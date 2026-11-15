@@ -375,7 +375,7 @@ impl MissionRuntime {
         gaps: Vec<crate::map_labels::LabelGap>,
         read: impl Fn(&str) -> Option<Vec<u8>> + Send + 'static,
     ) -> MissionRuntime {
-        MissionRuntime::load_with_start(path, seed, cfg, gaps, Vec::new(), read)
+        MissionRuntime::load_with_start(path, seed, cfg, gaps, Default::default(), read)
     }
 
     /// [`MissionRuntime::load_with_gaps`] with the seats' start values (the map's team table,
@@ -386,7 +386,7 @@ impl MissionRuntime {
         seed: u64,
         cfg: MissionConfig,
         gaps: Vec<crate::map_labels::LabelGap>,
-        start: Vec<crate::start_stock::SeatStart>,
+        start: crate::start_stock::StartStock,
         read: impl Fn(&str) -> Option<Vec<u8>> + Send + 'static,
     ) -> MissionRuntime {
         let shared = Rc::new(RefCell::new(Shared::default()));

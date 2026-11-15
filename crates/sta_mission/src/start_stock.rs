@@ -18,8 +18,13 @@
 //! from data for every map; measured for `a2_fed01` (the table's first block equals the stock game's
 //! start bar: dilithium, latinum, metal, crew); the officer limit is read from data only.
 //!
-//! A table value of 0 for crew or the officer limit is not written (what a literal 0 means in the
-//! original is not established): the seat keeps no crew pool or no officer limit, and in the sim an
+//! Order: the map's values first, then the script's own writes (it runs after them, so its `Set*`
+//! wins and its `Add*` adds). Grade: that a map's values are in place before the script's init is not
+//! measured in the original and not read from its executable; it is STA64's rule, chosen because the
+//! original script calls (read from data) all set or add to a team's stock and none assumes it is empty.
+//!
+//! A table value of 0 for crew or the officer limit is not written (grade: not measured; what a literal 0
+//! means in the original is not established): the seat keeps no crew pool or no officer limit, and in the sim an
 //! unwritten officer limit means no limit, so a seat whose table says 0 is not held back by officers.
 
 use sta_core::{Fixed, PlayerId};
@@ -50,9 +55,22 @@ fn whole(v: f32) -> i32 {
 
 /// The start values of the map `bzn` (`a2_fed01.bzn`) of `vfs`, one per seat in the table; empty when
 /// the map cannot be read or carries no table.
-pub fn read_start_stock(vfs: &Vfs, bzn: &str) -> Vec<SeatStart> {
-    let Some(Ok(bytes)) = vfs.read(&format!("bzn/{bzn}")) else { return Vec::new() };
-    from_table(&sta_bzn::team_starts(&bytes))
+pub fn read_start_stock(vfs: &Vfs, bzn: &str) -> StartStock {
+    let Some(Ok(bytes)) = vfs.read(&format!("bzn/{bzn}")) else { return StartStock::default() };
+    match sta_bzn::team_table(&bytes) {
+        sta_bzn::TeamTable::Found(t) => StartStock { seats: from_table(&t), refused: None },
+        sta_bzn::TeamTable::Refused(runs) => StartStock { seats: Vec::new(), refused: Some(format!("map team table refused (block runs {runs:?}): no start values")) },
+        sta_bzn::TeamTable::Absent => StartStock::default(),
+    }
+}
+
+/// What a host read from a mission's map: the seats' start values, or why none were taken.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StartStock {
+    pub seats: Vec<SeatStart>,
+    /// The map holds table-shaped records that are not exactly one table of eight blocks: nothing was
+    /// granted, and the runtime lists this once as an unsupported use.
+    pub refused: Option<String>,
 }
 
 /// [`SeatStart`]s of a team table, block `n` for seat `n`.
@@ -97,9 +115,12 @@ impl SeatStart {
 
 /// Queue the start values of `seats` as script edits and show them in the ctx's view: called once, while
 /// the runtime is built, before the script loads.
-pub(crate) fn queue(ctx: &mut Ctx, seats: Vec<SeatStart>) {
+pub(crate) fn queue(ctx: &mut Ctx, start: StartStock) {
+    if let Some(why) = &start.refused {
+        ctx.unsupported(why);
+    }
     let mut shown = Vec::new();
-    for seat in seats {
+    for seat in start.seats {
         let Some(p) = ctx.view.players.iter().find(|p| p.id == seat.seat) else { continue };
         shown.extend(seat.edits(p.crew.is_some() || p.officers[1] > Fixed::ZERO));
     }

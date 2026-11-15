@@ -871,8 +871,8 @@ pub trait MissionHost {
     }
 
     /// The seats' start values from the map's team table ([`crate::start_stock`]); none by default.
-    fn start_stock(&self, _campaign: &Campaign, _mission: &CampaignMission) -> Vec<crate::start_stock::SeatStart> {
-        Vec::new()
+    fn start_stock(&self, _campaign: &Campaign, _mission: &CampaignMission) -> crate::start_stock::StartStock {
+        crate::start_stock::StartStock::default()
     }
 
     /// The map's named paths `(label, points)`, in file order, for `A2.paths`.
@@ -1024,7 +1024,7 @@ pub fn launch_runtime_with_gaps(
     paths: Vec<(String, Vec<[f32; 3]>)>,
     label_gaps: Vec<crate::map_labels::LabelGap>,
 ) -> Result<MissionRuntime, StartError> {
-    launch_runtime_with_start(path, reader, seed, seat, setup, sim, paths, label_gaps, Vec::new())
+    launch_runtime_with_start(path, reader, seed, seat, setup, sim, paths, label_gaps, Default::default())
 }
 
 /// [`launch_runtime_with_gaps`] with the seats' start values (the map's team table, [`crate::start_stock`]):
@@ -1039,7 +1039,7 @@ pub fn launch_runtime_with_start(
     sim: &Sim,
     paths: Vec<(String, Vec<[f32; 3]>)>,
     label_gaps: Vec<crate::map_labels::LabelGap>,
-    start_stock: Vec<crate::start_stock::SeatStart>,
+    start_stock: crate::start_stock::StartStock,
 ) -> Result<MissionRuntime, StartError> {
     let cfg = MissionConfig {
         seat: Some(seat.0),
@@ -1313,7 +1313,7 @@ impl VfsHost {
 }
 
 impl MissionHost for VfsHost {
-    fn start_stock(&self, _campaign: &Campaign, mission: &CampaignMission) -> Vec<crate::start_stock::SeatStart> {
+    fn start_stock(&self, _campaign: &Campaign, mission: &CampaignMission) -> crate::start_stock::StartStock {
         crate::start_stock::read_start_stock(&self.vfs, &mission.bzn)
     }
 

@@ -32,7 +32,7 @@ fn table(human: [f32; 3], ai: [f32; 3]) -> Vec<sta_bzn::TeamStart> {
 fn runtime(script: &str, view: &WorldView, db: &Arc<ContentDb>, start: Vec<SeatStart>) -> MissionRuntime {
     let cfg = MissionConfig { content: Some(db.clone()), view: Some(view.clone()), player_numbering: PlayerNumbering::ArmadaTeams, ..MissionConfig::default() };
     let src = script.as_bytes().to_vec();
-    let rt = MissionRuntime::load_with_start("m.lua", 3, cfg, Vec::new(), start, move |p| (p == "m.lua").then(|| src.clone()));
+    let rt = MissionRuntime::load_with_start("m.lua", 3, cfg, Vec::new(), StartStock { seats: start, refused: None }, move |p| (p == "m.lua").then(|| src.clone()));
     assert!(rt.errors().is_empty(), "{:?}", rt.errors());
     rt
 }
@@ -127,4 +127,16 @@ fn the_start_values_are_ordinary_script_commands_a_replay_carries() {
     let sent = play(&mut rt, &mut sim, &mut view, 3);
     assert!(sent.iter().all(|c| c.player == PlayerId::SCRIPT && matches!(c.kind, CommandKind::Edit(_))));
     assert_eq!(sent.len(), 3 + 1 + 1 + 3 + 1, "3 cargo + crew + officers for seat 0, 3 cargo + crew for seat 1, once");
+}
+
+#[test]
+fn a_refused_table_is_listed_once_and_grants_nothing() {
+    let (mut sim, mut view, db) = bare([Control::Human, Control::Idle]);
+    let cfg = MissionConfig { content: Some(db.clone()), view: Some(view.clone()), ..MissionConfig::default() };
+    let start = StartStock { seats: Vec::new(), refused: Some("map team table refused (block runs [9]): no start values".into()) };
+    let mut rt = MissionRuntime::load_with_start("m.lua", 3, cfg, Vec::new(), start, |_| Some(Vec::new()));
+    let sent = play(&mut rt, &mut sim, &mut view, 2);
+    assert!(sent.is_empty());
+    let listed: Vec<_> = rt.unsupported().into_iter().filter(|(n, _)| n.contains("team table")).collect();
+    assert_eq!(listed.len(), 1, "{listed:?}");
 }

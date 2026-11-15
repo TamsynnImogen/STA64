@@ -352,14 +352,33 @@ pub struct TeamStart {
 /// map where a run of exactly eight blocks (no block-shaped record right before or after it) is not
 /// found exactly once, for which the answer is empty.
 pub fn team_starts(data: &[u8]) -> Vec<TeamStart> {
+    match team_table(data) {
+        TeamTable::Found(t) => t,
+        _ => Vec::new(),
+    }
+}
+
+/// What [`team_table`] found.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TeamTable {
+    /// Not a binary Armada II / Fleet Operations map, or no block-shaped records at all.
+    Absent,
+    /// Block-shaped records exist but are not exactly one run of eight: the lengths of the runs found.
+    /// Nothing is read from such a map; a host reports it as a gap.
+    Refused(Vec<usize>),
+    Found(Vec<TeamStart>),
+}
+
+/// [`team_starts`] saying why it read nothing.
+pub fn team_table(data: &[u8]) -> TeamTable {
     if !data.starts_with(b"version") || sol::is_sol(data) || a1::has_header_marker(data) {
-        return Vec::new();
+        return TeamTable::Absent;
     }
     if !text_value(data, b"BinaryMode [1] =").is_some_and(|v| v.eq_ignore_ascii_case("true")) {
-        return Vec::new();
+        return TeamTable::Absent;
     }
-    let Some(start) = binary_start(data) else { return Vec::new() };
-    let Ok(recs) = records(data, start) else { return Vec::new() };
+    let Some(start) = binary_start(data) else { return TeamTable::Absent };
+    let Ok(recs) = records(data, start) else { return TeamTable::Absent };
     const SHAPE: [u32; 13] = [4, 4, 5, 5, 5, 5, 5, 5, 5, 4, 5, 5, 5];
     let zero = |r: &Rec| r.data == [0u8; 4];
     let block_at = |i: usize| {
@@ -380,15 +399,20 @@ pub fn team_starts(data: &[u8]) -> Vec<TeamStart> {
             i += 1;
         }
     }
-    let [(first, 8)] = runs[..] else { return Vec::new() };
+    if runs.is_empty() {
+        return TeamTable::Absent;
+    }
+    let [(first, 8)] = runs[..] else { return TeamTable::Refused(runs.iter().map(|r| r.1).collect()) };
     let f = |i: usize| f32::from_le_bytes(recs[i].data.try_into().unwrap());
     let n = |i: usize| i32::from_le_bytes(recs[i].data.try_into().unwrap());
-    (0..8)
-        .map(|b| {
-            let at = first + 13 * b;
-            TeamStart { dilithium: f(at + 2), latinum: f(at + 4), metal: f(at + 6), officers: n(at + 9), crew: f(at + 11) }
-        })
-        .collect()
+    TeamTable::Found(
+        (0..8)
+            .map(|b| {
+                let at = first + 13 * b;
+                TeamStart { dilithium: f(at + 2), latinum: f(at + 4), metal: f(at + 6), officers: n(at + 9), crew: f(at + 11) }
+            })
+            .collect(),
+    )
 }
 
 fn strip_odf(s: &str) -> String {
@@ -620,9 +644,9 @@ PrjID = 4d62616b7500\r\nEntityID [1] =\r\n7\r\nteam [1] =\r\n2\r\nlabel = Baku\r
                 rec(&mut out, 5, &v.to_le_bytes());
                 rec(&mut out, 5, &0f32.to_le_bytes());
             }
-            rec(&mut out, 5, &21000f32.to_le_bytes());
-            rec(&mut out, 4, &600i32.to_le_bytes());
-            for v in [0f32, 3000.0, 0.0] {
+            rec(&mut out, 5, &8888f32.to_le_bytes());
+            rec(&mut out, 4, &321i32.to_le_bytes());
+            for v in [0f32, 1717.0, 0.0] {
                 rec(&mut out, 5, &v.to_le_bytes());
             }
         }
@@ -635,8 +659,8 @@ PrjID = 4d62616b7500\r\nEntityID [1] =\r\n7\r\nteam [1] =\r\n2\r\nlabel = Baku\r
         teams[0] = [1234.0, 56.0, 789.0];
         let got = team_starts(&team_map(&teams));
         assert_eq!(got.len(), 8);
-        assert_eq!(got[0], TeamStart { dilithium: 1234.0, latinum: 56.0, metal: 789.0, crew: 3000.0, officers: 600 });
-        assert_eq!(got[7], TeamStart { dilithium: 4321.0, latinum: 65.0, metal: 987.0, crew: 3000.0, officers: 600 });
+        assert_eq!(got[0], TeamStart { dilithium: 1234.0, latinum: 56.0, metal: 789.0, crew: 1717.0, officers: 321 });
+        assert_eq!(got[7], TeamStart { dilithium: 4321.0, latinum: 65.0, metal: 987.0, crew: 1717.0, officers: 321 });
     }
 
     #[test]
@@ -645,6 +669,8 @@ PrjID = 4d62616b7500\r\nEntityID [1] =\r\n7\r\nteam [1] =\r\n2\r\nlabel = Baku\r
         assert!(team_starts(&team_map(&[[1.0, 2.0, 3.0]; 9])).is_empty(), "nine blocks: a ninth would shift every seat");
         assert!(team_starts(&team_map(&[[1.0, 2.0, 3.0]; 16])).is_empty(), "two tables");
         assert_eq!(team_starts(&team_map(&[[1.0, 2.0, 3.0]; 8])).len(), 8, "the exact case");
+        assert_eq!(team_table(&team_map(&[[1.0, 2.0, 3.0]; 9])), TeamTable::Refused(vec![9]), "a refused table is reported, not just empty");
+        assert_eq!(team_table(&team_map(&[])), TeamTable::Absent);
         assert!(team_starts(TEXT.as_bytes()).is_empty(), "text map");
         assert!(team_starts(b"not a map").is_empty());
     }

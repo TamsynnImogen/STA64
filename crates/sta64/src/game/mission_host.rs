@@ -115,7 +115,7 @@ pub struct MissionLaunch {
     /// The AIPs the script may load (AI-06).
     aips: sta_ai::AipLibrary,
     /// The seats' start values from the map's team table.
-    start_stock: Vec<sta_mission::start_stock::SeatStart>,
+    start_stock: sta_mission::start_stock::StartStock,
 }
 
 impl std::fmt::Debug for MissionLaunch {
@@ -556,7 +556,7 @@ impl MissionHost for ClientHost {
         read_map_paths(&self.vfs, &mission.bzn)
     }
 
-    fn start_stock(&self, _: &Campaign, mission: &CampaignMission) -> Vec<sta_mission::start_stock::SeatStart> {
+    fn start_stock(&self, _: &Campaign, mission: &CampaignMission) -> sta_mission::start_stock::StartStock {
         sta_mission::start_stock::read_start_stock(&self.vfs, &mission.bzn)
     }
 
