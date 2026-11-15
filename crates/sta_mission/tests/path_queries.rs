@@ -155,6 +155,32 @@ fn duplicate_names_use_the_first_authored_path_and_empty_config_is_absent() {
 }
 
 #[test]
+fn mixed_case_handle_reaches_the_camera_with_its_authored_label() {
+    use sta_mission::cineractive::{Cineractive, Track};
+    use sta_sim::command::{CommandKind, Edit};
+    use sta_sim::present::Presentation;
+
+    let mut rt = runtime("Cineractive.active=true; Cineractive:lookFrom(Path('fLyBy'), 1)");
+    let mut camera = Cineractive::default();
+    for command in rt.take_commands() {
+        let CommandKind::Edit(Edit::Present(presentation)) = command.kind else {
+            panic!("camera queued a non-presentation command");
+        };
+        camera.observe(&presentation, 0, &geometry());
+        if let Presentation::Call { name, args } = &presentation {
+            assert_eq!(name, "Cineractive.lookFrom");
+            assert!(matches!(&args[0], sta_sim::present::Arg::Text(name) if name == "FlyBy"));
+        }
+    }
+    let shot = camera.shot.expect("authored path resolved by the camera");
+    let Track::Path(track) = shot.eye.what else {
+        panic!("camera did not retain the path track");
+    };
+    assert_eq!(track.points, [[12.5, -2.0, 30.0], [40.0, 5.0, -8.0]]);
+    assert!(rt.unsupported().is_empty());
+}
+
+#[test]
 #[ignore = "requires STA64_A1_PREMONITIONS pointing to an external, unshipped mission script"]
 fn installed_premonitions_optional_path_helper_uses_authored_geometry() {
     let source_path = std::env::var("STA64_A1_PREMONITIONS").expect("set STA64_A1_PREMONITIONS");
