@@ -113,26 +113,19 @@ pub(crate) fn queue(ctx: &mut Ctx, seats: Vec<SeatStart>) {
 /// What the sim will hold once `edits` are applied, in `view`: the script's first step reads it.
 pub(crate) fn show(view: &mut WorldView, edits: &[Edit]) {
     for e in edits {
-        let (seat, apply): (PlayerId, Box<dyn FnOnce(&mut sta_sim::view::PlayerView)>) = match e {
-            Edit::Cargo(p, res, v) => {
-                let (res, v) = (usize::from(*res), *v);
-                (*p, Box::new(move |pv| {
-                    pv.resources.resize(pv.resources.len().max(4), Fixed::ZERO);
-                    pv.resources[res] = v;
-                }))
-            }
-            Edit::TeamCrew(p, v) => {
-                let v = *v;
-                (*p, Box::new(move |pv| pv.crew = Some(v)))
-            }
-            Edit::MaxOfficers(p, v) => {
-                let v = *v;
-                (*p, Box::new(move |pv| pv.officers[1] = v))
-            }
+        let seat = match e {
+            Edit::Cargo(p, ..) | Edit::TeamCrew(p, _) | Edit::MaxOfficers(p, _) => *p,
             _ => continue,
         };
-        if let Some(pv) = view.players.iter_mut().find(|p| p.id == seat) {
-            apply(pv);
+        let Some(pv) = view.players.iter_mut().find(|p| p.id == seat) else { continue };
+        match e {
+            Edit::Cargo(_, res, v) => {
+                pv.resources.resize(pv.resources.len().max(4), Fixed::ZERO);
+                pv.resources[usize::from(*res)] = *v;
+            }
+            Edit::TeamCrew(_, v) => pv.crew = Some(*v),
+            Edit::MaxOfficers(_, v) => pv.officers[1] = *v,
+            _ => {}
         }
     }
 }
