@@ -64,6 +64,9 @@ pub struct HudConfig {
     pub gui: Option<GuiLayout>,
     /// Screen width over height; kept from the window when there is one.
     pub aspect: f32,
+    /// How the stock-look HUD sits on a window whose aspect differs from its sheet (the player's
+    /// `hud_layout` setting, kept in step by `fit_screen`). The LCARS HUD ignores it.
+    pub fit: stock::layout::HudFit,
     /// Scale the UI to the primary window (`UiScale` = height / 1080). Off
     /// when something else sets the scale (the frame runs).
     pub fit_scale: bool,
@@ -73,7 +76,7 @@ pub struct HudConfig {
 
 impl Default for HudConfig {
     fn default() -> Self {
-        HudConfig { gui: None, aspect: 16.0 / 9.0, fit_scale: true, log: false }
+        HudConfig { gui: None, aspect: 16.0 / 9.0, fit: stock::layout::HudFit::Centred, fit_scale: true, log: false }
     }
 }
 
@@ -196,7 +199,13 @@ fn fit_screen(
     mut config: ResMut<HudConfig>,
     mut layout: ResMut<HudLayoutRes>,
     mut scale: ResMut<UiScale>,
+    settings: Option<Res<crate::frontend::screens::Settings>>,
 ) {
+    if let Some(s) = settings
+        && config.fit != s.hud_fit
+    {
+        config.fit = s.hud_fit;
+    }
     if let Some(w) = window
         && w.height() > 0.0
     {
