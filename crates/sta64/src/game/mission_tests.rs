@@ -952,3 +952,66 @@ fn install_gated_a1_fed1_leaves_its_opening_cineractive_and_gives_the_camera_bac
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&data);
 }
+
+/// The federation campaign of the synthetic book with its first mission's script replaced.
+fn with_first_script(script: &str, second_wins: bool) -> Campaigns {
+    use crate::frontend::campaign::tests::{FakeHost, source};
+    let src = std::sync::Arc::new(source(second_wins).with("missions/syn_fed01.lua", script));
+    let book = sta_mission::campaign::CampaignBook::load(&*src, sta_mission::campaign::ShellLayout::Armada2);
+    Campaigns::new(book, std::sync::Arc::new(FakeHost(src)), crate::frontend::campaign::ProgressStore::none())
+}
+
+/// Plays mission 1 to its end with a script that ends it after `after` seconds with an Armada I
+/// end call whose time argument is the current mission time (what the stock scripts pass). The
+/// screen is faded to black the whole while, as the stock end sequence leaves it. Returns the
+/// sim seconds between the script's call and the return to the front end.
+fn a1_end_wait_secs(app: &mut App) -> f64 {
+    start_from_screens(app, 1);
+    app.world_mut().resource_mut::<crate::ui::presentation::FadeState>().alpha = 1.0;
+    let mut called_at = None;
+    let mut last_tick = 0;
+    for _ in 0..3000 {
+        app.update();
+        if state(app) != AppState::InGame {
+            break;
+        }
+        last_tick = app.world().resource::<SimLink>().curr().tick;
+        if called_at.is_none() && app.world().get_resource::<MissionRun>().is_some_and(|r| r.outcome.is_some()) {
+            called_at = Some(last_tick);
+        }
+    }
+    assert_eq!(state(app), AppState::FrontEnd, "the faded mission screen must end");
+    settle(app, 4);
+    assert_eq!(app.world().resource::<crate::ui::presentation::FadeState>().alpha, 0.0, "the black fade is gone");
+    (last_tick - called_at.expect("the script ended the mission")) as f64 / f64::from(sta_core::TICK_HZ)
+}
+
+#[test]
+fn an_a1_win_at_a_late_mission_time_reaches_the_debrief_at_once_and_unlocks_the_next_mission() {
+    // `SucceedMission(GetTime(), nil)` thirty seconds in: read as a delay it held the mission thirty
+    // seconds (ten minutes, clamped, in a real one) on the faded screen.
+    let mut app = app(with_first_script("local done\nMMM.register(function(t) if t >= 30 and not done then done = true; A1.SucceedMission(A1.GetTime(), nil) end end)\n", false));
+    let waited = a1_end_wait_secs(&mut app);
+    assert!(waited < 3.0, "waited {waited} s");
+    assert_eq!(screen(&app), Screen::Debrief);
+    let d = campaigns(&app).debrief.clone().expect("a debrief");
+    assert_eq!((d.result, d.mission), (RunResult::Won, 0));
+    assert_eq!(campaigns(&app).progress.state("federation").reached, 1);
+    assert!(has(&mut app, CampaignAct::Pick(1)), "the next mission is offered");
+    press(&mut app, CampaignAct::Pick(1));
+    press(&mut app, CampaignAct::Start);
+    until(&mut app, 300, |a| state(a) == AppState::InGame);
+}
+
+#[test]
+fn an_a1_loss_at_a_late_mission_time_reaches_the_debrief_and_offers_the_retry() {
+    let mut app = app(with_first_script("local done\nMMM.register(function(t) if t >= 30 and not done then done = true; A1.FailMission(A1.GetTime() + 2.0, nil) end if t >= 1e6 then A1.SucceedMission(A1.GetTime(), nil) end end)\n", false));
+    let waited = a1_end_wait_secs(&mut app);
+    assert!((1.5..5.0).contains(&waited), "the call's own two seconds, not thirty: {waited} s");
+    assert_eq!(screen(&app), Screen::Debrief);
+    let d = campaigns(&app).debrief.clone().expect("a debrief");
+    assert_eq!((d.result, d.mission), (RunResult::Lost, 0));
+    assert_eq!(campaigns(&app).progress.state("federation").reached, 0);
+    assert!(has(&mut app, CampaignAct::Pick(0)), "retry is offered");
+    assert_eq!(campaigns(&app).state("federation", 0), crate::frontend::campaign::MissionState::Ready, "the mission can be started again");
+}
