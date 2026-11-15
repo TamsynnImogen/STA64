@@ -385,7 +385,7 @@ fn at_equal_heights_the_lower_id_goes_up_and_the_higher_id_down() {
 
 #[test]
 fn only_a_craft_at_speed_zero_is_never_moved() {
-    // A crawling craft takes a small share, a craft at rest none.
+    // The craft at rest is not moved: the other one takes the whole push.
     let out = shifts(&[body(1, p3(0, 0, 0), true), body(2, p3(30, 0, 0), true)], &[(1, 0), (2, 5)]);
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].0, EntityId(2));
