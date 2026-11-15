@@ -1,18 +1,17 @@
 //! Wormhole gates (`classLabel = "wormhole_obj"`): a craft sent into a gate comes out of
-//! its partner (LUA-17; every profile since the stateless step for Armada II and Fleet
-//! Operations).
+//! its partner (LUA-17; Armada II and Fleet Operations since the stateless step, on two-gate maps).
 //!
 //! Rules (read from the Armada I and Armada II executables, static; not measured on the
 //! original):
-//! - **Partners.** Armada I pairs gates by creation order: each new gate pairs with the
+//! - **Partners (Armada II family).** Only when the map file placed exactly two gates (labelled
+//!   entities) are they a pair, in file order; with any other number nothing travels, and a
+//!   gate a script adds joins no pair, until LUA-33 reads the maps' partner pointers. Read from
+//!   the stock, Roots and mod maps' data: every pointer pair of a two-gate map is mutual (see the
+//!   LUA-24 travel PR); not measured in the original.
+//! - **Partners (Armada I).** Armada I pairs gates by creation order: each new gate pairs with the
 //!   one left unpaired, so the 1st pairs with the 2nd, the 3rd with the 4th. Here the
 //!   live gates, in id (creation) order, pair in twos; this matches the original until a
 //!   paired gate is destroyed (its partner is then re-paired in the original, not here).
-//!   Armada II pairs through the map's partner pointers and `LinkWormholes`, which the sim
-//!   does not carry yet (LUA-33): the same creation-order pairs stand in. Read from the
-//!   stock and Roots maps, the pointers name the adjacent gate in file order, except in
-//!   Roots `nirvana6` (an MP map), A2 `fed05`, `fed06`, `borg10` and the STA2 Classic
-//!   `borg07` to `borg10` rifts (one-way or null pointers): there a gate may pair wrongly.
 //! - **Who goes through.** A craft flying its last leg onto the gate (its target within
 //!   [`ON_GATE`] of the centre and no further legs queued: a move ordered onto the gate
 //!   entity) enters it; craft passing by, or on an earlier leg of a longer course, do not.
@@ -57,13 +56,23 @@ impl Sim {
     /// Live gates in id order, each with its partner (Armada I pairing), as `(gate, partner)`.
     fn gate_pairs(&self) -> Vec<(EntityId, EntityId)> {
         let Some(db) = self.content.as_deref() else { return Vec::new() };
+        let a1 = db.features().a1_compat;
         let gates: Vec<EntityId> = self
             .units
             .iter()
             .filter(|e| e.kind == crate::world::EntityKind::Prop && !e.flags.contains(UnitFlags::DYING))
             .filter(|e| db.unit(e.def).is_some_and(|d| d.class.0 == WORMHOLE_CLASS))
+            // The Armada II family pairs only the gates the map file placed (the only labelled
+            // entities); a gate a script adds is not paired.
+            .filter(|e| a1 || self.labels.get(e.id).is_some())
             .map(|e| e.id)
             .collect();
+        // Armada II family: exactly two map gates are a pair; any other number is not paired
+        // (file order is not the pointers there, e.g. Roots `nirvana6`, A2 `fed05`, `fed06`,
+        // `borg10`) until LUA-33 carries the partner pointers.
+        if !a1 && gates.len() != 2 {
+            return Vec::new();
+        }
         gates.chunks_exact(2).flat_map(|p| [(p[0], p[1]), (p[1], p[0])]).collect()
     }
 

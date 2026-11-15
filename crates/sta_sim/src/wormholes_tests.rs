@@ -47,6 +47,31 @@ fn world(db: &Arc<ContentDb>) -> (Sim, EntityId, EntityId) {
     (sim, a, b)
 }
 
+/// Armada II-family scene: the map file places `gates` (labelled, in order) and a script adds
+/// `scripted` (unlabelled); a cruiser `a` of seat 1 at the origin and `b` 300 north of it.
+fn world_of(db: &Arc<ContentDb>, gates: &[(i32, i32)], scripted: &[(i32, i32)]) -> (Sim, EntityId, EntityId) {
+    let mut map = sta_content::MapDef::empty();
+    let h = (Fixed::ONE, Fixed::ZERO);
+    for (i, &(x, z)) in gates.iter().enumerate() {
+        map.objects.push(sta_content::MapObject { odf: "fx_gate".into(), owner: None, pos: v(x, z), heading: h, label: Some(format!("G{i}")) });
+    }
+    let seat = PlayerSetup { id: PlayerId(1), team: TeamId(1), race: "fx".into(), control: Control::Idle };
+    let mut sim = Sim::from_setup(&GameSetup { seed: 3, map: Arc::new(map), content: Arc::clone(db), players: vec![seat], options: GameOptions::default() });
+    let gate = db.key("fx_gate").unwrap();
+    let cruiser = db.key("fx_cruiser").unwrap();
+    for &(x, z) in scripted {
+        sim.spawn_def(gate, PlayerId(255), v(x, z), h).unwrap();
+    }
+    let a = sim.spawn_def(cruiser, PlayerId(1), v(0, 0), h).unwrap();
+    let b = sim.spawn_def(cruiser, PlayerId(1), v(0, 300), h).unwrap();
+    (sim, a, b)
+}
+
+/// Two map gates at (1000, 0) and (5000, 5000).
+fn world2(db: &Arc<ContentDb>) -> (Sim, EntityId, EntityId) {
+    world_of(db, &[(1000, 0), (5000, 5000)], &[])
+}
+
 fn run(sim: &mut Sim, a: EntityId, b: EntityId) {
     let order = |seq, units, to| Command { player: PlayerId(1), seq, kind: CommandKind::Order(Order::Move { units, to, queue: false }) };
     // `a` is sent onto the first gate; `b` flies past it to a point beyond.
@@ -78,7 +103,7 @@ fn a_craft_ordered_onto_a_gate_comes_out_of_its_partner_at_rest() {
 #[test]
 fn a_craft_ordered_onto_a_gate_in_the_armada_ii_family_emerges_at_the_partner_centre() {
     let d = db(false);
-    let (mut sim, a, b) = world(&d);
+    let (mut sim, a, b) = world2(&d);
     run(&mut sim, a, b);
     let (x, z) = pos(&sim, a);
     assert!((x - 5000.0).abs() < 1.0 && (z - 5000.0).abs() < 1.0, "a at ({x}, {z})");
@@ -90,7 +115,7 @@ fn a_craft_ordered_onto_a_gate_in_the_armada_ii_family_emerges_at_the_partner_ce
 #[test]
 fn an_emerged_craft_stays_until_ordered_onto_the_gate_again() {
     let d = db(false);
-    let (mut sim, a, b) = world(&d);
+    let (mut sim, a, b) = world2(&d);
     run(&mut sim, a, b);
     for _ in 0..30 * 20 {
         sim.step(&[]);
@@ -109,7 +134,7 @@ fn an_emerged_craft_stays_until_ordered_onto_the_gate_again() {
 #[test]
 fn a_group_ordered_onto_one_gate_all_emerge_and_the_separation_spreads_them() {
     let d = db(false);
-    let (mut sim, _, _) = world(&d);
+    let (mut sim, _, _) = world2(&d);
     let cruiser = d.key("fx_cruiser").unwrap();
     let h = (Fixed::ONE, Fixed::ZERO);
     let ids: Vec<EntityId> = (0..3).map(|i| sim.spawn_def(cruiser, PlayerId(1), v(0, 100 * i), h).unwrap()).collect();
@@ -127,28 +152,60 @@ fn a_group_ordered_onto_one_gate_all_emerge_and_the_separation_spreads_them() {
     assert!(apart(at[0], at[1]) > 1.0 && apart(at[1], at[2]) > 1.0 && apart(at[0], at[2]) > 1.0, "{at:?}");
 }
 
-#[test]
-fn an_unpaired_trailing_gate_does_nothing() {
-    let d = db(false);
-    let (mut sim, a, _) = world(&d);
-    let to = Command { player: PlayerId(1), seq: 1, kind: CommandKind::Order(Order::Move { units: vec![a], to: v(-3000, 0), queue: false }) };
+/// Order `a` onto (x, z) and let it run; where it ends.
+fn send_a_onto(sim: &mut Sim, a: EntityId, x: i32, z: i32) -> (f32, f32) {
+    let to = Command { player: PlayerId(1), seq: 1, kind: CommandKind::Order(Order::Move { units: vec![a], to: v(x, z), queue: false }) };
     sim.step(&[to]);
     for _ in 0..30 * 60 {
         sim.step(&[]);
     }
-    let (x, z) = pos(&sim, a);
-    assert!((x + 3000.0).abs() < 200.0 && z.abs() < 200.0, "stays at the unpaired gate: ({x}, {z})");
+    pos(sim, a)
+}
+
+#[test]
+fn a_map_with_three_gates_pairs_nothing_in_the_armada_ii_family() {
+    let d = db(false);
+    let (mut sim, a, _) = world_of(&d, &[(1000, 0), (5000, 5000), (-3000, 0)], &[]);
+    let (x, z) = send_a_onto(&mut sim, a, 1000, 0);
+    assert!((x - 1000.0).abs() < 200.0 && z.abs() < 200.0, "no travel: ({x}, {z})");
+    let (mut sim, a, _) = world_of(&d, &[(1000, 0)], &[]);
+    let (x, z) = send_a_onto(&mut sim, a, 1000, 0);
+    assert!((x - 1000.0).abs() < 200.0 && z.abs() < 200.0, "a lone gate does nothing: ({x}, {z})");
+}
+
+#[test]
+fn a_script_added_third_gate_neither_joins_nor_breaks_the_pair() {
+    let d = db(false);
+    // The map's pair still works...
+    let (mut sim, a, _) = world_of(&d, &[(1000, 0), (5000, 5000)], &[(-3000, 0)]);
+    let (x, z) = send_a_onto(&mut sim, a, 1000, 0);
+    assert!((x - 5000.0).abs() < 1.0 && (z - 5000.0).abs() < 1.0, "the pair works: ({x}, {z})");
+    // ...and the script's gate goes nowhere.
+    let (mut sim, a, _) = world_of(&d, &[(1000, 0), (5000, 5000)], &[(-3000, 0)]);
+    let (x, z) = send_a_onto(&mut sim, a, -3000, 0);
+    assert!((x + 3000.0).abs() < 200.0 && z.abs() < 200.0, "no travel into a script gate: ({x}, {z})");
+}
+
+#[test]
+fn a_right_click_move_onto_a_gate_is_still_given_on_a_map_that_pairs_nothing() {
+    let d = db(false);
+    let (mut sim, _) = gate_world(&d);
+    let cruiser = d.key("fx_cruiser").unwrap();
+    let c = sim.spawn_def(cruiser, PlayerId(1), v(900, 0), (Fixed::ONE, Fixed::ZERO)).unwrap();
+    let g0 = sim.labels.iter().find(|(_, l)| l.as_str() == "Gate0").map(|(id, _)| id).unwrap();
+    let order = crate::context::context_order(Some(&d), &sim.view(), PlayerId(1), &[c], g0);
+    assert_eq!(order, Some(Order::Move { units: vec![c], to: v(1000, 0), queue: false }));
 }
 
 /// Whole-state digest after a craft of an Armada II-family scene went through a gate.
 #[test]
 fn a_travelling_craft_is_pinned_in_the_whole_state_digest() {
     let d = db(false);
-    let (mut sim, a, b) = world(&d);
+    let (mut sim, a, b) = world2(&d);
     run(&mut sim, a, b);
     assert_eq!(sim.digest(), PINNED_TRAVEL_DIGEST, "{:#x}", sim.digest());
 }
-const PINNED_TRAVEL_DIGEST: u64 = 0x413c_c80d_e8ad_a3b5;
+const PINNED_TRAVEL_DIGEST: u64 = 0x8422_6030_5bce_e23c;
 
 #[test]
 fn the_same_run_gives_the_same_digest() {
