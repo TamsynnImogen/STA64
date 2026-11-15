@@ -157,7 +157,9 @@ impl SimLink {
     }
 
     /// The bench's frame path steps its own sim: it hands each new view in here,
-    /// so effects and units read it as they read a link's.
+    /// so effects and units read it as they read a link's. A caller that builds the
+    /// new view from the old one starts from [`SimLink::real_curr`], never `curr()`
+    /// (which shows every unit while the fog is lifted, UI-46).
     pub fn feed(&mut self, view: Arc<WorldView>) {
         self.feed_with_production(view, Vec::new());
     }
@@ -178,8 +180,10 @@ impl SimLink {
         if let Some(log) = &mut self.log {
             log.log_step(before, &batch, out.view.tick, out.view.digest, DEFAULT_DIGEST_EVERY);
         }
+        // While lifted, the new shown `prev` is the old shown `curr`: no second copy.
+        let old_shown = self.lifted.take().map(|l| l.1);
         self.prev = std::mem::replace(&mut self.curr, out.view);
-        self.refresh_lifted();
+        self.lifted = self.fog_lifted.then(|| (old_shown.unwrap_or_else(|| all_seen(&self.prev)), all_seen(&self.curr)));
         let mut cmds = Vec::new();
         for c in self.controllers.get().iter_mut() {
             c.think(&self.curr, &out.events, &mut cmds);

@@ -478,6 +478,7 @@ fn update_fog(
     mut materials: ResMut<Assets<FogMaterial>>,
     mut layers: Query<(Entity, &FogLayer, &mut Visibility)>,
     reveal: Option<Res<crate::render::reveal::Reveal>>,
+    net: Option<Res<crate::game::net_match::NetGame>>,
     mut memo: Local<Memo>,
 ) {
     let Memo { seen, art_generation, memory, shown_reveal } = &mut *memo;
@@ -490,7 +491,8 @@ fn update_fog(
         return;
     };
     let curr = link.curr();
-    let lifted = reveal.as_deref().map_or((false, false), |r| (r.fog, r.shroud));
+    // A network game never shows a lifted layer, not even for the frame before the chords reset it.
+    let lifted = reveal.as_deref().filter(|_| net.is_none()).map_or((false, false), |r| (r.fog, r.shroud));
     let fresh = state.is_none() || *shown_reveal != Some(lifted) || *art_generation != Some(patterns.generation) || !seen.as_ref().is_some_and(|(v, p)| Arc::ptr_eq(v, curr) && *p == local.0);
     let map_changed = memory.as_ref().is_some_and(|m| m.min != [bounds.min.x, bounds.min.y]);
     if fresh || map_changed {

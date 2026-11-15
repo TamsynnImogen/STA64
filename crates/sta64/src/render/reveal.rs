@@ -9,8 +9,9 @@
 //!   [`SimLink::set_fog_lifted`], which shows the client every unit. The sim's own views, the
 //!   controllers (AI and mission scripts), the replay log, snapshots, digests and captures never see
 //!   it, so a revealed game plays and records exactly as an unrevealed one.
-//! - Refused in a network game (a [`NetGame`] exists): the toggles do nothing there and anything
-//!   lifted is put back.
+//! - Refused in a network game (a [`NetGame`] exists): the toggles do nothing there (a notice says so)
+//!   and anything lifted is put back. The chords act only while a match runs (not in the menus), and the
+//!   lifted state carries from one single-player match to the next until toggled.
 //! - Limit: with the fog lifted and the shroud not, units on never-explored ground are shown to the
 //!   unit lists and the minimap blips, but the shroud still blacks the ground under them in the 3D
 //!   view and on the minimap picture; lift both to see everything.
@@ -50,12 +51,16 @@ fn alt(keys: &ButtonInput<KeyCode>) -> bool {
     keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight)
 }
 
-/// Apply this frame's chords to `reveal`; in a network game they are refused and anything lifted is put
-/// back. Returns the notices to show.
+/// Apply this frame's chords to `reveal`; in a network game they are refused (with a notice) and
+/// anything lifted is put back. Returns the notices to show.
 fn toggle(reveal: &mut Reveal, keys: &ButtonInput<KeyCode>, network: bool) -> Vec<String> {
     let mut said = Vec::new();
+    let pressed = alt(keys) && (keys.just_pressed(KeyCode::KeyF) || keys.just_pressed(KeyCode::KeyV));
     if network {
         *reveal = Reveal::default();
+        if pressed {
+            said.push("Cheat refused: not in a network game".to_owned());
+        }
         return said;
     }
     if !alt(keys) {
@@ -74,20 +79,19 @@ fn toggle(reveal: &mut Reveal, keys: &ButtonInput<KeyCode>, network: bool) -> Ve
     said
 }
 
-/// Read the chords and hand the fog to the link.
+/// Read the chords and hand the fog to the link. Runs while a match runs only (not in the front end's
+/// menus, where Alt may be held while typing); a network game is refused even before its link exists.
 fn update_reveal(keys: Option<Res<ButtonInput<KeyCode>>>, net: Option<Res<NetGame>>, mut reveal: ResMut<Reveal>, link: Option<ResMut<SimLink>>, mut notices: MessageWriter<Notice>) {
-    let Some(mut link) = link else { return };
-    let before = *reveal;
     let said = match keys {
         Some(k) => toggle(&mut reveal, &k, net.is_some()),
         None => toggle(&mut reveal, &ButtonInput::default(), net.is_some()),
     };
-    if *reveal != before || !said.is_empty() {
-        for t in said {
-            notices.write(Notice::new(Severity::Info, t));
-        }
+    for t in said {
+        notices.write(Notice::new(Severity::Info, t));
     }
-    if link.fog_lifted() != reveal.fog {
+    if let Some(mut link) = link
+        && link.fog_lifted() != reveal.fog
+    {
         link.set_fog_lifted(reveal.fog);
     }
 }
@@ -96,7 +100,7 @@ pub struct RevealPlugin;
 
 impl Plugin for RevealPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Reveal>().add_message::<Notice>().add_systems(Update, update_reveal.in_set(GameSet::Input));
+        app.init_resource::<Reveal>().add_message::<Notice>().add_systems(Update, update_reveal.in_set(GameSet::Input).run_if(crate::game::flow::match_running));
     }
 }
 
@@ -235,7 +239,7 @@ mod tests {
         keys.press(KeyCode::AltLeft);
         keys.press(KeyCode::KeyV);
         let mut r = Reveal { fog: true, shroud: false };
-        assert!(toggle(&mut r, &keys, true).is_empty());
+        assert_eq!(toggle(&mut r, &keys, true).len(), 1, "the refusal is said");
         assert_eq!(r, Reveal::default());
     }
 }
