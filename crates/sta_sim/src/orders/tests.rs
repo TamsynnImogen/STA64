@@ -431,18 +431,28 @@ mod auto_warp {
     }
 
     /// Golden: whole-state digest of a keyed craft that warps a goal slightly off its bow
-    /// (the A1 intro case), 30 s in. Pinned so a change to the warp gate or its steering shows.
+    /// (the A1 intro case), 5 s in while it is still warping. Pinned so a change to the warp gate or its steering shows.
     #[test]
     fn warping_keyed_craft_digest_golden() {
         let run = || {
             let (mut sim, s) = scout_game(true);
-            for i in 0..30 * HZ {
+            for i in 0..5 * HZ {
                 WorldSource::step(&mut sim, &if i == 0 { vec![order(1, 0, Order::Move { units: vec![s], to: v(180, 800), queue: false })] } else { vec![] });
             }
+            assert_eq!(sim.approach_warp.phase(s), Some(crate::movement::approach::IN_WARP), "not warping at the sample tick");
             sim.digest()
         };
         assert_eq!(run(), run());
-        assert_eq!(run(), 0xa7044ba01c31a21c);
+        assert_eq!(run(), 0xbf0431891a3a18c4);
+    }
+
+    /// The band edge is exact at 30, 60 and 90 degrees (and capped beyond).
+    #[test]
+    fn the_warp_band_cosine_is_exact() {
+        for (deg, cos) in [(30, 0.866_025_4), (60, 0.5), (90, 0.0), (120, 0.0)] {
+            let got = f64::from(crate::orders::band_cosine(n(deg)).to_f32());
+            assert!((got - cos).abs() < 1e-3, "{deg} deg: {got} vs {cos}");
+        }
     }
 
     #[test]

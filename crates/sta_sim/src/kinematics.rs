@@ -217,7 +217,8 @@ pub(crate) struct Plan {
     /// Speed limit in place of `impulseSpeed` (`combatSpeed` on a stock
     /// approach); never above it.
     pub cap: Option<Fixed>,
-    /// In warp: fly straight along the heading toward `warpSpeed`.
+    /// In warp: accelerate toward `warpSpeed`; turns only with `steer` (read from the
+    /// executable, static: Armada I steers while it warps).
     pub warp: bool,
     /// Dropping out of warp: straight on, down to the cap.
     pub warp_out: bool,

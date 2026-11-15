@@ -460,9 +460,9 @@ impl Sim {
             // Armada I's physics ODFs set the distance and the heading band
             // (SIM-64); a unit without `tooCloseForWarp` takes Armada II's.
             let keyed = u.stats.too_close_for_warp > Fixed::ZERO;
-            // The engine steers while it warps and so may start inside the
-            // `headingCloseEnoughForWarp` band; STA64's warp flies straight, so the
-            // tight gate stays for keyed units too (the band is read, not used).
+            // Keyed craft steer while they warp and keep warp inside the ODF band
+            // (per-tick band and steering: read from the executable, static). The 0.99
+            // start gate and the 90 degree cap on the band are STA64's own.
             let aligned = to_goal > Fixed::ZERO && (u.heading.0 * gx + u.heading.1 * gz) / to_goal > Fixed::from_f64(0.99);
             let too_close = if keyed { u.stats.too_close_for_warp } else { too_close_to_warp() };
             // A craft already in warp keeps it while the goal stays inside the
@@ -470,8 +470,7 @@ impl Sim {
             // and back in again each time the heading error crossed it.
             let in_band = keyed && was && u.stats.heading_close_for_warp > Fixed::ZERO && to_goal > Fixed::ZERO && {
                 let cos = (u.heading.0 * gx + u.heading.1 * gz) / to_goal;
-                let band = crate::kinematics::rotate((Fixed::ONE, Fixed::ZERO), u.stats.heading_close_for_warp.min(Fixed::from_int(90)) * crate::kinematics::pi() / Fixed::from_int(180)).0;
-                cos > band
+                cos > band_cosine(u.stats.heading_close_for_warp)
             };
             let can = vw > vi && vi > crate::speed_override::HELD_SPEED && (aligned || in_band) && to_goal >= approach::warp_lead(vw, vi, db_radius(self, u));
             // Armada II gates the start on 0.9 of impulse speed; Armada I's
@@ -491,6 +490,11 @@ impl Sim {
         }
         plans
     }
+}
+
+/// Cosine of a `headingCloseEnoughForWarp` band in degrees, capped at 90 (STA64's cap).
+pub(crate) fn band_cosine(degrees: Fixed) -> Fixed {
+    crate::kinematics::rotate_by((Fixed::ONE, Fixed::ZERO), degrees.min(Fixed::from_int(90)) * crate::kinematics::pi() / Fixed::from_int(180)).0
 }
 
 fn db_radius(sim: &Sim, u: &Entity) -> Fixed {
