@@ -290,6 +290,219 @@ fn welding_rigs_are_skipped_until_the_building_flag_clears() {
     assert_eq!(builds(&run(vec![rig_view(1, false)])), [(EntityId(1), station_key)], "the rig is available again once BUILDING clears");
 }
 
+#[test]
+fn empty_aip_builds_only_an_available_miner_station_prerequisite_once() {
+    let fake = sta_content::fake::db();
+    let mut base = fake.unit(fake.key("fx_station").unwrap()).unwrap().clone();
+    base.build.list = vec![DefRef::new("fx_miner"), DefRef::new("fx_frigate")];
+    base.build.ticks = 30;
+    let mut rig = sta_content::UnitDef::new("fx_rig", "constructionrig");
+    rig.race = "fx".into();
+    rig.movement = sta_content::MoveStats::from_f32(140.0, 1.0, 1.0, 1.0, 0.2);
+    rig.hull = Fixed::from_int(100);
+    rig.build.list = vec![DefRef::new("fx_decoy"), DefRef::new("fx_refinery")];
+    let mut refinery = sta_content::UnitDef::new("fx_refinery", "mining");
+    refinery.race = "fx".into();
+    refinery.hull = Fixed::from_int(100);
+    refinery.build.cost = vec![Fixed::from_int(200)];
+    refinery.build.ticks = 30;
+    let mut decoy = sta_content::UnitDef::new("fx_decoy", "mining");
+    decoy.race = "fx".into();
+    decoy.build.cost = vec![Fixed::from_int(1)];
+    let (tree, warnings) = TechTree::parse(
+        "miner.tt",
+        "fx_station 0\nfx_rig 0\nfx_miner 1 fx_refinery\nfx_frigate 0\nfx_refinery 0\nfx_decoy 0\n",
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let mut builder = ContentDb::builder().profile(fake.profile()).features(fake.features().clone()).tech_tree(tree);
+    for weapon in fake.weapons() {
+        builder = builder.weapon(weapon.clone());
+    }
+    for unit in fake.units() {
+        let mut unit = if unit.odf == "fx_station" { base.clone() } else { unit.clone() };
+        if unit.odf == "fx_miner" {
+            unit.build.ticks = 30;
+            unit.build.cost = vec![Fixed::from_int(100)];
+        }
+        if unit.odf == "fx_frigate" {
+            unit.build.cost = vec![Fixed::from_int(150)];
+        }
+        builder = builder.unit(unit);
+    }
+    let db = Arc::new(builder.unit(rig).unit(refinery).unit(decoy).build().unwrap());
+    let key = |name| db.key(name).unwrap();
+    let mut cfg = SkirmishConfig {
+        player: P0,
+        race: "fx".into(),
+        content: Arc::clone(&db),
+        home: Vec3::ZERO,
+        enemy_starts: Vec::new(),
+        nodes: Vec::new(),
+        seed: 1,
+        params: Params::default(),
+    };
+    let me = PlayerView {
+        crew: None,
+        id: P0,
+        team: TeamId(0),
+        resources: vec![Fixed::from_int(1000); 4],
+        officers: [Fixed::ZERO; 2],
+        eliminated: false,
+        relations: Vec::new(),
+    };
+    let unit = |id, def| sta_sim::view::UnitView {
+        id: EntityId(id),
+        def,
+        owner: P0,
+        pos: Vec3::ZERO,
+        heading: (Fixed::ONE, Fixed::ZERO),
+        speed: Fixed::ZERO,
+        hull: [Fixed::ONE; 2],
+        shields: [[Fixed::ZERO; 2]; 4],
+        crew: None,
+        energy: None,
+        autonomy: None,
+        flags: sta_sim::view::UnitFlags::SELECTABLE,
+        progress: None,
+    };
+    let view = WorldView { units: vec![unit(1, key("fx_station")), unit(2, key("fx_rig")), unit(3, key("fx_rig"))], ..WorldView::default() };
+    let builds = |out: &[Command]| out.iter().filter_map(|c| match c.kind {
+        CommandKind::Order(Order::Build { builder, what, .. }) => Some((builder, what)),
+        _ => None,
+    }).collect::<Vec<_>>();
+
+    let mut ai = SkirmishController::new(cfg.clone());
+    let mut out = Vec::new();
+    ai.plan(&view, &me, &mut out);
+    assert_eq!(builds(&out), [(EntityId(2), key("fx_refinery"))], "the decoy is cheaper but does not unlock mining");
+    let scarce = PlayerView { resources: vec![Fixed::from_int(200); 4], ..me.clone() };
+    let mut scarce_ai = SkirmishController::new(cfg.clone());
+    out.clear();
+    scarce_ai.plan(&view, &scarce, &mut out);
+    assert_eq!(builds(&out), [(EntityId(2), key("fx_refinery"))], "the yard must save station funds instead of buying a warship");
+    out.clear();
+    ai.plan(&view, &me, &mut out);
+    assert!(builds(&out).is_empty(), "the in-flight rig job prevents duplicate construction and preserves miner funds");
+
+    cfg.params.build_list = vec![BuildItem { unit: "fx_decoy".into(), count: Fixed::ONE, base: None, max: None, tech_level: None }];
+    let mut ai = SkirmishController::new(cfg.clone());
+    out.clear();
+    ai.plan(&view, &me, &mut out);
+    assert_eq!(builds(&out), [(EntityId(1), key("fx_frigate")), (EntityId(2), key("fx_decoy"))], "an explicit AIP row retains its policy");
+
+    let (locked_tree, warnings) = TechTree::parse(
+        "multi-level.tt",
+        "fx_station 0\nfx_rig 0\nfx_miner 1 fx_refinery\nfx_frigate 0\nfx_refinery 1 fx_gate\nfx_decoy 0\nfx_gate 0\n",
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let mut gate = sta_content::UnitDef::new("fx_gate", "mining");
+    gate.race = "fx".into();
+    let mut locked_builder = ContentDb::builder()
+        .profile(cfg.content.profile())
+        .features(cfg.content.features().clone())
+        .tech_tree(locked_tree)
+        .unit(gate);
+    for weapon in cfg.content.weapons() {
+        locked_builder = locked_builder.weapon(weapon.clone());
+    }
+    for unit in cfg.content.units() {
+        locked_builder = locked_builder.unit(unit.clone());
+    }
+    let mut locked_cfg = cfg.clone();
+    locked_cfg.params.build_list.clear();
+    locked_cfg.content = Arc::new(locked_builder.build().unwrap());
+    let locked_view = WorldView {
+        units: vec![
+            unit(1, locked_cfg.content.key("fx_station").unwrap()),
+            unit(2, locked_cfg.content.key("fx_rig").unwrap()),
+        ],
+        ..WorldView::default()
+    };
+    let mut locked_ai = SkirmishController::new(locked_cfg);
+    out.clear();
+    locked_ai.plan(&locked_view, &me, &mut out);
+    assert_eq!(builds(&out), [(EntityId(1), locked_ai.cfg.content.key("fx_frigate").unwrap())], "a locked prerequisite must not freeze normal yard production");
+
+    let (alt_tree, warnings) = TechTree::parse(
+        "alternate-miner.tt",
+        "fx_station 0\nfx_rig 0\nfx_miner 1 fx_refinery\nfx_alt_miner 0\nfx_frigate 0\nfx_refinery 0\nfx_decoy 0\n",
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let mut alt_base = base.clone();
+    alt_base.build.list.insert(0, DefRef::new("fx_alt_miner"));
+    let mut alt_miner = sta_content::UnitDef::new("fx_alt_miner", "freighter");
+    alt_miner.race = "fx".into();
+    alt_miner.build.cost = vec![Fixed::from_int(100)];
+    let mut alt_builder = ContentDb::builder()
+        .profile(cfg.content.profile())
+        .features(cfg.content.features().clone())
+        .tech_tree(alt_tree)
+        .unit(alt_miner);
+    for weapon in cfg.content.weapons() {
+        alt_builder = alt_builder.weapon(weapon.clone());
+    }
+    for existing in cfg.content.units() {
+        alt_builder = alt_builder.unit(if existing.odf == "fx_station" { alt_base.clone() } else { existing.clone() });
+    }
+    let mut alt_cfg = cfg.clone();
+    alt_cfg.params.build_list.clear();
+    alt_cfg.content = Arc::new(alt_builder.build().unwrap());
+    let alt_view = WorldView {
+        units: vec![
+            unit(1, alt_cfg.content.key("fx_station").unwrap()),
+            unit(2, alt_cfg.content.key("fx_rig").unwrap()),
+        ],
+        ..WorldView::default()
+    };
+    let alt_miner_key = alt_cfg.content.key("fx_alt_miner").unwrap();
+    let mut alt_ai = SkirmishController::new(alt_cfg);
+    out.clear();
+    alt_ai.plan(&alt_view, &scarce, &mut out);
+    assert_eq!(builds(&out), [(EntityId(1), alt_miner_key)], "an available miner takes precedence over a locked alternate's station");
+
+    // Exercise admission and completion as well as planning. The starting
+    // constructor and base mirror the Classic dependency chain, but use
+    // authored fake definitions so this remains install-independent.
+    let game = GameSetup { content: Arc::clone(&cfg.content), ..setup(1, sta_content::fake::db()) };
+    let mut sim = Sim::from_setup(&game);
+    let at = game.map.starts[0].pos;
+    let spawn = |odf, player, pos| Command {
+        player: PlayerId::BENCH,
+        seq: 0,
+        kind: CommandKind::Edit(Edit::Spawn { odf: key(odf), player, pos, heading: (Fixed::ONE, Fixed::ZERO) }),
+    };
+    sim.step(&[
+        spawn("fx_station", P0, at),
+        spawn("fx_rig", P0, Vec3 { x: at.x + Fixed::from_int(400), ..at }),
+        spawn("fx_station", P1, game.map.starts[1].pos),
+        // After paying 200 for the station, 150 is enough for a warship but
+        // not for that warship and the 100-cost miner.
+        Command { player: PlayerId::BENCH, seq: 1, kind: CommandKind::Edit(Edit::Cargo(P0, 0, Fixed::from_int(350))) },
+    ]);
+    let mut ai = SkirmishController::new(SkirmishConfig::from_setup(&game, P0).unwrap());
+    let mut events = Vec::new();
+    let (mut built_refinery, mut built_miner, mut mining, mut rejected, mut early_warship) = (false, false, false, 0, false);
+    for _ in 0..3000 {
+        let mut orders = Vec::new();
+        ai.think(&sim.view(), &events, &mut orders);
+        let output = sim.step(&orders);
+        rejected += output.events.iter().filter(|e| matches!(e, SimEvent::Rejected { player, .. } if *player == P0)).count();
+        for e in &output.events {
+            if let SimEvent::Built { id, .. } = e {
+                early_warship |= !built_miner && output.view.units.iter().any(|u| u.id == *id && u.def == key("fx_frigate"));
+                built_refinery |= output.view.units.iter().any(|u| u.id == *id && u.def == key("fx_refinery"));
+                built_miner |= output.view.units.iter().any(|u| u.id == *id && u.def == key("fx_miner"));
+            }
+            mining |= matches!(e, SimEvent::MinerPhase { phase: sta_sim::MinerPhase::Mining, .. });
+        }
+        events = output.events;
+        if built_refinery && built_miner && mining { break; }
+    }
+    assert!(built_refinery && built_miner && mining, "refinery={built_refinery}, miner={built_miner}, mining={mining}");
+    assert!(!early_warship, "a warship spent the reserved miner budget before mining started");
+    assert_eq!(rejected, 0);
+}
+
 /// Both seats plan on the same ticks. A stagger by seat number once gave seat
 /// 1 every plan one tick before seat 0, which decided mirror games for it.
 #[test]

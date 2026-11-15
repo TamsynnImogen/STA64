@@ -1,6 +1,7 @@
-//! SIM-46 P0: the transporter and boarding keys of unit ODFs, race ODFs and
-//! `RTS_CFG.h` are typed and exposed; nothing reads them yet, so they do not
-//! move the content hash. Authored fixtures first, then install-gated counts.
+//! SIM-46 P0 and SIM-69: the transporter and boarding keys of unit ODFs, race
+//! ODFs and `RTS_CFG.h` are typed and exposed; the ones the sim reads are in the
+//! content digest when set, the others are not. Authored fixtures first, then
+//! an install-gated test of general rules.
 
 use std::path::Path;
 
@@ -52,11 +53,22 @@ fn unit_keys_are_read_with_their_defaults() {
 }
 
 #[test]
-fn the_keys_do_not_move_the_content_hash() {
+fn keys_the_sim_reads_move_the_content_hash_only_when_set() {
     let plain = "unitName = \"x\"\nclassLabel = \"craft\"\n";
-    let keyed = "unitName = \"x\"\nclassLabel = \"craft\"\ntransporter = 1\nassault = 1\nboardingPartyStrength = 5\ndisableShieldsOnTransport = 0\nweldingAnimSpeed = 0\nshieldDelay = 3\neventTransport = \"e\"\n";
-    assert_eq!(load(&[("u_a.odf", plain)]).hash(), load(&[("u_a.odf", keyed)]).hash());
+    let base = load(&[("u_a.odf", plain)]).hash();
+    // A database without the keys keeps its hash; the fake database's pin is unchanged.
+    assert_eq!(base, load(&[("u_a.odf", "unitName = \"x\"\nclassLabel = \"craft\"\nboardingPartyStrength = 1\ndisableShieldsOnTransport = 1\n")]).hash(), "explicit defaults digest as absent");
     assert_eq!(sta_content::fake::db().hash(), 0x9ef5_3881_3050_10f8);
+    // Each key the sim reads changes it.
+    for line in ["transporter = 1", "transporter = 0", "boardingPartyStrength = 2.5", "disableShieldsOnTransport = 0", "shieldDelay = 4"] {
+        let text = format!("{plain}{line}\n");
+        assert_ne!(base, load(&[("u_a.odf", &text)]).hash(), "{line}");
+    }
+    // The ones nothing reads do not.
+    for line in ["assault = 1", "weldingAnimSpeed = 0", "eventTransport = \"e\""] {
+        let text = format!("{plain}{line}\n");
+        assert_eq!(base, load(&[("u_a.odf", &text)]).hash(), "{line}");
+    }
 }
 
 #[test]
@@ -75,18 +87,21 @@ fn rules_keys_default_to_the_engine_values() {
     let (none, w) = Rules::from_header("int MAX_CREW = 5;\n");
     assert!(w.is_empty());
     assert_eq!(none.transporter(), d, "no key: the engine defaults");
-    let (set, w) = Rules::from_header("float TRANSPORTER_RANGE = 840.0;\nfloat TRANSPORTER_DELAY = 0;\nint   TRANSPORTER_MAX = 3;\n");
+    let (set, w) = Rules::from_header("float TRANSPORTER_RANGE = 612.0;\nfloat TRANSPORTER_DELAY = 0;\nint   TRANSPORTER_MAX = 4;\n");
     assert!(w.is_empty(), "{w:?}");
     let t = set.transporter();
-    assert_eq!((t.range, t.delay, t.max), (Fixed::from_int(840), Fixed::ZERO, 3), "explicit zero kept");
+    assert_eq!((t.range, t.delay, t.max), (Fixed::from_int(612), Fixed::ZERO, 4), "explicit zero kept");
     assert_eq!(t.action_delay, Fixed::ONE, "a key the header leaves out keeps the engine default");
     let (bad, w) = Rules::from_header("float TRANSPORTER_RANGE = far;\nint TRANSPORTER_MAX = -1;\n");
     assert_eq!(w.len(), 2);
     assert_eq!(bad.transporter(), d);
-    // Not digested (nothing reads them yet): the header alone does not change the rules digest.
+    // Digested when set (the sim reads them); a header without them digests as before.
     let (plain, _) = Rules::from_header("int MAX_CREW = 5;\n");
-    let (keyed, _) = Rules::from_header("int MAX_CREW = 5;\nfloat TRANSPORTER_RANGE = 840.0;\nint TRANSPORTER_MAX = 3;\n");
-    assert_eq!(plain.digest_entries(), keyed.digest_entries());
+    let (keyed, _) = Rules::from_header("int MAX_CREW = 5;\nfloat TRANSPORTER_RANGE = 612.0;\nint TRANSPORTER_MAX = 4;\n");
+    let (other, _) = Rules::from_header("int MAX_CREW = 5;\nfloat TRANSPORTER_RANGE = 613.0;\nint TRANSPORTER_MAX = 4;\n");
+    assert_ne!(plain.digest_entries(), keyed.digest_entries());
+    assert_ne!(keyed.digest_entries(), other.digest_entries());
+    assert_eq!(plain.digest_entries(), Rules::from_header("int MAX_CREW = 5;\nint SOMETHING_ELSE = 3;\n").0.digest_entries());
     assert!(!sta_content::TYPED_CFG_KEYS.contains(&"TRANSPORTER_RANGE"));
 }
 
@@ -96,7 +111,7 @@ fn race_keys_are_read_with_their_defaults() {
     std::fs::create_dir_all(dir.join("odf")).unwrap();
     let write = |name: &str, text: &str| std::fs::write(dir.join("odf").join(name), text).unwrap();
     write("races.odf", "numberOfRaces = 3\nrace0 = \"RaceA.odf\"\nrace1 = \"RaceB.odf\"\nrace2 = \"RaceC.odf\"\n");
-    write("RaceA.odf", "name = \"Alpha\"\nboardingStrength = 1.75f\ncrewRetreatRatio = 0.2f // trailing comment\ntransportSprite = \"btransport\"\ntransportToFriendsOnNotEasy = 1\ntransportToEnemyOnHard = 1\n");
+    write("RaceA.odf", "name = \"Alpha\"\ncrewRedStatus = 0.3f\nboardingStrength = 1.75f\ncrewRetreatRatio = 0.2f // trailing comment\ntransportSprite = \"btransport\"\ntransportToFriendsOnNotEasy = 1\ntransportToEnemyOnHard = 1\n");
     write("RaceB.odf", "name = \"Beta\"\nboardingStrength = 0.0f\ncanCommandeer = 0\ncanBeCommandeered = 0\ntransportToFriendsOnNotEasy = 0\n");
     write("RaceC.odf", "name = \"Gamma\"\n");
     let mut vfs = Vfs::default();
@@ -108,6 +123,10 @@ fn race_keys_are_read_with_their_defaults() {
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(db.rules().race_boarding("alpha"), races.boarding("alpha"));
     assert_eq!(db.rules().race_boarding("beta"), races.boarding("beta"));
+    // Repair rows are keyed by file stem; a unit's race key is the name (SIM-69 review).
+    assert_eq!(db.rules().race_repair_of("Alpha").and_then(|r| r.crew_red_status), Some(Fixed::from_f64(f64::from(0.3f32))));
+    assert!(db.rules().race_repair("alpha").is_none(), "the stem is `racea`");
+    assert!(db.rules().race_repair_of("beta").is_none());
     let a = races.boarding("ALPHA");
     assert_eq!(a.boarding_strength, Fixed::from_f64(1.75));
     assert_eq!(a.crew_retreat_ratio, Fixed::from_f64(f64::from(0.2f32)));
@@ -126,8 +145,11 @@ fn race_keys_are_read_with_their_defaults() {
     assert_eq!(rules.race_boarding("Alpha"), a);
     assert_eq!(rules.race_boarding("beta"), b);
     assert_eq!(rules.race_boarding("gamma"), RaceBoarding::default());
-    // Not digested: the race keys alone do not change the rules digest.
-    assert_eq!(rules.digest_entries(), Rules::from_header("").0.digest_entries());
+    // Digested when a read key differs from its default; the AI and presentation keys alone do not.
+    assert_ne!(rules.digest_entries(), Rules::from_header("").0.digest_entries());
+    let only_ai = RaceBoarding { crew_retreat_ratio: Fixed::from_f64(0.5), transport_sprite: Some("s".into()), ..RaceBoarding::default() };
+    let ai = Rules::from_header("").0.with_race_boarding(vec![("x".into(), only_ai)]);
+    assert_eq!(ai.digest_entries(), Rules::from_header("").0.digest_entries());
     let d = RaceBoarding::default();
     assert_eq!((d.boarding_strength, d.can_commandeer, d.can_be_commandeered), (Fixed::ONE, true, true));
     assert_eq!(d.crew_retreat_ratio, Fixed::from_f64(f64::from(0.15f32)));
