@@ -6,34 +6,33 @@
 //! - *Cruise.* A plain move flies at the craft's own `warpSpeed`: the
 //!   throttle multiplier is `warpSpeed / impulseSpeed` (1 when either is not
 //!   positive), worked out every tick from `stats`, so a scripted warp or
-//!   impulse value feeds it with no state of its own. Measured: 80, 100 and
-//!   50 units per second for the three stock classes, held on straight legs.
+//!   impulse value feeds it with no state of its own. Measured, held on
+//!   straight legs.
 //! - *Speed lag.* Forward speed follows the throttle with a first-order lag of
 //!   `frontBackInertia / impulseSpeed` seconds of the **play physics** (every
 //!   steered craft flies with one shared physics file outside cineractives:
-//!   exe; the 0.37 s lag is measured, the same for every class). Steady
-//!   speed is `impulse x throttle`. Reverse throttle uses `maxReverseSpeed`.
+//!   exe; the lag is measured, the same for every class). Steady speed is
+//!   `impulse x throttle`. Reverse throttle uses `maxReverseSpeed`.
 //! - *Throttle.* More than 45 degrees off its path point (or while the heading
 //!   error is above `headingCloseEnoughForWarp`) the craft asks for the
-//!   impulse throttle, so it keeps moving while it turns (measured: 13 to 17
-//!   units per second, never a pivot on the spot). Within 45 degrees a damped
-//!   controller (`braccelControlStiffness`, critically damped) chases the
-//!   path point, which runs `pathLeadDistance` ahead at the cruise speed and
-//!   at rest on the last point; the throttle saturates at the multiplier far
-//!   out and brakes from about 1.6 x cruise before the goal (measured),
-//!   to rest a few units short (measured: no overshoot). exe.
-//! - *Stop.* Within `tooCloseToTurn` of the final point the craft stops
-//!   steering and brakes onto it; the order ends when it is also slower than
-//!   half its impulse speed. With no target the throttle is zero and the
-//!   craft coasts about `speed x lag` (measured). exe.
+//!   impulse throttle, so it keeps moving while it turns (measured; never a
+//!   pivot on the spot). Within 45 degrees a damped controller
+//!   (`braccelControlStiffness`, critically damped) chases the path point,
+//!   which runs `pathLeadDistance` ahead at the cruise speed and at rest on
+//!   the last point; the throttle saturates at the multiplier far out and
+//!   brakes ahead of the goal, to rest short of it without overshoot
+//!   (measured; structure exe).
+//! - *Stop.* Within the stop radius of the final point (`tooCloseToTurn`, at
+//!   least the arrival distance and the turning-circle diameter; ours for the
+//!   last term) the craft stops steering and brakes onto it; the order ends
+//!   when it is also slower than half its impulse speed. With no target the
+//!   throttle is zero and the craft coasts about `speed x lag` (measured).
 //! - *Turn.* A servo (`sy_yawAngleCoeff`, `sy_yawVelocCoeff`) asks for a
 //!   share of the steady turn rate, which grows with speed as the shared
 //!   curve `velocCoeffStill`, `velocWhenCoeffHalf` and is scaled by
-//!   `impulseSpeed / turnRadius`: about 83 degrees per second at rest and 217
-//!   at cruise for the stock play physics (exe). Measured: 130 to 145 degrees
-//!   per second sustained in a sharp turn, about 0.8 s after the order, for
-//!   every class. The executable banks the craft (a critically damped roll
-//!   sets the yaw rate); we have no roll state, so the turn rate follows the
+//!   `impulseSpeed / turnRadius` (exe; the sustained rate in a sharp turn is
+//!   measured). The executable banks the craft (a critically damped roll sets
+//!   the yaw rate); we have no roll state, so the turn rate follows the
 //!   command through a first-order lag of `4 / (rollRotationSpeed x impulse)`
 //!   seconds. **Ours**; a value of `rollRotationSpeed` that is not positive
 //!   means no lag.
@@ -192,7 +191,7 @@ pub(super) fn authority(d: &A1Dynamics, v: Fixed) -> Fixed {
     Fixed::ONE - Fixed::ONE / den
 }
 
-/// The most any turn rate may be (radians per second): well above the stock
+/// The most any turn rate may be (radians per second): well above any shipped
 /// rates, and keeps one tick's rotation small for `rotate` whatever mod data
 /// says.
 pub(super) const MAX_TURN_RATE: f64 = 12.0;
@@ -295,8 +294,10 @@ fn decide(u: &mut Unit, p: &A1Params, queued: &[Vec3], plan: Option<Plan>) -> Cm
     // the stop radius of this one, or has reached the corner region (within
     // the lead distance) and crossed the bisector plane of the two legs at
     // it (the legs being the craft's present heading in and the next leg out),
-    // or, moving and heading away from it with it behind the next leg, has
-    // passed it. So a corner of any angle, an out-and-back included, is
+    // or, moving, heading away from it with it behind the next leg and still
+    // within twice the lead distance (a corner is cut by less than the lead
+    // distance, so a craft that rounded it is inside that; one that never came
+    // near it has not passed it), has passed it. So a corner of any angle, an out-and-back included, is
     // rounded only after the craft has got to it.
     let (mut tgt, mut rest) = (target, queued);
     if let Some(&next) = queued.first() {
@@ -311,7 +312,10 @@ fn decide(u: &mut Unit, p: &A1Params, queued: &[Vec3], plan: Option<Plan>) -> Cm
                 let bisector = rx * (u.heading.0 - ox) + rz * (u.heading.1 - oz) >= Fixed::ZERO;
                 let behind = u.heading.0 * tx + u.heading.1 * tz < Fixed::ZERO
                     && tx * ox + tz * oz <= Fixed::ZERO;
-                (td < lead && bisector) || (behind && u.speed > imp / Fixed::from_int(2))
+                (td < lead && bisector)
+                    || (td < lead * Fixed::from_int(2)
+                        && behind
+                        && u.speed > imp / Fixed::from_int(2))
             };
         if hand_over {
             u.target = None;
@@ -522,7 +526,7 @@ fn integrate(u: &mut Unit, p: &A1Params, cmd: &Cmd, dt: Fixed) {
 }
 
 /// Test inputs for the seam: a synthetic parameter block (key names and the
-/// stock values), in force on this thread until the guard drops. A block may
+/// authored values), in force on this thread until the guard drops. A block may
 /// be limited to one definition (the database-wide ask, with
 /// [`ContentKey::NONE`], is always answered).
 #[cfg(test)]
