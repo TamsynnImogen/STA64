@@ -93,19 +93,24 @@ impl TeamColours {
     }
 
     /// The palette entry of a sim owner (seat). The file numbers its entries 0 = neutral,
-    /// 1 to 8 = teams, and a seat is the BZN team minus one (`MapDef::convert_bzn`), so
-    /// seat `n` takes entry `n + 1`. Unowned and out-of-range owners take the neutral
-    /// entry (the first). `None` only when the palette is empty.
+    /// 1 to 8 = teams (entries 9 and up are spare and race colours, not teams), and a seat
+    /// is the BZN team minus one (`MapDef::convert_bzn`), so seat `n` takes entry `n + 1`.
+    /// An owner that is not a player seat takes the neutral entry (the first), and so does
+    /// a seat whose entry a shorter mod palette lacks. `None` only when the palette is empty.
+    ///
+    /// The unit view (`sync_units`) does not use this for the unowned owner: unowned units
+    /// keep plain white there, as before; the map view uses the neutral entry for them.
     pub fn owner_colour(&self, owner: PlayerId) -> Option<Color> {
-        if owner == sta_sim::world::NEUTRAL {
+        if !owner.is_player() {
             return self.0.first().map(|t| t.1);
         }
         self.team_colour(u32::from(owner.0) + 1)
     }
 
-    /// The palette entry of a 1-based BZN team; team 0 or beyond the palette is neutral.
+    /// The palette entry of a 1-based BZN team; team 0, a team above `MAX_PLAYERS` and a
+    /// team beyond a shorter mod palette are neutral.
     pub fn team_colour(&self, team: u32) -> Option<Color> {
-        let i = if team == 0 { 0 } else { team as usize };
+        let i = if team == 0 || team > u32::from(PlayerId::MAX_PLAYERS) { 0 } else { team as usize };
         self.0.get(i).or_else(|| self.0.first()).map(|t| t.1)
     }
 
@@ -499,11 +504,18 @@ mod team_colour_tests {
         assert_eq!(t.owner_colour(PlayerId(0)), Some(Color::srgb(1.0, 0.0, 0.0)));
         assert_eq!(t.owner_colour(PlayerId(1)), Some(Color::srgb(0.0, 1.0, 0.0)));
         // Beyond the palette and unowned: the neutral entry.
-        assert_eq!(t.owner_colour(PlayerId(2)), Some(Color::srgb(0.5, 0.5, 0.5)));
+        assert_eq!(t.owner_colour(PlayerId(2)), Some(Color::srgb(0.5, 0.5, 0.5)), "a shorter palette: neutral");
         assert_eq!(t.owner_colour(sta_sim::world::NEUTRAL), Some(Color::srgb(0.5, 0.5, 0.5)));
         // The map view's BZN team (1-based) agrees with the seat it becomes.
         assert_eq!(t.team_colour(1), t.owner_colour(PlayerId(0)));
         assert_eq!(t.team_colour(0), t.owner_colour(sta_sim::world::NEUTRAL));
+        // Spare and race entries (9 and up) are not teams.
+        let long = TeamColours((0..14).map(|i| (format!("e{i}"), Color::srgb(i as f32 / 20.0, 0.0, 0.0))).collect());
+        assert_eq!(long.owner_colour(PlayerId(7)), Some(Color::srgb(0.4, 0.0, 0.0)));
+        assert_eq!(long.owner_colour(PlayerId(8)), Some(Color::srgb(0.0, 0.0, 0.0)));
+        assert_eq!(long.owner_colour(PlayerId(100)), Some(Color::srgb(0.0, 0.0, 0.0)));
+        assert_eq!(long.team_colour(8), Some(Color::srgb(0.4, 0.0, 0.0)));
+        assert_eq!(long.team_colour(9), Some(Color::srgb(0.0, 0.0, 0.0)));
         assert_eq!(TeamColours(Vec::new()).owner_colour(PlayerId(0)), None);
     }
 }

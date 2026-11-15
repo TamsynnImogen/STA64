@@ -162,7 +162,13 @@ pub fn sync_units(
         }
     }
     // Seat n takes palette entry n + 1 (entry 0 is the neutral one): `TeamColours::owner_colour`.
-    let colour = |owner: PlayerId| teams.as_ref().and_then(|t| t.owner_colour(owner)).unwrap_or(Color::WHITE);
+    // Unowned units (moons, props, derelicts) stay plain white, as they always were here.
+    let colour = |owner: PlayerId| {
+        if owner == sta_sim::world::NEUTRAL {
+            return Color::WHITE;
+        }
+        teams.as_ref().and_then(|t| t.owner_colour(owner)).unwrap_or(Color::WHITE)
+    };
     let mut stale: BTreeSet<EntityId> = BTreeSet::new();
     for (id, u) in want {
         let share = hull_share(u);
@@ -596,7 +602,7 @@ mod view_tests {
                 child = Some((e2, c, g));
                 assert_eq!(app.world().get::<TeamColour>(e2).unwrap().0, Color::srgb(1.0, 0.0, 0.0));
                 assert_eq!(app.world().get::<TeamColour>(map[&EntityId(1)]).unwrap().0, Color::srgb(0.0, 0.0, 1.0));
-                assert_eq!(app.world().get::<TeamColour>(map[&EntityId(3)]).unwrap().0, Color::srgb(0.5, 0.5, 0.5), "unowned: the neutral entry");
+                assert_eq!(app.world().get::<TeamColour>(map[&EntityId(3)]).unwrap().0, Color::WHITE, "unowned: plain white, as on main (the palette entry 0 is grey here)");
                 // Seat 0 is the first team (entry 1), not the neutral entry 0.
                 assert_ne!(app.world().get::<TeamColour>(map[&EntityId(1)]).unwrap().0, Color::srgb(0.5, 0.5, 0.5));
             }
