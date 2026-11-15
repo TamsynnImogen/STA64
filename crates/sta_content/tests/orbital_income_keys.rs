@@ -68,7 +68,7 @@ fn node_keys_are_typed_through_the_planets_resource() {
     let db = load(&[
         ("u_world.odf", &planet("rich")),
         ("u_plain.odf", &planet("plain")),
-        ("rich.odf", "canHaveOrbitalStation = 1\nminingRate = 7\ntrickleAmount = 40\ntrickleMiningRateFraction = .25\namtmetal = 5000\namtbiomatter = 6500\ninfinite = 0\n"),
+        ("rich.odf", "canHaveOrbitalStation = 1\nminingRate = 7\ntrickleAmount = 40\ntrickleMiningRateFraction = .25\namtmetal = 5000\namtbiomatter = 6500\nisInfinite = 0\n"),
         ("plain.odf", "canHaveOrbitalStation = 1\n"),
     ]);
     let n = def(&db, "u_world").node_income.unwrap();
@@ -94,7 +94,7 @@ fn only_definitions_with_keys_move_the_digest() {
     assert_ne!(other, moved);
     let handle = hash(&[("u_s.odf", &station("resourcesCanHandle = \"metal\"\n")), ("u_p.odf", planet), ("n.odf", "canHaveOrbitalStation = 1\n")]);
     assert_ne!(handle, base.hash());
-    for key in ["miningRate = 3", "trickleAmount = 10", "trickleMiningRateFraction = 0.5", "infinite = 1", "amtmetal = 900"] {
+    for key in ["miningRate = 3", "trickleAmount = 10", "trickleMiningRateFraction = 0.5", "isInfinite = 1", "amtmetal = 900"] {
         let node = format!("canHaveOrbitalStation = 1\n{key}\n");
         let h = hash(&[("u_s.odf", &station("")), ("u_p.odf", planet), ("n.odf", &node)]);
         assert_ne!(h, base.hash(), "{key}");

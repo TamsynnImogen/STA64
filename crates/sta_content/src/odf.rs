@@ -347,6 +347,10 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
             // CON-51: the node's income keys, typed and not yet read by the sim.
             def.node_income = node.as_ref().and_then(|n| crate::orbital_income::resolve_node(&format!("{}.odf", stem(text)), n, &mut warnings));
         }
+        // Armada I: a moon carries no `resource` key (CON-53); the class and the absent scrap keys mark it.
+        if def.resource.is_none() && profile == Profile::Sta1Classic && crate::resources::is_sta1_moon(odf) {
+            def.resource = Some(crate::resources::DILITHIUM as u8);
+        }
         let file = format!("{s}.odf");
         def.planet_role = crate::planet::resolve(&file, odf, profile, &mut warnings);
         def.planet_crew_gain = crate::planet::resolve_crew_gain(&file, odf, profile, def.planet_role, &mut warnings);

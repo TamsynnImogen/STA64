@@ -870,6 +870,11 @@ pub trait MissionHost {
         Vec::new()
     }
 
+    /// The seats' start values from the map's team table ([`crate::start_stock`]); none by default.
+    fn start_stock(&self, _campaign: &Campaign, _mission: &CampaignMission) -> crate::start_stock::StartStock {
+        crate::start_stock::StartStock::default()
+    }
+
     /// The map's named paths `(label, points)`, in file order, for `A2.paths`.
     fn map_paths(&self, _campaign: &Campaign, _mission: &CampaignMission) -> Vec<(String, Vec<[f32; 3]>)> {
         Vec::new()
@@ -1019,6 +1024,23 @@ pub fn launch_runtime_with_gaps(
     paths: Vec<(String, Vec<[f32; 3]>)>,
     label_gaps: Vec<crate::map_labels::LabelGap>,
 ) -> Result<MissionRuntime, StartError> {
+    launch_runtime_with_start(path, reader, seed, seat, setup, sim, paths, label_gaps, Default::default())
+}
+
+/// [`launch_runtime_with_gaps`] with the seats' start values (the map's team table, [`crate::start_stock`]):
+/// queued as the script's first commands, ahead of anything it queues while it loads.
+#[allow(clippy::too_many_arguments)]
+pub fn launch_runtime_with_start(
+    path: &str,
+    reader: ScriptReader,
+    seed: u64,
+    seat: (PlayerId, PlayerNumbering),
+    setup: &GameSetup,
+    sim: &Sim,
+    paths: Vec<(String, Vec<[f32; 3]>)>,
+    label_gaps: Vec<crate::map_labels::LabelGap>,
+    start_stock: crate::start_stock::StartStock,
+) -> Result<MissionRuntime, StartError> {
     let cfg = MissionConfig {
         seat: Some(seat.0),
         player_numbering: seat.1,
@@ -1027,7 +1049,7 @@ pub fn launch_runtime_with_gaps(
         paths,
         view: Some((*sim.view()).clone()),
     };
-    let runtime = MissionRuntime::load_with_gaps(path, seed, cfg, label_gaps, move |p| reader(p));
+    let runtime = MissionRuntime::load_with_start(path, seed, cfg, label_gaps, start_stock, move |p| reader(p));
     if let Some(e) = runtime.errors().first() {
         return Err(StartError::Blocked(format!("{path} did not load: {e}")));
     }
@@ -1182,7 +1204,7 @@ impl CampaignRunner {
         let sim = Sim::from_setup(&setup);
         let carried = sim.labels.iter().map(|(_, l)| l.clone()).collect();
         let gaps = host.map_label_gaps(c, m, &carried);
-        let runtime = launch_runtime_with_gaps(&path, reader, seed, host.seat(), &setup, &sim, host.map_paths(c, m), gaps)?;
+        let runtime = launch_runtime_with_start(&path, reader, seed, host.seat(), &setup, &sim, host.map_paths(c, m), gaps, host.start_stock(c, m))?;
         let ai_hub = sta_ai::MissionAiHub::new(host.aip_library());
         self.active = Some(ActiveMission {
             campaign: campaign.to_owned(),
@@ -1291,6 +1313,10 @@ impl VfsHost {
 }
 
 impl MissionHost for VfsHost {
+    fn start_stock(&self, _campaign: &Campaign, mission: &CampaignMission) -> crate::start_stock::StartStock {
+        crate::start_stock::read_start_stock(&self.vfs, &mission.bzn)
+    }
+
     fn map_label_gaps(&self, _campaign: &Campaign, mission: &CampaignMission, carried: &std::collections::BTreeSet<String>) -> Vec<crate::map_labels::LabelGap> {
         crate::map_labels::read_map_label_gaps(&self.vfs, &self.index, &mission.bzn, carried)
     }
