@@ -34,15 +34,19 @@ impl StockLight {
     /// and pink whatever the owner's colour. Read from data (the placeholder values in
     /// every SOD); measured on the A2 original (the Galaxy's `team` strut, diffuse purple
     /// in the SOD, is white under the white player colour); not measured on A1.
+    ///
+    /// The Borg glow family (`team_Bglow*`, case-insensitive) is left as it was: it keeps its own
+    /// diffuse and ambient. Nothing is measured for those regions (not measured, left as on main).
     pub fn from_material(m: &sta_assets::model::LightingMaterial) -> StockLight {
-        let diffuse = if crate::render::hulls::is_team_material(&m.name) {
+        let placeholder = crate::render::hulls::is_team_material(&m.name) && !is_borg_glow(&m.name);
+        let diffuse = if placeholder {
             [1.0; 3]
         } else {
             m.diffuse
         };
-        // The ambient colour is the same kind of placeholder (green-cyan on `team_Bglow`,
+        // The ambient colour is the same kind of placeholder (red or purple on A1 `team_fed`,
         // purple on A2 `team`): a grey of equal luminance keeps the brightness and drops the hue.
-        let ambient = if crate::render::hulls::is_team_material(&m.name) {
+        let ambient = if placeholder {
             let [r, g, b] = m.ambient;
             if r == g && g == b {
                 m.ambient
@@ -54,6 +58,11 @@ impl StockLight {
         };
         StockLight { ambient, diffuse, specular: m.specular, power: m.power, model: m.model }
     }
+}
+
+/// The Borg glow material family (`team_Bglow`, `team_Bglow_1`), excluded from the placeholder rule.
+fn is_borg_glow(name: &str) -> bool {
+    name.get(..10).is_some_and(|p| p.eq_ignore_ascii_case("team_bglow"))
 }
 
 /// Registers the stock hull look: `Effect::Hulls` has a stock implementation, which
@@ -134,11 +143,24 @@ mod tests {
         }
     }
 
-    /// A coloured team ambient (A1 `team_Bglow` 0.0 0.33 0.25) becomes the grey of equal luminance;
+    /// The Borg glow family keeps its own diffuse and ambient, as on main.
+    #[test]
+    fn the_borg_glow_family_keeps_its_own_colours() {
+        for name in ["team_Bglow", "TEAM_BGLOW_1", "team_bglow"] {
+            let mut m = material(name, [0.0, 1.0, 0.7]);
+            m.ambient = [0.0, 0.333, 0.248];
+            let l = StockLight::from_material(&m);
+            assert_eq!((l.diffuse, l.ambient), ([0.0, 1.0, 0.7], [0.0, 0.333, 0.248]), "{name}");
+        }
+        let l = StockLight::from_material(&material("team_glow", [0.0, 1.0, 0.7]));
+        assert_eq!(l.diffuse, [1.0; 3], "other glow materials follow the team rule");
+    }
+
+    /// A coloured team ambient (here a green-cyan one) becomes the grey of equal luminance;
     /// a black one stays black; other materials keep theirs.
     #[test]
     fn a_team_materials_ambient_loses_its_hue_not_its_brightness() {
-        let mut m = material("team_Bglow", [0.0, 1.0, 0.7]);
+        let mut m = material("team_fed", [0.0, 1.0, 0.7]);
         m.ambient = [0.0, 0.333, 0.248];
         let a = StockLight::from_material(&m).ambient;
         let lum = 0.587 * 0.333 + 0.114 * 0.248;
