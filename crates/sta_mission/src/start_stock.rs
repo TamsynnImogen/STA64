@@ -10,13 +10,18 @@
 //! queues while it loads: a `Set*` at load time wins, an `Add*` adds to the start value); `Map`, the snapshot and the replay layout
 //! do not change, and a replay carries the edits as the commands they are.
 //!
-//! Rule STA64 follows: seat `n` (Armada team `n + 1`) gets its block's dilithium, latinum and metal as
-//! `Edit::Cargo`, its crew as `Edit::TeamCrew` and its officer limit as `Edit::MaxOfficers`, only
-//! while the seat has no crew pool and no officer limit yet (a host that placed a loadout is left
-//! alone), crew and officer limit only when the table gives more than 0 (what 0 means for a team is not established,
-//! so such a seat stays as it is today). Biomatter is not in the table as far as read. Evidence: read
-//! from data for every map; measured for `a2_fed01` (the table's first block equals the stock game's
-//! start bar: dilithium, latinum, metal, crew); the officer limit is read from data only.
+//! Rule STA64 follows: seat `n` (Armada team `n + 1`) gets its block's dilithium, latinum, metal and
+//! biomatter ("supply" in Fleet Operations) as `Edit::Cargo` (resource ids 0 to 3), its crew as
+//! `Edit::TeamCrew` and its officer limit as `Edit::MaxOfficers`, only while the seat has no crew pool and
+//! no officer limit yet (a host that placed a loadout is left alone), crew and officer limit only when
+//! the table gives more than 0 (what 0 means for a team is not established, so such a seat stays as it is
+//! today). The table is read in both block shapes (see [`sta_bzn::team_table`]); its values are the start
+//! values, not an addition to the header's `STARTING_*` defaults. Evidence: read from data for every map;
+//! measured for `a2_fed01` (the table's first block equals the stock game's start bar: dilithium,
+//! latinum, metal, crew); the officer limit is read from data only. The biomatter slot: read from the
+//! Fleet Operations executable, static (the team loader stores it into the biomatter field after the
+//! pre-load defaults, for newer file versions); the header's `STARTING_BIOMATTER` is not read by that
+//! executable; for Armada II maps the same slot is applied by inference (its executable was not read).
 //!
 //! Order: the map's values first, then the script's own writes (it runs after them, so its `Set*`
 //! wins and its `Add*` adds). Grade: that a map's values are in place before the script's init is not
@@ -41,6 +46,8 @@ pub struct SeatStart {
     pub dilithium: i32,
     pub latinum: i32,
     pub metal: i32,
+    /// Biomatter (supply).
+    pub biomatter: i32,
     /// `None` when the table gives 0.
     pub crew: Option<i32>,
     /// `None` when the table gives 0.
@@ -83,6 +90,7 @@ pub fn from_table(table: &[sta_bzn::TeamStart]) -> Vec<SeatStart> {
             dilithium: whole(t.dilithium),
             latinum: whole(t.latinum),
             metal: whole(t.metal),
+            biomatter: whole(t.biomatter),
             crew: Some(whole(t.crew)).filter(|&c| c > 0),
             officers: Some(t.officers.clamp(0, LIMIT as i32)).filter(|&o| o > 0),
         })
@@ -99,8 +107,8 @@ impl SeatStart {
             return Vec::new();
         }
         let mut out = Vec::new();
-        // Resource ids: 0 dilithium, 1 latinum, 2 metal.
-        for (res, v) in [(0u8, self.dilithium), (1, self.latinum), (2, self.metal)] {
+        // Resource ids: 0 dilithium, 1 latinum, 2 metal, 3 biomatter.
+        for (res, v) in [(0u8, self.dilithium), (1, self.latinum), (2, self.metal), (3, self.biomatter)] {
             out.push(Edit::Cargo(self.seat, res, Fixed::from_int(v)));
         }
         if let Some(c) = self.crew {
