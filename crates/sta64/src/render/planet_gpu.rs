@@ -66,7 +66,7 @@ fn drive(
             .map(|(c, _)| c.0);
     }
     let Some(id) = scenario.planet else { return };
-    let mut view = (**link.curr()).clone();
+    let mut view = (**link.real_curr()).clone();
     let owner = sta_sim::PlayerId(0);
     if let Some(u) = view.units.iter_mut().find(|u| u.id == id) {
         u.owner = owner;
