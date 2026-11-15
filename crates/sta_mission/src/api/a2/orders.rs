@@ -15,7 +15,8 @@
 //!   `AI_Attack(unit, object)` are STOP / ATTACK orders; the extra `int` of
 //!   `Stop` and `Attack` is never read. `Mine` is MINE with an object, or
 //!   without a target when the object is absent (nearest node, see `spawn.rs`).
-//!   They are sent as the unit's owner like a player's input.
+//!   They are sent as the unit's owner like a player's input; a unit with no player owner is
+//!   ordered as the script seat (LUA-36).
 //! - `SetImpulseSpeed` / `ResetImpulseSpeed` set and lift the unit's impulse
 //!   speed, `SetRedAlert` / `SetGreenAlert` set its alert status (red 0, yellow
 //!   1, green 2): typed SCRIPT edits (`Edit::MaxSpeed`, `Edit::Alert`) whose
@@ -211,7 +212,9 @@ impl Env {
     }
 
     /// Send an order as the unit's owner. A unit with no player owner (neutral) is ordered as the
-    /// script seat: the original's script calls test no owner (LUA-36).
+    /// script seat: the original's script calls test no owner (LUA-36). A handle that is not alive
+    /// takes the same branch; every caller has checked `alive` first, and the sim ignores an
+    /// order to a unit that is gone.
     pub(super) fn order(&self, name: &str, id: EntityId, make: impl FnOnce(Vec<EntityId>) -> Order) -> mlua::Result<()> {
         if !self.ctx.borrow().alive(id).is_some_and(|u| u.owner.is_player()) {
             return self.script_order(name, make(vec![id]));
@@ -220,7 +223,7 @@ impl Env {
             Ok(())
         } else {
             Err(mlua::Error::runtime(format!(
-                "A2.{name}: object {} has no player owner or the order could not be queued",
+                "A2.{name}: the order for object {} could not be queued",
                 id.0
             )))
         }
@@ -236,7 +239,8 @@ impl Env {
 
     /// The engine's script order calls test no owner (read from the executable, static: the
     /// object guard, then the special-forces byte, then `SetCommand`; LUA-36), so a unit with
-    /// no player owner is ordered like any other. Kept as the one place a call would check.
+    /// no player owner is ordered like any other. TODO: drop this no-op and its call sites in one
+    /// sweep once the open order-gate work (#727) has merged, to avoid conflicting with it.
     pub(super) fn owned(&self, _name: &str, _unit: &UnitView) -> mlua::Result<()> {
         Ok(())
     }

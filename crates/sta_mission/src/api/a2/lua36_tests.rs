@@ -76,6 +76,15 @@ fn kinds(rt: &mut MissionRuntime) -> Vec<(PlayerId, CommandKind)> {
     rt.take_commands().into_iter().map(|c| (c.player, c.kind)).collect()
 }
 
+/// The queued commands, after the sim has taken them: none may be rejected.
+fn kinds_stepped(rt: &mut MissionRuntime, s: &mut Scene) -> (Vec<(PlayerId, CommandKind)>, WorldView) {
+    let commands = rt.take_commands();
+    let out = s.sim.step(&commands);
+    let rejected: Vec<_> = out.events.iter().filter(|e| matches!(e, SimEvent::Rejected { .. })).collect();
+    assert!(rejected.is_empty(), "{rejected:?}");
+    (commands.into_iter().map(|c| (c.player, c.kind)).collect(), (*out.view).clone())
+}
+
 #[test]
 fn obstacle_avoidance_is_an_accepted_no_op_and_not_a_gap() {
     let s = scene(0);
@@ -90,11 +99,11 @@ fn obstacle_avoidance_is_an_accepted_no_op_and_not_a_gap() {
 
 #[test]
 fn an_order_to_a_unit_with_no_player_owner_is_sent_as_the_script_seat() {
-    let s = scene(sta_sim::world::NEUTRAL.0);
+    let mut s = scene(sta_sim::world::NEUTRAL.0);
     let mut rt = runtime(&s);
     assert!(!s.view.units.iter().find(|u| u.id == s.ids[0]).unwrap().owner.is_player());
     rt.eval::<()>("A2.Goto(a, 'P', false, 1); A2.Goto(a, b, true, 1); A2.Stop(a, 1)").unwrap();
-    let sent = kinds(&mut rt);
+    let (sent, _) = kinds_stepped(&mut rt, &mut s);
     assert_eq!(sent.len(), 4, "{sent:?}");
     assert!(sent.iter().all(|(p, _)| *p == PlayerId::SCRIPT), "{sent:?}");
     assert!(matches!(&sent[0].1, CommandKind::Order(Order::Move { units, queue: false, .. }) if *units == [s.ids[0]]));
@@ -106,19 +115,25 @@ fn an_order_to_a_unit_with_no_player_owner_is_sent_as_the_script_seat() {
 
 #[test]
 fn an_owned_unit_is_still_ordered_as_its_owner() {
-    let s = scene(0);
+    let mut s = scene(0);
     let mut rt = runtime(&s);
     rt.eval::<()>("A2.Goto(a, 'P', false, 1)").unwrap();
-    assert!(kinds(&mut rt).iter().all(|(p, _)| *p == PlayerId(0)));
+    let (sent, _) = kinds_stepped(&mut rt, &mut s);
+    assert_eq!(sent.len(), 2, "both points of the path: {sent:?}");
+    assert!(sent.iter().all(|(p, _)| *p == PlayerId(0)));
 }
 
 #[test]
 fn move_autonomy_low_orders_the_movement_level_of_a_live_craft() {
-    let s = scene(sta_sim::world::NEUTRAL.0);
+    let mut s = scene(sta_sim::world::NEUTRAL.0);
     let mut rt = runtime(&s);
     // No owner, no special-forces flag needed.
     rt.eval::<()>("A2.SetCommandMoveAutonomyLow(a); A2.SetCommandMoveAutonomyLow(b)").unwrap();
-    let sent = kinds(&mut rt);
+    let (sent, view) = kinds_stepped(&mut rt, &mut s);
+    for id in [s.ids[0], s.ids[1]] {
+        let level = view.units.iter().find(|u| u.id == id).and_then(|u| u.autonomy);
+        assert_eq!(level.map(|l| l[0]), Some(0), "movement autonomy low is stored for {id:?}");
+    }
     let want = |id| CommandKind::Order(Order::Autonomy { units: vec![id], kind: AutonomyKind::Movement, level: AutonomyLevel::Low });
     assert_eq!(sent, vec![(PlayerId::SCRIPT, want(s.ids[0])), (PlayerId::SCRIPT, want(s.ids[1]))]);
     // A handle naming nothing live does nothing; a malformed one raises.
@@ -175,6 +190,14 @@ fn the_nearest_search_mask_is_a_team_the_object_must_be_visible_to() {
         // The shift count is taken modulo 32.
         assert_eq!(near(&mut rt, &format!("A2.GetNearestObjectNearMe(a, 500, -1, nil, {}, false)", team + 32)), want);
     }
+    // A candidate one team cannot see is skipped for that team and returned for the other.
+    let seen = |team: i64| rt.eval::<bool>(&format!("return A2.IsVisibleToTeam(far, {team})")).unwrap();
+    let (by0, by1) = (seen(0), seen(1));
+    assert!(by1 && !by0, "the far frigate is its own team's and out of the other's sight");
+    let far_id = i64::from(s.ids[3].0);
+    let pos = "A2.GetNearestObjectNearPosition(Vector(5000, 0, 0), -1, -1, nil, ";
+    assert_eq!(near(&mut rt, &format!("{pos}1, false, 0)")), far_id, "visible to team 1");
+    assert_ne!(near(&mut rt, &format!("{pos}0, false, 0)")), far_id, "not visible to team 0");
     // A mask naming no seated team matches nothing.
     assert_eq!(near(&mut rt, "A2.GetNearestObjectNearMe(a, 500, -1, nil, 7, false)"), 0);
     assert!(rt.take_commands().is_empty());

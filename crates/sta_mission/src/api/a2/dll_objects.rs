@@ -402,7 +402,7 @@ struct Search<'a> {
     perceived: bool,
     exclude: Option<EntityId>,
     /// A non-negative mask: only these objects (see `near_mask`).
-    visible: Option<&'a BTreeSet<EntityId>>,
+    visible: Option<&'a std::collections::BTreeSet<EntityId>>,
 }
 
 /// The nearest live unit (exe: GetNearestObjectNearPosition). Squared XZ
