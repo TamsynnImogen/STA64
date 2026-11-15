@@ -413,6 +413,11 @@ fn press(
                     trf("{0}: click the map (Esc cancels)", &[&tr(&format!("{mode:?}"))]),
                 ));
             }
+            Act::Target(TargetMode::Transport) => {
+                // Greyed button pressed (or the selection changed): say why nothing was armed.
+                let why = if commands::shared(&feed).transport_family { "Cannot transport: no crew to spare" } else { "Transporters are not available in this game yet" };
+                notices.write(Notice::new(Severity::Warn, tr(why)));
+            }
             Act::Recrew if !commands::recrew_stations(&feed, &feed.own_selection()).is_empty() => {
                 // UI-only until the simulation defines a Recrew order and recovery rule.
                 notices.write(Notice::new(Severity::Warn, tr("Station recrewing is not implemented yet")));
@@ -561,6 +566,7 @@ fn target_mode_available(feed: &HudFeed, mode: TargetMode) -> bool {
         TargetMode::Mine => c.mine,
         TargetMode::Rally => c.rally,
         TargetMode::Colonize => c.colonize,
+        TargetMode::Transport => c.transport_ready,
     }
 }
 
@@ -608,6 +614,17 @@ fn target_order(
             ids = ships.clone();
             vec![Order::Colonize { units: ships, planet }]
         }
+        TargetMode::Transport => {
+            let id = target?;
+            if !transport_target(feed, id) { return None; }
+            let carriers = commands::transporters(feed, &ids);
+            // The target is never its own carrier (the sim drops it too); nothing left, nothing to send.
+            let carriers: Vec<EntityId> = carriers.into_iter().filter(|c| *c != id).collect();
+            if carriers.is_empty() { return None; }
+            // Range, shields and the target's side are the sim's to judge: stock does not approach, and neither does the sim.
+            ids = carriers.clone();
+            vec![Order::Transport { units: carriers, target: id, attack: false }]
+        }
         TargetMode::Rally => {
             let at = match target.and_then(|id| feed.view.unit(id).filter(|u| !u.flags.contains(UnitFlags::DYING)).map(|_| id)) {
                 Some(id) => Target::Entity(id),
@@ -617,6 +634,18 @@ fn target_order(
         }
     };
     Some((orders, ids))
+}
+
+/// The sim's target gate for `Order::Transport`, read from the view: a live ship or station with a crew
+/// capacity of at least one that is not a planet. Whose it is, how far and its shields are decided by the sim.
+fn transport_target(feed: &HudFeed, target: EntityId) -> bool {
+    let (Some(db), Some(t)) = (feed.content.as_deref(), feed.view.unit(target)) else { return false };
+    let Some(def) = db.unit(t.def) else { return false };
+    !t.flags.contains(UnitFlags::DYING)
+        && t.hull[0] > sta_sim::Fixed::ZERO
+        && matches!(EntityKind::of_def(def), EntityKind::Craft | EntityKind::Station)
+        && def.planet_role.is_none()
+        && t.crew.is_some_and(|c| c[1] >= sta_sim::Fixed::ONE)
 }
 
 /// The sim's `Order::Colonize` gate on the planet, read from the view: a live
@@ -771,5 +800,7 @@ mod target_tests {
 mod tests;
 #[cfg(test)]
 mod colonize_tests;
+#[cfg(test)]
+mod transport_tests;
 #[cfg(test)]
 mod recrew_tests;

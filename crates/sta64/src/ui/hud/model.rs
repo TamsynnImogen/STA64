@@ -213,6 +213,8 @@ pub enum TargetMode {
     Rally,
     /// The stock COLONIZE command: pick a planet for the colony ships.
     Colonize,
+    /// The stock TRANSPORT command: pick a ship or station to beam crew to or board.
+    Transport,
 }
 
 /// How a button looks.
@@ -341,6 +343,7 @@ fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
         Act::Back => (vec!["b_back".into()], false),
         Act::Target(TargetMode::Mine) => (vec!["b_harvest".into()], false),
         Act::Target(TargetMode::Colonize) => (vec!["b_colonize".into()], false),
+        Act::Target(TargetMode::Transport) => (vec!["b_transport".into()], false),
         Act::Cancel(_) => (vec!["b_cancel".into()], false),
         Act::Formation(_) => (Vec::new(), false),
         // No verified native ID for these actions; use the existing label.
@@ -471,6 +474,12 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
     }
     if caps.colonize {
         out.push(button(8, &tr("Colonize"), Act::Target(TargetMode::Colonize), &tooltip_key("Colonize")));
+    }
+    if caps.transport {
+        let mut b = button(14, &tr("Transport"), Act::Target(TargetMode::Transport), &tooltip_key("Transport"));
+        // Shown in its stock place but greyed when the sim would refuse (no transporter crew, Armada I).
+        if !caps.transport_ready { b.look = Look::Locked; }
+        out.push(b);
     }
     if caps.recrew {
         let mut b = button(9, &tr("Recrew"), Act::Recrew, &tooltip_key("Recrew"));
