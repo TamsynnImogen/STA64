@@ -241,9 +241,13 @@ pub(crate) fn step_planned(model: Model, u: &mut Unit, leg: Leg, plan: Plan) {
     if plan.warp && warp > u.stats.max_speed {
         u.speed = approach(u.speed, warp, warp * warp_rate() * dt);
         u.omega = Fixed::ZERO;
+        let flat = u.target.map(|t| flat_distance(u.pos, t));
         advance(u, dt);
         if let Some(t) = u.target {
-            climb(u, t, dt);
+            match (model, flat) {
+                (Model::Smooth, Some(flat)) => climb_line(u, t, u.speed * dt, flat, dt),
+                _ => climb(u, t, dt),
+            }
         }
         return;
     }
@@ -357,6 +361,34 @@ fn climb(u: &mut Unit, target: Vec3, dt: Fixed) {
     let st = u.stats;
     let dy = target.y - u.pos.y;
     u.pos.y = u.pos.y + clamp(dy, -st.max_speed * dt, st.max_speed * dt);
+}
+
+/// Horizontal distance between two points, zero beyond the box a square
+/// would overflow in (the callers only use it as a divisor guard).
+fn flat_distance(a: Vec3, b: Vec3) -> Fixed {
+    let (dx, dz) = (b.x - a.x, b.z - a.z);
+    let limit = Fixed::from_int(40_000);
+    if dx.abs() >= limit || dz.abs() >= limit {
+        return limit;
+    }
+    (dx * dx + dz * dz).sqrt()
+}
+
+/// Height under the Armada II family model (SIM-67; evidence: measured on
+/// the original bench): a straight line to the goal, vertical speed = speed
+/// x height difference / remaining horizontal distance, so the craft is at
+/// the goal's height as it arrives, brakes with the horizontal approach and
+/// never overshoots. `ds` is the distance covered this tick, `flat` the
+/// horizontal distance left before it. A craft with no goal never gets here
+/// and holds its height. Straight above its goal (`flat` zero) it climbs at
+/// cruise speed as before.
+fn climb_line(u: &mut Unit, target: Vec3, ds: Fixed, flat: Fixed, dt: Fixed) {
+    if flat == Fixed::ZERO {
+        climb(u, target, dt);
+        return;
+    }
+    let share = (ds / flat).max(Fixed::ZERO).min(Fixed::ONE);
+    u.pos.y = u.pos.y + (target.y - u.pos.y) * share;
 }
 
 /// STA64's own model, unchanged from SIM-01 (its digests are pinned).
@@ -777,7 +809,7 @@ mod smooth {
 
         u.speed = v.max(Fixed::ZERO);
         u.omega = w;
-        climb(u, aim, dt);
+        climb_line(u, aim, ds, flat, dt);
         apply(u, dyaw, ds);
     }
 }
