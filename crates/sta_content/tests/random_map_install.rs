@@ -39,7 +39,7 @@ fn random_maps_convert_against_the_install() {
         let fields = map.regions.iter().filter(|r| r.kind == RegionKind::AsteroidField).count();
         assert_eq!(nebulae, bzn.objects.iter().filter(|o| o.odf.starts_with("mnebula")).count());
         assert_eq!(fields, bzn.objects.iter().filter(|o| o.odf == random_map::ASTEROID_FIELD).count());
-        // Only wormholes and black holes have no place in a MapDef yet.
+        // Black holes have no place in a MapDef yet (wormholes are placed since LUA-24).
         let dropped = bzn.objects.iter().filter(|o| [random_map::WORMHOLE, random_map::BLACK_HOLE].contains(&o.odf.as_str())).count();
         assert!(counts.skipped + counts.props <= dropped, "seed {seed}: {counts:?}, {dropped} holes; {warnings:?}");
         eprintln!("seed {seed}: {:.0} across, {} starts, {counts:?}", bzn.size[0], map.starts.len());
