@@ -9,7 +9,8 @@
 //! | `hull`, `initial_hull` | `maxHealth`, optional `curHealth` (otherwise maximum) |
 //! | `shields`, `initial_shields` | `maxShield`/`maxShields`, `curShield`/`curShields`, `shieldRate` per second; A2/FO absent strength inherits health |
 //! | `crew`, `maximum_crew` | `crewCost` (starting/build amount), optional `maximumCrew` (otherwise `crewCost`) |
-//! | `transport` | `transporter`, `has_crew`, `assault`, `boardingPartyStrength` (1.0), `disableShieldsOnTransport` (true), `weldingAnimSpeed`, `shieldDelay`, `eventTransport` (SIM-46 P0, typed only) |
+//! | `transport` | `transporter`, `assault`, `boardingPartyStrength` (1.0), `disableShieldsOnTransport` (true), `weldingAnimSpeed`, `shieldDelay`, `eventTransport` (SIM-46 P0, typed only) |
+//! | `facility`, `has_crew` | optional `facility`, `has_crew` flags for station recrewing; explicit false is preserved |
 //! | `sensor` | `rangeScan` |
 //! | `attack_power` | `attackPower` (absent: `None`) |
 //! | `movement` | the physics ODF named by `physicsFile`, see [`movement`] |
@@ -141,6 +142,8 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
     }
     d.crew = r.fixed("crewCost");
     d.maximum_crew = odf.raw("maximumCrew").map(|_| r.fixed("maximumCrew"));
+    d.facility = r.flag("facility");
+    d.has_crew = r.flag("has_crew");
     // Planets carry their own typed `planet_crew_gain` and ignore this key here.
     if !matches!(d.class.0.as_str(), "planet" | "planet_obj" | "moon") {
         d.crew_gain = r.fixed("maxCrewGain").min(Fixed::from_int(1_000_000_000));
@@ -149,7 +152,6 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
     // SIM-46 P0: typed, not read by the sim yet. A non-number warns and keeps the default; negatives read as zero.
     d.transport = crate::def::TransportDef {
         transporter: r.flag("transporter"),
-        has_crew: r.flag("has_crew"),
         assault: r.flag("assault").unwrap_or(false),
         boarding_party_strength: r.num("boardingPartyStrength").map_or(Fixed::ONE, |v| Fixed::from_f64(v.max(0.0))),
         disable_shields_on_transport: r.flag("disableShieldsOnTransport").unwrap_or(true),

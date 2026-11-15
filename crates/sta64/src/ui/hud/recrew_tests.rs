@@ -1,4 +1,4 @@
-//! UI-only Recrew coverage. The simulation has no Recrew order or refill rule.
+//! Recrew HUD eligibility and command-queue coverage.
 
 use std::sync::Arc;
 
@@ -6,6 +6,7 @@ use bevy::prelude::*;
 use sta_content::{ContentDb, UnitDef};
 use sta_sim::view::{UnitFlags, UnitView};
 use sta_sim::{EntityId, Fixed, PlayerId, Vec3, WorldView};
+use sta_sim::command::{CommandKind, Order};
 
 use super::commands;
 use super::model::{Act, Look, Page, command, grid};
@@ -15,17 +16,17 @@ use super::*;
 const ME: PlayerId = PlayerId(1);
 
 fn feed() -> HudFeed {
-    let raw = |source: &str| Arc::new(sta_odf::resolve("s", &mut |_| Some(source.into())).unwrap());
-    let station = |odf: &str, source: &str| {
+    let station = |odf: &str, facility: Option<bool>, has_crew: Option<bool>| {
         let mut def = UnitDef::new(odf, "starbase");
-        def.raw = raw(source);
+        def.facility = facility;
+        def.has_crew = has_crew;
         def
     };
     let db = Arc::new(
         ContentDb::builder()
-            .unit(station("station", ""))
-            .unit(station("no_facility", "facility = 0"))
-            .unit(station("no_crew", "has_crew = 0"))
+            .unit(station("station", None, None))
+            .unit(station("no_facility", Some(false), None))
+            .unit(station("no_crew", None, Some(false)))
             .unit(UnitDef::new("ship", "craft"))
             .build()
             .unwrap(),
@@ -74,16 +75,24 @@ fn button(feed: &HudFeed) -> Option<super::model::Button> {
 }
 
 #[test]
-fn station_button_follows_live_crew_and_never_makes_an_order() {
+fn station_button_follows_live_crew_and_queues_only_when_ready() {
     let mut f = feed();
     let b = button(&f).unwrap();
     assert_eq!(b.look, Look::Ready);
     assert_eq!(b.sprite_names, ["b_recrew"]);
-    assert_eq!(command(&f, &Act::Recrew), None);
+    assert_eq!(command(&f, &Act::Recrew), Some((
+        CommandKind::Order(Order::Recrew { units: vec![EntityId(1)], on: None }),
+        vec![EntityId(1)],
+    )));
     f.selected = vec![EntityId(2)];
     assert_eq!(button(&f).unwrap().look, Look::Locked);
+    assert_eq!(command(&f, &Act::Recrew), None);
     Arc::make_mut(&mut f.view).units[1].crew = Some([Fixed::from_int(99), Fixed::from_int(100)]);
     assert_eq!(button(&f).unwrap().look, Look::Ready);
+    assert_eq!(command(&f, &Act::Recrew), Some((
+        CommandKind::Order(Order::Recrew { units: vec![EntityId(2)], on: None }),
+        vec![EntityId(2)],
+    )));
     Arc::make_mut(&mut f.view).units[1].crew = Some([Fixed::from_int(100), Fixed::from_int(100)]);
     assert_eq!(button(&f).unwrap().look, Look::Locked);
     assert_eq!(command(&f, &Act::Recrew), None);
@@ -103,6 +112,10 @@ fn only_owned_finished_live_capacity_stations_qualify() {
         commands::recrew_stations(&f, &f.own_selection()),
         [EntityId(1)]
     );
+    assert_eq!(command(&f, &Act::Recrew), Some((
+        CommandKind::Order(Order::Recrew { units: vec![EntityId(1)], on: None }),
+        vec![EntityId(1)],
+    )));
     assert_eq!(button(&f).unwrap().look, Look::Ready);
     f.selected = vec![EntityId(2), EntityId(6)];
     assert_eq!(button(&f).unwrap().look, Look::Locked);
@@ -115,7 +128,7 @@ fn only_owned_finished_live_capacity_stations_qualify() {
 }
 
 #[test]
-fn ready_click_warns_and_queues_nothing() {
+fn ready_click_queues_one_real_order_without_warning() {
     let f = feed();
     let mut app = App::new();
     app.add_plugins(MinimalPlugins)
@@ -134,15 +147,15 @@ fn ready_click_warns_and_queues_nothing() {
         .resource_mut::<Messages<ButtonClicked>>()
         .write(ButtonClicked(cell));
     app.update();
-    assert!(app.world().resource::<CommandQueue>().0.is_empty());
+    assert_eq!(app.world().resource::<CommandQueue>().0, [
+        CommandKind::Order(Order::Recrew { units: vec![EntityId(1)], on: None }),
+    ]);
     let notices: Vec<_> = app
         .world_mut()
         .resource_mut::<Messages<Notice>>()
         .drain()
         .collect();
-    assert_eq!(notices.len(), 1);
-    assert_eq!(notices[0].severity, crate::ui::notices::Severity::Warn);
-    assert!(notices[0].text.contains("not implemented"));
+    assert!(notices.is_empty());
 
     app.world_mut().insert_resource(HudFeed {
         selected: vec![EntityId(2)],
@@ -159,5 +172,16 @@ fn ready_click_warns_and_queues_nothing() {
             .next()
             .is_none()
     );
-    assert!(app.world().resource::<CommandQueue>().0.is_empty());
+    assert_eq!(app.world().resource::<CommandQueue>().0.len(), 1);
+
+    app.world_mut().insert_resource(HudFeed {
+        selected: vec![EntityId(99)],
+        ..feed()
+    });
+    app.world_mut()
+        .resource_mut::<Messages<ButtonClicked>>()
+        .write(ButtonClicked(cell));
+    app.update();
+    assert_eq!(app.world().resource::<CommandQueue>().0.len(), 1);
+    assert!(app.world_mut().resource_mut::<Messages<Notice>>().drain().next().is_none());
 }

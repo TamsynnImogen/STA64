@@ -120,15 +120,6 @@ impl TransportRules {
     }
 }
 
-/// `transporter` when the unit sets it (data); else every crewed ship and
-/// station, as the original's `craft.odf` default does for the units without a
-/// key (Armada I has none).
-/// Armada I has no such key: every crewed craft can transport.
-fn can_transport(def: &UnitDef, crew_max: Fixed, armada1: bool) -> bool {
-    let crewed = crew_max > Fixed::ZERO;
-    def.planet_role.is_none() && if armada1 { crewed } else { def.transport.transporter.unwrap_or(crewed) }
-}
-
 /// A pool at or below 1 % is "down" for the enemy gate of Armada I (S): the
 /// ratio of the shield pool when the unit has one, else of the hull pool (Armada
 /// I has a single health pool; the sim holds it as the hull when the converted
@@ -145,6 +136,25 @@ fn pool_down(e: &Entity, derelict: bool) -> bool {
         (e.hull[0], e.hull[1])
     };
     max <= Fixed::ZERO || now * Fixed::from_int(100) <= max
+}
+
+/// Whether the unit's game family and its own keys allow `Order::Transport` at all, whatever its
+/// crew: the Armada II family (`crew_loss_on_hit`, see the module docs) with the unit's `transporter`
+/// key (absent: a crewed ship or station), or the Armada I profile, which has no such key (every crewed
+/// craft; SIM-71); never a planet. Read-only; a client shows
+/// its button from this and from [`can_transport`] and does not repeat the rule.
+pub fn transport_allowed(db: &ContentDb, def: &UnitDef, crew_max: Fixed) -> bool {
+    let crewed = crew_max > Fixed::ZERO;
+    def.planet_role.is_none()
+        && if db.profile() == Profile::Sta1Classic { crewed } else { db.unit_features(def).crew_loss_on_hit && def.transport.transporter.unwrap_or(crewed) }
+}
+
+/// The sim's own answer to "may this unit be ordered to transport now?": [`transport_allowed`] and
+/// the crew floors (`crew` is current and maximum crew: the carrier needs more than the
+/// executable's 9 and more than one party). Read-only; the order validation uses it.
+pub fn can_transport(db: &ContentDb, def: &UnitDef, crew: [Fixed; 2]) -> bool {
+    let rules = TransportRules::of(db);
+    transport_allowed(db, def, crew[1]) && crew[0] > rules.min_crew && crew[0] > rules.party
 }
 
 /// `boardingPartyStrength` (1.0 when absent).
@@ -179,7 +189,7 @@ fn shield_hold(def: &UnitDef, rules: &TransportRules) -> Tick {
 
 /// The carrier race's `crewRedStatus` (data), the executable's 0.25 when absent.
 fn crew_red_status(db: &ContentDb, race: &str) -> Fixed {
-    db.rules().race_repair(race).and_then(|r| r.crew_red_status).unwrap_or(DEFAULT_CREW_RED)
+    db.rules().race_repair_of(race).and_then(|r| r.crew_red_status).unwrap_or(DEFAULT_CREW_RED)
 }
 
 /// One carrier's transport.
@@ -436,7 +446,6 @@ impl Sim {
         if attack {
             return false; // P3: transport attack (Roots, assault ships).
         }
-        let rules = TransportRules::of(&db);
         let Some(t) = self.units.get(target).filter(|t| alive(t)) else { return false };
         let target_ok = matches!(t.kind, EntityKind::Craft | EntityKind::Station)
             && t.crew.is_some_and(|c| c[1] >= Fixed::ONE)
@@ -457,8 +466,7 @@ impl Sim {
                             // The carrier's race must be allowed to take units of another team.
                             && (rules.armada1 || self.same_team(u.owner, target_owner) || can_commandeer(&db, self.unit_race(id).unwrap_or("")))
                             && (!player.is_player() || u.owner == player)
-                            && def.is_some_and(|d| (rules.armada1 || db.unit_features(d).crew_loss_on_hit) && can_transport(d, u.crew.map_or(Fixed::ZERO, |c| c[1]), rules.armada1))
-                            && u.crew.is_some_and(|c| c[0] > rules.min_crew && c[0] > rules.party)
+                            && def.is_some_and(|d| u.crew.is_some_and(|c| can_transport(&db, d, c)))
                     })
             })
             .collect();

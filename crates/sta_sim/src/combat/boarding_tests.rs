@@ -277,6 +277,19 @@ fn the_carrier_stops_at_the_races_red_status_from_the_content() {
 }
 
 #[test]
+fn the_red_status_row_is_found_by_the_race_name_when_the_file_stem_differs() {
+    // The rows are keyed by the race file's stem, a unit's race key is the race's name.
+    let repair = RaceRepair { crew_red_status: Some(fx(0.4)), ..RaceRepair::default() };
+    let rows = move |r: Rules| r.with_race_repairs(vec![("racea".into(), repair)]).with_race_repair_stems(vec![("alpha".into(), "RaceA.odf".into())]);
+    let mut w = world_with(db_with(None, true, &|_, _| {}, rows), PlayerId(2), "beta", 300);
+    w.set_crew(w.carrier, 134.0, 135.0);
+    w.set_crew(w.target, 0.0, 100_000.0);
+    w.order();
+    w.run(40 * 30);
+    assert_eq!(w.crew(w.carrier), 59.0, "stops at the 0.4 level, not the 0.25 default");
+}
+
+#[test]
 fn a_tie_leaves_a_derelict_that_keeps_its_owner_and_stops_its_order_and_the_next_party_captures_it() {
     let mut w = world(1, 300);
     let action = rules(&w.db).action_delay;
@@ -588,4 +601,24 @@ fn disable_shields_and_shield_delay_come_from_the_keys() {
     assert_eq!(shields, 90.0, "disableShieldsOnTransport = 0 keeps the carrier's shields");
     assert!(!held && default_held);
     assert_eq!(default_until - until, 30, "the target's shieldDelay of 2.0 s instead of the 3.0 s default");
+}
+
+#[test]
+fn the_public_answer_follows_the_family_the_key_and_the_crew_floors() {
+    use super::boarding::{can_transport, transport_allowed};
+    let off = |k: &str, u: &mut UnitDef| {
+        if k == "beta" {
+            u.transport.transporter = Some(false);
+        }
+    };
+    let d = db_with(None, true, &off, |r| r);
+    let (alpha, beta) = (d.unit(d.key("alpha").unwrap()).unwrap(), d.unit(d.key("beta").unwrap()).unwrap());
+    let crew = |now: f64| [fx(now), fx(CREW)];
+    assert!(transport_allowed(&d, alpha, fx(CREW)) && !transport_allowed(&d, beta, fx(CREW)), "transporter = 0");
+    assert!(can_transport(&d, alpha, crew(10.0)));
+    assert!(!can_transport(&d, alpha, crew(9.0)), "the floor is 9");
+    assert!(!can_transport(&d, beta, crew(100.0)));
+    // A family without the derelict latch is refused, whatever the crew.
+    let native = db(None, false);
+    assert!(!transport_allowed(&native, native.unit(native.key("alpha").unwrap()).unwrap(), fx(CREW)));
 }

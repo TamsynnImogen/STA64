@@ -31,20 +31,23 @@ fn unit_keys_are_read_with_their_defaults() {
     ]);
     let none = &def(&db, "u_none").transport;
     assert_eq!(*none, sta_content::TransportDef::default());
-    assert_eq!((none.transporter, none.has_crew, none.assault), (None, None, false));
+    assert_eq!((none.transporter, none.assault), (None, false));
+    assert_eq!(def(&db, "u_none").has_crew, None, "`has_crew` is SIM-70's field of the unit, not part of `transport`");
     assert_eq!(none.boarding_party_strength, Fixed::ONE);
     assert!(none.disable_shields_on_transport);
     assert_eq!((none.welding_anim_speed, none.shield_delay, none.event_transport.as_deref()), (None, None, None));
     // The key set through an include reaches the child; the child's own keys follow.
     let child = &def(&db, "u_child").transport;
-    assert_eq!((child.transporter, child.has_crew, child.assault), (Some(true), Some(true), true));
+    assert_eq!((child.transporter, child.assault), (Some(true), true));
+    assert_eq!(def(&db, "u_child").has_crew, Some(true));
     assert_eq!(child.boarding_party_strength, Fixed::from_int(5));
     assert!(!child.disable_shields_on_transport, "an explicit zero is kept");
     assert_eq!(child.welding_anim_speed, Some(Fixed::ZERO), "an explicit zero is kept, not absent");
     assert_eq!(child.shield_delay, Some(Fixed::from_int(3)));
     assert_eq!(child.event_transport.as_deref(), Some("AuthoredBeam"));
     let zero = &def(&db, "u_zero").transport;
-    assert_eq!((zero.transporter, zero.has_crew), (Some(false), Some(false)));
+    assert_eq!(zero.transporter, Some(false));
+    assert_eq!(def(&db, "u_zero").has_crew, Some(false));
     assert_eq!(zero.boarding_party_strength, Fixed::ZERO, "an explicit zero is not the default 1.0");
     assert_eq!(zero.welding_anim_speed, Some(Fixed::ONE));
 }
@@ -62,7 +65,7 @@ fn keys_the_sim_reads_move_the_content_hash_only_when_set() {
         assert_ne!(base, load(&[("u_a.odf", &text)]).hash(), "{line}");
     }
     // The ones nothing reads do not.
-    for line in ["has_crew = 1", "assault = 1", "weldingAnimSpeed = 0", "eventTransport = \"e\""] {
+    for line in ["assault = 1", "weldingAnimSpeed = 0", "eventTransport = \"e\""] {
         let text = format!("{plain}{line}\n");
         assert_eq!(base, load(&[("u_a.odf", &text)]).hash(), "{line}");
     }
@@ -108,7 +111,7 @@ fn race_keys_are_read_with_their_defaults() {
     std::fs::create_dir_all(dir.join("odf")).unwrap();
     let write = |name: &str, text: &str| std::fs::write(dir.join("odf").join(name), text).unwrap();
     write("races.odf", "numberOfRaces = 3\nrace0 = \"RaceA.odf\"\nrace1 = \"RaceB.odf\"\nrace2 = \"RaceC.odf\"\n");
-    write("RaceA.odf", "name = \"Alpha\"\nboardingStrength = 1.75f\ncrewRetreatRatio = 0.2f // trailing comment\ntransportSprite = \"btransport\"\ntransportToFriendsOnNotEasy = 1\ntransportToEnemyOnHard = 1\n");
+    write("RaceA.odf", "name = \"Alpha\"\ncrewRedStatus = 0.3f\nboardingStrength = 1.75f\ncrewRetreatRatio = 0.2f // trailing comment\ntransportSprite = \"btransport\"\ntransportToFriendsOnNotEasy = 1\ntransportToEnemyOnHard = 1\n");
     write("RaceB.odf", "name = \"Beta\"\nboardingStrength = 0.0f\ncanCommandeer = 0\ncanBeCommandeered = 0\ntransportToFriendsOnNotEasy = 0\n");
     write("RaceC.odf", "name = \"Gamma\"\n");
     let mut vfs = Vfs::default();
@@ -120,6 +123,10 @@ fn race_keys_are_read_with_their_defaults() {
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(db.rules().race_boarding("alpha"), races.boarding("alpha"));
     assert_eq!(db.rules().race_boarding("beta"), races.boarding("beta"));
+    // Repair rows are keyed by file stem; a unit's race key is the name (SIM-69 review).
+    assert_eq!(db.rules().race_repair_of("Alpha").and_then(|r| r.crew_red_status), Some(Fixed::from_f64(f64::from(0.3f32))));
+    assert!(db.rules().race_repair("alpha").is_none(), "the stem is `racea`");
+    assert!(db.rules().race_repair_of("beta").is_none());
     let a = races.boarding("ALPHA");
     assert_eq!(a.boarding_strength, Fixed::from_f64(1.75));
     assert_eq!(a.crew_retreat_ratio, Fixed::from_f64(f64::from(0.2f32)));
@@ -152,7 +159,7 @@ fn race_keys_are_read_with_their_defaults() {
 #[test]
 fn every_new_key_is_counted_as_read_by_the_coverage_list() {
     for k in [
-        "transporter", "has_crew", "assault", "boardingPartyStrength", "disableShieldsOnTransport", "weldingAnimSpeed",
+        "transporter", "assault", "boardingPartyStrength", "disableShieldsOnTransport", "weldingAnimSpeed", "has_crew", "facility",
         "shieldDelay", "eventTransport", "boardingStrength", "canCommandeer", "canBeCommandeered", "transportSprite",
         "crewRetreatRatio", "transportToEnemyOnHard", "transportToFriendsOnNotEasy",
     ] {
