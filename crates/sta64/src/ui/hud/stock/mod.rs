@@ -95,6 +95,7 @@ fn metadata<'a>(native: &'a NativeCommands, act: &Act) -> Option<&'a NativeComma
         Act::Target(TargetMode::Rally) => "rally",
         Act::Target(TargetMode::Colonize) => "colonize",
         Act::Stop => "stop",
+        Act::Recrew => "recrew",
         Act::Cancel(_) => "cancelbuild",
         _ => return None,
     })
@@ -117,8 +118,8 @@ fn menu_button(id: u32, name: &str) -> Button {
     }
 }
 
-/// Only already-supported actions can enter a native menu. The ODF is metadata,
-/// never authority to enable a new order backend.
+/// Native menus contain HUD actions with an explicit capability gate. Recrew is
+/// presentation-only until the sim has an order; ODF metadata cannot enable one.
 fn buttons(feed: &HudFeed, page: Page, native: &NativeCommands) -> Vec<Button> {
     let mut buttons = model::grid_with_capacity(feed, page, usize::MAX);
     if page == Page::Formations && buttons.iter().any(|b| matches!(b.act, Act::Formation(_))) {
@@ -544,3 +545,50 @@ pub(super) use info::update as update_values;
 mod gpu;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod recrew_tests {
+    use std::sync::Arc;
+
+    use sta_content::{ContentDb, UnitDef};
+    use sta_sim::view::{UnitFlags, UnitView};
+    use sta_sim::{EntityId, Fixed, PlayerId, Vec3, WorldView};
+
+    use super::*;
+
+    #[test]
+    fn authored_recrew_menu_preserves_live_look_art_and_tooltips() {
+        let db = Arc::new(ContentDb::builder().unit(UnitDef::new("station", "starbase")).build().unwrap());
+        let unit = UnitView {
+            id: EntityId(1), def: db.key("station").unwrap(), owner: PlayerId(1),
+            pos: Vec3::ZERO, heading: (Fixed::ZERO, Fixed::ONE), speed: Fixed::ZERO,
+            hull: [Fixed::ONE; 2], shields: [[Fixed::ZERO; 2]; 4],
+            crew: Some([Fixed::from_int(50), Fixed::from_int(100)]), energy: None, autonomy: None,
+            flags: UnitFlags::SELECTABLE, progress: None,
+        };
+        let mut feed = HudFeed {
+            view: Arc::new(WorldView { units: vec![unit], ..Default::default() }),
+            player: PlayerId(1), selected: vec![EntityId(1)], content: Some(db),
+        };
+        let mut native = NativeCommands::default();
+        native.groups.push("orders".into());
+        native.commands.insert("recrew".into(), NativeCommand {
+            odf: "recrew.odf".into(), command: "RECREW".into(), button: "recrew".into(),
+            preferred: Some([0, 1]), menu: Some("Orders".into()),
+            tooltip: Some("GUI_CP_RECREW_TOOLTIP".into()),
+            verbose: Some("GUI_CP_RECREW_VTOOLTIP".into()),
+            normal: None, hovered: None, pressed: None, disabled: None, active: None,
+        });
+        let root = buttons(&feed, Page::Top, &native);
+        assert!(root.iter().any(|b| b.act == Act::OpenNativeMenu(0)));
+        assert!(!root.iter().any(|b| b.act == Act::Recrew));
+        let in_menu = buttons(&feed, Page::Native(0), &native);
+        let recrew = in_menu.iter().find(|b| b.act == Act::Recrew).unwrap();
+        assert_eq!(recrew.look, Look::Ready);
+        assert_eq!(recrew.sprite_names, ["b_recrew", "recrew"]);
+        assert_eq!(recrew.tip, "GUI_CP_RECREW_TOOLTIP");
+        assert_eq!(recrew.verbose.as_deref(), Some("GUI_CP_RECREW_VTOOLTIP"));
+        Arc::make_mut(&mut feed.view).units[0].crew = Some([Fixed::from_int(100); 2]);
+        assert_eq!(buttons(&feed, Page::Native(0), &native).iter().find(|b| b.act == Act::Recrew).unwrap().look, Look::Locked);
+    }
+}

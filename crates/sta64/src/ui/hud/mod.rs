@@ -404,6 +404,10 @@ fn press(
                     trf("{0}: click the map (Esc cancels)", &[&tr(&format!("{mode:?}"))]),
                 ));
             }
+            Act::Recrew if !commands::recrew_stations(&feed, &feed.own_selection()).is_empty() => {
+                // UI-only until the simulation defines a Recrew order and recovery rule.
+                notices.write(Notice::new(Severity::Warn, tr("Station recrewing is not implemented yet")));
+            }
             Act::Build {
                 builder,
                 what,
@@ -757,3 +761,5 @@ mod target_tests {
 mod tests;
 #[cfg(test)]
 mod colonize_tests;
+#[cfg(test)]
+mod recrew_tests;
