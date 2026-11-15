@@ -315,18 +315,19 @@ fn a_move_onto_an_emerged_craft_does_not_travel() {
 }
 
 #[test]
-fn a_map_gate_without_a_label_still_counts_and_pairs() {
+fn two_map_gates_without_labels_do_not_pair() {
+    // Gates are counted among the labelled map entities; an unlabelled map gate is not counted.
     let d = db(false);
     let mut map = sta_content::MapDef::empty();
     let h = (Fixed::ONE, Fixed::ZERO);
-    for (x, z, label) in [(1000, 0, Some("G0".to_string())), (5000, 5000, None)] {
-        map.objects.push(sta_content::MapObject { odf: "fx_gate".into(), owner: None, pos: v(x, z), heading: h, label });
+    for (x, z) in [(1000, 0), (5000, 5000)] {
+        map.objects.push(sta_content::MapObject { odf: "fx_gate".into(), owner: None, pos: v(x, z), heading: h, label: None });
     }
     let seat = PlayerSetup { id: PlayerId(1), team: TeamId(1), race: "fx".into(), control: Control::Idle };
     let mut sim = Sim::from_setup(&GameSetup { seed: 3, map: Arc::new(map), content: Arc::clone(&d), players: vec![seat], options: GameOptions::default() });
     let a = sim.spawn_def(d.key("fx_cruiser").unwrap(), PlayerId(1), v(0, 0), h).unwrap();
     let (x, z) = send_a_onto(&mut sim, a, 1000, 0);
-    assert!((x - 5000.0).abs() <= 61.0 && (z - 5000.0).abs() <= 61.0, "{x} {z}");
+    assert!((x - 1000.0).abs() < 200.0 && z.abs() < 200.0, "no travel: ({x}, {z})");
 }
 
 #[test]

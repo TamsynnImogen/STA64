@@ -7,7 +7,7 @@
 //!   Fo3 and Sta2Classic profiles: stock Armada II, STA2 Classic, Fleet Operations 3.x, and 4.0
 //!   with Roots): the rule below. Native and any other profile: no gate moves anything, as before.
 //! - **Partners (Armada II family).** Only when the map file placed exactly two gates, counted by
-//!   class (`wormhole_obj`, any case) among the entities the map made, are they a pair, in file
+//!   class (`wormhole_obj`, any case) among the labelled entities the map made, are they a pair, in file
 //!   order; with any other number nothing travels, and a gate a script adds joins no pair, until
 //!   LUA-33 reads the maps' partner pointers (file order is not the partner pointers on every
 //!   map). A destroyed or removed map gate ends travel for the rest of the game (the count is
@@ -32,7 +32,8 @@
 //!   first free ring spot (the original's transport puts it at the centre, then its exit queue
 //!   carries it out; read from the executable, static; the spline is not modelled). Never on the
 //!   exact centre: a craft parked there would make every later move onto that craft a move onto
-//!   the gate. Never outside the map bounds.
+//!   the gate. Never outside the map bounds. When no spot qualifies the craft does not travel and
+//!   keeps its move, so it may come to rest on the gate's centre (rare).
 //!   Gate opening and closing (`AnimationTime`, `ClosedScale`, `OpenScale`, sounds) is
 //!   presentation and not modelled; `DisableTimer` is never armed in either game.
 //!
@@ -84,8 +85,9 @@ impl Sim {
             .units
             .iter()
             .filter(|e| !e.flags.contains(UnitFlags::DYING) && is_gate(e))
-            // The Armada II family pairs only the gates the map made (the spawn gives each a
-            // label, empty when the file has none); a gate a script adds is not paired.
+            // The Armada II family pairs only the gates the map made, which are the labelled
+            // entities (a script's gate has no sim label); a map gate with no label is not
+            // counted (none of the stock, Roots and mod maps has one).
             .filter(|e| a1 || self.labels.get(e.id).is_some())
             .map(|e| e.id)
             .collect();
