@@ -119,8 +119,8 @@ fn menu_button(id: u32, name: &str) -> Button {
     }
 }
 
-/// Native menus contain HUD actions with an explicit capability gate. Recrew is
-/// presentation-only until the sim has an order; ODF metadata cannot enable one.
+/// Native menus contain HUD actions with an explicit capability gate; ODF
+/// metadata cannot bypass live Recrew eligibility.
 fn buttons(feed: &HudFeed, page: Page, native: &NativeCommands) -> Vec<Button> {
     let mut buttons = model::grid_with_capacity(feed, page, usize::MAX);
     // The stock HUD shows only what the original shows: TRANSPORT only where the install's command data

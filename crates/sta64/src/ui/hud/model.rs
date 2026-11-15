@@ -187,7 +187,7 @@ pub enum Act {
     Special(u8),
     /// UI-02's stop on the own selection.
     Stop,
-    /// UI-only station command. There is no sim order or refill implementation yet.
+    /// Station crew recovery from the player's pool.
     Recrew,
     /// UI-02's formation on the own selection.
     Formation(u8),
@@ -502,7 +502,11 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
     let own = feed.own_selection();
     let caps = commands::shared(feed);
     match act {
-        Act::OpenBuild | Act::OpenFormations | Act::OpenNativeMenu(_) | Act::Back | Act::Target(_) | Act::NativeFormation(_) | Act::Recrew => None,
+        Act::OpenBuild | Act::OpenFormations | Act::OpenNativeMenu(_) | Act::Back | Act::Target(_) | Act::NativeFormation(_) => None,
+        Act::Recrew => {
+            let units = commands::recrew_stations(feed, &own);
+            (!units.is_empty()).then(|| (CommandKind::Order(Order::Recrew { units: units.clone(), on: None }), units))
+        }
         Act::Stop if caps.stop => {
             Some((CommandKind::Order(Order::Stop { units: own.clone() }), own))
         }
