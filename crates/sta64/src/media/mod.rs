@@ -16,7 +16,7 @@
 //!   HUD's cinematic window or viewscreen (UI-39) or any UI panel to show.
 //!   [`PanelScreen`] holds the image a mission's in-panel movie goes to and the
 //!   [`PanelKind`] that shows it. Space skips a skippable panel movie
-//!   ([`Movies::skip_panel`]); play goes on around it.
+//!   (Space); play goes on around it.
 //!
 //! # Threads and sync
 //!
@@ -221,7 +221,13 @@ impl Movies {
         self.fullscreen.is_some() || !self.pending.is_empty() || !self.panels.is_empty()
     }
 
-    /// A movie is playing in a panel, or waits for one.
+    /// A movie is playing in the panel that shows `image`, or waits for it.
+    pub fn panel_busy_for(&self, image: &Handle<Image>) -> bool {
+        self.panels.iter().any(|p| p.image.id() == image.id())
+            || self.pending.iter().any(|p| matches!(&p.target, MovieTarget::Panel(h) if h.id() == image.id()))
+    }
+
+    /// A movie is playing in some panel, or waits for one.
     pub fn panel_busy(&self) -> bool {
         !self.panels.is_empty() || self.pending.iter().any(|p| matches!(p.target, MovieTarget::Panel(_)))
     }
@@ -232,10 +238,6 @@ impl Movies {
         self.pending.push_back(request);
     }
 
-    /// Ask for the skippable panel movies to end (the panel's own click or key).
-    pub fn skip_panel(&mut self) {
-        self.skip_panel = true;
-    }
 
     /// A fullscreen movie is playing or queued.
     pub fn fullscreen_busy(&self) -> bool {
@@ -309,9 +311,12 @@ fn skip_keys(
     }
 }
 
-/// Space skips a skippable movie in a panel. The key is not taken: play goes on around the panel.
+/// Space skips a skippable movie in a panel. The key is not taken: play goes on around the panel,
+/// so a running cineractive (its own skip key is Space too) is skipped by the same press, which is
+/// intended: the clip is part of the scene.
 fn skip_panel_key(keys: Option<Res<ButtonInput<KeyCode>>>, mut movies: ResMut<Movies>) {
-    if movies.panels.is_empty() {
+    // A fullscreen movie takes every key; one press skips one movie.
+    if movies.panels.is_empty() || movies.fullscreen_busy() {
         return;
     }
     if keys.is_some_and(|k| k.just_pressed(KeyCode::Space)) {

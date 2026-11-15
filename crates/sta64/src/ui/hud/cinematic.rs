@@ -205,7 +205,7 @@ pub(super) fn show(
     mut panels: Query<&mut Node, With<CinematicPanel>>,
     mut pictures: Query<(&CinematicPicture, &mut Node), Without<CinematicPanel>>,
 ) {
-    let on = movies.is_some_and(|m| m.panel_busy());
+    let on = movies.zip(screen.as_ref()).is_some_and(|(m, s)| m.panel_busy_for(&s.image));
     let display = if on { Display::Flex } else { Display::None };
     for mut node in &mut panels {
         if node.display != display {
@@ -228,8 +228,6 @@ pub(super) fn show(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use sta_content::GuiCfg;
 
     use super::*;
@@ -356,7 +354,6 @@ cinematicDisplayArea = 20 30 360 240
     }
 
     fn hud_app(profile: UiProfile, gui: Option<GuiLayout>) -> App {
-        let db = Arc::new(sta_content::fake::db());
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default())).init_asset::<Image>();
         configure_sets(&mut app);
@@ -369,7 +366,6 @@ cinematicDisplayArea = 20 30 360 240
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<Movies>()
             .add_plugins(HudPlugin);
-        let _ = db;
         app.update();
         app.update();
         app
@@ -393,7 +389,7 @@ cinematicDisplayArea = 20 30 360 240
         app.update();
         assert_eq!(container_display(&mut app), Some(Display::Flex));
         // The panel takes no pointer: nothing under the HUD's picking is blocked by it.
-        let blocking = app.world_mut().query_filtered::<&Pickable, With<CinematicPanel>>().iter(app.world()).filter(|p| p.should_block_lower).count();
+        let blocking = app.world_mut().query_filtered::<&Pickable, Or<(With<CinematicPanel>, With<CinematicPicture>, With<ImageNode>)>>().iter(app.world()).filter(|p| p.should_block_lower).count();
         assert_eq!(blocking, 0);
     }
 

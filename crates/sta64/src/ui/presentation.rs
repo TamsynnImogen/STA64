@@ -952,12 +952,12 @@ fn ok_pressed(
 
 pub struct PresentationPlugin;
 
-/// Back at the front end (UI-34): titles, fades, queued message boxes, pending movie replies and the
-/// objectives panel of the match are gone, whatever ended it (a mission's debrief, F10, the in-game menu).
 fn reset_bridge(mut bridge: ResMut<BridgeState>) {
     *bridge = default();
 }
 
+/// Back at the front end (UI-34): titles, fades, queued message boxes, pending movie replies and the
+/// objectives panel of the match are gone, whatever ended it (a mission's debrief, F10, the in-game menu).
 fn reset_presentation(
     mut titles: ResMut<Titles>,
     mut fade: ResMut<FadeState>,
