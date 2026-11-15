@@ -27,9 +27,42 @@ pub struct StockLight {
 }
 
 impl StockLight {
+    /// A `team*` material's own diffuse colour is a placeholder, not a colour to draw:
+    /// the SOD files carry red (A1 `team_fed`), purple (A2 Galaxy's `team`) and green
+    /// values there, and the player's team colour takes the diffuse's place (the shader
+    /// multiplies it in). Applying both turned A1 Federation rims and nacelle caps red
+    /// and pink whatever the owner's colour. Read from data (the placeholder values in
+    /// every SOD); measured on the A2 original (the Galaxy's `team` strut, diffuse purple
+    /// in the SOD, is white under the white player colour); not measured on A1.
+    ///
+    /// The Borg glow family (`team_Bglow*`, case-insensitive) is left as it was: it keeps its own
+    /// diffuse and ambient. Nothing is measured for those regions (not measured, left as on main).
     pub fn from_material(m: &sta_assets::model::LightingMaterial) -> StockLight {
-        StockLight { ambient: m.ambient, diffuse: m.diffuse, specular: m.specular, power: m.power, model: m.model }
+        let placeholder = crate::render::hulls::is_team_material(&m.name) && !is_borg_glow(&m.name);
+        let diffuse = if placeholder {
+            [1.0; 3]
+        } else {
+            m.diffuse
+        };
+        // The ambient colour is the same kind of placeholder (red or purple on A1 `team_fed`,
+        // purple on A2 `team`): a grey of equal luminance keeps the brightness and drops the hue.
+        let ambient = if placeholder {
+            let [r, g, b] = m.ambient;
+            if r == g && g == b {
+                m.ambient
+            } else {
+                [(0.299 * r + 0.587 * g + 0.114 * b).clamp(0.0, 1.0); 3]
+            }
+        } else {
+            m.ambient
+        };
+        StockLight { ambient, diffuse, specular: m.specular, power: m.power, model: m.model }
     }
+}
+
+/// The Borg glow material family (`team_Bglow`, `team_Bglow_1`), excluded from the placeholder rule.
+fn is_borg_glow(name: &str) -> bool {
+    name.get(..10).is_some_and(|p| p.eq_ignore_ascii_case("team_bglow"))
 }
 
 /// Registers the stock hull look: `Effect::Hulls` has a stock implementation, which
@@ -84,6 +117,81 @@ mod tests {
         assert_eq!(stock.params.mdif, Vec4::new(0.9, 0.8, 0.7, 0.0));
         assert_eq!(stock.params.mspc, Vec4::new(0.2, 0.2, 0.2, 40.0));
         assert_eq!(stock.params.rim, Vec4::ZERO, "no rim light in the original");
+    }
+
+    fn material(name: &str, diffuse: [f32; 3]) -> sta_assets::model::LightingMaterial {
+        sta_assets::model::LightingMaterial {
+            name: name.into(),
+            ambient: [0.5; 3],
+            diffuse,
+            specular: [1.0, 0.5, 1.0],
+            power: 50.0,
+            model: 2,
+            self_illuminating: false,
+        }
+    }
+
+    /// The A1 `team_fed` material carries a red diffuse, the A2 Galaxy's `team` a purple
+    /// one: neither may reach the lit colour, only the team colour (the tint) does.
+    #[test]
+    fn a_team_material_does_not_apply_its_own_diffuse_colour() {
+        for (name, diffuse) in [("team_fed", [1.0, 0.0, 0.0]), ("team", [0.55, 0.19, 0.52]), ("Team", [1.0, 0.0, 0.0]), ("team_basic_shaderbump", [0.2, 0.3, 0.4])] {
+            let l = StockLight::from_material(&material(name, diffuse));
+            assert_eq!(l.diffuse, [1.0; 3], "{name}");
+            // The rest of the material is read as ever.
+            assert_eq!((l.ambient, l.specular, l.power, l.model), ([0.5; 3], [1.0, 0.5, 1.0], 50.0, 2), "{name}");
+        }
+    }
+
+    /// The Borg glow family keeps its own diffuse and ambient, as on main.
+    #[test]
+    fn the_borg_glow_family_keeps_its_own_colours() {
+        for name in ["team_Bglow", "TEAM_BGLOW_1", "team_bglow"] {
+            let mut m = material(name, [0.0, 1.0, 0.7]);
+            m.ambient = [0.0, 0.333, 0.248];
+            let l = StockLight::from_material(&m);
+            assert_eq!((l.diffuse, l.ambient), ([0.0, 1.0, 0.7], [0.0, 0.333, 0.248]), "{name}");
+        }
+        let l = StockLight::from_material(&material("team_glow", [0.0, 1.0, 0.7]));
+        assert_eq!(l.diffuse, [1.0; 3], "other glow materials follow the team rule");
+    }
+
+    /// A coloured team ambient (here a green-cyan one) becomes the grey of equal luminance;
+    /// a black one stays black; other materials keep theirs.
+    #[test]
+    fn a_team_materials_ambient_loses_its_hue_not_its_brightness() {
+        let mut m = material("team_fed", [0.0, 1.0, 0.7]);
+        m.ambient = [0.0, 0.333, 0.248];
+        let a = StockLight::from_material(&m).ambient;
+        let lum = 0.587 * 0.333 + 0.114 * 0.248;
+        assert!(a.iter().all(|c| (c - lum).abs() < 1e-6), "{a:?}");
+        m.ambient = [0.0; 3];
+        assert_eq!(StockLight::from_material(&m).ambient, [0.0; 3]);
+        let mut other = material("base_fed", [1.0; 3]);
+        other.ambient = [0.1, 0.2, 0.3];
+        assert_eq!(StockLight::from_material(&other).ambient, [0.1, 0.2, 0.3]);
+    }
+
+    /// Every other group keeps the diffuse colour its SOD material states.
+    #[test]
+    fn other_materials_keep_their_diffuse_colour() {
+        for (name, diffuse) in [("base_fed", [1.0, 1.0, 0.93]), ("impulse_fed", [1.0, 0.59, 0.0]), ("glow_white", [0.0, 0.7, 1.0]), ("steam", [0.1, 0.2, 0.3])] {
+            assert_eq!(StockLight::from_material(&material(name, diffuse)).diffuse, diffuse, "{name}");
+        }
+    }
+
+    /// Through the hull material: a team group under a team colour lights as white diffuse
+    /// times the tint, so its colour follows the owner and not the SOD's placeholder.
+    #[test]
+    fn a_team_group_is_drawn_with_a_white_diffuse_under_the_team_colour() {
+        let part = HullPart { stock: Some(StockLight::from_material(&material("team_fed", [1.0, 0.0, 0.0]))), ..default() };
+        let std = StandardMaterial { base_color: Color::srgb(0.2, 0.4, 0.9), ..default() };
+        let mut view = HullView::default();
+        view.set_stock(true);
+        let hull = hull_material(&std, &part, &view);
+        assert_eq!(hull.params.mdif, Vec4::new(1.0, 1.0, 1.0, 0.0));
+        let tint = Color::srgb(0.2, 0.4, 0.9).to_linear();
+        assert_eq!(hull.params.tint, Vec4::new(tint.red, tint.green, tint.blue, 0.0));
     }
 
     #[test]

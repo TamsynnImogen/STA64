@@ -171,6 +171,8 @@ impl Sim {
         if !self.approach_warp.is_empty() {
             self.approach_warp.hash_into(&mut h);
         }
+        // LUA-31: scripted warp speeds are movement state.
+        self.hash_warp_overrides(&mut h);
         self.confinement.hash_into(&mut h);
         h.0
     }
@@ -330,6 +332,9 @@ impl Sim {
                     if s.has_smooth_keys() {
                         row(id, "smooth stats", s.smooth_fields().into_iter().map(fx).collect::<Vec<_>>().join(", "));
                     }
+                }
+                for (id, v) in self.warp_overrides() {
+                    row(Some(id), "warp speed (script)", fx(v));
                 }
                 for (id, course) in self.movement.rows() {
                     row(Some(id), "formation", course.formation.to_string());
