@@ -18,8 +18,12 @@ fn block(name: &str) -> &'static str {
 }
 
 fn mission() -> String {
+    mission_of("")
+}
+
+fn mission_of(game: &str) -> String {
     let head = r#"Mission_ = {
-    name = 'tiny',
+    name = 'tiny',{game}
     vars = {}, state = {}, objects = {}, globals = {}, timers = {}, scripts = {},
     rules = {}, affected = {}, satisfied = {}, fired = {}, fireCount = {}, ran = {},
     calls = {}, missing = {}, failed = {}, notDecoded = {}, stepErrors = {},
@@ -51,17 +55,18 @@ function M.ScriptInit(...)
     do return 0 end
 end
 local deps = { 'p_strength_team_1', 'p_strength_team_2', 'p_AGGRESSIVE_AIP', 'p_DEFENSIVE_AIP', 'p_EXPLORATION_AIP' }
-Mission.rules[#Mission.rules + 1] = { name = 'SwitchToAggressiveAIPRule', action = 'aggressive', deps = deps,
+Mission.rules[#Mission.rules + 1] = { name = 'AggressivePlanRule', action = 'aggressive', deps = deps,
     when = function(S, O) return (not T(S.p_AGGRESSIVE_AIP)) and 2.0 * S.p_strength_team_1 < S.p_strength_team_2 end }
-Mission.rules[#Mission.rules + 1] = { name = 'SwitchToDefensiveAIPRule', action = 'defensive', deps = deps,
+Mission.rules[#Mission.rules + 1] = { name = 'DefensivePlanRule', action = 'defensive', deps = deps,
     when = function(S, O) return (not T(S.p_DEFENSIVE_AIP)) and S.p_strength_team_1 > 2.0 * S.p_strength_team_2 end }
-Mission.rules[#Mission.rules + 1] = { name = 'SwitchToExplorationAIPRule', action = 'exploration', deps = deps,
+Mission.rules[#Mission.rules + 1] = { name = 'ExplorationPlanRule', action = 'exploration', deps = deps,
     when = function(S, O) return (not T(S.p_EXPLORATION_AIP)) and S.p_strength_team_1 <= 2.0 * S.p_strength_team_2
         and 2.0 * S.p_strength_team_1 >= S.p_strength_team_2 end }
 -- depends on the strengths only, gated by game time: it fires only when a recompute re-runs it
 Mission.rules[#Mission.rules + 1] = { name = 'TimeGatedRule', action = 'gated', deps = { 'p_strength_team_1' },
     when = function(S, O) return Mission.time ~= nil and Mission.time > 60.0 end }
 "#;
+    let head = head.replace("{game}", game);
     format!("{head}{}\n{body}\n{}\n", block("PRELUDE"), block("ENGINE"))
 }
 
@@ -92,8 +97,12 @@ fn view(tick: u64, units: Vec<UnitView>) -> WorldView {
 }
 
 fn runtime() -> MissionRuntime {
+    runtime_of(&mission())
+}
+
+fn runtime_of(src: &str) -> MissionRuntime {
     let cfg = MissionConfig { player_numbering: PlayerNumbering::ArmadaTeams, ..MissionConfig::default() };
-    let rt = MissionRuntime::from_source_with("missions/T.lua", &mission(), 1, cfg);
+    let rt = MissionRuntime::from_source_with("missions/T.lua", src, 1, cfg);
     assert!(rt.errors().is_empty(), "{:?}", rt.errors());
     rt
 }
@@ -197,4 +206,35 @@ fn every_recompute_re_runs_a_rule_that_depends_on_the_strengths_even_when_they_d
     assert_eq!(count(&rt), 0);
     run(&mut rt, 4 * period, 4 * period + 1, &|_| units.clone());
     assert_eq!(count(&rt), 1, "80 s is tick 2400, the fourth recompute after the first");
+}
+
+#[test]
+fn team_three_and_a_craft_under_construction() {
+    let mut rt = runtime();
+    let mut units = fleet(&[100], &[300]);
+    units.push(unit(60, seat(3), 40, 80, false));
+    units.push(unit(61, seat(3), 40, 90, false));
+    let mut building = unit(62, seat(1), 1, 777, false);
+    building.progress = Some(Fixed::ONE / Fixed::from_int(2));
+    units.push(building);
+    units.sort_by_key(|u| u.id);
+    run(&mut rt, 0, 1, &|_| units.clone());
+    assert_eq!((value(&rt, 1), value(&rt, 2), value(&rt, 3), value(&rt, 4)), (100.0, 300.0, 170.0, 0.0), "a construction proxy is not a craft");
+}
+
+#[test]
+fn an_armada_i_mission_keeps_the_start_value_and_gets_no_recompute() {
+    let mut rt = runtime_of(&mission_of(" game = 'a1',"));
+    run(&mut rt, 0, 1300, &|_| fleet(&[100], &[300]));
+    assert_eq!((value(&rt, 1), value(&rt, 2)), (-1.0, -1.0));
+}
+
+#[test]
+fn no_recompute_after_the_mission_has_ended() {
+    let period = 20 * sta_core::TICK_HZ as u64;
+    let mut rt = runtime();
+    run(&mut rt, 0, 10, &|_| fleet(&[100], &[300]));
+    rt.eval::<()>("A2.SucceedMission(0.0, nil)").unwrap();
+    run(&mut rt, 10, period + 5, &|_| fleet(&[900], &[300]));
+    assert_eq!(value(&rt, 1), 100.0, "the recompute at 20 s does not happen after the end");
 }

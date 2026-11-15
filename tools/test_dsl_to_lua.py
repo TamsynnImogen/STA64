@@ -606,6 +606,13 @@ class PreludeTests(unittest.TestCase):
             "print(S.p_strength_team_1, MissionX.engineReads.strength_team_1)")
         self.assertEqual(out.splitlines(), ["0.0\t0.0\t-1.0", "7.5\t3"])
 
+    def test_armada_i_strengths_keep_the_start_value(self):
+        out = self.run_lua(
+            "MissionX.game = 'a1'\n"
+            "local v = EngineVar('strength_team_1', 'hot_float') BindVar('p_strength_team_1', 'hot_float', v)\n"
+            "print(S.p_strength_team_1)")
+        self.assertEqual(out, "-1.0")
+
     def test_out_parameter_keeps_the_slot_when_the_call_did_not_run(self):
         out = self.run_lua("A2 = { Recruit = function() return true, 42 end }\n"
                            "local ok = AO('Recruit') print(ok, OUTV(7))\n"

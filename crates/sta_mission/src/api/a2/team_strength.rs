@@ -5,10 +5,12 @@
 //! maximum hull (`maxHealth` as the object holds it now: the number `GetMaxHealth` returns) of
 //! every live Craft (ships and stations) of the object's own team, teams 1..8, team 0 never
 //! summed; damage, cost, crew and unit count play no part. It is recomputed every 200 sim steps,
-//! 20 s of game time, the first time on the mission's first step; each recompute sets the variable
-//! to 0 and adds in one call, so a team with a craft is marked dirty on every recompute even when
-//! the sum is unchanged. The step is 0.1 s of game time here as in the engine, so the period is
-//! derived from game seconds with the sim's tick rate, not from a step count.
+//! 20 s of game time, the first time on the mission's first step, and no more once the mission has
+//! ended; each recompute sets the variable to 0 and adds in one call, so a team with a craft is
+//! marked dirty on every recompute even when the sum is unchanged. The engine's step is 0.1 s and
+//! STA64's is 1/30 s, so the 20 s period is derived from game seconds with the sim's tick rate,
+//! not from a step count. Armada II only: an Armada I mission (`Mission.game == 'a1'`) is left
+//! alone, its writer is not established.
 
 use sta_core::seconds_to_ticks;
 use sta_sim::view::UnitView;
@@ -61,7 +63,19 @@ pub(crate) fn due(last: Option<u64>, tick: u64) -> bool {
 /// team with a craft of positive hull, and when the value moved. Objects without those fields
 /// (anything but a converted mission) are left alone and do not use up the due time.
 pub(crate) fn engine_update(object: &Table, ctx: &Shared, last: &mut Option<u64>) -> mlua::Result<()> {
-    let tick = ctx.borrow().view.tick;
+    // Armada I's strength variables have an unread writer: not bound here.
+    if object.raw_get::<Option<String>>("game")?.as_deref() == Some("a1") {
+        return Ok(());
+    }
+    let tick = {
+        let c = ctx.borrow();
+        // No recomputes after the mission has ended (latched, or its end time has passed).
+        let secs = c.view.tick as f64 / sta_core::TICK_HZ as f64;
+        if c.ended.is_some() || c.mission_end.as_ref().is_some_and(|e| e.blocked.is_none() && secs > e.time) {
+            return Ok(());
+        }
+        c.view.tick
+    };
     if !due(*last, tick) {
         return Ok(());
     }
