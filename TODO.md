@@ -166,6 +166,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] SIM-70 station Recrew: in a fresh match, reduce an owned station's crew, activate Recrew and check that station crew rises while the player pool pays the same amount. Check full/empty pool, toggle/Stop, damage pause, owner changes and save/reload. Native timing is backed by static rules and headless checks; graphical acceptance remains manual. Yard recrewing remains separate.
 
+- [?] FO4 AI startup (#806): start a fresh Federation versus Klingon skirmish. The computer's avatar starter should change into its authored productive station, then begin building. Check that the human starter remains available for manual avatar selection. The automatic AI owner gate is backed by static original-hook evidence and headless tests; graphical acceptance remains manual.
+
 ## Checked earlier (morning list)
 
 - [x] Construction live-feedback fixes accepted (2026-11-11, `construction-a1666d0`): the user confirmed visible beams, later chunk reveal and the constructor staying fixed under normal/queued movement. Automated Stop/cancellation and snapshot checks pass. FPS was not reported; this does not complete broader native/Android checks above.
