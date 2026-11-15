@@ -29,10 +29,12 @@ pub(in crate::ui::hud) enum StockBar {
     Hull(f32),
     Shield(f32),
     Progress(f32),
+    /// Armada I's energy bar (UI-19).
+    Energy(f32),
     Group(EntityId, f32),
 }
 
-fn node(r: R) -> Node {
+pub(super) fn node(r: R) -> Node {
     Node {
         position_type: PositionType::Absolute,
         left: Val::Px(r.x),
@@ -43,17 +45,17 @@ fn node(r: R) -> Node {
     }
 }
 
-fn place(origin: Vec2, r: R) -> R {
+pub(super) fn place(origin: Vec2, r: R) -> R {
     R::new(origin.x + r.x, origin.y + r.y, r.w, r.h)
 }
 
-fn picture(commands: &mut Commands, root: Entity, r: R, name: &str, frame: usize) {
+pub(super) fn picture(commands: &mut Commands, root: Entity, r: R, name: &str, frame: usize) {
     commands
         .entity(root)
         .with_child((node(r), Pickable::IGNORE, GuiImage::new(name).with_frame(frame)));
 }
 
-fn text(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>) -> Entity {
+pub(super) fn text(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>) -> Entity {
     text_styled(commands, root, r, value, color, size, kind, SpriteTextStyle::default().stock_label())
 }
 
@@ -73,7 +75,7 @@ fn text_styled(commands: &mut Commands, root: Entity, r: R, value: String, color
     child
 }
 
-fn bar(commands: &mut Commands, root: Entity, r: R, value: f32, color: Color, kind: StockBar) {
+pub(super) fn bar(commands: &mut Commands, root: Entity, r: R, value: f32, color: Color, kind: StockBar) {
     commands.entity(root).with_child((
         node(r),
         BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
@@ -153,7 +155,7 @@ fn chosen_rect(layout: &StockLayout, origin: Vec2, builder: bool, builder_key: &
     }
 }
 
-fn wireframe_rect(layout: &StockLayout, origin: Vec2, builder: bool) -> Option<R> {
+pub(super) fn wireframe_rect(layout: &StockLayout, origin: Vec2, builder: bool) -> Option<R> {
     if builder {
         for key in ["infoBuildWireframeIconArea", "infoBuildWireframe"] {
             if layout.raw_rect(key).is_some() {
@@ -185,7 +187,7 @@ fn wireframe_names(model: &str, layer: usize) -> Vec<String> {
 }
 
 /// Native Wireframe::Render draws five independent GUI SPR layers in one square.
-fn wireframe_layers(commands: &mut Commands, root: Entity, r: R, model: &str) {
+pub(super) fn wireframe_layers(commands: &mut Commands, root: Entity, r: R, model: &str) {
     let stem = model_stem(model);
     if stem.is_empty() {
         return;
@@ -231,7 +233,7 @@ fn spawn_separate_resources(commands: &mut Commands, root: Entity, layout: &Stoc
     }
 }
 
-fn spawn_resource(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme) {
+pub(super) fn spawn_resource(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme) {
     if super::separate_resources(layout) {
         spawn_separate_resources(commands, root, layout, feed, theme);
         return;
@@ -474,8 +476,16 @@ pub(in crate::ui::hud) fn update(
     feed: Res<HudFeed>,
     mut texts: Query<(&StockText, &mut SpriteText)>,
     mut bars: Query<(&StockBar, &mut Node)>,
+    mut crew: Query<&mut SpriteText, (With<super::a1::info::CrewText>, Without<StockText>)>,
 ) {
     let info = model::info(&feed);
+    let extra = super::a1::info::extra(&feed);
+    for mut text in &mut crew {
+        let value = extra.as_ref().and_then(|e| e.crew).map(|(now, _)| now.to_string()).unwrap_or_default();
+        if text.text != value {
+            text.text = value;
+        }
+    }
     for (kind, mut text) in &mut texts {
         let StockText::Resource(id) = kind;
         let value = resource_text(&feed, *id).unwrap_or_default();
@@ -488,6 +498,7 @@ pub(in crate::ui::hud) fn update(
             (StockBar::Hull(w), Info::Single(s)) => (s.hull, *w),
             (StockBar::Shield(w), Info::Single(s)) => (s.shield.unwrap_or(0.0), *w),
             (StockBar::Progress(w), Info::Single(s)) => (s.progress.unwrap_or(0.0), *w),
+            (StockBar::Energy(w), Info::Single(_)) => (extra.as_ref().and_then(|e| e.energy).unwrap_or(0.0), *w),
             (StockBar::Group(id, w), Info::Group(tiles)) => (
                 tiles.iter().find(|tile| tile.id == *id).map_or(0.0, |tile| tile.hull),
                 *w,

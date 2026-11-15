@@ -33,6 +33,7 @@ fn registry() -> sta_assets::Rgba {
     let font = SpriteFont {
         name: "synthetic_registry".into(),
         reference: None,
+        spacing: 0.0,
         pages: vec![Page {
             texture: "original_fixture".into(),
             height: 7.0,

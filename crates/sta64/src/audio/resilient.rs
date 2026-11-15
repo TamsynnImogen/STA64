@@ -306,6 +306,14 @@ impl AudioBackend for Resilient {
         self.inner.play(sound, bus, at);
     }
 
+    fn play_tagged(&mut self, tag: u32, sound: &Sound, bus: Bus, at: Option<[f32; 3]>) {
+        self.inner.play_tagged(tag, sound, bus, at);
+    }
+
+    fn stop_tag(&mut self, tag: u32) {
+        self.inner.stop_tag(tag);
+    }
+
     fn bus_busy(&self, bus: Bus) -> bool {
         self.inner.bus_busy(bus)
     }

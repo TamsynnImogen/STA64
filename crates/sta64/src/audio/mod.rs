@@ -35,7 +35,7 @@ pub use ui::{UiContext, UiSound, UiSoundPlugin, UiSounds};
 pub use voices::{VoiceConfig, VoiceNames, VoicePlugin};
 
 use crate::app::{GameSet, Mode};
-use crate::sim_link::{Bus, PlaySound, StopSounds};
+use crate::sim_link::{Bus, PlayScriptSound, PlaySound, StopScriptSound, StopSounds};
 
 /// Turns a bare sound name into decoded audio.
 pub trait SoundResolver: Send + Sync {
@@ -207,13 +207,15 @@ impl Plugin for AudioPlugin {
         app.add_plugins((MusicPlugin, UiSoundPlugin, SfxPlugin, VoicePlugin))
             .add_message::<PlaySound>()
             .add_message::<StopSounds>()
+            .add_message::<PlayScriptSound>()
+            .add_message::<StopScriptSound>()
             .add_message::<SoundStarted>()
             .init_resource::<ReportsSoundLengths>()
             .init_resource::<Volumes>()
             .insert_resource(Resolver(Box::new(StubResolver::default())))
             .add_message::<crate::frontend::screens::ModChosen>()
             .add_systems(Update, remount_sound.in_set(GameSet::Audio).before(play_sounds))
-            .add_systems(Update, (sync_volumes, sync_listener, play_sounds, stop_sounds, audio_test_key).chain().in_set(GameSet::Audio));
+            .add_systems(Update, (sync_volumes, sync_listener, play_sounds, play_script_sounds, stop_sounds, stop_script_sounds, audio_test_key).chain().in_set(GameSet::Audio));
         // Manual check: `sta64 --audio-test` plays a tone on each bus at startup, F9 repeats it.
         if tones {
             app.add_systems(Startup, test_tones);
@@ -271,6 +273,29 @@ fn play_sounds(mut msgs: MessageReader<PlaySound>, mut mixer: NonSendMut<Mixer>,
             mixer.backend.play(&sound, m.bus, m.at.map(|p| p.to_f32()));
         }
         started.write(SoundStarted { name: m.name.clone(), bus: m.bus, seconds });
+    }
+}
+
+/// A mission script's sounds (`AudioMessage`, `PlayMusic`): each is its own stream on the UI bus,
+/// mixed with whatever plays (no queue, no cut, no admission), tagged with the script's id so that
+/// `StopAudioMessage(id)` stops that one and nothing else. Read from the executable, static: the
+/// script audio overlay makes a new stream per call and stops by id.
+fn play_script_sounds(mut msgs: MessageReader<PlayScriptSound>, mut mixer: NonSendMut<Mixer>, mut resolver: ResMut<Resolver>, mut started: MessageWriter<SoundStarted>) {
+    for m in msgs.read() {
+        let mut seconds = None;
+        if let Some(sound) = resolver.0.resolve(&m.name) {
+            if sound.sample_rate > 0 {
+                seconds = Some(sound.frames.len() as f32 / sound.sample_rate as f32);
+            }
+            mixer.backend.play_tagged(m.id, &sound, Bus::Ui, None);
+        }
+        started.write(SoundStarted { name: m.name.clone(), bus: Bus::Ui, seconds });
+    }
+}
+
+fn stop_script_sounds(mut msgs: MessageReader<StopScriptSound>, mut mixer: NonSendMut<Mixer>) {
+    for m in msgs.read() {
+        mixer.backend.stop_tag(m.id);
     }
 }
 

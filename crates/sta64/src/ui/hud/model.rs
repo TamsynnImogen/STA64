@@ -172,6 +172,8 @@ pub enum Page {
     Formations,
     /// Authored stock command menu; its stable ID comes from loaded ODF metadata.
     Native(u32),
+    /// Armada I's Orders page: the alerts and orders submenu behind the Orders button.
+    Orders,
 }
 
 /// What pressing a cell does.
@@ -180,6 +182,10 @@ pub enum Act {
     OpenBuild,
     OpenFormations,
     OpenNativeMenu(u32),
+    /// Armada I's Orders button: open the Orders page.
+    OpenOrders,
+    /// One of Armada I's Orders-page orders the sim takes.
+    Order(UnitOrder),
     Back,
     /// Arm a map target; completed by the HUD's target click system.
     Target(TargetMode),
@@ -203,6 +209,15 @@ pub enum Act {
         odf: String,
         site: bool,
     },
+}
+
+/// The Armada I Orders-page orders that need no target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitOrder {
+    SearchAndDestroy,
+    Scout,
+    /// A slot the stock grid has and the sim cannot take an order for yet: drawn locked.
+    Unavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -347,7 +362,7 @@ fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
         Act::Cancel(_) => (vec!["b_cancel".into()], false),
         Act::Formation(_) => (Vec::new(), false),
         // No verified native ID for these actions; use the existing label.
-        Act::Special(_) | Act::Build { .. } | Act::OpenNativeMenu(_) | Act::NativeFormation(_) => (Vec::new(), false),
+        Act::Special(_) | Act::Build { .. } | Act::OpenNativeMenu(_) | Act::NativeFormation(_) | Act::OpenOrders | Act::Order(_) => (Vec::new(), false),
     };
     Button { cell, label: label.to_uppercase(), act, look: Look::Ready, tip: tip.to_owned(), verbose: None, sprite_names, keep_label }
 }
@@ -502,7 +517,11 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
     let own = feed.own_selection();
     let caps = commands::shared(feed);
     match act {
-        Act::OpenBuild | Act::OpenFormations | Act::OpenNativeMenu(_) | Act::Back | Act::Target(_) | Act::NativeFormation(_) => None,
+        Act::Order(UnitOrder::SearchAndDestroy) if caps.attack && caps.move_order => {
+            Some((CommandKind::Order(Order::SearchAndDestroy { units: own.clone() }), own))
+        }
+        Act::Order(UnitOrder::Scout) if caps.move_order => Some((CommandKind::Order(Order::Scout { units: own.clone() }), own)),
+        Act::OpenBuild | Act::OpenFormations | Act::OpenNativeMenu(_) | Act::OpenOrders | Act::Order(_) | Act::Back | Act::Target(_) | Act::NativeFormation(_) => None,
         Act::Recrew => {
             let units = commands::recrew_stations(feed, &own);
             (!units.is_empty()).then(|| (CommandKind::Order(Order::Recrew { units: units.clone(), on: None }), units))
