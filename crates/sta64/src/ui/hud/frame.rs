@@ -56,7 +56,7 @@ pub fn cfg_from_env() -> Option<GuiLayout> {
 /// [`HudFeed`](super::HudFeed) and `RadarFeed`.
 pub fn add_overlay(app: &mut App, target: Handle<Image>, size: (u32, u32)) {
     add_frame_overlay(app, target, size.1);
-    app.insert_resource(HudConfig { gui: cfg_from_env(), aspect: size.0 as f32 / size.1 as f32, fit_scale: false, log: true })
+    app.insert_resource(HudConfig { gui: cfg_from_env(), aspect: size.0 as f32 / size.1 as f32, fit: Default::default(), fit_scale: false, log: true })
         .insert_resource(ExternalFeed)
         .add_plugins(HudPlugin)
         .add_systems(Update, aim_at_camera.before(GameSet::Ui));

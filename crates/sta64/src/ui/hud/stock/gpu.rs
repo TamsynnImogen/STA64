@@ -110,9 +110,14 @@ fn crew_colour(vfs: &sta_vfs::Vfs, feed: &HudFeed, unit: &sta_sim::UnitView, sto
     else { Color::srgb(1.0, 0.0, 0.0) }
 }
 
+/// `STA64_HUD_FIT=stretched` captures the player's stretched HUD layout; anything else, centred.
+fn env_fit() -> super::layout::HudFit {
+    std::env::var("STA64_HUD_FIT").ok().and_then(|v| super::layout::HudFit::from_key(&v)).unwrap_or_default()
+}
+
 fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, label: &str, options: GameOptions, hover_mode: HoverCapture) {
     let layout = crate::game::gui_layout(&vfs, cfg).unwrap_or_else(|| panic!("installed {cfg} missing"));
-    let stock = StockLayout::for_aspect(&layout, size.x as f32 / size.y as f32);
+    let stock = StockLayout::for_aspect_fit(&layout, size.x as f32 / size.y as f32, env_fit());
     let resource = stock.pieces("resourcePanel");
     let minimap = stock.pieces("minimapBackgroundPanel");
     let info = stock.pieces("infoMiddleBackgroundPanel");
@@ -220,6 +225,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         .insert_resource(HudConfig {
             gui: Some(layout),
             aspect: size.x as f32 / size.y as f32,
+            fit: env_fit(),
             fit_scale: false,
             log: false,
         })
@@ -476,7 +482,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     if let Ok(dir) = std::env::var("STA64_HUD_CAPTURE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         dynamic
-            .save(std::path::Path::new(&dir).join(format!("stock-{label}.png")))
+            .save(std::path::Path::new(&dir).join(format!("stock-{label}{}.png", if env_fit() == super::layout::HudFit::Stretched { "-stretched" } else { "" })))
             .unwrap();
     }
     // Classic has no colour overrides. Guard the visible green/cyan/yellow
@@ -525,7 +531,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     // drawing (one factor, the sheet centred) must fill this authored join.
     if profile == UiProfile::Armada2 && size.x as f32 / size.y as f32 > 1.5 {
         let k = size.y as f32 / 1080.0;
-        let x = ((stock.hud.x + 256.0 * stock.scale) * k).round() as u32;
+        let x = ((stock.hud.x + 256.0 * stock.scale_x) * k).round() as u32;
         let y = ((stock.hud.y + 38.0 * stock.scale) * k).round() as u32;
         for x in x.saturating_sub(3)..=(x + 3).min(size.x - 1) {
             let pixel = rgba.get_pixel(x, y.min(size.y - 1));
@@ -656,7 +662,7 @@ fn installed_armada1_resource_readouts_render_on_gpu() {
             .insert_resource(UiProfile::Armada2.theme())
             .insert_resource(Mounted(vfs))
             .insert_resource(GuiSkin { table: Some(spr.into()) })
-            .insert_resource(HudConfig { gui: Some(layout), aspect: size.x as f32 / size.y as f32, fit_scale: false, log: false })
+            .insert_resource(HudConfig { gui: Some(layout), aspect: size.x as f32 / size.y as f32, fit: Default::default(), fit_scale: false, log: false })
             .insert_resource(UiScale(size.y as f32 / 1080.0))
             .insert_resource(hud_feed)
             .insert_resource(ExternalFeed)
