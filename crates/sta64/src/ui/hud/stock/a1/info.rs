@@ -15,11 +15,10 @@ use bevy::{picking::Pickable, prelude::*};
 use sta_sim::Fixed;
 
 use super::super::{
-    StockBar,
     infobar::InfoStyle,
     layout::StockLayout,
 };
-use super::super::info::{node, picture, text, wireframe_layers};
+use super::super::info::{StockBar, node, picture, text, wireframe_layers};
 use crate::ui::{
     gui_sprites::{GuiImage, GuiImageSampling},
     hud::{
