@@ -68,6 +68,23 @@ fn set_shield_percent_sets_the_hull_to_that_fraction_of_its_maximum_without_a_cl
 }
 
 #[test]
+fn a_huge_fraction_saturates_instead_of_wrapping() {
+    let (commands, id) = run(Profile::Sta1Classic, "A1.SetShieldPercent(u, 2000000000); A1.SetShieldPercent(u, -2000000000)");
+    let hulls: Vec<Fixed> = edits(&commands)
+        .into_iter()
+        .map(|e| match e {
+            Edit::HullValue(i, v) => {
+                assert_eq!(i, id);
+                v
+            }
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert!(hulls[0] > Fixed::from_int(1_000_000_000), "{:?}", hulls[0]);
+    assert!(hulls[1] < Fixed::ZERO, "{:?}", hulls[1]);
+}
+
+#[test]
 fn set_max_shields_sets_the_hull_maximum_then_the_hull() {
     let (commands, id) = run(Profile::Sta1Classic, "A1.SetMaxShields(u, 950)");
     assert_eq!(edits(&commands), vec![Edit::MaxHull(id, Fixed::from_int(950)), Edit::HullValue(id, Fixed::from_int(950))]);

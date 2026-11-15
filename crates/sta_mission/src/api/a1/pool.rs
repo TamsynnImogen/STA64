@@ -51,7 +51,9 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
     };
     wrap("SetShieldPercent", "hf", |e, u, a| {
         let f = a[1].num();
-        let to = u.hull[1] * Fixed::from_f64(f);
+        // In i128 and clamped: `Fixed`'s own multiply wraps, and the sim caps the value anyway.
+        let wide = (i128::from(u.hull[1].to_bits()) * i128::from(Fixed::from_f64(f).to_bits())) >> 32;
+        let to = Fixed::from_bits(wide.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64);
         e.edit("SetShieldPercent", Edit::HullValue(u.id, to))?;
         Ok(Value::Nil)
     })?;
