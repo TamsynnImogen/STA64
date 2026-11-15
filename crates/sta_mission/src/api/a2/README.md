@@ -599,10 +599,19 @@ constants. Orders are sent as the unit's owner; edits are SCRIPT edits.
   GO, ATTACK and MINE toward an object to orders; `WhatWhoWhereVO` maps BUILD at
   a position; both objects must be live or nothing happens. `WhatWhoParamVO`
   raises (a parameter has no order); other commands raise, counted. The voice
-  flag is not measured and not applied.
+  flag is not measured and not applied. The three calls and
+  `SetCommandMoveAutonomyLow` wait for a handle still being built (LUA-36).
+- LUA-36 (rules read from the executable, static; none measured): `ObstacleAvoidance` writes a
+  flag nothing reads, so it is an accepted no-op, not counted. The order calls test no owner,
+  so a unit with no player owner is ordered as the script seat. `SetCommandMoveAutonomyLow` is
+  an `Order::Autonomy` movement `Low` (`autonomy_call.rs`). The `mask` of
+  `GetNearestObjectNearPosition` / `NearMe` is a team the object must be visible to
+  (`near_mask.rs`). `GetDistance(object, path, point)` answers 1e30 for a dead handle or a
+  path the map lacks and clamps the point index. `SetCommandWhatWhoVO` toward a GUARD (23) or
+  with a parameter still has no order in the sim.
 
 Raising and counted (no seam): `Colonize
-Special_Attack SetCommandMoveAutonomyLow PointAt SetCrew SetRace
+Special_Attack PointAt SetCrew SetRace
 GetMainEnemyBaseLocation AttackMainEnemyBase GetAllyStationAttacks`.
 `AI_Team_Load_AIP` is accepted like `Player:loadAIP`: the request is queued
 and the host gives it to the seat's AI (`MissionRuntime::take_ai_requests`,

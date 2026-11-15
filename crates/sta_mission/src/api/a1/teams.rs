@@ -18,6 +18,8 @@ use crate::api::ai_switch;
 /// Resource ids in the world view and in `Edit::Cargo`: 0 dilithium.
 const DILITHIUM: u8 = 0;
 
+// A same-tick overwrite of a build charge or refund by an absolute `Edit::Cargo` write: see the
+// module note in `a2/resource_calls.rs`.
 fn dilithium(e: &Env, name: &str, team: i64, n: i64, add: bool) -> mlua::Result<Value> {
     let player = e.team(name, team)?;
     if !player.is_player() {

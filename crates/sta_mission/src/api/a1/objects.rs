@@ -46,7 +46,23 @@ fn shield_fraction(unit: &UnitView) -> f64 {
 
 pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::Result<()> {
     // The same operation as the A2 binding.
-    table.set("RemoveObject", alias(lua, env, a2, "RemoveObject")?)?;
+    // The original removes silently (see `replace_object`): the call is listed as a scripted removal.
+    let remove = alias(lua, env, a2, "RemoveObject")?;
+    let env_remove = env.clone();
+    table.set(
+        "RemoveObject",
+        lua.create_function(move |_, args: mlua::MultiValue| {
+            let id = match args.front() {
+                Some(Value::Integer(n)) => u32::try_from(*n).ok().map(|raw| env_remove.token(raw).and_then(Result::ok).unwrap_or(EntityId(raw))),
+                _ => None,
+            };
+            let out: mlua::MultiValue = remove.call(args)?;
+            if let Some(id) = id {
+                crate::api::spawn::note_removed(&mut env_remove.ctx.borrow_mut(), id);
+            }
+            Ok(out)
+        })?,
+    )?;
     table.set("CraftCannotDie", alias(lua, env, a2, "CraftCannotDie")?)?;
     table.set("IsAlive", alias(lua, env, a2, "IsAlive")?)?;
     table.set("IsCompromised", alias(lua, env, a2, "IsCompromised")?)?;

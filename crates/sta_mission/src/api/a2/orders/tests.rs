@@ -183,7 +183,8 @@ fn a_path_the_map_does_not_have_does_nothing_like_the_engines_null_lookup() {
 }
 
 #[test]
-fn an_unowned_unit_fails_before_the_path_lookup_as_on_a1() {
+fn an_unowned_unit_is_ordered_as_the_script_seat_and_the_path_lookup_still_runs() {
+    // LUA-36: the engine's script order calls test no owner (read from the executable, static).
     let s = scene_owned(
         Arc::new(fake::db()),
         ["fx_cruiser", "fx_cruiser", "fx_station", "fx_frigate"],
@@ -191,10 +192,14 @@ fn an_unowned_unit_fails_before_the_path_lookup_as_on_a1() {
         [sta_sim::world::NEUTRAL.0, 1, 0, 1],
     );
     for script in ["A2.Goto(a, 'NOPE', false, 1)", "A2.Patrol(a, 'NOPE')"] {
-        let (rt, err) = fails(&s, script);
-        assert!(err.contains("no player owner"), "{script}: {err}");
-        assert!(rt.absent_paths().is_empty(), "{script}");
+        let (rt, commands) = run(&s, script);
+        assert!(commands.is_empty(), "{script}");
+        assert!(rt.unsupported().is_empty(), "{script}");
+        assert_eq!(rt.absent_paths().len(), 1, "{script}");
     }
+    let (_, commands) = run(&s, "A2.Goto(a, 'P', false, 1)");
+    assert!(orders(&commands).iter().all(|(p, _)| *p == PlayerId::SCRIPT), "{commands:?}");
+    assert_eq!(commands.len(), 3);
 }
 
 #[test]
@@ -424,7 +429,6 @@ fn calls_with_no_seam_validate_then_raise_and_are_counted() {
     for (script, key) in [
         ("A2.Special_Attack(a, 'gquanteffect')", "A2.Special_Attack"),
         ("A2.Special_Attack(a, b, 'gtracbm')", "A2.Special_Attack"),
-        ("A2.SetCommandMoveAutonomyLow(a)", "A2.SetCommandMoveAutonomyLow"),
         ("A2.GetMainEnemyBaseLocation(1)", "A2.GetMainEnemyBaseLocation"),
         ("A2.AttackMainEnemyBase(a, true)", "A2.AttackMainEnemyBase"),
     ] {

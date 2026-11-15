@@ -228,10 +228,7 @@ fn nearest_searches_follow_the_native_filters() {
     assert_eq!(near(&mut rt, "A2.GetNearestObjectNearMe(a, 500, -1, nil, -1, false)"), b);
     assert_eq!(near(&mut rt, "A2.GetNearestObjectNearMe(a, 50, -1, nil, -1, false)"), 0);
     assert_eq!(near(&mut rt, "A2.GetNearestObjectNearMe(999999, 50, -1, nil, -1, false)"), 0);
-    // A mask other than -1 is not measured.
-    assert!(rt.eval::<()>("A2.GetNearestObjectNearMe(a, 50, -1, nil, 3, false)").is_err());
-    assert!(rt.eval::<()>(&format!("A2.GetNearestObjectNearPosition({}, 50, -1, nil, 3, false, 0)", v(0))).is_err());
-    assert_eq!(unsupported(&rt, "class-bit mask"), 2);
+    // A mask other than -1 is a team the object must be visible to (`lua36_tests`).
     // Shapes.
     assert!(rt.eval::<()>("A2.GetNearestObjectNearMe(a, 50, -1, nil, -1)").is_err());
     assert!(rt.eval::<()>("A2.GetNearestObjectNearPosition(1, 50, -1, nil, -1, false, 0)").is_err());

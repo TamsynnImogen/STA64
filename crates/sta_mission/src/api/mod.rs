@@ -82,6 +82,7 @@ mod tests;
 
 pub use monitor::MonitorKind;
 pub(crate) use monitor::MonitorState;
+pub(crate) use spawn::take_removed;
 
 pub(crate) fn fire_monitors(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
     monitor::fire_monitors(lua, ctx, errors);

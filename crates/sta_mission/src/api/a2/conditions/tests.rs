@@ -172,12 +172,13 @@ fn playback_state_follows_media_calls_and_client_reports() {
 fn path_distance_reads_host_paths_and_reports_a_missing_one() {
     let s = scene();
     let rt = runtime(&s);
-    assert!(rt.eval::<f64>("return A2.GetDistance(a, 'P', 0)").is_err());
-    assert!(rt.unsupported().iter().any(|(name, n)| name.contains("path 'P'") && *n == 1), "{:?}", rt.unsupported());
+    // The map lacks the path: the engine's lookup is null and the answer is the far constant (LUA-36).
+    assert_eq!(eval::<f64>(&rt, "return A2.GetDistance(a, 'P', 0)"), crate::api::ABSENT_DISTANCE);
+    assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());
     eval::<()>(&rt, "A2.paths.P = { {x=30,y=0,z=0}, {x=0,y=40,z=0} }");
     assert_eq!(eval::<f64>(&rt, "return A2.GetDistance(a, 'P', 0)"), 30.0);
     assert_eq!(eval::<f64>(&rt, "return A2.GetDistance(a, 'P', 1)"), 40.0);
-    assert!(rt.eval::<f64>("return A2.GetDistance(a, 'P', 2)").is_err());
+    assert_eq!(eval::<f64>(&rt, "return A2.GetDistance(a, 'P', 2)"), 40.0, "the index is clamped (LUA-36)");
     assert_eq!(eval::<f64>(&rt, "return A2.GetDistance(a, b)"), 100.0, "the two-object overload is unchanged");
 }
 
