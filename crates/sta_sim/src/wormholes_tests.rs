@@ -76,13 +76,79 @@ fn a_craft_ordered_onto_a_gate_comes_out_of_its_partner_at_rest() {
 }
 
 #[test]
-fn gates_move_nothing_outside_the_armada_i_pairing() {
+fn a_craft_ordered_onto_a_gate_in_the_armada_ii_family_emerges_at_the_partner_centre() {
     let d = db(false);
     let (mut sim, a, b) = world(&d);
     run(&mut sim, a, b);
     let (x, z) = pos(&sim, a);
-    assert!((x - 1000.0).abs() < 200.0 && z.abs() < 200.0, "a at ({x}, {z})");
+    assert!((x - 5000.0).abs() < 1.0 && (z - 5000.0).abs() < 1.0, "a at ({x}, {z})");
+    let u = sim.units.get(a).unwrap();
+    assert!(u.target.is_none() && u.speed == Fixed::ZERO, "order consumed");
+    assert!(pos(&sim, b).0 > 1500.0, "a craft only passing the gate does not travel");
 }
+
+#[test]
+fn an_emerged_craft_stays_until_ordered_onto_the_gate_again() {
+    let d = db(false);
+    let (mut sim, a, b) = world(&d);
+    run(&mut sim, a, b);
+    for _ in 0..30 * 20 {
+        sim.step(&[]);
+    }
+    let (x, z) = pos(&sim, a);
+    assert!((x - 5000.0).abs() < 1.0 && (z - 5000.0).abs() < 1.0, "no travel back by itself: ({x}, {z})");
+    let back = Command { player: PlayerId(1), seq: 9, kind: CommandKind::Order(Order::Move { units: vec![a], to: v(5000, 5000), queue: false }) };
+    sim.step(&[back]);
+    for _ in 0..30 * 5 {
+        sim.step(&[]);
+    }
+    let (x, z) = pos(&sim, a);
+    assert!((x - 1000.0).abs() < 1.0 && z.abs() < 1.0, "an explicit order sends it back: ({x}, {z})");
+}
+
+#[test]
+fn a_group_ordered_onto_one_gate_all_emerge_and_the_separation_spreads_them() {
+    let d = db(false);
+    let (mut sim, _, _) = world(&d);
+    let cruiser = d.key("fx_cruiser").unwrap();
+    let h = (Fixed::ONE, Fixed::ZERO);
+    let ids: Vec<EntityId> = (0..3).map(|i| sim.spawn_def(cruiser, PlayerId(1), v(0, 100 * i), h).unwrap()).collect();
+    let order = Command { player: PlayerId(1), seq: 1, kind: CommandKind::Order(Order::Move { units: ids.clone(), to: v(1000, 0), queue: false }) };
+    sim.step(&[order]);
+    for _ in 0..30 * 40 {
+        sim.step(&[]);
+    }
+    let at: Vec<(f32, f32)> = ids.iter().map(|&i| pos(&sim, i)).collect();
+    for &(x, z) in &at {
+        assert!((x - 5000.0).abs() < 200.0 && (z - 5000.0).abs() < 200.0, "emerged near the partner: ({x}, {z})");
+    }
+    let apart = |p: (f32, f32), q: (f32, f32)| (p.0 - q.0).abs() + (p.1 - q.1).abs();
+    eprintln!("group at {at:?}");
+    assert!(apart(at[0], at[1]) > 1.0 && apart(at[1], at[2]) > 1.0 && apart(at[0], at[2]) > 1.0, "{at:?}");
+}
+
+#[test]
+fn an_unpaired_trailing_gate_does_nothing() {
+    let d = db(false);
+    let (mut sim, a, _) = world(&d);
+    let to = Command { player: PlayerId(1), seq: 1, kind: CommandKind::Order(Order::Move { units: vec![a], to: v(-3000, 0), queue: false }) };
+    sim.step(&[to]);
+    for _ in 0..30 * 60 {
+        sim.step(&[]);
+    }
+    let (x, z) = pos(&sim, a);
+    assert!((x + 3000.0).abs() < 200.0 && z.abs() < 200.0, "stays at the unpaired gate: ({x}, {z})");
+}
+
+/// Whole-state digest after a craft of an Armada II-family scene went through a gate.
+#[test]
+fn a_travelling_craft_is_pinned_in_the_whole_state_digest() {
+    let d = db(false);
+    let (mut sim, a, b) = world(&d);
+    run(&mut sim, a, b);
+    assert_eq!(sim.digest(), PINNED_TRAVEL_DIGEST, "{:#x}", sim.digest());
+}
+const PINNED_TRAVEL_DIGEST: u64 = 0x413c_c80d_e8ad_a3b5;
 
 #[test]
 fn the_same_run_gives_the_same_digest() {
@@ -144,4 +210,17 @@ fn map_gates_pair_in_map_order() {
     let d = db(true);
     let (sim, g) = gate_world(&d);
     assert_eq!(sim.gate_pairs(), [(g[0], g[1]), (g[1], g[0]), (g[2], g[3]), (g[3], g[2])]);
+}
+
+#[test]
+fn a_right_click_on_a_gate_moves_the_mobile_units_onto_its_centre() {
+    let d = db(false);
+    let (mut sim, g) = gate_world(&d);
+    let cruiser = d.key("fx_cruiser").unwrap();
+    let c = sim.spawn_def(cruiser, PlayerId(1), v(900, 0), (Fixed::ONE, Fixed::ZERO)).unwrap();
+    let view = sim.view();
+    let order = crate::context::context_order(Some(&d), &view, PlayerId(1), &[c], g[0]);
+    assert_eq!(order, Some(Order::Move { units: vec![c], to: v(1000, 0), queue: false }));
+    // Not a gate, not this rule.
+    assert_eq!(crate::context::context_order(Some(&d), &view, PlayerId(1), &[c], c), None);
 }

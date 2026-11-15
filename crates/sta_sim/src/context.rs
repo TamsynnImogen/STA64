@@ -17,6 +17,10 @@
 //! - When nobody votes, the right-click is a plain move to the point
 //!   (`None` here): warships on a moon, unarmed units on an enemy.
 //!
+//! A right-click on a wormhole gate (class `wormhole_obj`) gives the mobile units a move onto the gate's
+//! centre, which the sim takes as a go-through (`wormholes`): the originals give a gate its own action
+//! (read from the executable, static), STA64 needs no new order for it.
+//!
 //! Stationary builders rally instead (STA64's rally order; the originals give
 //! a yard's rally point through its own button).
 //!
@@ -63,6 +67,7 @@ pub fn takers(db: Option<&ContentDb>, view: &WorldView, order: &Order) -> Vec<En
         Order::Mine { units, .. } => keep(units, &|db, id| is_miner(db, view, id)),
         Order::Attack { units, .. } => keep(units, &|db, id| is_armed(db, view, id)),
         Order::Rally { builders, .. } => builders.clone(),
+        Order::Move { units, .. } => units.clone(),
         _ => Vec::new(),
     }
 }
@@ -116,6 +121,16 @@ pub fn context_order(db: Option<&ContentDb>, view: &WorldView, me: PlayerId, own
     }
     if rally_builders(db, view, me, own) {
         return Some(Order::Rally { builders: own.to_vec(), at: Target::Entity(target) });
+    }
+    if let Some(db) = db
+        && db.unit(t.def).is_some_and(|d| d.class.0 == "wormhole_obj")
+    {
+        let movers: Vec<EntityId> = own
+            .iter()
+            .copied()
+            .filter(|&id| view.unit(id).and_then(|u| db.unit(u.def)).is_some_and(|d| d.movement.max_speed > Fixed::ZERO))
+            .collect();
+        return (!movers.is_empty()).then_some(Order::Move { units: movers, to: t.pos, queue: false });
     }
     let enemy = is_enemy(view, me, t.owner);
     let Some(db) = db else {

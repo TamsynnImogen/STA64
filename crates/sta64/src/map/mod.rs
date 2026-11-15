@@ -1105,7 +1105,7 @@ fn rebuild(
             commands.entity(entity).insert(SimEntity(id));
             // A resource (a moon) is neutral and never moves but is clicked for its info and
             // as a mining target.
-            if def.movement.max_speed > Fixed::ZERO || o.team > 0 || def.resource.is_some() {
+            if def.movement.max_speed > Fixed::ZERO || o.team > 0 || def.resource.is_some() || def.class.0 == "wormhole_obj" {
                 let radius = model
                     .bounds()
                     .map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5)
