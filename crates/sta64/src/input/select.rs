@@ -333,6 +333,34 @@ fn bulk_centre(link: &SimLink, ids: &[EntityId]) -> Option<Vec3> {
 }
 
 
+/// A cutscene starting cancels input under way, it does not freeze it: a box drag in progress
+/// (its node hidden, so it is not left over the cinematic) and a double-click in the making end,
+/// and an armed build placement or target mode is disarmed (its ghost goes). Runs on the start
+/// edge only; the selection itself is kept, inert.
+pub fn cancel_on_cutscene_start(
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
+    mut was: Local<bool>,
+    mut drag: ResMut<Drag>,
+    mut boxes: Query<&mut Visibility, With<SelectBox>>,
+    hud: Option<ResMut<crate::ui::hud::HudState>>,
+) {
+    let now = crate::ui::presentation::cutscene_running(cine);
+    let started = now && !*was;
+    *was = now;
+    if !started {
+        return;
+    }
+    drag.start = None;
+    drag.last_click = None;
+    for mut v in &mut boxes {
+        *v = Visibility::Hidden;
+    }
+    if let Some(mut h) = hud {
+        h.placing = None;
+        h.targeting = None;
+    }
+}
+
 /// Mouse: click, shift-click, box, double click.
 #[allow(clippy::too_many_arguments)]
 pub fn select(
@@ -481,6 +509,24 @@ mod tests {
     /// D (class 1, on screen, far below); player 1 owns E (class 1). Render
     /// x/z are screen pixels in an 800x600 top-down view.
     fn app() -> App {
+        build(false)
+    }
+
+    /// The same world driven by the real [`InputPlugin`](super::super::InputPlugin), so a test
+    /// fails when a gate is deleted from the wiring. `Aim` is refilled from `TestAim` after the
+    /// plugin's own `aim` system, which has no window to read.
+    fn real_app() -> App {
+        build(true)
+    }
+
+    #[derive(Resource, Default)]
+    struct TestAim(Option<AimState>);
+
+    fn inject_aim(t: Res<TestAim>, mut aim: ResMut<Aim>) {
+        aim.0 = t.0;
+    }
+
+    fn build(real: bool) -> App {
         let mut db = ContentDb::builder();
         for (name, class) in [("cls1", "craft"), ("cls2", "craft"), ("yard", "shipyard")] {
             db = db.unit(sta_content::UnitDef::new(name, class));
@@ -510,9 +556,18 @@ mod tests {
             .init_resource::<KeyBindings>()
             .init_resource::<MaxSelection>()
             .init_resource::<Aim>()
+            .init_resource::<TestAim>()
             .insert_resource(ContentRes(Arc::new(db)))
-            .insert_resource(SimLink::new(Box::new(Frozen(view.clone())), Box::new(LocalRouter::new()), PlayerId(0)))
-            .add_systems(Update, (select_keys, select).chain());
+            .insert_resource(SimLink::new(Box::new(Frozen(view.clone())), Box::new(LocalRouter::new()), PlayerId(0)));
+        if real {
+            crate::app::configure_sets(&mut app);
+            app.insert_resource(crate::sim_link::BenchDriven)
+                .init_resource::<crate::ui::hud::HudState>()
+                .add_plugins((crate::sim_link::SimLinkPlugin, super::super::InputPlugin))
+                .add_systems(Update, inject_aim.after(super::super::orders::aim).before(select_keys).in_set(crate::app::GameSet::Input));
+        } else {
+            app.add_systems(Update, (select_keys, select).chain());
+        }
         for u in &view.units {
             let [x, y, z] = u.pos.to_f32();
             app.world_mut().spawn((SimEntity(u.id), SelectRadius(50.0), GlobalTransform::from(Transform::from_xyz(x, y, -z))));
@@ -524,12 +579,14 @@ mod tests {
         // Screen (x, y) is world (x, z); depth is world y.
         let swap = Mat4::from_cols(Vec4::X, Vec4::Z, Vec4::Y, Vec4::W);
         let clip = Mat4::from_translation(Vec3::new(-1.0, 1.0, 0.5)) * Mat4::from_scale(Vec3::new(2.0 / 800.0, -2.0 / 600.0, 0.0)) * swap;
-        app.world_mut().resource_mut::<Aim>().0 = Some(AimState {
+        let state = Some(AimState {
             cursor: Vec2::new(x, z),
             ray: Ray3d::new(Vec3::new(x, 1000.0, z), Dir3::NEG_Y),
             clip_from_world: clip,
             size: Vec2::new(800.0, 600.0),
         });
+        app.world_mut().resource_mut::<Aim>().0 = state;
+        app.world_mut().resource_mut::<TestAim>().0 = state;
     }
 
     fn step(app: &mut App) {
@@ -673,6 +730,77 @@ mod tests {
         assert_eq!(sel(&app), [A]);
         drag(&mut app, (380.0, 180.0), (420.0, 220.0));
         assert_eq!(sel(&app), [A]);
+    }
+
+    fn cutscene(app: &mut App, on: bool) {
+        app.world_mut().insert_resource(crate::ui::presentation::CineractiveState { on, skippable: false });
+    }
+
+    fn queued_orders(app: &mut App) -> usize {
+        std::mem::take(&mut app.world_mut().resource_mut::<crate::sim_link::CommandQueue>().0).len()
+    }
+
+    /// Through the real plugin: during a cutscene a click, a box and the Stop key do nothing
+    /// (no selection change, so no select line, and no order), a kept selection stays inert,
+    /// and everything works again when it ends.
+    #[test]
+    fn nothing_is_selected_or_ordered_during_a_cutscene() {
+        let mut app = real_app();
+        click(&mut app, 100.0, 100.0);
+        assert_eq!(sel(&app), [A]);
+        tap(&mut app, KeyCode::KeyS);
+        assert_eq!(queued_orders(&mut app), 1, "the rig orders when no cutscene runs");
+        cutscene(&mut app, true);
+        app.world_mut().resource_mut::<Messages<SelectionChanged>>().clear();
+        click(&mut app, 300.0, 100.0);
+        drag(&mut app, (0.0, 0.0), (800.0, 250.0));
+        tap(&mut app, KeyCode::KeyS);
+        tap(&mut app, KeyCode::Digit1);
+        let changes = app.world_mut().resource_mut::<Messages<SelectionChanged>>().drain().count();
+        assert_eq!(sel(&app), [A], "the old selection is kept, inert");
+        assert_eq!(changes, 0, "no selection change, so no select line");
+        assert_eq!(queued_orders(&mut app), 0, "no order");
+        cutscene(&mut app, false);
+        click(&mut app, 300.0, 100.0);
+        assert_eq!(sel(&app), [B]);
+        tap(&mut app, KeyCode::KeyS);
+        assert_eq!(queued_orders(&mut app), 1);
+    }
+
+    /// A box begun before the cutscene is cancelled when it starts: released after it, it
+    /// selects nothing and its node is not left on screen.
+    #[test]
+    fn a_drag_under_way_is_cancelled_by_a_cutscene() {
+        let mut app = real_app();
+        app.update();
+        aim_at(&mut app, 0.0, 0.0);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        step(&mut app);
+        aim_at(&mut app, 800.0, 250.0);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        let visible = |app: &mut App| app.world_mut().query_filtered::<&Visibility, With<SelectBox>>().iter(app.world()).any(|v| *v == Visibility::Visible);
+        assert!(visible(&mut app), "the box is drawn while dragging");
+        cutscene(&mut app, true);
+        step(&mut app);
+        assert!(!visible(&mut app), "the box is hidden when the cutscene starts");
+        assert!(app.world().resource::<Drag>().start.is_none());
+        cutscene(&mut app, false);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        step(&mut app);
+        assert!(sel(&app).is_empty(), "the old drag selects nothing");
+    }
+
+    /// An armed placement or target mode is disarmed when the cutscene starts.
+    #[test]
+    fn an_armed_mode_is_disarmed_by_a_cutscene() {
+        let mut app = real_app();
+        app.world_mut().resource_mut::<crate::ui::hud::HudState>().targeting = Some(crate::ui::hud::model::TargetMode::Attack);
+        app.update();
+        assert!(app.world().resource::<crate::ui::hud::HudState>().targeting.is_some());
+        cutscene(&mut app, true);
+        app.update();
+        assert!(app.world().resource::<crate::ui::hud::HudState>().targeting.is_none());
     }
 
     #[test]
