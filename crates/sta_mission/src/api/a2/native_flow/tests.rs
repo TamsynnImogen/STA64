@@ -59,6 +59,29 @@ fn fades_map_duration_colour_and_delay() {
 }
 
 #[test]
+fn a_delayed_fade_out_clears_only_after_a_fade_out() {
+    let clear = Presentation::Fade { out: false, seconds: Fixed::ZERO, rgb: [0; 3] };
+    let delayed = |events: Vec<Presentation>| events.iter().filter(|p| matches!(p, Presentation::Call { name, .. } if name == "A2.FadeOut")).count();
+    // No fade before it, or a fade in before it: nothing is cleared.
+    for first in ["", "A2.FadeIn(script, 2, 0, 0, true);"] {
+        let mut rt = runtime();
+        rt.eval::<()>(&format!("{first} A2.FadeOut(script, 2, 4, 0, true)")).unwrap();
+        let events = events(&mut rt);
+        assert!(!events.contains(&clear), "{first:?}: {events:?}");
+        assert_eq!(delayed(events), 1);
+    }
+    // After a fade out the clear comes right before the delayed request; one clear for the chain.
+    let mut rt = runtime();
+    rt.eval::<()>("A2.FadeOut(script, 2, 0, 0, true); A2.FadeOut(script, 2, 4, 0, true); A2.FadeOut(script, 2, 4, 0, true)").unwrap();
+    let events = events(&mut rt);
+    assert_eq!(events.iter().filter(|p| **p == clear).count(), 2, "{events:?}");
+    // A delayed fade in does not clear and leaves the next delayed fade out without one.
+    let mut rt = runtime();
+    rt.eval::<()>("A2.FadeOut(script, 2, 0, 0, true); A2.FadeIn(script, 2, 3, 0, true); A2.FadeOut(script, 2, 4, 0, true)").unwrap();
+    assert!(!events(&mut rt).contains(&clear));
+}
+
+#[test]
 fn a_waiting_fade_holds_the_step_until_delay_plus_duration() {
     let mut rt = runtime();
     rt.eval::<()>("A2.FadeIn(script, 2, 1, 0, false); other = {}; A2.FadeOut(other, 1, 0, 0, false)").unwrap();
