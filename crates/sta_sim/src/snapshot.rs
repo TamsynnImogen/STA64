@@ -805,6 +805,8 @@ mod warp_tests;
 #[cfg(test)]
 #[path = "snapshot/alert_tests.rs"]
 mod alert_tests;
+
+#[cfg(test)]
 #[path = "snapshot/mission_switches_tests.rs"]
 mod mission_switches_tests;
 
