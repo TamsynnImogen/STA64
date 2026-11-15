@@ -200,6 +200,8 @@ pub struct Races {
     /// `(race name, ODF stem)` of the races with repair values: unit race keys are
     /// names, the repair rows are keyed by stem (SIM-69).
     repair_names: Vec<(String, String)>,
+    /// `miningRateModifier` per race key (CON-51), only races that author one.
+    mining: Vec<(String, Fixed)>,
     /// The races that set any boarding key (SIM-46 P0), by key, in race order.
     boarding: Vec<(String, RaceBoarding)>,
     /// Legacy profiles and loaded catalogues are authoritative. Only a bare
@@ -259,13 +261,13 @@ impl Races {
             Ok(o) => o,
             Err(e) => {
                 warnings.push(Warning::new("races.odf", e.to_string()));
-                return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), repair_names: Vec::new(), boarding: Vec::new(), authoritative }, warnings);
+                return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), repair_names: Vec::new(), boarding: Vec::new(), mining: Vec::new(), authoritative }, warnings);
             }
         };
         let declared = nonnegative_integer(&list, "numberofraces");
         if list.raw("numberofraces").is_some() && declared.is_none() {
             warnings.push(Warning::new("races.odf", "numberOfRaces must be a nonnegative integer"));
-            return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), repair_names: Vec::new(), boarding: Vec::new(), authoritative }, warnings);
+            return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), repair_names: Vec::new(), boarding: Vec::new(), mining: Vec::new(), authoritative }, warnings);
         }
         // Walk authored keys rather than an arbitrary fixed cap or a potentially
         // enormous declared count. Inherited trailing keys are inactive when a
@@ -283,6 +285,7 @@ impl Races {
         let mut seat_rules: Vec<(String, SeatRaceRule)> = Vec::new();
         let mut repair_rules: Vec<(String, RaceRepair)> = Vec::new();
         let mut repair_names: Vec<(String, String)> = Vec::new();
+        let mut mining_rates: Vec<(String, Fixed)> = Vec::new();
         let mut boarding_rules: Vec<(String, RaceBoarding)> = Vec::new();
         for i in entries {
             let Some(file) = list.str(&format!("race{i}")) else {
@@ -342,6 +345,10 @@ impl Races {
                     };
                     if rule != SeatRaceRule::default() {
                         seat_rules.push((name.clone(), rule));
+                    }
+                    // CON-51: the race's factor on mining income, only when authored (absent: not measured).
+                    if let Some(v) = crate::orbital_income::read_nonneg(&format!("{s}.odf"), &o, "miningRateModifier", &mut warnings) {
+                        mining_rates.push((name.clone(), v));
                     }
                     // SIM-46 P0: typed boarding keys; a bad value keeps the default.
                     {
@@ -445,11 +452,11 @@ impl Races {
         }
         repair_rules.sort_by(|a, b| a.0.cmp(&b.0));
         repair_rules.dedup_by(|a, b| a.0 == b.0);
-        (Races { races, crew: crew_rates, seat: seat_rules, repair: repair_rules, repair_names, boarding: boarding_rules, authoritative }, warnings)
+        (Races { races, crew: crew_rates, seat: seat_rules, repair: repair_rules, repair_names, boarding: boarding_rules, mining: mining_rates, authoritative }, warnings)
     }
 
     pub fn from_defs(races: Vec<RaceDef>) -> Races {
-        Races { races, crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), repair_names: Vec::new(), boarding: Vec::new(), authoritative: true }
+        Races { races, crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), repair_names: Vec::new(), boarding: Vec::new(), mining: Vec::new(), authoritative: true }
     }
 
     /// The crew keys of a race by its key (`unitedfederation`), any case.
@@ -466,6 +473,11 @@ impl Races {
     /// `(race name, ODF stem)` of the races that set repair values.
     pub fn repair_stems(&self) -> impl Iterator<Item = (&str, &str)> {
         self.repair_names.iter().map(|(n, s)| (n.as_str(), s.as_str()))
+    }
+
+    /// `miningRateModifier` per race key (CON-51), races that author one only.
+    pub fn mining_rate_modifiers(&self) -> impl Iterator<Item = (&str, Fixed)> {
+        self.mining.iter().map(|(k, v)| (k.as_str(), *v))
     }
 
     /// Authored repair metadata by race ODF stem, in canonical stem order.

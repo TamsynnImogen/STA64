@@ -17,6 +17,20 @@ use crate::sim_link::{ContentRes, Selection, SimLink};
 pub(super) use sta_sim::context::rally_builders;
 pub use sta_sim::context::context_order;
 
+/// The cursor sprite for what a right-click would do (UI-43; names are the install's own
+/// `cursor.spr` keys). A wormhole is the one target `context_order` answers with a move. Other
+/// actions (a placement, an armed pick) are not decided here yet.
+pub(crate) fn cursor_name(order: Option<&Order>, rally: bool) -> &'static str {
+    match order {
+        Some(Order::Attack { .. }) => "c_attack",
+        Some(Order::Mine { .. }) => "c_mining",
+        Some(Order::Rally { .. }) => "c_rally",
+        Some(Order::Move { .. }) => "c_wormin",
+        _ if rally => "c_rally",
+        _ => crate::ui::cursor::DEFAULT,
+    }
+}
+
 /// The cursor shows the order a right-click would give: a crosshair for an
 /// attack, a pointing hand for mining or rally, the arrow otherwise.
 #[allow(clippy::too_many_arguments)] // Bevy injects these system parameters.
@@ -30,15 +44,21 @@ pub fn cursor(
     mut windows: Query<&mut CursorIcon, With<PrimaryWindow>>,
     mut commands: Commands,
     window: Query<Entity, With<PrimaryWindow>>,
+    hud: Option<Res<crate::ui::hud::HudPointer>>,
+    mut wanted: ResMut<crate::ui::cursor::WantedCursor>,
 ) {
     let own = own_selection(&selection, &link);
     let icon = aim.0.filter(|_| !own.is_empty()).and_then(|a| unit_under(a.cursor, a.ray, &units)).filter(|&t| target_seen(link.curr(), local.as_deref().and_then(|l| l.0), t)).and_then(|t| {
         context_order(content.as_deref().map(|c| &*c.0), link.curr(), link.player(), &own, t)
     });
+    let rally = aim.0.is_some() && rally_builders(content.as_deref().map(|c| &*c.0), link.curr(), link.player(), &own);
+    if !hud.is_some_and(|h| h.0) {
+        wanted.0 = cursor_name(icon.as_ref(), rally);
+    }
     let want = match icon {
         Some(Order::Attack { .. }) => SystemCursorIcon::Crosshair,
         Some(Order::Mine { .. } | Order::Rally { .. }) => SystemCursorIcon::Pointer,
-        None if aim.0.is_some() && rally_builders(content.as_deref().map(|c| &*c.0), link.curr(), link.player(), &own) => {
+        None if rally => {
             SystemCursorIcon::Pointer
         }
         _ => SystemCursorIcon::Default,
@@ -153,6 +173,21 @@ mod tests {
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
         app.update();
         std::mem::take(&mut app.world_mut().resource_mut::<CommandQueue>().0)
+    }
+
+    #[test]
+    fn cursor_names_follow_the_order() {
+        let u = vec![EntityId(1)];
+        let attack = Order::Attack { units: u.clone(), target: EntityId(2) };
+        let mine = Order::Mine { units: u.clone(), node: EntityId(2) };
+        let rally = Order::Rally { builders: u.clone(), at: Target::Entity(EntityId(2)) };
+        let wormhole = Order::Move { units: u, to: SimVec3::from_f32([0.0; 3]), queue: false };
+        assert_eq!(cursor_name(Some(&attack), false), "c_attack");
+        assert_eq!(cursor_name(Some(&mine), false), "c_mining");
+        assert_eq!(cursor_name(Some(&rally), false), "c_rally");
+        assert_eq!(cursor_name(Some(&wormhole), false), "c_wormin");
+        assert_eq!(cursor_name(None, true), "c_rally");
+        assert_eq!(cursor_name(None, false), crate::ui::cursor::DEFAULT);
     }
 
     #[test]

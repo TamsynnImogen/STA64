@@ -481,6 +481,8 @@ impl Sim {
         self.push_out_of_fields();
         if let Some(db) = self.content.clone() {
             production::orbit::step(&db, &mut self.units);
+            let race_modifiers: Vec<_> = self.players.iter().map(|p| (p.0, db.rules().race_mining_rate_modifier(self.seat_race(p.0).unwrap_or("")))).collect();
+            self.economy.orbital_income(&db, &self.units, self.tick, &race_modifiers);
             let returned = self.transports.expire(self.tick);
             self.restore_carrier_shields(&returned);
             combat::damage::recharge(&mut self.units, &db, &self.switches, &self.subsystems, &self.transports);
