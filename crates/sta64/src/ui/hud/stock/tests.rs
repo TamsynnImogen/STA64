@@ -1008,6 +1008,30 @@ fn metadata_groups_only_available_actions() {
 }
 
 #[test]
+fn transport_shows_in_the_stock_palette_only_where_the_command_data_places_it() {
+    let db = content();
+    let mut feed = feed(&db);
+    let mut view = (*feed.view).clone();
+    view.units[0].crew = Some([Fixed::from_int(40), Fixed::from_int(50)]);
+    feed.view = Arc::new(view);
+    let transport = |native: &NativeCommands| buttons(&feed, Page::Top, native).into_iter().find(|b| b.act == Act::Target(TargetMode::Transport));
+    // No command data (an install without the command, as Armada I's Armada II-style palette): absent, though
+    // the model offers its fallback cell to STA64's own layout.
+    assert!(model::grid(&feed, Page::Top).iter().any(|b| b.act == Act::Target(TargetMode::Transport)));
+    assert!(transport(&NativeCommands::default()).is_none());
+    let record = |preferred| NativeCommand {
+        odf: "transport.odf".into(), command: "TRANSPORT".into(), button: "b_transport".into(), preferred, menu: None,
+        tooltip: None, verbose: None, normal: None, hovered: None, pressed: None, disabled: None, active: None,
+    };
+    let mut native = NativeCommands::default();
+    native.commands.insert("transport".into(), record(None));
+    assert!(transport(&native).is_none(), "a command with no place in the data");
+    native.commands.insert("transport".into(), record(Some([2, 1])));
+    let b = transport(&native).expect("placed by the data");
+    assert_eq!(b.sprite_names.first().map(String::as_str), Some("b_transport"));
+}
+
+#[test]
 fn native_formation_choices_keep_odf_identity_and_cannot_queue_orders() {
     let db = content();
     let feed = feed(&db);
