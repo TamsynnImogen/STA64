@@ -447,8 +447,9 @@ fn confinement_text(r: Option<&crate::ConfinementRules>) -> String {
 fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // Every field, so a new one fails to compile here until someone decides
     // whether the sim reads it (then it is digested below) or not.
-    // `transport` (SIM-46 P0) is typed but no sim system reads it yet, so it
-    // is not digested; the package that first reads a key digests it, when set.
+    // `transport` (SIM-46 P0): the sim reads `transporter`, `boardingPartyStrength`,
+    // `disableShieldsOnTransport` and `shieldDelay` (SIM-69), digested below when
+    // set; `has_crew`, `assault`, `weldingAnimSpeed`, `eventTransport` are not read yet.
     let UnitDef {
         key: _, odf: _, class: _, is_starbase: _, planet_role: _, planet_crew_gain: _, planet_crew_modifier: _,
         planet_colonizable: _, planet_civilian_population_modifier: _, planet_max_population: _, can_have_orbital_station: _, orbit_time: _, race: _,
@@ -560,6 +561,23 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
             .raw("hardpoint", &repair.repair_hardpoint.as_ref().map_or_else(|| "-".to_owned(), |s| quoted(&s.to_ascii_lowercase())))
             .raw("side", &repair.repair_side.map_or_else(|| "-".to_owned(), |side| side.to_string()))
             .raw("can_shipyard_repair", &repair.can_shipyard_repair.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string()))));
+    }
+    // SIM-69: the transport keys the sim reads, only when set.
+    {
+        let t = &u.transport;
+        let d = crate::TransportDef::default();
+        if (t.transporter, t.boarding_party_strength, t.disable_shields_on_transport, t.shield_delay)
+            != (d.transporter, d.boarding_party_strength, d.disable_shields_on_transport, d.shield_delay)
+        {
+            let opt = |v: Option<Fixed>| v.map_or_else(|| "-".to_owned(), fixed_text);
+            c.raw("transport", &group(
+                Canon::new()
+                    .raw("transporter", &t.transporter.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string()))
+                    .fixed("party_strength", t.boarding_party_strength)
+                    .flag("disable_shields", t.disable_shields_on_transport)
+                    .raw("shield_delay", &opt(t.shield_delay)),
+            ));
+        }
     }
     // `warpSpeed` (SIM-36 seam), only when set: the sim reads it from the
     // definition, so it is a sim-visible rule; content without it keeps its text.
