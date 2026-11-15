@@ -53,7 +53,8 @@ fn scene(first_owner: u8) -> Scene {
         spawn(4, "fx_frigate", 1, 5000.0),
     ]);
     let at = |x: f32| out.view.units.iter().find(|u| u.pos == Vec3::from_f32([x, 0.0, 0.0])).unwrap().id;
-    Scene { ids: [at(0.0), at(100.0), at(300.0), at(5000.0)], view: (*out.view).clone(), db, sim }
+    let view = crate::api::special_forces::flagged_view(&out.view, &db);
+    Scene { ids: [at(0.0), at(100.0), at(300.0), at(5000.0)], view, db, sim }
 }
 
 fn runtime(s: &Scene) -> MissionRuntime {
