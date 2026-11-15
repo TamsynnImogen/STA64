@@ -17,6 +17,12 @@ pub trait WorldSource: Send {
     fn step(&mut self, commands: &[Command]) -> TickOutput;
     /// The world now: after the last step, or at tick 0 before any.
     fn view(&self) -> Arc<WorldView>;
+    /// Optional immutable queue/site metadata for presentation. Sources without
+    /// production state (including legacy view logs) return no rows. Command
+    /// replays and snapshot restores derive it from their live `Sim`.
+    fn production_view(&self) -> Vec<crate::production::view::ProductionView> {
+        Vec::new()
+    }
     /// The whole world as snapshot bytes ([`Sim::snapshot`]), for sources that
     /// can: the playtest capture (TOOL-14) reads it, nothing in the sim does.
     /// The fakes have no state to save and answer `None`.

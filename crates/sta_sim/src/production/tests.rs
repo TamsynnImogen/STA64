@@ -6,6 +6,9 @@ use sta_content::{ContentDb, MoveStats, UnitDef};
 use sta_core::TeamId;
 use std::sync::Arc;
 
+#[path = "view_tests.rs"]
+mod view_tests;
+
 const P0: PlayerId = PlayerId(0);
 
 fn v(x: i32, z: i32) -> Vec3 {
