@@ -440,7 +440,10 @@ fn alert(lua: &Lua, env: &Env, name: &'static str, state: AlertState) -> mlua::R
     def(lua, env, name, &["h"], move |_, e, _, a| {
         let id = a[0].id();
         e.unit(name, id)?;
-        e.edit(name, Edit::Alert(id, state))?;
+        // Only a craft or station holds an alert (the sim rejects the rest).
+        if crate::api::alert::holds_alert(&e.ctx.borrow(), id) {
+            e.edit(name, Edit::Alert(id, state))?;
+        }
         Ok(Value::Nil)
     })
 }

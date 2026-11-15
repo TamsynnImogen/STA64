@@ -6,7 +6,7 @@ use sta_content::Profile;
 use sta_core::{ContentKey, TeamId};
 
 use crate::command::{AlertState, Command, CommandKind, Edit, Order};
-use crate::event::{SimEvent, Target};
+use crate::event::SimEvent;
 use crate::movement::approach_tests;
 use crate::setup::{Control, GameOptions, GameSetup, PlayerSetup};
 use crate::warp_override_tests::script;
@@ -119,8 +119,7 @@ fn yellow_fires_for_fifteen_seconds_after_an_enemy_hit_strictly() {
 }
 
 #[test]
-fn red_and_yellow_units_keep_the_default_rules_and_the_starbase_gate_is_the_same() {
-    // A station-class unit has weapons in this content too; the gate is the unit's, whatever its kind.
+fn the_gate_levels_follow_the_alert_edits_and_red_removes_the_row() {
     let mut sim = game(&[(1, 1), (2, 2)]);
     let s = put(&mut sim, "st_seer", 1, v(0, 0));
     assert_eq!(sim.alert_of(s), AlertState::Red);
@@ -244,7 +243,7 @@ fn ally_attack_counters_count_orders_against_non_enemies_with_a_shared_throttle(
     }
     WorldSource::step(&mut sim, &[attack(1, vec![a], friend)]);
     assert_eq!(sim.ally_attacks(PlayerId(3), PlayerId(1)), (2, 0));
-    // Assist's own attack orders never count: the counters did not move through the fights above.
+    // Only the two accepted orders above counted (the scene's targets are unarmed, so no assist ran).
     assert_eq!(sim.view().attrs.ally_attacks, vec![(3, 1, 2, 0)]);
 }
 
@@ -335,7 +334,39 @@ fn a_whole_state_digest_with_non_default_alert_state_is_pinned() {
     }
     assert_eq!(sim.ally_attacks(PlayerId(3), PlayerId(1)), (1, 0));
     assert_eq!(sim.digest(), PINNED, "{:#x}", sim.digest());
-    let Target::Entity(_) = Target::Entity(a) else { unreachable!() };
 }
 
 const PINNED: u64 = 0xadcc_88cf_dd1c_9c68;
+
+fn fake_game() -> Sim {
+    let seat = |id| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control: Control::Idle };
+    Sim::from_setup(&GameSetup {
+        seed: 3,
+        map: Arc::new(sta_content::MapDef::empty()),
+        content: Arc::new(sta_content::fake::db()),
+        players: vec![seat(0), seat(1)],
+        options: GameOptions::default(),
+    })
+}
+
+#[test]
+fn a_starbase_follows_the_same_gate_and_takes_alert_edits() {
+    let fires = |level: Option<AlertState>, stamped: bool| {
+        let mut sim = fake_game();
+        let key = sim.content().unwrap().key("fx_station").unwrap();
+        let station = sim.spawn_def(key, PlayerId(0), v(0, 0), AHEAD).unwrap();
+        put(&mut sim, "fx_miner", 1, v(0, 100));
+        if let Some(l) = level {
+            assert!(script(&mut sim, Edit::Alert(station, l)), "a station takes an alert edit");
+        }
+        if stamped {
+            let now = sim.tick;
+            sim.alerts.stamp(station, now);
+        }
+        fired_by(&mut sim, station, 240, vec![])
+    };
+    assert!(fires(None, false) > 0, "red");
+    assert_eq!(fires(Some(AlertState::Green), false), 0, "green");
+    assert_eq!(fires(Some(AlertState::Yellow), false), 0, "yellow without a hit");
+    assert!(fires(Some(AlertState::Yellow), true) > 0, "yellow after a hit");
+}

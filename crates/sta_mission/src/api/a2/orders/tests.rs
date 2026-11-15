@@ -335,6 +335,15 @@ fn alert_calls_are_applied_by_the_sim_and_read_back_in_the_same_tick_and_from_th
 }
 
 #[test]
+fn alert_calls_do_not_queue_or_answer_for_a_dying_unit() {
+    let mut s = scene();
+    s.view.units.iter_mut().find(|u| u.id == s.ids[1]).unwrap().flags = sta_sim::view::UnitFlags::DYING;
+    let (rt, commands) = run(&s, "A2.SetGreenAlert(b); assert(not A2.IsGreenAlert(b) and not A2.IsRedAlert(b)); A2.SetYellowAlert(a); assert(A2.IsYellowAlert(a))");
+    assert_eq!(commands.len(), 1, "{commands:?}: only the live unit's call is queued");
+    assert!(rt.unsupported().is_empty());
+}
+
+#[test]
 fn ally_attack_counters_read_the_views_rows_by_team_number() {
     let mut s = scene();
     s.view.attrs.ally_attacks = vec![(0, 1, 3, 1)];

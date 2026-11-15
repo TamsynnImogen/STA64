@@ -7,7 +7,7 @@
 //!   green. `Edit::Alert` writes it directly: no voice, no command reset, no
 //!   target clear (the HUD's alert order, which does reset the command, is a
 //!   UI package). A craft's row is dropped when it is set to red. The default
-//!   is red; the engine's class key `defaultGreenAlert` (stock `csuper` only)
+//!   is red; the engine's class key `defaultGreenAlert`
 //!   is not in the content crate yet (TODO: CON lane). A unit built by a yard
 //!   copies its producer's level (the engine copies it at `FinishBuild`); a
 //!   script spawn starts at the default.
@@ -38,8 +38,10 @@
 //!
 //! State and digest: alert rows, the counters and their last-record times are
 //! hashed only when present; the enemy-hit table is always saved but hashed
-//! only while some unit is not at red (its only in-sim reader is the yellow
-//! gate; hits already show in hull and shields). A run that never leaves red
+//! only while some unit is not at red, by the stated rule: its readers are the yellow
+//! gate in the sim and the `UnderAttack` binding through the view, and the hits
+//! themselves already show in hull and shields, so leaving the stamps out of
+//! the digest while every unit is red hides no desync that the digest would otherwise catch. A run that never leaves red
 //! and never orders an attack on a non-enemy hashes nothing new.
 
 use serde::{Deserialize, Serialize};
@@ -300,6 +302,8 @@ impl Sim {
         let dip = crate::relations::Diplomacy::new(&self.players, &self.relations);
         let tick = self.tick;
         let mut stamps = Vec::new();
+        // A hit whose shooter is already gone from the world (removed before this
+        // pass) is not stamped: whether the original stamps it is not established (TODO).
         for e in &self.events[from..] {
             if let SimEvent::Hit { target, by, .. } = *e
                 && target != by

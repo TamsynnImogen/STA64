@@ -400,7 +400,8 @@ fn mine(env: &Env, unit: EntityId, node: EntityId) -> mlua::Result<Value> {
 
 fn alert(lua: &Lua, env: &Env, name: &'static str, state: AlertState) -> mlua::Result<Function> {
     def(lua, env, name, &["h"], move |_, e, _, a| {
-        if e.alive(a[0].id()).is_some() {
+        let holds = crate::api::alert::holds_alert(&e.ctx.borrow(), a[0].id());
+        if holds {
             edit_feedback::queue(&mut e.ctx.borrow_mut(), name_label(name), Edit::Alert(a[0].id(), state))?;
         }
         nothing()
@@ -669,11 +670,11 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     table.set("SetGreenAlert", alert(lua, &env, "SetGreenAlert", AlertState::Green)?)?;
     table.set("SetYellowAlert", alert(lua, &env, "SetYellowAlert", AlertState::Yellow)?)?;
     // `IsRedAlert` / `IsYellowAlert` / `IsGreenAlert`: the unit's level (what a call of this tick
-    // set counts); false for anything that is not a live unit (LUA-32, read from the executable, static).
+    // set counts); false for anything that is not a live craft or station (LUA-32, read from the executable, static).
     for (name, level) in [("IsRedAlert", AlertState::Red), ("IsYellowAlert", AlertState::Yellow), ("IsGreenAlert", AlertState::Green)] {
         table.set(name, def(lua, &env, name, &["h"], move |_, e, _, a| {
             let c = e.ctx.borrow();
-            Ok(Value::Boolean(c.alive(a[0].id()).is_some() && crate::api::alert::state(&c, a[0].id()) == level))
+            Ok(Value::Boolean(crate::api::alert::holds_alert(&c, a[0].id()) && crate::api::alert::state(&c, a[0].id()) == level))
         })?)?;
     }
     // Ally attack counters (LUA-32): attack orders `by` gave against `team`'s units while not enemies.

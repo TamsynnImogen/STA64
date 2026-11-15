@@ -10,6 +10,13 @@ use sta_sim::command::{AlertState, CommandKind, Edit};
 
 use super::Ctx;
 
+/// Does the unit hold an alert level: a live craft or station (the sim rejects the
+/// edit for anything else, so the bindings neither queue nor answer for it).
+pub(crate) fn holds_alert(c: &Ctx, id: EntityId) -> bool {
+    use sta_sim::world::EntityKind;
+    c.alive(id).and_then(|u| c.def(u)).is_some_and(|d| matches!(EntityKind::of_def(d), EntityKind::Craft | EntityKind::Station))
+}
+
 /// The alert of a unit: the latest alert edit queued this tick, else one the
 /// host took but the sim has not settled, else the view's row (red when absent).
 pub(crate) fn state(c: &Ctx, id: EntityId) -> AlertState {
