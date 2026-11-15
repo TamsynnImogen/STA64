@@ -480,6 +480,8 @@ impl Sim {
         self.push_out_of_fields();
         if let Some(db) = self.content.clone() {
             production::orbit::step(&db, &mut self.units);
+            let race_modifiers: Vec<_> = self.players.iter().map(|p| (p.0, db.rules().race_mining_rate_modifier(self.seat_race(p.0).unwrap_or("")))).collect();
+            self.economy.orbital_income(&db, &self.units, self.tick, &race_modifiers);
             let returned = self.transports.expire(self.tick);
             self.restore_carrier_shields(&returned);
             combat::damage::recharge(&mut self.units, &db, &self.switches, &self.subsystems, &self.transports);
@@ -547,6 +549,11 @@ impl Sim {
         let Some(db) = self.content.as_deref() else { return Fixed::ZERO };
         let census = self.production.officer_census(&self.units, db, player);
         Fixed::from_bits(census.to_bits().saturating_add(self.economy.officer_adjust(player).to_bits()))
+    }
+
+    /// Production presentation at the current tick, derived from saved state.
+    pub fn production_view(&self) -> Vec<production::view::ProductionView> {
+        self.content.as_deref().map_or_else(Vec::new, |db| self.production.view(db, &self.units))
     }
 
     fn build_view(&self) -> WorldView {
@@ -750,6 +757,10 @@ impl WorldSource for Sim {
 
     fn snapshot(&self) -> Option<Vec<u8>> {
         Some(Sim::snapshot(self))
+    }
+
+    fn production_view(&self) -> Vec<production::view::ProductionView> {
+        Sim::production_view(self)
     }
 }
 

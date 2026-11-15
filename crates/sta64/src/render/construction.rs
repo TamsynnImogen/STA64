@@ -18,7 +18,13 @@ use crate::sim_link::{SimEntity, SimLink};
 #[derive(Resource, Default)]
 pub struct ConstructionEdges {
     pub sites: BTreeMap<EntityId, Vec<Vec3>>,
+    /// Separate preview roots never enter the station bee target table.
+    pub previews: HashMap<Entity, Vec<Vec3>>,
 }
+
+/// Presentation-only progress on a yard hull. It is deliberately not a SimEntity.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct ConstructionPreview(pub f32);
 
 /// Weld-gated visual start point for each station construction sequence.
 /// Missing site entries leave progress ungated; an explicit `None` holds at 0.
@@ -328,12 +334,14 @@ pub fn sync_reveal(
     link: Res<SimLink>,
     work: Option<Res<ConstructionWork>>,
     roots: Query<(Entity, &SimEntity)>,
+    previews: Query<(Entity, &ConstructionPreview), Without<SimEntity>>,
     mut parts: Query<(Entity, &GlobalTransform, &mut Mesh3d, &mut ConstructionPart)>,
     mut decorations: Query<(Entity, &ConstructionDecor, &mut Visibility)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut edges: ResMut<ConstructionEdges>,
 ) {
     edges.sites.clear();
+    edges.previews.clear();
     let by_root: HashMap<Entity, (EntityId, f32)> = roots
         .iter()
         .filter_map(|(entity, sim)| {
@@ -343,20 +351,25 @@ pub fn sync_reveal(
             })
         })
         .collect();
+    let preview_progress: HashMap<Entity, f32> = previews.iter().map(|(e, p)| (e, p.0)).collect();
     for (entity, decor, mut visibility) in &mut decorations {
-        let complete = by_root.get(&decor.owner).is_none_or(|(_, progress)| *progress >= 1.0);
+        let complete = by_root.get(&decor.owner).map(|(_, p)| *p)
+            .or_else(|| preview_progress.get(&decor.owner).copied())
+            .is_none_or(|progress| progress >= 1.0);
         if complete {
             *visibility = Visibility::Inherited;
             commands.entity(entity).remove::<ConstructionDecor>();
         }
     }
-    let mut seen_targets = HashMap::<EntityId, HashSet<[u32; 3]>>::new();
+    let mut seen_targets = HashMap::<Entity, HashSet<[u32; 3]>>::new();
     for (entity, transform, mut mesh_handle, mut construction) in &mut parts {
-        let Some((site, sim_progress)) = by_root.get(&construction.owner).copied() else {
+        let site_progress = by_root.get(&construction.owner).copied();
+        let preview = preview_progress.get(&construction.owner).copied();
+        let Some(sim_progress) = site_progress.map(|(_, p)| p).or(preview) else {
             restore(&mut commands, &mut meshes, entity, &mut mesh_handle, &construction);
             continue;
         };
-        let gate = work.as_ref().and_then(|work| work.starts.get(&site).copied());
+        let gate = site_progress.and_then(|(site, _)| work.as_ref().and_then(|work| work.starts.get(&site).copied()));
         let progress = effective_progress(sim_progress, gate);
         let count = construction.source.stage_indices.len();
         let completed = completed_stages(progress, count);
@@ -371,8 +384,12 @@ pub fn sync_reveal(
             construction.completed = completed;
         }
         if let Some(targets) = construction.source.stage_edges.get(completed) {
-            let site_targets = edges.sites.entry(site).or_default();
-            let seen = seen_targets.entry(site).or_default();
+            let site_targets = if let Some((site, _)) = site_progress {
+                edges.sites.entry(site).or_default()
+            } else {
+                edges.previews.entry(construction.owner).or_default()
+            };
+            let seen = seen_targets.entry(construction.owner).or_default();
             for point in targets {
                 let world = transform.transform_point(*point);
                 if seen.insert(point_key(world)) {
@@ -406,6 +423,7 @@ mod gpu_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
     use bevy::asset::RenderAssetUsages;
     use bevy::mesh::PrimitiveTopology;
     use sta_assets::model::{Group, Mesh as ModelMesh, Model, Node, NodeKind, SourceFormat};
@@ -597,5 +615,52 @@ mod tests {
         assert!(assets.get(&partial_a).is_none());
         assert!(assets.get(&partial_b).is_some());
         assert!(assets.get(&original).is_some());
+    }
+
+    #[test]
+    fn preview_reveal_publishes_frontier_without_station_bee_targets() {
+        struct Frozen(std::sync::Arc<sta_sim::WorldView>);
+        impl sta_sim::WorldSource for Frozen {
+            fn view(&self) -> std::sync::Arc<sta_sim::WorldView> { self.0.clone() }
+            fn step(&mut self, _: &[sta_sim::command::Command]) -> sta_sim::TickOutput {
+                sta_sim::TickOutput { view: self.0.clone(), events: Vec::new() }
+            }
+        }
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>()
+            .init_resource::<ConstructionEdges>()
+            .insert_resource(crate::sim_link::SimLink::new(
+                Box::new(Frozen(Arc::new(sta_sim::WorldView::default()))),
+                Box::new(sta_sim::command::LocalRouter::new()),
+                sta_sim::PlayerId(0),
+            ));
+        let root = app.world_mut().spawn(ConstructionPreview(0.5)).id();
+        let complete = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+            .with_inserted_indices(Indices::U32(vec![0, 1, 2, 3, 4, 5]));
+        let (original, partial) = {
+            let mut meshes = app.world_mut().resource_mut::<Assets<Mesh>>();
+            (meshes.add(complete.clone()), meshes.add(complete))
+        };
+        let source = Arc::new(ConstructionSource {
+            stage_indices: vec![vec![0, 1, 2], vec![3, 4, 5]],
+            stage_edges: vec![vec![Vec3::X], vec![Vec3::Y]],
+        });
+        let part = app.world_mut().spawn((
+            Mesh3d(partial.clone()),
+            GlobalTransform::from_translation(Vec3::new(10.0, 20.0, 30.0)),
+            ConstructionPart { owner: root, original: original.clone(), partial: partial.clone(), source, completed: 0 },
+        )).id();
+        app.world_mut().run_system_once(sync_reveal).unwrap();
+        app.world_mut().flush();
+        let edges = app.world().resource::<ConstructionEdges>();
+        assert!(edges.sites.is_empty());
+        assert_eq!(edges.previews[&root], vec![Vec3::new(10.0, 21.0, 30.0)]);
+        assert_eq!(app.world().resource::<Assets<Mesh>>().get(&partial).unwrap().indices(), Some(&Indices::U32(vec![0, 1, 2])));
+        app.world_mut().entity_mut(root).get_mut::<ConstructionPreview>().unwrap().0 = 1.0;
+        app.world_mut().run_system_once(sync_reveal).unwrap();
+        app.world_mut().flush();
+        assert!(app.world().get::<ConstructionPart>(part).is_none());
+        assert_eq!(app.world().get::<Mesh3d>(part).unwrap().0.id(), original.id());
+        assert!(app.world().resource::<Assets<Mesh>>().get(&partial).is_none());
     }
 }

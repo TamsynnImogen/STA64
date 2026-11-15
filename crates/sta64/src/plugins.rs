@@ -45,6 +45,7 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         // Inert until a `FogBounds` and a `LocalPlayer` exist.
         app.add_plugins(crate::render::fog::FogPlugin);
         app.add_plugins(crate::render::fx::persistent_shields::PersistentShieldsPlugin);
+        app.add_plugins(crate::render::build_visuals::BuildVisualsPlugin);
     } else if cfg.ui_gallery {
         app.add_plugins(crate::ui::theme::GalleryPlugin);
     } else {
@@ -86,6 +87,8 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         app.insert_resource(crate::ui::profile::UiPreference { lcars: cfg.lcars_ui })
             .add_plugins(crate::ui::profile::UiProfilePlugin);
         app.add_plugins(crate::ui::notices::NoticePlugin);
+        // UI-43: the install's own mouse cursors in place of the OS cursor.
+        app.add_plugins(crate::ui::cursor::CursorPlugin);
         // UI-30: titles, fades, the objectives panel and the replies for mission presentation.
         app.add_plugins(crate::ui::presentation::PresentationPlugin);
         if front_end {
