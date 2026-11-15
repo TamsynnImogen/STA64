@@ -288,10 +288,14 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             int32("PlayCinematicMovie", "mode", &args[2])?;
             let dont_wait = flag("PlayCinematicMovie", &args[3])?;
             let movie_name = file.clone();
+            // The original starts the video in the HUD's cinematic view (the small panel at
+            // the bottom right, play continues): `CinematicView::StartVideo` (read from the
+            // executable, static) and the gui cfg's `cinematicPanelArea` (read from data).
+            // The host shows it on the panel when it has one, else on the whole screen.
             present(
                 &c,
                 "PlayCinematicMovie",
-                Presentation::Movie { name: file, in_panel: false, skippable: true },
+                Presentation::Movie { name: file, in_panel: true, skippable: true },
             )?;
             c.borrow_mut().playback.movie = true;
             log_start(lua, &c, "movie", 0, &movie_name);
