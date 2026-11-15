@@ -58,6 +58,10 @@ pub struct WindowSizeSelect;
 #[derive(Component, Debug, Clone, Copy)]
 pub struct MsaaSelect;
 
+/// The Graphics tab's stock HUD layout choice (centred or stretched).
+#[derive(Component, Debug, Clone, Copy)]
+pub struct HudFitSelect;
+
 /// Windowed mode is the inverse of the stored fullscreen preference.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct WindowedMode;

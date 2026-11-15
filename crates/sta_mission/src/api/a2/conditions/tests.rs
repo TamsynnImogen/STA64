@@ -175,12 +175,13 @@ fn playback_state_follows_media_calls_and_client_reports() {
 fn path_distance_reads_host_paths_and_reports_a_missing_one() {
     let s = scene();
     let rt = runtime(&s);
-    assert!(rt.eval::<f64>("return A2.GetDistance(a, 'P', 0)").is_err());
-    assert!(rt.unsupported().iter().any(|(name, n)| name.contains("path 'P'") && *n == 1), "{:?}", rt.unsupported());
+    // The map lacks the path: the engine's lookup is null and the answer is the far constant (LUA-36).
+    assert_eq!(eval::<f64>(&rt, "return A2.GetDistance(a, 'P', 0)"), crate::api::ABSENT_DISTANCE);
+    assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());
     eval::<()>(&rt, "A2.paths.P = { {x=30,y=0,z=0}, {x=0,y=40,z=0} }");
     assert_eq!(eval::<f64>(&rt, "return A2.GetDistance(a, 'P', 0)"), 30.0);
     assert_eq!(eval::<f64>(&rt, "return A2.GetDistance(a, 'P', 1)"), 40.0);
-    assert!(rt.eval::<f64>("return A2.GetDistance(a, 'P', 2)").is_err());
+    assert_eq!(eval::<f64>(&rt, "return A2.GetDistance(a, 'P', 2)"), 40.0, "the index is clamped (LUA-36)");
     assert_eq!(eval::<f64>(&rt, "return A2.GetDistance(a, b)"), 100.0, "the two-object overload is unchanged");
 }
 
@@ -253,4 +254,76 @@ fn is_compromised_under_armada_teams_dying_crew_none_and_fixtures() {
     let u = s.view.units.iter_mut().find(|u| u.id == id).unwrap();
     u.flags = u.flags.with(sta_sim::view::UnitFlags::DYING, true);
     assert!(eval::<bool>(&mk(&s), "return A2.IsCompromised(a, 1)"));
+}
+
+/// Script reads of sight leave another team's unit out in the tick after it first appears
+/// (the sensors have not scanned it); the viewer's own seat and its mutual confirmed allies
+/// count at once, and a unit that leaves sight and returns is counted at once.
+#[test]
+fn visible_counts_skip_the_unit_that_just_appeared() {
+    let mut s = scene();
+    let mut rt = runtime(&s);
+    let mut out = Vec::new();
+    // The world the mission starts in is seen as it stands (the cruiser at 100 is in range).
+    assert_eq!(eval::<i64>(&rt, "return A2.CountVisibleUnits(0, 1, false, nil)"), 1);
+    rt.think(&s.view, &[], &mut out);
+    assert_eq!(eval::<i64>(&rt, "return A2.CountVisibleUnits(0, 1, false, nil)"), 1, "already there");
+    let spawn = |seq, player, x: f32| Command {
+        player: PlayerId::SCRIPT,
+        seq,
+        kind: CommandKind::Edit(Edit::Spawn {
+            odf: s.db.key("fx_cruiser").expect("fake odf"),
+            player: PlayerId(player),
+            pos: Vec3::from_f32([x, 0.0, 0.0]),
+            heading: (Fixed::ZERO, Fixed::ONE),
+        }),
+    };
+    let step = s.sim.step(&[spawn(10, 1, 150.0), spawn(11, 0, 60.0)]);
+    rt.think(&step.view, &step.events, &mut out);
+    assert_eq!(eval::<i64>(&rt, "return A2.CountVisibleUnits(0, 1, false, nil)"), 1, "new in range, not scanned yet");
+    assert_eq!(eval::<i64>(&rt, "return A2.CountVisibleUnits(0, 0, false, nil)"), 3, "own units count at once");
+    assert_eq!(eval::<i64>(&rt, "return A2.CountVisibleUnitsNearObject(a, 99999, 1, true, nil)"), 1);
+    // The other sight reads agree in the same tick.
+    let fresh_enemy = step.view.units.iter().find(|u| u.owner == PlayerId(1) && u.pos == Vec3::from_f32([150.0, 0.0, 0.0])).unwrap().id;
+    assert!(!eval::<bool>(&rt, &format!("return A2.IsVisibleToTeam({}, 0)", fresh_enemy.0)));
+    assert!(eval::<bool>(&rt, &format!("return A2.IsVisibleToTeam({}, 1)", fresh_enemy.0)), "its own seat");
+    let step = s.sim.step(&[]);
+    rt.think(&step.view, &step.events, &mut out);
+    assert_eq!(eval::<i64>(&rt, "return A2.CountVisibleUnits(0, 1, false, nil)"), 2, "one tick later");
+    assert!(eval::<bool>(&rt, &format!("return A2.IsVisibleToTeam({}, 0)", fresh_enemy.0)));
+
+    // A unit that left sight and comes back is counted at once: it is no longer new.
+    let mut hidden = (*step.view).clone();
+    for (p, seen) in &mut hidden.visibility {
+        if *p == PlayerId(0) {
+            seen.retain(|id| *id != fresh_enemy);
+        }
+    }
+    rt.think(&hidden, &[], &mut out);
+    assert_eq!(eval::<i64>(&rt, "return A2.CountVisibleUnits(0, 1, false, nil)"), 1, "out of sight");
+    rt.think(&step.view, &[], &mut out);
+    assert_eq!(eval::<i64>(&rt, "return A2.CountVisibleUnits(0, 1, false, nil)"), 2, "back in sight at once");
+}
+
+/// A fresh unit of a mutual confirmed ally shares the viewer's sight at once.
+#[test]
+fn a_fresh_allied_unit_counts_at_once() {
+    let mut s = scene();
+    let mut rt = runtime(&s);
+    let mut out = Vec::new();
+    rt.think(&s.view, &[], &mut out);
+    rt.eval::<()>("A2.SetRelation(0, 1, 2); A2.SetRelation(1, 0, 2)").unwrap();
+    let spawn = Command {
+        player: PlayerId::SCRIPT,
+        seq: 20,
+        kind: CommandKind::Edit(Edit::Spawn {
+            odf: s.db.key("fx_cruiser").expect("fake odf"),
+            player: PlayerId(1),
+            pos: Vec3::from_f32([200.0, 0.0, 0.0]),
+            heading: (Fixed::ZERO, Fixed::ONE),
+        }),
+    };
+    let step = s.sim.step(&[spawn]);
+    rt.think(&step.view, &step.events, &mut out);
+    assert_eq!(eval::<i64>(&rt, "return A2.CountVisibleUnits(0, 1, false, nil)"), 2, "ally's new unit, same tick");
 }

@@ -453,7 +453,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         key: _, odf: _, class: _, is_starbase: _, planet_role: _, planet_crew_gain: _, planet_crew_modifier: _,
         planet_colonizable: _, planet_civilian_population_modifier: _, planet_max_population: _, can_have_orbital_station: _, orbit_time: _, race: _,
         model: _, scale: _, movement: _, hull: _, shields: _, initial_hull: _, initial_shields: _,
-        crew: _, maximum_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
+        crew: _, maximum_crew: _, facility: _, has_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
         sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
         max_dilithium: _, mining_rate: _, transfer_rate: _, resource: _, features: _,
         confinement: _, nebula_pathing: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
@@ -526,6 +526,14 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
             None => "-".to_owned(),
             Some(r) => format!("{{map={};construction={}}}", confinement_text(Some(r)), confinement_text(db.construction_confinement(u.key))),
         });
+    // SIM-70: absent authored flags keep the prior digest; explicit false is
+    // distinct from absence because it excludes a station from recrewing.
+    if let Some(facility) = u.facility {
+        c.flag("facility", facility);
+    }
+    if let Some(has_crew) = u.has_crew {
+        c.flag("has_crew", has_crew);
+    }
     // SIM-39, SIM-55: only when set, so content without the keys keeps its digest.
     if u.sane_crew_loss {
         c.flag("sane_crew_loss", true);

@@ -39,7 +39,7 @@
 //! measured`. Findings are kept outside this repository.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::rc::Rc;
 
 use mlua::{Function, Lua, MultiValue, Table, Value};
@@ -51,7 +51,7 @@ use super::objects::{handle, integer, live};
 use super::queries::craft_family;
 use crate::api::entity_ref::{EntityRef, SpawnHandle, SpawnStatus};
 use crate::api::search::stem;
-use crate::api::{Ctx, Shared, edit_feedback, pos_f64, spawn, to_vec3, vector};
+use crate::api::{Ctx, Shared, edit_feedback, pos_f64, spawn, special_forces, to_vec3, vector};
 
 /// Handles at or above this are pending spawns (same range as `A1`).
 const TOKEN_BASE: u32 = 0x4000_0000;
@@ -99,6 +99,10 @@ const DEFERRED_ON_PENDING: &[&str] = &[
     "SearchAndDestroy",
     "SetAngularVelocity",
     "SetCanBeDecommissioned",
+    "SetCommandMoveAutonomyLow",
+    "SetCommandWhatWhoParamVO",
+    "SetCommandWhatWhoVO",
+    "SetCommandWhatWhoWhereVO",
     "SetCrew",
     "SetCurrentHealth",
     "SetForceOntoMap",
@@ -112,6 +116,7 @@ const DEFERRED_ON_PENDING: &[&str] = &[
     "SetRedAlert",
     "SetShieldPercent",
     "SetSpecialEnergy",
+    "SetSpecialForcesFlag",
     "SetYellowAlert",
     "Special_Attack",
     "Stop",
@@ -128,8 +133,6 @@ struct Deferred {
 #[derive(Default)]
 struct State {
     pending: BTreeMap<u32, Rc<SpawnHandle>>,
-    /// Handles flagged as special forces: a real id or a pending token.
-    special: BTreeSet<u32>,
     /// Orders given to handles that were still pending, in call order.
     deferred: Vec<Deferred>,
     ctx: Option<Shared>,
@@ -162,14 +165,6 @@ impl State {
             Some(SpawnStatus::Failed) => Token::Failed,
             Some(SpawnStatus::Queued | SpawnStatus::Submitted(_)) => Token::Pending,
         }
-    }
-
-    fn is_special(&self, id: EntityId) -> bool {
-        self.special.contains(&id.0)
-            || self
-                .special
-                .iter()
-                .any(|t| *t >= TOKEN_BASE && matches!(self.token(*t), Token::Id(i) if i == id))
     }
 
     /// Whether `v` is a `BuildObject` token whose object is not built yet.
@@ -397,6 +392,8 @@ struct Search<'a> {
     /// Also require the perceived team to match.
     perceived: bool,
     exclude: Option<EntityId>,
+    /// A non-negative mask: only these objects (see `near_mask`).
+    visible: Option<&'a std::collections::BTreeSet<EntityId>>,
 }
 
 /// The nearest live unit (exe: GetNearestObjectNearPosition). Squared XZ
@@ -404,12 +401,15 @@ struct Search<'a> {
 /// (the executable replaces on `<=`; its list order is taken as ascending id,
 /// not measured). The executable also skips derelict crafts and, for a
 /// non-negative mask argument, tests a bit of a class field: the view has no
-/// derelict state and the mask is rejected by the caller.
+/// derelict state; the mask is `near_mask`.
 fn nearest(c: &Ctx, q: &Search) -> Option<EntityId> {
     let mut best = if q.radius >= 0.0 { q.radius * q.radius } else { f64::INFINITY };
     let mut found = None;
     for u in &c.view.units {
         if u.flags.contains(UnitFlags::DYING) || q.exclude == Some(u.id) {
+            continue;
+        }
+        if q.visible.is_some_and(|v| !v.contains(&u.id)) {
             continue;
         }
         if q.team >= 0 {
@@ -524,13 +524,13 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         })?,
     )?;
 
-    // int SetSpecialForcesFlag(int, bool). Rule (exe): for a live Craft, store
-    // the flag on it and return its handle; anything else returns 0 and does
-    // nothing. Setting it also detaches the craft from its AI team; the AI
-    // seats of a mission do not read the flag yet (AI-02 / SIM-58 own that
-    // consumer), so its one consumer today is RecruitSpecialForces. A pending
-    // `BuildObject` token is flagged at once and the flag follows its object.
-    let (c, s) = (ctx.clone(), st.clone());
+    // int SetSpecialForcesFlag(int, bool). Rule (exe): for a live Craft, store the flag on it
+    // and return its handle; anything else returns 0 and does nothing (the executable does not
+    // look at production state). The flag is the sim's `Switches.special_forces`
+    // (`Edit::SpecialForces`, LUA-28); the script order gate and the AI read it. A pending
+    // `BuildObject` token is held and flagged once the object is built (the call returns the
+    // token at once, see `finish`).
+    let c = ctx.clone();
     table.set(
         "SetSpecialForcesFlag",
         lua.create_function(move |_, args: MultiValue| {
@@ -538,45 +538,31 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             arity(name, &args, 2)?;
             let raw = integer(name, &args[0])?;
             let on = boolean(name, &args, 1)?;
-            let valid = if raw >= TOKEN_BASE {
-                matches!(s.borrow().token(raw), Token::Pending | Token::Id(_))
-            } else {
+            if raw >= TOKEN_BASE {
+                // A built token is translated and a pending one held before this call (see
+                // `finish`): what is left is an unknown or failed token, no object.
+                return Ok(0i64);
+            }
+            let id = EntityId(raw);
+            let valid = {
                 let c = c.borrow();
-                c.alive(EntityId(raw)).is_some_and(|u| {
-                    u.progress.is_none() && c.def(u).is_none_or(|d| craft_family(&d.class.0) != Some(false))
-                })
+                !special_forces::removed_this_tick(&c, id)
+                    && c.alive(id).is_some_and(|u| c.def(u).is_none_or(|d| sta_sim::world::EntityKind::of_def(d) == sta_sim::world::EntityKind::Craft))
             };
             if !valid {
                 return Ok(0i64);
             }
-            let mut s = s.borrow_mut();
-            if on {
-                s.special.insert(raw);
-            } else {
-                s.special.remove(&raw);
-                // A flag stored under the token of this id goes too.
-                let stale: Vec<u32> = s
-                    .special
-                    .iter()
-                    .copied()
-                    .filter(|t| *t >= TOKEN_BASE && matches!(s.token(*t), Token::Id(i) if i.0 == raw))
-                    .collect();
-                for t in stale {
-                    s.special.remove(&t);
-                }
-            }
+            special_forces::queue_flag(&c, "A2.SetSpecialForcesFlag", id, on)?;
             Ok(i64::from(raw))
         })?,
     )?;
 
-    // bool RecruitSpecialForces(char *odf, int team, int &out). Rule (exe): the
-    // first craft of that team and ODF that is not already special forces is
-    // flagged and its handle stored in `out`; false (and out 0) when the ODF
-    // is null/unknown or none qualifies. Lua has no out parameter: the call
-    // returns `ok, handle`; a third argument is accepted and ignored. The
-    // executable also requires the craft to have no AI team: nothing here
-    // has one.
-    let (c, s) = (ctx.clone(), st.clone());
+    // bool RecruitSpecialForces(char *odf, int team, int &out). Rule (exe): out = 0; the first
+    // craft of that team and ODF that is not in production and not yet special forces is
+    // flagged and its handle stored in `out`; false (and out 0) when the ODF is null/unknown or
+    // none qualifies. Lua has no out parameter: the call returns `ok, handle`; a third argument
+    // is accepted and ignored.
+    let c = ctx.clone();
     table.set(
         "RecruitSpecialForces",
         lua.create_function(move |_, args: MultiValue| {
@@ -586,22 +572,12 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             }
             let odf = text(name, &args, 0)?;
             let team = signed(name, &args, 1)?;
-            let c = c.borrow();
-            let mut s = s.borrow_mut();
-            let found = odf.filter(|o| !o.is_empty()).and_then(|odf| {
-                c.view
-                    .units
-                    .iter()
-                    .filter(|u| !u.flags.contains(UnitFlags::DYING) && u.progress.is_none())
-                    .filter(|u| team_number(&c, u.owner) == Some(team))
-                    .filter(|u| stem(&c.odf_name(u)).eq_ignore_ascii_case(stem(&odf)))
-                    .filter(|u| c.def(u).is_none_or(|d| craft_family(&d.class.0) != Some(false)))
-                    .find(|u| !s.is_special(u.id))
-                    .map(|u| u.id)
-            });
-            if let Some(id) = found {
-                s.special.insert(id.0);
-            }
+            let found = match odf.filter(|o| !o.is_empty()) {
+                Some(odf) => {
+                    special_forces::recruit(&c, "A2.RecruitSpecialForces", &odf, |c, u| team_number(c, u.owner) == Some(team))?
+                }
+                None => None,
+            };
             Ok((found.is_some(), found.map_or(0, |id| i64::from(id.0))))
         })?,
     )?;
@@ -610,8 +586,8 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     // perceived, exclude). Rules (exe): see `nearest`; radius < 0 is
     // unlimited, team < 0 any team, a null odf any ODF, `perceived` also
     // requires the perceived team to match, `exclude` is a handle to skip
-    // (0 none). All stock calls pass mask -1; any other mask is a class-field
-    // bit test that is not measured and raises.
+    // (0 none). A mask >= 0 is a team number the candidate must be visible to
+    // (`near_mask`, LUA-36); -1 does not filter.
     let c = ctx.clone();
     table.set(
         "GetNearestObjectNearPosition",
@@ -625,10 +601,8 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             let mask = signed(name, &args, 4)?;
             let perceived = boolean(name, &args, 5)?;
             let exclude = integer(name, &args[6])?;
-            if mask != -1 {
-                return Err(path_error(&c, name, "a class-bit mask other than -1 is not measured".into()));
-            }
-            let q = Search { center, radius, team, odf: &odf, perceived, exclude: (exclude != 0).then_some(EntityId(exclude)) };
+            let visible = super::near_mask::visible(&c.borrow(), mask);
+            let q = Search { center, radius, team, odf: &odf, perceived, exclude: (exclude != 0).then_some(EntityId(exclude)), visible: visible.as_ref() };
             Ok(id_value(nearest(&c.borrow(), &q)))
         })?,
     )?;
@@ -648,12 +622,10 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             let odf = text(name, &args, 3)?;
             let mask = signed(name, &args, 4)?;
             let perceived = boolean(name, &args, 5)?;
-            if mask != -1 {
-                return Err(path_error(&c, name, "a class-bit mask other than -1 is not measured".into()));
-            }
             let c = c.borrow();
             let Some(unit) = c.alive(me) else { return Ok(id_value(None)) };
-            let q = Search { center: pos_f64(unit.pos), radius, team, odf: &odf, perceived, exclude: Some(me) };
+            let visible = super::near_mask::visible(&c, mask);
+            let q = Search { center: pos_f64(unit.pos), radius, team, odf: &odf, perceived, exclude: Some(me), visible: visible.as_ref() };
             Ok(id_value(nearest(&c, &q)))
         })?,
     )?;
@@ -875,18 +847,27 @@ pub(super) fn finish(lua: &Lua, table: &Table) -> mlua::Result<()> {
             _ => None,
         })
         .collect();
+    let ctx = st.borrow().ctx.clone();
     for (name, inner) in entries {
         let st = st.clone();
         let defers = DEFERRED_ON_PENDING.contains(&name.as_str());
         let label = name.clone();
+        // Script orders do nothing on a craft without the special-forces flag (LUA-28). The gate
+        // sits inside the held-call wrapper, so a held order meets it when it is replayed.
+        let inner = match (&ctx, special_forces::GATED.iter().find(|g| **g == name)) {
+            (Some(ctx), Some(gated)) => special_forces::gate(lua, ctx, gated, |_| None, inner)?,
+            _ => inner,
+        };
         table.set(
             name,
             lua.create_function(move |_, args: MultiValue| {
                 replay(&st);
                 if defers && args.iter().any(|v| st.borrow().is_pending(v)) {
                     let args: Vec<Value> = args.into_iter().collect();
+                    // `SetSpecialForcesFlag` returns the handle it was given.
+                    let echo = if label == "SetSpecialForcesFlag" { args.first().cloned() } else { None };
                     st.borrow_mut().deferred.push(Deferred { name: label.clone(), inner: inner.clone(), args });
-                    return Ok(MultiValue::new());
+                    return Ok(echo.into_iter().collect());
                 }
                 let args: MultiValue = args.into_iter().map(|v| st.borrow().translate(v)).collect();
                 inner.call::<MultiValue>(args)

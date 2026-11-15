@@ -394,30 +394,39 @@ fn spawn_group(
         // widget painter cannot tint the transparent wireframe hit area.
         commands.entity(entity).remove::<BackgroundColor>();
         commands.entity(root).add_child(entity);
-        if let Some(unit) = feed.view.unit(tile.id)
+        let wireframe_key = if small {
+            format!("infoMultiShipWireframeSm_{i}")
+        } else {
+            format!("infoMultiShipWireframe_{i}")
+        };
+        let wireframe = if layout.raw_rect(&wireframe_key).is_some() {
+            layout.at(origin, &wireframe_key)
+                .map(|area| R::new(area.x - r.x, area.y - r.y, area.w, area.h))
+        } else {
+            Some(R::new(0.0, 0.0, r.w, r.h))
+        };
+        if let Some(wireframe) = wireframe
+            && let Some(unit) = feed.view.unit(tile.id)
             && let Some(def) = feed.content.as_deref().and_then(|db| db.unit(unit.def))
         {
-            wireframe_layers(commands, entity, R::new(0.0, 0.0, r.w, r.h), &def.model);
+            wireframe_layers(commands, entity, wireframe, &def.model);
         }
-        // Normal group tiles have a separate authored name rectangle. Small
-        // tiles retain the icon inset because their CFG has no known name key.
-        let fallback = R::new(2.0, 2.0, (r.w - 4.0).max(0.0), (r.h - 4.0).max(0.0));
-        let name_rect = if small {
-            fallback
-        } else {
-            layout.at(origin, &format!("infoMultiShipName_{i}"))
-                .map_or(fallback, |name| R::new(name.x - r.x, name.y - r.y, name.w, name.h))
-        };
-        text_styled(
-            commands,
-            entity,
-            name_rect,
-            tile.name.clone(),
-            theme.text,
-            theme.micro_size,
-            None,
-            group_label_style(layout, name_rect.w),
-        );
+        if !small {
+            // Existing incomplete CFGs retain the icon inset when no name key exists.
+            let fallback = R::new(2.0, 2.0, (r.w - 4.0).max(0.0), (r.h - 4.0).max(0.0));
+            let name_rect = layout.at(origin, &format!("infoMultiShipName_{i}"))
+                .map_or(fallback, |name| R::new(name.x - r.x, name.y - r.y, name.w, name.h));
+            text_styled(
+                commands,
+                entity,
+                name_rect,
+                tile.name.clone(),
+                theme.text,
+                theme.micro_size,
+                None,
+                group_label_style(layout, name_rect.w),
+            );
+        }
         let hull_key = if small {
             format!("infoMultiShipHullSm_{i}")
         } else {
@@ -497,8 +506,9 @@ mod tests {
     use super::*;
     use bevy::ecs::world::CommandQueue;
     use sta_content::gui_cfg::{GuiLayout, Rect};
+    use sta_sim::fake::ScriptedSource;
     use sta_sim::{
-        Fixed, PlayerId, TeamId,
+        Fixed, PlayerId, TeamId, WorldSource,
         view::{PlayerView, WorldView},
     };
     use std::sync::Arc;
@@ -642,7 +652,7 @@ mod tests {
     }
 
     #[test]
-    fn group_name_uses_authored_rectangle_and_small_tiles_keep_inset() {
+    fn group_name_uses_authored_rectangle_and_small_tiles_have_no_caption() {
         let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
         cfg.rects.insert("infoMultiShipIcon_0".into(), Rect { x: 70, y: 90, w: 40, h: 40 });
         cfg.rects.insert("infoMultiShipName_0".into(), Rect { x: 50, y: 77, w: 90, h: 9 });
@@ -650,7 +660,7 @@ mod tests {
         let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
         let feed = HudFeed::default();
         let theme = Theme::default();
-        for (variant, expected) in [(1, R::new(-20.0, -13.0, 90.0, 9.0)), (2, R::new(2.0, 2.0, 36.0, 36.0))] {
+        for variant in [1, 2] {
             let mut world = World::new();
             let root = world.spawn(Node::default()).id();
             let mut queue = CommandQueue::default();
@@ -660,18 +670,92 @@ mod tests {
                 spawn_group(&mut commands, root, &layout, &feed, &theme, Vec2::ZERO, variant, &[tile]);
             }
             queue.apply(&mut world);
-            let (label, parent) = world.query::<(&SpriteText, &ChildOf)>().iter(&world)
-                .find(|(text, _)| text.text == "USS Dunlop").unwrap();
+            let label = world.query::<(&SpriteText, &ChildOf)>().iter(&world)
+                .find(|(text, _)| text.text == "USS Dunlop");
+            if variant == 2 {
+                assert!(label.is_none());
+                continue;
+            }
+            let (label, parent) = label.unwrap();
             assert_eq!(label.size, theme.micro_size);
             let wrapper = parent.parent();
             let tile = world.query_filtered::<Entity, With<GroupTile>>().single(&world).unwrap();
             assert_eq!(world.get::<ChildOf>(wrapper).unwrap().parent(), tile);
             let rect = world.get::<Node>(wrapper).unwrap();
+            let expected = R::new(-20.0, -13.0, 90.0, 9.0);
             assert_eq!((rect.left, rect.top, rect.width, rect.height),
                 (Val::Px(expected.x), Val::Px(expected.y), Val::Px(expected.w), Val::Px(expected.h)));
             let style = world.get::<SpriteTextStyle>(world.get::<Children>(wrapper).unwrap()[0]).unwrap();
             assert_eq!(style.wrap, Some(expected.w));
             assert!(!style.native && !style.min_size && style.scaled);
+        }
+    }
+
+    #[test]
+    fn seeded_group_tiers_use_authored_wireframes_and_only_normal_names() {
+        let db = Arc::new(sta_content::fake::db());
+        let units = (1..=30)
+            .map(|id| format!("{{ id: {id}, def: 'fx_cruiser', owner: 1, hull: 100, rails: [{{ at: 0, pos: {{ x: 0, y: 0, z: 0 }} }}] }}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut source = ScriptedSource::from_json5(&format!("{{ units: [{units}] }}"), &db).unwrap();
+        let feed = HudFeed {
+            view: source.step(&[]).view,
+            content: Some(db),
+            ..default()
+        };
+        let tiles = (1..=30)
+            .map(|id| model::Tile { id: EntityId(id), name: format!("Ship {id} full name"), hull: 1.0 })
+            .collect::<Vec<_>>();
+        let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
+        for i in 0..30 {
+            // The normal CFG has 16 slots; the compact CFG has 30.
+            for suffix in if i < 16 { &["", "Sm"][..] } else { &["Sm"][..] } {
+                cfg.rects.insert(format!("infoMultiShipIcon{suffix}_{i}"), Rect { x: 10 + i as i32 * 50, y: 20, w: 40, h: 40 });
+                cfg.rects.insert(format!("infoMultiShipWireframe{suffix}_{i}"), Rect { x: 14 + i as i32 * 50, y: 26, w: 25, h: 25 });
+            }
+            if i < 16 {
+                cfg.rects.insert(format!("infoMultiShipName_{i}"), Rect { x: 10 + i as i32 * 50, y: 61, w: 40, h: 9 });
+            }
+        }
+        // An explicit disabled wireframe stays disabled; an absent key uses the icon.
+        cfg.rects.insert("infoMultiShipWireframeSm_1".into(), Rect { x: 0, y: 0, w: 0, h: 0 });
+        cfg.rects.remove("infoMultiShipWireframeSm_2");
+        let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+        let theme = Theme::default();
+        for (variant, count) in [(1, 16), (2, 30)] {
+            let mut world = World::new();
+            let root = world.spawn(Node::default()).id();
+            let mut queue = CommandQueue::default();
+            {
+                let mut commands = Commands::new(&mut queue, &world);
+                spawn_group(&mut commands, root, &layout, &feed, &theme, Vec2::ZERO, variant, &tiles[..count]);
+            }
+            queue.apply(&mut world);
+            let mut tile_query = world.query::<(&GroupTile, &Node, &Tooltip, Option<&BackgroundColor>, Option<&Children>)>();
+            let rendered = tile_query.iter(&world).collect::<Vec<_>>();
+            assert_eq!(rendered.len(), count);
+            for (group, hit, tooltip, background, children) in rendered {
+                let i = group.0.0 as usize - 1;
+                assert_eq!(tooltip.short, tiles[i].name);
+                assert!(background.is_none());
+                assert_eq!((hit.width, hit.height), (Val::Px(40.0), Val::Px(40.0)));
+                let frames = children.into_iter().flat_map(|c| c.iter()).filter_map(|child| world.get::<GuiImage>(child).map(|_| child)).collect::<Vec<_>>();
+                if variant == 2 && i == 1 {
+                    assert!(frames.is_empty());
+                } else {
+                    assert_eq!(frames.len(), 5);
+                    let image_node = world.get::<Node>(frames[0]).unwrap();
+                    let expected = if variant == 2 && i == 2 {
+                        (Val::Px(0.0), Val::Px(0.0), Val::Px(40.0), Val::Px(40.0))
+                    } else {
+                        (Val::Px(4.0), Val::Px(6.0), Val::Px(25.0), Val::Px(25.0))
+                    };
+                    assert_eq!((image_node.left, image_node.top, image_node.width, image_node.height), expected);
+                }
+            }
+            let labels = world.query::<&SpriteText>().iter(&world).count();
+            assert_eq!(labels, if variant == 1 { 16 } else { 0 });
         }
     }
 

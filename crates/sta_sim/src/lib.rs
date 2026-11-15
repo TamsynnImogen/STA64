@@ -36,6 +36,9 @@ pub mod kinematics;
 pub mod movement;
 mod ownership;
 pub mod speed_override;
+pub mod warp_override;
+#[cfg(test)]
+mod warp_override_tests;
 #[cfg(test)]
 mod speed_override_tests;
 mod perception;
@@ -70,6 +73,8 @@ pub mod attrs;
 pub mod team_pool;
 #[cfg(test)]
 mod rerace_tests;
+#[cfg(test)]
+mod special_forces_tests;
 pub use start_effects::unsupported as unsupported_start_lifecycle;
 pub mod tech;
 pub mod victory;
@@ -194,6 +199,8 @@ pub struct Sim {
     // and latinum rules; fixed by the setup, so peers agree.)
     /// Planet population and colony ship orders (SIM-30); in the digest once any exists.
     colonies: colony::Colonies,
+    /// Transporter orders, parties in flight and shield holds (SIM-46); in the digest once any exists.
+    transports: combat::boarding::Transports,
 }
 
 impl Sim {
@@ -232,6 +239,7 @@ impl Sim {
             team_changes: Vec::new(),
             appearance_factions: Vec::new(),
             colonies: Default::default(),
+            transports: Default::default(),
         }
     }
 
@@ -269,6 +277,7 @@ impl Sim {
         let ok = self.apply_command(c);
         if ok && let command::CommandKind::Order(o) = &c.kind {
             self.colonies_after_order(c.player, o);
+            self.transports_after_order(c.player, o);
         }
         ok
     }
@@ -412,13 +421,14 @@ impl Sim {
             | Order::AttackPoint { .. }
             | Order::MoveWarp { .. } => self.apply_scripted(c.player, order),
             Order::Colonize { units, planet } => self.apply_colonize(c.player, units, *planet),
+            Order::Transport { units, target, attack } => self.apply_transport(c.player, units, *target, *attack),
             Order::Rally { builders, at } => {
                 let Some(db) = self.content.as_deref() else { return false };
                 self.production.order_rally(db, &self.units, c.player, builders, *at)
             }
-            // S2 transport is available before the SIM-40 yard runtime.
-            // Refuse the whole request, preserving existing orders/state.
-            Order::Repair { .. } => false,
+            // Refuse requests until their repair/recrew runtimes are integrated,
+            // preserving existing orders/state.
+            Order::Repair { .. } | Order::Recrew { .. } => false,
         }
     }
 
@@ -450,7 +460,10 @@ impl Sim {
         self.separate_units();
         self.push_out_of_fields();
         if let Some(db) = self.content.clone() {
-            combat::damage::recharge(&mut self.units, &db, &self.switches, &self.subsystems);
+            production::orbit::step(&db, &mut self.units);
+            let returned = self.transports.expire(self.tick);
+            self.restore_carrier_shields(&returned);
+            combat::damage::recharge(&mut self.units, &db, &self.switches, &self.subsystems, &self.transports);
             self.activate_team_change_weapons(&db);
             self.specials.step(&mut self.units, &db, &mut self.events);
             let from = self.events.len();
@@ -469,6 +482,9 @@ impl Sim {
             let mut lost = Vec::new();
             let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
             let killed = combat::damage::apply(&mut self.units, &db, &mut self.events, from, &mut casualties);
+            // Pulses and arrivals after the hits, before the latch upkeep (SIM-46).
+            self.step_transports();
+            let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
             combat::casualty::step(&mut self.units, &db, &mut casualties);
             for (id, by) in killed {
                 lost.extend(self.units.get(id).map(|u| u.owner));
@@ -557,7 +573,7 @@ impl Sim {
             }
         }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), ..self.attrs.view() } }
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), special_forces: self.switches.special_forces(), ..self.attrs.view() } }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content
@@ -648,6 +664,12 @@ impl Sim {
         // SIM-30: population and colonizing orders (nothing is hashed without colony state).
         if !self.colonies.is_empty() {
             self.colonies.hash_into(&mut h);
+        }
+        // LUA-31: scripted warp speeds (nothing is hashed without an override).
+        self.hash_warp_overrides(&mut h);
+        // SIM-46: transporter orders, parties in flight, shield holds (nothing is hashed without them).
+        if !self.transports.is_empty() {
+            self.transports.hash_into(&mut h);
         }
         let crew_count = self.units.iter().filter(|unit| unit.crew.is_some()).count();
         if crew_count != 0 {
@@ -918,5 +940,21 @@ mod tests {
         let rejected = [SimEvent::Rejected { player: PlayerId(0), seq: 0 }, SimEvent::Rejected { player: PlayerId(1), seq: 0 }];
         assert_eq!(out.events, rejected);
         assert_eq!(sim.unit(a).unwrap().target, Some(v(100, 0, 0)));
+    }
+
+    #[test]
+    fn recrew_is_rejected_without_changing_the_existing_order() {
+        let mut sim = Sim::new(1);
+        let a = sim.spawn(0, v(0, 0, 0), (Fixed::ZERO, Fixed::ONE), stats());
+        let destination = v(100, 0, 0);
+        sim.step(&[order(0, 0, command::Order::Move { units: vec![a], to: destination, queue: false })]);
+        for (seq, on) in [(1, None), (2, Some(true)), (3, Some(false))] {
+            let mut baseline = sim.clone();
+            baseline.step(&[]);
+            let out = sim.step(&[order(0, seq, command::Order::Recrew { units: vec![a], on })]);
+            assert!(out.events.contains(&SimEvent::Rejected { player: PlayerId(0), seq }));
+            assert_eq!(sim.unit(a).unwrap().target, Some(destination));
+            assert_eq!(sim.digest(), baseline.digest());
+        }
     }
 }

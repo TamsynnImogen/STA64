@@ -400,7 +400,7 @@ fn stock_rect(r: crate::ui::hud::layout::R) -> Node {
 
 fn spawn_stock(commands: &mut Commands, root: Entity, theme: &Theme, cfg: &HudConfig) {
     let Some(gui) = cfg.gui.as_ref() else { return };
-    let layout = StockLayout::for_aspect(gui, cfg.aspect);
+    let layout = StockLayout::for_aspect_fit(gui, cfg.aspect, cfg.fit);
     let area = layout.panel("minimap");
     let chrome = commands.spawn((
         RadarChrome,
@@ -718,12 +718,13 @@ fn rebuild_on_theme_change(
     config: Option<Res<HudConfig>>,
     roots: Query<Option<&Children>, With<RadarRoot>>,
     mut blips: ResMut<BlipEntities>,
-    mut previous: Local<Option<(Option<UiProfile>, Option<sta_content::GuiLayout>, f32)>>,
+    mut previous: Local<Option<(Option<UiProfile>, Option<sta_content::GuiLayout>, f32, crate::ui::hud::stock::layout::HudFit)>>,
 ) {
     let now = (
         profile.as_ref().map(|p| **p),
         config.as_ref().and_then(|c| c.gui.clone()),
         config.as_ref().map_or(16.0 / 9.0, |c| c.aspect),
+        config.as_ref().map_or_else(Default::default, |c| c.fit),
     );
     let changed = theme.is_changed() || previous.as_ref() != Some(&now);
     *previous = Some(now);

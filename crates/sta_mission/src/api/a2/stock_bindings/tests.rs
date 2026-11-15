@@ -70,7 +70,7 @@ fn scene_with(tweak: impl Fn(&mut sta_content::UnitDef)) -> Scene {
         spawn(4, "fx_frigate", 1, 5000.0),
     ]);
     let at = |x: f32| out.view.units.iter().find(|u| u.pos == Vec3::from_f32([x, 0.0, 0.0])).unwrap().id;
-    Scene { ids: [at(0.0), at(100.0), at(300.0), at(5000.0)], view: (*out.view).clone(), sim, db }
+    Scene { ids: [at(0.0), at(100.0), at(300.0), at(5000.0)], view: crate::api::special_forces::flagged_view(&out.view, &db), sim, db }
 }
 
 fn runtime(s: &Scene) -> MissionRuntime {
@@ -208,9 +208,6 @@ fn command_all_ships_raises_and_counts_what_it_cannot_serve_before_queueing() {
     // A command with no order without a target.
     assert!(rt.eval::<()>("A2.CommandAllShips(4, 0, nil, false, false)").is_err());
     assert!(counted(&rt, "CommandAllShips: command 4"));
-    // The unidentified first flag.
-    assert!(rt.eval::<()>("A2.CommandAllShips(3, 0, nil, true, false)").is_err());
-    assert!(counted(&rt, "CommandAllShips: the per-craft state"));
     assert!(rt.take_commands().is_empty());
     for bad in [
         "A2.CommandAllShips(3, 0, nil, false)",

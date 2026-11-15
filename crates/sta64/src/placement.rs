@@ -109,6 +109,21 @@ mod tests {
         (sim, db, rig)
     }
 
+    /// Steps until `n` stations of `what` exist and returns where they stand at that tick. A site is
+    /// built where the ghost showed, then (once finished) circles its planet (SIM-65): the promise is
+    /// about the site, so it is read the tick the site appears, still under construction.
+    fn sites(sim: &mut Sim, what: ContentKey, n: usize) -> Vec<(Vec3, (Fixed, Fixed))> {
+        for _ in 0..3000 {
+            let found: Vec<_> = sim.view().units.iter().filter(|u| u.def == what).map(|u| (u.pos, u.heading, u.progress)).collect();
+            if found.len() >= n {
+                assert!(found.iter().any(|f| f.2.is_some()), "read while the new site is under construction");
+                return found.into_iter().map(|f| (f.0, f.1)).collect();
+            }
+            sim.step(&[]);
+        }
+        panic!("no site appeared");
+    }
+
     #[test]
     fn an_orbital_station_snaps_over_a_planet_and_is_refused_elsewhere() {
         let (sim, db, rig) = world();
@@ -132,10 +147,7 @@ mod tests {
         sim.step(&[Command { player: PlayerId::BENCH, seq: 1, kind: CommandKind::Edit(e) }]);
         let o = Order::Build { builder: rig, what, at: Some(cursor) };
         sim.step(&[Command { player: PlayerId(0), seq: 2, kind: CommandKind::Order(o) }]);
-        for _ in 0..900 {
-            sim.step(&[]);
-        }
-        let built: Vec<_> = sim.view().units.iter().filter(|u| u.def == what).map(|u| (u.pos, u.heading)).collect();
+        let built = sites(&mut sim, what, 1);
         // The position is exact; the heading is recomputed from the snapped point, so it may differ in the last bit.
         assert_eq!(built.len(), 1);
         assert_eq!(built[0].0, g.at);
@@ -164,13 +176,42 @@ mod tests {
         let e = Edit::Cargo(PlayerId(0), 0, Fixed::from_int(9999));
         sim.step(&[Command { player: PlayerId::BENCH, seq: 1, kind: CommandKind::Edit(e) }]);
         sim.step(&[Command { player: PlayerId(0), seq: 2, kind: CommandKind::Order(order) }]);
-        for _ in 0..1500 {
-            sim.step(&[]);
-        }
-        let built: Vec<_> = sim.view().units.iter().filter(|u| u.def == what).map(|u| u.pos).collect();
+        let built: Vec<_> = sites(&mut sim, what, 1).into_iter().map(|b| b.0).collect();
         assert_eq!(built, [g.at]);
         // Open space is refused by the same call.
         assert_eq!(build_order(&feed, None, &armed, v(3000, 3000)), Err(SiteError::Blocked));
+    }
+
+    /// A second station's ghost agrees with the sim while the first one circles its planet: the first
+    /// planet stays taken wherever its station is on the ring, the other planet's slot is built where
+    /// the ghost showed.
+    #[test]
+    fn the_ghost_agrees_with_the_sim_while_a_neighbour_circles() {
+        use sta_sim::command::Order;
+        let (mut sim, db, rig) = world_with(&[1000, 2000]);
+        let what = db.key("fx_orbital").unwrap();
+        let e = Edit::Cargo(PlayerId(0), 0, Fixed::from_int(9999));
+        sim.step(&[Command { player: PlayerId::BENCH, seq: 1, kind: CommandKind::Edit(e) }]);
+        let first = v(900, 90);
+        let order = |at, seq| Command { player: PlayerId(0), seq, kind: CommandKind::Order(Order::Build { builder: rig, what, at: Some(at) }) };
+        sim.step(&[order(first, 2)]);
+        let start = sites(&mut sim, what, 1)[0].0;
+        // Until it is finished and has circled a good way round.
+        for _ in 0..2400 {
+            sim.step(&[]);
+        }
+        let now = sim.view().units.iter().find(|u| u.def == what).map(|u| (u.pos, u.progress)).unwrap();
+        assert!(now.1.is_none() && now.0 != start, "finished and circling: {now:?}");
+        let view = sim.view();
+        // Its planet is taken at any cursor, the neighbour's is free and snaps where the sim builds.
+        assert_eq!(ghost_site(&db, None, &view, what, rig, first).status, Err(SiteError::Blocked));
+        assert_eq!(ghost_site(&db, None, &view, what, rig, now.0).status, Err(SiteError::Blocked));
+        let cursor = v(2100, 60);
+        let g = ghost_site(&db, None, &view, what, rig, cursor);
+        assert_eq!(g.status, Ok(()));
+        sim.step(&[order(cursor, 3)]);
+        let built = sites(&mut sim, what, 2);
+        assert!(built.iter().any(|b| b.0 == g.at), "{built:?} holds the ghost's {:?}", g.at);
     }
 
     #[test]

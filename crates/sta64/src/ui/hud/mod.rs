@@ -51,7 +51,7 @@ use super::radar::{RadarPlugin, RadarRoot};
 use super::theme::{ButtonClicked, Theme, ThemePlugin};
 use crate::app::GameSet;
 use crate::input::orders::{Aim, OrderTargets, formation_moves};
-use crate::input::select::{Targetable, unit_under};
+use crate::input::select::{Targetable, target_seen, unit_under};
 use crate::ui::i18n::{tr, trf};
 use sta_sim::view::UnitFlags;
 use sta_sim::world::EntityKind;
@@ -64,6 +64,9 @@ pub struct HudConfig {
     pub gui: Option<GuiLayout>,
     /// Screen width over height; kept from the window when there is one.
     pub aspect: f32,
+    /// How the stock-look HUD sits on a window whose aspect differs from its sheet (the player's
+    /// `hud_layout` setting, kept in step by `fit_screen`). The LCARS HUD ignores it.
+    pub fit: stock::layout::HudFit,
     /// Scale the UI to the primary window (`UiScale` = height / 1080). Off
     /// when something else sets the scale (the frame runs).
     pub fit_scale: bool,
@@ -73,7 +76,7 @@ pub struct HudConfig {
 
 impl Default for HudConfig {
     fn default() -> Self {
-        HudConfig { gui: None, aspect: 16.0 / 9.0, fit_scale: true, log: false }
+        HudConfig { gui: None, aspect: 16.0 / 9.0, fit: stock::layout::HudFit::Centred, fit_scale: true, log: false }
     }
 }
 
@@ -168,8 +171,8 @@ impl Plugin for HudPlugin {
                     pointer,
                     crate::input::hover::track.run_if(not(resource_exists::<ExternalFeed>)),
                     stock::infobar::update,
-                    press,
-                    place_on_click.run_if(resource_exists::<Aim>),
+                    press.run_if(not(crate::ui::presentation::cutscene_running)),
+                    place_on_click.run_if(resource_exists::<Aim>).run_if(not(crate::ui::presentation::cutscene_running)),
                     ghost::update_ghost,
                     ghost::tint_ghost,
                     super::gui_sprites::paint.after(super::theme::WidgetPaint),
@@ -196,7 +199,13 @@ fn fit_screen(
     mut config: ResMut<HudConfig>,
     mut layout: ResMut<HudLayoutRes>,
     mut scale: ResMut<UiScale>,
+    settings: Option<Res<crate::frontend::screens::Settings>>,
 ) {
+    if let Some(s) = settings
+        && config.fit != s.hud_fit
+    {
+        config.fit = s.hud_fit;
+    }
     if let Some(w) = window
         && w.height() > 0.0
     {
@@ -404,6 +413,10 @@ fn press(
                     trf("{0}: click the map (Esc cancels)", &[&tr(&format!("{mode:?}"))]),
                 ));
             }
+            Act::Recrew if !commands::recrew_stations(&feed, &feed.own_selection()).is_empty() => {
+                // UI-only until the simulation defines a Recrew order and recovery rule.
+                notices.write(Notice::new(Severity::Warn, tr("Station recrewing is not implemented yet")));
+            }
             Act::Build {
                 builder,
                 what,
@@ -454,6 +467,7 @@ fn place_on_click(
     mut queue: ResMut<CommandQueue>,
     mut issued: MessageWriter<OrderIssued>,
     units: Targetable,
+    local: Option<Res<crate::render::units::LocalPlayer>>,
     mut targets: ResMut<OrderTargets>,
     bounds: Res<ghost::PlacementBounds>,
     mut notices: MessageWriter<Notice>,
@@ -481,7 +495,7 @@ fn place_on_click(
             return;
         }
         let Some(a) = aim.0 else { return };
-        let target = unit_under(a.cursor, a.ray, &units);
+        let target = unit_under(a.cursor, a.ray, &units).filter(|&t| target_seen(&feed.view, local.as_deref().and_then(|l| l.0), t));
         let own = feed.own_selection();
         let heights: Vec<f32> = own.iter().filter_map(|id| feed.view.unit(*id).map(|u| u.pos.y.to_f32())).collect();
         let y = if heights.is_empty() { 0.0 } else { heights.iter().sum::<f32>() / heights.len() as f32 };
@@ -757,3 +771,5 @@ mod target_tests {
 mod tests;
 #[cfg(test)]
 mod colonize_tests;
+#[cfg(test)]
+mod recrew_tests;

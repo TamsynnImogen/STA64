@@ -104,6 +104,11 @@ impl VoiceLimiter {
     }
 }
 
+/// A new sim's ids begin again: nothing seen of the last one may answer for them.
+fn forget_units(mut st: ResMut<SfxState>) {
+    st.seen.clear();
+}
+
 #[derive(Resource, Default)]
 struct SfxState {
     limiter: VoiceLimiter,
@@ -121,6 +126,8 @@ impl Plugin for SfxPlugin {
             .add_message::<PlaySound>()
             .init_resource::<SfxConfig>()
             .init_resource::<SfxState>()
+            .add_systems(OnEnter(crate::app::AppState::Loading), forget_units)
+            .add_systems(OnExit(crate::app::AppState::InGame), forget_units)
             .add_systems(Update, run_sfx.in_set(GameSet::Audio).before(play_sounds));
     }
 }
@@ -143,8 +150,12 @@ fn run_sfx(
     cam: Query<&GlobalTransform, crate::map::MainCamera>,
     mut msgs: MessageReader<SimMsg>,
     mut st: ResMut<SfxState>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
     mut out: MessageWriter<PlaySound>,
 ) {
+    // The advisor lines ("construction complete") are speech: dropped, not replayed, while a
+    // cutscene runs. Weapons, hits and explosions are sound effects and play on.
+    let cutscene = crate::ui::presentation::cutscene_running(cine);
     let (Some(link), Some(content)) = (link, content) else {
         msgs.clear();
         return;
@@ -192,6 +203,7 @@ fn run_sfx(
                     want.push((name, pos));
                 }
             }
+            SimEvent::Built { .. } if cutscene => {}
             SimEvent::Built { builder, id } => {
                 let Some(&(pos, def, owner)) = st.seen.get(id).or_else(|| st.seen.get(builder)) else { continue };
                 if me.is_some_and(|p| p != owner) {
@@ -355,5 +367,25 @@ mod tests {
         assert_eq!(got, vec![("ShipConstructionComplete".to_owned(), Bus::Sfx, Some([0.0, 0.0, 50.0]))]);
         let (mut app, log) = scene(tl, Some(PlayerId(1)));
         assert!(run(&mut app, &log, 16).is_empty());
+    }
+
+    #[test]
+    fn construction_complete_is_not_announced_over_a_cutscene_and_not_replayed() {
+        let tl = r#"{ units: [{ id: 1, def: "fx_yard", owner: 0, rails: [{ at: 0, pos: { x: 0, y: 0, z: 0 } }] },
+                              { id: 5, def: "fx_cruiser", owner: 0, rails: [{ at: 2, pos: { x: 0, y: 0, z: 50 } }] },
+                              { id: 6, def: "fx_cruiser", owner: 0, rails: [{ at: 30, pos: { x: 0, y: 0, z: 60 } }] }],
+                      events: [{ at: 2, event: { Built: { builder: 1, id: 5 } } },
+                               { at: 30, event: { Built: { builder: 1, id: 6 } } },
+                               { at: 3, event: { Fired: { shooter: 1, weapon: BEAM, hardpoint: 0, target: { Entity: 5 } } } }] }"#;
+        let (mut app, log) = scene(tl, Some(PlayerId(0)));
+        app.world_mut().insert_resource(crate::ui::presentation::CineractiveState { on: true, skippable: false });
+        let during = run(&mut app, &log, 16);
+        assert!(!during.iter().any(|p| p.0.contains("ConstructionComplete")), "advisor speech is dropped: {during:?}");
+        assert!(during.iter().any(|p| p.0 == "fx_beam_fire"), "real sound effects play on: {during:?}");
+        app.world_mut().resource_mut::<crate::ui::presentation::CineractiveState>().on = false;
+        let after = run(&mut app, &log, 500);
+        let said: Vec<_> = after.iter().filter(|p| p.0.contains("ConstructionComplete")).collect();
+        assert_eq!(said.len(), 1, "only the later one: {after:?}");
+        assert_eq!(said[0].2, Some([0.0, 0.0, 60.0]));
     }
 }

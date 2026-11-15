@@ -103,6 +103,16 @@ pub enum Order {
     /// Colonize a planet with pod colony ships (SIM-30; mission `Colonize`
     /// needs the ship's special-forces flag): see [`crate::colony`]. Tag 17.
     Colonize { units: Vec<EntityId>, planet: EntityId },
+    /// The transporter (SIM-46 P1): each unit beams crew to `target` (a friendly
+    /// transfer, a derelict re-crew or capture, or a boarding of an enemy whose
+    /// shields are down): see [`crate::combat::boarding`]. `attack` (approach and
+    /// fire, then beam: assault ships, Roots) is refused until SIM-46 P3. Tag 18.
+    Transport { units: Vec<EntityId>, target: EntityId, attack: bool },
+    /// Request station crew recovery from the player's crew pool (SIM-70).
+    /// `None` toggles the current state; `Some(on)` sets it explicitly.
+    /// Rejected without changing state until the recrew runtime is integrated.
+    /// Appended tag 19 preserves every preceding Order tag and payload.
+    Recrew { units: Vec<EntityId>, on: Option<bool> },
 }
 
 /// Which autonomy an [`Order::Autonomy`] sets.
@@ -327,6 +337,12 @@ pub enum Edit {
     /// other target (STA64 policy; the original has no type check).
     /// SCRIPT/BENCH only. Appended tag 46.
     PlanetPopulation(EntityId, Fixed),
+    /// Armada I `SetWarpSpeed` / `ResetWarpSpeed` (LUA-31): a live craft's
+    /// absolute warp speed in units per second, kept between 0 and
+    /// [`crate::warp_override::MAX_WARP`]; `None` restores the definition's.
+    /// Saved per unit. The end of a cineractive resets every craft's. Rejected
+    /// for anything but a live craft. SCRIPT/BENCH only. Appended tag 47.
+    WarpSpeed(EntityId, Option<Fixed>),
 }
 
 /// Which team-pool rule an [`Edit::TeamPool`] applies (appended variants only).
@@ -556,6 +572,17 @@ mod tests {
     }
 
     #[test]
+    fn warp_speed_edit_appends_tag_47() {
+        for to in [None, Some(Fixed::from_int(30))] {
+            let edit = Edit::WarpSpeed(EntityId(1), to);
+            let bytes = postcard::to_allocvec(&edit).unwrap();
+            assert_eq!(bytes[0], 47, "{edit:?}");
+            assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
+        }
+        assert_eq!(postcard::to_allocvec(&Edit::WarpSpeed(EntityId(1), None)).unwrap(), [47, 1, 0]);
+    }
+
+    #[test]
     fn planet_population_edit_appends_tag_46() {
         let edit = Edit::PlanetPopulation(EntityId(1), Fixed::ONE);
         let bytes = postcard::to_allocvec(&edit).unwrap();
@@ -589,7 +616,9 @@ mod tests {
             (13, Order::AttackAny { units: u.clone() }),
             (14, Order::AttackPoint { units: u.clone(), at }),
             (15, Order::MoveWarp { units: u.clone(), to: at, queue: true }),
-            (17, Order::Colonize { units: u, planet: id }),
+            (17, Order::Colonize { units: u.clone(), planet: id }),
+            (18, Order::Transport { units: u.clone(), target: id, attack: false }),
+            (19, Order::Recrew { units: u, on: None }),
         ];
         for (tag, o) in orders {
             let bytes = postcard::to_allocvec(&o).unwrap();
@@ -608,6 +637,16 @@ mod tests {
             let c = Command { player: PlayerId(0), seq: 9, kind: CommandKind::Order(Order::Rally { builders: vec![EntityId(3)], at }) };
             let bytes = postcard::to_allocvec(&c).unwrap();
             assert_eq!(postcard::from_bytes::<Command>(&bytes).unwrap(), c);
+        }
+    }
+
+    #[test]
+    fn recrew_toggle_and_explicit_states_round_trip_on_tag_19() {
+        for on in [None, Some(true), Some(false)] {
+            let order = Order::Recrew { units: vec![EntityId(4)], on };
+            let bytes = postcard::to_allocvec(&order).unwrap();
+            assert_eq!(bytes[0], 19);
+            assert_eq!(postcard::from_bytes::<Order>(&bytes).unwrap(), order);
         }
     }
 }

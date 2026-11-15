@@ -15,7 +15,8 @@
 //!   `AI_Attack(unit, object)` are STOP / ATTACK orders; the extra `int` of
 //!   `Stop` and `Attack` is never read. `Mine` is MINE with an object, or
 //!   without a target when the object is absent (nearest node, see `spawn.rs`).
-//!   They are sent as the unit's owner like a player's input.
+//!   They are sent as the unit's owner like a player's input; a unit with no player owner is
+//!   ordered as the script seat (LUA-36).
 //! - `SetImpulseSpeed` / `ResetImpulseSpeed` set and lift the unit's impulse
 //!   speed, `SetRedAlert` / `SetGreenAlert` set its alert status (red 0, yellow
 //!   1, green 2): typed SCRIPT edits (`Edit::MaxSpeed`, `Edit::Alert`) whose
@@ -210,31 +211,29 @@ impl Env {
         craft.then(|| unit.clone())
     }
 
-    /// Send an order as the unit's owner.
+    /// Send an order as the unit's owner. A unit with no player owner (neutral) is ordered as the
+    /// script seat: the original's script calls test no owner (LUA-36). A handle that is not alive
+    /// takes the same branch; every caller has checked `alive` first, and the sim ignores an
+    /// order to a unit that is gone.
     pub(super) fn order(&self, name: &str, id: EntityId, make: impl FnOnce(Vec<EntityId>) -> Order) -> mlua::Result<()> {
+        if !self.ctx.borrow().alive(id).is_some_and(|u| u.owner.is_player()) {
+            return self.script_order(name, make(vec![id]));
+        }
         if self.ctx.borrow_mut().order(id, make) {
             Ok(())
         } else {
             Err(mlua::Error::runtime(format!(
-                "A2.{name}: object {} has no player owner or the order could not be queued",
+                "A2.{name}: the order for object {} could not be queued",
                 id.0
             )))
         }
     }
 
     /// Queue `order` as the script seat (the sim then applies the mission-only gates).
-    fn script_order(&self, name: &str, order: Order) -> mlua::Result<()> {
+    pub(super) fn script_order(&self, name: &str, order: Order) -> mlua::Result<()> {
         match self.ctx.borrow_mut().try_push(PlayerId::SCRIPT, CommandKind::Order(order)) {
             Ok(_) => Ok(()),
             Err(why) => Err(mlua::Error::runtime(format!("A2.{name}: {why}"))),
-        }
-    }
-
-    pub(super) fn owned(&self, name: &str, unit: &UnitView) -> mlua::Result<()> {
-        if unit.owner.is_player() {
-            Ok(())
-        } else {
-            Err(mlua::Error::runtime(format!("A2.{name}: object {} has no player owner", unit.id.0)))
         }
     }
 
@@ -343,8 +342,6 @@ fn goto(lua: &Lua, env: &Env, overload: usize, a: &[P]) -> mlua::Result<Value> {
         let Some(target) = env.alive(a[1].id()) else { return nothing() };
         Some(target.pos)
     };
-    // Ownership first, as for A1: a unit with no player owner fails before any lookup.
-    env.owned("Goto", &unit)?;
     let points = match dest {
         Some(p) => vec![p],
         // An absent path name: the engine's lookup is null and nothing happens.
@@ -371,14 +368,12 @@ fn goto(lua: &Lua, env: &Env, overload: usize, a: &[P]) -> mlua::Result<Value> {
 /// `Attack(unit, object)` and `AI_Attack(unit, object)`: ATTACK with a target.
 fn attack(env: &Env, name: &str, unit: EntityId, target: EntityId) -> mlua::Result<Value> {
     let (Some(unit), Some(target)) = (env.alive(unit), env.alive(target)) else { return nothing() };
-    env.owned(name, &unit)?;
     env.order(name, unit.id, |units| Order::Attack { units, target: target.id })?;
     nothing()
 }
 
 fn mine(env: &Env, unit: EntityId, node: EntityId) -> mlua::Result<Value> {
     let Some(unit) = env.alive(unit) else { return nothing() };
-    env.owned("Mine", &unit)?;
     // An absent object means MINE without a target: the nearest node.
     let node = match env.alive(node) {
         Some(n) => Some(n.id),
@@ -459,7 +454,7 @@ fn nearest_enemy(env: &Env, a: &[P]) -> mlua::Result<Value> {
         }
         let seen = *sees
             .entry(u.owner)
-            .or_insert_with(|| c.view.visible_to(u.owner).iter().any(|v| v.id == me.id));
+            .or_insert_with(|| c.sees(u.owner, me.id));
         if !seen {
             continue;
         }
@@ -501,7 +496,6 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     table.set("Goto", def(lua, &env, "Goto", &["hsbi", "hhbi"], goto)?)?;
     table.set("Stop", def(lua, &env, "Stop", &["hi"], |_, e, _, a| {
         let Some(unit) = e.alive(a[0].id()) else { return nothing() };
-        e.owned("Stop", &unit)?;
         e.order("Stop", unit.id, |units| Order::Stop { units })?;
         nothing()
     })?)?;
@@ -512,14 +506,12 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         // nothing is seen (SIM-56 `AttackAny`).
         1 => {
             let Some(unit) = e.alive(a[0].id()) else { return nothing() };
-            e.owned("AI_Attack", &unit)?;
             e.order("AI_Attack", unit.id, |units| Order::AttackAny { units })?;
             nothing()
         }
         // ATTACK at a position: fly to weapon range of the point, firing nothing.
         _ => {
             let Some(unit) = e.alive(a[0].id()) else { return nothing() };
-            e.owned("AI_Attack", &unit)?;
             let (x, y, z) = a[1].vec();
             e.order("AI_Attack", unit.id, |units| Order::AttackPoint { units, at: to_vec3(x, y, z) })?;
             nothing()
@@ -531,7 +523,6 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     table.set("Patrol", def(lua, &env, "Patrol", &["hs"], |lua, e, _, a| {
         let Some(unit) = e.alive(a[0].id()) else { return nothing() };
         // An absent path name sets neither the path type nor the order.
-        e.owned("Patrol", &unit)?;
         let Some(points) = e.find_path(lua, "Patrol", a[1].text())? else {
             e.note_absent("Patrol", a[1].text());
             return nothing();
@@ -541,13 +532,11 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     })?)?;
     table.set("SearchAndDestroy", def(lua, &env, "SearchAndDestroy", &["h"], |_, e, _, a| {
         let Some(unit) = e.alive(a[0].id()) else { return nothing() };
-        e.owned("SearchAndDestroy", &unit)?;
         e.order("SearchAndDestroy", unit.id, |units| Order::SearchAndDestroy { units })?;
         nothing()
     })?)?;
     table.set("Scout", def(lua, &env, "Scout", &["h"], |_, e, _, a| {
         let Some(unit) = e.alive(a[0].id()) else { return nothing() };
-        e.owned("Scout", &unit)?;
         e.order("Scout", unit.id, |units| Order::Scout { units })?;
         nothing()
     })?)?;
@@ -558,12 +547,10 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     table.set("Colonize", def(lua, &env, "Colonize", &["hh"], |_, e, _, a| {
         let Some(unit) = e.alive(a[0].id()) else { return nothing() };
         let Some(planet) = e.alive(a[1].id()) else { return nothing() };
-        e.owned("Colonize", &unit)?;
         e.script_order("Colonize", Order::Colonize { units: vec![unit.id], planet: planet.id })?;
         nothing()
     })?)?;
     table.set("Special_Attack", raising(lua, &env, "Special_Attack", &["hs", "hhs"], "the sim orders only cloak and point-defence specials, and its special order carries no target")?)?;
-    table.set("SetCommandMoveAutonomyLow", raising(lua, &env, "SetCommandMoveAutonomyLow", &["h"], "no per-unit movement autonomy order in the sim seam")?)?;
     // Placement and facing (SIM-57). Rules, from the executable and the paired
     // measurements on stock Armada II (grades in `sta_sim::kinematics::placement`):
     // `SetPosition(unit, path[, i])` moves the unit to point `i` (0 when absent) of
@@ -704,12 +691,10 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         let (Some(unit), Some(target)) = (e.alive(a[0].id()), e.alive(a[2].id())) else { return nothing() };
         match what {
             CMD_GO => {
-                e.owned("SetCommandWhatWhoVO", &unit)?;
                 e.order("SetCommandWhatWhoVO", unit.id, |units| Order::Move { units, to: target.pos, queue: false })?;
             }
             CMD_ATTACK => return attack(e, "SetCommandWhatWhoVO", unit.id, target.id),
             CMD_MINE => {
-                e.owned("SetCommandWhatWhoVO", &unit)?;
                 e.order("SetCommandWhatWhoVO", unit.id, |units| Order::Mine { units, node: target.id })?;
             }
             other => {
@@ -734,7 +719,6 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             let why = format!("{} at a position has no order in the sim seam", command_name(what));
             return Err(e.gap("SetCommandWhatWhoWhereVO", &why));
         }
-        e.owned("SetCommandWhatWhoWhereVO", &unit)?;
         let key = e
             .ctx
             .borrow()

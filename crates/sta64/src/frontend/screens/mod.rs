@@ -443,6 +443,7 @@ fn on_settings(
     toggle_keys: Query<&SettingToggle>,
     window_size_fields: Query<(), With<view::WindowSizeSelect>>,
     msaa_fields: Query<(), With<view::MsaaSelect>>,
+    hud_fit_fields: Query<(), With<view::HudFitSelect>>,
     windowed_fields: Query<(), With<view::WindowedMode>>,
     mut settings: ResMut<Settings>,
     mut ui_preference: ResMut<crate::ui::profile::UiPreference>,
@@ -475,6 +476,9 @@ fn on_settings(
     for c in dropdowns.read() {
         if msaa_fields.contains(c.entity) && let Some(choice) = [None, Some(1), Some(2), Some(4)].get(c.index) {
             settings.msaa = *choice;
+        }
+        if hud_fit_fields.contains(c.entity) && let Some(&fit) = crate::ui::hud::stock::layout::HudFit::ALL.get(c.index) {
+            settings.hud_fit = fit;
         }
         if window_size_fields.get(c.entity).is_ok()
             && let Some(&size) = WindowSize::ALL.get(c.index)

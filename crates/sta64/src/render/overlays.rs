@@ -344,8 +344,8 @@ mod tests {
     }
 
     const TWO: &str = "{ units: [
-        { id: 1, owner: 1, hull: 100, rails: [{ at: 0, pos: { x: 0, y: 0, z: 0 } }] },
-        { id: 2, owner: 1, hull: 100, until: 20, rails: [{ at: 0, pos: { x: 9, y: 0, z: 0 } }] },
+        { id: 1, owner: 0, hull: 100, rails: [{ at: 0, pos: { x: 0, y: 0, z: 0 } }] },
+        { id: 2, owner: 0, hull: 100, until: 20, rails: [{ at: 0, pos: { x: 9, y: 0, z: 0 } }] },
     ] }";
 
     fn counts(app: &App) -> OverlayCounts {
