@@ -57,6 +57,19 @@ pub(crate) fn recharge(units: &mut Entities, db: &ContentDb, switches: &crate::s
         if rate <= Fixed::ZERO {
             continue;
         }
+        // SIM-68, Armada I (`a1_compat`): the only pool is `maxHealth`, held in the hull. It
+        // regenerates at `shieldRate` per second with no delay above zero (measured on the
+        // original), only with the shield generator switched on and not destroyed (read from the
+        // executable, static). Armada II, FO and Native hulls never regenerate.
+        if db.unit_features(def).a1_compat {
+            let row = subsystems.get(u.id).unwrap_or_default();
+            let gen_hp = def.system_hit_points[system(Subsystem::Shields)];
+            let generator_dead = gen_hp > Fixed::ZERO && row.damage[system(Subsystem::Shields)] >= gen_hp.to_bits();
+            if row.off & (1 << system(Subsystem::Shields)) == 0 && !generator_dead && u.hull[0] < u.hull[1] {
+                // Guarded so a very large maximum cannot wrap.
+                u.hull[0] = if u.hull[1] - u.hull[0] <= rate { u.hull[1] } else { u.hull[0] + rate };
+            }
+        }
         let pools = if u.shields.directional { 4 } else { 1 };
         for now in &mut u.shields.now[..pools] {
             if *now < max {

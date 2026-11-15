@@ -35,7 +35,7 @@ pub(crate) const DEADLINE: Duration = Duration::from_secs(20);
 fn race(name: &str, slot: i64) -> RaceDef {
     RaceDef {
         stem: name.into(), name: name.into(), display_key: None, slot: Some(slot), interface: None, interface_sprites: None,
-        single_player_music: None, multiplayer_music: None,
+        single_player_music: None, multiplayer_music: None, music_tracks: Vec::new(),
         standard_units: Vec::new(), minimal_units: Vec::new(), stock: [0; 4],
         lots_stock: [0; 4], normal_crew: None, lots_crew: None,
     }
