@@ -362,7 +362,8 @@ fn release_sim(mut commands: Commands) {
     commands.remove_resource::<crate::sim_link::SimHeld>();
 }
 
-/// A mission's first frame shown is its tick 0: the load's long frame is not time the sim owes.
+/// A mission's first frame shown is its tick 0 after the opening ticks: the load's long frame is not
+/// time the sim owes.
 fn start_clock(held: Option<Res<crate::sim_link::SimHeld>>, clock: Option<ResMut<crate::clock::AnimClock>>) {
     if let (Some(_), Some(mut clock)) = (held, clock) {
         clock.start_fresh();

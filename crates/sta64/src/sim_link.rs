@@ -153,8 +153,8 @@ impl SimLink {
 #[derive(Resource)]
 pub struct BenchDriven;
 
-/// A launched mission's sim waits for the game to be shown: its tick 0 and the script's first
-/// tick are the first in-game frame, whatever the load took. Inserted when the mission is
+/// A launched mission's sim waits for the game to be shown: its tick 0 and the script's opening
+/// ticks ([`crate::clock::OPENING_TICKS`]) are the first in-game frame, whatever the load took. Inserted when the mission is
 /// started, removed on entering `InGame` (or back at the front end). Menu scene, skirmish and
 /// multiplayer links never get it.
 #[derive(Resource)]
@@ -281,11 +281,19 @@ fn step_sim(
     for kind in queue.0.drain(..) {
         link.submit(kind);
     }
+    let opening = clock.is_opening();
     let due = clock.begin_frame(time.delta_secs_f64());
     for _ in 0..due {
         // A stall (lockstep waiting for a peer) holds anim time at alpha 1.
-        let Some(events) = link.tick() else { break };
+        let Some(mut events) = link.tick() else { break };
         clock.ticked();
+        // A mission's opening ticks run before its first frame is shown: what the script's set-up
+        // destroys there (a replaced fleet) was never on screen, so no death effect, sound, notice
+        // or music weight is owed for it (every death in these ticks, scripted or not: none was on screen).
+        // Everything else the opening raises is delivered. The script itself still sees the events.
+        if opening {
+            events.retain(|e| !matches!(e, SimEvent::Destroyed { .. }));
+        }
         out.write_batch(events.into_iter().map(SimMsg));
     }
     clock.end_frame();

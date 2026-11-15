@@ -38,12 +38,18 @@ struct Run {
     heard: Vec<(u64, String)>,
     /// The mission sim's tick on the first in-game frame.
     ticks_at_ingame: u64,
+    /// The first in-game frame, the first one a player sees.
+    first_frame: Frame,
     vfs: sta_vfs::Vfs,
     app: App,
 }
 
 /// `load_secs`: the real time each frame of the loading screen takes (a long load is a big one).
 fn drive(skip_at_tick: Option<u64>, load_secs: f32) -> Option<Run> {
+    drive_mission("Politics by Other Means", skip_at_tick, load_secs)
+}
+
+fn drive_mission(title: &str, skip_at_tick: Option<u64>, load_secs: f32) -> Option<Run> {
     let Ok(root) = std::env::var("STA64_TEST_ROOTS_INSTALL") else {
         eprintln!("SKIP: set STA64_TEST_ROOTS_INSTALL to Fleet Operations Roots for the intro run");
         return None;
@@ -51,7 +57,7 @@ fn drive(skip_at_tick: Option<u64>, load_secs: f32) -> Option<Run> {
     let dir = temp_dir("politics-intro");
     let vfs = sta_vfs::Vfs::mount_install(Path::new(&root), None).expect("mounts");
     let (mut campaigns, _) = load_campaigns_in(&vfs, Some(Path::new(&root)), None, |b| crate::frontend::campaign::ProgressStore::in_dir(&dir, b)).expect("campaigns");
-    let (campaign, mission) = campaigns.book.campaigns.iter().find_map(|c| c.missions.iter().find(|m| m.title.as_deref() == Some("Politics by Other Means")).map(|m| (c.id.clone(), m.index))).expect("the mission");
+    let (campaign, mission) = campaigns.book.campaigns.iter().find_map(|c| c.missions.iter().find(|m| m.title.as_deref() == Some(title)).map(|m| (c.id.clone(), m.index))).expect("the mission");
     let mut open = campaigns.book.clone();
     open.give_all_missions = true;
     campaigns.progress.apply_give_all(&open);
@@ -75,6 +81,18 @@ fn drive(skip_at_tick: Option<u64>, load_secs: f32) -> Option<Run> {
     until(&mut app, 600, |a| state(a) == AppState::InGame);
     app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(0.1)));
     let ticks_at_ingame = app.world().get_resource::<SimLink>().map_or(0, |l| l.curr().tick);
+    let first_frame = {
+        let w = app.world();
+        let cam = w.resource::<CinematicCamera>();
+        Frame {
+            tick: ticks_at_ingame,
+            cine: w.resource::<CineractiveState>().on,
+            locked: cam.locked,
+            shot_placed: cam.model.shot_placed,
+            hud_hidden: *w.get::<Visibility>(hud).unwrap() == Visibility::Hidden && *w.get::<Visibility>(notices).unwrap() == Visibility::Hidden,
+            fade: w.resource::<FadeState>().alpha,
+        }
+    };
     let mut frames = Vec::new();
     let mut skipped = false;
     for _ in 0..3000 {
@@ -105,7 +123,7 @@ fn drive(skip_at_tick: Option<u64>, load_secs: f32) -> Option<Run> {
     let log = app.world().resource::<PresentationLog>().0.clone();
     let heard = app.world().resource::<Heard>().0.clone();
     std::fs::remove_dir_all(dir).ok();
-    Some(Run { frames, log, heard, ticks_at_ingame, vfs, app })
+    Some(Run { frames, log, heard, ticks_at_ingame, first_frame, vfs, app })
 }
 
 fn kind(p: &Presentation) -> String {
@@ -203,14 +221,26 @@ fn install_gated_politics_opening_skipped_with_space_ends_in_the_same_playable_s
 fn install_gated_politics_sim_starts_with_the_game_whatever_the_load_took() {
     let (Some(short), Some(long)) = (drive(None, 0.1), drive(None, 3.0)) else { return };
     // The mission's tick 0 is the first in-game frame: nothing ran behind the loading screen.
-    assert_eq!(short.ticks_at_ingame, 1, "no mission tick before InGame; the first frame shown runs the first (short load)");
-    assert_eq!(long.ticks_at_ingame, 1, "no mission tick before InGame; the first frame shown runs the first (a long load, 3 s a frame)");
+    assert_eq!(short.ticks_at_ingame, u64::from(crate::clock::OPENING_TICKS), "no mission tick before InGame; the first frame shown runs the opening ticks (short load)");
+    assert_eq!(long.ticks_at_ingame, u64::from(crate::clock::OPENING_TICKS), "no mission tick before InGame; the first frame shown runs the opening ticks (a long load, 3 s a frame)");
     // Each request is carried out on the tick the script issued it, load or no load.
     let ticks = |r: &Run| r.log.iter().map(|(t, p)| (*t, kind(p))).collect::<Vec<_>>();
     assert_eq!(ticks(&short), ticks(&long), "the opening's timeline does not depend on the load");
     assert_opening_requests(&short);
     assert_opening_requests(&long);
-    // The camera's paths were there for the first tick: the first shot is taken on the first frames.
-    let first = |r: &Run| r.frames.iter().find(|f| f.shot_placed).map(|f| f.tick);
-    assert!(first(&long).is_some_and(|t| t <= 6), "{:?}", first(&long));
+    // The camera's paths were there for the first tick, and the opening's set-up (a shot, the cineractive,
+    // the black fade, no HUD) is on the first frame shown: never the default strategy camera first.
+    for r in [&short, &long] {
+        let f = r.first_frame;
+        assert!(f.cine && f.locked && f.shot_placed && f.hud_hidden, "the first frame shown is the opening's: {f:?}");
+    }
+    assert!(short.first_frame.fade > 0.5, "and it starts black: {:?}", short.first_frame);
+}
+
+/// "Counterpunch" opens the same way (a replaced fleet behind a monitor hook, then a path shot).
+#[test]
+fn install_gated_counterpunch_first_frame_shown_is_its_opening() {
+    let Some(run) = drive_mission("Counterpunch", None, 0.1) else { return };
+    let f = run.first_frame;
+    assert!(f.cine && f.locked && f.shot_placed && f.hud_hidden && f.fade > 0.5, "the first frame shown is the opening's: {f:?}");
 }

@@ -42,9 +42,17 @@ pub struct AnimClock {
     wall: f64,
     /// Seconds the last frame added to `wall`.
     frame_dt: f64,
-    /// The next frame adds no time (the sim starts with the first frame shown).
+    /// The next frame adds no time and runs [`OPENING_TICKS`] (the sim starts with the first frame shown).
     skip_dt: bool,
 }
+
+/// Ticks a launched mission runs before its first frame is shown. The script thinks after each
+/// tick over that tick's view and its commands apply on the next one, so a start-of-mission hook
+/// that waits one update on a monitor lands on tick 3 and what it spawns is told back (a camera
+/// `lookAt` on the spawn) on tick 4: with fewer ticks the first frame is the default strategy
+/// camera over the units the opening is about to replace. No mission time is owed for them: the
+/// opening is the script's tick 0 (the original's own order is not measured).
+pub const OPENING_TICKS: u32 = 4;
 
 impl Default for AnimClock {
     fn default() -> Self {
@@ -119,10 +127,10 @@ impl AnimClock {
     pub fn begin_frame(&mut self, real_dt: f64) -> u32 {
         let skip = std::mem::take(&mut self.skip_dt);
         if skip && !self.paused {
-            // The first frame shown runs the sim's first tick and no more, so the script's
-            // opening requests are on screen with it.
+            // The first frame shown runs the mission's opening ticks and no more, so the script's
+            // opening requests are on screen with it, not a frame later.
             self.frame_dt = 0.0;
-            return 1;
+            return OPENING_TICKS;
         }
         let dt = match self.mode {
             ClockMode::Wall => real_dt.max(0.0),
@@ -137,8 +145,14 @@ impl AnimClock {
         ((self.debt * TICK_HZ as f64) as u32).min(Self::MAX_TICKS_PER_FRAME)
     }
 
+    /// The next frame is a mission's first one shown (see [`start_fresh`](Self::start_fresh)): it runs
+    /// the opening ticks, and nothing they destroyed was ever on screen.
+    pub fn is_opening(&self) -> bool {
+        self.skip_dt && !self.paused
+    }
+
     /// The sim is about to start (a mission shown after its load): drop the time owed and
-    /// let the next frame, the first one shown, run one tick and add no time.
+    /// let the next frame, the first one shown, run the opening ticks and add no time.
     pub fn start_fresh(&mut self) {
         self.debt = 0.0;
         self.skip_dt = true;
@@ -222,11 +236,15 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_start_runs_one_tick_on_the_first_frame_whatever_dt_that_frame_had() {
+    fn a_fresh_start_runs_the_opening_ticks_on_the_first_frame_whatever_dt_that_frame_had() {
         let mut c = AnimClock::new(ClockMode::Wall, 1);
         c.start_fresh();
-        assert_eq!(c.begin_frame(5.0), 1, "a load's long frame is not time owed");
-        c.ticked();
+        assert!(c.is_opening());
+        assert_eq!(c.begin_frame(5.0), OPENING_TICKS, "a load's long frame is not time owed");
+        assert!(!c.is_opening());
+        for _ in 0..OPENING_TICKS {
+            c.ticked();
+        }
         c.end_frame();
         assert_eq!(c.wall(), 0.0);
         // The next frame is an ordinary one: 0.1 s is three ticks, not a catch-up burst.
