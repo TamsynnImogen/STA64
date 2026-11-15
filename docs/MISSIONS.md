@@ -309,7 +309,7 @@ or zero-hull entity still exists until removed from the snapshot. This differs
 from `A2.IsAlive`, which excludes dying entities. Missing IDs return false from
 Exists and true from DoesNotExist. Queries issue no commands; a queued removal
 becomes visible only after the host updates the mission view. The separate
-MMM `Path.exists` API is unchanged.
+MMM `Path.exists` queries the loaded map's path names independently of object existence.
 
 The pinned A2 reference establishes that DoesNotExist negates Exists rather
 than IsAlive, and that native existence does not consult the state separating
@@ -396,6 +396,26 @@ object-named globals passed first and the literal team value 1 second. This
 supports the chosen argument order; native fog, coalition and invalid-object
 defaults remain unverified. The number-to-seat interpretation is the explicit
 STA64 bridge policy, not a new simulation team rule.
+
+## Read-only MMM paths
+
+`Path.exists(name)` accepts exactly one nonempty UTF-8 string and returns whether
+`MissionConfig.paths` contains that name, including a named path with no points.
+Names compare ASCII case-insensitively, using the first matching entry in map order.
+Resolved handles retain that entry's authored label for camera playback.
+`Path(name).count` returns its point count and `.points` returns a fresh 1-based
+table of `Vector` values. An absent path has count zero and an empty point table;
+constructing a handle never creates a map path. Editing a returned table or vector
+does not change the map or later reads. Queries issue no commands or unsupported
+diagnostics. Unimplemented path mutations retain their unsupported diagnostics.
+
+The point count and table shape follow the MMM binding source (static evidence).
+Existence, strict query validation, case-insensitive lookup and absent-path behavior
+are explicit STA64 bridge policies. The native MMM constructor can create paths;
+STA64's read-only subset does not implement that behavior. This supports external
+ports that check optional camera paths before using them, without claiming full
+mission or camera parity. D2 and D13 apply: no hook code is loaded, and the Lua
+sandbox is unchanged.
 
 ## Campaign readiness
 
