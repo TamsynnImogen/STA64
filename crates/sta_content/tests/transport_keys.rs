@@ -159,7 +159,7 @@ fn race_keys_are_read_with_their_defaults() {
 #[test]
 fn every_new_key_is_counted_as_read_by_the_coverage_list() {
     for k in [
-        "transporter", "assault", "boardingPartyStrength", "disableShieldsOnTransport", "weldingAnimSpeed",
+        "transporter", "assault", "boardingPartyStrength", "disableShieldsOnTransport", "weldingAnimSpeed", "has_crew", "facility",
         "shieldDelay", "eventTransport", "boardingStrength", "canCommandeer", "canBeCommandeered", "transportSprite",
         "crewRetreatRatio", "transportToEnemyOnHard", "transportToFriendsOnNotEasy",
     ] {
