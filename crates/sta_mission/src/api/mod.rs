@@ -56,6 +56,7 @@ use sta_sim::SimEvent;
 
 mod a1;
 mod a2;
+pub(crate) use a2::team_strength;
 mod entity;
 mod edit_feedback;
 pub(crate) mod set_relation;
@@ -80,6 +81,7 @@ mod tests;
 
 pub use monitor::MonitorKind;
 pub(crate) use monitor::MonitorState;
+pub(crate) use spawn::take_removed;
 
 pub(crate) fn fire_monitors(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
     monitor::fire_monitors(lua, ctx, errors);
@@ -255,6 +257,12 @@ pub(crate) struct Ctx {
     /// Every object id the view has shown, so a handle that never existed can
     /// be told from one that died.
     pub seen: BTreeSet<EntityId>,
+    /// Ids that first appeared in the latest view (a spawn of the previous tick). A script
+    /// read does not count one as seen through another team's sensors yet ([`Ctx::sees`]).
+    /// Empty until the first `think` only when `MissionConfig::view` is set (the launch path
+    /// sets it), so the starting world is seen as it stands; without it every unit is new on
+    /// the first `think`.
+    pub fresh: BTreeSet<EntityId>,
     /// Which answers may rest on a gap ([`taint`]).
     pub taint: taint::Taint,
     /// Map labels the load did not create (LUA-25).
@@ -323,6 +331,7 @@ impl Ctx {
             mission_end: None,
             ended: None,
             seen,
+            fresh: BTreeSet::new(),
             taint: taint::Taint::default(),
             ai_requests_taken: 0,
             playback: Playback::default(),
@@ -425,6 +434,35 @@ impl Ctx {
 
     pub fn unsupported(&mut self, what: &str) {
         *self.unsupported.entry(what.to_owned()).or_default() += 1;
+    }
+
+    /// Whether seat `owner`'s units are in `viewer`'s sight without a sensor pass: its own and
+    /// its mutual confirmed allies' (the sim's sensor sharing, `sta_sim::sensors`).
+    fn shares_sight(&self, viewer: PlayerId, owner: PlayerId) -> bool {
+        viewer == owner
+            || (self.relation(viewer, owner) == Relation::Ally && self.relation(owner, viewer) == Relation::Ally)
+    }
+
+    /// The units `viewer` sees as a script reads them, ascending id: `WorldView::visible_to`,
+    /// except that a unit of a seat that does not share sight with `viewer` is left out in
+    /// the tick after it first appeared (sensors have not scanned it yet). STA64's own
+    /// one-tick rule, not measured in the original. Every script visibility read goes through
+    /// here, so they agree within a tick.
+    pub fn visible_ids(&self, viewer: PlayerId) -> BTreeSet<EntityId> {
+        self.view
+            .visible_to(viewer)
+            .into_iter()
+            .filter(|u| !self.fresh.contains(&u.id) || self.shares_sight(viewer, u.owner))
+            .map(|u| u.id)
+            .collect()
+    }
+
+    /// Whether `viewer` sees `id` as a script reads it (see [`Ctx::visible_ids`]).
+    pub fn sees(&self, viewer: PlayerId, id: EntityId) -> bool {
+        self.view
+            .visible_to(viewer)
+            .iter()
+            .any(|u| u.id == id && (!self.fresh.contains(&id) || self.shares_sight(viewer, u.owner)))
     }
 
     /// How `from` stands toward `to`: script override, else the view.

@@ -91,7 +91,10 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     call(lua, ctx, table, "Starfield_Load_Background_Geometry", "s", None)?;
     call(lua, ctx, table, "SetObjectCullingDistance", "n", None)?;
     call(lua, ctx, table, "RestoreObjectCullingDistance", "", None)?;
-    for name in ["ObstacleAvoidance", "PathPlanning", "CollisionPrevention", "FerengiCanSteal", "FerengiCanTrade"] {
+    // `ObstacleAvoidance` writes a flag that nothing reads (read from the executable, static: LUA-36),
+    // so it is an accepted no-op, not a gap. A1's `ObstacleAvoidence` is read there and is not this call.
+    call(lua, ctx, table, "ObstacleAvoidance", "b", None)?;
+    for name in ["PathPlanning", "CollisionPrevention", "FerengiCanSteal", "FerengiCanTrade"] {
         call(lua, ctx, table, name, "b", Some("no global switch in the sim seam"))?;
     }
     ai_switches(lua, ctx, table)?;
@@ -151,7 +154,10 @@ mod tests {
         // The cineractive end is the typed event, sent only when one was running (LUA-27: it resets speeds).
         assert_eq!(rt.take_commands().len(), 4, "every valid call retains its request");
         let counted: Vec<String> = rt.unsupported().into_iter().map(|(k, _)| k).collect();
-        assert!(counted.iter().any(|k| k.contains("A2.ObstacleAvoidance")));
+        assert!(!counted.iter().any(|k| k.contains("ObstacleAvoidance")), "its flag is never read: not a gap (LUA-36)");
+        assert!(rt.eval::<()>("A2.CollisionPrevention(true)").is_ok());
+        let counted: Vec<String> = rt.unsupported().into_iter().map(|(k, _)| k).collect();
+        assert!(counted.iter().any(|k| k.contains("A2.CollisionPrevention")), "the other global switches stay counted");
         assert!(!counted.iter().any(|k| k.contains("SetRelation")), "SetRelation is a sim edit now");
         assert!(!counted.iter().any(|k| k.contains("MuteSounds")), "a presentation hint is not a gap");
     }

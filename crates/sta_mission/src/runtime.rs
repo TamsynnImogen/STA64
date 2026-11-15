@@ -199,6 +199,8 @@ fn object_callback(lua: &Lua, object: Table, ctx: ApiShared) -> mlua::Result<Fun
     }
     let mut initialized = false;
     let mut was_active = false;
+    // The tick of the last team strength recompute (LUA-38).
+    let mut strength_tick: Option<u64> = None;
     lua.create_function_mut(move |lua, time: f64| {
         if !initialized {
             if let Some(setup) = object.get::<Option<Function>>("setup")? {
@@ -212,6 +214,8 @@ fn object_callback(lua: &Lua, object: Table, ctx: ApiShared) -> mlua::Result<Fun
         let cinematic_hooks = cinematic_update.is_some() || cinematic_finish.is_some();
         // The cineractive update of the engine (UI-36): the variables the converted rules wait on.
         cineractive_engine_update(lua, &object, &ctx)?;
+        // The engine's team strength variables, before this step's rule pass (LUA-38).
+        api::team_strength::engine_update(&object, &ctx, &mut strength_tick)?;
         if cinematic_hooks {
             // MMM's skip: Space while active and skippable ends the cineractive and calls
             // `cineractiveFinish(true)` (`mmm_loader.dll`, static).
@@ -614,6 +618,13 @@ impl MissionRuntime {
         out
     }
 
+    /// The units the script removed with `Entity.remove` since the last call: a removal is not a
+    /// destruction the script means to show (A2 `ExplodeNow`, damage and hull edits are not listed).
+    /// A host drops the death effect of these ids' `Destroyed` events.
+    pub fn take_removed(&self) -> Vec<sta_core::EntityId> {
+        crate::api::take_removed(&mut self.inner.ctx.borrow_mut())
+    }
+
     /// Path lookups that found no such path or point (LUA-18), with counts ascending by
     /// name. The engine does nothing there, so they are not [`MissionRuntime::unsupported`].
     pub fn absent_paths(&self) -> Vec<(String, u32)> {
@@ -702,6 +713,7 @@ impl Controller for MissionRuntime {
             c.events = events.to_vec();
             let tick = view.tick;
             let ids: Vec<_> = view.units.iter().map(|u| u.id).collect();
+            c.fresh = ids.iter().copied().filter(|id| !c.seen.contains(id)).collect();
             c.seen.extend(ids);
             for e in events {
                 match e {

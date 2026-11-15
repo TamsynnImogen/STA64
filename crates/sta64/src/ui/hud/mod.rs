@@ -51,7 +51,7 @@ use super::radar::{RadarPlugin, RadarRoot};
 use super::theme::{ButtonClicked, Theme, ThemePlugin};
 use crate::app::GameSet;
 use crate::input::orders::{Aim, OrderTargets, formation_moves};
-use crate::input::select::{Targetable, unit_under};
+use crate::input::select::{Targetable, target_seen, unit_under};
 use crate::ui::i18n::{tr, trf};
 use sta_sim::view::UnitFlags;
 use sta_sim::world::EntityKind;
@@ -467,6 +467,7 @@ fn place_on_click(
     mut queue: ResMut<CommandQueue>,
     mut issued: MessageWriter<OrderIssued>,
     units: Targetable,
+    local: Option<Res<crate::render::units::LocalPlayer>>,
     mut targets: ResMut<OrderTargets>,
     bounds: Res<ghost::PlacementBounds>,
     mut notices: MessageWriter<Notice>,
@@ -494,7 +495,7 @@ fn place_on_click(
             return;
         }
         let Some(a) = aim.0 else { return };
-        let target = unit_under(a.cursor, a.ray, &units);
+        let target = unit_under(a.cursor, a.ray, &units).filter(|&t| target_seen(&feed.view, local.as_deref().and_then(|l| l.0), t));
         let own = feed.own_selection();
         let heights: Vec<f32> = own.iter().filter_map(|id| feed.view.unit(*id).map(|u| u.pos.y.to_f32())).collect();
         let y = if heights.is_empty() { 0.0 } else { heights.iter().sum::<f32>() / heights.len() as f32 };
