@@ -422,6 +422,18 @@ mod through_the_sim {
         assert!((mid - 80.0).abs() < 1.0, "{mid}");
     }
 
+    #[test]
+    fn the_scripted_warp_speed_of_the_sim_is_the_cruise_multiplier() {
+        use crate::command::Edit;
+        let _g = seam::set(params());
+        let (mut sim, s) = game(Profile::Sta1Classic);
+        let set = Command { player: PlayerId::SCRIPT, seq: 0, kind: CommandKind::Edit(Edit::WarpSpeed(s, Some(Fixed::from_int(25)))) };
+        WorldSource::step(&mut sim, &[set]);
+        let tr = run(&mut sim, s, pt(0.0, 3000.0), 20);
+        let mid = num(tr[(12 * TICK_HZ) as usize].1);
+        assert!((mid - 25.0).abs() < 0.5, "{mid}");
+    }
+
     /// A run that exercises turn, cruise, a bend and the arrival, as a digest of the sim.
     fn digest_run() -> u64 {
         let _g = seam::set(params());
