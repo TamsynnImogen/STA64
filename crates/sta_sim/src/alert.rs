@@ -283,6 +283,8 @@ impl Sim {
     }
 
     /// Weapon gate: may `id` fire at something other than its ordered target now?
+    /// (`weapons` reads [`Alerts::opportunity_allowed`] directly; this is the test seam.)
+    #[cfg(test)]
     pub(crate) fn opportunity_fire_allowed(&self, id: EntityId) -> bool {
         self.alerts.opportunity_allowed(id, self.tick)
     }

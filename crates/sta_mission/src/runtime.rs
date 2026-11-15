@@ -704,11 +704,8 @@ impl Controller for MissionRuntime {
             let ids: Vec<_> = view.units.iter().map(|u| u.id).collect();
             c.seen.extend(ids);
             for e in events {
-                match e {
-                    SimEvent::Fired { shooter, .. } => {
-                        c.last_fired.insert(*shooter, tick);
-                    }
-                    _ => {}
+                if let SimEvent::Fired { shooter, .. } = e {
+                    c.last_fired.insert(*shooter, tick);
                 }
             }
             c.flush_delayed();
