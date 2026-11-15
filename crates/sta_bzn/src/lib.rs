@@ -122,12 +122,10 @@ pub fn parse(data: &[u8]) -> Result<Map, BznError> {
         let header = a1::inspect_header(data)?;
         return a1::parse_map(data, header);
     }
-    let header_end = |key: &[u8]| data.windows(key.len()).position(|w| w == key);
     let version = text_value(data, b"version [1] =").and_then(|v| v.parse().ok()).unwrap_or(0);
     let binary = text_value(data, b"BinaryMode [1] =").is_some_and(|v| v.eq_ignore_ascii_case("true"));
     let mut map = if binary {
-        let start = header_end(b"true").map(|i| i + 4).ok_or(BznError::NotBzn)?;
-        let start = start + data[start..].iter().take_while(|&&c| c == b'\r' || c == b'\n').count();
+        let start = binary_start(data).ok_or(BznError::NotBzn)?;
         parse_binary(&records(data, start)?)
     } else {
         parse_text(&String::from_utf8_lossy(data))
@@ -186,6 +184,12 @@ fn records(data: &[u8], mut at: usize) -> Result<Vec<Rec<'_>>, BznError> {
         return Err(BznError::Truncated(at));
     }
     Ok(out)
+}
+
+/// Where the records of a binary map start: after the first `true` of the header and the line break.
+fn binary_start(data: &[u8]) -> Option<usize> {
+    let start = data.windows(4).position(|w| w == b"true").map(|i| i + 4)?;
+    Some(start + data[start..].iter().take_while(|&&c| c == b'\r' || c == b'\n').count())
 }
 
 fn has_ext(s: &str, exts: &[&str]) -> bool {
@@ -321,6 +325,94 @@ fn start_loc(recs: &[Rec], k: usize) -> Option<(StartLoc, usize)> {
     let (_, k) = lp_string(recs, k + 4)?;
     let (_, k) = lp_string(recs, k)?;
     Some((StartLoc { pos: vec3(pos), kind, team, race }, k))
+}
+
+/// What one team of an Armada II / Fleet Operations binary map starts with (the map's team table).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TeamStart {
+    pub dilithium: f32,
+    pub latinum: f32,
+    pub metal: f32,
+    /// The team's crew stock.
+    pub crew: f32,
+    /// The team's officer limit.
+    pub officers: i32,
+}
+
+/// The team table of a binary map: eight blocks of thirteen records after the objects, block `n` for
+/// team `n + 1` (Armada team numbers; block 0 is the human seat of a mission). Each block is two i32
+/// (not read), then dilithium, latinum and metal as f32 each followed by a zero pad, then more fields
+/// (an i32 officer limit, crew, ...) of which the officer limit and crew are read.
+///
+/// Evidence: read from data (every binary `a2_*` and `mp*` map of the Armada II install and the Fleet
+/// Operations Roots map `PoliticsByOtherMeans` carry exactly one run of eight such blocks; unused
+/// teams hold the `RTS_CFG.h` starting defaults; the first block of `a2_fed01` matches the stock
+/// game's start bar for dilithium, latinum, metal and crew, measured; the officer limit of the
+/// player blocks equals `SINGLE_PLAYER_OFFICER_LIMIT`, not measured). Not read: text maps, Armada I maps, Star Trek: Legacy maps, and any
+/// map where a run of exactly eight blocks (no block-shaped record right before or after it) is not
+/// found exactly once, for which the answer is empty.
+pub fn team_starts(data: &[u8]) -> Vec<TeamStart> {
+    match team_table(data) {
+        TeamTable::Found(t) => t,
+        _ => Vec::new(),
+    }
+}
+
+/// What [`team_table`] found.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TeamTable {
+    /// Not a binary Armada II / Fleet Operations map, or no block-shaped records at all.
+    Absent,
+    /// Block-shaped records exist but are not exactly one run of eight: the lengths of the runs found.
+    /// Nothing is read from such a map; a host reports it as a gap.
+    Refused(Vec<usize>),
+    Found(Vec<TeamStart>),
+}
+
+/// [`team_starts`] saying why it read nothing.
+pub fn team_table(data: &[u8]) -> TeamTable {
+    if !data.starts_with(b"version") || sol::is_sol(data) || a1::has_header_marker(data) {
+        return TeamTable::Absent;
+    }
+    if !text_value(data, b"BinaryMode [1] =").is_some_and(|v| v.eq_ignore_ascii_case("true")) {
+        return TeamTable::Absent;
+    }
+    let Some(start) = binary_start(data) else { return TeamTable::Absent };
+    let Ok(recs) = records(data, start) else { return TeamTable::Absent };
+    const SHAPE: [u32; 13] = [4, 4, 5, 5, 5, 5, 5, 5, 5, 4, 5, 5, 5];
+    let zero = |r: &Rec| r.data == [0u8; 4];
+    let block_at = |i: usize| {
+        i + 13 <= recs.len()
+            && SHAPE.iter().enumerate().all(|(j, &kind)| recs[i + j].kind == kind && recs[i + j].data.len() == 4)
+            && [3, 5, 7].iter().all(|&j| zero(&recs[i + j]))
+    };
+    // Maximal runs of consecutive blocks: the table is the one run of exactly eight. A ninth block-shaped
+    // record before or after (a run of 9 or more) would shift every seat, so such a map reads as empty.
+    let mut runs = Vec::new();
+    let mut i = 0;
+    while i < recs.len() {
+        let len = (0..).take_while(|&b| block_at(i + 13 * b)).count();
+        if len > 0 {
+            runs.push((i, len));
+            i += 13 * len;
+        } else {
+            i += 1;
+        }
+    }
+    if runs.is_empty() {
+        return TeamTable::Absent;
+    }
+    let [(first, 8)] = runs[..] else { return TeamTable::Refused(runs.iter().map(|r| r.1).collect()) };
+    let f = |i: usize| f32::from_le_bytes(recs[i].data.try_into().unwrap());
+    let n = |i: usize| i32::from_le_bytes(recs[i].data.try_into().unwrap());
+    TeamTable::Found(
+        (0..8)
+            .map(|b| {
+                let at = first + 13 * b;
+                TeamStart { dilithium: f(at + 2), latinum: f(at + 4), metal: f(at + 6), officers: n(at + 9), crew: f(at + 11) }
+            })
+            .collect(),
+    )
 }
 
 fn strip_odf(s: &str) -> String {
@@ -535,6 +627,53 @@ MPDScriptFile = 6d6d6d5f6c6f616465722e646c6c\r\nAmbientRed [1] =\r\n0.25\r\nAmbi
 BackgroundArt = MbgBaku.SOD\r\nStarfieldOdf = ststars.odf\r\nsize [1] =\r\n1\r\n[GameObject]\r\nPrjIdLen [1] =\r\n6\r\n\
 PrjID = 4d62616b7500\r\nEntityID [1] =\r\n7\r\nteam [1] =\r\n2\r\nlabel = Baku\r\ntransform [1] =\r\n  right_x [1] =\r\n0\r\n\
   right_y [1] =\r\n0\r\n  right_z [1] =\r\n-1\r\n  position.x [1] =\r\n15.5\r\n  position.y [1] =\r\n-4\r\n  position.z [1] =\r\n33\r\n";
+
+    /// A binary map header and the given team blocks (dilithium, latinum, metal), own-authored.
+    fn team_map(teams: &[[f32; 3]]) -> Vec<u8> {
+        let rec = |out: &mut Vec<u8>, kind: u32, data: &[u8]| {
+            out.extend_from_slice(&kind.to_le_bytes());
+            out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            out.extend_from_slice(data);
+        };
+        let mut out = b"version [1] =\r\n2177\r\nBinaryMode [1] =\r\ntrue\r\n".to_vec();
+        rec(&mut out, 4, &7i32.to_le_bytes());
+        for t in teams {
+            rec(&mut out, 4, &0i32.to_le_bytes());
+            rec(&mut out, 4, &0i32.to_le_bytes());
+            for v in t {
+                rec(&mut out, 5, &v.to_le_bytes());
+                rec(&mut out, 5, &0f32.to_le_bytes());
+            }
+            rec(&mut out, 5, &8888f32.to_le_bytes());
+            rec(&mut out, 4, &321i32.to_le_bytes());
+            for v in [0f32, 1717.0, 0.0] {
+                rec(&mut out, 5, &v.to_le_bytes());
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn team_starts_reads_the_eight_block_table() {
+        let mut teams = vec![[4321.0, 65.0, 987.0]; 8];
+        teams[0] = [1234.0, 56.0, 789.0];
+        let got = team_starts(&team_map(&teams));
+        assert_eq!(got.len(), 8);
+        assert_eq!(got[0], TeamStart { dilithium: 1234.0, latinum: 56.0, metal: 789.0, crew: 1717.0, officers: 321 });
+        assert_eq!(got[7], TeamStart { dilithium: 4321.0, latinum: 65.0, metal: 987.0, crew: 1717.0, officers: 321 });
+    }
+
+    #[test]
+    fn team_starts_is_empty_unless_the_table_is_exactly_eight_blocks() {
+        assert!(team_starts(&team_map(&[[1.0, 2.0, 3.0]; 7])).is_empty(), "seven blocks");
+        assert!(team_starts(&team_map(&[[1.0, 2.0, 3.0]; 9])).is_empty(), "nine blocks: a ninth would shift every seat");
+        assert!(team_starts(&team_map(&[[1.0, 2.0, 3.0]; 16])).is_empty(), "two tables");
+        assert_eq!(team_starts(&team_map(&[[1.0, 2.0, 3.0]; 8])).len(), 8, "the exact case");
+        assert_eq!(team_table(&team_map(&[[1.0, 2.0, 3.0]; 9])), TeamTable::Refused(vec![9]), "a refused table is reported, not just empty");
+        assert_eq!(team_table(&team_map(&[])), TeamTable::Absent);
+        assert!(team_starts(TEXT.as_bytes()).is_empty(), "text map");
+        assert!(team_starts(b"not a map").is_empty());
+    }
 
     #[test]
     fn text_map() {
