@@ -357,7 +357,12 @@ pub fn team_starts(data: &[u8]) -> Vec<TeamStart> {
     let start = start + data[start..].iter().take_while(|&&c| c == b'\r' || c == b'\n').count();
     let Ok(recs) = records(data, start) else { return Vec::new() };
     const SHAPE: [u32; 13] = [4, 4, 5, 5, 5, 5, 5, 5, 5, 4, 5, 5, 5];
-    let block_at = |i: usize| i + 13 <= recs.len() && SHAPE.iter().enumerate().all(|(j, &kind)| recs[i + j].kind == kind && recs[i + j].data.len() == 4);
+    let zero = |r: &Rec| r.data == [0u8; 4];
+    let block_at = |i: usize| {
+        i + 13 <= recs.len()
+            && SHAPE.iter().enumerate().all(|(j, &kind)| recs[i + j].kind == kind && recs[i + j].data.len() == 4)
+            && [3, 5, 7].iter().all(|&j| zero(&recs[i + j]))
+    };
     let mut runs = Vec::new();
     let mut i = 0;
     while i < recs.len() {
