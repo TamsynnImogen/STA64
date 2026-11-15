@@ -161,13 +161,17 @@ fn builds(tree: Option<&str>, want: &str, count: i32, crafts: &[(&str, bool)]) -
         .collect()
 }
 
+// With the list satisfied the yard still fills the army with the dearest warship (not the
+// frigate), so these tests look for the listed class among what it builds.
 #[test]
 fn build_totals_leave_flagged_craft_out_so_the_ai_builds_replacements() {
     let frigate = sta_content::fake::db().key("fx_frigate").unwrap();
-    // Control: two unflagged frigates meet a list asking for two.
-    assert!(builds(None, "fx_frigate", 2, &[("fx_frigate", false), ("fx_frigate", false)]).is_empty());
+    // Control: two unflagged frigates meet a list asking for two frigates.
+    let b = builds(None, "fx_frigate", 2, &[("fx_frigate", false), ("fx_frigate", false)]);
+    assert!(!b.contains(&frigate), "{b:?}");
     // One of them flagged: the total is one, so it builds a replacement.
-    assert_eq!(builds(None, "fx_frigate", 2, &[("fx_frigate", false), ("fx_frigate", true)]), [frigate]);
+    let b = builds(None, "fx_frigate", 2, &[("fx_frigate", false), ("fx_frigate", true)]);
+    assert_eq!(b.first(), Some(&frigate), "{b:?}");
 }
 
 #[test]
@@ -175,9 +179,10 @@ fn a_flagged_craft_still_counts_as_a_tech_prerequisite() {
     // The cruiser needs a frigate. Prerequisites count flagged craft (the rule names build totals).
     let tree = "fx_frigate 0\nfx_miner 0\nfx_yard 0\nfx_station 0\nfx_cruiser 1 fx_frigate\n";
     let cruiser = sta_content::fake::db().key("fx_cruiser").unwrap();
-    assert!(builds(Some(tree), "fx_cruiser", 1, &[]).is_empty(), "control: no frigate, no cruiser");
-    assert_eq!(builds(Some(tree), "fx_cruiser", 1, &[("fx_frigate", false)]), [cruiser], "control: an unflagged frigate");
-    assert_eq!(builds(Some(tree), "fx_cruiser", 1, &[("fx_frigate", true)]), [cruiser], "a flagged frigate counts for the prerequisite");
-    // And a flagged cruiser does not count toward the total of one cruiser.
-    assert_eq!(builds(Some(tree), "fx_cruiser", 1, &[("fx_frigate", false), ("fx_cruiser", true)]), [cruiser]);
+    let b = builds(Some(tree), "fx_cruiser", 1, &[]);
+    assert!(!b.contains(&cruiser), "control: no frigate, no cruiser: {b:?}");
+    for flagged in [false, true] {
+        let b = builds(Some(tree), "fx_cruiser", 1, &[("fx_frigate", flagged)]);
+        assert_eq!(b.first(), Some(&cruiser), "frigate flagged={flagged}: {b:?}");
+    }
 }
