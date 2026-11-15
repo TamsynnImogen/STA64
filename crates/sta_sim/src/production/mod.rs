@@ -524,8 +524,8 @@ impl Production {
             let (dx, dz) = (d.at.x - r.pos.x, d.at.z - r.pos.z);
             // The smooth model (SIM-15) stops a craft anywhere within
             // `tooCloseToTurn` of its point, so a rig there must be in reach.
-            let reach = match crate::kinematics::Model::of(db.profile()) {
-                crate::kinematics::Model::Smooth => deploy_reach(&r.stats).max(r.stats.too_close_to_turn + crate::arrive_distance()),
+            let reach = match crate::kinematics::Model::for_content(db) {
+                crate::kinematics::Model::Smooth | crate::kinematics::Model::A1 => deploy_reach(&r.stats).max(r.stats.too_close_to_turn + crate::arrive_distance()),
                 crate::kinematics::Model::Native => deploy_reach(&r.stats),
             };
             // The rig stops beside the structure's footprint (SIM-21).
