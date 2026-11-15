@@ -352,6 +352,12 @@ pub struct UnitDef {
     pub crew: Fixed,
     /// `maximumCrew`; absent means the starting crew amount.
     pub maximum_crew: Option<Fixed>,
+    /// Authored `facility` flag for station recrewing (SIM-70). An explicit
+    /// false is distinct from an absent key; runtime policy resolves absence.
+    pub facility: Option<bool>,
+    /// Authored `has_crew` flag for station recrewing (SIM-70). An explicit
+    /// false is distinct from an absent key; runtime policy resolves absence.
+    pub has_crew: Option<bool>,
     /// `maxCrewGain` of a station (SIM-25): what it adds to its team's crew capacity.
     pub crew_gain: Fixed,
     /// `saneCrewLossMethod` (SIM-39): above 100 crew a shield hit's loss is
@@ -479,6 +485,8 @@ impl UnitDef {
             initial_shields: None,
             crew: Fixed::ZERO,
             maximum_crew: None,
+            facility: None,
+            has_crew: None,
             crew_gain: Fixed::ZERO,
             sane_crew_loss: false,
             system_hit_points: [Fixed::ZERO; 5],
