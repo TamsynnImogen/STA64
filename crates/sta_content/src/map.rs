@@ -23,9 +23,11 @@
 //!   `ScaleSOD`, a factor the renderer multiplies by the model's own radius),
 //!   a hidden `background_obj` named `*light*` a [`SceneryLight`]
 //!   (directional: `pos` is 30000 units back along the marker's front axis).
-//!   Other `background_obj` props (ice dust, wrecks), wormholes and unknown
-//!   ODFs are counted in [`Counts`] and named in the warnings, not carried:
-//!   [`Scenery`] has no place for props yet.
+//!   Other `background_obj` props (ice dust, wrecks) and unknown ODFs are
+//!   counted in [`Counts`] and named in the warnings, not carried:
+//!   [`Scenery`] has no place for props yet. A wormhole (`wormhole_obj`) whose
+//!   ODF the database defines (an ODF with a `unitName`) is a [`MapObject`] (LUA-24),
+//!   always neutral.
 //! - **Starts.** A multiplayer map (`mission_type` starting `mp`) has its
 //!   first `MPDStLoc` start locations; any other map (a mission) has every
 //!   location not left at the default (the neutral entry's position, the
@@ -162,7 +164,7 @@ pub struct SceneryLight {
 }
 
 /// Resolves an ODF name to its resolved ODF, for the classes the content
-/// database does not define (nebulae, background objects, wormholes).
+/// database does not define (nebulae, background objects).
 pub type OdfLookup<'a> = dyn FnMut(&str) -> Option<Arc<sta_odf::Odf>> + 'a;
 
 /// What the conversion did with each BZN object. Every object lands in
@@ -386,11 +388,11 @@ impl MapDef {
                         skip("background prop; not carried (Scenery has no props)", &mut counts.props);
                     }
                 }
-                "wormhole_obj" => skip("wormhole; not carried (no map type for it yet)", &mut counts.skipped),
                 _ if key.is_some() => {
                     map.objects.push(MapObject {
                         odf: placed_odf,
-                        owner: if o.team > 0 { u8::try_from(o.team - 1).ok() } else { None },
+                        // A wormhole is never a seat's (its BZN team is not an owner; a few stock ones carry 1 or 4).
+                        owner: if o.team > 0 && class != "wormhole_obj" { u8::try_from(o.team - 1).ok() } else { None },
                         pos,
                         heading: unit_xz(t[6], t[8]),
                         label: text(&o.label),
@@ -544,6 +546,28 @@ mod tests {
             ],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_wormhole_the_database_defines_is_placed_with_its_label() {
+        let fake = crate::fake::db();
+        let mut b = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for w in fake.weapons().cloned() {
+            b = b.weapon(w);
+        }
+        for u in fake.units().cloned() {
+            b = b.unit(u);
+        }
+        let db = b.unit(crate::UnitDef::new("fx_gate", "wormhole_obj")).build().unwrap();
+        let m = sta_bzn::Map {
+            min_extent: [0.0, -500.0, 0.0],
+            size: [10000.0, 1000.0, 10000.0],
+            objects: vec![obj("fx_gate", 2, "WormholeEntrance1", [10.0, 0.0, 20.0], [0.0, 0.0, 1.0])],
+            ..Default::default()
+        };
+        let c = MapDef::convert_bzn(&m, &db, &mut lookup(ODFS));
+        assert_eq!(c.counts, Counts { objects: 1, ..Default::default() });
+        assert_eq!(c.map.objects.iter().map(|o| (o.odf.as_str(), o.owner, o.label.as_deref())).collect::<Vec<_>>(), [("fx_gate", None, Some("WormholeEntrance1"))]);
     }
 
     #[test]
