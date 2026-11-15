@@ -275,7 +275,7 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("CountVisibleUnits", "A1.CountVisibleUnits(0, 1, true, nil)", Fine),
     ("CountVisibleUnitsNearObject", "A1.CountVisibleUnitsNearObject(a, 1000, 1, true, nil)", Fine),
     ("GetNearestObjectNearMe", "assert(A1.GetNearestObjectNearMe(a, 1000, 1, nil, -1, false) == b)", Fine),
-    ("ReplaceObject", "assert(A1.ReplaceObject(a, 'fx_frigate') == 0)", Fine),
+    ("ReplaceObject", "assert(A1.ReplaceObject(a, 'fx_frigate') >= 0x40000000)", Fine),
     ("DestroyEngines", "A1.DestroyEngines(a)", Fine),
     ("DisableShieldGenerator", "A1.DisableShieldGenerator(a, true)", Fine),
     ("RemoveAllObjects", "A1.RemoveAllObjects()", Fine),
@@ -744,10 +744,11 @@ fn set_relation_sends_a_one_directional_edit_with_the_engines_codes() {
 #[test]
 fn seam_gap_writes_are_retained_and_counted_without_other_effect() {
     let s = scene();
-    let (rt, commands) = run(&s, "A1.DestroyCritical(a)");
-    assert_eq!(presented(&commands), vec![call("DestroyCritical", vec![Arg::Entity(s.ids[0])])]);
+    // (`DestroyCritical` is bound since LUA-30; `EnableLight` is still a gap.)
+    let (rt, commands) = run(&s, "A1.EnableLight(a, true)");
+    assert_eq!(presented(&commands), vec![call("EnableLight", vec![Arg::Entity(s.ids[0]), Arg::Bool(true)])]);
     let unsupported: BTreeSet<String> = rt.unsupported().into_iter().map(|(k, _)| k).collect();
-    assert!(unsupported.iter().any(|k| k.starts_with("A1.DestroyCritical")));
+    assert!(unsupported.iter().any(|k| k.starts_with("A1.EnableLight")));
     // A dead target is an error, not a silent request.
     fails(&s, "A1.SetShieldPercent(999999, 0.5)");
 }
