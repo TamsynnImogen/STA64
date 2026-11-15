@@ -37,6 +37,13 @@ pub(super) fn odf_ok(c: &Ctx, unit: &UnitView, filter: Option<&str>) -> bool {
 }
 
 /// Live units inside the query, nearest first, then by id.
+///
+/// A seen-by query does not count a unit of another team that first appeared in the view
+/// that one tick ago: the sensors have not scanned it yet. Stock a2_fed01 builds the Borg
+/// outpost one tick before its intro props (allied, with sensors) are removed, and the
+/// first-contact rule reads in between. Read from the stock mission's data and measured on
+/// the headless run; the original's own sensor cadence is not measured (the one-tick delay
+/// is the least that separates this case).
 pub(super) fn near<'c>(c: &'c Ctx, q: &Query) -> Vec<&'c UnitView> {
     let visible: Option<BTreeSet<EntityId>> =
         q.seen_by.map(|p| c.view.visible_to(p).iter().map(|u| u.id).collect());
@@ -47,6 +54,7 @@ pub(super) fn near<'c>(c: &'c Ctx, q: &Query) -> Vec<&'c UnitView> {
         .filter(|u| u.id != q.exclude && c.alive(u.id).is_some())
         .filter(|u| q.owner.is_none_or(|o| u.owner == o))
         .filter(|u| visible.as_ref().is_none_or(|v| v.contains(&u.id)))
+        .filter(|u| q.seen_by.is_none_or(|p| u.owner == p || !c.fresh.contains(&u.id)))
         .filter(|u| odf_ok(c, u, q.odf))
         .map(|u| (dist(q.center, pos_f64(u.pos)), u))
         .filter(|(d, _)| *d <= q.radius)

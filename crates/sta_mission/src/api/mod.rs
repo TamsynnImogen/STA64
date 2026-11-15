@@ -254,6 +254,11 @@ pub(crate) struct Ctx {
     /// Every object id the view has shown, so a handle that never existed can
     /// be told from one that died.
     pub seen: BTreeSet<EntityId>,
+    /// Ids that first appeared in the latest view (a spawn of the previous tick). A script
+    /// query does not count one as seen by another team's sensors yet
+    /// ([`search::near`]). Empty until the first `think`, so the world a mission starts in
+    /// is seen as it stands.
+    pub fresh: BTreeSet<EntityId>,
     /// Which answers may rest on a gap ([`taint`]).
     pub taint: taint::Taint,
     pub ai_requests_taken: usize,
@@ -319,6 +324,7 @@ impl Ctx {
             mission_end: None,
             ended: None,
             seen,
+            fresh: BTreeSet::new(),
             taint: taint::Taint::default(),
             ai_requests_taken: 0,
             playback: Playback::default(),

@@ -1,8 +1,8 @@
 //! Mission movie events to playback (MED-03).
 //!
 //! A mission raises `Presentation::Movie { name, in_panel, skippable }` for
-//! `Media:playMovie` (MMM), `PlayCinematicMovie` (full screen) and
-//! `PlayBridgeMovie` (the bridge viewscreen, `in_panel`), and
+//! `Media:playMovie` (MMM, full screen), `PlayCinematicMovie` (Armada II, the HUD's
+//! cinematic panel, `in_panel`) and `PlayBridgeMovie` (the bridge viewscreen, `in_panel`), and
 //! `Presentation::StopMovie` for `StopMovie`. They arrive as `SimMsg` events;
 //! this system turns them into [`PlayMovie`] / [`StopMovie`] messages. The
 //! report that a movie is over is the [`MovieFinished`](super::MovieFinished)
@@ -37,7 +37,8 @@ pub(super) fn bridge(
             Presentation::Movie { name, in_panel, skippable } => {
                 let target = match (in_panel, &panel) {
                     (true, Some(p)) => MovieTarget::Panel(p.0.clone()),
-                    // No viewscreen to show it on: the whole screen is the viewscreen.
+                    // No panel to show it on yet (the HUD has no cinematic panel): the whole
+                    // screen stands in for it.
                     _ => MovieTarget::Fullscreen,
                 };
                 let id = ids.next();

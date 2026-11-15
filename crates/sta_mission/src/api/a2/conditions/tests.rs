@@ -254,3 +254,35 @@ fn is_compromised_under_armada_teams_dying_crew_none_and_fixtures() {
     u.flags = u.flags.with(sta_sim::view::UnitFlags::DYING, true);
     assert!(eval::<bool>(&mk(&s), "return A2.IsCompromised(a, 1)"));
 }
+
+/// A seen-by query does not count another team's unit in the tick after it appears: the
+/// sensors have not scanned it. Its own team's units count at once, and a unit that was
+/// already there stays counted. Stock a2_fed01 relies on it (first-contact rule).
+#[test]
+fn visible_counts_skip_the_unit_that_just_appeared() {
+    let mut s = scene();
+    let mut rt = runtime(&s);
+    let mut out = Vec::new();
+    // The world the mission starts in is seen as it stands (the cruiser at 100 is in range).
+    assert_eq!(eval::<i64>(&rt, "return A2.CountVisibleUnits(0, 1, false, nil)"), 1);
+    rt.think(&s.view, &[], &mut out);
+    assert_eq!(eval::<i64>(&rt, "return A2.CountVisibleUnits(0, 1, false, nil)"), 1, "already there");
+    let spawn = |seq, player, x: f32| Command {
+        player: PlayerId::SCRIPT,
+        seq,
+        kind: CommandKind::Edit(Edit::Spawn {
+            odf: s.db.key("fx_cruiser").expect("fake odf"),
+            player: PlayerId(player),
+            pos: Vec3::from_f32([x, 0.0, 0.0]),
+            heading: (Fixed::ZERO, Fixed::ONE),
+        }),
+    };
+    let step = s.sim.step(&[spawn(10, 1, 150.0), spawn(11, 0, 60.0)]);
+    rt.think(&step.view, &step.events, &mut out);
+    assert_eq!(eval::<i64>(&rt, "return A2.CountVisibleUnits(0, 1, false, nil)"), 1, "new in range, not scanned yet");
+    assert_eq!(eval::<i64>(&rt, "return A2.CountVisibleUnits(0, 0, false, nil)"), 3, "own units count at once");
+    assert_eq!(eval::<i64>(&rt, "return A2.CountVisibleUnitsNearObject(a, 99999, 1, true, nil)"), 1);
+    let step = s.sim.step(&[]);
+    rt.think(&step.view, &step.events, &mut out);
+    assert_eq!(eval::<i64>(&rt, "return A2.CountVisibleUnits(0, 1, false, nil)"), 2, "one tick later");
+}
