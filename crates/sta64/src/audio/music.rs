@@ -121,6 +121,8 @@ pub struct Director {
     playing: Option<Playing>,
     retry_at: Option<f32>,
     cursors: [Cursor; 3],
+    /// A cineractive is on: the ambient music is stopped and none starts (see [`Director::set_hold`]).
+    hold: bool,
 }
 
 impl Director {
@@ -135,7 +137,17 @@ impl Director {
             playing: None,
             retry_at: None,
             cursors: Default::default(),
+            hold: false,
         }
+    }
+
+    /// While held the director plays nothing: the track it was playing is stopped at the next
+    /// [`Director::advance`] and a new one starts when the hold ends. The cineractive holds it
+    /// (the original's `CineractiveStart` stops the ambient jukebox, `CineractiveEnd` starts a
+    /// track and the jukebox starts none while the cinematic view is on: read from the
+    /// executable, static). A mission script's own music is not this stream and does not touch it.
+    pub fn set_hold(&mut self, hold: bool) {
+        self.hold = hold;
     }
 
     pub fn mode(&self) -> Option<Mode> {
@@ -191,6 +203,9 @@ impl Director {
     }
 
     fn wanted(&self) -> Option<Mode> {
+        if self.hold {
+            return None;
+        }
         match self.ctx {
             Context::Silent => None,
             Context::Menu => Some(Mode::Menu),
@@ -307,11 +322,12 @@ fn context_from_state(state: Option<Res<State<AppState>>>, mut ctx: ResMut<Conte
     ctx.set_if_neq(want);
 }
 
-fn sync_director(ctx: Res<Context>, cfg: Res<MusicConfig>, mut st: ResMut<MusicState>) {
+fn sync_director(ctx: Res<Context>, cfg: Res<MusicConfig>, cine: Option<Res<crate::ui::presentation::CineractiveState>>, mut st: ResMut<MusicState>) {
     if cfg.is_changed() {
         st.director.set_config(cfg.clone());
     }
     st.director.set_context(*ctx);
+    st.director.set_hold(crate::ui::presentation::cutscene_running(cine));
 }
 
 fn run_music(
@@ -685,5 +701,28 @@ mod tests {
         assert!(calls.contains(&Call::StopBus { bus: Bus::Music }), "{calls:?}");
         assert!(calls.contains(&Call::Play { name: "audio-test:900".into(), bus: Bus::Music, at: None }), "{calls:?}");
         assert_eq!(app.world().resource::<MusicState>().director.mode(), Some(Mode::Battle));
+    }
+
+    /// The cineractive stops the ambient music, none starts while it is on, and a new track starts
+    /// when it ends (a script's own music is another stream and does not come through here).
+    #[test]
+    fn a_cineractive_stops_the_ambient_music_and_a_new_track_starts_after_it() {
+        use crate::ui::presentation::CineractiveState;
+        let c = MusicConfig { calm: list(&["audio-test:200", "audio-test:300"]), ..Default::default() };
+        let (mut app, log) = app(c, Context::Game);
+        app.init_resource::<CineractiveState>();
+        app.update();
+        let _ = log.drain();
+        app.world_mut().resource_mut::<CineractiveState>().on = true;
+        app.update();
+        let calls = log.drain();
+        assert!(calls.contains(&Call::StopBus { bus: Bus::Music }), "{calls:?}");
+        assert!(!calls.iter().any(|c| matches!(c, Call::Play { .. })), "no track starts under the cineractive: {calls:?}");
+        app.update();
+        app.update();
+        assert!(plays(&log).is_empty(), "still none while it is on");
+        app.world_mut().resource_mut::<CineractiveState>().on = false;
+        app.update();
+        assert_eq!(plays(&log).len(), 1, "a track starts when the cineractive ends");
     }
 }
