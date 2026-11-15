@@ -99,6 +99,10 @@ const DEFERRED_ON_PENDING: &[&str] = &[
     "SearchAndDestroy",
     "SetAngularVelocity",
     "SetCanBeDecommissioned",
+    "SetCommandMoveAutonomyLow",
+    "SetCommandWhatWhoParamVO",
+    "SetCommandWhatWhoVO",
+    "SetCommandWhatWhoWhereVO",
     "SetCrew",
     "SetCurrentHealth",
     "SetForceOntoMap",
@@ -388,6 +392,8 @@ struct Search<'a> {
     /// Also require the perceived team to match.
     perceived: bool,
     exclude: Option<EntityId>,
+    /// A non-negative mask: only these objects (see `near_mask`).
+    visible: Option<&'a std::collections::BTreeSet<EntityId>>,
 }
 
 /// The nearest live unit (exe: GetNearestObjectNearPosition). Squared XZ
@@ -395,12 +401,15 @@ struct Search<'a> {
 /// (the executable replaces on `<=`; its list order is taken as ascending id,
 /// not measured). The executable also skips derelict crafts and, for a
 /// non-negative mask argument, tests a bit of a class field: the view has no
-/// derelict state and the mask is rejected by the caller.
+/// derelict state; the mask is `near_mask`.
 fn nearest(c: &Ctx, q: &Search) -> Option<EntityId> {
     let mut best = if q.radius >= 0.0 { q.radius * q.radius } else { f64::INFINITY };
     let mut found = None;
     for u in &c.view.units {
         if u.flags.contains(UnitFlags::DYING) || q.exclude == Some(u.id) {
+            continue;
+        }
+        if q.visible.is_some_and(|v| !v.contains(&u.id)) {
             continue;
         }
         if q.team >= 0 {
@@ -577,8 +586,8 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     // perceived, exclude). Rules (exe): see `nearest`; radius < 0 is
     // unlimited, team < 0 any team, a null odf any ODF, `perceived` also
     // requires the perceived team to match, `exclude` is a handle to skip
-    // (0 none). All stock calls pass mask -1; any other mask is a class-field
-    // bit test that is not measured and raises.
+    // (0 none). A mask >= 0 is a team number the candidate must be visible to
+    // (`near_mask`, LUA-36); -1 does not filter.
     let c = ctx.clone();
     table.set(
         "GetNearestObjectNearPosition",
@@ -592,10 +601,8 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             let mask = signed(name, &args, 4)?;
             let perceived = boolean(name, &args, 5)?;
             let exclude = integer(name, &args[6])?;
-            if mask != -1 {
-                return Err(path_error(&c, name, "a class-bit mask other than -1 is not measured".into()));
-            }
-            let q = Search { center, radius, team, odf: &odf, perceived, exclude: (exclude != 0).then_some(EntityId(exclude)) };
+            let visible = super::near_mask::visible(&c.borrow(), mask);
+            let q = Search { center, radius, team, odf: &odf, perceived, exclude: (exclude != 0).then_some(EntityId(exclude)), visible: visible.as_ref() };
             Ok(id_value(nearest(&c.borrow(), &q)))
         })?,
     )?;
@@ -615,12 +622,10 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             let odf = text(name, &args, 3)?;
             let mask = signed(name, &args, 4)?;
             let perceived = boolean(name, &args, 5)?;
-            if mask != -1 {
-                return Err(path_error(&c, name, "a class-bit mask other than -1 is not measured".into()));
-            }
             let c = c.borrow();
             let Some(unit) = c.alive(me) else { return Ok(id_value(None)) };
-            let q = Search { center: pos_f64(unit.pos), radius, team, odf: &odf, perceived, exclude: Some(me) };
+            let visible = super::near_mask::visible(&c, mask);
+            let q = Search { center: pos_f64(unit.pos), radius, team, odf: &odf, perceived, exclude: Some(me), visible: visible.as_ref() };
             Ok(id_value(nearest(&c, &q)))
         })?,
     )?;

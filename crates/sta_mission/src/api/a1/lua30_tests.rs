@@ -311,3 +311,12 @@ fn a_station_is_hit_like_a_craft_and_a_prop_is_left_alone() {
     }
     assert!(s.rt.take_commands().is_empty());
 }
+
+#[test]
+fn armada_i_remove_and_replace_are_listed_as_scripted_removals() {
+    let s = scene();
+    s.rt.eval::<()>("A1.RemoveObject(a)").unwrap();
+    assert_eq!(s.rt.take_removed(), vec![s.ids[0]], "the original removes silently: no death effect");
+    s.rt.eval::<i64>("return A1.ReplaceObject(b, 't_other')").unwrap();
+    assert_eq!(s.rt.take_removed(), vec![s.ids[1]]);
+}

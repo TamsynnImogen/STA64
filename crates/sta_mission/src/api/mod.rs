@@ -56,6 +56,7 @@ use sta_sim::SimEvent;
 
 mod a1;
 mod a2;
+pub(crate) use a2::team_strength;
 mod entity;
 mod edit_feedback;
 pub(crate) mod set_relation;
@@ -81,6 +82,7 @@ mod tests;
 
 pub use monitor::MonitorKind;
 pub(crate) use monitor::MonitorState;
+pub(crate) use spawn::take_removed;
 
 pub(crate) fn fire_monitors(lua: &Lua, ctx: &Shared, errors: &mut Vec<String>) {
     monitor::fire_monitors(lua, ctx, errors);

@@ -1,11 +1,14 @@
 //! Combat: weapons (SIM-04), damage (SIM-05), point defence (SIM-06).
 
+pub mod boarding;
 pub mod casualty;
 pub mod damage;
 pub mod pd;
 pub mod targeting;
 pub mod weapons;
 
+#[cfg(test)]
+mod boarding_tests;
 #[cfg(test)]
 mod casualty_tests;
 #[cfg(test)]
