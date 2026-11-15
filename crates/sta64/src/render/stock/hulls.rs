@@ -27,8 +27,20 @@ pub struct StockLight {
 }
 
 impl StockLight {
+    /// A `team*` material's own diffuse colour is a placeholder, not a colour to draw:
+    /// the SOD files carry red (A1 `team_fed`), purple (A2 Galaxy's `team`) and green
+    /// values there, and the player's team colour takes the diffuse's place (the shader
+    /// multiplies it in). Applying both turned A1 Federation rims and nacelle caps red
+    /// and pink whatever the owner's colour. Read from data (the placeholder values in
+    /// every SOD); measured on the A2 original (the Galaxy's `team` strut, diffuse purple
+    /// in the SOD, is white under the white player colour); not measured on A1.
     pub fn from_material(m: &sta_assets::model::LightingMaterial) -> StockLight {
-        StockLight { ambient: m.ambient, diffuse: m.diffuse, specular: m.specular, power: m.power, model: m.model }
+        let diffuse = if crate::render::hulls::is_team_material(&m.name) {
+            [1.0; 3]
+        } else {
+            m.diffuse
+        };
+        StockLight { ambient: m.ambient, diffuse, specular: m.specular, power: m.power, model: m.model }
     }
 }
 
@@ -84,6 +96,52 @@ mod tests {
         assert_eq!(stock.params.mdif, Vec4::new(0.9, 0.8, 0.7, 0.0));
         assert_eq!(stock.params.mspc, Vec4::new(0.2, 0.2, 0.2, 40.0));
         assert_eq!(stock.params.rim, Vec4::ZERO, "no rim light in the original");
+    }
+
+    fn material(name: &str, diffuse: [f32; 3]) -> sta_assets::model::LightingMaterial {
+        sta_assets::model::LightingMaterial {
+            name: name.into(),
+            ambient: [0.5; 3],
+            diffuse,
+            specular: [1.0, 0.5, 1.0],
+            power: 50.0,
+            model: 2,
+            self_illuminating: false,
+        }
+    }
+
+    /// The A1 `team_fed` material carries a red diffuse, the A2 Galaxy's `team` a purple
+    /// one: neither may reach the lit colour, only the team colour (the tint) does.
+    #[test]
+    fn a_team_material_does_not_apply_its_own_diffuse_colour() {
+        for (name, diffuse) in [("team_fed", [1.0, 0.0, 0.0]), ("team", [0.55, 0.19, 0.52]), ("Team", [1.0, 0.0, 0.0]), ("team_basic_shaderbump", [0.2, 0.3, 0.4])] {
+            let l = StockLight::from_material(&material(name, diffuse));
+            assert_eq!(l.diffuse, [1.0; 3], "{name}");
+            // The rest of the material is read as ever.
+            assert_eq!((l.ambient, l.specular, l.power, l.model), ([0.5; 3], [1.0, 0.5, 1.0], 50.0, 2), "{name}");
+        }
+    }
+
+    /// Every other group keeps the diffuse colour its SOD material states.
+    #[test]
+    fn other_materials_keep_their_diffuse_colour() {
+        for (name, diffuse) in [("base_fed", [1.0, 1.0, 0.93]), ("impulse_fed", [1.0, 0.59, 0.0]), ("glow_white", [0.0, 0.7, 1.0]), ("steam", [0.1, 0.2, 0.3])] {
+            assert_eq!(StockLight::from_material(&material(name, diffuse)).diffuse, diffuse, "{name}");
+        }
+    }
+
+    /// Through the hull material: a team group under a team colour lights as white diffuse
+    /// times the tint, so its colour follows the owner and not the SOD's placeholder.
+    #[test]
+    fn a_team_group_is_drawn_with_a_white_diffuse_under_the_team_colour() {
+        let part = HullPart { stock: Some(StockLight::from_material(&material("team_fed", [1.0, 0.0, 0.0]))), ..default() };
+        let std = StandardMaterial { base_color: Color::srgb(0.2, 0.4, 0.9), ..default() };
+        let mut view = HullView::default();
+        view.set_stock(true);
+        let hull = hull_material(&std, &part, &view);
+        assert_eq!(hull.params.mdif, Vec4::new(1.0, 1.0, 1.0, 0.0));
+        let tint = Color::srgb(0.2, 0.4, 0.9).to_linear();
+        assert_eq!(hull.params.tint, Vec4::new(tint.red, tint.green, tint.blue, 0.0));
     }
 
     #[test]
