@@ -10,9 +10,9 @@
 //! do not change, and a replay carries the edits as the commands they are.
 //!
 //! Rule STA64 follows: seat `n` (Armada team `n + 1`) gets its block's dilithium, latinum and metal as
-//! `Edit::Cargo`, its crew as `Edit::TeamCrew` and its officer limit as `Edit::MaxOfficers`, each
-//! only while the seat has none of that yet (a host that placed a loadout is left alone), crew and
-//! officer limit only when the table gives more than 0 (what 0 means for a team is not established,
+//! `Edit::Cargo`, its crew as `Edit::TeamCrew` and its officer limit as `Edit::MaxOfficers`, only
+//! while the seat has no crew pool and no officer limit yet (a host that placed a loadout is left
+//! alone), crew and officer limit only when the table gives more than 0 (what 0 means for a team is not established,
 //! so such a seat stays as it is today). Biomatter is not in the table as far as read. Evidence: read
 //! from data for every map; measured for `a2_fed01` (the table's first block equals the stock game's
 //! start bar: dilithium, latinum, metal, crew); the officer limit is read from data only.
@@ -64,20 +64,23 @@ pub fn from_table(table: &[sta_bzn::TeamStart]) -> Vec<SeatStart> {
 }
 
 impl SeatStart {
-    /// The edits this seat needs given what the view already holds for it: cargo first, then crew and
-    /// officer limit (the sim takes both for any seat of the game, in command order).
-    pub(crate) fn edits(&self, has_stock: bool, has_crew: bool, has_officers: bool) -> Vec<Edit> {
-        let mut out = Vec::new();
-        if !has_stock {
-            // Resource ids: 0 dilithium, 1 latinum, 2 metal.
-            for (res, v) in [(0u8, self.dilithium), (1, self.latinum), (2, self.metal)] {
-                out.push(Edit::Cargo(self.seat, res, Fixed::from_int(v)));
-            }
+    /// The edits this seat needs: cargo first, then crew and officer limit (the sim takes both for any
+    /// seat of the game, in command order). A seat that already has crew or an officer limit came from
+    /// a placed loadout (a skirmish start) and takes nothing: whether it holds stock is not asked,
+    /// because passive income can open a stock slot on the tick before a host's first think.
+    pub(crate) fn edits(&self, has_loadout: bool) -> Vec<Edit> {
+        if has_loadout {
+            return Vec::new();
         }
-        if let Some(c) = self.crew.filter(|_| !has_crew) {
+        let mut out = Vec::new();
+        // Resource ids: 0 dilithium, 1 latinum, 2 metal.
+        for (res, v) in [(0u8, self.dilithium), (1, self.latinum), (2, self.metal)] {
+            out.push(Edit::Cargo(self.seat, res, Fixed::from_int(v)));
+        }
+        if let Some(c) = self.crew {
             out.push(Edit::TeamCrew(self.seat, Fixed::from_int(c)));
         }
-        if let Some(o) = self.officers.filter(|_| !has_officers) {
+        if let Some(o) = self.officers {
             out.push(Edit::MaxOfficers(self.seat, Fixed::from_int(o)));
         }
         out

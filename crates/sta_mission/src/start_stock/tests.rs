@@ -77,11 +77,25 @@ fn a_seat_the_table_does_not_cover_is_unchanged() {
 }
 
 #[test]
-fn a_seat_that_already_has_stock_crew_and_officers_is_left_alone() {
+fn a_seat_that_already_has_a_loadout_is_left_alone() {
     let seat = from_table(&table([2000.0, 0.0, 1000.0], [0.0; 3]))[0].clone();
-    assert!(seat.edits(true, true, true).is_empty(), "a skirmish start (loadout placed) takes nothing from the table");
-    assert_eq!(seat.edits(false, true, true).len(), 3, "cargo only");
-    assert!(matches!(seat.edits(true, false, false)[..], [Edit::TeamCrew(..), Edit::MaxOfficers(..)]));
+    assert!(seat.edits(true).is_empty(), "a skirmish start (crew or officers placed) takes nothing from the table");
+    assert!(matches!(seat.edits(false)[..], [Edit::Cargo(..), Edit::Cargo(..), Edit::Cargo(..), Edit::TeamCrew(..), Edit::MaxOfficers(..)]));
+}
+
+#[test]
+fn a_seat_with_a_loadout_in_the_view_gets_no_edit() {
+    let (mut sim, mut view, db) = bare([Control::Human, Control::Idle]);
+    // A skirmish-like seat: crew and officer limit already there, stock too.
+    let mut rt = runtime("", &view, &db, from_table(&table([2000.0, 0.0, 1000.0], [3500.0, 1000.0, 12500.0]))[..1].to_vec());
+    let mut v = view.clone();
+    let p = v.players.iter_mut().find(|p| p.id == PlayerId(0)).unwrap();
+    p.crew = Some(Fixed::from_int(750));
+    p.resources = vec![Fixed::from_int(9); 4];
+    let mut out = Vec::new();
+    rt.think(&v, &[], &mut out);
+    assert!(out.is_empty(), "{out:?}");
+    play(&mut rt, &mut sim, &mut view, 1);
 }
 
 #[test]

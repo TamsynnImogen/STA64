@@ -410,7 +410,9 @@ impl MissionRuntime {
     /// The seats' start values (the map's team table, [`crate::start_stock`]), sent on the first
     /// [`Controller::think`] as script edits before the script's first step. A script's own writes
     /// follow them in the same command list, so a `Set*` wins and an `Add*` adds to the start value
-    /// (the view the script reads on that step already shows the start values).
+    /// (the view the script reads on that step already shows the start values). A call the script
+    /// makes while it loads (before the first think) is queued ahead of them and is overwritten by
+    /// them; no stock Armada II script does that (their resource calls all run in rule steps).
     pub fn set_start_stock(&mut self, seats: Vec<crate::start_stock::SeatStart>) {
         self.start_stock = seats;
     }
@@ -713,7 +715,7 @@ impl Controller for MissionRuntime {
             c.events = events.to_vec();
             for seat in std::mem::take(&mut self.start_stock) {
                 let Some(p) = c.view.players.iter_mut().find(|p| p.id == seat.seat) else { continue };
-                let edits = seat.edits(!p.resources.is_empty(), p.crew.is_some(), p.officers[1] > sta_core::Fixed::ZERO);
+                let edits = seat.edits(p.crew.is_some() || p.officers[1] > sta_core::Fixed::ZERO);
                 for e in &edits {
                     // The script's first step reads the values the sim will hold.
                     match e {
