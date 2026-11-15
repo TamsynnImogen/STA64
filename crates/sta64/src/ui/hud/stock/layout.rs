@@ -255,16 +255,25 @@ impl StockLayout {
                 _ => None,
             }
         };
-        // The origin keys are read against a 1600x1200 reference, not the sheet's own canvas
-        // (the original engine's rule; evidence: read from data plus the Refit notes on the
-        // original, not measured here). Fleet Operations authors them that way: its 16:9 and
-        // 16:10 sheets (canvas 2134 and 1920 wide) put the palette at 264 and 293, which are
-        // 352 on the 4:3 sheet's 1600, right of the 351 wide minimap panel; its 5:4 sheet
-        // (1280 high) puts it at 957, which is 1020 = 940 + 80 in canvas units. Sheets whose
-        // canvas is 1600x1200 (Armada II, Classic, 4:3) are unchanged.
+        // The origin keys are read against a fixed 1600x1200 reference canvas, then scaled
+        // with the sheet's own canvas like every other key. Evidence per axis:
+        // - x: the Armada II engine reads `popupPaletteXA/XB` against a hard-coded 1600
+        //   (measured by Refit on a widened canvas; second-hand here, not measured by us).
+        //   For Roots the evidence is the sheets' own values (read from data): its 16:9 and
+        //   16:10 sheets (canvas 2134 and 1920 wide) author 264 and 293, which are 352 on the
+        //   4:3 sheet's 1600, right of the 351 wide minimap panel. Roots positions the palette
+        //   with its own add-on, so the engine's rule need not be Roots' rule.
+        // - y: read from data, the 5:4 sheet only (1280 high, `popupPaletteYA` 957 = 1020 =
+        //   940 + 80 in canvas units); Refit's measurement had a 1200 high canvas and says
+        //   nothing about y on another height.
+        // Alternative reading: "x derived from the minimap panel's right edge" (350). It gives
+        // the same x on the 16:9 and 16:10 sheets and predicts y 957 on the 5:4 sheet.
+        // TODO(UI-33): the 5:4 sheet's y is unmeasured: this rule says 1020.8, the alternative
+        // 957; a bench frame of the original Roots HUD at 1280x1024 settles it.
+        // Sheets whose canvas is 1600x1200 (Armada II, Classic, Roots 4:3) are the identity.
         let origin = Vec2::new(
-            self.number("popupPaletteXA").unwrap_or(30.0) as f32 * self.canvas.x / PALETTE_REFERENCE.x,
-            self.number("popupPaletteYA").unwrap_or(30.0) as f32 * self.canvas.y / PALETTE_REFERENCE.y,
+            self.number("popupPaletteXA").unwrap_or(30.0) as f32 * (self.canvas.x / PALETTE_REFERENCE.x),
+            self.number("popupPaletteYA").unwrap_or(30.0) as f32 * (self.canvas.y / PALETTE_REFERENCE.y),
         );
         Some(PaletteLayout {
             origin: Vec2::new(
@@ -421,7 +430,7 @@ mod tests {
                 let p = l.palette().unwrap();
                 let why = format!("{canvas:?} {xa},{ya} on {screen:?}");
                 let got = (p.origin - Vec2::new(l.hud.x, l.hud.y)) / l.scale;
-                assert!((got.x - want.0 as f32).abs() <= 1.0 / l.scale + 0.5 && (got.y - want.1 as f32).abs() <= 1.0 / l.scale + 0.5, "{why}: {got:?} vs {want:?}");
+                assert!((got.x - want.0 as f32).abs() <= 0.5 / l.scale + 1e-3 && (got.y - want.1 as f32).abs() <= 0.5 / l.scale + 1e-3, "{why}: {got:?} vs {want:?}");
                 // No command cell lies over the minimap panel.
                 let map = l.panel("minimap").unwrap();
                 for row in 0..3 {
@@ -495,7 +504,9 @@ mod tests {
     }
 
     /// A window of the sheet's own aspect lays out exactly as the per-axis mapping did:
-    /// no margins, the same rounded rectangles for every key kind.
+    /// no margins, the same rounded rectangles for every rect key. The palette origin follows
+    /// the 1600x1200 reference rule (see `palette`); the 640x480 case is synthetic (Armada I's
+    /// sheets have no palette keys, so that path is not reached in the game).
     #[test]
     fn same_aspect_window_is_todays_layout() {
         for (canvas, screen) in [((1600, 1200), Vec2::new(1440.0, 1080.0)), ((2134, 1200), Vec2::new(2134.0, 1200.0)), ((640, 480), Vec2::new(1440.0, 1080.0))] {
