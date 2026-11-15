@@ -21,6 +21,10 @@ fn orbit_game_with(profile: Option<sta_content::Profile>) -> Sim {
 
 /// As [`orbit_game_with`], with the beam's range and the freighter's `tooCloseToTurn` set.
 fn orbit_game_tuned(profile: Option<sta_content::Profile>, range: i32, too_close: Option<i32>) -> Sim {
+    orbit_content(orbit_builder(profile, range, too_close))
+}
+
+fn orbit_builder(profile: Option<sta_content::Profile>, range: i32, too_close: Option<i32>) -> sta_content::ContentBuilder {
     let base = sta_content::fake::db();
     let mut b = sta_content::ContentDb::builder().profile(profile.unwrap_or(base.profile())).features(base.features().clone());
     for u in base.units().filter(|u| u.odf != "fx_moon") {
@@ -46,7 +50,7 @@ fn orbit_game_tuned(profile: Option<sta_content::Profile>, range: i32, too_close
     }
     let mut moon = base.units().find(|u| u.odf == "fx_moon").unwrap().clone();
     moon.radius = Fixed::from_int(40);
-    orbit_content(b.weapon(beam).unit(orbiter).unit(moon))
+    b.weapon(beam).unit(orbiter).unit(moon)
 }
 
 fn orbit_content(b: sta_content::ContentBuilder) -> Sim {
@@ -353,6 +357,34 @@ fn a_beamless_freighter_keeps_its_target_when_the_station_is_destroyed_on_the_wa
         sim.step(&[]);
         assert_eq!(sim.unit(m).unwrap().target, Some(v(3000, 0)), "the target was cleared");
     }
+}
+
+/// SIM-65: the only station is an orbital facility that circles its planet (about 15 units a
+/// second on a 120 s orbit). Freighters steer at the station's place every tick, so they follow it
+/// round and still dock: with and without a mining beam.
+#[test]
+fn freighters_still_dock_at_an_orbital_station_that_circles_its_planet() {
+    let mut orbital = sta_content::UnitDef::new("fx_orbital", "p_mining");
+    orbital.race = "fx".into();
+    orbital.hull = Fixed::from_int(200);
+    orbital.orbit_time = Some(Fixed::from_int(120));
+    let mut world = sta_content::UnitDef::new("fx_world", "planet");
+    world.radius = Fixed::from_int(200);
+    world.resource = Some(2);
+    world.can_have_orbital_station = true;
+    let mut sim = orbit_content(orbit_builder(None, RANGE, None).unit(orbital).unit(world));
+    let moon = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, 0));
+    spawn(&mut sim, "fx_world", NEUTRAL, v(1500, 0));
+    let station = spawn(&mut sim, "fx_orbital", PlayerId(0), v(1500, 275));
+    let ms = vec![spawn(&mut sim, "fx_orbiter", PlayerId(0), v(500, 0)), spawn(&mut sim, "fx_miner", PlayerId(0), v(500, 60))];
+    let at = sim.unit(station).unwrap().pos;
+    sim.step(&[Command { player: PlayerId(0), seq: 1, kind: CommandKind::Order(Order::Mine { units: ms, node: moon }) }]);
+    let mut delivered = 0;
+    for _ in 0..9000 {
+        delivered += sim.step(&[]).events.iter().filter(|e| matches!(e, SimEvent::Delivered { .. })).count();
+    }
+    assert!(sim.unit(station).unwrap().pos != at, "the station circled meanwhile");
+    assert!(delivered >= 4, "{delivered} deliveries at a circling station");
 }
 
 /// Fleet Operations 4.0's miners (every race) have a 150 beam and `tooCloseToTurn 120`: the 30 degree
