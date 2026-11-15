@@ -116,8 +116,9 @@ impl SlotCommand {
 
     /// Whether the command lives on the Orders page (the alerts and orders submenu) rather
     /// than on the top page. `ORDER_REPAIR` and `ORDER_STAND_DOWN` are named like the Orders
-    /// entries but their slots (4 and 6) are free of the Orders page's own, so they are top
-    /// page buttons: evidence read from data, the slot numbers of the stock header.
+    /// entries, but in the stock header their slots clash with Orders-page entries' slots and
+    /// none of the top page's, so they are top page buttons (a reading of the stock header's
+    /// slot assignment; evidence read from data).
     pub const fn on_orders_page(self) -> bool {
         matches!(
             self,
@@ -210,24 +211,24 @@ mod tests {
     use super::*;
 
     const HEADER: &str = "// authored for the test\n\
-        int BUTTON_LOCATION_MOVE = 2;\n\
-        int BUTTON_LOCATION_ATTACK\t\t= 3; // trailing comment\n\
-        int BUTTON_LOCATION_TRANSPORT = -1;\n\
+        int BUTTON_LOCATION_MOVE = 6;\n\
+        int BUTTON_LOCATION_ATTACK\t\t= 4; // trailing comment\n\
+        int BUTTON_LOCATION_UPGRADE = -1;\n\
         int BUTTON_LOCATION_ORDERS = 12;\n\
-        int BUTTON_LOCATION_ORDER_SCOUT = 5;\n\
+        int BUTTON_LOCATION_ORDER_SCOUT = 9;\n\
         int BUTTON_LOCATION_ORDER_GUARD = 13;\n\
-        int BUTTON_LOCATION_STOP = 4;\n\
-        int BUTTON_LOCATION_STOP = 5;\n";
+        int BUTTON_LOCATION_STOP = 7;\n\
+        int BUTTON_LOCATION_STOP = 8;\n";
 
     #[test]
     fn typed_keys_slots_hidden_and_bad_values() {
         let (s, w) = ButtonSlots::from_header(HEADER);
-        assert_eq!(s.slot(SlotCommand::Move), Some(2));
-        assert_eq!(s.slot(SlotCommand::Attack), Some(3));
-        assert_eq!(s.slot(SlotCommand::Transport), None, "-1 is hidden");
+        assert_eq!(s.slot(SlotCommand::Move), Some(6));
+        assert_eq!(s.slot(SlotCommand::Attack), Some(4));
+        assert_eq!(s.slot(SlotCommand::Upgrade), None, "-1 is hidden");
         assert_eq!(s.slot(SlotCommand::Orders), Some(12));
         assert_eq!(s.slot(SlotCommand::Guard), None, "13 is out of range");
-        assert_eq!(s.slot(SlotCommand::Stop), Some(5), "a later assignment wins");
+        assert_eq!(s.slot(SlotCommand::Stop), Some(8), "a later assignment wins");
         assert_eq!(s.slot(SlotCommand::Build), None, "a key the header does not state is unset");
         assert_eq!(w.len(), 1);
         assert!(w[0].message.contains("BUTTON_LOCATION_ORDER_GUARD"), "{w:?}");
@@ -238,9 +239,9 @@ mod tests {
         let (s, _) = ButtonSlots::from_header(HEADER);
         assert_eq!(
             s.page(false),
-            [(2, SlotCommand::Move), (3, SlotCommand::Attack), (5, SlotCommand::Stop), (12, SlotCommand::Orders)]
+            [(4, SlotCommand::Attack), (6, SlotCommand::Move), (8, SlotCommand::Stop), (12, SlotCommand::Orders)]
         );
-        assert_eq!(s.page(true), [(5, SlotCommand::Scout)]);
+        assert_eq!(s.page(true), [(9, SlotCommand::Scout)]);
     }
 
     #[test]
@@ -257,9 +258,9 @@ mod tests {
         let d = std::env::temp_dir().join(format!("sta_slots_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         for (p, text) in [
-            ("Data/game_cfg.h", "int BUTTON_LOCATION_MOVE = 1;\nint BUTTON_LOCATION_ATTACK = 2;\n"),
+            ("Data/game_cfg.h", "int BUTTON_LOCATION_MOVE = 6;\nint BUTTON_LOCATION_ATTACK = 4;\n"),
             ("Data/Mods/Top/info.ini", "[mod]\nstandalone=0\n"),
-            ("Data/Mods/Top/game_cfg.h", "#include \"game_cfg.h\"\nint BUTTON_LOCATION_ATTACK = 7;\n"),
+            ("Data/Mods/Top/game_cfg.h", "#include \"game_cfg.h\"\nint BUTTON_LOCATION_ATTACK = 10;\n"),
         ] {
             let p = d.join(p);
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
@@ -269,6 +270,6 @@ mod tests {
         let (s, w) = ButtonSlots::load(&vfs).unwrap();
         let _ = std::fs::remove_dir_all(&d);
         assert!(w.is_empty(), "{w:?}");
-        assert_eq!((s.slot(SlotCommand::Move), s.slot(SlotCommand::Attack)), (Some(1), Some(7)));
+        assert_eq!((s.slot(SlotCommand::Move), s.slot(SlotCommand::Attack)), (Some(6), Some(10)));
     }
 }

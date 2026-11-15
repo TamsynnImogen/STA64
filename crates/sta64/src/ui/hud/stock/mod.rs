@@ -46,7 +46,7 @@ pub(super) struct StockState {
     info: Option<Info>,
     /// Armada I: the `game_cfg.h` slot map and the extra info values drawn (UI-19).
     slots: Option<ButtonSlots>,
-    a1_extra: Option<a1::info::Extra>,
+    a1_shape: Option<a1::info::Shape>,
     grid: Vec<Button>,
     page: Page,
     build_page: usize,
@@ -417,12 +417,12 @@ pub(super) fn refresh(
         a1::spawn_frames(&mut commands, body, &layout);
     }
     let now = model::info(&feed);
-    let a1_extra = a1.then(|| a1::info::extra(&feed)).flatten();
+    let a1_shape = a1.then(|| a1::info::extra(&feed).map(|e| e.shape(&state.info_style))).flatten();
     let structural = state
         .info
         .as_ref()
         .is_none_or(|old| !super::panels::same_info(old, &now))
-        || state.a1_extra != a1_extra;
+        || state.a1_shape != a1_shape;
     if structural {
         if !replaced {
             for entity in &infos {
@@ -444,7 +444,7 @@ pub(super) fn refresh(
         }
     }
     state.info = Some(now.clone());
-    state.a1_extra = a1_extra;
+    state.a1_shape = a1_shape;
     if a1 {
         let settled = a1::control::settle_page(&feed, hud.page);
         if settled != hud.page {

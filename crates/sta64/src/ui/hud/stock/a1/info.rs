@@ -39,6 +39,32 @@ pub struct Extra {
     pub race: String,
 }
 
+/// The crew readout's text, patched in place as the crew changes.
+#[derive(Component)]
+pub(in crate::ui::hud) struct CrewText;
+
+/// What decides whether the card must be rebuilt: which fields exist, the race and the crew dot's
+/// colour. The values themselves (energy, crew count) are patched in place by `info::update`, so
+/// the buttons of the grid are not respawned when they change.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Shape {
+    pub energy: bool,
+    pub crew: bool,
+    pub race: String,
+    pub dot: Option<Color>,
+}
+
+impl Extra {
+    pub(in crate::ui::hud) fn shape(&self, style: &InfoStyle) -> Shape {
+        Shape {
+            energy: self.energy.is_some(),
+            crew: self.crew.is_some(),
+            race: self.race.clone(),
+            dot: self.crew.map(|(_, ratio)| style.color(&self.race, Some(ratio))),
+        }
+    }
+}
+
 /// The extra values of a single selection, `None` for any other selection.
 pub(in crate::ui::hud) fn extra(feed: &HudFeed) -> Option<Extra> {
     let sel = feed.selected_units();
@@ -59,7 +85,7 @@ pub(in crate::ui::hud) fn emblem_names(race: &str) -> Vec<String> {
         names.push(format!("{race}_icon"));
         for full in ["federation", "klingon", "romulan", "borg"] {
             let name = format!("{full}_icon");
-            if race.len() >= 3 && full.starts_with(&race[..3]) && !names.contains(&name) {
+            if race.get(..3).is_some_and(|p| full.starts_with(p)) && !names.contains(&name) {
                 names.push(name);
             }
         }
@@ -157,13 +183,14 @@ fn single_card(
         }
     } else if let (Some(energy), Some(r)) = (extra.energy, layout.at(origin, "infoSingleEnergyBarArea")) {
         let name = layout.name("infoSingleEnergyBar").unwrap_or_default();
-        sprite_bar(commands, root, r, name, energy, None, tint("infoSingleEnergyBarColor"));
+        sprite_bar(commands, root, r, name, energy, Some(StockBar::Energy(r.w)), tint("infoSingleEnergyBarColor"));
     }
     // Crew: label bar, label, value and the dot.
     if let Some((now, ratio)) = extra.crew {
         pic(commands, "infoSingleCrewTextBackground", "infoSingleCrewTextBackgroundArea");
         if let Some(r) = layout.at(origin, "infoSingleCrewTextInformationArea") {
-            text(commands, root, r, now.to_string(), theme.text, theme.micro_size, None);
+            let entity = text(commands, root, r, now.to_string(), theme.text, theme.micro_size, None);
+            commands.entity(entity).insert(CrewText);
         }
         if let (Some(name), Some(r)) = (layout.name("infoSingleCrewDot"), layout.at(origin, "infoSingleCrewDotArea")) {
             let colour = style.color(&extra.race, Some(ratio));

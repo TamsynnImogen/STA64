@@ -29,6 +29,8 @@ pub(in crate::ui::hud) enum StockBar {
     Hull(f32),
     Shield(f32),
     Progress(f32),
+    /// Armada I's energy bar (UI-19).
+    Energy(f32),
     Group(EntityId, f32),
 }
 
@@ -474,8 +476,16 @@ pub(in crate::ui::hud) fn update(
     feed: Res<HudFeed>,
     mut texts: Query<(&StockText, &mut SpriteText)>,
     mut bars: Query<(&StockBar, &mut Node)>,
+    mut crew: Query<&mut SpriteText, (With<super::a1::info::CrewText>, Without<StockText>)>,
 ) {
     let info = model::info(&feed);
+    let extra = super::a1::info::extra(&feed);
+    for mut text in &mut crew {
+        let value = extra.as_ref().and_then(|e| e.crew).map(|(now, _)| now.to_string()).unwrap_or_default();
+        if text.text != value {
+            text.text = value;
+        }
+    }
     for (kind, mut text) in &mut texts {
         let StockText::Resource(id) = kind;
         let value = resource_text(&feed, *id).unwrap_or_default();
@@ -488,6 +498,7 @@ pub(in crate::ui::hud) fn update(
             (StockBar::Hull(w), Info::Single(s)) => (s.hull, *w),
             (StockBar::Shield(w), Info::Single(s)) => (s.shield.unwrap_or(0.0), *w),
             (StockBar::Progress(w), Info::Single(s)) => (s.progress.unwrap_or(0.0), *w),
+            (StockBar::Energy(w), Info::Single(_)) => (extra.as_ref().and_then(|e| e.energy).unwrap_or(0.0), *w),
             (StockBar::Group(id, w), Info::Group(tiles)) => (
                 tiles.iter().find(|tile| tile.id == *id).map_or(0.0, |tile| tile.hull),
                 *w,

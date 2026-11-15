@@ -23,43 +23,45 @@ use crate::ui::{profile::UiProfile, theme::click};
 
 /// An authored sheet in Armada I's key family, on the 640 x 480 canvas.
 const CFG: &str = "\
-resourcePanelArea = 400 0 240 16
-minimapPanelArea = 0 334 146 146
-infoPanelArea = 146 367 247 113
-infoBlackArea = 10 10 229 95
-infoSingleNameTextInformationArea = 102 32 114 9
-infoSingleClassTextInformationArea = 102 15 119 9
-infoSingleShieldBarArea = 38 32 48 5
-controlPanelArea = 500 300 120 160
-controlBlackArea = 8 8 100 133
-controlButton1 = 10 10 30 30
-controlButton2 = 45 10 30 30
-controlButton3 = 80 10 30 30
-controlButton4 = 10 45 30 30
-controlButton5 = 45 45 30 30
-controlButton6 = 80 45 30 30
-controlButton7 = 10 80 30 30
-controlButton8 = 45 80 30 30
-controlButton9 = 80 80 30 30
-controlButton10 = 10 115 30 30
-controlButton11 = 45 115 30 30
-controlButton12 = 80 115 30 30
-cinematicPanelArea = 393 356 131 124
+resourcePanelArea = 301 3 177 19
+minimapPanelArea = 11 301 129 171
+infoPanelArea = 163 351 233 127
+infoBlackArea = 7 9 211 99
+infoSingleNameTextInformationArea = 91 27 101 11
+infoSingleClassTextInformationArea = 91 13 103 8
+infoSingleShieldBarArea = 33 29 51 6
+infoSingleEnergyBarArea = 33 79 51 6
+infoSingleCrewTextInformationArea = 71 61 37 11
+controlPanelArea = 517 311 109 151
+controlBlackArea = 6 6 93 121
+controlButton1 = 8 7 29 29
+controlButton2 = 43 7 29 29
+controlButton3 = 78 7 29 29
+controlButton4 = 8 42 29 29
+controlButton5 = 43 42 29 29
+controlButton6 = 78 42 29 29
+controlButton7 = 8 77 29 29
+controlButton8 = 43 77 29 29
+controlButton9 = 78 77 29 29
+controlButton10 = 8 112 29 29
+controlButton11 = 43 112 29 29
+controlButton12 = 78 112 29 29
+cinematicPanelArea = 381 347 139 133
 ";
 
 /// Authored slots: not the install's numbers.
 const HEADER: &str = "\
-int BUTTON_LOCATION_MOVE = 2;
-int BUTTON_LOCATION_ATTACK = 3;
-int BUTTON_LOCATION_STOP = 4;
-int BUTTON_LOCATION_ORDERS = 5;
-int BUTTON_LOCATION_ORDER_SCOUT = 8;
-int BUTTON_LOCATION_ORDER_SEARCH_AND_DESTROY = 9;
-int BUTTON_LOCATION_ORDER_PATROL = 7;
-int BUTTON_LOCATION_ORDER_RED_ALERT = 1;
-int BUTTON_LOCATION_BACK = 12;
-int BUTTON_LOCATION_CANCEL = 11;
-int BUTTON_LOCATION_BUILD = 6;
+int BUTTON_LOCATION_MOVE = 9;
+int BUTTON_LOCATION_ATTACK = 10;
+int BUTTON_LOCATION_STOP = 11;
+int BUTTON_LOCATION_ORDERS = 12;
+int BUTTON_LOCATION_ORDER_SCOUT = 2;
+int BUTTON_LOCATION_ORDER_SEARCH_AND_DESTROY = 3;
+int BUTTON_LOCATION_ORDER_PATROL = 4;
+int BUTTON_LOCATION_ORDER_RED_ALERT = 6;
+int BUTTON_LOCATION_BACK = 8;
+int BUTTON_LOCATION_CANCEL = 7;
+int BUTTON_LOCATION_BUILD = 1;
 ";
 
 fn layout_cfg() -> sta_content::GuiLayout {
@@ -125,8 +127,8 @@ fn slot_rectangles_are_the_sheet_keys_on_one_640_by_480_canvas() {
     let l = StockLayout::new(&layout_cfg(), Vec2::new(640.0, 480.0));
     assert_eq!(l.canvas, Vec2::new(640.0, 480.0));
     let cells = control::cells(&l);
-    assert_eq!(cells[0], Some(R::new(510.0, 310.0, 30.0, 30.0)));
-    assert_eq!(cells[11], Some(R::new(580.0, 415.0, 30.0, 30.0)));
+    assert_eq!(cells[0], Some(R::new(525.0, 318.0, 29.0, 29.0)));
+    assert_eq!(cells[11], Some(R::new(595.0, 423.0, 29.0, 29.0)));
     assert!(cells.iter().all(Option::is_some));
     // The same sheet at 16:9 and 21:9 is one factor, centred: the grid keeps its shape (ADR 0008 H1, H2).
     for aspect in [16.0 / 9.0, 21.0 / 9.0] {
@@ -134,7 +136,7 @@ fn slot_rectangles_are_the_sheet_keys_on_one_640_by_480_canvas() {
         let c = control::cells(&l);
         let (a, b) = (c[0].unwrap(), c[1].unwrap());
         assert_eq!((a.w, a.h), (c[11].unwrap().w, c[11].unwrap().h));
-        assert!((b.x - a.x) / l.scale - 35.0 < 0.6, "pitch scales by the one factor");
+        assert!(((b.x - a.x) / l.scale - 35.0).abs() < 0.6, "pitch scales by the one factor");
         assert!(a.x >= l.hud.x && c[11].unwrap().right() <= l.hud.right());
     }
 }
@@ -143,9 +145,9 @@ fn slot_rectangles_are_the_sheet_keys_on_one_640_by_480_canvas() {
 fn panel_rectangles_stay_in_the_sheet_group() {
     let l = StockLayout::new(&layout_cfg(), Vec2::new(640.0, 480.0));
     let solid = super::solid(&l);
-    assert!(solid.contains(&R::new(500.0, 300.0, 120.0, 160.0)));
-    assert!(solid.contains(&R::new(146.0, 367.0, 247.0, 113.0)));
-    assert!(solid.contains(&R::new(393.0, 356.0, 131.0, 124.0)), "the cinematic rectangle is reserved");
+    assert!(solid.contains(&R::new(517.0, 311.0, 109.0, 151.0)));
+    assert!(solid.contains(&R::new(163.0, 351.0, 233.0, 127.0)));
+    assert!(solid.contains(&R::new(381.0, 347.0, 139.0, 133.0)), "the cinematic rectangle is reserved");
 }
 
 fn selection_feed() -> HudFeed {
@@ -157,11 +159,11 @@ fn top_page_puts_commands_in_the_header_slots() {
     let slots = ButtonSlots::from_header(HEADER).0;
     let b = control::buttons(&selection_feed(), Page::Top, &slots);
     let at = |slot: usize| b.iter().find(|b| b.cell == slot - 1).map(|b| b.act.clone());
-    assert_eq!(at(2), Some(Act::Target(TargetMode::Move)));
-    assert_eq!(at(4), Some(Act::Stop));
-    assert_eq!(at(5), Some(Act::OpenOrders));
-    assert_eq!(at(1), None, "orders-page commands are not on the top page");
-    assert_eq!(at(12), None, "back is not on the top page");
+    assert_eq!(at(9), Some(Act::Target(TargetMode::Move)));
+    assert_eq!(at(11), Some(Act::Stop));
+    assert_eq!(at(12), Some(Act::OpenOrders));
+    assert_eq!(at(6), None, "orders-page commands are not on the top page");
+    assert_eq!(at(8), None, "back is not on the top page");
     assert!(b.windows(2).all(|w| w[0].cell < w[1].cell));
 }
 
@@ -170,12 +172,12 @@ fn orders_page_has_its_slots_and_locks_what_the_sim_cannot_take() {
     let slots = ButtonSlots::from_header(HEADER).0;
     let b = control::buttons(&selection_feed(), Page::Orders, &slots);
     let at = |slot: usize| b.iter().find(|b| b.cell == slot - 1).cloned();
-    assert_eq!(at(8).unwrap().act, Act::Order(UnitOrder::Scout));
-    assert_eq!(at(8).unwrap().look, Look::Ready);
-    assert_eq!(at(7).unwrap().look, Look::Locked, "patrol has no HUD pick yet");
-    assert_eq!(at(1).unwrap().look, Look::Locked, "alert states have no player order yet");
-    assert_eq!(at(12).unwrap().act, Act::Back);
-    assert_eq!(at(11), None, "cancel belongs to the build page");
+    assert_eq!(at(2).unwrap().act, Act::Order(UnitOrder::Scout));
+    assert_eq!(at(2).unwrap().look, Look::Ready);
+    assert_eq!(at(4).unwrap().look, Look::Locked, "patrol has no HUD pick yet");
+    assert_eq!(at(6).unwrap().look, Look::Locked, "alert states have no player order yet");
+    assert_eq!(at(8).unwrap().act, Act::Back);
+    assert_eq!(at(7), None, "cancel belongs to the build page");
     let none = control::buttons(&HudFeed::default(), Page::Orders, &slots);
     assert!(none.is_empty(), "nothing selected: no grid");
 }
@@ -243,4 +245,34 @@ fn emblem_names_follow_the_race_name_or_stem() {
     assert_eq!(super::info::emblem_names("federation"), ["federation_icon"]);
     assert_eq!(super::info::emblem_names("kli")[1], "klingon_icon");
     assert!(super::info::emblem_names("").is_empty());
+}
+
+#[test]
+fn changing_energy_and_crew_patches_in_place_and_keeps_the_buttons() {
+    let mut app = app(4.0 / 3.0);
+    let set = |app: &mut App, energy: i32, crew: i32| {
+        let mut feed = app.world_mut().resource_mut::<HudFeed>();
+        let unit = &mut Arc::make_mut(&mut feed.view).units[0];
+        unit.energy = Some([Fixed::from_int(energy), Fixed::from_int(100)]);
+        unit.crew = Some([Fixed::from_int(crew), Fixed::from_int(100)]);
+    };
+    set(&mut app, 40, 90);
+    app.update();
+    app.update();
+    let buttons = |app: &mut App| {
+        let mut v: Vec<Entity> = app.world_mut().query_filtered::<Entity, With<GridCell>>().iter(app.world()).collect();
+        v.sort();
+        v
+    };
+    let crew_text = |app: &mut App| {
+        app.world_mut().query_filtered::<&crate::ui::sprite_font::SpriteText, With<super::info::CrewText>>().iter(app.world()).map(|t| t.text.clone()).collect::<Vec<_>>()
+    };
+    let before = buttons(&mut app);
+    assert!(!before.is_empty());
+    assert_eq!(crew_text(&mut app), ["90"]);
+    set(&mut app, 41, 89);
+    app.update();
+    app.update();
+    assert_eq!(buttons(&mut app), before, "the buttons are not respawned when energy or crew change");
+    assert_eq!(crew_text(&mut app), ["89"], "the crew readout is patched in place");
 }
