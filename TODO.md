@@ -192,6 +192,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] Transport content keys (SIM-46 P0, #753): with every install present, `cargo test -p sta_content --test transport_keys` passes (general rules over the install).
 
 - [?] Generic AI armed production (#818): in a fresh Classic skirmish with a Borg computer opponent on mp02twin, let it establish mining, construct a shipyard, and produce armed ships that attack the opponent. Check that it builds one useful producer, keeps its mining economy, and continues to honour explicit mission build plans. Headless combat probes supplement this manual check.
+- [?] RND-36 construction presentation: check valid/blocked placement footprints, the faint station blueprint after confirmation and while its hull builds, cancellation and constructor loss; queue two ships and build at two yards together. Ships should reveal opaque chunks with sparks on the mesh edges and no worker bees, then launch once. Check pause, save/load, fog and a new match; windowless proof is separate from in-game acceptance.
+
 
 ## Checked earlier (morning list)
 

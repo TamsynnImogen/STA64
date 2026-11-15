@@ -273,9 +273,9 @@ pub struct UnitModels {
 /// Build the model of every root that [`NeedsModel`], in the owner's team
 /// colour, with the damage-state nodes present (hidden by [`show_damage`]).
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-fn attach_models(
+pub(crate) fn attach_models(
     mut commands: Commands,
-    pending: Query<(Entity, &NeedsModel, &TeamColour, Option<&UnitOwner>, Option<&SimEntity>,
+    pending: Query<(Entity, &NeedsModel, &TeamColour, Option<&UnitOwner>, Option<&SimEntity>, Option<&crate::render::construction::ConstructionPreview>, Option<&crate::render::build_visuals::BuildVisual>,
     )>,
     mut moons: ResMut<crate::render::moons::MoonVariants>,
     mut silhouettes: Option<ResMut<crate::render::strategic::Silhouettes>>,
@@ -292,7 +292,7 @@ fn attach_models(
     device: Option<Res<RenderDevice>>,
 ) {
     let formats = device.map(|d| CompressedImageFormats::from_features(d.features())).unwrap_or(CompressedImageFormats::BC);
-    for (e, need, team, owner, sim) in &pending {
+    for (e, need, team, owner, sim, preview, build_visual) in &pending {
         commands.entity(e).remove::<NeedsModel>();
         let Some(def) = content.0.unit(need.0) else { continue;
         };
@@ -344,7 +344,7 @@ fn attach_models(
         let owned = owner.is_some_and(|o| o.0 != sta_sim::world::NEUTRAL);
         // A resource (a moon) is neutral and never moves, but is clicked for its info and
         // as a mining target, so it gets a click radius too: of the moon the marker was swapped for.
-        if mobile || owned || def.resource.is_some() {
+        if build_visual.is_none() && (mobile || owned || def.resource.is_some()) {
             let radius = if def.resource.is_some() { crate::map::resource_pick_radius(radius) } else { radius };
             commands.entity(e).insert(SelectRadius(radius.max(5.0)));
         }
@@ -374,17 +374,17 @@ fn attach_models(
             team: team.0,
             borg: false,
             sprites: &tables.0,
-            damaged: true,
+            damaged: build_visual.is_none(),
             normal_maps: true,
             parts: Some(&mut parts),
             model_key: path,
             unlit: false,
             scale: if scale > 0.0 { scale } else { 1.0 },
         };
-        let progress = sim
+        let progress = preview.map(|p| p.0).or_else(|| sim
             .and_then(|unit| link.curr().unit(unit.0))
             .and_then(|unit| unit.progress)
-            .map(|progress| progress.to_f32().clamp(0.0, 1.0));
+            .map(|progress| progress.to_f32().clamp(0.0, 1.0)));
         let stats = if progress.is_some_and(|progress| progress < 1.0) {
             let chunks = construction_chunk_count(def);
             model_scene::spawn_construction(&mut ctx, &model, e, chunks, 0.0)
