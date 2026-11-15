@@ -38,6 +38,11 @@ fn rebuilt(tree: Option<&str>) -> ContentDb {
     b.build().unwrap()
 }
 
+/// `rebuilt`, for the special-forces tests.
+pub(super) fn rebuilt_for_flags(tree: Option<&str>) -> ContentDb {
+    rebuilt(tree)
+}
+
 fn setup(seed: u64, content: ContentDb) -> GameSetup {
     let seat = |id: u8, control| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control };
     GameSetup {

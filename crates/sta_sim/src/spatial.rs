@@ -240,6 +240,91 @@ pub fn separate(grid: &Grid) -> Vec<(EntityId, (Fixed, Fixed))> {
         .collect()
 }
 
+/// A displacement in X, Y and Z.
+pub type Shift3 = (Fixed, Fixed, Fixed);
+
+/// Armada II craft separation (SIM-67; evidence: measured on the original
+/// bench for the Armada II family; the vertical bias constant is fitted to
+/// those marks, not read).
+///
+/// For each pair whose bodies (full radii) overlap in 3D: the push is
+/// `depth` along the centre line between the two craft plus a vertical part
+/// `vertical_bias * depth` that lifts the higher craft and lowers the lower
+/// one (equal heights: the lower id goes up and the higher id down; not
+/// measured). The push is shared by speed: each craft takes
+/// `|v| / (|v_a| + |v_b|)`, so a craft at speed exactly zero is never moved
+/// and the mover takes all of it (a braking or turning craft keeps a small
+/// speed and takes a small share); both nearly still (sum under 0.01) split
+/// 0.5 / 0.5. An immovable body never moves and the other takes all.
+/// Coincident centres push straight up and down. Displacements come back
+/// ascending by id, non-zero only, for movable bodies. A pure function of the
+/// snapshot, in [`Fixed`] arithmetic.
+pub fn separate_3d(
+    grid: &Grid,
+    speed_of: &dyn Fn(EntityId) -> Fixed,
+    vertical_bias: Fixed,
+) -> Vec<(EntityId, Shift3)> {
+    let zero = (Fixed::ZERO, Fixed::ZERO, Fixed::ZERO);
+    let mut acc = vec![zero; grid.bodies.len()];
+    let half = Fixed::from_bits(Fixed::ONE.to_bits() / 2);
+    let still = Fixed::from_f64(0.01);
+    for (ai, bi) in grid.pair_indices() {
+        let (a, b) = (grid.bodies[ai], grid.bodies[bi]);
+        let (wa, wb) = match (a.movable, b.movable) {
+            (true, true) => {
+                let (sa, sb) = (speed_of(a.id).abs(), speed_of(b.id).abs());
+                let sum = sa + sb;
+                if sum < still { (half, half) } else { (sa / sum, sb / sum) }
+            }
+            (true, false) => (Fixed::ONE, Fixed::ZERO),
+            (false, true) => (Fixed::ZERO, Fixed::ONE),
+            (false, false) => continue,
+        };
+        let (dx, dy, dz) = (b.pos.x - a.pos.x, b.pos.y - a.pos.y, b.pos.z - a.pos.z);
+        let r = a.radius + b.radius;
+        // Box test first: squares overflow past about 46000 units.
+        if dx.abs() >= r || dy.abs() >= r || dz.abs() >= r {
+            continue;
+        }
+        let d2 = dx * dx + dy * dy + dz * dz;
+        if d2 >= r * r {
+            continue;
+        }
+        let d = d2.sqrt();
+        let (nx, ny, nz, gap) = if d == Fixed::ZERO {
+            // On the same spot: a goes up, b goes down.
+            (Fixed::ZERO, -Fixed::ONE, Fixed::ZERO, r)
+        } else {
+            (dx / d, dy / d, dz / d, r - d)
+        };
+        // The higher craft of the pair goes up, the lower one down; on an
+        // exact tie the lower id goes up and the higher id down, so a tie
+        // lifts nothing in total (the original's tie is noise: not measured).
+        let (sa, sb) = match dy.cmp(&Fixed::ZERO) {
+            std::cmp::Ordering::Greater => (-Fixed::ONE, Fixed::ONE),
+            std::cmp::Ordering::Less => (Fixed::ONE, -Fixed::ONE),
+            std::cmp::Ordering::Equal => (Fixed::ONE, -Fixed::ONE),
+        };
+        let lift = vertical_bias * gap;
+        acc[ai] = (
+            acc[ai].0 - nx * gap * wa,
+            acc[ai].1 - ny * gap * wa + sa * lift * wa,
+            acc[ai].2 - nz * gap * wa,
+        );
+        acc[bi] = (
+            acc[bi].0 + nx * gap * wb,
+            acc[bi].1 + ny * gap * wb + sb * lift * wb,
+            acc[bi].2 + nz * gap * wb,
+        );
+    }
+    grid.bodies
+        .iter()
+        .zip(acc)
+        .filter(|(b, d)| b.movable && *d != zero)
+        .map(|(b, d)| (b.id, d))
+        .collect()
+}
+
 /// Separation plus solid push-out over `entities`, up to `passes` times (each
 /// pass moves bodies, then looks again; it stops early once nothing moves).
 /// Entities without a radius in `radii` are ignored; `movable` says which
