@@ -539,7 +539,7 @@ mod tests {
     fn the_chosen_race_wins_over_the_units_and_enemies_do_not_speak() {
         let mut r = rig(WORLD);
         // Federation (the units say so); the player chose Romulan.
-        r.app.world_mut().insert_resource(crate::game::LocalRace { name: "romulan".into(), interface: None, interface_sprites: None, music: None });
+        r.app.world_mut().insert_resource(crate::game::LocalRace { name: "romulan".into(), interface: None, interface_sprites: None, music: Vec::new() });
         r.frame();
         assert_eq!(*r.races.lock().unwrap(), [Some("federation".to_owned()), Some("romulan".to_owned())]);
         // An enemy warbird being selected is silent; an own unit speaks.
