@@ -114,7 +114,7 @@ pub(crate) fn add_view_systems(app: &mut App) {
         .init_resource::<crate::render::moons::MoonVariants>()
         .add_systems(
             Update,
-            (sync_units, attach_models.run_if(resource_exists::<Mounted>).run_if(resource_exists::<ContentRes>), show_damage)
+            (sync_units, attach_models.run_if(resource_exists::<Mounted>).run_if(resource_exists::<ContentRes>), pick_bodies.run_if(resource_exists::<ContentRes>), show_damage)
                 .chain()
                 .before(place)
                 .in_set(GameSet::Interpolate)
@@ -122,6 +122,20 @@ pub(crate) fn add_view_systems(app: &mut App) {
         )
         .add_systems(Update, place.in_set(GameSet::Interpolate).run_if(resource_exists::<SimLink>));
     crate::render::anim::add_systems(app);
+}
+
+/// The click radius of a planet or a resource node from its definition, for every sim entity
+/// that has none: the entity [`sync_units`] makes when the object comes back into sight is
+/// not the one the map view made (which went when the object left it), and
+/// [`attach_models`] gives a radius only to what it draws a model for (a planet's body is
+/// the map's, a latinum nebula has no model), so without this such an object cannot be picked
+/// after it was out of sight once. A model-derived radius, given first, stays.
+#[allow(clippy::type_complexity)]
+fn pick_bodies(mut commands: Commands, link: Res<SimLink>, content: Res<ContentRes>, bare: Query<(Entity, &SimEntity), Without<SelectRadius>>) {
+    for (e, id) in &bare {
+        let Some(r) = link.curr().unit(id.0).and_then(|u| content.0.unit(u.def)).and_then(crate::map::ghost_pick_radius) else { continue };
+        commands.entity(e).insert(SelectRadius(r));
+    }
 }
 
 /// Diff the current view against [`SimEntities`].
@@ -706,5 +720,41 @@ mod view_tests {
         assert_eq!(ids(&mut app), BTreeSet::from([1]));
         let e = app.world().resource::<SimEntities>().0[&EntityId(1)];
         assert!(app.world().get::<Cloaked>(e).is_some());
+    }
+
+    /// A planet or a resource node that was out of sight and came back is a new entity (the map's
+    /// was despawned with it): it must still have a click radius, as the planet's body is the
+    /// map's and a latinum nebula has no model of its own to take one from.
+    #[test]
+    fn a_planet_or_node_seen_again_can_still_be_picked() {
+        let mut planet = sta_content::UnitDef::new("pb_test", "planet");
+        planet.planet_role = Some(sta_content::PlanetRole::Producer);
+        planet.resource = Some(0);
+        planet.radius = Fixed::from_int(130);
+        let mut nebula = sta_content::UnitDef::new("latinum_test", "latinum");
+        nebula.resource = Some(1);
+        let mut ship = sta_content::UnitDef::new("ship_test", "frigate");
+        ship.radius = Fixed::from_int(20);
+        let db = Arc::new(sta_content::ContentDb::builder().unit(planet).unit(nebula).unit(ship).build().unwrap());
+        let key = |n: &str| db.key(n).unwrap();
+        let on = |id: u32, def: &str| UnitView { def: key(def), ..unit(id, 0, 100, UnitFlags::default()) };
+        let all = vec![on(1, "pb_test"), on(2, "latinum_test"), on(3, "ship_test")];
+        let seen = |ids: &[u32]| vec![(PlayerId(1), ids.iter().map(|&i| EntityId(i)).collect())];
+        let views = vec![view(0, all.clone(), seen(&[3])), view(1, all.clone(), seen(&[1, 2, 3]))];
+        let mut app = app_with(Box::new(Views(views, 0)), Some(PlayerId(1)));
+        app.insert_resource(crate::sim_link::ContentRes(db.clone()));
+        let radius = |app: &mut App, id: u32| {
+            let mut q = app.world_mut().query::<(&SimEntity, Option<&SelectRadius>)>();
+            q.iter(app.world()).find(|(s, _)| s.0 == EntityId(id)).map(|(_, r)| r.map(|r| r.0))
+        };
+        app.update();
+        assert_eq!(radius(&mut app, 1), None, "out of sight: not drawn, not picked");
+        for _ in 0..6 {
+            app.update();
+        }
+        assert_eq!(app.world().resource::<SimLink>().curr().tick, 1);
+        assert_eq!(radius(&mut app, 1), Some(Some(130.0)), "a planet back in sight is picked by its radius");
+        assert_eq!(radius(&mut app, 2), Some(Some(crate::map::FIELD_RADIUS)), "a node without model extent by its field");
+        assert_eq!(radius(&mut app, 3), Some(None), "a ship's radius comes from its model, not from here");
     }
 }
