@@ -66,7 +66,8 @@ pub(crate) fn recharge(units: &mut Entities, db: &ContentDb, switches: &crate::s
             let gen_hp = def.system_hit_points[system(Subsystem::Shields)];
             let generator_dead = gen_hp > Fixed::ZERO && row.damage[system(Subsystem::Shields)] >= gen_hp.to_bits();
             if row.off & (1 << system(Subsystem::Shields)) == 0 && !generator_dead && u.hull[0] < u.hull[1] {
-                u.hull[0] = (u.hull[0] + rate).min(u.hull[1]);
+                // Guarded so a very large maximum cannot wrap.
+                u.hull[0] = if u.hull[1] - u.hull[0] <= rate { u.hull[1] } else { u.hull[0] + rate };
             }
         }
         let pools = if u.shields.directional { 4 } else { 1 };

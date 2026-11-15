@@ -109,6 +109,50 @@ fn nothing_regenerates_while_derelict_without_repair_or_at_zero() {
 }
 
 #[test]
+fn nothing_regenerates_during_a_boarding_hold() {
+    let (mut sim, id) = damaged(Profile::Sta1Classic);
+    sim.transports.hold(id, super::boarding::TARGET_HOLD, 1000);
+    pass(&mut sim);
+    assert_eq!(hull(&sim, id), Fixed::from_int(100));
+}
+
+/// The recharge pass runs before the hits of a step: a hull of 1 is lifted to 2.5 first, so a
+/// hit of 2 leaves it and a hit of 2.5 kills it.
+#[test]
+fn regeneration_comes_before_the_hit_in_one_step() {
+    for (damage, survives) in [(2.0, true), (2.5, false)] {
+        let (mut sim, id) = damaged(Profile::Sta1Classic);
+        sim.units.get_mut(id).unwrap().hull[0] = Fixed::ONE;
+        pass(&mut sim);
+        let db = sim.content.clone().unwrap();
+        let mut events = vec![crate::SimEvent::Hit {
+            target: id,
+            by: id,
+            weapon: sta_content::ContentKey::NONE,
+            facing: 0,
+            shield: Fixed::ZERO,
+            hull: fx(damage),
+            at: Vec3 { x: Fixed::ZERO, y: Fixed::ZERO, z: Fixed::ZERO },
+        }];
+        let mut ctx = super::casualty::Ctx { subsystems: &mut sim.subsystems, rng: &mut sim.rng, switches: &sim.switches, colonies: &mut sim.colonies };
+        let killed = super::damage::apply(&mut sim.units, &db, &mut events, 0, &mut ctx);
+        assert_eq!(killed.is_empty(), survives, "hit of {damage}");
+    }
+}
+
+#[test]
+fn a_maximum_near_the_fixed_range_cannot_wrap() {
+    let (mut sim, id) = damaged(Profile::Sta1Classic);
+    let top = Fixed::from_bits(i64::MAX - 5);
+    {
+        let u = sim.units.get_mut(id).unwrap();
+        u.hull = [top - Fixed::ONE, top];
+    }
+    pass(&mut sim);
+    assert_eq!(hull(&sim, id), top);
+}
+
+#[test]
 fn other_profiles_never_regenerate_the_hull() {
     for profile in [Profile::Native, Profile::Sta2Classic, Profile::Fo4, Profile::Fo3] {
         let (mut sim, id) = damaged(profile);

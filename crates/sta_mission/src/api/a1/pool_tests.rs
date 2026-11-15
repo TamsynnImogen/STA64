@@ -74,6 +74,12 @@ fn set_max_shields_sets_the_hull_maximum_then_the_hull() {
 }
 
 #[test]
+fn set_max_shields_of_zero_or_less_leaves_the_hull_alone() {
+    let (commands, _) = run(Profile::Sta1Classic, "A1.SetMaxShields(u, 0); A1.SetMaxShields(u, -40)");
+    assert!(commands.is_empty(), "{commands:?}");
+}
+
+#[test]
 fn the_getters_answer_the_hull_over_its_maximum() {
     let (commands, _) = run(
         Profile::Sta1Classic,

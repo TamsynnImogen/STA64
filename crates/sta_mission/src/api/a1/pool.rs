@@ -4,8 +4,10 @@
 //! `maxHealth`, held in the hull (pool = `maxHealth`: measured on the original). The sim
 //! regenerates it (`damage::recharge`). The four calls act on it: `SetShieldPercent(h, f)`
 //! sets the hull to its maximum times `f` (no upper clamp; a value of 0 or less leaves the least
-//! positive hull, so the next hit kills), `SetMaxShields(h, v)` sets the hull maximum, then the hull,
-//! to `v`, and `GetShieldPercent` / `GetRealShieldPercent` answer the hull over its maximum (0
+//! positive hull, which a hit in the next step kills unless the regeneration that runs first in a
+//! step lifts it), `SetMaxShields(h, v)` with `v` above 0 sets the hull maximum, then the hull, to `v`
+//! (`v` of 0 or less leaves the hull alone: the single pool has no separate shield to remove; STA64
+//! rule, inferred), and `GetShieldPercent` / `GetRealShieldPercent` answer the hull over its maximum (0
 //! when the maximum is 0). Grade: INFERRED (the executable read says the calls act on the
 //! `maxHealth` pool; the setters were not measured). A unit without the feature, including
 //! one with authored shields, keeps the shield path of `objects.rs` / `seams.rs`.
@@ -49,12 +51,15 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
     };
     wrap("SetShieldPercent", "hf", |e, u, a| {
         let f = a[1].num();
-        let to = Fixed::from_f64(f64::from(u.hull[1].to_f32()) * f);
+        let to = u.hull[1] * Fixed::from_f64(f);
         e.edit("SetShieldPercent", Edit::HullValue(u.id, to))?;
         Ok(Value::Nil)
     })?;
     wrap("SetMaxShields", "hf", |e, u, a| {
         let v = Fixed::from_f64(a[1].num());
+        if v <= Fixed::ZERO {
+            return Ok(Value::Nil);
+        }
         e.edit("SetMaxShields", Edit::MaxHull(u.id, v))?;
         e.edit("SetMaxShields", Edit::HullValue(u.id, v))?;
         Ok(Value::Nil)
