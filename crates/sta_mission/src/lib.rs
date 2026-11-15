@@ -53,6 +53,7 @@ pub mod runtime;
 pub mod sandbox;
 pub mod script;
 pub mod standin;
+pub mod start_stock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatchedBy {
