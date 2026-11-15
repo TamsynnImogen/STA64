@@ -114,7 +114,7 @@ pub(crate) fn add_view_systems(app: &mut App) {
         .init_resource::<crate::render::moons::MoonVariants>()
         .add_systems(
             Update,
-            (sync_units, attach_models.run_if(resource_exists::<Mounted>).run_if(resource_exists::<ContentRes>), show_damage)
+            (sync_units, attach_models.run_if(resource_exists::<Mounted>).run_if(resource_exists::<ContentRes>), pick_bodies.run_if(resource_exists::<ContentRes>), show_damage)
                 .chain()
                 .before(place)
                 .in_set(GameSet::Interpolate)
@@ -122,6 +122,22 @@ pub(crate) fn add_view_systems(app: &mut App) {
         )
         .add_systems(Update, place.in_set(GameSet::Interpolate).run_if(resource_exists::<SimLink>));
     crate::render::anim::add_systems(app);
+}
+
+/// The click radius of a planet or a resource node from its definition, for every sim entity
+/// that has none: the entity [`sync_units`] makes when the object comes back into sight is
+/// not the one the map view made (which went when the object left it), and
+/// [`attach_models`] gives a radius only to what it draws a model for (a planet's body is
+/// the map's, a latinum nebula has no model), so without this such an object cannot be picked
+/// after it was out of sight once. A model-derived radius, given first, stays. Runs once per new
+/// entity (`Added<SimEntity>`): a definition does not change in place, so the radius follows the
+/// definition the entity was spawned with, and an entity that gets none is not rescanned.
+#[allow(clippy::type_complexity)]
+fn pick_bodies(mut commands: Commands, link: Res<SimLink>, content: Res<ContentRes>, bare: Query<(Entity, &SimEntity), (Added<SimEntity>, Without<SelectRadius>)>) {
+    for (e, id) in &bare {
+        let Some(r) = link.curr().unit(id.0).and_then(|u| content.0.unit(u.def)).and_then(crate::map::ghost_pick_radius) else { continue };
+        commands.entity(e).insert(SelectRadius(r));
+    }
 }
 
 /// Diff the current view against [`SimEntities`].
@@ -155,8 +171,9 @@ pub fn sync_units(
     .map(|u| (u.id, u))
     .collect();
     // A neutral planet or backdrop is scenery and stays drawn outside the sensors. Grade: that the original
-    // draws planets regardless of sensors is not measured, inferred from the stock look. Clicks and hover still
-    // follow `visible_to`, so a kept planet cannot be picked while unseen.
+    // draws planets regardless of sensors is not measured, inferred from the stock look. Clicks, hover, right-click orders, the order
+    // cursor and HUD targeting follow `visible_to` (`input::select::target_seen`), so a kept planet cannot be
+    // picked or ordered while unseen.
     if local.0.is_some()
         && let Some(content) = &content
     {
@@ -738,6 +755,95 @@ mod view_tests {
         assert_eq!(ids(&mut app), BTreeSet::from([1]));
         let e = app.world().resource::<SimEntities>().0[&EntityId(1)];
         assert!(app.world().get::<Cloaked>(e).is_some());
+    }
+
+    fn defs() -> Arc<sta_content::ContentDb> {
+        let mut planet = sta_content::UnitDef::new("pb_test", "planet");
+        planet.planet_role = Some(sta_content::PlanetRole::Producer);
+        planet.resource = Some(0);
+        planet.radius = Fixed::from_int(130);
+        let mut nebula = sta_content::UnitDef::new("latinum_test", "latinum");
+        nebula.resource = Some(1);
+        let mut gate = sta_content::UnitDef::new("gate_test", "wormhole_obj");
+        gate.radius = Fixed::from_int(60);
+        let mut ship = sta_content::UnitDef::new("ship_test", "frigate");
+        ship.radius = Fixed::from_int(20);
+        Arc::new(sta_content::ContentDb::builder().unit(planet).unit(nebula).unit(gate).unit(ship).build().unwrap())
+    }
+
+    fn on(db: &sta_content::ContentDb, id: u32, def: &str) -> UnitView {
+        UnitView { def: db.key(def).unwrap(), ..unit(id, 0, 100, UnitFlags::default()) }
+    }
+
+    fn radius(app: &mut App, id: u32) -> Option<(Entity, Option<f32>)> {
+        let mut q = app.world_mut().query::<(Entity, &SimEntity, Option<&SelectRadius>)>();
+        q.iter(app.world()).find(|(_, s, _)| s.0 == EntityId(id)).map(|(e, _, r)| (e, r.map(|r| r.0)))
+    }
+
+    fn run_to(app: &mut App, tick: u64) {
+        for _ in 0..200 {
+            app.update();
+            if app.world().resource::<SimLink>().curr().tick >= tick {
+                return;
+            }
+        }
+        panic!("never reached tick {tick}");
+    }
+
+    /// An object that leaves the local team's view is despawned, and the entity made when it is
+    /// seen again must have its click radius: `attach_models` (which runs here, with a mount
+    /// that has no models) gives none to a planet (its body is the map's) or to a node whose
+    /// model is missing, and a gate has none from its model on a re-sighting either.
+    #[test]
+    fn a_planet_or_node_seen_again_can_still_be_picked() {
+        let db = defs();
+        let all = vec![on(&db, 1, "pb_test"), on(&db, 2, "latinum_test"), on(&db, 3, "ship_test"), on(&db, 4, "gate_test")];
+        let seen = |ids: &[u32]| vec![(PlayerId(1), ids.iter().map(|&i| EntityId(i)).collect())];
+        let views = vec![view(0, all.clone(), seen(&[1, 2, 3, 4])), view(1, all.clone(), seen(&[3])), view(2, all.clone(), seen(&[1, 2, 3, 4]))];
+        let mut app = app_with(Box::new(Views(views, 0)), Some(PlayerId(1)));
+        app.add_plugins(AssetPlugin::default())
+            .init_asset::<Mesh>()
+            .init_asset::<StandardMaterial>()
+            .init_asset::<Image>()
+            .init_resource::<TextureCache>()
+            .init_resource::<PartCache>()
+            .insert_resource(SpriteTables(Arc::new(Default::default())))
+            .insert_resource(Mounted(sta_vfs::Vfs::default()))
+            .insert_resource(ContentRes(db.clone()));
+        let want = [(1, Some(130.0)), (2, Some(crate::map::FIELD_RADIUS)), (3, None), (4, Some(60.0))];
+        run_to(&mut app, 0);
+        let first: Vec<_> = want.iter().map(|&(id, r)| (radius(&mut app, id).unwrap(), r)).collect();
+        for ((_, got), want) in &first {
+            // The ship's radius would come from its model; the mount has none.
+            assert_eq!(got, want, "first sight");
+        }
+        run_to(&mut app, 1);
+        for id in [1, 2, 4] {
+            assert!(radius(&mut app, id).is_none(), "object {id} left the view: despawned");
+        }
+        run_to(&mut app, 2);
+        for (&(id, r), ((old, _), _)) in want.iter().zip(&first) {
+            let (now, got) = radius(&mut app, id).unwrap();
+            if id != 3 {
+                assert_ne!(now, *old, "object {id} is a new entity");
+            }
+            assert_eq!(got, r, "object {id} seen again");
+        }
+    }
+
+    /// A radius an entity already has (the model's, given by `attach_models` first) is kept.
+    #[test]
+    fn a_model_radius_wins_over_the_definitions() {
+        let db = defs();
+        let views = vec![view(0, vec![on(&db, 1, "pb_test"), on(&db, 2, "latinum_test")], Vec::new())];
+        let mut app = app_with(Box::new(Views(views, 0)), None);
+        app.insert_resource(ContentRes(db.clone()));
+        let (a, b) = (app.world_mut().spawn((SimEntity(EntityId(1)), SelectRadius(7.0))).id(), app.world_mut().spawn((SimEntity(EntityId(2)), SelectRadius(9.0))).id());
+        let c = app.world_mut().spawn(SimEntity(EntityId(2))).id();
+        app.update();
+        assert_eq!(app.world().get::<SelectRadius>(a).map(|r| r.0), Some(7.0));
+        assert_eq!(app.world().get::<SelectRadius>(b).map(|r| r.0), Some(9.0));
+        assert_eq!(app.world().get::<SelectRadius>(c).map(|r| r.0), Some(crate::map::FIELD_RADIUS), "a bare one gets the definition's");
     }
 
     /// A neutral planet outside every sensor stays drawn (the original shows its planets wherever the camera
