@@ -135,6 +135,7 @@ pub fn sync_units(
     existing: Query<(Entity, &SimEntity), Without<FromView>>,
     mut live: Query<(&mut HullShare, &mut UnitOwner, Has<Cloaked>), With<FromView>>,
     mut seen: Local<Option<(Arc<WorldView>, Option<PlayerId>)>>,
+    content: Option<Res<ContentRes>>,
 ) {
     // Entities the map view spawned for its own ships belong to the link too.
     for (e, u) in &existing {
@@ -146,13 +147,24 @@ pub fn sync_units(
     }
     *seen = Some((curr.clone(), local.0));
 
-    let want: BTreeMap<EntityId, &sta_sim::UnitView> = match local.0 {
+    let mut want: BTreeMap<EntityId, &sta_sim::UnitView> = match local.0 {
         Some(p) => curr.visible_to(p),
         None => curr.units.iter().collect(),
     }
     .into_iter()
     .map(|u| (u.id, u))
     .collect();
+    // A neutral planet or backdrop is scenery: the original draws it wherever the camera looks, sensors or
+    // not. Sensor visibility decides what the player's units see, not whether the map's planets exist.
+    if local.0.is_some()
+        && let Some(content) = &content
+    {
+        for u in &curr.units {
+            if u.owner == sta_sim::world::NEUTRAL && content.0.unit(u.def).is_some_and(|d| is_scenery_class(&d.class.0)) {
+                want.entry(u.id).or_insert(u);
+            }
+        }
+    }
 
     // Gone: not in the view, or no longer visible.
     let gone: Vec<EntityId> = map.0.keys().filter(|id| !want.contains_key(id)).copied().collect();
@@ -215,6 +227,11 @@ pub fn sync_units(
         }
         *seen = None;
     }
+}
+
+/// Classes of neutral things that are the map's scenery: always drawn, never an icon (`ODF classLabel`, read from data).
+pub fn is_scenery_class(class: &str) -> bool {
+    ["planet_obj", "planet", "background_obj"].iter().any(|c| class.eq_ignore_ascii_case(c))
 }
 
 fn hull_share(u: &sta_sim::UnitView) -> f32 {
@@ -304,6 +321,9 @@ fn attach_models(
             commands.entity(e).insert(SelectRadius(radius.max(5.0)));
         }
         let class = def.class.0.as_str();
+        if is_scenery_class(class) {
+            commands.entity(e).insert(crate::render::strategic::NoIcon);
+        }
         if owned && !matches!(class, "background_obj" | "latinum" | "asteroidfield" | "nebula_obj" | "planet" | "wormhole_obj") {
             let mut icon = crate::render::strategic::Strategic::new(crate::render::strategic::shape_for(class, mobile), team.0, radius,
             ).with_centre(centre);
@@ -706,5 +726,48 @@ mod view_tests {
         assert_eq!(ids(&mut app), BTreeSet::from([1]));
         let e = app.world().resource::<SimEntities>().0[&EntityId(1)];
         assert!(app.world().get::<Cloaked>(e).is_some());
+    }
+
+    /// A neutral planet outside every sensor stays drawn (the original shows its planets wherever the camera
+    /// looks); a neutral ship outside them does not.
+    #[test]
+    fn neutral_scenery_is_drawn_outside_sensor_range_and_a_neutral_ship_is_not() {
+        use sta_sim::world::NEUTRAL;
+        let db = sta_content::ContentDb::builder()
+            .unit(sta_content::UnitDef::new("t_backdrop", "planet_obj"))
+            .unit(sta_content::UnitDef::new("t_ship", "wingman"))
+            .build()
+            .unwrap();
+        let mut planet = unit(2, NEUTRAL.0, 100, UnitFlags::default());
+        planet.def = db.key("t_backdrop").unwrap();
+        let mut ship = unit(3, NEUTRAL.0, 100, UnitFlags::default());
+        ship.def = db.key("t_ship").unwrap();
+        let v = view(0, vec![unit(1, 1, 100, UnitFlags::default()), planet, ship], vec![(PlayerId(1), vec![EntityId(1)])]);
+        let mut app = app_with(Box::new(Views(vec![v], 0)), Some(PlayerId(1)));
+        app.insert_resource(ContentRes(Arc::new(db)));
+        for _ in 0..3 {
+            app.update();
+        }
+        let ids = roots(&mut app).into_iter().map(|r| r.0.0).collect::<BTreeSet<_>>();
+        assert_eq!(ids, BTreeSet::from([1, 2]), "the planet stays, the unseen neutral ship does not");
+    }
+
+    #[test]
+    fn scenery_classes_are_the_planet_and_backdrop_classes() {
+        assert!(is_scenery_class("planet_obj") && is_scenery_class("Planet") && is_scenery_class("background_obj"));
+        assert!(!is_scenery_class("wingman") && !is_scenery_class("station") && !is_scenery_class("asteroid"));
+    }
+
+    /// A view-drawn planet gets no strategic arrow: with the default radius it would turn into a speck and hide
+    /// its model from the zoom where its projected size drops under the symbol threshold.
+    #[test]
+    fn view_drawn_scenery_gets_no_strategic_icon() {
+        let mut app = App::new();
+        app.add_systems(Update, crate::render::strategic::ensure_icons);
+        let ship = app.world_mut().spawn((FromView, SimEntity(EntityId(1)))).id();
+        let planet = app.world_mut().spawn((FromView, SimEntity(EntityId(2)), crate::render::strategic::NoIcon)).id();
+        app.update();
+        assert!(app.world().get::<crate::render::strategic::Strategic>(ship).is_some());
+        assert!(app.world().get::<crate::render::strategic::Strategic>(planet).is_none());
     }
 }
