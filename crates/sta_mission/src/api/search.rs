@@ -36,10 +36,12 @@ pub(super) fn odf_ok(c: &Ctx, unit: &UnitView, filter: Option<&str>) -> bool {
     }
 }
 
-/// Live units inside the query, nearest first, then by id.
+/// Live units inside the query, nearest first, then by id. A seen-by query reads
+/// [`Ctx::visible_ids`]: another team's unit is not counted in the tick after it first
+/// appears (STA64's own one-tick rule, not measured in the original).
 pub(super) fn near<'c>(c: &'c Ctx, q: &Query) -> Vec<&'c UnitView> {
     let visible: Option<BTreeSet<EntityId>> =
-        q.seen_by.map(|p| c.view.visible_to(p).iter().map(|u| u.id).collect());
+        q.seen_by.map(|p| c.visible_ids(p));
     let mut found: Vec<(f64, &UnitView)> = c
         .view
         .units

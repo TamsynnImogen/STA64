@@ -465,7 +465,7 @@ fn nearest_enemy(env: &Env, a: &[P]) -> mlua::Result<Value> {
         }
         let seen = *sees
             .entry(u.owner)
-            .or_insert_with(|| c.view.visible_to(u.owner).iter().any(|v| v.id == me.id));
+            .or_insert_with(|| c.sees(u.owner, me.id));
         if !seen {
             continue;
         }
