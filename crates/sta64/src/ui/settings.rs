@@ -10,6 +10,8 @@
 //! - the options screen's volumes (`master`, `music`, `effects`, `voice`, `0..=100`),
 //!   `scroll_speed`, `window_size`, `fullscreen`, `vsync`, `show_fps` ([`Settings`]);
 //! - optional graphics choices (`msaa`, `graphics_detail`, `shadows`, `bloom`);
+//! - `hud_layout = centred | stretched`, how the stock-look HUD sits on a wide window
+//!   (ADR 0008 H7; unknown or missing: centred);
 //! - `player_name` and `relay`, the multiplayer name and relay address last used (UI-11);
 //! - `intro = true | false` ([`IntroSettings`]);
 //! - `version = 1`.
@@ -149,6 +151,8 @@ impl Stored {
                 }
                 "window_size" => crate::frontend::screens::WindowSize::from_key(value)
                     .map(|size| s.settings.window_size = size).is_some(),
+                "hud_layout" => crate::ui::hud::stock::layout::HudFit::from_key(value)
+                    .map(|fit| s.settings.hud_fit = fit).is_some(),
                 "msaa" => match value {
                     "auto" => { s.settings.msaa = None; true }
                     "1" | "2" | "4" => { s.settings.msaa = value.parse().ok(); true }
@@ -210,6 +214,7 @@ impl Stored {
         let _ = writeln!(t, "shadows = {}", st.shadows.map_or("auto".to_owned(), |v| v.to_string()));
         let _ = writeln!(t, "bloom = {}", st.bloom.map_or("auto".to_owned(), |v| v.to_string()));
         let _ = writeln!(t, "window_size = {}", st.window_size.key());
+        let _ = writeln!(t, "hud_layout = {}", st.hud_fit.key());
         if !st.player_name.is_empty() {
             let _ = writeln!(t, "player_name = {}", st.player_name);
         }
@@ -762,6 +767,28 @@ mod tests {
         let (invalid, warnings) = Stored::parse("msaa = 8\ngraphics_detail = 3\nshadows = perhaps\nbloom = maybe\n");
         assert_eq!(warnings.len(), 4, "{warnings:?}");
         assert_eq!((invalid.settings.msaa, invalid.settings.graphics_detail, invalid.settings.shadows, invalid.settings.bloom), (None, None, None, None));
+    }
+
+    #[test]
+    fn hud_layout_round_trips_and_unknown_or_missing_is_centred() {
+        use crate::ui::hud::stock::layout::HudFit;
+        let (old, warnings) = Stored::parse("fullscreen = true\n");
+        assert!(warnings.is_empty());
+        assert_eq!(old.settings.hud_fit, HudFit::Centred);
+        assert!(old.to_text().contains("hud_layout = centred"));
+        for fit in HudFit::ALL {
+            let mut s = Stored::default();
+            s.settings.hud_fit = fit;
+            let (back, warnings) = Stored::parse(&s.to_text());
+            assert!(warnings.is_empty(), "{warnings:?}");
+            assert_eq!(back.settings.hud_fit, fit);
+        }
+        let (bad, warnings) = Stored::parse("hud_layout = anchored\n");
+        assert_eq!(bad.settings.hud_fit, HudFit::Centred);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("bad value"));
+        let (shouted, _) = Stored::parse("hud_layout = stretched\n");
+        assert_eq!(shouted.settings.hud_fit, HudFit::Stretched);
     }
 
     #[test]

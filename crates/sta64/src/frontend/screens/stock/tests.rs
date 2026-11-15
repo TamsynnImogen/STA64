@@ -491,6 +491,33 @@ fn options_tabs_switch_and_settings_follow() {
     assert_eq!(app.world().get::<Dropdown>(size).unwrap().selected, 3);
 }
 
+/// The Graphics tab's HUD layout dropdown starts centred, writes the setting and survives a rebuild.
+#[cfg(not(target_os = "android"))]
+#[test]
+fn hud_layout_dropdown_follows_the_setting() {
+    use crate::frontend::screens::view::HudFitSelect;
+    use crate::ui::hud::stock::layout::HudFit;
+    use crate::ui::theme::{Dropdown, DropdownChanged};
+    let mut app = app_with(ScreenData::fake(), Some((1100, 700)), 1.0);
+    go(&mut app, Screen::Settings);
+    let bar = app.world_mut().query_filtered::<Entity, With<TabBar>>().single(app.world()).unwrap();
+    let tab2 = app.world_mut().query::<(Entity, &Tab)>().iter(app.world()).find(|(_, t)| t.0 == 2).map(|(e, _)| e).unwrap();
+    kit_click(app.world_mut(), tab2);
+    settle(&mut app);
+    assert_eq!(app.world().get::<TabBar>(bar).unwrap().selected, 2);
+    let field = app.world_mut().query_filtered::<Entity, With<HudFitSelect>>().single(app.world()).unwrap();
+    assert_eq!(app.world().get::<Dropdown>(field).unwrap().selected, 0);
+    pick(&mut app, field, 1);
+    assert_eq!(app.world().resource::<crate::frontend::screens::Settings>().hud_fit, HudFit::Stretched);
+    app.world_mut().write_message(DropdownChanged { entity: field, index: usize::MAX });
+    settle(&mut app);
+    assert_eq!(app.world().resource::<crate::frontend::screens::Settings>().hud_fit, HudFit::Stretched);
+    go(&mut app, Screen::Main);
+    go(&mut app, Screen::Settings);
+    let field = app.world_mut().query_filtered::<Entity, With<HudFitSelect>>().single(app.world()).unwrap();
+    assert_eq!(app.world().get::<Dropdown>(field).unwrap().selected, 1);
+}
+
 /// The texts come from the install's own `label.map`: the stock captions on the
 /// stock buttons. Needs `STA64_TEST_INSTALL` (and `STA64_TEST_MOD`).
 #[test]

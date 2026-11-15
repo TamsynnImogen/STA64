@@ -212,6 +212,14 @@ pub(super) fn body(c: &mut Box_, t: &Theme, s: &Settings, info: &GraphicsInfo, w
             });
         });
 
+        c.spawn(Node { width: Val::Px(selector_w), min_width: Val::Px(0.0), flex_direction: FlexDirection::Column, ..default() })
+            .with_children(|f| {
+                f.spawn(caption(t, &tr("HUD layout")));
+                let fits = crate::ui::hud::stock::layout::HudFit::ALL.map(|fit| tr(fit.label()));
+                let refs: Vec<_> = fits.iter().map(String::as_str).collect();
+                let picked = crate::ui::hud::stock::layout::HudFit::ALL.iter().position(|&fit| fit == s.hud_fit).unwrap_or(0);
+                f.spawn((dropdown(t, &refs, picked, selector_w), view::HudFitSelect));
+            });
         #[cfg(not(target_os = "android"))]
         c.spawn(caption(t, &tr("Windowed resolution; fullscreen uses the current monitor.")));
         if let Some(post_aa) = &info.post_aa {

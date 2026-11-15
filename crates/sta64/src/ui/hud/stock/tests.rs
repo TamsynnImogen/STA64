@@ -322,6 +322,30 @@ fn installed_armada1_guis_draw_three_resource_readouts_inside_the_window() {
     }
 }
 
+/// The player's HUD layout choice applies live: switching `HudConfig::fit` redraws the stock
+/// HUD in place, centred on the one-factor rectangle and stretched over the whole window.
+#[test]
+fn hud_fit_switch_redraws_the_stock_hud_live() {
+    use super::layout::HudFit;
+    let aspect = 2752.0_f32 / 1152.0;
+    let mut app = app_with_content_and_config(content(), HudConfig { aspect, ..config() }, UiProfile::Armada2);
+    let hud = |app: &App| app.world().resource::<StockState>().layout.as_ref().unwrap().hud;
+    let centred = hud(&app);
+    assert!(centred.x > 0.0 && centred.w < 1080.0 * aspect, "{centred:?}");
+    let label = |app: &mut App| (0..3).find_map(|id| resource_label(app, id)).expect("a resource readout").3.left;
+    let before = label(&mut app);
+    app.world_mut().resource_mut::<HudConfig>().fit = HudFit::Stretched;
+    app.update();
+    let stretched = hud(&app);
+    assert_eq!((stretched.x, stretched.y, stretched.h), (0.0, 0.0, 1080.0));
+    assert!((stretched.w - 1080.0 * aspect).abs() < 0.01, "{stretched:?}");
+    assert_ne!(label(&mut app), before);
+    app.world_mut().resource_mut::<HudConfig>().fit = HudFit::Centred;
+    app.update();
+    assert_eq!(hud(&app), centred);
+    assert_eq!(label(&mut app), before);
+}
+
 #[test]
 fn armada1_separate_panels_respect_no_flags_and_missing_text_areas() {
     let raw = A1_RESOURCES.replace("dilithiumTextArea = 14 1 60 13", "dilithiumTextArea = 0 0 0 0") + "noCrew = 1\n";
