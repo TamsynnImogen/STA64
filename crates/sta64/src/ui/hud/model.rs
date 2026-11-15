@@ -187,7 +187,7 @@ pub enum Act {
     Special(u8),
     /// UI-02's stop on the own selection.
     Stop,
-    /// UI-only station command. There is no sim order or refill implementation yet.
+    /// Station crew recovery from the player's pool.
     Recrew,
     /// UI-02's formation on the own selection.
     Formation(u8),
@@ -213,6 +213,8 @@ pub enum TargetMode {
     Rally,
     /// The stock COLONIZE command: pick a planet for the colony ships.
     Colonize,
+    /// The stock TRANSPORT command: pick a ship or station to beam crew to or board.
+    Transport,
 }
 
 /// How a button looks.
@@ -341,6 +343,7 @@ fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
         Act::Back => (vec!["b_back".into()], false),
         Act::Target(TargetMode::Mine) => (vec!["b_harvest".into()], false),
         Act::Target(TargetMode::Colonize) => (vec!["b_colonize".into()], false),
+        Act::Target(TargetMode::Transport) => (vec!["b_transport".into()], false),
         Act::Cancel(_) => (vec!["b_cancel".into()], false),
         Act::Formation(_) => (Vec::new(), false),
         // No verified native ID for these actions; use the existing label.
@@ -472,6 +475,12 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
     if caps.colonize {
         out.push(button(8, &tr("Colonize"), Act::Target(TargetMode::Colonize), &tooltip_key("Colonize")));
     }
+    if caps.transport {
+        let mut b = button(14, &tr("Transport"), Act::Target(TargetMode::Transport), &tooltip_key("Transport"));
+        // Shown in its stock place but greyed when the sim would refuse (no transporter crew, Armada I).
+        if !caps.transport_ready { b.look = Look::Locked; }
+        out.push(b);
+    }
     if caps.recrew {
         let mut b = button(9, &tr("Recrew"), Act::Recrew, &tooltip_key("Recrew"));
         if !caps.recrew_ready { b.look = Look::Locked; }
@@ -493,7 +502,11 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
     let own = feed.own_selection();
     let caps = commands::shared(feed);
     match act {
-        Act::OpenBuild | Act::OpenFormations | Act::OpenNativeMenu(_) | Act::Back | Act::Target(_) | Act::NativeFormation(_) | Act::Recrew => None,
+        Act::OpenBuild | Act::OpenFormations | Act::OpenNativeMenu(_) | Act::Back | Act::Target(_) | Act::NativeFormation(_) => None,
+        Act::Recrew => {
+            let units = commands::recrew_stations(feed, &own);
+            (!units.is_empty()).then(|| (CommandKind::Order(Order::Recrew { units: units.clone(), on: None }), units))
+        }
         Act::Stop if caps.stop => {
             Some((CommandKind::Order(Order::Stop { units: own.clone() }), own))
         }

@@ -52,9 +52,14 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// appends mission-set relations between seats (SIM-63). Format 27 appends the
 /// planet population rows and colony ship orders (SIM-30). Format 28 appends the
 /// scripted warp speeds (LUA-31). Format 29 appends the transporter orders,
-/// parties in flight and shield holds (SIM-46).
+/// parties in flight and shield holds (SIM-46). Format 31 appends station
+/// recrew activation and damage-pause rows (SIM-70); 30 is reserved by LUA-32.
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 29;
+pub const FORMAT_VERSION: u16 = 31;
+
+#[cfg(test)]
+#[path = "snapshot/recrew_tests.rs"]
+mod recrew_tests;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -476,6 +481,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&self.colonies.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&WarpRec { version: 1, rows: self.warp_overrides() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.transports.to_rec()).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&self.recrew.to_rec()).expect("snapshot serialises"));
         out
     }
 
@@ -550,6 +556,7 @@ impl Sim {
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown warp speed record version".into())); }
         let warp_override_rows = record.rows;
         let (transport_rec, rest): (crate::combat::boarding::TransportsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        let (recrew_rec, rest): (crate::recrew::RecrewRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -687,6 +694,8 @@ impl Sim {
             |id| content.as_deref().zip(units.get(id)).and_then(|(db, u)| db.unit(u.def)).is_some_and(|d| d.planet_role == Some(sta_content::PlanetRole::Producer)),
         ).ok_or_else(|| corrupt("colony rows"))?;
         let transports = crate::combat::boarding::Transports::from_rec(transport_rec, |id| units.contains(id)).ok_or_else(|| corrupt("transport rows"))?;
+        let recrew = crate::recrew::Recrews::from_rec(recrew_rec, &units, b.tick)
+            .ok_or_else(|| SnapshotError::Corrupt("invalid station recrew record".into()))?;
         let mut economy = crate::economy::Economy::from_rec(&b.economy);
         economy.restore_personnel(personnel_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         economy.restore_adjust(adjust_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
@@ -725,6 +734,7 @@ impl Sim {
             appearance_factions,
             colonies,
             transports,
+            recrew,
         };
         sim.refresh_seat_rules();
         Ok(sim)

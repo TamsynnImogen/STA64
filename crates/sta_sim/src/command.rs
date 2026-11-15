@@ -110,7 +110,7 @@ pub enum Order {
     Transport { units: Vec<EntityId>, target: EntityId, attack: bool },
     /// Request station crew recovery from the player's crew pool (SIM-70).
     /// `None` toggles the current state; `Some(on)` sets it explicitly.
-    /// Rejected without changing state until the recrew runtime is integrated.
+    /// Recovery consumes the owning player's live crew pool; see [`crate::recrew`].
     /// Appended tag 19 preserves every preceding Order tag and payload.
     Recrew { units: Vec<EntityId>, on: Option<bool> },
     /// Guard a ward (LUA-39; mission `SetCommandWhat*VO` with GUARD, 23): each
