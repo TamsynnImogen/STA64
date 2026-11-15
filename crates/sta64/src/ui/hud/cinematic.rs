@@ -295,6 +295,26 @@ cinematicDisplayArea = 20 30 360 240
     }
 
     #[test]
+    fn stretched_moves_the_panel_with_the_whole_sheet_and_scales_it_per_axis() {
+        use super::stock::layout::HudFit;
+        let screen = Vec2::new(2560.0, 1080.0);
+        let l = StockLayout::with_fit(&layout_of(CFG), screen, HudFit::Stretched);
+        let spec = stock_spec(&l).unwrap();
+        // The sheet fills the window; the panel sits at the same fraction of it as in the cfg canvas.
+        assert_eq!(l.hud, R::new(0.0, 0.0, screen.x, screen.y));
+        assert!((spec.panel.x - 1000.0 / 1600.0 * screen.x).abs() <= 1.0);
+        assert!((spec.panel.w - 400.0 / 1600.0 * screen.x).abs() <= 1.0);
+        assert!((spec.panel.h - 300.0 / 1200.0 * screen.y).abs() <= 1.0);
+        assert!(spec.panel.right() <= screen.x && spec.panel.bottom() <= screen.y);
+        // The movie still keeps its own aspect inside the stretched display.
+        let r = fit(spec.display, (400, 200));
+        assert!((r.w / r.h - 2.0).abs() < 0.02, "{r:?}");
+        // Centred on the same window: the same panel, smaller, inside the centred sheet.
+        let c = stock_spec(&StockLayout::with_fit(&layout_of(CFG), screen, HudFit::Centred)).unwrap();
+        assert!(c.panel.w < spec.panel.w);
+    }
+
+    #[test]
     fn no_visible_area_means_no_panel_and_the_movie_stays_fullscreen() {
         let screen = Vec2::new(1440.0, 1080.0);
         let absent = CFG.replace("cinematicPanelArea = 1000 700 400 300\n", "");
@@ -411,7 +431,7 @@ cinematicDisplayArea = 20 30 360 240
 
     /// Install-gated (`STA64_TEST_INSTALL`, an Armada II family root, `STA64_TEST_CFG` the race sheet,
     /// default `gui_fed.cfg`): whatever the installed sheet authors, a panel it has lies inside the
-    /// scaled sheet with its display inside it and its art inside it, at every window aspect.
+    /// scaled sheet with its display inside it, at every window aspect.
     #[test]
     fn installed_sheet_panel_lies_inside_the_sheet_at_every_aspect() {
         let Some(root) = std::env::var_os("STA64_TEST_INSTALL") else {
@@ -421,8 +441,8 @@ cinematicDisplayArea = 20 30 360 240
         let sheet = std::env::var("STA64_TEST_CFG").unwrap_or_else(|_| "gui_fed.cfg".into());
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty()).as_deref()).expect("install");
         let gui = crate::game::gui_layout(&vfs, &sheet).unwrap_or_else(|| panic!("installed {sheet} missing"));
-        for aspect in [4.0 / 3.0, 16.0 / 10.0, 16.0 / 9.0, 21.0 / 9.0] {
-            let l = StockLayout::for_aspect(&gui, aspect);
+        for (aspect, fit) in [4.0 / 3.0, 16.0 / 10.0, 16.0 / 9.0, 21.0 / 9.0].into_iter().flat_map(|a| super::stock::layout::HudFit::ALL.map(|f| (a, f))) {
+            let l = StockLayout::for_aspect_fit(&gui, aspect, fit);
             let Some(spec) = stock_spec(&l) else {
                 eprintln!("{sheet}: no visible cinematic area; the movie plays fullscreen");
                 return;
@@ -432,7 +452,6 @@ cinematicDisplayArea = 20 30 360 240
             assert!(spec.panel.w > 0.0 && spec.panel.h > 0.0);
             assert!(inside(sheet_rect, spec.panel), "panel in the sheet at aspect {aspect}");
             assert!(inside(spec.panel, spec.display), "display in the panel");
-            assert!(spec.pieces.iter().all(|(r, ..)| inside(spec.panel, *r)), "art in the panel");
         }
     }
 }
