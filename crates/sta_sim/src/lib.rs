@@ -202,6 +202,8 @@ pub struct Sim {
     // and latinum rules; fixed by the setup, so peers agree.)
     /// Planet population and colony ship orders (SIM-30); in the digest once any exists.
     colonies: colony::Colonies,
+    /// Transporter orders, parties in flight and shield holds (SIM-46); in the digest once any exists.
+    transports: combat::boarding::Transports,
 }
 
 impl Sim {
@@ -241,6 +243,7 @@ impl Sim {
             team_changes: Vec::new(),
             appearance_factions: Vec::new(),
             colonies: Default::default(),
+            transports: Default::default(),
         }
     }
 
@@ -278,6 +281,7 @@ impl Sim {
         let ok = self.apply_command(c);
         if ok && let command::CommandKind::Order(o) = &c.kind {
             self.colonies_after_order(c.player, o);
+            self.transports_after_order(c.player, o);
         }
         ok
     }
@@ -425,6 +429,7 @@ impl Sim {
             | Order::AttackPoint { .. }
             | Order::MoveWarp { .. } => self.apply_scripted(c.player, order),
             Order::Colonize { units, planet } => self.apply_colonize(c.player, units, *planet),
+            Order::Transport { units, target, attack } => self.apply_transport(c.player, units, *target, *attack),
             Order::Rally { builders, at } => {
                 let Some(db) = self.content.as_deref() else { return false };
                 self.production.order_rally(db, &self.units, c.player, builders, *at)
@@ -463,7 +468,9 @@ impl Sim {
         self.separate_units();
         self.push_out_of_fields();
         if let Some(db) = self.content.clone() {
-            combat::damage::recharge(&mut self.units, &db, &self.switches, &self.subsystems);
+            let returned = self.transports.expire(self.tick);
+            self.restore_carrier_shields(&returned);
+            combat::damage::recharge(&mut self.units, &db, &self.switches, &self.subsystems, &self.transports);
             self.activate_team_change_weapons(&db);
             let cloak_from = self.events.len();
             self.specials.step(&mut self.units, &db, &mut self.events);
@@ -485,6 +492,9 @@ impl Sim {
             let mut lost = Vec::new();
             let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
             let killed = combat::damage::apply(&mut self.units, &db, &mut self.events, from, &mut casualties);
+            // Pulses and arrivals after the hits, before the latch upkeep (SIM-46).
+            self.step_transports();
+            let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
             combat::casualty::step(&mut self.units, &db, &mut casualties);
             for (id, by) in killed {
                 lost.extend(self.units.get(id).map(|u| u.owner));
@@ -668,6 +678,10 @@ impl Sim {
         }
         // LUA-31: scripted warp speeds (nothing is hashed without an override).
         self.hash_warp_overrides(&mut h);
+        // SIM-46: transporter orders, parties in flight, shield holds (nothing is hashed without them).
+        if !self.transports.is_empty() {
+            self.transports.hash_into(&mut h);
+        }
         // LUA-32: alert levels, enemy hits (while a level exists) and ally attack counters.
         self.alerts.hash_into(&mut h);
         let crew_count = self.units.iter().filter(|unit| unit.crew.is_some()).count();

@@ -57,6 +57,7 @@ use sta_sim::SimEvent;
 mod a1;
 mod a2;
 mod alert;
+pub(crate) use a2::team_strength;
 mod entity;
 mod edit_feedback;
 pub(crate) mod set_relation;
