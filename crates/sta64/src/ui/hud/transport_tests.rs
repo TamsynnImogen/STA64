@@ -99,8 +99,8 @@ fn the_button_is_greyed_when_the_sim_would_refuse_every_carrier() {
     // A mixed selection is ready when any ship can; the other gets nothing.
     assert!(ready(&feed(&[2, 1])));
     assert!(commands::shared(&feed(&[2])).transport_family, "low crew in a family that allows it");
-    // Armada I (and Native): the sim refuses today, so the button is greyed. This follows `family_can_transport`
-    // (one helper, switched when the sim's Armada I rule lands), not a hard-coded profile check at the button.
+    // Armada I (and Native): the sim refuses today, so the button is greyed. This follows the sim's
+    // `transport_allowed` (switched when the sim's Armada I rule lands), not a hard-coded profile check at the button.
     for p in [Profile::Native, Profile::Sta1Classic] {
         let f = feed_in(p, &[1], |_| {});
         assert_eq!(button(&f).map(|b| b.look), Some(Look::Locked), "{p:?}");
