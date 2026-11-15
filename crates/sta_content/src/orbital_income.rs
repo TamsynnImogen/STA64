@@ -9,11 +9,13 @@
 //!
 //! - Station (`p_mining` only): `miningMultiplier`, `resourcesCanHandle`.
 //! - Resource node (the ODF a planet's `resource` names): `miningRate`,
-//!   `trickleAmount`, `trickleMiningRateFraction`, `infinite`, `amt<slot>`.
+//!   `trickleAmount`, `trickleMiningRateFraction`, `isInfinite`, `amt<slot>`.
 //! - Race: `miningRateModifier` (see [`crate::Races::mining_rate_modifiers`]).
 //!
-//! Nothing here changes what a node starts with or how freighters mine; the
-//! sim does not read these fields yet.
+//! Nothing in this crate applies them; what a node starts with and how it
+//! mines is the sim's (SIM-72). `isInfinite` is the Armada II family's node key (read
+//! from data); Armada I's inexhaustible moon carries `infinite` on the moon's own
+//! ODF, which has no resource node, so it is not typed here.
 
 use sta_core::Fixed;
 use sta_odf::Odf;
@@ -48,7 +50,7 @@ pub struct NodeIncome {
     pub trickle_amount: Option<Fixed>,
     /// `trickleMiningRateFraction`: the share of `miningRate` yielded at the floor.
     pub trickle_fraction: Option<Fixed>,
-    /// `infinite`: the node never depletes.
+    /// `isInfinite` of the node ODF: the node never depletes (`0` is `Some(false)`).
     pub infinite: Option<bool>,
     /// `amt<slot>` per slot: the quantity the ODF names. Not what a node
     /// starts with in the sim today.
@@ -107,10 +109,10 @@ pub(crate) fn resolve_station(
 
 /// The node keys; `None` when the node has none of them.
 pub(crate) fn resolve_node(file: &str, node: &Odf, warnings: &mut Vec<Warning>) -> Option<NodeIncome> {
-    let infinite = node.raw("infinite").and_then(|raw| {
-        let flag = node.bool("infinite");
+    let infinite = node.raw("isInfinite").and_then(|raw| {
+        let flag = node.bool("isInfinite");
         if flag.is_none() {
-            warnings.push(Warning::new(file, format!("infinite = {raw} is not a flag; ignored")));
+            warnings.push(Warning::new(file, format!("isInfinite = {raw} is not a flag; ignored")));
         }
         flag
     });

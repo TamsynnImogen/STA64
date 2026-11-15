@@ -1,10 +1,11 @@
 //! The typed rules of `RTS_CFG.h` (D9): officer limits, the path planner,
 //! the keys Classic Enhanced changes, and each race's starting forces. No
-//! raw header value reaches the simulation; every value here is an entry of
-//! the content digest ([`Rules::digest_entries`], D10).
+//! raw header value reaches the simulation; every value here is an
+//! entry of the content digest ([`Rules::digest_entries`], D10), except
+//! [`TransporterRules`] (SIM-46 P0), which the sim does not read yet.
 
 use crate::digest::{Canon, DigestEntry, quoted};
-use crate::{RaceRepair, Races, SeatRaceRule, Warning};
+use crate::{RaceBoarding, RaceRepair, Races, SeatRaceRule, Warning};
 use sta_assets::cfg_h::CfgH;
 use sta_core::Fixed;
 
@@ -33,12 +34,18 @@ pub struct Rules {
     race_repairs: Vec<(String, RaceRepair)>,
     /// `miningRateModifier` by lower-case race key (CON-51), only races that author one.
     race_mining: Vec<(String, Fixed)>,
+    /// Authored race boarding keys by lower-case race key (SIM-46 P0), only
+    /// the races that set any. Not in the content digest until the sim reads them.
+    race_boarding: Vec<(String, RaceBoarding)>,
     /// `RTS_CFG.h`'s default craft autonomy, when the header sets either key.
     autonomy: Option<AutonomyRules>,
     /// `RTS_CFG.h`'s attack warp distance (SIM-36), when the header sets it.
     approach: Option<ApproachRules>,
     /// Planet population levels and growth (SIM-30), when the header sets all of them.
     population: Option<PopulationRules>,
+    /// `RTS_CFG.h`'s transporter keys (SIM-46 P0), when the header sets any.
+    /// Not in the content digest until the sim reads them.
+    transporter: Option<TransporterRules>,
     /// The other typed `RTS_CFG.h` keys.
     pub cfg: CfgRules,
     /// Armada I's header-level start (`cfgStarting*`), see [`LegacyStart`].
@@ -221,6 +228,73 @@ impl ApproachRules {
                 None
             }
         }
+    }
+}
+
+/// The transporter keys of `RTS_CFG.h` (SIM-46 P0): reach, delays and the
+/// number of simultaneous transports. Defaults are the engine's own when the
+/// header leaves a key out (read from the executable, static; Armada I's
+/// executable was not analysed). The header's values are read from the data
+/// and differ between games and mods.
+///
+/// Typed and exposed only: no sim system applies them yet, so a mod's change
+/// is still reported as ignored by the coverage report ("read means applied")
+/// and they are not in the content digest ([`Rules::digest_entries`]) until
+/// the sim reads them, so no existing content hash moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransporterRules {
+    /// `TRANSPORTER_RANGE` (float, 300).
+    pub range: Fixed,
+    /// `TRANSPORTER_DELAY`, seconds (float, 1.0).
+    pub delay: Fixed,
+    /// `TRANSPORTER_ACTION_DELAY`, seconds (float, 1.0).
+    pub action_delay: Fixed,
+    /// `TRANSPORTER_MAX` (int, 5).
+    pub max: i64,
+}
+
+impl Default for TransporterRules {
+    fn default() -> Self {
+        TransporterRules { range: Fixed::from_int(300), delay: Fixed::ONE, action_delay: Fixed::ONE, max: 5 }
+    }
+}
+
+impl TransporterRules {
+    /// The header keys, in field order.
+    const KEYS: [&'static str; 4] = ["TRANSPORTER_RANGE", "TRANSPORTER_DELAY", "TRANSPORTER_ACTION_DELAY", "TRANSPORTER_MAX"];
+
+    fn from_cfg(cfg: &CfgH, warnings: &mut Vec<Warning>) -> Option<Self> {
+        if !Self::KEYS.iter().any(|k| cfg.raw(k).is_some()) {
+            return None;
+        }
+        let d = Self::default();
+        let mut warn = |key: &str, what: &str| warnings.push(Warning::new("RTS_CFG.h", format!("{key} is not {what}; the engine default is used")));
+        let mut real = |key: &str, default: Fixed| {
+            if cfg.raw(key).is_none() {
+                return default;
+            }
+            // As the header's `float` reads (f32); clamped so the fixed point holds it.
+            match cfg.f32(key).filter(|v| v.is_finite() && *v >= 0.0) {
+                Some(v) => Fixed::from_f64(f64::from(v.min(1.0e9))),
+                None => {
+                    warn(key, "a non-negative number");
+                    default
+                }
+            }
+        };
+        let (range, delay, action_delay) = (real(Self::KEYS[0], d.range), real(Self::KEYS[1], d.delay), real(Self::KEYS[2], d.action_delay));
+        let max = if cfg.raw(Self::KEYS[3]).is_none() {
+            d.max
+        } else {
+            match cfg.i64(Self::KEYS[3]).filter(|v| *v >= 0) {
+                Some(v) => v.min(1_000_000),
+                None => {
+                    warnings.push(Warning::new("RTS_CFG.h", format!("{} is not a non-negative whole number; the engine default is used", Self::KEYS[3])));
+                    d.max
+                }
+            }
+        };
+        Some(TransporterRules { range, delay, action_delay, max })
     }
 }
 
@@ -522,6 +596,7 @@ impl Rules {
         rules.autonomy = AutonomyRules::from_cfg(&cfg, &mut warnings);
         rules.approach = ApproachRules::from_cfg(&cfg, &mut warnings);
         rules.cfg = CfgRules::from_cfg(&cfg, &mut warnings);
+        rules.transporter = TransporterRules::from_cfg(&cfg, &mut warnings);
         (rules, warnings)
     }
 
@@ -550,7 +625,7 @@ impl Rules {
     }
 
     /// The race's `miningRateModifier`, `None` when the race authors none (the
-    /// engine default was not read). Not applied by the sim yet.
+    /// engine default was not read). Content only: the sim's use of it is SIM-72's.
     pub fn race_mining_rate_modifier(&self, race: &str) -> Option<Fixed> {
         let race = race.trim();
         self.race_mining.iter().find(|(k, _)| k.eq_ignore_ascii_case(race)).map(|(_, v)| *v)
@@ -578,6 +653,20 @@ impl Rules {
         rows.sort_by(|a, b| a.0.cmp(&b.0));
         rows.dedup_by(|a, b| a.0 == b.0);
         self.race_repairs = rows;
+        self
+    }
+
+    /// The boarding keys of a race by its key (`unitedfederation`), any case:
+    /// the race ODF's values with the engine defaults for absent keys, and all
+    /// defaults for a race that sets none (SIM-46 P0; typed, not digested yet).
+    pub fn race_boarding(&self, name: &str) -> RaceBoarding {
+        let n = name.trim().to_ascii_lowercase();
+        self.race_boarding.iter().find(|(k, _)| *k == n).map(|(_, b)| b.clone()).unwrap_or_default()
+    }
+
+    /// Set the race boarding keys (tests and content built in code).
+    pub fn with_race_boarding(mut self, rows: Vec<(String, RaceBoarding)>) -> Self {
+        self.race_boarding = rows.into_iter().map(|(k, b)| (k.trim().to_ascii_lowercase(), b)).collect();
         self
     }
 
@@ -611,6 +700,18 @@ impl Rules {
     /// Set the default autonomy (tests and content built in code).
     pub fn with_autonomy(mut self, autonomy: AutonomyRules) -> Self {
         self.autonomy = Some(autonomy);
+        self
+    }
+
+    /// The transporter rules: the header's values, the engine's defaults for
+    /// the keys it leaves out (SIM-46 P0; the sim does not read them yet).
+    pub fn transporter(&self) -> TransporterRules {
+        self.transporter.unwrap_or_default()
+    }
+
+    /// Set the transporter rules (tests and content built in code).
+    pub fn with_transporter(mut self, transporter: TransporterRules) -> Self {
+        self.transporter = Some(transporter);
         self
     }
 
@@ -657,6 +758,7 @@ impl Rules {
         rules.seat_races = races.seat_rules().map(|(k, r)| (k.to_owned(), r)).collect();
         rules.race_mining = races.mining_rate_modifiers().map(|(k, v)| (k.to_owned(), v)).collect();
         rules = rules.with_race_repairs(races.repair_rules().map(|(stem, repair)| (stem.to_owned(), repair)).collect());
+        rules.race_boarding = races.boarding_rules().map(|(k, b)| (k.to_owned(), b.clone())).collect();
         Ok((rules, warnings))
     }
 

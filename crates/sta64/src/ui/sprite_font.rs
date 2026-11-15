@@ -14,6 +14,13 @@
 //! three on 256 wide ones) and holds the single-byte glyphs the game draws as pictures
 //! (resource symbols at 0x80 and up) like any other code. Text is Windows-1252.
 //!
+//! **Armada I's form** (`Sprites/font.spr`, `font_jag.spr`, read from data) is the same two
+//! strips with three differences: one `@reference=<n>` for both axes, `#` label lines
+//! between the strip's runs of glyphs, and a single `char<TAB>texture<TAB>0<TAB>0<TAB>0<TAB>height<TAB>@anim=..<TAB>@anim=..`
+//! line in place of the `page` lines. [`SpriteFont::parse`] takes either by content.
+//! Advance is the strip width, as for the other form; the sheets leave one column
+//! between cells, so whether the original adds it to the advance is not measured.
+//!
 //! [`SpriteFont::parse`] and [`SpriteFont::layout`] are pure; [`SpriteFontPlugin`]
 //! loads every font of the mounted install into [`SpriteFonts`] and turns each
 //! [`SpriteText`] into glyph nodes, or into a plain `Text` when there is no font.
@@ -55,7 +62,7 @@ pub struct Page {
 pub struct SpriteFont {
     /// File stem as the VFS reports it (lower case), e.g. `fontsmall`.
     pub name: String,
-    /// `@referenceWidth`/`@referenceHeight` when the file sets them.
+    /// `@referenceWidth`/`@referenceHeight`, or Armada I's single `@reference=`, when the file sets them.
     pub reference: Option<[f32; 2]>,
     pub pages: Vec<Page>,
 }
@@ -73,11 +80,14 @@ impl SpriteFont {
                 .find_map(|l| l.strip_prefix(key))
                 .and_then(|v| v.split('#').next()?.trim().parse::<f32>().ok())
         };
+        // Armada II's form sets `@referenceWidth`/`@referenceHeight`; Armada I's sets one
+        // `@reference=<n>` for both axes.
         let reference = num("@referenceWidth=")
             .zip(num("@referenceHeight="))
-            .map(|(w, h)| [w, h]);
+            .map(|(w, h)| [w, h])
+            .or_else(|| num("@reference=").map(|n| [n, n]));
         let mut pages = Vec::new();
-        for l in lines.iter().filter(|l| l.starts_with("page")) {
+        for l in lines.iter().filter(|l| is_page_line(l)) {
             let f: Vec<&str> = l.split('\t').collect();
             let texture = f.get(1).map(|s| s.trim()).unwrap_or("");
             // The glyph height is the last plain number before the `@anim=` fields (Roots'
@@ -97,8 +107,15 @@ impl SpriteFont {
             let (Some(uv_id), Some(w_id)) = (strip_of("_uv"), strip_of("_w")) else {
                 continue;
             };
-            let uv = strip(&lines, uv_id);
-            let w = strip(&lines, w_id);
+            let a1 = is_char_line(l);
+            let mut uv = strip(&lines, uv_id, a1);
+            let w = strip(&lines, w_id, a1);
+            // Armada I's strips run one corner past the last width (one corner more
+            // than widths); a corner with no width cannot be drawn and is dropped. Fewer corners
+            // than widths is a damaged table.
+            if a1 && uv.len() == w.len() + 1 && !w.is_empty() {
+                uv.truncate(w.len());
+            }
             if texture.is_empty() || height <= 0.0 || uv.is_empty() || uv.len() != w.len() {
                 continue;
             }
@@ -435,9 +452,24 @@ impl GlyphWords {
     }
 }
 
+/// A page line: `page<a,b,c>` in Armada II's files, a single `char` line in Armada I's
+/// (`char<TAB>texture<TAB>0<TAB>0<TAB>0<TAB>height<TAB>@anim=..`). Both carry the texture,
+/// the glyph height and the two `@anim=` strips. Detected by the line, not by the game.
+fn is_page_line(l: &str) -> bool {
+    l.starts_with("page") || is_char_line(l)
+}
+
+/// Armada I's form of the page line. Only this form gets the Armada I leniencies (comment
+/// lines inside strips, one corner more than widths): Armada II family files in the other
+/// form load exactly as before.
+fn is_char_line(l: &str) -> bool {
+    l.strip_prefix("char").is_some_and(|rest| rest.starts_with(['\t', ' ']))
+}
+
 /// The numbers of an animation strip: one entry per line after `@keyframes`, up to the
-/// first blank or `@` line.
-fn strip(lines: &[&str], id: &str) -> Vec<Vec<f32>> {
+/// first blank or `@` line. With `skip_comments` (Armada I's form), lines holding only a `#` comment (Armada I labels each run of
+/// glyphs that way) are skipped; they do not end the strip.
+fn strip(lines: &[&str], id: &str, skip_comments: bool) -> Vec<Vec<f32>> {
     let Some(at) = lines
         .iter()
         .position(|l| l.starts_with("@animation") && l.split_whitespace().nth(1) == Some(id))
@@ -447,7 +479,11 @@ fn strip(lines: &[&str], id: &str) -> Vec<Vec<f32>> {
     let mut out = Vec::new();
     let mut started = false;
     for l in &lines[at + 1..] {
+        let raw = l.trim();
         let l = l.split('#').next().unwrap_or("").trim();
+        if skip_comments && started && l.is_empty() && raw.starts_with('#') {
+            continue;
+        }
         if !started {
             started = l == "@keyframes";
             continue;
@@ -2300,6 +2336,151 @@ mod tests {
                     assert!(lay.quads.iter().all(|q| q.rect.iter().all(|v| v.fract() == 0.0)), "{label}: {}", font.name);
                 }
             }
+        }
+    }
+
+    /// An authored font in Armada I's form: one `@reference`, comment-only labels inside the
+    /// strips, a trailing `char` line instead of `page` lines. Arbitrary numbers.
+    fn a1_form(n: usize) -> String {
+        let mut s = String::from("sprite_table\r\n\r\n@skip=off\r\n\r\n@reference=64\r\n@tmaterial=x #c\r\n\r\n@animation f_uv\r\noffset 99 0.0 step\r\n@keyframes\r\n# Space\r\n");
+        for i in 0..n {
+            if i == 3 {
+                s.push_str("# 'D'\r\n");
+            }
+            s.push_str(&format!("{}\t{}\t#c\r\n", (i % 8) * 7, (i / 8) * 9));
+        }
+        s.push_str("\r\n\r\n@animation f_w\r\nwidth 99 0.0 step\r\n@keyframes\r\n# Space\r\n");
+        for i in 0..n {
+            if i == 2 {
+                s.push_str("# label\r\n");
+            }
+            s.push_str(&format!("{}\t\r\n", 3 + i % 3));
+        }
+        s.push_str("\r\n# Name  File  U V W H\r\nchar\tsheet\t0\t0\t0\t8\t@anim=f_uv\t@anim=f_w\r\n");
+        s
+    }
+
+    #[test]
+    fn armada_i_form_parses_with_labels_and_a_single_reference() {
+        let f = SpriteFont::parse("font", &a1_form(20)).unwrap();
+        assert_eq!(f.reference, Some([64.0, 64.0]));
+        assert_eq!((f.pages.len(), f.len(), f.height()), (1, 20, 8.0));
+        assert_eq!(f.pages[0].texture, "sheet");
+        // Code 0x2A is glyph 10: column 2, row 1; widths cycle 3, 4, 5.
+        assert_eq!(f.glyph(0x2A).unwrap().1, GlyphEntry { x: 14.0, y: 9.0, w: 4.0 });
+        // Advances are the strip widths; the line is one glyph height.
+        let l = f.layout("01\n23", 1.0);
+        assert_eq!(l.height, 16.0);
+        assert_eq!(l.quads.len(), 4);
+        // Both forms parse by content: the Armada II sample still reads as two pages.
+        assert_eq!(SpriteFont::parse("F", SAMPLE).unwrap().pages.len(), 2);
+    }
+
+    #[test]
+    fn armada_i_form_without_matching_strips_is_no_font() {
+        let broken = a1_form(20).replace("@anim=f_w", "@anim=f_x");
+        assert!(SpriteFont::parse("font", &broken).is_none());
+        // A corner with no width at the end is dropped; a width with no corner is damage.
+        let extra_corner = a1_form(20).replacen("\r\n\r\n\r\n@animation f_w", "\r\n99\t99\r\n\r\n@animation f_w", 1);
+        assert_eq!(SpriteFont::parse("font", &extra_corner).unwrap().len(), 20);
+        let fewer_uv = a1_form(20).replacen("0\t0\t#c\r\n", "", 1);
+        assert!(SpriteFont::parse("font", &fewer_uv).is_none());
+    }
+
+    /// Armada II's `page` form keeps its old rule: a comment-only line inside a strip ends it,
+    /// so the font is rejected exactly as before, and a surplus corner is not trimmed.
+    #[test]
+    fn page_form_keeps_its_strict_strips() {
+        let labelled = SAMPLE.replacen("@keyframes\n0\t0", "@keyframes\n# label\n0\t0", 1);
+        // The damaged page is dropped (page b of the sample survives), as before.
+        assert_eq!(SpriteFont::parse("F", &labelled).unwrap().pages.len(), 1);
+        let extra = SAMPLE.replacen("\n\n@animation f_a_w", "\n30\t0\n\n@animation f_a_w", 1);
+        assert_eq!(SpriteFont::parse("F", &extra).unwrap().pages.len(), 1);
+        assert_eq!(SpriteFont::parse("F", SAMPLE).unwrap().pages.len(), 2);
+    }
+
+    /// Install-gated, Armada II family: a file in the `page` form with a comment-only line
+    /// inside a strip is not read (as before), so the set of loaded fonts is unchanged.
+    #[test]
+    fn page_form_fonts_with_labels_stay_unloaded_on_installed_a2_family() {
+        for (label, root, m) in installs() {
+            let Ok(vfs) = Vfs::mount_install(&root, m.as_deref()) else { continue };
+            let loaded: Vec<String> = read_fonts(&vfs).into_iter().map(|f| f.name.to_ascii_lowercase()).collect();
+            for path in vfs.list("sprites") {
+                let file = path.rsplit('/').next().unwrap_or(&path).to_ascii_lowercase();
+                if !file.starts_with("font") || !file.ends_with(".spr") {
+                    continue;
+                }
+                let Some(Ok(bytes)) = vfs.read(&path) else { continue };
+                let text = String::from_utf8_lossy(&bytes);
+                let lines: Vec<&str> = text.lines().map(str::trim).collect();
+                let labelled = lines.windows(2).any(|w| w[0] == "@keyframes" && w[1].starts_with('#'));
+                let has_char = lines.iter().any(|l| is_char_line(l));
+                if labelled && !has_char {
+                    assert!(
+                        !loaded.contains(&file[..file.len() - 4].to_owned()),
+                        "{label}: {file} loads although a strip starts with a comment line"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The same authored table drawn through a mod's `Sprites/font.spr` is found by
+    /// `read_fonts` next to nothing else.
+    #[test]
+    fn read_fonts_loads_armada_i_named_files() {
+        let dir = std::env::temp_dir().join(format!("sta64-a1font-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Sprites")).unwrap();
+        for name in ["font.spr", "font_jag.spr"] {
+            std::fs::write(dir.join("Sprites").join(name), a1_form(95)).unwrap();
+        }
+        let mut vfs = Vfs::default();
+        vfs.push_dir("root".into(), dir.clone()).unwrap();
+        let mut names: Vec<_> = read_fonts(&vfs).into_iter().map(|f| f.name).collect();
+        names.sort();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(names, ["font", "font_jag"]);
+    }
+
+    /// Install-gated: Armada I's `font.spr` and `font_jag.spr` load, and every printable
+    /// ASCII glyph has a non-empty rectangle inside its texture (letters and digits have ink). Asserts general rules only; nothing of the files is kept.
+    #[test]
+    fn armada_i_installed_fonts_load() {
+        let root = Path::new(HEROIC).join("Star Trek Armada");
+        let Ok(vfs) = Vfs::mount_install(&root, None) else {
+            eprintln!("Armada I not installed: skipped");
+            return;
+        };
+        let fonts = read_fonts(&vfs);
+        for stem in ["font", "font_jag"] {
+            let Some(f) = fonts.iter().find(|f| f.name.eq_ignore_ascii_case(stem)) else {
+                if vfs.read(&format!("sprites/{stem}.spr")).is_some() {
+                    panic!("{stem}: not read");
+                }
+                eprintln!("{stem}: not in this install: skipped");
+                continue;
+            };
+            assert!(f.height() > 0.0, "{stem}: no line height");
+            let (px, size) = decode_page(&vfs, &f.pages[0].texture)
+                .unwrap_or_else(|| panic!("{stem}: texture {} missing", f.pages[0].texture));
+            for code in 0x20u8..0x7f {
+                let (p, g) = f.glyph(code).unwrap_or_else(|| panic!("{stem}: no glyph {code:#x}"));
+                assert!(g.w > 0.0, "{stem}: empty glyph {code:#x}");
+                let r = texel_rect(f.reference, size, [g.x, g.y, g.w, f.pages[p].height]);
+                assert!(
+                    r.min.x >= 0.0 && r.min.y >= 0.0 && r.max.x <= size.x as f32 && r.max.y <= size.y as f32,
+                    "{stem}: glyph {code:#x} outside its texture"
+                );
+                if code.is_ascii_alphanumeric() {
+                    let ink = (r.min.y as usize..r.max.y as usize)
+                        .flat_map(|y| (r.min.x as usize..r.max.x as usize).map(move |x| (x, y)))
+                        .any(|(x, y)| px[(y * size.x as usize + x) * 4 + 3] > 0);
+                    assert!(ink, "{stem}: glyph {code:#x} has no ink");
+                }
+            }
+            assert!(page_fit(f, 0, size, &px).is_none_or(|v| v >= MIN_FIT), "{stem}: strips do not fit the sheet");
         }
     }
 }

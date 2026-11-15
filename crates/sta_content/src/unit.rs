@@ -9,6 +9,7 @@
 //! | `hull`, `initial_hull` | `maxHealth`, optional `curHealth` (otherwise maximum) |
 //! | `shields`, `initial_shields` | `maxShield`/`maxShields`, `curShield`/`curShields`, `shieldRate` per second; A2/FO absent strength inherits health |
 //! | `crew`, `maximum_crew` | `crewCost` (starting/build amount), optional `maximumCrew` (otherwise `crewCost`) |
+//! | `transport` | `transporter`, `assault`, `boardingPartyStrength` (1.0), `disableShieldsOnTransport` (true), `weldingAnimSpeed`, `shieldDelay`, `eventTransport` (SIM-46 P0, typed only) |
 //! | `facility`, `has_crew` | optional `facility`, `has_crew` flags for station recrewing; explicit false is preserved |
 //! | `sensor` | `rangeScan` |
 //! | `attack_power` | `attackPower` (absent: `None`) |
@@ -148,6 +149,16 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
         d.crew_gain = r.fixed("maxCrewGain").min(Fixed::from_int(1_000_000_000));
     }
     d.sane_crew_loss = r.flag("saneCrewLossMethod").unwrap_or(false);
+    // SIM-46 P0: typed, not read by the sim yet. A non-number warns and keeps the default; negatives read as zero.
+    d.transport = crate::def::TransportDef {
+        transporter: r.flag("transporter"),
+        assault: r.flag("assault").unwrap_or(false),
+        boarding_party_strength: r.num("boardingPartyStrength").map_or(Fixed::ONE, |v| Fixed::from_f64(v.max(0.0))),
+        disable_shields_on_transport: r.flag("disableShieldsOnTransport").unwrap_or(true),
+        welding_anim_speed: r.num("weldingAnimSpeed").map(|v| Fixed::from_f64(v.max(0.0))),
+        shield_delay: r.num("shieldDelay").map(|v| Fixed::from_f64(v.max(0.0))),
+        event_transport: r.text("eventTransport"),
+    };
     d.system_hit_points = [
         r.fixed("enginesHitPoints"),
         r.fixed("weaponsHitPoints"),
