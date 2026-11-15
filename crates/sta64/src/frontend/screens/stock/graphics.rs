@@ -225,7 +225,7 @@ pub(super) fn body(c: &mut Box_, t: &Theme, s: &Settings, info: &GraphicsInfo, w
             Node { width: Val::Percent(100.0), min_width: Val::Px(0.0), align_items: AlignItems::Center, column_gap: Val::Px(t.gap), ..default() },
         ))
         .with_children(|f| {
-            let fits = crate::ui::hud::stock::layout::HudFit::ALL.map(|fit| format!("{}: {}", tr("HUD layout"), tr(fit.label())));
+            let fits = crate::ui::hud::stock::layout::HudFit::ALL.map(|fit| trf("HUD layout: {0}", &[&tr(fit.label())]));
             let refs: Vec<_> = fits.iter().map(String::as_str).collect();
             let picked = crate::ui::hud::stock::layout::HudFit::ALL.iter().position(|&fit| fit == s.hud_fit).unwrap_or(0);
             f.spawn((Node { width: Val::Px(selector_w), flex_shrink: 0.0, ..default() }, children![(dropdown(t, &refs, picked, selector_w), view::HudFitSelect)]));
