@@ -185,6 +185,12 @@ pub(crate) fn ghost_pick_radius(def: &sta_content::UnitDef) -> Option<f32> {
     if def.resource.is_some() {
         return Some(resource_pick_radius(r));
     }
+    // A map wormhole is a move target (a gate), drawn from its model by the map view; one seen
+    // again after leaving sight is drawn by the units view and has no model radius there.
+    // Inert until its definition carries a `radius` (WORKPLAN wormhole travel, PR #763).
+    if def.class.0.eq_ignore_ascii_case("wormhole_obj") && r > 0.0 {
+        return Some(r.max(5.0));
+    }
     (matches!(def.planet_role, Some(sta_content::PlanetRole::Producer)) && r > 0.0).then_some(r.max(5.0))
 }
 

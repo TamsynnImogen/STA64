@@ -192,6 +192,18 @@ fn def_of(link: &SimLink, id: EntityId) -> Option<ContentKey> {
 
 pub(crate) type Targetable<'w, 's> = Query<'w, 's, (&'static SimEntity, &'static SelectRadius, &'static GlobalTransform, Option<&'static Strategic>)>;
 
+/// Whether `id` may be targeted by the local player: with a local player, only what its team sees
+/// (a kept-drawn planet outside every sensor is no target, so no order, cursor or HUD click goes
+/// through the fog); without one (the bench, a view with no seat) everything drawn is, as is
+/// everything in a view that carries no visibility data. Hover and click selection apply the same rule.
+pub(crate) fn target_seen(view: &sta_sim::WorldView, local: Option<sta_sim::PlayerId>, id: EntityId) -> bool {
+    let Some(player) = local else { return true };
+    if view.visibility.is_empty() {
+        return true;
+    }
+    view.visibility.binary_search_by_key(&player, |v| v.0).is_ok_and(|i| view.visibility[i].1.binary_search(&id).is_ok())
+}
+
 /// The unit under the cursor: a strategic icon, else the nearest sphere on the ray.
 pub(crate) fn unit_under(cursor: Vec2, ray: Ray3d, units: &Targetable) -> Option<EntityId> {
     let icon = units
