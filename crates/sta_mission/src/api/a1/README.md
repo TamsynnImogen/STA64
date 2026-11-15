@@ -101,12 +101,23 @@ executables), and the delay of `FailMission` /
   `InAttackMode(unit)` whether it fired within the last 3 s: the view carries no order
   queue, so both are approximations (not measured).
 
+## Warp speed (LUA-31)
+
+`SetWarpSpeed(unit, v)` and `ResetWarpSpeed(unit)` send `Edit::WarpSpeed` (the craft's absolute warp
+speed; reset restores the class value); `GetWarpSpeed(unit)` answers the current value and
+`GetImpulseSpeed(unit)` is the Armada II getter under this name. A live craft only: anything else does
+nothing and the getters answer 0. The sim keeps the value between 0 and 1000, saves it per unit, resets it
+(with the impulse speed) at the end of a cineractive, and flies a keyed craft's aligned far leg at it even
+below impulse; at or below a crawl a craft has no warp leg (rule from the executable, static; not measured;
+see `sta_sim::warp_override`). `GetWarpSpeed` reads the value queued this tick, else the view's, else the
+class value; it does not see an edit the host has taken but the sim has not applied yet (one tick).
+
 ## Not available until a sim seam exists
 
 Writes are retained as `Call A1.<Name>` and counted in `unsupported()` (also `Load_Rules` and
 `Load_Action_Scripts`, which load nothing and return 0). `SetRelation(a, b, r)` is not a
 gap: it sends `Edit::SetRelation` (SIM-63; 0 enemy, 1 neutral, 2 ally, a's view of b only). The gaps:
-`SetPosition SetWarpSpeed ResetWarpSpeed PointAt
+`SetPosition PointAt
 Special_Attack Attack(unit, Vector) SetSpecialWeaponAttackInterval
 AttackMainEnemyBase DestroyCritical Destroy*
 AllowMultipleSpecialWeaponFire SetSpecialForcesFlag TransferFlag LinkWormHoles
