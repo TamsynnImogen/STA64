@@ -20,8 +20,9 @@ use bevy::prelude::*;
 use sta_content::{ButtonSlots, SlotCommand, button_slots::SLOTS};
 
 use super::super::{StockState, layout::StockLayout};
+use super::costs;
 use crate::ui::{
-    i18n::tr,
+    i18n::{Strings, tr},
     hud::{
         HudState, commands,
         layout::R,
@@ -88,7 +89,7 @@ fn command(c: SlotCommand, feed: &HudFeed) -> Option<(&'static str, &'static [&'
 
 /// The buttons of a page, one per slot (cell = slot - 1). A locked button carries
 /// `UnitOrder::Unavailable`, which `hud::command` never turns into an order.
-pub(in crate::ui::hud) fn buttons(feed: &HudFeed, page: Page, slots: &ButtonSlots) -> Vec<Button> {
+pub(in crate::ui::hud) fn buttons(feed: &HudFeed, page: Page, slots: &ButtonSlots, strings: Option<&Strings>) -> Vec<Button> {
     if feed.own_selection().is_empty() {
         return Vec::new();
     }
@@ -108,6 +109,7 @@ pub(in crate::ui::hud) fn buttons(feed: &HudFeed, page: Page, slots: &ButtonSlot
             for slot in free {
                 let Some(mut item) = it.next() else { break };
                 item.cell = usize::from(slot - 1);
+                annotate(&mut item, feed, strings);
                 put(item);
             }
             // TODO(UI-19): a build list longer than the free slots needs paging; the original's
@@ -139,6 +141,31 @@ pub(in crate::ui::hud) fn buttons(feed: &HudFeed, page: Page, slots: &ButtonSlot
     }
     out.sort_by_key(|b| b.cell);
     out
+}
+
+/// A build or research button's tooltips with its `needs:` line (UI-42): the short one reads
+/// `Name (needs: ...)` (the game's own bracket words), the verbose one gets the line on its own
+/// row. Content only; the tooltip widget and its placement are unchanged.
+fn annotate(button: &mut Button, feed: &HudFeed, strings: Option<&Strings>) {
+    let Act::Build { what, .. } = &button.act else { return };
+    let Some(db) = feed.content.as_deref() else { return };
+    let Some(needs) = costs::needs(db, *what) else { return };
+    let line = costs::line(strings, &model::resource_model(feed), &needs, costs::shortfall(feed, *what));
+    if line.is_empty() {
+        return;
+    }
+    // The game's hotkey marker (`^Build`) is not shown in this composed text.
+    let resolve = |t: &str| strings.map_or(t, |s| s.tooltip_text(t)).replace('^', "");
+    let (open, close) = match strings {
+        Some(s) => (s.tooltip_text("GUI_CP_START_EXTRA").to_owned(), s.tooltip_text("GUI_CP_END_EXTRA").to_owned()),
+        None => ("(".into(), ")".into()),
+    };
+    let (open, close) = if open == "GUI_CP_START_EXTRA" || close == "GUI_CP_END_EXTRA" { ("(".into(), ")".into()) } else { (open, close) };
+    button.tip = format!("{} {open}{line}{close}", resolve(&button.tip));
+    button.verbose = Some(match button.verbose.as_deref() {
+        Some(v) => format!("{}\n{line}", resolve(v)),
+        None => line,
+    });
 }
 
 /// Spawn the grid's buttons into `parent`, one per slot rectangle the sheet has.
