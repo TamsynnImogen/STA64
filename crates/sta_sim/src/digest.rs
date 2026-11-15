@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(sim().section_digests().differing(&s.section_digests()), ["combat"]);
     }
 
-    const TRANSPORT_DIGEST: u64 = 0x490d_d40f_03ac_fb71;
+    const TRANSPORT_DIGEST: u64 = 0xe8c6_4cc3_76bd_d43e;
 
     #[test]
     fn a_set_autonomy_level_changes_the_combat_section_and_the_full_digest() {

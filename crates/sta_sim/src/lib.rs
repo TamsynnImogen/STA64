@@ -458,7 +458,8 @@ impl Sim {
         self.separate_units();
         self.push_out_of_fields();
         if let Some(db) = self.content.clone() {
-            self.transports.expire(self.tick);
+            let returned = self.transports.expire(self.tick);
+            self.restore_carrier_shields(&returned);
             combat::damage::recharge(&mut self.units, &db, &self.switches, &self.subsystems, &self.transports);
             self.activate_team_change_weapons(&db);
             self.specials.step(&mut self.units, &db, &mut self.events);

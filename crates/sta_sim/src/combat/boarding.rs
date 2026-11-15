@@ -26,8 +26,8 @@
 //! - Capture changes owner and race on one tick, the order becomes Stop and the
 //!   perceived owner follows (M); the carrier goes on transporting to it.
 //! - The carrier stops when `(crew - max) / maxCrew <= crewRedStatus` after a
-//!   pulse (M); its shields go to 0 at the first pulse and come back 3.3 s
-//!   after the last (M); the target's recharge delay is set to 3.0 s on every
+//!   pulse (M); its shields go to 0 at the first pulse and return in full in one
+//!   step a fixed time after the last (M); the target's recharge delay is set to 3.0 s on every
 //!   pulse (M).
 //!
 //! **Content seam.** The transporter and boarding keys (`TRANSPORTER_*`,
@@ -52,7 +52,7 @@ use crate::Sim;
 /// 0.01: an enemy with at most this much shield is "shields down" (S, M).
 const SHIELDS_DOWN: Fixed = Fixed::from_bits(42_949_673);
 /// 1.5, the defender's factor of the boarding fight (S, M).
-const DEFENCE_FACTOR: Fixed = Fixed::from_bits(6_442_450_944);
+pub(crate) const DEFENCE_FACTOR: Fixed = Fixed::from_bits(6_442_450_944);
 /// 0.25, the executable's default `crewRedStatus`.
 const DEFAULT_CREW_RED: Fixed = Fixed::from_bits(1 << 30);
 
@@ -156,8 +156,15 @@ pub struct Transports {
     parties: Vec<Party>,
     next_seq: u32,
     /// Shield recharge held until this tick (exclusive): targets and carriers.
-    pub(crate) holds: BTreeMap<EntityId, Tick>,
+    /// Keyed by entity and kind ([`TARGET_HOLD`], [`CARRIER_HOLD`]), so a unit that is a
+    /// carrier and an enemy's target at once keeps both; each kind keeps its later end.
+    pub(crate) holds: BTreeMap<(EntityId, u8), Tick>,
 }
+
+/// Hold kind: the unit is a boarded enemy whose recharge delay was set.
+pub(crate) const TARGET_HOLD: u8 = 0;
+/// Hold kind: the unit is a carrier whose shields are off; they return in full when it ends.
+pub(crate) const CARRIER_HOLD: u8 = 1;
 
 /// A party as a snapshot row: arrive, seq, target, size bits, strength bits, race, team, source.
 pub type PartyRow = (Tick, u32, EntityId, i64, i64, String, PlayerId, EntityId);
@@ -171,8 +178,8 @@ pub struct TransportsRec {
     /// `(arrive, seq, target, size bits, strength bits, race, team, source)`, ascending `(arrive, seq)`.
     pub parties: Vec<PartyRow>,
     pub next_seq: u32,
-    /// `(entity, held until)`, ascending entity.
-    pub holds: Vec<(EntityId, Tick)>,
+    /// `(entity, kind, held until)`, ascending `(entity, kind)`.
+    pub holds: Vec<(EntityId, u8, Tick)>,
 }
 
 fn alive(e: &Entity) -> bool {
@@ -209,12 +216,21 @@ impl Transports {
 
     /// Whether a unit's shields may not recharge now.
     pub(crate) fn shields_held(&self, id: EntityId) -> bool {
-        self.holds.contains_key(&id)
+        self.holds.contains_key(&(id, TARGET_HOLD)) || self.holds.contains_key(&(id, CARRIER_HOLD))
     }
 
-    /// Holds that ended by `tick` are dropped (before the recharge pass).
-    pub(crate) fn expire(&mut self, tick: Tick) {
+    /// Holds that ended by `tick` are dropped (before the recharge pass); returns the
+    /// carriers whose shields-off hold ended, ascending.
+    pub(crate) fn expire(&mut self, tick: Tick) -> Vec<EntityId> {
+        let ended: Vec<EntityId> = self.holds.iter().filter(|((_, kind), until)| *kind == CARRIER_HOLD && **until <= tick).map(|((id, _), _)| *id).collect();
         self.holds.retain(|_, until| *until > tick);
+        ended
+    }
+
+    /// Hold `id` of `kind` until `until`, keeping a later end if there is one.
+    fn hold(&mut self, id: EntityId, kind: u8, until: Tick) {
+        let held = self.holds.entry((id, kind)).or_insert(until);
+        *held = (*held).max(until);
     }
 
     /// A carrier's transport ends (a new order, a change of owner).
@@ -227,7 +243,8 @@ impl Transports {
         self.rows.remove(&id);
         self.rows.retain(|_, r| r.target != id);
         self.parties.retain(|p| p.target != id);
-        self.holds.remove(&id);
+        self.holds.remove(&(id, TARGET_HOLD));
+        self.holds.remove(&(id, CARRIER_HOLD));
         self.reset_seq();
     }
 
@@ -239,7 +256,7 @@ impl Transports {
 
     fn send(&mut self, mut party: Party) {
         party.seq = self.next_seq;
-        self.next_seq += 1;
+        self.next_seq = self.next_seq.wrapping_add(1);
         let at = self.parties.partition_point(|p| (p.arrive, p.seq) <= (party.arrive, party.seq));
         self.parties.insert(at, party);
     }
@@ -254,7 +271,7 @@ impl Transports {
                 .map(|p| (p.arrive, p.seq, p.target, p.size.to_bits(), p.strength.to_bits(), p.race.clone(), p.team, p.source))
                 .collect(),
             next_seq: self.next_seq,
-            holds: self.holds.iter().map(|(id, t)| (*id, *t)).collect(),
+            holds: self.holds.iter().map(|((id, kind), t)| (*id, *kind, *t)).collect(),
         }
     }
 
@@ -262,7 +279,7 @@ impl Transports {
     pub(crate) fn from_rec(rec: TransportsRec, exists: impl Fn(EntityId) -> bool) -> Option<Transports> {
         if rec.version != 1
             || !rec.rows.windows(2).all(|w| w[0].0 < w[1].0)
-            || !rec.holds.windows(2).all(|w| w[0].0 < w[1].0)
+            || !rec.holds.windows(2).all(|w| (w[0].0, w[0].1) < (w[1].0, w[1].1))
             || !rec.parties.windows(2).all(|w| (w[0].0, w[0].1) < (w[1].0, w[1].1))
         {
             return None;
@@ -270,7 +287,7 @@ impl Transports {
         const LIMIT: i64 = 1_000_000i64 << 32;
         let rows_ok = rec.rows.iter().all(|r| exists(r.0) && exists(r.1) && r.0 != r.1);
         let parties_ok = rec.parties.iter().all(|p| p.1 < rec.next_seq && exists(p.2) && (1..=LIMIT).contains(&p.3) && (0..=LIMIT).contains(&p.4));
-        let holds_ok = rec.holds.iter().all(|h| exists(h.0));
+        let holds_ok = rec.holds.iter().all(|h| exists(h.0) && h.1 <= CARRIER_HOLD);
         if !(rows_ok && parties_ok && holds_ok) || (rec.parties.is_empty() && rec.next_seq != 0) {
             return None;
         }
@@ -291,7 +308,7 @@ impl Transports {
                 })
                 .collect(),
             next_seq: rec.next_seq,
-            holds: rec.holds.into_iter().collect(),
+            holds: rec.holds.into_iter().map(|(id, kind, until)| ((id, kind), until)).collect(),
         })
     }
 
@@ -316,8 +333,9 @@ impl Transports {
         }
         h.u64(u64::from(self.next_seq));
         h.u64(self.holds.len() as u64);
-        for (id, until) in &self.holds {
+        for ((id, kind), until) in &self.holds {
             h.u64(u64::from(id.0));
+            h.u64(u64::from(*kind));
             h.u64(*until);
         }
     }
@@ -329,8 +347,9 @@ impl Transports {
         let mut t = Transports::default();
         t.rows.insert(carrier, TransportRow { target, next_pulse: 120 });
         t.send(Party { arrive: 135, seq: 0, target, size: Fixed::from_int(5), strength: Fixed::ONE, race: "federation".into(), team: PlayerId(0), source: carrier });
-        t.holds.insert(carrier, 219);
-        t.holds.insert(target, 210);
+        t.holds.insert((carrier, CARRIER_HOLD), 219);
+        t.holds.insert((carrier, TARGET_HOLD), 205);
+        t.holds.insert((target, TARGET_HOLD), 210);
         t
     }
 }
@@ -483,17 +502,13 @@ impl Sim {
         let drops = drops_shields(cdef);
         let tick = self.tick;
         if enemy {
-            let until = tick + rules.target_shield_hold;
-            let held = self.transports.holds.entry(target).or_insert(until);
-            *held = (*held).max(until);
+            self.transports.hold(target, TARGET_HOLD, tick + rules.target_shield_hold);
         }
         let Some(c) = self.units.get_mut(carrier) else { return false };
         c.crew = Some([cnow - size, cmax]);
         if drops {
             c.shields.now = [Fixed::ZERO; 4];
-            let until = tick + rules.carrier_shield_return;
-            let held = self.transports.holds.entry(carrier).or_insert(until);
-            *held = (*held).max(until);
+            self.transports.hold(carrier, CARRIER_HOLD, tick + rules.carrier_shield_return);
         }
         let party = Party { arrive: tick + if enemy { rules.action_delay } else { 0 }, seq: 0, target, size, strength, race: race.clone(), team: owner, source: carrier };
         if enemy {
@@ -552,13 +567,34 @@ impl Sim {
         let Some(t) = self.units.get_mut(p.target) else { return };
         kill_crew(t, &mut ctx, kills);
         let emptied = t.crew.is_some_and(|c| c[0] <= Fixed::ZERO);
-        if takes
-            && survivors > Fixed::ZERO
-            && emptied
-            && self.capture(p.target, &p)
-            && let Some(t) = self.units.get_mut(p.target)
-        {
-            t.crew = Some([survivors.min(max), max]);
+        if takes && survivors > Fixed::ZERO && emptied && self.capture(p.target, &p) {
+            if let Some(t) = self.units.get_mut(p.target) {
+                t.crew = Some([survivors.min(max), max]);
+            }
+        } else if emptied {
+            // A tie (or a refused capture) leaves a derelict that keeps its owner; its order is Stop.
+            self.stop_order(p.target);
+        }
+    }
+
+    /// The unit's order becomes Stop (as a capture leaves it).
+    fn stop_order(&mut self, id: EntityId) {
+        self.weapons.stop_attack(&self.units, PlayerId::SCRIPT, &[id]);
+        self.clear_scripted(PlayerId::SCRIPT, &[id]);
+        self.movement.clear_waypoints(id);
+        self.set_target(id, None);
+    }
+
+    /// Carriers whose shields-off hold ended get their shields back in full in one step (measured).
+    pub(crate) fn restore_carrier_shields(&mut self, carriers: &[EntityId]) {
+        for &id in carriers {
+            let derelict = self.subsystems.get(id).is_some_and(|r| r.derelict);
+            if let Some(u) = self.units.get_mut(id).filter(|u| alive(u) && !derelict) {
+                let pools = if u.shields.directional { 4 } else { 1 };
+                for now in &mut u.shields.now[..pools] {
+                    *now = u.shields.max;
+                }
+            }
         }
     }
 
