@@ -269,9 +269,11 @@ impl Sim {
             }
             Edit::Weapons(id, on) => self.set_flag(id, UnitFlags::WEAPONS_OFF, !on),
             Edit::MaxSpeed(id, to) => self.edit_max_speed(id, to),
+            Edit::WarpSpeed(id, to) => self.edit_warp_speed(id, to),
             Edit::Present(ref p) => {
                 if matches!(p, crate::present::Presentation::Cineractive { on: false, .. }) {
                     self.reset_all_impulse();
+                    self.reset_all_warp();
                 }
                 // Changes nothing but the impulse reset above; every client and replay sees the event.
                 self.events.push(SimEvent::Present(p.clone()));
