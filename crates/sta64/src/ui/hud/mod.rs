@@ -542,12 +542,8 @@ fn place_on_click(
         return;
     };
     let Some(at) = ground_point(a.ray, b.pos.y.to_f32()) else { return };
-    if let Some(short) = ghost::shortfall(&feed, &armed) {
-        let text = match short {
-            sta_sim::production::afford::Shortfall::Resource(i) => format!("{} ({})", tr("Cannot build: not enough resources"), model::resource_model(&feed).name(i)),
-            sta_sim::production::afford::Shortfall::Officers => tr("Cannot build: not enough officers"),
-        };
-        notices.write(Notice::new(Severity::Warn, text));
+    if !ghost::affordable(&feed, &armed) {
+        notices.write(Notice::new(Severity::Warn, tr("Cannot build: not enough resources")));
         return;
     }
     // The sim's own rule, as the ghost shows it: a refused site keeps the

@@ -10,7 +10,6 @@
 //! (both go through [`crate::placement::ghost_site`]).
 
 use bevy::prelude::*;
-use sta_sim::production::afford::{Shortfall, build_shortfall};
 use sta_sim::production::site::SiteError;
 use sta_sim::{ContentKey, Vec3 as SimVec3};
 
@@ -58,16 +57,11 @@ pub fn build_order(feed: &HudFeed, bounds: Option<&(SimVec3, SimVec3)>, armed: &
     Ok((site_at, sta_sim::command::Order::Build { builder: armed.builder, what: armed.what, at: Some(at) }))
 }
 
-/// What the player lacks to pay for `armed` now, `None` when it can: the sim's own answer
-/// ([`sta_sim::production::afford::build_shortfall`]), not a copy of its rule.
-pub fn shortfall(feed: &HudFeed, armed: &Armed) -> Option<Shortfall> {
-    let (Some(db), Some(p)) = (feed.content.as_deref(), feed.view.player(feed.player)) else { return None };
-    build_shortfall(db, p, armed.what)
-}
-
 /// Whether the player can pay for `armed` now (the sim refuses a rig's order otherwise).
 pub fn affordable(feed: &HudFeed, armed: &Armed) -> bool {
-    shortfall(feed, armed).is_none()
+    let (Some(db), Some(p)) = (feed.content.as_deref(), feed.view.player(feed.player)) else { return true };
+    let Some(def) = db.unit(armed.what) else { return true };
+    def.build.cost.iter().enumerate().all(|(i, &c)| c <= sta_sim::Fixed::ZERO || p.resources.get(i).is_some_and(|&h| h >= c))
 }
 
 fn paint(color: Color) -> impl Fn(&mut StandardMaterial) {
