@@ -272,6 +272,22 @@ pub struct PlaySound {
     pub bus: Bus,
 }
 
+/// A mission script's sound (`AudioMessage`, `PlayMusic`): its own stream, mixed with whatever else
+/// plays and stopped by its `id` alone ([`StopScriptSound`]), on the UI bus. The ids come from one
+/// counter for voice lines and music tracks.
+#[derive(Message, Debug, Clone)]
+pub struct PlayScriptSound {
+    pub id: u32,
+    pub name: String,
+}
+
+/// Stops the script stream `id` and nothing else (`StopAudioMessage`); a finished or unknown id is
+/// ignored.
+#[derive(Message, Debug, Clone, Copy)]
+pub struct StopScriptSound {
+    pub id: u32,
+}
+
 /// A request to cut what plays on one bus (a mission's `Media:stopSounds()`).
 #[derive(Message, Debug, Clone, Copy)]
 pub struct StopSounds {
@@ -289,6 +305,8 @@ impl Plugin for SimLinkPlugin {
             .add_message::<SelectionChanged>()
             .add_message::<PlaySound>()
             .add_message::<StopSounds>()
+            .add_message::<PlayScriptSound>()
+            .add_message::<StopScriptSound>()
             .init_resource::<AnimClock>()
             .init_resource::<CommandQueue>()
             .init_resource::<Selection>()

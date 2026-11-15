@@ -206,6 +206,7 @@ fn run_voices(
     mut orders: MessageReader<OrderIssued>,
     mut sim: MessageReader<SimMsg>,
     cine: Option<Res<crate::ui::presentation::CineractiveState>>,
+    (script_sounds, movies): (Option<Res<crate::ui::presentation::ScriptSounds>>, Option<Res<crate::media::Movies>>),
     mut was_cutscene: Local<bool>,
     mut st: ResMut<VoiceState>,
     mut out: MessageWriter<PlaySound>,
@@ -219,12 +220,15 @@ fn run_voices(
         stop.write(StopSounds { bus: Bus::Voice });
     }
     *was_cutscene = cutscene;
+    // Also dropped (not queued) while a script's message or music plays or a movie plays.
+    let silenced = crate::ui::presentation::event_voices_silenced(cutscene, script_sounds.as_deref(), movies.as_deref());
     // The menu scene's ships are scenery: no unit speaks in the front end. Nor during a script's
     // cineractive: its alerts and acknowledgements clash with the narration, and what happens
     // meanwhile is dropped, not queued for afterwards (the script's own lines go through
-    // `ui::presentation`, not here). Evidence: Cedric's playtest of the stock behaviour; which
-    // categories the original silences, and whether it queues, is not measured.
-    let (Some(link), Some(content), None, false) = (link, content, scene, cutscene) else {
+    // `ui::presentation`, not here). The Armada II event audio queue drops (does not queue) a
+    // request in those states, and while a script stream plays or a movie plays (read from the
+    // executable, static; not measured on the running original).
+    let (Some(link), Some(content), None, false) = (link, content, scene, silenced) else {
         selected.clear();
         orders.clear();
         sim.clear();
@@ -445,6 +449,24 @@ mod tests {
         r.wait(0.3);
         r.select(&[1]);
         assert_eq!(r.frame().len(), 1);
+    }
+
+    /// Event voices are dropped, not queued, while a script's message or music plays.
+    #[test]
+    fn unit_voices_are_dropped_while_a_script_stream_plays() {
+        let mut r = rig(WORLD);
+        let mut sounds = crate::ui::presentation::ScriptSounds::default();
+        sounds.start_for_test(7);
+        r.app.world_mut().insert_resource(sounds);
+        r.order(&[1], OrderKind::Move);
+        assert!(r.frame().is_empty(), "silent while a script stream plays");
+        r.wait(2.0);
+        // Not replayed after it: the stream ends, the next order speaks.
+        r.app.world_mut().insert_resource(crate::ui::presentation::ScriptSounds::default());
+        r.wait(1.0);
+        assert!(r.frame().is_empty(), "the dropped order is not queued for afterwards");
+        r.order(&[1], OrderKind::Move);
+        assert_eq!(r.frame(), ["CruiserAck"]);
     }
 
     #[test]
