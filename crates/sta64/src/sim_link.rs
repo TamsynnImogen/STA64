@@ -29,6 +29,10 @@ use sta_sim::{EntityId, PlayerId, SimEvent, Vec3 as SimVec3, WorldSource, WorldV
 use crate::app::GameSet;
 use crate::clock::AnimClock;
 
+#[cfg(test)]
+#[path = "sim_link_production_tests.rs"]
+mod production_tests;
+
 /// The running world source, its router and the last two views.
 #[derive(Resource)]
 pub struct SimLink {
@@ -36,6 +40,7 @@ pub struct SimLink {
     router: SyncCell<Box<dyn CommandRouter>>,
     prev: Arc<WorldView>,
     curr: Arc<WorldView>,
+    production: Vec<sta_sim::production::view::ProductionView>,
     /// Who this client's [`CommandQueue`] speaks for.
     player: PlayerId,
     /// Next sequence number for this client's commands.
@@ -52,7 +57,8 @@ pub struct SimLink {
 impl SimLink {
     pub fn new(source: Box<dyn WorldSource>, router: Box<dyn CommandRouter>, player: PlayerId) -> SimLink {
         let view = source.view();
-        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None }
+        let production = source.production_view();
+        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None }
     }
 
     /// Log every tick into `replay` (a [`Replay::new`] header of the game's
@@ -97,6 +103,11 @@ impl SimLink {
         &self.curr
     }
 
+    /// Queue/site metadata at the same simulation tick as `curr`.
+    pub fn production(&self) -> &[sta_sim::production::view::ProductionView] {
+        &self.production
+    }
+
     pub fn player(&self) -> PlayerId {
         self.player
     }
@@ -122,7 +133,13 @@ impl SimLink {
     /// The bench's frame path steps its own sim: it hands each new view in here,
     /// so effects and units read it as they read a link's.
     pub fn feed(&mut self, view: Arc<WorldView>) {
+        self.feed_with_production(view, Vec::new());
+    }
+
+    /// A bench owning the source can hand in both immutable views together.
+    pub fn feed_with_production(&mut self, view: Arc<WorldView>, production: Vec<sta_sim::production::view::ProductionView>) {
         self.prev = std::mem::replace(&mut self.curr, view);
+        self.production = production;
     }
 
     /// Run one tick if the router has its commands; `None` on a stall.
@@ -130,6 +147,7 @@ impl SimLink {
         let batch = self.router.get().take_ready(self.curr.tick + 1)?;
         let before = self.curr.tick;
         let out = self.source.get().step(&batch);
+        self.production = self.source.get().production_view();
         if let Some(log) = &mut self.log {
             log.log_step(before, &batch, out.view.tick, out.view.digest, DEFAULT_DIGEST_EVERY);
         }

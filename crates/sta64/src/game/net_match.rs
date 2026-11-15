@@ -328,6 +328,10 @@ impl WorldSource for PeerSource {
     fn snapshot(&self) -> Option<Vec<u8>> {
         Some(self.0.lock().peer.sim().snapshot())
     }
+
+    fn production_view(&self) -> Vec<sta_sim::production::view::ProductionView> {
+        self.0.lock().peer.sim().production_view()
+    }
 }
 
 // ---------------------------------------------------------------------------

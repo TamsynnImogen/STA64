@@ -60,6 +60,7 @@ pub(crate) mod officers;
 pub mod orbit;
 pub mod rally;
 pub mod site;
+pub mod view;
 mod transfer;
 
 /// Legacy five-job fallback, retained for downstream source compatibility.
