@@ -52,6 +52,7 @@ mod hold;
 mod lua30_tests;
 mod objects;
 mod orders;
+mod pool;
 mod presentation;
 mod replace_object;
 mod seams;
@@ -60,6 +61,8 @@ mod teams;
 mod warp;
 #[cfg(test)]
 mod overload_tests;
+#[cfg(test)]
+mod pool_tests;
 #[cfg(test)]
 mod tests;
 
@@ -563,6 +566,8 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     table.set("GetAttackLocation", alias(lua, &env, &a2, "GetAttackLocation")?)?;
     replace_object::install(lua, &env, &table)?;
     warp::install(lua, &env, &a2, &table)?;
+    // SIM-68: the shield-percent calls on the Armada I pool (before `hold` wraps the table).
+    pool::install(lua, &env, &table)?;
     hold::install(lua, &env, &table)?;
     lua.globals().raw_set("A1", table)?;
     Ok(())
