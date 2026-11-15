@@ -60,8 +60,8 @@ pub fn node_slot(odf: &Odf) -> Option<usize> {
 /// `amt<slot>` amount: the moon is class `scrap` without the `scrapValue` and `scrapCost` keys the
 /// scrap pieces (wrecks, salvage) carry, and the game's only stock slot is dilithium (its freighters
 /// "mine Dilithium from Dilithium Moons"). Read from data (the install's ODFs); that the executable
-/// keys on the same absence is not measured. `infinite` on a moon is not read: no node of any
-/// game is depleted by the sim.
+/// keys on the same absence is not measured. `infinite` on a moon is not read: the sim gives
+/// every node one fixed richness and runs it dry, so the inexhaustible moon is not told apart.
 pub fn is_sta1_moon(odf: &Odf) -> bool {
     odf.class_label().is_some_and(|c| c.trim().eq_ignore_ascii_case("scrap"))
         && odf.raw("scrapValue").is_none()
