@@ -395,7 +395,8 @@ pub fn select(
                 push_unique(&mut sel, u.0);
             }
         }
-    } else if let Some(id) = unit_under(cursor, aim.ray, &units) {
+    } else if let Some(id) = unit_under(cursor, aim.ray, &units).filter(|id| link.curr().visible_to(link.player()).iter().any(|u| u.id == *id)) {
+        // (Only what the local team sees is clickable: kept-drawn scenery outside the sensors is not a fog leak.)
         let double = drag.last_click.is_some_and(|(t, last)| last == id && now - t <= DOUBLE);
         drag.last_click = if double { None } else { Some((now, id)) };
         if !is_own(&link, id) {
@@ -567,6 +568,46 @@ mod tests {
 
     fn sel(app: &App) -> Vec<EntityId> {
         app.world().resource::<Selection>().0.clone()
+    }
+
+    /// Replace the view with one whose visibility list for player 0 leaves out `hide`; `neutral` also makes those units neutral.
+    fn hide_from_player(app: &mut App, hide: &[EntityId], neutral: bool) {
+        let mut view = (**app.world().resource::<SimLink>().curr()).clone();
+        for u in &mut view.units {
+            if neutral && hide.contains(&u.id) {
+                u.owner = sta_sim::world::NEUTRAL;
+            }
+        }
+        let ids = view.units.iter().map(|u| u.id).filter(|id| !hide.contains(id)).collect();
+        view.visibility = vec![(PlayerId(0), ids)];
+        app.insert_resource(SimLink::new(Box::new(Frozen(Arc::new(view))), Box::new(LocalRouter::new()), PlayerId(0)));
+    }
+
+    /// An unseen neutral thing kept drawn (a planet outside every sensor) cannot be selected or inspected by a click;
+    /// seen, it is inspected as before.
+    #[test]
+    fn a_click_on_an_unseen_neutral_selects_nothing_and_a_seen_one_is_inspected() {
+        let mut app = app();
+        hide_from_player(&mut app, &[E], true);
+        click(&mut app, 100.0, 300.0);
+        assert!(sel(&app).is_empty(), "an unseen neutral was clicked through the fog");
+
+        let mut app = app_seen_neutral();
+        click(&mut app, 100.0, 300.0);
+        assert_eq!(sel(&app), [E]);
+    }
+
+    fn app_seen_neutral() -> App {
+        let mut app = app();
+        let mut view = (**app.world().resource::<SimLink>().curr()).clone();
+        for u in &mut view.units {
+            if u.id == E {
+                u.owner = sta_sim::world::NEUTRAL;
+            }
+        }
+        view.visibility = vec![(PlayerId(0), view.units.iter().map(|u| u.id).collect())];
+        app.insert_resource(SimLink::new(Box::new(Frozen(Arc::new(view))), Box::new(LocalRouter::new()), PlayerId(0)));
+        app
     }
 
     fn sorted(mut v: Vec<EntityId>) -> Vec<EntityId> {

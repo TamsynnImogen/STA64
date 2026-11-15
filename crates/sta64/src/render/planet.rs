@@ -873,9 +873,6 @@ fn update_cities(
 }
 
 #[cfg(test)]
-#[path = "a1_planet_gpu.rs"]
-mod a1_planet_gpu;
-#[cfg(test)]
 #[path = "planet_gpu.rs"]
 mod gpu;
 
