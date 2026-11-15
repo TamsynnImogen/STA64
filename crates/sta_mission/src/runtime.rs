@@ -363,8 +363,22 @@ impl MissionRuntime {
         cfg: MissionConfig,
         read: impl Fn(&str) -> Option<Vec<u8>> + Send + 'static,
     ) -> MissionRuntime {
+        MissionRuntime::load_with_gaps(path, seed, cfg, Vec::new(), read)
+    }
+
+    /// [`MissionRuntime::load_with`] with the map's unresolved labels (LUA-25, [`crate::map_labels`]),
+    /// known before the script chunk runs: a `GetHandle` that finds nothing and names one is a handle gap.
+    pub fn load_with_gaps(
+        path: &str,
+        seed: u64,
+        cfg: MissionConfig,
+        gaps: Vec<crate::map_labels::LabelGap>,
+        read: impl Fn(&str) -> Option<Vec<u8>> + Send + 'static,
+    ) -> MissionRuntime {
         let shared = Rc::new(RefCell::new(Shared::default()));
-        let ctx: ApiShared = Rc::new(RefCell::new(Ctx::new(cfg, seed)));
+        let mut c = Ctx::new(cfg, seed);
+        c.label_gaps.set(gaps);
+        let ctx: ApiShared = Rc::new(RefCell::new(c));
         let lua = crate::sandbox::new_lua();
         let mut errors = Vec::new();
         if let Err(e) = Self::setup(&lua, &shared, &ctx, seed, Arc::new(Mutex::new(read)), path) {
@@ -382,6 +396,12 @@ impl MissionRuntime {
     pub fn from_source_with(name: &str, source: &str, seed: u64, cfg: MissionConfig) -> MissionRuntime {
         let (n, s) = (name.to_owned(), source.as_bytes().to_vec());
         MissionRuntime::load_with(name, seed, cfg, move |p| (p == n).then(|| s.clone()))
+    }
+
+    /// [`MissionRuntime::from_source_with`] with the map's unresolved labels (LUA-25).
+    pub fn from_source_with_gaps(name: &str, source: &str, seed: u64, cfg: MissionConfig, gaps: Vec<crate::map_labels::LabelGap>) -> MissionRuntime {
+        let (n, s) = (name.to_owned(), source.as_bytes().to_vec());
+        MissionRuntime::load_with_gaps(name, seed, cfg, gaps, move |p| (p == n).then(|| s.clone()))
     }
 
     fn setup(lua: &Lua, shared: &Rc<RefCell<Shared>>, ctx: &ApiShared, seed: u64, read: Reader, path: &str) -> mlua::Result<()> {
@@ -614,6 +634,9 @@ impl MissionRuntime {
         let mut out: std::collections::BTreeMap<String, u32> = c.unsupported.iter().map(|(k, v)| (k.clone(), *v)).collect();
         for r in &c.ai_requests[c.ai_requests_taken..] {
             *out.entry(untaken_name(r).to_owned()).or_default() += 1;
+        }
+        for (k, n) in c.label_gaps.hits() {
+            *out.entry(k.clone()).or_default() += n;
         }
         out.into_iter().collect()
     }

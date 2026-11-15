@@ -43,6 +43,7 @@ pub mod campaign;
 pub mod cheat;
 pub mod cineractive;
 pub mod converted;
+pub mod map_labels;
 pub mod ending;
 pub mod math;
 pub mod playthrough;

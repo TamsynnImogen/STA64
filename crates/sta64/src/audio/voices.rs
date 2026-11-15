@@ -14,6 +14,9 @@
 //!   [`VoiceNames::base_under_attack`] for a facility and [`VoiceNames::fleet_engaged`]
 //!   for a ship (both stock advisor events), at most once per [`VoiceConfig::alert_gap`].
 //!
+//! While a script's cineractive is on ([`crate::ui::presentation::CineractiveState`]) all of
+//! these are dropped, not queued; scripted voice lines are unaffected.
+//!
 //! Everything is on [`Bus::Voice`] and not positional. [`RateLimiter`] keeps it from
 //! turning into noise: a cooldown per kind of voice plus a short gap between any two.
 //!
@@ -33,7 +36,7 @@ use sta_sim::{EntityId, Fixed, PlayerId};
 use super::{Resolver, play_sounds};
 use crate::app::GameSet;
 use crate::render::units::LocalPlayer;
-use crate::sim_link::{Bus, ContentRes, OrderIssued, OrderKind, PlaySound, Selection, SelectionChanged, SimLink, SimMsg};
+use crate::sim_link::{Bus, ContentRes, OrderIssued, OrderKind, PlaySound, Selection, SelectionChanged, SimLink, SimMsg, StopSounds};
 
 /// Event names for alerts, which no ODF carries.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,6 +157,7 @@ impl Plugin for VoicePlugin {
             .add_message::<OrderIssued>()
             .add_message::<SelectionChanged>()
             .add_message::<PlaySound>()
+            .add_message::<StopSounds>()
             .init_resource::<VoiceConfig>()
             .init_resource::<VoiceState>()
             .init_resource::<Selection>()
@@ -201,11 +205,26 @@ fn run_voices(
     mut selected: MessageReader<SelectionChanged>,
     mut orders: MessageReader<OrderIssued>,
     mut sim: MessageReader<SimMsg>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
+    mut was_cutscene: Local<bool>,
     mut st: ResMut<VoiceState>,
     mut out: MessageWriter<PlaySound>,
+    mut stop: MessageWriter<StopSounds>,
 ) {
-    // The menu scene's ships are scenery: no unit speaks in the front end.
-    let (Some(link), Some(content), None) = (link, content, scene) else {
+    let cutscene = crate::ui::presentation::cutscene_running(cine);
+    // A line of ours still playing when the cutscene starts is cut. Only `Bus::Voice`'s static
+    // sounds stop (alerts and acknowledgements): scripted lines are on `Bus::Ui` and a movie's
+    // sound is a stream the mixer does not list, so neither is touched.
+    if cutscene && !*was_cutscene {
+        stop.write(StopSounds { bus: Bus::Voice });
+    }
+    *was_cutscene = cutscene;
+    // The menu scene's ships are scenery: no unit speaks in the front end. Nor during a script's
+    // cineractive: its alerts and acknowledgements clash with the narration, and what happens
+    // meanwhile is dropped, not queued for afterwards (the script's own lines go through
+    // `ui::presentation`, not here). Evidence: Cedric's playtest of the stock behaviour; which
+    // categories the original silences, and whether it queues, is not measured.
+    let (Some(link), Some(content), None, false) = (link, content, scene, cutscene) else {
         selected.clear();
         orders.clear();
         sim.clear();
@@ -426,6 +445,45 @@ mod tests {
         r.wait(0.3);
         r.select(&[1]);
         assert_eq!(r.frame().len(), 1);
+    }
+
+    #[test]
+    fn nothing_announces_during_a_cineractive_and_nothing_is_replayed_after() {
+        let hit = |at: u32, target: u32| format!("{{ at: {at}, event: {{ Hit: {{ target: {target}, by: 9, weapon: 0, facing: 0, shield: 0, hull: 5, at: {{ x: 0, y: 0, z: 0 }} }} }} }}");
+        let tl = format!(
+            r#"{{ units: [
+                {{ id: 1, def: "cruiser", owner: 0, rails: [{{ at: 0, pos: {{ x: 0, y: 0, z: 0 }} }}] }},
+                {{ id: 4, def: "base", owner: 0, rails: [{{ at: 0, pos: {{ x: 30, y: 0, z: 0 }} }}] }},
+                {{ id: 9, def: "warbird", owner: 1, rails: [{{ at: 0, pos: {{ x: 500, y: 0, z: 0 }} }}] }},
+              ], events: [{}, {}] }}"#,
+            hit(20, 4),
+            hit(200, 1)
+        );
+        let mut r = rig(&tl);
+        r.app.world_mut().insert_resource(crate::ui::presentation::CineractiveState { on: true, skippable: false });
+        // The start edge cuts a speech line still playing: one stop of the voice bus, once.
+        r.app.update();
+        let stops = r.log.drain().into_iter().filter(|c| matches!(c, Call::StopBus { bus: Bus::Voice })).count();
+        assert_eq!(stops, 1, "the voice bus is cut once when the cutscene starts");
+        // An order and a selection during the cutscene are as silent as the hit at tick 20.
+        r.order(&[1], OrderKind::Move);
+        r.select(&[1]);
+        let mut during = Vec::new();
+        for _ in 0..40 {
+            during.extend(r.frame());
+        }
+        assert!(during.is_empty(), "no announcement or acknowledgement in a cineractive: {during:?}");
+        // A scripted line takes the presentation path (UI bus) and is not gated here.
+        r.app.world_mut().write_message(PlaySound { name: "Narration".into(), at: None, bus: Bus::Ui });
+        r.app.update();
+        assert!(r.log.drain().iter().any(|c| matches!(c, Call::Play { name, .. } if name == "Narration")));
+        // Control returns: the dropped base alert is not replayed, a new event announces.
+        r.app.world_mut().resource_mut::<crate::ui::presentation::CineractiveState>().on = false;
+        let mut after = Vec::new();
+        for _ in 0..150 {
+            after.extend(r.frame());
+        }
+        assert_eq!(after, ["EnemyEngaged"], "only the hit after the cineractive announces");
     }
 
     #[test]

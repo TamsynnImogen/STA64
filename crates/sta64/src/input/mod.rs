@@ -49,14 +49,18 @@ impl Plugin for InputPlugin {
             .init_resource::<orders::OrderTargets>()
             .init_resource::<orders::Aim>()
             .add_systems(Startup, select::spawn_select_box)
+            // On the start edge of a cutscene: cancel a drag and an armed placement (it is not in the chain below: it needs no link).
+            .add_systems(Update, select::cancel_on_cutscene_start.in_set(crate::app::GameSet::Input))
             .add_systems(
                 Update,
                 (
                     orders::aim,
-                    select::select_keys,
+                    // Not while a cutscene runs: nothing is selected, ordered or acknowledged
+                    // (an existing selection is kept, inert, and works again afterwards).
+                    select::select_keys.run_if(not(crate::ui::presentation::cutscene_running)),
                     // A click on the HUD, or the one that places a build, is not the map's.
-                    select::select.run_if(crate::ui::hud::map_input_free),
-                    orders::order.run_if(crate::ui::hud::map_input_free),
+                    select::select.run_if(crate::ui::hud::map_input_free).run_if(not(crate::ui::presentation::cutscene_running)),
+                    orders::order.run_if(crate::ui::hud::map_input_free).run_if(not(crate::ui::presentation::cutscene_running)),
                     orders::prune_targets,
                     context::cursor,
                 )

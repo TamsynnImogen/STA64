@@ -1124,7 +1124,7 @@ fn rebuild(
                 units += 1;
             }
         }
-        let team = if o.team > 0 { teams.0.get(o.team as usize).map(|t| t.1).unwrap_or(neutral) } else { neutral };
+        let team = teams.team_colour(o.team.max(0) as u32).unwrap_or(neutral);
         // Team-owned ships and stations: their strategic icon, the mod's `<model>_sv`
         // sprite or a silhouette baked from the model.
         let class = odf.class_label().unwrap_or("").to_ascii_lowercase();

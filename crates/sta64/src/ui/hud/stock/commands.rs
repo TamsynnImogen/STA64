@@ -118,8 +118,9 @@ impl NativeCommands {
         } else {
             warn!("stock HUD: allcommands.odf is missing; using available command ODFs");
         }
-        // The shared HUD implements these capabilities even when allcommands omits them.
-        names.extend(["move", "attack", "stop", "rally", "harvest", "cancelbuild", "colonize"].map(str::to_owned));
+        // The shared HUD offers these actions even when allcommands omits them.
+        // Recrew is presentation-only: loading its metadata does not add a sim order.
+        names.extend(["move", "attack", "stop", "rally", "harvest", "cancelbuild", "colonize", "recrew"].map(str::to_owned));
         let mut commands = BTreeMap::new();
         let mut groups = BTreeSet::new();
         for name in names {
@@ -265,6 +266,20 @@ mod tests {
             Some(Color::srgba(0.0, 1.0, 0.0, 1.0))
         );
         assert!(loaded.groups.is_empty());
+    }
+
+    #[test]
+    fn recrew_loads_even_when_allcommands_omits_it() {
+        let install = Install::new("recrew");
+        install.file("Data/odf/commands/allcommands.odf", "commandNames = \"stop\"\n")
+            .file("Data/odf/commands/recrew.odf", "commandName = \"RECREW\"\nbuttonName = \"recrew\"\npreferredPosition = 0 1 0 0\ntooltip = \"GUI_CP_RECREW_TOOLTIP\"\nverbose = \"GUI_CP_RECREW_VTOOLTIP\"\nmenu = \"Orders\"\n");
+        let loaded = NativeCommands::load(&install.mount(None));
+        let recrew = loaded.get("RECREW").unwrap();
+        assert_eq!(recrew.sprite_names(), ["b_recrew", "recrew"]);
+        assert_eq!(recrew.preferred, Some([0, 1]));
+        assert_eq!(recrew.tooltip.as_deref(), Some("GUI_CP_RECREW_TOOLTIP"));
+        assert_eq!(recrew.verbose.as_deref(), Some("GUI_CP_RECREW_VTOOLTIP"));
+        assert_eq!(recrew.menu.as_deref(), Some("Orders"));
     }
 
     #[test]
