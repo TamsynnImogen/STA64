@@ -447,6 +447,8 @@ fn confinement_text(r: Option<&crate::ConfinementRules>) -> String {
 fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // Every field, so a new one fails to compile here until someone decides
     // whether the sim reads it (then it is digested below) or not.
+    // `transport` (SIM-46 P0) is typed but no sim system reads it yet, so it
+    // is not digested; the package that first reads a key digests it, when set.
     let UnitDef {
         key: _, odf: _, class: _, is_starbase: _, planet_role: _, planet_crew_gain: _, planet_crew_modifier: _,
         planet_colonizable: _, planet_civilian_population_modifier: _, planet_max_population: _, can_have_orbital_station: _, orbit_time: _, race: _,
@@ -455,7 +457,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
         max_dilithium: _, mining_rate: _, transfer_rate: _, resource: _, features: _,
         confinement: _, nebula_pathing: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
-        crew_gain: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, repair_attachment: _, raw: _,
+        crew_gain: _, transport: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, repair_attachment: _, raw: _,
     } = u;
     let crate::BuildDef { cost: _, ticks: _, officers: _, list: _, queue_limit: _, flagged_slots: _ } = &u.build;
     let name = |r: &crate::DefRef| quoted(&r.odf.to_ascii_lowercase());
