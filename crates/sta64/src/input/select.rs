@@ -510,7 +510,7 @@ mod tests {
             .init_resource::<Aim>()
             .insert_resource(ContentRes(Arc::new(db)))
             .insert_resource(SimLink::new(Box::new(Frozen(view.clone())), Box::new(LocalRouter::new()), PlayerId(0)))
-            .add_systems(Update, (select_keys, select).chain());
+            .add_systems(Update, (select_keys, select).chain().distributive_run_if(not(crate::ui::presentation::cutscene_running)));
         for u in &view.units {
             let [x, y, z] = u.pos.to_f32();
             app.world_mut().spawn((SimEntity(u.id), SelectRadius(50.0), GlobalTransform::from(Transform::from_xyz(x, y, -z))));
@@ -620,6 +620,26 @@ mod tests {
         assert_eq!(sel(&app), [A]);
         drag(&mut app, (380.0, 180.0), (420.0, 220.0));
         assert_eq!(sel(&app), [A]);
+    }
+
+    /// Same predicate as the voices and `InputPlugin` use: during a cutscene a click or a box
+    /// selects nothing (so no selection line is asked for), a kept selection stays inert, and
+    /// selecting works again when it ends.
+    #[test]
+    fn nothing_is_selected_during_a_cutscene() {
+        let mut app = app();
+        click(&mut app, 100.0, 100.0);
+        assert_eq!(sel(&app), [A]);
+        app.world_mut().insert_resource(crate::ui::presentation::CineractiveState { on: true, skippable: false });
+        app.world_mut().resource_mut::<Messages<SelectionChanged>>().clear();
+        click(&mut app, 300.0, 100.0);
+        drag(&mut app, (0.0, 0.0), (800.0, 250.0));
+        let changes = app.world_mut().resource_mut::<Messages<SelectionChanged>>().drain().count();
+        assert_eq!(sel(&app), [A], "the old selection is kept, inert");
+        assert_eq!(changes, 0, "no selection change, so no select line");
+        app.world_mut().resource_mut::<crate::ui::presentation::CineractiveState>().on = false;
+        click(&mut app, 300.0, 100.0);
+        assert_eq!(sel(&app), [B]);
     }
 
     #[test]
