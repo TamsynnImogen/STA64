@@ -177,6 +177,7 @@ impl Plugin for HudPlugin {
                     place_on_click.run_if(resource_exists::<Aim>).run_if(not(crate::ui::presentation::cutscene_running)),
                     ghost::update_ghost,
                     ghost::tint_ghost,
+                    ghost::sync_footprints,
                     super::gui_sprites::paint.after(super::theme::WidgetPaint),
                 )
                     .chain()
