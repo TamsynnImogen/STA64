@@ -12,7 +12,8 @@
 //! | `Cineractive { skippable }` | state in [`CineractiveState`]; Space skips a skippable one ([`ScriptReply::CineractiveSkipped`]: the script's cancel), caps release it ([`ScriptReply::CineractiveReleased`]); the camera is `camera_cinematic` (UI-36 shot model) | `cineractiveCancel` (A2) / `switch_camera_shot` (A1) is Space in `Input.map`; no letterbox exists in the original's data or executables, so none is drawn |
 //! | objectives and briefing (host state, not a `Presentation`) | the modal panel of [`ObjectivesView`], toggled with Alt+O | rectangles of `objectivesPanelArea` and the text areas in A2 stock `gui_glob16x12.cfg`, the A1 `gui_glob.cfg` panel; the completed-line tick **not measured** |
 //! | a message box ([`MessageBox`]) | the same panel with an OK button | the original's message display reuses the objectives keys |
-//! | `Movie`, `StopMovie` | MED-03 | |
+//! | `Movie`, `StopMovie` | MED-03; an in-panel movie goes to the HUD's cinematic window or viewscreen (UI-39, `ui/hud/cinematic.rs`) | the Armada II call raises the cinematic view (executable, static); the Armada I clip's rectangle inside the bridge scene is **not measured** |
+//! | A1 `PreLoadBridgeScene`, `SetBridgeSceneRace`, `ShowBridgeScene`, `ShowBridgeOnScreen` | typed as [`BridgeScene`] and kept in [`BridgeState`]; the bridge backdrop and layers are not drawn (UI-39: the clip plays in the HUD's viewscreen) | race number 1 to 4 from the stock scripts; what `ShowBridgeOnScreen` selects is **not measured** |
 //! | `Sound`, `StopSound` | `PlaySound` on the UI bus (no admission limit) / `StopSounds` (the audio lane resolves the name); the script's `IsAudioMessageDone` turns true when the clip's length has played ([`ScriptReply::SoundDone`], from `audio::SoundStarted`), at once if nothing plays it | clip length from the decoded file; the wait is measured for A1 only, for A2 and Fleet Ops **not measured** |
 //! | `Music`, `StopMusic`, `Effect`, `WaitForKey`, other `Call`s | **not shown** (audio and effects lanes); each kind is listed once in [`Unhandled`] | |
 //!
@@ -41,6 +42,54 @@ use crate::sim_link::{Bus, PlaySound, SimMsg, StopSounds};
 use crate::ui::i18n::Strings;
 use crate::ui::sprite_font::{SpriteTextStyle, sprite_text_styled};
 use crate::ui::theme::{ButtonClicked, Theme, UiButton, button, font_role};
+
+/// A1's bridge-scene calls as typed events (the sim raises them as untyped `Presentation::Call`s).
+#[derive(Message, Debug, Clone, PartialEq, Eq)]
+pub enum BridgeScene {
+    /// `PreLoadBridgeScene(type)`: load a race's bridge ahead of showing it.
+    Preload { race: i32 },
+    /// `SetBridgeSceneRace(type)`: the race of the bridge to show.
+    SetRace { race: i32 },
+    /// `ShowBridgeScene(flag)`: the bridge scene is shown or hidden.
+    Show(bool),
+    /// `ShowBridgeOnScreen(flag)`: the viewscreen of the scene is on or off.
+    OnScreen(bool),
+}
+
+impl BridgeScene {
+    /// The typed form of an `A1.<bridge call>` presentation call, `None` for any other call or
+    /// for arguments of the wrong kind.
+    pub fn from_call(name: &str, args: &[Arg]) -> Option<Self> {
+        match (name, args) {
+            ("A1.PreLoadBridgeScene", [Arg::Int(n), ..]) => Some(Self::Preload { race: *n as i32 }),
+            ("A1.SetBridgeSceneRace", [Arg::Int(n), ..]) => Some(Self::SetRace { race: *n as i32 }),
+            ("A1.ShowBridgeScene", [Arg::Bool(b)]) => Some(Self::Show(*b)),
+            ("A1.ShowBridgeOnScreen", [Arg::Bool(b)]) => Some(Self::OnScreen(*b)),
+            _ => None,
+        }
+    }
+}
+
+/// What the bridge calls last said. Nothing draws the bridge backdrop yet; the state is for the
+/// HUD and tests to read.
+#[derive(Resource, Default, Debug, Clone, PartialEq, Eq)]
+pub struct BridgeState {
+    pub preloaded: Option<i32>,
+    pub race: Option<i32>,
+    pub shown: bool,
+    pub on_screen: bool,
+}
+
+fn bridge_state(mut events: MessageReader<BridgeScene>, mut state: ResMut<BridgeState>) {
+    for e in events.read() {
+        match e {
+            BridgeScene::Preload { race } => state.preloaded = Some(*race),
+            BridgeScene::SetRace { race } => state.race = Some(*race),
+            BridgeScene::Show(b) => state.shown = *b,
+            BridgeScene::OnScreen(b) => state.on_screen = *b,
+        }
+    }
+}
 
 /// A2's layout space (stock `screenWidth` / `screenHeight` of `gui_glob16x12.cfg`).
 pub const A2_CANVAS: Vec2 = Vec2::new(1600.0, 1200.0);
@@ -401,6 +450,7 @@ pub(crate) fn consume(
     mut sounds: ResMut<ScriptSounds>,
     reports: Option<Res<crate::audio::ReportsSoundLengths>>,
     mut replies: MessageWriter<ScriptReply>,
+    mut bridge: MessageWriter<BridgeScene>,
 ) {
     for SimMsg(e) in events.read() {
         let SimEvent::Present(p) = e else { continue };
@@ -484,6 +534,9 @@ pub(crate) fn consume(
             // Shown elsewhere (movies, MED-03; the camera, camera_cinematic).
             Presentation::Movie { .. } | Presentation::StopMovie | Presentation::Shot { .. } | Presentation::CameraOffset { .. } => {}
             Presentation::Call { name, .. } if name == "Camera.center" => {}
+            Presentation::Call { name, args } if name.starts_with("A1.") && BridgeScene::from_call(name, args).is_some() => {
+                bridge.write(BridgeScene::from_call(name, args).unwrap());
+            }
             Presentation::Call { name, .. } if matches!(name.split_once('.').map_or("", |x| x.1), "CenterCamera" | "SetCameraZoom" | "CineractiveConstantSpeed" | "CineractiveCameraOffset" | "CineractiveShot") => {}
             // A2 `PlayMusic(script, file, dont_wait)`: the engine's audio overlay numbers music and
             // voice lines from one counter, and a wait on the track ends with it (read from the
@@ -899,6 +952,10 @@ fn ok_pressed(
 
 pub struct PresentationPlugin;
 
+fn reset_bridge(mut bridge: ResMut<BridgeState>) {
+    *bridge = default();
+}
+
 /// Back at the front end (UI-34): titles, fades, queued message boxes, pending movie replies and the
 /// objectives panel of the match are gone, whatever ended it (a mission's debrief, F10, the in-game menu).
 fn reset_presentation(
@@ -930,11 +987,13 @@ impl Plugin for PresentationPlugin {
             .init_resource::<CineractiveClock>()
             .init_resource::<Unhandled>()
             .init_resource::<PendingMovies>()
+            .init_resource::<BridgeState>()
+            .add_message::<BridgeScene>()
             .init_resource::<ScriptSounds>()
             .add_message::<crate::audio::SoundStarted>()
             .init_resource::<ObjectivesView>()
             .init_resource::<MessageQueue>()
-            .add_systems(OnEnter(crate::app::AppState::FrontEnd), reset_presentation)
+            .add_systems(OnEnter(crate::app::AppState::FrontEnd), (reset_presentation, reset_bridge))
             .add_message::<ScriptReply>()
             .add_message::<MessageBox>()
             .add_message::<crate::media::mission::Requested>()
@@ -946,7 +1005,7 @@ impl Plugin for PresentationPlugin {
             .add_systems(Startup, spawn_layers.run_if(resource_exists::<Theme>))
             .add_systems(
                 Update,
-                (clear_sounds_on_restart, consume, sound_replies, hide_notices_in_cineractive, run_clock, movie_replies, skip_cineractive, apply_replies, end_messages_on_skip, toggle_objectives, queue_messages, ok_pressed, draw_titles.run_if(resource_exists::<Theme>), draw_fade, draw_panel.run_if(resource_exists::<Theme>)).chain().in_set(GameSet::Ui),
+                (clear_sounds_on_restart, consume, bridge_state, sound_replies, hide_notices_in_cineractive, run_clock, movie_replies, skip_cineractive, apply_replies, end_messages_on_skip, toggle_objectives, queue_messages, ok_pressed, draw_titles.run_if(resource_exists::<Theme>), draw_fade, draw_panel.run_if(resource_exists::<Theme>)).chain().in_set(GameSet::Ui),
             );
     }
 }
@@ -1574,5 +1633,29 @@ mod tests {
         let o = |id, state| Objective { id, title: format!("t{id}"), description: "d".into(), state };
         v.fill(&[o(1, ObjectiveState::Active), o(2, ObjectiveState::Complete)], Some(&ObjectiveBriefing { file: "f".into(), title: "Mission".into(), text: "Go.".into(), notes: String::new() }));
         assert_eq!((v.title.as_str(), v.items.len(), v.items[1].state), ("Mission", 2, ObjectiveState::Complete));
+    }
+
+    #[test]
+    fn the_four_bridge_calls_are_typed_and_tracked_and_other_calls_are_not_taken() {
+        let mut app = app();
+        let call = |name: &str, args: Vec<Arg>| SimMsg(SimEvent::Present(Presentation::Call { name: name.into(), args }));
+        for m in [
+            call("A1.PreLoadBridgeScene", vec![Arg::Int(2)]),
+            call("A1.SetBridgeSceneRace", vec![Arg::Int(3), Arg::Text("romulan".into())]),
+            call("A1.ShowBridgeScene", vec![Arg::Bool(true)]),
+            call("A1.ShowBridgeOnScreen", vec![Arg::Bool(true)]),
+            call("A1.ShowBridgeOnScreen", vec![Arg::Bool(false)]),
+        ] {
+            app.world_mut().write_message(m);
+        }
+        step(&mut app, 0.0);
+        let state = app.world().resource::<BridgeState>().clone();
+        assert_eq!(state, BridgeState { preloaded: Some(2), race: Some(3), shown: true, on_screen: false });
+        assert!(app.world().resource::<Unhandled>().list().is_empty(), "typed, so no longer listed as not shown");
+        // A call that is not one of the four, or with the wrong argument kind, is still listed.
+        app.world_mut().write_message(call("A1.ShowBridgeScene", vec![Arg::Int(1)]));
+        step(&mut app, 0.0);
+        assert_eq!(app.world().resource::<Unhandled>().count("A1.ShowBridgeScene"), 1);
+        assert_eq!(BridgeScene::from_call("A1.Nothing", &[Arg::Bool(true)]), None);
     }
 }

@@ -13,8 +13,11 @@
 //!   picture fitted to the window. One at a time; further requests wait their
 //!   turn in order. Esc, Space, Enter or a click skips a `skippable` movie.
 //! * [`MovieTarget::Panel`]: frames are written into the given image, for the
-//!   bridge viewscreen (MED-04) or any UI panel to show. [`PanelScreen`] holds
-//!   the image a mission's in-panel movie goes to.
+//!   HUD's cinematic window or viewscreen (UI-39) or any UI panel to show.
+//!   [`PanelScreen`] holds the image a mission's in-panel movie goes to and the
+//!   [`PanelKind`] that shows it. A panel movie has no skip key (Space stops ships
+//!   and skips cineractives): it ends when it finishes or the script stops it, and
+//!   when the match ends.
 //!
 //! # Threads and sync
 //!
@@ -143,11 +146,23 @@ pub(crate) struct MovieOpener(pub Box<OpenFn>);
 
 pub(crate) type OpenFn = dyn Fn(&str) -> Result<locate::Opened, String> + Send + Sync;
 
-/// The image a mission's in-panel movie (the bridge viewscreen) is written to. The display
-/// that shows it (MED-04 / the bridge) inserts this resource; without one, a mission's
-/// in-panel movie plays full screen.
+/// Which HUD panel a [`PanelScreen`] feeds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PanelKind {
+    /// The stock HUD's cinematic window (`cinematic*Area` of the gui cfg).
+    Cinematic,
+    /// The viewscreen panel of the generic (LCARS) HUD, where the Armada I bridge clip goes.
+    Viewscreen,
+}
+
+/// The image a mission's in-panel movie is written to, and the kind of panel that shows it.
+/// The HUD panel that shows it inserts this resource (and removes it when it has no panel
+/// rectangle); without one, a mission's in-panel movie plays full screen.
 #[derive(Resource, Clone)]
-pub struct PanelScreen(pub Handle<Image>);
+pub struct PanelScreen {
+    pub image: Handle<Image>,
+    pub kind: PanelKind,
+}
 
 /// The player a movie is fitted into: its picture's size, to place it in the window.
 #[derive(Component)]
@@ -206,6 +221,23 @@ impl Movies {
         self.fullscreen.is_some() || !self.pending.is_empty() || !self.panels.is_empty()
     }
 
+    /// A movie is playing in the panel that shows `image`, or waits for it.
+    pub fn panel_busy_for(&self, image: &Handle<Image>) -> bool {
+        self.panels.iter().any(|p| p.image.id() == image.id())
+            || self.pending.iter().any(|p| matches!(&p.target, MovieTarget::Panel(h) if h.id() == image.id()))
+    }
+
+    /// A movie is playing in some panel, or waits for one.
+    pub fn panel_busy(&self) -> bool {
+        !self.panels.is_empty() || self.pending.iter().any(|p| matches!(p.target, MovieTarget::Panel(_)))
+    }
+
+    /// A request waiting for the decoder, as a HUD test needs one without a movie file.
+    #[cfg(test)]
+    pub(crate) fn queue_for_test(&mut self, request: PlayMovie) {
+        self.pending.push_back(request);
+    }
+
     /// A fullscreen movie is playing or queued.
     pub fn fullscreen_busy(&self) -> bool {
         self.fullscreen.is_some() || self.pending.iter().any(|p| matches!(p.target, MovieTarget::Fullscreen))
@@ -229,6 +261,7 @@ impl Plugin for MediaPlugin {
             .add_plugins(campaign::CampaignMoviesPlugin)
             .init_resource::<Movies>()
             .init_resource::<MovieIds>()
+            .add_systems(OnEnter(crate::app::AppState::FrontEnd), stop_panel_movies)
             .add_systems(PreUpdate, skip_keys.after(InputSystems))
             .add_systems(
                 Update,
@@ -275,6 +308,25 @@ fn skip_keys(
                 movies.skip = true;
             }
         }
+    }
+}
+
+/// The match is over (the front end is entered): a panel movie of it must not play on in the menus
+/// or show in the next match's panel. Fullscreen movies (the intros) are left alone.
+fn stop_panel_movies(mut movies: ResMut<Movies>, mut done: MessageWriter<MovieFinished>, mut commands: Commands) {
+    let mut gone = Vec::new();
+    movies.pending.retain(|p| {
+        let panel = matches!(p.target, MovieTarget::Panel(_));
+        if panel {
+            gone.push((p.id, p.name.clone()));
+        }
+        !panel
+    });
+    for p in std::mem::take(&mut movies.panels) {
+        gone.push(finish(p, &mut commands));
+    }
+    for (id, name) in gone {
+        done.write(MovieFinished { id, name, outcome: MovieOutcome::Stopped });
     }
 }
 
