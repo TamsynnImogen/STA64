@@ -843,6 +843,10 @@ pub struct SpriteTextStyle {
     /// Crisp text never draws below `size`: the multiple rounds up instead of down
     /// (HUD labels with a readable floor).
     pub min_size: bool,
+    /// The text sits centred, both ways, in the box its parent authors (HUD readouts in a
+    /// cfg text rectangle): the parent centres it and the baseline lift is not applied,
+    /// since the lift would only move it off the centre.
+    pub in_box: bool,
 }
 
 #[allow(dead_code)]
@@ -860,6 +864,10 @@ impl SpriteTextStyle {
     }
     pub fn wrap_to_parent(mut self) -> Self {
         self.wrap_parent = true;
+        self
+    }
+    pub fn centered_in_box(mut self) -> Self {
+        self.in_box = true;
         self
     }
     pub fn at_least_size(mut self) -> Self {
@@ -978,7 +986,7 @@ fn spawn_mixed(
             _ => Val::Auto,
         },
         max_width: wrap.map_or(Val::Auto, |w| Val::Px(w * inv)),
-        top: Val::Px(if crisp && style.min_size { -t.size * STOCK_LIFT } else { 0.0 }),
+        top: Val::Px(if crisp && style.min_size && !style.in_box { -t.size * STOCK_LIFT } else { 0.0 }),
         flex_shrink: 0.0,
         ..default()
     });
@@ -1202,7 +1210,7 @@ fn resolve_text(
             height: Val::Px(if crisp.is_some() { lay.height * inv } else { lay.height.ceil() }),
             // The taller font of a floored label sits on the TTF's baseline (A2 stock,
             // measured: its ink ends 3 px lower at 18 px without this).
-            top: Val::Px(if crisp.is_some() && style.min_size { -t.size * STOCK_LIFT } else { 0.0 }),
+            top: Val::Px(if crisp.is_some() && style.min_size && !style.in_box { -t.size * STOCK_LIFT } else { 0.0 }),
             flex_shrink: 0.0,
             ..default()
         });
@@ -1420,6 +1428,22 @@ mod tests {
                 (Handle::default(), UVec2::new(256, 128)),
             ],
         )
+    }
+
+    /// A floored stock label sits lifted onto the TTF baseline; one centred in its box
+    /// by its parent is not lifted (the lift would move it off the centre).
+    #[test]
+    fn text_centred_in_its_box_is_not_lifted() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<SpriteFonts>().add_systems(Update, resolve_text);
+        app.world_mut().resource_mut::<SpriteFonts>().fonts.insert("F".into(), test_font());
+        let plain = SpriteTextStyle::default().stock_label();
+        let lifted = app.world_mut().spawn(sprite_text_styled("!!", 18.0, Color::WHITE, plain.clone())).id();
+        let centred = app.world_mut().spawn(sprite_text_styled("!!", 18.0, Color::WHITE, plain.centered_in_box())).id();
+        app.update();
+        let top = |app: &App, e: Entity| app.world().get::<Node>(e).unwrap().top;
+        assert!(matches!(top(&app, lifted), Val::Px(t) if t < 0.0), "the floored label keeps its lift");
+        assert_eq!(top(&app, centred), Val::Px(0.0));
     }
 
     #[test]
