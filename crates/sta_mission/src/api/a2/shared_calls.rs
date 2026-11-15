@@ -94,14 +94,14 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     // `ObstacleAvoidance` writes a flag that nothing reads (read from the executable, static: LUA-36),
     // so it is an accepted no-op, not a gap. A1's `ObstacleAvoidence` is read there and is not this call.
     call(lua, ctx, table, "ObstacleAvoidance", "b", None)?;
-    for name in ["PathPlanning", "CollisionPrevention", "FerengiCanSteal", "FerengiCanTrade"] {
+    // `PathPlanning`, `CollisionPrevention` and `AllowWarp` are sim edits now (`switch_calls`, LUA-41).
+    for name in ["FerengiCanSteal", "FerengiCanTrade"] {
         call(lua, ctx, table, name, "b", Some("no global switch in the sim seam"))?;
     }
     ai_switches(lua, ctx, table)?;
     call(lua, ctx, table, "SetClippingDistance", "n", None)?;
     call(lua, ctx, table, "MessageDisplay_Set_Text_From_File", "s", None)?;
     for (name, sig, why) in [
-        ("AllowWarp", "i", "no warp permission edit in the sim seam"),
         ("DisableChat", "b", "chat is not a sim feature"),
         ("DisableSave", "", "no save lock in the mission API"),
         ("EnableSave", "", "no save lock in the mission API"),
@@ -155,9 +155,9 @@ mod tests {
         assert_eq!(rt.take_commands().len(), 4, "every valid call retains its request");
         let counted: Vec<String> = rt.unsupported().into_iter().map(|(k, _)| k).collect();
         assert!(!counted.iter().any(|k| k.contains("ObstacleAvoidance")), "its flag is never read: not a gap (LUA-36)");
-        assert!(rt.eval::<()>("A2.CollisionPrevention(true)").is_ok());
+        assert!(rt.eval::<()>("A2.FerengiCanSteal(true)").is_ok());
         let counted: Vec<String> = rt.unsupported().into_iter().map(|(k, _)| k).collect();
-        assert!(counted.iter().any(|k| k.contains("A2.CollisionPrevention")), "the other global switches stay counted");
+        assert!(counted.iter().any(|k| k.contains("A2.FerengiCanSteal")), "the other global switches stay counted");
         assert!(!counted.iter().any(|k| k.contains("SetRelation")), "SetRelation is a sim edit now");
         assert!(!counted.iter().any(|k| k.contains("MuteSounds")), "a presentation hint is not a gap");
     }

@@ -67,7 +67,7 @@ fn _every_sim_field_is_decided(s: &Sim) {
     let Sim {
         tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, starts: _, regions: _,
         bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, economy: _,
-        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, attrs: _, scripted: _, switches: _, relations: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _, transports: _, recrew: _,
+        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, attrs: _, scripted: _, switches: _, relations: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _, transports: _, recrew: _, mission_switches: _,
     } = s;
 }
 
@@ -173,6 +173,8 @@ impl Sim {
         }
         // LUA-31: scripted warp speeds are movement state.
         self.hash_warp_overrides(&mut h);
+        // LUA-41: the mission switches (nothing is hashed at the default).
+        self.mission_switches.hash_into(&mut h);
         self.confinement.hash_into(&mut h);
         h.0
     }
@@ -342,6 +344,9 @@ impl Sim {
                 }
                 for (id, v) in self.warp_overrides() {
                     row(Some(id), "warp speed (script)", fx(v));
+                }
+                if !self.mission_switches.is_default() {
+                    row(None, "mission switches (script)", format!("{:?}", self.mission_switches));
                 }
                 for (id, course) in self.movement.rows() {
                     row(Some(id), "formation", course.formation.to_string());

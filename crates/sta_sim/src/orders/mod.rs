@@ -479,7 +479,7 @@ impl Sim {
             // tight gate stays for keyed units too (the band is read, not used).
             let aligned = to_goal > Fixed::ZERO && (u.heading.0 * gx + u.heading.1 * gz) / to_goal > Fixed::from_f64(0.99);
             let too_close = if keyed { u.stats.too_close_for_warp } else { too_close_to_warp() };
-            let can = vw > vi && vi > crate::speed_override::HELD_SPEED && aligned && to_goal >= approach::warp_lead(vw, vi, db_radius(self, u));
+            let can = self.warp_allowed() && vw > vi && vi > crate::speed_override::HELD_SPEED && aligned && to_goal >= approach::warp_lead(vw, vi, db_radius(self, u));
             // Armada II gates the start on 0.9 of impulse speed; Armada I's
             // throttle factor applies at once.
             let up_to_speed = keyed || u.speed > Fixed::from_f64(0.9) * vi;

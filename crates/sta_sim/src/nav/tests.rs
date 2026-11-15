@@ -594,3 +594,30 @@ fn a_slow_craft_flying_round_a_long_wall_is_not_cut_off() {
     assert!(gap(end, v(0, 1500)) < 150.0, "ended at {end:?} after {ticks} ticks");
     assert!(ticks > 3600, "the detour should outlast two minutes ({ticks} ticks)");
 }
+
+/// `cross` with a `PathPlanning` edit sent first (LUA-41).
+fn cross_with_planning(pathing: Option<PathingRules>, planning: bool) -> f64 {
+    let mut sim = sim_with(vec![sphere(RegionKind::Nebula, "fx_mutara", 0, 1500, 400)], content(pathing));
+    let c = Command {
+        player: PlayerId::SCRIPT,
+        seq: 0,
+        kind: CommandKind::Edit(crate::command::Edit::MissionSwitch(crate::command::MissionSwitch::PathPlanning, planning)),
+    };
+    sim.step(&[c]);
+    let ship = put(&mut sim, "fx_cruiser", v(0, 0));
+    go(&mut sim, ship, v(0, 3000));
+    let mut closest = f64::MAX;
+    for _ in 0..3000 {
+        sim.step(&[]);
+        closest = closest.min(gap(sim.unit(ship).unwrap().pos, v(0, 1500)));
+    }
+    closest
+}
+
+#[test]
+fn the_path_planning_switch_overrides_the_cfg_key_both_ways() {
+    let off = PathingRules { enabled: false, ..Default::default() };
+    assert!(cross_with_planning(Some(off), true) > 400.0, "Some(true) plans over cfg 0");
+    assert!(cross_with_planning(None, false) < 1.0, "Some(false) flies through with cfg 1");
+    assert!(cross_with_planning(None, true) > 400.0, "control: planning on routes round");
+}

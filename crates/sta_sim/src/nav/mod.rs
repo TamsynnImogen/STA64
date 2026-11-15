@@ -329,7 +329,8 @@ impl Sim {
     /// to put back after kinematics.
     pub(crate) fn route_orders(&mut self) -> Vec<(EntityId, Vec3)> {
         let rules = self.pathing_rules();
-        if !rules.enabled {
+        // LUA-41: `PathPlanning(b)` overrides the cfg key `USE_PATH_PLANNING`.
+        if !self.mission_switches.path_planning.unwrap_or(rules.enabled) {
             return Vec::new();
         }
         let nebulae = self.nebulae(&rules);

@@ -37,8 +37,9 @@ pub const MAGIC: [u8; 4] = *b"S64N";
 /// team pool); 8 appends `Edit::SetRelation`, tag 45 (SIM-63); 9 appends
 /// `Order::Colonize`, tag 17, and `Edit::PlanetPopulation`, tag 46 (SIM-30); 10
 /// appends `Edit::WarpSpeed`, tag 47 (LUA-31); 11 appends `Order::Transport`, tag 18
-/// (SIM-46); 12 appends `Order::Recrew`, tag 19 (SIM-70).
-pub const PROTOCOL_VERSION: u16 = 12;
+/// (SIM-46); 12 appends `Order::Recrew`, tag 19 (SIM-70); 14 appends
+/// `Edit::MissionSwitch`, tag 48 (LUA-41; 13 is reserved by the guard order).
+pub const PROTOCOL_VERSION: u16 = 14;
 /// Magic, version and body length.
 pub const HEADER_LEN: usize = 10;
 /// Largest frame, header included.
@@ -1720,6 +1721,15 @@ mod tests {
         }
     }
 
+    /// `Edit::MissionSwitch`, Edit tag 48 (protocol 14): the golden covers it.
+    fn mission_switch_sample(seq: u32) -> Command {
+        Command {
+            player: PlayerId::SCRIPT,
+            seq,
+            kind: CommandKind::Edit(Edit::MissionSwitch(sta_sim::command::MissionSwitch::AllowWarp, false)),
+        }
+    }
+
     /// `Order::Transport`, Order tag 18 (protocol 11): the golden covers it.
     fn transport_sample(player: u8, seq: u32) -> Command {
         Command {
@@ -1809,6 +1819,7 @@ mod tests {
                 set_relation_sample(3),
                 planet_population_sample(4),
                 warp_speed_sample(5),
+                mission_switch_sample(6),
             ],
             schedule: vec![
                 Scheduled {
@@ -2098,7 +2109,7 @@ mod tests {
     #[test]
     fn golden_encoding_is_pinned() {
         let all: Vec<u8> = samples().iter().flat_map(|m| encode(m).unwrap()).collect();
-        assert_eq!(PROTOCOL_VERSION, 12);
+        assert_eq!(PROTOCOL_VERSION, 14);
         assert_eq!(
             fnv1a64(&all),
             GOLDEN,
@@ -2106,7 +2117,7 @@ mod tests {
         );
     }
 
-    const GOLDEN: u64 = 17039927170744811663;
+    const GOLDEN: u64 = 10348107938904786321;
 
     /// Tags are positional and never move: NET-04 appended 22 to 28 after
     /// `Sections` (21), the last tag of protocol 2.
@@ -2209,8 +2220,8 @@ mod tests {
     fn header_is_little_endian_and_frozen() {
         let bytes = encode(&Message::Ping { nonce: 0 }).unwrap();
         // Ping is tag 12, nonce 0: two body bytes.
-        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 12, 0, 2, 0, 0, 0, 12, 0]);
-        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 12, 0, 0, 0, 0, 0]);
+        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 14, 0, 2, 0, 0, 0, 12, 0]);
+        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 14, 0, 0, 0, 0, 0]);
     }
 
     #[test]

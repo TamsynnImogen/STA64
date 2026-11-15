@@ -53,9 +53,10 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// planet population rows and colony ship orders (SIM-30). Format 28 appends the
 /// scripted warp speeds (LUA-31). Format 29 appends the transporter orders,
 /// parties in flight and shield holds (SIM-46). Format 31 appends station
-/// recrew activation and damage-pause rows (SIM-70); 30 is reserved by LUA-32.
+/// recrew activation and damage-pause rows (SIM-70); 30 is reserved by LUA-32
+/// and 32 by its alert record. Format 33 appends the mission switches (LUA-41).
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 31;
+pub const FORMAT_VERSION: u16 = 33;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
@@ -482,6 +483,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&WarpRec { version: 1, rows: self.warp_overrides() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.transports.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.recrew.to_rec()).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&self.mission_switches.to_rec()).expect("snapshot serialises"));
         out
     }
 
@@ -557,6 +559,8 @@ impl Sim {
         let warp_override_rows = record.rows;
         let (transport_rec, rest): (crate::combat::boarding::TransportsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         let (recrew_rec, rest): (crate::recrew::RecrewRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        let (switches_rec, rest): (crate::mission_switches::SwitchesRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        let mission_switches = crate::mission_switches::MissionSwitches::from_rec(switches_rec).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -731,6 +735,7 @@ impl Sim {
             colonies,
             transports,
             recrew,
+            mission_switches,
         };
         sim.refresh_seat_rules();
         Ok(sim)
@@ -786,6 +791,10 @@ mod perception_tests;
 #[cfg(test)]
 #[path = "snapshot/warp_tests.rs"]
 mod warp_tests;
+
+#[cfg(test)]
+#[path = "snapshot/mission_switches_tests.rs"]
+mod mission_switches_tests;
 
 #[cfg(test)]
 mod tests {
