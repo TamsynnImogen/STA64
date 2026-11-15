@@ -446,11 +446,13 @@ impl Sim {
         if attack {
             return false; // P3: transport attack (Roots, assault ships).
         }
+        // Armada I has no commandeer keys (S).
+        let armada1 = db.profile() == Profile::Sta1Classic;
         let Some(t) = self.units.get(target).filter(|t| alive(t)) else { return false };
         let target_ok = matches!(t.kind, EntityKind::Craft | EntityKind::Station)
             && t.crew.is_some_and(|c| c[1] >= Fixed::ONE)
             && db.unit(t.def).is_some_and(|d| d.planet_role.is_none());
-        if !target_ok || !(rules.armada1 || can_be_commandeered(&db, self.unit_race(target).unwrap_or(""))) {
+        if !target_ok || !(armada1 || can_be_commandeered(&db, self.unit_race(target).unwrap_or(""))) {
             return false;
         }
         let target_owner = t.owner;
@@ -464,7 +466,7 @@ impl Sim {
                         let def = db.unit(u.def);
                         matches!(u.kind, EntityKind::Craft | EntityKind::Station)
                             // The carrier's race must be allowed to take units of another team.
-                            && (rules.armada1 || self.same_team(u.owner, target_owner) || can_commandeer(&db, self.unit_race(id).unwrap_or("")))
+                            && (armada1 || self.same_team(u.owner, target_owner) || can_commandeer(&db, self.unit_race(id).unwrap_or("")))
                             && (!player.is_player() || u.owner == player)
                             && def.is_some_and(|d| u.crew.is_some_and(|c| can_transport(&db, d, c)))
                     })

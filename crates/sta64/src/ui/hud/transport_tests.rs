@@ -99,9 +99,12 @@ fn the_button_is_greyed_when_the_sim_would_refuse_every_carrier() {
     // A mixed selection is ready when any ship can; the other gets nothing.
     assert!(ready(&feed(&[2, 1])));
     assert!(commands::shared(&feed(&[2])).transport_family, "low crew in a family that allows it");
-    // Armada I (and Native): the sim refuses today, so the button is greyed. This follows the sim's
-    // `transport_allowed` (switched when the sim's Armada I rule lands), not a hard-coded profile check at the button.
-    for p in [Profile::Native, Profile::Sta1Classic] {
+    // Native: the sim refuses, so the button is greyed. This follows the sim's `transport_allowed`, not a
+    // hard-coded profile check at the button. Armada I (SIM-71) is allowed: every crewed craft transports.
+    let a1 = feed_in(Profile::Sta1Classic, &[1], |_| {});
+    assert_eq!(button(&a1).map(|b| b.look), Some(Look::Ready), "Armada I");
+    assert!(commands::shared(&a1).transport_family);
+    for p in [Profile::Native] {
         let f = feed_in(p, &[1], |_| {});
         assert_eq!(button(&f).map(|b| b.look), Some(Look::Locked), "{p:?}");
         assert!(!target_mode_available(&f, TargetMode::Transport), "{p:?}");
@@ -186,7 +189,7 @@ fn pressing_the_button_arms_the_transport_pick_and_queues_nothing_until_the_clic
 
 #[test]
 fn pressing_the_greyed_button_arms_nothing() {
-    for (profile, crew_now) in [(Profile::Sta2Classic, 7), (Profile::Sta1Classic, 40)] {
+    for (profile, crew_now) in [(Profile::Sta2Classic, 7), (Profile::Sta1Classic, 7), (Profile::Native, 40)] {
         let mut app = app(profile, crew_now);
         press_transport(&mut app);
         assert_eq!(app.world().resource::<HudState>().targeting, None, "{profile:?} with {crew_now}");
