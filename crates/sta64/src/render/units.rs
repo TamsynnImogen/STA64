@@ -161,8 +161,8 @@ pub fn sync_units(
             commands.entity(e).try_despawn();
         }
     }
-    let neutral = Color::WHITE;
-    let colour = |owner: PlayerId| teams.as_ref().and_then(|t| t.0.get(owner.0 as usize)).map(|t| t.1).unwrap_or(neutral);
+    // Seat n takes palette entry n + 1 (entry 0 is the neutral one): `TeamColours::owner_colour`.
+    let colour = |owner: PlayerId| teams.as_ref().and_then(|t| t.owner_colour(owner)).unwrap_or(Color::WHITE);
     let mut stale: BTreeSet<EntityId> = BTreeSet::new();
     for (id, u) in want {
         let share = hull_share(u);
@@ -542,7 +542,7 @@ mod view_tests {
             .add_plugins(SimLinkPlugin)
             .insert_resource(LocalPlayer(local))
             .insert_resource(TeamColours(vec![
-                ("empty".into(), Color::WHITE),
+                ("empty".into(), Color::srgb(0.5, 0.5, 0.5)),
                 ("blue".into(), Color::srgb(0.0, 0.0, 1.0)),
                 ("red".into(), Color::srgb(1.0, 0.0, 0.0)),
             ]))
@@ -576,8 +576,9 @@ mod view_tests {
         let mut app = app_with(
             scripted(
                 "{ units: [
-                    { id: 1, owner: 1, hull: 100, rails: [{ at: 0, pos: { x: 0, y: 0, z: 0 } }] },
-                    { id: 2, owner: 2, hull: 100, until: 10, rails: [{ at: 4, pos: { x: 5, y: 0, z: 7 } }] },
+                    { id: 1, owner: 0, hull: 100, rails: [{ at: 0, pos: { x: 0, y: 0, z: 0 } }] },
+                    { id: 2, owner: 1, hull: 100, until: 10, rails: [{ at: 4, pos: { x: 5, y: 0, z: 7 } }] },
+                    { id: 3, owner: 253, hull: 100, rails: [{ at: 0, pos: { x: 2, y: 0, z: 2 } }] },
                 ] }",
             ),
             None,
@@ -595,11 +596,14 @@ mod view_tests {
                 child = Some((e2, c, g));
                 assert_eq!(app.world().get::<TeamColour>(e2).unwrap().0, Color::srgb(1.0, 0.0, 0.0));
                 assert_eq!(app.world().get::<TeamColour>(map[&EntityId(1)]).unwrap().0, Color::srgb(0.0, 0.0, 1.0));
+                assert_eq!(app.world().get::<TeamColour>(map[&EntityId(3)]).unwrap().0, Color::srgb(0.5, 0.5, 0.5), "unowned: the neutral entry");
+                // Seat 0 is the first team (entry 1), not the neutral entry 0.
+                assert_ne!(app.world().get::<TeamColour>(map[&EntityId(1)]).unwrap().0, Color::srgb(0.5, 0.5, 0.5));
             }
         }
         let (e2, c, g) = child.expect("unit 2 never appeared");
         assert!(app.world().get_entity(e2).is_err() && app.world().get_entity(c).is_err() && app.world().get_entity(g).is_err());
-        assert_eq!(app.world().resource::<SimEntities>().0.len(), 1);
+        assert_eq!(app.world().resource::<SimEntities>().0.len(), 2);
     }
 
     #[test]
