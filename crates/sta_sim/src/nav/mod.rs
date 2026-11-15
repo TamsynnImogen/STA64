@@ -341,13 +341,7 @@ impl Sim {
         let default_cost = cell_cost(rules.default_cost, &rules).max(1);
         let off_map = cell_cost(rules.off_map_cost, &rules);
         let resolution = ceil_units(rules.resolution).max(1);
-        let flows = crate::kinematics::Model::of(
-            self.content
-                .as_ref()
-                .map(|c| c.profile())
-                .unwrap_or_default(),
-        )
-        .flows_through_waypoints();
+        let flows = self.content.as_deref().map_or(crate::kinematics::Model::Native, crate::kinematics::Model::for_content).flows_through_waypoints();
         let movers: Vec<EntityId> = self
             .units
             .iter()

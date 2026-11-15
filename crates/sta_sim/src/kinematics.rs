@@ -71,6 +71,7 @@ use sta_core::{Fixed, TICK_HZ, Vec3};
 use crate::{Sim, Unit};
 
 mod placement;
+pub mod a1;
 
 /// The movement model a profile flies by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,11 +81,16 @@ pub enum Model {
     Native,
     /// Armada II's "smooth" physics (stock, STA2 Classic, FO4).
     Smooth,
+    /// Armada I's plain-move model ([`a1`], SIM-66). Never the answer of
+    /// [`Model::of`]: only [`Model::for_content`] gives it, and only once the
+    /// content supplies the play-physics parameters.
+    A1,
 }
 
 impl Model {
-    /// The model of a profile. Armada I (`Sta1Classic`) has not been
-    /// analysed and flies the native model until it is.
+    /// The model of a profile. Armada I (`Sta1Classic`) flies the native model
+    /// here; its own model needs the content's parameters, see
+    /// [`Model::for_content`].
     pub fn of(profile: Profile) -> Model {
         match profile {
             Profile::Sta2Classic | Profile::Fo4 | Profile::Fo3 => Model::Smooth,
@@ -92,10 +98,21 @@ impl Model {
         }
     }
 
+    /// The model a database flies by: [`Model::of`] its profile, except that
+    /// Armada I flies the [`a1`] model when the content supplies its
+    /// parameters ([`a1::params`]; today it never does, so nothing changes).
+    pub fn for_content(db: &sta_content::ContentDb) -> Model {
+        if db.profile() == Profile::Sta1Classic && a1::params(db, sta_core::ContentKey::NONE).is_some() {
+            Model::A1
+        } else {
+            Model::of(db.profile())
+        }
+    }
+
     /// Whether a unit flies through a waypoint that has another leg queued
     /// behind it, instead of coming to rest on it.
     pub fn flows_through_waypoints(self) -> bool {
-        matches!(self, Model::Smooth)
+        matches!(self, Model::Smooth | Model::A1)
     }
 }
 
@@ -105,6 +122,8 @@ pub struct Leg<'a> {
     /// The legs queued after the current target, in order (empty for
     /// models that stop at every waypoint).
     pub queued: &'a [Vec3],
+    /// The Armada I parameters of this unit ([`Model::A1`] only).
+    pub a1: Option<&'a a1::A1Params>,
 }
 
 pub(crate) fn dt() -> Fixed {
@@ -281,7 +300,7 @@ fn face(model: Model, u: &mut Unit, p: Vec3, dt: Fixed) {
     let err = atan2(cross, dot);
     match model {
         Model::Smooth => smooth::face(u, err, dt),
-        Model::Native => {
+        Model::Native | Model::A1 => {
             let st = u.stats;
             let accel = st.forward_accel * st.max_speed;
             u.speed = approach(u.speed, Fixed::ZERO, accel * dt);
@@ -296,12 +315,10 @@ impl Sim {
     /// Step every mobile unit under the content's movement model; units
     /// with an approach plan (ascending id) step under it.
     pub(crate) fn step_kinematics(&mut self, plans: &[(sta_core::EntityId, Plan)]) {
-        let model = Model::of(
-            self.content
-                .as_ref()
-                .map(|c| c.profile())
-                .unwrap_or_default(),
-        );
+        let model = match self.content.as_deref() {
+            Some(db) => Model::for_content(db),
+            None => Model::of(Profile::default()),
+        };
         let flows = model.flows_through_waypoints();
         let obstacles = if self.confinement.is_active() { self.obstacles() } else { Vec::new() };
         self.step_drifting_spin();
@@ -312,11 +329,15 @@ impl Sim {
                 _ => &[],
             };
             let previous = u.pos;
-            match plans.binary_search_by_key(&u.id, |p| p.0) {
-                Ok(i) => step_planned(model, u, Leg { queued }, plans[i].1),
+            let a1 = if model == Model::A1 { db.and_then(|db| a1::params(db, u.def)) } else { None };
+            let plan = plans.binary_search_by_key(&u.id, |p| p.0).ok().map(|i| plans[i].1);
+            match (&a1, plan) {
+                // Armada I (SIM-66): its own step; no warp phase, no drop-out.
+                (Some(p), plan) => a1::step(u, p, queued, plan),
+                (None, Some(plan)) => step_planned(model, u, Leg { queued, a1: None }, plan),
                 // Out of warp with no attack left: the warp-out still runs.
-                Err(_) if u.speed > u.stats.max_speed => step_planned(model, u, Leg { queued }, Plan::default()),
-                Err(_) => step(model, u, Leg { queued }),
+                (None, None) if u.speed > u.stats.max_speed => step_planned(model, u, Leg { queued, a1: None }, Plan::default()),
+                (None, None) => step(model, u, Leg { queued, a1: None }),
             }
             if self.confinement.is_active() && u.pos != previous {
                 let radius = db.and_then(|db| db.unit(u.def)).map_or(Fixed::ZERO, |d| d.radius * Fixed::from_int(3) / Fixed::from_int(4));
@@ -340,6 +361,10 @@ pub fn step(model: Model, u: &mut Unit, leg: Leg) {
     match model {
         Model::Native => native::step(u),
         Model::Smooth => smooth::step(u, leg),
+        Model::A1 => match leg.a1 {
+            Some(p) => a1::step(u, p, leg.queued, None),
+            None => native::step(u),
+        },
     }
 }
 
@@ -784,3 +809,5 @@ mod smooth {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod a1_tests;

@@ -70,7 +70,7 @@ fn fly(u: &mut Unit, legs: &[Vec3], max: u32) -> (Option<u32>, Fixed) {
     let mut slowest = u.stats.max_speed;
     let mut moving = false;
     for t in 0..max {
-        step(Model::Smooth, u, Leg { queued: &queue });
+        step(Model::Smooth, u, Leg { queued: &queue, a1: None });
         if u.target.is_none() && !queue.is_empty() {
             u.target = Some(queue.remove(0));
         }
@@ -262,7 +262,7 @@ fn smooth_trajectory_golden() {
             let mut queue: Vec<Vec3> = legs[1..].to_vec();
             u.target = Some(legs[0]);
             for _ in 0..1500 {
-                step(Model::Smooth, &mut u, Leg { queued: &queue });
+                step(Model::Smooth, &mut u, Leg { queued: &queue, a1: None });
                 if u.target.is_none() && !queue.is_empty() {
                     u.target = Some(queue.remove(0));
                 }
