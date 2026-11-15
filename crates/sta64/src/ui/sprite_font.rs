@@ -1118,7 +1118,7 @@ fn resolve_text(
             // Plain `sprite_text` carries no `Node` of its own (the glyph path adds one): without
             // it the TTF child is outside the UI tree and nothing is drawn (an install with no
             // loadable sprite font, such as Armada I's).
-            commands.entity(e).insert_if_new(Node::default());
+            commands.entity(e).insert_if_new(Node { flex_shrink: 0.0, ..default() });
             commands.entity(e).insert(SpriteLaid { text: t.text.clone(), size: t.size, untinted: Vec::new(), mixed: false });
             if let Some(&child) = existing.first().filter(|child| texts.contains(**child)) {
                 commands.entity(child).insert(label);
