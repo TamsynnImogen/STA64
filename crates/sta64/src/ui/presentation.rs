@@ -954,6 +954,10 @@ pub struct PresentationPlugin;
 
 /// Back at the front end (UI-34): titles, fades, queued message boxes, pending movie replies and the
 /// objectives panel of the match are gone, whatever ended it (a mission's debrief, F10, the in-game menu).
+fn reset_bridge(mut bridge: ResMut<BridgeState>) {
+    *bridge = default();
+}
+
 fn reset_presentation(
     mut titles: ResMut<Titles>,
     mut fade: ResMut<FadeState>,
@@ -962,9 +966,7 @@ fn reset_presentation(
     mut view: ResMut<ObjectivesView>,
     mut queue: ResMut<MessageQueue>,
     mut sounds: ResMut<ScriptSounds>,
-    mut bridge: ResMut<BridgeState>,
 ) {
-    *bridge = default();
     sounds.pending.clear();
     sounds.last_tick = 0;
     titles.items.clear();
@@ -991,7 +993,7 @@ impl Plugin for PresentationPlugin {
             .add_message::<crate::audio::SoundStarted>()
             .init_resource::<ObjectivesView>()
             .init_resource::<MessageQueue>()
-            .add_systems(OnEnter(crate::app::AppState::FrontEnd), reset_presentation)
+            .add_systems(OnEnter(crate::app::AppState::FrontEnd), (reset_presentation, reset_bridge))
             .add_message::<ScriptReply>()
             .add_message::<MessageBox>()
             .add_message::<crate::media::mission::Requested>()
