@@ -160,3 +160,16 @@ fn the_digest_of_a_run_without_guards_is_unchanged_and_a_guard_changes_it() {
     run(&mut b, vec![order(1, 1, Order::Stop { units: vec![guard] })], 1);
     assert!(b.scripted.job(guard).is_none() && b.scripted.is_empty());
 }
+
+/// A pinned whole-state digest sample that contains a guard row (LUA-39). A change of
+/// the guard's rules, or of anything the digest covers, moves it on purpose.
+#[test]
+fn a_whole_state_digest_with_a_guard_is_pinned() {
+    let (mut sim, _db, guard, ward) = pair();
+    run(&mut sim, vec![order(1, 0, Order::Guard { units: vec![guard], ward })], 2);
+    run(&mut sim, vec![order(1, 1, Order::Move { units: vec![ward], to: v(0, 900), queue: false })], 20 * HZ);
+    assert!(matches!(sim.scripted.job(guard), Some(Job::Guard { .. })));
+    assert_eq!(sim.digest(), PINNED_DIGEST);
+}
+
+const PINNED_DIGEST: u64 = 802086069578517796;

@@ -2116,7 +2116,7 @@ mod tests {
         );
     }
 
-    const GOLDEN: u64 = 17039927170744811663;
+    const GOLDEN: u64 = 10081208295799762682;
 
     /// Tags are positional and never move: NET-04 appended 22 to 28 after
     /// `Sections` (21), the last tag of protocol 2.
@@ -2219,8 +2219,8 @@ mod tests {
     fn header_is_little_endian_and_frozen() {
         let bytes = encode(&Message::Ping { nonce: 0 }).unwrap();
         // Ping is tag 12, nonce 0: two body bytes.
-        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 12, 0, 2, 0, 0, 0, 12, 0]);
-        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 12, 0, 0, 0, 0, 0]);
+        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 13, 0, 2, 0, 0, 0, 12, 0]);
+        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 13, 0, 0, 0, 0, 0]);
     }
 
     #[test]
@@ -2336,8 +2336,8 @@ mod tests {
         assert_eq!(peek_header(&bytes), Ok((1, bytes.len() - HEADER_LEN)));
         // A version notice from another build reads as its version.
         let mut notice = version_notice();
-        notice[4..6].copy_from_slice(&13u16.to_le_bytes());
-        assert_eq!(decode(&notice), Err(ProtoError::Version { found: 13 }));
+        notice[4..6].copy_from_slice(&14u16.to_le_bytes());
+        assert_eq!(decode(&notice), Err(ProtoError::Version { found: 14 }));
         // Our own version with no body is not a message.
         assert_eq!(decode(&version_notice()), Err(ProtoError::Empty));
         bytes[0] = b'X';
