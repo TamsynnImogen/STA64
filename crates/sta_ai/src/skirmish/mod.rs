@@ -67,7 +67,7 @@ mod pd;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use sta_content::{Aip, ContentDb, Owned, WeaponKind};
+use sta_content::{Aip, Availability, ContentDb, Owned, Unmet, WeaponKind};
 use sta_core::{ContentKey, EntityId, Fixed, PlayerId, Tick, Vec3};
 use sta_sim::SimEvent;
 use sta_sim::command::{Command, CommandKind, Order};
@@ -618,10 +618,46 @@ impl SkirmishController {
             })
         };
 
-        // Short of miners, and one can be built: save for them, spend nothing
-        // on ships. Income is what wins long games.
+        // Without an AIP, a yard's miner may be locked behind a station the
+        // rig can build. Use the tech tree's missing prerequisite rather than
+        // guessing a station by name or spending on an unrelated build.
+        let can_make_miners = own.iter().any(|o| {
+            o.role == Role::Yard && o.finished && buildable(o.def).iter().any(|&k| role_of(&db, k) == Role::Miner)
+        });
+        let mut miner_prereqs = BTreeSet::new();
+        if rows.is_empty() && count_role(&total, Role::Miner) < self.cfg.params.miners && !can_make_miners
+            && let Some(tree) = db.tech_tree()
+        {
+            for yard in own.iter().filter(|o| o.role == Role::Yard && o.finished) {
+                let Some(name) = db.name(yard.def) else { continue };
+                for option in tree.build_options(&db, name, &state, true) {
+                    if role_of(&db, option.def.key) != Role::Miner { continue; }
+                    if let Availability::Locked { unmet, .. } = option.availability {
+                        for missing in unmet {
+                            if let Unmet::Missing(name) = missing
+                                && let Some(key) = db.key(&name).filter(|&k| is_station(&db, k))
+                            {
+                                miner_prereqs.insert(key);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Short of miners, save for an available miner or a station an idle
+        // rig can build to unlock one. Keep the budget while that rig's
+        // deploy is in flight or its station is unfinished, until the newly
+        // available miner can be built.
+        // A locked second-level prerequisite, or no usable rig, must not
+        // freeze normal yard production.
         let saving = count_role(&total, Role::Miner) < self.cfg.params.miners
-            && own.iter().any(|o| o.role == Role::Yard && o.finished && buildable(o.def).iter().any(|&k| role_of(&db, k) == Role::Miner));
+            && (can_make_miners
+                || self.rig_jobs.values().any(|(k, _)| miner_prereqs.contains(k))
+                || own.iter().any(|o| !o.finished && miner_prereqs.contains(&o.def))
+                || own.iter().any(|o| {
+                    o.role == Role::Rig && o.finished && buildable(o.def).iter().any(|k| miner_prereqs.contains(k) && total.get(k).copied().unwrap_or(0) == 0)
+                }));
 
         // Yards, ascending id.
         for y in own.iter().filter(|o| o.role == Role::Yard && o.finished) {
@@ -666,7 +702,8 @@ impl SkirmishController {
             self.queued.entry(y.id).or_default().push((seq, what));
         }
 
-        // Rigs deploy the stations the AIP lists that are not there yet.
+        // Rigs deploy the stations the AIP lists, or a missing miner
+        // prerequisite when no AIP supplied a build list.
         let idle_rigs: Vec<&Own> = own
             .iter()
             .filter(|o| o.role == Role::Rig && o.finished && !o.welding && !self.rig_jobs.contains_key(&o.id))
@@ -692,6 +729,14 @@ impl SkirmishController {
                         && list_limit(k).is_some_and(|lim| total.get(&k).copied().unwrap_or(0) < lim)
                         // An orbital station needs a free planet orbit (SIM-62).
                         && (!db.unit(k).is_some_and(sta_sim::production::orbit::is_orbital) || orbit_site(&taken, r.pos).is_some())
+                })
+                .or_else(|| {
+                    if count_role(&total, Role::Miner) >= self.cfg.params.miners { return None; }
+                    miner_prereqs.iter().copied()
+                        .filter(|k| opts.contains(k) && total.get(k).copied().unwrap_or(0) == 0)
+                        .filter(|&k| affordable(k, &reserve))
+                        .filter(|&k| !db.unit(k).is_some_and(sta_sim::production::orbit::is_orbital) || orbit_site(&taken, r.pos).is_some())
+                        .min_by_key(|&k| (cost_sum(&db, k), k))
                 });
             let Some(what) = want.filter(|&k| affordable(k, &reserve)) else { continue };
             spend(what, &mut reserve);
