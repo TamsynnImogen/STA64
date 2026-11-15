@@ -52,13 +52,17 @@ pub struct SimLink {
     /// The game so far as a replay, when something asked for one (the playtest
     /// capture, TOOL-14): what each tick was given, never read by the sim.
     log: Option<Replay>,
+    /// UI-46: the views the client draws and reads, when the player lifted the fog (see
+    /// [`SimLink::set_fog_lifted`]); `None` otherwise, when they are `prev` and `curr`.
+    lifted: Option<(Arc<WorldView>, Arc<WorldView>)>,
+    fog_lifted: bool,
 }
 
 impl SimLink {
     pub fn new(source: Box<dyn WorldSource>, router: Box<dyn CommandRouter>, player: PlayerId) -> SimLink {
         let view = source.view();
         let production = source.production_view();
-        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None }
+        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None, lifted: None, fog_lifted: false }
     }
 
     /// Log every tick into `replay` (a [`Replay::new`] header of the game's
@@ -93,19 +97,41 @@ impl SimLink {
         self.controllers.get().len()
     }
 
-    /// The view before the last tick.
+    /// The view before the last tick, as the client draws it (every unit shown while the fog is lifted).
     pub fn prev(&self) -> &Arc<WorldView> {
-        &self.prev
+        self.lifted.as_ref().map_or(&self.prev, |l| &l.0)
     }
 
-    /// The view after the last tick.
+    /// The view after the last tick, as the client draws it (every unit shown while the fog is lifted).
     pub fn curr(&self) -> &Arc<WorldView> {
+        self.lifted.as_ref().map_or(&self.curr, |l| &l.1)
+    }
+
+    /// The sim's own view after the last tick, whatever the client shows: what captures, replays and
+    /// anything that must not depend on a cheat read.
+    pub fn real_curr(&self) -> &Arc<WorldView> {
         &self.curr
     }
 
     /// Queue/site metadata at the same simulation tick as `curr`.
     pub fn production(&self) -> &[sta_sim::production::view::ProductionView] {
         &self.production
+    }
+
+    /// UI-46 (presentation only): show every unit to the local player while `lifted`. The shown views
+    /// are copies of the sim's with every player's visibility list made complete; the sim's views, the
+    /// controllers, the replay log, the snapshot and the digest are never given them.
+    pub fn set_fog_lifted(&mut self, lifted: bool) {
+        self.fog_lifted = lifted;
+        self.refresh_lifted();
+    }
+
+    pub fn fog_lifted(&self) -> bool {
+        self.fog_lifted
+    }
+
+    fn refresh_lifted(&mut self) {
+        self.lifted = self.fog_lifted.then(|| (all_seen(&self.prev), all_seen(&self.curr)));
     }
 
     pub fn player(&self) -> PlayerId {
@@ -140,6 +166,7 @@ impl SimLink {
     pub fn feed_with_production(&mut self, view: Arc<WorldView>, production: Vec<sta_sim::production::view::ProductionView>) {
         self.prev = std::mem::replace(&mut self.curr, view);
         self.production = production;
+        self.refresh_lifted();
     }
 
     /// Run one tick if the router has its commands; `None` on a stall.
@@ -152,6 +179,7 @@ impl SimLink {
             log.log_step(before, &batch, out.view.tick, out.view.digest, DEFAULT_DIGEST_EVERY);
         }
         self.prev = std::mem::replace(&mut self.curr, out.view);
+        self.refresh_lifted();
         let mut cmds = Vec::new();
         for c in self.controllers.get().iter_mut() {
             c.think(&self.curr, &out.events, &mut cmds);
@@ -165,6 +193,20 @@ impl SimLink {
         }
         Some(out.events)
     }
+}
+
+/// A copy of `view` in which every player sees every unit. A view without visibility data already
+/// shows everything and is returned as it is.
+pub fn all_seen(view: &Arc<WorldView>) -> Arc<WorldView> {
+    if view.visibility.is_empty() {
+        return view.clone();
+    }
+    let ids: Vec<EntityId> = view.units.iter().map(|u| u.id).collect();
+    let mut v = (**view).clone();
+    for (_, seen) in &mut v.visibility {
+        seen.clone_from(&ids);
+    }
+    Arc::new(v)
 }
 
 /// The ids of units a mission script removed with a removal call (`Entity.remove`) whose `Destroyed`
