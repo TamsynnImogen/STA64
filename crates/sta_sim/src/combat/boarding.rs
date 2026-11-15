@@ -90,6 +90,13 @@ impl TransportRules {
     }
 }
 
+/// The carrier's crew floors, `[min_crew, party]`: a carrier needs more live crew than both to take
+/// `Order::Transport`. Read-only, no behaviour: lets the HUD grey its button from the rule's own numbers (UI-40).
+pub fn carrier_crew_floors(db: &ContentDb) -> [Fixed; 2] {
+    let rules = TransportRules::of(db);
+    [rules.min_crew, rules.party]
+}
+
 /// STUB (`transporter`, default true on `craft.odf`): crewed ships and stations.
 fn can_transport(def: &UnitDef, crew_max: Fixed) -> bool {
     def.planet_role.is_none() && crew_max > Fixed::ZERO

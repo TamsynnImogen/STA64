@@ -41,13 +41,26 @@
 use sta_core::{EntityId, Fixed, PlayerId, Vec3};
 
 use crate::Sim;
-use crate::spatial::{Body, Grid, Solid, push_from_solid, separate};
+use crate::kinematics::Model;
+use crate::spatial::{Body, Grid, Solid, push_from_solid, separate, separate_3d};
 use crate::world::EntityKind;
 
 /// Grid cell width, `2^7` units.
 const CELL_LOG2: u32 = 7;
+/// A craft's displacement in X and Z.
+type Shift = (EntityId, (Fixed, Fixed));
+/// A craft's gain in height.
+type Lift = (EntityId, Fixed);
 /// Extra room kept round a solid when steering, units.
 const MARGIN: i32 = 12;
+
+/// Vertical share of a craft-craft push under the Armada II family rule, per
+/// unit of overlap depth. Fitted to the bench marks (head-on over a parked
+/// craft, a crossing at 30 degrees, a glancing pass), not read: the
+/// executable's bias is 0.42 per contact in units not established.
+fn vertical_bias() -> Fixed {
+    Fixed::from_f64(0.42)
+}
 
 fn three_quarters(r: Fixed) -> Fixed {
     r * Fixed::from_int(3) / Fixed::from_int(4)
@@ -96,6 +109,11 @@ impl Sim {
             .as_ref()
             .and_then(|db| db.unit(def))
             .map_or(Fixed::ZERO, |d| three_quarters(d.radius))
+    }
+
+    /// The full bounding radius of a definition (zero: takes no room).
+    pub(crate) fn full_radius(&self, def: sta_core::ContentKey) -> Fixed {
+        self.content.as_ref().and_then(|db| db.unit(def)).map_or(Fixed::ZERO, |d| d.radius)
     }
 
     pub(crate) fn obstacles(&self) -> Vec<Obstacle> {
@@ -300,6 +318,32 @@ impl Sim {
         }
     }
 
+    /// The displacements of craft overlapping each other, `(id, (x, z))`, and
+    /// the heights they gain, `(id, y)`, both ascending by id.
+    ///
+    /// Armada II family (SIM-67): 3D, shared by speed, vertical bias; see
+    /// [`separate_3d`]. Every other model keeps the XZ half-and-half rule
+    /// ([`separate`]), bit for bit.
+    fn craft_shifts(&self, bodies: &[Body]) -> (Vec<Shift>, Vec<Lift>) {
+        let profile = self.content.as_ref().map(|c| c.profile()).unwrap_or_default();
+        if Model::of(profile) != Model::Smooth {
+            return (separate(&Grid::build(bodies, CELL_LOG2)), Vec::new());
+        }
+        // Full bounding radii (the original's ellipsoid is SIM-32's change).
+        let full: Vec<Body> = bodies
+            .iter()
+            .map(|b| Body {
+                radius: self.units.get(b.id).map_or(Fixed::ZERO, |u| self.full_radius(u.def)),
+                ..*b
+            })
+            .collect();
+        let speed = |id: EntityId| self.units.get(id).map_or(Fixed::ZERO, |u| u.speed);
+        let shifts3 = separate_3d(&Grid::build(&full, CELL_LOG2), &speed, vertical_bias());
+        let xz = shifts3.iter().map(|&(id, (x, _, z))| (id, (x, z))).collect();
+        let y = shifts3.iter().map(|&(id, (_, y, _))| (id, y)).collect();
+        (xz, y)
+    }
+
     /// Keep craft out of each other and out of solids, once per tick.
     pub(crate) fn separate_units(&mut self) {
         if self.content.is_none() {
@@ -320,7 +364,7 @@ impl Sim {
         if bodies.is_empty() {
             return;
         }
-        let mut shifts = separate(&Grid::build(&bodies, CELL_LOG2));
+        let (mut shifts, lifts) = self.craft_shifts(&bodies);
         let obstacles = self.obstacles();
         for b in bodies.iter().filter(|body| body.movable) {
             let owner = self.units.get(b.id).map(|u| u.owner);
@@ -355,6 +399,9 @@ impl Sim {
                 let previous = u.pos;
                 u.pos.x = u.pos.x + dx;
                 u.pos.z = u.pos.z + dz;
+                if let Ok(i) = lifts.binary_search_by_key(&id, |l| l.0) {
+                    u.pos.y = u.pos.y + lifts[i].1;
+                }
                 if u.pos != previous {
                     let radius = bodies.binary_search_by_key(&id, |b| b.id).map_or(Fixed::ZERO, |i| bodies[i].radius);
                     constrain_position(&mut self.confinement, u, previous, radius, &obstacles);
@@ -478,3 +525,6 @@ fn detours(p: Vec3, dir: (Fixed, Fixed), c: Vec3, ring: Fixed, y: Fixed, far: Fi
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+#[path = "avoid/a2_separation_tests.rs"]
+mod a2_separation_tests;

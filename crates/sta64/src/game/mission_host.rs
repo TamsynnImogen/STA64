@@ -74,7 +74,7 @@ use bevy::prelude::*;
 use sta_content::{ContentDb, MapDef, Races};
 use sta_core::{PlayerId, TICK_HZ};
 use sta_mission::api::PlayerNumbering;
-use sta_mission::campaign::{Campaign, CampaignBook, CampaignMission, MissionHost, MissionOutcome, ScriptReader, launch_runtime, map_setup, read_map_paths, resolved_script, scan_outcome};
+use sta_mission::campaign::{Campaign, CampaignBook, CampaignMission, MissionHost, MissionOutcome, ScriptReader, launch_runtime_with_start, map_setup, read_map_paths, resolved_script, scan_outcome};
 use sta_mission::runtime::MissionRuntime;
 use sta_sim::command::Command;
 use sta_sim::setup::{Control, Controller, GameOptions, GameSetup, PlayerSetup};
@@ -114,6 +114,8 @@ pub struct MissionLaunch {
     paths: Vec<(String, Vec<[f32; 3]>)>,
     /// The AIPs the script may load (AI-06).
     aips: sta_ai::AipLibrary,
+    /// The seats' start values from the map's team table.
+    start_stock: sta_mission::start_stock::StartStock,
 }
 
 impl std::fmt::Debug for MissionLaunch {
@@ -145,6 +147,7 @@ impl MissionLaunch {
             seat: campaigns.host.seat(),
             paths: campaigns.host.map_paths(c, m),
             aips: campaigns.host.aip_library(),
+            start_stock: campaigns.host.start_stock(c, m),
         })
     }
 
@@ -169,7 +172,7 @@ impl MissionLaunch {
 
     /// Load the script over the built game and share it between the link and the host.
     pub fn attach(&self, setup: &GameSetup, sim: &Sim) -> Result<MissionHandle, String> {
-        let runtime = launch_runtime(&self.script, self.reader.clone(), self.seed, self.seat, setup, sim, self.paths.clone()).map_err(|e| e.to_string())?;
+        let runtime = launch_runtime_with_start(&self.script, self.reader.clone(), self.seed, self.seat, setup, sim, self.paths.clone(), Vec::new(), self.start_stock.clone()).map_err(|e| e.to_string())?;
         let hub = sta_ai::MissionAiHub::new(self.aips.clone());
         let ai = setup.players.iter().filter(|p| !matches!(p.control, Control::Human)).map(|p| hub.controller(setup, p.id)).collect();
         Ok(MissionHandle { runtime: Arc::new(Mutex::new(runtime)), seats: Arc::new(Mutex::new(Seats { hub, ai })), removals: ScriptRemovals::default() })
@@ -570,6 +573,10 @@ impl MissionHost for ClientHost {
 
     fn map_paths(&self, _: &Campaign, mission: &CampaignMission) -> Vec<(String, Vec<[f32; 3]>)> {
         read_map_paths(&self.vfs, &mission.bzn)
+    }
+
+    fn start_stock(&self, _: &Campaign, mission: &CampaignMission) -> sta_mission::start_stock::StartStock {
+        sta_mission::start_stock::read_start_stock(&self.vfs, &mission.bzn)
     }
 
     fn seat(&self) -> (PlayerId, PlayerNumbering) {
