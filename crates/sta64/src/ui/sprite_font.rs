@@ -62,7 +62,7 @@ pub struct Page {
 pub struct SpriteFont {
     /// File stem as the VFS reports it (lower case), e.g. `fontsmall`.
     pub name: String,
-    /// `@referenceWidth`/`@referenceHeight` when the file sets them.
+    /// `@referenceWidth`/`@referenceHeight`, or Armada I's single `@reference=`, when the file sets them.
     pub reference: Option<[f32; 2]>,
     pub pages: Vec<Page>,
 }
@@ -109,10 +109,10 @@ impl SpriteFont {
             };
             let mut uv = strip(&lines, uv_id);
             let w = strip(&lines, w_id);
-            // Armada I's strips run one corner past the last width (224 corners, 223
-            // widths); a corner with no width cannot be drawn and is dropped. Fewer corners
+            // Armada I's strips run one corner past the last width (one corner more
+            // than widths); a corner with no width cannot be drawn and is dropped. Fewer corners
             // than widths is a damaged table.
-            if uv.len() > w.len() && !w.is_empty() {
+            if uv.len() == w.len() + 1 && !w.is_empty() {
                 uv.truncate(w.len());
             }
             if texture.is_empty() || height <= 0.0 || uv.is_empty() || uv.len() != w.len() {
@@ -2411,7 +2411,7 @@ mod tests {
         let fonts = read_fonts(&vfs);
         for stem in ["font", "font_jag"] {
             let Some(f) = fonts.iter().find(|f| f.name.eq_ignore_ascii_case(stem)) else {
-                if vfs.read("sprites/font.spr").is_some() {
+                if vfs.read(&format!("sprites/{stem}.spr")).is_some() {
                     panic!("{stem}: not read");
                 }
                 eprintln!("{stem}: not in this install: skipped");
