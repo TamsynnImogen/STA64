@@ -169,6 +169,28 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] FO4 AI startup (#806): start a fresh Federation versus Klingon skirmish. The computer's avatar starter should change into its authored productive station, then begin building. Check that the human starter remains available for manual avatar selection. The automatic AI owner gate is backed by static original-hook evidence and headless tests; graphical acceptance remains manual.
 
+### Playtest checks from the 2026-11-14/15 merges
+
+- [?] Planets (#732): in a map view a planet shows its near, camera-side hemisphere lit toward the key light, with the cloud shell and halo over the ground; check that dense clouds do not dim the halo.
+- [?] Planet and backdrop scenery (#757): play the first Armada I campaign mission from the start: the background planet stays visible at every zoom, at low camera angles and in the opening cineractive; clicking it while no own ship is near selects nothing. Check other Armada I missions with a planet object the same way.
+- [?] Armada I hull rims (#758): `cargo run -- --map fed1` as Federation: the saucer rim and nacelle caps are the owner's team colour, not red or pink; the Armada II Galaxy strut stays neutral.
+- [?] Armada I movement (LUA-30, #740): orders given with `Attack(unit, Vector)` fly to weapon range of the point without firing on the way; `ReplaceObject` leaves a new unit at the old place under the same owner.
+- [?] Armada I warp speed (LUA-31, #745): an Armada I mission that calls `SetWarpSpeed` makes the ship fly its warp leg at that speed and turn at impulse; a cineractive end restores normal warp speed.
+- [?] Wormholes (LUA-24, #763): in the Roots gameplay tutorial, right-click the first gate with the flagship, go out through it and back.
+- [?] Fleet Operations miners (#750): in a Fleet Operations Roots game, a miner with a long beam circles its resource instead of spiralling into it, and unloads at the station.
+- [?] a2_fed01 first contact (#751): the first-contact scene plays at the first real Borg sighting after the briefing, not at the end of the intro; the cinematic video shows in its own window with play continuing.
+- [?] Cutscenes (#755): in an installed Roots campaign mission with a cineractive intro, selection and orders do nothing and no event voices play while the cineractive runs. (install-gated)
+- [?] Mission openings (#772): in installed Roots campaign missions that open on a cineractive the first frame is the script's opening shot with the HUD hidden and no explosion of the replaced craft.
+- [?] Armada I HUD text (#756): in an Armada I campaign mission with the LCARS HUD, the resource bar shows numbers and labels and event lines show unit captions, not ODF names.
+- [?] Armada I fonts (UI-41, #802): in an Armada I skirmish the resource strip and unit captions use the stock font.
+- [?] Fleet Operations HUD (#760): a Roots 16:9 match (2752x1152 and 1920x1080): select a ship; the command buttons start right of the minimap panel; STA2 Classic and Armada II look as before.
+- [?] HUD layout (#773): in a wide window "HUD layout: Centred" is shown in Graphics options; Stretched fills the window at once, Centred restores the centred HUD, and the choice survives a restart.
+- [?] Campaign stock (#765): the first mission of each Armada II race starts with stock in the top bar and ships can be built; a Roots campaign mission starts with its map's stock; the gameplay tutorial still has none.
+- [?] Orbital stations (SIM-65, #759): in Armada II stock or STA2 Classic a finished orbital processing facility circles its planet once per `orbitTime` and pulses a mining beam at it.
+- [?] Armada I resource moons (CON-53, #798): in a running Armada I game the moon is clickable, a freighter mines and delivers, and the moon glows.
+- [?] AI plan switching (LUA-38, #776): a converted Armada II mission with AI-plan switch rules loads one AI plan after the opening and another at most once per switch interval when the relative strength crosses a band.
+- [?] Transport content keys (SIM-46 P0, #753): with every install present, `cargo test -p sta_content --test transport_keys` passes (general rules over the install).
+
 ## Checked earlier (morning list)
 
 - [x] Construction live-feedback fixes accepted (2026-11-11, `construction-a1666d0`): the user confirmed visible beams, later chunk reveal and the constructor staying fixed under normal/queued movement. Automated Stop/cancellation and snapshot checks pass. FPS was not reported; this does not complete broader native/Android checks above.
@@ -434,6 +456,68 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] LUA-20: a2_borg01 / a2_borg10 end near a `DisableAllAITeams`; check in the original whether a disabled team's distress responses and running waves change what `IsCompromised`/`CountStations` see there (not measured).
 - [ ] LUA-20: player check in game: a mission with `DisableAllAITeams` in a cineractive (borg01) and its AI waves afterwards.
 - [ ] SIM-61: mission-save blob carries per seat `ai`, `enabled`, plan; host-side requests outside `think` (replies) in the command stream.
+
+### Follow-ups from the 2026-11-14/15 merges
+
+- [ ] Render (#732): `render::gpu_shaders::rock_planet_and_nebula_pipelines_build` fails when run in one process with the other GPU tests (pre-existing on main), passes alone: isolate the test.
+- [ ] Render (#732): the planet halo (additive) and the cloud shell (blended) sort-tie at the same origin and depth bias: fix the bias if dense clouds dim the halo.
+- [ ] LUA-24 (#734): wormhole props are selectable and tinted in the UI for map gates seated to a team (`map/mod.rs` adds a select radius from the BZN team): key the select radius and the tint on the sim owner, or exclude `wormhole_obj` as the neighbouring code does. The study wanted them "not counted" by `CountUnits`; not filtered.
+- [ ] LUA-24 (#734): id-order gate pairing over live gates is reachable on stock maps (a script-built gate pairs with an odd leftover map gate; removing a gate shifts later pairs): fix with the gate link package; re-record the install-derived goldens.
+- [ ] LUA-24 (#763): maps with a gate count other than two get travel only after LUA-33 reads the partner pointers; recheck then, and re-check `a2_borg05`, `a2_kling05` and `a2_kling06` when the team travel switch and gate routing land.
+- [ ] LUA-24 (#763): HUD cursor for a right-click on a wormhole.
+- [ ] LUA-24 (#763): queued, patrol, escort and follow orders onto a gate are not carried through, a destroyed map gate ends travel for the game, and a craft with no qualifying exit spot may rest on the gate's centre: revisit with LUA-34.
+- [ ] LUA-24 (#763): `EnableWormholeTravel`, `LinkWormholes`, `StuffIntoWormhole` and `SetWormholeDeleteOnTransport` are still gaps while travel is always on for two-gate maps: a mission that keeps a gate closed gets a teleport instead.
+- [ ] LUA-25 (#737): do NOT wire `map_label_gaps` into the client host while `handle_gap` is global; first narrow the taint to the gapped label's own handle uses.
+- [ ] LUA-25 (#737): add the no-gap control to the label-gap test for the never-existing handle read, and rename the scenery-light test and its assertion message to "light-named prop".
+- [ ] LUA-30 (#740): the A2 `DestroyCritical` has no kind gate (it kills a prop or resource with hull, the A1 one skips those): check it against the stock A2 scripts.
+- [ ] LUA-30 (#740): `ReplaceObject` and `RemoveObject` emit Destroyed events, the original removes silently: a silent-retire edit tag in the sim (protocol bump); decide for the other remove calls (`RemoveAllObjects`, `RemoveAllCraft`, the A2 `RemoveObject`) once the docs or a measurement say so (#772).
+- [ ] LUA-30 (#740, #778): remove the dead gap registrations in `a1/seams.rs` and the no-op `Env::owned` once the special-forces package has merged.
+- [ ] LUA-31 (#745): `A1.GetWarpSpeed` can read a stale value for one tick (it ignores an edit the host has taken but the sim has not applied); implement the pending step if a mission calls it.
+- [ ] LUA-31 (#745): a script dropping a craft's warp below impulse mid-move is handled two ways (plain moves versus the attack approach); unify if it matters in play.
+- [ ] Test (#742): find the root cause of the Windows stall in `injected_latency_stalls_but_never_diverges` once the next failure shows the per-peer report (check the Windows read-timeout residual risk in `transport/wire.rs`).
+- [ ] Test (#741): the model_info temp-file collision on macOS was not reproduced; confirm the unique names cure it.
+- [ ] Miners (#750): measure on the original bench how fast and which way a miner with a long beam circles its resource and at what radius; Armada I sits exactly on the new branch's threshold, so a rounding-level position difference is possible there.
+- [ ] a2_fed01 (#751): `CountVisibleUnits` / `CountVisibleUnitsNearObject` honour the bool argument (real versus perceived team; read from the executable, static; STA64 ignores it today).
+- [ ] a2_fed01 (#751): measure in the original when a freshly created object becomes visible to other teams; if it is a sensor-pass cadence, replace the one-tick rule (needs a spawn tick in the sim).
+- [ ] HUD (#751): cinematic panel from the stock cfg `cinematic*Area` keys shows `PlayCinematicMovie` videos while play continues (`media::PanelScreen`).
+- [ ] SIM-46 P0 (#753): the AI and presentation keys (`crewRetreatRatio`, `transportToEnemyOnHard`, `transportToFriendsOnNotEasy`, `transportSprite`, `eventTransport`) are typed only and have no consumer yet; AI-02 and the renderer read them or they are removed.
+- [ ] SIM-46 P0 (#753): the boarding weapon keys (boarding size, delay and interval, commando team keys, torpedo boarding keys, `borgbore`) and the new transport `Features` switches (`derelict_latch`, `transport_approach`, `transport_attack_by_weld`, `transport_cloak_abort`, `transport_ally_hold_fire`) belong to the later SIM-46 packages.
+- [ ] SIM-46 (#774): switch the transporter seam (`TransportRules::of` and the four functions in `combat/boarding.rs`, stub values) to the #753 content keys, digest them (D10), apply race `boardingStrength` and `canCommandeer` from data, and update `TYPED_CFG_KEYS` for `TRANSPORTER_*`.
+- [ ] SIM-46 (#774): carrier shield restore at the end of a hold is not skipped when the carrier changed owner during the hold, and fills shields while a target hold on the same unit still runs: not measured; decide with the assault step.
+- [ ] SIM-46 (#774): fix the doc comment of `a_scripted_capture_run_is_pinned` (the first party captures), add a test that an invalid hold-kind byte is refused on load, and an end-to-end test of a captured yard (queue lost, no refund, cargo and special energy kept).
+- [ ] SIM-46 (#774): paired bench scene of stock A2 enemy boarding and derelict capture within tolerance of the unit tests; measure allied (different-team) derelict transfer, then fix the rule.
+- [ ] SIM-46 (#774): `Captured` and refusal events and the `UnitView` transport fields for the HUD.
+- [ ] UI-40 (#796): switch `family_can_transport` to the sim's rule when the Armada I transport rule lands, and `transport_state` to a sim accessor; stock `T` hotkey for TRANSPORT once the client has command hotkeys; transport cursors, refusal voice and event; acknowledgement voice (`OrderKind::of` has no Transport case); the capture button (`TRANSPORT_ATTACK`, assault units) once the sim takes `attack: true`; Armada I places transport on its speed rail (belongs to the Armada I stock HUD).
+- [ ] Cutscenes (#755): measure on the original (A2 stock, A1, Roots) which voices, advisor lines, alerts and the minimap under-attack ping are silenced during a cineractive, whether events are dropped or queued, whether selection and orders are locked, and what happens to a selection, a drag or an armed build held when it starts.
+- [ ] Cutscenes (#755): test that recalling an assigned control group does nothing during a cutscene (assign group 1 before the cutscene starts).
+- [ ] Armada I HUD (#756): the LCARS strip still lists Metal, Latinum and Biomatter for Armada I and omits crew; check whether other Armada I units author `unitName` as a string key; Armada I's `Sprites/font.spr` is not read by `read_fonts`.
+- [ ] Scenery picking (#757): right-click order targets (`input/orders.rs`), the order cursor (`input/context.rs`) and HUD targeting (`ui/hud/mod.rs`) are not filtered for kept scenery; settle them with the planet/moon picking fix as one shared "pickable" check.
+- [ ] Render (#769): A1 `scrap` dilithium moons (no `resource` key) are pickable and mineable.
+- [ ] Render (#769): measure on the original bench whether resources in explored space outside sensor range can be clicked and ordered; add a HUD-targeting test for `target_seen`.
+- [ ] Render (#769, #763): the doc comment above the wormhole pick-body test in `map/mod.rs` belongs to the test after it, and one comment line is over width: fix with the next change to that file.
+- [ ] Render (#758): Borg glow (`team_Bglow`, lit groups, A1): compare their colour under a player colour with the original and whether it also ignores their own colour.
+- [ ] Render (#758): the team material's specular colour is still added after the tint (tinted highlight regardless of owner colour); measure a team-face highlight against the original (A2 bench) before changing it.
+- [ ] Render (#761): measure on the original which colour team-material faces of unowned objects (derelicts, neutral stations) show, and the player colour of the first lobby slot and of a mission's BZN team 1; debris from a destroyed subsystem draws team faces white whatever the owner.
+- [ ] SIM-65 (#759): keep orbital stations out of the path planner as the original does (they still count as solid obstacles at their current position); freighters chase a circling station and dock within arrival distance: add the original's `resourcesCanHandle` filter for which station takes the cargo.
+- [ ] SIM-65 (#759): the orbital beam uses the orbit owner (falls back to pick), so an off-ring station in reach of a planet fires without circling: decide with the income package; assert the freighter docking test per freighter; trace `a2_borg06` once Special_Attack lands.
+- [ ] SIM-65 (#759): a station on two crossing rings orbits only the planet whose circle it is nearest to; an enemy orbital beam is drawn without a fog check of its own (not checked on screen).
+- [ ] UI-33 (#760): measure on the original bench the command palette's top-left position on the 16:9 sheet and the 5:4 sheet and settle the rule (reference-canvas versus derived from the minimap).
+- [ ] LUA-36 (#764): Armada II scripted music: a music override of the playlist with a per-sound stop and the music volume (a scripted track follows the UI volume today); one shared sound-id counter for `A2.AudioMessage`/`PlayMusic` and `Media:playSound` (ids can collide).
+- [ ] SIM-61 (#764): the A2 opening hand-over tick depends on a client clock and the decoded clip length, outside the command stream; not replay-safe until then.
+- [ ] Missions (#764): `AllowWarp`, `CollisionPrevention` and `ObstacleAvoidance` as sim state (no-ops today); `SetGreenAlert` / `SetRedAlert` (alert not modelled); engine-written team strength for A2 AIP switching so the `p_strength_team_*` rules do not flip every tick after hand-over.
+- [ ] Campaign start (#765): measure what a literal 0 for crew or officer limit means in the original on a map whose team table has zeros (STA64 leaves such a seat without a crew pool or officer limit); the AI seats' first-tick orders are applied before the start grants (an AI first build order may be refused and retried a tick later).
+- [ ] SIM-66 (#770): `A1_GOLDEN_QUEUED` ends before the final-leg brake (extend the run or shorten the course); an install-gated test asserting the same general rules (cruise, lag, no pivot, braking, stop short) on shipped data; a goal inside the turning-circle diameter ends the order without moving (decide whether to turn onto it).
+- [ ] SIM-66 (#770): when the A1 model is switched on by content, rerun `tools/campaign_readiness.py --a1` before and after, the fed1 win and lose playthroughs and the opening camera timings; bench the Borg-physics ship lag and spin, a 90 degree order at cruise, and escort and attack approaches under the model.
+- [ ] Mission openings (#772): `OPENING_TICKS` fits a set-up one script update late; one more update late still shows the default camera first. A removal is listed only for a unit alive at the call, and the removal log is bounded if no host takes it.
+- [ ] HUD (#773): add an "Anchored" third HUD layout choice once UI-37's anchored form (ADR 0008 H5/H7 layout file) exists.
+- [ ] A1 `InQueue` (#775): bind to a gate-travel queue state (ordered onto, waiting at, or being carried through a gate) once the sim exposes one; replace the speed approximation.
+- [ ] A1 bridge panel (#775): a panel for bridge-scene calls and the clip viewscreen (clips play fullscreen today).
+- [ ] LUA-36 (#778): guard order: a script guard command with a parameter (`a2_borg04`) still ends as a counted gap after the build receipt because the sim has no guard order; a new `Order` tag (protocol bump) is a ledger decision. `a2_kling03` fails early on an empty team 1 in the idle run: cause not investigated.
+- [ ] LUA-36 (#778): `IsVisibleToTeam(obj, n)` raises for an `n` that is no seated player (the original wraps and never raises); movement autonomy answers differ for an absent config key versus no process component.
+- [ ] SIM-67 (#780): model the original's post-collision height return (pitch turning back, needs a saved pitch) if the playtest still shows the difference; replace the interim bounding sphere by the shield ellipsoid (SIM-32) and refit the bias constant.
+- [ ] SIM-67 (#780): check on the bench the three-body head-on sides and the tie rule for equal heights; large craft in formation (slots overlap their own formation spacing) and the small residual height after arrival: revisit with SIM-32.
+- [ ] CON-53 (#798): the `infinite` key is not read (needs an infinite-node flag in the sim); the Armada I freighter declares no capacity key in the form the sim reads (falls back to the default); the moon rule tests the presence of the scrap keys, not their values; check from the executable that Armada I keys a moon on the same scrap-key absence.
+- [ ] UI-41 (#802): Armada I font: measure inter-glyph spacing and line pitch on the original; load only the fonts the game's own name pattern would load; a font strip with a comment line directly followed by a `page`/`char` line is not covered.
 
 ## Done recently
 
