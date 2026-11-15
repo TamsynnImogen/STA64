@@ -346,6 +346,7 @@ pub fn select(
     units: Targetable,
     content: Option<Res<ContentRes>>,
     ui_scale: Option<Res<UiScale>>,
+    local: Option<Res<crate::render::units::LocalPlayer>>,
     mut selection: ResMut<Selection>,
     mut changed: MessageWriter<SelectionChanged>,
     mut drag: ResMut<Drag>,
@@ -395,8 +396,8 @@ pub fn select(
                 push_unique(&mut sel, u.0);
             }
         }
-    } else if let Some(id) = unit_under(cursor, aim.ray, &units).filter(|id| link.curr().visible_to(link.player()).iter().any(|u| u.id == *id)) {
-        // (Only what the local team sees is clickable: kept-drawn scenery outside the sensors is not a fog leak.)
+    } else if let Some(id) = unit_under(cursor, aim.ray, &units).filter(|id| local.as_deref().and_then(|l| l.0).is_none_or(|p| link.curr().visible_to(p).iter().any(|u| u.id == *id))) {
+        // (With a local player only what its team sees is clickable: kept-drawn scenery outside the sensors is no fog leak; without one, everything drawn is.)
         let double = drag.last_click.is_some_and(|(t, last)| last == id && now - t <= DOUBLE);
         drag.last_click = if double { None } else { Some((now, id)) };
         if !is_own(&link, id) {
@@ -588,11 +589,22 @@ mod tests {
     #[test]
     fn a_click_on_an_unseen_neutral_selects_nothing_and_a_seen_one_is_inspected() {
         let mut app = app();
+        app.insert_resource(crate::render::units::LocalPlayer(Some(PlayerId(0))));
         hide_from_player(&mut app, &[E], true);
         click(&mut app, 100.0, 300.0);
         assert!(sel(&app).is_empty(), "an unseen neutral was clicked through the fog");
 
         let mut app = app_seen_neutral();
+        app.insert_resource(crate::render::units::LocalPlayer(Some(PlayerId(0))));
+        click(&mut app, 100.0, 300.0);
+        assert_eq!(sel(&app), [E]);
+    }
+
+    /// With no local player (a view with no seat, the bench) everything drawn is clickable, whatever the visibility lists say.
+    #[test]
+    fn without_a_local_player_a_click_inspects_any_drawn_unit() {
+        let mut app = app();
+        hide_from_player(&mut app, &[E], true);
         click(&mut app, 100.0, 300.0);
         assert_eq!(sel(&app), [E]);
     }
