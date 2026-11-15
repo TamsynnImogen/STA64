@@ -27,7 +27,8 @@
 //! 2. **Build order.** For each finished yard, picks from what the tech tree
 //!    (or, with none, the yard's build list) allows: miners, then the AIP's
 //!    `the_build_list` rows in order, then warships, the strongest it can
-//!    pay for. Construction rigs deploy the stations the AIP asks for.
+//!    pay for. Construction rigs deploy the stations the AIP asks for; without
+//!    build rows, they can also supply a direct miner or armed-fleet prerequisite.
 //! 3. **Defence.** [`Params::defence`] warships stay at the base; enemies
 //!    near a station bring them and the waiting reinforcements out.
 //! 4. **Attack waves.** When enough warships wait at the rally point they go
@@ -207,6 +208,28 @@ fn is_station(db: &ContentDb, key: ContentKey) -> bool {
 
 fn cost_sum(db: &ContentDb, key: ContentKey) -> Fixed {
     db.unit(key).map_or(Fixed::ZERO, |d| d.build.cost.iter().fold(Fixed::ZERO, |a, &c| a + c))
+}
+
+/// A fleet craft must have a resolved weapon that can actually hurt a target.
+fn armed_craft(db: &ContentDb, key: ContentKey) -> bool {
+    role_of(db, key) == Role::Warship && db.unit(key).is_some_and(|u| {
+        u.hardpoints.iter().filter_map(|h| db.weapon(h.weapon.key)).any(|w| {
+            sta_sim::combat::weapons::attacks_units(w)
+                && w.resource.is_none()
+                && w.damage > Fixed::ZERO
+                && w.range > Fixed::ZERO
+        })
+    })
+}
+
+fn produces_armed_craft(db: &ContentDb, state: &Owned, producer: ContentKey) -> bool {
+    let Some(unit) = db.unit(producer) else { return false };
+    match db.tech_tree() {
+        Some(tree) => tree.build_options(db, &unit.odf, state, true).iter().any(|option| {
+            option.availability.is_available() && armed_craft(db, option.def.key)
+        }),
+        None => unit.build.list.iter().any(|option| armed_craft(db, option.key)),
+    }
 }
 
 /// How close a ship must get to use its guns: three quarters of its shortest
@@ -702,8 +725,8 @@ impl SkirmishController {
             self.queued.entry(y.id).or_default().push((seq, what));
         }
 
-        // Rigs deploy the stations the AIP lists, or a missing miner
-        // prerequisite when no AIP supplied a build list.
+        // Rigs deploy the stations the AIP lists, a missing miner prerequisite,
+        // or (after mining starts) a producer that can make an armed craft.
         let idle_rigs: Vec<&Own> = own
             .iter()
             .filter(|o| o.role == Role::Rig && o.finished && !o.welding && !self.rig_jobs.contains_key(&o.id))
@@ -736,6 +759,33 @@ impl SkirmishController {
                         .filter(|k| opts.contains(k) && total.get(k).copied().unwrap_or(0) == 0)
                         .filter(|&k| affordable(k, &reserve))
                         .filter(|&k| !db.unit(k).is_some_and(sta_sim::production::orbit::is_orbital) || orbit_site(&taken, r.pos).is_some())
+                        .min_by_key(|&k| (cost_sum(&db, k), k))
+                })
+                .or_else(|| {
+                    if !rows.is_empty()
+                        || count_role(&total, Role::Miner) < self.cfg.params.miners
+                        || (self.cfg.params.miners > 0 && !own.iter().any(|o| o.role == Role::Miner && o.finished))
+                    {
+                        return None;
+                    }
+                    // Include unfinished and in-flight producers as though complete,
+                    // so another rig does not order the same missing step.
+                    let existing = own.iter().filter(|o| is_station(&db, o.def)).map(|o| (o.def, o.finished))
+                        .chain(self.rig_jobs.values().map(|(key, _)| (*key, false)));
+                    if existing.into_iter().any(|(key, finished)| {
+                        let future = if finished { state.clone() } else {
+                            let Some(name) = db.name(key) else { return false };
+                            state.clone().with(name, 1)
+                        };
+                        produces_armed_craft(&db, &future, key)
+                    }) {
+                        return None;
+                    }
+                    opts.iter().copied()
+                        .filter(|&k| is_station(&db, k) && total.get(&k).copied().unwrap_or(0) == 0)
+                        .filter(|&k| affordable(k, &reserve))
+                        .filter(|&k| !db.unit(k).is_some_and(sta_sim::production::orbit::is_orbital) || orbit_site(&taken, r.pos).is_some())
+                        .filter(|&k| db.name(k).is_some_and(|name| produces_armed_craft(&db, &state.clone().with(name, 1), k)))
                         .min_by_key(|&k| (cost_sum(&db, k), k))
                 });
             let Some(what) = want.filter(|&k| affordable(k, &reserve)) else { continue };
