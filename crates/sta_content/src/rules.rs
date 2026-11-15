@@ -304,7 +304,7 @@ impl TransporterRules {
 /// `cfgStartingDilithium` and `cfgStartingCrew`, and its officer maximum,
 /// `cfgMaxOfficers`. Armada I has dilithium and crew only (officers are a cap);
 /// its race ODFs have none of Armada II's `normaldilithium` keys. Keys read
-/// from the stock data (3500, 4000, 100) and named by the executable (static);
+/// from the stock data and named by the executable (static);
 /// that Instant Action grants exactly these is not measured on a running
 /// Armada I. Absent keys leave a field unset; no value is invented.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -329,7 +329,13 @@ impl LegacyStart {
             }
             v
         };
-        LegacyStart { crew: read("cfgStartingCrew"), dilithium: read("cfgStartingDilithium"), officers: cfg.i64("cfgMaxOfficers").filter(|v| *v >= 0).map(|v| v.min(1_000_000_000)) }
+        LegacyStart { crew: read("cfgStartingCrew"), dilithium: read("cfgStartingDilithium"), // Same precedence as the officer list: `cfgMaxOfficers` counts only when no
+        // Armada II style officer key is present.
+        officers: if cfg.raw("MP_OFFICER_LIMIT").is_none() && cfg.raw("SINGLE_PLAYER_OFFICER_LIMIT").is_none() {
+            cfg.i64("cfgMaxOfficers").filter(|v| *v >= 0).map(|v| v.min(1_000_000_000))
+        } else {
+            None
+        } }
     }
 }
 
@@ -1127,17 +1133,17 @@ mod legacy_start_tests {
     use super::*;
     use crate::digest::ContentDigest;
 
-    const A1: &str = "int cfgMaxDilithium = 999999;\nint cfgMaxOfficers = 100;\nint cfgMaxCrew = 99999;\nint cfgStartingDilithium = 3500;\nint cfgStartingCrew = 4000;\n";
+    const A1: &str = "int cfgMaxDilithium = 888888;\nint cfgMaxOfficers = 77;\nint cfgMaxCrew = 55555;\nint cfgStartingDilithium = 1234;\nint cfgStartingCrew = 2345;\n";
 
     #[test]
     fn armada_one_header_start_and_officer_cap_are_typed() {
         let (r, w) = Rules::from_header(A1);
         assert!(w.is_empty(), "{w:?}");
-        assert_eq!(r.legacy_start(), LegacyStart { dilithium: Some(3500), crew: Some(4000), officers: Some(100) });
-        assert_eq!(r.officer_limit(0), Some(100));
+        assert_eq!(r.legacy_start(), LegacyStart { dilithium: Some(1234), crew: Some(2345), officers: Some(77) });
+        assert_eq!(r.officer_limit(0), Some(77));
         let d = ContentDigest::from_entries(r.digest_entries());
-        assert_eq!(d.get("RTS_CFG.h:cfgStartingDilithium"), Some("3500"));
-        assert_eq!(d.get("RTS_CFG.h:cfgStartingCrew"), Some("4000"));
+        assert_eq!(d.get("RTS_CFG.h:cfgStartingDilithium"), Some("1234"));
+        assert_eq!(d.get("RTS_CFG.h:cfgStartingCrew"), Some("2345"));
     }
 
     #[test]
@@ -1147,9 +1153,10 @@ mod legacy_start_tests {
         assert_eq!(none.officer_limit(0), None);
         let d = ContentDigest::from_entries(none.digest_entries());
         assert!(d.get("RTS_CFG.h:cfgStartingDilithium").is_none() && d.get("RTS_CFG.h:cfgStartingCrew").is_none());
-        let (r, _) = Rules::from_header("int SINGLE_PLAYER_OFFICER_LIMIT = 7;\nint cfgMaxOfficers = 100;\n");
+        let (r, _) = Rules::from_header("int SINGLE_PLAYER_OFFICER_LIMIT = 7;\nint cfgMaxOfficers = 33;\n");
         assert_eq!(r.officer_limits.len(), 1);
         assert_eq!(r.officer_limit(0), Some(7));
+        assert_eq!(r.legacy_start().officers, None, "an explicit officer key wins: cfgMaxOfficers is not a second source");
     }
 
     #[test]

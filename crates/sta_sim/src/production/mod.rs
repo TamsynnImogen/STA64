@@ -166,7 +166,11 @@ fn ticks_of(db: &ContentDb, def: ContentKey) -> u64 {
 /// Take the whole cost of `def` from `p`, or nothing.
 fn can_pay(eco: &Economy, db: &ContentDb, p: PlayerId, def: ContentKey) -> bool {
     let Some(d) = db.unit(def) else { return false };
-    afford::first_short(&eco.stock_of(p), &eco.scaled_cost(p, &d.build.cost)).is_none()
+    let have = eco.stock_of(p);
+    !eco.scaled_cost(p, &d.build.cost)
+        .iter()
+        .enumerate()
+        .any(|(i, &c)| c > Fixed::ZERO && have.get(i).is_none_or(|&h| h < c))
 }
 
 fn pay(eco: &mut Economy, db: &ContentDb, p: PlayerId, def: ContentKey) -> bool {
