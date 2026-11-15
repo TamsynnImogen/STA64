@@ -44,8 +44,8 @@ fn a_guard_row_survives_and_an_unknown_tag_or_a_cut_file_is_a_load_error() {
     let record = chain::enc(&ScriptedRec { version: 1, rows });
     let mut forged = record.clone();
     let tag = forged.len() - 2;
-    assert_eq!(forged[tag], 7, "Job::Guard is tag 7");
-    forged[tag] = 8;
+    assert_eq!(forged[tag], 6, "Job::Guard is the seventh variant, tag 6");
+    forged[tag] = 7;
     let bad = chain::with(&bytes, chain::SCRIPTED, forged);
     assert!(!chain::corrupt(&bad, sim.content.clone()).is_empty());
     // Truncation anywhere is refused.
