@@ -185,6 +185,13 @@ pub(crate) fn ghost_pick_radius(def: &sta_content::UnitDef) -> Option<f32> {
     if def.resource.is_some() {
         return Some(resource_pick_radius(r));
     }
+    // A map wormhole (a gate) can be hovered, inspected and selected; a right-click on it stays a
+    // plain move until the wormhole travel order exists (PR #763). Content loading fills `radius`
+    // from the model, so a gate has this body today; one seen again after leaving sight is drawn by
+    // the units view, which gives it no model radius, so this keeps its body.
+    if def.class.0.eq_ignore_ascii_case("wormhole_obj") && r > 0.0 {
+        return Some(r.max(5.0));
+    }
     (matches!(def.planet_role, Some(sta_content::PlanetRole::Producer)) && r > 0.0).then_some(r.max(5.0))
 }
 
@@ -1541,6 +1548,18 @@ mod tests {
 
     /// A planet or resource node the map draws without a mesh of its own gets a pick body from
     /// its definition; scenery does not.
+    #[test]
+    fn a_wormhole_with_a_radius_has_a_pick_body() {
+        let mut gate = sta_content::UnitDef::new("gate", "wormhole_obj");
+        assert_eq!(ghost_pick_radius(&gate), None, "no radius, no body");
+        gate.radius = Fixed::from_int(60);
+        assert_eq!(ghost_pick_radius(&gate), Some(60.0));
+        gate.radius = Fixed::from_int(2);
+        assert_eq!(ghost_pick_radius(&gate), Some(5.0), "never smaller than a click can hit");
+        let ship = sta_content::UnitDef::new("ship", "frigate");
+        assert_eq!(ghost_pick_radius(&ship), None);
+    }
+
     #[test]
     fn ghosts_of_planets_and_resources_get_a_pick_radius() {
         let db = sta_content::fake::db();
