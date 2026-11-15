@@ -894,3 +894,65 @@ mod through_the_sim {
     const A1_GOLDEN: u64 = 0xf0d2c437462e3c7d;
     const A1_GOLDEN_QUEUED: u64 = 0x2efbfd0a1e8422b7;
 }
+
+/// CON-52: the parameters come from content, for Armada I only. Authored ODFs
+/// through an in-memory loader (no shipped values).
+mod from_content {
+    use super::*;
+    use sta_content::{ContentDb, Overrides, Profile};
+    use std::collections::HashMap;
+
+    const FILES: [(&str, &str); 6] = [
+        ("fastphys.odf", "classLabel = \"physics\"\nimpulseSpeed = 20\nfrontBackInertia = 8\nmaxReverseSpeed = 0.5\nturnRadius = 9\nvelocCoeffStill = 0.25\nvelocWhenCoeffHalf = 0.6\nbraccelControlStiffness = 2\nsy_yawAngleCoeff = 1.2\nsy_yawVelocCoeff = 0.2\nrollRotationSpeed = 0.6\n"),
+        ("ship.odf", "[GameObjectClass]\nclassLabel = \"craft\"\nunitName = \"S\"\nphysicsFile = \"shipphys.odf\"\n"),
+        ("shipphys.odf", "classLabel = \"physics\"\nimpulseSpeed = 20\nwarpSpeed = 60\ntooCloseToTurn = 40\npathLeadDistance = 120\n"),
+        ("drone.odf", "[GameObjectClass]\nclassLabel = \"craft\"\nunitName = \"D\"\nphysicsFile = \"dronephys.odf\"\n"),
+        ("dronephys.odf", "classLabel = \"physics\"\nimpulseSpeed = 20\nborgPhysics = 1\nmaxRotationSpeed = 0.4\n"),
+        ("yard.odf", "[GameObjectClass]\nclassLabel = \"shipyard\"\nunitName = \"Y\"\n"),
+    ];
+
+    fn db(profile: Profile) -> ContentDb {
+        let map: HashMap<String, &str> = FILES.iter().map(|(n, t)| ((*n).to_owned(), *t)).collect();
+        let stems: Vec<String> = ["ship", "drone", "yard"].iter().map(|s| (*s).to_owned()).collect();
+        sta_content::odf::load_with(profile, &Overrides::default(), &stems, &mut |n, v| {
+            let n = if n.ends_with(".odf") { n.to_owned() } else { format!("{n}.odf") };
+            if v == 0 { map.get(&n.to_ascii_lowercase()).map(|t| (*t).to_owned()) } else { None }
+        })
+        .unwrap()
+        .0
+    }
+
+    #[test]
+    fn armada_i_content_switches_the_model_on_for_craft_only() {
+        let db = db(Profile::Sta1Classic);
+        assert_eq!(Model::for_content(&db), Model::A1);
+        let key = |n: &str| db.key(n).unwrap();
+        let ship = a1::params(&db, key("ship")).expect("a craft has parameters");
+        assert!(ship.borg.is_none());
+        assert_eq!(a1::params(&db, key("drone")).unwrap().borg.map(|b| num(b.max_rotation_speed)), Some(0.4));
+        assert!(a1::params(&db, key("yard")).is_none(), "a structure keeps the old movement");
+        assert!(a1::params(&db, ContentKey::NONE).is_some());
+    }
+
+    #[test]
+    fn other_profiles_stay_on_their_models() {
+        for (profile, model) in [(Profile::Fo4, Model::Smooth), (Profile::Sta2Classic, Model::Smooth), (Profile::Native, Model::Native)] {
+            let db = db(profile);
+            assert_eq!(Model::for_content(&db), model);
+            assert!(a1::params(&db, db.key("ship").unwrap()).is_none());
+        }
+    }
+
+    #[test]
+    fn a_craft_with_content_parameters_reaches_its_goal() {
+        let db = db(Profile::Sta1Classic);
+        let k = db.key("ship").unwrap();
+        let p = a1::params(&db, k).unwrap();
+        let stats = db.unit(k).unwrap().movement;
+        for off in [0.0, 90.0, 180.0] {
+            let tr = fly(stats, &p, &[goal(off, 900.0)], 150.0);
+            let last = tr.last().unwrap();
+            assert!(last.done && last.dist < 60.0, "{off} degrees: done {} at {}", last.done, last.dist);
+        }
+    }
+}

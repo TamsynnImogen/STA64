@@ -336,6 +336,12 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
             None => None,
         };
         let mut def = crate::unit::unit_def_for_profile(s, odf, phys.as_deref(), profile, &mut warnings);
+        // CON-52: Armada I's Borg spin keys, from the craft's own physics file.
+        if profile == Profile::Sta1Classic
+            && let Some(p) = phys.as_deref()
+        {
+            def.a1_borg = crate::a1_physics::borg(p, &format!("{}.odf", stem(odf.str("physicsFile").unwrap_or_default())), &mut warnings);
+        }
         // A node's resource: the slot its resource ODF fills (`amtlatinum` on Fleet Ops 4.0's
         // tritanium moon, `amtmetal` on Roots'), else the game's word for it in the text.
         if let Some(text) = odf.str("resource").map(str::trim).filter(|t| !t.is_empty()) {
@@ -386,6 +392,21 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
             true
         });
         builder = builder.unit(def);
+    }
+
+    // CON-52: the play-physics block (Armada I only). A mod or fixture without the file
+    // is not an error: the model stays off, quietly. A file that is there and broken warns.
+    if let Some(file) = profile.play_physics_file().filter(|_| !units.is_empty()) {
+        let play = match sta_odf::resolve_layered(file, loader) {
+            Ok(odf) => crate::a1_physics::play_dynamics(&odf, &format!("{file}.odf"), &mut warnings),
+            Err(e) => {
+                if loader(&format!("{file}.odf"), 0).is_some() || loader(file, 0).is_some() {
+                    warnings.push(Warning::new(format!("{file}.odf"), format!("{e}; the Armada I movement model stays off")));
+                }
+                None
+            }
+        };
+        builder = builder.a1_play_physics(play);
     }
 
     // Names are unique by stem; `build` can only fail on a bug here.

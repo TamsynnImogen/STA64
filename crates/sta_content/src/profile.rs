@@ -114,6 +114,14 @@ impl Profile {
         PROFILE_NAMES.iter().find(|(n, _)| *n == k).map(|(_, p)| *p)
     }
 
+    /// The play-physics file (CON-52): the one physics ODF whose integrator
+    /// keys every steered Armada I craft flies by (the executable names it
+    /// `fastphys.odf`). `None` for the other profiles, which have no such
+    /// model. A mod overrides the file by layering one of the same name.
+    pub fn play_physics_file(self) -> Option<&'static str> {
+        (self == Profile::Sta1Classic).then_some("fastphys")
+    }
+
     /// Total station build jobs, including the active head (SIM-20).
     /// Original A1 uses five; stock A2 and FO use ten. Native retains
     /// STA64's five-job policy. A producer ODF can override every default.

@@ -53,6 +53,9 @@ pub struct ContentDb {
     has_map_confinement: bool,
     map_confinement_warnings: Vec<Warning>,
     rules: crate::Rules,
+    /// Armada I's play-physics block (CON-52): only under `Sta1Classic`, and
+    /// only when the file is there and usable.
+    a1_play: Option<crate::A1Dynamics>,
     /// The mounted layers' names, top first: informational (D10), recorded
     /// in replays and snapshots, never compared.
     packs: Vec<String>,
@@ -61,6 +64,12 @@ pub struct ContentDb {
 
 impl ContentDb {
     pub fn rules(&self) -> &crate::Rules { &self.rules }
+
+    /// Armada I's play-physics block (CON-52): `Some` only under
+    /// `Sta1Classic` with a usable file. The movement model asks for it.
+    pub fn a1_play_physics(&self) -> Option<&crate::A1Dynamics> {
+        self.a1_play.as_ref().filter(|_| self.profile == Profile::Sta1Classic)
+    }
 
     pub fn with_rules(mut self, rules: crate::Rules) -> Self {
         self.rules = rules;
@@ -324,6 +333,7 @@ pub struct ContentBuilder {
     features: Features,
     resources: Option<ResourceModel>,
     tech: Option<TechTree>,
+    a1_play: Option<crate::A1Dynamics>,
 }
 
 impl ContentBuilder {
@@ -350,6 +360,13 @@ impl ContentBuilder {
     /// The slot names; the profile's when not given.
     pub fn resources(mut self, resources: ResourceModel) -> Self {
         self.resources = Some(resources);
+        self
+    }
+
+    /// Armada I's play-physics block (CON-52). Ignored (and not hashed) unless
+    /// the profile is `Sta1Classic`.
+    pub fn a1_play_physics(mut self, play: Option<crate::A1Dynamics>) -> Self {
+        self.a1_play = play;
         self
     }
 
@@ -412,7 +429,8 @@ impl ContentBuilder {
         let mut db = ContentDb {
             defs, profile: self.profile, features: self.features, resources,
             tech: self.tech.map(Arc::new), map_confinement, construction_confinement, has_map_confinement,
-            map_confinement_warnings, rules: crate::Rules::default(), packs: Vec::new(),
+            map_confinement_warnings, rules: crate::Rules::default(),
+            a1_play: self.a1_play.filter(|_| self.profile == Profile::Sta1Classic), packs: Vec::new(),
             digest: ContentDigest::default(),
         };
         db.digest = digest_of(&db);
@@ -449,7 +467,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // whether the sim reads it (then it is digested below) or not.
     let UnitDef {
         key: _, odf: _, class: _, is_starbase: _, planet_role: _, planet_crew_gain: _, planet_crew_modifier: _,
-        planet_colonizable: _, planet_civilian_population_modifier: _, planet_max_population: _, can_have_orbital_station: _, orbit_time: _, race: _,
+        planet_colonizable: _, planet_civilian_population_modifier: _, planet_max_population: _, can_have_orbital_station: _, orbit_time: _, a1_borg: _, race: _,
         model: _, scale: _, movement: _, hull: _, shields: _, initial_hull: _, initial_shields: _,
         crew: _, maximum_crew: _, facility: _, has_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
         sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
@@ -589,6 +607,10 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     if u.can_have_orbital_station {
         c.flag("can_have_orbital_station", true);
     }
+    // CON-52: the Borg spin keys, only when set (other content keeps its text).
+    if let Some(b) = &u.a1_borg {
+        c.raw("a1_borg", &crate::a1_physics::borg_text(b));
+    }
     // The class is already hashed; the period only when the ODF set one.
     if let Some(t) = u.orbit_time.filter(|t| *t != Fixed::ZERO) {
         c.fixed("orbit_time", t);
@@ -715,6 +737,10 @@ fn digest_entries(db: &ContentDb) -> Vec<DigestEntry> {
     let mut out = db.rules.digest_entries();
     out.push(DigestEntry::new("content:profile", db.lineage()));
     out.push(DigestEntry::new("content:features", features_text(&db.features)));
+    // CON-52: only when the model has its block, so every other content keeps its digest.
+    if let Some(p) = db.a1_play_physics() {
+        out.push(DigestEntry::new("content:a1-play-physics", crate::a1_physics::dynamics_text(p)));
+    }
     out.push(DigestEntry::new("content:tech-tree", if db.tech.is_some() { "gated" } else { "none" }));
     out.push(DigestEntry::new("resources:slots", format!("[{}]", crate::resources::KEYS.join(","))));
     out.push(DigestEntry::new("resources:aliases", db.resources.aliases_text()));
