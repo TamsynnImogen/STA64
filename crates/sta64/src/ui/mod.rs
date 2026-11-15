@@ -3,6 +3,7 @@
 
 pub mod presentation;
 pub mod profile;
+pub mod cursor;
 pub mod gui_sprites;
 pub mod hud;
 pub mod ingame_menu;
