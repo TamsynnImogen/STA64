@@ -107,12 +107,13 @@ impl SpriteFont {
             let (Some(uv_id), Some(w_id)) = (strip_of("_uv"), strip_of("_w")) else {
                 continue;
             };
-            let mut uv = strip(&lines, uv_id);
-            let w = strip(&lines, w_id);
+            let a1 = is_char_line(l);
+            let mut uv = strip(&lines, uv_id, a1);
+            let w = strip(&lines, w_id, a1);
             // Armada I's strips run one corner past the last width (one corner more
             // than widths); a corner with no width cannot be drawn and is dropped. Fewer corners
             // than widths is a damaged table.
-            if uv.len() == w.len() + 1 && !w.is_empty() {
+            if a1 && uv.len() == w.len() + 1 && !w.is_empty() {
                 uv.truncate(w.len());
             }
             if texture.is_empty() || height <= 0.0 || uv.is_empty() || uv.len() != w.len() {
@@ -455,15 +456,20 @@ impl GlyphWords {
 /// (`char<TAB>texture<TAB>0<TAB>0<TAB>0<TAB>height<TAB>@anim=..`). Both carry the texture,
 /// the glyph height and the two `@anim=` strips. Detected by the line, not by the game.
 fn is_page_line(l: &str) -> bool {
-    l.starts_with("page")
-        || l.strip_prefix("char")
-            .is_some_and(|rest| rest.starts_with(['\t', ' ']))
+    l.starts_with("page") || is_char_line(l)
+}
+
+/// Armada I's form of the page line. Only this form gets the Armada I leniencies (comment
+/// lines inside strips, one corner more than widths): Armada II family files in the other
+/// form load exactly as before.
+fn is_char_line(l: &str) -> bool {
+    l.strip_prefix("char").is_some_and(|rest| rest.starts_with(['\t', ' ']))
 }
 
 /// The numbers of an animation strip: one entry per line after `@keyframes`, up to the
-/// first blank or `@` line. Lines holding only a `#` comment (Armada I labels each run of
+/// first blank or `@` line. With `skip_comments` (Armada I's form), lines holding only a `#` comment (Armada I labels each run of
 /// glyphs that way) are skipped; they do not end the strip.
-fn strip(lines: &[&str], id: &str) -> Vec<Vec<f32>> {
+fn strip(lines: &[&str], id: &str, skip_comments: bool) -> Vec<Vec<f32>> {
     let Some(at) = lines
         .iter()
         .position(|l| l.starts_with("@animation") && l.split_whitespace().nth(1) == Some(id))
@@ -475,7 +481,7 @@ fn strip(lines: &[&str], id: &str) -> Vec<Vec<f32>> {
     for l in &lines[at + 1..] {
         let raw = l.trim();
         let l = l.split('#').next().unwrap_or("").trim();
-        if started && l.is_empty() && raw.starts_with('#') {
+        if skip_comments && started && l.is_empty() && raw.starts_with('#') {
             continue;
         }
         if !started {
@@ -2379,6 +2385,45 @@ mod tests {
         assert_eq!(SpriteFont::parse("font", &extra_corner).unwrap().len(), 20);
         let fewer_uv = a1_form(20).replacen("0\t0\t#c\r\n", "", 1);
         assert!(SpriteFont::parse("font", &fewer_uv).is_none());
+    }
+
+    /// Armada II's `page` form keeps its old rule: a comment-only line inside a strip ends it,
+    /// so the font is rejected exactly as before, and a surplus corner is not trimmed.
+    #[test]
+    fn page_form_keeps_its_strict_strips() {
+        let labelled = SAMPLE.replacen("@keyframes\n0\t0", "@keyframes\n# label\n0\t0", 1);
+        // The damaged page is dropped (page b of the sample survives), as before.
+        assert_eq!(SpriteFont::parse("F", &labelled).unwrap().pages.len(), 1);
+        let extra = SAMPLE.replacen("\n\n@animation f_a_w", "\n30\t0\n\n@animation f_a_w", 1);
+        assert_eq!(SpriteFont::parse("F", &extra).unwrap().pages.len(), 1);
+        assert_eq!(SpriteFont::parse("F", SAMPLE).unwrap().pages.len(), 2);
+    }
+
+    /// Install-gated, Armada II family: a file in the `page` form with a comment-only line
+    /// inside a strip is not read (as before), so the set of loaded fonts is unchanged.
+    #[test]
+    fn page_form_fonts_with_labels_stay_unloaded_on_installed_a2_family() {
+        for (label, root, m) in installs() {
+            let Ok(vfs) = Vfs::mount_install(&root, m.as_deref()) else { continue };
+            let loaded: Vec<String> = read_fonts(&vfs).into_iter().map(|f| f.name.to_ascii_lowercase()).collect();
+            for path in vfs.list("sprites") {
+                let file = path.rsplit('/').next().unwrap_or(&path).to_ascii_lowercase();
+                if !file.starts_with("font") || !file.ends_with(".spr") {
+                    continue;
+                }
+                let Some(Ok(bytes)) = vfs.read(&path) else { continue };
+                let text = String::from_utf8_lossy(&bytes);
+                let lines: Vec<&str> = text.lines().map(str::trim).collect();
+                let labelled = lines.windows(2).any(|w| w[0] == "@keyframes" && w[1].starts_with('#'));
+                let has_char = lines.iter().any(|l| is_char_line(l));
+                if labelled && !has_char {
+                    assert!(
+                        !loaded.contains(&file[..file.len() - 4].to_owned()),
+                        "{label}: {file} loads although a strip starts with a comment line"
+                    );
+                }
+            }
+        }
     }
 
     /// The same authored table drawn through a mod's `Sprites/font.spr` is found by
