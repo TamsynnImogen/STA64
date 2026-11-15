@@ -563,10 +563,11 @@ fn installed_stock_hud_renders_on_gpu() {
         (UVec2::new(1920, 1080), "16x9-1080"),
         (UVec2::new(2560, 1080), "21x9"),
         (UVec2::new(3840, 1080), "32x9"),
+        (UVec2::new(2752, 1152), "2752x1152"),
     ] {
         let cfg = match (profile, ratio) {
             (UiProfile::Armada2, _) => "gui_fed.cfg",
-            (UiProfile::FleetOps, "16x9" | "16x9-1080" | "21x9" | "32x9") => "gui_federation16x9.cfg",
+            (UiProfile::FleetOps, "16x9" | "16x9-1080" | "21x9" | "32x9" | "2752x1152") => "gui_federation16x9.cfg",
             (UiProfile::FleetOps, _) => "gui_federation.cfg",
             _ => unreachable!(),
         };

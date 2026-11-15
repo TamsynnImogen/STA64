@@ -814,3 +814,49 @@ fn the_finder_sees_a_spawn_at_once_and_no_longer_sees_a_removed_unit() {
     let seen: (u32, u32, bool, String, bool) = rt.eval("return seen[1], seen[2], seen[3], seen[4], seen[5]").unwrap();
     assert_eq!(seen, (1, 1, true, "Flagship".to_owned(), true), "the old one is gone to the finder, its replacement is found");
 }
+
+#[test]
+fn only_entity_remove_is_listed_as_a_removal_a_hull_edit_to_zero_is_not() {
+    let (mut sim, db) = setup();
+    let mut first = runtime(&sim, db.clone(), "Entity.add('fx_cruiser', 0, Vector(1000, 0, 0)) Entity.add('fx_frigate', 0, Vector(2000, 0, 0))");
+    let out = sim.step(&first.take_commands());
+    let ids: Vec<EntityId> = out.events.iter().filter_map(|e| if let SimEvent::ScriptSpawned { id, .. } = e { Some(*id) } else { None }).collect();
+    assert_eq!(ids.len(), 2);
+    let cfg = MissionConfig { content: Some(db), view: Some((*out.view).clone()), ..MissionConfig::default() };
+    let mut rt = MissionRuntime::from_source_with(
+        "removed.lua",
+        r#"
+        done = false
+        MMM.register(function()
+            if done then return end
+            done = true
+            local c = EntityFinder():findOne({ odf = 'fx_cruiser' })
+            local f = EntityFinder():findOne({ odf = 'fx_frigate' })
+            Entity.remove(c)
+            f.hull = 0
+        end)
+        "#,
+        17,
+        cfg,
+    );
+    rt.think(&out.view, &out.events, &mut Vec::new());
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    assert_eq!(rt.take_removed(), vec![ids[0]], "the removal call is listed, the hull edit is not");
+    assert!(rt.take_removed().is_empty(), "taken once");
+}
+
+#[test]
+fn a_unit_that_is_already_dead_is_not_listed_when_the_script_removes_it() {
+    let (mut sim, db) = setup();
+    let mut first = runtime(&sim, db.clone(), "Entity.add('fx_cruiser', 0, Vector(1000, 0, 0))");
+    let out = sim.step(&first.take_commands());
+    let id = out.events.iter().find_map(|e| if let SimEvent::ScriptSpawned { id, .. } = e { Some(*id) } else { None }).expect("spawned");
+    let cfg = MissionConfig { content: Some(db), view: Some((*out.view).clone()), ..MissionConfig::default() };
+    let mut rt = MissionRuntime::from_source_with("dead.lua", "kept = nil\nMMM.register(function() if not kept then kept = EntityFinder():findOne({ odf = 'fx_cruiser' }) end end)\n", 17, cfg);
+    rt.think(&out.view, &out.events, &mut Vec::new());
+    // The unit dies on its own tick; the script then removes it in the think after that tick.
+    let out = sim.step(&[Command { player: PlayerId::SCRIPT, seq: 1, kind: CommandKind::Edit(Edit::Kill(id)) }]);
+    rt.think(&out.view, &out.events, &mut Vec::new());
+    rt.eval::<()>("Entity.remove(kept)").ok();
+    assert!(rt.take_removed().is_empty(), "its real death effect is kept");
+}

@@ -48,10 +48,14 @@ use super::entity_ref::{SpawnHandle, SpawnStatus};
 use super::{Shared, to_vec3};
 
 mod hold;
+#[cfg(test)]
+mod lua30_tests;
 mod objects;
 mod orders;
 mod presentation;
+mod replace_object;
 mod seams;
+mod subsystems;
 mod teams;
 mod warp;
 #[cfg(test)]
@@ -500,10 +504,12 @@ fn alias_as(lua: &Lua, env: &Env, a2: &Table, name: &'static str, a2_name: &'sta
     let env = env.clone();
     lua.create_function(move |_, args: MultiValue| {
         let mut mapped = Vec::with_capacity(args.len());
-        // Every aliased call takes its object handle first; no other argument is one.
+        // Every aliased call takes its object handle first; no other argument is one, except
+        // the second object of `GetAttackLocation`.
         for (position, v) in args.into_iter().enumerate() {
+            let object = position == 0 || (position == 1 && name == "GetAttackLocation");
             let resolved = match &v {
-                Value::Integer(n) if position == 0 => u32::try_from(*n).ok().and_then(|raw| env.token(raw)),
+                Value::Integer(n) if object => u32::try_from(*n).ok().and_then(|raw| env.token(raw)),
                 _ => None,
             };
             mapped.push(match resolved {
@@ -551,6 +557,11 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     teams::install(lua, &env, &a2, &table)?;
     presentation::install(lua, &env, &a2, &table)?;
     seams::install(lua, &env, &a2, &table)?;
+    // LUA-30: replace the seam-gap bindings of the same names (before `hold` wraps the table).
+    subsystems::install(lua, &env, &table)?;
+    // GetAttackLocation: the Armada II geometry (read from the executable, static).
+    table.set("GetAttackLocation", alias(lua, &env, &a2, "GetAttackLocation")?)?;
+    replace_object::install(lua, &env, &table)?;
     warp::install(lua, &env, &a2, &table)?;
     hold::install(lua, &env, &table)?;
     lua.globals().raw_set("A1", table)?;

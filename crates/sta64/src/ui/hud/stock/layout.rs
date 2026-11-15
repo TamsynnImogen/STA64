@@ -34,6 +34,9 @@ impl PaletteLayout {
     }
 }
 
+/// The canvas the palette origin keys (`popupPaletteXA`, `popupPaletteYA`) are authored on.
+const PALETTE_REFERENCE: Vec2 = Vec2::new(1600.0, 1200.0);
+
 /// CFG canvas coordinates mapped to the screen by one factor for both axes. The sheet's
 /// canvas, scaled and centred, is [`StockLayout::hud`]: the one rectangle every consumer
 /// (panels, pointer, minimap, notices) shares; the screen outside it belongs to the world.
@@ -252,10 +255,30 @@ impl StockLayout {
                 _ => None,
             }
         };
+        // The origin keys are read against a fixed 1600x1200 reference canvas, then scaled
+        // with the sheet's own canvas like every other key. Evidence per axis:
+        // - x: the Armada II engine reads `popupPaletteXA/XB` against a hard-coded 1600
+        //   (measured by Refit on a widened canvas; second-hand here, not measured by us).
+        //   For Roots the evidence is the sheets' own values (read from data): its 16:9 and
+        //   16:10 sheets (canvas 2134 and 1920 wide) author 264 and 293, which are 352 on the
+        //   4:3 sheet's 1600, right of the 351 wide minimap panel. Roots positions the palette
+        //   with its own add-on, so the engine's rule need not be Roots' rule.
+        // - y: read from data, the 5:4 sheet only (1280 high, `popupPaletteYA` 957 = 1020 =
+        //   940 + 80 in canvas units); Refit's measurement had a 1200 high canvas and says
+        //   nothing about y on another height.
+        // Alternative reading: "x derived from the minimap panel's right edge" (350). It gives
+        // the same x on the 16:9 and 16:10 sheets and predicts y 957 on the 5:4 sheet.
+        // TODO(UI-33): the 5:4 sheet's y is unmeasured: this rule says 1020.8, the alternative
+        // 957; a bench frame of the original Roots HUD at 1280x1024 settles it.
+        // Sheets whose canvas is 1600x1200 (Armada II, Classic, Roots 4:3) are the identity.
+        let origin = Vec2::new(
+            self.number("popupPaletteXA").unwrap_or(30.0) as f32 * (self.canvas.x / PALETTE_REFERENCE.x),
+            self.number("popupPaletteYA").unwrap_or(30.0) as f32 * (self.canvas.y / PALETTE_REFERENCE.y),
+        );
         Some(PaletteLayout {
             origin: Vec2::new(
-                (self.number("popupPaletteXA").unwrap_or(30.0) as f32 * self.scale).round() + self.hud.x,
-                (self.number("popupPaletteYA").unwrap_or(30.0) as f32 * self.scale).round() + self.hud.y,
+                (origin.x * self.scale).round() + self.hud.x,
+                (origin.y * self.scale).round() + self.hud.y,
             ),
             cell: Vec2::new(cell.w, cell.h),
             gap: Vec2::splat((gap * self.scale).round()),
@@ -382,28 +405,42 @@ mod tests {
         assert_eq!(unnamed[0].name, "default_sprite");
     }
 
-    /// Fleet Ops' 16:9 sheet (canvas 2134x1200, minimap panel 351 wide, palette at 264)
-    /// on a 21:9 window: the HUD is the 16:9 sheet scaled by one factor and centred, so the
-    /// palette sits where it does at 16:9 (inside the authored minimap panel, as stock has
-    /// it) plus the centring offset; nothing is moved relative to the minimap.
+    /// The palette origin is read against a 1600x1200 reference (see `palette`): Fleet Ops'
+    /// 16:9 sheet (canvas 2134x1200, minimap panel 351 wide, popupPaletteXA 264) and 16:10
+    /// sheet (1920x1200, 293) start the command cells at 352 canvas units, right of the
+    /// minimap panel, on every window; its 5:4 sheet (1600x1280, YA 957) at 1020. Classic's
+    /// and the 4:3 sheets (canvas 1600x1200) are placed as authored.
     #[test]
-    fn palette_moves_with_the_centred_sheet() {
-        let mut cfg = GuiLayout { canvas: (2134, 1200), ..Default::default() };
-        cfg.rects.insert("paletteSingleButtonArea".into(), rect(0, 0, 88, 88));
-        cfg.rects.insert("minimapPanelArea".into(), rect(-1, 818, 351, 383));
-        cfg.numbers.insert("popupPaletteXA".into(), 264.0);
-        cfg.numbers.insert("popupPaletteYA".into(), 940.0);
-        let base = StockLayout::new(&cfg, Vec2::new(2134.0, 1200.0));
-        assert_eq!(base.hud, R::new(0.0, 0.0, 2134.0, 1200.0));
-        let rel = base.palette().unwrap().origin - Vec2::new(base.panel("minimap").unwrap().x, base.panel("minimap").unwrap().y);
-        for screen in [Vec2::new(3440.0, 1440.0), Vec2::new(2560.0, 1080.0), Vec2::new(5120.0, 1440.0)] {
-            let l = StockLayout::new(&cfg, screen);
-            let (map, p) = (l.panel("minimap").unwrap(), l.palette().unwrap());
-            // Scaled by one factor, the palette keeps its place relative to the minimap panel.
-            let k = screen.y / 1200.0;
-            let got = p.origin - Vec2::new(map.x, map.y);
-            assert!((got - rel * k).abs().max_element() <= 1.0, "{screen:?}: {got:?} vs {:?}", rel * k);
-            assert!(p.origin.x >= l.hud.x, "{screen:?}");
+    fn palette_origin_is_read_against_the_1600x1200_reference() {
+        // (canvas, popupPaletteXA, YA, expected canvas origin)
+        for (canvas, xa, ya, want) in [
+            ((2134, 1200), 264.0, 940.0, (264.0 * 2134.0 / 1600.0, 940.0)),
+            ((1920, 1200), 293.0, 940.0, (293.0 * 1920.0 / 1600.0, 940.0)),
+            ((1600, 1280), 352.0, 957.0, (352.0, 957.0 * 1280.0 / 1200.0)),
+            ((1600, 1200), 352.0, 940.0, (352.0, 940.0)),
+            ((1600, 1200), 355.0, 825.0, (355.0, 825.0)),
+        ] {
+            let mut cfg = GuiLayout { canvas, ..Default::default() };
+            cfg.rects.insert("paletteSingleButtonArea".into(), rect(0, 0, 88, 88));
+            cfg.rects.insert("minimapPanelArea".into(), rect(-1, 818 + canvas.1 - 1200, 351, 383));
+            cfg.numbers.insert("popupPaletteXA".into(), xa);
+            cfg.numbers.insert("popupPaletteYA".into(), ya);
+            for screen in [Vec2::new(1920.0, 1080.0), Vec2::new(2752.0, 1152.0), Vec2::new(3440.0, 1440.0), Vec2::new(1024.0, 768.0), Vec2::new(canvas.0 as f32, canvas.1 as f32)] {
+                let l = StockLayout::new(&cfg, screen);
+                let p = l.palette().unwrap();
+                let why = format!("{canvas:?} {xa},{ya} on {screen:?}");
+                let got = (p.origin - Vec2::new(l.hud.x, l.hud.y)) / l.scale;
+                assert!((got.x - want.0 as f32).abs() <= 0.5 / l.scale + 1e-3 && (got.y - want.1 as f32).abs() <= 0.5 / l.scale + 1e-3, "{why}: {got:?} vs {want:?}");
+                // No command cell lies over the minimap panel.
+                let map = l.panel("minimap").unwrap();
+                for row in 0..3 {
+                    for col in 0..3 {
+                        let c = p.cell_rect(col, row);
+                        let inside = c.x < map.right() && c.right() > map.x && c.y < map.bottom() && c.bottom() > map.y;
+                        assert!(!inside, "{why}: cell {col},{row} {c:?} overlaps the minimap {map:?}");
+                    }
+                }
+            }
         }
     }
 
@@ -467,7 +504,9 @@ mod tests {
     }
 
     /// A window of the sheet's own aspect lays out exactly as the per-axis mapping did:
-    /// no margins, the same rounded rectangles for every key kind.
+    /// no margins, the same rounded rectangles for every rect key. The palette origin follows
+    /// the 1600x1200 reference rule (see `palette`); the 640x480 case is synthetic (Armada I's
+    /// sheets have no palette keys, so that path is not reached in the game).
     #[test]
     fn same_aspect_window_is_todays_layout() {
         for (canvas, screen) in [((1600, 1200), Vec2::new(1440.0, 1080.0)), ((2134, 1200), Vec2::new(2134.0, 1200.0)), ((640, 480), Vec2::new(1440.0, 1080.0))] {
@@ -484,7 +523,9 @@ mod tests {
                 assert_eq!(l.rect(key), Some(old(cfg.rects[key])), "{canvas:?} {key}");
             }
             assert_eq!(l.panel("minimap"), Some(old(cfg.rects["minimapPanelArea"])), "{canvas:?}");
-            assert_eq!(l.palette().unwrap().origin, Vec2::new((400.0 * sx).round(), (900.0 * sy).round()), "{canvas:?}");
+            // Palette origin keys are read against 1600x1200, then scaled like every other key.
+            let (px, py) = (400.0 * canvas.0 as f32 / 1600.0, 900.0 * canvas.1 as f32 / 1200.0);
+            assert_eq!(l.palette().unwrap().origin, Vec2::new((px * sx).round(), (py * sy).round()), "{canvas:?}");
         }
     }
 
@@ -508,7 +549,7 @@ mod tests {
         let (got, want) = (l.panel("minimap").unwrap(), old(cfg.rects["minimapPanelArea"]));
         assert!(close(got, want), "minimap: {got:?} vs {want:?}");
         let o = l.palette().unwrap().origin;
-        assert!((o.x - 400.0 * sx).abs() <= 1.0 && (o.y - 900.0 * sy).abs() <= 1.0, "{o:?}");
+        assert!((o.x - 400.0 * canvas.0 as f32 / 1600.0 * sx).abs() <= 1.0 && (o.y - 900.0 * sy).abs() <= 1.0, "{o:?}");
     }
 
     #[test]
