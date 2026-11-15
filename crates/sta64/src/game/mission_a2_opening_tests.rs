@@ -124,7 +124,7 @@ pub fn drive(seconds: f64) -> Option<Trace> {
     open.give_all_missions = true;
     cs.progress.apply_give_all(&open);
     let mut app = base(cs);
-    let (null, _calls) = NullAudio::new();
+    let (null, calls) = NullAudio::new();
     app.insert_resource(crate::viewer::Mounted(vfs))
         .init_resource::<crate::map::Catalogue>()
         .init_resource::<ButtonInput<KeyCode>>()
@@ -175,6 +175,12 @@ pub fn drive(seconds: f64) -> Option<Trace> {
             let _ = writeln!(text, "A t={:.2} tick={t} {h}", secs(*t));
         }
         heard_at = w.resource::<Heard>().0.len();
+        // What reached the mixer backend (every bus), as it would have sounded.
+        for c in calls.drain() {
+            if !matches!(c, crate::audio::Call::Listener { .. } | crate::audio::Call::BusVolume { .. }) {
+                let _ = writeln!(text, "C t={:.2} tick={tick} {c:?}", secs(tick));
+            }
+        }
         if secs(tick) >= seconds || state(&app) != AppState::InGame {
             break;
         }
