@@ -561,12 +561,12 @@ fn start_script_sound(
 fn sound_replies(
     mut started: MessageReader<crate::audio::SoundStarted>,
     time: Res<Time<Real>>,
-    clock: Option<Res<crate::clock::AnimClock>>,
     mut sounds: ResMut<ScriptSounds>,
     mut out: MessageWriter<ScriptReply>,
 ) {
-    // The game clock stands still in the pause menu, and so does a script's wait on its message.
-    let dt = if clock.is_some_and(|c| c.paused()) { 0.0 } else { time.delta_secs() };
+    // Real time, as the player hears the clip: the audio is not paused with the game, and a paused
+    // sim holds the script anyway.
+    let dt = time.delta_secs();
     for p in &mut sounds.pending {
         if let Some(left) = p.2.as_mut() {
             *left -= dt;
@@ -911,6 +911,7 @@ fn reset_presentation(
     mut sounds: ResMut<ScriptSounds>,
 ) {
     sounds.pending.clear();
+    sounds.last_tick = 0;
     titles.items.clear();
     // `Titles::default()` is not dirty, so the layer would keep what it drew.
     titles.dirty = true;
@@ -1049,8 +1050,8 @@ mod tests {
         frozen(&mut app);
         app.init_resource::<ReportsSoundLengths>().add_message::<SoundStarted>();
         // The music is message 1, a long voice line message 2 (the A2 counter is shared).
-        start(&mut app, a2_music(1, "track.wav"), "track.wav", 10.0);
-        start(&mut app, Presentation::Sound { id: 2, name: "rant.wav".into(), at: None }, "rant.wav", 20.0);
+        start(&mut app, a2_music(1, "clip_t.wav"), "clip_t.wav", 10.0);
+        start(&mut app, Presentation::Sound { id: 2, name: "clip_b.wav".into(), at: None }, "clip_b.wav", 20.0);
         let _ = bus_cuts(&mut app);
         send(&mut app, Presentation::StopSound { id: 1 });
         assert_eq!(bus_cuts(&mut app), 0, "the stop of the track must not stop the UI bus the voice line plays on");
@@ -1068,8 +1069,8 @@ mod tests {
         let mut app = app();
         frozen(&mut app);
         app.init_resource::<ReportsSoundLengths>().add_message::<SoundStarted>();
-        start(&mut app, a2_music(1, "track.wav"), "track.wav", 10.0);
-        start(&mut app, Presentation::Sound { id: 2, name: "line.wav".into(), at: None }, "line.wav", 20.0);
+        start(&mut app, a2_music(1, "clip_t.wav"), "clip_t.wav", 10.0);
+        start(&mut app, Presentation::Sound { id: 2, name: "clip_a.wav".into(), at: None }, "clip_a.wav", 20.0);
         let _ = bus_cuts(&mut app);
         let _ = replies(&mut app);
         app.world_mut().write_message(ScriptReply::CineractiveSkipped);
@@ -1099,7 +1100,7 @@ mod tests {
         let mut app = app();
         frozen(&mut app);
         app.init_resource::<ReportsSoundLengths>().add_message::<SoundStarted>().insert_resource(link_at(5));
-        start(&mut app, Presentation::Sound { id: 1, name: "old.wav".into(), at: None }, "old.wav", 20.0);
+        start(&mut app, Presentation::Sound { id: 1, name: "clip_c.wav".into(), at: None }, "clip_c.wav", 20.0);
         let _ = bus_cuts(&mut app);
         let _ = replies(&mut app);
         // The mission restarts in place: the sim's clock goes back.
@@ -1108,24 +1109,22 @@ mod tests {
         assert!(app.world().resource::<ScriptSounds>().playing().is_empty(), "the old run's message is gone");
         assert_eq!(bus_cuts(&mut app), 1, "and what still played is cut");
         // The new run's message 1 is not ended by anything left of the old one.
-        start(&mut app, Presentation::Sound { id: 1, name: "new.wav".into(), at: None }, "new.wav", 20.0);
+        start(&mut app, Presentation::Sound { id: 1, name: "clip_d.wav".into(), at: None }, "clip_d.wav", 20.0);
         assert!(replies(&mut app).is_empty());
         assert_eq!(app.world().resource::<ScriptSounds>().playing(), [1]);
     }
 
     #[test]
-    fn a_wait_on_a_message_does_not_run_down_while_the_game_is_paused() {
+    fn a_wait_on_a_message_ends_with_its_clip_in_real_time_even_while_the_game_is_paused() {
         use crate::audio::{ReportsSoundLengths, SoundStarted};
         let mut app = app();
         frozen(&mut app);
         app.insert_resource(crate::clock::AnimClock::new(crate::clock::ClockMode::Wall, 0));
         app.init_resource::<ReportsSoundLengths>().add_message::<SoundStarted>();
-        start(&mut app, Presentation::Sound { id: 4, name: "line.wav".into(), at: None }, "line.wav", 5.0);
+        start(&mut app, Presentation::Sound { id: 4, name: "clip_a.wav".into(), at: None }, "clip_a.wav", 5.0);
         app.world_mut().resource_mut::<crate::clock::AnimClock>().set_paused(true);
-        step(&mut app, 8.0);
-        assert!(replies(&mut app).is_empty(), "paused: the wait has not run down");
-        app.world_mut().resource_mut::<crate::clock::AnimClock>().set_paused(false);
         step(&mut app, 6.0);
+        // The audio is not paused with the game, so the clip has ended and the wait with it (the paused sim holds the script).
         assert_eq!(replies(&mut app), [ScriptReply::SoundDone { id: 4 }]);
     }
 
@@ -1152,11 +1151,11 @@ mod tests {
         let mut app = app();
         frozen(&mut app);
         app.init_resource::<ReportsSoundLengths>().add_message::<SoundStarted>();
-        send(&mut app, a2_music(14, "track.wav"));
+        send(&mut app, a2_music(14, "clip_t.wav"));
         let heard: Vec<String> = app.world_mut().resource_mut::<Messages<PlaySound>>().drain().map(|m| m.name).collect();
-        assert_eq!(heard, ["track.wav"], "the track is played, not left unhandled");
+        assert_eq!(heard, ["clip_t.wav"], "the track is played, not left unhandled");
         assert_eq!(app.world().resource::<Unhandled>().count("A2.PlayMusic"), 0);
-        app.world_mut().write_message(SoundStarted { name: "track.wav".into(), bus: Bus::Ui, seconds: Some(10.0) });
+        app.world_mut().write_message(SoundStarted { name: "clip_t.wav".into(), bus: Bus::Ui, seconds: Some(10.0) });
         app.update();
         step(&mut app, 9.0);
         assert!(replies(&mut app).is_empty(), "a script that waits for its track is still waiting at 9 s");

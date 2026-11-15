@@ -180,7 +180,6 @@ pub fn drive(seconds: f64) -> Option<Trace> {
         }
     }
     let objectives = app.world().resource::<crate::ui::presentation::ObjectivesView>().items.len();
-    let objectives = app.world().resource::<crate::ui::presentation::ObjectivesView>().items.len();
     let heard = app.world().resource::<Heard>().0.clone();
     let log = app.world().resource::<PresentationLog>().0.clone();
     if let Ok(out) = std::env::var("STA64_TEST_TRACE_DIR") {
