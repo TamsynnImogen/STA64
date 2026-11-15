@@ -929,7 +929,8 @@ mod from_content {
         let key = |n: &str| db.key(n).unwrap();
         let ship = a1::params(&db, key("ship")).expect("a craft has parameters");
         assert!(ship.borg.is_none());
-        assert_eq!(a1::params(&db, key("drone")).unwrap().borg.map(|b| num(b.max_rotation_speed)), Some(0.4));
+        let spin = a1::params(&db, key("drone")).unwrap().borg.map(|b| num(b.max_rotation_speed));
+        assert!(spin.is_some_and(|v| (v - 0.4).abs() < 1e-6), "{spin:?}");
         assert!(a1::params(&db, key("yard")).is_none(), "a structure keeps the old movement");
         assert!(a1::params(&db, ContentKey::NONE).is_some());
     }
