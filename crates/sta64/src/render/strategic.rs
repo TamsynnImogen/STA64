@@ -286,7 +286,9 @@ impl Plugin for StrategicPlugin {
             .init_resource::<CullStats>()
             .init_resource::<SwitchParams>()
             .add_systems(Startup, make_masks)
-            .add_systems(Update, (toggle, ensure_icons, attach).chain().run_if(in_match))
+            // After the units view's set: `ensure_icons` sizes an arrow from the entity's `SelectRadius`,
+            // which `sync_units`, `attach_models` and `pick_bodies` (GameSet::Interpolate) settle.
+            .add_systems(Update, (toggle, ensure_icons, attach).chain().after(crate::app::GameSet::Interpolate).run_if(in_match))
             .add_systems(PostUpdate, draw.run_if(resource_exists::<bevy::gizmos::config::GizmoConfigStore>).run_if(in_match).after(update))
             // The handoff precedes both model visibility propagation and UI layout.
             .add_systems(
@@ -392,11 +394,15 @@ fn toggle(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<Mode>) {
     }
 }
 
+/// A view-drawn thing that never gets a strategic icon: map scenery (a planet), which has no symbol to fall back to.
+#[derive(Component)]
+pub struct NoIcon;
+
 /// Units drawn from the view get an icon too (an arrow in the owner's colour).
 #[allow(clippy::type_complexity)]
 pub(crate) fn ensure_icons(
     mut commands: Commands,
-    units: Query<(Entity, Option<&TeamColour>, Option<&SelectRadius>), (With<FromView>, With<SimEntity>, Without<Strategic>, Without<NeedsModel>)>,
+    units: Query<(Entity, Option<&TeamColour>, Option<&SelectRadius>), (With<FromView>, With<SimEntity>, Without<Strategic>, Without<NeedsModel>, Without<NoIcon>)>,
 ) {
     for (e, colour, radius) in &units {
         let colour = colour.map_or(Color::WHITE, |c| c.0);

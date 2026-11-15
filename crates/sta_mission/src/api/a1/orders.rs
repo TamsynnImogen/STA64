@@ -9,7 +9,7 @@ use mlua::{Lua, Table, Value};
 use sta_core::EntityId;
 use sta_sim::command::Order;
 
-use super::{A, Env, args_of, def};
+use super::{A, Env, def};
 
 fn send(e: &Env, name: &str, id: EntityId, make: impl FnOnce(Vec<EntityId>) -> Order) -> mlua::Result<()> {
     e.unit(name, id)?;
@@ -51,15 +51,20 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
         send(e, "Stop", a[0].id(), |units| Order::Stop { units })?;
         Ok(Value::Nil)
     })?)?;
-    // `Attack(unit, target, int)`; the position form is an attack-move, which
-    // has no order in the simulation.
+    // `Attack(unit, target, int)`; the position form is `AttackPoint` (LUA-30).
     table.set("Attack", def(lua, env, "Attack", &["hhi", "hv"], |_, e, ov, a| {
         if ov == 0 {
             let target = e.unit("Attack", a[1].id())?.id;
             send(e, "Attack", a[0].id(), |units| Order::Attack { units, target })?;
         } else {
-            e.unit("Attack", a[0].id())?;
-            e.gap("Attack", "no attack-move order in the sim seam", args_of(a))?;
+            // LUA-30: the same command with a point (read from the executable, static), bound to the Armada II
+            // rule of `AI_Attack(point)`: `AttackPoint` flies to weapon range and fires at nothing on the way;
+            // what the original does at a point is not read.
+            let to = match &a[1] {
+                A::Vec(v) => *v,
+                _ => unreachable!("overload 1 is a Vector"),
+            };
+            send(e, "Attack", a[0].id(), |units| Order::AttackPoint { units, at: to })?;
         }
         Ok(Value::Nil)
     })?)?;
@@ -122,9 +127,6 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
         let c = e.ctx.borrow();
         let within = u64::from(ATTACK_MODE_SECONDS * sta_core::TICK_HZ);
         Ok(Value::Boolean(c.last_fired.get(&id).is_some_and(|t| c.view.tick.saturating_sub(*t) <= within)))
-    })?)?;
-    table.set("GetAttackLocation", def(lua, env, "GetAttackLocation", &["hh"], |_, e, _, _| {
-        Err(e.no_data("GetAttackLocation", "the world view carries no order target"))
     })?)?;
     table.set("GetAllyShipAttacks", def(lua, env, "GetAllyShipAttacks", &["ii"], |_, e, _, _| {
         Err(e.no_data("GetAllyShipAttacks", "AI attack statistics are not in the world view"))
