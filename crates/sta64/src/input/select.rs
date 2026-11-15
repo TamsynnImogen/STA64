@@ -195,7 +195,9 @@ pub(crate) type Targetable<'w, 's> = Query<'w, 's, (&'static SimEntity, &'static
 /// Whether `id` may be targeted by the local player: with a local player, only what its team sees
 /// (a kept-drawn planet outside every sensor is no target, so no order, cursor or HUD click goes
 /// through the fog); without one (the bench, a view with no seat) everything drawn is, as is
-/// everything in a view that carries no visibility data. Hover and click selection apply the same rule.
+/// everything in a view that carries no visibility data. Click selection, right-click orders, the order
+/// cursor and HUD targeting apply this rule. Hover (`hover.rs`) filters by the seat the link speaks as
+/// instead, with or without a `LocalPlayer` (kept as it was; its fog test relies on it).
 pub(crate) fn target_seen(view: &sta_sim::WorldView, local: Option<sta_sim::PlayerId>, id: EntityId) -> bool {
     let Some(player) = local else { return true };
     if view.visibility.is_empty() {
