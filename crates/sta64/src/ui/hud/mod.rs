@@ -168,8 +168,8 @@ impl Plugin for HudPlugin {
                     pointer,
                     crate::input::hover::track.run_if(not(resource_exists::<ExternalFeed>)),
                     stock::infobar::update,
-                    press,
-                    place_on_click.run_if(resource_exists::<Aim>),
+                    press.run_if(not(crate::ui::presentation::cutscene_running)),
+                    place_on_click.run_if(resource_exists::<Aim>).run_if(not(crate::ui::presentation::cutscene_running)),
                     ghost::update_ghost,
                     ghost::tint_ghost,
                     super::gui_sprites::paint.after(super::theme::WidgetPaint),
@@ -403,6 +403,10 @@ fn press(
                     Severity::Info,
                     trf("{0}: click the map (Esc cancels)", &[&tr(&format!("{mode:?}"))]),
                 ));
+            }
+            Act::Recrew if !commands::recrew_stations(&feed, &feed.own_selection()).is_empty() => {
+                // UI-only until the simulation defines a Recrew order and recovery rule.
+                notices.write(Notice::new(Severity::Warn, tr("Station recrewing is not implemented yet")));
             }
             Act::Build {
                 builder,
@@ -757,3 +761,5 @@ mod target_tests {
 mod tests;
 #[cfg(test)]
 mod colonize_tests;
+#[cfg(test)]
+mod recrew_tests;
