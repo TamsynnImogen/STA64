@@ -7,7 +7,7 @@
 //!
 //! | request | shown here | evidence |
 //! |---|---|---|
-//! | `Title`, `RemoveTitle`, A1 `ShowTitle` / `ShowSubtitle` placement, A2 `UI.addTitle` / `addSubtitle` with x, y, seconds | text at a canvas position, until its seconds run out or it is removed | A2 canvas 1600x1200 and the default places (50,50) / (50,1000) from Fleet Ops Roots' Lua, A1 640x480 rect from the A1 mission DLLs; stock A2 title colour and font **not measured** |
+//! | `Title`, `RemoveTitle`, A1 `ShowTitle` / `ShowSubtitle` placement, A2 `ShowTitle` / `ShowSubtitle` placement (x < 0 centred), A2 `UI.addTitle` / `addSubtitle` with x, y, seconds | text at a canvas position, until its seconds run out or it is removed | A2 canvas 1600x1200 and the default places (50,50) / (50,1000) from Fleet Ops Roots' Lua, A1 640x480 rect from the A1 mission DLLs; stock A2 title colour and font **not measured** |
 //! | `Fade` | a full-screen black rectangle, alpha ramped over `seconds` | `ScreenFade` is a black rectangle in the original; the A1 argument meanings beyond seconds **not measured** |
 //! | `Cineractive { skippable }` | state in [`CineractiveState`]; Space skips a skippable one ([`ScriptReply::CineractiveSkipped`]: the script's cancel), caps release it ([`ScriptReply::CineractiveReleased`]); the camera is `camera_cinematic` (UI-36 shot model) | `cineractiveCancel` (A2) / `switch_camera_shot` (A1) is Space in `Input.map`; no letterbox exists in the original's data or executables, so none is drawn |
 //! | objectives and briefing (host state, not a `Presentation`) | the modal panel of [`ObjectivesView`], toggled with Alt+O | rectangles of `objectivesPanelArea` and the text areas in A2 stock `gui_glob16x12.cfg`, the A1 `gui_glob.cfg` panel; the completed-line tick **not measured** |
@@ -293,6 +293,8 @@ pub struct TitleItem {
     pub left: Option<f32>,
     /// An A1 title's rectangle `[x, y, w, h]` on the 640x480 canvas, and seconds shown.
     pub a1_rect: Option<[f32; 4]>,
+    /// An A2 `ShowTitle` / `ShowSubtitle` with a negative x: centred across the screen at `place.at.y`.
+    pub centred: bool,
     /// An A1 title's fade level (RGB scale) when it is held: 0 to 1 over [`A1_TITLE_FADE_SECS`]
     /// while it fades in (the script's flag), then held; `age` counts seconds into the fade in.
     pub age: f32,
@@ -486,6 +488,7 @@ pub(crate) fn consume(
                 place: place_of(*subtitle),
                 left: seconds.map(|s| s.to_f32()),
                 a1_rect: None,
+                centred: false,
                 age: 0.0,
                 out: None,
             }),
@@ -521,7 +524,7 @@ pub(crate) fn consume(
                 if let [Arg::Int(id), Arg::Text(text), x, y, secs, _] = args.as_slice()
                     && let (Some(x), Some(y), Some(secs), Ok(id)) = (num(x), num(y), num(secs), u32::try_from(*id))
                 {
-                    titles.add(TitleItem { id, text: text_of(strings.as_deref(), text), subtitle, place: Place { canvas: A2_CANVAS, at: Vec2::new(x, y) }, left: (secs > 0.0).then_some(secs), a1_rect: None, age: 0.0, out: None });
+                    titles.add(TitleItem { id, text: text_of(strings.as_deref(), text), subtitle, place: Place { canvas: A2_CANVAS, at: Vec2::new(x, y) }, left: (secs > 0.0).then_some(secs), a1_rect: None, centred: false, age: 0.0, out: None });
                 } else {
                     unhandled.note(name);
                 }
@@ -538,6 +541,22 @@ pub(crate) fn consume(
                         // The flag: fade in over a second (true) or show at once (false).
                         t.age = if matches!(flag, Arg::Bool(false)) { A1_TITLE_FADE_SECS } else { 0.0 };
                     }
+                    titles.dirty = true;
+                } else {
+                    unhandled.note(name);
+                }
+            }
+            // A2 `ShowTitle(id, x, y, fade)` / `ShowSubtitle`, queued after the typed title with its id:
+            // the canvas place; a negative x is centred (the stock intro captions pass -1). The
+            // fade flag, the title font and colour are not applied (read from the executable,
+            // static; not measured).
+            Presentation::Call { name, args } if name == "A2.ShowTitle" || name == "A2.ShowSubtitle" => {
+                if let [Arg::Int(id), x, y, ..] = args.as_slice()
+                    && let (Some(x), Some(y), Ok(id)) = (num(x), num(y), u32::try_from(*id))
+                    && let Some(t) = titles.items.iter_mut().find(|t| t.id == id)
+                {
+                    t.centred = x < 0.0;
+                    t.place = Place { canvas: A2_CANVAS, at: Vec2::new(x.max(0.0), y) };
                     titles.dirty = true;
                 } else {
                     unhandled.note(name);
@@ -825,6 +844,13 @@ fn draw_titles(mut commands: Commands, theme: Res<Theme>, mut titles: ResMut<Tit
             ));
             continue;
         }
+        if t.centred {
+            commands.entity(root).with_child((
+                Node { position_type: PositionType::Absolute, left: Val::Percent(0.0), width: Val::Percent(100.0), justify_content: JustifyContent::Center, top: Val::Percent(p.at.y / p.canvas.y * 100.0), ..default() },
+                children![sprite_text_styled(t.text.clone(), size, Color::WHITE, SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent())],
+            ));
+            continue;
+        }
         commands.entity(root).with_child((
             Node { position_type: PositionType::Absolute, left: Val::Percent(p.at.x / p.canvas.x * 100.0), top: Val::Percent(p.at.y / p.canvas.y * 100.0), max_width: Val::Percent(80.0), ..default() },
             children![sprite_text_styled(t.text.clone(), size, Color::WHITE, SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent())],
@@ -1072,6 +1098,21 @@ mod tests {
 
     fn replies(app: &mut App) -> Vec<ScriptReply> {
         app.world_mut().resource_mut::<Messages<ScriptReply>>().drain().collect()
+    }
+
+    #[test]
+    fn an_a2_show_title_places_the_typed_title_and_centres_on_a_negative_x() {
+        let mut app = app();
+        send(&mut app, Presentation::Title { id: 4, text: "Caption".into(), subtitle: false, seconds: None });
+        send(&mut app, Presentation::Call { name: "A2.ShowTitle".into(), args: vec![Arg::Int(4), Arg::Int(-1), Arg::Int(200), Arg::Bool(true)] });
+        send(&mut app, Presentation::Title { id: 5, text: "Heading".into(), subtitle: false, seconds: None });
+        send(&mut app, Presentation::Call { name: "A2.ShowTitle".into(), args: vec![Arg::Int(5), Arg::Int(100), Arg::Int(120), Arg::Bool(true)] });
+        let t = app.world().resource::<Titles>();
+        assert!(t.items[0].centred);
+        assert_eq!(t.items[0].place, Place { canvas: A2_CANVAS, at: Vec2::new(0.0, 200.0) });
+        assert!(!t.items[1].centred);
+        assert_eq!(t.items[1].place.at, Vec2::new(100.0, 120.0));
+        assert_eq!(app.world().resource::<Unhandled>().count("A2.ShowTitle"), 0);
     }
 
     #[test]

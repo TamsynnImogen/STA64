@@ -177,6 +177,13 @@ fn fade(lua: &Lua, ctx: &Shared, name: &'static str, out: bool) -> mlua::Result<
         if delay == 0.0 {
             present(&c, name, fade)?;
         } else {
+            // A delayed fade out replaces the fade in force at once, so a screen the last shot
+            // faded to black is clear until the new fade starts (measured once on the original:
+            // the shot after a fade out is visible during the delay; the executable's fade state
+            // was not read). A delayed fade in keeps its earlier behaviour.
+            if out {
+                present(&c, name, Presentation::Fade { out: false, seconds: Fixed::ZERO, rgb })?;
+            }
             // The typed fade has no start delay: the request is kept with every argument, and the
             // fade is presented when it starts (LUA-17).
             let arguments = vec![

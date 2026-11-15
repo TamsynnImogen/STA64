@@ -43,6 +43,8 @@ fn fades_map_duration_colour_and_delay() {
         vec![
             Presentation::Fade { out: false, seconds: Fixed::from_f64(3.0), rgb: [0; 3] },
             Presentation::Fade { out: true, seconds: Fixed::from_f64(1.5), rgb: [255; 3] },
+            // A delayed fade out first clears the held fade (instant fade in).
+            Presentation::Fade { out: false, seconds: Fixed::ZERO, rgb: [0; 3] },
             Presentation::Call {
                 name: "A2.FadeOut".into(),
                 args: vec![
