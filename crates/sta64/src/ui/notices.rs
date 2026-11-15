@@ -254,7 +254,7 @@ fn events_to_notices(
     // A cineractive shows no log: what the script does during it (replacing the
     // fleet, the staged fight of an intro) is not reported, and the lines would
     // otherwise appear the moment the player gets control back.
-    let Some(link) = link.filter(|_| !cine.is_some_and(|c| c.on)) else {
+    let Some(link) = link.filter(|_| !crate::ui::presentation::cutscene_running(cine)) else {
         events.clear();
         return;
     };
