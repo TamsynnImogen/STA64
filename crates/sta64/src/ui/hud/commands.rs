@@ -36,7 +36,6 @@ pub struct Capabilities {
     /// (tells a greyed press apart: the family is refused, or the crew is too low).
     pub transport_family: bool,
     /// A finished station with a positive live crew capacity can show Recrew.
-    /// The sim has no Recrew order yet; this is presentation only.
     pub recrew: bool,
     /// At least one eligible station is below its live crew maximum.
     pub recrew_ready: bool,
@@ -77,8 +76,8 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
         .collect();
     let t = transport_state(db, def, kind, u);
     let recrew = kind == EntityKind::Station
-        && def.raw.bool("facility") != Some(false)
-        && def.raw.bool("has_crew") != Some(false)
+        && def.facility != Some(false)
+        && def.has_crew != Some(false)
         && u.crew.is_some_and(|crew| crew[1] > Fixed::ZERO);
     let recrew_ready = recrew && u.crew.is_some_and(|crew| crew[0] < crew[1]);
     Capabilities {
@@ -160,7 +159,7 @@ pub fn shared(feed: &HudFeed) -> Capabilities {
 }
 
 /// Owned, finished stations below their live crew maximum in a mixed selection.
-/// This is used only to validate a UI click until the sim supports recrewing.
+/// These are the only units sent with a Recrew order.
 pub fn recrew_stations(feed: &HudFeed, ids: &[EntityId]) -> Vec<EntityId> {
     let Some(db) = feed.content.as_deref() else { return Vec::new() };
     ids.iter().copied().filter(|id| {
