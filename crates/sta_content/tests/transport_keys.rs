@@ -108,7 +108,7 @@ fn race_keys_are_read_with_their_defaults() {
     std::fs::create_dir_all(dir.join("odf")).unwrap();
     let write = |name: &str, text: &str| std::fs::write(dir.join("odf").join(name), text).unwrap();
     write("races.odf", "numberOfRaces = 3\nrace0 = \"RaceA.odf\"\nrace1 = \"RaceB.odf\"\nrace2 = \"RaceC.odf\"\n");
-    write("RaceA.odf", "name = \"Alpha\"\nboardingStrength = 1.75f\ncrewRetreatRatio = 0.2f // trailing comment\ntransportSprite = \"btransport\"\ntransportToFriendsOnNotEasy = 1\ntransportToEnemyOnHard = 1\n");
+    write("RaceA.odf", "name = \"Alpha\"\ncrewRedStatus = 0.3f\nboardingStrength = 1.75f\ncrewRetreatRatio = 0.2f // trailing comment\ntransportSprite = \"btransport\"\ntransportToFriendsOnNotEasy = 1\ntransportToEnemyOnHard = 1\n");
     write("RaceB.odf", "name = \"Beta\"\nboardingStrength = 0.0f\ncanCommandeer = 0\ncanBeCommandeered = 0\ntransportToFriendsOnNotEasy = 0\n");
     write("RaceC.odf", "name = \"Gamma\"\n");
     let mut vfs = Vfs::default();
@@ -120,6 +120,10 @@ fn race_keys_are_read_with_their_defaults() {
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(db.rules().race_boarding("alpha"), races.boarding("alpha"));
     assert_eq!(db.rules().race_boarding("beta"), races.boarding("beta"));
+    // Repair rows are keyed by file stem; a unit's race key is the name (SIM-69 review).
+    assert_eq!(db.rules().race_repair_of("Alpha").and_then(|r| r.crew_red_status), Some(Fixed::from_f64(f64::from(0.3f32))));
+    assert!(db.rules().race_repair("alpha").is_none(), "the stem is `racea`");
+    assert!(db.rules().race_repair_of("beta").is_none());
     let a = races.boarding("ALPHA");
     assert_eq!(a.boarding_strength, Fixed::from_f64(1.75));
     assert_eq!(a.crew_retreat_ratio, Fixed::from_f64(f64::from(0.2f32)));

@@ -32,6 +32,8 @@ pub struct Rules {
     seat_races: Vec<(String, SeatRaceRule)>,
     /// Authored race repair metadata by ODF stem (SIM-40), absent when unset.
     race_repairs: Vec<(String, RaceRepair)>,
+    /// `(race name, ODF stem)` for the rows above: a unit's race key is the name.
+    race_repair_stems: Vec<(String, String)>,
     /// Authored race boarding keys by lower-case race key (SIM-46 P0), only
     /// the races that set any. The three the sim reads are digested (SIM-69).
     race_boarding: Vec<(String, RaceBoarding)>,
@@ -627,6 +629,22 @@ impl Rules {
         self.race_repairs.iter().find(|(key, _)| *key == stem).map(|(_, repair)| *repair)
     }
 
+    /// Repair metadata of the race a unit carries (its race key, the ODF's `name`):
+    /// through the name's file stem when the race is known, else the key as a stem.
+    pub fn race_repair_of(&self, race: &str) -> Option<RaceRepair> {
+        let name = race.trim().to_ascii_lowercase();
+        match self.race_repair_stems.iter().find(|(n, _)| *n == name) {
+            Some((_, stem)) => self.race_repair(stem),
+            None => self.race_repair(&name),
+        }
+    }
+
+    /// Set which race name has which repair stem (tests and content built in code).
+    pub fn with_race_repair_stems(mut self, rows: Vec<(String, String)>) -> Self {
+        self.race_repair_stems = rows.into_iter().map(|(n, s)| (n.trim().to_ascii_lowercase(), crate::odf::stem(&s))).collect();
+        self
+    }
+
     /// Set synthetic race repair metadata; canonical stems keep the first row.
     pub fn with_race_repairs(mut self, rows: Vec<(String, RaceRepair)>) -> Self {
         let mut rows: Vec<_> = rows
@@ -741,6 +759,7 @@ impl Rules {
         }
         rules.seat_races = races.seat_rules().map(|(k, r)| (k.to_owned(), r)).collect();
         rules = rules.with_race_repairs(races.repair_rules().map(|(stem, repair)| (stem.to_owned(), repair)).collect());
+        rules.race_repair_stems = races.repair_stems().map(|(n, s)| (n.to_owned(), s.to_owned())).collect();
         rules.race_boarding = races.boarding_rules().map(|(k, b)| (k.to_owned(), b.clone())).collect();
         Ok((rules, warnings))
     }

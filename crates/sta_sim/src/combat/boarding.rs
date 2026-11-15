@@ -100,11 +100,20 @@ impl TransportRules {
     }
 }
 
-/// `transporter` when the unit sets it (data); else every crewed ship and
-/// station, as the original's `craft.odf` default does for the units without a
-/// key (Armada I has none).
-fn can_transport(def: &UnitDef, crew_max: Fixed) -> bool {
-    def.planet_role.is_none() && def.transport.transporter.unwrap_or(crew_max > Fixed::ZERO)
+/// The sim's own answer to "may this unit be ordered to transport?": the
+/// profile family (`crew_loss_on_hit`, see the module docs), the unit's
+/// `transporter` key (absent: a crewed ship or station, as the stub did; planets
+/// never), and the crew floors (`crew` is current and maximum crew: the carrier needs
+/// more than the executable's 9 and more than one party). Read-only; the order
+/// validation uses it, and a client should too (it must not repeat the rule).
+pub fn can_transport(db: &ContentDb, def: &UnitDef, crew: [Fixed; 2]) -> bool {
+    let rules = TransportRules::of(db);
+    let crewed = crew[1] > Fixed::ZERO;
+    def.planet_role.is_none()
+        && db.unit_features(def).crew_loss_on_hit
+        && def.transport.transporter.unwrap_or(crewed)
+        && crew[0] > rules.min_crew
+        && crew[0] > rules.party
 }
 
 /// `boardingPartyStrength` (1.0 when absent).
@@ -139,7 +148,7 @@ fn shield_hold(def: &UnitDef, rules: &TransportRules) -> Tick {
 
 /// The carrier race's `crewRedStatus` (data), the executable's 0.25 when absent.
 fn crew_red_status(db: &ContentDb, race: &str) -> Fixed {
-    db.rules().race_repair(race).and_then(|r| r.crew_red_status).unwrap_or(DEFAULT_CREW_RED)
+    db.rules().race_repair_of(race).and_then(|r| r.crew_red_status).unwrap_or(DEFAULT_CREW_RED)
 }
 
 /// One carrier's transport.
@@ -417,8 +426,7 @@ impl Sim {
                             // The carrier's race must be allowed to take units of another team.
                             && (self.same_team(u.owner, target_owner) || can_commandeer(&db, self.unit_race(id).unwrap_or("")))
                             && (!player.is_player() || u.owner == player)
-                            && def.is_some_and(|d| db.unit_features(d).crew_loss_on_hit && can_transport(d, u.crew.map_or(Fixed::ZERO, |c| c[1])))
-                            && u.crew.is_some_and(|c| c[0] > rules.min_crew && c[0] > rules.party)
+                            && def.is_some_and(|d| u.crew.is_some_and(|c| can_transport(&db, d, c)))
                     })
             })
             .collect();

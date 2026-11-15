@@ -277,6 +277,19 @@ fn the_carrier_stops_at_the_races_red_status_from_the_content() {
 }
 
 #[test]
+fn the_red_status_row_is_found_by_the_race_name_when_the_file_stem_differs() {
+    // The rows are keyed by the race file's stem, a unit's race key is the race's name.
+    let repair = RaceRepair { crew_red_status: Some(fx(0.4)), ..RaceRepair::default() };
+    let rows = move |r: Rules| r.with_race_repairs(vec![("racea".into(), repair)]).with_race_repair_stems(vec![("alpha".into(), "RaceA.odf".into())]);
+    let mut w = world_with(db_with(None, true, &|_, _| {}, rows), PlayerId(2), "beta", 300);
+    w.set_crew(w.carrier, 134.0, 135.0);
+    w.set_crew(w.target, 0.0, 100_000.0);
+    w.order();
+    w.run(40 * 30);
+    assert_eq!(w.crew(w.carrier), 59.0, "stops at the 0.4 level, not the 0.25 default");
+}
+
+#[test]
 fn a_tie_leaves_a_derelict_that_keeps_its_owner_and_stops_its_order_and_the_next_party_captures_it() {
     let mut w = world(1, 300);
     let action = rules(&w.db).action_delay;
