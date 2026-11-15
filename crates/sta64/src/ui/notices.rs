@@ -241,7 +241,13 @@ pub fn notice_for(ev: &SimEvent, me: PlayerId, unit: impl Fn(sta_sim::EntityId) 
 }
 
 fn name_of(db: Option<&ContentRes>, u: &UnitView) -> String {
-    db.and_then(|d| d.0.name(u.def)).map(str::to_owned).unwrap_or_else(|| tr("Unit"))
+    // The ODF's own `unitName` caption (what the HUD's mouseover strip shows), the ODF name
+    // only when it authors none.
+    db.and_then(|d| {
+        let caption = d.0.unit(u.def).and_then(super::hud::model::craft_names::unit_name);
+        caption.or_else(|| d.0.name(u.def)).map(str::to_owned)
+    })
+    .unwrap_or_else(|| tr("Unit"))
 }
 
 fn events_to_notices(
@@ -580,6 +586,38 @@ mod tests {
         assert_eq!(log.lines.len(), 2);
         assert!(log.lines.iter().all(|l| l.from.is_none()));
         assert_eq!(app.world().resource::<Notices>().active[0].severity, Severity::Bad);
+    }
+
+    #[test]
+    fn name_of_prefers_the_unit_name_caption_over_the_odf_name() {
+        let unit = |odf: &str, text: &str| {
+            let mut def = sta_content::UnitDef::new(odf, "cruiser");
+            def.raw = std::sync::Arc::new(sta_odf::resolve("unit", &mut |_| Some(text.to_owned())).unwrap());
+            def
+        };
+        let db = sta_content::ContentDb::builder()
+            .unit(unit("fx_captioned", "[GameObjectClass]\nunitName = \"Test Cruiser\"\n"))
+            .unit(unit("fx_plain", "[GameObjectClass]\nclassLabel = \"cruiser\"\n"))
+            .build()
+            .unwrap();
+        let view = |odf: &str| UnitView {
+            id: sta_sim::EntityId(1),
+            def: db.key(odf).unwrap(),
+            owner: PlayerId(0),
+            pos: sta_sim::Vec3::ZERO,
+            heading: (sta_sim::Fixed::ZERO, sta_sim::Fixed::ONE),
+            speed: sta_sim::Fixed::ZERO,
+            hull: [sta_sim::Fixed::ONE; 2],
+            shields: [[sta_sim::Fixed::ZERO; 2]; 4],
+            crew: None,
+            energy: None,
+            autonomy: None,
+            flags: sta_sim::view::UnitFlags::default(),
+            progress: None,
+        };
+        let res = ContentRes(std::sync::Arc::new(db.clone()));
+        assert_eq!(name_of(Some(&res), &view("fx_captioned")), "Test Cruiser");
+        assert_eq!(name_of(Some(&res), &view("fx_plain")), "fx_plain");
     }
 
     #[test]

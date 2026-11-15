@@ -4,7 +4,7 @@
 use sta_content::UnitDef;
 use sta_sim::EntityId;
 
-pub(super) fn unit_name(def: &UnitDef) -> Option<&str> {
+pub(crate) fn unit_name(def: &UnitDef) -> Option<&str> {
     def.raw
         .str("unitName")
         .map(str::trim)
