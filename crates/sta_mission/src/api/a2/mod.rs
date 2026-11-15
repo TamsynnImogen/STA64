@@ -36,6 +36,7 @@ mod shared_calls;
 mod stock_bindings;
 mod subsystems;
 mod team_pool;
+pub(crate) mod team_strength;
 #[cfg(test)]
 mod tests;
 mod titles;
