@@ -306,7 +306,9 @@ impl Sim {
                 || self.production.is_deploying(id)
                 || u.kind != EntityKind::Craft
                 || u.stats.too_close_for_warp <= Fixed::ZERO
-                || u.stats.warp_speed <= u.stats.max_speed
+                // A warp leg above impulse, or the slower aligned leg of a warp
+                // speed below it (LUA-31); equal or zero has no leg.
+                || (u.stats.warp_speed <= u.stats.max_speed && crate::warp_override::slow_leg(u.stats.warp_speed, u.stats.max_speed).is_none())
                 || u.stats.max_speed <= crate::speed_override::HELD_SPEED
                 || self.scripted.job(id).is_some()
                 || self.weapons.attack_of(id).is_some()
@@ -476,6 +478,11 @@ impl Sim {
             let up_to_speed = keyed || u.speed > Fixed::from_f64(0.9) * vi;
             let warp = if was { can } else { can && to_goal > too_close && up_to_speed };
             let mut plan = Plan { warp, ..Plan::default() };
+            // LUA-31: a warp speed below impulse still sets the speed of the aligned
+            // far leg (the throttle factor is the multiplier), no warp-in effect.
+            if keyed && aligned && to_goal > too_close {
+                plan.cap = crate::warp_override::slow_leg(vw, vi);
+            }
             if warp {
                 self.approach_warp.set_phase(id, approach::IN_WARP);
             } else if phase.is_some() && u.speed > vi {
