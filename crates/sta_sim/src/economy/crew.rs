@@ -20,9 +20,10 @@
 //!   (what counts as "close to a planet" is not measured); `crewRetreatRatio`,
 //!   the yard refill (`CfgRules::yard_crew_per_sec`, `BASE_CREW_PER_SEC`, default 20). Per-unit crew: loss from hits, system deaths, the
 //!   life-support drain and the derelict latch is `combat/casualty.rs`
-//!   (SIM-39); boarding losses are not implemented (SIM-46), and recovery
-//!   (station RECREW at `recrewRate`, yard recrew at `yard_crew_per_sec` from the team
-//!   pool) is not either; a ship does not regain crew by itself (measured).
+//!   (SIM-39). Station RECREW at `recrewRate` from the team pool is
+//!   `crate::recrew`; transporter crew transfer is `combat/boarding.rs`.
+//!   Yard recrew at `yard_crew_per_sec` is not implemented; a ship does not
+//!   regain crew by itself (measured).
 
 use sta_content::ContentDb;
 use sta_core::{Fixed, PlayerId, TICK_HZ};

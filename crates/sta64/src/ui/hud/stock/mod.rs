@@ -98,6 +98,7 @@ fn metadata<'a>(native: &'a NativeCommands, act: &Act) -> Option<&'a NativeComma
         Act::Target(TargetMode::Mine) => "harvest",
         Act::Target(TargetMode::Rally) => "rally",
         Act::Target(TargetMode::Colonize) => "colonize",
+        Act::Target(TargetMode::Transport) => "transport",
         Act::Stop => "stop",
         Act::Recrew => "recrew",
         Act::Cancel(_) => "cancelbuild",
@@ -122,10 +123,14 @@ fn menu_button(id: u32, name: &str) -> Button {
     }
 }
 
-/// Native menus contain HUD actions with an explicit capability gate. Recrew is
-/// presentation-only until the sim has an order; ODF metadata cannot enable one.
+/// Native menus contain HUD actions with an explicit capability gate; ODF
+/// metadata cannot bypass live Recrew eligibility.
 fn buttons(feed: &HudFeed, page: Page, native: &NativeCommands) -> Vec<Button> {
     let mut buttons = model::grid_with_capacity(feed, page, usize::MAX);
+    // The stock HUD shows only what the original shows: TRANSPORT only where the install's command data
+    // gives it a place (Armada I puts it on its speed rail, a later package); the fallback cell is for
+    // STA64's own layout.
+    buttons.retain(|b| b.act != Act::Target(TargetMode::Transport) || metadata(native, &b.act).is_some_and(|m| m.preferred.is_some()));
     if page == Page::Formations && buttons.iter().any(|b| matches!(b.act, Act::Formation(_))) {
         let formations: Vec<_> = native.formations().collect();
         if !formations.is_empty() {
