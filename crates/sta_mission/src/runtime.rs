@@ -705,9 +705,6 @@ impl Controller for MissionRuntime {
             c.seen.extend(ids);
             for e in events {
                 match e {
-                    SimEvent::Hit { target, .. } => {
-                        c.last_hit.insert(*target, tick);
-                    }
                     SimEvent::Fired { shooter, .. } => {
                         c.last_fired.insert(*shooter, tick);
                     }

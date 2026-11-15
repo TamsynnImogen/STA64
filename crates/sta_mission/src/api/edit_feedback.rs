@@ -44,6 +44,14 @@ impl Store {
         })
     }
 
+    /// The latest alert edit the host has taken but the sim has not settled for `id`.
+    pub(super) fn pending_alert(&self, id: sta_core::EntityId) -> Option<sta_sim::command::AlertState> {
+        self.tracked.values().rev().find_map(|t| match &t.edit {
+            Edit::Alert(who, s) if *who == id && t.submitted.is_some() => Some(*s),
+            _ => None,
+        })
+    }
+
     pub(super) fn submit(&mut self, commands: &[Command], tick: Tick) {
         for command in commands {
             if command.player == PlayerId::SCRIPT

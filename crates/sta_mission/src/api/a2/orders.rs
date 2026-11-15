@@ -17,9 +17,12 @@
 //!   without a target when the object is absent (nearest node, see `spawn.rs`).
 //!   They are sent as the unit's owner like a player's input.
 //! - `SetImpulseSpeed` / `ResetImpulseSpeed` set and lift the unit's impulse
-//!   speed, `SetRedAlert` / `SetGreenAlert` set its alert status (red 0, yellow
-//!   1, green 2): typed SCRIPT edits (`Edit::MaxSpeed`, `Edit::Alert`) whose
-//!   rejection by the sim is reported and counted (`edit_feedback`).
+//!   speed, `SetRedAlert` / `SetYellowAlert` / `SetGreenAlert` set its alert status
+//!   (red 0, yellow 1, green 2) and `IsRedAlert` / `IsYellowAlert` / `IsGreenAlert` read it
+//!   (LUA-32; the sim gates fire and idle assist on it, see `sta_sim::alert`):
+//!   typed SCRIPT edits (`Edit::MaxSpeed`, `Edit::Alert`) whose rejection by the sim
+//!   is reported and counted (`edit_feedback`). `GetAllyShipAttacks` / `GetAllyStationAttacks`
+//!   read the sim's ally attack counters; `UnderAttack` the last enemy hit (`conditions`).
 //! - `GetNearestEnemy(unit, r)`: nearest live unit whose owner is an enemy of
 //!   the unit's owner, inside the square of half side `r` around the unit,
 //!   measured in the XZ plane, and whose owner can see the unit; 0 when none.
@@ -403,6 +406,7 @@ fn name_label(name: &str) -> &'static str {
     match name {
         "SetRedAlert" => "A2.SetRedAlert",
         "SetGreenAlert" => "A2.SetGreenAlert",
+        "SetYellowAlert" => "A2.SetYellowAlert",
         "SetImpulseSpeed" => "A2.SetImpulseSpeed",
         _ => "A2.ResetImpulseSpeed",
     }
@@ -658,13 +662,28 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     })?)?;
     table.set("SetRedAlert", alert(lua, &env, "SetRedAlert", AlertState::Red)?)?;
     table.set("SetGreenAlert", alert(lua, &env, "SetGreenAlert", AlertState::Green)?)?;
+    table.set("SetYellowAlert", alert(lua, &env, "SetYellowAlert", AlertState::Yellow)?)?;
+    // `IsRedAlert` / `IsYellowAlert` / `IsGreenAlert`: the unit's level (what a call of this tick
+    // set counts); false for anything that is not a live unit (LUA-32, read from the executable, static).
+    for (name, level) in [("IsRedAlert", AlertState::Red), ("IsYellowAlert", AlertState::Yellow), ("IsGreenAlert", AlertState::Green)] {
+        table.set(name, def(lua, &env, name, &["h"], move |_, e, _, a| {
+            let c = e.ctx.borrow();
+            Ok(Value::Boolean(c.alive(a[0].id()).is_some() && crate::api::alert::state(&c, a[0].id()) == level))
+        })?)?;
+    }
+    // Ally attack counters (LUA-32): attack orders `by` gave against `team`'s units while not enemies.
+    table.set("GetAllyShipAttacks", def(lua, &env, "GetAllyShipAttacks", &["ii"], |_, e, _, a| {
+        Ok(Value::Integer(crate::api::alert::ally_attacks(&e.ctx.borrow(), a[0].int(), a[1].int(), false)))
+    })?)?;
 
     // Queries.
     table.set("GetNearestEnemy", def(lua, &env, "GetNearestEnemy", &["hf"], |_, e, _, a| nearest_enemy(e, a))?)?;
     table.set("GetAttackLocation", def(lua, &env, "GetAttackLocation", &["hh"], |lua, e, _, a| attack_location(e, lua, a))?)?;
     table.set("GetMainEnemyBaseLocation", raising(lua, &env, "GetMainEnemyBaseLocation", &["i"], "the AI team's strategic map (its main enemy base) is not in the world view")?)?;
     table.set("AttackMainEnemyBase", raising(lua, &env, "AttackMainEnemyBase", &["hb"], "the AI team's strategic map (its main enemy base) is not in the world view")?)?;
-    table.set("GetAllyStationAttacks", raising(lua, &env, "GetAllyStationAttacks", &["ii"], "the AI team's attack statistics are not in the world view")?)?;
+    table.set("GetAllyStationAttacks", def(lua, &env, "GetAllyStationAttacks", &["ii"], |_, e, _, a| {
+        Ok(Value::Integer(crate::api::alert::ally_attacks(&e.ctx.borrow(), a[0].int(), a[1].int(), true)))
+    })?)?;
 
     // AI plan: the request is queued for the host, which gives it to the
     // seat's AI (`MissionRuntime::take_ai_requests`, `sta_ai::MissionAiHub`).

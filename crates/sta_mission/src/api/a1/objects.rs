@@ -62,6 +62,9 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     table.set("SetSpecialEnergy", alias(lua, env, a2, "SetSpecialEnergy")?)?;
     table.set("IsVisibleToTeam", alias(lua, env, a2, "IsVisibleToTeam")?)?;
     table.set("UnderAttack", alias(lua, env, a2, "UnderAttack")?)?;
+    for name in ["IsRedAlert", "IsYellowAlert", "IsGreenAlert"] {
+        table.set(name, alias(lua, env, a2, name)?)?;
+    }
 
     table.set("GetHandle", def(lua, env, "GetHandle", &["s"], |_, e, _, a| {
         let mut c = e.ctx.borrow_mut();

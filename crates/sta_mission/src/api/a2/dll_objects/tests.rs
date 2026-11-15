@@ -354,7 +354,8 @@ fn edits_the_sim_rejects_are_reported_and_counted() {
     for _ in 0..3 {
         advance(&mut rt, &mut sim);
     }
-    assert_eq!(unsupported(&rt, "SetCanBeDecommissioned: simulation rejected"), 1);
+    // LUA-32: the sim stores the decommission switch now.
+    assert_eq!(unsupported(&rt, "SetCanBeDecommissioned: simulation rejected"), 0);
     // SIM-55: the sim applies the shield generator switch now.
     assert_eq!(unsupported(&rt, "DisableShieldGenerator: simulation rejected"), 0);
 }

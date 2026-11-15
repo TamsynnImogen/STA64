@@ -51,9 +51,11 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// Format 25 appends the team-pool adjustments of scripts (SIM-54). Format 26
 /// appends mission-set relations between seats (SIM-63). Format 27 appends the
 /// planet population rows and colony ship orders (SIM-30). Format 28 appends the
-/// scripted warp speeds (LUA-31).
+/// scripted warp speeds (LUA-31). Format 30 appends the alert levels, last
+/// enemy hits and ally attack counters (LUA-32), and the decommission bit of the
+/// switch rows.
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 28;
+pub const FORMAT_VERSION: u16 = 30;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 
@@ -474,6 +476,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&RelationsRec { version: 1, rows: self.relations.to_rows() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.colonies.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&WarpRec { version: 1, rows: self.warp_overrides() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&self.alerts.to_rec()).expect("snapshot serialises"));
         out
     }
 
@@ -547,6 +550,7 @@ impl Sim {
         let (record, rest): (WarpRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if record.version != 1 { return Err(SnapshotError::Corrupt("unknown warp speed record version".into())); }
         let warp_override_rows = record.rows;
+        let (alert_rec, rest): (crate::alert::AlertRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -659,6 +663,12 @@ impl Sim {
         }
         let engagement = crate::combat::targeting::Engagement::from_rec(engagement_rows, b.tick, |id| units.contains(id))
             .ok_or_else(|| SnapshotError::Corrupt("engagement rows out of order, from the future or of an unknown entity".into()))?;
+        let alerts = crate::alert::Alerts::from_rec(
+            alert_rec,
+            b.tick,
+            |id| units.get(id).map(|u| u.kind),
+            |p| b.players.iter().any(|(q, _)| q.0 == p),
+        ).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         let specials = crate::specials::Specials::from_rec(b.specials).ok_or_else(|| corrupt("specials"))?;
         let start_effects = crate::start_effects::StartEffects::from_rec(effect_rows, |id| units.contains(id))
             .ok_or_else(|| corrupt("start effect rows"))?;
@@ -706,6 +716,7 @@ impl Sim {
             approach_warp,
             watchdog,
             engagement,
+            alerts,
             start_effects,
             nav: Default::default(),
             subsystems,
@@ -768,6 +779,10 @@ mod perception_tests;
 #[cfg(test)]
 #[path = "snapshot/warp_tests.rs"]
 mod warp_tests;
+
+#[cfg(test)]
+#[path = "snapshot/alert_tests.rs"]
+mod alert_tests;
 
 #[cfg(test)]
 mod tests {

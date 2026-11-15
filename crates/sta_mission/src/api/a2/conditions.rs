@@ -275,16 +275,12 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     table.set("IsExploding", query(lua, ctx, "IsExploding", 1, |c, a| {
         Ok(c.unit(handle("IsExploding", a, 0)?).is_some_and(|u| u.flags.contains(UnitFlags::DYING)))
     })?)?;
-    // A hit within the last `seconds` of mission time (reading not measured).
+    // `UnderAttack(h, seconds)` (LUA-32): the sim's last enemy hit on the object, `now - stamp < seconds`
+    // (strict, game seconds); false for an object that is gone (read from the executable, static).
     table.set("UnderAttack", query(lua, ctx, "UnderAttack", 2, |c, a| {
         let id = handle("UnderAttack", a, 0)?;
         let window = num("UnderAttack", a, 1)?;
-        if window < 0.0 {
-            return Err(bad("UnderAttack", 1, "a non-negative number of seconds"));
-        }
-        alive(c, "UnderAttack", id)?;
-        let within = (window * TICK_HZ as f64).round() as u64;
-        Ok(c.last_hit.get(&id).is_some_and(|t| c.view.tick.saturating_sub(*t) <= within))
+        Ok(crate::api::alert::under_attack(c, id, window))
     })?)?;
     // IsCompromised(object, team): true when the object has been lost to `team`,
     // i.e. it is gone or dying, is not a craft or station, is a derelict, or

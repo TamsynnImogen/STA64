@@ -126,11 +126,12 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
     table.set("GetAttackLocation", def(lua, env, "GetAttackLocation", &["hh"], |_, e, _, _| {
         Err(e.no_data("GetAttackLocation", "the world view carries no order target"))
     })?)?;
-    table.set("GetAllyShipAttacks", def(lua, env, "GetAllyShipAttacks", &["ii"], |_, e, _, _| {
-        Err(e.no_data("GetAllyShipAttacks", "AI attack statistics are not in the world view"))
+    // Ally attack counters (LUA-32): the sim's `[team][byTeam]` order counts.
+    table.set("GetAllyShipAttacks", def(lua, env, "GetAllyShipAttacks", &["ii"], |_, e, _, a| {
+        Ok(Value::Integer(crate::api::alert::ally_attacks(&e.ctx.borrow(), a[0].int(), a[1].int(), false)))
     })?)?;
-    table.set("GetAllyStationAttacks", def(lua, env, "GetAllyStationAttacks", &["ii"], |_, e, _, _| {
-        Err(e.no_data("GetAllyStationAttacks", "AI attack statistics are not in the world view"))
+    table.set("GetAllyStationAttacks", def(lua, env, "GetAllyStationAttacks", &["ii"], |_, e, _, a| {
+        Ok(Value::Integer(crate::api::alert::ally_attacks(&e.ctx.borrow(), a[0].int(), a[1].int(), true)))
     })?)?;
     Ok(())
 }

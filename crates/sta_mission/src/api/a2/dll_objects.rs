@@ -704,8 +704,8 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     )?;
 
     // void SetCanBeDecommissioned(int, bool): exe: stores the bool on the
-    // Craft. Queued as the typed `Decommissionable` edit; the sim rejects it
-    // until decommissioning exists, which the edit feedback reports and counts.
+    // Craft. Queued as the typed `Decommissionable` edit; the sim stores it as a
+    // per-craft switch bit (LUA-32; nothing reads it until decommissioning exists).
     let c = ctx.clone();
     table.set(
         "SetCanBeDecommissioned",
