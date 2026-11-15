@@ -269,8 +269,9 @@ pub fn cutscene_running(cine: Option<Res<CineractiveState>>) -> bool {
 
 /// Event voice lines (unit acknowledgements and alerts, advisor lines) are dropped, not queued,
 /// while a script's audio plays (any `AudioMessage` or `PlayMusic` stream), the cineractive view
-/// is on, or a movie plays. Read from the executable, static: the event audio queue refuses a
-/// request in each of those states. Not measured on the running original.
+/// is on, or a movie plays. Read from the Armada II executable, static: the event audio queue
+/// refuses a request in each of those states. Applied to Armada I and the Fleet Operations family
+/// as well: not established there. Not measured on the running original.
 pub fn event_voices_silenced(cutscene: bool, sounds: Option<&ScriptSounds>, movies: Option<&crate::media::Movies>) -> bool {
     cutscene || sounds.is_some_and(ScriptSounds::any_playing) || movies.is_some_and(crate::media::Movies::busy)
 }
@@ -661,8 +662,8 @@ fn sound_replies(
 }
 
 /// A restart of the mission in place (the sim's tick going back) drops the messages of the run
-/// before it: their ids restart at 1, so a stale entry would end the new run's wait, and keep a
-/// later stop from cutting the bus. What still plays is cut.
+/// before it: their ids restart at 1, so a stale entry would end the new run's wait or stop the
+/// new run's stream of the same id. What still plays is stopped, stream by stream.
 fn clear_sounds_on_restart(link: Option<Res<crate::sim_link::SimLink>>, mut sounds: ResMut<ScriptSounds>, mut stop: MessageWriter<StopScriptSound>) {
     let Some(link) = link else { return };
     if sounds.restarted(link.curr().tick) {
@@ -977,6 +978,7 @@ fn reset_bridge(mut bridge: ResMut<BridgeState>) {
 
 /// Back at the front end (UI-34): titles, fades, queued message boxes, pending movie replies and the
 /// objectives panel of the match are gone, whatever ended it (a mission's debrief, F10, the in-game menu).
+#[allow(clippy::too_many_arguments)]
 fn reset_presentation(
     mut titles: ResMut<Titles>,
     mut fade: ResMut<FadeState>,
@@ -985,8 +987,12 @@ fn reset_presentation(
     mut view: ResMut<ObjectivesView>,
     mut queue: ResMut<MessageQueue>,
     mut sounds: ResMut<ScriptSounds>,
+    mut stop: MessageWriter<StopScriptSound>,
 ) {
-    sounds.pending.clear();
+    // A script's stream does not play on into the menus.
+    for (id, _, _) in std::mem::take(&mut sounds.pending) {
+        stop.write(StopScriptSound { id });
+    }
     sounds.last_tick = 0;
     titles.items.clear();
     // `Titles::default()` is not dirty, so the layer would keep what it drew.
@@ -1250,6 +1256,39 @@ mod tests {
         send(&mut app, Presentation::StopSound { id: 2 });
         assert_eq!(stops(&mut app), [2], "the track stops and the voice lines play on");
         assert_eq!(app.world().resource::<ScriptSounds>().playing(), [1, 3]);
+    }
+
+    /// Each condition of the event-voice suppression holds on its own.
+    #[test]
+    fn event_voices_are_silenced_by_a_cutscene_a_script_stream_or_a_movie_each_alone() {
+        let mut busy = ScriptSounds::default();
+        busy.start_for_test(5);
+        let movie = crate::media::Movies::busy_for_test();
+        assert!(!event_voices_silenced(false, None, None));
+        assert!(!event_voices_silenced(false, Some(&ScriptSounds::default()), Some(&crate::media::Movies::default())));
+        assert!(event_voices_silenced(true, None, None), "the cinematic view");
+        assert!(event_voices_silenced(false, Some(&busy), None), "a script stream");
+        assert!(event_voices_silenced(false, None, Some(&movie)), "a movie");
+    }
+
+    /// Entering the front end stops the script's streams, so a track does not play into the menu.
+    #[test]
+    fn leaving_the_match_stops_the_script_streams() {
+        use crate::audio::{ReportsSoundLengths, SoundStarted};
+        let mut app = app();
+        frozen(&mut app);
+        app.add_plugins(bevy::state::app::StatesPlugin).init_state::<crate::app::AppState>();
+        app.init_resource::<ReportsSoundLengths>().add_message::<SoundStarted>();
+        app.update();
+        start(&mut app, a2_music(1, "clip_m.wav"), "clip_m.wav", 60.0);
+        start(&mut app, Presentation::Sound { id: 2, name: "clip_a.wav".into(), at: None }, "clip_a.wav", 30.0);
+        let _ = stops(&mut app);
+        app.world_mut().resource_mut::<NextState<crate::app::AppState>>().set(crate::app::AppState::FrontEnd);
+        app.update();
+        let mut cut = stops(&mut app);
+        cut.sort_unstable();
+        assert_eq!(cut, [1, 2]);
+        assert!(!app.world().resource::<ScriptSounds>().any_playing());
     }
 
     #[test]

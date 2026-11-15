@@ -145,7 +145,8 @@ impl Director {
     /// [`Director::advance`] and a new one starts when the hold ends. The cineractive holds it
     /// (the original's `CineractiveStart` stops the ambient jukebox, `CineractiveEnd` starts a
     /// track and the jukebox starts none while the cinematic view is on: read from the
-    /// executable, static). A mission script's own music is not this stream and does not touch it.
+    /// Armada II executable, static; applied to Armada I and the Fleet Operations family as well:
+    /// not established there). A mission script's own music is not this stream and does not touch it.
     pub fn set_hold(&mut self, hold: bool) {
         self.hold = hold;
     }

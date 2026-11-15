@@ -225,8 +225,9 @@ fn run_voices(
     // The menu scene's ships are scenery: no unit speaks in the front end. Nor during a script's
     // cineractive: its alerts and acknowledgements clash with the narration, and what happens
     // meanwhile is dropped, not queued for afterwards (the script's own lines go through
-    // `ui::presentation`, not here). Evidence: Cedric's playtest of the stock behaviour; which
-    // categories the original silences, and whether it queues, is not measured.
+    // `ui::presentation`, not here). The Armada II event audio queue drops (does not queue) a
+    // request in those states, and while a script stream plays or a movie plays (read from the
+    // executable, static; not measured on the running original).
     let (Some(link), Some(content), None, false) = (link, content, scene, silenced) else {
         selected.clear();
         orders.clear();
