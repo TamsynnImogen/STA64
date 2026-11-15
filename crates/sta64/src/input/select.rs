@@ -192,6 +192,20 @@ fn def_of(link: &SimLink, id: EntityId) -> Option<ContentKey> {
 
 pub(crate) type Targetable<'w, 's> = Query<'w, 's, (&'static SimEntity, &'static SelectRadius, &'static GlobalTransform, Option<&'static Strategic>)>;
 
+/// Whether `id` may be targeted by the local player: with a local player, only what its team sees
+/// (a kept-drawn planet outside every sensor is no target, so no order, cursor or HUD click goes
+/// through the fog); without one (the bench, a view with no seat) everything drawn is, as is
+/// everything in a view that carries no visibility data. Click selection, right-click orders, the order
+/// cursor and HUD targeting apply this rule. Hover (`hover.rs`) filters by the seat the link speaks as
+/// instead, with or without a `LocalPlayer` (kept as it was; its fog test relies on it).
+pub(crate) fn target_seen(view: &sta_sim::WorldView, local: Option<sta_sim::PlayerId>, id: EntityId) -> bool {
+    let Some(player) = local else { return true };
+    if view.visibility.is_empty() {
+        return true;
+    }
+    view.visibility.binary_search_by_key(&player, |v| v.0).is_ok_and(|i| view.visibility[i].1.binary_search(&id).is_ok())
+}
+
 /// The unit under the cursor: a strategic icon, else the nearest sphere on the ray.
 pub(crate) fn unit_under(cursor: Vec2, ray: Ray3d, units: &Targetable) -> Option<EntityId> {
     let icon = units
@@ -424,7 +438,7 @@ pub fn select(
                 push_unique(&mut sel, u.0);
             }
         }
-    } else if let Some(id) = unit_under(cursor, aim.ray, &units).filter(|id| local.as_deref().and_then(|l| l.0).is_none_or(|p| link.curr().visible_to(p).iter().any(|u| u.id == *id))) {
+    } else if let Some(id) = unit_under(cursor, aim.ray, &units).filter(|&id| target_seen(link.curr(), local.as_deref().and_then(|l| l.0), id)) {
         // (With a local player only what its team sees is clickable: kept-drawn scenery outside the sensors is no fog leak; without one, everything drawn is.)
         let double = drag.last_click.is_some_and(|(t, last)| last == id && now - t <= DOUBLE);
         drag.last_click = if double { None } else { Some((now, id)) };
