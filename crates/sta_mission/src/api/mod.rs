@@ -56,6 +56,7 @@ use sta_sim::SimEvent;
 
 mod a1;
 mod a2;
+mod alert;
 pub(crate) use a2::team_strength;
 mod entity;
 mod edit_feedback;
@@ -270,8 +271,6 @@ pub(crate) struct Ctx {
     pub label_gaps: label_gap::LabelGaps,
     pub ai_requests_taken: usize,
     pub playback: Playback,
-    /// The view tick of the last `Hit` each object took (`A2.UnderAttack`).
-    pub last_hit: BTreeMap<EntityId, u64>,
     /// The view tick each object last fired a weapon (`A1.InAttackMode`).
     pub last_fired: BTreeMap<EntityId, u64>,
     /// Presentation requests a script made with a start delay (a fade's `delay`), by the view
@@ -338,7 +337,6 @@ impl Ctx {
             taint: taint::Taint::default(),
             ai_requests_taken: 0,
             playback: Playback::default(),
-            last_hit: BTreeMap::new(),
             last_fired: BTreeMap::new(),
             delayed: Vec::new(),
             cine: crate::cineractive::Cineractive::default(),
