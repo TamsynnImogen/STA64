@@ -2,7 +2,8 @@
 //! Armada II campaign mission (`STA64_TEST_A2_BZN`, default the first Klingon mission), converted on
 //! this machine and driven headless from the screens with no input. It writes a per-frame trace of
 //! what the host does (presentation requests, sounds started and stopped, fade, cineractive, camera)
-//! to `STA64_TEST_TRACE_DIR` when set, and asserts the voice-line rules named below.
+//! to `STA64_TEST_TRACE_DIR` when set (never inside the repository: it is the script's sequence), and
+//! asserts rules over the trace that hold for any mission, none of them taken from the script.
 //!
 //! The audio layer is the real one over a silent backend (`NullAudio`) with the install's sound
 //! bank, so a clip's length is its decoded length. No window, no audio device.
@@ -14,7 +15,9 @@ use crate::sim_link::{PlaySound, StopSounds};
 use crate::ui::presentation::{CineractiveState, FadeState, PresentationLog, ScriptSounds};
 use bevy::time::TimeUpdateStrategy;
 use std::fmt::Write as _;
+use std::path::PathBuf;
 use std::time::Duration;
+use sta_sim::present::{Arg, Presentation};
 
 const HZ: f64 = sta_core::TICK_HZ as f64;
 
@@ -32,17 +35,66 @@ fn secs(t: u64) -> f64 {
     t as f64 / HZ
 }
 
+/// Removes the temp dirs when the test ends, panicking or not.
+struct Cleanup(Vec<PathBuf>);
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        for d in &self.0 {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+}
+
 pub struct Frame {
     pub tick: u64,
     pub cine: bool,
     pub playing: Vec<u32>,
 }
 
+/// One script message: when it started, how long the audio layer says it is, when the script stopped it.
+pub struct Msg {
+    pub id: u32,
+    pub start: u64,
+    pub length: Option<f64>,
+    pub stopped: Option<u64>,
+}
+
 pub struct Trace {
-    pub text: String,
     pub frames: Vec<Frame>,
+    pub msgs: Vec<Msg>,
+    pub ui_cuts: Vec<u64>,
     pub objectives: usize,
-    pub heard: Vec<(u64, String)>,
+}
+
+/// Messages of the presentation log with the lengths the audio layer reported for them.
+fn messages(log: &[(u64, Presentation)], heard: &[(u64, String)]) -> Vec<Msg> {
+    let mut msgs: Vec<(Msg, String)> = Vec::new();
+    for (tick, p) in log {
+        match p {
+            Presentation::Sound { id, name, .. } => msgs.push((Msg { id: *id, start: *tick, length: None, stopped: None }, name.clone())),
+            Presentation::Call { name, args } if name == "A2.PlayMusic" => {
+                if let [Arg::Int(id), Arg::Text(file)] = args.as_slice() {
+                    msgs.push((Msg { id: *id as u32, start: *tick, length: None, stopped: None }, file.clone()));
+                }
+            }
+            Presentation::StopSound { id } => {
+                if let Some((m, _)) = msgs.iter_mut().rev().find(|(m, _)| m.id == *id && m.stopped.is_none()) {
+                    m.stopped = Some(*tick);
+                }
+            }
+            _ => {}
+        }
+    }
+    for (tick, h) in heard {
+        let Some(rest) = h.strip_prefix("started ") else { continue };
+        let Some((name, tail)) = rest.split_once(" bus Ui length Some(") else { continue };
+        let length: Option<f64> = tail.trim_end_matches(')').parse().ok();
+        if let Some((m, _)) = msgs.iter_mut().find(|(m, n)| m.length.is_none() && m.start == *tick && n == name) {
+            m.length = length;
+        }
+    }
+    msgs.into_iter().map(|(m, _)| m).collect()
 }
 
 /// Plays the mission from the screens for `seconds` of game time with no input.
@@ -54,11 +106,12 @@ pub fn drive(seconds: f64) -> Option<Trace> {
     let bzn = std::env::var("STA64_TEST_A2_BZN").unwrap_or_else(|_| "a2_kling01".into());
     let root = Path::new(&root);
     let data = temp_dir("a2open-data");
+    let dir = temp_dir("a2open-menu");
+    let _cleanup = Cleanup(vec![data.clone(), dir.clone()]);
     let tool = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/convert_install_missions.py");
     let run = std::process::Command::new("python3").arg("-I").arg(tool).arg("--install").arg(root).env("STA64_DATA_DIR", &data).output().expect("run the converter");
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
     let conv = sta_mission::converted::dir_in(&data, root, None);
-    let dir = temp_dir("a2open-menu");
     let vfs = sta_vfs::Vfs::mount_install(root, None).expect("mounts");
     let (mut cs, _) = load_campaigns_with(&vfs, Some(root), None, Some(&conv), |b| crate::frontend::campaign::ProgressStore::in_dir(&dir, b)).expect("campaigns");
     let (campaign, mission) = cs
@@ -127,44 +180,49 @@ pub fn drive(seconds: f64) -> Option<Trace> {
         }
     }
     let objectives = app.world().resource::<crate::ui::presentation::ObjectivesView>().items.len();
+    let objectives = app.world().resource::<crate::ui::presentation::ObjectivesView>().items.len();
     let heard = app.world().resource::<Heard>().0.clone();
-    let _ = std::fs::remove_dir_all(&dir);
-    let _ = std::fs::remove_dir_all(&data);
+    let log = app.world().resource::<PresentationLog>().0.clone();
     if let Ok(out) = std::env::var("STA64_TEST_TRACE_DIR") {
-        let _ = std::fs::create_dir_all(&out);
-        let _ = std::fs::write(Path::new(&out).join(format!("{bzn}-host.txt")), &text);
+        let out = PathBuf::from(out);
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let inside = out.canonicalize().or_else(|_| std::fs::create_dir_all(&out).and_then(|()| out.canonicalize())).is_ok_and(|o| repo.canonicalize().is_ok_and(|r| o.starts_with(r)));
+        if !inside {
+            let _ = std::fs::write(out.join(format!("{bzn}-host.txt")), &text);
+        }
     }
-    Some(Trace { text, frames, objectives, heard })
+    let ui_cuts = heard.iter().filter(|(_, h)| h.starts_with("stop-bus Ui")).map(|(t, _)| *t).collect();
+    Some(Trace { frames, msgs: messages(&log, &heard), ui_cuts, objectives })
 }
 
-/// The rules this opening depends on (the evidence for each is in the PR body):
-/// - a stop of the music track is not a stop of the voice line playing beside it (the first voice
-///   line, 50 s long, plays to its end: the UI bus is never cut, since nobody skips);
-/// - the script's wait on its last music track ends with the clip, so the opening hands over
-///   (cineractive off, objectives issued) after its last voice line instead of never.
+/// Rules over the trace of an opening that nobody skips (none comes from the script):
+/// - the UI bus is cut only when the stopped message was the last one playing;
+/// - every message plays for the length the audio layer reported, unless the script stopped it;
+/// - the opening hands over once its last message has ended, well before the hold cap, and the
+///   mission's objectives are issued.
 #[test]
-fn install_gated_a2_kling01_opening_keeps_its_voice_line_and_hands_over() {
+fn install_gated_a2_opening_obeys_the_message_and_hand_over_rules() {
     let Some(t) = drive(float_env("STA64_TEST_A2_SECONDS", 150.0)) else { return };
-    // (The Voice bus is cut once, at the start of the cutscene: event voices do not run over it.)
-    let ui_cuts: Vec<_> = t.heard.iter().filter(|(_, h)| h.starts_with("stop-bus Ui")).collect();
-    assert!(ui_cuts.is_empty(), "nothing stopped the UI bus (the scripted lines) without a skip: {ui_cuts:?}");
-    // Rant_1 is message 2 (the track before it is message 1) and plays for its whole clip.
-    let started = t.heard.iter().find(|(_, h)| h.starts_with("started a2_kling01_Martoks_Rant_1.wav")).expect("the first voice line starts");
-    let length: f64 = started.1.split("Some(").nth(1).and_then(|r| r.trim_end_matches(')').parse().ok()).expect("its clip length is read from the file");
-    assert!(length > 30.0, "{length}");
-    let end = secs(started.0) + length;
-    let playing_at = |s: f64| t.frames.iter().min_by(|a, b| (secs(a.tick) - s).abs().total_cmp(&(secs(b.tick) - s).abs())).unwrap().playing.contains(&2);
-    assert!(playing_at(end - 2.0), "the first voice line is still playing {:.0} s in (clip {length:.0} s)", end - 2.0 - secs(started.0));
-    // Control comes back after the last shot (Martok's speech is the longest wait), not later.
-    let off = t.frames.iter().find(|f| secs(f.tick) > 100.0 && !f.cine).map(|f| secs(f.tick));
-    assert!(off.is_some_and(|s| s < 125.0), "the opening hands over: {off:?}");
+    let slack = 0.6;
+    assert!(!t.msgs.is_empty() && t.msgs.iter().all(|m| m.length.is_some()), "every message resolved to a clip with a length");
+    for &cut in &t.ui_cuts {
+        let stopped_now: Vec<u64> = t.msgs.iter().filter(|m| m.stopped == Some(cut)).map(|m| m.id as u64).collect();
+        let others = t.msgs.iter().filter(|m| !stopped_now.contains(&(m.id as u64)) && m.start <= cut && m.stopped.is_none_or(|s| s > cut) && secs(cut) < secs(m.start) + m.length.unwrap() - slack).count();
+        assert_eq!(others, 0, "the UI bus was cut at {:.1} s while another message was still playing", secs(cut));
+    }
+    for m in &t.msgs {
+        let end = secs(m.start) + m.length.unwrap();
+        let until = m.stopped.map_or(end, |s| secs(s).min(end)) - slack;
+        let gaps: Vec<f64> = t.frames.iter().filter(|f| secs(f.tick) > secs(m.start) + 0.3 && secs(f.tick) < until && !f.playing.contains(&m.id)).map(|f| secs(f.tick)).collect();
+        assert!(gaps.is_empty(), "message {} stopped playing early (first at {:.1} s, clip ends {:.1} s)", m.id, gaps[0], end);
+    }
+    let first_on = t.frames.iter().find(|f| f.cine).map(|f| f.tick).expect("the opening takes the camera");
+    let handover = t.frames.iter().find(|f| f.tick > first_on && !f.cine).map(|f| secs(f.tick)).expect("the opening hands over");
+    let cap = secs(first_on) + f64::from(sta_mission::cineractive::MAX_HOLD_SECS);
+    assert!(handover < cap - 10.0, "the hand-over ({handover:.1} s) comes before the hold cap ({cap:.1} s), by the script's own end");
+    let last_end = t.msgs.iter().filter(|m| secs(m.start) < handover).map(|m| secs(m.start) + m.length.unwrap()).fold(0.0, f64::max);
+    assert!(handover <= last_end + 5.0, "the hand-over ({handover:.1} s) follows the last message's end ({last_end:.1} s) closely");
     assert!(t.objectives > 0, "the mission's objectives are issued");
-}
-
-#[test]
-fn install_gated_a2_opening_trace() {
-    let Some(t) = drive(float_env("STA64_TEST_A2_SECONDS", 200.0)) else { return };
-    assert!(!t.text.is_empty());
 }
 
 fn float_env(name: &str, default: f64) -> f64 {
