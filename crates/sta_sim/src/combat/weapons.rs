@@ -90,6 +90,16 @@ pub fn attacks_units(w: &sta_content::WeaponDef) -> bool {
     w.kind != WeaponKind::PointDefence && !crate::specials::is_special(w) && !tool
 }
 
+/// Does `id` take an `Attack` order on `target` from `player` (any unit, for
+/// scripts and the bench): an armed unit that is not the target and that the
+/// player may order. The target's own validity is checked by the caller.
+pub(crate) fn takes_attack(db: &ContentDb, units: &Entities, player: PlayerId, id: EntityId, target: EntityId) -> bool {
+    id != target
+        && units
+            .get(id)
+            .is_some_and(|u| (!player.is_player() || u.owner == player) && db.unit(u.def).is_some_and(|d| can_attack(db, d)))
+}
+
 /// Armed for an attack order: a hardpoint whose weapon [`attacks_units`].
 pub fn can_attack(db: &ContentDb, def: &sta_content::UnitDef) -> bool {
     def.hardpoints.iter().any(|hp| db.weapon(hp.weapon.key).is_some_and(attacks_units))
@@ -335,7 +345,7 @@ impl Weapons {
         events: &mut Vec<SimEvent>,
     ) {
         let (mut specials, mut rng) = (Specials::default(), Rng::new(1));
-        self.step_with_perception(tick, units, db, crate::relations::Diplomacy::plain(teams), &Table::new(), &mut specials, &mut rng, &Default::default(), events);
+        self.step_with_perception(tick, units, db, crate::relations::Diplomacy::plain(teams), &Table::new(), &mut specials, &mut rng, &Default::default(), &Default::default(), events);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -349,6 +359,7 @@ impl Weapons {
         specials: &mut Specials,
         rng: &mut Rng,
         switches: &crate::switches::SwitchTable,
+        alerts: &crate::alert::Alerts,
         events: &mut Vec<SimEvent>,
     ) {
         let alive = |id: EntityId| units.get(id).filter(|u| u.hull[1] > Fixed::ZERO);
@@ -417,6 +428,8 @@ impl Weapons {
             // first tick it is seen, the creation tick for all practical
             // purposes; ascending id keeps the draws stable.
             self.init_mounts(tick, db, u.id, def, rng);
+            // LUA-32: green never, yellow only after a recent enemy hit fires at a target other than the ordered one.
+            let opportunity = alerts.opportunity_allowed(u.id, tick);
             if u.flags.contains(UnitFlags::WEAPONS_OFF) || self.held.binary_search(&u.id).is_ok() {
                 continue;
             }
@@ -443,7 +456,7 @@ impl Weapons {
                 let seen = (!teams.players.is_empty()).then(|| visibility.iter()
                     .find(|(player, _)| *player == u.owner)
                     .map_or(&[][..], |(_, ids)| ids.as_slice()));
-                let Some(t) = self.pick(db, u, w.range, arc, units, teams, perception, seen, switches) else {
+                let Some(t) = self.pick(db, u, w.range, arc, units, teams, perception, seen, switches, opportunity) else {
                     continue;
                 };
                 if self.mounts.get(u.id).is_none() {
@@ -577,12 +590,7 @@ impl Weapons {
         }
         let mut any = false;
         for &id in ids {
-            let armed = |u: &Entity| db.unit(u.def).is_some_and(|d| can_attack(db, d));
-            if id != target
-                && units
-                    .get(id)
-                    .is_some_and(|u| (!player.is_player() || u.owner == player) && armed(u))
-            {
+            if takes_attack(db, units, player, id, target) {
                 self.set_attack(id, target);
                 any = true;
             }
@@ -591,7 +599,7 @@ impl Weapons {
     }
 
     /// The target a mount of `u` shoots at, if any: the ordered one when it
-    /// can be hit, else the nearest enemy that can.
+    /// can be hit, else (when `opportunity`, the alert gate) the nearest enemy that can.
     #[allow(clippy::too_many_arguments)]
     fn pick<'a>(
         &self,
@@ -604,6 +612,7 @@ impl Weapons {
         perception: &Table<PlayerId>,
         seen: Option<&[EntityId]>,
         switches: &crate::switches::SwitchTable,
+        opportunity: bool,
     ) -> Option<&'a Entity> {
         // A cloaked unit is only a target for mutual allies (SIM-63).
         let unseen = |t: &Entity| t.flags.contains(UnitFlags::CLOAKED) && !teams.confirmed_ally(t.owner, u.owner);
@@ -623,7 +632,7 @@ impl Weapons {
             }
         }
         let ordered = self.attack.get(u.id).copied();
-        if !teams.is_seat(u.owner) {
+        if !teams.is_seat(u.owner) || !opportunity {
             return None;
         }
         // SIM-36 `target_score`: one target per craft, the best-scoring enemy

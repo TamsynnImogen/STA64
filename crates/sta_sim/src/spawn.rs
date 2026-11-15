@@ -144,6 +144,7 @@ impl Sim {
         self.recrew.remove(id);
         self.scripted.remove(id);
         self.switches.remove(id);
+        self.alerts.remove(id);
         if let Some(by) = destroyed_by {
             self.events.push(SimEvent::Destroyed { id, by });
         }
@@ -280,6 +281,7 @@ impl Sim {
             Edit::Weapons(id, on) => self.set_flag(id, UnitFlags::WEAPONS_OFF, !on),
             Edit::MaxSpeed(id, to) => self.edit_max_speed(id, to),
             Edit::WarpSpeed(id, to) => self.edit_warp_speed(id, to),
+            Edit::Alert(id, to) => self.edit_alert(id, to),
             Edit::Present(ref p) => {
                 if matches!(p, crate::present::Presentation::Cineractive { on: false, .. }) {
                     self.reset_all_impulse();
@@ -802,11 +804,11 @@ mod tests {
             "Subsystem(Engines) acts as Engines"
         );
         assert!(
-            out.events.contains(&SimEvent::Rejected {
+            !out.events.contains(&SimEvent::Rejected {
                 player: PlayerId::SCRIPT,
                 seq: 2
             }),
-            "Alert waits for its package"
+            "Alert is accepted (LUA-32)"
         );
         WorldSource::step(
             &mut sim,

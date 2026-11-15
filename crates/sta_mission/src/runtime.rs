@@ -737,14 +737,8 @@ impl Controller for MissionRuntime {
             c.fresh = ids.iter().copied().filter(|id| !c.seen.contains(id)).collect();
             c.seen.extend(ids);
             for e in events {
-                match e {
-                    SimEvent::Hit { target, .. } => {
-                        c.last_hit.insert(*target, tick);
-                    }
-                    SimEvent::Fired { shooter, .. } => {
-                        c.last_fired.insert(*shooter, tick);
-                    }
-                    _ => {}
+                if let SimEvent::Fired { shooter, .. } = e {
+                    c.last_fired.insert(*shooter, tick);
                 }
             }
             c.flush_delayed();
