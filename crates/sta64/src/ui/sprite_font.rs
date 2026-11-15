@@ -18,8 +18,10 @@
 //! strips with three differences: one `@reference=<n>` for both axes, `#` label lines
 //! between the strip's runs of glyphs, and a single `char<TAB>texture<TAB>0<TAB>0<TAB>0<TAB>height<TAB>@anim=..<TAB>@anim=..`
 //! line in place of the `page` lines. [`SpriteFont::parse`] takes either by content.
-//! Advance is the strip width, as for the other form; the sheets leave one column
-//! between cells, so whether the original adds it to the advance is not measured.
+//! The pen advances by the strip width plus one texel (the engine adds a constant 1.0
+//! per character; read from the executable, static; the sheets leave that column between
+//! cells), so [`SpriteFont::spacing`] is 1 for this form and 0 for the other. The line
+//! pitch is the glyph height, with nothing added.
 //!
 //! [`SpriteFont::parse`] and [`SpriteFont::layout`] are pure; [`SpriteFontPlugin`]
 //! loads every font of the mounted install into [`SpriteFonts`] and turns each
@@ -64,6 +66,11 @@ pub struct SpriteFont {
     pub name: String,
     /// `@referenceWidth`/`@referenceHeight`, or Armada I's single `@reference=`, when the file sets them.
     pub reference: Option<[f32; 2]>,
+    /// Texels the pen advances past each glyph beyond its strip width. Armada I's `char`
+    /// form: the engine adds a constant 1.0 per drawn character to the glyph's width (read
+    /// from the executable, static), which is the one column the sheets leave between
+    /// cells. Armada II's `page` form: 0, its strip widths already are the advances.
+    pub spacing: f32,
     pub pages: Vec<Page>,
 }
 
@@ -139,9 +146,11 @@ impl SpriteFont {
                 glyphs,
             });
         }
+        let spacing = if lines.iter().any(|l| is_char_line(l)) { 1.0 } else { 0.0 };
         (!pages.is_empty()).then(|| SpriteFont {
             name: name.to_owned(),
             reference,
+            spacing,
             pages,
         })
     }
@@ -221,7 +230,7 @@ impl SpriteFont {
                 rect: [x, y, g.w * scale, h * scale],
                 src: [g.x, g.y, g.w, h],
             });
-            x += g.w * scale;
+            x += (g.w + self.spacing) * scale;
         }
         let lines = text.split('\n').count().max(1);
         Layout {
@@ -1910,6 +1919,7 @@ mod tests {
         SpriteFont {
             name: "T".into(),
             reference: None,
+            spacing: 0.0,
             pages: vec![Page { texture: "t".into(), height: h, glyphs }],
         }
     }
@@ -2374,6 +2384,26 @@ mod tests {
         assert_eq!(l.quads.len(), 4);
         // Both forms parse by content: the Armada II sample still reads as two pages.
         assert_eq!(SpriteFont::parse("F", SAMPLE).unwrap().pages.len(), 2);
+    }
+
+    /// Armada I's pen advances by the strip width plus one texel; the quad stays the strip
+    /// width. Armada II's form (the sample) advances by the strip width alone.
+    #[test]
+    fn armada_i_pen_adds_a_texel_and_armada_ii_does_not() {
+        let a1 = SpriteFont::parse("font", &a1_form(20)).unwrap();
+        assert_eq!(a1.spacing, 1.0);
+        // '0' (glyph 16) is 4 wide, '1' (17) 5: widths cycle 3, 4, 5 from 0x20.
+        let (w0, w1) = (a1.glyph(b'0').unwrap().1.w, a1.glyph(b'1').unwrap().1.w);
+        let l = a1.layout("01", 2.0);
+        assert_eq!(l.quads[1].rect[0], (w0 + 1.0) * 2.0);
+        assert_eq!(l.quads[0].rect[2], w0 * 2.0);
+        assert_eq!(l.width, (w0 + 1.0 + w1 + 1.0) * 2.0);
+        // A line's pitch is the glyph height alone.
+        assert_eq!(a1.layout("0\n1", 1.0).quads[1].rect[1], 8.0);
+        let a2 = SpriteFont::parse("F", SAMPLE).unwrap();
+        assert_eq!(a2.spacing, 0.0);
+        let l = a2.layout("  !", 1.0);
+        assert_eq!((l.quads[1].rect[0], l.quads[2].rect[0], l.width), (5.0, 10.0, 18.5));
     }
 
     #[test]
