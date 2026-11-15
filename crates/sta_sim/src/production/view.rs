@@ -117,9 +117,8 @@ impl Production {
         }
         for (id, weld) in self.welds.iter() {
             let Some(unit) = units.get(id) else { continue };
-            if units.get(weld.builder).is_none() {
-                continue;
-            }
+            // A live station keeps welding after its constructor dies. Keep
+            // that site; consumers use the child's owner/visibility then.
             rows.insert(
                 weld.builder,
                 ProductionView {
