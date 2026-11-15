@@ -40,7 +40,19 @@ impl StockLight {
         } else {
             m.diffuse
         };
-        StockLight { ambient: m.ambient, diffuse, specular: m.specular, power: m.power, model: m.model }
+        // The ambient colour is the same kind of placeholder (green-cyan on `team_Bglow`,
+        // purple on A2 `team`): a grey of equal luminance keeps the brightness and drops the hue.
+        let ambient = if crate::render::hulls::is_team_material(&m.name) {
+            let [r, g, b] = m.ambient;
+            if r == g && g == b {
+                m.ambient
+            } else {
+                [(0.299 * r + 0.587 * g + 0.114 * b).clamp(0.0, 1.0); 3]
+            }
+        } else {
+            m.ambient
+        };
+        StockLight { ambient, diffuse, specular: m.specular, power: m.power, model: m.model }
     }
 }
 
@@ -120,6 +132,22 @@ mod tests {
             // The rest of the material is read as ever.
             assert_eq!((l.ambient, l.specular, l.power, l.model), ([0.5; 3], [1.0, 0.5, 1.0], 50.0, 2), "{name}");
         }
+    }
+
+    /// A coloured team ambient (A1 `team_Bglow` 0.0 0.33 0.25) becomes the grey of equal luminance;
+    /// a black one stays black; other materials keep theirs.
+    #[test]
+    fn a_team_materials_ambient_loses_its_hue_not_its_brightness() {
+        let mut m = material("team_Bglow", [0.0, 1.0, 0.7]);
+        m.ambient = [0.0, 0.333, 0.248];
+        let a = StockLight::from_material(&m).ambient;
+        let lum = 0.587 * 0.333 + 0.114 * 0.248;
+        assert!(a.iter().all(|c| (c - lum).abs() < 1e-6), "{a:?}");
+        m.ambient = [0.0; 3];
+        assert_eq!(StockLight::from_material(&m).ambient, [0.0; 3]);
+        let mut other = material("base_fed", [1.0; 3]);
+        other.ambient = [0.1, 0.2, 0.3];
+        assert_eq!(StockLight::from_material(&other).ambient, [0.1, 0.2, 0.3]);
     }
 
     /// Every other group keeps the diffuse colour its SOD material states.
