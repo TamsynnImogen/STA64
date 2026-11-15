@@ -337,6 +337,9 @@ pub struct UnitDef {
     /// station that can only be built in a planet's orbit (SIM-62); zero when the
     /// ODF has no `orbitTime`. `None` for every other class.
     pub orbit_time: Option<Fixed>,
+    /// Armada I Borg-physics keys from the craft's own physics file (CON-52):
+    /// `Some` only under `Sta1Classic` for a craft whose `borgPhysics` is set.
+    pub a1_borg: Option<crate::A1Borg>,
     /// `miningMultiplier` and `resourcesCanHandle` of a class `p_mining` station
     /// (CON-51). `None` for other classes and for a station with neither key.
     pub station_mining: Option<crate::StationMining>,
@@ -484,6 +487,7 @@ impl UnitDef {
             planet_max_population: 0,
             can_have_orbital_station: false,
             orbit_time: None,
+            a1_borg: None,
             station_mining: None,
             node_income: None,
             race: String::new(),

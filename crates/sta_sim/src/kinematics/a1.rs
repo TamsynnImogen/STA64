@@ -49,11 +49,13 @@
 //!
 //! # The seam
 //!
-//! The play-physics keys do not reach `sta_content` yet (the content lane's).
-//! [`params`] is the one place the model asks for them and answers "not
-//! available" today; then [`Model::for_content`](super::Model::for_content)
-//! keeps `Sta1Classic` on the native model and nothing moves. The key names
-//! are on [`A1Dynamics`] and [`A1Borg`]; values are the ODF's own (fractions
+//! `sta_content` (CON-52) reads the play-physics file (the profile's setting,
+//! `Profile::play_physics_file`) and each Borg craft's own keys, for
+//! `Sta1Classic` only. [`params`] is the one place the model asks for them;
+//! it answers "not available" (and then
+//! [`Model::for_content`](super::Model::for_content) keeps the native model)
+//! for every other profile and for an unusable block. The key names are on
+//! [`A1Dynamics`] and [`A1Borg`]; values are the ODF's own (fractions
 //! and degrees as written, the model does the unit changes).
 
 use sta_content::ContentDb;
@@ -61,46 +63,7 @@ use sta_core::{ContentKey, Fixed, Vec3};
 
 use super::*;
 
-/// The play-physics file's keys the model reads (the file the executable names
-/// `fastphys.odf`; every steered craft integrates with it).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct A1Dynamics {
-    /// `impulseSpeed` of the play physics: the scale of the lag, the turn rate
-    /// and the speed curve.
-    pub impulse_speed: Fixed,
-    /// `frontBackInertia`: seconds times impulse; the lag is this divided by
-    /// `impulse_speed`.
-    pub front_back_inertia: Fixed,
-    /// `maxReverseSpeed`: a fraction of impulse.
-    pub max_reverse_speed: Fixed,
-    /// `turnRadius`: world units at impulse speed and full servo.
-    pub turn_radius: Fixed,
-    /// `velocCoeffStill`: turn authority at rest, 0 to 1.
-    pub veloc_coeff_still: Fixed,
-    /// `velocWhenCoeffHalf`: speed at half authority, a fraction of impulse.
-    pub veloc_when_coeff_half: Fixed,
-    /// `braccelControlStiffness`: stiffness of the throttle controller, 1/s^2.
-    pub braccel_control_stiffness: Fixed,
-    /// `sy_yawAngleCoeff`: servo gain on the heading error (radians).
-    pub yaw_angle_coeff: Fixed,
-    /// `sy_yawVelocCoeff`: servo damping on the turn rate.
-    pub yaw_veloc_coeff: Fixed,
-    /// `rollRotationSpeed`: a fraction of impulse; sets the turn-rate lag.
-    pub roll_rotation_speed: Fixed,
-}
-
-/// A craft's own Borg keys (`borgPhysics` is 1).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct A1Borg {
-    /// `maxRotationSpeed`, radians per second.
-    pub max_rotation_speed: Fixed,
-    /// `rotationAcceleration`, 1/s.
-    pub rotation_acceleration: Fixed,
-    /// `rotationStiffness`, 1/s^2.
-    pub rotation_stiffness: Fixed,
-    /// `tooSlowToTurn`, units per second.
-    pub too_slow_to_turn: Fixed,
-}
+pub use sta_content::{A1Borg, A1Dynamics};
 
 /// What the model needs for one craft.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -112,17 +75,24 @@ pub struct A1Params {
 
 /// The one place the model asks content for its parameters. `def` is the
 /// craft's definition, or [`ContentKey::NONE`] to ask only whether the play
-/// physics is there at all (it is database-wide). Answers `None`, "not
-/// available", until `sta_content` parses the keys (the content package fills
-/// this in; nothing else in the sim reads them). Must answer `None` for
-/// definitions that are not steered craft.
+/// physics is there at all (it is database-wide).
+///
+/// Content (CON-52) answers for `Sta1Classic` only: the play-physics block is
+/// database-wide and present only when the profile's play file loaded usably;
+/// a definition that is not a steered craft (no positive `impulseSpeed` of its
+/// own: structures, planets, weapons) gets `None` and keeps the old movement,
+/// as does everything when the block is absent or degenerate.
 pub fn params(db: &ContentDb, def: ContentKey) -> Option<A1Params> {
-    let _ = (db, def);
     #[cfg(test)]
     if let Some(p) = seam::get(def) {
         return Some(p);
     }
-    None
+    let play = *db.a1_play_physics()?;
+    if def == ContentKey::NONE {
+        return Some(A1Params { play, borg: None });
+    }
+    let unit = db.unit(def).filter(|u| u.movement.max_speed > Fixed::ZERO)?;
+    Some(A1Params { play, borg: unit.a1_borg })
 }
 
 /// `e^-x` for `x >= 0`: the series on a halved argument, squared back.
