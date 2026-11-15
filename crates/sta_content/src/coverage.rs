@@ -56,6 +56,12 @@ pub const READ_ODF_KEYS: &[&str] = &[
     "singleplayermusic", "miningrate", "dilithiumtransferrate", "timeuntilclosure",
     "timeuntiltakeoff", "timewelding", "weldingbeamwidth", "workerbeename", "instantactionslot",
     "commandnames", "warpspeed", "attackpower",
+    // SIM-46 P0: typed (unit and race ODFs), not applied by the sim yet. ODF keys count as read once a
+    // loader types them; cfg keys count only once applied, so `TRANSPORTER_*` is still reported as ignored.
+    "transporter", "has_crew", "assault", "boardingpartystrength", "disableshieldsontransport",
+    "weldinganimspeed", "shielddelay", "eventtransport", "boardingstrength", "cancommandeer",
+    "canbecommandeered", "transportsprite", "crewretreatratio", "transporttoenemyonhard",
+    "transporttofriendsonnoteasy",
 ];
 
 /// Prefixes of numbered ODF keys (`weapon1`, `buildItem3`, ...) that are read.
