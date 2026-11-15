@@ -127,7 +127,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
                 .decode(team)
                 .filter(|player| player.is_player())
                 .ok_or_else(|| mlua::Error::runtime("A2.IsVisibleToTeam requires a valid player number"))?;
-            Ok(c.alive(id).is_some() && c.view.visible_to(player).iter().any(|unit| unit.id == id))
+            Ok(c.alive(id).is_some() && c.sees(player, id))
         })?,
     )?;
     Ok(())

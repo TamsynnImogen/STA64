@@ -713,6 +713,7 @@ impl Controller for MissionRuntime {
             c.events = events.to_vec();
             let tick = view.tick;
             let ids: Vec<_> = view.units.iter().map(|u| u.id).collect();
+            c.fresh = ids.iter().copied().filter(|id| !c.seen.contains(id)).collect();
             c.seen.extend(ids);
             for e in events {
                 match e {

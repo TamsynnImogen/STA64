@@ -164,10 +164,7 @@ impl Sim {
         }
         let radii: Vec<Fixed> = self.units.iter().map(|u| self.body_radius(u.def)).collect();
         let margin = Fixed::from_int(MARGIN);
-        let flows = crate::kinematics::Model::of(
-            self.content.as_ref().map(|c| c.profile()).unwrap_or_default(),
-        )
-        .flows_through_waypoints();
+        let flows = self.content.as_deref().map_or(crate::kinematics::Model::Native, crate::kinematics::Model::for_content).flows_through_waypoints();
         let mut held = Vec::new();
         let mut blocked = Vec::new();
         for (u, &ur) in self.units.iter_mut().zip(&radii) {
