@@ -415,7 +415,8 @@ fn press(
             }
             Act::Target(TargetMode::Transport) => {
                 // Greyed button pressed (or the selection changed): say why nothing was armed.
-                notices.write(Notice::new(Severity::Warn, tr("Cannot transport: no crew to spare")));
+                let why = if commands::shared(&feed).transport_family { "Cannot transport: no crew to spare" } else { "Transporters are not available in this game yet" };
+                notices.write(Notice::new(Severity::Warn, tr(why)));
             }
             Act::Recrew if !commands::recrew_stations(&feed, &feed.own_selection()).is_empty() => {
                 // UI-only until the simulation defines a Recrew order and recovery rule.

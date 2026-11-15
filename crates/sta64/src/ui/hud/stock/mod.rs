@@ -123,6 +123,10 @@ fn menu_button(id: u32, name: &str) -> Button {
 /// presentation-only until the sim has an order; ODF metadata cannot enable one.
 fn buttons(feed: &HudFeed, page: Page, native: &NativeCommands) -> Vec<Button> {
     let mut buttons = model::grid_with_capacity(feed, page, usize::MAX);
+    // The stock HUD shows only what the original shows: TRANSPORT only where the install's command data
+    // gives it a place (Armada I puts it on its speed rail, a later package); the fallback cell is for
+    // STA64's own layout.
+    buttons.retain(|b| b.act != Act::Target(TargetMode::Transport) || metadata(native, &b.act).is_some_and(|m| m.preferred.is_some()));
     if page == Page::Formations && buttons.iter().any(|b| matches!(b.act, Act::Formation(_))) {
         let formations: Vec<_> = native.formations().collect();
         if !formations.is_empty() {
