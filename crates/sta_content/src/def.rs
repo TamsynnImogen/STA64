@@ -340,6 +340,13 @@ pub struct UnitDef {
     /// Armada I Borg-physics keys from the craft's own physics file (CON-52):
     /// `Some` only under `Sta1Classic` for a craft whose `borgPhysics` is set.
     pub a1_borg: Option<crate::A1Borg>,
+    /// `miningMultiplier` and `resourcesCanHandle` of a class `p_mining` station
+    /// (CON-51). `None` for other classes and for a station with neither key.
+    pub station_mining: Option<crate::StationMining>,
+    /// The income keys of the resource node a planet names (`resource =`): mining
+    /// rate, trickle, `isInfinite` and `amt<slot>` (CON-51). `None` when the node
+    /// has none. Typed content only: the sim's use of it is SIM-72's.
+    pub node_income: Option<crate::NodeIncome>,
     pub race: String,
     pub model: String,
     pub scale: Fixed,
@@ -481,6 +488,8 @@ impl UnitDef {
             can_have_orbital_station: false,
             orbit_time: None,
             a1_borg: None,
+            station_mining: None,
+            node_income: None,
             race: String::new(),
             model: String::new(),
             scale: Fixed::ONE,

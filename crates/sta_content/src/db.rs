@@ -470,7 +470,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // set; `has_crew`, `assault`, `weldingAnimSpeed`, `eventTransport` are not read yet.
     let UnitDef {
         key: _, odf: _, class: _, is_starbase: _, planet_role: _, planet_crew_gain: _, planet_crew_modifier: _,
-        planet_colonizable: _, planet_civilian_population_modifier: _, planet_max_population: _, can_have_orbital_station: _, orbit_time: _, a1_borg: _, race: _,
+        planet_colonizable: _, planet_civilian_population_modifier: _, planet_max_population: _, can_have_orbital_station: _, orbit_time: _, a1_borg: _, station_mining: _, node_income: _, race: _,
         model: _, scale: _, movement: _, hull: _, shields: _, initial_hull: _, initial_shields: _,
         crew: _, maximum_crew: _, facility: _, has_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
         sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
@@ -634,6 +634,22 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // The class is already hashed; the period only when the ODF set one.
     if let Some(t) = u.orbit_time.filter(|t| *t != Fixed::ZERO) {
         c.fixed("orbit_time", t);
+    }
+    // CON-51: orbital income keys, only when the ODF carries one, so content without them keeps its digest.
+    if let Some(m) = u.station_mining {
+        c.raw("station_mining", &group(
+            Canon::new()
+                .opt_fixed("multiplier", m.multiplier)
+                .raw("can_handle", &m.can_handle.map_or_else(|| "-".to_owned(), |h| format!("[{}]", h.map(|b| u8::from(b).to_string()).join(","))))));
+    }
+    if let Some(n) = u.node_income {
+        c.raw("node_income", &group(
+            Canon::new()
+                .opt_fixed("mining_rate", n.mining_rate)
+                .opt_fixed("trickle_amount", n.trickle_amount)
+                .opt_fixed("trickle_fraction", n.trickle_fraction)
+                .raw("infinite", &n.infinite.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string()))
+                .list("amounts", n.amounts.map(|a| a.map_or_else(|| "-".to_owned(), fixed_text)))));
     }
     c.finish()
 }
