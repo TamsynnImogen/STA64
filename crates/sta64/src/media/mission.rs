@@ -36,7 +36,7 @@ pub(super) fn bridge(
         match p {
             Presentation::Movie { name, in_panel, skippable } => {
                 let target = match (in_panel, &panel) {
-                    (true, Some(p)) => MovieTarget::Panel(p.0.clone()),
+                    (true, Some(p)) => MovieTarget::Panel(p.image.clone()),
                     // No panel to show it on yet (the HUD has no cinematic panel): the whole
                     // screen stands in for it.
                     _ => MovieTarget::Fullscreen,

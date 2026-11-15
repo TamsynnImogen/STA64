@@ -169,7 +169,7 @@ mod tests {
         let races = Races::from_defs(vec![RaceDef {
             stem: "fx".into(), name: "fx".into(), display_key: None, slot: Some(0),
             interface: None, interface_sprites: None,
-            single_player_music: None, multiplayer_music: None,
+            single_player_music: None, multiplayer_music: None, music_tracks: Vec::new(),
             standard_units: vec!["fx_station".into(), "missing".into(), "fx_beam".into(), "fx_station".into()],
             minimal_units: vec!["fx_miner".into()], stock: [7, 0, 0, 0],
             lots_stock: [0; 4], normal_crew: None, lots_crew: None,
@@ -210,7 +210,7 @@ mod tests {
         let races = Races::from_defs(vec![RaceDef {
             stem: "fx".into(), name: "fx".into(), display_key: None, slot: Some(0),
             interface: None, interface_sprites: None,
-            single_player_music: None, multiplayer_music: None,
+            single_player_music: None, multiplayer_music: None, music_tracks: Vec::new(),
             standard_units: vec!["fx_pod".into(), "fx_yard".into(), "fx_pod".into(), "fx_miner".into()],
             minimal_units: Vec::new(), stock: [7, 0, 0, 0],
             lots_stock: [0; 4], normal_crew: None, lots_crew: None,
