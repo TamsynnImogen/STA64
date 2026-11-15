@@ -16,6 +16,11 @@ fn orbit_game() -> Sim {
 }
 
 fn orbit_game_with(profile: Option<sta_content::Profile>) -> Sim {
+    orbit_game_tuned(profile, RANGE, None)
+}
+
+/// As [`orbit_game_with`], with the beam's range and the freighter's `tooCloseToTurn` set.
+fn orbit_game_tuned(profile: Option<sta_content::Profile>, range: i32, too_close: Option<i32>) -> Sim {
     let base = sta_content::fake::db();
     let mut b = sta_content::ContentDb::builder().profile(profile.unwrap_or(base.profile())).features(base.features().clone());
     for u in base.units().filter(|u| u.odf != "fx_moon") {
@@ -29,12 +34,16 @@ fn orbit_game_with(profile: Option<sta_content::Profile>) -> Sim {
         b = b.weapon(w.clone());
     }
     let mut beam = WeaponDef::new("fx_minebeam", "minebm", WeaponKind::Projectile);
-    beam.range = Fixed::from_int(RANGE);
+    beam.range = Fixed::from_int(range);
     beam.refire = 45;
     let mut orbiter = base.units().find(|u| u.odf == "fx_miner").unwrap().clone();
     orbiter.odf = "fx_orbiter".into();
     orbiter.radius = Fixed::from_int(10);
     orbiter.hardpoints = vec![Hardpoint { weapon: DefRef::new("fx_minebeam"), node: "hp01".into(), arc: None }];
+    if let Some(t) = too_close {
+        orbiter.movement.too_close_to_turn = Fixed::from_int(t);
+        orbiter.movement.path_lead = Fixed::from_int(300);
+    }
     let mut moon = base.units().find(|u| u.odf == "fx_moon").unwrap().clone();
     moon.radius = Fixed::from_int(40);
     orbit_content(b.weapon(beam).unit(orbiter).unit(moon))
@@ -343,5 +352,36 @@ fn a_beamless_freighter_keeps_its_target_when_the_station_is_destroyed_on_the_wa
     for _ in 0..5 {
         sim.step(&[]);
         assert_eq!(sim.unit(m).unwrap().target, Some(v(3000, 0)), "the target was cleared");
+    }
+}
+
+/// Fleet Operations 4.0's miners (every race) have a 150 beam and `tooCloseToTurn 120`: the pursuit
+/// point 30 degrees ahead on a 150 circle lies inside that, so the smooth model halted the miner at
+/// its first stop and it sat still, beam on, instead of circling a moon or a nebula without a model
+/// extent. The pursuit point now lies beyond the miner's own `tooCloseToTurn`.
+#[test]
+fn a_miner_with_a_large_too_close_to_turn_still_circles_at_the_beams_range() {
+    for radius in [40] {
+        let mut sim = orbit_game_tuned(Some(sta_content::Profile::Fo4), 150, Some(120));
+        let moon = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, 0));
+        spawn(&mut sim, "fx_station", PlayerId(0), v(3000, 0));
+        let m = spawn(&mut sim, "fx_orbiter", PlayerId(0), v(900, 100));
+        assert!(mine(&mut sim, 0, m, moon));
+        until(&mut sim, m, MinerPhase::Mining, 3000);
+        let c = sim.unit(moon).unwrap().pos;
+        let (mut swept, mut last) = (0.0f32, flat(&sim, m, c).1);
+        let mut late = Vec::new();
+        for t in 0..200u32 {
+            sim.step(&[]);
+            let (r, a) = flat(&sim, m, c);
+            let mut d = a - last;
+            if d > std::f32::consts::PI { d -= 2.0 * std::f32::consts::PI }
+            if d < -std::f32::consts::PI { d += 2.0 * std::f32::consts::PI }
+            swept += d;
+            last = a;
+            if t >= 120 { late.push((r, sim.unit(m).unwrap().speed.to_f32())); }
+        }
+        assert!(swept < -2.0, "radius {radius}: swept {swept} rad, the miner did not circle");
+        assert!(late.iter().all(|(r, v)| (*r - 150.0).abs() < 40.0 && *v > 1.0), "radius {radius}: {late:?}");
     }
 }

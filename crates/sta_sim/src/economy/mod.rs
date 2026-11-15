@@ -149,6 +149,13 @@ const MINING_BEAM_CLASS: &str = "minebm";
 /// this far ahead of the freighter. cos and sin of it.
 const PURSUIT_COS: Fixed = Fixed::from_bits(3_719_550_787);
 const PURSUIT_SIN: Fixed = Fixed::from_bits(2_147_483_648);
+/// Chord of that 30 degree step as a share of the radius: 2 sin(15 degrees).
+const PURSUIT_CHORD: Fixed = Fixed::from_bits(2_223_238_668);
+/// How far beyond the miner's `tooCloseToTurn` the pursuit point must lie. Inside that distance the
+/// smooth movement model stops a slow craft instead of steering it, so a miner whose own
+/// `tooCloseToTurn` exceeds the 30 degree chord (Fleet Operations 4.0: 120 against a 150 beam) would
+/// park at its first stop with the beam on.
+const PURSUIT_MARGIN: i32 = 10;
 /// Height layer constants: 7.5, 2/15, k 5/6 (moons, planets) and 1/2 (latinum nebula).
 const LAYER_MID: Fixed = Fixed::from_bits(32_212_254_720);
 const LAYER_STEP: Fixed = Fixed::from_bits(572_662_306);
@@ -187,13 +194,23 @@ fn work_distance(db: &ContentDb, miner: ContentKey, node: ContentKey) -> Fixed {
 /// round the resource, `ANCHOR_PURSUIT_POINT_ANGLE` ahead of it (clockwise seen from above), on the
 /// freighter's own height layer (`handle & 15`; `k` 5/6, a latinum nebula 1/2). Read from the
 /// executable, static; the on-screen direction and speed are not measured.
-fn orbit_point(db: &ContentDb, id: EntityId, pos: Vec3, node_def: ContentKey, node: Vec3, range: Fixed) -> Option<Vec3> {
+fn orbit_point(db: &ContentDb, id: EntityId, miner: ContentKey, pos: Vec3, node_def: ContentKey, node: Vec3, range: Fixed) -> Option<Vec3> {
     let (dx, dz) = (pos.x - node.x, pos.z - node.z);
     let len = (dx * dx + dz * dz).sqrt();
     if len < Fixed::ONE {
         return None;
     }
-    let (c, s) = (PURSUIT_COS, PURSUIT_SIN);
+    // The step round the circle is the original's 30 degrees, widened only as far as it takes for the
+    // pursuit point to lie beyond the miner's `tooCloseToTurn` (ODF key `tooCloseToTurn`; stock
+    // miners keep exactly 30 degrees).
+    let need = db.unit(miner).map_or(Fixed::ZERO, |d| d.movement.too_close_to_turn) + Fixed::from_int(PURSUIT_MARGIN);
+    let (c, s) = if need > PURSUIT_CHORD * range {
+        let chord = need.min(range * Fixed::from_bits(7_730_941_133)); // at most 1.8 radii
+        let c = Fixed::ONE - chord * chord / (range * range * Fixed::from_int(2));
+        (c, (Fixed::ONE - c * c).sqrt())
+    } else {
+        (PURSUIT_COS, PURSUIT_SIN)
+    };
     let (rx, rz) = (dx * c + dz * s, dz * c - dx * s);
     let k = range / len;
     let nd = db.unit(node_def);
@@ -463,7 +480,7 @@ impl Economy {
                         }
                         // Round the resource, for as long as the beam works.
                         if let (Some(range), Some(np)) = (mining_range(db, def), node_pos) {
-                            set_target(units, id, orbit_point(db, id, pos, node_def, np, range));
+                            set_target(units, id, orbit_point(db, id, def, pos, node_def, np, range));
                         }
                         let take = cfg.rate.min(cfg.capacity - m.cargo).min(left);
                         m.cargo = m.cargo + take;
@@ -492,7 +509,7 @@ impl Economy {
                             && dist(pos, np) <= range * ORBIT_BAND
                             && dist(at, np) > range * ORBIT_BAND
                             && (at.x - pos.x) * (pos.x - np.x) + (at.z - pos.z) * (pos.z - np.z) <= Fixed::ZERO
-                            && let Some(p) = orbit_point(db, id, pos, node_def, np, range)
+                            && let Some(p) = orbit_point(db, id, def, pos, node_def, np, range)
                         {
                             set_target(units, id, Some(p));
                             break;
