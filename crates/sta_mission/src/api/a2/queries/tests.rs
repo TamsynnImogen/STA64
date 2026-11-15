@@ -557,8 +557,10 @@ fn dead_handles_get_the_graded_answers_and_live_ones_are_unchanged() {
     assert!(rt.eval::<f64>(&format!("return A2.GetMaxHealth({})", first.0)).unwrap() > 0.0);
     let live: (f64, f64) = rt.eval(&format!("local p = A2.GetLocation({}); return p.x, p.z", first.0)).unwrap();
     assert_eq!(live, (-0.5, -2.0));
-    // No established answer: still raises (the prelude's swallow answers 0).
-    for call in ["A2.GetRealTeam(99999)", "A2.GetOriginalRace(99999)", "A2.GetDistance(99999,'P',0)"] {
+    // No established answer: still raises (the prelude's swallow answers 0). The path form of
+    // GetDistance answers the far constant for a dead handle (LUA-36).
+    assert_eq!(rt.eval::<f64>("return A2.GetDistance(99999,'P',0)").unwrap(), crate::api::ABSENT_DISTANCE);
+    for call in ["A2.GetRealTeam(99999)", "A2.GetOriginalRace(99999)"] {
         assert!(rt.eval::<()>(call).is_err(), "{call}");
     }
     // A malformed handle is not a dead one.

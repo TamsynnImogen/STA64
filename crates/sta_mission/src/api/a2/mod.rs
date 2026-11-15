@@ -14,6 +14,7 @@ use mlua::Lua;
 
 use super::Shared;
 
+mod autonomy_call;
 mod camera;
 mod conditions;
 mod dll_objects;
@@ -25,6 +26,7 @@ mod native_camera;
 mod native_flow;
 mod native_presentation;
 mod native_text;
+mod near_mask;
 mod objectives;
 mod objects;
 mod fleets;
@@ -38,6 +40,8 @@ mod subsystems;
 mod team_pool;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod lua36_tests;
 mod titles;
 
 pub(super) fn cineractive_active(lua: &Lua) -> mlua::Result<bool> {
@@ -79,6 +83,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     mission_end::install(lua, ctx, &a2)?;
     subsystems::install(lua, ctx, &a2)?;
     orders::install(lua, ctx, &a2)?;
+    autonomy_call::install(lua, ctx, &a2)?;
     dll_objects::install(lua, ctx, &a2)?;
     // After `conditions` (CountStations, IsStation) and `dll_objects` (GetFirstCraft).
     stock_bindings::install(lua, ctx, &a2)?;

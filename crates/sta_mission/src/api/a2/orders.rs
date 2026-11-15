@@ -210,8 +210,12 @@ impl Env {
         craft.then(|| unit.clone())
     }
 
-    /// Send an order as the unit's owner.
+    /// Send an order as the unit's owner. A unit with no player owner (neutral) is ordered as the
+    /// script seat: the original's script calls test no owner (LUA-36).
     pub(super) fn order(&self, name: &str, id: EntityId, make: impl FnOnce(Vec<EntityId>) -> Order) -> mlua::Result<()> {
+        if !self.ctx.borrow().alive(id).is_some_and(|u| u.owner.is_player()) {
+            return self.script_order(name, make(vec![id]));
+        }
         if self.ctx.borrow_mut().order(id, make) {
             Ok(())
         } else {
@@ -223,19 +227,18 @@ impl Env {
     }
 
     /// Queue `order` as the script seat (the sim then applies the mission-only gates).
-    fn script_order(&self, name: &str, order: Order) -> mlua::Result<()> {
+    pub(super) fn script_order(&self, name: &str, order: Order) -> mlua::Result<()> {
         match self.ctx.borrow_mut().try_push(PlayerId::SCRIPT, CommandKind::Order(order)) {
             Ok(_) => Ok(()),
             Err(why) => Err(mlua::Error::runtime(format!("A2.{name}: {why}"))),
         }
     }
 
-    pub(super) fn owned(&self, name: &str, unit: &UnitView) -> mlua::Result<()> {
-        if unit.owner.is_player() {
-            Ok(())
-        } else {
-            Err(mlua::Error::runtime(format!("A2.{name}: object {} has no player owner", unit.id.0)))
-        }
+    /// The engine's script order calls test no owner (read from the executable, static: the
+    /// object guard, then the special-forces byte, then `SetCommand`; LUA-36), so a unit with
+    /// no player owner is ordered like any other. Kept as the one place a call would check.
+    pub(super) fn owned(&self, _name: &str, _unit: &UnitView) -> mlua::Result<()> {
+        Ok(())
     }
 
     fn team(&self, name: &str, number: i64) -> mlua::Result<PlayerId> {
@@ -343,7 +346,6 @@ fn goto(lua: &Lua, env: &Env, overload: usize, a: &[P]) -> mlua::Result<Value> {
         let Some(target) = env.alive(a[1].id()) else { return nothing() };
         Some(target.pos)
     };
-    // Ownership first, as for A1: a unit with no player owner fails before any lookup.
     env.owned("Goto", &unit)?;
     let points = match dest {
         Some(p) => vec![p],
@@ -563,7 +565,6 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         nothing()
     })?)?;
     table.set("Special_Attack", raising(lua, &env, "Special_Attack", &["hs", "hhs"], "the sim orders only cloak and point-defence specials, and its special order carries no target")?)?;
-    table.set("SetCommandMoveAutonomyLow", raising(lua, &env, "SetCommandMoveAutonomyLow", &["h"], "no per-unit movement autonomy order in the sim seam")?)?;
     // Placement and facing (SIM-57). Rules, from the executable and the paired
     // measurements on stock Armada II (grades in `sta_sim::kinematics::placement`):
     // `SetPosition(unit, path[, i])` moves the unit to point `i` (0 when absent) of
