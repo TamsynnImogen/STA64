@@ -181,7 +181,6 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
         "FleetOrder",
         def(lua, env, "FleetOrder", &["hvi"], |_, e, _, a| {
             let Some(unit) = e.alive(a[0].id()) else { return nothing() };
-            e.owned("FleetOrder", &unit)?;
             let (x, y, z) = a[1].vec();
             let to = to_vec3(x, y, z);
             match a[2].int() {

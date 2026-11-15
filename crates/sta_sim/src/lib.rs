@@ -73,6 +73,8 @@ pub mod attrs;
 pub mod team_pool;
 #[cfg(test)]
 mod rerace_tests;
+#[cfg(test)]
+mod special_forces_tests;
 pub use start_effects::unsupported as unsupported_start_lifecycle;
 pub mod tech;
 pub mod victory;
@@ -425,9 +427,9 @@ impl Sim {
                 let Some(db) = self.content.as_deref() else { return false };
                 self.production.order_rally(db, &self.units, c.player, builders, *at)
             }
-            // S2 transport is available before the SIM-40 yard runtime.
-            // Refuse the whole request, preserving existing orders/state.
-            Order::Repair { .. } => false,
+            // Refuse requests until their repair/recrew runtimes are integrated,
+            // preserving existing orders/state.
+            Order::Repair { .. } | Order::Recrew { .. } => false,
         }
     }
 
@@ -572,7 +574,7 @@ impl Sim {
             }
         }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), ..self.attrs.view() } }
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), special_forces: self.switches.special_forces(), ..self.attrs.view() } }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content
@@ -939,5 +941,21 @@ mod tests {
         let rejected = [SimEvent::Rejected { player: PlayerId(0), seq: 0 }, SimEvent::Rejected { player: PlayerId(1), seq: 0 }];
         assert_eq!(out.events, rejected);
         assert_eq!(sim.unit(a).unwrap().target, Some(v(100, 0, 0)));
+    }
+
+    #[test]
+    fn recrew_is_rejected_without_changing_the_existing_order() {
+        let mut sim = Sim::new(1);
+        let a = sim.spawn(0, v(0, 0, 0), (Fixed::ZERO, Fixed::ONE), stats());
+        let destination = v(100, 0, 0);
+        sim.step(&[order(0, 0, command::Order::Move { units: vec![a], to: destination, queue: false })]);
+        for (seq, on) in [(1, None), (2, Some(true)), (3, Some(false))] {
+            let mut baseline = sim.clone();
+            baseline.step(&[]);
+            let out = sim.step(&[order(0, seq, command::Order::Recrew { units: vec![a], on })]);
+            assert!(out.events.contains(&SimEvent::Rejected { player: PlayerId(0), seq }));
+            assert_eq!(sim.unit(a).unwrap().target, Some(destination));
+            assert_eq!(sim.digest(), baseline.digest());
+        }
     }
 }

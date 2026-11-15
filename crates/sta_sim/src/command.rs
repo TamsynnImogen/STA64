@@ -108,10 +108,15 @@ pub enum Order {
     /// shields are down): see [`crate::combat::boarding`]. `attack` (approach and
     /// fire, then beam: assault ships, Roots) is refused until SIM-46 P3. Tag 18.
     Transport { units: Vec<EntityId>, target: EntityId, attack: bool },
+    /// Request station crew recovery from the player's crew pool (SIM-70).
+    /// `None` toggles the current state; `Some(on)` sets it explicitly.
+    /// Rejected without changing state until the recrew runtime is integrated.
+    /// Appended tag 19 preserves every preceding Order tag and payload.
+    Recrew { units: Vec<EntityId>, on: Option<bool> },
     /// Guard a ward (LUA-39; mission `SetCommandWhat*VO` with GUARD, 23): each
     /// craft keeps station beside `ward`, fights what attacks it and stops when
     /// it is gone: see [`crate::orders`]. A ward that is no live craft, or is
-    /// the unit itself, is refused. Tag 19.
+    /// the unit itself, is refused. Tag 20.
     Guard { units: Vec<EntityId>, ward: EntityId },
 }
 
@@ -618,7 +623,8 @@ mod tests {
             (15, Order::MoveWarp { units: u.clone(), to: at, queue: true }),
             (17, Order::Colonize { units: u.clone(), planet: id }),
             (18, Order::Transport { units: u.clone(), target: id, attack: false }),
-            (19, Order::Guard { units: u, ward: id }),
+            (19, Order::Recrew { units: u.clone(), on: None }),
+            (20, Order::Guard { units: u, ward: id }),
         ];
         for (tag, o) in orders {
             let bytes = postcard::to_allocvec(&o).unwrap();
@@ -637,6 +643,16 @@ mod tests {
             let c = Command { player: PlayerId(0), seq: 9, kind: CommandKind::Order(Order::Rally { builders: vec![EntityId(3)], at }) };
             let bytes = postcard::to_allocvec(&c).unwrap();
             assert_eq!(postcard::from_bytes::<Command>(&bytes).unwrap(), c);
+        }
+    }
+
+    #[test]
+    fn recrew_toggle_and_explicit_states_round_trip_on_tag_19() {
+        for on in [None, Some(true), Some(false)] {
+            let order = Order::Recrew { units: vec![EntityId(4)], on };
+            let bytes = postcard::to_allocvec(&order).unwrap();
+            assert_eq!(bytes[0], 19);
+            assert_eq!(postcard::from_bytes::<Order>(&bytes).unwrap(), order);
         }
     }
 }
