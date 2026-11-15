@@ -1,6 +1,6 @@
 //! Install-gated: every playable race of an Armada I and an Armada II install names gameplay
 //! music through `RaceDef::playlist` (A1 `track0..`, A2 `singlePlayerMusic` / `multiPlayerMusic`),
-//! and the first track of each exists in the install's `sounds/music`.
+//! and every track of it, in both modes, exists in the install's `sounds/music`.
 //! Read from data; an absent or unmountable install is skipped.
 
 use std::path::Path;
@@ -22,17 +22,22 @@ fn playable_races_have_a_gameplay_playlist() {
         let (index, _) = OdfIndex::build(&vfs);
         let (races, _) = Races::load(&vfs, &index);
         for race in races.playable() {
-            let list = race.playlist(false);
-            assert!(!list.is_empty(), "{label} {} has no gameplay music", race.stem);
-            let first = list[0].rsplit(['/', '\\']).next().unwrap().to_ascii_lowercase();
-            assert!(
-                vfs.read(&format!("sounds/music/{first}")).is_some() || vfs.read(&format!("music/{first}")).is_some(),
-                "{label} {}: {first} not found",
-                race.stem
-            );
-            checked += 1;
+            for multiplayer in [false, true] {
+                let list = race.playlist(multiplayer);
+                assert!(!list.is_empty(), "{label} {} has no gameplay music (multiplayer {multiplayer})", race.stem);
+                for track in list {
+                    let file = track.rsplit(['/', '\\']).next().unwrap().to_ascii_lowercase();
+                    assert!(
+                        vfs.read(&format!("sounds/music/{file}")).is_some() || vfs.read(&format!("music/{file}")).is_some(),
+                        "{label} {} (multiplayer {multiplayer}): {track} not found in the install",
+                        race.stem
+                    );
+                    checked += 1;
+                }
+            }
         }
     }
+    eprintln!("{checked} tracks checked");
     if checked == 0 {
         eprintln!("no install mounted: nothing checked");
     }
