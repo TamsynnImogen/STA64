@@ -184,6 +184,19 @@ pub struct CineractiveState {
     pub skippable: bool,
 }
 
+/// The one "a cutscene is running" predicate: the announcement and acknowledgement voices
+/// (`audio::voices`), the "construction complete" advisor lines (`audio::sfx`), the event
+/// log's notices (`ui::notices::events_to_notices`) and the player's selection and orders
+/// (`input`, the HUD's buttons) all ask it, so those cannot disagree. (The notice and HUD
+/// roots' visibility follow `CineractiveState.on` directly, in `hide_notices_in_cineractive`
+/// and `game::flow::show_match_ui`.) True while a script's cineractive is on.
+/// Fleet Operations Roots' intros declare theirs the same way (`Cineractive.active`), so no
+/// separate input-lock call exists to honour; whether the original also locks selection is
+/// not measured (Cedric's playtest reports ships selectable and speaking in that intro).
+pub fn cutscene_running(cine: Option<Res<CineractiveState>>) -> bool {
+    cine.is_some_and(|c| c.on)
+}
+
 /// Where a title goes: the canvas it is placed in and its top left.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Place {
