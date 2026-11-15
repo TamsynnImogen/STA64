@@ -32,8 +32,10 @@ pub struct Rules {
     seat_races: Vec<(String, SeatRaceRule)>,
     /// Authored race repair metadata by ODF stem (SIM-40), absent when unset.
     race_repairs: Vec<(String, RaceRepair)>,
+    /// `(race name, ODF stem)` for the rows above: a unit's race key is the name.
+    race_repair_stems: Vec<(String, String)>,
     /// Authored race boarding keys by lower-case race key (SIM-46 P0), only
-    /// the races that set any. Not in the content digest until the sim reads them.
+    /// the races that set any. The three the sim reads are digested (SIM-69).
     race_boarding: Vec<(String, RaceBoarding)>,
     /// `RTS_CFG.h`'s default craft autonomy, when the header sets either key.
     autonomy: Option<AutonomyRules>,
@@ -41,8 +43,7 @@ pub struct Rules {
     approach: Option<ApproachRules>,
     /// Planet population levels and growth (SIM-30), when the header sets all of them.
     population: Option<PopulationRules>,
-    /// `RTS_CFG.h`'s transporter keys (SIM-46 P0), when the header sets any.
-    /// Not in the content digest until the sim reads them.
+    /// `RTS_CFG.h`'s transporter keys (SIM-46 P0), when the header sets any; digested (SIM-69).
     transporter: Option<TransporterRules>,
     /// The other typed `RTS_CFG.h` keys.
     pub cfg: CfgRules,
@@ -235,10 +236,10 @@ impl ApproachRules {
 /// executable was not analysed). The header's values are read from the data
 /// and differ between games and mods.
 ///
-/// Typed and exposed only: no sim system applies them yet, so a mod's change
-/// is still reported as ignored by the coverage report ("read means applied")
-/// and they are not in the content digest ([`Rules::digest_entries`]) until
-/// the sim reads them, so no existing content hash moves.
+/// The transport rules of the sim read all four (SIM-69), so a header that
+/// sets any is in the content digest ([`Rules::digest_entries`]); a header
+/// without them digests as before. The coverage report still lists a mod's
+/// change as ignored until the keys join `TYPED_CFG_KEYS`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransporterRules {
     /// `TRANSPORTER_RANGE` (float, 300).
@@ -628,6 +629,22 @@ impl Rules {
         self.race_repairs.iter().find(|(key, _)| *key == stem).map(|(_, repair)| *repair)
     }
 
+    /// Repair metadata of the race a unit carries (its race key, the ODF's `name`):
+    /// through the name's file stem when the race is known, else the key as a stem.
+    pub fn race_repair_of(&self, race: &str) -> Option<RaceRepair> {
+        let name = race.trim().to_ascii_lowercase();
+        match self.race_repair_stems.iter().find(|(n, _)| *n == name) {
+            Some((_, stem)) => self.race_repair(stem),
+            None => self.race_repair(&name),
+        }
+    }
+
+    /// Set which race name has which repair stem (tests and content built in code).
+    pub fn with_race_repair_stems(mut self, rows: Vec<(String, String)>) -> Self {
+        self.race_repair_stems = rows.into_iter().map(|(n, s)| (n.trim().to_ascii_lowercase(), crate::odf::stem(&s))).collect();
+        self
+    }
+
     /// Set synthetic race repair metadata; canonical stems keep the first row.
     pub fn with_race_repairs(mut self, rows: Vec<(String, RaceRepair)>) -> Self {
         let mut rows: Vec<_> = rows
@@ -643,7 +660,7 @@ impl Rules {
 
     /// The boarding keys of a race by its key (`unitedfederation`), any case:
     /// the race ODF's values with the engine defaults for absent keys, and all
-    /// defaults for a race that sets none (SIM-46 P0; typed, not digested yet).
+    /// defaults for a race that sets none (SIM-46 P0; digested when it differs from the defaults, SIM-69).
     pub fn race_boarding(&self, name: &str) -> RaceBoarding {
         let n = name.trim().to_ascii_lowercase();
         self.race_boarding.iter().find(|(k, _)| *k == n).map(|(_, b)| b.clone()).unwrap_or_default()
@@ -742,6 +759,7 @@ impl Rules {
         }
         rules.seat_races = races.seat_rules().map(|(k, r)| (k.to_owned(), r)).collect();
         rules = rules.with_race_repairs(races.repair_rules().map(|(stem, repair)| (stem.to_owned(), repair)).collect());
+        rules.race_repair_stems = races.repair_stems().map(|(n, s)| (n.to_owned(), s.to_owned())).collect();
         rules.race_boarding = races.boarding_rules().map(|(k, b)| (k.to_owned(), b.clone())).collect();
         Ok((rules, warnings))
     }
@@ -818,6 +836,22 @@ impl Rules {
                 .map(|(k, r)| format!("{}:{}:{}", quoted(k), crate::digest::fixed_text(r.officer_multiplier), crate::digest::fixed_text(r.latinum_scale)))
                 .collect::<Vec<_>>();
             out.push(DigestEntry::new("race:seat-rules", format!("[{}]", rows.join(","))));
+        }
+        // SIM-69: the transport rules read these (sim-visible), only when set, so content without the keys keeps its digest.
+        if let Some(t) = self.transporter {
+            let value = Canon::new().fixed("range", t.range).fixed("delay", t.delay).fixed("action_delay", t.action_delay).int("max", t.max).finish();
+            out.push(DigestEntry::new("RTS_CFG.h:TRANSPORTER", value));
+        }
+        for (race, b) in &self.race_boarding {
+            let d = RaceBoarding::default();
+            if (b.boarding_strength, b.can_commandeer, b.can_be_commandeered) != (d.boarding_strength, d.can_commandeer, d.can_be_commandeered) {
+                let value = Canon::new()
+                    .fixed("boarding_strength", b.boarding_strength)
+                    .flag("can_commandeer", b.can_commandeer)
+                    .flag("can_be_commandeered", b.can_be_commandeered)
+                    .finish();
+                out.push(DigestEntry::new(crate::digest::key("race-boarding:", race), value));
+            }
         }
         for (stem, repair) in &self.race_repairs {
             let value = Canon::new()

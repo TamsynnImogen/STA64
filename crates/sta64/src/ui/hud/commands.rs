@@ -98,29 +98,18 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
     }
 }
 
-/// Whether the unit's game family takes `Order::Transport` (the sim's feature gate: the derelict latch,
-/// stock A2, Classic, FO 3.x, Roots).
-///
-/// TODO (UI-40): the place to switch when the sim's Armada I transport rule lands (every crewed craft
-/// transports there): it answers false today for Armada I and Native, as the sim refuses them; the view
-/// carries no "can transport" field yet. With `transport_state` it is the only place that decides
-/// whether a carrier can transport, so the button needs no other change.
-fn family_can_transport(db: &ContentDb, def: &sta_content::UnitDef) -> bool {
-    db.unit_features(def).crew_loss_on_hit
-}
-
-/// What the HUD says about one unit's transport command (the sim's `apply_transport` carrier gate, read
-/// from the view): whether the button is shown (a crewed ship or station that is not a planet), whether the
-/// game family allows it, and whether the unit is ready (family allowed and live crew above both floors,
-/// which come from the sim's own rule through `sta_sim::combat::boarding::carrier_crew_floors`).
+/// What the HUD says about one unit's transport command: whether the button is shown (a crewed ship or
+/// station that is not a planet), whether the sim allows the unit to transport at all (its game family and
+/// its own `transporter` key), and whether the unit is ready (allowed and live crew above both floors).
+/// Both answers are the sim's own (`sta_sim::combat::boarding::{transport_allowed, can_transport}`); the
+/// client repeats no part of the rule.
 struct TransportState { shown: bool, family: bool, ready: bool }
 
 fn transport_state(db: &ContentDb, def: &sta_content::UnitDef, kind: EntityKind, u: &UnitView) -> TransportState {
     let crew_max = u.crew.map_or(Fixed::ZERO, |c| c[1]);
     let shown = matches!(kind, EntityKind::Craft | EntityKind::Station) && def.planet_role.is_none() && crew_max > Fixed::ZERO;
-    let family = shown && family_can_transport(db, def);
-    let [min_crew, party] = sta_sim::combat::boarding::carrier_crew_floors(db);
-    let ready = family && u.crew.is_some_and(|c| c[0] > min_crew && c[0] > party);
+    let family = shown && sta_sim::combat::boarding::transport_allowed(db, def, crew_max);
+    let ready = shown && u.crew.is_some_and(|c| sta_sim::combat::boarding::can_transport(db, def, c));
     TransportState { shown, family, ready }
 }
 
