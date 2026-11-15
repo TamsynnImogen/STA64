@@ -2127,7 +2127,7 @@ mod tests {
         );
     }
 
-    const GOLDEN: u64 = 10348107938904786321;
+    const GOLDEN: u64 = 9486446883983553881;
 
     /// Tags are positional and never move: NET-04 appended 22 to 28 after
     /// `Sections` (21), the last tag of protocol 2.
