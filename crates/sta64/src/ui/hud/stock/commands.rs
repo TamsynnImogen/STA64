@@ -119,8 +119,9 @@ impl NativeCommands {
             warn!("stock HUD: allcommands.odf is missing; using available command ODFs");
         }
         // The shared HUD offers these actions even when allcommands omits them.
-        // Recrew is presentation-only: loading its metadata does not add a sim order.
-        names.extend(["move", "attack", "stop", "rally", "harvest", "cancelbuild", "colonize", "recrew"].map(str::to_owned));
+        // Recrew metadata is available even when omitted from allcommands;
+        // the live capability gate still controls whether the action appears.
+        names.extend(["move", "attack", "stop", "rally", "harvest", "cancelbuild", "colonize", "transport", "recrew"].map(str::to_owned));
         let mut commands = BTreeMap::new();
         let mut groups = BTreeSet::new();
         for name in names {

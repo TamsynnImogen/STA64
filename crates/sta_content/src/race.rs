@@ -101,6 +101,49 @@ pub struct RaceCrew {
     pub planet_modifier: Fixed,
 }
 
+/// The boarding and transport keys of a race ODF (SIM-46 P0). Typed only: no
+/// simulation system or AI reads them yet and they are not in the content
+/// digest until one does. Absent keys keep the engine's default (read from
+/// the executable, static; Armada I's executable was not analysed).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RaceBoarding {
+    /// `boardingStrength`: the race's multiplier on boarding parties (1.0).
+    pub boarding_strength: Fixed,
+    /// `canCommandeer`: the race's units may capture others (true).
+    pub can_commandeer: bool,
+    /// `canBeCommandeered`: the race's units may be captured (true).
+    pub can_be_commandeered: bool,
+    /// `transportSprite`: the sprite shown on a transporting unit
+    /// (presentation); `None` when absent, then [`DEFAULT_TRANSPORT_SPRITE`].
+    pub transport_sprite: Option<String>,
+    /// `crewRetreatRatio`: the crew share below which the AI retreats a
+    /// unit (0.15; AI policy, AI-02's).
+    pub crew_retreat_ratio: Fixed,
+    /// `transportToEnemyOnHard` (false): AI policy, AI-02's.
+    pub transport_to_enemy_on_hard: bool,
+    /// `transportToFriendsOnNotEasy` (true): AI policy, AI-02's.
+    pub transport_to_friends_on_not_easy: bool,
+}
+
+/// The sprite the engine shows on a transporting unit when the race names none
+/// (read from the executable, static).
+pub const DEFAULT_TRANSPORT_SPRITE: &str = "ftransport";
+
+impl Default for RaceBoarding {
+    fn default() -> Self {
+        RaceBoarding {
+            boarding_strength: Fixed::ONE,
+            can_commandeer: true,
+            can_be_commandeered: true,
+            transport_sprite: None,
+            // 0.15 as the ODF's f32 reads it, so a written 0.15 equals the default.
+            crew_retreat_ratio: Fixed::from_f64(f64::from(0.15f32)),
+            transport_to_enemy_on_hard: false,
+            transport_to_friends_on_not_easy: true,
+        }
+    }
+}
+
 /// Authored race repair metadata from a resolved race ODF (SIM-40).
 /// Absence differs from an explicitly authored zero; no runtime defaults are inferred.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,6 +197,8 @@ pub struct Races {
     seat: Vec<(String, SeatRaceRule)>,
     /// Authored repair values keyed by race ODF stem, not unit race key.
     repair: Vec<(String, RaceRepair)>,
+    /// The races that set any boarding key (SIM-46 P0), by key, in race order.
+    boarding: Vec<(String, RaceBoarding)>,
     /// Legacy profiles and loaded catalogues are authoritative. Only a bare
     /// native/fake database may infer its choices from unit definitions.
     authoritative: bool,
@@ -211,13 +256,13 @@ impl Races {
             Ok(o) => o,
             Err(e) => {
                 warnings.push(Warning::new("races.odf", e.to_string()));
-                return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), authoritative }, warnings);
+                return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), boarding: Vec::new(), authoritative }, warnings);
             }
         };
         let declared = nonnegative_integer(&list, "numberofraces");
         if list.raw("numberofraces").is_some() && declared.is_none() {
             warnings.push(Warning::new("races.odf", "numberOfRaces must be a nonnegative integer"));
-            return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), authoritative }, warnings);
+            return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), boarding: Vec::new(), authoritative }, warnings);
         }
         // Walk authored keys rather than an arbitrary fixed cap or a potentially
         // enormous declared count. Inherited trailing keys are inactive when a
@@ -234,6 +279,7 @@ impl Races {
         let mut crew_rates: Vec<(String, RaceCrew)> = Vec::new();
         let mut seat_rules: Vec<(String, SeatRaceRule)> = Vec::new();
         let mut repair_rules: Vec<(String, RaceRepair)> = Vec::new();
+        let mut boarding_rules: Vec<(String, RaceBoarding)> = Vec::new();
         for i in entries {
             let Some(file) = list.str(&format!("race{i}")) else {
                 continue;
@@ -292,6 +338,29 @@ impl Races {
                     };
                     if rule != SeatRaceRule::default() {
                         seat_rules.push((name.clone(), rule));
+                    }
+                    // SIM-46 P0: typed boarding keys; a bad value keeps the default.
+                    {
+                        const KEYS: [&str; 7] = [
+                            "boardingstrength", "cancommandeer", "canbecommandeered", "transportsprite",
+                            "crewretreatratio", "transporttoenemyonhard", "transporttofriendsonnoteasy",
+                        ];
+                        if KEYS.iter().any(|k| o.raw(k).is_some()) {
+                            let d = RaceBoarding::default();
+                            let flag = |k: &str, default: bool| o.bool(k).unwrap_or(default);
+                            let real = |k: &str, default: Fixed| {
+                                o.f32(k).filter(|v| v.is_finite() && *v >= 0.0).map_or(default, |v| Fixed::from_f64(f64::from(v).min(1.0e3)))
+                            };
+                            boarding_rules.push((name.clone(), RaceBoarding {
+                                boarding_strength: real("boardingstrength", d.boarding_strength),
+                                can_commandeer: flag("cancommandeer", d.can_commandeer),
+                                can_be_commandeered: flag("canbecommandeered", d.can_be_commandeered),
+                                transport_sprite: text("transportsprite"),
+                                crew_retreat_ratio: real("crewretreatratio", d.crew_retreat_ratio),
+                                transport_to_enemy_on_hard: flag("transporttoenemyonhard", d.transport_to_enemy_on_hard),
+                                transport_to_friends_on_not_easy: flag("transporttofriendsonnoteasy", d.transport_to_friends_on_not_easy),
+                            }));
+                        }
                     }
                     // ODF::f32 applies the stock numeric suffix convention. Check the
                     // signed 32.32 range before converting: Fixed::from_f64 saturates.
@@ -371,11 +440,11 @@ impl Races {
         }
         repair_rules.sort_by(|a, b| a.0.cmp(&b.0));
         repair_rules.dedup_by(|a, b| a.0 == b.0);
-        (Races { races, crew: crew_rates, seat: seat_rules, repair: repair_rules, authoritative }, warnings)
+        (Races { races, crew: crew_rates, seat: seat_rules, repair: repair_rules, boarding: boarding_rules, authoritative }, warnings)
     }
 
     pub fn from_defs(races: Vec<RaceDef>) -> Races {
-        Races { races, crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), authoritative: true }
+        Races { races, crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), boarding: Vec::new(), authoritative: true }
     }
 
     /// The crew keys of a race by its key (`unitedfederation`), any case.
@@ -392,6 +461,19 @@ impl Races {
     /// Authored repair metadata by race ODF stem, in canonical stem order.
     pub fn repair_rules(&self) -> impl Iterator<Item = (&str, RaceRepair)> {
         self.repair.iter().map(|(stem, repair)| (stem.as_str(), *repair))
+    }
+
+    /// The boarding keys of a race by its key (`unitedfederation`), any case:
+    /// the ODF's own values with the engine defaults for absent keys, and
+    /// all defaults for a race that sets none (SIM-46 P0; the sim does not read them yet).
+    pub fn boarding(&self, name: &str) -> RaceBoarding {
+        let n = name.trim().to_ascii_lowercase();
+        self.boarding.iter().find(|(k, _)| *k == n).map(|(_, b)| b.clone()).unwrap_or_default()
+    }
+
+    /// The races that set any boarding key, by lower-case key, in race order.
+    pub fn boarding_rules(&self) -> impl Iterator<Item = (&str, &RaceBoarding)> {
+        self.boarding.iter().map(|(k, b)| (k.as_str(), b))
     }
 
     /// Every race's crew keys, in race order.
