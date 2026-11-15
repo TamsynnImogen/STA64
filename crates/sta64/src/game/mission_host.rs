@@ -114,6 +114,8 @@ pub struct MissionLaunch {
     paths: Vec<(String, Vec<[f32; 3]>)>,
     /// The AIPs the script may load (AI-06).
     aips: sta_ai::AipLibrary,
+    /// The seats' start values from the map's team table.
+    start_stock: Vec<sta_mission::start_stock::SeatStart>,
 }
 
 impl std::fmt::Debug for MissionLaunch {
@@ -145,6 +147,7 @@ impl MissionLaunch {
             seat: campaigns.host.seat(),
             paths: campaigns.host.map_paths(c, m),
             aips: campaigns.host.aip_library(),
+            start_stock: campaigns.host.start_stock(c, m),
         })
     }
 
@@ -169,7 +172,8 @@ impl MissionLaunch {
 
     /// Load the script over the built game and share it between the link and the host.
     pub fn attach(&self, setup: &GameSetup, sim: &Sim) -> Result<MissionHandle, String> {
-        let runtime = launch_runtime(&self.script, self.reader.clone(), self.seed, self.seat, setup, sim, self.paths.clone()).map_err(|e| e.to_string())?;
+        let mut runtime = launch_runtime(&self.script, self.reader.clone(), self.seed, self.seat, setup, sim, self.paths.clone()).map_err(|e| e.to_string())?;
+        runtime.set_start_stock(self.start_stock.clone());
         let hub = sta_ai::MissionAiHub::new(self.aips.clone());
         let ai = setup.players.iter().filter(|p| !matches!(p.control, Control::Human)).map(|p| hub.controller(setup, p.id)).collect();
         Ok(MissionHandle { runtime: Arc::new(Mutex::new(runtime)), seats: Arc::new(Mutex::new(Seats { hub, ai })) })
@@ -551,6 +555,10 @@ impl MissionHost for ClientHost {
 
     fn map_paths(&self, _: &Campaign, mission: &CampaignMission) -> Vec<(String, Vec<[f32; 3]>)> {
         read_map_paths(&self.vfs, &mission.bzn)
+    }
+
+    fn start_stock(&self, _: &Campaign, mission: &CampaignMission) -> Vec<sta_mission::start_stock::SeatStart> {
+        sta_mission::start_stock::read_start_stock(&self.vfs, &mission.bzn)
     }
 
     fn seat(&self) -> (PlayerId, PlayerNumbering) {

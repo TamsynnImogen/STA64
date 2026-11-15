@@ -56,7 +56,8 @@ use mlua::{Function, Lua, MultiValue, Table, Value};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use sta_sim::command::Command;
+use sta_core::PlayerId;
+use sta_sim::command::{Command, CommandKind, Edit};
 use sta_sim::setup::Controller;
 use sta_sim::view::WorldView;
 use sta_sim::{SimEvent, TICK_HZ};
@@ -154,6 +155,8 @@ pub enum MissionEndState {
 pub struct MissionRuntime {
     inner: Inner,
     errors: Vec<String>,
+    /// The seats' start values still to send before the script's first step ([`MissionRuntime::set_start_stock`]).
+    start_stock: Vec<crate::start_stock::SeatStart>,
 }
 
 // SAFETY: `Lua` is not `Send` because its handles share non-atomic
@@ -384,7 +387,7 @@ impl MissionRuntime {
         if let Err(e) = Self::setup(&lua, &shared, &ctx, seed, Arc::new(Mutex::new(read)), path) {
             errors.push(format!("{path}: {e}"));
         }
-        MissionRuntime { inner: Inner { callbacks: Vec::new(), shared, ctx, lua }, errors }
+        MissionRuntime { inner: Inner { callbacks: Vec::new(), shared, ctx, lua }, errors, start_stock: Vec::new() }
     }
 
     /// Load a script given as text (tests, tools).
@@ -402,6 +405,14 @@ impl MissionRuntime {
     pub fn from_source_with_gaps(name: &str, source: &str, seed: u64, cfg: MissionConfig, gaps: Vec<crate::map_labels::LabelGap>) -> MissionRuntime {
         let (n, s) = (name.to_owned(), source.as_bytes().to_vec());
         MissionRuntime::load_with_gaps(name, seed, cfg, gaps, move |p| (p == n).then(|| s.clone()))
+    }
+
+    /// The seats' start values (the map's team table, [`crate::start_stock`]), sent on the first
+    /// [`Controller::think`] as script edits before the script's first step. A script's own writes
+    /// follow them in the same command list, so a `Set*` wins and an `Add*` adds to the start value
+    /// (the view the script reads on that step already shows the start values).
+    pub fn set_start_stock(&mut self, seats: Vec<crate::start_stock::SeatStart>) {
+        self.start_stock = seats;
     }
 
     fn setup(lua: &Lua, shared: &Rc<RefCell<Shared>>, ctx: &ApiShared, seed: u64, read: Reader, path: &str) -> mlua::Result<()> {
@@ -700,6 +711,25 @@ impl Controller for MissionRuntime {
             let mut c = self.inner.ctx.borrow_mut();
             c.view = view.clone();
             c.events = events.to_vec();
+            for seat in std::mem::take(&mut self.start_stock) {
+                let Some(p) = c.view.players.iter_mut().find(|p| p.id == seat.seat) else { continue };
+                let edits = seat.edits(!p.resources.is_empty(), p.crew.is_some(), p.officers[1] > sta_core::Fixed::ZERO);
+                for e in &edits {
+                    // The script's first step reads the values the sim will hold.
+                    match e {
+                        Edit::Cargo(_, res, v) => {
+                            p.resources.resize(p.resources.len().max(4), sta_core::Fixed::ZERO);
+                            p.resources[usize::from(*res)] = *v;
+                        }
+                        Edit::TeamCrew(_, v) => p.crew = Some(*v),
+                        Edit::MaxOfficers(_, v) => p.officers[1] = *v,
+                        _ => {}
+                    }
+                }
+                for e in edits {
+                    let _ = c.try_push(PlayerId::SCRIPT, CommandKind::Edit(e));
+                }
+            }
             let tick = view.tick;
             let ids: Vec<_> = view.units.iter().map(|u| u.id).collect();
             c.seen.extend(ids);

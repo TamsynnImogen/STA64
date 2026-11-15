@@ -870,6 +870,11 @@ pub trait MissionHost {
         Vec::new()
     }
 
+    /// The seats' start values from the map's team table ([`crate::start_stock`]); none by default.
+    fn start_stock(&self, _campaign: &Campaign, _mission: &CampaignMission) -> Vec<crate::start_stock::SeatStart> {
+        Vec::new()
+    }
+
     /// The map's named paths `(label, points)`, in file order, for `A2.paths`.
     fn map_paths(&self, _campaign: &Campaign, _mission: &CampaignMission) -> Vec<(String, Vec<[f32; 3]>)> {
         Vec::new()
@@ -1182,7 +1187,8 @@ impl CampaignRunner {
         let sim = Sim::from_setup(&setup);
         let carried = sim.labels.iter().map(|(_, l)| l.clone()).collect();
         let gaps = host.map_label_gaps(c, m, &carried);
-        let runtime = launch_runtime_with_gaps(&path, reader, seed, host.seat(), &setup, &sim, host.map_paths(c, m), gaps)?;
+        let mut runtime = launch_runtime_with_gaps(&path, reader, seed, host.seat(), &setup, &sim, host.map_paths(c, m), gaps)?;
+        runtime.set_start_stock(host.start_stock(c, m));
         let ai_hub = sta_ai::MissionAiHub::new(host.aip_library());
         self.active = Some(ActiveMission {
             campaign: campaign.to_owned(),
@@ -1291,6 +1297,10 @@ impl VfsHost {
 }
 
 impl MissionHost for VfsHost {
+    fn start_stock(&self, _campaign: &Campaign, mission: &CampaignMission) -> Vec<crate::start_stock::SeatStart> {
+        crate::start_stock::read_start_stock(&self.vfs, &mission.bzn)
+    }
+
     fn map_label_gaps(&self, _campaign: &Campaign, mission: &CampaignMission, carried: &std::collections::BTreeSet<String>) -> Vec<crate::map_labels::LabelGap> {
         crate::map_labels::read_map_label_gaps(&self.vfs, &self.index, &mission.bzn, carried)
     }
