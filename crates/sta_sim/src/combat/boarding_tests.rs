@@ -1,14 +1,14 @@
 //! SIM-46 P1: the transporter order (`combat/boarding.rs`). The scenarios use
 //! authored values on typed definitions (crews, radii, shields, race factors);
-//! only the stub rule constants (`TransportRules::of`, the defender factor) are
-//! the rules under test, and expectations are written from them. No game file is read.
+//! the rule numbers come from the content's keys (`TransportRules::of`) and the
+//! defender factor, and expectations are written from them. No game file is read.
 
 use super::boarding::{CARRIER_HOLD, DEFENCE_FACTOR, Party, TARGET_HOLD, TransportRules, Transports};
 use crate::command::{Command, CommandKind, Order};
 use crate::setup::{Control, GameOptions, GameSetup, PlayerSetup};
 use crate::world::NEUTRAL;
 use crate::{Sim, WorldSource};
-use sta_content::{ContentDb, MapDef, Profile, RaceRepair, Rules, UnitDef};
+use sta_content::{ContentDb, MapDef, Profile, RaceBoarding, RaceRepair, Rules, TransporterRules, UnitDef};
 use sta_core::{EntityId, Fixed, PlayerId, TeamId, Vec3};
 use std::sync::Arc;
 
@@ -33,9 +33,18 @@ fn party(db: &ContentDb) -> f64 {
 }
 
 fn db(crew_red: Option<f64>, on: bool) -> Arc<ContentDb> {
-    let mut features = Profile::Sta2Classic.features();
+    db_with(crew_red, on, &|_, _| {}, |r| r)
+}
+
+/// `tweak` edits each unit by key (`alpha`, `beta`, `gamma`); `more` the rules.
+fn db_with(crew_red: Option<f64>, on: bool, tweak: &dyn Fn(&str, &mut UnitDef), more: impl Fn(Rules) -> Rules) -> Arc<ContentDb> {
+    db_for(Profile::Sta2Classic, crew_red, on, tweak, more)
+}
+
+fn db_for(profile: Profile, crew_red: Option<f64>, on: bool, tweak: &dyn Fn(&str, &mut UnitDef), more: impl Fn(Rules) -> Rules) -> Arc<ContentDb> {
+    let mut features = profile.features();
     features.crew_loss_on_hit = on;
-    let mut b = ContentDb::builder().profile(Profile::Sta2Classic).features(features);
+    let mut b = ContentDb::builder().profile(profile).features(features);
     for (key, race) in [("alpha", "alpha"), ("beta", "beta"), ("gamma", "beta")] {
         let mut u = UnitDef::new(key, "craft");
         u.race = race.into();
@@ -46,9 +55,10 @@ fn db(crew_red: Option<f64>, on: bool) -> Arc<ContentDb> {
         u.crew = fx(CREW);
         u.maximum_crew = Some(fx(CREW));
         u.radius = Fixed::from_int(RADIUS);
+        tweak(key, &mut u);
         b = b.unit(u);
     }
-    let mut rules = Rules::default();
+    let mut rules = more(Rules::default());
     if let Some(red) = crew_red {
         let repair = RaceRepair { crew_red_status: Some(fx(red)), ..RaceRepair::default() };
         rules = rules.with_race_repairs(vec![("alpha".into(), repair)]);
@@ -271,6 +281,19 @@ fn the_carrier_stops_at_the_races_red_status_from_the_content() {
 }
 
 #[test]
+fn the_red_status_row_is_found_by_the_race_name_when_the_file_stem_differs() {
+    // The rows are keyed by the race file's stem, a unit's race key is the race's name.
+    let repair = RaceRepair { crew_red_status: Some(fx(0.4)), ..RaceRepair::default() };
+    let rows = move |r: Rules| r.with_race_repairs(vec![("racea".into(), repair)]).with_race_repair_stems(vec![("alpha".into(), "RaceA.odf".into())]);
+    let mut w = world_with(db_with(None, true, &|_, _| {}, rows), PlayerId(2), "beta", 300);
+    w.set_crew(w.carrier, 134.0, 135.0);
+    w.set_crew(w.target, 0.0, 100_000.0);
+    w.order();
+    w.run(40 * 30);
+    assert_eq!(w.crew(w.carrier), 59.0, "stops at the 0.4 level, not the 0.25 default");
+}
+
+#[test]
 fn a_tie_leaves_a_derelict_that_keeps_its_owner_and_stops_its_order_and_the_next_party_captures_it() {
     let mut w = world(1, 300);
     let action = rules(&w.db).action_delay;
@@ -482,3 +505,273 @@ fn the_sample_state_is_well_formed() {
     bad.holds.swap(0, 1);
     assert!(Transports::from_rec(bad, |id| id.0 <= 2).is_none(), "holds must ascend by (entity, kind)");
 }
+
+// SIM-69: the numbers come from the content's keys. The base database has no
+// header, so the scenarios above run on the engine defaults.
+
+/// The carrier at 0 and a team mate with room at `gap`: crew paid and gained after the order tick.
+fn friend(db: Arc<ContentDb>, gap: i32) -> World {
+    let mut w = world_with(db, PlayerId(2), "beta", gap);
+    w.set_crew(w.target, 40.0, CREW);
+    w
+}
+
+#[test]
+fn the_header_sets_range_party_and_delays() {
+    let hdr = TransporterRules { range: fx(120.0), delay: fx(2.0), action_delay: fx(0.5), max: 7 };
+    let d = db_with(None, true, &|_, _| {}, |r| r.with_transporter(hdr));
+    let r = rules(&d);
+    assert_eq!((r.range, r.party, r.delay, r.action_delay), (fx(120.0), Fixed::from_int(7), 60, 15));
+    // Reach is the range plus both radii.
+    let mut inside = friend(Arc::clone(&d), 120 + 2 * RADIUS);
+    assert!(inside.order());
+    assert_eq!((inside.crew(inside.carrier), inside.crew(inside.target)), (CREW - 7.0, 47.0));
+    inside.run(59);
+    assert_eq!(inside.crew(inside.carrier), CREW - 7.0, "one pulse per two seconds");
+    inside.run(1);
+    assert_eq!(inside.crew(inside.carrier), CREW - 14.0);
+    let mut outside = friend(Arc::clone(&d), 120 + 2 * RADIUS + 1);
+    assert!(!outside.order());
+    // A header that leaves the keys out gives the engine defaults.
+    let e = rules(&db(None, true));
+    assert_eq!((e.range, e.party, e.delay, e.action_delay), (Fixed::from_int(300), Fixed::from_int(5), 30, 30));
+}
+
+#[test]
+fn the_transporter_key_decides_who_may_transport_and_absent_means_crewed() {
+    let off = |k: &str, u: &mut UnitDef| {
+        if k == "alpha" {
+            u.transport.transporter = Some(false);
+        }
+    };
+    let mut w = friend(db_with(None, true, &off, |r| r), 100);
+    assert!(!w.order(), "transporter = 0");
+    let on = |k: &str, u: &mut UnitDef| {
+        if k == "alpha" {
+            u.transport.transporter = Some(true);
+        }
+    };
+    assert!(friend(db_with(None, true, &on, |r| r), 100).order());
+    assert!(friend(db(None, true), 100).order(), "no key: a crewed ship transports");
+}
+
+#[test]
+fn party_and_race_strengths_come_from_the_keys() {
+    let party_key = |k: &str, u: &mut UnitDef| {
+        if k == "alpha" {
+            u.transport.boarding_party_strength = fx(3.0);
+        }
+    };
+    let race = |r: Rules| {
+        r.with_race_boarding(vec![("alpha".into(), RaceBoarding { boarding_strength: fx(1.5), ..RaceBoarding::default() }), ("beta".into(), RaceBoarding { boarding_strength: fx(0.5), ..RaceBoarding::default() })])
+    };
+    let d = db_with(None, true, &party_key, race);
+    let mut w = world_with(Arc::clone(&d), PlayerId(1), "beta", 300);
+    w.lower_shields(w.target);
+    w.order();
+    w.run(30); // the first party has landed
+    // size 5 x (3.0 x 1.5) / (1.0 x 0.5 x 1.5) = 30 kills
+    assert_eq!(w.crew(w.target), CREW - 30.0);
+}
+
+#[test]
+fn can_commandeer_and_can_be_commandeered_gate_the_order() {
+    let none = |r: Rules| r.with_race_boarding(vec![("alpha".into(), RaceBoarding { can_commandeer: false, ..RaceBoarding::default() })]);
+    // A race that cannot commandeer may still help a team mate but not take an enemy.
+    assert!(friend(db_with(None, true, &|_, _| {}, none), 100).order());
+    let mut enemy = world_with(db_with(None, true, &|_, _| {}, none), PlayerId(1), "beta", 100);
+    enemy.lower_shields(enemy.target);
+    assert!(!enemy.order());
+    let safe = |r: Rules| r.with_race_boarding(vec![("beta".into(), RaceBoarding { can_be_commandeered: false, ..RaceBoarding::default() })]);
+    assert!(!friend(db_with(None, true, &|_, _| {}, safe), 100).order());
+}
+
+#[test]
+fn disable_shields_and_shield_delay_come_from_the_keys() {
+    let keys = |k: &str, u: &mut UnitDef| match k {
+        "alpha" => u.transport.disable_shields_on_transport = false,
+        "beta" => u.transport.shield_delay = Some(fx(2.0)),
+        _ => {}
+    };
+    let hold = |d: Arc<ContentDb>| {
+        let mut w = world_with(d, PlayerId(1), "beta", 300);
+        w.lower_shields(w.target);
+        w.order();
+        let until = *w.sim.transports.holds.get(&(w.target, TARGET_HOLD)).expect("the target is held");
+        (w.shields(w.carrier), w.sim.transports().shields_held(w.carrier), until)
+    };
+    let (shields, held, until) = hold(db_with(None, true, &keys, |r| r));
+    let (_, default_held, default_until) = hold(db(None, true));
+    assert_eq!(shields, 90.0, "disableShieldsOnTransport = 0 keeps the carrier's shields");
+    assert!(!held && default_held);
+    assert_eq!(default_until - until, 30, "the target's shieldDelay of 2.0 s instead of the 3.0 s default");
+}
+
+#[test]
+fn the_public_answer_follows_the_family_the_key_and_the_crew_floors() {
+    use super::boarding::{can_transport, transport_allowed};
+    let off = |k: &str, u: &mut UnitDef| {
+        if k == "beta" {
+            u.transport.transporter = Some(false);
+        }
+    };
+    let d = db_with(None, true, &off, |r| r);
+    let (alpha, beta) = (d.unit(d.key("alpha").unwrap()).unwrap(), d.unit(d.key("beta").unwrap()).unwrap());
+    let crew = |now: f64| [fx(now), fx(CREW)];
+    assert!(transport_allowed(&d, alpha, fx(CREW)) && !transport_allowed(&d, beta, fx(CREW)), "transporter = 0");
+    assert!(can_transport(&d, alpha, crew(10.0)));
+    assert!(!can_transport(&d, alpha, crew(9.0)), "the floor is 9");
+    assert!(!can_transport(&d, beta, crew(100.0)));
+    // A family without the derelict latch is refused, whatever the crew.
+    let native = db(None, false);
+    assert!(!transport_allowed(&native, native.unit(native.key("alpha").unwrap()).unwrap(), fx(CREW)));
+}
+
+// SIM-71: the Armada I profile (read from the executable, static; not measured). Its units hold the
+// single health pool as hull and have no shield maximum; header and race numbers are authored.
+
+const A1_HULL: i32 = 100_000;
+
+/// An Armada I database: no casualty model, one pool, the race strengths and header given.
+fn a1_db(strengths: &[(&str, f64)], range: f64, tweak: &dyn Fn(&str, &mut UnitDef)) -> Arc<ContentDb> {
+    let rows: Vec<(String, RaceBoarding)> = strengths.iter().map(|(r, v)| ((*r).to_owned(), RaceBoarding { boarding_strength: fx(*v), ..RaceBoarding::default() })).collect();
+    let hdr = TransporterRules { range: fx(range), delay: Fixed::ONE, action_delay: Fixed::ONE, max: 5 };
+    db_for(
+        Profile::Sta1Classic,
+        None,
+        false,
+        &|k, u| {
+            u.shields.max = Fixed::ZERO;
+            u.shields.recharge = Fixed::ZERO;
+            tweak(k, u);
+        },
+        move |r| r.with_transporter(hdr).with_race_boarding(rows.clone()),
+    )
+}
+
+fn set_pool(w: &mut World, now: i32) {
+    let id = w.target;
+    w.sim.units.get_mut(id).unwrap().hull = [Fixed::from_int(now), Fixed::from_int(A1_HULL)];
+}
+
+#[test]
+fn armada_one_kills_use_only_the_two_races_strengths() {
+    // A 2.0, D 0.5: kills = 5 x 2.0 / 0.5 = 20. The unit multiplier and the 1.5 factor of Armada II do not apply.
+    let party_key = |k: &str, u: &mut UnitDef| {
+        if k == "alpha" || k == "beta" {
+            u.transport.boarding_party_strength = fx(7.0);
+        }
+    };
+    let mut w = world_with(a1_db(&[("alpha", 2.0), ("beta", 0.5)], 400.0, &party_key), PlayerId(1), "beta", 300);
+    set_pool(&mut w, A1_HULL / 100);
+    assert!(w.order());
+    w.run(30); // the first party has landed
+    assert_eq!(w.crew(w.target), CREW - 20.0);
+}
+
+#[test]
+fn armada_one_range_is_centre_to_centre_from_the_cfg_key() {
+    let d = a1_db(&[], 120.0, &|_, _| {});
+    let mut inside = world_with(Arc::clone(&d), PlayerId(2), "beta", 120);
+    inside.set_crew(inside.target, 40.0, CREW);
+    assert!(inside.order());
+    assert_eq!(inside.crew(inside.target), 45.0);
+    // One unit further is out of range although the two radii would reach (Armada II adds them).
+    let mut outside = world_with(d, PlayerId(2), "beta", 121);
+    outside.set_crew(outside.target, 40.0, CREW);
+    assert!(!outside.order());
+}
+
+#[test]
+fn armada_one_boards_an_enemy_whose_pool_is_at_or_below_one_percent_and_a_derelict() {
+    let d = a1_db(&[], 400.0, &|_, _| {});
+    let boarded = |pool: i32| {
+        let mut w = world_with(Arc::clone(&d), PlayerId(1), "beta", 300);
+        set_pool(&mut w, pool);
+        w.order();
+        w.run(30);
+        w.crew(w.target) < CREW
+    };
+    assert!(boarded(A1_HULL / 100), "exactly 1 %");
+    assert!(!boarded(A1_HULL / 100 + 1000), "above 1 %");
+    // A latched derelict passes whatever the sim holds as its pool.
+    let mut w = world_with(d, PlayerId(1), "beta", 300);
+    w.make_derelict(w.target);
+    w.order();
+    w.run(30);
+    assert_eq!(w.owner(w.target), PlayerId(0), "an enemy derelict is captured");
+}
+
+#[test]
+fn armada_one_has_no_unit_key_no_commandeer_keys_and_keeps_the_carriers_shields() {
+    let keys = |k: &str, u: &mut UnitDef| {
+        u.transport.transporter = Some(false);
+        if k == "alpha" {
+            u.shields.max = fx(90.0); // this carrier has a shield pool of its own
+        }
+    };
+    let rows = vec![("alpha".to_owned(), RaceBoarding { can_commandeer: false, ..RaceBoarding::default() }), ("beta".to_owned(), RaceBoarding { can_be_commandeered: false, ..RaceBoarding::default() })];
+    let hdr = TransporterRules { range: fx(400.0), delay: Fixed::ONE, action_delay: Fixed::ONE, max: 5 };
+    let d = db_for(Profile::Sta1Classic, None, false, &|k, u| { u.shields.max = Fixed::ZERO; keys(k, u) }, move |r| r.with_transporter(hdr).with_race_boarding(rows.clone()));
+    let mut w = world_with(d, PlayerId(1), "beta", 300);
+    set_pool(&mut w, A1_HULL / 100);
+    assert!(w.order(), "transporter = 0, canCommandeer = 0 and canBeCommandeered = 0 are not Armada I keys");
+    w.sim.units.get_mut(w.carrier).unwrap().shields.now = [fx(90.0), Fixed::ZERO, Fixed::ZERO, Fixed::ZERO];
+    w.run(30);
+    assert_eq!(w.shields(w.carrier), 90.0, "the carrier keeps its shields");
+    assert!(!w.sim.transports().shields_held(w.carrier));
+    // No planets, and the capture command stays refused.
+    assert!(!super::boarding::can_transport(&w.db, w.db.unit(w.db.key("alpha").unwrap()).unwrap(), [fx(8.0), fx(CREW)]), "the crew floor holds");
+}
+
+#[test]
+fn armada_one_clears_the_latch_of_a_recrewed_derelict_that_keeps_its_owner() {
+    let mut w = world_with(a1_db(&[], 400.0, &|_, _| {}), PlayerId(2), "beta", 100);
+    w.make_derelict(w.target);
+    assert!(w.order());
+    assert!(!w.derelict(w.target), "crew of 1 or more clears the latch (no casualty model runs)");
+    assert_eq!((w.owner(w.target), w.crew(w.target)), (PlayerId(2), 5.0));
+}
+
+#[test]
+fn an_allied_targets_shields_drop_for_the_transfer_and_return_in_full_after_the_hold() {
+    let mut w = world_with(db(None, true), PlayerId(2), "beta", 100);
+    w.set_crew(w.target, 40.0, CREW);
+    w.sim.units.get_mut(w.target).unwrap().shields.now = [fx(90.0), Fixed::ZERO, Fixed::ZERO, Fixed::ZERO];
+    assert!(w.order());
+    assert_eq!(w.shields(w.target), 0.0, "off at the first pulse");
+    assert!(w.sim.transports().shields_held(w.target));
+    w.sim.transports.end(w.carrier);
+    w.run(rules(&w.db).carrier_shield_return - 1);
+    assert_eq!(w.shields(w.target), 0.0, "still off during the hold");
+    w.run(2);
+    assert_eq!(w.shields(w.target), 90.0, "back in full one step after the hold");
+    assert!(!w.sim.transports().shields_held(w.target));
+    // An enemy is not given this hold kind (its recharge delay is set instead), and the carrier's own key rules.
+    let keep = |k: &str, u: &mut UnitDef| {
+        if k == "alpha" {
+            u.transport.disable_shields_on_transport = false;
+        }
+    };
+    let mut x = world_with(db_with(None, true, &keep, |r| r), PlayerId(2), "beta", 100);
+    x.set_crew(x.target, 40.0, CREW);
+    assert!(x.order());
+    assert_eq!(x.shields(x.target), 90.0, "disableShieldsOnTransport = 0 on the carrier keeps the ally's too");
+}
+
+/// The full digest after an authored Armada I run: a carrier boards a nearly down enemy of low crew,
+/// the second party arrives and captures it. New pin (SIM-71).
+#[test]
+fn an_armada_one_boarding_run_is_pinned() {
+    let mut w = world_with(a1_db(&[("alpha", 1.25), ("beta", 0.75)], 400.0, &|_, _| {}), PlayerId(1), "beta", 300);
+    set_pool(&mut w, 900);
+    w.sim.units.get_mut(w.target).unwrap().target = Some(at(900));
+    w.set_crew(w.target, 2.5, CREW);
+    assert!(w.order());
+    w.run(45);
+    assert_eq!(w.owner(w.target), PlayerId(0));
+    assert!(!w.sim.transports().is_empty());
+    assert_eq!(w.sim.digest(), A1_RUN_DIGEST, "{:#x}", w.sim.digest());
+}
+
+const A1_RUN_DIGEST: u64 = 0xadde_12fe_4e91_c9ec;

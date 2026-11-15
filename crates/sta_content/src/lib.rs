@@ -14,7 +14,9 @@
 //! [`ContentError::Unsupported`]. [`ContentDb::builder`] and [`fake`] work
 //! without any install. [`legacy`] still serves the map view's scenery ODFs.
 
+pub mod a1_physics;
 pub mod aip;
+pub mod button_slots;
 pub mod confinement;
 pub mod db;
 pub mod def;
@@ -39,15 +41,19 @@ pub mod rules;
 pub mod techtree;
 pub mod map;
 pub mod odf;
+pub mod orbital_income;
 pub mod strings;
 pub mod unit;
 pub mod weapon;
 
+pub use button_slots::{ButtonSlots, SlotCommand};
 pub use aip::{Aip, AipList, AipValue, AipVar, BuildItem};
 pub use confinement::{ConfinementInitial, ConfinementOverrides, ConfinementRules, ConfinementSpatial};
+pub use a1_physics::{A1Borg, A1Dynamics};
 pub use db::{ContentBuilder, ContentDb, DEFAULT_TECH_TREE};
 pub use def::{BuildDef, CasualtyDef, ClassLabel, ColonizePodDef, DefRef, FireArc, FxRefs, Hardpoint, LaunchPoint, MoveStats, NebulaPathing, OrdnanceCrewLoss, RepairDef, ResourceWeaponDef, ShieldDef, SoundRefs, TransportDef, UnitDef, WeaponDef, WeaponKind};
 pub use features::{Features, Profile};
+pub use orbital_income::{NodeIncome, StationMining};
 pub use planet::PlanetRole;
 pub use gui_cfg::{Colour, GuiCfg, GuiLayout, GuiValue, Panel, Rect};
 pub use index::{OdfEntry, OdfIndex};

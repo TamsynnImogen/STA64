@@ -83,7 +83,7 @@ impl MissionSwitches {
     }
 }
 
-/// The snapshot record (format 33).
+/// The snapshot record (format 34).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwitchesRec {
     version: u8,

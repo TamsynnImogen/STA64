@@ -59,9 +59,13 @@ impl Sim {
         true
     }
 
+    /// A dying craft takes the spin like any other (the original's hulk spins
+    /// after `ExplodeNow`). STA64 removes a destroyed unit at once and keeps no
+    /// hulk, so for an id that was allocated and is gone the call is accepted and
+    /// does nothing (not a rejected edit); an id never allocated is rejected.
     pub(crate) fn edit_angular_velocity(&mut self, id: EntityId, omega: Fixed) -> bool {
-        let Some(u) = self.units.get_mut(id).filter(|u| !u.flags.contains(UnitFlags::DYING)) else {
-            return false;
+        let Some(u) = self.units.get_mut(id) else {
+            return id.0 != 0 && id < self.units.next_id();
         };
         if u.kind == EntityKind::Craft && u.flags.contains(UnitFlags::ENGINES_OFF) {
             let cap = Fixed::from_int(MAX_SCRIPT_OMEGA);
@@ -129,7 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn dying_units_are_rejected_by_all_three_edits_and_the_unmodified_edits_pass() {
+    fn dying_units_are_rejected_by_position_and_heading_but_take_the_spin() {
         let mut sim = sim();
         let id = spawn(&mut sim);
         let dir = (Fixed::ONE, Fixed::ZERO);
@@ -139,7 +143,8 @@ mod tests {
         sim.units.get_mut(id).unwrap().flags = sim.units.get(id).unwrap().flags.with(UnitFlags::DYING, true);
         assert!(!sim.edit_position(id, Vec3::ZERO));
         assert!(!sim.edit_heading(id, dir));
-        assert!(!sim.edit_angular_velocity(id, Fixed::ONE));
+        // LUA-32: a dying craft takes the spin (the original's hulk spins after `ExplodeNow`).
+        assert!(sim.edit_angular_velocity(id, Fixed::ONE));
     }
 
     #[test]

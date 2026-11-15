@@ -1,4 +1,4 @@
-//! LUA-41: the mission switches record of snapshot format 33.
+//! LUA-41: the mission switches record of snapshot format 34.
 
 use super::*;
 use super::chain;
@@ -51,7 +51,7 @@ fn the_record_is_mandatory_and_schema_checked() {
 #[test]
 fn the_previous_formats_are_refused() {
     let mut bytes = Sim::new(9).snapshot();
-    for found in [31u16, 32] {
+    for found in [31u16, 32, 33] {
         bytes[4..6].copy_from_slice(&found.to_le_bytes());
         assert_eq!(Sim::from_snapshot(&bytes, None).err(), Some(SnapshotError::FormatVersion { found }));
     }

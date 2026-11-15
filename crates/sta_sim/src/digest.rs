@@ -67,7 +67,7 @@ fn _every_sim_field_is_decided(s: &Sim) {
     let Sim {
         tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, starts: _, regions: _,
         bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, economy: _,
-        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, attrs: _, scripted: _, switches: _, relations: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _, transports: _, recrew: _, mission_switches: _,
+        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, attrs: _, scripted: _, switches: _, relations: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _, transports: _, recrew: _, alerts: _, mission_switches: _,
     } = s;
 }
 
@@ -211,6 +211,8 @@ impl Sim {
         if !self.autonomy.is_empty() {
             self.autonomy.hash_into(&mut h);
         }
+        // LUA-32: alert levels gate fire and assists (nothing is hashed at the default).
+        self.alerts.hash_into(&mut h);
         if !self.subsystems.is_empty() {
             self.subsystems.hash_into(&mut h);
         }
@@ -372,6 +374,12 @@ impl Sim {
                 }
                 if !self.autonomy.is_empty() {
                     row(None, "autonomy levels (hash)", block("autonomy", &|h| self.autonomy.hash_into(h)));
+                }
+                for (id, level) in self.alerts.levels() {
+                    row(Some(id), "alert (script)", format!("{level:?}"));
+                }
+                if !self.alerts.is_default() {
+                    row(None, "alert levels, enemy hits, ally attacks (hash)", block("alerts", &|h| self.alerts.hash_into(h)));
                 }
                 if !self.scripted.is_empty() {
                     row(None, "scripted orders (hash)", block("scripted", &|h| self.scripted.hash_into(h)));

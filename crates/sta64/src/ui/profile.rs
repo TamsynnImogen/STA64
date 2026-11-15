@@ -16,6 +16,8 @@ use super::theme::{self, Theme};
 pub enum UiProfile {
     #[default]
     Lcars,
+    /// Armada I's own HUD (UI-19): its panels and fixed control grid.
+    Armada1,
     Armada2,
     FleetOps,
 }
@@ -28,14 +30,15 @@ impl UiProfile {
     /// A neutral fallback for stock presentation. The mounted CFG/SPR files,
     /// rather than these tokens, supply the original menu and HUD artwork.
     pub fn theme(self) -> Theme {
-        if !self.is_stock() {
+        // Armada I has no stock menus: its front end keeps the default theme (UI-19).
+        if !self.is_stock() || self == Self::Armada1 {
             return Theme::default();
         }
         let mut t = Theme::default();
         let (accent, accent2) = match self {
             Self::Armada2 => (Color::srgb_u8(103, 150, 180), Color::srgb_u8(74, 102, 120)),
             Self::FleetOps => (Color::srgb_u8(159, 175, 186), Color::srgb_u8(78, 95, 106)),
-            Self::Lcars => unreachable!(),
+            Self::Lcars | Self::Armada1 => unreachable!(),
         };
         t.panel = Color::srgb_u8(10, 17, 23);
         t.panel_hi = Color::srgb_u8(39, 53, 62);
@@ -99,6 +102,8 @@ impl Default for UiProfiles {
         };
         for (name, profile) in [
             ("lcars", UiProfile::Lcars),
+            ("a1", UiProfile::Armada1),
+            ("armada1", UiProfile::Armada1),
             ("a2", UiProfile::Armada2),
             ("armada2", UiProfile::Armada2),
             ("fo", UiProfile::FleetOps),
@@ -130,7 +135,8 @@ impl UiProfile {
             // FO 3.x detected as `Sta2Classic` before CON-44 and keeps its UI profile (its own look is not measured).
             GameProfile::Sta2Classic | GameProfile::Fo3 => Self::Armada2,
             GameProfile::Fo4 => Self::FleetOps,
-            GameProfile::Native | GameProfile::Sta1Classic => Self::Lcars,
+            GameProfile::Sta1Classic => Self::Armada1,
+            GameProfile::Native => Self::Lcars,
         }
     }
 }
@@ -279,7 +285,13 @@ mod tests {
             Some(UiProfile::Armada2)
         );
         assert_eq!(profiles.resolve("unknown", GameProfile::Fo4), None);
-        assert_eq!(UiProfile::from_game(GameProfile::Sta1Classic), UiProfile::Lcars);
+        assert_eq!(UiProfile::from_game(GameProfile::Sta1Classic), UiProfile::Armada1);
+        assert_eq!(UiProfile::from_game(GameProfile::Native), UiProfile::Lcars);
+        assert_eq!(profiles.resolve("A1", GameProfile::Native), Some(UiProfile::Armada1));
+        assert_eq!(profiles.resolve("armada1", GameProfile::Native), Some(UiProfile::Armada1));
+        assert_eq!(profiles.resolve("stock", GameProfile::Sta1Classic), Some(UiProfile::Armada1));
+        assert!(UiProfile::Armada1.is_stock());
+        assert_eq!(UiProfile::Armada1.theme().accent, Theme::default().accent, "the front end keeps its look");
     }
 
     #[test]
