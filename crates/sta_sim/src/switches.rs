@@ -17,10 +17,10 @@
 //! - **CraftCanRepair** false: no shield regeneration (`combat::damage::recharge`
 //!   skips the unit). The engine also stops hull regeneration and the repair
 //!   system; STA64 has no hull regeneration or repair system to stop.
-//! - **ButItCanBeDerelicted**, **CraftCanRecrew**: stored and in snapshots and
-//!   the digest. STA64 has no derelict state and no per-craft recrew, so
-//!   neither changes behaviour yet (the engine's `canRecrew` default at spawn is
-//!   not established; the flag here starts unset).
+//! - **ButItCanBeDerelicted** is stored in snapshots and the digest and read
+//!   by the casualty model. **CraftCanRecrew** false prevents station recovery
+//!   and clears its active request (`crate::recrew`); re-enabling permits a
+//!   new request. The switch starts unset and does not fabricate crew.
 //! - **HideObject** and **SetSpecialForcesFlag** are two bits of the unit
 //!   (`hidden`, `special_forces`); the engine reads hidden only when drawing and
 //!   special forces in the script order gate, assist and the AI planner.
@@ -156,7 +156,17 @@ impl Sim {
             }
             Edit::CraftCanRepair(id, on) => self.craft_switch(*id, |s| s.no_repair = !on),
             Edit::DerelictAllowed(id, on) => self.craft_switch(*id, |s| s.derelict_ok = *on),
-            Edit::CanRecrew(id, on) => self.craft_switch(*id, |s| s.recrew = Some(*on)),
+            Edit::CanRecrew(id, on) => {
+                let ok = self.units.get(*id).is_some_and(|u| {
+                    matches!(u.kind, crate::world::EntityKind::Craft | crate::world::EntityKind::Station)
+                        && u.hull[0] > sta_core::Fixed::ZERO
+                        && !u.flags.contains(crate::view::UnitFlags::DYING)
+                });
+                if ok {
+                    self.switches.edit(*id, |s| s.recrew = Some(*on));
+                }
+                ok
+            },
             Edit::Hidden(id, on) => live(self, *id) && {
                 self.switches.edit(*id, |s| s.hidden = *on);
                 true

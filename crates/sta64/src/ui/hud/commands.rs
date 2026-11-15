@@ -24,8 +24,18 @@ pub struct Capabilities {
     /// `colony_ship` flag, plus the sim's own pod-ship rule (Borg beam ships are refused).
     /// Evidence: read from data (the game's command and ship definitions).
     pub colonize: bool,
+    /// The stock TRANSPORT command is shown: an own, finished, crewed ship or station
+    /// (`transport.odf` names the `transporter` class as its source; the sim treats every
+    /// crewed craft and station as one). Evidence: read from data; the sim's rule.
+    pub transport: bool,
+    /// The sim would take `Order::Transport` from at least one selected unit: the carrier's game
+    /// family has the derelict latch (Armada I is refused for now) and its crew is above the
+    /// transporter floor. When false the button is shown disabled.
+    pub transport_ready: bool,
+    /// At least one selected transporter belongs to a game family the sim takes the order for
+    /// (tells a greyed press apart: the family is refused, or the crew is too low).
+    pub transport_family: bool,
     /// A finished station with a positive live crew capacity can show Recrew.
-    /// The sim has no Recrew order yet; this is presentation only.
     pub recrew: bool,
     /// At least one eligible station is below its live crew maximum.
     pub recrew_ready: bool,
@@ -64,9 +74,10 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
             (slot <= u8::MAX as usize && kind == SpecialKind::Cloak).then_some((slot as u8, kind))
         })
         .collect();
+    let t = transport_state(db, def, kind, u);
     let recrew = kind == EntityKind::Station
-        && def.raw.bool("facility") != Some(false)
-        && def.raw.bool("has_crew") != Some(false)
+        && def.facility != Some(false)
+        && def.has_crew != Some(false)
         && u.crew.is_some_and(|crew| crew[1] > Fixed::ZERO);
     let recrew_ready = recrew && u.crew.is_some_and(|crew| crew[0] < crew[1]);
     Capabilities {
@@ -78,10 +89,28 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
             && !def.build.list.is_empty() && !u.flags.contains(UnitFlags::BUILDING),
         mine: mobile && def.mines(),
         colonize: mobile && def.raw.bool("colony_ship").unwrap_or(false) && sta_sim::colony::is_pod_ship(db, def),
+        transport: t.shown,
+        transport_family: t.family,
+        transport_ready: t.ready,
         recrew,
         recrew_ready,
         specials,
     }
+}
+
+/// What the HUD says about one unit's transport command: whether the button is shown (a crewed ship or
+/// station that is not a planet), whether the sim allows the unit to transport at all (its game family and
+/// its own `transporter` key), and whether the unit is ready (allowed and live crew above both floors).
+/// Both answers are the sim's own (`sta_sim::combat::boarding::{transport_allowed, can_transport}`); the
+/// client repeats no part of the rule.
+struct TransportState { shown: bool, family: bool, ready: bool }
+
+fn transport_state(db: &ContentDb, def: &sta_content::UnitDef, kind: EntityKind, u: &UnitView) -> TransportState {
+    let crew_max = u.crew.map_or(Fixed::ZERO, |c| c[1]);
+    let shown = matches!(kind, EntityKind::Craft | EntityKind::Station) && def.planet_role.is_none() && crew_max > Fixed::ZERO;
+    let family = shown && sta_sim::combat::boarding::transport_allowed(db, def, crew_max);
+    let ready = shown && u.crew.is_some_and(|c| sta_sim::combat::boarding::can_transport(db, def, c));
+    TransportState { shown, family, ready }
 }
 
 pub fn shared(feed: &HudFeed) -> Capabilities {
@@ -107,6 +136,10 @@ pub fn shared(feed: &HudFeed) -> Capabilities {
         common.mine |= next.mine;
         // Likewise: only the colony ships of a mixed selection take a Colonize order (see `colony_ships`).
         common.colonize |= next.colonize;
+        // Transport shows when any selected unit is a transporter and is ready when any can take the order.
+        common.transport |= next.transport;
+        common.transport_ready |= next.transport_ready;
+        common.transport_family |= next.transport_family;
         common.recrew |= next.recrew;
         common.recrew_ready |= next.recrew_ready;
         common.specials.retain(|s| next.specials.contains(s));
@@ -115,7 +148,7 @@ pub fn shared(feed: &HudFeed) -> Capabilities {
 }
 
 /// Owned, finished stations below their live crew maximum in a mixed selection.
-/// This is used only to validate a UI click until the sim supports recrewing.
+/// These are the only units sent with a Recrew order.
 pub fn recrew_stations(feed: &HudFeed, ids: &[EntityId]) -> Vec<EntityId> {
     let Some(db) = feed.content.as_deref() else { return Vec::new() };
     ids.iter().copied().filter(|id| {
@@ -135,6 +168,12 @@ pub fn miners(feed: &HudFeed, ids: &[EntityId]) -> Vec<EntityId> {
 pub fn colony_ships(feed: &HudFeed, ids: &[EntityId]) -> Vec<EntityId> {
     let Some(db) = feed.content.as_deref() else { return Vec::new() };
     ids.iter().copied().filter(|id| feed.view.unit(*id).is_some_and(|u| one(db, u).colonize)).collect()
+}
+
+/// The members of `ids` the sim takes a Transport order from (the rest of a mixed selection do not receive it).
+pub fn transporters(feed: &HudFeed, ids: &[EntityId]) -> Vec<EntityId> {
+    let Some(db) = feed.content.as_deref() else { return Vec::new() };
+    ids.iter().copied().filter(|id| feed.view.unit(*id).is_some_and(|u| one(db, u).transport_ready)).collect()
 }
 
 #[cfg(test)]

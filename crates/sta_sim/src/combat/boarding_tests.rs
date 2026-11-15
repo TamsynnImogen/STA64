@@ -602,3 +602,23 @@ fn disable_shields_and_shield_delay_come_from_the_keys() {
     assert!(!held && default_held);
     assert_eq!(default_until - until, 30, "the target's shieldDelay of 2.0 s instead of the 3.0 s default");
 }
+
+#[test]
+fn the_public_answer_follows_the_family_the_key_and_the_crew_floors() {
+    use super::boarding::{can_transport, transport_allowed};
+    let off = |k: &str, u: &mut UnitDef| {
+        if k == "beta" {
+            u.transport.transporter = Some(false);
+        }
+    };
+    let d = db_with(None, true, &off, |r| r);
+    let (alpha, beta) = (d.unit(d.key("alpha").unwrap()).unwrap(), d.unit(d.key("beta").unwrap()).unwrap());
+    let crew = |now: f64| [fx(now), fx(CREW)];
+    assert!(transport_allowed(&d, alpha, fx(CREW)) && !transport_allowed(&d, beta, fx(CREW)), "transporter = 0");
+    assert!(can_transport(&d, alpha, crew(10.0)));
+    assert!(!can_transport(&d, alpha, crew(9.0)), "the floor is 9");
+    assert!(!can_transport(&d, beta, crew(100.0)));
+    // A family without the derelict latch is refused, whatever the crew.
+    let native = db(None, false);
+    assert!(!transport_allowed(&native, native.unit(native.key("alpha").unwrap()).unwrap(), fx(CREW)));
+}

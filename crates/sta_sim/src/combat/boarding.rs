@@ -100,20 +100,20 @@ impl TransportRules {
     }
 }
 
-/// The sim's own answer to "may this unit be ordered to transport?": the
-/// profile family (`crew_loss_on_hit`, see the module docs), the unit's
-/// `transporter` key (absent: a crewed ship or station, as the stub did; planets
-/// never), and the crew floors (`crew` is current and maximum crew: the carrier needs
-/// more than the executable's 9 and more than one party). Read-only; the order
-/// validation uses it, and a client should too (it must not repeat the rule).
+/// Whether the unit's game family and its own keys allow `Order::Transport` at all, whatever its
+/// crew: the profile family (`crew_loss_on_hit`, see the module docs), the unit's `transporter` key
+/// (absent: a crewed ship or station, as the stub did) and no planets. Read-only; a client shows
+/// its button from this and from [`can_transport`] and does not repeat the rule.
+pub fn transport_allowed(db: &ContentDb, def: &UnitDef, crew_max: Fixed) -> bool {
+    def.planet_role.is_none() && db.unit_features(def).crew_loss_on_hit && def.transport.transporter.unwrap_or(crew_max > Fixed::ZERO)
+}
+
+/// The sim's own answer to "may this unit be ordered to transport now?": [`transport_allowed`] and
+/// the crew floors (`crew` is current and maximum crew: the carrier needs more than the
+/// executable's 9 and more than one party). Read-only; the order validation uses it.
 pub fn can_transport(db: &ContentDb, def: &UnitDef, crew: [Fixed; 2]) -> bool {
     let rules = TransportRules::of(db);
-    let crewed = crew[1] > Fixed::ZERO;
-    def.planet_role.is_none()
-        && db.unit_features(def).crew_loss_on_hit
-        && def.transport.transporter.unwrap_or(crewed)
-        && crew[0] > rules.min_crew
-        && crew[0] > rules.party
+    transport_allowed(db, def, crew[1]) && crew[0] > rules.min_crew && crew[0] > rules.party
 }
 
 /// `boardingPartyStrength` (1.0 when absent).

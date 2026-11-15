@@ -60,6 +60,9 @@ mod orders_tests;
 pub mod switches;
 pub mod replay;
 pub mod repair;
+pub mod recrew;
+#[cfg(test)]
+mod recrew_tests;
 pub mod setup;
 pub mod snapshot;
 pub mod sensors;
@@ -201,6 +204,8 @@ pub struct Sim {
     colonies: colony::Colonies,
     /// Transporter orders, parties in flight and shield holds (SIM-46); in the digest once any exists.
     transports: combat::boarding::Transports,
+    /// Station recovery activation and damage holds (SIM-70), saved and hashed.
+    recrew: recrew::Recrews,
 }
 
 impl Sim {
@@ -240,6 +245,7 @@ impl Sim {
             appearance_factions: Vec::new(),
             colonies: Default::default(),
             transports: Default::default(),
+            recrew: Default::default(),
         }
     }
 
@@ -356,6 +362,9 @@ impl Sim {
                 eligible.sort();
                 eligible.dedup();
                 if eligible.is_empty() { return false; }
+                for &id in &eligible {
+                    self.recrew.cancel(id, self.tick);
+                }
                 self.clear_scripted(c.player, &eligible);
                 self.weapons.stop_attack(&self.units, c.player, &eligible);
                 self.economy.cancel(&self.units, c.player, &eligible);
@@ -426,9 +435,9 @@ impl Sim {
                 let Some(db) = self.content.as_deref() else { return false };
                 self.production.order_rally(db, &self.units, c.player, builders, *at)
             }
-            // Refuse requests until their repair/recrew runtimes are integrated,
-            // preserving existing orders/state.
-            Order::Repair { .. } | Order::Recrew { .. } => false,
+            // Yard repair remains unavailable until its runtime is integrated.
+            Order::Repair { .. } => false,
+            Order::Recrew { units, on } => self.order_recrew(c.player, units, *on),
         }
     }
 
@@ -480,10 +489,14 @@ impl Sim {
                 self.approach_warp.end(id);
             }
             let mut lost = Vec::new();
+            // Pause station recovery for incoming positive hits, including
+            // casualty hits whose final hull-damage event may become zero.
+            self.recrew.note_hits(&self.units, &db, &self.events[from..], self.tick);
             let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
             let killed = combat::damage::apply(&mut self.units, &db, &mut self.events, from, &mut casualties);
             // Pulses and arrivals after the hits, before the latch upkeep (SIM-46).
             self.step_transports();
+            self.step_recrew();
             let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
             combat::casualty::step(&mut self.units, &db, &mut casualties);
             for (id, by) in killed {
