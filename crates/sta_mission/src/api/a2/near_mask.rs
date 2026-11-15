@@ -19,5 +19,5 @@ pub(super) fn visible(c: &Ctx, mask: i64) -> Option<BTreeSet<EntityId>> {
         return None;
     }
     let team = u8::try_from(mask & 31).ok().and_then(|n| c.player_numbering.decode(n)).filter(|p| p.is_player());
-    Some(team.map(|p| c.view.visible_to(p).iter().map(|u| u.id).collect()).unwrap_or_default())
+    Some(team.map(|p| c.visible_ids(p)).unwrap_or_default())
 }
