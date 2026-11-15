@@ -58,7 +58,7 @@ pub fn cursor(
     let want = match icon {
         Some(Order::Attack { .. }) => SystemCursorIcon::Crosshair,
         Some(Order::Mine { .. } | Order::Rally { .. }) => SystemCursorIcon::Pointer,
-        None if aim.0.is_some() && rally_builders(content.as_deref().map(|c| &*c.0), link.curr(), link.player(), &own) => {
+        None if rally => {
             SystemCursorIcon::Pointer
         }
         _ => SystemCursorIcon::Default,
