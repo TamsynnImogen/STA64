@@ -9,7 +9,7 @@ use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
 use sta_sim::command::Order;
 
 use super::orders::Aim;
-use super::select::{Targetable, own_selection, unit_under};
+use super::select::{Targetable, own_selection, target_seen, unit_under};
 use crate::sim_link::{ContentRes, Selection, SimLink};
 
 // The rule (the originals' group vote) lives in the sim crate, where the
@@ -26,12 +26,13 @@ pub fn cursor(
     selection: Res<Selection>,
     link: Res<SimLink>,
     content: Option<Res<ContentRes>>,
+    local: Option<Res<crate::render::units::LocalPlayer>>,
     mut windows: Query<&mut CursorIcon, With<PrimaryWindow>>,
     mut commands: Commands,
     window: Query<Entity, With<PrimaryWindow>>,
 ) {
     let own = own_selection(&selection, &link);
-    let icon = aim.0.filter(|_| !own.is_empty()).and_then(|a| unit_under(a.cursor, a.ray, &units)).and_then(|t| {
+    let icon = aim.0.filter(|_| !own.is_empty()).and_then(|a| unit_under(a.cursor, a.ray, &units)).filter(|&t| target_seen(link.curr(), local.as_deref().and_then(|l| l.0), t)).and_then(|t| {
         context_order(content.as_deref().map(|c| &*c.0), link.curr(), link.player(), &own, t)
     });
     let want = match icon {

@@ -101,17 +101,36 @@ executables), and the delay of `FailMission` /
   `InAttackMode(unit)` whether it fired within the last 3 s: the view carries no order
   queue, so both are approximations (not measured).
 
+## LUA-30 (sim-backed)
+
+`DestroyCritical` and the five `Destroy<System>` calls (a typed hit of 100000 on a live Craft or Station (read from data: stock shipyard use); for a system also
+the switch-off), `Attack(unit, Vector)` (`Order::AttackPoint`, the A2 point rule), `GetAttackLocation` (the A2
+geometry) and `ReplaceObject` (kill, then a spawn at the same place and owner; pending handle, no heading or
+label carried). Evidence: read from the executable, static; effects in play not measured. See `subsystems.rs`
+and `replace_object.rs`.
+
+## Warp speed (LUA-31)
+
+`SetWarpSpeed(unit, v)` and `ResetWarpSpeed(unit)` send `Edit::WarpSpeed` (the craft's absolute warp
+speed; reset restores the class value); `GetWarpSpeed(unit)` answers the current value and
+`GetImpulseSpeed(unit)` is the Armada II getter under this name. A live craft only: anything else does
+nothing and the getters answer 0. The sim keeps the value between 0 and 1000, saves it per unit, resets it
+(with the impulse speed) at the end of a cineractive, and flies a keyed craft's aligned far leg at it even
+below impulse; at or below a crawl a craft has no warp leg (rule from the executable, static; not measured;
+see `sta_sim::warp_override`). `GetWarpSpeed` reads the value queued this tick, else the view's, else the
+class value; it does not see an edit the host has taken but the sim has not applied yet (one tick).
+
 ## Not available until a sim seam exists
 
 Writes are retained as `Call A1.<Name>` and counted in `unsupported()` (also `Load_Rules` and
 `Load_Action_Scripts`, which load nothing and return 0). `SetRelation(a, b, r)` is not a
 gap: it sends `Edit::SetRelation` (SIM-63; 0 enemy, 1 neutral, 2 ally, a's view of b only). The gaps:
-`SetPosition SetWarpSpeed ResetWarpSpeed PointAt
-Special_Attack Attack(unit, Vector) SetSpecialWeaponAttackInterval
-AttackMainEnemyBase DestroyCritical Destroy*
+`SetPosition PointAt
+Special_Attack SetSpecialWeaponAttackInterval
+AttackMainEnemyBase
 AllowMultipleSpecialWeaponFire SetSpecialForcesFlag TransferFlag LinkWormHoles
 EnableWormholeTravel ObstacleAvoidence PauseSimulation UnpauseSimulation
-EnableLight ReplaceObject RecruitSpecialForces SetRace SetWormholeTeam
+EnableLight RecruitSpecialForces SetRace SetWormholeTeam
 SetOfficers AddOfficers SetTeamCrew AddCrew SetCrew`.
 
 The AI switches `DisableAllAITeams EnableAllAITeams DisableTeam EnableTeam SetIsAITeam` are not
@@ -123,7 +142,7 @@ switches in `unsupported()` as `AI.<call>`. `ResetStrategyCycle` is not exported
 Armada I.
 
 Queries raise an error naming the missing data (also `strength_team_1`, `strength_team_2`, `hot_float_value`): `InStopMode InAttackMode
-OutOfSpecialAttackMode InQueue GetAttackLocation UnderAttack
+OutOfSpecialAttackMode InQueue UnderAttack
 GetAllyShipAttacks GetAllyStationAttacks GetDilithiumOnFreighter
 IsThereARomulanSpyOnShip GetTranswarpExitWormhole
 GetNearestTranswarpGate`.

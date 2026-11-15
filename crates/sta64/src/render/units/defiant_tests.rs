@@ -241,3 +241,80 @@ fn install_visible_resource_nodes_are_pickable_and_minable() {
     }
     assert!(failed.is_empty(), "{failed:#?}");
 }
+
+/// With `STA64_TEST_INSTALL` (an Armada I install; `STA64_TEST_MAP`, default `fed1`): a view-driven game
+/// with a local player, where the map's planet is outside every sensor of the local seat. The planet must
+/// stay in the drawn set, and carry no strategic icon (a view-drawn planet with one turns into a speck and
+/// hides its model once zoomed out). Playtest report: the A1 `fed1` planet was drawn only when zoomed in.
+#[test]
+fn install_unseen_background_planet_stays_drawn_without_an_icon() {
+    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
+        eprintln!("SKIP: set STA64_TEST_INSTALL (an Armada I install)");
+        return;
+    };
+    let map_name = std::env::var("STA64_TEST_MAP").unwrap_or_else(|_| "fed1".into());
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), None).unwrap();
+    let (index, _) = sta_content::OdfIndex::build(&vfs);
+    let (db, _) = sta_content::ContentDb::load(&vfs, &index).unwrap();
+    let db = Arc::new(db);
+    let Some(Ok(data)) = vfs.read(&format!("bzn/{map_name}.bzn")) else {
+        eprintln!("SKIP: no map {map_name} in this install");
+        return;
+    };
+    let bzn = sta_bzn::parse(&data).unwrap();
+    let side = crate::map::build_sim(&bzn, &map_name, &db, &index, &vfs, Some(0), None);
+    let mut view = (*sta_sim::WorldSource::view(&side.sim)).clone();
+    let planets: Vec<_> = view
+        .units
+        .iter()
+        .filter(|u| u.owner == sta_sim::world::NEUTRAL && db.unit(u.def).is_some_and(|d| d.class.0.eq_ignore_ascii_case("planet_obj")))
+        .map(|u| u.id)
+        .collect();
+    assert!(!planets.is_empty(), "{map_name} has a planet_obj");
+    // Nobody senses it: the visibility lists keep everything but the planets (a list is needed, an empty one means omniscient).
+    if view.visibility.is_empty() {
+        view.visibility = vec![(PlayerId(0), view.units.iter().map(|u| u.id).collect())];
+    }
+    for (_, ids) in &mut view.visibility {
+        ids.retain(|id| !planets.contains(id));
+    }
+    assert!(view.visible_to(PlayerId(0)).iter().all(|u| !planets.contains(&u.id)));
+
+    struct Frozen(Arc<sta_sim::WorldView>);
+    impl sta_sim::WorldSource for Frozen {
+        fn step(&mut self, _: &[sta_sim::command::Command]) -> sta_sim::TickOutput {
+            sta_sim::TickOutput { view: self.0.clone(), events: vec![] }
+        }
+        fn view(&self) -> Arc<sta_sim::WorldView> {
+            self.0.clone()
+        }
+    }
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .add_plugins(AssetPlugin::default())
+        .init_asset::<Mesh>()
+        .init_asset::<StandardMaterial>()
+        .init_asset::<Image>()
+        .insert_resource(Mounted(vfs))
+        .insert_resource(ContentRes(db.clone()))
+        .insert_resource(SpriteTables(Arc::new(SpriteTable::default())))
+        .init_resource::<crate::render::moons::MoonVariants>()
+        .init_resource::<TextureCache>()
+        .init_resource::<PartCache>()
+        .init_resource::<UnitModels>()
+        .init_resource::<SimEntities>()
+        .insert_resource(LocalPlayer(Some(PlayerId(0))))
+        .insert_resource(crate::sim_link::SimLink::new(Box::new(Frozen(Arc::new(view))), Box::new(sta_sim::command::LocalRouter::new()), PlayerId(0)));
+    app.world_mut().run_system_once(sync_units).unwrap();
+    app.world_mut().flush();
+    app.world_mut().run_system_once(attach_models).unwrap();
+    app.world_mut().flush();
+    app.world_mut().run_system_once(crate::render::strategic::ensure_icons).unwrap();
+    app.world_mut().flush();
+    let drawn = app.world().resource::<SimEntities>().0.clone();
+    for id in planets {
+        let e = *drawn.get(&id).unwrap_or_else(|| panic!("the unseen planet {id:?} was dropped from the drawn set"));
+        assert!(app.world().get::<crate::render::strategic::Strategic>(e).is_none(), "planet {id:?} got a strategic icon");
+        assert!(app.world().get::<crate::render::strategic::NoIcon>(e).is_some());
+    }
+}

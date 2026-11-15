@@ -52,8 +52,6 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         e.edit("SetPosition", sta_sim::command::Edit::Position(unit.id, to))?;
         Ok(Value::Nil)
     })?)?;
-    table.set("SetWarpSpeed", gap_write(lua, env, "SetWarpSpeed", &["hf"], "no warp-speed seam in the sim")?)?;
-    table.set("ResetWarpSpeed", gap_write(lua, env, "ResetWarpSpeed", &["h"], "no warp-speed seam in the sim")?)?;
     // Patrol and SearchAndDestroy (SIM-56): the Armada II rules; the Armada I
     // executable's script `Patrol` also sets the path's loop type and issues
     // GO (read, static); its command handlers are not read.

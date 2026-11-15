@@ -112,6 +112,24 @@ fn one<C: Component>(app: &mut App) -> Entity {
     app.world_mut().query_filtered::<Entity, With<C>>().single(app.world()).unwrap()
 }
 
+/// A cutscene is no time for the HUD's buttons: a press on a command cell queues nothing
+/// (and arms nothing) while it runs, and works again after it.
+#[test]
+fn a_press_does_nothing_during_a_cutscene() {
+    let mut app = app(content(None), &[1]);
+    app.world_mut().insert_resource(crate::ui::presentation::CineractiveState { on: true, skippable: false });
+    let stop = cell(&mut app, |a| *a == Act::Stop);
+    press(&mut app, stop);
+    assert!(queued(&mut app).is_empty(), "no order from a button during a cutscene");
+    let open = cell(&mut app, |a| *a == Act::OpenBuild);
+    press(&mut app, open);
+    assert_eq!(app.world().resource::<HudState>().page, Page::default(), "no page change either");
+    app.world_mut().resource_mut::<crate::ui::presentation::CineractiveState>().on = false;
+    let stop = cell(&mut app, |a| *a == Act::Stop);
+    press(&mut app, stop);
+    assert!(!queued(&mut app).is_empty(), "the same press works afterwards");
+}
+
 #[test]
 fn the_panels_follow_the_selection_in_three_heights() {
     let mut app = app(content(None), &[]);

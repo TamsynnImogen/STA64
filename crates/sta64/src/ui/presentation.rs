@@ -127,9 +127,18 @@ pub enum ScriptReply {
 #[derive(Resource, Default, Debug)]
 pub struct ScriptSounds {
     pending: Vec<(u32, String, Option<f32>)>,
+    /// The sim tick last seen, to notice a restart in place (the tick going back).
+    last_tick: u64,
 }
 
 impl ScriptSounds {
+    /// Notes the sim's tick; true when it went back, which is a restart of the mission in place.
+    fn restarted(&mut self, tick: u64) -> bool {
+        let back = tick < self.last_tick;
+        self.last_tick = tick;
+        back
+    }
+
     /// The ids of the messages still playing (for tests).
     #[cfg(test)]
     pub fn playing(&self) -> Vec<u32> {
@@ -182,6 +191,19 @@ pub struct PresentationLog(pub Vec<(u64, Presentation)>);
 pub struct CineractiveState {
     pub on: bool,
     pub skippable: bool,
+}
+
+/// The one "a cutscene is running" predicate: the announcement and acknowledgement voices
+/// (`audio::voices`), the "construction complete" advisor lines (`audio::sfx`), the event
+/// log's notices (`ui::notices::events_to_notices`) and the player's selection and orders
+/// (`input`, the HUD's buttons) all ask it, so those cannot disagree. (The notice and HUD
+/// roots' visibility follow `CineractiveState.on` directly, in `hide_notices_in_cineractive`
+/// and `game::flow::show_match_ui`.) True while a script's cineractive is on.
+/// Fleet Operations Roots' intros declare theirs the same way (`Cineractive.active`), so no
+/// separate input-lock call exists to honour; whether the original also locks selection is
+/// not measured (Cedric's playtest reports ships selectable and speaking in that intro).
+pub fn cutscene_running(cine: Option<Res<CineractiveState>>) -> bool {
+    cine.is_some_and(|c| c.on)
 }
 
 /// Where a title goes: the canvas it is placed in and its top left.
@@ -463,28 +485,36 @@ pub(crate) fn consume(
             Presentation::Movie { .. } | Presentation::StopMovie | Presentation::Shot { .. } | Presentation::CameraOffset { .. } => {}
             Presentation::Call { name, .. } if name == "Camera.center" => {}
             Presentation::Call { name, .. } if matches!(name.split_once('.').map_or("", |x| x.1), "CenterCamera" | "SetCameraZoom" | "CineractiveConstantSpeed" | "CineractiveCameraOffset" | "CineractiveShot") => {}
+            // A2 `PlayMusic(script, file, dont_wait)`: the engine's audio overlay numbers music and
+            // voice lines from one counter, and a wait on the track ends with it (read from the
+            // executable, static). STA64 plays the track as one more script sound (the A1 route),
+            // so the wait ends with the clip instead of never.
+            Presentation::Call { name, args } if name == "A2.PlayMusic" => {
+                if let [Arg::Int(id), Arg::Text(file)] = args.as_slice() && let Ok(id) = u32::try_from(*id) {
+                    start_script_sound(id, file, &mut play, &mut sounds, reports.is_some(), &mut replies);
+                } else {
+                    unhandled.note(name);
+                }
+            }
             Presentation::Call { name, .. } => {
                 unhandled.note(name);
             }
             // A script's voice or message sound goes to the audio layer by name (the resolver
             // finds `Data/sounds/...` by stem, events by name); the host answers the script.
             Presentation::Sound { id, name, .. } => {
-                // The UI bus: the voice bus drops a line while another plays (a unit's acknowledgement,
-                // or the script's previous message).
-                play.write(PlaySound { name: name.clone(), at: None, bus: Bus::Ui });
-                // The message ends when its clip does (`sound_replies`); with no audio layer to
-                // say how long it is, at once.
-                if reports.is_some() {
-                    sounds.pending.push((*id, name.clone(), None));
-                } else {
-                    replies.write(ScriptReply::SoundDone { id: *id });
-                }
+                start_script_sound(*id, name, &mut play, &mut sounds, reports.is_some(), &mut replies);
             }
-            // `Media:stopSounds()` stops every script sound: that bus (not per sound). A stopped
-            // message is over for the script, which has already forgotten it.
+            // `StopAudioMessage(id)` / `Media:stopSounds()` end one message. The engine ignores an id
+            // that is no longer playing, so a stop of a finished (or never started) message does
+            // nothing: it must not cut another line. The mixer stops whole buses, not single clips,
+            // so the bus is cut when the stopped message was the last one playing; while others play,
+            // the message is only over for the script (a track's tail may then overlap the next).
             Presentation::StopSound { id } => {
-                stop.write(StopSounds { bus: Bus::Ui });
+                let live = sounds.pending.iter().any(|p| p.0 == *id);
                 sounds.pending.retain(|p| p.0 != *id);
+                if live && sounds.pending.is_empty() {
+                    stop.write(StopSounds { bus: Bus::Ui });
+                }
             }
             Presentation::Music { .. } => {
                 unhandled.note("Music");
@@ -505,10 +535,37 @@ pub(crate) fn consume(
     }
 }
 
+/// Starts a script's sound (a voice line, or an A2 music track) on the UI bus; the script's wait on
+/// it ends when the clip does (`sound_replies`), at once when no audio layer says how long it is.
+fn start_script_sound(
+    id: u32,
+    name: &str,
+    play: &mut MessageWriter<PlaySound>,
+    sounds: &mut ScriptSounds,
+    audio_layer: bool,
+    replies: &mut MessageWriter<ScriptReply>,
+) {
+    // The UI bus: the voice bus drops a line while another plays (a unit's acknowledgement,
+    // or the script's previous message).
+    play.write(PlaySound { name: name.to_owned(), at: None, bus: Bus::Ui });
+    if audio_layer {
+        sounds.pending.push((id, name.to_owned(), None));
+    } else {
+        replies.write(ScriptReply::SoundDone { id });
+    }
+}
+
 /// Ends the mission messages: the audio layer says how long each clip is when it takes the request
 /// ([`crate::audio::SoundStarted`], matched by name in request order), and the message is done
 /// that long after, in real time, as the player hears it. A clip that did not resolve ends at once.
-fn sound_replies(mut started: MessageReader<crate::audio::SoundStarted>, time: Res<Time<Real>>, mut sounds: ResMut<ScriptSounds>, mut out: MessageWriter<ScriptReply>) {
+fn sound_replies(
+    mut started: MessageReader<crate::audio::SoundStarted>,
+    time: Res<Time<Real>>,
+    mut sounds: ResMut<ScriptSounds>,
+    mut out: MessageWriter<ScriptReply>,
+) {
+    // Real time, as the player hears the clip: the audio is not paused with the game, and a paused
+    // sim holds the script anyway.
     let dt = time.delta_secs();
     for p in &mut sounds.pending {
         if let Some(left) = p.2.as_mut() {
@@ -530,6 +587,33 @@ fn sound_replies(mut started: MessageReader<crate::audio::SoundStarted>, time: R
         }
         !done
     });
+}
+
+/// A restart of the mission in place (the sim's tick going back) drops the messages of the run
+/// before it: their ids restart at 1, so a stale entry would end the new run's wait, and keep a
+/// later stop from cutting the bus. What still plays is cut.
+fn clear_sounds_on_restart(link: Option<Res<crate::sim_link::SimLink>>, mut sounds: ResMut<ScriptSounds>, mut stop: MessageWriter<StopSounds>) {
+    let Some(link) = link else { return };
+    if sounds.restarted(link.curr().tick) {
+        sounds.pending.clear();
+        stop.write(StopSounds { bus: Bus::Ui });
+    }
+}
+
+/// A skip or a release of the cineractive ends what the script was playing: the UI bus is cut
+/// and every pending message is over for the script, so nothing plays on into the game.
+fn end_messages_on_skip(
+    mut replies: ParamSet<(MessageReader<ScriptReply>, MessageWriter<ScriptReply>)>,
+    mut sounds: ResMut<ScriptSounds>,
+    mut stop: MessageWriter<StopSounds>,
+) {
+    if !replies.p0().read().any(|r| matches!(r, ScriptReply::CineractiveSkipped | ScriptReply::CineractiveReleased)) {
+        return;
+    }
+    stop.write(StopSounds { bus: Bus::Ui });
+    for (id, _, _) in std::mem::take(&mut sounds.pending) {
+        replies.p1().write(ScriptReply::SoundDone { id });
+    }
 }
 
 /// The notices are hidden over a cutscene (the HUD and radar roots follow the same state in
@@ -827,6 +911,7 @@ fn reset_presentation(
     mut sounds: ResMut<ScriptSounds>,
 ) {
     sounds.pending.clear();
+    sounds.last_tick = 0;
     titles.items.clear();
     // `Titles::default()` is not dirty, so the layer would keep what it drew.
     titles.dirty = true;
@@ -861,7 +946,7 @@ impl Plugin for PresentationPlugin {
             .add_systems(Startup, spawn_layers.run_if(resource_exists::<Theme>))
             .add_systems(
                 Update,
-                (consume, sound_replies, hide_notices_in_cineractive, run_clock, movie_replies, skip_cineractive, apply_replies, toggle_objectives, queue_messages, ok_pressed, draw_titles.run_if(resource_exists::<Theme>), draw_fade, draw_panel.run_if(resource_exists::<Theme>)).chain().in_set(GameSet::Ui),
+                (clear_sounds_on_restart, consume, sound_replies, hide_notices_in_cineractive, run_clock, movie_replies, skip_cineractive, apply_replies, end_messages_on_skip, toggle_objectives, queue_messages, ok_pressed, draw_titles.run_if(resource_exists::<Theme>), draw_fade, draw_panel.run_if(resource_exists::<Theme>)).chain().in_set(GameSet::Ui),
             );
     }
 }
@@ -931,13 +1016,151 @@ mod tests {
 
     #[test]
     fn a_script_sound_reaches_the_audio_layer_and_stop_sounds_stops_it() {
+        use crate::audio::{ReportsSoundLengths, SoundStarted};
         let mut app = app();
+        app.init_resource::<ReportsSoundLengths>().add_message::<SoundStarted>();
         send(&mut app, Presentation::Sound { id: 1, name: "Voice.mp3".into(), at: None });
         let heard: Vec<String> = app.world_mut().resource_mut::<Messages<PlaySound>>().drain().map(|m| m.name).collect();
         assert_eq!(heard, ["Voice.mp3"]);
         send(&mut app, Presentation::StopSound { id: 1 });
         assert_eq!(app.world_mut().resource_mut::<Messages<StopSounds>>().drain().count(), 1);
         assert_eq!(app.world().resource::<Unhandled>().count("Sound"), 0);
+    }
+
+    /// Plays `name` (as `id`) through the host and tells it the clip is `length` seconds long.
+    fn start(app: &mut App, p: Presentation, name: &str, length: f32) {
+        use crate::audio::SoundStarted;
+        send(app, p);
+        app.world_mut().write_message(SoundStarted { name: name.into(), bus: Bus::Ui, seconds: Some(length) });
+        app.update();
+    }
+
+    fn a2_music(id: i64, file: &str) -> Presentation {
+        Presentation::Call { name: "A2.PlayMusic".into(), args: vec![Arg::Int(id), Arg::Text(file.into())] }
+    }
+
+    fn bus_cuts(app: &mut App) -> usize {
+        app.world_mut().resource_mut::<Messages<StopSounds>>().drain().count()
+    }
+
+    #[test]
+    fn stopping_a_music_track_does_not_cut_the_voice_line_that_is_playing() {
+        use crate::audio::{ReportsSoundLengths, SoundStarted};
+        let mut app = app();
+        frozen(&mut app);
+        app.init_resource::<ReportsSoundLengths>().add_message::<SoundStarted>();
+        // The music is message 1, a long voice line message 2 (the A2 counter is shared).
+        start(&mut app, a2_music(1, "clip_t.wav"), "clip_t.wav", 10.0);
+        start(&mut app, Presentation::Sound { id: 2, name: "clip_b.wav".into(), at: None }, "clip_b.wav", 20.0);
+        let _ = bus_cuts(&mut app);
+        send(&mut app, Presentation::StopSound { id: 1 });
+        assert_eq!(bus_cuts(&mut app), 0, "the stop of the track must not stop the UI bus the voice line plays on");
+        assert_eq!(app.world().resource::<ScriptSounds>().playing(), [2], "the voice line is still playing");
+        assert!(replies(&mut app).is_empty());
+        // The voice line is the last one playing now: stopping it stops the bus.
+        send(&mut app, Presentation::StopSound { id: 2 });
+        assert_eq!(bus_cuts(&mut app), 1);
+        assert!(app.world().resource::<ScriptSounds>().playing().is_empty());
+    }
+
+    #[test]
+    fn a_skip_cuts_the_ui_bus_and_ends_every_pending_message() {
+        use crate::audio::{ReportsSoundLengths, SoundStarted};
+        let mut app = app();
+        frozen(&mut app);
+        app.init_resource::<ReportsSoundLengths>().add_message::<SoundStarted>();
+        start(&mut app, a2_music(1, "clip_t.wav"), "clip_t.wav", 10.0);
+        start(&mut app, Presentation::Sound { id: 2, name: "clip_a.wav".into(), at: None }, "clip_a.wav", 20.0);
+        let _ = bus_cuts(&mut app);
+        let _ = replies(&mut app);
+        app.world_mut().write_message(ScriptReply::CineractiveSkipped);
+        app.update();
+        assert_eq!(bus_cuts(&mut app), 1, "the skip cuts the bus the messages play on");
+        let done = replies(&mut app);
+        assert!(done.contains(&ScriptReply::SoundDone { id: 1 }) && done.contains(&ScriptReply::SoundDone { id: 2 }), "{done:?}");
+        assert!(app.world().resource::<ScriptSounds>().playing().is_empty());
+        // The script then stops its current line: nothing is left to stop, nothing is cut twice.
+        send(&mut app, Presentation::StopSound { id: 2 });
+        assert_eq!(bus_cuts(&mut app), 0);
+    }
+
+    #[test]
+    fn a_restart_in_place_drops_the_old_runs_messages() {
+        use crate::audio::{ReportsSoundLengths, SoundStarted};
+        use crate::sim_link::SimLink;
+        use sta_sim::command::LocalRouter;
+        use sta_sim::WorldSource;
+        let link_at = |ticks: u32| {
+            let mut sim = sta_sim::Sim::new(1);
+            for _ in 0..ticks {
+                sim.step(&[]);
+            }
+            SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), sta_core::PlayerId(0))
+        };
+        let mut app = app();
+        frozen(&mut app);
+        app.init_resource::<ReportsSoundLengths>().add_message::<SoundStarted>().insert_resource(link_at(5));
+        start(&mut app, Presentation::Sound { id: 1, name: "clip_c.wav".into(), at: None }, "clip_c.wav", 20.0);
+        let _ = bus_cuts(&mut app);
+        let _ = replies(&mut app);
+        // The mission restarts in place: the sim's clock goes back.
+        app.insert_resource(link_at(0));
+        app.update();
+        assert!(app.world().resource::<ScriptSounds>().playing().is_empty(), "the old run's message is gone");
+        assert_eq!(bus_cuts(&mut app), 1, "and what still played is cut");
+        // The new run's message 1 is not ended by anything left of the old one.
+        start(&mut app, Presentation::Sound { id: 1, name: "clip_d.wav".into(), at: None }, "clip_d.wav", 20.0);
+        assert!(replies(&mut app).is_empty());
+        assert_eq!(app.world().resource::<ScriptSounds>().playing(), [1]);
+    }
+
+    #[test]
+    fn a_wait_on_a_message_ends_with_its_clip_in_real_time_even_while_the_game_is_paused() {
+        use crate::audio::{ReportsSoundLengths, SoundStarted};
+        let mut app = app();
+        frozen(&mut app);
+        app.insert_resource(crate::clock::AnimClock::new(crate::clock::ClockMode::Wall, 0));
+        app.init_resource::<ReportsSoundLengths>().add_message::<SoundStarted>();
+        start(&mut app, Presentation::Sound { id: 4, name: "clip_a.wav".into(), at: None }, "clip_a.wav", 5.0);
+        app.world_mut().resource_mut::<crate::clock::AnimClock>().set_paused(true);
+        step(&mut app, 6.0);
+        // The audio is not paused with the game, so the clip has ended and the wait with it (the paused sim holds the script).
+        assert_eq!(replies(&mut app), [ScriptReply::SoundDone { id: 4 }]);
+    }
+
+    #[test]
+    fn stopping_a_message_that_has_ended_does_nothing() {
+        use crate::audio::{ReportsSoundLengths, SoundStarted};
+        let mut app = app();
+        frozen(&mut app);
+        app.init_resource::<ReportsSoundLengths>().add_message::<SoundStarted>();
+        start(&mut app, Presentation::Sound { id: 3, name: "short.wav".into(), at: None }, "short.wav", 1.0);
+        start(&mut app, Presentation::Sound { id: 4, name: "long.wav".into(), at: None }, "long.wav", 60.0);
+        step(&mut app, 1.5);
+        assert_eq!(replies(&mut app), [ScriptReply::SoundDone { id: 3 }], "the short clip is over");
+        let _ = bus_cuts(&mut app);
+        // A skip stops the "current" message, which has ended: the engine ignores the id.
+        send(&mut app, Presentation::StopSound { id: 3 });
+        assert_eq!(bus_cuts(&mut app), 0);
+        assert_eq!(app.world().resource::<ScriptSounds>().playing(), [4], "the other line plays on");
+    }
+
+    #[test]
+    fn an_a2_music_wait_ends_with_its_clip() {
+        use crate::audio::{ReportsSoundLengths, SoundStarted};
+        let mut app = app();
+        frozen(&mut app);
+        app.init_resource::<ReportsSoundLengths>().add_message::<SoundStarted>();
+        send(&mut app, a2_music(14, "clip_t.wav"));
+        let heard: Vec<String> = app.world_mut().resource_mut::<Messages<PlaySound>>().drain().map(|m| m.name).collect();
+        assert_eq!(heard, ["clip_t.wav"], "the track is played, not left unhandled");
+        assert_eq!(app.world().resource::<Unhandled>().count("A2.PlayMusic"), 0);
+        app.world_mut().write_message(SoundStarted { name: "clip_t.wav".into(), bus: Bus::Ui, seconds: Some(10.0) });
+        app.update();
+        step(&mut app, 9.0);
+        assert!(replies(&mut app).is_empty(), "a script that waits for its track is still waiting at 9 s");
+        step(&mut app, 1.5);
+        assert_eq!(replies(&mut app), [ScriptReply::SoundDone { id: 14 }], "and is released when the clip has played");
     }
 
     #[test]

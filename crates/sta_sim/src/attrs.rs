@@ -46,6 +46,10 @@ pub struct AttrsView {
     /// override), ascending id; absence means the definition's value.
     #[serde(default)]
     pub impulse: Vec<(EntityId, Fixed)>,
+    /// Craft whose warp speed differs from their definition's (LUA-31 scripted
+    /// override), ascending id; absence means the definition's value.
+    #[serde(default)]
+    pub warp: Vec<(EntityId, Fixed)>,
 }
 
 /// One seat's derived team numbers.
@@ -106,6 +110,7 @@ impl Attrs {
             seats: Vec::new(),
             special_forces: Vec::new(),
             impulse: Vec::new(),
+            warp: Vec::new(),
         }
     }
 
