@@ -167,6 +167,10 @@ pub(super) fn build(
     let container = commands
         .spawn((
             CinematicPanel,
+            // The HUD root is hidden over a cineractive (`game::flow::show_match_ui`), and the
+            // script plays its clip inside one: the panel alone stays visible then, whatever its
+            // parent is (the panel is drawn only while a clip plays in it).
+            Visibility::Visible,
             Pickable::IGNORE,
             Node { display: Display::None, position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
             GlobalZIndex(8),
@@ -391,6 +395,41 @@ cinematicDisplayArea = 20 30 360 240
         // The panel takes no pointer: nothing under the HUD's picking is blocked by it.
         let blocking = app.world_mut().query_filtered::<&Pickable, Or<(With<CinematicPanel>, With<CinematicPicture>, With<ImageNode>)>>().iter(app.world()).filter(|p| p.should_block_lower).count();
         assert_eq!(blocking, 0);
+    }
+
+    /// What Bevy resolves for `e`: the nearest `Visible`/`Hidden` on it or above it.
+    fn effectively_visible(app: &App, mut e: Entity) -> bool {
+        loop {
+            match app.world().get::<Visibility>(e) {
+                Some(Visibility::Visible) => return true,
+                Some(Visibility::Hidden) => return false,
+                _ => {}
+            }
+            match app.world().get::<ChildOf>(e) {
+                Some(p) => e = p.parent(),
+                None => return true,
+            }
+        }
+    }
+
+    #[test]
+    fn the_panel_is_visible_while_a_cineractive_hides_the_rest_of_the_hud() {
+        for (profile, gui, kind) in [(UiProfile::Armada2, Some(layout_of(CFG)), PanelKind::Cinematic), (UiProfile::Lcars, None, PanelKind::Viewscreen)] {
+            let mut app = hud_app(profile, gui);
+            assert_eq!(app.world().resource::<PanelScreen>().kind, kind);
+            queue_panel_movie(&mut app);
+            app.update();
+            let root = app.world_mut().query_filtered::<Entity, With<HudRoot>>().single(app.world()).unwrap();
+            let panel = app.world_mut().query_filtered::<Entity, With<CinematicPanel>>().single(app.world()).unwrap();
+            // Outside a cineractive the HUD is shown, and so is the panel.
+            assert!(effectively_visible(&app, root) && effectively_visible(&app, panel));
+            // Over a cineractive `show_match_ui` hides the root; the panel with its clip stays.
+            *app.world_mut().get_mut::<Visibility>(root).unwrap() = Visibility::Hidden;
+            app.update();
+            assert!(!effectively_visible(&app, root), "the HUD root is hidden");
+            assert!(effectively_visible(&app, panel), "{kind:?}: the clip's panel stays visible");
+            assert_eq!(container_display(&mut app), Some(Display::Flex));
+        }
     }
 
     #[test]
