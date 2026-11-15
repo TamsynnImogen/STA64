@@ -13,8 +13,10 @@
 //!   picture fitted to the window. One at a time; further requests wait their
 //!   turn in order. Esc, Space, Enter or a click skips a `skippable` movie.
 //! * [`MovieTarget::Panel`]: frames are written into the given image, for the
-//!   bridge viewscreen (MED-04) or any UI panel to show. [`PanelScreen`] holds
-//!   the image a mission's in-panel movie goes to.
+//!   HUD's cinematic window or viewscreen (UI-39) or any UI panel to show.
+//!   [`PanelScreen`] holds the image a mission's in-panel movie goes to and the
+//!   [`PanelKind`] that shows it. Space skips a skippable panel movie
+//!   ([`Movies::skip_panel`]); play goes on around it.
 //!
 //! # Threads and sync
 //!
@@ -102,7 +104,7 @@ pub struct PlayMovie {
     pub id: MovieId,
     pub name: String,
     pub target: MovieTarget,
-    /// The player may skip it (Esc and the like); only for fullscreen.
+    /// The player may skip it (Esc and the like fullscreen, Space in a panel).
     pub skippable: bool,
 }
 
@@ -143,11 +145,23 @@ pub(crate) struct MovieOpener(pub Box<OpenFn>);
 
 pub(crate) type OpenFn = dyn Fn(&str) -> Result<locate::Opened, String> + Send + Sync;
 
-/// The image a mission's in-panel movie (the bridge viewscreen) is written to. The display
-/// that shows it (MED-04 / the bridge) inserts this resource; without one, a mission's
-/// in-panel movie plays full screen.
+/// Which HUD panel a [`PanelScreen`] feeds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PanelKind {
+    /// The stock HUD's cinematic window (`cinematic*Area` of the gui cfg).
+    Cinematic,
+    /// The viewscreen panel of the generic (LCARS) HUD, where the Armada I bridge clip goes.
+    Viewscreen,
+}
+
+/// The image a mission's in-panel movie is written to, and the kind of panel that shows it.
+/// The HUD panel that shows it inserts this resource (and removes it when it has no panel
+/// rectangle); without one, a mission's in-panel movie plays full screen.
 #[derive(Resource, Clone)]
-pub struct PanelScreen(pub Handle<Image>);
+pub struct PanelScreen {
+    pub image: Handle<Image>,
+    pub kind: PanelKind,
+}
 
 /// The player a movie is fitted into: its picture's size, to place it in the window.
 #[derive(Component)]
@@ -198,12 +212,29 @@ pub struct Movies {
     fullscreen: Option<Player>,
     panels: Vec<Player>,
     skip: bool,
+    skip_panel: bool,
 }
 
 impl Movies {
     /// A movie is on screen or waiting for the screen.
     pub fn busy(&self) -> bool {
         self.fullscreen.is_some() || !self.pending.is_empty() || !self.panels.is_empty()
+    }
+
+    /// A movie is playing in a panel, or waits for one.
+    pub fn panel_busy(&self) -> bool {
+        !self.panels.is_empty() || self.pending.iter().any(|p| matches!(p.target, MovieTarget::Panel(_)))
+    }
+
+    /// A request waiting for the decoder, as a HUD test needs one without a movie file.
+    #[cfg(test)]
+    pub(crate) fn queue_for_test(&mut self, request: PlayMovie) {
+        self.pending.push_back(request);
+    }
+
+    /// Ask for the skippable panel movies to end (the panel's own click or key).
+    pub fn skip_panel(&mut self) {
+        self.skip_panel = true;
     }
 
     /// A fullscreen movie is playing or queued.
@@ -229,7 +260,7 @@ impl Plugin for MediaPlugin {
             .add_plugins(campaign::CampaignMoviesPlugin)
             .init_resource::<Movies>()
             .init_resource::<MovieIds>()
-            .add_systems(PreUpdate, skip_keys.after(InputSystems))
+            .add_systems(PreUpdate, (skip_keys, skip_panel_key).after(InputSystems))
             .add_systems(
                 Update,
                 (mission::bridge, intake, drive, fit_overlays, duck_music).chain().in_set(GameSet::Ui),
@@ -275,6 +306,16 @@ fn skip_keys(
                 movies.skip = true;
             }
         }
+    }
+}
+
+/// Space skips a skippable movie in a panel. The key is not taken: play goes on around the panel.
+fn skip_panel_key(keys: Option<Res<ButtonInput<KeyCode>>>, mut movies: ResMut<Movies>) {
+    if movies.panels.is_empty() {
+        return;
+    }
+    if keys.is_some_and(|k| k.just_pressed(KeyCode::Space)) {
+        movies.skip_panel = true;
     }
 }
 
@@ -354,6 +395,7 @@ fn drive(
     launch(&mut movies, &vfs, &opener, &mut images, &mut commands, &mut done);
 
     let skip = std::mem::take(&mut movies.skip);
+    let skip_panel = std::mem::take(&mut movies.skip_panel);
     let mut ended: Vec<(Player, MovieOutcome)> = Vec::new();
     if let Some(mut p) = movies.fullscreen.take() {
         let skipped = skip && p.skippable;
@@ -363,7 +405,8 @@ fn drive(
         }
     }
     for mut p in std::mem::take(&mut movies.panels) {
-        match step(&mut p, dt, false, &mut images, mixer.as_deref_mut()) {
+        let skipped = skip_panel && p.skippable;
+        match step(&mut p, dt, skipped, &mut images, mixer.as_deref_mut()) {
             Some(o) => ended.push((p, o)),
             None => movies.panels.push(p),
         }
