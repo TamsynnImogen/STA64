@@ -64,7 +64,7 @@ pub struct HudConfig {
     pub gui: Option<GuiLayout>,
     /// Screen width over height; kept from the window when there is one.
     pub aspect: f32,
-    /// How the stock-look HUD sits on a window wider than its sheet (the player's
+    /// How the stock-look HUD sits on a window whose aspect differs from its sheet (the player's
     /// `hud_layout` setting, kept in step by `fit_screen`). The LCARS HUD ignores it.
     pub fit: stock::layout::HudFit,
     /// Scale the UI to the primary window (`UiScale` = height / 1080). Off

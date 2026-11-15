@@ -37,14 +37,15 @@ impl PaletteLayout {
 /// The canvas the palette origin keys (`popupPaletteXA`, `popupPaletteYA`) are authored on.
 const PALETTE_REFERENCE: Vec2 = Vec2::new(1600.0, 1200.0);
 
-/// How the stock HUD sits on a window that is not the sheet's aspect (ADR 0008 H7; the
+/// How the stock HUD sits on a window whose aspect is not the sheet's, wider or narrower (ADR 0008 H7; the
 /// player's `hud_layout` setting). Governs the stock-look HUD only.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum HudFit {
     /// H2: one factor for both axes, centred; the sides belong to the world.
     #[default]
     Centred,
-    /// The sheet's canvas scaled to the whole window per axis, as the original engines do.
+    /// The sheet's canvas scaled to the whole window per axis, as the original engines do
+    /// (this changes the HUD on any window whose aspect is not the sheet's, wider or narrower).
     Stretched,
 }
 
@@ -65,7 +66,10 @@ impl HudFit {
         }
     }
 
+    /// Case-insensitive; `centered` is accepted as `centred`.
     pub fn from_key(key: &str) -> Option<Self> {
+        let key = key.trim().to_ascii_lowercase();
+        let key = if key == "centered" { "centred" } else { key.as_str() };
         Self::ALL.into_iter().find(|fit| fit.key() == key)
     }
 }
@@ -650,6 +654,7 @@ mod tests {
             assert_eq!(HudFit::from_key(fit.key()), Some(fit));
         }
         assert_eq!(HudFit::from_key("anchored"), None);
+        assert_eq!(HudFit::from_key("Centered"), Some(HudFit::Centred));
         assert_eq!(HudFit::default(), HudFit::Centred);
     }
 

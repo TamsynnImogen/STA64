@@ -10,8 +10,8 @@
 //! - the options screen's volumes (`master`, `music`, `effects`, `voice`, `0..=100`),
 //!   `scroll_speed`, `window_size`, `fullscreen`, `vsync`, `show_fps` ([`Settings`]);
 //! - optional graphics choices (`msaa`, `graphics_detail`, `shadows`, `bloom`);
-//! - `hud_layout = centred | stretched`, how the stock-look HUD sits on a wide window
-//!   (ADR 0008 H7; unknown or missing: centred);
+//! - `hud_layout = centred | stretched`, how the stock-look HUD sits on a window that is not its sheet's aspect
+//!   (ADR 0008 H7; case-insensitive, `centered` accepted; unknown or missing: centred);
 //! - `player_name` and `relay`, the multiplayer name and relay address last used (UI-11);
 //! - `intro = true | false` ([`IntroSettings`]);
 //! - `version = 1`.
@@ -770,7 +770,7 @@ mod tests {
     }
 
     #[test]
-    fn hud_layout_round_trips_and_unknown_or_missing_is_centred() {
+    fn hud_layout_round_trips_ignores_case_and_unknown_or_missing_is_centred() {
         use crate::ui::hud::stock::layout::HudFit;
         let (old, warnings) = Stored::parse("fullscreen = true\n");
         assert!(warnings.is_empty());
@@ -787,8 +787,11 @@ mod tests {
         assert_eq!(bad.settings.hud_fit, HudFit::Centred);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("bad value"));
-        let (shouted, _) = Stored::parse("hud_layout = stretched\n");
-        assert_eq!(shouted.settings.hud_fit, HudFit::Stretched);
+        for (text, want) in [("STRETCHED", HudFit::Stretched), ("Centered", HudFit::Centred), (" centred ", HudFit::Centred)] {
+            let (parsed, warnings) = Stored::parse(&format!("hud_layout = {text}\n"));
+            assert!(warnings.is_empty(), "{text}: {warnings:?}");
+            assert_eq!(parsed.settings.hud_fit, want, "{text}");
+        }
     }
 
     #[test]

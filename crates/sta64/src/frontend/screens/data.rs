@@ -432,7 +432,7 @@ pub struct Settings {
     pub bloom: Option<bool>,
     /// Explicit LCARS presentation override; false leaves the game/mod default in control.
     pub lcars_ui: bool,
-    /// How the stock-look HUD sits on a window wider than its sheet (ADR 0008 H7).
+    /// How the stock-look HUD sits on a window whose aspect differs from its sheet (ADR 0008 H7).
     pub hud_fit: crate::ui::hud::stock::layout::HudFit,
     /// The multiplayer player name last used (UI-11).
     pub player_name: String,

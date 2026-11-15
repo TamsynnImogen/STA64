@@ -50,6 +50,7 @@ pub enum GraphicsPart {
     DisplayDevice,
     Resolution,
     AntiAliasing,
+    HudLayout,
     Renderer,
     Monitor,
     Toggles,
@@ -212,19 +213,24 @@ pub(super) fn body(c: &mut Box_, t: &Theme, s: &Settings, info: &GraphicsInfo, w
             });
         });
 
-        c.spawn(Node { width: Val::Px(selector_w), min_width: Val::Px(0.0), flex_direction: FlexDirection::Column, ..default() })
-            .with_children(|f| {
-                f.spawn(caption(t, &tr("HUD layout")));
-                let fits = crate::ui::hud::stock::layout::HudFit::ALL.map(|fit| tr(fit.label()));
-                let refs: Vec<_> = fits.iter().map(String::as_str).collect();
-                let picked = crate::ui::hud::stock::layout::HudFit::ALL.iter().position(|&fit| fit == s.hud_fit).unwrap_or(0);
-                f.spawn((dropdown(t, &refs, picked, selector_w), view::HudFitSelect));
-            });
         #[cfg(not(target_os = "android"))]
         c.spawn(caption(t, &tr("Windowed resolution; fullscreen uses the current monitor.")));
         if let Some(post_aa) = &info.post_aa {
             c.spawn(caption(t, &trf("{0} post-processing AA overrides MSAA.", &[post_aa])));
         }
+        // One row: the label is part of each choice ("HUD layout: Centred"); the note beside it
+        // says the option has no effect on the LCARS interface.
+        c.spawn((
+            GraphicsPart::HudLayout,
+            Node { width: Val::Percent(100.0), min_width: Val::Px(0.0), align_items: AlignItems::Center, column_gap: Val::Px(t.gap), ..default() },
+        ))
+        .with_children(|f| {
+            let fits = crate::ui::hud::stock::layout::HudFit::ALL.map(|fit| format!("{}: {}", tr("HUD layout"), tr(fit.label())));
+            let refs: Vec<_> = fits.iter().map(String::as_str).collect();
+            let picked = crate::ui::hud::stock::layout::HudFit::ALL.iter().position(|&fit| fit == s.hud_fit).unwrap_or(0);
+            f.spawn((Node { width: Val::Px(selector_w), flex_shrink: 0.0, ..default() }, children![(dropdown(t, &refs, picked, selector_w), view::HudFitSelect)]));
+            f.spawn(caption(t, &tr("Stock HUD only")));
+        });
         info_row(c, t, GraphicsPart::Renderer, &tr("Renderer"), &info.renderer);
         info_row(c, t, GraphicsPart::Monitor, &tr("Game monitor"), &info.monitor);
 
