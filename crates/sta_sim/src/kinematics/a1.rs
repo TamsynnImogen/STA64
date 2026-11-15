@@ -125,35 +125,6 @@ pub fn params(db: &ContentDb, def: ContentKey) -> Option<A1Params> {
     None
 }
 
-/// Test inputs for the seam: a synthetic parameter block (key names and the
-/// stock values), in force on this thread until the guard drops.
-#[cfg(test)]
-pub(crate) mod seam {
-    use super::A1Params;
-    use std::cell::Cell;
-
-    thread_local! {
-        static BLOCK: Cell<Option<A1Params>> = const { Cell::new(None) };
-    }
-
-    pub(crate) struct Guard;
-
-    pub(crate) fn set(p: A1Params) -> Guard {
-        BLOCK.with(|b| b.set(Some(p)));
-        Guard
-    }
-
-    pub(super) fn get() -> Option<A1Params> {
-        BLOCK.with(|b| b.get())
-    }
-
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            BLOCK.with(|b| b.set(None));
-        }
-    }
-}
-
 /// `e^-x` for `x >= 0`: the series on a halved argument, squared back.
 fn exp_neg(x: Fixed) -> Fixed {
     let mut y = x;
@@ -193,7 +164,10 @@ fn lag_seconds(d: &A1Dynamics) -> Fixed {
 /// The turn authority curve `c(v)`: `velocCoeffStill` at rest, one half at
 /// `velocWhenCoeffHalf x impulse`, rising toward one.
 fn authority(d: &A1Dynamics, v: Fixed) -> Fixed {
-    let still = d.veloc_coeff_still.min(Fixed::from_f64(0.95)).max(Fixed::ZERO);
+    let still = d
+        .veloc_coeff_still
+        .min(Fixed::from_f64(0.95))
+        .max(Fixed::ZERO);
     let b = Fixed::ONE / (Fixed::ONE - still);
     let half = d.veloc_when_coeff_half * d.impulse_speed;
     if half <= Fixed::ZERO {
@@ -233,7 +207,10 @@ fn bearing_error(u: &Unit, p: Vec3) -> Fixed {
         return Fixed::ZERO;
     }
     let (tx, tz) = (dx / d, dz / d);
-    atan2(u.heading.0 * tz - u.heading.1 * tx, u.heading.0 * tx + u.heading.1 * tz)
+    atan2(
+        u.heading.0 * tz - u.heading.1 * tx,
+        u.heading.0 * tx + u.heading.1 * tz,
+    )
 }
 
 /// Cosine of the half-angle of the cone ahead (45 degrees) inside which the
@@ -250,7 +227,11 @@ pub(super) fn step(u: &mut Unit, p: &A1Params, queued: &[Vec3], plan: Option<Pla
         decide(u, p, queued, plan)
     } else {
         // A held craft (impulse at the crawl): nothing to fly with.
-        Cmd { throttle: Fixed::ZERO, steer: None, aim: None }
+        Cmd {
+            throttle: Fixed::ZERO,
+            steer: None,
+            aim: None,
+        }
     };
     integrate(u, p, &cmd, dt);
     if let Some(aim) = cmd.aim {
@@ -262,7 +243,11 @@ pub(super) fn step(u: &mut Unit, p: &A1Params, queued: &[Vec3], plan: Option<Pla
 fn decide(u: &mut Unit, p: &A1Params, queued: &[Vec3], plan: Option<Plan>) -> Cmd {
     let st = u.stats;
     let imp = st.max_speed;
-    let none = Cmd { throttle: Fixed::ZERO, steer: None, aim: None };
+    let none = Cmd {
+        throttle: Fixed::ZERO,
+        steer: None,
+        aim: None,
+    };
     let Some(target) = u.target else {
         // No target: no throttle, and an attacker in range turns to face.
         let steer = plan.and_then(|pl| pl.face).map(|f| bearing_error(u, f));
@@ -308,17 +293,22 @@ fn decide(u: &mut Unit, p: &A1Params, queued: &[Vec3], plan: Option<Plan>) -> Cm
                 let (ux, uz) = (dx / len, dz / len);
                 let a_dot = prev.0 * ux + prev.1 * uz;
                 let a2 = prev.0 * prev.0 + prev.1 * prev.1;
-                let s = (-a_dot + (a_dot * a_dot - (a2 - lead * lead)).max(Fixed::ZERO).sqrt()).min(len);
+                let s = (-a_dot + (a_dot * a_dot - (a2 - lead * lead)).max(Fixed::ZERO).sqrt())
+                    .min(len);
                 carrot = Some((prev.0 + ux * s, prev.1 + uz * s, (ux, uz), false));
                 break;
             }
         }
         prev = (bx, bz);
     }
-    let (cx, cz, seg, at_end) = carrot.unwrap_or((prev.0, prev.1, (Fixed::ZERO, Fixed::ZERO), true));
+    let (cx, cz, seg, at_end) =
+        carrot.unwrap_or((prev.0, prev.1, (Fixed::ZERO, Fixed::ZERO), true));
     let chase = (cx * cx + cz * cz).sqrt();
     if chase == Fixed::ZERO {
-        return Cmd { aim: Some(tgt), ..none };
+        return Cmd {
+            aim: Some(tgt),
+            ..none
+        };
     }
 
     let m = multiplier(&st);
@@ -348,13 +338,21 @@ fn decide(u: &mut Unit, p: &A1Params, queued: &[Vec3], plan: Option<Plan>) -> Cm
 
     // Within tooCloseToTurn of the final point: no steering, brake onto it.
     if to_final <= near {
-        return Cmd { throttle: control(h.0 * fx + h.1 * fz, Fixed::ZERO), steer: None, aim: Some(tgt) };
+        return Cmd {
+            throttle: control(h.0 * fx + h.1 * fz, Fixed::ZERO),
+            steer: None,
+            aim: Some(tgt),
+        };
     }
 
     let (tx, tz) = (cx / chase, cz / chase);
     let cross = h.0 * tz - h.1 * tx;
     let dot = h.0 * tx + h.1 * tz;
-    let cruise = if st.warp_speed > Fixed::ZERO { st.warp_speed } else { imp };
+    let cruise = if st.warp_speed > Fixed::ZERO {
+        st.warp_speed
+    } else {
+        imp
+    };
     let carrot_speed = if at_end { Fixed::ZERO } else { cruise };
     let along = h.0 * cx + h.1 * cz;
     let along_speed = carrot_speed * (h.0 * seg.0 + h.1 * seg.1);
@@ -362,23 +360,39 @@ fn decide(u: &mut Unit, p: &A1Params, queued: &[Vec3], plan: Option<Plan>) -> Cm
     // The path point inside the turning circle on its side: no steering.
     if d.turn_radius > Fixed::ZERO {
         let r = d.turn_radius;
-        let (nx, nz) = if cross >= Fixed::ZERO { (-h.1, h.0) } else { (h.1, -h.0) };
+        let (nx, nz) = if cross >= Fixed::ZERO {
+            (-h.1, h.0)
+        } else {
+            (h.1, -h.0)
+        };
         let (ex, ez) = (cx - nx * r, cz - nz * r);
         if ex * ex + ez * ez < r * r {
-            return Cmd { throttle: control(along, along_speed), steer: None, aim: Some(tgt) };
+            return Cmd {
+                throttle: control(along, along_speed),
+                steer: None,
+                aim: Some(tgt),
+            };
         }
     }
 
     let err = atan2(cross, dot);
     let band = st.heading_close_for_warp * pi() / Fixed::from_int(180);
-    let mut throttle = if allow && err.abs() < band { m } else { Fixed::ONE };
+    let mut throttle = if allow && err.abs() < band {
+        m
+    } else {
+        Fixed::ONE
+    };
     if let Some(cap) = plan.and_then(|pl| pl.cap) {
         throttle = throttle.min(cap / imp);
     }
     if dot > cone() {
         throttle = control(along, along_speed);
     }
-    Cmd { throttle, steer: Some(err), aim: Some(tgt) }
+    Cmd {
+        throttle,
+        steer: Some(err),
+        aim: Some(tgt),
+    }
 }
 
 /// Speed, turn rate, heading and position for one tick under `cmd`.
@@ -411,7 +425,11 @@ fn integrate(u: &mut Unit, p: &A1Params, cmd: &Cmd, dt: Fixed) {
     match p.borg {
         None => {
             let command = match cmd.steer {
-                Some(err) => clamp(d.yaw_angle_coeff * err - d.yaw_veloc_coeff * u.omega, -Fixed::ONE, Fixed::ONE),
+                Some(err) => clamp(
+                    d.yaw_angle_coeff * err - d.yaw_veloc_coeff * u.omega,
+                    -Fixed::ONE,
+                    Fixed::ONE,
+                ),
                 None => Fixed::ZERO,
             };
             let goal = command * full_turn_rate(d, v);
@@ -434,7 +452,11 @@ fn integrate(u: &mut Unit, p: &A1Params, cmd: &Cmd, dt: Fixed) {
             let scale = b.rotation_acceleration * b.max_rotation_speed;
             if scale > Fixed::ZERO {
                 let want = k * err - Fixed::from_int(2) * k.sqrt() * u.omega;
-                let share = clamp((want + b.rotation_acceleration * u.omega) / scale, -Fixed::ONE, Fixed::ONE);
+                let share = clamp(
+                    (want + b.rotation_acceleration * u.omega) / scale,
+                    -Fixed::ONE,
+                    Fixed::ONE,
+                );
                 let accel = share * scale - b.rotation_acceleration * u.omega;
                 u.omega = u.omega + accel * dt;
             } else {
@@ -449,4 +471,33 @@ fn integrate(u: &mut Unit, p: &A1Params, cmd: &Cmd, dt: Fixed) {
     u.speed = nv;
     u.pos.x = u.pos.x + u.heading.0 * dist;
     u.pos.z = u.pos.z + u.heading.1 * dist;
+}
+
+/// Test inputs for the seam: a synthetic parameter block (key names and the
+/// stock values), in force on this thread until the guard drops.
+#[cfg(test)]
+pub(crate) mod seam {
+    use super::A1Params;
+    use std::cell::Cell;
+
+    thread_local! {
+        static BLOCK: Cell<Option<A1Params>> = const { Cell::new(None) };
+    }
+
+    pub(crate) struct Guard;
+
+    pub(crate) fn set(p: A1Params) -> Guard {
+        BLOCK.with(|b| b.set(Some(p)));
+        Guard
+    }
+
+    pub(super) fn get() -> Option<A1Params> {
+        BLOCK.with(|b| b.get())
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            BLOCK.with(|b| b.set(None));
+        }
+    }
 }

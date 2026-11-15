@@ -6,6 +6,9 @@
 //! sim does not have (an order is obeyed on the tick it is given), so the
 //! windows are the measured ranges widened by about 0.2 s on the low side.
 
+// Platform maths measure the trace here only; the model under test uses Fixed.
+#![allow(clippy::disallowed_methods)]
+
 use super::a1::{A1Borg, A1Dynamics, A1Params, seam};
 use super::*;
 use crate::world::{Entity, EntityKind};
@@ -34,7 +37,10 @@ pub(crate) fn play() -> A1Dynamics {
 }
 
 pub(crate) fn params() -> A1Params {
-    A1Params { play: play(), borg: None }
+    A1Params {
+        play: play(),
+        borg: None,
+    }
 }
 
 fn borg() -> A1Params {
@@ -70,14 +76,22 @@ fn craft(stats: MoveStats) -> Unit {
         EntityKind::Craft,
         ContentKey::NONE,
         PlayerId(1),
-        Vec3 { x: Fixed::ZERO, y: Fixed::ZERO, z: Fixed::ZERO },
+        Vec3 {
+            x: Fixed::ZERO,
+            y: Fixed::ZERO,
+            z: Fixed::ZERO,
+        },
         (Fixed::ZERO, Fixed::ONE),
         stats,
     )
 }
 
 fn pt(x: f64, z: f64) -> Vec3 {
-    Vec3 { x: f(x), y: Fixed::ZERO, z: f(z) }
+    Vec3 {
+        x: f(x),
+        y: Fixed::ZERO,
+        z: f(z),
+    }
 }
 
 fn num(x: Fixed) -> f64 {
@@ -117,7 +131,10 @@ fn fly(stats: MoveStats, p: &A1Params, legs: &[Vec3], secs: f64) -> Vec<S> {
         }
         let (gx, gz) = (num(last.x - u.pos.x), num(last.z - u.pos.z));
         let (hx, hz) = (num(u.heading.0), num(u.heading.1));
-        let err = (hx * gz - hz * gx).atan2(hx * gx + hz * gz).to_degrees().abs();
+        let err = (hx * gz - hz * gx)
+            .atan2(hx * gx + hz * gz)
+            .to_degrees()
+            .abs();
         out.push(S {
             t: (i + 1) as f64 / TICK_HZ as f64,
             x: num(u.pos.x),
@@ -152,9 +169,17 @@ fn cruise_is_the_ships_own_warp_speed_held_on_a_straight_leg() {
     for (warp, near) in [CRUISER, DESTROYER, CONSTRUCTION] {
         let tr = fly(class(warp, near), &params(), &[goal(0.0, 4000.0)], 40.0);
         // Measured: 80.0, 99.6 to 99.9 and 50.0 over 4.5 to 27 s legs.
-        let m = mean(tr.iter().filter(|s| s.t > 6.0 && s.t < 30.0).map(|s| s.speed));
+        let m = mean(
+            tr.iter()
+                .filter(|s| s.t > 6.0 && s.t < 30.0)
+                .map(|s| s.speed),
+        );
         assert!((m - warp).abs() < 0.01 * warp, "{warp}: {m}");
-        let lo = tr.iter().filter(|s| s.t > 6.0 && s.t < 30.0).map(|s| s.speed).fold(f64::MAX, f64::min);
+        let lo = tr
+            .iter()
+            .filter(|s| s.t > 6.0 && s.t < 30.0)
+            .map(|s| s.speed)
+            .fold(f64::MAX, f64::min);
         assert!(lo > 0.99 * warp, "{warp}: dips to {lo}");
     }
 }
@@ -166,19 +191,31 @@ fn speed_from_rest_is_one_first_order_lag_for_every_class() {
         let tr = fly(class(warp, near), &params(), &[goal(0.0, 4000.0)], 3.0);
         let share = |t: f64| tr.iter().find(|s| s.t >= t - 1e-6).unwrap().speed / warp;
         // Measured: tau 0.365 to 0.375 s; 90% of cruise 0.94 to 0.96 s after the order.
-        assert!((share(0.375) - 0.632).abs() < 0.03, "{warp}: {}", share(0.375));
+        assert!(
+            (share(0.375) - 0.632).abs() < 0.03,
+            "{warp}: {}",
+            share(0.375)
+        );
         assert!((share(1.1) - 0.95).abs() < 0.02, "{warp}: {}", share(1.1));
         let t90 = first(&tr, |s| s.speed >= 0.9 * warp);
         assert!((0.80..=1.0).contains(&t90), "{warp}: 90% at {t90}");
         at_tau.push(share(0.375));
     }
     // Shared physics: the shares are equal across classes.
-    assert!(at_tau.windows(2).all(|w| (w[0] - w[1]).abs() < 0.005), "{at_tau:?}");
+    assert!(
+        at_tau.windows(2).all(|w| (w[0] - w[1]).abs() < 0.005),
+        "{at_tau:?}"
+    );
 }
 
 #[test]
 fn a_180_degree_order_turns_and_gets_up_to_cruise_on_the_measured_times() {
-    let tr = fly(class(CRUISER.0, CRUISER.1), &params(), &[goal(180.0, 1000.0)], 8.0);
+    let tr = fly(
+        class(CRUISER.0, CRUISER.1),
+        &params(),
+        &[goal(180.0, 1000.0)],
+        8.0,
+    );
     let t10 = first(&tr, |s| s.err < 10.0);
     let t90 = first(&tr, |s| s.speed >= 72.0);
     eprintln!("180: within 10 deg {t10}, 90% {t90}");
@@ -187,7 +224,9 @@ fn a_180_degree_order_turns_and_gets_up_to_cruise_on_the_measured_times() {
     assert!((1.9..=2.6).contains(&t90), "{t90}");
     // Peak turn rate over 0.2 s windows (measured 130 to 145 deg/s sustained).
     let w = 6;
-    let peak = (0..tr.len() - w).map(|i| mean(tr[i..i + w].iter().map(|s| s.omega.abs()))).fold(0.0, f64::max);
+    let peak = (0..tr.len() - w)
+        .map(|i| mean(tr[i..i + w].iter().map(|s| s.omega.abs())))
+        .fold(0.0, f64::max);
     eprintln!("180: peak turn rate {peak}");
     assert!((125.0..=160.0).contains(&peak), "{peak}");
     // Reached about 0.8 s after the order.
@@ -197,7 +236,12 @@ fn a_180_degree_order_turns_and_gets_up_to_cruise_on_the_measured_times() {
 
 #[test]
 fn a_90_degree_order_from_rest_on_the_measured_times() {
-    let tr = fly(class(DESTROYER.0, DESTROYER.1), &params(), &[goal(90.0, 1500.0)], 6.0);
+    let tr = fly(
+        class(DESTROYER.0, DESTROYER.1),
+        &params(),
+        &[goal(90.0, 1500.0)],
+        6.0,
+    );
     let t10 = first(&tr, |s| s.err < 10.0);
     let t90 = first(&tr, |s| s.speed >= 90.0);
     eprintln!("90: within 10 deg {t10}, 90% {t90}");
@@ -221,7 +265,10 @@ fn the_ship_does_not_pivot_on_the_spot_it_moves_while_turning() {
         // It moved from the first tenth of a second on: no stationary pivot.
         assert!(tr[5].speed > 3.0, "{warp}: {}", tr[5].speed);
         // The arc is tight: well inside 30 units across for the whole turn.
-        let w = turning.iter().map(|s| (s.x * s.x + s.z * s.z).sqrt()).fold(0.0, f64::max);
+        let w = turning
+            .iter()
+            .map(|s| (s.x * s.x + s.z * s.z).sqrt())
+            .fold(0.0, f64::max);
         assert!(w < 40.0, "{warp}: arc {w}");
     }
 }
@@ -230,10 +277,18 @@ fn the_ship_does_not_pivot_on_the_spot_it_moves_while_turning() {
 fn a_path_bend_at_cruise_keeps_most_of_the_speed() {
     // A 78 degree bend in the course, from a ship already at cruise.
     let a = 78f64.to_radians();
-    let legs = [pt(0.0, 3000.0), pt(-3000.0 * a.sin(), 3000.0 + 3000.0 * a.cos())];
+    let legs = [
+        pt(0.0, 3000.0),
+        pt(-3000.0 * a.sin(), 3000.0 + 3000.0 * a.cos()),
+    ];
     let tr = fly(class(DESTROYER.0, DESTROYER.1), &params(), &legs, 80.0);
-    let near_bend = |s: &&S| s.t > 8.0 && ((s.x * s.x + (s.z - 3000.0) * (s.z - 3000.0)).sqrt()) < 300.0;
-    let at_bend = tr.iter().filter(near_bend).map(|s| s.speed).fold(f64::MAX, f64::min);
+    let near_bend =
+        |s: &&S| s.t > 8.0 && ((s.x * s.x + (s.z - 3000.0) * (s.z - 3000.0)).sqrt()) < 300.0;
+    let at_bend = tr
+        .iter()
+        .filter(near_bend)
+        .map(|s| s.speed)
+        .fold(f64::MAX, f64::min);
     eprintln!("bend: slowest {at_bend}");
     // Measured: about 95% of cruise at a 78 degree bend.
     assert!(at_bend > 0.85 * 100.0, "{at_bend}");
@@ -260,19 +315,40 @@ fn stopping_at_cruise_coasts_speed_times_the_lag() {
 /// Braking start, arrival and overshoot on a long straight leg.
 #[test]
 fn arrival_brakes_from_about_one_and_a_half_cruise_out_and_stops_short_without_overshoot() {
-    for (warp, near, goal_z) in [(CRUISER.0, CRUISER.1, 2000.0), (DESTROYER.0, DESTROYER.1, 2400.0)] {
+    for (warp, near, goal_z) in [
+        (CRUISER.0, CRUISER.1, 2000.0),
+        (DESTROYER.0, DESTROYER.1, 2400.0),
+    ] {
         let tr = fly(class(warp, near), &params(), &[pt(0.0, goal_z)], 40.0);
         // The braking starts where the speed first falls under its cruise value.
         let peak = tr.iter().map(|s| s.speed).fold(0.0, f64::max);
-        let top = tr.iter().position(|s| s.speed >= 0.995 * warp).expect("reaches cruise");
-        let start = tr[top..].iter().position(|s| s.speed < 0.995 * peak).map(|i| i + top).expect("brakes");
+        let top = tr
+            .iter()
+            .position(|s| s.speed >= 0.995 * warp)
+            .expect("reaches cruise");
+        let start = tr[top..]
+            .iter()
+            .position(|s| s.speed < 0.995 * peak)
+            .map(|i| i + top)
+            .expect("brakes");
         let braking_at = tr[start].dist;
-        eprintln!("{warp}: braking starts {braking_at} out ({} x cruise)", braking_at / warp);
+        eprintln!(
+            "{warp}: braking starts {braking_at} out ({} x cruise)",
+            braking_at / warp
+        );
         // Measured: about 1.6 x cruise before the goal (127 u at 80, 157 at 100).
         // The speed falls half a percent under cruise a little after the throttle drops.
-        assert!((1.35 * warp..=1.75 * warp).contains(&braking_at), "{warp}: {braking_at}");
+        assert!(
+            (1.35 * warp..=1.75 * warp).contains(&braking_at),
+            "{warp}: {braking_at}"
+        );
         // No speed rise after braking starts.
-        assert!(tr[start..].windows(2).all(|w| w[1].speed <= w[0].speed + 0.02), "{warp}: speed rises while braking");
+        assert!(
+            tr[start..]
+                .windows(2)
+                .all(|w| w[1].speed <= w[0].speed + 0.02),
+            "{warp}: speed rises while braking"
+        );
         // It never passes the goal and ends a few units short (measured 5.5 u).
         let end = tr.last().unwrap();
         assert!(end.speed < 0.5 && end.done, "{warp}: {end:?}");
@@ -286,9 +362,20 @@ fn arrival_brakes_from_about_one_and_a_half_cruise_out_and_stops_short_without_o
 #[test]
 fn braking_never_speeds_up_again_on_any_approach_angle() {
     for off in [0.0, 30.0, 90.0, 150.0] {
-        let tr = fly(class(CRUISER.0, CRUISER.1), &params(), &[goal(off, 1200.0)], 30.0);
-        let brake = tr.iter().position(|s| s.dist < 1.6 * 80.0 && s.speed > 70.0).expect("cruise reached");
-        let rises = tr[brake..].windows(2).filter(|w| w[1].speed > w[0].speed + 0.05).count();
+        let tr = fly(
+            class(CRUISER.0, CRUISER.1),
+            &params(),
+            &[goal(off, 1200.0)],
+            30.0,
+        );
+        let brake = tr
+            .iter()
+            .position(|s| s.dist < 1.6 * 80.0 && s.speed > 70.0)
+            .expect("cruise reached");
+        let rises = tr[brake..]
+            .windows(2)
+            .filter(|w| w[1].speed > w[0].speed + 0.05)
+            .count();
         assert_eq!(rises, 0, "{off} deg");
     }
 }
@@ -297,12 +384,24 @@ fn braking_never_speeds_up_again_on_any_approach_angle() {
 fn a_scripted_warp_speed_is_the_cruise_and_below_impulse_only_aligned_legs_slow() {
     // Warp 25: cruise 25 on a straight leg.
     let tr = fly(class(25.0, 50.0), &params(), &[goal(0.0, 2000.0)], 20.0);
-    let m = mean(tr.iter().filter(|s| s.t > 5.0 && s.t < 15.0).map(|s| s.speed));
+    let m = mean(
+        tr.iter()
+            .filter(|s| s.t > 5.0 && s.t < 15.0)
+            .map(|s| s.speed),
+    );
     assert!((m - 25.0).abs() < 0.5, "{m}");
     // Warp 10 (below impulse 20): aligned legs at 10, a turning start at impulse.
     let tr = fly(class(10.0, 50.0), &params(), &[goal(180.0, 2000.0)], 20.0);
-    let turning = tr.iter().filter(|s| s.t < 1.0).map(|s| s.speed).fold(0.0, f64::max);
-    let m = mean(tr.iter().filter(|s| s.t > 6.0 && s.t < 15.0).map(|s| s.speed));
+    let turning = tr
+        .iter()
+        .filter(|s| s.t < 1.0)
+        .map(|s| s.speed)
+        .fold(0.0, f64::max);
+    let m = mean(
+        tr.iter()
+            .filter(|s| s.t > 6.0 && s.t < 15.0)
+            .map(|s| s.speed),
+    );
     assert!(turning > 12.0, "{turning}");
     assert!((m - 10.0).abs() < 0.3, "{m}");
 }
@@ -332,7 +431,11 @@ fn a_waypoint_flows_through_and_the_last_leg_stops() {
     let end = tr.last().unwrap();
     assert!(end.done && end.dist < 12.0 && end.speed < 0.5, "{end:?}");
     // Never stops on the way: speed stays above impulse between the legs.
-    let mid = tr.iter().filter(|s| s.z > 600.0 && s.dist > 400.0).map(|s| s.speed).fold(f64::MAX, f64::min);
+    let mid = tr
+        .iter()
+        .filter(|s| s.z > 600.0 && s.dist > 400.0)
+        .map(|s| s.speed)
+        .fold(f64::MAX, f64::min);
     assert!(mid > 20.0, "{mid}");
 }
 
@@ -348,12 +451,18 @@ mod through_the_sim {
 
     fn empty(profile: Profile) -> ContentDb {
         let base = sta_content::fake::db();
-        ContentDb::builder().profile(profile).features(base.features().clone()).build().unwrap()
+        ContentDb::builder()
+            .profile(profile)
+            .features(base.features().clone())
+            .build()
+            .unwrap()
     }
 
     fn game(profile: Profile) -> (Sim, EntityId) {
         let base = sta_content::fake::db();
-        let mut b = ContentDb::builder().profile(profile).features(base.features().clone());
+        let mut b = ContentDb::builder()
+            .profile(profile)
+            .features(base.features().clone());
         for w in base.weapons().cloned() {
             b = b.weapon(w);
         }
@@ -365,7 +474,14 @@ mod through_the_sim {
         }
         let db = Arc::new(b.build().unwrap());
         let mut sim = approach_tests::sim_with(Arc::clone(&db));
-        let s = sim.spawn_def(db.key("fx_frigate").unwrap(), PlayerId(1), pt(0.0, 0.0), (Fixed::ZERO, Fixed::ONE)).unwrap();
+        let s = sim
+            .spawn_def(
+                db.key("fx_frigate").unwrap(),
+                PlayerId(1),
+                pt(0.0, 0.0),
+                (Fixed::ZERO, Fixed::ONE),
+            )
+            .unwrap();
         (sim, s)
     }
 
@@ -373,7 +489,15 @@ mod through_the_sim {
         let mut out = Vec::new();
         for i in 0..secs * TICK_HZ {
             let cmds = if i == 0 {
-                vec![Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![s], to, queue: false }) }]
+                vec![Command {
+                    player: PlayerId(1),
+                    seq: 0,
+                    kind: CommandKind::Order(Order::Move {
+                        units: vec![s],
+                        to,
+                        queue: false,
+                    }),
+                }]
             } else {
                 vec![]
             };
@@ -393,7 +517,13 @@ mod through_the_sim {
         let (mut a, sa) = game(Profile::Sta1Classic);
         let (mut b, sb) = game(Profile::Native);
         for to in [pt(0.0, 2000.0), pt(-900.0, -400.0)] {
-            assert_eq!(run(&mut a, sa, to, 40).iter().map(|r| (r.0, r.1, r.2)).collect::<Vec<_>>(), run(&mut b, sb, to, 40));
+            assert_eq!(
+                run(&mut a, sa, to, 40)
+                    .iter()
+                    .map(|r| (r.0, r.1, r.2))
+                    .collect::<Vec<_>>(),
+                run(&mut b, sb, to, 40)
+            );
         }
     }
 
@@ -427,7 +557,11 @@ mod through_the_sim {
         use crate::command::Edit;
         let _g = seam::set(params());
         let (mut sim, s) = game(Profile::Sta1Classic);
-        let set = Command { player: PlayerId::SCRIPT, seq: 0, kind: CommandKind::Edit(Edit::WarpSpeed(s, Some(Fixed::from_int(25)))) };
+        let set = Command {
+            player: PlayerId::SCRIPT,
+            seq: 0,
+            kind: CommandKind::Edit(Edit::WarpSpeed(s, Some(Fixed::from_int(25)))),
+        };
         WorldSource::step(&mut sim, &[set]);
         let tr = run(&mut sim, s, pt(0.0, 3000.0), 20);
         let mid = num(tr[(12 * TICK_HZ) as usize].1);
