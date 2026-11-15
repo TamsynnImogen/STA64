@@ -15,13 +15,23 @@
 //! - Nothing else is checked: not the map edge, not other objects, not
 //!   ownership or exploration.
 //!
+//! Orbiting (SIM-65, `PlanetMiningBase::Simulate`): from the tick it is
+//! finished, a station's bearing from its planet's centre advances by `2 pi /
+//! orbitTime` radians per second, in the sense that turns the bearing's
+//! `(sin a, cos a)` from +Z toward +X, on the circle of radius + [`ALTITUDE`]
+//! at the planet's height; its heading is the outward radial. Read from the
+//! executable, static; the constant `2 pi` (one orbit per `orbitTime`, as the
+//! ODF comment says) is inferred, not read. The planet's own turning is not
+//! used by the original's step. The position is the saved entity position:
+//! the next one is a function of it, the planet and the content, so the step
+//! keeps no state of its own.
+//!
 //! Evidence: read from the executable, static (`CanPlaceHere`,
 //! `GetRealBuildPosition`, `mClickedOnAPlanet`, `GetOrbitalPosition`); the
 //! ODF keys are read from data in A2 Stock and STA2 Classic (Fleet Operations
 //! and Roots have no orbital station ODFs). Not measured on the bench: which
 //! side of the station faces the planet. The orbiting itself (`orbitTime`
-//! seconds per orbit) is not implemented: a station keeps the bearing it was
-//! built at.
+//! seconds per orbit) is [`step`] (SIM-65), below.
 //!
 //! No state is kept: planets and occupied slots are read off the entities
 //! (a station within [`REACH`] of a planet's radius belongs to that planet), so
@@ -30,7 +40,7 @@
 //! the same inputs ([`snap_view`]).
 
 use sta_content::{ContentDb, UnitDef};
-use sta_core::{ContentKey, EntityId, Fixed, Vec3};
+use sta_core::{ContentKey, EntityId, Fixed, Vec3, TICK_HZ};
 
 use crate::world::Entities;
 
@@ -181,4 +191,52 @@ pub fn snap_view(
     }
     let (planets, orbiters) = from_view(db, view);
     Some(snap(&planets, &orbiters, at))
+}
+
+/// `2 pi` as a [`Fixed`] (`round(2 pi * 2^32)`): one orbit is this many radians.
+const TAU: Fixed = Fixed::from_bits(26_986_075_409);
+
+/// The bearing's advance per tick for an orbit of `orbit_time` seconds; zero
+/// for a time that is not positive (no orbiting).
+pub fn step_angle(orbit_time: Fixed) -> Fixed {
+    if orbit_time <= Fixed::ZERO {
+        return Fixed::ZERO;
+    }
+    TAU / (orbit_time * Fixed::from_int(TICK_HZ as i32))
+}
+
+/// One tick of every finished orbital station's revolution about its planet.
+/// A station still being built stays at its site; one with no planet whose
+/// orbit it is on (or within reach of) stays put, as does one whose
+/// `orbitTime` is not positive.
+pub(crate) fn step(db: &ContentDb, units: &mut Entities) {
+    let (planets, orbiters) = from_entities(db, units);
+    if planets.is_empty() || orbiters.is_empty() {
+        return;
+    }
+    let moves: Vec<(EntityId, Vec3, (Fixed, Fixed))> = units
+        .iter()
+        .filter(|e| e.progress.is_none())
+        .filter_map(|e| {
+            let d = db.unit(e.def).filter(|d| is_orbital(d))?;
+            let da = step_angle(d.orbit_time?);
+            if da == Fixed::ZERO {
+                return None;
+            }
+            let p = owner(&planets, e.pos)?;
+            let (dx, dz) = (e.pos.x - p.pos.x, e.pos.z - p.pos.z);
+            let len = (dx * dx + dz * dz).sqrt();
+            let h = if len == Fixed::ZERO { (Fixed::ZERO, Fixed::ONE) } else { (dx / len, dz / len) };
+            // `rotate_by` turns +X toward +Z; the original's bearing runs the other way.
+            let h = crate::kinematics::rotate_by(h, -da);
+            let r = p.radius + Fixed::from_int(ALTITUDE);
+            Some((e.id, Vec3 { x: p.pos.x + h.0 * r, y: p.pos.y, z: p.pos.z + h.1 * r }, h))
+        })
+        .collect();
+    for (id, pos, heading) in moves {
+        if let Some(e) = units.get_mut(id) {
+            e.pos = pos;
+            e.heading = heading;
+        }
+    }
 }

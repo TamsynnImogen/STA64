@@ -450,6 +450,7 @@ impl Sim {
         self.separate_units();
         self.push_out_of_fields();
         if let Some(db) = self.content.clone() {
+            production::orbit::step(&db, &mut self.units);
             combat::damage::recharge(&mut self.units, &db, &self.switches, &self.subsystems);
             self.activate_team_change_weapons(&db);
             self.specials.step(&mut self.units, &db, &mut self.events);
