@@ -107,7 +107,7 @@ impl Plugin for WeaponFxPlugin {
         // RND-28: the recipes a mod's mounted files lay over Refit's, read as the files
         // are mounted (`ordnance/ordnance.ini`, D12).
         // RND-29: a freighter's mining beam is drawn as a shot of its mining weapon, from where it orbits.
-        app.add_plugins(super::super::mining::MiningPlugin);
+        app.add_plugins(super::super::mining::MiningPlugin).add_plugins(super::super::orbital_beam::OrbitalBeamPlugin);
         app.init_resource::<OrdnanceRecipes>().add_systems(
             Update,
             load_recipes.run_if(resource_exists_and_changed::<crate::viewer::Mounted>).before(spawn_fx),
