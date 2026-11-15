@@ -73,9 +73,14 @@ struct TempFile(std::path::PathBuf);
 
 impl TempFile {
     fn new(bytes: &[u8]) -> Self {
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::time::{SystemTime, UNIX_EPOCH};
+        // Tests run as threads of one process and some clocks are coarse, so the
+        // counter is what makes every name unique.
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let count = COUNTER.fetch_add(1, Ordering::Relaxed);
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let path = std::env::temp_dir().join(format!("model-info-{}-{nonce}.sod", std::process::id()));
+        let path = std::env::temp_dir().join(format!("model-info-{}-{nonce}-{count}.sod", std::process::id()));
         std::fs::write(&path, bytes).unwrap();
         Self(path)
     }
