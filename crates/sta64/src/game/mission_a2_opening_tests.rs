@@ -139,13 +139,15 @@ pub fn drive(seconds: f64) -> Option<Trace> {
 
 /// The rules this opening depends on (the evidence for each is in the PR body):
 /// - a stop of the music track is not a stop of the voice line playing beside it (the first voice
-///   line, 50 s long, plays to its end: no bus cut at all, since nobody skips);
+///   line, 50 s long, plays to its end: the UI bus is never cut, since nobody skips);
 /// - the script's wait on its last music track ends with the clip, so the opening hands over
 ///   (cineractive off, objectives issued) after its last voice line instead of never.
 #[test]
 fn install_gated_a2_kling01_opening_keeps_its_voice_line_and_hands_over() {
     let Some(t) = drive(float_env("STA64_TEST_A2_SECONDS", 150.0)) else { return };
-    assert!(!t.heard.iter().any(|(_, h)| h.starts_with("stop-bus")), "nothing stopped a bus without a skip: {:?}", t.heard.iter().filter(|(_, h)| h.starts_with("stop-bus")).collect::<Vec<_>>());
+    // (The Voice bus is cut once, at the start of the cutscene: event voices do not run over it.)
+    let ui_cuts: Vec<_> = t.heard.iter().filter(|(_, h)| h.starts_with("stop-bus Ui")).collect();
+    assert!(ui_cuts.is_empty(), "nothing stopped the UI bus (the scripted lines) without a skip: {ui_cuts:?}");
     // Rant_1 is message 2 (the track before it is message 1) and plays for its whole clip.
     let started = t.heard.iter().find(|(_, h)| h.starts_with("started a2_kling01_Martoks_Rant_1.wav")).expect("the first voice line starts");
     let length: f64 = started.1.split("Some(").nth(1).and_then(|r| r.trim_end_matches(')').parse().ok()).expect("its clip length is read from the file");
