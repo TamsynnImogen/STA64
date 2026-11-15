@@ -1005,3 +1005,16 @@ fn dead_handles_get_the_graded_answers_and_live_ones_are_unchanged() {
         assert!(rt.eval::<()>(&format!("local _ = A1.{call}")).is_err(), "{call}");
     }
 }
+
+#[test]
+fn a1_in_queue_is_not_a_question_about_movement() {
+    // A craft flying a course is in no processing queue (the original reads a queue stage, not a speed).
+    let mut s = scene();
+    for u in &mut s.view.units {
+        u.speed = Fixed::from_int(80);
+    }
+    let (rt, _) = run(&s, "assert(A1.InQueue(a) == false); assert(A1.InQueue(far) == false)");
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    // A handle that names nothing live still raises, as before.
+    assert!(fails(&s, "A1.InQueue(0)").contains("InQueue"));
+}

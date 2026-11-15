@@ -109,11 +109,17 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
     table.set("InStopMode", no_order_state(lua, env, "InStopMode")?)?;
     table.set("OutOfSpecialAttackMode", no_order_state(lua, env, "OutOfSpecialAttackMode")?)?;
     // The view carries no order queue, so these two answer from what it does carry
-    // (LUA-17; approximations, not measured against the original):
-    // `InQueue(unit)`: the craft is still under way (speed above zero), which is how
-    // stock missions use it ("arrived": near the point and no longer in its queue).
+    // (LUA-17; approximations, not measured against the original).
+    // `InQueue(unit)`: the craft is in a processing queue. Read from the executable, static: the
+    // call answers whether the craft's queue stage (the queue manager of its craft process, the
+    // one that holds a craft waiting at a gate or a dock) is above zero, and says nothing of
+    // movement, so a craft flying a course is not in a queue. The sim models no processing queue
+    // (a wormhole carries a craft over at once), so a live craft is never in one. Fed1 asks it
+    // after the wormhole: "out of the gate and past 200 units", which is the cut to the wide
+    // shot; answering "is moving" held that cut until every ship had stopped.
     table.set("InQueue", def(lua, env, "InQueue", &["h"], |_, e, _, a| {
-        Ok(Value::Boolean(e.unit("InQueue", a[0].id())?.speed > sta_core::Fixed::ZERO))
+        e.unit("InQueue", a[0].id())?;
+        Ok(Value::Boolean(false))
     })?)?;
     // `InAttackMode(unit)`: the unit fired a weapon within the last
     // `ATTACK_MODE_SECONDS` (stock missions ask it before ordering an idle patrol to engage).

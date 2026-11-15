@@ -17,7 +17,7 @@ use bevy::time::TimeUpdateStrategy;
 use sta_sim::present::Presentation;
 use std::time::Duration;
 
-const HZ: f64 = sta_core::TICK_HZ as f64;
+pub(super) const HZ: f64 = sta_core::TICK_HZ as f64;
 
 #[derive(Resource, Default)]
 struct Started(Vec<(u64, String, Option<f32>)>);
@@ -28,24 +28,24 @@ fn note_started(mut msgs: MessageReader<SoundStarted>, mut out: ResMut<Started>,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Frame {
-    tick: u64,
-    cine: bool,
-    locked: bool,
-    hud_hidden: bool,
-    fade: f32,
-    playing: usize,
-    eye: Vec3,
+pub(super) struct Frame {
+    pub(super) tick: u64,
+    pub(super) cine: bool,
+    pub(super) locked: bool,
+    pub(super) hud_hidden: bool,
+    pub(super) fade: f32,
+    pub(super) playing: usize,
+    pub(super) eye: Vec3,
 }
 
-struct Run {
-    frames: Vec<Frame>,
-    log: Vec<(u64, Presentation)>,
-    started: Vec<(u64, String, Option<f32>)>,
-    app: App,
+pub(super) struct Run {
+    pub(super) frames: Vec<Frame>,
+    pub(super) log: Vec<(u64, Presentation)>,
+    pub(super) started: Vec<(u64, String, Option<f32>)>,
+    pub(super) app: App,
 }
 
-fn secs(t: u64) -> f64 {
+pub(super) fn secs(t: u64) -> f64 {
     t as f64 / HZ
 }
 
@@ -55,7 +55,7 @@ fn drive(seconds: f64) -> Option<Run> {
 }
 
 /// The same, for the A1 campaign mission whose map is `bzn` (all missions opened).
-fn drive_mission(seconds: f64, bzn: &str) -> Option<Run> {
+pub(super) fn drive_mission(seconds: f64, bzn: &str) -> Option<Run> {
     let Ok(root) = std::env::var("STA64_TEST_A1_INSTALL") else {
         eprintln!("SKIP: set STA64_TEST_A1_INSTALL to an Armada I root");
         return None;

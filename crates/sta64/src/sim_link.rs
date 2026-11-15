@@ -108,6 +108,13 @@ impl SimLink {
         self.router.get().submit(cmd);
     }
 
+    /// Test hook: hand a command stamped by someone else (a bench edit the script or the
+    /// player could not send) to the router.
+    #[cfg(test)]
+    pub fn submit_as(&mut self, cmd: Command) {
+        self.router.get().submit(cmd);
+    }
+
     /// Where to draw `id` at `alpha` between the last two ticks: map-space
     /// position and XZ heading, as floats for rendering. `None` once gone.
     pub fn interpolate(&self, id: EntityId, alpha: f32) -> Option<([f32; 3], [f32; 2])> {

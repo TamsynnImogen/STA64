@@ -10,6 +10,8 @@ mod intro;
 mod a2_opening;
 #[path = "mission_a1_opening_tests.rs"]
 mod a1_opening;
+#[path = "mission_a1_midscene_tests.rs"]
+mod a1_midscene;
 
 use std::path::Path;
 use std::time::Duration;
