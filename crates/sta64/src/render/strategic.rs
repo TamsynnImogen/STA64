@@ -392,11 +392,15 @@ fn toggle(keys: Res<ButtonInput<KeyCode>>, mut mode: ResMut<Mode>) {
     }
 }
 
+/// A view-drawn thing that never gets a strategic icon: map scenery (a planet), which has no symbol to fall back to.
+#[derive(Component)]
+pub struct NoIcon;
+
 /// Units drawn from the view get an icon too (an arrow in the owner's colour).
 #[allow(clippy::type_complexity)]
 pub(crate) fn ensure_icons(
     mut commands: Commands,
-    units: Query<(Entity, Option<&TeamColour>, Option<&SelectRadius>), (With<FromView>, With<SimEntity>, Without<Strategic>, Without<NeedsModel>)>,
+    units: Query<(Entity, Option<&TeamColour>, Option<&SelectRadius>), (With<FromView>, With<SimEntity>, Without<Strategic>, Without<NeedsModel>, Without<NoIcon>)>,
 ) {
     for (e, colour, radius) in &units {
         let colour = colour.map_or(Color::WHITE, |c| c.0);
