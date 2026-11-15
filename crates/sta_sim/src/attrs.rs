@@ -46,6 +46,15 @@ pub struct AttrsView {
     /// override), ascending id; absence means the definition's value.
     #[serde(default)]
     pub warp: Vec<(EntityId, Fixed)>,
+    /// Units not at red (LUA-32), ascending id; absence means red.
+    #[serde(default)]
+    pub alerts: Vec<(EntityId, crate::command::AlertState)>,
+    /// The tick of the last enemy hit on each unit (LUA-32), ascending id.
+    #[serde(default)]
+    pub enemy_hit: Vec<(EntityId, u64)>,
+    /// `(team, by, ship attack orders, station attack orders)` of the ally attack counters (LUA-32), non-zero rows ascending.
+    #[serde(default)]
+    pub ally_attacks: Vec<(u8, u8, u32, u32)>,
     /// Craft whose special-forces flag is set (`Edit::SpecialForces`, LUA-28), ascending id.
     /// Derived from the switch rows each tick; not saved state.
     #[serde(default)]
@@ -111,6 +120,9 @@ impl Attrs {
             special_forces: Vec::new(),
             impulse: Vec::new(),
             warp: Vec::new(),
+            alerts: Vec::new(),
+            enemy_hit: Vec::new(),
+            ally_attacks: Vec::new(),
         }
     }
 

@@ -127,31 +127,28 @@ fn resources_time_crew_and_exploding_read_the_view() {
 }
 
 #[test]
-fn under_attack_is_a_hit_within_the_window_and_expires() {
+fn under_attack_reads_the_sims_last_enemy_hit_strictly_and_is_false_for_a_dead_handle() {
     let s = scene();
     let mut rt = runtime(&s);
     assert!(!eval::<bool>(&rt, "return A2.UnderAttack(a, 1.0)"));
-    let hit = SimEvent::Hit {
-        target: s.ids[0],
-        by: s.ids[1],
-        weapon: sta_content::ContentKey::NONE,
-        facing: 0,
-        shield: Fixed::ZERO,
-        hull: Fixed::from_int(5),
-        at: Vec3::ZERO,
-    };
+    let hz = sta_core::TICK_HZ as u64;
     let mut view = s.view.clone();
     let mut out = Vec::new();
-    view.tick = 100;
-    rt.think(&view, &[hit], &mut out);
+    view.attrs.enemy_hit = vec![(s.ids[0], 100)];
+    view.tick = 100 + hz - 1;
+    rt.think(&view, &[], &mut out);
     assert!(eval::<bool>(&rt, "return A2.UnderAttack(a, 1.0)"));
     assert!(!eval::<bool>(&rt, "return A2.UnderAttack(b, 9.0)"), "another object was not hit");
-    view.tick = 100 + 3 * sta_core::TICK_HZ as u64;
+    view.tick = 100 + hz;
     rt.think(&view, &[], &mut out);
-    assert!(!eval::<bool>(&rt, "return A2.UnderAttack(a, 1.0)"));
+    assert!(!eval::<bool>(&rt, "return A2.UnderAttack(a, 1.0)"), "exactly the window is not inside it (strict)");
     assert!(eval::<bool>(&rt, "return A2.UnderAttack(a, 9.0)"));
-    assert!(rt.eval::<bool>("return A2.UnderAttack(a, -1.0)").is_err());
-    assert!(rt.eval::<bool>("return A2.UnderAttack(123456, 1.0)").is_err());
+    // Hit events alone no longer count: the sim's stamp (enemy hits only) is the source.
+    view.attrs.enemy_hit.clear();
+    let hit = SimEvent::Hit { target: s.ids[0], by: s.ids[1], weapon: sta_content::ContentKey::NONE, facing: 0, shield: Fixed::ZERO, hull: Fixed::from_int(5), at: Vec3::ZERO };
+    rt.think(&view, &[hit], &mut out);
+    assert!(!eval::<bool>(&rt, "return A2.UnderAttack(a, 9.0)"));
+    assert!(!eval::<bool>(&rt, "return A2.UnderAttack(123456, 1.0)"), "a handle that is gone is false");
 }
 
 #[test]

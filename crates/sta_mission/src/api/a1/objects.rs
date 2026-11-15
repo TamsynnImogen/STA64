@@ -78,6 +78,9 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     table.set("SetSpecialEnergy", alias(lua, env, a2, "SetSpecialEnergy")?)?;
     table.set("IsVisibleToTeam", alias(lua, env, a2, "IsVisibleToTeam")?)?;
     table.set("UnderAttack", alias(lua, env, a2, "UnderAttack")?)?;
+    for name in ["IsRedAlert", "IsYellowAlert", "IsGreenAlert"] {
+        table.set(name, alias(lua, env, a2, name)?)?;
+    }
 
     table.set("GetHandle", def(lua, env, "GetHandle", &["s"], |_, e, _, a| {
         let mut c = e.ctx.borrow_mut();
@@ -437,7 +440,10 @@ fn alert(lua: &Lua, env: &Env, name: &'static str, state: AlertState) -> mlua::R
     def(lua, env, name, &["h"], move |_, e, _, a| {
         let id = a[0].id();
         e.unit(name, id)?;
-        e.edit(name, Edit::Alert(id, state))?;
+        // Only a craft or station holds an alert (the sim rejects the rest).
+        if crate::api::alert::holds_alert(&e.ctx.borrow(), id) {
+            e.edit(name, Edit::Alert(id, state))?;
+        }
         Ok(Value::Nil)
     })
 }
