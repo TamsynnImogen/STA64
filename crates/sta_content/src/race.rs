@@ -136,6 +136,8 @@ pub struct Races {
     seat: Vec<(String, SeatRaceRule)>,
     /// Authored repair values keyed by race ODF stem, not unit race key.
     repair: Vec<(String, RaceRepair)>,
+    /// `miningRateModifier` per race key (CON-51), only races that author one.
+    mining: Vec<(String, Fixed)>,
     /// Legacy profiles and loaded catalogues are authoritative. Only a bare
     /// native/fake database may infer its choices from unit definitions.
     authoritative: bool,
@@ -193,13 +195,13 @@ impl Races {
             Ok(o) => o,
             Err(e) => {
                 warnings.push(Warning::new("races.odf", e.to_string()));
-                return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), authoritative }, warnings);
+                return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), authoritative, ..Races::default() }, warnings);
             }
         };
         let declared = nonnegative_integer(&list, "numberofraces");
         if list.raw("numberofraces").is_some() && declared.is_none() {
             warnings.push(Warning::new("races.odf", "numberOfRaces must be a nonnegative integer"));
-            return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), authoritative }, warnings);
+            return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), authoritative, ..Races::default() }, warnings);
         }
         // Walk authored keys rather than an arbitrary fixed cap or a potentially
         // enormous declared count. Inherited trailing keys are inactive when a
@@ -216,6 +218,7 @@ impl Races {
         let mut crew_rates: Vec<(String, RaceCrew)> = Vec::new();
         let mut seat_rules: Vec<(String, SeatRaceRule)> = Vec::new();
         let mut repair_rules: Vec<(String, RaceRepair)> = Vec::new();
+        let mut mining_rates: Vec<(String, Fixed)> = Vec::new();
         for i in entries {
             let Some(file) = list.str(&format!("race{i}")) else {
                 continue;
@@ -274,6 +277,10 @@ impl Races {
                     };
                     if rule != SeatRaceRule::default() {
                         seat_rules.push((name.clone(), rule));
+                    }
+                    // CON-51: the race's factor on mining income, only when authored (absent: not measured).
+                    if let Some(v) = crate::orbital_income::read_nonneg(&format!("{s}.odf"), &o, "miningRateModifier", &mut warnings) {
+                        mining_rates.push((name.clone(), v));
                     }
                     // ODF::f32 applies the stock numeric suffix convention. Check the
                     // signed 32.32 range before converting: Fixed::from_f64 saturates.
@@ -347,11 +354,11 @@ impl Races {
         }
         repair_rules.sort_by(|a, b| a.0.cmp(&b.0));
         repair_rules.dedup_by(|a, b| a.0 == b.0);
-        (Races { races, crew: crew_rates, seat: seat_rules, repair: repair_rules, authoritative }, warnings)
+        (Races { races, crew: crew_rates, seat: seat_rules, repair: repair_rules, mining: mining_rates, authoritative }, warnings)
     }
 
     pub fn from_defs(races: Vec<RaceDef>) -> Races {
-        Races { races, crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), authoritative: true }
+        Races { races, crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), authoritative: true, ..Races::default() }
     }
 
     /// The crew keys of a race by its key (`unitedfederation`), any case.
@@ -363,6 +370,11 @@ impl Races {
     /// The [`SeatRaceRule`]s that are not the identity, in race order.
     pub fn seat_rules(&self) -> impl Iterator<Item = (&str, SeatRaceRule)> {
         self.seat.iter().map(|(k, r)| (k.as_str(), *r))
+    }
+
+    /// `miningRateModifier` per race key (CON-51), races that author one only.
+    pub fn mining_rate_modifiers(&self) -> impl Iterator<Item = (&str, Fixed)> {
+        self.mining.iter().map(|(k, v)| (k.as_str(), *v))
     }
 
     /// Authored repair metadata by race ODF stem, in canonical stem order.

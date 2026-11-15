@@ -39,6 +39,7 @@ pub mod rules;
 pub mod techtree;
 pub mod map;
 pub mod odf;
+pub mod orbital_income;
 pub mod strings;
 pub mod unit;
 pub mod weapon;
@@ -48,6 +49,7 @@ pub use confinement::{ConfinementInitial, ConfinementOverrides, ConfinementRules
 pub use db::{ContentBuilder, ContentDb, DEFAULT_TECH_TREE};
 pub use def::{BuildDef, CasualtyDef, ClassLabel, ColonizePodDef, DefRef, FireArc, FxRefs, Hardpoint, LaunchPoint, MoveStats, NebulaPathing, OrdnanceCrewLoss, RepairDef, ResourceWeaponDef, ShieldDef, SoundRefs, UnitDef, WeaponDef, WeaponKind};
 pub use features::{Features, Profile};
+pub use orbital_income::{NodeIncome, StationMining};
 pub use planet::PlanetRole;
 pub use gui_cfg::{Colour, GuiCfg, GuiLayout, GuiValue, Panel, Rect};
 pub use index::{OdfEntry, OdfIndex};

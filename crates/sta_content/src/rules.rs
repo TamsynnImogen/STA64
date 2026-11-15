@@ -31,6 +31,8 @@ pub struct Rules {
     seat_races: Vec<(String, SeatRaceRule)>,
     /// Authored race repair metadata by ODF stem (SIM-40), absent when unset.
     race_repairs: Vec<(String, RaceRepair)>,
+    /// `miningRateModifier` by lower-case race key (CON-51), only races that author one.
+    race_mining: Vec<(String, Fixed)>,
     /// `RTS_CFG.h`'s default craft autonomy, when the header sets either key.
     autonomy: Option<AutonomyRules>,
     /// `RTS_CFG.h`'s attack warp distance (SIM-36), when the header sets it.
@@ -547,6 +549,19 @@ impl Rules {
         self
     }
 
+    /// The race's `miningRateModifier`, `None` when the race authors none (the
+    /// engine default was not read). Not applied by the sim yet.
+    pub fn race_mining_rate_modifier(&self, race: &str) -> Option<Fixed> {
+        let race = race.trim();
+        self.race_mining.iter().find(|(k, _)| k.eq_ignore_ascii_case(race)).map(|(_, v)| *v)
+    }
+
+    /// Set the race mining modifiers (tests and content built in code).
+    pub fn with_race_mining(mut self, rows: Vec<(String, Fixed)>) -> Self {
+        self.race_mining = rows;
+        self
+    }
+
     /// Authored repair metadata for an exact race ODF stem, not a unit race key.
     pub fn race_repair(&self, stem: &str) -> Option<RaceRepair> {
         let stem = crate::odf::stem(stem);
@@ -640,6 +655,7 @@ impl Rules {
             rules.crew.get_or_insert_with(CrewRules::default).races = rates;
         }
         rules.seat_races = races.seat_rules().map(|(k, r)| (k.to_owned(), r)).collect();
+        rules.race_mining = races.mining_rate_modifiers().map(|(k, v)| (k.to_owned(), v)).collect();
         rules = rules.with_race_repairs(races.repair_rules().map(|(stem, repair)| (stem.to_owned(), repair)).collect());
         Ok((rules, warnings))
     }
@@ -716,6 +732,11 @@ impl Rules {
                 .map(|(k, r)| format!("{}:{}:{}", quoted(k), crate::digest::fixed_text(r.officer_multiplier), crate::digest::fixed_text(r.latinum_scale)))
                 .collect::<Vec<_>>();
             out.push(DigestEntry::new("race:seat-rules", format!("[{}]", rows.join(","))));
+        }
+        // CON-51: only when a race authors one, so content without the key keeps its hash.
+        if !self.race_mining.is_empty() {
+            let rows = self.race_mining.iter().map(|(k, v)| format!("{}:{}", quoted(k), crate::digest::fixed_text(*v))).collect::<Vec<_>>();
+            out.push(DigestEntry::new("race:mining-rate", format!("[{}]", rows.join(","))));
         }
         for (stem, repair) in &self.race_repairs {
             let value = Canon::new()

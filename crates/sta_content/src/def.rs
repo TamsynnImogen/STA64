@@ -337,6 +337,13 @@ pub struct UnitDef {
     /// station that can only be built in a planet's orbit (SIM-62); zero when the
     /// ODF has no `orbitTime`. `None` for every other class.
     pub orbit_time: Option<Fixed>,
+    /// `miningMultiplier` and `resourcesCanHandle` of a class `p_mining` station
+    /// (CON-51). `None` for other classes and for a station with neither key.
+    pub station_mining: Option<crate::StationMining>,
+    /// The income keys of the resource node a planet names (`resource =`): mining
+    /// rate, trickle, `infinite` and `amt<slot>` (CON-51). `None` when the node
+    /// has none. Not read by the sim yet; the amounts do not set a node's start.
+    pub node_income: Option<crate::NodeIncome>,
     pub race: String,
     pub model: String,
     pub scale: Fixed,
@@ -475,6 +482,8 @@ impl UnitDef {
             planet_max_population: 0,
             can_have_orbital_station: false,
             orbit_time: None,
+            station_mining: None,
+            node_income: None,
             race: String::new(),
             model: String::new(),
             scale: Fixed::ONE,

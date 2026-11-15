@@ -344,6 +344,8 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
             def.resource = Some(slot.unwrap_or(0) as u8);
             // SIM-62: the node's `canHaveOrbitalStation` (read from data: A2 `ResourcePlanet.odf` 1; moons, rocks 0).
             def.can_have_orbital_station = node.as_ref().and_then(|n| n.bool("canHaveOrbitalStation")).unwrap_or(false);
+            // CON-51: the node's income keys, typed and not yet read by the sim.
+            def.node_income = node.as_ref().and_then(|n| crate::orbital_income::resolve_node(&format!("{}.odf", stem(text)), n, &mut warnings));
         }
         let file = format!("{s}.odf");
         def.planet_role = crate::planet::resolve(&file, odf, profile, &mut warnings);
@@ -354,6 +356,7 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
             crate::planet::resolve_civilian_population_modifier(&file, odf, profile, def.planet_role, &mut warnings);
         def.planet_max_population = crate::planet::resolve_max_population(&file, odf, def.planet_role, &mut warnings);
         def.orbit_time = crate::planet::resolve_orbit_time(&file, odf, &def.class.0, &mut warnings);
+        def.station_mining = crate::orbital_income::resolve_station(&file, odf, &def.class.0, &model, &mut warnings);
         def.build.queue_limit = build_queue_limit(&file, odf, &mut warnings);
         def.is_starbase = station_flag(&file, odf, profile, &mut warnings);
         let mut native = Overrides::default();
