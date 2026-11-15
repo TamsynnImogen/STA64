@@ -310,6 +310,8 @@ pub struct LegacyStart {
     pub dilithium: Option<i64>,
     /// `cfgStartingCrew`: the team crew stock of a seat.
     pub crew: Option<i64>,
+    /// `cfgMaxOfficers`: the officer cap of a seat.
+    pub officers: Option<i64>,
 }
 
 impl LegacyStart {
@@ -324,7 +326,7 @@ impl LegacyStart {
             }
             v
         };
-        LegacyStart { crew: read("cfgStartingCrew"), dilithium: read("cfgStartingDilithium") }
+        LegacyStart { crew: read("cfgStartingCrew"), dilithium: read("cfgStartingDilithium"), officers: cfg.i64("cfgMaxOfficers").filter(|v| *v >= 0).map(|v| v.min(1_000_000_000)) }
     }
 }
 
@@ -1054,7 +1056,7 @@ mod cfg_tests {
         // which is digested only when it differs from the engine default.
         // The two facing keys are digested only when set (SIM-39).
         let mut rules = Rules::default().with_approach(ApproachRules { min_move_warp_distance: Fixed::from_int(1100) });
-        rules.legacy_start = LegacyStart { dilithium: Some(1), crew: Some(2) };
+        rules.legacy_start = LegacyStart { dilithium: Some(1), crew: Some(2), officers: None };
         rules.cfg.facing_weight = Some(Fixed::ONE);
         rules.cfg.facing_constant = Some(3);
         let pop = PopulationRules { levels: [Fixed::from_int(1000); 4], civilian_rate_modifier: Fixed::ONE };
@@ -1076,7 +1078,7 @@ mod legacy_start_tests {
     fn armada_one_header_start_and_officer_cap_are_typed() {
         let (r, w) = Rules::from_header(A1);
         assert!(w.is_empty(), "{w:?}");
-        assert_eq!(r.legacy_start(), LegacyStart { dilithium: Some(3500), crew: Some(4000) });
+        assert_eq!(r.legacy_start(), LegacyStart { dilithium: Some(3500), crew: Some(4000), officers: Some(100) });
         assert_eq!(r.officer_limit(0), Some(100));
         let d = ContentDigest::from_entries(r.digest_entries());
         assert_eq!(d.get("RTS_CFG.h:cfgStartingDilithium"), Some("3500"));

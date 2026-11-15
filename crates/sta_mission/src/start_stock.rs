@@ -38,9 +38,10 @@ use crate::api::Ctx;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeatStart {
     pub seat: PlayerId,
-    pub dilithium: i32,
-    pub latinum: i32,
-    pub metal: i32,
+    /// `None`: not written (a header start carries dilithium only).
+    pub dilithium: Option<i32>,
+    pub latinum: Option<i32>,
+    pub metal: Option<i32>,
     /// `None` when the table gives 0.
     pub crew: Option<i32>,
     /// `None` when the table gives 0.
@@ -80,13 +81,37 @@ pub fn from_table(table: &[sta_bzn::TeamStart]) -> Vec<SeatStart> {
         .enumerate()
         .map(|(n, t)| SeatStart {
             seat: PlayerId(n as u8),
-            dilithium: whole(t.dilithium),
-            latinum: whole(t.latinum),
-            metal: whole(t.metal),
+            dilithium: Some(whole(t.dilithium)),
+            latinum: Some(whole(t.latinum)),
+            metal: Some(whole(t.metal)),
             crew: Some(whole(t.crew)).filter(|&c| c > 0),
             officers: Some(t.officers.clamp(0, LIMIT as i32)).filter(|&o| o > 0),
         })
         .collect()
+}
+
+/// The start values of an install whose `RTS_CFG.h` carries one start for every team (`cfgStartingDilithium`,
+/// `cfgStartingCrew`, `cfgMaxOfficers`), for each of `seats`: what a map without a team table gives its
+/// seats. Empty when the header has none of the keys, so a profile whose header does not carry them (the
+/// Armada II family) is unchanged by data, not by name. Each key that is absent leaves its field unset.
+pub fn header_start(rules: &sta_content::Rules, seats: impl IntoIterator<Item = PlayerId>) -> Vec<SeatStart> {
+    let h = rules.legacy_start();
+    let whole = |v: Option<i64>| v.map(|v| v.clamp(0, i64::from(LIMIT as i32)) as i32).filter(|&v| v > 0);
+    let (dilithium, crew, officers) = (h.dilithium.map(|v| v.clamp(0, i64::from(LIMIT as i32)) as i32), whole(h.crew), whole(h.officers));
+    if dilithium.is_none() && crew.is_none() && officers.is_none() {
+        return Vec::new();
+    }
+    seats.into_iter().map(|seat| SeatStart { seat, dilithium, latinum: None, metal: None, crew, officers }).collect()
+}
+
+impl StartStock {
+    /// The map gave no team table (and none was refused): the install header's start for `seats`.
+    pub fn or_header(mut self, rules: &sta_content::Rules, seats: impl IntoIterator<Item = PlayerId>) -> StartStock {
+        if self.seats.is_empty() && self.refused.is_none() {
+            self.seats = header_start(rules, seats);
+        }
+        self
+    }
 }
 
 impl SeatStart {
@@ -101,7 +126,9 @@ impl SeatStart {
         let mut out = Vec::new();
         // Resource ids: 0 dilithium, 1 latinum, 2 metal.
         for (res, v) in [(0u8, self.dilithium), (1, self.latinum), (2, self.metal)] {
-            out.push(Edit::Cargo(self.seat, res, Fixed::from_int(v)));
+            if let Some(v) = v {
+                out.push(Edit::Cargo(self.seat, res, Fixed::from_int(v)));
+            }
         }
         if let Some(c) = self.crew {
             out.push(Edit::TeamCrew(self.seat, Fixed::from_int(c)));
