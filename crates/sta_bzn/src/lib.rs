@@ -323,6 +323,62 @@ fn start_loc(recs: &[Rec], k: usize) -> Option<(StartLoc, usize)> {
     Some((StartLoc { pos: vec3(pos), kind, team, race }, k))
 }
 
+/// What one team of an Armada II / Fleet Operations binary map starts with (the map's team table).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TeamStart {
+    pub dilithium: f32,
+    pub latinum: f32,
+    pub metal: f32,
+    /// The team's crew stock.
+    pub crew: f32,
+    /// The team's officer limit.
+    pub officers: i32,
+}
+
+/// The team table of a binary map: eight blocks of thirteen records after the objects, block `n` for
+/// team `n + 1` (Armada team numbers; block 0 is the human seat of a mission). Each block is two i32
+/// (not read), then dilithium, latinum and metal as f32 each followed by a zero pad, then more fields
+/// (an i32 officer limit, crew, ...) of which the officer limit and crew are read.
+///
+/// Evidence: read from data (every binary `a2_*` and `mp*` map of the Armada II install and the Fleet
+/// Operations Roots map `PoliticsByOtherMeans` carry exactly one run of eight such blocks; unused
+/// teams hold the `RTS_CFG.h` starting defaults; the first block of `a2_fed01` matches the stock
+/// game's start bar for dilithium, latinum, metal and crew, measured; the officer limit of the
+/// player blocks equals `SINGLE_PLAYER_OFFICER_LIMIT`, not measured). Not read: text maps, Armada I maps, Star Trek: Legacy maps, and any
+/// map where the run of eight is not found exactly once, for which the answer is empty.
+pub fn team_starts(data: &[u8]) -> Vec<TeamStart> {
+    if !data.starts_with(b"version") || sol::is_sol(data) || a1::has_header_marker(data) {
+        return Vec::new();
+    }
+    if !text_value(data, b"BinaryMode [1] =").is_some_and(|v| v.eq_ignore_ascii_case("true")) {
+        return Vec::new();
+    }
+    let Some(start) = data.windows(4).position(|w| w == b"true").map(|i| i + 4) else { return Vec::new() };
+    let start = start + data[start..].iter().take_while(|&&c| c == b'\r' || c == b'\n').count();
+    let Ok(recs) = records(data, start) else { return Vec::new() };
+    const SHAPE: [u32; 13] = [4, 4, 5, 5, 5, 5, 5, 5, 5, 4, 5, 5, 5];
+    let block_at = |i: usize| i + 13 <= recs.len() && SHAPE.iter().enumerate().all(|(j, &kind)| recs[i + j].kind == kind && recs[i + j].data.len() == 4);
+    let mut runs = Vec::new();
+    let mut i = 0;
+    while i < recs.len() {
+        if (0..8).all(|b| block_at(i + 13 * b)) {
+            runs.push(i);
+            i += 13 * 8;
+        } else {
+            i += 1;
+        }
+    }
+    let [first] = runs[..] else { return Vec::new() };
+    let f = |i: usize| f32::from_le_bytes(recs[i].data.try_into().unwrap());
+    let n = |i: usize| i32::from_le_bytes(recs[i].data.try_into().unwrap());
+    (0..8)
+        .map(|b| {
+            let at = first + 13 * b;
+            TeamStart { dilithium: f(at + 2), latinum: f(at + 4), metal: f(at + 6), officers: n(at + 9), crew: f(at + 11) }
+        })
+        .collect()
+}
+
 fn strip_odf(s: &str) -> String {
     let s = s.trim();
     if s.to_ascii_lowercase().ends_with(".odf") { s[..s.len() - 4].to_owned() } else { s.to_owned() }
@@ -535,6 +591,49 @@ MPDScriptFile = 6d6d6d5f6c6f616465722e646c6c\r\nAmbientRed [1] =\r\n0.25\r\nAmbi
 BackgroundArt = MbgBaku.SOD\r\nStarfieldOdf = ststars.odf\r\nsize [1] =\r\n1\r\n[GameObject]\r\nPrjIdLen [1] =\r\n6\r\n\
 PrjID = 4d62616b7500\r\nEntityID [1] =\r\n7\r\nteam [1] =\r\n2\r\nlabel = Baku\r\ntransform [1] =\r\n  right_x [1] =\r\n0\r\n\
   right_y [1] =\r\n0\r\n  right_z [1] =\r\n-1\r\n  position.x [1] =\r\n15.5\r\n  position.y [1] =\r\n-4\r\n  position.z [1] =\r\n33\r\n";
+
+    /// A binary map header and the given team blocks (dilithium, latinum, metal), own-authored.
+    fn team_map(teams: &[[f32; 3]]) -> Vec<u8> {
+        let rec = |out: &mut Vec<u8>, kind: u32, data: &[u8]| {
+            out.extend_from_slice(&kind.to_le_bytes());
+            out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            out.extend_from_slice(data);
+        };
+        let mut out = b"version [1] =\r\n2177\r\nBinaryMode [1] =\r\ntrue\r\n".to_vec();
+        rec(&mut out, 4, &7i32.to_le_bytes());
+        for t in teams {
+            rec(&mut out, 4, &0i32.to_le_bytes());
+            rec(&mut out, 4, &0i32.to_le_bytes());
+            for v in t {
+                rec(&mut out, 5, &v.to_le_bytes());
+                rec(&mut out, 5, &0f32.to_le_bytes());
+            }
+            rec(&mut out, 5, &21000f32.to_le_bytes());
+            rec(&mut out, 4, &600i32.to_le_bytes());
+            for v in [0f32, 3000.0, 0.0] {
+                rec(&mut out, 5, &v.to_le_bytes());
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn team_starts_reads_the_eight_block_table() {
+        let mut teams = vec![[3500.0, 1000.0, 12500.0]; 8];
+        teams[0] = [2000.0, 0.0, 1000.0];
+        let got = team_starts(&team_map(&teams));
+        assert_eq!(got.len(), 8);
+        assert_eq!(got[0], TeamStart { dilithium: 2000.0, latinum: 0.0, metal: 1000.0, crew: 3000.0, officers: 600 });
+        assert_eq!(got[7], TeamStart { dilithium: 3500.0, latinum: 1000.0, metal: 12500.0, crew: 3000.0, officers: 600 });
+    }
+
+    #[test]
+    fn team_starts_is_empty_unless_the_table_is_whole_and_unique() {
+        assert!(team_starts(&team_map(&[[1.0, 2.0, 3.0]; 7])).is_empty(), "seven blocks");
+        assert!(team_starts(&team_map(&[[1.0, 2.0, 3.0]; 16])).is_empty(), "two tables");
+        assert!(team_starts(TEXT.as_bytes()).is_empty(), "text map");
+        assert!(team_starts(b"not a map").is_empty());
+    }
 
     #[test]
     fn text_map() {
