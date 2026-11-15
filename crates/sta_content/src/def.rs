@@ -352,6 +352,12 @@ pub struct UnitDef {
     pub crew: Fixed,
     /// `maximumCrew`; absent means the starting crew amount.
     pub maximum_crew: Option<Fixed>,
+    /// Authored `facility` flag for station recrewing (SIM-70). An explicit
+    /// false is distinct from an absent key; runtime policy resolves absence.
+    pub facility: Option<bool>,
+    /// Authored `has_crew` flag for station recrewing (SIM-70). An explicit
+    /// false is distinct from an absent key; runtime policy resolves absence.
+    pub has_crew: Option<bool>,
     /// `maxCrewGain` of a station (SIM-25): what it adds to its team's crew capacity.
     pub crew_gain: Fixed,
     /// The unit's transporter and boarding keys (SIM-46 P0); typed, not read by the sim yet.
@@ -481,6 +487,8 @@ impl UnitDef {
             initial_shields: None,
             crew: Fixed::ZERO,
             maximum_crew: None,
+            facility: None,
+            has_crew: None,
             crew_gain: Fixed::ZERO,
             transport: TransportDef::default(),
             sane_crew_loss: false,
@@ -623,9 +631,6 @@ pub struct TransportDef {
     /// `transporter`: the unit can transport. `None` when no ODF in its
     /// include chain has the key (Armada I has none).
     pub transporter: Option<bool>,
-    /// `has_crew`: the unit is crewed. `None` when absent; the sim
-    /// approximates it by maximum crew above zero (`casualty.rs`) meanwhile.
-    pub has_crew: Option<bool>,
     /// `assault`: the unit may be ordered to capture (stock and Fleet Operations).
     pub assault: bool,
     /// `boardingPartyStrength`: multiplier on the carrier's boarding parties;
@@ -648,7 +653,6 @@ impl Default for TransportDef {
     fn default() -> Self {
         TransportDef {
             transporter: None,
-            has_crew: None,
             assault: false,
             boarding_party_strength: Fixed::ONE,
             disable_shields_on_transport: true,
