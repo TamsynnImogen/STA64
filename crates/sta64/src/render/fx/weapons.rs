@@ -255,7 +255,8 @@ pub(crate) fn spawn_fx(
                     // A beam weapon runs its ribbon for `duration`; a recipe of beam or
                     // cone kind on a shot the sim resolves on arrival, for its flight.
                     _ => {
-                        let life = if def.kind == WeaponKind::Beam { def.duration.max(1) as f32 } else { flight };
+                        // A mining beam is a projectile kind with a `lifeSpan` (CON-51 fix): it lives that long, as the sim's income window does.
+                        let life = if def.kind == WeaponKind::Beam || def.duration > 0 { def.duration.max(1) as f32 } else { flight };
                         let kind = if recipe.shape == Shape::Cone { quad::K_CONE } else { quad::K_BEAM };
                         cmds.spawn((mk(FxKind::Beam, life, Look::new(kind, recipe.col)), FxAlpha(0.0), Transform::from_translation(from.midpoint(to))));
                         cmds.spawn((mk(FxKind::Impact, life, flare), FxAlpha(0.0), Transform::from_translation(to)));
