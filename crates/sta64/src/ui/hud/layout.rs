@@ -34,6 +34,12 @@ pub const CELL: f32 = 56.0;
 pub const CELL_GAP: f32 = 4.0;
 /// Padding inside the grid's frame.
 pub const GRID_PAD: f32 = 8.0;
+/// The kit's viewscreen (UI-39): where a mission's in-play movie shows on the generic HUD. STA64's
+/// own layout data, arranged (a 2:1 clip fits it with room for a frame): not measured in any
+/// original, and the Armada I bridge scene's own clip rectangle is in no cfg key.
+pub const VIEWSCREEN: Vec2 = Vec2::new(380.0, 214.0);
+/// The frame around the viewscreen's picture.
+pub const VIEWSCREEN_PAD: f32 = 6.0;
 /// The radar's panel (UI-05) as the kit lays it out; measured on a frame run
 /// (`tests/hud_frame.rs` checks the radar fills it).
 pub const RADAR_PANEL: Vec2 = Vec2::new(347.0, 458.0);
@@ -95,6 +101,8 @@ pub struct HudLayout {
     pub screen: Vec2,
     pub resources: R,
     pub minimap: R,
+    /// The in-play movie panel, top right under the resources strip (UI-39).
+    pub viewscreen: R,
     /// Info panel sizes, low / middle / high.
     pub info: [Vec2; 3],
     pub grid_size: Vec2,
@@ -136,10 +144,17 @@ impl HudLayout {
             GRID_COLS as f32 * CELL + (GRID_COLS - 1) as f32 * CELL_GAP + 2.0 * GRID_PAD,
             GRID_ROWS as f32 * CELL + (GRID_ROWS - 1) as f32 * CELL_GAP + 2.0 * GRID_PAD,
         );
+        let viewscreen = R::new(
+            (screen.x - MARGIN - VIEWSCREEN.x).round(),
+            resources.bottom() + GAP,
+            VIEWSCREEN.x,
+            VIEWSCREEN.y,
+        );
         HudLayout {
             screen,
             resources,
             minimap,
+            viewscreen,
             info,
             grid_size,
             no_resource: [no("Dilithium"), no("Latinum"), no("Metal"), no("Biomatter")],
