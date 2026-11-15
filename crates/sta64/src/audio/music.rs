@@ -293,8 +293,15 @@ impl Plugin for MusicPlugin {
             .init_resource::<Context>()
             .init_resource::<MusicConfig>()
             .insert_resource(MusicState { director: Director::new(MusicConfig::default()), owners: HashMap::new() })
+            .add_systems(OnEnter(AppState::Loading), forget_owners)
+            .add_systems(OnExit(AppState::InGame), forget_owners)
             .add_systems(Update, (context_from_state, sync_director, run_music).chain().in_set(GameSet::Audio));
     }
+}
+
+/// A new sim's ids begin again: the owners of the last one's units must not answer for them.
+fn forget_owners(mut st: ResMut<MusicState>) {
+    st.owners.clear();
 }
 
 fn context_from_state(state: Option<Res<State<AppState>>>, mut ctx: ResMut<Context>) {

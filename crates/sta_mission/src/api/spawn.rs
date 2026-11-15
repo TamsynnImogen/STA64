@@ -25,6 +25,8 @@ pub(crate) struct SpawnStore {
     removed: Vec<(EntityId, ContentKey, PlayerId, Vec3, String)>,
     /// Entities the script removed since the last tick's receipts: gone to `EntityFinder` at once.
     killed: BTreeSet<EntityId>,
+    /// Ids removed through `Entity.remove` that a host has not taken yet ([`take_removed`]).
+    removed_log: Vec<EntityId>,
     /// What the script has just assigned, read back at once: the sim applies an edit on the next
     /// tick, the original's setters are synchronous (read from the executable, static). Keyed by
     /// the unit (or the pending request) and the attribute; a row of a resolved unit is valid in the
@@ -97,6 +99,27 @@ pub(super) fn pending_spawns(c: &Ctx) -> Vec<Rc<SpawnHandle>> {
         .filter(|h| matches!(h.state.get(), SpawnStatus::Queued | SpawnStatus::Submitted(_)))
         .cloned()
         .collect()
+}
+
+/// Lists `id` as a scripted removal (a call the original performs silently), next to `Entity.remove`'s.
+///
+/// Only a unit alive at the call is listed: one that died on this very tick keeps its real death
+/// effect. The list is bounded for a host that never takes it.
+pub(crate) fn note_removed(c: &mut Ctx, id: EntityId) {
+    const BOUND: usize = 4096;
+    if c.alive(id).is_none() {
+        return;
+    }
+    if c.spawns.removed_log.len() >= BOUND {
+        c.spawns.removed_log.remove(0);
+    }
+    c.spawns.removed_log.push(id);
+}
+
+/// The ids the script removed with `Entity.remove` since the last call (a plain removal, as opposed
+/// to a destruction the script causes on purpose: `A2.ExplodeNow`, damage or hull edits).
+pub(crate) fn take_removed(c: &mut Ctx) -> Vec<EntityId> {
+    std::mem::take(&mut c.spawns.removed_log)
 }
 
 /// Whether the script removed `id` since the last tick's receipts.
@@ -355,6 +378,7 @@ fn dispatch(c: &mut Ctx, actor: EntityRef, action: EntityAction) -> bool {
             let queued = edit(c, Edit::Kill(id));
             if queued {
                 c.spawns.killed.insert(id);
+                note_removed(c, id);
                 c.spawns.removed.extend(row);
             }
             queued

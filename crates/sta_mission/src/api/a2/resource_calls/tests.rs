@@ -188,8 +188,11 @@ fn a_failed_resource_write_taints_no_entity_named_by_its_amount() {
     let win = format!("if A2.IsAlive({id}) then A2.SucceedMission(0, 0) end");
     // The amount is a value: the end stands.
     assert_eq!(end(format!("A2.NoteGap('AddMetal', 1, {id})\n{win}")), MissionEndState::Ended { won: true });
-    // Argument 0 in 1..8 is a team, not a handle.
-    assert_eq!(end(format!("A2.NoteGap('AddMetal', 2, 5)\n{win}")), MissionEndState::Ended { won: true });
+    // Argument 0 in 1..8 is a team, not a handle: the unit with that handle is not tainted.
+    let low = view.units.iter().map(|u| u.id.0).find(|i| (1..=8).contains(i)).expect("a unit with a handle in 1..8");
+    let win_low = format!("if A2.IsAlive({low}) then A2.SucceedMission(0, 0) end");
+    assert_eq!(end(format!("A2.NoteGap('AddMetal', {low}, 5)\n{win_low}")), MissionEndState::Ended { won: true });
+    assert!(matches!(end(format!("A2.NoteGap('Special_Attack', {low}, 5)\n{win_low}")), MissionEndState::Blocked(_)), "the control");
     // The control: the same id as a handle of another gap taints it.
     assert!(matches!(end(format!("A2.NoteGap('Special_Attack', {id}, 5)\n{win}")), MissionEndState::Blocked(_)));
 }

@@ -6,6 +6,8 @@
 
 #[path = "mission_intro_tests.rs"]
 mod intro;
+#[path = "mission_a2_opening_tests.rs"]
+mod a2_opening;
 #[path = "mission_a1_opening_tests.rs"]
 mod a1_opening;
 
@@ -420,6 +422,73 @@ fn a_script_that_faults_gives_the_player_the_cineractive_back() {
     assert!(released, "and the fault released it (errors {errors:?})");
     let faults = app.world().resource::<MissionHandle>().with(|rt| rt.errors().iter().filter(|e| is_fault(e)).count());
     assert!(faults >= 1, "the fault is what released it");
+}
+
+/// The destroyed units the host was told of.
+#[derive(Resource, Default)]
+struct Shown {
+    destroyed: Vec<sta_core::EntityId>,
+}
+
+fn watch_destroyed(mut msgs: MessageReader<crate::sim_link::SimMsg>, mut shown: ResMut<Shown>) {
+    for m in msgs.read() {
+        if let sta_sim::SimEvent::Destroyed { id, .. } = &m.0 {
+            shown.destroyed.push(*id);
+        }
+    }
+}
+
+/// A script whose set-up, a little after its first update, replaces a unit and starts a cineractive with a
+/// shot: the first frame shown must already be that shot, over a world without the removed unit, and the host
+/// is told of no destruction for the scripted removal. Otherwise the default strategy camera is drawn first and
+/// a death effect plays for the unit the script replaced.
+#[test]
+fn the_first_frame_shown_is_the_scripts_opening_shot_over_the_world_it_set_up() {
+    let script = "local made = false\n\
+        local function onCin() \
+            for _, v in pairs(EntityFinder(function(e) return e:isType(Entity.Type.GameObject) end):find()) do \
+                local odf, at, who = v.odf, v.position, v.player.number \
+                Entity.add(odf, who, at) \
+                Entity.remove(v) \
+                break \
+            end \
+            Cineractive.active = true \
+            Cineractive:lookFrom(Vector(3000, 500, 3000)) \
+            Cineractive:lookAt(Vector(3500, 0, 3500)) \
+        end\n\
+        MMM.register(function(t) if t > 1e9 then Mission:finish(true, 0) end if not made then made = true \
+            Monitor('go', false, nil, function() return true end, nil):hook('onCin', MonitorHook.Type.OnTrue, nil, onCin, nil) end end)\n";
+    let mut app = app(with_tutorial_script(script));
+    app.init_resource::<Shown>()
+        .add_plugins(crate::input::camera_cinematic::CinematicCameraPlugin)
+        .add_systems(Update, watch_destroyed.after(crate::app::GameSet::SimLink));
+    let cam = app.world_mut().spawn((crate::viewer::Orbit { focus: Vec3::ZERO, yaw: 0.0, pitch: 0.7, dist: 400.0, home: (Vec3::ZERO, 1.0) }, Transform::default())).id();
+    settle(&mut app, 4);
+    app.world_mut().write_message(crate::frontend::campaign::StartMission { campaign: "tutorials".into(), mission: 0 });
+    let mut loaded: Option<Vec<sta_core::EntityId>> = None;
+    let mut first: Option<(bool, bool, Vec3, Vec<sta_core::EntityId>)> = None;
+    let mut errors = Vec::new();
+    for _ in 0..600 {
+        app.update();
+        if let Some(h) = app.world().get_resource::<MissionHandle>() {
+            errors = h.with(|rt| rt.errors().to_vec());
+        }
+        let ids: Vec<_> = app.world().get_resource::<SimLink>().map(|l| l.curr().units.iter().map(|u| u.id).collect()).unwrap_or_default();
+        if state(&app) != AppState::InGame {
+            loaded = Some(ids).filter(|i| !i.is_empty());
+            continue;
+        }
+        let w = app.world();
+        first = Some((w.resource::<crate::ui::presentation::CineractiveState>().on, w.resource::<crate::input::camera_cinematic::CinematicCamera>().locked, w.get::<crate::viewer::Orbit>(cam).unwrap().focus, ids));
+        break;
+    }
+    let (on, locked, focus, shown_ids) = first.unwrap_or_else(|| panic!("the game was shown (state {:?}, screen {:?}, errors {errors:?})", state(&app), screen(&app)));
+    let loaded = loaded.expect("the map's units were there while loading");
+    assert!(on && locked, "the first frame shown is already the cineractive's (errors {errors:?})");
+    assert!(focus.distance(Vec3::ZERO) > 100.0, "and the shot's pose, not the default strategy camera's: {focus:?}");
+    let removed: Vec<_> = loaded.iter().filter(|id| !shown_ids.contains(id)).collect();
+    assert!(!removed.is_empty(), "the script's set-up removed units before the first frame (errors {errors:?})");
+    assert!(app.world().resource::<Shown>().destroyed.is_empty(), "no destruction is shown for units that were never on screen: {:?}", app.world().resource::<Shown>().destroyed);
 }
 
 #[test]
