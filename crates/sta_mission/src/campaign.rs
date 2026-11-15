@@ -1024,6 +1024,23 @@ pub fn launch_runtime_with_gaps(
     paths: Vec<(String, Vec<[f32; 3]>)>,
     label_gaps: Vec<crate::map_labels::LabelGap>,
 ) -> Result<MissionRuntime, StartError> {
+    launch_runtime_with_start(path, reader, seed, seat, setup, sim, paths, label_gaps, Vec::new())
+}
+
+/// [`launch_runtime_with_gaps`] with the seats' start values (the map's team table, [`crate::start_stock`]):
+/// queued as the script's first commands, ahead of anything it queues while it loads.
+#[allow(clippy::too_many_arguments)]
+pub fn launch_runtime_with_start(
+    path: &str,
+    reader: ScriptReader,
+    seed: u64,
+    seat: (PlayerId, PlayerNumbering),
+    setup: &GameSetup,
+    sim: &Sim,
+    paths: Vec<(String, Vec<[f32; 3]>)>,
+    label_gaps: Vec<crate::map_labels::LabelGap>,
+    start_stock: Vec<crate::start_stock::SeatStart>,
+) -> Result<MissionRuntime, StartError> {
     let cfg = MissionConfig {
         seat: Some(seat.0),
         player_numbering: seat.1,
@@ -1032,7 +1049,7 @@ pub fn launch_runtime_with_gaps(
         paths,
         view: Some((*sim.view()).clone()),
     };
-    let runtime = MissionRuntime::load_with_gaps(path, seed, cfg, label_gaps, move |p| reader(p));
+    let runtime = MissionRuntime::load_with_start(path, seed, cfg, label_gaps, start_stock, move |p| reader(p));
     if let Some(e) = runtime.errors().first() {
         return Err(StartError::Blocked(format!("{path} did not load: {e}")));
     }
@@ -1187,8 +1204,7 @@ impl CampaignRunner {
         let sim = Sim::from_setup(&setup);
         let carried = sim.labels.iter().map(|(_, l)| l.clone()).collect();
         let gaps = host.map_label_gaps(c, m, &carried);
-        let mut runtime = launch_runtime_with_gaps(&path, reader, seed, host.seat(), &setup, &sim, host.map_paths(c, m), gaps)?;
-        runtime.set_start_stock(host.start_stock(c, m));
+        let runtime = launch_runtime_with_start(&path, reader, seed, host.seat(), &setup, &sim, host.map_paths(c, m), gaps, host.start_stock(c, m))?;
         let ai_hub = sta_ai::MissionAiHub::new(host.aip_library());
         self.active = Some(ActiveMission {
             campaign: campaign.to_owned(),
