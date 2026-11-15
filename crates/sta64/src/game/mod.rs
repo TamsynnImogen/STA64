@@ -56,7 +56,8 @@ pub struct LocalRace {
     pub name: String,
     pub interface: Option<String>,
     pub interface_sprites: Option<String>,
-    pub music: Option<String>,
+    /// The gameplay playlist (calm music), empty when the install names none.
+    pub music: Vec<String>,
 }
 
 /// The seats of a skirmish, and what was decided on the way.
@@ -129,7 +130,7 @@ pub fn local_race(races: &Races, name: &str) -> LocalRace {
         name: name.to_owned(),
         interface: def.and_then(|r| r.interface.clone()),
         interface_sprites: def.and_then(|r| r.interface_sprites.clone()),
-        music: def.and_then(|r| r.multiplayer_music.clone().or_else(|| r.single_player_music.clone())),
+        music: def.map(|r| r.playlist(true)).unwrap_or_default(),
     }
 }
 
@@ -268,7 +269,7 @@ pub fn apply_race(
         }
     }
     if race.is_changed() && let Some(mut music) = music {
-        music.calm = race.music.iter().cloned().collect();
+        music.calm.clone_from(&race.music);
         info!("music: {:?} for {}", music.calm, race.name);
     }
 }
@@ -402,7 +403,7 @@ mod gui_selection_tests {
             .add_systems(Update, apply_race);
         app.insert_resource(LocalRace {
             name: "test".into(), interface: Some("gui_test.cfg".into()),
-            interface_sprites: Some("gui_test.spr".into()), music: None,
+            interface_sprites: Some("gui_test.spr".into()), music: Vec::new(),
         });
         app.update();
         assert_eq!(app.world().resource::<HudConfig>().gui.as_ref().unwrap().canvas, (1600, 1200));
@@ -424,6 +425,34 @@ mod gui_selection_tests {
         assert!(app.world().resource::<HudConfig>().gui.is_none());
         assert!(app.world().resource::<GuiSkin>().table.is_none());
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod music_tests {
+    use super::*;
+    use sta_content::Races;
+
+    /// An Armada I race lists `track0..`: a match plays them as its calm playlist, a mission
+    /// seat and an instant-action seat alike.
+    #[test]
+    fn a_race_with_a_track_list_sets_the_calm_playlist() {
+        let (races, _) = Races::load_with(&mut |n, v| {
+            if v != 0 {
+                return None;
+            }
+            match n.to_ascii_lowercase().trim_end_matches(".odf") {
+                "races" => Some("race0=fx".to_owned()),
+                "fx" => Some("name=fx\ninstantActionSlot=0\ntrack0=\"a.wav\"\ntrack1=\"b.wav\"".to_owned()),
+                _ => None,
+            }
+        });
+        let local = local_race(&races, "fx");
+        assert_eq!(local.music, ["a.wav", "b.wav"]);
+        let mut app = App::new();
+        app.init_resource::<crate::audio::MusicConfig>().insert_resource(local).add_systems(Update, apply_race);
+        app.update();
+        assert_eq!(app.world().resource::<crate::audio::MusicConfig>().calm, ["a.wav", "b.wav"]);
     }
 }
 

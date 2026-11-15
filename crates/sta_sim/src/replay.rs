@@ -740,7 +740,7 @@ mod tests {
         let other = Races::from_defs(vec![sta_content::RaceDef {
             stem: "fx".into(), name: "fx".into(), display_key: None, slot: Some(0),
             interface: None, interface_sprites: None,
-            single_player_music: None, multiplayer_music: None,
+            single_player_music: None, multiplayer_music: None, music_tracks: Vec::new(),
             standard_units: vec!["fx_cruiser".into()],
             minimal_units: vec![], stock: [9, 0, 0, 0],
             lots_stock: [0; 4], normal_crew: None, lots_crew: None,

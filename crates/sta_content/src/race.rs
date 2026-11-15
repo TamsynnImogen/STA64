@@ -52,6 +52,8 @@ pub struct RaceDef {
     pub interface_sprites: Option<String>,
     pub single_player_music: Option<String>,
     pub multiplayer_music: Option<String>,
+    /// Armada I's music play list: `track0`, `track1`, ... in order (read from the race ODFs).
+    pub music_tracks: Vec<String>,
     /// `standardunits1..`, ODF stems.
     pub standard_units: Vec<String>,
     /// `minimalunits1..`, ODF stems.
@@ -63,6 +65,18 @@ pub struct RaceDef {
     /// Authored crew stock, absent when the ODF does not configure it.
     pub normal_crew: Option<i64>,
     pub lots_crew: Option<i64>,
+}
+
+impl RaceDef {
+    /// The race's gameplay music: Armada I's `track0..` list, else the one file of
+    /// `singleplayermusic` / `multiplayermusic` (`multiplayer` picks which is tried first).
+    pub fn playlist(&self, multiplayer: bool) -> Vec<String> {
+        if !self.music_tracks.is_empty() {
+            return self.music_tracks.clone();
+        }
+        let (first, second) = if multiplayer { (&self.multiplayer_music, &self.single_player_music) } else { (&self.single_player_music, &self.multiplayer_music) };
+        first.clone().or_else(|| second.clone()).into_iter().collect()
+    }
 }
 
 /// What a seat starts with.
@@ -306,6 +320,7 @@ impl Races {
                         interface_sprites: text("interfacesprites"),
                         single_player_music: text("singleplayermusic"),
                         multiplayer_music: text("multiplayermusic"),
+                        music_tracks: (0..).map_while(|i| text(&format!("track{i}"))).collect(),
                         standard_units: numbered(&o, "standardunits"),
                         minimal_units: numbered(&o, "minimalunits"),
                         stock: [
@@ -664,6 +679,23 @@ mod tests {
         assert_eq!(r.get("norace").unwrap().slot, None);
         let slots: Vec<_> = r.playable().iter().map(|r| r.stem.as_str()).collect();
         assert_eq!(slots, ["federation", "klingon"]);
+    }
+
+    #[test]
+    fn music_playlist_is_the_track_list_or_the_single_file() {
+        // Armada I race ODFs list `track0..`; Armada II ones name one file per mode.
+        let (races, warnings) = Races::load_with(&mut loader(&[
+            ("races", "race0=a1\nrace1=a2\nrace2=none"),
+            ("a1", "name=fx\ninstantActionSlot=0\ntrack0=\"m300.wav\"\ntrack1=\"m115.wav\"\ntrack2=\"m100.wav\""),
+            ("a2", "name=fy\ninstantActionSlot=1\nsinglePlayerMusic=\"sp.wav\"\nmultiPlayerMusic=\"mp.wav\""),
+            ("none", "name=fz\ninstantActionSlot=2"),
+        ]));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(races.get("a1").unwrap().playlist(false), ["m300.wav", "m115.wav", "m100.wav"]);
+        assert_eq!(races.get("a1").unwrap().playlist(true), ["m300.wav", "m115.wav", "m100.wav"]);
+        assert_eq!(races.get("a2").unwrap().playlist(false), ["sp.wav"]);
+        assert_eq!(races.get("a2").unwrap().playlist(true), ["mp.wav"]);
+        assert!(races.get("none").unwrap().playlist(false).is_empty());
     }
 
     #[test]

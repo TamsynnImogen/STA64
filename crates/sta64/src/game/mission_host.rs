@@ -183,7 +183,7 @@ impl MissionLaunch {
             name: def.name.clone(),
             interface: def.interface.clone(),
             interface_sprites: def.interface_sprites.clone(),
-            music: def.single_player_music.clone().or_else(|| def.multiplayer_music.clone()),
+            music: def.playlist(false),
         })
     }
 }

@@ -85,7 +85,7 @@ fn local_race_skin_resets_between_matches_and_does_not_follow_selection() {
         .add_systems(Update, apply_race);
     app.insert_resource(LocalRace {
         name: "local".into(), interface: None,
-        interface_sprites: Some("authored.spr".into()), music: None,
+        interface_sprites: Some("authored.spr".into()), music: Vec::new(),
     });
     app.update();
     assert_eq!(app.world().resource::<GuiSkin>().table.as_deref(), Some("authored.spr"));
@@ -93,7 +93,7 @@ fn local_race_skin_resets_between_matches_and_does_not_follow_selection() {
     app.update();
     assert_eq!(app.world().resource::<GuiSkin>().table.as_deref(), Some("authored.spr"));
     app.insert_resource(LocalRace {
-        name: "no_skin".into(), interface: None, interface_sprites: None, music: None,
+        name: "no_skin".into(), interface: None, interface_sprites: None, music: Vec::new(),
     });
     app.update();
     assert_eq!(app.world().resource::<GuiSkin>().table, None);

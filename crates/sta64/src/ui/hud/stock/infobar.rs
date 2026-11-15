@@ -416,7 +416,7 @@ mod tests {
             interface: None,
             interface_sprites: None,
             single_player_music: None,
-            multiplayer_music: None,
+            multiplayer_music: None, music_tracks: Vec::new(),
             standard_units: Vec::new(),
             minimal_units: Vec::new(),
             stock: [0; 4],
