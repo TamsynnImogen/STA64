@@ -19,6 +19,7 @@ use sta_content::{ButtonSlots, SlotCommand, button_slots::SLOTS};
 
 use super::super::{StockState, layout::StockLayout};
 use crate::ui::{
+    i18n::tr,
     hud::{
         HudState, commands,
         layout::R,
@@ -110,26 +111,26 @@ pub(in crate::ui::hud) fn buttons(feed: &HudFeed, page: Page, slots: &ButtonSlot
             // TODO(UI-19): a build list longer than the free slots needs paging; the original's
             // rule is not measured.
             if let (Some(slot), Some(builder)) = (cancel, model::builder(feed)) {
-                put(button(slot, "Cancel", Act::Cancel(builder.id), Look::Ready, &["b_cancel"]));
+                put(button(slot, &tr("Cancel"), Act::Cancel(builder.id), Look::Ready, &["b_cancel"]));
             }
             if let Some(slot) = back {
-                put(button(slot, "Back", Act::Back, Look::Ready, &["b_back"]));
+                put(button(slot, &tr("Back"), Act::Back, Look::Ready, &["b_back"]));
             }
         }
         Page::Orders => {
             for (slot, c) in slots.page(true) {
                 if let Some((label, icons, act, look)) = command(c, feed) {
-                    put(button(slot, label, act, look, icons));
+                    put(button(slot, &tr(label), act, look, icons));
                 }
             }
             if let Some(slot) = slots.slot(SlotCommand::Back) {
-                put(button(slot, "Back", Act::Back, Look::Ready, &["b_back"]));
+                put(button(slot, &tr("Back"), Act::Back, Look::Ready, &["b_back"]));
             }
         }
         _ => {
             for (slot, c) in slots.page(false) {
                 if let Some((label, icons, act, look)) = command(c, feed) {
-                    put(button(slot, label, act, look, icons));
+                    put(button(slot, &tr(label), act, look, icons));
                 }
             }
         }

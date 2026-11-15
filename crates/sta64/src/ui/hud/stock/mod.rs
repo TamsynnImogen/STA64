@@ -351,6 +351,8 @@ pub(super) fn refresh(
             .as_ref()
             .map_or_else(NativeCommands::default, |m| NativeCommands::load(&m.0));
         state.loaded = true;
+    }
+    if mount_changed {
         state.slots = None;
     }
     let a1 = a1::is_a1(profile.as_deref());
