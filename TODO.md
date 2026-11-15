@@ -164,6 +164,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] UI-16 playtest: skirmish on A1, A2, FO 3.2.7, Roots, Classic: stock HUD info panel, mouse-over bar, command and PREV/NEXT buttons, Refit grid captions are in the mod's font and readable; no clipped or doubled text.
 - [?] UI-16 playtest: A2 stock at 1024x768: info panel lines unclipped, minimap filter buttons without captions; FO resource numbers not doubled at 4:3.
 
+- [?] SIM-70 station Recrew: in a fresh match, reduce an owned station's crew, activate Recrew and check that station crew rises while the player pool pays the same amount. Check full/empty pool, toggle/Stop, damage pause, owner changes and save/reload. Native timing is backed by static rules and headless checks; graphical acceptance remains manual. Yard recrewing remains separate.
+
 ## Checked earlier (morning list)
 
 - [x] Construction live-feedback fixes accepted (2026-11-11, `construction-a1666d0`): the user confirmed visible beams, later chunk reveal and the constructor staying fixed under normal/queued movement. Automated Stop/cancellation and snapshot checks pass. FPS was not reported; this does not complete broader native/Android checks above.
