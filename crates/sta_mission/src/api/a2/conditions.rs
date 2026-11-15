@@ -24,7 +24,7 @@ use sta_sim::view::UnitFlags;
 mod derelict;
 
 use crate::api::search::{Query, near};
-use crate::api::{Ctx, Shared, dist, pos_f64};
+use crate::api::{ABSENT_DISTANCE, Ctx, Shared, dist, pos_f64};
 
 /// Resource ids in the world view: 0 dilithium, 1 latinum, 2 metal.
 const DILITHIUM: usize = 0;
@@ -350,13 +350,21 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
 }
 
 /// `A2.GetDistance(object, path, point)`: the object to a point of
-/// `A2.paths[path]`, a table the host fills from the map.
+/// `A2.paths[path]`, a table the host fills from the map. Rule (read from the executable,
+/// static; LUA-36): an object that names nothing live, or a path name the map lacks, answers
+/// 1e30 (the dead-handle constant of LUA-21, no error); the point index is clamped into
+/// `0..count`. The distance metric is the two-object form's (3D here; the executable's reads x and
+/// z only: a deviation that predates this package and is not changed here).
 pub(super) fn path_distance(c: &mut Ctx, lua: &Lua, args: &MultiValue) -> mlua::Result<f64> {
     let name = "GetDistance";
     let id = handle(name, args, 0)?;
     let path = text(name, args, 1)?.ok_or_else(|| bad(name, 1, "a path name"))?;
     let index = int(name, args, 2)?;
-    let from = pos_f64(alive(c, name, id)?.pos);
+    let Some(unit) = c.alive(id).cloned() else {
+        c.dead_handle("A2", name, id)?;
+        return Ok(ABSENT_DISTANCE);
+    };
+    let from = pos_f64(unit.pos);
     let missing = |c: &mut Ctx, why: String| {
         let why = format!("A2.{name}: {why}");
         c.unsupported(&why);
@@ -367,11 +375,17 @@ pub(super) fn path_distance(c: &mut Ctx, lua: &Lua, args: &MultiValue) -> mlua::
         return Err(missing(c, "A2.paths is missing".into()));
     };
     let Value::Table(points) = paths.raw_get::<Value>(path.as_str())? else {
-        return Err(missing(c, format!("path '{path}' is not in A2.paths (the host fills it from the map)")));
+        c.note_absent_path(format!("absent path '{path}' (A2.{name})"));
+        return Ok(ABSENT_DISTANCE);
     };
-    let point = usize::try_from(index).ok().and_then(|i| points.raw_get::<Value>(i + 1).ok());
-    let Some(Value::Table(p)) = point else {
-        return Err(missing(c, format!("path '{path}' has no point {index}")));
+    let count = points.raw_len();
+    if count == 0 {
+        c.note_absent_path(format!("absent path '{path}' (A2.{name})"));
+        return Ok(ABSENT_DISTANCE);
+    }
+    let point = usize::try_from(index).unwrap_or(0).min(count - 1);
+    let Ok(Value::Table(p)) = points.raw_get::<Value>(point + 1) else {
+        return Err(missing(c, format!("path '{path}' has a malformed point")));
     };
     let get = |k: &str| p.raw_get::<f64>(k).ok().filter(|v| v.is_finite());
     match (get("x"), get("y"), get("z")) {

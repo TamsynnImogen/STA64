@@ -184,7 +184,7 @@ fn a_pending_build_token_raises_and_taints_in_both_bindings() {
     // A2: a real pending token raises, naming the call.
     rt.eval::<()>("A2.paths.Q = { {x=40,y=0,z=0}, {x=50,y=0,z=0} }; tok2 = A2.BuildObject('ship', 0, 'Q', 1)").unwrap();
     let e = rt.eval::<bool>("return A2.IsDerelict(tok2)").expect_err("pending").to_string();
-    assert!(e.contains("A2.IsDerelict"), "{e}");
+    assert!(e.contains("A2.IsDerelict") && e.contains("is not alive"), "{e}");
     // A failed or unknown A1 token stays the lenient "no such object": derelict.
     assert!(truth(&rt, "A1.IsDerelict(0x40000063)"));
 }

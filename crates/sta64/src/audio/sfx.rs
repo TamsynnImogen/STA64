@@ -104,6 +104,11 @@ impl VoiceLimiter {
     }
 }
 
+/// A new sim's ids begin again: nothing seen of the last one may answer for them.
+fn forget_units(mut st: ResMut<SfxState>) {
+    st.seen.clear();
+}
+
 #[derive(Resource, Default)]
 struct SfxState {
     limiter: VoiceLimiter,
@@ -121,6 +126,8 @@ impl Plugin for SfxPlugin {
             .add_message::<PlaySound>()
             .init_resource::<SfxConfig>()
             .init_resource::<SfxState>()
+            .add_systems(OnEnter(crate::app::AppState::Loading), forget_units)
+            .add_systems(OnExit(crate::app::AppState::InGame), forget_units)
             .add_systems(Update, run_sfx.in_set(GameSet::Audio).before(play_sounds));
     }
 }
