@@ -54,12 +54,19 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// scripted warp speeds (LUA-31). Format 29 appends the transporter orders,
 /// parties in flight and shield holds (SIM-46). Format 31 appends station
 /// recrew activation and damage-pause rows (SIM-70); 30 is reserved by LUA-32.
+/// Format 33 adds the guard order to the scripted-order rows (LUA-39; 32 is
+/// reserved by LUA-32's alert state): a build without it would refuse such a row
+/// as a corrupt record, but could not tell the file from a valid one by version.
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 31;
+pub const FORMAT_VERSION: u16 = 33;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
 mod recrew_tests;
+
+#[cfg(test)]
+#[path = "snapshot/guard_tests.rs"]
+mod guard_tests;
 
 const HEADER: usize = 4 + 2 + 4 + 8;
 

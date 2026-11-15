@@ -1,0 +1,55 @@
+//! LUA-39: format 33 carries guard rows in the scripted-order record; the previous formats
+//! are refused and a forged or unknown-tag row is a load error.
+
+use super::*;
+use crate::command::{Command, CommandKind, Order};
+use crate::movement::approach_tests;
+use sta_core::{Fixed, PlayerId, Vec3};
+
+fn guarded() -> Sim {
+    let mut sim = approach_tests::sim(approach_tests::db(sta_content::Profile::Sta2Classic, Some(1100)));
+    let db = sim.content.clone().unwrap();
+    let at = |x: i32| Vec3 { x: Fixed::from_int(x), y: Fixed::ZERO, z: Fixed::ZERO };
+    let ahead = (Fixed::ZERO, Fixed::ONE);
+    let ward = sim.spawn_def(db.key("st_target").unwrap(), PlayerId(1), at(0), ahead).unwrap();
+    let guard = sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), at(250), ahead).unwrap();
+    let cmd = Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Guard { units: vec![guard], ward }) };
+    crate::WorldSource::step(&mut sim, &[cmd]);
+    assert!(matches!(sim.scripted.job(guard), Some(crate::orders::Job::Guard { .. })));
+    sim
+}
+
+#[test]
+fn the_format_is_33_and_the_previous_formats_are_refused() {
+    assert_eq!(FORMAT_VERSION, 33);
+    let sim = guarded();
+    let bytes = sim.snapshot();
+    assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), 33);
+    for old in [31u16, 32] {
+        let mut stale = bytes.clone();
+        stale[4..6].copy_from_slice(&old.to_le_bytes());
+        assert!(matches!(Sim::from_snapshot(&stale, sim.content.clone()), Err(SnapshotError::FormatVersion { found }) if found == old));
+    }
+}
+
+#[test]
+fn a_guard_row_survives_and_an_unknown_tag_or_a_cut_file_is_a_load_error() {
+    let sim = guarded();
+    let bytes = sim.snapshot();
+    let back = Sim::from_snapshot(&bytes, sim.content.clone()).unwrap();
+    assert_eq!(back.snapshot(), bytes, "save, load, save");
+    // The guard's job tag is the second byte from the end of the scripted record; an unknown tag
+    // is what a build without guards would meet.
+    let rows = sim.scripted.to_rows();
+    let record = chain::enc(&ScriptedRec { version: 1, rows });
+    let mut forged = record.clone();
+    let tag = forged.len() - 2;
+    assert_eq!(forged[tag], 7, "Job::Guard is tag 7");
+    forged[tag] = 8;
+    let bad = chain::with(&bytes, chain::SCRIPTED, forged);
+    assert!(!chain::corrupt(&bad, sim.content.clone()).is_empty());
+    // Truncation anywhere is refused.
+    for cut in [bytes.len() - 1, bytes.len() / 2, HEADER + 1] {
+        assert!(Sim::from_snapshot(&bytes[..cut], sim.content.clone()).is_err(), "cut at {cut}");
+    }
+}
