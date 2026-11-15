@@ -250,10 +250,12 @@ pub type Shift3 = (Fixed, Fixed, Fixed);
 /// For each pair whose bodies (full radii) overlap in 3D: the push is
 /// `depth` along the centre line between the two craft plus a vertical part
 /// `vertical_bias * depth` that lifts the higher craft and lowers the lower
-/// one (equal heights: the lower id goes up). The push is shared by speed:
-/// each craft takes `|v| / (|v_a| + |v_b|)`, so a parked craft is never
-/// moved and the mover takes all of it; both nearly still (sum under 0.01)
-/// split 0.5 / 0.5. An immovable body never moves and the other takes all.
+/// one (equal heights: the lower id goes up and the higher id down; not
+/// measured). The push is shared by speed: each craft takes
+/// `|v| / (|v_a| + |v_b|)`, so a craft at speed exactly zero is never moved
+/// and the mover takes all of it (a braking or turning craft keeps a small
+/// speed and takes a small share); both nearly still (sum under 0.01) split
+/// 0.5 / 0.5. An immovable body never moves and the other takes all.
 /// Coincident centres push straight up and down. Displacements come back
 /// ascending by id, non-zero only, for movable bodies. A pure function of the
 /// snapshot, in [`Fixed`] arithmetic.
@@ -266,7 +268,6 @@ pub fn separate_3d(
     let mut acc = vec![zero; grid.bodies.len()];
     let half = Fixed::from_bits(Fixed::ONE.to_bits() / 2);
     let still = Fixed::from_f64(0.01);
-    let tie = Fixed::ONE;
     for (ai, bi) in grid.pair_indices() {
         let (a, b) = (grid.bodies[ai], grid.bodies[bi]);
         let (wa, wb) = match (a.movable, b.movable) {
@@ -297,11 +298,12 @@ pub fn separate_3d(
             (dx / d, dy / d, dz / d, r - d)
         };
         // The higher craft of the pair goes up, the lower one down; on an
-        // exact tie both go up (not measured: the original's tie is noise).
+        // exact tie the lower id goes up and the higher id down, so a tie
+        // lifts nothing in total (the original's tie is noise: not measured).
         let (sa, sb) = match dy.cmp(&Fixed::ZERO) {
             std::cmp::Ordering::Greater => (-Fixed::ONE, Fixed::ONE),
             std::cmp::Ordering::Less => (Fixed::ONE, -Fixed::ONE),
-            std::cmp::Ordering::Equal => (tie, tie),
+            std::cmp::Ordering::Equal => (Fixed::ONE, -Fixed::ONE),
         };
         let lift = vertical_bias * gap;
         acc[ai] = (

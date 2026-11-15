@@ -22,12 +22,12 @@ fn p3(x: i32, y: i32, z: i32) -> Vec3 {
 pub(crate) const RADIUS: i32 = 20;
 const SUM: f64 = 40.0;
 
-fn db(profile: Profile) -> Arc<ContentDb> {
+fn db(profile: Profile, radius: i32) -> Arc<ContentDb> {
     let mut ship = UnitDef::new("st_ship", "craft");
     ship.race = "st".into();
     ship.movement = MoveStats::from_f32(140.0, 1.0, 1.0, 1.0, 1.0);
     ship.movement.combat_speed = n(70);
-    ship.radius = n(RADIUS);
+    ship.radius = n(radius);
     ship.hull = n(100_000);
     Arc::new(
         ContentDb::builder()
@@ -40,11 +40,15 @@ fn db(profile: Profile) -> Arc<ContentDb> {
 }
 
 pub(crate) fn sim(profile: Profile) -> Sim {
+    sim_r(profile, RADIUS)
+}
+
+fn sim_r(profile: Profile, radius: i32) -> Sim {
     let seat = |id| PlayerSetup { id: PlayerId(id), team: TeamId(1), race: "st".into(), control: Control::Idle };
     Sim::from_setup(&GameSetup {
         seed: 9,
         map: Arc::new(sta_content::MapDef::empty()),
-        content: db(profile),
+        content: db(profile, radius),
         players: vec![seat(1), seat(2)],
         options: GameOptions::default(),
     })
@@ -260,7 +264,7 @@ fn pinned_digest_of_two_craft_crossing() {
     assert_eq!(native, PINNED_NATIVE, "{native:#x}");
 }
 
-const PINNED_A2: u64 = 0x6013_6f58_a43e_a9f7;
+const PINNED_A2: u64 = 0xa559_5c89_0457_1491;
 const PINNED_NATIVE: u64 = 0x7bf3_4c37_09cc_fc90;
 
 #[test]
@@ -268,7 +272,7 @@ fn a_craft_with_a_goal_descends_on_the_straight_line_and_arrives_with_the_horizo
     let mut sim = sim(Profile::Sta2Classic);
     let a = put(&mut sim, p3(0, 20, 0), (1, 0));
     go(&mut sim, &[a], p3(1000, 0, 0));
-    let mut checked = 0;
+    let (mut checked, mut halfway) = (0, false);
     for _ in 0..900 {
         sim.step(&[]);
         let at = sim.unit(a).unwrap().pos;
@@ -278,13 +282,21 @@ fn a_craft_with_a_goal_descends_on_the_straight_line_and_arrives_with_the_horizo
             assert!((fl(at.y) / left - 0.02).abs() < 0.002, "x {} y {}", fl(at.x), fl(at.y));
             checked += 1;
         }
+        // Half way along it is still about half the height (the old climb had
+        // spent all of it within a fraction of a second).
+        if (fl(at.x) - 500.0).abs() < 3.0 {
+            assert!((8.0..=12.0).contains(&fl(at.y)), "y {} half way", fl(at.y));
+            halfway = true;
+        }
     }
     assert!(checked > 100);
+    assert!(halfway, "never passed the half way mark");
     let end = sim.unit(a).unwrap();
     assert!(gap_xz(end.pos, p3(1000, 0, 0)) < 5.0);
     assert!(end.pos.y >= Fixed::ZERO && fl(end.pos.y) < 2.0, "ended at height {}", fl(end.pos.y));
 }
 
+/// A pin of rule that did not change (the old climb held it too).
 #[test]
 fn a_craft_with_no_goal_holds_its_height() {
     let mut sim = sim(Profile::Sta2Classic);
@@ -338,4 +350,80 @@ fn an_enemy_station_stays_a_solid_craft_are_pushed_out_of_and_it_never_moves() {
     // Solid rule unchanged: three quarters of each radius, craft pushed fully out.
     assert!(closest >= 150.0 + 75.0 - 15.0, "came within {closest}");
     assert_eq!(sim.unit(station).unwrap().pos, p3(0, 0, 0));
+}
+
+fn body(id: u32, at: Vec3, movable: bool) -> crate::spatial::Body {
+    crate::spatial::Body { id: EntityId(id), pos: at, radius: n(20), movable }
+}
+
+fn shifts(bodies: &[crate::spatial::Body], speeds: &[(u32, i32)]) -> Vec<(EntityId, crate::spatial::Shift3)> {
+    let grid = crate::spatial::Grid::build(bodies, 7);
+    let speed = |id: EntityId| n(speeds.iter().find(|s| s.0 == id.0).map_or(0, |s| s.1));
+    crate::spatial::separate_3d(&grid, &speed, Fixed::from_f64(0.42))
+}
+
+#[test]
+fn an_immovable_body_never_moves_and_the_other_takes_the_whole_push() {
+    // A rig (immovable) and a craft overlapping by 10 along X, both at rest.
+    let out = shifts(&[body(1, p3(0, 0, 0), false), body(2, p3(30, 0, 0), true)], &[]);
+    assert_eq!(out.len(), 1);
+    let (id, (x, _, _)) = out[0];
+    assert_eq!(id, EntityId(2));
+    assert!((fl(x) - 10.0).abs() < 0.01, "{}", fl(x));
+}
+
+#[test]
+fn at_equal_heights_the_lower_id_goes_up_and_the_higher_id_down() {
+    // Two movers at the same height, same speed, overlapping along X.
+    let out = shifts(&[body(1, p3(0, 0, 0), true), body(2, p3(30, 0, 0), true)], &[(1, 50), (2, 50)]);
+    let (a, b) = (out[0].1, out[1].1);
+    assert!(a.1 > Fixed::ZERO && b.1 < Fixed::ZERO, "{a:?} {b:?}");
+    assert!((fl(a.1 + b.1)).abs() < 0.01, "no net lift: {a:?} {b:?}");
+    // Pushed apart along the line, half each.
+    assert!(a.0 < Fixed::ZERO && b.0 > Fixed::ZERO);
+}
+
+#[test]
+fn only_a_craft_at_speed_zero_is_never_moved() {
+    // A crawling craft takes a small share, a craft at rest none.
+    let out = shifts(&[body(1, p3(0, 0, 0), true), body(2, p3(30, 0, 0), true)], &[(1, 0), (2, 5)]);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].0, EntityId(2));
+}
+
+#[test]
+fn the_armada_one_classic_profile_keeps_the_xz_rule() {
+    let r = fly(
+        Profile::Sta1Classic,
+        (p3(0, 0, 500), p3(1000, 0, 500), (1, 0)),
+        None,
+        Some(p3(500, 0, 512)),
+        400,
+    );
+    assert_eq!(r.a.y, 0.0);
+    assert!(r.parked_moved > 1.0, "{}", r.parked_moved);
+}
+
+/// Known difference: formation slots are 60 apart (movement.rs), so craft
+/// whose radii sum to more than that overlap their own slots and are pushed
+/// apart; they end a few units off their slots and a few units above and below
+/// the plane (the residual of the height rule, see `climb_line`). The group
+/// still arrives.
+#[test]
+fn a_group_move_of_large_craft_ends_close_to_its_slots_and_the_plane() {
+    let mut sim = sim_r(Profile::Sta2Classic, 35);
+    let ids: Vec<_> = (0..3).map(|i| put(&mut sim, p3(0, 0, i * 200), (1, 0))).collect();
+    let kind = CommandKind::Order(Order::Formation { units: ids.clone(), kind: 1 });
+    sim.step(&[Command { player: PlayerId(1), seq: 0, kind }]);
+    let kind = CommandKind::Order(Order::Move { units: ids.clone(), to: p3(1000, 0, 200), queue: false });
+    sim.step(&[Command { player: PlayerId(1), seq: 1, kind }]);
+    for _ in 0..900 {
+        sim.step(&[]);
+    }
+    for (i, id) in ids.iter().enumerate() {
+        let at = sim.unit(*id).unwrap().pos;
+        let slot = p3(1000, 0, 200 - (i as i32 - 1) * 60);
+        assert!(gap_xz(at, slot) < 15.0, "craft {i} ended {} from its slot", gap_xz(at, slot));
+        assert!(fl(at.y).abs() < 10.0, "craft {i} ended at height {}", fl(at.y));
+    }
 }

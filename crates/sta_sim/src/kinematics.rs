@@ -388,11 +388,12 @@ fn climb(u: &mut Unit, target: Vec3, dt: Fixed) {
     u.pos.y = u.pos.y + clamp(dy, -st.max_speed * dt, st.max_speed * dt);
 }
 
-/// Horizontal distance between two points, zero beyond the box a square
-/// would overflow in (the callers only use it as a divisor guard).
+/// Horizontal distance between two points, saturating at 32000 (half the
+/// widest span whose squares fit: the sum of two squares wraps past a
+/// diagonal of about 46000). The callers only use it as a divisor.
 fn flat_distance(a: Vec3, b: Vec3) -> Fixed {
     let (dx, dz) = (b.x - a.x, b.z - a.z);
-    let limit = Fixed::from_int(40_000);
+    let limit = Fixed::from_int(32_000);
     if dx.abs() >= limit || dz.abs() >= limit {
         return limit;
     }
@@ -405,7 +406,9 @@ fn flat_distance(a: Vec3, b: Vec3) -> Fixed {
 /// the goal's height as it arrives, brakes with the horizontal approach and
 /// never overshoots. `ds` is the distance covered this tick, `flat` the
 /// horizontal distance left before it. A craft with no goal never gets here
-/// and holds its height. Straight above its goal (`flat` zero) it climbs at
+/// and holds its height. Known difference: a craft displaced late in its
+/// route arrives with a small residual height, as the arrival halts it
+/// before the line is finished. Straight above its goal (`flat` zero) it climbs at
 /// cruise speed as before.
 fn climb_line(u: &mut Unit, target: Vec3, ds: Fixed, flat: Fixed, dt: Fixed) {
     if flat == Fixed::ZERO {
