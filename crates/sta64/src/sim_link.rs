@@ -149,12 +149,38 @@ impl SimLink {
     }
 }
 
+/// The ids of units a mission script removed with a removal call (`Entity.remove`) whose `Destroyed`
+/// the client has not met yet. Rule: a scripted removal shows no death effect (inferred from the stock
+/// openings showing none; not measured). Fed by the mission's controller after each think, read by
+/// [`step_sim`], which drops the matching `Destroyed` events. Calls that explode a unit on purpose,
+/// damage and hull edits are not listed. Armada I and II removal calls map to the same sim edit but
+/// are left out until their documentation says the original removes silently.
+#[derive(Resource, Clone, Default)]
+pub struct ScriptRemovals(std::sync::Arc<std::sync::Mutex<std::collections::BTreeSet<EntityId>>>);
+
+impl ScriptRemovals {
+    /// Ids the script has just removed.
+    pub fn add(&self, ids: impl IntoIterator<Item = EntityId>) {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).extend(ids);
+    }
+
+    /// Whether `id` was a scripted removal; the entry is spent (ids are not reused within a sim).
+    pub fn take(&self, id: EntityId) -> bool {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&id)
+    }
+}
+
+/// A mission or match starting or ending: the list belonged to the last sim, whose ids the next one reuses.
+fn forget_removals(mut commands: Commands) {
+    commands.remove_resource::<ScriptRemovals>();
+}
+
 /// Marks a link the bench feeds itself: `step_sim` leaves it alone.
 #[derive(Resource)]
 pub struct BenchDriven;
 
-/// A launched mission's sim waits for the game to be shown: its tick 0 and the script's first
-/// tick are the first in-game frame, whatever the load took. Inserted when the mission is
+/// A launched mission's sim waits for the game to be shown: its tick 0 and the script's opening
+/// ticks ([`crate::clock::OPENING_TICKS`]) are the first in-game frame, whatever the load took. Inserted when the mission is
 /// started, removed on entering `InGame` (or back at the front end). Menu scene, skirmish and
 /// multiplayer links never get it.
 #[derive(Resource)]
@@ -267,6 +293,8 @@ impl Plugin for SimLinkPlugin {
             .init_resource::<CommandQueue>()
             .init_resource::<Selection>()
             .init_resource::<SimEntities>()
+            .add_systems(OnEnter(crate::app::AppState::Loading), forget_removals)
+            .add_systems(OnExit(crate::app::AppState::InGame), forget_removals)
             .add_systems(Update, step_sim.in_set(GameSet::SimLink).run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<BenchDriven>)).run_if(not(resource_exists::<SimHeld>)));
     }
 }
@@ -277,6 +305,7 @@ fn step_sim(
     mut link: ResMut<SimLink>,
     mut queue: ResMut<CommandQueue>,
     mut out: MessageWriter<SimMsg>,
+    removals: Option<Res<ScriptRemovals>>,
 ) {
     for kind in queue.0.drain(..) {
         link.submit(kind);
@@ -284,8 +313,14 @@ fn step_sim(
     let due = clock.begin_frame(time.delta_secs_f64());
     for _ in 0..due {
         // A stall (lockstep waiting for a peer) holds anim time at alpha 1.
-        let Some(events) = link.tick() else { break };
+        let Some(mut events) = link.tick() else { break };
         clock.ticked();
+        // A unit the script removed with a removal call raises no death effect, sound, notice or
+        // music weight, at any tick of the mission (the script itself still sees the event). A
+        // destruction the script causes on purpose, or any other kill, is delivered as it is.
+        if let Some(r) = &removals {
+            events.retain(|e| !matches!(e, SimEvent::Destroyed { id, .. } if r.take(*id)));
+        }
         out.write_batch(events.into_iter().map(SimMsg));
     }
     clock.end_frame();
@@ -294,6 +329,7 @@ fn step_sim(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
     use bevy::time::TimeUpdateStrategy;
     use sta_sim::command::LocalRouter;
     use sta_sim::{Fixed, MoveStats, Sim};
@@ -336,5 +372,107 @@ mod tests {
         let (p0, p1) = (link.prev().unit(id).unwrap().pos.z.to_f32(), z);
         assert!((p[2] - (p0 + p1) / 2.0).abs() < 1e-3);
         assert_eq!(app.world().resource::<Seen>().0, [SimEvent::Spawned { id }]);
+    }
+
+    /// A stand-in script: after the tick a unit is due, it kills it (`listed`: through a removal call).
+    struct Killer {
+        due: Vec<(u64, EntityId, bool)>,
+        removals: ScriptRemovals,
+        seq: u32,
+    }
+
+    impl Controller for Killer {
+        fn think(&mut self, view: &WorldView, _: &[SimEvent], out: &mut Vec<sta_sim::command::Command>) {
+            for &(tick, id, listed) in &self.due {
+                if view.tick == tick {
+                    if listed {
+                        self.removals.add([id]);
+                    }
+                    self.seq += 1;
+                    out.push(sta_sim::command::Command { player: PlayerId::SCRIPT, seq: self.seq, kind: CommandKind::Edit(sta_sim::command::Edit::Kill(id)) });
+                }
+            }
+        }
+    }
+
+    #[derive(Resource, Default)]
+    struct Died(Vec<(u64, EntityId)>);
+
+    fn record_deaths(mut died: ResMut<Died>, mut msgs: MessageReader<SimMsg>, link: Res<SimLink>) {
+        for m in msgs.read() {
+            if let SimEvent::Destroyed { id, .. } = m.0 {
+                died.0.push((link.curr().tick, id));
+            }
+        }
+    }
+
+    /// A sim with `n` units, the stand-in script as its controller and `removals` as the world's list.
+    fn killer_app(n: usize, due: impl Fn(&[EntityId]) -> Vec<(u64, EntityId, bool)>, opening: bool) -> (App, Vec<EntityId>, ScriptRemovals) {
+        let mut sim = Sim::new(1);
+        let ids: Vec<EntityId> = (0..n).map(|i| sim.spawn(0, SimVec3::from_f32([i as f32 * 100.0, 0.0, 0.0]), (Fixed::ZERO, Fixed::ONE), MoveStats::from_f32(140.0, 100.0, 1.0, 1.0, 1.0))).collect();
+        let removals = ScriptRemovals::default();
+        let killer = Killer { due: due(&ids), removals: removals.clone(), seq: 0 };
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 60.0)))
+            .configure_sets(Update, GameSet::SimLink)
+            .add_plugins(SimLinkPlugin)
+            .insert_resource(SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), PlayerId(0)).with_controllers(vec![Box::new(killer)]))
+            .insert_resource(removals.clone())
+            .init_resource::<Died>()
+            .add_systems(Update, record_deaths.after(GameSet::SimLink));
+        if opening {
+            app.world_mut().resource_mut::<AnimClock>().start_fresh();
+        }
+        (app, ids, removals)
+    }
+
+    fn run(app: &mut App, ticks: u64) {
+        for _ in 0..(ticks * 3) {
+            app.update();
+        }
+    }
+
+    /// The latency `clock::OPENING_TICKS` adds up: a controller thinks after a tick and its command
+    /// applies on the next one. A change in how `SimLink::tick` steps and thinks fails here.
+    #[test]
+    fn a_controller_command_applies_on_the_next_tick() {
+        let (mut app, ids, _) = killer_app(1, |ids| vec![(1, ids[0], false)], false);
+        run(&mut app, 6);
+        assert_eq!(app.world().resource::<Died>().0, [(2, ids[0])], "thought after tick 1, applied on tick 2");
+        assert_eq!(crate::clock::OPENING_TICKS, 4, "the number's parts are derived in `clock`; a changed latency means a new sum");
+    }
+
+    #[test]
+    fn a_script_removed_unit_raises_no_death_event_at_tick_2_nor_at_tick_500() {
+        let (mut app, ids, removals) = killer_app(2, |ids| vec![(1, ids[0], true), (499, ids[1], true)], false);
+        run(&mut app, 520);
+        assert!(app.world().resource::<SimLink>().curr().unit(ids[0]).is_none() && app.world().resource::<SimLink>().curr().unit(ids[1]).is_none(), "both are gone");
+        assert!(app.world().resource::<Died>().0.is_empty(), "{:?}", app.world().resource::<Died>().0);
+        assert!(!removals.take(ids[0]) && !removals.take(ids[1]), "the entries are spent");
+    }
+
+    #[test]
+    fn a_unit_the_script_destroys_on_purpose_keeps_its_effect_also_in_the_opening_ticks() {
+        let (mut app, ids, _) = killer_app(1, |ids| vec![(1, ids[0], false)], true);
+        run(&mut app, 6);
+        assert_eq!(app.world().resource::<Died>().0, [(4, ids[0])], "delivered in the first frame, which ran the opening ticks");
+    }
+
+    #[test]
+    fn a_new_sim_does_not_inherit_the_last_ones_removals() {
+        let (mut app, ids, removals) = killer_app(1, |ids| vec![(3, ids[0], false)], false);
+        removals.add([ids[0]]); // left over from a mission that ended
+        app.world_mut().run_system_once(forget_removals).unwrap();
+        app.update();
+        run(&mut app, 8);
+        assert_eq!(app.world().resource::<Died>().0, [(4, ids[0])], "the same id in a new sim shows its death");
+    }
+
+    #[test]
+    fn an_ordinary_kill_keeps_its_effect_late_in_a_mission() {
+        let (mut app, ids, _) = killer_app(2, |ids| vec![(1, ids[0], true), (499, ids[1], false)], false);
+        run(&mut app, 520);
+        assert_eq!(app.world().resource::<Died>().0, [(500, ids[1])], "only the removed one is silent");
     }
 }

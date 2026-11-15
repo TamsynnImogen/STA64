@@ -600,10 +600,18 @@ class PreludeTests(unittest.TestCase):
     def test_engine_written_variables_are_counted_and_bindable(self):
         out = self.run_lua(
             "local v = EngineVar('strength_team_1', 'hot_float') BindVar('p_strength_team_1', 'hot_float', v)\n"
-            "print(S.p_strength_team_1, S.p_strength_team_1)\n"
+            "local w = EngineVar('tried_warp_team_1', 'hot_float') BindVar('p_tried_warp_team_1', 'hot_float', w)\n"
+            "print(S.p_strength_team_1, S.p_strength_team_1, S.p_tried_warp_team_1)\n"
             "A2 = { EngineVariable = function(n) return n == 'strength_team_1' and 7.5 or nil end }\n"
             "print(S.p_strength_team_1, MissionX.engineReads.strength_team_1)")
-        self.assertEqual(out.splitlines(), ["-1.0\t-1.0", "7.5\t3"])
+        self.assertEqual(out.splitlines(), ["0.0\t0.0\t-1.0", "7.5\t3"])
+
+    def test_armada_i_strengths_keep_the_start_value(self):
+        out = self.run_lua(
+            "MissionX.game = 'a1'\n"
+            "local v = EngineVar('strength_team_1', 'hot_float') BindVar('p_strength_team_1', 'hot_float', v)\n"
+            "print(S.p_strength_team_1)")
+        self.assertEqual(out, "-1.0")
 
     def test_out_parameter_keeps_the_slot_when_the_call_did_not_run(self):
         out = self.run_lua("A2 = { Recruit = function() return true, 42 end }\n"

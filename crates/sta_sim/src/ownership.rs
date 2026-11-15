@@ -76,6 +76,7 @@ impl Sim {
         // craft's scripted order goes with its old owner's.
         self.clear_scripted(PlayerId::SCRIPT, &[id]);
         self.colonies_craft_transferred(id);
+        self.transports.end(id);
         self.switches.edit(id, |s| s.special_forces = false);
         if previous_owner != to {
             self.reset_impulse(id);
