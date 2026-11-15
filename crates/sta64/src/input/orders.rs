@@ -10,7 +10,7 @@ use sta_sim::{EntityId, Vec3 as SimVec3};
 
 use super::Pointer;
 use super::keys::{Action, KeyBindings};
-use super::select::{AimState, Targetable, own_selection, unit_under};
+use super::select::{AimState, Targetable, own_selection, target_seen, unit_under};
 use crate::sim_link::{CommandQueue, ContentRes, OrderIssued, OrderKind, Selection, SimLink};
 
 /// Where each ship was last ordered to go, until it arrives or is stopped,
@@ -45,6 +45,7 @@ pub fn order(
     selection: Res<Selection>,
     link: Res<SimLink>,
     content: Option<Res<ContentRes>>,
+    local: Option<Res<crate::render::units::LocalPlayer>>,
     mut queue: ResMut<CommandQueue>,
     mut targets: ResMut<OrderTargets>,
     mut issued: MessageWriter<OrderIssued>,
@@ -78,6 +79,7 @@ pub fn order(
     // Right-click on a resource or an enemy gives a context order; on
     // anything else it moves.
     if let Some(order) = unit_under(cursor, ray, &units)
+        .filter(|&t| target_seen(view, local.as_deref().and_then(|l| l.0), t))
         .and_then(|t| super::context::context_order(content.as_deref().map(|c| &*c.0), view, me, &own, t))
     {
         let kind = OrderKind::of(&order);
@@ -276,6 +278,50 @@ mod tests {
         let (cmds, msgs) = click(&mut app, false);
         assert_eq!(cmds, [CommandKind::Order(Order::Attack { units: vec![a], target: e })]);
         assert_eq!((msgs.len(), msgs[0].kind), (1, OrderKind::Attack));
+    }
+
+    /// A target the local player does not see (a kept-drawn planet outside every sensor, here the
+    /// enemy) takes no context order: the click is a move. Seen, it is attacked.
+    #[test]
+    fn right_click_on_an_unseen_target_moves_and_on_a_seen_one_gives_its_order() {
+        use sta_sim::command::Command;
+        use sta_sim::{TickOutput, WorldSource, WorldView};
+        struct Frozen(std::sync::Arc<WorldView>);
+        impl WorldSource for Frozen {
+            fn step(&mut self, _: &[Command]) -> TickOutput {
+                TickOutput { view: self.0.clone(), events: vec![] }
+            }
+            fn view(&self) -> std::sync::Arc<WorldView> {
+                self.0.clone()
+            }
+        }
+        for (seen, want_attack) in [(false, false), (true, true)] {
+            let (mut app, [a, b, e]) = app();
+            app.insert_resource(crate::render::units::LocalPlayer(Some(PlayerId(0))));
+            let mut view = (**app.world().resource::<SimLink>().curr()).clone();
+            view.visibility = vec![(PlayerId(0), [a, b].into_iter().chain(seen.then_some(e)).collect::<std::collections::BTreeSet<_>>().into_iter().collect())];
+            app.insert_resource(SimLink::new(Box::new(Frozen(std::sync::Arc::new(view))), Box::new(LocalRouter::new()), PlayerId(0)));
+            aim_at(&mut app, -500.0, 0.0);
+            let (cmds, _) = click(&mut app, false);
+            match &cmds[..] {
+                [CommandKind::Order(Order::Attack { target, .. })] => assert!(want_attack && *target == e, "seen={seen}"),
+                [CommandKind::Order(Order::Move { .. })] => assert!(!want_attack, "seen={seen}"),
+                other => panic!("seen={seen}: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn target_seen_follows_the_local_players_visible_set() {
+        let (app, [a, _, e]) = app();
+        let mut view = (**app.world().resource::<SimLink>().curr()).clone();
+        let me = Some(PlayerId(0));
+        view.visibility = Vec::new();
+        assert!(target_seen(&view, me, e), "a view with no visibility data shows everything");
+        view.visibility = vec![(PlayerId(0), vec![a])];
+        assert!(target_seen(&view, me, a) && !target_seen(&view, me, e));
+        assert!(target_seen(&view, None, e), "no local player: everything drawn");
+        assert!(!target_seen(&view, Some(PlayerId(3)), a), "a seat the view does not know sees nothing");
     }
 
     #[test]
