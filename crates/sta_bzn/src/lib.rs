@@ -341,18 +341,26 @@ pub struct TeamStart {
     pub officers: i32,
 }
 
-/// The team table of a binary map: eight blocks of thirteen records after the objects, block `n` for
-/// team `n + 1` (Armada team numbers; block 0 is the human seat of a mission). Each block is two i32
-/// (not read), then dilithium, latinum and metal as f32 each followed by a zero pad, then more fields
-/// (an i32 officer limit, crew, ...) of which the officer limit and crew are read.
+/// The team table of a binary map: eight blocks after the objects, block `n` for team `n + 1` (Armada team
+/// numbers; block 0 is the human seat of a mission). Two block shapes are recognised from the record
+/// structure alone (not from a profile name): the older one is two i32 (not read) and eleven records; the
+/// newer one has one extra one-byte bool record after the two i32, and when it is true an i16 and a string
+/// record (a team name) follow it, so blocks of the newer shape vary in length. The eleven records are
+/// dilithium, latinum and metal as f32 each followed by a zero pad, then biomatter ("supply") as f32, the
+/// officer limit as i32, the crew capacity, crew and one more f32; dilithium, latinum, metal, biomatter,
+/// the officer limit and crew are read. The two shapes cannot be mistaken for each other (the third
+/// record is an f32 or a bool).
 ///
 /// Evidence: read from data (every binary `a2_*` and `mp*` map of the Armada II install and the Fleet
-/// Operations Roots map `PoliticsByOtherMeans` carry exactly one run of eight such blocks; unused
-/// teams hold the `RTS_CFG.h` starting defaults; the first block of `a2_fed01` matches the stock
-/// game's start bar for dilithium, latinum, metal and crew, measured; the officer limit of the
-/// player blocks equals `SINGLE_PLAYER_OFFICER_LIMIT`, not measured). Not read: text maps, Armada I maps, Star Trek: Legacy maps, and any
-/// map where a run of exactly eight blocks (no block-shaped record right before or after it) is not
-/// found exactly once, for which the answer is empty.
+/// Operations Roots maps carry exactly one run of eight such blocks, in either shape; unused teams hold
+/// the `RTS_CFG.h` starting defaults; the first block of `a2_fed01` matches the stock game's start bar
+/// for dilithium, latinum, metal and crew, measured; the officer limit of the player blocks equals
+/// `SINGLE_PLAYER_OFFICER_LIMIT`, not measured). The biomatter slot is read from the Roots executable,
+/// static (the team loader stores it into the biomatter field); applied to Armada II maps by inference.
+/// Values are taken as written: real maps carry very large values and negative crew on some seats, which
+/// a consumer clamps. Not read: text maps, Armada I maps, Star Trek: Legacy maps, and any map where a run
+/// of exactly eight blocks (no block-shaped record right before or after it) is not found exactly once,
+/// for which the answer is empty.
 pub fn team_starts(data: &[u8]) -> Vec<TeamStart> {
     match team_table(data) {
         TeamTable::Found(t) => t,
