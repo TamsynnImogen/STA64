@@ -394,3 +394,68 @@ fn installed_ship_preview_attaches_partial_model_without_selection() {
         "installed craft should attach private partial hull geometry"
     );
 }
+
+#[test]
+fn leaving_a_match_removes_blueprints_ship_hulls_and_sparks_without_a_link() {
+    let db = sta_content::fake::db();
+    let cruiser = db.key("fx_cruiser").unwrap();
+    let station = db.key("fx_station").unwrap();
+    let view = source_view(&db);
+    let mut app = App::new();
+    app.init_resource::<Assets<Mesh>>()
+        .init_resource::<Assets<FxQuadMaterial>>()
+        .init_resource::<ConstructionEdges>()
+        .init_resource::<crate::render::particles::Particles>()
+        .init_resource::<crate::sim_link::SimEntities>()
+        .insert_resource(AnimClock::default())
+        .insert_resource(ContentRes(Arc::new(db)))
+        .insert_resource(LocalPlayer(Some(PlayerId(0))));
+    install_link(
+        &mut app,
+        view,
+        vec![
+            row(1, cruiser, 0.4, true, true, None),
+            row(3, station, 0.0, true, false, None),
+        ],
+    );
+    app.world_mut().run_system_once(sync_build_visuals).unwrap();
+    app.world_mut().flush();
+    let built = roots(&mut app);
+    assert_eq!(built.len(), 2);
+    let ship = built[&EntityId(1)].0;
+    app.world_mut()
+        .resource_mut::<ConstructionEdges>()
+        .previews
+        .insert(ship, vec![Vec3::ONE]);
+    app.world_mut().run_system_once(sync_sparks).unwrap();
+    app.world_mut().flush();
+    assert_eq!(
+        app.world_mut()
+            .query::<&YardSpark>()
+            .iter(app.world())
+            .count(),
+        3
+    );
+    // This is the real front-end transition: SimLink is removed before the
+    // map's match-entity sweep, so per-tick production systems cannot clean up.
+    app.world_mut().remove_resource::<SimLink>();
+    app.world_mut()
+        .run_system_once(crate::map::clear_match)
+        .unwrap();
+    app.world_mut().flush();
+    assert!(roots(&mut app).is_empty());
+    assert_eq!(
+        app.world_mut()
+            .query::<&YardSpark>()
+            .iter(app.world())
+            .count(),
+        0
+    );
+    assert_eq!(
+        app.world_mut()
+            .query::<&PinnedBlueprint>()
+            .iter(app.world())
+            .count(),
+        0
+    );
+}

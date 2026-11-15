@@ -224,6 +224,7 @@ fn sync_build_visuals(
                 Kind::Blueprint => "station blueprint",
             }),
             next.key,
+            crate::map::MatchEntity,
             NeedsModel(next.key.def),
             TeamColour(colour),
             pose(next.pos, next.heading),
@@ -317,6 +318,7 @@ fn sync_sparks(
             let material = mats.add(quad::material(&look));
             commands.spawn((
                 Name::new("yard weld spark"),
+                crate::map::MatchEntity,
                 YardSpark {
                     root,
                     slot,
