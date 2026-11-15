@@ -35,6 +35,16 @@ struct Game {
 }
 
 fn game(script: &str) -> Game {
+    game_with(script, false)
+}
+
+/// [`game`] with every craft flagged as special forces: script orders do nothing on an
+/// unflagged craft (LUA-28), and the taint tests below order their craft.
+fn game_flagged(script: &str) -> Game {
+    game_with(script, true)
+}
+
+fn game_with(script: &str, flag: bool) -> Game {
     let mut map = sta_content::fake::two_bases();
     map.objects.push(obj("fx_cruiser", 0, v(-1000, 0), "hero"));
     map.objects.push(obj("fx_frigate", 0, v(-900, 200), "wing"));
@@ -49,7 +59,10 @@ fn game(script: &str) -> Game {
         players: vec![seat(0, Control::Human), seat(1, Control::Idle)],
         options: GameOptions::default(),
     };
-    let sim = Sim::from_setup(&setup);
+    let mut sim = Sim::from_setup(&setup);
+    if flag {
+        super::special_forces::flag_all(&mut sim, &content);
+    }
     let cfg = MissionConfig {
         seat: Some(PlayerId(0)),
         content: Some(content),
@@ -794,7 +807,7 @@ use crate::runtime::MissionEndState;
 /// Ids: 2 hero (p0), 3 wing (p0), 4 foe (p1), 5 far (p1). `Special_Attack` (three-argument form) raises
 /// and is counted unsupported: a gap call that names both handles.
 fn end_state(script: &str) -> MissionEndState {
-    let mut g = game(script);
+    let mut g = game_flagged(script);
     g.run(5);
     g.rt.mission_end(g.view.tick)
 }
@@ -847,7 +860,7 @@ fn a_handle_that_never_existed_blocks_only_after_a_handle_producing_gap() {
 /// LUA-21: run `before` for two ticks, then show a view in which FOE is gone, run `after` and
 /// give the end state. FOE (4) was alive in the first ticks, so it is a formerly live object.
 fn end_state_after_removal(before: &str, after: &str) -> MissionEndState {
-    let mut g = game(before);
+    let mut g = game_flagged(before);
     g.run(2);
     let mut v = (*g.view).clone();
     v.units.retain(|u| u.id != FOE);
@@ -948,7 +961,7 @@ fn a_gap_that_changes_who_fights_taints_every_later_read() {
 #[test]
 fn a_raised_command_all_ships_is_a_world_effect_gap() {
     // Orders for many craft that did not go out: later reads are tainted.
-    let s = "pcall(A2.CommandAllShips, 3, 0, nil, true, false)\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
+    let s = "pcall(A2.CommandAllShips, 4, 0, nil, false, false)\nif A2.IsAlive(2) then A2.SucceedMission(0, 0) end";
     assert!(matches!(end_state(s), MissionEndState::Blocked(_)));
 }
 

@@ -220,9 +220,6 @@ fn command_all_ships(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()>
                 CMD_ATTACK => |units| Order::AttackAny { units },
                 n => return Err(gap(&c, NAME, &format!("command {n} has no order without a target"))),
             };
-            if only_flagged {
-                return Err(gap(&c, NAME, "the per-craft state the first flag selects on is not identified"));
-            }
             let candidates: Vec<EntityId> = {
                 let b = c.borrow();
                 b.view
@@ -231,6 +228,8 @@ fn command_all_ships(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()>
                     .filter(|u| listed(&b, u) && !derelict(u) && u.owner.is_player())
                     .filter(|u| owner.is_none_or(|o| u.owner == o))
                     .filter(|u| odf_ok(&b, u, odf.as_deref()))
+                    // The fourth argument keeps only special-forces craft (LUA-28).
+                    .filter(|u| !only_flagged || crate::api::special_forces::flagged(&b, u.id))
                     .map(|u| u.id)
                     .collect()
             };

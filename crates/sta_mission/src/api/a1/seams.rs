@@ -10,6 +10,7 @@ use mlua::{Function, Lua, Table, Value};
 use sta_sim::TICK_HZ;
 
 use super::{Env, args_of, def};
+use crate::api::special_forces;
 
 fn gap_write(
     lua: &Lua,
@@ -131,7 +132,20 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     table.set("DestroySensors", gap_write(lua, env, "DestroySensors", &["h"], "no subsystem destruction in the sim seam")?)?;
     table.set("AllowMultipleSpecialWeaponFire", gap_write(lua, env, "AllowMultipleSpecialWeaponFire", &["hb"], "no special-weapon rule seam in the sim")?)?;
     // Objects, flags and wormholes.
-    table.set("SetSpecialForcesFlag", gap_write(lua, env, "SetSpecialForcesFlag", &["hb"], "no special-forces marker in the sim seam")?)?;
+    // `SetSpecialForcesFlag(craft, on)` (LUA-28): the flag is the sim's `Switches.special_forces`.
+    // Read from the Armada I executable, static: a live craft takes the flag, anything else is left
+    // alone.
+    table.set("SetSpecialForcesFlag", def(lua, env, "SetSpecialForcesFlag", &["hb"], |_, e, _, a| {
+        // A craft that is dying, dead or removed this tick does nothing (as for no object).
+        let Some(unit) = e.ctx.borrow().alive(a[0].id()).cloned() else { return Ok(Value::Nil) };
+        let id = unit.id;
+        let craft = { let c = e.ctx.borrow(); c.def(&unit).is_none_or(|d| sta_sim::world::EntityKind::of_def(d) == sta_sim::world::EntityKind::Craft) };
+        let gone = special_forces::removed_this_tick(&e.ctx.borrow(), id);
+        if craft && !gone {
+            special_forces::queue_flag(&e.ctx, "A1.SetSpecialForcesFlag", id, a[1].boolean())?;
+        }
+        Ok(Value::Nil)
+    })?)?;
     table.set("TransferFlag", gap_write(lua, env, "TransferFlag", &["ii"], "flag transfer between ships has no sim seam")?)?;
     table.set("LinkWormHoles", gap_write(lua, env, "LinkWormHoles", &["hh"], "no wormhole link edit in the sim seam")?)?;
     table.set("EnableWormholeTravel", gap_write(lua, env, "EnableWormholeTravel", &["hb"], "no wormhole travel switch in the sim seam")?)?;
@@ -147,14 +161,16 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         e.gap("ReplaceObject", "no object replacement in the sim seam", args_of(a))?;
         Ok(Value::Integer(0))
     })?)?;
-    // `RecruitSpecialForces(name, team, out)` returns success and leaves the
-    // out-reference unchanged: no seam, so (false, out).
+    // `RecruitSpecialForces(name, team, out)` (LUA-28), read from the Armada I executable, static:
+    // `out` becomes 0, then the first craft of that team and class that is not in production and
+    // not yet flagged takes the flag and its handle goes to `out`; false when none qualifies.
+    // Lua has no out parameter: the call returns `ok, handle`.
     let recruit_env = env.clone();
     table.set("RecruitSpecialForces", lua.create_function(move |_, args: mlua::MultiValue| {
         let (_, a) = recruit_env.parse("RecruitSpecialForces", &["sii"], &args)?;
-        recruit_env.team("RecruitSpecialForces", a[1].int())?;
-        recruit_env.gap("RecruitSpecialForces", "no special-forces recruitment in the sim seam", args_of(&a))?;
-        Ok((false, a[2].int()))
+        let team = recruit_env.team("RecruitSpecialForces", a[1].int())?;
+        let found = special_forces::recruit(&recruit_env.ctx, "A1.RecruitSpecialForces", a[0].text(), |_, u| u.owner == team)?;
+        Ok((found.is_some(), found.map_or(0, |id| i64::from(id.0))))
     })?)?;
     // Loading rule and action-script DLLs by name: a converted mission is one
     // Lua file, so nothing is loaded; 0 is the failure status.
