@@ -41,7 +41,8 @@ pub struct InputPlugin;
 
 impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<select::Drag>()
+        app.init_resource::<crate::ui::cursor::WantedCursor>()
+            .init_resource::<select::Drag>()
             .init_resource::<select::ControlGroups>()
             .init_resource::<keys::KeyBindings>()
             .init_resource::<select::MaxSelection>()
