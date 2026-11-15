@@ -865,6 +865,11 @@ pub trait MissionHost {
     /// ([`resolved_script`] runs the one the book resolved).
     fn script(&self, _campaign: &Campaign, mission: &CampaignMission) -> Result<(String, ScriptReader), String>;
 
+    /// The map's labels the built sim carries no object for (LUA-25), for `GetHandle`'s gap record.
+    fn map_label_gaps(&self, _campaign: &Campaign, _mission: &CampaignMission, _carried: &std::collections::BTreeSet<String>) -> Vec<crate::map_labels::LabelGap> {
+        Vec::new()
+    }
+
     /// The map's named paths `(label, points)`, in file order, for `A2.paths`.
     fn map_paths(&self, _campaign: &Campaign, _mission: &CampaignMission) -> Vec<(String, Vec<[f32; 3]>)> {
         Vec::new()
@@ -998,6 +1003,22 @@ pub fn launch_runtime(
     sim: &Sim,
     paths: Vec<(String, Vec<[f32; 3]>)>,
 ) -> Result<MissionRuntime, StartError> {
+    launch_runtime_with_gaps(path, reader, seed, seat, setup, sim, paths, Vec::new())
+}
+
+/// [`launch_runtime`] with the map's unresolved labels (LUA-25, [`crate::map_labels`]), known before the
+/// script chunk loads so a `GetHandle` at load time records its gap too.
+#[allow(clippy::too_many_arguments)]
+pub fn launch_runtime_with_gaps(
+    path: &str,
+    reader: ScriptReader,
+    seed: u64,
+    seat: (PlayerId, PlayerNumbering),
+    setup: &GameSetup,
+    sim: &Sim,
+    paths: Vec<(String, Vec<[f32; 3]>)>,
+    label_gaps: Vec<crate::map_labels::LabelGap>,
+) -> Result<MissionRuntime, StartError> {
     let cfg = MissionConfig {
         seat: Some(seat.0),
         player_numbering: seat.1,
@@ -1006,7 +1027,7 @@ pub fn launch_runtime(
         paths,
         view: Some((*sim.view()).clone()),
     };
-    let runtime = MissionRuntime::load_with(path, seed, cfg, move |p| reader(p));
+    let runtime = MissionRuntime::load_with_gaps(path, seed, cfg, label_gaps, move |p| reader(p));
     if let Some(e) = runtime.errors().first() {
         return Err(StartError::Blocked(format!("{path} did not load: {e}")));
     }
@@ -1159,7 +1180,9 @@ impl CampaignRunner {
         let (path, reader) = host.script(c, m).map_err(StartError::Blocked)?;
         let setup = host.game_setup(c, m, seed).map_err(StartError::Blocked)?;
         let sim = Sim::from_setup(&setup);
-        let runtime = launch_runtime(&path, reader, seed, host.seat(), &setup, &sim, host.map_paths(c, m))?;
+        let carried = sim.labels.iter().map(|(_, l)| l.clone()).collect();
+        let gaps = host.map_label_gaps(c, m, &carried);
+        let runtime = launch_runtime_with_gaps(&path, reader, seed, host.seat(), &setup, &sim, host.map_paths(c, m), gaps)?;
         let ai_hub = sta_ai::MissionAiHub::new(host.aip_library());
         self.active = Some(ActiveMission {
             campaign: campaign.to_owned(),
@@ -1268,6 +1291,10 @@ impl VfsHost {
 }
 
 impl MissionHost for VfsHost {
+    fn map_label_gaps(&self, _campaign: &Campaign, mission: &CampaignMission, carried: &std::collections::BTreeSet<String>) -> Vec<crate::map_labels::LabelGap> {
+        crate::map_labels::read_map_label_gaps(&self.vfs, &self.index, &mission.bzn, carried)
+    }
+
     fn game_setup(&self, _campaign: &Campaign, mission: &CampaignMission, seed: u64) -> Result<GameSetup, String> {
         let path = format!("bzn/{}", mission.bzn);
         let bytes = self.vfs.read(&path).ok_or_else(|| format!("{path} missing"))?.map_err(|e| format!("{path}: {e}"))?;
@@ -1324,3 +1351,5 @@ pub fn map_setup(map: MapDef, content: Arc<ContentDb>, seed: u64) -> GameSetup {
 #[cfg(test)]
 #[path = "campaign/tests.rs"]
 mod tests;
+#[cfg(test)]
+mod label_gap_tests;
