@@ -15,8 +15,9 @@
 //! * [`MovieTarget::Panel`]: frames are written into the given image, for the
 //!   HUD's cinematic window or viewscreen (UI-39) or any UI panel to show.
 //!   [`PanelScreen`] holds the image a mission's in-panel movie goes to and the
-//!   [`PanelKind`] that shows it. Space skips a skippable panel movie
-//!   (Space); play goes on around it.
+//!   [`PanelKind`] that shows it. A panel movie has no skip key (Space stops ships
+//!   and skips cineractives): it ends when it finishes or the script stops it, and
+//!   when the match ends.
 //!
 //! # Threads and sync
 //!
@@ -104,7 +105,7 @@ pub struct PlayMovie {
     pub id: MovieId,
     pub name: String,
     pub target: MovieTarget,
-    /// The player may skip it (Esc and the like fullscreen, Space in a panel).
+    /// The player may skip it (Esc and the like); only for fullscreen.
     pub skippable: bool,
 }
 
@@ -212,7 +213,6 @@ pub struct Movies {
     fullscreen: Option<Player>,
     panels: Vec<Player>,
     skip: bool,
-    skip_panel: bool,
 }
 
 impl Movies {
@@ -238,7 +238,6 @@ impl Movies {
         self.pending.push_back(request);
     }
 
-
     /// A fullscreen movie is playing or queued.
     pub fn fullscreen_busy(&self) -> bool {
         self.fullscreen.is_some() || self.pending.iter().any(|p| matches!(p.target, MovieTarget::Fullscreen))
@@ -262,7 +261,8 @@ impl Plugin for MediaPlugin {
             .add_plugins(campaign::CampaignMoviesPlugin)
             .init_resource::<Movies>()
             .init_resource::<MovieIds>()
-            .add_systems(PreUpdate, (skip_keys, skip_panel_key).after(InputSystems))
+            .add_systems(OnEnter(crate::app::AppState::FrontEnd), stop_panel_movies)
+            .add_systems(PreUpdate, skip_keys.after(InputSystems))
             .add_systems(
                 Update,
                 (mission::bridge, intake, drive, fit_overlays, duck_music).chain().in_set(GameSet::Ui),
@@ -311,16 +311,22 @@ fn skip_keys(
     }
 }
 
-/// Space skips a skippable movie in a panel. The key is not taken: play goes on around the panel,
-/// so a running cineractive (its own skip key is Space too) is skipped by the same press, which is
-/// intended: the clip is part of the scene.
-fn skip_panel_key(keys: Option<Res<ButtonInput<KeyCode>>>, mut movies: ResMut<Movies>) {
-    // A fullscreen movie takes every key; one press skips one movie.
-    if movies.panels.is_empty() || movies.fullscreen_busy() {
-        return;
+/// The match is over (the front end is entered): a panel movie of it must not play on in the menus
+/// or show in the next match's panel. Fullscreen movies (the intros) are left alone.
+fn stop_panel_movies(mut movies: ResMut<Movies>, mut done: MessageWriter<MovieFinished>, mut commands: Commands) {
+    let mut gone = Vec::new();
+    movies.pending.retain(|p| {
+        let panel = matches!(p.target, MovieTarget::Panel(_));
+        if panel {
+            gone.push((p.id, p.name.clone()));
+        }
+        !panel
+    });
+    for p in std::mem::take(&mut movies.panels) {
+        gone.push(finish(p, &mut commands));
     }
-    if keys.is_some_and(|k| k.just_pressed(KeyCode::Space)) {
-        movies.skip_panel = true;
+    for (id, name) in gone {
+        done.write(MovieFinished { id, name, outcome: MovieOutcome::Stopped });
     }
 }
 
@@ -400,7 +406,6 @@ fn drive(
     launch(&mut movies, &vfs, &opener, &mut images, &mut commands, &mut done);
 
     let skip = std::mem::take(&mut movies.skip);
-    let skip_panel = std::mem::take(&mut movies.skip_panel);
     let mut ended: Vec<(Player, MovieOutcome)> = Vec::new();
     if let Some(mut p) = movies.fullscreen.take() {
         let skipped = skip && p.skippable;
@@ -410,8 +415,7 @@ fn drive(
         }
     }
     for mut p in std::mem::take(&mut movies.panels) {
-        let skipped = skip_panel && p.skippable;
-        match step(&mut p, dt, skipped, &mut images, mixer.as_deref_mut()) {
+        match step(&mut p, dt, false, &mut images, mixer.as_deref_mut()) {
             Some(o) => ended.push((p, o)),
             None => movies.panels.push(p),
         }

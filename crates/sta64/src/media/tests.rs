@@ -256,30 +256,38 @@ fn a_movie_that_may_not_be_skipped_ignores_escape() {
 }
 
 #[test]
-fn space_skips_a_skippable_panel_movie_and_the_key_stays_for_the_game() {
+fn a_panel_movie_has_no_skip_key() {
     let (mut app, _log) = app();
     let h = panel(&mut app);
-    let id = play(&mut app, "3000f", MovieTarget::Panel(h), true);
-    run_until(&mut app, "on the panel", |a| a.world().resource::<Movies>().panels.first().is_some_and(|p| matches!(p.phase, Phase::Playing)));
-    assert!(app.world().resource::<Movies>().panel_busy());
-    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Space);
-    run_until(&mut app, "reports", |a| !finished(a).is_empty());
-    assert_eq!((finished(&app)[0].0, &finished(&app)[0].2), (id, &MovieOutcome::Skipped));
-    assert!(app.world().resource::<ButtonInput<KeyCode>>().just_pressed(KeyCode::Space), "not taken: play goes on around the panel");
-    assert!(!app.world().resource::<Movies>().panel_busy());
+    play(&mut app, "40f", MovieTarget::Panel(h), true);
+    run_until(&mut app, "playing", |a| a.world().resource::<Movies>().panels.first().is_some_and(|p| matches!(p.phase, Phase::Playing)));
+    for k in [KeyCode::Space, KeyCode::Escape, KeyCode::Enter] {
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(k);
+    }
+    run_until(&mut app, "ends", |a| !finished(a).is_empty());
+    assert_eq!(finished(&app)[0].2, MovieOutcome::Completed);
+    assert!(app.world().resource::<ButtonInput<KeyCode>>().just_pressed(KeyCode::Space), "the keys stay for the game");
 }
 
 #[test]
-fn a_panel_movie_that_may_not_be_skipped_ignores_space_and_a_panel_never_takes_escape() {
+fn entering_the_front_end_stops_panel_movies_and_leaves_fullscreen_ones() {
+    use crate::app::AppState;
     let (mut app, _log) = app();
+    app.add_plugins(bevy::state::app::StatesPlugin).init_state::<AppState>();
+    app.update();
     let h = panel(&mut app);
-    play(&mut app, "40f", MovieTarget::Panel(h), false);
-    run_until(&mut app, "playing", |a| a.world().resource::<Movies>().panels.first().is_some_and(|p| matches!(p.phase, Phase::Playing)));
-    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Space);
-    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
-    run_until(&mut app, "ends", |a| !finished(a).is_empty());
-    assert_eq!(finished(&app)[0].2, MovieOutcome::Completed);
-    assert!(app.world().resource::<ButtonInput<KeyCode>>().just_pressed(KeyCode::Escape));
+    let in_panel = play(&mut app, "3000f", MovieTarget::Panel(h), false);
+    let h2 = panel(&mut app);
+    let queued = play(&mut app, "3000f", MovieTarget::Panel(h2), false);
+    let full = play(&mut app, "3000f", MovieTarget::Fullscreen, true);
+    run_until(&mut app, "playing", |a| !a.world().resource::<Movies>().panels.is_empty() && a.world().resource::<Movies>().fullscreen.is_some());
+    app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::FrontEnd);
+    run_until(&mut app, "stopped", |a| finished(a).len() >= 2);
+    let f = finished(&app);
+    assert!(f.iter().all(|x| x.2 == MovieOutcome::Stopped && (x.0 == in_panel || x.0 == queued)), "{f:?}");
+    assert!(!app.world().resource::<Movies>().panel_busy());
+    assert!(app.world().resource::<Movies>().fullscreen.is_some(), "an intro-style fullscreen movie plays on");
+    let _ = full;
 }
 
 #[test]

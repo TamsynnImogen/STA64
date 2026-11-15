@@ -233,7 +233,7 @@ mod tests {
     use super::*;
     use crate::app::configure_sets;
     use crate::media::{MovieId, MovieTarget, PlayMovie};
-    use crate::sim_link::{Selection};
+    use crate::sim_link::Selection;
     use crate::ui::hud::{ExternalFeed, HudFeed, HudPlugin};
 
     /// Authored sheet text with a cinematic panel (numbers match no stock sheet).
@@ -435,8 +435,13 @@ cinematicDisplayArea = 20 30 360 240
             return;
         };
         let sheet = std::env::var("STA64_TEST_CFG").unwrap_or_else(|_| "gui_fed.cfg".into());
+        // Sheets are named per race and per family; an install without this one is skipped.
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty()).as_deref()).expect("install");
-        let gui = crate::game::gui_layout(&vfs, &sheet).unwrap_or_else(|| panic!("installed {sheet} missing"));
+        if vfs.read(&format!("misc/{sheet}")).is_none() {
+            eprintln!("SKIP: no {sheet} in this install (set STA64_TEST_CFG to one it has)");
+            return;
+        }
+        let gui = crate::game::gui_layout(&vfs, &sheet).expect("installed sheet");
         for (aspect, fit) in [4.0 / 3.0, 16.0 / 10.0, 16.0 / 9.0, 21.0 / 9.0].into_iter().flat_map(|a| super::stock::layout::HudFit::ALL.map(|f| (a, f))) {
             let l = StockLayout::for_aspect_fit(&gui, aspect, fit);
             let Some(spec) = stock_spec(&l) else {
