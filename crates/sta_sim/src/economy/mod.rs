@@ -513,9 +513,9 @@ impl Economy {
                         // CON-51: a planet's node at or below its `trickleAmount` is held there and
                         // yields `trickleMiningRateFraction` of the miner's rate (read from the
                         // executable, static). A node with data for only one of the two depletes as before.
-                        let trickle = planet_trickle(db, node_def).filter(|(floor, _)| left <= *floor);
+                        let trickle = planet_trickle(db, node_def).filter(|(floor, _)| left <= *floor && !is_infinite(db, node_def));
                         let rate = trickle.map_or(cfg.rate, |(_, fraction)| cfg.rate * fraction);
-                        let take = rate.min(cfg.capacity - m.cargo).min(if trickle.is_some() { cfg.capacity } else { left });
+                        let take = rate.min(cfg.capacity - m.cargo).min(if trickle.is_some() || is_infinite(db, node_def) { cfg.capacity } else { left });
                         m.cargo = m.cargo + take;
                         if !is_infinite(db, node_def) && trickle.is_none() {
                             // Taking a planet's node below its trickle amount leaves it at the amount.

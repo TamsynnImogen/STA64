@@ -79,3 +79,25 @@ fn an_infinite_node_never_falls() {
     let got = sim.view().players.iter().find(|p| p.id == PlayerId(0)).unwrap().resources[0];
     assert!(got > Fixed::from_int(200));
 }
+
+/// The key path: `isInfinite` of the node ODF, read by the content loader, keeps a planet's node
+/// from falling and from ever meeting the trickle floor, for a miner.
+#[test]
+fn a_node_whose_odf_says_is_infinite_never_falls_for_a_miner() {
+    let odf = |name: &str, text: &str| (name.to_owned(), text.to_owned());
+    let files = [
+        odf("u_world", "unitName = \"x\"\nclassLabel = \"planet\"\nresource = \"n\"\n"),
+        odf("n", "canHaveOrbitalStation = 1\namtdilithium = 200\nisInfinite = 1\ntrickleAmount = 500\ntrickleMiningRateFraction = 0.01\n"),
+    ];
+    let (db, _) = sta_content::odf::load_with(sta_content::Profile::Sta2Classic, &sta_content::Overrides::default(), &["u_world".to_owned()], &mut |n, v| {
+        files.iter().find(|f| f.0.trim_end_matches(".odf") == n.trim_end_matches(".odf") && v == 0).map(|f| f.1.clone())
+    })
+    .unwrap();
+    let income = db.unit(db.key("u_world").unwrap()).unwrap().node_income;
+    assert_eq!(income.and_then(|n| n.infinite), Some(true));
+    let (sim, node) = run_mining(income, 3000);
+    assert!(left(&sim, node).is_none_or(|l| l == Fixed::from_int(200)));
+    let got = sim.view().players.iter().find(|p| p.id == PlayerId(0)).unwrap().resources[0];
+    // Past the floor's 1 percent trickle by far: it never fell to the floor.
+    assert!(got > Fixed::from_int(200), "{got:?}");
+}

@@ -121,6 +121,37 @@ fn nothing_is_paid_without_a_reason_to() {
 }
 
 #[test]
+fn a_station_with_its_weapons_off_earns_nothing() {
+    use crate::command::{Command, CommandKind, Edit};
+    let mut sim = game_with_content(db(&case(), true, true));
+    spawn(&mut sim, "o_world", NEUTRAL, v(0, 0));
+    let station = spawn(&mut sim, "o_station", PlayerId(0), v(RING, 0));
+    sim.step(&[Command { player: PlayerId::BENCH, seq: 1, kind: CommandKind::Edit(Edit::Weapons(station, false)) }]);
+    for _ in 0..PERIOD * 4 {
+        sim.step(&[]);
+    }
+    assert_eq!(sim.view().players.iter().find(|p| p.id == PlayerId(0)).unwrap().resources.get(2).copied().unwrap_or(Fixed::ZERO), Fixed::ZERO);
+    // Switched back on, it earns again.
+    sim.step(&[Command { player: PlayerId::BENCH, seq: 2, kind: CommandKind::Edit(Edit::Weapons(station, true)) }]);
+    for _ in 0..PERIOD * 4 {
+        sim.step(&[]);
+    }
+    assert!(sim.view().players.iter().find(|p| p.id == PlayerId(0)).unwrap().resources[2] > Fixed::ZERO);
+}
+
+#[test]
+fn extreme_mod_values_cannot_wrap_into_a_negative_amount() {
+    let mut c = case();
+    c.node.mining_rate = Some(Fixed::from_int(2_000_000_000));
+    c.node.amounts = [None, None, Some(Fixed::from_int(2_000_000_000)), None];
+    c.station.multiplier = Some(Fixed::from_int(1_000_000_000));
+    c.race = Some(Fixed::from_int(1_000_000_000));
+    let (_, metal, _) = run(db(&c, true, true), v(RING, 0), PlayerId(0), PERIOD);
+    // At most the cap a second over the living ticks.
+    assert!(metal > Fixed::ZERO && metal < Fixed::from_int(1_300_000), "{metal:?}");
+}
+
+#[test]
 fn income_needs_no_new_saved_state() {
     let (sim, metal, left) = run(db(&case(), true, true), v(RING, 0), PlayerId(0), 100);
     assert!(metal > Fixed::ZERO && left.is_some());

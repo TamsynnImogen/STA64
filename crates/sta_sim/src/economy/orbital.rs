@@ -1,4 +1,5 @@
-//! Orbital mining income (SIM-66, part of #748): a finished orbital station on its
+//! Orbital mining income (SIM-72, part of #748; implements ADR 0004 D9 and D10: the rule reads
+//! the typed content fields, whose values are in the content digest): a finished orbital station on its
 //! planet's ring whose mining beam is alive takes from the planet's node into its owner's
 //! stock, with no freighter and no dock.
 //!
@@ -14,7 +15,8 @@
 //! `duration` ticks of every `refire` ticks of the station's mining weapon (the first
 //! hardpoint whose weapon is class `minebm`), counted from tick 0: a function of the tick,
 //! so nothing is saved. Its phase against the client's drawn pulse is not synchronised
-//! (not measured). A station still being built, dying, or owned by nobody earns nothing.
+//! (not measured). A station still being built, dying, owned by nobody, or with its weapons
+//! switched off (`UnitFlags::WEAPONS_OFF`: the beam is a weapon) earns nothing.
 //!
 //! Choices, labelled: a race without `miningRateModifier` counts 1 (the engine's default
 //! was not read); the single-player difficulty modifier is not applied (not graded); only
@@ -40,6 +42,20 @@ fn beam_alive(db: &ContentDb, def: &sta_content::UnitDef, tick: u64) -> bool {
     tick % w.refire.max(1) < w.duration
 }
 
+/// Beyond this a factor or the running product is cut, so a mod's extreme values cannot
+/// wrap the fixed-point number into a negative amount (1e6 x 1e3 stays far below the range).
+const PRODUCT_CAP: i32 = 1_000_000;
+const FACTOR_CAP: i32 = 1_000;
+
+/// `rate x multiplier x modifier`, each step capped.
+fn product(rate: Fixed, multiplier: Fixed, modifier: Fixed) -> Fixed {
+    let cap = Fixed::from_int(PRODUCT_CAP);
+    let factor = Fixed::from_int(FACTOR_CAP);
+    let step = rate.min(cap);
+    let step = (step * multiplier.min(factor)).min(cap);
+    (step * modifier.min(factor)).min(cap)
+}
+
 impl Economy {
     /// One tick of every orbital station's income. `race_modifiers` is each seat's
     /// `miningRateModifier` (`None`: its race authors none).
@@ -49,7 +65,7 @@ impl Economy {
             return;
         }
         for e in units.iter() {
-            if e.progress.is_some() || e.owner == NEUTRAL || e.flags.contains(crate::view::UnitFlags::DYING) {
+            if e.progress.is_some() || e.owner == NEUTRAL || e.flags.contains(crate::view::UnitFlags::DYING) || e.flags.contains(crate::view::UnitFlags::WEAPONS_OFF) {
                 continue;
             }
             let Some(d) = db.unit(e.def).filter(|d| orbit::is_orbital(d)) else { continue };
@@ -67,7 +83,7 @@ impl Economy {
                 continue;
             }
             let race = race_modifiers.iter().find(|(p, _)| *p == e.owner).and_then(|(_, m)| *m).unwrap_or(Fixed::ONE);
-            let per = per_tick(rate * mult * race);
+            let per = per_tick(product(rate, mult, race));
             let def = units.get(planet.id).map_or(e.def, |p| p.def);
             let left = self.nodes.get(planet.id).copied().unwrap_or_else(|| start_amount(db, def));
             let trickle = planet_trickle(db, def);
