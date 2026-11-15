@@ -191,9 +191,15 @@ fn an_idle_opponent_never_acts_and_survives() {
 /// multiplayer map (`STA64_TEST_MAP`, default `blueamber`) built as the game builds it.
 /// Each seat gets its race's start units and stock, and the AI seat issues orders that
 /// the sim accepts. Prints what the AI did in the first minutes.
+/// `STA64_TEST_AI_TICKS` changes the default 9,000-tick budget (at most one hour).
+/// `STA64_TEST_AI_REQUIRE_COMBAT=1` also requires mining, a newly built armed
+/// craft, and that craft hitting the human opponent.
 #[test]
 fn install_skirmish_starts_and_the_ai_acts() {
     let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
+    let ticks: u64 = std::env::var("STA64_TEST_AI_TICKS").map_or(9000, |s| s.parse().expect("STA64_TEST_AI_TICKS is an integer"));
+    assert!((1..=108_000).contains(&ticks), "STA64_TEST_AI_TICKS must be between 1 and 108000");
+    let require_combat = std::env::var("STA64_TEST_AI_REQUIRE_COMBAT").is_ok_and(|s| s == "1");
     let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
     let map_name = std::env::var("STA64_TEST_MAP").unwrap_or_else(|_| "blueamber".into());
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
@@ -213,6 +219,15 @@ fn install_skirmish_starts_and_the_ai_acts() {
     assert_eq!(link.controllers(), 1);
     let name = |k| db.name(k).unwrap_or("?").to_owned();
     let (mut built, mut rejected, mut mined) = (Vec::new(), 0, 0);
+    let mut armed_built = std::collections::BTreeSet::new();
+    let mut built_ship_hits = 0;
+    let armed = |key| db.unit(key).is_some_and(|d| {
+        sta_sim::world::EntityKind::of_def(d) == sta_sim::world::EntityKind::Craft
+            && d.class.0 != "constructionrig" && !d.mines()
+            && d.hardpoints.iter().filter_map(|hp| db.weapon(hp.weapon.key))
+                .any(|w| sta_sim::combat::weapons::attacks_units(w) && w.resource.is_none()
+                    && w.damage > sta_sim::Fixed::ZERO && w.range > sta_sim::Fixed::ZERO)
+    });
     let view = link.curr().clone();
     for p in &view.players {
         let mine: Vec<_> = view.units.iter().filter(|u| u.owner == p.id).map(|u| name(u.def)).collect();
@@ -223,25 +238,33 @@ fn install_skirmish_starts_and_the_ai_acts() {
             assert!(!mine.is_empty(), "the AI seat has start units");
         }
     }
-    for _ in 0..(30 * 60 * 5) {
+    for _ in 0..ticks {
         for e in link.tick().unwrap() {
             match e {
                 SimEvent::Built { id, .. } => {
                     let v = link.curr();
                     if let Some(u) = v.unit(id).filter(|u| u.owner == ai) {
                         built.push((v.tick, name(u.def)));
+                        if armed(u.def) { armed_built.insert(id); }
                     }
                 }
+                SimEvent::Hit { by, target, .. }
+                    if armed_built.contains(&by) && link.curr().unit(target).is_some_and(|u| u.owner == PlayerId(0)) => built_ship_hits += 1,
                 SimEvent::Rejected { player, .. } if player == ai => rejected += 1,
-                SimEvent::Delivered { .. } => mined += 1,
+                SimEvent::Delivered { player, .. } if player == ai => mined += 1,
                 _ => {}
             }
         }
     }
     let v = link.curr();
-    println!("after 5 minutes: AI built {built:?}, {rejected} rejected, {mined} deliveries; AI units now {:?}", v.units.iter().filter(|u| u.owner == ai).map(|u| name(u.def)).collect::<Vec<_>>());
-    assert!(!built.is_empty(), "the AI built something in five minutes");
+    println!("after {ticks} ticks: AI built {built:?}, {} armed craft built, {built_ship_hits} hits from built craft, {rejected} rejected, {mined} deliveries; AI units now {:?}", armed_built.len(), v.units.iter().filter(|u| u.owner == ai).map(|u| name(u.def)).collect::<Vec<_>>());
+    assert!(!built.is_empty(), "the AI built something in {ticks} ticks");
     assert_eq!(rejected, 0, "the sim accepted every order of the AI");
+    if require_combat {
+        assert!(mined > 0, "the AI delivered mined resources");
+        assert!(!armed_built.is_empty(), "the AI produced an armed craft");
+        assert!(built_ship_hits > 0, "a newly built armed craft hit the opponent");
+    }
 }
 
 /// With `STA64_TEST_INSTALL` (+ `STA64_TEST_MOD`, `STA64_TEST_MAP`): on a real skirmish

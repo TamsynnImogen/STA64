@@ -81,6 +81,7 @@ impl Sim {
         self.switches.edit(id, |s| s.special_forces = false);
         if previous_owner != to {
             self.reset_impulse(id);
+            self.alerts.clear_hit(id);
         }
         if new_team && !self.team_changes.contains(&id) {
             self.team_changes.push(id);

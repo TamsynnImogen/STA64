@@ -650,8 +650,7 @@ from the stock scripts' constants; not measured otherwise.
   derelict crafts are not skipped (no derelict state in the view).
 - `A2.GetFirstCraft`, `A2.GetLocation(path, index)` (0-based, `A2.paths`).
 - `DestroyCritical` queues a lethal `Damage`, `ExplodeNow` a `Kill`,
-  `SetCanBeDecommissioned` the typed edit the sim rejects today (reported and
-  counted by the edit feedback); `DisableShieldGenerator`, `SetShieldPercent`,
+  `SetCanBeDecommissioned` the typed edit the sim stores as a switch bit (LUA-32); `DisableShieldGenerator`, `SetShieldPercent`,
   `SetMaxShields` and `Damage<System>` are applied by the sim (SIM-55).
 - Calls with no sim seam (position, per-team targeting, hidden/name/population/wormhole/cargo/fleet state) raise
   and are counted; see `seams()` for each reason.
