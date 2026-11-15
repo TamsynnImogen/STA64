@@ -24,6 +24,11 @@ pub struct Capabilities {
     /// `colony_ship` flag, plus the sim's own pod-ship rule (Borg beam ships are refused).
     /// Evidence: read from data (the game's command and ship definitions).
     pub colonize: bool,
+    /// A finished station with a positive live crew capacity can show Recrew.
+    /// The sim has no Recrew order yet; this is presentation only.
+    pub recrew: bool,
+    /// At least one eligible station is below its live crew maximum.
+    pub recrew_ready: bool,
     /// Same supported special kind at the same sim slot on every unit.
     pub specials: Vec<(u8, SpecialKind)>,
 }
@@ -59,6 +64,11 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
             (slot <= u8::MAX as usize && kind == SpecialKind::Cloak).then_some((slot as u8, kind))
         })
         .collect();
+    let recrew = kind == EntityKind::Station
+        && def.raw.bool("facility") != Some(false)
+        && def.raw.bool("has_crew") != Some(false)
+        && u.crew.is_some_and(|crew| crew[1] > Fixed::ZERO);
+    let recrew_ready = recrew && u.crew.is_some_and(|crew| crew[0] < crew[1]);
     Capabilities {
         stop,
         move_order: mobile,
@@ -68,6 +78,8 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
             && !def.build.list.is_empty() && !u.flags.contains(UnitFlags::BUILDING),
         mine: mobile && def.mines(),
         colonize: mobile && def.raw.bool("colony_ship").unwrap_or(false) && sta_sim::colony::is_pod_ship(db, def),
+        recrew,
+        recrew_ready,
         specials,
     }
 }
@@ -95,9 +107,22 @@ pub fn shared(feed: &HudFeed) -> Capabilities {
         common.mine |= next.mine;
         // Likewise: only the colony ships of a mixed selection take a Colonize order (see `colony_ships`).
         common.colonize |= next.colonize;
+        common.recrew |= next.recrew;
+        common.recrew_ready |= next.recrew_ready;
         common.specials.retain(|s| next.specials.contains(s));
     }
     common
+}
+
+/// Owned, finished stations below their live crew maximum in a mixed selection.
+/// This is used only to validate a UI click until the sim supports recrewing.
+pub fn recrew_stations(feed: &HudFeed, ids: &[EntityId]) -> Vec<EntityId> {
+    let Some(db) = feed.content.as_deref() else { return Vec::new() };
+    ids.iter().copied().filter(|id| {
+        feed.view.unit(*id).is_some_and(|u| {
+            u.owner == feed.player && !u.flags.contains(UnitFlags::DYING) && one(db, u).recrew_ready
+        })
+    }).collect()
 }
 
 /// The members of `ids` that can take a Mine order (the rest of a mixed selection do not receive it).
