@@ -56,6 +56,18 @@ pub fn node_slot(odf: &Odf) -> Option<usize> {
     (0..SLOTS).find(|&s| odf.f32(&amount_key(s)).is_some_and(|v| v > 0.0))
 }
 
+/// Whether an Armada I ODF is a resource moon. Armada I marks none with a `resource` key or an
+/// `amt<slot>` amount: the moon is class `scrap` without the `scrapValue` and `scrapCost` keys the
+/// scrap pieces (wrecks, salvage) carry, and the game's only stock slot is dilithium (its freighters
+/// "mine Dilithium from Dilithium Moons"). Read from data (the install's ODFs); that the executable
+/// keys on the same absence is not measured. `infinite` on a moon is not read: the sim gives
+/// every node one fixed richness and runs it dry, so the inexhaustible moon is not told apart.
+pub fn is_sta1_moon(odf: &Odf) -> bool {
+    odf.class_label().is_some_and(|c| c.trim().eq_ignore_ascii_case("scrap"))
+        && odf.raw("scrapValue").is_none()
+        && odf.raw("scrapCost").is_none()
+}
+
 /// What a game calls its stock slots.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceModel {
