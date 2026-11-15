@@ -56,6 +56,8 @@ use crate::event::SimEvent;
 use crate::world::{Entities, Entity, EntityKind, Fnv, Table};
 
 pub mod afford;
+#[cfg(test)]
+mod afford_tests;
 mod launch;
 pub(crate) mod officers;
 pub mod orbit;
