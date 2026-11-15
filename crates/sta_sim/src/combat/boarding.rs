@@ -1,11 +1,28 @@
 //! The transporter order, crew transfer, boarding and capture (SIM-46 P1).
 //!
-//! Armada II family only: a transport is accepted when the carrier's resolved
+//! Armada II family: a transport is accepted when the carrier's resolved
 //! features have `crew_loss_on_hit` (stock A2, Classic, FO 3.x, Roots), because
-//! the derelict latch the capture rules lean on exists only there (Native and
-//! Armada I are refused; the A1 rule is not read yet). Planets, boarding
-//! specials, Roots/FO deltas, hold fire and the assault attack mode are not
-//! here: `Order::Transport { attack: true }` is refused.
+//! the derelict latch the capture rules lean on exists only there. The Armada I
+//! profile (SIM-71) is accepted too, with its own differences below; Native is
+//! refused. Planets, boarding specials, Roots/FO deltas, hold fire and the
+//! assault attack mode are not here: `Order::Transport { attack: true }` is refused.
+//!
+//! **Armada I** (read from the executable, static; keys from data; **not
+//! measured**: the Armada I bench cannot script scenes). The same pulse, arrival
+//! delay, stop rule, crew floor, target shield hold, derelict and capture rules,
+//! with these differences: the kills use only the two races' `boardingStrength`
+//! (no 1.5 factor, no unit multiplier); the range is centre to centre; an enemy
+//! is boardable when its single health pool is at or below 1 % (a latched derelict
+//! passes); the carrier keeps its shields; no `transporter`, `canCommandeer` or
+//! `canBeCommandeered` (every crewed craft can transport); no capture command; no
+//! planets. After an Armada I capture, what happens to production, officers and
+//! the unit cap is not established.
+//!
+//! **Allies** (Armada II family, measured on stock Armada II): the boarder's own
+//! view decides enemy or friend; a friend or ally gains crew up to its maximum
+//! and the overflow is lost; an allied derelict revives and stays its owner's.
+//! A non-enemy target's shields drop for the transfer and return in full after
+//! the hold (`disableShieldsOnTransport` of the carrier).
 //!
 //! Rules, evidence **M** = measured on stock Armada II (bench, 2026-11-15),
 //! **S** = read from the executable (static), **D** = read from data:
@@ -42,7 +59,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use sta_content::{ContentDb, UnitDef};
+use sta_content::{ContentDb, Profile, UnitDef};
 use sta_core::{EntityId, Fixed, PlayerId, TICK_HZ, Tick, Vec3};
 
 use super::casualty::{Ctx, kill_crew};
@@ -78,6 +95,8 @@ pub(crate) struct TransportRules {
     pub target_shield_hold: Tick,
     /// How long after a pulse the carrier's shields stay off (3.3 s, M; not a data key).
     pub carrier_shield_return: Tick,
+    /// The Armada I profile (SIM-71): the original's earlier transporter (see the module docs).
+    pub armada1: bool,
 }
 
 /// Seconds as ticks, rounded to the nearest; negative reads as zero.
@@ -96,6 +115,7 @@ impl TransportRules {
             min_crew: Fixed::from_int(9),
             target_shield_hold: 3 * TICK_HZ as Tick,
             carrier_shield_return: 99,
+            armada1: db.profile() == Profile::Sta1Classic,
         }
     }
 }
@@ -103,8 +123,28 @@ impl TransportRules {
 /// `transporter` when the unit sets it (data); else every crewed ship and
 /// station, as the original's `craft.odf` default does for the units without a
 /// key (Armada I has none).
-fn can_transport(def: &UnitDef, crew_max: Fixed) -> bool {
-    def.planet_role.is_none() && def.transport.transporter.unwrap_or(crew_max > Fixed::ZERO)
+/// Armada I has no such key: every crewed craft can transport.
+fn can_transport(def: &UnitDef, crew_max: Fixed, armada1: bool) -> bool {
+    let crewed = crew_max > Fixed::ZERO;
+    def.planet_role.is_none() && if armada1 { crewed } else { def.transport.transporter.unwrap_or(crewed) }
+}
+
+/// A pool at or below 1 % is "down" for the enemy gate of Armada I (S): the
+/// ratio of the shield pool when the unit has one, else of the hull pool (Armada
+/// I has a single health pool; the sim holds it as the hull when the converted
+/// definition has no shield maximum). A derelict passes: the original's latch
+/// zeroes that pool, which the sim keeps as hull.
+fn pool_down(e: &Entity, derelict: bool) -> bool {
+    if derelict {
+        return true;
+    }
+    let (now, max) = if e.shields.max > Fixed::ZERO {
+        let pools = if e.shields.directional { 4 } else { 1 };
+        (e.shields.now[..pools].iter().fold(Fixed::ZERO, |a, &s| a + s), e.shields.max * Fixed::from_int(pools as i32))
+    } else {
+        (e.hull[0], e.hull[1])
+    };
+    max <= Fixed::ZERO || now * Fixed::from_int(100) <= max
 }
 
 /// `boardingPartyStrength` (1.0 when absent).
@@ -401,7 +441,7 @@ impl Sim {
         let target_ok = matches!(t.kind, EntityKind::Craft | EntityKind::Station)
             && t.crew.is_some_and(|c| c[1] >= Fixed::ONE)
             && db.unit(t.def).is_some_and(|d| d.planet_role.is_none());
-        if !target_ok || !can_be_commandeered(&db, self.unit_race(target).unwrap_or("")) {
+        if !target_ok || !(rules.armada1 || can_be_commandeered(&db, self.unit_race(target).unwrap_or(""))) {
             return false;
         }
         let target_owner = t.owner;
@@ -415,9 +455,9 @@ impl Sim {
                         let def = db.unit(u.def);
                         matches!(u.kind, EntityKind::Craft | EntityKind::Station)
                             // The carrier's race must be allowed to take units of another team.
-                            && (self.same_team(u.owner, target_owner) || can_commandeer(&db, self.unit_race(id).unwrap_or("")))
+                            && (rules.armada1 || self.same_team(u.owner, target_owner) || can_commandeer(&db, self.unit_race(id).unwrap_or("")))
                             && (!player.is_player() || u.owner == player)
-                            && def.is_some_and(|d| db.unit_features(d).crew_loss_on_hit && can_transport(d, u.crew.map_or(Fixed::ZERO, |c| c[1])))
+                            && def.is_some_and(|d| (rules.armada1 || db.unit_features(d).crew_loss_on_hit) && can_transport(d, u.crew.map_or(Fixed::ZERO, |c| c[1]), rules.armada1))
                             && u.crew.is_some_and(|c| c[0] > rules.min_crew && c[0] > rules.party)
                     })
             })
@@ -498,13 +538,16 @@ impl Sim {
         let Some(t) = self.units.get(target).filter(|u| alive(u)) else { return false };
         let (Some(cdef), Some(tdef)) = (db.unit(c.def), db.unit(t.def)) else { return false };
         let (Some([cnow, cmax]), Some([tnow, tmax])) = (c.crew, t.crew) else { return false };
-        if tmax < Fixed::ONE || !within(c.pos, t.pos, rules.range + cdef.radius + tdef.radius) {
+        // Armada I measures the range centre to centre (S); Armada II surface to surface (M).
+        let reach = if rules.armada1 { rules.range } else { rules.range + cdef.radius + tdef.radius };
+        if tmax < Fixed::ONE || !within(c.pos, t.pos, reach) {
             return false;
         }
         let (owner, tshield, tpos_owner) = (c.owner, shield_total(t), t.owner);
         let enemy = Diplomacy::new(&self.players, &self.relations).is_enemy(owner, tpos_owner);
         if enemy {
-            if tshield > SHIELDS_DOWN {
+            let derelict = self.subsystems.get(target).is_some_and(|r| r.derelict);
+            if if rules.armada1 { !pool_down(t, derelict) } else { tshield > SHIELDS_DOWN } {
                 return false;
             }
         } else if tnow >= tmax {
@@ -514,12 +557,21 @@ impl Sim {
         if size <= Fixed::ZERO {
             return false;
         }
-        let strength = race_strength(db, self.unit_race(carrier).unwrap_or("")) * boarding_multiplier(cdef);
+        // Armada I has no unit multiplier (S).
+        let strength = race_strength(db, self.unit_race(carrier).unwrap_or("")) * if rules.armada1 { Fixed::ONE } else { boarding_multiplier(cdef) };
         let race = self.unit_race(carrier).unwrap_or("").to_owned();
-        let drops = drops_shields(cdef);
+        // Armada I's carrier keeps its shields (no such key, S).
+        let drops = !rules.armada1 && drops_shields(cdef);
         let tick = self.tick;
         if enemy {
             self.transports.hold(target, TARGET_HOLD, tick + shield_hold(tdef, rules));
+        } else if drops {
+            // A non-enemy target's shields drop for the transfer too and return in full after the
+            // hold, like the carrier's (M on an allied target; an own-team target is assumed equal).
+            if let Some(t) = self.units.get_mut(target) {
+                t.shields.now = [Fixed::ZERO; 4];
+            }
+            self.transports.hold(target, CARRIER_HOLD, tick + rules.carrier_shield_return);
         }
         let Some(c) = self.units.get_mut(carrier) else { return false };
         c.crew = Some([cnow - size, cmax]);
@@ -547,6 +599,21 @@ impl Sim {
 
     /// A party reaches its target (see the module docs).
     pub(crate) fn resolve_party(&mut self, db: &ContentDb, p: Party) {
+        let target = p.target;
+        self.resolve_arrival(db, p);
+        // Armada I runs no casualty model to clear the derelict latch (`casualty::step`
+        // does it elsewhere), so a re-crewed unit clears it here (S: crew of 1 or more).
+        if db.profile() == Profile::Sta1Classic {
+            let Some(t) = self.units.get_mut(target).filter(|t| alive(t)) else { return };
+            let (Some(def), Some([now, _])) = (db.unit(t.def), t.crew) else { return };
+            if now >= Fixed::ONE && self.subsystems.get(target).is_some_and(|r| r.derelict) {
+                let mut ctx = Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
+                super::casualty::clear_derelict(t, def, &mut ctx);
+            }
+        }
+    }
+
+    fn resolve_arrival(&mut self, db: &ContentDb, p: Party) {
         // A party whose carrier is gone is lost (S).
         if self.units.get(p.source).is_none() {
             return;
@@ -574,7 +641,12 @@ impl Sim {
             self.capture(p.target, &p);
             return;
         }
-        let defence = boarding_multiplier(def) * race_strength(db, self.unit_race(p.target).unwrap_or("")) * DEFENCE_FACTOR;
+        let defence = if db.profile() == Profile::Sta1Classic {
+            // Armada I: the two races' strengths only (S).
+            race_strength(db, self.unit_race(p.target).unwrap_or(""))
+        } else {
+            boarding_multiplier(def) * race_strength(db, self.unit_race(p.target).unwrap_or("")) * DEFENCE_FACTOR
+        };
         if defence <= Fixed::ZERO {
             return;
         }
