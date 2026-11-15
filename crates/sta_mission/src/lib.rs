@@ -40,8 +40,11 @@ impl Labels {
 pub mod api;
 pub mod blocked;
 pub mod campaign;
+pub mod cheat;
 pub mod cineractive;
 pub mod converted;
+pub mod map_labels;
+pub mod ending;
 pub mod math;
 pub mod playthrough;
 pub mod progress;
