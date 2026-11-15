@@ -24,7 +24,7 @@ fn def<'a>(db: &'a ContentDb, name: &str) -> &'a sta_content::UnitDef {
 fn unit_keys_are_read_with_their_defaults() {
     let db = load(&[
         ("u_base.odf", "unitName = \"x\"\nclassLabel = \"craft\"\ntransporter = 1\nhas_crew = 1\nshieldDelay = 3.0f\n"),
-        ("u_child.odf", "#include \"u_base.odf\"\nassault = 1\nboardingPartyStrength = 5.0f\ndisableShieldsOnTransport = 0\nweldingAnimSpeed = 0.0\neventTransport = \"PicardTransport\"\n"),
+        ("u_child.odf", "#include \"u_base.odf\"\nassault = 1\nboardingPartyStrength = 5.0f\ndisableShieldsOnTransport = 0\nweldingAnimSpeed = 0.0\neventTransport = \"AuthoredBeam\"\n"),
         ("u_none.odf", "unitName = \"x\"\nclassLabel = \"craft\"\n"),
         ("u_zero.odf", "unitName = \"x\"\nclassLabel = \"craft\"\ntransporter = 0\nhas_crew = 0\nboardingPartyStrength = 0\nweldingAnimSpeed = 1.0\n"),
     ]);
@@ -41,7 +41,7 @@ fn unit_keys_are_read_with_their_defaults() {
     assert!(!child.disable_shields_on_transport, "an explicit zero is kept");
     assert_eq!(child.welding_anim_speed, Some(Fixed::ZERO), "an explicit zero is kept, not absent");
     assert_eq!(child.shield_delay, Some(Fixed::from_int(3)));
-    assert_eq!(child.event_transport.as_deref(), Some("PicardTransport"));
+    assert_eq!(child.event_transport.as_deref(), Some("AuthoredBeam"));
     let zero = &def(&db, "u_zero").transport;
     assert_eq!((zero.transporter, zero.has_crew), (Some(false), Some(false)));
     assert_eq!(zero.boarding_party_strength, Fixed::ZERO, "an explicit zero is not the default 1.0");
@@ -100,7 +100,11 @@ fn race_keys_are_read_with_their_defaults() {
     vfs.push_dir("layer0".into(), dir.clone()).unwrap();
     let (index, _) = OdfIndex::build(&vfs);
     let (races, _) = Races::load(&vfs, &index);
+    // And from the loaded database, which drops `Races` after `Rules::load`.
+    let (db, _) = ContentDb::load_as(&vfs, Profile::Sta2Classic, &index).unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(db.rules().race_boarding("alpha"), races.boarding("alpha"));
+    assert_eq!(db.rules().race_boarding("beta"), races.boarding("beta"));
     let a = races.boarding("ALPHA");
     assert_eq!(a.boarding_strength, Fixed::from_f64(1.75));
     assert_eq!(a.crew_retreat_ratio, Fixed::from_f64(f64::from(0.2f32)));
@@ -113,6 +117,14 @@ fn race_keys_are_read_with_their_defaults() {
     // A race that sets none, and one that does not exist, read the defaults.
     assert_eq!(races.boarding("gamma"), RaceBoarding::default());
     assert_eq!(races.boarding("nobody"), RaceBoarding::default());
+    // The same keys reach a consumer holding only the rules (what the database keeps).
+    let (rules, _) = Rules::from_header("");
+    let rules = rules.with_race_boarding(races.boarding_rules().map(|(k, b)| (k.to_owned(), b.clone())).collect());
+    assert_eq!(rules.race_boarding("Alpha"), a);
+    assert_eq!(rules.race_boarding("beta"), b);
+    assert_eq!(rules.race_boarding("gamma"), RaceBoarding::default());
+    // Not digested: the race keys alone do not change the rules digest.
+    assert_eq!(rules.digest_entries(), Rules::from_header("").0.digest_entries());
     let d = RaceBoarding::default();
     assert_eq!((d.boarding_strength, d.can_commandeer, d.can_be_commandeered), (Fixed::ONE, true, true));
     assert_eq!(d.crew_retreat_ratio, Fixed::from_f64(f64::from(0.15f32)));
@@ -130,116 +142,55 @@ fn every_new_key_is_counted_as_read_by_the_coverage_list() {
     }
 }
 
-const HEROIC: &str = "/home/cedric/Games/Heroic";
-const ROOTS: &str = "Star Trek Armada II Fleet Operations Roots";
-
+/// Counts of what an install's definitions carry, so the test can assert general rules.
 #[derive(Default, Debug)]
 struct Counts {
     units: usize,
-    transporter: usize,
-    transporter_off: usize,
-    has_crew: usize,
-    has_crew_off: usize,
-    assault: usize,
-    party: usize,
-    shields_stay: usize,
-    welding_zero: usize,
-    welding: usize,
-    delay: usize,
-    event: usize,
+    transporter_set: usize,
+    welding_zero_and_set: usize,
     races: usize,
-    race_strength: usize,
-    race_commandeer_off: usize,
-    race_sprite: usize,
-    race_retreat: usize,
-    race_policy: usize,
+    race_boarding_nondefault: usize,
 }
 
-fn count(dir: &str, modname: Option<&str>) -> Option<(Counts, TransporterRules)> {
-    let root = Path::new(HEROIC).join(dir);
-    if !root.is_dir() {
-        eprintln!("{dir}: skipped, not installed");
-        return None;
-    }
-    let vfs = match Vfs::mount_install(&root, modname) {
-        Ok(v) => v,
-        Err(_) => {
-            let mut v = Vfs::default();
-            v.push_dir(dir.into(), root.clone()).ok()?;
-            v
-        }
-    };
+/// Reads the install named by `STA64_TEST_INSTALL` (and `STA64_TEST_MOD`, empty
+/// for none) at run time and asserts rules that hold for any install; skipped
+/// without it. Counts are printed with `--nocapture`.
+#[test]
+fn installed_content_obeys_the_key_rules() {
+    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
+    let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
+    let vfs = Vfs::mount_install(Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
     let (index, _) = OdfIndex::build(&vfs);
-    let (db, _) = ContentDb::load(&vfs, &index).ok()?;
+    let (db, _) = ContentDb::load(&vfs, &index).unwrap();
     let mut c = Counts::default();
     for u in db.units() {
         let t = &u.transport;
         c.units += 1;
-        c.transporter += usize::from(t.transporter == Some(true));
-        c.transporter_off += usize::from(t.transporter == Some(false));
-        c.has_crew += usize::from(t.has_crew == Some(true));
-        c.has_crew_off += usize::from(t.has_crew == Some(false));
-        c.assault += usize::from(t.assault);
-        c.party += usize::from(u.raw.raw("boardingPartyStrength").is_some());
-        c.shields_stay += usize::from(!t.disable_shields_on_transport);
-        c.welding += usize::from(t.welding_anim_speed.is_some());
-        c.welding_zero += usize::from(t.welding_anim_speed == Some(Fixed::ZERO));
-        c.delay += usize::from(t.shield_delay.is_some());
-        c.event += usize::from(t.event_transport.is_some());
-    }
-    let (races, _) = Races::load(&vfs, &index);
-    for r in races.iter() {
-        c.races += 1;
-        let b = races.boarding(&r.name);
-        let d = RaceBoarding::default();
-        c.race_strength += usize::from(b.boarding_strength != d.boarding_strength);
-        c.race_commandeer_off += usize::from(!b.can_commandeer || !b.can_be_commandeered);
-        c.race_sprite += usize::from(b.transport_sprite.is_some());
-        c.race_retreat += usize::from(b.crew_retreat_ratio != d.crew_retreat_ratio);
-        c.race_policy += usize::from(b.transport_to_enemy_on_hard != d.transport_to_enemy_on_hard || b.transport_to_friends_on_not_easy != d.transport_to_friends_on_not_easy);
-    }
-    Some((c, db.rules().transporter()))
-}
-
-/// Read from the installs at run time; absent installs are skipped. Counts are
-/// printed with `--nocapture`.
-#[test]
-fn installed_content_carries_the_keys() {
-    let cases = [
-        ("A1", "Star Trek Armada", None),
-        ("A2", "Star Trek Armada II (Stock)", None),
-        ("FO 3.2.7", "Star Trek Armada II Fleet Operations", None),
-        ("DW", "Star Trek Armada II Dominion War", None),
-        ("Roots", ROOTS, None),
-    ];
-    for (label, dir, modname) in cases {
-        let Some((c, t)) = count(dir, modname) else { continue };
-        eprintln!("{label}: {c:?} rules {t:?}");
-        assert!(c.units > 0, "{label}");
-        // Lower bounds a little under what the installs carry (counts of definitions after includes).
-        let hundred = |n: i32| Fixed::from_int(n);
-        match label {
-            "A1" => {
-                assert_eq!((c.transporter, c.has_crew, c.assault, c.party, c.welding), (0, 0, 0, 0, 0), "A1 has none of these unit keys");
-                assert!(c.races >= 8 && c.race_strength >= 6 && c.race_retreat >= 4, "A1 races carry boardingStrength and crewRetreatRatio");
-                assert_eq!((t.range, t.max), (hundred(500), 5), "A1 header");
-            }
-            "A2" => {
-                assert!(c.transporter >= 170 && c.transporter_off >= 10 && c.has_crew >= 190 && c.has_crew_off >= 100, "A2: {c:?}");
-                assert!(c.assault >= 5 && c.party >= 10 && c.event >= 3 && c.delay >= 300, "A2: {c:?}");
-                assert!(c.race_strength >= 6 && c.race_sprite >= 5 && c.race_retreat >= 6 && c.race_policy >= 3 && c.race_commandeer_off >= 1, "A2: {c:?}");
-                assert_eq!((t.range, t.max, c.welding, c.shields_stay), (hundred(500), 5, 0, 0), "A2 header");
-            }
-            "FO 3.2.7" | "DW" => {
-                assert!(c.transporter >= 2100 && c.transporter_off >= 70 && c.has_crew >= 1900, "{label}: {c:?}");
-                assert!(c.assault >= 30 && c.party >= 150 && c.shields_stay >= 30 && c.race_sprite >= 9, "{label}: {c:?}");
-                assert_eq!((t.range, t.max, c.welding), (hundred(1000), 3, 0), "{label} header");
-            }
-            _ => {
-                assert!(c.transporter >= 450 && c.transporter_off >= 80 && c.has_crew >= 350, "Roots: {c:?}");
-                assert!(c.welding >= 250 && c.welding_zero >= 200 && c.shields_stay >= 50 && c.race_sprite >= 12, "Roots: {c:?}");
-                assert_eq!((t.range, t.max, c.assault, c.party), (hundred(840), 5, 0, 0), "Roots header");
-            }
+        c.transporter_set += usize::from(t.transporter.is_some());
+        c.welding_zero_and_set += usize::from(t.welding_anim_speed.is_some());
+        // Typed values stay in range whatever the data says.
+        assert!(t.boarding_party_strength >= Fixed::ZERO);
+        assert!(t.shield_delay.is_none_or(|d| d >= Fixed::ZERO));
+        // Absent keys read as absent or default, never as a made-up value.
+        if u.raw.raw("boardingPartyStrength").is_none() {
+            assert_eq!(t.boarding_party_strength, Fixed::ONE);
+        }
+        if u.raw.raw("disableShieldsOnTransport").is_none() {
+            assert!(t.disable_shields_on_transport);
         }
     }
+    assert!(c.units > 0);
+    // Race keys are reachable from the database, equal to what the race loader reads.
+    let (races, _) = Races::load(&vfs, &index);
+    let d = RaceBoarding::default();
+    for r in races.iter() {
+        c.races += 1;
+        let b = db.rules().race_boarding(&r.name);
+        assert_eq!(b, races.boarding(&r.name), "{}: the database exposes the loader's boarding keys", r.name);
+        c.race_boarding_nondefault += usize::from(b != d);
+    }
+    // The header's keys: every loaded value is within its allowed range.
+    let t = db.rules().transporter();
+    assert!(t.range >= Fixed::ZERO && t.delay >= Fixed::ZERO && t.action_delay >= Fixed::ZERO && t.max >= 0);
+    eprintln!("{c:?} rules {t:?}");
 }

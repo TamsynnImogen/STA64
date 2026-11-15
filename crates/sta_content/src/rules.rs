@@ -5,7 +5,7 @@
 //! [`TransporterRules`] (SIM-46 P0), which the sim does not read yet.
 
 use crate::digest::{Canon, DigestEntry, quoted};
-use crate::{RaceRepair, Races, SeatRaceRule, Warning};
+use crate::{RaceBoarding, RaceRepair, Races, SeatRaceRule, Warning};
 use sta_assets::cfg_h::CfgH;
 use sta_core::Fixed;
 
@@ -32,6 +32,9 @@ pub struct Rules {
     seat_races: Vec<(String, SeatRaceRule)>,
     /// Authored race repair metadata by ODF stem (SIM-40), absent when unset.
     race_repairs: Vec<(String, RaceRepair)>,
+    /// Authored race boarding keys by lower-case race key (SIM-46 P0), only
+    /// the races that set any. Not in the content digest until the sim reads them.
+    race_boarding: Vec<(String, RaceBoarding)>,
     /// `RTS_CFG.h`'s default craft autonomy, when the header sets either key.
     autonomy: Option<AutonomyRules>,
     /// `RTS_CFG.h`'s attack warp distance (SIM-36), when the header sets it.
@@ -229,9 +232,8 @@ impl ApproachRules {
 /// The transporter keys of `RTS_CFG.h` (SIM-46 P0): reach, delays and the
 /// number of simultaneous transports. Defaults are the engine's own when the
 /// header leaves a key out (read from the executable, static; Armada I's
-/// executable was not analysed, its header sets all four). The header values
-/// are read from the data: 500 on Armada I and stock Armada II, 1000 and 3
-/// on Fleet Operations 3.x, 840 on Roots.
+/// executable was not analysed). The header's values are read from the data
+/// and differ between games and mods.
 ///
 /// Typed and exposed only: no sim system applies them yet, so a mod's change
 /// is still reported as ignored by the coverage report ("read means applied")
@@ -639,6 +641,20 @@ impl Rules {
         self
     }
 
+    /// The boarding keys of a race by its key (`unitedfederation`), any case:
+    /// the race ODF's values with the engine defaults for absent keys, and all
+    /// defaults for a race that sets none (SIM-46 P0; typed, not digested yet).
+    pub fn race_boarding(&self, name: &str) -> RaceBoarding {
+        let n = name.trim().to_ascii_lowercase();
+        self.race_boarding.iter().find(|(k, _)| *k == n).map(|(_, b)| b.clone()).unwrap_or_default()
+    }
+
+    /// Set the race boarding keys (tests and content built in code).
+    pub fn with_race_boarding(mut self, rows: Vec<(String, RaceBoarding)>) -> Self {
+        self.race_boarding = rows.into_iter().map(|(k, b)| (k.trim().to_ascii_lowercase(), b)).collect();
+        self
+    }
+
     /// The team crew rules, when the content has any.
     pub fn crew(&self) -> Option<&CrewRules> {
         self.crew.as_ref()
@@ -726,6 +742,7 @@ impl Rules {
         }
         rules.seat_races = races.seat_rules().map(|(k, r)| (k.to_owned(), r)).collect();
         rules = rules.with_race_repairs(races.repair_rules().map(|(stem, repair)| (stem.to_owned(), repair)).collect());
+        rules.race_boarding = races.boarding_rules().map(|(k, b)| (k.to_owned(), b.clone())).collect();
         Ok((rules, warnings))
     }
 

@@ -447,6 +447,11 @@ impl Races {
         self.boarding.iter().find(|(k, _)| *k == n).map(|(_, b)| b.clone()).unwrap_or_default()
     }
 
+    /// The races that set any boarding key, by lower-case key, in race order.
+    pub fn boarding_rules(&self) -> impl Iterator<Item = (&str, &RaceBoarding)> {
+        self.boarding.iter().map(|(k, b)| (k.as_str(), b))
+    }
+
     /// Every race's crew keys, in race order.
     pub fn crew_rates(&self) -> impl Iterator<Item = (&str, RaceCrew)> {
         self.crew.iter().map(|(k, c)| (k.as_str(), *c))
