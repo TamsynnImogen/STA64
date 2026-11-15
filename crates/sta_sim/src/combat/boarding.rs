@@ -405,7 +405,6 @@ impl Sim {
         if attack {
             return false; // P3: transport attack (Roots, assault ships).
         }
-        let rules = TransportRules::of(&db);
         let Some(t) = self.units.get(target).filter(|t| alive(t)) else { return false };
         let target_ok = matches!(t.kind, EntityKind::Craft | EntityKind::Station)
             && t.crew.is_some_and(|c| c[1] >= Fixed::ONE)
