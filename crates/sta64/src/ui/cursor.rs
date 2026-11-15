@@ -66,7 +66,10 @@ struct CursorNode;
 /// leaves the cursor still. `None` when the rectangle does not lie in the texture.
 pub(crate) fn frames_of(sprite: &Sprite, anim: Option<&Animation>, size: UVec2) -> Option<(Vec<Rect>, Vec2, f32)> {
     let base = crop(sprite, size)?;
-    let origin = sprite.origin.map_or(Vec2::ZERO, |o| Vec2::new(o[0], o[1]));
+    // The hotspot is written in the same units as the rectangle (texels of the reference size):
+    // scale it the way `crop` scales the rectangle, so a larger texture keeps the hotspot on the same spot.
+    let k = Vec2::new(size.x as f32 / sprite.reference[0].unwrap_or(size.x as f32), size.y as f32 / sprite.reference[1].unwrap_or(size.y as f32));
+    let origin = sprite.origin.map_or(Vec2::ZERO, |o| Vec2::new(o[0], o[1]) * k);
     let mut frames = vec![base];
     let mut period = 0.0;
     if let Some(a) = anim
@@ -107,7 +110,7 @@ pub(crate) fn node_pos(pointer: Vec2, origin: Vec2, k: f32) -> Vec2 {
 }
 
 fn resolve(name: &str, sprites: &mut CursorSprites, vfs: &sta_vfs::Vfs, images: &mut Assets<Image>, formats: CompressedImageFormats) -> Option<CursorArt> {
-    if let Some(found) = sprites.resolved.get(&name.to_ascii_lowercase()) {
+    if let Some(found) = sprites.resolved.get(name) {
         return found.clone();
     }
     let found = (|| {
@@ -118,7 +121,7 @@ fn resolve(name: &str, sprites: &mut CursorSprites, vfs: &sta_vfs::Vfs, images: 
         let (frames, origin, period) = frames_of(&sprite, anim.as_ref(), size)?;
         Some(CursorArt { image: handle, frames, origin, period })
     })();
-    sprites.resolved.insert(name.to_ascii_lowercase(), found.clone());
+    sprites.resolved.insert(name.to_owned(), found.clone());
     found
 }
 
@@ -204,7 +207,7 @@ impl Plugin for CursorPlugin {
         app.init_resource::<WantedCursor>()
             .init_resource::<CursorSprites>()
             .add_systems(PreUpdate, reset_wanted)
-            .add_systems(PostUpdate, place);
+            .add_systems(PostUpdate, place.before(bevy::ui::UiSystems::Prepare));
     }
 }
 
@@ -238,8 +241,10 @@ mod tests {
     fn a_bigger_texture_makes_a_bigger_cursor_with_the_same_names() {
         let t = table();
         let s = t.sprite("still").unwrap();
-        let (frames, _, period) = frames_of(s, None, UVec2::new(160, 80)).unwrap();
+        let (frames, origin, period) = frames_of(s, None, UVec2::new(160, 80)).unwrap();
         assert_eq!(frames, vec![Rect::new(0.0, 40.0, 40.0, 80.0)]);
+        // the hotspot (16,16) of the 32 px cell stays at the cell's centre in the 40 px cell
+        assert_eq!(origin, Vec2::new(20.0, 20.0));
         assert_eq!(period, 0.0);
     }
 
