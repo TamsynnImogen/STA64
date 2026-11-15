@@ -203,6 +203,23 @@ impl FogGrid {
         }
     }
 
+    /// UI-46: this grid as the player sees it with the shroud and/or the fog lifted (presentation
+    /// only; `self` keeps the real memory). Lifting the shroud counts every cell as explored; lifting
+    /// the fog counts every explored cell as in sight, so with both lifted everything is in sight,
+    /// and with the fog alone the unexplored ground stays black.
+    pub fn lifted(&self, fog: bool, shroud: bool) -> FogGrid {
+        let mut g = self.clone();
+        if shroud {
+            g.explored.fill(true);
+        }
+        if fog {
+            for (v, e) in g.visible.iter_mut().zip(&g.explored) {
+                *v |= *e;
+            }
+        }
+        g
+    }
+
     /// One byte per cell, row by row from the map's low Z: 255 where the layer hides
     /// the cell, 0 where it shows it. This is the texture `fog.wesl` reads.
     pub fn mask(&self, layer: Layer) -> Vec<u8> {
@@ -375,6 +392,7 @@ pub struct FogPlugin;
 impl Plugin for FogPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "fog.wesl");
+        app.add_plugins(crate::render::reveal::RevealPlugin);
         app.init_resource::<FogSettings>().add_plugins(MaterialPlugin::<FogMaterial>::default()).add_systems(
             Update,
             (load_patterns.run_if(resource_exists::<Assets<Image>>), update_fog)
@@ -432,6 +450,16 @@ fn params(layer: Layer, grid: &FogGrid, art: Vec2) -> FogParams {
     }
 }
 
+/// What `update_fog` remembers between frames (one `Local`: a system takes at most 16 parameters).
+#[derive(Default)]
+struct Memo {
+    seen: Option<(Arc<WorldView>, Option<PlayerId>)>,
+    art_generation: Option<u32>,
+    /// What the sim's sensors have shown so far, whatever is lifted (UI-46); `FogState` holds the lifted copy.
+    memory: Option<FogGrid>,
+    shown_reveal: Option<(bool, bool)>,
+}
+
 /// Recompute the grid when the view, the player or the map changes; spawn the layers
 /// once, then rewrite their masks.
 #[allow(clippy::too_many_arguments)]
@@ -449,9 +477,10 @@ fn update_fog(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<FogMaterial>>,
     mut layers: Query<(Entity, &FogLayer, &mut Visibility)>,
-    mut seen: Local<Option<(Arc<WorldView>, Option<PlayerId>)>>,
-    mut art_generation: Local<Option<u32>>,
+    reveal: Option<Res<crate::render::reveal::Reveal>>,
+    mut memo: Local<Memo>,
 ) {
+    let Memo { seen, art_generation, memory, shown_reveal } = &mut *memo;
     let Some(patterns) = patterns else { return };
     let Some(player) = local.0 else {
         // No local player: the whole map is shown.
@@ -461,19 +490,23 @@ fn update_fog(
         return;
     };
     let curr = link.curr();
-    let fresh = state.is_none() || *art_generation != Some(patterns.generation) || !seen.as_ref().is_some_and(|(v, p)| Arc::ptr_eq(v, curr) && *p == local.0);
-    let map_changed = state.as_ref().is_some_and(|s| s.grid.min != [bounds.min.x, bounds.min.y]);
+    let lifted = reveal.as_deref().map_or((false, false), |r| (r.fog, r.shroud));
+    let fresh = state.is_none() || *shown_reveal != Some(lifted) || *art_generation != Some(patterns.generation) || !seen.as_ref().is_some_and(|(v, p)| Arc::ptr_eq(v, curr) && *p == local.0);
+    let map_changed = memory.as_ref().is_some_and(|m| m.min != [bounds.min.x, bounds.min.y]);
     if fresh || map_changed {
         *seen = Some((curr.clone(), local.0));
-        let (mut grid, updates) = match state.as_deref() {
-            Some(s) if !map_changed => (s.grid.clone(), s.updates),
+        *shown_reveal = Some(lifted);
+        let (mut grid, updates) = match (state.as_deref(), memory.take()) {
+            (Some(s), Some(m)) if !map_changed => (m, s.updates),
             _ => (FogGrid::new([bounds.min.x, bounds.min.y], [bounds.max.x, bounds.max.y]), 0),
         };
         grid.observe(curr, player, content.as_deref().map(|c| &*c.0));
+        let shown = grid.lifted(lifted.0, lifted.1);
+        *memory = Some(grid);
         let art_changed = *art_generation != Some(patterns.generation);
         *art_generation = Some(patterns.generation);
         let respawn = state.is_none() || map_changed || art_changed;
-        let new = FogState { grid, updates: updates + 1 };
+        let new = FogState { grid: shown, updates: updates + 1 };
         if respawn {
             for (e, l, _) in &layers {
                 images.remove(&l.mask);

@@ -23,6 +23,7 @@ pub mod planet;
 pub mod post;
 pub mod profile;
 pub mod quality;
+pub mod reveal;
 pub mod rock;
 pub mod shader_shadow;
 pub mod shadows;
