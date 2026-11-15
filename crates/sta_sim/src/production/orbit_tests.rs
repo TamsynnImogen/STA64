@@ -1,4 +1,5 @@
 //! SIM-62: orbital stations snap to a planet's orbit slot, one per planet.
+//! SIM-65: a finished station circles its planet (the second half of the file).
 use super::*;
 use crate::command::{Command, CommandKind, Edit, Order};
 use crate::setup::{Control, GameOptions, GameSetup, PlayerSetup};
@@ -14,7 +15,12 @@ fn v(x: i32, z: i32) -> Vec3 {
     Vec3 { x: Fixed::from_int(x), y: Fixed::ZERO, z: Fixed::from_int(z) }
 }
 
-fn content() -> Arc<ContentDb> {
+/// `orbit_time` seconds per orbit; zero keeps a station at its slot (the SIM-62 tests).
+fn content(orbit_time: i32) -> Arc<ContentDb> {
+    content_with_time(Fixed::from_int(orbit_time))
+}
+
+fn content_with_time(orbit_time: Fixed) -> Arc<ContentDb> {
     let fake = sta_content::fake::db();
     let mut features = fake.features().clone();
     features.pay_on_queue = true;
@@ -22,13 +28,13 @@ fn content() -> Arc<ContentDb> {
     rig.race = "fx".into();
     rig.movement = MoveStats::from_f32(140.0, 1.0, 1.0, 1.0, 0.2);
     rig.hull = Fixed::from_int(100);
-    // An orbital station: class p_mining, one orbit in 120 s.
+    // An orbital station: class p_mining.
     let mut orbital = UnitDef::new("fx_orbital", "p_mining");
     orbital.race = "fx".into();
     orbital.hull = Fixed::from_int(200);
     orbital.build.cost = vec![Fixed::from_int(100)];
     orbital.build.ticks = 60;
-    orbital.orbit_time = Some(Fixed::from_int(120));
+    orbital.orbit_time = Some(orbit_time);
     // A planet with a slot, and a moon without one.
     let mut world = UnitDef::new("fx_world", "planet");
     world.radius = Fixed::from_int(RADIUS);
@@ -48,11 +54,19 @@ fn content() -> Arc<ContentDb> {
 }
 
 fn game() -> Sim {
+    game_with(0)
+}
+
+fn game_with(orbit_time: i32) -> Sim {
+    game_with_content(content(orbit_time))
+}
+
+fn game_with_content(content: Arc<ContentDb>) -> Sim {
     let seat = |id| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control: Control::Human };
     let mut sim = Sim::from_setup(&GameSetup {
         seed: 3,
         map: Arc::new(sta_content::MapDef::empty()),
-        content: content(),
+        content,
         players: vec![seat(0), seat(1)],
         options: GameOptions::default(),
     });
@@ -237,3 +251,183 @@ fn a_rig_on_the_far_side_of_the_planet_still_gets_there() {
     // Its stand point is outside the orbit, so the rig reaches it from either side (planets
     // do not block movement in the sim, so the path itself is not asserted).
 }
+
+// SIM-65: orbiting.
+
+fn at_ring(sim: &Sim, world: Vec3) -> Vec3 {
+    let (pos, _) = orbitals(sim)[0];
+    Vec3 { x: pos.x - world.x, y: pos.y - world.y, z: pos.z - world.z }
+}
+
+/// A finished orbital station facing +Z of a planet at (1000, 0): bearing 0.
+fn finished(sim: &mut Sim) -> (Vec3, EntityId) {
+    let world = v(1000, 0);
+    spawn(sim, "fx_world", world);
+    let ring = RADIUS + orbit::ALTITUDE;
+    let station = spawn(sim, "fx_orbital", v(1000, ring));
+    (world, station)
+}
+
+#[test]
+fn a_station_circles_its_planet_one_orbit_per_orbit_time() {
+    let mut sim = game_with(120);
+    let (world, station) = finished(&mut sim);
+    let ring = f64::from(RADIUS + orbit::ALTITUDE);
+    // A quarter orbit (30 s): the bearing runs from +Z toward +X.
+    for _ in 0..900 {
+        sim.step(&[]);
+        let r = dist(sim.unit(station).unwrap().pos, world);
+        assert!((r - ring).abs() < 0.01, "stays on the orbit: {r}");
+    }
+    let off = at_ring(&sim, world);
+    assert!(off.x.to_f32() > 274.0 && off.z.to_f32().abs() < 3.0, "a quarter turn toward +X: {off:?}");
+    let (_, heading) = orbitals(&sim)[0];
+    assert!(heading.0.to_f32() > 0.999 && heading.1.to_f32().abs() < 0.01, "faces outward: {heading:?}");
+    // Another three quarters: back at the start, then the same again.
+    for _ in 0..2700 {
+        sim.step(&[]);
+    }
+    let off = at_ring(&sim, world);
+    assert!(off.x.to_f32().abs() < 3.0 && off.z.to_f32() > 274.0, "one full orbit: {off:?}");
+    assert_eq!(sim.unit(station).unwrap().pos.y, world.y);
+}
+
+#[test]
+fn no_orbit_time_a_building_station_or_open_space_keeps_the_station_still() {
+    // Zero seconds: no orbiting.
+    let mut sim = game_with(0);
+    let (_, station) = finished(&mut sim);
+    let at = sim.unit(station).unwrap().pos;
+    for _ in 0..300 {
+        sim.step(&[]);
+    }
+    assert_eq!(sim.unit(station).unwrap().pos, at);
+    // No planet near: nothing to circle.
+    let mut sim = game_with(120);
+    let far = spawn(&mut sim, "fx_orbital", v(5000, 5000));
+    for _ in 0..300 {
+        sim.step(&[]);
+    }
+    assert_eq!(sim.unit(far).unwrap().pos, v(5000, 5000));
+    // Under construction: it stays at its site until finished.
+    let mut sim = game_with(120);
+    let (_, station) = finished(&mut sim);
+    sim.units.get_mut(station).unwrap().progress = Some(Fixed::ZERO);
+    let at = sim.unit(station).unwrap().pos;
+    for _ in 0..300 {
+        sim.step(&[]);
+    }
+    assert_eq!(sim.unit(station).unwrap().pos, at);
+}
+
+#[test]
+fn a_station_off_the_ring_stays_where_a_script_or_map_put_it() {
+    let mut sim = game_with(120);
+    let world = v(1000, 0);
+    spawn(&mut sim, "fx_world", world);
+    // Within reach of the planet but 20 units off its circle.
+    let station = spawn(&mut sim, "fx_orbital", v(1000, RADIUS + 20));
+    // On the circle, then moved off it by a script (`SetPosition`).
+    let moved = spawn(&mut sim, "fx_orbital", v(1000, -(RADIUS + orbit::ALTITUDE)));
+    for _ in 0..30 {
+        sim.step(&[]);
+    }
+    assert!(sim.unit(moved).unwrap().pos != v(1000, -(RADIUS + orbit::ALTITUDE)), "on the circle it orbits");
+    let away = v(1000, 3 * RADIUS);
+    sim.units.get_mut(moved).unwrap().pos = away;
+    for _ in 0..300 {
+        sim.step(&[]);
+    }
+    assert_eq!(sim.unit(station).unwrap().pos, v(1000, RADIUS + 20), "never on the ring: never pulled onto it");
+    assert_eq!(sim.unit(moved).unwrap().pos, away, "moved off the ring: stops orbiting, not pulled back");
+}
+
+#[test]
+fn a_built_station_circles_from_the_bearing_it_was_built_at_and_the_slot_stays_taken() {
+    let mut sim = game_with(120);
+    let world = v(1000, 0);
+    spawn(&mut sim, "fx_world", world);
+    let rig = spawn(&mut sim, "fx_rig", v(0, 0));
+    assert!(build(&mut sim, rig, v(960, 0)));
+    for _ in 0..1800 {
+        sim.step(&[]);
+    }
+    assert_eq!(orbitals(&sim).len(), 1, "built");
+    let r = dist(orbitals(&sim)[0].0, world);
+    assert!((r - f64::from(RADIUS + orbit::ALTITUDE)).abs() < 0.01);
+    // Wherever it is now, it still owns the planet and the cursor sees it taken.
+    assert!(!build(&mut sim, rig, v(1100, 80)), "taken while circling");
+}
+
+#[test]
+fn circling_is_deterministic_and_survives_a_snapshot() {
+    let run = |cut: bool| {
+        let mut sim = game_with(120);
+        finished(&mut sim);
+        for _ in 0..500 {
+            sim.step(&[]);
+        }
+        if cut {
+            let bytes = sim.snapshot();
+            sim = Sim::from_snapshot(&bytes, sim.content().cloned()).unwrap();
+        }
+        for _ in 0..1000 {
+            sim.step(&[]);
+        }
+        sim.digest()
+    };
+    assert_eq!(run(false), run(false));
+    assert_eq!(run(false), run(true), "a mid-orbit save restores to the same course");
+}
+
+#[test]
+fn the_step_angle_is_two_pi_over_the_orbit_time() {
+    let a = orbit::step_angle(Fixed::from_int(120)).to_f32();
+    assert!((a - std::f32::consts::TAU / 3600.0).abs() < 1e-6, "{a}");
+    assert_eq!(orbit::step_angle(Fixed::ZERO), Fixed::ZERO);
+    assert_eq!(orbit::step_angle(-Fixed::ONE), Fixed::ZERO);
+}
+
+#[test]
+fn an_extreme_orbit_time_costs_one_step_and_never_hangs() {
+    // The smallest positive time spins it by a bounded angle; a huge one does not move it.
+    for t in [Fixed::from_bits(1), Fixed::from_bits(30), Fixed::from_bits(i64::MAX)] {
+        let a = orbit::step_angle(t);
+        assert!(a >= Fixed::ZERO && a.to_f32() < std::f32::consts::TAU, "{t:?}: {a:?}");
+    }
+    assert_eq!(orbit::step_angle(Fixed::from_bits(i64::MAX)), Fixed::ZERO);
+    let ring = f64::from(RADIUS + orbit::ALTITUDE);
+    for t in [Fixed::from_bits(1), Fixed::from_bits(i64::MAX)] {
+        let mut s = game_with_content(content_with_time(t));
+        let (w, st) = finished(&mut s);
+        for _ in 0..30 {
+            s.step(&[]);
+        }
+        let r = dist(s.unit(st).unwrap().pos, w);
+        assert!((r - ring).abs() < 0.05, "{t:?}: stays on the ring: {r}");
+    }
+}
+
+/// The station's position and heading bits after 3600 and 108000 ticks of a
+/// 100 s orbit round a planet at (1000, 0): constants, so every OS is held to
+/// the same numbers and not only to itself.
+#[test]
+fn the_orbit_math_is_pinned_to_constants() {
+    let mut sim = game_with(100);
+    let (_, station) = finished(&mut sim);
+    let bits = |sim: &Sim| {
+        let u = sim.unit(station).unwrap();
+        [u.pos.x.to_bits(), u.pos.z.to_bits(), u.heading.0.to_bits(), u.heading.1.to_bits()]
+    };
+    for _ in 0..3600 {
+        sim.step(&[]);
+    }
+    assert_eq!(bits(&sim), PIN_3600, "after 3600 ticks");
+    for _ in 3600..108_000 {
+        sim.step(&[]);
+    }
+    assert_eq!(bits(&sim), PIN_108000, "after 108000 ticks");
+}
+
+const PIN_3600: [i64; 4] = [5_419_037_378_300, 362_631_314_925, 4_087_527_572, 1_318_659_327];
+const PIN_108000: [i64; 4] = [4_297_444_042_525, 1_181_113_409_575, 9_006_351, 4_294_957_853];

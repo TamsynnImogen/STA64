@@ -458,6 +458,7 @@ impl Sim {
         self.separate_units();
         self.push_out_of_fields();
         if let Some(db) = self.content.clone() {
+            production::orbit::step(&db, &mut self.units);
             let returned = self.transports.expire(self.tick);
             self.restore_carrier_shields(&returned);
             combat::damage::recharge(&mut self.units, &db, &self.switches, &self.subsystems, &self.transports);
