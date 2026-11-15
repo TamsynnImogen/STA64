@@ -294,13 +294,20 @@ impl Sim {
     /// physics have no such key, so their plain moves never warp.
     pub(crate) fn auto_warp_moves(&mut self, player: PlayerId, ids: &[EntityId]) {
         // Armada I's model (SIM-66) has no warp phase: the throttle multiplier
-        // is part of the plain move, so there is no job to start.
-        if self.content.as_deref().is_some_and(|db| crate::kinematics::Model::for_content(db) == crate::kinematics::Model::A1) {
-            return;
-        }
+        // is part of the plain move, so a craft the model flies has no job to
+        // start. Decided per unit: one the model has no parameters for keeps it.
+        let a1_on = self
+            .content
+            .as_deref()
+            .is_some_and(|db| crate::kinematics::Model::for_content(db) == crate::kinematics::Model::A1);
         for &id in ids {
             let Some(u) = self.units.get(id) else { continue };
             if (player.is_player() && u.owner != player)
+                || (a1_on
+                    && self
+                        .content
+                        .as_deref()
+                        .is_some_and(|db| crate::kinematics::a1::params(db, u.def).is_some()))
                 || !u.orderable()
                 || self.economy.is_mining(id)
                 || self.production.is_deploying(id)

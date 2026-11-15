@@ -115,18 +115,29 @@ pub struct A1Params {
 /// craft's definition, or [`ContentKey::NONE`] to ask only whether the play
 /// physics is there at all (it is database-wide). Answers `None`, "not
 /// available", until `sta_content` parses the keys (the content package fills
-/// this in; nothing else in the sim reads them).
+/// this in; nothing else in the sim reads them). Must answer `None` for
+/// definitions that are not steered craft.
 pub fn params(db: &ContentDb, def: ContentKey) -> Option<A1Params> {
     let _ = (db, def);
     #[cfg(test)]
-    if let Some(p) = seam::get() {
+    if let Some(p) = seam::get(def) {
         return Some(p);
     }
     None
 }
 
 /// `e^-x` for `x >= 0`: the series on a halved argument, squared back.
-fn exp_neg(x: Fixed) -> Fixed {
+///
+/// Valid range: any `x`. Below zero gives one; from 23 up gives zero (e^-23 is
+/// under one unit of the last place of 32.32), which also keeps the series
+/// from running on an argument large enough to wrap.
+pub(super) fn exp_neg(x: Fixed) -> Fixed {
+    if x <= Fixed::ZERO {
+        return Fixed::ONE;
+    }
+    if x >= Fixed::from_int(23) {
+        return Fixed::ZERO;
+    }
     let mut y = x;
     let mut halvings = 0;
     while y > Fixed::from_f64(0.125) && halvings < 24 {
@@ -162,11 +173,14 @@ fn lag_seconds(d: &A1Dynamics) -> Fixed {
 }
 
 /// The turn authority curve `c(v)`: `velocCoeffStill` at rest, one half at
-/// `velocWhenCoeffHalf x impulse`, rising toward one.
-fn authority(d: &A1Dynamics, v: Fixed) -> Fixed {
+/// `velocWhenCoeffHalf x impulse`, rising toward one. Valid range:
+/// `velocCoeffStill` in [0, 0.5] (above that the half point would lie below
+/// the rest value and the curve has a pole; mod data above it is clamped to
+/// 0.5, a flat curve), so the result is in [0, 1).
+pub(super) fn authority(d: &A1Dynamics, v: Fixed) -> Fixed {
     let still = d
         .veloc_coeff_still
-        .min(Fixed::from_f64(0.95))
+        .min(Fixed::from_f64(0.5))
         .max(Fixed::ZERO);
     let b = Fixed::ONE / (Fixed::ONE - still);
     let half = d.veloc_when_coeff_half * d.impulse_speed;
@@ -174,11 +188,18 @@ fn authority(d: &A1Dynamics, v: Fixed) -> Fixed {
         return still;
     }
     let a = (Fixed::from_int(2) - b) / half;
-    Fixed::ONE - Fixed::ONE / (a * v.abs() + b)
+    let den = (a * v.abs() + b).max(Fixed::ONE);
+    Fixed::ONE - Fixed::ONE / den
 }
 
-/// The steady turn rate (radians per second) of a full servo at speed `v`.
-fn full_turn_rate(d: &A1Dynamics, v: Fixed) -> Fixed {
+/// The most any turn rate may be (radians per second): well above the stock
+/// rates, and keeps one tick's rotation small for `rotate` whatever mod data
+/// says.
+pub(super) const MAX_TURN_RATE: f64 = 12.0;
+
+/// The steady turn rate (radians per second) of a full servo at speed `v`,
+/// at most [`MAX_TURN_RATE`].
+pub(super) fn full_turn_rate(d: &A1Dynamics, v: Fixed) -> Fixed {
     if d.turn_radius <= Fixed::ZERO || d.impulse_speed <= Fixed::ZERO {
         return Fixed::ZERO;
     }
@@ -186,7 +207,8 @@ fn full_turn_rate(d: &A1Dynamics, v: Fixed) -> Fixed {
     if at_impulse <= Fixed::ZERO {
         return Fixed::ZERO;
     }
-    d.impulse_speed / d.turn_radius * authority(d, v) / at_impulse
+    (d.impulse_speed / d.turn_radius * authority(d, v) / at_impulse)
+        .min(Fixed::from_f64(MAX_TURN_RATE))
 }
 
 /// What the controllers ask of one tick.
@@ -254,7 +276,15 @@ fn decide(u: &mut Unit, p: &A1Params, queued: &[Vec3], plan: Option<Plan>) -> Cm
         return Cmd { steer, ..none };
     };
     let lead = st.path_lead.max(arrive_distance());
-    let near = st.too_close_to_turn.max(arrive_distance());
+    // The stop radius: `tooCloseToTurn`, at least the arrival distance and at
+    // least the diameter of the turning circle at impulse. A goal inside that
+    // diameter (mod data only; the stock `tooCloseToTurn` is larger) cannot be
+    // turned onto, so the craft is treated as there instead of circling or
+    // stalling until the stuck-order watch.
+    let near = st
+        .too_close_to_turn
+        .max(arrive_distance())
+        .max(Fixed::from_int(2) * p.play.turn_radius.max(Fixed::ZERO));
     let final_point = queued.last().copied().unwrap_or(target);
     let pos = u.pos;
     let planar = |q: Vec3| {
@@ -262,13 +292,28 @@ fn decide(u: &mut Unit, p: &A1Params, queued: &[Vec3], plan: Option<Plan>) -> Cm
         (dx, dz, (dx * dx + dz * dz).sqrt())
     };
     // The course hands over to the next waypoint once the craft is within
-    // `tooCloseToTurn` of this one, or has passed it (the waypoint no longer
-    // lies ahead along the next leg).
+    // the stop radius of this one, or has reached the corner region (within
+    // the lead distance) and crossed the bisector plane of the two legs at
+    // it (the legs being the craft's present heading in and the next leg out),
+    // or, moving and heading away from it with it behind the next leg, has
+    // passed it. So a corner of any angle, an out-and-back included, is
+    // rounded only after the craft has got to it.
     let (mut tgt, mut rest) = (target, queued);
     if let Some(&next) = queued.first() {
-        let (tx, tz, td) = planar(target);
-        let (nx, nz) = (next.x - target.x, next.z - target.z);
-        if td < near || tx * nx + tz * nz <= Fixed::ZERO {
+        let (_, _, td) = planar(target);
+        let (tx, tz, _) = planar(target);
+        let (ox, oz) = (next.x - target.x, next.z - target.z);
+        let ol = (ox * ox + oz * oz).sqrt();
+        let hand_over = td < near
+            || ol > Fixed::ZERO && {
+                let (ox, oz) = (ox / ol, oz / ol);
+                let (rx, rz) = (pos.x - target.x, pos.z - target.z);
+                let bisector = rx * (u.heading.0 - ox) + rz * (u.heading.1 - oz) >= Fixed::ZERO;
+                let behind = u.heading.0 * tx + u.heading.1 * tz < Fixed::ZERO
+                    && tx * ox + tz * oz <= Fixed::ZERO;
+                (td < lead && bisector) || (behind && u.speed > imp / Fixed::from_int(2))
+            };
+        if hand_over {
             u.target = None;
             (tgt, rest) = (next, &queued[1..]);
         }
@@ -336,8 +381,10 @@ fn decide(u: &mut Unit, p: &A1Params, queued: &[Vec3], plan: Option<Plan>) -> Cm
         clamp(t, -tmax, tmax)
     };
 
-    // Within tooCloseToTurn of the final point: no steering, brake onto it.
-    if to_final <= near {
+    // On the last leg and within the stop radius of the final point: no
+    // steering, brake onto it. (Passing near the final point on the way to a
+    // waypoint is not arriving.)
+    if rest.is_empty() && to_final <= near {
         return Cmd {
             throttle: control(h.0 * fx + h.1 * fz, Fixed::ZERO),
             steer: None,
@@ -458,7 +505,8 @@ fn integrate(u: &mut Unit, p: &A1Params, cmd: &Cmd, dt: Fixed) {
                     Fixed::ONE,
                 );
                 let accel = share * scale - b.rotation_acceleration * u.omega;
-                u.omega = u.omega + accel * dt;
+                let max = Fixed::from_f64(MAX_TURN_RATE);
+                u.omega = clamp(u.omega + accel * dt, -max, max);
             } else {
                 u.omega = Fixed::ZERO;
             }
@@ -474,30 +522,41 @@ fn integrate(u: &mut Unit, p: &A1Params, cmd: &Cmd, dt: Fixed) {
 }
 
 /// Test inputs for the seam: a synthetic parameter block (key names and the
-/// stock values), in force on this thread until the guard drops.
+/// stock values), in force on this thread until the guard drops. A block may
+/// be limited to one definition (the database-wide ask, with
+/// [`ContentKey::NONE`], is always answered).
 #[cfg(test)]
 pub(crate) mod seam {
     use super::A1Params;
+    use sta_core::ContentKey;
     use std::cell::Cell;
 
+    type Block = Option<(A1Params, Option<ContentKey>)>;
+
     thread_local! {
-        static BLOCK: Cell<Option<A1Params>> = const { Cell::new(None) };
+        static BLOCK: Cell<Block> = const { Cell::new(None) };
     }
 
-    pub(crate) struct Guard;
+    /// Puts the block that was in force back when dropped.
+    pub(crate) struct Guard(Block);
 
     pub(crate) fn set(p: A1Params) -> Guard {
-        BLOCK.with(|b| b.set(Some(p)));
-        Guard
+        Guard(BLOCK.with(|b| b.replace(Some((p, None)))))
     }
 
-    pub(super) fn get() -> Option<A1Params> {
-        BLOCK.with(|b| b.get())
+    pub(crate) fn set_only(p: A1Params, def: ContentKey) -> Guard {
+        Guard(BLOCK.with(|b| b.replace(Some((p, Some(def))))))
+    }
+
+    pub(super) fn get(def: ContentKey) -> Option<A1Params> {
+        BLOCK.with(|b| b.get()).and_then(|(p, only)| {
+            (only.is_none() || def == ContentKey::NONE || only == Some(def)).then_some(p)
+        })
     }
 
     impl Drop for Guard {
         fn drop(&mut self) {
-            BLOCK.with(|b| b.set(None));
+            BLOCK.with(|b| b.set(self.0));
         }
     }
 }
