@@ -408,6 +408,9 @@ table of `Vector` values. An absent path has count zero and an empty point table
 constructing a handle never creates a map path. Editing a returned table or vector
 does not change the map or later reads. Queries issue no commands or unsupported
 diagnostics. Unimplemented path mutations retain their unsupported diagnostics.
+Specialized camera helpers such as `Cineractive:shotPathPointObject` and
+`Cineractive:setCameraPathOffset` also remain unsupported; successful path lookup
+alone does not complete those cinematic sequences.
 
 The point count and table shape follow the MMM binding source (static evidence).
 Existence, strict query validation, case-insensitive lookup and absent-path behavior
