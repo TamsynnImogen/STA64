@@ -59,7 +59,7 @@ fn scene() -> Scene {
     let units: Vec<EntityId> = out.view.units.iter().map(|u| u.id).collect();
     assert_eq!(units.len(), 4, "scene units");
     let at = |x: f32| out.view.units.iter().find(|u| u.pos == Vec3::from_f32([x, 0.0, 0.0])).unwrap().id;
-    Scene { ids: [at(0.0), at(100.0), at(300.0), at(5000.0)], view: (*out.view).clone(), db }
+    Scene { ids: [at(0.0), at(100.0), at(300.0), at(5000.0)], view: crate::api::special_forces::flagged_view(&out.view, &db), db }
 }
 
 const PRELUDE: &str = r#"
@@ -260,7 +260,7 @@ const CASES: &[(&str, &str, Expect)] = &[
     ("Cloak", "A1.Cloak(a)", Fine),
     ("DisableWeapons", "A1.DisableWeapons(a, true)", Fine),
     ("ImmediateCloak", "A1.ImmediateCloak(a)", Fine),
-    ("RecruitSpecialForces", "local ok, out = A1.RecruitSpecialForces('x', 0, 7); assert(ok == false and out == 7)", Fine),
+    ("RecruitSpecialForces", "local ok, out = A1.RecruitSpecialForces('x', 0, 7); assert(ok == false and out == 0)", Fine),
     ("FadeRemove", "A1.FadeRemove()", Fine),
     ("RemoveAllCraft", "A1.RemoveAllCraft(true, -1)", Fine),
     ("DestroyShieldGenerator", "A1.DestroyShieldGenerator(a)", Fine),
@@ -843,7 +843,8 @@ fn build_object_handles_resolve_after_the_receipt() {
     // is held (LUA-17: the original's handle is usable at once).
     assert!(!rt.eval::<bool>("return A1.Exists(h)").unwrap());
     assert!(rt.eval::<()>("A1.GetLocation(h)").is_err());
-    rt.eval::<()>("A1.Stop(h, 1)").expect("held");
+    // A script flags what it orders (LUA-28): the flag is held with the order.
+    rt.eval::<()>("A1.SetSpecialForcesFlag(h, true); A1.Stop(h, 1)").expect("held");
     assert!(!rt.eval::<bool>("return A1.IsValid(h)").unwrap());
     let first = rt.take_commands();
     assert!(matches!(&first[0].kind, CommandKind::Edit(Edit::SpawnRequest { player, .. }) if *player == PlayerId(1)));
@@ -864,10 +865,11 @@ fn build_object_handles_resolve_after_the_receipt() {
     let held = rt.take_commands();
     assert_eq!(held.iter().filter(|c| c.kind == CommandKind::Order(Order::Stop { units: vec![id] })).count(), 1, "{held:?}");
     assert_eq!(rt.eval::<f64>("return A1.GetLocation(h).x").unwrap(), 40.0);
-    rt.eval::<()>("A1.Stop(h, 1)").unwrap();
+    // The sim has not seen the flag edit yet: flag again in the same tick, as a script would.
+    rt.eval::<()>("A1.SetSpecialForcesFlag(h, true); A1.Stop(h, 1)").unwrap();
     let commands = rt.take_commands();
-    assert_eq!(commands[0].kind, CommandKind::Order(Order::Stop { units: vec![id] }));
-    assert_eq!(commands[0].player, PlayerId(1));
+    assert_eq!(commands[1].kind, CommandKind::Order(Order::Stop { units: vec![id] }));
+    assert_eq!(commands[1].player, PlayerId(1));
 }
 
 #[test]
@@ -935,7 +937,7 @@ fn held_calls_keep_the_script_order() {
     let cfg = MissionConfig { content: Some(s.db.clone()), view: Some((*sim.view()).clone()), ..MissionConfig::default() };
     let src = format!(
         "A1.paths.Q = {{ {{x=40,y=0,z=0}} }}; A1.paths.R = {{ {{x=90,y=0,z=0}} }}; \
-         A1.CineractiveStart(); h = A1.BuildObject('fx_cruiser', 1, 'Q', 0); \
+         A1.CineractiveStart(); h = A1.BuildObject('fx_cruiser', 1, 'Q', 0); A1.SetSpecialForcesFlag(h, true); \
          A1.Attack({a}, h, 1); A1.Goto({a}, 'R', 1); A1.CineractiveEnd()",
         a = s.ids[0].0
     );

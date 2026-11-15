@@ -92,7 +92,15 @@ fn special_forces_flag_returns_the_handle_and_ignores_invalid_objects() {
     // Native: absent objects return 0 and change nothing.
     assert_eq!(rt.eval::<i64>("return A2.SetSpecialForcesFlag(0, true)").unwrap(), 0);
     assert_eq!(rt.eval::<i64>("return A2.SetSpecialForcesFlag(999999, true)").unwrap(), 0);
-    assert!(rt.take_commands().is_empty(), "the flag is mission state, not a command");
+    // The flag is the sim's switch: each valid call is one `Edit::SpecialForces`; an absent object queues nothing.
+    let flags: Vec<_> = rt.take_commands().into_iter().map(|c| c.kind).collect();
+    assert_eq!(
+        flags,
+        vec![
+            CommandKind::Edit(Edit::SpecialForces(s.ids[0], true)),
+            CommandKind::Edit(Edit::SpecialForces(s.ids[0], false)),
+        ]
+    );
     for bad in ["", "a", "a, 1", "a, true, 1", "'a', true", "-1, true", "a, 1"] {
         assert!(rt.eval::<()>(&format!("A2.SetSpecialForcesFlag({bad})")).is_err(), "{bad}");
     }
@@ -122,7 +130,7 @@ fn recruit_takes_the_first_unflagged_craft_of_that_team_and_odf() {
     }
     assert!(rt.eval::<()>("A2.RecruitSpecialForces('fx_cruiser')").is_err());
     assert!(rt.eval::<()>("A2.RecruitSpecialForces('fx_cruiser', 'x', 0)").is_err());
-    assert!(rt.take_commands().is_empty());
+    assert!(rt.take_commands().iter().all(|c| matches!(c.kind, CommandKind::Edit(Edit::SpecialForces(..)))), "recruiting only flags");
 }
 
 /// LUA-21: a `BuildObject` token with no object yet is no dead handle (the original's handle is usable
@@ -173,7 +181,7 @@ fn build_object_queues_a_spawn_and_its_handle_resolves_after_the_receipt() {
     let r: (bool, i64) = rt.eval("return A2.RecruitSpecialForces('fx_cruiser', 1, 0)").unwrap();
     assert_eq!(r, (true, i64::from(id.0)));
     rt.eval::<()>("A2.RemoveObject(h)").unwrap();
-    assert!(matches!(rt.take_commands()[0].kind, CommandKind::Edit(Edit::Kill(k)) if k == id));
+    assert!(matches!(rt.take_commands().last().unwrap().kind, CommandKind::Edit(Edit::Kill(k)) if k == id));
 }
 
 #[test]
@@ -540,7 +548,7 @@ fn path_lookup_prefers_exact_then_a_unique_case_insensitive_match() {
     assert_eq!(rt.eval::<f64>("return A2.GetLocation('aB', 0).x").unwrap(), 2.0);
     // One case-insensitive match is used, in both the order and object calls.
     assert_eq!(rt.eval::<f64>("return A2.GetLocation('solo', 0).x").unwrap(), 3.0);
-    rt.eval::<()>("A2.Goto(a, 'solo', false, 0)").unwrap();
+    rt.eval::<()>("A2.SetSpecialForcesFlag(a, true); A2.Goto(a, 'solo', false, 0)").unwrap();
     // Two case-insensitive matches and no exact one: an error, deterministically.
     let err = rt.eval::<()>("A2.GetLocation('AB', 0)").expect_err("ambiguous").to_string();
     assert!(err.contains("ambiguous"), "{err}");

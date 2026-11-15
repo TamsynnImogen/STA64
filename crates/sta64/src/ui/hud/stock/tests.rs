@@ -322,6 +322,84 @@ fn installed_armada1_guis_draw_three_resource_readouts_inside_the_window() {
     }
 }
 
+/// The player's HUD layout choice applies live, through the real path: the `Settings` value
+/// is copied into `HudConfig::fit` by `fit_screen`, the stock HUD redraws in place with
+/// different rectangles, and switching back restores the exact centred layout.
+#[test]
+fn hud_fit_switch_redraws_the_stock_hud_live() {
+    use super::layout::HudFit;
+    use crate::frontend::screens::Settings;
+    let aspect = 2752.0_f32 / 1152.0;
+    let mut app = app_with_content_and_config(content(), HudConfig { aspect, ..config() }, UiProfile::Armada2);
+    app.insert_resource(Settings::default());
+    app.update();
+    let snapshot = |app: &App| {
+        let state = app.world().resource::<StockState>();
+        let l = state.layout.as_ref().unwrap();
+        (l.fit, l.hud, l.panel("minimap"), l.palette().unwrap().origin, state.solid.clone())
+    };
+    let label = |app: &mut App| (0..3).find_map(|id| resource_label(app, id)).expect("a resource readout").3.left;
+    let centred = snapshot(&app);
+    assert_eq!(centred.0, HudFit::Centred);
+    assert!(centred.1.x > 0.0 && centred.1.w < 1080.0 * aspect, "{:?}", centred.1);
+    let before = label(&mut app);
+
+    app.world_mut().resource_mut::<Settings>().hud_fit = HudFit::Stretched;
+    app.update();
+    assert_eq!(app.world().resource::<HudConfig>().fit, HudFit::Stretched);
+    let stretched = snapshot(&app);
+    assert_eq!((stretched.1.x, stretched.1.y, stretched.1.h), (0.0, 0.0, 1080.0));
+    assert!((stretched.1.w - 1080.0 * aspect).abs() < 0.01, "{:?}", stretched.1);
+    assert_ne!(stretched.2, centred.2);
+    assert_ne!(stretched.3, centred.3);
+    assert_ne!(label(&mut app), before);
+
+    app.world_mut().resource_mut::<Settings>().hud_fit = HudFit::Centred;
+    app.update();
+    let back = snapshot(&app);
+    assert_eq!(back, centred, "switching back restores the exact centred layout");
+    assert_eq!(label(&mut app), before);
+}
+
+/// Stretched mode: the HUD is the whole window, so no side margin exists; the pointer-solid
+/// rectangles cover the minimap and the command cells where they are drawn, the open view
+/// above the HUD stays free, and a click on a command cell still queues its order.
+#[test]
+fn stretched_hud_keeps_pointer_solids_and_clicks_on_its_cells() {
+    use super::layout::HudFit;
+    let aspect = 21.0_f32 / 9.0;
+    let mut app = app_with_content_and_config(content(), HudConfig { aspect, fit: HudFit::Stretched, ..config() }, UiProfile::Armada2);
+    let state = app.world().resource::<StockState>();
+    let layout = state.layout.as_ref().unwrap();
+    assert_eq!(layout.fit, HudFit::Stretched);
+    assert_eq!(layout.hud, R::new(0.0, 0.0, 1080.0 * aspect, 1080.0));
+    let map = layout.panel("minimap").unwrap();
+    assert_eq!(map.x, 0.0, "panels start at the window edge");
+    let first = layout.palette().unwrap().cell_rect(0, 0);
+    let centre = |r: R| Vec2::new(r.x + r.w / 2.0, r.y + r.h / 2.0);
+    assert!(state.solid.iter().any(|r| r.contains(centre(map))), "minimap is pointer-solid");
+    assert!(state.solid.iter().any(|r| r.contains(centre(first))), "a command cell is pointer-solid");
+    for p in [Vec2::new(1080.0 * aspect / 2.0, 100.0), Vec2::new(1080.0 * aspect - 3.0, 100.0)] {
+        assert!(!state.solid.iter().any(|r| r.contains(p)), "{p:?} is the open view");
+    }
+    // The built button sits on that rectangle, and a click on it queues the order.
+    let stop = cell_rect_of(&mut app, Act::Stop);
+    let origin = app.world().resource::<StockState>().layout.as_ref().unwrap().palette().unwrap();
+    assert!((0..origin.columns).any(|c| (0..origin.rows).any(|r| origin.cell_rect(c, r) == stop)), "{stop:?} is a palette cell");
+    let stop = cell(&mut app, Act::Stop);
+    click(app.world_mut(), stop);
+    app.update();
+    assert_eq!(app.world().resource::<CommandQueue>().0, [CommandKind::Order(Order::Stop { units: vec![EntityId(1)] })]);
+}
+
+/// The placed rectangle of a palette button (its absolute-positioned node).
+fn cell_rect_of(app: &mut App, act: Act) -> R {
+    let e = cell(app, act);
+    let n = app.world().get::<Node>(e).unwrap().clone();
+    let (Val::Px(x), Val::Px(y), Val::Px(w), Val::Px(h)) = (n.left, n.top, n.width, n.height) else { panic!("not pixel placed") };
+    R::new(x, y, w, h)
+}
+
 #[test]
 fn armada1_separate_panels_respect_no_flags_and_missing_text_areas() {
     let raw = A1_RESOURCES.replace("dilithiumTextArea = 14 1 60 13", "dilithiumTextArea = 0 0 0 0") + "noCrew = 1\n";

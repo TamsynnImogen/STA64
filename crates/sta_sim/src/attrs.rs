@@ -55,6 +55,10 @@ pub struct AttrsView {
     /// `(team, by, ship attack orders, station attack orders)` of the ally attack counters (LUA-32), non-zero rows ascending.
     #[serde(default)]
     pub ally_attacks: Vec<(u8, u8, u32, u32)>,
+    /// Craft whose special-forces flag is set (`Edit::SpecialForces`, LUA-28), ascending id.
+    /// Derived from the switch rows each tick; not saved state.
+    #[serde(default)]
+    pub special_forces: Vec<EntityId>,
 }
 
 /// One seat's derived team numbers.
@@ -113,6 +117,7 @@ impl Attrs {
             races: self.races.iter().map(|(i, s)| (i, s.clone())).collect(),
             player_races: self.player_races.clone(),
             seats: Vec::new(),
+            special_forces: Vec::new(),
             impulse: Vec::new(),
             warp: Vec::new(),
             alerts: Vec::new(),

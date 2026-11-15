@@ -62,6 +62,7 @@ mod entity;
 mod edit_feedback;
 pub(crate) mod set_relation;
 pub(crate) mod ai_switch;
+pub(crate) mod special_forces;
 mod entity_action;
 mod entity_ref;
 mod camera_intent;

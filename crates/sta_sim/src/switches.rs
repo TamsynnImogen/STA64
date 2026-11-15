@@ -25,10 +25,10 @@
 //!   (`hidden`, `special_forces`); the engine reads hidden only when drawing and
 //!   special forces in the script order gate, assist and the AI planner.
 //!   `Craft::SetTeam` clears special forces (an ownership change does so here).
-//!   They are read with [`Sim::switches`]; the view does not carry them yet
-//!   (a `UnitView` field touches every view literal of `sta64`) and the
-//!   `SetSpecialForcesFlag` binding keeps its flag as mission state, so it sends
-//!   no `Edit::SpecialForces` until the AI consumer (AI-02) reads it.
+//!   They are read with [`Sim::switches`]; the view carries the special-forces
+//!   units as `AttrsView::special_forces` (derived each tick, LUA-28), which the
+//!   mission bindings and the AI read. The mission bindings send `Edit::SpecialForces`
+//!   and gate script orders on it; the AI leaves flagged craft out of its plans.
 //! - **SetCanBeDecommissioned** (LUA-32): one more bit (`no_decommission`, hash bit 4), stored for a
 //!   live craft; nothing reads it yet (no decommissioning in STA64).
 //! - **SetName**: a display string (limited to [`MAX_NAME_BYTES`]).
@@ -106,6 +106,11 @@ impl SwitchTable {
     /// The display names scripts gave (`Edit::Name`), ascending id.
     pub(crate) fn names(&self) -> Vec<(EntityId, String)> {
         self.rows.iter().filter_map(|(id, s)| s.name.clone().map(|n| (id, n))).collect()
+    }
+
+    /// Units with the special-forces flag set, ascending id (the view's list, LUA-28).
+    pub(crate) fn special_forces(&self) -> Vec<EntityId> {
+        self.rows.iter().filter(|(_, s)| s.special_forces).map(|(id, _)| id).collect()
     }
 
     pub(crate) fn to_rows(&self) -> Vec<(EntityId, Switches)> {
