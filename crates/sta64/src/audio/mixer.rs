@@ -86,6 +86,14 @@ pub trait AudioBackend {
     fn name(&self) -> &'static str;
     /// Play `sound` on `bus`; `at` is a map-space position, `None` for non-positional.
     fn play(&mut self, sound: &Sound, bus: Bus, at: Option<[f32; 3]>);
+    /// Like [`AudioBackend::play`], for a stream a mission script started and may stop by its
+    /// `tag` (the script's message id) without touching anything else on the bus. The default
+    /// plays it untagged, so a backend that cannot stop one stream falls back to bus cuts.
+    fn play_tagged(&mut self, _tag: u32, sound: &Sound, bus: Bus, at: Option<[f32; 3]>) {
+        self.play(sound, bus, at);
+    }
+    /// Stops the stream played with `tag` and nothing else; an unknown or finished tag is a no-op.
+    fn stop_tag(&mut self, _tag: u32) {}
     /// Whether a bus still has audible playback (including an in-progress stop).
     fn bus_busy(&self, bus: Bus) -> bool;
     /// Advance a headless backend's playback clock; real devices use their own clock.
@@ -126,7 +134,8 @@ const FALLOFF: f32 = 2000.0;
 pub struct KiraAudio {
     manager: AudioManager<DefaultBackend>,
     tracks: HashMap<Bus, TrackHandle>,
-    playing: Vec<(Bus, StaticSoundHandle)>,
+    /// What plays, with the tag of a stream a script may stop by itself (its message id).
+    playing: Vec<(Bus, Option<u32>, StaticSoundHandle)>,
     listener: ([f32; 3], [f32; 3]),
     /// `num_stream_errors_discarded` at the last poll.
     discarded_seen: u64,
@@ -147,16 +156,9 @@ impl KiraAudio {
     }
 }
 
-fn db(v: f32) -> Decibels {
-    if v <= 0.001 { Decibels::SILENCE } else { Decibels(20.0 * v.log10()) }
-}
-
-impl AudioBackend for KiraAudio {
-    fn name(&self) -> &'static str {
-        "kira"
-    }
-
-    fn play(&mut self, sound: &Sound, bus: Bus, at: Option<[f32; 3]>) {
+impl KiraAudio {
+    /// Starts `sound` on `bus`, kept for the bus cuts and, with a `tag`, for [`AudioBackend::stop_tag`].
+    fn start(&mut self, sound: &Sound, bus: Bus, at: Option<[f32; 3]>, tag: Option<u32>) {
         let frames: Arc<[Frame]> = sound.frames.iter().map(|f| Frame::new(f[0], f[1])).collect();
         let mut settings = StaticSoundSettings::new();
         if let Some(p) = at {
@@ -169,13 +171,40 @@ impl AudioBackend for KiraAudio {
             settings = settings.panning(Panning((side * far).clamp(-1.0, 1.0))).volume(Decibels(-20.0 * far));
         }
         let data = StaticSoundData { sample_rate: sound.sample_rate, frames, settings, slice: None };
-        self.playing.retain(|(_, h)| h.state() != PlaybackState::Stopped);
+        self.playing.retain(|(_, _, h)| h.state() != PlaybackState::Stopped);
         if let Some(t) = self.tracks.get_mut(&bus) {
             match t.play(data) {
-                Ok(h) => self.playing.push((bus, h)),
+                Ok(h) => self.playing.push((bus, tag, h)),
                 Err(e) => warn!("audio: playing {:?} failed: {e}", sound.name),
             }
         }
+    }
+}
+
+fn db(v: f32) -> Decibels {
+    if v <= 0.001 { Decibels::SILENCE } else { Decibels(20.0 * v.log10()) }
+}
+
+impl AudioBackend for KiraAudio {
+    fn name(&self) -> &'static str {
+        "kira"
+    }
+
+    fn play(&mut self, sound: &Sound, bus: Bus, at: Option<[f32; 3]>) {
+        self.start(sound, bus, at, None);
+    }
+
+    fn play_tagged(&mut self, tag: u32, sound: &Sound, bus: Bus, at: Option<[f32; 3]>) {
+        self.start(sound, bus, at, Some(tag));
+    }
+
+    fn stop_tag(&mut self, tag: u32) {
+        self.playing.retain_mut(|(_, t, h)| {
+            if *t == Some(tag) {
+                h.stop(Tween::default());
+            }
+            *t != Some(tag)
+        });
     }
 
     fn play_stream(&mut self, stream: &PcmStream, bus: Bus) {
@@ -187,7 +216,7 @@ impl AudioBackend for KiraAudio {
     }
 
     fn bus_busy(&self, bus: Bus) -> bool {
-        self.playing.iter().any(|(b, handle)| *b == bus && handle.state() != PlaybackState::Stopped)
+        self.playing.iter().any(|(b, _, handle)| *b == bus && handle.state() != PlaybackState::Stopped)
     }
 
     fn set_bus_volume(&mut self, bus: MixBus, volume: f32) {
@@ -203,16 +232,16 @@ impl AudioBackend for KiraAudio {
     }
 
     fn stop_all(&mut self) {
-        for (_, h) in &mut self.playing {
+        for (_, _, h) in &mut self.playing {
             h.stop(Tween::default());
         }
         // A stop can fade asynchronously. Retain voice handles until Kira
         // reports Stopped so a replacement cannot overlap the fading line.
-        self.playing.retain(|(bus, h)| *bus == Bus::Voice && h.state() != PlaybackState::Stopped);
+        self.playing.retain(|(bus, _, h)| *bus == Bus::Voice && h.state() != PlaybackState::Stopped);
     }
 
     fn stop_bus(&mut self, bus: Bus) {
-        self.playing.retain_mut(|(b, h)| {
+        self.playing.retain_mut(|(b, _, h)| {
             if *b == bus {
                 h.stop(Tween::default());
             }

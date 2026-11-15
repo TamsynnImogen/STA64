@@ -11,7 +11,7 @@
 use super::*;
 use crate::audio::{AudioPlugin, BankResolver, Mixer, NullAudio, Resolver, SoundStarted};
 use crate::input::camera_cinematic::{CinematicCamera, CinematicCameraPlugin};
-use crate::sim_link::{PlaySound, StopSounds};
+use crate::sim_link::{PlayScriptSound, PlaySound, StopScriptSound, StopSounds};
 use crate::ui::presentation::{CineractiveState, FadeState, PresentationLog, ScriptSounds};
 use bevy::time::TimeUpdateStrategy;
 use std::fmt::Write as _;
@@ -24,10 +24,13 @@ const HZ: f64 = sta_core::TICK_HZ as f64;
 #[derive(Resource, Default)]
 struct Heard(Vec<(u64, String)>);
 
-fn note(mut started: MessageReader<SoundStarted>, mut play: MessageReader<PlaySound>, mut stop: MessageReader<StopSounds>, mut out: ResMut<Heard>, link: Option<Res<SimLink>>) {
+#[allow(clippy::too_many_arguments)]
+fn note(mut started: MessageReader<SoundStarted>, mut play: MessageReader<PlaySound>, mut stop: MessageReader<StopSounds>, mut play_script: MessageReader<PlayScriptSound>, mut stop_script: MessageReader<StopScriptSound>, mut out: ResMut<Heard>, link: Option<Res<SimLink>>) {
     let tick = link.map_or(0, |l| l.curr().tick);
     out.0.extend(play.read().map(|m| (tick, format!("play {} bus {:?}", m.name, m.bus))));
     out.0.extend(started.read().map(|m| (tick, format!("started {} bus {:?} length {:?}", m.name, m.bus, m.seconds))));
+    out.0.extend(play_script.read().map(|m| (tick, format!("play {} bus Ui", m.name))));
+    out.0.extend(stop_script.read().map(|m| (tick, format!("stop-script {}", m.id))));
     out.0.extend(stop.read().map(|m| (tick, format!("stop-bus {:?}", m.bus))));
 }
 
@@ -63,7 +66,8 @@ pub struct Msg {
 pub struct Trace {
     pub frames: Vec<Frame>,
     pub msgs: Vec<Msg>,
-    pub ui_cuts: Vec<u64>,
+    /// Every stop of one script stream: when, and which message id.
+    pub ui_cuts: Vec<(u64, u32)>,
     pub objectives: usize,
 }
 
@@ -124,7 +128,7 @@ pub fn drive(seconds: f64) -> Option<Trace> {
     open.give_all_missions = true;
     cs.progress.apply_give_all(&open);
     let mut app = base(cs);
-    let (null, _calls) = NullAudio::new();
+    let (null, calls) = NullAudio::new();
     app.insert_resource(crate::viewer::Mounted(vfs))
         .init_resource::<crate::map::Catalogue>()
         .init_resource::<ButtonInput<KeyCode>>()
@@ -175,8 +179,19 @@ pub fn drive(seconds: f64) -> Option<Trace> {
             let _ = writeln!(text, "A t={:.2} tick={t} {h}", secs(*t));
         }
         heard_at = w.resource::<Heard>().0.len();
+        // What reached the mixer backend (every bus), as it would have sounded.
+        for c in calls.drain() {
+            if !matches!(c, crate::audio::Call::Listener { .. } | crate::audio::Call::BusVolume { .. }) {
+                let _ = writeln!(text, "C t={:.2} tick={tick} {c:?}", secs(tick));
+            }
+        }
         if secs(tick) >= seconds || state(&app) != AppState::InGame {
             break;
+        }
+    }
+    if let Some(h) = app.world().get_resource::<MissionHandle>() {
+        for e in h.with(|rt| rt.errors().to_vec()) {
+            let _ = writeln!(text, "E script error: {e}");
         }
     }
     let objectives = app.world().resource::<crate::ui::presentation::ObjectivesView>().items.len();
@@ -190,12 +205,12 @@ pub fn drive(seconds: f64) -> Option<Trace> {
             let _ = std::fs::write(out.join(format!("{bzn}-host.txt")), &text);
         }
     }
-    let ui_cuts = heard.iter().filter(|(_, h)| h.starts_with("stop-bus Ui")).map(|(t, _)| *t).collect();
+    let ui_cuts = heard.iter().filter_map(|(t, h)| h.strip_prefix("stop-script ").and_then(|id| id.parse().ok()).map(|id| (*t, id))).collect();
     Some(Trace { frames, msgs: messages(&log, &heard), ui_cuts, objectives })
 }
 
 /// Rules over the trace of an opening that nobody skips (none comes from the script):
-/// - the UI bus is cut only when the stopped message was the last one playing;
+/// - a stop names one script stream and only one that is still playing (no bus is cut);
 /// - every message plays for the length the audio layer reported, unless the script stopped it;
 /// - the opening hands over once its last message has ended, well before the hold cap, and the
 ///   mission's objectives are issued.
@@ -204,10 +219,10 @@ fn install_gated_a2_opening_obeys_the_message_and_hand_over_rules() {
     let Some(t) = drive(float_env("STA64_TEST_A2_SECONDS", 150.0)) else { return };
     let slack = 0.6;
     assert!(!t.msgs.is_empty() && t.msgs.iter().all(|m| m.length.is_some()), "every message resolved to a clip with a length");
-    for &cut in &t.ui_cuts {
-        let stopped_now: Vec<u64> = t.msgs.iter().filter(|m| m.stopped == Some(cut)).map(|m| m.id as u64).collect();
-        let others = t.msgs.iter().filter(|m| !stopped_now.contains(&(m.id as u64)) && m.start <= cut && m.stopped.is_none_or(|s| s > cut) && secs(cut) < secs(m.start) + m.length.unwrap() - slack).count();
-        assert_eq!(others, 0, "the UI bus was cut at {:.1} s while another message was still playing", secs(cut));
+    for &(cut, id) in &t.ui_cuts {
+        // A stop names one stream, and only a stream that is still playing (a stale id is ignored).
+        let m = t.msgs.iter().filter(|m| m.id == id && m.start <= cut).last().expect("a stop names a message the script started");
+        assert!(secs(cut) < secs(m.start) + m.length.unwrap() + slack, "message {id} was stopped at {:.1} s, after its clip had ended", secs(cut));
     }
     for m in &t.msgs {
         let end = secs(m.start) + m.length.unwrap();
