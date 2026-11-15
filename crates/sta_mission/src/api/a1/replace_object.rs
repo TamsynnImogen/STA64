@@ -42,6 +42,8 @@ pub(super) fn install(lua: &Lua, env: &Env, table: &Table) -> mlua::Result<()> {
                 let handle = crate::api::spawn::queue_spawn(&mut c, key, owner, pos).map_err(mlua::Error::runtime)?;
                 c.try_push(sta_core::PlayerId::SCRIPT, sta_sim::command::CommandKind::Edit(Edit::Kill(id)))
                     .map_err(|reason| mlua::Error::runtime(format!("A1.ReplaceObject: {reason}")))?;
+                // The original removes silently: the client shows no death effect for this Kill.
+                crate::api::spawn::note_removed(&mut c, id);
                 handle
             };
             let EntityRef::Spawn(spawn) = handle else {

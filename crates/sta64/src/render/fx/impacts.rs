@@ -155,7 +155,10 @@ pub struct ImpactFxPlugin;
 
 impl Plugin for ImpactFxPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Seen>().add_systems(
+        app.init_resource::<Seen>()
+            .add_systems(OnEnter(crate::app::AppState::Loading), forget_units)
+            .add_systems(OnExit(crate::app::AppState::InGame), forget_units)
+            .add_systems(
             Update,
             (track, spawn_impacts, smoke_attach, emit_smoke, update_impacts, attach_visuals, apply_alpha, apply_shields, apply_fire, apply_quads)
                 .chain()
@@ -215,6 +218,12 @@ pub(super) fn spark_at(from: Vec3, dir: Vec3, speed: f32, age: f32, life: f32) -
     let travel = |t: f32| speed * t * (1.0 - 0.5 * SPARK_DRAG * t / life);
     let tail_t = if age > SPARK_TAIL { age - SPARK_TAIL } else { 0.0 };
     Some((from + dir * travel(tail_t), from + dir * travel(age), 1.0 - age / life))
+}
+
+/// A mission or match starting or ending: the next sim's ids begin again, so what was seen of the last
+/// one must not answer for them.
+fn forget_units(mut seen: ResMut<Seen>) {
+    seen.0.clear();
 }
 
 fn track(link: Res<SimLink>, content: Option<Res<ContentRes>>, ents: Option<Res<SimEntities>>, radii: Query<&SelectRadius>, mut seen: ResMut<Seen>) {

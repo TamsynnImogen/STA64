@@ -46,13 +46,23 @@ pub struct AnimClock {
     skip_dt: bool,
 }
 
-/// Ticks a launched mission runs before its first frame is shown. The script thinks after each
-/// tick over that tick's view and its commands apply on the next one, so a start-of-mission hook
-/// that waits one update on a monitor lands on tick 3 and what it spawns is told back (a camera
-/// `lookAt` on the spawn) on tick 4: with fewer ticks the first frame is the default strategy
-/// camera over the units the opening is about to replace. No mission time is owed for them: the
-/// opening is the script's tick 0 (the original's own order is not measured).
-pub const OPENING_TICKS: u32 = 4;
+/// The first tick of a mission, before any script has thought (the script thinks after a tick).
+const OPENING_FIRST_TICK: u32 = 1;
+/// A command the script queued in a think after tick N applies on tick N+1 (`SimLink::tick` steps
+/// first and thinks after; pinned by `sim_link::tests::a_controller_command_applies_on_the_next_tick`):
+/// the script's own first update.
+const OPENING_APPLY: u32 = 1;
+/// A set-up that waits one script update (a monitor whose hook fires on the update after the first).
+const OPENING_ONE_UPDATE_LATE: u32 = 1;
+/// A reply the set-up waits for (a shot aimed at a unit the set-up has just spawned).
+const OPENING_REPLY: u32 = 1;
+
+/// Ticks a launched mission runs before its first frame is shown: the host's latencies added up, so
+/// that a script's start-of-mission set-up (removals, a cineractive, a shot) has applied before the
+/// first frame is drawn, and not the default strategy camera over units the set-up replaces. A set-up
+/// that is one more update late still shows its first frame early. No mission time is owed for the
+/// ticks: they are the script's tick 0 (the original's own order is not measured).
+pub const OPENING_TICKS: u32 = OPENING_FIRST_TICK + OPENING_APPLY + OPENING_ONE_UPDATE_LATE + OPENING_REPLY;
 
 impl Default for AnimClock {
     fn default() -> Self {
@@ -125,8 +135,9 @@ impl AnimClock {
     /// mode) and say how many ticks are due. Run them, calling
     /// [`ticked`](Self::ticked) after each, then [`end_frame`](Self::end_frame).
     pub fn begin_frame(&mut self, real_dt: f64) -> u32 {
-        let skip = std::mem::take(&mut self.skip_dt);
-        if skip && !self.paused {
+        // A start that is paused keeps its opening for the first unpaused frame.
+        if self.skip_dt && !self.paused {
+            self.skip_dt = false;
             // The first frame shown runs the mission's opening ticks and no more, so the script's
             // opening requests are on screen with it, not a frame later.
             self.frame_dt = 0.0;
@@ -143,12 +154,6 @@ impl AnimClock {
         }
         self.debt += dt;
         ((self.debt * TICK_HZ as f64) as u32).min(Self::MAX_TICKS_PER_FRAME)
-    }
-
-    /// The next frame is a mission's first one shown (see [`start_fresh`](Self::start_fresh)): it runs
-    /// the opening ticks, and nothing they destroyed was ever on screen.
-    pub fn is_opening(&self) -> bool {
-        self.skip_dt && !self.paused
     }
 
     /// The sim is about to start (a mission shown after its load): drop the time owed and
@@ -226,6 +231,17 @@ mod tests {
     }
 
     #[test]
+    fn a_start_that_is_paused_runs_its_opening_on_the_first_unpaused_frame() {
+        let mut c = AnimClock::new(ClockMode::Wall, 1);
+        c.start_fresh();
+        c.set_paused(true);
+        assert_eq!(c.begin_frame(0.1), 0);
+        c.end_frame();
+        c.set_paused(false);
+        assert_eq!(c.begin_frame(5.0), OPENING_TICKS);
+    }
+
+    #[test]
     fn wall_mode_runs_thirty_ticks_a_second() {
         let mut c = AnimClock::new(ClockMode::Wall, 1);
         let ran: u32 = frames(&mut c, 1.0 / 60.0, 120).iter().sum();
@@ -239,9 +255,7 @@ mod tests {
     fn a_fresh_start_runs_the_opening_ticks_on_the_first_frame_whatever_dt_that_frame_had() {
         let mut c = AnimClock::new(ClockMode::Wall, 1);
         c.start_fresh();
-        assert!(c.is_opening());
         assert_eq!(c.begin_frame(5.0), OPENING_TICKS, "a load's long frame is not time owed");
-        assert!(!c.is_opening());
         for _ in 0..OPENING_TICKS {
             c.ticked();
         }

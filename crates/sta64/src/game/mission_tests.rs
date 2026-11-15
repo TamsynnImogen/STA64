@@ -438,11 +438,10 @@ fn watch_destroyed(mut msgs: MessageReader<crate::sim_link::SimMsg>, mut shown: 
     }
 }
 
-/// A start-of-mission hook that waits one update on a monitor (as Roots' openings do), replaces a
-/// unit and starts a cineractive with a shot: the first frame shown must already be that shot, over a
-/// world without the removed units, and the host is told of no destruction (the units were never on
-/// screen). Otherwise the default strategy camera is drawn over the units first, and a death effect
-/// plays for each unit the script replaced.
+/// A script whose set-up, a little after its first update, replaces a unit and starts a cineractive with a
+/// shot: the first frame shown must already be that shot, over a world without the removed unit, and the host
+/// is told of no destruction for the scripted removal. Otherwise the default strategy camera is drawn first and
+/// a death effect plays for the unit the script replaced.
 #[test]
 fn the_first_frame_shown_is_the_scripts_opening_shot_over_the_world_it_set_up() {
     let script = "local made = false\n\

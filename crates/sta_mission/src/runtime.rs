@@ -614,6 +614,13 @@ impl MissionRuntime {
         out
     }
 
+    /// The units the script removed with `Entity.remove` since the last call: a removal is not a
+    /// destruction the script means to show (A2 `ExplodeNow`, damage and hull edits are not listed).
+    /// A host drops the death effect of these ids' `Destroyed` events.
+    pub fn take_removed(&self) -> Vec<sta_core::EntityId> {
+        crate::api::take_removed(&mut self.inner.ctx.borrow_mut())
+    }
+
     /// Path lookups that found no such path or point (LUA-18), with counts ascending by
     /// name. The engine does nothing there, so they are not [`MissionRuntime::unsupported`].
     pub fn absent_paths(&self) -> Vec<(String, u32)> {

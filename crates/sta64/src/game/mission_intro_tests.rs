@@ -237,7 +237,7 @@ fn install_gated_politics_sim_starts_with_the_game_whatever_the_load_took() {
     assert!(short.first_frame.fade > 0.5, "and it starts black: {:?}", short.first_frame);
 }
 
-/// "Counterpunch" opens the same way (a replaced fleet behind a monitor hook, then a path shot).
+/// A second mission whose opening sets the world up and starts a cineractive: its first frame shown is the opening's too.
 #[test]
 fn install_gated_counterpunch_first_frame_shown_is_its_opening() {
     let Some(run) = drive_mission("Counterpunch", None, 0.1) else { return };

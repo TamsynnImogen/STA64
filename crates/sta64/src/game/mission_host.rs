@@ -88,7 +88,7 @@ use crate::frontend::loading::{LoadInfo, LoadProgress};
 use crate::frontend::screens::{Screen, ScreenData};
 use crate::map::MapSeat;
 use crate::media::campaign::{MissionBegan, MissionEnded, MissionMovieLog, MissionMovies};
-use crate::sim_link::{SimLink, SimMsg};
+use crate::sim_link::{ScriptRemovals, SimLink, SimMsg};
 use crate::ui::notices::{Notice, Severity};
 use crate::ui::presentation::{ObjectivesView, ScriptReply};
 
@@ -172,7 +172,7 @@ impl MissionLaunch {
         let runtime = launch_runtime(&self.script, self.reader.clone(), self.seed, self.seat, setup, sim, self.paths.clone()).map_err(|e| e.to_string())?;
         let hub = sta_ai::MissionAiHub::new(self.aips.clone());
         let ai = setup.players.iter().filter(|p| !matches!(p.control, Control::Human)).map(|p| hub.controller(setup, p.id)).collect();
-        Ok(MissionHandle { runtime: Arc::new(Mutex::new(runtime)), seats: Arc::new(Mutex::new(Seats { hub, ai })) })
+        Ok(MissionHandle { runtime: Arc::new(Mutex::new(runtime)), seats: Arc::new(Mutex::new(Seats { hub, ai })), removals: ScriptRemovals::default() })
     }
 
     /// The seat's race for the HUD, music and cfg (`None`: the install does not list it).
@@ -194,6 +194,8 @@ impl MissionLaunch {
 pub struct MissionHandle {
     runtime: Arc<Mutex<MissionRuntime>>,
     seats: Arc<Mutex<Seats>>,
+    /// Units the script removed with a removal call, for the client's death effects to skip.
+    removals: ScriptRemovals,
 }
 
 /// The mission's AI seats and the queue of plan loads between the script and them.
@@ -205,7 +207,12 @@ struct Seats {
 impl MissionHandle {
     /// The controller for [`SimLink::with_controllers`]: the script, then the AI seats.
     pub fn controller(&self) -> Box<dyn Controller> {
-        Box::new(Shared { rt: self.runtime.clone(), seats: self.seats.clone() })
+        Box::new(Shared { rt: self.runtime.clone(), seats: self.seats.clone(), removals: self.removals.clone() })
+    }
+
+    /// The removal list, for the world to read (see [`ScriptRemovals`]).
+    pub fn removals(&self) -> ScriptRemovals {
+        self.removals.clone()
     }
 
     /// Run `f` on the runtime.
@@ -222,6 +229,7 @@ impl MissionHandle {
 struct Shared {
     rt: Arc<Mutex<MissionRuntime>>,
     seats: Arc<Mutex<Seats>>,
+    removals: ScriptRemovals,
 }
 
 impl Controller for Shared {
@@ -230,6 +238,9 @@ impl Controller for Shared {
         rt.think(view, events, out);
         // The script ran first, so a plan it loads this tick reaches its seat this tick.
         let loads = rt.take_ai_requests();
+        // A removal the script just called is reported by the next tick's `Destroyed`; the client
+        // shows no death effect for it (the removal is queued now, so it is listed in time).
+        self.removals.add(rt.take_removed());
         drop(rt);
         let mut seats = self.seats.lock().unwrap_or_else(PoisonError::into_inner);
         seats.hub.submit_requests(loads);
@@ -355,6 +366,13 @@ fn on_start_mission(
     commands.insert_resource(launch);
     commands.insert_resource(crate::sim_link::SimHeld);
     next.set(AppState::Loading);
+}
+
+/// The mission's removal list is a resource of the world, where `step_sim` reads it.
+fn share_removals(handle: Option<Res<MissionHandle>>, mut commands: Commands) {
+    if let Some(handle) = handle.filter(|h| h.is_changed()) {
+        commands.insert_resource(handle.removals());
+    }
 }
 
 /// The sim of a launched mission starts stepping (or, back at the front end, is not held for ever).
@@ -651,6 +669,7 @@ impl Plugin for MissionHostPlugin {
             .add_message::<Notice>()
             .add_systems(OnEnter(AppState::InGame), (start_clock, begin_mission, release_sim).chain())
             .add_systems(OnEnter(AppState::FrontEnd), release_sim)
+            .add_systems(Update, share_removals)
             .add_systems(OnEnter(AppState::FrontEnd), finish_mission.after(crate::frontend::screens::enter_front_end))
             .add_systems(
                 Update,
