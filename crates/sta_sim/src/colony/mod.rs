@@ -503,7 +503,8 @@ impl Sim {
             | Order::SearchAndDestroy { units }
             | Order::Scout { units }
             | Order::AttackAny { units }
-            | Order::AttackPoint { units, .. } => (units, false),
+            | Order::AttackPoint { units, .. }
+            | Order::Guard { units, .. } => (units, false),
             Order::Build { builder, .. } => (std::slice::from_ref(builder), false),
             _ => return,
         };

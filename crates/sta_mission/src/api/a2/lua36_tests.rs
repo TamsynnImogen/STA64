@@ -150,7 +150,7 @@ fn the_command_calls_wait_for_a_handle_still_being_built() {
     let mut s = scene(0);
     let cfg = MissionConfig { content: Some(s.db.clone()), view: Some((*s.sim.view()).clone()), ..MissionConfig::default() };
     let src = "A2.paths.Q = { {x=40,y=0,z=0} }; h = A2.BuildObject('fx_cruiser', 1, 'Q', 0); \
-               A2.SetCommandMoveAutonomyLow(h); A2.SetCommandWhatWhoParamVO(h, 23, 1, 1, false)";
+               A2.SetCommandMoveAutonomyLow(h); A2.SetCommandWhatWhoParamVO(h, 37, 1, 1, false)";
     let mut rt = MissionRuntime::from_source_with("held.lua", src, 3, cfg);
     assert!(rt.errors().is_empty(), "{:?}", rt.errors());
     let commands = rt.take_commands();
