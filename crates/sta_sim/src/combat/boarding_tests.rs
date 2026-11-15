@@ -249,19 +249,55 @@ fn a_party_that_empties_the_crew_captures_with_survivors_and_owner_and_race_chan
     w.run(29);
     assert_eq!((w.owner(w.target), w.sim.unit_race(w.target)), (PlayerId(1), Some("beta")));
     w.run(1);
-    // kills 3.333 > crew 2: survivors (3.333 - 2) x 0.3 = 0.4: captured, still derelict.
+    // kills 3.333 > crew 2: survivors (3.333 - 2) x D / A (1.5) = 2.0: captured with 2 crew.
     assert_eq!(w.owner(w.target), PlayerId(0));
     assert_eq!(w.sim.unit_race(w.target), Some("alpha"));
     assert!(w.sim.units.get(w.target).unwrap().target.is_none(), "Stop");
-    assert!(w.derelict(w.target));
-    let want = (Fixed::from_int(5) / Fixed::from_bits(6_442_450_944) - Fixed::from_int(2)) * Fixed::from_bits(1_288_490_189);
+    assert!(!w.derelict(w.target), "2 crew is not a derelict");
+    let kills = Fixed::from_int(5) / Fixed::from_bits(6_442_450_944);
+    let want = (kills - Fixed::from_int(2)) * Fixed::from_bits(6_442_450_944) / Fixed::ONE;
     assert_eq!(w.sim.units.get(w.target).unwrap().crew.unwrap()[0], want);
-    assert!((num(want) - 0.4).abs() < 0.001);
+    assert!((num(want) - 2.0).abs() < 0.001);
     // The carrier keeps transporting to the now-friendly ship: the next pulse re-crews it.
     w.run(1);
     assert_eq!(w.sim.transports().target_of(w.carrier), Some(w.target));
     w.run(30);
     assert!(w.crew(w.target) >= 5.0 && !w.derelict(w.target), "{}", w.crew(w.target));
+}
+
+#[test]
+fn survivors_are_the_surplus_times_defence_over_attack_for_each_pairing() {
+    let size = Fixed::from_int(5);
+    let near = |v: Fixed, want: f64| assert!((num(v) - want).abs() < 0.0001, "{} vs {want}", num(v));
+    // Strong attacker on a Federation-like defender: D / A = 0.3, an excess of 5 leaves 1.5.
+    let (kills, survivors) = super::boarding::outcome(size, Fixed::from_int(5), fx(1.5), fx(16.6667 - 5.0));
+    near(kills, 16.6667);
+    near(survivors, 1.5);
+    // Attacker 1.5 on a defender of 1.125: D / A = 0.75, an excess of 3.333 leaves 2.5.
+    let (kills, survivors) = super::boarding::outcome(size, fx(1.5), fx(1.125), fx(6.6667 - 3.3333));
+    near(kills, 6.6667);
+    near(survivors, 2.5);
+    // Equal races: D / A = 1.5, per party 3.333 kills; an excess of 1 leaves 1.5.
+    let (kills, survivors) = super::boarding::outcome(size, Fixed::ONE, fx(1.5), fx(3.3333 - 1.0));
+    near(kills, 3.3333);
+    near(survivors, 1.5);
+    // No capture without `kills > crew`.
+    assert_eq!(super::boarding::outcome(size, Fixed::ONE, fx(1.5), fx(4.0)).1, Fixed::ZERO);
+}
+
+#[test]
+fn survivors_under_one_leave_the_captured_unit_derelict() {
+    let mut w = world(1, 300);
+    w.lower_shields(w.target);
+    w.set_crew(w.target, 3.0, 250.0);
+    let party = Party { arrive: 0, seq: 0, target: w.target, size: Fixed::from_int(5), strength: Fixed::ONE, race: "alpha".into(), team: PlayerId(0), source: w.carrier };
+    let db = Arc::clone(&w.db);
+    w.sim.resolve_party(&db, party);
+    // kills 3.333 over crew 3: survivors 0.333 x 1.5 = 0.5.
+    assert_eq!(w.owner(w.target), PlayerId(0));
+    assert!((w.crew(w.target) - 0.5).abs() < 0.001);
+    w.run(1);
+    assert!(w.derelict(w.target));
 }
 
 #[test]
@@ -271,7 +307,7 @@ fn strong_boarders_leave_survivors_as_crew() {
     let party = Party { arrive: 0, seq: 0, target: w.target, size: Fixed::from_int(5), strength: Fixed::from_int(5), race: "alpha".into(), team: PlayerId(0), source: w.carrier };
     let db = Arc::clone(&w.db);
     w.sim.resolve_party(&db, party);
-    // kills 16.67 over crew 10: survivors 6.67 x 0.3 = 2.0 become the crew.
+    // kills 16.67 over crew 10: survivors 6.67 x D / A (0.3) = 2.0 become the crew.
     assert_eq!(w.owner(w.target), PlayerId(0));
     assert!((w.crew(w.target) - 2.0).abs() < 0.001);
     w.run(1);

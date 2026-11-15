@@ -21,7 +21,8 @@
 //!   the party and captures it (M). Otherwise the boarding fight:
 //!   `kills = size x A / D`, `D = defender multiplier x race strength x 1.5`;
 //!   capture when `kills > crew` (a tie leaves a derelict that keeps its owner)
-//!   with `survivors = (kills - crew) x 0.3` (M); the survivors become the crew.
+//!   with `survivors = (kills - crew) x D / A` (M, two pairings); the survivors
+//!   become the crew.
 //! - Capture changes owner and race on one tick, the order becomes Stop and the
 //!   perceived owner follows (M); the carrier goes on transporting to it.
 //! - The carrier stops when `(crew - max) / maxCrew <= crewRedStatus` after a
@@ -52,8 +53,6 @@ use crate::Sim;
 const SHIELDS_DOWN: Fixed = Fixed::from_bits(42_949_673);
 /// 1.5, the defender's factor of the boarding fight (S, M).
 const DEFENCE_FACTOR: Fixed = Fixed::from_bits(6_442_450_944);
-/// 0.3, the share of the surplus kills that lives on as crew (M).
-const SURVIVOR_FACTOR: Fixed = Fixed::from_bits(1_288_490_189);
 /// 0.25, the executable's default `crewRedStatus`.
 const DEFAULT_CREW_RED: Fixed = Fixed::from_bits(1 << 30);
 
@@ -336,6 +335,17 @@ impl Transports {
     }
 }
 
+/// One party's boarding fight: `kills = size x A / D`; when `kills > crew`,
+/// `survivors = (kills - crew) x D / A` (measured), else none.
+pub(crate) fn outcome(size: Fixed, attack: Fixed, defence: Fixed, crew: Fixed) -> (Fixed, Fixed) {
+    let kills = size * attack / defence;
+    if kills > crew && attack > Fixed::ZERO {
+        (kills, (kills - crew) * defence / attack)
+    } else {
+        (kills, Fixed::ZERO)
+    }
+}
+
 impl Sim {
     /// The transporter state (read-only).
     pub fn transports(&self) -> &Transports {
@@ -536,9 +546,8 @@ impl Sim {
         if defence <= Fixed::ZERO {
             return;
         }
-        let kills = p.size * p.strength / defence;
+        let (kills, survivors) = outcome(p.size, p.strength, defence, now);
         let takes = kills > now;
-        let survivors = if takes { (kills - now) * SURVIVOR_FACTOR } else { Fixed::ZERO };
         let mut ctx = Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
         let Some(t) = self.units.get_mut(p.target) else { return };
         kill_crew(t, &mut ctx, kills);
