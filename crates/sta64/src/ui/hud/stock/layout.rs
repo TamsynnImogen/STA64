@@ -277,7 +277,7 @@ pub fn info_variant(info: &Info) -> usize {
             }
         }
         Info::Group(group) => {
-            if group.len() <= 8 {
+            if group.len() <= 16 {
                 1
             } else {
                 2
@@ -575,7 +575,11 @@ mod tests {
             name: String::new(),
             hull: 1.0,
         };
-        assert_eq!(info_variant(&Info::Group(vec![tile.clone(); 8])), 1);
-        assert_eq!(info_variant(&Info::Group(vec![tile; 9])), 2);
+        for count in [2, 16] {
+            assert_eq!(info_variant(&Info::Group(vec![tile.clone(); count])), 1);
+        }
+        for count in [17, 30] {
+            assert_eq!(info_variant(&Info::Group(vec![tile.clone(); count])), 2);
+        }
     }
 }
