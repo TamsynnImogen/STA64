@@ -278,6 +278,8 @@ pub(crate) struct Ctx {
     pub delayed: Vec<(u64, sta_sim::present::Presentation)>,
     /// The cineractive shots the script placed (UI-36), fed from every presentation request.
     pub cine: crate::cineractive::Cineractive,
+    /// The start-value edits queued at load, still to be shown in the view of the first think.
+    pub start_view: Vec<Edit>,
 }
 
 /// A requested mission end: `SucceedMission(seconds, text)` /
@@ -338,6 +340,7 @@ impl Ctx {
             last_fired: BTreeMap::new(),
             delayed: Vec::new(),
             cine: crate::cineractive::Cineractive::default(),
+            start_view: Vec::new(),
         }
     }
 

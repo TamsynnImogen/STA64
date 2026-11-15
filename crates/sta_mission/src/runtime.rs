@@ -379,9 +379,24 @@ impl MissionRuntime {
         gaps: Vec<crate::map_labels::LabelGap>,
         read: impl Fn(&str) -> Option<Vec<u8>> + Send + 'static,
     ) -> MissionRuntime {
+        MissionRuntime::load_with_start(path, seed, cfg, gaps, Default::default(), read)
+    }
+
+    /// [`MissionRuntime::load_with_gaps`] with the seats' start values (the map's team table,
+    /// [`crate::start_stock`]), queued as the script's first commands, ahead of anything it queues while
+    /// it loads: a `Set*` at load time wins and an `Add*` adds to the start value.
+    pub fn load_with_start(
+        path: &str,
+        seed: u64,
+        cfg: MissionConfig,
+        gaps: Vec<crate::map_labels::LabelGap>,
+        start: crate::start_stock::StartStock,
+        read: impl Fn(&str) -> Option<Vec<u8>> + Send + 'static,
+    ) -> MissionRuntime {
         let shared = Rc::new(RefCell::new(Shared::default()));
         let mut c = Ctx::new(cfg, seed);
         c.label_gaps.set(gaps);
+        crate::start_stock::queue(&mut c, start);
         let ctx: ApiShared = Rc::new(RefCell::new(c));
         let lua = crate::sandbox::new_lua();
         let mut errors = Vec::new();
@@ -711,6 +726,12 @@ impl Controller for MissionRuntime {
             let mut c = self.inner.ctx.borrow_mut();
             c.view = view.clone();
             c.events = events.to_vec();
+            // The start values (and any write the script made while loading) are queued, not in the sim
+            // yet: show them to the script's first step, in queue order.
+            if !std::mem::take(&mut c.start_view).is_empty() {
+                let queued: Vec<_> = c.commands.iter().filter_map(|x| match &x.kind { sta_sim::command::CommandKind::Edit(e) => Some(e.clone()), _ => None }).collect();
+                crate::start_stock::show(&mut c.view, &queued);
+            }
             let tick = view.tick;
             let ids: Vec<_> = view.units.iter().map(|u| u.id).collect();
             c.fresh = ids.iter().copied().filter(|id| !c.seen.contains(id)).collect();

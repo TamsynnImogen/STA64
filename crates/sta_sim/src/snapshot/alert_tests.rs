@@ -1,4 +1,4 @@
-//! LUA-32: the alert record of snapshot format 30.
+//! LUA-32: the alert record of snapshot format 32.
 
 use super::*;
 use super::chain;

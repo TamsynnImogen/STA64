@@ -93,7 +93,7 @@ pub struct Alerts {
     ally_last: Vec<(u8, u64)>,
 }
 
-/// [`Alerts`] as the snapshot stores it (format 30).
+/// [`Alerts`] as the snapshot stores it (format 32).
 #[derive(Serialize, Deserialize)]
 pub(crate) struct AlertRec {
     pub(crate) version: u8,

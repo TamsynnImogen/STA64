@@ -141,6 +141,7 @@ impl Sim {
         self.attrs.remove(id);
         self.colonies.remove_entity(id);
         self.transports.remove_entity(id);
+        self.recrew.remove(id);
         self.scripted.remove(id);
         self.switches.remove(id);
         self.alerts.remove(id);
@@ -157,6 +158,9 @@ impl Sim {
             return false;
         }
         if let Some(ok) = self.apply_switch_edit(e) {
+            if ok && let Edit::CanRecrew(id, false) = e {
+                self.recrew.cancel(*id, self.tick);
+            }
             return ok;
         }
         match *e {
@@ -220,9 +224,14 @@ impl Sim {
                 } else {
                     Fixed::ZERO
                 };
+                let before = u.hull[0];
                 u.hull[0] = (u.hull[0] - amount).max(floor).min(u.hull[0]);
+                let taken = before - u.hull[0];
                 if u.hull[0] <= Fixed::ZERO {
                     return self.despawn(id, None);
+                }
+                if taken > Fixed::ZERO && let Some(db) = self.content.as_deref() {
+                    self.recrew.note_damage(&self.units, db, id, Fixed::ZERO, taken, self.tick);
                 }
                 true
             }

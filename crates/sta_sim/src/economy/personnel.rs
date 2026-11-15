@@ -5,6 +5,18 @@ use super::*;
 pub(crate) type PersonnelRows = Vec<(PlayerId, Option<i64>, Option<i64>)>;
 
 impl Economy {
+    /// Debit only initialized live crew, preserving officer limits and any
+    /// over-capacity stock. Returns the exact amount available to the caller.
+    pub(crate) fn withdraw_crew(&mut self, player: PlayerId, wanted: Fixed) -> Fixed {
+        let Ok(i) = self.personnel.binary_search_by_key(&player, |r| r.0) else {
+            return Fixed::ZERO;
+        };
+        let Some(held) = self.personnel[i].1 else { return Fixed::ZERO };
+        let taken = wanted.max(Fixed::ZERO).min(held.max(Fixed::ZERO));
+        self.personnel[i].1 = Some(held - taken);
+        taken
+    }
+
     pub fn crew_of(&self, player: PlayerId) -> Option<Fixed> {
         self.personnel
             .binary_search_by_key(&player, |r| r.0)
