@@ -160,6 +160,9 @@ pub struct Transports {
     pub(crate) holds: BTreeMap<EntityId, Tick>,
 }
 
+/// A party as a snapshot row: arrive, seq, target, size bits, strength bits, race, team, source.
+pub type PartyRow = (Tick, u32, EntityId, i64, i64, String, PlayerId, EntityId);
+
 /// The snapshot form of [`Transports`] (format 29).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransportsRec {
@@ -167,7 +170,7 @@ pub struct TransportsRec {
     /// `(carrier, target, next pulse)`, ascending carrier.
     pub rows: Vec<(EntityId, EntityId, Tick)>,
     /// `(arrive, seq, target, size bits, strength bits, race, team, source)`, ascending `(arrive, seq)`.
-    pub parties: Vec<(Tick, u32, EntityId, i64, i64, String, PlayerId, EntityId)>,
+    pub parties: Vec<PartyRow>,
     pub next_seq: u32,
     /// `(entity, held until)`, ascending entity.
     pub holds: Vec<(EntityId, Tick)>,
@@ -540,10 +543,13 @@ impl Sim {
         let Some(t) = self.units.get_mut(p.target) else { return };
         kill_crew(t, &mut ctx, kills);
         let emptied = t.crew.is_some_and(|c| c[0] <= Fixed::ZERO);
-        if takes && survivors > Fixed::ZERO && emptied && self.capture(p.target, &p) {
-            if let Some(t) = self.units.get_mut(p.target) {
-                t.crew = Some([survivors.min(max), max]);
-            }
+        if takes
+            && survivors > Fixed::ZERO
+            && emptied
+            && self.capture(p.target, &p)
+            && let Some(t) = self.units.get_mut(p.target)
+        {
+            t.crew = Some([survivors.min(max), max]);
         }
     }
 

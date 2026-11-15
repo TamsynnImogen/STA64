@@ -1792,13 +1792,13 @@ mod tests {
                 cmd(0, 0),
                 cmd(2, 0),
                 colonize_sample(2, 1),
+                transport_sample(2, 2),
                 edit(0),
                 text(PlayerId::SCRIPT.0, 1, ""),
                 team_pool_edit(2),
                 set_relation_sample(3),
                 planet_population_sample(4),
                 warp_speed_sample(5),
-                transport_sample(2, 6),
             ],
             schedule: vec![
                 Scheduled {
@@ -2096,7 +2096,7 @@ mod tests {
         );
     }
 
-    const GOLDEN: u64 = 3787655823121684989;
+    const GOLDEN: u64 = 11597141938037505554;
 
     /// Tags are positional and never move: NET-04 appended 22 to 28 after
     /// `Sections` (21), the last tag of protocol 2.
@@ -2308,8 +2308,8 @@ mod tests {
         assert_eq!(peek_header(&bytes), Ok((1, bytes.len() - HEADER_LEN)));
         // A version notice from another build reads as its version.
         let mut notice = version_notice();
-        notice[4..6].copy_from_slice(&11u16.to_le_bytes());
-        assert_eq!(decode(&notice), Err(ProtoError::Version { found: 11 }));
+        notice[4..6].copy_from_slice(&12u16.to_le_bytes());
+        assert_eq!(decode(&notice), Err(ProtoError::Version { found: 12 }));
         // Our own version with no body is not a message.
         assert_eq!(decode(&version_notice()), Err(ProtoError::Empty));
         bytes[0] = b'X';
