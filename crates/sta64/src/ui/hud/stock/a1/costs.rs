@@ -12,6 +12,9 @@
 //! short and the verbose tooltip because the short one shows first). TODO: crew (`crewCost`
 //! exists on the unit, the sim neither charges nor checks it, so it is not listed).
 //!
+//! The amounts are the definition's cost, unscaled: a seat race's cost scaling in the sim (the latinum
+//! factor of a race the data frees of latinum) is not reflected (TODO).
+//!
 //! The missing resource is named from `sta_sim::production::afford::build_shortfall`, the sim's
 //! own payment test over the client's view; nothing here compares stocks itself.
 
@@ -35,6 +38,13 @@ pub struct Needs {
     pub race: String,
 }
 
+/// The amount shown for a cost the sim charges as it stands: rounded up to the next whole unit, so
+/// a fractional cost (0.5, 1.9) never reads as less than what is charged. A choice of display
+/// (the original's rounding is not established), covered by a test.
+fn whole(v: f32) -> i64 {
+    v.ceil() as i64
+}
+
 /// An item's cost from its definition; `None` for an unknown key.
 pub(in crate::ui::hud) fn needs(db: &ContentDb, key: ContentKey) -> Option<Needs> {
     let def = db.unit(key)?;
@@ -45,9 +55,9 @@ pub(in crate::ui::hud) fn needs(db: &ContentDb, key: ContentKey) -> Option<Needs
             .iter()
             .enumerate()
             .filter(|(_, c)| c.to_f32() > 0.0)
-            .map(|(i, c)| (i, c.to_f32() as i64))
+            .map(|(i, c)| (i, whole(c.to_f32())))
             .collect(),
-        officers: def.build.officers.to_f32().max(0.0) as i64,
+        officers: whole(def.build.officers.to_f32().max(0.0)),
         race: def.race.clone(),
     })
 }
@@ -253,5 +263,114 @@ mod tests {
         assert_eq!(refusal(&feed, Some(&UiProfile::Lcars), None, key), None);
         let rich = self::feed(&db, 500, [0, 0]);
         assert_eq!(refusal(&rich, Some(&UiProfile::Armada1), None, key), None, "affordable: no refusal");
+    }
+
+    /// A research station (id 2) whose list is one pod item, plus the cruiser: authored costs.
+    fn research_db(cost: [f64; 4], officers: f64) -> Arc<ContentDb> {
+        let fake = sta_content::fake::db();
+        let mut b = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for w in fake.weapons() {
+            b = b.weapon(w.clone());
+        }
+        for u in fake.units() {
+            let mut u = u.clone();
+            if u.odf == "fx_station" {
+                u.build.list = vec![sta_content::DefRef::new("fx_pod")];
+            }
+            if u.odf == "fx_cruiser" {
+                let mut pod = u.clone();
+                pod.odf = "fx_pod".into();
+                pod.build.list = Vec::new();
+                pod.build.cost = cost.iter().map(|c| Fixed::from_f64(*c)).collect();
+                pod.build.officers = Fixed::from_f64(officers);
+                b = b.unit(pod);
+            }
+            b = b.unit(u);
+        }
+        Arc::new(b.build().unwrap())
+    }
+
+    fn research_feed(db: &Arc<ContentDb>, stock: i32, officers: [i32; 2]) -> HudFeed {
+        let mut source = ScriptedSource::from_json5(
+            "{ units: [{ id: 2, def: 'fx_station', owner: 1, hull: 100, rails: [{ at: 0, pos: { x: 0, y: 0, z: 0 } }] }] }",
+            db,
+        )
+        .unwrap();
+        let mut f = feed(db, stock, officers);
+        let mut view = (*source.step(&[]).view).clone();
+        view.players = f.view.players.clone();
+        view.players[0].resources = vec![Fixed::from_int(stock); 4];
+        f.view = Arc::new(view);
+        f.selected = vec![EntityId(2)];
+        f
+    }
+
+    #[test]
+    fn a_research_item_gets_the_line_and_a_fractional_cost_shows_what_the_sim_charges() {
+        let db = research_db([0.5, 1.9, 2.0, 0.0], 0.0);
+        let feed = research_feed(&db, 500, [0, 0]);
+        let slots = ButtonSlots::from_header("int BUTTON_LOCATION_BACK = 5;\n").0;
+        let buttons = control::buttons(&feed, Page::Build, &slots, None);
+        let item = buttons.iter().find(|b| matches!(b.act, Act::Build { .. })).expect("a research pod item");
+        // Rounded up to the next whole unit; the zero biomatter slot is not listed.
+        assert!(item.tip.ends_with("(needs: 1 dilithium, 2 latinum, 2 metal)"), "{}", item.tip);
+        assert_eq!(whole(0.5), 1);
+        assert_eq!(whole(1.9), 2);
+        assert_eq!(whole(2.0), 2);
+    }
+
+    #[test]
+    fn a_zero_cost_slot_beside_a_positive_one_is_left_out() {
+        let db = research_db([0.0, 6.0, 0.0, 0.0], 0.0);
+        let n = needs(&db, db.key("fx_pod").unwrap()).unwrap();
+        assert_eq!(n.slots, vec![(1, 6)]);
+        assert_eq!(line(None, &ResourceModel::default(), &n, None), "needs: 6 latinum");
+    }
+
+    #[test]
+    fn the_officers_shortfall_reads_through_line_and_refusal() {
+        let db = research_db([0.0, 0.0, 0.0, 0.0], 5.0);
+        let key = db.key("fx_pod").unwrap();
+        let capped = research_feed(&db, 500, [0, 3]);
+        assert_eq!(shortfall(&capped, key), Some(Shortfall::Officers));
+        let n = needs(&db, key).unwrap();
+        assert_eq!(line(None, &ResourceModel::default(), &n, Some(Shortfall::Officers)), "needs: 5 officers (short of: officers)");
+        assert_eq!(refusal(&capped, Some(&UiProfile::Armada1), None, key).as_deref(), Some("Cannot build: not enough officers"));
+    }
+
+    #[test]
+    fn a_table_without_the_keys_falls_back_and_never_prints_empty_brackets() {
+        let db = db(120, 5, "x");
+        let feed = feed(&db, 500, [0, 0]);
+        let slots = ButtonSlots::from_header("int BUTTON_LOCATION_BACK = 5;\n").0;
+        // A table that has none of the Control Panel parts: the English fallbacks, no panic.
+        let bare = Strings::from_game("english", "\"UNRELATED_KEY\", \"x\"");
+        let buttons = control::buttons(&feed, Page::Build, &slots, Some(&bare));
+        let item = buttons.iter().find(|b| matches!(b.act, Act::Build { .. })).unwrap();
+        assert!(item.tip.ends_with("(needs: 120 dilithium, 5 officers)"), "{}", item.tip);
+        assert!(!item.tip.contains("()") && !item.tip.contains("GUI_CP_"), "{}", item.tip);
+        // A table that blanks the bracket words: no empty brackets either.
+        let blank = Strings::from_game("english", "\"GUI_CP_START_EXTRA\", \"\", \"GUI_CP_END_EXTRA\", \"\"");
+        let buttons = control::buttons(&feed, Page::Build, &slots, Some(&blank));
+        let item = buttons.iter().find(|b| matches!(b.act, Act::Build { .. })).unwrap();
+        assert!(!item.tip.contains("()") && item.tip.contains("needs: 120 dilithium"), "{}", item.tip);
+        // And the words with an unrelated table fall back to the resource model's own.
+        let n = needs(&db, station(&db)).unwrap();
+        assert_eq!(line(Some(&bare), &ResourceModel::default(), &n, None), "needs: 120 dilithium, 5 officers");
+    }
+
+    #[test]
+    fn armada_two_and_the_generic_hud_keep_their_build_tooltips() {
+        let db = db(120, 5, "x");
+        let feed = feed(&db, 30, [0, 0]);
+        // The Armada II stock palette's build buttons (`stock::buttons`) and the generic grid.
+        let stock = crate::ui::hud::stock::buttons(&feed, Page::Build, &Default::default());
+        let generic = crate::ui::hud::model::grid(&feed, Page::Build);
+        for list in [&stock, &generic] {
+            let item = list.iter().find(|b| matches!(b.act, Act::Build { .. })).expect("a build item");
+            assert!(!item.tip.contains("needs:") && !item.tip.contains("short of"), "{}", item.tip);
+            assert!(item.verbose.as_deref().is_none_or(|v| !v.contains("needs:")), "{:?}", item.verbose);
+        }
+        assert_eq!(stock.iter().find(|b| matches!(b.act, Act::Build { .. })).unwrap().tip, "Build fx_station");
     }
 }

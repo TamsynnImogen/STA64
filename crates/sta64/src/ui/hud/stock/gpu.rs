@@ -934,7 +934,19 @@ fn installed_armada1_build_costs_tooltip_renders_on_gpu() {
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), None).expect("installed A1 VFS");
     let layout = crate::game::gui_layout(&vfs, "gui_fed.cfg").expect("installed gui_fed.cfg");
     let strings = crate::ui::i18n::Strings::load(&vfs, "english");
+    let words = strings.clone();
     let hud_feed = feed(&vfs, GameOptions::default(), 0);
+    let db = hud_feed.content.clone().expect("installed content");
+    // Every own unit with a build list: the starting construction ship, and a station or research
+    // building when the start has one.
+    let builders: Vec<sta_sim::EntityId> = hud_feed
+        .view
+        .units
+        .iter()
+        .filter(|u| u.owner == hud_feed.player && db.unit(u.def).is_some_and(|d| !d.build.list.is_empty()))
+        .map(|u| u.id)
+        .collect();
+    assert!(!builders.is_empty(), "the start has a builder");
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -984,8 +996,59 @@ fn installed_armada1_build_costs_tooltip_renders_on_gpu() {
         eprintln!("SKIP {label}: hardware adapter unavailable");
         return;
     }
-    // Open the build page of the starting builder and rest the pointer on a build item.
-    app.world_mut().resource_mut::<super::super::HudState>().page = super::super::Page::Build;
+    // The rule, for every build button of every builder, all computed from the data at run time: the
+    // tooltip holds the string table's own "needs" word, and for each cost the unit's definition
+    // charges, its amount and its resource word (the table's for dilithium, the resource model's
+    // otherwise); the officers amount when it takes officers.
+    let require = words.tooltip_text("GUI_CP_REQUIRE").to_owned();
+    assert_ne!(require, "GUI_CP_REQUIRE", "{label}: the install's table has the word");
+    let mut first = None;
+    let mut with_line = 0;
+    for builder in &builders {
+        app.world_mut().resource_mut::<HudFeed>().selected = vec![*builder];
+        app.world_mut().resource_mut::<Selection>().0 = vec![*builder];
+        app.world_mut().resource_mut::<super::super::HudState>().page = super::super::Page::Build;
+        for _ in 0..4 {
+            app.update();
+        }
+        let resources = super::super::model::resource_model(app.world().resource::<HudFeed>());
+        let cells: Vec<(Entity, sta_sim::ContentKey)> = app
+            .world_mut()
+            .query::<(Entity, &super::super::panels::GridCell)>()
+            .iter(app.world())
+            .filter_map(|(e, c)| match c.0 {
+                super::super::Act::Build { what, .. } => Some((e, what)),
+                _ => None,
+            })
+            .collect();
+        for (cell, what) in cells {
+            let short = app.world().get::<crate::ui::notices::Tooltip>(cell).expect("tooltip").short.clone();
+            let needs = super::a1::costs::needs(&db, what).expect("the item's definition");
+            if needs.slots.is_empty() && needs.officers == 0 {
+                continue;
+            }
+            with_line += 1;
+            assert!(short.contains(&require), "{label}: {short:?} lacks {require:?}");
+            for (slot, amount) in &needs.slots {
+                assert!(short.contains(&amount.to_string()), "{label}: {short:?} lacks the amount {amount}");
+                let word = if *slot == sta_content::resources::DILITHIUM {
+                    words.tooltip_text("GUI_CP_DILITHIUM_RES").to_lowercase()
+                } else {
+                    resources.name(*slot).to_lowercase()
+                };
+                assert!(short.to_lowercase().contains(&word), "{label}: {short:?} lacks the word {word:?}");
+            }
+            if needs.officers > 0 {
+                assert!(short.contains(&needs.officers.to_string()), "{label}: {short:?} lacks the officers amount");
+            }
+            first.get_or_insert((*builder, what, short));
+        }
+    }
+    eprintln!("{label}: {} builder(s), {with_line} priced build button(s) checked", builders.len());
+    // Back to the first priced button's builder to hover it.
+    let (builder, what, short) = first.expect("at least one priced build button");
+    app.world_mut().resource_mut::<HudFeed>().selected = vec![builder];
+    app.world_mut().resource_mut::<Selection>().0 = vec![builder];
     for _ in 0..4 {
         app.update();
     }
@@ -993,13 +1056,10 @@ fn installed_armada1_build_costs_tooltip_renders_on_gpu() {
         .world_mut()
         .query::<(Entity, &super::super::panels::GridCell)>()
         .iter(app.world())
-        .find(|(_, c)| matches!(c.0, super::super::Act::Build { .. }))
+        .find(|(_, c)| matches!(&c.0, super::super::Act::Build { what: w, .. } if *w == what))
         .map(|(e, _)| e)
-        .expect("the starting builder has build items");
-    let short = app.world().get::<crate::ui::notices::Tooltip>(item).expect("tooltip").short.clone();
-    eprintln!("{label}: short tooltip is {short:?}");
-    assert!(short.contains("needs:") || short.contains("requires"), "{label}: no cost line in the tooltip: {short:?}");
-    assert!(short.chars().any(|c| c.is_ascii_digit()), "{label}: no amount in the tooltip: {short:?}");
+        .expect("the button again");
+    assert_eq!(app.world().get::<crate::ui::notices::Tooltip>(item).unwrap().short, short);
     let frames = Arc::new(Mutex::new(Vec::<Image>::new()));
     let output = Arc::clone(&frames);
     app.world_mut().spawn(Screenshot::image(target)).observe(move |shot: On<ScreenshotCaptured>| {
