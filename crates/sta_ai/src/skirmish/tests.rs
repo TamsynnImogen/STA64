@@ -503,6 +503,182 @@ fn empty_aip_builds_only_an_available_miner_station_prerequisite_once() {
     assert_eq!(rejected, 0);
 }
 
+/// A rig can supply a shipyard once the station's miner economy is running.
+#[test]
+fn empty_aip_builds_one_armed_ship_producer_after_mining() {
+    let fake = sta_content::fake::db();
+    let mut rig = sta_content::UnitDef::new("fx_rig", "constructionrig");
+    rig.race = "fx".into();
+    rig.hull = Fixed::from_int(100);
+    rig.movement = sta_content::MoveStats::from_f32(140.0, 1.0, 1.0, 1.0, 0.2);
+    rig.build.list = vec![DefRef::new("fx_decoy"), DefRef::new("fx_yard")];
+    let mut decoy = sta_content::UnitDef::new("fx_decoy", "mining");
+    decoy.race = "fx".into();
+    decoy.build.cost = vec![Fixed::ONE];
+    let (tree, warnings) = TechTree::parse("armed.tt", "fx_station 0\nfx_rig 0\nfx_miner 0\nfx_yard 0\nfx_frigate 1 fx_yard\nfx_cruiser 1 fx_yard\nfx_decoy 0\n");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let mut builder = ContentDb::builder().profile(fake.profile()).features(fake.features().clone()).tech_tree(tree);
+    for weapon in fake.weapons() { builder = builder.weapon(weapon.clone()); }
+    for unit in fake.units() { builder = builder.unit(unit.clone()); }
+    let db = Arc::new(builder.unit(rig).unit(decoy).build().unwrap());
+    let key = |name| db.key(name).unwrap();
+    let mut cfg = SkirmishConfig {
+        player: P0, race: "fx".into(), content: Arc::clone(&db), home: Vec3::ZERO,
+        enemy_starts: Vec::new(), nodes: Vec::new(), seed: 1, params: Params::default(),
+    };
+    cfg.params.miners = 1;
+    let me = PlayerView {
+        crew: None, id: P0, team: TeamId(0), resources: vec![Fixed::from_int(2000); 4],
+        officers: [Fixed::ZERO; 2], eliminated: false, relations: Vec::new(),
+    };
+    let unit = |id, def, progress| sta_sim::view::UnitView {
+        id: EntityId(id), def, owner: P0, pos: Vec3::ZERO,
+        heading: (Fixed::ONE, Fixed::ZERO), speed: Fixed::ZERO,
+        hull: [Fixed::ONE; 2], shields: [[Fixed::ZERO; 2]; 4],
+        crew: None, energy: None, autonomy: None,
+        flags: sta_sim::view::UnitFlags::SELECTABLE, progress,
+    };
+    let base = vec![unit(1, key("fx_station"), None), unit(2, key("fx_rig"), None), unit(3, key("fx_rig"), None)];
+    let orders = |view: &WorldView, cfg: SkirmishConfig| {
+        let mut ai = SkirmishController::new(cfg);
+        let mut out = Vec::new();
+        ai.plan(view, &me, &mut out);
+        (ai, out)
+    };
+    let builds = |out: &[Command]| out.iter().filter_map(|c| match c.kind {
+        CommandKind::Order(Order::Build { builder, what, .. }) => Some((builder, what)),
+        _ => None,
+    }).collect::<Vec<_>>();
+    let (_, out) = orders(&WorldView { units: base.clone(), ..WorldView::default() }, cfg.clone());
+    assert_eq!(builds(&out), [(EntityId(1), key("fx_miner"))], "miner is first; no station yet");
+    let mut mined = base.clone();
+    mined.push(unit(4, key("fx_miner"), None));
+    let (mut ai, out) = orders(&WorldView { units: mined.clone(), ..WorldView::default() }, cfg.clone());
+    assert_eq!(builds(&out), [(EntityId(2), key("fx_yard"))], "one producer, not the cheaper decoy");
+    let mut two_miners = cfg.clone();
+    two_miners.params.miners = 2;
+    let (_, out) = orders(&WorldView { units: mined.clone(), ..WorldView::default() }, two_miners);
+    assert_eq!(builds(&out), [(EntityId(1), key("fx_miner")), (EntityId(2), key("fx_yard"))], "a queued miner meets the goal while an existing miner is already finished");
+    let mut retry = Vec::new();
+    ai.plan(&WorldView { units: mined.clone(), ..WorldView::default() }, &me, &mut retry);
+    assert!(builds(&retry).is_empty(), "pending rig job prevents another producer");
+    mined.push(unit(5, key("fx_yard"), Some(Fixed::from_f64(0.5))));
+    let (_, out) = orders(&WorldView { units: mined.clone(), ..WorldView::default() }, cfg.clone());
+    assert!(builds(&out).is_empty(), "unfinished yard counts as an incoming producer");
+    mined.last_mut().unwrap().progress = None;
+    let (_, out) = orders(&WorldView { units: mined.clone(), ..WorldView::default() }, cfg.clone());
+    assert!(builds(&out).iter().any(|&(builder, what)| builder == EntityId(5) && armed_craft(&db, what)), "finished yard builds an armed craft");
+
+    cfg.params.build_list = vec![BuildItem { unit: "fx_decoy".into(), count: Fixed::ONE, base: None, max: None, tech_level: None }];
+    let (_, out) = orders(&WorldView { units: base, ..WorldView::default() }, cfg.clone());
+    assert!(!builds(&out).iter().any(|&(_, what)| what == key("fx_yard")), "explicit AIP does not trigger fallback");
+
+    // A direct candidate must itself be available, and adding it must be
+    // sufficient to make a real armed craft available.
+    for (case, text) in [
+        ("locked yard", "fx_station 0\nfx_rig 0\nfx_miner 0\nfx_yard 1 fx_gate\nfx_frigate 1 fx_yard\nfx_cruiser 1 fx_yard\nfx_decoy 0\n"),
+        ("locked armament", "fx_station 0\nfx_rig 0\nfx_miner 0\nfx_yard 0\nfx_frigate 1 fx_gate\nfx_cruiser 1 fx_gate\nfx_decoy 0\n"),
+    ] {
+        let (tree, warnings) = TechTree::parse("locked.tt", text);
+        assert!(warnings.is_empty(), "{case}: {warnings:?}");
+        let mut b = ContentDb::builder().profile(db.profile()).features(db.features().clone()).tech_tree(tree);
+        for weapon in db.weapons() { b = b.weapon(weapon.clone()); }
+        for unit in db.units() { b = b.unit(unit.clone()); }
+        let mut locked_cfg = cfg.clone();
+        locked_cfg.params.build_list.clear();
+        locked_cfg.content = Arc::new(b.build().unwrap());
+        let (_, out) = orders(&WorldView { units: mined[..4].to_vec(), ..WorldView::default() }, locked_cfg);
+        assert!(builds(&out).is_empty(), "{case}: no station order or reserved budget without an available direct path");
+    }
+    let mut unarmed = ContentDb::builder().profile(db.profile()).features(db.features().clone());
+    for weapon in db.weapons() { unarmed = unarmed.weapon(weapon.clone()); }
+    let point_defence = db.unit(key("fx_station")).unwrap().hardpoints[1].clone();
+    for mut unit in db.units().cloned() {
+        if unit.odf == "fx_frigate" || unit.odf == "fx_cruiser" {
+            unit.hardpoints = vec![point_defence.clone()];
+        }
+        unarmed = unarmed.unit(unit);
+    }
+    let (tree, warnings) = TechTree::parse("unarmed.tt", "fx_station 0\nfx_rig 0\nfx_miner 0\nfx_yard 0\nfx_frigate 1 fx_yard\nfx_cruiser 1 fx_yard\nfx_decoy 0\n");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let mut unarmed_cfg = cfg.clone();
+    unarmed_cfg.params.build_list.clear();
+    unarmed_cfg.content = Arc::new(unarmed.tech_tree(tree).build().unwrap());
+    let (_, out) = orders(&WorldView { units: mined[..4].to_vec(), ..WorldView::default() }, unarmed_cfg);
+    assert!(builds(&out).is_empty(), "point defence alone cannot justify a yard");
+    for case in ["minebm", "tractor_bm", "cloakingdevice", "resourceweapon"] {
+        let mut b = ContentDb::builder().profile(db.profile()).features(db.features().clone());
+        for mut weapon in db.weapons().cloned() {
+            if weapon.odf == "fx_beam" {
+                weapon.class.0 = case.into();
+                if case == "resourceweapon" {
+                    weapon.resource = Some(sta_content::ResourceWeaponDef {
+                        add: [Fixed::ZERO; 4], crew: Fixed::ZERO, one_time: false,
+                        always_player: false, always_ai: false,
+                    });
+                }
+            }
+            b = b.weapon(weapon);
+        }
+        let beam_mount = db.unit(key("fx_frigate")).unwrap().hardpoints[0].clone();
+        for mut unit in db.units().cloned() {
+            if unit.odf == "fx_frigate" || unit.odf == "fx_cruiser" {
+                unit.hardpoints = vec![beam_mount.clone()];
+            }
+            b = b.unit(unit);
+        }
+        let (tree, warnings) = TechTree::parse("tool.tt", "fx_station 0\nfx_rig 0\nfx_miner 0\nfx_yard 0\nfx_frigate 1 fx_yard\nfx_cruiser 1 fx_yard\nfx_decoy 0\n");
+        assert!(warnings.is_empty(), "{case}: {warnings:?}");
+        let mut tool_cfg = cfg.clone();
+        tool_cfg.params.build_list.clear();
+        tool_cfg.content = Arc::new(b.tech_tree(tree).build().unwrap());
+        let (_, out) = orders(&WorldView { units: mined[..4].to_vec(), ..WorldView::default() }, tool_cfg);
+        assert!(builds(&out).is_empty(), "{case}: positive-damage, positive-range noncombat mount cannot justify a yard");
+    }
+
+    let game = GameSetup { content: Arc::clone(&db), ..setup(1, sta_content::fake::db()) };
+    let run = || {
+        let mut sim = Sim::from_setup(&game);
+        let at = game.map.starts[0].pos;
+        let spawn = |odf, player, pos| Command {
+            player: PlayerId::BENCH, seq: 0,
+            kind: CommandKind::Edit(Edit::Spawn { odf: key(odf), player, pos, heading: (Fixed::ONE, Fixed::ZERO) }),
+        };
+        sim.step(&[
+            spawn("fx_station", P0, at),
+            spawn("fx_rig", P0, Vec3 { x: at.x + Fixed::from_int(400), ..at }),
+            spawn("fx_miner", P0, Vec3 { x: at.x + Fixed::from_int(300), ..at }),
+            spawn("fx_station", P1, game.map.starts[1].pos),
+            Command { player: PlayerId::BENCH, seq: 1, kind: CommandKind::Edit(Edit::Cargo(P0, 0, Fixed::from_int(5000))) },
+        ]);
+        let mut ai = SkirmishController::new(SkirmishConfig::from_setup(&game, P0).unwrap());
+        ai.cfg.params.miners = 1;
+        ai.cfg.params.min_attack = 1;
+        ai.cfg.params.max_attack = 1;
+        ai.cfg.params.defence = 0;
+        let mut events = Vec::new();
+        let mut commands = Vec::new();
+        let (mut yard, mut armed, mut attack, mut rejected) = (false, false, false, 0);
+        for _ in 0..8000 {
+            let mut orders = Vec::new();
+            ai.think(&sim.view(), &events, &mut orders);
+            attack |= orders.iter().any(|c| matches!(c.kind, CommandKind::Order(Order::Attack { .. })));
+            if !orders.is_empty() { commands.push((sim.view().tick, orders.clone())); }
+            let output = sim.step(&orders);
+            rejected += output.events.iter().filter(|e| matches!(e, SimEvent::Rejected { player, .. } if *player == P0)).count();
+            yard |= output.view.units.iter().any(|u| u.owner == P0 && u.def == key("fx_yard") && finished(u));
+            armed |= output.view.units.iter().any(|u| u.owner == P0 && armed_craft(&db, u.def) && finished(u));
+            events = output.events;
+            if yard && armed && attack { break; }
+        }
+        (yard, armed, attack, rejected, sim.digest(), commands)
+    };
+    let first = run();
+    assert!(first.0 && first.1 && first.2, "yard={}, armed={}, attack={}", first.0, first.1, first.2);
+    assert_eq!(first.3, 0, "all orders accepted");
+    assert_eq!(first, run(), "the same seed yields the same result and digest");
+}
+
 /// Both seats plan on the same ticks. A stagger by seat number once gave seat
 /// 1 every plan one tick before seat 0, which decided mirror games for it.
 #[test]

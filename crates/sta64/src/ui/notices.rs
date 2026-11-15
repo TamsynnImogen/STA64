@@ -478,11 +478,14 @@ fn on_out(ev: On<PointerOut>, mut hover: ResMut<TipHover>) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_tip(
     hover: Res<TipHover>,
     tips: Query<&Tooltip>,
     strings: Option<Res<crate::ui::i18n::Strings>>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
+    ui_scale: Option<Res<UiScale>>,
+    measured: Option<Single<&ComputedNode, With<TipBox>>>,
     mut boxed: Single<&mut Node, With<TipBox>>,
     mut words: Single<&mut SpriteText, With<TipText>>,
 ) {
@@ -500,12 +503,55 @@ fn draw_tip(
     if let Some(w) = window
         && let Some(p) = w.cursor_position()
     {
-        // Below and right of the pointer; left of it near the right edge.
-        let flip = p.x > w.width() - 320.0;
-        boxed.top = Val::Px(p.y + 20.0);
-        boxed.left = if flip { Val::Auto } else { Val::Px(p.x + 16.0) };
-        boxed.right = if flip { Val::Px(w.width() - p.x + 8.0) } else { Val::Auto };
+        // The cursor, the window and the measured box are in logical window pixels, while a `Val::Px`
+        // is multiplied by `UiScale` when the UI is laid out: place in window pixels, then divide.
+        let k = ui_scale.map_or(1.0, |s| s.0).max(1e-3);
+        let size = measured.map_or(Vec2::ZERO, |c| tip_size(&c, k));
+        let at = place_tip(p, size, Vec2::new(w.width(), w.height()), k);
+        boxed.left = Val::Px(at.x / k);
+        boxed.top = Val::Px(at.y / k);
+        boxed.right = Val::Auto;
     }
+}
+
+/// The box's size in logical window pixels. `ComputedNode::size` is physical; its `inverse_scale_factor` is
+/// 1 / (window scale factor x `UiScale`) (bevy_ui 0.20 `update_ui_context_system` and `ui_layout_system`), so
+/// physical x inverse is in UI units, and `UiScale` (`k`) takes it to window pixels.
+pub(crate) fn tip_size(node: &ComputedNode, k: f32) -> Vec2 {
+    node.size() * node.inverse_scale_factor() * k
+}
+
+/// Where the tooltip's top-left corner goes, in logical window pixels. STA64's rule (quality of life;
+/// no sheet of any install states a tooltip placement): below and right of the pointer, `k` being the
+/// UI scale that the offsets (UI units) are multiplied by; shifted inside the window when it would cross an
+/// edge; flipped above or left of the pointer when it would run off the bottom or right edge, and when
+/// the shift alone would leave it over the pointer. Only the position changes, never the box.
+pub(crate) fn place_tip(cursor: Vec2, size: Vec2, window: Vec2, k: f32) -> Vec2 {
+    let (dx, dy, gap) = (16.0 * k, 20.0 * k, 8.0 * k);
+    let mut at = cursor + Vec2::new(dx, dy);
+    if at.x + size.x > window.x {
+        at.x = cursor.x - gap - size.x;
+    }
+    if at.y + size.y > window.y {
+        at.y = cursor.y - gap - size.y;
+    }
+    let inside = |at: Vec2| Vec2::new(at.x.clamp(0.0, (window.x - size.x).max(0.0)), at.y.clamp(0.0, (window.y - size.y).max(0.0)));
+    let covers = |at: Vec2| cursor.x >= at.x && cursor.x <= at.x + size.x && cursor.y >= at.y && cursor.y <= at.y + size.y;
+    let shifted = inside(at);
+    if !covers(shifted) {
+        return shifted;
+    }
+    // The window leaves no room on the flipped side: try the other sides of the pointer.
+    [
+        Vec2::new(cursor.x + dx, cursor.y - gap - size.y),
+        Vec2::new(cursor.x - gap - size.x, cursor.y + dy),
+        Vec2::new(cursor.x - gap - size.x, cursor.y - gap - size.y),
+        Vec2::new(cursor.x + dx, cursor.y + dy),
+    ]
+    .into_iter()
+    .map(inside)
+    .find(|c| !covers(*c))
+    .unwrap_or(shifted)
 }
 
 pub struct NoticePlugin;
@@ -676,6 +722,95 @@ mod tests {
         assert_eq!(t.text_at(TIP_SHORT_SECS), Some("Hull"));
         assert_eq!(t.text_at(TIP_VERBOSE_SECS), Some("Hull integrity at 100%"));
         assert_eq!(Tooltip::new("Hull").text_at(5.0), Some("Hull"));
+    }
+
+    fn rect(at: Vec2, size: Vec2) -> Rect {
+        Rect::from_corners(at, at + size)
+    }
+
+    /// Authored sizes only: a box of 20 text units wide and a few lines tall, at the three window
+    /// aspects, with the pointer at every edge and corner, centre and a spot far from the edges.
+    /// The placement does not depend on the HUD fit (centred or stretched): it sees window pixels only.
+    #[test]
+    fn tooltip_stays_inside_the_window_and_off_the_pointer() {
+        for (w, h) in [(1440.0_f32, 1080.0_f32), (1920.0, 1080.0), (2520.0, 1080.0), (3440.0, 1440.0)] {
+            let k = h / 1080.0;
+            let window = Vec2::new(w, h);
+            for size in [Vec2::new(300.0, 40.0), Vec2::new(300.0, 160.0)].map(|s| s * k) {
+                let xs = [0.0, 1.0, w * 0.5, w - 1.0, w];
+                let ys = [0.0, 1.0, h * 0.5, h - 1.0, h];
+                for x in xs {
+                    for y in ys {
+                        let cursor = Vec2::new(x, y);
+                        let at = place_tip(cursor, size, window, k);
+                        let r = rect(at, size);
+                        let why = format!("{w}x{h} cursor {cursor:?} size {size:?} at {at:?}");
+                        assert!(r.min.x >= 0.0 && r.min.y >= 0.0 && r.max.x <= w && r.max.y <= h, "outside: {why}");
+                        assert!(!(r.min.x < cursor.x && cursor.x < r.max.x && r.min.y < cursor.y && cursor.y < r.max.y), "covers the pointer: {why}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The measuring path: a node laid out by bevy_ui carries its physical size and
+    /// `inverse_scale_factor = 1 / (window scale x UiScale)`; its extent in window pixels must come out as
+    /// UI units x UiScale, and the placed box must lie inside the window.
+    #[test]
+    fn measured_box_lies_inside_the_window_at_any_scale() {
+        for ws in [1.0_f32, 2.0] {
+            for k in [1.0_f32, 1.333, 2.0] {
+                let ui_units = Vec2::new(300.0, 120.0);
+                let node = ComputedNode { size: ui_units * ws * k, inverse_scale_factor: 1.0 / (ws * k), ..default() };
+                let size = tip_size(&node, k);
+                assert!((size - ui_units * k).abs().max_element() < 1e-3, "ws {ws} k {k}: {size:?}");
+                let window = Vec2::new(2520.0, 1080.0) * k;
+                for cursor in [window - Vec2::splat(2.0), Vec2::new(window.x - 2.0, window.y * 0.5), Vec2::new(window.x * 0.5, window.y - 2.0), Vec2::new(10.0, window.y - 2.0)] {
+                    let at = place_tip(cursor, size, window, k);
+                    assert!(at.x >= 0.0 && at.y >= 0.0 && at.x + size.x <= window.x + 1e-3 && at.y + size.y <= window.y + 1e-3, "ws {ws} k {k} cursor {cursor:?}: {at:?}");
+                    assert!(!(at.x < cursor.x && cursor.x < at.x + size.x && at.y < cursor.y && cursor.y < at.y + size.y), "covers pointer");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tooltip_far_from_the_edges_sits_below_right_of_the_pointer() {
+        // The unchanged case, the stock Armada II one: window 1440x1080 (4:3, UI scale 1).
+        let at = place_tip(Vec2::new(400.0, 300.0), Vec2::new(300.0, 60.0), Vec2::new(1440.0, 1080.0), 1.0);
+        assert_eq!(at, Vec2::new(416.0, 320.0));
+    }
+
+    #[test]
+    fn tooltip_opens_upward_near_the_bottom_and_leftward_near_the_right_edge() {
+        let window = Vec2::new(2520.0, 1080.0);
+        let size = Vec2::new(300.0, 100.0);
+        let up = place_tip(Vec2::new(500.0, 1060.0), size, window, 1.0);
+        assert!(up.y + size.y <= 1060.0 && up.x == 516.0, "{up:?}");
+        let left = place_tip(Vec2::new(2500.0, 500.0), size, window, 1.0);
+        assert!(left.x + size.x <= 2500.0 && left.y == 520.0, "{left:?}");
+    }
+
+    #[test]
+    fn tooltip_box_lands_beside_the_pointer_at_any_ui_scale() {
+        use bevy::window::PrimaryWindow;
+        for scale in [1.0_f32, 1.5] {
+            let mut app = rig();
+            app.insert_resource(UiScale(scale));
+            let mut window = Window::default();
+            window.resolution.set(2520.0, 1080.0);
+            window.set_cursor_position(Some(Vec2::new(800.0, 400.0)));
+            app.world_mut().spawn((window, PrimaryWindow));
+            app.update();
+            let e = app.world_mut().spawn(Tooltip::new("Metal")).id();
+            *app.world_mut().resource_mut::<TipHover>() = TipHover { target: Some(e), rest: 5.0 };
+            app.update();
+            let node = app.world_mut().query_filtered::<&Node, With<TipBox>>().single(app.world()).unwrap().clone();
+            let (Val::Px(left), Val::Px(top)) = (node.left, node.top) else { panic!("{node:?}") };
+            // The node is laid out at left * scale window pixels: that is the pointer plus the offset.
+            assert!((left * scale - (800.0 + 16.0 * scale)).abs() < 0.01, "scale {scale}: left {left}");
+            assert!((top * scale - (400.0 + 20.0 * scale)).abs() < 0.01, "scale {scale}: top {top}");
+        }
     }
 
     #[test]

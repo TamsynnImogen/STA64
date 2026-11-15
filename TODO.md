@@ -191,6 +191,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] AI plan switching (LUA-38, #776): a converted Armada II mission with AI-plan switch rules loads one AI plan after the opening and another at most once per switch interval when the relative strength crosses a band.
 - [?] Transport content keys (SIM-46 P0, #753): with every install present, `cargo test -p sta_content --test transport_keys` passes (general rules over the install).
 
+- [?] Generic AI armed production (#818): in a fresh Classic skirmish with a Borg computer opponent on mp02twin, let it establish mining, construct a shipyard, and produce armed ships that attack the opponent. Check that it builds one useful producer, keeps its mining economy, and continues to honour explicit mission build plans. Headless combat probes supplement this manual check.
+
 ## Checked earlier (morning list)
 
 - [x] Construction live-feedback fixes accepted (2026-11-11, `construction-a1666d0`): the user confirmed visible beams, later chunk reveal and the constructor staying fixed under normal/queued movement. Automated Stop/cancellation and snapshot checks pass. FPS was not reported; this does not complete broader native/Android checks above.
