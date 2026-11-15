@@ -44,8 +44,8 @@ mod defiant_tests;
 #[derive(Component)]
 pub struct SelectRadius(pub f32);
 
-/// Whose eyes the map is drawn through. `None` shows every unit in the view;
-/// `Some(p)` only what `WorldView::visible_to(p)` lists.
+/// Whose eyes the map is drawn through. `None` shows every unit in the view; `Some(p)` what
+/// `WorldView::visible_to(p)` lists, plus neutral scenery (see [`is_scenery_class`]), which stays drawn unseen.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct LocalPlayer(pub Option<PlayerId>);
 
@@ -114,7 +114,7 @@ pub(crate) fn add_view_systems(app: &mut App) {
         .init_resource::<crate::render::moons::MoonVariants>()
         .add_systems(
             Update,
-            (sync_units, attach_models.run_if(resource_exists::<Mounted>).run_if(resource_exists::<ContentRes>), show_damage)
+            (sync_units, attach_models.run_if(resource_exists::<Mounted>).run_if(resource_exists::<ContentRes>), pick_bodies.run_if(resource_exists::<ContentRes>), show_damage)
                 .chain()
                 .before(place)
                 .in_set(GameSet::Interpolate)
@@ -122,6 +122,22 @@ pub(crate) fn add_view_systems(app: &mut App) {
         )
         .add_systems(Update, place.in_set(GameSet::Interpolate).run_if(resource_exists::<SimLink>));
     crate::render::anim::add_systems(app);
+}
+
+/// The click radius of a planet or a resource node from its definition, for every sim entity
+/// that has none: the entity [`sync_units`] makes when the object comes back into sight is
+/// not the one the map view made (which went when the object left it), and
+/// [`attach_models`] gives a radius only to what it draws a model for (a planet's body is
+/// the map's, a latinum nebula has no model), so without this such an object cannot be picked
+/// after it was out of sight once. A model-derived radius, given first, stays. Runs once per new
+/// entity (`Added<SimEntity>`): a definition does not change in place, so the radius follows the
+/// definition the entity was spawned with, and an entity that gets none is not rescanned.
+#[allow(clippy::type_complexity)]
+fn pick_bodies(mut commands: Commands, link: Res<SimLink>, content: Res<ContentRes>, bare: Query<(Entity, &SimEntity), (Added<SimEntity>, Without<SelectRadius>)>) {
+    for (e, id) in &bare {
+        let Some(r) = link.curr().unit(id.0).and_then(|u| content.0.unit(u.def)).and_then(crate::map::ghost_pick_radius) else { continue };
+        commands.entity(e).insert(SelectRadius(r));
+    }
 }
 
 /// Diff the current view against [`SimEntities`].
@@ -135,6 +151,7 @@ pub fn sync_units(
     existing: Query<(Entity, &SimEntity), Without<FromView>>,
     mut live: Query<(&mut HullShare, &mut UnitOwner, Has<Cloaked>), With<FromView>>,
     mut seen: Local<Option<(Arc<WorldView>, Option<PlayerId>)>>,
+    content: Option<Res<ContentRes>>,
 ) {
     // Entities the map view spawned for its own ships belong to the link too.
     for (e, u) in &existing {
@@ -146,23 +163,42 @@ pub fn sync_units(
     }
     *seen = Some((curr.clone(), local.0));
 
-    let want: BTreeMap<EntityId, &sta_sim::UnitView> = match local.0 {
+    let mut want: BTreeMap<EntityId, &sta_sim::UnitView> = match local.0 {
         Some(p) => curr.visible_to(p),
         None => curr.units.iter().collect(),
     }
     .into_iter()
     .map(|u| (u.id, u))
     .collect();
+    // A neutral planet or backdrop is scenery and stays drawn outside the sensors. Grade: that the original
+    // draws planets regardless of sensors is not measured, inferred from the stock look. Clicks, hover, right-click orders, the order
+    // cursor and HUD targeting follow `visible_to` (`input::select::target_seen`), so a kept planet cannot be
+    // picked or ordered while unseen.
+    if local.0.is_some()
+        && let Some(content) = &content
+    {
+        for u in &curr.units {
+            if u.owner == sta_sim::world::NEUTRAL && content.0.unit(u.def).is_some_and(|d| is_scenery_class(&d.class.0)) {
+                want.entry(u.id).or_insert(u);
+            }
+        }
+    }
 
-    // Gone: not in the view, or no longer visible.
+    // Gone: not in the view, or neither visible to the local player nor neutral scenery.
     let gone: Vec<EntityId> = map.0.keys().filter(|id| !want.contains_key(id)).copied().collect();
     for id in gone {
         if let Some(e) = map.0.remove(&id) {
             commands.entity(e).try_despawn();
         }
     }
-    let neutral = Color::WHITE;
-    let colour = |owner: PlayerId| teams.as_ref().and_then(|t| t.0.get(owner.0 as usize)).map(|t| t.1).unwrap_or(neutral);
+    // Seat n takes palette entry n + 1 (entry 0 is the neutral one): `TeamColours::owner_colour`.
+    // Unowned units (moons, props, derelicts) stay plain white, as they always were here.
+    let colour = |owner: PlayerId| {
+        if owner == sta_sim::world::NEUTRAL {
+            return Color::WHITE;
+        }
+        teams.as_ref().and_then(|t| t.owner_colour(owner)).unwrap_or(Color::WHITE)
+    };
     let mut stale: BTreeSet<EntityId> = BTreeSet::new();
     for (id, u) in want {
         let share = hull_share(u);
@@ -217,6 +253,11 @@ pub fn sync_units(
     }
 }
 
+/// Classes of neutral things that are the map's scenery: always drawn, never an icon (`ODF classLabel`, read from data).
+pub fn is_scenery_class(class: &str) -> bool {
+    ["planet_obj", "planet", "background_obj"].iter().any(|c| class.eq_ignore_ascii_case(c))
+}
+
 fn hull_share(u: &sta_sim::UnitView) -> f32 {
     let max = u.hull[1].to_f32();
     if max > 0.0 { (u.hull[0].to_f32() / max).clamp(0.0, 1.0) } else { 1.0 }
@@ -258,6 +299,10 @@ fn attach_models(
         // A planet's body is the map view's (`map/mod.rs` builds it from the map's object); a sim
         // planet with no map object (a bench scene's) has none, and its SOD sphere would be an
         // untextured dark ball hiding the map's planet drawn at the same place.
+        // Scenery never gets a strategic icon (also an A2 `planet` re-created from the view, which has no model here).
+        if is_scenery_class(&def.class.0) {
+            commands.entity(e).insert(crate::render::strategic::NoIcon);
+        }
         if def.class.0.eq_ignore_ascii_case("planet") {
             continue;
         }
@@ -542,7 +587,7 @@ mod view_tests {
             .add_plugins(SimLinkPlugin)
             .insert_resource(LocalPlayer(local))
             .insert_resource(TeamColours(vec![
-                ("empty".into(), Color::WHITE),
+                ("empty".into(), Color::srgb(0.5, 0.5, 0.5)),
                 ("blue".into(), Color::srgb(0.0, 0.0, 1.0)),
                 ("red".into(), Color::srgb(1.0, 0.0, 0.0)),
             ]))
@@ -576,8 +621,9 @@ mod view_tests {
         let mut app = app_with(
             scripted(
                 "{ units: [
-                    { id: 1, owner: 1, hull: 100, rails: [{ at: 0, pos: { x: 0, y: 0, z: 0 } }] },
-                    { id: 2, owner: 2, hull: 100, until: 10, rails: [{ at: 4, pos: { x: 5, y: 0, z: 7 } }] },
+                    { id: 1, owner: 0, hull: 100, rails: [{ at: 0, pos: { x: 0, y: 0, z: 0 } }] },
+                    { id: 2, owner: 1, hull: 100, until: 10, rails: [{ at: 4, pos: { x: 5, y: 0, z: 7 } }] },
+                    { id: 3, owner: 253, hull: 100, rails: [{ at: 0, pos: { x: 2, y: 0, z: 2 } }] },
                 ] }",
             ),
             None,
@@ -595,11 +641,14 @@ mod view_tests {
                 child = Some((e2, c, g));
                 assert_eq!(app.world().get::<TeamColour>(e2).unwrap().0, Color::srgb(1.0, 0.0, 0.0));
                 assert_eq!(app.world().get::<TeamColour>(map[&EntityId(1)]).unwrap().0, Color::srgb(0.0, 0.0, 1.0));
+                assert_eq!(app.world().get::<TeamColour>(map[&EntityId(3)]).unwrap().0, Color::WHITE, "unowned: plain white, as on main (the palette entry 0 is grey here)");
+                // Seat 0 is the first team (entry 1), not the neutral entry 0.
+                assert_ne!(app.world().get::<TeamColour>(map[&EntityId(1)]).unwrap().0, Color::srgb(0.5, 0.5, 0.5));
             }
         }
         let (e2, c, g) = child.expect("unit 2 never appeared");
         assert!(app.world().get_entity(e2).is_err() && app.world().get_entity(c).is_err() && app.world().get_entity(g).is_err());
-        assert_eq!(app.world().resource::<SimEntities>().0.len(), 1);
+        assert_eq!(app.world().resource::<SimEntities>().0.len(), 2);
     }
 
     #[test]
@@ -706,5 +755,195 @@ mod view_tests {
         assert_eq!(ids(&mut app), BTreeSet::from([1]));
         let e = app.world().resource::<SimEntities>().0[&EntityId(1)];
         assert!(app.world().get::<Cloaked>(e).is_some());
+    }
+
+    fn defs() -> Arc<sta_content::ContentDb> {
+        let mut planet = sta_content::UnitDef::new("pb_test", "planet");
+        planet.planet_role = Some(sta_content::PlanetRole::Producer);
+        planet.resource = Some(0);
+        planet.radius = Fixed::from_int(130);
+        let mut nebula = sta_content::UnitDef::new("latinum_test", "latinum");
+        nebula.resource = Some(1);
+        let mut gate = sta_content::UnitDef::new("gate_test", "wormhole_obj");
+        gate.radius = Fixed::from_int(60);
+        let mut ship = sta_content::UnitDef::new("ship_test", "frigate");
+        ship.radius = Fixed::from_int(20);
+        Arc::new(sta_content::ContentDb::builder().unit(planet).unit(nebula).unit(gate).unit(ship).build().unwrap())
+    }
+
+    fn on(db: &sta_content::ContentDb, id: u32, def: &str) -> UnitView {
+        UnitView { def: db.key(def).unwrap(), ..unit(id, 0, 100, UnitFlags::default()) }
+    }
+
+    fn radius(app: &mut App, id: u32) -> Option<(Entity, Option<f32>)> {
+        let mut q = app.world_mut().query::<(Entity, &SimEntity, Option<&SelectRadius>)>();
+        q.iter(app.world()).find(|(_, s, _)| s.0 == EntityId(id)).map(|(e, _, r)| (e, r.map(|r| r.0)))
+    }
+
+    fn run_to(app: &mut App, tick: u64) {
+        for _ in 0..200 {
+            app.update();
+            if app.world().resource::<SimLink>().curr().tick >= tick {
+                return;
+            }
+        }
+        panic!("never reached tick {tick}");
+    }
+
+    /// An object that leaves the local team's view is despawned, and the entity made when it is
+    /// seen again must have its click radius: `attach_models` (which runs here, with a mount
+    /// that has no models) gives none to a planet (its body is the map's) or to a node whose
+    /// model is missing, and a gate has none from its model on a re-sighting either.
+    #[test]
+    fn a_planet_or_node_seen_again_can_still_be_picked() {
+        let db = defs();
+        let all = vec![on(&db, 1, "pb_test"), on(&db, 2, "latinum_test"), on(&db, 3, "ship_test"), on(&db, 4, "gate_test")];
+        let seen = |ids: &[u32]| vec![(PlayerId(1), ids.iter().map(|&i| EntityId(i)).collect())];
+        let views = vec![view(0, all.clone(), seen(&[1, 2, 3, 4])), view(1, all.clone(), seen(&[3])), view(2, all.clone(), seen(&[1, 2, 3, 4]))];
+        let mut app = app_with(Box::new(Views(views, 0)), Some(PlayerId(1)));
+        app.add_plugins(AssetPlugin::default())
+            .init_asset::<Mesh>()
+            .init_asset::<StandardMaterial>()
+            .init_asset::<Image>()
+            .init_resource::<TextureCache>()
+            .init_resource::<PartCache>()
+            .insert_resource(SpriteTables(Arc::new(Default::default())))
+            .insert_resource(Mounted(sta_vfs::Vfs::default()))
+            .insert_resource(ContentRes(db.clone()));
+        let want = [(1, Some(130.0)), (2, Some(crate::map::FIELD_RADIUS)), (3, None), (4, Some(60.0))];
+        run_to(&mut app, 0);
+        let first: Vec<_> = want.iter().map(|&(id, r)| (radius(&mut app, id).unwrap(), r)).collect();
+        for ((_, got), want) in &first {
+            // The ship's radius would come from its model; the mount has none.
+            assert_eq!(got, want, "first sight");
+        }
+        run_to(&mut app, 1);
+        for id in [1, 2, 4] {
+            assert!(radius(&mut app, id).is_none(), "object {id} left the view: despawned");
+        }
+        run_to(&mut app, 2);
+        for (&(id, r), ((old, _), _)) in want.iter().zip(&first) {
+            let (now, got) = radius(&mut app, id).unwrap();
+            if id != 3 {
+                assert_ne!(now, *old, "object {id} is a new entity");
+            }
+            assert_eq!(got, r, "object {id} seen again");
+        }
+    }
+
+    /// A radius an entity already has (the model's, given by `attach_models` first) is kept.
+    #[test]
+    fn a_model_radius_wins_over_the_definitions() {
+        let db = defs();
+        let views = vec![view(0, vec![on(&db, 1, "pb_test"), on(&db, 2, "latinum_test")], Vec::new())];
+        let mut app = app_with(Box::new(Views(views, 0)), None);
+        app.insert_resource(ContentRes(db.clone()));
+        let (a, b) = (app.world_mut().spawn((SimEntity(EntityId(1)), SelectRadius(7.0))).id(), app.world_mut().spawn((SimEntity(EntityId(2)), SelectRadius(9.0))).id());
+        let c = app.world_mut().spawn(SimEntity(EntityId(2))).id();
+        app.update();
+        assert_eq!(app.world().get::<SelectRadius>(a).map(|r| r.0), Some(7.0));
+        assert_eq!(app.world().get::<SelectRadius>(b).map(|r| r.0), Some(9.0));
+        assert_eq!(app.world().get::<SelectRadius>(c).map(|r| r.0), Some(crate::map::FIELD_RADIUS), "a bare one gets the definition's");
+    }
+
+    /// A neutral planet outside every sensor stays drawn (the original shows its planets wherever the camera
+    /// looks); a neutral ship outside them does not.
+    #[test]
+    fn neutral_scenery_is_drawn_outside_sensor_range_and_a_neutral_ship_is_not() {
+        use sta_sim::world::NEUTRAL;
+        let db = sta_content::ContentDb::builder()
+            .unit(sta_content::UnitDef::new("t_backdrop", "planet_obj"))
+            .unit(sta_content::UnitDef::new("t_ship", "wingman"))
+            .build()
+            .unwrap();
+        let mut planet = unit(2, NEUTRAL.0, 100, UnitFlags::default());
+        planet.def = db.key("t_backdrop").unwrap();
+        let mut ship = unit(3, NEUTRAL.0, 100, UnitFlags::default());
+        ship.def = db.key("t_ship").unwrap();
+        let v = view(0, vec![unit(1, 1, 100, UnitFlags::default()), planet, ship], vec![(PlayerId(1), vec![EntityId(1)])]);
+        let mut app = app_with(Box::new(Views(vec![v], 0)), Some(PlayerId(1)));
+        app.insert_resource(ContentRes(Arc::new(db)));
+        for _ in 0..3 {
+            app.update();
+        }
+        let ids = roots(&mut app).into_iter().map(|r| r.0.0).collect::<BTreeSet<_>>();
+        assert_eq!(ids, BTreeSet::from([1, 2]), "the planet stays, the unseen neutral ship does not");
+    }
+
+    #[test]
+    fn scenery_classes_are_the_planet_and_backdrop_classes() {
+        assert!(is_scenery_class("planet_obj") && is_scenery_class("Planet") && is_scenery_class("background_obj"));
+        assert!(!is_scenery_class("wingman") && !is_scenery_class("station") && !is_scenery_class("asteroid"));
+    }
+
+    /// A view-drawn planet gets no strategic arrow: with the default radius it would turn into a speck and hide
+    /// its model from the zoom where its projected size drops under the symbol threshold.
+    #[test]
+    fn view_drawn_scenery_gets_no_strategic_icon() {
+        let mut app = App::new();
+        app.add_systems(Update, crate::render::strategic::ensure_icons);
+        let ship = app.world_mut().spawn((FromView, SimEntity(EntityId(1)))).id();
+        let planet = app.world_mut().spawn((FromView, SimEntity(EntityId(2)), crate::render::strategic::NoIcon)).id();
+        app.update();
+        assert!(app.world().get::<crate::render::strategic::Strategic>(ship).is_some());
+        assert!(app.world().get::<crate::render::strategic::Strategic>(planet).is_none());
+    }
+
+    /// The real game's path: the map view's own entity (a `SimEntity` without `FromView`) for a neutral planet outside
+    /// every sensor survives `sync_units` and stays the one entity of that id; a neutral ship outside them is despawned.
+    #[test]
+    fn the_map_views_own_planet_entity_survives_while_unseen() {
+        use sta_sim::world::NEUTRAL;
+        let db = sta_content::ContentDb::builder()
+            .unit(sta_content::UnitDef::new("t_backdrop", "planet_obj"))
+            .unit(sta_content::UnitDef::new("t_ship", "wingman"))
+            .build()
+            .unwrap();
+        let mut planet = unit(2, NEUTRAL.0, 100, UnitFlags::default());
+        planet.def = db.key("t_backdrop").unwrap();
+        let mut ship = unit(3, NEUTRAL.0, 100, UnitFlags::default());
+        ship.def = db.key("t_ship").unwrap();
+        let v = view(0, vec![unit(1, 1, 100, UnitFlags::default()), planet, ship], vec![(PlayerId(1), vec![EntityId(1)])]);
+        let mut app = app_with(Box::new(Views(vec![v], 0)), Some(PlayerId(1)));
+        app.insert_resource(ContentRes(Arc::new(db)));
+        let map_planet = app.world_mut().spawn(SimEntity(EntityId(2))).id();
+        let map_ship = app.world_mut().spawn(SimEntity(EntityId(3))).id();
+        for _ in 0..5 {
+            app.update();
+        }
+        assert!(app.world().get_entity(map_planet).is_ok(), "the map's planet entity was despawned");
+        assert_eq!(app.world().resource::<SimEntities>().0.get(&EntityId(2)), Some(&map_planet));
+        assert_eq!(roots(&mut app).iter().filter(|r| r.0 == EntityId(2)).count(), 1, "a second entity was made for the planet");
+        assert!(app.world().get_entity(map_ship).is_err(), "an unseen neutral ship stays drawn");
+    }
+
+    /// An A2 `planet` re-created from the view (the map view draws its body, so attach_models skips it) gets `NoIcon`
+    /// before that skip, and `ensure_icons` leaves it without an arrow; a ship of the same kind of entity does get one.
+    #[test]
+    fn a_view_drawn_a2_planet_gets_no_icon_even_though_it_has_no_model() {
+        use bevy::ecs::system::RunSystemOnce;
+        let db = sta_content::ContentDb::builder().unit(sta_content::UnitDef::new("t_planet", "planet")).build().unwrap();
+        let key = db.key("t_planet").unwrap();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(bevy::asset::AssetPlugin::default())
+            .init_asset::<Mesh>()
+            .init_asset::<StandardMaterial>()
+            .init_asset::<Image>()
+            .insert_resource(Mounted(sta_vfs::Vfs::default()))
+            .insert_resource(ContentRes(Arc::new(db)))
+            .insert_resource(SpriteTables(Arc::new(sta_assets::a2fmt::spr::SpriteTable::default())))
+            .init_resource::<crate::render::moons::MoonVariants>()
+            .init_resource::<TextureCache>()
+            .init_resource::<PartCache>()
+            .init_resource::<UnitModels>()
+            .insert_resource(SimLink::new(Box::new(Views(vec![view(0, Vec::new(), Vec::new())], 0)), Box::new(LocalRouter::new()), PlayerId(1)));
+        let planet = app.world_mut().spawn((FromView, SimEntity(EntityId(2)), NeedsModel(key), TeamColour(Color::WHITE))).id();
+        app.world_mut().run_system_once(attach_models).unwrap();
+        app.world_mut().flush();
+        app.world_mut().run_system_once(crate::render::strategic::ensure_icons).unwrap();
+        app.world_mut().flush();
+        assert!(app.world().get::<crate::render::strategic::NoIcon>(planet).is_some());
+        assert!(app.world().get::<crate::render::strategic::Strategic>(planet).is_none());
     }
 }
