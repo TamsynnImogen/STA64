@@ -241,7 +241,13 @@ pub fn notice_for(ev: &SimEvent, me: PlayerId, unit: impl Fn(sta_sim::EntityId) 
 }
 
 fn name_of(db: Option<&ContentRes>, u: &UnitView) -> String {
-    db.and_then(|d| d.0.name(u.def)).map(str::to_owned).unwrap_or_else(|| tr("Unit"))
+    // The ODF's own `unitName` caption (what the HUD's mouseover strip shows), the ODF name
+    // only when it authors none.
+    db.and_then(|d| {
+        let caption = d.0.unit(u.def).and_then(|def| def.raw.str("unitName")).map(str::trim).filter(|n| !n.is_empty());
+        caption.or_else(|| d.0.name(u.def)).map(str::to_owned)
+    })
+    .unwrap_or_else(|| tr("Unit"))
 }
 
 fn events_to_notices(

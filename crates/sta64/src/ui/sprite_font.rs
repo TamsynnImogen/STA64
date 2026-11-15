@@ -1115,6 +1115,10 @@ fn resolve_text(
                 };
                 commands.entity(e).insert(node);
             }
+            // Plain `sprite_text` carries no `Node` of its own (the glyph path adds one): without
+            // it the TTF child is outside the UI tree and nothing is drawn (an install with no
+            // loadable sprite font, such as Armada I's).
+            commands.entity(e).insert_if_new(Node::default());
             commands.entity(e).insert(SpriteLaid { text: t.text.clone(), size: t.size, untinted: Vec::new(), mixed: false });
             if let Some(&child) = existing.first().filter(|child| texts.contains(**child)) {
                 commands.entity(child).insert(label);
@@ -2050,6 +2054,19 @@ mod tests {
         app.update();
         let kids = app.world().get::<Children>(e).unwrap();
         assert!(app.world().get::<ImageNode>(kids[0]).is_some());
+    }
+
+    /// With no sprite font loaded, plain text (the LCARS HUD's) still gets a layout node, so
+    /// its TTF child is part of the UI tree and is drawn.
+    #[test]
+    fn plain_text_without_fonts_has_a_layout_node() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<SpriteFonts>().init_resource::<GlyphWords>().add_systems(Update, resolve_text);
+        let e = app.world_mut().spawn(sprite_text("6000", 12.0, Color::WHITE)).id();
+        app.update();
+        assert!(app.world().get::<Node>(e).is_some(), "the text entity has no Node");
+        let kid = app.world().get::<Children>(e).unwrap()[0];
+        assert_eq!(app.world().get::<Text>(kid).unwrap().0, "6000");
     }
 
     /// The TTF cannot draw the games' picture codes: the mod's words stand in.
