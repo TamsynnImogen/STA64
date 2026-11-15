@@ -158,7 +158,7 @@ fn a_start_unit_without_a_model_is_reported() {
         interface: None,
         interface_sprites: None,
         single_player_music: None,
-        multiplayer_music: None,
+        multiplayer_music: None, music_tracks: Vec::new(),
         standard_units: vec!["fx_yard".into(), "fx_station".into()],
         minimal_units: Vec::new(),
         stock: [4000, 2000, 0, 500],
