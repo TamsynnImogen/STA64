@@ -176,11 +176,11 @@ fn the_digest_of_a_station_earning_over_a_run_is_pinned() {
 #[test]
 fn a_station_built_from_odfs_credits_metal_end_to_end() {
     let files: Vec<(&str, &str)> = vec![
-        ("u_station", "unitName = \"s\"\nclassLabel = \"p_mining\"\norbitTime = 0\nminingMultiplier = 0.5\nresourcesCanHandle = \"metal\"\nweapon1 = \"w_mine\"\nweaponHardPoints1 = \"hp01\"\n"),
+        ("u_station", "unitName = \"s\"\nclassLabel = \"p_mining\"\norbitTime = 0\nminingMultiplier = 0.6\nresourcesCanHandle = \"metal\"\nweapon1 = \"w_mine\"\nweaponHardPoints1 = \"hp01\"\n"),
         ("u_world", "unitName = \"w\"\nclassLabel = \"planet\"\nresource = \"n\"\n"),
         ("n", "canHaveOrbitalStation = 1\nminingRate = 6\namtmetal = 1000\n"),
-        ("w_mine", "wpnName = \"m\"\nclassLabel = \"cannon\"\nordName = \"o_mine\"\nrange = 150\nshotDelay = 1.5\n"),
-        ("o_mine", "classLabel = \"minebm\"\nlifeSpan = 1.25\nshotSpeed = 1000\n"),
+        ("w_mine", "wpnName = \"m\"\nclassLabel = \"cannon\"\nordName = \"o_mine\"\nrange = 150\nshotDelay = 1.7\n"),
+        ("o_mine", "classLabel = \"minebm\"\nlifeSpan = 0.9\nshotSpeed = 1000\n"),
     ];
     let stems: Vec<String> = files.iter().map(|f| f.0.to_owned()).collect();
     let (db, _) = sta_content::odf::load_with(sta_content::Profile::Sta2Classic, &sta_content::Overrides::default(), &stems, &mut |n, v| {
@@ -190,11 +190,11 @@ fn a_station_built_from_odfs_credits_metal_end_to_end() {
     let mut sim = game_with_content(db);
     spawn(&mut sim, "u_world", NEUTRAL, v(0, 0));
     spawn(&mut sim, "u_station", PlayerId(0), v(crate::production::orbit::ALTITUDE, 0));
-    for _ in 0..PERIOD * 10 {
+    for _ in 0..51 * 10 {
         sim.step(&[]);
     }
     let metal = sim.view().players.iter().find(|p| p.id == PlayerId(0)).unwrap().resources.get(2).copied().unwrap_or(Fixed::ZERO);
-    // 6 x 0.5 a second for the ticks the beam lives (its lifeSpan rounded to ticks, of every 45):
-    // 38 of 45 over ten periods at 0.1 a tick, within a tick or two of the spawn.
-    assert!(near(metal, 38.1), "{metal:?}");
+    // 6 x 0.6 a second is 0.12 a tick while the beam lives: its lifeSpan in ticks (27) of every
+    // 51 (the shot delay), over ten periods, within a tick or two of the spawn.
+    assert!(near(metal, 32.5), "{metal:?}");
 }
