@@ -256,6 +256,60 @@ fn a_movie_that_may_not_be_skipped_ignores_escape() {
 }
 
 #[test]
+fn a_panel_movie_has_no_skip_key() {
+    let (mut app, _log) = app();
+    let h = panel(&mut app);
+    play(&mut app, "40f", MovieTarget::Panel(h), true);
+    run_until(&mut app, "playing", |a| a.world().resource::<Movies>().panels.first().is_some_and(|p| matches!(p.phase, Phase::Playing)));
+    for k in [KeyCode::Space, KeyCode::Escape, KeyCode::Enter] {
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(k);
+    }
+    run_until(&mut app, "ends", |a| !finished(a).is_empty());
+    assert_eq!(finished(&app)[0].2, MovieOutcome::Completed);
+    assert!(app.world().resource::<ButtonInput<KeyCode>>().just_pressed(KeyCode::Space), "the keys stay for the game");
+}
+
+#[test]
+fn entering_the_front_end_stops_panel_movies_and_leaves_fullscreen_ones() {
+    use crate::app::AppState;
+    let (mut app, _log) = app();
+    app.add_plugins(bevy::state::app::StatesPlugin).init_state::<AppState>();
+    app.update();
+    let h = panel(&mut app);
+    let in_panel = play(&mut app, "3000f", MovieTarget::Panel(h), false);
+    let h2 = panel(&mut app);
+    let queued = play(&mut app, "3000f", MovieTarget::Panel(h2), false);
+    let full = play(&mut app, "3000f", MovieTarget::Fullscreen, true);
+    run_until(&mut app, "playing", |a| !a.world().resource::<Movies>().panels.is_empty() && a.world().resource::<Movies>().fullscreen.is_some());
+    app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::FrontEnd);
+    run_until(&mut app, "stopped", |a| finished(a).len() >= 2);
+    let f = finished(&app);
+    assert!(f.iter().all(|x| x.2 == MovieOutcome::Stopped && (x.0 == in_panel || x.0 == queued)), "{f:?}");
+    assert!(!app.world().resource::<Movies>().panel_busy());
+    assert!(app.world().resource::<Movies>().fullscreen.is_some(), "an intro-style fullscreen movie plays on");
+    let _ = full;
+}
+
+#[test]
+fn an_in_panel_mission_movie_goes_fullscreen_when_no_panel_is_registered_and_to_the_panel_when_one_is() {
+    use sta_sim::SimEvent;
+    use sta_sim::present::Presentation;
+    let (mut app, _log) = app();
+    let ev = |p| crate::sim_link::SimMsg(SimEvent::Present(p));
+    let clip = |name: &str| Presentation::Movie { name: name.into(), in_panel: true, skippable: true };
+    app.world_mut().write_message(ev(clip("3000f")));
+    run_until(&mut app, "fullscreen", |a| a.world().resource::<Movies>().fullscreen.is_some());
+    assert!(app.world().resource::<Movies>().panels.is_empty());
+    app.world_mut().write_message(ev(Presentation::StopMovie));
+    app.update();
+    let screen = panel(&mut app);
+    app.insert_resource(PanelScreen { image: screen, kind: PanelKind::Viewscreen });
+    app.world_mut().write_message(ev(clip("3000f")));
+    run_until(&mut app, "panel", |a| !a.world().resource::<Movies>().panels.is_empty());
+    assert!(app.world().resource::<Movies>().fullscreen.is_none());
+}
+
+#[test]
 fn stop_reports_playing_and_waiting_movies_and_shuts_their_threads_and_sound() {
     let (mut app, log) = app();
     let h = panel(&mut app);
@@ -280,7 +334,7 @@ fn mission_movie_events_play_and_report_done() {
     use sta_sim::present::Presentation;
     let (mut app, _log) = app();
     let screen = panel(&mut app);
-    app.insert_resource(PanelScreen(screen.clone()));
+    app.insert_resource(PanelScreen { image: screen.clone(), kind: PanelKind::Cinematic });
     let ev = |p| crate::sim_link::SimMsg(SimEvent::Present(p));
     app.world_mut().write_message(ev(Presentation::Movie { name: "40f".into(), in_panel: true, skippable: false }));
     app.world_mut().write_message(ev(Presentation::Movie { name: "10f".into(), in_panel: false, skippable: true }));

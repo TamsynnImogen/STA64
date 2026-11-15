@@ -6,8 +6,10 @@
 //! - `name`: the race key unit definitions carry (`unitedfederation`);
 //! - `instantactionslot`: its nonnegative place in the skirmish setup, including
 //!   zero; absent or invalid slots do not make a modern race playable;
-//! - `interfaceconfiguration`: its GUI cfg (`gui_federation.cfg`), and
-//!   `singleplayermusic` / `multiplayermusic`;
+//! - `interfaceconfiguration`: its GUI cfg (`gui_federation.cfg`), and its music:
+//!   `singleplayermusic` / `multiplayermusic` (Armada II, Fleet Operations: one file
+//!   each) or Armada I's `track0`, `track1`, ... play list; see [`RaceDef::playlist`]
+//!   for which wins (the single files, then `track0..` only when neither is named);
 //! - `standardunits1..`: what a normal start places (an outpost, the race's
 //!   faction object and an effect), `minimalunits1..`: what a minimal start
 //!   places (a construction ship), and the stock of a start at the "normal"
@@ -52,6 +54,8 @@ pub struct RaceDef {
     pub interface_sprites: Option<String>,
     pub single_player_music: Option<String>,
     pub multiplayer_music: Option<String>,
+    /// Armada I's music play list: `track0`, `track1`, ... in order (read from the race ODFs).
+    pub music_tracks: Vec<String>,
     /// `standardunits1..`, ODF stems.
     pub standard_units: Vec<String>,
     /// `minimalunits1..`, ODF stems.
@@ -63,6 +67,20 @@ pub struct RaceDef {
     /// Authored crew stock, absent when the ODF does not configure it.
     pub normal_crew: Option<i64>,
     pub lots_crew: Option<i64>,
+}
+
+impl RaceDef {
+    /// The race's gameplay music: the one file of `singleplayermusic` / `multiplayermusic`
+    /// (`multiplayer` picks which is tried first, the other is the fallback), and only when
+    /// neither key gives a file, Armada I's `track0..` list. A race that names an Armada II key
+    /// keeps the Armada II meaning (stock Species 8472 also carries unused leftover `track0..`).
+    pub fn playlist(&self, multiplayer: bool) -> Vec<String> {
+        let (first, second) = if multiplayer { (&self.multiplayer_music, &self.single_player_music) } else { (&self.single_player_music, &self.multiplayer_music) };
+        match first.clone().or_else(|| second.clone()) {
+            Some(file) => vec![file],
+            None => self.music_tracks.clone(),
+        }
+    }
 }
 
 /// What a seat starts with.
@@ -380,6 +398,12 @@ impl Races {
                         interface_sprites: text("interfacesprites"),
                         single_player_music: text("singleplayermusic"),
                         multiplayer_music: text("multiplayermusic"),
+                        // Gaps are kept, as with `standardunits`; empty entries are dropped.
+                        music_tracks: crate::odf::numbered(&o, "track")
+                            .into_iter()
+                            .map(|(_, raw)| raw.trim().trim_matches('"').trim().to_owned())
+                            .filter(|s| !s.is_empty())
+                            .collect(),
                         standard_units: numbered(&o, "standardunits"),
                         minimal_units: numbered(&o, "minimalunits"),
                         stock: [
@@ -756,6 +780,29 @@ mod tests {
         assert_eq!(r.get("norace").unwrap().slot, None);
         let slots: Vec<_> = r.playable().iter().map(|r| r.stem.as_str()).collect();
         assert_eq!(slots, ["federation", "klingon"]);
+    }
+
+    #[test]
+    fn music_playlist_is_the_single_file_else_the_track_list() {
+        // Armada I race ODFs list `track0..`; Armada II ones name one file per mode, and a
+        // race with both kinds of keys (stock Species 8472) keeps its Armada II file.
+        let (races, warnings) = Races::load_with(&mut loader(&[
+            ("races", "race0=a1\nrace1=a2\nrace2=none\nrace3=both\nrace4=gap"),
+            ("a1", "name=fx\ninstantActionSlot=0\ntrack0=\"m300.wav\"\ntrack1=\"m115.wav\"\ntrack2=\"m100.wav\""),
+            ("a2", "name=fy\ninstantActionSlot=1\nsinglePlayerMusic=\"sp.wav\"\nmultiPlayerMusic=\"mp.wav\""),
+            ("none", "name=fz\ninstantActionSlot=2"),
+            ("both", "name=fw\ninstantActionSlot=3\nmultiPlayerMusic=\"mp.wav\"\nsinglePlayerMusic=\"\"\ntrack0=\"t0.wav\"\ntrack1=\"t1.wav\""),
+            ("gap", "name=fv\ninstantActionSlot=4\ntrack0=\"a.wav\"\ntrack2=\"c.wav\"\ntrack3=\"\""),
+        ]));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(races.get("a1").unwrap().playlist(false), ["m300.wav", "m115.wav", "m100.wav"]);
+        assert_eq!(races.get("a1").unwrap().playlist(true), ["m300.wav", "m115.wav", "m100.wav"]);
+        assert_eq!(races.get("a2").unwrap().playlist(false), ["sp.wav"]);
+        assert_eq!(races.get("a2").unwrap().playlist(true), ["mp.wav"]);
+        assert!(races.get("none").unwrap().playlist(false).is_empty());
+        assert_eq!(races.get("both").unwrap().playlist(false), ["mp.wav"]);
+        assert_eq!(races.get("both").unwrap().playlist(true), ["mp.wav"]);
+        assert_eq!(races.get("gap").unwrap().playlist(false), ["a.wav", "c.wav"]);
     }
 
     #[test]
