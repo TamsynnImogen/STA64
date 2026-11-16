@@ -5,6 +5,9 @@ The stock renderer consumes the mounted local race's interface CFG and selected
 GUI SPR table, falling back to gui_global.spr. LCARS restores the existing
 Refit layout/grid. Gameplay/capability/command handling remains shared.
 
+Which cfg keys the HUD code uses by name, panel by panel, is in the generated
+[audit](STOCK_HUD_CFG_AUDIT.md) (UI-48); regenerate it with `tools/hud_cfg_audit.py`.
+
 ## Design before implementation
 
 - `stock/layout.rs` is the pure view of resolved GuiLayout: case-insensitive

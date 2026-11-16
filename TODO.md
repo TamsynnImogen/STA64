@@ -198,6 +198,7 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 ### Playtest checks from the 2026-11-15/16 merges
 
+- [ ] Stock HUD cfg audit (UI-48, #879): [docs/STOCK_HUD_CFG_AUDIT.md](docs/STOCK_HUD_CFG_AUDIT.md) lists every `gui_*.cfg` key of the three games with its state. 322 of 581 are `missing` (comm panel 155, bridge 27, single-selection info 24, objectives 16, multi-selection 12). Next: close them panel by panel, starting with the panels already on screen (single and multi selection info, minimap, command palette), then comm, objectives, pause and drop-player boxes. `built` rows (158) need a per-prefix check.
 - [?] Weapon base keys (CON-54, #858): `STA64_TEST_INSTALL=<A1, A2 or FO install> cargo test -p sta_content --test weapon_base_keys -- --nocapture` prints how many weapons set a base key, the `hitChance` and `damageBase` table rows read and `row warnings 0`. Nothing changes in play yet: the keys are typed, and SIM-73 applies them one rule at a time. Judge the load cost on Fleet Operations (about 160 MB more peak memory and 3 s more in a debug build for its 3 million table rows).
 
 - [?] Armada I music (#762): in an Armada I campaign mission the intro music and voices play and the gameplay music follows (not heard by ear, no audio run).
