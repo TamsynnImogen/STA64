@@ -49,7 +49,11 @@
 //!   drop-out uses the lead above (the engine stops at `tooCloseToTurn` and
 //!   coasts: not measured). A unit without the key never warps on a plain move.
 //!
-//! State is in snapshots (format 21) and in the digest once any exists.
+//! State is in snapshots (format 21; the guard order, appended to the job rows, from format 33) and in the digest once any exists.
+
+mod guard;
+#[cfg(test)]
+mod guard_tests;
 
 use serde::{Deserialize, Serialize};
 use sta_core::{EntityId, Fixed, PlayerId, Vec3};
@@ -80,6 +84,8 @@ pub enum Job {
     AttackAny,
     AttackPoint { at: Vec3 },
     Warp,
+    /// Appended (LUA-39): see [`guard`](self::guard).
+    Guard { ward: EntityId },
 }
 
 /// Every craft's scripted order, ascending id.
@@ -165,6 +171,10 @@ impl Scripted {
                     v3(h, at);
                 }
                 Job::Warp => h.u64(6),
+                Job::Guard { ward } => {
+                    h.u64(7);
+                    h.u64(ward.0 as u64);
+                }
             }
         }
     }
@@ -215,10 +225,15 @@ impl Sim {
             | Order::Scout { units }
             | Order::AttackAny { units }
             | Order::AttackPoint { units, .. }
-            | Order::MoveWarp { units, .. } => units,
+            | Order::MoveWarp { units, .. }
+            | Order::Guard { units, .. } => units,
             _ => return false,
         };
         let ids = self.scripted_takers(player, units);
+        let ids = match order {
+            Order::Guard { ward, .. } => self.guard_takers(player, ids, *ward),
+            _ => ids,
+        };
         if ids.is_empty() || matches!(order, Order::Patrol { points, .. } if points.is_empty()) {
             return false;
         }
@@ -280,6 +295,12 @@ impl Sim {
                     self.set_target(id, Some(*to));
                     let _ = queue; // a queued warp move replaces the course, as the plain one does
                     self.scripted.rows.insert(id, Job::Warp);
+                }
+            }
+            Order::Guard { ward, .. } => {
+                for &id in &ids {
+                    self.set_target(id, None);
+                    self.scripted.rows.insert(id, Job::Guard { ward: *ward });
                 }
             }
             _ => return false,
@@ -410,6 +431,10 @@ impl Sim {
                             }
                         }
                     }
+                }
+                Job::Guard { ward } => {
+                    let seen = seats.then(|| visibility.iter().find(|(p, _)| *p == owner).map_or(&[][..], |(_, ids)| ids.as_slice()));
+                    self.step_guard(id, ward, &db, dip, seen);
                 }
                 Job::Scout { start, mut radius, dest, mut explored, cloaked } => {
                     if !cloaked && let Some(db) = self.content.clone() {
