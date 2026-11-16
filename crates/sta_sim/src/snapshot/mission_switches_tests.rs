@@ -35,12 +35,16 @@ fn the_record_is_mandatory_and_schema_checked() {
     let bytes = switched().snapshot();
     let unknown = SwitchesRec::for_test(2, MissionSwitches::default());
     assert_eq!(chain::corrupt(&chain::with(&bytes, chain::MISSION_SWITCHES, chain::enc(&unknown)), None), "unknown mission switches record version");
-    // A path override byte outside None/Some(false)/Some(true) does not decode.
-    let mut forged = chain::split(&bytes);
-    let last = forged[chain::MISSION_SWITCHES].len() - 1;
-    forged[chain::MISSION_SWITCHES][last - 1] = 1;
-    forged[chain::MISSION_SWITCHES][last] = 2;
-    assert!(matches!(Sim::from_snapshot(&chain::join(&forged), None), Err(SnapshotError::Corrupt(_))));
+    // The record ends with the path override: an Option tag byte, then a bool byte for Some
+    // (`switched()` writes Some(true)). A bool byte other than 0 or 1 and an Option tag other
+    // than 0 or 1 do not decode.
+    for from_end in [0usize, 1] {
+        let mut forged = chain::split(&bytes);
+        let rec = &mut forged[chain::MISSION_SWITCHES];
+        let at = rec.len() - 1 - from_end;
+        rec[at] = 2;
+        assert!(matches!(Sim::from_snapshot(&chain::join(&forged), None), Err(SnapshotError::Corrupt(_))), "byte {from_end} from the end");
+    }
     let missing = chain::before(&bytes, chain::MISSION_SWITCHES);
     assert!(matches!(Sim::from_snapshot(&missing, None), Err(SnapshotError::Corrupt(_))));
     let mut trailing = bytes;

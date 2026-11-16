@@ -17,6 +17,9 @@
 //! - **ObstacleAvoidance** in Armada II writes a flag that nothing reads; it is
 //!   stored and has no effect.
 //!
+//! The Armada I movement model does not read `AllowWarp`: no Armada I script calls it, so
+//! its automatic warp on long plain moves is unchanged by the switch's default.
+//!
 //! State: one global record, saved always and hashed only when it differs from
 //! the default (all on, no path override), so a run that never sends a switch
 //! edit keeps every digest.
