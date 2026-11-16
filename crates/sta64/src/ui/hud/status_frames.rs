@@ -131,14 +131,37 @@ fn installed_status_queue_and_cargo_render_and_clear() {
     yard.build
         .list
         .push(sta_content::DefRef::new("status_ship"));
+    // Read native art from the opted-in install; the fixture ships remain
+    // synthetic and no textures or SPR definitions are copied into the test.
+    let models =
+        std::env::var("STA64_STATUS_MODELS").unwrap_or_else(|_| "fcruise1,fdestroy,fscout".into());
+    let models: Vec<_> = models.split(',').map(str::trim).collect();
+    assert_eq!(
+        models.len(),
+        3,
+        "STA64_STATUS_MODELS needs three model stems"
+    );
+    let queued_units: Vec<_> = [
+        ("status_ship", "cruiser"),
+        ("status_frigate", "frigate"),
+        ("status_scout", "scout"),
+    ]
+    .into_iter()
+    .zip(&models)
+    .map(|((name, class), model)| {
+        let mut unit = sta_content::UnitDef::new(name, class);
+        unit.model = (*model).into();
+        unit
+    })
+    .collect();
     let db = Arc::new(
         sta_content::ContentDb::builder()
             .unit(yard)
             .unit(sta_content::UnitDef::new("status_freighter", "freighter"))
             .unit(sta_content::UnitDef::new("status_station", "starbase"))
-            .unit(sta_content::UnitDef::new("status_ship", "cruiser"))
-            .unit(sta_content::UnitDef::new("status_frigate", "frigate"))
-            .unit(sta_content::UnitDef::new("status_scout", "scout"))
+            .unit(queued_units[0].clone())
+            .unit(queued_units[1].clone())
+            .unit(queued_units[2].clone())
             .build()
             .unwrap(),
     );
@@ -385,6 +408,44 @@ fn installed_status_queue_and_cargo_render_and_clear() {
             }
         }
         if stage <= 1 {
+            let world = app.world_mut();
+            let mut art = world.query::<(&GuiImage, Option<&ImageNode>)>();
+            for model in &models {
+                assert!(
+                    art.iter(world).any(|(image, painted)| {
+                        image.names.first() == Some(&format!("{model}w1")) && painted.is_some()
+                    }),
+                    "queued {model} has no painted native wireframe"
+                );
+            }
+            assert!(
+                art.iter(world)
+                    .all(|(image, _)| { image.names.iter().all(|name| !name.starts_with("b_")) }),
+                "queue must not use build-button artwork"
+            );
+            let native_progress = world
+                .resource::<StatusUiState>()
+                .last
+                .as_ref()
+                .unwrap()
+                .progress
+                .is_some();
+            if native_progress {
+                let layout = world.resource::<stock::StockState>();
+                let sprite = layout
+                    .layout
+                    .as_ref()
+                    .unwrap()
+                    .name("infoSingleConstructionBar")
+                    .unwrap_or("large_construction_bar")
+                    .to_owned();
+                assert!(
+                    art.iter(world).any(|(image, painted)| {
+                        image.names.first() == Some(&sprite) && painted.is_some()
+                    }),
+                    "native queue progress SPR did not resolve: {sprite}"
+                );
+            }
             queue_widths.push(bar_width(&mut app, |kind| {
                 matches!(kind, LiveValue::QueueProgress(0, _))
             }));

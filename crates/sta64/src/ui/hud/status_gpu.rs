@@ -7,7 +7,7 @@ use sta_sim::{EntityId, Fixed};
 
 use super::layout::R;
 use super::model::{self, HudFeed, Info};
-use super::status::{self, JobState, QueueItem, SelectedStatus, StatusFeed};
+use super::status::{self, JobState, SelectedStatus, StatusFeed};
 use super::stock::{self, layout::StockLayout};
 use super::{HudConfig, HudLayoutRes, HudRoot};
 use crate::ui::gui_sprites::{GuiImage, GuiImageSampling};
@@ -163,34 +163,18 @@ fn clipped_bar(
     }
 }
 
-fn sprite_candidates(item: &QueueItem) -> Vec<String> {
-    let mut names = Vec::new();
-    for source in [item.model.as_deref(), item.odf.as_deref()]
-        .into_iter()
-        .flatten()
-    {
-        let basename = source.rsplit(['/', '\\']).next().unwrap_or(source).trim();
-        let stem = match basename.rsplit_once('.') {
-            Some((stem, ext))
-                if ["sod", "odf", "glb", "gltf", "m3d"]
-                    .iter()
-                    .any(|known| ext.eq_ignore_ascii_case(known)) =>
-            {
-                stem
-            }
-            _ => basename,
-        };
-        if !stem.is_empty() {
-            let name = format!("b_{stem}");
-            if !names
-                .iter()
-                .any(|old: &String| old.eq_ignore_ascii_case(&name))
-            {
-                names.push(name);
-            }
-        }
-    }
-    names
+/// Number of columns and square size for the compact wireframe card.
+fn queue_grid(width: f32, count: usize) -> (usize, f32, usize) {
+    let inner = (width - 16.0).max(0.0);
+    let columns = (((inner + 4.0) / 68.0).floor() as usize).clamp(1, 5);
+    let cell = ((inner - (columns - 1) as f32 * 4.0) / columns as f32).clamp(0.0, 64.0);
+    let rows = count.div_ceil(columns);
+    (columns, cell, rows)
+}
+
+fn queue_card_height(width: f32, count: usize, extra_rows: usize) -> f32 {
+    let (_, cell, rows) = queue_grid(width, count);
+    rows as f32 * (cell + 12.0) + extra_rows as f32 * 26.0 + 10.0
 }
 
 fn stock_shape(
@@ -223,15 +207,18 @@ fn stock_shape(
     let lcars_card =
         if fallback_queue || fallback_progress || fallback_construction || fallback_cargo {
             layout.info_area(variant).map(|panel| {
-                let rows = if fallback_queue {
+                let jobs = if fallback_queue {
                     status.queue.len().min(10)
                 } else if fallback_progress {
                     1
                 } else {
                     0
-                } + usize::from(fallback_cargo)
-                    + usize::from(fallback_construction);
-                let h = rows as f32 * 26.0 + 12.0;
+                };
+                let h = queue_card_height(
+                    panel.w,
+                    jobs,
+                    usize::from(fallback_cargo) + usize::from(fallback_construction),
+                );
                 R::new(panel.x, (panel.y - h - 8.0).max(0.0), panel.w, h)
             })
         } else {
@@ -269,11 +256,10 @@ fn lcars_shape(
     theme: &Theme,
 ) -> Shape {
     let panel = layout.0.bottom_row(info.height()).info;
-    let rows = status.queue.len().min(10)
-        + usize::from(status.cargo.is_some())
-        + usize::from(status.construction.is_some());
-    let height = (rows as f32 * 26.0 + 12.0).max(0.0);
-    let card = (rows > 0).then(|| {
+    let jobs = status.queue.len().min(10);
+    let extras = usize::from(status.cargo.is_some()) + usize::from(status.construction.is_some());
+    let height = queue_card_height(panel.w, jobs, extras);
+    let card = (jobs + extras > 0).then(|| {
         R::new(
             panel.x,
             (panel.y - height - theme.gap).max(0.0),
@@ -356,42 +342,9 @@ fn draw_stock(
                 ChildOf(slot),
             ));
         }
-        let icon = sprite_candidates(item);
-        if !icon.is_empty() {
-            let mut image = GuiImage::new(icon[0].clone());
-            image.names = icon;
-            commands.spawn((
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(2.0),
-                    top: Val::Px(2.0),
-                    width: Val::Px((r.w - 4.0).max(0.0)),
-                    height: Val::Px((r.h - 20.0).max(0.0)),
-                    ..default()
-                },
-                image,
-                Pickable::IGNORE,
-                ChildOf(slot),
-            ));
+        if let Some(model) = item.model.as_deref() {
+            stock::queue_wireframe(commands, root, *r, model);
         }
-        let label = format!(
-            "{} {}",
-            item.name,
-            match item.state {
-                JobState::Building => "▶",
-                JobState::AwaitingResources => "WAIT",
-                JobState::Queued => "…",
-            }
-        );
-        text(
-            commands,
-            slot,
-            R::new(2.0, (r.h - 22.0).max(0.0), (r.w - 4.0).max(0.0), 20.0),
-            label,
-            theme,
-            None,
-            true,
-        );
     }
     if status.queue.len() > shape.slots.len()
         && let Some((_, last)) = shape.slots.last()
@@ -416,8 +369,12 @@ fn draw_stock(
             r,
             value,
             theme,
-            layout.name("infoProgressBar"),
-            theme.warn,
+            layout
+                .name("infoSingleConstructionBar")
+                .or(Some("large_construction_bar")),
+            layout
+                .colour("infoSingleConstructionBarColor")
+                .unwrap_or(theme.warn),
             LiveValue::QueueProgress(0, r.w),
         );
     }
@@ -517,24 +474,15 @@ fn draw_lcars(
         ChildOf(root),
     ));
     let mut y = card.y + 5.0;
+    let (columns, cell, rows) = queue_grid(card.w, status.queue.len().min(10));
     for (i, item) in status.queue.iter().take(10).enumerate() {
-        let label = match item.state {
-            JobState::Building => "BUILDING",
-            JobState::AwaitingResources => "WAITING",
-            JobState::Queued => "QUEUED",
-        };
-        let row = R::new(card.x + 8.0, y, card.w - 16.0, 22.0);
-        text(
-            commands,
-            root,
-            row,
-            format!("{}  {label}", item.name),
-            theme,
-            None,
-            false,
-        );
+        let x = card.x + 8.0 + (i % columns) as f32 * (cell + 4.0);
+        let top = y + (i / columns) as f32 * (cell + 12.0);
+        if let Some(model) = item.model.as_deref() {
+            stock::queue_wireframe(commands, root, R::new(x, top, cell, cell), model);
+        }
         if let Some(value) = item.progress {
-            let bar = R::new(card.x + card.w - 100.0, y + 18.0, 90.0, 3.0);
+            let bar = R::new(x, top + cell + 2.0, cell, 3.0);
             clipped_bar(
                 commands,
                 root,
@@ -546,8 +494,8 @@ fn draw_lcars(
                 LiveValue::QueueProgress(i, bar.w),
             );
         }
-        y += 26.0;
     }
+    y += rows as f32 * (cell + 12.0);
     if status.queue.len() > 10 {
         text(
             commands,
@@ -753,6 +701,7 @@ mod tests {
 
     use super::*;
     use crate::ui::hud::model::Single;
+    use crate::ui::hud::status::QueueItem;
 
     fn info(builder: bool) -> Info {
         Info::Single(Single {
@@ -1050,10 +999,151 @@ mod tests {
     }
 
     #[test]
-    fn queued_icon_uses_model_then_odf_names() {
-        let mut item = queued().queue.remove(0);
-        item.model = Some("models/hero.sod".into());
-        assert_eq!(sprite_candidates(&item), ["b_hero", "b_ship"]);
+    fn stock_queue_draws_authored_background_five_wireframes_and_native_progress_art() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut cfg = GuiLayout {
+            canvas: (1600, 1200),
+            ..Default::default()
+        };
+        cfg.rects.insert(
+            "infoBuildQueue_0".into(),
+            Rect {
+                x: 10,
+                y: 20,
+                w: 96,
+                h: 96,
+            },
+        );
+        cfg.rects.insert(
+            "infoProgressBar".into(),
+            Rect {
+                x: 10,
+                y: 120,
+                w: 200,
+                h: 12,
+            },
+        );
+        cfg.names
+            .insert("infoBuildQueueSlot_0".into(), "slot_background".into());
+        cfg.names.insert(
+            "infoSingleConstructionBar".into(),
+            "custom_build_bar".into(),
+        );
+        let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+        let mut status = queued();
+        status.queue.truncate(1);
+        let selected = info(true);
+        let shape = stock_shape(EntityId(7), &status, &layout, &selected);
+        let slot_rect = shape.slots[0].1;
+        let progress_rect = shape.progress.unwrap();
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        world
+            .run_system_once(move |mut commands: Commands| {
+                draw_stock(
+                    &mut commands,
+                    root,
+                    &HudFeed::default(),
+                    &status,
+                    &shape,
+                    &layout,
+                    &Theme::default(),
+                    &selected,
+                );
+            })
+            .unwrap();
+
+        let mut images = world.query::<(&GuiImage, &Node)>();
+        let images: Vec<_> = images.iter(&world).collect();
+        assert_eq!(images.len(), 7); // slot, five layers, progress
+        assert!(
+            images
+                .iter()
+                .any(|(image, _)| image.names == ["slot_background"])
+        );
+        for layer in 1..=5 {
+            let name = format!("shipw{layer}");
+            let (_, node) = images
+                .iter()
+                .find(|(image, _)| image.names[0] == name)
+                .unwrap();
+            assert_eq!(node.left, Val::Px(slot_rect.x));
+            assert_eq!(node.top, Val::Px(slot_rect.y));
+            assert_eq!(node.width, Val::Px(slot_rect.w));
+            assert_eq!(node.height, Val::Px(slot_rect.h));
+        }
+        assert!(
+            images
+                .iter()
+                .any(|(image, _)| image.names == ["custom_build_bar"])
+        );
+        assert!(
+            images
+                .iter()
+                .all(|(image, _)| image.names.iter().all(|name| !name.starts_with("b_")))
+        );
+        let mut clips = world.query::<(&LiveValue, &Node)>();
+        let clips: Vec<_> = clips.iter(&world).collect();
+        assert!(clips.iter().any(|(value, node)| matches!(value, LiveValue::QueueProgress(0, width) if *width == progress_rect.w) && node.width == Val::Px(progress_rect.w * 0.5)));
+        let mut labels = world.query::<&SpriteText>();
+        assert_eq!(labels.iter(&world).count(), 0);
+    }
+
+    #[test]
+    fn fallback_queue_uses_bounded_grid_with_live_cell_progress() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut status = queued();
+        let second = status.queue[1].clone();
+        status.queue.extend((0..8).map(|_| second.clone()));
+        let card = R::new(100.0, 200.0, 400.0, queue_card_height(400.0, 10, 0));
+        let (cols, cell, rows) = queue_grid(card.w, status.queue.len());
+        assert_eq!((cols, cell, rows), (5, 64.0, 2));
+        assert_eq!(card.h, 162.0);
+        let shape = Shape {
+            selected: EntityId(7),
+            stock: false,
+            queue: Vec::new(),
+            cargo: false,
+            cargo_resource: None,
+            construction: false,
+            slots: Vec::new(),
+            progress: None,
+            cargo_bar: None,
+            lcars_card: Some(card),
+        };
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        world
+            .run_system_once(move |mut commands: Commands| {
+                draw_lcars(
+                    &mut commands,
+                    root,
+                    &HudFeed::default(),
+                    &status,
+                    &shape,
+                    &Theme::default(),
+                );
+            })
+            .unwrap();
+        let mut images = world.query::<(&GuiImage, &Node)>();
+        let images: Vec<_> = images.iter(&world).collect();
+        assert_eq!(images.len(), 5); // only the modeled first job has five layers
+        let (_, first) = images
+            .iter()
+            .find(|(image, _)| image.names[0] == "shipw1")
+            .unwrap();
+        assert_eq!(first.left, Val::Px(108.0));
+        assert_eq!(first.top, Val::Px(205.0));
+        assert_eq!(first.width, Val::Px(64.0));
+        let mut clips = world.query::<(&LiveValue, &Node)>();
+        assert!(clips.iter(&world).any(
+            |(value, node)| matches!(value, LiveValue::QueueProgress(0, width) if *width == 64.0)
+                && node.width == Val::Px(32.0)
+        ));
+        let mut labels = world.query::<&SpriteText>();
+        assert_eq!(labels.iter(&world).count(), 0);
     }
 
     #[test]
