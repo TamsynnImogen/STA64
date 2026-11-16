@@ -683,8 +683,8 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
         disable_weapons: _, decloak_on_hit: _, initial_shot_delay_modifier: _,
         ignore_shot_delay_effects: _, ordnance_defence: _, activate_on_team_change: _, crew_loss: _, damage_variance: _, resource: _, replace: _, colonize: _, base: _, features: _, raw: _,
     } = w;
-    // `base` (CON-54) is typed only: nothing in the sim reads it yet, so it is not
-    // digested. SIM-73 adds each key it starts to read.
+    // `base` (CON-54): only the keys a sim rule reads are digested, and only for a
+    // weapon whose switch for that rule is on (SIM-73, below); the rest is typed only.
     let mut c = Canon::new();
     c
         .text("class", &w.class.0)
@@ -730,6 +730,29 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
     // SIM-30: a colonizer pod's payload and range, only when the ordnance is one.
     if let Some(p) = w.colonize {
         c.raw("colonize", &group(Canon::new().fixed("party_size", p.party_size).fixed("orbit_range", p.orbit_range)));
+    }
+    // SIM-73: the keys of the hit roll and of per-target damage, only under their
+    // switches and only when set, so every other weapon keeps its text.
+    let table = |l: &crate::Lookup| group(Canon::new().fixed("base", l.base).list("rows", l.iter().map(|(name, v)| format!("{}:{}", quoted(name), fixed_text(v)))));
+    let features = db.weapon_features(w);
+    if features.weapon_hit_roll {
+        let t = &w.base.to_hit;
+        if let Some(l) = &w.base.hit_chance {
+            c.raw("hit_chance", &table(l));
+        }
+        if [t.stop_to_hit, t.to_hit_stop, t.impulse_to_hit, t.to_hit_impulse].iter().any(Option::is_some) {
+            c.raw("to_hit", &group(
+                Canon::new()
+                    .opt_fixed("stop_to_hit", t.stop_to_hit)
+                    .opt_fixed("to_hit_stop", t.to_hit_stop)
+                    .opt_fixed("impulse_to_hit", t.impulse_to_hit)
+                    .opt_fixed("to_hit_impulse", t.to_hit_impulse)));
+        }
+    }
+    if features.weapon_target_damage
+        && let Some(l) = &w.base.damage_base
+    {
+        c.raw("damage_rows", &table(l));
     }
     c.finish()
 }
