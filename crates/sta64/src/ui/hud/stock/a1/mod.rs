@@ -5,6 +5,7 @@
 //! - [`control`]: the control panel, a fixed grid of twelve slots (`controlButton1..12`) whose
 //!   commands the install's `game_cfg.h` places (`BUTTON_LOCATION_*`, ADR 0004 D9, D11), with the
 //!   Orders page behind the Orders button, and the build page.
+//! - [`costs`]: the `needs:` line of the build and research tooltips and the named refusal (UI-42).
 //! - [`info`]: the single-selection info panel (`infoSingle*` keys: name, class, shield bar,
 //!   construction and energy bars, crew, race icon).
 //!
@@ -16,6 +17,7 @@
 //! here, see [`cinematic_rect`]).
 
 pub(super) mod control;
+pub(in crate::ui::hud) mod costs;
 pub(super) mod info;
 
 use bevy::{picking::Pickable, prelude::*};

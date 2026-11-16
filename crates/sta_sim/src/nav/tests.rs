@@ -595,6 +595,129 @@ fn a_slow_craft_flying_round_a_long_wall_is_not_cut_off() {
     assert!(ticks > 3600, "the detour should outlast two minutes ({ticks} ticks)");
 }
 
+fn creep_spec(solid: crate::spatial::Solid) -> super::grid::Spec {
+    let mut s = super::grid::Spec {
+        origin: (0, 0),
+        cell: 32,
+        width: 1,
+        height: 1,
+        default_cost: 1,
+        body: Fixed::from_int(50),
+        solids: vec![solid, crate::spatial::Solid::Sphere { centre: v(500, 500), radius: Fixed::from_int(80) }],
+        hazards: Vec::new(),
+        area: None,
+    };
+    super::frame(&mut s, v(0, 0), v(4000, 4000));
+    s
+}
+
+fn sphere_at(x: Fixed, z: Fixed) -> crate::spatial::Solid {
+    crate::spatial::Solid::Sphere { centre: Vec3 { x, y: Fixed::ZERO, z }, radius: Fixed::from_int(100) }
+}
+
+/// A solid that creeps (an orbiting station moves a fraction of a unit a tick) changes the
+/// grid's spec every tick but its cells only when it crosses a cell centre. While the blocked
+/// cells do not change the cache must hand back the same grid, and so the same field, without
+/// building a grid (a player's orbital station made every blocked craft build a grid and a field
+/// every tick; the tick then cost most of its 33 ms). When the cells do change it must build:
+/// never a stale grid. Every grid handed back is what a fresh build gives.
+#[test]
+fn a_creeping_solid_is_built_once_while_its_cells_hold_and_again_when_they_change() {
+    use super::{Cache, grid::Grid};
+    let mut cache = Cache::default();
+    let (id, grid) = cache.grid(creep_spec(sphere_at(Fixed::from_int(2000), Fixed::from_int(2000))));
+    let goal = grid.cell_of(v(3000, 3000));
+    let field = cache.field(id, &grid, goal);
+    assert_eq!(cache.builds, 1);
+    let mut changed = 0;
+    // A drift of 0.05 of a unit a step along x and 0.025 along z, over 4 cell widths in x.
+    for step in 1..=2560i64 {
+        let at = sphere_at(Fixed::from_int(2000) + Fixed::from_bits(step * 214_748_365), Fixed::from_int(2000) + Fixed::from_bits(step * 107_374_182));
+        let spec = creep_spec(at);
+        let fresh = Grid::build(spec.clone());
+        let before = cache.builds;
+        let (again, g) = cache.grid(spec);
+        assert!(g.same_cells(&fresh), "step {step}: a stale grid");
+        if cache.builds == before {
+            if again == id {
+                assert!(Arc::ptr_eq(&cache.field(again, &g, goal), &field), "step {step}: the field is reused");
+            }
+        } else {
+            changed += 1;
+        }
+    }
+    // The cells changed some times on the way (so the path crossed cell centres), and far
+    // fewer times than there were steps.
+    assert!(changed >= 1, "the path never crossed a cell centre");
+    assert!(cache.builds < 200, "{} builds for 2560 creeping steps", cache.builds);
+}
+
+/// The same for a box (axis-aligned, the only other obstacle shape), and a move that changes the
+/// cells builds.
+#[test]
+fn a_moved_box_builds_only_when_its_cells_change() {
+    use super::Cache;
+    use crate::spatial::Solid;
+    let boxed = |dx: Fixed| Solid::Box { min: Vec3 { x: Fixed::from_int(1000) + dx, y: Fixed::ZERO, z: Fixed::from_int(1000) }, max: Vec3 { x: Fixed::from_int(1200) + dx, y: Fixed::ZERO, z: Fixed::from_int(1100) } };
+    let mut cache = Cache::default();
+    cache.grid(creep_spec(boxed(Fixed::ZERO)));
+    cache.grid(creep_spec(boxed(Fixed::from_bits(1000))));
+    assert_eq!(cache.builds, 1);
+    cache.grid(creep_spec(boxed(Fixed::from_int(64))));
+    assert_eq!(cache.builds, 2);
+}
+
+/// A moving sphere half inside a fixed bigger one: its own cells change as it drifts but the union
+/// of blocked cells does not. The entry kept for the grid must follow the solids (else it is
+/// compared against where the sphere began, and every tick after the first change builds).
+#[test]
+fn a_solid_drifting_inside_a_fixed_one_does_not_build_every_tick() {
+    use super::{Cache, grid::Grid};
+    use crate::spatial::Solid;
+    let spec = |step: i64| {
+        let mut s = creep_spec(sphere_at(Fixed::from_int(2000) + Fixed::from_bits(step * 214_748_365), Fixed::from_int(2000)));
+        s.solids.push(Solid::Sphere { centre: v(2060, 2000), radius: Fixed::from_int(400) });
+        super::frame(&mut s, v(0, 0), v(4000, 4000));
+        s
+    };
+    let mut cache = Cache::default();
+    cache.grid(spec(0));
+    for step in 1..=2560 {
+        let s = spec(step);
+        let fresh = Grid::build(s.clone());
+        let (_, g) = cache.grid(s);
+        assert!(g.same_cells(&fresh), "step {step}: a stale grid");
+    }
+    assert!(cache.builds < 200, "{} builds for 2560 steps", cache.builds);
+}
+
+/// Equal solids are not enough: any other input of the grid that differs builds, and what comes
+/// back is what a fresh build gives.
+#[test]
+fn a_changed_frame_body_hazard_area_cost_or_solid_count_builds() {
+    use super::{Cache, grid::{Area, Grid, Hazard}};
+    use crate::spatial::Solid;
+    let base = || creep_spec(sphere_at(Fixed::from_int(2000), Fixed::from_int(2000)));
+    let mut cache = Cache::default();
+    cache.grid(base());
+    let mut expected = 1;
+    type Change = Box<dyn Fn(&mut super::grid::Spec)>;
+    let variants: Vec<(&str, Change)> = vec![
+        ("body", Box::new(|s| s.body = Fixed::from_int(90))),
+        ("default cost", Box::new(|s| s.default_cost = 3)),
+        ("hazard", Box::new(|s| s.hazards.push(Hazard { shape: Solid::Sphere { centre: v(1000, 1000), radius: Fixed::from_int(200) }, cost: 50 }))),
+        ("area", Box::new(|s| s.area = Some(Area { min: (Fixed::from_int(100), Fixed::from_int(100)), max: (Fixed::from_int(3900), Fixed::from_int(3900)), outside: 9 }))),
+        ("solid count", Box::new(|s| s.solids.push(Solid::Sphere { centre: v(3000, 3000), radius: Fixed::from_int(60) }))),
+    ];
+    for (what, change) in variants {
+        let mut s = base();
+        change(&mut s);
+        let fresh = Grid::build(s.clone());
+        let (_, g) = cache.grid(s);
+        expected += 1;
+        assert_eq!(cache.builds, expected, "{what}: must build");
+        assert!(g.same_cells(&fresh), "{what}: not what a fresh build gives");
+    }
 /// `cross` with a `PathPlanning` edit sent first (LUA-41).
 fn cross_with_planning(pathing: Option<PathingRules>, planning: bool) -> f64 {
     let mut sim = sim_with(vec![sphere(RegionKind::Nebula, "fx_mutara", 0, 1500, 400)], content(pathing));

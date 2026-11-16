@@ -59,12 +59,51 @@ impl Ghost {
 #[derive(Component)]
 pub struct FootprintGrid;
 
+/// Existing objects/regions have a neutral overlay; placement legality keeps
+/// its green/red colours on the proposed station itself.
+pub(super) const OCCUPIED: Color = Color::srgba(0.65, 0.8, 1.0, 0.65);
+
 #[derive(Resource)]
 pub(crate) struct FootprintAssets {
-    meshes: std::collections::BTreeMap<u32, Handle<Mesh>>,
+    meshes: std::collections::BTreeMap<(u32, u32), Handle<Mesh>>,
     cell_size: f32,
     clear: Handle<StandardMaterial>,
     blocked: Handle<StandardMaterial>,
+    pub(super) occupied: Handle<StandardMaterial>,
+}
+
+impl FootprintAssets {
+    pub(super) fn grid(&mut self, meshes: &mut Assets<Mesh>, half: Vec2) -> (Handle<Mesh>, Vec3) {
+        let (_, spacing) = footprint_shape(half.max_element(), self.cell_size);
+        let count = (half * 2.0 / spacing)
+            .ceil()
+            .clamp(Vec2::splat(2.0), Vec2::splat(128.0));
+        let (columns, rows) = (count.x as u32, count.y as u32);
+        let mesh = self
+            .meshes
+            .entry((columns, rows))
+            .or_insert_with(|| {
+                meshes.add(if columns == rows {
+                    super::footprint::mesh(columns)
+                } else {
+                    super::footprint::rectangular_mesh(columns, rows)
+                })
+            })
+            .clone();
+        (mesh, Vec3::splat(spacing))
+    }
+}
+
+/// A live, owned builder placing a station supplies the construction plane.
+pub(super) fn placement_height(state: &HudState, feed: &HudFeed) -> Option<f32> {
+    let armed = state.placing.as_ref()?;
+    let db = feed.content.as_deref()?;
+    let def = db.unit(armed.what)?;
+    if sta_sim::world::EntityKind::of_def(def) != sta_sim::world::EntityKind::Station {
+        return None;
+    }
+    let builder = feed.view.unit(armed.builder)?;
+    (builder.owner == feed.player).then(|| builder.pos.y.to_f32())
 }
 
 fn footprint_material(color: Color) -> StandardMaterial {
@@ -100,6 +139,7 @@ fn footprint_shape(radius: f32, cell_size: f32) -> (u32, f32) {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn sync_footprints(
     mut commands: Commands,
+    state: Res<HudState>,
     feed: Res<HudFeed>,
     ghosts: Query<(Entity, &Ghost, &Visibility)>,
     children: Query<&Children>,
@@ -117,6 +157,12 @@ pub(crate) fn sync_footprints(
     meshes: Option<ResMut<Assets<Mesh>>>,
     materials: Option<ResMut<Assets<StandardMaterial>>>,
 ) {
+    if placement_height(&state, &feed).is_none() {
+        for (entity, ..) in &grids {
+            commands.entity(entity).despawn();
+        }
+        return;
+    }
     let Some(db) = feed.content.as_deref() else {
         return;
     };
@@ -138,6 +184,7 @@ pub(crate) fn sync_footprints(
             cell_size: read_spacing(),
             clear: materials.add(footprint_material(CLEAR)),
             blocked: materials.add(footprint_material(BLOCKED)),
+            occupied: materials.add(footprint_material(OCCUPIED)),
         };
         commands.insert_resource(assets);
         return;
@@ -151,12 +198,7 @@ pub(crate) fn sync_footprints(
             continue;
         }
         let radius = site::footprint(db, ghost.def).to_f32();
-        let (cells, spacing) = footprint_shape(radius, assets.cell_size);
-        let mesh = assets
-            .meshes
-            .entry(cells)
-            .or_insert_with(|| meshes.add(super::footprint::mesh(cells)))
-            .clone();
+        let (mesh, scale) = assets.grid(&mut meshes, Vec2::splat(radius));
         let material = if ghost.status.is_some_and(|s| s.is_ok()) {
             &assets.clear
         } else {
@@ -174,9 +216,9 @@ pub(crate) fn sync_footprints(
             if current_mesh.0 != mesh {
                 commands.entity(entity).insert(Mesh3d(mesh));
             }
-            if transform.scale != Vec3::splat(spacing) {
+            if transform.scale != scale {
                 commands.entity(entity).insert(Transform {
-                    scale: Vec3::splat(spacing),
+                    scale,
                     ..*transform
                 });
             }
@@ -187,7 +229,7 @@ pub(crate) fn sync_footprints(
                 ChildOf(root),
                 Mesh3d(mesh),
                 MeshMaterial3d(material.clone()),
-                Transform::from_xyz(0.0, 0.15, 0.0).with_scale(Vec3::splat(spacing)),
+                Transform::from_xyz(0.0, 0.15, 0.0).with_scale(scale),
             ));
         }
     }
@@ -422,6 +464,14 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
 
+    fn placement_view(db: &sta_content::ContentDb) -> std::sync::Arc<sta_sim::WorldView> {
+        use sta_sim::WorldSource;
+        sta_sim::fake::ScriptedSource::from_json5(
+            r#"{units:[{id:1,def:"fx_cruiser",owner:0,hull:100,rails:[{at:0,pos:{x:0,y:0,z:0}}]}]}"#,
+            db,
+        ).unwrap().view()
+    }
+
     #[test]
     fn grid_spacing_uses_header_and_extreme_content_keeps_its_extent() {
         use sta_assets::cfg_h::CfgH;
@@ -440,18 +490,26 @@ mod tests {
 
     #[test]
     fn footprint_tracks_status_and_is_removed_with_its_ghost() {
-        use sta_sim::{PlayerId, WorldView};
+        use sta_sim::PlayerId;
         use std::sync::Arc;
 
         let db = sta_content::fake::db();
-        let def = db.units().next().expect("fake unit").key;
+        let def = db.key("fx_station").unwrap();
         let radius = site::footprint(&db, def).to_f32();
         let mut world = World::new();
         world.insert_resource(HudFeed {
-            view: Arc::new(WorldView::default()),
+            view: placement_view(&db),
             player: PlayerId(0),
             selected: Vec::new(),
             content: Some(Arc::new(db)),
+        });
+        world.insert_resource(HudState {
+            placing: Some(Armed {
+                builder: sta_sim::EntityId(1),
+                what: def,
+                odf: "fx_station".into(),
+            }),
+            ..default()
         });
         world.insert_resource(Assets::<Mesh>::default());
         world.insert_resource(Assets::<StandardMaterial>::default());
@@ -518,14 +576,14 @@ mod tests {
 
     #[test]
     fn pinned_blueprint_survives_cursor_disarm_and_is_faint() {
-        use sta_sim::{PlayerId, WorldView};
+        use sta_sim::PlayerId;
         use std::sync::Arc;
 
         let db = sta_content::fake::db();
-        let def = db.units().next().expect("fake unit").key;
+        let def = db.key("fx_station").unwrap();
         let mut world = World::new();
         world.insert_resource(HudFeed {
-            view: Arc::new(WorldView::default()),
+            view: placement_view(&db),
             player: PlayerId(0),
             selected: Vec::new(),
             content: Some(Arc::new(db)),
@@ -541,6 +599,11 @@ mod tests {
             .id();
         world.run_system_once(update_ghost).unwrap();
         assert!(world.get::<Ghost>(root).is_some());
+        world.resource_mut::<HudState>().placing = Some(Armed {
+            builder: sta_sim::EntityId(1),
+            what: def,
+            odf: "fx_station".into(),
+        });
 
         let mut materials = Assets::<StandardMaterial>::default();
         let source = materials.add(StandardMaterial::default());
@@ -580,6 +643,13 @@ mod tests {
                 .unwrap()
                 .base_color,
             PINNED
+        );
+        world.resource_mut::<HudState>().placing = None;
+        world.run_system_once(sync_footprints).unwrap();
+        assert!(world.get::<Ghost>(root).is_some());
+        assert!(
+            world.get_entity(ring).is_err(),
+            "footprints end with placement mode"
         );
     }
 
