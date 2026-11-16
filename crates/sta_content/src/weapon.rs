@@ -85,7 +85,7 @@ fn rows_only(r: &mut Reader, key: &str) -> Option<Lookup> {
 #[derive(Default)]
 pub(crate) struct LookupPool {
     names: std::collections::HashSet<std::sync::Arc<str>>,
-    tables: std::collections::HashSet<std::sync::Arc<[(std::sync::Arc<str>, Fixed)]>>,
+    tables: std::collections::HashSet<crate::def::LookupRows>,
 }
 
 impl LookupPool {
