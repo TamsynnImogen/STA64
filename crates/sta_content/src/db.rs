@@ -478,8 +478,8 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         confinement: _, nebula_pathing: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
         crew_gain: _, transport: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, repair_attachment: _, stats: _, raw: _,
     } = u;
-    // `stats` (CON-55) is typed only: nothing in the sim reads it yet, so it is not
-    // digested. SIM-74 adds each key it starts to read.
+    // `stats` (CON-55): only the keys a sim rule reads are digested (the planet keys
+    // under SIM-73's target-mask switch, below); the rest is typed only.
     let crate::BuildDef { cost: _, ticks: _, officers: _, list: _, queue_limit: _, flagged_slots: _ } = &u.build;
     let name = |r: &crate::DefRef| quoted(&r.odf.to_ascii_lowercase());
     let m = &u.movement;
@@ -653,6 +653,11 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
                 .raw("infinite", &n.infinite.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string()))
                 .list("amounts", n.amounts.map(|a| a.map_or_else(|| "-".to_owned(), fixed_text)))));
     }
+    // SIM-73: the shooter's planet keys, only under the target-mask switch and only when set.
+    if db.unit_features(u).weapon_target_masks && (u.stats.can_attack_planets.is_some() || u.stats.can_only_attack_planets.is_some()) {
+        let flag = |b: Option<bool>| b.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string());
+        c.raw("attack_planets", &group(Canon::new().raw("can", &flag(u.stats.can_attack_planets)).raw("only", &flag(u.stats.can_only_attack_planets))));
+    }
     c.finish()
 }
 
@@ -753,6 +758,18 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
         && let Some(l) = &w.base.damage_base
     {
         c.raw("damage_rows", &table(l));
+    }
+    if features.weapon_target_masks && w.base.targets != crate::TargetMaskDef::default() {
+        let m = &w.base.targets;
+        let flag = |b: Option<bool>| b.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string());
+        c.raw("targets", &group(
+            Canon::new()
+                .raw("enemy_craft", &flag(m.enemy_craft))
+                .raw("enemy_buildings", &flag(m.enemy_buildings))
+                .raw("allied_craft", &flag(m.allied_craft))
+                .raw("allied_buildings", &flag(m.allied_buildings))
+                .raw("enemy_planets_only", &flag(m.enemy_planets_only))
+                .raw("location", &flag(m.location))));
     }
     c.finish()
 }

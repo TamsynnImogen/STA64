@@ -456,7 +456,8 @@ impl Weapons {
                 let seen = (!teams.players.is_empty()).then(|| visibility.iter()
                     .find(|(player, _)| *player == u.owner)
                     .map_or(&[][..], |(_, ids)| ids.as_slice()));
-                let Some(t) = self.pick(db, u, w.range, arc, units, teams, perception, seen, switches, opportunity) else {
+                let masked = db.weapon_features(w).weapon_target_masks.then_some(w);
+                let Some(t) = self.pick(db, u, w.range, arc, units, teams, perception, seen, switches, opportunity, masked) else {
                     continue;
                 };
                 if self.mounts.get(u.id).is_none() {
@@ -621,11 +622,27 @@ impl Weapons {
         seen: Option<&[EntityId]>,
         switches: &crate::switches::SwitchTable,
         opportunity: bool,
+        masked: Option<&sta_content::WeaponDef>,
     ) -> Option<&'a Entity> {
         // A cloaked unit is only a target for mutual allies (SIM-63).
         let unseen = |t: &Entity| t.flags.contains(UnitFlags::CLOAKED) && !teams.confirmed_ally(t.owner, u.owner);
+        // SIM-73 `weapon_target_masks` (off by default): what this weapon may be fired at.
+        let allowed = |t: &Entity| {
+            masked.is_none_or(|w| {
+                let perceived = perception.get(t.id).copied().unwrap_or(t.owner);
+                let stance = if teams.is_enemy(u.owner, perceived) {
+                    super::hit_roll::Stance::Enemy
+                } else if teams.confirmed_ally(perceived, u.owner) {
+                    super::hit_roll::Stance::Ally
+                } else {
+                    super::hit_roll::Stance::Neutral
+                };
+                super::hit_roll::can_target(db, w, u, t, stance)
+            })
+        };
         let hittable = |t: &Entity| {
             t.id != u.id
+                && allowed(t)
                 && seen.is_none_or(|ids| ids.binary_search(&t.id).is_ok())
                 && !unseen(t)
                 && t.hull[1] > Fixed::ZERO

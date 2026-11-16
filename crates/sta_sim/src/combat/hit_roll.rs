@@ -24,12 +24,29 @@
 //! **Damage.** A hit does the ordnance's `damageBase` row for the target's
 //! ODF when it has one, else the plain value.
 //!
+//! **Target masks** (`weapon_target_masks`, also off everywhere). A weapon
+//! with `targetLocation` set is not limited. Otherwise:
+//!
+//! - a shooter without `canAttackPlanets` does not fire at a planet, and one
+//!   with `canOnlyAttackPlanets` fires at nothing else;
+//! - at an enemy: a station needs `targetEnemyBuildings` (default on), any
+//!   enemy needs `targetEnemyCraft` (default on), and `targetEnemyPlanetsOnly`
+//!   limits the weapon to planets;
+//! - at an ally: a station needs `targetAlliedBuildings` and any ally needs
+//!   `targetAlliedCraft` (both default off);
+//! - a neutral target is not limited by the masks.
+//!
+//! "Station" is the sim's station kind, standing in for the original's
+//! building flag of the target's class (our reading). The original also
+//! refuses an allied target carrying one further flag we have not identified,
+//! and then asks the ordnance class; neither is reproduced.
+//!
 //! A table row names a unit ODF, with or without `.odf`, in any case.
 
 use sta_content::{ContentDb, Lookup, WeaponDef};
 use sta_core::Fixed;
 
-use crate::world::Entity;
+use crate::world::{Entity, EntityKind};
 
 /// The row of `table` for the unit ODF `odf`, if any. The last matching row
 /// wins, as a later row replaces an earlier one of the same name.
@@ -76,4 +93,38 @@ pub fn will_hit(db: &ContentDb, weapon: &WeaponDef, shooter: &Entity, target: &E
 pub fn damage_for(db: &ContentDb, weapon: &WeaponDef, target: &Entity) -> Fixed {
     let target_odf = db.unit(target.def).map_or("", |d| d.odf.as_str());
     weapon.base.damage_base.as_ref().and_then(|l| row(l, target_odf)).unwrap_or(weapon.damage)
+}
+
+/// How the shooter stands to a target, for [`can_target`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stance {
+    Enemy,
+    Ally,
+    Neutral,
+}
+
+/// May `weapon` on `shooter` be fired at `target` (the target masks)?
+pub fn can_target(db: &ContentDb, weapon: &WeaponDef, shooter: &Entity, target: &Entity, stance: Stance) -> bool {
+    let m = &weapon.base.targets;
+    if m.location == Some(true) {
+        return true;
+    }
+    let planet = db.unit(target.def).is_some_and(|d| matches!(d.class.0.as_str(), "planet" | "planet_obj"));
+    let stats = db.unit(shooter.def).map(|d| &d.stats);
+    if planet && stats.and_then(|s| s.can_attack_planets) != Some(true) {
+        return false;
+    }
+    if !planet && stats.and_then(|s| s.can_only_attack_planets) == Some(true) {
+        return false;
+    }
+    let building = target.kind == EntityKind::Station;
+    match stance {
+        Stance::Enemy => {
+            !(building && m.enemy_buildings == Some(false))
+                && m.enemy_craft != Some(false)
+                && !(m.enemy_planets_only == Some(true) && !planet)
+        }
+        Stance::Ally => !(building && m.allied_buildings != Some(true)) && m.allied_craft == Some(true),
+        Stance::Neutral => true,
+    }
 }

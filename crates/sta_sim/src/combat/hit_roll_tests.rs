@@ -21,20 +21,38 @@ fn table(base: f64, rows: &[(&str, f64)]) -> Lookup {
 
 /// `fake::db()` with the two switches set and `patch` applied to every weapon.
 fn db(hit_roll: bool, target_damage: bool, patch: impl Fn(&mut WeaponDef)) -> ContentDb {
+    db_with(
+        |f| {
+            f.weapon_hit_roll = hit_roll;
+            f.weapon_target_damage = target_damage;
+        },
+        patch,
+        |_| {},
+    )
+}
+
+/// `fake::db()` with `switches` applied to its features and the patches to every weapon and unit.
+fn db_with(switches: impl Fn(&mut Features), weapon: impl Fn(&mut WeaponDef), unit: impl Fn(&mut sta_content::UnitDef)) -> ContentDb {
     let fake = sta_content::fake::db();
     let mut features: Features = fake.features().clone();
-    features.weapon_hit_roll = hit_roll;
-    features.weapon_target_damage = target_damage;
+    switches(&mut features);
     let mut b = ContentDb::builder().profile(fake.profile()).features(features);
     for u in fake.units() {
-        b = b.unit(u.clone());
+        let mut u = u.clone();
+        unit(&mut u);
+        b = b.unit(u);
     }
     for w in fake.weapons() {
         let mut w = w.clone();
-        patch(&mut w);
+        weapon(&mut w);
         b = b.weapon(w);
     }
     b.build().unwrap()
+}
+
+/// As [`db`], with only the target-mask switch as given.
+fn masks(on: bool, weapon: impl Fn(&mut WeaponDef), unit: impl Fn(&mut sta_content::UnitDef)) -> ContentDb {
+    db_with(|f| f.weapon_target_masks = on, weapon, unit)
 }
 
 /// A cruiser ordered to attack `target_def`, 300 units ahead, both at rest.
@@ -158,4 +176,54 @@ fn the_keys_are_digested_only_under_their_switch() {
     assert_eq!(db(false, true, chance).hash(), db(false, true, |_| {}).hash());
     let modifier = |w: &mut WeaponDef| w.base.to_hit.to_hit_stop = Some(Fixed::ONE);
     assert_ne!(db(true, false, modifier).hash(), db(true, false, |_| {}).hash());
+}
+
+#[test]
+fn the_mask_switch_off_changes_nothing() {
+    let plain = fight(masks(false, |_| {}, |_| {}), "fx_frigate", TICKS);
+    let keyed = fight(masks(false, |w| w.base.targets.enemy_craft = Some(false), |u| u.stats.can_only_attack_planets = Some(true)), "fx_frigate", TICKS);
+    assert_eq!(plain, keyed);
+    // On, with no key set: the defaults allow enemy craft and stations, as before.
+    // (The digest differs: the switch is part of the content's feature set.)
+    let events = |r: (usize, usize, Option<Fixed>, u64)| (r.0, r.1, r.2);
+    assert_eq!(events(fight(masks(true, |_| {}, |_| {}), "fx_frigate", TICKS)), events(plain));
+    assert_eq!(events(fight(masks(true, |_| {}, |_| {}), "fx_station", TICKS)), events(fight(masks(false, |_| {}, |_| {}), "fx_station", TICKS)));
+}
+
+#[test]
+fn a_weapon_that_may_not_target_enemy_craft_does_not_fire() {
+    let no_craft = |w: &mut WeaponDef| w.base.targets.enemy_craft = Some(false);
+    assert_eq!(fight(masks(true, no_craft, |_| {}), "fx_frigate", TICKS).0, 0);
+    // The same flag is asked of an enemy station too.
+    assert_eq!(fight(masks(true, no_craft, |_| {}), "fx_station", TICKS).0, 0);
+    // `targetLocation` lifts every mask.
+    let located = |w: &mut WeaponDef| {
+        w.base.targets.enemy_craft = Some(false);
+        w.base.targets.location = Some(true);
+    };
+    assert!(fight(masks(true, located, |_| {}), "fx_frigate", TICKS).0 > 3);
+}
+
+#[test]
+fn enemy_buildings_and_planets_only_limit_the_weapon() {
+    let no_buildings = |w: &mut WeaponDef| w.base.targets.enemy_buildings = Some(false);
+    assert_eq!(fight(masks(true, no_buildings, |_| {}), "fx_station", TICKS).0, 0);
+    assert!(fight(masks(true, no_buildings, |_| {}), "fx_frigate", TICKS).0 > 3, "craft are still targets");
+    let planets_only = |w: &mut WeaponDef| w.base.targets.enemy_planets_only = Some(true);
+    assert_eq!(fight(masks(true, planets_only, |_| {}), "fx_frigate", TICKS).0, 0);
+}
+
+#[test]
+fn a_shooter_that_only_attacks_planets_fires_at_nothing_else() {
+    let only = |u: &mut sta_content::UnitDef| u.stats.can_only_attack_planets = Some(true);
+    assert_eq!(fight(masks(true, |_| {}, only), "fx_frigate", TICKS).0, 0);
+}
+
+#[test]
+fn the_mask_keys_are_digested_only_under_their_switch() {
+    let weapon = |w: &mut WeaponDef| w.base.targets.enemy_buildings = Some(false);
+    let unit = |u: &mut sta_content::UnitDef| u.stats.can_attack_planets = Some(true);
+    assert_eq!(masks(false, weapon, unit).hash(), sta_content::fake::db().hash());
+    assert_ne!(masks(true, weapon, |_| {}).hash(), masks(true, |_| {}, |_| {}).hash());
+    assert_ne!(masks(true, |_| {}, unit).hash(), masks(true, |_| {}, |_| {}).hash());
 }
