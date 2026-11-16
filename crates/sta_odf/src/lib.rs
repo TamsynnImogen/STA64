@@ -87,11 +87,11 @@ pub fn parse(text: &str) -> RawOdf {
             }
             continue;
         }
-        if is_table_row(line) {
-            if let Some(entry) = continuation.and_then(|index| out.entries.get_mut(index)) {
-                entry.rows.push(line.to_owned());
-                continue;
-            }
+        if is_table_row(line)
+            && let Some(entry) = continuation.and_then(|index| out.entries.get_mut(index))
+        {
+            entry.rows.push(line.to_owned());
+            continue;
         }
         continuation = None;
         if let Some((k, v)) = line.split_once('=') {
