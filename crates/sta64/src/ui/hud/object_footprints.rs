@@ -25,6 +25,7 @@ pub(crate) struct MapFootprintRegions(pub Arc<MapDef>);
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum FootprintKey {
     Sim(EntityId),
+    Pending(EntityId),
     Region(Entity, usize),
 }
 
@@ -57,6 +58,44 @@ fn region_pose(shape: RegionShape) -> Option<FootprintPose> {
 
 fn unit_radius(db: &ContentDb, def: ContentKey, _kind: EntityKind) -> f32 {
     site::obstacle_radius(db, def).to_f32()
+}
+
+fn pending_footprints(
+    feed: &HudFeed,
+    rows: &[sta_sim::production::view::ProductionView],
+    replacing: Option<EntityId>,
+) -> HashMap<FootprintKey, FootprintPose> {
+    let Some(db) = feed.content.as_deref() else {
+        return HashMap::new();
+    };
+    rows.iter()
+        .filter(|row| Some(row.builder) != replacing)
+        .filter(|row| {
+            feed.view
+                .unit(row.builder)
+                .is_some_and(|unit| unit.owner == feed.player)
+        })
+        .filter_map(|row| {
+            let pending = row.site.as_ref()?;
+            let def = db.unit(pending.def)?;
+            if pending.entity.is_some()
+                || EntityKind::of_def(def) != EntityKind::Station
+                || EntityKind::hidden(def)
+                || row.jobs.first().is_none_or(|job| job.started)
+            {
+                return None;
+            }
+            let radius = site::obstacle_radius(db, pending.def).to_f32();
+            Some((
+                FootprintKey::Pending(row.builder),
+                FootprintPose {
+                    x: pending.pos.x.to_f32(),
+                    z: pending.pos.z.to_f32(),
+                    half: Vec2::splat(radius),
+                },
+            ))
+        })
+        .collect()
 }
 
 fn wanted(
@@ -114,6 +153,7 @@ pub(crate) fn sync_object_footprints(
     feed: Res<HudFeed>,
     maps: Query<(Entity, &MapFootprintRegions)>,
     fog: Option<Res<FogState>>,
+    link: Option<Res<crate::sim_link::SimLink>>,
     mut assets: Option<ResMut<FootprintAssets>>,
     mut meshes: Option<ResMut<Assets<Mesh>>>,
     existing: Query<(Entity, &FootprintKey, &Transform, &Mesh3d)>,
@@ -127,6 +167,13 @@ pub(crate) fn sync_object_footprints(
     }
     let y = active_y.unwrap() + 0.15;
     let mut desired = wanted(&feed, &maps, fog.as_deref());
+    if let Some(link) = link.as_ref() {
+        desired.extend(pending_footprints(
+            &feed,
+            link.production(),
+            state.placing.as_ref().map(|armed| armed.builder),
+        ));
+    }
     let assets = assets.as_mut().unwrap();
     let meshes = meshes.as_mut().unwrap();
     for (entity, key, current, current_mesh) in &existing {
@@ -264,6 +311,61 @@ mod tests {
             grid.set_cell_for_test(cx, cz, true, true);
         }
         FogState { grid, updates: 1 }
+    }
+
+    #[test]
+    fn pending_sites_show_other_owned_reservations_and_leave_when_replaced_or_started() {
+        use sta_sim::production::view::{ConstructionSiteView, ProductionJobView, ProductionView};
+        let db = content();
+        let mut feed = feed(db.clone());
+        let mut view = (*feed.view).clone();
+        view.units.push(unit(&db, 9, "rig", 0, 1000));
+        view.visibility[0].1.push(EntityId(9));
+        feed.view = Arc::new(view);
+        let mut rows = vec![ProductionView {
+            builder: EntityId(9),
+            jobs: vec![ProductionJobView {
+                def: db.key("station").unwrap(),
+                progress: Fixed::ZERO,
+                paid: true,
+                started: false,
+            }],
+            site: Some(ConstructionSiteView {
+                def: db.key("station").unwrap(),
+                pos: SimVec3::from_f32([1500.0, 0.0, 200.0]),
+                heading: (Fixed::ZERO, Fixed::ONE),
+                entity: None,
+            }),
+        }];
+        let pending = pending_footprints(&feed, &rows, Some(EntityId(1)));
+        let pose = pending.get(&FootprintKey::Pending(EntityId(9))).unwrap();
+        assert_eq!(
+            (pose.x, pose.z, pose.half),
+            (
+                1500.0,
+                200.0,
+                Vec2::splat(site::footprint(&db, db.key("station").unwrap()).to_f32())
+            )
+        );
+        assert!(pending_footprints(&feed, &rows, Some(EntityId(9))).is_empty());
+        rows[0].jobs[0].started = true;
+        assert!(
+            pending_footprints(&feed, &rows, None).is_empty(),
+            "in-yard hull is not a reserved station site"
+        );
+        rows[0].jobs[0].started = false;
+        rows[0].site.as_mut().unwrap().entity = Some(EntityId(20));
+        assert!(
+            pending_footprints(&feed, &rows, None).is_empty(),
+            "real station uses the unit footprint"
+        );
+        rows[0].site.as_mut().unwrap().entity = None;
+        rows[0].builder = EntityId(3);
+        assert!(
+            pending_footprints(&feed, &rows, None).is_empty(),
+            "foreign pending jobs stay private"
+        );
+        assert!(pending_footprints(&feed, &[], None).is_empty());
     }
 
     #[test]
