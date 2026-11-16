@@ -64,7 +64,7 @@ STA64 currently has no interactive replay player to host this input.
 
 The resource-grant operation adds at simulation command application time, so repeated codes
 and a purchase in the same tick cannot replace each other's stock. Its new appended TeamOp
-variant requires wire protocol 15 (14 is reserved for the mission-switch package); no snapshot
+variant requires wire protocol 15 (14 introduced mission switches); no snapshot
 layout changes. The earlier TeamOp tags remain unchanged.
 
 Rule evidence: cheat dispatch and resource constants read statically from the original engines;

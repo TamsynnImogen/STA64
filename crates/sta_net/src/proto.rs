@@ -38,8 +38,9 @@ pub const MAGIC: [u8; 4] = *b"S64N";
 /// `Order::Colonize`, tag 17, and `Edit::PlanetPopulation`, tag 46 (SIM-30); 10
 /// appends `Edit::WarpSpeed`, tag 47 (LUA-31); 11 appends `Order::Transport`, tag 18
 /// (SIM-46); 12 appends `Order::Recrew`, tag 19 (SIM-70); 13 appends `Order::Guard`, tag 20 (LUA-39);
-/// 14 appends `Edit::MissionSwitch`, tag 48 (LUA-41).
-pub const PROTOCOL_VERSION: u16 = 14;
+/// 14 appends `Edit::MissionSwitch`, tag 48 (LUA-41); 15 appends
+/// `TeamOp::ResourceAdd`, tag 7 (repeated resource grants).
+pub const PROTOCOL_VERSION: u16 = 15;
 /// Magic, version and body length.
 pub const HEADER_LEN: usize = 10;
 /// Largest frame, header included.
@@ -1684,6 +1685,21 @@ mod tests {
         }
     }
 
+    /// Resource grants append TeamOp tag 7 (protocol 15). Keep the new payload in the
+    /// full-frame round trips and golden, not only the nested enum's unit test.
+    fn resource_grant_sample(seq: u32) -> Command {
+        use sta_sim::command::TeamOp;
+        Command {
+            player: PlayerId::SCRIPT,
+            seq,
+            kind: CommandKind::Edit(Edit::TeamPool(
+                PlayerId(1),
+                TeamOp::ResourceAdd(3),
+                sta_core::Fixed::from_int(200),
+            )),
+        }
+    }
+
     /// `Edit::SetRelation`, Edit tag 45 (protocol 8): the golden covers it.
     fn set_relation_sample(seq: u32) -> Command {
         use sta_sim::view::Relation;
@@ -1830,6 +1846,7 @@ mod tests {
                 planet_population_sample(4),
                 warp_speed_sample(5),
                 mission_switch_sample(6),
+                resource_grant_sample(7),
             ],
             schedule: vec![
                 Scheduled {
@@ -2119,7 +2136,7 @@ mod tests {
     #[test]
     fn golden_encoding_is_pinned() {
         let all: Vec<u8> = samples().iter().flat_map(|m| encode(m).unwrap()).collect();
-        assert_eq!(PROTOCOL_VERSION, 14);
+        assert_eq!(PROTOCOL_VERSION, 15);
         assert_eq!(
             fnv1a64(&all),
             GOLDEN,
@@ -2127,7 +2144,7 @@ mod tests {
         );
     }
 
-    const GOLDEN: u64 = 9486446883983553881;
+    const GOLDEN: u64 = 2106338790910784012;
 
     /// Tags are positional and never move: NET-04 appended 22 to 28 after
     /// `Sections` (21), the last tag of protocol 2.
@@ -2230,8 +2247,25 @@ mod tests {
     fn header_is_little_endian_and_frozen() {
         let bytes = encode(&Message::Ping { nonce: 0 }).unwrap();
         // Ping is tag 12, nonce 0: two body bytes.
-        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 14, 0, 2, 0, 0, 0, 12, 0]);
-        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 14, 0, 0, 0, 0, 0]);
+        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 15, 0, 2, 0, 0, 0, 12, 0]);
+        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 15, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn pre_grant_protocol_is_refused_before_reading_the_new_operation() {
+        let sample = samples()
+            .into_iter()
+            .find(|m| {
+                matches!(m, Message::Turn(t) if t.commands.iter().any(|c| {
+                    matches!(c.kind, CommandKind::Edit(Edit::TeamPool(
+                        _, sta_sim::command::TeamOp::ResourceAdd(_), _
+                    )))
+                }))
+            })
+            .unwrap();
+        let mut bytes = encode(&sample).unwrap();
+        bytes[4..6].copy_from_slice(&14u16.to_le_bytes());
+        assert_eq!(decode(&bytes), Err(ProtoError::Version { found: 14 }));
     }
 
     #[test]
@@ -2347,8 +2381,8 @@ mod tests {
         assert_eq!(peek_header(&bytes), Ok((1, bytes.len() - HEADER_LEN)));
         // A version notice from another build reads as its version.
         let mut notice = version_notice();
-        notice[4..6].copy_from_slice(&15u16.to_le_bytes());
-        assert_eq!(decode(&notice), Err(ProtoError::Version { found: 15 }));
+        notice[4..6].copy_from_slice(&16u16.to_le_bytes());
+        assert_eq!(decode(&notice), Err(ProtoError::Version { found: 16 }));
         // Our own version with no body is not a message.
         assert_eq!(decode(&version_notice()), Err(ProtoError::Empty));
         bytes[0] = b'X';
