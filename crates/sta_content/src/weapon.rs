@@ -12,7 +12,7 @@
 //! | `range`, `refire` | `range`, `shotDelay` (else the first `shotDelay<n>`) seconds, as ticks |
 //! | `damage` | ordnance `damageBase` |
 //! | `shot_speed` | ordnance `shotSpeed`, projectiles only |
-//! | `duration` | ordnance `lifespan` seconds, beams only; `STA64_duration` seconds on the weapon ODF overrides it (point defence has no lifespan) |
+//! | `duration` | ordnance `lifespan` seconds, beams and mining beams (class `minebm`) only; `STA64_duration` seconds on the weapon ODF overrides it (point defence has no lifespan) |
 //! | `fire_sound`, `fx` | `fireSound`; ordnance `shotGeometry` (else `sprite`) |
 //! | specials | `effectTimer`, `energyDrainRate`, `specialEnergyCost`, `disableWeapons` (default on), `decloakOnHit` |
 //! | shot timing | `initialShotDelayModifier` (signed; absent stays `None`), `ignoreShotDelayEffects`; `ordnance_defence` is the weapon's own class `ordnancedefenseweapon` |
@@ -29,6 +29,9 @@ use crate::Warning;
 
 /// Ordnance classes that are drawn as a beam rather than flown.
 pub const BEAM_CLASSES: &[&str] = &["phaser", "utribeam", "unibeam", "pdlbeam", "holding_bm", "tractor_bm"];
+
+/// The ordnance class of a mining beam (freighters' and orbital stations').
+pub const MINING_BEAM_CLASS: &str = "minebm";
 
 /// Weapon classes that shoot down ordnance.
 const POINT_DEFENCE: &[&str] = &["ordnancedefenseweapon", "pointdefenselaser"];
@@ -127,7 +130,15 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
         d.fx = o.text("shotGeometry").or_else(|| o.text("sprite"));
         match kind {
             WeaponKind::Beam => d.duration = o.ticks("lifespan"),
-            _ => d.shot_speed = o.fixed("shotSpeed"),
+            _ => {
+                d.shot_speed = o.fixed("shotSpeed");
+                // A mining beam (class `minebm`) is not one of the drawn beam classes above and stays a
+                // projectile kind, but its `lifeSpan` is how long each pulse lives: the orbital income of
+                // the sim and the drawn beam both read it (read from data; the kind is unchanged).
+                if ord_class.as_deref() == Some(MINING_BEAM_CLASS) {
+                    d.duration = o.ticks("lifespan");
+                }
+            }
         }
     } else if kind != WeaponKind::Beam || d.range > Fixed::ZERO && d.effect_ticks == 0 && d.energy_cost == Fixed::ZERO {
         // A weapon that shoots but has no ordnance to read damage from.
