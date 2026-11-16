@@ -157,7 +157,7 @@ fn a_planet_takes_one_station_and_a_moon_none() {
     for _ in 0..1500 {
         sim.step(&[]);
     }
-    assert_eq!(orbitals(&sim).len(), 1, "the second rig's order was replaced by the refused one");
+    assert_eq!(orbitals(&sim).len(), 2, "a refused replacement keeps the second rig's valid reservation");
 }
 
 #[test]
