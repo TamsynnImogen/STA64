@@ -62,7 +62,7 @@
 //!
 //! Grids, fields and nearest-cell answers are cached by the full set of
 //! inputs that build them ([`grid::Spec`] equality and exact keys), never by
-//! a hash, so the cache cannot change a result (a grid whose cells equal a
+//! a hash (or, for a grid, equal cell costs), so the cache cannot change a result (a grid whose cells equal a
 //! cached one's is that one: a solid that moves less than a cell, as an orbiting
 //! station does, keeps its fields); it is outside the digest and
 //! snapshots.
@@ -150,7 +150,10 @@ impl Cache {
         // Shapes that moved and came to the same costs (as one cell centre leaves and another
         // enters) are the cached grid too.
         if let Some(i) = self.grids.iter().position(|(_, o)| o.same_cells(&g)) {
-            let e = self.grids.remove(i);
+            // The cells are the cached ones, so its fields stay valid under its id; the entry takes
+            // the new spec, so the next tick's footprint compare starts from where the solids are now.
+            let (old, _) = self.grids.remove(i);
+            let e = (old, Arc::new(g));
             self.grids.insert(0, e.clone());
             return e;
         }
