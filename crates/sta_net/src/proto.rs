@@ -37,8 +37,8 @@ pub const MAGIC: [u8; 4] = *b"S64N";
 /// team pool); 8 appends `Edit::SetRelation`, tag 45 (SIM-63); 9 appends
 /// `Order::Colonize`, tag 17, and `Edit::PlanetPopulation`, tag 46 (SIM-30); 10
 /// appends `Edit::WarpSpeed`, tag 47 (LUA-31); 11 appends `Order::Transport`, tag 18
-/// (SIM-46); 12 appends `Order::Recrew`, tag 19 (SIM-70).
-pub const PROTOCOL_VERSION: u16 = 12;
+/// (SIM-46); 12 appends `Order::Recrew`, tag 19 (SIM-70); 13 appends `Order::Guard`, tag 20 (LUA-39).
+pub const PROTOCOL_VERSION: u16 = 13;
 /// Magic, version and body length.
 pub const HEADER_LEN: usize = 10;
 /// Largest frame, header included.
@@ -1738,6 +1738,15 @@ mod tests {
         }
     }
 
+    /// `Order::Guard`, Order tag 20 (protocol 13): the golden covers it.
+    fn guard_sample(player: u8, seq: u32) -> Command {
+        Command {
+            player: PlayerId(player),
+            seq,
+            kind: CommandKind::Order(Order::Guard { units: vec![EntityId(4)], ward: EntityId(9) }),
+        }
+    }
+
     fn text(player: u8, seq: u32, t: &str) -> Command {
         Command {
             player: PlayerId(player),
@@ -1803,6 +1812,7 @@ mod tests {
                 colonize_sample(2, 1),
                 transport_sample(2, 2),
                 recrew_sample(2, 3),
+                guard_sample(2, 4),
                 edit(0),
                 text(PlayerId::SCRIPT.0, 1, ""),
                 team_pool_edit(2),
@@ -2098,7 +2108,7 @@ mod tests {
     #[test]
     fn golden_encoding_is_pinned() {
         let all: Vec<u8> = samples().iter().flat_map(|m| encode(m).unwrap()).collect();
-        assert_eq!(PROTOCOL_VERSION, 12);
+        assert_eq!(PROTOCOL_VERSION, 13);
         assert_eq!(
             fnv1a64(&all),
             GOLDEN,
@@ -2106,7 +2116,7 @@ mod tests {
         );
     }
 
-    const GOLDEN: u64 = 17039927170744811663;
+    const GOLDEN: u64 = 10081208295799762682;
 
     /// Tags are positional and never move: NET-04 appended 22 to 28 after
     /// `Sections` (21), the last tag of protocol 2.
@@ -2209,8 +2219,8 @@ mod tests {
     fn header_is_little_endian_and_frozen() {
         let bytes = encode(&Message::Ping { nonce: 0 }).unwrap();
         // Ping is tag 12, nonce 0: two body bytes.
-        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 12, 0, 2, 0, 0, 0, 12, 0]);
-        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 12, 0, 0, 0, 0, 0]);
+        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 13, 0, 2, 0, 0, 0, 12, 0]);
+        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 13, 0, 0, 0, 0, 0]);
     }
 
     #[test]
@@ -2326,8 +2336,8 @@ mod tests {
         assert_eq!(peek_header(&bytes), Ok((1, bytes.len() - HEADER_LEN)));
         // A version notice from another build reads as its version.
         let mut notice = version_notice();
-        notice[4..6].copy_from_slice(&13u16.to_le_bytes());
-        assert_eq!(decode(&notice), Err(ProtoError::Version { found: 13 }));
+        notice[4..6].copy_from_slice(&14u16.to_le_bytes());
+        assert_eq!(decode(&notice), Err(ProtoError::Version { found: 14 }));
         // Our own version with no body is not a message.
         assert_eq!(decode(&version_notice()), Err(ProtoError::Empty));
         bytes[0] = b'X';

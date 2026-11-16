@@ -43,20 +43,44 @@ fn install_progress(app: &mut App, progress: Option<f32>) {
 
 #[test]
 fn installed_station_reveals_opaque_chunks_offscreen() {
+    installed_reveal(false);
+}
+
+#[test]
+fn installed_ship_preview_reveals_opaque_chunks_without_a_sim_entity() {
+    if std::env::var("STA64_SHIP_CONSTRUCTION_TESTS").as_deref() != Ok("1") {
+        eprintln!(
+            "SKIP: set STA64_SHIP_CONSTRUCTION_TESTS=1 as well as the construction GPU gates"
+        );
+        return;
+    }
+    installed_reveal(true);
+}
+
+fn installed_reveal(preview: bool) {
     if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1")
         || std::env::var("STA64_CONSTRUCTION_TESTS").as_deref() != Ok("1")
     {
-        eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_CONSTRUCTION_TESTS=1 and STA64_TEST_INSTALL/STA64_TEST_MOD");
+        eprintln!(
+            "SKIP: set STA64_GPU_TESTS=1 STA64_CONSTRUCTION_TESTS=1 and STA64_TEST_INSTALL/STA64_TEST_MOD"
+        );
         return;
     }
     let root = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
-    let active_mod = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
-    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), active_mod.as_deref()).unwrap();
+    let active_mod = std::env::var("STA64_TEST_MOD")
+        .ok()
+        .filter(|m| !m.is_empty());
+    let vfs =
+        sta_vfs::Vfs::mount_install(std::path::Path::new(&root), active_mod.as_deref()).unwrap();
     let model_key = std::env::var("STA64_TEST_MODEL").unwrap_or_else(|_| "fbase".into());
     let (path, fmt) = sta_assets::find_model(&vfs, &model_key).expect("requested station model");
     let model = sta_assets::load_model(&vfs, &path, fmt).unwrap();
     let (lo, hi) = model.bounds().expect("station bounds");
-    let centre = Vec3::new((lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, -(lo[2] + hi[2]) * 0.5);
+    let centre = Vec3::new(
+        (lo[0] + hi[0]) * 0.5,
+        (lo[1] + hi[1]) * 0.5,
+        -(lo[2] + hi[2]) * 0.5,
+    );
     let radius = (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5;
     let mut app = App::new();
     app.add_plugins(
@@ -94,7 +118,10 @@ fn installed_station_reveals_opaque_chunks_offscreen() {
         None,
     );
     target_image.asset_usage = RenderAssetUsages::RENDER_WORLD;
-    let target = app.world_mut().resource_mut::<Assets<Image>>().add(target_image);
+    let target = app
+        .world_mut()
+        .resource_mut::<Assets<Image>>()
+        .add(target_image);
     app.world_mut().spawn((
         Camera3d::default(),
         RenderTarget::from(target.clone()),
@@ -121,11 +148,19 @@ fn installed_station_reveals_opaque_chunks_offscreen() {
             let sprites = sta_assets::a2fmt::spr::SpriteTable::default();
             let mut parts = crate::render::model_scene::PartCache::default();
             for progress in [0.0, 1.0] {
-                let root = commands.spawn((Transform::IDENTITY, Visibility::Hidden)).id();
+                let root = commands
+                    .spawn((Transform::IDENTITY, Visibility::Hidden))
+                    .id();
                 if progress == 0.0 {
-                    commands
-                        .entity(root)
-                        .insert(crate::sim_link::SimEntity(sta_sim::EntityId(1)));
+                    if preview {
+                        commands
+                            .entity(root)
+                            .insert(super::ConstructionPreview(0.0));
+                    } else {
+                        commands
+                            .entity(root)
+                            .insert(crate::sim_link::SimEntity(sta_sim::EntityId(1)));
+                    }
                 }
                 stages.0.push(root);
                 let mut ctx = crate::render::model_scene::SpawnCtx {
@@ -148,9 +183,15 @@ fn installed_station_reveals_opaque_chunks_offscreen() {
                     unlit: false,
                     scale: 1.0,
                 };
-                let stats = crate::render::model_scene::spawn_construction(&mut ctx, &model, root, 24, progress);
+                let stats = crate::render::model_scene::spawn_construction(
+                    &mut ctx, &model, root, 24, progress,
+                );
                 assert!(stats.meshes > 0 && stats.triangles > 0);
-                assert!(stats.missing_textures.is_empty(), "{:?}", stats.missing_textures);
+                assert!(
+                    stats.missing_textures.is_empty(),
+                    "{:?}",
+                    stats.missing_textures
+                );
             }
         },
     );
@@ -159,17 +200,39 @@ fn installed_station_reveals_opaque_chunks_offscreen() {
     app.update();
     let roots = app.world().resource::<Stages>().0.clone();
     let frames = Arc::new(Mutex::new(Vec::<Image>::new()));
-    let captures = [
-        (Some(0.5), Some(None)),
-        (Some(0.5), Some(Some(0.5))),
-        (Some(0.75), Some(Some(0.5))),
-        (Some(0.5), None), // Missing work entry keeps ordinary progress unblocked.
-        (Some(1.0), Some(None)),
-        (None, None), // Unblocked full reference instance.
-    ];
+    let captures = if preview {
+        [
+            (Some(0.0), None),
+            (Some(0.25), None),
+            (Some(0.5), None),
+            (Some(0.75), None),
+            (Some(1.0), None),
+            (None, None),
+        ]
+    } else {
+        [
+            (Some(0.5), Some(None)),
+            (Some(0.5), Some(Some(0.5))),
+            (Some(0.75), Some(Some(0.5))),
+            (Some(0.5), None), // Missing work entry keeps ordinary progress unblocked.
+            (Some(1.0), Some(None)),
+            (None, None), // Unblocked full reference instance.
+        ]
+    };
     for (stage, (progress, start)) in captures.into_iter().enumerate() {
         if stage < 5 {
             install_progress(&mut app, progress);
+            if preview {
+                app.world_mut()
+                    .get_mut::<super::ConstructionPreview>(roots[0])
+                    .unwrap()
+                    .0 = progress.unwrap();
+                assert!(
+                    app.world()
+                        .get::<crate::sim_link::SimEntity>(roots[0])
+                        .is_none()
+                );
+            }
         }
         {
             let mut work = app.world_mut().resource_mut::<super::ConstructionWork>();
@@ -211,7 +274,10 @@ fn installed_station_reveals_opaque_chunks_offscreen() {
     for (stage, image) in frames.lock().unwrap().iter().enumerate() {
         let dynamic = image.clone().try_into_dynamic().unwrap();
         let rgba = dynamic.to_rgba8();
-        let mask: Vec<bool> = rgba.pixels().map(|p| p[0].max(p[1]).max(p[2]) > 20).collect();
+        let mask: Vec<bool> = rgba
+            .pixels()
+            .map(|p| p[0].max(p[1]).max(p[2]) > 20)
+            .collect();
         eprintln!(
             "{model_key} construction stage {stage}: {} lit pixels",
             mask.iter().filter(|&&p| p).count()
@@ -220,21 +286,40 @@ fn installed_station_reveals_opaque_chunks_offscreen() {
         if let Ok(dir) = std::env::var("STA64_GPU_OUT") {
             std::fs::create_dir_all(&dir).unwrap();
             dynamic
-                .save(std::path::Path::new(&dir).join(format!("construction-{model_key}-{stage}.png")))
+                .save(
+                    std::path::Path::new(&dir)
+                        .join(format!("construction-{model_key}-{stage}.png")),
+                )
                 .unwrap();
         }
     }
-    let counts: Vec<usize> = masks.iter().map(|m| m.iter().filter(|&&p| p).count()).collect();
-    assert_eq!(counts[0], 0, "pre-weld progress must not display the hull");
-    assert_eq!(counts[0], counts[1], "latched first weld must not jump visual progress");
-    assert!(
-        counts[2] > 100 && counts[2] < counts[4],
-        "station fails partial/full reveal: {counts:?}"
-    );
-    assert_eq!(
-        counts[2], counts[3],
-        "missing work entry must use ordinary sim progress"
-    );
+    let counts: Vec<usize> = masks
+        .iter()
+        .map(|m| m.iter().filter(|&&p| p).count())
+        .collect();
+    assert_eq!(counts[0], 0, "zero progress must not display the hull");
+    if preview {
+        assert!(
+            counts[1] > 100
+                && counts[1] < counts[2]
+                && counts[2] <= counts[3]
+                && counts[3] < counts[4],
+            "ship hull does not progressively appear: {counts:?}"
+        );
+    } else {
+        assert_eq!(
+            counts[0], counts[1],
+            "latched first weld must not jump visual progress"
+        );
+        assert!(
+            counts[2] > 100 && counts[2] < counts[4],
+            "station fails partial/full reveal: {counts:?}"
+        );
+        assert_eq!(
+            counts[2], counts[3],
+            "missing work entry must use ordinary sim progress"
+        );
+    }
     let outside = masks[2]
         .iter()
         .zip(&masks[4])
@@ -249,10 +334,16 @@ fn installed_station_reveals_opaque_chunks_offscreen() {
         .zip(&masks[5])
         .filter(|(finished, original)| finished != original)
         .count();
-    assert_eq!(mismatch, 0, "completed station differs from the original shared mesh");
+    assert_eq!(
+        mismatch, 0,
+        "completed station differs from the original shared mesh"
+    );
     let world = app.world_mut();
     assert_eq!(
-        world.query::<&super::ConstructionPart>().iter(world).count(),
+        world
+            .query::<&super::ConstructionPart>()
+            .iter(world)
+            .count(),
         0,
         "private reveal data survives completion"
     );
