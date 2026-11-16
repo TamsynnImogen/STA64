@@ -92,7 +92,7 @@ fn flag_names(flags: UnitFlags) -> Vec<String> {
 }
 
 fn unit_info(link: &SimLink, content: &ContentDb, replay: &Replay, id: EntityId) -> Option<UnitInfo> {
-    let u = link.curr().unit(id)?;
+    let u = link.real_curr().unit(id)?;
     Some(UnitInfo {
         id: id.0,
         def: content.name(u.def).map(str::to_owned),
@@ -125,7 +125,7 @@ pub struct Looking {
 /// `None` when the link keeps no replay (not a match) or has no snapshot.
 pub fn take(link: &mut SimLink, meta: &MatchMeta, content: &ContentDb, looking: &Looking) -> Option<Capture> {
     let replay = link.replay()?.clone();
-    let view = link.curr().clone();
+    let view = link.real_curr().clone();
     let mut index = CaptureIndex::new(&replay, content, view.tick, view.digest, meta.start, capture::now_unix(), build_info());
     index.mount = meta.mount.clone();
     index.units_total = view.units.len();
