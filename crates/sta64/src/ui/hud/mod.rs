@@ -28,6 +28,7 @@
 
 mod cinematic;
 mod footprint;
+pub(crate) mod object_footprints;
 pub mod frame;
 pub mod ghost;
 pub mod layout;
@@ -178,7 +179,7 @@ impl Plugin for HudPlugin {
                     place_on_click.run_if(resource_exists::<Aim>).run_if(not(crate::ui::presentation::cutscene_running)),
                     ghost::update_ghost,
                     ghost::tint_ghost,
-                    ghost::sync_footprints,
+                    (ghost::sync_footprints, object_footprints::sync_object_footprints).chain(),
                     super::gui_sprites::paint.after(super::theme::WidgetPaint),
                 )
                     .chain()
@@ -485,6 +486,8 @@ fn place_on_click(
     mut targets: ResMut<OrderTargets>,
     bounds: Res<ghost::PlacementBounds>,
     mut notices: MessageWriter<Notice>,
+    profile: Option<Res<crate::ui::profile::UiProfile>>,
+    strings: Option<Res<crate::ui::i18n::Strings>>,
 ) {
     if keys
         .as_ref()
@@ -545,7 +548,9 @@ fn place_on_click(
     };
     let Some(at) = ground_point(a.ray, b.pos.y.to_f32()) else { return };
     if !ghost::affordable(&feed, &armed) {
-        notices.write(Notice::new(Severity::Warn, tr("Cannot build: not enough resources")));
+        let text = stock::a1::costs::refusal(&feed, profile.as_deref(), strings.as_deref(), armed.what)
+            .unwrap_or_else(|| tr("Cannot build: not enough resources"));
+        notices.write(Notice::new(Severity::Warn, text));
         return;
     }
     // The sim's own rule, as the ghost shows it: a refused site keeps the
