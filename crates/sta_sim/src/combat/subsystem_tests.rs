@@ -107,6 +107,31 @@ fn switches_are_recorded_and_engines_and_weapons_stay_flags() {
 }
 
 #[test]
+fn disabled_shields_drop_hold_and_resume_without_changing_the_maximum() {
+    let (mut sim, id, _) = world();
+    assert!(script(&mut sim, Edit::Subsystem(id, Subsystem::Shields, false)));
+    for _ in 0..10 { sim.step(&[]); }
+    assert_eq!(now(&sim, id), Fixed::ZERO);
+    assert_eq!(sim.units.get(id).unwrap().shields.max, Fixed::from_int(400));
+    // A fill while disabled cannot leave effective shields behind.
+    assert!(script(&mut sim, Edit::ShieldPercent(id, Fixed::ONE)));
+    assert_eq!(now(&sim, id), Fixed::ZERO);
+    assert!(script(&mut sim, Edit::Subsystem(id, Subsystem::Shields, true)));
+    assert!(now(&sim, id) > Fixed::ZERO);
+}
+
+#[test]
+fn older_snapshot_with_charged_disabled_shields_is_normalized_before_combat() {
+    let (mut sim, id, _) = world();
+    sim.subsystems.set_off_for_test(id);
+    assert!(now(&sim, id) > Fixed::ZERO, "older state-only switch behavior");
+    let mut loaded = Sim::from_snapshot(&sim.snapshot(), sim.content.clone()).unwrap();
+    loaded.step(&[]);
+    assert_eq!(now(&loaded, id), Fixed::ZERO);
+    assert!(!loaded.subsystem_state(id, Subsystem::Shields).unwrap().0);
+}
+
+#[test]
 fn damage_adds_clamps_to_the_hit_points_and_repairs_when_negative() {
     let (mut sim, id, _) = world();
     assert!(script(&mut sim, Edit::SubsystemDamage(id, Subsystem::Engines, Fixed::from_int(50))));

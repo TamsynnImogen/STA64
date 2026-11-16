@@ -589,7 +589,11 @@ pub(super) fn active(hud: Res<HudState>, mut buttons: Query<(&GridCell, &mut Gui
     }
 }
 
-pub(super) fn navigate(mut clicks: MessageReader<ButtonClicked>, nav: Query<&StockNav>, mut state: ResMut<StockState>) {
+pub(super) fn navigate(mut clicks: MessageReader<ButtonClicked>, nav: Query<&StockNav>, mut state: ResMut<StockState>, cheat: Option<Res<crate::cheats::input::CheatInput>>) {
+    if cheat.is_some_and(|c| c.open || c.blocked_this_frame) {
+        clicks.read().for_each(drop);
+        return;
+    }
     for ButtonClicked(entity) in clicks.read() {
         if let Ok(nav) = nav.get(*entity) {
             state.build_page = state.build_page.saturating_add_signed(nav.0 as isize);

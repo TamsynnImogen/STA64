@@ -55,6 +55,7 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
     // input — one line per package, append inside your lane's block
     if map_view {
         app.add_plugins(InputPlugin);
+        app.add_plugins(crate::cheats::CheatsPlugin);
     }
 
     // UI-30: scripted camera shots from mission presentation requests

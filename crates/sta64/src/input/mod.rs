@@ -72,7 +72,8 @@ impl Plugin for InputPlugin {
                     // button (or the backdrop) must not select or order them.
                     .distributive_run_if(not(resource_exists::<crate::frontend::scene::MenuScene>))
                     // The in-game menu (UI-34) is over the match: nothing under it takes a click or a key.
-                    .distributive_run_if(crate::ui::ingame_menu::menu_closed),
+                    .distributive_run_if(crate::ui::ingame_menu::menu_closed)
+                    .distributive_run_if(crate::cheats::input::game_input_free),
             );
     }
 }

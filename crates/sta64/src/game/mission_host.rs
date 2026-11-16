@@ -467,7 +467,8 @@ fn run_mission(
         && let Some(o) = handle.with(|rt| scan_outcome(rt, tick))
     {
         let gaps = handle.with(sta_mission::blocked::gaps);
-        if sta_mission::blocked::is_blocked(o.won, &gaps) {
+        let forced = handle.with(MissionRuntime::mission_end_forced);
+        if !forced && sta_mission::blocked::is_blocked(o.won, &gaps) {
             let why = sta_mission::blocked::summary(&gaps);
             warn!("mission: {} ended in a loss after unsupported calls ({why}): blocked, not counted", run.campaign);
             run.blocked = Some(why);
