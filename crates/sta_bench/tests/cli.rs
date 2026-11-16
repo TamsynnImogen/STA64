@@ -2,16 +2,119 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+struct TempDir(PathBuf);
+
+impl TempDir {
+    fn new(tag: &str) -> Self {
+        let base = std::env::temp_dir();
+        loop {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let serial = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = base.join(format!(
+                "sta-bench-cli-{tag}-{}-{nanos}-{serial}",
+                std::process::id()
+            ));
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Self(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create temporary directory {}: {error}", path.display()),
+            }
+        }
+    }
+}
+
+impl std::ops::Deref for TempDir {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl AsRef<Path> for TempDir {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.0) {
+            eprintln!(
+                "could not clean temporary directory {}: {error}",
+                self.0.display()
+            );
+        }
+    }
+}
 
 fn bench_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench")
 }
 
-fn tmp(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("sta-bench-cli-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
+fn tmp(name: &str) -> TempDir {
+    TempDir::new(name)
+}
+
+#[test]
+fn temp_dir_removes_nested_contents_on_drop() {
+    let path;
+    {
+        let dir = tmp("cleanup-nested");
+        path = dir.to_path_buf();
+        std::fs::create_dir_all(dir.join("nested")).unwrap();
+        std::fs::write(dir.join("nested/file"), b"fixture").unwrap();
+    }
+    assert!(!path.exists());
+}
+
+#[test]
+fn temp_dir_removes_contents_when_scope_unwinds() {
+    let dir = tmp("cleanup-unwind");
+    let path = dir.to_path_buf();
+    let result = std::panic::catch_unwind(move || {
+        std::fs::write(dir.join("fixture"), b"fixture").unwrap();
+        panic!("synthetic test unwind");
+    });
+    assert!(result.is_err());
+    assert!(!path.exists());
+}
+
+#[test]
+fn temp_dirs_with_the_same_tag_are_isolated_and_preserve_siblings() {
+    let first = tmp("same-tag");
+    let second = tmp("same-tag");
+    assert_ne!(first.as_ref(), second.as_ref());
+    std::fs::write(first.join("first"), b"one").unwrap();
+    std::fs::write(second.join("second"), b"two").unwrap();
+    let first_path = first.to_path_buf();
+    let second_path = second.to_path_buf();
+    drop(first);
+    assert!(!first_path.exists());
+    assert_eq!(std::fs::read(second_path.join("second")).unwrap(), b"two");
+}
+
+#[cfg(unix)]
+#[test]
+fn temp_dir_cleanup_does_not_follow_symlinks() {
+    let outside = tmp("symlink-outside");
+    let owned = tmp("symlink-owned");
+    std::fs::write(outside.join("keep"), b"preserve").unwrap();
+    std::os::unix::fs::symlink(outside.as_ref(), owned.join("link")).unwrap();
+    let outside_path = outside.to_path_buf();
+    drop(owned);
+    assert_eq!(
+        std::fs::read(outside_path.join("keep")).unwrap(),
+        b"preserve"
+    );
 }
 
 fn run(args: &[&str]) -> Output {
