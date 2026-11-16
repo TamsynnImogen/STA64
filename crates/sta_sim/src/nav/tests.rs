@@ -701,7 +701,8 @@ fn a_changed_frame_body_hazard_area_cost_or_solid_count_builds() {
     let mut cache = Cache::default();
     cache.grid(base());
     let mut expected = 1;
-    let variants: Vec<(&str, Box<dyn Fn(&mut super::grid::Spec)>)> = vec![
+    type Change = Box<dyn Fn(&mut super::grid::Spec)>;
+    let variants: Vec<(&str, Change)> = vec![
         ("body", Box::new(|s| s.body = Fixed::from_int(90))),
         ("default cost", Box::new(|s| s.default_cost = 3)),
         ("hazard", Box::new(|s| s.hazards.push(Hazard { shape: Solid::Sphere { centre: v(1000, 1000), radius: Fixed::from_int(200) }, cost: 50 }))),
