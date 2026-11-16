@@ -67,7 +67,7 @@ fn installed_ghost_is_readable_without_lights() {
             view: std::sync::Arc::default(),
             player: sta_sim::PlayerId(0),
             selected: Vec::new(),
-            content: Some(db),
+            content: Some(db), ..Default::default()
         })
         .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(GlobalAmbientLight {

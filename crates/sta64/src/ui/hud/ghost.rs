@@ -451,7 +451,7 @@ mod tests {
             view: Arc::new(WorldView::default()),
             player: PlayerId(0),
             selected: Vec::new(),
-            content: Some(Arc::new(db)),
+            content: Some(Arc::new(db)), ..Default::default()
         });
         world.insert_resource(Assets::<Mesh>::default());
         world.insert_resource(Assets::<StandardMaterial>::default());
@@ -528,7 +528,7 @@ mod tests {
             view: Arc::new(WorldView::default()),
             player: PlayerId(0),
             selected: Vec::new(),
-            content: Some(Arc::new(db)),
+            content: Some(Arc::new(db)), ..Default::default()
         });
         world.insert_resource(HudState::default());
         let root = world
