@@ -59,11 +59,25 @@ pub(super) fn text(commands: &mut Commands, root: Entity, r: R, value: String, c
     text_styled(commands, root, r, value, color, size, kind, SpriteTextStyle::default().stock_label())
 }
 
+/// A resource readout: the number is centred, both ways, in its cfg text rectangle, not
+/// top-left anchored with a baseline lift. Armada II stock: measured on one original
+/// 1280x720 frame, the digits' ink centre lies within 1 px of the rectangle's centre on
+/// both axes (rectangles scaled per axis from the sheet). Armada I: not measured (its
+/// rectangle sits centred in its panel, which suggests the same rule); TODO.md has the check.
+pub(super) fn readout(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>) -> Entity {
+    text_styled(commands, root, r, value, color, size, kind, SpriteTextStyle::default().stock_label().centered_in_box())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn text_styled(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>, style: SpriteTextStyle) -> Entity {
     // SpriteFontPlugin replaces the SpriteText entity's Node while resolving glyphs.
     // Keep authored placement on a separate parent that it never rewrites.
-    let wrapper = commands.spawn((node(r), Pickable::IGNORE)).id();
+    let mut wrap_node = node(r);
+    if style.in_box {
+        wrap_node.align_items = AlignItems::Center;
+        wrap_node.justify_content = JustifyContent::Center;
+    }
+    let wrapper = commands.spawn((wrap_node, Pickable::IGNORE)).id();
     let size = if style.min_size { size.max(18.0) } else { size };
     let mut e = commands.spawn(sprite_text_styled(value, size, color, style));
     if let Some(kind) = kind {
@@ -229,7 +243,7 @@ fn spawn_separate_resources(commands: &mut Commands, root: Entity, layout: &Stoc
             continue;
         };
         let value = resource_text(feed, id).unwrap_or_default();
-        text(commands, root, r, value, theme.text, theme.small_size, Some(StockText::Resource(id)));
+        readout(commands, root, r, value, theme.text, theme.small_size, Some(StockText::Resource(id)));
     }
 }
 
@@ -263,7 +277,7 @@ pub(super) fn spawn_resource(commands: &mut Commands, root: Entity, layout: &Sto
             continue;
         };
         let color = resource_colour(layout, id, theme.text);
-        text(
+        readout(
             commands,
             root,
             r,
@@ -843,6 +857,68 @@ mod tests {
     fn fixed_whole_values_truncate_toward_zero_without_float_rounding() {
         assert_eq!(whole(Fixed::from_bits(Fixed::ONE.to_bits() * 16_777_217)), 16_777_217);
         assert_eq!(whole(Fixed::from_bits(-Fixed::ONE.to_bits() - 1)), -1);
+    }
+
+    /// Readouts are centred in their rectangle on both axes, whatever its size and the
+    /// window's (the rectangle is already in logical px); other stock text is not.
+    /// Rule on installed data, no values: every resource readout's text rectangle lies inside
+    /// its panel (the single strip, or each separate panel of the Armada I family).
+    #[test]
+    fn installed_resource_text_rectangles_lie_inside_their_panels() {
+        let Some(root) = std::env::var_os("STA64_TEST_INSTALL") else { return };
+        let Ok(mode) = std::env::var("STA64_TEST_MOD") else { return };
+        let Ok(vfs) = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(&mode)) else { return };
+        let Some(cfg) = crate::game::gui_layout(&vfs, "gui_fed.cfg") else { return };
+        for canvas in [Vec2::new(1024.0, 768.0), Vec2::new(2752.0, 1152.0)] {
+            let layout = StockLayout::new(&cfg, canvas);
+            let inside = |outer: R, inner: R| {
+                inner.x >= outer.x - 0.01 && inner.y >= outer.y - 0.01 && inner.right() <= outer.right() + 0.01 && inner.bottom() <= outer.bottom() + 0.01
+            };
+            let mut checked = 0;
+            if super::super::separate_resources(&layout) {
+                for (prefix, ..) in SEPARATE_RESOURCES {
+                    let Some(panel) = layout.panel(prefix) else { continue };
+                    let Some(text) = layout.at(Vec2::new(panel.x, panel.y), &format!("{prefix}TextArea")) else { continue };
+                    assert!(inside(panel, text), "{mode}: {prefix} text {text:?} outside panel {panel:?}");
+                    checked += 1;
+                }
+            } else if let Some(panel) = layout.panel("resource") {
+                for id in 0..6 {
+                    let Some(text) = layout.at(Vec2::new(panel.x, panel.y), &format!("resource_{id}")) else { continue };
+                    assert!(inside(panel, text), "{mode}: resource_{id} text {text:?} outside panel {panel:?}");
+                    checked += 1;
+                }
+            }
+            eprintln!("{mode} {canvas:?}: {checked} readout rectangles inside their panels");
+        }
+    }
+
+    #[test]
+    fn readout_wrapper_centres_its_text_in_the_rectangle() {
+        for r in [R::new(10.0, 4.0, 60.0, 12.0), R::new(500.0, 40.0, 300.0, 60.0)] {
+            let mut world = World::new();
+            let root = world.spawn(Node::default()).id();
+            let mut queue = CommandQueue::default();
+            {
+                let mut commands = Commands::new(&mut queue, &world);
+                readout(&mut commands, root, r, "10".into(), Color::WHITE, 12.0, Some(StockText::Resource(2)));
+                text(&mut commands, root, r, "10".into(), Color::WHITE, 12.0, None);
+            }
+            queue.apply(&mut world);
+            let mut found = Vec::new();
+            for (node, kids) in world.query::<(&Node, &Children)>().iter(&world) {
+                if node.position_type == PositionType::Absolute && node.left == Val::Px(r.x) {
+                    let kid = kids[0];
+                    let centred = world.get::<crate::ui::sprite_font::SpriteTextStyle>(kid).unwrap().in_box;
+                    found.push((centred, node.align_items, node.justify_content, node.width, node.height));
+                }
+            }
+            found.sort_by_key(|f| !f.0);
+            assert_eq!(found.len(), 2);
+            assert_eq!(found[0], (true, AlignItems::Center, JustifyContent::Center, Val::Px(r.w), Val::Px(r.h)));
+            assert_ne!(found[1].1, AlignItems::Center);
+            assert_ne!(found[1].2, JustifyContent::Center);
+        }
     }
 
     #[test]
