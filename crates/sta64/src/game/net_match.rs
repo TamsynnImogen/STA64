@@ -332,6 +332,10 @@ impl WorldSource for PeerSource {
     fn production_view(&self) -> Vec<sta_sim::production::view::ProductionView> {
         self.0.lock().peer.sim().production_view()
     }
+
+    fn cargo_view(&self) -> Vec<sta_sim::economy::view::CargoView> {
+        self.0.lock().peer.sim().cargo_view()
+    }
 }
 
 // ---------------------------------------------------------------------------
