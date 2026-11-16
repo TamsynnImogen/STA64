@@ -460,7 +460,73 @@ pub struct UnitDef {
     /// The resolved ODF, so loaders and tools can reach keys no field reads.
     /// The simulation never reads it (D9): what it needs is a typed field.
     /// Empty for definitions not made from an ODF.
+    /// The craft and object keys both stock games read (CON-55). Typed
+    /// only: SIM-74 applies them.
+    pub stats: UnitStatsDef,
     pub raw: Arc<sta_odf::Odf>,
+}
+
+/// Craft and object stat keys (CON-55), each `None` (a list: empty) when the
+/// ODF does not set it. The key names and value types are read from the stock
+/// executables, static; nothing here is measured. Not yet applied by the sim.
+/// System slots are in [`UnitDef::system_hit_points`] order: engines, weapons,
+/// shield generator, life support, sensors.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct UnitStatsDef {
+    /// `intrinsicValue`: the unit's worth to target scoring and the AI.
+    pub intrinsic_value: Option<Fixed>,
+    /// `criticalHitPercent` (Armada I).
+    pub critical_hit_percent: Option<Fixed>,
+    /// `hullTargetHardpoints`, as written: an empty name keeps its place.
+    pub hull_target_hardpoints: Vec<String>,
+    /// `criticalTargetHardpoints`.
+    pub critical_target_hardpoints: Vec<String>,
+    /// `<system>TargetHardpoints` per system slot.
+    pub system_target_hardpoints: [Vec<String>; 5],
+    /// `<system>SparkTime` per system slot, seconds.
+    pub system_spark_time: [Option<Fixed>; 5],
+    /// `shipType` (Armada II), lower case.
+    pub ship_type: Option<String>,
+    /// `isHero`.
+    pub is_hero: Option<bool>,
+    /// `selfDestruct`: the ODF of the self-destruct weapon, lower case.
+    pub self_destruct: Option<String>,
+    /// `missileDetonator` (Armada II): an ODF name, lower case.
+    pub missile_detonator: Option<String>,
+    /// `defaultGreenAlert`.
+    pub default_green_alert: Option<bool>,
+    /// `alwaysUseSpecialWeapons`.
+    pub always_use_special_weapons: Option<bool>,
+    /// `damagedScan`.
+    pub damaged_scan: Option<Fixed>,
+    /// `avoidanceClass`.
+    pub avoidance_class: Option<i32>,
+    /// `collisionRadius`.
+    pub collision_radius: Option<Fixed>,
+    /// `shieldPad`.
+    pub shield_pad: Option<Fixed>,
+    /// `maxExtraWeapons` (Armada II).
+    pub max_extra_weapons: Option<i32>,
+    /// `canAttackPlanets` (Armada II).
+    pub can_attack_planets: Option<bool>,
+    /// `canOnlyAttackPlanets` (Armada II).
+    pub can_only_attack_planets: Option<bool>,
+    /// `recyclesInPlace` (Armada II).
+    pub recycles_in_place: Option<bool>,
+    /// `shipIsBuiltByEvolution` (Armada II).
+    pub built_by_evolution: Option<bool>,
+    /// `shipIsBuiltByShips` (Armada II).
+    pub built_by_ships: Option<bool>,
+    /// `healthRate` (Armada II).
+    pub health_rate: Option<Fixed>,
+    /// `percentNebulaWarn` (Armada II).
+    pub percent_nebula_warn: Option<Fixed>,
+    /// `dockingSpeedFactor` (Armada I).
+    pub docking_speed_factor: Option<Fixed>,
+    /// `decommissionValue` (Armada I).
+    pub decommission_value: Option<i32>,
+    /// `aiName`: the name the AI build lists know the unit by, lower case.
+    pub ai_name: Option<String>,
 }
 
 /// What a nebula costs the path planner (SIM-23), from its ODF.
@@ -548,6 +614,7 @@ impl UnitDef {
             invalid_as_target: false,
             attack_power: None,
             life: None,
+            stats: UnitStatsDef::default(),
             raw: Arc::new(raw),
         }
     }

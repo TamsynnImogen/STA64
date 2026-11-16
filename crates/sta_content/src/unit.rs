@@ -282,8 +282,69 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
         });
     }
 
+    d.stats = stats(odf, &file, warnings);
     d.movement = movement(phys, &file, warnings);
     d
+}
+
+/// The ODF key stems of the five systems, in `system_hit_points` order.
+const SYSTEMS: [&str; 5] = ["engines", "weapons", "shieldGenerator", "lifeSupport", "sensors"];
+
+/// A list of quoted names as written; an empty `""` keeps its place. Text
+/// outside quotes (a bare word) is taken as one name.
+fn names(raw: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = raw.trim();
+    while !rest.is_empty() {
+        if let Some(quoted) = rest.strip_prefix('"') {
+            let end = quoted.find('"').unwrap_or(quoted.len());
+            out.push(quoted[..end].trim().to_owned());
+            rest = quoted.get(end + 1..).unwrap_or("").trim_start();
+        } else {
+            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            out.push(rest[..end].trim_end_matches(';').to_owned());
+            rest = rest[end..].trim_start();
+        }
+    }
+    out
+}
+
+/// The CON-55 stat keys of a unit ODF. A value that does not parse warns and stays unset.
+fn stats(odf: &Odf, file: &str, warnings: &mut Vec<Warning>) -> crate::def::UnitStatsDef {
+    let mut r = Reader { odf, file, warnings };
+    let signed = |r: &mut Reader, key: &str| r.num(key).map(Fixed::from_f64);
+    let whole = |r: &mut Reader, key: &str| r.num(key).map(|v| v.round() as i32);
+    let name = |r: &Reader, key: &str| r.text(key).map(|t| t.to_ascii_lowercase()).filter(|t| !t.eq_ignore_ascii_case("null"));
+    let list = |key: &str| odf.raw(key).map(names).unwrap_or_default();
+    crate::def::UnitStatsDef {
+        intrinsic_value: signed(&mut r, "intrinsicValue"),
+        critical_hit_percent: signed(&mut r, "criticalHitPercent"),
+        hull_target_hardpoints: list("hullTargetHardpoints"),
+        critical_target_hardpoints: list("criticalTargetHardpoints"),
+        system_target_hardpoints: SYSTEMS.map(|s| list(&format!("{s}TargetHardpoints"))),
+        system_spark_time: SYSTEMS.map(|s| signed(&mut r, &format!("{s}SparkTime"))),
+        ship_type: name(&r, "shipType"),
+        is_hero: r.flag("isHero"),
+        self_destruct: name(&r, "selfDestruct"),
+        missile_detonator: name(&r, "missileDetonator"),
+        default_green_alert: r.flag("defaultGreenAlert"),
+        always_use_special_weapons: r.flag("alwaysUseSpecialWeapons"),
+        damaged_scan: signed(&mut r, "damagedScan"),
+        avoidance_class: whole(&mut r, "avoidanceClass"),
+        collision_radius: signed(&mut r, "collisionRadius"),
+        shield_pad: signed(&mut r, "shieldPad"),
+        max_extra_weapons: whole(&mut r, "maxExtraWeapons"),
+        can_attack_planets: r.flag("canAttackPlanets"),
+        can_only_attack_planets: r.flag("canOnlyAttackPlanets"),
+        recycles_in_place: r.flag("recyclesInPlace"),
+        built_by_evolution: r.flag("shipIsBuiltByEvolution"),
+        built_by_ships: r.flag("shipIsBuiltByShips"),
+        health_rate: signed(&mut r, "healthRate"),
+        percent_nebula_warn: signed(&mut r, "percentNebulaWarn"),
+        docking_speed_factor: signed(&mut r, "dockingSpeedFactor"),
+        decommission_value: whole(&mut r, "decommissionValue"),
+        ai_name: name(&r, "aiName"),
+    }
 }
 
 #[cfg(test)]
@@ -297,6 +358,58 @@ mod tests {
 
     /// Armada I's warp-on-move keys (SIM-64), as `fastphys.odf` writes them
     /// (trailing `;` included); Armada II's physics files have neither.
+    fn unit(text: &str) -> (UnitDef, Vec<Warning>) {
+        let mut w = Vec::new();
+        let d = unit_def("u", &odf(text), None, &mut w);
+        (d, w)
+    }
+
+    #[test]
+    fn stat_keys_absent_stay_unset() {
+        let (d, w) = unit("classLabel = \"craft\"\nmaxHealth = 100\n");
+        assert_eq!(d.stats, crate::def::UnitStatsDef::default());
+        assert!(w.is_empty(), "{w:?}");
+    }
+
+    #[test]
+    fn stat_keys_are_read() {
+        let (d, w) = unit(
+            "classLabel = \"craft\"\nintrinsicValue = 0.45f\ncriticalHitPercent = 5\n\
+             hullTargetHardpoints = \"hp01\" \"\" \"hp03\"\ncriticalTargetHardpoints = \"hp10\"\n\"hp11\" \"hp12\"\n\
+             enginesTargetHardpoints = \"e1\" \"e2\"\nsensorsTargetHardpoints = \"s1\"\nweaponsSparkTime = 1.5\n\
+             shipType = \"F\"\nisHero = 1\nselfDestruct = \"GSelfD\"\nmissileDetonator = \"gdeton\"\ndefaultGreenAlert = 0\n\
+             alwaysUseSpecialWeapons = 1\ndamagedScan = 250\navoidanceClass = 3\ncollisionRadius = 12.5\nshieldPad = -2\n\
+             maxExtraWeapons = 2\ncanAttackPlanets = 1\ncanOnlyAttackPlanets = 0\nrecyclesInPlace = 1\n\
+             shipIsBuiltByEvolution = 1\nshipIsBuiltByShips = 0\nhealthRate = 0.2\npercentNebulaWarn = 0.5\n\
+             dockingSpeedFactor = 0.25\ndecommissionValue = 40\naiName = \"Fed_Destroyer\"\n",
+        );
+        assert!(w.is_empty(), "{w:?}");
+        let s = &d.stats;
+        assert_eq!(s.intrinsic_value, Some(Fixed::from_f64(0.45f32 as f64)));
+        assert_eq!(s.critical_hit_percent, Some(Fixed::from_int(5)));
+        assert_eq!(s.hull_target_hardpoints, ["hp01", "", "hp03"], "an empty name keeps its place");
+        assert_eq!(s.critical_target_hardpoints, ["hp10", "hp11", "hp12"], "a continued list is one list");
+        assert_eq!(s.system_target_hardpoints[0], ["e1", "e2"]);
+        assert_eq!(s.system_target_hardpoints[4], ["s1"]);
+        assert!(s.system_target_hardpoints[1].is_empty());
+        assert_eq!(s.system_spark_time, [None, Some(Fixed::from_f64(1.5)), None, None, None]);
+        assert_eq!((s.ship_type.as_deref(), s.self_destruct.as_deref(), s.missile_detonator.as_deref()), (Some("f"), Some("gselfd"), Some("gdeton")));
+        assert_eq!((s.is_hero, s.default_green_alert, s.always_use_special_weapons), (Some(true), Some(false), Some(true)));
+        assert_eq!((s.damaged_scan, s.avoidance_class, s.max_extra_weapons), (Some(Fixed::from_int(250)), Some(3), Some(2)));
+        assert_eq!((s.collision_radius, s.shield_pad), (Some(Fixed::from_f64(12.5)), Some(Fixed::from_int(-2))));
+        assert_eq!((s.can_attack_planets, s.can_only_attack_planets, s.recycles_in_place), (Some(true), Some(false), Some(true)));
+        assert_eq!((s.built_by_evolution, s.built_by_ships), (Some(true), Some(false)));
+        assert_eq!((s.health_rate, s.percent_nebula_warn), (Some(Fixed::from_f64(0.2f32 as f64)), Some(Fixed::from_f64(0.5))));
+        assert_eq!((s.docking_speed_factor, s.decommission_value, s.ai_name.as_deref()), (Some(Fixed::from_f64(0.25)), Some(40), Some("fed_destroyer")));
+    }
+
+    #[test]
+    fn malformed_stat_values_warn_and_stay_unset() {
+        let (d, w) = unit("classLabel = \"craft\"\nintrinsicValue = lots\nisHero = maybe\navoidanceClass = big\nselfDestruct = \"NULL\"\n");
+        assert_eq!((d.stats.intrinsic_value, d.stats.is_hero, d.stats.avoidance_class, d.stats.self_destruct.as_deref()), (None, None, None, None));
+        assert_eq!(w.len(), 3, "{w:?}");
+    }
+
     #[test]
     fn armada_one_warp_keys_are_read_and_absent_keys_leave_them_zero() {
         let ph = odf("impulseSpeed = 20\nwarpSpeed = 100\ntooCloseForWarp = 10;\nheadingCloseEnoughForWarp = 30;\n");

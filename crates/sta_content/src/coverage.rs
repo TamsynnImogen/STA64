@@ -51,6 +51,15 @@ pub const READ_ODF_KEYS: &[&str] = &[
     "switchtoattack", "cloakenable", "warpenable", "crewaffectsweapondelay", "ignorevalidastarget",
     "regularweapondelay", "ignoreshield", "forceinvalidatetarget", "canattackstations", "specialvalue",
     "shieldduration", "omegaturn", "seektime", "shotaccel", "detectradius", "traveltimefraction",
+    // CON-55: unit stat keys (typed; applied by SIM-74).
+    "intrinsicvalue", "criticalhitpercent", "hulltargethardpoints", "criticaltargethardpoints",
+    "enginestargethardpoints", "weaponstargethardpoints", "shieldgeneratortargethardpoints",
+    "lifesupporttargethardpoints", "sensorstargethardpoints", "enginessparktime", "weaponssparktime",
+    "shieldgeneratorsparktime", "lifesupportsparktime", "sensorssparktime", "shiptype", "ishero",
+    "selfdestruct", "missiledetonator", "defaultgreenalert", "alwaysusespecialweapons", "damagedscan",
+    "avoidanceclass", "collisionradius", "shieldpad", "maxextraweapons", "canattackplanets",
+    "canonlyattackplanets", "recyclesinplace", "shipisbuiltbyevolution", "shipisbuiltbyships", "healthrate",
+    "percentnebulawarn", "dockingspeedfactor", "decommissionvalue", "ainame",
     // Found by intersecting the keys of the installed ODFs with the string
     // literals of the loaders (`check_pack <root> --keys` lists the rest).
     "tooltip", "basename", "race", "fireball", "officercost", "curshields", "maxshields",
