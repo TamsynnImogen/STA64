@@ -66,7 +66,7 @@ fn a_stopped_id_is_reusable_and_the_old_deadline_is_gone() {
 
 #[test]
 fn a_running_id_still_raises_duplicate_id() {
-    let mut rt = MissionRuntime::from_source(
+    let rt = MissionRuntime::from_source(
         "authored-reuse-running.lua",
         r#"
         a = Timer('busy', 100, Timer.State.Started)
