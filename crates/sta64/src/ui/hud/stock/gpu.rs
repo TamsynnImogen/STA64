@@ -913,3 +913,176 @@ fn installed_armada1_stock_hud_renders_on_gpu() {
     }
     }
 }
+
+/// UI-42: hovering an Armada I build button shows its `needs:` line, in a windowless GPU frame.
+/// The unit is the install's real starting construction ship; the tooltip is STA64's own (the
+/// original's place for it is not established). Set `STA64_GPU_TESTS=1
+/// STA64_TEST_A1_INSTALL=<Armada I root>`; `STA64_HUD_CAPTURE_DIR` keeps the frame locally (it
+/// shows game art: never commit it).
+#[test]
+fn installed_armada1_build_costs_tooltip_renders_on_gpu() {
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_TEST_A1_INSTALL=<Armada I root>");
+        return;
+    }
+    let Some(install) = std::env::var_os("STA64_TEST_A1_INSTALL") else {
+        eprintln!("SKIP: set STA64_TEST_A1_INSTALL=<Armada I root>");
+        return;
+    };
+    let size = UVec2::new(1920, 1080);
+    let label = "a1-build-costs-tooltip-1920x1080";
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), None).expect("installed A1 VFS");
+    let layout = crate::game::gui_layout(&vfs, "gui_fed.cfg").expect("installed gui_fed.cfg");
+    let strings = crate::ui::i18n::Strings::load(&vfs, "english");
+    let words = strings.clone();
+    let hud_feed = feed(&vfs, GameOptions::default(), 0);
+    let db = hud_feed.content.clone().expect("installed content");
+    // Every own unit with a build list: the starting construction ship, and a station or research
+    // building when the start has one.
+    let builders: Vec<sta_sim::EntityId> = hud_feed
+        .view
+        .units
+        .iter()
+        .filter(|u| u.owner == hud_feed.player && db.unit(u.def).is_some_and(|d| !d.build.list.is_empty()))
+        .map(|u| u.id)
+        .collect();
+    assert!(!builders.is_empty(), "the start has a builder");
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
+            .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
+            .disable::<bevy::winit::WinitPlugin>()
+            .disable::<bevy::log::LogPlugin>(),
+    );
+    configure_sets(&mut app);
+    let selection = hud_feed.selected.clone();
+    app.insert_resource(ClearColor(Color::BLACK))
+        .insert_resource(UiProfile::Armada1)
+        .insert_resource(UiProfile::Armada1.theme())
+        .insert_resource(Mounted(vfs))
+        .insert_resource(strings)
+        .insert_resource(GuiSkin { table: Some("gui_federation.spr".into()) })
+        .insert_resource(HudConfig { gui: Some(layout), aspect: size.x as f32 / size.y as f32, fit_scale: false, ..default() })
+        .insert_resource(UiScale(size.y as f32 / 1080.0))
+        .insert_resource(hud_feed)
+        .insert_resource(ExternalFeed)
+        .insert_resource(Selection(selection))
+        .init_resource::<ButtonInput<MouseButton>>()
+        .init_resource::<ButtonInput<KeyCode>>()
+        .add_plugins(HudPlugin)
+        .add_systems(Update, aim_roots_hud.before(GameSet::Ui));
+    let mut image = Image::new_target_texture(size.x, size.y, bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb, None);
+    image.asset_usage = RenderAssetUsages::RENDER_WORLD;
+    let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+    let camera = app
+        .world_mut()
+        .spawn((Camera2d, Camera { order: 1, clear_color: ClearColorConfig::Custom(Color::BLACK), ..default() }, RenderTarget::from(target.clone()), Msaa::Off))
+        .id();
+    app.insert_resource(CaptureCamera(camera));
+    app.finish();
+    app.cleanup();
+    for _ in 0..8 {
+        app.update();
+    }
+    let adapter = app.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>().cloned().or_else(|| {
+        app.get_sub_app(bevy::render::RenderApp).and_then(|r| r.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>().cloned())
+    });
+    let Some(adapter) = adapter else {
+        eprintln!("SKIP {label}: no render adapter");
+        return;
+    };
+    if crate::bench::frames::is_software_adapter(adapter.device_type, &adapter.name) {
+        eprintln!("SKIP {label}: hardware adapter unavailable");
+        return;
+    }
+    // The rule, for every build button of every builder, all computed from the data at run time: the
+    // tooltip holds the string table's own "needs" word, and for each cost the unit's definition
+    // charges, its amount and its resource word (the table's for dilithium, the resource model's
+    // otherwise); the officers amount when it takes officers.
+    let require = words.tooltip_text("GUI_CP_REQUIRE").to_owned();
+    assert_ne!(require, "GUI_CP_REQUIRE", "{label}: the install's table has the word");
+    let mut first = None;
+    let mut with_line = 0;
+    for builder in &builders {
+        app.world_mut().resource_mut::<HudFeed>().selected = vec![*builder];
+        app.world_mut().resource_mut::<Selection>().0 = vec![*builder];
+        app.world_mut().resource_mut::<super::super::HudState>().page = super::super::Page::Build;
+        for _ in 0..4 {
+            app.update();
+        }
+        let resources = super::super::model::resource_model(app.world().resource::<HudFeed>());
+        let cells: Vec<(Entity, sta_sim::ContentKey)> = app
+            .world_mut()
+            .query::<(Entity, &super::super::panels::GridCell)>()
+            .iter(app.world())
+            .filter_map(|(e, c)| match c.0 {
+                super::super::Act::Build { what, .. } => Some((e, what)),
+                _ => None,
+            })
+            .collect();
+        for (cell, what) in cells {
+            let short = app.world().get::<crate::ui::notices::Tooltip>(cell).expect("tooltip").short.clone();
+            let needs = super::a1::costs::needs(&db, what).expect("the item's definition");
+            if needs.slots.is_empty() && needs.officers == 0 {
+                continue;
+            }
+            with_line += 1;
+            assert!(short.contains(&require), "{label}: {short:?} lacks {require:?}");
+            for (slot, amount) in &needs.slots {
+                assert!(short.contains(&amount.to_string()), "{label}: {short:?} lacks the amount {amount}");
+                let word = if *slot == sta_content::resources::DILITHIUM {
+                    words.tooltip_text("GUI_CP_DILITHIUM_RES").to_lowercase()
+                } else {
+                    resources.name(*slot).to_lowercase()
+                };
+                assert!(short.to_lowercase().contains(&word), "{label}: {short:?} lacks the word {word:?}");
+            }
+            if needs.officers > 0 {
+                assert!(short.contains(&needs.officers.to_string()), "{label}: {short:?} lacks the officers amount");
+            }
+            first.get_or_insert((*builder, what, short));
+        }
+    }
+    eprintln!("{label}: {} builder(s), {with_line} priced build button(s) checked", builders.len());
+    // Back to the first priced button's builder to hover it.
+    let (builder, what, short) = first.expect("at least one priced build button");
+    app.world_mut().resource_mut::<HudFeed>().selected = vec![builder];
+    app.world_mut().resource_mut::<Selection>().0 = vec![builder];
+    for _ in 0..4 {
+        app.update();
+    }
+    let item = app
+        .world_mut()
+        .query::<(Entity, &super::super::panels::GridCell)>()
+        .iter(app.world())
+        .find(|(_, c)| matches!(&c.0, super::super::Act::Build { what: w, .. } if *w == what))
+        .map(|(e, _)| e)
+        .expect("the button again");
+    assert_eq!(app.world().get::<crate::ui::notices::Tooltip>(item).unwrap().short, short);
+    let frames = Arc::new(Mutex::new(Vec::<Image>::new()));
+    let output = Arc::clone(&frames);
+    app.world_mut().spawn(Screenshot::image(target)).observe(move |shot: On<ScreenshotCaptured>| {
+        output.lock().unwrap().push(shot.image.clone());
+    });
+    for _ in 0..60 {
+        *app.world_mut().resource_mut::<crate::ui::notices::TipHover>() =
+            crate::ui::notices::TipHover { target: Some(item), rest: crate::ui::notices::TIP_SHORT_SECS + 0.1 };
+        app.update();
+        if !frames.lock().unwrap().is_empty() {
+            break;
+        }
+    }
+    let shown = app
+        .world_mut()
+        .query::<&crate::ui::sprite_font::SpriteText>()
+        .iter(app.world())
+        .any(|t| t.text == short);
+    assert!(shown, "{label}: the tooltip text was not displayed");
+    let shot = frames.lock().unwrap().first().cloned().unwrap_or_else(|| panic!("{label}: no GPU capture"));
+    let rgba = shot.try_into_dynamic().expect("GPU image conversion").to_rgba8();
+    if let Ok(dir) = std::env::var("STA64_HUD_CAPTURE_DIR") {
+        std::fs::create_dir_all(&dir).unwrap();
+        rgba.save(std::path::Path::new(&dir).join(format!("stock-{label}.png"))).unwrap();
+    }
+}
