@@ -1047,6 +1047,8 @@ pub fn launch_runtime_with_start(
     label_gaps: Vec<crate::map_labels::LabelGap>,
     start_stock: crate::start_stock::StartStock,
 ) -> Result<MissionRuntime, StartError> {
+    // A map with no team table: the install header's start for every seat of the game.
+    let start_stock = start_stock.or_header(setup.content.rules(), setup.players.iter().map(|p| p.id));
     let cfg = MissionConfig {
         seat: Some(seat.0),
         player_numbering: seat.1,

@@ -10,7 +10,7 @@
 //! (both go through [`crate::placement::ghost_site`]).
 
 use bevy::prelude::*;
-use sta_sim::production::site::SiteError;
+use sta_sim::production::site::{self, SiteError};
 use sta_sim::{ContentKey, Vec3 as SimVec3};
 
 use super::model::HudFeed;
@@ -29,6 +29,13 @@ pub const CLEAR: Color = Color::srgba(0.35, 1.0, 0.4, 0.75);
 /// Tint of a ghost over a blocked site.
 pub const BLOCKED: Color = Color::srgba(1.0, 0.25, 0.2, 0.75);
 
+/// Completed stations waiting for construction appear as faint blueprints.
+pub const PINNED: Color = Color::srgba(0.35, 1.0, 0.4, 0.15);
+
+/// A station blueprint owned by the construction renderer, not the cursor.
+#[derive(Component, Debug)]
+pub(crate) struct PinnedBlueprint;
+
 /// The ghost entity; `status` is whether the site under the cursor is clear.
 #[derive(Component, Debug)]
 pub struct Ghost {
@@ -36,6 +43,118 @@ pub struct Ghost {
     pub status: Option<Result<(), SiteError>>,
     painted: Option<Result<(), SiteError>>,
     own: Vec<(Entity, Handle<StandardMaterial>)>,
+}
+
+impl Ghost {
+    pub(crate) fn pinned(def: ContentKey) -> Self {
+        Self {
+            def,
+            status: Some(Ok(())),
+            painted: None,
+            own: Vec::new(),
+        }
+    }
+}
+
+#[derive(Component)]
+pub struct FootprintRing;
+
+#[derive(Resource)]
+pub(crate) struct FootprintAssets {
+    mesh: Handle<Mesh>,
+    clear: Handle<StandardMaterial>,
+    blocked: Handle<StandardMaterial>,
+}
+
+fn footprint_material(color: Color) -> StandardMaterial {
+    StandardMaterial {
+        base_color: color,
+        alpha_mode: AlphaMode::Blend,
+        unlit: true,
+        cull_mode: None,
+        ..default()
+    }
+}
+
+/// Give every visible ghost a ring at the simulator's footprint radius. The
+/// shared mesh and two materials are created once, regardless of ghost count.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sync_footprints(
+    mut commands: Commands,
+    feed: Res<HudFeed>,
+    ghosts: Query<(Entity, &Ghost, &Visibility)>,
+    children: Query<&Children>,
+    rings: Query<(Entity, &MeshMaterial3d<StandardMaterial>, &Transform), With<FootprintRing>>,
+    assets: Option<Res<FootprintAssets>>,
+    meshes: Option<ResMut<Assets<Mesh>>>,
+    materials: Option<ResMut<Assets<StandardMaterial>>>,
+) {
+    let Some(db) = feed.content.as_deref() else {
+        return;
+    };
+    let (mesh, clear, blocked) = if let Some(assets) = assets {
+        (
+            assets.mesh.clone(),
+            assets.clear.clone(),
+            assets.blocked.clone(),
+        )
+    } else {
+        let (Some(mut meshes), Some(mut materials)) = (meshes, materials) else {
+            return;
+        };
+        let assets = FootprintAssets {
+            mesh: meshes.add(Annulus::new(0.96, 1.0)),
+            clear: materials.add(footprint_material(CLEAR)),
+            blocked: materials.add(footprint_material(BLOCKED)),
+        };
+        let handles = (
+            assets.mesh.clone(),
+            assets.clear.clone(),
+            assets.blocked.clone(),
+        );
+        commands.insert_resource(assets);
+        handles
+    };
+    for (root, ghost, visibility) in &ghosts {
+        if *visibility == Visibility::Hidden || ghost.status.is_none() {
+            continue;
+        }
+        let radius = site::footprint(db, ghost.def).to_f32();
+        let material = if ghost.status.is_some_and(|s| s.is_ok()) {
+            &clear
+        } else {
+            &blocked
+        };
+        let existing = children
+            .iter_descendants(root)
+            .find_map(|e| rings.get(e).ok());
+        if let Some((entity, current, transform)) = existing {
+            if current.0 != *material {
+                commands
+                    .entity(entity)
+                    .insert(MeshMaterial3d(material.clone()));
+            }
+            if transform.scale != Vec3::splat(radius) {
+                commands.entity(entity).insert(Transform {
+                    scale: Vec3::splat(radius),
+                    ..*transform
+                });
+            }
+        } else {
+            // Annulus faces +Z; rotate it into the XZ plane. Parentage keeps
+            // the ring centred on the actual snapped ghost transform.
+            commands.spawn((
+                Name::new("building footprint"),
+                FootprintRing,
+                ChildOf(root),
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(material.clone()),
+                Transform::from_xyz(0.0, 0.15, 0.0)
+                    .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2))
+                    .with_scale(Vec3::splat(radius)),
+            ));
+        }
+    }
 }
 
 /// Where `armed` would be built for a cursor at `at`, and whether the site is legal: the same
@@ -92,7 +211,7 @@ pub fn update_ghost(
     feed: Res<HudFeed>,
     aim: Option<Res<Aim>>,
     bounds: Option<Res<PlacementBounds>>,
-    mut ghosts: Query<(Entity, &mut Ghost, &mut Transform, &mut Visibility)>,
+    mut ghosts: Query<(Entity, &mut Ghost, &mut Transform, &mut Visibility), Without<PinnedBlueprint>>,
 ) {
     let armed = state.placing.as_ref().filter(|a| feed.view.unit(a.builder).is_some());
     let Some(armed) = armed else {
@@ -138,17 +257,19 @@ pub fn update_ghost(
 /// share theirs with real units) and keep them tinted by the site's status.
 pub fn tint_ghost(
     mut commands: Commands,
-    mut ghosts: Query<(Entity, &mut Ghost)>,
+    mut ghosts: Query<(Entity, &mut Ghost, Option<&PinnedBlueprint>)>,
     children: Query<&Children>,
     mut handles: Query<&mut MeshMaterial3d<StandardMaterial>>,
     hull_sources: Query<&HullSource>,
+    footprints: Query<(), With<FootprintRing>>,
     assets: Option<ResMut<Assets<StandardMaterial>>>,
 ) {
     let Some(mut assets) = assets else { return };
-    for (root, mut g) in &mut ghosts {
+    for (root, mut g, pinned) in &mut ghosts {
         let Some(status) = g.status else { continue };
         let mut new_parts = false;
         for d in children.iter_descendants(root) {
+            if footprints.get(d).is_ok() { continue }
             if let Some((_, own)) = g.own.iter().find(|(entity, _)| *entity == d) {
                 if hull_sources.get(d).is_ok() {
                     commands.entity(d)
@@ -176,7 +297,7 @@ pub fn tint_ghost(
         if g.painted == Some(status) && !new_parts && !g.own.is_empty() {
             continue;
         }
-        let color = if status.is_ok() { CLEAR } else { BLOCKED };
+        let color = if pinned.is_some() { PINNED } else if status.is_ok() { CLEAR } else { BLOCKED };
         let apply = paint(color);
         for (_, h) in &g.own {
             if let Some(mut m) = assets.get_mut(h) {
@@ -201,6 +322,132 @@ pub fn refusal(e: SiteError) -> &'static str {
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn footprint_tracks_status_and_is_removed_with_its_ghost() {
+        use sta_sim::{PlayerId, WorldView};
+        use std::sync::Arc;
+
+        let db = sta_content::fake::db();
+        let def = db.units().next().expect("fake unit").key;
+        let radius = site::footprint(&db, def).to_f32();
+        let mut world = World::new();
+        world.insert_resource(HudFeed {
+            view: Arc::new(WorldView::default()),
+            player: PlayerId(0),
+            selected: Vec::new(),
+            content: Some(Arc::new(db)),
+        });
+        world.insert_resource(Assets::<Mesh>::default());
+        world.insert_resource(Assets::<StandardMaterial>::default());
+        let root = world
+            .spawn((
+                Ghost {
+                    def,
+                    status: Some(Ok(())),
+                    painted: None,
+                    own: Vec::new(),
+                },
+                Transform::from_xyz(42.0, 0.0, 7.0),
+                Visibility::Inherited,
+            ))
+            .id();
+
+        world.run_system_once(sync_footprints).unwrap();
+        let ring = world.get::<Children>(root).unwrap().iter().next().unwrap();
+        assert!(world.get::<FootprintRing>(ring).is_some());
+        let local = world.get::<Transform>(ring).unwrap();
+        assert_eq!(local.scale, Vec3::splat(radius));
+        assert_eq!(local.translation.x, 0.0);
+        assert_eq!(local.translation.z, 0.0);
+        let clear = world
+            .get::<MeshMaterial3d<StandardMaterial>>(ring)
+            .unwrap()
+            .0
+            .clone();
+        let mesh = world.get::<Mesh3d>(ring).unwrap().0.clone();
+        assert_eq!(
+            world
+                .resource::<Assets<StandardMaterial>>()
+                .get(&clear)
+                .unwrap()
+                .base_color,
+            CLEAR
+        );
+
+        world.get_mut::<Ghost>(root).unwrap().status = Some(Err(SiteError::Blocked));
+        world.run_system_once(sync_footprints).unwrap();
+        let blocked = world
+            .get::<MeshMaterial3d<StandardMaterial>>(ring)
+            .unwrap()
+            .0
+            .clone();
+        assert_ne!(blocked, clear);
+        assert_eq!(
+            world
+                .resource::<Assets<StandardMaterial>>()
+                .get(&blocked)
+                .unwrap()
+                .base_color,
+            BLOCKED
+        );
+        assert_eq!(world.get::<Children>(root).unwrap().len(), 1);
+        assert_eq!(world.get::<Mesh3d>(ring).unwrap().0, mesh);
+
+        world.entity_mut(root).despawn();
+        assert!(world.get_entity(ring).is_err());
+    }
+
+    #[test]
+    fn pinned_blueprint_survives_cursor_disarm_and_is_faint() {
+        use sta_sim::{PlayerId, WorldView};
+        use std::sync::Arc;
+
+        let db = sta_content::fake::db();
+        let def = db.units().next().expect("fake unit").key;
+        let mut world = World::new();
+        world.insert_resource(HudFeed {
+            view: Arc::new(WorldView::default()),
+            player: PlayerId(0),
+            selected: Vec::new(),
+            content: Some(Arc::new(db)),
+        });
+        world.insert_resource(HudState::default());
+        let root = world
+            .spawn((
+                PinnedBlueprint,
+                Ghost::pinned(def),
+                Transform::default(),
+                Visibility::Inherited,
+            ))
+            .id();
+        world.run_system_once(update_ghost).unwrap();
+        assert!(world.get::<Ghost>(root).is_some());
+
+        let mut materials = Assets::<StandardMaterial>::default();
+        let source = materials.add(StandardMaterial::default());
+        world.insert_resource(materials);
+        world.insert_resource(Assets::<Mesh>::default());
+        let child = world.spawn(MeshMaterial3d(source)).id();
+        world.entity_mut(root).add_child(child);
+        world.run_system_once(sync_footprints).unwrap();
+        world.run_system_once(tint_ghost).unwrap();
+        let ring = world.get::<Children>(root).unwrap().iter().find(|&e| world.get::<FootprintRing>(e).is_some()).unwrap();
+        let ring_material = &world.get::<MeshMaterial3d<StandardMaterial>>(ring).unwrap().0;
+        assert_eq!(world.resource::<Assets<StandardMaterial>>().get(ring_material).unwrap().base_color, CLEAR);
+        let own = &world
+            .get::<MeshMaterial3d<StandardMaterial>>(child)
+            .unwrap()
+            .0;
+        assert_eq!(
+            world
+                .resource::<Assets<StandardMaterial>>()
+                .get(own)
+                .unwrap()
+                .base_color,
+            PINNED
+        );
+    }
 
     #[test]
     fn blueprint_copy_ignores_dark_transparent_source_and_preserves_original() {
@@ -317,6 +564,10 @@ mod tests {
         world.run_system_once(update_ghost).unwrap();
         assert_eq!(world.get::<Ghost>(ghost).unwrap().status, Some(Err(SiteError::Blocked)));
         assert_eq!(world.get::<Transform>(ghost).unwrap().translation.x, 3000.0);
+
+        world.insert_resource(Aim(None));
+        world.run_system_once(update_ghost).unwrap();
+        assert_eq!(world.get::<Visibility>(ghost), Some(&Visibility::Hidden));
 
         // The click asks the same rule: the site the ghost shows OK is accepted, open space refused.
         let feed = world.resource::<HudFeed>();
