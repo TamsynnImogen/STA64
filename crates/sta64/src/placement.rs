@@ -331,7 +331,7 @@ mod tests {
         assert_eq!(site::obstacle_radius(&db, db.key("fx_world").unwrap()), Fixed::from_int(200));
         spawn_at(&mut sim, &db, "fx_station", v(3000, 3000));
         fund(&mut sim);
-        let feed = HudFeed { view: sim.view(), player: PlayerId(0), selected: vec![rig], content: Some(db.clone()) };
+        let feed = HudFeed { view: sim.view(), player: PlayerId(0), selected: vec![rig], content: Some(db.clone()), ..Default::default() };
         let armed = Armed { builder: rig, what, odf: "fx_station".into() };
         let diagonal = v(3074, 3074);
         assert_eq!(ghost_site(&db, None, &feed.view, what, rig, diagonal).status, Err(SiteError::Blocked));
