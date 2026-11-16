@@ -15,7 +15,7 @@ use crate::ui::theme::{
 
 const PAGE_SIZE: usize = 6;
 
-#[derive(Resource, Debug, Clone)]
+#[derive(Resource, Debug, Clone, Default)]
 pub struct ControlsDraft {
     pub(crate) text: Vec<String>,
     pub(crate) page: usize,
@@ -27,17 +27,6 @@ pub struct ControlsDraft {
 /// field updates the draft without destroying the focused field each frame.
 #[derive(Resource, Default)]
 pub struct ControlsRender(pub u64);
-
-impl Default for ControlsDraft {
-    fn default() -> Self {
-        Self {
-            text: Vec::new(),
-            page: 0,
-            error: None,
-            active: false,
-        }
-    }
-}
 
 impl ControlsDraft {
     fn reload(&mut self, bindings: &KeyBindings) {
@@ -108,6 +97,7 @@ pub enum ControlsAct {
 
 /// Read the actual field component before a page switch or Apply. The widget's
 /// TextChanged message may be delivered after this click in the same frame.
+#[allow(clippy::too_many_arguments)] // Bevy system inputs for the shared front-end and match editor.
 pub fn update(
     mut clicks: MessageReader<ButtonClicked>,
     acts: Query<&ControlsAct>,
