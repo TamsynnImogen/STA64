@@ -1391,8 +1391,8 @@ mod tests {
         app.update();
         let level = |app: &App| app.world().resource::<crate::audio::SoundMute>().0;
         assert_eq!(level(&app), 1.0);
-        send(&mut app, mute_call(Arg::Num(Fixed::from_f64(0.4))));
-        assert!((level(&app) - 0.4).abs() < 1e-6);
+        send(&mut app, mute_call(Arg::Num(Fixed::from_f64(0.37))));
+        assert!((level(&app) - 0.37).abs() < 1e-6);
         send(&mut app, mute_call(Arg::Num(Fixed::from_int(7))));
         assert_eq!(level(&app), 1.0, "held to full level");
         send(&mut app, mute_call(Arg::Num(Fixed::from_f64(0.25))));
@@ -1403,7 +1403,7 @@ mod tests {
         app.insert_resource(link_at(0));
         app.update();
         assert_eq!(level(&app), 1.0, "a restart in place un-mutes");
-        send(&mut app, mute_call(Arg::Num(Fixed::from_f64(0.3))));
+        send(&mut app, mute_call(Arg::Num(Fixed::from_f64(0.29))));
         app.world_mut().resource_mut::<NextState<crate::app::AppState>>().set(crate::app::AppState::FrontEnd);
         app.update();
         assert_eq!(level(&app), 1.0, "leaving the match un-mutes");

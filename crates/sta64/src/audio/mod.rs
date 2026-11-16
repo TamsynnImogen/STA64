@@ -242,7 +242,10 @@ fn remount_sound(mut chosen: MessageReader<crate::frontend::screens::ModChosen>,
 /// (`AudioMessage`, `PlayMusic`), which stay at full level. Read from the Armada II executable,
 /// static: every sound's volume is its class volume times this unless it is a script stream; the
 /// engine's only writer is the script call, which the stock scripts pair with an un-mute. STA64
-/// resets it when the front end is entered. Applied to Armada I and the Fleet Operations family
+/// resets it when the front end is entered. A movie's sound is on the UI bus too and so exempt
+/// (inferred, not measured: the mute exists to make room for the narration and the movie). STA64
+/// deviation: the HUD's click and error sounds are on the UI bus as well and are not scaled either.
+/// Applied to Armada I and the Fleet Operations family
 /// as well: not established there. Not measured on the running original.
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
 pub struct SoundMute(pub f32);
@@ -647,7 +650,7 @@ mod tests {
         let (mut app, log) = app();
         app.update();
         let _ = log.drain();
-        app.world_mut().resource_mut::<SoundMute>().set(0.5);
+        app.world_mut().resource_mut::<SoundMute>().set(0.37);
         app.update();
         let calls = log.drain();
         let sent = |bus| calls.iter().find_map(|c| match c {
@@ -655,11 +658,12 @@ mod tests {
             _ => None,
         });
         let user = *app.world().resource::<Volumes>();
-        assert_eq!(sent(MixBus::Sfx), Some(user.sfx * 0.5), "a weapon sound's bus is scaled");
-        assert_eq!(sent(MixBus::Voice), Some(user.voice * 0.5));
-        assert_eq!(sent(MixBus::Music), Some(user.music * 0.5));
+        assert_eq!(sent(MixBus::Sfx), Some(user.sfx * 0.37), "a weapon sound's bus is scaled");
+        assert_eq!(sent(MixBus::Voice), Some(user.voice * 0.37));
+        assert_eq!(sent(MixBus::Music), Some(user.music * 0.37));
         assert_eq!(sent(MixBus::Ui), None, "the script's streams keep the user's level");
         assert_eq!(sent(MixBus::Master), None);
+        assert_eq!(sent(MixBus::from(crate::media::MOVIE_BUS)), None, "a movie's sound keeps the user's level");
         // Un-muting restores the user's levels.
         app.world_mut().resource_mut::<SoundMute>().set(1.0);
         app.update();
