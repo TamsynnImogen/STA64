@@ -666,3 +666,55 @@ fn a_moved_box_builds_only_when_its_cells_change() {
     cache.grid(creep_spec(boxed(Fixed::from_int(64))));
     assert_eq!(cache.builds, 2);
 }
+
+/// A moving sphere half inside a fixed bigger one: its own cells change as it drifts but the union
+/// of blocked cells does not. The entry kept for the grid must follow the solids (else it is
+/// compared against where the sphere began, and every tick after the first change builds).
+#[test]
+fn a_solid_drifting_inside_a_fixed_one_does_not_build_every_tick() {
+    use super::{Cache, grid::Grid};
+    use crate::spatial::Solid;
+    let spec = |step: i64| {
+        let mut s = creep_spec(sphere_at(Fixed::from_int(2000) + Fixed::from_bits(step * 214_748_365), Fixed::from_int(2000)));
+        s.solids.push(Solid::Sphere { centre: v(2060, 2000), radius: Fixed::from_int(400) });
+        super::frame(&mut s, v(0, 0), v(4000, 4000));
+        s
+    };
+    let mut cache = Cache::default();
+    cache.grid(spec(0));
+    for step in 1..=2560 {
+        let s = spec(step);
+        let fresh = Grid::build(s.clone());
+        let (_, g) = cache.grid(s);
+        assert!(g.same_cells(&fresh), "step {step}: a stale grid");
+    }
+    assert!(cache.builds < 200, "{} builds for 2560 steps", cache.builds);
+}
+
+/// Equal solids are not enough: any other input of the grid that differs builds, and what comes
+/// back is what a fresh build gives.
+#[test]
+fn a_changed_frame_body_hazard_area_cost_or_solid_count_builds() {
+    use super::{Cache, grid::{Area, Grid, Hazard}};
+    use crate::spatial::Solid;
+    let base = || creep_spec(sphere_at(Fixed::from_int(2000), Fixed::from_int(2000)));
+    let mut cache = Cache::default();
+    cache.grid(base());
+    let mut expected = 1;
+    let variants: Vec<(&str, Box<dyn Fn(&mut super::grid::Spec)>)> = vec![
+        ("body", Box::new(|s| s.body = Fixed::from_int(90))),
+        ("default cost", Box::new(|s| s.default_cost = 3)),
+        ("hazard", Box::new(|s| s.hazards.push(Hazard { shape: Solid::Sphere { centre: v(1000, 1000), radius: Fixed::from_int(200) }, cost: 50 }))),
+        ("area", Box::new(|s| s.area = Some(Area { min: (Fixed::from_int(100), Fixed::from_int(100)), max: (Fixed::from_int(3900), Fixed::from_int(3900)), outside: 9 }))),
+        ("solid count", Box::new(|s| s.solids.push(Solid::Sphere { centre: v(3000, 3000), radius: Fixed::from_int(60) }))),
+    ];
+    for (what, change) in variants {
+        let mut s = base();
+        change(&mut s);
+        let fresh = Grid::build(s.clone());
+        let (_, g) = cache.grid(s);
+        expected += 1;
+        assert_eq!(cache.builds, expected, "{what}: must build");
+        assert!(g.same_cells(&fresh), "{what}: not what a fresh build gives");
+    }
+}
