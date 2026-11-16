@@ -74,11 +74,13 @@ struct Flow {
     /// `AudioOverlay`'s id counter: starts at 1, shared by voice and music.
     next_sound: u32,
     next_key: u32,
+    /// The last fade the script asked for was a fade out (so the screen is, or is going, black).
+    last_fade_out: bool,
 }
 
 fn flow<R>(lua: &Lua, f: impl FnOnce(&mut Flow) -> R) -> R {
     if lua.app_data_ref::<RefCell<Flow>>().is_none() {
-        lua.set_app_data(RefCell::new(Flow { waits: Vec::new(), started: Vec::new(), next_sound: 1, next_key: 1 }));
+        lua.set_app_data(RefCell::new(Flow { waits: Vec::new(), started: Vec::new(), next_sound: 1, next_key: 1, last_fade_out: false }));
     }
     let cell = lua.app_data_ref::<RefCell<Flow>>().expect("flow state");
     let mut state = cell.borrow_mut();
@@ -174,9 +176,19 @@ fn fade(lua: &Lua, ctx: &Shared, name: &'static str, out: bool) -> mlua::Result<
         let dont_wait = flag(name, &args[4])?;
         let rgb = if white { [255; 3] } else { [0; 3] };
         let fade = Presentation::Fade { out, seconds: Fixed::from_f64(duration), rgb };
+        let after_fade_out = flow(lua, |f| std::mem::replace(&mut f.last_fade_out, out));
         if delay == 0.0 {
             present(&c, name, fade)?;
         } else {
+            // A delayed fade out after a fade out clears the screen until it starts (measured once,
+            // in one mission, on the original: a shot started after a fade out is visible during
+            // the delay). The same observation also fits "a new shot clears the held fade"; the
+            // executable's fade state was not read. A fade out still ramping is cut too (not
+            // measured); after a fade in, or with no fade before it, nothing is cleared. A
+            // delayed fade in keeps its earlier behaviour.
+            if out && after_fade_out {
+                present(&c, name, Presentation::Fade { out: false, seconds: Fixed::ZERO, rgb })?;
+            }
             // The typed fade has no start delay: the request is kept with every argument, and the
             // fade is presented when it starts (LUA-17).
             let arguments = vec![
