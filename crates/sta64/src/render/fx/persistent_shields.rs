@@ -159,6 +159,7 @@ fn sync_outlines(
     flow: Option<Res<crate::game::flow::Flow>>,
     link: Option<Res<SimLink>>,
     local: Option<Res<LocalPlayer>>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
     content: Option<Res<ContentRes>>,
     roots: Option<Res<SimEntities>>,
     root_info: Query<(
@@ -195,7 +196,8 @@ fn sync_outlines(
         material.params.eye = eye.translation().extend(1.0);
     }
 
-    let visible = match local.as_ref().and_then(|l| l.0) {
+    let eyes = local.as_ref().and_then(|l| l.0).filter(|_| !crate::render::units::cinematic_reveal(cine.as_deref()));
+    let visible = match eyes {
         Some(player) => link.curr().visible_to(player),
         None => link.curr().units.iter().collect(),
     };
