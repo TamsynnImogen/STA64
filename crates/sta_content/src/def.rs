@@ -622,8 +622,11 @@ pub struct Lookup {
     pub base: Fixed,
     /// Shared between the weapons whose tables are equal: Fleet Operations
     /// repeats the same few tables over millions of rows.
-    pub rows: Arc<[(Arc<str>, Fixed)]>,
+    pub rows: LookupRows,
 }
+
+/// The rows of a [`Lookup`]: `(name, value)` in file order.
+pub type LookupRows = Arc<[(Arc<str>, Fixed)]>;
 
 impl Lookup {
     /// The rows as `(name, value)`, in file order.
