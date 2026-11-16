@@ -440,17 +440,22 @@ fn run_mission(
     mut view: Option<ResMut<ObjectivesView>>,
     log: Option<Res<MissionMovieLog>>,
     mut leave: MessageWriter<LeaveMatch>,
+    mut notices: MessageWriter<Notice>,
 ) {
     let tick = link.curr().tick;
     // A script that faults may have lost the callback that ends its cineractive: give the player
     // the camera back (the camera, the presentation state and the script hear the same reply).
     let faults = handle.with(|rt| {
         let e = rt.errors();
-        (e.len(), e.iter().skip(run.errors_seen).any(|x| is_fault(x)))
+        (e.len(), e.iter().skip(run.errors_seen).filter(|x| is_fault(x)).map(|x| x.lines().next().unwrap_or("").to_owned()).collect::<Vec<_>>())
     });
     run.errors_seen = faults.0;
-    if faults.1 {
-        warn!("mission: the script raised an error; any cineractive it holds is released");
+    if !faults.1.is_empty() {
+        // Never silent (LUA-42): the player sees a notice, the log has the error.
+        for first in &faults.1 {
+            warn!("mission: the script raised an error ({first}); any cineractive it holds is released");
+        }
+        notices.write(Notice::new(Severity::Warn, "The mission script raised an error; the mission may not be able to continue. See the log."));
         replies.p1().write(ScriptReply::CineractiveReleased);
     }
     for r in replies.p0().read() {

@@ -13,7 +13,7 @@ whole interval from the current tick; `stop()` clears the deadline. Changing
 state changes. No wall clock or background thread is involved.
 
 `Timer.find(name)` returns a handle or nil; `getAll()` returns handles in
-registration order. Duplicate timer/hook names return errors. `stopAll()`
+order of first registration. A timer name that is still running, and a duplicate hook name on one timer, return errors; the name of a timer that is not running (expired, stopped, or never started) is reusable (the slot becomes a new one-shot timer with no hooks; LUA-42; an old handle to that id now addresses the reused timer, the original's behaviour not measured). `stopAll()`
 stops every timer. `unhook(name)` removes one hook; `unhook()` removes all.
 `id`, `interval`, `repeats`, `state` and hook count `hooks` are readable;
 `interval` and `repeats` are writable.
