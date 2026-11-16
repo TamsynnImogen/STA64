@@ -92,10 +92,25 @@ pub(super) fn clip_to_rect(commands: &mut Commands, text: Entity, vertical: bool
 /// A group tile name longer than this wraps in the stock tile font and is clipped on both axes.
 const TILE_NAME_WRAPS_FROM: usize = 16;
 
-pub(super) fn bar(commands: &mut Commands, root: Entity, r: R, value: f32, color: Color, kind: StockBar) {
+/// The unfilled part of a stock bar when the cfg names no colour for it.
+const BAR_TRACK: Color = Color::srgba(0.0, 0.0, 0.0, 0.5);
+
+/// The colours of a stock bar as `(track, fill)` (UI-48), from the first of
+/// `tracks` and of `fills` the cfg sets (full key names, so each key the HUD
+/// reads is written out where it is used). The original
+/// draws the whole bar in `<stem>DisableColor`, then the filled part over it
+/// in the bar's own colour, which for bars with a fixed colour is
+/// `<stem>Color` (read from the stock Armada II executable, static; not
+/// compared by eye). A key the cfg does not set leaves the fallback.
+pub(super) fn bar_colours(layout: &StockLayout, tracks: &[&str], fills: &[&str], fill: Color) -> (Color, Color) {
+    let first = |keys: &[&str]| keys.iter().find_map(|key| layout.colour(key));
+    (first(tracks).unwrap_or(BAR_TRACK), first(fills).unwrap_or(fill))
+}
+
+pub(super) fn bar(commands: &mut Commands, root: Entity, r: R, value: f32, (track, color): (Color, Color), kind: StockBar) {
     commands.entity(root).with_child((
         node(r),
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
+        BackgroundColor(track),
         Pickable::IGNORE,
         children![(
             kind,
@@ -359,7 +374,7 @@ fn spawn_single(
         "infoBuildHullBar",
         "infoSingleHullBarArea",
     ) {
-        bar(commands, root, r, single.hull, theme.good, StockBar::Hull(r.w));
+        bar(commands, root, r, single.hull, bar_colours(layout, &["infoSingleHullBarDisableColor", "infoSingleShieldBarDisableColor"], &["infoSingleHullBarColor"], theme.good), StockBar::Hull(r.w));
     }
     if let Some(shield) = single.shield
         && let Some(r) = chosen_rect(
@@ -370,12 +385,12 @@ fn spawn_single(
             "infoSingleShieldBarArea",
         )
     {
-        bar(commands, root, r, shield, theme.accent2, StockBar::Shield(r.w));
+        bar(commands, root, r, shield, bar_colours(layout, &["infoSingleShieldBarDisableColor"], &["infoSingleShieldBarColor"], theme.accent2), StockBar::Shield(r.w));
     }
     if let Some(progress) = single.progress
         && let Some(r) = layout.at(origin, "infoSingleConstructionBarArea")
     {
-        bar(commands, root, r, progress, theme.warn, StockBar::Progress(r.w));
+        bar(commands, root, r, progress, bar_colours(layout, &["infoSingleConstructionBarDisableColor"], &["infoSingleConstructionBarColor"], theme.warn), StockBar::Progress(r.w));
     }
 
 }
@@ -459,7 +474,7 @@ fn spawn_group(
                 root,
                 hull,
                 tile.hull,
-                theme.good,
+                bar_colours(layout, &["infoMultiHullBarDisableColor", "infoMultiShieldBarDisableColor"], &["infoMultiHullBarColor"], theme.good),
                 StockBar::Group(tile.id, hull.w),
             );
         }
@@ -542,6 +557,28 @@ mod tests {
         view::{PlayerView, WorldView},
     };
     use std::sync::Arc;
+
+    /// UI-48: a stock bar's track and fill come from the cfg when it names them.
+    #[test]
+    fn bar_colours_come_from_the_cfg_and_fall_back_per_key() {
+        use sta_content::gui_cfg::Colour;
+        let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
+        let colour = |r: f32, g: f32, b: f32| Colour { r, g, b, a: 1.0 };
+        cfg.colours.insert("infoSingleConstructionBarColor".into(), colour(1.0, 0.6, 0.2));
+        cfg.colours.insert("infoSingleConstructionBarDisableColor".into(), colour(0.3, 0.3, 0.3));
+        cfg.colours.insert("infosingleshieldbardisablecolor".into(), colour(0.2, 0.2, 0.2));
+        cfg.colours.insert("infoMultiShieldBarDisableColor".into(), colour(0.1, 0.1, 0.1));
+        let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+        let fallback = Color::srgb(0.0, 1.0, 0.0);
+        // Both keys set.
+        assert_eq!(bar_colours(&layout, &["infoSingleConstructionBarDisableColor"], &["infoSingleConstructionBarColor"], fallback), (Color::srgba(0.3, 0.3, 0.3, 1.0), Color::srgba(1.0, 0.6, 0.2, 1.0)));
+        // Only the track is set (key case does not matter): the fill keeps the fallback.
+        assert_eq!(bar_colours(&layout, &["infoSingleShieldBarDisableColor"], &["infoSingleShieldBarColor"], fallback), (Color::srgba(0.2, 0.2, 0.2, 1.0), fallback));
+        // Neither: the built-in track and the fallback fill.
+        assert_eq!(bar_colours(&layout, &["infoSingleHullBarDisableColor"], &["infoSingleHullBarColor"], fallback), (BAR_TRACK, fallback));
+        // The first key the cfg sets wins.
+        assert_eq!(bar_colours(&layout, &["infoMultiHullBarDisableColor", "infoMultiShieldBarDisableColor"], &["infoMultiHullBarColor"], fallback), (Color::srgba(0.1, 0.1, 0.1, 1.0), fallback));
+    }
 
     /// A long free-text name (a mod map can carry up to the buffer's length) stays inside its
     /// authored rect: the placement parent of the single card's name and of a group tile's name

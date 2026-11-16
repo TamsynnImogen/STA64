@@ -51,6 +51,20 @@ Which cfg keys the HUD code uses by name, panel by panel, is in the generated
   commands. Existing action capability gates and targeting/build rules stay
   authoritative. Do not expose enabled unsupported gameplay actions.
 
+## Bars (UI-48)
+
+A stock bar is drawn whole in `<stem>DisableColor`, then its filled part over
+that in the bar's own colour, which for bars with a fixed colour is
+`<stem>Color` (read from the stock Armada II executable, static; not compared
+by eye). The single-selection hull, shield and construction bars and the group
+tiles' hull bars take both from the mounted cfg (the hull bar borrows the
+shield bar's track colour, the group bar the multi shield bar's, where the cfg
+has none of their own); a key the cfg does not set
+keeps the theme colour (fill) or a translucent black (track). Not yet: the
+bar's own sprite (`infoSingleShieldBar` and the like name one), the
+health-dependent fill colour of the original's hull and shield bar, and the
+energy, dilithium, crew and planet-metal bars.
+
 ## Scope and proof boundaries
 
 Top-right full menu functions (UI-20), production queue views (UI-26), per-unit
