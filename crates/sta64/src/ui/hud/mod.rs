@@ -27,6 +27,7 @@
 #![allow(dead_code)]
 
 mod cinematic;
+mod footprint;
 pub mod frame;
 pub mod ghost;
 pub mod layout;
