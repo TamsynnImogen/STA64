@@ -73,6 +73,7 @@ fn rect(r: R) -> Node {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn text(
     commands: &mut Commands,
     parent: Entity,
@@ -96,6 +97,7 @@ fn text(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn clipped_bar(
     commands: &mut Commands,
     parent: Entity,
@@ -297,6 +299,7 @@ fn lcars_shape(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_stock(
     commands: &mut Commands,
     root: Entity,

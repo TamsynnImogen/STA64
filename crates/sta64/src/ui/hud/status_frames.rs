@@ -185,7 +185,13 @@ fn installed_status_queue_and_cargo_render_and_clear() {
             resource: None,
         }],
     };
-    let profile = crate::ui::profile::UiProfile::Armada2;
+    let profile =
+        crate::ui::profile::resolve_profile(Some(&vfs), Default::default(), &Default::default());
+    assert!(
+        profile.is_stock(),
+        "installed status test requires a stock HUD profile"
+    );
+    eprintln!("status mounted profile: {profile:?}; sheet: {cfg}");
     let aspect = SIZE.x as f32 / SIZE.y as f32;
     let config = HudConfig {
         gui: Some(gui.clone()),
