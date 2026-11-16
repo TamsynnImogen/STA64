@@ -447,12 +447,14 @@ fn run_mission(
     // the camera back (the camera, the presentation state and the script hear the same reply).
     let faults = handle.with(|rt| {
         let e = rt.errors();
-        (e.len(), e.iter().skip(run.errors_seen).find(|x| is_fault(x)).map(|x| x.lines().next().unwrap_or("").to_owned()))
+        (e.len(), e.iter().skip(run.errors_seen).filter(|x| is_fault(x)).map(|x| x.lines().next().unwrap_or("").to_owned()).collect::<Vec<_>>())
     });
     run.errors_seen = faults.0;
-    if let Some(first) = faults.1 {
+    if !faults.1.is_empty() {
         // Never silent (LUA-42): the player sees a notice, the log has the error.
-        warn!("mission: the script raised an error ({first}); any cineractive it holds is released");
+        for first in &faults.1 {
+            warn!("mission: the script raised an error ({first}); any cineractive it holds is released");
+        }
         notices.write(Notice::new(Severity::Warn, "The mission script raised an error; the mission may not be able to continue. See the log."));
         replies.p1().write(ScriptReply::CineractiveReleased);
     }
