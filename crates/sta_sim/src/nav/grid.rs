@@ -270,6 +270,50 @@ impl Grid {
         grid
     }
 
+    /// Whether this grid is the one `spec` would build, found without building it: `spec` is
+    /// this grid's own spec but for solids that moved, and every moved solid blocks the same
+    /// cells where it is now as where it was. The cell costs are the base costs with the solids'
+    /// cells blocked, so the same union of blocked cells is the same grid.
+    pub(crate) fn matches_moved_solids(&self, spec: &Spec) -> bool {
+        let old = &self.spec;
+        if (old.origin, old.cell, old.width, old.height, old.default_cost, old.body) != (spec.origin, spec.cell, spec.width, spec.height, spec.default_cost, spec.body)
+            || old.hazards != spec.hazards
+            || old.area != spec.area
+            || old.solids.len() != spec.solids.len()
+        {
+            return false;
+        }
+        for (a, b) in old.solids.iter().zip(&spec.solids) {
+            if a == b {
+                continue;
+            }
+            let (ra, rb) = (spec.reach(a), spec.reach(b));
+            let (ea, eb) = (extent(a, ra), extent(b, rb));
+            let (x0, z0, x1, z1) = (ea.0.min(eb.0), ea.1.min(eb.1), ea.2.max(eb.2), ea.3.max(eb.3));
+            let (i0, i1) = spec.range(x0, x1, spec.origin.0, spec.width);
+            let (j0, j1) = spec.range(z0, z1, spec.origin.1, spec.height);
+            let (r2a, r2b) = (sq(ra.to_bits() as i128), sq(rb.to_bits() as i128));
+            for j in j0..=j1 {
+                for i in i0..=i1 {
+                    let (x, z) = spec.centre_bits(i, j);
+                    if (distance2(x, z, a) < r2a) != (distance2(x, z, b) < r2b) {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// Whether `other` answers every query exactly as `self` does: the same frame
+    /// and cell costs. Nothing reads the solids or hazards once the costs are
+    /// built (components, sizes and fields follow from the costs), so two grids
+    /// that match here are interchangeable, whatever shapes made them.
+    pub(crate) fn same_cells(&self, other: &Grid) -> bool {
+        let (a, b) = (&self.spec, &other.spec);
+        (a.origin, a.cell, a.width, a.height, a.default_cost) == (b.origin, b.cell, b.width, b.height, b.default_cost) && self.cost == other.cost
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.cost.len()
     }

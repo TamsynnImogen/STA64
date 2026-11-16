@@ -1,5 +1,5 @@
 //! CFG/SPR presentation of the shared HUD actions. No simulation policy lives here.
-mod a1;
+pub(in crate::ui::hud) mod a1;
 mod commands;
 mod info;
 pub(super) mod infobar;
@@ -319,6 +319,7 @@ pub(super) fn refresh(
     feed: Res<HudFeed>,
     mut hud: ResMut<HudState>,
     mounted: Option<Res<Mounted>>,
+    strings: Option<Res<crate::ui::i18n::Strings>>,
     roots: Query<Entity, With<HudRoot>>,
     bodies: Query<Entity, With<StockBody>>,
     legacy: Query<Entity, With<HudBody>>,
@@ -457,7 +458,7 @@ pub(super) fn refresh(
         }
     }
     let mut next = if a1 {
-        state.slots.as_ref().map_or_else(Vec::new, |slots| a1::control::buttons(&feed, hud.page, slots))
+        state.slots.as_ref().map_or_else(Vec::new, |slots| a1::control::buttons(&feed, hud.page, slots, strings.as_deref()))
     } else {
         buttons(&feed, hud.page, &state.native)
     };
