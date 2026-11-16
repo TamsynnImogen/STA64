@@ -27,9 +27,9 @@ Games: the stock data of Armada I (A1), Armada II (A2) and Fleet Operations (FO)
 | control panel | 8 | 1 | 0 | 7 | 0 |
 | drop-player box | 18 | 0 | 0 | 8 | 10 |
 | info panel, build and research | 15 | 7 | 0 | 4 | 4 |
-| info panel, multi selection | 20 | 7 | 0 | 1 | 12 |
+| info panel, multi selection | 20 | 8 | 0 | 1 | 11 |
 | info panel, other | 36 | 11 | 0 | 16 | 9 |
-| info panel, single selection | 62 | 33 | 0 | 5 | 24 |
+| info panel, single selection | 62 | 35 | 0 | 5 | 22 |
 | loading box | 9 | 0 | 0 | 7 | 2 |
 | minimap | 12 | 6 | 0 | 4 | 2 |
 | objectives | 24 | 0 | 0 | 8 | 16 |
@@ -39,15 +39,15 @@ Games: the stock data of Armada I (A1), Armada II (A2) and Fleet Operations (FO)
 | screen | 2 | 0 | 2 | 0 | 0 |
 | speed rail | 10 | 0 | 0 | 6 | 4 |
 | tooltip and cursor | 7 | 0 | 0 | 0 | 7 |
-| **all** | **581** | **96** | **5** | **158** | **322** |
+| **all** | **581** | **99** | **5** | **158** | **319** |
 
 By game (a key set by several games counts in each):
 
 | game | keys | drawn | typed | built | missing |
 |---|---:|---:|---:|---:|---:|
-| A1 | 351 | 39 | 1 | 109 | 202 |
-| A2 | 443 | 71 | 4 | 91 | 277 |
-| FO | 474 | 83 | 5 | 103 | 283 |
+| A1 | 351 | 42 | 1 | 109 | 199 |
+| A2 | 443 | 74 | 4 | 91 | 274 |
+| FO | 474 | 86 | 5 | 103 | 280 |
 
 ## avatar box
 
@@ -429,7 +429,7 @@ By game (a key set by several games counts in each):
 | `infoMultiHullBar` | FO | missing |
 | `infoMultiShieldBar` | A1 A2 FO | missing |
 | `infoMultiShieldBarArea` | A1 | missing |
-| `infoMultiShieldBarDisableColor` | A1 A2 FO | missing |
+| `infoMultiShieldBarDisableColor` | A1 A2 FO | drawn |
 | `infoMultiShipHull_#` | FO | drawn |
 | `infoMultiShipHullSm_#` | FO | drawn |
 | `infoMultiShipIcon_#` | A1 A2 FO | drawn |
@@ -498,7 +498,7 @@ By game (a key set by several games counts in each):
 | `infoSingleConstructionBar` | A1 A2 FO | drawn |
 | `infoSingleConstructionBarArea` | A1 A2 FO | drawn |
 | `infoSingleConstructionBarColor` | A1 A2 FO | drawn |
-| `infoSingleConstructionBarDisableColor` | A1 A2 FO | missing |
+| `infoSingleConstructionBarDisableColor` | A1 A2 FO | drawn |
 | `infoSingleCrewBarColor` | A2 FO | missing |
 | `infoSingleCrewDot` | A1 | drawn |
 | `infoSingleCrewDotArea` | A1 | drawn |
@@ -544,7 +544,7 @@ By game (a key set by several games counts in each):
 | `infoSingleRaceIconDisplayArea` | A1 A2 FO | drawn |
 | `infoSingleShieldBar` | A1 A2 FO | drawn |
 | `infoSingleShieldBarArea` | A1 A2 FO | drawn |
-| `infoSingleShieldBarDisableColor` | A1 A2 FO | missing |
+| `infoSingleShieldBarDisableColor` | A1 A2 FO | drawn |
 | `infoSingleSystemsDisplay` | FO | missing |
 | `infoSingleSystemsIcon` | FO | built |
 | `infoSingleWireframeIconArea` | A1 A2 FO | drawn |
