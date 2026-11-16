@@ -170,11 +170,10 @@ fn run_sfx(
         st.seen.insert(u.id, (u.pos, u.def, u.owner));
     }
     let db = &content.0;
-    // A cineractive shows the whole view, and so is heard whole (`render::units::cinematic_reveal`).
-    let me = local.and_then(|l| l.0).filter(|_| !reveal);
+    let me = local.and_then(|l| l.0);
     let view = link.curr();
     let visible: Option<HashSet<EntityId>> =
-        me.filter(|_| !view.visibility.is_empty()).map(|p| view.visible_to(p).into_iter().map(|u| u.id).collect());
+        me.filter(|_| !view.visibility.is_empty()).map(|p| crate::render::units::drawn_units(view, Some(p), reveal).into_iter().map(|u| u.id).collect());
     // Heard when the unit is the player's own or in the player's visible list; with no
     // fog data or no local player, everything is.
     let sees = |id: EntityId, owner: PlayerId| match (&visible, me) {
