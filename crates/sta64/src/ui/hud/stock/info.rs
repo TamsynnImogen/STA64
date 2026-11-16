@@ -584,7 +584,7 @@ mod tests {
         }
         queue.apply(&mut world);
         let mut texts = world.query::<(&SpriteText, &ChildOf)>();
-        let overflow = |pred: &dyn Fn(&str) -> bool| -> Vec<Overflow> {
+        let mut overflow = |pred: &dyn Fn(&str) -> bool| -> Vec<Overflow> {
             texts.iter(&world).filter(|(t, _)| pred(&t.text)).filter_map(|(_, parent)| world.get::<Node>(parent.parent()).map(|n| n.overflow)).collect()
         };
         // The single card's name: horizontal clip only (the stock look keeps the line's height).
