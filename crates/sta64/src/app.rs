@@ -140,6 +140,8 @@ pub struct LaunchConfig {
     /// `--perf <out.json>` and the `--perf-*` options: a performance run of the install's
     /// map view (TOOL-18, docs/TESTBENCH.md "Performance runs").
     pub perf: Option<crate::bench::perf::PerfOpts>,
+    /// `--reveal fog,shroud,all` (UI-46): start with the fog and/or the shroud lifted: `(fog, shroud)`.
+    pub reveal: (bool, bool),
     /// Arguments not understood, kept for the warning.
     pub unknown: Vec<String>,
 }
@@ -161,6 +163,8 @@ Usage: sta64 [options]
   --opponent-race <name>   with --skirmish: the opponent's race (default: the next playable one)
   --mission-report         print which mission script every map would run, then exit
   --nointro                skip the logo and title movies at start
+  --reveal <what>          start a single-player game with the fog and/or shroud lifted (fog, shroud, all; comma
+                           separated; testing aid, drawing only; Alt+F and Alt+V toggle them in the game)
 
 Test bench (docs/TESTBENCH.md):
   --scene <ini>            load a bench scene
@@ -234,6 +238,10 @@ impl LaunchConfig {
                 "--lcars-ui" => cfg.lcars_ui = true,
                 "--mission-report" => cfg.mission_report = true,
                 "--nointro" | "-nointro" => cfg.nointro = true,
+                "--reveal" => match value(&mut args).as_deref().and_then(crate::render::reveal::parse_reveal) {
+                    Some((f, s)) => cfg.reveal = (cfg.reveal.0 | f, cfg.reveal.1 | s),
+                    None => cfg.unknown.push("--reveal (needs fog, shroud or all, comma separated)".into()),
+                },
                 "--help" | "-h" => cfg.help = true,
                 "--scene" => cfg.scene = value(&mut args).map(PathBuf::from),
                 "--headless" => cfg.headless = true,
@@ -406,6 +414,9 @@ mod tests {
     fn bad_values_are_reported() {
         let c = parse("--clock sometimes --ticks many --control pigeon --frobnicate");
         assert_eq!(c.unknown, ["--clock sometimes", "--ticks (needs a number)", "--control pigeon", "--frobnicate"]);
+        assert_eq!(LaunchConfig::parse(["--reveal".to_owned(), "fog".to_owned()]).reveal, (true, false));
+        assert_eq!(LaunchConfig::parse(["--reveal".to_owned(), "all".to_owned()]).reveal, (true, true));
+        assert_eq!(LaunchConfig::parse(["--reveal".to_owned(), "moon".to_owned()]).unknown.len(), 1);
         assert!(parse("--help").help);
     }
 }
