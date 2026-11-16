@@ -7,7 +7,7 @@
 //!
 //! | request | shown here | evidence |
 //! |---|---|---|
-//! | `Title`, `RemoveTitle`, A1 `ShowTitle` / `ShowSubtitle` placement, A2 `ShowTitle` / `ShowSubtitle` placement (x < 0 centred), A2 `UI.addTitle` / `addSubtitle` with x, y, seconds | text at a canvas position, until its seconds run out or it is removed | A2 canvas 1600x1200 and the default places (50,50) / (50,1000) from Fleet Ops Roots' Lua, A1 640x480 rect from the A1 mission DLLs; stock A2 title colour and font **not measured** |
+//! | `Title`, `RemoveTitle`, A1 `ShowTitle` / `ShowSubtitle` placement, A2 `ShowTitle` / `ShowSubtitle` placement (x < 0 centred), A2 `UI.addTitle` / `addSubtitle` with x, y, seconds | text at a canvas position, until its seconds run out or it is removed | A2 canvas 1600x1200 and the default places (50,50) / (50,1000) from Fleet Ops Roots' Lua, A1 640x480 rect from the A1 mission DLLs; title colour: typed titles blue, subtitles white (read from the executable, static); stock A2 title font **not measured** |
 //! | `Fade` | a full-screen black rectangle, alpha ramped over `seconds` | `ScreenFade` is a black rectangle in the original; the A1 argument meanings beyond seconds **not measured** |
 //! | `Cineractive { skippable }` | state in [`CineractiveState`]; Space skips a skippable one ([`ScriptReply::CineractiveSkipped`]: the script's cancel), caps release it ([`ScriptReply::CineractiveReleased`]); the camera is `camera_cinematic` (UI-36 shot model) | `cineractiveCancel` (A2) / `switch_camera_shot` (A1) is Space in `Input.map`; no letterbox exists in the original's data or executables, so none is drawn |
 //! | objectives and briefing (host state, not a `Presentation`) | the modal panel of [`ObjectivesView`], toggled with Alt+O | rectangles of `objectivesPanelArea` and the text areas in A2 stock `gui_glob16x12.cfg`, the A1 `gui_glob.cfg` panel; the completed-line tick **not measured** |
@@ -96,8 +96,15 @@ pub const A2_CANVAS: Vec2 = Vec2::new(1600.0, 1200.0);
 /// An A1 title fades in over this many seconds when the script's flag is set (all stock titles set it;
 /// read from the executable, static; the unit of the engine's step is inferred, not measured).
 pub const A1_TITLE_FADE_SECS: f32 = 1.0;
-/// A1 titles are drawn in the title font's colour, RGB (0, 0.5, 1) (hard-coded in the executable, static).
-pub const A1_TITLE_COLOUR: [f32; 3] = [0.0, 0.5, 1.0];
+/// Typed titles (`ShowTitle`, both games) are drawn in this colour, hard-coded in each
+/// executable (read from the executable, static); subtitles are white. Title colour and font should
+/// become profile or mod data (TODO.md).
+pub const TITLE_COLOUR: [f32; 3] = [0.0, 0.5, 1.0];
+
+/// The text colour of a title or subtitle, before any fade level.
+pub fn title_colour(subtitle: bool) -> [f32; 3] {
+    if subtitle { [1.0; 3] } else { TITLE_COLOUR }
+}
 
 /// Where A1's `ShowTitle(x, y, w, h)` puts the text, in 480-unit-high canvas units from the window's
 /// top-left: centred in the rectangle by the width and height the default font would give it
@@ -552,7 +559,7 @@ pub(crate) fn consume(
             }
             // A2 `ShowTitle(id, x, y, fade)` / `ShowSubtitle`, queued after the typed title with its id:
             // the canvas place; a negative x is centred (read from the executable, static). The
-            // fade flag, the title font and colour are not applied (not measured); wrapped lines
+            // fade flag and the title font are not applied (not measured); wrapped lines
             // of a centred title are not re-centred; the title layer is under the fade overlay.
             Presentation::Call { name, args } if name == "A2.ShowTitle" || name == "A2.ShowSubtitle" => {
                 if let [Arg::Int(id), x, y, ..] = args.as_slice()
@@ -848,11 +855,11 @@ fn draw_titles(mut commands: Commands, theme: Res<Theme>, mut titles: ResMut<Tit
     for t in &titles.items {
         let size = if t.subtitle { theme.text_size } else { theme.heading_size };
         let p = t.place;
+        let colour = title_colour(t.subtitle);
         if let Some(rect) = t.a1_rect {
             let at = a1_title_at(rect, &t.text);
             let b = t.level();
-            let base = if t.subtitle { [1.0; 3] } else { A1_TITLE_COLOUR };
-            let [r, g, bl] = base.map(|c| c * b);
+            let [r, g, bl] = title_colour(t.subtitle).map(|c| c * b);
             commands.entity(root).with_child((
                 Node { position_type: PositionType::Absolute, left: Val::Vh(at.x / A1_CANVAS.y * 100.0), top: Val::Vh(at.y / A1_CANVAS.y * 100.0), ..default() },
                 children![sprite_text_styled(t.text.clone(), size, Color::srgb(r, g, bl), SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent())],
@@ -862,13 +869,13 @@ fn draw_titles(mut commands: Commands, theme: Res<Theme>, mut titles: ResMut<Tit
         if t.centred {
             commands.entity(root).with_child((
                 Node { position_type: PositionType::Absolute, left: Val::Percent(0.0), width: Val::Percent(100.0), justify_content: JustifyContent::Center, top: Val::Percent(p.at.y / p.canvas.y * 100.0), ..default() },
-                children![sprite_text_styled(t.text.clone(), size, Color::WHITE, SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent())],
+                children![sprite_text_styled(t.text.clone(), size, Color::srgb(colour[0], colour[1], colour[2]), SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent())],
             ));
             continue;
         }
         commands.entity(root).with_child((
             Node { position_type: PositionType::Absolute, left: Val::Percent(p.at.x / p.canvas.x * 100.0), top: Val::Percent(p.at.y / p.canvas.y * 100.0), max_width: Val::Percent(80.0), ..default() },
-            children![sprite_text_styled(t.text.clone(), size, Color::WHITE, SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent())],
+            children![sprite_text_styled(t.text.clone(), size, Color::srgb(colour[0], colour[1], colour[2]), SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent())],
         ));
     }
 }
@@ -1117,6 +1124,13 @@ mod tests {
 
     fn replies(app: &mut App) -> Vec<ScriptReply> {
         app.world_mut().resource_mut::<Messages<ScriptReply>>().drain().collect()
+    }
+
+    #[test]
+    fn titles_use_the_title_colour_and_subtitles_stay_white() {
+        assert_eq!(title_colour(false), TITLE_COLOUR);
+        assert_eq!(title_colour(true), [1.0; 3]);
+        assert_ne!(title_colour(false), title_colour(true));
     }
 
     #[test]
