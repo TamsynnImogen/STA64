@@ -141,8 +141,10 @@ pub(super) fn spawn(
                             JustifyContent::FlexStart
                         },
                         align_items: AlignItems::Center,
-                        // A map's or a script's name must not leave its authored rect.
-                        overflow: if field == InfoBarField::Name { Overflow::clip() } else { Overflow::visible() },
+                        // A map's or a script's name must not leave its authored rect sideways (not
+                        // vertically: the glyph line may be taller than the rect). A longer name
+                        // shows its end, as the right-justified name always did.
+                        overflow: if field == InfoBarField::Name { Overflow::clip_x() } else { Overflow::visible() },
                         ..node(rect)
                     },
                     Pickable::IGNORE,
