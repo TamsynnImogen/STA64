@@ -64,6 +64,7 @@ fn a_stopped_id_is_reusable_and_the_old_deadline_is_gone() {
     assert!(rt.errors().is_empty(), "{:?}", rt.errors());
 }
 
+/// Regression guard (passes with and without the fix).
 #[test]
 fn a_running_id_still_raises_duplicate_id() {
     let rt = MissionRuntime::from_source(
@@ -81,9 +82,8 @@ fn a_running_id_still_raises_duplicate_id() {
     assert_eq!(rt.eval::<String>("return a.state").unwrap(), "Started");
 }
 
-/// The shape of a stock win: an earlier hook uses ids, a later hook (a monitor's) begins a non-skippable
-/// cineractive and then builds timers under the same ids, the last of which ends the mission. Before the
-/// fix the later hook raised after the cineractive began and the mission could never end.
+/// Fix test: a hook that begins a non-skippable cineractive and then builds timers under ids of expired
+/// timers reaches `Mission:finish`.
 #[test]
 fn a_late_end_sequence_reusing_ids_still_ends_the_mission() {
     let mut rt = MissionRuntime::from_source(
@@ -109,7 +109,7 @@ fn a_late_end_sequence_reusing_ids_still_ends_the_mission() {
     assert!(rt.finished(), "the late sequence did not reach Mission:finish");
 }
 
-/// A raised error in a hook that began a non-skippable cineractive is never silent: the runtime
+/// Regression guard (passes with and without the fix): a raised hook error is never silent: the runtime
 /// lists it (the client shows a notice and logs it, `mission_host::run_mission`).
 #[test]
 fn a_hook_error_after_a_non_skippable_cineractive_is_reported() {
