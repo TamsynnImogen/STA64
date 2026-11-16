@@ -26,7 +26,7 @@ fn busy() -> (Sim, EntityId, EntityId, EntityId) {
 }
 
 fn rec(bytes: &[u8]) -> AlertRec {
-    let (r, _): (AlertRec, _) = postcard::take_from_bytes(chain::split(bytes).last().unwrap()).unwrap();
+    let (r, _): (AlertRec, _) = postcard::take_from_bytes(&chain::split(bytes)[chain::ALERTS]).unwrap();
     r
 }
 

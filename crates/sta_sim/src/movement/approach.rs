@@ -201,7 +201,7 @@ impl Sim {
                 if !far && t.speed < combat && (f.attack_combat_speed || d < w) {
                     plan.cap = Some(combat);
                 }
-                let can = vw > vi && vi > crate::speed_override::HELD_SPEED && plan.cap.is_none() && aligned && to_goal >= warp_lead(vw, vi, r_own);
+                let can = self.warp_allowed() && vw > vi && vi > crate::speed_override::HELD_SPEED && plan.cap.is_none() && aligned && to_goal >= warp_lead(vw, vi, r_own);
                 warp = if warp { can } else { can && far && u.speed > Fixed::from_f64(0.9) * vi };
                 // LUA-31: a keyed craft's warp speed below impulse caps the aligned far leg.
                 if plan.cap.is_none() && far && aligned && u.stats.too_close_for_warp > Fixed::ZERO && to_goal > u.stats.too_close_for_warp {

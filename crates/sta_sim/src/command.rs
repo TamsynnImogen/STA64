@@ -348,6 +348,20 @@ pub enum Edit {
     /// Saved per unit. The end of a cineractive resets every craft's. Rejected
     /// for anything but a live craft. SCRIPT/BENCH only. Appended tag 47.
     WarpSpeed(EntityId, Option<Fixed>),
+    /// A mission-wide switch (LUA-41): `AllowWarp`, `CollisionPrevention`,
+    /// `PathPlanning` (writes the override of the cfg key) or
+    /// `ObstacleAvoidance` (stored, no effect in Armada II). Global: no team,
+    /// no unit. Always accepted. SCRIPT/BENCH only. Appended tag 48.
+    MissionSwitch(MissionSwitch, bool),
+}
+
+/// Which switch an [`Edit::MissionSwitch`] sets (appended variants only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MissionSwitch {
+    AllowWarp,
+    CollisionPrevention,
+    ObstacleAvoidance,
+    PathPlanning,
 }
 
 /// Which team-pool rule an [`Edit::TeamPool`] applies (appended variants only).
@@ -585,6 +599,17 @@ mod tests {
             assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
         }
         assert_eq!(postcard::to_allocvec(&Edit::WarpSpeed(EntityId(1), None)).unwrap(), [47, 1, 0]);
+    }
+
+    #[test]
+    fn mission_switch_edit_appends_tag_48() {
+        for (i, which) in [MissionSwitch::AllowWarp, MissionSwitch::CollisionPrevention, MissionSwitch::ObstacleAvoidance, MissionSwitch::PathPlanning].into_iter().enumerate() {
+            let edit = Edit::MissionSwitch(which, true);
+            let bytes = postcard::to_allocvec(&edit).unwrap();
+            assert_eq!(bytes, [48, i as u8, 1], "{edit:?}");
+            assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
+        }
+        assert!(postcard::from_bytes::<Edit>(&[48, 4, 1]).is_err(), "no fifth switch");
     }
 
     #[test]

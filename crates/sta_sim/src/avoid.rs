@@ -325,6 +325,10 @@ impl Sim {
     /// [`separate_3d`]. Every other model keeps the XZ half-and-half rule
     /// ([`separate`]), bit for bit.
     fn craft_shifts(&self, bodies: &[Body]) -> (Vec<Shift>, Vec<Lift>) {
+        // LUA-41: `CollisionPrevention(false)` skips the craft-craft shifts (solids still push).
+        if !self.mission_switches.collision_prevention {
+            return (Vec::new(), Vec::new());
+        }
         let profile = self.content.as_ref().map(|c| c.profile()).unwrap_or_default();
         if Model::of(profile) != Model::Smooth {
             return (separate(&Grid::build(bodies, CELL_LOG2)), Vec::new());

@@ -35,6 +35,7 @@ mod queries;
 mod random;
 mod resource_calls;
 mod shared_calls;
+mod switch_calls;
 mod stock_bindings;
 mod subsystems;
 mod team_pool;
@@ -91,6 +92,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
     handles::install(lua, ctx, &a2)?;
     shared_calls::install(lua, ctx, &a2)?;
     resource_calls::install(lua, ctx, &a2)?;
+    switch_calls::install(lua, ctx, &a2)?;
     team_pool::install(lua, ctx, &a2)?;
     super::taint::wrap(lua, ctx, &a2)?;
     // Keep last: wraps every function above (pending BuildObject handles).
