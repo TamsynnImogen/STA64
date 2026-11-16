@@ -19,6 +19,63 @@ use crate::input::orders::Aim;
 use crate::render::hulls::{HullMaterial, HullSource};
 use crate::render::units::{NeedsModel, TeamColour, to_bevy};
 
+/// Live placement inputs outside WorldView; no simulation state is copied into
+/// the HUD feed or persisted by this presentation adapter.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct PlacementInputs<'w, 's> {
+    maps: Query<'w, 's, &'static super::object_footprints::MapFootprintRegions>,
+    link: Option<Res<'w, crate::sim_link::SimLink>>,
+}
+impl PlacementInputs<'_, '_> {
+    fn status(
+        &self,
+        feed: &HudFeed,
+        bounds: Option<&(SimVec3, SimVec3)>,
+        armed: &Armed,
+        at: SimVec3,
+    ) -> (SimVec3, Result<(), SiteError>) {
+        let Some(db) = feed.content.as_deref() else {
+            return (at, Ok(()));
+        };
+        let regions: Vec<_> = self
+            .maps
+            .iter()
+            .flat_map(|map| map.0.regions.iter().cloned())
+            .collect();
+        let production = self.link.as_ref()
+            .map_or(&[][..], |link| link.production());
+        let site = crate::placement::ghost_site_with_context(
+            db,
+            bounds,
+            &feed.view,
+            armed.what,
+            armed.builder,
+            at,
+            &regions,
+            production,
+        );
+        (site.at, site.status)
+    }
+    pub(super) fn order(
+        &self,
+        feed: &HudFeed,
+        bounds: Option<&(SimVec3, SimVec3)>,
+        armed: &Armed,
+        at: SimVec3,
+    ) -> Result<(SimVec3, sta_sim::command::Order), SiteError> {
+        let (site_at, status) = self.status(feed, bounds, armed, at);
+        status?;
+        Ok((
+            site_at,
+            sta_sim::command::Order::Build {
+                builder: armed.builder,
+                what: armed.what,
+                at: Some(at),
+            },
+        ))
+    }
+}
+
 /// The map's playable volume, for build sites (`None`: unbounded). Set when a
 /// map loads, from the same bounds the sim was given.
 #[derive(Resource, Default, Clone, Copy, Debug, PartialEq)]
@@ -65,7 +122,7 @@ pub(super) const OCCUPIED: Color = Color::srgba(0.65, 0.8, 1.0, 0.65);
 
 #[derive(Resource)]
 pub(crate) struct FootprintAssets {
-    meshes: std::collections::BTreeMap<(u32, u32), Handle<Mesh>>,
+    meshes: std::collections::BTreeMap<(u32, u32, u32), Handle<Mesh>>,
     cell_size: f32,
     clear: Handle<StandardMaterial>,
     blocked: Handle<StandardMaterial>,
@@ -75,22 +132,13 @@ pub(crate) struct FootprintAssets {
 impl FootprintAssets {
     pub(super) fn grid(&mut self, meshes: &mut Assets<Mesh>, half: Vec2) -> (Handle<Mesh>, Vec3) {
         let (_, spacing) = footprint_shape(half.max_element(), self.cell_size);
-        let count = (half * 2.0 / spacing)
-            .ceil()
-            .clamp(Vec2::splat(2.0), Vec2::splat(128.0));
-        let (columns, rows) = (count.x as u32, count.y as u32);
+        let key = (half.x.to_bits(), half.y.to_bits(), spacing.to_bits());
         let mesh = self
             .meshes
-            .entry((columns, rows))
-            .or_insert_with(|| {
-                meshes.add(if columns == rows {
-                    super::footprint::mesh(columns)
-                } else {
-                    super::footprint::rectangular_mesh(columns, rows)
-                })
-            })
+            .entry(key)
+            .or_insert_with(|| meshes.add(super::footprint::sized_mesh(half, spacing)))
             .clone();
-        (mesh, Vec3::splat(spacing))
+        (mesh, Vec3::ONE)
     }
 }
 
@@ -316,6 +364,7 @@ pub fn update_ghost(
     feed: Res<HudFeed>,
     aim: Option<Res<Aim>>,
     bounds: Option<Res<PlacementBounds>>,
+    inputs: PlacementInputs,
     mut ghosts: Query<
         (Entity, &mut Ghost, &mut Transform, &mut Visibility),
         Without<PinnedBlueprint>,
@@ -349,7 +398,7 @@ pub fn update_ghost(
         match at {
             Some(at) => {
                 // The placement rule the sim applies: an orbital station snaps onto a planet's orbit.
-                let (site_at, status) = site_status(
+                let (site_at, status) = inputs.status(
                     &feed,
                     bounds.as_deref().and_then(|b| b.0.as_ref()),
                     armed,
@@ -531,9 +580,12 @@ mod tests {
         let ring = world.get::<Children>(root).unwrap().iter().next().unwrap();
         assert!(world.get::<FootprintGrid>(ring).is_some());
         let local = world.get::<Transform>(ring).unwrap();
-        let (cells, spacing) = footprint_shape(radius, 50.0);
-        assert_eq!(local.scale, Vec3::splat(spacing));
-        assert!(cells as f32 * spacing >= 2.0 * radius);
+        assert_eq!(local.scale, Vec3::ONE);
+        let mesh_handle = &world.get::<Mesh3d>(ring).unwrap().0;
+        let grid = world.resource::<Assets<Mesh>>().get(mesh_handle).unwrap();
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(points)) = grid.attribute(Mesh::ATTRIBUTE_POSITION) else { panic!("positions") };
+        assert_eq!(points.iter().map(|p| p[0]).fold(f32::NEG_INFINITY, f32::max), radius);
+        assert_eq!(points.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min), -radius);
         assert_eq!(local.translation.x, 0.0);
         assert_eq!(local.translation.z, 0.0);
         let clear = world

@@ -552,6 +552,9 @@ mod tests {
         let file = dir.join("config/settings.cfg");
         let mut a = app(&file, false, false);
         a.world_mut().resource_mut::<KeyBindings>().rebind(Action::SelectType, KeyCode::KeyQ);
+        a.world_mut().resource_mut::<KeyBindings>().rebind(Action::RevealModifier, KeyCode::ControlRight);
+        a.world_mut().resource_mut::<KeyBindings>().rebind(Action::RevealFog, KeyCode::KeyG);
+        a.world_mut().resource_mut::<KeyBindings>().rebind(Action::RevealShroud, KeyCode::KeyH);
         *a.world_mut().resource_mut::<MaxSelection>() = MaxSelection::new(75);
         a.world_mut().resource_mut::<UiPreference>().lcars = true;
         a.world_mut().resource_mut::<Settings>().set_number(SettingKey::MusicVolume, 33.0);
@@ -563,6 +566,9 @@ mod tests {
         let b = app(&file, false, false);
         assert_eq!(b.world().resource::<KeyBindings>().keys(Action::SelectType), [KeyCode::KeyQ]);
         assert_eq!(b.world().resource::<KeyBindings>().keys(Action::Stop), [KeyCode::KeyS, KeyCode::Space]);
+        assert_eq!(b.world().resource::<KeyBindings>().keys(Action::RevealModifier), [KeyCode::ControlRight]);
+        assert_eq!(b.world().resource::<KeyBindings>().keys(Action::RevealFog), [KeyCode::KeyG]);
+        assert_eq!(b.world().resource::<KeyBindings>().keys(Action::RevealShroud), [KeyCode::KeyH]);
         assert_eq!(b.world().resource::<MaxSelection>().get(), 75);
         assert!(b.world().resource::<UiPreference>().lcars);
         assert!(b.world().resource::<Settings>().lcars_ui);
@@ -594,6 +600,9 @@ mod tests {
         std::fs::write(&file, "select_type = KeyZ\n").unwrap();
         let a = app(&file, false, false);
         assert_eq!(a.world().resource::<KeyBindings>().keys(Action::SelectType), [KeyCode::KeyZ]);
+        assert_eq!(a.world().resource::<KeyBindings>().keys(Action::RevealModifier), [KeyCode::AltLeft, KeyCode::AltRight]);
+        assert_eq!(a.world().resource::<KeyBindings>().keys(Action::RevealFog), [KeyCode::KeyF]);
+        assert_eq!(a.world().resource::<KeyBindings>().keys(Action::RevealShroud), [KeyCode::KeyV]);
         assert_eq!(a.world().resource::<Settings>().master, Settings::default().master);
         drop(a);
         // Garbled text: bad lines skipped with warnings, good lines kept.

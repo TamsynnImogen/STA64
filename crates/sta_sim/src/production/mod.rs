@@ -279,6 +279,7 @@ impl Production {
         what: ContentKey,
         at: Option<Vec3>,
         bounds: Option<&(Vec3, Vec3)>,
+        regions: &[sta_content::Region],
     ) -> bool {
         let Some(b) = units.get(builder) else {
             return false;
@@ -322,33 +323,70 @@ impl Production {
             }
             EntityKind::Craft => {
                 let Some(at) = at else { return false };
-                // A new order replaces a pending deploy.
-                self.drop_deploy(db, eco, builder);
                 // The same rule the placement ghost shows (see [`site`], [`orbit`]).
                 // An orbital station replaces the site rule with the orbit's:
                 // the sim snaps the cursor point to the planet's slot.
                 let mut outward = None;
+                let mut parent_planet = None;
                 let at = if db.unit(what).is_some_and(orbit::is_orbital) {
                     let (planets, mut orbiters) = orbit::from_entities(db, units);
                     orbiters.extend(
-                        self.deploys.iter().filter(|(_, d)| db.unit(d.def).is_some_and(orbit::is_orbital)).map(|(_, d)| d.at),
+                        self.deploys
+                            .iter()
+                            .filter(|(id, d)| {
+                                *id != builder && db.unit(d.def).is_some_and(orbit::is_orbital)
+                            })
+                            .map(|(_, d)| d.at),
                     );
                     match orbit::snap(&planets, &orbiters, at) {
                         Ok(slot) => {
                             outward = Some(slot.heading);
+                            parent_planet = Some(slot.planet);
                             slot.at
                         }
                         Err(_) => return false,
                     }
                 } else {
-                    let mut others = site::entity_obstacles(db, units, builder);
-                    others.extend(self.deploys.iter().map(|(_, d)| (d.at, site::footprint(db, d.def))));
-                    if site::check_site(db, bounds, what, at, others).is_err() {
-                        return false;
-                    }
                     at
                 };
-                if pay_now && !(self.officers_admit(units, db, eco, owner, what) && pay(eco, db, owner, what)) {
+                let obstacles = units
+                    .iter()
+                    .filter(|u| {
+                        u.id != builder
+                            && Some(u.id) != parent_planet
+                            && u.kind != EntityKind::Projectile
+                    })
+                    .filter(|u| db.unit(u.def).is_some())
+                    .map(|u| site::unit_bounds(db, u.def, u.pos));
+                let reserved = self
+                    .deploys
+                    .iter()
+                    .filter(|(id, _)| *id != builder)
+                    .map(|(_, d)| site::unit_bounds(db, d.def, d.at));
+                // An orbital station must overlap its attachment planet. It
+                // still cannot encroach on another object, region or site.
+                let limits = if parent_planet.is_some() {
+                    None
+                } else {
+                    bounds
+                };
+                if site::check_bounds(
+                    limits,
+                    site::unit_bounds(db, what, at),
+                    obstacles
+                        .chain(reserved)
+                        .chain(regions.iter().filter_map(site::region_bounds)),
+                )
+                .is_err()
+                {
+                    return false;
+                }
+                // Invalid geometry leaves an existing reservation untouched.
+                self.drop_deploy(db, eco, builder);
+                if pay_now
+                    && !(self.officers_admit(units, db, eco, owner, what)
+                        && pay(eco, db, owner, what))
+                {
                     return false;
                 }
                 self.deploys.insert(

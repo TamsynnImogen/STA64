@@ -399,7 +399,7 @@ impl Sim {
                     return false;
                 }
                 self.clear_scripted(c.player, &[*builder]);
-                let ok = self.production.order_build(&db, &mut self.units, &mut self.economy, c.player, *builder, *what, *at, self.bounds.as_ref());
+                let ok = self.production.order_build(&db, &mut self.units, &mut self.economy, c.player, *builder, *what, *at, self.bounds.as_ref(), &self.regions);
                 if ok && self.production.is_deploying(*builder) {
                     // A craft sent to build drops its attack (SIM-36: the
                     // approach would otherwise steer it off its site).

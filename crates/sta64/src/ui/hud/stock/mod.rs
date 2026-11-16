@@ -88,6 +88,11 @@ pub(super) fn node(r: R) -> Node {
     }
 }
 
+/// Reuse the stock info panel's five authored wireframe layers for queue jobs.
+pub(super) fn queue_wireframe(commands: &mut Commands, root: Entity, r: R, model: &str) {
+    info::wireframe_layers(commands, root, r, model);
+}
+
 fn metadata<'a>(native: &'a NativeCommands, act: &Act) -> Option<&'a NativeCommand> {
     if let Act::NativeFormation(odf) = act {
         return native.commands.get(odf);

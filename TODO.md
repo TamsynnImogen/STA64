@@ -169,6 +169,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] FO4 AI startup (#806): start a fresh Federation versus Klingon skirmish. The computer's avatar starter should change into its authored productive station, then begin building. Check that the human starter remains available for manual avatar selection. The automatic AI owner gate is backed by static original-hook evidence and headless tests; graphical acceptance remains manual.
 
+- [?] Reveal bindings (UI-49, #868): rebind `reveal_modifier`, `reveal_fog` and `reveal_shroud` in the existing settings file, restart and check the new combinations. Defaults stay Alt+F/V; the modifier is required and comma-separated keys are alternatives. Check menu/cheat entry capture and multiplayer refusal. A graphical binding editor is not part of this change.
+
 ### Playtest checks from the 2026-11-14/15 merges
 
 - [?] Planets (#732): in a map view a planet shows its near, camera-side hemisphere lit toward the key light, with the cloud shell and halo over the ground; check that dense clouds do not dim the halo.
@@ -217,6 +219,10 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] Armada II title and fade (#835): in an Armada II mission with a delayed fade out the held fade clears as intended and the title appears at the script's placement.
 - [?] Boarding data (#800): with the stock Armada II install `cargo test -p sta_sim` boarding scenarios still pass after the data differences the PR lists.
 
+
+- [?] Armed cursors (UI-44, #863): arm Move, Attack, Mine, Colonize, Transport, Rally and station placement in Classic/FO; compare valid and refused targets with the click result, including a blocked build site and insufficient stock. Check cancellation, crossing the HUD, an open menu and cheat typing. Missing refusal artwork keeps the existing pointer fallback; Repair and targeted-special actions remain unavailable.
+
+- [?] Current-frame tooltip placement (UI-50, #869): hover near each window edge until short and verbose tooltips appear, switch between short and tall tooltips, then resize/change UI scale. The first visible frame should use the new box size; background, border and all text should stay together inside the window. Confirm localized text, crispness and normal hover delays in Classic and FO.
 
 ## Checked earlier (morning list)
 
@@ -1057,3 +1063,6 @@ FO total: 396 of 474 key names in its `gui_*.cfg` files and hook reads are not m
 - [?] RND-36 all footprints: arm station placement and inspect footprints under existing ships/stations, moons/planets/wormholes, nebulae and asteroid fields; move a ship and verify its grid follows. Cancel or confirm placement: all grids disappear, while a confirmed station blueprint stays only until welding starts. Check hidden objects stay hidden and a second match starts clean.
 - [?] Single-player cheat input (UI-47, #848): Enter opens, exact code then Enter submits, Escape cancels; check typing never issues map orders, moves the camera or opens the game menu. Check the A1/A2/FO money amounts, selected-ship FO codes, forced campaign win/loss and refusal in multiplayer. See docs/CHEATS.md; no native/graphical acceptance yet.
 - [ ] Cheat prerequisites (UI-47): A1 `canofwhoopass` needs original tactical-process modes; FO `levelup` needs rank/replacement progression. Both currently explain the missing system and apply no substitute. Optional A2FOCheats configurable five-resource grants and timed `dis` recovery are also absent.
+
+- [ ] UI-26 live acceptance (#851): verify ordered station jobs, advancing active/construction bars and empty/partial/full freighter storage in A1/A2/Classic/FO. Optional presentation views leave serialized world-view bytes unchanged; unsupported per-item cancellation needs a separate command/refund seam.
+- [?] Construction queue artwork (#870): queued ships show layered wireframes without names or build-button icons; FO queue frames follow `infoBuildQueueSlot_#`, and the native active bar uses `infoProgressBar` geometry with `infoSingleConstructionBar` SPR artwork. Check station queues in Classic, A1 and FO, including mod-overridden slot art and an advancing bar.

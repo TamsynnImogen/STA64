@@ -737,7 +737,11 @@ impl SpriteTable {
                     e.emitter_type = match val.to_ascii_lowercase().as_str() {
                         "cloud" => EmitterType::Cloud,
                         "beam" => EmitterType::Beam,
-                        _ => EmitterType::Spray,
+                        "spray" => EmitterType::Spray,
+                        _ => {
+                            self.warn(file, i, "unknown emitter type; using spray");
+                            EmitterType::Spray
+                        }
                     }
                 }
                 "sprite" => e.sprite = Some(String::from(val)),
@@ -816,6 +820,38 @@ particle_count=30\r\n\
         assert_eq!(e.emitter_type, EmitterType::Cloud);
         assert_eq!(e.particle_count, 30);
         assert_eq!(e.sprite.as_deref(), Some("ventplas"));
+    }
+
+    #[test]
+    fn unknown_emitter_type_warns_with_included_file_and_line_and_uses_spray() {
+        let t = SpriteTable::load("root.spr", |name| match name {
+            "root.spr" => Some(b"@include child.spr\n".to_vec()),
+            "child.spr" => Some(b"@emitter unknown\ntype=mist\n@end_emitter\n".to_vec()),
+            _ => None,
+        });
+
+        assert_eq!(t.emitter("unknown").unwrap().emitter_type, EmitterType::Spray);
+        assert_eq!(
+            t.warnings,
+            [Warning {
+                file: String::from("child.spr"),
+                line: 2,
+                message: "unknown emitter type; using spray",
+            }]
+        );
+    }
+
+    #[test]
+    fn supported_and_default_emitter_types_do_not_warn() {
+        let t = SpriteTable::parse(
+            b"@emitter default\n@end_emitter\n@emitter spray\ntype=Spray\n@end_emitter\n@emitter cloud\ntype=cloud\n@end_emitter\n@emitter beam\ntype=BEAM\n@end_emitter\n",
+        );
+
+        assert_eq!(t.emitter("default").unwrap().emitter_type, EmitterType::Spray);
+        assert_eq!(t.emitter("spray").unwrap().emitter_type, EmitterType::Spray);
+        assert_eq!(t.emitter("cloud").unwrap().emitter_type, EmitterType::Cloud);
+        assert_eq!(t.emitter("beam").unwrap().emitter_type, EmitterType::Beam);
+        assert!(t.warnings.is_empty());
     }
 
     #[test]

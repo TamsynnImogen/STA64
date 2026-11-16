@@ -79,13 +79,16 @@ fn rows_only(r: &mut Reader, key: &str) -> Option<Lookup> {
     if r.odf.has_rows(key) { lookup(r, key).filter(|l| !l.rows.is_empty()) } else { None }
 }
 
+/// Interned rows of one weapon lookup table.
+type LookupRows = std::sync::Arc<[(std::sync::Arc<str>, Fixed)]>;
+
 /// Shares equal tables and names between weapons (CON-54): an ordnance is read
 /// once per weapon that fires it, and Fleet Operations pastes the same table
 /// into thousands of files.
 #[derive(Default)]
 pub(crate) struct LookupPool {
     names: std::collections::HashSet<std::sync::Arc<str>>,
-    tables: std::collections::HashSet<crate::def::LookupRows>,
+    tables: std::collections::HashSet<LookupRows>,
 }
 
 impl LookupPool {
