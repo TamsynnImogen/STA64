@@ -22,7 +22,7 @@ use crate::render::units::{NeedsModel, TeamColour, to_bevy};
 /// Live placement inputs outside WorldView; no simulation state is copied into
 /// the HUD feed or persisted by this presentation adapter.
 #[derive(bevy::ecs::system::SystemParam)]
-pub(super) struct PlacementInputs<'w, 's> {
+pub(crate) struct PlacementInputs<'w, 's> {
     maps: Query<'w, 's, &'static super::object_footprints::MapFootprintRegions>,
     link: Option<Res<'w, crate::sim_link::SimLink>>,
 }
