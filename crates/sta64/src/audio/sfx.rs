@@ -158,6 +158,7 @@ fn run_sfx(
     // The advisor lines ("construction complete") are speech: dropped, not replayed, while a
     // cutscene runs, a script's message or music plays or a movie plays. Weapons, hits and
     // explosions are sound effects and play on.
+    let reveal = crate::render::units::cinematic_reveal(cine.as_deref());
     let cutscene = crate::ui::presentation::event_voices_silenced(crate::ui::presentation::cutscene_running(cine), script_sounds.as_deref(), movies.as_deref());
     let (Some(link), Some(content)) = (link, content) else {
         msgs.clear();
@@ -172,7 +173,7 @@ fn run_sfx(
     let me = local.and_then(|l| l.0);
     let view = link.curr();
     let visible: Option<HashSet<EntityId>> =
-        me.filter(|_| !view.visibility.is_empty()).map(|p| view.visible_to(p).into_iter().map(|u| u.id).collect());
+        me.filter(|_| !view.visibility.is_empty()).map(|p| crate::render::units::drawn_units(view, Some(p), reveal).into_iter().map(|u| u.id).collect());
     // Heard when the unit is the player's own or in the player's visible list; with no
     // fog data or no local player, everything is.
     let sees = |id: EntityId, owner: PlayerId| match (&visible, me) {

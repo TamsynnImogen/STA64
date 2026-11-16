@@ -49,6 +49,30 @@ pub struct SelectRadius(pub f32);
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct LocalPlayer(pub Option<PlayerId>);
 
+/// While a cineractive runs the sensors do not limit what is drawn, heard and outlined: a scripted
+/// shot's subject (an enemy fleet far from the player's sensors) must be in it. Grade: not measured
+/// in the original; STA64's rule, taken from the fog rule already in the code (the cinematic view
+/// draws no fog or shroud). It lifts sensor range, not a cloak: a cloaked unit the local player could
+/// not otherwise see stays hidden (its own and allied cloaked units are in `visible_to` already).
+/// Any other reveal (the fog cheat, UI-46) composes with it: with the fog lifted `visible_to` is
+/// already every unit.
+pub fn cinematic_reveal(cine: Option<&crate::ui::presentation::CineractiveState>) -> bool {
+    cine.is_some_and(|c| c.on)
+}
+
+/// The units the client draws, hears and outlines: every unit with no local player; what
+/// `visible_to(local)` lists; and, while `reveal` (a cineractive), also every unit that is not cloaked.
+pub fn drawn_units(view: &WorldView, local: Option<PlayerId>, reveal: bool) -> Vec<&sta_sim::UnitView> {
+    match local {
+        None => view.units.iter().collect(),
+        Some(p) if reveal => {
+            let seen: BTreeSet<EntityId> = view.visible_to(p).into_iter().map(|u| u.id).collect();
+            view.units.iter().filter(|u| seen.contains(&u.id) || !u.flags.contains(UnitFlags::CLOAKED)).collect()
+        }
+        Some(p) => view.visible_to(p),
+    }
+}
+
 /// The team colour the unit is drawn in, from its owner.
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct TeamColour(pub Color);
@@ -140,17 +164,21 @@ fn pick_bodies(mut commands: Commands, link: Res<SimLink>, content: Res<ContentR
     }
 }
 
+/// What `sync_units` last drew: the view, the local player and whether a cineractive revealed the view.
+type SeenKey = (Arc<WorldView>, Option<PlayerId>, bool);
+
 /// Diff the current view against [`SimEntities`].
 #[allow(clippy::too_many_arguments)]
 pub fn sync_units(
     mut commands: Commands,
     link: Res<SimLink>,
     local: Res<LocalPlayer>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
     teams: Option<Res<TeamColours>>,
     mut map: ResMut<SimEntities>,
     existing: Query<(Entity, &SimEntity), Without<FromView>>,
     mut live: Query<(&mut HullShare, &mut UnitOwner, Has<Cloaked>), With<FromView>>,
-    mut seen: Local<Option<(Arc<WorldView>, Option<PlayerId>)>>,
+    mut seen: Local<Option<SeenKey>>,
     content: Option<Res<ContentRes>>,
 ) {
     // Entities the map view spawned for its own ships belong to the link too.
@@ -158,18 +186,15 @@ pub fn sync_units(
         map.0.entry(u.0).or_insert(e);
     }
     let curr = link.curr();
-    if seen.as_ref().is_some_and(|(v, p)| Arc::ptr_eq(v, curr) && *p == local.0) {
+    // While a cineractive runs the sensors do not limit the view (`drawn_units`); the next frame after
+    // it ends the local player's sight applies again and the revealed enemies are despawned below.
+    let reveal = cinematic_reveal(cine.as_deref());
+    if seen.as_ref().is_some_and(|(v, p, r)| Arc::ptr_eq(v, curr) && *p == local.0 && *r == reveal) {
         return;
     }
-    *seen = Some((curr.clone(), local.0));
+    *seen = Some((curr.clone(), local.0, reveal));
 
-    let mut want: BTreeMap<EntityId, &sta_sim::UnitView> = match local.0 {
-        Some(p) => curr.visible_to(p),
-        None => curr.units.iter().collect(),
-    }
-    .into_iter()
-    .map(|u| (u.id, u))
-    .collect();
+    let mut want: BTreeMap<EntityId, &sta_sim::UnitView> = drawn_units(curr, local.0, reveal).into_iter().map(|u| (u.id, u)).collect();
     // A neutral planet or backdrop is scenery and stays drawn outside the sensors. Grade: that the original
     // draws planets regardless of sensors is not measured, inferred from the stock look. Clicks, hover, right-click orders, the order
     // cursor and HUD targeting follow `visible_to` (`input::select::target_seen`), so a kept planet cannot be
@@ -755,6 +780,73 @@ mod view_tests {
         assert_eq!(ids(&mut app), BTreeSet::from([1]));
         let e = app.world().resource::<SimEntities>().0[&EntityId(1)];
         assert!(app.world().get::<Cloaked>(e).is_some());
+    }
+
+    #[test]
+    fn a_cineractive_draws_the_enemy_fleet_and_it_is_gone_the_next_frame_after_it_ends() {
+        use crate::ui::presentation::CineractiveState;
+        let all = vec![unit(1, 1, 100, UnitFlags::default()), unit(2, 2, 100, UnitFlags::default()), unit(3, 2, 100, UnitFlags::default())];
+        // Player 1 sees only its own unit 1; 2 and 3 belong to the enemy and are out of its sensors.
+        let v = view(0, all, vec![(PlayerId(1), vec![EntityId(1)]), (PlayerId(2), vec![EntityId(2), EntityId(3)])]);
+        let mut app = app_with(Box::new(Views(vec![v], 0)), Some(PlayerId(1)));
+        app.insert_resource(CineractiveState::default());
+        let ids = |app: &mut App| roots(app).into_iter().map(|r| r.0.0).collect::<BTreeSet<_>>();
+        app.update();
+        app.update();
+        assert_eq!(ids(&mut app), BTreeSet::from([1]), "the enemy is out of sight in play");
+        app.world_mut().resource_mut::<CineractiveState>().on = true;
+        app.update();
+        assert_eq!(ids(&mut app), BTreeSet::from([1, 2, 3]), "a cineractive shows the enemy fleet its shot is about");
+        app.world_mut().resource_mut::<CineractiveState>().on = false;
+        app.update();
+        assert_eq!(ids(&mut app), BTreeSet::from([1]), "and it is gone again the next frame after the cineractive ends");
+        consistent_with_visible(&mut app);
+    }
+
+    #[test]
+    fn a_cineractive_lifts_sensor_range_not_a_cloak() {
+        let all = vec![
+            unit(1, 1, 100, UnitFlags::CLOAKED),
+            unit(2, 2, 100, UnitFlags::default()),
+            unit(3, 2, 100, UnitFlags::default()),
+            unit(4, 2, 100, UnitFlags::CLOAKED),
+            unit(5, 2, 100, UnitFlags::CLOAKED),
+        ];
+        // Player 1 sees its own cloaked unit 1, the enemy 2 and, by a sensor, the enemy cloaked 5.
+        let v = view(0, all, vec![(PlayerId(1), vec![EntityId(1), EntityId(2), EntityId(5)])]);
+        let ids = |local: Option<PlayerId>, reveal: bool| drawn_units(&v, local, reveal).into_iter().map(|u| u.id.0).collect::<Vec<_>>();
+        assert_eq!(ids(Some(PlayerId(1)), false), [1, 2, 5], "in play: what the sensors list");
+        assert_eq!(ids(Some(PlayerId(1)), true), [1, 2, 3, 5], "a cineractive adds the unseen enemy, not the unseen cloaked one (4)");
+        assert_eq!(ids(None, true), [1, 2, 3, 4, 5], "with no local player everything is drawn, as before");
+    }
+
+    #[test]
+    fn a_cineractive_while_the_fog_is_lifted_keeps_the_revealed_units() {
+        use crate::ui::presentation::CineractiveState;
+        let all = vec![unit(1, 1, 100, UnitFlags::default()), unit(2, 2, 100, UnitFlags::default()), unit(3, 2, 100, UnitFlags::default())];
+        let v = view(0, all, vec![(PlayerId(1), vec![EntityId(1)]), (PlayerId(2), vec![EntityId(2), EntityId(3)])]);
+        let mut app = app_with(Box::new(Views(vec![v], 0)), Some(PlayerId(1)));
+        app.insert_resource(CineractiveState::default());
+        app.world_mut().resource_mut::<SimLink>().set_fog_lifted(true);
+        let ids = |app: &mut App| roots(app).into_iter().map(|r| r.0.0).collect::<BTreeSet<_>>();
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(ids(&mut app), BTreeSet::from([1, 2, 3]), "the fog cheat shows every unit");
+        app.world_mut().resource_mut::<CineractiveState>().on = true;
+        app.update();
+        app.update();
+        assert_eq!(ids(&mut app), BTreeSet::from([1, 2, 3]));
+        app.world_mut().resource_mut::<CineractiveState>().on = false;
+        app.update();
+        app.update();
+        assert_eq!(ids(&mut app), BTreeSet::from([1, 2, 3]), "the cineractive's end does not despawn what the cheat reveals");
+    }
+
+    fn consistent_with_visible(app: &mut App) {
+        let map: BTreeSet<EntityId> = app.world().resource::<SimEntities>().0.keys().copied().collect();
+        let ents: BTreeSet<EntityId> = roots(app).into_iter().map(|r| r.0).collect();
+        assert_eq!(map, ents, "no orphan entity outlives its map entry");
     }
 
     fn defs() -> Arc<sta_content::ContentDb> {
