@@ -218,7 +218,7 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] Boarding data (#800): with the stock Armada II install `cargo test -p sta_sim` boarding scenarios still pass after the data differences the PR lists.
 
 
-- [?] SPR emitter diagnostics (CON-58, #864): inspect the parser warning list for an authored unknown emitter type; it names the source file and type line and retains the Spray fallback. Known types and an omitted type remain warning-free. This adds parser diagnostics; runtime consumers do not automatically log every SPR warning.
+- [?] Armed cursors (UI-44, #863): arm Move, Attack, Mine, Colonize, Transport, Rally and station placement in Classic/FO; compare valid and refused targets with the click result, including a blocked build site and insufficient stock. Check cancellation, crossing the HUD, an open menu and cheat typing. Missing refusal artwork keeps the existing pointer fallback; Repair and targeted-special actions remain unavailable.
 
 ## Checked earlier (morning list)
 
