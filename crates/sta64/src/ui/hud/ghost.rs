@@ -501,7 +501,7 @@ mod tests {
             view: placement_view(&db),
             player: PlayerId(0),
             selected: Vec::new(),
-            content: Some(Arc::new(db)),
+            content: Some(Arc::new(db)), ..Default::default()
         });
         world.insert_resource(HudState {
             placing: Some(Armed {
@@ -586,7 +586,7 @@ mod tests {
             view: placement_view(&db),
             player: PlayerId(0),
             selected: Vec::new(),
-            content: Some(Arc::new(db)),
+            content: Some(Arc::new(db)), ..Default::default()
         });
         world.insert_resource(HudState::default());
         let root = world
@@ -818,6 +818,7 @@ mod tests {
             player: PlayerId(0),
             selected: Vec::new(),
             content: Some(Arc::new(db)),
+            ..Default::default()
         });
         let state = HudState {
             placing: Some(Armed {

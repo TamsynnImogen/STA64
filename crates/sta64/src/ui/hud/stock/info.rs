@@ -75,6 +75,23 @@ fn text_styled(commands: &mut Commands, root: Entity, r: R, value: String, color
     child
 }
 
+/// Keeps a free-text name (a map's or a script's, up to the buffer's length) inside its authored
+/// rect: the placement parent of the text clips what does not fit, so it cannot run over
+/// neighbouring panels. Only the horizontal axis is clipped (the glyph line may be taller than
+/// the authored rect, so a vertical clip would cut every name); `vertical` also clips the other
+/// axis, for a wrapped name whose extra lines would spill over what is below.
+pub(super) fn clip_to_rect(commands: &mut Commands, text: Entity, vertical: bool) {
+    commands.queue(move |world: &mut World| {
+        let Some(parent) = world.get::<ChildOf>(text).map(ChildOf::parent) else { return };
+        if let Some(mut node) = world.get_mut::<Node>(parent) {
+            node.overflow = if vertical { Overflow::clip() } else { Overflow::clip_x() };
+        }
+    });
+}
+
+/// A group tile name longer than this wraps in the stock tile font and is clipped on both axes.
+const TILE_NAME_WRAPS_FROM: usize = 16;
+
 pub(super) fn bar(commands: &mut Commands, root: Entity, r: R, value: f32, color: Color, kind: StockBar) {
     commands.entity(root).with_child((
         node(r),
@@ -292,7 +309,7 @@ fn spawn_single(
         "infoBuildName",
         "infoSingleNameTextArea",
     ) {
-        text(
+        let name = text(
             commands,
             root,
             r,
@@ -305,6 +322,7 @@ fn spawn_single(
             theme.small_size,
             None,
         );
+        clip_to_rect(commands, name, false);
     }
     if let Some(r) = chosen_rect(
         layout,
@@ -418,7 +436,7 @@ fn spawn_group(
             let fallback = R::new(2.0, 2.0, (r.w - 4.0).max(0.0), (r.h - 4.0).max(0.0));
             let name_rect = layout.at(origin, &format!("infoMultiShipName_{i}"))
                 .map_or(fallback, |name| R::new(name.x - r.x, name.y - r.y, name.w, name.h));
-            text_styled(
+            let name = text_styled(
                 commands,
                 entity,
                 name_rect,
@@ -428,6 +446,7 @@ fn spawn_group(
                 None,
                 group_label_style(layout, name_rect.w),
             );
+            clip_to_rect(commands, name, tile.name.chars().count() > TILE_NAME_WRAPS_FROM);
         }
         let hull_key = if small {
             format!("infoMultiShipHullSm_{i}")
@@ -523,6 +542,56 @@ mod tests {
         view::{PlayerView, WorldView},
     };
     use std::sync::Arc;
+
+    /// A long free-text name (a mod map can carry up to the buffer's length) stays inside its
+    /// authored rect: the placement parent of the single card's name and of a group tile's name
+    /// clips. Invented 127-character name.
+    #[test]
+    fn a_long_given_name_is_clipped_to_its_authored_rect() {
+        let long = "Wanderer ".repeat(15)[..127].to_owned();
+        let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
+        cfg.rects.insert("infoSingleNameTextArea".into(), Rect { x: 10, y: 10, w: 120, h: 12 });
+        cfg.rects.insert("infoMultiShipIcon_0".into(), Rect { x: 10, y: 20, w: 40, h: 40 });
+        cfg.rects.insert("infoMultiShipName_0".into(), Rect { x: 10, y: 61, w: 40, h: 9 });
+        cfg.rects.insert("infoMultiShipIcon_1".into(), Rect { x: 60, y: 20, w: 40, h: 40 });
+        cfg.rects.insert("infoMultiShipName_1".into(), Rect { x: 60, y: 61, w: 40, h: 9 });
+        let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+        let theme = Theme::default();
+        let feed = HudFeed::default();
+        let single = model::Single {
+            id: EntityId(1),
+            name: long.clone(),
+            captain: None,
+            registry: None,
+            class: "Class".into(),
+            own: true,
+            hull: 1.0,
+            hull_now: 10,
+            hull_max: 10,
+            shield: None,
+            progress: None,
+            builder: false,
+        };
+        let tile = model::Tile { id: EntityId(1), name: long, hull: 1.0 };
+        let short = model::Tile { id: EntityId(2), name: "Short".into(), hull: 1.0 };
+        let mut world = World::new();
+        let root = world.spawn(Node::default()).id();
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            spawn_single(&mut commands, root, &layout, &feed, &theme, Vec2::ZERO, &single);
+            spawn_group(&mut commands, root, &layout, &feed, &theme, Vec2::ZERO, 1, &[tile.clone(), short]);
+        }
+        queue.apply(&mut world);
+        let mut texts = world.query::<(&SpriteText, &ChildOf)>();
+        let mut overflow = |pred: &dyn Fn(&str) -> bool| -> Vec<Overflow> {
+            texts.iter(&world).filter(|(t, _)| pred(&t.text)).filter_map(|(_, parent)| world.get::<Node>(parent.parent()).map(|n| n.overflow)).collect()
+        };
+        // The single card's name: horizontal clip only (the stock look keeps the line's height).
+        // The long wrapped tile name: both axes; a short tile name: horizontal only.
+        assert_eq!(overflow(&|t| t.len() >= 100), vec![Overflow::clip_x(), Overflow::clip()]);
+        assert_eq!(overflow(&|t| t == "Short"), vec![Overflow::clip_x()]);
+    }
 
     #[test]
     fn resource_ids_follow_native_stock_order() {

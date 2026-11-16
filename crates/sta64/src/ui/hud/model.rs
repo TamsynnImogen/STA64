@@ -29,11 +29,13 @@ pub struct HudFeed {
     pub player: PlayerId,
     pub selected: Vec<EntityId>,
     pub content: Option<Arc<ContentDb>>,
+    /// The names the map gave its objects (host-only, see [`super::instance_names`]).
+    pub names: super::instance_names::InstanceNames,
 }
 
 impl Default for HudFeed {
     fn default() -> Self {
-        HudFeed { view: Arc::default(), player: PlayerId(0), selected: Vec::new(), content: None }
+        HudFeed { view: Arc::default(), player: PlayerId(0), selected: Vec::new(), content: None, names: Default::default() }
     }
 }
 
@@ -47,12 +49,31 @@ impl HudFeed {
         self.content.as_deref().and_then(|c| c.unit(u.def))
     }
 
+    /// The name a script gave the unit (`WorldView::attrs::names`), else the one its map gave
+    /// it, as written; the ODF caption and craft-name pool apply when neither exists.
+    pub(crate) fn given_name(&self, u: &UnitView) -> Option<&str> {
+        let set = &self.view.attrs.names;
+        set.binary_search_by_key(&u.id, |n| n.0)
+            .ok()
+            .map(|i| set[i].1.as_str())
+            .filter(|n| !n.trim().is_empty())
+            .or_else(|| self.names.get(u.id))
+    }
+
     pub(crate) fn name(&self, u: &UnitView) -> String {
+        if let Some(n) = self.given_name(u) {
+            return n.to_owned();
+        }
         self.def(u).map_or_else(|| format!("#{}", u.id.0), |d| craft_names::instance(d, u.id))
     }
 
-    /// Authored type caption for the mouseover strip, independent of craft name.
+    /// The mouseover strip's name: the unit's given name (script-set, else the map's) when it has
+    /// one, else the authored type caption (independent of craft name). Whether the original's
+    /// strip shows a given name or the type caption is not established.
     pub(crate) fn unit_label(&self, u: &UnitView) -> String {
+        if let Some(n) = self.given_name(u) {
+            return n.to_owned();
+        }
         self.def(u).map_or_else(|| format!("#{}", u.id.0), |d| {
             craft_names::unit_name(d).unwrap_or(&d.class.0).to_owned()
         })
@@ -144,7 +165,7 @@ pub fn info(feed: &HudFeed) -> Info {
             let (now, max) = shields.iter().fold((0.0, 0.0), |(n, m), s| (n + s[0].to_f32(), m + s[1].to_f32()));
             Info::Single(Single {
                 id: u.id,
-                name,
+                name: feed.given_name(u).map_or(name, str::to_owned),
                 captain,
                 registry,
                 class: def.map_or_else(String::new, |d| craft_names::unit_name(d).unwrap_or(&d.class.0).to_owned()),
@@ -675,7 +696,7 @@ mod tests {
             players: vec![player(1, 1, [3000.0, 20.0, 700.0, 0.0], [3.0, 10.0]), player(2, 2, [0.0; 4], [0.0; 2])],
             ..Default::default()
         };
-        HudFeed { view: Arc::new(view), player: ME, selected: selected.iter().map(|&i| EntityId(i)).collect(), content: Some(Arc::new(db)) }
+        HudFeed { view: Arc::new(view), player: ME, selected: selected.iter().map(|&i| EntityId(i)).collect(), content: Some(Arc::new(db)), ..Default::default() }
     }
 
     /// `fake::db()` with a tech tree.
@@ -713,7 +734,7 @@ mod tests {
         };
         let mut sim = Sim::from_setup(&setup);
         let id = sim.spawn_def(db.key("fx_constructor").unwrap(), ME, Vec3::ZERO, (Fixed::ZERO, Fixed::ONE)).unwrap();
-        let mut f = HudFeed { view: sim.view(), player: ME, selected: vec![id], content: Some(db.clone()) };
+        let mut f = HudFeed { view: sim.view(), player: ME, selected: vec![id], content: Some(db.clone()), ..Default::default() };
         let Info::Single(before) = info(&f) else { panic!("single selection") };
         assert_eq!(before.class, "Construction Ship");
         assert!(["USS First", "USS Second", "USS Third"].contains(&before.name.as_str()));
@@ -737,6 +758,45 @@ mod tests {
         f.view = restored.view();
         let Info::Single(after_tick) = info(&f) else { panic!("selection after tick") };
         assert_eq!(after_tick.name, before.name);
+    }
+
+    /// A name the map gave a unit shows on the selection card and the hover/tile name; a name a
+    /// script set wins over it; both are shown as written (non-ASCII included, no panic) and a
+    /// blank one is ignored. Invented names only.
+    #[test]
+    fn a_map_instance_name_is_preferred_to_the_caption_and_a_script_name_to_both() {
+        use super::super::instance_names::InstanceNames;
+        let db = sta_content::fake::db();
+        let units = vec![unit(&db, 1, "fx_cruiser", 1, 80.0, None), unit(&db, 2, "fx_cruiser", 1, 80.0, None), unit(&db, 3, "fx_cruiser", 1, 80.0, None)];
+        let mut f = feed(db, units, &[1]);
+        let map = sta_bzn::Map {
+            objects: ["Aurelia Test-7", "Ångström Ω-2 \u{1F680}", "   "]
+                .iter()
+                .enumerate()
+                .map(|(i, n)| sta_bzn::MapObject { odf: "fx_cruiser".into(), label: format!("obj_{i}"), instance_name: (*n).into(), ..Default::default() })
+                .collect(),
+            ..Default::default()
+        };
+        f.names = InstanceNames::of(&map, [(EntityId(1), "obj_0"), (EntityId(2), "obj_1"), (EntityId(3), "obj_2")]);
+        let one = |f: &HudFeed| match info(f) {
+            Info::Single(c) => c.name,
+            other => panic!("{other:?}"),
+        };
+        let u = |f: &HudFeed, id: u32| f.view.unit(EntityId(id)).unwrap().clone();
+        assert_eq!(one(&f), "Aurelia Test-7");
+        assert_eq!(f.unit_label(&u(&f, 1)), "Aurelia Test-7");
+        assert_eq!(f.name(&u(&f, 2)), "Ångström Ω-2 \u{1F680}");
+        // A blank map name leaves the ODF caption.
+        assert_eq!(f.name(&u(&f, 3)), f.def(&u(&f, 3)).map(|d| craft_names::identity(d, EntityId(3)).name).unwrap());
+        // A script-set name replaces the map's; an empty one does not hide it.
+        Arc::make_mut(&mut f.view).attrs.names = vec![(EntityId(1), "Script Name".into()), (EntityId(2), "".into())];
+        assert_eq!(one(&f), "Script Name");
+        assert_eq!(f.unit_label(&u(&f, 1)), "Script Name");
+        assert_eq!(f.name(&u(&f, 2)), "Ångström Ω-2 \u{1F680}");
+        // The group tile uses the same name.
+        f.selected = vec![EntityId(1), EntityId(2)];
+        let Info::Group(tiles) = info(&f) else { panic!("group") };
+        assert_eq!(tiles[0].name, "Script Name");
     }
 
     #[test]

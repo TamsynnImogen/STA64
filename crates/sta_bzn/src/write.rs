@@ -403,6 +403,87 @@ fn text(map: &Map) -> Result<String, WriteError> {
 mod tests {
     use super::*;
 
+    /// The records of a binary map as `(kind, byte range of the record, data range)`.
+    fn records(bytes: &[u8]) -> Vec<(u32, std::ops::Range<usize>)> {
+        let mut at = bytes.windows(4).position(|w| w == b"true").expect("binary header") + 4;
+        while matches!(bytes[at], b'\r' | b'\n') {
+            at += 1;
+        }
+        let mut out = Vec::new();
+        while at + 8 <= bytes.len() {
+            let kind = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+            let size = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap()) as usize;
+            out.push((kind, at..at + 8 + size));
+            at += 8 + size;
+        }
+        out
+    }
+
+    /// `instance_name` of an object is the 128-byte buffer after its label, trimmed; a blank
+    /// buffer and an absent one give nothing, and the next object's buffer is not taken.
+    #[test]
+    fn a_binary_maps_instance_name_buffer_is_read_after_the_label() {
+        let bytes = write(&sample(true)).unwrap();
+        let recs = records(&bytes);
+        // The first object's label record: a 40-byte string whose text is "Baku".
+        let label = recs.iter().position(|(k, r)| *k == 2 && r.len() == 8 + 40 && bytes[r.start + 8..].starts_with(b"Baku")).expect("label record");
+        let with = |buffer: &[u8]| {
+            let mut out = bytes[..recs[label].1.end].to_vec();
+            out.extend_from_slice(&2u32.to_le_bytes());
+            out.extend_from_slice(&(buffer.len() as u32).to_le_bytes());
+            out.extend_from_slice(buffer);
+            out.extend_from_slice(&bytes[recs[label].1.end..]);
+            crate::parse(&out).unwrap()
+        };
+        let mut buffer = b"Tester Prime \0junk".to_vec();
+        buffer.resize(128, 0);
+        let map = with(&buffer);
+        assert_eq!(map.objects[0].instance_name, "Tester Prime");
+        assert_eq!(map.objects[1].instance_name, "", "the second object has none");
+        assert_eq!(map.objects[0].label, "Baku", "the script label is not replaced");
+        // Blank (spaces) and a buffer of another length are no name.
+        assert_eq!(with(&[b' '; 128]).objects[0].instance_name, "");
+        assert_eq!(with(&[b'x'; 127]).objects[0].instance_name, "");
+        // Non-ASCII bytes do not panic and keep what decodes (lossily).
+        let mut high = vec![0xC3, 0xA9, 0xFF, 0xFE, b'z'];
+        high.resize(128, 0);
+        assert!(!with(&high).objects[0].instance_name.is_empty());
+        // The sample as written has no name buffer at all.
+        assert!(crate::parse(&bytes).unwrap().objects.iter().all(|o| o.instance_name.is_empty()));
+    }
+
+    /// Truncated and damaged maps, and the finder over arbitrary records, never panic.
+    #[test]
+    fn damaged_maps_and_random_records_never_panic_the_name_reader() {
+        let bytes = write(&sample(true)).unwrap();
+        for cut in (0..bytes.len()).step_by(7) {
+            let _ = crate::parse(&bytes[..cut]);
+        }
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _ in 0..200 {
+            let mut damaged = bytes.clone();
+            for _ in 0..8 {
+                let at = (next() as usize) % damaged.len();
+                damaged[at] = next() as u8;
+            }
+            let _ = crate::parse(&damaged);
+        }
+        let blobs: Vec<Vec<u8>> = [0usize, 1, 2, 4, 12, 48, 127, 128, 129].iter().map(|&n| (0..n).map(|_| next() as u8).collect()).collect();
+        for round in 0..300 {
+            let recs: Vec<(u32, &[u8])> = (0..(round % 60)).map(|_| ((next() % 14) as u32, blobs[(next() as usize) % blobs.len()].as_slice())).collect();
+            for from in [0, 1, recs.len() / 2, recs.len(), recs.len() + 3, usize::MAX - 5, usize::MAX] {
+                let _ = crate::instance_name_of(&recs, from);
+            }
+        }
+    }
+
+
     fn sample(binary: bool) -> Map {
         let loc = |x: f32, kind: &str, team: i32, race: &str| StartLoc {
             pos: [x, 0.0, x * 2.0],
@@ -437,6 +518,7 @@ mod tests {
                     entity_id: 7,
                     team: 2,
                     label: "Baku".into(),
+                    instance_name: String::new(),
                     initial_position: Some([15.5, -4.0, 33.0]),
                     transform: [
                         0.0, 0.0, -1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 15.5, -4.0, 33.0,
@@ -448,6 +530,7 @@ mod tests {
                     entity_id: -9,
                     team: 0,
                     label: String::new(),
+                    instance_name: String::new(),
                     initial_position: Some([1.0, 2.0, 3.0]),
                     transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 3.0],
                     light_colour: None,
