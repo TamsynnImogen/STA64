@@ -57,7 +57,7 @@ use super::radar::{RadarPlugin, RadarRoot};
 use super::theme::{ButtonClicked, Theme, ThemePlugin};
 use crate::app::GameSet;
 use crate::input::orders::{Aim, OrderTargets, formation_moves};
-use crate::input::select::{Targetable, target_seen, unit_under};
+use crate::input::select::{Targetable, target_seen, unit_under_where};
 use crate::ui::i18n::{tr, trf};
 use sta_sim::view::UnitFlags;
 use sta_sim::world::EntityKind;
@@ -594,7 +594,7 @@ fn order_at_aim(
     units: &Targetable,
     local: Option<sta_sim::PlayerId>,
 ) -> Option<(Vec<Order>, Vec<EntityId>)> {
-    let target = unit_under(aim.cursor, aim.ray, units).filter(|&t| target_seen(&feed.view, local, t));
+    let target = unit_under_where(aim.cursor, aim.ray, units, |t| target_seen(&feed.view, local, t));
     let own = feed.own_selection();
     let heights: Vec<f32> = own.iter().filter_map(|id| feed.view.unit(*id).map(|u| u.pos.y.to_f32())).collect();
     let y = if heights.is_empty() { 0.0 } else { heights.iter().sum::<f32>() / heights.len() as f32 };
@@ -996,6 +996,29 @@ mod target_tests {
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
         app.world_mut().run_system_once(place_on_click).unwrap();
         assert!(app.world().resource::<HudState>().targeting.is_none());
+    }
+
+    #[test]
+    fn armed_attack_reaches_seen_target_behind_unseen_resource_and_refuses_seen_resource() {
+        let mut f = feed(&[1]);
+        Arc::make_mut(&mut f.view).visibility = vec![(PlayerId(1), vec![EntityId(1), EntityId(4)])];
+        let mut app = click_app(f, HudState { targeting: Some(TargetMode::Attack), ..Default::default() }, 0.0);
+        app.insert_resource(crate::render::units::LocalPlayer(Some(PlayerId(1))));
+        app.world_mut().spawn((SimEntity(EntityId(4)), SelectRadius(10.0), GlobalTransform::default()));
+        app.world_mut().spawn((SimEntity(EntityId(5)), SelectRadius(10.0), GlobalTransform::from(Transform::from_xyz(0.0, 50.0, 0.0))));
+        app.world_mut().run_system_once(armed_cursor).unwrap();
+        assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_attack");
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut().run_system_once(place_on_click).unwrap();
+        assert!(matches!(app.world().resource::<CommandQueue>().0.as_slice(), [CommandKind::Order(Order::Attack { target: EntityId(4), .. })]));
+
+        app.world_mut().resource_mut::<CommandQueue>().0.clear();
+        app.world_mut().resource_mut::<HudState>().targeting = Some(TargetMode::Attack);
+        Arc::make_mut(&mut app.world_mut().resource_mut::<HudFeed>().view).visibility[0].1.push(EntityId(5));
+        app.world_mut().run_system_once(armed_cursor).unwrap();
+        assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_noattack");
+        app.world_mut().run_system_once(place_on_click).unwrap();
+        assert!(app.world().resource::<CommandQueue>().0.is_empty());
     }
 
     #[test]
