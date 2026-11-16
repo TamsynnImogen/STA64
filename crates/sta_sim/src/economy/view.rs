@@ -88,7 +88,7 @@ mod tests {
         }]);
     }
 
-    fn spawn(sim: &mut Sim, odf: &str, owner: PlayerId) -> EntityId {
+    fn spawn_at(sim: &mut Sim, odf: &str, owner: PlayerId, pos: Vec3) -> EntityId {
         let id = sim
             .view()
             .units
@@ -101,12 +101,16 @@ mod tests {
             CommandKind::Edit(Edit::Spawn {
                 odf: def,
                 player: owner,
-                pos: Vec3::ZERO,
+                pos,
                 heading: (Fixed::ZERO, Fixed::ONE),
             }),
         );
         assert!(sim.unit(id).is_some());
         id
+    }
+
+    fn spawn(sim: &mut Sim, odf: &str, owner: PlayerId) -> EntityId {
+        spawn_at(sim, odf, owner, Vec3::ZERO)
     }
 
     fn read(sim: &Sim) -> Vec<CargoView> {
@@ -123,7 +127,14 @@ mod tests {
         let mut sim = game();
         let moon = spawn(&mut sim, "fx_moon", NEUTRAL);
         let miner = spawn(&mut sim, "fx_miner", PlayerId(0));
-        let other = spawn(&mut sim, "fx_miner", PlayerId(1));
+        // Keep the second owner's craft outside the first owner's cruiser's
+        // weapons; otherwise combat can eliminate that seat before transfer.
+        let other = spawn_at(
+            &mut sim,
+            "fx_miner",
+            PlayerId(1),
+            Vec3::from_f32([10_000.0, 0.0, 0.0]),
+        );
         spawn(&mut sim, "fx_cruiser", PlayerId(0));
         let empty = read(&sim);
         assert_eq!(
@@ -155,11 +166,19 @@ mod tests {
         assert_eq!(full.amount, Fixed::from_int(90));
         assert_eq!(full.capacity, Fixed::from_int(90));
         assert_eq!(full.resource, Some(0));
+        assert!(sim.unit(other).is_some());
+        assert!(!sim.is_eliminated(PlayerId(1)));
 
-        step(
-            &mut sim,
-            PlayerId::BENCH,
-            CommandKind::Edit(Edit::Team(miner, PlayerId(1))),
+        let transfer = sim.step(&[Command {
+            player: PlayerId::BENCH,
+            seq: 0,
+            kind: CommandKind::Edit(Edit::Team(miner, PlayerId(1))),
+        }]);
+        assert!(
+            !transfer
+                .events
+                .iter()
+                .any(|event| matches!(event, crate::SimEvent::Rejected { .. }))
         );
         assert_eq!(sim.unit(miner).unwrap().owner, PlayerId(1));
         assert_eq!(read(&sim)[0].amount, full.amount);
