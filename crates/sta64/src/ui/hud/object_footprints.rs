@@ -23,7 +23,7 @@ use crate::render::fog::FogState;
 pub(crate) struct MapFootprintRegions(pub Arc<MapDef>);
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum FootprintKey {
+pub(crate) enum FootprintKey {
     Sim(EntityId),
     Region(Entity, usize),
 }
