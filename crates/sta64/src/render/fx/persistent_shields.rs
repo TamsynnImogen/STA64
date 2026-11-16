@@ -196,11 +196,7 @@ fn sync_outlines(
         material.params.eye = eye.translation().extend(1.0);
     }
 
-    let eyes = local.as_ref().and_then(|l| l.0).filter(|_| !crate::render::units::cinematic_reveal(cine.as_deref()));
-    let visible = match eyes {
-        Some(player) => link.curr().visible_to(player),
-        None => link.curr().units.iter().collect(),
-    };
+    let visible = crate::render::units::drawn_units(link.curr(), local.as_ref().and_then(|l| l.0), crate::render::units::cinematic_reveal(cine.as_deref()));
     let mut desired = BTreeMap::new();
     for unit in visible {
         let Some(&root) = roots.0.get(&unit.id) else {
