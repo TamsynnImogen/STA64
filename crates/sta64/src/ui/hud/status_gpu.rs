@@ -89,7 +89,14 @@ fn text(
     let style = SpriteTextStyle::default().centered().wrapped(r.w);
     let style = if stock { style.stock_label() } else { style };
     let wrapper = commands
-        .spawn((rect(r), Pickable::IGNORE, ChildOf(parent)))
+        .spawn((
+            Node {
+                overflow: Overflow::clip(),
+                ..rect(r)
+            },
+            Pickable::IGNORE,
+            ChildOf(parent),
+        ))
         .id();
     let mut child = commands.spawn((
         sprite_text_styled(value, theme.micro_size.max(16.0), theme.text, style),
@@ -445,15 +452,19 @@ fn draw_stock(
             cargo_colour(layout, cargo.resource, theme),
             LiveValue::Cargo(r.w),
         );
-        text(
-            commands,
-            root,
-            R::new(r.x, r.y, r.w, r.h),
-            cargo_text(feed, cargo.amount, cargo.capacity, cargo.resource),
-            theme,
-            Some(LiveValue::CargoAmount),
-            true,
-        );
+        // Thin native bars keep their fill; add the optional numeric label
+        // only when a full line fits inside the authored rectangle.
+        if r.h >= theme.micro_size.max(16.0) {
+            text(
+                commands,
+                root,
+                R::new(r.x, r.y, r.w, r.h),
+                cargo_text(feed, cargo.amount, cargo.capacity, cargo.resource),
+                theme,
+                Some(LiveValue::CargoAmount),
+                true,
+            );
+        }
     }
 }
 
@@ -952,6 +963,90 @@ mod tests {
                 .lcars_card
                 .is_none()
         );
+    }
+
+    #[test]
+    fn thin_native_cargo_bar_keeps_its_fill_without_overflowing_text() {
+        use bevy::ecs::system::RunSystemOnce;
+        for (height, expect_label) in [(12, false), (64, true)] {
+            let mut cfg = GuiLayout {
+                canvas: (1600, 1200),
+                ..Default::default()
+            };
+            cfg.panels.insert(
+                "info".into(),
+                Panel {
+                    area: Some(Rect {
+                        x: 20,
+                        y: 800,
+                        w: 800,
+                        h: 300,
+                    }),
+                    ..Default::default()
+                },
+            );
+            cfg.rects.insert(
+                "infoSingleDilithiumBarArea".into(),
+                Rect {
+                    x: 100,
+                    y: 100,
+                    w: 400,
+                    h: height,
+                },
+            );
+            let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+            let status = SelectedStatus {
+                cargo: Some(status::CargoStatus {
+                    amount: Fixed::from_int(50),
+                    capacity: Fixed::from_int(100),
+                    resource: Some(0),
+                    fraction: 0.5,
+                }),
+                ..Default::default()
+            };
+            let selected = info(false);
+            let shape = stock_shape(EntityId(7), &status, &layout, &selected);
+            let mut world = World::new();
+            let root = world.spawn_empty().id();
+            world
+                .run_system_once(move |mut commands: Commands| {
+                    draw_stock(
+                        &mut commands,
+                        root,
+                        &HudFeed::default(),
+                        &status,
+                        &shape,
+                        &layout,
+                        &Theme::default(),
+                        &selected,
+                    );
+                })
+                .unwrap();
+            let mut values = world.query::<(Entity, &LiveValue)>();
+            let values: Vec<_> = values
+                .iter(&world)
+                .map(|(entity, value)| (entity, *value))
+                .collect();
+            assert_eq!(
+                values
+                    .iter()
+                    .filter(|(_, value)| matches!(value, LiveValue::Cargo(_)))
+                    .count(),
+                1
+            );
+            let labels: Vec<_> = values
+                .iter()
+                .filter(|(_, value)| matches!(value, LiveValue::CargoAmount))
+                .collect();
+            assert_eq!(labels.len(), usize::from(expect_label));
+            if let Some((entity, _)) = labels.first() {
+                let parent = world.get::<ChildOf>(*entity).unwrap().parent();
+                assert_eq!(
+                    world.get::<Node>(parent).unwrap().overflow,
+                    Overflow::clip()
+                );
+            }
+        }
     }
 
     #[test]
