@@ -1,4 +1,4 @@
-//! Optional windowless, installed-model brightness check for building ghosts.
+//! Optional windowless, installed-model and placement-grid brightness check.
 use super::*;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::RenderTarget;
@@ -45,6 +45,7 @@ fn installed_ghost_is_readable_without_lights() {
     });
     let db = std::sync::Arc::new(sta_content::ContentDb::builder().unit(def).build().unwrap());
     let def_key = db.key("gpu_blueprint").unwrap();
+    let grid_cfg = sta_content::layered::cfg_h(&vfs, "RTS_CFG.h");
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -61,6 +62,7 @@ fn installed_ghost_is_readable_without_lights() {
     );
     app.add_plugins(crate::render::hulls::HullPlugin)
         .add_systems(Update, (tint_ghost, sync_footprints).chain())
+        .insert_resource(crate::viewer::Mounted(vfs))
         .insert_resource(HudFeed {
             view: std::sync::Arc::default(),
             player: sta_sim::PlayerId(0),
@@ -95,6 +97,7 @@ fn installed_ghost_is_readable_without_lights() {
     app.add_systems(
         Startup,
         move |mut commands: Commands,
+              mounted: Res<crate::viewer::Mounted>,
               mut meshes: ResMut<Assets<Mesh>>,
               mut materials: ResMut<Assets<StandardMaterial>>,
               mut images: ResMut<Assets<Image>>| {
@@ -110,7 +113,7 @@ fn installed_ghost_is_readable_without_lights() {
                 meshes: &mut meshes,
                 materials: &mut materials,
                 textures: crate::render::textures::Loader {
-                    vfs: &vfs,
+                    vfs: &mounted.0,
                     cache: &mut cache,
                     images: &mut images,
                     formats: bevy::image::CompressedImageFormats::NONE,
@@ -208,12 +211,19 @@ fn installed_ghost_is_readable_without_lights() {
         })
         .insert(Visibility::Inherited);
     let captures = Arc::new(Mutex::new(Vec::<Image>::new()));
-    for (stage, status) in [Ok(()), Err(SiteError::Blocked), Ok(())]
+    for (stage, status) in [Ok(()), Err(SiteError::Blocked), Ok(()), Ok(())]
         .into_iter()
         .enumerate()
     {
         if stage == 2 {
             app.world_mut().entity_mut(root).insert(PinnedBlueprint);
+        }
+        if stage == 3 {
+            let world = app.world_mut();
+            let mut grids = world.query_filtered::<&mut Visibility, With<FootprintGrid>>();
+            for mut visibility in grids.iter_mut(world) {
+                *visibility = Visibility::Hidden;
+            }
         }
         app.world_mut().get_mut::<Ghost>(root).unwrap().status = Some(status);
         for _ in 0..12 {
@@ -283,6 +293,22 @@ fn installed_ghost_is_readable_without_lights() {
         green_sum(&frames[2]) < green_sum(&frames[0]),
         "pinned blueprint must be fainter than the cursor ghost"
     );
+    // Check the grid itself: the ghost's bright hull must not make a missing
+    // overlay pass this test. Frames differ only by the grid's visibility.
+    let with_grid = frames[2].clone().try_into_dynamic().unwrap().to_rgba8();
+    let without_grid = frames[3].clone().try_into_dynamic().unwrap().to_rgba8();
+    let grid_pixels = with_grid
+        .pixels()
+        .zip(without_grid.pixels())
+        .filter(|(a, b)| i16::from(a[1]) - i16::from(b[1]) > 30)
+        .count();
+    eprintln!("{model_key} placement grid: {grid_pixels} distinct visible pixels");
+    assert!(
+        grid_pixels > 100,
+        "placement grid missing or obscured: {grid_pixels}"
+    );
+    let assets = app.world().resource::<FootprintAssets>();
+    assert_eq!(assets.cell_size, footprint_cell_size(grid_cfg.as_ref()));
     for (handle, color, texture, alpha) in originals {
         let m = app
             .world()
