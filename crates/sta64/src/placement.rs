@@ -39,26 +39,97 @@ pub fn ghost_site(
     builder: EntityId,
     cursor: Vec3,
 ) -> GhostSite {
+    ghost_site_with_context(db, bounds, view, what, builder, cursor, &[], &[])
+}
+
+/// Includes typed map regions and live pending reservations, which are not
+/// serialized into WorldView. Geometry is shared with authoritative admission.
+#[allow(clippy::too_many_arguments)]
+pub fn ghost_site_with_context(
+    db: &ContentDb,
+    bounds: Option<&(Vec3, Vec3)>,
+    view: &WorldView,
+    what: ContentKey,
+    builder: EntityId,
+    cursor: Vec3,
+    regions: &[sta_content::Region],
+    production: &[sta_sim::production::view::ProductionView],
+) -> GhostSite {
     let facing = (Fixed::ZERO, Fixed::ONE);
-    match orbit::snap_view(db, view, what, cursor) {
-        Some(Ok(slot)) => GhostSite { at: slot.at, heading: slot.heading, status: Ok(()), orbit: Some(Ok(slot)) },
-        Some(Err(e)) => GhostSite { at: cursor, heading: facing, status: Err(SiteError::Blocked), orbit: Some(Err(e)) },
-        None => GhostSite {
-            at: cursor,
-            heading: facing,
-            status: site::check_site(db, bounds, what, cursor, site::view_obstacles(db, view, Some(builder))),
-            orbit: None,
-        },
+    let pending: Vec<_> = production
+        .iter()
+        .filter(|row| row.builder != builder)
+        .filter_map(|row| {
+            row.site.as_ref().filter(|site| {
+                site.entity.is_none()
+                    && row.jobs.first().is_some_and(|job| !job.started)
+                    && db.unit(site.def).is_some_and(|def| {
+                        sta_sim::world::EntityKind::of_def(def)
+                            == sta_sim::world::EntityKind::Station
+                    })
+            })
+        })
+        .collect();
+    let orbit = if db.unit(what).is_some_and(orbit::is_orbital) {
+        let (planets, mut orbiters) = orbit::from_view(db, view);
+        orbiters.extend(
+            pending
+                .iter()
+                .filter(|site| db.unit(site.def).is_some_and(orbit::is_orbital))
+                .map(|site| site.pos),
+        );
+        Some(orbit::snap(&planets, &orbiters, cursor))
+    } else {
+        None
+    };
+    let (at, heading, parent) = match orbit {
+        Some(Ok(slot)) => (slot.at, slot.heading, Some(slot.planet)),
+        Some(Err(e)) => {
+            return GhostSite {
+                at: cursor,
+                heading: facing,
+                status: Err(SiteError::Blocked),
+                orbit: Some(Err(e)),
+            };
+        }
+        None => (cursor, facing, None),
+    };
+    let others = view
+        .units
+        .iter()
+        .filter(|unit| unit.id != builder && Some(unit.id) != parent)
+        .filter(|unit| {
+            db.unit(unit.def).is_some_and(|def| {
+                sta_sim::world::EntityKind::of_def(def) != sta_sim::world::EntityKind::Projectile
+            })
+        })
+        .map(|unit| site::unit_bounds(db, unit.def, unit.pos));
+    let reserved = pending
+        .iter()
+        .map(|site| site::unit_bounds(db, site.def, site.pos));
+    let limits = if parent.is_some() { None } else { bounds };
+    let status = site::check_bounds(
+        limits,
+        site::unit_bounds(db, what, at),
+        others
+            .chain(reserved)
+            .chain(regions.iter().filter_map(site::region_bounds)),
+    );
+    GhostSite {
+        at,
+        heading,
+        status,
+        orbit,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sta_content::{ContentDb, MoveStats, UnitDef};
-    use sta_sim::command::{Command, CommandKind, Edit};
+    use sta_content::{ContentDb, MoveStats, Region, RegionKind, RegionShape, UnitDef};
+    use sta_sim::command::{Command, CommandKind, Edit, Order};
     use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
-    use sta_sim::{PlayerId, Sim, TeamId, WorldSource};
+    use sta_sim::{PlayerId, Sim, SimEvent, TeamId, WorldSource};
     use std::sync::Arc;
 
     fn v(x: i32, z: i32) -> Vec3 {
@@ -70,6 +141,10 @@ mod tests {
     }
 
     fn world_with(planets: &[i32]) -> (Sim, Arc<ContentDb>, EntityId) {
+        world_with_regions(planets, Vec::new())
+    }
+
+    fn world_with_regions(planets: &[i32], regions: Vec<Region>) -> (Sim, Arc<ContentDb>, EntityId) {
         let fake = sta_content::fake::db();
         let mut rig = UnitDef::new("fx_rig", "constructionrig");
         rig.race = "fx".into();
@@ -89,9 +164,11 @@ mod tests {
         }
         let db = Arc::new(b.build().unwrap());
         let seat = |id| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control: Control::Human };
+        let mut map = sta_content::MapDef::empty();
+        map.regions = regions;
         let mut sim = Sim::from_setup(&GameSetup {
             seed: 1,
-            map: Arc::new(sta_content::MapDef::empty()),
+            map: Arc::new(map),
             content: db.clone(),
             players: vec![seat(0), seat(1)],
             options: GameOptions::default(),
@@ -107,6 +184,27 @@ mod tests {
         }
         let rig = spawn("fx_rig", v(0, 0));
         (sim, db, rig)
+    }
+
+    fn spawn_at(sim: &mut Sim, db: &ContentDb, odf: &str, at: Vec3) -> EntityId {
+        let id = sim.units.next_id();
+        sim.step(&[Command { player: PlayerId::BENCH, seq: 0, kind: CommandKind::Edit(Edit::Spawn {
+            odf: db.key(odf).unwrap(), player: PlayerId(0), pos: at,
+            heading: (Fixed::ZERO, Fixed::ONE),
+        }) }]);
+        assert!(sim.unit(id).is_some());
+        id
+    }
+
+    fn fund(sim: &mut Sim) {
+        sim.step(&[Command { player: PlayerId::BENCH, seq: 1,
+            kind: CommandKind::Edit(Edit::Cargo(PlayerId(0), 0, Fixed::from_int(9999))) }]);
+    }
+
+    fn build(sim: &mut Sim, rig: EntityId, what: ContentKey, at: Vec3) -> bool {
+        let out = sim.step(&[Command { player: PlayerId(0), seq: 2,
+            kind: CommandKind::Order(Order::Build { builder: rig, what, at: Some(at) }) }]);
+        !out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. }))
     }
 
     /// Steps until `n` stations of `what` exist and returns where they stand at that tick. A site is
@@ -222,5 +320,71 @@ mod tests {
         assert_eq!((g.status, g.at, g.orbit), (Ok(()), v(3000, 3000), None));
         // On the planet itself it is blocked, as before.
         assert_eq!(ghost_site(&db, None, &sim.view(), what, rig, v(1000, 10)).status, Err(SiteError::Blocked));
+    }
+
+    #[test]
+    fn client_ghost_and_click_match_sim_for_diagonal_overlap_and_exact_touch() {
+        use crate::ui::hud::{Armed, ghost::build_order, model::HudFeed};
+        let (mut sim, db, rig) = world();
+        let what = db.key("fx_station").unwrap();
+        assert_eq!(site::footprint(&db, what), Fixed::from_f64(37.5));
+        assert_eq!(site::obstacle_radius(&db, db.key("fx_world").unwrap()), Fixed::from_int(200));
+        spawn_at(&mut sim, &db, "fx_station", v(3000, 3000));
+        fund(&mut sim);
+        let feed = HudFeed { view: sim.view(), player: PlayerId(0), selected: vec![rig], content: Some(db.clone()) };
+        let armed = Armed { builder: rig, what, odf: "fx_station".into() };
+        let diagonal = v(3074, 3074);
+        assert_eq!(ghost_site(&db, None, &feed.view, what, rig, diagonal).status, Err(SiteError::Blocked));
+        assert_eq!(build_order(&feed, None, &armed, diagonal), Err(SiteError::Blocked));
+        // Two 37.5-unit squares overlap by one unit on each axis, while their
+        // centre distance exceeds the old circles' combined 75-unit radius.
+        assert!(!build(&mut sim, rig, what, diagonal));
+        let touching = v(3075, 3000);
+        assert_eq!(ghost_site(&db, None, &feed.view, what, rig, touching).status, Ok(()));
+        assert_eq!(build_order(&feed, None, &armed, touching).unwrap().1,
+            Order::Build { builder: rig, what, at: Some(touching) });
+        assert!(build(&mut sim, rig, what, touching), "exact edge contact is admitted by the sim");
+    }
+
+    #[test]
+    fn client_context_uses_live_pending_reservations_but_not_the_armed_rigs_own() {
+        let (mut sim, db, first) = world();
+        let second = spawn_at(&mut sim, &db, "fx_rig", v(500, 0));
+        let what = db.key("fx_station").unwrap();
+        fund(&mut sim);
+        let pending_at = v(3000, 3000);
+        assert!(build(&mut sim, first, what, pending_at));
+        let production = sim.production_view();
+        let reserved = production.iter().find(|row| row.builder == first).unwrap();
+        assert_eq!(reserved.site.as_ref().unwrap().entity, None);
+        assert!(!reserved.jobs[0].started);
+        let view = sim.view();
+        assert_eq!(ghost_site_with_context(&db, None, &view, what, first, pending_at, &[], &production).status, Ok(()),
+            "the armed rig's own reservation is omitted");
+        let encroaching = v(3074, 3074);
+        assert_eq!(ghost_site_with_context(&db, None, &view, what, second, encroaching, &[], &production).status,
+            Err(SiteError::Blocked));
+        assert!(!build(&mut sim, second, what, encroaching));
+        let touching = v(3075, 3000);
+        assert_eq!(ghost_site_with_context(&db, None, &view, what, second, touching, &[], &production).status, Ok(()));
+        assert!(build(&mut sim, second, what, touching));
+    }
+
+    #[test]
+    fn client_context_and_sim_both_reject_typed_sphere_and_box_regions() {
+        let regions = vec![
+            Region { kind: RegionKind::Nebula, odf: "synthetic_nebula".into(),
+                shape: RegionShape::Sphere { centre: v(4000, 4000), radius: Fixed::from_int(100) } },
+            Region { kind: RegionKind::AsteroidField, odf: "synthetic_field".into(),
+                shape: RegionShape::Box { min: v(4900, 4950), max: v(5100, 5050) } },
+        ];
+        let (mut sim, db, rig) = world_with_regions(&[1000], regions.clone());
+        let what = db.key("fx_station").unwrap();
+        fund(&mut sim);
+        for at in [v(4100, 4000), v(5110, 5000)] {
+            assert_eq!(ghost_site_with_context(&db, None, &sim.view(), what, rig, at, &regions, &[]).status,
+                Err(SiteError::Blocked));
+            assert!(!build(&mut sim, rig, what, at));
+        }
     }
 }

@@ -1,7 +1,7 @@
 //! Display-only occupied footprints while a station build site is being chosen.
 //! Craft and station squares use the current construction placement radius;
 //! resource and prop squares use their authored body radius when present.
-//! These descriptive squares do not change the sim's radial site rules.
+//! Their outer bounds are also used by authoritative build admission.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -36,43 +36,27 @@ struct FootprintPose {
 }
 
 fn region_pose(shape: RegionShape) -> Option<FootprintPose> {
-    let (x, z, half) = match shape {
-        RegionShape::Sphere { centre, radius } => {
-            let radius = radius.to_f32();
-            (centre.x.to_f32(), centre.z.to_f32(), Vec2::splat(radius))
-        }
-        RegionShape::Box { min, max } => {
-            let (x0, z0, x1, z1) = (
-                min.x.to_f32(),
-                min.z.to_f32(),
-                max.x.to_f32(),
-                max.z.to_f32(),
-            );
-            (
-                (x0 + x1) * 0.5,
-                (z0 + z1) * 0.5,
-                Vec2::new((x1 - x0) * 0.5, (z1 - z0) * 0.5),
-            )
-        }
-        _ => return None,
+    let region = sta_content::Region {
+        kind: sta_content::RegionKind::Nebula,
+        odf: String::new(),
+        shape,
     };
-    (x.is_finite()
-        && z.is_finite()
-        && half.x.is_finite()
-        && half.y.is_finite()
-        && half.x > 0.0
-        && half.y > 0.0)
-        .then_some(FootprintPose { x, z, half })
+    let bounds = site::region_bounds(&region)?;
+    let (x0, z0, x1, z1) = (
+        bounds.min.0.to_f32(),
+        bounds.min.1.to_f32(),
+        bounds.max.0.to_f32(),
+        bounds.max.1.to_f32(),
+    );
+    Some(FootprintPose {
+        x: (x0 + x1) * 0.5,
+        z: (z0 + z1) * 0.5,
+        half: Vec2::new((x1 - x0) * 0.5, (z1 - z0) * 0.5),
+    })
 }
 
-fn unit_radius(db: &ContentDb, def: ContentKey, kind: EntityKind) -> f32 {
-    let authored = db.unit(def).map_or(0.0, |unit| unit.radius.to_f32());
-    match kind {
-        EntityKind::Craft | EntityKind::Station => site::footprint(db, def).to_f32(),
-        EntityKind::Resource if authored <= 0.0 => crate::map::resource_pick_radius(authored),
-        EntityKind::Resource | EntityKind::Prop if authored > 0.0 => authored,
-        _ => site::footprint(db, def).to_f32(),
-    }
+fn unit_radius(db: &ContentDb, def: ContentKey, _kind: EntityKind) -> f32 {
+    site::obstacle_radius(db, def).to_f32()
 }
 
 fn wanted(

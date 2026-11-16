@@ -492,6 +492,7 @@ fn place_on_click(
     local: Option<Res<crate::render::units::LocalPlayer>>,
     mut targets: ResMut<OrderTargets>,
     bounds: Res<ghost::PlacementBounds>,
+    placement: ghost::PlacementInputs,
     mut notices: MessageWriter<Notice>,
     profile: Option<Res<crate::ui::profile::UiProfile>>,
     strings: Option<Res<crate::ui::i18n::Strings>>,
@@ -562,7 +563,7 @@ fn place_on_click(
     }
     // The sim's own rule, as the ghost shows it: a refused site keeps the
     // placement armed so the click can be tried again elsewhere.
-    let (site_at, order) = match ghost::build_order(&feed, bounds.0.as_ref(), &armed, at) {
+    let (site_at, order) = match placement.order(&feed, bounds.0.as_ref(), &armed, at) {
         Ok(r) => r,
         Err(e) => {
             notices.write(Notice::new(Severity::Warn, tr(ghost::refusal(e))));
