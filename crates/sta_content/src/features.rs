@@ -134,11 +134,18 @@ pub struct Features {
     /// has one (SIM-73; read from the executable, static, not measured). Off
     /// everywhere until measured: the plain `damageBase`.
     pub weapon_target_damage: bool,
+    /// A weapon fires only at what its target masks allow (SIM-73):
+    /// `targetEnemyCraft`, `targetEnemyBuildings`, `targetAlliedCraft`,
+    /// `targetAlliedBuildings`, `targetEnemyPlanetsOnly`, `targetLocation` and
+    /// the shooter's `canAttackPlanets` / `canOnlyAttackPlanets`
+    /// (`sta_sim::combat::hit_roll::can_target`; read from the stock Armada II
+    /// executable, static, not measured). Off everywhere until measured.
+    pub weapon_target_masks: bool,
 }
 
 impl Features {
     /// Every switch, in declaration order, for the content hash.
-    pub(crate) fn bits(&self) -> [bool; 37] {
+    pub(crate) fn bits(&self) -> [bool; 38] {
         [
             self.weapon_damage_controls,
             self.point_defense_cycles,
@@ -177,6 +184,7 @@ impl Features {
             self.assist_on_ally_fire,
             self.weapon_hit_roll,
             self.weapon_target_damage,
+            self.weapon_target_masks,
         ]
     }
 }
