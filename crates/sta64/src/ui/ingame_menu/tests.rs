@@ -223,6 +223,8 @@ fn a_networked_match_is_never_paused() {
 
 #[test]
 fn the_options_panel_changes_a_volume_and_the_settings_store_saves_it() {
+    use crate::frontend::screens::stock::controls::{BindingField, ControlsAct, ControlsDraft};
+    use crate::ui::theme::TextField;
     let dir = crate::frontend::campaign::tests::temp_dir("ingame-menu-settings");
     let path = dir.join(crate::ui::settings::FILE_NAME);
     let mut app = app();
@@ -242,6 +244,50 @@ fn the_options_panel_changes_a_volume_and_the_settings_store_saves_it() {
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(stored.settings.music, 12.0, "{text}");
     assert_eq!(stored.bindings.keys(Action::GameMenu), [KeyCode::Escape]);
+    let control_button = |app: &mut App, want| app.world_mut().query::<(Entity, &ControlsAct)>().iter(app.world()).find(|(_, a)| **a == want).unwrap().0;
+    let field = |app: &mut App, action| app.world_mut().query::<(Entity, &BindingField)>().iter(app.world()).find(|(_, f)| f.0 == action).unwrap().0;
+    for _ in 0..3 {
+        let next = control_button(&mut app, ControlsAct::Next);
+        click(app.world_mut(), next);
+        settle(&mut app, 2);
+    }
+    let game_menu = field(&mut app, Action::GameMenu);
+    app.world_mut().get_mut::<TextField>(game_menu).unwrap().text = "KeyQ".into();
+    let apply = control_button(&mut app, ControlsAct::Apply);
+    click(app.world_mut(), apply);
+    settle(&mut app, 4);
+    let (saved, warnings) = crate::ui::settings::Stored::parse(&std::fs::read_to_string(&path).unwrap());
+    assert!(warnings.is_empty());
+    assert_eq!(saved.bindings.keys(Action::GameMenu), [KeyCode::KeyQ]);
+    assert_eq!(saved.settings.music, 12.0);
+    let applied_text = std::fs::read_to_string(&path).unwrap();
+
+    let game_menu = field(&mut app, Action::GameMenu);
+    app.world_mut().get_mut::<TextField>(game_menu).unwrap().text = "KeyR, NotAKey".into();
+    let apply = control_button(&mut app, ControlsAct::Apply);
+    click(app.world_mut(), apply);
+    settle(&mut app, 4);
+    assert_eq!(app.world().resource::<KeyBindings>().keys(Action::GameMenu), [KeyCode::KeyQ]);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), applied_text, "invalid Apply must not rewrite settings");
+    assert!(app.world().resource::<ControlsDraft>().error.as_ref().unwrap().contains("NotAKey"));
+
+    let reset = control_button(&mut app, ControlsAct::Reset);
+    click(app.world_mut(), reset);
+    settle(&mut app, 2);
+    button(&mut app, MenuAct::Back);
+    assert_eq!(app.world().resource::<KeyBindings>().keys(Action::GameMenu), [KeyCode::KeyQ]);
+    button(&mut app, MenuAct::Options);
+    assert_eq!(app.world().resource::<ControlsDraft>().text[18], "KeyQ");
+    let reset = control_button(&mut app, ControlsAct::Reset);
+    click(app.world_mut(), reset);
+    settle(&mut app, 2);
+    let apply = control_button(&mut app, ControlsAct::Apply);
+    click(app.world_mut(), apply);
+    settle(&mut app, 4);
+    let (saved, warnings) = crate::ui::settings::Stored::parse(&std::fs::read_to_string(&path).unwrap());
+    assert!(warnings.is_empty());
+    assert_eq!(saved.bindings.keys(Action::GameMenu), [KeyCode::Escape]);
+    assert_eq!(saved.settings.music, 12.0);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -453,4 +499,45 @@ fn direct_match_graphics_options_apply_without_frontend_screens() {
     app.world_mut().write_message(ToggleChanged { entity: toggle, on: true });
     app.update();
     assert!(app.world().resource::<Settings>().show_fps);
+}
+
+#[test]
+fn direct_match_controls_apply_after_input_and_reset_only_keys() {
+    use crate::frontend::screens::stock::controls::{BindingField, ControlsAct, ControlsDraft};
+    use crate::ui::theme::TextField;
+    let mut app = App::new();
+    app.add_plugins((MinimalPlugins, StatesPlugin));
+    configure_sets(&mut app);
+    app.insert_state(AppState::InGame).add_plugins(InGameMenuPlugin);
+    *app.world_mut().resource_mut::<InGameMenu>() = InGameMenu { open: true, page: MenuPage::Options };
+    app.world_mut().resource_mut::<OptionsTab>().0 = 3;
+    settle(&mut app, 4);
+    assert!(!app.is_plugin_added::<ScreensPlugin>());
+    assert_eq!(app.world().resource::<ControlsDraft>().text.len(), Action::ALL.len());
+    let act = |app: &mut App, want| app.world_mut().query::<(Entity, &ControlsAct)>().iter(app.world()).find(|(_, a)| **a == want).unwrap().0;
+    for _ in 0..3 {
+        let next = act(&mut app, ControlsAct::Next);
+        click(app.world_mut(), next);
+        settle(&mut app, 2);
+    }
+    let field = app.world_mut().query::<(Entity, &BindingField)>().iter(app.world()).find(|(_, f)| f.0 == Action::GameMenu).unwrap().0;
+    app.world_mut().get_mut::<TextField>(field).unwrap().text = "KeyQ".into();
+    let apply = act(&mut app, ControlsAct::Apply);
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyQ);
+    click(app.world_mut(), apply);
+    app.update();
+    assert_eq!(app.world().resource::<KeyBindings>().keys(Action::GameMenu), [KeyCode::KeyQ]);
+    assert_eq!(menu(&app).page, MenuPage::Options, "new binding must not fire in the Apply frame");
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+    let reset = act(&mut app, ControlsAct::Reset);
+    app.world_mut().resource_mut::<Settings>().music = 13.0;
+    click(app.world_mut(), reset);
+    settle(&mut app, 2);
+    assert_eq!(app.world().resource::<KeyBindings>().keys(Action::GameMenu), [KeyCode::KeyQ]);
+    assert_eq!(app.world().resource::<ControlsDraft>().text[18], "Escape");
+    let apply = act(&mut app, ControlsAct::Apply);
+    click(app.world_mut(), apply);
+    settle(&mut app, 2);
+    assert_eq!(app.world().resource::<KeyBindings>().keys(Action::GameMenu), [KeyCode::Escape]);
+    assert_eq!(app.world().resource::<Settings>().music, 13.0);
 }

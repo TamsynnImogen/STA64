@@ -342,11 +342,12 @@ fn the_preview_shows_the_start_positions_of_the_picked_map() {
     let theme = app.world().resource::<Theme>().clone();
     let browse = app.world().resource::<crate::frontend::screens::Browse>().clone();
     let settings = app.world().resource::<crate::frontend::screens::Settings>().clone();
+    let controls = app.world().resource::<super::controls::ControlsDraft>().clone();
     let selected = app.world().resource::<crate::frontend::screens::SelectedMod>().clone();
     let active_mod = app.world().resource::<crate::frontend::screens::ActiveMod>().clone();
     let scroll = *app.world().resource::<crate::frontend::screens::ListScroll>();
     let ctx = crate::frontend::screens::view::Ctx {
-        theme: &theme, data: &data, strings: None, draft: &draft, browse: &browse, settings: &settings, selected: &selected, active_mod: &active_mod, scroll: &scroll,
+        theme: &theme, data: &data, strings: None, draft: &draft, browse: &browse, settings: &settings, controls: &controls, selected: &selected, active_mod: &active_mod, scroll: &scroll,
         layout: ScreenLayout::Stock, stock_box: Vec2::new(1440.0, 1080.0), options_tab: 0, graphics: None, campaigns: None,
     };
     let dots = preview_dots(&ctx);
@@ -556,6 +557,51 @@ fn the_options_tab_survives_a_rebuild() {
     settle(&mut app);
     let bar = app.world_mut().query_filtered::<Entity, With<TabBar>>().single(app.world()).unwrap();
     assert_eq!(app.world().get::<TabBar>(bar).unwrap().selected, 2);
+}
+
+#[test]
+fn controls_editor_keeps_page_text_and_applies_only_valid_bindings() {
+    use crate::input::keys::{Action, KeyBindings};
+    use crate::ui::theme::TextField;
+    let mut app = app();
+    go(&mut app, Screen::Settings);
+    let tab = app.world_mut().query::<(Entity, &Tab)>().iter(app.world()).find(|(_, t)| t.0 == 3).unwrap().0;
+    kit_click(app.world_mut(), tab);
+    settle(&mut app);
+    let field = |app: &mut App, action| app.world_mut().query::<(Entity, &controls::BindingField)>().iter(app.world()).find(|(_, f)| f.0 == action).unwrap().0;
+    let button = |app: &mut App, act| app.world_mut().query::<(Entity, &controls::ControlsAct)>().iter(app.world()).find(|(_, a)| **a == act).unwrap().0;
+    let add = field(&mut app, Action::AddModifier);
+    app.world_mut().get_mut::<TextField>(add).unwrap().text = "KeyQ".into();
+    let next = button(&mut app, controls::ControlsAct::Next);
+    crate::ui::theme::click(app.world_mut(), next);
+    settle(&mut app);
+    assert_eq!(app.world().resource::<controls::ControlsDraft>().text[0], "KeyQ");
+    for _ in 0..2 {
+        let next = button(&mut app, controls::ControlsAct::Next);
+        crate::ui::theme::click(app.world_mut(), next);
+        settle(&mut app);
+    }
+    let reveal = field(&mut app, Action::RevealShroud);
+    app.world_mut().get_mut::<TextField>(reveal).unwrap().text = "KeyH, NotAKey".into();
+    let apply = button(&mut app, controls::ControlsAct::Apply);
+    crate::ui::theme::click(app.world_mut(), apply);
+    settle(&mut app);
+    let live = app.world().resource::<KeyBindings>();
+    assert_eq!(live.keys(Action::AddModifier), [KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    assert_eq!(live.keys(Action::RevealShroud), [KeyCode::KeyV]);
+    assert!(app.world().resource::<controls::ControlsDraft>().error.as_ref().unwrap().contains("NotAKey"));
+    let reveal = field(&mut app, Action::RevealShroud);
+    app.world_mut().get_mut::<TextField>(reveal).unwrap().text = "KeyH".into();
+    let apply = button(&mut app, controls::ControlsAct::Apply);
+    crate::ui::theme::click(app.world_mut(), apply);
+    settle(&mut app);
+    let live = app.world().resource::<KeyBindings>();
+    assert_eq!(live.keys(Action::AddModifier), [KeyCode::KeyQ]);
+    assert_eq!(live.keys(Action::RevealShroud), [KeyCode::KeyH]);
+    assert_eq!(KeyBindings::from_text(&live.to_text()), *live);
+    go(&mut app, Screen::Main);
+    go(&mut app, Screen::Settings);
+    assert_eq!(app.world().resource::<controls::ControlsDraft>().text[0], "KeyQ");
 }
 
 #[test]
