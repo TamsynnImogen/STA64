@@ -125,11 +125,20 @@ pub struct Features {
     /// draws an idle craft in (stock A2, SIM-36; read from the executable).
     /// Off: hits only (Roots).
     pub assist_on_ally_fire: bool,
+    /// A shot at a moving craft can miss (SIM-73): `hitChance`, its row for
+    /// the target's ODF and the to-hit modifiers decide (`sta_sim::combat::hit_roll`;
+    /// read from the stock Armada II executable, static, not measured). Off
+    /// everywhere until measured: every shot hits.
+    pub weapon_hit_roll: bool,
+    /// A hit does the ordnance's `damageBase` row for the target's ODF when it
+    /// has one (SIM-73; read from the executable, static, not measured). Off
+    /// everywhere until measured: the plain `damageBase`.
+    pub weapon_target_damage: bool,
 }
 
 impl Features {
     /// Every switch, in declaration order, for the content hash.
-    pub(crate) fn bits(&self) -> [bool; 35] {
+    pub(crate) fn bits(&self) -> [bool; 37] {
         [
             self.weapon_damage_controls,
             self.point_defense_cycles,
@@ -166,6 +175,8 @@ impl Features {
             self.idle_assist,
             self.assist_high_autonomy_only,
             self.assist_on_ally_fire,
+            self.weapon_hit_roll,
+            self.weapon_target_damage,
         ]
     }
 }
