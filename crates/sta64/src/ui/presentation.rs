@@ -472,6 +472,7 @@ pub(crate) fn consume(
     reports: Option<Res<crate::audio::ReportsSoundLengths>>,
     mut replies: MessageWriter<ScriptReply>,
     mut bridge: MessageWriter<BridgeScene>,
+    mut mute: ResMut<crate::audio::SoundMute>,
 ) {
     for SimMsg(e) in events.read() {
         let SimEvent::Present(p) = e else { continue };
@@ -555,6 +556,15 @@ pub(crate) fn consume(
             // Shown elsewhere (movies, MED-03; the camera, camera_cinematic).
             Presentation::Movie { .. } | Presentation::StopMovie | Presentation::Shot { .. } | Presentation::CameraOffset { .. } => {}
             Presentation::Call { name, .. } if name == "Camera.center" => {}
+            // A2 `MuteSounds(f)`: the master multiplier of everything but the script's own streams
+            // (see [`crate::audio::SoundMute`]).
+            Presentation::Call { name, args } if name == "A2.MuteSounds" => {
+                if let Some(f) = args.first().and_then(num) {
+                    mute.set(f);
+                } else {
+                    unhandled.note(name);
+                }
+            }
             Presentation::Call { name, args } if name.starts_with("A1.") && BridgeScene::from_call(name, args).is_some() => {
                 bridge.write(BridgeScene::from_call(name, args).unwrap());
             }
@@ -664,9 +674,11 @@ fn sound_replies(
 /// A restart of the mission in place (the sim's tick going back) drops the messages of the run
 /// before it: their ids restart at 1, so a stale entry would end the new run's wait or stop the
 /// new run's stream of the same id. What still plays is stopped, stream by stream.
-fn clear_sounds_on_restart(link: Option<Res<crate::sim_link::SimLink>>, mut sounds: ResMut<ScriptSounds>, mut stop: MessageWriter<StopScriptSound>) {
+fn clear_sounds_on_restart(link: Option<Res<crate::sim_link::SimLink>>, mut sounds: ResMut<ScriptSounds>, mut stop: MessageWriter<StopScriptSound>, mut mute: ResMut<crate::audio::SoundMute>) {
     let Some(link) = link else { return };
     if sounds.restarted(link.curr().tick) {
+        // The new run's intro mutes (and un-mutes) for itself.
+        *mute = default();
         for (id, _, _) in std::mem::take(&mut sounds.pending) {
             stop.write(StopScriptSound { id });
         }
@@ -988,7 +1000,10 @@ fn reset_presentation(
     mut queue: ResMut<MessageQueue>,
     mut sounds: ResMut<ScriptSounds>,
     mut stop: MessageWriter<StopScriptSound>,
+    mut mute: ResMut<crate::audio::SoundMute>,
 ) {
+    // The menus are not muted by the match's script.
+    *mute = default();
     // A script's stream does not play on into the menus.
     for (id, _, _) in std::mem::take(&mut sounds.pending) {
         stop.write(StopScriptSound { id });
@@ -1011,6 +1026,7 @@ impl Plugin for PresentationPlugin {
             .init_resource::<CineractiveState>()
             .init_resource::<CineractiveClock>()
             .init_resource::<Unhandled>()
+            .init_resource::<crate::audio::SoundMute>()
             .init_resource::<PendingMovies>()
             .init_resource::<BridgeState>()
             .add_message::<BridgeScene>()
@@ -1289,6 +1305,48 @@ mod tests {
         cut.sort_unstable();
         assert_eq!(cut, [1, 2]);
         assert!(!app.world().resource::<ScriptSounds>().any_playing());
+    }
+
+    fn mute_call(f: Arg) -> Presentation {
+        Presentation::Call { name: "A2.MuteSounds".into(), args: vec![f] }
+    }
+
+    /// `MuteSounds(f)` sets the master multiplier (held to 0..1, a non-number ignored and listed),
+    /// and the match's end, the front end and a restart in place put it back to 1.
+    #[test]
+    fn mute_sounds_sets_the_multiplier_and_it_is_reset_when_the_match_is_left_or_restarted() {
+        use crate::sim_link::SimLink;
+        use sta_sim::command::LocalRouter;
+        use sta_sim::WorldSource;
+        let link_at = |ticks: u32| {
+            let mut sim = sta_sim::Sim::new(1);
+            for _ in 0..ticks {
+                sim.step(&[]);
+            }
+            SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), sta_core::PlayerId(0))
+        };
+        let mut app = app();
+        frozen(&mut app);
+        app.add_plugins(bevy::state::app::StatesPlugin).init_state::<crate::app::AppState>().insert_resource(link_at(5));
+        app.update();
+        let level = |app: &App| app.world().resource::<crate::audio::SoundMute>().0;
+        assert_eq!(level(&app), 1.0);
+        send(&mut app, mute_call(Arg::Num(Fixed::from_f64(0.4))));
+        assert!((level(&app) - 0.4).abs() < 1e-6);
+        send(&mut app, mute_call(Arg::Num(Fixed::from_int(7))));
+        assert_eq!(level(&app), 1.0, "held to full level");
+        send(&mut app, mute_call(Arg::Num(Fixed::from_f64(0.25))));
+        send(&mut app, mute_call(Arg::Bool(true)));
+        assert!((level(&app) - 0.25).abs() < 1e-6, "a non-number leaves it");
+        assert_eq!(app.world().resource::<Unhandled>().count("A2.MuteSounds"), 1);
+        // A retry starts the intro again: the sim's clock goes back and the multiplier with it.
+        app.insert_resource(link_at(0));
+        app.update();
+        assert_eq!(level(&app), 1.0, "a restart in place un-mutes");
+        send(&mut app, mute_call(Arg::Num(Fixed::from_f64(0.3))));
+        app.world_mut().resource_mut::<NextState<crate::app::AppState>>().set(crate::app::AppState::FrontEnd);
+        app.update();
+        assert_eq!(level(&app), 1.0, "leaving the match un-mutes");
     }
 
     #[test]
