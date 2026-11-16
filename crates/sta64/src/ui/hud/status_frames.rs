@@ -311,7 +311,11 @@ fn installed_status_queue_and_cargo_render_and_clear() {
                     .clear();
                 app.world_mut().resource_mut::<HudFeed>().selected = vec![FREIGHTER];
             }
-            3 => app.world_mut().resource_mut::<StatusFeed>().cargo[0].amount = Fixed::from_int(50),
+            3 => {
+                let mut source = app.world_mut().resource_mut::<StatusFeed>();
+                source.cargo[0].amount = Fixed::from_int(50);
+                source.cargo[0].resource = Some(0);
+            }
             4 => {
                 app.world_mut().resource_mut::<StatusFeed>().cargo[0].amount = Fixed::from_int(100)
             }
