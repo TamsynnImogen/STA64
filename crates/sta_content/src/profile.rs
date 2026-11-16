@@ -515,7 +515,7 @@ fn read_ini_named(root: &Path, name: &str) -> Option<Ini> {
 }
 
 /// Switch names, in `Features` declaration order.
-pub const FEATURE_NAMES: [&str; 35] = [
+pub const FEATURE_NAMES: [&str; 37] = [
     "weapon_damage_controls",
     "point_defense_cycles",
     "fire_arcs",
@@ -551,6 +551,8 @@ pub const FEATURE_NAMES: [&str; 35] = [
     "idle_assist",
     "assist_high_autonomy_only",
     "assist_on_ally_fire",
+    "weapon_hit_roll",
+    "weapon_target_damage",
 ];
 
 impl Features {
@@ -591,6 +593,8 @@ impl Features {
             "idle_assist" => &mut self.idle_assist,
             "assist_high_autonomy_only" => &mut self.assist_high_autonomy_only,
             "assist_on_ally_fire" => &mut self.assist_on_ally_fire,
+            "weapon_hit_roll" => &mut self.weapon_hit_roll,
+            "weapon_target_damage" => &mut self.weapon_target_damage,
             _ => return None,
         })
     }

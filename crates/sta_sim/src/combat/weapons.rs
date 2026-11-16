@@ -472,6 +472,14 @@ impl Weapons {
                     hardpoint: i as u8,
                     target: Target::Entity(t.id),
                 });
+                // SIM-73, both off by default: the hit roll (one draw, only for a
+                // target that can be missed) and the target's own damage row.
+                let features = db.weapon_features(w);
+                if features.weapon_hit_roll && !super::hit_roll::will_hit(db, w, u, t, || draw(rng)) {
+                    // A miss fires and does no damage: no shot is flown and no `Hit` is sent.
+                    continue;
+                }
+                let damage = if features.weapon_target_damage { super::hit_roll::damage_for(db, w, t) } else { w.damage };
                 if w.kind == WeaponKind::Projectile {
                     self.next_shot += 1;
                     let step = w.shot_speed / Fixed::from_int(TICK_HZ as i32);
@@ -482,7 +490,7 @@ impl Weapons {
                         target: t.id,
                         pos: u.pos,
                         step,
-                        damage: w.damage,
+                        damage,
                     });
                 } else {
                     let face = facing(t.heading, t.pos, u.pos);
@@ -492,7 +500,7 @@ impl Weapons {
                         weapon: w.key,
                         facing: face,
                         shield: Fixed::ZERO,
-                        hull: w.damage,
+                        hull: damage,
                         at: t.pos,
                     });
                 }
