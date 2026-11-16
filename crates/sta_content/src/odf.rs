@@ -307,6 +307,7 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
     let mut builder = ContentDb::builder().profile(profile).features(resolve_features(profile, &[mod_overrides]));
     let mut weapon_arcs = BTreeMap::new();
     let mut weapon_names = BTreeSet::new();
+    let mut lookups = crate::weapon::LookupPool::default();
     for (s, odf) in &weapons {
         let ord = odf.str("ordName").map(str::trim).filter(|o| !o.is_empty()).and_then(|o| {
             let found = get(o, &mut warnings, loader);
@@ -317,6 +318,7 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
         });
         let (mut def, arc) = crate::weapon::weapon_def(s, odf, ord.as_deref(), &mut warnings);
         def.features = Some(features_of(&format!("{s}.odf"), odf, &Overrides::default(), &mut warnings));
+        lookups.share(&mut def.base);
         weapon_arcs.insert(stem(s), arc);
         weapon_names.insert(stem(s));
         builder = builder.weapon(def);

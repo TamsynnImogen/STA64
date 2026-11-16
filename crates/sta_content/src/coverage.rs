@@ -43,6 +43,14 @@ pub const READ_ODF_KEYS: &[&str] = &[
     "specialenergycost", "specialenergyrate", "turnalpha", "turnomega", "turnomegafractionatrest",
     "unitname", "weldingbeamsprite", "workerbeehardpoints", "wreckage", "wpnname", "sta64_mapconfinementinitial",
     "sta64_queuelimit", "turrets", "weapon_damage_controls",
+    // CON-54: weapon and ordnance base keys (typed; applied by SIM-73).
+    "hitchance", "stoptohitmodifier", "tohitstopmodifier", "impulsetohitmodifier", "tohitimpulsemodifier",
+    "warptohitmodifier", "tohitwarpmodifier", "slowtohitmodifier", "tohitslowmodifier", "targetenemycraft",
+    "targetenemybuildings", "targetalliedcraft", "targetalliedbuildings", "targetenemyplanets",
+    "targetenemyplanetsonly", "targetlocation", "aitargetlocation", "needtarget", "beneficial",
+    "switchtoattack", "cloakenable", "warpenable", "crewaffectsweapondelay", "ignorevalidastarget",
+    "regularweapondelay", "ignoreshield", "forceinvalidatetarget", "canattackstations", "specialvalue",
+    "shieldduration", "omegaturn", "seektime", "shotaccel", "detectradius", "traveltimefraction",
     // Found by intersecting the keys of the installed ODFs with the string
     // literals of the loaders (`check_pack <root> --keys` lists the rest).
     "tooltip", "basename", "race", "fireball", "officercost", "curshields", "maxshields",

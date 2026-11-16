@@ -679,8 +679,10 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
         key: _, odf: _, class: _, kind: _, range: _, damage: _, refire: _, shot_speed: _,
         duration: _, fire_sound: _, fx: _, effect_ticks: _, energy_drain: _, energy_cost: _,
         disable_weapons: _, decloak_on_hit: _, initial_shot_delay_modifier: _,
-        ignore_shot_delay_effects: _, ordnance_defence: _, activate_on_team_change: _, crew_loss: _, damage_variance: _, resource: _, replace: _, colonize: _, features: _, raw: _,
+        ignore_shot_delay_effects: _, ordnance_defence: _, activate_on_team_change: _, crew_loss: _, damage_variance: _, resource: _, replace: _, colonize: _, base: _, features: _, raw: _,
     } = w;
+    // `base` (CON-54) is typed only: nothing in the sim reads it yet, so it is not
+    // digested. SIM-73 adds each key it starts to read.
     let mut c = Canon::new();
     c
         .text("class", &w.class.0)

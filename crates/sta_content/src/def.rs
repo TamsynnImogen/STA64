@@ -608,7 +608,122 @@ pub struct WeaponDef {
     /// The colonizer pod this weapon launches (SIM-30): set when the ordnance's
     /// class is `ColonizerPod`; `None` for every other weapon.
     pub colonize: Option<ColonizePodDef>,
+    /// The weapon and ordnance base keys both stock games read (CON-54).
+    /// Typed only: the sim rules that apply them are SIM-73.
+    pub base: WeaponBaseDef,
     pub raw: Arc<sta_odf::Odf>,
+}
+
+/// A value with per-target rows (CON-54): `key = base` followed by
+/// `"name" value` lines. Which target a row's name selects is the sim's rule
+/// (SIM-73); here the names are kept lower-cased as written, in file order.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Lookup {
+    pub base: Fixed,
+    /// Shared between the weapons whose tables are equal: Fleet Operations
+    /// repeats the same few tables over millions of rows.
+    pub rows: Arc<[(Arc<str>, Fixed)]>,
+}
+
+impl Lookup {
+    /// The rows as `(name, value)`, in file order.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, Fixed)> {
+        self.rows.iter().map(|(name, v)| (&**name, *v))
+    }
+}
+
+/// To-hit modifiers of a weapon (CON-54), signed, `None` when the ODF has no
+/// such key. `<state>ToHit` is the shooter's own movement state, `toHit<state>`
+/// the target's (our reading of the key names; not measured). `warp` and
+/// `slow` are Armada I's states, `impulse` Armada II's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ToHitDef {
+    pub stop_to_hit: Option<Fixed>,
+    pub to_hit_stop: Option<Fixed>,
+    pub impulse_to_hit: Option<Fixed>,
+    pub to_hit_impulse: Option<Fixed>,
+    pub warp_to_hit: Option<Fixed>,
+    pub to_hit_warp: Option<Fixed>,
+    pub slow_to_hit: Option<Fixed>,
+    pub to_hit_slow: Option<Fixed>,
+}
+
+/// What a weapon may be aimed at (CON-54). `None`: the key is absent and the
+/// weapon class's own default applies (not typed here).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TargetMaskDef {
+    /// `targetEnemyCraft`.
+    pub enemy_craft: Option<bool>,
+    /// `targetEnemyBuildings`.
+    pub enemy_buildings: Option<bool>,
+    /// `targetAlliedCraft`.
+    pub allied_craft: Option<bool>,
+    /// `targetAlliedBuildings`.
+    pub allied_buildings: Option<bool>,
+    /// `targetEnemyPlanets` (Armada II).
+    pub enemy_planets: Option<bool>,
+    /// `targetEnemyPlanetsOnly` (Armada II).
+    pub enemy_planets_only: Option<bool>,
+    /// `targetLocation`: aimed at a point, not a unit.
+    pub location: Option<bool>,
+    /// `AItargetLocation`: the same for computer players.
+    pub ai_location: Option<bool>,
+}
+
+/// Weapon and ordnance base keys (CON-54), each `None` when the ODF does not
+/// set it. Evidence: the key names and value types are read from the stock
+/// executables, static; nothing here is measured. Not yet applied by the sim.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WeaponBaseDef {
+    /// `hitChance` with its per-target rows.
+    pub hit_chance: Option<Lookup>,
+    /// The ordnance's `damageBase`, `damageVariance`, `damageThreshold`,
+    /// `shieldCrewModifier` and `hullCrewModifier`, only when the key has
+    /// per-target rows (the plain values are `WeaponDef::damage`,
+    /// `damage_variance` and `crew_loss`).
+    pub damage_base: Option<Lookup>,
+    pub damage_variance: Option<Lookup>,
+    pub damage_threshold: Option<Lookup>,
+    pub shield_crew_modifier: Option<Lookup>,
+    pub hull_crew_modifier: Option<Lookup>,
+    pub to_hit: ToHitDef,
+    pub targets: TargetMaskDef,
+    /// `needTarget`.
+    pub need_target: Option<bool>,
+    /// `beneficial`: the weapon helps its target.
+    pub beneficial: Option<bool>,
+    /// `switchToAttack`.
+    pub switch_to_attack: Option<bool>,
+    /// `cloakEnable`: usable while cloaked.
+    pub cloak_enable: Option<bool>,
+    /// `warpEnable` (Armada II): usable at warp.
+    pub warp_enable: Option<bool>,
+    /// `crewAffectsWeaponDelay`.
+    pub crew_affects_weapon_delay: Option<bool>,
+    /// `ignoreValidAsTarget` (Armada II).
+    pub ignore_valid_as_target: Option<bool>,
+    /// `regularWeaponDelay`, seconds.
+    pub regular_weapon_delay: Option<Fixed>,
+    /// Ordnance `ignoreShield`.
+    pub ignore_shield: Option<bool>,
+    /// Ordnance `forceInvalidateTarget` (Armada II).
+    pub force_invalidate_target: Option<bool>,
+    /// Ordnance `canAttackStations` (Armada II mines).
+    pub can_attack_stations: Option<bool>,
+    /// Ordnance `specialValue`.
+    pub special_value: Option<Fixed>,
+    /// Ordnance `shieldDuration`, seconds.
+    pub shield_duration: Option<Fixed>,
+    /// Ordnance `omegaTurn`: a seeking shot's turn rate.
+    pub omega_turn: Option<Fixed>,
+    /// Ordnance `seekTime`, seconds.
+    pub seek_time: Option<Fixed>,
+    /// Ordnance `shotAccel`.
+    pub shot_accel: Option<Fixed>,
+    /// Ordnance `detectRadius` (mines).
+    pub detect_radius: Option<Fixed>,
+    /// Ordnance `travelTimeFraction` (Armada II beams).
+    pub travel_time_fraction: Option<Fixed>,
 }
 
 /// The keys of a `ColonizerPod` ordnance (SIM-30), read from the ordnance ODF
@@ -762,6 +877,7 @@ impl WeaponDef {
             resource: None,
             replace: None,
             colonize: None,
+            base: WeaponBaseDef::default(),
             raw: Arc::new(raw),
         }
     }
