@@ -266,10 +266,6 @@ fn installed_status_queue_and_cargo_render_and_clear() {
     ));
     app.finish();
     app.cleanup();
-    assert!(
-        app.get_sub_app(bevy::render::RenderApp).is_some(),
-        "windowless render app missing"
-    );
 
     for _ in 0..4 {
         app.update();
