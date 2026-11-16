@@ -28,6 +28,7 @@
 
 mod cinematic;
 mod footprint;
+pub(crate) mod object_footprints;
 pub mod frame;
 pub mod instance_names;
 pub mod ghost;
@@ -179,7 +180,7 @@ impl Plugin for HudPlugin {
                     place_on_click.run_if(resource_exists::<Aim>).run_if(not(crate::ui::presentation::cutscene_running)),
                     ghost::update_ghost,
                     ghost::tint_ghost,
-                    ghost::sync_footprints,
+                    (ghost::sync_footprints, object_footprints::sync_object_footprints).chain(),
                     super::gui_sprites::paint.after(super::theme::WidgetPaint),
                 )
                     .chain()

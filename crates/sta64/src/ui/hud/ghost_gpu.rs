@@ -36,15 +36,29 @@ fn installed_ghost_is_readable_without_lights() {
         -(lo[2] + hi[2]) * 0.5,
     );
     let radius = (Vec3::from(hi) - Vec3::from(lo)).length() * 0.5;
-    let mut def = sta_content::UnitDef::new("gpu_blueprint", "station");
+    use sta_sim::WorldSource;
+    let mut def = sta_content::UnitDef::new("gpu_blueprint", "shipyard");
     def.launch = Some(sta_content::LaunchPoint {
         offset: (sta_sim::Fixed::ZERO, sta_sim::Fixed::ZERO),
         dir: (sta_sim::Fixed::ZERO, sta_sim::Fixed::ONE),
         clear: sta_sim::Fixed::from_f64(f64::from(radius) * 4.0 / 3.0),
         node: None,
     });
-    let db = std::sync::Arc::new(sta_content::ContentDb::builder().unit(def).build().unwrap());
+    let db = std::sync::Arc::new(
+        sta_content::ContentDb::builder()
+            .unit(def)
+            .unit(sta_content::UnitDef::new("gpu_builder", "constructionrig"))
+            .unit(sta_content::UnitDef::new("gpu_object", "starbase"))
+            .build()
+            .unwrap(),
+    );
     let def_key = db.key("gpu_blueprint").unwrap();
+    let view = sta_sim::fake::ScriptedSource::from_json5(
+        r#"{units:[{id:1,def:"gpu_builder",owner:0,hull:100,rails:[{at:0,pos:{x:0,y:0,z:0}}]}]}"#,
+        &db,
+    )
+    .unwrap()
+    .view();
     let grid_cfg = sta_content::layered::cfg_h(&vfs, "RTS_CFG.h");
     let mut app = App::new();
     app.add_plugins(
@@ -61,13 +75,30 @@ fn installed_ghost_is_readable_without_lights() {
             .disable::<bevy::winit::WinitPlugin>(),
     );
     app.add_plugins(crate::render::hulls::HullPlugin)
-        .add_systems(Update, (tint_ghost, sync_footprints).chain())
+        .add_systems(
+            Update,
+            (
+                tint_ghost,
+                sync_footprints,
+                super::super::object_footprints::sync_object_footprints,
+            )
+                .chain(),
+        )
         .insert_resource(crate::viewer::Mounted(vfs))
         .insert_resource(HudFeed {
-            view: std::sync::Arc::default(),
+            view,
             player: sta_sim::PlayerId(0),
             selected: Vec::new(),
-            content: Some(db), ..Default::default()
+            content: Some(db.clone()),
+            ..Default::default()
+        })
+        .insert_resource(HudState {
+            placing: Some(Armed {
+                builder: sta_sim::EntityId(1),
+                what: def_key,
+                odf: "gpu_blueprint".into(),
+            }),
+            ..default()
         })
         .insert_resource(ClearColor(Color::BLACK))
         .insert_resource(GlobalAmbientLight {
@@ -309,6 +340,78 @@ fn installed_ghost_is_readable_without_lights() {
     );
     let assets = app.world().resource::<FootprintAssets>();
     assert_eq!(assets.cell_size, footprint_cell_size(grid_cfg.as_ref()));
+    drop(frames);
+
+    // With the cursor ghost hidden, the existing station, constructor and map
+    // region must still render their own footprints. Disarming removes all.
+    app.world_mut()
+        .get_mut::<Visibility>(root)
+        .unwrap()
+        .set_if_neq(Visibility::Hidden);
+    let span = radius * 0.65;
+    let mut view = (*app.world().resource::<HudFeed>().view).clone();
+    view.units[0].pos = sta_sim::Vec3::from_f32([-span, 0.0, 0.0]);
+    let mut station = view.units[0].clone();
+    station.id = sta_sim::EntityId(2);
+    station.def = db.key("gpu_object").unwrap();
+    station.pos = sta_sim::Vec3::from_f32([span, 0.0, 0.0]);
+    view.units.push(station);
+    app.world_mut().resource_mut::<HudFeed>().view = Arc::new(view);
+    let mut map = sta_content::MapDef::empty();
+    map.regions.push(sta_content::Region {
+        kind: sta_content::RegionKind::Nebula,
+        odf: "gpu_region".into(),
+        shape: sta_content::RegionShape::Sphere {
+            centre: sta_sim::Vec3::from_f32([0.0, 0.0, -span]),
+            radius: sta_sim::Fixed::from_int(30),
+        },
+    });
+    app.world_mut()
+        .spawn(super::super::object_footprints::MapFootprintRegions(
+            Arc::new(map),
+        ));
+    let object_frames = Arc::new(Mutex::new(Vec::<Image>::new()));
+    for stage in 0..2 {
+        if stage == 1 {
+            app.world_mut().resource_mut::<HudState>().placing = None;
+        }
+        for _ in 0..12 {
+            app.update();
+        }
+        let world = app.world_mut();
+        let mut overlays =
+            world.query_filtered::<Entity, (With<crate::map::MatchEntity>, With<Mesh3d>)>();
+        assert_eq!(overlays.iter(world).count(), if stage == 0 { 3 } else { 0 });
+        let output = Arc::clone(&object_frames);
+        app.world_mut()
+            .spawn(Screenshot::image(target.clone()))
+            .observe(move |shot: On<ScreenshotCaptured>| {
+                output.lock().unwrap().push(shot.image.clone());
+            });
+        for _ in 0..60 {
+            app.update();
+            if object_frames.lock().unwrap().len() > stage {
+                break;
+            }
+        }
+        assert_eq!(object_frames.lock().unwrap().len(), stage + 1);
+    }
+    let objects = object_frames.lock().unwrap();
+    for (stage, image) in objects.iter().enumerate() {
+        let dynamic = image.clone().try_into_dynamic().unwrap();
+        let pixels = dynamic.to_rgba8().pixels().filter(|p| p[2] > 30).count();
+        eprintln!("occupied object footprints {stage}: {pixels} visible pixels");
+        if stage == 0 {
+            assert!(pixels > 100, "existing object footprints are invisible");
+        } else {
+            assert_eq!(pixels, 0, "footprints remain after leaving placement mode");
+        }
+        if let Ok(dir) = std::env::var("STA64_GPU_OUT") {
+            dynamic
+                .save(std::path::Path::new(&dir).join(format!("object-footprints-{stage}.png")))
+                .unwrap();
+        }
+    }
     for (handle, color, texture, alpha) in originals {
         let m = app
             .world()

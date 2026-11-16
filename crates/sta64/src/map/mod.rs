@@ -920,7 +920,9 @@ fn rebuild(
     ambient.brightness = 250.0;
 
     let neutral = teams.0.first().map(|t| t.1).unwrap_or(Color::WHITE);
-    let root = commands.spawn((MapRoot, Transform::IDENTITY, Visibility::default())).id();
+    let root = commands.spawn((MapRoot,
+        crate::ui::hud::object_footprints::MapFootprintRegions(map_def.clone()),
+        Transform::IDENTITY, Visibility::default())).id();
     let (mut drawn, mut no_model, mut no_odf, mut tris, mut planets, mut rocks) = (0usize, 0usize, 0usize, 0usize, 0usize, 0usize);
     let mut missing: Vec<String> = Vec::new();
     let mut map_lights: Vec<(Vec3, Option<[f32; 3]>)> = Vec::new();
