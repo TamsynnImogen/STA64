@@ -63,7 +63,7 @@ pub(super) fn text(commands: &mut Commands, root: Entity, r: R, value: String, c
 /// top-left anchored with a baseline lift. Armada II stock: measured on one original
 /// 1280x720 frame, the digits' ink centre lies within 1 px of the rectangle's centre on
 /// both axes (rectangles scaled per axis from the sheet). Armada I: not measured (its
-/// rectangle is 63 x 12 units in a 16-unit panel, which suggests the same rule); TODO.
+/// rectangle sits centred in its panel, which suggests the same rule); TODO.md has the check.
 pub(super) fn readout(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>) -> Entity {
     text_styled(commands, root, r, value, color, size, kind, SpriteTextStyle::default().stock_label().centered_in_box())
 }
