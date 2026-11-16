@@ -718,6 +718,8 @@ fn a_changed_frame_body_hazard_area_cost_or_solid_count_builds() {
         assert_eq!(cache.builds, expected, "{what}: must build");
         assert!(g.same_cells(&fresh), "{what}: not what a fresh build gives");
     }
+}
+
 /// `cross` with a `PathPlanning` edit sent first (LUA-41).
 fn cross_with_planning(pathing: Option<PathingRules>, planning: bool) -> f64 {
     let mut sim = sim_with(vec![sphere(RegionKind::Nebula, "fx_mutara", 0, 1500, 400)], content(pathing));
