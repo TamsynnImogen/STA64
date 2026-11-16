@@ -1,5 +1,5 @@
-//! Single-player cheat entry (UI-47). State changes travel through the ordinary command log;
-//! presentation cheats stay on the client. See docs/CHEATS.md for the supported rules and gaps.
+//! Single-player cheat entry (UI-47). Gameplay changes and cineractive events use the command
+//! log; diagnostics stay on the client. See docs/CHEATS.md for the supported rules and gaps.
 
 pub mod input;
 
