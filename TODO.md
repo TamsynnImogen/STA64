@@ -220,6 +220,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Armed cursors (UI-44, #863): arm Move, Attack, Mine, Colonize, Transport, Rally and station placement in Classic/FO; compare valid and refused targets with the click result, including a blocked build site and insufficient stock. Check cancellation, crossing the HUD, an open menu and cheat typing. Missing refusal artwork keeps the existing pointer fallback; Repair and targeted-special actions remain unavailable.
 
+- [?] Current-frame tooltip placement (UI-50, #869): hover near each window edge until short and verbose tooltips appear, switch between short and tall tooltips, then resize/change UI scale. The first visible frame should use the new box size; background, border and all text should stay together inside the window. Confirm localized text, crispness and normal hover delays in Classic and FO.
+
 ## Checked earlier (morning list)
 
 - [x] Construction live-feedback fixes accepted (2026-11-11, `construction-a1666d0`): the user confirmed visible beams, later chunk reveal and the constructor staying fixed under normal/queued movement. Automated Stop/cancellation and snapshot checks pass. FPS was not reported; this does not complete broader native/Android checks above.
