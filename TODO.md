@@ -196,6 +196,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 ### Playtest checks from the 2026-11-15/16 merges
 
+- [?] Weapon base keys (CON-54, #858): `STA64_TEST_INSTALL=<A1, A2 or FO install> cargo test -p sta_content --test weapon_base_keys -- --nocapture` prints how many weapons set a base key, the `hitChance` and `damageBase` table rows read and `row warnings 0`. Nothing changes in play yet: the keys are typed, and SIM-73 applies them one rule at a time. Judge the load cost on Fleet Operations (about 160 MB more peak memory and 3 s more in a debug build for its 3 million table rows).
+
 - [?] Armada I music (#762): in an Armada I campaign mission the intro music and voices play and the gameplay music follows (not heard by ear, no audio run).
 - [?] Armada I health (#790): in an Armada I skirmish a damaged ship regenerates hull at the stock rule's pace; a ship at zero hull dies (the bench saw death at an empty pool, the static read says otherwise: see the follow-up).
 - [?] Armada I stock HUD (#795): in an Armada I campaign mission the stock-sheet HUD shows the command, build and info panels; orders and build slots work by click; stations show their own entries.

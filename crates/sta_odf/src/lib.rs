@@ -41,6 +41,11 @@ pub struct Entry {
     pub key: String,
     pub value: String,
     pub line: usize,
+    /// Table rows that follow the assignment: lines of the form
+    /// `"name" value...` (a per-target row of `hitChance`, `damageBase`, ...),
+    /// as written, comments stripped. Rows of quoted strings only are part
+    /// of `value` instead (a name list).
+    pub rows: Vec<String>,
 }
 
 /// One parsed file, before include resolution.
@@ -82,6 +87,12 @@ pub fn parse(text: &str) -> RawOdf {
             }
             continue;
         }
+        if is_table_row(line) {
+            if let Some(entry) = continuation.and_then(|index| out.entries.get_mut(index)) {
+                entry.rows.push(line.to_owned());
+                continue;
+            }
+        }
         continuation = None;
         if let Some((k, v)) = line.split_once('=') {
             let key = k.trim();
@@ -90,6 +101,7 @@ pub fn parse(text: &str) -> RawOdf {
                     key: key.to_owned(),
                     value: v.trim().to_owned(),
                     line: i + 1,
+                    rows: Vec::new(),
                 });
                 continuation = Some(out.entries.len() - 1);
             }
@@ -111,6 +123,15 @@ fn is_quoted_continuation(line: &str) -> bool {
         }
     }
     false
+}
+
+/// A table row: one quoted name, then at least one unquoted token, and no
+/// `=` outside the quotes (`"fbattle.odf" 0.5`).
+fn is_table_row(line: &str) -> bool {
+    let Some(quoted) = line.trim().strip_prefix('"') else { return false };
+    let Some(end) = quoted.find('"') else { return false };
+    let rest = quoted[end + 1..].trim();
+    !rest.is_empty() && !rest.starts_with('"') && !rest.contains('=')
 }
 
 fn strip_comment(line: &str) -> &str {
@@ -156,6 +177,9 @@ pub struct Odf {
     pub name: String,
     values: HashMap<String, String>,
     sources: HashMap<String, KeySource>,
+    /// Table rows of the winning assignment of each key that has any, one
+    /// row per line (a single allocation: Fleet Operations has millions of rows).
+    rows: HashMap<String, String>,
     /// Keys in first-definition order, original case.
     order: Vec<String>,
     /// Includes of the root's own name that had no lower version left, so
@@ -164,12 +188,29 @@ pub struct Odf {
 }
 
 impl Odf {
-    fn set(&mut self, key: &str, value: &str, source: KeySource) {
+    fn set(&mut self, key: &str, value: &str, rows: &[String], source: KeySource) {
         let k = key.to_ascii_lowercase();
         self.sources.insert(k.clone(), source);
+        // The rows belong to the assignment: a later assignment replaces them too.
+        if rows.is_empty() {
+            self.rows.remove(&k);
+        } else {
+            self.rows.insert(k.clone(), rows.join("\n"));
+        }
         if self.values.insert(k, value.to_owned()).is_none() {
             self.order.push(key.to_owned());
         }
+    }
+
+    /// The table rows after the winning assignment of `key` (`"name" value...`
+    /// lines, as written); none when it has none.
+    pub fn rows(&self, key: &str) -> impl Iterator<Item = &str> {
+        self.rows.get(&key.to_ascii_lowercase()).map_or("", String::as_str).lines()
+    }
+
+    /// Does the winning assignment of `key` have table rows?
+    pub fn has_rows(&self, key: &str) -> bool {
+        self.rows.contains_key(&key.to_ascii_lowercase())
     }
 
     /// The file, layer copy and line whose assignment of `key` won.
@@ -287,7 +328,7 @@ fn apply(
     }
     w.stack.pop();
     for e in &raw.entries {
-        odf.set(&e.key, &e.value, KeySource { file: std::sync::Arc::clone(&file_arc), version, line: e.line });
+        odf.set(&e.key, &e.value, &e.rows, KeySource { file: std::sync::Arc::clone(&file_arc), version, line: e.line });
     }
     Ok(())
 }
@@ -314,6 +355,33 @@ mod tests {
         assert_eq!(raw.entries.len(), 3);
         assert_eq!(raw.entries[1].value, "\"Uses // inside\"");
         assert_eq!(raw.entries[2].line, 6);
+    }
+
+    #[test]
+    fn table_rows_stay_with_their_assignment() {
+        let text = "hitChance = 0.9f // base\n\"fbattle.odf\" 0.5 // slow\n\n\"fscout.odf\"\t0.25\nrange = 600\n\"stray.odf\" 1\n";
+        let raw = parse(text);
+        assert_eq!(raw.entries.len(), 2);
+        assert_eq!(raw.entries[0].value, "0.9f");
+        assert_eq!(raw.entries[0].rows, ["\"fbattle.odf\" 0.5", "\"fscout.odf\"\t0.25"]);
+        assert_eq!(raw.entries[1].rows, ["\"stray.odf\" 1"]);
+        let odf = resolve("w", &mut |_| Some(text.to_owned())).unwrap();
+        assert_eq!(odf.f32("hitChance"), Some(0.9));
+        assert_eq!(odf.rows("HITCHANCE").collect::<Vec<_>>(), ["\"fbattle.odf\" 0.5", "\"fscout.odf\"\t0.25"]);
+        assert!(odf.has_rows("hitChance") && !odf.has_rows("range2") && odf.rows("absent").next().is_none());
+        // A row before any assignment, and a name list, are not table rows.
+        assert!(parse("\"a.odf\" 1\nx = 2\n").entries[0].rows.is_empty());
+        assert!(parse("names = \"A\"\n\"B\" \"C\"\n").entries[0].rows.is_empty());
+    }
+
+    #[test]
+    fn a_later_assignment_replaces_the_rows_too() {
+        let base = "damageBase = 10\n\"a.odf\" 2\n";
+        let odf = resolve("w", &mut |n| Some(if n.eq_ignore_ascii_case("base.odf") { base.to_owned() } else { "#include \"base.odf\"\ndamageBase = 20\n".to_owned() })).unwrap();
+        assert_eq!(odf.f32("damageBase"), Some(20.0));
+        assert!(!odf.has_rows("damageBase"));
+        let odf = resolve("w", &mut |n| Some(if n.eq_ignore_ascii_case("base.odf") { base.to_owned() } else { "#include \"base.odf\"\n".to_owned() })).unwrap();
+        assert_eq!(odf.rows("damageBase").collect::<Vec<_>>(), ["\"a.odf\" 2"]);
     }
 
     #[test]
