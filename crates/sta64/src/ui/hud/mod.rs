@@ -37,6 +37,8 @@ pub mod model;
 pub mod commands;
 mod panels;
 pub mod stock;
+mod status;
+mod status_gpu;
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -149,6 +151,8 @@ impl Plugin for HudPlugin {
             .init_resource::<HudPointer>()
             .init_resource::<crate::input::hover::HoveredUnit>()
             .init_resource::<stock::StockState>()
+            .init_resource::<status::StatusFeed>()
+            .init_resource::<status_gpu::StatusUiState>()
             .init_resource::<cinematic::CinematicState>()
             .init_resource::<super::gui_sprites::GuiSkin>()
             .init_resource::<super::gui_sprites::GuiSprites>()
@@ -167,8 +171,7 @@ impl Plugin for HudPlugin {
                     feed_from_link.run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<ExternalFeed>)),
                     fit_screen,
                     refresh,
-                    stock::refresh,
-                    stock::update_values,
+                    (stock::refresh, stock::update_values, (status::sync, status_gpu::refresh, status_gpu::update_values).chain()).chain(),
                     stock::active,
                     stock::navigate,
                     panels::update_values.before(super::theme::WidgetPaint),
@@ -367,11 +370,13 @@ fn pointer(
     layout: Res<HudLayoutRes>,
     state: Res<HudState>,
     stock: Res<stock::StockState>,
+    status: Res<status_gpu::StatusUiState>,
     mut out: ResMut<HudPointer>,
 ) {
     let over = window.and_then(|w| w.cursor_position()).is_some_and(|c| {
         let p = c / scale.0.max(1e-3);
-        if stock.layout.is_some() { stock.solid.iter().any(|r| r.contains(p)) }
+        if status.fallback_card().is_some_and(|r| r.contains(p)) { true }
+        else if stock.layout.is_some() { stock.solid.iter().any(|r| r.contains(p)) }
         else { layout.0.solid(state.height).iter().any(|r| r.contains(p)) }
     });
     if out.0 != over {
