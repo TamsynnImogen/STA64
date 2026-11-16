@@ -218,6 +218,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] Boarding data (#800): with the stock Armada II install `cargo test -p sta_sim` boarding scenarios still pass after the data differences the PR lists.
 
 
+- [?] SPR emitter diagnostics (CON-58, #864): inspect the parser warning list for an authored unknown emitter type; it names the source file and type line and retains the Spray fallback. Known types and an omitted type remain warning-free. This adds parser diagnostics; runtime consumers do not automatically log every SPR warning.
+
 ## Checked earlier (morning list)
 
 - [x] Construction live-feedback fixes accepted (2026-11-11, `construction-a1666d0`): the user confirmed visible beams, later chunk reveal and the constructor staying fixed under normal/queued movement. Automated Stop/cancellation and snapshot checks pass. FPS was not reported; this does not complete broader native/Android checks above.
