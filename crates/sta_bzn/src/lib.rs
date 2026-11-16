@@ -317,9 +317,8 @@ fn object_starts(recs: &[Rec], k: usize) -> bool {
 }
 
 /// The object's display name: the first 128-byte string record from `from` on, before the next
-/// object record and within 40 records (read from data: 802 named objects in 814 Armada II
-/// maps, never two such buffers in one object; the distance from the label differs by object
-/// class). Cut at the first NUL and trimmed; a blank buffer or none gives an empty string.
+/// object record and within 40 records (read from data on the installed Armada II maps: at
+/// most one such buffer per object; the distance from the label differs by object class). Cut at the first NUL and trimmed; a blank buffer or none gives an empty string.
 fn instance_name(recs: &[Rec], from: usize) -> String {
     for k in from..recs.len().min(from.saturating_add(40)) {
         if object_starts(recs, k) {
