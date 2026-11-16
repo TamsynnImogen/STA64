@@ -596,9 +596,12 @@ constants. Orders are sent as the unit's owner; edits are SCRIPT edits.
   the point of `a`'s bounding sphere (`UnitDef::radius`) toward `b`, or one
   radius along +x without `b`; raises when the radius is not in the content.
 - `SetCommandWhat...VO` (bound here, not in `native_text.rs`): `WhatWhoVO` maps
-  GO, ATTACK and MINE toward an object to orders; `WhatWhoWhereVO` maps BUILD at
-  a position; both objects must be live or nothing happens. `WhatWhoParamVO`
-  raises (a parameter has no order); other commands raise, counted. The voice
+  GO, ATTACK, MINE and GUARD (23, LUA-39) toward an object to orders;
+  `WhatWhoWhereVO` maps BUILD at a position; both objects must be live or nothing
+  happens. GUARD (also through `WhatWhoParamVO`, whose parameter the guard does
+  not read) is `Order::Guard` as the script seat: both objects live craft, no
+  owner or special-forces test, the unit as its own ward does nothing.
+  `WhatWhoParamVO` otherwise raises (a parameter has no order); other commands raise, counted. The voice
   flag is not measured and not applied. The three calls and
   `SetCommandMoveAutonomyLow` wait for a handle still being built (LUA-36).
 - LUA-36 (rules read from the executable, static; none measured): `ObstacleAvoidance` writes a
@@ -647,8 +650,7 @@ from the stock scripts' constants; not measured otherwise.
   derelict crafts are not skipped (no derelict state in the view).
 - `A2.GetFirstCraft`, `A2.GetLocation(path, index)` (0-based, `A2.paths`).
 - `DestroyCritical` queues a lethal `Damage`, `ExplodeNow` a `Kill`,
-  `SetCanBeDecommissioned` the typed edit the sim rejects today (reported and
-  counted by the edit feedback); `DisableShieldGenerator`, `SetShieldPercent`,
+  `SetCanBeDecommissioned` the typed edit the sim stores as a switch bit (LUA-32); `DisableShieldGenerator`, `SetShieldPercent`,
   `SetMaxShields` and `Damage<System>` are applied by the sim (SIM-55).
 - Calls with no sim seam (position, per-team targeting, hidden/name/population/wormhole/cargo/fleet state) raise
   and are counted; see `seams()` for each reason.

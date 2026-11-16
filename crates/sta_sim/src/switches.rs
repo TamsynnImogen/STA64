@@ -29,6 +29,8 @@
 //!   units as `AttrsView::special_forces` (derived each tick, LUA-28), which the
 //!   mission bindings and the AI read. The mission bindings send `Edit::SpecialForces`
 //!   and gate script orders on it; the AI leaves flagged craft out of its plans.
+//! - **SetCanBeDecommissioned** (LUA-32): one more bit (`no_decommission`, hash bit 4), stored for a
+//!   live craft; nothing reads it yet (no decommissioning in STA64).
 //! - **SetName**: a display string (limited to [`MAX_NAME_BYTES`]).
 
 use serde::{Deserialize, Serialize};
@@ -54,6 +56,9 @@ pub struct Switches {
     pub hidden: bool,
     pub special_forces: bool,
     pub name: Option<String>,
+    /// `SetCanBeDecommissioned(false)` (LUA-32): stored and saved; STA64 has no
+    /// decommissioning to refuse yet. The default (the engine's, not established) reads as allowed.
+    pub no_decommission: bool,
 }
 
 impl Switches {
@@ -125,7 +130,7 @@ impl SwitchTable {
         for (id, s) in self.rows.iter() {
             h.u64(id.0 as u64);
             h.u64(u64::from(s.not_target_of));
-            h.u64(u64::from(s.no_repair) | u64::from(s.derelict_ok) << 1 | u64::from(s.hidden) << 2 | u64::from(s.special_forces) << 3);
+            h.u64(u64::from(s.no_repair) | u64::from(s.derelict_ok) << 1 | u64::from(s.hidden) << 2 | u64::from(s.special_forces) << 3 | u64::from(s.no_decommission) << 4);
             h.u64(match s.recrew { None => 0, Some(false) => 1, Some(true) => 2 });
             h.str(s.name.as_deref().unwrap_or(""));
         }
@@ -172,6 +177,7 @@ impl Sim {
                 true
             },
             Edit::SpecialForces(id, on) => self.craft_switch(*id, |s| s.special_forces = *on),
+            Edit::Decommissionable(id, on) => self.craft_switch(*id, |s| s.no_decommission = !on),
             Edit::Name(id, name) => {
                 if name.len() > MAX_NAME_BYTES || !self.units.get(*id).is_some_and(|u| u.kind == crate::world::EntityKind::Craft) || !live(self, *id) {
                     return Some(false);

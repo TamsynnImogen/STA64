@@ -18,9 +18,12 @@
 //!   They are sent as the unit's owner like a player's input; a unit with no player owner is
 //!   ordered as the script seat (LUA-36).
 //! - `SetImpulseSpeed` / `ResetImpulseSpeed` set and lift the unit's impulse
-//!   speed, `SetRedAlert` / `SetGreenAlert` set its alert status (red 0, yellow
-//!   1, green 2): typed SCRIPT edits (`Edit::MaxSpeed`, `Edit::Alert`) whose
-//!   rejection by the sim is reported and counted (`edit_feedback`).
+//!   speed, `SetRedAlert` / `SetYellowAlert` / `SetGreenAlert` set its alert status
+//!   (red 0, yellow 1, green 2) and `IsRedAlert` / `IsYellowAlert` / `IsGreenAlert` read it
+//!   (LUA-32; the sim gates fire and idle assist on it, see `sta_sim::alert`):
+//!   typed SCRIPT edits (`Edit::MaxSpeed`, `Edit::Alert`) whose rejection by the sim
+//!   is reported and counted (`edit_feedback`). `GetAllyShipAttacks` / `GetAllyStationAttacks`
+//!   read the sim's ally attack counters; `UnderAttack` the last enemy hit (`conditions`).
 //! - `GetNearestEnemy(unit, r)`: nearest live unit whose owner is an enemy of
 //!   the unit's owner, inside the square of half side `r` around the unit,
 //!   measured in the XZ plane, and whose owner can see the unit; 0 when none.
@@ -56,6 +59,7 @@ const CMD_STOP: i64 = 3;
 const CMD_GO: i64 = 4;
 const CMD_ATTACK: i64 = 6;
 const CMD_MINE: i64 = 21;
+const CMD_GUARD: i64 = 23;
 const CMD_BUILD: i64 = 25;
 /// Highest `AiCommand` value.
 const CMD_LAST: i64 = 56;
@@ -386,7 +390,8 @@ fn mine(env: &Env, unit: EntityId, node: EntityId) -> mlua::Result<Value> {
 
 fn alert(lua: &Lua, env: &Env, name: &'static str, state: AlertState) -> mlua::Result<Function> {
     def(lua, env, name, &["h"], move |_, e, _, a| {
-        if e.alive(a[0].id()).is_some() {
+        let holds = crate::api::alert::holds_alert(&e.ctx.borrow(), a[0].id());
+        if holds {
             edit_feedback::queue(&mut e.ctx.borrow_mut(), name_label(name), Edit::Alert(a[0].id(), state))?;
         }
         nothing()
@@ -398,6 +403,7 @@ fn name_label(name: &str) -> &'static str {
     match name {
         "SetRedAlert" => "A2.SetRedAlert",
         "SetGreenAlert" => "A2.SetGreenAlert",
+        "SetYellowAlert" => "A2.SetYellowAlert",
         "SetImpulseSpeed" => "A2.SetImpulseSpeed",
         _ => "A2.ResetImpulseSpeed",
     }
@@ -464,6 +470,18 @@ fn nearest_enemy(env: &Env, a: &[P]) -> mlua::Result<Value> {
         }
     }
     Ok(Value::Integer(best.map_or(0, |(_, id)| i64::from(id.0))))
+}
+
+/// `SetCommandWhat...VO(unit, GUARD, ward[, param], voice)` (LUA-39): both objects must be live
+/// craft (the engine's ship-bit guard; anything else does nothing); no owner and no
+/// special-forces test, so the order goes in as the script seat. The parameter is not read by the
+/// guard behaviour and the voice flag is not applied (read from the executable, static). A ward
+/// that is the unit itself does nothing.
+fn guard(e: &Env, name: &str, unit: EntityId, ward: EntityId) -> mlua::Result<Value> {
+    if unit != ward && e.alive_craft(unit).is_some() && e.alive_craft(ward).is_some() {
+        e.script_order(name, Order::Guard { units: vec![unit], ward })?;
+    }
+    nothing()
 }
 
 /// The commands the `SetCommandWhat...VO` calls can map onto the sim's orders.
@@ -645,13 +663,28 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
     })?)?;
     table.set("SetRedAlert", alert(lua, &env, "SetRedAlert", AlertState::Red)?)?;
     table.set("SetGreenAlert", alert(lua, &env, "SetGreenAlert", AlertState::Green)?)?;
+    table.set("SetYellowAlert", alert(lua, &env, "SetYellowAlert", AlertState::Yellow)?)?;
+    // `IsRedAlert` / `IsYellowAlert` / `IsGreenAlert`: the unit's level (what a call of this tick
+    // set counts); false for anything that is not a live craft or station (LUA-32, read from the executable, static).
+    for (name, level) in [("IsRedAlert", AlertState::Red), ("IsYellowAlert", AlertState::Yellow), ("IsGreenAlert", AlertState::Green)] {
+        table.set(name, def(lua, &env, name, &["h"], move |_, e, _, a| {
+            let c = e.ctx.borrow();
+            Ok(Value::Boolean(crate::api::alert::holds_alert(&c, a[0].id()) && crate::api::alert::state(&c, a[0].id()) == level))
+        })?)?;
+    }
+    // Ally attack counters (LUA-32): attack orders `by` gave against `team`'s units while not enemies.
+    table.set("GetAllyShipAttacks", def(lua, &env, "GetAllyShipAttacks", &["ii"], |_, e, _, a| {
+        Ok(Value::Integer(crate::api::alert::ally_attacks(&e.ctx.borrow(), a[0].int(), a[1].int(), false)))
+    })?)?;
 
     // Queries.
     table.set("GetNearestEnemy", def(lua, &env, "GetNearestEnemy", &["hf"], |_, e, _, a| nearest_enemy(e, a))?)?;
     table.set("GetAttackLocation", def(lua, &env, "GetAttackLocation", &["hh"], |lua, e, _, a| attack_location(e, lua, a))?)?;
     table.set("GetMainEnemyBaseLocation", raising(lua, &env, "GetMainEnemyBaseLocation", &["i"], "the AI team's strategic map (its main enemy base) is not in the world view")?)?;
     table.set("AttackMainEnemyBase", raising(lua, &env, "AttackMainEnemyBase", &["hb"], "the AI team's strategic map (its main enemy base) is not in the world view")?)?;
-    table.set("GetAllyStationAttacks", raising(lua, &env, "GetAllyStationAttacks", &["ii"], "the AI team's attack statistics are not in the world view")?)?;
+    table.set("GetAllyStationAttacks", def(lua, &env, "GetAllyStationAttacks", &["ii"], |_, e, _, a| {
+        Ok(Value::Integer(crate::api::alert::ally_attacks(&e.ctx.borrow(), a[0].int(), a[1].int(), true)))
+    })?)?;
 
     // AI plan: the request is queued for the host, which gives it to the
     // seat's AI (`MissionRuntime::take_ai_requests`, `sta_ai::MissionAiHub`).
@@ -694,6 +727,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
                 e.order("SetCommandWhatWhoVO", unit.id, |units| Order::Move { units, to: target.pos, queue: false })?;
             }
             CMD_ATTACK => return attack(e, "SetCommandWhatWhoVO", unit.id, target.id),
+            CMD_GUARD => return guard(e, "SetCommandWhatWhoVO", unit.id, target.id),
             CMD_MINE => {
                 e.order("SetCommandWhatWhoVO", unit.id, |units| Order::Mine { units, node: target.id })?;
             }
@@ -708,6 +742,9 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         let what = command_arg("SetCommandWhatWhoParamVO", &a[1])?;
         if e.alive(a[0].id()).is_none() || e.alive(a[2].id()).is_none() {
             return nothing();
+        }
+        if what == CMD_GUARD {
+            return guard(e, "SetCommandWhatWhoParamVO", a[0].id(), a[2].id());
         }
         let why = format!("{} with a parameter has no order in the sim seam", command_name(what));
         Err(e.gap("SetCommandWhatWhoParamVO", &why))

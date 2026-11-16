@@ -947,9 +947,9 @@ pub struct ActiveMission {
 /// latter for `Mission.finish` (counted as a loss, result unknown). Success
 /// follows Lua truthiness.
 const OUTCOME_HOOK: &str = r#"
-local function record(won, delay)
+local function record(won, delay, absolute)
   if rawget(_G, "__sta64_outcome") == nil then
-    rawset(_G, "__sta64_outcome", { won = won, delay = tonumber(delay) or 0 })
+    rawset(_G, "__sta64_outcome", { won = won, delay = tonumber(delay) or 0, absolute = absolute or false })
   end
 end
 local function wrap(t, name, fixed)
@@ -959,11 +959,14 @@ local function wrap(t, name, fixed)
   rawset(t, name, function(...)
     local a, b = ...
     if a == t then a, b = select(2, ...) end
-    if fixed == nil then record(a ~= nil and a ~= false, b) else record(fixed, a) end
+    if fixed == nil then record(a ~= nil and a ~= false, b, false) else record(fixed, a, true) end
     return f(...)
   end)
 end
 wrap(rawget(_G, "Mission"), "finish", nil)
+-- `SucceedMission(t, text)` / `FailMission(t, text)` take the mission time `t` at which the mission
+-- ends (stock scripts pass `GetTime()`, i.e. now), not a delay: `scan_outcome` turns it into the
+-- seconds still to wait. `Mission.finish(won, delay)` is STA64's own and takes a delay.
 -- A2's end calls carry their own time and are resolved by `scan_outcome`
 -- (`MissionRuntime::mission_end`), not recorded here.
 for _, t in ipairs({ _G, rawget(_G, "A1") }) do
@@ -981,10 +984,13 @@ pub fn scan_outcome(runtime: &MissionRuntime, tick: u64) -> Option<MissionOutcom
     if let MissionEndState::Ended { won } = runtime.mission_end(tick) {
         return Some(MissionOutcome { won, delay: 0.0, tick });
     }
-    let got: mlua::Result<(Option<bool>, Option<f64>)> =
-        runtime.eval("local o = rawget(_G, '__sta64_outcome') if o then return o.won, o.delay end");
-    if let Ok((Some(won), delay)) = got {
-        Some(MissionOutcome { won, delay: delay.unwrap_or(0.0), tick })
+    let got: mlua::Result<(Option<bool>, Option<f64>, Option<bool>)> =
+        runtime.eval("local o = rawget(_G, '__sta64_outcome') if o then return o.won, o.delay, o.absolute end");
+    if let Ok((Some(won), delay, absolute)) = got {
+        let delay = delay.unwrap_or(0.0);
+        // An absolute end time already reached (the stock scripts' `GetTime()`) closes at once.
+        let delay = if absolute == Some(true) { (delay - tick as f64 / f64::from(sta_core::TICK_HZ)).max(0.0) } else { delay };
+        Some(MissionOutcome { won, delay, tick })
     } else if runtime.finished() {
         // The script reached the real finish without passing the hook
         // (it kept a reference from before the hook was installed):
@@ -1041,6 +1047,8 @@ pub fn launch_runtime_with_start(
     label_gaps: Vec<crate::map_labels::LabelGap>,
     start_stock: crate::start_stock::StartStock,
 ) -> Result<MissionRuntime, StartError> {
+    // A map with no team table: the install header's start for every seat of the game.
+    let start_stock = start_stock.or_header(setup.content.rules(), setup.players.iter().map(|p| p.id));
     let cfg = MissionConfig {
         seat: Some(seat.0),
         player_numbering: seat.1,

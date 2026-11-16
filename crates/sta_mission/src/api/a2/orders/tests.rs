@@ -318,17 +318,37 @@ fn impulse_speed_is_a_typed_edit_and_the_getter_follows_it() {
 }
 
 #[test]
-fn the_sim_rejecting_an_alert_edit_is_reported_and_counted() {
+fn alert_calls_are_applied_by_the_sim_and_read_back_in_the_same_tick_and_from_the_view() {
     let mut s = scene();
     let mut rt = runtime(&s);
-    rt.eval::<()>("A2.SetRedAlert(a); A2.SetGreenAlert(b)").unwrap();
-    // The host submits them, the sim answers; the runtime reports on a later view.
+    // A new unit is red; a call of this tick shows at once (no voice, no other effect).
+    rt.eval::<()>("assert(A2.IsRedAlert(a) and not A2.IsYellowAlert(a) and not A2.IsGreenAlert(a))").unwrap();
+    rt.eval::<()>("A2.SetGreenAlert(b); assert(A2.IsGreenAlert(b) and not A2.IsRedAlert(b)); A2.SetYellowAlert(a); assert(A2.IsYellowAlert(a))").unwrap();
+    // Gone and non-existent handles read false for every level.
+    rt.eval::<()>("assert(not A2.IsRedAlert(123456) and not A2.IsGreenAlert(123456)); A2.SetGreenAlert(123456)").unwrap();
     driven(&mut s, &mut rt, 5);
-    let counted_edits: Vec<_> = rt.unsupported().into_iter().map(|(k, _)| k).collect();
-    for label in ["A2.SetRedAlert", "A2.SetGreenAlert"] {
-        let wanted = format!("{label}: simulation rejected edit");
-        assert!(counted_edits.contains(&wanted), "{wanted} in {counted_edits:?}");
-    }
+    assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());
+    assert_eq!(s.view.attrs.alerts, vec![(s.ids[0], sta_sim::command::AlertState::Yellow), (s.ids[1], sta_sim::command::AlertState::Green)]);
+    rt.eval::<()>("assert(A2.IsYellowAlert(a) and A2.IsGreenAlert(b)); A2.SetRedAlert(a); assert(A2.IsRedAlert(a))").unwrap();
+    driven(&mut s, &mut rt, 3);
+    assert_eq!(s.view.attrs.alerts, vec![(s.ids[1], sta_sim::command::AlertState::Green)]);
+}
+
+#[test]
+fn alert_calls_do_not_queue_or_answer_for_a_dying_unit() {
+    let mut s = scene();
+    s.view.units.iter_mut().find(|u| u.id == s.ids[1]).unwrap().flags = sta_sim::view::UnitFlags::DYING;
+    let (rt, commands) = run(&s, "A2.SetGreenAlert(b); assert(not A2.IsGreenAlert(b) and not A2.IsRedAlert(b)); A2.SetYellowAlert(a); assert(A2.IsYellowAlert(a))");
+    assert_eq!(commands.len(), 1, "{commands:?}: only the live unit's call is queued");
+    assert!(rt.unsupported().is_empty());
+}
+
+#[test]
+fn ally_attack_counters_read_the_views_rows_by_team_number() {
+    let mut s = scene();
+    s.view.attrs.ally_attacks = vec![(0, 1, 3, 1)];
+    let rt = runtime(&s);
+    rt.eval::<()>("assert(A2.GetAllyShipAttacks(0, 1) == 3 and A2.GetAllyStationAttacks(0, 1) == 1 and A2.GetAllyShipAttacks(1, 0) == 0 and A2.GetAllyShipAttacks(7, 1) == 0)").unwrap();
 }
 
 #[test]
@@ -420,7 +440,6 @@ fn calls_with_no_seam_validate_then_raise_and_are_counted() {
         ("A2.Special_Attack(a, b, 'gtracbm')", "A2.Special_Attack"),
         ("A2.GetMainEnemyBaseLocation(1)", "A2.GetMainEnemyBaseLocation"),
         ("A2.AttackMainEnemyBase(a, true)", "A2.AttackMainEnemyBase"),
-        ("A2.GetAllyStationAttacks(3, 1)", "A2.GetAllyStationAttacks"),
     ] {
         let (rt, err) = fails(&s, script);
         assert!(err.contains("is not available"), "{script}: {err}");
@@ -701,3 +720,5 @@ fn a_fleet_without_a_destination_orders_nothing_and_dead_or_bad_members_are_skip
     let (_, err) = fails(&s, "A2.CreateNewMoveFleet(1)");
     assert!(err.contains("takes no argument"), "{err}");
 }
+
+mod guard_tests;

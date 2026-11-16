@@ -29,8 +29,7 @@
 //! (`assist_high_autonomy_only`) and a firing ally draws no one in (the Roots
 //! engine's patch of the idle state, read statically). That also explains the
 //! measured idle picks: a stock craft that is shot at turns on its attacker,
-//! a Roots one at medium autonomy keeps its best-scoring target. Not modelled: alert status (the engine's
-//! green alert never fires on its own; STA64 crafts are always at red), the
+//! a Roots one at medium autonomy keeps its best-scoring target. Alert status (LUA-32, `alert`): a green or special-forces craft never assists (yellow assists as red does). Not modelled: the
 //! idle leash (a 300-unit dogfight radius around the hold point).
 //!
 //! The memory of who was hit by whom and who fired is kept for one second.
@@ -213,6 +212,10 @@ impl Sim {
                 continue;
             }
             if !dip.is_seat(u.owner) {
+                continue;
+            }
+            // LUA-32: green, and a special-forces craft, never assist (read from the executable, static).
+            if self.assist_gate(u.id) || self.switches.get(u.id).special_forces {
                 continue;
             }
             let near = |a: &Entity| {

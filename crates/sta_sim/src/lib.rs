@@ -37,6 +37,9 @@ pub mod movement;
 mod ownership;
 pub mod speed_override;
 pub mod warp_override;
+pub mod alert;
+#[cfg(test)]
+mod alert_tests;
 #[cfg(test)]
 mod warp_override_tests;
 #[cfg(test)]
@@ -175,6 +178,8 @@ pub struct Sim {
     approach_warp: movement::approach::Warp,
     /// Recent hits and shots for assists (SIM-36); in the digest once any is.
     engagement: combat::targeting::Engagement,
+    /// Alert levels, last enemy hits and ally attack counters (LUA-32); in the digest once any exists.
+    alerts: alert::Alerts,
     /// Pending start-helper lifecycle steps (SIM-28); in the digest once any exist.
     start_effects: start_effects::StartEffects,
     /// Move orders that make no progress (stuck detector): in snapshots, not in the digest.
@@ -233,6 +238,7 @@ impl Sim {
             autonomy: Default::default(),
             approach_warp: Default::default(),
             engagement: Default::default(),
+            alerts: Default::default(),
             start_effects: Default::default(),
             watchdog: Default::default(),
             nav: Default::default(),
@@ -397,6 +403,10 @@ impl Sim {
                 let Some(db) = self.content.clone() else { return false };
                 self.clear_scripted(c.player, units);
                 let ok = self.weapons.order_attack(&db, &self.units, c.player, units, *target);
+                if ok {
+                    let takers: Vec<EntityId> = units.iter().copied().filter(|&id| combat::weapons::takes_attack(&db, &self.units, c.player, id, *target)).collect();
+                    self.count_ally_attacks(&takers, *target);
+                }
                 // The attack replaces queued legs, mining and a pending build
                 // site of the crafts that took it (SIM-36); the approach sets
                 // the course.
@@ -428,7 +438,8 @@ impl Sim {
             | Order::Scout { .. }
             | Order::AttackAny { .. }
             | Order::AttackPoint { .. }
-            | Order::MoveWarp { .. } => self.apply_scripted(c.player, order),
+            | Order::MoveWarp { .. }
+            | Order::Guard { .. } => self.apply_scripted(c.player, order),
             Order::Colonize { units, planet } => self.apply_colonize(c.player, units, *planet),
             Order::Transport { units, target, attack } => self.apply_transport(c.player, units, *target, *attack),
             Order::Rally { builders, at } => {
@@ -470,17 +481,22 @@ impl Sim {
         self.push_out_of_fields();
         if let Some(db) = self.content.clone() {
             production::orbit::step(&db, &mut self.units);
+            let race_modifiers: Vec<_> = self.players.iter().map(|p| (p.0, db.rules().race_mining_rate_modifier(self.seat_race(p.0).unwrap_or("")))).collect();
+            self.economy.orbital_income(&db, &self.units, self.tick, &race_modifiers);
             let returned = self.transports.expire(self.tick);
             self.restore_carrier_shields(&returned);
             combat::damage::recharge(&mut self.units, &db, &self.switches, &self.subsystems, &self.transports);
             self.activate_team_change_weapons(&db);
+            let cloak_from = self.events.len();
             self.specials.step(&mut self.units, &db, &mut self.events);
+            self.forget_hits_of_cloakers(cloak_from);
             let from = self.events.len();
             let mut held = if db.features().builder_hold_fire { self.production.builders_at_work() } else { Vec::new() };
             held.extend(self.scripted.holding_fire());
             self.weapons.hold_fire(held);
-            self.weapons.step_with_perception(self.tick, &self.units, &db, relations::Diplomacy::new(&self.players, &self.relations), &self.perception, &mut self.specials, &mut self.rng, &self.switches, &mut self.events);
+            self.weapons.step_with_perception(self.tick, &self.units, &db, relations::Diplomacy::new(&self.players, &self.relations), &self.perception, &mut self.specials, &mut self.rng, &self.switches, &self.alerts, &mut self.events);
             self.record_engagement(from);
+            self.record_enemy_hits(from);
             // An attack whose target is gone leaves no course behind (SIM-36).
             for id in self.weapons.take_ended() {
                 if let Some(u) = self.units.get_mut(id).filter(|u| u.kind == EntityKind::Craft) {
@@ -515,6 +531,7 @@ impl Sim {
             let from = self.events.len();
             self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement);
             self.inherit_builder_races(from);
+            self.inherit_builder_alert(from);
             let built: Vec<EntityId> = self.events[from..].iter().filter_map(|e| match e { SimEvent::Spawned { id } => Some(*id), _ => None }).collect();
             for id in built {
                 self.default_autonomy(id);
@@ -533,6 +550,11 @@ impl Sim {
         let Some(db) = self.content.as_deref() else { return Fixed::ZERO };
         let census = self.production.officer_census(&self.units, db, player);
         Fixed::from_bits(census.to_bits().saturating_add(self.economy.officer_adjust(player).to_bits()))
+    }
+
+    /// Production presentation at the current tick, derived from saved state.
+    pub fn production_view(&self) -> Vec<production::view::ProductionView> {
+        self.content.as_deref().map_or_else(Vec::new, |db| self.production.view(db, &self.units))
     }
 
     fn build_view(&self) -> WorldView {
@@ -586,7 +608,7 @@ impl Sim {
             }
         }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), special_forces: self.switches.special_forces(), ..self.attrs.view() } }
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), alerts: self.alerts.levels(), enemy_hit: self.alerts.hits(), ally_attacks: self.alerts.ally_rows().to_vec(), special_forces: self.switches.special_forces(), ..self.attrs.view() } }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content
@@ -684,6 +706,8 @@ impl Sim {
         if !self.transports.is_empty() {
             self.transports.hash_into(&mut h);
         }
+        // LUA-32: alert levels, enemy hits (while a level exists) and ally attack counters.
+        self.alerts.hash_into(&mut h);
         let crew_count = self.units.iter().filter(|unit| unit.crew.is_some()).count();
         if crew_count != 0 {
             h.str("unit-crew-v1");
@@ -734,6 +758,10 @@ impl WorldSource for Sim {
 
     fn snapshot(&self) -> Option<Vec<u8>> {
         Some(Sim::snapshot(self))
+    }
+
+    fn production_view(&self) -> Vec<production::view::ProductionView> {
+        Sim::production_view(self)
     }
 }
 

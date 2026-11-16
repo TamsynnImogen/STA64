@@ -147,14 +147,14 @@ fn table_path(name: &str) -> Option<String> {
     (!path.is_empty() && path.ends_with(".spr") && !path.contains("..")).then(|| format!("sprites/{path}"))
 }
 
-fn read_table(vfs: &sta_vfs::Vfs, path: &str) -> SpriteTable {
+pub(crate) fn read_table(vfs: &sta_vfs::Vfs, path: &str) -> SpriteTable {
     SpriteTable::load(path, |name| {
         let path = table_path(name)?;
         vfs.read(&path).and_then(Result::ok)
     })
 }
 
-fn crop(sprite: &Sprite, size: UVec2) -> Option<Rect> {
+pub(crate) fn crop(sprite: &Sprite, size: UVec2) -> Option<Rect> {
     if size.x == 0 || size.y == 0 {
         return None;
     }
@@ -180,7 +180,7 @@ fn crop(sprite: &Sprite, size: UVec2) -> Option<Rect> {
     Some(Rect::new(x * sx, y * sy, (x + w) * sx, (y + h) * sy))
 }
 
-fn page(
+pub(crate) fn page(
     sprite: &Sprite,
     sampling: GuiImageSampling,
     vfs: &sta_vfs::Vfs,

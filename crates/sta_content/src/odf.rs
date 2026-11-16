@@ -336,6 +336,12 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
             None => None,
         };
         let mut def = crate::unit::unit_def_for_profile(s, odf, phys.as_deref(), profile, &mut warnings);
+        // CON-52: Armada I's Borg spin keys, from the craft's own physics file.
+        if profile == Profile::Sta1Classic
+            && let Some(p) = phys.as_deref()
+        {
+            def.a1_borg = crate::a1_physics::borg(p, &format!("{}.odf", stem(odf.str("physicsFile").unwrap_or_default())), &mut warnings);
+        }
         // A node's resource: the slot its resource ODF fills (`amtlatinum` on Fleet Ops 4.0's
         // tritanium moon, `amtmetal` on Roots'), else the game's word for it in the text.
         if let Some(text) = odf.str("resource").map(str::trim).filter(|t| !t.is_empty()) {
@@ -344,6 +350,8 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
             def.resource = Some(slot.unwrap_or(0) as u8);
             // SIM-62: the node's `canHaveOrbitalStation` (read from data: A2 `ResourcePlanet.odf` 1; moons, rocks 0).
             def.can_have_orbital_station = node.as_ref().and_then(|n| n.bool("canHaveOrbitalStation")).unwrap_or(false);
+            // CON-51: the node's income keys, typed here (the sim's use is SIM-72's).
+            def.node_income = node.as_ref().and_then(|n| crate::orbital_income::resolve_node(&format!("{}.odf", stem(text)), n, &mut warnings));
         }
         // Armada I: a moon carries no `resource` key (CON-53); the class and the absent scrap keys mark it.
         if def.resource.is_none() && profile == Profile::Sta1Classic && crate::resources::is_sta1_moon(odf) {
@@ -358,6 +366,7 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
             crate::planet::resolve_civilian_population_modifier(&file, odf, profile, def.planet_role, &mut warnings);
         def.planet_max_population = crate::planet::resolve_max_population(&file, odf, def.planet_role, &mut warnings);
         def.orbit_time = crate::planet::resolve_orbit_time(&file, odf, &def.class.0, &mut warnings);
+        def.station_mining = crate::orbital_income::resolve_station(&file, odf, &def.class.0, &model, &mut warnings);
         def.build.queue_limit = build_queue_limit(&file, odf, &mut warnings);
         def.is_starbase = station_flag(&file, odf, profile, &mut warnings);
         let mut native = Overrides::default();
@@ -390,6 +399,21 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
             true
         });
         builder = builder.unit(def);
+    }
+
+    // CON-52: the play-physics block (Armada I only). A mod or fixture without the file
+    // is not an error: the model stays off, quietly. A file that is there and broken warns.
+    if let Some(file) = profile.play_physics_file().filter(|_| !units.is_empty()) {
+        let play = match sta_odf::resolve_layered(file, loader) {
+            Ok(odf) => crate::a1_physics::play_dynamics(&odf, &format!("{file}.odf"), &mut warnings),
+            Err(e) => {
+                if loader(&format!("{file}.odf"), 0).is_some() || loader(file, 0).is_some() {
+                    warnings.push(Warning::new(format!("{file}.odf"), format!("{e}; the Armada I movement model stays off")));
+                }
+                None
+            }
+        };
+        builder = builder.a1_play_physics(play);
     }
 
     // Names are unique by stem; `build` can only fail on a bug here.

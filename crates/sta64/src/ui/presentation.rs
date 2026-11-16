@@ -7,14 +7,14 @@
 //!
 //! | request | shown here | evidence |
 //! |---|---|---|
-//! | `Title`, `RemoveTitle`, A1 `ShowTitle` / `ShowSubtitle` placement, A2 `UI.addTitle` / `addSubtitle` with x, y, seconds | text at a canvas position, until its seconds run out or it is removed | A2 canvas 1600x1200 and the default places (50,50) / (50,1000) from Fleet Ops Roots' Lua, A1 640x480 rect from the A1 mission DLLs; stock A2 title colour and font **not measured** |
+//! | `Title`, `RemoveTitle`, A1 `ShowTitle` / `ShowSubtitle` placement, A2 `ShowTitle` / `ShowSubtitle` placement (x < 0 centred), A2 `UI.addTitle` / `addSubtitle` with x, y, seconds | text at a canvas position, until its seconds run out or it is removed | A2 canvas 1600x1200 and the default places (50,50) / (50,1000) from Fleet Ops Roots' Lua, A1 640x480 rect from the A1 mission DLLs; stock A2 title colour and font **not measured** |
 //! | `Fade` | a full-screen black rectangle, alpha ramped over `seconds` | `ScreenFade` is a black rectangle in the original; the A1 argument meanings beyond seconds **not measured** |
 //! | `Cineractive { skippable }` | state in [`CineractiveState`]; Space skips a skippable one ([`ScriptReply::CineractiveSkipped`]: the script's cancel), caps release it ([`ScriptReply::CineractiveReleased`]); the camera is `camera_cinematic` (UI-36 shot model) | `cineractiveCancel` (A2) / `switch_camera_shot` (A1) is Space in `Input.map`; no letterbox exists in the original's data or executables, so none is drawn |
 //! | objectives and briefing (host state, not a `Presentation`) | the modal panel of [`ObjectivesView`], toggled with Alt+O | rectangles of `objectivesPanelArea` and the text areas in A2 stock `gui_glob16x12.cfg`, the A1 `gui_glob.cfg` panel; the completed-line tick **not measured** |
 //! | a message box ([`MessageBox`]) | the same panel with an OK button | the original's message display reuses the objectives keys |
 //! | `Movie`, `StopMovie` | MED-03; an in-panel movie goes to the HUD's cinematic window or viewscreen (UI-39, `ui/hud/cinematic.rs`) | the Armada II call raises the cinematic view (executable, static); the Armada I clip's rectangle inside the bridge scene is **not measured** |
 //! | A1 `PreLoadBridgeScene`, `SetBridgeSceneRace`, `ShowBridgeScene`, `ShowBridgeOnScreen` | typed as [`BridgeScene`] and kept in [`BridgeState`]; the bridge backdrop and layers are not drawn (UI-39: the clip plays in the HUD's viewscreen) | race number 1 to 4 from the stock scripts; what `ShowBridgeOnScreen` selects is **not measured** |
-//! | `Sound`, `StopSound` | `PlaySound` on the UI bus (no admission limit) / `StopSounds` (the audio lane resolves the name); the script's `IsAudioMessageDone` turns true when the clip's length has played ([`ScriptReply::SoundDone`], from `audio::SoundStarted`), at once if nothing plays it | clip length from the decoded file; the wait is measured for A1 only, for A2 and Fleet Ops **not measured** |
+//! | `Sound`, `StopSound` | [`PlayScriptSound`] (its own UI-bus stream, mixed with what plays, no queue or cut) / [`StopScriptSound`] (that stream alone; a stale id is ignored) (the audio lane resolves the name); the script's `IsAudioMessageDone` turns true when the clip's length has played ([`ScriptReply::SoundDone`], from `audio::SoundStarted`), at once if nothing plays it | clip length from the decoded file; the wait is measured for A1 only, for A2 and Fleet Ops **not measured** |
 //! | `Music`, `StopMusic`, `Effect`, `WaitForKey`, other `Call`s | **not shown** (audio and effects lanes); each kind is listed once in [`Unhandled`] | |
 //!
 //! While a cineractive is on, the HUD and the notices are hidden and the fog layers are not drawn (the cinematic view's render list holds no HUD panel and the terrain pass draws fog and shroud only in the RTS view: Refit, read from the executable, static), and its end clears the fade.
@@ -38,7 +38,7 @@ use sta_sim::present::{Arg, Presentation};
 
 use crate::app::GameSet;
 use crate::media::{MovieFinished, MovieId, mission::Requested};
-use crate::sim_link::{Bus, PlaySound, SimMsg, StopSounds};
+use crate::sim_link::{PlayScriptSound, SimMsg, StopScriptSound};
 use crate::ui::i18n::Strings;
 use crate::ui::sprite_font::{SpriteTextStyle, sprite_text_styled};
 use crate::ui::theme::{ButtonClicked, Theme, UiButton, button, font_role};
@@ -188,6 +188,18 @@ impl ScriptSounds {
         back
     }
 
+    /// Whether a script message or track is still playing: the event voices stay silent meanwhile
+    /// ([`crate::audio`] voices).
+    pub fn any_playing(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    /// A message `id` playing, as a test of another module needs one without an audio layer.
+    #[cfg(test)]
+    pub(crate) fn start_for_test(&mut self, id: u32) {
+        self.pending.push((id, String::new(), Some(60.0)));
+    }
+
     /// The ids of the messages still playing (for tests).
     #[cfg(test)]
     pub fn playing(&self) -> Vec<u32> {
@@ -255,6 +267,15 @@ pub fn cutscene_running(cine: Option<Res<CineractiveState>>) -> bool {
     cine.is_some_and(|c| c.on)
 }
 
+/// Event voice lines (unit acknowledgements and alerts, advisor lines) are dropped, not queued,
+/// while a script's audio plays (any `AudioMessage` or `PlayMusic` stream), the cineractive view
+/// is on, or a movie plays. Read from the Armada II executable, static: the event audio queue
+/// refuses a request in each of those states. Applied to Armada I and the Fleet Operations family
+/// as well: not established there. Not measured on the running original.
+pub fn event_voices_silenced(cutscene: bool, sounds: Option<&ScriptSounds>, movies: Option<&crate::media::Movies>) -> bool {
+    cutscene || sounds.is_some_and(ScriptSounds::any_playing) || movies.is_some_and(crate::media::Movies::busy)
+}
+
 /// Where a title goes: the canvas it is placed in and its top left.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Place {
@@ -272,6 +293,8 @@ pub struct TitleItem {
     pub left: Option<f32>,
     /// An A1 title's rectangle `[x, y, w, h]` on the 640x480 canvas, and seconds shown.
     pub a1_rect: Option<[f32; 4]>,
+    /// An A2 `ShowTitle` / `ShowSubtitle` with a negative x: centred across the screen at `place.at.y`.
+    pub centred: bool,
     /// An A1 title's fade level (RGB scale) when it is held: 0 to 1 over [`A1_TITLE_FADE_SECS`]
     /// while it fades in (the script's flag), then held; `age` counts seconds into the fade in.
     pub age: f32,
@@ -443,8 +466,8 @@ pub(crate) fn consume(
     mut cineractive: ResMut<CineractiveState>,
     mut clock: ResMut<CineractiveClock>,
     mut unhandled: ResMut<Unhandled>,
-    mut play: MessageWriter<PlaySound>,
-    mut stop: MessageWriter<StopSounds>,
+    mut play: MessageWriter<PlayScriptSound>,
+    mut stop: MessageWriter<StopScriptSound>,
     mut log: Option<ResMut<PresentationLog>>,
     link: Option<Res<crate::sim_link::SimLink>>,
     mut sounds: ResMut<ScriptSounds>,
@@ -465,6 +488,7 @@ pub(crate) fn consume(
                 place: place_of(*subtitle),
                 left: seconds.map(|s| s.to_f32()),
                 a1_rect: None,
+                centred: false,
                 age: 0.0,
                 out: None,
             }),
@@ -474,10 +498,13 @@ pub(crate) fn consume(
                 // the stock openings call `fadeIn` at their first tick and begin black, so nothing of
                 // the RTS view shows before the first shot (the original's start colour is inferred:
                 // not measured; a fade in on a screen already faded out runs from there as before).
-                if !*out && cineractive.on && !fade.touched && fade.alpha == 0.0 {
+                // An instant fade in on a clear screen (a script clearing a held fade) is neither a
+                // first fade nor a start from black.
+                let instant_clear = !*out && seconds.to_f32() <= 0.0 && fade.alpha == 0.0;
+                if !*out && cineractive.on && !fade.touched && fade.alpha == 0.0 && !instant_clear {
                     fade.alpha = 1.0;
                 }
-                fade.touched = true;
+                fade.touched |= !instant_clear;
                 fade.start(*out, seconds.to_f32(), *rgb);
             }
             Presentation::Cineractive { on, skippable } => {
@@ -500,7 +527,7 @@ pub(crate) fn consume(
                 if let [Arg::Int(id), Arg::Text(text), x, y, secs, _] = args.as_slice()
                     && let (Some(x), Some(y), Some(secs), Ok(id)) = (num(x), num(y), num(secs), u32::try_from(*id))
                 {
-                    titles.add(TitleItem { id, text: text_of(strings.as_deref(), text), subtitle, place: Place { canvas: A2_CANVAS, at: Vec2::new(x, y) }, left: (secs > 0.0).then_some(secs), a1_rect: None, age: 0.0, out: None });
+                    titles.add(TitleItem { id, text: text_of(strings.as_deref(), text), subtitle, place: Place { canvas: A2_CANVAS, at: Vec2::new(x, y) }, left: (secs > 0.0).then_some(secs), a1_rect: None, centred: false, age: 0.0, out: None });
                 } else {
                     unhandled.note(name);
                 }
@@ -517,6 +544,22 @@ pub(crate) fn consume(
                         // The flag: fade in over a second (true) or show at once (false).
                         t.age = if matches!(flag, Arg::Bool(false)) { A1_TITLE_FADE_SECS } else { 0.0 };
                     }
+                    titles.dirty = true;
+                } else {
+                    unhandled.note(name);
+                }
+            }
+            // A2 `ShowTitle(id, x, y, fade)` / `ShowSubtitle`, queued after the typed title with its id:
+            // the canvas place; a negative x is centred (read from the executable, static). The
+            // fade flag, the title font and colour are not applied (not measured); wrapped lines
+            // of a centred title are not re-centred; the title layer is under the fade overlay.
+            Presentation::Call { name, args } if name == "A2.ShowTitle" || name == "A2.ShowSubtitle" => {
+                if let [Arg::Int(id), x, y, ..] = args.as_slice()
+                    && let (Some(x), Some(y), Ok(id)) = (num(x), num(y), u32::try_from(*id))
+                    && let Some(t) = titles.items.iter_mut().find(|t| t.id == id)
+                {
+                    t.centred = x < 0.0;
+                    t.place = Place { canvas: A2_CANVAS, at: Vec2::new(x.max(0.0), y) };
                     titles.dirty = true;
                 } else {
                     unhandled.note(name);
@@ -557,16 +600,14 @@ pub(crate) fn consume(
             Presentation::Sound { id, name, .. } => {
                 start_script_sound(*id, name, &mut play, &mut sounds, reports.is_some(), &mut replies);
             }
-            // `StopAudioMessage(id)` / `Media:stopSounds()` end one message. The engine ignores an id
-            // that is no longer playing, so a stop of a finished (or never started) message does
-            // nothing: it must not cut another line. The mixer stops whole buses, not single clips,
-            // so the bus is cut when the stopped message was the last one playing; while others play,
-            // the message is only over for the script (a track's tail may then overlap the next).
+            // `StopAudioMessage(id)` stops that one stream, whatever else plays (read from the
+            // executable, static: a stream per call, stopped by id). An id that is no longer
+            // playing is ignored, so a stop of a finished (or never started) message cuts nothing.
             Presentation::StopSound { id } => {
                 let live = sounds.pending.iter().any(|p| p.0 == *id);
                 sounds.pending.retain(|p| p.0 != *id);
-                if live && sounds.pending.is_empty() {
-                    stop.write(StopSounds { bus: Bus::Ui });
+                if live {
+                    stop.write(StopScriptSound { id: *id });
                 }
             }
             Presentation::Music { .. } => {
@@ -593,14 +634,14 @@ pub(crate) fn consume(
 fn start_script_sound(
     id: u32,
     name: &str,
-    play: &mut MessageWriter<PlaySound>,
+    play: &mut MessageWriter<PlayScriptSound>,
     sounds: &mut ScriptSounds,
     audio_layer: bool,
     replies: &mut MessageWriter<ScriptReply>,
 ) {
-    // The UI bus: the voice bus drops a line while another plays (a unit's acknowledgement,
-    // or the script's previous message).
-    play.write(PlaySound { name: name.to_owned(), at: None, bus: Bus::Ui });
+    // The script's own stream (the UI bus, not the voice bus, which drops a line while another
+    // plays): it mixes with whatever plays and is stopped by its id alone.
+    play.write(PlayScriptSound { id, name: name.to_owned() });
     if audio_layer {
         sounds.pending.push((id, name.to_owned(), None));
     } else {
@@ -626,7 +667,7 @@ fn sound_replies(
         }
     }
     for s in started.read() {
-        if s.bus != Bus::Ui {
+        if s.bus != crate::sim_link::Bus::Ui {
             continue;
         }
         if let Some(p) = sounds.pending.iter_mut().find(|p| p.2.is_none() && p.1 == s.name) {
@@ -643,13 +684,14 @@ fn sound_replies(
 }
 
 /// A restart of the mission in place (the sim's tick going back) drops the messages of the run
-/// before it: their ids restart at 1, so a stale entry would end the new run's wait, and keep a
-/// later stop from cutting the bus. What still plays is cut.
-fn clear_sounds_on_restart(link: Option<Res<crate::sim_link::SimLink>>, mut sounds: ResMut<ScriptSounds>, mut stop: MessageWriter<StopSounds>) {
+/// before it: their ids restart at 1, so a stale entry would end the new run's wait or stop the
+/// new run's stream of the same id. What still plays is stopped, stream by stream.
+fn clear_sounds_on_restart(link: Option<Res<crate::sim_link::SimLink>>, mut sounds: ResMut<ScriptSounds>, mut stop: MessageWriter<StopScriptSound>) {
     let Some(link) = link else { return };
     if sounds.restarted(link.curr().tick) {
-        sounds.pending.clear();
-        stop.write(StopSounds { bus: Bus::Ui });
+        for (id, _, _) in std::mem::take(&mut sounds.pending) {
+            stop.write(StopScriptSound { id });
+        }
     }
 }
 
@@ -658,13 +700,13 @@ fn clear_sounds_on_restart(link: Option<Res<crate::sim_link::SimLink>>, mut soun
 fn end_messages_on_skip(
     mut replies: ParamSet<(MessageReader<ScriptReply>, MessageWriter<ScriptReply>)>,
     mut sounds: ResMut<ScriptSounds>,
-    mut stop: MessageWriter<StopSounds>,
+    mut stop: MessageWriter<StopScriptSound>,
 ) {
     if !replies.p0().read().any(|r| matches!(r, ScriptReply::CineractiveSkipped | ScriptReply::CineractiveReleased)) {
         return;
     }
-    stop.write(StopSounds { bus: Bus::Ui });
     for (id, _, _) in std::mem::take(&mut sounds.pending) {
+        stop.write(StopScriptSound { id });
         replies.p1().write(ScriptReply::SoundDone { id });
     }
 }
@@ -802,6 +844,13 @@ fn draw_titles(mut commands: Commands, theme: Res<Theme>, mut titles: ResMut<Tit
             commands.entity(root).with_child((
                 Node { position_type: PositionType::Absolute, left: Val::Vh(at.x / A1_CANVAS.y * 100.0), top: Val::Vh(at.y / A1_CANVAS.y * 100.0), ..default() },
                 children![sprite_text_styled(t.text.clone(), size, Color::srgb(r, g, bl), SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent())],
+            ));
+            continue;
+        }
+        if t.centred {
+            commands.entity(root).with_child((
+                Node { position_type: PositionType::Absolute, left: Val::Percent(0.0), width: Val::Percent(100.0), justify_content: JustifyContent::Center, top: Val::Percent(p.at.y / p.canvas.y * 100.0), ..default() },
+                children![sprite_text_styled(t.text.clone(), size, Color::WHITE, SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent())],
             ));
             continue;
         }
@@ -958,6 +1007,7 @@ fn reset_bridge(mut bridge: ResMut<BridgeState>) {
 
 /// Back at the front end (UI-34): titles, fades, queued message boxes, pending movie replies and the
 /// objectives panel of the match are gone, whatever ended it (a mission's debrief, F10, the in-game menu).
+#[allow(clippy::too_many_arguments)]
 fn reset_presentation(
     mut titles: ResMut<Titles>,
     mut fade: ResMut<FadeState>,
@@ -966,8 +1016,12 @@ fn reset_presentation(
     mut view: ResMut<ObjectivesView>,
     mut queue: ResMut<MessageQueue>,
     mut sounds: ResMut<ScriptSounds>,
+    mut stop: MessageWriter<StopScriptSound>,
 ) {
-    sounds.pending.clear();
+    // A script's stream does not play on into the menus.
+    for (id, _, _) in std::mem::take(&mut sounds.pending) {
+        stop.write(StopScriptSound { id });
+    }
     sounds.last_tick = 0;
     titles.items.clear();
     // `Titles::default()` is not dirty, so the layer would keep what it drew.
@@ -999,8 +1053,8 @@ impl Plugin for PresentationPlugin {
             .add_message::<crate::media::mission::Requested>()
             .add_message::<MovieFinished>()
             .add_message::<SimMsg>()
-            .add_message::<PlaySound>()
-            .add_message::<StopSounds>()
+            .add_message::<StopScriptSound>()
+            .add_message::<PlayScriptSound>()
             .add_message::<ButtonClicked>()
             .add_systems(Startup, spawn_layers.run_if(resource_exists::<Theme>))
             .add_systems(
@@ -1013,6 +1067,7 @@ impl Plugin for PresentationPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sim_link::Bus;
     use crate::ui::sprite_font::SpriteText;
     use sta_core::Fixed;
 
@@ -1049,6 +1104,37 @@ mod tests {
     }
 
     #[test]
+    fn an_instant_clear_on_a_clear_screen_is_not_a_cineractives_first_fade() {
+        let mut app = app();
+        send(&mut app, Presentation::Cineractive { on: true, skippable: true });
+        send(&mut app, Presentation::Fade { out: false, seconds: Fixed::ZERO, rgb: [0; 3] });
+        assert_eq!(app.world().resource::<FadeState>().alpha, 0.0);
+        // The first real fade in still opens from black.
+        send(&mut app, Presentation::Fade { out: false, seconds: secs(2), rgb: [0; 3] });
+        assert!(app.world().resource::<FadeState>().alpha > 0.99);
+        // A clear of a held black does clear it.
+        send(&mut app, Presentation::Fade { out: true, seconds: Fixed::ZERO, rgb: [0; 3] });
+        assert_eq!(app.world().resource::<FadeState>().alpha, 1.0);
+        send(&mut app, Presentation::Fade { out: false, seconds: Fixed::ZERO, rgb: [0; 3] });
+        assert_eq!(app.world().resource::<FadeState>().alpha, 0.0);
+    }
+
+    #[test]
+    fn an_a2_show_title_places_the_typed_title_and_centres_on_a_negative_x() {
+        let mut app = app();
+        send(&mut app, Presentation::Title { id: 4, text: "Caption".into(), subtitle: false, seconds: None });
+        send(&mut app, Presentation::Call { name: "A2.ShowTitle".into(), args: vec![Arg::Int(4), Arg::Int(-1), Arg::Int(200), Arg::Bool(true)] });
+        send(&mut app, Presentation::Title { id: 5, text: "Heading".into(), subtitle: false, seconds: None });
+        send(&mut app, Presentation::Call { name: "A2.ShowTitle".into(), args: vec![Arg::Int(5), Arg::Int(100), Arg::Int(120), Arg::Bool(true)] });
+        let t = app.world().resource::<Titles>();
+        assert!(t.items[0].centred);
+        assert_eq!(t.items[0].place, Place { canvas: A2_CANVAS, at: Vec2::new(0.0, 200.0) });
+        assert!(!t.items[1].centred);
+        assert_eq!(t.items[1].place.at, Vec2::new(100.0, 120.0));
+        assert_eq!(app.world().resource::<Unhandled>().count("A2.ShowTitle"), 0);
+    }
+
+    #[test]
     fn titles_show_at_their_places_and_go_when_removed_or_timed_out() {
         let mut app = app();
         send(&mut app, Presentation::Title { id: 1, text: "Hello".into(), subtitle: false, seconds: None });
@@ -1079,10 +1165,10 @@ mod tests {
         let mut app = app();
         app.init_resource::<ReportsSoundLengths>().add_message::<SoundStarted>();
         send(&mut app, Presentation::Sound { id: 1, name: "Voice.mp3".into(), at: None });
-        let heard: Vec<String> = app.world_mut().resource_mut::<Messages<PlaySound>>().drain().map(|m| m.name).collect();
+        let heard: Vec<String> = app.world_mut().resource_mut::<Messages<PlayScriptSound>>().drain().map(|m| m.name).collect();
         assert_eq!(heard, ["Voice.mp3"]);
         send(&mut app, Presentation::StopSound { id: 1 });
-        assert_eq!(app.world_mut().resource_mut::<Messages<StopSounds>>().drain().count(), 1);
+        assert_eq!(app.world_mut().resource_mut::<Messages<StopScriptSound>>().drain().count(), 1);
         assert_eq!(app.world().resource::<Unhandled>().count("Sound"), 0);
     }
 
@@ -1098,12 +1184,17 @@ mod tests {
         Presentation::Call { name: "A2.PlayMusic".into(), args: vec![Arg::Int(id), Arg::Text(file.into())] }
     }
 
+    /// The ids of the streams stopped since the last call.
+    fn stops(app: &mut App) -> Vec<u32> {
+        app.world_mut().resource_mut::<Messages<StopScriptSound>>().drain().map(|m| m.id).collect()
+    }
+
     fn bus_cuts(app: &mut App) -> usize {
-        app.world_mut().resource_mut::<Messages<StopSounds>>().drain().count()
+        stops(app).len()
     }
 
     #[test]
-    fn stopping_a_music_track_does_not_cut_the_voice_line_that_is_playing() {
+    fn stopping_a_script_stream_stops_that_stream_alone() {
         use crate::audio::{ReportsSoundLengths, SoundStarted};
         let mut app = app();
         frozen(&mut app);
@@ -1113,17 +1204,16 @@ mod tests {
         start(&mut app, Presentation::Sound { id: 2, name: "clip_b.wav".into(), at: None }, "clip_b.wav", 20.0);
         let _ = bus_cuts(&mut app);
         send(&mut app, Presentation::StopSound { id: 1 });
-        assert_eq!(bus_cuts(&mut app), 0, "the stop of the track must not stop the UI bus the voice line plays on");
+        assert_eq!(stops(&mut app), [1], "the stop names the track and nothing else");
         assert_eq!(app.world().resource::<ScriptSounds>().playing(), [2], "the voice line is still playing");
         assert!(replies(&mut app).is_empty());
-        // The voice line is the last one playing now: stopping it stops the bus.
         send(&mut app, Presentation::StopSound { id: 2 });
-        assert_eq!(bus_cuts(&mut app), 1);
+        assert_eq!(stops(&mut app), [2]);
         assert!(app.world().resource::<ScriptSounds>().playing().is_empty());
     }
 
     #[test]
-    fn a_skip_cuts_the_ui_bus_and_ends_every_pending_message() {
+    fn a_skip_stops_every_pending_stream_and_ends_its_wait() {
         use crate::audio::{ReportsSoundLengths, SoundStarted};
         let mut app = app();
         frozen(&mut app);
@@ -1134,7 +1224,9 @@ mod tests {
         let _ = replies(&mut app);
         app.world_mut().write_message(ScriptReply::CineractiveSkipped);
         app.update();
-        assert_eq!(bus_cuts(&mut app), 1, "the skip cuts the bus the messages play on");
+        let mut cut = stops(&mut app);
+        cut.sort_unstable();
+        assert_eq!(cut, [1, 2], "the skip stops the streams the script had playing");
         let done = replies(&mut app);
         assert!(done.contains(&ScriptReply::SoundDone { id: 1 }) && done.contains(&ScriptReply::SoundDone { id: 2 }), "{done:?}");
         assert!(app.world().resource::<ScriptSounds>().playing().is_empty());
@@ -1204,6 +1296,61 @@ mod tests {
         assert_eq!(app.world().resource::<ScriptSounds>().playing(), [4], "the other line plays on");
     }
 
+    /// Script streams overlay: a second message or track neither queues behind nor cuts the first,
+    /// and a stop of a stale id (never started, or ended) stops nothing.
+    #[test]
+    fn script_streams_overlay_and_only_a_live_id_can_be_stopped() {
+        use crate::audio::{ReportsSoundLengths, SoundStarted};
+        let mut app = app();
+        frozen(&mut app);
+        app.init_resource::<ReportsSoundLengths>().add_message::<SoundStarted>();
+        start(&mut app, Presentation::Sound { id: 1, name: "clip_a.wav".into(), at: None }, "clip_a.wav", 30.0);
+        start(&mut app, a2_music(2, "clip_m.wav"), "clip_m.wav", 60.0);
+        start(&mut app, Presentation::Sound { id: 3, name: "clip_b.wav".into(), at: None }, "clip_b.wav", 5.0);
+        let played: Vec<(u32, String)> = app.world_mut().resource_mut::<Messages<PlayScriptSound>>().drain().map(|m| (m.id, m.name)).collect();
+        assert_eq!(played, [(1, "clip_a.wav".to_owned()), (2, "clip_m.wav".to_owned()), (3, "clip_b.wav".to_owned())], "all three start at once, none waits for another");
+        assert!(stops(&mut app).is_empty(), "a new track does not stop the one before it");
+        assert!(app.world().resource::<ScriptSounds>().any_playing());
+        send(&mut app, Presentation::StopSound { id: 9 });
+        assert!(stops(&mut app).is_empty(), "an id that never played is ignored");
+        send(&mut app, Presentation::StopSound { id: 2 });
+        assert_eq!(stops(&mut app), [2], "the track stops and the voice lines play on");
+        assert_eq!(app.world().resource::<ScriptSounds>().playing(), [1, 3]);
+    }
+
+    /// Each condition of the event-voice suppression holds on its own.
+    #[test]
+    fn event_voices_are_silenced_by_a_cutscene_a_script_stream_or_a_movie_each_alone() {
+        let mut busy = ScriptSounds::default();
+        busy.start_for_test(5);
+        let movie = crate::media::Movies::busy_for_test();
+        assert!(!event_voices_silenced(false, None, None));
+        assert!(!event_voices_silenced(false, Some(&ScriptSounds::default()), Some(&crate::media::Movies::default())));
+        assert!(event_voices_silenced(true, None, None), "the cinematic view");
+        assert!(event_voices_silenced(false, Some(&busy), None), "a script stream");
+        assert!(event_voices_silenced(false, None, Some(&movie)), "a movie");
+    }
+
+    /// Entering the front end stops the script's streams, so a track does not play into the menu.
+    #[test]
+    fn leaving_the_match_stops_the_script_streams() {
+        use crate::audio::{ReportsSoundLengths, SoundStarted};
+        let mut app = app();
+        frozen(&mut app);
+        app.add_plugins(bevy::state::app::StatesPlugin).init_state::<crate::app::AppState>();
+        app.init_resource::<ReportsSoundLengths>().add_message::<SoundStarted>();
+        app.update();
+        start(&mut app, a2_music(1, "clip_m.wav"), "clip_m.wav", 60.0);
+        start(&mut app, Presentation::Sound { id: 2, name: "clip_a.wav".into(), at: None }, "clip_a.wav", 30.0);
+        let _ = stops(&mut app);
+        app.world_mut().resource_mut::<NextState<crate::app::AppState>>().set(crate::app::AppState::FrontEnd);
+        app.update();
+        let mut cut = stops(&mut app);
+        cut.sort_unstable();
+        assert_eq!(cut, [1, 2]);
+        assert!(!app.world().resource::<ScriptSounds>().any_playing());
+    }
+
     #[test]
     fn an_a2_music_wait_ends_with_its_clip() {
         use crate::audio::{ReportsSoundLengths, SoundStarted};
@@ -1211,7 +1358,7 @@ mod tests {
         frozen(&mut app);
         app.init_resource::<ReportsSoundLengths>().add_message::<SoundStarted>();
         send(&mut app, a2_music(14, "clip_t.wav"));
-        let heard: Vec<String> = app.world_mut().resource_mut::<Messages<PlaySound>>().drain().map(|m| m.name).collect();
+        let heard: Vec<String> = app.world_mut().resource_mut::<Messages<PlayScriptSound>>().drain().map(|m| m.name).collect();
         assert_eq!(heard, ["clip_t.wav"], "the track is played, not left unhandled");
         assert_eq!(app.world().resource::<Unhandled>().count("A2.PlayMusic"), 0);
         app.world_mut().write_message(SoundStarted { name: "clip_t.wav".into(), bus: Bus::Ui, seconds: Some(10.0) });

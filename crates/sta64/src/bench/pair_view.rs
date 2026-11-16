@@ -131,9 +131,11 @@ fn hide_text(mut commands: Commands, texts: Query<Entity, (With<MatchEntity>, Wi
 fn adopt_views(bench: ResMut<BenchRes>, link: Option<ResMut<SimLink>>) {
     let Some(mut link) = link else { return };
     let mut bench = bench;
-    let view = bench.0.get().view();
-    if !Arc::ptr_eq(link.curr(), view) {
-        link.feed(view.clone());
+    let bench = bench.0.get();
+    let view = bench.view();
+    let production = bench.sim.production_view();
+    if !Arc::ptr_eq(link.curr(), view) || link.production() != production {
+        link.feed_with_production(view.clone(), production);
     }
 }
 
