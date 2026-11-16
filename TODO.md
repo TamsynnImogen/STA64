@@ -621,3 +621,5 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] Reveal chords are not rebindable (UI-46): Alt+F and Alt+V read the keyboard directly, not through `KeyBindings`; add actions when the settings screen should list them.
 
 - [?] RND-36 construction correction: while placing a station, check the square green/red footprint grid; after confirming, the faint station ghost remains during constructor travel and disappears when welding begins. Cancel placement/build and return to the menu to check cleanup. Repeat with a different mounted game/mod grid size.
+
+- [?] RND-36 all footprints: arm station placement and inspect footprints under existing ships/stations, moons/planets/wormholes, nebulae and asteroid fields; move a ship and verify its grid follows. Cancel or confirm placement: all grids disappear, while a confirmed station blueprint stays only until welding starts. Check hidden objects stay hidden and a second match starts clean.
