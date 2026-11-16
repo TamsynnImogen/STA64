@@ -239,14 +239,29 @@ pub(crate) fn install(lua: &Lua, ctx: &Shared) -> mlua::Result<()> {
             _ => return Err(bad("state must be Timer.State.Started or Stopped")),
         };
         let mut b = c.borrow_mut();
-        if b.timers.timers.iter().any(|t| t.id == id) {
-            return Err(bad("duplicate id"));
-        }
         let next = if started {
             Some(due(b.view.tick, ticks)?)
         } else {
             None
         };
+        // An id whose timer has expired or been stopped is reusable: the slot becomes a new
+        // one-shot timer (no hooks, a new version so firings queued for the old one are dropped).
+        // An id that is still running keeps the error (bridge convention; the original's rule is
+        // not measured).
+        if let Some(index) = b.timers.timers.iter().position(|t| t.id == id) {
+            let old = &mut b.timers.timers[index];
+            if old.started {
+                return Err(bad("duplicate id"));
+            }
+            old.interval = ticks;
+            old.repeats = false;
+            old.started = started;
+            old.due = next;
+            old.version = old.version.wrapping_add(1);
+            old.hooks.clear();
+            drop(b);
+            return lua.create_userdata(Timer(index, c.clone()));
+        }
         let index = b.timers.timers.len();
         b.timers.timers.push(TimerState {
             id,
