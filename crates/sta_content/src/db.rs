@@ -476,8 +476,10 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
         max_dilithium: _, mining_rate: _, transfer_rate: _, resource: _, features: _,
         confinement: _, nebula_pathing: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
-        crew_gain: _, transport: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, repair_attachment: _, raw: _,
+        crew_gain: _, transport: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, repair_attachment: _, stats: _, raw: _,
     } = u;
+    // `stats` (CON-55) is typed only: nothing in the sim reads it yet, so it is not
+    // digested. SIM-74 adds each key it starts to read.
     let crate::BuildDef { cost: _, ticks: _, officers: _, list: _, queue_limit: _, flagged_slots: _ } = &u.build;
     let name = |r: &crate::DefRef| quoted(&r.odf.to_ascii_lowercase());
     let m = &u.movement;

@@ -198,6 +198,7 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 ### Playtest checks from the 2026-11-15/16 merges
 
+- [?] Unit stat keys (CON-55, #876): `STA64_TEST_INSTALL=<A1, A2 or FO install> cargo test -p sta_content --test unit_stat_keys -- --nocapture` prints how many units set a stat key (`intrinsicValue`, target hardpoint lists, `shipType`, `avoidanceClass`, heroes, `selfDestruct`). Nothing changes in play yet: the keys are typed, and SIM-74 applies them.
 - [?] Weapon base keys (CON-54, #858): `STA64_TEST_INSTALL=<A1, A2 or FO install> cargo test -p sta_content --test weapon_base_keys -- --nocapture` prints how many weapons set a base key, the `hitChance` and `damageBase` table rows read and `row warnings 0`. Nothing changes in play yet: the keys are typed, and SIM-73 applies them one rule at a time. Judge the load cost on Fleet Operations (about 160 MB more peak memory and 3 s more in a debug build for its 3 million table rows).
 
 - [?] Armada I music (#762): in an Armada I campaign mission the intro music and voices play and the gameplay music follows (not heard by ear, no audio run).
