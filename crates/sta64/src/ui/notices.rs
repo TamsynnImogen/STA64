@@ -478,14 +478,10 @@ fn on_out(ev: On<PointerOut>, mut hover: ResMut<TipHover>) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn draw_tip(
     hover: Res<TipHover>,
     tips: Query<&Tooltip>,
     strings: Option<Res<crate::ui::i18n::Strings>>,
-    window: Option<Single<&Window, With<PrimaryWindow>>>,
-    ui_scale: Option<Res<UiScale>>,
-    measured: Option<Single<&ComputedNode, With<TipBox>>>,
     mut boxed: Single<&mut Node, With<TipBox>>,
     mut words: Single<&mut SpriteText, With<TipText>>,
 ) {
@@ -500,17 +496,49 @@ fn draw_tip(
         words.text = shown.to_owned();
     }
     boxed.display = Display::Flex;
-    if let Some(w) = window
-        && let Some(p) = w.cursor_position()
-    {
-        // The cursor, the window and the measured box are in logical window pixels, while a `Val::Px`
-        // is multiplied by `UiScale` when the UI is laid out: place in window pixels, then divide.
-        let k = ui_scale.map_or(1.0, |s| s.0).max(1e-3);
-        let size = measured.map_or(Vec2::ZERO, |c| tip_size(&c, k));
-        let at = place_tip(p, size, Vec2::new(w.width(), w.height()), k);
-        boxed.left = Val::Px(at.x / k);
-        boxed.top = Val::Px(at.y / k);
-        boxed.right = Val::Auto;
+}
+
+/// Use this frame's measured extent, after sprite/TTF text and UI layout have run.
+/// Updating only Node here would affect the next layout. Translate the computed box and
+/// its complete subtree now, before clipping and render extraction, and retain the desired
+/// Node position for the next layout. Glyph geometry and relative transforms stay intact.
+fn position_tip(
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    ui_scale: Option<Res<UiScale>>,
+    mut boxed: Query<(Entity, &ComputedNode, &mut Node, &mut UiGlobalTransform), With<TipBox>>,
+    children: Query<&Children>,
+    mut descendants: Query<&mut UiGlobalTransform, Without<TipBox>>,
+) {
+    let Some(w) = window else { return };
+    let Some(pointer) = w.cursor_position() else { return };
+    let Ok((entity, measured, mut node, mut transform)) = boxed.single_mut() else { return };
+    if node.display == Display::None { return; }
+
+    let k = ui_scale.map_or(1.0, |s| s.0).max(1e-3);
+    let logical_per_physical = measured.inverse_scale_factor() * k;
+    if !logical_per_physical.is_finite() || logical_per_physical <= 0.0 { return; }
+    let at = place_tip(pointer, tip_size(measured, k), Vec2::new(w.width(), w.height()), k);
+    let (left, top) = (Val::Px(at.x / k), Val::Px(at.y / k));
+    if node.left != left || node.top != top || node.right != Val::Auto {
+        node.left = left;
+        node.top = top;
+        node.right = Val::Auto;
+    }
+    // The tooltip root has no authored rotation or scale. UI layout stores physical
+    // size and a centre translation; keep its top-left on physical pixels as layout does.
+    let current = transform.translation - measured.size() * 0.5;
+    let delta = (at / logical_per_physical).round() - current;
+    if delta == Vec2::ZERO { return; }
+    let shift = |global: &mut UiGlobalTransform| {
+        let mut affine = global.affine();
+        affine.translation += delta;
+        *global = affine.into();
+    };
+    shift(&mut transform);
+    for child in children.iter_descendants(entity) {
+        if let Ok(mut global) = descendants.get_mut(child) {
+            shift(&mut global);
+        }
     }
 }
 
@@ -568,9 +596,13 @@ impl Plugin for NoticePlugin {
             .add_observer(on_over)
             .add_observer(on_out)
             .add_systems(Startup, spawn_roots)
-            .add_systems(Update, (events_to_notices.after(crate::ui::presentation::consume), collect, age, retheme, (draw_notices, draw_chat, draw_tip)).chain().in_set(GameSet::Ui).after(ProfileSync));
+            .add_systems(Update, (events_to_notices.after(crate::ui::presentation::consume), collect, age, retheme, (draw_notices, draw_chat, draw_tip)).chain().in_set(GameSet::Ui).after(ProfileSync))
+            .add_systems(PostUpdate, position_tip.after(bevy::ui::UiSystems::Layout).before(bevy::ui::UiSystems::PostLayout));
     }
 }
+
+#[cfg(test)]
+mod tooltip_layout_tests;
 
 #[cfg(test)]
 mod tests {
