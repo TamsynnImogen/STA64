@@ -369,6 +369,8 @@ pub enum TeamOp {
     OfficersAddA1,
     /// A1 `SetOfficers`: the officer count becomes `min(trunc(v), cap)`.
     OfficersSetA1,
+    /// Add a nonnegative amount to resource stock when this command applies.
+    ResourceAdd(u8),
 }
 
 /// The largest turn rate (radians per second) a script may set.
@@ -545,6 +547,9 @@ mod tests {
             assert_eq!(bytes[0], 44, "{edit:?}");
             assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
         }
+        let op = TeamOp::ResourceAdd(2);
+        assert_eq!(postcard::to_allocvec(&op).unwrap(), [7, 2]);
+        assert_eq!(postcard::from_bytes::<TeamOp>(&[7, 2]).unwrap(), op);
     }
 
     #[test]

@@ -81,6 +81,8 @@ pub mod team_pool;
 mod rerace_tests;
 #[cfg(test)]
 mod special_forces_tests;
+#[cfg(test)]
+mod cheat_grant_tests;
 pub use start_effects::unsupported as unsupported_start_lifecycle;
 pub mod tech;
 pub mod victory;
