@@ -237,6 +237,7 @@ mod tests {
             player: PlayerId(0),
             selected: Vec::new(),
             content: Some(db),
+            ..Default::default()
         }
     }
 

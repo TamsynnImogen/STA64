@@ -371,6 +371,7 @@ impl SolMap {
                     entity_id: o.id as i32,
                     team: o.team,
                     label: o.instance_name.clone(),
+                    instance_name: String::new(),
                     initial_position: Some(o.pos),
                     transform: o.transform,
                     light_colour: None,

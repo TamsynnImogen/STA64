@@ -604,6 +604,12 @@ constants. Orders are sent as the unit's owner; edits are SCRIPT edits.
   `WhatWhoParamVO` otherwise raises (a parameter has no order); other commands raise, counted. The voice
   flag is not measured and not applied. The three calls and
   `SetCommandMoveAutonomyLow` wait for a handle still being built (LUA-36).
+- LUA-41 (rules read from the executable, static; none measured): `AllowWarp(int)`,
+  `CollisionPrevention(bool)` and `PathPlanning(bool)` send `Edit::MissionSwitch` (`switch_calls.rs`)
+  and are no longer counted as gaps. `AllowWarp` returns the previous value: the integer this
+  binding last stored, else 1 or 0 from the view (a mission loaded from a save); the sim only
+  keeps on or off. `CollisionPrevention` off skips the craft-craft separation, `PathPlanning`
+  overrides `USE_PATH_PLANNING`. `ObstacleAvoidance` stays a no-op (below).
 - LUA-36 (rules read from the executable, static; none measured): `ObstacleAvoidance` writes a
   flag nothing reads, so it is an accepted no-op, not counted. The order calls test no owner,
   so a unit with no player owner is ordered as the script seat. `SetCommandMoveAutonomyLow` is

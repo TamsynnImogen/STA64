@@ -90,6 +90,7 @@ fn installed_ghost_is_readable_without_lights() {
             player: sta_sim::PlayerId(0),
             selected: Vec::new(),
             content: Some(db.clone()),
+            ..Default::default()
         })
         .insert_resource(HudState {
             placing: Some(Armed {

@@ -554,6 +554,7 @@ pub(crate) fn clear_match(
     // The sim ids the match's entities answered to; the menu scene's units are made again from its view.
     entities.0.clear();
     commands.remove_resource::<crate::render::fog::FogState>();
+    commands.remove_resource::<crate::ui::hud::instance_names::InstanceNames>();
     // The playtest capture's record of how the match began (a networked match does not write one).
     commands.remove_resource::<crate::capture::MatchMeta>();
     for e in &q {
@@ -882,6 +883,9 @@ fn rebuild(
         None => {}
     }
     let map_def = setup.map.clone();
+    // The names this map gives its objects, joined to the sim's ids by label (host-only; the
+    // HUD reads them). A map without names gives an empty table.
+    commands.insert_resource(crate::ui::hud::instance_names::InstanceNames::of(&map, sim.labels.iter().map(|(id, l)| (id, l.as_str()))));
     let mut placed = Placed::of(&sim);
     commands.insert_resource(ContentRes(content.clone()));
     // The races' city textures, for the colonies' lights (RND-12).

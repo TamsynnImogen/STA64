@@ -86,7 +86,7 @@ fn feed(selected: &[u32], mutate: impl FnOnce(&mut Vec<UnitView>, &mut WorldView
     };
     mutate(&mut units, &mut view);
     view.units = units;
-    HudFeed { view: Arc::new(view), player: ME, selected: selected.iter().copied().map(EntityId).collect(), content: Some(db) }
+    HudFeed { view: Arc::new(view), player: ME, selected: selected.iter().copied().map(EntityId).collect(), content: Some(db), ..Default::default() }
 }
 
 fn colonize(f: &HudFeed, planet: u32) -> Option<(Vec<Order>, Vec<EntityId>)> {

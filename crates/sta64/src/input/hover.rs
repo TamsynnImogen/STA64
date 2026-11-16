@@ -135,7 +135,7 @@ mod tests {
                 view,
                 player: PlayerId(0),
                 selected: vec![EntityId(99)],
-                content: None,
+                content: None, ..Default::default()
             })
             .add_systems(Update, track);
         app

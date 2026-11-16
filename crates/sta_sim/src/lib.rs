@@ -40,6 +40,9 @@ pub mod warp_override;
 pub mod alert;
 #[cfg(test)]
 mod alert_tests;
+pub mod mission_switches;
+#[cfg(test)]
+mod mission_switches_tests;
 #[cfg(test)]
 mod warp_override_tests;
 #[cfg(test)]
@@ -213,6 +216,8 @@ pub struct Sim {
     transports: combat::boarding::Transports,
     /// Station recovery activation and damage holds (SIM-70), saved and hashed.
     recrew: recrew::Recrews,
+    /// Mission-wide switches (LUA-41), saved; hashed only when not the default.
+    mission_switches: mission_switches::MissionSwitches,
 }
 
 impl Sim {
@@ -254,6 +259,7 @@ impl Sim {
             colonies: Default::default(),
             transports: Default::default(),
             recrew: Default::default(),
+            mission_switches: Default::default(),
         }
     }
 
@@ -610,7 +616,7 @@ impl Sim {
             }
         }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), alerts: self.alerts.levels(), enemy_hit: self.alerts.hits(), ally_attacks: self.alerts.ally_rows().to_vec(), special_forces: self.switches.special_forces(), ..self.attrs.view() } }
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), alerts: self.alerts.levels(), enemy_hit: self.alerts.hits(), ally_attacks: self.alerts.ally_rows().to_vec(), special_forces: self.switches.special_forces(), mission_switches: self.mission_switches, ..self.attrs.view() } }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content
@@ -704,6 +710,8 @@ impl Sim {
         }
         // LUA-31: scripted warp speeds (nothing is hashed without an override).
         self.hash_warp_overrides(&mut h);
+        // LUA-41: the mission switches (nothing is hashed at the default).
+        self.mission_switches.hash_into(&mut h);
         // SIM-46: transporter orders, parties in flight, shield holds (nothing is hashed without them).
         if !self.transports.is_empty() {
             self.transports.hash_into(&mut h);
