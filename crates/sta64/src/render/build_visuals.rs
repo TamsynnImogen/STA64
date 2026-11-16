@@ -40,7 +40,7 @@ fn active_head(row: &ProductionView) -> Option<(&ProductionJobView, &Constructio
 fn classify(kind: EntityKind, paid: bool, started: bool, real_site: bool) -> Option<Kind> {
     match kind {
         EntityKind::Craft => (paid && started && !real_site).then_some(Kind::Ship),
-        EntityKind::Station => (!started || real_site).then_some(Kind::Blueprint),
+        EntityKind::Station => (!started && !real_site).then_some(Kind::Blueprint),
         _ => None,
     }
 }
@@ -101,21 +101,6 @@ fn wanted(link: &SimLink, content: &ContentRes, local: &LocalPlayer) -> Vec<Want
             continue;
         };
         let shown = match (kind, site.entity) {
-            (Kind::Blueprint, Some(id)) => {
-                let Some(station) = curr.unit(id) else {
-                    continue;
-                };
-                if station.def != job.def
-                    || station.owner != link.player()
-                    || !visible.contains(&id)
-                    || !station
-                        .progress
-                        .is_some_and(|progress| progress < sta_sim::Fixed::ONE)
-                {
-                    continue;
-                }
-                station
-            }
             (Kind::Blueprint, None) => {
                 let Some(builder) = curr.unit(row.builder) else {
                     continue;
@@ -137,7 +122,7 @@ fn wanted(link: &SimLink, content: &ContentRes, local: &LocalPlayer) -> Vec<Want
                 }
                 builder
             }
-            (Kind::Ship, Some(_)) => continue,
+            (_, Some(_)) => continue,
         };
         out.push(Wanted {
             key: BuildVisual {
@@ -224,6 +209,7 @@ fn sync_build_visuals(
                 Kind::Blueprint => "station blueprint",
             }),
             next.key,
+            crate::map::MatchEntity,
             NeedsModel(next.key.def),
             TeamColour(colour),
             pose(next.pos, next.heading),
@@ -317,6 +303,7 @@ fn sync_sparks(
             let material = mats.add(quad::material(&look));
             commands.spawn((
                 Name::new("yard weld spark"),
+                crate::map::MatchEntity,
                 YardSpark {
                     root,
                     slot,
@@ -386,9 +373,11 @@ mod tests {
             Some(Kind::Blueprint)
         );
         assert_eq!(
-            classify(EntityKind::Station, true, true, true),
+            classify(EntityKind::Station, true, false, false),
             Some(Kind::Blueprint)
         );
+        assert_eq!(classify(EntityKind::Station, true, true, true), None);
+        assert_eq!(classify(EntityKind::Station, true, false, true), None);
         assert_eq!(classify(EntityKind::Station, true, true, false), None);
         assert_eq!(classify(EntityKind::Prop, true, true, false), None);
     }

@@ -6,9 +6,10 @@ use bevy::asset::RenderAssetUsages;
 use bevy::ecs::system::RunSystemOnce;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use sta_assets::a2fmt::spr::SpriteTable;
-use sta_sim::command::{Command, LocalRouter};
+use sta_sim::command::{Command, CommandKind, Edit, LocalRouter, Order};
 use sta_sim::production::view::{ConstructionSiteView, ProductionJobView, ProductionView};
-use sta_sim::{Fixed, TickOutput, WorldSource, WorldView};
+use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
+use sta_sim::{Fixed, Sim, TickOutput, WorldSource, WorldView};
 
 struct Frozen {
     view: Arc<WorldView>,
@@ -234,44 +235,113 @@ fn hidden_yard_does_not_disclose_its_construction() {
 }
 
 #[test]
-fn welded_station_blueprint_follows_station_after_builder_death_and_capture() {
-    let db = sta_content::fake::db();
+fn station_blueprint_survives_travel_then_clears_when_welding_starts() {
+    let fake = sta_content::fake::db();
+    let mut rig = sta_content::UnitDef::new("fx_rig", "constructionrig");
+    rig.race = "fx".into();
+    rig.movement = sta_content::MoveStats::from_f32(140.0, 1.0, 1.0, 1.0, 0.2);
+    rig.hull = Fixed::from_int(100);
+    let mut builder = sta_content::ContentDb::builder()
+        .profile(fake.profile())
+        .features(fake.features().clone())
+        .unit(rig);
+    for weapon in fake.weapons() {
+        builder = builder.weapon(weapon.clone());
+    }
+    for unit in fake.units() {
+        builder = builder.unit(unit.clone());
+    }
+    let db = Arc::new(builder.build().unwrap());
     let station = db.key("fx_station").unwrap();
-    let mut view = (*source_view(&db)).clone();
-    view.units.retain(|unit| unit.id != EntityId(3));
-    let station_unit = view
-        .units
-        .iter_mut()
-        .find(|unit| unit.id == EntityId(4))
-        .unwrap();
-    station_unit.progress = Some(Fixed::from_f64(0.4));
+    let mut sim = Sim::from_setup(&GameSetup {
+        seed: 3,
+        map: Arc::new(sta_content::MapDef::empty()),
+        content: db.clone(),
+        players: vec![PlayerSetup {
+            id: PlayerId(0),
+            team: sta_sim::TeamId(0),
+            race: "fx".into(),
+            control: Control::Human,
+        }],
+        options: GameOptions::default(),
+    });
+    let step = |sim: &mut Sim, player, kind| {
+        sim.step(&[Command {
+            player,
+            seq: 0,
+            kind,
+        }])
+    };
+    let spawn = step(
+        &mut sim,
+        PlayerId::BENCH,
+        CommandKind::Edit(Edit::Spawn {
+            odf: db.key("fx_rig").unwrap(),
+            player: PlayerId(0),
+            pos: sta_sim::Vec3::ZERO,
+            heading: (Fixed::ZERO, Fixed::ONE),
+        }),
+    );
+    let rig = spawn.view.units[0].id;
+    step(
+        &mut sim,
+        PlayerId::BENCH,
+        CommandKind::Edit(Edit::Cargo(PlayerId(0), 0, Fixed::from_int(2000))),
+    );
+    let ordered = step(
+        &mut sim,
+        PlayerId(0),
+        CommandKind::Order(Order::Build {
+            builder: rig,
+            what: station,
+            at: Some(sta_sim::Vec3::from_f32([1000.0, 0.0, 0.0])),
+        }),
+    );
+    assert!(
+        !ordered
+            .events
+            .iter()
+            .any(|event| matches!(event, sta_sim::SimEvent::Rejected { .. })),
+        "real station build order should be accepted"
+    );
     let mut app = App::new();
     app.init_resource::<Assets<Mesh>>()
-        .insert_resource(ContentRes(Arc::new(db)))
+        .insert_resource(ContentRes(db))
         .insert_resource(LocalPlayer(Some(PlayerId(0))))
         .add_systems(Update, sync_build_visuals);
-    install_link(
-        &mut app,
-        Arc::new(view.clone()),
-        vec![row(3, station, 0.4, true, true, Some(EntityId(4)))],
-    );
+    app.insert_resource(SimLink::new(
+        Box::new(sim),
+        Box::new(LocalRouter::new()),
+        PlayerId(0),
+    ));
+    let pending = &app.world().resource::<SimLink>().production()[0];
+    assert!(!pending.jobs[0].started);
+    assert!(pending.site.as_ref().unwrap().entity.is_none());
     app.update();
-    let before = roots(&mut app);
-    assert_eq!(before.len(), 1);
-    assert_eq!(before[&EntityId(3)].2, Kind::Blueprint);
-    let station_unit = view
-        .units
-        .iter_mut()
-        .find(|unit| unit.id == EntityId(4))
-        .unwrap();
-    station_unit.owner = PlayerId(1);
-    install_link(
-        &mut app,
-        Arc::new(view),
-        vec![row(3, station, 0.5, true, true, Some(EntityId(4)))],
+    let blueprint = roots(&mut app)[&rig].0;
+    assert!(app.world().get::<PinnedBlueprint>(blueprint).is_some());
+    let mut travel_ticks = 0;
+    loop {
+        app.world_mut().resource_mut::<SimLink>().tick().unwrap();
+        app.update();
+        let link = app.world().resource::<SimLink>();
+        let row = &link.production()[0];
+        if let Some(child) = row.site.as_ref().unwrap().entity {
+            assert!(row.jobs[0].started);
+            assert!(link.curr().unit(child).unwrap().progress.is_some());
+            assert!(roots(&mut app).is_empty());
+            assert!(app.world().get::<PinnedBlueprint>(blueprint).is_none());
+            break;
+        }
+        assert!(!row.jobs[0].started);
+        assert_eq!(roots(&mut app)[&rig].0, blueprint);
+        travel_ticks += 1;
+        assert!(travel_ticks < 3000, "rig never reached its site");
+    }
+    assert!(
+        travel_ticks > 0,
+        "blueprint should survive constructor travel"
     );
-    app.update();
-    assert!(roots(&mut app).is_empty());
 }
 
 #[test]
@@ -392,5 +462,70 @@ fn installed_ship_preview_attaches_partial_model_without_selection() {
     assert!(
         parts.iter(world).any(|part| part.owner == root),
         "installed craft should attach private partial hull geometry"
+    );
+}
+
+#[test]
+fn leaving_a_match_removes_blueprints_ship_hulls_and_sparks_without_a_link() {
+    let db = sta_content::fake::db();
+    let cruiser = db.key("fx_cruiser").unwrap();
+    let station = db.key("fx_station").unwrap();
+    let view = source_view(&db);
+    let mut app = App::new();
+    app.init_resource::<Assets<Mesh>>()
+        .init_resource::<Assets<FxQuadMaterial>>()
+        .init_resource::<ConstructionEdges>()
+        .init_resource::<crate::render::particles::Particles>()
+        .init_resource::<crate::sim_link::SimEntities>()
+        .insert_resource(AnimClock::default())
+        .insert_resource(ContentRes(Arc::new(db)))
+        .insert_resource(LocalPlayer(Some(PlayerId(0))));
+    install_link(
+        &mut app,
+        view,
+        vec![
+            row(1, cruiser, 0.4, true, true, None),
+            row(3, station, 0.0, true, false, None),
+        ],
+    );
+    app.world_mut().run_system_once(sync_build_visuals).unwrap();
+    app.world_mut().flush();
+    let built = roots(&mut app);
+    assert_eq!(built.len(), 2);
+    let ship = built[&EntityId(1)].0;
+    app.world_mut()
+        .resource_mut::<ConstructionEdges>()
+        .previews
+        .insert(ship, vec![Vec3::ONE]);
+    app.world_mut().run_system_once(sync_sparks).unwrap();
+    app.world_mut().flush();
+    assert_eq!(
+        app.world_mut()
+            .query::<&YardSpark>()
+            .iter(app.world())
+            .count(),
+        3
+    );
+    // This is the real front-end transition: SimLink is removed before the
+    // map's match-entity sweep, so per-tick production systems cannot clean up.
+    app.world_mut().remove_resource::<SimLink>();
+    app.world_mut()
+        .run_system_once(crate::map::clear_match)
+        .unwrap();
+    app.world_mut().flush();
+    assert!(roots(&mut app).is_empty());
+    assert_eq!(
+        app.world_mut()
+            .query::<&YardSpark>()
+            .iter(app.world())
+            .count(),
+        0
+    );
+    assert_eq!(
+        app.world_mut()
+            .query::<&PinnedBlueprint>()
+            .iter(app.world())
+            .count(),
+        0
     );
 }
