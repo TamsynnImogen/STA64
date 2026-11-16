@@ -23,16 +23,13 @@
 //! snapshot, protocol or replay number; it is a host input of a single-player game and must never
 //! be applied in a replay or a network session (that is the [`CheatSession`] check).
 //!
-//! **Not yet as a scripted end in the host:** `sta64`'s mission host applies `blocked::is_blocked` to every
-//! outcome the scan returns, so a forced loss with gaps in the run would be reported blocked, not
-//! lost. "Exactly as for a scripted end" holds for `CampaignRunner::finish`, not yet for that host
-//! check; the chat-hook package carries a forced flag in the outcome to skip it.
+//! **Host handling.** The mission host skips its unsupported-script-gap blocked check for a
+//! successfully forced end, so a forced loss is recorded as a loss even when the script had gaps.
 //!
 //! **Left open** (not modelled by STA64, so not honoured here): the Armada II conditions under
 //! which the chat box does not open (a script's `DisableChat(true)`, a script step waiting for
 //! Enter, the objectives display up). The caller that owns the chat box decides whether it opens;
-//! this module only sees the text it sends. STA64 has no single-player in-game chat input yet
-//! (the chat log is display only), so nothing calls [`try_chat_cheat`] in the binary today.
+//! this module only sees the text it sends.
 
 use crate::runtime::MissionRuntime;
 

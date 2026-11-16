@@ -169,7 +169,13 @@ pub(super) fn pointer_press(mouse: Res<ButtonInput<MouseButton>>, hover: Res<Hov
     commands.queue(move |w: &mut World| press(w, &hits));
 }
 
-pub(super) fn key_events(mut keys: MessageReader<KeyboardInput>, held: Res<ButtonInput<KeyCode>>, mut commands: Commands) {
+pub(super) fn key_events(mut keys: MessageReader<KeyboardInput>, held: Res<ButtonInput<KeyCode>>, mut commands: Commands, cheat: Option<Res<crate::cheats::input::CheatInput>>) {
+    // Read and discard captured events, so closing cheat entry cannot replay old text/Tab/Enter
+    // into the kit on the following frame.
+    if cheat.is_some_and(|c| c.open || c.blocked_this_frame) {
+        keys.read().for_each(drop);
+        return;
+    }
     for ev in keys.read() {
         if ev.state != ButtonState::Pressed {
             continue;

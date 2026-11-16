@@ -145,6 +145,16 @@ impl SimLink {
         self.router.get().submit(cmd);
     }
 
+    /// UI-47: already-authorized local sandbox input. Only the single-player cheat dispatcher
+    /// calls this; a normal player's `submit` keeps that player's identity and cannot edit.
+    /// BENCH has its own reserved identity, separate from the mission's SCRIPT sequence.
+    /// The router and replay log see these requests exactly like any existing bench command.
+    pub(crate) fn submit_sandbox(&mut self, kind: CommandKind) {
+        let cmd = Command { player: PlayerId::BENCH, seq: self.seq, kind };
+        self.seq += 1;
+        self.router.get().submit(cmd);
+    }
+
     /// Where to draw `id` at `alpha` between the last two ticks: map-space
     /// position and XZ heading, as floats for rendering. `None` once gone.
     pub fn interpolate(&self, id: EntityId, alpha: f32) -> Option<([f32; 3], [f32; 2])> {

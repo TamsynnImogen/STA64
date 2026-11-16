@@ -570,6 +570,11 @@ impl MissionRuntime {
         self.inner.ctx.borrow().finished
     }
 
+    /// Whether a host cheat successfully forced this mission to end.
+    pub fn mission_end_forced(&self) -> bool {
+        self.inner.ctx.borrow().mission_end_forced
+    }
+
     /// What the script `print`ed.
     pub fn log(&self) -> Vec<String> {
         self.inner.ctx.borrow().log.clone()
@@ -618,6 +623,7 @@ impl MissionRuntime {
         let mut c = self.inner.ctx.borrow_mut();
         c.mission_end = Some(api::MissionEnd { time: tick as f64 / sta_core::TICK_HZ as f64, failed: !won, blocked: None });
         c.ended = Some(won);
+        c.mission_end_forced = true;
         true
     }
 

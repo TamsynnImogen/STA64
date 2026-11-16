@@ -10,6 +10,7 @@
 pub mod app;
 pub mod bench;
 pub mod clock;
+mod cheats;
 pub mod game;
 pub mod placement;
 pub mod plugins;

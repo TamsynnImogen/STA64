@@ -170,9 +170,9 @@ pub enum Edit {
     /// that tick (see [`crate::present`]).
     Present(crate::present::Presentation),
     /// A subsystem on or off (mission `Disable*` calls). `Engines` and
-    /// `Weapons` act like [`Edit::Engines`] / [`Edit::Weapons`]; `Shields`,
-    /// `LifeSupport` and `Sensors` are recorded as switched off or on
-    /// (SIM-55; the combat consequences are not modelled, see `combat/damage.rs`).
+    /// `Weapons` act like [`Edit::Engines`] / [`Edit::Weapons`]; `Shields` drops its pools
+    /// while off and resumes recharge when enabled (UI-47). `LifeSupport` and `Sensors`
+    /// switches are recorded (SIM-55; combat consequences remain incomplete).
     Subsystem(EntityId, Subsystem, bool),
     /// Alert state (mission `SetRedAlert` and friends). Rejected until a
     /// package models alert states.

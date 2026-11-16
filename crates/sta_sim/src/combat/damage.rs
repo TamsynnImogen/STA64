@@ -29,9 +29,10 @@
 //! Shields, hull and crew live on the entity, so snapshots and the digest
 //! already cover them; [`Subsystems`] is the one state of its own.
 //!
-//! Not yet: what a switched-off or damaged system does. The sim records it
-//! and nothing else reads it: the original's effect (a dead shield generator
-//! absorbing nothing, life support draining crew, sensors) is not measured.
+//! Switched-off shield generators drop their pools and prevent recharge (UI-47; static rule,
+//! timing not measured). Armada I's hull recharge also reads generator damage (SIM-68).
+//! Other subsystem combat consequences remain incomplete; recording a switch alone does not
+//! establish parity for destroyed generators, life support or sensors.
 //! Systems damage from hits (weapons or engines offline below a hull
 //! threshold) is not modelled either.
 
@@ -48,6 +49,12 @@ use crate::Sim;
 /// Recharge every unit's shields by its definition's rate.
 pub(crate) fn recharge(units: &mut Entities, db: &ContentDb, switches: &crate::switches::SwitchTable, subsystems: &Subsystems, transports: &super::boarding::Transports) {
     for u in units.iter_mut() {
+        // Hold disabled shields at zero even after loading an older snapshot which stored the
+        // off bit alongside charged pools, or a script tried to refill a disabled generator.
+        if subsystems.get(u.id).is_some_and(|r| r.off & (1 << system(Subsystem::Shields)) != 0) {
+            u.shields.now.fill(Fixed::ZERO);
+            continue;
+        }
         // `CraftCanRepair(false)` (SIM-58) stops the shields coming back too.
         if u.hull[0] <= Fixed::ZERO || switches.no_repair(u.id) || subsystems.get(u.id).is_some_and(|r| r.derelict) || transports.shields_held(u.id) {
             continue;
@@ -291,6 +298,9 @@ impl Sim {
                 self.subsystems.edit(id, |r| {
                     r.off = if on { r.off & !(1 << n) } else { r.off | (1 << n) };
                 });
+                if sub == Subsystem::Shields && !on {
+                    self.units.get_mut(id).expect("live ship").shields.now.fill(Fixed::ZERO);
+                }
                 true
             }
         }
