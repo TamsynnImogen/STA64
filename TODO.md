@@ -584,6 +584,436 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] WORKPLAN owed (missions lane): the order after LUA-31 is SIM-46 packages and LUA-33/LUA-34, then LUA-32, then LUA-35, and the snapshot, Edit and protocol numbers written in rows LUA-32 to LUA-35 are stale: the coordinator re-assigns them when the SIM-46 needs are stated.
 - [ ] WORKPLAN owed (LUA-37): the row says a forced end is refused outside dev or cheat mode, while LUA-29 found the original needs no dev mode in single-player missions: settle when LUA-37 starts.
 
+## Backward compatibility gaps (Armada I, Armada II, Fleet Operations)
+
+What the original games read or do that STA64 does not yet, so original
+content and mods keep working. Compared on 2026-11-16 against `main` at
+`37283fe8`.
+
+Source tags, on every line:
+
+- `[A1]` Armada I only.
+- `[A2]` Armada II only (new in Armada II).
+- `[A1 A2]` both stock games.
+- `[FO]` Fleet Operations addition (its hook library).
+
+Fleet Operations runs on the Armada II executable, so every `[A2]` and
+`[A1 A2]` line also applies to Fleet Operations content.
+
+How to read it:
+
+- Evidence grade for the key and name lists: read from the executable, static,
+  not measured. Usage counts behind the ordering are read from data (`docs/data/`).
+- A name counts as covered when it is a string literal in `crates/**/*.rs` (the
+  rule `tools/data_inventory.py` uses). That shows the name is mentioned, not
+  that the behaviour matches. Names read through a generic loader (`cfg_h.rs`,
+  `gui_cfg.rs`) show as missing even where a mod's value would be picked up.
+- "Not named" for a file means its name does not occur in the source; a file
+  reached through a pattern or another file's reference can still load. Those
+  lines are things to verify.
+- Nothing here was run in game. Each item needs a WORKPLAN row and a claim
+  before code; `[plan X]` marks a row that exists whose keys are not in code yet.
+
+### Decided (Tammy, 2026-11-16)
+
+- [ ] ODF key lookup is reproduced per profile. `[A1]`: a key matches the first
+  line in file order whose start equals the key (case-insensitive) and which
+  contains `=`; there is no word boundary, so an earlier `keyX = ...` line
+  shadows `key`, and a file's own lines come before its includes. `[A2]` and
+  `[FO]`: the whole key must match, case-insensitive. `sta_odf` is exact for
+  every profile today; prefix lookup belongs under `Profile::Sta1Classic` only.
+  Still to read for `[A2]`: which of two duplicate keys wins. Fixtures: `keyX`
+  before `key`, own line against included line, a line without `=`.
+- [ ] `[A2]` Armada II saved games must be readable. No reader and no WORKPLAN
+  row yet (Armada I saved state is CON-40). First step: an inspection tool that
+  walks a save and reports every record, before any import into the sim.
+
+### Loader and parser rules
+
+- [ ] `[A1 A2 FO]` Class defaults: each object class has defaults that apply when
+  an ODF omits a key. Audit STA64's defaults class by class.
+- [ ] `[A2]` Subsystem key families built from the subsystem name:
+  `<system>SparkTime` is unread (`HitPoints`, `HitPercent`, `RepairTime`,
+  `CrewLoss` and `TargetHardpoints` are read).
+- [ ] `[A1 A2]` Physics cascade: Armada I movement keys come from the shared
+  physics file first, then the ship ODF; Armada II reads 48 keys in the same
+  order. Check `sta_content` applies that order per profile.
+- [ ] `[A1 A2]` `events.odf` / `events.dat`: sounds and `SoundPriority` are parsed;
+  `Marker` (radius, shrink, time, colour) and `Text` lines are not.
+- [ ] `[A1 A2 FO]` Table values (`"name" value` rows after a key): check a reader
+  for each of `hitChance`, `damageBase`, `possibleCraftNames`,
+  `<system>TargetHardpoints`, `weaponHardpoints#`, `commandHotkeys`,
+  `commandNames`; `[FO]` `validTargets`, `disable<System>Percent/Time`,
+  `repairRate`, `beneficialBuild`, `supplyClasses`, `drainSpecialEnergyPercent`.
+- [ ] `[A2]` Starfield ODF keys `bstar.#`, `mstar.#`, `cstar.#` and their `.scale`
+  forms are built at run time; check a reader exists.
+- [ ] `[FO]` Virtual directories and file precedence (`docs/NATIVE_FEATURES.md`
+  row is `todo`, no WORKPLAN row). Rule read from the hook: entries order by
+  name (ASCII case fold), then owning mod (an entry with a mod before one
+  without; two mods by priority), then primary root, then loose before packed.
+  Two different mods of equal priority have no tie-break. Compare with `sta_vfs`.
+- [ ] `[FO]` Producer queue accounting (start, cancel, finish, tech check at
+  start): compare with SIM-08/20/33 and file only the differences.
+
+### Fixed-name and per-format files
+
+ODF:
+- [ ] `[A1 A2]` `light.odf`, `component.odf`, `techlvl.odf` not named.
+- [ ] `[A2]` `editmenu.odf` (map-editor menus: `menuTitle`, `menuName<n>`, `item<n>`, `forceToNeutral`) not named.
+- [ ] `[FO]` `loadscreen.odf` (load bar and tips) not named.
+- [ ] Check depth of the named ones: `[A1 A2]` `teamcolor.odf`, `button.odf`, `audio.odf`, `races.odf`; `[A2]` `allcommands.odf`; `[FO]` `odf/system/stars_*.odf`.
+
+CFG:
+- [ ] `[A1]` `cca.cfg`, `collision.cfg`, `logfile.cfg` not named (`woncfg.cfg` is the retired online service: out of scope).
+- [ ] `[A2]` `gui_cardassian.cfg`, `gui_species8472.cfg` not named (`gamespy.cfg`: out of scope).
+- [ ] `[FO]` per-aspect sets `gui_<race>{4x3,5x4,16x10,16x9}.cfg` for Borg, Dominion, Federation, Klingon and Romulan (only `gui_16x9.cfg` and `gui_federation16x9.cfg` are named), `gui_4x3.cfg`, `gui_5x4.cfg`, `gui_16x10.cfg`, `gui_defaultrace.cfg`, `gui_interface_misc.cfg`, `gui_observer*.cfg`, `gui_mapedit*.cfg`.
+- [ ] `[A2]` cfg keys built at run time: `background_<n>`, `tabBmp_<n>`, `tabBmpH_<n>`, `playerButtonRect<n>`, `<button>_click.wav`, `<button>_rollover.wav`.
+- [ ] `[A1 A2]` value kinds: rectangle, sprite name, colour, cursor, point pair. Check `gui_cfg.rs` has a typed reader for each.
+
+SPR (syntax is covered: every directive, material, track kind, interpolation, row flag and emitter parameter in the three installs has a name in source):
+- [ ] `[A1 A2 FO]` an unknown emitter type silently becomes `spray`; warn instead.
+- [ ] `[A1]` `@tmaterial=wormhole`, `[A1 A2]` `alphathreshold`: named; check they are drawn, not only parsed.
+- [ ] Sprite files not named: `[A1 A2]` `gui_map.spr`; `[A2]` `gui_cardassian.spr`, `gui_species8472.spr`; `[A2 FO]` `gui_credits.spr`; `[FO]` `gui_dominion.spr`, `systembackgrounds.spr`, `systemimages.spr`, `miniimages.spr`, `fleetops_comp.spr`; `[A1 A2 FO]` `tex_anim.spr`, `tex_anim_gui.spr` (normally `@include`d).
+- [ ] Font sets: `[A2]` the font file name is built from a name and a size; only `fontfinal4_10/13/16` are named. Unnamed: `[A2 FO]` `fontfinal4_12/15/19/20/24`; `[FO]` `fontfinal4_9/14/17/18/18_large/18_small/30/31/38/48`, `fontsmall_5/6/8/10`.
+- [ ] Not compared at all: animation timing, cursor `@origin` hot spots, `@snap_to_pixel` and `@chromakey` drawing, emitter physics.
+
+AIP:
+- [ ] `docs/data/aip.md` marks 3 of the 77 variables stock files set as read.
+- [ ] `[A1]` `UNIT_CONSTRUCTION_PROGRAM` rows and the `aipdef.h` constants (`NUMBER_TO_HAVE`, `NUMBER_TO_BUILD`, `RATIO_TO_BUILD`, `RATIO_TO_HAVE`; placement `CENTER_OF_BASE`, `PERIMETER`, `OUTSIDE_OF_BASE`, `NEAR_ENEMY_BASE`, `NEAR_ENEMY_TROOPS`) have no reader.
+- [ ] Build-list row widths in stock data are 5, 4, 3 and 2 fields; check each maps to the right fields.
+- [ ] File selection not named: `[A1]` `<race>_offensive_list.aip`, `<race>_defensive_list.aip`, `default_offensive.aip`, `default_defensive.aip`; `[A1 A2]` `default.aip`, `newdefault.aip`; `[A2]` `_endgame_list.aip`.
+- [ ] `[A1 A2]` `strategic_ai_config.txt` not named.
+- [ ] Set by stock files but not confirmed as read by the executables (verify before implementing): `MAX_EVAL_*`, `MAX_EXEC_ATTACK_BASE`, `MAX_EXEC_ESCORT`, `MAX_EXEC_EXPLORE`, `MAX_EXEC_RESOURCE`, `max_attack_force`, `min_attack_force`, `min_defense_force`, `max_perimeter_force`, `min_perimeter_force`, `min_resource_force`, `patrol_one_in_n`, `recompute_strategy_period`, `threat_proximity_modifier`; `[A2]` `MAX_SCOUTING`, `recycle_units`.
+
+TT (line forms are covered: `<odf> 0`, `<odf> N <prereq>...`, `-1`, `-2`, `#include`, names without `.odf`):
+- [ ] `[A2]` tech flags (`gTech...`) parse as withheld items; check that finishing the research makes the flag available. Not verified either way.
+- [ ] `[A2]` game-option techtrees not named: `earlytech.tt`, `nosci.tt`, `nospweap.tt`, `nosuper.tt`, `demotech.tt`. `[FO]` `devtech.tt`.
+- [ ] `[A2]` mission techtrees `a2_<race>02..10.tt`: load each once.
+
+XML (Fleet Operations techtree):
+- [ ] `[FO]` not in `techtree.rs`: `customEval` with requirement `ID`, `numSatisfied`, `countConstructions` (default true) on `cap` and `capacityList`, `contextODF` on `capList`, the `<enemy>` condition, `<parentInclude/>`. Stock FO 4 data uses none of them; mods can.
+- [ ] `[FO]` rules to verify: names compare without case; booleans are `true`/`false` or a number (non-zero true); an ODF name that resolves to nothing skips the element; an include of the file's own name reads the next mod level down; a capacity pool sums negative weights first, then fails as soon as the running total passes `maxCapValue`; pool names are matched without case, newest definition first.
+- [ ] `[FO]` `race` on `<object>` is used twice in FO data; find what the game does with it.
+- [ ] `[FO]` `devtech.xml`, `freetech.xml` not named; `TECHTREE_DEFAULT_FILE` (header) unread.
+
+Other text files opened by fixed name:
+- [ ] `[A1]` `gamekey.map`; `[A1 A2]` `lang.ini`, `texture.dat`; `[A1]` `lang.txt` not named.
+
+### Game modes, saves, missions, network
+
+- [ ] `[A2]` Capture the Flag (`ctfUnits#`, race `canPlayCaptureTheFlag`) and Collect Latinum (`canPlayCollectLatinum`): absent.
+- [ ] `[A1]` Instant-4X keys `myScrap`, `myPilots`, `hisScrap`, `hisPilots`: absent.
+- [ ] `[A2]` Admiral's Log: `ADLOG_CFG.h` (28 names) and its screens (build, battles, ships, economy, military, score, tally, timeline): none read.
+- [ ] `[A1]` Saved-game state per object is not imported (`docs/A1_BZN_SUPPORT.md`; CON-40). Most state: craft orders and alert status, per-object flags, AI team state, timed effects (disable, drain, hyper, invincible, change team, give vision, scramble interface).
+- [ ] `[A1]` Mission calls (`crates/sta_mission/src/api/a1/README.md`): of 172 bound calls, 81 change the game, 35 raise an event nothing consumes, 42 are retained with no effect, 14 always raise. No stock mission has been run through the table.
+- [ ] `[A2]` Mission calls: `DisableLifeSupport(int, bool)` and `DisableSensors(int, bool)` lack the original signature. Of the methods no stock mission calls, 98 have no binding (community missions can call them):
+  `AddBillboardEffect`, `AddToAdLog`, `AddToLoad`, `AddToSave`, `AllCapitalShipsDestroyed`, `CineractiveShotTrackLeft`, `CineractiveTargetOffset`, `ClearFog`, `CountUnitsInRectangle`, `CountUnitsInRectangle2`, `CountVisibleUnitsNearPoint`, `CreateNewDefendFleet`, `EnginesActive`, `EnginesDestroyed`, `EnginesDisabled`, `FindGameEvent`, `GetBiomatter`, `GetCombatSpeed`, `GetCurrentCommand`, `GetInputControlPointer`, `GetMaxDilithium`, `GetMaxLatinum`, `GetMaxMetal`, `GetNearestObject`, `GetNearestObjectNearPath`, `GetNearestRepairFacility`, `GetNearestVehicle`, `GetRace`, `GetSpecialEnergy`, `IsAITeam`, `IsConfirmedAlly`, `IsConfirmedEnemy`, `IsConfirmedNeutral`, `IsEnabled`, `IsRaceOfFlag`, `IsUnconfirmedAlly`, `IsUnconfirmedEnemy`, `IsUnconfirmedNeutral`, `LifeSupportActive`, `LifeSupportDestroyed`, `LifeSupportDisabled`, `MonitorInputControls`, `ObjectHasFlag`, `RemoveFromLoad`, `RemoveFromSave`, `ScriptCreate_dirty_int`, `ScriptCreate_hot_float`, `ScriptCreate_hot_int`, `ScriptCreate_timer_int`, `ScriptDestroy_dirty_int`, `ScriptDestroy_hot_float`, `ScriptGet_ALWAYS_EVALUATE`, `ScriptGet_WORLD`, `ScriptGet_isCineractiveCancel`, `ScriptGet_isCineractiveDone`, `ScriptGet_moons_team_1`, `ScriptGet_moons_team_2`, `ScriptGet_moons_team_3`, `ScriptGet_moons_team_4`, `ScriptGet_moons_team_5`, `ScriptGet_moons_team_6`, `ScriptGet_moons_team_7`, `ScriptGet_moons_team_8`, `ScriptGet_strength_team_1`, `ScriptGet_strength_team_2`, `ScriptGet_strength_team_3`, `ScriptGet_strength_team_4`, `ScriptGet_strength_team_5`, `ScriptGet_strength_team_6`, `ScriptGet_strength_team_7`, `ScriptGet_strength_team_8`, `ScriptGet_tried_warp_team_1`, `ScriptGet_tried_warp_team_2`, `ScriptGet_tried_warp_team_3`, `ScriptGet_tried_warp_team_4`, `ScriptGet_tried_warp_team_5`, `ScriptGet_tried_warp_team_6`, `ScriptGet_tried_warp_team_7`, `ScriptGet_tried_warp_team_8`, `SensorsActive`, `SensorsDestroyed`, `SensorsDisabled`, `SetCombatSpeed`, `SetPathSegmentSpeedModifier`, `SetPathType`, `SetStarbaseUpgrades`, `SetTeamText`, `SetVelocity`, `SetWormholeExpireOnClose`, `ShieldGeneratorActive`, `ShieldGeneratorDestroyed`, `ShieldGeneratorDisabled`, `TeamAttackAll`, `TeamKamikaze`, `TriggerGameEvent`, `WeaponsActive`, `WeaponsDestroyed`, `WeaponsDisabled`
+- [ ] `[A2]` Random map (CON-49): the class position check and the exact distribution table are not reproduced, so a seed does not give the original's map.
+- [ ] `[A1 A2]` Original multiplayer wire compatibility is not planned (new lockstep protocol). State it as a deliberate break in `docs/NET.md`.
+- [ ] `[A2]` Resolution tiers and font groups: which art and font set a resolution selects.
+
+### Suggested order
+
+1. `[A1]` prefix lookup per profile (decided); class defaults audit.
+2. `[A1 A2]` weapon and ordnance base keys (`hitChance`, to-hit modifiers, target masks, `ignoreShield`): every weapon in all three games.
+3. `[FO]` high-volume keys: `extraWeaponHardpoints`, `explosionHit`, `explosionShieldHit`, cannon cycle keys `[plan SIM-48]`, experience `[plan SIM-42]`, replace-weapon remainder `[plan SIM-43]`, ordnance effects.
+4. `[A1 A2]` map-object effects (nebula, wormhole, black hole).
+5. Special weapon classes by data weight.
+6. `[A2]` saved games (decided), stations, trade, recycling `[plan SIM-45]`, Admiral's Log; hotkeys; AIP.
+
+### ODF keys (762 names the originals read that STA64 does not)
+
+Grouped by the object class that reads the key, most-used first; within a line, most-used key first.
+
+- [ ] [A1] craft (3): `criticalHitPercent`, `dockingSpeedFactor`, `yawRotationRate`
+- [ ] [A1 A2] craft (8): `intrinsicValue`, `criticalTargetHardpoints`, `hullTargetHardpoints`, `damagedScan`, `isHero`, `selfDestruct`, `defaultGreenAlert`, `alwaysUseSpecialWeapons`
+- [ ] [A2] craft (28): `maxExtraWeapons`, `healthRate`, `shipType`, `trekPhysicsFile`, `footprintBuffer`, `northBuffer`, `physics`, `southBuffer`, `shipIsBuiltByEvolution`, `recyclesInPlace`, `addToPlanner`, `canAttackPlanets`, `eastBuffer`, `canOnlyAttackPlanets`, `downBuffer`, `missileDetonator`, `percentNebulaWarn`, `upBuffer`, `westBuffer`, `%sCrewLoss`, `%sHitPercent`, `%sHitPoints`, `%sRepairTime`, `%sSparkTime`, `D4p`, `shipIsBuiltByShips`, `xfireBal`, `xselfbal`
+- [ ] [FO] craft (47): `SpecialEnergyDisplayMode`, `recycleBiomatter`, `recycleLatinum`, `recycleTime`, `worthXP`, `originalClass`, `XPlevel`, `nextrankXP`, `nextrankClass`, `giveIsAllowed`, `overlaySod`, `perceivedNeutral`, `destroyedBiomatterCost`, `rankupBiomatter`, `IamGameToTheDeathCondition`, `canRepairshipRepair`, `destroyMeWithResearchStation`, `avatarBoxIcon`, `avatarBoxTooltip`, `destroyFootprint`, `turnToFire`, `preferredSelect`, `constructionVoice`, `allowBuildQueuePop`, `createFootprint`, `beneficialBuild`, `beneficialBuildRadius`, `showChoiceDialog`, `freighterSize`, `beneficialBuildForce`, `beneficialBuildInvert`, `defaultAlertStatus`, `defaultMovementAutonomy`, `defaultSpecialWeaponAutonomy`, `destroyedCrewCost`, `destroyedDilithiumCost`, `destroyedLatinumCost`, `destroyedMetalCost`, `explosionChunks`, `footprintAligned`, `healthBeamRatio`, `moduleGroup`, `moduleType`, `rankupCrew`, `rankupDilithium`, `rankupLatinum`, `rankupMetal`
+- [ ] [A1] weapon (5): `buttonPriority`, `slowToHitModifier`, `toHitSlowModifier`, `toHitWarpModifier`, `warpToHitModifier`
+- [ ] [A1 A2] weapon (19): `hitChance`, `stopToHitModifier`, `toHitStopModifier`, `needTarget`, `buttonSlot`, `switchToAttack`, `targetLocation`, `beneficial`, `buttonBorder`, `AItargetLocation`, `targetAlliedCraft`, `cloakEnable`, `targetEnemyBuildings`, `targetEnemyCraft`, `targetAlliedBuildings`, `offSound`, `crewAffectsWeaponDelay`, `regularWeaponDelay`, `fireEventID`
+- [ ] [A2] weapon (10): `impulseToHitModifier`, `toHitImpulseModifier`, `speakOnAttack`, `attackSpeech`, `hotkeyLabel`, `ignoreValidAsTarget`, `assimilatable`, `targetEnemyPlanets`, `targetEnemyPlanetsOnly`, `warpEnable`
+- [ ] [FO] weapon (10): `overrideSubSystem`, `showRange`, `validTargets`, `overrideCeaseFire`, `visibleRange`, `preserveStatus`, `showInMultiSelect`, `showEffectIcon`, `hasNegativeEffectOnOwner`, `showAsEffectIcon`
+- [ ] [A1] ordnance (1): `shotSound`
+- [ ] [A1 A2] ordnance (10): `spriteDuration`, `shotColor`, `ignoreShield`, `hitSound`, `shieldDuration`, `Length`, `specialValue`, `shotInfo`, `lodShift`, `shieldGeometryName`
+- [ ] [A2] ordnance (1): `forceInvalidateTarget`
+- [ ] [A1 A2 FO] ordnance (2): `lightFalloffRange`, `lightFalloffStart`
+- [ ] [FO] ordnance (6): `explosionHit`, `explosionShieldHit`, `registerTargetHit`, `explosionSprite`, `explosionDuration`, `explosionSizeFactor`
+- [ ] [A1] game object (3): `keymapLabel`, `decommissionValue`, `mapColor`
+- [ ] [A1 A2] game object (12): `avoidanceClass`, `weldingRadius`, `aiName`, `mapIcon`, `distanceBelowGrid`, `mapSize`, `mapSprite`, `moveBelowCombatArea`, `collisionRadius`, `shieldPad`, `weldingSpeed`, `weldingSpriteName`
+- [ ] [A2] game object (5): `hotkeyLabel`, `ambientMinimumFactor`, `ambientMaximumFactor`, `directorRadiusScale`, `Odf_Names`
+- [ ] [A1 A2 FO] game object (2): `lightFalloffRange`, `lightFalloffStart`
+- [ ] [FO] game object (9): `extraWeaponHardpoints`, `clearsFog`, `ignoreInterface`, `selectHighlight`, `ignoredAsTarget`, `priorityBuild`, `curSpecialEnergy`, `hullTooltip`, `renderIgnoreCameraDistance`
+- [ ] [A1 A2] mine (3): `omegaTurn`, `shotAccel`, `detectRadius`
+- [ ] [A2] mine (1): `canAttackStations`
+- [ ] [A1 A2] missile (2): `omegaTurn`, `seekTime`
+- [ ] [A1 A2] cannon (3): `maxShots`, `minimumShotInterval`, `saveFire`
+- [ ] [A2 FO] cannon (1): `eventFire`
+- [ ] [FO] cannon (15): `shotCycleResetTime`, `saveFireCyclePoint`, `usePrimaryTarget`, `baseTargets`, `hitMode`, `targetLoop`, `autoTargetClosest`, `hitCloaked`, `HardpointShift`, `maxExtraTargets`, `hitInvalid`, `targetSelf`, `targetTerrainOnly`, `forceAudioVisual`, `alwaysDeductValues`
+- [ ] [A2] producer (1): `alert`
+- [ ] [A1 A2] phaser (1): `flareSprite`
+- [ ] [A2] phaser (1): `flareRadiusMultiplier`
+- [ ] [FO] custom odfload (1): `XPlevel`
+- [ ] [FO] replace weapon (29): `replacementMaintainOrders`, `replacementCreationType`, `replacementRegisterAsNew`, `replacementkeepName`, `replacementKeepOwner`, `transferStats`, `replacementEvent`, `selectMode`, `isToggledOn`, `replacementDontRemoveFootprint`, `replacementInstantCycle`, `ignoreTechTree`, `replacementResetSpecialEnergy`, `concurrentChilds`, `replacementResetCrew`, `replacementFindOpenSpot`, `warpIn`, `warpInSpeed`, `replacementEnemyOfAll`, `replacementAnimate`, `replacementFractionSOD`, `transferExtraWeapons`, `ignoreSameClass`, `replacementUseLabelAsClass`, `requiredBiomatter`, `requiredCrew`, `requiredDilithium`, `requiredLatinum`, `requiredMetal`
+- [ ] [A1 A2] toggle weapon (1): `needTarget`
+- [ ] [FO] uni ordnance (32): `affectedSystems`, `damageMode`, `disableWeaponsPercent`, `disableWeaponsTime`, `extraWeapon`, `extraWeaponPercent`, `extraWeaponTime`, `disableEnginesPercent`, `disableEnginesTime`, `disableSensorsPercent`, `disableSensorsTime`, `disableLifeSupportPercent`, `disableLifeSupportTime`, `boardingPercent`, `boardingRate`, `boardingTime`, `drainSpecialEnergyPercent`, `drainSpecialEnergyRate`, `drainSpecialEnergyTime`, `boardingCrewSubtract`, `disableShieldsPercent`, `disableShieldsTime`, `drainCrewPercent`, `drainCrewRate`, `drainCrewTime`, `drainHullPercent`, `drainHullRate`, `drainHullTime`, `drainShieldPercent`, `drainShieldRate`, `drainShieldTime`, `extraWeaponTimerReset`
+- [ ] [A1] race (4): `displayName`, `officerUpgradeODF`, `officerName`, `officerOperate`
+- [ ] [A1 A2] race (6): `weaponRed`, `weaponYellow`, `retreatStrength`, `officerRes`, `officerTooltip`, `officerVerboseTooltip`
+- [ ] [A2] race (11): `creationLabel`, `insufficientOfficersEvent`, `recycleDilithiumFraction`, `recycledLabel`, `recycleMetalFraction`, `atmosphereTint`, `canPlayCollectLatinum`, `affectedByPsionicInsanity`, `canPlayCaptureTheFlag`, `canPlayColonizePlanets`, `canTrade`
+- [ ] [FO] race (17): `allowGiveBiomatter`, `allowGiveCrew`, `allowGiveDilithium`, `allowGiveLatinum`, `allowGiveMetal`, `canGainXP`, `AIFreightersPerMoon`, `giveToOtherRaceBiomatterRatio`, `giveToOtherRaceCrewRatio`, `giveToOtherRaceDilithiumRatio`, `giveToOtherRaceLatinumRatio`, `giveToOtherRaceMetalRatio`, `usesBiomatter`, `usesCrew`, `usesDilithium`, `usesLatinum`, `usesMetal`
+- [ ] [A1 A2] holding beam (6): `lengthScale`, `radiusScale`, `boardingDelay`, `boardingInterval`, `boardingSize`, `targetRange`
+- [ ] [A1] mining station (1): `dockingBuffer`
+- [ ] [A1 A2] mining station (1): `freighterName`
+- [ ] [A2] mining station (1): `checkValidResourceInterval`
+- [ ] [A2] smooth (8): `backwardAccel`, `pitchAlpha`, `pitchOmega`, `rollCoupling`, `pitchAlphaFractionAtRest`, `pitchOmegaFractionAtRest`, `pitchDefault`, `pitchDefaultSpeed`
+- [ ] [A1 A2] fireball explosion (5): `Length`, `dbName`, `shockwave`, `shockwaveDelay`, `shockwaveMinimum`
+- [ ] [A2] fireball explosion (1): `blameTheShooter`
+- [ ] [A1 A2] nebula (19): `blue_glow_range`, `green_glow_range`, `one_in_n_chance_of_light_source`, `red_glow_range`, `damageValue`, `min_speed_change`, `speed_change_period_divisor`, `speed_change_range`, `disableCloak`, `disableCrew`, `disableShields`, `hideContents`, `craft_speed_coefficient`, `craft_speed_limit`, `regenValue`, `repairValue`, `clearEffects`, `damageCrewModifier`, `damageHullModifier`
+- [ ] [A2] nebula (3): `canWeBuildInHere`, `nebulaType`, `craft_max_speed_fraction`
+- [ ] [A1] shipyard (1): `dockingBuffer`
+- [ ] [A1 A2] shipyard (1): `buildAnimation`
+- [ ] [A2] shipyard (7): `decommissionFacility`, `repairAnimation`, `alwaysRecomputeRallyPoint`, `dilithiumRecyclingFraction`, `metalRecyclingFraction`, `recycleExchangeRate`, `fix`
+- [ ] [FO] shipyard (1): `alliedRepairUpgrade`
+- [ ] [A1 A2] tractor beam (5): `lengthScale`, `radiusScale`, `targetRange`, `omegaType`, `targetSpeed`
+- [ ] [A1 A2] utritium beam (3): `objectName`, `scaleCount`, `scaleValue`
+- [ ] [A1 A2] tech assim beam (3): `lengthScale`, `radiusScale`, `targetRange`
+- [ ] [A2] tech assim beam (1): `assimilationTime`
+- [ ] [A1 A2] resource extraction beam (3): `lengthScale`, `radiusScale`, `drainRate`
+- [ ] [A2] resource extraction beam (1): `conversionRate`
+- [ ] [A1 A2] borg bore (3): `lengthScale`, `radiusScale`, `attackRange`
+- [ ] [A1 A2] research pod (1): `isUpgrade`
+- [ ] [A2] research pod (4): `isShipUpgrade`, `upgradeLevel`, `upgradeMultiplier`, `upgradeSystem`
+- [ ] [FO] research pod (1): `isResearchedByYard`
+- [ ] [A1 A2] mining beam (2): `lengthScale`, `radiusScale`
+- [ ] [A1 A2] holo generator (2): `lengthScale`, `radiusScale`
+- [ ] [A1 A2] shield disruptor (2): `lengthScale`, `radiusScale`
+- [ ] [A1 A2] edit menu (1): `forceToNeutral`
+- [ ] [A2] edit menu (3): `menuTitle`, `item%d`, `menuName%d`
+- [ ] [A1 A2] artillery (2): `objectName`, `blastRadius`
+- [ ] [A1 A2] wormhole (13): `Rotation`, `ClosedScale`, `AnimationTime`, `DisableTimer`, `MaxScaleFactor`, `MaxSpeedFactor`, `OpenScale`, `ScaleEffectRange`, `SpeedEffectRange`, `openSound`, `closeSound`, `AnimationRadius`, `TransportRadius`
+- [ ] [A2] wormhole (1): `expireOnClose`
+- [ ] [A1 A2] worm hole (13): `Rotation`, `ClosedScale`, `AnimationTime`, `DisableTimer`, `MaxScaleFactor`, `MaxSpeedFactor`, `OpenScale`, `ScaleEffectRange`, `SpeedEffectRange`, `openSound`, `closeSound`, `AnimationRadius`, `TransportRadius`
+- [ ] [A1] hover craft (15): `maxVerticalSpeed`, `shp_pitchAngleCoeff`, `shp_pitchVelocCoeff`, `shp_verticalPosCoeff`, `shp_verticalVelocCoeff`, `sp_pitchVelocCoeff`, `spl_lvelocAngleCoeff`, `spl_pitchAngleCoeff`, `spl_pitchVelocCoeff`, `spl_pvelocAngleCoeff`, `spl_verticalVelocCoeff`, `sy_rollAngleCoeff`, `sy_rollVelocCoeff`, `sy_velocAngleCoeff`, `maxForwardSpeed`
+- [ ] [A1 A2] hover craft (7): `maxRoll`, `leftRightInertia`, `maxPitch`, `pitchRotationSpeed`, `sp_pitchAngleCoeff`, `sp_velocAngleCoeff`, `upDownInertia`
+- [ ] [A1 A2] ion storm torpedo (1): `objectName`
+- [ ] [A1 A2] transient rift (1): `objectName`
+- [ ] [A1 A2] area effect cannon (4): `hitCondition`, `waveName`, `maxTargets`, `waveEffect`
+- [ ] [A2] area effect cannon (1): `waveRange`
+- [ ] [A1] micro organism (2): `specialEnergyDelay`, `specialEnergyDrainRate`
+- [ ] [A1 A2] micro organism (2): `particleArt`, `drainRate`
+- [ ] [A2] micro organism (2): `affectedSystem`, `DrainTime`
+- [ ] [A1 A2] shockwave explosion (2): `fadeFactor`, `radiusFactor`
+- [ ] [A1 A2] area effect missile (2): `hitCondition`, `maxTargets`
+- [ ] [A1 A2] hover (7): `maxRoll`, `leftRightInertia`, `maxPitch`, `pitchRotationSpeed`, `sp_pitchAngleCoeff`, `sp_velocAngleCoeff`, `upDownInertia`
+- [ ] [A1 A2] death chant (6): `SpeedModifier`, `DamageModifier`, `FireModifier`, `HitModifier`, `RepairModifier`, `TurnModifier`
+- [ ] [A1 A2] plasma overdrive (6): `SpeedModifier`, `DamageModifier`, `FireModifier`, `HitModifier`, `RepairModifier`, `TurnModifier`
+- [ ] [A1 A2] nanites (7): `rollRate`, `effectTexture`, `maxTime`, `minTime`, `movementSpeed`, `startReturnTime`, `AIeffectTime`
+- [ ] [A2] nanites (1): `wphoton`
+- [ ] [A2] technology tree (1): `isShipUpgrade`
+- [ ] [A1 A2] explosion (1): `explSound`
+- [ ] [A2] explosion (1): `blameTheExploder`
+- [ ] [A1 A2] ion storm (4): `damageValue`, `Rotation`, `ScalingCount`, `ScalingStepSize`
+- [ ] [A1 A2] utritium ball (4): `damageValue`, `Rotation`, `ScalingCount`, `ScalingStepSize`
+- [ ] [A2] build screen (27): `betweenPlayerSpace`, `bottomY`, `buildArrowDownRect`, `buildArrowUpRect`, `buildScrollAreaRect`, `buildTopY`, `builtHeaderRect`, `builtHeaderX`, `classHeaderRect`, `classHeaderX`, `lostHeaderRect`, `lostHeaderX`, `SCROLL_DOWN_BUTTON_DOWN`, `SCROLL_DOWN_BUTTON_NORMAL`, `SCROLL_DOWN_BUTTON_OVER`, `SCROLL_TAB_HEIGHT`, `SCROLL_TAB_NORMAL`, `SCROLL_TAB_WIDTH`, `SCROLL_UP_BUTTON_DOWN`, `SCROLL_UP_BUTTON_NORMAL`, `SCROLL_UP_BUTTON_OVER`, `sortButton`, `sortButtonH`, `sortButtonRect`, `stardateHeaderRect`, `stardateHeaderX`, `ship1ClassData`
+- [ ] [A1 A2] research station (1): `podHardpoints`
+- [ ] [A2] research station (2): `reserveItem%d`, `secondaryBuildItem%d`
+- [ ] [A2] command info (6): `needsTarget`, `displayTrade`, `isBuy`, `sourceNot`, `sourceTypeOr`, `isToggle`
+- [ ] [A1] freighter (1): `maxScrap`
+- [ ] [A2] freighter (5): `explosionUnitsPerLatinum`, `latinum_spray_emitter`, `speedFractionCarryingLatinum`, `latinum_spray_hardpoint`, `weaponIndexForShips`
+- [ ] [FO] utility weapon (2): `isToggledOn`, `linkWeapon`
+- [ ] [A1] control panel (1): `buildName`
+- [ ] [A1 A2] control panel (1): `forceToNeutral`
+- [ ] [A2] battles screen (21): `barHeight`, `battleAlliedHeaderRect`, `battleEnemyHeaderRect`, `battleFleetsHeaderRect`, `battlesArrowDownRect`, `battlesArrowUpRect`, `battlesScrollAreaRect`, `battleTitleHeaderRect`, `battleTopY`, `bottomY`, `individualBarThin`, `SCROLL_DOWN_BUTTON_DOWN`, `SCROLL_DOWN_BUTTON_NORMAL`, `SCROLL_DOWN_BUTTON_OVER`, `SCROLL_TAB_HEIGHT`, `SCROLL_TAB_NORMAL`, `SCROLL_TAB_WIDTH`, `SCROLL_UP_BUTTON_DOWN`, `SCROLL_UP_BUTTON_NORMAL`, `SCROLL_UP_BUTTON_OVER`, `battle1Data`
+- [ ] [A2] ships screen (22): `barHeight`, `bottomY`, `filterButton`, `filterButtonH`, `filterButtonSpace`, `individualBarThin`, `SCROLL_DOWN_BUTTON_DOWN`, `SCROLL_DOWN_BUTTON_NORMAL`, `SCROLL_DOWN_BUTTON_OVER`, `SCROLL_TAB_HEIGHT`, `SCROLL_TAB_NORMAL`, `SCROLL_TAB_WIDTH`, `SCROLL_UP_BUTTON_DOWN`, `SCROLL_UP_BUTTON_NORMAL`, `SCROLL_UP_BUTTON_OVER`, `shipFilterButtonRect`, `shipsArrowDownRect`, `shipsArrowUpRect`, `shipsScrollAreaRect`, `topBarY`, `ship1Data`, `ship1Image`
+- [ ] [A2] beam (1): `travelTimeFraction`
+- [ ] [A1 A2] wormhole generator (3): `drainRate`, `wormholeID`, `lifetime`
+- [ ] [A2] ranged object affector (9): `affectorType`, `timeBetween`, `wave_Effect`, `cycleColorBlue`, `cycleColorGreen`, `cycleColorRed`, `damageFactor`, `rangeFactor`, `percentReduction`
+- [ ] [A1 A2] computer override (4): `particleArt`, `ownerSystemDuration`, `targetSystemDuration`, `timeBetweenSystems`
+- [ ] [A1 A2] fusing weapon (1): `initialDistance`
+- [ ] [A2] fusing weapon (6): `finalDistance`, `fusedClass`, `eventCancel`, `fusingMetalCost`, `saucerFormation`, `disbandTime`
+- [ ] [A2 FO] fusing weapon (1): `eventFire`
+- [ ] [A1 A2] detect cloak (2): `detectClass`, `detectTimer`
+- [ ] [A2 FO] repair ship (1): `repairRate`
+- [ ] [FO] repair ship (1): `repairsShields`
+- [ ] [A1 A2] klingon commando team (5): `fallDuration`, `fallRate`, `rotationRate`, `stayDuration`, `timeDelay`
+- [ ] [A1] starbase (1): `maximumUpgrades`
+- [ ] [A1 A2] starbase (1): `officerGain`
+- [ ] [A1 A2] regeneration weapon (1): `regenModifier`
+- [ ] [A1 A2] psionic disruption (1): `particleArt`
+- [ ] [A2] admiral's log dialog (16): `adLogBG`, `betweenTabSpace`, `buttonTextColor`, `dialogWinRect`, `doneBmp`, `doneBmpH`, `doneButtonRect`, `generalTextColor`, `interPlayerHeight`, `playerButton`, `playerButtonH`, `saveBmp`, `saveBmpH`, `saveButtonRect`, `playerButtonRect1`, `tabRect1`
+- [ ] [A1 A2] black hole (5): `Rotation`, `ScaleSize`, `EventRadius`, `GravityRadius`, `GravityForce`
+- [ ] [A1 A2] shield inversion (1): `drainRate`
+- [ ] [A1 A2] flux wave (6): `expansionTime`, `initialScale`, `maxScale`, `retractionTime`, `timeAtMaxSize`, `visualFactor`
+- [ ] [A2] flux wave (2): `propSpeed`, `spinRate`
+- [ ] [A1 A2] black hole creator (6): `expansionTime`, `initialScale`, `maxScale`, `retractionTime`, `timeAtMaxSize`, `visualFactor`
+- [ ] [A2] black hole creator (1): `centerEffectOnTarget`
+- [ ] [A1 A2] repulsion wave (9): `repulsionForce`, `waveArc`, `amplitude`, `frequency`, `segments`, `spreadSpeed`, `waveLength`, `waveSpeed`, `explosionRadius`
+- [ ] [A1 A2] cloaking device (3): `stepSize`, `transparency`, `unsafeCloakDistance`
+- [ ] [FO] cloaking device (4): `decloakShieldDelay`, `disableShield`, `initialCloak`, `phaseCloak`
+- [ ] [A1 A2] officer display (2): `officerTooltip`, `officerVerboseTooltip`
+- [ ] [A1 A2] planet (1): `Rotation`
+- [ ] [A2] planet (3): `groundDistance`, `turbulence`, `relativeAtmosphereSpeed`
+- [ ] [A1 A2] probe torpedo (2): `detectCloak`, `periodScan`
+- [ ] [A1 A2] upgrade (1): `officerGain`
+- [ ] [A1 A2] officer upgrade (1): `officerGain`
+- [ ] [A1 A2] transwarp drive (2): `initialDistance`, `ScaleSize`
+- [ ] [A1 A2] shockwave cannon (3): `repulsionForce`, `disableTime`, `waveArc`
+- [ ] [A1 A2] background planet (1): `Rotation`
+- [ ] [FO] load bar (17): `loadbarColorEnd`, `loadbarColorStart`, `loadbarHeight`, `loadbarInvert`, `loadbarPositionX`, `loadbarPositionY`, `loadbarTransparencyEnd`, `loadbarVertical`, `loadbarWidth`, `numberOfTips`, `tipPositionX`, `tipPositionY`, `tipSpriteSize`, `tipSpriteX`, `tipSpriteY`, `tipWidth`, `loadbarTransparencyStart`
+- [ ] [A1 A2] chain pulsar (3): `chainDamageModifier`, `chainRadius`, `maxHits`
+- [ ] [A2 FO] agent saboteur (1): `eventFire`
+- [ ] [FO] agent saboteur (2): `destructionProbability`, `ownerGainsXP`
+- [ ] [FO] rumble explosion (5): `rootNode`, `createObject`, `rumbleArea`, `rumbleDuration`, `rumbleStrength`
+- [ ] [A2] economy screen (8): `betweenPlayerSpace`, `crewHeaderRect`, `dilithiumHeaderRect`, `latinumHeaderRect`, `metalHeaderRect`, `totalEconHeaderRect`, `tradeHeaderRect`, `player1DilData`
+- [ ] [A2] timeline screen (8): `timeLineArea`, `timeLineBattlesArea`, `timelineBattlesIcon`, `timeLineBattlesIconArea`, `timeLineTextArea`, `timeLinePlanetArea`, `timelinePlanetIcon`, `timeLinePlanetIconArea`
+- [ ] [A2] score screen (7): `betweenPlayerSpace`, `economyHeaderRect`, `gamePtsHeaderRect`, `militaryHeaderRect`, `scienceHeaderRect`, `totalScoreHeaderRect`, `player1ScoreData`
+- [ ] [A2] tally screen (7): `tallyBuiltHeaderRect`, `tallyClassHeaderRect`, `tallyDestroyedHeaderRect`, `tallyEffectivenessRect`, `tallyKillsHeaderRet`, `tallyLostHeaderRect`, `tally1Data`
+- [ ] [A1 A2] speed boost (1): `SpeedModifier`
+- [ ] [A1 A2] ghost (3): `ghostAmbient`, `ghostDiffuse`, `ghostSpecular`
+- [ ] [A2] ghost (1): `ghostTeamColorFactor`
+- [ ] [A1 A2] quantum effect (1): `wormholeID`
+- [ ] [A2] quantum effect (5): `deltaRadius`, `maxRadius`, `minRadius`, `numSections`, `shipID`
+- [ ] [A2 FO] repair weapon (1): `eventFire`
+- [ ] [FO] repair weapon (1): `standbyTime`
+- [ ] [A2 FO] sleeper agent (1): `eventFire`
+- [ ] [FO] sleeper agent (1): `ownerGainsXP`
+- [ ] [FO] module conf (1): `numberOfModules`
+- [ ] [FO] build yard (2): `moduleConf`, `vanishEffect`
+- [ ] [A2] military screen (6): `betweenPlayerSpace`, `shipsHeaderRect`, `stationsHeaderRect`, `totalMilHeaderRect`, `planetsHeaderRect`, `player1ShipData`
+- [ ] [A2 FO] separating weapon (1): `eventFire`
+- [ ] [A1] instant 4X mission (4): `hisPilots`, `hisScrap`, `myPilots`, `myScrap`
+- [ ] [A1 A2] repulsion field (1): `repulsionForce`
+- [ ] [A2] trading station (4): `cargoTransferRate`, `percentTradeProfit`, `cargoKey%d`, `cargoValue%d`
+- [ ] [A2] bio pulse (8): `battleOrdnance`, `chargeDelay`, `damageRate`, `formationBehind`, `formationRadius`, `frigateOrdnance`, `mainDelay`, `specialEnergyLossRate`
+- [ ] [FO] detector weapon (4): `MarkColor`, `MarkRadius`, `MarkShrink`, `MarkTime`
+- [ ] [FO] cloaking device control (3): `disableShield`, `initialCloak`, `phaseCloak`
+- [ ] [A1 A2] standard button (3): `colorBorderDisabled`, `colorBorderMouseOver`, `colorBorderNormal`
+- [ ] [A1 A2] psychonic blast (1): `percentage`
+- [ ] [A1 A2] reflect weapon (2): `reflectBeam`, `reflectMissile`
+- [ ] [A2] reflect weapon (2): `reflectHitOwnerRatio`, `reflectionRatio`
+- [ ] [A1 A2] plasma cannon (1): `disableTime`
+- [ ] [A2] plasma cannon (1): `disableWeapon`
+- [ ] [A2] nebula creator (5): `nebulaID`, `growTime`, `maxSize`, `shrinkTime`, `stableTime`
+- [ ] [FO] ram weapon (1): `successChance`
+- [ ] [A1 A2] asteroid field (1): `repelIfWithin`
+- [ ] [A2] mine array (6): `acceleration`, `destructRadius`, `detectRange`, `returnSpeed`, `slowdownDist`, `accelCont`
+- [ ] [A1 A2] standard component (2): `tooltipDelay`, `verboseTooltipDelay`
+- [ ] [A1 A2] gravity mine (1): `slowPercent`
+- [ ] [A1 A2] omega explosion (2): `topEdgeModifier`, `waveHeight`
+- [ ] [A1 A2] cursor interface (2): `tooltipDelay`, `verboseTooltipDelay`
+- [ ] [A2] accel cannon (2): `MaxCiviliansKilled`, `MaxCrewMembersKilled`
+- [ ] [A2] individual screen (6): `horizontalOverlay`, `verticalOverlay`, `horzOverlayRect_0`, `horzOverlayRect_1`, `vertOverlayRect_0`, `vertOverlayRect_1`
+- [ ] [A1 A2] sensor array (1): `isTranswarpGate`
+- [ ] [FO] fighter (2): `supplyClasses`, `operationRange`
+- [ ] [A1 A2] fed repair team (1): `shieldsReturned`
+- [ ] [A2] cargo ship (1): `m_maxResource`
+- [ ] [A2] planet shield (2): `hitPercent`, `hitPoints`
+- [ ] [A2] popup palette (2): `commandHotkeys`, `controlDefaultCursor`
+- [ ] [A2] colonizing beam (2): `transferAmount`, `transferTime`
+- [ ] [A2] nebula flux (3): `damage_range`, `wave_name`, `wFluxWav`
+- [ ] [A2] nebula generation (1): `nebulaID`
+- [ ] [A1] background object (1): `streamChunkLength`
+- [ ] [A1 A2] background object (1): `minimum3DSounds`
+- [ ] [A2] colony (1): `cleansingWeaponIndex`
+- [ ] [A2] construction rig (2): `animateBees`, `fbee`
+- [ ] [A2] drones (2): `numDrones`, `fbee`
+- [ ] [A2] resource transfer data (1): `conversionRate`
+- [ ] [FO] fed shield emitter (1): `shieldAmount`
+- [ ] [A1] ship display (1): `infoSystem`
+- [ ] [A1] speed rail (1): `speedSingleButtonGap`
+- [ ] [A1] selection display (1): `selectSystem`
+- [ ] [A1] comm display (3): `commBarNumberOfPlayers`, `commIndicatorAnchor`, `commIndicatorWidth`
+- [ ] [A1 A2] target override (4): `segmentLength`, `segmentRadius`, `segmentTexture`, `segmentVariance`
+- [ ] [A1 A2] audio default (1): `minimum3DSounds`
+- [ ] [A2] clairvoyant link (1): `effectDuration`
+- [ ] [A2] tech assim weapon (1): `assignClass%d`
+- [ ] [FO] command info bar (1): `CommandInfoBarButtonDistance`
+- [ ] [FO] fleet ops functions hook (1): `groupTextColor`
+- [ ] [FO] resource weapon (5): `addBiomatterThreshold`, `addCrewThreshold`, `addDilithiumThreshold`, `addLatinumThreshold`, `addMetalThreshold`
+- [ ] [FO] uni beam (1): `missLifetime`
+
+### ODF class labels with no code (82)
+
+Tag = which games ship ODFs of the class. Most-used first.
+
+- [ ] [A1 A2] (25): `detectcloak`, `fireballexplode`, `wormholegen`, `reflectweapon`, `blackholecreator`, `myotron`, `shieldh`, `shieldinv`, `polerontorpedo`, `shockwavecannon`, `override`, `warpcoreoverload`, `omegaexplode`, `manheimeffect`, `ionstorm_tp`, `containbreach`, `fedrepairteam`, `remodulation`, `phasecloakdevice`, `selfdestruct`, `holoemitter`, `grenade`, `klingoncommandoteam`, `repulsionwave`, `posijammer`
+- [ ] [A1 A2 FO] (17): `shockwavexplode`, `regeneration`, `micro`, `plasmacannon`, `minelayer`, `deathchant`, `antimine`, `psychonicblast`, `transwarpconduit`, `transwarpdrive`, `chainpulsar`, `esconverter`, `rfield`, `gravmine`, `nanitesordnance`, `romulanspy`, `temporal`
+- [ ] [A2] (22): `insanity`, `nebcreator`, `resourceextractionbeam`, `separatingweapon`, `transriftweapon`, `speed_boost`, `shield_disruptor`, `targneb`, `biopulse`, `clairvoyance`, `shieldremovingtorpedo`, `fluxwave`, `cvoyantlink`, `tech_assim_beam`, `quantumeffect`, `techassim`, `trans_rift`, `drones_weapon`, `nebgeneration`, `nebulaflux`, `hologen_weapon`, `hologenerator`
+- [ ] [A2 FO] (5): `borgenergyemitter`, `rangedobjectaffector`, `fedshieldemitter`, `fusingweapon`, `psidisrupt`
+- [ ] [FO] (10): `unitorpedo`, `rumbleexplode`, `probetorpedo`, `ramweapon`, `agentsaboteur`, `cloakdetector`, `detectorweapon`, `cloakingdevicecontrol`, `repairweapon`, `sleeperagent`
+- [ ] [A1 (executable only, no stock ODF)] (3): `plasmaoverdrive`, `shieldgendisruptor`, `targetov`
+
+### Header config names (`*.h`) the originals read
+
+- [ ] [A1] `ART_CFG.h` (16 of 18): `SMOOTH_CAMERA_TIME`, `MOVIE_CAMERA`, `CAMERA_MIN_ZOOM`, `CAMERA_MAX_ZOOM`, `ST3D_CHUNK_MANAGER_MAX_CHUNKS`, `ST3D_CHUNK_DENSITY`, `ST3D_CHUNK_MAX_LIFETIME`, `ST3D_CHUNK_MAX_ANGULAR_VELOCITY`, `ST3D_CHUNK_MAX_VELOCITY`, `STARFIELD_GEOMETRY_NAME`, `STARFIELD_GEOMETRY_SCALE`, `CINEMATIC_NEAR_CLIPPING_PLANE`, `CINEMATIC_FAR_CLIPPING_PLANE`, `STAR_FAR_CLIP_PLANE`, `GRID_FAR_CLIP_PLANE`, `STARFIELD_BACKGROUND_STAR_NUM_REPRESENTATIONS`
+- [ ] [A1] `game_cfg.h` (4 of 29): `MISSIONS_DIRECTORY`, `AI_DIRECTORY`, `WATCH_LOCATION`, `WATCH_VERSION`
+- [ ] [A1] `RTS_CFG.h` (114 of 141): `OVERVIEW_MAX_ZOOM`, `OVERVIEW_INIT_ZOOM`, `OVERVIEW_MIN_ZOOM`, `OVERVIEW_MAX_HEIGHT`, `OVERVIEW_MIN_HEIGHT`, `SCROLL_COEFFICIENT`, `FASTSCROLL_COEFFICIENT`, `ZOOM_SCROLL_COEFFICIENT`, `ROTATION_SCROLL_COEFFICIENT`, `CINEMATIC_ROTATION_COEFFECIENT`, `KEYBOARD_SCROLL_RATE`, `SCROLL_ACCELERATION`, `TIME_SCALE`, `MAX_SCROLL_SPEED`, `INITIAL_SCROLL_SPEED`, `FAST_SCROLL_ACCELERATION`, `FAST_TIME_SCALE`, `FAST_MAX_SCROLL_SPEED`, `FAST_INITIAL_SCROLL_SPEED`, `USE_LIGHTING_FOR_SELECTION`, `SELECTION_RECTANGLE_COMMIT_AREA`, `RESOURCE_PANEL_PRIORITY`, `CINEMATIC_PANEL_PRIORITY`, `CONTROL_PANEL_PRIORITY`, `CURSOR_SIMULATE_PRIORITY`, `CURSOR_RENDER_PRIORITY`, `RADAR_PANEL_PRIORITY`, `OVERVIEW_PANEL_PRIORITY`, `VIDEO_PANEL_PRIORITY`, `SELECTION_PRIORITY`, `INFO_PANEL_PRIORITY`, `SPEED_PANEL_PRIORITY`, `OBJECTIVES_PANEL_PRIORITY`, `SNAP_TO_DISTANCE`, `UNHIDE_DISTANCE`, `SCROLL_INTERVAL`, `DEFAULT_CHAT_TEXT_HEIGHT`, `GRID_FX_GROWTH_RATE`, `GRID_FX_MAX_SIZE`, `GRID_FX_MIN_SIZE`, `GRID_FX_GROWTH_INTERVAL`, `GRID_FX_ROTATION_SPEED`, `GRID_FX_MIN_SEGMENTS`, `GRID_FX_MAX_SEGMENTS`, `SHOW_QUADTREE`, `SHOW_FOOTPRINTS_IN_EDIT_MODE`, `DEBUG_VECTORS_3D`, `DEBUG_SHOW_AI_PATHS`, `DEBUG_SHOW_AI_PATHS_RUNNING`, `DEBUG_SHOW_CURVES`, `DEBUG_SHOW_OBJ_POSTS`, `DEBUG_SHOW_OBJ_POSTS_RUNNING`, `DEBUG_SHOW_LOCAL_BOUNDING_BOX`, `DEBUG_SHOW_OBJECT_BOUNDING_BOX`, `DEBUG_SHOW_LOCAL_BOUNDING_SPHERE`, `DEBUG_SHOW_OBJECT_BOUNDING_SPHERE`, `DEBUG_SHOW_BOUNDING_SQUARE`, `DEBUG_DRAW`, `SELECTION_CIRCLE_VERTICAL_OFFSET`, `SELECTION_CIRCLE_SIZE_MULTIPLIER`, `EASY_SPECIAL_WEAPON_FIRE_MODIFIER`, `DEFAULT_SPECIAL_WEAPON_FIRE_MODIFIER`, `HARD_SPECIAL_WEAPON_FIRE_MODIFIER`, `HARD_AI_COST_AND_SPEED_HANDICAP`, `MEDIUM_AI_COST_AND_SPEED_HANDICAP`, `HARD_AI_CLOAK_PERCENT`, `MEDIUM_AI_CLOAK_PERCENT`, `EASY_AI_CLOAK_PERCENT`, `cfg_MIN_MOVE_DISTANCE_FOR_CLOAK`, `EASY_DAMAGE`, `HARD_DAMAGE`, `ST3D_NUM_ZSORT_BUCKETS`, `ST3D_SHOW_LIGHT_SOURCE_INFO`, `ST3D_PRELOAD_TEXTURES`, `USE_SYSTEM_HITPOINTS`, `SYSTEM_HITPOINTS_BONUS`, `DEMAND_LOAD_ODFS`, `FRAMERATE_DISPLAY`, `MORASS_SIZE`, `MORASS_SHIP_LIMIT`, `MORASS_FRIENDS_LIMIT`, `CIRCLE_IN_PLACE_DURING_COMBAT`, `CIRCLE_RADIUS_DIVISOR`, `MAX_PREVENTION_ROTATION`, `CANNOT_PATH_INTO_COST`, `PERFORM_RUBBER_BANDING`, `FORMATIONS_RELATIVE_TO_SHIP`, `COMBAT_SLOWDOWN`, `FORMATION_LEADER_SLOWDOWN`, `ASTEROID_BELT_PATHING_COST`, `ASTEROID_BELT_PATHING_DISTANCE`, `BLACKHOLE_PATHING_COST`, `BLACKHOLE_PATHING_SAFETY_COEFFICIENT`, `DEFAULT_TO_FORMATION_MOVE`, `AI_GRID_SIZE`, `EASY_AI`, `MEDIUM_AI`, `ANCHOR_RADIUS`, `ANCHOR_PURSUIT_FORCE`, `CENTER_OF_COMBAT_PERSISTENCE_CUTOFF`, `DOGFIGHT_RANGE`, `FORMATION_SPACING`, `OLD_AVOIDANCE_FORCE_WEIGHT`, `COLLISION_LOOK_AHEAD_TIME`, `COLLISION_SAFETY_MARGIN`, `Y_REPULSION`, `PATH_POINT_RADIUS_SQUARED`, `SCRIPTED_ATTACK_SPEED_UP`, `SCRIPTED_ATTACK_TARGET_SLOW_DOWN`, `MAP_EDGE_EPSILON`, `MAP_EDGE_BUFFER`, `DECONSTRUCT_PERCENT_TIME`, `BEAM_MISS_LIFETIME`, `NORMAL_WEAPON_TEAM_COLOR`
+- [ ] [A1] names read that no stock header declares (26 of 27): `AVOIDANCE_USING_RANGE_SEARCH`, `CLIFF_REPULSION_COEFFICIENT`, `COLLISION_CHEAP_2D_COLLIDE`, `COLLISION_CONFIG_FILE_REVISION`, `COLLISION_DIRECT_REPULSION`, `COLLISION_FULL_POTENTIAL_FIELD`, `COLLISION_LATERAL_REPULSION`, `COLLISION_MARTIN_REPULSION`, `COLLISION_REAL_COLLISIONS`, `death_map_resolution`, `DEFAULT_REPULSION_CUTOFF`, `DISTANCE_OF_INFLUENCE`, `empire_map_resolution`, `exploration_map_resolution`, `EXTRA_GOAL_ATTRACTION`, `EXTRA_STUCK_TIME`, `goal_map_resolution`, `hunt_map_resolution`, `LATERAL_AVOIDANCE_MULTIPLIER`, `LATERAL_DANGER_WIDTH`, `output_file_name`, `relaxation_cycles`, `REPULSIVE_COEFFICIENT`, `start_up_script`, `SWITCH_TO_NEXT_POINT_DISTANCE`, `threat_map_resolution`
+- [ ] [A2] `ADLOG_CFG.h` (28 of 28): `cfgShipsKilled`, `cfgShipsLost`, `cfgShipsBuilt`, `cfgStationsKilled`, `cfgStationsLost`, `cfgStationsBuilt`, `cfgPlanetsColonized`, `cfgPlanetsLost`, `cfgDilithiumGathered`, `cfgDilithiumSpent`, `cfgDilithiumBought`, `cfgDilithiumSold`, `cfgLatinumGathered`, `cfgLatinumSpent`, `cfgMetalGathered`, `cfgMetalSpent`, `cfgMetalBought`, `cfgMetalSold`, `cfgBiomatterGathered`, `cfgBiomatterSpent`, `cfgCrewEnlisted`, `cfgCrewAssigned`, `cfgCrewLost`, `cfgTradeStations`, `cfgCargoShips`, `cfgShipsSent`, `cfgShipsReceived`, `cfgTradeProfit`
+- [ ] [A2] `ART_CFG.h` (21 of 25): `SCROLL_INTERVAL`, `DEFAULT_CHAT_TEXT_HEIGHT`, `ST3D_CHUNK_MANAGER_MAX_CHUNKS`, `ST3D_CHUNK_SIZE_FACTOR`, `ST3D_CHUNK_LIFETIME_AVG`, `ST3D_CHUNK_LIFETIME_DEVIATION`, `ST3D_CHUNK_MAX_ANGULAR_VELOCITY`, `ST3D_CHUNK_MAX_VELOCITY`, `ST3D_NUM_ZSORT_BUCKETS`, `ST3D_SHOW_LIGHT_SOURCE_INFO`, `ST3D_PRELOAD_TEXTURES`, `cfgST3D_ALWAYS_FLUSH_D3D_BUFFERS`, `STARFIELD_GEOMETRY_NAME`, `STARFIELD_ODF_NAME`, `CINEMATIC_NEAR_CLIPPING_PLANE`, `CINEMATIC_FAR_CLIPPING_PLANE`, `STAR_FAR_CLIP_PLANE`, `STARFIELD_GEOMETRY_SCALE`, `cfgSTARFIELD_NUM_BSTAR`, `cfgSTARFIELD_NUM_MSTAR`, `cfgSTARFIELD_NUM_CSTAR`
+- [ ] [A2] `game_cfg.h` (2 of 2): `MISSIONS_DIRECTORY`, `AI_DIRECTORY`
+- [ ] [A2] `Network_CFG.h` (1 of 1): `MOTD_ADDRESS`
+- [ ] [A2] `RTS_CFG.h` (131 of 177): `cfg_DEFAULT_TACTICAL_ZOOM`, `OVERVIEW_MAX_HEIGHT`, `OVERVIEW_MIN_HEIGHT`, `SCROLL_COEFFICIENT`, `FASTSCROLL_COEFFICIENT`, `ZOOM_SCROLL_COEFFICIENT`, `ROTATION_SCROLL_COEFFICIENT`, `CINEMATIC_ROTATION_COEFFECIENT`, `KEYBOARD_SCROLL_RATE`, `cfgMOUSE_HOLD_LEVEL`, `SCROLL_ACCELERATION`, `MAX_SCROLL_SPEED`, `INITIAL_SCROLL_SPEED`, `cfgTACTICAL_WHERE_MODE`, `SELECTION_RECTANGLE_COMMIT_AREA`, `cfgPATH_POINT_SELECTION_DISTANCE`, `SNAP_TO_DISTANCE`, `UNHIDE_DISTANCE`, `GRID_FX_GROWTH_RATE`, `GRID_FX_MAX_SIZE`, `GRID_FX_MIN_SIZE`, `GRID_FX_GROWTH_INTERVAL`, `GRID_FX_ROTATION_SPEED`, `SHOW_QUADTREE`, `SHOW_FOOTPRINTS_IN_EDIT_MODE`, `DEBUG_VECTORS_3D`, `DEBUG_SHOW_AI_PATHS`, `DEBUG_SHOW_AI_PATHS_RUNNING`, `DEBUG_SHOW_CURVES`, `DEBUG_SHOW_OBJ_POSTS`, `DEBUG_SHOW_LOCAL_BOUNDING_BOX`, `DEBUG_SHOW_OBJECT_BOUNDING_BOX`, `DEBUG_SHOW_OBJECT_BOUNDING_SPHERE`, `DEBUG_SHOW_BOUNDING_SQUARE`, `DEBUG_DRAW`, `cfgINITIAL_STARDATE`, `cfgSTARDATE_PER_SECOND`, `cfgDEFEND_TIME`, `cfgLATINUM_COLLECT`, `EASY_DAMAGE`, `HARD_DAMAGE`, `EASY_MINING_MODIFIER`, `HARD_MINING_MODIFIER`, `EASY_SPECIAL_WEAPON_FIRE_MODIFIER`, `DEFAULT_SPECIAL_WEAPON_FIRE_MODIFIER`, `HARD_SPECIAL_WEAPON_FIRE_MODIFIER`, `MEDIUM_AI_COST_HANDICAP`, `MEDIUM_AI_SPEED_HANDICAP`, `EASY_AI_COST_HANDICAP`, `EASY_AI_SPEED_HANDICAP`, `HARD_AI_CLOAK_PERCENT`, `MEDIUM_AI_CLOAK_PERCENT`, `EASY_AI_CLOAK_PERCENT`, `cfgRESOURCE_LATINUM_SPACING`, `cfg8472_RESOURCE_DISTANCE`, `cfg8472_RESOURCE_INSIDE_DISTANCE`, `cfgFREIGHTERS_PER_MOON`, `cfgRESOURCE_THREAT_PENALTY_COEFFICIENT`, `cfgPLANET_BASE_BUILD_BUFFER`, `cfg_MIN_MOVE_DISTANCE_FOR_CLOAK`, `SYSTEM_HITPOINTS_BONUS`, `cfgDEMAND_LOAD_ODFS`, `cfgRELOAD_OBJECT_CLASSES`, `cfgFLIP_TO_WINDOWED_ON_ASSERT`, `cfgTACTICAL_GRID_RENDER`, `cfgSTRATEGIC_GRID_RENDER`, `FRAMERATE_DISPLAY`, `cfgMAX_STRATEGIC_VIEW_OBJECT_SCALE`, `cfg_AI_SHOW_GOALS_COUNT`, `CIRCLE_IN_PLACE_DURING_COMBAT`, `CIRCLE_RADIUS_DIVISOR`, `MAX_PREVENTION_ROTATION`, `cfg_WARP_INHIBITION_BUFFER`, `cfg_WARP_INHIBITION_COST`, `cfg_ALMOST_INTRAVERSIBLE`, `PERFORM_RUBBER_BANDING`, `COMBAT_SLOWDOWN`, `FORMATION_LEADER_SLOWDOWN`, `ASTEROID_BELT_PATHING_COST`, `BLACKHOLE_PATHING_COST`, `BLACKHOLE_PATHING_SAFETY_COEFFICIENT`, `cfgDEFAULT_TO_FORMATION_MOVE`, `cfgBLACKHOLE_DEWARP_RADIUS_MULTIPLIER`, `PLANET_MINING_RADIUS_OFFSET`, `AI_GRID_SIZE`, `EASY_AI`, `MEDIUM_AI`, `SKINNY_SHIP_COMBAT_FLOOR`, `SKINNY_SHIP_COMBAT_CEILING`, `DEEP_SPACE_SHIP_COMBAT_FLOOR`, `DEEP_SPACE_SHIP_COMBAT_CEILING`, `ANCHOR_RADIUS`, `ANCHOR_PURSUIT_FORCE`, `CENTER_OF_COMBAT_PERSISTENCE_CUTOFF`, `DOGFIGHT_RANGE`, `cfgDOGFIGHT_RADIUS_MODIFIER`, `cfgCLOVERLEAF_RADIUS_MODIFIER`, `FORMATION_SPACING`, `OLD_AVOIDANCE_FORCE_WEIGHT`, `COLLISION_LOOK_AHEAD_TIME`, `COLLISION_SAFETY_MARGIN`, `Y_REPULSION`, `PATH_POINT_RADIUS_SQUARED`, `MAP_EDGE_EPSILON`, `MAP_EDGE_BUFFER`, `DECONSTRUCT_PERCENT_TIME`, `BEAM_MISS_LIFETIME`, `NORMAL_WEAPON_TEAM_COLOR`, `MAX_LATINUM`, `MAX_METAL`, `MAX_BIOMATTER`, `STARTING_DILITHIUM`, `STARTING_LATINUM`, `STARTING_METAL`, `MP_RESOURCE_MODES`, `DRAW_PIZZA_BOX`, `cfgSCREEN_WIDTH`, `cfgSCREEN_HEIGHT`, `cfgRESIZEABLE_WINDOW`, `cfgTACTICAL_SNAP_DISTANCE`, `cfgFADE_OUT_ENABLED`, `cfgFADE_OUT_MIN_FOV`, `cfgFADE_OUT_MAX_FOV`, `cfgFADE_OUT_MAX`, `cfgWINNERS_BONUS`, `cfgTIMELINE_FREQ`, `cfgTSTATION_TIME_BETWEEN_FERENGI`, `cfgKILL_FERENGI_TIME_ADD`, `cfgBIOMATTER_RECYCLE_FRACTION`, `cfgSOUND_VOICE_SAMPLE`, `cfgSOUND_EFFECTS_SAMPLE`
+- [ ] [A2] names read that no stock header declares (25 of 25): `danger_diminishment`, `death_map_resolution`, `distance_from_goal_match_modifier`, `empire_map_resolution`, `exploration_map_resolution`, `fleetAIRatio`, `formationName`, `goal_map_resolution`, `m_formationID`, `m_shipRadius`, `max_matching_force_ratio`, `min_matching_force_ratio`, `relaxation_coefficient`, `relaxation_cycles`, `resource_biomatter_tendency`, `resource_dilithium_tendency`, `resource_distance_multiplier`, `resource_enemy_penalty`, `resource_health_multiplier`, `resource_lack_multiplier`, `resource_latinum_tendency`, `resource_metal_tendency`, `scoutRandomlyRatio`, `threat_map_resolution`, `threatModifier`
+- [ ] [FO] names the Fleet Operations hook reads (23 of 29): `cfgBUTTON_COLOR`, `cfgCINEMATIC_WINDOW_ENABLED`, `cfgDEFAULT_MAP`, `cfgDEFAULT_MAP_TITLE`, `cfgSOUND_INGAME_CHEAT`, `cfgSOUND_LOADING_MUSIC`, `cfgSOUND_SHELL_MUSIC`, `cfgTEXT_COLOR`, `cfgTITLE_COLOR`, `CRAFT_DEFAULT_ALERT_STATUS`, `DISABLE_HEIGHT_CHANGE`, `GAME_OPTIONS_INFINITE_RESOURCES`, `GAME_OPTIONS_MAP_DEPTH`, `GAME_OPTIONS_MOTHERSHIP`, `GAME_OPTIONS_OFFICERS`, `GAME_OPTIONS_PHYSICS`, `GAME_OPTIONS_RANDOM_MAP`, `GAME_OPTIONS_WARP`, `PRODUCER_BUILD_INFO_WIREFRAME_SIZE`, `SHIELD_EFFECT_DAMAGE_COLORED`, `SHIELD_EFFECT_RESCALE`, `SYSTEM_REPAIR_SPARK_SPRITE`, `TECHTREE_DEFAULT_FILE`
+
+### CFG keys
+
+- [ ] [A1] GUI, cinematic view (10 of 13): `cinematicDefaultCursor`, `cinematicDefaultBackground`, `cinematicBackgroundPanelArea`, `cinematicMinimizedPanelArea`, `cinematicMenuButtonArea`, `cinematicMenuButton`, `cinematicMenuBorder`, `cinematicCommButtonArea`, `cinematicCommButton`, `cinematicCommBorder`
+- [ ] [A1] GUI, control panel (2 of 4): `controlDefaultCursor`, `controlBackgroundPanelArea`
+- [ ] [A1] GUI, map radar (2 of 7): `minimapDefaultCursor`, `minimapBackgroundPanelArea`
+- [ ] [A1] GUI, ship display (13 of 30): `infoDefaultCursor`, `infoBackgroundPanelArea`, `infoSingleBackgroundArea`, `infoSingleCrewTextArea`, `infoSingleOfficerTextArea`, `infoSingleRaceIconBackground`, `infoSingleShieldBarDisableColor`, `infoSingleEnergyBarDisableColor`, `infoSingleConstructionBarDisableColor`, `infoSingleDilithiumBarArea`, `infoSingleDilithiumBar`, `infoSingleDilithiumBarDisableColor`, `infoSingleDilithiumBarColor`
+- [ ] [A1] GUI, energy bar (10 of 10): `infoMultiShieldBarArea`, `infoMultiShieldBar`, `infoMultiShieldBarDisableColor`, `infoMultiEnergyBarArea`, `infoMultiEnergyBar`, `infoMultiEnergyBarDisableColor`, `infoMultiEnergyBarColor`, `infoMultiCrewDotArea`, `infoMultiCrewDot`, `infoMultiWireframeIconArea`
+- [ ] [A1] GUI, other panels (2 of 2): `bridgePanelRect`, `bridgeBlackRect`
+- [ ] [A1] GUI, speed rail (6 of 6): `speedDefaultCursor`, `speedPanelArea`, `speedBackgroundPanelArea`, `speedSingleButtonArea`, `speedSeparatorArea`, `speedSeparator`
+- [ ] [A1] GUI, objectives display (3 of 4): `objectivesDefaultCursor`, `objectivesBlackArea`, `objectivesBackgroundPanelArea`
+- [ ] [A1] GUI, comm display (7 of 7): `commDefaultCursor`, `commPanelArea`, `commBlackArea_0`, `commBlackArea_1`, `commBlackArea_2`, `commBackgroundPanelArea`, `commIndicatorSprite`
+- [ ] [A1] GUI, drop player box (3 of 4): `dropPlayerDefaultCursor`, `dropPlayerBlackArea`, `dropPlayerBackgroundPanelArea`
+- [ ] [A1] GUI, pause box (4 of 4): `pauseGameDefaultCursor`, `pauseGamePanelArea`, `pauseGameBlackArea`, `pauseGameBackgroundPanelArea`
+- [ ] [A1] engine config names, including `collision.cfg` and `cca.cfg` (160 of 216): `output_file_name`, `start_up_script`, `threat_map_resolution`, `relaxation_cycles`, `empire_map_resolution`, `death_map_resolution`, `exploration_map_resolution`, `hunt_map_resolution`, `goal_map_resolution`, `COLLISION_CONFIG_FILE_REVISION`, `AVOIDANCE_USING_RANGE_SEARCH`, `COLLISION_LATERAL_REPULSION`, `COLLISION_FULL_POTENTIAL_FIELD`, `COLLISION_REAL_COLLISIONS`, `COLLISION_DIRECT_REPULSION`, `COLLISION_MARTIN_REPULSION`, `LATERAL_AVOIDANCE_MULTIPLIER`, `LATERAL_DANGER_WIDTH`, `COLLISION_CHEAP_2D_COLLIDE`, `EXTRA_GOAL_ATTRACTION`, `REPULSIVE_COEFFICIENT`, `DEFAULT_REPULSION_CUTOFF`, `DISTANCE_OF_INFLUENCE`, `CLIFF_REPULSION_COEFFICIENT`, `SWITCH_TO_NEXT_POINT_DISTANCE`, `EXTRA_STUCK_TIME`, `MISSIONS_DIRECTORY`, `AI_DIRECTORY`, `WATCH_LOCATION`, `WATCH_VERSION`, `EASY_SPECIAL_WEAPON_FIRE_MODIFIER`, `DEFAULT_SPECIAL_WEAPON_FIRE_MODIFIER`, `HARD_SPECIAL_WEAPON_FIRE_MODIFIER`, `EASY_DAMAGE`, `HARD_DAMAGE`, `HARD_AI_COST_AND_SPEED_HANDICAP`, `MEDIUM_AI_COST_AND_SPEED_HANDICAP`, `HARD_AI_CLOAK_PERCENT`, `MEDIUM_AI_CLOAK_PERCENT`, `EASY_AI_CLOAK_PERCENT`, `cfg_MIN_MOVE_DISTANCE_FOR_CLOAK`, `SCROLL_INTERVAL`, `DEFAULT_CHAT_TEXT_HEIGHT`, `SELECTION_CIRCLE_VERTICAL_OFFSET`, `SELECTION_CIRCLE_SIZE_MULTIPLIER`, `FRAMERATE_DISPLAY`, `SHOW_QUADTREE`, `CANNOT_PATH_INTO_COST`, `PERFORM_RUBBER_BANDING`, `FORMATIONS_RELATIVE_TO_SHIP`, `COMBAT_SLOWDOWN`, `FORMATION_LEADER_SLOWDOWN`, `ASTEROID_BELT_PATHING_COST`, `ASTEROID_BELT_PATHING_DISTANCE`, `BLACKHOLE_PATHING_COST`, `BLACKHOLE_PATHING_SAFETY_COEFFICIENT`, `DEFAULT_TO_FORMATION_MOVE`, `SHOW_FOOTPRINTS_IN_EDIT_MODE`, `MORASS_SIZE`, `MORASS_SHIP_LIMIT`, `MORASS_FRIENDS_LIMIT`, `CIRCLE_IN_PLACE_DURING_COMBAT`, `CIRCLE_RADIUS_DIVISOR`, `GRID_FX_GROWTH_RATE`, `GRID_FX_MAX_SIZE`, `GRID_FX_MIN_SIZE`, `GRID_FX_GROWTH_INTERVAL`, `GRID_FX_ROTATION_SPEED`, `GRID_FX_MIN_SEGMENTS`, `GRID_FX_MAX_SEGMENTS`, `AI_GRID_SIZE`, `EASY_AI`, `MEDIUM_AI`, `OVERVIEW_MIN_ZOOM`, `OVERVIEW_MAX_ZOOM`, `OVERVIEW_INIT_ZOOM`, `OVERVIEW_MAX_HEIGHT`, `OVERVIEW_MIN_HEIGHT`, `RESOURCE_PANEL_PRIORITY`, `CINEMATIC_PANEL_PRIORITY`, `CONTROL_PANEL_PRIORITY`, `CURSOR_SIMULATE_PRIORITY`, `CURSOR_RENDER_PRIORITY`, `RADAR_PANEL_PRIORITY`, `OVERVIEW_PANEL_PRIORITY`, `VIDEO_PANEL_PRIORITY`, `SELECTION_PRIORITY`, `INFO_PANEL_PRIORITY`, `SPEED_PANEL_PRIORITY`, `OBJECTIVES_PANEL_PRIORITY`, `SCROLL_COEFFICIENT`, `FASTSCROLL_COEFFICIENT`, `ZOOM_SCROLL_COEFFICIENT`, `ROTATION_SCROLL_COEFFICIENT`, `CINEMATIC_ROTATION_COEFFECIENT`, `KEYBOARD_SCROLL_RATE`, `SNAP_TO_DISTANCE`, `UNHIDE_DISTANCE`, `USE_LIGHTING_FOR_SELECTION`, `SELECTION_RECTANGLE_COMMIT_AREA`, `SCROLL_ACCELERATION`, `TIME_SCALE`, `MAX_SCROLL_SPEED`, `INITIAL_SCROLL_SPEED`, `FAST_SCROLL_ACCELERATION`, `FAST_TIME_SCALE`, `FAST_MAX_SCROLL_SPEED`, `FAST_INITIAL_SCROLL_SPEED`, `SMOOTH_CAMERA_TIME`, `MOVIE_CAMERA`, `DEBUG_VECTORS_3D`, `DEBUG_SHOW_AI_PATHS`, `DEBUG_SHOW_AI_PATHS_RUNNING`, `DEBUG_SHOW_CURVES`, `DEBUG_SHOW_OBJ_POSTS`, `DEBUG_SHOW_OBJ_POSTS_RUNNING`, `DEBUG_SHOW_LOCAL_BOUNDING_BOX`, `DEBUG_SHOW_OBJECT_BOUNDING_BOX`, `DEBUG_SHOW_LOCAL_BOUNDING_SPHERE`, `DEBUG_SHOW_OBJECT_BOUNDING_SPHERE`, `DEBUG_SHOW_BOUNDING_SQUARE`, `DEBUG_DRAW`, `CAMERA_MIN_ZOOM`, `CAMERA_MAX_ZOOM`, `STARFIELD_GEOMETRY_NAME`, `STARFIELD_GEOMETRY_SCALE`, `CINEMATIC_NEAR_CLIPPING_PLANE`, `CINEMATIC_FAR_CLIPPING_PLANE`, `STAR_FAR_CLIP_PLANE`, `GRID_FAR_CLIP_PLANE`, `STARFIELD_BACKGROUND_STAR_NUM_REPRESENTATIONS`, `DECONSTRUCT_PERCENT_TIME`, `BEAM_MISS_LIFETIME`, `NORMAL_WEAPON_TEAM_COLOR`, `ST3D_NUM_ZSORT_BUCKETS`, `ST3D_SHOW_LIGHT_SOURCE_INFO`, `ST3D_PRELOAD_TEXTURES`, `ST3D_CHUNK_MANAGER_MAX_CHUNKS`, `ST3D_CHUNK_DENSITY`, `ST3D_CHUNK_MAX_LIFETIME`, `ST3D_CHUNK_MAX_ANGULAR_VELOCITY`, `ST3D_CHUNK_MAX_VELOCITY`, `USE_SYSTEM_HITPOINTS`, `SYSTEM_HITPOINTS_BONUS`, `ANCHOR_RADIUS`, `ANCHOR_PURSUIT_FORCE`, `CENTER_OF_COMBAT_PERSISTENCE_CUTOFF`, `FORMATION_SPACING`, `PATH_POINT_RADIUS_SQUARED`, `SCRIPTED_ATTACK_SPEED_UP`, `SCRIPTED_ATTACK_TARGET_SLOW_DOWN`, `DOGFIGHT_RANGE`, `OLD_AVOIDANCE_FORCE_WEIGHT`, `MAX_PREVENTION_ROTATION`, `COLLISION_LOOK_AHEAD_TIME`, `COLLISION_SAFETY_MARGIN`, `Y_REPULSION`, `MAP_EDGE_EPSILON`, `MAP_EDGE_BUFFER`, `DEMAND_LOAD_ODFS`
+- [ ] [A2] button panel (32 of 35): `bb_standard`, `buttonBackgroundPanelArea`, `comm_button`, `commBorder`, `commButton`, `commButtonArea`, `help_button`, `helpBorder`, `helpButton`, `helpButtonArea`, `idle_button`, `idleBorder`, `idleButton`, `idleButtonArea`, `menuBorder`, `menuButtonArea`, `more_button`, `moreBorder`, `moreButton`, `moreButtonArea`, `objectives_button`, `objectivesBorder`, `objectivesButton`, `objectivesButtonArea`, `palette_button`, `paletteBorder`, `paletteButton`, `paletteButtonArea`, `toggle_button`, `toggleBorder`, `toggleButton`, `toggleButtonArea`
+- [ ] [A2] cinematic view (3 of 6): `cinematic_background`, `cinematicBackgroundPanelArea`, `cinematicDefaultBackground`
+- [ ] [A2] comm bar (4 of 4): `comm_standard_marker`, `comm_standard_toggle`, `comm_standard_border`, `comm_standard_button`
+- [ ] [A2] comm display (11 of 11): `comm_standard_toggle`, `comm_standard_border`, `comm_standard_button`, `comm_indicator`, `commBackgroundPanelArea`, `commIndicatorSprite`, `commPanelArea`, `commBackgroundPanel`, `commBarNumberOfPlayers`, `commIndicatorAnchor`, `commIndicatorWidth`
+- [ ] [A2] cursor interface (14 of 15): `frameLocation`, `tooltipBackgroundColor`, `tooltipFrameBottom.0`, `tooltipFrameBottom.1`, `tooltipFrameBottomRect_0`, `tooltipFrameBottomRect_1`, `tooltipFrameLeft`, `tooltipFrameLeftRect`, `tooltipFrameRight`, `tooltipFrameRightRect`, `tooltipFrameTop.0`, `tooltipFrameTop.1`, `tooltipFrameTopRect_0`, `tooltipFrameTopRect_1`
+- [ ] [A2] drop player box (4 of 5): `drop_standard_border`, `drop_standard_button`, `dropPlayerBackgroundPanelArea`, `dropPlayerBlackArea`
+- [ ] [A2] load percentage box (3 of 3): `loadingPlayerBackgroundPanelArea`, `loadingPlayerBlackArea`, `loadingPlayerPanelArea`
+- [ ] [A2] map radar (4 of 18): `bb_standard`, `minimapBackgroundPanelArea`, `minimapShipFilterBorder`, `minimapStationFilterBorder`
+- [ ] [A2] message display (4 of 5): `pause_standard_border`, `pause_standard_button`, `objectivesBackgroundPanelArea`, `objectivesBlackArea`
+- [ ] [A2] objectives display (4 of 5): `pause_standard_border`, `pause_standard_button`, `objectivesBackgroundPanelArea`, `objectivesBlackArea`
+- [ ] [A2] pause box (5 of 5): `pause_standard_border`, `pause_standard_button`, `pauseGameBackgroundPanelArea`, `pauseGameBlackArea`, `pauseGamePanelArea`
+- [ ] [A2] popup palette (4 of 12): `popupPaletteXB`, `popupPaletteYB`, `staticPaletteHeightB`, `staticPaletteWidthB`
+- [ ] [A2] replay panel (23 of 23): `bb_standard`, `fast_button`, `fastBorder`, `fastButton`, `fastButtonArea`, `normal_button`, `normalBorder`, `normalButton`, `normalButtonArea`, `pause_button`, `pauseBorder`, `pauseButton`, `pauseButtonArea`, `replayBackgroundPanelArea`, `replayPanelArea`, `restart_button`, `restartBorder`, `restartButton`, `restartButtonArea`, `slow_button`, `slowBorder`, `slowButton`, `slowButtonArea`
+- [ ] [A2] ship display (33 of 50): `infoBackgroundPanelArea`, `infoBuildCrew`, `infoBuildCrewIcon`, `infoBuildEnergy`, `infoBuildEnergyIcon`, `infoBuildOfficers`, `infoBuildOfficersIcon`, `infoCrewNum`, `infoCrewNumIcon`, `infoEnergy`, `infoEnergyIcon`, `infoLowBackgroundPanelArea`, `infoMiddleBackgroundPanelArea`, `infoOfficers`, `infoOfficersIcon`, `infoProgressBar`, `infoSingleConstructionArea`, `infoSingleConstructionBarDisableColor`, `infoSingleDilithiumBar`, `infoSingleDilithiumBarArea`, `infoSingleDilithiumBarDisableColor`, `infoSinglePlanetMetalBarArea`, `infoSinglePlanetMetalBarColor`, `infoSinglePlanetMetalBarDisableColor`, `infoSinglePlanetTeamTextArea`, `infoSingleRaceIconBackground`, `infoSingleShieldBarDisableColor`, `large_construction_bar`, `large_dilithium_bar`, `large_metal_bar`, `large_shield_bar`, `race_icon_bar`, `infoAreaYOffset`
+- [ ] [A2] ship icon (3 of 3): `infoMultiShieldBar`, `infoMultiShieldBarDisableColor`, `small_shield_bar`
+- [ ] [A2] race (5 of 12): `ADM_COMMISSIONED`, `ADM_DECOMMISSIONED`, `clickSound`, `GUI_RD_OFFICERS_TOOLTIP`, `rolloverSound`
+- [ ] [A2] selection display (4 of 5): `group_background`, `select_crew_dot`, `select_energy_bar`, `select_system`
+- [ ] [A2] admiral's log tabs (3 of 5): `playerButtonRect`, `tabBmp_`, `tabBmpH_`
+- [ ] [FO] `gui_*.cfg`, comm panel (184): `CommandInfoBarButtonDistance`, `commallianceheadingtextarea`, `commallianceheadingtextlabel`, `commallianceheadingtextlabelarea`, `commalliedvictorybuttonarea`, `commalliedvictorybuttonimage`, `commalliedvictorybuttontoggle`, `commalliedvictorybuttontooltip`, `commalliedvictorytextarea`, `commalliedvictorytextcolor`, `commalliedvictorytextlabel`, `commalliedvictorytextlabelarea`, `commandinfobarbackgroundpanel`, `commandinfobarbackgroundpanelarea`, `commandinfobarbackgroundpanelsize`, `commandinfobarbuttonrect`, `commandinfobardefaultcursor`, `commandinfobarpanelarea`, `commbackgroundpanel`, `commbackgroundpanel_#`, `commbackgroundpanelarea`, `commbackgroundpanelsize`, `commbarallybuttonarea`, `commbarallybuttonimage`, `commbarallybuttonmarker`, `commbarallybuttontoggle`, `commbarallybuttontooltip`, `commbarchatbuttonarea`, `commbarchatbuttonimage`, `commbarchatbuttontoggle`, `commbarchatbuttontooltip`, `commbarenemybuttonarea`, `commbarenemybuttonimage`, `commbarenemybuttonmarker`, `commbarenemybuttontooltip`, `commbarnamebuttonarea`, `commbarnamebuttonimage`, `commbarnamebuttontooltip`, `commbarnametextarea`, `commbarnametextcolor`, `commbarnametextinformationarea`, `commbarneutralbuttonarea`, `commbarneutralbuttonimage`, `commbarneutralbuttonmarker`, `commbarneutralbuttontooltip`, `commbarnumberofplayers`, `commbarplayer_#`, `commbarselectbuttonarea`, `commbarselectbuttonimage`, `commbarselectbuttontoggle`, `commbarselectbuttontooltip`, `commbarteamtextarea`, `commbarteamtextbackground`, `commbarteamtextbackgroundarea`, `commbarteamtextcolor`, `commbarteamtextinformationarea`, `commbiomatteramounttextarea`, `commbiomatteramounttextbackground`, `commbiomatteramounttextbackgroundarea`, `commbiomatteramounttextinformationarea`, `commbiomatterdownbuttonarea`, `commbiomatterdownbuttonimage`, `commbiomatterdownbuttontooltip`, `commbiomatterupbuttonarea`, `commbiomatterupbuttonimage`, `commbiomatterupbuttontooltip`, `commbutton`, `commbuttonarea`, `commcrewamounttextarea`, `commcrewamounttextbackground`, `commcrewamounttextbackgroundarea`, `commcrewamounttextinformationarea`, `commcrewdownbuttonarea`, `commcrewdownbuttonimage`, `commcrewdownbuttontooltip`, `commcrewupbuttonarea`, `commcrewupbuttonimage`, `commcrewupbuttontooltip`, `commdefaultcursor`, `commdilithiumamounttextarea`, `commdilithiumamounttextbackground`, `commdilithiumamounttextbackgroundarea`, `commdilithiumamounttextinformationarea`, `commdilithiumdownbuttonarea`, `commdilithiumdownbuttonimage`, `commdilithiumdownbuttontooltip`, `commdilithiumupbuttonarea`, `commdilithiumupbuttonimage`, `commdilithiumupbuttontooltip`, `commgivebiomatterbuttonarea`, `commgivebiomatterbuttonimage`, `commgivebiomatterbuttontext`, `commgivebiomatterbuttontooltip`, `commgivecrewbuttonarea`, `commgivecrewbuttonimage`, `commgivecrewbuttontext`, `commgivecrewbuttontooltip`, `commgivedilithiumbuttonarea`, `commgivedilithiumbuttonimage`, `commgivedilithiumbuttontext`, `commgivedilithiumbuttontooltip`, `commgivegrouptextarea`, `commgivegrouptextlabel`, `commgivegrouptextlabelarea`, `commgivelatinumbuttonarea`, `commgivelatinumbuttonimage`, `commgivelatinumbuttontext`, `commgivelatinumbuttontooltip`, `commgivemetalbuttonarea`, `commgivemetalbuttonimage`, `commgivemetalbuttontext`, `commgivemetalbuttontooltip`, `commgiveunitsbuttonarea`, `commgiveunitsbuttonimage`, `commgiveunitsbuttontext`, `commgiveunitsbuttontooltip`, `commindicatoranchor`, `commindicatorcolor`, `commindicatorsprite`, `commindicatorwidth`, `commlatencybuttonarea`, `commlatencybuttonimage`, `commlatencybuttontoggle`, `commlatencybuttontooltip`, `commlatencytextarea`, `commlatencytextcolor`, `commlatencytextlabel`, `commlatencytextlabelarea`, `commlatinumamounttextarea`, `commlatinumamounttextbackground`, `commlatinumamounttextbackgroundarea`, `commlatinumamounttextinformationarea`, `commlatinumdownbuttonarea`, `commlatinumdownbuttonimage`, `commlatinumdownbuttontooltip`, `commlatinumupbuttonarea`, `commlatinumupbuttonimage`, `commlatinumupbuttontooltip`, `commmessageallbuttonarea`, `commmessageallbuttonimage`, `commmessageallbuttontext`, `commmessageallbuttontooltip`, `commmessagealliesbuttonarea`, `commmessagealliesbuttonimage`, `commmessagealliesbuttontext`, `commmessagealliesbuttontooltip`, `commmessageenemiesbuttonarea`, `commmessageenemiesbuttonimage`, `commmessageenemiesbuttontext`, `commmessageenemiesbuttontooltip`, `commmessagegrouptextarea`, `commmessagegrouptextlabel`, `commmessagegrouptextlabelarea`, `commmessageheadingtextarea`, `commmessageheadingtextlabel`, `commmessageheadingtextlabelarea`, `commmessageprivatebuttonarea`, `commmessageprivatebuttonimage`, `commmessageprivatebuttontext`, `commmessageprivatebuttontooltip`, `commmetalamounttextarea`, `commmetalamounttextbackground`, `commmetalamounttextbackgroundarea`, `commmetalamounttextinformationarea`, `commmetaldownbuttonarea`, `commmetaldownbuttonimage`, `commmetaldownbuttontooltip`, `commmetalupbuttonarea`, `commmetalupbuttonimage`, `commmetalupbuttontooltip`, `commokaybuttonarea`, `commokaybuttonimage`, `commokaybuttontext`, `commpanelarea`, `commplayerheadingtextarea`, `commplayerheadingtextlabel`, `commplayerheadingtextlabelarea`, `commteamheadingtextarea`, `commteamheadingtextlabel`, `commteamheadingtextlabelarea`, `commtitletextarea`, `commtitletextcolor`, `commtitletextlabel`, `commtitletextlabelarea`
+- [ ] [FO] `gui_*.cfg`, other (17): `groupTextColor`, `fastbuttonarea`, `helpbutton`, `helpbuttonarea`, `idlebutton`, `idlebuttonarea`, `menubuttonarea`, `morebuttonarea`, `normalbuttonarea`, `pausebuttonarea`, `replaypanelarea`, `selectsystem_#`, `slowbuttonarea`, `togglebutton`, `togglebuttonarea`, `xtooltip`, `ytooltip`
+- [ ] [FO] `gui_*.cfg`, avatar box (6): `avatarboxbackgroundpanel`, `avatarboxbackgroundpanelarea`, `avatarboxbackgroundpanelsize`, `avatarboxdefaultcursor`, `avatarboxiconarea`, `avatarboxpanelarea`
+- [ ] [FO] `gui_*.cfg`, bridge (32): `b_bridgebackground`, `b_bridgebackground_#`, `b_bridgebackgroundrect`, `b_bridgebackgroundsize`, `b_bridgelayer#rect`, `b_bridgelayer#sprite`, `bridgeblackrect`, `bridgepanelrect`, `d_bridgebackground`, `d_bridgebackground_#`, `d_bridgebackgroundrect`, `d_bridgebackgroundsize`, `d_bridgelayer#rect`, `d_bridgelayer#sprite`, `f_bridgebackground`, `f_bridgebackground_#`, `f_bridgebackgroundrect`, `f_bridgebackgroundsize`, `f_bridgelayer#rect`, `f_bridgelayer#sprite`, `k_bridgebackground`, `k_bridgebackground_#`, `k_bridgebackgroundrect`, `k_bridgebackgroundsize`, `k_bridgelayer#rect`, `k_bridgelayer#sprite`, `r_bridgebackground`, `r_bridgebackground_#`, `r_bridgebackgroundrect`, `r_bridgebackgroundsize`, `r_bridgelayer#rect`, `r_bridgelayer#sprite`
+- [ ] [FO] `gui_*.cfg`, build box (6): `buildboxbackgroundpanel`, `buildboxbackgroundpanelarea`, `buildboxbuildbutton`, `buildboxdefaultcursor`, `buildboxpanelarea`, `buildboxresourcetext`
+- [ ] [FO] `gui_*.cfg`, button panel (5): `buttonbackgroundpanel`, `buttonbackgroundpanel_#`, `buttonbackgroundpanelarea`, `buttonbackgroundpanelsize`, `buttondefaultcursor`
+- [ ] [FO] `gui_*.cfg`, cinematic (3): `cinematicbackgroundpanelarea`, `cinematicdefaultbackground`, `cinematicdefaultcursor`
+- [ ] [FO] `gui_*.cfg`, drop-player box (16): `dropplayeraitakeoverbuttonarea`, `dropplayeraitakeoverbuttonimage`, `dropplayeraitakeoverbuttontext`, `dropplayeraitakeoverbuttontooltip`, `dropplayerbackgroundpanel`, `dropplayerbackgroundpanel_#`, `dropplayerbackgroundpanelarea`, `dropplayerbackgroundpanelsize`, `dropplayerdefaultcursor`, `dropplayerdropbuttonarea`, `dropplayerdropbuttonimage`, `dropplayerdropbuttontext`, `dropplayerdropbuttontooltip`, `dropplayertextarea`, `dropplayertextcolor`, `dropplayertextinformationarea`
+- [ ] [FO] `gui_*.cfg`, tooltip and cursor (6): `framelocation`, `tooltipbackgroundcolor`, `tooltipframebottomrect_#`, `tooltipframeleftrect`, `tooltipframerightrect`, `tooltipframetoprect_#`
+- [ ] [FO] `gui_*.cfg`, info panel, other (31): `infobackgroundpanel_#`, `infobackgroundpanelarea`, `infobaroffset_#`, `infoblackarea_#`, `infobuildcrew`, `infobuildcrewicon`, `infobuildenergy`, `infobuildenergyicon`, `infobuildofficers`, `infobuildofficersicon`, `infobuildqueue_#`, `infobuildqueueslot_#`, `infobuildsystem_#`, `infobuildsystemicon_#`, `infocrewnum`, `infocrewnumicon`, `infodefaultcursor`, `infoenergy`, `infoenergyicon`, `infolowbackgroundpanelarea`, `infolowbackgroundpanelsize`, `infomiddlebackgroundpanel_#`, `infomiddlebackgroundpanelarea`, `infomiddlebackgroundpanelsize`, `infoofficers`, `infoofficersicon`, `infopanelarea_#`, `infoprogressbar`, `infosystem_#`, `infosystemicon_#`, `infoteam`
+- [ ] [FO] `gui_*.cfg`, info panel, multi selection (12): `infomultihullbar`, `infomultishieldbar`, `infomultishieldbardisablecolor`, `infomultishiphull_#`, `infomultishiphullsm_#`, `infomultishipicon_#`, `infomultishipiconsm_#`, `infomultishipname_#`, `infomultishipshield_#`, `infomultishipshieldsm_#`, `infomultishipwireframe_#`, `infomultishipwireframesm_#`
+- [ ] [FO] `gui_*.cfg`, info panel, single selection (17): `infosingleconstructionarea`, `infosingleconstructionbardisablecolor`, `infosinglecrewbarcolor`, `infosingledilithiumbar`, `infosingledilithiumbararea`, `infosingledilithiumbarcolor`, `infosingledilithiumbardisablecolor`, `infosinglelatinumbarcolor`, `infosinglemetalbarcolor`, `infosingleplanetmetalbar`, `infosingleplanetmetalbararea`, `infosingleplanetmetalbarcolor`, `infosingleplanetmetalbardisablecolor`, `infosingleplanetteamtextarea`, `infosingleshieldbardisablecolor`, `infosinglesystemsdisplay`, `infosinglesystemsicon`
+- [ ] [FO] `gui_*.cfg`, loading box (9): `loadingplayerbackgroundpanel`, `loadingplayerbackgroundpanel_#`, `loadingplayerbackgroundpanelarea`, `loadingplayerbackgroundpanelsize`, `loadingplayerdefaultcursor`, `loadingplayerpanelarea`, `loadingplayertextarea`, `loadingplayertextcolor`, `loadingplayertextinformationarea`
+- [ ] [FO] `gui_*.cfg`, minimap (3): `minimapbackgroundpanel_#`, `minimapbackgroundpanelarea`, `minimapdefaultcursor`
+- [ ] [FO] `gui_*.cfg`, objectives (24): `objectivesbackgroundpanel`, `objectivesbackgroundpanel_#`, `objectivesbackgroundpanelarea`, `objectivesbackgroundpanelsize`, `objectivesbutton`, `objectivesbuttonarea`, `objectivesdefaultcursor`, `objectivesheaderarea`, `objectivesheadercolor`, `objectivesheaderinformationarea`, `objectivesokayborderimage`, `objectivesokaybuttonarea`, `objectivesokaybuttonimage`, `objectivesokaybuttontext`, `objectivesokaybuttontooltip`, `objectivessummarycolor`, `objectivessummaryheaderarea`, `objectivessummaryinformationarea`, `objectivestextarea`, `objectivestextcolor`, `objectivestextinformationarea`, `objectivestitlearea`, `objectivestitlecolor`, `objectivestitleinformationarea`
+- [ ] [FO] `gui_*.cfg`, command palette (6): `palettebutton`, `palettebuttonarea`, `popuppalettexb`, `popuppaletteyb`, `staticpaletteheightb`, `staticpalettewidthb`
+- [ ] [FO] `gui_*.cfg`, pause box (14): `pausegamebackgroundpanel`, `pausegamebackgroundpanelarea`, `pausegamebackgroundpanelsize`, `pausegamedefaultcursor`, `pausegamepanelarea`, `pausegametextarea`, `pausegametextcolor`, `pausegametextlabel`, `pausegametextlabelarea`, `pausegameunpauseborderimage`, `pausegameunpausebuttonarea`, `pausegameunpausebuttonimage`, `pausegameunpausebuttontext`, `pausegameunpausebuttontooltip`
+- [ ] [FO] `gui_*.cfg`, resource bar (5): `resource_#`, `resource_#_color`, `resourcedefaultcursor`, `resourcepanel_#`, `restartbuttonarea`
+
+FO total: 396 of 474 key names in its `gui_*.cfg` files and hook reads are not mentioned in STA64.
+
+### AIP names
+
+- [ ] [A1] read by the executable (26 of 31): `attack_troops_priority`, `attack_region_priority`, `defend_priority`, `attack_enemy_base_priority`, `intrinsic_value_bonus`, `exploration_priority`, `scripted_priority`, `perimeter_priority`, `resource_priority`, `escort_priority`, `min_escort_force`, `max_escort_force`, `max_resource_force`, `max_defense_force`, `min_exploration_force`, `max_exploration_force`, `relaxation_cycles`, `max_danger_raw_bonus`, `max_threat_raw_bonus`, `distance_from_home_priority_modifier`, `distance_from_enemy_priority_modifier`, `avoid_danger_priority_modifier`, `human_target_raw_bonus`, `max_misc_bid_bonus`, `persistence_modifier`, `patrol_one_in_n`
+- [ ] [A2] read by the executable (26 of 33): `planetThreatBonus`, `attack_troops_priority`, `attack_region_priority`, `defend_priority`, `attack_enemy_base_priority`, `intrinsic_value_bonus`, `exploration_priority`, `explorationFailurePenalty`, `scripted_priority`, `perimeter_priority`, `resource_priority`, `escort_priority`, `min_escort_force`, `max_escort_force`, `max_resource_force`, `max_defense_force`, `min_exploration_force`, `max_exploration_force`, `relaxation_cycles`, `distance_from_home_priority_modifier`, `distance_from_enemy_priority_modifier`, `avoid_danger_priority_modifier`, `human_target_raw_bonus`, `max_misc_bid_bonus`, `persistence_modifier`, `patrol_one_in_n`
+
 ## Done recently
 
 - [x] Map-confinement geometry prerequisite (SIM-22 stage 1): checked Fixed boundary volumes, strict edge comparisons, asymmetric upper projection and inspect-only reporting pass five focused tests, including a 405-point containment/idempotence grid. This is a pure shared helper; entity state, movement enforcement, profile/ODF defaults, save/replay integration and Lua ForceOntoMap remain unfinished. No new in-game test applies until that integration is delivered.
