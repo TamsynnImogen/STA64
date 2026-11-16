@@ -294,7 +294,7 @@ mod tests {
             }),
             player: PlayerId(1),
             selected: vec![EntityId(1)],
-            content: Some(db),
+            content: Some(db), ..Default::default()
         };
         assert_eq!(shared(&feed).specials, vec![(0, SpecialKind::Cloak)]);
         assert!(
@@ -346,7 +346,7 @@ mod tests {
 
         let mut feed = HudFeed {
             view: Arc::new(WorldView { units: vec![producer_view, background_view], ..Default::default() }),
-            player: PlayerId(0), selected: vec![EntityId(1)], content: Some(db),
+            player: PlayerId(0), selected: vec![EntityId(1)], content: Some(db), ..Default::default()
         };
         assert!(shared(&feed).stop && shared(&feed).build);
         feed.selected = vec![EntityId(2)];

@@ -1571,6 +1571,21 @@ mod tests {
         assert!(h(b) >= 18.0, "{}", h(b));
     }
 
+    /// A map's object names are free text: characters outside Windows-1252 (and astral ones)
+    /// lay out as `?`/fallback runs without a panic, upper-cased as the HUD card does.
+    #[test]
+    fn non_ascii_object_names_lay_out_without_panicking() {
+        let f = SpriteFont::parse("F", SAMPLE).unwrap();
+        for name in ["Ångström Ω-2 \u{1F680}", "ß straße", "İstanbul", "\u{0}\u{7f}\u{80}\u{ff}\u{100}", ""] {
+            for text in [name.to_owned(), name.to_uppercase(), name.chars().take(5).collect()] {
+                let _ = f.layout(&text, 2.0);
+                let _ = f.layout_block(&text, 2.0, Some(40.0), Align::Left);
+                let _ = f.measure(&text, 2.0);
+                let _ = f.runs(&text);
+            }
+        }
+    }
+
     #[test]
     fn a_font_lacks_what_it_cannot_draw_and_runs_split_there() {
         let f = SpriteFont::parse("F", SAMPLE).unwrap();

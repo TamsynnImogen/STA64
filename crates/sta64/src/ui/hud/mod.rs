@@ -29,6 +29,7 @@
 mod cinematic;
 mod footprint;
 pub mod frame;
+pub mod instance_names;
 pub mod ghost;
 pub mod layout;
 pub mod model;
@@ -198,8 +199,9 @@ impl Plugin for HudPlugin {
 }
 
 /// Copy the game's view, player, selection and content into the feed.
-pub fn feed_from_link(link: Res<SimLink>, selection: Res<Selection>, content: Option<Res<ContentRes>>, mut feed: ResMut<HudFeed>) {
+pub fn feed_from_link(link: Res<SimLink>, selection: Res<Selection>, content: Option<Res<ContentRes>>, names: Option<Res<instance_names::InstanceNames>>, mut feed: ResMut<HudFeed>) {
     feed.view = link.curr().clone();
+    feed.names = names.map(|n| n.clone()).unwrap_or_default();
     feed.player = link.player();
     feed.selected.clone_from(&selection.0);
     feed.content = content.map(|c| c.0.clone());
@@ -724,7 +726,7 @@ mod target_tests {
         };
         HudFeed {
             view: Arc::new(WorldView { units: vec![make(1, "fx_cruiser", 1), make(2, "fx_miner", 1), make(3, "fx_yard", 1), make(4, "fx_cruiser", 2), make(5, "fx_moon", 255)], ..Default::default() }),
-            player: PlayerId(1), selected: selected.iter().copied().map(EntityId).collect(), content: Some(Arc::new(db)),
+            player: PlayerId(1), selected: selected.iter().copied().map(EntityId).collect(), content: Some(Arc::new(db)), ..Default::default()
         }
     }
 

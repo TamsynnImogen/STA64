@@ -69,7 +69,7 @@ fn feed(vfs: &sta_vfs::Vfs, options: GameOptions, group: usize) -> HudFeed {
     }
     let view = sim.view();
     let selected = view.units.iter().find(|u| u.owner == PlayerId(0)).expect("authored start unit").id;
-    HudFeed { view, player: PlayerId(0), selected: vec![selected], content: Some(db) }
+    HudFeed { view, player: PlayerId(0), selected: vec![selected], content: Some(db), ..Default::default() }
 }
 
 fn resolved_pieces(app: &mut App, pieces: &[super::layout::Piece]) -> usize {

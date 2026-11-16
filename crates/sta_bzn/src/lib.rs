@@ -57,6 +57,10 @@ pub struct MapObject {
     pub entity_id: i32,
     pub team: i32,
     pub label: String,
+    /// The map's display name for the object (Armada II binary maps: a separate 128-byte
+    /// buffer after the label, `instance_name`; empty when the map gives none). Not the
+    /// script label. Text-format maps are not read for it.
+    pub instance_name: String,
     /// Prefix `pos`, separate from the final transform; absent when unavailable.
     /// Uses the returned map's coordinates, including A1 resize conversion.
     pub initial_position: Option<[f32; 3]>,
@@ -289,6 +293,7 @@ fn parse_binary(recs: &[Rec]) -> Map {
         if let Some(l) = recs.get(j).filter(|r| r.is_string()) {
             o.label = l.text();
         }
+        o.instance_name = instance_name(recs, j + 1);
         if let Some(t) = recs[j..(j + 6).min(recs.len())].iter().find(|r| r.kind == 11 && r.data.len() == 48) {
             let f = t.floats();
             o.transform.copy_from_slice(&f[..12]);
@@ -298,6 +303,40 @@ fn parse_binary(recs: &[Rec]) -> Map {
     }
     m.paths = paths::from_records(&recs[objects_from.min(recs.len())..]);
     m
+}
+
+/// Whether an object record starts at `k` (`PrjIdLen`, `PrjID`, id, position).
+fn object_starts(recs: &[Rec], k: usize) -> bool {
+    let (Some(len), Some(name), Some(id), Some(pos)) = (recs.get(k), recs.get(k + 1), recs.get(k + 2), recs.get(k + 3)) else { return false };
+    len.kind == 3
+        && name.is_string()
+        && len.i16().is_some_and(|n| n as usize == name.data.len() && n > 1)
+        && id.kind == 4
+        && pos.kind == 9
+        && pos.data.len() == 12
+}
+
+/// The object's display name: the first 128-byte string record from `from` on, before the next
+/// object record and within 40 records (read from data: 802 named objects in 814 Armada II
+/// maps, never two such buffers in one object; the distance from the label differs by object
+/// class). Cut at the first NUL and trimmed; a blank buffer or none gives an empty string.
+fn instance_name(recs: &[Rec], from: usize) -> String {
+    for k in from..recs.len().min(from.saturating_add(40)) {
+        if object_starts(recs, k) {
+            break;
+        }
+        if recs[k].kind == 2 && recs[k].data.len() == 128 {
+            return recs[k].text().trim().to_owned();
+        }
+    }
+    String::new()
+}
+
+/// [`instance_name`] over `(kind, data)` pairs, for tests of other modules.
+#[cfg(test)]
+pub(crate) fn instance_name_of(recs: &[(u32, &[u8])], from: usize) -> String {
+    let recs: Vec<Rec> = recs.iter().map(|&(kind, data)| Rec { kind, data }).collect();
+    instance_name(&recs, from)
 }
 
 /// A length-prefixed string at `k`: `(text, next record)`. A zero length has
@@ -640,6 +679,7 @@ fn parse_text(text: &str) -> Map {
             entity_id: get("EntityID").and_then(|v| v.parse().ok()).unwrap_or(0),
             team: get("team").and_then(|v| v.parse().ok()).unwrap_or(0),
             label: get("label").unwrap_or_default(),
+            instance_name: String::new(),
             initial_position,
             transform: t,
             light_colour: match (get("lightColorRed"), get("lightColorGreen"), get("lightColorBlue")) {
@@ -655,6 +695,29 @@ fn parse_text(text: &str) -> Map {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn instance_name_stops_at_the_next_object_and_takes_the_first_buffer() {
+        fn rec(kind: u32, data: &[u8]) -> Rec<'_> {
+            Rec { kind, data }
+        }
+        let mut name = b"Quux Prime".to_vec();
+        name.resize(128, 0);
+        let label = [0u8; 40];
+        let pos = [0u8; 12];
+        let id = 7i32.to_le_bytes();
+        let next = [rec(3, &[3, 0]), rec(2, b"abc"), rec(4, &id), rec(9, &pos)];
+        // The distance from the label varies by class: a few scalars in between.
+        let named = [rec(2, &label), rec(1, &[0]), rec(5, &[0; 4]), rec(2, &name)];
+        assert_eq!(instance_name(&named, 1), "Quux Prime");
+        // A buffer after the next object's start belongs to that object.
+        let mut crossing = vec![rec(2, &label), rec(5, &[0; 4])];
+        crossing.extend(next);
+        crossing.push(rec(2, &name));
+        assert_eq!(instance_name(&crossing, 1), "");
+        assert_eq!(instance_name(&named, 99), "");
+    }
+
 
     const TEXT: &str = "version [1] =\r\n2177\r\nBinaryMode [1] =\r\nfalse\r\nMPDType [1] =\r\n7\r\nMPDType = 6d697373696f6e\r\n\
 MPDMinExtent [1] =\r\n  x [1] =\r\n0\r\n  y [1] =\r\n-1250\r\n  z [1] =\r\n0\r\nMPDScriptFile [1] =\r\n14\r\n\
