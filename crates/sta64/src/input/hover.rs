@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use sta_sim::EntityId;
 
 use super::orders::Aim;
-use super::select::{AimState, Targetable, unit_under};
+use super::select::{AimState, Targetable, target_seen, unit_under_where};
 use crate::frontend::scene::MenuScene;
 use crate::sim_link::SimLink;
 use crate::ui::hud::{HudFeed, HudPointer};
@@ -50,18 +50,12 @@ fn resolve(
     let AimState { cursor, ray, .. } = aim?;
     let link = link?;
     let feed = feed?;
-    let id = unit_under(cursor, ray, units)?;
-    let live = link.curr().unit(id)?;
-    if !live.flags.contains(sta_sim::view::UnitFlags::SELECTABLE)
-        || live.flags.contains(sta_sim::view::UnitFlags::DYING)
-    {
-        return None;
-    }
-    feed.view
-        .visible_to(link.player())
-        .iter()
-        .any(|u| u.id == id)
-        .then_some(id)
+    unit_under_where(cursor, ray, units, |id| {
+        link.curr().unit(id).is_some_and(|live| {
+            live.flags.contains(sta_sim::view::UnitFlags::SELECTABLE)
+                && !live.flags.contains(sta_sim::view::UnitFlags::DYING)
+        }) && feed.view.unit(id).is_some() && target_seen(&feed.view, Some(link.player()), id)
+    })
 }
 
 fn can_track(
@@ -218,6 +212,24 @@ mod tests {
         app.world_mut().resource_mut::<HoveredUnit>().0 = Some(EntityId(1));
         app.update();
         assert_eq!(app.world().resource::<HoveredUnit>().0, None);
+    }
+
+    #[test]
+    fn hover_reaches_visible_selectable_unit_behind_unseen_or_invalid_one() {
+        for (front_flags, front_visible) in [(UnitFlags::SELECTABLE, false), (UnitFlags::default(), true)] {
+            let mut view = WorldView {
+                units: vec![unit(1, front_flags), unit(2, UnitFlags::SELECTABLE)],
+                visibility: vec![(PlayerId(0), if front_visible { vec![EntityId(1), EntityId(2)] } else { vec![EntityId(2)] })],
+                ..Default::default()
+            };
+            view.units.sort_by_key(|u| u.id);
+            let mut app = fixture_app(view);
+            root(&mut app, 1, Vec3::new(0.0, 0.0, -50.0));
+            root(&mut app, 2, Vec3::new(0.0, 0.0, -100.0));
+            app.insert_resource(aim(Vec2::ZERO, Vec3::ZERO, Dir3::NEG_Z));
+            app.update();
+            assert_eq!(app.world().resource::<HoveredUnit>().0, Some(EntityId(2)));
+        }
     }
 
     #[test]
