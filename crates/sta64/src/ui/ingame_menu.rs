@@ -245,6 +245,7 @@ fn panel(p: &mut Box_, theme: &Theme, slot: MenuSlot, b: Vec2) {
 struct Parts<'a> {
     theme: &'a Theme,
     settings: &'a Settings,
+    controls: &'a stock::controls::ControlsDraft,
     graphics: Option<&'a stock::GraphicsInfo>,
     strings: Option<&'a Strings>,
     tab: usize,
@@ -276,7 +277,7 @@ fn spawn_menu(commands: &mut Commands, page: MenuPage, parts: &Parts, b: Vec2) {
                 MenuPage::Options => {
                     panel(p, t, MenuSlot::OptionsPanel, b);
                     title(p, t, MenuSlot::OptionsTitle, b, &caption(parts.strings, "options", "Options"));
-                    stock::options_body(p, t, parts.settings, parts.tab, parts.graphics, rect(MenuSlot::OptionsBody, b), MenuPlaced(MenuSlot::OptionsBody));
+                    stock::options_body(p, t, parts.settings, parts.controls, parts.tab, parts.graphics, rect(MenuSlot::OptionsBody, b), MenuPlaced(MenuSlot::OptionsBody));
                     button(p, t, MenuSlot::OptionsBack, b, &tr("Back"), MenuAct::Back);
                 }
                 MenuPage::ConfirmExit | MenuPage::ConfirmQuit => {
@@ -308,10 +309,12 @@ fn rebuild(
     settings: Res<Settings>,
     graphics: Option<Res<stock::GraphicsInfo>>,
     tab: Res<OptionsTab>,
+    controls: Res<stock::controls::ControlsDraft>,
+    controls_render: Res<stock::controls::ControlsRender>,
     strings: Option<Res<Strings>>,
     mission: Option<Res<crate::game::mission_host::MissionRun>>,
 ) {
-    if !(menu.is_changed() || graphics.as_ref().is_some_and(|g| g.is_changed()) || theme.is_changed() || stock_box.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed())) {
+    if !(menu.is_changed() || graphics.as_ref().is_some_and(|g| g.is_changed()) || theme.is_changed() || stock_box.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed()) || controls_render.is_changed()) {
         return;
     }
     for e in &roots {
@@ -320,7 +323,7 @@ fn rebuild(
     if !menu.open {
         return;
     }
-    let parts = Parts { theme: &theme, settings: &settings, graphics: graphics.as_deref(), strings: strings.as_deref(), tab: tab.0, mission: mission.is_some() };
+    let parts = Parts { theme: &theme, settings: &settings, controls: &controls, graphics: graphics.as_deref(), strings: strings.as_deref(), tab: tab.0, mission: mission.is_some() };
     spawn_menu(&mut commands, menu.page, &parts, stock_box.0);
 }
 
@@ -462,7 +465,7 @@ impl Plugin for InGameMenuPlugin {
                 Update,
                 (
                     // The options panel's widgets, as the front end's screens run them (`on_settings` runs in a match too).
-                    (stock::track_box, stock::track_tab, rebuild).chain().run_if(ingame),
+                    (stock::track_box, stock::track_tab, rebuild.after(stock::controls::update)).chain().run_if(ingame),
                 )
                     .in_set(GameSet::Ui),
             )

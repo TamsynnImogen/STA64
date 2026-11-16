@@ -228,7 +228,7 @@ fn settings(p: &mut Box_, ctx: &Ctx, b: Vec2) {
     let t = ctx.theme;
     let title = region(Slot::OptionsTitle).px(b);
     put(p, Slot::OptionsTitle, title, kit_text(t, t.caps(&cap(ctx, "options", "Options"), t.caps_titles), t.title_size, t.title));
-    options_body(p, t, ctx.settings, ctx.options_tab, ctx.graphics, region(Slot::OptionsBody).px(b), Placed(Slot::OptionsBody));
+    options_body(p, t, ctx.settings, ctx.controls, ctx.options_tab, ctx.graphics, region(Slot::OptionsBody).px(b), Placed(Slot::OptionsBody));
     act_button(p, ctx, b, Slot::OptionsBack, &cap(ctx, "previous_menu", "Previous menu"), Act::Goto(Screen::Main));
 }
 
@@ -238,12 +238,13 @@ fn settings(p: &mut Box_, ctx: &Ctx, b: Vec2) {
 /// `SettingToggle`; `on_settings` writes them to the `Settings` resource, which the settings
 /// store (UI-29) saves. `tab` is the selected tab; `mark` tags the panel's node.
 #[allow(clippy::too_many_arguments)]
-pub fn options_body(p: &mut Box_, t: &crate::ui::theme::Theme, settings: &crate::frontend::screens::Settings, tab: usize, info: Option<&super::GraphicsInfo>, body: Rect, mark: impl Bundle) {
+pub fn options_body(p: &mut Box_, t: &crate::ui::theme::Theme, settings: &crate::frontend::screens::Settings, controls: &super::controls::ControlsDraft, tab: usize, info: Option<&super::GraphicsInfo>, body: Rect, mark: impl Bundle) {
     let s = settings.clone();
     let theme = t.clone();
     let info = info.cloned().unwrap_or_default();
-    let tabs = [tr("Sound"), tr("Game"), tr("Graphics")];
-    let tab = tab.min(2);
+    let tabs = [tr("Sound"), tr("Game"), tr("Graphics"), tr("Controls")];
+    let tab = tab.min(3);
+    let controls = controls.clone();
     p.spawn((
         mark,
         Node {
@@ -279,6 +280,9 @@ pub fn options_body(p: &mut Box_, t: &crate::ui::theme::Theme, settings: &crate:
             });
             c.spawn(tab_panel(bar, 2)).insert(Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(theme.gap), display: shown(2), ..default() }).with_children(|c| {
                 super::graphics::body(c, &theme, &s, &info, body.width());
+            });
+            c.spawn(tab_panel(bar, 3)).insert(Node { flex_direction: FlexDirection::Column, row_gap: Val::Px(theme.gap), display: shown(3), ..default() }).with_children(|c| {
+                super::controls::body(c, &theme, &controls, body.width());
             });
     });
 }

@@ -105,6 +105,7 @@ pub struct Ctx<'a> {
     pub draft: &'a SetupDraft,
     pub browse: &'a Browse,
     pub settings: &'a Settings,
+    pub controls: &'a super::stock::controls::ControlsDraft,
     pub selected: &'a SelectedMod,
     pub active_mod: &'a ActiveMod,
     pub scroll: &'a ListScroll,
