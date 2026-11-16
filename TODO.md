@@ -6,6 +6,7 @@ this file is what's being worked on now and what needs checking by eye.
 Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your check in game/viewer
 
 ## Needs your check
+- [?] Controls editor (UI-51, #874): open Options -> Controls in the front end and during a match. Edit actions across multiple pages using comma-separated `KeyCode` names (for example `KeyS, Space`); Apply should change the bindings and survive restart. An invalid name should show an error and leave all live bindings unchanged. Reset keys should stage binding defaults until Apply without changing volume or graphics settings. Closing Options discards unapplied text. Check text fit and keyboard focus at compact and ultrawide sizes; headless tests cover the underlying interactions, not desktop appearance.
 - [?] LUA-40 read-only MMM paths: check an external converted mission's optional camera-path lookup with populated and absent paths. Headless tests cover `Path.exists`, `.count`, copied `.points` and authored-label camera handoff; full cinematic playback and mission fidelity still need acceptance.
 - [?] CFG multi-selection tiers: check selections of 2, 16, 17 and 30 units in Classic and FO4. The normal wireframe slots show names through 16; the compact wireframe slots show no captions from 17. Wireframes follow their cfg rectangles and retain full hover tooltips. This supersedes the earlier over-eight small-tile fallback note.
 - [?] Multi-selection names: select two construction ships in Classic and FO4 (build them first if needed). Captions should use a compact sprite font in their cfg name areas, with full names retained and clear of the hull bars. Check at 1080p and 720p, resize, and compare a selection of more than eight ships (small tiles retain their existing icon-area fallback).
@@ -198,7 +199,7 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 ### Playtest checks from the 2026-11-15/16 merges
 
-- [?] Unit stat keys (CON-55, #876): `STA64_TEST_INSTALL=<A1, A2 or FO install> cargo test -p sta_content --test unit_stat_keys -- --nocapture` prints how many units set a stat key (`intrinsicValue`, target hardpoint lists, `shipType`, `avoidanceClass`, heroes, `selfDestruct`). Nothing changes in play yet: the keys are typed, and SIM-74 applies them.
+- [ ] Stock HUD cfg audit (UI-48, #879): [docs/STOCK_HUD_CFG_AUDIT.md](docs/STOCK_HUD_CFG_AUDIT.md) lists every `gui_*.cfg` key of the three games with its state. 322 of 581 are `missing` (comm panel 155, bridge 27, single-selection info 24, objectives 16, multi-selection 12). Next: close them panel by panel, starting with the panels already on screen (single and multi selection info, minimap, command palette), then comm, objectives, pause and drop-player boxes. `built` rows (158) need a per-prefix check.
 - [?] Weapon base keys (CON-54, #858): `STA64_TEST_INSTALL=<A1, A2 or FO install> cargo test -p sta_content --test weapon_base_keys -- --nocapture` prints how many weapons set a base key, the `hitChance` and `damageBase` table rows read and `row warnings 0`. Nothing changes in play yet: the keys are typed, and SIM-73 applies them one rule at a time. Judge the load cost on Fleet Operations (about 160 MB more peak memory and 3 s more in a debug build for its 3 million table rows).
 
 - [?] Armada I music (#762): in an Armada I campaign mission the intro music and voices play and the gameplay music follows (not heard by ear, no audio run).
@@ -224,6 +225,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] Armed cursors (UI-44, #863): arm Move, Attack, Mine, Colonize, Transport, Rally and station placement in Classic/FO; compare valid and refused targets with the click result, including a blocked build site and insufficient stock. Check cancellation, crossing the HUD, an open menu and cheat typing. Missing refusal artwork keeps the existing pointer fallback; Repair and targeted-special actions remain unavailable.
 
 - [?] Current-frame tooltip placement (UI-50, #869): hover near each window edge until short and verbose tooltips appear, switch between short and tall tooltips, then resize/change UI scale. The first visible frame should use the new box size; background, border and all text should stay together inside the window. Confirm localized text, crispness and normal hover delays in Classic and FO.
+
+- [?] A1 ODF lookup (CON-56, #875): with an updated A1 build, verify unit/race/scenery values after first-prefix assignment selection. `check_pack <A1 root> --lookup-changes` audits all nonempty parsed-key prefixes and reports exact-vs-selected values and provenance; native lexer and in-game parity remain unmeasured.
 
 ## Checked earlier (morning list)
 

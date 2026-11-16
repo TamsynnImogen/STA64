@@ -149,10 +149,14 @@ pub(crate) struct SettingsControlsPlugin;
 impl Plugin for SettingsControlsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Settings>()
+            .init_resource::<crate::input::keys::KeyBindings>()
+            .init_resource::<stock::controls::ControlsDraft>()
+            .init_resource::<stock::controls::ControlsRender>()
             .init_resource::<crate::ui::profile::UiPreference>()
             .init_resource::<stock::GraphicsInfo>()
             .add_message::<crate::ui::graphics::GraphicsEdited>()
             .add_systems(Update, stock::read_graphics_info.before(on_settings))
+            .add_systems(Update, stock::controls::update.in_set(GameSet::Ui).before(on_settings))
             .add_systems(Update, stock::paint_graphics_checks.after(crate::ui::theme::WidgetPaint))
             .add_systems(Update, on_settings.in_set(GameSet::Ui)
                 .before(crate::ui::profile::ProfileSync)
@@ -505,19 +509,20 @@ fn rebuild(
     scroll: Res<ListScroll>,
     config: Res<ScreensConfig>,
     stock_box: Res<stock::StockBox>,
-    options_tab: Res<stock::OptionsTab>,
+    options: (Res<stock::OptionsTab>, Res<stock::controls::ControlsDraft>, Res<stock::controls::ControlsRender>),
     strings: Option<Res<crate::ui::i18n::Strings>>,
     campaigns: Option<Res<crate::frontend::campaign::Campaigns>>,
 ) {
     let (settings, graphics) = presentation;
+    let (options_tab, controls, controls_render) = options;
     let (selected, active_mod) = mod_state;
     let Some(draft) = draft else { return };
-    if !(screen.is_changed() || graphics.as_ref().is_some_and(|g| g.is_changed()) || campaigns.as_ref().is_some_and(|c| c.is_changed()) || draft.is_changed() || browse.is_changed() || selected.is_changed() || active_mod.is_changed() || data.is_changed() || theme.is_changed() || stock_box.is_changed() || config.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed())) {
+    if !(screen.is_changed() || graphics.as_ref().is_some_and(|g| g.is_changed()) || campaigns.as_ref().is_some_and(|c| c.is_changed()) || draft.is_changed() || browse.is_changed() || selected.is_changed() || active_mod.is_changed() || data.is_changed() || theme.is_changed() || stock_box.is_changed() || config.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed()) || controls_render.is_changed()) {
         return;
     }
     for e in &roots {
         commands.entity(e).despawn();
     }
-    let ctx = view::Ctx { theme: &theme, data: &data, strings: strings.as_deref(), draft: &draft, browse: &browse, settings: &settings, selected: &selected, active_mod: &active_mod, scroll: &scroll, layout: config.layout, stock_box: stock_box.0, options_tab: options_tab.0, graphics: graphics.as_deref(), campaigns: campaigns.as_deref() };
+    let ctx = view::Ctx { theme: &theme, data: &data, strings: strings.as_deref(), draft: &draft, browse: &browse, settings: &settings, controls: &controls, selected: &selected, active_mod: &active_mod, scroll: &scroll, layout: config.layout, stock_box: stock_box.0, options_tab: options_tab.0, graphics: graphics.as_deref(), campaigns: campaigns.as_deref() };
     view::spawn(&mut commands, *screen.get(), &ctx, camera.map(|c| c.0));
 }

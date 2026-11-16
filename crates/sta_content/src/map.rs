@@ -257,7 +257,7 @@ impl MapDef {
         let mut cache: std::collections::HashMap<String, Option<Arc<sta_odf::Odf>>> = Default::default();
         let mut lookup = |name: &str| {
             let k = name.to_ascii_lowercase();
-            cache.entry(k.clone()).or_insert_with(|| sta_odf::resolve_layered(&k, &mut |n, v| index.load(vfs, n, v)).ok().map(Arc::new)).clone()
+            cache.entry(k.clone()).or_insert_with(|| crate::odf::resolve_for_profile(&k, db.profile(), &mut |n, v| index.load(vfs, n, v)).ok().map(Arc::new)).clone()
         };
         let mut converted = Self::convert_bzn_context(m, selected_stem, db, &mut lookup);
         if let (Some(a1), Some(name)) = (&m.a1, selected_stem) {
