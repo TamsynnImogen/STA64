@@ -53,6 +53,7 @@ mod passive;
 mod crew;
 mod personnel;
 mod seat;
+pub mod view;
 
 /// What a fresh node holds.
 pub const RICHNESS: i32 = 1_000_000;
@@ -285,6 +286,12 @@ pub struct EconomyRec {
 }
 
 impl Economy {
+    /// Live cargo rows for mining craft, including eligible idle craft with an
+    /// empty hold. This reads the same miner records and capacity rule as mining.
+    pub fn cargo_view(&self, db: &ContentDb, units: &Entities) -> Vec<view::CargoView> {
+        view::rows(self, db, units)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.stock.is_empty() && self.nodes.is_empty() && self.miners.is_empty() && self.personnel.is_empty() && self.adjust.is_empty()
     }

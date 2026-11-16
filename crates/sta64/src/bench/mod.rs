@@ -376,7 +376,7 @@ fn bench_frame(
         clock.ticked();
         // The effects' view of the tick just run: its world and its events.
         if let Some(link) = link.as_mut() {
-            link.feed_with_production(bench.view().clone(), bench.sim.production_view());
+            link.feed_with_production_and_cargo(bench.view().clone(), bench.sim.production_view(), bench.sim.cargo_view());
             out.write_batch(bench.events[*sent..].iter().map(|(_, e)| SimMsg(e.clone())));
             *sent = bench.events.len();
         }

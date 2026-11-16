@@ -23,6 +23,11 @@ pub trait WorldSource: Send {
     fn production_view(&self) -> Vec<crate::production::view::ProductionView> {
         Vec::new()
     }
+    /// Optional immutable cargo metadata for presentation. Stateless sources
+    /// return no rows; live simulations derive it from their economy records.
+    fn cargo_view(&self) -> Vec<crate::economy::view::CargoView> {
+        Vec::new()
+    }
     /// The whole world as snapshot bytes ([`Sim::snapshot`]), for sources that
     /// can: the playtest capture (TOOL-14) reads it, nothing in the sim does.
     /// The fakes have no state to save and answer `None`.

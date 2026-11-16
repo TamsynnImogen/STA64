@@ -41,6 +41,7 @@ pub struct SimLink {
     prev: Arc<WorldView>,
     curr: Arc<WorldView>,
     production: Vec<sta_sim::production::view::ProductionView>,
+    cargo: Vec<sta_sim::economy::view::CargoView>,
     /// Who this client's [`CommandQueue`] speaks for.
     player: PlayerId,
     /// Next sequence number for this client's commands.
@@ -62,7 +63,8 @@ impl SimLink {
     pub fn new(source: Box<dyn WorldSource>, router: Box<dyn CommandRouter>, player: PlayerId) -> SimLink {
         let view = source.view();
         let production = source.production_view();
-        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None, lifted: None, fog_lifted: false }
+        let cargo = source.cargo_view();
+        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, cargo, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None, lifted: None, fog_lifted: false }
     }
 
     /// Log every tick into `replay` (a [`Replay::new`] header of the game's
@@ -118,6 +120,11 @@ impl SimLink {
         &self.production
     }
 
+    /// Economy cargo metadata at the same simulation tick as `curr`.
+    pub fn cargo(&self) -> &[sta_sim::economy::view::CargoView] {
+        &self.cargo
+    }
+
     /// UI-46 (presentation only): show every unit to the local player while `lifted`. The shown views
     /// are copies of the sim's with every player's visibility list made complete; the sim's views, the
     /// controllers, the replay log, the snapshot and the digest are never given them.
@@ -166,8 +173,15 @@ impl SimLink {
 
     /// A bench owning the source can hand in both immutable views together.
     pub fn feed_with_production(&mut self, view: Arc<WorldView>, production: Vec<sta_sim::production::view::ProductionView>) {
+        self.feed_with_production_and_cargo(view, production, Vec::new());
+    }
+
+    /// A bench owning the source can supply its actual production and economy
+    /// metadata alongside the view from the same tick.
+    pub fn feed_with_production_and_cargo(&mut self, view: Arc<WorldView>, production: Vec<sta_sim::production::view::ProductionView>, cargo: Vec<sta_sim::economy::view::CargoView>) {
         self.prev = std::mem::replace(&mut self.curr, view);
         self.production = production;
+        self.cargo = cargo;
         self.refresh_lifted();
     }
 
@@ -177,6 +191,7 @@ impl SimLink {
         let before = self.curr.tick;
         let out = self.source.get().step(&batch);
         self.production = self.source.get().production_view();
+        self.cargo = self.source.get().cargo_view();
         if let Some(log) = &mut self.log {
             log.log_step(before, &batch, out.view.tick, out.view.digest, DEFAULT_DIGEST_EVERY);
         }
