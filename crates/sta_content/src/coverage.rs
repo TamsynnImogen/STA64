@@ -21,7 +21,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use sta_odf::Odf;
+use sta_odf::{LookupChange, Odf};
 use sta_vfs::{Source, Vfs};
 
 use crate::OdfIndex;
@@ -198,12 +198,13 @@ pub fn check(vfs: &Vfs) -> Report {
 fn odf_coverage(vfs: &Vfs, index: &OdfIndex, report: &mut Report) {
     let mut unknown: BTreeMap<String, usize> = BTreeMap::new();
     let cov = &mut report.odf;
+    let profile = crate::Profile::detect(vfs);
     for (stem, entry) in index.iter() {
         if entry.layer != 0 {
             continue;
         }
         let file = entry.path.rsplit('/').next().unwrap_or(&entry.path);
-        match sta_odf::resolve_layered(file, &mut |name, version| index.load(vfs, name, version)) {
+        match crate::odf::resolve_for_profile(file, profile, &mut |name, version| index.load(vfs, name, version)) {
             Ok(odf) => {
                 cov.files += 1;
                 for key in odf.keys() {
@@ -221,6 +222,68 @@ fn odf_coverage(vfs: &Vfs, index: &OdfIndex, report: &mut Report) {
     let mut unknown: Vec<_> = unknown.into_iter().collect();
     unknown.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     cov.unknown = unknown;
+}
+
+/// One visible ODF whose parsed-key prefix lookup changes a raw value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OdfLookupChanges {
+    pub file: String,
+    /// The effective file's layer, before includes are followed.
+    pub layer: String,
+    pub changes: Vec<(LookupChange, KeyWhy)>,
+}
+
+/// A separate, exhaustive audit; [`check`] does not pay its prefix-query cost.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LookupAudit {
+    /// Number of visible ODF stems attempted, including unresolved ones.
+    pub files: usize,
+    pub changed: Vec<OdfLookupChanges>,
+    pub errors: Vec<(String, String)>,
+}
+
+impl LookupAudit {
+    pub fn changed_queries(&self) -> usize {
+        self.changed.iter().map(|f| f.changes.len()).sum()
+    }
+}
+
+/// Resolve all visible ODFs with the supplied lineage and compare each
+/// nonempty parsed-key prefix with exact matching (ADR 0004 D4/D5).
+pub fn lookup_change_audit(vfs: &Vfs, profile: crate::Profile) -> LookupAudit {
+    let (index, _) = OdfIndex::build(vfs);
+    let mut report = LookupAudit::default();
+    for (_, entry) in index.iter() {
+        report.files += 1;
+        let file = entry.path.rsplit('/').next().unwrap_or(&entry.path);
+        match crate::odf::resolve_for_profile(file, profile, &mut |name, version| index.load(vfs, name, version)) {
+            Ok(odf) => {
+                let mut changes = Vec::new();
+                for change in odf.lookup_changes() {
+                    let src = &change.source;
+                    let versions = index.versions(&src.file);
+                    let Some(source_entry) = versions.get(src.version) else {
+                        report.errors.push((entry.path.clone(), format!("missing source {} version {} for query {}", src.file, src.version, change.key)));
+                        continue;
+                    };
+                    let layer = vfs.layers()[source_entry.layer].name().to_owned();
+                    changes.push((change.clone(), KeyWhy {
+                        file: source_entry.path.clone(), layer, line: src.line,
+                        value: change.selected.clone(),
+                    }));
+                }
+                if !changes.is_empty() {
+                    report.changed.push(OdfLookupChanges {
+                        file: entry.path.clone(),
+                        layer: vfs.layers()[entry.layer].name().to_owned(),
+                        changes,
+                    });
+                }
+            }
+            Err(e) => report.errors.push((entry.path.clone(), e.to_string())),
+        }
+    }
+    report
 }
 
 /// Entries of `name` that the top version changes against what it hides.
@@ -401,7 +464,7 @@ pub fn why_key(vfs: &Vfs, file: &str, key: &str) -> Option<KeyWhy> {
     let (index, _) = OdfIndex::build(vfs);
     let entry = index.get(file)?;
     let selected = entry.path.rsplit('/').next().unwrap_or(&entry.path).to_owned();
-    let odf: Odf = sta_odf::resolve_layered(&selected, &mut |name, version| index.load(vfs, name, version)).ok()?;
+    let odf: Odf = crate::odf::resolve_for_profile(&selected, crate::Profile::detect(vfs), &mut |name, version| index.load(vfs, name, version)).ok()?;
     let src = odf.source(key)?;
     let hit = index.versions(&src.file).get(src.version).map(|e| (e.layer, e.path.clone()));
     let layer = hit.as_ref().and_then(|(l, _)| vfs.layers().get(*l)).map_or_else(String::new, |l| l.name().to_owned());
@@ -530,6 +593,44 @@ mod tests {
         let w = why_key(&vfs, "RTS_CFG.h", "SHIELD_DAMAGE_PROTECTION").unwrap();
         assert_eq!((w.layer.as_str(), w.line, w.value.as_str()), ("Child", 1, "0.9"));
         assert!(why_text(&vfs, "child", Some("odd")).contains("line 4"));
+    }
+
+    #[test]
+    fn a1_lookup_audit_reports_own_prefix_duplicate_and_truthful_why() {
+        let t = Tmp::new("lookup_a1");
+        t.write("Data/info.ini", "[mod]\nProfile=sta1classic\n");
+        t.write("Data/odf/ships/base.odf", "key = base\n");
+        t.write("Data/odf/ships/child.odf", "#include \"base.odf\"\nkeyX = own\ndupLong = first\ndupLong = last\norphanLong\n");
+        let vfs = Vfs::mount_install(&t.0, None).unwrap();
+        assert_eq!(crate::Profile::detect(&vfs), crate::Profile::Sta1Classic);
+        let report = lookup_change_audit(&vfs, crate::Profile::Sta1Classic);
+        assert_eq!(report.files, 2);
+        assert!(report.errors.is_empty(), "{:?}", report.errors);
+        let child = report.changed.iter().find(|f| f.file.ends_with("child.odf")).unwrap();
+        let (prefix, source) = child.changes.iter().find(|(c, _)| c.key == "key").unwrap();
+        assert_eq!((prefix.exact.as_deref(), prefix.selected.as_str()), (Some("base"), "own"));
+        assert_eq!((source.file.as_str(), source.layer.as_str(), source.line), ("odf/ships/child.odf", "Data", 2));
+        let (duplicate, source) = child.changes.iter().find(|(c, _)| c.key == "duplong").unwrap();
+        assert_eq!((duplicate.exact.as_deref(), duplicate.selected.as_str(), source.line), (Some("last"), "first", 3));
+        assert!(!child.changes.iter().any(|(c, _)| c.key.starts_with("orphan")));
+        let why = why_key(&vfs, "child", "key").unwrap();
+        assert_eq!((why.file.as_str(), why.line, why.value.as_str()), ("odf/ships/child.odf", 2, "own"));
+        assert!(why_text(&vfs, "child", Some("key")).contains("key key = own from odf/ships/child.odf (layer Data) line 2"));
+        let exact = lookup_change_audit(&vfs, crate::Profile::Sta2Classic);
+        assert_eq!(exact.files, 2);
+        assert!(exact.changed.is_empty());
+        assert!(exact.errors.is_empty());
+    }
+
+    #[test]
+    fn lookup_audit_keeps_resolution_errors_visible() {
+        let t = Tmp::new("lookup_error");
+        t.write("Data/odf/ships/broken.odf", "#include \"missing.odf\"\nkeyX = value\n");
+        let vfs = Vfs::mount_install(&t.0, None).unwrap();
+        let report = lookup_change_audit(&vfs, crate::Profile::Sta1Classic);
+        assert_eq!(report.files, 1);
+        assert_eq!(report.errors.len(), 1);
+        assert!(report.errors[0].0.ends_with("broken.odf"));
     }
 }
 

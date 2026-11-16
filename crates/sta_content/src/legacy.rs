@@ -5,7 +5,8 @@
 //! file name across all ODF folders. This does the same and wraps each in a
 //! [`UnitDef`]: class, drawn model (`basename`, else the ODF's own name),
 //! `ScaleSOD`, and movement from the physics ODF (`physicsFile`). Nothing is
-//! checked against a profile and no hardpoints, builds or weapons are read.
+//! typed against a profile and no hardpoints, builds or weapons are read.
+//! Raw ODF lookup follows the detected lineage, like the full content loader.
 //! The resolved ODF stays in [`UnitDef::raw`] for the scenery keys the map
 //! reads straight from it.
 
@@ -53,11 +54,11 @@ impl Legacy {
             return o.clone();
         }
         let paths = &self.paths;
-        let mut load = |n: &str| {
+        let load = |n: &str| {
             let n = stem(n);
             paths.get(&n).and_then(|p| vfs.read(p)).and_then(Result::ok).map(|b| String::from_utf8_lossy(&b).into_owned())
         };
-        let odf = sta_odf::resolve(&key, &mut load).ok().map(Arc::new);
+        let odf = crate::odf::resolve_for_profile(&key, crate::Profile::detect(vfs), &mut |name, version| if version == 0 { load(name) } else { None }).ok().map(Arc::new);
         self.odfs.insert(key, odf.clone());
         odf
     }

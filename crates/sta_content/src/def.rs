@@ -259,6 +259,22 @@ pub struct BuildDef {
 impl BuildDef {
     /// [`flagged_slots`](BuildDef::flagged_slots) as a builder's ODF gives them.
     pub fn flagged_slots_of(odf: &sta_odf::Odf) -> Option<Vec<String>> {
+        if odf.lookup_policy() == sta_odf::LookupPolicy::PrefixFirst {
+            let mut any = false;
+            let mut items = Vec::new();
+            for index in crate::odf::prefix_numbered_indices(odf, "builditem") {
+                let query = format!("builditem{index}");
+                if ["availability", "provided"].iter().any(|suffix| odf.raw(&format!("{query}{suffix}")).is_some()) {
+                    any = true;
+                    if let Some(value) = odf.raw(&query) {
+                        items.push(crate::techtree::stem(value.trim().trim_matches('"')));
+                    }
+                }
+            }
+            items.sort();
+            items.dedup();
+            return any.then_some(items);
+        }
         let mut any = false;
         let mut items = Vec::new();
         for k in odf.keys() {
