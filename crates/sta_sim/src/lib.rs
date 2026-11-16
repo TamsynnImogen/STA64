@@ -84,6 +84,8 @@ pub mod team_pool;
 mod rerace_tests;
 #[cfg(test)]
 mod special_forces_tests;
+#[cfg(test)]
+mod cheat_grant_tests;
 pub use start_effects::unsupported as unsupported_start_lifecycle;
 pub mod tech;
 pub mod victory;
@@ -563,6 +565,11 @@ impl Sim {
         self.content.as_deref().map_or_else(Vec::new, |db| self.production.view(db, &self.units))
     }
 
+    /// Read-only cargo and hold capacity for live mining craft.
+    pub fn cargo_view(&self) -> Vec<economy::view::CargoView> {
+        self.content.as_deref().map_or_else(Vec::new, |db| self.economy.cargo_view(db, &self.units))
+    }
+
     fn build_view(&self) -> WorldView {
         // `hidden = 1` objects (start pods, faction objects, map markers) stay in
         // `units` for scripts, but no player sees or picks them (`EntityKind::hidden`).
@@ -770,6 +777,10 @@ impl WorldSource for Sim {
 
     fn production_view(&self) -> Vec<production::view::ProductionView> {
         Sim::production_view(self)
+    }
+
+    fn cargo_view(&self) -> Vec<economy::view::CargoView> {
+        Sim::cargo_view(self)
     }
 }
 

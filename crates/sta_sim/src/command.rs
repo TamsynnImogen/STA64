@@ -170,9 +170,9 @@ pub enum Edit {
     /// that tick (see [`crate::present`]).
     Present(crate::present::Presentation),
     /// A subsystem on or off (mission `Disable*` calls). `Engines` and
-    /// `Weapons` act like [`Edit::Engines`] / [`Edit::Weapons`]; `Shields`,
-    /// `LifeSupport` and `Sensors` are recorded as switched off or on
-    /// (SIM-55; the combat consequences are not modelled, see `combat/damage.rs`).
+    /// `Weapons` act like [`Edit::Engines`] / [`Edit::Weapons`]; `Shields` drops its pools
+    /// while off and resumes recharge when enabled (UI-47). `LifeSupport` and `Sensors`
+    /// switches are recorded (SIM-55; combat consequences remain incomplete).
     Subsystem(EntityId, Subsystem, bool),
     /// Alert state (mission `SetRedAlert` and friends). Rejected until a
     /// package models alert states.
@@ -383,6 +383,8 @@ pub enum TeamOp {
     OfficersAddA1,
     /// A1 `SetOfficers`: the officer count becomes `min(trunc(v), cap)`.
     OfficersSetA1,
+    /// Add a nonnegative amount to resource stock when this command applies.
+    ResourceAdd(u8),
 }
 
 /// The largest turn rate (radians per second) a script may set.
@@ -559,6 +561,9 @@ mod tests {
             assert_eq!(bytes[0], 44, "{edit:?}");
             assert_eq!(postcard::from_bytes::<Edit>(&bytes).unwrap(), edit);
         }
+        let op = TeamOp::ResourceAdd(2);
+        assert_eq!(postcard::to_allocvec(&op).unwrap(), [7, 2]);
+        assert_eq!(postcard::from_bytes::<TeamOp>(&[7, 2]).unwrap(), op);
     }
 
     #[test]

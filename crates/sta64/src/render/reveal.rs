@@ -100,7 +100,7 @@ pub struct RevealPlugin;
 
 impl Plugin for RevealPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Reveal>().add_message::<Notice>().add_systems(Update, update_reveal.in_set(GameSet::Input).run_if(crate::game::flow::match_running));
+        app.init_resource::<Reveal>().add_message::<Notice>().add_systems(Update, update_reveal.in_set(GameSet::Input).run_if(crate::game::flow::match_running).run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free));
     }
 }
 

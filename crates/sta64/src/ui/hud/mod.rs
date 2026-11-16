@@ -177,7 +177,7 @@ impl Plugin for HudPlugin {
                     crate::input::hover::track.run_if(not(resource_exists::<ExternalFeed>)),
                     stock::infobar::update,
                     press.run_if(not(crate::ui::presentation::cutscene_running)),
-                    place_on_click.run_if(resource_exists::<Aim>).run_if(not(crate::ui::presentation::cutscene_running)),
+                    place_on_click.run_if(resource_exists::<Aim>).run_if(not(crate::ui::presentation::cutscene_running)).run_if(crate::cheats::input::game_input_free),
                     ghost::update_ghost,
                     ghost::tint_ghost,
                     (ghost::sync_footprints, object_footprints::sync_object_footprints).chain(),
@@ -394,7 +394,12 @@ fn press(
     mut changed: MessageWriter<SelectionChanged>,
     mut notices: MessageWriter<Notice>,
     mut targets: ResMut<OrderTargets>,
+    cheat: Option<Res<crate::cheats::input::CheatInput>>,
 ) {
+    if cheat.is_some_and(|c| c.open || c.blocked_this_frame) {
+        clicks.read().for_each(drop);
+        return;
+    }
     for ButtonClicked(e) in clicks.read() {
         if let Ok(GroupTile(id)) = tiles.get(*e) {
             let shift = keys
