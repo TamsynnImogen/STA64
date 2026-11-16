@@ -750,3 +750,16 @@ fn square_bounds_allow_edge_contact_but_reject_one_bit_overlap_and_map_regions()
     assert!(!sim.production.is_deploying(rig));
     assert_eq!(dilithium(&sim), Fixed::from_int(5000));
 }
+
+#[test]
+fn a_model_less_resource_blocks_its_displayed_field_footprint() {
+    let mut sim = game(true);
+    let rig = spawn(&mut sim, "fx_rig", v(-1000, -1000));
+    spawn(&mut sim, "fx_moon", v(1000, 1000));
+    fund(&mut sim, 5000);
+    // This fake resource has no authored body radius. Its displayed field
+    // half-extent is 100, beyond the ordinary model-less craft fallback.
+    assert!(!build(&mut sim, rig, "fx_station", Some(v(1120, 1120))));
+    assert_eq!(dilithium(&sim), Fixed::from_int(5000));
+    assert!(!sim.production.is_deploying(rig));
+}
