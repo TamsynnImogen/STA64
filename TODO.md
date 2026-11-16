@@ -169,6 +169,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] FO4 AI startup (#806): start a fresh Federation versus Klingon skirmish. The computer's avatar starter should change into its authored productive station, then begin building. Check that the human starter remains available for manual avatar selection. The automatic AI owner gate is backed by static original-hook evidence and headless tests; graphical acceptance remains manual.
 
+- [?] Reveal bindings (UI-49, #868): rebind `reveal_modifier`, `reveal_fog` and `reveal_shroud` in the existing settings file, restart and check the new combinations. Defaults stay Alt+F/V; the modifier is required and comma-separated keys are alternatives. Check menu/cheat entry capture and multiplayer refusal. A graphical binding editor is not part of this change.
+
 ### Playtest checks from the 2026-11-14/15 merges
 
 - [?] Planets (#732): in a map view a planet shows its near, camera-side hemisphere lit toward the key light, with the cloud shell and halo over the ground; check that dense clouds do not dim the halo.

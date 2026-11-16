@@ -48,10 +48,24 @@ are not added without executable evidence that they work.
 
 ## Reveal controls (PR #837, UI-46)
 
-**Alt+F** lifts/restores fog; **Alt+V** lifts/restores shroud. At launch use `--reveal fog`,
+By default, **Alt+F** lifts/restores fog and **Alt+V** lifts/restores shroud. At launch use `--reveal fog`,
 `--reveal shroud` or `--reveal all`. Lift both to see the whole map. They remain client-side
 presentation changes and are refused in network games. Clicking an enemy exposed by the cheat
 may issue an ordinary attack order; that explicit order is recorded and replayed normally.
+
+The existing `settings.cfg` file can rebind the reveal modifier and both action keys:
+
+```text
+reveal_modifier = AltLeft, AltRight
+reveal_fog = KeyF
+reveal_shroud = KeyV
+```
+
+Keys separated by commas are alternatives. Hold a bound modifier and press a bound action key;
+for example, `reveal_modifier = ControlLeft, ControlRight` and `reveal_fog = KeyG` use Ctrl+G.
+Older settings files keep the defaults. This uses the existing settings file and binding API;
+there is no graphical binding editor yet. Menu and cheat entry still capture these keys, and
+network games still refuse reveal changes.
 
 ## Recording and verification
 
