@@ -11,10 +11,14 @@ const FILL_Y: f32 = -0.001;
 
 /// A centered square with one translucent fill and one ribbon per grid line.
 pub(super) fn mesh(cells: u32) -> Mesh {
-    let half = cells as f32 * 0.5;
-    let lo = -half;
-    let hi = half;
-    let quads = 1 + 2 * (cells as usize + 1);
+    rectangular_mesh(cells, cells)
+}
+
+/// Rectangular footprint, retaining square cells on both axes.
+pub(super) fn rectangular_mesh(columns: u32, rows: u32) -> Mesh {
+    let (left, right) = (-(columns as f32) * 0.5, columns as f32 * 0.5);
+    let (bottom, top) = (-(rows as f32) * 0.5, rows as f32 * 0.5);
+    let quads = 1 + columns as usize + rows as usize + 2;
     let mut positions = Vec::with_capacity(quads * 4);
     let mut normals = Vec::with_capacity(quads * 4);
     let mut uvs = Vec::with_capacity(quads * 4);
@@ -30,13 +34,30 @@ pub(super) fn mesh(cells: u32) -> Mesh {
     };
 
     // Recess the fill slightly so the white ribbons remain visible over it.
-    quad(lo, lo, hi, hi, FILL_Y, FILL_ALPHA);
-    for line in 0..=cells {
-        let at = lo + line as f32;
-        let start = (at - LINE_WIDTH * 0.5).max(lo);
-        let end = (at + LINE_WIDTH * 0.5).min(hi);
-        quad(start, lo, end, hi, 0.0, 1.0);
-        quad(lo, start, hi, end, 0.0, 1.0);
+    quad(left, bottom, right, top, FILL_Y, FILL_ALPHA);
+    for line in 0..=columns.max(rows) {
+        if line <= columns {
+            let at = left + line as f32;
+            quad(
+                (at - LINE_WIDTH * 0.5).max(left),
+                bottom,
+                (at + LINE_WIDTH * 0.5).min(right),
+                top,
+                0.0,
+                1.0,
+            );
+        }
+        if line <= rows {
+            let at = bottom + line as f32;
+            quad(
+                left,
+                (at - LINE_WIDTH * 0.5).max(bottom),
+                right,
+                (at + LINE_WIDTH * 0.5).min(top),
+                0.0,
+                1.0,
+            );
+        }
     }
 
     Mesh::new(
@@ -101,6 +122,29 @@ mod tests {
             assert_eq!((horizontal[0][2], horizontal[2][2]), (start, end));
             assert!(vertical.iter().all(|p| p[1] == 0.0));
             assert!(horizontal.iter().all(|p| p[1] == 0.0));
+        }
+    }
+
+    #[test]
+    fn rectangular_regions_retain_square_cell_spacing() {
+        let grid = rectangular_mesh(6, 2);
+        let positions = positions(&grid);
+        assert_eq!(positions.len(), (1 + 7 + 3) * 4);
+        for (axis, half) in [(0, 3.0), (2, 1.0)] {
+            assert_eq!(
+                positions
+                    .iter()
+                    .map(|p| p[axis])
+                    .fold(f32::INFINITY, f32::min),
+                -half
+            );
+            assert_eq!(
+                positions
+                    .iter()
+                    .map(|p| p[axis])
+                    .fold(f32::NEG_INFINITY, f32::max),
+                half
+            );
         }
     }
 
