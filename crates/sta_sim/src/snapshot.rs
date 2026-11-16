@@ -58,8 +58,9 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// switch rows. Format 33 adds the guard order to the scripted-order rows (LUA-39):
 /// a build without it would refuse such a row as a corrupt record, but could not
 /// tell the file from a valid one by version.
+/// Format 34 appends the mission switches (LUA-41).
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 33;
+pub const FORMAT_VERSION: u16 = 34;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
@@ -491,6 +492,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&self.transports.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.recrew.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.alerts.to_rec()).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&self.mission_switches.to_rec()).expect("snapshot serialises"));
         out
     }
 
@@ -567,6 +569,8 @@ impl Sim {
         let (transport_rec, rest): (crate::combat::boarding::TransportsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         let (recrew_rec, rest): (crate::recrew::RecrewRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         let (alert_rec, rest): (crate::alert::AlertRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        let (switches_rec, rest): (crate::mission_switches::SwitchesRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        let mission_switches = crate::mission_switches::MissionSwitches::from_rec(switches_rec).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -752,6 +756,7 @@ impl Sim {
             colonies,
             transports,
             recrew,
+            mission_switches,
         };
         sim.refresh_seat_rules();
         Ok(sim)
@@ -811,6 +816,10 @@ mod warp_tests;
 #[cfg(test)]
 #[path = "snapshot/alert_tests.rs"]
 mod alert_tests;
+
+#[cfg(test)]
+#[path = "snapshot/mission_switches_tests.rs"]
+mod mission_switches_tests;
 
 #[cfg(test)]
 mod tests {

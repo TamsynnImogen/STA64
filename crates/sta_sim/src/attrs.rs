@@ -59,6 +59,9 @@ pub struct AttrsView {
     /// Derived from the switch rows each tick; not saved state.
     #[serde(default)]
     pub special_forces: Vec<EntityId>,
+    /// The mission-wide switches (LUA-41); the default when none was sent.
+    #[serde(default)]
+    pub mission_switches: crate::mission_switches::MissionSwitches,
 }
 
 /// One seat's derived team numbers.
@@ -123,6 +126,7 @@ impl Attrs {
             alerts: Vec::new(),
             enemy_hit: Vec::new(),
             ally_attacks: Vec::new(),
+            mission_switches: Default::default(),
         }
     }
 

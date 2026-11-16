@@ -282,6 +282,7 @@ impl Sim {
             Edit::MaxSpeed(id, to) => self.edit_max_speed(id, to),
             Edit::WarpSpeed(id, to) => self.edit_warp_speed(id, to),
             Edit::Alert(id, to) => self.edit_alert(id, to),
+            Edit::MissionSwitch(which, on) => self.edit_mission_switch(which, on),
             Edit::Present(ref p) => {
                 if matches!(p, crate::present::Presentation::Cineractive { on: false, .. }) {
                     self.reset_all_impulse();

@@ -20,12 +20,13 @@ fn guarded() -> Sim {
 }
 
 #[test]
-fn the_format_is_33_and_the_previous_formats_are_refused() {
-    assert_eq!(FORMAT_VERSION, 33);
+fn the_guard_rows_are_in_a_format_from_33_and_the_previous_formats_are_refused() {
+    // Format 33 added the guard rows; LUA-41 followed with 34.
+    assert_eq!(FORMAT_VERSION, 34);
     let sim = guarded();
     let bytes = sim.snapshot();
-    assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), 33);
-    for old in [31u16, 32] {
+    assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), 34);
+    for old in [31u16, 32, 33] {
         let mut stale = bytes.clone();
         stale[4..6].copy_from_slice(&old.to_le_bytes());
         assert!(matches!(Sim::from_snapshot(&stale, sim.content.clone()), Err(SnapshotError::FormatVersion { found }) if found == old));

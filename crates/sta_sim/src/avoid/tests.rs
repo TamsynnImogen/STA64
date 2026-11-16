@@ -341,3 +341,37 @@ fn random_orders_across_a_field_of_obstacles_always_end() {
         }
     }
 }
+
+fn overlapping_pair(prevention: bool) -> f64 {
+    let mut sim = sim(Vec::new());
+    let a = put(&mut sim, "fx_cruiser", 1, v(0, 0));
+    let b = put(&mut sim, "fx_cruiser", 1, v(20, 0));
+    if !prevention {
+        let c = Command { player: PlayerId::SCRIPT, seq: 0, kind: CommandKind::Edit(crate::command::Edit::MissionSwitch(crate::command::MissionSwitch::CollisionPrevention, false)) };
+        sim.step(&[c]);
+    }
+    for _ in 0..120 {
+        sim.step(&[]);
+    }
+    gap(sim.unit(a).unwrap().pos, sim.unit(b).unwrap().pos)
+}
+
+#[test]
+fn collision_prevention_off_leaves_craft_overlapped() {
+    // LUA-41: authored numbers; two idle cruisers (bodies 75) 20 apart.
+    assert!(overlapping_pair(true) > 140.0, "control: pushed apart");
+    assert!(overlapping_pair(false) < 21.0, "pushed apart with prevention off");
+}
+
+#[test]
+fn collision_prevention_off_still_pushes_a_craft_out_of_a_solid() {
+    let mut sim = sim(Vec::new());
+    let planet = put(&mut sim, "fx_moon", 0, v(0, 0));
+    let ship = put(&mut sim, "fx_cruiser", 1, v(50, 0));
+    let c = Command { player: PlayerId::SCRIPT, seq: 0, kind: CommandKind::Edit(crate::command::Edit::MissionSwitch(crate::command::MissionSwitch::CollisionPrevention, false)) };
+    sim.step(&[c]);
+    for _ in 0..60 {
+        sim.step(&[]);
+    }
+    assert!(gap(sim.unit(ship).unwrap().pos, sim.unit(planet).unwrap().pos) >= 375.0 - TOLERANCE);
+}
