@@ -31,13 +31,7 @@ pub(super) enum LiveValue {
 struct Shape {
     selected: EntityId,
     stock: bool,
-    queue: Vec<(
-        sta_sim::ContentKey,
-        JobState,
-        String,
-        Option<String>,
-        Option<String>,
-    )>,
+    queue: Vec<QueueShape>,
     cargo: bool,
     cargo_resource: Option<u8>,
     construction: bool,
@@ -45,6 +39,15 @@ struct Shape {
     progress: Option<R>,
     cargo_bar: Option<R>,
     lcars_card: Option<R>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct QueueShape {
+    def: sta_sim::ContentKey,
+    state: JobState,
+    name: String,
+    model: Option<String>,
+    odf: Option<String>,
 }
 
 #[cfg(test)]
@@ -233,14 +236,12 @@ fn stock_shape(
         queue: status
             .queue
             .iter()
-            .map(|q| {
-                (
-                    q.def,
-                    q.state,
-                    q.name.clone(),
-                    q.model.clone(),
-                    q.odf.clone(),
-                )
+            .map(|q| QueueShape {
+                def: q.def,
+                state: q.state,
+                name: q.name.clone(),
+                model: q.model.clone(),
+                odf: q.odf.clone(),
             })
             .collect(),
         cargo: status.cargo.is_some(),
@@ -279,14 +280,12 @@ fn lcars_shape(
         queue: status
             .queue
             .iter()
-            .map(|q| {
-                (
-                    q.def,
-                    q.state,
-                    q.name.clone(),
-                    q.model.clone(),
-                    q.odf.clone(),
-                )
+            .map(|q| QueueShape {
+                def: q.def,
+                state: q.state,
+                name: q.name.clone(),
+                model: q.model.clone(),
+                odf: q.odf.clone(),
             })
             .collect(),
         cargo: status.cargo.is_some(),
