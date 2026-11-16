@@ -141,6 +141,8 @@ pub(super) fn spawn(
                             JustifyContent::FlexStart
                         },
                         align_items: AlignItems::Center,
+                        // A map's or a script's name must not leave its authored rect.
+                        overflow: if field == InfoBarField::Name { Overflow::clip() } else { Overflow::visible() },
                         ..node(rect)
                     },
                     Pickable::IGNORE,

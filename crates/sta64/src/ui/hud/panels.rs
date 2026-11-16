@@ -271,7 +271,7 @@ fn fill_single(p: &mut EntityCommands, theme: &Theme, s: &Single, size: Vec2) {
     let bar = ((size.x - 2.0 * theme.pad - theme.side_bar) * 0.5).clamp(120.0, 360.0);
     let name_colour = if s.own { theme.title } else { theme.bad };
     p.with_child((
-        Node { align_items: AlignItems::Baseline, column_gap: Val::Px(theme.gap), ..default() },
+        Node { align_items: AlignItems::Baseline, column_gap: Val::Px(theme.gap), max_width: Val::Percent(100.0), overflow: Overflow::clip(), ..default() },
         Pickable::IGNORE,
         children![text(s.name.to_uppercase(), theme.heading_size, name_colour), text(s.class.to_uppercase(), theme.small_size, theme.text_dim)],
     ));

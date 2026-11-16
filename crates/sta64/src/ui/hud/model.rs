@@ -67,7 +67,9 @@ impl HudFeed {
         self.def(u).map_or_else(|| format!("#{}", u.id.0), |d| craft_names::instance(d, u.id))
     }
 
-    /// Authored type caption for the mouseover strip, independent of craft name.
+    /// The mouseover strip's name: the unit's given name (script-set, else the map's) when it has
+    /// one, else the authored type caption (independent of craft name). Whether the original's
+    /// strip shows a given name or the type caption is not established.
     pub(crate) fn unit_label(&self, u: &UnitView) -> String {
         if let Some(n) = self.given_name(u) {
             return n.to_owned();

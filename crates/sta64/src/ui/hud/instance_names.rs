@@ -23,20 +23,25 @@ pub struct InstanceNames(Arc<HashMap<EntityId, String>>);
 
 impl InstanceNames {
     /// The names of `map`'s objects joined to the sim's `labels` (entity id, label). A label
-    /// is matched trimmed; the first object with that label and a name gives it; no name,
-    /// no row.
+    /// is matched trimmed; a label shared by objects that disagree (a different name, or one
+    /// of them unnamed) gives nothing; no name, no row.
     pub fn of<'a>(map: &sta_bzn::Map, labels: impl IntoIterator<Item = (EntityId, &'a str)>) -> InstanceNames {
-        let mut by_label: HashMap<&str, &str> = HashMap::new();
+        // A label several objects share names an entity only when every sharer gives the same
+        // name; otherwise the label is dropped (the map is ambiguous, no name is guessed).
+        let mut by_label: HashMap<&str, Option<&str>> = HashMap::new();
         for o in &map.objects {
             let (label, name) = (o.label.trim(), o.instance_name.trim());
-            if !label.is_empty() && !name.is_empty() {
-                by_label.entry(label).or_insert(name);
+            if label.is_empty() {
+                continue;
             }
+            let name = Some(name).filter(|n| !n.is_empty());
+            by_label.entry(label).and_modify(|seen| if *seen != name { *seen = None }).or_insert(name);
         }
+        by_label.retain(|_, name| name.is_some());
         if by_label.is_empty() {
             return InstanceNames::default();
         }
-        let rows = labels.into_iter().filter_map(|(id, label)| by_label.get(label.trim()).map(|n| (id, (*n).to_owned())));
+        let rows = labels.into_iter().filter_map(|(id, label)| by_label.get(label.trim()).and_then(|n| *n).map(|n| (id, n.to_owned())));
         InstanceNames(Arc::new(rows.collect()))
     }
 
@@ -71,5 +76,17 @@ mod tests {
             assert_eq!(names.get(EntityId(id)), None);
         }
         assert!(InstanceNames::of(&sta_bzn::Map::default(), labels).is_empty());
+    }
+
+    #[test]
+    fn a_label_shared_by_objects_that_disagree_gives_no_name() {
+        let map = sta_bzn::Map {
+            objects: vec![object("dup", "Same Name"), object("dup", "Same Name"), object("mixed", "Named"), object("mixed", ""), object("clash", "One"), object("clash", "Two")],
+            ..Default::default()
+        };
+        let labels = [(EntityId(1), "dup"), (EntityId(2), "dup"), (EntityId(3), "mixed"), (EntityId(4), "clash")];
+        let names = InstanceNames::of(&map, labels);
+        assert_eq!((names.get(EntityId(1)), names.get(EntityId(2))), (Some("Same Name"), Some("Same Name")));
+        assert_eq!((names.get(EntityId(3)), names.get(EntityId(4))), (None, None));
     }
 }
