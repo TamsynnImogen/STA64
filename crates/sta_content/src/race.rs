@@ -251,7 +251,7 @@ impl Races {
         let mut warnings = Vec::new();
         let root = loader("races.odf", 0);
         let authoritative = root.is_some() || profile != Profile::Native;
-        let list = match sta_odf::resolve_layered("races", &mut |name, version| {
+        let list = match crate::odf::resolve_for_profile("races", profile, &mut |name, version| {
             if version == 0 && stem(name) == "races" {
                 root.clone()
             } else {
@@ -272,12 +272,15 @@ impl Races {
         // Walk authored keys rather than an arbitrary fixed cap or a potentially
         // enormous declared count. Inherited trailing keys are inactive when a
         // child lowers numberOfRaces.
-        let mut entries: Vec<u64> = list.keys().filter_map(|key| {
+        let mut entries: Vec<u64> = if list.lookup_policy() == sta_odf::LookupPolicy::PrefixFirst {
+            crate::odf::prefix_numbered_indices(&list, "race").into_iter()
+                .filter(|&index| declared.is_none_or(|count| index < count as u64)).collect()
+        } else { list.keys().filter_map(|key| {
             let key = key.to_ascii_lowercase();
             let index = key.strip_prefix("race")?.parse::<u64>().ok()?;
             (key == format!("race{index}") && declared.is_none_or(|count| index < count as u64))
                 .then_some(index)
-        }).collect();
+        }).collect() };
         entries.sort_unstable();
         let mut races = Vec::new();
         let mut interfaces = Vec::new();
@@ -292,7 +295,7 @@ impl Races {
                 continue;
             };
             let s = stem(file);
-            match sta_odf::resolve_layered(&s, loader) {
+            match crate::odf::resolve_for_profile(&s, profile, loader) {
                 Ok(o) => {
                     let Some(name) = o
                         .str("name")

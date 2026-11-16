@@ -224,6 +224,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Current-frame tooltip placement (UI-50, #869): hover near each window edge until short and verbose tooltips appear, switch between short and tall tooltips, then resize/change UI scale. The first visible frame should use the new box size; background, border and all text should stay together inside the window. Confirm localized text, crispness and normal hover delays in Classic and FO.
 
+- [?] A1 ODF lookup (CON-56, #875): with an updated A1 build, verify unit/race/scenery values after first-prefix assignment selection. `check_pack <A1 root> --lookup-changes` audits all nonempty parsed-key prefixes and reports exact-vs-selected values and provenance; native lexer and in-game parity remain unmeasured.
+
 ## Checked earlier (morning list)
 
 - [x] Construction live-feedback fixes accepted (2026-11-11, `construction-a1666d0`): the user confirmed visible beams, later chunk reveal and the constructor staying fixed under normal/queued movement. Automated Stop/cancellation and snapshot checks pass. FPS was not reported; this does not complete broader native/Android checks above.

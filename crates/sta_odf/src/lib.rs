@@ -6,7 +6,8 @@
 //! - `#include "other.odf"` pulls in another ODF. Includes are resolved by file
 //!   name across all known ODF folders, so the folder is organisational only.
 //! - Later assignments override earlier ones, so an ODF's own keys override
-//!   anything it includes.
+//!   anything it includes. [`LookupPolicy::PrefixFirst`] explicitly selects
+//!   the Armada I first-prefix rule instead; ordinary resolvers stay exact.
 //! - Quoted list rows may continue an assignment on following lines.
 //! - Fleet Operations layers its files (a mod's over its parent's over the
 //!   game's). An include of the root file's own name is its **next version
@@ -20,7 +21,7 @@
 //! Values are kept as raw text with typed accessors; interpretation belongs to
 //! the systems that consume them.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 pub mod cst;
 pub use cst::{Cst, GroupTable, LineKind};
@@ -172,9 +173,39 @@ pub struct KeySource {
     pub line: usize,
 }
 
+/// Assignment selection; parsing and include validation are unchanged.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LookupPolicy {
+    /// Whole-key matching, with later assignments replacing earlier ones.
+    #[default]
+    Exact,
+    /// First case-insensitive prefix match, own assignments before includes.
+    /// Armada I rule: read from the executable, static; lexer parity unmeasured.
+    PrefixFirst,
+}
+
+#[derive(Debug, Clone)]
+struct Candidate {
+    key: String,
+    value: String,
+    rows: String,
+    source: KeySource,
+}
+
+/// A nonempty lookup whose value changes under prefix-first selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LookupChange {
+    pub key: String,
+    pub exact: Option<String>,
+    pub selected: String,
+    pub source: KeySource,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Odf {
     pub name: String,
+    policy: LookupPolicy,
+    candidates: Vec<Candidate>,
     values: HashMap<String, String>,
     sources: HashMap<String, KeySource>,
     /// Table rows of the winning assignment of each key that has any, one
@@ -188,6 +219,39 @@ pub struct Odf {
 }
 
 impl Odf {
+    /// Assignment-selection policy used by this resolved file.
+    pub fn lookup_policy(&self) -> LookupPolicy {
+        self.policy
+    }
+
+    fn candidate(&self, key: &str) -> Option<&Candidate> {
+        let key = key.to_ascii_lowercase();
+        self.candidates.iter().find(|entry| entry.key.starts_with(&key))
+    }
+
+    /// Exhaustive value-change audit for nonempty parsed-key queries: every
+    /// possible successful prefix is checked, including names not authored as
+    /// whole keys. Sorted independently of hash-map iteration. Unchanged values
+    /// with different provenance are omitted.
+    pub fn lookup_changes(&self) -> Vec<LookupChange> {
+        if self.policy == LookupPolicy::Exact {
+            return Vec::new();
+        }
+        let mut queries = BTreeSet::new();
+        for entry in &self.candidates {
+            for end in entry.key.char_indices().map(|(i, _)| i).skip(1).chain(std::iter::once(entry.key.len())) {
+                queries.insert(&entry.key[..end]);
+            }
+        }
+        queries.into_iter().filter_map(|key| {
+            let selected = self.candidate(key)?;
+            let exact = self.values.get(key);
+            (exact.map(String::as_str) != Some(selected.value.as_str())).then(|| LookupChange {
+                key: key.to_owned(), exact: exact.cloned(), selected: selected.value.clone(), source: selected.source.clone(),
+            })
+        }).collect()
+    }
+
     fn set(&mut self, key: &str, value: &str, rows: &[String], source: KeySource) {
         let k = key.to_ascii_lowercase();
         self.sources.insert(k.clone(), source);
@@ -205,22 +269,39 @@ impl Odf {
     /// The table rows after the winning assignment of `key` (`"name" value...`
     /// lines, as written); none when it has none.
     pub fn rows(&self, key: &str) -> impl Iterator<Item = &str> {
-        self.rows.get(&key.to_ascii_lowercase()).map_or("", String::as_str).lines()
+        let rows = if self.policy == LookupPolicy::PrefixFirst {
+            self.candidate(key).map(|entry| entry.rows.as_str())
+        } else {
+            self.rows.get(&key.to_ascii_lowercase()).map(String::as_str)
+        };
+        rows.unwrap_or("").lines()
     }
 
     /// Does the winning assignment of `key` have table rows?
     pub fn has_rows(&self, key: &str) -> bool {
-        self.rows.contains_key(&key.to_ascii_lowercase())
+        if self.policy == LookupPolicy::PrefixFirst {
+            self.candidate(key).is_some_and(|entry| !entry.rows.is_empty())
+        } else {
+            self.rows.contains_key(&key.to_ascii_lowercase())
+        }
     }
 
     /// The file, layer copy and line whose assignment of `key` won.
     pub fn source(&self, key: &str) -> Option<&KeySource> {
-        self.sources.get(&key.to_ascii_lowercase())
+        if self.policy == LookupPolicy::PrefixFirst {
+            self.candidate(key).map(|entry| &entry.source)
+        } else {
+            self.sources.get(&key.to_ascii_lowercase())
+        }
     }
 
     /// Raw value text (quotes retained).
     pub fn raw(&self, key: &str) -> Option<&str> {
-        self.values.get(&key.to_ascii_lowercase()).map(String::as_str)
+        if self.policy == LookupPolicy::PrefixFirst {
+            self.candidate(key).map(|entry| entry.value.as_str())
+        } else {
+            self.values.get(&key.to_ascii_lowercase()).map(String::as_str)
+        }
     }
 
     /// String value with surrounding quotes removed.
@@ -272,8 +353,15 @@ pub fn resolve(name: &str, load: &mut dyn FnMut(&str) -> Option<String>) -> Resu
 /// `name`'s `version`-th copy counting down from the highest-priority layer
 /// (0 = the copy normally seen, 1 = the one it hides, ...), or `None`.
 pub fn resolve_layered(name: &str, load: &mut dyn FnMut(&str, usize) -> Option<String>) -> Result<Odf, OdfError> {
+    resolve_layered_with_policy(name, LookupPolicy::Exact, load)
+}
+
+/// Layered resolution with an explicit assignment-selection policy. The
+/// ordinary resolver remains exact for callers without profile information.
+pub fn resolve_layered_with_policy(name: &str, policy: LookupPolicy, load: &mut dyn FnMut(&str, usize) -> Option<String>) -> Result<Odf, OdfError> {
     let mut odf = Odf {
         name: name.to_owned(),
+        policy,
         ..Default::default()
     };
     let mut walk = Walk {
@@ -307,6 +395,14 @@ fn apply(
     let raw = parse(&text);
     let file_arc: std::sync::Arc<str> = file.as_str().into();
     w.stack.push((key, version));
+    // Prefix selection scans each file before its includes. Keep all candidates,
+    // including shadowed duplicates, while retaining the exact baseline maps.
+    if odf.policy == LookupPolicy::PrefixFirst {
+        odf.candidates.extend(raw.entries.iter().map(|entry| Candidate {
+            key: entry.key.to_ascii_lowercase(), value: entry.value.clone(), rows: entry.rows.join("\n"),
+            source: KeySource { file: std::sync::Arc::clone(&file_arc), version, line: entry.line },
+        }));
+    }
     for inc in &raw.includes {
         let inc_key = with_odf_ext(inc).to_ascii_lowercase();
         if inc_key == w.root {
