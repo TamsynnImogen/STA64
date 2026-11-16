@@ -64,8 +64,9 @@ pub use pcm::PcmStream;
 
 /// The bus movie sound plays on: the UI bus, which a script's `MuteSounds` does not scale (a script
 /// mutes the game so that speech and movies are heard). Whether the original's movie player goes
-/// through the muted sound classes is not established; STA64 exempts movie sound. A movie's sound
-/// follows the UI volume setting.
+/// through the muted sound classes is not established; STA64 exempts movie sound. Known gap: there
+/// is no UI or movie volume slider (the settings set master, music, effects and voice), so a
+/// movie's sound follows the master volume only; it used to follow the voice slider too.
 pub const MOVIE_BUS: Bus = Bus::Ui;
 /// Frames decoded before playback starts (a smooth start without a long wait).
 const START_FRAMES: usize = 6;
