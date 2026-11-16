@@ -212,6 +212,7 @@ impl Plugin for AudioPlugin {
             .add_message::<SoundStarted>()
             .init_resource::<ReportsSoundLengths>()
             .init_resource::<Volumes>()
+            .init_resource::<SoundMute>()
             .insert_resource(Resolver(Box::new(StubResolver::default())))
             .add_message::<crate::frontend::screens::ModChosen>()
             .add_systems(Update, remount_sound.in_set(GameSet::Audio).before(play_sounds))
@@ -236,8 +237,44 @@ fn remount_sound(mut chosen: MessageReader<crate::frontend::screens::ModChosen>,
     resolver.0 = Box::new(fresh);
 }
 
-fn sync_volumes(volumes: Res<Volumes>, mut mixer: NonSendMut<Mixer>, mut sent: Local<Option<Volumes>>) {
-    if *sent == Some(*volumes) {
+/// A mission script's `MuteSounds(f)`: a linear multiplier on every sound the game makes (world
+/// and effect sounds, event voices, the ambient music) except the script's own streams
+/// (`AudioMessage`, `PlayMusic`), which stay at full level. Read from the Armada II executable,
+/// static: every sound's volume is its class volume times this unless it is a script stream; the
+/// engine's only writer is the script call, which the stock scripts pair with an un-mute. STA64
+/// resets it when the front end is entered. A movie's sound is on the UI bus too and so exempt
+/// (inferred, not measured: the mute exists to make room for the narration and the movie). STA64
+/// deviation: the HUD's click and error sounds are on the UI bus as well and are not scaled either.
+/// Applied to Armada I and the Fleet Operations family
+/// as well: not established there. Not measured on the running original.
+#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+pub struct SoundMute(pub f32);
+
+impl Default for SoundMute {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
+impl SoundMute {
+    /// Sets the multiplier from a script's argument; a value that is not a number is ignored and
+    /// one outside 0 to 1 is held to it (a bus cannot be louder than the user set it).
+    pub fn set(&mut self, factor: f32) {
+        if factor.is_finite() {
+            self.0 = factor.clamp(0.0, 1.0);
+        }
+    }
+
+    /// The volumes the buses play at: the music, effect and voice buses carry the sounds the
+    /// multiplier applies to; the UI bus carries the script's streams (and menu clicks) and is exempt.
+    fn apply(self, v: &Volumes) -> Volumes {
+        Volumes { music: v.music * self.0, sfx: v.sfx * self.0, voice: v.voice * self.0, ..*v }
+    }
+}
+
+fn sync_volumes(volumes: Res<Volumes>, mute: Option<Res<SoundMute>>, mut mixer: NonSendMut<Mixer>, mut sent: Local<Option<Volumes>>) {
+    let volumes = mute.map_or(*volumes, |m| m.apply(&volumes));
+    if *sent == Some(volumes) {
         return;
     }
     for b in MixBus::ALL {
@@ -245,7 +282,7 @@ fn sync_volumes(volumes: Res<Volumes>, mut mixer: NonSendMut<Mixer>, mut sent: L
             mixer.backend.set_bus_volume(b, volumes.get(b));
         }
     }
-    *sent = Some(*volumes);
+    *sent = Some(volumes);
 }
 
 fn sync_listener(cam: Query<&GlobalTransform, crate::map::MainCamera>, mut mixer: NonSendMut<Mixer>) {
@@ -603,6 +640,46 @@ mod tests {
         assert_eq!(log.drain(), vec![Call::BusVolume { bus: MixBus::Music, volume: 0.25 }]);
         app.update();
         assert!(log.calls().is_empty());
+    }
+
+    /// The script's mute scales the buses the game's own sounds are on (weapons and effects, event
+    /// voices, the ambient music) and leaves the UI bus, which carries the script's streams, at the
+    /// user's level.
+    #[test]
+    fn the_script_mute_scales_effects_and_leaves_the_script_stream_bus_alone() {
+        let (mut app, log) = app();
+        app.update();
+        let _ = log.drain();
+        app.world_mut().resource_mut::<SoundMute>().set(0.37);
+        app.update();
+        let calls = log.drain();
+        let sent = |bus| calls.iter().find_map(|c| match c {
+            Call::BusVolume { bus: b, volume } if *b == bus => Some(*volume),
+            _ => None,
+        });
+        let user = *app.world().resource::<Volumes>();
+        assert_eq!(sent(MixBus::Sfx), Some(user.sfx * 0.37), "a weapon sound's bus is scaled");
+        assert_eq!(sent(MixBus::Voice), Some(user.voice * 0.37));
+        assert_eq!(sent(MixBus::Music), Some(user.music * 0.37));
+        assert_eq!(sent(MixBus::Ui), None, "the script's streams keep the user's level");
+        assert_eq!(sent(MixBus::Master), None);
+        assert_eq!(sent(MixBus::from(crate::media::MOVIE_BUS)), None, "a movie's sound keeps the user's level");
+        // Un-muting restores the user's levels.
+        app.world_mut().resource_mut::<SoundMute>().set(1.0);
+        app.update();
+        let back = log.drain();
+        assert!(back.contains(&Call::BusVolume { bus: MixBus::Sfx, volume: user.sfx }), "{back:?}");
+    }
+
+    #[test]
+    fn a_mute_is_held_to_zero_to_one_and_a_non_number_is_ignored() {
+        let mut m = SoundMute::default();
+        m.set(2.0);
+        assert_eq!(m.0, 1.0);
+        m.set(-1.0);
+        assert_eq!(m.0, 0.0);
+        m.set(f32::NAN);
+        assert_eq!(m.0, 0.0);
     }
 
     #[test]
