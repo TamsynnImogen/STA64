@@ -630,10 +630,9 @@ fn a_creeping_solid_is_built_once_while_its_cells_hold_and_again_when_they_chang
     let field = cache.field(id, &grid, goal);
     assert_eq!(cache.builds, 1);
     let mut changed = 0;
-    // A path round a circle (as an orbit goes), 0.05 of a unit a step, over 4 cell widths.
+    // A drift of 0.05 of a unit a step along x and 0.025 along z, over 4 cell widths in x.
     for step in 1..=2560i64 {
-        let a = step as f64 * 0.05 / 300.0;
-        let at = sphere_at(Fixed::from_int(2000) + Fixed::from_f64(300.0 * a.sin()), Fixed::from_int(2000) + Fixed::from_f64(300.0 * (1.0 - a.cos())));
+        let at = sphere_at(Fixed::from_int(2000) + Fixed::from_bits(step * 214_748_365), Fixed::from_int(2000) + Fixed::from_bits(step * 107_374_182));
         let spec = creep_spec(at);
         let fresh = Grid::build(spec.clone());
         let before = cache.builds;
