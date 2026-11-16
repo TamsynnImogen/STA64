@@ -525,3 +525,49 @@ fn grid_cell_captions_are_sprite_text() {
     }
     assert!(world.query::<&ScalableText>().iter(world).next().is_none());
 }
+
+/// The cruiser's station build priced far above any stock: authored, matches no game.
+fn priced_content() -> ContentDb {
+    let fake = sta_content::fake::db();
+    let mut b = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+    for w in fake.weapons() {
+        b = b.weapon(w.clone());
+    }
+    for u in fake.units() {
+        let mut u = u.clone();
+        if u.odf == "fx_cruiser" {
+            u.build.list = vec![DefRef::new("fx_station")];
+        }
+        if u.odf == "fx_station" {
+            u.build.cost = vec![Fixed::from_int(999_999), Fixed::ZERO, Fixed::ZERO, Fixed::ZERO];
+        }
+        b = b.unit(u);
+    }
+    b.build().unwrap()
+}
+
+/// The notices a click on open space shows after arming the unaffordable station, with `profile`.
+fn refused_notice_texts(profile: Option<crate::ui::profile::UiProfile>) -> Vec<String> {
+    let mut app = app(priced_content(), &[1]);
+    if let Some(p) = profile {
+        app.insert_resource(p);
+    }
+    armed_at(&mut app, -1600.0, 300.0);
+    app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+    app.update();
+    app.update();
+    assert!(queued(&mut app).is_empty(), "nothing is ordered");
+    app.world().resource::<crate::ui::notices::Notices>().active.iter().map(|n| n.text.clone()).filter(|t| t.starts_with("Cannot build")).collect()
+}
+
+/// UI-42: only Armada I names the missing resource; every other profile keeps the generic wording.
+#[test]
+fn a_refused_placement_names_the_resource_on_armada_one_and_keeps_the_old_text_elsewhere() {
+    use crate::ui::profile::UiProfile;
+    let generic = tr("Cannot build: not enough resources");
+    assert_eq!(refused_notice_texts(None), [generic.clone()]);
+    assert_eq!(refused_notice_texts(Some(UiProfile::Lcars)), [generic.clone()]);
+    assert_eq!(refused_notice_texts(Some(UiProfile::Armada2)), [generic.clone()]);
+    assert_eq!(refused_notice_texts(Some(UiProfile::FleetOps)), [generic]);
+    assert_eq!(refused_notice_texts(Some(UiProfile::Armada1)), ["Cannot build: not enough dilithium"]);
+}

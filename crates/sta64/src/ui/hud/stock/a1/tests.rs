@@ -157,7 +157,7 @@ fn selection_feed() -> HudFeed {
 #[test]
 fn top_page_puts_commands_in_the_header_slots() {
     let slots = ButtonSlots::from_header(HEADER).0;
-    let b = control::buttons(&selection_feed(), Page::Top, &slots);
+    let b = control::buttons(&selection_feed(), Page::Top, &slots, None);
     let at = |slot: usize| b.iter().find(|b| b.cell == slot - 1).map(|b| b.act.clone());
     assert_eq!(at(9), Some(Act::Target(TargetMode::Move)));
     assert_eq!(at(11), Some(Act::Stop));
@@ -170,7 +170,7 @@ fn top_page_puts_commands_in_the_header_slots() {
 #[test]
 fn orders_page_has_its_slots_and_locks_what_the_sim_cannot_take() {
     let slots = ButtonSlots::from_header(HEADER).0;
-    let b = control::buttons(&selection_feed(), Page::Orders, &slots);
+    let b = control::buttons(&selection_feed(), Page::Orders, &slots, None);
     let at = |slot: usize| b.iter().find(|b| b.cell == slot - 1).cloned();
     assert_eq!(at(2).unwrap().act, Act::Order(UnitOrder::Scout));
     assert_eq!(at(2).unwrap().look, Look::Ready);
@@ -178,13 +178,13 @@ fn orders_page_has_its_slots_and_locks_what_the_sim_cannot_take() {
     assert_eq!(at(6).unwrap().look, Look::Locked, "alert states have no player order yet");
     assert_eq!(at(8).unwrap().act, Act::Back);
     assert_eq!(at(7), None, "cancel belongs to the build page");
-    let none = control::buttons(&HudFeed::default(), Page::Orders, &slots);
+    let none = control::buttons(&HudFeed::default(), Page::Orders, &slots, None);
     assert!(none.is_empty(), "nothing selected: no grid");
 }
 
 #[test]
 fn a_header_without_keys_gives_an_empty_grid() {
-    assert!(control::buttons(&selection_feed(), Page::Top, &ButtonSlots::default()).is_empty());
+    assert!(control::buttons(&selection_feed(), Page::Top, &ButtonSlots::default(), None).is_empty());
 }
 
 #[test]
