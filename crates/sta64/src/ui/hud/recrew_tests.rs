@@ -64,7 +64,7 @@ fn feed() -> HudFeed {
         }),
         player: ME,
         selected: vec![EntityId(1)],
-        content: Some(db),
+        content: Some(db), ..Default::default()
     }
 }
 

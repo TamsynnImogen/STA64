@@ -103,7 +103,7 @@ fn feed(db: &Arc<ContentDb>) -> HudFeed {
         view: Arc::new(view),
         player: PlayerId(1),
         selected: vec![EntityId(1)],
-        content: Some(db.clone()),
+        content: Some(db.clone()), ..Default::default()
     }
 }
 

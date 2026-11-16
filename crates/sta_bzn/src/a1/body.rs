@@ -307,6 +307,7 @@ pub(crate) fn parse_map(data: &[u8], header: Header) -> Result<Map, BznError> {
             entity_id,
             team,
             label,
+            instance_name: String::new(),
             initial_position: Some(position),
             transform,
             light_colour: light_colour(&recs, matrix_at + 1),

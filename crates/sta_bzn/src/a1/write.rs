@@ -333,6 +333,7 @@ mod tests {
                     entity_id: id,
                     team,
                     label: label.into(),
+                    instance_name: String::new(),
                     initial_position: Some(p),
                     transform: [
                         1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, p[0], p[1], p[2],

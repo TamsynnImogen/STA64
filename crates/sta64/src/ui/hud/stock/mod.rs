@@ -628,7 +628,7 @@ mod recrew_tests {
         };
         let mut feed = HudFeed {
             view: Arc::new(WorldView { units: vec![unit], ..Default::default() }),
-            player: PlayerId(1), selected: vec![EntityId(1)], content: Some(db),
+            player: PlayerId(1), selected: vec![EntityId(1)], content: Some(db), ..Default::default()
         };
         let mut native = NativeCommands::default();
         native.groups.push("orders".into());

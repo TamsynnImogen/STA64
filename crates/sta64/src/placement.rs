@@ -167,7 +167,7 @@ mod tests {
         let g = ghost_site(&db, None, &sim.view(), what, rig, cursor);
         assert_eq!((g.status, g.at), (Ok(()), v(1275, 0)));
         assert_ne!(ghost_site(&db, None, &sim.view(), what, rig, g.at).at, g.at, "a second snap moves it: the scenario");
-        let feed = HudFeed { view: sim.view(), player: PlayerId(0), selected: vec![rig], content: Some(db.clone()) };
+        let feed = HudFeed { view: sim.view(), player: PlayerId(0), selected: vec![rig], content: Some(db.clone()), ..Default::default() };
         let armed = Armed { builder: rig, what, odf: "fx_orbital".into() };
         assert_eq!(site_status(&feed, None, &armed, cursor), (g.at, Ok(())));
         let (site_at, order) = build_order(&feed, None, &armed, cursor).unwrap();

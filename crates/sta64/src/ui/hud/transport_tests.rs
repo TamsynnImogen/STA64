@@ -59,7 +59,7 @@ fn view(db: &ContentDb, mutate: impl FnOnce(&mut Vec<UnitView>)) -> WorldView {
 
 fn feed_in(profile: Profile, selected: &[u32], mutate: impl FnOnce(&mut Vec<UnitView>)) -> HudFeed {
     let db = db(profile);
-    HudFeed { view: Arc::new(view(&db, mutate)), player: ME, selected: selected.iter().copied().map(EntityId).collect(), content: Some(db) }
+    HudFeed { view: Arc::new(view(&db, mutate)), player: ME, selected: selected.iter().copied().map(EntityId).collect(), content: Some(db), ..Default::default() }
 }
 
 fn feed(selected: &[u32]) -> HudFeed {
