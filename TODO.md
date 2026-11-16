@@ -535,7 +535,8 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] HUD (#773): add an "Anchored" third HUD layout choice once UI-37's anchored form (ADR 0008 H5/H7 layout file) exists.
 - [ ] A1 `InQueue` (#775): bind to a gate-travel queue state (ordered onto, waiting at, or being carried through a gate) once the sim exposes one; replace the speed approximation.
 - [x] A1 bridge panel (#775, done by #799 and #815): a panel for bridge-scene calls and the clip viewscreen (clips play fullscreen today).
-- [x] LUA-36 (#778, done by #827): guard order: a script guard command with a parameter (`a2_borg04`) still ends as a counted gap after the build receipt because the sim has no guard order; a new `Order` tag (protocol bump) is a ledger decision. `a2_kling03` fails early on an empty team 1 in the idle run: cause not investigated.
+- [x] LUA-36 (#778, done by #827): guard order: a script guard command with a parameter (`a2_borg04`) still ends as a counted gap after the build receipt because the sim has no guard order; a new `Order` tag (protocol bump) is a ledger decision.
+- [ ] a2_kling03 (#778): fails early on an empty team 1 in the idle run: cause not investigated.
 - [ ] LUA-36 (#778): `IsVisibleToTeam(obj, n)` raises for an `n` that is no seated player (the original wraps and never raises); movement autonomy answers differ for an absent config key versus no process component.
 - [ ] SIM-67 (#780): model the original's post-collision height return (pitch turning back, needs a saved pitch) if the playtest still shows the difference; replace the interim bounding sphere by the shield ellipsoid (SIM-32) and refit the bias constant.
 - [ ] SIM-67 (#780): check on the bench the three-body head-on sides and the tie rule for equal heights; large craft in formation (slots overlap their own formation spacing) and the small residual height after arrival: revisit with SIM-32.
