@@ -77,6 +77,19 @@ impl Sim {
 
     /// [`crate::command::Edit::TeamPool`].
     pub(crate) fn edit_team_pool(&mut self, player: PlayerId, op: TeamOp, x: Fixed) -> bool {
+        if let TeamOp::ResourceAdd(slot) = op {
+            if !self.players.iter().any(|(id, _)| *id == player)
+                || usize::from(slot) >= crate::economy::RESOURCES
+                || x < Fixed::ZERO
+            {
+                return false;
+            }
+            let mut stock: [Fixed; crate::economy::RESOURCES] = self.economy.stock_of(player).try_into().unwrap_or([Fixed::ZERO; crate::economy::RESOURCES]);
+            let index = usize::from(slot);
+            stock[index] = Fixed::from_bits(stock[index].to_bits().saturating_add(x.to_bits()));
+            self.economy.set_stock(player, stock);
+            return true;
+        }
         let Some(db) = self.content.clone() else { return false };
         if !self.players.iter().any(|(id, _)| *id == player) {
             return false;

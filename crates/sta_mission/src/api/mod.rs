@@ -256,6 +256,8 @@ pub(crate) struct Ctx {
     pub mission_end: Option<MissionEnd>,
     /// Latched once the end has happened.
     pub ended: Option<bool>,
+    /// Set only when the host accepts an explicit forced mission end.
+    pub(crate) mission_end_forced: bool,
     /// Every object id the view has shown, so a handle that never existed can
     /// be told from one that died.
     pub seen: BTreeSet<EntityId>,
@@ -332,6 +334,7 @@ impl Ctx {
             ai_requests: Vec::new(),
             mission_end: None,
             ended: None,
+            mission_end_forced: false,
             seen,
             fresh: BTreeSet::new(),
             taint: taint::Taint::default(),

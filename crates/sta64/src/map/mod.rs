@@ -512,10 +512,10 @@ impl Plugin for MapPlugin {
                     crate::clock::advance_idle_clock.run_if(not(resource_exists::<crate::sim_link::SimLink>).or_else(resource_exists::<crate::sim_link::SimHeld>)),
                     input,
                     rebuild,
-                    radar_click.run_if(crate::ui::ingame_menu::menu_closed),
+                    radar_click.run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free),
                     // Under the in-game menu (UI-34) the camera stands still.
-                    pan_keys.run_if(crate::ui::ingame_menu::menu_closed),
-                    crate::viewer::orbit_camera.run_if(crate::ui::ingame_menu::menu_closed),
+                    pan_keys.run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free),
+                    crate::viewer::orbit_camera.run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free),
                     radar_camera,
                     spin,
                     sky_follows_camera,

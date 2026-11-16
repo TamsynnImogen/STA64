@@ -111,6 +111,7 @@ impl Economy {
                 self.set_adjust(player, None, Some(Fixed::from_bits(to.to_bits().saturating_sub(census.to_bits()))));
                 true
             }
+            TeamOp::ResourceAdd(_) => false,
         }
     }
 
