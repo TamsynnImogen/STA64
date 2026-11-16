@@ -73,6 +73,8 @@ fn text_styled(commands: &mut Commands, root: Entity, r: R, value: String, color
     // SpriteFontPlugin replaces the SpriteText entity's Node while resolving glyphs.
     // Keep authored placement on a separate parent that it never rewrites.
     let mut wrap_node = node(r);
+    // The centring relies on the SpriteText node keeping taffy rounding on (no LayoutConfig):
+    // `use_rounding: false` there would bring back half-pixel blur.
     if style.in_box {
         wrap_node.align_items = AlignItems::Center;
         wrap_node.justify_content = JustifyContent::Center;
@@ -928,40 +930,64 @@ mod tests {
         assert_eq!(whole(Fixed::from_bits(-Fixed::ONE.to_bits() - 1)), -1);
     }
 
-    /// Readouts are centred in their rectangle on both axes, whatever its size and the
-    /// window's (the rectangle is already in logical px); other stock text is not.
     /// Rule on installed data, no values: every resource readout's text rectangle lies inside
     /// its panel (the single strip, or each separate panel of the Armada I family).
+    /// `STA64_TEST_A1_INSTALL=<Armada I root>` mounts stock Armada I (no mod); `STA64_TEST_INSTALL`
+    /// with an optional `STA64_TEST_MOD` mounts an Armada II family install. A set variable that
+    /// cannot be mounted or read fails; an unset one skips with a message.
     #[test]
     fn installed_resource_text_rectangles_lie_inside_their_panels() {
-        let Some(root) = std::env::var_os("STA64_TEST_INSTALL") else { return };
-        let Ok(mode) = std::env::var("STA64_TEST_MOD") else { return };
-        let Ok(vfs) = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(&mode)) else { return };
-        let Some(cfg) = crate::game::gui_layout(&vfs, "gui_fed.cfg") else { return };
-        for canvas in [Vec2::new(1024.0, 768.0), Vec2::new(2752.0, 1152.0)] {
-            let layout = StockLayout::new(&cfg, canvas);
-            let inside = |outer: R, inner: R| {
-                inner.x >= outer.x - 0.01 && inner.y >= outer.y - 0.01 && inner.right() <= outer.right() + 0.01 && inner.bottom() <= outer.bottom() + 0.01
-            };
-            let mut checked = 0;
-            if super::super::separate_resources(&layout) {
-                for (prefix, ..) in SEPARATE_RESOURCES {
-                    let Some(panel) = layout.panel(prefix) else { continue };
-                    let Some(text) = layout.at(Vec2::new(panel.x, panel.y), &format!("{prefix}TextArea")) else { continue };
-                    assert!(inside(panel, text), "{mode}: {prefix} text {text:?} outside panel {panel:?}");
-                    checked += 1;
-                }
-            } else if let Some(panel) = layout.panel("resource") {
-                for id in 0..6 {
-                    let Some(text) = layout.at(Vec2::new(panel.x, panel.y), &format!("resource_{id}")) else { continue };
-                    assert!(inside(panel, text), "{mode}: resource_{id} text {text:?} outside panel {panel:?}");
-                    checked += 1;
+        let a1 = std::env::var_os("STA64_TEST_A1_INSTALL");
+        let a2 = std::env::var_os("STA64_TEST_INSTALL");
+        if a1.is_none() && a2.is_none() {
+            eprintln!("SKIP: set STA64_TEST_A1_INSTALL (Armada I root) or STA64_TEST_INSTALL (+ STA64_TEST_MOD)");
+            return;
+        }
+        let mut mounts = Vec::new();
+        if let Some(root) = a1 {
+            mounts.push((root, None, vec!["gui_fed.cfg", "gui_kli.cfg", "gui_rom.cfg", "gui_bor.cfg"]));
+        }
+        if let Some(root) = a2 {
+            let m = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
+            mounts.push((root, m, vec!["gui_fed.cfg"]));
+        }
+        for (root, mode, cfgs) in mounts {
+            let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), mode.as_deref())
+                .unwrap_or_else(|e| panic!("cannot mount {root:?} ({mode:?}): {e:?}"));
+            for cfg_name in cfgs {
+                let cfg = crate::game::gui_layout(&vfs, cfg_name).unwrap_or_else(|| panic!("{cfg_name} missing"));
+                for canvas in [Vec2::new(1024.0, 768.0), Vec2::new(2752.0, 1152.0)] {
+                    let layout = StockLayout::new(&cfg, canvas);
+                    let inside = |outer: R, inner: R| {
+                        inner.x >= outer.x - 0.01
+                            && inner.y >= outer.y - 0.01
+                            && inner.right() <= outer.right() + 0.01
+                            && inner.bottom() <= outer.bottom() + 0.01
+                    };
+                    let mut checked = 0;
+                    if super::super::separate_resources(&layout) {
+                        for (prefix, ..) in SEPARATE_RESOURCES {
+                            let Some(panel) = layout.panel(prefix) else { continue };
+                            let Some(text) = layout.at(Vec2::new(panel.x, panel.y), &format!("{prefix}TextArea")) else { continue };
+                            assert!(inside(panel, text), "{cfg_name}: {prefix} text {text:?} outside panel {panel:?}");
+                            checked += 1;
+                        }
+                    } else if let Some(panel) = layout.panel("resource") {
+                        for id in 0..6 {
+                            let Some(text) = layout.at(Vec2::new(panel.x, panel.y), &format!("resource_{id}")) else { continue };
+                            assert!(inside(panel, text), "{cfg_name}: resource_{id} text {text:?} outside panel {panel:?}");
+                            checked += 1;
+                        }
+                    }
+                    assert!(checked > 0, "{cfg_name} {canvas:?}: no readout rectangle found");
+                    eprintln!("{cfg_name} {canvas:?}: {checked} readout rectangles inside their panels");
                 }
             }
-            eprintln!("{mode} {canvas:?}: {checked} readout rectangles inside their panels");
         }
     }
 
+    /// Readouts are centred in their rectangle on both axes, whatever its size and the
+    /// window's (the rectangle is already in logical px); other stock text is not.
     #[test]
     fn readout_wrapper_centres_its_text_in_the_rectangle() {
         for r in [R::new(10.0, 4.0, 60.0, 12.0), R::new(500.0, 40.0, 300.0, 60.0)] {
@@ -987,6 +1013,73 @@ mod tests {
             assert_eq!(found[0], (true, AlignItems::Center, JustifyContent::Center, Val::Px(r.w), Val::Px(r.h)));
             assert_ne!(found[1].1, AlignItems::Center);
             assert_ne!(found[1].2, JustifyContent::Center);
+        }
+    }
+
+    /// Runs bevy_ui layout on an invented box with an odd leftover, at two scales: the readout's
+    /// text is centred on both axes (within one physical pixel, the snapping), sits on a whole physical
+    /// pixel, stays centred when the string changes, and the plain helper's wrapper is exactly
+    /// the authored node.
+    #[test]
+    fn readout_text_is_centred_and_pixel_aligned_after_layout() {
+        use bevy::camera::{ComputedCameraValues, RenderTargetInfo, Viewport};
+        use bevy::ui::UiGlobalTransform;
+        let r = R::new(13.0, 7.0, 61.0, 29.0);
+        for scale in [1.0_f32, 4.0 / 3.0] {
+            let mut app = App::new();
+            app.add_plugins((
+                MinimalPlugins,
+                bevy::transform::TransformPlugin,
+                bevy::asset::AssetPlugin::default(),
+                bevy::window::WindowPlugin { primary_window: None, ..default() },
+                bevy::input::InputPlugin,
+                bevy::a11y::AccessibilityPlugin,
+                bevy::picking::DefaultPickingPlugins,
+                bevy::text::TextPlugin,
+                bevy::ui::UiPlugin,
+            ));
+            app.init_resource::<Assets<Image>>();
+            app.init_resource::<Assets<bevy::image::TextureAtlasLayout>>();
+            app.insert_resource(UiScale(scale));
+            app.world_mut().spawn((
+                Camera2d,
+                Camera {
+                    computed: ComputedCameraValues {
+                        target_info: Some(RenderTargetInfo { physical_size: UVec2::new(800, 600), scale_factor: 1.0 }),
+                        ..default()
+                    },
+                    viewport: Some(Viewport { physical_size: UVec2::new(800, 600), ..default() }),
+                    ..default()
+                },
+            ));
+            let root = app.world_mut().spawn(Node { width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }).id();
+            let mut queue = CommandQueue::default();
+            let (readout_text, plain_text) = {
+                let mut commands = Commands::new(&mut queue, app.world());
+                let a = readout(&mut commands, root, r, "7".into(), Color::WHITE, 12.0, Some(StockText::Resource(2)));
+                let b = text(&mut commands, root, r, "7".into(), Color::WHITE, 12.0, None);
+                (a, b)
+            };
+            queue.apply(app.world_mut());
+            let wrapper_of = |app: &App, e: Entity| app.world().get::<ChildOf>(e).unwrap().parent();
+            // What `resolve_text` leaves: a fixed-size node of the glyph run (odd sizes).
+            for width in [11.0, 41.0] {
+                for e in [readout_text, plain_text] {
+                    app.world_mut().entity_mut(e).insert(Node { width: Val::Px(width), height: Val::Px(15.0), flex_shrink: 0.0, ..default() });
+                }
+                app.update();
+                let centre = |app: &App, e: Entity| app.world().get::<UiGlobalTransform>(e).unwrap().translation;
+                let size = |app: &App, e: Entity| app.world().get::<ComputedNode>(e).unwrap().size;
+                let wrapper = wrapper_of(&app, readout_text);
+                let (wc, tc) = (centre(&app, wrapper), centre(&app, readout_text));
+                // Whole-pixel snapping of both nodes' edges can leave one physical pixel at a fractional scale.
+                assert!((wc.x - tc.x).abs() <= 1.0 && (wc.y - tc.y).abs() <= 1.0, "scale {scale} width {width}: wrapper {wc:?} text {tc:?}");
+                let ts = size(&app, readout_text);
+                let (left, top) = (tc.x - ts.x / 2.0, tc.y - ts.y / 2.0);
+                assert!((left - left.round()).abs() < 1e-3 && (top - top.round()).abs() < 1e-3, "scale {scale}: text at {left},{top} off the pixel grid");
+            }
+            let plain_wrapper = app.world().get::<Node>(wrapper_of(&app, plain_text)).unwrap();
+            assert_eq!(*plain_wrapper, node(r));
         }
     }
 
