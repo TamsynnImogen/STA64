@@ -594,3 +594,75 @@ fn a_slow_craft_flying_round_a_long_wall_is_not_cut_off() {
     assert!(gap(end, v(0, 1500)) < 150.0, "ended at {end:?} after {ticks} ticks");
     assert!(ticks > 3600, "the detour should outlast two minutes ({ticks} ticks)");
 }
+
+fn creep_spec(solid: crate::spatial::Solid) -> super::grid::Spec {
+    let mut s = super::grid::Spec {
+        origin: (0, 0),
+        cell: 32,
+        width: 1,
+        height: 1,
+        default_cost: 1,
+        body: Fixed::from_int(50),
+        solids: vec![solid, crate::spatial::Solid::Sphere { centre: v(500, 500), radius: Fixed::from_int(80) }],
+        hazards: Vec::new(),
+        area: None,
+    };
+    super::frame(&mut s, v(0, 0), v(4000, 4000));
+    s
+}
+
+fn sphere_at(x: Fixed, z: Fixed) -> crate::spatial::Solid {
+    crate::spatial::Solid::Sphere { centre: Vec3 { x, y: Fixed::ZERO, z }, radius: Fixed::from_int(100) }
+}
+
+/// A solid that creeps (an orbiting station moves a fraction of a unit a tick) changes the
+/// grid's spec every tick but its cells only when it crosses a cell centre. While the blocked
+/// cells do not change the cache must hand back the same grid, and so the same field, without
+/// building a grid (a player's orbital station made every blocked craft build a grid and a field
+/// every tick; the tick then cost most of its 33 ms). When the cells do change it must build:
+/// never a stale grid. Every grid handed back is what a fresh build gives.
+#[test]
+fn a_creeping_solid_is_built_once_while_its_cells_hold_and_again_when_they_change() {
+    use super::{Cache, grid::Grid};
+    let mut cache = Cache::default();
+    let (id, grid) = cache.grid(creep_spec(sphere_at(Fixed::from_int(2000), Fixed::from_int(2000))));
+    let goal = grid.cell_of(v(3000, 3000));
+    let field = cache.field(id, &grid, goal);
+    assert_eq!(cache.builds, 1);
+    let mut changed = 0;
+    // A drift of 0.05 of a unit a step along x and 0.025 along z, over 4 cell widths in x.
+    for step in 1..=2560i64 {
+        let at = sphere_at(Fixed::from_int(2000) + Fixed::from_bits(step * 214_748_365), Fixed::from_int(2000) + Fixed::from_bits(step * 107_374_182));
+        let spec = creep_spec(at);
+        let fresh = Grid::build(spec.clone());
+        let before = cache.builds;
+        let (again, g) = cache.grid(spec);
+        assert!(g.same_cells(&fresh), "step {step}: a stale grid");
+        if cache.builds == before {
+            if again == id {
+                assert!(Arc::ptr_eq(&cache.field(again, &g, goal), &field), "step {step}: the field is reused");
+            }
+        } else {
+            changed += 1;
+        }
+    }
+    // The cells changed some times on the way (so the path crossed cell centres), and far
+    // fewer times than there were steps.
+    assert!(changed >= 1, "the path never crossed a cell centre");
+    assert!(cache.builds < 200, "{} builds for 2560 creeping steps", cache.builds);
+}
+
+/// The same for a box (axis-aligned, the only other obstacle shape), and a move that changes the
+/// cells builds.
+#[test]
+fn a_moved_box_builds_only_when_its_cells_change() {
+    use super::Cache;
+    use crate::spatial::Solid;
+    let boxed = |dx: Fixed| Solid::Box { min: Vec3 { x: Fixed::from_int(1000) + dx, y: Fixed::ZERO, z: Fixed::from_int(1000) }, max: Vec3 { x: Fixed::from_int(1200) + dx, y: Fixed::ZERO, z: Fixed::from_int(1100) } };
+    let mut cache = Cache::default();
+    cache.grid(creep_spec(boxed(Fixed::ZERO)));
+    cache.grid(creep_spec(boxed(Fixed::from_bits(1000))));
+    assert_eq!(cache.builds, 1);
+    cache.grid(creep_spec(boxed(Fixed::from_int(64))));
+    assert_eq!(cache.builds, 2);
+}

@@ -62,7 +62,9 @@
 //!
 //! Grids, fields and nearest-cell answers are cached by the full set of
 //! inputs that build them ([`grid::Spec`] equality and exact keys), never by
-//! a hash, so the cache cannot change a result; it is outside the digest and
+//! a hash, so the cache cannot change a result (a grid whose cells equal a
+//! cached one's is that one: a solid that moves less than a cell, as an orbiting
+//! station does, keeps its fields); it is outside the digest and
 //! snapshots.
 //!
 //! The tuning constants below ([`MAX_SIDE`], [`LOOK`], [`POCKET`], the
@@ -114,6 +116,8 @@ pub(crate) struct Cache {
     /// `(grid id, component, target x, target z, from cell)` -> cell.
     nearest: Vec<(NearestKey, Option<u32>)>,
     next: u64,
+    /// Grids built (not found), for the tests.
+    builds: u64,
 }
 
 impl std::fmt::Debug for Cache {
@@ -134,9 +138,25 @@ impl Cache {
             self.grids.insert(0, e.clone());
             return e;
         }
+        // A solid that creeps (an orbiting station) changes the spec every tick but the cells
+        // only now and then: when the cached grid has the same cells, it is the grid.
+        if let Some(i) = self.grids.iter().position(|(_, o)| o.matches_moved_solids(&spec)) {
+            let e = self.grids.remove(i);
+            self.grids.insert(0, e.clone());
+            return e;
+        }
+        self.builds += 1;
+        let g = Grid::build(spec);
+        // Shapes that moved and came to the same costs (as one cell centre leaves and another
+        // enters) are the cached grid too.
+        if let Some(i) = self.grids.iter().position(|(_, o)| o.same_cells(&g)) {
+            let e = self.grids.remove(i);
+            self.grids.insert(0, e.clone());
+            return e;
+        }
         let id = self.next;
         self.next += 1;
-        let g = Arc::new(Grid::build(spec));
+        let g = Arc::new(g);
         self.grids.insert(0, (id, g.clone()));
         if self.grids.len() > GRIDS {
             let gone: Vec<u64> = self.grids.drain(GRIDS..).map(|(id, _)| id).collect();
