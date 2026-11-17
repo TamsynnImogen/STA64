@@ -512,7 +512,7 @@ By game (a key set by several games counts in each):
 | `infoSingleDilithiumBar` | A1 A2 FO | drawn |
 | `infoSingleDilithiumBarArea` | A1 A2 FO | drawn |
 | `infoSingleDilithiumBarColor` | A1 A2 FO | drawn |
-| `infoSingleDilithiumBarDisableColor` | A1 A2 FO | missing |
+| `infoSingleDilithiumBarDisableColor` | A1 A2 FO | drawn |
 | `infoSingleEnergyBar` | A1 | drawn |
 | `infoSingleEnergyBarArea` | A1 | drawn |
 | `infoSingleEnergyBarColor` | A1 | drawn |
@@ -535,9 +535,9 @@ By game (a key set by several games counts in each):
 | `infoSingleOfficerTextLabel` | A1 | missing |
 | `infoSingleOfficerTextLabelArea` | A1 | missing |
 | `infoSinglePlanetMetalBar` | A2 FO | missing |
-| `infoSinglePlanetMetalBarArea` | A2 FO | missing |
-| `infoSinglePlanetMetalBarColor` | A2 FO | missing |
-| `infoSinglePlanetMetalBarDisableColor` | A2 FO | missing |
+| `infoSinglePlanetMetalBarArea` | A2 FO | drawn |
+| `infoSinglePlanetMetalBarColor` | A2 FO | drawn |
+| `infoSinglePlanetMetalBarDisableColor` | A2 FO | drawn |
 | `infoSinglePlanetTeamTextArea` | A2 FO | built |
 | `infoSingleRaceIcon` | A1 A2 FO | drawn |
 | `infoSingleRaceIconArea` | A1 A2 FO | drawn |

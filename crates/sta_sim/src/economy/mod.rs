@@ -288,6 +288,11 @@ pub struct EconomyRec {
 impl Economy {
     /// Live cargo rows for mining craft, including eligible idle craft with an
     /// empty hold. This reads the same miner records and capacity rule as mining.
+    /// Every resource node's amount left (UI-48), ascending id.
+    pub fn node_view(&self, db: &ContentDb, units: &Entities) -> Vec<view::NodeView> {
+        view::node_rows(self, db, units)
+    }
+
     pub fn cargo_view(&self, db: &ContentDb, units: &Entities) -> Vec<view::CargoView> {
         view::rows(self, db, units)
     }

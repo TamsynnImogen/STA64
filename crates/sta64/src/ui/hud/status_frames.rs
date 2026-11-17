@@ -207,6 +207,7 @@ fn installed_status_queue_and_cargo_render_and_clear() {
             capacity: Fixed::from_int(100),
             resource: None,
         }],
+            nodes: Vec::new(),
     };
     let profile =
         crate::ui::profile::resolve_profile(Some(&vfs), Default::default(), &Default::default());

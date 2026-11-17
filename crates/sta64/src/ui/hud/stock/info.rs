@@ -32,6 +32,23 @@ pub(in crate::ui::hud) enum StockBar {
     /// Armada I's energy bar (UI-19).
     Energy(f32),
     Group(EntityId, f32),
+    /// UI-48: a resource node's amount left over what it started with.
+    Node(f32),
+}
+
+/// UI-48: the bar a resource node shows, from its definition: a planet giving metal draws the
+/// planet-metal bar, any other dilithium node (a moon) the dilithium bar. Keys, sprite names and
+/// colours from data; which node takes which bar is ours (the original's info-bar code not read).
+fn node_bar(def: &sta_content::UnitDef) -> Option<(&'static str, &'static str, &'static str)> {
+    if !sta_sim::world::EntityKind::mineable_def(def) {
+        return None;
+    }
+    match (def.class.0.as_str(), def.resource.unwrap_or(0)) {
+        ("planet", 2) => Some(("infoSinglePlanetMetalBarArea", "infoSinglePlanetMetalBarDisableColor", "infoSinglePlanetMetalBarColor")),
+        ("latinum", _) => None,
+        (_, 0) => Some(("infoSingleDilithiumBarArea", "infoSingleDilithiumBarDisableColor", "infoSingleDilithiumBarColor")),
+        _ => None,
+    }
 }
 
 pub(super) fn node(r: R) -> Node {
@@ -408,6 +425,12 @@ fn spawn_single(
     {
         bar(commands, root, r, progress, bar_colours(layout, &["infoSingleConstructionBarDisableColor"], &["infoSingleConstructionBarColor"], theme.warn), StockBar::Progress(r.w));
     }
+    if let Some((area, track, fill)) = feed.view.unit(single.id).and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def))).and_then(node_bar)
+        && let Some(r) = layout.at(origin, area)
+    {
+        // Full until the status feed says otherwise (`update` fills it every frame).
+        bar(commands, root, r, 1.0, bar_colours(layout, &[track], &[fill], theme.accent), StockBar::Node(r.w));
+    }
 
 }
 
@@ -522,8 +545,17 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout,
     }
 }
 
+/// A node's amount left over its start (UI-48), 1 for an infinite node or one the feed lacks.
+pub(in crate::ui::hud) fn node_fraction(status: Option<&crate::ui::hud::status::StatusFeed>, id: EntityId) -> f32 {
+    status
+        .and_then(|s| s.nodes.iter().find(|n| n.entity == id))
+        .filter(|n| !n.infinite && n.start > sta_sim::Fixed::ZERO)
+        .map_or(1.0, |n| (n.amount.to_f32() / n.start.to_f32()).clamp(0.0, 1.0))
+}
+
 pub(in crate::ui::hud) fn update(
     feed: Res<HudFeed>,
+    status: Option<Res<crate::ui::hud::status::StatusFeed>>,
     mut texts: Query<(&StockText, &mut SpriteText)>,
     mut bars: Query<(&StockBar, &mut Node)>,
     mut crew: Query<&mut SpriteText, (With<super::a1::info::CrewText>, Without<StockText>)>,
@@ -549,6 +581,7 @@ pub(in crate::ui::hud) fn update(
             (StockBar::Shield(w), Info::Single(s)) => (s.shield.unwrap_or(0.0), *w),
             (StockBar::Progress(w), Info::Single(s)) => (s.progress.unwrap_or(0.0), *w),
             (StockBar::Energy(w), Info::Single(_)) => (extra.as_ref().and_then(|e| e.energy).unwrap_or(0.0), *w),
+            (StockBar::Node(w), Info::Single(s)) => (node_fraction(status.as_deref(), s.id), *w),
             (StockBar::Group(id, w), Info::Group(tiles)) => (
                 tiles.iter().find(|tile| tile.id == *id).map_or(0.0, |tile| tile.hull),
                 *w,
@@ -1165,5 +1198,24 @@ mod tests {
             ),
             (Val::Px(31.0), Val::Px(42.0), Val::Px(80.0), Val::Px(20.0))
         );
+    }
+
+    /// UI-48: which node draws which bar, and the fraction it shows.
+    #[test]
+    fn a_node_shows_its_amount_left_on_the_dilithium_or_planet_metal_bar() {
+        use sta_content::UnitDef;
+        let fake = sta_content::fake::db();
+        let moon = fake.units().find(|u| u.odf == "fx_moon").unwrap().clone();
+        assert_eq!(node_bar(&moon).map(|b| b.0), Some("infoSingleDilithiumBarArea"));
+        let mut planet = UnitDef::new("p", "planet");
+        planet.planet_role = Some(sta_content::PlanetRole::Producer);
+        planet.resource = Some(2);
+        assert_eq!(node_bar(&planet).map(|b| b.0), Some("infoSinglePlanetMetalBarArea"));
+        assert!(node_bar(&UnitDef::new("c", "craft")).is_none());
+        let node = |amount: i32, infinite| sta_sim::economy::view::NodeView { entity: EntityId(5), resource: 0, amount: Fixed::from_int(amount), start: Fixed::from_int(400), infinite };
+        let feed = |n| crate::ui::hud::status::StatusFeed { nodes: vec![n], ..Default::default() };
+        assert_eq!(node_fraction(Some(&feed(node(100, false))), EntityId(5)), 0.25);
+        assert_eq!(node_fraction(Some(&feed(node(100, true))), EntityId(5)), 1.0, "infinite: always full");
+        assert_eq!(node_fraction(None, EntityId(5)), 1.0);
     }
 }
