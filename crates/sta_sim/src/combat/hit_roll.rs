@@ -24,6 +24,21 @@
 //! **Damage.** A hit does the ordnance's `damageBase` row for the target's
 //! ODF when it has one, else the plain value.
 //!
+//! **Damage variance.** Under the same switch, where a hit's damage varies
+//! (the casualty model), the spread is the ordnance's `damageVariance` row
+//! for the target's ODF when it has one, else the plain value.
+//!
+//! **Firing from a cloak** (`weapon_cloak_fire`, off everywhere). A fully
+//! cloaked craft fires only weapons with `cloakEnable` set. The original
+//! also lets a cloaked craft fire with a further unit flag and energy we
+//! have not identified; not reproduced.
+//!
+//! **Not sim rules.** `ignoreShield` only decides whether an ordnance stops
+//! at the shield bubble (with a shield-hit effect) or flies on to the hull;
+//! the damage it does is the same either way (read from the executable,
+//! static), so it belongs to the renderer. `needTarget` and `warpEnable`
+//! belong to targeted specials and warp, which the sim does not have yet.
+//!
 //! **Target masks** (`weapon_target_masks`, also off everywhere). A weapon
 //! with `targetLocation` set is not limited. Otherwise:
 //!
@@ -93,6 +108,18 @@ pub fn will_hit(db: &ContentDb, weapon: &WeaponDef, shooter: &Entity, target: &E
 pub fn damage_for(db: &ContentDb, weapon: &WeaponDef, target: &Entity) -> Fixed {
     let target_odf = db.unit(target.def).map_or("", |d| d.odf.as_str());
     weapon.base.damage_base.as_ref().and_then(|l| row(l, target_odf)).unwrap_or(weapon.damage)
+}
+
+/// The spread of a hit of `weapon` on `target`: its `damageVariance` row
+/// for the target's ODF, else the plain value.
+pub fn variance_for(db: &ContentDb, weapon: &WeaponDef, target: &Entity) -> Fixed {
+    let target_odf = db.unit(target.def).map_or("", |d| d.odf.as_str());
+    weapon.base.damage_variance.as_ref().and_then(|l| row(l, target_odf)).unwrap_or(weapon.damage_variance)
+}
+
+/// May `weapon` be fired by a fully cloaked craft (`cloakEnable`)?
+pub fn fires_from_cloak(weapon: &WeaponDef) -> bool {
+    weapon.base.cloak_enable == Some(true)
 }
 
 /// How the shooter stands to a target, for [`can_target`].

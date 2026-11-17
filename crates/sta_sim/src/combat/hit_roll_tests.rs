@@ -227,3 +227,64 @@ fn the_mask_keys_are_digested_only_under_their_switch() {
     assert_ne!(masks(true, weapon, |_| {}).hash(), masks(true, |_| {}, |_| {}).hash());
     assert_ne!(masks(true, |_| {}, unit).hash(), masks(true, |_| {}, |_| {}).hash());
 }
+
+/// All hits (shield + hull) of the cruiser on a frigate under the casualty model.
+fn hit_amounts(target_damage: bool, weapon: impl Fn(&mut WeaponDef)) -> Vec<Fixed> {
+    let db = db_with(
+        |f| {
+            f.crew_loss_on_hit = true;
+            f.weapon_target_damage = target_damage;
+        },
+        weapon,
+        |_| {},
+    );
+    let seat = |id| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control: Control::Idle };
+    let (cruiser, target) = (db.key("fx_cruiser").unwrap(), db.key("fx_station").unwrap());
+    let setup = GameSetup { seed: 7, map: Arc::new(sta_content::MapDef::empty()), content: Arc::new(db), players: vec![seat(1), seat(2)], options: GameOptions::default() };
+    let mut sim = Sim::from_setup(&setup);
+    let shooter = sim.spawn_def(cruiser, PlayerId(1), v(2000, 2000), (Fixed::ZERO, Fixed::ONE)).unwrap();
+    let target = sim.spawn_def(target, PlayerId(2), v(2000, 2300), (Fixed::ZERO, Fixed::ONE)).unwrap();
+    let order = Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Attack { units: vec![shooter], target }) };
+    let mut out = Vec::new();
+    for t in 0..TICKS {
+        let cmds = if t == 0 { vec![order.clone()] } else { Vec::new() };
+        for e in sim.step(&cmds).events {
+            if let SimEvent::Hit { by, shield, hull, .. } = e
+                && by == shooter
+            {
+                out.push(shield + hull);
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn a_variance_row_for_the_target_replaces_the_plain_spread() {
+    let flat = |w: &mut WeaponDef| {
+        w.damage_variance = Fixed::ZERO;
+        w.base.damage_variance = Some(table(0.0, &[("fx_station.odf", 5.0)]));
+    };
+    let distinct = |v: &[Fixed]| {
+        let mut v = v.to_vec();
+        v.sort();
+        v.dedup();
+        v.len()
+    };
+    let off = hit_amounts(false, flat);
+    let on = hit_amounts(true, flat);
+    assert!(off.len() > 3 && on.len() > 3, "{off:?} {on:?}");
+    // Per weapon kind the plain spread is zero, so off gives one amount per weapon.
+    assert!(distinct(&on) > distinct(&off), "the row spreads the damage: {on:?} vs {off:?}");
+}
+
+#[test]
+fn variance_rows_and_cloak_enable_are_digested_only_under_their_switch() {
+    let rows = |w: &mut WeaponDef| w.base.damage_variance = Some(table(1.0, &[("fx_frigate", 3.0)]));
+    let cloak = |w: &mut WeaponDef| w.base.cloak_enable = Some(true);
+    assert_eq!(db(false, false, rows).hash(), sta_content::fake::db().hash());
+    assert_ne!(db(false, true, rows).hash(), db(false, true, |_| {}).hash());
+    let cloak_db = |on: bool, patch: &dyn Fn(&mut WeaponDef)| db_with(|f| f.weapon_cloak_fire = on, patch, |_| {});
+    assert_eq!(cloak_db(false, &cloak).hash(), sta_content::fake::db().hash());
+    assert_ne!(cloak_db(true, &cloak).hash(), cloak_db(true, &|_| {}).hash());
+}

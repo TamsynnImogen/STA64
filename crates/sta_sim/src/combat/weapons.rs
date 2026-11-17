@@ -446,6 +446,10 @@ impl Weapons {
                 if tick < START_HOLD_TICKS && db.weapon_features(w).start_fire_hold {
                     continue;
                 }
+                // SIM-73 `weapon_cloak_fire` (off by default): from a cloak only `cloakEnable` weapons fire.
+                if db.weapon_features(w).weapon_cloak_fire && u.flags.contains(UnitFlags::CLOAKED) && !super::hit_roll::fires_from_cloak(w) {
+                    continue;
+                }
                 let arc = if db.features().fire_arcs {
                     hp.arc
                 } else {
