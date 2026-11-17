@@ -71,7 +71,7 @@ pub(crate) struct Obstacle {
     pub(crate) solid: Solid,
     pub(crate) friend: Option<PlayerId>,
     /// Static regions have no actor; a moving solid never blocks itself.
-    source: Option<EntityId>,
+    pub(crate) source: Option<EntityId>,
 }
 
 impl Obstacle {

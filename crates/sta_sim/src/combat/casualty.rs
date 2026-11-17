@@ -232,7 +232,9 @@ pub(crate) fn clear_derelict(t: &mut Entity, def: &UnitDef, ctx: &mut Ctx) {
 /// really did and whether it emptied the pool.
 pub(crate) fn hit(t: &mut Entity, def: &UnitDef, w: &WeaponDef, db: &ContentDb, ctx: &mut Ctx, pool: usize, damage: Fixed) -> (Fixed, Fixed, bool) {
     let k = &def.casualty;
-    let d = varied(damage, w.damage_variance, ctx.rng);
+    // SIM-73 `weapon_target_damage` (off by default): the target's own variance row.
+    let variance = if db.weapon_features(w).weapon_target_damage { super::hit_roll::variance_for(db, w, t) } else { w.damage_variance };
+    let d = varied(damage, variance, ctx.rng);
     let protection = k.shield_protection.or(db.rules().cfg.shield_damage_protection).unwrap_or(Fixed::ONE).max(Fixed::ZERO).min(Fixed::ONE);
     let s_part = mul(d, protection);
     let mut h = d - s_part;

@@ -513,6 +513,9 @@ pub struct UnitStatsDef {
     pub can_only_attack_planets: Option<bool>,
     /// `recyclesInPlace` (Armada II).
     pub recycles_in_place: Option<bool>,
+    /// `addToPlanner` (Armada II craft and stations): 0 keeps the unit out of
+    /// the path planner (stock orbital stations). Read by `sta_sim::nav`.
+    pub add_to_planner: Option<bool>,
     /// `shipIsBuiltByEvolution` (Armada II).
     pub built_by_evolution: Option<bool>,
     /// `shipIsBuiltByShips` (Armada II).
