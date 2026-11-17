@@ -199,3 +199,12 @@ fn the_record_refuses_bad_queues() {
     assert!(!ok(vec![(EntityId(1), vec![EntityId(2)]), (EntityId(3), vec![EntityId(2)])]), "a ship twice");
     assert!(!ok(vec![(EntityId(1), vec![EntityId(20)])]), "an unknown ship");
 }
+
+#[test]
+fn roots_lets_a_ship_dock_fifty_further_out() {
+    use super::service::{DOCK_REACH, ROOTS_EXTRA_REACH, reaches};
+    let stock = sta_content::fake::db();
+    assert_eq!(reaches(&stock).0, DOCK_REACH);
+    let roots = ContentDb::builder().profile(sta_content::Profile::Fo4).features(sta_content::Profile::Fo4.features()).build().unwrap();
+    assert_eq!(reaches(&roots), (DOCK_REACH + ROOTS_EXTRA_REACH, super::service::WAIT_REACH + ROOTS_EXTRA_REACH));
+}
