@@ -145,11 +145,16 @@ pub struct Features {
     /// to transport attack a target that still has shields; never by an AI
     /// seat. On in Fo4 (the Roots engine); off elsewhere.
     pub transport_attack_by_weld: bool,
+    /// A fully cloaked craft fires only its weapons with `cloakEnable` set
+    /// (SIM-73; read from the stock Armada II executable, static, not
+    /// measured). Off everywhere until measured: the cloak device's
+    /// `disableWeapons` alone decides.
+    pub weapon_cloak_fire: bool,
 }
 
 impl Features {
     /// Every switch, in declaration order, for the content hash.
-    pub(crate) fn bits(&self) -> [bool; 39] {
+    pub(crate) fn bits(&self) -> [bool; 40] {
         [
             self.weapon_damage_controls,
             self.point_defense_cycles,
@@ -190,6 +195,7 @@ impl Features {
             self.weapon_target_damage,
             self.weapon_target_masks,
             self.transport_attack_by_weld,
+            self.weapon_cloak_fire,
         ]
     }
 }
