@@ -686,6 +686,25 @@ class MissionDllInventoryTests(unittest.TestCase):
         kinds = inventory.a1_kinds(self.repo)
         self.assertEqual(kinds, {"SetPosition": "retained", "InQueue": "error", "Stop": "working"})
 
+    def test_loop_and_nested_registrations_count(self):
+        self.register_a2(
+            'for (name, label, sub) in [\n    ("DisableLifeSupport", "A2.DisableLifeSupport", 1),\n] {\n'
+            '    table.set(\n        name,\n        f,\n    )?;\n}\n'
+            'super::fleets::install(lua, &env, table)?;\n'
+        )
+        (self.a2 / "fleets.rs").write_text(
+            'for name in ["CreateNewSiegeFleet"] {\n    table.set(name, f)?;\n}\n'
+            '// for name in ["Ghost"] { table.set(name, f)?; }\n'
+            'for x in ["NotBound"] {\n    other.set(x, f)?;\n}\n',
+            encoding="utf-8",
+        )
+        names = inventory.a2_source_names(self.repo)
+        self.assertIn("DisableLifeSupport", names)
+        self.assertIn("CreateNewSiegeFleet", names)
+        self.assertNotIn("Ghost", names)
+        self.assertNotIn("NotBound", names)
+        self.assertNotIn("A2.DisableLifeSupport", names)
+
     def test_a1_cases_cover_every_signature_overload(self):
         tests = (SCRIPT.parent.parent / "crates/sta_mission/src/api/a1/tests.rs").read_text(encoding="utf-8")
         cased = {}
@@ -695,7 +714,10 @@ class MissionDllInventoryTests(unittest.TestCase):
         for lua_name in inventory.A1_SIGNATURES.values():
             n = lua_name.split(".", 1)[1]
             declared[n] = declared.get(n, 0) + 1
-        self.assertEqual(cased, declared)
+        # Every overload has a case; a call may have more (argument edge cases)
+        # and the table may test calls no stock DLL imports.
+        short = {n: (cased.get(n, 0), want) for n, want in declared.items() if cased.get(n, 0) < want}
+        self.assertEqual(short, {})
 
     def test_every_a1_signature_names_a_distinct_overload(self):
         keys = [inventory.normalized_signature(sig) for sig in inventory.A1_SIGNATURES]
