@@ -80,7 +80,7 @@ fn seat_state(s: &NetShared, p: sta_core::PlayerId, now: Instant) -> String {
     }
 }
 
-fn update(mut commands: Commands, game: Option<Res<NetGame>>, mut status: ResMut<NetStatus>, root: Query<Entity, With<NetOverlayRoot>>, mut texts: Query<&mut Text, With<NetOverlayText>>) {
+fn update(mut commands: Commands, game: Option<Res<NetGame>>, mut status: ResMut<NetStatus>, root: Query<Entity, With<NetOverlayRoot>>, mut texts: Query<&mut crate::ui::sprite_font::SpriteText, With<NetOverlayText>>) {
     let now = game.as_ref().map(|g| g.read(|s| lines(s, Instant::now()))).unwrap_or_default();
     if status.0 != now {
         status.0.clone_from(&now);
@@ -93,8 +93,8 @@ fn update(mut commands: Commands, game: Option<Res<NetGame>>, mut status: ResMut
     }
     let text = now.join("\n");
     if let Ok(mut t) = texts.single_mut() {
-        if t.0 != text {
-            t.0 = text;
+        if t.text != text {
+            t.text = text;
         }
         return;
     }
@@ -107,10 +107,10 @@ fn update(mut commands: Commands, game: Option<Res<NetGame>>, mut status: ResMut
         .with_children(|p| {
             p.spawn((
                 NetOverlayText,
-                Text::new(text),
-                TextFont { font_size: bevy::text::FontSize::Px(20.0), ..default() },
-                TextColor(Color::srgb(0.98, 0.9, 0.55)),
-                TextLayout::justify(Justify::Center),
+                // UI-16: the mod's sprite font (the baked TTF where it has none), centred, wrapped
+                // to the box.
+                crate::ui::sprite_font::sprite_text(text, 20.0, Color::srgb(0.98, 0.9, 0.55)),
+                crate::ui::sprite_font::SpriteTextStyle::default().centered().wrap_to_parent(),
                 Node { max_width: Val::Percent(70.0), ..default() },
             ));
         });
