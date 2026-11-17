@@ -313,6 +313,10 @@ pub struct CameraLimits {
     max_dist: f32,
     /// Pixels from the window edge that scroll the view (`SCROLL_BORDER_WIDTH`).
     border: f32,
+    /// The eye's lowest and highest height over the map plane (`OVERVIEW_MIN_HEIGHT`,
+    /// `OVERVIEW_MAX_HEIGHT`); `None` where the cfg has no such key.
+    min_height: Option<f32>,
+    max_height: Option<f32>,
     /// The mission start camera (UI-36): `OVERVIEW_INIT_HEIGHT`, `OVERVIEW_PARABOLA_FOCUS`,
     /// `OVERVIEW_INIT_ROTATION` and the look point's height, the middle of
     /// `SHIP_COMBAT_FLOOR` / `SHIP_COMBAT_CEILING`.
@@ -373,6 +377,8 @@ impl CameraLimits {
             hi: Vec3::splat(1e9),
             max_dist: 1e9,
             border: cfg.and_then(|c| c.f32("SCROLL_BORDER_WIDTH")).unwrap_or(8.0),
+            min_height: cfg.and_then(|c| c.f32("OVERVIEW_MIN_HEIGHT")).filter(|v| v.is_finite()),
+            max_height: cfg.and_then(|c| c.f32("OVERVIEW_MAX_HEIGHT")).filter(|v| v.is_finite() && *v > 0.0),
             start: StartCamera::from_cfg(cfg),
         }
     }
@@ -720,8 +726,11 @@ fn pan_keys(
     time: Res<Time>,
     limits: Res<CameraLimits>,
     window: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
     mut q: Query<(&mut Orbit, &Transform)>,
 ) {
+    // A script's camera shot may sit outside the player's overview heights.
+    let scripted = crate::ui::presentation::cutscene_running(cine);
     let edge = window.single().ok().and_then(|w| {
         let c = w.cursor_position()?;
         let (wd, ht, b) = (w.width(), w.height(), limits.border);
@@ -745,7 +754,27 @@ fn pan_keys(
         let step = d * o.dist * 0.8 * time.delta_secs();
         o.focus += step;
         o.focus = o.focus.clamp(limits.lo, limits.hi);
-        o.dist = o.dist.clamp(50.0, limits.max_dist);
+        o.dist = if scripted { o.dist.clamp(50.0, limits.max_dist) } else { limits.clamp_dist(o.dist, o.pitch, o.focus.y) };
+    }
+}
+
+impl CameraLimits {
+    /// The orbit distance kept within the map's size and, where the cfg sets them, within
+    /// `OVERVIEW_MIN_HEIGHT` .. `OVERVIEW_MAX_HEIGHT` of eye height over the look point's plane
+    /// (the original's overview camera, the keys read from data; the parabola it zooms along is
+    /// not followed: the pitch stays the player's).
+    pub fn clamp_dist(&self, dist: f32, pitch: f32, focus_y: f32) -> f32 {
+        let (mut lo, mut hi) = (50.0f32, self.max_dist.max(50.0));
+        let s = pitch.sin();
+        if s > 0.05 {
+            if let Some(max_h) = self.max_height {
+                hi = hi.min(((max_h - focus_y) / s).max(lo));
+            }
+            if let Some(min_h) = self.min_height {
+                lo = lo.max(((min_h - focus_y) / s).min(hi));
+            }
+        }
+        dist.clamp(lo, hi)
     }
 }
 
@@ -1493,6 +1522,24 @@ mod a1_start_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_eye_stays_within_the_cfgs_overview_heights() {
+        let cfg = sta_assets::cfg_h::CfgH::parse("float OVERVIEW_MAX_HEIGHT = 700.0;\nfloat OVERVIEW_MIN_HEIGHT = 100.0;\n");
+        let mut limits = CameraLimits::from_cfg(Some(&cfg));
+        limits.max_dist = 10_000.0;
+        let pitch = std::f32::consts::FRAC_PI_6; // sin = 0.5
+        assert!((limits.clamp_dist(5_000.0, pitch, 0.0) - 1_400.0).abs() < 0.5, "700 high at most");
+        assert!((limits.clamp_dist(60.0, pitch, 0.0) - 200.0).abs() < 0.5, "100 high at least");
+        assert_eq!(limits.clamp_dist(800.0, pitch, 0.0), 800.0);
+        // A look point raised by 100 leaves 600 above it.
+        assert!((limits.clamp_dist(5_000.0, pitch, 100.0) - 1_200.0).abs() < 0.5);
+        // No keys: the old limits (50 .. the map's size).
+        let mut plain = CameraLimits::from_cfg(None);
+        plain.max_dist = 3_000.0;
+        assert_eq!(plain.clamp_dist(5_000.0, pitch, 0.0), 3_000.0);
+        assert_eq!(plain.clamp_dist(10.0, pitch, 0.0), 50.0);
+    }
 
     #[test]
     fn fps_text_follows_saved_visibility_and_defaults_hidden() {
