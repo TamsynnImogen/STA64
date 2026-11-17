@@ -616,6 +616,8 @@ fn armed_cursor_name(mode: TargetMode, valid: bool) -> &'static str {
         (TargetMode::Colonize, false) => "c_nocolonize",
         (TargetMode::Transport, true) => "c_transport",
         (TargetMode::Transport, false) => "c_notransport",
+        (TargetMode::Repair, true) => "c_repair",
+        (TargetMode::Repair, false) => "c_norepair",
         // Installed tables have c_rally but no c_norally; use the move refusal art.
         (TargetMode::Rally, true) => "c_rally",
         (TargetMode::Rally, false) => "c_nomove",
@@ -658,6 +660,7 @@ fn target_mode_available(feed: &HudFeed, mode: TargetMode) -> bool {
         TargetMode::Rally => c.rally,
         TargetMode::Colonize => c.colonize,
         TargetMode::Transport => c.transport_ready,
+        TargetMode::Repair => c.repair,
     }
 }
 
@@ -716,6 +719,16 @@ fn target_order(
             ids = carriers.clone();
             vec![Order::Transport { units: carriers, target: id, attack: false }]
         }
+        TargetMode::Repair => {
+            let ships = commands::repairers(feed, &ids);
+            if ships.is_empty() { return None; }
+            // A yard under the cursor is the one asked for; anywhere else the sim picks the best (SIM-40).
+            // Whether the ship needs repair and the yard repairs is the sim's to judge.
+            let yard = target.filter(|&id| repair_yard(feed, id));
+            if target.is_some() && yard.is_none() && point.is_none() { return None; }
+            ids = ships.clone();
+            vec![Order::Repair { units: ships, yard }]
+        }
         TargetMode::Rally => {
             let at = match target.and_then(|id| feed.view.unit(id).filter(|u| !u.flags.contains(UnitFlags::DYING)).map(|_| id)) {
                 Some(id) => Target::Entity(id),
@@ -725,6 +738,19 @@ fn target_order(
         }
     };
     Some((orders, ids))
+}
+
+/// A yard the HUD may name in `Order::Repair`: a live, finished station of the player's own team whose ODF
+/// says `repairFacility = 1` (the sim's yard gate, SIM-40, read from the view).
+fn repair_yard(feed: &HudFeed, id: EntityId) -> bool {
+    let (Some(db), Some(y)) = (feed.content.as_deref(), feed.view.unit(id)) else { return false };
+    let mine = feed.view.player(feed.player).map(|p| p.team);
+    let team = |p: sta_sim::PlayerId| feed.view.player(p).map(|v| v.team);
+    !y.flags.contains(UnitFlags::DYING)
+        && y.hull[0] > sta_sim::Fixed::ZERO
+        && y.progress.is_none_or(|p| p >= sta_sim::Fixed::ONE)
+        && (y.owner == feed.player || (mine.is_some() && team(y.owner) == mine))
+        && db.unit(y.def).is_some_and(|d| EntityKind::of_def(d) == EntityKind::Station && d.repair.repair_facility == Some(true))
 }
 
 /// The sim's target gate for `Order::Transport`, read from the view: a live ship or station with a crew
@@ -821,6 +847,32 @@ mod target_tests {
     }
 
     fn mine_available(f: &HudFeed) -> bool { target_mode_available(f, TargetMode::Mine) }
+
+    #[test]
+    fn repair_targets_a_repair_yard_or_lets_the_sim_choose() {
+        let fake = sta_content::fake::db();
+        let mut builder = sta_content::ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for weapon in fake.weapons() { builder = builder.weapon(weapon.clone()); }
+        for unit in fake.units() {
+            let mut unit = unit.clone();
+            if unit.odf == "fx_yard" { unit.repair.repair_facility = Some(true); }
+            builder = builder.unit(unit);
+        }
+        let mut f = feed(&[1, 3]);
+        f.content = Some(Arc::new(builder.build().unwrap()));
+        let p = Some(SimVec3::from_f32([10.0, 0.0, 20.0]));
+        assert!(target_mode_available(&f, TargetMode::Repair), "a craft that can move is selected");
+        // The yard under the cursor is named; only the craft of the mixed selection go.
+        assert!(matches!(target_order(&f, TargetMode::Repair, Some(EntityId(3)), p), Some((orders, ids))
+            if ids == vec![EntityId(1)] && matches!(orders.as_slice(), [Order::Repair { units, yard: Some(EntityId(3)) }] if units == &[EntityId(1)])));
+        // Open space: the sim picks the best yard.
+        assert!(matches!(target_order(&f, TargetMode::Repair, None, p), Some((orders, _)) if matches!(orders.as_slice(), [Order::Repair { yard: None, .. }])));
+        // An enemy ship is no yard: the sim picks instead.
+        assert!(matches!(target_order(&f, TargetMode::Repair, Some(EntityId(4)), p), Some((orders, _)) if matches!(orders.as_slice(), [Order::Repair { yard: None, .. }])));
+        // A station alone cannot go to a yard.
+        assert!(!target_mode_available(&feed(&[3]), TargetMode::Repair));
+        assert_eq!(armed_cursor_name(TargetMode::Repair, true), "c_repair");
+    }
 
     #[test]
     fn target_actions_make_supported_orders() {
