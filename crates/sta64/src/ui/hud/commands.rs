@@ -35,6 +35,10 @@ pub struct Capabilities {
     /// At least one selected transporter belongs to a game family the sim takes the order for
     /// (tells a greyed press apart: the family is refused, or the crew is too low).
     pub transport_family: bool,
+    /// The stock REPAIR command (`repair.odf`, command `GET_REPAIR`): a craft that can move and
+    /// whose ODF does not say `canShipyardRepair = 0` (the sim's `Order::Repair` gate, SIM-40;
+    /// whether it needs repair and which yard is the sim's to judge).
+    pub repair: bool,
     /// A finished station with a positive live crew capacity can show Recrew.
     pub recrew: bool,
     /// At least one eligible station is below its live crew maximum.
@@ -90,6 +94,7 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
         mine: mobile && def.mines(),
         colonize: mobile && def.raw.bool("colony_ship").unwrap_or(false) && sta_sim::colony::is_pod_ship(db, def),
         transport: t.shown,
+        repair: mobile && def.repair.can_shipyard_repair != Some(false),
         transport_family: t.family,
         transport_ready: t.ready,
         recrew,
@@ -140,6 +145,8 @@ pub fn shared(feed: &HudFeed) -> Capabilities {
         common.transport |= next.transport;
         common.transport_ready |= next.transport_ready;
         common.transport_family |= next.transport_family;
+        // Only the craft of a mixed selection that can go to a yard take the order (see `repairers`).
+        common.repair |= next.repair;
         common.recrew |= next.recrew;
         common.recrew_ready |= next.recrew_ready;
         common.specials.retain(|s| next.specials.contains(s));
@@ -162,6 +169,12 @@ pub fn recrew_stations(feed: &HudFeed, ids: &[EntityId]) -> Vec<EntityId> {
 pub fn miners(feed: &HudFeed, ids: &[EntityId]) -> Vec<EntityId> {
     let Some(db) = feed.content.as_deref() else { return Vec::new() };
     ids.iter().copied().filter(|id| feed.view.unit(*id).is_some_and(|u| one(db, u).mine)).collect()
+}
+
+/// The members of `ids` that can take a Repair order (the rest of a mixed selection do not receive it).
+pub fn repairers(feed: &HudFeed, ids: &[EntityId]) -> Vec<EntityId> {
+    let Some(db) = feed.content.as_deref() else { return Vec::new() };
+    ids.iter().copied().filter(|id| feed.view.unit(*id).is_some_and(|u| one(db, u).repair)).collect()
 }
 
 /// The members of `ids` that can take a Colonize order (the rest of a mixed selection do not receive it).
