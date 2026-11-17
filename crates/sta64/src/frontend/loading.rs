@@ -60,6 +60,7 @@ use sta_content::MapDef;
 use crate::app::GameSet;
 use crate::clock::AnimClock;
 use crate::ui::i18n::tr;
+use crate::ui::sprite_font::{SpriteText, SpriteTextStyle, sprite_text_styled};
 use crate::render::textures::{Loader, TextureCache};
 use crate::ui::theme::{Fill, ProgressBar, Theme, ThemePlugin, mix};
 use crate::viewer::Mounted;
@@ -491,13 +492,9 @@ fn fit_scale(
     }
 }
 
+/// UI-16: the mod's sprite font (the baked TTF where it has none), wrapped to its column.
 fn text(s: impl Into<String>, size: f32, color: Color) -> impl Bundle {
-    (
-        Text::new(s.into()),
-        TextFont { font_size: bevy::text::FontSize::Px(size), ..default() },
-        TextColor(color),
-        Pickable::IGNORE,
-    )
+    sprite_text_styled(s, size, color, SpriteTextStyle::default().wrap_to_parent())
 }
 
 fn stop(color: Color, at: f32) -> bevy::ui::ColorStop {
@@ -762,8 +759,8 @@ fn update_screen(
     clock: Option<Res<AnimClock>>,
     time: Res<Time>,
     window: Option<Single<&Window, With<PrimaryWindow>>>,
-    mut status: Query<&mut Text, (With<StatusText>, Without<PercentText>)>,
-    mut percent: Query<&mut Text, (With<PercentText>, Without<StatusText>)>,
+    mut status: Query<&mut SpriteText, (With<StatusText>, Without<PercentText>)>,
+    mut percent: Query<&mut SpriteText, (With<PercentText>, Without<StatusText>)>,
     mut bar: Query<&mut ProgressBar, With<LoadingBar>>,
     mut dots: Query<(&RingDot, &mut BackgroundColor)>,
     mut logged: Local<String>,
@@ -773,14 +770,14 @@ fn update_screen(
     }
     let words = progress.doing();
     for mut t in &mut status {
-        if t.0 != words {
-            t.0.clone_from(&words);
+        if t.text != words {
+            t.text.clone_from(&words);
         }
     }
     let pct = format!("{}%", progress.percent());
     for mut t in &mut percent {
-        if t.0 != pct {
-            t.0.clone_from(&pct);
+        if t.text != pct {
+            t.text.clone_from(&pct);
         }
     }
     for mut b in &mut bar {
@@ -1044,9 +1041,9 @@ mod tests {
         assert_eq!(count::<RingDot>(&mut app), layout::DOTS);
         assert_eq!(app.world().resource::<ScreenSky>().faces, 0, "no install: the stand-in sky");
         assert_eq!(app.world().resource::<LoadProgress>().percent(), 25);
-        let words = app.world_mut().query_filtered::<&Text, With<StatusText>>().single(app.world()).unwrap().0.clone();
+        let words = app.world_mut().query_filtered::<&SpriteText, With<StatusText>>().single(app.world()).unwrap().text.clone();
         assert!(words.starts_with("Loading models and textures"), "{words}");
-        let pct = app.world_mut().query_filtered::<&Text, With<PercentText>>().single(app.world()).unwrap().0.clone();
+        let pct = app.world_mut().query_filtered::<&SpriteText, With<PercentText>>().single(app.world()).unwrap().text.clone();
         assert_eq!(pct, "25%");
         let bar = app.world_mut().query_filtered::<&ProgressBar, With<LoadingBar>>().single(app.world()).unwrap().0;
         assert!((bar - 0.25).abs() < 1e-4);

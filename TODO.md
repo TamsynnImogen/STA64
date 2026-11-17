@@ -6,6 +6,7 @@ this file is what's being worked on now and what needs checking by eye.
 Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your check in game/viewer
 
 ## Needs your check
+- [?] Sprite fonts in the loading screen, end banner and network overlay (UI-16, #389): start a skirmish on a mod with sprite fonts (FO 4, Classic). The loading screen's kicker, title, briefing, objectives, status words and percentage, the VICTORY/DEFEAT banner, and the network wait/desync overlay should be in the mod's font (briefing paragraphs wrapped to their column, overlay centred), with the baked TTF on a mod without fonts. Headless tests cover the text values only, not the look.
 - [?] **Three combat switches to test against the original before any profile turns them on** (SIM-73, #883). All are off everywhere, read from the Armada II executable, not measured. Switch one on for a whole mod with a `[Features]` section in its `info.ini` (`weapon_hit_roll = 1`), or for one weapon or unit with a `Feature_<name> = 1` key in its ODF. That route is the loader's documented one and was not tried end to end for these three; they were only switched on inside the test suite.
   - [ ] `weapon_hit_roll`: compare the miss rate against a moving ship and a stopped one with a weapon whose `hitChance` is below 1; stations should take every shot. Check whether the original draws a missed torpedo flying past: here a miss flies no projectile.
   - [ ] `weapon_target_damage`: with one weapon, compare damage on a target that has its own `damageBase` row and on one that has none.
