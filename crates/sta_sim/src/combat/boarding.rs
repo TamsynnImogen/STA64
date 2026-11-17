@@ -4,8 +4,16 @@
 //! features have `crew_loss_on_hit` (stock A2, Classic, FO 3.x, Roots), because
 //! the derelict latch the capture rules lean on exists only there. The Armada I
 //! profile (SIM-71) is accepted too, with its own differences below; Native is
-//! refused. Planets, boarding specials, Roots/FO deltas, hold fire and the
-//! assault attack mode are not here: `Order::Transport { attack: true }` is refused.
+//! refused. Planets, boarding specials, the other Roots/FO deltas and hold fire are not
+//! here.
+//!
+//! **Transport attack** (`Order::Transport { attack: true }`, feature
+//! `transport_attack_by_weld`, on in Fo4, the Roots engine): taken only from a
+//! seat that is not an AI seat, and only by carriers whose `weldingAnimSpeed` is
+//! 0; such a transport boards an enemy whose shields are still up. Everything
+//! else is the plain transport. Elsewhere the attack form is refused. Rule from
+//! the WORKPLAN row (Roots), not measured; assault ships' faster capture is not
+//! here.
 //!
 //! **Armada I** (read from the executable, static; keys from data; **not
 //! measured**: the Armada I bench cannot script scenes). The same pulse, arrival
@@ -197,6 +205,8 @@ fn crew_red_status(db: &ContentDb, race: &str) -> Fixed {
 pub struct TransportRow {
     pub target: EntityId,
     pub next_pulse: Tick,
+    /// A transport attack: the enemy's shields do not stop it.
+    pub attack: bool,
 }
 
 /// A boarding party in flight to an enemy.
@@ -236,7 +246,7 @@ pub(crate) const CARRIER_HOLD: u8 = 1;
 /// A party as a snapshot row: arrive, seq, target, size bits, strength bits, race, team, source.
 pub type PartyRow = (Tick, u32, EntityId, i64, i64, String, PlayerId, EntityId);
 
-/// The snapshot form of [`Transports`] (format 29).
+/// The snapshot form of [`Transports`] (format 29; `attacks` from format 35).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransportsRec {
     pub version: u8,
@@ -247,6 +257,13 @@ pub struct TransportsRec {
     pub next_seq: u32,
     /// `(entity, kind, held until)`, ascending `(entity, kind)`.
     pub holds: Vec<(EntityId, u8, Tick)>,
+    /// Carriers whose transport is an attack, ascending (version 2, format 35).
+    pub attacks: Vec<EntityId>,
+}
+
+/// May this carrier transport attack (Roots): the switch and `weldingAnimSpeed = 0`.
+fn attack_capable(db: &ContentDb, d: &UnitDef) -> bool {
+    db.unit_features(d).transport_attack_by_weld && d.transport.welding_anim_speed == Some(Fixed::ZERO)
 }
 
 fn alive(e: &Entity) -> bool {
@@ -330,8 +347,9 @@ impl Transports {
 
     pub(crate) fn to_rec(&self) -> TransportsRec {
         TransportsRec {
-            version: 1,
+            version: 2,
             rows: self.rows.iter().map(|(c, r)| (*c, r.target, r.next_pulse)).collect(),
+            attacks: self.rows.iter().filter(|(_, r)| r.attack).map(|(c, _)| *c).collect(),
             parties: self
                 .parties
                 .iter()
@@ -344,8 +362,10 @@ impl Transports {
 
     /// Rebuild from a snapshot record: ascending ids and order keys, entities that exist, sane sizes.
     pub(crate) fn from_rec(rec: TransportsRec, exists: impl Fn(EntityId) -> bool) -> Option<Transports> {
-        if rec.version != 1
+        if rec.version != 2
             || !rec.rows.windows(2).all(|w| w[0].0 < w[1].0)
+            || !rec.attacks.windows(2).all(|w| w[0] < w[1])
+            || !rec.attacks.iter().all(|c| rec.rows.binary_search_by_key(c, |r| r.0).is_ok())
             || !rec.holds.windows(2).all(|w| (w[0].0, w[0].1) < (w[1].0, w[1].1))
             || !rec.parties.windows(2).all(|w| (w[0].0, w[0].1) < (w[1].0, w[1].1))
         {
@@ -359,7 +379,7 @@ impl Transports {
             return None;
         }
         Some(Transports {
-            rows: rec.rows.into_iter().map(|(c, target, next_pulse)| (c, TransportRow { target, next_pulse })).collect(),
+            rows: rec.rows.into_iter().map(|(c, target, next_pulse)| (c, TransportRow { target, next_pulse, attack: rec.attacks.binary_search(&c).is_ok() })).collect(),
             parties: rec
                 .parties
                 .into_iter()
@@ -405,6 +425,13 @@ impl Transports {
             h.u64(u64::from(*kind));
             h.u64(*until);
         }
+        // Only when there is one, so runs without a transport attack keep their digests.
+        if self.rows.values().any(|r| r.attack) {
+            h.str("transport-attacks");
+            for (c, _) in self.rows.iter().filter(|(_, r)| r.attack) {
+                h.u64(u64::from(c.0));
+            }
+        }
     }
 
     /// A sample with a transport, a party in flight and two shield holds (digest pin).
@@ -412,7 +439,7 @@ impl Transports {
     pub(crate) fn sample_for_test() -> Transports {
         let (carrier, target) = (EntityId(2), EntityId(1));
         let mut t = Transports::default();
-        t.rows.insert(carrier, TransportRow { target, next_pulse: 120 });
+        t.rows.insert(carrier, TransportRow { target, next_pulse: 120, attack: false });
         t.send(Party { arrive: 135, seq: 0, target, size: Fixed::from_int(5), strength: Fixed::ONE, race: "federation".into(), team: PlayerId(0), source: carrier });
         t.holds.insert((carrier, CARRIER_HOLD), 219);
         t.holds.insert((carrier, TARGET_HOLD), 205);
@@ -443,8 +470,9 @@ impl Sim {
     /// target's shields (the pulse tests those); false when no unit could take it.
     pub(crate) fn apply_transport(&mut self, player: PlayerId, carriers: &[EntityId], target: EntityId, attack: bool) -> bool {
         let Some(db) = self.content.clone() else { return false };
-        if attack {
-            return false; // P3: transport attack (Roots, assault ships).
+        // Transport attack (Roots): never from an AI seat.
+        if attack && (self.ai_seats.binary_search(&player).is_ok() || !player.is_player()) {
+            return false;
         }
         // Armada I has no commandeer keys (S).
         let armada1 = db.profile() == Profile::Sta1Classic;
@@ -469,6 +497,7 @@ impl Sim {
                             && (armada1 || self.same_team(u.owner, target_owner) || can_commandeer(&db, self.unit_race(id).unwrap_or("")))
                             && (!player.is_player() || u.owner == player)
                             && def.is_some_and(|d| u.crew.is_some_and(|c| can_transport(&db, d, c)))
+                            && (!attack || def.is_some_and(|d| attack_capable(&db, d)))
                     })
             })
             .collect();
@@ -487,7 +516,7 @@ impl Sim {
             self.movement.clear_waypoints(id);
             self.set_target(id, None);
             self.colonies.end_process(id, false);
-            self.transports.rows.insert(id, TransportRow { target, next_pulse: self.tick });
+            self.transports.rows.insert(id, TransportRow { target, next_pulse: self.tick, attack });
         }
         true
     }
@@ -545,6 +574,7 @@ impl Sim {
 
     /// One pulse of `carrier` to `target`; false when the transport ends.
     fn pulse(&mut self, db: &ContentDb, rules: &TransportRules, carrier: EntityId, target: EntityId) -> bool {
+        let attack = self.transports.rows.get(&carrier).is_some_and(|r| r.attack);
         let Some(c) = self.units.get(carrier).filter(|u| alive(u)) else { return false };
         let Some(t) = self.units.get(target).filter(|u| alive(u)) else { return false };
         let (Some(cdef), Some(tdef)) = (db.unit(c.def), db.unit(t.def)) else { return false };
@@ -558,7 +588,7 @@ impl Sim {
         let enemy = Diplomacy::new(&self.players, &self.relations).is_enemy(owner, tpos_owner);
         if enemy {
             let derelict = self.subsystems.get(target).is_some_and(|r| r.derelict);
-            if if rules.armada1 { !pool_down(t, derelict) } else { tshield > SHIELDS_DOWN } {
+            if !attack && if rules.armada1 { !pool_down(t, derelict) } else { tshield > SHIELDS_DOWN } {
                 return false;
             }
         } else if tnow >= tmax {

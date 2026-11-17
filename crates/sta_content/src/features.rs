@@ -141,11 +141,10 @@ pub struct Features {
     /// (`sta_sim::combat::hit_roll::can_target`; read from the stock Armada II
     /// executable, static, not measured). Off everywhere until measured.
     pub weapon_target_masks: bool,
-    /// A fully cloaked craft fires only its weapons with `cloakEnable` set
-    /// (SIM-73; read from the stock Armada II executable, static, not
-    /// measured). Off everywhere until measured: the cloak device's
-    /// `disableWeapons` alone decides.
-    pub weapon_cloak_fire: bool,
+    /// SIM-46 (Roots): a carrier whose `weldingAnimSpeed` is 0 may be ordered
+    /// to transport attack a target that still has shields; never by an AI
+    /// seat. On in Fo4 (the Roots engine); off elsewhere.
+    pub transport_attack_by_weld: bool,
 }
 
 impl Features {
@@ -190,7 +189,7 @@ impl Features {
             self.weapon_hit_roll,
             self.weapon_target_damage,
             self.weapon_target_masks,
-            self.weapon_cloak_fire,
+            self.transport_attack_by_weld,
         ]
     }
 }

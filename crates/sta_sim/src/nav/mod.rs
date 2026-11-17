@@ -11,6 +11,10 @@
 //!   solid's radius plus the craft's body radius, SIM-21's own contact
 //!   distance (the body rounded up to whole units, so craft of one size share
 //!   a grid).
+//!   A unit whose ODF says `addToPlanner = 0` (stock Armada II's orbital
+//!   stations and the Species 8472 mine) is left out of planning, as the
+//!   original never adds it to its planners (read from the executable,
+//!   static); SIM-21 still keeps craft off it up close.
 //! - **Nebulae** ([`RegionKind::Nebula`], from `nebula_obj` map objects) cost
 //!   their ODF's `pathing_cost` per cell
 //!   ([`NebulaPathing`](sta_content::NebulaPathing), hashed with the
@@ -357,7 +361,14 @@ impl Sim {
             return Vec::new();
         }
         let nebulae = self.nebulae(&rules);
-        let obstacles = self.obstacles();
+        let db = self.content.clone();
+        let planned = |o: &crate::avoid::Obstacle| {
+            o.source
+                .and_then(|id| self.units.get(id))
+                .and_then(|e| db.as_deref().and_then(|db| db.unit(e.def)))
+                .is_none_or(|d| d.stats.add_to_planner != Some(false))
+        };
+        let obstacles: Vec<_> = self.obstacles().into_iter().filter(|o| planned(o)).collect();
         if nebulae.is_empty() && obstacles.is_empty() {
             return Vec::new();
         }

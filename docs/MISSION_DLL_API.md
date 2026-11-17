@@ -15,15 +15,15 @@ user's own executables each time, and none are recorded here.
 | engine API size | 371 `ScriptInterface` methods | (imports only) |
 | distinct calls used | 138 | 213 |
 | call sites | 11692 | — |
-| DLL-shaped callable (`A2` / `A1` table) | 130 | 172 |
-| missing callable signatures (missing A1 calls) | 2 | 0 |
-| &nbsp;&nbsp;of the A1 callable: working (sim- or view-backed) | — | 81 |
+| DLL-shaped callable (`A2` / `A1` table) | 132 | 172 |
+| missing callable signatures (missing A1 calls) | 0 | 0 |
+| &nbsp;&nbsp;of the A1 callable: working (sim- or view-backed) | — | 105 |
 | &nbsp;&nbsp;of the A1 callable: presentation event only, no consumer yet | — | 35 |
-| &nbsp;&nbsp;of the A1 callable: request retained and counted, no effect | — | 42 |
-| &nbsp;&nbsp;of the A1 callable: always raises (no data in the world view) | — | 14 |
+| &nbsp;&nbsp;of the A1 callable: request retained and counted, no effect | — | 23 |
+| &nbsp;&nbsp;of the A1 callable: always raises (no data in the world view) | — | 9 |
 | MMM job-equivalent, not A2-shaped | 0 | — |
 | bound in STA64's Lua today | — | 6 |
-| in MMM's API, not yet bound | 2 | 0 |
+| in MMM's API, not yet bound | 0 | 0 |
 | no Lua equivalent (STA64 extension needed) | 0 | 0 |
 | script-state plumbing (n/a in Lua) | 6 | 41 |
 
@@ -215,8 +215,8 @@ user's own executables each time, and none are recorded here.
 | `void ButItCanBeDerelicted(int, bool)` | 5 | 5 | A2 DLL-shaped | `A2.ButItCanBeDerelicted` |
 | `void SetAngularVelocity(int, Vector3 const &)` | 5 | 12 | A2 DLL-shaped | `A2.SetAngularVelocity` |
 | `void Decloak(int)` | 4 | 23 | A2 DLL-shaped | `A2.Decloak` |
-| `void DisableLifeSupport(int, bool)` | 4 | 17 | MMM | `DamageFlags.DisableLifesupport` |
-| `void DisableSensors(int, bool)` | 4 | 18 | MMM | `DamageFlags.DisableSensors` |
+| `void DisableLifeSupport(int, bool)` | 4 | 17 | A2 DLL-shaped | `A2.DisableLifeSupport` |
+| `void DisableSensors(int, bool)` | 4 | 18 | A2 DLL-shaped | `A2.DisableSensors` |
 | `void StuffIntoWormhole(int, int)` | 4 | 6 | A2 DLL-shaped | `A2.StuffIntoWormhole` |
 | `bool IsExploding(int)` | 3 | 4 | A2 DLL-shaped | `A2.IsExploding` |
 | `bool IsOdf(int, char *)` | 3 | 7 | A2 DLL-shaped | `A2.IsOdf` |
@@ -517,10 +517,10 @@ import no engine call.
 
 | install | rule DLLs | rules | conditions decoded | distinct calls | pairs | pairs working | pairs raising | pairs missing | sites | sites working |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| Star Trek Armada II (Stock) | 36 | 1168 | 1168 | 28 | 182 | 171 | 11 | 0 | 895 | 823 |
-| Star Trek Armada (A1 missions) | 26 | — | — | 38 | 175 | 152 | 23 | 0 | — | — |
+| Star Trek Armada II | 36 | 1168 | 1168 | 28 | 182 | 171 | 11 | 0 | 895 | 823 |
+| Star Trek Armada (A1 missions) | 26 | — | — | 38 | 175 | 164 | 11 | 0 | — | — |
 
-### Armada II: conditions of `Star Trek Armada II (Stock)`
+### Armada II: conditions of `Star Trek Armada II`
 
 | call | rule DLLs | sites | status | Lua name |
 |---|---:|---:|:-:|---|
@@ -566,7 +566,7 @@ import no engine call.
 | `int CountUnitsNearPoint(char *, float, int, char *, int)` | 10 | working | `A1.CountUnitsNearPoint` |
 | `float GetShieldPercent(int)` | 9 | working | `A1.GetShieldPercent` |
 | `float GetDistance(int &, int &)` | 8 | working | `A1.GetDistance` |
-| `bool InQueue(int)` | 7 | raises | `A1.InQueue` |
+| `bool InQueue(int)` | 7 | working | `A1.InQueue` |
 | `int CountUnitsNearObject(int, float, int, char *)` | 7 | working | `A1.CountUnitsNearObject` |
 | `bool IsAlive(int)` | 6 | working | `A1.IsAlive` |
 | `int GetRealTeam(int)` | 6 | working | `A1.GetRealTeam` |
@@ -585,14 +585,14 @@ import no engine call.
 | `int GetLocationOfFlag(int)` | 2 | working | `A1.GetLocationOfFlag` |
 | `int GetNearestEnemy(int, float)` | 2 | working | `A1.GetNearestEnemy` |
 | `float hot_float::operator float(void)` | 2 | raises | `A1.hot_float_value` |
-| `bool InAttackMode(int)` | 1 | raises | `A1.InAttackMode` |
+| `bool InAttackMode(int)` | 1 | working | `A1.InAttackMode` |
 | `bool IsDerelict(int)` | 1 | working | `A1.IsDerelict` |
 | `bool IsThereARomulanSpyOnShip(int)` | 1 | raises | `A1.IsThereARomulanSpyOnShip` |
 | `bool IsVisibleToTeam(int, int)` | 1 | working | `A1.IsVisibleToTeam` |
-| `bool RecruitSpecialForces(char *, int, int &)` | 1 | raises | `A1.RecruitSpecialForces` |
+| `bool RecruitSpecialForces(char *, int, int &)` | 1 | working | `A1.RecruitSpecialForces` |
 | `bool UnderAttack(int, float)` | 1 | working | `A1.UnderAttack` |
-| `int GetAllyShipAttacks(int, int)` | 1 | raises | `A1.GetAllyShipAttacks` |
-| `int GetAllyStationAttacks(int, int)` | 1 | raises | `A1.GetAllyStationAttacks` |
+| `int GetAllyShipAttacks(int, int)` | 1 | working | `A1.GetAllyShipAttacks` |
+| `int GetAllyStationAttacks(int, int)` | 1 | working | `A1.GetAllyStationAttacks` |
 | `int GetNearestObjectNearPosition(Vector3 const &, float, int, char *, int, bool, int)` | 1 | working | `A1.GetNearestObjectNearPosition` |
 | `int GetPercievedTeamOfFlag(int)` | 1 | working | `A1.GetPercievedTeamOfFlag` |
 | `int GetRealTeamOfFlag(int)` | 1 | working | `A1.GetRealTeamOfFlag` |
