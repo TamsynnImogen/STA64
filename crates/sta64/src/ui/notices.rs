@@ -276,6 +276,55 @@ fn events_to_notices(
     }
 }
 
+/// Units whose owner changed since the last call, and which side of `me` they crossed:
+/// `(id, from, to)` for a unit `me` lost or gained. A unit seen for the first time is only
+/// remembered; units gone from the view are forgotten.
+pub fn owner_changes(known: &mut std::collections::BTreeMap<sta_sim::EntityId, PlayerId>, units: &[UnitView], me: PlayerId) -> Vec<(sta_sim::EntityId, PlayerId, PlayerId)> {
+    let mut out = Vec::new();
+    let mut next = std::collections::BTreeMap::new();
+    for u in units {
+        if let Some(&was) = known.get(&u.id)
+            && was != u.owner
+            && (was == me || u.owner == me)
+        {
+            out.push((u.id, was, u.owner));
+        }
+        next.insert(u.id, u.owner);
+    }
+    *known = next;
+    out
+}
+
+/// SIM-46: a unit that changes hands (a capture by boarding, a script's team swap) is
+/// reported when it was the player's or becomes the player's. The sim sends no event for it;
+/// the owners are compared between frames. During a cutscene the owners are followed silently.
+fn ownership_notices(
+    link: Option<Res<SimLink>>,
+    db: Option<Res<ContentRes>>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
+    mut known: Local<std::collections::BTreeMap<sta_sim::EntityId, PlayerId>>,
+    mut out: MessageWriter<Notice>,
+) {
+    let Some(link) = link else {
+        known.clear();
+        return;
+    };
+    let me = link.player();
+    let changes = owner_changes(&mut known, &link.curr().units, me);
+    if crate::ui::presentation::cutscene_running(cine) {
+        return;
+    }
+    for (id, from, _) in changes {
+        let Some(u) = link.curr().unit(id) else { continue };
+        let name = name_of(db.as_deref(), u);
+        out.write(if from == me {
+            Notice::new(Severity::Bad, trf("{0} lost to another player", &[&name]))
+        } else {
+            Notice::new(Severity::Good, trf("{0} captured", &[&name]))
+        });
+    }
+}
+
 fn collect(mut notices: MessageReader<Notice>, mut chats: MessageReader<ChatMsg>, mut active: ResMut<Notices>, mut log: ResMut<ChatLog>) {
     for n in notices.read() {
         active.push(n);
@@ -413,6 +462,35 @@ fn retheme(
     log.dirty = true;
 }
 
+/// The tooltip's background and text colours: the race cfg's `tooltipBackgroundColor` and
+/// `tooltipTextColor` under the stock HUD (UI-48; how the stock games colour their tooltip,
+/// read from data), else the theme's.
+pub(crate) fn tip_colours(cfg: Option<&sta_content::GuiLayout>, stock: bool, theme: &Theme) -> (Color, Color) {
+    let colour = |key: &str| cfg.filter(|_| stock).and_then(|c| c.colours.get(key)).map(|c| Color::srgba(c.r, c.g, c.b, c.a));
+    (colour("tooltipBackgroundColor").unwrap_or(theme.panel), colour("tooltipTextColor").unwrap_or(theme.text))
+}
+
+fn tip_cfg_colours(
+    theme: Res<Theme>,
+    hud: Option<Res<super::hud::HudConfig>>,
+    profile: Option<Res<super::profile::UiProfile>>,
+    mut tips: Query<&mut BackgroundColor, With<TipBox>>,
+    mut texts: Query<&mut SpriteText, With<TipText>>,
+) {
+    let stock = profile.is_some_and(|p| p.is_stock());
+    let (background, text) = tip_colours(hud.as_deref().and_then(|h| h.gui.as_ref()), stock, &theme);
+    for mut b in &mut tips {
+        if b.0 != background {
+            b.0 = background;
+        }
+    }
+    for mut t in &mut texts {
+        if t.color != text {
+            t.color = text;
+        }
+    }
+}
+
 fn draw_notices(
     mut commands: Commands,
     theme: Res<Theme>,
@@ -478,14 +556,10 @@ fn on_out(ev: On<PointerOut>, mut hover: ResMut<TipHover>) {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn draw_tip(
     hover: Res<TipHover>,
     tips: Query<&Tooltip>,
     strings: Option<Res<crate::ui::i18n::Strings>>,
-    window: Option<Single<&Window, With<PrimaryWindow>>>,
-    ui_scale: Option<Res<UiScale>>,
-    measured: Option<Single<&ComputedNode, With<TipBox>>>,
     mut boxed: Single<&mut Node, With<TipBox>>,
     mut words: Single<&mut SpriteText, With<TipText>>,
 ) {
@@ -500,17 +574,49 @@ fn draw_tip(
         words.text = shown.to_owned();
     }
     boxed.display = Display::Flex;
-    if let Some(w) = window
-        && let Some(p) = w.cursor_position()
-    {
-        // The cursor, the window and the measured box are in logical window pixels, while a `Val::Px`
-        // is multiplied by `UiScale` when the UI is laid out: place in window pixels, then divide.
-        let k = ui_scale.map_or(1.0, |s| s.0).max(1e-3);
-        let size = measured.map_or(Vec2::ZERO, |c| tip_size(&c, k));
-        let at = place_tip(p, size, Vec2::new(w.width(), w.height()), k);
-        boxed.left = Val::Px(at.x / k);
-        boxed.top = Val::Px(at.y / k);
-        boxed.right = Val::Auto;
+}
+
+/// Use this frame's measured extent, after sprite/TTF text and UI layout have run.
+/// Updating only Node here would affect the next layout. Translate the computed box and
+/// its complete subtree now, before clipping and render extraction, and retain the desired
+/// Node position for the next layout. Glyph geometry and relative transforms stay intact.
+fn position_tip(
+    window: Option<Single<&Window, With<PrimaryWindow>>>,
+    ui_scale: Option<Res<UiScale>>,
+    mut boxed: Query<(Entity, &ComputedNode, &mut Node, &mut UiGlobalTransform), With<TipBox>>,
+    children: Query<&Children>,
+    mut descendants: Query<&mut UiGlobalTransform, Without<TipBox>>,
+) {
+    let Some(w) = window else { return };
+    let Some(pointer) = w.cursor_position() else { return };
+    let Ok((entity, measured, mut node, mut transform)) = boxed.single_mut() else { return };
+    if node.display == Display::None { return; }
+
+    let k = ui_scale.map_or(1.0, |s| s.0).max(1e-3);
+    let logical_per_physical = measured.inverse_scale_factor() * k;
+    if !logical_per_physical.is_finite() || logical_per_physical <= 0.0 { return; }
+    let at = place_tip(pointer, tip_size(measured, k), Vec2::new(w.width(), w.height()), k);
+    let (left, top) = (Val::Px(at.x / k), Val::Px(at.y / k));
+    if node.left != left || node.top != top || node.right != Val::Auto {
+        node.left = left;
+        node.top = top;
+        node.right = Val::Auto;
+    }
+    // The tooltip root has no authored rotation or scale. UI layout stores physical
+    // size and a centre translation; keep its top-left on physical pixels as layout does.
+    let current = transform.translation - measured.size() * 0.5;
+    let delta = (at / logical_per_physical).round() - current;
+    if delta == Vec2::ZERO { return; }
+    let shift = |global: &mut UiGlobalTransform| {
+        let mut affine = global.affine();
+        affine.translation += delta;
+        *global = affine.into();
+    };
+    shift(&mut transform);
+    for child in children.iter_descendants(entity) {
+        if let Ok(mut global) = descendants.get_mut(child) {
+            shift(&mut global);
+        }
     }
 }
 
@@ -568,9 +674,13 @@ impl Plugin for NoticePlugin {
             .add_observer(on_over)
             .add_observer(on_out)
             .add_systems(Startup, spawn_roots)
-            .add_systems(Update, (events_to_notices.after(crate::ui::presentation::consume), collect, age, retheme, (draw_notices, draw_chat, draw_tip)).chain().in_set(GameSet::Ui).after(ProfileSync));
+            .add_systems(Update, (events_to_notices.after(crate::ui::presentation::consume), collect, age, retheme, tip_cfg_colours, (draw_notices, draw_chat, draw_tip)).chain().in_set(GameSet::Ui).after(ProfileSync))
+            .add_systems(PostUpdate, position_tip.after(bevy::ui::UiSystems::Layout).before(bevy::ui::UiSystems::PostLayout));
     }
 }
+
+#[cfg(test)]
+mod tooltip_layout_tests;
 
 #[cfg(test)]
 mod tests {
@@ -923,5 +1033,16 @@ mod tests {
         assert_eq!(notice_root.row_gap, Val::Px(new_theme.gap * 0.5));
         let lines = app.world_mut().query_filtered::<&SpriteText, With<NoticeLine>>().iter(app.world()).map(|t| (t.text.clone(), t.color)).collect::<Vec<_>>();
         assert_eq!(lines, vec![("Shields low".to_owned(), new_theme.warn)]);
+    }
+
+    #[test]
+    fn the_tooltip_takes_the_cfg_colours_only_under_the_stock_hud() {
+        let theme = Theme::default();
+        let (cfg, warnings) = sta_content::GuiCfg::parse("t.cfg", "screenWidth = 800\nscreenHeight = 600\ntooltipBackgroundColor = 0.5 0 0\ntooltipTextColor = 0 1 0\n");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let layout = cfg.layout_auto();
+        assert_eq!(tip_colours(Some(&layout), true, &theme), (Color::srgba(0.5, 0.0, 0.0, 1.0), Color::srgba(0.0, 1.0, 0.0, 1.0)));
+        assert_eq!(tip_colours(Some(&layout), false, &theme), (theme.panel, theme.text), "the LCARS HUD keeps its theme");
+        assert_eq!(tip_colours(None, true, &theme), (theme.panel, theme.text));
     }
 }

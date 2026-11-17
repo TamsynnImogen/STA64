@@ -259,6 +259,22 @@ pub struct BuildDef {
 impl BuildDef {
     /// [`flagged_slots`](BuildDef::flagged_slots) as a builder's ODF gives them.
     pub fn flagged_slots_of(odf: &sta_odf::Odf) -> Option<Vec<String>> {
+        if odf.lookup_policy() == sta_odf::LookupPolicy::PrefixFirst {
+            let mut any = false;
+            let mut items = Vec::new();
+            for index in crate::odf::prefix_numbered_indices(odf, "builditem") {
+                let query = format!("builditem{index}");
+                if ["availability", "provided"].iter().any(|suffix| odf.raw(&format!("{query}{suffix}")).is_some()) {
+                    any = true;
+                    if let Some(value) = odf.raw(&query) {
+                        items.push(crate::techtree::stem(value.trim().trim_matches('"')));
+                    }
+                }
+            }
+            items.sort();
+            items.dedup();
+            return any.then_some(items);
+        }
         let mut any = false;
         let mut items = Vec::new();
         for k in odf.keys() {
@@ -444,7 +460,76 @@ pub struct UnitDef {
     /// The resolved ODF, so loaders and tools can reach keys no field reads.
     /// The simulation never reads it (D9): what it needs is a typed field.
     /// Empty for definitions not made from an ODF.
+    /// The craft and object keys both stock games read (CON-55). Typed
+    /// only: SIM-74 applies them.
+    pub stats: UnitStatsDef,
     pub raw: Arc<sta_odf::Odf>,
+}
+
+/// Craft and object stat keys (CON-55), each `None` (a list: empty) when the
+/// ODF does not set it. The key names and value types are read from the stock
+/// executables, static; nothing here is measured. Not yet applied by the sim.
+/// System slots are in [`UnitDef::system_hit_points`] order: engines, weapons,
+/// shield generator, life support, sensors.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct UnitStatsDef {
+    /// `intrinsicValue`: the unit's worth to target scoring and the AI.
+    pub intrinsic_value: Option<Fixed>,
+    /// `criticalHitPercent` (Armada I).
+    pub critical_hit_percent: Option<Fixed>,
+    /// `hullTargetHardpoints`, as written: an empty name keeps its place.
+    pub hull_target_hardpoints: Vec<String>,
+    /// `criticalTargetHardpoints`.
+    pub critical_target_hardpoints: Vec<String>,
+    /// `<system>TargetHardpoints` per system slot.
+    pub system_target_hardpoints: [Vec<String>; 5],
+    /// `<system>SparkTime` per system slot, seconds.
+    pub system_spark_time: [Option<Fixed>; 5],
+    /// `shipType` (Armada II), lower case.
+    pub ship_type: Option<String>,
+    /// `isHero`.
+    pub is_hero: Option<bool>,
+    /// `selfDestruct`: the ODF of the self-destruct weapon, lower case.
+    pub self_destruct: Option<String>,
+    /// `missileDetonator` (Armada II): an ODF name, lower case.
+    pub missile_detonator: Option<String>,
+    /// `defaultGreenAlert`.
+    pub default_green_alert: Option<bool>,
+    /// `alwaysUseSpecialWeapons`.
+    pub always_use_special_weapons: Option<bool>,
+    /// `damagedScan`.
+    pub damaged_scan: Option<Fixed>,
+    /// `avoidanceClass`.
+    pub avoidance_class: Option<i32>,
+    /// `collisionRadius`.
+    pub collision_radius: Option<Fixed>,
+    /// `shieldPad`.
+    pub shield_pad: Option<Fixed>,
+    /// `maxExtraWeapons` (Armada II).
+    pub max_extra_weapons: Option<i32>,
+    /// `canAttackPlanets` (Armada II).
+    pub can_attack_planets: Option<bool>,
+    /// `canOnlyAttackPlanets` (Armada II).
+    pub can_only_attack_planets: Option<bool>,
+    /// `recyclesInPlace` (Armada II).
+    pub recycles_in_place: Option<bool>,
+    /// `addToPlanner` (Armada II craft and stations): 0 keeps the unit out of
+    /// the path planner (stock orbital stations). Read by `sta_sim::nav`.
+    pub add_to_planner: Option<bool>,
+    /// `shipIsBuiltByEvolution` (Armada II).
+    pub built_by_evolution: Option<bool>,
+    /// `shipIsBuiltByShips` (Armada II).
+    pub built_by_ships: Option<bool>,
+    /// `healthRate` (Armada II).
+    pub health_rate: Option<Fixed>,
+    /// `percentNebulaWarn` (Armada II).
+    pub percent_nebula_warn: Option<Fixed>,
+    /// `dockingSpeedFactor` (Armada I).
+    pub docking_speed_factor: Option<Fixed>,
+    /// `decommissionValue` (Armada I).
+    pub decommission_value: Option<i32>,
+    /// `aiName`: the name the AI build lists know the unit by, lower case.
+    pub ai_name: Option<String>,
 }
 
 /// What a nebula costs the path planner (SIM-23), from its ODF.
@@ -532,6 +617,7 @@ impl UnitDef {
             invalid_as_target: false,
             attack_power: None,
             life: None,
+            stats: UnitStatsDef::default(),
             raw: Arc::new(raw),
         }
     }
@@ -608,7 +694,125 @@ pub struct WeaponDef {
     /// The colonizer pod this weapon launches (SIM-30): set when the ordnance's
     /// class is `ColonizerPod`; `None` for every other weapon.
     pub colonize: Option<ColonizePodDef>,
+    /// The weapon and ordnance base keys both stock games read (CON-54).
+    /// Typed only: the sim rules that apply them are SIM-73.
+    pub base: WeaponBaseDef,
     pub raw: Arc<sta_odf::Odf>,
+}
+
+/// A value with per-target rows (CON-54): `key = base` followed by
+/// `"name" value` lines. Which target a row's name selects is the sim's rule
+/// (SIM-73); here the names are kept lower-cased as written, in file order.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Lookup {
+    pub base: Fixed,
+    /// Shared between the weapons whose tables are equal: Fleet Operations
+    /// repeats the same few tables over millions of rows.
+    pub rows: LookupRows,
+}
+
+/// The rows of a [`Lookup`]: `(name, value)` in file order.
+pub type LookupRows = Arc<[(Arc<str>, Fixed)]>;
+
+impl Lookup {
+    /// The rows as `(name, value)`, in file order.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, Fixed)> {
+        self.rows.iter().map(|(name, v)| (&**name, *v))
+    }
+}
+
+/// To-hit modifiers of a weapon (CON-54), signed, `None` when the ODF has no
+/// such key. `<state>ToHit` is the shooter's own movement state, `toHit<state>`
+/// the target's (our reading of the key names; not measured). `warp` and
+/// `slow` are Armada I's states, `impulse` Armada II's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ToHitDef {
+    pub stop_to_hit: Option<Fixed>,
+    pub to_hit_stop: Option<Fixed>,
+    pub impulse_to_hit: Option<Fixed>,
+    pub to_hit_impulse: Option<Fixed>,
+    pub warp_to_hit: Option<Fixed>,
+    pub to_hit_warp: Option<Fixed>,
+    pub slow_to_hit: Option<Fixed>,
+    pub to_hit_slow: Option<Fixed>,
+}
+
+/// What a weapon may be aimed at (CON-54). `None`: the key is absent and the
+/// weapon class's own default applies (not typed here).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TargetMaskDef {
+    /// `targetEnemyCraft`.
+    pub enemy_craft: Option<bool>,
+    /// `targetEnemyBuildings`.
+    pub enemy_buildings: Option<bool>,
+    /// `targetAlliedCraft`.
+    pub allied_craft: Option<bool>,
+    /// `targetAlliedBuildings`.
+    pub allied_buildings: Option<bool>,
+    /// `targetEnemyPlanets` (Armada II).
+    pub enemy_planets: Option<bool>,
+    /// `targetEnemyPlanetsOnly` (Armada II).
+    pub enemy_planets_only: Option<bool>,
+    /// `targetLocation`: aimed at a point, not a unit.
+    pub location: Option<bool>,
+    /// `AItargetLocation`: the same for computer players.
+    pub ai_location: Option<bool>,
+}
+
+/// Weapon and ordnance base keys (CON-54), each `None` when the ODF does not
+/// set it. Evidence: the key names and value types are read from the stock
+/// executables, static; nothing here is measured. Not yet applied by the sim.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WeaponBaseDef {
+    /// `hitChance` with its per-target rows.
+    pub hit_chance: Option<Lookup>,
+    /// The ordnance's `damageBase`, `damageVariance`, `damageThreshold`,
+    /// `shieldCrewModifier` and `hullCrewModifier`, only when the key has
+    /// per-target rows (the plain values are `WeaponDef::damage`,
+    /// `damage_variance` and `crew_loss`).
+    pub damage_base: Option<Lookup>,
+    pub damage_variance: Option<Lookup>,
+    pub damage_threshold: Option<Lookup>,
+    pub shield_crew_modifier: Option<Lookup>,
+    pub hull_crew_modifier: Option<Lookup>,
+    pub to_hit: ToHitDef,
+    pub targets: TargetMaskDef,
+    /// `needTarget`.
+    pub need_target: Option<bool>,
+    /// `beneficial`: the weapon helps its target.
+    pub beneficial: Option<bool>,
+    /// `switchToAttack`.
+    pub switch_to_attack: Option<bool>,
+    /// `cloakEnable`: usable while cloaked.
+    pub cloak_enable: Option<bool>,
+    /// `warpEnable` (Armada II): usable at warp.
+    pub warp_enable: Option<bool>,
+    /// `crewAffectsWeaponDelay`.
+    pub crew_affects_weapon_delay: Option<bool>,
+    /// `ignoreValidAsTarget` (Armada II).
+    pub ignore_valid_as_target: Option<bool>,
+    /// `regularWeaponDelay`, seconds.
+    pub regular_weapon_delay: Option<Fixed>,
+    /// Ordnance `ignoreShield`.
+    pub ignore_shield: Option<bool>,
+    /// Ordnance `forceInvalidateTarget` (Armada II).
+    pub force_invalidate_target: Option<bool>,
+    /// Ordnance `canAttackStations` (Armada II mines).
+    pub can_attack_stations: Option<bool>,
+    /// Ordnance `specialValue`.
+    pub special_value: Option<Fixed>,
+    /// Ordnance `shieldDuration`, seconds.
+    pub shield_duration: Option<Fixed>,
+    /// Ordnance `omegaTurn`: a seeking shot's turn rate.
+    pub omega_turn: Option<Fixed>,
+    /// Ordnance `seekTime`, seconds.
+    pub seek_time: Option<Fixed>,
+    /// Ordnance `shotAccel`.
+    pub shot_accel: Option<Fixed>,
+    /// Ordnance `detectRadius` (mines).
+    pub detect_radius: Option<Fixed>,
+    /// Ordnance `travelTimeFraction` (Armada II beams).
+    pub travel_time_fraction: Option<Fixed>,
 }
 
 /// The keys of a `ColonizerPod` ordnance (SIM-30), read from the ordnance ODF
@@ -762,6 +966,7 @@ impl WeaponDef {
             resource: None,
             replace: None,
             colonize: None,
+            base: WeaponBaseDef::default(),
             raw: Arc::new(raw),
         }
     }

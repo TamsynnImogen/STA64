@@ -21,6 +21,7 @@ use bevy::window::PrimaryWindow;
 pub mod layout;
 mod main_menu;
 mod graphics;
+pub(crate) mod controls;
 pub use graphics::{GraphicsInfo, GraphicsPart};
 mod screens;
 #[cfg(test)]

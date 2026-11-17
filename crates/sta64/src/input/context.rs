@@ -9,7 +9,7 @@ use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
 use sta_sim::command::Order;
 
 use super::orders::Aim;
-use super::select::{Targetable, own_selection, target_seen, unit_under};
+use super::select::{Targetable, own_selection, target_seen, unit_under_where};
 use crate::sim_link::{ContentRes, Selection, SimLink};
 
 // The rule (the originals' group vote) lives in the sim crate, where the
@@ -48,7 +48,7 @@ pub fn cursor(
     mut wanted: ResMut<crate::ui::cursor::WantedCursor>,
 ) {
     let own = own_selection(&selection, &link);
-    let icon = aim.0.filter(|_| !own.is_empty()).and_then(|a| unit_under(a.cursor, a.ray, &units)).filter(|&t| target_seen(link.curr(), local.as_deref().and_then(|l| l.0), t)).and_then(|t| {
+    let icon = aim.0.filter(|_| !own.is_empty()).and_then(|a| unit_under_where(a.cursor, a.ray, &units, |t| target_seen(link.curr(), local.as_deref().and_then(|l| l.0), t))).and_then(|t| {
         context_order(content.as_deref().map(|c| &*c.0), link.curr(), link.player(), &own, t)
     });
     let rally = aim.0.is_some() && rally_builders(content.as_deref().map(|c| &*c.0), link.curr(), link.player(), &own);
@@ -81,6 +81,7 @@ pub fn cursor(
 mod tests {
     use std::sync::Arc;
 
+    use bevy::ecs::system::RunSystemOnce;
     use sta_content::{ContentDb, DefRef, UnitDef, fake};
     use sta_core::{Fixed, TeamId};
     use sta_sim::command::Target;
@@ -188,6 +189,33 @@ mod tests {
         assert_eq!(cursor_name(Some(&wormhole), false), "c_wormin");
         assert_eq!(cursor_name(None, true), "c_rally");
         assert_eq!(cursor_name(None, false), crate::ui::cursor::DEFAULT);
+    }
+
+    #[test]
+    fn order_cursor_reaches_seen_enemy_behind_unseen_moon_but_keeps_seen_moon_gate() {
+        let (mut app, ids) = app(1);
+        app.insert_resource(crate::render::units::LocalPlayer(Some(PlayerId(0))));
+        app.init_resource::<crate::ui::cursor::WantedCursor>();
+        let mut view = (**app.world().resource::<SimLink>().curr()).clone();
+        view.visibility = vec![(PlayerId(0), view.units.iter().map(|u| u.id).filter(|&id| id != ids[4]).collect())];
+        app.insert_resource(SimLink::new(Box::new(ViewSource(Arc::new(view))), Box::new(LocalRouter::new()), PlayerId(0)));
+        let front = app.world_mut().query::<(Entity, &SimEntity)>().iter(app.world()).find(|(_, id)| id.0 == ids[4]).unwrap().0;
+        app.world_mut().entity_mut(front).insert(GlobalTransform::from(Transform::from_xyz(-3000.0, 100.0, 0.0)));
+        app.world_mut().resource_mut::<Aim>().0 = Some(AimState {
+            cursor: Vec2::ZERO,
+            ray: Ray3d::new(Vec3::new(-3000.0, 1000.0, 0.0), Dir3::NEG_Y),
+            clip_from_world: Mat4::IDENTITY,
+            size: Vec2::new(800.0, 600.0),
+        });
+        app.world_mut().run_system_once(cursor).unwrap();
+        assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_attack");
+
+        let mut view = (**app.world().resource::<SimLink>().curr()).clone();
+        view.visibility[0].1.push(ids[4]);
+        view.visibility[0].1.sort();
+        app.insert_resource(SimLink::new(Box::new(ViewSource(Arc::new(view))), Box::new(LocalRouter::new()), PlayerId(0)));
+        app.world_mut().run_system_once(cursor).unwrap();
+        assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, crate::ui::cursor::DEFAULT);
     }
 
     #[test]

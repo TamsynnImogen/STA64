@@ -32,6 +32,9 @@ infoSingleClassTextInformationArea = 91 13 103 8
 infoSingleShieldBarArea = 33 29 51 6
 infoSingleEnergyBarArea = 33 79 51 6
 infoSingleCrewTextInformationArea = 71 61 37 11
+infoSingleCrewTextLabel = \"MY_CREW_LABEL\"
+infoSingleCrewTextLabelArea = 40 61 30 11
+infoSingleCrewTextColor = 0 1 0
 controlPanelArea = 517 311 109 151
 controlBlackArea = 6 6 93 121
 controlButton1 = 8 7 29 29
@@ -275,4 +278,22 @@ fn changing_energy_and_crew_patches_in_place_and_keeps_the_buttons() {
     app.update();
     assert_eq!(buttons(&mut app), before, "the buttons are not respawned when energy or crew change");
     assert_eq!(crew_text(&mut app), ["89"], "the crew readout is patched in place");
+}
+
+/// UI-48: the crew label from the cfg (a string-table key; "CREW" when no table has it),
+/// and the cfg's crew text colour on the label and the readout.
+#[test]
+fn the_crew_label_and_colour_come_from_the_cfg() {
+    let mut app = app(4.0 / 3.0);
+    {
+        let mut feed = app.world_mut().resource_mut::<HudFeed>();
+        let unit = &mut Arc::make_mut(&mut feed.view).units[0];
+        unit.crew = Some([Fixed::from_int(90), Fixed::from_int(100)]);
+    }
+    app.update();
+    app.update();
+    let texts: Vec<(String, Color)> = app.world_mut().query::<&crate::ui::sprite_font::SpriteText>().iter(app.world()).map(|t| (t.text.clone(), t.color)).collect();
+    let green = Color::srgba(0.0, 1.0, 0.0, 1.0);
+    assert!(texts.iter().any(|(t, c)| t == "CREW" && *c == green), "{texts:?}");
+    assert!(texts.iter().any(|(t, c)| t == "90" && *c == green), "{texts:?}");
 }

@@ -1,8 +1,9 @@
 //! UI-46: reveal cheats for testing. Lift the shroud and the fog of war, each on its own, in a
 //! running single-player game.
 //!
-//! - Alt+F toggles the fog (explored ground counts as in sight, so enemy units are drawn everywhere),
-//!   Alt+V toggles the shroud (unexplored ground counts as explored: no black); `--reveal
+//! - By default, Alt+F toggles the fog (explored ground counts as in sight, so enemy units are drawn everywhere),
+//!   Alt+V toggles the shroud (unexplored ground counts as explored: no black). All three keys
+//!   are rebindable; `--reveal
 //!   fog,shroud,all` starts with them lifted. A notice says what changed.
 //! - **Drawing only.** [`Reveal`] is read by the fog layers and the minimap picture
 //!   ([`FogGrid::lifted`](super::fog::FogGrid::lifted)) and, for the fog, by
@@ -23,6 +24,7 @@ use bevy::prelude::*;
 
 use crate::app::GameSet;
 use crate::game::net_match::NetGame;
+use crate::input::keys::{Action, KeyBindings};
 use crate::sim_link::SimLink;
 use crate::ui::notices::{Notice, Severity};
 
@@ -47,44 +49,42 @@ pub fn parse_reveal(v: &str) -> Option<(bool, bool)> {
     (fog || shroud).then_some((fog, shroud))
 }
 
-fn alt(keys: &ButtonInput<KeyCode>) -> bool {
-    keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight)
-}
-
 /// Apply this frame's chords to `reveal`; in a network game they are refused (with a notice) and
 /// anything lifted is put back. Returns the notices to show.
-fn toggle(reveal: &mut Reveal, keys: &ButtonInput<KeyCode>, network: bool) -> Vec<String> {
+fn toggle(reveal: &mut Reveal, keys: &ButtonInput<KeyCode>, bindings: &KeyBindings, network: bool) -> Vec<String> {
     let mut said = Vec::new();
-    let pressed = alt(keys) && (keys.just_pressed(KeyCode::KeyF) || keys.just_pressed(KeyCode::KeyV));
+    let modifier = bindings.pressed(Action::RevealModifier, keys);
+    let fog = modifier && bindings.just_pressed(Action::RevealFog, keys);
+    let shroud = modifier && bindings.just_pressed(Action::RevealShroud, keys);
     if network {
         *reveal = Reveal::default();
-        if pressed {
+        if fog || shroud {
             said.push("Cheat refused: not in a network game".to_owned());
         }
         return said;
     }
-    if !alt(keys) {
+    if !modifier {
         return said;
     }
     let mut flip = |on: &mut bool, what: &str| {
         *on = !*on;
         said.push(format!("Cheat: {what} {}", if *on { "lifted" } else { "restored" }));
     };
-    if keys.just_pressed(KeyCode::KeyF) {
+    if fog {
         flip(&mut reveal.fog, "fog of war");
     }
-    if keys.just_pressed(KeyCode::KeyV) {
+    if shroud {
         flip(&mut reveal.shroud, "shroud");
     }
     said
 }
 
 /// Read the chords and hand the fog to the link. Runs while a match runs only (not in the front end's
-/// menus, where Alt may be held while typing); a network game is refused even before its link exists.
-fn update_reveal(keys: Option<Res<ButtonInput<KeyCode>>>, net: Option<Res<NetGame>>, mut reveal: ResMut<Reveal>, link: Option<ResMut<SimLink>>, mut notices: MessageWriter<Notice>) {
+/// menus, where the modifier may be held while typing); a network game is refused even before its link exists.
+fn update_reveal(keys: Option<Res<ButtonInput<KeyCode>>>, bindings: Res<KeyBindings>, net: Option<Res<NetGame>>, mut reveal: ResMut<Reveal>, link: Option<ResMut<SimLink>>, mut notices: MessageWriter<Notice>) {
     let said = match keys {
-        Some(k) => toggle(&mut reveal, &k, net.is_some()),
-        None => toggle(&mut reveal, &ButtonInput::default(), net.is_some()),
+        Some(k) => toggle(&mut reveal, &k, &bindings, net.is_some()),
+        None => toggle(&mut reveal, &ButtonInput::default(), &bindings, net.is_some()),
     };
     for t in said {
         notices.write(Notice::new(Severity::Info, t));
@@ -100,7 +100,7 @@ pub struct RevealPlugin;
 
 impl Plugin for RevealPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Reveal>().add_message::<Notice>().add_systems(Update, update_reveal.in_set(GameSet::Input).run_if(crate::game::flow::match_running).run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free));
+        app.init_resource::<Reveal>().init_resource::<KeyBindings>().add_message::<Notice>().add_systems(Update, update_reveal.in_set(GameSet::Input).run_if(crate::game::flow::match_running).run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free));
     }
 }
 
@@ -202,10 +202,14 @@ mod tests {
     }
 
     fn chord(app: &mut App, key: KeyCode) {
+        chord_with_modifier(app, KeyCode::AltLeft, key);
+    }
+
+    fn chord_with_modifier(app: &mut App, modifier: KeyCode, key: KeyCode) {
         let mut k = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
         k.release_all();
         k.clear();
-        k.press(KeyCode::AltLeft);
+        k.press(modifier);
         k.press(key);
         app.update();
     }
@@ -229,8 +233,67 @@ mod tests {
         let mut keys = ButtonInput::<KeyCode>::default();
         keys.press(KeyCode::KeyF);
         let mut r = Reveal::default();
-        assert!(toggle(&mut r, &keys, false).is_empty());
+        assert!(toggle(&mut r, &keys, &KeyBindings::default(), false).is_empty());
         assert_eq!(r, Reveal::default());
+    }
+
+    #[test]
+    fn reveal_system_reads_rebound_actions_from_the_resource() {
+        let mut app = app();
+        let mut bindings = app.world_mut().resource_mut::<KeyBindings>();
+        bindings.rebind(Action::RevealModifier, KeyCode::ControlRight);
+        bindings.rebind(Action::RevealFog, KeyCode::KeyG);
+        bindings.rebind(Action::RevealShroud, KeyCode::KeyH);
+        drop(bindings);
+        chord(&mut app, KeyCode::KeyF);
+        chord(&mut app, KeyCode::KeyV);
+        assert_eq!(*app.world().resource::<Reveal>(), Reveal::default());
+        chord_with_modifier(&mut app, KeyCode::ControlRight, KeyCode::KeyG);
+        assert_eq!(*app.world().resource::<Reveal>(), Reveal { fog: true, shroud: false });
+        chord_with_modifier(&mut app, KeyCode::ControlRight, KeyCode::KeyH);
+        assert_eq!(*app.world().resource::<Reveal>(), Reveal { fog: true, shroud: true });
+    }
+
+    #[test]
+    fn rebound_chords_require_their_own_modifier_and_fresh_key_presses() {
+        let mut bindings = KeyBindings::default();
+        bindings.rebind(Action::RevealModifier, KeyCode::ControlRight);
+        bindings.rebind(Action::RevealFog, KeyCode::KeyG);
+        bindings.rebind(Action::RevealShroud, KeyCode::KeyH);
+        let mut keys = ButtonInput::<KeyCode>::default();
+        let mut reveal = Reveal::default();
+
+        // The old Alt+F/V chords and the new keys without their modifier do nothing.
+        for key in [KeyCode::KeyF, KeyCode::KeyV, KeyCode::KeyG, KeyCode::KeyH] {
+            keys.release_all();
+            keys.clear();
+            keys.press(KeyCode::AltLeft);
+            keys.press(key);
+            assert!(toggle(&mut reveal, &keys, &bindings, false).is_empty());
+        }
+        keys.release_all();
+        keys.clear();
+        keys.press(KeyCode::KeyG);
+        assert!(toggle(&mut reveal, &keys, &bindings, false).is_empty());
+
+        keys.release_all();
+        keys.clear();
+        keys.press(KeyCode::ControlRight);
+        keys.press(KeyCode::KeyG);
+        assert_eq!(toggle(&mut reveal, &keys, &bindings, false), ["Cheat: fog of war lifted"]);
+        assert_eq!(reveal, Reveal { fog: true, shroud: false });
+        keys.clear();
+        keys.press(KeyCode::KeyG); // Held key and repeat are not a fresh press.
+        assert!(toggle(&mut reveal, &keys, &bindings, false).is_empty());
+        keys.press(KeyCode::KeyH);
+        assert_eq!(toggle(&mut reveal, &keys, &bindings, false), ["Cheat: shroud lifted"]);
+        assert_eq!(reveal, Reveal { fog: true, shroud: true });
+        keys.clear();
+        keys.release(KeyCode::ControlRight);
+        keys.release(KeyCode::KeyG);
+        keys.press(KeyCode::KeyG);
+        assert!(toggle(&mut reveal, &keys, &bindings, false).is_empty());
+        assert_eq!(reveal, Reveal { fog: true, shroud: true });
     }
 
     #[test]
@@ -239,7 +302,7 @@ mod tests {
         keys.press(KeyCode::AltLeft);
         keys.press(KeyCode::KeyV);
         let mut r = Reveal { fog: true, shroud: false };
-        assert_eq!(toggle(&mut r, &keys, true).len(), 1, "the refusal is said");
+        assert_eq!(toggle(&mut r, &keys, &KeyBindings::default(), true).len(), 1, "the refusal is said");
         assert_eq!(r, Reveal::default());
     }
 }

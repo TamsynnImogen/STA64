@@ -52,6 +52,8 @@ sta_tools = { path = "crates/sta_tools" }
 # No `audio` feature (bevy_audio -> rodio): sound is `kira` (crates/sta64/src/audio), and a second
 # rodio output stream next to it is unused and flooded the log on a device error.
 bevy = { version = "0.20.1", default-features = false, features = ["2d", "3d", "ui"] }
+# The modder tool shell (EDT-01, `sta_tools` feature `shell`).
+bevy_egui = { version = "0.43.1", default-features = false, features = ["render", "default_fonts"] }
 thiserror = "2"
 # Snapshots, replays and the wire (postcard); native content and fakes (json5).
 serde = { version = "1", features = ["derive", "rc"] }

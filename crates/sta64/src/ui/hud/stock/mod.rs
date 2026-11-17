@@ -1,5 +1,6 @@
 //! CFG/SPR presentation of the shared HUD actions. No simulation policy lives here.
 pub(in crate::ui::hud) mod a1;
+pub(in crate::ui::hud) mod buttons;
 mod commands;
 mod info;
 pub(super) mod infobar;
@@ -88,6 +89,11 @@ pub(super) fn node(r: R) -> Node {
     }
 }
 
+/// Reuse the stock info panel's five authored wireframe layers for queue jobs.
+pub(super) fn queue_wireframe(commands: &mut Commands, root: Entity, r: R, model: &str) {
+    info::wireframe_layers(commands, root, r, model);
+}
+
 fn metadata<'a>(native: &'a NativeCommands, act: &Act) -> Option<&'a NativeCommand> {
     if let Act::NativeFormation(odf) = act {
         return native.commands.get(odf);
@@ -99,6 +105,7 @@ fn metadata<'a>(native: &'a NativeCommands, act: &Act) -> Option<&'a NativeComma
         Act::Target(TargetMode::Rally) => "rally",
         Act::Target(TargetMode::Colonize) => "colonize",
         Act::Target(TargetMode::Transport) => "transport",
+        Act::Target(TargetMode::Repair) => "repair",
         Act::Stop => "stop",
         Act::Recrew => "recrew",
         Act::Cancel(_) => "cancelbuild",
@@ -422,6 +429,9 @@ pub(super) fn refresh(
     if a1 && replaced {
         a1::spawn_frames(&mut commands, body, &layout);
     }
+    if !a1 && replaced {
+        buttons::spawn(&mut commands, body, &layout, &theme);
+    }
     let now = model::info(&feed);
     let a1_shape = a1.then(|| a1::info::extra(&feed).map(|e| e.shape(&state.info_style))).flatten();
     let structural = state
@@ -443,7 +453,7 @@ pub(super) fn refresh(
             .id();
         let bar = commands.spawn((StockInfoBar, Pickable::IGNORE, Node::default(), ChildOf(body))).id();
         if a1 {
-            a1::info::spawn(&mut commands, parent, &layout, &feed, &theme, &state.info_style);
+            a1::info::spawn(&mut commands, parent, &layout, &feed, &theme, &state.info_style, strings.as_deref());
         } else {
             info::spawn(&mut commands, parent, &layout, &feed, &theme);
             infobar::spawn(&mut commands, bar, &layout, &theme, layout::info_variant(&now));

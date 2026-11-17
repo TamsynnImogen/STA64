@@ -5,12 +5,25 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# Light on purpose: no Bevy, no egui. The windowed tool shell of EDT-01 is
-# not here yet; when it comes it goes behind its own feature or crate so the
-# command-line tools stay quick to build.
+# Light by default: no Bevy, no egui. The windowed tool shell of EDT-01 is
+# behind the `shell` feature (bin `tool_shell`), so the command-line tools
+# stay quick to build.
+
+[features]
+shell = ["dep:bevy", "dep:bevy_egui", "dep:sta_vfs", "dep:sta_content", "dep:sta_assets", "dep:thiserror"]
 
 [dependencies]
 sta_odf.workspace = true
+sta_vfs = { workspace = true, optional = true }
+sta_content = { workspace = true, optional = true }
+sta_assets = { workspace = true, optional = true }
+bevy = { workspace = true, optional = true }
+bevy_egui = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+
+[[bin]]
+name = "tool_shell"
+required-features = ["shell"]
 
 [dev-dependencies]
 sta_vfs.workspace = true

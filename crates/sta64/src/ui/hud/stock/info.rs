@@ -32,6 +32,23 @@ pub(in crate::ui::hud) enum StockBar {
     /// Armada I's energy bar (UI-19).
     Energy(f32),
     Group(EntityId, f32),
+    /// UI-48: a resource node's amount left over what it started with.
+    Node(f32),
+}
+
+/// UI-48: the bar a resource node shows, from its definition: a planet giving metal draws the
+/// planet-metal bar, any other dilithium node (a moon) the dilithium bar. Keys, sprite names and
+/// colours from data; which node takes which bar is ours (the original's info-bar code not read).
+fn node_bar(def: &sta_content::UnitDef) -> Option<(&'static str, &'static str, &'static str)> {
+    if !sta_sim::world::EntityKind::mineable_def(def) {
+        return None;
+    }
+    match (def.class.0.as_str(), def.resource.unwrap_or(0)) {
+        ("planet", 2) => Some(("infoSinglePlanetMetalBarArea", "infoSinglePlanetMetalBarDisableColor", "infoSinglePlanetMetalBarColor")),
+        ("latinum", _) => None,
+        (_, 0) => Some(("infoSingleDilithiumBarArea", "infoSingleDilithiumBarDisableColor", "infoSingleDilithiumBarColor")),
+        _ => None,
+    }
 }
 
 pub(super) fn node(r: R) -> Node {
@@ -108,10 +125,25 @@ pub(super) fn clip_to_rect(commands: &mut Commands, text: Entity, vertical: bool
 /// A group tile name longer than this wraps in the stock tile font and is clipped on both axes.
 const TILE_NAME_WRAPS_FROM: usize = 16;
 
-pub(super) fn bar(commands: &mut Commands, root: Entity, r: R, value: f32, color: Color, kind: StockBar) {
+/// The unfilled part of a stock bar when the cfg names no colour for it.
+const BAR_TRACK: Color = Color::srgba(0.0, 0.0, 0.0, 0.5);
+
+/// The colours of a stock bar as `(track, fill)` (UI-48), from the first of
+/// `tracks` and of `fills` the cfg sets (full key names, so each key the HUD
+/// reads is written out where it is used). The original
+/// draws the whole bar in `<stem>DisableColor`, then the filled part over it
+/// in the bar's own colour, which for bars with a fixed colour is
+/// `<stem>Color` (read from the stock Armada II executable, static; not
+/// compared by eye). A key the cfg does not set leaves the fallback.
+pub(super) fn bar_colours(layout: &StockLayout, tracks: &[&str], fills: &[&str], fill: Color) -> (Color, Color) {
+    let first = |keys: &[&str]| keys.iter().find_map(|key| layout.colour(key));
+    (first(tracks).unwrap_or(BAR_TRACK), first(fills).unwrap_or(fill))
+}
+
+pub(super) fn bar(commands: &mut Commands, root: Entity, r: R, value: f32, (track, color): (Color, Color), kind: StockBar) {
     commands.entity(root).with_child((
         node(r),
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)),
+        BackgroundColor(track),
         Pickable::IGNORE,
         children![(
             kind,
@@ -375,7 +407,7 @@ fn spawn_single(
         "infoBuildHullBar",
         "infoSingleHullBarArea",
     ) {
-        bar(commands, root, r, single.hull, theme.good, StockBar::Hull(r.w));
+        bar(commands, root, r, single.hull, bar_colours(layout, &["infoSingleHullBarDisableColor", "infoSingleShieldBarDisableColor"], &["infoSingleHullBarColor"], theme.good), StockBar::Hull(r.w));
     }
     if let Some(shield) = single.shield
         && let Some(r) = chosen_rect(
@@ -386,12 +418,18 @@ fn spawn_single(
             "infoSingleShieldBarArea",
         )
     {
-        bar(commands, root, r, shield, theme.accent2, StockBar::Shield(r.w));
+        bar(commands, root, r, shield, bar_colours(layout, &["infoSingleShieldBarDisableColor"], &["infoSingleShieldBarColor"], theme.accent2), StockBar::Shield(r.w));
     }
     if let Some(progress) = single.progress
         && let Some(r) = layout.at(origin, "infoSingleConstructionBarArea")
     {
-        bar(commands, root, r, progress, theme.warn, StockBar::Progress(r.w));
+        bar(commands, root, r, progress, bar_colours(layout, &["infoSingleConstructionBarDisableColor"], &["infoSingleConstructionBarColor"], theme.warn), StockBar::Progress(r.w));
+    }
+    if let Some((area, track, fill)) = feed.view.unit(single.id).and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def))).and_then(node_bar)
+        && let Some(r) = layout.at(origin, area)
+    {
+        // Full until the status feed says otherwise (`update` fills it every frame).
+        bar(commands, root, r, 1.0, bar_colours(layout, &[track], &[fill], theme.accent), StockBar::Node(r.w));
     }
 
 }
@@ -475,7 +513,7 @@ fn spawn_group(
                 root,
                 hull,
                 tile.hull,
-                theme.good,
+                bar_colours(layout, &["infoMultiHullBarDisableColor", "infoMultiShieldBarDisableColor"], &["infoMultiHullBarColor"], theme.good),
                 StockBar::Group(tile.id, hull.w),
             );
         }
@@ -507,8 +545,17 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout,
     }
 }
 
+/// A node's amount left over its start (UI-48), 1 for an infinite node or one the feed lacks.
+pub(in crate::ui::hud) fn node_fraction(status: Option<&crate::ui::hud::status::StatusFeed>, id: EntityId) -> f32 {
+    status
+        .and_then(|s| s.nodes.iter().find(|n| n.entity == id))
+        .filter(|n| !n.infinite && n.start > sta_sim::Fixed::ZERO)
+        .map_or(1.0, |n| (n.amount.to_f32() / n.start.to_f32()).clamp(0.0, 1.0))
+}
+
 pub(in crate::ui::hud) fn update(
     feed: Res<HudFeed>,
+    status: Option<Res<crate::ui::hud::status::StatusFeed>>,
     mut texts: Query<(&StockText, &mut SpriteText)>,
     mut bars: Query<(&StockBar, &mut Node)>,
     mut crew: Query<&mut SpriteText, (With<super::a1::info::CrewText>, Without<StockText>)>,
@@ -534,6 +581,7 @@ pub(in crate::ui::hud) fn update(
             (StockBar::Shield(w), Info::Single(s)) => (s.shield.unwrap_or(0.0), *w),
             (StockBar::Progress(w), Info::Single(s)) => (s.progress.unwrap_or(0.0), *w),
             (StockBar::Energy(w), Info::Single(_)) => (extra.as_ref().and_then(|e| e.energy).unwrap_or(0.0), *w),
+            (StockBar::Node(w), Info::Single(s)) => (node_fraction(status.as_deref(), s.id), *w),
             (StockBar::Group(id, w), Info::Group(tiles)) => (
                 tiles.iter().find(|tile| tile.id == *id).map_or(0.0, |tile| tile.hull),
                 *w,
@@ -558,6 +606,28 @@ mod tests {
         view::{PlayerView, WorldView},
     };
     use std::sync::Arc;
+
+    /// UI-48: a stock bar's track and fill come from the cfg when it names them.
+    #[test]
+    fn bar_colours_come_from_the_cfg_and_fall_back_per_key() {
+        use sta_content::gui_cfg::Colour;
+        let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
+        let colour = |r: f32, g: f32, b: f32| Colour { r, g, b, a: 1.0 };
+        cfg.colours.insert("infoSingleConstructionBarColor".into(), colour(1.0, 0.6, 0.2));
+        cfg.colours.insert("infoSingleConstructionBarDisableColor".into(), colour(0.3, 0.3, 0.3));
+        cfg.colours.insert("infosingleshieldbardisablecolor".into(), colour(0.2, 0.2, 0.2));
+        cfg.colours.insert("infoMultiShieldBarDisableColor".into(), colour(0.1, 0.1, 0.1));
+        let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+        let fallback = Color::srgb(0.0, 1.0, 0.0);
+        // Both keys set.
+        assert_eq!(bar_colours(&layout, &["infoSingleConstructionBarDisableColor"], &["infoSingleConstructionBarColor"], fallback), (Color::srgba(0.3, 0.3, 0.3, 1.0), Color::srgba(1.0, 0.6, 0.2, 1.0)));
+        // Only the track is set (key case does not matter): the fill keeps the fallback.
+        assert_eq!(bar_colours(&layout, &["infoSingleShieldBarDisableColor"], &["infoSingleShieldBarColor"], fallback), (Color::srgba(0.2, 0.2, 0.2, 1.0), fallback));
+        // Neither: the built-in track and the fallback fill.
+        assert_eq!(bar_colours(&layout, &["infoSingleHullBarDisableColor"], &["infoSingleHullBarColor"], fallback), (BAR_TRACK, fallback));
+        // The first key the cfg sets wins.
+        assert_eq!(bar_colours(&layout, &["infoMultiHullBarDisableColor", "infoMultiShieldBarDisableColor"], &["infoMultiHullBarColor"], fallback), (Color::srgba(0.1, 0.1, 0.1, 1.0), fallback));
+    }
 
     /// A long free-text name (a mod map can carry up to the buffer's length) stays inside its
     /// authored rect: the placement parent of the single card's name and of a group tile's name
@@ -1128,5 +1198,24 @@ mod tests {
             ),
             (Val::Px(31.0), Val::Px(42.0), Val::Px(80.0), Val::Px(20.0))
         );
+    }
+
+    /// UI-48: which node draws which bar, and the fraction it shows.
+    #[test]
+    fn a_node_shows_its_amount_left_on_the_dilithium_or_planet_metal_bar() {
+        use sta_content::UnitDef;
+        let fake = sta_content::fake::db();
+        let moon = fake.units().find(|u| u.odf == "fx_moon").unwrap().clone();
+        assert_eq!(node_bar(&moon).map(|b| b.0), Some("infoSingleDilithiumBarArea"));
+        let mut planet = UnitDef::new("p", "planet");
+        planet.planet_role = Some(sta_content::PlanetRole::Producer);
+        planet.resource = Some(2);
+        assert_eq!(node_bar(&planet).map(|b| b.0), Some("infoSinglePlanetMetalBarArea"));
+        assert!(node_bar(&UnitDef::new("c", "craft")).is_none());
+        let node = |amount: i32, infinite| sta_sim::economy::view::NodeView { entity: EntityId(5), resource: 0, amount: Fixed::from_int(amount), start: Fixed::from_int(400), infinite };
+        let feed = |n| crate::ui::hud::status::StatusFeed { nodes: vec![n], ..Default::default() };
+        assert_eq!(node_fraction(Some(&feed(node(100, false))), EntityId(5)), 0.25);
+        assert_eq!(node_fraction(Some(&feed(node(100, true))), EntityId(5)), 1.0, "infinite: always full");
+        assert_eq!(node_fraction(None, EntityId(5)), 1.0);
     }
 }

@@ -40,10 +40,19 @@ pub enum Action {
     Capture,
     /// Open the in-game menu (UI-34). The stock games bind `mainMenu` to Esc.
     GameMenu,
+    /// Held with a reveal key to toggle a client-only visibility layer.
+    RevealModifier,
+    /// Toggle the fog of war while the reveal modifier is held.
+    RevealFog,
+    /// Toggle the shroud while the reveal modifier is held.
+    RevealShroud,
+    /// Pause or resume a single-player match (UI-48; the stock games bind
+    /// `pauseGame` to the Pause key).
+    PauseGame,
 }
 
 impl Action {
-    pub const ALL: [Action; 19] = [
+    pub const ALL: [Action; 23] = [
         Action::AddModifier,
         Action::GroupModifier,
         Action::CentreModifier,
@@ -63,6 +72,10 @@ impl Action {
         Action::Formation(FORM_WEDGE),
         Action::Capture,
         Action::GameMenu,
+        Action::RevealModifier,
+        Action::RevealFog,
+        Action::RevealShroud,
+        Action::PauseGame,
     ];
 
     pub fn name(self) -> String {
@@ -78,6 +91,10 @@ impl Action {
             Action::Formation(_) => "formation_wedge".into(),
             Action::Capture => "capture".into(),
             Action::GameMenu => "game_menu".into(),
+            Action::RevealModifier => "reveal_modifier".into(),
+            Action::RevealFog => "reveal_fog".into(),
+            Action::RevealShroud => "reveal_shroud".into(),
+            Action::PauseGame => "pause_game".into(),
         }
     }
 
@@ -115,6 +132,10 @@ impl Default for KeyBindings {
         m.insert(Action::Formation(FORM_WEDGE), vec![KeyCode::F3]);
         m.insert(Action::Capture, vec![KeyCode::F12]);
         m.insert(Action::GameMenu, vec![KeyCode::Escape]);
+        m.insert(Action::RevealModifier, vec![KeyCode::AltLeft, KeyCode::AltRight]);
+        m.insert(Action::RevealFog, vec![KeyCode::KeyF]);
+        m.insert(Action::RevealShroud, vec![KeyCode::KeyV]);
+        m.insert(Action::PauseGame, vec![KeyCode::Pause]);
         for (n, k) in DIGITS.into_iter().enumerate() {
             m.insert(Action::Group(n as u8), vec![k]);
         }
@@ -227,5 +248,21 @@ mod tests {
         assert_eq!(KeyBindings::from_text("stop = KeyS\n").keys(Action::GameMenu), [KeyCode::Escape]);
         b.rebind(Action::GameMenu, KeyCode::F9);
         assert_eq!(KeyBindings::from_text(&b.to_text()).keys(Action::GameMenu), [KeyCode::F9]);
+    }
+
+    #[test]
+    fn reveal_actions_keep_defaults_and_round_trip_rebindings() {
+        let mut b = KeyBindings::default();
+        assert_eq!(b.keys(Action::RevealModifier), [KeyCode::AltLeft, KeyCode::AltRight]);
+        assert_eq!(b.keys(Action::RevealFog), [KeyCode::KeyF]);
+        assert_eq!(b.keys(Action::RevealShroud), [KeyCode::KeyV]);
+        assert_eq!(KeyBindings::from_text("stop = KeyS\n").keys(Action::RevealModifier), b.keys(Action::RevealModifier));
+        b.rebind(Action::RevealModifier, KeyCode::ControlRight);
+        b.rebind(Action::RevealFog, KeyCode::KeyG);
+        b.rebind(Action::RevealShroud, KeyCode::KeyH);
+        assert_eq!(KeyBindings::from_text(&b.to_text()), b);
+        assert_eq!(Action::from_name("reveal_modifier"), Some(Action::RevealModifier));
+        assert_eq!(Action::from_name("reveal_fog"), Some(Action::RevealFog));
+        assert_eq!(Action::from_name("reveal_shroud"), Some(Action::RevealShroud));
     }
 }

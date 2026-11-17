@@ -251,6 +251,8 @@ pub enum TargetMode {
     Colonize,
     /// The stock TRANSPORT command: pick a ship or station to beam crew to or board.
     Transport,
+    /// The stock REPAIR command: pick a repair yard, or anywhere for the best one (SIM-40).
+    Repair,
 }
 
 /// How a button looks.
@@ -380,6 +382,7 @@ fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
         Act::Target(TargetMode::Mine) => (vec!["b_harvest".into()], false),
         Act::Target(TargetMode::Colonize) => (vec!["b_colonize".into()], false),
         Act::Target(TargetMode::Transport) => (vec!["b_transport".into()], false),
+        Act::Target(TargetMode::Repair) => (vec!["b_repair".into()], false),
         Act::Cancel(_) => (vec!["b_cancel".into()], false),
         Act::Formation(_) => (Vec::new(), false),
         // No verified native ID for these actions; use the existing label.
@@ -516,6 +519,10 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
         // Shown in its stock place but greyed when the sim would refuse (no transporter crew, Armada I).
         if !caps.transport_ready { b.look = Look::Locked; }
         out.push(b);
+    }
+    if caps.repair {
+        // Cell 1 is the producers' Rally; a craft that can move is never one.
+        out.push(button(1, &tr("Repair"), Act::Target(TargetMode::Repair), &tooltip_key("Repair at a shipyard")));
     }
     if caps.recrew {
         let mut b = button(9, &tr("Recrew"), Act::Recrew, &tooltip_key("Recrew"));
@@ -842,8 +849,8 @@ mod tests {
         let g = grid(&f, Page::Top);
         assert_eq!(
             g.iter().map(|b| b.cell).collect::<Vec<_>>(),
-            [2, 3, 6, 7],
-            "mobile armed craft"
+            [1, 2, 3, 6, 7],
+            "mobile armed craft (1: Repair, SIM-40)"
         );
         let stop = g.iter().find(|b| b.act == Act::Stop).unwrap();
         assert_eq!(

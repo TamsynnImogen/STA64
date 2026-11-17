@@ -684,3 +684,82 @@ fn rig_parks_beside_its_site_and_neither_is_pushed() {
         assert!(g >= 130.0, "rig inside the structure: {g} at {i}, rig {:?} was {rig_at:?}", sim.unit(rig).unwrap().pos);
     }
 }
+
+#[test]
+fn square_footprint_overlap_refuses_diagonal_encroachment_and_preserves_reservation() {
+    let mut sim = game(true);
+    let rig = spawn(&mut sim, "fx_rig", v(-1000, -1000));
+    let yard = spawn(&mut sim, "fx_yard", v(1000, 1000));
+    fund(&mut sim, 5000);
+    let what = key(&sim, "fx_station");
+    let db = sim.content().unwrap().clone();
+    let gap = site::footprint(&db, what) + site::footprint(&db, sim.unit(yard).unwrap().def);
+    let centre = sim.unit(yard).unwrap().pos;
+    let diagonal = Vec3 {
+        x: centre.x + gap - Fixed::ONE,
+        z: centre.z + gap - Fixed::ONE,
+        ..centre
+    };
+    let cash = dilithium(&sim);
+    assert!(
+        !build(&mut sim, rig, "fx_station", Some(diagonal)),
+        "diagonal squares overlap even when circles would clear"
+    );
+    assert_eq!(dilithium(&sim), cash);
+    let valid = v(3000, 3000);
+    assert!(build(&mut sim, rig, "fx_station", Some(valid)));
+    let reserved = sim.production.view(&db, &sim.units);
+    let cash = dilithium(&sim);
+    assert!(!build(&mut sim, rig, "fx_station", Some(diagonal)));
+    assert_eq!(dilithium(&sim), cash);
+    assert_eq!(
+        sim.production.view(&db, &sim.units),
+        reserved,
+        "bad replacement keeps old site"
+    );
+    let second = spawn(&mut sim, "fx_rig", v(-2000, -2000));
+    assert!(
+        !build(&mut sim, second, "fx_station", Some(valid)),
+        "pending site reserves its square"
+    );
+}
+
+#[test]
+fn square_bounds_allow_edge_contact_but_reject_one_bit_overlap_and_map_regions() {
+    use site::{Bounds, SiteError, check_bounds};
+    let a = Bounds::centered(v(0, 0), Fixed::from_int(50), Fixed::from_int(50));
+    let edge = Bounds::centered(v(100, 0), Fixed::from_int(50), Fixed::from_int(50));
+    assert_eq!(check_bounds(None, a, [edge]), Ok(()));
+    let tiny = Bounds {
+        min: (edge.min.0 - Fixed::from_bits(1), edge.min.1),
+        ..edge
+    };
+    assert_eq!(check_bounds(None, a, [tiny]), Err(SiteError::Blocked));
+    let mut sim = game(true);
+    let rig = spawn(&mut sim, "fx_rig", v(-1000, -1000));
+    fund(&mut sim, 5000);
+    sim.regions.push(sta_content::Region {
+        kind: sta_content::RegionKind::Nebula,
+        odf: String::new(),
+        shape: sta_content::RegionShape::Box {
+            min: v(500, 500),
+            max: v(1500, 750),
+        },
+    });
+    assert!(!build(&mut sim, rig, "fx_station", Some(v(1490, 740))));
+    assert!(!sim.production.is_deploying(rig));
+    assert_eq!(dilithium(&sim), Fixed::from_int(5000));
+}
+
+#[test]
+fn a_model_less_resource_blocks_its_displayed_field_footprint() {
+    let mut sim = game(true);
+    let rig = spawn(&mut sim, "fx_rig", v(-1000, -1000));
+    spawn(&mut sim, "fx_moon", v(1000, 1000));
+    fund(&mut sim, 5000);
+    // This fake resource has no authored body radius. Its displayed field
+    // half-extent is 100, beyond the ordinary model-less craft fallback.
+    assert!(!build(&mut sim, rig, "fx_station", Some(v(1120, 1120))));
+    assert_eq!(dilithium(&sim), Fixed::from_int(5000));
+    assert!(!sim.production.is_deploying(rig));
+}

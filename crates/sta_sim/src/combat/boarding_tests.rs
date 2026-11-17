@@ -475,7 +475,7 @@ fn transport_state_round_trips_through_a_snapshot_and_keeps_stepping_alike() {
 }
 
 /// The full digest after an authored scripted run: a carrier boards a shot-down enemy of low
-/// crew, the second party arrives, the unit is captured (owner, race, order Stop) and
+/// crew, the first party arrives, the unit is captured (owner, race, order Stop) and
 /// the carrier goes on. The layout of every transport field is in it.
 #[test]
 fn a_scripted_capture_run_is_pinned() {
@@ -775,3 +775,139 @@ fn an_armada_one_boarding_run_is_pinned() {
 }
 
 const A1_RUN_DIGEST: u64 = 0xadde_12fe_4e91_c9ec;
+
+// SIM-46 transport attack (Roots, `transport_attack_by_weld`).
+
+/// Fo4 content; the carrier `alpha` has `weldingAnimSpeed` as given.
+fn roots_db(weld: Option<f64>) -> Arc<ContentDb> {
+    db_for(Profile::Fo4, None, true, &|k, u| if k == "alpha" { u.transport.welding_anim_speed = weld.map(fx) }, |r| r)
+}
+
+impl World {
+    fn attack(&mut self, player: u8) -> bool {
+        let c = Command { player: PlayerId(player), seq: 0, kind: CommandKind::Order(Order::Transport { units: vec![self.carrier], target: self.target, attack: true }) };
+        self.sim.step(&[c]);
+        self.sim.transports().target_of(self.carrier).is_some()
+    }
+}
+
+#[test]
+fn a_zero_weld_carrier_on_roots_transport_attacks_a_shielded_enemy() {
+    let mut w = world_with(roots_db(Some(0.0)), PlayerId(1), "beta", 300);
+    assert!(w.shields(w.target) > 0.0);
+    w.set_crew(w.target, 2.5, CREW);
+    assert!(w.attack(0));
+    w.run(45);
+    assert_eq!(w.owner(w.target), PlayerId(0), "captured through its shields");
+    // The plain order on the same content still stops at the shields.
+    let mut plain = world_with(roots_db(Some(0.0)), PlayerId(1), "beta", 300);
+    plain.set_crew(plain.target, 2.5, CREW);
+    plain.order();
+    plain.run(45);
+    assert_eq!(plain.owner(plain.target), PlayerId(1));
+}
+
+#[test]
+fn transport_attack_is_refused_without_the_weld_key_the_switch_or_from_a_non_player() {
+    for weld in [None, Some(1.0)] {
+        let mut w = world_with(roots_db(weld), PlayerId(1), "beta", 300);
+        assert!(!w.attack(0), "weldingAnimSpeed {weld:?}");
+    }
+    let classic = db_with(None, true, &|k, u| if k == "alpha" { u.transport.welding_anim_speed = Some(Fixed::ZERO) }, |r| r);
+    assert!(!world_with(classic, PlayerId(1), "beta", 300).attack(0), "switch off in Sta2Classic");
+    let mut w = world_with(roots_db(Some(0.0)), PlayerId(1), "beta", 300);
+    let c = Command { player: PlayerId::SCRIPT, seq: 0, kind: CommandKind::Order(Order::Transport { units: vec![w.carrier], target: w.target, attack: true }) };
+    w.sim.step(&[c]);
+    assert!(w.sim.transports().target_of(w.carrier).is_none(), "a script is not a player");
+}
+
+#[test]
+fn an_ai_seat_may_not_transport_attack() {
+    let db = roots_db(Some(0.0));
+    let seat = |id: u8, control: Control| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control };
+    let mut sim = Sim::from_setup(&GameSetup {
+        seed: 7,
+        map: Arc::new(MapDef::empty()),
+        content: Arc::clone(&db),
+        players: vec![seat(0, Control::Ai("test".into())), seat(1, Control::Idle)],
+        options: GameOptions::default(),
+    });
+    let carrier = sim.spawn_def(db.key("alpha").unwrap(), PlayerId(0), at(0), (Fixed::ZERO, Fixed::ONE)).unwrap();
+    let target = sim.spawn_def(db.key("beta").unwrap(), PlayerId(1), at(300), (Fixed::ZERO, Fixed::ONE)).unwrap();
+    // Shields down, so the plain order keeps going.
+    sim.units.get_mut(target).unwrap().shields.now = [Fixed::ZERO; 4];
+    let c = |attack| Command { player: PlayerId(0), seq: 0, kind: CommandKind::Order(Order::Transport { units: vec![carrier], target, attack }) };
+    sim.step(&[c(true)]);
+    assert!(sim.transports().target_of(carrier).is_none());
+    sim.step(&[c(false)]);
+    assert!(sim.transports().target_of(carrier).is_some(), "the plain order is the AI's to give");
+}
+
+#[test]
+fn a_transport_attack_round_trips_through_a_snapshot() {
+    let mut w = world_with(roots_db(Some(0.0)), PlayerId(1), "beta", 300);
+    assert!(w.attack(0));
+    w.run(3);
+    let copy = Sim::from_snapshot(&w.sim.snapshot(), Some(Arc::clone(&w.db))).unwrap();
+    assert_eq!(copy.digest(), w.sim.digest());
+    let (target, mut a, mut b) = (w.target, w.sim, copy);
+    for _ in 0..60 {
+        a.step(&[]);
+        b.step(&[]);
+        assert_eq!(a.digest(), b.digest());
+    }
+    assert_eq!(a.units.get(target).unwrap().owner, b.units.get(target).unwrap().owner);
+}
+
+#[test]
+fn a_hold_kind_above_carrier_and_an_attack_without_a_row_are_refused_on_load() {
+    let rec = Transports::sample_for_test().to_rec();
+    let mut bad = rec.clone();
+    bad.holds[0].1 = 2;
+    assert!(Transports::from_rec(bad, |id| id.0 <= 2).is_none());
+    let mut stray = rec;
+    stray.attacks = vec![EntityId(99)];
+    assert!(Transports::from_rec(stray, |id| id.0 <= 2).is_none());
+}
+
+/// SIM-46 (#774 review): a captured yard loses its queue and nobody is refunded; its
+/// cargo-free stock is untouched on both sides (measured rule, see `capture`).
+#[test]
+fn a_captured_yard_loses_its_queue_and_no_one_is_refunded() {
+    let fake = sta_content::fake::db();
+    let mut features = fake.features().clone();
+    features.crew_loss_on_hit = true;
+    let mut b = ContentDb::builder().profile(fake.profile()).features(features);
+    for w in fake.weapons() {
+        b = b.weapon(w.clone());
+    }
+    for u in fake.units() {
+        let mut u = u.clone();
+        // Shot down and staying down, as `beta` in the scenes above.
+        if u.odf == "fx_yard" {
+            u.shields.recharge = Fixed::ZERO;
+        }
+        b = b.unit(u);
+    }
+    let db = Arc::new(b.build().unwrap());
+    let seat = |id: u8| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control: Control::Idle };
+    let mut sim = Sim::from_setup(&GameSetup { seed: 7, map: Arc::new(MapDef::empty()), content: Arc::clone(&db), players: vec![seat(0), seat(1)], options: GameOptions::default() });
+    let carrier = sim.spawn_def(db.key("fx_cruiser").unwrap(), PlayerId(0), at(0), (Fixed::ZERO, Fixed::ONE)).unwrap();
+    let yard = sim.spawn_def(db.key("fx_yard").unwrap(), PlayerId(1), at(300), (Fixed::ZERO, Fixed::ONE)).unwrap();
+    let build = Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Build { builder: yard, what: db.key("fx_frigate").unwrap(), at: None }) };
+    sim.step(&[build]);
+    assert!(!sim.production.queue(yard).is_empty(), "the yard is building");
+    let (paid1, paid0) = (sim.economy.stock_of(PlayerId(1)), sim.economy.stock_of(PlayerId(0)));
+    let y = sim.units.get_mut(yard).unwrap();
+    y.shields.now = [Fixed::ZERO; 4];
+    y.crew = Some([fx(2.5), fx(500.0)]);
+    let order = Command { player: PlayerId(0), seq: 1, kind: CommandKind::Order(Order::Transport { units: vec![carrier], target: yard, attack: false }) };
+    sim.step(&[order]);
+    for _ in 0..45 {
+        sim.step(&[]);
+    }
+    assert_eq!(sim.units.get(yard).unwrap().owner, PlayerId(0), "captured");
+    assert!(sim.production.queue(yard).is_empty(), "the queue is lost");
+    assert_eq!(sim.economy.stock_of(PlayerId(1)), paid1, "the old owner gets nothing back");
+    assert_eq!(sim.economy.stock_of(PlayerId(0)), paid0, "the captor gets nothing either");
+}

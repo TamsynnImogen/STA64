@@ -37,6 +37,8 @@ pub mod model;
 pub mod commands;
 mod panels;
 pub mod stock;
+mod status;
+mod status_gpu;
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -55,7 +57,7 @@ use super::radar::{RadarPlugin, RadarRoot};
 use super::theme::{ButtonClicked, Theme, ThemePlugin};
 use crate::app::GameSet;
 use crate::input::orders::{Aim, OrderTargets, formation_moves};
-use crate::input::select::{Targetable, target_seen, unit_under};
+use crate::input::select::{Targetable, target_seen, unit_under_where};
 use crate::ui::i18n::{tr, trf};
 use sta_sim::view::UnitFlags;
 use sta_sim::world::EntityKind;
@@ -131,6 +133,9 @@ impl Plugin for HudPlugin {
         if !app.is_plugin_added::<ThemePlugin>() {
             app.add_plugins(ThemePlugin);
         }
+        // The stock button panel (UI-48) writes these; their own plugins register them too.
+        app.add_message::<crate::input::select::CameraFocus>()
+            .add_message::<crate::ui::ingame_menu::OpenInGameMenu>();
         if !app.is_plugin_added::<super::sprite_font::SpriteFontPlugin>() {
             app.add_plugins(super::sprite_font::SpriteFontPlugin);
         }
@@ -147,8 +152,11 @@ impl Plugin for HudPlugin {
             .init_resource::<HudFeed>()
             .init_resource::<HudState>()
             .init_resource::<HudPointer>()
+            .init_resource::<crate::ui::cursor::WantedCursor>()
             .init_resource::<crate::input::hover::HoveredUnit>()
             .init_resource::<stock::StockState>()
+            .init_resource::<status::StatusFeed>()
+            .init_resource::<status_gpu::StatusUiState>()
             .init_resource::<cinematic::CinematicState>()
             .init_resource::<super::gui_sprites::GuiSkin>()
             .init_resource::<super::gui_sprites::GuiSprites>()
@@ -167,10 +175,9 @@ impl Plugin for HudPlugin {
                     feed_from_link.run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<ExternalFeed>)),
                     fit_screen,
                     refresh,
-                    stock::refresh,
-                    stock::update_values,
+                    (stock::refresh, stock::update_values, (status::sync, status_gpu::refresh, status_gpu::update_values).chain()).chain(),
                     stock::active,
-                    stock::navigate,
+                    (stock::navigate, stock::buttons::press).chain(),
                     panels::update_values.before(super::theme::WidgetPaint),
                     host,
                     pointer,
@@ -178,6 +185,11 @@ impl Plugin for HudPlugin {
                     stock::infobar::update,
                     press.run_if(not(crate::ui::presentation::cutscene_running)),
                     place_on_click.run_if(resource_exists::<Aim>).run_if(not(crate::ui::presentation::cutscene_running)).run_if(crate::cheats::input::game_input_free),
+                    armed_cursor.run_if(resource_exists::<Aim>)
+                        .run_if(not(crate::ui::presentation::cutscene_running))
+                        .run_if(not(resource_exists::<crate::frontend::scene::MenuScene>))
+                        .run_if(crate::ui::ingame_menu::menu_closed)
+                        .run_if(crate::cheats::input::game_input_free),
                     ghost::update_ghost,
                     ghost::tint_ghost,
                     (ghost::sync_footprints, object_footprints::sync_object_footprints).chain(),
@@ -367,11 +379,13 @@ fn pointer(
     layout: Res<HudLayoutRes>,
     state: Res<HudState>,
     stock: Res<stock::StockState>,
+    status: Res<status_gpu::StatusUiState>,
     mut out: ResMut<HudPointer>,
 ) {
     let over = window.and_then(|w| w.cursor_position()).is_some_and(|c| {
         let p = c / scale.0.max(1e-3);
-        if stock.layout.is_some() { stock.solid.iter().any(|r| r.contains(p)) }
+        if status.fallback_card().is_some_and(|r| r.contains(p)) { true }
+        else if stock.layout.is_some() { stock.solid.iter().any(|r| r.contains(p)) }
         else { layout.0.solid(state.height).iter().any(|r| r.contains(p)) }
     });
     if out.0 != over {
@@ -492,6 +506,7 @@ fn place_on_click(
     local: Option<Res<crate::render::units::LocalPlayer>>,
     mut targets: ResMut<OrderTargets>,
     bounds: Res<ghost::PlacementBounds>,
+    placement: ghost::PlacementInputs,
     mut notices: MessageWriter<Notice>,
     profile: Option<Res<crate::ui::profile::UiProfile>>,
     strings: Option<Res<crate::ui::i18n::Strings>>,
@@ -519,12 +534,7 @@ fn place_on_click(
             return;
         }
         let Some(a) = aim.0 else { return };
-        let target = unit_under(a.cursor, a.ray, &units).filter(|&t| target_seen(&feed.view, local.as_deref().and_then(|l| l.0), t));
-        let own = feed.own_selection();
-        let heights: Vec<f32> = own.iter().filter_map(|id| feed.view.unit(*id).map(|u| u.pos.y.to_f32())).collect();
-        let y = if heights.is_empty() { 0.0 } else { heights.iter().sum::<f32>() / heights.len() as f32 };
-        let point = ground_point(a.ray, y);
-        if let Some((orders, ids)) = target_order(&feed, mode, target, point) {
+        if let Some((orders, ids)) = order_at_aim(&feed, mode, a, &units, local.as_deref().and_then(|l| l.0)) {
             if let Some(kind) = orders.first().and_then(OrderKind::of) {
                 issued.write(OrderIssued { units: ids.clone(), kind });
             }
@@ -562,7 +572,7 @@ fn place_on_click(
     }
     // The sim's own rule, as the ghost shows it: a refused site keeps the
     // placement armed so the click can be tried again elsewhere.
-    let (site_at, order) = match ghost::build_order(&feed, bounds.0.as_ref(), &armed, at) {
+    let (site_at, order) = match placement.order(&feed, bounds.0.as_ref(), &armed, at) {
         Ok(r) => r,
         Err(e) => {
             notices.write(Notice::new(Severity::Warn, tr(ghost::refusal(e))));
@@ -579,6 +589,68 @@ fn place_on_click(
     state.placing = None;
 }
 
+/// The same picked unit, visibility gate and ground height used by a left click and its cursor.
+fn order_at_aim(
+    feed: &HudFeed,
+    mode: TargetMode,
+    aim: crate::input::select::AimState,
+    units: &Targetable,
+    local: Option<sta_sim::PlayerId>,
+) -> Option<(Vec<Order>, Vec<EntityId>)> {
+    let target = unit_under_where(aim.cursor, aim.ray, units, |t| target_seen(&feed.view, local, t));
+    let own = feed.own_selection();
+    let heights: Vec<f32> = own.iter().filter_map(|id| feed.view.unit(*id).map(|u| u.pos.y.to_f32())).collect();
+    let y = if heights.is_empty() { 0.0 } else { heights.iter().sum::<f32>() / heights.len() as f32 };
+    target_order(feed, mode, target, ground_point(aim.ray, y))
+}
+
+fn armed_cursor_name(mode: TargetMode, valid: bool) -> &'static str {
+    match (mode, valid) {
+        (TargetMode::Move, true) => "c_move",
+        (TargetMode::Move, false) => "c_nomove",
+        (TargetMode::Attack, true) => "c_attack",
+        (TargetMode::Attack, false) => "c_noattack",
+        (TargetMode::Mine, true) => "c_mining",
+        (TargetMode::Mine, false) => "c_nomining",
+        (TargetMode::Colonize, true) => "c_colonize",
+        (TargetMode::Colonize, false) => "c_nocolonize",
+        (TargetMode::Transport, true) => "c_transport",
+        (TargetMode::Transport, false) => "c_notransport",
+        (TargetMode::Repair, true) => "c_repair",
+        (TargetMode::Repair, false) => "c_norepair",
+        // Installed tables have c_rally but no c_norally; use the move refusal art.
+        (TargetMode::Rally, true) => "c_rally",
+        (TargetMode::Rally, false) => "c_nomove",
+    }
+}
+
+/// Armed picks take precedence over the context cursor, which ran in GameSet::Input.
+#[allow(clippy::too_many_arguments)]
+fn armed_cursor(
+    state: Res<HudState>,
+    aim: Res<Aim>,
+    pointer: Res<HudPointer>,
+    feed: Res<HudFeed>,
+    units: Targetable,
+    local: Option<Res<crate::render::units::LocalPlayer>>,
+    bounds: Res<ghost::PlacementBounds>,
+    placement: ghost::PlacementInputs,
+    mut wanted: ResMut<crate::ui::cursor::WantedCursor>,
+) {
+    if state.targeting.is_none() && state.placing.is_none() { return; }
+    if pointer.0 { wanted.0 = crate::ui::cursor::DEFAULT; return; }
+    let Some(a) = aim.0 else { wanted.0 = crate::ui::cursor::DEFAULT; return };
+    if let Some(mode) = state.targeting {
+        wanted.0 = armed_cursor_name(mode, order_at_aim(&feed, mode, a, &units, local.as_deref().and_then(|l| l.0)).is_some());
+    } else if let Some(armed) = state.placing.as_ref() {
+        let valid = feed.view.unit(armed.builder)
+            .and_then(|b| ground_point(a.ray, b.pos.y.to_f32()))
+            .is_some_and(|at| ghost::affordable(&feed, armed)
+                && placement.order(&feed, bounds.0.as_ref(), armed, at).is_ok());
+        wanted.0 = if valid { "c_build" } else { "c_nobuild" };
+    }
+}
+
 fn target_mode_available(feed: &HudFeed, mode: TargetMode) -> bool {
     let c = commands::shared(feed);
     match mode {
@@ -588,6 +660,7 @@ fn target_mode_available(feed: &HudFeed, mode: TargetMode) -> bool {
         TargetMode::Rally => c.rally,
         TargetMode::Colonize => c.colonize,
         TargetMode::Transport => c.transport_ready,
+        TargetMode::Repair => c.repair,
     }
 }
 
@@ -646,6 +719,16 @@ fn target_order(
             ids = carriers.clone();
             vec![Order::Transport { units: carriers, target: id, attack: false }]
         }
+        TargetMode::Repair => {
+            let ships = commands::repairers(feed, &ids);
+            if ships.is_empty() { return None; }
+            // A yard under the cursor is the one asked for; anywhere else the sim picks the best (SIM-40).
+            // Whether the ship needs repair and the yard repairs is the sim's to judge.
+            let yard = target.filter(|&id| repair_yard(feed, id));
+            if target.is_some() && yard.is_none() && point.is_none() { return None; }
+            ids = ships.clone();
+            vec![Order::Repair { units: ships, yard }]
+        }
         TargetMode::Rally => {
             let at = match target.and_then(|id| feed.view.unit(id).filter(|u| !u.flags.contains(UnitFlags::DYING)).map(|_| id)) {
                 Some(id) => Target::Entity(id),
@@ -655,6 +738,19 @@ fn target_order(
         }
     };
     Some((orders, ids))
+}
+
+/// A yard the HUD may name in `Order::Repair`: a live, finished station of the player's own team whose ODF
+/// says `repairFacility = 1` (the sim's yard gate, SIM-40, read from the view).
+fn repair_yard(feed: &HudFeed, id: EntityId) -> bool {
+    let (Some(db), Some(y)) = (feed.content.as_deref(), feed.view.unit(id)) else { return false };
+    let mine = feed.view.player(feed.player).map(|p| p.team);
+    let team = |p: sta_sim::PlayerId| feed.view.player(p).map(|v| v.team);
+    !y.flags.contains(UnitFlags::DYING)
+        && y.hull[0] > sta_sim::Fixed::ZERO
+        && y.progress.is_none_or(|p| p >= sta_sim::Fixed::ONE)
+        && (y.owner == feed.player || (mine.is_some() && team(y.owner) == mine))
+        && db.unit(y.def).is_some_and(|d| EntityKind::of_def(d) == EntityKind::Station && d.repair.repair_facility == Some(true))
 }
 
 /// The sim's target gate for `Order::Transport`, read from the view: a live ship or station with a crew
@@ -722,9 +818,14 @@ fn ground_point(ray: Ray3d, y: f32) -> Option<SimVec3> {
 #[cfg(test)]
 mod target_tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
     use sta_sim::view::{PlayerView, Relation, UnitView};
     use sta_sim::{Fixed, PlayerId, TeamId, WorldView};
     use std::sync::Arc;
+    use crate::input::select::AimState;
+    use crate::render::units::SelectRadius;
+    use crate::sim_link::SimEntity;
+    use crate::sim_link::CommandQueue;
 
     fn feed(selected: &[u32]) -> HudFeed {
         let db = sta_content::fake::db();
@@ -746,6 +847,32 @@ mod target_tests {
     }
 
     fn mine_available(f: &HudFeed) -> bool { target_mode_available(f, TargetMode::Mine) }
+
+    #[test]
+    fn repair_targets_a_repair_yard_or_lets_the_sim_choose() {
+        let fake = sta_content::fake::db();
+        let mut builder = sta_content::ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for weapon in fake.weapons() { builder = builder.weapon(weapon.clone()); }
+        for unit in fake.units() {
+            let mut unit = unit.clone();
+            if unit.odf == "fx_yard" { unit.repair.repair_facility = Some(true); }
+            builder = builder.unit(unit);
+        }
+        let mut f = feed(&[1, 3]);
+        f.content = Some(Arc::new(builder.build().unwrap()));
+        let p = Some(SimVec3::from_f32([10.0, 0.0, 20.0]));
+        assert!(target_mode_available(&f, TargetMode::Repair), "a craft that can move is selected");
+        // The yard under the cursor is named; only the craft of the mixed selection go.
+        assert!(matches!(target_order(&f, TargetMode::Repair, Some(EntityId(3)), p), Some((orders, ids))
+            if ids == vec![EntityId(1)] && matches!(orders.as_slice(), [Order::Repair { units, yard: Some(EntityId(3)) }] if units == &[EntityId(1)])));
+        // Open space: the sim picks the best yard.
+        assert!(matches!(target_order(&f, TargetMode::Repair, None, p), Some((orders, _)) if matches!(orders.as_slice(), [Order::Repair { yard: None, .. }])));
+        // An enemy ship is no yard: the sim picks instead.
+        assert!(matches!(target_order(&f, TargetMode::Repair, Some(EntityId(4)), p), Some((orders, _)) if matches!(orders.as_slice(), [Order::Repair { yard: None, .. }])));
+        // A station alone cannot go to a yard.
+        assert!(!target_mode_available(&feed(&[3]), TargetMode::Repair));
+        assert_eq!(armed_cursor_name(TargetMode::Repair, true), "c_repair");
+    }
 
     #[test]
     fn target_actions_make_supported_orders() {
@@ -814,6 +941,304 @@ mod target_tests {
         f.selected = vec![EntityId(3)];
         Arc::make_mut(&mut f.view).units[2].owner = PlayerId(2);
         assert!(target_order(&f, TargetMode::Rally, None, p).is_none());
+    }
+
+    #[test]
+    fn armed_cursor_uses_the_click_order_and_respects_capture() {
+        let mut world = World::new();
+        world.insert_resource(feed(&[1]));
+        world.insert_resource(HudState { targeting: Some(TargetMode::Attack), ..Default::default() });
+        world.insert_resource(HudPointer(false));
+        world.insert_resource(ghost::PlacementBounds::default());
+        world.insert_resource(crate::ui::cursor::WantedCursor::default());
+        let aim = AimState {
+            cursor: Vec2::ZERO,
+            ray: Ray3d::new(Vec3::new(0.0, 100.0, 0.0), Dir3::NEG_Y),
+            clip_from_world: Mat4::IDENTITY,
+            size: Vec2::new(800.0, 600.0),
+        };
+        world.insert_resource(Aim(Some(aim)));
+        world.spawn((SimEntity(EntityId(4)), SelectRadius(10.0), GlobalTransform::default()));
+
+        let check = |world: &mut World, expected| {
+            world.resource_mut::<crate::ui::cursor::WantedCursor>().0 = "c_wormin";
+            world.run_system_once(armed_cursor).unwrap();
+            assert_eq!(world.resource::<crate::ui::cursor::WantedCursor>().0, expected);
+        };
+        check(&mut world, "c_attack");
+        // The same click rule rejects a dying target.
+        Arc::make_mut(&mut world.resource_mut::<HudFeed>().view).units[3].flags = UnitFlags::DYING;
+        check(&mut world, "c_noattack");
+        // HUD capture and missing aim force the normal pointer, even if Input ran with stale capture.
+        world.resource_mut::<HudPointer>().0 = true;
+        check(&mut world, crate::ui::cursor::DEFAULT);
+        world.resource_mut::<HudPointer>().0 = false;
+        world.resource_mut::<Aim>().0 = None;
+        check(&mut world, crate::ui::cursor::DEFAULT);
+    }
+
+    #[test]
+    fn armed_cursor_names_track_the_order_gate() {
+        let p = Some(SimVec3::from_f32([10.0, 0.0, 20.0]));
+        for (feed, mode, target, valid, refused) in [
+            (feed(&[1]), TargetMode::Move, None, "c_move", "c_nomove"),
+            (feed(&[1]), TargetMode::Attack, Some(EntityId(4)), "c_attack", "c_noattack"),
+            (feed(&[2]), TargetMode::Mine, Some(EntityId(5)), "c_mining", "c_nomining"),
+            (feed(&[3]), TargetMode::Rally, None, "c_rally", "c_nomove"),
+        ] {
+            assert_eq!(armed_cursor_name(mode, target_order(&feed, mode, target, p).is_some()), valid);
+            assert_eq!(armed_cursor_name(mode, target_order(&feed, mode, Some(EntityId(99)), None).is_some()), refused);
+        }
+        let stale = feed(&[99]);
+        assert_eq!(armed_cursor_name(TargetMode::Attack, target_order(&stale, TargetMode::Attack, Some(EntityId(4)), p).is_some()), "c_noattack");
+    }
+
+    fn click_app(feed: HudFeed, state: HudState, x: f32) -> App {
+        let mut app = App::new();
+        app.add_message::<OrderIssued>()
+            .add_message::<Notice>()
+            .insert_resource(feed)
+            .insert_resource(state)
+            .insert_resource(Aim(Some(AimState {
+                cursor: Vec2::ZERO,
+                ray: Ray3d::new(Vec3::new(x, 100.0, 0.0), Dir3::NEG_Y),
+                clip_from_world: Mat4::IDENTITY,
+                size: Vec2::new(800.0, 600.0),
+            })))
+            .insert_resource(HudPointer(false))
+            .init_resource::<ghost::PlacementBounds>()
+            .init_resource::<crate::ui::cursor::WantedCursor>()
+            .init_resource::<CommandQueue>()
+            .init_resource::<OrderTargets>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<ButtonInput<KeyCode>>();
+        app
+    }
+
+    #[test]
+    fn armed_attack_cursor_and_click_agree_on_valid_and_refused_targets() {
+        let mut app = click_app(feed(&[1]), HudState { targeting: Some(TargetMode::Attack), ..Default::default() }, 0.0);
+        app.world_mut().spawn((SimEntity(EntityId(4)), SelectRadius(10.0), GlobalTransform::default()));
+        app.world_mut().run_system_once(armed_cursor).unwrap();
+        assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_attack");
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut().run_system_once(place_on_click).unwrap();
+        assert!(matches!(app.world().resource::<CommandQueue>().0.as_slice(), [CommandKind::Order(Order::Attack { target: EntityId(4), .. })]));
+        assert!(app.world().resource::<HudState>().targeting.is_none());
+
+        app.world_mut().resource_mut::<HudState>().targeting = Some(TargetMode::Attack);
+        app.world_mut().resource_mut::<CommandQueue>().0.clear();
+        Arc::make_mut(&mut app.world_mut().resource_mut::<HudFeed>().view).units[3].flags = UnitFlags::DYING;
+        app.world_mut().run_system_once(armed_cursor).unwrap();
+        assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_noattack");
+        app.world_mut().run_system_once(place_on_click).unwrap();
+        assert!(app.world().resource::<CommandQueue>().0.is_empty());
+        assert_eq!(app.world().resource::<HudState>().targeting, Some(TargetMode::Attack));
+
+        Arc::make_mut(&mut app.world_mut().resource_mut::<HudFeed>().view).units[3].flags = UnitFlags::SELECTABLE;
+        Arc::make_mut(&mut app.world_mut().resource_mut::<HudFeed>().view).visibility = vec![(PlayerId(1), vec![EntityId(1)])];
+        app.insert_resource(crate::render::units::LocalPlayer(Some(PlayerId(1))));
+        app.world_mut().run_system_once(armed_cursor).unwrap();
+        assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_noattack");
+        app.world_mut().run_system_once(place_on_click).unwrap();
+        assert!(app.world().resource::<CommandQueue>().0.is_empty());
+
+        // A stale selection is cleared by the existing click path before presentation.
+        app.world_mut().resource_mut::<HudFeed>().selected = vec![EntityId(99)];
+        app.world_mut().run_system_once(place_on_click).unwrap();
+        assert!(app.world().resource::<HudState>().targeting.is_none());
+        app.world_mut().resource_mut::<HudState>().targeting = Some(TargetMode::Attack);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+        app.world_mut().run_system_once(place_on_click).unwrap();
+        assert!(app.world().resource::<HudState>().targeting.is_none());
+    }
+
+    #[test]
+    fn armed_attack_reaches_seen_target_behind_unseen_resource_and_refuses_seen_resource() {
+        let mut f = feed(&[1]);
+        Arc::make_mut(&mut f.view).visibility = vec![(PlayerId(1), vec![EntityId(1), EntityId(4)])];
+        let mut app = click_app(f, HudState { targeting: Some(TargetMode::Attack), ..Default::default() }, 0.0);
+        app.insert_resource(crate::render::units::LocalPlayer(Some(PlayerId(1))));
+        app.world_mut().spawn((SimEntity(EntityId(4)), SelectRadius(10.0), GlobalTransform::default()));
+        app.world_mut().spawn((SimEntity(EntityId(5)), SelectRadius(10.0), GlobalTransform::from(Transform::from_xyz(0.0, 50.0, 0.0))));
+        app.world_mut().run_system_once(armed_cursor).unwrap();
+        assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_attack");
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut().run_system_once(place_on_click).unwrap();
+        assert!(matches!(app.world().resource::<CommandQueue>().0.as_slice(), [CommandKind::Order(Order::Attack { target: EntityId(4), .. })]));
+
+        app.world_mut().resource_mut::<CommandQueue>().0.clear();
+        app.world_mut().resource_mut::<HudState>().targeting = Some(TargetMode::Attack);
+        Arc::make_mut(&mut app.world_mut().resource_mut::<HudFeed>().view).visibility[0].1.push(EntityId(5));
+        app.world_mut().run_system_once(armed_cursor).unwrap();
+        assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_noattack");
+        app.world_mut().run_system_once(place_on_click).unwrap();
+        assert!(app.world().resource::<CommandQueue>().0.is_empty());
+    }
+
+    #[test]
+    fn armed_build_cursor_and_click_agree_on_site_and_cost() {
+        let mut f = feed(&[1]);
+        let fake = f.content.as_ref().unwrap();
+        let mut builder = sta_content::ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for weapon in fake.weapons() { builder = builder.weapon(weapon.clone()); }
+        for unit in fake.units() {
+            let mut unit = unit.clone();
+            if unit.odf == "fx_cruiser" { unit.build.list = vec![sta_content::DefRef::new("fx_station")]; }
+            builder = builder.unit(unit);
+        }
+        let db = builder.build().unwrap();
+        assert_eq!(f.view.unit(EntityId(1)).unwrap().def, db.key("fx_cruiser").unwrap());
+        f.content = Some(Arc::new(db));
+        Arc::make_mut(&mut f.view).players = vec![player(1, 1, None)];
+        Arc::make_mut(&mut f.view).players[0].resources = vec![Fixed::from_int(3000)];
+        let what = f.content.as_ref().unwrap().key("fx_station").unwrap();
+        let armed = Armed { builder: EntityId(1), what, odf: "fx_station".into() };
+        let mut app = click_app(f, HudState { placing: Some(armed.clone()), ..Default::default() }, 1000.0);
+        app.world_mut().run_system_once(armed_cursor).unwrap();
+        assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_build");
+
+        app.world_mut().resource_mut::<Aim>().0.as_mut().unwrap().ray = Ray3d::new(Vec3::new(0.0, 100.0, 0.0), Dir3::NEG_Y);
+        app.world_mut().run_system_once(armed_cursor).unwrap();
+        assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_nobuild");
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut().run_system_once(place_on_click).unwrap();
+        assert!(app.world().resource::<CommandQueue>().0.is_empty());
+        assert!(app.world().resource::<HudState>().placing.is_some());
+
+        app.world_mut().resource_mut::<Aim>().0.as_mut().unwrap().ray = Ray3d::new(Vec3::new(1000.0, 100.0, 0.0), Dir3::NEG_Y);
+        let lo = SimVec3::from_f32([-500.0, -500.0, -500.0]);
+        let hi = SimVec3::from_f32([500.0, 500.0, 500.0]);
+        app.world_mut().resource_mut::<ghost::PlacementBounds>().0 = Some((lo, hi));
+        app.world_mut().run_system_once(armed_cursor).unwrap();
+        assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_nobuild");
+        app.world_mut().run_system_once(place_on_click).unwrap();
+        assert!(app.world().resource::<CommandQueue>().0.is_empty());
+        app.world_mut().resource_mut::<ghost::PlacementBounds>().0 = None;
+        app.world_mut().run_system_once(armed_cursor).unwrap();
+        assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_build");
+        app.world_mut().run_system_once(place_on_click).unwrap();
+        assert!(matches!(app.world().resource::<CommandQueue>().0.as_slice(), [CommandKind::Order(Order::Build { builder: EntityId(1), what: w, .. })] if *w == what));
+        assert!(app.world().resource::<HudState>().placing.is_none());
+
+        app.world_mut().resource_mut::<HudState>().placing = Some(armed);
+        app.world_mut().resource_mut::<CommandQueue>().0.clear();
+        Arc::make_mut(&mut app.world_mut().resource_mut::<HudFeed>().view).players[0].resources[0] = Fixed::ZERO;
+        app.world_mut().run_system_once(armed_cursor).unwrap();
+        assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_nobuild");
+        app.world_mut().run_system_once(place_on_click).unwrap();
+        assert!(app.world().resource::<CommandQueue>().0.is_empty());
+        assert!(app.world().resource::<HudState>().placing.is_some());
+    }
+
+    #[test]
+    fn armed_cursor_update_obeys_input_capture_guards() {
+        let mut app = click_app(feed(&[1]), HudState { targeting: Some(TargetMode::Move), ..Default::default() }, 1000.0);
+        app.add_systems(Update, armed_cursor
+            .run_if(not(crate::ui::presentation::cutscene_running))
+            .run_if(crate::ui::ingame_menu::menu_closed)
+            .run_if(crate::cheats::input::game_input_free));
+        let name = |app: &App| app.world().resource::<crate::ui::cursor::WantedCursor>().0;
+        app.update();
+        assert_eq!(name(&app), "c_move");
+        let mut menu = crate::ui::ingame_menu::InGameMenu::default();
+        menu.open = true;
+        app.insert_resource(menu);
+        app.world_mut().resource_mut::<crate::ui::cursor::WantedCursor>().0 = crate::ui::cursor::DEFAULT;
+        app.update();
+        assert_eq!(name(&app), crate::ui::cursor::DEFAULT);
+        app.world_mut().resource_mut::<crate::ui::ingame_menu::InGameMenu>().open = false;
+        let mut cheat = crate::cheats::input::CheatInput::default();
+        cheat.open = true;
+        app.insert_resource(cheat);
+        app.update();
+        assert_eq!(name(&app), crate::ui::cursor::DEFAULT);
+        app.world_mut().resource_mut::<crate::cheats::input::CheatInput>().open = false;
+        let mut cine = crate::ui::presentation::CineractiveState::default();
+        cine.on = true;
+        app.insert_resource(cine);
+        app.update();
+        assert_eq!(name(&app), crate::ui::cursor::DEFAULT);
+        app.world_mut().resource_mut::<crate::ui::presentation::CineractiveState>().on = false;
+        app.update();
+        assert_eq!(name(&app), "c_move");
+    }
+
+    #[test]
+    fn transport_cursor_and_click_share_the_ready_carrier_and_target_gates() {
+        let fake = sta_content::fake::db();
+        let mut builder = sta_content::ContentDb::builder()
+            .profile(sta_content::Profile::Sta2Classic)
+            .features(sta_content::Profile::Sta2Classic.features());
+        for weapon in fake.weapons() { builder = builder.weapon(weapon.clone()); }
+        for unit in fake.units() { builder = builder.unit(unit.clone()); }
+        let db = Arc::new(builder.build().unwrap());
+        let mut f = feed(&[1]);
+        f.content = Some(db);
+        let view = Arc::make_mut(&mut f.view);
+        view.units[0].crew = Some([Fixed::from_int(40), Fixed::from_int(50)]);
+        view.units[3].crew = Some([Fixed::from_int(30), Fixed::from_int(50)]);
+        view.players = vec![player(1, 1, None), player(2, 2, None)];
+        let mut app = click_app(f, HudState { targeting: Some(TargetMode::Transport), ..Default::default() }, 0.0);
+        app.world_mut().spawn((SimEntity(EntityId(4)), SelectRadius(10.0), GlobalTransform::default()));
+        app.world_mut().run_system_once(armed_cursor).unwrap();
+        assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_transport");
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut().run_system_once(place_on_click).unwrap();
+        assert!(matches!(app.world().resource::<CommandQueue>().0.as_slice(), [CommandKind::Order(Order::Transport { target: EntityId(4), .. })]));
+
+        app.world_mut().resource_mut::<HudState>().targeting = Some(TargetMode::Transport);
+        app.world_mut().resource_mut::<CommandQueue>().0.clear();
+        Arc::make_mut(&mut app.world_mut().resource_mut::<HudFeed>().view).units[3].crew = None;
+        app.world_mut().run_system_once(armed_cursor).unwrap();
+        assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_notransport");
+        app.world_mut().run_system_once(place_on_click).unwrap();
+        assert!(app.world().resource::<CommandQueue>().0.is_empty());
+    }
+
+    #[test]
+    fn colonize_cursor_and_click_share_the_planet_gate() {
+        use sta_content::{ColonizePodDef, ContentDb, DefRef, Hardpoint, PlanetRole, PopulationRules, Rules, UnitDef, WeaponDef, WeaponKind};
+        let mut pod = WeaponDef::new("ui_pod", "colonizerpod", WeaponKind::Projectile);
+        pod.colonize = Some(ColonizePodDef { party_size: Fixed::from_int(100), orbit_range: Fixed::from_int(150) });
+        let mut ship = UnitDef::new("ui_colony", "colony");
+        ship.movement.max_speed = Fixed::ONE;
+        ship.hardpoints = vec![Hardpoint { weapon: DefRef::new("ui_pod"), node: "hp01".into(), arc: None }];
+        ship.raw = Arc::new(sta_odf::resolve("s", &mut |_| Some("colony_ship = 1".into())).unwrap());
+        let mut planet = UnitDef::new("ui_planet", "planet");
+        planet.planet_role = Some(PlanetRole::Producer);
+        planet.planet_colonizable = true;
+        planet.planet_max_population = 1;
+        let rules = Rules::default().with_population(PopulationRules {
+            levels: [Fixed::from_int(1000), Fixed::from_int(2000), Fixed::from_int(3000), Fixed::from_int(5000)],
+            civilian_rate_modifier: Fixed::from_f64(0.2),
+        });
+        let db = Arc::new(ContentDb::builder().weapon(pod).unit(ship).unit(planet).build().unwrap().with_rules(rules));
+        let unit = |id, odf, owner| UnitView {
+            id: EntityId(id), def: db.key(odf).unwrap(), owner, pos: SimVec3::ZERO,
+            heading: (Fixed::ZERO, Fixed::ONE), speed: Fixed::ZERO, hull: [Fixed::ONE; 2],
+            shields: [[Fixed::ZERO; 2]; 4], crew: None, energy: None, autonomy: None,
+            flags: UnitFlags::SELECTABLE, progress: None,
+        };
+        let f = HudFeed {
+            view: Arc::new(WorldView { units: vec![unit(1, "ui_colony", PlayerId(1)), unit(2, "ui_planet", sta_sim::world::NEUTRAL)], ..Default::default() }),
+            player: PlayerId(1), selected: vec![EntityId(1)], content: Some(db), ..Default::default()
+        };
+        let mut app = click_app(f, HudState { targeting: Some(TargetMode::Colonize), ..Default::default() }, 0.0);
+        app.world_mut().spawn((SimEntity(EntityId(2)), SelectRadius(10.0), GlobalTransform::default()));
+        app.world_mut().run_system_once(armed_cursor).unwrap();
+        assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_colonize");
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut().run_system_once(place_on_click).unwrap();
+        assert!(matches!(app.world().resource::<CommandQueue>().0.as_slice(), [CommandKind::Order(Order::Colonize { planet: EntityId(2), .. })]));
+
+        app.world_mut().resource_mut::<HudState>().targeting = Some(TargetMode::Colonize);
+        app.world_mut().resource_mut::<CommandQueue>().0.clear();
+        Arc::make_mut(&mut app.world_mut().resource_mut::<HudFeed>().view).units[1].owner = PlayerId(2);
+        app.world_mut().run_system_once(armed_cursor).unwrap();
+        assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_nocolonize");
+        app.world_mut().run_system_once(place_on_click).unwrap();
+        assert!(app.world().resource::<CommandQueue>().0.is_empty());
     }
 }
 

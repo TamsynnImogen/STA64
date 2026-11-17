@@ -98,6 +98,7 @@ fn into_the_breach_installed_map_reaches_first_borg_wave() {
         labels: sim.labels.iter().map(|(id, label)| (id, label.clone())).collect(),
         view: Some((*sim.view()).clone()),
         paths: Vec::new(),
+        map_bounds: None,
     };
     let source = std::fs::read_to_string(ports.join("Into the Breach.lua")).expect("read external clean-room port");
     let observed = format!(

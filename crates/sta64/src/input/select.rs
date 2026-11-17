@@ -102,8 +102,16 @@ pub struct ControlGroups {
 /// Ask the camera to centre on this map-space point (a double-tapped group).
 /// The camera code reads it; selection does not move the camera.
 #[derive(Message, Debug, Clone, Copy)]
-#[allow(dead_code)] // read by the camera (not yet)
 pub struct CameraFocus(pub Vec3);
+
+/// The strategy camera centres on the last requested point (a double-tapped
+/// group, the HUD's idle button); its height, angle and distance stay.
+pub fn follow_focus(mut requests: MessageReader<CameraFocus>, mut cams: Query<&mut crate::viewer::Orbit>) {
+    let Some(CameraFocus(p)) = requests.read().last().copied() else { return };
+    for mut o in &mut cams {
+        o.focus = Vec3::new(p.x, o.focus.y, p.z);
+    }
+}
 
 /// The cursor, its ray and the camera's projection, this frame.
 #[derive(Clone, Copy, Debug)]
@@ -208,9 +216,20 @@ pub(crate) fn target_seen(view: &sta_sim::WorldView, local: Option<sta_sim::Play
 
 /// The unit under the cursor: a strategic icon, else the nearest sphere on the ray.
 pub(crate) fn unit_under(cursor: Vec2, ray: Ray3d, units: &Targetable) -> Option<EntityId> {
+    unit_under_where(cursor, ray, units, |_| true)
+}
+
+/// Pick among eligible units, before icon priority and sphere/volume ranking.
+pub(crate) fn unit_under_where(
+    cursor: Vec2,
+    ray: Ray3d,
+    units: &Targetable,
+    eligible: impl Fn(EntityId) -> bool,
+) -> Option<EntityId> {
     let icon = units
         .iter()
         .filter_map(|(u, _, _, s)| {
+            if !eligible(u.0) { return None; }
             let s = s.filter(|s| s.shown > 0.5)?;
             let d = s.screen.distance(cursor);
             (d <= s.size_px * 0.6).then_some((d, u.0))
@@ -222,6 +241,7 @@ pub(crate) fn unit_under(cursor: Vec2, ray: Ray3d, units: &Targetable) -> Option
     // Every sphere the ray crosses: (distance along the ray, radius, centre, id).
     let mut hits: Vec<(f32, f32, Vec3, EntityId)> = Vec::new();
     for (u, radius, gt, strategic) in units {
+        if !eligible(u.0) { continue; }
         // A symbol replaces this model, so its invisible sphere cannot steal a
         // click (including when the symbol is folded into a fleet leader).
         if strategic.is_some_and(|s| s.symbol) {
@@ -438,7 +458,7 @@ pub fn select(
                 push_unique(&mut sel, u.0);
             }
         }
-    } else if let Some(id) = unit_under(cursor, aim.ray, &units).filter(|&id| target_seen(link.curr(), local.as_deref().and_then(|l| l.0), id)) {
+    } else if let Some(id) = unit_under_where(cursor, aim.ray, &units, |id| target_seen(link.curr(), local.as_deref().and_then(|l| l.0), id)) {
         // (With a local player only what its team sees is clickable: kept-drawn scenery outside the sensors is no fog leak; without one, everything drawn is.)
         let double = drag.last_click.is_some_and(|(t, last)| last == id && now - t <= DOUBLE);
         drag.last_click = if double { None } else { Some((now, id)) };
@@ -475,6 +495,18 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    #[test]
+    fn the_camera_centres_on_the_last_focus_request_and_keeps_its_height() {
+        let mut app = App::new();
+        app.add_message::<CameraFocus>().add_systems(Update, follow_focus);
+        let cam = app.world_mut().spawn(crate::viewer::Orbit { focus: Vec3::new(0.0, 5.0, 0.0), yaw: 0.0, pitch: 0.7, dist: 400.0, home: (Vec3::ZERO, 1.0) }).id();
+        app.world_mut().write_message(CameraFocus(Vec3::new(10.0, 99.0, 20.0)));
+        app.world_mut().write_message(CameraFocus(Vec3::new(-30.0, 99.0, 40.0)));
+        app.update();
+        assert_eq!(app.world().get::<crate::viewer::Orbit>(cam).unwrap().focus, Vec3::new(-30.0, 5.0, 40.0));
+    }
+    use bevy::ecs::system::RunSystemOnce;
     use sta_content::ContentDb;
     use sta_sim::command::LocalRouter;
     use sta_sim::command::Command;
@@ -518,6 +550,44 @@ mod tests {
     /// Two own stations (class `shipyard`) and an own station of another def.
     const Y1: EntityId = EntityId(7);
     const Y2: EntityId = EntityId(8);
+
+    #[test]
+    fn eligibility_precedes_icon_sphere_and_containing_volume_ranking() {
+        let ray = Ray3d::new(Vec3::ZERO, Dir3::NEG_Z);
+        let cursor = Vec2::ZERO;
+        let pick = |app: &mut App, hidden: EntityId| {
+            app.world_mut().run_system_once(move |units: Targetable| {
+                (
+                    unit_under(cursor, ray, &units),
+                    unit_under_where(cursor, ray, &units, |id| id != hidden),
+                    unit_under_where(cursor, ray, &units, |_| false),
+                    unit_under_where(cursor, ray, &units, |_| true),
+                )
+            }).unwrap()
+        };
+        let root = |app: &mut App, id, z, radius| {
+            app.world_mut().spawn((SimEntity(EntityId(id)), SelectRadius(radius), GlobalTransform::from(Transform::from_xyz(0.0, 0.0, z))));
+        };
+
+        let mut spheres = App::new();
+        root(&mut spheres, 1, -10.0, 5.0);
+        root(&mut spheres, 2, -20.0, 5.0);
+        assert_eq!(pick(&mut spheres, EntityId(1)), (Some(EntityId(1)), Some(EntityId(2)), None, Some(EntityId(1))));
+
+        let mut icons = App::new();
+        root(&mut icons, 2, -20.0, 5.0);
+        let mut icon = Strategic::new(crate::render::strategic::Shape::Arrow, Color::WHITE, 20.0);
+        icon.symbol = true;
+        icon.shown = 1.0;
+        icon.screen = cursor;
+        icons.world_mut().spawn((SimEntity(EntityId(1)), SelectRadius(5.0), GlobalTransform::from(Transform::from_xyz(0.0, 0.0, -10.0)), icon));
+        assert_eq!(pick(&mut icons, EntityId(1)), (Some(EntityId(1)), Some(EntityId(2)), None, Some(EntityId(1))));
+
+        let mut volume = App::new();
+        root(&mut volume, 1, -10.0, 30.0);
+        root(&mut volume, 2, -20.0, 2.0);
+        assert_eq!(pick(&mut volume, EntityId(2)), (Some(EntityId(2)), Some(EntityId(1)), None, Some(EntityId(2))));
+    }
 
     /// Player 0 owns A, B (class 1), C (class 2), F (class 1, off screen) and
     /// D (class 1, on screen, far below); player 1 owns E (class 1). Render
@@ -669,6 +739,17 @@ mod tests {
         app.insert_resource(crate::render::units::LocalPlayer(Some(PlayerId(0))));
         click(&mut app, 100.0, 300.0);
         assert_eq!(sel(&app), [E]);
+    }
+
+    #[test]
+    fn click_reaches_visible_unit_behind_unseen_sphere() {
+        let mut app = app();
+        app.insert_resource(crate::render::units::LocalPlayer(Some(PlayerId(0))));
+        hide_from_player(&mut app, &[A], false);
+        let entity = app.world_mut().query::<(Entity, &SimEntity)>().iter(app.world()).find(|(_, id)| id.0 == A).unwrap().0;
+        app.world_mut().entity_mut(entity).insert(GlobalTransform::from(Transform::from_xyz(300.0, 100.0, 100.0)));
+        click(&mut app, 300.0, 100.0);
+        assert_eq!(sel(&app), [B]);
     }
 
     /// With no local player (a view with no seat, the bench) everything drawn is clickable, whatever the visibility lists say.

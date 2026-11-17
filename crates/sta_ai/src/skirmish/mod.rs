@@ -202,6 +202,15 @@ fn role_of(db: &ContentDb, key: ContentKey) -> Role {
     }
 }
 
+/// The role an own unit plays for the planner (AI-05): as [`role_of`], except that a
+/// warship whose ODF says `collisionRadius = 2` is left out of fleets and strategic goals
+/// (no wave, garrison or goal role). Rule from the Roots changelog, not measured.
+fn fleet_role(db: &ContentDb, key: ContentKey) -> Role {
+    let role = role_of(db, key);
+    let small = db.unit(key).and_then(|d| d.stats.collision_radius) == Some(Fixed::from_int(2));
+    if role == Role::Warship && small { Role::Other } else { role }
+}
+
 fn is_station(db: &ContentDb, key: ContentKey) -> bool {
     db.unit(key).is_some_and(|d| EntityKind::of_def(d) == EntityKind::Station)
 }
@@ -508,11 +517,16 @@ impl SkirmishController {
                     id: u.id,
                     def: u.def,
                     pos: u.pos,
-                    role: role_of(&db, u.def),
+                    role: fleet_role(&db, u.def),
                     finished: finished(u),
                     welding: u.flags.contains(UnitFlags::BUILDING),
                 });
             } else if me.relations.iter().any(|&(p, r)| p == u.owner && r == Relation::Enemy) {
+                // AI-05: an enemy derelict (crew below one of a crew maximum) is no target: the AI
+                // does not shoot derelicts apart (WORKPLAN row, Roots changelog; not measured).
+                if u.crew.is_some_and(|[now, max]| now < Fixed::ONE && max > Fixed::ZERO) {
+                    continue;
+                }
                 let role = role_of(&db, u.def);
                 if role != Role::Other || is_station(&db, u.def) {
                     foes.push(Foe { id: u.id, pos: u.pos, armed: role == Role::Warship });
@@ -961,5 +975,7 @@ impl SkirmishController {
 
 #[cfg(test)]
 mod special_forces_tests;
+#[cfg(test)]
+mod derelict_tests;
 #[cfg(test)]
 mod tests;

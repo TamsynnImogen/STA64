@@ -3,6 +3,7 @@
 pub mod boarding;
 pub mod casualty;
 pub mod damage;
+pub mod hit_roll;
 pub mod pd;
 pub mod targeting;
 pub mod weapons;
@@ -19,6 +20,10 @@ pub(crate) mod subsystem_tests;
 mod pool_regen_tests;
 #[cfg(test)]
 pub(crate) mod pd_tests;
+#[cfg(test)]
+mod hit_roll_tests;
+#[cfg(test)]
+mod crew_delay_tests;
 #[cfg(test)]
 mod weapons_tests;
 #[cfg(test)]

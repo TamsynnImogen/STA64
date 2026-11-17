@@ -12,8 +12,9 @@
 //!   from the planet's centre: radius plus [`ALTITUDE`] from the centre, at the
 //!   planet's height. Its yaw follows that bearing, so its heading is the
 //!   outward radial.
-//! - Nothing else is checked: not the map edge, not other objects, not
-//!   ownership or exploration.
+//! - The orbit calculation does not check map edges, other objects, ownership
+//!   or exploration. Build admission additionally rejects footprint overlap
+//!   with objects other than the attachment planet (STA64 placement rule).
 //!
 //! Orbiting (SIM-65, `PlanetMiningBase::Simulate`): from the tick it is
 //! finished, a station's bearing from its planet's centre advances by `2 pi /

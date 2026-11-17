@@ -476,8 +476,10 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
         max_dilithium: _, mining_rate: _, transfer_rate: _, resource: _, features: _,
         confinement: _, nebula_pathing: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
-        crew_gain: _, transport: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, repair_attachment: _, raw: _,
+        crew_gain: _, transport: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, repair_attachment: _, stats: _, raw: _,
     } = u;
+    // `stats` (CON-55): only the keys a sim rule reads are digested (the planet keys
+    // under SIM-73's target-mask switch, below); the rest is typed only.
     let crate::BuildDef { cost: _, ticks: _, officers: _, list: _, queue_limit: _, flagged_slots: _ } = &u.build;
     let name = |r: &crate::DefRef| quoted(&r.odf.to_ascii_lowercase());
     let m = &u.movement;
@@ -651,6 +653,15 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
                 .raw("infinite", &n.infinite.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string()))
                 .list("amounts", n.amounts.map(|a| a.map_or_else(|| "-".to_owned(), fixed_text)))));
     }
+    // SIM-65: `addToPlanner = 0` leaves the unit out of path planning (read by `sta_sim::nav`); only when set.
+    if let Some(on) = u.stats.add_to_planner {
+        c.raw("add_to_planner", if on { "1" } else { "0" });
+    }
+    // SIM-73: the shooter's planet keys, only under the target-mask switch and only when set.
+    if db.unit_features(u).weapon_target_masks && (u.stats.can_attack_planets.is_some() || u.stats.can_only_attack_planets.is_some()) {
+        let flag = |b: Option<bool>| b.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string());
+        c.raw("attack_planets", &group(Canon::new().raw("can", &flag(u.stats.can_attack_planets)).raw("only", &flag(u.stats.can_only_attack_planets))));
+    }
     c.finish()
 }
 
@@ -679,8 +690,10 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
         key: _, odf: _, class: _, kind: _, range: _, damage: _, refire: _, shot_speed: _,
         duration: _, fire_sound: _, fx: _, effect_ticks: _, energy_drain: _, energy_cost: _,
         disable_weapons: _, decloak_on_hit: _, initial_shot_delay_modifier: _,
-        ignore_shot_delay_effects: _, ordnance_defence: _, activate_on_team_change: _, crew_loss: _, damage_variance: _, resource: _, replace: _, colonize: _, features: _, raw: _,
+        ignore_shot_delay_effects: _, ordnance_defence: _, activate_on_team_change: _, crew_loss: _, damage_variance: _, resource: _, replace: _, colonize: _, base: _, features: _, raw: _,
     } = w;
+    // `base` (CON-54): only the keys a sim rule reads are digested, and only for a
+    // weapon whose switch for that rule is on (SIM-73, below); the rest is typed only.
     let mut c = Canon::new();
     c
         .text("class", &w.class.0)
@@ -726,6 +739,49 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
     // SIM-30: a colonizer pod's payload and range, only when the ordnance is one.
     if let Some(p) = w.colonize {
         c.raw("colonize", &group(Canon::new().fixed("party_size", p.party_size).fixed("orbit_range", p.orbit_range)));
+    }
+    // SIM-73: the keys of the hit roll and of per-target damage, only under their
+    // switches and only when set, so every other weapon keeps its text.
+    let table = |l: &crate::Lookup| group(Canon::new().fixed("base", l.base).list("rows", l.iter().map(|(name, v)| format!("{}:{}", quoted(name), fixed_text(v)))));
+    let features = db.weapon_features(w);
+    if features.weapon_hit_roll {
+        let t = &w.base.to_hit;
+        if let Some(l) = &w.base.hit_chance {
+            c.raw("hit_chance", &table(l));
+        }
+        if [t.stop_to_hit, t.to_hit_stop, t.impulse_to_hit, t.to_hit_impulse].iter().any(Option::is_some) {
+            c.raw("to_hit", &group(
+                Canon::new()
+                    .opt_fixed("stop_to_hit", t.stop_to_hit)
+                    .opt_fixed("to_hit_stop", t.to_hit_stop)
+                    .opt_fixed("impulse_to_hit", t.impulse_to_hit)
+                    .opt_fixed("to_hit_impulse", t.to_hit_impulse)));
+        }
+    }
+    if features.weapon_target_damage
+        && let Some(l) = &w.base.damage_base
+    {
+        c.raw("damage_rows", &table(l));
+    }
+    if features.weapon_target_damage
+        && let Some(l) = &w.base.damage_variance
+    {
+        c.raw("variance_rows", &table(l));
+    }
+    if features.weapon_cloak_fire && w.base.cloak_enable == Some(true) {
+        c.raw("cloak_enable", "1");
+    }
+    if features.weapon_target_masks && w.base.targets != crate::TargetMaskDef::default() {
+        let m = &w.base.targets;
+        let flag = |b: Option<bool>| b.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string());
+        c.raw("targets", &group(
+            Canon::new()
+                .raw("enemy_craft", &flag(m.enemy_craft))
+                .raw("enemy_buildings", &flag(m.enemy_buildings))
+                .raw("allied_craft", &flag(m.allied_craft))
+                .raw("allied_buildings", &flag(m.allied_buildings))
+                .raw("enemy_planets_only", &flag(m.enemy_planets_only))
+                .raw("location", &flag(m.location))));
     }
     c.finish()
 }

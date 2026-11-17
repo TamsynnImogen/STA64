@@ -1229,3 +1229,82 @@ fn stock_hud_labels_are_sprite_text_and_never_scalable() {
         assert!(world.get::<Text>(l).is_none());
     }
 }
+
+// UI-48: the button panel.
+mod button_panel {
+    use super::*;
+    use crate::input::select::CameraFocus;
+    use crate::ui::hud::stock::buttons::{self, PanelButton};
+    use crate::ui::presentation::ObjectivesView;
+
+    fn panel_config() -> HudConfig {
+        let text = format!("{CFG}menuButtonArea = 1500 0 50 30\nidleButtonArea = 1440 0 50 30\nobjectivesButtonArea = 1380 0 50 30\nobjectivesButton = \"my_objectives\"\ncommButtonArea = 0 0 0 0\nhelpButtonArea = 1320 0 50 30\n");
+        let (cfg, warnings) = GuiCfg::parse("panel.cfg", &text);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        HudConfig { gui: Some(cfg.layout_auto()), fit_scale: false, ..default() }
+    }
+
+    fn panel_app() -> App {
+        let mut app = app_with_content_and_config(content(), panel_config(), UiProfile::Armada2);
+        app.insert_resource(ObjectivesView::default());
+        app.update();
+        app
+    }
+
+    fn panel(app: &mut App) -> Vec<(Entity, PanelButton, Vec<String>, WidgetState)> {
+        let mut out: Vec<_> = app
+            .world_mut()
+            .query::<(Entity, &PanelButton, &crate::ui::gui_sprites::GuiButton, &WidgetState)>()
+            .iter(app.world())
+            .map(|(e, b, g, s)| (e, *b, g.names.clone(), *s))
+            .collect();
+        out.sort_by_key(|o| format!("{:?}", o.1));
+        out
+    }
+
+    #[test]
+    fn the_cfg_places_the_panel_buttons_with_their_sprites_and_a_zero_area_hides_one() {
+        let mut app = panel_app();
+        let got = panel(&mut app);
+        let acts: Vec<_> = got.iter().map(|g| g.1).collect();
+        assert_eq!(acts, [PanelButton::Idle, PanelButton::Menu, PanelButton::Objectives, PanelButton::Unavailable], "comm hidden, help drawn: {got:?}");
+        let sprite = |b: PanelButton| got.iter().find(|g| g.1 == b).unwrap().2.clone();
+        assert_eq!(sprite(PanelButton::Objectives), ["my_objectives"], "the cfg's sprite");
+        assert_eq!(sprite(PanelButton::Menu), ["menu_button"], "the engine's default");
+        assert_eq!(got.iter().find(|g| g.1 == PanelButton::Unavailable).unwrap().3, WidgetState::Disabled);
+    }
+
+    #[test]
+    fn objectives_shows_the_objectives_and_idle_asks_the_camera_for_an_idle_ship() {
+        let mut app = panel_app();
+        let got = panel(&mut app);
+        let find = |b: PanelButton| got.iter().find(|g| g.1 == b).unwrap().0;
+        click(app.world_mut(), find(PanelButton::Objectives));
+        app.update();
+        assert!(app.world().resource::<ObjectivesView>().visible);
+        // The test feed's cruiser stands still: it is idle.
+        click(app.world_mut(), find(PanelButton::Idle));
+        app.update();
+        let msgs = app.world().resource::<Messages<CameraFocus>>();
+        assert!(msgs.iter_current_update_messages().count() + msgs.len() > 0, "a focus request was sent");
+    }
+
+    #[test]
+    fn next_idle_takes_the_idle_ships_in_turn() {
+        let db = content();
+        let mut feed = feed(&db);
+        let mut view = (*feed.view).clone();
+        let mut second = view.units[0].clone();
+        second.id = EntityId(7);
+        view.units.push(second);
+        let mut enemy = view.units[0].clone();
+        enemy.id = EntityId(9);
+        enemy.owner = PlayerId(2);
+        view.units.push(enemy);
+        feed.view = Arc::new(view);
+        let first = buttons::next_idle(&feed, None).unwrap().id;
+        let then = buttons::next_idle(&feed, Some(first)).unwrap().id;
+        let wrap = buttons::next_idle(&feed, Some(then)).unwrap().id;
+        assert_eq!((first, then, wrap), (EntityId(1), EntityId(7), EntityId(1)), "own ships only, wrapping");
+    }
+}

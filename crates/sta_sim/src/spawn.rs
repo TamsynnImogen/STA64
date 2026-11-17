@@ -142,6 +142,7 @@ impl Sim {
         self.colonies.remove_entity(id);
         self.transports.remove_entity(id);
         self.recrew.remove(id);
+        self.repairs.remove_entity(id);
         self.scripted.remove(id);
         self.switches.remove(id);
         self.alerts.remove(id);

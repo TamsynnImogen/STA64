@@ -192,6 +192,10 @@ pub struct Weapons {
     /// Units whose attack ended this step because the target is gone; the
     /// sim takes them right after the step (not state of its own).
     ended: Vec<EntityId>,
+    /// SIM-74 `crew_weapon_delay`: the reload multiplier of each unit at yellow or red
+    /// crew status, ascending id; absent means 1. Set by the sim before each step from
+    /// the unit's race and crew; not state of its own.
+    crew_delay: Vec<(EntityId, Fixed)>,
 }
 
 /// [`Weapons`] as the snapshot stores it (SIM-10).
@@ -226,7 +230,15 @@ impl Weapons {
             pd: Pd::from_rec(r.pd)?,
             held: Vec::new(),
             ended: Vec::new(),
+            crew_delay: Vec::new(),
         })
+    }
+
+    /// SIM-74: the reload multipliers for the next step, `(unit, factor)` (sorted here).
+    pub(crate) fn set_crew_delay(&mut self, mut rows: Vec<(EntityId, Fixed)>) {
+        rows.sort_by_key(|r| r.0);
+        rows.dedup_by_key(|r| r.0);
+        self.crew_delay = rows;
     }
 
     /// Order `unit` to attack `target` until it is gone.
@@ -446,6 +458,10 @@ impl Weapons {
                 if tick < START_HOLD_TICKS && db.weapon_features(w).start_fire_hold {
                     continue;
                 }
+                // SIM-73 `weapon_cloak_fire` (off by default): from a cloak only `cloakEnable` weapons fire.
+                if db.weapon_features(w).weapon_cloak_fire && u.flags.contains(UnitFlags::CLOAKED) && !super::hit_roll::fires_from_cloak(w) {
+                    continue;
+                }
                 let arc = if db.features().fire_arcs {
                     hp.arc
                 } else {
@@ -456,7 +472,8 @@ impl Weapons {
                 let seen = (!teams.players.is_empty()).then(|| visibility.iter()
                     .find(|(player, _)| *player == u.owner)
                     .map_or(&[][..], |(_, ids)| ids.as_slice()));
-                let Some(t) = self.pick(db, u, w.range, arc, units, teams, perception, seen, switches, opportunity) else {
+                let masked = db.weapon_features(w).weapon_target_masks.then_some(w);
+                let Some(t) = self.pick(db, u, w.range, arc, units, teams, perception, seen, switches, opportunity, masked) else {
                     continue;
                 };
                 if self.mounts.get(u.id).is_none() {
@@ -464,7 +481,14 @@ impl Weapons {
                         .insert(u.id, vec![Mount { ready: 0 }; def.hardpoints.len()]);
                 }
                 if let Some(m) = self.mounts.get_mut(u.id) {
-                    m[i].ready = tick + shot_reload(db.weapon_features(w).weapon_shot_timing, w, rng);
+                    let mut reload = shot_reload(db.weapon_features(w).weapon_shot_timing, w, rng);
+                    if db.weapon_features(w).crew_weapon_delay
+                        && w.base.crew_affects_weapon_delay != Some(false)
+                        && let Ok(i) = self.crew_delay.binary_search_by_key(&u.id, |r| r.0)
+                    {
+                        reload = scaled(reload, self.crew_delay[i].1).max(1);
+                    }
+                    m[i].ready = tick + reload;
                 }
                 events.push(SimEvent::Fired {
                     shooter: u.id,
@@ -472,6 +496,14 @@ impl Weapons {
                     hardpoint: i as u8,
                     target: Target::Entity(t.id),
                 });
+                // SIM-73, both off by default: the hit roll (one draw, only for a
+                // target that can be missed) and the target's own damage row.
+                let features = db.weapon_features(w);
+                if features.weapon_hit_roll && !super::hit_roll::will_hit(db, w, u, t, || draw(rng)) {
+                    // A miss fires and does no damage: no shot is flown and no `Hit` is sent.
+                    continue;
+                }
+                let damage = if features.weapon_target_damage { super::hit_roll::damage_for(db, w, t) } else { w.damage };
                 if w.kind == WeaponKind::Projectile {
                     self.next_shot += 1;
                     let step = w.shot_speed / Fixed::from_int(TICK_HZ as i32);
@@ -482,7 +514,7 @@ impl Weapons {
                         target: t.id,
                         pos: u.pos,
                         step,
-                        damage: w.damage,
+                        damage,
                     });
                 } else {
                     let face = facing(t.heading, t.pos, u.pos);
@@ -492,7 +524,7 @@ impl Weapons {
                         weapon: w.key,
                         facing: face,
                         shield: Fixed::ZERO,
-                        hull: w.damage,
+                        hull: damage,
                         at: t.pos,
                     });
                 }
@@ -613,11 +645,27 @@ impl Weapons {
         seen: Option<&[EntityId]>,
         switches: &crate::switches::SwitchTable,
         opportunity: bool,
+        masked: Option<&sta_content::WeaponDef>,
     ) -> Option<&'a Entity> {
         // A cloaked unit is only a target for mutual allies (SIM-63).
         let unseen = |t: &Entity| t.flags.contains(UnitFlags::CLOAKED) && !teams.confirmed_ally(t.owner, u.owner);
+        // SIM-73 `weapon_target_masks` (off by default): what this weapon may be fired at.
+        let allowed = |t: &Entity| {
+            masked.is_none_or(|w| {
+                let perceived = perception.get(t.id).copied().unwrap_or(t.owner);
+                let stance = if teams.is_enemy(u.owner, perceived) {
+                    super::hit_roll::Stance::Enemy
+                } else if teams.confirmed_ally(perceived, u.owner) {
+                    super::hit_roll::Stance::Ally
+                } else {
+                    super::hit_roll::Stance::Neutral
+                };
+                super::hit_roll::can_target(db, w, u, t, stance)
+            })
+        };
         let hittable = |t: &Entity| {
             t.id != u.id
+                && allowed(t)
                 && seen.is_none_or(|ids| ids.binary_search(&t.id).is_ok())
                 && !unseen(t)
                 && t.hull[1] > Fixed::ZERO
@@ -655,5 +703,44 @@ impl Weapons {
             }
         }
         best.map(|b| b.1)
+    }
+}
+
+/// SIM-74 `crew_weapon_delay` (read from the stock Armada II executable, static; not
+/// measured): a unit's reload multiplier from its crew status. At or below its race's
+/// `crewYellowStatus` (engine default 0.5) a reload takes `weaponYellow` (3) times as long,
+/// at or below `crewRedStatus` (0.25) `weaponRed` (9) times; above both, 1. The crew
+/// status is crew over maximum, capped at 1. A unit without a crew maximum is never slowed.
+pub(crate) fn crew_delay_factor(repair: sta_content::RaceRepair, crew: [Fixed; 2]) -> Fixed {
+    let [now, max] = crew;
+    if max <= Fixed::ZERO {
+        return Fixed::ONE;
+    }
+    let fraction = Fixed::from_bits(((i128::from(now.to_bits().max(0)) << 32) / i128::from(max.to_bits())).min(1 << 32) as i64);
+    let mut factor = Fixed::ONE;
+    if fraction <= repair.crew_yellow_status.unwrap_or(Fixed::from_bits(1 << 31)) {
+        factor = repair.weapon_yellow.unwrap_or(Fixed::from_int(3));
+    }
+    if fraction <= repair.crew_red_status.unwrap_or(Fixed::from_bits(1 << 30)) {
+        factor = repair.weapon_red.unwrap_or(Fixed::from_int(9));
+    }
+    factor
+}
+
+impl crate::Sim {
+    /// The units whose reloads [`crew_delay_factor`] slows, when any weapon has the switch.
+    pub(crate) fn crew_weapon_delays(&self, db: &ContentDb) -> Vec<(EntityId, Fixed)> {
+        if !db.features().crew_weapon_delay && !db.weapons().any(|w| db.weapon_features(w).crew_weapon_delay) {
+            return Vec::new();
+        }
+        self.units
+            .iter()
+            .filter_map(|u| {
+                let crew = u.crew?;
+                let race = self.unit_race(u.id).unwrap_or("");
+                let factor = crew_delay_factor(db.rules().race_repair_of(race).unwrap_or_default(), crew);
+                (factor != Fixed::ONE).then_some((u.id, factor))
+            })
+            .collect()
     }
 }

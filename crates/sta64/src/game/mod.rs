@@ -352,8 +352,10 @@ pub fn outcome(
             GlobalZIndex(50),
         ))
         .with_children(|p| {
-            p.spawn((Text::new(title), TextFont { font_size: bevy::text::FontSize::Px(72.0), ..default() }, TextColor(colour)));
-            p.spawn((Text::new(line), TextFont { font_size: bevy::text::FontSize::Px(24.0), ..default() }, TextColor(Color::WHITE)));
+            // UI-16: the mod's sprite font, the baked TTF where it has none.
+            use crate::ui::sprite_font::{SpriteTextStyle, sprite_text_styled};
+            p.spawn(sprite_text_styled(title, 72.0, colour, SpriteTextStyle::default().centered()));
+            p.spawn(sprite_text_styled(line, 24.0, Color::WHITE, SpriteTextStyle::default().centered()));
         });
 }
 

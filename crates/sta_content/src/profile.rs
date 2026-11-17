@@ -188,6 +188,8 @@ impl Profile {
                 target_score: true,
                 idle_assist: true,
                 assist_high_autonomy_only: true,
+                // SIM-46: Roots' transport attack (WORKPLAN row; not measured).
+                transport_attack_by_weld: true,
                 ..off
             },
             // FO 3.2.7 (CON-44, D5). Each bit from the 3.2.7 and Dominion War
@@ -515,7 +517,7 @@ fn read_ini_named(root: &Path, name: &str) -> Option<Ini> {
 }
 
 /// Switch names, in `Features` declaration order.
-pub const FEATURE_NAMES: [&str; 35] = [
+pub const FEATURE_NAMES: [&str; 41] = [
     "weapon_damage_controls",
     "point_defense_cycles",
     "fire_arcs",
@@ -551,6 +553,12 @@ pub const FEATURE_NAMES: [&str; 35] = [
     "idle_assist",
     "assist_high_autonomy_only",
     "assist_on_ally_fire",
+    "weapon_hit_roll",
+    "weapon_target_damage",
+    "weapon_target_masks",
+    "transport_attack_by_weld",
+    "weapon_cloak_fire",
+    "crew_weapon_delay",
 ];
 
 impl Features {
@@ -591,6 +599,12 @@ impl Features {
             "idle_assist" => &mut self.idle_assist,
             "assist_high_autonomy_only" => &mut self.assist_high_autonomy_only,
             "assist_on_ally_fire" => &mut self.assist_on_ally_fire,
+            "weapon_hit_roll" => &mut self.weapon_hit_roll,
+            "weapon_target_damage" => &mut self.weapon_target_damage,
+            "weapon_target_masks" => &mut self.weapon_target_masks,
+            "transport_attack_by_weld" => &mut self.transport_attack_by_weld,
+            "weapon_cloak_fire" => &mut self.weapon_cloak_fire,
+            "crew_weapon_delay" => &mut self.crew_weapon_delay,
             _ => return None,
         })
     }
@@ -806,7 +820,8 @@ mod tests {
                 "attack_opportunity_fire",
                 "target_score",
                 "idle_assist",
-                "assist_high_autonomy_only"
+                "assist_high_autonomy_only",
+                "transport_attack_by_weld"
             ]
         );
         assert!(!Profile::Fo4.features().pay_on_queue);

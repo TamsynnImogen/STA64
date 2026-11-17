@@ -1,24 +1,37 @@
-//! Presentation mesh for the station placement grid. The caller supplies the
-//! cell count and scales this unit-spaced mesh to the configured cell size.
+//! Presentation mesh for the station placement grid. Its outer border follows
+//! the supplied physical bounds; only interior cell spacing is configurable.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
-use bevy::prelude::Mesh;
+use bevy::prelude::{Mesh, Vec2};
 
 const LINE_WIDTH: f32 = 0.025;
 const FILL_ALPHA: f32 = 0.12;
 const FILL_Y: f32 = -0.001;
 
 /// A centered square with one translucent fill and one ribbon per grid line.
+#[cfg(test)]
 pub(super) fn mesh(cells: u32) -> Mesh {
     rectangular_mesh(cells, cells)
 }
 
 /// Rectangular footprint, retaining square cells on both axes.
+#[cfg(test)]
 pub(super) fn rectangular_mesh(columns: u32, rows: u32) -> Mesh {
-    let (left, right) = (-(columns as f32) * 0.5, columns as f32 * 0.5);
-    let (bottom, top) = (-(rows as f32) * 0.5, rows as f32 * 0.5);
+    sized_mesh(Vec2::new(columns as f32 * 0.5, rows as f32 * 0.5), 1.0)
+}
+
+/// Grid with exact world-space half extents. The final cell on each axis may
+/// be shorter than `spacing`, so the border never overstates the site's size.
+pub(super) fn sized_mesh(half: Vec2, spacing: f32) -> Mesh {
+    assert!(half.x.is_finite() && half.y.is_finite() && half.x > 0.0 && half.y > 0.0);
+    assert!(spacing.is_finite() && spacing > 0.0);
+    let (left, right) = (-half.x, half.x);
+    let (bottom, top) = (-half.y, half.y);
+    let columns = (half.x * 2.0 / spacing).ceil() as u32;
+    let rows = (half.y * 2.0 / spacing).ceil() as u32;
     let quads = 1 + columns as usize + rows as usize + 2;
+    let line_width = (spacing * LINE_WIDTH).min(half.min_element() * 2.0);
     let mut positions = Vec::with_capacity(quads * 4);
     let mut normals = Vec::with_capacity(quads * 4);
     let mut uvs = Vec::with_capacity(quads * 4);
@@ -34,26 +47,34 @@ pub(super) fn rectangular_mesh(columns: u32, rows: u32) -> Mesh {
     };
 
     // Recess the fill slightly so the white ribbons remain visible over it.
-    quad(left, bottom, right, top, FILL_Y, FILL_ALPHA);
+    quad(left, bottom, right, top, FILL_Y * spacing, FILL_ALPHA);
     for line in 0..=columns.max(rows) {
         if line <= columns {
-            let at = left + line as f32;
+            let at = if line == columns {
+                right
+            } else {
+                left + line as f32 * spacing
+            };
             quad(
-                (at - LINE_WIDTH * 0.5).max(left),
+                (at - line_width * 0.5).max(left),
                 bottom,
-                (at + LINE_WIDTH * 0.5).min(right),
+                (at + line_width * 0.5).min(right),
                 top,
                 0.0,
                 1.0,
             );
         }
         if line <= rows {
-            let at = bottom + line as f32;
+            let at = if line == rows {
+                top
+            } else {
+                bottom + line as f32 * spacing
+            };
             quad(
                 left,
-                (at - LINE_WIDTH * 0.5).max(bottom),
+                (at - line_width * 0.5).max(bottom),
                 right,
-                (at + LINE_WIDTH * 0.5).min(top),
+                (at + line_width * 0.5).min(top),
                 0.0,
                 1.0,
             );
@@ -146,6 +167,49 @@ mod tests {
                 half
             );
         }
+    }
+
+    #[test]
+    fn nonmultiple_square_has_exact_border_and_a_clipped_final_cell() {
+        let grid = sized_mesh(Vec2::splat(37.5), 50.0);
+        let positions = positions(&grid);
+        assert_eq!(positions.len(), (1 + 3 + 3) * 4);
+        for point in positions {
+            assert!((-37.5..=37.5).contains(&point[0]));
+            assert!((-37.5..=37.5).contains(&point[2]));
+        }
+        assert_eq!((positions[0][0], positions[2][0]), (-37.5, 37.5));
+        assert_eq!((positions[0][2], positions[2][2]), (-37.5, 37.5));
+        // Quads are fill, then vertical and horizontal strips per boundary.
+        let vertical = |line: usize| &positions[(1 + line * 2) * 4..(2 + line * 2) * 4];
+        assert_eq!(vertical(0)[0][0], -37.5);
+        assert_eq!(vertical(2)[2][0], 37.5);
+        assert_eq!(vertical(1)[0][0], 12.5 - LINE_WIDTH * 50.0 * 0.5);
+        assert_eq!(vertical(1)[2][0], 12.5 + LINE_WIDTH * 50.0 * 0.5);
+        let inner = (vertical(1)[0][0] + vertical(1)[2][0]) * 0.5;
+        assert_eq!(vertical(2)[2][0] - inner, 25.0);
+    }
+
+    #[test]
+    fn asymmetric_rectangle_keeps_spacing_and_clips_each_last_edge() {
+        let half = Vec2::new(62.5, 37.5);
+        let positions = positions(&sized_mesh(half, 50.0)).to_vec();
+        assert_eq!(positions.len(), (1 + 4 + 3) * 4);
+        assert!(
+            positions
+                .iter()
+                .all(|p| p[0] >= -half.x && p[0] <= half.x && p[2] >= -half.y && p[2] <= half.y)
+        );
+        assert_eq!((positions[0][0], positions[2][0]), (-62.5, 62.5));
+        assert_eq!((positions[0][2], positions[2][2]), (-37.5, 37.5));
+        let x_strip = |line: usize| &positions[(1 + line * 2) * 4..(2 + line * 2) * 4];
+        let z_strip = |line: usize| &positions[(2 + line * 2) * 4..(3 + line * 2) * 4];
+        let x1 = (x_strip(1)[0][0] + x_strip(1)[2][0]) * 0.5;
+        let x2 = (x_strip(2)[0][0] + x_strip(2)[2][0]) * 0.5;
+        assert_eq!((x1, x2, x2 - x1), (-12.5, 37.5, 50.0));
+        assert_eq!((z_strip(1)[0][2] + z_strip(1)[2][2]) * 0.5, 12.5);
+        assert_eq!(x_strip(3)[2][0], half.x);
+        assert_eq!(z_strip(2)[2][2], half.y);
     }
 
     #[test]

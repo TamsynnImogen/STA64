@@ -22,8 +22,8 @@
 //!   life-support drain and the derelict latch is `combat/casualty.rs`
 //!   (SIM-39). Station RECREW at `recrewRate` from the team pool is
 //!   `crate::recrew`; transporter crew transfer is `combat/boarding.rs`.
-//!   Yard recrew at `yard_crew_per_sec` is not implemented; a ship does not
-//!   regain crew by itself (measured).
+//!   Yard recrew at `yard_crew_per_sec` is SIM-40's yard service
+//!   (`crate::repair::service`); a ship does not regain crew by itself (measured).
 
 use sta_content::ContentDb;
 use sta_core::{Fixed, PlayerId, TICK_HZ};

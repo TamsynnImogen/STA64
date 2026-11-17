@@ -178,10 +178,36 @@ impl Reader<'_> {
     }
 }
 
+/// Canonical numbered queries that can match an authored key under A1
+/// prefix lookup. A key such as race10Extra can answer race1 and race10;
+/// collecting only authored whole keys would silently lose both lookups.
+pub(crate) fn prefix_numbered_indices(odf: &Odf, prefix: &str) -> BTreeSet<u64> {
+    let prefix = prefix.to_ascii_lowercase();
+    let mut indices = BTreeSet::new();
+    for key in odf.keys() {
+        let key = key.to_ascii_lowercase();
+        let Some(rest) = key.strip_prefix(&prefix) else { continue };
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        for end in 1..=digits {
+            if let Ok(index) = rest[..end].parse::<u64>()
+                && rest[..end] == index.to_string()
+            {
+                indices.insert(index);
+            }
+        }
+    }
+    indices
+}
+
 /// Values of the numbered keys `{prefix}{n}` (case-insensitive), in number
 /// order. Raw text; quotes retained.
 pub(crate) fn numbered<'a>(odf: &'a Odf, prefix: &str) -> Vec<(u32, &'a str)> {
     let prefix = prefix.to_ascii_lowercase();
+    if odf.lookup_policy() == sta_odf::LookupPolicy::PrefixFirst {
+        return prefix_numbered_indices(odf, &prefix).into_iter().filter_map(|index| {
+            Some((u32::try_from(index).ok()?, odf.raw(&format!("{prefix}{index}"))?))
+        }).collect();
+    }
     let mut out: Vec<(u32, &str)> = odf
         .keys()
         .filter_map(|k| {
@@ -260,6 +286,12 @@ fn station_flag(file: &str, odf: &Odf, profile: Profile, warnings: &mut Vec<Warn
     false
 }
 
+/// One profile hand-over for all content-side ODF consumers (ADR 0004 D4/D5).
+pub(crate) fn resolve_for_profile(name: &str, profile: Profile, loader: &mut Loader<'_>) -> std::result::Result<Odf, sta_odf::OdfError> {
+    let policy = if profile == Profile::Sta1Classic { sta_odf::LookupPolicy::PrefixFirst } else { sta_odf::LookupPolicy::Exact };
+    sta_odf::resolve_layered_with_policy(name, policy, loader)
+}
+
 /// Build the database from ODFs found by `stems`. [`load`] is this over an
 /// install; tests give an in-memory loader.
 pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], loader: &mut Loader<'_>) -> Result<(ContentDb, Vec<Warning>)> {
@@ -281,7 +313,7 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
         if let Some(o) = resolved.get(&key) {
             return o.clone();
         }
-        let odf = match sta_odf::resolve_layered(&key, loader) {
+        let odf = match resolve_for_profile(&key, profile, loader) {
             Ok(o) => Some(Arc::new(o)),
             Err(e) => {
                 warn.push(Warning::new(format!("{key}.odf"), e.to_string()));
@@ -307,6 +339,7 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
     let mut builder = ContentDb::builder().profile(profile).features(resolve_features(profile, &[mod_overrides]));
     let mut weapon_arcs = BTreeMap::new();
     let mut weapon_names = BTreeSet::new();
+    let mut lookups = crate::weapon::LookupPool::default();
     for (s, odf) in &weapons {
         let ord = odf.str("ordName").map(str::trim).filter(|o| !o.is_empty()).and_then(|o| {
             let found = get(o, &mut warnings, loader);
@@ -317,6 +350,7 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
         });
         let (mut def, arc) = crate::weapon::weapon_def(s, odf, ord.as_deref(), &mut warnings);
         def.features = Some(features_of(&format!("{s}.odf"), odf, &Overrides::default(), &mut warnings));
+        lookups.share(&mut def.base);
         weapon_arcs.insert(stem(s), arc);
         weapon_names.insert(stem(s));
         builder = builder.weapon(def);
@@ -345,7 +379,7 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
         // A node's resource: the slot its resource ODF fills (`amtlatinum` on Fleet Ops 4.0's
         // tritanium moon, `amtmetal` on Roots'), else the game's word for it in the text.
         if let Some(text) = odf.str("resource").map(str::trim).filter(|t| !t.is_empty()) {
-            let node = sta_odf::resolve_layered(&stem(text), loader).ok();
+            let node = resolve_for_profile(&stem(text), profile, loader).ok();
             let slot = node.as_ref().and_then(crate::resources::node_slot).or_else(|| model.slot_of_text(text));
             def.resource = Some(slot.unwrap_or(0) as u8);
             // SIM-62: the node's `canHaveOrbitalStation` (read from data: A2 `ResourcePlanet.odf` 1; moons, rocks 0).
@@ -404,7 +438,7 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
     // CON-52: the play-physics block (Armada I only). A mod or fixture without the file
     // is not an error: the model stays off, quietly. A file that is there and broken warns.
     if let Some(file) = profile.play_physics_file().filter(|_| !units.is_empty()) {
-        let play = match sta_odf::resolve_layered(file, loader) {
+        let play = match resolve_for_profile(file, profile, loader) {
             Ok(odf) => crate::a1_physics::play_dynamics(&odf, &format!("{file}.odf"), &mut warnings),
             Err(e) => {
                 if loader(&format!("{file}.odf"), 0).is_some() || loader(file, 0).is_some() {

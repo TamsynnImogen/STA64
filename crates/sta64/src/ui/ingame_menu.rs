@@ -71,6 +71,11 @@ pub struct OpenInGameMenu;
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct NetworkedMatch;
 
+/// The player paused the match with the pause key (UI-48): single player only. The
+/// pause box shows while it is set and the menu is closed.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PlayerPause(pub bool);
+
 /// The page of the menu that is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MenuPage {
@@ -245,6 +250,7 @@ fn panel(p: &mut Box_, theme: &Theme, slot: MenuSlot, b: Vec2) {
 struct Parts<'a> {
     theme: &'a Theme,
     settings: &'a Settings,
+    controls: &'a stock::controls::ControlsDraft,
     graphics: Option<&'a stock::GraphicsInfo>,
     strings: Option<&'a Strings>,
     tab: usize,
@@ -276,7 +282,7 @@ fn spawn_menu(commands: &mut Commands, page: MenuPage, parts: &Parts, b: Vec2) {
                 MenuPage::Options => {
                     panel(p, t, MenuSlot::OptionsPanel, b);
                     title(p, t, MenuSlot::OptionsTitle, b, &caption(parts.strings, "options", "Options"));
-                    stock::options_body(p, t, parts.settings, parts.tab, parts.graphics, rect(MenuSlot::OptionsBody, b), MenuPlaced(MenuSlot::OptionsBody));
+                    stock::options_body(p, t, parts.settings, parts.controls, parts.tab, parts.graphics, rect(MenuSlot::OptionsBody, b), MenuPlaced(MenuSlot::OptionsBody));
                     button(p, t, MenuSlot::OptionsBack, b, &tr("Back"), MenuAct::Back);
                 }
                 MenuPage::ConfirmExit | MenuPage::ConfirmQuit => {
@@ -308,10 +314,12 @@ fn rebuild(
     settings: Res<Settings>,
     graphics: Option<Res<stock::GraphicsInfo>>,
     tab: Res<OptionsTab>,
+    controls: Res<stock::controls::ControlsDraft>,
+    controls_render: Res<stock::controls::ControlsRender>,
     strings: Option<Res<Strings>>,
     mission: Option<Res<crate::game::mission_host::MissionRun>>,
 ) {
-    if !(menu.is_changed() || graphics.as_ref().is_some_and(|g| g.is_changed()) || theme.is_changed() || stock_box.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed())) {
+    if !(menu.is_changed() || graphics.as_ref().is_some_and(|g| g.is_changed()) || theme.is_changed() || stock_box.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed()) || controls_render.is_changed()) {
         return;
     }
     for e in &roots {
@@ -320,7 +328,7 @@ fn rebuild(
     if !menu.open {
         return;
     }
-    let parts = Parts { theme: &theme, settings: &settings, graphics: graphics.as_deref(), strings: strings.as_deref(), tab: tab.0, mission: mission.is_some() };
+    let parts = Parts { theme: &theme, settings: &settings, controls: &controls, graphics: graphics.as_deref(), strings: strings.as_deref(), tab: tab.0, mission: mission.is_some() };
     spawn_menu(&mut commands, menu.page, &parts, stock_box.0);
 }
 
@@ -400,18 +408,42 @@ fn buttons(
 }
 
 /// Single player stops the sim while the menu is open; a networked match never does.
-fn pause(menu: Res<InGameMenu>, net: Option<Res<NetworkedMatch>>, game: Option<Res<crate::game::net_match::NetGame>>, clock: Option<ResMut<AnimClock>>) {
+/// The pause key toggles [`PlayerPause`] while the menu is closed, in a match that is not
+/// networked (a lockstep match never waits for one player).
+#[allow(clippy::too_many_arguments)]
+fn pause_key(
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    bindings: Option<Res<KeyBindings>>,
+    menu: Res<InGameMenu>,
+    net: Option<Res<NetworkedMatch>>,
+    game: Option<Res<crate::game::net_match::NetGame>>,
+    mut paused: ResMut<PlayerPause>,
+) {
+    if menu.open || net.is_some() || game.is_some() {
+        return;
+    }
+    let pressed = keys.as_deref().is_some_and(|k| match bindings.as_deref() {
+        Some(b) => b.just_pressed(Action::PauseGame, k),
+        None => k.just_pressed(KeyCode::Pause),
+    });
+    if pressed {
+        paused.0 = !paused.0;
+    }
+}
+
+fn pause(menu: Res<InGameMenu>, player: Res<PlayerPause>, net: Option<Res<NetworkedMatch>>, game: Option<Res<crate::game::net_match::NetGame>>, clock: Option<ResMut<AnimClock>>) {
     let Some(mut clock) = clock else { return };
     // A lockstep match (INT-M5's `NetGame`, or whoever inserts the marker) never waits for a menu.
-    let want = menu.open && net.is_none() && game.is_none();
+    let want = (menu.open || player.0) && net.is_none() && game.is_none();
     if clock.paused() != want {
         clock.set_paused(want);
     }
 }
 
 /// Back out of the match: the menu is closed and the clock runs again, for the next match.
-fn reset(mut menu: ResMut<InGameMenu>, clock: Option<ResMut<AnimClock>>, mut tab: ResMut<OptionsTab>) {
+fn reset(mut menu: ResMut<InGameMenu>, clock: Option<ResMut<AnimClock>>, mut tab: ResMut<OptionsTab>, mut player: ResMut<PlayerPause>) {
     *menu = InGameMenu::default();
+    player.0 = false;
     tab.0 = 0;
     if let Some(mut c) = clock {
         c.set_paused(false);
@@ -448,6 +480,7 @@ impl Plugin for InGameMenuPlugin {
         }
         let ingame = in_state(AppState::InGame);
         app.init_resource::<InGameMenu>()
+            .init_resource::<PlayerPause>()
             .init_resource::<Settings>()
             .init_resource::<crate::ui::profile::UiPreference>()
             .init_resource::<OptionsTab>()
@@ -457,12 +490,13 @@ impl Plugin for InGameMenuPlugin {
             .add_message::<LeaveMatch>()
             .add_systems(OnExit(AppState::InGame), reset)
             // The menu's own logic runs before the sim link: a menu opened this frame holds the next tick.
-            .add_systems(Update, (keys_and_requests, buttons, pause).chain().run_if(ingame.clone()).in_set(GameSet::Input))
+            .add_systems(Update, (keys_and_requests, pause_key, buttons, super::pause_box::unpause, pause).chain().run_if(ingame.clone()).in_set(GameSet::Input))
+            .add_systems(Update, super::pause_box::draw.run_if(resource_exists::<Theme>).in_set(GameSet::Ui))
             .add_systems(
                 Update,
                 (
                     // The options panel's widgets, as the front end's screens run them (`on_settings` runs in a match too).
-                    (stock::track_box, stock::track_tab, rebuild).chain().run_if(ingame),
+                    (stock::track_box, stock::track_tab, rebuild.after(stock::controls::update)).chain().run_if(ingame),
                 )
                     .in_set(GameSet::Ui),
             )

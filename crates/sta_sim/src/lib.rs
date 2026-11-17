@@ -216,6 +216,8 @@ pub struct Sim {
     transports: combat::boarding::Transports,
     /// Station recovery activation and damage holds (SIM-70), saved and hashed.
     recrew: recrew::Recrews,
+    /// Yard repair queues (SIM-40); in the digest and the snapshot once any exists.
+    repairs: repair::Repairs,
     /// Mission-wide switches (LUA-41), saved; hashed only when not the default.
     mission_switches: mission_switches::MissionSwitches,
 }
@@ -259,6 +261,7 @@ impl Sim {
             colonies: Default::default(),
             transports: Default::default(),
             recrew: Default::default(),
+            repairs: Default::default(),
             mission_switches: Default::default(),
         }
     }
@@ -298,6 +301,7 @@ impl Sim {
         if ok && let command::CommandKind::Order(o) = &c.kind {
             self.colonies_after_order(c.player, o);
             self.transports_after_order(c.player, o);
+            self.repairs_after_order(c.player, o);
         }
         ok
     }
@@ -399,7 +403,7 @@ impl Sim {
                     return false;
                 }
                 self.clear_scripted(c.player, &[*builder]);
-                let ok = self.production.order_build(&db, &mut self.units, &mut self.economy, c.player, *builder, *what, *at, self.bounds.as_ref());
+                let ok = self.production.order_build(&db, &mut self.units, &mut self.economy, c.player, *builder, *what, *at, self.bounds.as_ref(), &self.regions);
                 if ok && self.production.is_deploying(*builder) {
                     // A craft sent to build drops its attack (SIM-36: the
                     // approach would otherwise steer it off its site).
@@ -454,8 +458,7 @@ impl Sim {
                 let Some(db) = self.content.as_deref() else { return false };
                 self.production.order_rally(db, &self.units, c.player, builders, *at)
             }
-            // Yard repair remains unavailable until its runtime is integrated.
-            Order::Repair { .. } => false,
+            Order::Repair { units, yard } => self.apply_repair(c.player, units, *yard),
             Order::Recrew { units, on } => self.order_recrew(c.player, units, *on),
         }
     }
@@ -502,6 +505,8 @@ impl Sim {
             let mut held = if db.features().builder_hold_fire { self.production.builders_at_work() } else { Vec::new() };
             held.extend(self.scripted.holding_fire());
             self.weapons.hold_fire(held);
+            let crew_delay = self.crew_weapon_delays(&db);
+            self.weapons.set_crew_delay(crew_delay);
             self.weapons.step_with_perception(self.tick, &self.units, &db, relations::Diplomacy::new(&self.players, &self.relations), &self.perception, &mut self.specials, &mut self.rng, &self.switches, &self.alerts, &mut self.events);
             self.record_engagement(from);
             self.record_enemy_hits(from);
@@ -521,6 +526,7 @@ impl Sim {
             // Pulses and arrivals after the hits, before the latch upkeep (SIM-46).
             self.step_transports();
             self.step_recrew();
+            self.step_repairs();
             let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
             combat::casualty::step(&mut self.units, &db, &mut casualties);
             for (id, by) in killed {
@@ -563,6 +569,11 @@ impl Sim {
     /// Production presentation at the current tick, derived from saved state.
     pub fn production_view(&self) -> Vec<production::view::ProductionView> {
         self.content.as_deref().map_or_else(Vec::new, |db| self.production.view(db, &self.units))
+    }
+
+    /// Read-only amounts left in the resource nodes (UI-48).
+    pub fn node_view(&self) -> Vec<economy::view::NodeView> {
+        self.content.as_deref().map_or_else(Vec::new, |db| self.economy.node_view(db, &self.units))
     }
 
     /// Read-only cargo and hold capacity for live mining craft.
@@ -781,6 +792,10 @@ impl WorldSource for Sim {
 
     fn cargo_view(&self) -> Vec<economy::view::CargoView> {
         Sim::cargo_view(self)
+    }
+
+    fn node_view(&self) -> Vec<economy::view::NodeView> {
+        Sim::node_view(self)
     }
 }
 

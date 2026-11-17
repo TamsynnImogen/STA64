@@ -6,7 +6,8 @@
 //! - `#include "other.odf"` pulls in another ODF. Includes are resolved by file
 //!   name across all known ODF folders, so the folder is organisational only.
 //! - Later assignments override earlier ones, so an ODF's own keys override
-//!   anything it includes.
+//!   anything it includes. [`LookupPolicy::PrefixFirst`] explicitly selects
+//!   the Armada I first-prefix rule instead; ordinary resolvers stay exact.
 //! - Quoted list rows may continue an assignment on following lines.
 //! - Fleet Operations layers its files (a mod's over its parent's over the
 //!   game's). An include of the root file's own name is its **next version
@@ -20,7 +21,7 @@
 //! Values are kept as raw text with typed accessors; interpretation belongs to
 //! the systems that consume them.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 pub mod cst;
 pub use cst::{Cst, GroupTable, LineKind};
@@ -41,6 +42,11 @@ pub struct Entry {
     pub key: String,
     pub value: String,
     pub line: usize,
+    /// Table rows that follow the assignment: lines of the form
+    /// `"name" value...` (a per-target row of `hitChance`, `damageBase`, ...),
+    /// as written, comments stripped. Rows of quoted strings only are part
+    /// of `value` instead (a name list).
+    pub rows: Vec<String>,
 }
 
 /// One parsed file, before include resolution.
@@ -82,6 +88,12 @@ pub fn parse(text: &str) -> RawOdf {
             }
             continue;
         }
+        if is_table_row(line)
+            && let Some(entry) = continuation.and_then(|index| out.entries.get_mut(index))
+        {
+            entry.rows.push(line.to_owned());
+            continue;
+        }
         continuation = None;
         if let Some((k, v)) = line.split_once('=') {
             let key = k.trim();
@@ -90,6 +102,7 @@ pub fn parse(text: &str) -> RawOdf {
                     key: key.to_owned(),
                     value: v.trim().to_owned(),
                     line: i + 1,
+                    rows: Vec::new(),
                 });
                 continuation = Some(out.entries.len() - 1);
             }
@@ -111,6 +124,15 @@ fn is_quoted_continuation(line: &str) -> bool {
         }
     }
     false
+}
+
+/// A table row: one quoted name, then at least one unquoted token, and no
+/// `=` outside the quotes (`"fbattle.odf" 0.5`).
+fn is_table_row(line: &str) -> bool {
+    let Some(quoted) = line.trim().strip_prefix('"') else { return false };
+    let Some(end) = quoted.find('"') else { return false };
+    let rest = quoted[end + 1..].trim();
+    !rest.is_empty() && !rest.starts_with('"') && !rest.contains('=')
 }
 
 fn strip_comment(line: &str) -> &str {
@@ -151,11 +173,44 @@ pub struct KeySource {
     pub line: usize,
 }
 
+/// Assignment selection; parsing and include validation are unchanged.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LookupPolicy {
+    /// Whole-key matching, with later assignments replacing earlier ones.
+    #[default]
+    Exact,
+    /// First case-insensitive prefix match, own assignments before includes.
+    /// Armada I rule: read from the executable, static; lexer parity unmeasured.
+    PrefixFirst,
+}
+
+#[derive(Debug, Clone)]
+struct Candidate {
+    key: String,
+    value: String,
+    rows: String,
+    source: KeySource,
+}
+
+/// A nonempty lookup whose value changes under prefix-first selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LookupChange {
+    pub key: String,
+    pub exact: Option<String>,
+    pub selected: String,
+    pub source: KeySource,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Odf {
     pub name: String,
+    policy: LookupPolicy,
+    candidates: Vec<Candidate>,
     values: HashMap<String, String>,
     sources: HashMap<String, KeySource>,
+    /// Table rows of the winning assignment of each key that has any, one
+    /// row per line (a single allocation: Fleet Operations has millions of rows).
+    rows: HashMap<String, String>,
     /// Keys in first-definition order, original case.
     order: Vec<String>,
     /// Includes of the root's own name that had no lower version left, so
@@ -164,22 +219,89 @@ pub struct Odf {
 }
 
 impl Odf {
-    fn set(&mut self, key: &str, value: &str, source: KeySource) {
+    /// Assignment-selection policy used by this resolved file.
+    pub fn lookup_policy(&self) -> LookupPolicy {
+        self.policy
+    }
+
+    fn candidate(&self, key: &str) -> Option<&Candidate> {
+        let key = key.to_ascii_lowercase();
+        self.candidates.iter().find(|entry| entry.key.starts_with(&key))
+    }
+
+    /// Exhaustive value-change audit for nonempty parsed-key queries: every
+    /// possible successful prefix is checked, including names not authored as
+    /// whole keys. Sorted independently of hash-map iteration. Unchanged values
+    /// with different provenance are omitted.
+    pub fn lookup_changes(&self) -> Vec<LookupChange> {
+        if self.policy == LookupPolicy::Exact {
+            return Vec::new();
+        }
+        let mut queries = BTreeSet::new();
+        for entry in &self.candidates {
+            for end in entry.key.char_indices().map(|(i, _)| i).skip(1).chain(std::iter::once(entry.key.len())) {
+                queries.insert(&entry.key[..end]);
+            }
+        }
+        queries.into_iter().filter_map(|key| {
+            let selected = self.candidate(key)?;
+            let exact = self.values.get(key);
+            (exact.map(String::as_str) != Some(selected.value.as_str())).then(|| LookupChange {
+                key: key.to_owned(), exact: exact.cloned(), selected: selected.value.clone(), source: selected.source.clone(),
+            })
+        }).collect()
+    }
+
+    fn set(&mut self, key: &str, value: &str, rows: &[String], source: KeySource) {
         let k = key.to_ascii_lowercase();
         self.sources.insert(k.clone(), source);
+        // The rows belong to the assignment: a later assignment replaces them too.
+        if rows.is_empty() {
+            self.rows.remove(&k);
+        } else {
+            self.rows.insert(k.clone(), rows.join("\n"));
+        }
         if self.values.insert(k, value.to_owned()).is_none() {
             self.order.push(key.to_owned());
         }
     }
 
+    /// The table rows after the winning assignment of `key` (`"name" value...`
+    /// lines, as written); none when it has none.
+    pub fn rows(&self, key: &str) -> impl Iterator<Item = &str> {
+        let rows = if self.policy == LookupPolicy::PrefixFirst {
+            self.candidate(key).map(|entry| entry.rows.as_str())
+        } else {
+            self.rows.get(&key.to_ascii_lowercase()).map(String::as_str)
+        };
+        rows.unwrap_or("").lines()
+    }
+
+    /// Does the winning assignment of `key` have table rows?
+    pub fn has_rows(&self, key: &str) -> bool {
+        if self.policy == LookupPolicy::PrefixFirst {
+            self.candidate(key).is_some_and(|entry| !entry.rows.is_empty())
+        } else {
+            self.rows.contains_key(&key.to_ascii_lowercase())
+        }
+    }
+
     /// The file, layer copy and line whose assignment of `key` won.
     pub fn source(&self, key: &str) -> Option<&KeySource> {
-        self.sources.get(&key.to_ascii_lowercase())
+        if self.policy == LookupPolicy::PrefixFirst {
+            self.candidate(key).map(|entry| &entry.source)
+        } else {
+            self.sources.get(&key.to_ascii_lowercase())
+        }
     }
 
     /// Raw value text (quotes retained).
     pub fn raw(&self, key: &str) -> Option<&str> {
-        self.values.get(&key.to_ascii_lowercase()).map(String::as_str)
+        if self.policy == LookupPolicy::PrefixFirst {
+            self.candidate(key).map(|entry| entry.value.as_str())
+        } else {
+            self.values.get(&key.to_ascii_lowercase()).map(String::as_str)
+        }
     }
 
     /// String value with surrounding quotes removed.
@@ -231,8 +353,15 @@ pub fn resolve(name: &str, load: &mut dyn FnMut(&str) -> Option<String>) -> Resu
 /// `name`'s `version`-th copy counting down from the highest-priority layer
 /// (0 = the copy normally seen, 1 = the one it hides, ...), or `None`.
 pub fn resolve_layered(name: &str, load: &mut dyn FnMut(&str, usize) -> Option<String>) -> Result<Odf, OdfError> {
+    resolve_layered_with_policy(name, LookupPolicy::Exact, load)
+}
+
+/// Layered resolution with an explicit assignment-selection policy. The
+/// ordinary resolver remains exact for callers without profile information.
+pub fn resolve_layered_with_policy(name: &str, policy: LookupPolicy, load: &mut dyn FnMut(&str, usize) -> Option<String>) -> Result<Odf, OdfError> {
     let mut odf = Odf {
         name: name.to_owned(),
+        policy,
         ..Default::default()
     };
     let mut walk = Walk {
@@ -266,6 +395,14 @@ fn apply(
     let raw = parse(&text);
     let file_arc: std::sync::Arc<str> = file.as_str().into();
     w.stack.push((key, version));
+    // Prefix selection scans each file before its includes. Keep all candidates,
+    // including shadowed duplicates, while retaining the exact baseline maps.
+    if odf.policy == LookupPolicy::PrefixFirst {
+        odf.candidates.extend(raw.entries.iter().map(|entry| Candidate {
+            key: entry.key.to_ascii_lowercase(), value: entry.value.clone(), rows: entry.rows.join("\n"),
+            source: KeySource { file: std::sync::Arc::clone(&file_arc), version, line: entry.line },
+        }));
+    }
     for inc in &raw.includes {
         let inc_key = with_odf_ext(inc).to_ascii_lowercase();
         if inc_key == w.root {
@@ -287,7 +424,7 @@ fn apply(
     }
     w.stack.pop();
     for e in &raw.entries {
-        odf.set(&e.key, &e.value, KeySource { file: std::sync::Arc::clone(&file_arc), version, line: e.line });
+        odf.set(&e.key, &e.value, &e.rows, KeySource { file: std::sync::Arc::clone(&file_arc), version, line: e.line });
     }
     Ok(())
 }
@@ -314,6 +451,33 @@ mod tests {
         assert_eq!(raw.entries.len(), 3);
         assert_eq!(raw.entries[1].value, "\"Uses // inside\"");
         assert_eq!(raw.entries[2].line, 6);
+    }
+
+    #[test]
+    fn table_rows_stay_with_their_assignment() {
+        let text = "hitChance = 0.9f // base\n\"fbattle.odf\" 0.5 // slow\n\n\"fscout.odf\"\t0.25\nrange = 600\n\"stray.odf\" 1\n";
+        let raw = parse(text);
+        assert_eq!(raw.entries.len(), 2);
+        assert_eq!(raw.entries[0].value, "0.9f");
+        assert_eq!(raw.entries[0].rows, ["\"fbattle.odf\" 0.5", "\"fscout.odf\"\t0.25"]);
+        assert_eq!(raw.entries[1].rows, ["\"stray.odf\" 1"]);
+        let odf = resolve("w", &mut |_| Some(text.to_owned())).unwrap();
+        assert_eq!(odf.f32("hitChance"), Some(0.9));
+        assert_eq!(odf.rows("HITCHANCE").collect::<Vec<_>>(), ["\"fbattle.odf\" 0.5", "\"fscout.odf\"\t0.25"]);
+        assert!(odf.has_rows("hitChance") && !odf.has_rows("range2") && odf.rows("absent").next().is_none());
+        // A row before any assignment, and a name list, are not table rows.
+        assert!(parse("\"a.odf\" 1\nx = 2\n").entries[0].rows.is_empty());
+        assert!(parse("names = \"A\"\n\"B\" \"C\"\n").entries[0].rows.is_empty());
+    }
+
+    #[test]
+    fn a_later_assignment_replaces_the_rows_too() {
+        let base = "damageBase = 10\n\"a.odf\" 2\n";
+        let odf = resolve("w", &mut |n| Some(if n.eq_ignore_ascii_case("base.odf") { base.to_owned() } else { "#include \"base.odf\"\ndamageBase = 20\n".to_owned() })).unwrap();
+        assert_eq!(odf.f32("damageBase"), Some(20.0));
+        assert!(!odf.has_rows("damageBase"));
+        let odf = resolve("w", &mut |n| Some(if n.eq_ignore_ascii_case("base.odf") { base.to_owned() } else { "#include \"base.odf\"\n".to_owned() })).unwrap();
+        assert_eq!(odf.rows("damageBase").collect::<Vec<_>>(), ["\"a.odf\" 2"]);
     }
 
     #[test]

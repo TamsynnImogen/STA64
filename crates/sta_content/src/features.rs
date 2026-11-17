@@ -125,11 +125,41 @@ pub struct Features {
     /// draws an idle craft in (stock A2, SIM-36; read from the executable).
     /// Off: hits only (Roots).
     pub assist_on_ally_fire: bool,
+    /// A shot at a moving craft can miss (SIM-73): `hitChance`, its row for
+    /// the target's ODF and the to-hit modifiers decide (`sta_sim::combat::hit_roll`;
+    /// read from the stock Armada II executable, static, not measured). Off
+    /// everywhere until measured: every shot hits.
+    pub weapon_hit_roll: bool,
+    /// A hit does the ordnance's `damageBase` row for the target's ODF when it
+    /// has one (SIM-73; read from the executable, static, not measured). Off
+    /// everywhere until measured: the plain `damageBase`.
+    pub weapon_target_damage: bool,
+    /// A weapon fires only at what its target masks allow (SIM-73):
+    /// `targetEnemyCraft`, `targetEnemyBuildings`, `targetAlliedCraft`,
+    /// `targetAlliedBuildings`, `targetEnemyPlanetsOnly`, `targetLocation` and
+    /// the shooter's `canAttackPlanets` / `canOnlyAttackPlanets`
+    /// (`sta_sim::combat::hit_roll::can_target`; read from the stock Armada II
+    /// executable, static, not measured). Off everywhere until measured.
+    pub weapon_target_masks: bool,
+    /// SIM-46 (Roots): a carrier whose `weldingAnimSpeed` is 0 may be ordered
+    /// to transport attack a target that still has shields; never by an AI
+    /// seat. On in Fo4 (the Roots engine); off elsewhere.
+    pub transport_attack_by_weld: bool,
+    /// A fully cloaked craft fires only its weapons with `cloakEnable` set
+    /// (SIM-73; read from the stock Armada II executable, static, not
+    /// measured). Off everywhere until measured: the cloak device's
+    /// `disableWeapons` alone decides.
+    pub weapon_cloak_fire: bool,
+    /// A weapon whose `crewAffectsWeaponDelay` is on (default) reloads
+    /// `weaponYellow` / `weaponRed` times slower at yellow / red crew status
+    /// (SIM-74; read from the stock Armada II executable, static, not
+    /// measured). Off everywhere until measured.
+    pub crew_weapon_delay: bool,
 }
 
 impl Features {
     /// Every switch, in declaration order, for the content hash.
-    pub(crate) fn bits(&self) -> [bool; 35] {
+    pub(crate) fn bits(&self) -> [bool; 41] {
         [
             self.weapon_damage_controls,
             self.point_defense_cycles,
@@ -166,6 +196,12 @@ impl Features {
             self.idle_assist,
             self.assist_high_autonomy_only,
             self.assist_on_ally_fire,
+            self.weapon_hit_roll,
+            self.weapon_target_damage,
+            self.weapon_target_masks,
+            self.transport_attack_by_weld,
+            self.weapon_cloak_fire,
+            self.crew_weapon_delay,
         ]
     }
 }
