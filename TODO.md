@@ -549,7 +549,7 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] SIM-61 (#764): the A2 opening hand-over tick depends on a client clock and the decoded clip length, outside the command stream; not replay-safe until then.
 - [ ] Missions (#764): `AllowWarp`, `CollisionPrevention` and `ObstacleAvoidance` as sim state (no-ops today); `SetGreenAlert` / `SetRedAlert` (alert not modelled; alert calls: see #777).
 - [ ] Campaign start (#765): measure what a literal 0 for crew or officer limit means in the original on a map whose team table has zeros (STA64 leaves such a seat without a crew pool or officer limit); the AI seats' first-tick orders are applied before the start grants (an AI first build order may be refused and retried a tick later).
-- [ ] SIM-66 (#770): `A1_GOLDEN_QUEUED` ends before the final-leg brake (extend the run or shorten the course); an install-gated test asserting the same general rules (cruise, lag, no pivot, braking, stop short) on shipped data; a goal inside the turning-circle diameter ends the order without moving (decide whether to turn onto it).
+- [ ] SIM-66 (#770): a goal inside the turning-circle diameter ends the order without moving (decide whether to turn onto it). (The queued golden now runs through the final-leg brake; `a1_model_install` checks the general rules on all 108 shipped Armada I craft.)
 - [ ] SIM-66 (#770): when the A1 model is switched on by content, rerun `tools/campaign_readiness.py --a1` before and after, the fed1 win and lose playthroughs and the opening camera timings; bench the Borg-physics ship lag and spin, a 90 degree order at cruise, and escort and attack approaches under the model.
 - [ ] Mission openings (#772): `OPENING_TICKS` fits a set-up one script update late; one more update late still shows the default camera first. A removal is listed only for a unit alive at the call, and the removal log is bounded if no host takes it.
 - [ ] HUD (#773): add an "Anchored" third HUD layout choice once UI-37's anchored form (ADR 0008 H5/H7 layout file) exists.
@@ -567,7 +567,6 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] WORKPLAN owed (#753): SIM-46 row *owns* cell must add the typed-key files in `sta_content` (`def`, `unit`, `race`, `rules`, `coverage`) for P0, and *done when* must add "typed keys expose the data values and move no content digest until the sim reads them".
 - [ ] WORKPLAN owed (#759): add the SIM-65 row (orbital mining stations); text in the PR body's requested-row section.
 - [ ] WORKPLAN owed (#776): add the LUA-38 row (team strength engine variables); text in the PR body's requested-row section.
-- [ ] WORKPLAN owed (#770): SIM-66 row still says "with the stock numbers" and "assert the measured targets": reword to the general rules, and fix its "unblocks" (SIM-67 is Armada II separation, not the stopgap removal; the SIM-68 reference is not a WORKPLAN row).
 
 ### Follow-ups from the 2026-11-15/16 merges
 
