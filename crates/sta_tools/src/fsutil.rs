@@ -61,6 +61,28 @@ pub fn write_atomically(target: &Path, bytes: &[u8]) -> io::Result<()> {
     result
 }
 
+/// Save `bytes` over an existing `target`, keeping the previous contents as
+/// `<target>.bak` (replacing an older backup), then writing atomically
+/// ([`write_atomically`]). Returns the backup's path. A missing target is an
+/// error: the tools edit files, they do not create them.
+pub fn save_with_backup(target: &Path, bytes: &[u8]) -> io::Result<std::path::PathBuf> {
+    let mut name = target
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "no file name"))?
+        .to_owned();
+    name.push(".bak");
+    let backup = target.with_file_name(name);
+    let old = fs::read(target)?;
+    // The backup is written atomically too, so a crash leaves the old one or the new one.
+    if backup.exists() {
+        write_atomically(&backup, &old)?;
+    } else {
+        fs::write(&backup, &old)?;
+    }
+    write_atomically(target, bytes)?;
+    Ok(backup)
+}
+
 /// `s` as a JSON string literal.
 pub fn json_str(s: &str) -> String {
     let mut o = String::from("\"");
@@ -106,6 +128,22 @@ mod tests {
         );
         #[cfg(unix)]
         assert_eq!(skipped.len(), 1);
+        fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn save_with_backup_round_trips_and_keeps_the_previous_bytes() {
+        let d = scratch("backup");
+        let f = d.join("x.odf");
+        assert!(save_with_backup(&f, b"new").is_err(), "a missing file is not created");
+        fs::write(&f, b"one\r\n").unwrap();
+        let bak = save_with_backup(&f, b"two\n").unwrap();
+        assert_eq!(bak, d.join("x.odf.bak"));
+        assert_eq!((fs::read(&f).unwrap(), fs::read(&bak).unwrap()), (b"two\n".to_vec(), b"one\r\n".to_vec()));
+        save_with_backup(&f, b"three").unwrap();
+        assert_eq!((fs::read(&f).unwrap(), fs::read(&bak).unwrap()), (b"three".to_vec(), b"two\n".to_vec()));
+        let left: Vec<_> = fs::read_dir(&d).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(left.len(), 2, "no temp file left: {left:?}");
         fs::remove_dir_all(&d).unwrap();
     }
 
