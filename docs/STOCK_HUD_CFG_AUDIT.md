@@ -20,7 +20,7 @@ Games: the stock data of Armada I (A1), Armada II (A2) and Fleet Operations (FO)
 | avatar box | 6 | 0 | 0 | 6 | 0 |
 | bridge | 32 | 0 | 0 | 5 | 27 |
 | build box | 6 | 0 | 0 | 4 | 2 |
-| button panel | 18 | 0 | 1 | 5 | 12 |
+| button panel | 18 | 12 | 1 | 5 | 0 |
 | cinematic | 19 | 3 | 0 | 7 | 9 |
 | comm panel | 183 | 0 | 0 | 28 | 155 |
 | command palette | 12 | 6 | 0 | 0 | 6 |
@@ -32,22 +32,22 @@ Games: the stock data of Armada I (A1), Armada II (A2) and Fleet Operations (FO)
 | info panel, single selection | 62 | 35 | 0 | 5 | 22 |
 | loading box | 9 | 0 | 0 | 7 | 2 |
 | minimap | 12 | 6 | 0 | 4 | 2 |
-| objectives | 24 | 0 | 0 | 8 | 16 |
-| other | 21 | 6 | 2 | 1 | 12 |
+| objectives | 24 | 12 | 0 | 8 | 4 |
+| other | 21 | 8 | 2 | 1 | 10 |
 | pause box | 17 | 0 | 0 | 8 | 9 |
 | resource bar | 44 | 16 | 0 | 28 | 0 |
 | screen | 2 | 0 | 2 | 0 | 0 |
 | speed rail | 10 | 0 | 0 | 6 | 4 |
 | tooltip and cursor | 7 | 0 | 0 | 0 | 7 |
-| **all** | **581** | **99** | **5** | **158** | **319** |
+| **all** | **581** | **125** | **5** | **158** | **293** |
 
 By game (a key set by several games counts in each):
 
 | game | keys | drawn | typed | built | missing |
 |---|---:|---:|---:|---:|---:|
-| A1 | 351 | 42 | 1 | 109 | 199 |
-| A2 | 443 | 74 | 4 | 91 | 274 |
-| FO | 474 | 86 | 5 | 103 | 280 |
+| A1 | 351 | 48 | 1 | 109 | 193 |
+| A2 | 443 | 100 | 4 | 91 | 248 |
+| FO | 474 | 112 | 5 | 103 | 254 |
 
 ## avatar box
 
@@ -118,18 +118,18 @@ By game (a key set by several games counts in each):
 | `buttonBackgroundPanelSize` | A2 FO | built |
 | `buttonDefaultCursor` | A2 FO | built |
 | `buttonPanelArea` | A2 FO | typed |
-| `commButton` | A2 FO | missing |
-| `commButtonArea` | A2 FO | missing |
-| `helpButton` | A2 FO | missing |
-| `helpButtonArea` | A2 FO | missing |
-| `idleButton` | A2 FO | missing |
-| `idleButtonArea` | A2 FO | missing |
-| `menuButtonArea` | A2 FO | missing |
-| `moreButtonArea` | A2 FO | missing |
-| `objectivesButton` | A2 FO | missing |
-| `objectivesButtonArea` | A2 FO | missing |
-| `paletteButton` | A2 FO | missing |
-| `paletteButtonArea` | A2 FO | missing |
+| `commButton` | A2 FO | drawn |
+| `commButtonArea` | A2 FO | drawn |
+| `helpButton` | A2 FO | drawn |
+| `helpButtonArea` | A2 FO | drawn |
+| `idleButton` | A2 FO | drawn |
+| `idleButtonArea` | A2 FO | drawn |
+| `menuButtonArea` | A2 FO | drawn |
+| `moreButtonArea` | A2 FO | drawn |
+| `objectivesButton` | A2 FO | drawn |
+| `objectivesButtonArea` | A2 FO | drawn |
+| `paletteButton` | A2 FO | drawn |
+| `paletteButtonArea` | A2 FO | drawn |
 
 ## cinematic
 
@@ -591,23 +591,23 @@ By game (a key set by several games counts in each):
 | `objectivesBlackArea` | A1 | built |
 | `objectivesDefaultCursor` | A1 A2 FO | built |
 | `objectivesHeaderArea` | A2 FO | missing |
-| `objectivesHeaderColor` | A2 FO | missing |
-| `objectivesHeaderInformationArea` | A2 FO | missing |
+| `objectivesHeaderColor` | A2 FO | drawn |
+| `objectivesHeaderInformationArea` | A2 FO | drawn |
 | `objectivesOkayBorderImage` | A2 FO | missing |
-| `objectivesOkayButtonArea` | A1 A2 FO | missing |
-| `objectivesOkayButtonImage` | A1 A2 FO | missing |
-| `objectivesOkayButtonText` | A1 A2 FO | missing |
-| `objectivesOkayButtonTooltip` | A1 A2 FO | missing |
+| `objectivesOkayButtonArea` | A1 A2 FO | drawn |
+| `objectivesOkayButtonImage` | A1 A2 FO | drawn |
+| `objectivesOkayButtonText` | A1 A2 FO | drawn |
+| `objectivesOkayButtonTooltip` | A1 A2 FO | drawn |
 | `objectivesPanelArea` | A1 A2 FO | built |
-| `objectivesSummaryColor` | A2 FO | missing |
+| `objectivesSummaryColor` | A2 FO | drawn |
 | `objectivesSummaryHeaderArea` | A2 FO | missing |
-| `objectivesSummaryInformationArea` | A2 FO | missing |
+| `objectivesSummaryInformationArea` | A2 FO | drawn |
 | `objectivesTextArea` | A1 A2 FO | built |
-| `objectivesTextColor` | A1 A2 FO | missing |
-| `objectivesTextInformationArea` | A1 A2 FO | missing |
+| `objectivesTextColor` | A1 A2 FO | drawn |
+| `objectivesTextInformationArea` | A1 A2 FO | drawn |
 | `objectivesTitleArea` | A2 FO | missing |
-| `objectivesTitleColor` | A2 FO | missing |
-| `objectivesTitleInformationArea` | A2 FO | missing |
+| `objectivesTitleColor` | A2 FO | drawn |
+| `objectivesTitleInformationArea` | A2 FO | drawn |
 
 ## other
 
@@ -630,8 +630,8 @@ By game (a key set by several games counts in each):
 | `selectSystem_#` | A1 A2 FO | typed |
 | `shields` | A2 FO | drawn |
 | `slowButtonArea` | A2 FO | missing |
-| `toggleButton` | A2 FO | missing |
-| `toggleButtonArea` | A2 FO | missing |
+| `toggleButton` | A2 FO | drawn |
+| `toggleButtonArea` | A2 FO | drawn |
 | `xTooltip` | A2 FO | missing |
 | `yTooltip` | A2 FO | missing |
 

@@ -133,6 +133,9 @@ impl Plugin for HudPlugin {
         if !app.is_plugin_added::<ThemePlugin>() {
             app.add_plugins(ThemePlugin);
         }
+        // The stock button panel (UI-48) writes these; their own plugins register them too.
+        app.add_message::<crate::input::select::CameraFocus>()
+            .add_message::<crate::ui::ingame_menu::OpenInGameMenu>();
         if !app.is_plugin_added::<super::sprite_font::SpriteFontPlugin>() {
             app.add_plugins(super::sprite_font::SpriteFontPlugin);
         }
@@ -174,7 +177,7 @@ impl Plugin for HudPlugin {
                     refresh,
                     (stock::refresh, stock::update_values, (status::sync, status_gpu::refresh, status_gpu::update_values).chain()).chain(),
                     stock::active,
-                    stock::navigate,
+                    (stock::navigate, stock::buttons::press).chain(),
                     panels::update_values.before(super::theme::WidgetPaint),
                     host,
                     pointer,

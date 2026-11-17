@@ -102,8 +102,16 @@ pub struct ControlGroups {
 /// Ask the camera to centre on this map-space point (a double-tapped group).
 /// The camera code reads it; selection does not move the camera.
 #[derive(Message, Debug, Clone, Copy)]
-#[allow(dead_code)] // read by the camera (not yet)
 pub struct CameraFocus(pub Vec3);
+
+/// The strategy camera centres on the last requested point (a double-tapped
+/// group, the HUD's idle button); its height, angle and distance stay.
+pub fn follow_focus(mut requests: MessageReader<CameraFocus>, mut cams: Query<&mut crate::viewer::Orbit>) {
+    let Some(CameraFocus(p)) = requests.read().last().copied() else { return };
+    for mut o in &mut cams {
+        o.focus = Vec3::new(p.x, o.focus.y, p.z);
+    }
+}
 
 /// The cursor, its ray and the camera's projection, this frame.
 #[derive(Clone, Copy, Debug)]
@@ -487,6 +495,17 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    #[test]
+    fn the_camera_centres_on_the_last_focus_request_and_keeps_its_height() {
+        let mut app = App::new();
+        app.add_message::<CameraFocus>().add_systems(Update, follow_focus);
+        let cam = app.world_mut().spawn(crate::viewer::Orbit { focus: Vec3::new(0.0, 5.0, 0.0), yaw: 0.0, pitch: 0.7, dist: 400.0, home: (Vec3::ZERO, 1.0) }).id();
+        app.world_mut().write_message(CameraFocus(Vec3::new(10.0, 99.0, 20.0)));
+        app.world_mut().write_message(CameraFocus(Vec3::new(-30.0, 99.0, 40.0)));
+        app.update();
+        assert_eq!(app.world().get::<crate::viewer::Orbit>(cam).unwrap().focus, Vec3::new(-30.0, 5.0, 40.0));
+    }
     use bevy::ecs::system::RunSystemOnce;
     use sta_content::ContentDb;
     use sta_sim::command::LocalRouter;
