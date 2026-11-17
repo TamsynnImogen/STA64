@@ -276,6 +276,55 @@ fn events_to_notices(
     }
 }
 
+/// Units whose owner changed since the last call, and which side of `me` they crossed:
+/// `(id, from, to)` for a unit `me` lost or gained. A unit seen for the first time is only
+/// remembered; units gone from the view are forgotten.
+pub fn owner_changes(known: &mut std::collections::BTreeMap<sta_sim::EntityId, PlayerId>, units: &[UnitView], me: PlayerId) -> Vec<(sta_sim::EntityId, PlayerId, PlayerId)> {
+    let mut out = Vec::new();
+    let mut next = std::collections::BTreeMap::new();
+    for u in units {
+        if let Some(&was) = known.get(&u.id)
+            && was != u.owner
+            && (was == me || u.owner == me)
+        {
+            out.push((u.id, was, u.owner));
+        }
+        next.insert(u.id, u.owner);
+    }
+    *known = next;
+    out
+}
+
+/// SIM-46: a unit that changes hands (a capture by boarding, a script's team swap) is
+/// reported when it was the player's or becomes the player's. The sim sends no event for it;
+/// the owners are compared between frames. During a cutscene the owners are followed silently.
+fn ownership_notices(
+    link: Option<Res<SimLink>>,
+    db: Option<Res<ContentRes>>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
+    mut known: Local<std::collections::BTreeMap<sta_sim::EntityId, PlayerId>>,
+    mut out: MessageWriter<Notice>,
+) {
+    let Some(link) = link else {
+        known.clear();
+        return;
+    };
+    let me = link.player();
+    let changes = owner_changes(&mut known, &link.curr().units, me);
+    if crate::ui::presentation::cutscene_running(cine) {
+        return;
+    }
+    for (id, from, _) in changes {
+        let Some(u) = link.curr().unit(id) else { continue };
+        let name = name_of(db.as_deref(), u);
+        out.write(if from == me {
+            Notice::new(Severity::Bad, trf("{0} lost to another player", &[&name]))
+        } else {
+            Notice::new(Severity::Good, trf("{0} captured", &[&name]))
+        });
+    }
+}
+
 fn collect(mut notices: MessageReader<Notice>, mut chats: MessageReader<ChatMsg>, mut active: ResMut<Notices>, mut log: ResMut<ChatLog>) {
     for n in notices.read() {
         active.push(n);
@@ -596,7 +645,7 @@ impl Plugin for NoticePlugin {
             .add_observer(on_over)
             .add_observer(on_out)
             .add_systems(Startup, spawn_roots)
-            .add_systems(Update, (events_to_notices.after(crate::ui::presentation::consume), collect, age, retheme, (draw_notices, draw_chat, draw_tip)).chain().in_set(GameSet::Ui).after(ProfileSync))
+            .add_systems(Update, (events_to_notices.after(crate::ui::presentation::consume), ownership_notices, collect, age, retheme, (draw_notices, draw_chat, draw_tip)).chain().in_set(GameSet::Ui).after(ProfileSync))
             .add_systems(PostUpdate, position_tip.after(bevy::ui::UiSystems::Layout).before(bevy::ui::UiSystems::PostLayout));
     }
 }
@@ -955,5 +1004,23 @@ mod tests {
         assert_eq!(notice_root.row_gap, Val::Px(new_theme.gap * 0.5));
         let lines = app.world_mut().query_filtered::<&SpriteText, With<NoticeLine>>().iter(app.world()).map(|t| (t.text.clone(), t.color)).collect::<Vec<_>>();
         assert_eq!(lines, vec![("Shields low".to_owned(), new_theme.warn)]);
+    }
+
+    #[test]
+    fn owner_changes_report_units_the_player_loses_or_gains() {
+        let db = sta_content::fake::db();
+        let unit = |id: u32, owner: u8| UnitView {
+            id: sta_sim::EntityId(id), def: db.key("fx_cruiser").unwrap(), owner: PlayerId(owner),
+            pos: sta_sim::Vec3::ZERO, heading: (sta_sim::Fixed::ZERO, sta_sim::Fixed::ONE), speed: sta_sim::Fixed::ZERO,
+            hull: [sta_sim::Fixed::ONE; 2], shields: [[sta_sim::Fixed::ZERO; 2]; 4], crew: None, energy: None, autonomy: None,
+            flags: sta_sim::view::UnitFlags::SELECTABLE, progress: None,
+        };
+        let me = PlayerId(1);
+        let mut known = std::collections::BTreeMap::new();
+        assert!(owner_changes(&mut known, &[unit(1, 1), unit(2, 2), unit(3, 3)], me).is_empty(), "first sight is only remembered");
+        let changes = owner_changes(&mut known, &[unit(1, 2), unit(2, 1), unit(3, 2)], me);
+        assert_eq!(changes, [(sta_sim::EntityId(1), PlayerId(1), PlayerId(2)), (sta_sim::EntityId(2), PlayerId(2), PlayerId(1))], "between two others: not reported");
+        assert!(owner_changes(&mut known, &[unit(1, 2)], me).is_empty());
+        assert!(owner_changes(&mut known, &[unit(2, 2)], me).is_empty(), "a unit gone and back is seen afresh");
     }
 }
