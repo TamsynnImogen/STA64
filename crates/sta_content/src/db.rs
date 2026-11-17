@@ -653,6 +653,10 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
                 .raw("infinite", &n.infinite.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string()))
                 .list("amounts", n.amounts.map(|a| a.map_or_else(|| "-".to_owned(), fixed_text)))));
     }
+    // SIM-65: `addToPlanner = 0` leaves the unit out of path planning (read by `sta_sim::nav`); only when set.
+    if let Some(on) = u.stats.add_to_planner {
+        c.raw("add_to_planner", if on { "1" } else { "0" });
+    }
     // SIM-73: the shooter's planet keys, only under the target-mask switch and only when set.
     if db.unit_features(u).weapon_target_masks && (u.stats.can_attack_planets.is_some() || u.stats.can_only_attack_planets.is_some()) {
         let flag = |b: Option<bool>| b.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string());
