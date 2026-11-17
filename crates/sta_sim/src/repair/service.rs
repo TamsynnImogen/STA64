@@ -15,6 +15,8 @@
 //!   `surface distance / speed + 5 x queue length` (`super::select_a2_yard`).
 //! - *Needs repair (S).* Hull below maximum, shields below maximum, a damaged
 //!   system, or at least 0.1 crew missing that the team pool can give.
+//! - *Roots* (Fo4 profile): both reaches are [`ROOTS_EXTRA_REACH`] larger (changelog, not
+//!   measured).
 //! - *Queue (S, ours).* First come, first served per yard. The head of the
 //!   queue flies to the yard and is serviced once its surface distance is at
 //!   most [`DOCK_REACH`] (ours; the original's dock point and entry distance
@@ -51,6 +53,15 @@ use crate::world::{Entity, EntityKind, Fnv};
 pub const DOCK_REACH: Fixed = Fixed::from_bits(30 << 32);
 /// Surface distance at which a waiting ship holds (ours).
 pub const WAIT_REACH: Fixed = Fixed::from_bits(150 << 32);
+/// Roots (the Fo4 profile) lets a ship enter the queue 50 further out than stock
+/// (WORKPLAN SIM-40, from the Roots changelog; not measured): both reaches grow by it.
+pub const ROOTS_EXTRA_REACH: Fixed = Fixed::from_bits(50 << 32);
+
+/// The dock and wait reaches of `db`'s profile.
+pub fn reaches(db: &ContentDb) -> (Fixed, Fixed) {
+    let extra = if db.profile() == sta_content::Profile::Fo4 { ROOTS_EXTRA_REACH } else { Fixed::ZERO };
+    (DOCK_REACH + extra, WAIT_REACH + extra)
+}
 
 /// 0.1 crew: less missing than this does not count (S).
 const CREW_SLACK: Fixed = Fixed::from_bits(429_496_730);
@@ -306,6 +317,7 @@ impl Sim {
             return;
         }
         let Some(db) = self.content.clone() else { return };
+        let (dock_reach, wait_reach) = reaches(&db);
         let queues = self.repairs.queues.clone();
         for (yard, ships) in queues {
             // Drop what is no longer valid: a dead yard, a ship gone, moved to another owner,
@@ -328,13 +340,13 @@ impl Sim {
                 let ypos = y.pos;
                 if head {
                     head = false;
-                    if gap <= DOCK_REACH {
+                    if gap <= dock_reach {
                         self.set_target(ship, None);
                         self.service(&db, ship);
                     } else {
                         self.set_target(ship, Some(ypos));
                     }
-                } else if gap <= WAIT_REACH {
+                } else if gap <= wait_reach {
                     self.set_target(ship, None);
                 } else {
                     self.set_target(ship, Some(ypos));
