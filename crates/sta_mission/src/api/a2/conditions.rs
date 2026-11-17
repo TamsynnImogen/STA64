@@ -236,7 +236,24 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         }
         Ok(n)
     })?)?;
-    table.set("CountCapitalShips", no_data_fn(lua, ctx, "CountCapitalShips", "no capital-ship classification in the content data")?)?;
+    // CountCapitalShips(team): the team's live craft whose `shipType` starts with A, B, C, D
+    // or F (read from the executable, static; stock A2 writes one capital letter). The
+    // engine also leaves out craft carrying a flag it uses to stop a craft firing; the
+    // derelict latch stands in for it (ours). `shipType` is kept lower case by the
+    // content loader, so a lower-case letter counts here where the engine's compare,
+    // case-sensitive, would not.
+    table.set("CountCapitalShips", query(lua, ctx, "CountCapitalShips", 1, |c, a| {
+        let owner = team(c, "CountCapitalShips", int("CountCapitalShips", a, 0)?)?;
+        c.note_team_query(Some(owner), "CountCapitalShips");
+        let capital = |u: &sta_sim::view::UnitView| {
+            c.def(u).is_some_and(|d| {
+                EntityKind::of_def(d) == EntityKind::Craft
+                    && d.stats.ship_type.as_deref().and_then(|t| t.chars().next()).is_some_and(|ch| matches!(ch.to_ascii_uppercase(), 'A' | 'B' | 'C' | 'D' | 'F'))
+            })
+        };
+        let n = c.view.units.iter().filter(|u| u.owner == owner && c.alive(u.id).is_some() && !derelict::latched(u) && capital(u)).count();
+        Ok(n as i64)
+    })?)?;
 
     // Unit state.
     table.set("GetCrew", {

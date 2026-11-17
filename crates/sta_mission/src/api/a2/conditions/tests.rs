@@ -187,7 +187,6 @@ fn calls_without_data_raise_and_are_counted_never_guessed() {
     let s = scene();
     let rt = runtime(&s);
     for (call, name) in [
-        ("A2.CountCapitalShips(0)", "CountCapitalShips"),
         ("A2.IsShipAliveAndOffMap(a)", "IsShipAliveAndOffMap"),
         ("A2.IsCargoShipReadyToLoad(a)", "IsCargoShipReadyToLoad"),
         ("A2.IsCargoShipFullAndReadyToSend(a)", "IsCargoShipFullAndReadyToSend"),
@@ -197,7 +196,7 @@ fn calls_without_data_raise_and_are_counted_never_guessed() {
         assert!(e.contains(&format!("A2.{name}")), "{e}");
     }
     let counted = rt.unsupported();
-    assert_eq!(counted.len(), 5, "{counted:?}");
+    assert_eq!(counted.len(), 4, "{counted:?}");
     assert!(counted.iter().all(|(_, n)| *n == 1));
 }
 
@@ -336,4 +335,30 @@ fn is_ship_alive_and_off_map_reads_the_map_bounds_the_host_passes() {
     assert!(eval::<bool>(&rt, "return A2.IsShipAliveAndOffMap(far)"), "a craft at x 5000, outside");
     assert!(!eval::<bool>(&rt, "return A2.IsShipAliveAndOffMap(999999)"), "no such object");
     assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());
+}
+
+#[test]
+fn count_capital_ships_counts_ship_types_a_to_d_and_f() {
+    let s = scene();
+    let rt = runtime(&s);
+    // The fake content has no `shipType`: no capital ships.
+    assert_eq!(eval::<i64>(&rt, "return A2.CountCapitalShips(0)"), 0);
+    let fake_db = fake::db();
+    for (ty, want) in [("A", 1), ("c", 1), ("F", 1), ("E", 0), ("X", 0)] {
+        let mut b = ContentDb::builder().profile(fake_db.profile()).features(fake_db.features().clone());
+        for u in s.db.units() {
+            let mut u = u.clone();
+            if u.odf == "fx_cruiser" || u.odf == "fx_station" {
+                u.stats.ship_type = Some(ty.to_ascii_lowercase());
+            }
+            b = b.unit(u);
+        }
+        for w in s.db.weapons() {
+            b = b.weapon(w.clone());
+        }
+        let cfg = MissionConfig { content: Some(Arc::new(b.build().unwrap())), view: Some(s.view.clone()), ..MissionConfig::default() };
+        let rt = MissionRuntime::from_source_with("cond.lua", "", 3, cfg);
+        // Player 0 has one cruiser and one station: only the craft counts.
+        assert_eq!(eval::<i64>(&rt, "return A2.CountCapitalShips(0)"), want, "shipType {ty}");
+    }
 }
