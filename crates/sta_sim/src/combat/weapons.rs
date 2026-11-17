@@ -192,6 +192,10 @@ pub struct Weapons {
     /// Units whose attack ended this step because the target is gone; the
     /// sim takes them right after the step (not state of its own).
     ended: Vec<EntityId>,
+    /// SIM-74 `crew_weapon_delay`: the reload multiplier of each unit at yellow or red
+    /// crew status, ascending id; absent means 1. Set by the sim before each step from
+    /// the unit's race and crew; not state of its own.
+    crew_delay: Vec<(EntityId, Fixed)>,
 }
 
 /// [`Weapons`] as the snapshot stores it (SIM-10).
@@ -226,7 +230,15 @@ impl Weapons {
             pd: Pd::from_rec(r.pd)?,
             held: Vec::new(),
             ended: Vec::new(),
+            crew_delay: Vec::new(),
         })
+    }
+
+    /// SIM-74: the reload multipliers for the next step, `(unit, factor)` (sorted here).
+    pub(crate) fn set_crew_delay(&mut self, mut rows: Vec<(EntityId, Fixed)>) {
+        rows.sort_by_key(|r| r.0);
+        rows.dedup_by_key(|r| r.0);
+        self.crew_delay = rows;
     }
 
     /// Order `unit` to attack `target` until it is gone.
@@ -469,7 +481,14 @@ impl Weapons {
                         .insert(u.id, vec![Mount { ready: 0 }; def.hardpoints.len()]);
                 }
                 if let Some(m) = self.mounts.get_mut(u.id) {
-                    m[i].ready = tick + shot_reload(db.weapon_features(w).weapon_shot_timing, w, rng);
+                    let mut reload = shot_reload(db.weapon_features(w).weapon_shot_timing, w, rng);
+                    if db.weapon_features(w).crew_weapon_delay
+                        && w.base.crew_affects_weapon_delay != Some(false)
+                        && let Ok(i) = self.crew_delay.binary_search_by_key(&u.id, |r| r.0)
+                    {
+                        reload = scaled(reload, self.crew_delay[i].1).max(1);
+                    }
+                    m[i].ready = tick + reload;
                 }
                 events.push(SimEvent::Fired {
                     shooter: u.id,
@@ -684,5 +703,44 @@ impl Weapons {
             }
         }
         best.map(|b| b.1)
+    }
+}
+
+/// SIM-74 `crew_weapon_delay` (read from the stock Armada II executable, static; not
+/// measured): a unit's reload multiplier from its crew status. At or below its race's
+/// `crewYellowStatus` (engine default 0.5) a reload takes `weaponYellow` (3) times as long,
+/// at or below `crewRedStatus` (0.25) `weaponRed` (9) times; above both, 1. The crew
+/// status is crew over maximum, capped at 1. A unit without a crew maximum is never slowed.
+pub(crate) fn crew_delay_factor(repair: sta_content::RaceRepair, crew: [Fixed; 2]) -> Fixed {
+    let [now, max] = crew;
+    if max <= Fixed::ZERO {
+        return Fixed::ONE;
+    }
+    let fraction = Fixed::from_bits(((i128::from(now.to_bits().max(0)) << 32) / i128::from(max.to_bits())).min(1 << 32) as i64);
+    let mut factor = Fixed::ONE;
+    if fraction <= repair.crew_yellow_status.unwrap_or(Fixed::from_bits(1 << 31)) {
+        factor = repair.weapon_yellow.unwrap_or(Fixed::from_int(3));
+    }
+    if fraction <= repair.crew_red_status.unwrap_or(Fixed::from_bits(1 << 30)) {
+        factor = repair.weapon_red.unwrap_or(Fixed::from_int(9));
+    }
+    factor
+}
+
+impl crate::Sim {
+    /// The units whose reloads [`crew_delay_factor`] slows, when any weapon has the switch.
+    pub(crate) fn crew_weapon_delays(&self, db: &ContentDb) -> Vec<(EntityId, Fixed)> {
+        if !db.features().crew_weapon_delay && !db.weapons().any(|w| db.weapon_features(w).crew_weapon_delay) {
+            return Vec::new();
+        }
+        self.units
+            .iter()
+            .filter_map(|u| {
+                let crew = u.crew?;
+                let race = self.unit_race(u.id).unwrap_or("");
+                let factor = crew_delay_factor(db.rules().race_repair_of(race).unwrap_or_default(), crew);
+                (factor != Fixed::ONE).then_some((u.id, factor))
+            })
+            .collect()
     }
 }

@@ -153,6 +153,10 @@ pub struct RaceRepair {
     pub red: Option<Fixed>,
     pub crew_yellow_status: Option<Fixed>,
     pub crew_red_status: Option<Fixed>,
+    /// `weaponYellow` / `weaponRed`: a weapon's reload multiplier at yellow / red
+    /// crew status (SIM-74, read by `sta_sim` under `crew_weapon_delay`).
+    pub weapon_yellow: Option<Fixed>,
+    pub weapon_red: Option<Fixed>,
 }
 
 impl RaceRepair {
@@ -394,6 +398,8 @@ impl Races {
                         red: repair_value("repairred"),
                         crew_yellow_status: repair_value("crewyellowstatus"),
                         crew_red_status: repair_value("crewredstatus"),
+                        weapon_yellow: repair_value("weaponyellow"),
+                        weapon_red: repair_value("weaponred"),
                     };
                     if !repair.is_empty() {
                         repair_names.push((name.clone(), s.clone()));

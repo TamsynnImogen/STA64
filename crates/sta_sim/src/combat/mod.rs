@@ -23,6 +23,8 @@ pub(crate) mod pd_tests;
 #[cfg(test)]
 mod hit_roll_tests;
 #[cfg(test)]
+mod crew_delay_tests;
+#[cfg(test)]
 mod weapons_tests;
 #[cfg(test)]
 pub(crate) mod engine_timing_tests;

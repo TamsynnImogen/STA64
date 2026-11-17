@@ -505,6 +505,8 @@ impl Sim {
             let mut held = if db.features().builder_hold_fire { self.production.builders_at_work() } else { Vec::new() };
             held.extend(self.scripted.holding_fire());
             self.weapons.hold_fire(held);
+            let crew_delay = self.crew_weapon_delays(&db);
+            self.weapons.set_crew_delay(crew_delay);
             self.weapons.step_with_perception(self.tick, &self.units, &db, relations::Diplomacy::new(&self.players, &self.relations), &self.perception, &mut self.specials, &mut self.rng, &self.switches, &self.alerts, &mut self.events);
             self.record_engagement(from);
             self.record_enemy_hits(from);

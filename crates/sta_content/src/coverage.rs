@@ -62,6 +62,8 @@ pub const READ_ODF_KEYS: &[&str] = &[
     "percentnebulawarn", "dockingspeedfactor", "decommissionvalue", "ainame",
     // SIM-65: read by the path planner.
     "addtoplanner",
+    // SIM-74: the crew-status reload multipliers (race ODF).
+    "weaponyellow", "weaponred",
     // Found by intersecting the keys of the installed ODFs with the string
     // literals of the loaders (`check_pack <root> --keys` lists the rest).
     "tooltip", "basename", "race", "fireball", "officercost", "curshields", "maxshields",
