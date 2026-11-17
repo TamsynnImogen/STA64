@@ -236,7 +236,24 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         }
         Ok(n)
     })?)?;
-    table.set("CountCapitalShips", no_data_fn(lua, ctx, "CountCapitalShips", "no capital-ship classification in the content data")?)?;
+    // CountCapitalShips(team): the team's live craft whose `shipType` starts with A, B, C, D
+    // or F (read from the executable, static; stock A2 writes one capital letter). The
+    // engine also leaves out craft carrying a flag it uses to stop a craft firing; the
+    // derelict latch stands in for it (ours). `shipType` is kept lower case by the
+    // content loader, so a lower-case letter counts here where the engine's compare,
+    // case-sensitive, would not.
+    table.set("CountCapitalShips", query(lua, ctx, "CountCapitalShips", 1, |c, a| {
+        let owner = team(c, "CountCapitalShips", int("CountCapitalShips", a, 0)?)?;
+        c.note_team_query(Some(owner), "CountCapitalShips");
+        let capital = |u: &sta_sim::view::UnitView| {
+            c.def(u).is_some_and(|d| {
+                EntityKind::of_def(d) == EntityKind::Craft
+                    && d.stats.ship_type.as_deref().and_then(|t| t.chars().next()).is_some_and(|ch| matches!(ch.to_ascii_uppercase(), 'A' | 'B' | 'C' | 'D' | 'F'))
+            })
+        };
+        let n = c.view.units.iter().filter(|u| u.owner == owner && c.alive(u.id).is_some() && !derelict::latched(u) && capital(u)).count();
+        Ok(n as i64)
+    })?)?;
 
     // Unit state.
     table.set("GetCrew", {
@@ -304,7 +321,25 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         Ok(fixture || derelict || owner != Some(team))
     })?)?;
     derelict::install(lua, ctx, table)?;
-    table.set("IsShipAliveAndOffMap", no_data_fn(lua, ctx, "IsShipAliveAndOffMap", "the world view carries no off-map state")?)?;
+    // IsShipAliveAndOffMap(object): a live craft whose x or z lies outside the map's
+    // bounds (read from the executable, static; nothing measured). STA64's class
+    // mapping stands in for the engine's craft flag (no content: a craft). Without the
+    // map's bounds from the host the call raises, as before.
+    let known = query(lua, ctx, "IsShipAliveAndOffMap", 1, |c, a| {
+        let id = handle("IsShipAliveAndOffMap", a, 0)?;
+        let Some((lo, hi)) = c.map_bounds else { return Ok(false) };
+        c.note_query(id, "IsShipAliveAndOffMap");
+        let Some(u) = c.alive(id) else { return Ok(false) };
+        let craft = c.def(u).is_none_or(|d| EntityKind::of_def(d) == EntityKind::Craft);
+        let p = u.pos;
+        Ok(craft && (p.x < lo.x || p.x > hi.x || p.z < lo.z || p.z > hi.z))
+    })?;
+    let unknown = no_data_fn(lua, ctx, "IsShipAliveAndOffMap", "the host passed no map bounds")?;
+    let c = ctx.clone();
+    table.set("IsShipAliveAndOffMap", lua.create_function(move |_, args: MultiValue| {
+        let has_bounds = c.borrow().map_bounds.is_some();
+        if has_bounds { known.call::<Value>(args) } else { unknown.call::<Value>(args) }
+    })?)?;
     table.set("IsCargoShipReadyToLoad", no_data_fn(lua, ctx, "IsCargoShipReadyToLoad", "the world view carries no cargo state")?)?;
     table.set("IsCargoShipFullAndReadyToSend", no_data_fn(lua, ctx, "IsCargoShipFullAndReadyToSend", "the world view carries no cargo state")?)?;
 

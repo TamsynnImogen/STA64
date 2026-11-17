@@ -869,3 +869,45 @@ fn a_hold_kind_above_carrier_and_an_attack_without_a_row_are_refused_on_load() {
     stray.attacks = vec![EntityId(99)];
     assert!(Transports::from_rec(stray, |id| id.0 <= 2).is_none());
 }
+
+/// SIM-46 (#774 review): a captured yard loses its queue and nobody is refunded; its
+/// cargo-free stock is untouched on both sides (measured rule, see `capture`).
+#[test]
+fn a_captured_yard_loses_its_queue_and_no_one_is_refunded() {
+    let fake = sta_content::fake::db();
+    let mut features = fake.features().clone();
+    features.crew_loss_on_hit = true;
+    let mut b = ContentDb::builder().profile(fake.profile()).features(features);
+    for w in fake.weapons() {
+        b = b.weapon(w.clone());
+    }
+    for u in fake.units() {
+        let mut u = u.clone();
+        // Shot down and staying down, as `beta` in the scenes above.
+        if u.odf == "fx_yard" {
+            u.shields.recharge = Fixed::ZERO;
+        }
+        b = b.unit(u);
+    }
+    let db = Arc::new(b.build().unwrap());
+    let seat = |id: u8| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control: Control::Idle };
+    let mut sim = Sim::from_setup(&GameSetup { seed: 7, map: Arc::new(MapDef::empty()), content: Arc::clone(&db), players: vec![seat(0), seat(1)], options: GameOptions::default() });
+    let carrier = sim.spawn_def(db.key("fx_cruiser").unwrap(), PlayerId(0), at(0), (Fixed::ZERO, Fixed::ONE)).unwrap();
+    let yard = sim.spawn_def(db.key("fx_yard").unwrap(), PlayerId(1), at(300), (Fixed::ZERO, Fixed::ONE)).unwrap();
+    let build = Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Build { builder: yard, what: db.key("fx_frigate").unwrap(), at: None }) };
+    sim.step(&[build]);
+    assert!(!sim.production.queue(yard).is_empty(), "the yard is building");
+    let (paid1, paid0) = (sim.economy.stock_of(PlayerId(1)), sim.economy.stock_of(PlayerId(0)));
+    let y = sim.units.get_mut(yard).unwrap();
+    y.shields.now = [Fixed::ZERO; 4];
+    y.crew = Some([fx(2.5), fx(500.0)]);
+    let order = Command { player: PlayerId(0), seq: 1, kind: CommandKind::Order(Order::Transport { units: vec![carrier], target: yard, attack: false }) };
+    sim.step(&[order]);
+    for _ in 0..45 {
+        sim.step(&[]);
+    }
+    assert_eq!(sim.units.get(yard).unwrap().owner, PlayerId(0), "captured");
+    assert!(sim.production.queue(yard).is_empty(), "the queue is lost");
+    assert_eq!(sim.economy.stock_of(PlayerId(1)), paid1, "the old owner gets nothing back");
+    assert_eq!(sim.economy.stock_of(PlayerId(0)), paid0, "the captor gets nothing either");
+}

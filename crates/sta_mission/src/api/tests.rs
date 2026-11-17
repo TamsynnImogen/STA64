@@ -70,6 +70,7 @@ fn game_with(script: &str, flag: bool) -> Game {
         view: Some((*sim.view()).clone()),
         paths: Vec::new(),
         player_numbering: super::PlayerNumbering::Slots,
+        map_bounds: None,
     };
     let rt = MissionRuntime::from_source_with("missions/T.lua", script, 1, cfg);
     assert!(rt.errors().is_empty(), "{:?}", rt.errors());

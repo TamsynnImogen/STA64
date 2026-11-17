@@ -1,5 +1,6 @@
 //! CFG/SPR presentation of the shared HUD actions. No simulation policy lives here.
 pub(in crate::ui::hud) mod a1;
+pub(in crate::ui::hud) mod buttons;
 mod commands;
 mod info;
 pub(super) mod infobar;
@@ -426,6 +427,9 @@ pub(super) fn refresh(
     let layout = state.layout.take().unwrap();
     if a1 && replaced {
         a1::spawn_frames(&mut commands, body, &layout);
+    }
+    if !a1 && replaced {
+        buttons::spawn(&mut commands, body, &layout, &theme);
     }
     let now = model::info(&feed);
     let a1_shape = a1.then(|| a1::info::extra(&feed).map(|e| e.shape(&state.info_style))).flatten();
