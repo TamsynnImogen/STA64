@@ -23,6 +23,7 @@
 //! read with narrow compatibility paths, carry a content hash of the old
 //! kind that matches no current database, so they are refused by version.
 //! Format 35 (SIM-46) appends the transport-attack carriers to the transport record.
+//! Format 36 (SIM-40) appends the yard repair queues.
 //!
 //! The state types of other crates (`MoveStats`) have no serde, so the body
 //! uses small mirror records here instead of touching those crates.
@@ -61,11 +62,14 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// tell the file from a valid one by version.
 /// Format 34 appends the mission switches (LUA-41).
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 35;
+pub const FORMAT_VERSION: u16 = 36;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
 mod recrew_tests;
+#[cfg(test)]
+#[path = "snapshot/repairs_tests.rs"]
+mod repairs_tests;
 
 #[cfg(test)]
 #[path = "snapshot/guard_tests.rs"]
@@ -494,6 +498,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&self.recrew.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.alerts.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.mission_switches.to_rec()).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&self.repairs.to_rec()).expect("snapshot serialises"));
         out
     }
 
@@ -572,6 +577,7 @@ impl Sim {
         let (alert_rec, rest): (crate::alert::AlertRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         let (switches_rec, rest): (crate::mission_switches::SwitchesRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         let mission_switches = crate::mission_switches::MissionSwitches::from_rec(switches_rec).map_err(|why| SnapshotError::Corrupt(why.into()))?;
+        let (repairs_rec, rest): (crate::repair::RepairsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -717,6 +723,7 @@ impl Sim {
         let transports = crate::combat::boarding::Transports::from_rec(transport_rec, |id| units.contains(id)).ok_or_else(|| corrupt("transport rows"))?;
         let recrew = crate::recrew::Recrews::from_rec(recrew_rec, &units, b.tick)
             .ok_or_else(|| SnapshotError::Corrupt("invalid station recrew record".into()))?;
+        let repairs = crate::repair::Repairs::from_rec(repairs_rec, |id| units.contains(id)).ok_or_else(|| corrupt("repair queues"))?;
         let mut economy = crate::economy::Economy::from_rec(&b.economy);
         economy.restore_personnel(personnel_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         economy.restore_adjust(adjust_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
@@ -757,6 +764,7 @@ impl Sim {
             colonies,
             transports,
             recrew,
+            repairs,
             mission_switches,
         };
         sim.refresh_seat_rules();

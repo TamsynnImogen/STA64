@@ -326,6 +326,31 @@ impl Sim {
         true
     }
 
+    /// SIM-40: a yard takes `healed` damage points off system `n`. A system that was
+    /// dead and lives again is switched back on, as the original re-enables a repaired
+    /// system (read from the executable, static); a derelict unit stays off.
+    pub(crate) fn yard_repair_system(&mut self, id: EntityId, n: usize, healed: Fixed) {
+        let Some(hp) = self.content.as_deref().and_then(|db| db.unit(self.units.get(id)?.def)).map(|d| d.system_hit_points[n]) else {
+            return;
+        };
+        let before = self.subsystems.get(id).unwrap_or_default();
+        let dead_before = hp > Fixed::ZERO && before.damage[n] >= hp.to_bits();
+        self.subsystems.edit(id, |r| r.damage[n] = r.damage[n].saturating_sub(healed.to_bits().max(0)).max(0));
+        let after = self.subsystems.get(id).unwrap_or_default();
+        if !dead_before || after.damage[n] >= hp.to_bits() || after.derelict {
+            return;
+        }
+        match n {
+            0 | 1 => {
+                if let Some(u) = self.units.get_mut(id) {
+                    let flag = if n == 0 { UnitFlags::ENGINES_OFF } else { UnitFlags::WEAPONS_OFF };
+                    u.flags = u.flags.with(flag, false);
+                }
+            }
+            _ => self.subsystems.edit(id, |r| r.off &= !(1 << n)),
+        }
+    }
+
     /// Whether the system is switched on (by `Disable<System>`), and its damage
     /// points. Engines and weapons answer from the unit flags.
     pub fn subsystem_state(&self, id: EntityId, sub: Subsystem) -> Option<(bool, Fixed)> {
