@@ -345,6 +345,8 @@ A2_SIGNATURES = {
     "void ExplodeNow(int)": "A2.ExplodeNow",
     "void SetCanBeDecommissioned(int, bool)": "A2.SetCanBeDecommissioned",
     "void DisableShieldGenerator(int, bool)": "A2.DisableShieldGenerator",
+    "void DisableLifeSupport(int, bool)": "A2.DisableLifeSupport",
+    "void DisableSensors(int, bool)": "A2.DisableSensors",
     "void SetPosition(int, char*)": "A2.SetPosition",
     "void SetPosition(int, char*, int)": "A2.SetPosition",
     "void SetShieldPercent(int, float)": "A2.SetShieldPercent",
@@ -602,8 +604,51 @@ def normalized_signature(sig):
     return sig
 
 
+_LITERAL_SET = re.compile(r'(?m)^\s*(?:table|a2)\s*\.\s*set\s*\(\s*"([A-Za-z_][A-Za-z_0-9]*)"\s*,')
+# `for (name, ..) in [("Name", ..), ..] { .. table.set(name, ..) .. }` and
+# `for name in ["Name", ..] { .. }`: every first string of the array binds.
+_LOOP = re.compile(r'(?s)\bfor\s+\(?\s*([A-Za-z_][A-Za-z_0-9]*)[^\n]*?\bin\s*\[(.*?)\]\s*\{')
+_INSTALL = re.compile(r'\b(?:super::)?([A-Za-z_][A-Za-z_0-9]*)::install\s*\(')
+
+
+def _loop_names(src):
+    names = set()
+    for m in _LOOP.finditer(src):
+        var, array = m.group(1), m.group(2)
+        body = src[m.end():m.end() + 2000]
+        if not re.search(r'\b(?:table|a2)\s*\.\s*set\s*\(\s*' + re.escape(var) + r'\s*,', body):
+            continue
+        if array.lstrip().startswith("("):
+            names |= set(re.findall(r'\(\s*"([A-Za-z_][A-Za-z_0-9]*)"', array))
+        else:
+            names |= set(re.findall(r'"([A-Za-z_][A-Za-z_0-9]*)"', array))
+    return names
+
+
+def _bound_names(base, root_src, modules):
+    """Names bound by `root_src` and the modules it installs, following nested installs."""
+    names, seen, todo = set(), set(), list(modules)
+    strip = lambda src: "\n".join(line for line in src.splitlines() if not line.lstrip().startswith("//"))
+    root_src = strip(root_src)
+    names |= set(_LITERAL_SET.findall(root_src)) | _loop_names(root_src)
+    while todo:
+        module = todo.pop()
+        if module in seen:
+            continue
+        seen.add(module)
+        path = os.path.join(base, f"{module}.rs")
+        if not os.path.isfile(path):
+            continue
+        with open(path, encoding="utf-8") as source:
+            # A commented-out registration is not a binding.
+            src = strip(source.read())
+        names |= set(_LITERAL_SET.findall(src)) | _loop_names(src)
+        todo.extend(_INSTALL.findall(src))
+    return names
+
+
 def a2_source_names(repo):
-    """Literal A2 table.set names in registered production api/a2 modules."""
+    """A2 table.set names (literal or a loop over literals) in registered production api/a2 modules."""
     base = os.path.join(repo, "crates/sta_mission/src/api/a2")
     try:
         with open(os.path.join(base, "mod.rs"), encoding="utf-8") as source:
@@ -616,24 +661,12 @@ def a2_source_names(repo):
     )
     if not modules or not re.search(r'raw_set\s*\(\s*"A2"\s*,\s*a2\s*\)', registration):
         return set()
-    names = set()
-    for module in modules:
-        path = os.path.join(base, f"{module}.rs")
-        if not os.path.isfile(path):
-            continue
-        with open(path, encoding="utf-8") as source:
-            src = source.read()
-        names |= set(
-            re.findall(
-                r'(?m)^\s*table\s*\.\s*set\s*\(\s*"([A-Za-z_][A-Za-z_0-9]*)"\s*,',
-                src,
-            )
-        )
-    return names
+    # mod.rs itself sets data (`paths`), not calls; only its modules count.
+    return _bound_names(base, "", modules)
 
 
 def a1_source_names(repo):
-    """Literal A1 table.set names in registered production api/a1 modules."""
+    """A1 table.set names (literal or a loop over literals) in registered production api/a1 modules."""
     base = os.path.join(repo, "crates/sta_mission/src/api/a1")
     try:
         with open(os.path.join(base, "mod.rs"), encoding="utf-8") as source:
@@ -646,22 +679,9 @@ def a1_source_names(repo):
     )
     if not modules or not re.search(r'raw_set\s*\(\s*"A1"\s*,\s*table\s*\)', registration):
         return set()
-    names = set()
-    for module in modules:
-        path = os.path.join(base, f"{module}.rs")
-        if not os.path.isfile(path):
-            continue
-        with open(path, encoding="utf-8") as source:
-            src = source.read()
-        # A commented-out registration is not a binding.
-        src = "\n".join(line for line in src.splitlines() if not line.lstrip().startswith("//"))
-        names |= set(
-            re.findall(
-                r'(?m)^\s*table\s*\.\s*set\s*\(\s*"([A-Za-z_][A-Za-z_0-9]*)"\s*,',
-                src,
-            )
-        )
-    return names
+    # The install function of mod.rs binds some calls itself (`GetAttackLocation`).
+    install = registration[registration.find("pub(super) fn install"):]
+    return _bound_names(base, install, modules) - {"paths"}
 
 
 def a1_kinds(repo):
