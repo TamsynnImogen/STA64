@@ -22,6 +22,7 @@
 //! the keyed content digest's hash. Formats 8 to 14, which earlier builds
 //! read with narrow compatibility paths, carry a content hash of the old
 //! kind that matches no current database, so they are refused by version.
+//! Format 35 (SIM-46) appends the transport-attack carriers to the transport record.
 //!
 //! The state types of other crates (`MoveStats`) have no serde, so the body
 //! uses small mirror records here instead of touching those crates.
@@ -60,7 +61,7 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// tell the file from a valid one by version.
 /// Format 34 appends the mission switches (LUA-41).
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 34;
+pub const FORMAT_VERSION: u16 = 35;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
