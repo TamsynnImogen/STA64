@@ -571,6 +571,11 @@ impl Sim {
         self.content.as_deref().map_or_else(Vec::new, |db| self.production.view(db, &self.units))
     }
 
+    /// Read-only amounts left in the resource nodes (UI-48).
+    pub fn node_view(&self) -> Vec<economy::view::NodeView> {
+        self.content.as_deref().map_or_else(Vec::new, |db| self.economy.node_view(db, &self.units))
+    }
+
     /// Read-only cargo and hold capacity for live mining craft.
     pub fn cargo_view(&self) -> Vec<economy::view::CargoView> {
         self.content.as_deref().map_or_else(Vec::new, |db| self.economy.cargo_view(db, &self.units))
@@ -787,6 +792,10 @@ impl WorldSource for Sim {
 
     fn cargo_view(&self) -> Vec<economy::view::CargoView> {
         Sim::cargo_view(self)
+    }
+
+    fn node_view(&self) -> Vec<economy::view::NodeView> {
+        Sim::node_view(self)
     }
 }
 

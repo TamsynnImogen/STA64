@@ -29,7 +29,7 @@ Games: the stock data of Armada I (A1), Armada II (A2) and Fleet Operations (FO)
 | info panel, build and research | 15 | 7 | 0 | 4 | 4 |
 | info panel, multi selection | 20 | 8 | 0 | 1 | 11 |
 | info panel, other | 36 | 11 | 0 | 16 | 9 |
-| info panel, single selection | 62 | 35 | 0 | 5 | 22 |
+| info panel, single selection | 62 | 39 | 0 | 5 | 18 |
 | loading box | 9 | 0 | 0 | 7 | 2 |
 | minimap | 12 | 6 | 0 | 4 | 2 |
 | objectives | 24 | 12 | 0 | 8 | 4 |
@@ -39,15 +39,15 @@ Games: the stock data of Armada I (A1), Armada II (A2) and Fleet Operations (FO)
 | screen | 2 | 0 | 2 | 0 | 0 |
 | speed rail | 10 | 0 | 0 | 6 | 4 |
 | tooltip and cursor | 7 | 2 | 0 | 0 | 5 |
-| **all** | **581** | **134** | **5** | **158** | **284** |
+| **all** | **581** | **138** | **5** | **158** | **280** |
 
 By game (a key set by several games counts in each):
 
 | game | keys | drawn | typed | built | missing |
 |---|---:|---:|---:|---:|---:|
-| A1 | 351 | 55 | 1 | 109 | 186 |
-| A2 | 443 | 109 | 4 | 91 | 239 |
-| FO | 474 | 121 | 5 | 103 | 245 |
+| A1 | 351 | 56 | 1 | 109 | 185 |
+| A2 | 443 | 113 | 4 | 91 | 235 |
+| FO | 474 | 125 | 5 | 103 | 241 |
 
 ## avatar box
 
@@ -512,7 +512,7 @@ By game (a key set by several games counts in each):
 | `infoSingleDilithiumBar` | A1 A2 FO | drawn |
 | `infoSingleDilithiumBarArea` | A1 A2 FO | drawn |
 | `infoSingleDilithiumBarColor` | A1 A2 FO | drawn |
-| `infoSingleDilithiumBarDisableColor` | A1 A2 FO | missing |
+| `infoSingleDilithiumBarDisableColor` | A1 A2 FO | drawn |
 | `infoSingleEnergyBar` | A1 | drawn |
 | `infoSingleEnergyBarArea` | A1 | drawn |
 | `infoSingleEnergyBarColor` | A1 | drawn |
@@ -535,9 +535,9 @@ By game (a key set by several games counts in each):
 | `infoSingleOfficerTextLabel` | A1 | missing |
 | `infoSingleOfficerTextLabelArea` | A1 | missing |
 | `infoSinglePlanetMetalBar` | A2 FO | missing |
-| `infoSinglePlanetMetalBarArea` | A2 FO | missing |
-| `infoSinglePlanetMetalBarColor` | A2 FO | missing |
-| `infoSinglePlanetMetalBarDisableColor` | A2 FO | missing |
+| `infoSinglePlanetMetalBarArea` | A2 FO | drawn |
+| `infoSinglePlanetMetalBarColor` | A2 FO | drawn |
+| `infoSinglePlanetMetalBarDisableColor` | A2 FO | drawn |
 | `infoSinglePlanetTeamTextArea` | A2 FO | built |
 | `infoSingleRaceIcon` | A1 A2 FO | drawn |
 | `infoSingleRaceIconArea` | A1 A2 FO | drawn |

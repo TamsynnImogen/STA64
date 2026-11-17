@@ -17,6 +17,35 @@ pub struct CargoView {
     pub resource: Option<u8>,
 }
 
+/// A resource node's amount left and what it started with (UI-48: the HUD's dilithium and
+/// planet-metal bars). `start` is the amount a fresh node holds; an infinite node is never
+/// reduced, so its amount stays at `start`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NodeView {
+    pub entity: EntityId,
+    pub resource: u8,
+    pub amount: Fixed,
+    pub start: Fixed,
+    pub infinite: bool,
+}
+
+pub(super) fn node_rows(economy: &Economy, db: &ContentDb, units: &Entities) -> Vec<NodeView> {
+    units
+        .iter()
+        .filter(|u| db.unit(u.def).is_some_and(EntityKind::mineable_def))
+        .map(|u| {
+            let start = super::start_amount(db, u.def);
+            NodeView {
+                entity: u.id,
+                resource: super::node_resource(db, u.def),
+                amount: economy.nodes.get(u.id).copied().unwrap_or(start),
+                start,
+                infinite: super::is_infinite(db, u.def),
+            }
+        })
+        .collect()
+}
+
 pub(super) fn rows(economy: &Economy, db: &ContentDb, units: &Entities) -> Vec<CargoView> {
     units
         .iter()
@@ -221,5 +250,31 @@ mod tests {
         let db = sta_content::fake::db();
         let source = crate::fake::ScriptedSource::from_json5("{units:[]}", &db).unwrap();
         assert!(source.cargo_view().is_empty());
+    }
+
+    /// UI-48: a node's view starts at its start amount and falls as it is mined.
+    #[test]
+    fn the_node_view_reports_what_is_left_of_each_node() {
+        let db = std::sync::Arc::new(sta_content::fake::db());
+        let mut sim = crate::Sim::from_setup(&crate::setup::GameSetup {
+            seed: 1,
+            map: std::sync::Arc::new(sta_content::MapDef::empty()),
+            content: db.clone(),
+            players: vec![crate::setup::PlayerSetup { id: sta_core::PlayerId(0), team: sta_core::TeamId(0), race: "fx".into(), control: crate::setup::Control::Idle }],
+            options: Default::default(),
+        });
+        let moon = sim.spawn_def(db.key("fx_moon").unwrap(), crate::world::NEUTRAL, sta_core::Vec3::ZERO, (Fixed::ZERO, Fixed::ONE)).unwrap();
+        let rows = sim.node_view();
+        let row = rows.iter().find(|r| r.entity == moon).expect("the moon is a node");
+        assert_eq!(row.amount, row.start);
+        assert!(row.start > Fixed::ZERO);
+        let miner = sim.spawn_def(db.key("fx_miner").unwrap(), sta_core::PlayerId(0), sta_core::Vec3 { x: Fixed::from_int(100), y: Fixed::ZERO, z: Fixed::ZERO }, (Fixed::ZERO, Fixed::ONE)).unwrap();
+        let order = crate::command::Command { player: sta_core::PlayerId(0), seq: 0, kind: crate::command::CommandKind::Order(crate::command::Order::Mine { units: vec![miner], node: moon }) };
+        crate::WorldSource::step(&mut sim, &[order]);
+        for _ in 0..3000 {
+            crate::WorldSource::step(&mut sim, &[]);
+        }
+        let left = sim.node_view().into_iter().find(|r| r.entity == moon).unwrap();
+        assert!(left.amount < left.start, "{left:?}");
     }
 }

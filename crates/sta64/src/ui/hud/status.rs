@@ -18,6 +18,8 @@ use crate::sim_link::SimLink;
 pub(crate) struct StatusFeed {
     pub production: Vec<ProductionView>,
     pub cargo: Vec<CargoView>,
+    /// Resource-node amounts (UI-48's dilithium and planet-metal bars).
+    pub nodes: Vec<sta_sim::economy::view::NodeView>,
 }
 
 /// Keep optional status at the same simulation tick as the regular HUD feed.
@@ -30,7 +32,10 @@ pub(super) fn sync(
     if external.is_some() || link.is_none() {
         feed.production.clear();
         feed.cargo.clear();
+        feed.nodes.clear();
     } else if let Some(link) = link {
+        feed.nodes.clear();
+        feed.nodes.extend_from_slice(link.nodes());
         feed.production.clear();
         feed.production.extend_from_slice(link.production());
         feed.cargo.clear();
@@ -273,6 +278,7 @@ mod tests {
                 capacity: Fixed::from_int(10),
                 resource: Some(0),
             }],
+                nodes: Vec::new(),
         };
         let enemy = feed(
             vec![unit(1, 2, Some(Fixed::from_f64(0.2)))],
