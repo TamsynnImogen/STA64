@@ -453,7 +453,7 @@ pub(super) fn refresh(
             .id();
         let bar = commands.spawn((StockInfoBar, Pickable::IGNORE, Node::default(), ChildOf(body))).id();
         if a1 {
-            a1::info::spawn(&mut commands, parent, &layout, &feed, &theme, &state.info_style);
+            a1::info::spawn(&mut commands, parent, &layout, &feed, &theme, &state.info_style, strings.as_deref());
         } else {
             info::spawn(&mut commands, parent, &layout, &feed, &theme);
             infobar::spawn(&mut commands, bar, &layout, &theme, layout::info_variant(&now));

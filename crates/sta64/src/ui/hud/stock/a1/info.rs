@@ -119,13 +119,13 @@ fn sprite_bar(commands: &mut Commands, root: Entity, r: R, sprite: &str, value: 
 }
 
 /// The panel's dynamic content: the resource strip, and for one selected unit its card.
-pub(in crate::ui::hud) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme, style: &InfoStyle) {
+pub(in crate::ui::hud) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme, style: &InfoStyle, strings: Option<&crate::ui::i18n::Strings>) {
     super::super::info::spawn_resource(commands, root, layout, feed, theme);
     let Some(area) = layout.panel("info") else { return };
     let origin = Vec2::new(area.x, area.y);
     let Info::Single(single) = model::info(feed) else { return };
     let extra = extra(feed).unwrap_or_default();
-    single_card(commands, root, layout, feed, theme, style, origin, &single, &extra);
+    single_card(commands, root, layout, feed, theme, style, origin, &single, &extra, strings);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -139,6 +139,7 @@ fn single_card(
     origin: Vec2,
     single: &Single,
     extra: &Extra,
+    strings: Option<&crate::ui::i18n::Strings>,
 ) {
     let pic = |commands: &mut Commands, key: &str, area: &str| {
         if let (Some(name), Some(r)) = (layout.name(key), layout.at(origin, area)) {
@@ -188,8 +189,14 @@ fn single_card(
     // Crew: label bar, label, value and the dot.
     if let Some((now, ratio)) = extra.crew {
         pic(commands, "infoSingleCrewTextBackground", "infoSingleCrewTextBackgroundArea");
+        let crew_colour = layout.colour("infoSingleCrewTextColor").unwrap_or(theme.text);
+        // UI-48: the label on its bar, a string-table key (`GUI_SD_TEXT_CREW_LABEL` in stock).
+        if let (Some(key), Some(r)) = (layout.name("infoSingleCrewTextLabel"), layout.at(origin, "infoSingleCrewTextLabelArea")) {
+            let label = strings.map(|s| s.game_text(key)).filter(|t| *t != key).unwrap_or("CREW").to_owned();
+            text(commands, root, r, label, crew_colour, theme.micro_size, None);
+        }
         if let Some(r) = layout.at(origin, "infoSingleCrewTextInformationArea") {
-            let entity = text(commands, root, r, now.to_string(), theme.text, theme.micro_size, None);
+            let entity = text(commands, root, r, now.to_string(), crew_colour, theme.micro_size, None);
             commands.entity(entity).insert(CrewText);
         }
         if let (Some(name), Some(r)) = (layout.name("infoSingleCrewDot"), layout.at(origin, "infoSingleCrewDotArea")) {

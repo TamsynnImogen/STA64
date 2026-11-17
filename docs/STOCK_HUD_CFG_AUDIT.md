@@ -29,7 +29,7 @@ Games: the stock data of Armada I (A1), Armada II (A2) and Fleet Operations (FO)
 | info panel, build and research | 15 | 7 | 0 | 4 | 4 |
 | info panel, multi selection | 20 | 8 | 0 | 1 | 11 |
 | info panel, other | 36 | 11 | 0 | 16 | 9 |
-| info panel, single selection | 62 | 35 | 0 | 5 | 22 |
+| info panel, single selection | 62 | 38 | 0 | 5 | 19 |
 | loading box | 9 | 0 | 0 | 7 | 2 |
 | minimap | 12 | 6 | 0 | 4 | 2 |
 | objectives | 24 | 12 | 0 | 8 | 4 |
@@ -39,13 +39,13 @@ Games: the stock data of Armada I (A1), Armada II (A2) and Fleet Operations (FO)
 | screen | 2 | 0 | 2 | 0 | 0 |
 | speed rail | 10 | 0 | 0 | 6 | 4 |
 | tooltip and cursor | 7 | 2 | 0 | 0 | 5 |
-| **all** | **581** | **134** | **5** | **158** | **284** |
+| **all** | **581** | **137** | **5** | **158** | **281** |
 
 By game (a key set by several games counts in each):
 
 | game | keys | drawn | typed | built | missing |
 |---|---:|---:|---:|---:|---:|
-| A1 | 351 | 55 | 1 | 109 | 186 |
+| A1 | 351 | 58 | 1 | 109 | 183 |
 | A2 | 443 | 109 | 4 | 91 | 239 |
 | FO | 474 | 121 | 5 | 103 | 245 |
 
@@ -505,10 +505,10 @@ By game (a key set by several games counts in each):
 | `infoSingleCrewTextArea` | A1 | built |
 | `infoSingleCrewTextBackground` | A1 | drawn |
 | `infoSingleCrewTextBackgroundArea` | A1 | drawn |
-| `infoSingleCrewTextColor` | A1 | missing |
+| `infoSingleCrewTextColor` | A1 | drawn |
 | `infoSingleCrewTextInformationArea` | A1 | drawn |
-| `infoSingleCrewTextLabel` | A1 | missing |
-| `infoSingleCrewTextLabelArea` | A1 | missing |
+| `infoSingleCrewTextLabel` | A1 | drawn |
+| `infoSingleCrewTextLabelArea` | A1 | drawn |
 | `infoSingleDilithiumBar` | A1 A2 FO | drawn |
 | `infoSingleDilithiumBarArea` | A1 A2 FO | drawn |
 | `infoSingleDilithiumBarColor` | A1 A2 FO | drawn |
