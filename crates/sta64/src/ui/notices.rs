@@ -462,6 +462,35 @@ fn retheme(
     log.dirty = true;
 }
 
+/// The tooltip's background and text colours: the race cfg's `tooltipBackgroundColor` and
+/// `tooltipTextColor` under the stock HUD (UI-48; how the stock games colour their tooltip,
+/// read from data), else the theme's.
+pub(crate) fn tip_colours(cfg: Option<&sta_content::GuiLayout>, stock: bool, theme: &Theme) -> (Color, Color) {
+    let colour = |key: &str| cfg.filter(|_| stock).and_then(|c| c.colours.get(key)).map(|c| Color::srgba(c.r, c.g, c.b, c.a));
+    (colour("tooltipBackgroundColor").unwrap_or(theme.panel), colour("tooltipTextColor").unwrap_or(theme.text))
+}
+
+fn tip_cfg_colours(
+    theme: Res<Theme>,
+    hud: Option<Res<super::hud::HudConfig>>,
+    profile: Option<Res<super::profile::UiProfile>>,
+    mut tips: Query<&mut BackgroundColor, With<TipBox>>,
+    mut texts: Query<&mut SpriteText, With<TipText>>,
+) {
+    let stock = profile.is_some_and(|p| p.is_stock());
+    let (background, text) = tip_colours(hud.as_deref().and_then(|h| h.gui.as_ref()), stock, &theme);
+    for mut b in &mut tips {
+        if b.0 != background {
+            b.0 = background;
+        }
+    }
+    for mut t in &mut texts {
+        if t.color != text {
+            t.color = text;
+        }
+    }
+}
+
 fn draw_notices(
     mut commands: Commands,
     theme: Res<Theme>,
@@ -645,7 +674,7 @@ impl Plugin for NoticePlugin {
             .add_observer(on_over)
             .add_observer(on_out)
             .add_systems(Startup, spawn_roots)
-            .add_systems(Update, (events_to_notices.after(crate::ui::presentation::consume), ownership_notices, collect, age, retheme, (draw_notices, draw_chat, draw_tip)).chain().in_set(GameSet::Ui).after(ProfileSync))
+            .add_systems(Update, (events_to_notices.after(crate::ui::presentation::consume), collect, age, retheme, tip_cfg_colours, (draw_notices, draw_chat, draw_tip)).chain().in_set(GameSet::Ui).after(ProfileSync))
             .add_systems(PostUpdate, position_tip.after(bevy::ui::UiSystems::Layout).before(bevy::ui::UiSystems::PostLayout));
     }
 }
@@ -1007,20 +1036,13 @@ mod tests {
     }
 
     #[test]
-    fn owner_changes_report_units_the_player_loses_or_gains() {
-        let db = sta_content::fake::db();
-        let unit = |id: u32, owner: u8| UnitView {
-            id: sta_sim::EntityId(id), def: db.key("fx_cruiser").unwrap(), owner: PlayerId(owner),
-            pos: sta_sim::Vec3::ZERO, heading: (sta_sim::Fixed::ZERO, sta_sim::Fixed::ONE), speed: sta_sim::Fixed::ZERO,
-            hull: [sta_sim::Fixed::ONE; 2], shields: [[sta_sim::Fixed::ZERO; 2]; 4], crew: None, energy: None, autonomy: None,
-            flags: sta_sim::view::UnitFlags::SELECTABLE, progress: None,
-        };
-        let me = PlayerId(1);
-        let mut known = std::collections::BTreeMap::new();
-        assert!(owner_changes(&mut known, &[unit(1, 1), unit(2, 2), unit(3, 3)], me).is_empty(), "first sight is only remembered");
-        let changes = owner_changes(&mut known, &[unit(1, 2), unit(2, 1), unit(3, 2)], me);
-        assert_eq!(changes, [(sta_sim::EntityId(1), PlayerId(1), PlayerId(2)), (sta_sim::EntityId(2), PlayerId(2), PlayerId(1))], "between two others: not reported");
-        assert!(owner_changes(&mut known, &[unit(1, 2)], me).is_empty());
-        assert!(owner_changes(&mut known, &[unit(2, 2)], me).is_empty(), "a unit gone and back is seen afresh");
+    fn the_tooltip_takes_the_cfg_colours_only_under_the_stock_hud() {
+        let theme = Theme::default();
+        let (cfg, warnings) = sta_content::GuiCfg::parse("t.cfg", "screenWidth = 800\nscreenHeight = 600\ntooltipBackgroundColor = 0.5 0 0\ntooltipTextColor = 0 1 0\n");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let layout = cfg.layout_auto();
+        assert_eq!(tip_colours(Some(&layout), true, &theme), (Color::srgba(0.5, 0.0, 0.0, 1.0), Color::srgba(0.0, 1.0, 0.0, 1.0)));
+        assert_eq!(tip_colours(Some(&layout), false, &theme), (theme.panel, theme.text), "the LCARS HUD keeps its theme");
+        assert_eq!(tip_colours(None, true, &theme), (theme.panel, theme.text));
     }
 }

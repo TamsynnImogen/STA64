@@ -38,16 +38,16 @@ Games: the stock data of Armada I (A1), Armada II (A2) and Fleet Operations (FO)
 | resource bar | 44 | 16 | 0 | 28 | 0 |
 | screen | 2 | 0 | 2 | 0 | 0 |
 | speed rail | 10 | 0 | 0 | 6 | 4 |
-| tooltip and cursor | 7 | 0 | 0 | 0 | 7 |
-| **all** | **581** | **132** | **5** | **158** | **286** |
+| tooltip and cursor | 7 | 2 | 0 | 0 | 5 |
+| **all** | **581** | **134** | **5** | **158** | **284** |
 
 By game (a key set by several games counts in each):
 
 | game | keys | drawn | typed | built | missing |
 |---|---:|---:|---:|---:|---:|
 | A1 | 351 | 55 | 1 | 109 | 186 |
-| A2 | 443 | 107 | 4 | 91 | 241 |
-| FO | 474 | 119 | 5 | 103 | 247 |
+| A2 | 443 | 109 | 4 | 91 | 239 |
+| FO | 474 | 121 | 5 | 103 | 245 |
 
 ## avatar box
 
@@ -733,9 +733,9 @@ By game (a key set by several games counts in each):
 | key | games | state |
 |---|---|---|
 | `frameLocation` | A2 FO | missing |
-| `tooltipBackgroundColor` | A2 FO | missing |
+| `tooltipBackgroundColor` | A2 FO | drawn |
 | `tooltipFrameBottomRect_#` | A2 FO | missing |
 | `tooltipFrameLeftRect` | A2 FO | missing |
 | `tooltipFrameRightRect` | A2 FO | missing |
 | `tooltipFrameTopRect_#` | A2 FO | missing |
-| `tooltipTextColor` | A2 FO | missing |
+| `tooltipTextColor` | A2 FO | drawn |

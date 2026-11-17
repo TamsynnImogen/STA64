@@ -378,13 +378,26 @@ fn freighters_still_dock_at_an_orbital_station_that_circles_its_planet() {
     let station = spawn(&mut sim, "fx_orbital", PlayerId(0), v(1500, 275));
     let ms = vec![spawn(&mut sim, "fx_orbiter", PlayerId(0), v(500, 0)), spawn(&mut sim, "fx_miner", PlayerId(0), v(500, 60))];
     let at = sim.unit(station).unwrap().pos;
-    sim.step(&[Command { player: PlayerId(0), seq: 1, kind: CommandKind::Order(Order::Mine { units: ms, node: moon }) }]);
+    sim.step(&[Command { player: PlayerId(0), seq: 1, kind: CommandKind::Order(Order::Mine { units: ms.clone(), node: moon }) }]);
     let mut delivered = 0;
+    // Unloads per freighter: each one docks, not just one of the two.
+    let mut unloads = [0usize; 2];
     for _ in 0..9000 {
-        delivered += sim.step(&[]).events.iter().filter(|e| matches!(e, SimEvent::Delivered { .. })).count();
+        for e in sim.step(&[]).events {
+            match e {
+                SimEvent::Delivered { .. } => delivered += 1,
+                SimEvent::MinerPhase { id, phase: MinerPhase::Unloading, .. } => {
+                    if let Some(i) = ms.iter().position(|m| *m == id) {
+                        unloads[i] += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
     }
     assert!(sim.unit(station).unwrap().pos != at, "the station circled meanwhile");
     assert!(delivered >= 4, "{delivered} deliveries at a circling station");
+    assert!(unloads.iter().all(|&n| n >= 2), "unloads per freighter (beam-armed, beamless): {unloads:?}");
 }
 
 /// Fleet Operations 4.0's miners (every race) have a 150 beam and `tooCloseToTurn 120`: the 30 degree
