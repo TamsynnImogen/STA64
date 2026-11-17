@@ -860,7 +860,9 @@ mod through_the_sim {
                     }),
                 })
                 .collect();
-            for i in 0..60 * TICK_HZ {
+            // The queued course is long enough that 60 s ended before the final-leg brake.
+            let secs = if queued { 120 } else { 60 };
+            for i in 0..secs * TICK_HZ {
                 let sent = if i == 0 {
                     std::mem::take(&mut cmds)
                 } else {
@@ -871,6 +873,13 @@ mod through_the_sim {
                 for v in [u.pos.x, u.pos.z, u.speed, u.omega] {
                     h.fixed(v);
                 }
+            }
+            if queued {
+                // The run covers the final-leg brake: at rest on the last point.
+                let u = sim.unit(s).unwrap();
+                let end = course[course.len() - 1];
+                let (dx, dz) = (num(u.pos.x - end.x), num(u.pos.z - end.z));
+                assert!(num(u.speed) < 1.0 && dx * dx + dz * dz < 60.0 * 60.0, "speed {} at ({dx}, {dz}) from the last point", num(u.speed));
             }
         }
         h.0
@@ -892,7 +901,7 @@ mod through_the_sim {
     /// Pinned with the authored parameter block; the queued one covers the
     /// hand-over and the final-leg logic.
     const A1_GOLDEN: u64 = 0xf0d2c437462e3c7d;
-    const A1_GOLDEN_QUEUED: u64 = 0x2efbfd0a1e8422b7;
+    const A1_GOLDEN_QUEUED: u64 = 0xd5e2_bd6b_9d6f_727a;
 }
 
 /// CON-52: the parameters come from content, for Armada I only. Authored ODFs
