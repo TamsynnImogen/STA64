@@ -175,6 +175,9 @@ pub struct MissionConfig {
     pub labels: BTreeMap<EntityId, String>,
     /// The map's named paths in file order, `(label, points)`, for `A2.paths` (CON-47).
     pub paths: Vec<(String, Vec<[f32; 3]>)>,
+    /// The map's bounds, `(min, max)`, for `IsShipAliveAndOffMap`; `None` when the
+    /// host does not pass them (the call then raises).
+    pub map_bounds: Option<(sta_core::Vec3, sta_core::Vec3)>,
     /// The world before the first tick, so a script's load-time finds work.
     pub view: Option<WorldView>,
 }
@@ -223,6 +226,7 @@ pub(crate) struct Ctx {
     pub content: Option<Arc<ContentDb>>,
     pub labels: BTreeMap<EntityId, String>,
     pub paths: Vec<(String, Vec<[f32; 3]>)>,
+    pub map_bounds: Option<(sta_core::Vec3, sta_core::Vec3)>,
     pub view: WorldView,
     pub events: Vec<SimEvent>,
     pub commands: Vec<Command>,
@@ -308,6 +312,7 @@ impl Ctx {
             content: cfg.content,
             labels: cfg.labels,
             paths: cfg.paths,
+            map_bounds: cfg.map_bounds,
             label_gaps: label_gap::LabelGaps::default(),
             view,
             events: Vec::new(),

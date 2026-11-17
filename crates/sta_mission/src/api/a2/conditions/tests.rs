@@ -324,3 +324,16 @@ fn a_fresh_allied_unit_counts_at_once() {
     rt.think(&step.view, &step.events, &mut out);
     assert_eq!(eval::<i64>(&rt, "return A2.CountVisibleUnits(0, 1, false, nil)"), 2, "ally's new unit, same tick");
 }
+
+#[test]
+fn is_ship_alive_and_off_map_reads_the_map_bounds_the_host_passes() {
+    let s = scene();
+    let b = |v: f32| Vec3::from_f32([v, -v, v]);
+    let cfg = MissionConfig { content: Some(s.db.clone()), view: Some(s.view.clone()), map_bounds: Some((b(-1000.0), b(1000.0))), ..MissionConfig::default() };
+    let rt = MissionRuntime::from_source_with("cond.lua", "", 3, cfg);
+    rt.eval::<()>(&format!("a, s, far = {}, {}, {}", s.ids[0].0, s.ids[2].0, s.ids[3].0)).unwrap();
+    assert!(!eval::<bool>(&rt, "return A2.IsShipAliveAndOffMap(a)"), "a craft inside the map");
+    assert!(eval::<bool>(&rt, "return A2.IsShipAliveAndOffMap(far)"), "a craft at x 5000, outside");
+    assert!(!eval::<bool>(&rt, "return A2.IsShipAliveAndOffMap(999999)"), "no such object");
+    assert!(rt.unsupported().is_empty(), "{:?}", rt.unsupported());
+}

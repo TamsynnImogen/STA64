@@ -1055,6 +1055,7 @@ pub fn launch_runtime_with_start(
         content: Some(setup.content.clone()),
         labels: sim.labels.iter().map(|(id, l)| (id, l.clone())).collect(),
         paths,
+        map_bounds: Some(setup.map.bounds),
         view: Some((*sim.view()).clone()),
     };
     let runtime = MissionRuntime::load_with_start(path, seed, cfg, label_gaps, start_stock, move |p| reader(p));

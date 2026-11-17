@@ -304,7 +304,25 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
         Ok(fixture || derelict || owner != Some(team))
     })?)?;
     derelict::install(lua, ctx, table)?;
-    table.set("IsShipAliveAndOffMap", no_data_fn(lua, ctx, "IsShipAliveAndOffMap", "the world view carries no off-map state")?)?;
+    // IsShipAliveAndOffMap(object): a live craft whose x or z lies outside the map's
+    // bounds (read from the executable, static; nothing measured). STA64's class
+    // mapping stands in for the engine's craft flag (no content: a craft). Without the
+    // map's bounds from the host the call raises, as before.
+    let known = query(lua, ctx, "IsShipAliveAndOffMap", 1, |c, a| {
+        let id = handle("IsShipAliveAndOffMap", a, 0)?;
+        let Some((lo, hi)) = c.map_bounds else { return Ok(false) };
+        c.note_query(id, "IsShipAliveAndOffMap");
+        let Some(u) = c.alive(id) else { return Ok(false) };
+        let craft = c.def(u).is_none_or(|d| EntityKind::of_def(d) == EntityKind::Craft);
+        let p = u.pos;
+        Ok(craft && (p.x < lo.x || p.x > hi.x || p.z < lo.z || p.z > hi.z))
+    })?;
+    let unknown = no_data_fn(lua, ctx, "IsShipAliveAndOffMap", "the host passed no map bounds")?;
+    let c = ctx.clone();
+    table.set("IsShipAliveAndOffMap", lua.create_function(move |_, args: MultiValue| {
+        let has_bounds = c.borrow().map_bounds.is_some();
+        if has_bounds { known.call::<Value>(args) } else { unknown.call::<Value>(args) }
+    })?)?;
     table.set("IsCargoShipReadyToLoad", no_data_fn(lua, ctx, "IsCargoShipReadyToLoad", "the world view carries no cargo state")?)?;
     table.set("IsCargoShipFullAndReadyToSend", no_data_fn(lua, ctx, "IsCargoShipFullAndReadyToSend", "the world view carries no cargo state")?)?;
 

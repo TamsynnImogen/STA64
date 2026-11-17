@@ -511,9 +511,13 @@ hit tick per object). `IsAudioMessageDone` / `IsMoviePlaying` follow
 
 Bound but raising (counted in `unsupported()` as `A2.<Name>: <why>`, never a
 guessed value): `CountCapitalShips` (no capital-ship class in the content
-data), `IsShipAliveAndOffMap`, `IsCargoShipReadyToLoad`,
-`IsCargoShipFullAndReadyToSend`, `GetLatinumTraded` (no cargo, off-map or
-trade state in the world view).
+data), `IsCargoShipReadyToLoad`, `IsCargoShipFullAndReadyToSend`,
+`GetLatinumTraded` (no cargo or trade state in the world view).
+
+`IsShipAliveAndOffMap(object)` is true for a live craft whose x or z lies
+outside the map's bounds (read from the executable, static), with the bounds
+the host passes (`MissionConfig::map_bounds`, filled from the map by
+`campaign::launch_runtime_with_start`); without them it raises as above.
 
 `IsCompromised(object, team)` (LUA-12) is true when the object has been lost
 to `team`: gone or dying, not a craft or station, a derelict (crew under one
