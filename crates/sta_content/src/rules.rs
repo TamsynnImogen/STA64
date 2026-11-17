@@ -883,13 +883,18 @@ impl Rules {
             out.push(DigestEntry::new("race:mining-rate", format!("[{}]", rows.join(","))));
         }
         for (stem, repair) in &self.race_repairs {
-            let value = Canon::new()
+            let mut canon = Canon::new();
+            canon
                 .opt_fixed("strength", repair.strength)
                 .opt_fixed("yellow", repair.yellow)
                 .opt_fixed("red", repair.red)
                 .opt_fixed("crew_yellow_status", repair.crew_yellow_status)
-                .opt_fixed("crew_red_status", repair.crew_red_status)
-                .finish();
+                .opt_fixed("crew_red_status", repair.crew_red_status);
+            // SIM-74: only when the race sets them, so a race without the keys keeps its text.
+            if repair.weapon_yellow.is_some() || repair.weapon_red.is_some() {
+                canon.opt_fixed("weapon_yellow", repair.weapon_yellow).opt_fixed("weapon_red", repair.weapon_red);
+            }
+            let value = canon.finish();
             out.push(DigestEntry::new(crate::digest::key("race-repair:", stem), value));
         }
         for s in &self.starts {

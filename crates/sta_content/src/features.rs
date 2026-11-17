@@ -150,11 +150,16 @@ pub struct Features {
     /// measured). Off everywhere until measured: the cloak device's
     /// `disableWeapons` alone decides.
     pub weapon_cloak_fire: bool,
+    /// A weapon whose `crewAffectsWeaponDelay` is on (default) reloads
+    /// `weaponYellow` / `weaponRed` times slower at yellow / red crew status
+    /// (SIM-74; read from the stock Armada II executable, static, not
+    /// measured). Off everywhere until measured.
+    pub crew_weapon_delay: bool,
 }
 
 impl Features {
     /// Every switch, in declaration order, for the content hash.
-    pub(crate) fn bits(&self) -> [bool; 40] {
+    pub(crate) fn bits(&self) -> [bool; 41] {
         [
             self.weapon_damage_controls,
             self.point_defense_cycles,
@@ -196,6 +201,7 @@ impl Features {
             self.weapon_target_masks,
             self.transport_attack_by_weld,
             self.weapon_cloak_fire,
+            self.crew_weapon_delay,
         ]
     }
 }
