@@ -29,7 +29,7 @@ Games: the stock data of Armada I (A1), Armada II (A2) and Fleet Operations (FO)
 | info panel, build and research | 15 | 7 | 0 | 4 | 4 |
 | info panel, multi selection | 20 | 8 | 0 | 1 | 11 |
 | info panel, other | 36 | 11 | 0 | 16 | 9 |
-| info panel, single selection | 62 | 38 | 0 | 5 | 19 |
+| info panel, single selection | 62 | 42 | 0 | 5 | 15 |
 | loading box | 9 | 0 | 0 | 7 | 2 |
 | minimap | 12 | 6 | 0 | 4 | 2 |
 | objectives | 24 | 12 | 0 | 8 | 4 |
@@ -39,15 +39,15 @@ Games: the stock data of Armada I (A1), Armada II (A2) and Fleet Operations (FO)
 | screen | 2 | 0 | 2 | 0 | 0 |
 | speed rail | 10 | 0 | 0 | 6 | 4 |
 | tooltip and cursor | 7 | 2 | 0 | 0 | 5 |
-| **all** | **581** | **137** | **5** | **158** | **281** |
+| **all** | **581** | **141** | **5** | **158** | **277** |
 
 By game (a key set by several games counts in each):
 
 | game | keys | drawn | typed | built | missing |
 |---|---:|---:|---:|---:|---:|
-| A1 | 351 | 58 | 1 | 109 | 183 |
-| A2 | 443 | 109 | 4 | 91 | 239 |
-| FO | 474 | 121 | 5 | 103 | 245 |
+| A1 | 351 | 59 | 1 | 109 | 182 |
+| A2 | 443 | 113 | 4 | 91 | 235 |
+| FO | 474 | 125 | 5 | 103 | 241 |
 
 ## avatar box
 
