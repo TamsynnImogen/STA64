@@ -78,6 +78,7 @@ impl Sim {
         self.colonies_craft_transferred(id);
         self.transports.end(id);
         self.recrew.remove(id);
+        self.repairs.remove_entity(id);
         self.switches.edit(id, |s| s.special_forces = false);
         if previous_owner != to {
             self.reset_impulse(id);

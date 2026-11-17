@@ -746,3 +746,49 @@ fn the_path_planning_switch_overrides_the_cfg_key_both_ways() {
     assert!(cross_with_planning(None, false) < 1.0, "Some(false) flies through with cfg 1");
     assert!(cross_with_planning(None, true) > 400.0, "control: planning on routes round");
 }
+
+/// SIM-65: an enemy station of radius 400 on the course; `addToPlanner` as given. The
+/// cruiser's motion tick by tick from the origin towards (0, 3000).
+fn past_a_station(add_to_planner: Option<bool>, pathing: Option<PathingRules>) -> Vec<(Vec3, (Fixed, Fixed))> {
+    let base = content(None);
+    let mut b = ContentDb::builder().profile(base.profile()).features(base.features().clone());
+    for w in base.weapons() {
+        b = b.weapon(w.clone());
+    }
+    for u in base.units() {
+        let mut u = u.clone();
+        if u.odf == "fx_station" {
+            u.radius = Fixed::from_int(400);
+            u.stats.add_to_planner = add_to_planner;
+        }
+        b = b.unit(u);
+    }
+    let db = b.build().unwrap();
+    let db = match pathing {
+        Some(p) => db.with_rules(Rules::default().with_pathing(p)),
+        None => db,
+    };
+    let mut sim = sim_with(Vec::new(), Arc::new(db));
+    let key = sim.content().unwrap().key("fx_station").unwrap();
+    sim.spawn_def(key, PlayerId(2), v(0, 1500), (Fixed::ZERO, Fixed::ONE)).unwrap();
+    let ship = put(&mut sim, "fx_cruiser", v(0, 0));
+    go(&mut sim, ship, v(0, 3000));
+    (0..1200)
+        .map(|_| {
+            sim.step(&[]);
+            let u = sim.unit(ship).unwrap();
+            (u.pos, u.heading)
+        })
+        .collect()
+}
+
+#[test]
+fn a_station_with_add_to_planner_zero_is_left_out_of_planning() {
+    let unplanned = PathingRules { enabled: false, ..Default::default() };
+    let planned_round = past_a_station(None, None);
+    let left_out = past_a_station(Some(false), None);
+    let no_planning = past_a_station(None, Some(unplanned));
+    assert_ne!(planned_round, no_planning, "a station is planned round by default");
+    assert_eq!(left_out, no_planning, "`addToPlanner = 0`: as if the planner were off");
+    assert_eq!(past_a_station(Some(true), None), planned_round, "`addToPlanner = 1` is the default");
+}

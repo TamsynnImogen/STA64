@@ -337,6 +337,7 @@ fn stats(odf: &Odf, file: &str, warnings: &mut Vec<Warning>) -> crate::def::Unit
         can_attack_planets: r.flag("canAttackPlanets"),
         can_only_attack_planets: r.flag("canOnlyAttackPlanets"),
         recycles_in_place: r.flag("recyclesInPlace"),
+        add_to_planner: r.flag("addToPlanner"),
         built_by_evolution: r.flag("shipIsBuiltByEvolution"),
         built_by_ships: r.flag("shipIsBuiltByShips"),
         health_rate: signed(&mut r, "healthRate"),

@@ -216,6 +216,8 @@ pub struct Sim {
     transports: combat::boarding::Transports,
     /// Station recovery activation and damage holds (SIM-70), saved and hashed.
     recrew: recrew::Recrews,
+    /// Yard repair queues (SIM-40); in the digest and the snapshot once any exists.
+    repairs: repair::Repairs,
     /// Mission-wide switches (LUA-41), saved; hashed only when not the default.
     mission_switches: mission_switches::MissionSwitches,
 }
@@ -259,6 +261,7 @@ impl Sim {
             colonies: Default::default(),
             transports: Default::default(),
             recrew: Default::default(),
+            repairs: Default::default(),
             mission_switches: Default::default(),
         }
     }
@@ -298,6 +301,7 @@ impl Sim {
         if ok && let command::CommandKind::Order(o) = &c.kind {
             self.colonies_after_order(c.player, o);
             self.transports_after_order(c.player, o);
+            self.repairs_after_order(c.player, o);
         }
         ok
     }
@@ -454,8 +458,7 @@ impl Sim {
                 let Some(db) = self.content.as_deref() else { return false };
                 self.production.order_rally(db, &self.units, c.player, builders, *at)
             }
-            // Yard repair remains unavailable until its runtime is integrated.
-            Order::Repair { .. } => false,
+            Order::Repair { units, yard } => self.apply_repair(c.player, units, *yard),
             Order::Recrew { units, on } => self.order_recrew(c.player, units, *on),
         }
     }
@@ -521,6 +524,7 @@ impl Sim {
             // Pulses and arrivals after the hits, before the latch upkeep (SIM-46).
             self.step_transports();
             self.step_recrew();
+            self.step_repairs();
             let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
             combat::casualty::step(&mut self.units, &db, &mut casualties);
             for (id, by) in killed {

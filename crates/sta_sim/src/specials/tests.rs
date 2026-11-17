@@ -394,3 +394,46 @@ fn mid_cloak_snapshot_continues_identically() {
     assert_eq!(loaded.specials.energy_of(c), live.specials.energy_of(c));
     assert!(loaded.unit(c).unwrap().flags.contains(UnitFlags::CLOAKED));
 }
+
+/// SIM-73 `weapon_cloak_fire`: the loud cloaker's scene on content with that
+/// switch, its beam's `cloakEnable` as given. Returns the cloaker's shots
+/// once it is cloaked and an enemy is within reach.
+fn shots_from_cloak(switch: bool, cloak_enable: Option<bool>) -> usize {
+    let fake = sta_content::fake::db();
+    let (units, weapons) = fixture::defs();
+    let mut features = fake.features().clone();
+    features.weapon_cloak_fire = switch;
+    let mut b = sta_content::ContentDb::builder().profile(fake.profile()).features(features);
+    for mut w in fake.weapons().cloned().chain(weapons) {
+        w.base.cloak_enable = cloak_enable;
+        b = b.weapon(w);
+    }
+    for u in fake.units().cloned().chain(units) {
+        b = b.unit(u);
+    }
+    let db = Arc::new(b.build().unwrap());
+    let seat = |id: u8, team: u8| PlayerSetup { id: PlayerId(id), team: TeamId(team), race: "fx".into(), control: Control::Idle };
+    let setup = GameSetup {
+        seed: 3,
+        map: Arc::new(sta_content::MapDef::empty()),
+        content: Arc::clone(&db),
+        players: vec![seat(1, 1), seat(2, 2)],
+        options: GameOptions::default(),
+    };
+    let mut sim = Sim::from_setup(&setup);
+    let c = sim.spawn_def(db.key("fx_cloaker_loud").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
+    let e = sim.spawn_def(db.key("fx_frigate").unwrap(), PlayerId(2), v(3000, 0), (-Fixed::ONE, Fixed::ZERO)).unwrap();
+    run(&mut sim, &[cloak(1, c, true)], 2);
+    assert_eq!(sim.specials.cloak_state(c), Some(CloakState::Cloaked));
+    sim.units.get_mut(e).unwrap().pos = v(300, 0);
+    fired_by(&run(&mut sim, &[], 2), c).len()
+}
+
+#[test]
+fn with_the_cloak_fire_switch_only_cloak_enabled_weapons_fire_from_a_cloak() {
+    assert!(shots_from_cloak(false, None) > 0, "switch off: `disableWeapons = 0` alone decides");
+    assert!(shots_from_cloak(false, Some(false)) > 0, "switch off: the key is not read");
+    assert_eq!(shots_from_cloak(true, None), 0, "switch on: no `cloakEnable`, no shot");
+    assert_eq!(shots_from_cloak(true, Some(false)), 0);
+    assert!(shots_from_cloak(true, Some(true)) > 0, "`cloakEnable = 1` fires from the cloak");
+}
