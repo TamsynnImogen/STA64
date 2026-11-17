@@ -306,7 +306,7 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] A2 nearest searches: skip derelicts once the view carries derelict state; measure mask and tie order on the bench. (#532)
 - [ ] A2 `BuildObject` object form: measure the rotation convention to accept non-zero offsets. (#532)
 - [ ] Client consumer (UI-30/MED) answers `A2.EnterKeyDone`, `AudioMessageDone`, `MovieDone`, `CineractiveStartDone` and handles the new `Call` events. (#532)
-- [ ] A converted-mission step machine polls `A2.ScriptWaits(script)`. (#532)
+- [x] A converted-mission step machine polls `A2.ScriptWaits(script)`. (#532) (done: the converter's step-machine prelude polls it, `tools/dsl_to_lua.py` `runScripts`)
 - [ ] SIM-40 follow-ups: the dock point on the yard model (`repairHardpoint`, `repairSide`, `a2_dock_offset`), Roots deltas (queue entry 50 further, priority repair), special energy refilled on completion, the HUD repair button (UI-04) and AI use; a paired scene timing one repair on stock A2.
 - [ ] Seams still needed (ranked list in the follow-up docs PR): Patrol, SearchAndDestroy, Scout, Colonize, warp Goto, PointAt, SetCrew, SetRace, SetPosition, AllowAsTarget, shield edits, targeted specials, unit command record. (#532)
 - [ ] LUA-05 follow-ups (#149 closed with 0 missing A2 calls): three bound A2 calls still always raise for want of a world-view field (`IsShipAliveAndOffMap` now reads the map bounds, `CountCapitalShips` the `shipType` letter): `IsCargoShipFullAndReadyToSend`, `IsCargoShipReadyToLoad`, `GetLatinumTraded`. Headless a2_fed01 (6,000 ticks) issues its 5 objectives at 72 s; the sim rejects its `A2.SetCrew` (UnitCrew) and `A2.SetRace` (UnitRace) edits, and `DisableSave`/`EnableSave`/`FerengiCanSteal`/`FerengiCanTrade` have no seam. AIP execution (`Player.loadAIP` only recorded) waits on the decision whether AIPs run through `sta_ai`. 9 A1 callables still raise.
@@ -316,7 +316,7 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] In-match text (UI-15): start a skirmish as a non-default race and kill a ship; the notice appears top centre, clear of the info text at the top left, and the info panel's race field names the race you play, not the map's default ([notices.rs](crates/sta64/src/ui/notices.rs), [map/mod.rs](crates/sta64/src/map/mod.rs))
 - [ ] Engine measurements, not measured yet: where stock and Roots choose impulse vs combat speed for an attack order (only the effect is measured; SIM-36)
 - [ ] Engine measurements, not measured yet: M1, M2 and M4 on Roots + FO 4.0 (only M3 measured; FO `ordnancedefenseweapon` decompiled only; SIM-34)
-- [ ] LUA-11: bind `GetHandle`, `AudioMessage`, `PlayMusic`, `CineractiveStart/End`, `ShowTitle`/`RemoveTitle`, `SetPosition`, `BuildObject`, `Stop`, `Goto` on `A2` so converted a2_fed01 passes its intro (LUA-05) (#534)
+- [x] LUA-11: bind `GetHandle`, `AudioMessage`, `PlayMusic`, `CineractiveStart/End`, `ShowTitle`/`RemoveTitle`, `SetPosition`, `BuildObject`, `Stop`, `Goto` on `A2` so converted a2_fed01 passes its intro (LUA-05) (#534) (done: bound on `A2`; `mission_dll_inventory.py` reports 0 missing A2 calls since #893)
 - [ ] LUA-11: script waits (FadeIn/FadeOut/Cineractive/AudioMessage/PlayMusic/WaitForEnterKey hold the calling script) in the converted runtime once the bindings report completion (#534)
 - [ ] LUA-11: engine-owned variables strength/moons/tried_warp_team_N written from the sim (AIP switching rules) (#534)
 - [ ] LUA-11: A1 front end for the lifter (stack-depth argument tracking, DllMain registration/init), 20 campaign missions (#534)
@@ -326,8 +326,8 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] UI-30: a converted A2 mission hosted in the client shows its opening camera and titles in a headless frame (needs the mission host) (#533)
 - [ ] UI-30: `ScriptReply` becomes a command in the shared stream (seam) so movie/message/skip answers replay (#533)
 - [ ] UI-30: `SetCameraZoom`, `CineractiveCameraOffset`, `CineractiveShot` meanings measured on the bench, then consumed (#533)
-- [ ] UI-30: map loader fills `ScenePaths` so path-point shots resolve (#533)
-- [ ] LUA-11: read the A2 BZN path list (sta_bzn) and fill `A2.paths`, then `Goto`/`BuildObject`/`GetDistance` by path run (19-22 missions) (#550)
+- [x] UI-30: map loader fills `ScenePaths` so path-point shots resolve (#533) (done: the mission host inserts `ScenePaths` from the map's paths, `game/mission_host.rs`)
+- [x] LUA-11: read the A2 BZN path list (sta_bzn) and fill `A2.paths`, then `Goto`/`BuildObject`/`GetDistance` by path run (19-22 missions) (#550) (done: `campaign::read_map_paths` fills `A2.paths`, CON-47)
 - [ ] LUA-11: engine-owned team variables (strength/moons/tried_warp) written from the sim for the AIP switching rules; fleet objects (`CreateNew*Fleet`) (#550)
 - [ ] LUA-11: measure what releases a cineractive start and Enter waits in the original (stand-in values today) (#550)
 - [ ] LUA-11: `IsCompromised` meaning (27 missions) and `AI_Team_Load_AIP` (30) once SIM rows land (#550)
@@ -349,7 +349,7 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] `cargo test -p sta_net --test rejoin` stays green 5 times in a row on a loaded machine (socket tests wait on conditions, never on sleeps). (#564)
 - [ ] After SIM changes to movement or the roster: `STA64_BLESS_NET_FIXTURE=1 cargo test -p sta_net --test snapshot_fixture` and say so in the PR. (#564)
 - [ ] Lobby (UI-11/INT) must: store the `rejoin_token` from `Welcome` and the new one from every rejoin; call `Peer::serve_rejoins` and `set_departure_source` on the host; show `ResyncEvent`s; not drop a seat while `rejoin_in_progress`; kick on `SeatAbuse`; fill `Start` seat lineage and pack names from the host's `ContentDb` (the snapshot's provenance is checked against them). (#564)
-- [ ] LUA-12: bind A2 `FailMission` / `SucceedMission` (unbound; missions cannot end). (#567)
+- [x] LUA-12: bind A2 `FailMission` / `SucceedMission` (unbound; missions cannot end). (#567) (done: bound, `api/a2/mission_end.rs`)
 - [ ] SIM-59: derelict latch and original owner as view fields; then `IsCompromised` is exact. (#567)
 - [ ] AI-06 / INT-M6: the client's mission host takes `take_aip_requests` and seats `MissionAiHub` controllers. (#565)
 - [ ] AI-06: watch a Roots mission AI (build list then priorities file) build and attack on a real run. (#565)
@@ -362,7 +362,7 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] SIM-57: measure `PointAt` on Armada I and `SetAngularVelocity` on Roots. (#570)
 - [ ] LUA-11: converter passes `Vector3 const&` slots as `Ref` tables (`SetAngularVelocity`); unresolved `G[0x...]` operands to `PointAt`. (#570)
 - [ ] Check `Start.map.digest` against each peer's `map_digest` at start (NET). (#569)
-- [ ] sta64 networked start: `Control::RemoteAi` must stay an AI seat (flow.rs). (#569)
+- [x] sta64 networked start: `Control::RemoteAi` must stay an AI seat (flow.rs). (#569) (done: `game/flow.rs` treats `RemoteAi` as an AI seat; `net_match.rs` gives it no local controller)
 - [ ] INT-M6/AI-06: a mission whose script loads an AIP at tick N has its AI seat act only from N (headless `game::mission_tests`); install-gated Roots and converted-A2 starts show no `Player.loadAIP` in `unsupported()`. (#575)
 - [ ] SIM-61: a save after a scripted AIP load keeps the plan (the plan is outside the snapshot today). (#575)
 - [ ] LUA-13: with a stock install, `tools/campaign_readiness.py --converted --ticks 9000` shows 0 wins, 0 losses that rest on a gap, and the blocked reasons fall as gaps close. (#577)
@@ -371,10 +371,10 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] `python3 tools/campaign_readiness.py --converted --a2 <stock> --ticks 9000`: no first-problem call is a converter defect (SetAngularVelocity, GetNearestObjectNearPosition, G[...] operands gone); `engine_reads` non-empty for AIP missions. (#586)
 - [ ] A host binds `A2.EngineVariable(name)` for team strength / moons / warp tries. (#586)
 - [ ] SIM seam: synchronous spawn so queries (GetMaxHealth) work on a BuildObject handle in the same tick (tutorial4). (#586)
-- [ ] LUA-14 follow-up: model `isCineractiveDone` (camera-shot completion) so A1 openings end (fed1, fed2, finale5) (#591)
+- [x] LUA-14 follow-up: model `isCineractiveDone` (camera-shot completion) so A1 openings end (fed1, fed2, finale5) (#591) (done: the runtime writes `isCineractiveDone` / `isCineractiveCancel` while a cineractive runs, `sta_mission/src/cineractive.rs`)
 - [ ] LUA-14 follow-up: A1 `BuildObject` "neutral ownership requires a resource definition" (team mapping) (#591)
 - [ ] LUA-14 follow-up: engine behaviour of A1 calls on an invalid or dead handle (read from Armada.exe), as A2's object guard (#591)
-- [ ] SIM-36 follow-up: join SIM-58's per-team targetable mask into `combat::targeting::candidate`.
+- [x] SIM-36 follow-up: join SIM-58's per-team targetable mask into `combat::targeting::candidate`. (done: `candidate` takes the switch table and skips `blocked_for` targets)
 - [ ] SIM-36 follow-up: run `sta-bench pair attack-approach` both sides (STA64 side on install content) and set its tolerances from the report.
 - [ ] SIM-36 follow-up: measure the Roots construction ship in transit, and the stock assist through the HUD autonomy buttons.
 - [ ] Referee: run `relay`, `netplay host --referee`, `netplay join` and `referee` as in the recipe on a second machine over a real network.
@@ -550,7 +550,7 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] Render (#758): the team material's specular colour is still added after the tint (tinted highlight regardless of owner colour); measure a team-face highlight against the original (A2 bench) before changing it.
 - [ ] Render (#761): measure on the original which colour team-material faces of unowned objects (derelicts, neutral stations) show, and the player colour of the first lobby slot and of a mission's BZN team 1; debris from a destroyed subsystem draws team faces white whatever the owner.
 - [ ] SIM-65 (#759): orbital stations (`addToPlanner = 0`) are now out of the path planner; freighters chase a circling station and dock within arrival distance: add the original's `resourcesCanHandle` filter for which station takes the cargo.
-- [ ] SIM-65 (#759): the orbital beam uses the orbit owner (falls back to pick), so an off-ring station in reach of a planet fires without circling: decide with the income package; trace `a2_borg06` once Special_Attack lands.
+- [ ] SIM-65 (#759): assert the freighter docking test per freighter; trace `a2_borg06` once Special_Attack lands.
 - [ ] SIM-65 (#759): a station on two crossing rings orbits only the planet whose circle it is nearest to; an enemy orbital beam is drawn without a fog check of its own (not checked on screen).
 - [ ] UI-33 (#760): measure on the original bench the command palette's top-left position on the 16:9 sheet and the 5:4 sheet and settle the rule (reference-canvas versus derived from the minimap).
 - [ ] LUA-36 (#764): Armada II scripted music: a music override of the playlist with a per-sound stop and the music volume (a scripted track follows the UI volume today); one shared sound-id counter for `A2.AudioMessage`/`PlayMusic` and `Media:playSound` (ids can collide).

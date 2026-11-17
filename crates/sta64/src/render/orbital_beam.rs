@@ -3,7 +3,8 @@
 //!
 //! Like a freighter's beam (RND-29, [`super::mining`]) this is a visual effect, not sim state: the
 //! view says where the station and its planet are (the planet is the one whose orbit the station is
-//! on, [`sta_sim::production::orbit::owner`]), and every `shotDelay` of the station's mining weapon
+//! on, [`sta_sim::production::orbit::on_ring`]; a station off every ring fires nothing, as it earns
+//! nothing in SIM-72's income), and every `shotDelay` of the station's mining weapon
 //! (`gOrbitalBeam`: 1.5 s, ordnance class `minebm`, `lifeSpan` 1.25 s) a [`MiningShot`] is sent for
 //! [`weapons`](super::fx::weapons): the beam is on about five sixths of the time and follows the
 //! station round the planet. No owner, crew or power is asked: the original's step tests none
@@ -61,7 +62,7 @@ fn fire(mut beams: ResMut<Beams>, link: Res<SimLink>, content: Res<ContentRes>, 
     let (planets, _) = orbit::from_view(db, view);
     let now = clock.now();
     for s in stations {
-        let Some(planet) = orbit::owner(&planets, s.pos) else { continue };
+        let Some(planet) = orbit::on_ring(&planets, s.pos) else { continue };
         let Some(wp) = db.unit(s.def).and_then(|d| mining_weapon(db, d)) else { continue };
         let next = beams.0.entry(s.id).or_insert(now);
         if now >= *next {
@@ -106,12 +107,22 @@ mod tests {
     /// turn between tick 0 and 300; an ordinary station beside it.
     fn app() -> (App, Entity) {
         let db = db();
-        let text = "{ units: [
-            { id: 1, def: \"o_world\", owner: 0, hull: 1, rails: [{ at: 0, pos: { x: 0, y: 0, z: 0 } }] },
-            { id: 2, def: \"o_station\", owner: 0, hull: 1, rails: [{ at: 0, pos: { x: 0, y: 0, z: 275 } }, { at: 300, pos: { x: 275, y: 0, z: 0 } }] },
-            { id: 3, def: \"o_plain\", owner: 0, hull: 1, rails: [{ at: 0, pos: { x: 900, y: 0, z: 0 } }] },
-        ], events: [] }";
-        let src = ScriptedSource::from_json5(text, &db).unwrap();
+        // The station follows the ring in eight straight steps: a chord sags at most 5 units inside the
+        // circle, within `orbit::on_ring`'s tolerance, so it stays on its planet's orbit throughout.
+        let rail = (0..=8)
+            .map(|k| {
+                let a = k as f64 / 8.0 * std::f64::consts::FRAC_PI_2;
+                format!("{{ at: {}, pos: {{ x: {:.3}, y: 0, z: {:.3} }} }}", k * 300 / 8, 275.0 * a.sin(), 275.0 * a.cos())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let text = format!("{{ units: [
+            {{ id: 1, def: \"o_world\", owner: 0, hull: 1, rails: [{{ at: 0, pos: {{ x: 0, y: 0, z: 0 }} }}] }},
+            {{ id: 2, def: \"o_station\", owner: 0, hull: 1, rails: [{rail}] }},
+            {{ id: 3, def: \"o_plain\", owner: 0, hull: 1, rails: [{{ at: 0, pos: {{ x: 900, y: 0, z: 0 }} }}] }},
+            {{ id: 4, def: \"o_station\", owner: 0, hull: 1, rails: [{{ at: 0, pos: {{ x: 0, y: 0, z: -340 }} }}] }},
+        ], events: [] }}");
+        let src = ScriptedSource::from_json5(&text, &db).unwrap();
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / TICK_HZ as f64)))
@@ -122,7 +133,7 @@ mod tests {
             .add_systems(Update, crate::render::units::place.in_set(GameSet::Interpolate));
         configure_sets(&mut app);
         let mut station = Entity::PLACEHOLDER;
-        for (id, x, z) in [(1, 0.0, 0.0), (2, 0.0, 275.0), (3, 900.0, 0.0)] {
+        for (id, x, z) in [(1, 0.0, 0.0), (2, 0.0, 275.0), (3, 900.0, 0.0), (4, 0.0, -340.0)] {
             let e = app.world_mut().spawn((SimEntity(EntityId(id)), Transform::from_translation(to_bevy([x, 0.0, z])))).id();
             app.world_mut().resource_mut::<SimEntities>().0.insert(EntityId(id), e);
             if id == 2 {
@@ -133,7 +144,8 @@ mod tests {
     }
 
     /// The orbital station's beam is up in pulses all the time, from the station to the planet and
-    /// along it while it circles; the ordinary station with the same weapon fires nothing.
+    /// along it while it circles; the ordinary station with the same weapon fires nothing, and
+    /// neither does an orbital station off the planet's ring (65 units beyond it).
     #[test]
     fn the_orbital_station_pulses_its_beam_at_its_planet_and_follows_it() {
         let (mut app, _) = app();
