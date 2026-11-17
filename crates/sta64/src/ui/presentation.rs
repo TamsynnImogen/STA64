@@ -929,51 +929,117 @@ fn text_ends_with_heading(body: &str, heading: &str) -> bool {
     !want.is_empty() && body.lines().rev().find(|l| !l.trim().is_empty()).is_some_and(|l| norm(l) == want)
 }
 
-/// The panel is A2 stock's `objectivesPanelArea=192 80 1280 1024` of 1600x1200, the
-/// title and text 30/50 px in, the OK button at (952, 948) of 252x60 inside it.
+/// Where the objectives panel draws, from the race's GUI cfg (UI-48): `objectivesPanelArea`
+/// on the cfg's canvas, and inside it the title, summary heading, text, objectives heading
+/// and OK button rectangles with their colours, sprites and string keys. A key the cfg leaves
+/// out takes A2 stock's `gui_glob16x12.cfg` value, which is what the panel drew before.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ObjectivesLayout {
+    pub canvas: (f32, f32),
+    pub panel: [f32; 4],
+    pub title: [f32; 4],
+    pub summary: [f32; 4],
+    pub text: [f32; 4],
+    pub header: [f32; 4],
+    pub ok: [f32; 4],
+    pub title_colour: Option<Color>,
+    pub summary_colour: Option<Color>,
+    pub text_colour: Option<Color>,
+    pub header_colour: Option<Color>,
+    pub ok_image: Option<String>,
+    pub ok_text: String,
+    pub ok_tooltip: Option<String>,
+}
+
+impl ObjectivesLayout {
+    pub(crate) fn from_cfg(cfg: Option<&sta_content::GuiLayout>) -> ObjectivesLayout {
+        let rect = |key: &str, stock: [f32; 4]| {
+            cfg.and_then(|c| c.rects.get(key)).filter(|r| r.w > 0 && r.h > 0).map_or(stock, |r| [r.x as f32, r.y as f32, r.w as f32, r.h as f32])
+        };
+        let colour = |key: &str| cfg.and_then(|c| c.colours.get(key)).map(|c| Color::srgba(c.r, c.g, c.b, c.a));
+        let name = |key: &str| cfg.and_then(|c| c.names.get(key)).cloned();
+        let canvas = cfg.map(|c| c.canvas).filter(|c| c.0 > 0 && c.1 > 0).map_or((1600.0, 1200.0), |c| (c.0 as f32, c.1 as f32));
+        ObjectivesLayout {
+            canvas,
+            // `objectivesPanelArea` is a panel key: the cfg keeps it with the panel.
+            panel: cfg
+                .and_then(|c| c.panels.iter().find(|(k, _)| k.eq_ignore_ascii_case("objectives")).and_then(|(_, p)| p.area))
+                .filter(|r| r.w > 0 && r.h > 0)
+                .map_or([192.0, 80.0, 1280.0, 1024.0], |r| [r.x as f32, r.y as f32, r.w as f32, r.h as f32]),
+            title: rect("objectivesTitleInformationArea", [30.0, 50.0, 1200.0, 50.0]),
+            summary: rect("objectivesSummaryInformationArea", [30.0, 120.0, 1200.0, 40.0]),
+            text: rect("objectivesTextInformationArea", [50.0, 160.0, 1200.0, 485.0]),
+            header: rect("objectivesHeaderInformationArea", [30.0, 392.0, 1200.0, 45.0]),
+            ok: rect("objectivesOkayButtonArea", [952.0, 948.0, 252.0, 60.0]),
+            title_colour: colour("objectivesTitleColor"),
+            summary_colour: colour("objectivesSummaryColor"),
+            text_colour: colour("objectivesTextColor"),
+            header_colour: colour("objectivesHeaderColor"),
+            ok_image: name("objectivesOkayButtonImage"),
+            ok_text: name("objectivesOkayButtonText").unwrap_or_else(|| "GUI_POP_OBJ_BUTTON".to_owned()),
+            ok_tooltip: name("objectivesOkayButtonTooltip"),
+        }
+    }
+}
+
+/// The panel on the cfg's rectangles (see [`ObjectivesLayout`]). Text blocks are placed at
+/// their rectangles' tops: the title, the briefing heading, the briefing in the text area,
+/// the objectives heading and the objective lines under it.
+#[allow(clippy::too_many_arguments)]
 fn draw_panel(
     mut commands: Commands,
     theme: Res<Theme>,
     strings: Option<Res<Strings>>,
+    hud: Option<Res<crate::ui::hud::HudConfig>>,
     view: Res<ObjectivesView>,
     queue: Res<MessageQueue>,
     roots: Query<Entity, With<PanelRoot>>,
-    mut shown: Local<Option<PanelContent>>,
+    mut shown: Local<Option<(PanelContent, ObjectivesLayout)>>,
 ) {
+    let layout = ObjectivesLayout::from_cfg(hud.as_deref().and_then(|h| h.gui.as_ref()));
     let want = panel_content(&view, &queue);
-    if want == *shown && !theme.is_changed() {
+    let same = match (&want, shown.as_ref()) {
+        (None, None) => true,
+        (Some(w), Some((c, l))) => w == c && *l == layout,
+        _ => false,
+    };
+    if same && !theme.is_changed() {
         return;
     }
     for e in &roots {
         commands.entity(e).despawn();
     }
-    *shown = want.clone();
+    *shown = want.clone().map(|c| (c, layout.clone()));
     let Some(c) = want else { return };
     let s = strings.as_deref();
-    let (pw, ph) = (1280.0, 1024.0);
+    let l = &layout;
+    let [px, py, pw, ph] = l.panel;
     let pct = |v: f32, of: f32| Val::Percent(v / of * 100.0);
-    let head = |t: String, colour: Color| (Node { margin: UiRect::bottom(Val::Px(theme.gap)), ..default() }, children![sprite_text_styled(t, theme.heading_size, colour, SpriteTextStyle::role(font_role(&theme, theme.heading_size)).wrap_to_parent())]);
-    let line = |t: String, colour: Color| (Node { margin: UiRect::bottom(Val::Px(theme.gap)), ..default() }, children![sprite_text_styled(t, theme.text_size, colour, SpriteTextStyle::role(font_role(&theme, theme.text_size)).wrap_to_parent())]);
-    let summary_colour = Color::srgb(0.8, 1.0, 1.0);
-    let ok = fixed(s, "GUI_POP_OBJ_BUTTON", "OK");
+    let at = |r: [f32; 4]| Node { position_type: PositionType::Absolute, left: pct(r[0], pw), top: pct(r[1], ph), width: pct(r[2], pw), flex_direction: FlexDirection::Column, ..default() };
+    let text = |t: String, size: f32, colour: Color| sprite_text_styled(t, size, colour, SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent());
+    let line = |t: String, colour: Color| (Node { margin: UiRect::bottom(Val::Px(theme.gap)), ..default() }, children![text(t, theme.text_size, colour)]);
+    let summary_colour = l.summary_colour.unwrap_or(Color::srgb(0.8, 1.0, 1.0));
+    let header_colour = l.header_colour.unwrap_or(summary_colour);
+    let text_colour = l.text_colour.unwrap_or(theme.text);
+    let ok = fixed(s, &l.ok_text, "OK");
     let mut panel = commands.spawn((
         PanelRoot,
-        Node { position_type: PositionType::Absolute, left: pct(192.0, 1600.0), top: pct(80.0, 1200.0), width: pct(pw, 1600.0), height: pct(ph, 1200.0), flex_direction: FlexDirection::Column, padding: UiRect { left: pct(50.0, pw), right: pct(30.0, pw), top: pct(50.0, ph), bottom: Val::Px(0.0) }, ..default() },
+        Node { position_type: PositionType::Absolute, left: pct(px, l.canvas.0), top: pct(py, l.canvas.1), width: pct(pw, l.canvas.0), height: pct(ph, l.canvas.1), ..default() },
         BackgroundColor(theme.panel.with_alpha(0.92)),
         GlobalZIndex(920),
     ));
     panel.with_children(|p| {
         if !c.title.is_empty() {
-            p.spawn(head(c.title.clone(), theme.title));
+            p.spawn((at(l.title), children![text(c.title.clone(), theme.heading_size, l.title_colour.unwrap_or(theme.title))]));
         }
         if c.message.is_none()
             && !c.body.is_empty()
             && let Some(h) = heading_text(s, "GUI_OD_BRIEFING_SUMMARY", "BRIEFING SUMMARY:")
         {
-            p.spawn(head(h, summary_colour));
+            p.spawn((at(l.summary), children![text(h, theme.heading_size, summary_colour)]));
         }
         if !c.body.is_empty() {
-            p.spawn(line(c.body.clone(), theme.text));
+            p.spawn((at(l.text), children![line(c.body.clone(), text_colour)]));
         }
         if c.message.is_none() && !c.lines.is_empty() {
             // Objective files may carry the heading themselves as the last line of the briefing text; then it is
@@ -982,18 +1048,31 @@ fn draw_panel(
             // still show two.
             let heading = fixed(s, "GUI_OD_OBJECTIVES", "OBJECTIVES:");
             if !text_ends_with_heading(&c.body, &heading) {
-                p.spawn(head(heading, summary_colour));
+                p.spawn((at(l.header), children![text(heading, theme.heading_size, header_colour)]));
             }
-            for l in &c.lines {
-                let (mark, colour) = match l.state {
-                    ObjectiveState::Active => ("* ", theme.text),
-                    ObjectiveState::Complete => ("* ", theme.good),
-                    ObjectiveState::Failed => ("* ", theme.bad),
-                };
-                p.spawn(line(format!("{mark}{}", l.text), colour));
-            }
+            let below = [l.text[0], l.header[1] + l.header[3], l.text[2], 0.0];
+            p.spawn(at(below)).with_children(|list| {
+                for o in &c.lines {
+                    let colour = match o.state {
+                        ObjectiveState::Active => text_colour,
+                        ObjectiveState::Complete => theme.good,
+                        ObjectiveState::Failed => theme.bad,
+                    };
+                    list.spawn(line(format!("* {}", o.text), colour));
+                }
+            });
         }
-        p.spawn((Node { position_type: PositionType::Absolute, left: pct(952.0, pw), top: pct(948.0, ph), ..default() }, children![(OkButton, button(&theme, &ok, 252.0))]));
+        let mut ok_button = p.spawn((Node { position_type: PositionType::Absolute, left: pct(l.ok[0], pw), top: pct(l.ok[1], ph), ..default() },));
+        ok_button.with_children(|b| {
+            let mut e = b.spawn((OkButton, button(&theme, &ok, l.ok[2])));
+            if let Some(img) = &l.ok_image {
+                // The cfg's okay border image (the hover frame) is not drawn: the sprite button has no hover art.
+                e.insert(crate::ui::gui_sprites::GuiButton { names: vec![img.clone()], keep_label: true });
+            }
+            if let Some(tip) = &l.ok_tooltip {
+                e.insert(crate::ui::notices::Tooltip::new(fixed(s, tip, "")));
+            }
+        });
     });
 }
 
@@ -1876,5 +1955,21 @@ mod tests {
         step(&mut app, 0.0);
         assert_eq!(app.world().resource::<Unhandled>().count("A1.ShowBridgeScene"), 1);
         assert_eq!(BridgeScene::from_call("A1.Nothing", &[Arg::Bool(true)]), None);
+    }
+
+    #[test]
+    fn the_objectives_panel_takes_its_rectangles_colours_and_button_from_the_cfg() {
+        let stock = ObjectivesLayout::from_cfg(None);
+        assert_eq!((stock.panel, stock.ok, stock.ok_text.as_str()), ([192.0, 80.0, 1280.0, 1024.0], [952.0, 948.0, 252.0, 60.0], "GUI_POP_OBJ_BUTTON"));
+        let text = "screenWidth = 800\nscreenHeight = 600\nobjectivesPanelArea = 10 20 700 500\nobjectivesTitleInformationArea = 5 6 300 20\nobjectivesHeaderInformationArea = 0 0 0 0\nobjectivesTitleColor = 1 0 0\nobjectivesOkayButtonArea = 400 450 120 30\nobjectivesOkayButtonImage = \"ok_spr\"\nobjectivesOkayButtonText = \"MY_OK\"\n";
+        let (cfg, warnings) = sta_content::GuiCfg::parse("obj.cfg", text);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let l = ObjectivesLayout::from_cfg(Some(&cfg.layout_auto()));
+        assert_eq!(l.canvas, (800.0, 600.0));
+        assert_eq!((l.panel, l.title, l.ok), ([10.0, 20.0, 700.0, 500.0], [5.0, 6.0, 300.0, 20.0], [400.0, 450.0, 120.0, 30.0]));
+        assert_eq!(l.header, stock.header, "a zero rectangle keeps the stock place");
+        assert_eq!(l.title_colour, Some(Color::srgba(1.0, 0.0, 0.0, 1.0)));
+        assert_eq!((l.ok_image.as_deref(), l.ok_text.as_str()), (Some("ok_spr"), "MY_OK"));
+        assert_eq!(l.text_colour, None, "an absent colour keeps the theme's");
     }
 }
