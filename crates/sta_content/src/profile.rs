@@ -515,7 +515,7 @@ fn read_ini_named(root: &Path, name: &str) -> Option<Ini> {
 }
 
 /// Switch names, in `Features` declaration order.
-pub const FEATURE_NAMES: [&str; 38] = [
+pub const FEATURE_NAMES: [&str; 39] = [
     "weapon_damage_controls",
     "point_defense_cycles",
     "fire_arcs",
@@ -554,6 +554,7 @@ pub const FEATURE_NAMES: [&str; 38] = [
     "weapon_hit_roll",
     "weapon_target_damage",
     "weapon_target_masks",
+    "weapon_cloak_fire",
 ];
 
 impl Features {
@@ -597,6 +598,7 @@ impl Features {
             "weapon_hit_roll" => &mut self.weapon_hit_roll,
             "weapon_target_damage" => &mut self.weapon_target_damage,
             "weapon_target_masks" => &mut self.weapon_target_masks,
+            "weapon_cloak_fire" => &mut self.weapon_cloak_fire,
             _ => return None,
         })
     }

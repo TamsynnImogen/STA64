@@ -759,6 +759,14 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
     {
         c.raw("damage_rows", &table(l));
     }
+    if features.weapon_target_damage
+        && let Some(l) = &w.base.damage_variance
+    {
+        c.raw("variance_rows", &table(l));
+    }
+    if features.weapon_cloak_fire && w.base.cloak_enable == Some(true) {
+        c.raw("cloak_enable", "1");
+    }
     if features.weapon_target_masks && w.base.targets != crate::TargetMaskDef::default() {
         let m = &w.base.targets;
         let flag = |b: Option<bool>| b.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string());
