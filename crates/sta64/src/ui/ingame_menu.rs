@@ -71,6 +71,11 @@ pub struct OpenInGameMenu;
 #[derive(Resource, Debug, Clone, Copy, Default)]
 pub struct NetworkedMatch;
 
+/// The player paused the match with the pause key (UI-48): single player only. The
+/// pause box shows while it is set and the menu is closed.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PlayerPause(pub bool);
+
 /// The page of the menu that is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MenuPage {
@@ -403,18 +408,42 @@ fn buttons(
 }
 
 /// Single player stops the sim while the menu is open; a networked match never does.
-fn pause(menu: Res<InGameMenu>, net: Option<Res<NetworkedMatch>>, game: Option<Res<crate::game::net_match::NetGame>>, clock: Option<ResMut<AnimClock>>) {
+/// The pause key toggles [`PlayerPause`] while the menu is closed, in a match that is not
+/// networked (a lockstep match never waits for one player).
+#[allow(clippy::too_many_arguments)]
+fn pause_key(
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    bindings: Option<Res<KeyBindings>>,
+    menu: Res<InGameMenu>,
+    net: Option<Res<NetworkedMatch>>,
+    game: Option<Res<crate::game::net_match::NetGame>>,
+    mut paused: ResMut<PlayerPause>,
+) {
+    if menu.open || net.is_some() || game.is_some() {
+        return;
+    }
+    let pressed = keys.as_deref().is_some_and(|k| match bindings.as_deref() {
+        Some(b) => b.just_pressed(Action::PauseGame, k),
+        None => k.just_pressed(KeyCode::Pause),
+    });
+    if pressed {
+        paused.0 = !paused.0;
+    }
+}
+
+fn pause(menu: Res<InGameMenu>, player: Res<PlayerPause>, net: Option<Res<NetworkedMatch>>, game: Option<Res<crate::game::net_match::NetGame>>, clock: Option<ResMut<AnimClock>>) {
     let Some(mut clock) = clock else { return };
     // A lockstep match (INT-M5's `NetGame`, or whoever inserts the marker) never waits for a menu.
-    let want = menu.open && net.is_none() && game.is_none();
+    let want = (menu.open || player.0) && net.is_none() && game.is_none();
     if clock.paused() != want {
         clock.set_paused(want);
     }
 }
 
 /// Back out of the match: the menu is closed and the clock runs again, for the next match.
-fn reset(mut menu: ResMut<InGameMenu>, clock: Option<ResMut<AnimClock>>, mut tab: ResMut<OptionsTab>) {
+fn reset(mut menu: ResMut<InGameMenu>, clock: Option<ResMut<AnimClock>>, mut tab: ResMut<OptionsTab>, mut player: ResMut<PlayerPause>) {
     *menu = InGameMenu::default();
+    player.0 = false;
     tab.0 = 0;
     if let Some(mut c) = clock {
         c.set_paused(false);
@@ -451,6 +480,7 @@ impl Plugin for InGameMenuPlugin {
         }
         let ingame = in_state(AppState::InGame);
         app.init_resource::<InGameMenu>()
+            .init_resource::<PlayerPause>()
             .init_resource::<Settings>()
             .init_resource::<crate::ui::profile::UiPreference>()
             .init_resource::<OptionsTab>()
@@ -460,7 +490,8 @@ impl Plugin for InGameMenuPlugin {
             .add_message::<LeaveMatch>()
             .add_systems(OnExit(AppState::InGame), reset)
             // The menu's own logic runs before the sim link: a menu opened this frame holds the next tick.
-            .add_systems(Update, (keys_and_requests, buttons, pause).chain().run_if(ingame.clone()).in_set(GameSet::Input))
+            .add_systems(Update, (keys_and_requests, pause_key, buttons, super::pause_box::unpause, pause).chain().run_if(ingame.clone()).in_set(GameSet::Input))
+            .add_systems(Update, super::pause_box::draw.run_if(resource_exists::<Theme>).in_set(GameSet::Ui))
             .add_systems(
                 Update,
                 (

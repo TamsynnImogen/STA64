@@ -46,10 +46,13 @@ pub enum Action {
     RevealFog,
     /// Toggle the shroud while the reveal modifier is held.
     RevealShroud,
+    /// Pause or resume a single-player match (UI-48; the stock games bind
+    /// `pauseGame` to the Pause key).
+    PauseGame,
 }
 
 impl Action {
-    pub const ALL: [Action; 22] = [
+    pub const ALL: [Action; 23] = [
         Action::AddModifier,
         Action::GroupModifier,
         Action::CentreModifier,
@@ -72,6 +75,7 @@ impl Action {
         Action::RevealModifier,
         Action::RevealFog,
         Action::RevealShroud,
+        Action::PauseGame,
     ];
 
     pub fn name(self) -> String {
@@ -90,6 +94,7 @@ impl Action {
             Action::RevealModifier => "reveal_modifier".into(),
             Action::RevealFog => "reveal_fog".into(),
             Action::RevealShroud => "reveal_shroud".into(),
+            Action::PauseGame => "pause_game".into(),
         }
     }
 
@@ -130,6 +135,7 @@ impl Default for KeyBindings {
         m.insert(Action::RevealModifier, vec![KeyCode::AltLeft, KeyCode::AltRight]);
         m.insert(Action::RevealFog, vec![KeyCode::KeyF]);
         m.insert(Action::RevealShroud, vec![KeyCode::KeyV]);
+        m.insert(Action::PauseGame, vec![KeyCode::Pause]);
         for (n, k) in DIGITS.into_iter().enumerate() {
             m.insert(Action::Group(n as u8), vec![k]);
         }

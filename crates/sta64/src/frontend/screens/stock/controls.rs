@@ -80,6 +80,7 @@ fn action_label(action: Action) -> String {
         Action::RevealModifier => tr("Reveal modifier"),
         Action::RevealFog => tr("Toggle fog"),
         Action::RevealShroud => tr("Toggle shroud"),
+        Action::PauseGame => tr("Pause game"),
     }
 }
 
@@ -257,7 +258,7 @@ mod tests {
         let mut bindings = KeyBindings::default();
         let mut draft = ControlsDraft::default();
         draft.reload(&bindings);
-        assert_eq!(draft.text.len(), 22);
+        assert_eq!(draft.text.len(), 23);
         draft.text[0] = "KeyQ".into();
         draft.page = 3;
         draft.text[21] = "KeyH".into();
