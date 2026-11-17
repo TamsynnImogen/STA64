@@ -34,20 +34,20 @@ Games: the stock data of Armada I (A1), Armada II (A2) and Fleet Operations (FO)
 | minimap | 12 | 6 | 0 | 4 | 2 |
 | objectives | 24 | 12 | 0 | 8 | 4 |
 | other | 21 | 8 | 2 | 1 | 10 |
-| pause box | 17 | 0 | 0 | 8 | 9 |
+| pause box | 17 | 7 | 0 | 8 | 2 |
 | resource bar | 44 | 16 | 0 | 28 | 0 |
 | screen | 2 | 0 | 2 | 0 | 0 |
 | speed rail | 10 | 0 | 0 | 6 | 4 |
 | tooltip and cursor | 7 | 0 | 0 | 0 | 7 |
-| **all** | **581** | **125** | **5** | **158** | **293** |
+| **all** | **581** | **132** | **5** | **158** | **286** |
 
 By game (a key set by several games counts in each):
 
 | game | keys | drawn | typed | built | missing |
 |---|---:|---:|---:|---:|---:|
-| A1 | 351 | 48 | 1 | 109 | 193 |
-| A2 | 443 | 100 | 4 | 91 | 248 |
-| FO | 474 | 112 | 5 | 103 | 254 |
+| A1 | 351 | 55 | 1 | 109 | 186 |
+| A2 | 443 | 107 | 4 | 91 | 241 |
+| FO | 474 | 119 | 5 | 103 | 247 |
 
 ## avatar box
 
@@ -648,14 +648,14 @@ By game (a key set by several games counts in each):
 | `pauseGameDefaultCursor` | A1 A2 FO | built |
 | `pauseGamePanelArea` | A1 A2 FO | built |
 | `pauseGameTextArea` | A1 A2 FO | built |
-| `pauseGameTextColor` | A1 A2 FO | missing |
-| `pauseGameTextLabel` | A1 A2 FO | missing |
-| `pauseGameTextLabelArea` | A1 A2 FO | missing |
+| `pauseGameTextColor` | A1 A2 FO | drawn |
+| `pauseGameTextLabel` | A1 A2 FO | drawn |
+| `pauseGameTextLabelArea` | A1 A2 FO | drawn |
 | `pauseGameUnpauseBorderImage` | A2 FO | missing |
-| `pauseGameUnpauseButtonArea` | A1 A2 FO | missing |
-| `pauseGameUnpauseButtonImage` | A1 A2 FO | missing |
-| `pauseGameUnpauseButtonText` | A1 A2 FO | missing |
-| `pauseGameUnpauseButtonTooltip` | A1 A2 FO | missing |
+| `pauseGameUnpauseButtonArea` | A1 A2 FO | drawn |
+| `pauseGameUnpauseButtonImage` | A1 A2 FO | drawn |
+| `pauseGameUnpauseButtonText` | A1 A2 FO | drawn |
+| `pauseGameUnpauseButtonTooltip` | A1 A2 FO | drawn |
 
 ## resource bar
 

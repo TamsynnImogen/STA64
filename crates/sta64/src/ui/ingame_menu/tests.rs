@@ -222,6 +222,35 @@ fn a_networked_match_is_never_paused() {
 }
 
 #[test]
+fn the_pause_key_holds_a_single_player_match_and_continue_resumes_it() {
+    let mut app = app();
+    start_match(&mut app);
+    key(&mut app, KeyCode::Pause);
+    assert!(app.world().resource::<PlayerPause>().0);
+    assert!(app.world().resource::<AnimClock>().paused());
+    let held = tick_digest(&app);
+    settle(&mut app, 20);
+    assert_eq!(tick_digest(&app), held, "no tick while paused");
+    let ok = app.world_mut().query_filtered::<Entity, With<crate::ui::pause_box::UnpauseButton>>().iter(app.world()).next();
+    // The box needs the theme; without one the key toggles back.
+    match ok {
+        Some(e) => {
+            click(app.world_mut(), e);
+            settle(&mut app, 3);
+        }
+        None => key(&mut app, KeyCode::Pause),
+    }
+    assert!(!app.world().resource::<PlayerPause>().0);
+    assert!(!app.world().resource::<AnimClock>().paused());
+    settle(&mut app, 10);
+    assert!(tick_digest(&app).0 > held.0, "the sim runs again");
+    // Networked: the key does nothing.
+    app.insert_resource(NetworkedMatch);
+    key(&mut app, KeyCode::Pause);
+    assert!(!app.world().resource::<PlayerPause>().0);
+}
+
+#[test]
 fn the_options_panel_changes_a_volume_and_the_settings_store_saves_it() {
     use crate::frontend::screens::stock::controls::{BindingField, ControlsAct, ControlsDraft};
     use crate::ui::theme::TextField;
