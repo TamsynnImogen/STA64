@@ -749,3 +749,31 @@ fn an_order_the_sim_could_not_serve_is_sent_again() {
     ai.go(5, &mut out, unit, to);
     assert_eq!(out.len(), 2, "after OrderAbandoned the AI sends it again");
 }
+
+/// AI-05: a warship whose ODF says `collisionRadius = 2` plays no fleet role; any other value,
+/// or none, keeps it a warship.
+#[test]
+fn a_collision_radius_of_two_keeps_a_warship_out_of_fleets() {
+    let fake = sta_content::fake::db();
+    let with = |r: Option<i32>| {
+        let mut b = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for w in fake.weapons() {
+            b = b.weapon(w.clone());
+        }
+        for u in fake.units() {
+            let mut u = u.clone();
+            if u.odf == "fx_cruiser" {
+                u.stats.collision_radius = r.map(sta_sim::Fixed::from_int);
+            }
+            b = b.unit(u);
+        }
+        b.build().unwrap()
+    };
+    for (r, want) in [(None, Role::Warship), (Some(3), Role::Warship), (Some(2), Role::Other)] {
+        let db = with(r);
+        assert_eq!(super::fleet_role(&db, db.key("fx_cruiser").unwrap()), want, "collisionRadius {r:?}");
+    }
+    // The miner keeps its role whatever the key says.
+    let db = with(Some(2));
+    assert_eq!(super::fleet_role(&db, db.key("fx_miner").unwrap()), Role::Miner);
+}
