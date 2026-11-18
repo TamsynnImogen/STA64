@@ -214,10 +214,6 @@ pub fn resolve_profile(vfs: Option<&Vfs>, preference: UiPreference, profiles: &U
         }
         warn!("UI profile: unknown [Mod] UiProfile={name:?}; using game preset");
     }
-    // An Armada I compatibility mod (requires A1Compat) on another engine: Armada I's interface.
-    if game != GameProfile::Native && sta_content::profile::a1_compat(vfs) {
-        return UiProfile::Armada1;
-    }
     UiProfile::from_game(game)
 }
 
