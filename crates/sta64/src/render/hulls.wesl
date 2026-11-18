@@ -123,7 +123,8 @@ fn from_srgb(c: vec3<f32>) -> vec3<f32> {
 // diffuse colour times N.L, specular added after the texture, the lit colour clipped at 1.
 fn shade_stock(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>) -> vec4<f32> {
     let v = normalize(k.eye.xyz - wp);
-    var sum = k.mamb.rgb * k.amb.rgb;
+    // mamb.a 2 (Armada I): the vertex starts from scene ambient + material ambient; else their product.
+    var sum = select(k.mamb.rgb * k.amb.rgb, k.mamb.rgb + k.amb.rgb, k.mamb.a > 1.5);
     var spec = vec3<f32>(0.0);
     for (var j = 0; j < 4; j++) {
         let l = k.dvec[j].xyz;

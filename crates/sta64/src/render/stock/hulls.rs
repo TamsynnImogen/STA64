@@ -9,7 +9,11 @@
 //! term: its SOD materials mostly carry one authoring default specular and the original
 //! shows no sheen. Evidence grade: stated by a modder, not measured; the Armada II comparison
 //! judged whole-frame luminance and did not isolate the specular term, so Armada II and Fleet
-//! Operations keep the term unchanged. The values are still read, for a later specular port. The Refit look (`hulls.rs`, `hulls.wesl`'s other
+//! Operations keep the term unchanged. On an Armada I install the ambient part is the SUM
+//! `material ambient + scene ambient` (the engine's vertex lighting starts each vertex from that
+//! sum; read from the executable, static; the planet's disc then matches one frame of the
+//! original on the same map within a few percent: seen in two frames of the original, one map);
+//! which of the engine's two lighting paths runs is not established. The values are still read, for a later specular port. The Refit look (`hulls.rs`, `hulls.wesl`'s other
 //! branch) keeps its own constants and is drawn under [`RenderProfile::Refit`].
 //!
 //! Data keys read: per SOD lighting material `ambient`, `diffuse`, `specular`, `power`,
@@ -88,7 +92,10 @@ impl Plugin for StockHullsPlugin {
 /// no ambient colour, so only the lights reach it).
 pub fn apply_material(p: &mut crate::render::hulls::HullParams, _m: &StandardMaterial, part: &crate::render::hulls::HullPart, no_specular: bool) {
     let l = part.stock.unwrap_or(StockLight { ambient: [0.0; 3], diffuse: [1.0; 3], specular: [0.0; 3], power: 1.0, model: 2 });
-    p.mamb = Vec3::from(l.ambient).extend(1.0);
+    // `mamb.w` 1: the scene's ambient light multiplies the material's ambient colour; 2 (an Armada I
+    // install): the two are added, as the engine's vertex lighting starts each vertex from their sum
+    // (read from the executable, static; see `hulls.wesl`'s `shade_stock`).
+    p.mamb = Vec3::from(l.ambient).extend(if no_specular { 2.0 } else { 1.0 });
     p.mdif = Vec3::from(l.diffuse).extend(0.0);
     // Armada I: no highlight (the data is read; the specular term itself is untouched).
     let specular = if no_specular { [0.0; 3] } else { l.specular };
@@ -137,6 +144,22 @@ mod tests {
         other.set_stock(true);
         assert_eq!(hull_material(&std, &part, &a1).params.mspc, Vec4::new(0.0, 0.0, 0.0, 40.0));
         assert_eq!(hull_material(&std, &part, &other).params.mspc, Vec4::new(0.2, 0.2, 0.2, 40.0));
+    }
+
+    /// Armada I adds the scene ambient to the material's; Armada II and Fleet Operations multiply them.
+    #[test]
+    fn armada_one_adds_the_scene_ambient_to_the_materials() {
+        let std = StandardMaterial::default();
+        let part = HullPart { stock: Some(lit()), ..default() };
+        let mut a1 = HullView::default();
+        a1.set_stock(true);
+        a1.set_no_specular(true);
+        let mut other = HullView::default();
+        other.set_stock(true);
+        assert_eq!(hull_material(&std, &part, &a1).params.mamb.w, 2.0);
+        assert_eq!(hull_material(&std, &part, &other).params.mamb.w, 1.0);
+        let src = include_str!("../hulls.wesl");
+        assert!(src.contains("k.mamb.rgb + k.amb.rgb, k.mamb.a > 1.5"));
     }
 
     fn material(name: &str, diffuse: [f32; 3]) -> sta_assets::model::LightingMaterial {
