@@ -34,8 +34,6 @@ follows the user's A2FOExtensions policy at source
   nonplayable. Field presence, including inherited presence, matches that policy.
 - A fully authored valid slot table overrides this legacy default. The fallback
   applies only to the A1 profile; A2/FO content does not acquire races from GUI keys.
-  (Proposed: also an A1 compatibility mod on another engine, a mod requiring the
-  `A1Compat` module; see the 2026-11-17 amendment to ADR 0006.)
 
 No original ODF is rewritten, no faction names are hardcoded, and no native
 executable is run. This ports the bounded race-menu eligibility policy, not
