@@ -180,6 +180,10 @@ pub struct HullView {
     /// The Stock profile draws hulls (RND-24) and the scene's ambient light colour.
     pub(crate) stock: bool,
     pub(crate) ambient: Vec3,
+    /// An Armada I install (`Sta1Classic`): the Stock look draws no specular highlight from the
+    /// SOD lighting material (its values are read and kept). Armada II and Fleet Operations
+    /// are not changed by this.
+    pub(crate) no_specular: bool,
 }
 
 impl HullView {
@@ -187,6 +191,12 @@ impl HullView {
     #[cfg(test)]
     pub(crate) fn set_stock(&mut self, on: bool) {
         self.stock = on;
+    }
+
+    /// The view of an Armada I install (tests).
+    #[cfg(test)]
+    pub(crate) fn set_no_specular(&mut self, on: bool) {
+        self.no_specular = on;
     }
 
     pub(crate) fn write(&self, p: &mut HullParams) {
@@ -293,6 +303,7 @@ fn update_view(
     ambient: Option<Res<GlobalAmbientLight>>,
     profile: Option<Res<crate::render::profile::RenderProfile>>,
     effects: Option<Res<crate::render::profile::ProfileEffects>>,
+    content: Option<Res<crate::sim_link::ContentRes>>,
     standard: Res<Assets<StandardMaterial>>,
     mut view: ResMut<HullView>,
     made: Res<HullMaterials>,
@@ -319,12 +330,13 @@ fn update_view(
         let c = a.color.to_srgba();
         Vec3::new(c.red, c.green, c.blue)
     });
-    let now = HullView { eye: cam.translation().extend(1.0), dvec, dcol, sdvec, sdcol, stock, ambient: amb, ..view.clone() };
+    let no_specular = content.is_some_and(|c| c.0.profile() == sta_content::Profile::Sta1Classic);
+    let now = HullView { eye: cam.translation().extend(1.0), dvec, dcol, sdvec, sdcol, stock, ambient: amb, no_specular, ..view.clone() };
     let moved = (now.eye - view.eye).length_squared() > 1e-4;
-    if !moved && now.dvec == view.dvec && now.dcol == view.dcol && now.sdvec == view.sdvec && now.sdcol == view.sdcol && now.stock == view.stock && now.ambient == view.ambient {
+    if !moved && now.dvec == view.dvec && now.dcol == view.dcol && now.sdvec == view.sdvec && now.sdcol == view.sdcol && now.stock == view.stock && now.no_specular == view.no_specular && now.ambient == view.ambient {
         return;
     }
-    let switched = now.stock != view.stock;
+    let switched = now.stock != view.stock || now.no_specular != view.no_specular;
     *view = now;
     if switched {
         // The profile changed: every hull material is made again in the other look.
@@ -371,7 +383,7 @@ pub fn hull_material(m: &StandardMaterial, part: &HullPart, view: &HullView) -> 
         ..default()
     };
     if view.stock {
-        crate::render::stock::hulls::apply_material(&mut params, m, part);
+        crate::render::stock::hulls::apply_material(&mut params, m, part, view.no_specular);
     }
     set_source(&mut params, m);
     view.write(&mut params);
