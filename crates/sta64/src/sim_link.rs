@@ -44,6 +44,7 @@ pub struct SimLink {
     cargo: Vec<sta_sim::economy::view::CargoView>,
     /// Resource-node amounts at the same tick as `curr` (UI-48).
     nodes: Vec<sta_sim::economy::view::NodeView>,
+    systems: Vec<sta_sim::combat::damage::SystemView>,
     /// Who this client's [`CommandQueue`] speaks for.
     player: PlayerId,
     /// Next sequence number for this client's commands.
@@ -67,7 +68,8 @@ impl SimLink {
         let production = source.production_view();
         let cargo = source.cargo_view();
         let nodes = source.node_view();
-        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, cargo, nodes, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None, lifted: None, fog_lifted: false }
+        let systems = source.system_view();
+        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, cargo, nodes, systems, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None, lifted: None, fog_lifted: false }
     }
 
     /// Log every tick into `replay` (a [`Replay::new`] header of the game's
@@ -131,6 +133,11 @@ impl SimLink {
     /// Resource-node amounts at the same simulation tick as `curr` (UI-48).
     pub fn nodes(&self) -> &[sta_sim::economy::view::NodeView] {
         &self.nodes
+    }
+
+    /// Damaged or switched-off systems (UI-48 system icons), refreshed each tick.
+    pub fn systems(&self) -> &[sta_sim::combat::damage::SystemView] {
+        &self.systems
     }
 
     /// UI-46 (presentation only): show every unit to the local player while `lifted`. The shown views
@@ -211,6 +218,7 @@ impl SimLink {
         self.production = self.source.get().production_view();
         self.cargo = self.source.get().cargo_view();
         self.nodes = self.source.get().node_view();
+        self.systems = self.source.get().system_view();
         if let Some(log) = &mut self.log {
             log.log_step(before, &batch, out.view.tick, out.view.digest, DEFAULT_DIGEST_EVERY);
         }
