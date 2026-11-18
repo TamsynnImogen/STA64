@@ -192,7 +192,7 @@ fn a_snapshot_mid_repair_continues_alike() {
 #[test]
 fn the_record_refuses_bad_queues() {
     use super::service::{Repairs, RepairsRec};
-    let ok = |q: Vec<(EntityId, Vec<EntityId>)>| Repairs::from_rec(RepairsRec { version: 1, queues: q }, |id| id.0 < 10).is_some();
+    let ok = |q: Vec<(EntityId, Vec<EntityId>)>| Repairs::from_rec(RepairsRec { version: 2, queues: q, beams: Vec::new() }, |id| id.0 < 10).is_some();
     assert!(ok(vec![(EntityId(1), vec![EntityId(2), EntityId(3)])]));
     assert!(!ok(vec![(EntityId(1), vec![])]), "empty queue");
     assert!(!ok(vec![(EntityId(3), vec![EntityId(2)]), (EntityId(1), vec![EntityId(4)])]), "yards out of order");

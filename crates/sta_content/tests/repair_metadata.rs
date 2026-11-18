@@ -141,3 +141,17 @@ fn repair_side_accepts_exact_i32_boundaries_and_rejects_overflow() {
         }
     }
 }
+
+#[test]
+fn repair_rate_is_read_and_digested_only_when_set() {
+    let (db, warnings) = load(&format!("{CRAFT}repairRate = .25\n"), None);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(repair(&db).repair_rate, Some(Fixed::from_f64(0.25)));
+    let (plain, _) = load(CRAFT, None);
+    assert_eq!(repair(&plain).repair_rate, None);
+    assert_ne!(plain.hash(), db.hash(), "a set rate changes the digest");
+    // A unit with other repair keys but no rate keeps the digest it had before the key existed.
+    let (other, _) = load(&format!("{CRAFT}repairFacility = 1\n"), None);
+    let (other2, _) = load(&format!("{CRAFT}repairFacility = 1\n"), None);
+    assert_eq!(other.hash(), other2.hash());
+}

@@ -582,13 +582,19 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         || repair.repair_hardpoint.is_some()
         || repair.repair_side.is_some()
         || repair.can_shipyard_repair.is_some()
+        || repair.repair_rate.is_some()
     {
-        c.raw("repair", &group(Canon::new()
-            .list("system_times", repair.system_times.map(|t| t.map_or_else(|| "-".to_owned(), fixed_text)))
+        let mut g = Canon::new();
+        g.list("system_times", repair.system_times.map(|t| t.map_or_else(|| "-".to_owned(), fixed_text)))
             .raw("facility", &repair.repair_facility.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string()))
             .raw("hardpoint", &repair.repair_hardpoint.as_ref().map_or_else(|| "-".to_owned(), |s| quoted(&s.to_ascii_lowercase())))
             .raw("side", &repair.repair_side.map_or_else(|| "-".to_owned(), |side| side.to_string()))
-            .raw("can_shipyard_repair", &repair.can_shipyard_repair.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string()))));
+            .raw("can_shipyard_repair", &repair.can_shipyard_repair.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string()));
+        // SIM-41: only when set, so content without it keeps its digest (D10).
+        if let Some(rate) = repair.repair_rate {
+            g.fixed("rate", rate);
+        }
+        c.raw("repair", &group(&mut g));
     }
     // SIM-69: the transport keys the sim reads, only when set.
     {
