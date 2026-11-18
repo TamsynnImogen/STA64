@@ -191,6 +191,26 @@ pub(super) fn bar(commands: &mut Commands, root: Entity, r: R, value: f32, (trac
     ));
 }
 
+/// A bar drawn with its cfg sprite (`<bar>` beside `<bar>Area`, e.g. `infoSingleDilithiumBar`):
+/// the picture at the bar's full size, tinted by the fill colour and cut off at the value, over
+/// the track colour. `update` resizes the clip like a plain bar's fill. Which part shows and the
+/// tint are ours (the original's bar drawing not read).
+pub(super) fn sprite_bar(commands: &mut Commands, root: Entity, r: R, value: f32, (track, color): (Color, Color), kind: StockBar, sprite: &str) {
+    let mut picture = GuiImage::new(sprite);
+    picture.color = color;
+    commands.entity(root).with_child((
+        node(r),
+        BackgroundColor(track),
+        Pickable::IGNORE,
+        children![(
+            kind,
+            Node { width: Val::Px(r.w * value.clamp(0.0, 1.0)), height: Val::Percent(100.0), overflow: Overflow::clip(), ..default() },
+            Pickable::IGNORE,
+            children![(Node { width: Val::Px(r.w), height: Val::Percent(100.0), flex_shrink: 0.0, ..default() }, Pickable::IGNORE, picture)],
+        )],
+    ));
+}
+
 fn resource_slot(id: usize) -> Option<usize> {
     match id {
         2 => Some(0),
@@ -462,7 +482,11 @@ fn spawn_single(
         && let Some(r) = layout.at(origin, area)
     {
         // Full until the status feed says otherwise (`update` fills it every frame).
-        bar(commands, root, r, 1.0, bar_colours(layout, &[track], &[fill], theme.accent), StockBar::Node(r.w));
+        let colours = bar_colours(layout, &[track], &[fill], theme.accent);
+        match layout.name(area.trim_end_matches("Area")) {
+            Some(sprite) => sprite_bar(commands, root, r, 1.0, colours, StockBar::Node(r.w), sprite),
+            None => bar(commands, root, r, 1.0, colours, StockBar::Node(r.w)),
+        }
     }
     // UI-48: the system icons of a ship or station with systems (`infosystem` frame n at
     // `infoSystemIcon_n`, the builder card's `infoBuildSystemIcon_n`).
