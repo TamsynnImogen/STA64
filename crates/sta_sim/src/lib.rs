@@ -218,6 +218,8 @@ pub struct Sim {
     recrew: recrew::Recrews,
     /// Yard repair queues (SIM-40); in the digest and the snapshot once any exists.
     repairs: repair::Repairs,
+    /// Units being decommissioned (SIM-45); in the digest once any exists.
+    recycles: economy::recycle::Recycles,
     /// Mission-wide switches (LUA-41), saved; hashed only when not the default.
     mission_switches: mission_switches::MissionSwitches,
 }
@@ -262,6 +264,7 @@ impl Sim {
             transports: Default::default(),
             recrew: Default::default(),
             repairs: Default::default(),
+            recycles: Default::default(),
             mission_switches: Default::default(),
         }
     }
@@ -302,6 +305,7 @@ impl Sim {
             self.colonies_after_order(c.player, o);
             self.transports_after_order(c.player, o);
             self.repairs_after_order(c.player, o);
+            self.recycles_after_order(c.player, o);
         }
         ok
     }
@@ -459,6 +463,7 @@ impl Sim {
                 self.production.order_rally(db, &self.units, c.player, builders, *at)
             }
             Order::Repair { units, yard } => self.apply_repair(c.player, units, *yard),
+            Order::Decommission { units, yard } => self.apply_decommission(c.player, units, *yard),
             Order::Recrew { units, on } => self.order_recrew(c.player, units, *on),
         }
     }
@@ -527,6 +532,7 @@ impl Sim {
             self.step_transports();
             self.step_recrew();
             self.step_repairs();
+            self.step_recycles();
             let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
             combat::casualty::step(&mut self.units, &db, &mut casualties);
             for (id, by) in killed {

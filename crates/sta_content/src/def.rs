@@ -199,6 +199,13 @@ pub struct RepairDef {
     /// warn and stay absent. This is metadata, not a native side policy.
     pub repair_side: Option<i32>,
     pub can_shipyard_repair: Option<bool>,
+    /// SIM-45: `recyclesInPlace` (a unit decommissioned where it stands).
+    pub recycles_in_place: Option<bool>,
+    /// SIM-45: `decommissionFacility` (a yard that takes decommissioned ships).
+    pub decommission_facility: Option<bool>,
+    /// SIM-45: a yard's `dilithiumRecyclingFraction` / `metalRecyclingFraction` (else the race's).
+    pub dilithium_recycling: Option<Fixed>,
+    pub metal_recycling: Option<Fixed>,
 }
 
 /// Where a hardpoint can aim, relative to the unit's heading, without

@@ -39,6 +39,10 @@ pub struct Capabilities {
     /// whose ODF does not say `canShipyardRepair = 0` (the sim's `Order::Repair` gate, SIM-40;
     /// whether it needs repair and which yard is the sim's to judge).
     pub repair: bool,
+    /// The stock DECOMMISSION command (`decom.odf`: source a ship or a facility, not a planet or
+    /// species mine): an own ship or finished station (the sim's `Order::Decommission` gate,
+    /// SIM-45; which yard, or in place, is the sim's to judge).
+    pub decommission: bool,
     /// A finished station with a positive live crew capacity can show Recrew.
     pub recrew: bool,
     /// At least one eligible station is below its live crew maximum.
@@ -95,6 +99,7 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
         colonize: mobile && def.raw.bool("colony_ship").unwrap_or(false) && sta_sim::colony::is_pod_ship(db, def),
         transport: t.shown,
         repair: mobile && def.repair.can_shipyard_repair != Some(false),
+        decommission: matches!(kind, EntityKind::Craft | EntityKind::Station) && !u.flags.contains(UnitFlags::BUILDING) && u.progress.is_none_or(|p| p >= Fixed::ONE),
         transport_family: t.family,
         transport_ready: t.ready,
         recrew,
@@ -147,6 +152,7 @@ pub fn shared(feed: &HudFeed) -> Capabilities {
         common.transport_family |= next.transport_family;
         // Only the craft of a mixed selection that can go to a yard take the order (see `repairers`).
         common.repair |= next.repair;
+        common.decommission |= next.decommission;
         common.recrew |= next.recrew;
         common.recrew_ready |= next.recrew_ready;
         common.specials.retain(|s| next.specials.contains(s));
