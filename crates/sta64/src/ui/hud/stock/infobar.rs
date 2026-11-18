@@ -292,29 +292,13 @@ pub(in crate::ui::hud) fn update(
                 .iter()
                 .any(|visible| visible.id == unit.id)
     });
-    let selected = (feed.selected.len() == 1)
-        .then(|| feed.selected_units())
-        .and_then(|units| units.first().copied())
-        .filter(|unit| unit.flags.contains(UnitFlags::SELECTABLE))
-        .filter(|unit| {
-            feed.view
-                .visible_to(feed.player)
-                .iter()
-                .any(|visible| visible.id == unit.id)
-        });
-    let unit = hovered.or(selected);
+    // Only what is under the pointer: the selection has the info panel.
+    let unit = hovered;
     let layout = state.layout.as_ref();
     for (field, mut text, mut visibility) in &mut texts {
         let shown = unit.and_then(|unit| {
             if *field == InfoBarField::Name {
-                return Some((
-                    if hovered.is_some() {
-                        feed.unit_label(unit)
-                    } else {
-                        feed.name(unit)
-                    },
-                    None,
-                ));
+                return Some((feed.unit_label(unit), None));
             }
             value(unit, *field)
         });
