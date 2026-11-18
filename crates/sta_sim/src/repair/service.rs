@@ -300,7 +300,8 @@ impl Sim {
             | Order::AttackPoint { units, .. }
             | Order::Guard { units, .. }
             | Order::Colonize { units, .. }
-            | Order::Transport { units, .. } => units,
+            | Order::Transport { units, .. }
+            | Order::Decommission { units, .. } => units,
             Order::Build { builder, .. } => std::slice::from_ref(builder),
             _ => return,
         };

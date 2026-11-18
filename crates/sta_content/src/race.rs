@@ -157,6 +157,10 @@ pub struct RaceRepair {
     /// crew status (SIM-74, read by `sta_sim` under `crew_weapon_delay`).
     pub weapon_yellow: Option<Fixed>,
     pub weapon_red: Option<Fixed>,
+    /// `recycleDilithiumFraction` / `recycleMetalFraction`: the share of the cost an in-place
+    /// recycle returns, and a yard's when it sets none (SIM-45; the executable's default is 0.8).
+    pub recycle_dilithium: Option<Fixed>,
+    pub recycle_metal: Option<Fixed>,
 }
 
 impl RaceRepair {
@@ -400,6 +404,8 @@ impl Races {
                         crew_red_status: repair_value("crewredstatus"),
                         weapon_yellow: repair_value("weaponyellow"),
                         weapon_red: repair_value("weaponred"),
+                        recycle_dilithium: repair_value("recycledilithiumfraction"),
+                        recycle_metal: repair_value("recyclemetalfraction"),
                     };
                     if !repair.is_empty() {
                         repair_names.push((name.clone(), s.clone()));

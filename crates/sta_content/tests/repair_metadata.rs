@@ -141,3 +141,15 @@ fn repair_side_accepts_exact_i32_boundaries_and_rejects_overflow() {
         }
     }
 }
+
+#[test]
+fn fo_recycle_amounts_and_time_are_read_only_when_set() {
+    let (db, warnings) = load(&format!("{CRAFT}recycleDilithium = 273\nrecycleLatinum = 100\nrecycleBiomatter = 9\nrecycleTime = 50\n"), None);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let r = repair(&db);
+    assert_eq!(r.recycle_amounts, Some([Fixed::from_int(273), Fixed::from_int(100), Fixed::ZERO, Fixed::from_int(9)]));
+    assert_eq!(r.recycle_time, Some(Fixed::from_int(50)));
+    let (plain, _) = load(CRAFT, None);
+    assert_eq!((repair(&plain).recycle_amounts, repair(&plain).recycle_time), (None, None));
+    assert_ne!(plain.hash(), db.hash());
+}

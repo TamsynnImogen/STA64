@@ -118,6 +118,10 @@ pub enum Order {
     /// it is gone: see [`crate::orders`]. A ward that is no live craft, or is
     /// the unit itself, is refused. Tag 20.
     Guard { units: Vec<EntityId>, ward: EntityId },
+    /// Decommission (SIM-45): each unit is recycled in place or at a yard and returns part of
+    /// its cost and its crew: see [`crate::economy::recycle`]. `Some(yard)` names the yard; `None`
+    /// lets the sim choose. Appended tag 21 preserves every preceding Order tag and payload.
+    Decommission { units: Vec<EntityId>, yard: Option<EntityId> },
 }
 
 /// Which autonomy an [`Order::Autonomy`] sets.
@@ -654,7 +658,8 @@ mod tests {
             (17, Order::Colonize { units: u.clone(), planet: id }),
             (18, Order::Transport { units: u.clone(), target: id, attack: false }),
             (19, Order::Recrew { units: u.clone(), on: None }),
-            (20, Order::Guard { units: u, ward: id }),
+            (20, Order::Guard { units: u.clone(), ward: id }),
+            (21, Order::Decommission { units: u, yard: Some(id) }),
         ];
         for (tag, o) in orders {
             let bytes = postcard::to_allocvec(&o).unwrap();

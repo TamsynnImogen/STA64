@@ -582,13 +582,41 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         || repair.repair_hardpoint.is_some()
         || repair.repair_side.is_some()
         || repair.can_shipyard_repair.is_some()
+        || repair.recycles_in_place.is_some()
+        || repair.decommission_facility.is_some()
+        || repair.dilithium_recycling.is_some()
+        || repair.metal_recycling.is_some()
+        || repair.recycle_amounts.is_some()
+        || repair.recycle_time.is_some()
     {
-        c.raw("repair", &group(Canon::new()
+        let mut g = Canon::new();
+        g
             .list("system_times", repair.system_times.map(|t| t.map_or_else(|| "-".to_owned(), fixed_text)))
             .raw("facility", &repair.repair_facility.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string()))
             .raw("hardpoint", &repair.repair_hardpoint.as_ref().map_or_else(|| "-".to_owned(), |s| quoted(&s.to_ascii_lowercase())))
             .raw("side", &repair.repair_side.map_or_else(|| "-".to_owned(), |side| side.to_string()))
-            .raw("can_shipyard_repair", &repair.can_shipyard_repair.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string()))));
+            .raw("can_shipyard_repair", &repair.can_shipyard_repair.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string()));
+        // SIM-45: each only when set (D10).
+        let flag = |b: bool| u8::from(b).to_string();
+        if let Some(b) = repair.recycles_in_place {
+            g.raw("recycles_in_place", &flag(b));
+        }
+        if let Some(b) = repair.decommission_facility {
+            g.raw("decommission_facility", &flag(b));
+        }
+        if let Some(v) = repair.dilithium_recycling {
+            g.fixed("dilithium_recycling", v);
+        }
+        if let Some(v) = repair.metal_recycling {
+            g.fixed("metal_recycling", v);
+        }
+        if let Some(a) = repair.recycle_amounts {
+            g.list("recycle_amounts", a.map(crate::digest::fixed_text));
+        }
+        if let Some(t) = repair.recycle_time {
+            g.fixed("recycle_time", t);
+        }
+        c.raw("repair", &group(&mut g));
     }
     // SIM-69: the transport keys the sim reads, only when set.
     {

@@ -22,12 +22,12 @@ fn guarded() -> Sim {
 #[test]
 fn the_guard_rows_are_in_a_format_from_33_and_the_previous_formats_are_refused() {
     // Format 33 added the guard rows; LUA-41 followed with 34, SIM-46's transport attacks with 35,
-    // SIM-40's repair queues with 36.
-    assert_eq!(FORMAT_VERSION, 36);
+    // SIM-40's repair queues with 36, SIM-45's decommissions with 37.
+    assert_eq!(FORMAT_VERSION, 37);
     let sim = guarded();
     let bytes = sim.snapshot();
-    assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), 36);
-    for old in [31u16, 32, 33, 34, 35] {
+    assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), 37);
+    for old in [31u16, 32, 33, 34, 35, 36] {
         let mut stale = bytes.clone();
         stale[4..6].copy_from_slice(&old.to_le_bytes());
         assert!(matches!(Sim::from_snapshot(&stale, sim.content.clone()), Err(SnapshotError::FormatVersion { found }) if found == old));

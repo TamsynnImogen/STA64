@@ -78,6 +78,8 @@ fn layered_race_repairs_inherit_and_override_without_losing_absence() {
                 crew_red_status: Some(Fixed::from_f64(-1.5)),
                 weapon_yellow: None,
                 weapon_red: None,
+                recycle_dilithium: None,
+                recycle_metal: None,
             }
         )]
     );
