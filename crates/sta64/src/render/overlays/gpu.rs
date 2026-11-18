@@ -392,4 +392,5 @@ fn installed_armada1_marker_renders_under_the_unit_on_hardware() {
     eprintln!("marker frame lit/neutral {marker:?}, plain frame {plain:?}");
     assert!(marker.0 > 800, "the marker should light many pixels below the unit: {marker:?}");
     assert!(marker.1 * 10 > marker.0 * 9, "the untinted marker is neutral grey: {marker:?}");
+    assert!(plain.1 * 3 < marker.1, "under the Armada II profile there is no grey marker, only the team ring: {plain:?} against {marker:?}");
 }

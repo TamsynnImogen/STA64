@@ -141,6 +141,7 @@ fn sync_overlays(
     mut commands: Commands,
     selection: Res<Selection>,
     hovered: Option<Res<HoveredUnit>>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
     art: Res<marker::MarkerArt>,
     ents: Res<SimEntities>,
     link: Res<SimLink>,
@@ -151,11 +152,14 @@ fn sync_overlays(
     existing: Query<(Entity, &Overlay, Has<marker::Marker>)>,
 ) {
     let mut want: BTreeMap<(EntityId, OverlayKind), Entity> = BTreeMap::new();
-    // The Armada I marker also shows under the hovered unit, selected or not.
+    // The Armada I marker also shows under the hovered unit, selected or not, except while a
+    // cineractive runs: hover tracking goes on then and ships sweeping under the resting cursor
+    // would flicker markers. Only this overlay is gated; hover for the HUD is unchanged. A
+    // selection kept through the cutscene keeps its marker.
     if art.art.is_some()
+        && !crate::ui::presentation::cutscene_running(cine)
         && let Some(id) = hovered.as_ref().and_then(|h| h.0)
         && let Some(&root) = ents.0.get(&id)
-        && units.get(root).is_ok()
     {
         want.insert((id, OverlayKind::Ring), root);
     }
@@ -196,7 +200,7 @@ fn sync_overlays(
                     marker::Marker { radius },
                     ChildOf(root),
                     Mesh3d(assets.quad.clone()),
-                    MeshMaterial3d(mats.add(marker::material(a))),
+                    MeshMaterial3d(a.material.clone()),
                     Transform::default(),
                 ));
             }
@@ -415,7 +419,7 @@ mod tests {
     }
 
     fn give_marker_art(app: &mut App) {
-        app.world_mut().resource_mut::<marker::MarkerArt>().art = Some(marker::Art { image: Handle::default(), uv: bevy::math::Affine2::IDENTITY });
+        app.world_mut().resource_mut::<marker::MarkerArt>().art = Some(marker::Art { material: Handle::default() });
     }
 
     fn sync(app: &mut App) {
@@ -450,6 +454,21 @@ mod tests {
         select(&mut app, &[]);
         sync(&mut app);
         assert!(markers(&mut app).is_empty());
+    }
+
+    #[test]
+    fn no_hover_marker_during_a_cineractive_but_a_kept_selection_keeps_its_marker() {
+        let mut app = rig(TWO);
+        app.update();
+        select(&mut app, &[1]);
+        give_marker_art(&mut app);
+        app.world_mut().insert_resource(HoveredUnit(Some(EntityId(2))));
+        app.world_mut().insert_resource(crate::ui::presentation::CineractiveState { on: true, skippable: true });
+        sync(&mut app);
+        assert_eq!(markers(&mut app), vec![EntityId(1)], "selected only: no hover marker in a cutscene");
+        app.world_mut().insert_resource(crate::ui::presentation::CineractiveState::default());
+        sync(&mut app);
+        assert_eq!(markers(&mut app), vec![EntityId(1), EntityId(2)], "hover marker is back when it ends");
     }
 
     #[test]

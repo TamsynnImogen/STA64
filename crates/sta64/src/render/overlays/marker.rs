@@ -44,9 +44,8 @@ pub struct MarkerArt {
 
 #[derive(Clone)]
 pub struct Art {
-    pub image: Handle<Image>,
-    /// UV transform that maps the unit quad onto the sprite's rectangle.
-    pub uv: Affine2,
+    /// The one untinted material every marker shares.
+    pub material: Handle<StandardMaterial>,
 }
 
 /// A marker quad under unit root `ChildOf`: `radius` is what it was sized by.
@@ -70,9 +69,10 @@ pub(super) fn load_art(
     profile: Option<Res<UiProfile>>,
     mounted: Option<Res<Mounted>>,
     images: Option<ResMut<Assets<Image>>>,
+    materials: Option<ResMut<Assets<StandardMaterial>>>,
 ) {
     let on = wanted(profile.as_deref());
-    let (Some(mounted), Some(mut images)) = (mounted, images) else {
+    let (Some(mounted), Some(mut images), Some(mut materials)) = (mounted, images, materials) else {
         if art.art.is_some() {
             art.art = None;
         }
@@ -97,14 +97,16 @@ pub(super) fn load_art(
         let mut cache = GuiSprites::default();
         let (image, size) = gui_sprites::page(sprite, GuiImageSampling::Linear, &mounted.0, &mut cache, &mut images, CompressedImageFormats::empty())?;
         let rect = gui_sprites::crop(sprite, size)?;
-        Some(Art { image, uv: uv_of(rect, size) })
+        let uv = uv_of(rect, size);
+        let material = materials.add(material(&image, uv));
+        Some(Art { material })
     });
 }
 
-pub(super) fn material(art: &Art) -> StandardMaterial {
+fn material(image: &Handle<Image>, uv: Affine2) -> StandardMaterial {
     StandardMaterial {
-        base_color_texture: Some(art.image.clone()),
-        uv_transform: art.uv,
+        base_color_texture: Some(image.clone()),
+        uv_transform: uv,
         unlit: true,
         cull_mode: None,
         alpha_mode: AlphaMode::Add,
