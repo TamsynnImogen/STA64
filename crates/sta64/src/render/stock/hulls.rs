@@ -5,11 +5,7 @@
 //! a face group's lit colour is the texture times the team colour (team groups) times
 //! `material ambient x scene ambient + sum over the map's lights of material diffuse x
 //! light colour x N.L`, plus the material's specular colour times `(N.H)^power` per light,
-//! added after the texture; clipped at 1. An Armada I install (`Sta1Classic`) draws no specular
-//! term: its SOD materials mostly carry one authoring default specular and the original
-//! shows no sheen. Evidence grade: stated by a modder, not measured; the Armada II comparison
-//! judged whole-frame luminance and did not isolate the specular term, so Armada II and Fleet
-//! Operations keep the term unchanged. The values are still read, for a later specular port. The Refit look (`hulls.rs`, `hulls.wesl`'s other
+//! added after the texture; clipped at 1. The Refit look (`hulls.rs`, `hulls.wesl`'s other
 //! branch) keeps its own constants and is drawn under [`RenderProfile::Refit`].
 //!
 //! Data keys read: per SOD lighting material `ambient`, `diffuse`, `specular`, `power`,
@@ -86,13 +82,11 @@ impl Plugin for StockHullsPlugin {
 /// Writes the stock look into a hull material's parameters (a part with no lighting
 /// material, e.g. a glTF, takes the engine's default white one; an M3D's material carries
 /// no ambient colour, so only the lights reach it).
-pub fn apply_material(p: &mut crate::render::hulls::HullParams, _m: &StandardMaterial, part: &crate::render::hulls::HullPart, no_specular: bool) {
+pub fn apply_material(p: &mut crate::render::hulls::HullParams, _m: &StandardMaterial, part: &crate::render::hulls::HullPart) {
     let l = part.stock.unwrap_or(StockLight { ambient: [0.0; 3], diffuse: [1.0; 3], specular: [0.0; 3], power: 1.0, model: 2 });
     p.mamb = Vec3::from(l.ambient).extend(1.0);
     p.mdif = Vec3::from(l.diffuse).extend(0.0);
-    // Armada I: no highlight (the data is read; the specular term itself is untouched).
-    let specular = if no_specular { [0.0; 3] } else { l.specular };
-    p.mspc = Vec3::from(specular).extend(l.power.max(1.0));
+    p.mspc = Vec3::from(l.specular).extend(l.power.max(1.0));
     p.misc = Vec4::new(1.0, 1.0, l.power.max(1.0), 1.0);
     p.rim = Vec4::ZERO;
     p.cut.z = 1.0;
@@ -123,20 +117,6 @@ mod tests {
         assert_eq!(stock.params.mdif, Vec4::new(0.9, 0.8, 0.7, 0.0));
         assert_eq!(stock.params.mspc, Vec4::new(0.2, 0.2, 0.2, 40.0));
         assert_eq!(stock.params.rim, Vec4::ZERO, "no rim light in the original");
-    }
-
-    /// Armada I draws no specular term; Armada II and Fleet Operations keep theirs.
-    #[test]
-    fn armada_one_draws_no_specular() {
-        let std = StandardMaterial::default();
-        let part = HullPart { stock: Some(lit()), ..default() };
-        let mut a1 = HullView::default();
-        a1.set_stock(true);
-        a1.set_no_specular(true);
-        let mut other = HullView::default();
-        other.set_stock(true);
-        assert_eq!(hull_material(&std, &part, &a1).params.mspc, Vec4::new(0.0, 0.0, 0.0, 40.0));
-        assert_eq!(hull_material(&std, &part, &other).params.mspc, Vec4::new(0.2, 0.2, 0.2, 40.0));
     }
 
     fn material(name: &str, diffuse: [f32; 3]) -> sta_assets::model::LightingMaterial {
@@ -217,7 +197,7 @@ mod tests {
     #[test]
     fn a_part_without_a_material_gets_the_engine_default() {
         let mut p = crate::render::hulls::HullParams::default();
-        apply_material(&mut p, &StandardMaterial::default(), &HullPart::default(), false);
+        apply_material(&mut p, &StandardMaterial::default(), &HullPart::default());
         assert_eq!(p.mdif, Vec4::new(1.0, 1.0, 1.0, 0.0));
         assert_eq!(p.mamb.w, 1.0);
     }
