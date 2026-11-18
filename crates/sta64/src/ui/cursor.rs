@@ -8,6 +8,11 @@
 //! whichever system decides (today `input/context.rs`, from the same decision a right-click
 //! uses). Client-side presentation only.
 //!
+//! Race variants (UI-45, read from data): Fleet Operations and Roots ship `<cursor>_<race>`
+//! sprites whose suffix is a race's `name` key (`_UnitedFederation` for `unitedfederation`,
+//! `_KlingonEmpire`, …; the table's lookup ignores case). The local player's race variant is used
+//! where the table has it, else the plain sprite; stock tables have none and are unchanged.
+//!
 //! Rules (read from data; see the package notes outside the repository): the hotspot is in
 //! texture pixels; a cell's size on screen is its texture size, so a mod that ships a larger
 //! texture under the same sprite names gets a larger cursor; a flipbook plays over the
@@ -125,6 +130,20 @@ fn resolve(name: &str, sprites: &mut CursorSprites, vfs: &sta_vfs::Vfs, images: 
     found
 }
 
+/// The sprite names to try, in order: the wanted cursor's race variant, the wanted cursor, the
+/// default's race variant, the default.
+pub(crate) fn candidates(wanted: &str, race: Option<&str>) -> Vec<String> {
+    let mut out = Vec::new();
+    for name in [wanted, DEFAULT] {
+        if let Some(r) = race {
+            out.push(format!("{name}_{r}"));
+        }
+        out.push(name.to_owned());
+    }
+    out.dedup();
+    out
+}
+
 fn reset_wanted(mut wanted: ResMut<WantedCursor>) {
     if wanted.0 != DEFAULT {
         wanted.0 = DEFAULT;
@@ -139,6 +158,7 @@ fn place(
     images: Option<ResMut<Assets<Image>>>,
     device: Option<Res<bevy::render::renderer::RenderDevice>>,
     ui_scale: Option<Res<UiScale>>,
+    race: Option<Res<crate::game::LocalRace>>,
     time: Res<Time>,
     mut sprites: ResMut<CursorSprites>,
     mut window: Query<(&Window, Option<&mut CursorOptions>), With<PrimaryWindow>>,
@@ -156,7 +176,8 @@ fn place(
     let art = match (&mounted, pointer) {
         (Some(m), Some(_)) => {
             let vfs = &m.0;
-            resolve(wanted.0, &mut sprites, vfs, &mut images, formats).or_else(|| resolve(DEFAULT, &mut sprites, vfs, &mut images, formats))
+            let race = race.as_deref().map(|r| r.name.as_str()).filter(|n| !n.is_empty());
+            candidates(wanted.0, race).iter().find_map(|name| resolve(name, &mut sprites, vfs, &mut images, formats))
         }
         _ => None,
     };
@@ -276,6 +297,19 @@ mod tests {
     }
 
     #[test]
+    fn the_local_races_variant_comes_first_then_the_plain_cursor() {
+        assert_eq!(candidates("c_attack", Some("klingonempire")), ["c_attack_klingonempire", "c_attack", &format!("{DEFAULT}_klingonempire"), DEFAULT]);
+        assert_eq!(candidates("c_attack", None), ["c_attack", DEFAULT]);
+        // The table's own lookup ignores case, so `c_attack_KlingonEmpire` is found by this name.
+        let table = SpriteTable::parse(b"sprite_table\n@referenceWidth=64\n@referenceHeight=32\nc_attack_KlingonEmpire tex_a 0 0 32 32 @cursor\nc_attack tex_a 32 0 32 32 @cursor\n");
+        let picked = candidates("c_attack", Some("klingonempire")).into_iter().find(|n| table.sprite(n).is_some());
+        assert_eq!(picked.as_deref(), Some("c_attack_klingonempire"));
+        assert_eq!(table.sprite("c_attack_klingonempire").unwrap().name, "c_attack_KlingonEmpire");
+        let plain = candidates("c_attack", Some("borg")).into_iter().find(|n| table.sprite(n).is_some());
+        assert_eq!(plain.as_deref(), Some("c_attack"), "no Borg variant: the plain cursor");
+    }
+
+    #[test]
     fn wanted_resets_to_the_pointer() {
         let mut app = App::new();
         app.init_resource::<WantedCursor>().add_systems(PreUpdate, reset_wanted);
@@ -304,6 +338,16 @@ mod tests {
             let cell = frames[0].size();
             assert!(frames.iter().all(|f| (f.size() - cell).abs().max_element() < 1e-3), "{name}: frames differ in size");
             assert!(origin.x <= cell.x && origin.y <= cell.y, "{name}: hotspot {origin:?} outside the {cell:?} cell");
+        }
+        // UI-45: where the table has race variants, each playable race's `name` finds its own.
+        let db_index = sta_content::OdfIndex::build(&vfs).0;
+        let (races, _) = sta_content::Races::load(&vfs, &db_index);
+        let names: Vec<String> = races.playable().iter().map(|r| r.name.clone()).collect();
+        let with_variants = names.iter().filter(|r| table.sprite(&format!("c_attack_{r}")).is_some()).count();
+        eprintln!("race cursor variants: {with_variants} of {} playable races ({names:?})", names.len());
+        for r in &names {
+            let first = candidates("c_attack", Some(r)).into_iter().find(|n| table.sprite(n).is_some());
+            assert!(first.is_some(), "{r}: no attack cursor at all");
         }
     }
 }
