@@ -121,6 +121,10 @@ fn make_view(mut commands: Commands, images: Option<ResMut<Assets<Image>>>) {
     let Some(mut images) = images else { return };
     let mut image = Image::new_target_texture(MIN_SIDE, MIN_SIDE, TextureFormat::Rgba8UnormSrgb, None);
     image.asset_usage = RenderAssetUsages::RENDER_WORLD;
+    // A resized picture is drawn afresh every frame, so the old texture is not worth copying; the
+    // copy also needs `COPY_SRC`, which a render target made here does not have, and the failed
+    // copy is a validation error that makes the renderer quit.
+    image.copy_on_resize = false;
     commands.insert_resource(ActionView { image: images.add(image) });
 }
 
@@ -147,7 +151,7 @@ fn subject(selection: Res<Selection>, entities: Option<Res<SimEntities>>, mut su
     }
 }
 
-/// Keep the camera pair alive while the HUD shows the picture, and aim it at the subject.
+/// Keep the camera pair while the match runs, switched on only while the HUD shows the picture, and aim it at the subject.
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn sync_cameras(
     mut commands: Commands,
@@ -158,20 +162,26 @@ fn sync_cameras(
     entities: Option<Res<SimEntities>>,
     bodies: Query<(&GlobalTransform, Option<&SelectRadius>), (Without<ActionCamera>, Without<ActionSky>)>,
     main: Query<(&GlobalTransform, &Projection), (crate::map::MainCamera, Without<ActionSky>)>,
-    mut scene: Query<(Entity, &mut Transform, &mut GlobalTransform), (With<ActionCamera>, Without<ActionSky>)>,
-    mut sky: Query<(Entity, &mut Transform, &mut GlobalTransform), (With<ActionSky>, Without<ActionCamera>)>,
+    mut scene: Query<(&mut Transform, &mut GlobalTransform, &mut Camera), (With<ActionCamera>, Without<ActionSky>)>,
+    mut sky: Query<(&mut Transform, &mut GlobalTransform, &mut Camera), (With<ActionSky>, Without<ActionCamera>)>,
 ) {
     // Only while the picture can be seen: a hidden match UI (loading, a cineractive) costs no passes.
     let size = pictures.iter().filter(|(_, v)| v.get()).map(|(n, _)| n.size()).find(|s| s.x > 0.0 && s.y > 0.0);
     let (Some(view), Some(size), Ok((main_tf, projection))) = (view, size, main.single()) else {
-        for (e, ..) in &scene {
-            commands.entity(e).despawn();
-        }
-        for (e, ..) in &sky {
-            commands.entity(e).despawn();
+        // The cameras stay, switched off: showing the picture again costs neither a black frame
+        // nor a new target.
+        for (.., mut cam) in scene.iter_mut().chain(sky.iter_mut()) {
+            if cam.is_active {
+                cam.is_active = false;
+            }
         }
         return;
     };
+    for (.., mut cam) in scene.iter_mut().chain(sky.iter_mut()) {
+        if !cam.is_active {
+            cam.is_active = true;
+        }
+    }
     let want = picture_size(size);
     if let Some(img) = images.get(&view.image)
         && (img.width(), img.height()) != (want.x, want.y)
@@ -191,6 +201,8 @@ fn sync_cameras(
             MatchEntity,
             ActionCamera,
             Camera3d::default(),
+            // An intermediate picture: no tonemapper, so no dithering either.
+            bevy::core_pipeline::tonemapping::DebandDither::Disabled,
             Camera { order: -9, clear_color: ClearColorConfig::None, ..default() },
             RenderTarget::from(view.image.clone()),
             projection.clone(),
@@ -202,6 +214,7 @@ fn sync_cameras(
             ActionSky,
             BackgroundCamera,
             Camera3d::default(),
+            bevy::core_pipeline::tonemapping::DebandDither::Disabled,
             Camera { order: -10, ..default() },
             RenderTarget::from(view.image.clone()),
             RenderLayers::layer(crate::map::BACKGROUND_LAYER),
@@ -214,12 +227,12 @@ fn sync_cameras(
     // With no subject the camera keeps its last pose.
     if let Some(pose) = pose {
         // `GlobalTransform` too: this runs after propagation, and the render of this frame reads it.
-        for (_, mut t, mut g) in &mut scene {
+        for (mut t, mut g, _) in &mut scene {
             *t = pose;
             *g = GlobalTransform::from(pose);
         }
         // The sky is a direction-only picture drawn from the map camera's place.
-        for (_, mut t, mut g) in &mut sky {
+        for (mut t, mut g, _) in &mut sky {
             *t = Transform { translation: main_tf.translation(), ..pose };
             *g = GlobalTransform::from(*t);
         }
