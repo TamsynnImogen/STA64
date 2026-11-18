@@ -395,7 +395,7 @@ pub const BACKGROUND_LAYER: usize = 1;
 pub struct BackgroundCamera;
 
 /// The main (scene) camera, for queries that want the one camera the player moves.
-pub type MainCamera = (With<Camera3d>, Without<BackgroundCamera>);
+pub type MainCamera = (With<Camera3d>, Without<BackgroundCamera>, Without<crate::render::action_camera::ActionCamera>);
 
 #[derive(Component)]
 #[require(Propagate<RenderLayers> = Propagate(RenderLayers::layer(BACKGROUND_LAYER)))]
@@ -579,6 +579,8 @@ fn setup(mut commands: Commands) {
         .spawn((
             MatchEntity,
             Camera3d::default(),
+            // The overlay layer (rings, bars, grid) is drawn by this camera only.
+            RenderLayers::from_layers(&[0, crate::render::action_camera::OVERLAY_LAYER]),
             Camera {
                 order: 1,
                 clear_color: ClearColorConfig::None,

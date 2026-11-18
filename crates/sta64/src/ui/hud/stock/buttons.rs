@@ -31,6 +31,8 @@ pub(in crate::ui::hud) enum PanelButton {
     Menu,
     Objectives,
     Idle,
+    /// The Armada I action camera's picture (UI-53): a click goes to what it shows.
+    ActionView,
     /// A system STA64 does not have yet.
     Unavailable,
 }
@@ -102,6 +104,7 @@ pub(in crate::ui::hud) fn next_idle(feed: &HudFeed, last: Option<sta_sim::Entity
 }
 
 /// Presses of the panel buttons.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::ui::hud) fn press(
     mut clicks: MessageReader<ButtonClicked>,
     buttons: Query<&PanelButton>,
@@ -109,6 +112,7 @@ pub(in crate::ui::hud) fn press(
     objectives: Option<ResMut<ObjectivesView>>,
     mut menu: MessageWriter<OpenInGameMenu>,
     mut focus: MessageWriter<CameraFocus>,
+    subject: Option<Res<crate::render::action_camera::ActionSubject>>,
     mut last: Local<Option<sta_sim::EntityId>>,
 ) {
     let mut objectives = objectives;
@@ -127,6 +131,12 @@ pub(in crate::ui::hud) fn press(
                     *last = Some(u.id);
                     let p = u.pos.to_f32();
                     // Sim to map space: z is mirrored.
+                    focus.write(CameraFocus(Vec3::new(p[0], p[1], -p[2])));
+                }
+            }
+            Ok(PanelButton::ActionView) => {
+                if let Some(u) = subject.as_ref().and_then(|s| s.0).and_then(|id| feed.view.unit(id)) {
+                    let p = u.pos.to_f32();
                     focus.write(CameraFocus(Vec3::new(p[0], p[1], -p[2])));
                 }
             }

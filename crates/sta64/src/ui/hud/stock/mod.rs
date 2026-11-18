@@ -327,6 +327,7 @@ pub(super) fn refresh(
     mut hud: ResMut<HudState>,
     mounted: Option<Res<Mounted>>,
     strings: Option<Res<crate::ui::i18n::Strings>>,
+    action: Option<Res<crate::render::action_camera::ActionView>>,
     roots: Query<Entity, With<HudRoot>>,
     bodies: Query<Entity, With<StockBody>>,
     legacy: Query<Entity, With<HudBody>>,
@@ -428,6 +429,7 @@ pub(super) fn refresh(
     let layout = state.layout.take().unwrap();
     if a1 && replaced {
         a1::spawn_frames(&mut commands, body, &layout);
+        a1::action::spawn(&mut commands, body, &layout, &theme, strings.as_deref(), action.as_deref());
     }
     if !a1 && replaced {
         buttons::spawn(&mut commands, body, &layout, &theme);
