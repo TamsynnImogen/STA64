@@ -126,6 +126,14 @@ pub struct Tile {
     pub id: EntityId,
     pub name: String,
     pub hull: f32,
+    /// The shields' share over all facings; `None` without shields.
+    pub shield: Option<f32>,
+}
+
+/// A unit's shields as one share over all facings, `None` without shields.
+fn shield_frac(u: &UnitView) -> Option<f32> {
+    let (now, max) = u.shields.iter().fold((0.0, 0.0), |(n, m), s| (n + s[0].to_f32(), m + s[1].to_f32()));
+    (max > 0.0).then(|| (now / max).clamp(0.0, 1.0))
 }
 
 /// The info panel's content.
@@ -161,8 +169,6 @@ pub fn info(feed: &HudFeed) -> Info {
                     (identity.name, identity.captain, identity.registry)
                 },
             );
-            let shields: Vec<[Fixed; 2]> = u.shields.to_vec();
-            let (now, max) = shields.iter().fold((0.0, 0.0), |(n, m), s| (n + s[0].to_f32(), m + s[1].to_f32()));
             Info::Single(Single {
                 id: u.id,
                 name: feed.given_name(u).map_or(name, str::to_owned),
@@ -173,12 +179,12 @@ pub fn info(feed: &HudFeed) -> Info {
                 hull: frac(u.hull),
                 hull_now: u.hull[0].to_f32().round() as i32,
                 hull_max: u.hull[1].to_f32().round() as i32,
-                shield: (max > 0.0).then(|| (now / max).clamp(0.0, 1.0)),
+                shield: shield_frac(u),
                 progress: u.progress.map(|p| p.to_f32().clamp(0.0, 1.0)),
                 builder: def.is_some_and(|d| !d.build.list.is_empty()) && finished(u),
             })
         }
-        many => Info::Group(many.iter().map(|u| Tile { id: u.id, name: feed.name(u), hull: frac(u.hull) }).collect()),
+        many => Info::Group(many.iter().map(|u| Tile { id: u.id, name: feed.name(u), hull: frac(u.hull), shield: shield_frac(u) }).collect()),
     }
 }
 

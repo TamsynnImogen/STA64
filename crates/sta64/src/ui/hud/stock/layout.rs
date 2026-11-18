@@ -721,6 +721,7 @@ mod tests {
             id: EntityId(1),
             name: String::new(),
             hull: 1.0,
+            shield: None,
         };
         for count in [2, 16] {
             assert_eq!(info_variant(&Info::Group(vec![tile.clone(); count])), 1);
