@@ -1,15 +1,18 @@
 //! The Stock profile's hulls (RND-24): ships and stations lit the way the original
 //! engine lights them, from the SOD's own lighting material.
 //!
-//! Rule (read from data, checked against frames of the original, `bench/pairs/hull-*.ini`):
-//! a face group's lit colour is the texture times the team colour (team groups) times
-//! `material ambient x scene ambient + sum over the map's lights of material diffuse x
-//! light colour x N.L`, plus the material's specular colour times `(N.H)^power` per light,
-//! added after the texture; clipped at 1. An Armada I install (`Sta1Classic`) draws no specular
-//! term: its SOD materials mostly carry one authoring default specular and the original
-//! shows no sheen. Evidence grade: stated by a modder, not measured; the Armada II comparison
-//! judged whole-frame luminance and did not isolate the specular term, so Armada II and Fleet
-//! Operations keep the term unchanged. The values are still read, for a later specular port. The Refit look (`hulls.rs`, `hulls.wesl`'s other
+//! Rule (read from data; the ambient and diffuse terms checked against frames of the original,
+//! `bench/pairs/hull-*.ini`): a face group's lit colour is the texture times the team colour
+//! (team groups) times `material ambient x scene ambient + sum over the map's lights of
+//! material diffuse x light colour x N.L`, plus the material's specular colour times
+//! `(N.H)^power` per light, added after the texture; clipped at 1.
+//!
+//! The specular term is read from data and was never isolated in a frame comparison (the
+//! Armada II comparison judged whole-frame luminance). An Armada I install (`Sta1Classic`)
+//! draws no specular term: its SOD materials mostly carry one authoring default specular, and
+//! a modder states the original shows no sheen there (grade: stated by a modder, not
+//! measured). Armada II and Fleet Operations still draw the term (not measured). The values
+//! are still read, for a later specular port. The Refit look (`hulls.rs`, `hulls.wesl`'s other
 //! branch) keeps its own constants and is drawn under [`RenderProfile::Refit`].
 //!
 //! Data keys read: per SOD lighting material `ambient`, `diffuse`, `specular`, `power`,
@@ -90,7 +93,7 @@ pub fn apply_material(p: &mut crate::render::hulls::HullParams, _m: &StandardMat
     let l = part.stock.unwrap_or(StockLight { ambient: [0.0; 3], diffuse: [1.0; 3], specular: [0.0; 3], power: 1.0, model: 2 });
     p.mamb = Vec3::from(l.ambient).extend(1.0);
     p.mdif = Vec3::from(l.diffuse).extend(0.0);
-    // Armada I: no highlight (the data is read; the specular term itself is untouched).
+    // Armada I: no highlight. The colour is zeroed (the data is still read); the shader's specular term is untouched.
     let specular = if no_specular { [0.0; 3] } else { l.specular };
     p.mspc = Vec3::from(specular).extend(l.power.max(1.0));
     p.misc = Vec4::new(1.0, 1.0, l.power.max(1.0), 1.0);
