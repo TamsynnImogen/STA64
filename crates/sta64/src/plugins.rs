@@ -46,6 +46,8 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         app.add_plugins(crate::render::fog::FogPlugin);
         app.add_plugins(crate::render::fx::persistent_shields::PersistentShieldsPlugin);
         app.add_plugins(crate::render::build_visuals::BuildVisualsPlugin);
+        // The Armada I stock HUD's action camera; idle until the HUD shows its picture.
+        app.add_plugins(crate::render::action_camera::ActionCameraPlugin);
     } else if cfg.ui_gallery {
         app.add_plugins(crate::ui::theme::GalleryPlugin);
     } else {

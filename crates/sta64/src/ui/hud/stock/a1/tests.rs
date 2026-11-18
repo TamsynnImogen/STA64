@@ -50,6 +50,11 @@ controlButton10 = 8 112 29 29
 controlButton11 = 43 112 29 29
 controlButton12 = 78 112 29 29
 cinematicPanelArea = 381 347 139 133
+cinematicDisplayArea = 9 35 121 90
+cinematicCommButton = \"cine_comm\"
+cinematicMenuButton = \"cine_menu\"
+cinematicCommButtonArea = 12 12 50 16
+cinematicMenuButtonArea = 72 12 50 16
 ";
 
 /// Authored slots: not the install's numbers.
@@ -296,4 +301,82 @@ fn the_crew_label_and_colour_come_from_the_cfg() {
     let green = Color::srgba(0.0, 1.0, 0.0, 1.0);
     assert!(texts.iter().any(|(t, c)| t == "CREW" && *c == green), "{texts:?}");
     assert!(texts.iter().any(|(t, c)| t == "90" && *c == green), "{texts:?}");
+}
+
+fn find<C: Component>(app: &mut App, f: impl Fn(&C) -> bool) -> Vec<Entity> {
+    app.world_mut().query::<(Entity, &C)>().iter(app.world()).filter(|(_, c)| f(c)).map(|(e, _)| e).collect()
+}
+
+fn with_view(mut app: App) -> App {
+    app.world_mut().insert_resource(crate::render::action_camera::ActionView { image: Handle::default() });
+    app.world_mut().insert_resource(crate::render::action_camera::ActionSubject(Some(EntityId(1))));
+    // Rebuild the body with the picture's resource in place.
+    app.world_mut().resource_mut::<HudConfig>().aspect += 0.001;
+    app.update();
+    app.update();
+    app
+}
+
+#[test]
+fn the_window_has_comm_and_menu_at_their_cfg_places_inside_the_panel_on_every_aspect() {
+    use crate::ui::hud::stock::buttons::PanelButton;
+    use crate::ui::theme::WidgetState;
+    for aspect in [4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0] {
+        let mut app = app(aspect);
+        let layout = app.world().resource::<StockState>().layout.clone().expect("layout");
+        let panel = layout.panel("cinematic").unwrap();
+        let mut q = app.world_mut().query::<(&PanelButton, &Node, &WidgetState)>();
+        let buttons: Vec<_> = q.iter(app.world()).filter(|(a, ..)| matches!(a, PanelButton::Menu | PanelButton::Unavailable)).collect();
+        // Only the window's two buttons exist on the Armada I sheet (the Armada II panel buttons are not drawn).
+        assert_eq!(buttons.len(), 2, "{aspect}");
+        for (_, node, _) in &buttons {
+            let (Val::Px(x), Val::Px(y), Val::Px(w), Val::Px(h)) = (node.left, node.top, node.width, node.height) else { panic!("px") };
+            let r = R::new(x, y, w, h);
+            assert!(r.x >= panel.x && r.y >= panel.y && r.right() <= panel.right() && r.bottom() <= panel.bottom(), "{aspect}: inside the panel");
+            assert!(r.x >= layout.hud.x && r.right() <= layout.hud.right(), "{aspect}: inside the sheet group");
+        }
+        let at = |key: &str| layout.at(Vec2::new(panel.x, panel.y), key).unwrap();
+        let rects: Vec<R> = buttons.iter().map(|(_, n, _)| { let (Val::Px(x), Val::Px(y), Val::Px(w), Val::Px(h)) = (n.left, n.top, n.width, n.height) else { unreachable!() }; R::new(x, y, w, h) }).collect();
+        assert!(rects.contains(&at("cinematicMenuButtonArea")) && rects.contains(&at("cinematicCommButtonArea")));
+        let state_of = |act: PanelButton| buttons.iter().find(|(a, ..)| **a == act).map(|(_, _, s)| **s);
+        assert_eq!(state_of(PanelButton::Menu), Some(WidgetState::Normal));
+        assert_eq!(state_of(PanelButton::Unavailable), Some(WidgetState::Disabled), "no comm menu in a match");
+    }
+}
+
+#[test]
+fn menu_opens_the_in_game_menu_and_comm_does_nothing() {
+    use crate::ui::hud::stock::buttons::PanelButton;
+    use crate::ui::ingame_menu::OpenInGameMenu;
+    let mut app = app(16.0 / 9.0);
+    let menu = find::<PanelButton>(&mut app, |b| *b == PanelButton::Menu);
+    let comm = find::<PanelButton>(&mut app, |b| *b == PanelButton::Unavailable);
+    assert_eq!((menu.len(), comm.len()), (1, 1));
+    press(&mut app, comm[0]);
+    assert_eq!(app.world().resource::<Messages<OpenInGameMenu>>().len(), 0, "a disabled button sends nothing");
+    press(&mut app, menu[0]);
+    assert_eq!(app.world().resource::<Messages<OpenInGameMenu>>().len(), 1);
+}
+
+#[test]
+fn the_picture_is_drawn_in_the_display_area_and_a_click_goes_to_the_subject() {
+    use crate::input::select::CameraFocus;
+    use crate::render::action_camera::ActionPicture;
+    let mut app = with_view(app(16.0 / 9.0));
+    let layout = app.world().resource::<StockState>().layout.clone().unwrap();
+    let panel = layout.panel("cinematic").unwrap();
+    let picture = app.world_mut().query_filtered::<(Entity, &Node), With<ActionPicture>>().iter(app.world()).map(|(e, n)| (e, n.clone())).collect::<Vec<_>>();
+    assert_eq!(picture.len(), 1);
+    let want = layout.at(Vec2::new(panel.x, panel.y), "cinematicDisplayArea").unwrap();
+    assert_eq!((picture[0].1.left, picture[0].1.width), (Val::Px(want.x), Val::Px(want.w)));
+    press(&mut app, picture[0].0);
+    let focus: Vec<_> = app.world_mut().resource_mut::<Messages<CameraFocus>>().drain().collect();
+    assert_eq!(focus.len(), 1, "one click, one move");
+}
+
+#[test]
+fn without_the_action_view_resource_there_is_no_picture_node() {
+    use crate::render::action_camera::ActionPicture;
+    let mut app = app(4.0 / 3.0);
+    assert_eq!(app.world_mut().query_filtered::<(), With<ActionPicture>>().iter(app.world()).count(), 0);
 }
