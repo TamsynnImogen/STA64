@@ -529,9 +529,13 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
         if !caps.recrew_ready { b.look = Look::Locked; }
         out.push(b);
     }
-    for (i, (slot, _)) in caps.specials.iter().enumerate() {
+    for (i, (slot, kind)) in caps.specials.iter().enumerate() {
         if let Some(cell) = [5, 10, 11, 12, 13, 14].get(i) {
-            out.push(button(*cell, &tr("Cloak"), Act::Special(*slot), &tooltip_key("Toggle cloak")));
+            let (label, tip) = match kind {
+                sta_sim::specials::SpecialKind::PointDefence => (tr("Point defence"), tooltip_key("Toggle point defence")),
+                _ => (tr("Cloak"), tooltip_key("Toggle cloak")),
+            };
+            out.push(button(*cell, &label, Act::Special(*slot), &tip));
         }
     }
     out.sort_by_key(|b| b.cell);
