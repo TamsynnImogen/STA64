@@ -8,6 +8,9 @@
 //! - a line to its move target when [`OrderTargets`] has one. The views do
 //!   not carry queued waypoints (SIM-02), so only that one target is drawn.
 //!
+//! Under the Armada I stock presentation the ring is the install's own marker sprite instead, and
+//! the unit under the cursor gets one too, see [`marker`] (RND-37).
+//!
 //! Rings and bars are children of the unit root, so they go with it when
 //! the unit is destroyed; [`sync_overlays`] despawns the rest when the
 //! selection changes. [`OverlayCounts`] says how many of each exist (for
@@ -17,6 +20,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 mod geometry;
+pub mod marker;
 #[cfg(test)]
 mod gpu;
 pub use geometry::{GaugeStyle, ModelBounds};
@@ -26,6 +30,7 @@ use bevy::transform::helper::TransformHelper;
 use sta_sim::{EntityId, UnitView};
 
 use crate::app::GameSet;
+use crate::input::hover::HoveredUnit;
 use crate::input::orders::OrderTargets;
 use crate::render::units::{HullShare, SelectRadius, TeamColour, to_bevy};
 use crate::sim_link::{Selection, SimEntities, SimLink};
@@ -85,10 +90,11 @@ impl Plugin for OverlaysPlugin {
             .init_resource::<GaugeStyle>()
             .init_resource::<OrderTargets>()
             .init_resource::<OverlayCounts>()
+            .init_resource::<marker::MarkerArt>()
             .add_systems(Startup, make_assets.run_if(resource_exists::<Assets<Mesh>>).run_if(resource_exists::<Assets<StandardMaterial>>))
             .add_systems(
                 Update,
-                (sync_overlays, update_bars, update_lines, billboard.after(crate::viewer::orbit_camera), count)
+                (marker::load_art, sync_overlays, marker::orient, update_bars, update_lines, billboard.after(crate::viewer::orbit_camera), count)
                     .chain()
                     .in_set(GameSet::Render)
                     .distributive_run_if(resource_exists::<SimLink>)
@@ -134,15 +140,29 @@ fn bar_geometry(radius: f32) -> (f32, f32, f32) {
 fn sync_overlays(
     mut commands: Commands,
     selection: Res<Selection>,
+    hovered: Option<Res<HoveredUnit>>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
+    art: Res<marker::MarkerArt>,
     ents: Res<SimEntities>,
     link: Res<SimLink>,
     targets: Res<OrderTargets>,
     assets: Res<OverlayAssets>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     units: Query<(Option<&SelectRadius>, Option<&TeamColour>, Option<&HullShare>)>,
-    existing: Query<(Entity, &Overlay)>,
+    existing: Query<(Entity, &Overlay, Has<marker::Marker>)>,
 ) {
     let mut want: BTreeMap<(EntityId, OverlayKind), Entity> = BTreeMap::new();
+    // The Armada I marker also shows under the hovered unit, selected or not, except while a
+    // cineractive runs: hover tracking goes on then and ships sweeping under the resting cursor
+    // would flicker markers. Only this overlay is gated; hover for the HUD is unchanged. A
+    // selection kept through the cutscene keeps its marker.
+    if art.art.is_some()
+        && !crate::ui::presentation::cutscene_running(cine)
+        && let Some(id) = hovered.as_ref().and_then(|h| h.0)
+        && let Some(&root) = ents.0.get(&id)
+    {
+        want.insert((id, OverlayKind::Ring), root);
+    }
     for id in &selection.0 {
         let Some(&root) = ents.0.get(id) else { continue };
         if units.get(root).is_err() {
@@ -158,8 +178,9 @@ fn sync_overlays(
         }
     }
     let mut have: BTreeSet<(EntityId, OverlayKind)> = BTreeSet::new();
-    for (e, o) in &existing {
-        if !(want.contains_key(&(o.unit, o.kind)) && have.insert((o.unit, o.kind))) {
+    for (e, o, is_marker) in &existing {
+        let stale = o.kind == OverlayKind::Ring && is_marker != art.art.is_some();
+        if stale || !(want.contains_key(&(o.unit, o.kind)) && have.insert((o.unit, o.kind))) {
             commands.entity(e).try_despawn();
         }
     }
@@ -171,6 +192,18 @@ fn sync_overlays(
         let radius = radius.map_or(DEFAULT_RADIUS, |r| r.0);
         let overlay = Overlay { unit: id, kind };
         match kind {
+            OverlayKind::Ring if art.art.is_some() => {
+                let a = art.art.as_ref().unwrap();
+                commands.spawn((
+                    Name::new("selection marker"),
+                    overlay,
+                    marker::Marker { radius },
+                    ChildOf(root),
+                    Mesh3d(assets.quad.clone()),
+                    MeshMaterial3d(a.material.clone()),
+                    Transform::default(),
+                ));
+            }
             OverlayKind::Ring => {
                 let colour = colour.map_or(Color::srgb(0.3, 1.0, 0.4), |c| c.0);
                 // Annulus faces +Z; lay it on the ground.
@@ -383,6 +416,78 @@ mod tests {
         assert_eq!(counts(&app), OverlayCounts::default());
         let mut q = app.world_mut().query::<&Overlay>();
         assert_eq!(q.iter(app.world()).count(), 0);
+    }
+
+    fn give_marker_art(app: &mut App) {
+        app.world_mut().resource_mut::<marker::MarkerArt>().art = Some(marker::Art { material: Handle::default() });
+    }
+
+    fn sync(app: &mut App) {
+        app.world_mut().run_system_once(sync_overlays).unwrap();
+        app.world_mut().flush();
+    }
+
+    fn markers(app: &mut App) -> Vec<EntityId> {
+        let mut q = app.world_mut().query::<(&Overlay, &marker::Marker)>();
+        let mut ids: Vec<_> = q.iter(app.world()).map(|(o, _)| o.unit).collect();
+        ids.sort();
+        ids
+    }
+
+    #[test]
+    fn marker_shows_under_selected_and_hovered_units_when_the_art_exists() {
+        let mut app = rig(TWO);
+        app.update();
+        app.world_mut().insert_resource(HoveredUnit(Some(EntityId(2))));
+        sync(&mut app);
+        assert!(markers(&mut app).is_empty(), "no art, no marker: other profiles keep their look");
+        select(&mut app, &[1]);
+        give_marker_art(&mut app);
+        sync(&mut app);
+        assert_eq!(markers(&mut app), vec![EntityId(1), EntityId(2)], "selected and hovered");
+        // The hovered, unselected unit gets the marker only, no bars.
+        assert_eq!(counts_now(&mut app), OverlayCounts { rings: 2, bars: 1, lines: 0 });
+        app.world_mut().insert_resource(HoveredUnit(Some(EntityId(1))));
+        sync(&mut app);
+        assert_eq!(markers(&mut app), vec![EntityId(1)], "selected and hovered at once is still one marker");
+        app.world_mut().insert_resource(HoveredUnit(None));
+        select(&mut app, &[]);
+        sync(&mut app);
+        assert!(markers(&mut app).is_empty());
+    }
+
+    #[test]
+    fn no_hover_marker_during_a_cineractive_but_a_kept_selection_keeps_its_marker() {
+        let mut app = rig(TWO);
+        app.update();
+        select(&mut app, &[1]);
+        give_marker_art(&mut app);
+        app.world_mut().insert_resource(HoveredUnit(Some(EntityId(2))));
+        app.world_mut().insert_resource(crate::ui::presentation::CineractiveState { on: true, skippable: true });
+        sync(&mut app);
+        assert_eq!(markers(&mut app), vec![EntityId(1)], "selected only: no hover marker in a cutscene");
+        app.world_mut().insert_resource(crate::ui::presentation::CineractiveState::default());
+        sync(&mut app);
+        assert_eq!(markers(&mut app), vec![EntityId(1), EntityId(2)], "hover marker is back when it ends");
+    }
+
+    #[test]
+    fn losing_the_art_brings_the_plain_ring_back() {
+        let mut app = rig(TWO);
+        app.update();
+        select(&mut app, &[1]);
+        give_marker_art(&mut app);
+        sync(&mut app);
+        assert_eq!(markers(&mut app).len(), 1);
+        app.world_mut().resource_mut::<marker::MarkerArt>().art = None;
+        sync(&mut app);
+        assert!(markers(&mut app).is_empty());
+        assert_eq!(counts_now(&mut app).rings, 1, "the team ring is drawn again");
+    }
+
+    fn counts_now(app: &mut App) -> OverlayCounts {
+        app.world_mut().run_system_once(count).unwrap();
+        counts(app)
     }
 
     #[test]

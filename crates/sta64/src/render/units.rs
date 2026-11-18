@@ -416,6 +416,9 @@ pub(crate) fn attach_models(
         } else {
             model_scene::spawn(&mut ctx, &model, e)
         };
+        if def.class.0.eq_ignore_ascii_case("planet_obj") {
+            model_scene::spawn_planet_nimbus(&mut ctx, &def.model, e);
+        }
         let policy = models.appearance.entry(need.0).or_insert_with(|| {
             crate::render::appearance::ModelInstance::new(need.0, model.clone(), model_scale, def).policy
         }).clone();

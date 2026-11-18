@@ -292,10 +292,9 @@ fn spawn_impl(
             );
         }
         match &node.kind {
-            NodeKind::Sprite => spawn_sprite_node(ctx, node.sprite_node_id(), id, &quad,
-                construction.map(|_| root),
-                &mut stats,
-            ),
+            NodeKind::Sprite => {
+                spawn_sprite_node(ctx, node.sprite_node_id(), id, &quad, construction.map(|_| root), &mut stats);
+            }
             NodeKind::Emitter(emitter) => {
                 match crate::render::particles::Template::new(ctx.sprites, emitter) {
                 Some(tpl) => {
@@ -340,15 +339,15 @@ fn spawn_impl(
 fn spawn_sprite_node(ctx: &mut SpawnCtx, id: &str, parent: Entity, quad: &Handle<Mesh>,
     construction_owner: Option<Entity>,
     stats: &mut SpawnStats,
-) {
+) -> Option<Entity> {
     let table = ctx.sprites;
     let Some(def) = table.sprite_node(id) else {
         stats.unknown_sprite_nodes.push(id.to_owned());
-        return;
+        return None;
     };
     let Some(sprite) = table.sprite(&def.sprite) else {
         stats.unknown_sprite_nodes.push(format!("{id} (sprite {})", def.sprite));
-        return;
+        return None;
     };
     let texture = ctx.textures.colour(&sprite.texture, false);
     if texture.is_none() {
@@ -398,6 +397,32 @@ fn spawn_sprite_node(ctx: &mut SpawnCtx, id: &str, parent: Entity, quad: &Handle
         ));
     }
     stats.sprite_nodes += 1;
+    Some(e.id())
+}
+
+/// A planet's nimbus: the engine's planet class looks up a sprite node named by the planet's model
+/// name (its ODF's `baseName`, else the ODF's own name; read from the executable, static) and draws it
+/// at the planet. The sprite tables define such nodes per planet model: sprite, size, colour (read from
+/// data). A model with no such node has none (the engine's lookup comes back empty). Only planets of
+/// class `planet_obj` come here (Armada II, Fleet Operations and Roots planets are class `planet`, which
+/// takes the separate body path). Drawn under the Stock look only, as the moons' nimbus is.
+pub fn spawn_planet_nimbus(ctx: &mut SpawnCtx, model_name: &str, root: Entity) -> bool {
+    let id = match model_name.len().checked_sub(4).and_then(|i| model_name.get(i..)) {
+        Some(ext) if ext.eq_ignore_ascii_case(".sod") => &model_name[..model_name.len() - 4],
+        _ => model_name,
+    };
+    if ctx.sprites.sprite_node(id).is_none() {
+        return false;
+    }
+    let quad = ctx.meshes.add(sprites::unit_quad());
+    let mut stats = SpawnStats::default();
+    match spawn_sprite_node(ctx, id, root, &quad, None, &mut stats) {
+        Some(e) => {
+            ctx.commands.entity(e).insert(crate::render::rock::MoonNimbus::default());
+            true
+        }
+        None => false,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -827,5 +852,57 @@ mod tests {
         let expect = Vec3::from(mirror(r.transform_point(p)));
         let got = to_bevy(&r).transform_point(Vec3::from(mirror(p)));
         assert!((expect - got).length() < 1e-5, "{expect} vs {got}");
+    }
+
+    /// A planet's nimbus is the sprite node named by its model (synthetic table, no game data):
+    /// one with a matching node gets a hidden-until-Stock additive billboard of that node's size and
+    /// colour; a model with none (the table has no such id) gets nothing.
+    #[test]
+    fn a_planet_gets_the_sprite_node_named_by_its_model() {
+        use bevy::ecs::world::CommandQueue;
+        use bevy::image::CompressedImageFormats;
+        let table = SpriteTable::parse(
+            b"sprite_table\n@reference=64\n@tmaterial=additive\nglow tex 0 0 64 64\n@sprite_node Mplan glow const (100,80) (1,0.5,0.1) billboard\n",
+        );
+        let vfs = sta_vfs::Vfs::default();
+        let (mut meshes, mut materials, mut images) = (Assets::<Mesh>::default(), Assets::<StandardMaterial>::default(), Assets::<Image>::default());
+        let mut cache = crate::render::textures::TextureCache::default();
+        let mut world = World::new();
+        let root = world.spawn((Transform::IDENTITY, Visibility::default())).id();
+        let mut queue = CommandQueue::default();
+        let drawn = {
+            let mut commands = Commands::new(&mut queue, &world);
+            let mut ctx = SpawnCtx {
+                commands: &mut commands,
+                meshes: &mut meshes,
+                materials: &mut materials,
+                textures: Loader { vfs: &vfs, cache: &mut cache, images: &mut images, formats: CompressedImageFormats::NONE },
+                team: Color::WHITE,
+                borg: false,
+                sprites: &table,
+                damaged: false,
+                normal_maps: false,
+                parts: None,
+                model_key: "mplan.sod".into(),
+                unlit: false,
+                scale: 3.0,
+            };
+            let named = spawn_planet_nimbus(&mut ctx, "MPlan.SOD", root);
+            let lower = spawn_planet_nimbus(&mut ctx, "mplan.sod", root);
+            assert!(lower, "the suffix is trimmed whatever its case");
+            let other = spawn_planet_nimbus(&mut ctx, "mother", root);
+            (named, other)
+        };
+        queue.apply(&mut world);
+        assert_eq!(drawn, (true, false));
+        let mut q = world.query::<(&Transform, &SpriteFx, &crate::render::rock::MoonNimbus, &ChildOf)>();
+        let all: Vec<_> = q.iter(&world).collect();
+        assert_eq!(all.len(), 2);
+        let (tf, fx, nimbus, parent) = all[0];
+        assert_eq!(parent.parent(), root);
+        // Billboards are sized by half extents; ScaleSOD does not scale a sprite.
+        assert_eq!(tf.scale, Vec3::new(200.0, 160.0, 1.0));
+        assert_eq!(fx.colour, [1.0, 0.5, 0.1]);
+        assert!(!nimbus.on, "hidden until the Stock look turns it on");
     }
 }
