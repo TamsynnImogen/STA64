@@ -212,6 +212,8 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
         }
     });
     d.repair.can_shipyard_repair = r.flag("canShipyardRepair");
+    d.repair.repairs_shields = r.flag("repairsShields");
+    d.repair.repair_rate = odf.raw("repairRate").map(|_| r.fixed("repairRate").max(Fixed::ZERO).min(Fixed::from_int(1_000)));
     d.repair.recycles_in_place = r.flag("recyclesInPlace");
     d.repair.decommission_facility = r.flag("decommissionFacility");
     let fraction = |r: &mut Reader, key: &str| odf.raw(key).map(|_| r.fixed(key).max(Fixed::ZERO).min(Fixed::from_int(1_000)));

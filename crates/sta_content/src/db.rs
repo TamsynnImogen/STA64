@@ -586,6 +586,8 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         || repair.decommission_facility.is_some()
         || repair.dilithium_recycling.is_some()
         || repair.metal_recycling.is_some()
+        || repair.repair_rate.is_some()
+        || repair.repairs_shields.is_some()
         || repair.recycle_amounts.is_some()
         || repair.recycle_time.is_some()
     {
@@ -609,6 +611,13 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         }
         if let Some(v) = repair.metal_recycling {
             g.fixed("metal_recycling", v);
+        }
+        // SIM-41: only when set (D10).
+        if let Some(rate) = repair.repair_rate {
+            g.fixed("rate", rate);
+        }
+        if let Some(on) = repair.repairs_shields {
+            g.raw("repairs_shields", &u8::from(on).to_string());
         }
         if let Some(a) = repair.recycle_amounts {
             g.list("recycle_amounts", a.map(crate::digest::fixed_text));

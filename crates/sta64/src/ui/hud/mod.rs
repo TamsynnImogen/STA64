@@ -931,6 +931,29 @@ mod target_tests {
         assert_eq!(armed_cursor_name(TargetMode::Decommission, true), "c_decommission");
     }
 
+    /// SIM-41: a repair ship aimed at a ship that is not a yard is sent to repair it; aimed at a yard it
+    /// goes there itself.
+    #[test]
+    fn repair_ships_aimed_at_a_ship_repair_it() {
+        let fake = sta_content::fake::db();
+        let mut builder = sta_content::ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for weapon in fake.weapons() { builder = builder.weapon(weapon.clone()); }
+        for unit in fake.units() {
+            let mut unit = unit.clone();
+            if unit.odf == "fx_yard" { unit.repair.repair_facility = Some(true); }
+            if unit.odf == "fx_cruiser" { unit.class = sta_content::ClassLabel::new("repairship"); }
+            builder = builder.unit(unit);
+        }
+        let mut f = feed(&[1]);
+        f.content = Some(Arc::new(builder.build().unwrap()));
+        let p = Some(SimVec3::from_f32([10.0, 0.0, 20.0]));
+        assert!(matches!(target_order(&f, TargetMode::Repair, Some(EntityId(4)), p), Some((orders, ids))
+            if ids == vec![EntityId(1)] && matches!(orders.as_slice(), [Order::Repair { units, yard: Some(EntityId(4)) }] if units == &[EntityId(1)])));
+        // At a yard it is a yard repair as before.
+        assert!(matches!(target_order(&f, TargetMode::Repair, Some(EntityId(3)), p), Some((orders, _)) if matches!(orders.as_slice(), [Order::Repair { yard: Some(EntityId(3)), .. }])));
+    }
+
+
     #[test]
     fn target_actions_make_supported_orders() {
         let p = Some(SimVec3::from_f32([10.0, 0.0, 20.0]));

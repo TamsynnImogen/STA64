@@ -681,6 +681,7 @@ pub(in crate::ui::hud) fn update(
     mut crew: Query<&mut SpriteText, (With<super::a1::info::CrewText>, Without<StockText>)>,
     mut icons: Query<(&SystemIcon, &mut GuiImage), Without<WireLayer>>,
     mut layers: Query<(&WireLayer, &mut GuiImage), Without<SystemIcon>>,
+    state: Option<Res<super::StockState>>,
 ) {
     for (w, mut image) in &mut layers {
         let tint = layer_tint(status.as_deref(), *w);
@@ -1409,6 +1410,28 @@ mod tests {
         assert_eq!(at(5), Color::WHITE);
         assert_eq!(layer_tint(Some(&feed), WireLayer { unit: EntityId(9), layer: 2 }), Color::WHITE, "an unlisted unit is whole");
     }
+
+    /// A bar with a cfg sprite: the picture tinted by the fill colour inside a clip the update
+    /// resizes, over the track colour.
+    #[test]
+    fn a_sprite_bar_tints_its_picture_and_clips_it_at_the_value() {
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        let mut queue = CommandQueue::default();
+        let track = Color::srgb(0.2, 0.2, 0.2);
+        let blue = Color::srgb(0.0, 0.0, 1.0);
+        sprite_bar(&mut Commands::new(&mut queue, &world), root, R::new(0.0, 0.0, 200.0, 10.0), 0.5, (track, blue), StockBar::Node(200.0), "large_dilithium_bar");
+        queue.apply(&mut world);
+        let outer = world.get::<Children>(root).unwrap()[0];
+        assert_eq!(world.get::<BackgroundColor>(outer).unwrap().0, track);
+        let clip = world.get::<Children>(outer).unwrap()[0];
+        assert_eq!(world.get::<Node>(clip).unwrap().width, Val::Px(100.0));
+        let picture = world.get::<Children>(clip).unwrap()[0];
+        let image = world.get::<GuiImage>(picture).unwrap();
+        assert_eq!((image.names[0].as_str(), image.color), ("large_dilithium_bar", blue));
+        assert_eq!(world.get::<Node>(picture).unwrap().width, Val::Px(200.0), "the picture keeps the full bar's size");
+    }
+
 
     /// Hull and shield bars draw their cfg sprite; without a fill colour key the picture is
     /// untinted, with one it takes it; no sprite keeps the flat bar.
