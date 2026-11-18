@@ -32,6 +32,10 @@ pub trait WorldSource: Send {
     fn node_view(&self) -> Vec<crate::economy::view::NodeView> {
         Vec::new()
     }
+    /// Optional system states for presentation (UI-48). Stateless sources return no rows.
+    fn system_view(&self) -> Vec<crate::combat::damage::SystemView> {
+        Vec::new()
+    }
     /// The whole world as snapshot bytes ([`Sim::snapshot`]), for sources that
     /// can: the playtest capture (TOOL-14) reads it, nothing in the sim does.
     /// The fakes have no state to save and answer `None`.

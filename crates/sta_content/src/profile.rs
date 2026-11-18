@@ -508,16 +508,6 @@ impl Ini {
     }
 }
 
-/// Whether the mount is an Armada I compatibility mod: a layer's `info.ini` requires the
-/// `A1Compat` module (ADR 0006, 2026-11-17 amendment). The profile does not change; the race
-/// menu follows Armada I's policy and the interface defaults to Armada I's.
-pub fn a1_compat(vfs: &Vfs) -> bool {
-    vfs.layers().iter().filter_map(|l| {
-        let bytes = std::fs::read(find_ci(&l.root, "info.ini")?).ok()?;
-        Some(sta_vfs::mods::Ini::parse(&String::from_utf8_lossy(&bytes)))
-    }).any(|ini| ini.requires_module("A1Compat"))
-}
-
 fn read_info(root: &Path) -> Option<Ini> {
     read_ini_named(root, "info.ini")
 }
