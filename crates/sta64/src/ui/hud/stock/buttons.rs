@@ -113,6 +113,7 @@ pub(in crate::ui::hud) fn press(
     mut menu: MessageWriter<OpenInGameMenu>,
     mut focus: MessageWriter<CameraFocus>,
     subject: Option<Res<crate::render::action_camera::ActionSubject>>,
+    entities: Option<Res<crate::sim_link::SimEntities>>,
     mut last: Local<Option<sta_sim::EntityId>>,
 ) {
     let mut objectives = objectives;
@@ -135,7 +136,9 @@ pub(in crate::ui::hud) fn press(
                 }
             }
             Ok(PanelButton::ActionView) => {
-                if let Some(u) = subject.as_ref().and_then(|s| s.0).and_then(|id| feed.view.unit(id)) {
+                // Only a unit the renderer still has (in sight): the frame it leaves sight, the click does nothing.
+                let drawn = |id| entities.as_ref().is_some_and(|e| e.0.contains_key(&id));
+                if let Some(u) = subject.as_ref().and_then(|s| s.0).filter(|&id| drawn(id)).and_then(|id| feed.view.unit(id)) {
                     let p = u.pos.to_f32();
                     focus.write(CameraFocus(Vec3::new(p[0], p[1], -p[2])));
                 }

@@ -134,6 +134,13 @@ fn layer_overlays(mut commands: Commands, added: Query<Entity, Added<Overlay>>) 
 
 fn subject(selection: Res<Selection>, entities: Option<Res<SimEntities>>, mut subject: ResMut<ActionSubject>) {
     let exists = |id: EntityId| entities.as_ref().is_some_and(|e| e.0.contains_key(&id));
+    // A match ended (its entities are gone): no id carries into the next one.
+    if entities.as_ref().is_none_or(|e| e.0.is_empty()) {
+        if subject.0.is_some() {
+            subject.0 = None;
+        }
+        return;
+    }
     let next = next_subject(&selection.0, subject.0, exists);
     if subject.0 != next {
         subject.0 = next;
@@ -146,20 +153,21 @@ fn sync_cameras(
     mut commands: Commands,
     view: Option<Res<ActionView>>,
     mut images: ResMut<Assets<Image>>,
-    pictures: Query<&ComputedNode, With<ActionPicture>>,
+    pictures: Query<(&ComputedNode, &InheritedVisibility), With<ActionPicture>>,
     subject: Res<ActionSubject>,
     entities: Option<Res<SimEntities>>,
     bodies: Query<(&GlobalTransform, Option<&SelectRadius>), (Without<ActionCamera>, Without<ActionSky>)>,
-    main: Query<(&GlobalTransform, &Projection), crate::map::MainCamera>,
-    mut scene: Query<(Entity, &mut Transform), (With<ActionCamera>, Without<ActionSky>)>,
-    mut sky: Query<(Entity, &mut Transform), (With<ActionSky>, Without<ActionCamera>)>,
+    main: Query<(&GlobalTransform, &Projection), (crate::map::MainCamera, Without<ActionSky>)>,
+    mut scene: Query<(Entity, &mut Transform, &mut GlobalTransform), (With<ActionCamera>, Without<ActionSky>)>,
+    mut sky: Query<(Entity, &mut Transform, &mut GlobalTransform), (With<ActionSky>, Without<ActionCamera>)>,
 ) {
-    let size = pictures.iter().map(|n| n.size()).find(|s| s.x > 0.0 && s.y > 0.0);
+    // Only while the picture can be seen: a hidden match UI (loading, a cineractive) costs no passes.
+    let size = pictures.iter().filter(|(_, v)| v.get()).map(|(n, _)| n.size()).find(|s| s.x > 0.0 && s.y > 0.0);
     let (Some(view), Some(size), Ok((main_tf, projection))) = (view, size, main.single()) else {
-        for (e, _) in &scene {
+        for (e, ..) in &scene {
             commands.entity(e).despawn();
         }
-        for (e, _) in &sky {
+        for (e, ..) in &sky {
             commands.entity(e).despawn();
         }
         return;
@@ -187,6 +195,7 @@ fn sync_cameras(
             RenderTarget::from(view.image.clone()),
             projection.clone(),
             eye,
+            GlobalTransform::from(eye),
         ));
         commands.spawn((
             MatchEntity,
@@ -198,17 +207,21 @@ fn sync_cameras(
             RenderLayers::layer(crate::map::BACKGROUND_LAYER),
             projection,
             eye,
+            GlobalTransform::from(eye),
         ));
         return;
     }
     // With no subject the camera keeps its last pose.
     if let Some(pose) = pose {
-        for (_, mut t) in &mut scene {
+        // `GlobalTransform` too: this runs after propagation, and the render of this frame reads it.
+        for (_, mut t, mut g) in &mut scene {
             *t = pose;
+            *g = GlobalTransform::from(pose);
         }
         // The sky is a direction-only picture drawn from the map camera's place.
-        for (_, mut t) in &mut sky {
+        for (_, mut t, mut g) in &mut sky {
             *t = Transform { translation: main_tf.translation(), ..pose };
+            *g = GlobalTransform::from(*t);
         }
     }
 }
