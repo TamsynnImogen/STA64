@@ -12,15 +12,17 @@
 //! # Declaration (the mod's `ART_CFG.h`)
 //!
 //! `#define A2FO_SPECULAR_SUFFIX "_specular"` and `#define A2FO_EMISSIVE_SUFFIX "_emissive_"`
-//! (aliases `SpecularTextureSuffix`, `EmissiveTextureSuffix`). Like the extension, each setting
-//! is merged separately over every copy of the file, the base data first, then parent mods, then
-//! the active mod: a later copy overrides, an empty value turns the convention off, a value that
-//! is not 1 to 64 ASCII letters, digits, `_` or `-` is ignored and keeps what was inherited.
-//! (The game itself only merges copies a file `#include`s; the extension does not wait for that.)
-//! Content that declares neither is never searched.
+//! (aliases `SpecularTextureSuffix`, `EmissiveTextureSuffix`). Read the way STA64 reads every cfg
+//! header (ADR 0004 D11, `sta_content::layered`): the top copy of the file, plus the copies it
+//! reaches through `#include` of its own name; a copy without that include replaces the file.
+//! (The extension instead merges each setting over every copy; see the PR body.) In the effective
+//! file an empty value turns the convention off, and a value that is not 1 to 64 ASCII letters,
+//! digits, `_` or `-` also leaves it off, because under that reading the invalid assignment is the
+//! last one and nothing is inherited past it. Content that declares neither is never searched.
 //!
-//! # Files (`.dds`, `.tga`, `.png`, `.bmp` in that order, under textures, textures/rgb,
-//! textures/index8 and textures/compressed, the mounted layers' override order)
+//! # Files (`.dds`, `.tga`, `.png`, `.bmp`; the search order is the extension's: each mounted layer
+//! in precedence order (active mod first, then its parents, then the base data), within it textures,
+//! textures/rgb, textures/index8, textures/compressed, then the root, and the extension innermost)
 //!
 //! For a group whose diffuse is `ship`: the specular map is `ship_specular`; the emissive maps are
 //! `ship_emissive_warp`, `_impulse`, `_shields`, `_life`, `_sensor`, `_weapons`. A faction variant
@@ -68,24 +70,12 @@ pub const BORG_SUFFIX: &str = "_b";
 /// The extension refuses a specular map file above this size.
 pub const MAX_SPECULAR_BYTES: usize = 32 * 1024 * 1024;
 const EXTENSIONS: [&str; 4] = ["dds", "tga", "png", "bmp"];
-const ROOTS: [&str; 4] = ["textures", "textures/rgb", "textures/index8", "textures/compressed"];
+/// The extension's directory order under one layer; the empty one is the root itself.
+const ROOTS: [&str; 5] = ["textures", "textures/rgb", "textures/index8", "textures/compressed", ""];
 
-/// What one copy of `ART_CFG.h` says about one suffix.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum Setting {
-    Absent,
-    Off,
-    On(String),
-    /// Present but not usable: the inherited value stays.
-    Invalid,
-}
-
-fn setting(cfg: &sta_assets::cfg_h::CfgH, names: [&str; 4]) -> Setting {
-    match names.iter().find_map(|n| cfg.raw(n)) {
-        None => Setting::Absent,
-        Some(raw) if raw.trim().is_empty() => Setting::Off,
-        Some(raw) => valid_suffix(raw).map_or(Setting::Invalid, Setting::On),
-    }
+/// What the effective `ART_CFG.h` says about one suffix.
+fn setting(cfg: &sta_assets::cfg_h::CfgH, names: [&str; 4]) -> Option<String> {
+    names.iter().find_map(|n| cfg.raw(n)).and_then(valid_suffix)
 }
 
 const SPEC_NAMES: [&str; 4] = ["A2FO_SPECULAR_SUFFIX", "a2fo_specular_suffix", "SpecularTextureSuffix", "speculartexturesuffix"];
@@ -99,27 +89,21 @@ pub struct MapSuffixes {
 }
 
 impl MapSuffixes {
-    /// Merge the copies of `ART_CFG.h`, the lowest layer first.
-    pub fn from_copies<'a>(texts: impl IntoIterator<Item = &'a str>) -> MapSuffixes {
-        let mut out = MapSuffixes::default();
-        for text in texts {
-            let cfg = sta_assets::cfg_h::CfgH::parse(text);
-            for (names, slot) in [(SPEC_NAMES, &mut out.specular), (EMIT_NAMES, &mut out.emissive)] {
-                match setting(&cfg, names) {
-                    Setting::On(s) => *slot = Some(s),
-                    Setting::Off => *slot = None,
-                    Setting::Absent | Setting::Invalid => {}
-                }
-            }
-        }
-        out
+    /// The declarations of one effective (already layered) `ART_CFG.h`. An empty or invalid value
+    /// is off.
+    pub fn from_cfg(cfg: &sta_assets::cfg_h::CfgH) -> MapSuffixes {
+        MapSuffixes { specular: setting(cfg, SPEC_NAMES), emissive: setting(cfg, EMIT_NAMES) }
     }
 
-    /// Every copy of `ART_CFG.h` in the mount, merged (the extension's Data, parent mods, active mod).
+    /// The text of one `ART_CFG.h` as the effective file.
+    #[cfg(test)]
+    pub fn from_text(text: &str) -> MapSuffixes {
+        MapSuffixes::from_cfg(&sta_assets::cfg_h::CfgH::parse(text))
+    }
+
+    /// The mount's `ART_CFG.h` through the layered reading (D11): top copy and its self-includes.
     pub fn from_vfs(vfs: &sta_vfs::Vfs) -> MapSuffixes {
-        let copies = vfs.resolve_all("ART_CFG.h").len();
-        let texts: Vec<String> = (0..copies).rev().filter_map(|v| sta_content::layered::resolve(vfs, "ART_CFG.h", v).ok().flatten()).map(|r| r.text).collect();
-        MapSuffixes::from_copies(texts.iter().map(String::as_str))
+        sta_content::layered::cfg_h(vfs, "ART_CFG.h").map(|c| MapSuffixes::from_cfg(&c)).unwrap_or_default()
     }
 
     pub fn any(&self) -> bool {
@@ -156,9 +140,12 @@ pub fn stem(diffuse: &str) -> &str {
 /// A diffuse that already ends in a known faction suffix, reduced to its base (`ship_b` to
 /// `ship`, `_b`): the map suffix goes between them, never after.
 pub fn split_faction<'a>(stem: &'a str, known: &[&str]) -> (&'a str, Option<String>) {
-    for f in known.iter().filter(|f| !f.is_empty()) {
+    // Longest first: a declared `_ab` wins over a shorter `_b` that is its tail.
+    let mut known: Vec<&str> = known.iter().copied().filter(|f| !f.is_empty()).collect();
+    known.sort_by_key(|f| std::cmp::Reverse(f.len()));
+    for f in known {
         if stem.len() > f.len() && stem.is_char_boundary(stem.len() - f.len()) && stem[stem.len() - f.len()..].eq_ignore_ascii_case(f) {
-            return (&stem[..stem.len() - f.len()], Some((*f).to_owned()));
+            return (&stem[..stem.len() - f.len()], Some(f.to_owned()));
         }
     }
     (stem, None)
@@ -236,7 +223,25 @@ impl Loader<'_> {
         if !suffixes.any() {
             return None;
         }
-        self.hull_maps_with(&suffixes, diffuse, faction, known, MapSwitches::startup(), MAX_SPECULAR_BYTES)
+        // The spawn path has no faction catalogue at hand: the races' declared suffixes are read
+        // once per mount and joined to what the caller knows.
+        let races = self.race_suffixes();
+        let mut all: Vec<&str> = known.to_vec();
+        all.extend(races.iter().map(String::as_str).filter(|r| !known.contains(r)));
+        self.hull_maps_with(&suffixes, diffuse, faction, &all, MapSwitches::startup(), MAX_SPECULAR_BYTES)
+    }
+
+    /// The faction suffixes the mount's races declare, read once per mount.
+    fn race_suffixes(&mut self) -> Vec<String> {
+        let key = self.vfs.layers().iter().map(|l| l.name()).collect::<Vec<_>>().join("|");
+        if let Some((k, v)) = &self.cache.race_suffixes
+            && *k == key
+        {
+            return v.clone();
+        }
+        let v: Vec<String> = crate::render::appearance::factions::FactionCatalogue::load(self.vfs).suffixes().into_iter().map(str::to_owned).collect();
+        self.cache.race_suffixes = Some((key, v.clone()));
+        v
     }
 
     pub fn hull_maps_with(&mut self, suffixes: &MapSuffixes, diffuse: &str, faction: Option<&str>, known: &[&str], switches: MapSwitches, cap: usize) -> Option<HullMaps> {
@@ -326,24 +331,23 @@ impl Loader<'_> {
     }
 }
 
-/// `name` as a map file: the first extension (dds, tga, png, bmp) that exists in any root, the
-/// layer that wins by the mount's order.
+/// `name` as a map file, in the extension's order: the layer that wins by the mount's precedence
+/// first, within it the directory, and the file extension last (so a mod's `.tga` beats a base
+/// layer's `.dds`, and the textures directory's `.tga` beats a subdirectory's `.dds`).
 fn find_map_file(vfs: &sta_vfs::Vfs, name: &str) -> Option<(String, &'static str)> {
-    for ext in EXTENSIONS {
-        let mut best: Option<(usize, String)> = None;
-        for root in ROOTS {
-            let path = format!("{root}/{name}.{ext}").to_ascii_lowercase();
-            if let Some((layer, _)) = vfs.resolve(&path)
-                && best.as_ref().is_none_or(|(old, _)| layer < *old)
-            {
-                best = Some((layer, path));
+    let mut best: Option<((usize, usize, usize), String, &'static str)> = None;
+    for (d, root) in ROOTS.iter().enumerate() {
+        for (e, ext) in EXTENSIONS.iter().enumerate() {
+            let path = if root.is_empty() { format!("{name}.{ext}") } else { format!("{root}/{name}.{ext}") }.to_ascii_lowercase();
+            // The top layer with this exact path; a whiteout hides the ones below it.
+            let Some((layer, _)) = vfs.resolve(&path) else { continue };
+            let key = (layer, d, e);
+            if best.as_ref().is_none_or(|(k, _, _)| key < *k) {
+                best = Some((key, path, ext));
             }
         }
-        if let Some((_, path)) = best {
-            return Some((path, ext));
-        }
     }
-    None
+    best.map(|(_, p, e)| (p, e))
 }
 
 /// The emissive maps of a material as one: the first sets the size, the others are scaled to it
@@ -398,7 +402,7 @@ mod tests {
     use super::*;
 
     fn cfg(text: &str) -> MapSuffixes {
-        MapSuffixes::from_copies([text])
+        MapSuffixes::from_text(text)
     }
 
     #[test]
@@ -422,19 +426,6 @@ mod tests {
     }
 
     #[test]
-    fn copies_merge_per_setting_and_an_invalid_value_keeps_the_inherited_one() {
-        let base = "#define A2FO_SPECULAR_SUFFIX \"_specular\"\n#define A2FO_EMISSIVE_SUFFIX \"_emissive_\"\n";
-        // A mod copy that declares neither inherits both.
-        assert_eq!(MapSuffixes::from_copies([base, "#define OTHER 1\n"]), cfg(base));
-        // One that changes one setting keeps the other.
-        let m = MapSuffixes::from_copies([base, "#define A2FO_SPECULAR_SUFFIX \"_spec\"\n"]);
-        assert_eq!((m.specular.as_deref(), m.emissive.as_deref()), (Some("_spec"), Some("_emissive_")));
-        // An invalid value is ignored; an empty one turns the convention off.
-        let m = MapSuffixes::from_copies([base, "#define A2FO_SPECULAR_SUFFIX \"bad value\"\n#define A2FO_EMISSIVE_SUFFIX \"\"\n"]);
-        assert_eq!((m.specular.as_deref(), m.emissive), (Some("_specular"), None));
-    }
-
-    #[test]
     fn faction_suffix_goes_last_and_falls_back() {
         assert_eq!(names("ship", "_specular", "", None), ["ship_specular"]);
         assert_eq!(names("ship", "_specular", "", Some("_b")), ["ship_specular_b", "ship_specular"]);
@@ -449,6 +440,8 @@ mod tests {
         assert_eq!(split_faction("ship", &["_b"]), ("ship", None));
         assert_eq!(split_faction("_b", &["_b"]), ("_b", None), "nothing left of a bare suffix");
         assert_eq!(stem("Textures/RGB/Ship_B.TGA"), "Ship_B");
+        assert_eq!(split_faction("ship_ab", &["_b", "_ab"]), ("ship", Some("_ab".into())), "the longer suffix wins over its tail");
+        assert_eq!(split_faction("ship_ab", &["_ab", "_b"]), ("ship", Some("_ab".into())));
     }
 
     fn scratch(tag: &str) -> std::path::PathBuf {
@@ -626,21 +619,92 @@ mod tests {
     }
 
     #[test]
-    fn layers_inherit_the_declaration_and_absent_lookups_are_cached() {
+    fn a_mod_copy_inherits_the_declaration_only_through_its_self_include() {
         let install = Install::new("layers", Some(SPEC_CFG), &[("ship_specular.tga", tga(1, 2, 3))]);
+        // D11: a copy without the include replaces the file, the base declaration is gone.
         install.top_cfg("#define UNRELATED 1\n");
         let (found, _) = install.run(true, |l| {
-            assert_eq!(l.map_suffixes().specular.as_deref(), Some("_specular"), "the mod's ART_CFG.h does not hide the base one's");
+            assert_eq!(l.map_suffixes(), MapSuffixes::default());
+            l.hull_maps("ship", None, &[]).is_some()
+        });
+        assert!(!found, "replaced without the include: the convention is off");
+        // With the self-include it inherits, and may change one setting.
+        install.top_cfg("#include \"ART_CFG.h\"\n#define A2FO_EMISSIVE_SUFFIX \"_glow_\"\n");
+        let (found, _) = install.run(true, |l| {
+            let s = l.map_suffixes();
+            assert_eq!((s.specular.as_deref(), s.emissive.as_deref()), (Some("_specular"), Some("_glow_")));
             l.hull_maps("ship", None, &[]).is_some()
         });
         assert!(found);
-        let ((), cached) = install.run(true, |l| {
+        // An invalid value in the effective file is off, not the inherited one.
+        install.top_cfg("#include \"ART_CFG.h\"\n#define A2FO_SPECULAR_SUFFIX \"bad value\"\n");
+        let (s, _) = install.run(true, |l| l.map_suffixes());
+        assert_eq!(s, MapSuffixes::default());
+        // Without a mod the base copy applies as it is.
+        let (s, _) = install.run(false, |l| l.map_suffixes());
+        assert_eq!(s.specular.as_deref(), Some("_specular"));
+    }
+
+    #[test]
+    fn absent_lookups_are_cached() {
+        let install = Install::new("miss", Some(SPEC_CFG), &[("ship_specular.tga", tga(1, 2, 3))]);
+        let ((), cached) = install.run(false, |l| {
             assert!(l.hull_maps("none", None, &[]).is_none());
             let n = l.cache.map.len();
             assert!(l.hull_maps("none", None, &[]).is_none());
             assert_eq!(l.cache.map.len(), n, "the miss is remembered");
         });
         assert_eq!(cached, 1);
+    }
+
+    fn put(install: &Install, rel: &str, bytes: &[u8]) {
+        let p = install.0.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, bytes).unwrap();
+    }
+
+    fn spec_texel(install: &Install, top: bool) -> [u8; 3] {
+        let (t, _) = install.run(top, |l| {
+            let m = l.hull_maps("ship", None, &[]).unwrap();
+            first_texel(l, &m.specular).unwrap()
+        });
+        [t[0], t[1], t[2]]
+    }
+
+    #[test]
+    fn a_mods_tga_beats_a_base_layers_dds() {
+        // The layer comes before the extension: the active mod's `.tga` over the base `.dds`.
+        let install = Install::new("order_layer", Some(SPEC_CFG), &[("ship_specular.tga", tga(1, 1, 1))]);
+        put(&install, "Data/Textures/RGB/ship_specular.dds", b"not a real dds");
+        install.top_cfg(&format!("#include \"ART_CFG.h\"\n{SPEC_CFG}"));
+        put(&install, "Data/Mods/Top/Textures/RGB/ship_specular.tga", &tga(7, 8, 9));
+        assert_eq!(spec_texel(&install, true), [7, 8, 9]);
+    }
+
+    #[test]
+    fn the_textures_directory_beats_a_subdirectory_whatever_the_extension() {
+        let install = Install::new("order_dir", Some(SPEC_CFG), &[("ship_specular.dds", b"not a real dds".to_vec())]);
+        put(&install, "Data/Textures/ship_specular.tga", &tga(4, 5, 6));
+        assert_eq!(spec_texel(&install, false), [4, 5, 6]);
+        // And the root itself comes last.
+        let root_only = Install::new("order_root", Some(SPEC_CFG), &[]);
+        put(&root_only, "Data/ship_specular.tga", &tga(2, 3, 4));
+        assert_eq!(spec_texel(&root_only, false), [2, 3, 4]);
+        put(&root_only, "Data/Textures/Compressed/ship_specular.tga", &tga(5, 5, 5));
+        assert_eq!(spec_texel(&root_only, false), [5, 5, 5]);
+    }
+
+    #[test]
+    fn the_spawn_path_knows_the_races_suffixes_and_the_longest_wins() {
+        let install = Install::new("spawn", Some(SPEC_CFG), &[("ship_specular_ab.tga", tga(1, 2, 3)), ("ship_specular_b.tga", tga(9, 9, 9))]);
+        let (t, _) = install.run(false, |l| {
+            // As if the mount's races declared `_b` and `_ab`; the spawn path passes no list.
+            let key = l.vfs.layers().iter().map(|x| x.name()).collect::<Vec<_>>().join("|");
+            l.cache.race_suffixes = Some((key, vec!["_b".into(), "_ab".into()]));
+            let m = l.hull_maps("ship_ab", None, &[]).unwrap();
+            first_texel(l, &m.specular).unwrap()
+        });
+        assert_eq!(&t[..3], &[1, 2, 3], "ship_ab reduces to ship with `_ab`, not `ship_a` with `_b`");
     }
 
     fn phong(specular: [f32; 3], power: f32, model: u8) -> StockLight {
