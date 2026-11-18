@@ -75,7 +75,9 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
     let specials = specials_of(db, def)
         .enumerate()
         .filter_map(|(slot, (kind, _weapon))| {
-            (slot <= u8::MAX as usize && kind == SpecialKind::Cloak).then_some((slot as u8, kind))
+            // UI-31: the toggleable point defence too (the sim lists it as a special only where its
+            // energy rule is on); `Order::Special` on its slot toggles it.
+            (slot <= u8::MAX as usize && matches!(kind, SpecialKind::Cloak | SpecialKind::PointDefence)).then_some((slot as u8, kind))
         })
         .collect();
     let t = transport_state(db, def, kind, u);
@@ -407,4 +409,33 @@ mod tests {
         assert!(cap("yard").build && cap("yard").rally);
     }
 
+
+    /// UI-31: a unit with a toggleable point defence (the energy rule on) offers it as a special
+    /// button; the press is `Order::Special` on its slot, which the sim toggles.
+    #[test]
+    fn a_toggleable_point_defence_is_offered_as_a_special() {
+        let fake = sta_content::fake::db();
+        let mut features = fake.features().clone();
+        features.pd_energy = true;
+        features.point_defense_cycles = true;
+        let mut build = ContentDb::builder().profile(fake.profile()).features(features);
+        for w in fake.weapons() {
+            build = build.weapon(w.clone());
+        }
+        for u in fake.units() {
+            build = build.unit(u.clone());
+        }
+        let db = Arc::new(build.build().unwrap());
+        let station = UnitView {
+            id: EntityId(1), def: db.key("fx_station").unwrap(), owner: PlayerId(1), pos: Vec3::ZERO,
+            heading: (Fixed::ZERO, Fixed::ONE), speed: Fixed::ZERO, hull: [Fixed::ONE; 2], shields: [[Fixed::ZERO; 2]; 4],
+            crew: None, energy: None, autonomy: None, flags: UnitFlags::SELECTABLE, progress: None,
+        };
+        let feed = HudFeed { view: Arc::new(WorldView { units: vec![station], ..Default::default() }), player: PlayerId(1), selected: vec![EntityId(1)], content: Some(db), ..Default::default() };
+        let specials = shared(&feed).specials;
+        let Some(&(slot, _)) = specials.iter().find(|(_, k)| *k == SpecialKind::PointDefence) else { panic!("{specials:?}") };
+        let b = grid(&feed, Page::Top).into_iter().find(|b| b.act == Act::Special(slot)).expect("a point-defence button");
+        assert_eq!(b.label, "POINT DEFENCE");
+        assert!(matches!(command(&feed, &Act::Special(slot)), Some((CommandKind::Order(Order::Special { slot: s, .. }), _)) if s == slot));
+    }
 }

@@ -49,10 +49,13 @@ pub enum Action {
     /// Pause or resume a single-player match (UI-48; the stock games bind
     /// `pauseGame` to the Pause key).
     PauseGame,
+    /// `select_next_ship` (UI-32): on Roots every damaged combat ship on screen, elsewhere the
+    /// next own ship. Stock binds it to `[` and Roots to W (W pans the camera here).
+    SelectNextShip,
 }
 
 impl Action {
-    pub const ALL: [Action; 23] = [
+    pub const ALL: [Action; 24] = [
         Action::AddModifier,
         Action::GroupModifier,
         Action::CentreModifier,
@@ -76,6 +79,7 @@ impl Action {
         Action::RevealFog,
         Action::RevealShroud,
         Action::PauseGame,
+        Action::SelectNextShip,
     ];
 
     pub fn name(self) -> String {
@@ -95,6 +99,7 @@ impl Action {
             Action::RevealFog => "reveal_fog".into(),
             Action::RevealShroud => "reveal_shroud".into(),
             Action::PauseGame => "pause_game".into(),
+            Action::SelectNextShip => "select_next_ship".into(),
         }
     }
 
@@ -136,6 +141,7 @@ impl Default for KeyBindings {
         m.insert(Action::RevealFog, vec![KeyCode::KeyF]);
         m.insert(Action::RevealShroud, vec![KeyCode::KeyV]);
         m.insert(Action::PauseGame, vec![KeyCode::Pause]);
+        m.insert(Action::SelectNextShip, vec![KeyCode::BracketLeft]);
         for (n, k) in DIGITS.into_iter().enumerate() {
             m.insert(Action::Group(n as u8), vec![k]);
         }
@@ -219,7 +225,7 @@ fn parse_key(s: &str) -> Option<KeyCode> {
         KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ, Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6,
         Digit7, Digit8, Digit9, F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12, ShiftLeft, ShiftRight,
         ControlLeft, ControlRight, AltLeft, AltRight, Space, Tab, Backquote, Home, End, Numpad0, Numpad1, Numpad2,
-        Numpad3, Numpad4, Numpad5, Numpad6, Numpad7, Numpad8, Numpad9, Escape, Pause,
+        Numpad3, Numpad4, Numpad5, Numpad6, Numpad7, Numpad8, Numpad9, Escape, Pause, BracketLeft, BracketRight,
     ];
     CANDIDATES.iter().copied().find(|k| format!("{k:?}") == s)
 }
