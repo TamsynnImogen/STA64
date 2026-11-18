@@ -52,6 +52,9 @@ mod orbital;
 mod passive;
 mod crew;
 mod personnel;
+pub mod recycle;
+#[cfg(test)]
+mod recycle_tests;
 mod seat;
 pub mod view;
 

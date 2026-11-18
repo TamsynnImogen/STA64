@@ -67,7 +67,7 @@ fn _every_sim_field_is_decided(s: &Sim) {
     let Sim {
         tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, starts: _, regions: _,
         bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, economy: _,
-        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, attrs: _, scripted: _, switches: _, relations: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _, transports: _, recrew: _, repairs: _, alerts: _, mission_switches: _,
+        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, attrs: _, scripted: _, switches: _, relations: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _, transports: _, recrew: _, repairs: _, recycles: _, alerts: _, mission_switches: _,
     } = s;
 }
 
@@ -232,6 +232,7 @@ impl Sim {
         if !self.repairs.is_empty() {
             self.repairs.hash_into(&mut h);
         }
+        self.recycles.hash_into(&mut h);
         if !self.relations.is_empty() {
             self.relations.hash_into(&mut h);
         }

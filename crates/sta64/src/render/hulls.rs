@@ -89,7 +89,8 @@ pub struct HullParams {
     /// x 1 with a map; y one texel (u, v); z the depth bias; w how much of the Key a shadow takes.
     pub shp: Vec4,
     /// Stock profile (RND-24): the SOD lighting material (`mamb.w` 1 draws the group the
-    /// stock way, 0 as Refit's look does).
+    /// stock way, 2 the Armada I stock way (scene ambient added to the material's, the sum
+    /// clamped to 1), 0 as Refit's look does).
     pub mamb: Vec4,
     pub mdif: Vec4,
     pub mspc: Vec4,
@@ -160,10 +161,11 @@ pub struct HullView {
     /// The Stock profile draws hulls (RND-24) and the scene's ambient light colour.
     pub(crate) stock: bool,
     pub(crate) ambient: Vec3,
-    /// An Armada I install (`Sta1Classic`): the Stock look draws no specular highlight from the
+    /// An Armada I install (`Sta1Classic`): the Stock look follows the Armada I lighting rules:
+    /// scene ambient added to the material's (`mamb.w` 2), and no specular highlight from the
     /// SOD lighting material (its values are read and kept). Armada II and Fleet Operations
     /// are not changed by this.
-    pub(crate) no_specular: bool,
+    pub(crate) armada_one: bool,
 }
 
 impl HullView {
@@ -175,8 +177,8 @@ impl HullView {
 
     /// The view of an Armada I install (tests).
     #[cfg(test)]
-    pub(crate) fn set_no_specular(&mut self, on: bool) {
-        self.no_specular = on;
+    pub(crate) fn set_armada_one(&mut self, on: bool) {
+        self.armada_one = on;
     }
 
     pub(crate) fn write(&self, p: &mut HullParams) {
@@ -305,17 +307,22 @@ fn update_view(
         (to, Vec3::ZERO, if own { 1.0 } else { l.illuminance }, Vec3::new(r.red, r.green, r.blue))
     }));
     let stock = matches!((profile, effects), (Some(p), Some(e)) if e.implementation(*p, crate::render::profile::Effect::Hulls) == crate::render::profile::RenderProfile::Stock);
-    let amb = ambient.map_or(Vec3::ZERO, |a| {
+    let armada_one = content.is_some_and(|c| c.0.profile() == sta_content::Profile::Sta1Classic);
+    // A scene with no map (the front-end menu, the viewer, a bench scene) sets the ambient light as a
+    // knob for Bevy's renderer (plain white), which is no scene ambient. Under the Armada I rule the
+    // ambient is added to the material's, so such a scene takes none (stated default: zero, the
+    // material's own ambient and the scene's lights alone). A map view's lights carry `MapLightSource`.
+    let has_map = sun.iter().any(|(_, _, s)| s.is_some());
+    let amb = ambient.filter(|_| !armada_one || has_map).map_or(Vec3::ZERO, |a| {
         let c = a.color.to_srgba();
         Vec3::new(c.red, c.green, c.blue)
     });
-    let no_specular = content.is_some_and(|c| c.0.profile() == sta_content::Profile::Sta1Classic);
-    let now = HullView { eye: cam.translation().extend(1.0), dvec, dcol, sdvec, sdcol, stock, ambient: amb, no_specular, ..view.clone() };
+    let now = HullView { eye: cam.translation().extend(1.0), dvec, dcol, sdvec, sdcol, stock, ambient: amb, armada_one, ..view.clone() };
     let moved = (now.eye - view.eye).length_squared() > 1e-4;
-    if !moved && now.dvec == view.dvec && now.dcol == view.dcol && now.sdvec == view.sdvec && now.sdcol == view.sdcol && now.stock == view.stock && now.no_specular == view.no_specular && now.ambient == view.ambient {
+    if !moved && now.dvec == view.dvec && now.dcol == view.dcol && now.sdvec == view.sdvec && now.sdcol == view.sdcol && now.stock == view.stock && now.armada_one == view.armada_one && now.ambient == view.ambient {
         return;
     }
-    let switched = now.stock != view.stock || now.no_specular != view.no_specular;
+    let switched = now.stock != view.stock || now.armada_one != view.armada_one;
     *view = now;
     if switched {
         // The profile changed: every hull material is made again in the other look.
@@ -358,7 +365,7 @@ pub fn hull_material(m: &StandardMaterial, part: &HullPart, view: &HullView) -> 
         ..default()
     };
     if view.stock {
-        crate::render::stock::hulls::apply_material(&mut params, m, part, view.no_specular);
+        crate::render::stock::hulls::apply_material(&mut params, m, part, view.armada_one);
     }
     set_source(&mut params, m);
     view.write(&mut params);

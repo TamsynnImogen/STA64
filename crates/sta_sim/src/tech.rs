@@ -289,4 +289,24 @@ mod tests {
         assert_ne!(a.content().unwrap().hash(), b.content().unwrap().hash());
         assert_eq!(b.content().unwrap().hash(), c.content().unwrap().hash());
     }
+
+    /// SIM-44: a unit's `fleetCapFile` list refuses the build at the cap, without a charge.
+    #[test]
+    fn a_fleet_cap_refuses_the_build_at_the_cap_and_charges_nothing() {
+        let cap = std::sync::Arc::new(sta_content::CapacityList { name: "cruisercap".into(), max: 2, members: vec![("fx_cruiser".into(), 1)], ..Default::default() });
+        let mut sim = game_with(Some(TREE), [0, 1], |u| if u.odf == "fx_cruiser" { u.fleet_cap = Some(cap.clone()) });
+        let yard = spawn(&mut sim, "fx_yard", P0);
+        spawn(&mut sim, "fx_cruiser", P0);
+        assert!(build(&mut sim, P0, yard, "fx_cruiser"), "1 of 2: room");
+        spawn(&mut sim, "fx_cruiser", P0);
+        let before = sim.economy.stock_of(P0);
+        assert!(!build(&mut sim, P0, yard, "fx_cruiser"), "2 of 2: full");
+        assert_eq!(sim.economy.stock_of(P0), before, "a refused build is not charged");
+        // Another player's cruisers do not count.
+        let mut other = game_with(Some(TREE), [0, 1], |u| if u.odf == "fx_cruiser" { u.fleet_cap = Some(cap.clone()) });
+        let yard = spawn(&mut other, "fx_yard", P0);
+        spawn(&mut other, "fx_cruiser", P1);
+        spawn(&mut other, "fx_cruiser", P1);
+        assert!(build(&mut other, P0, yard, "fx_cruiser"));
+    }
 }

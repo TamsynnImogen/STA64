@@ -143,16 +143,13 @@ fn repair_side_accepts_exact_i32_boundaries_and_rejects_overflow() {
 }
 
 #[test]
-fn repair_rate_is_read_and_digested_only_when_set() {
-    let (db, warnings) = load(&format!("{CRAFT}repairRate = .25\nrepairsShields = 1\n"), None);
+fn fo_recycle_amounts_and_time_are_read_only_when_set() {
+    let (db, warnings) = load(&format!("{CRAFT}recycleDilithium = 273\nrecycleLatinum = 100\nrecycleBiomatter = 9\nrecycleTime = 50\n"), None);
     assert!(warnings.is_empty(), "{warnings:?}");
-    assert_eq!(repair(&db).repair_rate, Some(Fixed::from_f64(0.25)));
-    assert_eq!(repair(&db).repairs_shields, Some(true));
+    let r = repair(&db);
+    assert_eq!(r.recycle_amounts, Some([Fixed::from_int(273), Fixed::from_int(100), Fixed::ZERO, Fixed::from_int(9)]));
+    assert_eq!(r.recycle_time, Some(Fixed::from_int(50)));
     let (plain, _) = load(CRAFT, None);
-    assert_eq!(repair(&plain).repair_rate, None);
-    assert_ne!(plain.hash(), db.hash(), "a set rate changes the digest");
-    // A unit with other repair keys but no rate keeps the digest it had before the key existed.
-    let (other, _) = load(&format!("{CRAFT}repairFacility = 1\n"), None);
-    let (other2, _) = load(&format!("{CRAFT}repairFacility = 1\n"), None);
-    assert_eq!(other.hash(), other2.hash());
+    assert_eq!((repair(&plain).recycle_amounts, repair(&plain).recycle_time), (None, None));
+    assert_ne!(plain.hash(), db.hash());
 }

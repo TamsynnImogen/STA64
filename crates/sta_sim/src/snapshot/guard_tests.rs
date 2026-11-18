@@ -22,7 +22,7 @@ fn guarded() -> Sim {
 #[test]
 fn the_guard_rows_are_in_a_format_from_33_and_the_previous_formats_are_refused() {
     // Format 33 added the guard rows; LUA-41 followed with 34, SIM-46's transport attacks with 35,
-    // SIM-40's repair queues with 36, SIM-41's repair-ship beams with 37.
+    // SIM-40's repair queues with 36, SIM-45's decommissions with 37.
     assert_eq!(FORMAT_VERSION, 37);
     let sim = guarded();
     let bytes = sim.snapshot();

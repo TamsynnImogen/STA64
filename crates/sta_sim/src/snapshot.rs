@@ -24,7 +24,7 @@
 //! kind that matches no current database, so they are refused by version.
 //! Format 35 (SIM-46) appends the transport-attack carriers to the transport record.
 //! Format 36 (SIM-40) appends the yard repair queues.
-//! Format 37 (SIM-41) adds the repair ships' beam targets to the repair record (version 2).
+//! Format 37 (SIM-45) appends the decommissions.
 //!
 //! The state types of other crates (`MoveStats`) have no serde, so the body
 //! uses small mirror records here instead of touching those crates.
@@ -500,6 +500,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&self.alerts.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.mission_switches.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.repairs.to_rec()).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&self.recycles.to_rec()).expect("snapshot serialises"));
         out
     }
 
@@ -579,6 +580,7 @@ impl Sim {
         let (switches_rec, rest): (crate::mission_switches::SwitchesRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         let mission_switches = crate::mission_switches::MissionSwitches::from_rec(switches_rec).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         let (repairs_rec, rest): (crate::repair::RepairsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        let (recycles_rec, rest): (crate::economy::recycle::RecyclesRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -725,6 +727,7 @@ impl Sim {
         let recrew = crate::recrew::Recrews::from_rec(recrew_rec, &units, b.tick)
             .ok_or_else(|| SnapshotError::Corrupt("invalid station recrew record".into()))?;
         let repairs = crate::repair::Repairs::from_rec(repairs_rec, |id| units.contains(id)).ok_or_else(|| corrupt("repair queues"))?;
+        let recycles = crate::economy::recycle::Recycles::from_rec(recycles_rec, |id| units.contains(id)).ok_or_else(|| corrupt("decommissions"))?;
         let mut economy = crate::economy::Economy::from_rec(&b.economy);
         economy.restore_personnel(personnel_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         economy.restore_adjust(adjust_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
@@ -766,6 +769,7 @@ impl Sim {
             transports,
             recrew,
             repairs,
+            recycles,
             mission_switches,
         };
         sim.refresh_seat_rules();

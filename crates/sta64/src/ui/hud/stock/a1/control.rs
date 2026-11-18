@@ -77,7 +77,7 @@ fn command(c: SlotCommand, feed: &HudFeed) -> Option<(&'static str, &'static [&'
         SlotCommand::RedAlert if mobile => ("Red alert", &["b_ralert"], Act::Order(UnitOrder::Unavailable), Look::Locked),
         SlotCommand::Patrol if mobile => ("Patrol", &["b_patrol"], Act::Order(UnitOrder::Unavailable), Look::Locked),
         SlotCommand::Guard if mobile => ("Guard", &["b_guard"], Act::Order(UnitOrder::Unavailable), Look::Locked),
-        SlotCommand::Decommission if mobile => ("Decommission", &["b_decom"], Act::Order(UnitOrder::Unavailable), Look::Locked),
+        SlotCommand::Decommission if mobile => ("Decommission", &["b_decom"], Act::Target(TargetMode::Decommission), Look::Ready),
         SlotCommand::SelfDestruct if mobile => ("Self destruct", &["b_gselfdes"], Act::Order(UnitOrder::Unavailable), Look::Locked),
         SlotCommand::Scout if mobile => ("Scout", &["b_scout"], Act::Order(UnitOrder::Scout), ready),
         SlotCommand::SearchAndDestroy if caps.attack && mobile => {
