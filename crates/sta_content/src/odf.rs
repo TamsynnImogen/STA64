@@ -357,6 +357,8 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
     }
 
     let model = crate::ResourceModel::for_profile(profile);
+    // SIM-44: cap files by stem, read once.
+    let mut caps: BTreeMap<String, Option<Arc<crate::CapacityList>>> = BTreeMap::new();
     let unit_names: BTreeSet<String> = units.iter().map(|(s, _)| stem(s)).collect();
     for (s, odf) in &units {
         let phys = match odf.str("physicsFile").map(str::trim).filter(|p| !p.is_empty()) {
@@ -392,6 +394,17 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
             def.resource = Some(crate::resources::DILITHIUM as u8);
         }
         let file = format!("{s}.odf");
+        if let Some(cap) = odf.str("fleetCapFile").map(str::trim).filter(|c| !c.is_empty()) {
+            let key = stem(cap);
+            if !caps.contains_key(&key) {
+                let list = get(cap, &mut warnings, loader).map(|c| Arc::new(fleet_cap_list(&key, &c, &mut warnings)));
+                if list.is_none() {
+                    warnings.push(Warning::new(&file, format!("fleetCapFile {cap} has no ODF; no cap")));
+                }
+                caps.insert(key.clone(), list);
+            }
+            def.fleet_cap = caps.get(&key).cloned().flatten();
+        }
         def.planet_role = crate::planet::resolve(&file, odf, profile, &mut warnings);
         def.planet_crew_gain = crate::planet::resolve_crew_gain(&file, odf, profile, def.planet_role, &mut warnings);
         def.planet_crew_modifier = crate::planet::resolve_crew_modifier(&file, odf, profile, def.planet_role, &mut warnings);
@@ -459,6 +472,39 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
 pub fn load(vfs: &sta_vfs::Vfs, profile: Profile, index: &OdfIndex) -> Result<(ContentDb, Vec<Warning>)> {
     let stems: Vec<String> = index.iter().map(|(s, _)| s.to_owned()).collect();
     load_with(profile, &Overrides::from_vfs(vfs), &stems, &mut |n, v| index.load(vfs, n, v))
+}
+
+/// A `fleetCapFile` ODF (SIM-44) as a [`CapacityList`](crate::CapacityList): `fleetCapClass<n>`
+/// members with `fleetCapClass<n>CapValue` weights (default 1, as the XML's `capValue`), `maxCap`
+/// the limit (absent: none of its own, `i64::MAX`; the XML list of that name, where there is
+/// one, governs), `capTooltip` / `capTooltipReached` the texts (read from data).
+pub(crate) fn fleet_cap_list(name: &str, odf: &Odf, warnings: &mut Vec<Warning>) -> crate::CapacityList {
+    let file = format!("{name}.odf");
+    let int = |key: &str, warnings: &mut Vec<Warning>| -> Option<i64> {
+        let raw = odf.str(key)?.trim().trim_matches('"').trim().to_owned();
+        let v = raw.parse::<i64>().ok().or_else(|| raw.parse::<f64>().ok().filter(|f| f.is_finite() && f.fract() == 0.0).map(|f| f as i64));
+        if v.is_none() {
+            warnings.push(Warning::new(&file, format!("{key} is not a whole number; ignored")));
+        }
+        v.map(|v| v.clamp(-1_000_000_000, 1_000_000_000))
+    };
+    let mut members = Vec::new();
+    for (n, raw) in numbered(odf, "fleetCapClass") {
+        let member = stem(raw.trim().trim_matches('"').trim());
+        if member.is_empty() {
+            continue;
+        }
+        members.push((member, int(&format!("fleetCapClass{n}CapValue"), warnings).unwrap_or(1)));
+    }
+    let text = |key: &str| odf.str(key).map(|t| t.trim().trim_matches('"').to_owned()).unwrap_or_default();
+    crate::CapacityList {
+        name: name.to_owned(),
+        max: int("maxCap", warnings).unwrap_or(i64::MAX),
+        tooltip: text("capTooltip"),
+        tooltip_reached: text("capTooltipReached"),
+        tooltip_over: text("capTooltipReached"),
+        members,
+    }
 }
 
 #[cfg(test)]

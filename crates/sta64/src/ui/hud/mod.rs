@@ -618,6 +618,9 @@ fn armed_cursor_name(mode: TargetMode, valid: bool) -> &'static str {
         (TargetMode::Transport, false) => "c_notransport",
         (TargetMode::Repair, true) => "c_repair",
         (TargetMode::Repair, false) => "c_norepair",
+        // The installs have c_decommission and no refusal art of its own.
+        (TargetMode::Decommission, true) => "c_decommission",
+        (TargetMode::Decommission, false) => "c_nomove",
         // Installed tables have c_rally but no c_norally; use the move refusal art.
         (TargetMode::Rally, true) => "c_rally",
         (TargetMode::Rally, false) => "c_nomove",
@@ -661,6 +664,7 @@ fn target_mode_available(feed: &HudFeed, mode: TargetMode) -> bool {
         TargetMode::Colonize => c.colonize,
         TargetMode::Transport => c.transport_ready,
         TargetMode::Repair => c.repair,
+        TargetMode::Decommission => c.decommission,
     }
 }
 
@@ -720,6 +724,16 @@ fn target_order(
             vec![Order::Transport { units: carriers, target: id, attack: false }]
         }
         TargetMode::Repair => {
+            // SIM-41: repair ships aimed at a ship that is not a yard repair it with their beam.
+            if let (Some(t), Some(db)) = (target, feed.content.as_deref())
+                && !repair_yard(feed, t)
+            {
+                let rships: Vec<EntityId> = ids.iter().copied().filter(|&id| id != t && feed.view.unit(id).and_then(|u| db.unit(u.def)).is_some_and(|d| d.class.0.eq_ignore_ascii_case("repairship"))).collect();
+                if !rships.is_empty() {
+                    ids = rships.clone();
+                    return Some((vec![Order::Repair { units: rships, yard: Some(t) }], ids));
+                }
+            }
             let ships = commands::repairers(feed, &ids);
             if ships.is_empty() { return None; }
             // A yard under the cursor is the one asked for; anywhere else the sim picks the best (SIM-40).
@@ -728,6 +742,15 @@ fn target_order(
             if target.is_some() && yard.is_none() && point.is_none() { return None; }
             ids = ships.clone();
             vec![Order::Repair { units: ships, yard }]
+        }
+        TargetMode::Decommission => {
+            // A yard under the cursor is the one asked for; anywhere else the sim picks, or recycles in place.
+            let own: Vec<EntityId> = ids.iter().copied().filter(|&id| feed.view.unit(id).is_some_and(|u| u.owner == feed.player)).collect();
+            if own.is_empty() { return None; }
+            let yard = target.filter(|&id| decommission_yard(feed, id));
+            if target.is_some() && yard.is_none() && point.is_none() { return None; }
+            ids = own.clone();
+            vec![Order::Decommission { units: own, yard }]
         }
         TargetMode::Rally => {
             let at = match target.and_then(|id| feed.view.unit(id).filter(|u| !u.flags.contains(UnitFlags::DYING)).map(|_| id)) {
@@ -738,6 +761,17 @@ fn target_order(
         }
     };
     Some((orders, ids))
+}
+
+/// A yard the HUD may name in `Order::Decommission`: a live, finished station of the player's own whose ODF
+/// says `decommissionFacility = 1` (the sim's gate, SIM-45, read from the view).
+fn decommission_yard(feed: &HudFeed, id: EntityId) -> bool {
+    let (Some(db), Some(y)) = (feed.content.as_deref(), feed.view.unit(id)) else { return false };
+    !y.flags.contains(UnitFlags::DYING)
+        && y.hull[0] > sta_sim::Fixed::ZERO
+        && y.progress.is_none_or(|p| p >= sta_sim::Fixed::ONE)
+        && y.owner == feed.player
+        && db.unit(y.def).is_some_and(|d| EntityKind::of_def(d) == EntityKind::Station && d.repair.decommission_facility == Some(true))
 }
 
 /// A yard the HUD may name in `Order::Repair`: a live, finished station of the player's own team whose ODF
@@ -872,6 +906,29 @@ mod target_tests {
         // A station alone cannot go to a yard.
         assert!(!target_mode_available(&feed(&[3]), TargetMode::Repair));
         assert_eq!(armed_cursor_name(TargetMode::Repair, true), "c_repair");
+    }
+
+    /// SIM-45: DECOMMISSION names a decommission yard under the cursor, else lets the sim choose.
+    #[test]
+    fn decommission_targets_a_yard_or_lets_the_sim_choose() {
+        let fake = sta_content::fake::db();
+        let mut builder = sta_content::ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for weapon in fake.weapons() { builder = builder.weapon(weapon.clone()); }
+        for unit in fake.units() {
+            let mut unit = unit.clone();
+            if unit.odf == "fx_yard" { unit.repair.decommission_facility = Some(true); }
+            builder = builder.unit(unit);
+        }
+        let mut f = feed(&[1]);
+        f.content = Some(Arc::new(builder.build().unwrap()));
+        let p = Some(SimVec3::from_f32([10.0, 0.0, 20.0]));
+        assert!(target_mode_available(&f, TargetMode::Decommission));
+        assert!(matches!(target_order(&f, TargetMode::Decommission, Some(EntityId(3)), p), Some((orders, ids))
+            if ids == vec![EntityId(1)] && matches!(orders.as_slice(), [Order::Decommission { units, yard: Some(EntityId(3)) }] if units == &[EntityId(1)])));
+        assert!(matches!(target_order(&f, TargetMode::Decommission, None, p), Some((orders, _)) if matches!(orders.as_slice(), [Order::Decommission { yard: None, .. }])));
+        // An enemy's ship is no yard: the sim picks.
+        assert!(matches!(target_order(&f, TargetMode::Decommission, Some(EntityId(4)), p), Some((orders, _)) if matches!(orders.as_slice(), [Order::Decommission { yard: None, .. }])));
+        assert_eq!(armed_cursor_name(TargetMode::Decommission, true), "c_decommission");
     }
 
     #[test]

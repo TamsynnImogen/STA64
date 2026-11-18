@@ -27,7 +27,7 @@ struct HullParams {
     sh: array<vec4<f32>, 3>,    // the Key's shadow map (shadows.rs): world -> u, v, depth along the Key
     shp: vec4<f32>,             // x 1: there is a map (0: none); y one texel (u, v); z the depth bias; w how much of the Key a shadow takes
     // The Stock profile (RND-24, render/stock/hulls.rs): the SOD lighting material's own colours.
-    mamb: vec4<f32>,  // ambient colour; a: 1 draws the group the stock way (amb.rgb is then the scene's ambient light), 0 Refit's look
+    mamb: vec4<f32>,  // ambient colour; a: 1 draws the group the stock way (amb.rgb is then the scene's ambient light), 2 the Armada I stock way (ambient added, sum clamped), 0 Refit's look
     mdif: vec4<f32>,  // diffuse colour
     mspc: vec4<f32>,  // specular colour; a: its exponent
 };
@@ -123,7 +123,8 @@ fn from_srgb(c: vec3<f32>) -> vec3<f32> {
 // diffuse colour times N.L, specular added after the texture, the lit colour clipped at 1.
 fn shade_stock(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>) -> vec4<f32> {
     let v = normalize(k.eye.xyz - wp);
-    var sum = k.mamb.rgb * k.amb.rgb;
+    // mamb.a 2 (Armada I): the vertex starts from scene ambient + material ambient; else their product.
+    var sum = select(k.mamb.rgb * k.amb.rgb, k.mamb.rgb + k.amb.rgb, k.mamb.a > 1.5);
     var spec = vec3<f32>(0.0);
     for (var j = 0; j < 4; j++) {
         let l = k.dvec[j].xyz;
@@ -133,6 +134,10 @@ fn shade_stock(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>) -> vec4<f32> {
         if dot(n, l) > 0.0 {
             spec += c * pow(max(0.0, dot(n, h)), k.mspc.a);
         }
+    }
+    // Armada I: the engine clamps the vertex colour to [0, 1] before the texture (read from the executable, static).
+    if k.mamb.a > 1.5 {
+        sum = clamp(sum, vec3<f32>(0.0), vec3<f32>(1.0));
     }
     // The engine multiplies the colours as stored (gamma-space numbers, no linear light):
     // the texture and the team colour are taken as such, the result goes out as such.

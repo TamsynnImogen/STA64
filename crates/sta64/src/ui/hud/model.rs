@@ -259,6 +259,8 @@ pub enum TargetMode {
     Transport,
     /// The stock REPAIR command: pick a repair yard, or anywhere for the best one (SIM-40).
     Repair,
+    /// The stock DECOMMISSION command: pick a yard, or anywhere for the best one or in place (SIM-45).
+    Decommission,
 }
 
 /// How a button looks.
@@ -389,6 +391,7 @@ fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
         Act::Target(TargetMode::Colonize) => (vec!["b_colonize".into()], false),
         Act::Target(TargetMode::Transport) => (vec!["b_transport".into()], false),
         Act::Target(TargetMode::Repair) => (vec!["b_repair".into()], false),
+        Act::Target(TargetMode::Decommission) => (vec!["b_decom".into()], false),
         Act::Cancel(_) => (vec!["b_cancel".into()], false),
         Act::Formation(_) => (Vec::new(), false),
         // No verified native ID for these actions; use the existing label.
@@ -530,14 +533,21 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
         // Cell 1 is the producers' Rally; a craft that can move is never one.
         out.push(button(1, &tr("Repair"), Act::Target(TargetMode::Repair), &tooltip_key("Repair at a shipyard")));
     }
+    if caps.decommission {
+        out.push(button(13, &tr("Decommission"), Act::Target(TargetMode::Decommission), &tooltip_key("Decommission")));
+    }
     if caps.recrew {
         let mut b = button(9, &tr("Recrew"), Act::Recrew, &tooltip_key("Recrew"));
         if !caps.recrew_ready { b.look = Look::Locked; }
         out.push(b);
     }
-    for (i, (slot, _)) in caps.specials.iter().enumerate() {
+    for (i, (slot, kind)) in caps.specials.iter().enumerate() {
         if let Some(cell) = [5, 10, 11, 12, 13, 14].get(i) {
-            out.push(button(*cell, &tr("Cloak"), Act::Special(*slot), &tooltip_key("Toggle cloak")));
+            let (label, tip) = match kind {
+                sta_sim::specials::SpecialKind::PointDefence => (tr("Point defence"), tooltip_key("Toggle point defence")),
+                _ => (tr("Cloak"), tooltip_key("Toggle cloak")),
+            };
+            out.push(button(*cell, &label, Act::Special(*slot), &tip));
         }
     }
     out.sort_by_key(|b| b.cell);
@@ -855,8 +865,8 @@ mod tests {
         let g = grid(&f, Page::Top);
         assert_eq!(
             g.iter().map(|b| b.cell).collect::<Vec<_>>(),
-            [1, 2, 3, 6, 7],
-            "mobile armed craft (1: Repair, SIM-40)"
+            [1, 2, 3, 6, 7, 13],
+            "mobile armed craft (1: Repair, SIM-40; 13: Decommission, SIM-45)"
         );
         let stop = g.iter().find(|b| b.act == Act::Stop).unwrap();
         assert_eq!(
@@ -1073,10 +1083,11 @@ mod tests {
         let db = db.build().unwrap();
         let f = feed(db, vec![unit(&fake, 2, "fx_yard", 1, 100.0, None)], &[2]);
         let top = grid(&f, Page::Top);
-        assert_eq!(top.iter().map(|b| b.cell).collect::<Vec<_>>(), [0, 1, 6]);
+        assert_eq!(top.iter().map(|b| b.cell).collect::<Vec<_>>(), [0, 1, 6, 13]);
         assert_eq!(top[0].sprite_names, ["b_build"]);
         assert_eq!(top[1].sprite_names, ["b_rally"]);
         assert_eq!(top[2].sprite_names, ["b_stop"]);
+        assert_eq!(top[3].sprite_names, ["b_decom"]);
         let build = grid(&f, Page::Build);
         assert_eq!(build.iter().map(|b| b.cell).collect::<Vec<_>>(), [0, 1, 4, 9]);
         assert_eq!(build[0].sprite_names, ["b_fed_excelsior", "b_fx_cruiser"]);

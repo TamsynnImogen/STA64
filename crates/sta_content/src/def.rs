@@ -199,6 +199,18 @@ pub struct RepairDef {
     /// warn and stay absent. This is metadata, not a native side policy.
     pub repair_side: Option<i32>,
     pub can_shipyard_repair: Option<bool>,
+    /// SIM-45: `recyclesInPlace` (a unit decommissioned where it stands).
+    pub recycles_in_place: Option<bool>,
+    /// SIM-45: `decommissionFacility` (a yard that takes decommissioned ships).
+    pub decommission_facility: Option<bool>,
+    /// SIM-45: a yard's `dilithiumRecyclingFraction` / `metalRecyclingFraction` (else the race's).
+    pub dilithium_recycling: Option<Fixed>,
+    pub metal_recycling: Option<Fixed>,
+    /// SIM-45 (FO/Roots): `recycleDilithium`, `recycleLatinum`, `recycleMetal`,
+    /// `recycleBiomatter` by resource slot, `Some` when any is set (the others 0).
+    pub recycle_amounts: Option<[Fixed; 4]>,
+    /// SIM-45 (FO/Roots): `recycleTime`, seconds.
+    pub recycle_time: Option<Fixed>,
 }
 
 /// Where a hardpoint can aim, relative to the unit's heading, without
@@ -348,6 +360,11 @@ pub struct UnitDef {
     /// e.g. `ResourcePlanet.odf`): an orbital station may be built in its orbit
     /// (SIM-62). False for moons, rocks and everything without the key.
     pub can_have_orbital_station: bool,
+    /// SIM-44: the cap file the unit names (`fleetCapFile`, FO/Roots), read into the same
+    /// [`CapacityList`](crate::CapacityList) as the XML tech tree's `<capacitylist>`: members from
+    /// `fleetCapClass#`, weights from `fleetCapClass#CapValue` (default 1), the limit from `maxCap`
+    /// (absent: no limit of its own). Shared by every unit naming the same file.
+    pub fleet_cap: Option<std::sync::Arc<crate::CapacityList>>,
     /// Seconds one orbit takes (`orbitTime`) for a station of class `p_mining`,
     /// the class of the orbital mining and processing facilities: `Some` marks a
     /// station that can only be built in a planet's orbit (SIM-62); zero when the
@@ -571,6 +588,7 @@ impl UnitDef {
             planet_civilian_population_modifier: Fixed::ZERO,
             planet_max_population: 0,
             can_have_orbital_station: false,
+            fleet_cap: None,
             orbit_time: None,
             a1_borg: None,
             station_mining: None,
