@@ -20,6 +20,8 @@ pub(crate) struct StatusFeed {
     pub cargo: Vec<CargoView>,
     /// Resource-node amounts (UI-48's dilithium and planet-metal bars).
     pub nodes: Vec<sta_sim::economy::view::NodeView>,
+    /// UI-48: units with damaged or switched-off systems; the rest are whole and on.
+    pub systems: Vec<sta_sim::combat::damage::SystemView>,
 }
 
 /// Keep optional status at the same simulation tick as the regular HUD feed.
@@ -33,9 +35,12 @@ pub(super) fn sync(
         feed.production.clear();
         feed.cargo.clear();
         feed.nodes.clear();
+        feed.systems.clear();
     } else if let Some(link) = link {
         feed.nodes.clear();
         feed.nodes.extend_from_slice(link.nodes());
+        feed.systems.clear();
+        feed.systems.extend_from_slice(link.systems());
         feed.production.clear();
         feed.production.extend_from_slice(link.production());
         feed.cargo.clear();
@@ -279,6 +284,7 @@ mod tests {
                 resource: Some(0),
             }],
                 nodes: Vec::new(),
+                systems: Vec::new(),
         };
         let enemy = feed(
             vec![unit(1, 2, Some(Fixed::from_f64(0.2)))],

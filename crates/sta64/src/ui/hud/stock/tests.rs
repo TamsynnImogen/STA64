@@ -456,6 +456,9 @@ fn inherited_a2_info_colour_tints_single_and_builder_text() {
     let cfg = inherited_config("", "infoTextColor = 1 0 1 1\nshipNameColor = 0 1 0 1\nresource_2_color = 1 0 0 1\n");
     for build_count in [0, 1] {
         let mut app = app_with_content_and_config(content_with_build_count(build_count), cfg.clone(), UiProfile::Armada2);
+        // The info bar follows the pointer: hover the selected ship to read its values there.
+        app.world_mut().resource_mut::<crate::input::hover::HoveredUnit>().0 = Some(EntityId(1));
+        app.update();
         let (name_key, class_key) = if build_count == 0 {
             ("infoSingleNameTextArea", "infoSingleClassTextArea")
         } else {
@@ -631,6 +634,9 @@ fn populated_info_bar(builder: bool, extra: &str) -> App {
 fn bare_status_values_and_crew_change_colour_with_live_pools() {
     use infobar::InfoBarField::{Hull, Shields, Crew};
     let mut app = populated_info_bar(false, "systemIconHealthyColor=0 1 0\nsystemIconLowColor=1 1 0\nsystemIconCriticalColor=1 0 0\n");
+    // The info bar follows the pointer: hover the selected ship to read its values there.
+    app.world_mut().resource_mut::<crate::input::hover::HoveredUnit>().0 = Some(EntityId(1));
+    app.update();
     assert_eq!(info_bar_label(&mut app, Hull).unwrap().1, "100");
     let crew_node = info_bar_label(&mut app, Crew).unwrap().0;
     let mut feed = app.world().resource::<HudFeed>().clone();
@@ -665,12 +671,12 @@ fn resolved_cfg_supplies_optional_selection_gauge_dimensions() {
 }
 
 #[test]
-fn hovered_info_bar_keeps_selected_card_and_updates_real_pools_in_place() {
+fn info_bar_follows_only_the_pointer_and_updates_real_pools_in_place() {
     use infobar::InfoBarField::{Name, Hull, Shields, Crew, Energy};
     let mut app = populated_info_bar(true, "hull_color = 0.2 0.4 0.6 0.8\ncrew_amt_color = 0 1 1 1\nshipNameColor = 1 0 1 1\n");
     let fields = [Name, Hull, Shields, Crew, Energy];
     let ids: Vec<_> = fields.iter().map(|&field| info_bar_label(&mut app, field).unwrap().0).collect();
-    assert_eq!(info_bar_label(&mut app, Name).unwrap().1, "USS Test");
+    assert_eq!(info_bar_label(&mut app, Name).unwrap().1, "", "the selection alone shows nothing: the bar follows the pointer");
     app.world_mut().resource_mut::<crate::input::hover::HoveredUnit>().0 = Some(EntityId(2));
     app.update();
     for (field, expected) in [(Name,"Construction Ship"), (Hull,"50"), (Shields,"25"), (Crew,"73"), (Energy,"3")] {
@@ -708,8 +714,8 @@ fn hovered_info_bar_keeps_selected_card_and_updates_real_pools_in_place() {
     assert_eq!(info_bar_label(&mut app, Crew).unwrap().0, ids[3]);
     app.world_mut().resource_mut::<crate::input::hover::HoveredUnit>().0 = None;
     app.update();
-    assert_eq!(info_bar_label(&mut app, Name).unwrap().1, "USS Test");
-    assert_eq!(info_bar_label(&mut app, Crew).unwrap().1, "150");
+    assert_eq!(info_bar_label(&mut app, Name).unwrap().3, Visibility::Hidden, "off the unit the bar empties, the selection notwithstanding");
+    assert_eq!(info_bar_label(&mut app, Crew).unwrap().1, "");
 }
 
 #[test]
@@ -843,6 +849,9 @@ fn profile_and_selection_changes_preserve_root_camera_and_state() {
 #[test]
 fn numeric_values_patch_existing_stock_entities() {
     let mut app = app();
+    // The info bar follows the pointer: hover the selected ship to read its values there.
+    app.world_mut().resource_mut::<crate::input::hover::HoveredUnit>().0 = Some(EntityId(1));
+    app.update();
     let resources = |app: &mut App| -> Vec<(Entity, usize, String)> {
         app.world_mut()
             .query::<(Entity, &info::StockText, &SpriteText)>()
