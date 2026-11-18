@@ -1002,10 +1002,35 @@ mod view_tests {
         assert_eq!(visible(&mut app, 2), Visibility::Inherited);
         let mut icons = app.world_mut().query::<(&Icon, &Node)>();
         assert!(icons.iter(app.world()).all(|(_, n)| n.display == Display::None));
-        // Over: the hand-off decides again (and Tab's Always still wins afterwards).
+        // Over: the hand-off decides again.
         app.insert_resource(crate::ui::presentation::CineractiveState::default());
         app.update();
         assert!(view(&app).active);
+        assert_eq!(visible(&mut app, 1), Visibility::Hidden);
+    }
+
+    /// The player's Always choice is kept through a cutscene (the stored mode is not
+    /// touched) and comes back with its end, even from a camera low enough for Auto to
+    /// draw models.
+    #[test]
+    fn the_players_always_choice_survives_a_cineractive() {
+        let us = [unit(1, 1, 0.0, 0.0, 0.0)];
+        let mut app = rig(&world(&us), None, 300.0);
+        *app.world_mut().resource_mut::<Mode>() = Mode::Always;
+        app.update();
+        app.update();
+        assert!(view(&app).active);
+        assert_eq!(visible(&mut app, 1), Visibility::Hidden);
+        app.insert_resource(crate::ui::presentation::CineractiveState { on: true, skippable: true });
+        app.update();
+        assert_eq!(*app.world().resource::<Mode>(), Mode::Always);
+        assert!(!view(&app).active && view(&app).icons.is_empty());
+        assert_eq!(visible(&mut app, 1), Visibility::Inherited);
+        app.insert_resource(crate::ui::presentation::CineractiveState::default());
+        app.update();
+        assert_eq!(*app.world().resource::<Mode>(), Mode::Always);
+        assert!(view(&app).active);
+        assert_eq!(view(&app).icons.len(), 1);
         assert_eq!(visible(&mut app, 1), Visibility::Hidden);
     }
 
