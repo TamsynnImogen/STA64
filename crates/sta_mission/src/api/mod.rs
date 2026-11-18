@@ -430,7 +430,13 @@ impl Ctx {
             self.unsupported("order: no owner");
             return false;
         };
-        match self.try_push(owner, CommandKind::Order(make(vec![id]))) {
+        // A script is the authority over its own seats: the sim rejects every command of an
+        // eliminated seat (the skirmish rule: no craft or station left), but a mission builds
+        // more ships for such a seat and orders them. Those orders go in as the script's own,
+        // which may order any unit. Nothing changes for a seat that is still in the game.
+        let eliminated = self.view.players.iter().any(|p| p.id == owner && p.eliminated);
+        let from = if eliminated { PlayerId::SCRIPT } else { owner };
+        match self.try_push(from, CommandKind::Order(make(vec![id]))) {
             Ok(_) => true,
             Err(reason) => { self.unsupported(reason); false }
         }
