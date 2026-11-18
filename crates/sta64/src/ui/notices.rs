@@ -556,16 +556,39 @@ fn on_out(ev: On<PointerOut>, mut hover: ResMut<TipHover>) {
     }
 }
 
+/// The name of the unit under the pointer, for the tooltip box when no interface element
+/// has one (the original's tooltip over objects, its `tooltip*` colours; which name it shows
+/// is ours: the one the selection card uses).
+#[derive(Resource, Default, Debug, Clone, PartialEq)]
+pub struct UnitTip(pub Option<String>);
+
+fn unit_tip(hover: Option<Res<crate::input::hover::HoveredUnit>>, feed: Option<Res<crate::ui::hud::model::HudFeed>>, mut tip: ResMut<UnitTip>) {
+    // Apps without the match's hover or feed (the front end) leave it alone.
+    let (Some(hover), Some(feed)) = (hover, feed) else { return };
+    let next = hover.0.and_then(|id| {
+        let u = feed.view.unit(id)?;
+        let shown = u.flags.contains(sta_sim::view::UnitFlags::SELECTABLE)
+            && !u.flags.contains(sta_sim::view::UnitFlags::DYING)
+            && feed.view.visible_to(feed.player).iter().any(|v| v.id == id);
+        shown.then(|| feed.name(u))
+    });
+    if tip.0 != next {
+        tip.0 = next;
+    }
+}
+
 fn draw_tip(
     hover: Res<TipHover>,
     tips: Query<&Tooltip>,
+    unit: Option<Res<UnitTip>>,
     strings: Option<Res<crate::ui::i18n::Strings>>,
     mut boxed: Single<&mut Node, With<TipBox>>,
     mut words: Single<&mut SpriteText, With<TipText>>,
 ) {
     let shown = hover.target.and_then(|e| tips.get(e).ok()).and_then(|t| t.text_at(hover.rest));
     let shown = shown.map(|text| strings.as_ref().map_or(text, |s| s.tooltip_text(text)))
-        .filter(|text| !text.is_empty());
+        .filter(|text| !text.is_empty())
+        .or_else(|| unit.as_deref().and_then(|u| u.0.as_deref()).filter(|t| !t.is_empty()));
     let Some(shown) = shown else {
         boxed.display = Display::None;
         return;
@@ -671,10 +694,11 @@ impl Plugin for NoticePlugin {
             .init_resource::<Notices>()
             .init_resource::<ChatLog>()
             .init_resource::<TipHover>()
+            .init_resource::<UnitTip>()
             .add_observer(on_over)
             .add_observer(on_out)
             .add_systems(Startup, spawn_roots)
-            .add_systems(Update, (events_to_notices.after(crate::ui::presentation::consume), collect, age, retheme, tip_cfg_colours, (draw_notices, draw_chat, draw_tip)).chain().in_set(GameSet::Ui).after(ProfileSync))
+            .add_systems(Update, (events_to_notices.after(crate::ui::presentation::consume), collect, age, retheme, tip_cfg_colours, unit_tip, (draw_notices, draw_chat, draw_tip)).chain().in_set(GameSet::Ui).after(ProfileSync))
             .add_systems(PostUpdate, position_tip.after(bevy::ui::UiSystems::Layout).before(bevy::ui::UiSystems::PostLayout));
     }
 }
@@ -921,6 +945,29 @@ mod tests {
             assert!((left * scale - (800.0 + 16.0 * scale)).abs() < 0.01, "scale {scale}: left {left}");
             assert!((top * scale - (400.0 + 20.0 * scale)).abs() < 0.01, "scale {scale}: top {top}");
         }
+    }
+
+    #[test]
+    fn the_unit_under_the_pointer_gets_the_tooltip_box_when_no_button_has_one() {
+        let mut app = rig();
+        app.update();
+        let shown = |app: &mut App| {
+            let d = app.world_mut().query_filtered::<&Node, With<TipBox>>().single(app.world()).unwrap().display;
+            let t = app.world_mut().query_filtered::<&SpriteText, With<TipText>>().single(app.world()).unwrap().text.clone();
+            (d, t)
+        };
+        app.world_mut().resource_mut::<UnitTip>().0 = Some("USS Test".into());
+        app.update();
+        assert_eq!(shown(&mut app), (Display::Flex, "USS Test".to_owned()));
+        // A button's tooltip wins over the unit's.
+        let e = app.world_mut().spawn(Tooltip::new("Metal")).id();
+        *app.world_mut().resource_mut::<TipHover>() = TipHover { target: Some(e), rest: 5.0 };
+        app.update();
+        assert_eq!(shown(&mut app).1, "Metal");
+        *app.world_mut().resource_mut::<TipHover>() = TipHover::default();
+        app.world_mut().resource_mut::<UnitTip>().0 = None;
+        app.update();
+        assert_eq!(shown(&mut app).0, Display::None);
     }
 
     #[test]

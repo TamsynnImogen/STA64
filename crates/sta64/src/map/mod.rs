@@ -1203,6 +1203,10 @@ fn rebuild(
             scale,
         };
         let stats = model_scene::spawn(&mut ctx, &model, entity);
+        // An Armada I planet's nimbus (`planets.spr`), looked up by the planet's model name.
+        if class == "planet_obj" {
+            model_scene::spawn_planet_nimbus(&mut ctx, &def.model, entity);
+        }
         tris += stats.triangles;
         drawn += 1;
     }

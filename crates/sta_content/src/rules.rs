@@ -368,6 +368,12 @@ pub struct CfgRules {
     pub facing_weight: Option<Fixed>,
     /// `cfgFACING_CONSTANT` (int; 3): the distance falloff of that blend. As above.
     pub facing_constant: Option<i64>,
+    /// `DECONSTRUCT_PERCENT_TIME` (float; A2 0.67, Roots 0.3): a recycle takes this share of
+    /// the unit's build time (SIM-45, read from the executable, static).
+    pub deconstruct_percent_time: Option<Fixed>,
+    /// `cfgBIOMATTER_RECYCLE_FRACTION` (float; A2 0, Roots 0.5): the share of the biomatter cost
+    /// a recycle returns (SIM-45, read from the executable, static).
+    pub biomatter_recycle_fraction: Option<Fixed>,
 }
 
 impl CfgRules {
@@ -383,7 +389,7 @@ impl CfgRules {
     }
 
     /// The keys, in the order of [`texts`](CfgRules::texts).
-    pub const KEYS: [&'static str; 8] = [
+    pub const KEYS: [&'static str; 10] = [
         "BASE_CREW_PER_SEC",
         "HARD_AI_COST_HANDICAP",
         "HARD_AI_SPEED_HANDICAP",
@@ -392,11 +398,13 @@ impl CfgRules {
         "cfgFREIGHTERS_PER_NEBULA",
         "cfgFACING_WEIGHT",
         "cfgFACING_CONSTANT",
+        "DECONSTRUCT_PERCENT_TIME",
+        "cfgBIOMATTER_RECYCLE_FRACTION",
     ];
 
     /// Each value as the digest renders it (`unset` when absent), in
     /// [`KEYS`](CfgRules::KEYS) order.
-    fn texts(&self) -> [String; 8] {
+    fn texts(&self) -> [String; 10] {
         let real = |v: Option<Fixed>| v.map_or_else(|| "unset".to_owned(), crate::digest::fixed_text);
         let int = |v: Option<i64>| v.map_or_else(|| "unset".to_owned(), |v| v.to_string());
         [
@@ -408,6 +416,8 @@ impl CfgRules {
             int(self.freighters_per_nebula),
             real(self.facing_weight),
             int(self.facing_constant),
+            real(self.deconstruct_percent_time),
+            real(self.biomatter_recycle_fraction),
         ]
     }
 
@@ -428,6 +438,8 @@ impl CfgRules {
         let hard_ai_cost_handicap = real("HARD_AI_COST_HANDICAP");
         let hard_ai_speed_handicap = real("HARD_AI_SPEED_HANDICAP");
         let facing_weight = real("cfgFACING_WEIGHT");
+        let deconstruct_percent_time = real("DECONSTRUCT_PERCENT_TIME");
+        let biomatter_recycle_fraction = real("cfgBIOMATTER_RECYCLE_FRACTION");
         let mut int = |key: &str| {
             cfg.raw(key)?;
             let v = cfg.i64(key).map(|v| v.clamp(-1_000_000_000, 1_000_000_000));
@@ -445,6 +457,8 @@ impl CfgRules {
             hard_ai_speed_handicap,
             facing_weight,
             facing_constant: int("cfgFACING_CONSTANT"),
+            deconstruct_percent_time,
+            biomatter_recycle_fraction,
         }
     }
 }
@@ -823,7 +837,8 @@ impl Rules {
                 crate::digest::fixed_text(self.approach().min_move_warp_distance),
             ));
         }
-        // The two facing keys (SIM-39) only when set, so content without them keeps its hash.
+        // The facing keys (SIM-39) and the recycle keys (SIM-45) only when set, so content
+        // without them keeps its hash.
         for (i, (key, value)) in CfgRules::KEYS.iter().zip(self.cfg.texts()).enumerate() {
             if i >= 6 && value == "unset" {
                 continue;
@@ -893,6 +908,10 @@ impl Rules {
             // SIM-74: only when the race sets them, so a race without the keys keeps its text.
             if repair.weapon_yellow.is_some() || repair.weapon_red.is_some() {
                 canon.opt_fixed("weapon_yellow", repair.weapon_yellow).opt_fixed("weapon_red", repair.weapon_red);
+            }
+            // SIM-45: only when set, so races without them keep their hash.
+            if repair.recycle_dilithium.is_some() || repair.recycle_metal.is_some() {
+                canon.opt_fixed("recycle_dilithium", repair.recycle_dilithium).opt_fixed("recycle_metal", repair.recycle_metal);
             }
             let value = canon.finish();
             out.push(DigestEntry::new(crate::digest::key("race-repair:", stem), value));
@@ -1125,6 +1144,8 @@ mod cfg_tests {
         rules.legacy_start = LegacyStart { dilithium: Some(1), crew: Some(2), officers: None };
         rules.cfg.facing_weight = Some(Fixed::ONE);
         rules.cfg.facing_constant = Some(3);
+        rules.cfg.deconstruct_percent_time = Some(Fixed::ONE);
+        rules.cfg.biomatter_recycle_fraction = Some(Fixed::ONE);
         let pop = PopulationRules { levels: [Fixed::from_int(1000); 4], civilian_rate_modifier: Fixed::ONE };
         let d = ContentDigest::from_entries(rules.with_population(pop).digest_entries());
         for k in TYPED_CFG_KEYS.iter().filter(|k| !matches!(**k, "MP_OFFICER_LIST_SIZE" | "SINGLE_PLAYER_OFFICER_LIMIT" | "cfgMaxOfficers")) {

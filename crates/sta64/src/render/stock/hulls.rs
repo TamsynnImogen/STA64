@@ -1,11 +1,25 @@
 //! The Stock profile's hulls (RND-24): ships and stations lit the way the original
 //! engine lights them, from the SOD's own lighting material.
 //!
-//! Rule (read from data, checked against frames of the original, `bench/pairs/hull-*.ini`):
-//! a face group's lit colour is the texture times the team colour (team groups) times
-//! `material ambient x scene ambient + sum over the map's lights of material diffuse x
-//! light colour x N.L`, plus the material's specular colour times `(N.H)^power` per light,
-//! added after the texture; clipped at 1. The Refit look (`hulls.rs`, `hulls.wesl`'s other
+//! Rule (read from data; the ambient and diffuse terms checked against frames of the original,
+//! `bench/pairs/hull-*.ini`): a face group's lit colour is the texture times the team colour
+//! (team groups) times `material ambient x scene ambient + sum over the map's lights of
+//! material diffuse x light colour x N.L`, plus the material's specular colour times
+//! `(N.H)^power` per light, added after the texture; clipped at 1.
+//!
+//! On an Armada I install the ambient part is the SUM `material ambient + scene ambient`, and the
+//! summed light is clamped to [0, 1] before the texture (the engine's vertex lighting starts each
+//! vertex from that sum and clamps the result; read from the executable, static). Compared with the
+//! original on one frame of one map, the planet only: its disc matched within a few percent. Hulls and
+//! stations rest on the static read and the shared code path and were not compared. Which of the
+//! engine's two lighting paths runs is not established.
+//!
+//! The specular term is read from data and was never isolated in a frame comparison (the
+//! Armada II comparison judged whole-frame luminance). An Armada I install (`Sta1Classic`)
+//! draws no specular term: its SOD materials mostly carry one authoring default specular, and
+//! a modder states the original shows no sheen there (grade: stated by a modder, not
+//! measured). Armada II and Fleet Operations still draw the term (not measured). The values
+//! are still read, for a later specular port. The Refit look (`hulls.rs`, `hulls.wesl`'s other
 //! branch) keeps its own constants and is drawn under [`RenderProfile::Refit`].
 //!
 //! Data keys read: per SOD lighting material `ambient`, `diffuse`, `specular`, `power`,
@@ -82,11 +96,16 @@ impl Plugin for StockHullsPlugin {
 /// Writes the stock look into a hull material's parameters (a part with no lighting
 /// material, e.g. a glTF, takes the engine's default white one; an M3D's material carries
 /// no ambient colour, so only the lights reach it).
-pub fn apply_material(p: &mut crate::render::hulls::HullParams, _m: &StandardMaterial, part: &crate::render::hulls::HullPart) {
+pub fn apply_material(p: &mut crate::render::hulls::HullParams, _m: &StandardMaterial, part: &crate::render::hulls::HullPart, armada_one: bool) {
     let l = part.stock.unwrap_or(StockLight { ambient: [0.0; 3], diffuse: [1.0; 3], specular: [0.0; 3], power: 1.0, model: 2 });
-    p.mamb = Vec3::from(l.ambient).extend(1.0);
+    // `mamb.w` 1: the scene's ambient light multiplies the material's ambient colour; 2 (an Armada I
+    // install): the two are added, as the engine's vertex lighting starts each vertex from their sum
+    // (read from the executable, static; see `hulls.wesl`'s `shade_stock`).
+    p.mamb = Vec3::from(l.ambient).extend(if armada_one { 2.0 } else { 1.0 });
     p.mdif = Vec3::from(l.diffuse).extend(0.0);
-    p.mspc = Vec3::from(l.specular).extend(l.power.max(1.0));
+    // Armada I: no highlight. The colour is zeroed (the data is still read); the shader's specular term is untouched.
+    let specular = if armada_one { [0.0; 3] } else { l.specular };
+    p.mspc = Vec3::from(specular).extend(l.power.max(1.0));
     p.misc = Vec4::new(1.0, 1.0, l.power.max(1.0), 1.0);
     p.rim = Vec4::ZERO;
     p.cut.z = 1.0;
@@ -117,6 +136,36 @@ mod tests {
         assert_eq!(stock.params.mdif, Vec4::new(0.9, 0.8, 0.7, 0.0));
         assert_eq!(stock.params.mspc, Vec4::new(0.2, 0.2, 0.2, 40.0));
         assert_eq!(stock.params.rim, Vec4::ZERO, "no rim light in the original");
+    }
+
+    /// Armada I draws no specular term; Armada II and Fleet Operations keep theirs.
+    #[test]
+    fn armada_one_draws_armada_one() {
+        let std = StandardMaterial::default();
+        let part = HullPart { stock: Some(lit()), ..default() };
+        let mut a1 = HullView::default();
+        a1.set_stock(true);
+        a1.set_armada_one(true);
+        let mut other = HullView::default();
+        other.set_stock(true);
+        assert_eq!(hull_material(&std, &part, &a1).params.mspc, Vec4::new(0.0, 0.0, 0.0, 40.0));
+        assert_eq!(hull_material(&std, &part, &other).params.mspc, Vec4::new(0.2, 0.2, 0.2, 40.0));
+    }
+
+    /// Armada I adds the scene ambient to the material's; Armada II and Fleet Operations multiply them.
+    #[test]
+    fn armada_one_adds_the_scene_ambient_to_the_materials() {
+        let std = StandardMaterial::default();
+        let part = HullPart { stock: Some(lit()), ..default() };
+        let mut a1 = HullView::default();
+        a1.set_stock(true);
+        a1.set_armada_one(true);
+        let mut other = HullView::default();
+        other.set_stock(true);
+        assert_eq!(hull_material(&std, &part, &a1).params.mamb.w, 2.0);
+        assert_eq!(hull_material(&std, &part, &other).params.mamb.w, 1.0);
+        let src = include_str!("../hulls.wesl");
+        assert!(src.contains("k.mamb.rgb + k.amb.rgb, k.mamb.a > 1.5"));
     }
 
     fn material(name: &str, diffuse: [f32; 3]) -> sta_assets::model::LightingMaterial {
@@ -197,7 +246,7 @@ mod tests {
     #[test]
     fn a_part_without_a_material_gets_the_engine_default() {
         let mut p = crate::render::hulls::HullParams::default();
-        apply_material(&mut p, &StandardMaterial::default(), &HullPart::default());
+        apply_material(&mut p, &StandardMaterial::default(), &HullPart::default(), false);
         assert_eq!(p.mdif, Vec4::new(1.0, 1.0, 1.0, 0.0));
         assert_eq!(p.mamb.w, 1.0);
     }

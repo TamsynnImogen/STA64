@@ -2170,6 +2170,7 @@ mod tests {
         for (expected, order) in [
             (18, Order::Transport { units: vec![EntityId(4)], target: EntityId(9), attack: false }),
             (19, Order::Recrew { units: vec![EntityId(4)], on: None }),
+            (21, Order::Decommission { units: vec![EntityId(4)], yard: None }),
         ] {
             let bytes = postcard::to_allocvec(&order).unwrap();
             assert_eq!(bytes[0], expected);

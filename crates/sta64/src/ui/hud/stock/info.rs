@@ -32,6 +32,8 @@ pub(in crate::ui::hud) enum StockBar {
     /// Armada I's energy bar (UI-19).
     Energy(f32),
     Group(EntityId, f32),
+    /// A group tile's shield bar (`infoMultiShipShield_<n>`).
+    GroupShield(EntityId, f32),
     /// UI-48: a resource node's amount left over what it started with.
     Node(f32),
 }
@@ -49,6 +51,44 @@ fn node_bar(def: &sta_content::UnitDef) -> Option<(&'static str, &'static str, &
         (_, 0) => Some(("infoSingleDilithiumBarArea", "infoSingleDilithiumBarDisableColor", "infoSingleDilithiumBarColor")),
         _ => None,
     }
+}
+
+/// UI-48: a system icon of the single-selection card, by cfg slot (`infoSystemIcon_<n>`: 0
+/// sensors, 1 shield generator, 2 weapons, 3 engines, 4 life support; the slots' meaning is
+/// the stock cfgs' comments, read from data).
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::ui::hud) struct SystemIcon(pub usize);
+
+/// The sim's system index ([`sta_sim::combat::damage::SystemView`] order: engines, weapons,
+/// shield generator, life support, sensors) of cfg slot `n`.
+const SLOT_SYSTEM: [usize; 5] = [4, 2, 1, 0, 3];
+
+/// The tint of a system icon, by A2FOExtensions' palette rule (its GUI guide, read from data):
+/// switched off `systemIconDisabledColor`; no hit points left `systemIconDestroyedColor`; else
+/// above 50 % `systemIconHealthyColor`, above 25 % `systemIconLowColor`, else
+/// `systemIconCriticalColor`. A key the cfg leaves out takes STA64's own colour for that state
+/// (ours: white, yellow, red, grey, red), so stock cfgs without the palette still show damage.
+pub(super) fn system_tint(layout: Option<&StockLayout>, health: sta_sim::Fixed, on: bool) -> Color {
+    let h = health.to_f32();
+    let (key, ours) = if !on {
+        ("systemIconDisabledColor", Color::srgb(0.45, 0.45, 0.45))
+    } else if h <= 0.0 {
+        ("systemIconDestroyedColor", Color::srgb(1.0, 0.2, 0.15))
+    } else if h > 0.5 {
+        ("systemIconHealthyColor", Color::WHITE)
+    } else if h > 0.25 {
+        ("systemIconLowColor", Color::srgb(1.0, 0.85, 0.2))
+    } else {
+        ("systemIconCriticalColor", Color::srgb(1.0, 0.2, 0.15))
+    };
+    layout.and_then(|l| l.colour(key)).unwrap_or(ours)
+}
+
+/// The tint of cfg slot `slot` of unit `id` (whole and on when the feed does not list it).
+fn slot_tint(layout: Option<&StockLayout>, status: Option<&crate::ui::hud::status::StatusFeed>, id: EntityId, slot: usize) -> Color {
+    let n = SLOT_SYSTEM[slot];
+    let (health, on) = status.and_then(|s| s.systems.iter().find(|v| v.entity == id)).map_or((sta_sim::Fixed::ONE, true), |v| (v.health[n], v.on[n]));
+    system_tint(layout, health, on)
 }
 
 pub(super) fn node(r: R) -> Node {
@@ -158,6 +198,41 @@ pub(super) fn bar(commands: &mut Commands, root: Entity, r: R, value: f32, (trac
     ));
 }
 
+/// A bar drawn with its cfg sprite (`<bar>` beside `<bar>Area`, e.g. `infoSingleDilithiumBar`):
+/// the picture at the bar's full size, tinted by the fill colour and cut off at the value, over
+/// the track colour. `update` resizes the clip like a plain bar's fill. Which part shows and the
+/// tint are ours (the original's bar drawing not read).
+/// A bar from the cfg: the sprite named by `sprite_key` (`infoSingleHullBar`, ...) when the cfg
+/// names one, else the flat bar. With a sprite and no authored fill colour (`fills`), the picture
+/// is drawn untinted (Roots' hull and shield bars name only a picture).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn cfg_bar(commands: &mut Commands, root: Entity, layout: &StockLayout, r: R, value: f32, (tracks, fills, fallback): (&[&str], &[&str], Color), kind: StockBar, sprite_key: &str) {
+    let (track, fill) = bar_colours(layout, tracks, fills, fallback);
+    match layout.name(sprite_key) {
+        Some(sprite) => {
+            let tint = if fills.iter().any(|k| layout.colour(k).is_some()) { fill } else { Color::WHITE };
+            sprite_bar(commands, root, r, value, (track, tint), kind, sprite);
+        }
+        None => bar(commands, root, r, value, (track, fill), kind),
+    }
+}
+
+pub(super) fn sprite_bar(commands: &mut Commands, root: Entity, r: R, value: f32, (track, color): (Color, Color), kind: StockBar, sprite: &str) {
+    let mut picture = GuiImage::new(sprite);
+    picture.color = color;
+    commands.entity(root).with_child((
+        node(r),
+        BackgroundColor(track),
+        Pickable::IGNORE,
+        children![(
+            kind,
+            Node { width: Val::Px(r.w * value.clamp(0.0, 1.0)), height: Val::Percent(100.0), overflow: Overflow::clip(), ..default() },
+            Pickable::IGNORE,
+            children![(Node { width: Val::Px(r.w), height: Val::Percent(100.0), flex_shrink: 0.0, ..default() }, Pickable::IGNORE, picture)],
+        )],
+    ));
+}
+
 fn resource_slot(id: usize) -> Option<usize> {
     match id {
         2 => Some(0),
@@ -253,6 +328,40 @@ fn wireframe_names(model: &str, layer: usize) -> Vec<String> {
 
 /// Native Wireframe::Render draws five independent GUI SPR layers in one square.
 pub(super) fn wireframe_layers(commands: &mut Commands, root: Entity, r: R, model: &str) {
+    wireframe_layers_of(commands, root, r, model, None);
+}
+
+/// UI-28: a wireframe layer of a unit on the panel, tinted by its system's state each frame.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::ui::hud) struct WireLayer {
+    pub unit: EntityId,
+    /// 1..=5, the `w<n>` sprite.
+    pub layer: usize,
+}
+
+/// The sim's system index ([`sta_sim::combat::damage::SystemView`] order) of wireframe layer `w<n>`:
+/// w1 weapons, w2 engines, w3 life support, w4 shield generator, w5 sensors (read from the stock
+/// wireframe art by eye; the original draws layer n with the ship's system n-1).
+const LAYER_SYSTEM: [usize; 5] = [1, 0, 3, 2, 4];
+
+/// A wireframe layer's colour (A2 `WireframeIcon::DrawSystem`, read from the executable, static):
+/// white; with damage left `r` above 0.01, `(r, 0.2(1 - r), 0.2(1 - r))`, pure red when destroyed;
+/// a switched-off system yellow (the original flashes it; here it is steady, ours).
+pub(super) fn wire_tint(health: Fixed, on: bool) -> Color {
+    if !on {
+        return Color::srgb(1.0, 1.0, 0.0);
+    }
+    let r = (1.0 - health.to_f32()).clamp(0.0, 1.0);
+    if r > 0.01 { Color::srgb(r, 0.2 * (1.0 - r), 0.2 * (1.0 - r)) } else { Color::WHITE }
+}
+
+fn layer_tint(status: Option<&crate::ui::hud::status::StatusFeed>, w: WireLayer) -> Color {
+    let Some(&n) = LAYER_SYSTEM.get(w.layer.wrapping_sub(1)) else { return Color::WHITE };
+    status.and_then(|s| s.systems.iter().find(|v| v.entity == w.unit)).map_or(Color::WHITE, |v| wire_tint(v.health[n], v.on[n]))
+}
+
+/// [`wireframe_layers`] for a unit whose layers follow its systems' state (`None`: plain art).
+pub(super) fn wireframe_layers_of(commands: &mut Commands, root: Entity, r: R, model: &str, unit: Option<EntityId>) {
     let stem = model_stem(model);
     if stem.is_empty() {
         return;
@@ -260,7 +369,10 @@ pub(super) fn wireframe_layers(commands: &mut Commands, root: Entity, r: R, mode
     for layer in 1..=5 {
         let mut image = GuiImage::new("").with_sampling(GuiImageSampling::Linear);
         image.names = wireframe_names(&stem, layer);
-        commands.entity(root).with_child((node(r), Pickable::IGNORE, image));
+        let mut e = commands.spawn((node(r), Pickable::IGNORE, image, ChildOf(root)));
+        if let Some(unit) = unit {
+            e.insert(WireLayer { unit, layer });
+        }
     }
 }
 
@@ -398,7 +510,7 @@ fn spawn_single(
         && let Some(unit) = feed.view.unit(single.id)
         && let Some(def) = feed.content.as_deref().and_then(|db| db.unit(unit.def))
     {
-        wireframe_layers(commands, root, r, &def.model);
+        wireframe_layers_of(commands, root, r, &def.model, Some(single.id));
     }
     if let Some(r) = chosen_rect(
         layout,
@@ -407,7 +519,7 @@ fn spawn_single(
         "infoBuildHullBar",
         "infoSingleHullBarArea",
     ) {
-        bar(commands, root, r, single.hull, bar_colours(layout, &["infoSingleHullBarDisableColor", "infoSingleShieldBarDisableColor"], &["infoSingleHullBarColor"], theme.good), StockBar::Hull(r.w));
+        cfg_bar(commands, root, layout, r, single.hull, (&["infoSingleHullBarDisableColor", "infoSingleShieldBarDisableColor"], &["infoSingleHullBarColor"], theme.good), StockBar::Hull(r.w), "infoSingleHullBar");
     }
     if let Some(shield) = single.shield
         && let Some(r) = chosen_rect(
@@ -418,7 +530,7 @@ fn spawn_single(
             "infoSingleShieldBarArea",
         )
     {
-        bar(commands, root, r, shield, bar_colours(layout, &["infoSingleShieldBarDisableColor"], &["infoSingleShieldBarColor"], theme.accent2), StockBar::Shield(r.w));
+        cfg_bar(commands, root, layout, r, shield, (&["infoSingleShieldBarDisableColor"], &["infoSingleShieldBarColor"], theme.accent2), StockBar::Shield(r.w), "infoSingleShieldBar");
     }
     if let Some(progress) = single.progress
         && let Some(r) = layout.at(origin, "infoSingleConstructionBarArea")
@@ -429,7 +541,17 @@ fn spawn_single(
         && let Some(r) = layout.at(origin, area)
     {
         // Full until the status feed says otherwise (`update` fills it every frame).
-        bar(commands, root, r, 1.0, bar_colours(layout, &[track], &[fill], theme.accent), StockBar::Node(r.w));
+        cfg_bar(commands, root, layout, r, 1.0, (&[track], &[fill], theme.accent), StockBar::Node(r.w), area.trim_end_matches("Area"));
+    }
+    // UI-48: the system icons of a ship or station with systems (`infosystem` frame n at
+    // `infoSystemIcon_n`, the builder card's `infoBuildSystemIcon_n`).
+    let has_systems = feed.view.unit(single.id).and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def))).is_some_and(|d| d.system_hit_points.iter().any(|hp| *hp > sta_sim::Fixed::ZERO));
+    if has_systems {
+        for slot in 0..5 {
+            if let Some(r) = chosen_rect(layout, origin, single.builder, &format!("infoBuildSystemIcon_{slot}"), &format!("infoSystemIcon_{slot}")) {
+                commands.entity(root).with_child((node(r), Pickable::IGNORE, SystemIcon(slot), GuiImage::new("infosystem").with_frame(slot)));
+            }
+        }
     }
 
 }
@@ -483,7 +605,7 @@ fn spawn_group(
             && let Some(unit) = feed.view.unit(tile.id)
             && let Some(def) = feed.content.as_deref().and_then(|db| db.unit(unit.def))
         {
-            wireframe_layers(commands, entity, wireframe, &def.model);
+            wireframe_layers_of(commands, entity, wireframe, &def.model, Some(tile.id));
         }
         if !small {
             // Existing incomplete CFGs retain the icon inset when no name key exists.
@@ -508,14 +630,12 @@ fn spawn_group(
             format!("infoMultiShipHull_{i}")
         };
         if let Some(hull) = layout.at(origin, &hull_key) {
-            bar(
-                commands,
-                root,
-                hull,
-                tile.hull,
-                bar_colours(layout, &["infoMultiHullBarDisableColor", "infoMultiShieldBarDisableColor"], &["infoMultiHullBarColor"], theme.good),
-                StockBar::Group(tile.id, hull.w),
-            );
+            cfg_bar(commands, root, layout, hull, tile.hull, (&["infoMultiHullBarDisableColor", "infoMultiShieldBarDisableColor"], &["infoMultiHullBarColor"], theme.good), StockBar::Group(tile.id, hull.w), "infoMultiHullBar");
+        }
+        // UI-48: the tile's shield bar (A2 and FO author one per tile; FO's compact layout `Sm`).
+        let shield_key = if small { format!("infoMultiShipShieldSm_{i}") } else { format!("infoMultiShipShield_{i}") };
+        if let (Some(shield), Some(r)) = (tile.shield, layout.at(origin, &shield_key)) {
+            cfg_bar(commands, root, layout, r, shield, (&["infoMultiShieldBarDisableColor"], &["infoMultiShieldBarColor"], theme.accent2), StockBar::GroupShield(tile.id, r.w), "infoMultiShieldBar");
         }
     }
 }
@@ -559,8 +679,25 @@ pub(in crate::ui::hud) fn update(
     mut texts: Query<(&StockText, &mut SpriteText)>,
     mut bars: Query<(&StockBar, &mut Node)>,
     mut crew: Query<&mut SpriteText, (With<super::a1::info::CrewText>, Without<StockText>)>,
+    mut icons: Query<(&SystemIcon, &mut GuiImage), Without<WireLayer>>,
+    mut layers: Query<(&WireLayer, &mut GuiImage), Without<SystemIcon>>,
+    state: Option<Res<super::StockState>>,
 ) {
+    for (w, mut image) in &mut layers {
+        let tint = layer_tint(status.as_deref(), *w);
+        if image.color != tint {
+            image.color = tint;
+        }
+    }
     let info = model::info(&feed);
+    if let Info::Single(s) = &info {
+        for (icon, mut image) in &mut icons {
+            let tint = slot_tint(state.as_deref().and_then(|st| st.layout.as_ref()), status.as_deref(), s.id, icon.0);
+            if image.color != tint {
+                image.color = tint;
+            }
+        }
+    }
     let extra = super::a1::info::extra(&feed);
     for mut text in &mut crew {
         let value = extra.as_ref().and_then(|e| e.crew).map(|(now, _)| now.to_string()).unwrap_or_default();
@@ -584,6 +721,10 @@ pub(in crate::ui::hud) fn update(
             (StockBar::Node(w), Info::Single(s)) => (node_fraction(status.as_deref(), s.id), *w),
             (StockBar::Group(id, w), Info::Group(tiles)) => (
                 tiles.iter().find(|tile| tile.id == *id).map_or(0.0, |tile| tile.hull),
+                *w,
+            ),
+            (StockBar::GroupShield(id, w), Info::Group(tiles)) => (
+                tiles.iter().find(|tile| tile.id == *id).and_then(|tile| tile.shield).unwrap_or(0.0),
                 *w,
             ),
             _ => continue,
@@ -658,8 +799,8 @@ mod tests {
             progress: None,
             builder: false,
         };
-        let tile = model::Tile { id: EntityId(1), name: long, hull: 1.0 };
-        let short = model::Tile { id: EntityId(2), name: "Short".into(), hull: 1.0 };
+        let tile = model::Tile { id: EntityId(1), name: long, hull: 1.0, shield: None };
+        let short = model::Tile { id: EntityId(2), name: "Short".into(), hull: 1.0, shield: None };
         let mut world = World::new();
         let root = world.spawn(Node::default()).id();
         let mut queue = CommandQueue::default();
@@ -764,7 +905,7 @@ mod tests {
         let feed = HudFeed::default();
         let theme = Theme::default();
         let name = "USS Long Ship Name";
-        let tile = model::Tile { id: EntityId(7), name: name.into(), hull: 1.0 };
+        let tile = model::Tile { id: EntityId(7), name: name.into(), hull: 1.0, shield: None };
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         crate::app::configure_sets(&mut app);
@@ -832,7 +973,7 @@ mod tests {
             let mut queue = CommandQueue::default();
             {
                 let mut commands = Commands::new(&mut queue, &world);
-                let tile = model::Tile { id: EntityId(7), name: "USS Dunlop".into(), hull: 1.0 };
+                let tile = model::Tile { id: EntityId(7), name: "USS Dunlop".into(), hull: 1.0, shield: None };
                 spawn_group(&mut commands, root, &layout, &feed, &theme, Vec2::ZERO, variant, &[tile]);
             }
             queue.apply(&mut world);
@@ -871,7 +1012,7 @@ mod tests {
             ..default()
         };
         let tiles = (1..=30)
-            .map(|id| model::Tile { id: EntityId(id), name: format!("Ship {id} full name"), hull: 1.0 })
+            .map(|id| model::Tile { id: EntityId(id), name: format!("Ship {id} full name"), hull: 1.0, shield: None })
             .collect::<Vec<_>>();
         let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
         for i in 0..30 {
@@ -1217,5 +1358,128 @@ mod tests {
         assert_eq!(node_fraction(Some(&feed(node(100, false))), EntityId(5)), 0.25);
         assert_eq!(node_fraction(Some(&feed(node(100, true))), EntityId(5)), 1.0, "infinite: always full");
         assert_eq!(node_fraction(None, EntityId(5)), 1.0);
+    }
+
+    /// UI-48: a system icon's tint by cfg slot, from the sim's system order, with A2FOExtensions'
+    /// palette keys and thresholds and STA64's colours where a key is missing.
+    #[test]
+    fn system_icons_are_tinted_by_their_systems_state() {
+        use sta_content::gui_cfg::{Colour, GuiLayout};
+        use sta_sim::combat::damage::SystemView;
+        let f = Fixed::from_f64;
+        let view = SystemView { entity: EntityId(5), health: [f(0.2), Fixed::ONE, f(0.5), Fixed::ZERO, Fixed::ONE], on: [true, true, true, true, false] };
+        let feed = crate::ui::hud::status::StatusFeed { systems: vec![view], ..Default::default() };
+        // No palette: STA64's colours. Slot 3 engines (20 %), 1 shield generator (50 %: low, not
+        // healthy), 4 life support (0: destroyed), 0 sensors (off), 2 weapons (whole).
+        let none = None;
+        assert_eq!(slot_tint(none, Some(&feed), EntityId(5), 3), Color::srgb(1.0, 0.2, 0.15));
+        assert_eq!(slot_tint(none, Some(&feed), EntityId(5), 1), Color::srgb(1.0, 0.85, 0.2));
+        assert_eq!(slot_tint(none, Some(&feed), EntityId(5), 4), Color::srgb(1.0, 0.2, 0.15));
+        assert_eq!(slot_tint(none, Some(&feed), EntityId(5), 0), Color::srgb(0.45, 0.45, 0.45));
+        assert_eq!(slot_tint(none, Some(&feed), EntityId(5), 2), Color::WHITE);
+        assert_eq!(slot_tint(none, Some(&feed), EntityId(9), 3), Color::WHITE, "an unlisted unit is whole");
+        // With the palette (as Roots' STL mod sets it).
+        let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
+        let c = |r, g, b| Colour { r, g, b, a: 1.0 };
+        for (k, v) in [("systemIconHealthyColor", c(0.0, 0.25, 1.0)), ("systemIconLowColor", c(1.0, 0.9, 0.0)), ("systemIconCriticalColor", c(1.0, 0.15, 0.0)), ("systemIconDisabledColor", c(0.25, 0.55, 1.0)), ("systemIconDestroyedColor", c(1.0, 0.0, 1.0))] {
+            cfg.colours.insert(k.into(), v);
+        }
+        let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+        let l = Some(&layout);
+        assert_eq!(slot_tint(l, Some(&feed), EntityId(5), 3), Color::srgba(1.0, 0.15, 0.0, 1.0), "critical");
+        assert_eq!(slot_tint(l, Some(&feed), EntityId(5), 1), Color::srgba(1.0, 0.9, 0.0, 1.0), "low");
+        assert_eq!(slot_tint(l, Some(&feed), EntityId(5), 4), Color::srgba(1.0, 0.0, 1.0, 1.0), "destroyed");
+        assert_eq!(slot_tint(l, Some(&feed), EntityId(5), 0), Color::srgba(0.25, 0.55, 1.0, 1.0), "disabled");
+        assert_eq!(slot_tint(l, Some(&feed), EntityId(5), 2), Color::srgba(0.0, 0.25, 1.0, 1.0), "healthy");
+    }
+
+    /// UI-28: each wireframe layer takes its system's state; a destroyed system's layer is pure
+    /// red, the others white; hull damage plays no part.
+    #[test]
+    fn wireframe_layers_follow_their_systems_state() {
+        use sta_sim::combat::damage::SystemView;
+        let f = Fixed::from_f64;
+        // Sim order: engines destroyed, weapons whole, shields 75 %, life support off, sensors whole.
+        let view = SystemView { entity: EntityId(5), health: [Fixed::ZERO, Fixed::ONE, f(0.75), Fixed::ONE, Fixed::ONE], on: [true, true, true, false, true] };
+        let feed = crate::ui::hud::status::StatusFeed { systems: vec![view], ..Default::default() };
+        let at = |layer| layer_tint(Some(&feed), WireLayer { unit: EntityId(5), layer });
+        assert_eq!(at(2), Color::srgb(1.0, 0.0, 0.0), "w2 engines: destroyed");
+        assert_eq!(at(1), Color::WHITE, "w1 weapons: whole");
+        assert_eq!(at(4), Color::srgb(0.25, 0.15, 0.15), "w4 shield generator: a quarter of its damage");
+        assert_eq!(at(3), Color::srgb(1.0, 1.0, 0.0), "w3 life support: off");
+        assert_eq!(at(5), Color::WHITE);
+        assert_eq!(layer_tint(Some(&feed), WireLayer { unit: EntityId(9), layer: 2 }), Color::WHITE, "an unlisted unit is whole");
+    }
+
+    /// A bar with a cfg sprite: the picture tinted by the fill colour inside a clip the update
+    /// resizes, over the track colour.
+    #[test]
+    fn a_sprite_bar_tints_its_picture_and_clips_it_at_the_value() {
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        let mut queue = CommandQueue::default();
+        let track = Color::srgb(0.2, 0.2, 0.2);
+        let blue = Color::srgb(0.0, 0.0, 1.0);
+        sprite_bar(&mut Commands::new(&mut queue, &world), root, R::new(0.0, 0.0, 200.0, 10.0), 0.5, (track, blue), StockBar::Node(200.0), "large_dilithium_bar");
+        queue.apply(&mut world);
+        let outer = world.get::<Children>(root).unwrap()[0];
+        assert_eq!(world.get::<BackgroundColor>(outer).unwrap().0, track);
+        let clip = world.get::<Children>(outer).unwrap()[0];
+        assert_eq!(world.get::<Node>(clip).unwrap().width, Val::Px(100.0));
+        let picture = world.get::<Children>(clip).unwrap()[0];
+        let image = world.get::<GuiImage>(picture).unwrap();
+        assert_eq!((image.names[0].as_str(), image.color), ("large_dilithium_bar", blue));
+        assert_eq!(world.get::<Node>(picture).unwrap().width, Val::Px(200.0), "the picture keeps the full bar's size");
+    }
+
+
+    /// Hull and shield bars draw their cfg sprite; without a fill colour key the picture is
+    /// untinted, with one it takes it; no sprite keeps the flat bar.
+    #[test]
+    fn cfg_bars_use_the_named_sprite_and_tint_only_with_an_authored_colour() {
+        use sta_content::gui_cfg::{Colour, GuiLayout};
+        let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
+        cfg.names.insert("infoSingleHullBar".into(), "large_hull_bar".into());
+        cfg.names.insert("infoSingleShieldBar".into(), "large_shield_bar".into());
+        cfg.colours.insert("infoSingleShieldBarColor".into(), Colour { r: 0.0, g: 0.0, b: 1.0, a: 1.0 });
+        let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        let mut queue = CommandQueue::default();
+        let r = R::new(0.0, 0.0, 100.0, 10.0);
+        let green = Color::srgb(0.0, 1.0, 0.0);
+        {
+            let mut c = Commands::new(&mut queue, &world);
+            cfg_bar(&mut c, root, &layout, r, 1.0, (&[], &["infoSingleHullBarColor"], green), StockBar::Hull(100.0), "infoSingleHullBar");
+            cfg_bar(&mut c, root, &layout, r, 1.0, (&[], &["infoSingleShieldBarColor"], green), StockBar::Shield(100.0), "infoSingleShieldBar");
+            cfg_bar(&mut c, root, &layout, r, 1.0, (&[], &[], green), StockBar::Progress(100.0), "infoSingleConstructionBar");
+        }
+        queue.apply(&mut world);
+        let images: Vec<(String, Color)> = world.query::<&GuiImage>().iter(&world).map(|i| (i.names[0].clone(), i.color)).collect();
+        assert!(images.contains(&("large_hull_bar".to_owned(), Color::WHITE)), "{images:?}");
+        assert!(images.contains(&("large_shield_bar".to_owned(), Color::srgba(0.0, 0.0, 1.0, 1.0))), "{images:?}");
+        assert_eq!(images.len(), 2, "no sprite named: the construction bar stays flat");
+    }
+
+    /// UI-48: a group tile carries its shield share; a bar is drawn at `infoMultiShipShield_<n>`.
+    #[test]
+    fn group_tiles_draw_their_shield_bar_from_the_cfg() {
+        use sta_content::gui_cfg::{GuiLayout, Rect};
+        let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
+        cfg.rects.insert("infoMultiShipShield_0".into(), Rect { x: 10, y: 20, w: 72, h: 7 });
+        // A tile is drawn only where its icon rectangle is authored.
+        cfg.rects.insert("infoMultiShipIcon_0".into(), Rect { x: 10, y: 30, w: 72, h: 40 });
+        cfg.rects.insert("infoMultiShipIcon_1".into(), Rect { x: 90, y: 30, w: 72, h: 40 });
+        let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        let mut queue = CommandQueue::default();
+        let feed = HudFeed::default();
+        let theme = Theme::default();
+        let tiles = vec![model::Tile { id: EntityId(1), name: "A".into(), hull: 1.0, shield: Some(0.5) }, model::Tile { id: EntityId(2), name: "B".into(), hull: 1.0, shield: None }];
+        spawn_group(&mut Commands::new(&mut queue, &world), root, &layout, &feed, &theme, Vec2::ZERO, 1, &tiles);
+        queue.apply(&mut world);
+        let shields: Vec<(EntityId, Val)> = world.query::<(&StockBar, &Node)>().iter(&world).filter_map(|(k, n)| match k { StockBar::GroupShield(id, _) => Some((*id, n.width)), _ => None }).collect();
+        assert_eq!(shields, [(EntityId(1), Val::Px(36.0))], "half of 72 for the first tile; none without the key or shields");
     }
 }
