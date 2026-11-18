@@ -18,8 +18,16 @@ fn v(x: i32, z: i32) -> Vec3 {
 /// `fx_yard` repairs; `fx_cruiser` has 100 engine hit points repaired at 0.5 s
 /// per point, hull 1000, shields 200 recharging 1 per tick, `healthRate` 2.
 fn db(patch: impl Fn(&mut UnitDef)) -> Arc<ContentDb> {
+    db_on(None, patch)
+}
+
+/// [`db`] under `profile` (the fake's own when `None`).
+fn db_on(profile: Option<sta_content::Profile>, patch: impl Fn(&mut UnitDef)) -> Arc<ContentDb> {
     let fake = sta_content::fake::db();
-    let mut b = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+    let mut b = match profile {
+        Some(p) => ContentDb::builder().profile(p).features(p.features()),
+        None => ContentDb::builder().profile(fake.profile()).features(fake.features().clone()),
+    };
     for w in fake.weapons() {
         b = b.weapon(w.clone());
     }
@@ -207,4 +215,42 @@ fn roots_lets_a_ship_dock_fifty_further_out() {
     assert_eq!(reaches(&stock).0, DOCK_REACH);
     let roots = ContentDb::builder().profile(sta_content::Profile::Fo4).features(sta_content::Profile::Fo4.features()).build().unwrap();
     assert_eq!(reaches(&roots), (DOCK_REACH + ROOTS_EXTRA_REACH, super::service::WAIT_REACH + ROOTS_EXTRA_REACH));
+}
+
+#[test]
+fn roots_refills_special_energy_when_the_repair_ends() {
+    for (profile, refilled) in [(Some(sta_content::Profile::Fo4), true), (None, false)] {
+        let mut w = world(db_on(profile, |u| if u.odf == "fx_cruiser" {
+            u.special_energy_max = Fixed::from_int(100);
+            u.special_energy_rate = Fixed::ZERO;
+        }), 600);
+        let ship = w.ship;
+        w.damage(ship);
+        w.sim.step(&[]);
+        let db = w.sim.content.clone().unwrap();
+        assert!(w.sim.specials.set_energy(&w.sim.units, &db, ship, Fixed::from_int(10)));
+        assert!(!rejected(&w.order(vec![ship], None)));
+        w.sim.units.get_mut(ship).unwrap().pos = v(0, 20);
+        w.run(3);
+        assert!(w.sim.repairs().yard_of(ship).is_none(), "{profile:?}: repaired and gone");
+        let energy = w.sim.specials.energy_of(ship);
+        assert_eq!(energy, Some(if refilled { Fixed::from_int(100) } else { Fixed::from_int(10) }), "{profile:?}");
+    }
+}
+
+#[test]
+fn roots_keeps_a_queued_ships_place_on_a_second_repair_order() {
+    for (profile, kept) in [(Some(sta_content::Profile::Fo4), true), (None, false)] {
+        let d = db_on(profile, |_| {});
+        let mut w = world(Arc::clone(&d), 600);
+        let first = w.ship;
+        let second = w.sim.spawn_def(d.key("fx_cruiser").unwrap(), PlayerId(1), v(0, 700), (Fixed::ZERO, Fixed::ONE)).unwrap();
+        w.damage(first);
+        w.damage(second);
+        assert!(!rejected(&w.order(vec![first, second], None)));
+        let place = |w: &W| w.sim.repairs().queue(w.yard).iter().position(|s| *s == first);
+        assert_eq!(place(&w), Some(0), "{profile:?}");
+        assert!(!rejected(&w.order(vec![first], None)), "{profile:?}: a second order is accepted");
+        assert_eq!(place(&w), Some(if kept { 0 } else { 1 }), "{profile:?}");
+    }
 }
