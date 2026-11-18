@@ -306,6 +306,40 @@ fn wireframe_names(model: &str, layer: usize) -> Vec<String> {
 
 /// Native Wireframe::Render draws five independent GUI SPR layers in one square.
 pub(super) fn wireframe_layers(commands: &mut Commands, root: Entity, r: R, model: &str) {
+    wireframe_layers_of(commands, root, r, model, None);
+}
+
+/// UI-28: a wireframe layer of a unit on the panel, tinted by its system's state each frame.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::ui::hud) struct WireLayer {
+    pub unit: EntityId,
+    /// 1..=5, the `w<n>` sprite.
+    pub layer: usize,
+}
+
+/// The sim's system index ([`sta_sim::combat::damage::SystemView`] order) of wireframe layer `w<n>`:
+/// w1 weapons, w2 engines, w3 life support, w4 shield generator, w5 sensors (read from the stock
+/// wireframe art by eye; the original draws layer n with the ship's system n-1).
+const LAYER_SYSTEM: [usize; 5] = [1, 0, 3, 2, 4];
+
+/// A wireframe layer's colour (A2 `WireframeIcon::DrawSystem`, read from the executable, static):
+/// white; with damage left `r` above 0.01, `(r, 0.2(1 - r), 0.2(1 - r))`, pure red when destroyed;
+/// a switched-off system yellow (the original flashes it; here it is steady, ours).
+pub(super) fn wire_tint(health: Fixed, on: bool) -> Color {
+    if !on {
+        return Color::srgb(1.0, 1.0, 0.0);
+    }
+    let r = (1.0 - health.to_f32()).clamp(0.0, 1.0);
+    if r > 0.01 { Color::srgb(r, 0.2 * (1.0 - r), 0.2 * (1.0 - r)) } else { Color::WHITE }
+}
+
+fn layer_tint(status: Option<&crate::ui::hud::status::StatusFeed>, w: WireLayer) -> Color {
+    let Some(&n) = LAYER_SYSTEM.get(w.layer.wrapping_sub(1)) else { return Color::WHITE };
+    status.and_then(|s| s.systems.iter().find(|v| v.entity == w.unit)).map_or(Color::WHITE, |v| wire_tint(v.health[n], v.on[n]))
+}
+
+/// [`wireframe_layers`] for a unit whose layers follow its systems' state (`None`: plain art).
+pub(super) fn wireframe_layers_of(commands: &mut Commands, root: Entity, r: R, model: &str, unit: Option<EntityId>) {
     let stem = model_stem(model);
     if stem.is_empty() {
         return;
@@ -313,7 +347,10 @@ pub(super) fn wireframe_layers(commands: &mut Commands, root: Entity, r: R, mode
     for layer in 1..=5 {
         let mut image = GuiImage::new("").with_sampling(GuiImageSampling::Linear);
         image.names = wireframe_names(&stem, layer);
-        commands.entity(root).with_child((node(r), Pickable::IGNORE, image));
+        let mut e = commands.spawn((node(r), Pickable::IGNORE, image, ChildOf(root)));
+        if let Some(unit) = unit {
+            e.insert(WireLayer { unit, layer });
+        }
     }
 }
 
@@ -451,7 +488,7 @@ fn spawn_single(
         && let Some(unit) = feed.view.unit(single.id)
         && let Some(def) = feed.content.as_deref().and_then(|db| db.unit(unit.def))
     {
-        wireframe_layers(commands, root, r, &def.model);
+        wireframe_layers_of(commands, root, r, &def.model, Some(single.id));
     }
     if let Some(r) = chosen_rect(
         layout,
@@ -550,7 +587,7 @@ fn spawn_group(
             && let Some(unit) = feed.view.unit(tile.id)
             && let Some(def) = feed.content.as_deref().and_then(|db| db.unit(unit.def))
         {
-            wireframe_layers(commands, entity, wireframe, &def.model);
+            wireframe_layers_of(commands, entity, wireframe, &def.model, Some(tile.id));
         }
         if !small {
             // Existing incomplete CFGs retain the icon inset when no name key exists.
@@ -626,8 +663,15 @@ pub(in crate::ui::hud) fn update(
     mut texts: Query<(&StockText, &mut SpriteText)>,
     mut bars: Query<(&StockBar, &mut Node)>,
     mut crew: Query<&mut SpriteText, (With<super::a1::info::CrewText>, Without<StockText>)>,
-    mut icons: Query<(&SystemIcon, &mut GuiImage)>,
+    mut icons: Query<(&SystemIcon, &mut GuiImage), Without<WireLayer>>,
+    mut layers: Query<(&WireLayer, &mut GuiImage), Without<SystemIcon>>,
 ) {
+    for (w, mut image) in &mut layers {
+        let tint = layer_tint(status.as_deref(), *w);
+        if image.color != tint {
+            image.color = tint;
+        }
+    }
     let info = model::info(&feed);
     if let Info::Single(s) = &info {
         for (icon, mut image) in &mut icons {
@@ -1309,5 +1353,23 @@ mod tests {
         assert_eq!(slot_tint(Some(&feed), EntityId(5), 0), Color::srgb(0.45, 0.45, 0.45));
         assert_eq!(slot_tint(Some(&feed), EntityId(5), 2), Color::WHITE);
         assert_eq!(slot_tint(Some(&feed), EntityId(9), 3), Color::WHITE, "an unlisted unit is whole");
+    }
+
+    /// UI-28: each wireframe layer takes its system's state; a destroyed system's layer is pure
+    /// red, the others white; hull damage plays no part.
+    #[test]
+    fn wireframe_layers_follow_their_systems_state() {
+        use sta_sim::combat::damage::SystemView;
+        let f = Fixed::from_f64;
+        // Sim order: engines destroyed, weapons whole, shields 75 %, life support off, sensors whole.
+        let view = SystemView { entity: EntityId(5), health: [Fixed::ZERO, Fixed::ONE, f(0.75), Fixed::ONE, Fixed::ONE], on: [true, true, true, false, true] };
+        let feed = crate::ui::hud::status::StatusFeed { systems: vec![view], ..Default::default() };
+        let at = |layer| layer_tint(Some(&feed), WireLayer { unit: EntityId(5), layer });
+        assert_eq!(at(2), Color::srgb(1.0, 0.0, 0.0), "w2 engines: destroyed");
+        assert_eq!(at(1), Color::WHITE, "w1 weapons: whole");
+        assert_eq!(at(4), Color::srgb(0.25, 0.15, 0.15), "w4 shield generator: a quarter of its damage");
+        assert_eq!(at(3), Color::srgb(1.0, 1.0, 0.0), "w3 life support: off");
+        assert_eq!(at(5), Color::WHITE);
+        assert_eq!(layer_tint(Some(&feed), WireLayer { unit: EntityId(9), layer: 2 }), Color::WHITE, "an unlisted unit is whole");
     }
 }
