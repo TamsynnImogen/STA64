@@ -438,11 +438,14 @@ pub struct Settings {
     pub player_name: String,
     /// The relay address last used (UI-11); empty until one is entered.
     pub relay: String,
+    /// The mouse cursor's size factor (UI-45; 0.5 to 3, default 1): the install's cursor art
+    /// is drawn this many times its texture size.
+    pub cursor_scale: f32,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { master: 80.0, music: 60.0, effects: 80.0, voice: 80.0, scroll_speed: 50.0, window_size: WindowSize::Automatic, fullscreen: false, vsync: true, show_fps: false, msaa: None, graphics_detail: None, shadows: None, bloom: None, lcars_ui: false, hud_fit: crate::ui::hud::stock::layout::HudFit::Centred, player_name: String::new(), relay: String::new() }
+        Settings { master: 80.0, music: 60.0, effects: 80.0, voice: 80.0, scroll_speed: 50.0, window_size: WindowSize::Automatic, fullscreen: false, vsync: true, show_fps: false, msaa: None, graphics_detail: None, shadows: None, bloom: None, lcars_ui: false, hud_fit: crate::ui::hud::stock::layout::HudFit::Centred, player_name: String::new(), relay: String::new(), cursor_scale: 1.0 }
     }
 }
 

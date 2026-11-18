@@ -157,6 +157,10 @@ pub struct RaceRepair {
     /// crew status (SIM-74, read by `sta_sim` under `crew_weapon_delay`).
     pub weapon_yellow: Option<Fixed>,
     pub weapon_red: Option<Fixed>,
+    /// `recycleDilithiumFraction` / `recycleMetalFraction`: the share of the cost an in-place
+    /// recycle returns, and a yard's when it sets none (SIM-45; the executable's default is 0.8).
+    pub recycle_dilithium: Option<Fixed>,
+    pub recycle_metal: Option<Fixed>,
 }
 
 impl RaceRepair {
@@ -239,7 +243,9 @@ fn nonnegative_integer(odf: &sta_odf::Odf, key: &str) -> Option<i64> {
 impl Races {
     /// The races of a mounted install.
     pub fn load(vfs: &sta_vfs::Vfs, index: &crate::OdfIndex) -> (Races, Vec<Warning>) {
-        let (mut races, warnings) = Races::load_with_profile(Profile::detect(vfs), &mut |n, v| index.load(vfs, n, v));
+        let profile = Profile::detect(vfs);
+        let a1_menu = profile == Profile::Sta1Classic || crate::profile::a1_compat(vfs);
+        let (mut races, warnings) = Races::load_with_policy(profile, a1_menu, &mut |n, v| index.load(vfs, n, v));
         // An indexed but unreadable catalogue is not an intentionally bare DB.
         races.authoritative |= index.get("races").is_some();
         (races, warnings)
@@ -252,6 +258,12 @@ impl Races {
 
     /// Apply profile-specific race-menu defaults after ordinary layered ODF resolution.
     pub fn load_with_profile(profile: Profile, loader: &mut Loader<'_>) -> (Races, Vec<Warning>) {
+        Self::load_with_policy(profile, profile == Profile::Sta1Classic, loader)
+    }
+
+    /// [`load_with_profile`](Races::load_with_profile), with the Armada I race-menu policy
+    /// chosen apart from the profile: an A1 compatibility mod keeps its engine's profile.
+    pub fn load_with_policy(profile: Profile, a1_menu: bool, loader: &mut Loader<'_>) -> (Races, Vec<Warning>) {
         let mut warnings = Vec::new();
         let root = loader("races.odf", 0);
         let authoritative = root.is_some() || profile != Profile::Native;
@@ -400,6 +412,8 @@ impl Races {
                         crew_red_status: repair_value("crewredstatus"),
                         weapon_yellow: repair_value("weaponyellow"),
                         weapon_red: repair_value("weaponred"),
+                        recycle_dilithium: repair_value("recycledilithiumfraction"),
+                        recycle_metal: repair_value("recyclemetalfraction"),
                     };
                     if !repair.is_empty() {
                         repair_names.push((name.clone(), s.clone()));
@@ -441,7 +455,7 @@ impl Races {
                 Err(e) => warnings.push(Warning::new(format!("{s}.odf"), e.to_string())),
             }
         }
-        if profile == Profile::Sta1Classic {
+        if a1_menu {
             // A2FOExtensions config.rs::a2fo_rs_config_race: preserve a fully
             // valid explicit table; otherwise derive A1's legacy menu from
             // interfaceConfiguration presence, in race declaration order.
@@ -783,6 +797,21 @@ mod tests {
         assert_eq!(races.get("blank").unwrap().display_key, None);
         assert_eq!(races.get("absent").unwrap().display_key, None);
         assert_eq!(races.playable().iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["internal_fed", "internal_borg"]);
+    }
+
+    #[test]
+    fn an_a1_compatibility_mod_gets_the_armada_i_menu_on_its_own_profile() {
+        const A1_TABLE: &[(&str, &str)] = &[
+            ("races", "numberOfRaces = 3\nrace0 = \"borg.odf\"\nrace1 = \"fed.odf\"\nrace2 = \"norace.odf\"\n"),
+            ("borg", "name = \"borg\"\ninterfaceConfiguration = \"gui_bor.cfg\"\n"),
+            ("fed", "name = \"federation\"\ninterfaceConfiguration = \"gui_fed.cfg\"\n"),
+            ("norace", "name = \"norace\"\n"),
+        ];
+        let (r, w) = Races::load_with_policy(Profile::Fo4, true, &mut loader(A1_TABLE));
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(r.playable().iter().map(|r| r.stem.as_str()).collect::<Vec<_>>(), ["borg", "fed"]);
+        let (r, _) = Races::load_with_profile(Profile::Fo4, &mut loader(A1_TABLE));
+        assert!(r.playable().is_empty(), "without the module, Roots rules: no slots, no races");
     }
 
     #[test]

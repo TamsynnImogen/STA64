@@ -106,6 +106,7 @@ fn metadata<'a>(native: &'a NativeCommands, act: &Act) -> Option<&'a NativeComma
         Act::Target(TargetMode::Colonize) => "colonize",
         Act::Target(TargetMode::Transport) => "transport",
         Act::Target(TargetMode::Repair) => "repair",
+        Act::Target(TargetMode::Decommission) => "decom",
         Act::Stop => "stop",
         Act::Recrew => "recrew",
         Act::Cancel(_) => "cancelbuild",
