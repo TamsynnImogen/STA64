@@ -797,6 +797,10 @@ impl WorldSource for Sim {
     fn node_view(&self) -> Vec<economy::view::NodeView> {
         Sim::node_view(self)
     }
+
+    fn system_view(&self) -> Vec<combat::damage::SystemView> {
+        Sim::system_view(self)
+    }
 }
 
 #[cfg(test)]

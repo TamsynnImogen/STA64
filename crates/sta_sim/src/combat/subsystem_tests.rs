@@ -429,3 +429,19 @@ fn names_and_races_are_per_unit_validated_viewed_and_survive_snapshot_and_death(
     assert!(script(&mut sim, Edit::Kill(id)));
     assert!(sim.view().attrs.names.is_empty() && sim.view().attrs.races.is_empty(), "rows go with the unit");
 }
+
+#[test]
+fn system_view_lists_damaged_or_switched_off_systems_as_health_shares() {
+    let (mut sim, id, _) = world();
+    assert!(sim.system_view().is_empty(), "a whole, switched-on ship is not listed");
+    assert!(script(&mut sim, Edit::SubsystemDamage(id, Subsystem::Engines, Fixed::from_int(30))));
+    assert!(script(&mut sim, Edit::Subsystem(id, Subsystem::Sensors, false)));
+    let v = sim.system_view();
+    assert_eq!(v.len(), 1);
+    assert_eq!(v[0].entity, id);
+    assert_eq!(v[0].health[0], fx(0.75), "engines: 90 of 120 hit points left");
+    assert_eq!(v[0].health[1], Fixed::ONE);
+    assert_eq!(v[0].health[4], Fixed::ONE, "no sensorsHitPoints: whole");
+    assert_eq!(v[0].on, [true, true, true, true, false]);
+    assert_eq!(WorldSource::system_view(&sim), v);
+}

@@ -428,8 +428,13 @@ pub fn orbit_camera(
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
     config: Option<Res<OrbitButtons>>,
+    limits: Option<Res<crate::map::CameraLimits>>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
     mut q: Query<(&mut Orbit, &mut Transform)>,
 ) {
+    // In a match the zoom is limited here, before the camera is placed: limiting it a frame
+    // later (in the map's pan) made the view jump out and back at the overview heights.
+    let limits = limits.filter(|_| !crate::ui::presentation::cutscene_running(cine));
     let cfg = config.map(|c| *c).unwrap_or(OrbitButtons {
         rotate: MouseButton::Left,
         pan: Some(MouseButton::Right),
@@ -452,6 +457,9 @@ pub fn orbit_camera(
         };
         if lines != 0.0 {
             o.dist = (o.dist * 0.88f32.powf(lines)).max(0.01);
+        }
+        if let Some(l) = &limits {
+            o.dist = l.clamp_dist(o.dist, o.pitch, o.focus.y);
         }
         let rot = Quat::from_euler(EulerRot::YXZ, o.yaw, -o.pitch, 0.0);
         tf.translation = o.focus + rot * Vec3::new(0.0, 0.0, o.dist);
