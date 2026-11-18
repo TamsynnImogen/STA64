@@ -26,9 +26,9 @@ Games: the stock data of Armada I (A1), Armada II (A2) and Fleet Operations (FO)
 | command palette | 12 | 6 | 0 | 0 | 6 |
 | control panel | 8 | 1 | 0 | 7 | 0 |
 | drop-player box | 18 | 0 | 0 | 8 | 10 |
-| info panel, build and research | 15 | 7 | 0 | 4 | 4 |
+| info panel, build and research | 15 | 8 | 0 | 3 | 4 |
 | info panel, multi selection | 20 | 8 | 0 | 1 | 11 |
-| info panel, other | 36 | 11 | 0 | 16 | 9 |
+| info panel, other | 36 | 13 | 0 | 15 | 8 |
 | info panel, single selection | 62 | 42 | 0 | 5 | 15 |
 | loading box | 9 | 0 | 0 | 7 | 2 |
 | minimap | 12 | 6 | 0 | 4 | 2 |
@@ -39,15 +39,15 @@ Games: the stock data of Armada I (A1), Armada II (A2) and Fleet Operations (FO)
 | screen | 2 | 0 | 2 | 0 | 0 |
 | speed rail | 10 | 0 | 0 | 6 | 4 |
 | tooltip and cursor | 7 | 2 | 0 | 0 | 5 |
-| **all** | **581** | **141** | **5** | **158** | **277** |
+| **all** | **581** | **144** | **5** | **156** | **276** |
 
 By game (a key set by several games counts in each):
 
 | game | keys | drawn | typed | built | missing |
 |---|---:|---:|---:|---:|---:|
-| A1 | 351 | 59 | 1 | 109 | 182 |
-| A2 | 443 | 113 | 4 | 91 | 235 |
-| FO | 474 | 125 | 5 | 103 | 241 |
+| A1 | 351 | 60 | 1 | 109 | 181 |
+| A2 | 443 | 115 | 4 | 89 | 235 |
+| FO | 474 | 127 | 5 | 101 | 241 |
 
 ## avatar box
 
@@ -413,7 +413,7 @@ By game (a key set by several games counts in each):
 | `infoBuildQueueSlot_#` | FO | drawn |
 | `infoBuildShieldBar` | A2 FO | drawn |
 | `infoBuildSystem_#` | A2 FO | missing |
-| `infoBuildSystemIcon_#` | A2 FO | built |
+| `infoBuildSystemIcon_#` | A2 FO | drawn |
 | `infoBuildWireframe` | A2 FO | drawn |
 
 ## info panel, multi selection
@@ -473,9 +473,9 @@ By game (a key set by several games counts in each):
 | `infoPanelArea` | A1 A2 | built |
 | `infoPanelArea_#` | A2 FO | drawn |
 | `infoProgressBar` | A2 FO | drawn |
-| `infoSystem` | A1 | missing |
+| `infoSystem` | A1 | drawn |
 | `infoSystem_#` | A1 A2 FO | missing |
-| `infoSystemIcon_#` | A2 FO | built |
+| `infoSystemIcon_#` | A2 FO | drawn |
 | `infoTeam` | A2 FO | missing |
 | `infoTextColor` | A2 FO | drawn |
 | `nameTextColor` | FO | drawn |
