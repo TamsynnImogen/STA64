@@ -31,11 +31,6 @@ pub(crate) struct PauseLayout {
     pub button_image: Option<String>,
     pub button_text: String,
     pub button_tooltip: Option<String>,
-    /// `pauseGameBackgroundPanel`: the art's sprite name and its pieces (`_n`, frame n, at the
-    /// piece's rectangle in the panel; `BackgroundPanelSize` of them). Empty where the cfg draws
-    /// no background (Roots: size 0, the unpause button's image is the art).
-    pub background: Option<String>,
-    pub pieces: Vec<(usize, [f32; 4])>,
 }
 
 impl PauseLayout {
@@ -43,7 +38,6 @@ impl PauseLayout {
         let to = |r: &sta_content::gui_cfg::Rect| [r.x as f32, r.y as f32, r.w as f32, r.h as f32];
         let rect = |key: &str, stock: [f32; 4]| cfg.and_then(|c| c.rects.get(key)).filter(|r| r.w > 0 && r.h > 0).map_or(stock, to);
         let name = |key: &str| cfg.and_then(|c| c.names.get(key)).cloned();
-        let pause_panel = cfg.and_then(|c| c.panels.iter().find(|(k, _)| k.eq_ignore_ascii_case("pauseGame")).map(|(_, p)| p));
         let canvas = cfg.map(|c| c.canvas).filter(|c| c.0 > 0 && c.1 > 0).map_or((1600.0, 1200.0), |c| (c.0 as f32, c.1 as f32));
         PauseLayout {
             canvas,
@@ -59,13 +53,6 @@ impl PauseLayout {
             button_image: name("pauseGameUnpauseButtonImage"),
             button_text: name("pauseGameUnpauseButtonText").unwrap_or_else(|| "GUI_POP_PAUSE_CONTINUE".to_owned()),
             button_tooltip: name("pauseGameUnpauseButtonTooltip"),
-            background: pause_panel.and_then(|p| p.background.clone()),
-            pieces: pause_panel
-                .map(|p| {
-                    let n = p.background_size.unwrap_or(0).max(0) as u32;
-                    p.pieces.iter().filter(|(k, r)| **k < n && r.w > 0 && r.h > 0).map(|(k, r)| (*k as usize, to(r))).collect()
-                })
-                .unwrap_or_default(),
         }
     }
 }
@@ -100,42 +87,27 @@ pub(crate) fn draw(
     let s = strings.as_deref();
     let [px, py, pw, ph] = l.panel;
     let pct = |v: f32, of: f32| Val::Percent(v / of * 100.0);
-    let at = |r: [f32; 4]| Node { position_type: PositionType::Absolute, left: pct(r[0], pw), top: pct(r[1], ph), width: pct(r[2], pw), height: pct(r[3], ph), ..default() };
-    // The cfg's art replaces the flat panel: background pieces, or (Roots) an unpause button
-    // whose image fills the box.
-    let has_art = !l.pieces.is_empty() || l.button_image.is_some();
-    let fill = if has_art { Color::NONE } else { theme.panel.with_alpha(0.92) };
+    let at = |r: [f32; 4]| Node { position_type: PositionType::Absolute, left: pct(r[0], pw), top: pct(r[1], ph), width: pct(r[2], pw), ..default() };
     let label = text_of(s, &l.label, "Game paused");
     let continue_text = text_of(s, &l.button_text, "Continue");
     commands
         .spawn((
             PauseBoxRoot,
             Node { position_type: PositionType::Absolute, left: pct(px, l.canvas.0), top: pct(py, l.canvas.1), width: pct(pw, l.canvas.0), height: pct(ph, l.canvas.1), ..default() },
-            BackgroundColor(fill),
+            BackgroundColor(theme.panel.with_alpha(0.92)),
             GlobalZIndex(930),
         ))
         .with_children(|p| {
-            if let Some(name) = &l.background {
-                for (frame, r) in &l.pieces {
-                    p.spawn((at(*r), Pickable::IGNORE, super::gui_sprites::GuiImage::new(name.clone()).with_frame(*frame)));
-                }
-            }
-            // The button first, so the label is drawn over a button that fills the box (Roots).
+            p.spawn((at(l.text), children![sprite_text_styled(label, theme.heading_size, l.text_colour.unwrap_or(theme.text), SpriteTextStyle::role(font_role(&theme, theme.heading_size)).centered().wrap_to_parent())]));
             p.spawn(at(l.button)).with_children(|b| {
                 let mut e = b.spawn((UnpauseButton, button(&theme, &continue_text, l.button[2])));
                 if let Some(img) = &l.button_image {
-                    // The authored image at the authored size, not the theme's pill.
-                    e.insert((
-                        super::gui_sprites::GuiButton { names: vec![img.clone()], keep_label: true },
-                        Node { width: Val::Percent(100.0), height: Val::Percent(100.0), justify_content: JustifyContent::Center, align_items: AlignItems::End, ..default() },
-                        BackgroundColor(Color::NONE),
-                    ));
+                    e.insert(super::gui_sprites::GuiButton { names: vec![img.clone()], keep_label: true });
                 }
                 if let Some(tip) = &l.button_tooltip {
                     e.insert(super::notices::Tooltip::new(text_of(s, tip, "")));
                 }
             });
-            p.spawn((at(l.text), Pickable::IGNORE, children![sprite_text_styled(label, theme.heading_size, l.text_colour.unwrap_or(theme.text), SpriteTextStyle::role(font_role(&theme, theme.heading_size)).centered().wrap_to_parent())]));
         });
 }
 
@@ -168,18 +140,5 @@ mod tests {
         assert_eq!(l.button, stock.button, "a zero rectangle keeps the stock place");
         assert_eq!((l.label.as_str(), l.button_image.as_deref()), ("MY_PAUSE", Some("go")));
         assert_eq!(l.text_colour, Some(Color::srgba(0.0, 1.0, 0.0, 1.0)));
-        assert!(l.pieces.is_empty() && l.background.is_none());
-    }
-
-    #[test]
-    fn the_background_pieces_come_from_the_cfg() {
-        let text = "screenWidth = 1600\nscreenHeight = 1200\npauseGamePanelArea = 600 400 384 192\npauseGameBackgroundPanel = \"art\"\npauseGameBackgroundPanelArea = 0 0 384 192\npauseGameBackgroundPanelSize = 2\npauseGameBackgroundPanel_0 = 0 0 256 192\npauseGameBackgroundPanel_1 = 256 0 128 192\n";
-        let (cfg, _) = sta_content::GuiCfg::parse("p.cfg", text);
-        let l = PauseLayout::from_cfg(Some(&cfg.layout_auto()));
-        assert_eq!(l.background.as_deref(), Some("art"));
-        assert_eq!(l.pieces, vec![(0, [0.0, 0.0, 256.0, 192.0]), (1, [256.0, 0.0, 128.0, 192.0])]);
-        // Size 0 (Roots): no pieces even where some are written.
-        let (cfg, _) = sta_content::GuiCfg::parse("p.cfg", &text.replace("PanelSize = 2", "PanelSize = 0"));
-        assert!(PauseLayout::from_cfg(Some(&cfg.layout_auto())).pieces.is_empty());
     }
 }
