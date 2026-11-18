@@ -15,6 +15,10 @@
 //!   laid out about the destination, facing along the way from the group's
 //!   centroid. Formation kinds: 0 none (all aim for the point), 1 line abreast,
 //!   2 column, 3 wedge. Anything else is rejected.
+//! - No ship follows another: each has its own slot from the order on, so when the lowest-id
+//!   ship (the "leader") is destroyed or sent elsewhere the others still go to their slots
+//!   (SIM-50: the Roots rule, from its engine changelog; not measured; whether stock Armada II's
+//!   followers stop with their leader is not measured either).
 //! - Courses exist only for units that have waypoints or a formation, are
 //!   dropped when the unit is gone, and are in the digest.
 
@@ -24,6 +28,9 @@ pub mod approach;
 #[cfg(test)]
 #[path = "movement/approach_tests.rs"]
 pub(crate) mod approach_tests;
+#[cfg(test)]
+#[path = "movement/formation_leader_tests.rs"]
+mod formation_leader_tests;
 
 use crate::command::Order;
 use crate::world::{Fnv, Table};
