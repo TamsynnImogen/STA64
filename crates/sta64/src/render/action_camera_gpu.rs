@@ -73,7 +73,7 @@ fn the_action_picture_shows_the_subject_and_leaves_the_overlay_layer_out_on_gpu(
     app.world_mut().resource_mut::<SimEntities>().0.insert(EntityId(1), unit);
     app.world_mut().resource_mut::<Selection>().0 = vec![EntityId(1)];
     // The map camera must satisfy `MainCamera`; the node that asks for the picture has a size.
-    app.world_mut().spawn((ActionPicture, ComputedNode { size: Vec2::new(226.0, 160.0), ..default() }));
+    app.world_mut().spawn((ActionPicture, InheritedVisibility::VISIBLE, ComputedNode { size: Vec2::new(226.0, 160.0), ..default() }));
 
     app.finish();
     app.cleanup();
@@ -98,7 +98,7 @@ fn the_action_picture_shows_the_subject_and_leaves_the_overlay_layer_out_on_gpu(
     let is_green = |p: &[u8; 4]| p[1] > 100 && p[1] > p[0].saturating_mul(2) && p[1] > p[2].saturating_mul(2);
     let main = shoot(&mut app, &main_target);
     assert!(count(&main, is_magenta) > 50, "the map camera sees the subject");
-    assert!(count(&main, is_green) > 0 || count(&main, is_magenta) > 0, "the map camera draws");
+    assert!(count(&main, is_green) > 0, "the map camera draws the overlay layer");
     let action = shoot(&mut app, &view);
     assert_eq!((action.width(), action.height()), (226, 160), "the picture follows the node");
     let seen = count(&action, is_magenta);

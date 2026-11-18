@@ -50,7 +50,7 @@ controlButton10 = 8 112 29 29
 controlButton11 = 43 112 29 29
 controlButton12 = 78 112 29 29
 cinematicPanelArea = 381 347 139 133
-cinematicDisplayArea = 9 35 121 90
+cinematicDisplayArea = 11 33 119 88
 cinematicCommButton = \"cine_comm\"
 cinematicMenuButton = \"cine_menu\"
 cinematicCommButtonArea = 12 12 50 16
@@ -310,6 +310,8 @@ fn find<C: Component>(app: &mut App, f: impl Fn(&C) -> bool) -> Vec<Entity> {
 fn with_view(mut app: App) -> App {
     app.world_mut().insert_resource(crate::render::action_camera::ActionView { image: Handle::default() });
     app.world_mut().insert_resource(crate::render::action_camera::ActionSubject(Some(EntityId(1))));
+    let unit = app.world_mut().spawn_empty().id();
+    app.world_mut().insert_resource(crate::sim_link::SimEntities([(EntityId(1), unit)].into_iter().collect()));
     // Rebuild the body with the picture's resource in place.
     app.world_mut().resource_mut::<HudConfig>().aspect += 0.001;
     app.update();
@@ -372,6 +374,10 @@ fn the_picture_is_drawn_in_the_display_area_and_a_click_goes_to_the_subject() {
     press(&mut app, picture[0].0);
     let focus: Vec<_> = app.world_mut().resource_mut::<Messages<CameraFocus>>().drain().collect();
     assert_eq!(focus.len(), 1, "one click, one move");
+    // The subject leaves sight (the renderer no longer has it): the click moves nothing.
+    app.world_mut().resource_mut::<crate::sim_link::SimEntities>().0.clear();
+    press(&mut app, picture[0].0);
+    assert_eq!(app.world_mut().resource_mut::<Messages<CameraFocus>>().drain().count(), 0, "no jump to an unseen unit");
 }
 
 #[test]
