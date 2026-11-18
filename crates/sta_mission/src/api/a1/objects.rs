@@ -98,8 +98,23 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         Ok(handle_value(id))
     })?)?;
 
-    table.set("IsValid", def(lua, env, "IsValid", &["H"], |_, e, _, a| {
-        Ok(Value::Boolean(e.ctx.borrow().unit(a[0].id()).is_some()))
+    // `IsValid(handle)` is a non-zero test of the handle value, not a lookup: a handle of an
+    // object that has died stays valid (read from the executable, static; Armada.exe). Stock
+    // end rules rely on it. A pending spawn token is a non-zero handle as well. A token of a
+    // FAILED spawn answers false: that is a STA64 rule (the original's answer for a failed
+    // build is not read), so a script that guards a query with `IsValid` does not raise on it.
+    // Any finite number is accepted (-1, a handle that was never set, is non-zero: true).
+    let env_valid = env.clone();
+    table.set("IsValid", lua.create_function(move |_, v: Value| {
+        let n = match v {
+            Value::Integer(n) => n as f64,
+            Value::Number(n) if n.is_finite() => n,
+            _ => return Err(mlua::Error::runtime("A1.IsValid argument 1 must be a finite number (a handle; 0 is not valid)")),
+        };
+        if n == 0.0 {
+            return Ok(false);
+        }
+        Ok(!matches!(super::hold::token_state(&env_valid, &v), super::hold::Tok::Failed))
     })?)?;
 
     table.set("IsExploding", def(lua, env, "IsExploding", &["h"], |_, e, _, a| {
