@@ -205,14 +205,14 @@ impl Env {
         if raw < TOKEN_BASE {
             return None;
         }
-        let mut st = self.st.borrow_mut();
+        let st = self.st.borrow_mut();
         let Some(handle) = st.pending.get(&raw).cloned() else {
             return Some(Err("is not a known pending object"));
         };
         Some(match handle.state.get() {
             SpawnStatus::Resolved(id) => Ok(id),
             SpawnStatus::Failed => {
-                st.pending.remove(&raw);
+                // Kept (not removed): `IsValid` still sees the token as failed.
                 Err("could not be built (the spawn failed)")
             }
             SpawnStatus::Queued | SpawnStatus::Submitted(_) => Err(STILL_BEING_BUILT),

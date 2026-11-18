@@ -85,10 +85,14 @@ const KEEP_ORDER: &[&str] = &["CineractiveStart", "CineractiveEnd", "Cineractive
 
 /// What a raw argument is: a pending token, a failed one, or anything else.
 #[derive(PartialEq)]
-enum Tok {
+pub(super) enum Tok {
     Pending,
     Failed,
     Other,
+}
+
+pub(super) fn token_state(env: &Env, v: &Value) -> Tok {
+    tok(env, v)
 }
 
 fn tok(env: &Env, v: &Value) -> Tok {

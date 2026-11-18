@@ -1,5 +1,5 @@
 -- Armada I, Federation 2: a player who defends. The fleet attacks the nearest enemy it can see;
--- the plan notes each enemy unit that has left the point where it was first seen ("acted").
+-- the plan notes each enemy unit when first seen ("first") and when it has left that point ("acted").
 local first, acted = {}, {}
 local function armed()
   local o = {}
@@ -12,7 +12,10 @@ wait_until(control, 300)
 while true do
   local foes = units{enemy = true}
   for _, f in ipairs(foes) do
-    first[f.id] = first[f.id] or { x = f.x, z = f.z }
+    if not first[f.id] then
+      first[f.id] = { x = f.x, z = f.z }
+      note("first " .. f.id)
+    end
     local p = first[f.id]
     if not acted[f.id] and math.abs(f.x - p.x) + math.abs(f.z - p.z) > 100 then
       acted[f.id] = true
