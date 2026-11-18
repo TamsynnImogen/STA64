@@ -724,6 +724,16 @@ fn target_order(
             vec![Order::Transport { units: carriers, target: id, attack: false }]
         }
         TargetMode::Repair => {
+            // SIM-41: repair ships aimed at a ship that is not a yard repair it with their beam.
+            if let (Some(t), Some(db)) = (target, feed.content.as_deref())
+                && !repair_yard(feed, t)
+            {
+                let rships: Vec<EntityId> = ids.iter().copied().filter(|&id| id != t && feed.view.unit(id).and_then(|u| db.unit(u.def)).is_some_and(|d| d.class.0.eq_ignore_ascii_case("repairship"))).collect();
+                if !rships.is_empty() {
+                    ids = rships.clone();
+                    return Some((vec![Order::Repair { units: rships, yard: Some(t) }], ids));
+                }
+            }
             let ships = commands::repairers(feed, &ids);
             if ships.is_empty() { return None; }
             // A yard under the cursor is the one asked for; anywhere else the sim picks the best (SIM-40).

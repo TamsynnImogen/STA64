@@ -66,22 +66,39 @@ pub fn reaches(db: &ContentDb) -> (Fixed, Fixed) {
 /// 0.1 crew: less missing than this does not count (S).
 const CREW_SLACK: Fixed = Fixed::from_bits(429_496_730);
 
-/// The yard queues: `(yard, ships in arrival order)`, ascending yard.
+/// The yard queues: `(yard, ships in arrival order)`, ascending yard; and the repair ships'
+/// beams (SIM-41): `(repair ship, target, hold)`, ascending ship; `hold`: taken on its own
+/// within range (Roots' medium autonomy), so the ship does not move for it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Repairs {
     queues: Vec<(EntityId, Vec<EntityId>)>,
+    pub(super) beams: Vec<(EntityId, EntityId, bool)>,
 }
 
-/// The snapshot form of [`Repairs`] (format 36).
+/// The snapshot form of [`Repairs`] (format 37; version 2 adds the beams).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepairsRec {
     pub version: u8,
     pub queues: Vec<(EntityId, Vec<EntityId>)>,
+    pub beams: Vec<(EntityId, EntityId, bool)>,
 }
 
 impl Repairs {
     pub fn is_empty(&self) -> bool {
-        self.queues.is_empty()
+        self.queues.is_empty() && self.beams.is_empty()
+    }
+
+    /// The ship repair ship `ship` is repairing (SIM-41).
+    pub fn beam_of(&self, ship: EntityId) -> Option<EntityId> {
+        self.beams.iter().find(|(s, _, _)| *s == ship).map(|(_, t, _)| *t)
+    }
+
+    pub(super) fn set_beam(&mut self, ship: EntityId, target: EntityId, hold: bool) {
+        self.end(ship);
+        match self.beams.binary_search_by_key(&ship, |(s, _, _)| *s) {
+            Ok(i) => self.beams[i] = (ship, target, hold),
+            Err(i) => self.beams.insert(i, (ship, target, hold)),
+        }
     }
 
     /// The yard `ship` is queued at.
@@ -104,6 +121,7 @@ impl Repairs {
             q.retain(|s| *s != ship);
         }
         self.queues.retain(|(_, q)| !q.is_empty());
+        self.beams.retain(|(s, _, _)| *s != ship);
     }
 
     /// An entity left the world: as a ship or as a yard.
@@ -130,15 +148,29 @@ impl Repairs {
                 h.u64(u64::from(s.0));
             }
         }
+        // Only when there are any, so worlds without repair ships hash as before.
+        if !self.beams.is_empty() {
+            h.str("repair-beams-v1");
+            h.u64(self.beams.len() as u64);
+            for (s, t, hold) in &self.beams {
+                h.u64(u64::from(s.0));
+                h.u64(u64::from(t.0));
+                h.u64(u64::from(*hold));
+            }
+        }
     }
 
     pub(crate) fn to_rec(&self) -> RepairsRec {
-        RepairsRec { version: 1, queues: self.queues.clone() }
+        RepairsRec { version: 2, queues: self.queues.clone(), beams: self.beams.clone() }
     }
 
-    /// Ascending yards, no empty queue, no ship twice, every id in the world.
+    /// Ascending yards, no empty queue, no ship twice, every id in the world; beams by
+    /// ascending repair ship, none on itself or also queued at a yard.
     pub(crate) fn from_rec(rec: RepairsRec, exists: impl Fn(EntityId) -> bool) -> Option<Repairs> {
-        if rec.version != 1 || !rec.queues.windows(2).all(|w| w[0].0 < w[1].0) {
+        if rec.version != 2 || !rec.queues.windows(2).all(|w| w[0].0 < w[1].0) || !rec.beams.windows(2).all(|w| w[0].0 < w[1].0) {
+            return None;
+        }
+        if rec.beams.iter().any(|(s, t, _)| s == t || !exists(*s) || !exists(*t) || rec.queues.iter().any(|(_, q)| q.contains(s))) {
             return None;
         }
         let mut seen: Vec<EntityId> = Vec::new();
@@ -151,11 +183,11 @@ impl Repairs {
         let n = seen.len();
         seen.sort();
         seen.dedup();
-        (seen.len() == n).then_some(Repairs { queues: rec.queues })
+        (seen.len() == n).then_some(Repairs { queues: rec.queues, beams: rec.beams })
     }
 }
 
-fn alive(e: &Entity) -> bool {
+pub(super) fn alive(e: &Entity) -> bool {
     e.hull[0] > Fixed::ZERO && !e.flags.contains(UnitFlags::DYING)
 }
 
@@ -165,7 +197,7 @@ fn mul(a: Fixed, b: Fixed) -> Fixed {
 }
 
 /// Centre distance minus both radii, in 128-bit arithmetic.
-fn surface(a: &Entity, ra: Fixed, b: &Entity, rb: Fixed) -> Fixed {
+pub(super) fn surface(a: &Entity, ra: Fixed, b: &Entity, rb: Fixed) -> Fixed {
     let d = |p: Fixed, q: Fixed| i128::from(p.to_bits()) - i128::from(q.to_bits());
     let (dx, dz) = (d(a.pos.x, b.pos.x), d(a.pos.z, b.pos.z));
     let sq = ((dx * dx + dz * dz) >> 32).min(i128::from(i64::MAX)) as i64;
@@ -189,7 +221,7 @@ impl Sim {
     }
 
     /// A yard `ship` (owned by `owner`) may repair at.
-    fn repair_yard_ok(&self, db: &ContentDb, yard: EntityId, owner: PlayerId) -> bool {
+    pub(super) fn repair_yard_ok(&self, db: &ContentDb, yard: EntityId, owner: PlayerId) -> bool {
         self.units.get(yard).is_some_and(|y| {
             y.kind == EntityKind::Station
                 && alive(y)
@@ -227,6 +259,12 @@ impl Sim {
         let mut ids = units.to_vec();
         ids.sort();
         ids.dedup();
+        // SIM-41: a repair ship told to repair a ship that is not a yard for it beams it.
+        let beamed = yard.map_or_else(Vec::new, |t| self.assign_beams(&db, player, &ids, t));
+        ids.retain(|id| !beamed.contains(id));
+        if ids.is_empty() && !beamed.is_empty() {
+            return true;
+        }
         let mut taken = Vec::new();
         for id in ids {
             let Some(u) = self.units.get(id) else { continue };
@@ -319,6 +357,7 @@ impl Sim {
         }
         let Some(db) = self.content.clone() else { return };
         let (dock_reach, wait_reach) = reaches(&db);
+        self.step_beams(&db);
         let queues = self.repairs.queues.clone();
         for (yard, ships) in queues {
             // Drop what is no longer valid: a dead yard, a ship gone, moved to another owner,
@@ -359,10 +398,10 @@ impl Sim {
     /// One tick of the yard's work on a docked ship (S).
     fn service(&mut self, db: &ContentDb, id: EntityId) {
         let Some(u) = self.units.get(id) else { return };
-        let Some(def) = db.unit(u.def) else { return };
+        if db.unit(u.def).is_none() {
+            return;
+        }
         let owner = u.owner;
-        let shield_rate = def.shields.recharge * Fixed::from_int(TICK_HZ as i32);
-        let health_rate = def.stats.health_rate.unwrap_or_else(|| mul(shield_rate, Fixed::from_bits(858_993_459)));
         // Crew from the team pool.
         if let Some([now, max]) = u.crew
             && max - now >= CREW_SLACK
@@ -375,6 +414,34 @@ impl Sim {
                 }
             }
         }
+        self.repair_systems_and_hull(db, id, Fixed::ONE);
+        self.restore_shields(db, id, Fixed::ONE);
+    }
+
+    /// Shields at 50 times the unit's own recharge rate, times `scale` (S).
+    pub(super) fn restore_shields(&mut self, db: &ContentDb, id: EntityId, scale: Fixed) {
+        let Some(u) = self.units.get(id) else { return };
+        let Some(def) = db.unit(u.def) else { return };
+        let shield_rate = def.shields.recharge * Fixed::from_int(TICK_HZ as i32);
+        let Some(u) = self.units.get_mut(id) else { return };
+        if u.shields.max > Fixed::ZERO {
+            let gain = mul(mul(per_tick(shield_rate), Fixed::from_int(50)), scale);
+            let pools = if u.shields.directional { 4 } else { 1 };
+            for s in &mut u.shields.now[..pools] {
+                *s = (*s + gain).min(u.shields.max);
+            }
+        }
+    }
+
+    /// The part of a yard's work a repair ship's beam also does (SIM-41): systems at 100 points
+    /// per second by their modified repair time, hull at 100 times `healthRate`, both times
+    /// `scale` (1 at a yard, the repair ship's `repairRate` for a beam; read from the
+    /// executable, static).
+    pub(super) fn repair_systems_and_hull(&mut self, db: &ContentDb, id: EntityId, scale: Fixed) {
+        let Some(u) = self.units.get(id) else { return };
+        let Some(def) = db.unit(u.def) else { return };
+        let shield_rate = def.shields.recharge * Fixed::from_int(TICK_HZ as i32);
+        let health_rate = def.stats.health_rate.unwrap_or_else(|| mul(shield_rate, Fixed::from_bits(858_993_459)));
         // Systems, by their modified repair time.
         let race = self.unit_race(id).unwrap_or("").to_owned();
         let r = db.rules().race_repair_of(&race).unwrap_or_default();
@@ -386,7 +453,7 @@ impl Sim {
             crew_red_status: r.crew_red_status.unwrap_or(Fixed::from_bits(1 << 30)),
         };
         let crew_fraction = self.units.get(id).and_then(|u| u.crew).filter(|c| c[1] > Fixed::ZERO).map_or(Fixed::ONE, |[n, m]| Fixed::from_bits(((i128::from(n.to_bits()) << 32) / i128::from(m.to_bits())).clamp(0, i128::from(i64::MAX)) as i64));
-        let budget = per_tick(Fixed::from_int(100));
+        let budget = mul(per_tick(Fixed::from_int(100)), scale);
         let row = self.subsystems.get(id).unwrap_or_default();
         for n in 0..5 {
             if def.system_hit_points[n] <= Fixed::ZERO || row.damage[n] <= 0 {
@@ -402,17 +469,9 @@ impl Sim {
             self.yard_repair_system(id, n, healed);
         }
         let Some(u) = self.units.get_mut(id) else { return };
-        // Shields, at 50 times the unit's own rate.
-        if u.shields.max > Fixed::ZERO {
-            let gain = mul(per_tick(shield_rate), Fixed::from_int(50));
-            let pools = if u.shields.directional { 4 } else { 1 };
-            for s in &mut u.shields.now[..pools] {
-                *s = (*s + gain).min(u.shields.max);
-            }
-        }
         // Hull, at 100 times `healthRate`.
         if health_rate > Fixed::ZERO {
-            let gain = mul(per_tick(health_rate), Fixed::from_int(100));
+            let gain = mul(mul(per_tick(health_rate), Fixed::from_int(100)), scale);
             u.hull[0] = (u.hull[0] + gain).min(u.hull[1]);
         }
     }
