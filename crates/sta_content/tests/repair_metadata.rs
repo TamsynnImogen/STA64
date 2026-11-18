@@ -153,3 +153,14 @@ fn fo_recycle_amounts_and_time_are_read_only_when_set() {
     assert_eq!((repair(&plain).recycle_amounts, repair(&plain).recycle_time), (None, None));
     assert_ne!(plain.hash(), db.hash());
 }
+
+#[test]
+fn repair_rate_and_repairs_shields_are_read_and_digested_only_when_set() {
+    let (db, warnings) = load(&format!("{CRAFT}repairRate = .25\nrepairsShields = 1\n"), None);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(repair(&db).repair_rate, Some(Fixed::from_f64(0.25)));
+    assert_eq!(repair(&db).repairs_shields, Some(true));
+    let (plain, _) = load(CRAFT, None);
+    assert_eq!((repair(&plain).repair_rate, repair(&plain).repairs_shields), (None, None));
+    assert_ne!(plain.hash(), db.hash(), "set keys change the digest");
+}

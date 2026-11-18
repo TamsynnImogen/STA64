@@ -63,7 +63,7 @@ pub struct Recycles {
     jobs: Vec<(EntityId, Job)>,
 }
 
-/// The snapshot form of [`Recycles`] (format 37).
+/// The snapshot form of [`Recycles`] (format 38).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecyclesRec {
     pub version: u8,

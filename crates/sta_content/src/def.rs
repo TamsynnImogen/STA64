@@ -199,6 +199,12 @@ pub struct RepairDef {
     /// warn and stay absent. This is metadata, not a native side policy.
     pub repair_side: Option<i32>,
     pub can_shipyard_repair: Option<bool>,
+    /// `repairRate` of a repair ship (SIM-41): its beam repairs at this many times a yard's
+    /// rates (systems and hull; stock 0.25). `None` when absent.
+    pub repair_rate: Option<Fixed>,
+    /// `repairsShields` (FO/Roots repair ships): the beam also restores shields. `None` when
+    /// absent.
+    pub repairs_shields: Option<bool>,
     /// SIM-45: `recyclesInPlace` (a unit decommissioned where it stands).
     pub recycles_in_place: Option<bool>,
     /// SIM-45: `decommissionFacility` (a yard that takes decommissioned ships).

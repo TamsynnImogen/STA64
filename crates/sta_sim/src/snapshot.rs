@@ -24,7 +24,8 @@
 //! kind that matches no current database, so they are refused by version.
 //! Format 35 (SIM-46) appends the transport-attack carriers to the transport record.
 //! Format 36 (SIM-40) appends the yard repair queues.
-//! Format 37 (SIM-45) appends the decommissions.
+//! Format 37 (SIM-41) adds the repair ships' beam targets to the repair record (version 2).
+//! Format 38 (SIM-45) appends the decommissions (merged after 37; renumbered so the two layouts differ).
 //!
 //! The state types of other crates (`MoveStats`) have no serde, so the body
 //! uses small mirror records here instead of touching those crates.
@@ -63,7 +64,7 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// tell the file from a valid one by version.
 /// Format 34 appends the mission switches (LUA-41).
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 37;
+pub const FORMAT_VERSION: u16 = 38;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
