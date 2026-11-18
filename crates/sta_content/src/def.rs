@@ -348,6 +348,11 @@ pub struct UnitDef {
     /// e.g. `ResourcePlanet.odf`): an orbital station may be built in its orbit
     /// (SIM-62). False for moons, rocks and everything without the key.
     pub can_have_orbital_station: bool,
+    /// SIM-44: the cap file the unit names (`fleetCapFile`, FO/Roots), read into the same
+    /// [`CapacityList`](crate::CapacityList) as the XML tech tree's `<capacitylist>`: members from
+    /// `fleetCapClass#`, weights from `fleetCapClass#CapValue` (default 1), the limit from `maxCap`
+    /// (absent: no limit of its own). Shared by every unit naming the same file.
+    pub fleet_cap: Option<std::sync::Arc<crate::CapacityList>>,
     /// Seconds one orbit takes (`orbitTime`) for a station of class `p_mining`,
     /// the class of the orbital mining and processing facilities: `Some` marks a
     /// station that can only be built in a planet's orbit (SIM-62); zero when the
@@ -571,6 +576,7 @@ impl UnitDef {
             planet_civilian_population_modifier: Fixed::ZERO,
             planet_max_population: 0,
             can_have_orbital_station: false,
+            fleet_cap: None,
             orbit_time: None,
             a1_borg: None,
             station_mining: None,

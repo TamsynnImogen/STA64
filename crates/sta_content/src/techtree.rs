@@ -478,11 +478,22 @@ impl TechTree {
     /// undocumented; this is inferred from install data.
     pub fn availability_for_builder(&self, db: &ContentDb, odf: &str, builder: &str, state: &dyn TechState, ai: bool) -> Availability {
         let a = self.availability(odf, state);
-        if a == Availability::NotListed && self.unlisted_item_allowed(db, odf, builder, ai) {
+        let a = if a == Availability::NotListed && self.unlisted_item_allowed(db, odf, builder, ai) {
             Availability::Available
         } else {
             a
+        };
+        // SIM-44: the unit's own `fleetCapFile`, where no XML list of that name governs it.
+        if a == Availability::Available
+            && let Some(cap) = db.key(&stem(odf)).and_then(|k| db.unit(k)).and_then(|u| u.fleet_cap.as_deref())
+            && !self.caps.contains_key(&cap.name)
+        {
+            let used: i64 = cap.members.iter().map(|(o, v)| v.saturating_mul(i64::from(state.count(o)))).fold(0i64, i64::saturating_add);
+            if used >= cap.max {
+                return Availability::Locked { unmet: vec![Unmet::CapacityFull(cap.name.clone())], hidden: false };
+            }
         }
+        a
     }
 
     fn unlisted_item_allowed(&self, db: &ContentDb, odf: &str, builder: &str, ai: bool) -> bool {
