@@ -31,7 +31,8 @@ struct HullParams {
     mdif: vec4<f32>,  // diffuse colour
     mspc: vec4<f32>,  // specular colour; a: its exponent
     // Specular and emissive maps (RND-38, mapped.rs; ported from the A2FOExtensions project).
-    map: vec4<f32>,   // x: 1 with a specular map; y: 1 with an emissive map; z: the highlight colour and w the exponent when the material states none
+    map: vec4<f32>,   // x: 1 with a specular map; y: 1 with an emissive map
+    mhl: vec4<f32>,   // the highlight of a part with a specular map: colour and exponent (zero: none)
 };
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> k: HullParams;
@@ -45,6 +46,7 @@ struct HullParams {
 @group(constants::MATERIAL_BIND_GROUP) @binding(6) var spec_map: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(7) var map_sampler: sampler;
 @group(constants::MATERIAL_BIND_GROUP) @binding(8) var emit_map: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(9) var emit_sampler: sampler;
 
 struct FragIn {
     @builtin(position) position: vec4<f32>,
@@ -126,15 +128,15 @@ fn from_srgb(c: vec3<f32>) -> vec3<f32> {
 }
 
 // A specular map's highlight (A2FOExtensions): per light, its colour times (N.H)^power, front
-// facing, times the highlight colour (the material's when it has one, else the defaults), times the
+// facing, times the highlight colour (a Phong material's own, else the defaults), times the
 // map's RGB. The lights are the look's own (`dvec`, `dcol`).
 fn mapped_highlight(n: vec3<f32>, wp: vec3<f32>, mask: vec3<f32>) -> vec3<f32> {
     let v = normalize(k.eye.xyz - wp);
-    var col = k.mspc.rgb * k.misc.y;
-    var pw = k.mspc.a;
-    if max(col.x, max(col.y, col.z)) <= 0.0 {
-        col = vec3<f32>(k.map.z);
-        pw = k.map.w;
+    // A Phong material's own colour and exponent, or the defaults; a zero of either is no highlight.
+    let col = k.mhl.rgb;
+    let pw = k.mhl.w;
+    if pw <= 0.0 || max(col.x, max(col.y, col.z)) <= 0.0 {
+        return vec3<f32>(0.0);
     }
     var spec = vec3<f32>(0.0);
     for (var j = 0; j < 4; j++) {
@@ -225,7 +227,7 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     let t = textureSample(tex, tex_sampler, uv);
     let m0 = textureSample(nmap, nmap_sampler, uv).rgb * 2.0 - vec3<f32>(1.0);
     let sm = textureSample(spec_map, map_sampler, uv).rgb;
-    let em = textureSample(emit_map, map_sampler, uv).rgb;
+    let em = textureSample(emit_map, emit_sampler, uv).rgb;
     let dp1 = dpdx(wp);
     let dp2 = dpdy(wp);
     let du1 = dpdx(uv);

@@ -95,8 +95,10 @@ pub struct HullParams {
     pub mdif: Vec4,
     pub mspc: Vec4,
     /// Specular and emissive maps (RND-38, `mapped.rs`): x 1 with a specular map, y 1 with an
-    /// emissive map, z and w the highlight colour and exponent when the material states none.
+    /// emissive map.
     pub map: Vec4,
+    /// The highlight of a part with a specular map: colour and exponent (`mapped::highlight_params`).
+    pub mhl: Vec4,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
@@ -117,8 +119,10 @@ pub struct HullMaterial {
     #[texture(6)]
     #[sampler(7)]
     pub spec_map: Option<Handle<Image>>,
-    /// The emissive map (RND-38), added after lighting when `params.map.y` says there is one.
+    /// The emissive map (RND-38), added after lighting when `params.map.y` says there is one. Its own
+    /// sampler: the map's repeat sampler, whatever the specular binding holds.
     #[texture(8)]
+    #[sampler(9)]
     pub emissive_map: Option<Handle<Image>>,
     pub double_sided: bool,
 }
@@ -126,10 +130,9 @@ pub struct HullMaterial {
 impl HullMaterial {
     /// Carry a part's specular and emissive maps (RND-38) into the material and its flags.
     pub fn set_maps(&mut self, maps: Option<&crate::render::mapped::HullMaps>, switches: crate::render::mapped::MapSwitches) {
-        use crate::render::mapped::{DEFAULT_POWER, DEFAULT_STRENGTH};
         self.spec_map = maps.and_then(|m| m.specular.clone()).filter(|_| switches.specular);
         self.emissive_map = maps.and_then(|m| m.emissive.clone()).filter(|_| switches.emissive);
-        self.params.map = Vec4::new(self.spec_map.is_some() as u8 as f32, self.emissive_map.is_some() as u8 as f32, DEFAULT_STRENGTH, DEFAULT_POWER);
+        self.params.map = Vec4::new(self.spec_map.is_some() as u8 as f32, self.emissive_map.is_some() as u8 as f32, 0.0, 0.0);
     }
 }
 
@@ -355,7 +358,7 @@ fn update_view(
                 let (s, e) = (spec.is_some(), emissive.is_some());
                 m.spec_map = spec;
                 m.emissive_map = emissive;
-                m.params.map = Vec4::new(s as u8 as f32, e as u8 as f32, crate::render::mapped::DEFAULT_STRENGTH, crate::render::mapped::DEFAULT_POWER);
+                m.params.map = Vec4::new(s as u8 as f32, e as u8 as f32, 0.0, 0.0);
             }
         }
     }
@@ -392,6 +395,7 @@ pub fn hull_material(m: &StandardMaterial, part: &HullPart, view: &HullView) -> 
     if view.stock {
         crate::render::stock::hulls::apply_material(&mut params, m, part, view.armada_one);
     }
+    params.mhl = crate::render::mapped::highlight_params(part.stock.as_ref());
     set_source(&mut params, m);
     view.write(&mut params);
     HullMaterial {
@@ -993,9 +997,9 @@ mod gpu {
             app.world_mut().entity_mut(subject).insert(Transform::IDENTITY);
             set(&mut app, None, None);
             let base = take(&mut app, "mapped-none");
-            set(&mut app, Some(white), None);
+            set(&mut app, Some(white.clone()), None);
             let lit = take(&mut app, "mapped-white");
-            set(&mut app, Some(black), None);
+            set(&mut app, Some(black.clone()), None);
             let masked = take(&mut app, "mapped-black");
             set(&mut app, None, Some(red));
             let glow = take(&mut app, "mapped-emissive");
@@ -1004,6 +1008,50 @@ mod gpu {
             assert!(sum(&masked, 1) <= sum(&base, 1), "a black map adds none");
             assert!(sum(&glow, 0) > sum(&base, 0) + 10_000, "a red emissive map adds red");
             assert!(sum(&glow, 1) <= sum(&base, 1) + 1_000, "and only red");
+
+            // The Stock look draws the same masks: no highlight of its own here (the part states no
+            // lighting material), so a white map adds the defaults' highlight and a black one nothing.
+            app.insert_resource(crate::render::profile::RenderProfile::Stock);
+            for _ in 0..4 {
+                app.update();
+            }
+            set(&mut app, None, None);
+            let s_base = take(&mut app, "mapped-stock-none");
+            set(&mut app, Some(white.clone()), None);
+            let s_lit = take(&mut app, "mapped-stock-white");
+            set(&mut app, Some(black.clone()), None);
+            let s_masked = take(&mut app, "mapped-stock-black");
+            eprintln!("RND-38 stock sums (G): none {} white {} black {}", sum(&s_base, 1), sum(&s_lit, 1), sum(&s_masked, 1));
+            assert!(sum(&s_lit, 1) > sum(&s_base, 1) + 1_000, "Stock look: a white specular map adds the default highlight");
+            assert!(sum(&s_masked, 1) <= sum(&s_base, 1) + 1_000, "Stock look: a black map adds none");
+
+            // An emissive map alone, on UVs well outside 0..1: its own repeat sampler tiles it, so the
+            // glow keeps its pattern (a clamped sampler would smear the edge texel over the sphere).
+            let strip = {
+                let mut i = Image::new(Extent3d { width: 2, height: 1, depth_or_array_layers: 1 }, TextureDimension::D2, vec![255, 0, 0, 255, 0, 0, 0, 255], TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
+                i.sampler = crate::render::textures::repeat_sampler();
+                app.world_mut().resource_mut::<Assets<Image>>().add(i)
+            };
+            set(&mut app, None, None);
+            let plain1 = take(&mut app, "mapped-uv1-none");
+            set(&mut app, None, Some(strip.clone()));
+            let tiled1 = take(&mut app, "mapped-uv1-strip");
+            let mesh = app.world().entity(subject).get::<Mesh3d>().unwrap().0.clone();
+            if let Some(mut m) = app.world_mut().resource_mut::<Assets<Mesh>>().get_mut(&mesh)
+                && let Some(bevy::mesh::VertexAttributeValues::Float32x2(uv)) = m.attribute_mut(Mesh::ATTRIBUTE_UV_0)
+            {
+                for u in uv.iter_mut() {
+                    *u = [u[0] * 4.0, u[1] * 4.0];
+                }
+            }
+            set(&mut app, None, None);
+            let plain4 = take(&mut app, "mapped-uv4-none");
+            set(&mut app, None, Some(strip));
+            let tiled4 = take(&mut app, "mapped-uv4-strip");
+            let (d1, d4) = (sum(&tiled1, 0) as i64 - sum(&plain1, 0) as i64, sum(&tiled4, 0) as i64 - sum(&plain4, 0) as i64);
+            eprintln!("RND-38 emissive-only red gain: UV 0..1 {d1}, UV 0..4 {d4}");
+            assert!(d1 > 10_000, "the strip glows on UVs inside 0..1");
+            assert!(d4 * 10 > d1 * 6, "and on UVs outside 0..1 as much (repeat), not smeared from the edge ({d4} vs {d1})");
         }
         let errors = ERRORS.lock().unwrap().clone();
         assert!(errors.is_empty(), "shader/pipeline ERROR events:\n{}", errors.join("\n"));

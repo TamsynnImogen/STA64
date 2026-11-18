@@ -354,16 +354,6 @@ fn sync(
                 {
                     material.base_color_texture = Some(texture);
                 }
-                // The mod's specular and emissive maps for the faction diffuse (RND-38): the
-                // faction suffix last, the base map as the fallback; none declared, none added.
-                match name_maps(&mut loader, group, suffix) {
-                    Some(maps) => {
-                        commands.entity(entity).insert(maps);
-                    }
-                    None => {
-                        commands.entity(entity).remove::<super::mapped::HullMaps>();
-                    }
-                }
                 // Native faction bump maps are not supported: retain slot 1.
                 if let Some(name) = &group.maps.glow
                     && let Some(texture) = loader.faction_colour(name, suffix)
@@ -376,6 +366,21 @@ fn sync(
                 {
                     material.metallic_roughness_texture = Some(texture);
                     material.perceptual_roughness = 1.0;
+                }
+            }
+            // The mod's specular and emissive maps for the drawn diffuse (RND-38): the faction suffix
+            // last, the base map as the fallback; none declared, none carried. Set on every rebuild
+            // so a part captured back to no faction does not keep the faction's maps.
+            if let Some(group) = group {
+                let known = catalogue.suffixes();
+                let mut loader = textures.loader();
+                match name_maps(&mut loader, group, suffix, &known) {
+                    Some(maps) => {
+                        commands.entity(entity).insert(maps);
+                    }
+                    None => {
+                        commands.entity(entity).remove::<super::mapped::HullMaps>();
+                    }
                 }
             }
             if let Some(private) = private {
@@ -413,8 +418,8 @@ fn sync(
     }
 }
 
-fn name_maps(loader: &mut super::textures::Loader, group: &sta_assets::model::Group, suffix: &str) -> Option<super::mapped::HullMaps> {
-    loader.hull_maps(group.maps.diffuse.as_deref()?, Some(suffix))
+fn name_maps(loader: &mut super::textures::Loader, group: &sta_assets::model::Group, suffix: Option<&str>, known: &[&str]) -> Option<super::mapped::HullMaps> {
+    loader.hull_maps(group.maps.diffuse.as_deref()?, suffix, known)
 }
 
 #[cfg(test)]

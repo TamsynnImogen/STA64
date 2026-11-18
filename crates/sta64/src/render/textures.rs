@@ -23,6 +23,8 @@ pub(crate) use pbr::TextureUse;
 #[derive(Resource, Default)]
 pub struct TextureCache {
     pub map: HashMap<String, Option<Handle<Image>>>,
+    /// The mount's specular and emissive map declarations and which `ART_CFG.h` copies they came from (RND-38).
+    pub map_config: Option<(String, crate::render::mapped::MapSuffixes)>,
 }
 
 pub fn repeat_sampler() -> ImageSampler {
