@@ -69,6 +69,15 @@ impl Ini {
         self.sections.get(&section.to_ascii_lowercase()).map(Vec::as_slice).unwrap_or(&[])
     }
 
+    /// Whether a `[modules] requiredN` key names `module` (case-insensitive). Only the
+    /// required list: `activeN` entries are optional extras (ADR 0006, 2026-11-17 amendment).
+    pub fn requires_module(&self, module: &str) -> bool {
+        self.section("modules").iter().any(|(k, v)| {
+            k.to_ascii_lowercase().strip_prefix("required").is_some_and(|n| n.chars().all(|c| c.is_ascii_digit()))
+                && v.trim().trim_matches('"').trim().eq_ignore_ascii_case(module)
+        })
+    }
+
     /// Lower-case section names.
     pub fn sections(&self) -> impl Iterator<Item = &str> {
         self.sections.keys().map(String::as_str)
@@ -398,5 +407,14 @@ mod tests {
         }
         eprintln!("{} mods, {} notes", mods.len(), notes.len());
         assert!(!mods.is_empty());
+    }
+
+    #[test]
+    fn requires_module_reads_only_the_required_list() {
+        let ini = Ini::parse("[mod]\r\nName=x\r\n[modules]\r\nrequired0=\"A1Compat\"\r\nactive0 = \"Other\"\r\n");
+        assert!(ini.requires_module("a1compat"));
+        assert!(!ini.requires_module("Other"), "active entries are not requirements");
+        assert!(!Ini::parse("[modules]\nactive0=A1Compat\n").requires_module("A1Compat"));
+        assert!(!Ini::parse("[modules]\nrequiredX=A1Compat\n").requires_module("A1Compat"));
     }
 }
