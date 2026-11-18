@@ -32,6 +32,8 @@ pub(in crate::ui::hud) enum StockBar {
     /// Armada I's energy bar (UI-19).
     Energy(f32),
     Group(EntityId, f32),
+    /// A group tile's shield bar (`infoMultiShipShield_<n>`).
+    GroupShield(EntityId, f32),
     /// UI-48: a resource node's amount left over what it started with.
     Node(f32),
 }
@@ -195,6 +197,21 @@ pub(super) fn bar(commands: &mut Commands, root: Entity, r: R, value: f32, (trac
 /// the picture at the bar's full size, tinted by the fill colour and cut off at the value, over
 /// the track colour. `update` resizes the clip like a plain bar's fill. Which part shows and the
 /// tint are ours (the original's bar drawing not read).
+/// A bar from the cfg: the sprite named by `sprite_key` (`infoSingleHullBar`, ...) when the cfg
+/// names one, else the flat bar. With a sprite and no authored fill colour (`fills`), the picture
+/// is drawn untinted (Roots' hull and shield bars name only a picture).
+#[allow(clippy::too_many_arguments)]
+pub(super) fn cfg_bar(commands: &mut Commands, root: Entity, layout: &StockLayout, r: R, value: f32, (tracks, fills, fallback): (&[&str], &[&str], Color), kind: StockBar, sprite_key: &str) {
+    let (track, fill) = bar_colours(layout, tracks, fills, fallback);
+    match layout.name(sprite_key) {
+        Some(sprite) => {
+            let tint = if fills.iter().any(|k| layout.colour(k).is_some()) { fill } else { Color::WHITE };
+            sprite_bar(commands, root, r, value, (track, tint), kind, sprite);
+        }
+        None => bar(commands, root, r, value, (track, fill), kind),
+    }
+}
+
 pub(super) fn sprite_bar(commands: &mut Commands, root: Entity, r: R, value: f32, (track, color): (Color, Color), kind: StockBar, sprite: &str) {
     let mut picture = GuiImage::new(sprite);
     picture.color = color;
@@ -460,7 +477,7 @@ fn spawn_single(
         "infoBuildHullBar",
         "infoSingleHullBarArea",
     ) {
-        bar(commands, root, r, single.hull, bar_colours(layout, &["infoSingleHullBarDisableColor", "infoSingleShieldBarDisableColor"], &["infoSingleHullBarColor"], theme.good), StockBar::Hull(r.w));
+        cfg_bar(commands, root, layout, r, single.hull, (&["infoSingleHullBarDisableColor", "infoSingleShieldBarDisableColor"], &["infoSingleHullBarColor"], theme.good), StockBar::Hull(r.w), "infoSingleHullBar");
     }
     if let Some(shield) = single.shield
         && let Some(r) = chosen_rect(
@@ -471,7 +488,7 @@ fn spawn_single(
             "infoSingleShieldBarArea",
         )
     {
-        bar(commands, root, r, shield, bar_colours(layout, &["infoSingleShieldBarDisableColor"], &["infoSingleShieldBarColor"], theme.accent2), StockBar::Shield(r.w));
+        cfg_bar(commands, root, layout, r, shield, (&["infoSingleShieldBarDisableColor"], &["infoSingleShieldBarColor"], theme.accent2), StockBar::Shield(r.w), "infoSingleShieldBar");
     }
     if let Some(progress) = single.progress
         && let Some(r) = layout.at(origin, "infoSingleConstructionBarArea")
@@ -482,11 +499,7 @@ fn spawn_single(
         && let Some(r) = layout.at(origin, area)
     {
         // Full until the status feed says otherwise (`update` fills it every frame).
-        let colours = bar_colours(layout, &[track], &[fill], theme.accent);
-        match layout.name(area.trim_end_matches("Area")) {
-            Some(sprite) => sprite_bar(commands, root, r, 1.0, colours, StockBar::Node(r.w), sprite),
-            None => bar(commands, root, r, 1.0, colours, StockBar::Node(r.w)),
-        }
+        cfg_bar(commands, root, layout, r, 1.0, (&[track], &[fill], theme.accent), StockBar::Node(r.w), area.trim_end_matches("Area"));
     }
     // UI-48: the system icons of a ship or station with systems (`infosystem` frame n at
     // `infoSystemIcon_n`, the builder card's `infoBuildSystemIcon_n`).
@@ -575,14 +588,12 @@ fn spawn_group(
             format!("infoMultiShipHull_{i}")
         };
         if let Some(hull) = layout.at(origin, &hull_key) {
-            bar(
-                commands,
-                root,
-                hull,
-                tile.hull,
-                bar_colours(layout, &["infoMultiHullBarDisableColor", "infoMultiShieldBarDisableColor"], &["infoMultiHullBarColor"], theme.good),
-                StockBar::Group(tile.id, hull.w),
-            );
+            cfg_bar(commands, root, layout, hull, tile.hull, (&["infoMultiHullBarDisableColor", "infoMultiShieldBarDisableColor"], &["infoMultiHullBarColor"], theme.good), StockBar::Group(tile.id, hull.w), "infoMultiHullBar");
+        }
+        // UI-48: the tile's shield bar (A2 and FO author one per tile; FO's compact layout `Sm`).
+        let shield_key = if small { format!("infoMultiShipShieldSm_{i}") } else { format!("infoMultiShipShield_{i}") };
+        if let (Some(shield), Some(r)) = (tile.shield, layout.at(origin, &shield_key)) {
+            cfg_bar(commands, root, layout, r, shield, (&["infoMultiShieldBarDisableColor"], &["infoMultiShieldBarColor"], theme.accent2), StockBar::GroupShield(tile.id, r.w), "infoMultiShieldBar");
         }
     }
 }
@@ -662,6 +673,10 @@ pub(in crate::ui::hud) fn update(
                 tiles.iter().find(|tile| tile.id == *id).map_or(0.0, |tile| tile.hull),
                 *w,
             ),
+            (StockBar::GroupShield(id, w), Info::Group(tiles)) => (
+                tiles.iter().find(|tile| tile.id == *id).and_then(|tile| tile.shield).unwrap_or(0.0),
+                *w,
+            ),
             _ => continue,
         };
         let next = Val::Px(width * value.clamp(0.0, 1.0));
@@ -734,8 +749,8 @@ mod tests {
             progress: None,
             builder: false,
         };
-        let tile = model::Tile { id: EntityId(1), name: long, hull: 1.0 };
-        let short = model::Tile { id: EntityId(2), name: "Short".into(), hull: 1.0 };
+        let tile = model::Tile { id: EntityId(1), name: long, hull: 1.0, shield: None };
+        let short = model::Tile { id: EntityId(2), name: "Short".into(), hull: 1.0, shield: None };
         let mut world = World::new();
         let root = world.spawn(Node::default()).id();
         let mut queue = CommandQueue::default();
@@ -840,7 +855,7 @@ mod tests {
         let feed = HudFeed::default();
         let theme = Theme::default();
         let name = "USS Long Ship Name";
-        let tile = model::Tile { id: EntityId(7), name: name.into(), hull: 1.0 };
+        let tile = model::Tile { id: EntityId(7), name: name.into(), hull: 1.0, shield: None };
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         crate::app::configure_sets(&mut app);
@@ -908,7 +923,7 @@ mod tests {
             let mut queue = CommandQueue::default();
             {
                 let mut commands = Commands::new(&mut queue, &world);
-                let tile = model::Tile { id: EntityId(7), name: "USS Dunlop".into(), hull: 1.0 };
+                let tile = model::Tile { id: EntityId(7), name: "USS Dunlop".into(), hull: 1.0, shield: None };
                 spawn_group(&mut commands, root, &layout, &feed, &theme, Vec2::ZERO, variant, &[tile]);
             }
             queue.apply(&mut world);
@@ -947,7 +962,7 @@ mod tests {
             ..default()
         };
         let tiles = (1..=30)
-            .map(|id| model::Tile { id: EntityId(id), name: format!("Ship {id} full name"), hull: 1.0 })
+            .map(|id| model::Tile { id: EntityId(id), name: format!("Ship {id} full name"), hull: 1.0, shield: None })
             .collect::<Vec<_>>();
         let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
         for i in 0..30 {
@@ -1309,5 +1324,55 @@ mod tests {
         assert_eq!(slot_tint(Some(&feed), EntityId(5), 0), Color::srgb(0.45, 0.45, 0.45));
         assert_eq!(slot_tint(Some(&feed), EntityId(5), 2), Color::WHITE);
         assert_eq!(slot_tint(Some(&feed), EntityId(9), 3), Color::WHITE, "an unlisted unit is whole");
+    }
+
+    /// Hull and shield bars draw their cfg sprite; without a fill colour key the picture is
+    /// untinted, with one it takes it; no sprite keeps the flat bar.
+    #[test]
+    fn cfg_bars_use_the_named_sprite_and_tint_only_with_an_authored_colour() {
+        use sta_content::gui_cfg::{Colour, GuiLayout};
+        let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
+        cfg.names.insert("infoSingleHullBar".into(), "large_hull_bar".into());
+        cfg.names.insert("infoSingleShieldBar".into(), "large_shield_bar".into());
+        cfg.colours.insert("infoSingleShieldBarColor".into(), Colour { r: 0.0, g: 0.0, b: 1.0, a: 1.0 });
+        let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        let mut queue = CommandQueue::default();
+        let r = R::new(0.0, 0.0, 100.0, 10.0);
+        let green = Color::srgb(0.0, 1.0, 0.0);
+        {
+            let mut c = Commands::new(&mut queue, &world);
+            cfg_bar(&mut c, root, &layout, r, 1.0, (&[], &["infoSingleHullBarColor"], green), StockBar::Hull(100.0), "infoSingleHullBar");
+            cfg_bar(&mut c, root, &layout, r, 1.0, (&[], &["infoSingleShieldBarColor"], green), StockBar::Shield(100.0), "infoSingleShieldBar");
+            cfg_bar(&mut c, root, &layout, r, 1.0, (&[], &[], green), StockBar::Progress(100.0), "infoSingleConstructionBar");
+        }
+        queue.apply(&mut world);
+        let images: Vec<(String, Color)> = world.query::<&GuiImage>().iter(&world).map(|i| (i.names[0].clone(), i.color)).collect();
+        assert!(images.contains(&("large_hull_bar".to_owned(), Color::WHITE)), "{images:?}");
+        assert!(images.contains(&("large_shield_bar".to_owned(), Color::srgba(0.0, 0.0, 1.0, 1.0))), "{images:?}");
+        assert_eq!(images.len(), 2, "no sprite named: the construction bar stays flat");
+    }
+
+    /// UI-48: a group tile carries its shield share; a bar is drawn at `infoMultiShipShield_<n>`.
+    #[test]
+    fn group_tiles_draw_their_shield_bar_from_the_cfg() {
+        use sta_content::gui_cfg::{GuiLayout, Rect};
+        let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
+        cfg.rects.insert("infoMultiShipShield_0".into(), Rect { x: 10, y: 20, w: 72, h: 7 });
+        // A tile is drawn only where its icon rectangle is authored.
+        cfg.rects.insert("infoMultiShipIcon_0".into(), Rect { x: 10, y: 30, w: 72, h: 40 });
+        cfg.rects.insert("infoMultiShipIcon_1".into(), Rect { x: 90, y: 30, w: 72, h: 40 });
+        let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+        let mut world = World::new();
+        let root = world.spawn_empty().id();
+        let mut queue = CommandQueue::default();
+        let feed = HudFeed::default();
+        let theme = Theme::default();
+        let tiles = vec![model::Tile { id: EntityId(1), name: "A".into(), hull: 1.0, shield: Some(0.5) }, model::Tile { id: EntityId(2), name: "B".into(), hull: 1.0, shield: None }];
+        spawn_group(&mut Commands::new(&mut queue, &world), root, &layout, &feed, &theme, Vec2::ZERO, 1, &tiles);
+        queue.apply(&mut world);
+        let shields: Vec<(EntityId, Val)> = world.query::<(&StockBar, &Node)>().iter(&world).filter_map(|(k, n)| match k { StockBar::GroupShield(id, _) => Some((*id, n.width)), _ => None }).collect();
+        assert_eq!(shields, [(EntityId(1), Val::Px(36.0))], "half of 72 for the first tile; none without the key or shields");
     }
 }
