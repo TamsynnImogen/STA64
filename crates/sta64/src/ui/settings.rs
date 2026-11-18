@@ -10,6 +10,7 @@
 //! - the options screen's volumes (`master`, `music`, `effects`, `voice`, `0..=100`),
 //!   `scroll_speed`, `window_size`, `fullscreen`, `vsync`, `show_fps` ([`Settings`]);
 //! - optional graphics choices (`msaa`, `graphics_detail`, `shadows`, `bloom`);
+//! - `cursor_scale = 0.5 ..= 3` (UI-45), the mouse cursor's size factor; out-of-range values clamp;
 //! - `hud_layout = centred | stretched`, how the stock-look HUD sits on a window that is not its sheet's aspect
 //!   (ADR 0008 H7; case-insensitive, `centered` accepted; unknown or missing: centred);
 //! - `player_name` and `relay`, the multiplayer name and relay address last used (UI-11);
@@ -153,6 +154,8 @@ impl Stored {
                     .map(|size| s.settings.window_size = size).is_some(),
                 "hud_layout" => crate::ui::hud::stock::layout::HudFit::from_key(value)
                     .map(|fit| s.settings.hud_fit = fit).is_some(),
+                "cursor_scale" => value.parse::<f32>().ok().filter(|v| v.is_finite())
+                    .map(|v| s.settings.cursor_scale = v.clamp(0.5, 3.0)).is_some(),
                 "msaa" => match value {
                     "auto" => { s.settings.msaa = None; true }
                     "1" | "2" | "4" => { s.settings.msaa = value.parse().ok(); true }
@@ -215,6 +218,7 @@ impl Stored {
         let _ = writeln!(t, "bloom = {}", st.bloom.map_or("auto".to_owned(), |v| v.to_string()));
         let _ = writeln!(t, "window_size = {}", st.window_size.key());
         let _ = writeln!(t, "hud_layout = {}", st.hud_fit.key());
+        let _ = writeln!(t, "cursor_scale = {}", st.cursor_scale);
         if !st.player_name.is_empty() {
             let _ = writeln!(t, "player_name = {}", st.player_name);
         }
@@ -776,6 +780,17 @@ mod tests {
         let (invalid, warnings) = Stored::parse("msaa = 8\ngraphics_detail = 3\nshadows = perhaps\nbloom = maybe\n");
         assert_eq!(warnings.len(), 4, "{warnings:?}");
         assert_eq!((invalid.settings.msaa, invalid.settings.graphics_detail, invalid.settings.shadows, invalid.settings.bloom), (None, None, None, None));
+    }
+
+    #[test]
+    fn cursor_scale_round_trips_and_clamps() {
+        let (s, w) = Stored::parse("cursor_scale = 1.5\n");
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(s.settings.cursor_scale, 1.5);
+        assert!(s.to_text().contains("cursor_scale = 1.5"));
+        assert_eq!(Stored::parse("cursor_scale = 9\n").0.settings.cursor_scale, 3.0);
+        assert_eq!(Stored::parse("cursor_scale = 0.1\n").0.settings.cursor_scale, 0.5);
+        assert_eq!(Stored::parse("").0.settings.cursor_scale, 1.0, "missing: the texture size");
     }
 
     #[test]

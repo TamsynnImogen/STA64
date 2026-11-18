@@ -159,6 +159,7 @@ fn place(
     device: Option<Res<bevy::render::renderer::RenderDevice>>,
     ui_scale: Option<Res<UiScale>>,
     race: Option<Res<crate::game::LocalRace>>,
+    settings: Option<Res<crate::frontend::screens::Settings>>,
     time: Res<Time>,
     mut sprites: ResMut<CursorSprites>,
     mut window: Query<(&Window, Option<&mut CursorOptions>), With<PrimaryWindow>>,
@@ -197,13 +198,15 @@ fn place(
     };
     let frame = frame_at(art.frames.len(), art.period, time.elapsed_secs());
     let rect = art.frames[frame];
-    let pos = node_pos(pointer, art.origin, ui_scale.map_or(1.0, |s| s.0));
+    // The player's size factor (UI-45) scales the drawn cell and the hotspot alike.
+    let size = settings.as_deref().map_or(1.0, |s| s.cursor_scale).clamp(0.5, 3.0);
+    let pos = node_pos(pointer, art.origin * size, ui_scale.map_or(1.0, |s| s.0));
     let image = ImageNode { image: art.image.clone(), rect: Some(rect), image_mode: bevy::ui::widget::NodeImageMode::Stretch, ..default() };
     if let Some((_, mut node, mut current, mut v)) = nodes.iter_mut().next() {
         node.left = Val::Px(pos.x);
         node.top = Val::Px(pos.y);
-        node.width = Val::Px(rect.width());
-        node.height = Val::Px(rect.height());
+        node.width = Val::Px(rect.width() * size);
+        node.height = Val::Px(rect.height() * size);
         if current.image != image.image || current.rect != image.rect {
             *current = image;
         }
@@ -213,7 +216,7 @@ fn place(
     } else {
         commands.spawn((
             CursorNode,
-            Node { position_type: PositionType::Absolute, left: Val::Px(pos.x), top: Val::Px(pos.y), width: Val::Px(rect.width()), height: Val::Px(rect.height()), ..default() },
+            Node { position_type: PositionType::Absolute, left: Val::Px(pos.x), top: Val::Px(pos.y), width: Val::Px(rect.width() * size), height: Val::Px(rect.height() * size), ..default() },
             image,
             GlobalZIndex(i32::MAX - 1),
             Pickable::IGNORE,
