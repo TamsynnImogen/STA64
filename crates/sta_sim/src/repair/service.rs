@@ -397,9 +397,10 @@ impl Sim {
     /// One tick of the yard's work on a docked ship (S).
     fn service(&mut self, db: &ContentDb, id: EntityId) {
         let Some(u) = self.units.get(id) else { return };
-        let Some(def) = db.unit(u.def) else { return };
+        if db.unit(u.def).is_none() {
+            return;
+        }
         let owner = u.owner;
-        let shield_rate = def.shields.recharge * Fixed::from_int(TICK_HZ as i32);
         // Crew from the team pool.
         if let Some([now, max]) = u.crew
             && max - now >= CREW_SLACK
@@ -413,10 +414,17 @@ impl Sim {
             }
         }
         self.repair_systems_and_hull(db, id, Fixed::ONE);
+        self.restore_shields(db, id, Fixed::ONE);
+    }
+
+    /// Shields at 50 times the unit's own recharge rate, times `scale` (S).
+    pub(super) fn restore_shields(&mut self, db: &ContentDb, id: EntityId, scale: Fixed) {
+        let Some(u) = self.units.get(id) else { return };
+        let Some(def) = db.unit(u.def) else { return };
+        let shield_rate = def.shields.recharge * Fixed::from_int(TICK_HZ as i32);
         let Some(u) = self.units.get_mut(id) else { return };
-        // Shields, at 50 times the unit's own rate.
         if u.shields.max > Fixed::ZERO {
-            let gain = mul(per_tick(shield_rate), Fixed::from_int(50));
+            let gain = mul(mul(per_tick(shield_rate), Fixed::from_int(50)), scale);
             let pools = if u.shields.directional { 4 } else { 1 };
             for s in &mut u.shields.now[..pools] {
                 *s = (*s + gain).min(u.shields.max);

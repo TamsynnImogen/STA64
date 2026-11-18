@@ -212,6 +212,7 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
         }
     });
     d.repair.can_shipyard_repair = r.flag("canShipyardRepair");
+    d.repair.repairs_shields = r.flag("repairsShields");
     d.repair.repair_rate = odf.raw("repairRate").map(|_| r.fixed("repairRate").max(Fixed::ZERO).min(Fixed::from_int(1_000)));
     d.sensor = r.fixed("rangeScan");
     d.attack_power = odf.raw("attackPower").map(|_| r.fixed("attackPower").max(Fixed::ZERO).min(Fixed::from_int(1_000_000)));

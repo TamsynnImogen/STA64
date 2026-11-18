@@ -194,3 +194,47 @@ fn medium_autonomy_waits_on_stock_and_repairs_only_in_range_without_moving_on_ro
     w.run(4 * TICK_HZ + 1);
     assert!(w.sim.repairs().beam_of(w.rship).is_none());
 }
+
+#[test]
+fn a_repair_ship_with_repairs_shields_also_restores_shields() {
+    // Without the key: shields are not the beam's business (the ship is whole otherwise).
+    let mut w = world(150);
+    let (rship, ship) = (w.rship, w.ship);
+    {
+        let u = w.sim.units.get_mut(ship).unwrap();
+        u.hull[0] = u.hull[1];
+        u.shields.now = [Fixed::ZERO; 4];
+    }
+    assert!(rejected(&w.order(vec![rship], ship)), "only shields down: nothing for a plain beam");
+    // With `repairsShields = 1`.
+    let d = {
+        let base = db_on(None);
+        let mut b = ContentDb::builder().profile(base.profile()).features(base.features().clone());
+        for wpn in base.weapons() {
+            b = b.weapon(wpn.clone());
+        }
+        for u in base.units() {
+            let mut u = u.clone();
+            if u.odf == "fx_rship" {
+                u.repair.repairs_shields = Some(true);
+            }
+            b = b.unit(u);
+        }
+        Arc::new(b.build().unwrap())
+    };
+    let seat = |id| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control: Control::Idle };
+    let mut sim = Sim::from_setup(&GameSetup { seed: 3, map: Arc::new(sta_content::MapDef::empty()), content: Arc::clone(&d), players: vec![seat(1)], options: GameOptions::default() });
+    let ahead = (Fixed::ZERO, Fixed::ONE);
+    let rship = sim.spawn_def(d.key("fx_rship").unwrap(), PlayerId(1), v(0, 0), ahead).unwrap();
+    let ship = sim.spawn_def(d.key("fx_cruiser").unwrap(), PlayerId(1), v(0, 150), ahead).unwrap();
+    sim.units.get_mut(ship).unwrap().shields.now = [Fixed::ZERO; 4];
+    let c = Command { player: PlayerId(1), seq: 9, kind: CommandKind::Order(Order::Repair { units: vec![rship], yard: Some(ship) }) };
+    assert!(!rejected(&sim.step(&[c]).events));
+    for _ in 0..TICK_HZ {
+        sim.step(&[]);
+    }
+    // On its own the ship recharges `recharge` a tick; the beam adds 50 x 0.25 = 12.5 times that.
+    let own = d.unit(d.key("fx_cruiser").unwrap()).unwrap().shields.recharge * Fixed::from_int(TICK_HZ as i32);
+    let now = sim.unit(ship).unwrap().shields.now[0];
+    assert!(now > Fixed::ZERO && now > own * Fixed::from_int(5), "the beam brings the shields up well past their own recharge: {now:?} vs {own:?} a second");
+}

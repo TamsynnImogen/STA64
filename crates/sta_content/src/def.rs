@@ -202,6 +202,9 @@ pub struct RepairDef {
     /// `repairRate` of a repair ship (SIM-41): its beam repairs at this many times a yard's
     /// rates (systems and hull; stock 0.25). `None` when absent.
     pub repair_rate: Option<Fixed>,
+    /// `repairsShields` (FO/Roots repair ships): the beam also restores shields. `None` when
+    /// absent.
+    pub repairs_shields: Option<bool>,
 }
 
 /// Where a hardpoint can aim, relative to the unit's heading, without

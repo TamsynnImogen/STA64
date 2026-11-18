@@ -23,7 +23,11 @@
 //!   only a ship already inside its beam's range and repairs it without moving (the beam ends if
 //!   the ship leaves the range); stock leaves medium alone. Not measured.
 //!
-//! Not done (SIM-41's later slices): `repairsShields`, `alliedRepairUpgrade`, the `fedrepairteam`
+//! - *Shields (D; effect inferred from the key's name, not measured).* A repair ship with
+//!   `repairsShields = 1` (FO/Roots) also restores shields, at a yard's shield rate times its
+//!   `repairRate`, and counts low shields as damage.
+//!
+//! Not done (SIM-41's later slices): `alliedRepairUpgrade`, the `fedrepairteam`
 //! / `esconverter` auto-fire gates, the beam's own effect on screen. Not measured: rate and range
 //! against the original (WORKPLAN's paired scene).
 
@@ -49,12 +53,20 @@ impl Sim {
         Some((def.repair.repair_rate.unwrap_or(Fixed::ZERO), range))
     }
 
-    /// Hull or a system short (what the beam restores).
-    fn beam_needed(&self, db: &ContentDb, id: EntityId) -> bool {
+    /// Whether the repair ship's beam also restores shields (`repairsShields = 1`).
+    fn beam_shields(&self, db: &ContentDb, ship: EntityId) -> bool {
+        self.units.get(ship).and_then(|u| db.unit(u.def)).is_some_and(|d| d.repair.repairs_shields == Some(true))
+    }
+
+    /// Hull or a system short, or shields when the beam restores them (what the beam restores).
+    fn beam_needed(&self, db: &ContentDb, id: EntityId, shields: bool) -> bool {
         let Some(u) = self.units.get(id) else { return false };
         let Some(def) = db.unit(u.def) else { return false };
         let row = self.subsystems.get(id).unwrap_or_default();
-        u.hull[0] < u.hull[1] || (0..5).any(|n| def.system_hit_points[n] > Fixed::ZERO && row.damage[n] > 0)
+        let pools = if u.shields.directional { 4 } else { 1 };
+        u.hull[0] < u.hull[1]
+            || (0..5).any(|n| def.system_hit_points[n] > Fixed::ZERO && row.damage[n] > 0)
+            || (shields && u.shields.max > Fixed::ZERO && u.shields.now[..pools].iter().any(|s| *s < u.shields.max))
     }
 
     /// Whether `ship` may beam `target` now.
@@ -64,7 +76,7 @@ impl Sim {
             && t.kind == EntityKind::Craft
             && alive(t)
             && crate::relations::Diplomacy::new(&self.players, &self.relations).confirmed_ally(s.owner, t.owner)
-            && self.beam_needed(db, target)
+            && self.beam_needed(db, target, self.beam_shields(db, ship))
     }
 
     /// `Order::Repair` naming `target`: the repair ships among `units` that may beam it (and for
@@ -169,6 +181,9 @@ impl Sim {
             }
             if gap < range && rate > Fixed::ZERO {
                 self.repair_systems_and_hull(db, target, rate);
+                if self.beam_shields(db, ship) {
+                    self.restore_shields(db, target, rate);
+                }
             }
         }
     }

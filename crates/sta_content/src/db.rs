@@ -583,6 +583,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         || repair.repair_side.is_some()
         || repair.can_shipyard_repair.is_some()
         || repair.repair_rate.is_some()
+        || repair.repairs_shields.is_some()
     {
         let mut g = Canon::new();
         g.list("system_times", repair.system_times.map(|t| t.map_or_else(|| "-".to_owned(), fixed_text)))
@@ -593,6 +594,9 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         // SIM-41: only when set, so content without it keeps its digest (D10).
         if let Some(rate) = repair.repair_rate {
             g.fixed("rate", rate);
+        }
+        if let Some(on) = repair.repairs_shields {
+            g.raw("repairs_shields", &u8::from(on).to_string());
         }
         c.raw("repair", &group(&mut g));
     }

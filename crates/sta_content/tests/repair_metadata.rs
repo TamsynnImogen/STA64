@@ -144,9 +144,10 @@ fn repair_side_accepts_exact_i32_boundaries_and_rejects_overflow() {
 
 #[test]
 fn repair_rate_is_read_and_digested_only_when_set() {
-    let (db, warnings) = load(&format!("{CRAFT}repairRate = .25\n"), None);
+    let (db, warnings) = load(&format!("{CRAFT}repairRate = .25\nrepairsShields = 1\n"), None);
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(repair(&db).repair_rate, Some(Fixed::from_f64(0.25)));
+    assert_eq!(repair(&db).repairs_shields, Some(true));
     let (plain, _) = load(CRAFT, None);
     assert_eq!(repair(&plain).repair_rate, None);
     assert_ne!(plain.hash(), db.hash(), "a set rate changes the digest");
