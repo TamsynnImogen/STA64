@@ -238,3 +238,23 @@ fn a_repair_ship_with_repairs_shields_also_restores_shields() {
     let now = sim.unit(ship).unwrap().shields.now[0];
     assert!(now > Fixed::ZERO && now > own * Fixed::from_int(5), "the beam brings the shields up well past their own recharge: {now:?} vs {own:?} a second");
 }
+
+#[test]
+fn a_right_click_with_a_repair_ship_on_a_damaged_own_ship_is_the_repair_order() {
+    let mut w = world(150);
+    let (rship, ship, foe) = (w.rship, w.ship, w.foe);
+    let db = w.sim.content.clone().unwrap();
+    let view = w.sim.view();
+    let order = crate::context::context_order(Some(&db), &view, PlayerId(1), &[rship], ship);
+    assert!(matches!(&order, Some(Order::Repair { units, yard: Some(t) }) if units == &[rship] && *t == ship), "{order:?}");
+    assert_eq!(crate::context::takers(Some(&db), &view, order.as_ref().unwrap()), [rship]);
+    // A whole ship, or a ship of another (enemy) player: no repair vote.
+    assert!(!matches!(crate::context::context_order(Some(&db), &view, PlayerId(1), &[rship], foe), Some(Order::Repair { .. })));
+    w.sim.units.get_mut(ship).unwrap().hull[0] = Fixed::from_int(1000);
+    assert!(crate::context::context_order(Some(&db), &w.sim.view(), PlayerId(1), &[rship], ship).is_none());
+    // The order given that way works.
+    w.sim.units.get_mut(ship).unwrap().hull[0] = Fixed::from_int(600);
+    let c = Command { player: PlayerId(1), seq: 9, kind: CommandKind::Order(order.unwrap()) };
+    assert!(!rejected(&w.sim.step(&[c]).events));
+    assert_eq!(w.sim.repairs().beam_of(rship), Some(ship));
+}

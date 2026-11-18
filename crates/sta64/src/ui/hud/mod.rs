@@ -720,6 +720,16 @@ fn target_order(
             vec![Order::Transport { units: carriers, target: id, attack: false }]
         }
         TargetMode::Repair => {
+            // SIM-41: repair ships aimed at a ship that is not a yard repair it with their beam.
+            if let (Some(t), Some(db)) = (target, feed.content.as_deref())
+                && !repair_yard(feed, t)
+            {
+                let rships: Vec<EntityId> = ids.iter().copied().filter(|&id| id != t && feed.view.unit(id).and_then(|u| db.unit(u.def)).is_some_and(|d| d.class.0.eq_ignore_ascii_case("repairship"))).collect();
+                if !rships.is_empty() {
+                    ids = rships.clone();
+                    return Some((vec![Order::Repair { units: rships, yard: Some(t) }], ids));
+                }
+            }
             let ships = commands::repairers(feed, &ids);
             if ships.is_empty() { return None; }
             // A yard under the cursor is the one asked for; anywhere else the sim picks the best (SIM-40).
@@ -872,6 +882,28 @@ mod target_tests {
         // A station alone cannot go to a yard.
         assert!(!target_mode_available(&feed(&[3]), TargetMode::Repair));
         assert_eq!(armed_cursor_name(TargetMode::Repair, true), "c_repair");
+    }
+
+    /// SIM-41: a repair ship aimed at a ship that is not a yard is sent to repair it; aimed at a yard it
+    /// goes there itself.
+    #[test]
+    fn repair_ships_aimed_at_a_ship_repair_it() {
+        let fake = sta_content::fake::db();
+        let mut builder = sta_content::ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for weapon in fake.weapons() { builder = builder.weapon(weapon.clone()); }
+        for unit in fake.units() {
+            let mut unit = unit.clone();
+            if unit.odf == "fx_yard" { unit.repair.repair_facility = Some(true); }
+            if unit.odf == "fx_cruiser" { unit.class = sta_content::ClassLabel::new("repairship"); }
+            builder = builder.unit(unit);
+        }
+        let mut f = feed(&[1]);
+        f.content = Some(Arc::new(builder.build().unwrap()));
+        let p = Some(SimVec3::from_f32([10.0, 0.0, 20.0]));
+        assert!(matches!(target_order(&f, TargetMode::Repair, Some(EntityId(4)), p), Some((orders, ids))
+            if ids == vec![EntityId(1)] && matches!(orders.as_slice(), [Order::Repair { units, yard: Some(EntityId(4)) }] if units == &[EntityId(1)])));
+        // At a yard it is a yard repair as before.
+        assert!(matches!(target_order(&f, TargetMode::Repair, Some(EntityId(3)), p), Some((orders, _)) if matches!(orders.as_slice(), [Order::Repair { yard: Some(EntityId(3)), .. }])));
     }
 
     #[test]
