@@ -456,3 +456,41 @@ fn a_material_built_before_content_arrives_is_rebuilt_without_specular() {
     app.update();
     assert_eq!(specular_of(&app, part), Vec4::new(0.0, 0.0, 0.0, 40.0));
 }
+
+fn params_of(app: &App, part: Entity) -> HullParams {
+    let hull = &app.world().get::<HullSource>(part).expect("part converted").hull;
+    app.world().resource::<Assets<HullMaterial>>().get(hull).unwrap().params
+}
+
+#[test]
+fn armada_one_install_adds_the_scene_ambient_and_others_multiply_it() {
+    for (profile, switch) in [(sta_content::Profile::Sta1Classic, 2.0), (sta_content::Profile::Sta2Classic, 1.0)] {
+        let (mut app, part) = specular_app();
+        app.insert_resource(content_of(profile));
+        app.update();
+        assert_eq!(params_of(&app, part).mamb.w, switch, "{profile:?}");
+    }
+}
+
+/// A scene with no map sets the ambient light to white for Bevy's renderer: under the Armada I rule
+/// (added to the material's ambient) that is no scene ambient, so it takes none; a map view keeps its
+/// own ambient, and other profiles keep reading the colour as before.
+#[test]
+fn a_scene_without_a_map_takes_no_ambient_under_the_armada_one_rule() {
+    let cases = [
+        (sta_content::Profile::Sta1Classic, false, Vec3::ZERO),
+        (sta_content::Profile::Sta1Classic, true, Vec3::ONE),
+        (sta_content::Profile::Sta2Classic, false, Vec3::ONE),
+    ];
+    for (profile, map_view, want) in cases {
+        let (mut app, part) = specular_app();
+        app.insert_resource(content_of(profile));
+        app.insert_resource(GlobalAmbientLight { color: Color::WHITE, brightness: 250.0, ..default() });
+        let light = app.world_mut().spawn((DirectionalLight::default(), GlobalTransform::default())).id();
+        if map_view {
+            app.world_mut().entity_mut(light).insert(crate::map::MapLightSource(false));
+        }
+        app.update();
+        assert!((params_of(&app, part).amb.truncate() - want).abs().max_element() < 1e-5, "{profile:?} map view {map_view}");
+    }
+}
