@@ -384,3 +384,75 @@ fn run_capture_test(auxiliary_maps: bool) {
         assert!((hull.params.tint.z - tint.blue).abs() < 1e-6);
     }
 }
+
+/// A minimal Stock-look app: one camera, one hull part with a lit SOD material of invented values.
+fn specular_app() -> (App, Entity) {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    app.init_resource::<Assets<StandardMaterial>>();
+    app.init_resource::<Assets<HullMaterial>>();
+    app.init_resource::<HullMaterials>();
+    app.init_resource::<HullView>();
+    app.init_resource::<HullLighting>();
+    app.init_resource::<crate::render::profile::ProfileEffects>();
+    app.insert_resource(crate::render::profile::RenderProfile::Stock);
+    app.world_mut()
+        .resource_mut::<crate::render::profile::ProfileEffects>()
+        .register_stock(crate::render::profile::Effect::Hulls);
+    app.add_systems(Update, (update_view, apply.in_set(HullApply), follow_source).chain());
+    app.add_message::<AssetEvent<StandardMaterial>>();
+    app.world_mut().spawn((Camera3d::default(), GlobalTransform::default()));
+    let base = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial::default());
+    let part = app
+        .world_mut()
+        .spawn((
+            HullPart {
+                stock: Some(crate::render::stock::hulls::StockLight {
+                    ambient: [0.5; 3],
+                    diffuse: [0.9, 0.8, 0.7],
+                    specular: [0.2, 0.3, 0.4],
+                    power: 40.0,
+                    model: 1,
+                }),
+                ..default()
+            },
+            MeshMaterial3d(base),
+        ))
+        .id();
+    (app, part)
+}
+
+fn content_of(profile: sta_content::Profile) -> ContentRes {
+    ContentRes(Arc::new(ContentDb::builder().profile(profile).build().unwrap()))
+}
+
+fn specular_of(app: &App, part: Entity) -> Vec4 {
+    let hull = &app.world().get::<HullSource>(part).expect("part converted").hull;
+    app.world().resource::<Assets<HullMaterial>>().get(hull).unwrap().params.mspc
+}
+
+#[test]
+fn armada_one_install_zeroes_the_stock_specular_colour() {
+    let (mut app, part) = specular_app();
+    app.insert_resource(content_of(sta_content::Profile::Sta1Classic));
+    app.update();
+    assert_eq!(specular_of(&app, part), Vec4::new(0.0, 0.0, 0.0, 40.0));
+}
+
+#[test]
+fn other_profiles_keep_the_stock_specular_colour() {
+    let (mut app, part) = specular_app();
+    app.insert_resource(content_of(sta_content::Profile::Sta2Classic));
+    app.update();
+    assert_eq!(specular_of(&app, part), Vec4::new(0.2, 0.3, 0.4, 40.0));
+}
+
+#[test]
+fn a_material_built_before_content_arrives_is_rebuilt_without_specular() {
+    let (mut app, part) = specular_app();
+    app.update();
+    assert_eq!(specular_of(&app, part), Vec4::new(0.2, 0.3, 0.4, 40.0), "no content yet: the term is kept");
+    app.insert_resource(content_of(sta_content::Profile::Sta1Classic));
+    app.update();
+    assert_eq!(specular_of(&app, part), Vec4::new(0.0, 0.0, 0.0, 40.0));
+}
