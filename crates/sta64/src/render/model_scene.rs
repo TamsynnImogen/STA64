@@ -69,6 +69,8 @@ struct CachedPart {
     rock: Option<crate::render::rock::RockPart>,
     /// Set on a hull's parts (not skies), for the hull look (`render/hulls.rs`).
     hull: Option<crate::render::hulls::HullPart>,
+    /// The mod's specular and emissive maps for the group's diffuse (RND-38), when it declares any.
+    maps: Option<crate::render::mapped::HullMaps>,
 }
 
 /// Face groups that take the owner's team colour.
@@ -623,6 +625,9 @@ fn spawn_mesh(
             stock: lm.map(crate::render::stock::hulls::StockLight::from_material),
         },
         );
+        // Specular and emissive maps the mod declares for this diffuse (RND-38); nothing is looked
+        // up when `ART_CFG.h` declares neither suffix.
+        let mapped = hull.as_ref().and_then(|_| maps.diffuse.as_deref()).and_then(|d| ctx.textures.hull_maps(d, ctx.borg.then_some(crate::render::mapped::BORG_SUFFIX)));
         let part = CachedPart {
             mesh: ctx.meshes.add(bevy_mesh),
             material: ctx.materials.add(material),
@@ -631,6 +636,7 @@ fn spawn_mesh(
             triangles,
             rock,
             hull,
+            maps: mapped,
         };
         if let Some(cache) = ctx.parts.as_mut() {
             cache.map.insert(cache_key, part.clone());
@@ -700,6 +706,9 @@ fn spawn_part(ctx: &mut SpawnCtx, part: &CachedPart, parent: Entity, surface: (u
     }
     if let Some(h) = part.hull {
         e.insert(h);
+    }
+    if let Some(m) = &part.maps {
+        e.insert(m.clone());
     }
     if let Some((animation, offset)) = flipbook {
         e.insert(UvFlipbook {

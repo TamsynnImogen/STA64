@@ -11,6 +11,7 @@ pub mod fog;
 pub mod fx;
 pub mod hulls;
 pub mod lod_switch;
+pub mod mapped;
 pub mod materials;
 pub mod mining;
 pub mod orbital_beam;

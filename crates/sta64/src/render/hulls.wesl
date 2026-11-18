@@ -30,6 +30,8 @@ struct HullParams {
     mamb: vec4<f32>,  // ambient colour; a: 1 draws the group the stock way (amb.rgb is then the scene's ambient light), 0 Refit's look
     mdif: vec4<f32>,  // diffuse colour
     mspc: vec4<f32>,  // specular colour; a: its exponent
+    // Specular and emissive maps (RND-38, mapped.rs; ported from the A2FOExtensions project).
+    map: vec4<f32>,   // x: 1 with a specular map; y: 1 with an emissive map; z: the highlight colour and w the exponent when the material states none
 };
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> k: HullParams;
@@ -39,6 +41,10 @@ struct HullParams {
 @group(constants::MATERIAL_BIND_GROUP) @binding(4) var nmap_sampler: sampler;
 // The Key's shadow map: r + g / 2048 the depth of the nearest hull along the Key, 1 where none.
 @group(constants::MATERIAL_BIND_GROUP) @binding(5) var smap: texture_2d<f32>;
+// The specular map (RGB masks the highlight) and the emissive map (added after lighting); both at the diffuse UVs.
+@group(constants::MATERIAL_BIND_GROUP) @binding(6) var spec_map: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(7) var map_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(8) var emit_map: texture_2d<f32>;
 
 struct FragIn {
     @builtin(position) position: vec4<f32>,
@@ -119,9 +125,38 @@ fn from_srgb(c: vec3<f32>) -> vec3<f32> {
     return select(pow((c + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4)), c / 12.92, c <= vec3<f32>(0.04045));
 }
 
+// A specular map's highlight (A2FOExtensions): per light, its colour times (N.H)^power, front
+// facing, times the highlight colour (the material's when it has one, else the defaults), times the
+// map's RGB. The lights are the look's own (`dvec`, `dcol`).
+fn mapped_highlight(n: vec3<f32>, wp: vec3<f32>, mask: vec3<f32>) -> vec3<f32> {
+    let v = normalize(k.eye.xyz - wp);
+    var col = k.mspc.rgb * k.misc.y;
+    var pw = k.mspc.a;
+    if max(col.x, max(col.y, col.z)) <= 0.0 {
+        col = vec3<f32>(k.map.z);
+        pw = k.map.w;
+    }
+    var spec = vec3<f32>(0.0);
+    for (var j = 0; j < 4; j++) {
+        let l = k.dvec[j].xyz;
+        if dot(n, l) > 0.0 {
+            spec += k.dcol[j].rgb * pow(max(0.0, dot(n, normalize(l + v))), pw);
+        }
+    }
+    return spec * col * mask;
+}
+
+// The emissive map added to a finished colour, in display values, clipped at 1 (self-lit).
+fn add_emissive(c: vec3<f32>, em: vec3<f32>) -> vec3<f32> {
+    if k.map.y < 0.5 {
+        return c;
+    }
+    return from_srgb(clamp(to_srgb(c) + to_srgb(em), vec3<f32>(0.0), vec3<f32>(1.0)));
+}
+
 // Stock: the original engine's fixed-function lighting from the SOD material, per light
 // diffuse colour times N.L, specular added after the texture, the lit colour clipped at 1.
-fn shade_stock(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>) -> vec4<f32> {
+fn shade_stock(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>, sm: vec3<f32>, em: vec3<f32>) -> vec4<f32> {
     let v = normalize(k.eye.xyz - wp);
     var sum = k.mamb.rgb * k.amb.rgb;
     var spec = vec3<f32>(0.0);
@@ -137,15 +172,19 @@ fn shade_stock(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>) -> vec4<f32> {
     // The engine multiplies the colours as stored (gamma-space numbers, no linear light):
     // the texture and the team colour are taken as such, the result goes out as such.
     let ts = to_srgb(t.rgb);
-    let lit = ts * to_srgb(k.tint.rgb) * sum + spec * k.mspc.rgb * k.misc.y;
+    var highlight = spec * k.mspc.rgb * k.misc.y;
+    if k.map.x > 0.5 {
+        highlight = mapped_highlight(n, wp, sm);
+    }
+    let lit = ts * to_srgb(k.tint.rgb) * sum + highlight;
     let c = clamp(mix(lit, ts * max(k.amb.a, 1.0), saturate(t.a * min(k.amb.a, 1.0))), vec3<f32>(0.0), vec3<f32>(1.0));
-    return vec4<f32>(from_srgb(c), k.misc.x);
+    return vec4<f32>(add_emissive(from_srgb(c), em), k.misc.x);
 }
 
 // Everything after the normal: the lights, the texture, the night lights.
-fn shade(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>) -> vec4<f32> {
+fn shade(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>, sm: vec3<f32>, em: vec3<f32>) -> vec4<f32> {
     if k.mamb.a > 0.5 {
-        return shade_stock(n, wp, t);
+        return shade_stock(n, wp, t, sm, em);
     }
     let v = normalize(k.eye.xyz - wp);
     var sum = k.amb.rgb;
@@ -159,10 +198,14 @@ fn shade(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>) -> vec4<f32> {
     }
     sum += k.rim.rgb * pow(1.0 - saturate(dot(n, v)), k.rim.a);
     let gloss = dot(t.rgb, vec3<f32>(0.299, 0.587, 0.114));
-    let lit = t.rgb * k.tint.rgb * max(sum, vec3<f32>(0.0)) + spec * k.misc.y * gloss;
+    var highlight = spec * k.misc.y * gloss;
+    if k.map.x > 0.5 {
+        highlight = mapped_highlight(n, wp, sm);
+    }
+    let lit = t.rgb * k.tint.rgb * max(sum, vec3<f32>(0.0)) + highlight;
     let glow = t.rgb * max(k.amb.a, 1.0);
     let c = shoulder(mix(lit, glow, saturate(t.a * min(k.amb.a, 1.0))), k.cut.z);
-    return vec4<f32>(c, k.misc.x);
+    return vec4<f32>(add_emissive(c, em), k.misc.x);
 }
 
 @fragment
@@ -176,6 +219,8 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     // All lookups and derivatives up front (uniform control flow).
     let t = textureSample(tex, tex_sampler, uv);
     let m0 = textureSample(nmap, nmap_sampler, uv).rgb * 2.0 - vec3<f32>(1.0);
+    let sm = textureSample(spec_map, map_sampler, uv).rgb;
+    let em = textureSample(emit_map, map_sampler, uv).rgb;
     let dp1 = dpdx(wp);
     let dp2 = dpdy(wp);
     let du1 = dpdx(uv);
@@ -201,5 +246,5 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
             n = nb / l;
         }
     }
-    return shade(n, wp, t);
+    return shade(n, wp, t, sm, em);
 }
