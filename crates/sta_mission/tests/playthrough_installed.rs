@@ -98,8 +98,16 @@ fn a1_federation_2_waves_act_and_the_mission_is_won() {
     let log = dump(&p);
     // The first wave's seat is eliminated; ships built for it afterwards still move.
     assert!(p.of("eliminated").next().is_some(), "no seat was eliminated:\n{log}");
-    let acted = p.of("plan").filter(|e| e.what.starts_with("acted ")).count();
-    assert!(acted >= 3, "only {acted} enemy units acted:\n{log}");
+    // Only enemy units first seen after the tick of the elimination count, so the first wave
+    // cannot satisfy the check.
+    let eliminated_at = p.of("eliminated").next().map(|e| e.tick).unwrap();
+    let late: std::collections::HashSet<&str> = p
+        .of("plan")
+        .filter(|e| e.tick > eliminated_at)
+        .filter_map(|e| e.what.strip_prefix("first "))
+        .collect();
+    let acted = p.of("plan").filter_map(|e| e.what.strip_prefix("acted ")).filter(|id| late.contains(id)).count();
+    assert!(acted >= 3, "only {acted} enemy units first seen after the elimination acted:\n{log}");
     assert!(p.outcome.is_some_and(|o| o.won), "not won:\n{log}");
 }
 

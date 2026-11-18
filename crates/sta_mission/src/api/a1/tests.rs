@@ -902,6 +902,40 @@ fn is_valid_does_not_look_the_object_up() {
     let (rt, _) = run(&s, "gone = 4242");
     assert!(rt.eval::<bool>("return A1.IsValid(gone) and A1.IsValid(a) and not A1.IsValid(0)").unwrap());
     assert!(rt.eval::<bool>("return A1.IsCompromised(gone, 1)").unwrap());
+    // Not a handle value: an error that names what is accepted.
+    assert!(rt.eval::<bool>("return A1.IsValid(0/0)").is_err());
+    assert!(rt.eval::<bool>("return A1.IsValid('x')").is_err());
+    assert!(!rt.eval::<bool>("return A1.IsValid(0.0)").unwrap());
+}
+
+/// `IsValid` for the four states of a spawned handle: pending and live and dead answer true, a
+/// failed spawn answers false (STA64 rule; the original's answer is not read).
+#[test]
+fn is_valid_by_spawn_state() {
+    use sta_sim::setup::Controller;
+    let s = scene();
+    let mut sim = Sim::from_setup(&game(&s.db));
+    let cfg = MissionConfig { content: Some(s.db.clone()), view: Some((*sim.view()).clone()), ..MissionConfig::default() };
+    let src = "A1.paths.Q = { {x=40,y=0,z=0} }; ok = A1.BuildObject('fx_cruiser', 1, 'Q', 0); bad = A1.BuildObject('fx_cruiser', 1, 'Q', 0)";
+    let mut rt = MissionRuntime::from_source_with("valid.lua", src, 3, cfg);
+    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
+    // Pending.
+    assert!(rt.eval::<bool>("return A1.IsValid(ok) and A1.IsValid(bad)").unwrap());
+    let cmds = rt.take_commands();
+    // Deliver only the first request: the second gets no receipt and fails.
+    let first: Vec<_> = cmds.iter().take(1).cloned().collect();
+    let out = sim.step(&first);
+    let mut later = Vec::new();
+    rt.think(&out.view, &out.events, &mut later);
+    let out = sim.step(&[]);
+    rt.think(&out.view, &out.events, &mut later);
+    // Live.
+    assert!(rt.eval::<bool>("return A1.Exists(ok) and A1.IsValid(ok)").unwrap());
+    // Failed.
+    assert!(!rt.eval::<bool>("return A1.IsValid(bad)").unwrap());
+    assert!(!rt.eval::<bool>("return A1.IsValid(bad)").unwrap(), "stays failed on a second ask");
+    // Dead: a handle that names nothing live.
+    assert!(rt.eval::<bool>("return A1.IsValid(4242)").unwrap());
 }
 
 #[test]
