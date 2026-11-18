@@ -15,9 +15,13 @@ fn v(x: i32, z: i32) -> Vec3 {
 
 /// The fake content plus `fx_rship`: a repair ship with `repairRate` 0.25 and a 200-range beam;
 /// `fx_cruiser` gets hull 1000 and `healthRate` 2 (100 x 2 x 0.25 = 50 hull a second by beam).
-fn db() -> Arc<ContentDb> {
+/// Under `profile` (the fake's own when `None`).
+fn db_on(profile: Option<sta_content::Profile>) -> Arc<ContentDb> {
     let fake = sta_content::fake::db();
-    let mut b = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+    let mut b = match profile {
+        Some(p) => ContentDb::builder().profile(p).features(p.features()),
+        None => ContentDb::builder().profile(fake.profile()).features(fake.features().clone()),
+    };
     for w in fake.weapons() {
         b = b.weapon(w.clone());
     }
@@ -33,6 +37,7 @@ fn db() -> Arc<ContentDb> {
             r.odf = "fx_rship".into();
             r.class = sta_content::ClassLabel::new("repairship");
             r.repair.repair_rate = Some(Fixed::from_bits(1 << 30));
+            r.sensor = Fixed::from_int(2000);
             r.hardpoints = vec![Hardpoint { weapon: DefRef::new("fx_repairbeam"), node: "hp01".into(), arc: None }];
             b = b.unit(r);
         }
@@ -51,7 +56,11 @@ struct W {
 /// A repair ship of player 1 at the origin, a damaged cruiser of player 1 `gap` away along z,
 /// a damaged cruiser of player 2 far off.
 fn world(gap: i32) -> W {
-    let d = db();
+    world_on(None, gap)
+}
+
+fn world_on(profile: Option<sta_content::Profile>, gap: i32) -> W {
+    let d = db_on(profile);
     let seat = |id| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control: Control::Idle };
     let mut sim = Sim::from_setup(&GameSetup { seed: 3, map: Arc::new(sta_content::MapDef::empty()), content: Arc::clone(&d), players: vec![seat(1), seat(2)], options: GameOptions::default() });
     let ahead = (Fixed::ZERO, Fixed::ONE);
@@ -144,10 +153,44 @@ fn a_snapshot_mid_beam_continues_alike() {
 #[test]
 fn the_record_refuses_bad_beams() {
     use crate::repair::{Repairs, RepairsRec};
-    let ok = |b: Vec<(EntityId, EntityId)>, q: Vec<(EntityId, Vec<EntityId>)>| Repairs::from_rec(RepairsRec { version: 2, queues: q, beams: b }, |id| id.0 < 10).is_some();
-    assert!(ok(vec![(EntityId(1), EntityId(2)), (EntityId(3), EntityId(2))], vec![]));
-    assert!(!ok(vec![(EntityId(3), EntityId(2)), (EntityId(1), EntityId(2))], vec![]), "unordered");
-    assert!(!ok(vec![(EntityId(1), EntityId(1))], vec![]), "on itself");
-    assert!(!ok(vec![(EntityId(1), EntityId(20))], vec![]), "unknown target");
-    assert!(!ok(vec![(EntityId(1), EntityId(2))], vec![(EntityId(5), vec![EntityId(1)])]), "also queued at a yard");
+    let ok = |b: Vec<(EntityId, EntityId, bool)>, q: Vec<(EntityId, Vec<EntityId>)>| Repairs::from_rec(RepairsRec { version: 2, queues: q, beams: b }, |id| id.0 < 10).is_some();
+    assert!(ok(vec![(EntityId(1), EntityId(2), false), (EntityId(3), EntityId(2), false)], vec![]));
+    assert!(!ok(vec![(EntityId(3), EntityId(2), false), (EntityId(1), EntityId(2), false)], vec![]), "unordered");
+    assert!(!ok(vec![(EntityId(1), EntityId(1), false)], vec![]), "on itself");
+    assert!(!ok(vec![(EntityId(1), EntityId(20), false)], vec![]), "unknown target");
+    assert!(!ok(vec![(EntityId(1), EntityId(2), false)], vec![(EntityId(5), vec![EntityId(1)])]), "also queued at a yard");
+}
+
+#[test]
+fn on_high_autonomy_an_idle_repair_ship_finds_a_damaged_ally_in_scan_range() {
+    let mut w = world(1000);
+    let (rship, ship) = (w.rship, w.ship);
+    w.sim.autonomy.set_for_test(rship, [2, 0]);
+    w.run(4 * TICK_HZ + 1);
+    assert_eq!(w.sim.repairs().beam_of(rship), Some(ship), "1000 apart, inside its 2000 scan range");
+    w.run(30 * TICK_HZ);
+    assert!(w.hull(ship) > Fixed::from_int(600), "it went over and repaired");
+}
+
+#[test]
+fn medium_autonomy_waits_on_stock_and_repairs_only_in_range_without_moving_on_roots() {
+    // Stock: medium (the engine default) does nothing on its own.
+    let mut w = world(150);
+    w.run(4 * TICK_HZ + 1);
+    assert!(w.sim.repairs().beam_of(w.rship).is_none());
+    // Roots: a ship inside the beam's 200 is repaired where the repair ship stands.
+    let mut w = world_on(Some(sta_content::Profile::Fo4), 150);
+    let (rship, ship) = (w.rship, w.ship);
+    w.sim.autonomy.set_for_test(rship, [1, 0]);
+    let at = w.sim.unit(rship).unwrap().pos;
+    w.run(4 * TICK_HZ + 1);
+    assert_eq!(w.sim.repairs().beam_of(rship), Some(ship));
+    w.run(2 * TICK_HZ);
+    assert!(w.hull(ship) > Fixed::from_int(600));
+    assert_eq!(w.sim.unit(rship).unwrap().pos, at, "it does not move");
+    // Roots, out of the beam's range: left alone.
+    let mut w = world_on(Some(sta_content::Profile::Fo4), 1000);
+    w.sim.autonomy.set_for_test(w.rship, [1, 0]);
+    w.run(4 * TICK_HZ + 1);
+    assert!(w.sim.repairs().beam_of(w.rship).is_none());
 }

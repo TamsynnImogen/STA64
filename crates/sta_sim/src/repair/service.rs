@@ -67,11 +67,12 @@ pub fn reaches(db: &ContentDb) -> (Fixed, Fixed) {
 const CREW_SLACK: Fixed = Fixed::from_bits(429_496_730);
 
 /// The yard queues: `(yard, ships in arrival order)`, ascending yard; and the repair ships'
-/// beams (SIM-41): `(repair ship, target)`, ascending ship.
+/// beams (SIM-41): `(repair ship, target, hold)`, ascending ship; `hold`: taken on its own
+/// within range (Roots' medium autonomy), so the ship does not move for it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Repairs {
     queues: Vec<(EntityId, Vec<EntityId>)>,
-    pub(super) beams: Vec<(EntityId, EntityId)>,
+    pub(super) beams: Vec<(EntityId, EntityId, bool)>,
 }
 
 /// The snapshot form of [`Repairs`] (format 37; version 2 adds the beams).
@@ -79,7 +80,7 @@ pub struct Repairs {
 pub struct RepairsRec {
     pub version: u8,
     pub queues: Vec<(EntityId, Vec<EntityId>)>,
-    pub beams: Vec<(EntityId, EntityId)>,
+    pub beams: Vec<(EntityId, EntityId, bool)>,
 }
 
 impl Repairs {
@@ -89,14 +90,14 @@ impl Repairs {
 
     /// The ship repair ship `ship` is repairing (SIM-41).
     pub fn beam_of(&self, ship: EntityId) -> Option<EntityId> {
-        self.beams.iter().find(|(s, _)| *s == ship).map(|(_, t)| *t)
+        self.beams.iter().find(|(s, _, _)| *s == ship).map(|(_, t, _)| *t)
     }
 
-    pub(super) fn set_beam(&mut self, ship: EntityId, target: EntityId) {
+    pub(super) fn set_beam(&mut self, ship: EntityId, target: EntityId, hold: bool) {
         self.end(ship);
-        match self.beams.binary_search_by_key(&ship, |(s, _)| *s) {
-            Ok(i) => self.beams[i].1 = target,
-            Err(i) => self.beams.insert(i, (ship, target)),
+        match self.beams.binary_search_by_key(&ship, |(s, _, _)| *s) {
+            Ok(i) => self.beams[i] = (ship, target, hold),
+            Err(i) => self.beams.insert(i, (ship, target, hold)),
         }
     }
 
@@ -120,7 +121,7 @@ impl Repairs {
             q.retain(|s| *s != ship);
         }
         self.queues.retain(|(_, q)| !q.is_empty());
-        self.beams.retain(|(s, _)| *s != ship);
+        self.beams.retain(|(s, _, _)| *s != ship);
     }
 
     /// An entity left the world: as a ship or as a yard.
@@ -151,9 +152,10 @@ impl Repairs {
         if !self.beams.is_empty() {
             h.str("repair-beams-v1");
             h.u64(self.beams.len() as u64);
-            for (s, t) in &self.beams {
+            for (s, t, hold) in &self.beams {
                 h.u64(u64::from(s.0));
                 h.u64(u64::from(t.0));
+                h.u64(u64::from(*hold));
             }
         }
     }
@@ -168,7 +170,7 @@ impl Repairs {
         if rec.version != 2 || !rec.queues.windows(2).all(|w| w[0].0 < w[1].0) || !rec.beams.windows(2).all(|w| w[0].0 < w[1].0) {
             return None;
         }
-        if rec.beams.iter().any(|(s, t)| s == t || !exists(*s) || !exists(*t) || rec.queues.iter().any(|(_, q)| q.contains(s))) {
+        if rec.beams.iter().any(|(s, t, _)| s == t || !exists(*s) || !exists(*t) || rec.queues.iter().any(|(_, q)| q.contains(s))) {
             return None;
         }
         let mut seen: Vec<EntityId> = Vec::new();

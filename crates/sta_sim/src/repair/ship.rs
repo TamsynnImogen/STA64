@@ -16,9 +16,15 @@
 //! - *End (S).* A target that no longer qualifies (repaired, dead, gone, no longer allied)
 //!   ends the order and the repair ship stops. Any other order ends it too.
 //!
-//! Not done (SIM-41's later slices): the automatic search on high movement autonomy and Roots'
-//! medium-autonomy rule, `repairsShields`, `alliedRepairUpgrade`, the `fedrepairteam` /
-//! `esconverter` auto-fire gates, the beam's own effect on screen. Not measured: rate and range
+//! - *On its own (S; Roots from the changelog).* Every [`AUTO_REPAIR_SECS`] an idle repair ship
+//!   (no order, course, attack or beam) on **high** movement autonomy takes the first damaged
+//!   allied ship within its scan range (`rangeScan`), its own player's before an ally's (lowest
+//!   id first: ours), and goes to it. On Roots (the Fo4 profile) one on **medium** autonomy takes
+//!   only a ship already inside its beam's range and repairs it without moving (the beam ends if
+//!   the ship leaves the range); stock leaves medium alone. Not measured.
+//!
+//! Not done (SIM-41's later slices): `repairsShields`, `alliedRepairUpgrade`, the `fedrepairteam`
+//! / `esconverter` auto-fire gates, the beam's own effect on screen. Not measured: rate and range
 //! against the original (WORKPLAN's paired scene).
 
 use sta_content::ContentDb;
@@ -27,6 +33,9 @@ use sta_core::{EntityId, Fixed, PlayerId, Vec3};
 use super::service::{alive, surface};
 use crate::Sim;
 use crate::world::EntityKind;
+
+/// Seconds between an idle repair ship's looks for work (S).
+pub const AUTO_REPAIR_SECS: u32 = 4;
 
 /// Surface gap a repair ship closes to before it holds (S).
 pub const BEAM_APPROACH: Fixed = Fixed::from_bits(50 << 32);
@@ -67,7 +76,7 @@ impl Sim {
             if (player.is_player() && owner != player) || self.repair_ship(db, id).is_none() || self.repair_yard_ok(db, target, owner) || !self.beam_target_ok(db, id, target) {
                 continue;
             }
-            self.repairs.set_beam(id, target);
+            self.repairs.set_beam(id, target, false);
             taken.push(id);
         }
         if !taken.is_empty() {
@@ -80,9 +89,59 @@ impl Sim {
         taken
     }
 
+    /// Idle repair ships look for work on their own (see the module docs).
+    pub(crate) fn auto_repair(&mut self) {
+        if !self.tick.is_multiple_of(u64::from(AUTO_REPAIR_SECS * sta_core::TICK_HZ)) {
+            return;
+        }
+        let Some(db) = self.content.clone() else { return };
+        let roots = db.profile() == sta_content::Profile::Fo4;
+        let ships: Vec<EntityId> = self.units.iter().map(|u| u.id).collect();
+        for ship in ships {
+            let Some((rate, range)) = self.repair_ship(&db, ship) else { continue };
+            let level = self.autonomy.levels(ship)[0];
+            let hold = match level {
+                2 => false,
+                1 if roots => true,
+                _ => continue,
+            };
+            let Some(u) = self.units.get(ship) else { continue };
+            let idle = rate > Fixed::ZERO
+                && self.repairs.beam_of(ship).is_none()
+                && self.repairs.yard_of(ship).is_none()
+                && self.scripted.job(ship).is_none()
+                && u.target.is_none()
+                && self.weapons.attack_of(ship).is_none()
+                && self.movement.course(ship).is_none_or(|c| c.waypoints.is_empty());
+            if !idle {
+                continue;
+            }
+            let owner = u.owner;
+            let reach = if hold { range } else { db.unit(u.def).map_or(Fixed::ZERO, |d| d.sensor) };
+            let sr = db.unit(u.def).map_or(Fixed::ZERO, |d| d.radius);
+            let mut best: Option<(bool, EntityId)> = None;
+            for t in self.units.iter() {
+                if !self.beam_target_ok(&db, ship, t.id) {
+                    continue;
+                }
+                let tr = db.unit(t.def).map_or(Fixed::ZERO, |d| d.radius);
+                if surface(u, sr, t, tr) >= reach {
+                    continue;
+                }
+                let own = t.owner == owner;
+                if best.is_none_or(|(b_own, _)| own && !b_own) {
+                    best = Some((own, t.id));
+                }
+            }
+            if let Some((_, target)) = best {
+                self.repairs.set_beam(ship, target, hold);
+            }
+        }
+    }
+
     /// One tick of every repair ship's beam.
     pub(super) fn step_beams(&mut self, db: &ContentDb) {
-        for (ship, target) in self.repairs.beams.clone() {
+        for (ship, target, hold) in self.repairs.beams.clone() {
             let rs = self.repair_ship(db, ship);
             if rs.is_none() || !self.beam_target_ok(db, ship, target) {
                 self.repairs.end(ship);
@@ -96,7 +155,13 @@ impl Sim {
             let radius = |e: &crate::world::Entity| db.unit(e.def).map_or(Fixed::ZERO, |d| d.radius);
             let (sr, tr) = (radius(s), radius(t));
             let gap = surface(s, sr, t, tr);
-            if gap > BEAM_APPROACH {
+            if hold {
+                // Taken where it stands: out of range it lets the target go instead of following.
+                if gap >= range {
+                    self.repairs.end(ship);
+                    continue;
+                }
+            } else if gap > BEAM_APPROACH {
                 let to = approach_point(t.pos, s.pos, sr + tr + BEAM_APPROACH);
                 self.set_target(ship, Some(to));
             } else {

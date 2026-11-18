@@ -526,6 +526,7 @@ impl Sim {
             // Pulses and arrivals after the hits, before the latch upkeep (SIM-46).
             self.step_transports();
             self.step_recrew();
+            self.auto_repair();
             self.step_repairs();
             let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
             combat::casualty::step(&mut self.units, &db, &mut casualties);
