@@ -627,7 +627,7 @@ fn spawn_mesh(
         );
         // Specular and emissive maps the mod declares for this diffuse (RND-38); nothing is looked
         // up when `ART_CFG.h` declares neither suffix.
-        let mapped = hull.as_ref().and_then(|_| maps.diffuse.as_deref()).and_then(|d| ctx.textures.hull_maps(d, ctx.borg.then_some(crate::render::mapped::BORG_SUFFIX)));
+        let mapped = hull.as_ref().and(maps.diffuse.as_deref()).and_then(|d| ctx.textures.hull_maps(d, ctx.borg.then_some(crate::render::mapped::BORG_SUFFIX)));
         let part = CachedPart {
             mesh: ctx.meshes.add(bevy_mesh),
             material: ctx.materials.add(material),

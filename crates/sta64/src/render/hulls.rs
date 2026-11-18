@@ -961,7 +961,7 @@ mod gpu {
                 }
             };
             let sum = |d: &[u8], c: usize| d.chunks_exact(4).map(|p| p[c] as u64).sum::<u64>();
-            let mut take = |app: &mut App, name: &str| {
+            let take = |app: &mut App, name: &str| {
                 for _ in 0..4 {
                     app.update();
                 }
