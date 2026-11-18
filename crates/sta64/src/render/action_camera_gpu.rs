@@ -80,7 +80,7 @@ fn the_action_picture_shows_the_subject_and_leaves_the_overlay_layer_out_on_gpu(
             .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
             .disable::<bevy::winit::WinitPlugin>(),
     );
-    app.insert_resource(ClearColor(Color::BLACK)).init_resource::<Selection>().insert_resource(SimEntities::default()).add_plugins((bevy::app::HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate), ActionCameraPlugin));
+    app.insert_resource(ClearColor(Color::BLACK)).insert_resource(SimEntities::default()).add_plugins((bevy::app::HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate), ActionCameraPlugin));
 
     let mut main_image = Image::new_target_texture(256, 192, TextureFormat::Rgba8UnormSrgb, None);
     main_image.asset_usage = RenderAssetUsages::RENDER_WORLD;
@@ -106,7 +106,7 @@ fn the_action_picture_shows_the_subject_and_leaves_the_overlay_layer_out_on_gpu(
         Transform::from_xyz(0.0, 0.0, 0.0).with_scale(Vec3::new(3.0, 0.2, 3.0)),
     ));
     app.world_mut().resource_mut::<SimEntities>().0.insert(EntityId(1), unit);
-    app.world_mut().resource_mut::<Selection>().0 = vec![EntityId(1)];
+    app.world_mut().resource_mut::<ActionCandidates>().idle = vec![EntityId(1)];
     // The map camera must satisfy `MainCamera`; the node that asks for the picture has a size.
     app.world_mut().spawn((ActionPicture, InheritedVisibility::VISIBLE, ComputedNode { size: Vec2::new(226.0, 160.0), ..default() }));
 
@@ -166,13 +166,13 @@ fn the_action_picture_survives_a_resize_and_a_hide_and_show_on_gpu() {
             .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
             .disable::<bevy::winit::WinitPlugin>(),
     );
-    app.insert_resource(ClearColor(Color::BLACK)).init_resource::<Selection>().insert_resource(SimEntities::default()).add_plugins((bevy::app::HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate), ActionCameraPlugin));
+    app.insert_resource(ClearColor(Color::BLACK)).insert_resource(SimEntities::default()).add_plugins((bevy::app::HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate), ActionCameraPlugin));
     app.world_mut().spawn((Camera3d::default(), Camera { is_active: false, ..default() }, Transform::from_xyz(0.0, 400.0, 0.0).looking_to(Vec3::NEG_Y, Vec3::NEG_Z)));
     let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cuboid::new(20.0, 20.0, 20.0));
     let magenta = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial { base_color: Color::srgb(1.0, 0.0, 1.0), unlit: true, ..default() });
     let unit = app.world_mut().spawn((Mesh3d(mesh), MeshMaterial3d(magenta), Transform::default(), SelectRadius(14.0))).id();
     app.world_mut().resource_mut::<SimEntities>().0.insert(EntityId(1), unit);
-    app.world_mut().resource_mut::<Selection>().0 = vec![EntityId(1)];
+    app.world_mut().resource_mut::<ActionCandidates>().idle = vec![EntityId(1)];
     let picture = app.world_mut().spawn((ActionPicture, InheritedVisibility::VISIBLE, ComputedNode { size: Vec2::new(226.0, 160.0), ..default() })).id();
     app.finish();
     app.cleanup();
