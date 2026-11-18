@@ -109,3 +109,37 @@ does not decide it. A rename touches every `Profile::Fo4` use and the profile na
 its own decision.
 
 Not answered in this document or in its history as of 2026-11-13; the implementation notes in [FO_PROFILE_DETECTION.md](../FO_PROFILE_DETECTION.md) say `Fo4` keeps its name and the rename question is still open.
+
+## Amendment proposed 2026-11-17: the A1Compat module
+
+**Status:** proposed, needs Tammy's and Cedric's approval. Requested by Immy
+after a playtest.
+
+**Problem.** An Armada I compatibility mod on the Roots engine (Immy's
+STA1 Classic Mod: `AssetVersion=50000`, `ParentMod="STA2 Classic Mod"`,
+`[modules] required0="A1Compat"`) detects as `Fo4`, correctly for its rules.
+But its race ODFs are Armada I style (no `instantActionSlot`), so under `Fo4`
+no race is playable: the skirmish ignores the player's pick and falls back to
+the map's race. The interface follows the game profile, so the player also
+gets no Armada I HUD and the mod's A1 sheets (`gui_fed.cfg`, `gui_bor.cfg`) draw
+nothing. On the original engine the A1Compat module supplies both. STA64 ignores
+`[modules]` (the note above), and the A1 race-menu policy in
+[PLAYABLE_RACES.md](../PLAYABLE_RACES.md) is limited to the `Sta1Classic` profile.
+
+**Proposed rule.** `[modules]` is read for one fact only: whether any
+`requiredN` key of a mounted layer's `info.ini` names `A1Compat` (case-insensitive).
+If it does, the mount is an *A1 compatibility mod*. The profile is still chosen
+as above, so the rules stay `Fo4`. Two consequences:
+
+1. The race menu uses the Armada I policy of PLAYABLE_RACES.md (a fully valid
+   explicit slot table is kept; otherwise races with `interfaceConfiguration`
+   get slots in declaration order).
+2. The default interface is Armada I's (`UiProfile` A1). A `[mod] UiProfile=`
+   key still wins.
+
+`activeN` lists and every other module name stay ignored. This is not a
+second identification policy: the profile does not change.
+
+**Alternative.** No STA64 change: the mod states `UiProfile=a1` and gives its
+race ODFs `instantActionSlot`. That works today, but it pushes STA64's gap
+onto the mod and on every A1 compatibility mod after it.
