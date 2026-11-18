@@ -51,6 +51,39 @@ fn node_bar(def: &sta_content::UnitDef) -> Option<(&'static str, &'static str, &
     }
 }
 
+/// UI-48: a system icon of the single-selection card, by cfg slot (`infoSystemIcon_<n>`: 0
+/// sensors, 1 shield generator, 2 weapons, 3 engines, 4 life support; the slots' meaning is
+/// the stock cfgs' comments, read from data).
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::ui::hud) struct SystemIcon(pub usize);
+
+/// The sim's system index ([`sta_sim::combat::damage::SystemView`] order: engines, weapons,
+/// shield generator, life support, sensors) of cfg slot `n`.
+const SLOT_SYSTEM: [usize; 5] = [4, 2, 1, 0, 3];
+
+/// The tint of a system icon: switched off grey, else by the share of hit points left (whole
+/// white, under two thirds yellow, under one third red). Interim rule, ours: how the original
+/// marks a damaged system is not established (TODO line).
+pub(super) fn system_tint(health: sta_sim::Fixed, on: bool) -> Color {
+    if !on {
+        return Color::srgb(0.45, 0.45, 0.45);
+    }
+    let h = health.to_f32();
+    if h < 1.0 / 3.0 {
+        Color::srgb(1.0, 0.2, 0.15)
+    } else if h < 2.0 / 3.0 {
+        Color::srgb(1.0, 0.85, 0.2)
+    } else {
+        Color::WHITE
+    }
+}
+
+/// The tint of cfg slot `slot` of unit `id` (whole and on when the feed does not list it).
+fn slot_tint(status: Option<&crate::ui::hud::status::StatusFeed>, id: EntityId, slot: usize) -> Color {
+    let n = SLOT_SYSTEM[slot];
+    status.and_then(|s| s.systems.iter().find(|v| v.entity == id)).map_or(Color::WHITE, |v| system_tint(v.health[n], v.on[n]))
+}
+
 pub(super) fn node(r: R) -> Node {
     Node {
         position_type: PositionType::Absolute,
@@ -431,6 +464,16 @@ fn spawn_single(
         // Full until the status feed says otherwise (`update` fills it every frame).
         bar(commands, root, r, 1.0, bar_colours(layout, &[track], &[fill], theme.accent), StockBar::Node(r.w));
     }
+    // UI-48: the system icons of a ship or station with systems (`infosystem` frame n at
+    // `infoSystemIcon_n`, the builder card's `infoBuildSystemIcon_n`).
+    let has_systems = feed.view.unit(single.id).and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def))).is_some_and(|d| d.system_hit_points.iter().any(|hp| *hp > sta_sim::Fixed::ZERO));
+    if has_systems {
+        for slot in 0..5 {
+            if let Some(r) = chosen_rect(layout, origin, single.builder, &format!("infoBuildSystemIcon_{slot}"), &format!("infoSystemIcon_{slot}")) {
+                commands.entity(root).with_child((node(r), Pickable::IGNORE, SystemIcon(slot), GuiImage::new("infosystem").with_frame(slot)));
+            }
+        }
+    }
 
 }
 
@@ -559,8 +602,17 @@ pub(in crate::ui::hud) fn update(
     mut texts: Query<(&StockText, &mut SpriteText)>,
     mut bars: Query<(&StockBar, &mut Node)>,
     mut crew: Query<&mut SpriteText, (With<super::a1::info::CrewText>, Without<StockText>)>,
+    mut icons: Query<(&SystemIcon, &mut GuiImage)>,
 ) {
     let info = model::info(&feed);
+    if let Info::Single(s) = &info {
+        for (icon, mut image) in &mut icons {
+            let tint = slot_tint(status.as_deref(), s.id, icon.0);
+            if image.color != tint {
+                image.color = tint;
+            }
+        }
+    }
     let extra = super::a1::info::extra(&feed);
     for mut text in &mut crew {
         let value = extra.as_ref().and_then(|e| e.crew).map(|(now, _)| now.to_string()).unwrap_or_default();
@@ -1217,5 +1269,21 @@ mod tests {
         assert_eq!(node_fraction(Some(&feed(node(100, false))), EntityId(5)), 0.25);
         assert_eq!(node_fraction(Some(&feed(node(100, true))), EntityId(5)), 1.0, "infinite: always full");
         assert_eq!(node_fraction(None, EntityId(5)), 1.0);
+    }
+
+    /// UI-48: a system icon's tint by cfg slot, from the sim's system order.
+    #[test]
+    fn system_icons_are_tinted_by_their_systems_state() {
+        use sta_sim::combat::damage::SystemView;
+        let half = Fixed::from_f64(0.5);
+        let view = SystemView { entity: EntityId(5), health: [Fixed::from_f64(0.2), Fixed::ONE, half, Fixed::ONE, Fixed::ONE], on: [true, true, true, true, false] };
+        let feed = crate::ui::hud::status::StatusFeed { systems: vec![view], ..Default::default() };
+        // Slot 3 is engines (sim 0, 20 % left), slot 1 the shield generator (sim 2, half), slot 0 sensors (off).
+        assert_eq!(slot_tint(Some(&feed), EntityId(5), 3), system_tint(Fixed::from_f64(0.2), true));
+        assert_eq!(slot_tint(Some(&feed), EntityId(5), 3), Color::srgb(1.0, 0.2, 0.15));
+        assert_eq!(slot_tint(Some(&feed), EntityId(5), 1), Color::srgb(1.0, 0.85, 0.2));
+        assert_eq!(slot_tint(Some(&feed), EntityId(5), 0), Color::srgb(0.45, 0.45, 0.45));
+        assert_eq!(slot_tint(Some(&feed), EntityId(5), 2), Color::WHITE);
+        assert_eq!(slot_tint(Some(&feed), EntityId(9), 3), Color::WHITE, "an unlisted unit is whole");
     }
 }

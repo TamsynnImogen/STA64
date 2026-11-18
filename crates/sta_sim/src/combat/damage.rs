@@ -177,6 +177,18 @@ fn system(sub: Subsystem) -> usize {
     }
 }
 
+/// One unit's systems as the interface shows them, in [`UnitDef::system_hit_points`] order
+/// (engines, weapons, shield generator, life support, sensors): the share of hit points left
+/// (1 for a system without hit points) and whether it is switched on.
+///
+/// [`UnitDef::system_hit_points`]: sta_content::UnitDef::system_hit_points
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SystemView {
+    pub entity: EntityId,
+    pub health: [Fixed; 5],
+    pub on: [bool; 5],
+}
+
 /// One unit's switched-off systems (bit `n` of `off` is system `n`, only the
 /// shield generator, life support and sensors) and damage points per system,
 /// as fixed-point bits.
@@ -363,6 +375,31 @@ impl Sim {
             _ => row.off & (1 << n) == 0,
         };
         Some((on, Fixed::from_bits(row.damage[n])))
+    }
+
+    /// Read-only state of the five systems of every unit with damaged or switched-off systems
+    /// (UI-48: the info panel's system icons). Units not listed have every system whole and on.
+    pub fn system_view(&self) -> Vec<SystemView> {
+        let Some(db) = self.content.as_deref() else { return Vec::new() };
+        let mut ids: Vec<EntityId> = self.subsystems.to_rows().into_iter().map(|(id, _)| id).collect();
+        ids.extend(self.units.iter().filter(|u| u.flags.contains(UnitFlags::ENGINES_OFF) || u.flags.contains(UnitFlags::WEAPONS_OFF)).map(|u| u.id));
+        ids.sort();
+        ids.dedup();
+        ids.into_iter()
+            .filter_map(|id| {
+                let def = db.unit(self.units.get(id)?.def)?;
+                let mut out = SystemView { entity: id, health: [Fixed::ONE; 5], on: [true; 5] };
+                for (n, sub) in [Subsystem::Engines, Subsystem::Weapons, Subsystem::Shields, Subsystem::LifeSupport, Subsystem::Sensors].into_iter().enumerate() {
+                    let (on, damage) = self.subsystem_state(id, sub)?;
+                    let hp = def.system_hit_points[n];
+                    out.on[n] = on;
+                    if hp > Fixed::ZERO {
+                        out.health[n] = ((hp - damage) / hp).max(Fixed::ZERO).min(Fixed::ONE);
+                    }
+                }
+                Some(out)
+            })
+            .collect()
     }
 
     /// The derelict latch of a live unit (SIM-39): `None` for a unit that is not in the world.
