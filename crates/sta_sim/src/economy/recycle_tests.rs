@@ -162,3 +162,25 @@ fn a_snapshot_mid_recycle_continues_alike_and_bad_records_are_refused() {
     assert!(!ok(vec![(EntityId(1), j(Some(1)))]), "its own yard");
     assert!(!ok(vec![(EntityId(1), j(Some(20)))]), "unknown yard");
 }
+
+#[test]
+fn fo_recycle_amounts_and_time_replace_the_fractions_and_build_share() {
+    let d = db(|u| {
+        if u.odf == "fx_cruiser" {
+            u.repair.recycles_in_place = Some(true);
+            u.repair.recycle_amounts = Some([Fixed::from_int(273), Fixed::from_int(100), Fixed::ZERO, Fixed::from_int(9)]);
+            u.repair.recycle_time = Some(Fixed::from_int(2));
+        }
+    });
+    let mut w = world(d, 600);
+    let ship = w.ship;
+    let before: Vec<Fixed> = (0..4).map(|s| w.stock(s)).collect();
+    assert!(!rejected(&w.order(vec![ship], None)));
+    // recycleTime 2 s = 60 ticks, not 300 x 0.67.
+    w.run(58);
+    assert!(w.sim.unit(ship).is_some());
+    w.run(4);
+    assert!(w.sim.unit(ship).is_none());
+    let got: Vec<f64> = (0..4).map(|s| (w.stock(s) - before[s]).to_f32() as f64).collect();
+    assert!(near(w.stock(0) - before[0], 273.0) && near(w.stock(1) - before[1], 100.0) && near(w.stock(2) - before[2], 0.0) && near(w.stock(3) - before[3], 9.0), "{got:?}");
+}

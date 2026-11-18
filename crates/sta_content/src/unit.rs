@@ -217,6 +217,17 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
     let fraction = |r: &mut Reader, key: &str| odf.raw(key).map(|_| r.fixed(key).max(Fixed::ZERO).min(Fixed::from_int(1_000)));
     d.repair.dilithium_recycling = fraction(&mut r, "dilithiumRecyclingFraction");
     d.repair.metal_recycling = fraction(&mut r, "metalRecyclingFraction");
+    let amount_keys = ["recycleDilithium", "recycleLatinum", "recycleMetal", "recycleBiomatter"];
+    if amount_keys.iter().any(|k| odf.raw(k).is_some()) {
+        let mut a = [Fixed::ZERO; 4];
+        for (slot, k) in amount_keys.iter().enumerate() {
+            if odf.raw(k).is_some() {
+                a[slot] = r.fixed(k).max(Fixed::ZERO).min(Fixed::from_int(1_000_000_000));
+            }
+        }
+        d.repair.recycle_amounts = Some(a);
+    }
+    d.repair.recycle_time = odf.raw("recycleTime").map(|_| r.fixed("recycleTime").max(Fixed::ZERO).min(Fixed::from_int(1_000_000)));
     d.sensor = r.fixed("rangeScan");
     d.attack_power = odf.raw("attackPower").map(|_| r.fixed("attackPower").max(Fixed::ZERO).min(Fixed::from_int(1_000_000)));
 

@@ -21,7 +21,12 @@
 //! - *End (S, ours).* Any other order, the yard's loss or the unit's end stops it; nothing is
 //!   refunded then.
 //!
-//! Not done: the FO/Roots `recycle*` / `recycleTime` / `destroyedBiomatterCost` keys, `recycler`
+//! - *FO/Roots keys (D; payout inferred from the key names, not measured).* A unit that sets any
+//!   of `recycleDilithium` / `recycleLatinum` / `recycleMetal` / `recycleBiomatter` returns those
+//!   amounts instead of the fractions (the crew still goes back); `recycleTime` (seconds) replaces
+//!   build time x `DECONSTRUCT_PERCENT_TIME`. The AI build handicap on that time is not applied.
+//!
+//! Not done: `destroyedBiomatterCost`, `recycler`
 //! / `recycleExchangeRate`, `eventDecommission` and the deconstruction effect, Roots' rule
 //! against decommissioning a ship being boarded, the shared yard queue.
 
@@ -266,7 +271,12 @@ impl Sim {
                 }
                 continue;
             }
-            let start = |left: Option<Tick>| left.unwrap_or_else(|| (mul(Fixed::from_int(def.build.ticks.min(i32::MAX as u64) as i32), percent).to_bits() >> 32).max(0) as Tick);
+            // FO/Roots `recycleTime` (seconds) where set, else build time x the header's share.
+            let ticks = match def.repair.recycle_time {
+                Some(t) => mul(t, Fixed::from_int(sta_core::TICK_HZ as i32)),
+                None => mul(Fixed::from_int(def.build.ticks.min(i32::MAX as u64) as i32), percent),
+            };
+            let start = |left: Option<Tick>| left.unwrap_or_else(|| (ticks.to_bits() >> 32).max(0) as Tick);
             let left = match job.yard {
                 None => Some(start(job.left)),
                 Some(y) => {
@@ -319,7 +329,12 @@ impl Sim {
         };
         let bio = db.rules().cfg.biomatter_recycle_fraction.unwrap_or(Fixed::ZERO).max(Fixed::ZERO);
         let cost = |i: usize| def.build.cost.get(i).copied().unwrap_or(Fixed::ZERO).max(Fixed::ZERO);
-        for (slot, amount) in [(0u8, mul(cost(0), fd)), (2, mul(cost(2), fm)), (3, mul(cost(3), bio))] {
+        // FO/Roots amounts where any is set, in place of the fractions (inferred from the keys).
+        let refund: Vec<(u8, Fixed)> = match def.repair.recycle_amounts {
+            Some(a) => (0u8..4).map(|s| (s, a[usize::from(s)])).collect(),
+            None => vec![(0u8, mul(cost(0), fd)), (2, mul(cost(2), fm)), (3, mul(cost(3), bio))],
+        };
+        for (slot, amount) in refund {
             if amount > Fixed::ZERO {
                 self.edit_team_pool(owner, TeamOp::ResourceAdd(slot), amount);
             }

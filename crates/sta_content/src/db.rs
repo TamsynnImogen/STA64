@@ -586,6 +586,8 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         || repair.decommission_facility.is_some()
         || repair.dilithium_recycling.is_some()
         || repair.metal_recycling.is_some()
+        || repair.recycle_amounts.is_some()
+        || repair.recycle_time.is_some()
     {
         let mut g = Canon::new();
         g
@@ -607,6 +609,12 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         }
         if let Some(v) = repair.metal_recycling {
             g.fixed("metal_recycling", v);
+        }
+        if let Some(a) = repair.recycle_amounts {
+            g.list("recycle_amounts", a.map(crate::digest::fixed_text));
+        }
+        if let Some(t) = repair.recycle_time {
+            g.fixed("recycle_time", t);
         }
         c.raw("repair", &group(&mut g));
     }

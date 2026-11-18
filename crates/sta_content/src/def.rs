@@ -206,6 +206,11 @@ pub struct RepairDef {
     /// SIM-45: a yard's `dilithiumRecyclingFraction` / `metalRecyclingFraction` (else the race's).
     pub dilithium_recycling: Option<Fixed>,
     pub metal_recycling: Option<Fixed>,
+    /// SIM-45 (FO/Roots): `recycleDilithium`, `recycleLatinum`, `recycleMetal`,
+    /// `recycleBiomatter` by resource slot, `Some` when any is set (the others 0).
+    pub recycle_amounts: Option<[Fixed; 4]>,
+    /// SIM-45 (FO/Roots): `recycleTime`, seconds.
+    pub recycle_time: Option<Fixed>,
 }
 
 /// Where a hardpoint can aim, relative to the unit's heading, without
