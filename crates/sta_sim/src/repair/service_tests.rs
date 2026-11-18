@@ -237,3 +237,20 @@ fn roots_refills_special_energy_when_the_repair_ends() {
         assert_eq!(energy, Some(if refilled { Fixed::from_int(100) } else { Fixed::from_int(10) }), "{profile:?}");
     }
 }
+
+#[test]
+fn roots_keeps_a_queued_ships_place_on_a_second_repair_order() {
+    for (profile, kept) in [(Some(sta_content::Profile::Fo4), true), (None, false)] {
+        let d = db_on(profile, |_| {});
+        let mut w = world(Arc::clone(&d), 600);
+        let first = w.ship;
+        let second = w.sim.spawn_def(d.key("fx_cruiser").unwrap(), PlayerId(1), v(0, 700), (Fixed::ZERO, Fixed::ONE)).unwrap();
+        w.damage(first);
+        w.damage(second);
+        assert!(!rejected(&w.order(vec![first, second], None)));
+        let place = |w: &W| w.sim.repairs().queue(w.yard).iter().position(|s| *s == first);
+        assert_eq!(place(&w), Some(0), "{profile:?}");
+        assert!(!rejected(&w.order(vec![first], None)), "{profile:?}: a second order is accepted");
+        assert_eq!(place(&w), Some(if kept { 0 } else { 1 }), "{profile:?}");
+    }
+}

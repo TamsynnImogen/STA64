@@ -36,9 +36,9 @@
 //!   of either ends it; nothing is refunded (there is no cost).
 //!
 //! Not done: the dock point on the yard model (`repairHardpoint`,
-//! `repairSide`), Roots' priority repair that a second order does not
-//! cancel, AI use. Roots refills the special energy of a ship whose repair
-//! ends at the head of a queue (changelog, not measured).
+//! `repairSide`), AI use. Roots refills the special energy of a ship whose
+//! repair ends at the head of a queue, and a second repair order to a queued
+//! ship keeps its place (priority repair; changelog, not measured).
 
 use serde::{Deserialize, Serialize};
 use sta_content::ContentDb;
@@ -228,6 +228,8 @@ impl Sim {
         ids.sort();
         ids.dedup();
         let mut taken = Vec::new();
+        let mut kept = false;
+        let roots = db.profile() == sta_content::Profile::Fo4;
         for id in ids {
             let Some(u) = self.units.get(id) else { continue };
             let Some(def) = db.unit(u.def) else { continue };
@@ -238,6 +240,12 @@ impl Sim {
                 || def.repair.can_shipyard_repair == Some(false)
                 || !self.needs_repair(&db, id)
             {
+                continue;
+            }
+            // Roots' priority repair: a second order to a ship already queued (at the named yard,
+            // or at any when none is named) keeps its yard and its place (changelog, not measured).
+            if roots && let Some(at) = self.repairs.yard_of(id) && yard.is_none_or(|y| y == at) {
+                kept = true;
                 continue;
             }
             let owner = u.owner;
@@ -264,7 +272,7 @@ impl Sim {
             taken.push(id);
         }
         if taken.is_empty() {
-            return false;
+            return kept;
         }
         // Like every order that replaces what a unit is doing.
         self.weapons.stop_attack(&self.units, player, &taken);
