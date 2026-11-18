@@ -470,7 +470,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // set; `has_crew`, `assault`, `weldingAnimSpeed`, `eventTransport` are not read yet.
     let UnitDef {
         key: _, odf: _, class: _, is_starbase: _, planet_role: _, planet_crew_gain: _, planet_crew_modifier: _,
-        planet_colonizable: _, planet_civilian_population_modifier: _, planet_max_population: _, can_have_orbital_station: _, orbit_time: _, a1_borg: _, station_mining: _, node_income: _, race: _,
+        planet_colonizable: _, planet_civilian_population_modifier: _, planet_max_population: _, can_have_orbital_station: _, fleet_cap: _, orbit_time: _, a1_borg: _, station_mining: _, node_income: _, race: _,
         model: _, scale: _, movement: _, hull: _, shields: _, initial_hull: _, initial_shields: _,
         crew: _, maximum_crew: _, facility: _, has_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
         sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
@@ -656,6 +656,11 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // SIM-62: orbital placement reads both, so they are sim-visible rules; only when set.
     if u.can_have_orbital_station {
         c.flag("can_have_orbital_station", true);
+    }
+    // SIM-44: the cap file the build gate reads, only when set.
+    if let Some(cap) = &u.fleet_cap {
+        let members: Vec<String> = cap.members.iter().map(|(o, v)| format!("{o}:{v}")).collect();
+        c.raw("fleet_cap", &format!("{} {} [{}]", cap.name, cap.max, members.join(" ")));
     }
     // CON-52: the Borg spin keys, only when set (other content keeps its text).
     if let Some(b) = &u.a1_borg {

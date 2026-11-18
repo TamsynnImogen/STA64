@@ -81,6 +81,7 @@ fn action_label(action: Action) -> String {
         Action::RevealFog => tr("Toggle fog"),
         Action::RevealShroud => tr("Toggle shroud"),
         Action::PauseGame => tr("Pause game"),
+        Action::SelectNextShip => tr("Select damaged ships (Roots) / next ship"),
     }
 }
 
@@ -258,7 +259,7 @@ mod tests {
         let mut bindings = KeyBindings::default();
         let mut draft = ControlsDraft::default();
         draft.reload(&bindings);
-        assert_eq!(draft.text.len(), 23);
+        assert_eq!(draft.text.len(), Action::ALL.len());
         draft.text[0] = "KeyQ".into();
         draft.page = 3;
         draft.text[21] = "KeyH".into();

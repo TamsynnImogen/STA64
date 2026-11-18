@@ -278,6 +278,41 @@ fn push_unique(v: &mut Vec<EntityId>, id: EntityId) {
     }
 }
 
+/// UI-32, Roots' `select_next_ship` (engine changelog, not measured): every own combat ship on
+/// screen that is damaged: hull short, or shields under 60 % of their maximum (a gravity mine on
+/// it, the third case, is not modelled). In id order.
+fn damaged_on_screen(link: &SimLink, content: Option<&ContentRes>, aim: Option<&AimState>, units: &Targetable) -> Vec<EntityId> {
+    let Some(aim) = aim else { return Vec::new() };
+    let mut out: Vec<EntityId> = units
+        .iter()
+        .filter(|(u, _, gt, strategic)| {
+            is_own(link, u.0)
+                && is_ship(link, content, u.0)
+                && content.is_none_or(|c| link.curr().unit(u.0).and_then(|v| c.0.unit(v.def)).is_some_and(|d| sta_sim::combat::weapons::can_attack(&c.0, d)))
+                && aim.on_screen(visual_centre(gt, *strategic))
+                && link.curr().unit(u.0).is_some_and(damaged)
+        })
+        .map(|(u, ..)| u.0)
+        .collect();
+    out.sort();
+    out
+}
+
+/// Hull short, or shields under 60 % of their maximum (all facings together).
+fn damaged(u: &sta_sim::UnitView) -> bool {
+    let (now, max) = u.shields.iter().fold((0.0f32, 0.0f32), |(n, m), s| (n + s[0].to_f32(), m + s[1].to_f32()));
+    u.hull[0] < u.hull[1] || (max > 0.0 && now < 0.6 * max)
+}
+
+/// Elsewhere (ours; stock's own behaviour is not established): the own ship after the highest-id
+/// selected one, wrapping round.
+fn next_own_ship(link: &SimLink, content: Option<&ContentRes>, current: &[EntityId]) -> Option<EntityId> {
+    let mut ships: Vec<EntityId> = link.curr().units.iter().filter(|u| u.owner == link.player() && is_ship(link, content, u.id)).map(|u| u.id).collect();
+    ships.sort();
+    let after = current.iter().copied().max();
+    ships.iter().copied().find(|&id| after.is_none_or(|a| id > a)).or_else(|| ships.first().copied())
+}
+
 /// Keys: select-by-type and control groups.
 #[allow(clippy::too_many_arguments)]
 pub fn select_keys(
@@ -290,9 +325,26 @@ pub fn select_keys(
     mut groups: ResMut<ControlGroups>,
     mut changed: MessageWriter<SelectionChanged>,
     mut focus: MessageWriter<CameraFocus>,
+    aim: Option<Res<Aim>>,
+    units: Targetable,
+    content: Option<Res<ContentRes>>,
 ) {
     let now = time.elapsed_secs_f64();
     let before = selection.0.clone();
+    if bindings.just_pressed(Action::SelectNextShip, &keys) {
+        let content = content.as_deref();
+        let roots = content.is_some_and(|c| c.0.profile() == sta_content::Profile::Fo4);
+        let next = if roots {
+            let aim = aim.as_deref().and_then(|a| a.0);
+            damaged_on_screen(&link, content, aim.as_ref(), &units)
+        } else {
+            next_own_ship(&link, content, &selection.0).into_iter().collect()
+        };
+        if !next.is_empty() {
+            selection.0 = next;
+            cap(&mut selection.0, *max);
+        }
+    }
     if bindings.just_pressed(Action::SelectType, &keys) {
         let defs: Vec<ContentKey> = own_selection(&selection, &link).into_iter().filter_map(|id| def_of(&link, id)).collect();
         if !defs.is_empty() {
@@ -1027,6 +1079,39 @@ mod tests {
         click(&mut app, 100.0, 100.0);
         // A, B and D (class 1, on screen): not C (class 2), E (enemy), F (off screen).
         assert_eq!(sorted(sel(&app)), [A, B, D]);
+    }
+
+    /// UI-32: away from Roots `select_next_ship` steps through the own ships by id, wrapping;
+    /// stations are skipped.
+    #[test]
+    fn select_next_ship_steps_through_the_own_ships() {
+        let mut app = app();
+        tap(&mut app, KeyCode::BracketLeft);
+        assert_eq!(sel(&app), [A], "nothing selected: the first own ship");
+        tap(&mut app, KeyCode::BracketLeft);
+        assert_eq!(sel(&app), [B]);
+        click(&mut app, 700.0, 500.0);
+        let last = sel(&app);
+        tap(&mut app, KeyCode::BracketLeft);
+        assert_eq!(sel(&app), [A], "after the last own ship ({last:?}) it wraps round");
+    }
+
+    /// UI-32: Roots' "damaged": hull short or shields under 60 % of their maximum.
+    #[test]
+    fn damaged_is_hull_short_or_shields_under_sixty_percent() {
+        let whole = unit(1, 0, 0, 0.0, 0.0);
+        assert!(!damaged(&whole));
+        let mut hull = whole.clone();
+        hull.hull = [Fixed::from_f64(0.9), Fixed::ONE];
+        assert!(damaged(&hull));
+        let mut shields = whole.clone();
+        shields.shields = [[Fixed::from_f64(0.55), Fixed::ONE]; 4];
+        assert!(damaged(&shields));
+        shields.shields = [[Fixed::from_f64(0.65), Fixed::ONE]; 4];
+        assert!(!damaged(&shields), "65 %: not damaged");
+        let mut none = whole.clone();
+        none.shields = [[Fixed::ZERO; 2]; 4];
+        assert!(!damaged(&none), "no shields at all is not damage");
     }
 
     #[test]
