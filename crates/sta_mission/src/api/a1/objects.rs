@@ -98,8 +98,16 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
         Ok(handle_value(id))
     })?)?;
 
-    table.set("IsValid", def(lua, env, "IsValid", &["H"], |_, e, _, a| {
-        Ok(Value::Boolean(e.ctx.borrow().unit(a[0].id()).is_some()))
+    // `IsValid(handle)` is a non-zero test of the handle value, not a lookup: a handle of an
+    // object that has died stays valid (read from the executable, static; Armada.exe). Stock
+    // end rules rely on it.
+    // A pending or failed spawn token is a non-zero handle as well.
+    table.set("IsValid", lua.create_function(|_, v: Value| {
+        Ok(match v {
+            Value::Integer(n) => n != 0,
+            Value::Number(n) => n != 0.0,
+            _ => return Err(mlua::Error::runtime("A1.IsValid argument 1 must be an unsigned integer handle")),
+        })
     })?)?;
 
     table.set("IsExploding", def(lua, env, "IsExploding", &["h"], |_, e, _, a| {

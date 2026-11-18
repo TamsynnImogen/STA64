@@ -844,8 +844,9 @@ fn build_object_handles_resolve_after_the_receipt() {
     assert!(!rt.eval::<bool>("return A1.Exists(h)").unwrap());
     assert!(rt.eval::<()>("A1.GetLocation(h)").is_err());
     // A script flags what it orders (LUA-28): the flag is held with the order.
-    rt.eval::<()>("A1.SetSpecialForcesFlag(h, true); A1.Stop(h, 1)").expect("held");
-    assert!(!rt.eval::<bool>("return A1.IsValid(h)").unwrap());
+    rt.eval::<()>("A1.SetSpecialForcesFlag(h, true); A1.SetRedAlert(h); A1.SetGreenAlert(h); A1.SetYellowAlert(h); A1.Stop(h, 1)").expect("held");
+    // IsValid is a non-zero test of the handle, also for a spawn that is still pending.
+    assert!(rt.eval::<bool>("return A1.IsValid(h)").unwrap());
     let first = rt.take_commands();
     assert!(matches!(&first[0].kind, CommandKind::Edit(Edit::SpawnRequest { player, .. }) if *player == PlayerId(1)));
     let out = sim.step(&first);
@@ -864,12 +865,43 @@ fn build_object_handles_resolve_after_the_receipt() {
     assert!(rt.eval::<bool>("return A1.IsAlive(h) and A1.Exists(h)").unwrap());
     let held = rt.take_commands();
     assert_eq!(held.iter().filter(|c| c.kind == CommandKind::Order(Order::Stop { units: vec![id] })).count(), 1, "{held:?}");
+    for state in [AlertState::Red, AlertState::Green, AlertState::Yellow] {
+        assert_eq!(held.iter().filter(|c| c.kind == CommandKind::Edit(Edit::Alert(id, state))).count(), 1, "{state:?}: {held:?}");
+    }
     assert_eq!(rt.eval::<f64>("return A1.GetLocation(h).x").unwrap(), 40.0);
     // The sim has not seen the flag edit yet: flag again in the same tick, as a script would.
     rt.eval::<()>("A1.SetSpecialForcesFlag(h, true); A1.Stop(h, 1)").unwrap();
     let commands = rt.take_commands();
     assert_eq!(commands[1].kind, CommandKind::Order(Order::Stop { units: vec![id] }));
     assert_eq!(commands[1].player, PlayerId(1));
+}
+
+/// An order for a unit of an eliminated seat goes in as the script's own (the sim rejects every
+/// command of an eliminated seat); a seat still in the game keeps ordering as its owner.
+#[test]
+fn orders_for_an_eliminated_seat_are_sent_as_the_scripts() {
+    let mut s = scene();
+    let [a, b, ..] = s.ids;
+    let (_, commands) = run(&s, "A1.SetSpecialForcesFlag(b, true); A1.Stop(b, 1); A1.Stop(a, 1)");
+    let stop = |id: EntityId| Command { player: PlayerId(0), seq: 0, kind: CommandKind::Order(Order::Stop { units: vec![id] }) };
+    let player_of = |commands: &[Command], id: EntityId| commands.iter().find(|c| c.kind == stop(id).kind).map(|c| c.player);
+    assert_eq!(player_of(&commands, b), Some(PlayerId(1)));
+    for p in &mut s.view.players {
+        p.eliminated = p.id == PlayerId(1);
+    }
+    let (_, commands) = run(&s, "A1.SetSpecialForcesFlag(b, true); A1.Stop(b, 1); A1.Stop(a, 1)");
+    assert_eq!(player_of(&commands, b), Some(PlayerId::SCRIPT));
+    assert_eq!(player_of(&commands, a), Some(PlayerId(0)));
+}
+
+/// `IsValid` tests the handle value only (Armada.exe): a handle of a unit that is gone stays
+/// valid, 0 is not.
+#[test]
+fn is_valid_does_not_look_the_object_up() {
+    let s = scene();
+    let (rt, _) = run(&s, "gone = 4242");
+    assert!(rt.eval::<bool>("return A1.IsValid(gone) and A1.IsValid(a) and not A1.IsValid(0)").unwrap());
+    assert!(rt.eval::<bool>("return A1.IsCompromised(gone, 1)").unwrap());
 }
 
 #[test]
