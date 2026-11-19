@@ -84,6 +84,33 @@ fn a1_federation_1_is_won_by_a_competent_player() {
     assert!(p.of("error").next().is_none(), "script errors:\n{log}");
 }
 
+/// Armada I, Federation 2: the later waves belong to a seat that was eliminated when the first
+/// wave died; their orders must still reach the sim (the enemy acts), and the mission's end rule
+/// must be able to hold once the last ships are dead (the win).
+#[test]
+fn a1_federation_2_waves_act_and_the_mission_is_won() {
+    let Ok(install) = std::env::var("STA64_TEST_A1_INSTALL") else {
+        eprintln!("skipped: set STA64_TEST_A1_INSTALL to an Armada I root");
+        return;
+    };
+    let out = convert("a1_to_lua.py", &install, "fed2");
+    let p = play_mission(&install, &out, "fed2", "a1_fed2.lua", 30 * 60 * 30);
+    let log = dump(&p);
+    // The first wave's seat is eliminated; ships built for it afterwards still move.
+    assert!(p.of("eliminated").next().is_some(), "no seat was eliminated:\n{log}");
+    // Only enemy units first seen after the tick of the elimination count, so the first wave
+    // cannot satisfy the check.
+    let eliminated_at = p.of("eliminated").next().map(|e| e.tick).unwrap();
+    let late: std::collections::HashSet<&str> = p
+        .of("plan")
+        .filter(|e| e.tick > eliminated_at)
+        .filter_map(|e| e.what.strip_prefix("first "))
+        .collect();
+    let acted = p.of("plan").filter_map(|e| e.what.strip_prefix("acted ")).filter(|id| late.contains(id)).count();
+    assert!(acted >= 3, "only {acted} enemy units first seen after the elimination acted:\n{log}");
+    assert!(p.outcome.is_some_and(|o| o.won), "not won:\n{log}");
+}
+
 /// The lose condition of the same mission: the Enterprise is lost.
 #[test]
 fn a1_federation_1_is_lost_when_the_enterprise_is_destroyed() {

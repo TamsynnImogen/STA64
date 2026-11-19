@@ -368,6 +368,21 @@ fn sync(
                     material.perceptual_roughness = 1.0;
                 }
             }
+            // The mod's specular and emissive maps for the drawn diffuse (RND-38): the faction suffix
+            // last, the base map as the fallback; none declared, none carried. Set on every rebuild
+            // so a part captured back to no faction does not keep the faction's maps.
+            if let Some(group) = group {
+                let known = catalogue.suffixes();
+                let mut loader = textures.loader();
+                match name_maps(&mut loader, group, suffix, &known) {
+                    Some(maps) => {
+                        commands.entity(entity).insert(maps);
+                    }
+                    None => {
+                        commands.entity(entity).remove::<super::mapped::HullMaps>();
+                    }
+                }
+            }
             if let Some(private) = private {
                 if let Some(mut target) = standard.get_mut(&private.handle) {
                     if flipbooks.contains(entity) {
@@ -401,6 +416,10 @@ fn sync(
             }
         }
     }
+}
+
+fn name_maps(loader: &mut super::textures::Loader, group: &sta_assets::model::Group, suffix: Option<&str>, known: &[&str]) -> Option<super::mapped::HullMaps> {
+    loader.hull_maps(group.maps.diffuse.as_deref()?, suffix, known)
 }
 
 #[cfg(test)]

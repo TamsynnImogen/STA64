@@ -137,7 +137,7 @@ impl ScriptedSource {
 
     fn view_at(&self, t: Tick) -> WorldView {
         let units = self.rails.iter().filter_map(|r| r.at(t)).collect();
-        WorldView { tick: t, digest: 0, units, players: Vec::new(), visibility: Vec::new(), perceived_owners: Vec::new(), appearance: Default::default(), attrs: Default::default(), colonies: Vec::new() }
+        WorldView { tick: t, units, ..WorldView::default() }
     }
 
     fn events_at(&self, t: Tick) -> Vec<SimEvent> {
@@ -216,6 +216,10 @@ struct LogFile {
     ticks: Vec<TickOutput>,
 }
 
+// View logs include the derived PD slots. The player save and replay schemas
+// do not store views, so their shared seam revision stays unchanged.
+const VIEW_LOG_REV: u32 = SEAM_REV + 1;
+
 /// A recorded run, replayed as a [`WorldSource`] that ignores commands.
 /// Past the end it repeats the last view with no events.
 #[derive(Debug, Clone)]
@@ -244,9 +248,9 @@ impl ViewLog {
         self.next = 0;
     }
 
-    /// `postcard`, tagged with [`SEAM_REV`].
+    /// `postcard`, tagged with the view log's schema revision.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let file = LogFile { rev: SEAM_REV, initial: self.initial.clone(), ticks: self.ticks.clone() };
+        let file = LogFile { rev: VIEW_LOG_REV, initial: self.initial.clone(), ticks: self.ticks.clone() };
         postcard::to_allocvec(&file).expect("views serialize")
     }
 
@@ -254,12 +258,12 @@ impl ViewLog {
     pub fn from_bytes(bytes: &[u8]) -> Result<ViewLog, String> {
         // Read the revision before interpreting the version-dependent view.
         let (rev, _): (u32, _) = postcard::take_from_bytes(bytes).map_err(|e| e.to_string())?;
-        if rev != SEAM_REV {
-            return Err(format!("view log is seam revision {rev}, this build reads {SEAM_REV}"));
+        if rev != VIEW_LOG_REV {
+            return Err(format!("view log is seam revision {rev}, this build reads {VIEW_LOG_REV}"));
         }
         let file: LogFile = postcard::from_bytes(bytes).map_err(|e| e.to_string())?;
-        if file.rev != SEAM_REV {
-            return Err(format!("view log is seam revision {}, this build reads {SEAM_REV}", file.rev));
+        if file.rev != VIEW_LOG_REV {
+            return Err(format!("view log is seam revision {}, this build reads {VIEW_LOG_REV}", file.rev));
         }
         Ok(ViewLog { initial: file.initial, ticks: file.ticks, next: 0 })
     }
@@ -438,7 +442,7 @@ mod tests {
 
     #[test]
     fn view_log_refuses_other_revisions() {
-        let file = LogFile { rev: SEAM_REV + 1, initial: Arc::default(), ticks: Vec::new() };
+        let file = LogFile { rev: VIEW_LOG_REV + 1, initial: Arc::default(), ticks: Vec::new() };
         let bytes = postcard::to_allocvec(&file).unwrap();
         assert!(ViewLog::from_bytes(&bytes).is_err());
     }
