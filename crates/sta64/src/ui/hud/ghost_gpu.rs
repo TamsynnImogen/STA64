@@ -158,6 +158,7 @@ fn installed_ghost_is_readable_without_lights() {
                 model_key: path.clone(),
                 unlit: false,
                 scale: 1.0,
+                diffuse_tint: false,
             };
             let stats = crate::render::model_scene::spawn(&mut ctx, &model, root);
             assert!(stats.meshes > 0 && stats.triangles > 0);

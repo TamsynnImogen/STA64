@@ -182,6 +182,7 @@ fn installed_reveal(preview: bool) {
                     model_key: path.clone(),
                     unlit: false,
                     scale: 1.0,
+                    diffuse_tint: false,
                 };
                 let stats = crate::render::model_scene::spawn_construction(
                     &mut ctx, &model, root, 24, progress,
