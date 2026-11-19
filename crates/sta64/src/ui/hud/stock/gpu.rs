@@ -165,20 +165,30 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         assert_eq!(unit.crew, Some([Fixed::from_int(150), Fixed::from_int(1500)]));
         assert_eq!(crew_tint, Some(Color::srgb(1.0, 0.0, 0.0)), "Classic starbase at10percent must be red");
     }
-    let mut expected_bar = Vec::new();
     let percent = |now: i128, max: i128| (max > 0).then(|| (now * 200 + max).div_euclid(max * 2).to_string());
     let whole = |value: Fixed| { let bits=value.to_bits(); if bits>0 { (bits/Fixed::ONE.to_bits()).max(1) } else { bits/Fixed::ONE.to_bits() } };
-    if let Some(unit) = source {
+    let expected_bar = {
         use super::infobar::InfoBarField::{Name,Hull,Shields,Crew,Energy};
-        let shield = unit.shields.iter().fold([0_i128;2], |[n,m],s| [n+i128::from(s[0].to_bits()),m+i128::from(s[1].to_bits())]);
-        expected_bar = vec![
-            (Name,"shipName",Some(if hover.is_some() {hud_feed.unit_label(unit)} else {hud_feed.name(unit)})),
-            (Hull,"hull",percent(i128::from(unit.hull[0].to_bits()),i128::from(unit.hull[1].to_bits()))),
-            (Shields,"shields",percent(shield[0],shield[1])),
-            (Crew,"crew_amt",unit.crew.map(|v| whole(v[0]).to_string())),
-            (Energy,"energy_amt",unit.energy.and_then(|v| percent(i128::from(v[0].to_bits()),i128::from(v[1].to_bits())))),
+        // The InfoBar is driven by hover. Selection alone fills the separate info panel.
+        let hovered = hover.map(|id| hud_feed.view.unit(id).expect("hovered fixture unit"));
+        let expected = hovered.map(|unit| {
+            let shield = unit.shields.iter().fold([0_i128;2], |[n,m],s| [n+i128::from(s[0].to_bits()),m+i128::from(s[1].to_bits())]);
+            [
+                Some(hud_feed.unit_label(unit)),
+                percent(i128::from(unit.hull[0].to_bits()),i128::from(unit.hull[1].to_bits())),
+                percent(shield[0],shield[1]),
+                unit.crew.map(|v| whole(v[0]).to_string()),
+                unit.energy.and_then(|v| percent(i128::from(v[0].to_bits()),i128::from(v[1].to_bits()))),
+            ]
+        });
+        let fields = [
+            (Name,"shipName"), (Hull,"hull"), (Shields,"shields"),
+            (Crew,"crew_amt"), (Energy,"energy_amt"),
         ];
-    }
+        fields.into_iter().zip(expected.unwrap_or_default())
+            .map(|((field, key), value)| (field, key, value))
+            .collect::<Vec<_>>()
+    };
     let bar_variant = super::layout::info_variant(&super::super::model::info(&hud_feed));
     let info = stock.pieces(match bar_variant {
         0 => "infoLowBackgroundPanel",
