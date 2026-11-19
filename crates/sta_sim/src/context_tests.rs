@@ -146,7 +146,7 @@ fn mining_and_tractor_beams_do_not_vote_attack() {
     assert_eq!(super::takers(Some(&db), &v, &attack), vec![c]);
 }
 
-/// A producer station that names a physics file with a positive speed (Armada I's shape) takes a
+/// A producer station whose definition carries a positive speed takes a
 /// right-click rally; a mobile construction rig does not (it keeps the move). Authored data.
 #[test]
 fn a_producer_with_a_physics_speed_rallies_and_a_rig_does_not() {

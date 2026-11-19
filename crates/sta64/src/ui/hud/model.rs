@@ -464,8 +464,8 @@ pub fn builder(feed: &HudFeed) -> Option<&UnitView> {
 /// Whether a builder of this def places what it builds on the map (a construction rig's ghost and
 /// site) instead of queueing it in place (a yard or starbase, with its rally point). The sim's own
 /// split: a producer station ([`EntityKind::producer_def`], by class label) queues, any other
-/// builder that is a craft deploys. Not a speed test: Armada I stations name a physics file with a
-/// positive `impulseSpeed` (read from data), so a speed above zero does not make a craft.
+/// builder that is a craft deploys. Not a speed test: a station's definition may carry a positive
+/// speed (for example through a `physicsFile`), and that does not make it a craft.
 pub fn deploys_at_site(def: &UnitDef) -> bool {
     !EntityKind::producer_def(def) && EntityKind::of_def(def) == EntityKind::Craft
 }
@@ -1127,8 +1127,8 @@ mod tests {
         assert!(matches!(cruiser.act, Act::Build { site: false, .. }));
     }
 
-    /// The fake content with every unit given the physics an Armada I station has: a positive
-    /// impulse speed (authored data, no stock values), plus an authored construction rig.
+    /// The fake content with the yard and station given a positive speed (authored data),
+    /// plus an authored construction rig.
     fn moving_stations_db() -> ContentDb {
         let fake = sta_content::fake::db();
         let mut db = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
