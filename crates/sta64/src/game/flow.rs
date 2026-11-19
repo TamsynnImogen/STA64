@@ -158,6 +158,7 @@ pub(crate) fn invalidate_mount_caches(
     surfaces: Option<ResMut<crate::render::surfaces::Surfaces>>,
     tables: Option<ResMut<crate::render::sprites::SpriteTables>>,
     bridge_art: Option<ResMut<crate::ui::bridge_scene::BridgeArt>>,
+    objectives_art: Option<ResMut<crate::ui::objectives_panel::ObjectivesArt>>,
 ) {
     fn reset<T: Resource<Mutability = bevy::ecs::component::Mutable> + Default>(r: Option<ResMut<T>>) {
         if let Some(mut r) = r {
@@ -173,6 +174,7 @@ pub(crate) fn invalidate_mount_caches(
     reset(silhouettes);
     reset(surfaces);
     reset(bridge_art);
+    reset(objectives_art);
     if let Some(mut t) = tables {
         t.0 = Arc::new(sta_assets::load_sprite_table(&vfs.0));
     }

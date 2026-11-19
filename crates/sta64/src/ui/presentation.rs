@@ -1051,13 +1051,16 @@ fn draw_panel(
     let gui = hud.as_deref().and_then(|h| h.gui.as_ref());
     let layout = ObjectivesLayout::from_cfg(gui);
     let want = panel_content(&view, &queue);
+    let mut art = art;
+    if want.is_none()
+        && let Some(a) = art.as_mut()
+    {
+        // The panel is closed: let go of the picture's textures (a failure is kept, so it is not logged again).
+        a.release();
+    }
     let art_node = match (want.is_some() && profile.as_deref().is_some_and(|p| p.is_stock()), art, images) {
-        (true, Some(mut art), Some(mut images)) => {
-            if mounted.as_ref().is_some_and(|m| m.is_changed()) {
-                art.reset(true);
-            }
-            art.get(gui, mounted.as_ref().map(|m| &m.0), &mut images).map(|a| (a, art.generation))
-        }
+        // The picture is dropped with the mount's other caches (`game::flow::invalidate_mount_caches`).
+        (true, Some(mut art), Some(mut images)) => art.get(gui, mounted.as_ref().map(|m| &m.0), &mut images).map(|a| (a, art.generation)),
         _ => None,
     };
     let fit = hud.as_deref().map_or_else(Default::default, |h| h.fit);
@@ -1093,6 +1096,10 @@ fn draw_panel(
         justify_content: justify,
         ..default()
     };
+    // The stock panel's text blocks are clipped to their rectangle and never reach the OK button's area (what the
+    // original does with text that does not fit is not established: interim, no scroll bar is drawn).
+    let ok_top = l.ok[1];
+    let clipped = |r: [f32; 4]| Node { height: pct((r[1] + r[3]).min(ok_top).max(r[1]) - r[1], ph), overflow: Overflow::clip(), ..at(r) };
     let text = |t: String, size: f32, colour: Color| sprite_text_styled(t, size, colour, SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent());
     let line = |t: String, colour: Color| (Node { margin: UiRect::bottom(Val::Px(theme.gap)), ..default() }, children![text(t, theme.text_size, colour)]);
     let summary_colour = l.summary_colour.unwrap_or(Color::srgb(0.8, 1.0, 1.0));
@@ -1133,7 +1140,7 @@ fn draw_panel(
             // (where it starts is not measured: interim).
             let area = stock.as_ref().and_then(|a| a.black).unwrap_or(l.text);
             let heading = fixed(s, "GUI_OD_OBJECTIVES", "OBJECTIVES:");
-            p.spawn(at(area)).with_children(|block| {
+            p.spawn(clipped(area)).with_children(|block| {
                 if !c.title.is_empty() {
                     block.spawn(line(c.title.clone(), text_colour));
                 }
@@ -1173,7 +1180,7 @@ fn draw_panel(
                 p.spawn((heading_box(l.summary), children![text(h, theme.heading_size, summary_colour)]));
             }
             if !c.body.is_empty() {
-                p.spawn((at(l.text), children![line(c.body.clone(), text_colour)]));
+                p.spawn((if stock_text { clipped(l.text) } else { at(l.text) }, children![line(c.body.clone(), text_colour)]));
             }
             if c.message.is_none() && !c.lines.is_empty() {
                 // Objective files may carry the heading themselves as the last line of the briefing text; then it is
@@ -1185,7 +1192,8 @@ fn draw_panel(
                     p.spawn((heading_box(l.header), children![text(heading, theme.heading_size, header_colour)]));
                 }
                 let below = [l.text[0], l.header[1] + l.header[3], l.text[2], 0.0];
-                p.spawn(at(below)).with_children(|list| {
+                let list_node = if stock_text { clipped([below[0], below[1], below[2], ok_top - below[1]]) } else { at(below) };
+                p.spawn(list_node).with_children(|list| {
                     for o in &c.lines {
                         let colour = complete_colour(o.state);
                         if stock_text {
@@ -2300,6 +2308,54 @@ mod tests {
             assert_eq!(blacks, 1, "the cfg's black area");
             let orange = app.world_mut().query::<&SpriteText>().iter(app.world()).all(|t| t.text == "OK" || t.text.starts_with('*') || t.color == Color::srgb(1.0, 0.5, 0.0) || t.color == Theme::default().good);
             assert!(orange, "the cfg's text colour");
+        }
+
+        #[test]
+        fn a_remount_with_no_panel_open_reloads_the_art_when_the_panel_next_opens() {
+            use crate::ui::objectives_panel::{ObjectivesArt, fixtures::{SPR, mount as mount_files}};
+            let (vfs, _t) = art_install();
+            let mut app = stock_app(CFG, 4.0 / 3.0, UiProfile::Armada2, Some(vfs));
+            app.add_systems(Update, crate::game::flow::invalidate_mount_caches.run_if(resource_exists_and_changed::<crate::viewer::Mounted>));
+            let alpha = |app: &mut App| {
+                let h = app.world_mut().query::<&ImageNode>().iter(app.world()).next().map(|n| n.image.clone()).expect("a piece");
+                app.world().resource::<Assets<Image>>().get(&h).unwrap().data.as_ref().unwrap()[3]
+            };
+            open(&mut app, "");
+            assert_eq!(alpha(&mut app), 128);
+            assert!(app.world().resource::<ObjectivesArt>().is_loaded());
+            // Closed: the textures are let go.
+            app.world_mut().resource_mut::<ObjectivesView>().visible = false;
+            app.update();
+            assert!(!app.world().resource::<ObjectivesArt>().is_loaded(), "released with the panel");
+            // A mod that replaces only the texture: another mount, no panel open.
+            let mut tga = crate::ui::objectives_panel::fixtures::tga();
+            tga[21] = 200;
+            let (other, _t2) = mount_files(&[("sprites/gui_global.spr", SPR.to_vec()), ("textures/rgb/tile.tga", tga)]);
+            app.insert_resource(crate::viewer::Mounted(other));
+            app.update();
+            app.world_mut().resource_mut::<ObjectivesView>().visible = true;
+            app.update();
+            assert_eq!(alpha(&mut app), 200, "the new mount's art, not the old one");
+        }
+
+        #[test]
+        fn text_is_clipped_and_cannot_reach_the_ok_button() {
+            for (cfg, profile) in [(CFG, UiProfile::Armada2), (CFG_SINGLE, UiProfile::Armada1)] {
+                let (vfs, _t) = art_install();
+                let mut app = stock_app(cfg, 4.0 / 3.0, profile, Some(vfs));
+                let goals: Vec<Objective> = (1..=60).map(|i| Objective { id: i, title: format!("A goal that is long enough to wrap onto a second line of the panel, number {i}"), description: String::new(), state: ObjectiveState::Active }).collect();
+                let mut v = app.world_mut().resource_mut::<ObjectivesView>();
+                v.fill(&goals, Some(&ObjectiveBriefing { file: "f".into(), title: "T".into(), text: "Paragraph.\n\n".repeat(60), notes: "HINT. ".repeat(80) }));
+                v.visible = true;
+                app.update();
+                // The OK button's top, as a fraction of the panel (250 or 260 of 300).
+                let ok_top = 260.0 / 300.0 * 100.0;
+                let clips: Vec<(f32, f32)> = app.world_mut().query::<&Node>().iter(app.world()).filter(|n| n.overflow.y == bevy::ui::OverflowAxis::Clip).filter_map(|n| match (n.top, n.height) { (Val::Percent(t), Val::Percent(h)) => Some((t, h)), _ => None }).collect();
+                assert!(!clips.is_empty(), "{cfg}: text blocks are clipped");
+                for (top, h) in clips {
+                    assert!(top + h <= ok_top + 1e-3, "{profile:?}: a text block ends at {} past the button at {ok_top}", top + h);
+                }
+            }
         }
 
         #[test]
