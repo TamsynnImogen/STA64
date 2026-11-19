@@ -76,7 +76,11 @@
 # last one (stamp file <check dir>/.agent-cargo-worktree, written under
 # check.lock), the wrapper deletes the workspace crates' fingerprints
 # (<check dir>/*/.fingerprint/<crate>-<hash>, also under a target triple):
-# those crates are rebuilt, the third-party dependencies stay cached.
+# those crates are rebuilt, the third-party dependencies stay cached. The
+# crates are the root manifest's [workspace] members; if none are found,
+# every fingerprint goes (fail closed). Without flock, checks are not
+# serialised and this protection does not hold. A run with STA64_LOCK_DIR set
+# but not STA64_CHECK_DIR is refused (the lock would not guard the directory).
 #
 # Without flock or renice (macOS, Windows shells, minimal containers) those
 # steps are skipped and cargo still runs with the env and jobs settings.
@@ -181,6 +185,11 @@ qdir=$lock_dir/queue/$class
 envs=(CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0)
 [ "$has_jobs" = 0 ] && envs+=(CARGO_BUILD_JOBS=2)
 check_dir=${STA64_CHECK_DIR:-$main_root/.claude/target-check}
+if [ "$class" = check ] && [ "$dry" = 0 ] && [ -n "${STA64_LOCK_DIR:-}" ] && [ -z "${STA64_CHECK_DIR:-}" ]; then
+  # A lock directory that is not the live one guards nothing about the live check directory.
+  echo "agent-cargo: STA64_LOCK_DIR is set but STA64_CHECK_DIR is not: the live check directory would be modified without its lock. Set both or neither." >&2
+  exit 2
+fi
 [ "$class" = check ] && envs+=("CARGO_TARGET_DIR=$check_dir")
 if [ "$class" = bench ]; then envs=(STA64_BENCH_LOCK=1); fi
 
@@ -355,24 +364,32 @@ if [ "$class" = check ]; then
   last=$(cat "$stamp" 2>/dev/null || true)
   if [ "$last" != "$here" ]; then
     mkdir -p "$check_dir" 2>/dev/null
-    names=$(for f in "$here"/Cargo.toml "$here"/crates/*/Cargo.toml; do
-      [ -f "$f" ] && sed -n 's/^name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -n 1
-    done)
+    # Names of the workspace members, from [workspace] members of the root manifest.
+    names=" "
+    for m in $(sed -n '/^[[:space:]]*members[[:space:]]*=/,/\]/p' "$here/Cargo.toml" 2>/dev/null | grep -o '"[^"]*"' | tr -d '"'); do
+      for f in "$here"/$m/Cargo.toml; do
+        [ -f "$f" ] && names="$names$(sed -n 's/^name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -n 1) "
+      done
+    done
+    [ -f "$here/Cargo.toml" ] && names="$names$(sed -n 's/^name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$here/Cargo.toml" | head -n 1) "
+    all=0; [ "$names" = " " ] || [ "$names" = "  " ] && all=1   # fail closed: no names found => invalidate everything
     n=0
     for fp in "$check_dir"/.fingerprint "$check_dir"/*/.fingerprint "$check_dir"/*/*/.fingerprint; do
       [ -d "$fp" ] || continue
-      for name in $names; do
-        for d in "$fp/$name"-* "$fp/${name//_/-}"-*; do
-          # exactly <crate>-<16 hex>: never a dependency whose name starts the same
-          case "${d##*/}" in "$name"-*|"${name//_/-}"-*) ;; *) continue ;; esac
-          h=${d##*-}
-          case "$h" in *[!0-9a-f]*|"") continue ;; esac
-          [ "${#h}" = 16 ] && [ -d "$d" ] && { rm -rf "$d"; n=$((n + 1)); }
-        done
+      for d in "$fp"/*; do
+        [ -d "$d" ] || continue
+        base=${d##*/}; h=${base##*-}; stem=${base%-*}
+        # exactly <full crate name>-<16 hex>
+        case "$h" in *[!0-9a-f]*|"") [ "$all" = 1 ] || continue ;; esac
+        if [ "$all" = 0 ]; then
+          [ "${#h}" = 16 ] || continue
+          case "$names" in *" $stem "*|*" ${stem//-/_} "*) ;; *) continue ;; esac
+        fi
+        rm -rf "$d"; n=$((n + 1))
       done
     done
     printf '%s\n' "$here" > "$stamp" 2>/dev/null
-    echo "agent-cargo: check dir last used from ${last:-nowhere}; invalidated $n workspace crate fingerprint(s), dependencies stay cached" >&2
+    echo "agent-cargo: check dir last used from ${last:-nowhere}; invalidated $n $([ "$all" = 1 ] && echo '(ALL, no workspace members found)' || echo workspace) crate fingerprint(s), dependencies stay cached" >&2
   fi
 fi
 

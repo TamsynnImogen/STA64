@@ -9,6 +9,8 @@ w=$here/agent-cargo
 fails=0
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/agent-cargo-test.XXXXXX") || exit 2
 trap 'rm -rf "$tmp"' EXIT
+# Never the live check directory: the wrapper invalidates fingerprints in it.
+export STA64_CHECK_DIR="$tmp/target-check"
 
 dry() { STA64_LOCK_DIR="$tmp/locks" STA64_SCCACHE=0 "$w" --dry-run "$@" 2>&1; }
 expect() { # name, haystack, needle
@@ -168,14 +170,18 @@ EOS
   #    different worktree than the stamp's deletes the workspace crates'
   #    fingerprints, never a dependency's, and keeps nothing from a same-worktree run.
   cd_=$tmp/cdir; rm -rf "$cd_"; mkdir -p "$cd_/debug/.fingerprint" "$cd_/x86_64-unknown-linux-gnu/debug/.fingerprint"
-  fpm=sta_core-0123456789abcdef; fpd=serde-0123456789abcdef; fpn=sta_core_extra-0123456789abcdef; fpt=sta_core-notahash
-  for r in debug x86_64-unknown-linux-gnu/debug; do for d in $fpm $fpd $fpn $fpt; do mkdir -p "$cd_/$r/.fingerprint/$d"; done; done
+  fpm=sta_core-0123456789abcdef; fpd=serde-0123456789abcdef; fpn=sta_core_extra-0123456789abcdef; fpt=sta_core-notahash; fph=sta_core-x-0123456789abcdef
+  for r in debug x86_64-unknown-linux-gnu/debug; do for d in $fpm $fpd $fpn $fpt $fph; do mkdir -p "$cd_/$r/.fingerprint/$d"; done; done
+  # 7b. Refusal: lock dir overridden, check dir not (the live one) => exit 2, nothing run.
+  o=$(env -u STA64_CHECK_DIR PATH="$tmp/bin:$PATH" STA64_SCCACHE=0 STA64_LOCK_DIR="$tmp/locks" "$w" --check check -p x 2>&1); rc=$?
+  [ "$rc" = 2 ] || { echo "FAIL cdir-refusal: exit $rc"; fails=$((fails+1)); }
+  expect cdir-refusal-msg "$o" "Set both or neither"; refute cdir-refusal-ran "$o" "ran-fake-cargo"
   chk() { PATH="$tmp/bin:$PATH" STA64_SCCACHE=0 STA64_LOCK_DIR="$tmp/locks" STA64_CHECK_DIR="$cd_" "$w" --check check -p x 2>&1; }
   o=$(chk)
   expect cdir-note "$o" "invalidated 2 workspace crate fingerprint(s)"
   for r in debug x86_64-unknown-linux-gnu/debug; do
     [ ! -e "$cd_/$r/.fingerprint/$fpm" ] || { echo "FAIL cdir-member-removed ($r)"; fails=$((fails+1)); }
-    for d in $fpd $fpn $fpt; do [ -d "$cd_/$r/.fingerprint/$d" ] || { echo "FAIL cdir-keeps $d ($r)"; fails=$((fails+1)); }; done
+    for d in $fpd $fpn $fpt $fph; do [ -d "$cd_/$r/.fingerprint/$d" ] || { echo "FAIL cdir-keeps $d ($r)"; fails=$((fails+1)); }; done
   done
   [ "$(cat "$cd_/.agent-cargo-worktree")" = "$(git rev-parse --show-toplevel)" ] || { echo "FAIL cdir-stamp"; fails=$((fails+1)); }
   mkdir "$cd_/debug/.fingerprint/$fpm"; o=$(chk)           # same worktree: untouched
@@ -184,6 +190,12 @@ EOS
   echo /elsewhere/other-worktree > "$cd_/.agent-cargo-worktree"; o=$(chk)   # another worktree used it last
   [ ! -e "$cd_/debug/.fingerprint/$fpm" ] || { echo "FAIL cdir-switch-removes"; fails=$((fails+1)); }
   expect cdir-from "$o" "last used from /elsewhere/other-worktree"
+  # empty member list (not a workspace root): fail closed, every fingerprint goes.
+  mkdir -p "$tmp/notws"; echo /elsewhere/x > "$cd_/.agent-cargo-worktree"
+  mkdir -p "$cd_/debug/.fingerprint/$fpm" "$cd_/debug/.fingerprint/$fpd"
+  ( cd "$tmp/notws" && git init -q . 2>/dev/null; PATH="$tmp/bin:$PATH" STA64_SCCACHE=0 STA64_LOCK_DIR="$tmp/locks" STA64_CHECK_DIR="$cd_" "$w" --check check -p x >"$tmp/o8" 2>&1 )
+  expect cdir-failclosed "$(cat "$tmp/o8")" "ALL, no workspace members found"
+  [ ! -e "$cd_/debug/.fingerprint/$fpd" ] && [ ! -e "$cd_/debug/.fingerprint/$fpm" ] || { echo "FAIL cdir-failclosed-removed"; fails=$((fails+1)); }
   # other classes never touch it:
   echo /elsewhere/other-worktree > "$cd_/.agent-cargo-worktree"; mkdir "$cd_/debug/.fingerprint/$fpm"
   PATH="$tmp/bin:$PATH" STA64_SCCACHE=0 STA64_LOCK_DIR="$tmp/locks" STA64_CHECK_DIR="$cd_" "$w" --heavy check -p x >/dev/null 2>&1

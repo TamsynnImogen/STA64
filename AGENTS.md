@@ -215,7 +215,8 @@ at once. Bevy makes `sta64` heavy.
   does not key a workspace crate's artefacts by worktree, so the wrapper
   remembers which worktree used that directory last and, when yours differs,
   deletes the workspace crates' fingerprints first (they are rebuilt; the
-  third-party dependencies stay cached). Never `touch` source files or run
+  third-party dependencies stay cached; without `flock` checks are not
+  serialised and this protection does not hold). Never `touch` source files or run
   the check against a stale directory to work around odd errors: if a check
   error does not match your source, report it.
 - One cargo command at a time per agent, in the foreground; no background
