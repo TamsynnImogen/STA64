@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use sta_content::{ContentDb, UnitDef};
+use sta_content::{ContentDb, Profile, UnitDef};
 use sta_core::{EntityId, Fixed, PlayerId, TeamId, Vec3};
 
 use crate::command::{Command, CommandKind, Edit, Order};
@@ -16,8 +16,13 @@ fn v(x: i32, z: i32) -> Vec3 {
 /// `fx_cruiser` costs 600 dilithium, 300 metal and 50 biomatter and takes 300 ticks to build;
 /// `fx_yard` takes decommissioned ships (`patch` adjusts any unit).
 fn db(patch: impl Fn(&mut UnitDef)) -> Arc<ContentDb> {
+    db_profile(Profile::Native, patch)
+}
+
+fn db_profile(profile: Profile, patch: impl Fn(&mut UnitDef)) -> Arc<ContentDb> {
     let fake = sta_content::fake::db();
-    let mut b = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+    let features = if profile == fake.profile() { fake.features().clone() } else { profile.features() };
+    let mut b = ContentDb::builder().profile(profile).features(features);
     for w in fake.weapons() {
         b = b.weapon(w.clone());
     }
@@ -183,4 +188,57 @@ fn fo_recycle_amounts_and_time_replace_the_fractions_and_build_share() {
     assert!(w.sim.unit(ship).is_none());
     let got: Vec<f64> = (0..4).map(|s| (w.stock(s) - before[s]).to_f32() as f64).collect();
     assert!(near(w.stock(0) - before[0], 273.0) && near(w.stock(1) - before[1], 100.0) && near(w.stock(2) - before[2], 0.0) && near(w.stock(3) - before[3], 9.0), "{got:?}");
+}
+
+/// A station's shield is down so the authored transport launches a real party;
+/// default content gives it a 30-tick flight. Both seats have different teams.
+fn boarded_yard(profile: Profile) -> (W, EntityId) {
+    let d = db_profile(profile, |u| if u.odf == "fx_yard" { u.shields.recharge = Fixed::ZERO });
+    let mut w = world(Arc::clone(&d), 600);
+    let carrier = w.sim.spawn_def(d.key("fx_cruiser").unwrap(), PlayerId(2), v(0, 100), (Fixed::ZERO, Fixed::ONE)).unwrap();
+    w.sim.units.get_mut(w.yard).unwrap().shields.now = [Fixed::ZERO; 4];
+    let transport = Command { player: PlayerId(2), seq: 1, kind: CommandKind::Order(Order::Transport { units: vec![carrier], target: w.yard, attack: false }) };
+    let events = w.sim.step(&[transport]).events;
+    assert!(!events.iter().any(|e| matches!(e, SimEvent::Rejected { seq: 1, .. })));
+    assert_eq!(w.sim.transports().incoming(w.yard), 1, "a party launched on the order tick");
+    let stop = Command { player: PlayerId(2), seq: 2, kind: CommandKind::Order(Order::Stop { units: vec![carrier] }) };
+    w.sim.step(&[stop]);
+    assert_eq!(w.sim.transports().incoming(w.yard), 1, "stopping the carrier keeps its launched party");
+    (w, carrier)
+}
+
+#[test]
+fn fo4_station_with_hostile_party_in_flight_refuses_decommission_until_arrival() {
+    let (mut w, carrier) = boarded_yard(Profile::Fo4);
+    let yard = w.yard;
+    assert!(w.sim.unit(carrier).is_some());
+    assert!(rejected(&w.order(vec![yard], None)));
+    assert!(w.sim.recycles.job_of(yard).is_none(), "refusal creates no recycle job");
+    w.run(30);
+    assert_eq!(w.sim.transports().incoming(yard), 0);
+    assert_eq!(w.sim.unit(yard).unwrap().owner, PlayerId(1), "the strong station survives boarding");
+    assert!(!rejected(&w.order(vec![yard], None)), "normal decommission follows arrival");
+    assert!(w.sim.recycles.job_of(yard).is_some());
+}
+
+#[test]
+fn classic_station_with_hostile_party_in_flight_still_decommissions() {
+    let (mut w, _) = boarded_yard(Profile::Sta2Classic);
+    let yard = w.yard;
+    assert!(!rejected(&w.order(vec![yard], None)));
+    assert!(w.sim.recycles.job_of(yard).is_some());
+}
+
+#[test]
+fn fo4_transport_order_blocked_by_shields_does_not_block_station_decommission() {
+    let d = db_profile(Profile::Fo4, |_| {});
+    let mut w = world(Arc::clone(&d), 600);
+    let carrier = w.sim.spawn_def(d.key("fx_cruiser").unwrap(), PlayerId(2), v(0, 100), (Fixed::ZERO, Fixed::ONE)).unwrap();
+    let transport = Command { player: PlayerId(2), seq: 1, kind: CommandKind::Order(Order::Transport { units: vec![carrier], target: w.yard, attack: false }) };
+    let events = w.sim.step(&[transport]).events;
+    assert!(!events.iter().any(|e| matches!(e, SimEvent::Rejected { seq: 1, .. })), "the order passed admission");
+    assert_eq!(w.sim.transports().incoming(w.yard), 0, "shields prevented a pulse");
+    let yard = w.yard;
+    assert!(!rejected(&w.order(vec![yard], None)));
+    assert!(w.sim.recycles.job_of(yard).is_some());
 }
