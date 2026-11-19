@@ -72,6 +72,7 @@ fn action_label(action: Action) -> String {
         Action::SelectType => tr("Select same type"),
         Action::Group(n) => trf("Group {0}", &[&(n + 1)]),
         Action::Stop => tr("Stop"),
+        Action::PointDefence => tr("Toggle point defence"),
         Action::Formation(sta_sim::movement::FORM_LINE) => tr("Line formation"),
         Action::Formation(sta_sim::movement::FORM_COLUMN) => tr("Column formation"),
         Action::Formation(_) => tr("Wedge formation"),

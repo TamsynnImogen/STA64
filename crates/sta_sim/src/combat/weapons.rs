@@ -593,6 +593,19 @@ impl Weapons {
         self.pd.is_on(id, i)
     }
 
+    pub(crate) fn active_point_defence(&self, db: &ContentDb, units: &Entities) -> Vec<(EntityId, u8)> {
+        let mut active = Vec::new();
+        for id in self.pd.active_entities() {
+            let Some(def) = units.get(id).and_then(|unit| db.unit(unit.def)) else { continue };
+            for (slot, (mount, kind, _)) in (0..=u8::MAX).zip(specials::specials_indexed(db, def)) {
+                if kind == specials::SpecialKind::PointDefence && self.pd.is_on(id, mount) {
+                    active.push((id, slot));
+                }
+            }
+        }
+        active
+    }
+
     /// Drop the attack orders of the listed units that `player` may order.
     pub(crate) fn stop_attack(&mut self, units: &Entities, player: PlayerId, ids: &[EntityId]) {
         for &id in ids {

@@ -34,6 +34,8 @@ pub enum Action {
     Group(u8),
     /// Stop the selected units.
     Stop,
+    /// Toggle the selected units' point defence (UI-31).
+    PointDefence,
     /// Set the selection's formation: one of the `movement::FORM_*` kinds.
     Formation(u8),
     /// Held with `GroupModifier` (Ctrl): write a playtest capture folder (TOOL-14).
@@ -55,7 +57,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 24] = [
+    pub const ALL: [Action; 25] = [
         Action::AddModifier,
         Action::GroupModifier,
         Action::CentreModifier,
@@ -70,6 +72,7 @@ impl Action {
         Action::Group(7),
         Action::Group(8),
         Action::Stop,
+        Action::PointDefence,
         Action::Formation(FORM_LINE),
         Action::Formation(FORM_COLUMN),
         Action::Formation(FORM_WEDGE),
@@ -90,6 +93,7 @@ impl Action {
             Action::SelectType => "select_type".into(),
             Action::Group(n) => format!("group{}", n + 1),
             Action::Stop => "stop".into(),
+            Action::PointDefence => "point_defence".into(),
             Action::Formation(FORM_LINE) => "formation_line".into(),
             Action::Formation(FORM_COLUMN) => "formation_column".into(),
             Action::Formation(_) => "formation_wedge".into(),
@@ -132,6 +136,7 @@ impl Default for KeyBindings {
         m.insert(Action::CentreModifier, vec![KeyCode::AltLeft, KeyCode::AltRight]);
         m.insert(Action::SelectType, vec![KeyCode::KeyT]);
         m.insert(Action::Stop, vec![KeyCode::KeyS, KeyCode::Space]);
+        m.insert(Action::PointDefence, vec![KeyCode::KeyP]);
         m.insert(Action::Formation(FORM_LINE), vec![KeyCode::F1]);
         m.insert(Action::Formation(FORM_COLUMN), vec![KeyCode::F2]);
         m.insert(Action::Formation(FORM_WEDGE), vec![KeyCode::F3]);
@@ -270,5 +275,14 @@ mod tests {
         assert_eq!(Action::from_name("reveal_modifier"), Some(Action::RevealModifier));
         assert_eq!(Action::from_name("reveal_fog"), Some(Action::RevealFog));
         assert_eq!(Action::from_name("reveal_shroud"), Some(Action::RevealShroud));
+    }
+
+    #[test]
+    fn point_defence_defaults_and_rebinding_survive_settings_text() {
+        let mut b = KeyBindings::default();
+        assert_eq!(b.keys(Action::PointDefence), [KeyCode::KeyP]);
+        assert_eq!(KeyBindings::from_text("stop = KeyS\n").keys(Action::PointDefence), [KeyCode::KeyP]);
+        b.rebind(Action::PointDefence, KeyCode::KeyO);
+        assert_eq!(KeyBindings::from_text(&b.to_text()).keys(Action::PointDefence), [KeyCode::KeyO]);
     }
 }

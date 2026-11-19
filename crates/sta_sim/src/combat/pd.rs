@@ -146,6 +146,11 @@ impl Pd {
         self.ready.get(id).and_then(|r| r.get(i)).is_some_and(|m| m.on)
     }
 
+    /// Entities with at least one active mount, in ascending id order.
+    pub(crate) fn active_entities(&self) -> impl Iterator<Item = EntityId> + '_ {
+        self.ready.iter().filter(|(_, mounts)| mounts.iter().any(|m| m.on)).map(|(id, _)| id)
+    }
+
     /// Switch the PD weapon at hardpoint `i` of `u` on or off (a toggle).
     /// True when the order took.
     pub(crate) fn toggle(
@@ -165,16 +170,8 @@ impl Pd {
             self.ready.insert(id, vec![Mount::default(); def.hardpoints.len()]);
         }
         let on = self.ready.get(id).is_some_and(|r| r[i].on);
-        if !on {
-            let have = specials.energy_of(id);
-            let ok = match have {
-                Some(e) if feats.pd_debt_timer => e >= w.energy_cost,
-                Some(e) => e > Fixed::ZERO || w.energy_cost == Fixed::ZERO,
-                None => w.energy_cost == Fixed::ZERO,
-            };
-            if !ok {
-                return false;
-            }
+        if !on && !crate::specials::point_defence_has_energy(db, w, specials.energy_of(id)) {
+            return false;
         }
         if let Some(r) = self.ready.get_mut(id) {
             r[i].on = !on;
