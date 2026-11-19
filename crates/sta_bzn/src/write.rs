@@ -507,6 +507,7 @@ mod tests {
             tech_tree_file: "borg.tt".into(),
             race: "borg".into(),
             start_count: 2,
+            team_colours: Vec::new(),
             start_locs: vec![
                 loc(1000.0, "empty", -1, ""),
                 loc(10.5, "player", 1, "race-unspecified"),

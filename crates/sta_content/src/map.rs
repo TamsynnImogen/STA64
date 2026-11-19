@@ -533,6 +533,7 @@ mod tests {
             starfield_odf: "stars_default.odf".into(),
             start_count: 2,
             start_locs: vec![loc(5000.0, 5000.0), loc(1000.0, 5000.0), loc(9000.0, 5000.0), loc(5000.0, 5000.0)],
+            team_colours: Vec::new(),
             objects: vec![
                 obj("fx_moon", 0, "moon", [10.0, 0.0, 20.0], [0.0, 0.0, 1.0]),
                 obj("fx_station", 2, "", [30.0, 5.0, 40.0], [3.0, 0.0, 4.0]),

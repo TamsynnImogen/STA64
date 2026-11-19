@@ -8,6 +8,8 @@ use std::sync::Arc;
 
 #[path = "view_tests.rs"]
 mod view_tests;
+#[path = "free_unit_tests.rs"]
+mod free_unit_tests;
 
 const P0: PlayerId = PlayerId(0);
 

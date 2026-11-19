@@ -129,6 +129,7 @@ fn front_end_to_match_and_back() {
     assert_eq!(plays(&log).last().map(String::as_str), Some("audio-test:200"), "the menu tune loops until the match starts, then the game playlist");
 
     // Leave: back at the front end on the main screen, the match cleaned up, the menu music again.
+    app.world_mut().insert_resource(crate::viewer::MapTeamColours(vec![[0, 0], [1, 1]]));
     app.world_mut().write_message(LeaveMatch);
     settle(&mut app, 4);
     assert_eq!(state(&app), AppState::FrontEnd);
@@ -136,6 +137,7 @@ fn front_end_to_match_and_back() {
     assert!(!app.world().contains_resource::<ActiveMatch>());
     assert!(!app.world().contains_resource::<SkirmishCfg>());
     assert!(!app.world().contains_resource::<LocalRace>());
+    assert!(!app.world().contains_resource::<crate::viewer::MapTeamColours>(), "the map's team colours end with the match");
     assert_eq!(app.world().resource::<MapSeat>().0, None);
     assert!(app.world().contains_resource::<MenuScene>(), "the scene is open again");
     assert!(app.world().resource::<SimLink>().player() != sta_sim::PlayerId(cfg.seat), "only the scene's link is left");
