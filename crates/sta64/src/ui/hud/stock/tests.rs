@@ -1374,7 +1374,7 @@ mod button_panel {
     }
 
     #[test]
-    fn more_shows_and_hides_the_second_row_and_menu_opens_the_in_game_menu() {
+    fn every_button_shows_at_the_start_and_more_hides_and_shows_the_second_row_and_menu_opens_the_in_game_menu() {
         let mut app = app_with_content_and_config(content(), placed_config(4.0 / 3.0), UiProfile::Armada2);
         app.update();
         let find = |app: &mut App, b: PanelButton| {
@@ -1382,28 +1382,30 @@ mod button_panel {
         };
         let display = |app: &App, e: Entity| app.world().get::<Node>(e).unwrap().display;
         let (menu, more, idle) = (find(&mut app, PanelButton::Menu), find(&mut app, PanelButton::More), find(&mut app, PanelButton::Idle));
-        assert_eq!(display(&app, menu), Display::None, "the second row starts hidden");
+        assert_eq!(display(&app, menu), Display::Flex, "interim: the menu button shows at the start");
         assert_eq!(display(&app, idle), Display::Flex);
-        click(app.world_mut(), more);
-        app.update();
-        app.update();
-        assert_eq!(display(&app, menu), Display::Flex);
-        // It survives a rebuild of the HUD (a layout change).
-        app.world_mut().resource_mut::<HudConfig>().aspect = 21.0 / 9.0;
-        app.update();
-        app.update();
-        let menu = find(&mut app, PanelButton::Menu);
-        assert_eq!(display(&app, menu), Display::Flex);
+        // The menu button, visible, opens the menu through the real press system.
         click(app.world_mut(), menu);
         app.update();
         let msgs = app.world().resource::<Messages<crate::ui::ingame_menu::OpenInGameMenu>>();
         assert!(msgs.iter_current_update_messages().count() + msgs.len() > 0, "the in-game menu opens");
+        click(app.world_mut(), more);
+        app.update();
+        app.update();
+        assert_eq!(display(&app, menu), Display::None);
+        assert_eq!(display(&app, idle), Display::Flex, "the first row stays");
+        // The hidden state survives a rebuild of the HUD (a layout change).
+        app.world_mut().resource_mut::<HudConfig>().aspect = 21.0 / 9.0;
+        app.update();
+        app.update();
+        let menu = find(&mut app, PanelButton::Menu);
+        assert_eq!(display(&app, menu), Display::None);
         let more = find(&mut app, PanelButton::More);
         click(app.world_mut(), more);
         app.update();
         app.update();
         let menu = find(&mut app, PanelButton::Menu);
-        assert_eq!(display(&app, menu), Display::None);
+        assert_eq!(display(&app, menu), Display::Flex);
     }
 
     #[test]
