@@ -366,7 +366,8 @@ pub struct BuildItem {
     /// The build cell it sits in, counted over the cells the page offers. Items follow each
     /// other, except that in a text tech tree an item that cannot be built (withheld or not
     /// listed) leaves its own cell empty and the others keep their positions (read from the
-    /// executable, static, for Armada II; assumed for Armada I: interim).
+    /// executable, static, Armada I and II; the cell position is the item's place in the builder's
+    /// list, which is assumed to be the position the executable uses: interim).
     pub slot: usize,
 }
 
@@ -1303,7 +1304,7 @@ mod tests {
     }
 
     /// A text tree that leaves an item out empties that item's cell; the other cells keep their
-    /// positions (interim for Armada I, see `BuildItem::slot`).
+    /// positions (see `BuildItem::slot`).
     #[test]
     fn a_text_tree_leaves_the_cell_of_an_unbuildable_item_empty() {
         let db = db_with(Some(TREE));

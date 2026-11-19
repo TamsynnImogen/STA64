@@ -229,7 +229,13 @@ pub(crate) struct MissionSide {
 
 /// The content with the tech tree the map names for its game: the mount's default tree when the map
 /// names none, names it already, or names one the mount lacks (logged).
-pub(crate) fn with_map_tech_tree(content: Arc<ContentDb>, vfs: &sta_vfs::Vfs, file: &str, map: &str) -> Arc<ContentDb> {
+///
+/// A lobby match (`in_net_match`) keeps the content it was given: its sim comes from the host's
+/// setup with the default tree, so the HUD must read the same.
+pub(crate) fn with_map_tech_tree(content: Arc<ContentDb>, vfs: &sta_vfs::Vfs, file: &str, map: &str, in_net_match: bool) -> Arc<ContentDb> {
+    if in_net_match {
+        return content;
+    }
     let (swapped, warnings) = content.with_map_tech_tree(vfs, file);
     for w in &warnings {
         warn!("map {map}: tech tree {}: {}", w.file, w.message);
@@ -884,8 +890,7 @@ fn rebuild(
     let mut net_match = net.take();
     // The game plays with the tech tree its map names (`techTreeFilename`); a tree the install lacks
     // leaves the default one, with a log line.
-    // A lobby match keeps the default tree (its sim comes from the host's setup; the HUD must agree).
-    let content = if net_match.is_some() { content } else { with_map_tech_tree(content, &vfs.0, &map.tech_tree_file, &name) };
+    let content = with_map_tech_tree(content, &vfs.0, &map.tech_tree_file, &name, net_match.is_some());
     let side = match net_match.take() {
         Some(nm) => {
             let own = MapDef::convert_bzn_named_in(&map, &name, &content, &vfs.0, &index).map;
@@ -1571,6 +1576,35 @@ mod a1_start_tests;
 
 #[cfg(test)]
 mod tests {
+    /// A map's tree is loaded for a local game; a lobby match keeps the default content (the
+    /// same `Arc`) so the HUD agrees with the host's sim. Content rebuilt from the same map and
+    /// name has the same digest (a save of such a game reloads against it).
+    #[test]
+    fn the_maps_tree_applies_to_a_local_game_and_not_to_a_lobby_match() {
+        use sta_content::{ContentDb, TechTree, UnitDef};
+        let dir = std::env::temp_dir().join(format!("sta64_maptree_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (rel, text) in [("Data/techtree/tech1.tt", "yard.odf 0\nship.odf 1 yard.odf\n"), ("Data/techtree/small.tt", "yard.odf 0\n"), ("Data/Mods/M/info.ini", "[mod]\n")] {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        }
+        let vfs = sta_vfs::Vfs::mount_install(&dir, Some("M")).unwrap();
+        let mut b = ContentDb::builder().tech_tree(TechTree::parse("tech1.tt", "yard.odf 0\nship.odf 1 yard.odf\n").0);
+        for n in ["yard", "ship"] {
+            b = b.unit(UnitDef::new(n, "craft"));
+        }
+        let default = Arc::new(b.build().unwrap());
+        let local = super::with_map_tech_tree(default.clone(), &vfs, "small.tt", "m", false);
+        let net = super::with_map_tech_tree(default.clone(), &vfs, "small.tt", "m", true);
+        let again = super::with_map_tech_tree(default.clone(), &vfs, "small.tt", "m", false);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(Arc::ptr_eq(&net, &default), "a lobby match keeps the default content");
+        assert!(!Arc::ptr_eq(&local, &default));
+        assert!(local.tech_tree().unwrap().entry("ship").is_none(), "the map's tree replaced the default");
+        assert_eq!(local.digest(), again.digest());
+    }
+
     use super::*;
 
     #[test]

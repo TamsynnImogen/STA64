@@ -458,8 +458,7 @@ impl TechTree {
 
     /// Whether this tree was read from a text (`.tt`) file. In a text tree an
     /// item the tree does not list is not buildable and its build cell stays
-    /// empty at its position (read from the executable, static, for Armada II;
-    /// assumed for Armada I: interim), so [`availability_for_builder`](TechTree::availability_for_builder)
+    /// empty at its position (read from the executable, static, Armada I and II), so [`availability_for_builder`](TechTree::availability_for_builder)
     /// lets no unlisted item through. The XML form keeps the inferred
     /// fallback (ADR 0004: mods ship either format in any profile, so the rule
     /// keys on the format, not the profile).

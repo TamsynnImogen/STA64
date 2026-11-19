@@ -279,7 +279,7 @@ mod tests {
 
     /// A map's own text tree restricts by leaving items out: the sim refuses an unlisted item
     /// even for a builder without flagged slots, for humans and AI seats alike; listed items are
-    /// unchanged. (Armada II executable, static; Armada I assumed: interim.)
+    /// unchanged. (Armada I and II executables, static.)
     #[test]
     fn a_text_tree_that_omits_an_item_refuses_it_for_every_seat() {
         let mut sim = yard_game("fx_yard 0\nfx_frigate 0\n", false, true);

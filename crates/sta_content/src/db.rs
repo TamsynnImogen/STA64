@@ -193,7 +193,7 @@ impl ContentDb {
     /// `none`, or the tree already in use gives `None` (keep this database). A
     /// tree the mount lacks, that fails to load or that has no entries gives
     /// `None` and a warning that the current tree stays (the caller logs it).
-    /// Read from the executable, static (Armada II; Armada I partly): the
+    /// Read from the executable, static (Armada I and II): the
     /// game plays with the tree its map names.
     pub fn with_map_tech_tree(&self, vfs: &sta_vfs::Vfs, name: &str) -> (Option<ContentDb>, Vec<Warning>) {
         let name = name.trim();
