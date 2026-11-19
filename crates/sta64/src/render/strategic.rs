@@ -558,7 +558,7 @@ fn update(
         let root_scale = gt.to_scale_rotation_translation().0.abs().max_element();
         let projected_radius = if depth > 1.0 { s.radius * root_scale * focal / depth } else { f32::INFINITY };
         let distance = CullParams::distance(eye, pos);
-        stats.count(cull, distance);
+        stats.count(hide, distance);
         let previous = if s.symbol { Representation::Symbol } else { Representation::Model };
         let symbol = lod_switch::decide(*mode, previous, projected_radius, distance, cull, switch.of(Class::of(s.shape))) == Representation::Symbol;
         let gone = cutscene && hide.cineractive_hides(distance, depth, s.radius * root_scale);
