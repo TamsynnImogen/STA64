@@ -294,3 +294,103 @@ fn selection_gauges_render_in_screen_pixels_on_hardware() {
         "gauge widths did not shrink with distance: {widths:?}"
     );
 }
+
+/// RND-37: the Armada I marker in a windowless frame, against the same scene under another UI
+/// profile. Set `STA64_GPU_TESTS=1 STA64_TEST_A1_INSTALL=<Armada I root>`; `STA64_OVERLAY_CAPTURE_DIR`
+/// keeps the frames locally (they show game art: never commit them).
+#[test]
+fn installed_armada1_marker_renders_under_the_unit_on_hardware() {
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_TEST_A1_INSTALL=<Armada I root>");
+        return;
+    }
+    let Some(install) = std::env::var_os("STA64_TEST_A1_INSTALL") else {
+        eprintln!("SKIP: set STA64_TEST_A1_INSTALL=<Armada I root>");
+        return;
+    };
+    let mut frames = Vec::new();
+    for (label, profile) in [("marker", crate::ui::profile::UiProfile::Armada1), ("plain", crate::ui::profile::UiProfile::Armada2)] {
+        let unit = UnitView {
+            id: UNIT,
+            def: ContentKey::NONE,
+            owner: PlayerId(1),
+            pos: sta_sim::Vec3::ZERO,
+            heading: (Fixed::ONE, Fixed::ZERO),
+            speed: Fixed::ZERO,
+            hull: [Fixed::from_int(1), Fixed::from_int(1)],
+            shields: [[Fixed::ZERO, Fixed::ZERO]; 4],
+            crew: None,
+            energy: None,
+            autonomy: None,
+            flags: Default::default(),
+            progress: None,
+        };
+        let view = Arc::new(WorldView { units: vec![unit], ..default() });
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), None).expect("installed A1 VFS");
+        let mut app = App::new();
+        app.add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
+                .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
+                .disable::<bevy::winit::WinitPlugin>()
+                .disable::<bevy::log::LogPlugin>(),
+        );
+        configure_sets(&mut app);
+        app.insert_resource(ClearColor(Color::BLACK))
+            .insert_resource(profile)
+            .insert_resource(crate::viewer::Mounted(vfs))
+            .init_resource::<SimEntities>()
+            .insert_resource(Selection(vec![UNIT]))
+            .insert_resource(SimLink::new(Box::new(FrozenWorldSource(view)), Box::new(LocalRouter::new()), PlayerId(1)))
+            .add_plugins(OverlaysPlugin);
+        let mut image = Image::new_target_texture(SIZE.x, SIZE.y, bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb, None);
+        image.asset_usage = RenderAssetUsages::RENDER_WORLD;
+        let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+        app.world_mut().spawn((
+            Camera3d::default(),
+            Camera::default(),
+            RenderTarget::from(target.clone()),
+            Msaa::Off,
+            Transform::from_xyz(0.0, 90.0, 150.0).looking_at(Vec3::new(0.0, -10.0, 0.0), Vec3::Y),
+        ));
+        let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cuboid::new(20.0, 8.0, 40.0));
+        let material = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial { base_color: Color::srgb(0.5, 0.5, 0.55), unlit: true, ..default() });
+        let root = app
+            .world_mut()
+            .spawn((Transform::from_rotation(Quat::from_rotation_y(0.6)), Visibility::Inherited, SelectRadius(24.0), HullShare(1.0), TeamColour(Color::srgb(1.0, 1.0, 0.0))))
+            .with_children(|c| {
+                c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::default()));
+            })
+            .id();
+        app.world_mut().resource_mut::<SimEntities>().0.insert(UNIT, root);
+        app.finish();
+        app.cleanup();
+        for _ in 0..24 {
+            app.update();
+        }
+        let rgba = capture(&mut app, &target, label);
+        frames.push(rgba);
+    }
+    // Below the unit, where the marker lies: neutral grey light in the marker frame, none in the other.
+    let lit = |img: &image::RgbaImage| {
+        let mut n = 0;
+        let mut neutral = 0;
+        for y in 380..720 {
+            for x in 300..980 {
+                let p = img.get_pixel(x, y);
+                if p[0] > 40 {
+                    n += 1;
+                    if p[0].abs_diff(p[1]) < 14 && p[1].abs_diff(p[2]) < 14 {
+                        neutral += 1;
+                    }
+                }
+            }
+        }
+        (n, neutral)
+    };
+    let (marker, plain) = (lit(&frames[0]), lit(&frames[1]));
+    eprintln!("marker frame lit/neutral {marker:?}, plain frame {plain:?}");
+    assert!(marker.0 > 800, "the marker should light many pixels below the unit: {marker:?}");
+    assert!(marker.1 * 10 > marker.0 * 9, "the untinted marker is neutral grey: {marker:?}");
+    assert!(plain.1 * 3 < marker.1, "under the Armada II profile there is no grey marker, only the team ring: {plain:?} against {marker:?}");
+}
