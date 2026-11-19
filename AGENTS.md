@@ -211,7 +211,13 @@ at once. Bevy makes `sta64` heavy.
   `renice -n 19 -p $$ >/dev/null && cargo test -p sta_sim --jobs 2`.
   (`nice`/`ionice` prefixes are refused by Claude Code's worktree guard;
   `renice` on the shell is not.) The workspace check shares one target
-  directory, `<main checkout>/.claude/target-check`, across worktrees.
+  directory, `<main checkout>/.claude/target-check`, across worktrees. Cargo
+  does not key a workspace crate's artefacts by worktree, so the wrapper
+  remembers which worktree used that directory last and, when yours differs,
+  deletes the workspace crates' fingerprints first (they are rebuilt; the
+  third-party dependencies stay cached). Never `touch` source files or run
+  the check against a stale directory to work around odd errors: if a check
+  error does not match your source, report it.
 - One cargo command at a time per agent, in the foreground; no background
   builds, no `pkill`.
 - Scope to the packages you changed (`-p`). Prefer `cargo check` while

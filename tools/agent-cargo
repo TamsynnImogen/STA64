@@ -21,6 +21,8 @@
 #               tools/agent-cargo --bench ./a2test run hud
 #             While any holder exists, --heavy builds get no second slot.
 #   --check   lock check.lock and CARGO_TARGET_DIR=<main checkout>/.claude/target-check
+#             (see "Check directory" below for why switching worktree costs a
+#             rebuild of the workspace crates, never of the dependencies)
 #   (none)    inferred: `-p sta64` or any crate depending on bevy, or no
 #             `-p` at all => heavy; `check --workspace` => check; else light
 #
@@ -37,6 +39,8 @@
 #                     deleted (default 1800)
 #   STA64_QUEUE_KEY   ticket identity (default: hash of the git top level, so
 #                     one worktree is one waiter)
+#   STA64_CHECK_DIR   the shared check target directory (default
+#                     <main checkout>/.claude/target-check)
 #   STA64_SCCACHE=0   do not use sccache even if it is on PATH
 #   SCCACHE_DIR       default ~/.cache/sta64-sccache
 #   SCCACHE_CACHE_SIZE default 20G
@@ -59,6 +63,20 @@
 # wrappers that have it; the mutual exclusion is still the same flock files,
 # so an older wrapper that flocks directly still works (it just jumps the line).
 # --bench is not queued.
+#
+# Check directory (--check): the one target directory is shared by every
+# worktree, and cargo does NOT key a workspace crate's artefacts by the
+# worktree: the fingerprint hash uses the crate's path relative to the
+# workspace root, and freshness is decided by source mtime against the
+# artefact's. So worktree B reuses what worktree A built for `sta_bzn` when
+# B's file is older than A's artefact (a checkout older than the other
+# agent's last build): a real error then passes unseen, or a crate that did
+# change is rebuilt against a stale dependency and fails with errors that
+# are not in its source. Before a check run in a different worktree than the
+# last one (stamp file <check dir>/.agent-cargo-worktree, written under
+# check.lock), the wrapper deletes the workspace crates' fingerprints
+# (<check dir>/*/.fingerprint/<crate>-<hash>, also under a target triple):
+# those crates are rebuilt, the third-party dependencies stay cached.
 #
 # Without flock or renice (macOS, Windows shells, minimal containers) those
 # steps are skipped and cargo still runs with the env and jobs settings.
@@ -162,7 +180,8 @@ qdir=$lock_dir/queue/$class
 # they would reach the test binary); an explicit -j/--jobs wins.
 envs=(CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0)
 [ "$has_jobs" = 0 ] && envs+=(CARGO_BUILD_JOBS=2)
-[ "$class" = check ] && envs+=("CARGO_TARGET_DIR=$main_root/.claude/target-check")
+check_dir=${STA64_CHECK_DIR:-$main_root/.claude/target-check}
+[ "$class" = check ] && envs+=("CARGO_TARGET_DIR=$check_dir")
 if [ "$class" = bench ]; then envs=(STA64_BENCH_LOCK=1); fi
 
 sccache_on=0
@@ -198,6 +217,7 @@ if [ "$dry" = 1 ]; then
     echo "queue:  $qdir, ticket <first-seen>-$qkey (kept across LOCK-BUSY retries), active ${q_active}s, stale ${q_stale}s"
   else echo "queue:  off"; fi
   [ "$have_renice" = 1 ] && echo "nice:   renice -n 19" || echo "nice:   none (renice not found)"
+  [ "$class" = check ] && echo "stamp:  $check_dir/.agent-cargo-worktree = $here (differs: workspace crates' fingerprints are deleted first)"
   echo "sccache: $([ "$sccache_on" = 1 ] && echo on || echo off)"
   for e in "${envs[@]}"; do echo "env:    $e"; done
   if [ "$class" = bench ]; then printf 'cmd:   '; else printf 'cmd:    cargo'; fi
@@ -324,6 +344,35 @@ elif [ "$have_flock" = 1 ]; then
   else
     exec 9>"$lock_dir/$class.lock" || { echo "agent-cargo: cannot open lock in $lock_dir" >&2; exit 2; }
     flock -w "$wait_s" 9 || { echo LOCK-BUSY; exit 75; }
+  fi
+fi
+
+# Check class: a different worktree than the last run in the shared directory
+# makes the workspace crates' artefacts untrustworthy (see "Check directory").
+# Inside check.lock, so no other check run sees a half-cleaned directory.
+if [ "$class" = check ]; then
+  stamp=$check_dir/.agent-cargo-worktree
+  last=$(cat "$stamp" 2>/dev/null || true)
+  if [ "$last" != "$here" ]; then
+    mkdir -p "$check_dir" 2>/dev/null
+    names=$(for f in "$here"/Cargo.toml "$here"/crates/*/Cargo.toml; do
+      [ -f "$f" ] && sed -n 's/^name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -n 1
+    done)
+    n=0
+    for fp in "$check_dir"/.fingerprint "$check_dir"/*/.fingerprint "$check_dir"/*/*/.fingerprint; do
+      [ -d "$fp" ] || continue
+      for name in $names; do
+        for d in "$fp/$name"-* "$fp/${name//_/-}"-*; do
+          # exactly <crate>-<16 hex>: never a dependency whose name starts the same
+          case "${d##*/}" in "$name"-*|"${name//_/-}"-*) ;; *) continue ;; esac
+          h=${d##*-}
+          case "$h" in *[!0-9a-f]*|"") continue ;; esac
+          [ "${#h}" = 16 ] && [ -d "$d" ] && { rm -rf "$d"; n=$((n + 1)); }
+        done
+      done
+    done
+    printf '%s\n' "$here" > "$stamp" 2>/dev/null
+    echo "agent-cargo: check dir last used from ${last:-nowhere}; invalidated $n workspace crate fingerprint(s), dependencies stay cached" >&2
   fi
 fi
 
