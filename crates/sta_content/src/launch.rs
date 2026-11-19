@@ -121,6 +121,28 @@ pub fn attach_radii<'a>(vfs: &sta_vfs::Vfs, units: impl Iterator<Item = &'a mut 
 
 /// The launch point of `def` from its model (`None`: model not readable).
 pub fn launch_point(def: &UnitDef, sod: Option<&Sod>) -> LaunchPoint {
+    let name = def.raw.str("buildHardpoint").map(str::trim).filter(|s| !s.is_empty());
+    point_at(def, sod, name)
+}
+
+/// Node a mining station's free unit appears at when `dockingHardpoint` is absent.
+pub const DEFAULT_DOCK_NODE: &str = "dock";
+
+/// Where a mining station's free unit appears: the model node named by
+/// `dockingHardpoint` (default [`DEFAULT_DOCK_NODE`]), position and +z axis.
+/// A node the model lacks (or an unreadable model) gives STA64's own
+/// fallback, not the original's: the station's centre facing ahead, which
+/// the spawn places [`DOCK_FALLBACK_AHEAD`] units in front of the centre
+/// (interim, not measured).
+pub fn dock_point(def: &UnitDef, sod: Option<&Sod>) -> LaunchPoint {
+    let name = def.raw.str("dockingHardpoint").map(str::trim).filter(|s| !s.is_empty()).unwrap_or(DEFAULT_DOCK_NODE);
+    point_at(def, sod, Some(name))
+}
+
+/// Interim fallback distance ahead of the station for a missing dock node.
+pub const DOCK_FALLBACK_AHEAD: i32 = 100;
+
+fn point_at(def: &UnitDef, sod: Option<&Sod>, name: Option<&str>) -> LaunchPoint {
     let scale = def.scale.to_f32();
     let scale = if scale > 0.0 { scale } else { 1.0 };
     let Some(sod) = sod else {
@@ -137,11 +159,6 @@ pub fn launch_point(def: &UnitDef, sod: Option<&Sod>) -> LaunchPoint {
     } else {
         DEFAULT_CLEAR as f32
     };
-    let name = def
-        .raw
-        .str("buildHardpoint")
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
     let found = name.and_then(|n| {
         if n.eq_ignore_ascii_case("root") {
             return Some((n, [0.0, 0.0, 0.0], [0.0, 0.0, 1.0]));
@@ -178,7 +195,7 @@ pub fn launch_point(def: &UnitDef, sod: Option<&Sod>) -> LaunchPoint {
 pub fn attach<'a>(vfs: &sta_vfs::Vfs, units: impl Iterator<Item = &'a mut UnitDef>) {
     let mut sods: BTreeMap<String, Option<Sod>> = BTreeMap::new();
     for u in units {
-        if u.build.list.is_empty() {
+        if u.build.list.is_empty() && u.free_unit.is_none() {
             continue;
         }
         let key = u
@@ -190,6 +207,11 @@ pub fn attach<'a>(vfs: &sta_vfs::Vfs, units: impl Iterator<Item = &'a mut UnitDe
             ModelSod::Sod(s) => Some(*s),
             _ => None,
         });
-        u.launch = Some(launch_point(u, sod.as_ref()));
+        if !u.build.list.is_empty() {
+            u.launch = Some(launch_point(u, sod.as_ref()));
+        }
+        if u.free_unit.is_some() {
+            u.dock = Some(dock_point(u, sod.as_ref()));
+        }
     }
 }

@@ -38,6 +38,8 @@
 //!   in the player's officer census with the live actors. Over the player's
 //!   limit an order is refused (`pay_on_queue`), or its head waits unstarted.
 //!   Cancel and loss of the builder release it.
+//! - A mining station finished by a rig whose def names `freighterName` gets that unit
+//!   free, at its dock node ([`free_unit`]).
 //! - Not yet: cooperative multi-yard builds on one item,
 //!   `Features::construction_rigs` gating.
 //! - A rig's site must pass [`site::check_site`] (inside the map, clear of other
@@ -56,6 +58,7 @@ use crate::event::SimEvent;
 use crate::world::{Entities, Entity, EntityKind, Fnv, Table};
 
 pub mod afford;
+mod free_unit;
 #[cfg(test)]
 mod afford_tests;
 mod launch;
@@ -492,6 +495,7 @@ impl Production {
                     units.get_mut(id).expect("completed weld").target = target;
                 }
                 events.push(SimEvent::Built { builder, id });
+                free_unit::spawn(units, db, id, confinement, events);
             } else {
                 s.progress = Some(Fixed::from_int(done as i32) / Fixed::from_int(ticks as i32));
             }
