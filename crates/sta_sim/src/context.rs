@@ -110,7 +110,10 @@ fn is_enemy(view: &WorldView, me: PlayerId, owner: PlayerId) -> bool {
 }
 
 /// The whole selected group must consist of finished, own, stationary
-/// builders. Mobile construction rigs keep their right-click Move behavior.
+/// builders: producer stations (by class label, whatever physics file they
+/// name: Armada I stations carry a positive `impulseSpeed`, read from data)
+/// and builders that cannot move. Mobile construction rigs keep their
+/// right-click Move behavior.
 pub fn rally_builders(db: Option<&ContentDb>, view: &WorldView, me: PlayerId, own: &[EntityId]) -> bool {
     let Some(db) = db else { return false };
     !own.is_empty() && own.iter().all(|&id| {
@@ -120,9 +123,9 @@ pub fn rally_builders(db: Option<&ContentDb>, view: &WorldView, me: PlayerId, ow
                 && u.progress.is_none_or(|p| p >= Fixed::ONE)
                 && db.unit(u.def).is_some_and(|d| {
                     !d.build.list.is_empty()
-                        && d.movement.max_speed == Fixed::ZERO
-                        && (matches!(EntityKind::of_def(d), EntityKind::Station | EntityKind::Craft)
-                            || EntityKind::producer_def(d))
+                        && (EntityKind::producer_def(d)
+                            || (d.movement.max_speed == Fixed::ZERO
+                                && matches!(EntityKind::of_def(d), EntityKind::Station | EntityKind::Craft)))
                 })
         })
     })

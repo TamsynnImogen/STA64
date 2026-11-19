@@ -1176,32 +1176,31 @@ mod tests {
         assert!(!commands::shared(&f).rally);
     }
 
-    /// Install-gated, read from data: on every installed lineage, a builder places its build list
-    /// on the map exactly when it is not a producer station, and every stock starbase or shipyard
-    /// that builds queues. Skips without the installs.
+    /// Install-gated (`STA64_TEST_INSTALL`, optional `STA64_TEST_MOD`; skipped when unset), read
+    /// from data: whatever the install, a builder whose list holds only craft queues in place and a
+    /// builder whose list holds only stations places them on the map, judged by the listed items'
+    /// kinds, not by class labels or speed.
     #[test]
-    fn installed_builders_split_by_class_not_by_speed() {
-        let heroic = std::path::Path::new("/home/cedric/Games/Heroic");
-        let mut checked = (0, 0);
-        for dir in ["Star Trek Armada", "Star Trek Armada II (Stock)", "Star Trek Armada II Fleet Operations", "Star Trek Armada II Fleet Operations Roots"] {
-            let root = heroic.join(dir);
-            let Ok(vfs) = sta_vfs::Vfs::mount_install(&root, None) else { continue };
-            let (index, _) = sta_content::OdfIndex::build(&vfs);
-            let Ok((db, _)) = ContentDb::load(&vfs, &index) else { continue };
-            for u in db.units().filter(|u| !u.build.list.is_empty()) {
-                let producer = matches!(u.class.0.as_str(), "starbase" | "shipyard" | "buildyard" | "research" | "mining" | "p_mining" | "sensor" | "trading_station");
-                let rig = u.class.0 == "constructionrig";
-                if producer {
-                    assert!(!deploys_at_site(u), "{dir}: {} queues in place", u.odf);
-                    checked.0 += 1;
-                }
-                if rig {
-                    assert!(deploys_at_site(u), "{dir}: {} places its stations", u.odf);
-                    checked.1 += 1;
-                }
+    fn installed_builders_split_by_what_they_build() {
+        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
+        let active = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
+        let Ok(vfs) = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), active.as_deref()) else { return };
+        let (index, _) = sta_content::OdfIndex::build(&vfs);
+        let Ok((db, _)) = ContentDb::load(&vfs, &index) else { return };
+        let (mut queues, mut places) = (0, 0);
+        for u in db.units().filter(|u| !u.build.list.is_empty()) {
+            let kinds: Vec<EntityKind> = u.build.list.iter().filter_map(|r| db.unit(r.key)).map(EntityKind::of_def).collect();
+            let crafts = kinds.iter().any(|k| *k == EntityKind::Craft);
+            let stations = kinds.iter().any(|k| *k == EntityKind::Station);
+            if crafts && !stations {
+                assert!(!deploys_at_site(u), "{}: builds only craft, must queue in place", u.odf);
+                queues += 1;
+            } else if stations && !crafts && EntityKind::of_def(u) == EntityKind::Craft {
+                assert!(deploys_at_site(u), "{}: a craft that builds only stations places them", u.odf);
+                places += 1;
             }
         }
-        eprintln!("checked {} producers and {} rigs", checked.0, checked.1);
+        assert!(queues > 0 && places > 0, "the install has queueing builders ({queues}) and placing builders ({places})");
     }
 
     #[test]
