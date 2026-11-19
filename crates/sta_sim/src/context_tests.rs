@@ -145,3 +145,43 @@ fn mining_and_tractor_beams_do_not_vote_attack() {
     assert_eq!((sim.weapons.attack_of(m), sim.weapons.attack_of(r), sim.weapons.attack_of(c)), (None, None, Some(e)));
     assert_eq!(super::takers(Some(&db), &v, &attack), vec![c]);
 }
+
+/// A producer station whose definition carries a positive speed takes a
+/// right-click rally; a mobile construction rig does not (it keeps the move). Authored data.
+#[test]
+fn a_producer_with_a_physics_speed_rallies_and_a_rig_does_not() {
+    let fake = sta_content::fake::db();
+    let mut b = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+    for w in fake.weapons() { b = b.weapon(w.clone()); }
+    for u in fake.units() {
+        let mut u = u.clone();
+        if u.odf == "fx_yard" { u.movement.max_speed = Fixed::from_int(20); }
+        b = b.unit(u);
+    }
+    let mut rig = sta_content::UnitDef::new("fx_rig", "constructionrig");
+    rig.movement.max_speed = Fixed::from_int(20);
+    rig.build.list = vec![sta_content::DefRef::new("fx_station")];
+    let db = Arc::new(b.unit(rig).build().unwrap());
+    let setup = GameSetup {
+        seed: 5,
+        map: Arc::new(MapDef::empty()),
+        content: db.clone(),
+        players: [0, 1]
+            .map(|id| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control: Control::Idle })
+            .to_vec(),
+        options: GameOptions::default(),
+    };
+    let mut sim = Sim::from_setup(&setup);
+    let h = (Fixed::ZERO, Fixed::ONE);
+    let mut spawn = |odf: &str, owner: u8, x: f32| sim.spawn_def(db.key(odf).unwrap(), PlayerId(owner), Vec3::from_f32([x, 0.0, 1000.0]), h).unwrap();
+    let yard = spawn("fx_yard", 0, 900.0);
+    let rig = spawn("fx_rig", 0, 1100.0);
+    let moon = spawn("fx_moon", 255, 1500.0);
+    let v = sim.view();
+    assert_eq!(
+        context_order(Some(&db), &v, PlayerId(0), &[yard], moon),
+        Some(Order::Rally { builders: vec![yard], at: crate::command::Target::Entity(moon) })
+    );
+    assert!(!super::rally_builders(Some(&db), &v, PlayerId(0), &[rig]));
+    assert!(!super::rally_builders(Some(&db), &v, PlayerId(0), &[yard, rig]));
+}
