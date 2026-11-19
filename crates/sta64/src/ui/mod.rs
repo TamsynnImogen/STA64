@@ -3,6 +3,9 @@
 
 pub mod presentation;
 pub mod bridge_scene;
+pub mod objectives_panel;
+#[cfg(test)]
+mod objectives_panel_gpu;
 pub mod profile;
 pub mod cursor;
 pub mod gui_sprites;
