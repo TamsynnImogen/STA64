@@ -10,7 +10,7 @@
 //!   despawns the roots of ids that went (with all descendants), and
 //!   updates the components that change. [`attach_models`] builds the model
 //!   under a root once the game's files are mounted; [`show_damage`] shows
-//!   the model's damage-state nodes by hull share.
+//!   the model's damage-state nodes (system nodes by offline systems).
 //! - Selection rings, bars and target lines are `render/overlays.rs`.
 //!
 //! The sim works in the map's left-handed space; the renderer mirrors Z.
@@ -86,6 +86,11 @@ pub struct MarkColour(pub Color);
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct HullShare(pub f32);
 
+/// Systems of the unit that are offline, as [`systems_off_bits`]: what the model's
+/// system nodes follow. A root without it has none offline.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SystemsOff(pub u8);
+
 /// The unit is cloaked. RND-11 styles it; this only marks it.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct Cloaked;
@@ -102,20 +107,50 @@ pub struct UnitOwner(pub PlayerId);
 #[derive(Component)]
 pub struct FromView;
 
-/// Hull share below which the damage-state node `name` shows, or `None` for
-/// any other node. Breaches show first, then fires and venting (`crew`,
-/// `life`), then the failing systems.
-pub fn damage_threshold(name: &str) -> Option<f32> {
-    Some(match name.to_ascii_lowercase().as_str() {
-        "damage" => 0.75,
-        "crew" | "life" => 0.5,
-        "shields" => 0.4,
-        "engines" => 0.3,
-        "sensors" => 0.25,
-        "target" => 0.2,
-        _ => return None,
-    })
+/// The system a model's system node stands for, as an index into the view's system
+/// order (engines, weapons, shields, life support, sensors): the node names
+/// `engines`, `target` (weapons), `shields`, `life` and `sensors`.
+fn node_system(name: &str) -> Option<usize> {
+    const NODES: [(&str, usize); 5] = [("engines", 0), ("target", 1), ("shields", 2), ("life", 3), ("sensors", 4)];
+    NODES.iter().find(|(n, _)| name.eq_ignore_ascii_case(n)).map(|&(_, i)| i)
 }
+
+/// Bit `i` set: system `i` (view order) is offline, whether destroyed, held off or
+/// disabled: the view's one answer, [`sta_sim::appearance::SystemAppearance::enabled`].
+/// A unit the view lists no systems for has none offline.
+pub fn systems_off_bits(view: &sta_sim::appearance::AppearanceView, id: EntityId) -> u8 {
+    let Some(systems) = view.systems(id) else { return 0 };
+    systems.iter().enumerate().fold(0, |bits, (i, s)| if s.is_some_and(|s| !s.enabled) { bits | (1 << i) } else { bits })
+}
+
+/// Whether the damage-state node `name` shows, or `None` for any other node.
+///
+/// - A system node (`engines`, `target`, `shields`, `life`, `sensors`) shows its
+///   children while that system is offline and hides them while it is online,
+///   independent of hull. Grade: read from the executable, static, for Armada II.
+///   Fleet Operations, Roots and Armada I were not looked at; the rule is assumed
+///   for them (interim).
+/// - `damage`, the group the system nodes sit in: shown from hull share
+///   [`DAMAGE_GROUP_SHARE`] down, or while any system is offline so its node can show.
+///   Interim: what else a model keeps under the group is not established.
+/// - `crew`: hull share below [`CREW_SHARE`]. Interim: the rule read for Armada II
+///   is by crew share, not implemented here.
+pub fn damage_node_shown(name: &str, share: f32, off: u8) -> Option<bool> {
+    if let Some(i) = node_system(name) {
+        return Some(off & (1 << i) != 0);
+    }
+    if name.eq_ignore_ascii_case("damage") {
+        return Some(share < DAMAGE_GROUP_SHARE || off != 0);
+    }
+    if name.eq_ignore_ascii_case("crew") {
+        return Some(share < CREW_SHARE);
+    }
+    None
+}
+
+/// Interim hull-share thresholds (STA64's own) of the `damage` and `crew` nodes.
+const DAMAGE_GROUP_SHARE: f32 = 0.75;
+const CREW_SHARE: f32 = 0.5;
 
 pub struct UnitsRenderPlugin;
 
@@ -183,7 +218,7 @@ pub fn sync_units(
     map_teams: Option<Res<crate::viewer::MapTeamColours>>,
     mut map: ResMut<SimEntities>,
     existing: Query<(Entity, &SimEntity), Without<FromView>>,
-    mut live: Query<(&mut HullShare, &mut UnitOwner, Has<Cloaked>), With<FromView>>,
+    mut live: Query<(&mut HullShare, &mut UnitOwner, Has<Cloaked>, Option<&mut SystemsOff>), With<FromView>>,
     mut seen: Local<Option<SeenKey>>,
     content: Option<Res<ContentRes>>,
 ) {
@@ -240,11 +275,22 @@ pub fn sync_units(
     let mut stale: BTreeSet<EntityId> = BTreeSet::new();
     for (id, u) in want {
         let share = hull_share(u);
+        let off = systems_off_bits(&curr.appearance, id);
         let cloaked = u.flags.contains(UnitFlags::CLOAKED);
         if let Some(&e) = map.0.get(&id) {
-            if let Ok((mut h, mut o, was_cloaked)) = live.get_mut(e) {
+            if let Ok((mut h, mut o, was_cloaked, was_off)) = live.get_mut(e) {
                 if h.0 != share {
                     h.0 = share;
+                }
+                match was_off {
+                    Some(mut was) => {
+                        if was.0 != off {
+                            was.0 = off;
+                        }
+                    }
+                    None => {
+                        commands.entity(e).insert(SystemsOff(off));
+                    }
                 }
                 if o.0 != u.owner {
                     o.0 = u.owner;
@@ -273,6 +319,7 @@ pub fn sync_units(
             TeamColour(colour(u.owner)),
             MarkColour(mark(u.owner)),
             HullShare(share),
+            SystemsOff(off),
             Transform::from_translation(pos).with_rotation(rot),
             Visibility::default(),
         ));
@@ -467,19 +514,21 @@ fn construction_chunk_count(def: &sta_content::UnitDef) -> u16 {
     }
 }
 
-/// Show each damage-state node of a unit's model once its hull share is below
-/// the node's threshold ([`damage_threshold`]).
+/// Show each damage-state node of a unit's model by [`damage_node_shown`]: the system
+/// nodes (and the emitters under them) by the unit's offline systems, the `damage` and
+/// `crew` nodes by hull share (interim).
 #[allow(clippy::type_complexity)]
 pub fn show_damage(
-    units: Query<(Entity, &HullShare), Or<(Changed<HullShare>, Changed<Children>)>>,
+    units: Query<(Entity, &HullShare, Option<&SystemsOff>), Or<(Changed<HullShare>, Changed<SystemsOff>, Changed<Children>)>>,
     children: Query<&Children>,
     mut nodes: Query<(&Name, &mut Visibility), Without<model_scene::NativeNode>>,
 ) {
-    for (unit, share) in &units {
+    for (unit, share, off) in &units {
+        let off = off.map_or(0, |o| o.0);
         for d in children.iter_descendants(unit) {
             let Ok((name, mut vis)) = nodes.get_mut(d) else { continue };
-            let Some(limit) = damage_threshold(name) else { continue };
-            let want = if share.0 < limit { Visibility::Inherited } else { Visibility::Hidden };
+            let Some(show) = damage_node_shown(name, share.0, off) else { continue };
+            let want = if show { Visibility::Inherited } else { Visibility::Hidden };
             if *vis != want {
                 *vis = want;
             }
@@ -783,33 +832,74 @@ mod view_tests {
         WorldView { tick, units, visibility, ..WorldView::default() }
     }
 
+    /// One view of unit 1 at `hull` of 100, with system `off` (view order) offline, if any.
+    fn view_with_system(tick: u64, hull: i32, off: Option<usize>) -> WorldView {
+        use sta_sim::appearance::SystemAppearance;
+        let mut v = view(tick, vec![unit(1, 1, hull, UnitFlags::default())], Vec::new());
+        let systems = std::array::from_fn(|i| {
+            let on = off != Some(i);
+            Some(SystemAppearance { enabled: on, health: [if on { Fixed::from_int(20) } else { Fixed::ZERO }, Fixed::from_int(20)] })
+        });
+        v.appearance.systems = vec![(EntityId(1), systems)];
+        v
+    }
+
     #[test]
-    fn damage_nodes_switch_at_hull_thresholds() {
-        let hulls = [100, 80, 70, 45, 35, 25, 10, 60];
-        let views = hulls.iter().enumerate().map(|(i, &h)| view(i as u64, vec![unit(1, 1, h, UnitFlags::default())], Vec::new())).collect();
+    fn system_nodes_follow_the_offline_system_not_the_hull() {
+        // Hull 100 with every system online; hull 10 online; hull 100 with engines offline;
+        // the same with weapons offline; engines back online (repaired).
+        let steps: [(i32, Option<usize>); 5] = [(100, None), (10, None), (100, Some(0)), (100, Some(1)), (100, None)];
+        let views = steps.iter().enumerate().map(|(i, &(h, off))| view_with_system(i as u64, h, off)).collect();
         let mut app = app_with(Box::new(Views(views, 0)), None);
         app.update();
         let root = app.world().resource::<SimEntities>().0[&EntityId(1)];
-        let names = ["damage", "crew", "engines", "target", "hull"];
+        let names = ["damage", "crew", "engines", "target", "shields", "life", "sensors", "hull"];
         let nodes: Vec<(&str, Entity)> = names
             .into_iter()
             .map(|n| (n, app.world_mut().spawn((Name::new(n), Visibility::Hidden, ChildOf(root))).id()))
             .collect();
-        let mut checked = 0;
+        let mut seen = BTreeSet::new();
         for _ in 0..20 {
             app.update();
             let tick = app.world().resource::<SimLink>().curr().tick as usize;
-            let share = hulls[tick.min(hulls.len() - 1)] as f32 / 100.0;
+            let (hull, off) = steps[tick.min(steps.len() - 1)];
+            seen.insert(tick);
             for (name, e) in &nodes {
                 let shown = *app.world().get::<Visibility>(*e).unwrap() != Visibility::Hidden;
-                let want = damage_threshold(name).is_some_and(|t| share < t);
-                assert_eq!(shown, want, "node {name} at hull share {share}");
+                let want = match *name {
+                    "engines" => off == Some(0),
+                    "target" => off == Some(1),
+                    "shields" | "life" | "sensors" | "hull" => false,
+                    "damage" => hull < 75 || off.is_some(),
+                    _ => hull < 50,
+                };
+                assert_eq!(shown, want, "node {name} at hull {hull}, offline system {off:?}");
             }
-            checked += 1;
         }
-        assert_eq!(checked, 20);
-        // Repaired: back to hidden (last view is 60%: only `damage` stays shown).
-        assert!(damage_threshold("hull").is_none());
+        assert!(seen.iter().max().is_some_and(|&t| t >= steps.len() - 1), "the last step was reached: {seen:?}");
+    }
+
+    #[test]
+    fn every_offline_system_shows_its_node_and_a_model_without_nodes_shows_nothing() {
+        let names = ["engines", "target", "shields", "life", "sensors"];
+        for (i, name) in names.iter().enumerate() {
+            assert_eq!(damage_node_shown(name, 1.0, 0), Some(false), "{name} online");
+            assert_eq!(damage_node_shown(name, 1.0, 1 << i), Some(true), "{name} offline");
+            assert_eq!(damage_node_shown(&name.to_uppercase(), 1.0, 1 << i), Some(true), "{name} any case");
+            for (j, other) in names.iter().enumerate().filter(|&(j, _)| j != i) {
+                assert_eq!(damage_node_shown(other, 1.0, 1 << i), Some(false), "{other} (system {j}) with only system {i} offline");
+            }
+        }
+        for other in ["hull", "geometry", "hp01", "borg", ""] {
+            assert_eq!(damage_node_shown(other, 0.0, 0b11111), None, "{other:?} is not a damage node");
+        }
+        // The offline bits come from the view's `enabled` alone: destroyed (health 0) and
+        // disabled or held off (health full) both count, a system the unit lacks does not.
+        use sta_sim::appearance::{AppearanceView, SystemAppearance};
+        let sys = |enabled, hp| Some(SystemAppearance { enabled, health: [Fixed::from_int(hp), Fixed::from_int(20)] });
+        let view = AppearanceView { systems: vec![(EntityId(1), [sys(false, 0), sys(false, 20), sys(true, 20), None, sys(true, 7)])], ..AppearanceView::default() };
+        assert_eq!(systems_off_bits(&view, EntityId(1)), 0b00011);
+        assert_eq!(systems_off_bits(&view, EntityId(2)), 0);
     }
 
     #[test]
