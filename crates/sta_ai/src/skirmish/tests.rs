@@ -679,6 +679,104 @@ fn empty_aip_builds_one_armed_ship_producer_after_mining() {
     assert_eq!(first, run(), "the same seed yields the same result and digest");
 }
 
+#[test]
+fn fo4_aip_counts_promoted_craft_by_distance_below_grid() {
+    let make_db = |profile, variant_tag| {
+        let fake = sta_content::fake::db();
+        let mut builder = ContentDb::builder().profile(profile).features(fake.features().clone());
+        for weapon in fake.weapons() {
+            builder = builder.weapon(weapon.clone());
+        }
+        for unit in fake.units() {
+            let mut unit = unit.clone();
+            if unit.odf == "fx_cruiser" {
+                unit.stats.distance_below_grid = Some(Fixed::from_int(50));
+            }
+            if unit.odf == "fx_yard" {
+                // The promoted craft exists in the world but cannot be queued
+                // directly; the yard can still build the base class.
+                let mut veteran = fake.unit(fake.key("fx_cruiser").unwrap()).unwrap().clone();
+                veteran.odf = "fx_cruiser_veteran".into();
+                veteran.stats.distance_below_grid = Some(variant_tag);
+                veteran.build.list.clear();
+                builder = builder.unit(veteran);
+            }
+            builder = builder.unit(unit);
+        }
+        Arc::new(builder.build().unwrap())
+    };
+    let run = |profile, variant_tag, count| {
+        let db = make_db(profile, variant_tag);
+        let key = |name| db.key(name).unwrap();
+        let mut cfg = SkirmishConfig {
+            player: P0,
+            race: "fx".into(),
+            content: Arc::clone(&db),
+            home: Vec3::ZERO,
+            enemy_starts: Vec::new(),
+            nodes: Vec::new(),
+            seed: 1,
+            params: Params::default(),
+        };
+        cfg.params.miners = 0;
+        cfg.params.build_list = vec![BuildItem { unit: "fx_cruiser".into(), count, base: None, max: None, tech_level: None }];
+        let me = PlayerView {
+            crew: None,
+            id: P0,
+            team: TeamId(0),
+            resources: vec![Fixed::from_int(10_000); 4],
+            officers: [Fixed::ZERO; 2],
+            eliminated: false,
+            relations: Vec::new(),
+        };
+        let unit = |id, odf| sta_sim::view::UnitView {
+            id: EntityId(id),
+            def: key(odf),
+            owner: P0,
+            pos: Vec3::ZERO,
+            heading: (Fixed::ONE, Fixed::ZERO),
+            speed: Fixed::ZERO,
+            hull: [Fixed::ONE; 2],
+            shields: [[Fixed::ZERO; 2]; 4],
+            crew: None,
+            energy: None,
+            autonomy: None,
+            flags: sta_sim::view::UnitFlags::SELECTABLE,
+            progress: None,
+        };
+        let view = WorldView {
+            units: vec![unit(1, "fx_station"), unit(2, "fx_yard"), unit(3, "fx_cruiser_veteran")],
+            ..WorldView::default()
+        };
+        let mut ai = SkirmishController::new(cfg);
+        let mut out = Vec::new();
+        ai.plan(&view, &me, &mut out);
+        out.into_iter().filter_map(|c| match c.kind {
+            CommandKind::Order(Order::Build { what, .. }) => Some(what),
+            _ => None,
+        }).collect::<Vec<_>>()
+    };
+
+    let fo4_base = make_db(sta_content::Profile::Fo4, Fixed::from_int(50));
+    let fo4_cruiser = fo4_base.key("fx_cruiser").unwrap();
+    assert!(
+        !run(sta_content::Profile::Fo4, Fixed::from_int(50), Fixed::ONE).contains(&fo4_cruiser),
+        "a matched promoted craft satisfies the explicit base-class row and blocks generic fallback"
+    );
+    assert!(
+        run(sta_content::Profile::Fo4, Fixed::from_int(50), Fixed::from_int(2)).contains(&fo4_cruiser),
+        "a higher requested count still wants another base-class craft"
+    );
+    assert!(
+        run(sta_content::Profile::Fo4, Fixed::from_int(51), Fixed::ONE).contains(&fo4_cruiser),
+        "a nonmatching promotion tag does not satisfy the base-class row"
+    );
+    assert!(
+        run(sta_content::Profile::Native, Fixed::from_int(50), Fixed::ONE).contains(&fo4_cruiser),
+        "non-Fo4 profiles match the explicit ODF key exactly"
+    );
+}
+
 /// Both seats plan on the same ticks. A stagger by seat number once gave seat
 /// 1 every plan one tick before seat 0, which decided mirror games for it.
 #[test]
