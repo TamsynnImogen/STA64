@@ -137,8 +137,8 @@ fn menu_button(id: u32, name: &str) -> Button {
 fn buttons(feed: &HudFeed, page: Page, native: &NativeCommands) -> Vec<Button> {
     let mut buttons = model::grid_with_capacity(feed, page, usize::MAX);
     // The stock HUD shows only what the original shows: TRANSPORT only where the install's command data
-    // gives it a place (Armada I puts it on its speed rail, a later package); the fallback cell is for
-    // STA64's own layout.
+    // gives it a place (Armada I has none here: it puts it on its speed rail, `a1::speed`); the fallback
+    // cell is for STA64's own layout.
     buttons.retain(|b| b.act != Act::Target(TargetMode::Transport) || metadata(native, &b.act).is_some_and(|m| m.preferred.is_some()));
     // Capture is an authored stock command in the trade palette. It has no LCARS
     // fallback cell: adding one would compete with the existing special slots.
@@ -489,6 +489,10 @@ pub(super) fn refresh(
     } else {
         buttons(&feed, hud.page, &state.native)
     };
+    if a1 {
+        // The speed rail is on every page: the transport button is not a control slot.
+        next.extend(a1::speed::buttons(&feed, strings.as_deref()));
+    }
     if !a1 && matches!(hud.page, Page::Native(_)) && next.iter().all(|b| b.act == Act::Back) {
         hud.page = Page::Top;
         next = buttons(&feed, hud.page, &state.native);

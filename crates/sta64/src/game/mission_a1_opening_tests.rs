@@ -227,3 +227,70 @@ fn install_gated_a1_fed2_and_fed3_openings_hand_the_game_over() {
         assert!(!last.cine && !last.locked && !last.hud_hidden && last.fade == 0.0, "{bzn}: the RTS view with the HUD and a clear screen after the opening: {last:?}");
     }
 }
+
+/// Install-gated: Armada I Federation 3, past its opening, with the transporter driven the way the speed rail's
+/// button drives it: the HUD's own button check and target pick on the live view, then the order it sends,
+/// through the same command queue. Rules asserted: the button is there for a crewed own selection; the pick
+/// sends one `Order::Transport` for the ready carrier; the sim moves crew between two own ships in range (the
+/// data's `TRANSPORTER_RANGE`); the mission goes on (no outcome, objectives still issued).
+#[test]
+fn install_gated_a1_fed3_transport_through_the_rail_button_flow_and_the_mission_goes_on() {
+    use crate::sim_link::{CommandQueue, SimLink};
+    use crate::ui::hud::{HudFeed, a1_rail_transport, model::Look};
+    use sta_sim::{EntityId, command::{CommandKind, Order}};
+    let Some(mut run) = drive_mission(150.0, "fed3.bzn") else { return };
+    let db = run.app.world_mut().resource_scope(|w, mut catalogue: Mut<crate::map::Catalogue>| catalogue.content(&w.resource::<crate::viewer::Mounted>().0).expect("the install's content").db.clone());
+    let (view, me) = {
+        let w = run.app.world();
+        (w.resource::<SimLink>().real_curr().clone(), w.resource::<SimLink>().player())
+    };
+    let range = db.rules().transporter().range.to_f32();
+    let crew = |u: &sta_sim::view::UnitView| u.crew.map(|c| (c[0].to_f32(), c[1].to_f32()));
+    let own: Vec<_> = view.units.iter().filter(|u| u.owner == me && u.crew.is_some()).collect();
+    for u in &own {
+        eprintln!("own {:?} crew {:?} at {:?}", u.id, crew(u), u.pos);
+    }
+    assert!(!own.is_empty(), "the player has crewed ships after the opening");
+    // The nearest pair of own ships where the HUD offers the button and the pick, and the target has room.
+    let feed_for = |c: &sta_sim::view::UnitView| HudFeed { view: view.clone(), player: me, selected: vec![c.id], content: Some(db.clone()), ..Default::default() };
+    let dist = |a: &sta_sim::view::UnitView, b: &sta_sim::view::UnitView| {
+        let d = [a.pos.x - b.pos.x, a.pos.y - b.pos.y, a.pos.z - b.pos.z].map(|v| v.to_f32());
+        (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+    };
+    let mut pairs: Vec<(f32, EntityId, EntityId)> = Vec::new();
+    for c in &own {
+        for t in &own {
+            if c.id != t.id && t.crew.is_some_and(|k| k[0] < k[1]) {
+                pairs.push((dist(c, t), c.id, t.id));
+            }
+        }
+    }
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    eprintln!("range {range}, candidate pairs (distance, carrier, target): {:?}", &pairs[..pairs.len().min(8)]);
+    let (d, c, t) = pairs.iter().copied().find(|&(_, c, t)| {
+        let carrier = view.unit(c).unwrap();
+        let (look, orders) = a1_rail_transport(&feed_for(carrier), t);
+        look == Some(Look::Ready) && orders.is_some()
+    }).expect("an own ship the rail button is ready for, and a friendly target with room");
+    let (look, orders) = a1_rail_transport(&feed_for(view.unit(c).unwrap()), t);
+    assert_eq!(look, Some(Look::Ready));
+    let orders = orders.unwrap();
+    assert!(matches!(orders.as_slice(), [Order::Transport { units, target, attack: false }] if units == &[c] && *target == t), "{orders:?}");
+    let before = (crew(view.unit(c).unwrap()).unwrap().0, crew(view.unit(t).unwrap()).unwrap().0);
+    let tick0 = run.app.world().resource::<SimLink>().curr().tick;
+    for o in orders {
+        run.app.world_mut().resource_mut::<CommandQueue>().0.push(CommandKind::Order(o));
+    }
+    for _ in 0..600 {
+        run.app.update();
+    }
+    let after_view = run.app.world().resource::<SimLink>().real_curr().clone();
+    let after = (crew(after_view.unit(c).unwrap()).unwrap().0, crew(after_view.unit(t).unwrap()).unwrap().0);
+    eprintln!("ticks {} -> {}, distance {d}, carrier/target crew {before:?} -> {after:?}", tick0, run.app.world().resource::<SimLink>().curr().tick);
+    if d <= range {
+        assert!(after.0 < before.0 && after.1 > before.1, "the carrier's crew moved to the target: {before:?} -> {after:?}");
+    }
+    let w = run.app.world();
+    assert!(w.resource::<MissionRun>().outcome.is_none(), "the mission goes on");
+    assert!(!w.resource::<crate::ui::presentation::ObjectivesView>().items.is_empty(), "the objectives are still issued");
+}
