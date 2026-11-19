@@ -103,14 +103,35 @@ impl Warp {
     }
 }
 
-/// The attack range of a unit: the longest regular weapon, if any.
+/// The attack range of a unit: the longest weapon that attacks units (not a tool), if any.
 pub(crate) fn attack_range(db: &ContentDb, def: &UnitDef) -> Option<Fixed> {
     def.hardpoints
         .iter()
         .filter_map(|hp| db.weapon(hp.weapon.key))
-        .filter(|w| w.kind != WeaponKind::PointDefence && !crate::specials::is_special(w) && w.resource.is_none())
+        .filter(|w| w.kind != WeaponKind::PointDefence && crate::combat::weapons::attacks_units(w) && w.resource.is_none())
         .map(|w| w.range)
         .max()
+}
+
+/// The class key `canAttack` (default 1).
+pub(crate) fn class_may_attack(def: &UnitDef) -> bool {
+    def.raw.bool("canAttack").unwrap_or(true)
+}
+
+/// May `def` take up a fight by itself (assist, answering an attacker)? Automatic
+/// pursuit and assist require the class key `canAttack` (default 1) and a weapon
+/// that attacks units and is not marked by its `special` key as a special weapon
+/// (read from the executable, static; also in Roots). Where a weapon carries no
+/// `special` key the tool-class test of `attacks_units` stands in (interim). A craft
+/// that fails stays where it is; whether it flees is not measured, not modelled.
+pub(crate) fn engages_alone(db: &ContentDb, def: &UnitDef) -> bool {
+    class_may_attack(def)
+        && def.hardpoints.iter().filter_map(|hp| db.weapon(hp.weapon.key)).any(|w| {
+            w.kind != WeaponKind::PointDefence
+                && crate::combat::weapons::attacks_units(w)
+                && w.resource.is_none()
+                && !w.raw.bool("special").unwrap_or(false)
+        })
 }
 
 /// Gap kept to the target's surface by the goal point (`sk_ATTACK_BUFFER`,

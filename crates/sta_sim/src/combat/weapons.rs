@@ -97,11 +97,22 @@ pub(crate) fn takes_attack(db: &ContentDb, units: &Entities, player: PlayerId, i
     id != target
         && units
             .get(id)
-            .is_some_and(|u| (!player.is_player() || u.owner == player) && db.unit(u.def).is_some_and(|d| can_attack(db, d)))
+            .is_some_and(|u| {
+                (!player.is_player() || u.owner == player)
+                    && db.unit(u.def).is_some_and(|d| armed(db, d) && (!player.is_player() || crate::movement::approach::class_may_attack(d)))
+            })
 }
 
-/// Armed for an attack order: a hardpoint whose weapon [`attacks_units`].
+/// Can a player order this craft to attack (HUD, right-click, hotkey)? Armed
+/// ([`armed`]) and not a class with `canAttack = 0`. The class key's effect on
+/// an explicit attack order is stated by a player (interim): the executable
+/// shows the order itself is not refused by the key, only the HUD button hides.
 pub fn can_attack(db: &ContentDb, def: &sta_content::UnitDef) -> bool {
+    armed(db, def) && crate::movement::approach::class_may_attack(def)
+}
+
+/// A hardpoint whose weapon [`attacks_units`].
+pub fn armed(db: &ContentDb, def: &sta_content::UnitDef) -> bool {
     def.hardpoints.iter().any(|hp| db.weapon(hp.weapon.key).is_some_and(attacks_units))
 }
 
@@ -452,7 +463,12 @@ impl Weapons {
                 let Some(w) = db.weapon(hp.weapon.key) else {
                     continue;
                 };
-                if w.kind == WeaponKind::PointDefence || crate::specials::is_special(w) || w.resource.is_some() {
+                // A tool (tractor, mining or repair beam) does no regular fire: a craft
+                // that carries only tools never fights (stated by a player and measured
+                // earlier for orders; the `special` key marks them but also real attack
+                // weapons the engine fires by special autonomy, not modelled: interim
+                // stand-in is the tool class).
+                if !attacks_units(w) || w.resource.is_some() {
                     continue;
                 }
                 if tick < START_HOLD_TICKS && db.weapon_features(w).start_fire_hold {

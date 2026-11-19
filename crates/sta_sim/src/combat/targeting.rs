@@ -198,6 +198,9 @@ impl Sim {
         for u in self.units.iter() {
             let Some(def) = db.unit(u.def) else { continue };
             let Some(range) = crate::movement::approach::attack_range(&db, def) else { continue };
+            if !crate::movement::approach::engages_alone(&db, def) {
+                continue;
+            }
             let idle = u.kind == EntityKind::Craft
                 && self.scripted.job(u.id).is_none()
                 && u.target.is_none()
