@@ -91,6 +91,13 @@ fn bridge_state(mut events: MessageReader<BridgeScene>, mut state: ResMut<Bridge
     }
 }
 
+/// Global z of the script's titles, its objectives panel and its fade; the pause box and the in-game menu
+/// sit above ([`super::pause_box::PAUSE_BOX_Z`], [`super::ingame_menu::MENU_Z`]), the bridge scene below
+/// all of them ([`super::bridge_scene::BRIDGE_SCENE_Z`]).
+pub const TITLES_Z: i32 = 900;
+pub const OBJECTIVES_Z: i32 = 920;
+pub const FADE_Z: i32 = 950;
+
 /// A2's layout space (stock `screenWidth` / `screenHeight` of `gui_glob16x12.cfg`).
 pub const A2_CANVAS: Vec2 = Vec2::new(1600.0, 1200.0);
 /// An A1 title fades in over this many seconds when the script's flag is set (all stock titles set it;
@@ -833,12 +840,12 @@ struct PanelRoot;
 struct OkButton;
 
 fn spawn_layers(mut commands: Commands) {
-    commands.spawn((TitleLayer, Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, GlobalZIndex(900), Pickable::IGNORE));
+    commands.spawn((TitleLayer, Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, GlobalZIndex(TITLES_Z), Pickable::IGNORE));
     commands.spawn((
         FadeOverlay,
         Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
         BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
-        GlobalZIndex(950),
+        GlobalZIndex(FADE_Z),
         Pickable::IGNORE,
     ));
 }
@@ -1026,7 +1033,7 @@ fn draw_panel(
         PanelRoot,
         Node { position_type: PositionType::Absolute, left: pct(px, l.canvas.0), top: pct(py, l.canvas.1), width: pct(pw, l.canvas.0), height: pct(ph, l.canvas.1), ..default() },
         BackgroundColor(theme.panel.with_alpha(0.92)),
-        GlobalZIndex(920),
+        GlobalZIndex(OBJECTIVES_Z),
     ));
     panel.with_children(|p| {
         if !c.title.is_empty() {

@@ -1,11 +1,10 @@
 //! Armada I's bridge scene: where a mission's `PlayBridgeMovie` clip plays.
 //!
-//! **Rule.** The original has two movie calls on one video object: `PlayBridgeMovie` draws into the
-//! bridge display's screen rectangle, `PlayCinematicMovie` into the HUD's cinematic panel (read
-//! from the executable, static). Every stock Armada I mission script uses only the first (read from
-//! the missions' import tables), and the bridge display lives in the cineractive view, which has no
-//! HUD. STA64 therefore plays an Armada I mission's in-panel movie here ([`BridgeScreen`]) and
-//! leaves the HUD's panel to Armada II.
+//! **Rule.** `PlayBridgeMovie` draws into the bridge display's screen rectangle and
+//! `PlayCinematicMovie` into the HUD's cinematic panel (read from the executable, static). STA64's
+//! Armada I mission API exposes only the first, and the bridge display belongs to the cineractive
+//! view, which has no HUD. STA64 therefore plays an Armada I mission's in-panel movie here
+//! ([`BridgeScreen`]) and leaves the HUD's panel to Armada II.
 //!
 //! **Layout** (read from the executable, static, unless said): the scene is a 640x480 picture, the
 //! race's `<p>bridge_panel` sprite (`<p>bridgeBackground`, `<p>bridgeBackgroundSize` and
@@ -22,8 +21,9 @@
 //! drawn on black at its own aspect over the whole window, and the reason is logged once.
 //!
 //! The frame is shown only while [`BridgeState::shown`] (`ShowBridgeScene`); without it the clip
-//! plays in its rectangle on black. The overlay covers the HUD and takes the pointer, as the
-//! cineractive view has no HUD panel to receive it.
+//! plays in its rectangle on black. The overlay covers the HUD and takes the pointer below it; it
+//! sits under the script's titles, objectives panel, fade, the pause box and the in-game menu
+//! ([`BRIDGE_SCENE_Z`]), so those stay visible and usable over it.
 
 use std::collections::HashMap;
 
@@ -45,15 +45,18 @@ use crate::media::{BridgeScreen, Movies};
 use crate::sim_link::ContentRes;
 use crate::viewer::Mounted;
 
-/// The scene's own space: the stock gui cfg's bridge rectangles are in it.
+/// The scene's own space where the gui cfg sets none: the stock gui cfg's bridge rectangles are in it.
 pub const CANVAS: Vec2 = Vec2::new(640.0, 480.0);
+
+/// Global z of the overlay: over the HUD (its panels are far below), under every presentation layer.
+pub const BRIDGE_SCENE_Z: i32 = 800;
 
 /// The pixel colour of the art's screen window (read from the stock tiles; the key is only
 /// applied to this art).
 const WINDOW_KEY: [u8; 3] = [255, 0, 255];
 
-/// The cfg key prefix of a bridge type: 1 Federation, 2 Klingon, 3 Romulan, 4 Borg (the stock scripts'
-/// numbers), the default scene for any other.
+/// The cfg key prefix of a bridge type: 1 Federation, 2 Klingon, 3 Romulan, 4 Borg, the default scene
+/// for any other.
 pub fn prefix(race: Option<i32>) -> &'static str {
     match race {
         Some(1) => "f_",
@@ -83,10 +86,18 @@ pub struct BridgeLayout {
     pub movie: R,
 }
 
-pub fn layout(window: Vec2, race: Option<i32>) -> BridgeLayout {
-    let (scale, group) = fit_canvas(CANVAS, window);
+/// The canvas of the cfg the frame pieces are in (the clip rectangle follows it), [`CANVAS`] without one.
+pub fn canvas_of(gui: Option<&sta_content::GuiLayout>) -> Vec2 {
+    gui.map(|g| g.canvas).filter(|c| c.0 > 0 && c.1 > 0).map_or(CANVAS, |c| Vec2::new(c.0 as f32, c.1 as f32))
+}
+
+/// The clip's rectangle is in the executable's 640x480 units; on a cfg canvas of another size it is
+/// scaled with it, so it stays over the art's window.
+pub fn layout(window: Vec2, race: Option<i32>, canvas: Vec2) -> BridgeLayout {
+    let (scale, group) = fit_canvas(canvas, window);
     let [x, y, w, h] = movie_rect(race);
-    BridgeLayout { group, movie: R::new(group.x + x * scale, group.y + y * scale, w * scale, h * scale) }
+    let (sx, sy) = (scale * canvas.x / CANVAS.x, scale * canvas.y / CANVAS.y);
+    BridgeLayout { group, movie: R::new(group.x + x * sx, group.y + y * sy, w * sx, h * sy) }
 }
 
 /// The largest rectangle of the picture's aspect that fits the window, centred.
@@ -109,14 +120,38 @@ pub struct BridgeArt {
     cache: GuiSprites,
 }
 
+/// Why art could not be had: a transient cause (no cfg or install yet) is retried, one from the data is kept.
+#[derive(Debug)]
+pub struct ArtError {
+    pub transient: bool,
+    pub why: String,
+}
+
+impl ArtError {
+    fn data(why: impl Into<String>) -> Self {
+        Self { transient: false, why: why.into() }
+    }
+}
+
 impl BridgeArt {
+    /// The art of `prefix`, loaded on first use. A failure from the data is remembered and logged once;
+    /// a transient one is retried at the next call.
     fn get(&mut self, prefix: &'static str, gui: Option<&sta_content::GuiLayout>, vfs: Option<&sta_vfs::Vfs>, images: &mut Assets<Image>) -> Option<Art> {
         if !self.by_prefix.contains_key(prefix) {
-            let loaded = vfs.ok_or_else(|| "no install is mounted".to_owned()).and_then(|v| load_art(prefix, gui, v, images, &mut self.cache));
-            if let Err(why) = &loaded {
-                warn!("bridge scene: {why}; the movie plays full screen on black");
+            let loaded = match vfs {
+                None => Err(ArtError { transient: true, why: "no install is mounted".to_owned() }),
+                Some(v) => load_art(prefix, gui, v, images, &mut self.cache),
+            };
+            match loaded {
+                Ok(art) => {
+                    self.by_prefix.insert(prefix, Some(art));
+                }
+                Err(e) if e.transient => return None,
+                Err(e) => {
+                    warn!("bridge scene: {}; the movie plays full screen on black", e.why);
+                    self.by_prefix.insert(prefix, None);
+                }
             }
-            self.by_prefix.insert(prefix, loaded.ok());
         }
         self.by_prefix[prefix].clone()
     }
@@ -193,22 +228,22 @@ fn load_art(
     vfs: &sta_vfs::Vfs,
     images: &mut Assets<Image>,
     cache: &mut GuiSprites,
-) -> Result<Art, String> {
-    let gui = gui.ok_or("no gui cfg")?;
-    let pieces = StockLayout::new(gui, CANVAS).pieces(&format!("{prefix}bridgeBackground"));
+) -> Result<Art, ArtError> {
+    let gui = gui.ok_or(ArtError { transient: true, why: "no gui cfg yet".to_owned() })?;
+    let pieces = StockLayout::new(gui, canvas_of(Some(gui))).pieces(&format!("{prefix}bridgeBackground"));
     if pieces.is_empty() {
-        return Err(format!("the gui cfg has no `{prefix}bridgeBackground` pieces"));
+        return Err(ArtError::data(format!("the gui cfg has no `{prefix}bridgeBackground` pieces")));
     }
     let table = gui_sprites::read_table(vfs, "sprites/gui_global.spr");
     let mut out = Vec::new();
     for piece in pieces {
         let name = format!("{}.{}", piece.name, piece.frame);
-        let sprite = table.sprite(&name).ok_or_else(|| format!("sprite `{name}` is not in gui_global.spr"))?;
+        let sprite = table.sprite(&name).ok_or_else(|| ArtError::data(format!("sprite `{name}` is not in gui_global.spr")))?;
         let mut keyed = sprite.clone();
         keyed.skip = Skip::Colour(WINDOW_KEY);
         let (handle, size) = gui_sprites::page(&keyed, GuiImageSampling::Nearest, vfs, cache, images, CompressedImageFormats::empty())
-            .ok_or_else(|| format!("texture of `{name}` is missing"))?;
-        let crop = gui_sprites::crop(&keyed, size).ok_or_else(|| format!("sprite `{name}` has no usable rectangle"))?;
+            .ok_or_else(|| ArtError::data(format!("texture of `{name}` is missing")))?;
+        let crop = gui_sprites::crop(&keyed, size).ok_or_else(|| ArtError::data(format!("sprite `{name}` has no usable rectangle")))?;
         out.push((piece.frame, handle, crop));
     }
     Ok(out)
@@ -246,6 +281,10 @@ pub fn drive(
             commands.entity(e).despawn();
         }
         overlay.built = None;
+        // The scene is gone: let go of the art (a mod switch or the next clip loads its own).
+        if !art.by_prefix.is_empty() {
+            *art = BridgeArt::default();
+        }
         return;
     }
     let (Some(screen), Some(window), Some(mut images)) = (screen, window, images) else { return };
@@ -266,13 +305,13 @@ pub fn drive(
     if let Some(e) = overlay.entity.take() {
         commands.entity(e).despawn();
     }
-    let l = layout(size, race);
+    let l = layout(size, race, canvas_of(gui));
     let root = commands
         .spawn((
             Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
             BackgroundColor(Color::BLACK),
-            // Below the full-screen movies' overlay, above the HUD and the notices.
-            GlobalZIndex(i32::MAX - 8),
+            // Above the HUD, below titles, fades, boxes and menus.
+            GlobalZIndex(BRIDGE_SCENE_Z),
             FocusPolicy::Block,
             Pickable { should_block_lower: true, is_hoverable: true },
         ))
@@ -352,17 +391,17 @@ f_bridgeBackground_1 = 320 0 320 480
 
     #[test]
     fn the_scene_fills_a_4_by_3_window_and_the_clip_scales_with_it() {
-        let l = layout(Vec2::new(1280.0, 960.0), Some(1));
+        let l = layout(Vec2::new(1280.0, 960.0), Some(1), CANVAS);
         assert_eq!(l.group, R::new(0.0, 0.0, 1280.0, 960.0));
         let [x, y, w, h] = movie_rect(Some(1));
         assert_eq!(l.movie, R::new(x * 2.0, y * 2.0, w * 2.0, h * 2.0));
-        let native = layout(Vec2::new(640.0, 480.0), Some(1));
+        let native = layout(Vec2::new(640.0, 480.0), Some(1), CANVAS);
         assert_eq!(native.movie, R::new(x, y, w, h));
     }
 
     #[test]
     fn on_a_wide_window_the_group_keeps_its_aspect_and_is_centred_as_a_whole() {
-        let l = layout(Vec2::new(1920.0, 1080.0), Some(3));
+        let l = layout(Vec2::new(1920.0, 1080.0), Some(3), CANVAS);
         assert_eq!(l.group.h, 1080.0);
         assert!((l.group.w / l.group.h - 4.0 / 3.0).abs() < 1e-4, "{:?}", l.group);
         assert_eq!(l.group.x, (1920.0 - l.group.w) / 2.0);
@@ -373,7 +412,7 @@ f_bridgeBackground_1 = 320 0 320 480
         assert!(l.movie.x >= l.group.x && l.movie.right() <= l.group.right() && l.movie.bottom() <= l.group.bottom());
         assert!((l.movie.w / l.movie.h - w / h).abs() < 1e-4);
         // A narrow window scales by the width and centres vertically.
-        let tall = layout(Vec2::new(640.0, 960.0), None);
+        let tall = layout(Vec2::new(640.0, 960.0), None, CANVAS);
         assert_eq!((tall.group.w, tall.group.h, tall.group.y), (640.0, 480.0, 240.0));
     }
 
@@ -412,7 +451,16 @@ f_bridgeBackground_1 = 320 0 320 480
         assert_eq!(mode(false, false), Mode::Bare);
     }
 
-    fn mount(files: &[(&str, Vec<u8>)]) -> sta_vfs::Vfs {
+    /// A temporary install root, removed when dropped.
+    struct Tmp(std::path::PathBuf);
+
+    impl Drop for Tmp {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn mount(files: &[(&str, Vec<u8>)]) -> (sta_vfs::Vfs, Tmp) {
         let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
         let root = std::env::temp_dir().join(format!("sta64-bridge-scene-{}-{nonce}", std::process::id()));
         let data = root.join("Data");
@@ -422,7 +470,7 @@ f_bridgeBackground_1 = 320 0 320 480
             fs::write(path, bytes).unwrap();
         }
         fs::create_dir_all(&data).unwrap();
-        sta_vfs::Vfs::mount_install(&root, None).unwrap()
+        (sta_vfs::Vfs::mount_install(&root, None).unwrap(), Tmp(root))
     }
 
     /// A 2x1 true-colour TGA: one magenta pixel (the window) and one grey.
@@ -440,7 +488,7 @@ f_bridgeBackground_1 = 320 0 320 480
     #[test]
     fn the_frame_art_is_the_cfg_pieces_cropped_from_the_table_with_the_window_keyed_out() {
         let spr = b"f_bridge_panel.0 tile 0 0 1 1\nf_bridge_panel.1 tile 1 0 1 1\n".to_vec();
-        let vfs = mount(&[("sprites/gui_global.spr", spr), ("textures/rgb/tile.tga", tga())]);
+        let (vfs, _tmp) = mount(&[("sprites/gui_global.spr", spr), ("textures/rgb/tile.tga", tga())]);
         let mut images = Assets::<Image>::default();
         let mut cache = GuiSprites::default();
         let layout = gui(CFG);
@@ -458,14 +506,14 @@ f_bridgeBackground_1 = 320 0 320 480
         let layout = gui(CFG);
         let mut images = Assets::<Image>::default();
         let mut cache = GuiSprites::default();
-        let no_table = mount(&[]);
-        let why = load_art("f_", Some(&layout), &no_table, &mut images, &mut cache).unwrap_err();
+        let (no_table, _t1) = mount(&[]);
+        let why = load_art("f_", Some(&layout), &no_table, &mut images, &mut cache).unwrap_err().why;
         assert!(why.contains("f_bridge_panel.0"), "{why}");
-        let no_texture = mount(&[("sprites/gui_global.spr", b"f_bridge_panel.0 tile 0 0 1 1\nf_bridge_panel.1 tile 1 0 1 1\n".to_vec())]);
-        let why = load_art("f_", Some(&layout), &no_texture, &mut images, &mut cache).unwrap_err();
+        let (no_texture, _t2) = mount(&[("sprites/gui_global.spr", b"f_bridge_panel.0 tile 0 0 1 1\nf_bridge_panel.1 tile 1 0 1 1\n".to_vec())]);
+        let why = load_art("f_", Some(&layout), &no_texture, &mut images, &mut cache).unwrap_err().why;
         assert!(why.contains("texture"), "{why}");
         // Another bridge type's keys are not in the cfg; no cfg at all.
-        assert!(load_art("k_", Some(&layout), &no_table, &mut images, &mut cache).unwrap_err().contains("no `k_bridgeBackground`"));
+        assert!(load_art("k_", Some(&layout), &no_table, &mut images, &mut cache).unwrap_err().why.contains("no `k_bridgeBackground`"));
         assert!(load_art("f_", None, &no_table, &mut images, &mut cache).is_err());
     }
 
@@ -514,8 +562,58 @@ f_bridgeBackground_1 = 320 0 320 480
         assert_eq!(app.world().resource::<BridgeOverlay>().built.as_ref().map(|b| b.mode), Some(Mode::Bare));
         let nodes = overlay_nodes(&mut app);
         assert_eq!(nodes.len(), 1);
-        let l = layout(Vec2::new(1920.0, 1080.0), Some(1));
+        let l = layout(Vec2::new(1920.0, 1080.0), Some(1), CANVAS);
         let Val::Percent(left) = nodes[0].left else { panic!("{:?}", nodes[0].left) };
         assert!((left - l.movie.x / 1920.0 * 100.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn the_overlay_sits_over_the_hud_and_under_every_presentation_layer() {
+        use crate::ui::{ingame_menu::MENU_Z, pause_box::PAUSE_BOX_Z, presentation::{FADE_Z, OBJECTIVES_Z, TITLES_Z}};
+        // The HUD's cinematic panel is the highest HUD layer (z 8).
+        assert!(BRIDGE_SCENE_Z > 8);
+        for z in [TITLES_Z, OBJECTIVES_Z, PAUSE_BOX_Z, FADE_Z, MENU_Z] {
+            assert!(BRIDGE_SCENE_Z < z, "{BRIDGE_SCENE_Z} must stay under {z}");
+        }
+    }
+
+    #[test]
+    fn the_clip_rectangle_follows_the_cfg_canvas_with_the_frame_pieces() {
+        let big = gui(&format!("screenWidth = 1280\nscreenHeight = 960\n{CFG}"));
+        assert_eq!(canvas_of(Some(&big)), Vec2::new(1280.0, 960.0));
+        assert_eq!(canvas_of(None), CANVAS);
+        let window = Vec2::new(1280.0, 960.0);
+        let l = layout(window, Some(1), canvas_of(Some(&big)));
+        // On a 1280x960 canvas in a 1280x960 window one unit is one pixel, so the executable's
+        // 640x480 rectangle is doubled: the same fraction of the group as with the default canvas.
+        let d = layout(window, Some(1), CANVAS);
+        assert_eq!(l.movie, d.movie);
+        // And the pieces of that cfg land in the same group.
+        let pieces = StockLayout::new(&big, window).pieces("f_bridgeBackground");
+        assert_eq!(pieces.len(), 2);
+        assert_eq!(StockLayout::new(&big, window).hud, l.group);
+    }
+
+    #[test]
+    fn a_transient_failure_is_retried_and_a_data_failure_is_kept_and_the_art_resets_on_remount() {
+        let (vfs, _t) = mount(&[("sprites/gui_global.spr", b"f_bridge_panel.0 tile 0 0 1 1\nf_bridge_panel.1 tile 1 0 1 1\n".to_vec()), ("textures/rgb/tile.tga", tga())]);
+        let layout = gui(CFG);
+        let mut images = Assets::<Image>::default();
+        let mut art = BridgeArt::default();
+        // No cfg yet, no install yet: nothing is remembered.
+        assert!(art.get("f_", None, Some(&vfs), &mut images).is_none());
+        assert!(art.get("f_", Some(&layout), None, &mut images).is_none());
+        assert!(art.by_prefix.is_empty());
+        // Now it loads.
+        assert!(art.get("f_", Some(&layout), Some(&vfs), &mut images).is_some());
+        // A prefix the cfg lacks is a data failure: remembered.
+        assert!(art.get("k_", Some(&layout), Some(&vfs), &mut images).is_none());
+        assert!(art.by_prefix.contains_key("k_"));
+        // A remount (the flow's cache invalidation) drops it all.
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).insert_resource(Mounted(vfs)).insert_resource(art);
+        app.add_systems(Update, crate::game::flow::invalidate_mount_caches);
+        app.update();
+        assert!(app.world().resource::<BridgeArt>().by_prefix.is_empty());
     }
 }
