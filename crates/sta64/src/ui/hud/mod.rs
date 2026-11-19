@@ -15,8 +15,10 @@
 //!   tree ([`TechTree::build_options`](sta_content::TechTree::build_options))
 //!   when the content has one, else the def's list; locked entries are shown
 //!   disabled, hidden ones left out. A press queues `Order::Build`. A builder
-//!   that moves (a construction rig) needs a site: the press arms a
-//!   [`Placing`] and the next left click on the map places it.
+//!   that is not a producer station (a construction rig, a craft by class
+//!   label) needs a site: the press arms a [`Placing`] and the next left
+//!   click on the map places it. A producer station (starbase, shipyard, by
+//!   class label, not by speed) queues in place and takes a rally point.
 //! - **Hosting**: the radar and the notices are moved to their HUD.md places.
 //!
 //! What a game mode must do for it is in the INT-M3 notes of the UI-04 PR:

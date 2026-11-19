@@ -1158,4 +1158,8 @@ FO total: 396 of 474 key names in its `gui_*.cfg` files and hook reads are not m
 - [ ] Mining station free unit: not measured whether it mines by itself after docking (original queues it at the station's dock; STA64 stands it at the dock node and does not auto-mine).
 - [ ] Mining station free unit: interim, station crew lower than the unit's cost stops at zero (the original does not clamp); a model without the dock node uses STA64's own spot ahead of the station.
 - [ ] Mining station free unit: whether it counts against fleet cap or officers is not read; STA64 charges nothing and counts it as a live actor.
+- [?] Armada I producers queue their ships (fix/a1-ship-build-queue): on an Armada I install, select a starbase or shipyard, press a ship's build button: it queues (no ghost) and the Rally button is offered; a construction ship's station buttons still arm the ghost. Not checked in the running game, only by tests.
+- [ ] Client checks that read speed zero as station (sounds, voices, cheats, the menu scene, map helpers, radar, unit render) can misjudge a station whose definition carries a speed; not surveyed, not changed.
+- [ ] A mobile unit that produces craft (possible in mods) still arms a site in the client and is treated as a rig by the sim; unsupported, not changed.
+- [ ] The install-gated test `installed_name_pools_are_read_without_splitting_craft_names` fails when `STA64_TEST_INSTALL` points at an install without craft name pools; it should skip or check by profile (existing, not caused by the Armada I producers fix).
 - [ ] Normal play, cost: the symbol factor keeps full models on screen over a larger area before they turn into symbols; the cost is not measured here (the frame rate is being measured separately).
