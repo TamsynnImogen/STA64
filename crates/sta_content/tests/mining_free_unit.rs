@@ -9,6 +9,10 @@ use sta_content::{odf::load_with, ContentDb, OdfIndex, Overrides, Profile};
 use sta_vfs::Vfs;
 
 fn load(station: &str) -> ContentDb {
+    load_warned(station).0
+}
+
+fn load_warned(station: &str) -> (ContentDb, Vec<sta_content::Warning>) {
     load_with(
         Profile::Native,
         &Overrides::default(),
@@ -20,7 +24,6 @@ fn load(station: &str) -> ContentDb {
         },
     )
     .unwrap()
-    .0
 }
 
 fn free_of(db: &ContentDb) -> Option<String> {
@@ -70,4 +73,14 @@ fn installed_stations_name_units_the_database_has() {
         vfs.push_dir("root".into(), dir.clone().into()).unwrap();
         check(&vfs, &format!("dir {dir}"));
     }
+}
+
+#[test]
+fn a_name_that_is_no_unit_warns_and_gives_none() {
+    let (db, warnings) = load_warned("classLabel = \"mining\"\nfreighterName = \"ghost\"\n");
+    assert_eq!(free_of(&db), None);
+    assert!(db.unit(db.key("station").unwrap()).unwrap().dock.is_none());
+    assert!(warnings.iter().any(|w| w.to_string().contains("freighterName ghost is not a defined unit")), "{warnings:?}");
+    let (_, ok) = load_warned("classLabel = \"mining\"\nfreighterName = \"freight\"\n");
+    assert!(!ok.iter().any(|w| w.to_string().contains("freighterName")), "{ok:?}");
 }

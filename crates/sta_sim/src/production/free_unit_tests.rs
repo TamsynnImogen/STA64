@@ -133,7 +133,31 @@ fn station_crew_stops_at_zero_when_lower_than_the_free_unit_cost() {
 }
 
 #[test]
-fn spawned_station_and_yard_queue_give_no_free_unit() {
+fn a_unit_completed_by_a_yard_queue_gives_no_free_unit_even_if_its_def_names_one() {
+    let base = content_free(None, true);
+    let mut b = ContentDb::builder().profile(base.profile()).features(base.features().clone());
+    for w in base.weapons() {
+        b = b.weapon(w.clone());
+    }
+    for u in base.units() {
+        let mut u = u.clone();
+        if u.odf.eq_ignore_ascii_case("fx_frigate") {
+            u.free_unit = Some("fx_miner".into());
+        }
+        b = b.unit(u);
+    }
+    let mut sim = game_with(Arc::new(b.build().unwrap()));
+    let yard = spawn(&mut sim, "fx_yard", v(0, 0));
+    fund(&mut sim, 1500);
+    assert!(build(&mut sim, yard, "fx_frigate", None));
+    let mut log = Vec::new();
+    run(&mut sim, 3000, &mut log);
+    assert!(!built(&log).is_empty(), "the yard finished a frigate");
+    assert!(miners(&sim).is_empty());
+}
+
+#[test]
+fn a_spawned_station_gives_no_free_unit() {
     let mut sim = game_with(content_free(Some("fx_miner"), true));
     spawn(&mut sim, "fx_station", v(500, 500));
     for _ in 0..5 {
