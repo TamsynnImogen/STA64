@@ -53,6 +53,9 @@ use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::math::{Rect, Vec2};
 use bevy::prelude::*;
 
+/// Global z of the in-game menu.
+pub const MENU_Z: i32 = 960;
+
 use crate::app::{AppState, GameSet};
 use crate::clock::AnimClock;
 use crate::frontend::screens::Settings;
@@ -264,7 +267,7 @@ fn spawn_menu(commands: &mut Commands, page: MenuPage, parts: &Parts, b: Vec2) {
             MenuRoot,
             DespawnOnExit(AppState::InGame),
             // Above the mission's message panel (920), titles (900) and fades (950); below notices (1000).
-            GlobalZIndex(960),
+            GlobalZIndex(MENU_Z),
             // The whole window: dims the match and takes the pointer, so nothing under it is hit.
             Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), align_items: AlignItems::Center, justify_content: JustifyContent::Center, ..default() },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
