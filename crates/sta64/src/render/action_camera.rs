@@ -258,12 +258,19 @@ fn log_fights(mut msgs: MessageReader<SimMsg>, clock: Option<Res<AnimClock>>, mu
             log.0.insert(id, now);
         }
     }
+    // Trimmed here, not in `gather`, which runs only while a picture shows.
+    trim_log(&mut log.0, now);
+}
+
+/// Forget units that last fought more than [`FIGHT_SECS`] before `now`.
+fn trim_log(log: &mut BTreeMap<EntityId, f32>, now: f32) {
+    log.retain(|_, t| now - *t <= FIGHT_SECS);
 }
 
 /// The local player's visible, living units for each tier, from the client's view of the world.
 fn gather(link: Res<SimLink>, local: Option<Res<LocalPlayer>>, content: Option<Res<ContentRes>>, clock: Option<Res<AnimClock>>, mut log: ResMut<FightLog>, mut out: ResMut<ActionCandidates>) {
     let now = anim_now(clock.as_deref());
-    log.0.retain(|_, t| now - *t <= FIGHT_SECS);
+    trim_log(&mut log.0, now);
     let player = local.and_then(|l| l.0).unwrap_or(link.player());
     let view = link.curr();
     let craft = |def| content.as_ref().and_then(|c| c.0.unit(def)).is_none_or(|d| EntityKind::of_def(d) == EntityKind::Craft);
@@ -383,9 +390,10 @@ fn sync_cameras(
             MatchEntity,
             ActionCamera,
             Camera3d::default(),
-            // A small picture: no multisampling (the post effects and quality settings skip these cameras).
+            // A small picture: no multisampling (the quality settings skip these cameras). The post
+            // writer gives this camera the main view's tonemapper (none in Stock) and nothing else.
             Msaa::Off,
-            // An intermediate picture: no tonemapper, so no dithering either.
+            // No dithering: it would show as noise in a few hundred pixels.
             bevy::core_pipeline::tonemapping::DebandDither::Disabled,
             Camera { order: -9, clear_color: ClearColorConfig::None, ..default() },
             RenderTarget::from(view.image.clone()),
@@ -479,6 +487,21 @@ mod tests {
     fn nothing_is_chosen_when_the_player_has_no_units() {
         assert_eq!(pick(&cands(&[], &[], &[]), Some((Tier::Idle, EntityId(1))), 0.0), None);
         assert_eq!(pick(&cands(&[], &[], &[]), None, 0.0), None);
+    }
+
+    #[test]
+    fn the_fight_log_forgets_old_fights_without_a_picture() {
+        let mut log = BTreeMap::from([(EntityId(1), 0.0), (EntityId(2), 10.0)]);
+        trim_log(&mut log, FIGHT_SECS + 1.0);
+        assert_eq!(log.keys().copied().collect::<Vec<_>>(), vec![EntityId(2)]);
+        // `log_fights` itself (the system that runs in every profile) calls it.
+        let mut app = App::new();
+        app.add_message::<SimMsg>().init_resource::<FightLog>().add_systems(Update, log_fights);
+        app.world_mut().resource_mut::<FightLog>().0.insert(EntityId(9), -100.0);
+        app.world_mut().write_message(SimMsg(SimEvent::Hit { target: EntityId(2), by: EntityId(7), weapon: sta_sim::ContentKey::NONE, facing: 0, shield: Fixed::ZERO, hull: Fixed::ZERO, at: Default::default() }));
+        app.update();
+        let keys: Vec<_> = app.world().resource::<FightLog>().0.keys().copied().collect();
+        assert_eq!(keys, vec![EntityId(2), EntityId(7)], "the old entry is gone, the new ones stay");
     }
 
     #[test]

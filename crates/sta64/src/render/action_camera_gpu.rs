@@ -55,6 +55,14 @@ fn the_action_picture_shows_the_subject_and_leaves_the_overlay_layer_out_on_gpu(
             .disable::<bevy::log::LogPlugin>(),
     );
     app.insert_resource(ClearColor(Color::BLACK)).insert_resource(SimEntities::default()).add_plugins((bevy::app::HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate), ActionCameraPlugin));
+    // The client's post writer, in the Stock look: no tonemapper on the main view, and so none on the picture.
+    app.insert_resource(crate::render::profile::RenderProfile::Stock)
+        .insert_resource({
+            let mut e = crate::render::profile::ProfileEffects::default();
+            e.register_stock(crate::render::profile::Effect::Post);
+            e
+        })
+        .add_plugins(crate::render::post::PostFxPlugin { initial: crate::render::post::PostFx::default() });
 
     let mut main_image = Image::new_target_texture(256, 192, TextureFormat::Rgba8UnormSrgb, None);
     main_image.asset_usage = RenderAssetUsages::RENDER_WORLD;
@@ -112,6 +120,10 @@ fn the_action_picture_shows_the_subject_and_leaves_the_overlay_layer_out_on_gpu(
     let seen = count(&action, is_magenta);
     assert!(seen > 400, "the subject is framed in the picture ({seen} px)");
     assert_eq!(count(&action, is_green), 0, "overlay pieces are not in the picture");
+    // The same flat colour reads the same in both: the picture is not tonemapped in Stock.
+    let brightest = |img: &image::RgbaImage| img.pixels().filter(|p| is_magenta(&p.0)).map(|p| p.0).max_by_key(|p| u16::from(p[0]) + u16::from(p[2])).unwrap();
+    let (m, a) = (brightest(&main), brightest(&action));
+    assert!((0..3).all(|i| m[i].abs_diff(a[i]) <= 2), "flat subject: main {m:?}, picture {a:?}");
 }
 
 fn set_visible(app: &mut App, picture: Entity, visible: bool) {

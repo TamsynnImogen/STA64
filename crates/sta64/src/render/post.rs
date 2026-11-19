@@ -143,8 +143,7 @@ fn cycle_preset(keys: Option<Res<ButtonInput<KeyCode>>>, mut fx: ResMut<PostFx>)
     }
 }
 
-type NewNotBackground = (Added<Camera3d>, Without<BackgroundCamera>, Without<crate::render::action_camera::ActionCamera>);
-type NotBackground = (With<Camera3d>, Without<BackgroundCamera>, Without<crate::render::action_camera::ActionCamera>);
+type NotBackground = (With<Camera3d>, Without<BackgroundCamera>);
 
 /// Put the settings on the cameras: when they change, and on new cameras.
 ///
@@ -155,8 +154,8 @@ type NotBackground = (With<Camera3d>, Without<BackgroundCamera>, Without<crate::
 pub fn apply(
     mut commands: Commands,
     fx: Res<PostFx>,
-    cams: Query<Entity, NotBackground>,
-    added: Query<Entity, NewNotBackground>,
+    cams: Query<(Entity, Has<crate::render::action_camera::ActionCamera>), NotBackground>,
+    added: Query<Entity, (Added<Camera3d>, Without<BackgroundCamera>)>,
     marked: Query<(), With<PostFxMsaa>>,
     profile: Option<Res<crate::render::profile::RenderProfile>>,
     effects: Option<Res<crate::render::profile::ProfileEffects>>,
@@ -168,8 +167,14 @@ pub fn apply(
     if !fx.is_changed() && added.is_empty() && !stock_changed {
         return;
     }
-    for e in &cams {
+    for (e, action) in &cams {
         let mut cam = commands.entity(e);
+        // The action view's small picture takes the tonemapper of the main view (so the same look
+        // in every profile) and none of the other effects.
+        if action {
+            cam.try_insert(fx.tonemapping.unwrap_or(if stock { Tonemapping::None } else { Tonemapping::default() }));
+            continue;
+        }
         if fx.bloom {
             cam.try_insert(Bloom { intensity: fx.bloom_intensity, ..Bloom::NATURAL });
         } else {
@@ -242,17 +247,43 @@ mod tests {
     }
 
     #[test]
-    fn the_action_view_cameras_get_no_post_effects_and_no_msaa_change() {
-        let mut app = App::new();
-        app.set_error_handler(bevy::ecs::error::panic).add_plugins(PostFxPlugin { initial: PostFx::cinematic() });
-        let scene = app.world_mut().spawn((Camera3d::default(), Msaa::Off, crate::render::action_camera::ActionCamera)).id();
-        let sky = app.world_mut().spawn((Camera3d::default(), Msaa::Off, BackgroundCamera, crate::render::action_camera::ActionSky)).id();
-        app.update();
-        app.world_mut().insert_resource(PostFx { bloom: true, auto_exposure: true, aa: Aa::Smaa, vignette: true, ..default() });
-        app.update();
-        for e in [scene, sky] {
-            assert!(!has::<Bloom>(&app, e) && !has::<AutoExposure>(&app, e) && !has::<Hdr>(&app, e) && !has::<Smaa>(&app, e) && !has::<Vignette>(&app, e));
-            assert_eq!(app.world().get::<Msaa>(e), Some(&Msaa::Off));
+    fn the_action_view_cameras_get_no_post_effects_no_msaa_change_and_the_main_views_tonemapper() {
+        use crate::render::profile::{ProfileEffects, RenderProfile};
+        for profile in [RenderProfile::Stock, RenderProfile::Refit] {
+            let mut app = App::new();
+            app.set_error_handler(bevy::ecs::error::panic)
+                .insert_resource(profile)
+                .insert_resource({
+                    let mut e = ProfileEffects::default();
+                    e.register_stock(crate::render::profile::Effect::Post);
+                    e
+                })
+                .add_plugins(PostFxPlugin { initial: PostFx::default() });
+            let main = app.world_mut().spawn(Camera3d::default()).id();
+            let scene = app.world_mut().spawn((Camera3d::default(), Msaa::Off, crate::render::action_camera::ActionCamera)).id();
+            let sky = app.world_mut().spawn((Camera3d::default(), Msaa::Off, BackgroundCamera, crate::render::action_camera::ActionSky)).id();
+            let sky_before = app.world().get::<Tonemapping>(sky).cloned();
+            app.update();
+            app.world_mut().insert_resource(PostFx { bloom: true, auto_exposure: true, aa: Aa::Smaa, vignette: true, ..default() });
+            app.update();
+            for e in [scene, sky] {
+                assert!(!has::<Bloom>(&app, e) && !has::<AutoExposure>(&app, e) && !has::<Hdr>(&app, e) && !has::<Smaa>(&app, e) && !has::<Vignette>(&app, e));
+                assert_eq!(app.world().get::<Msaa>(e), Some(&Msaa::Off));
+            }
+            // The scene camera draws with exactly the main camera's tonemapper: none in Stock.
+            assert_eq!(app.world().get::<Tonemapping>(scene), app.world().get::<Tonemapping>(main), "{profile:?}");
+            if profile == RenderProfile::Stock {
+                assert_eq!(app.world().get::<Tonemapping>(scene), Some(&Tonemapping::None));
+            }
+            // The sky camera (a background camera) is not the writer's: it keeps what it was made with.
+            assert_eq!(app.world().get::<Tonemapping>(sky).cloned(), sky_before);
+            // A look switched at run time reaches the scene camera too.
+            if profile == RenderProfile::Stock {
+                app.insert_resource(RenderProfile::Refit);
+                app.update();
+                assert_eq!(app.world().get::<Tonemapping>(scene), app.world().get::<Tonemapping>(main));
+                assert_ne!(app.world().get::<Tonemapping>(scene), Some(&Tonemapping::None));
+            }
         }
     }
 
