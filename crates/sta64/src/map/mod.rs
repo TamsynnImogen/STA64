@@ -950,6 +950,13 @@ fn rebuild(
     ambient.brightness = 250.0;
 
     let neutral = teams.0.first().map(|t| t.1).unwrap_or(Color::WHITE);
+    // The map's own team colours (Armada I maps with a team table) apply where the player picked none:
+    // not in a skirmish, whose set-up is the player's pick. A mission or the map view takes the map's.
+    let map_team_colours = if skirmish_cfg.is_none() { crate::viewer::MapTeamColours::from_map(&map) } else { None };
+    match &map_team_colours {
+        Some(m) => commands.insert_resource(m.clone()),
+        None => commands.remove_resource::<crate::viewer::MapTeamColours>(),
+    }
     let root = commands.spawn((MapRoot,
         crate::ui::hud::object_footprints::MapFootprintRegions(map_def.clone()),
         Transform::IDENTITY, Visibility::default())).id();
@@ -1163,7 +1170,7 @@ fn rebuild(
                 units += 1;
             }
         }
-        let team = teams.team_colour(o.team.max(0) as u32).unwrap_or(neutral);
+        let team = map_team_colours.as_ref().and_then(|m| m.map(&teams, o.team.max(0) as u32)).or_else(|| teams.team_colour(o.team.max(0) as u32)).unwrap_or(neutral);
         // Team-owned ships and stations: their strategic icon, the mod's `<model>_sv`
         // sprite or a silhouette baked from the model.
         let class = odf.class_label().unwrap_or("").to_ascii_lowercase();

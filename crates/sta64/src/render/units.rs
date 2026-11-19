@@ -175,6 +175,7 @@ pub fn sync_units(
     local: Res<LocalPlayer>,
     cine: Option<Res<crate::ui::presentation::CineractiveState>>,
     teams: Option<Res<TeamColours>>,
+    map_teams: Option<Res<crate::viewer::MapTeamColours>>,
     mut map: ResMut<SimEntities>,
     existing: Query<(Entity, &SimEntity), Without<FromView>>,
     mut live: Query<(&mut HullShare, &mut UnitOwner, Has<Cloaked>), With<FromView>>,
@@ -222,7 +223,9 @@ pub fn sync_units(
         if owner == sta_sim::world::NEUTRAL {
             return Color::WHITE;
         }
-        teams.as_ref().and_then(|t| t.owner_colour(owner)).unwrap_or(Color::WHITE)
+        // An Armada I map's own team table, where one applies (`MapTeamColours`): seat n is team n + 1.
+        let from_map = || teams.as_ref().zip(map_teams.as_ref()).and_then(|(t, m)| m.hull(t, u32::from(owner.0) + 1));
+        from_map().or_else(|| teams.as_ref().and_then(|t| t.owner_colour(owner))).unwrap_or(Color::WHITE)
     };
     let mut stale: BTreeSet<EntityId> = BTreeSet::new();
     for (id, u) in want {
