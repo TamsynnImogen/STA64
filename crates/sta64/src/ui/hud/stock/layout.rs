@@ -279,6 +279,11 @@ impl StockLayout {
 
     /// Count is authoritative. Only existing numbered CFG rectangles below it draw.
     pub fn pieces(&self, prefix: &str) -> Vec<Piece> {
+        self.canvas_pieces(prefix).into_iter().map(|(frame, name, rect)| Piece { rect: self.scaled(rect), name, frame }).collect()
+    }
+
+    /// The pieces of [`Self::pieces`] in canvas units, unplaced (for a caller that places them itself).
+    pub fn canvas_pieces(&self, prefix: &str) -> Vec<(usize, String, Rect)> {
         let count = self.number(&format!("{prefix}Size")).unwrap_or(0.0);
         if !count.is_finite() || count <= 0.0 {
             return Vec::new();
@@ -286,13 +291,9 @@ impl StockLayout {
         let name = self.name(prefix).unwrap_or("default_sprite");
         let mut out = Vec::new();
         // Iterate the bounded CFG maps, never a potentially untrusted Size range.
-        let add = |frame: usize, rect: Rect, out: &mut Vec<Piece>| {
+        let add = |frame: usize, rect: Rect, out: &mut Vec<(usize, String, Rect)>| {
             if (frame as f64) < count && rect.w > 0 && rect.h > 0 {
-                out.push(Piece {
-                    rect: self.scaled(rect),
-                    name: name.to_owned(),
-                    frame,
-                });
+                out.push((frame, name.to_owned(), rect));
             }
         };
         let key_prefix = format!("{prefix}_");
@@ -310,7 +311,7 @@ impl StockLayout {
                 add(frame as usize, rect, &mut out);
             }
         }
-        out.sort_by_key(|piece| piece.frame);
+        out.sort_by_key(|piece| piece.0);
         out
     }
 

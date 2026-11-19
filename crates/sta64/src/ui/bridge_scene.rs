@@ -12,7 +12,10 @@
 //! `<p>bridge_panel` sprite (`<p>bridgeBackground`, `<p>bridgeBackgroundSize` and
 //! `<p>bridgeBackground_<n>` of the gui cfg; `<p>` by the bridge type of `SetBridgeSceneRace`). The
 //! group keeps its aspect and is centred as a whole on other window aspects (the stock look rule,
-//! ADR 0008), black around it (what the original draws in the bars is **not measured**). The
+//! ADR 0008; the player's decision of 2026-11-19: "i'd like the bridge sprites to be centered on the
+//! screen in letterbox format"), black around it, bars left and right or above and below (what the
+//! original draws in the bars is **not measured**). One transform ([`SceneFit`]) places the pieces and
+//! the clip, with every edge on a whole physical pixel. The
 //! animated `<p>bridgeLayer<n>` lights are not drawn yet (TODO.md).
 //!
 //! **Fallback.** No frame art (a mod without the sprites or the cfg keys, no install): the clip is
@@ -36,7 +39,7 @@ use sta_assets::a2fmt::spr::Skip;
 use super::gui_sprites::{self, GuiImageSampling, GuiSprites};
 use super::hud::HudConfig;
 use super::hud::layout::R;
-use super::hud::stock::layout::{StockLayout, fit_canvas};
+use super::hud::stock::layout::StockLayout;
 use super::presentation::BridgeState;
 use crate::app::GameSet;
 use crate::media::{BridgeScreen, Movies};
@@ -88,13 +91,54 @@ pub fn canvas_of(gui: Option<&sta_content::GuiLayout>) -> Vec2 {
     gui.map(|g| g.canvas).filter(|c| c.0 > 0 && c.1 > 0).map_or(CANVAS, |c| Vec2::new(c.0 as f32, c.1 as f32))
 }
 
+/// The one transform from the scene's canvas units to the window's physical pixels, for the frame
+/// pieces and the clip alike: one scale (the largest that fits the window, aspect kept), the group
+/// centred both ways, black bars on the sides that remain ("bridge sprites centered on the screen in
+/// letterbox format": the player's decision of 2026-11-19; the stock look rule of ADR 0008, the group
+/// moves only as a whole). Every edge lands on a whole physical pixel and is `origin + round(u * scale)`,
+/// so two neighbours that share a canvas edge share the pixel edge (no gap, no overlap at any scale).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SceneFit {
+    scale: f32,
+    origin: Vec2,
+    size: Vec2,
+    canvas: Vec2,
+}
+
+impl SceneFit {
+    /// `window` is in physical pixels.
+    pub fn new(window: Vec2, canvas: Vec2) -> Self {
+        let scale = (window.x / canvas.x).min(window.y / canvas.y);
+        let size = (canvas * scale).round().min(window);
+        let origin = ((window - size) / 2.0).floor().max(Vec2::ZERO);
+        Self { scale, origin, size, canvas }
+    }
+
+    fn edge(&self, u: f32, axis: usize) -> f32 {
+        let (o, size) = if axis == 0 { (self.origin.x, self.size.x) } else { (self.origin.y, self.size.y) };
+        o + (u * self.scale).round().min(size)
+    }
+
+    /// A canvas rectangle (`x y w h`) in window pixels, its edges snapped.
+    pub fn place(&self, [x, y, w, h]: [f32; 4]) -> R {
+        let (l, r) = (self.edge(x, 0), self.edge(x + w, 0));
+        let (t, b) = (self.edge(y, 1), self.edge(y + h, 1));
+        R::new(l, t, r - l, b - t)
+    }
+
+    /// The whole canvas.
+    pub fn group(&self) -> R {
+        self.place([0.0, 0.0, self.canvas.x, self.canvas.y])
+    }
+}
+
 /// The clip's rectangle is in the units of [`CANVAS`]; on a cfg canvas of another size it is
-/// scaled with it, so it stays over the art's window.
+/// scaled with it, so it stays over the art's window. `window` is in physical pixels.
 pub fn layout(window: Vec2, race: Option<i32>, canvas: Vec2) -> BridgeLayout {
-    let (scale, group) = fit_canvas(canvas, window);
+    let fit = SceneFit::new(window, canvas);
     let [x, y, w, h] = movie_rect(race);
-    let (sx, sy) = (scale * canvas.x / CANVAS.x, scale * canvas.y / CANVAS.y);
-    BridgeLayout { group, movie: R::new(group.x + x * sx, group.y + y * sy, w * sx, h * sy) }
+    let (kx, ky) = (canvas.x / CANVAS.x, canvas.y / CANVAS.y);
+    BridgeLayout { group: fit.group(), movie: fit.place([x * kx, y * ky, w * kx, h * ky]) }
 }
 
 /// The largest rectangle of the picture's aspect that fits the window, centred.
@@ -247,7 +291,7 @@ fn load_art(
 }
 
 fn absolute(r: R, window: Vec2) -> Node {
-    // Fractions of the window, so the scene does not depend on the UI scale.
+    // Fractions of the window (`window` in the units of `r`), so the scene does not depend on the UI scale.
     Node {
         position_type: PositionType::Absolute,
         left: Val::Percent(r.x / window.x * 100.0),
@@ -256,6 +300,13 @@ fn absolute(r: R, window: Vec2) -> Node {
         height: Val::Percent(r.h / window.y * 100.0),
         ..default()
     }
+}
+
+/// The picture takes exactly its node's rectangle: `Auto` would size it by the source's aspect (an
+/// aspect off by a pixel after snapping, or a clip of another shape, would then move an edge).
+fn stretched(mut n: ImageNode) -> ImageNode {
+    n.image_mode = NodeImageMode::Stretch;
+    n
 }
 
 /// Show the scene while a clip plays on the bridge screen, and remove it after.
@@ -285,7 +336,9 @@ pub fn drive(
         return;
     }
     let (Some(screen), Some(window), Some(mut images)) = (screen, window, images) else { return };
-    let size = Vec2::new(window.width(), window.height());
+    // Physical pixels: every edge of the scene is snapped to one (see [`SceneFit`]); the overlay's
+    // fractions are of the same window whatever the scale factor or UI scale.
+    let size = window.physical_size().as_vec2();
     if size.x <= 0.0 || size.y <= 0.0 {
         return;
     }
@@ -315,16 +368,18 @@ pub fn drive(
         .id();
     match mode {
         Mode::Fullscreen => {
-            commands.spawn((FallbackPicture, absolute(R::new(0.0, 0.0, size.x, size.y), size), ImageNode::new(screen.image.clone()), Pickable::IGNORE, ChildOf(root)));
+            commands.spawn((FallbackPicture, absolute(R::new(0.0, 0.0, size.x, size.y), size), stretched(ImageNode::new(screen.image.clone())), Pickable::IGNORE, ChildOf(root)));
         }
         Mode::Bare | Mode::Framed => {
-            commands.spawn((absolute(l.movie, size), ImageNode::new(screen.image.clone()), Pickable::IGNORE, ChildOf(root)));
+            commands.spawn((absolute(l.movie, size), stretched(ImageNode::new(screen.image.clone())), Pickable::IGNORE, ChildOf(root)));
         }
     }
     if let (Some(pieces), Some(gui)) = (pieces, gui) {
-        for p in StockLayout::new(gui, size).pieces(&format!("{key}bridgeBackground")) {
-            if let Some((_, image, crop)) = pieces.iter().find(|(f, _, _)| *f == p.frame) {
-                commands.spawn((absolute(p.rect, size), ImageNode { image: image.clone(), rect: Some(*crop), ..default() }, Pickable::IGNORE, ChildOf(root)));
+        let fit = SceneFit::new(size, canvas_of(Some(gui)));
+        for (frame, _, r) in StockLayout::new(gui, size).canvas_pieces(&format!("{key}bridgeBackground")) {
+            if let Some((_, image, crop)) = pieces.iter().find(|(f, _, _)| *f == frame) {
+                let rect = fit.place([r.x as f32, r.y as f32, r.w as f32, r.h as f32]);
+                commands.spawn((absolute(rect, size), ImageNode { image: image.clone(), rect: Some(*crop), image_mode: NodeImageMode::Stretch, ..default() }, Pickable::IGNORE, ChildOf(root)));
             }
         }
     }
@@ -341,7 +396,7 @@ fn fit_fallback(
 ) {
     let (Some(window), Some(screen), Some(images)) = (window, screen, images) else { return };
     let Some(img) = images.get(&screen.image) else { return };
-    let size = Vec2::new(window.width(), window.height());
+    let size = window.physical_size().as_vec2();
     let next = absolute(fit_window(size, (img.width(), img.height())), size);
     for mut node in &mut pictures {
         if node.left != next.left || node.top != next.top || node.width != next.width || node.height != next.height {
@@ -369,6 +424,8 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    mod gpu;
     use crate::media::mission::target_for;
     use crate::media::{MovieId, MovieTarget, PanelKind, PanelScreen, PlayMovie};
 
@@ -413,6 +470,102 @@ f_bridgeBackground_1 = 320 0 320 480
         assert_eq!((tall.group.w, tall.group.h, tall.group.y), (640.0, 480.0, 240.0));
     }
 
+    /// Window sizes in physical pixels: the sheet's own aspect, wide, ultrawide, tall, odd and fractional scales.
+    const SIZES: [(f32, f32); 9] = [
+        (640.0, 480.0),
+        (1280.0, 960.0),
+        (1920.0, 1080.0),
+        (3440.0, 1440.0),
+        (2752.0, 1152.0),
+        (1001.0, 777.0),
+        (800.0, 1280.0),
+        (1000.0, 1500.0),
+        (333.0, 1021.0),
+    ];
+
+    #[test]
+    fn the_group_is_centred_as_a_whole_with_bars_on_the_remaining_sides() {
+        for (w, h) in SIZES {
+            let l = layout(Vec2::new(w, h), Some(1), CANVAS);
+            let g = l.group;
+            assert!(g.x >= 0.0 && g.y >= 0.0 && g.right() <= w && g.bottom() <= h, "{w}x{h}: {g:?}");
+            // Equal bars (one pixel apart at most when the difference is odd).
+            assert!(((g.x) - (w - g.right())).abs() <= 1.0, "{w}x{h}: horizontal bars {g:?}");
+            assert!(((g.y) - (h - g.bottom())).abs() <= 1.0, "{w}x{h}: vertical bars {g:?}");
+            // The picture keeps its aspect (to the pixel) and touches the window on the limiting axis.
+            assert!((g.w / g.h - 4.0 / 3.0).abs() < 2.0 / g.h.min(g.w), "{w}x{h}: {g:?}");
+            assert!(g.x <= 1.0 || g.y <= 1.0, "{w}x{h}: it is the largest that fits {g:?}");
+            // Whole pixels.
+            assert!([g.x, g.y, g.w, g.h].iter().all(|v| v.fract() == 0.0), "{w}x{h}: {g:?}");
+        }
+        // Wide: bars left and right; tall: bars above and below.
+        let wide = layout(Vec2::new(2752.0, 1152.0), None, CANVAS).group;
+        assert_eq!((wide.y, wide.h), (0.0, 1152.0));
+        assert!(wide.x > 0.0);
+        let tall = layout(Vec2::new(800.0, 1280.0), None, CANVAS).group;
+        assert_eq!((tall.x, tall.w), (0.0, 800.0));
+        assert!(tall.y > 0.0);
+    }
+
+    #[test]
+    fn the_clip_rectangle_is_the_opening_mapped_through_the_pictures_own_transform() {
+        for race in [None, Some(1), Some(2), Some(3), Some(4)] {
+            for (w, h) in SIZES {
+                let window = Vec2::new(w, h);
+                let fit = SceneFit::new(window, CANVAS);
+                let l = layout(window, race, CANVAS);
+                assert_eq!(l.movie, fit.place(movie_rect(race)), "{race:?} {w}x{h}");
+                // Inside the group, whole pixels, and within a pixel of the exact scaled rectangle.
+                let g = l.group;
+                let m = l.movie;
+                assert!(m.x >= g.x && m.y >= g.y && m.right() <= g.right() && m.bottom() <= g.bottom(), "{race:?} {w}x{h}");
+                let s = g.w / CANVAS.x;
+                let [x, y, mw, mh] = movie_rect(race);
+                for (got, want) in [(m.x - g.x, x * s), (m.y - g.y, y * s), (m.w, mw * s), (m.h, mh * s)] {
+                    assert!(got.fract() == 0.0 && (got - want).abs() <= 1.0, "{race:?} {w}x{h}: {got} vs {want}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pieces_that_share_a_canvas_edge_share_the_pixel_edge_at_every_scale() {
+        // Authored pieces that tile the canvas at odd cuts.
+        let cuts_x = [0.0, 107.0, 213.0, 427.0, 640.0];
+        let cuts_y = [0.0, 77.0, 241.0, 480.0];
+        for (w, h) in SIZES {
+            let fit = SceneFit::new(Vec2::new(w, h), CANVAS);
+            let g = fit.group();
+            let mut cover = 0.0;
+            for yi in 0..cuts_y.len() - 1 {
+                for xi in 0..cuts_x.len() - 1 {
+                    let r = fit.place([cuts_x[xi], cuts_y[yi], cuts_x[xi + 1] - cuts_x[xi], cuts_y[yi + 1] - cuts_y[yi]]);
+                    let right = fit.place([cuts_x[xi + 1], cuts_y[yi], 1.0, 1.0]);
+                    assert_eq!(r.right(), right.x, "{w}x{h}: right neighbour shares the edge");
+                    let below = fit.place([cuts_x[xi], cuts_y[yi + 1], 1.0, 1.0]);
+                    assert_eq!(r.bottom(), below.y, "{w}x{h}: lower neighbour shares the edge");
+                    assert!([r.x, r.y, r.w, r.h].iter().all(|v| v.fract() == 0.0));
+                    cover += r.w * r.h;
+                }
+            }
+            assert_eq!(cover, g.w * g.h, "{w}x{h}: the pieces tile the group exactly");
+        }
+    }
+
+    #[test]
+    fn the_pieces_of_a_cfg_are_placed_through_the_same_transform_as_the_clip() {
+        let g = gui(CFG);
+        let layout_ = StockLayout::new(&g, Vec2::new(2752.0, 1152.0));
+        let fit = SceneFit::new(Vec2::new(2752.0, 1152.0), canvas_of(Some(&g)));
+        let raw = layout_.canvas_pieces("f_bridgeBackground");
+        assert_eq!(raw.len(), 2);
+        let placed: Vec<R> = raw.iter().map(|(_, _, r)| fit.place([r.x as f32, r.y as f32, r.w as f32, r.h as f32])).collect();
+        // Centred, as a whole: the two halves span the group.
+        assert_eq!(placed[0].x, fit.group().x);
+        assert_eq!(placed[1].right(), fit.group().right());
+        assert_eq!(placed[0].right(), placed[1].x);
+    }
+
     #[test]
     fn every_bridge_type_has_a_clip_rectangle_inside_the_scene_and_its_own_prefix() {
         let mut seen = std::collections::BTreeSet::new();
@@ -449,7 +602,7 @@ f_bridgeBackground_1 = 320 0 320 480
     }
 
     /// A temporary install root, removed when dropped.
-    struct Tmp(std::path::PathBuf);
+    pub(super) struct Tmp(std::path::PathBuf);
 
     impl Drop for Tmp {
         fn drop(&mut self) {
@@ -457,7 +610,7 @@ f_bridgeBackground_1 = 320 0 320 480
         }
     }
 
-    fn mount(files: &[(&str, Vec<u8>)]) -> (sta_vfs::Vfs, Tmp) {
+    pub(super) fn mount(files: &[(&str, Vec<u8>)]) -> (sta_vfs::Vfs, Tmp) {
         let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
         let root = std::env::temp_dir().join(format!("sta64-bridge-scene-{}-{nonce}", std::process::id()));
         let data = root.join("Data");
@@ -471,7 +624,7 @@ f_bridgeBackground_1 = 320 0 320 480
     }
 
     /// A 2x1 true-colour TGA: one magenta pixel (the window) and one grey.
-    fn tga() -> Vec<u8> {
+    pub(super) fn tga() -> Vec<u8> {
         let mut bytes = vec![0u8; 18];
         bytes[2] = 2;
         bytes[12] = 2;
