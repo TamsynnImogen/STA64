@@ -46,8 +46,11 @@ pub fn cursor(
     window: Query<Entity, With<PrimaryWindow>>,
     hud: Option<Res<crate::ui::hud::HudPointer>>,
     mut wanted: ResMut<crate::ui::cursor::WantedCursor>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
 ) {
-    let own = own_selection(&selection, &link);
+    // Over a cutscene no order is on offer (selection and orders are gated the same way), so the
+    // cursor stays the arrow: the selection is kept, inert, and the cursor reads it again afterwards.
+    let own = if crate::ui::presentation::cutscene_running(cine) { Vec::new() } else { own_selection(&selection, &link) };
     let icon = aim.0.filter(|_| !own.is_empty()).and_then(|a| unit_under_where(a.cursor, a.ray, &units, |t| target_seen(link.curr(), local.as_deref().and_then(|l| l.0), t))).and_then(|t| {
         context_order(content.as_deref().map(|c| &*c.0), link.curr(), link.player(), &own, t)
     });
@@ -216,6 +219,34 @@ mod tests {
         app.insert_resource(SimLink::new(Box::new(ViewSource(Arc::new(view))), Box::new(LocalRouter::new()), PlayerId(0)));
         app.world_mut().run_system_once(cursor).unwrap();
         assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, crate::ui::cursor::DEFAULT);
+    }
+
+    /// The attack crosshair is not shown over a cutscene; it returns after it.
+    #[test]
+    fn the_order_cursor_is_not_shown_during_a_cutscene() {
+        let (mut app, ids) = app(1);
+        app.insert_resource(crate::render::units::LocalPlayer(Some(PlayerId(0))));
+        app.init_resource::<crate::ui::cursor::WantedCursor>();
+        let mut view = (**app.world().resource::<SimLink>().curr()).clone();
+        view.visibility = vec![(PlayerId(0), view.units.iter().map(|u| u.id).filter(|&id| id != ids[4]).collect())];
+        app.insert_resource(SimLink::new(Box::new(ViewSource(Arc::new(view))), Box::new(LocalRouter::new()), PlayerId(0)));
+        let front = app.world_mut().query::<(Entity, &SimEntity)>().iter(app.world()).find(|(_, id)| id.0 == ids[4]).unwrap().0;
+        app.world_mut().entity_mut(front).insert(GlobalTransform::from(Transform::from_xyz(-3000.0, 100.0, 0.0)));
+        app.world_mut().resource_mut::<Aim>().0 = Some(AimState {
+            cursor: Vec2::ZERO,
+            ray: Ray3d::new(Vec3::new(-3000.0, 1000.0, 0.0), Dir3::NEG_Y),
+            clip_from_world: Mat4::IDENTITY,
+            size: Vec2::new(800.0, 600.0),
+        });
+        let wanted = |app: &App| app.world().resource::<crate::ui::cursor::WantedCursor>().0;
+        app.world_mut().run_system_once(cursor).unwrap();
+        assert_eq!(wanted(&app), "c_attack", "the rig shows it without a cutscene");
+        app.insert_resource(crate::ui::presentation::CineractiveState { on: true, skippable: false });
+        app.world_mut().run_system_once(cursor).unwrap();
+        assert_eq!(wanted(&app), crate::ui::cursor::DEFAULT);
+        app.insert_resource(crate::ui::presentation::CineractiveState { on: false, skippable: false });
+        app.world_mut().run_system_once(cursor).unwrap();
+        assert_eq!(wanted(&app), "c_attack");
     }
 
     #[test]
