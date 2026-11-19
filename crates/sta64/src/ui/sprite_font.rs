@@ -40,6 +40,12 @@ use sta_vfs::Vfs;
 
 use crate::viewer::Mounted;
 
+/// Plain text's whole multiple may draw at most this share smaller than asked (15% below),
+/// unless no font of the mod allows it.
+pub const PLAIN_MIN_SHARE: f32 = 0.85;
+/// ... and at most this share larger (15% above), so a label does not outgrow its box.
+pub const PLAIN_MAX_SHARE: f32 = 1.15;
+
 /// One glyph of a page: its top left corner and width, in the page's reference texels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlyphEntry {
@@ -665,6 +671,52 @@ impl SpriteFonts {
             .map(|(f, k, _)| (f, k))
     }
 
+    /// The font and whole multiple for plain (unstyled) text, which has no role and was
+    /// once drawn at exactly `size` in the font nearest `size` (STA64's old fractional
+    /// path): the same face ([`pick`](Self::pick) of `size`) at the whole multiple whose
+    /// drawn height is NEAREST to `desired` physical pixels (a tie takes the larger, so a
+    /// label never shrinks on a tie), provided that lies within [`PLAIN_MIN_SHARE`] below
+    /// and [`PLAIN_MAX_SHARE`] above the request. When the face offers no such multiple, the
+    /// nearest drawn height over all the mod's fonts and multiples inside the lower bound;
+    /// when none is inside it (a mod whose fonts are all taller or too coarse), the nearest
+    /// of all.
+    pub fn crisp_plain(&self, size: f32, desired: f32) -> Option<(&LoadedFont, u32)> {
+        let floor = desired * PLAIN_MIN_SHARE;
+        // The multiples of one font bracketing `desired`; the nearer (the larger on a tie).
+        let best_k = |h: f32| -> (u32, f32) {
+            let lo = ((desired / h).floor() as u32).max(1);
+            let hi = lo + 1;
+            let (dl, dh) = ((h * lo as f32 - desired).abs(), (h * hi as f32 - desired).abs());
+            let k = if dh <= dl { hi } else { lo };
+            (k, h * k as f32)
+        };
+        if let Some(f) = self.pick(size).filter(|f| f.font.height() > 0.0) {
+            let (k, drawn) = best_k(f.font.height());
+            if drawn >= floor && drawn <= desired * PLAIN_MAX_SHARE {
+                return Some((f, k));
+            }
+        }
+        let mut cands: Vec<(&LoadedFont, u32, f32)> = self
+            .fonts
+            .values()
+            .filter(|f| f.font.height() > 0.0)
+            .map(|f| {
+                let (k, drawn) = best_k(f.font.height());
+                (f, k, drawn)
+            })
+            .collect();
+        // Nearest drawn height, the larger on a tie, then the smaller multiple.
+        cands.sort_by(|a, b| {
+            let (da, db) = ((a.2 - desired).abs(), (b.2 - desired).abs());
+            da.total_cmp(&db).then(b.2.total_cmp(&a.2)).then(a.1.cmp(&b.1))
+        });
+        cands
+            .iter()
+            .find(|c| c.2 >= floor)
+            .or_else(|| cands.first())
+            .map(|&(f, k, _)| (f, k))
+    }
+
     /// Like [`crisp`](Self::crisp) but never smaller than `desired` (less 0.5 px): when the
     /// choice falls short, the font that reaches it with the smallest height, at the fewest
     /// whole multiples. A font a size up at 1x beats doubling the one just below (A2 stock
@@ -1103,8 +1155,9 @@ fn resolve_text(
             }
             continue;
         }
-        // Plain `sprite_text` (the HUD's) keeps its old drawing: pictures tinted like the
-        // rest and no glyph words. A `SpriteTextStyle` opts in to both.
+        // Plain `sprite_text` (the HUD's) draws pictures tinted like the rest and shows no
+        // glyph words; a `SpriteTextStyle` opts in to both. Its size and font are chosen by
+        // `SpriteFonts::crisp_plain` below, not by a role.
         let styled = style.is_some();
         let style = style.as_deref().cloned().unwrap_or_default();
         let existing: Vec<Entity> = children
@@ -1112,16 +1165,21 @@ fn resolve_text(
             .map(|children| children.iter().collect())
             .unwrap_or_default();
         // Text is drawn crisp: a font and whole multiple that put glyph texels on whole physical
-        // pixels, so a nearest-sampled sheet shows even strokes. Plain `sprite_text` (the
-        // Refit layout's labels, radar captions) takes the same path as styled text: at the
-        // size's own fractional scale its texels came out one or two pixels wide at random
-        // (measured on a 3440 x 1440 frame). Only `native` and `scaled` text keeps its own size.
+        // pixels, so a nearest-sampled sheet shows even strokes. Styled text picks by role and
+        // size ([`SpriteFonts::crisp`]). Plain `sprite_text` (the Refit layout's labels, radar
+        // captions) has no role and was drawn at exactly its size in the font nearest to it; it
+        // keeps that face and takes the whole multiple whose drawn height is nearest to the
+        // size, within [`PLAIN_MIN_SHARE`] ([`SpriteFonts::crisp_plain`]), so it may take
+        // another of the mod's fonts when the face has no multiple that close. Only `native` and
+        // `scaled` text keeps its own fractional size.
         let crisp = if !style.native && !style.scaled && scalable.is_none() {
             // A sprite font's nominal height carries leading above and below its ink; a
             // label with a readable floor asks for the font that inks as tall as the
             // TTF of that size (`STOCK_INK`), not one of that nominal height.
             let want = t.size * px * if style.min_size { STOCK_INK } else { 1.0 };
-            if style.min_size {
+            if !styled {
+                fonts.crisp_plain(t.size, want)
+            } else if style.min_size {
                 fonts.crisp_at_least(style.role, want)
             } else {
                 fonts.crisp(style.role, want)
@@ -2342,26 +2400,28 @@ mod tests {
         assert!(((w * 2.0) - (w * 2.0).round()).abs() < 1e-3);
     }
 
-    /// Plain `sprite_text` (no style) is crisp too: whole physical pixels at a non-integer
-    /// UI scale, where its fractional scale used to put texels on uneven pixels.
-    #[test]
-    fn plain_sprite_text_resolves_to_whole_physical_pixels_at_a_fractional_scale() {
-        let ui = 1440.0f32 / 1080.0;
+    /// Drawn glyph height in physical pixels of plain `sprite_text` of `size` logical px at
+    /// UiScale `ui` in a mod whose fonts have the given heights; every node edge is asserted
+    /// to sit on a whole physical pixel on the way.
+    fn plain_drawn_height(heights: &[f32], size: f32, ui: f32) -> f32 {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<SpriteFonts>()
             .init_resource::<GlyphWords>()
             .insert_resource(UiScale(ui))
             .add_systems(Update, resolve_text);
-        let mut f = ttf_like(19.0);
-        f.name = "fontmedium".into();
-        let mut lf = LoadedFont::new(f, vec![(Handle::default(), UVec2::new(256, 256))]);
-        lf.font.reference = None;
-        app.world_mut().resource_mut::<SpriteFonts>().fonts.insert("fontmedium".into(), lf);
-        let e = app.world_mut().spawn(sprite_text("Federation campaign", 21.0, Color::WHITE)).id();
+        for (i, h) in heights.iter().enumerate() {
+            let mut f = ttf_like(*h);
+            f.name = format!("font{i}");
+            let mut lf = LoadedFont::new(f, vec![(Handle::default(), UVec2::new(256, 256))]);
+            lf.font.reference = None;
+            app.world_mut().resource_mut::<SpriteFonts>().fonts.insert(format!("font{i}"), lf);
+        }
+        let e = app.world_mut().spawn(sprite_text("Federation campaign", size, Color::WHITE)).id();
         app.update();
         let kids: Vec<Entity> = app.world().get::<Children>(e).unwrap().iter().collect();
         assert!(!kids.is_empty());
+        let mut drawn = 0.0;
         for k in kids {
             let n = app.world().get::<Node>(k).unwrap();
             for v in [n.left, n.top, n.width, n.height] {
@@ -2369,11 +2429,49 @@ mod tests {
                 let phys = v * ui;
                 assert!((phys - phys.round()).abs() < 1e-3, "{phys} is not a whole physical pixel");
             }
-            // Whole multiple of the font's texels (19 px glyphs, 1x or 2x), not a fractional one.
             let Val::Px(h) = n.height else { panic!("px") };
-            let mult = h * ui / 19.0;
-            assert!((mult - mult.round()).abs() < 1e-3, "{mult} is not a whole multiple of the font's texels");
+            drawn = h * ui;
         }
+        drawn
+    }
+
+    /// Plain `sprite_text` (no style) is crisp too: whole physical pixels at a non-integer UI
+    /// scale, and its drawn height stays near the requested height (nearest whole multiple,
+    /// within `PLAIN_MIN_SHARE` below it when the mod's fonts allow it), on the same face as
+    /// before when that face has a multiple that close.
+    #[test]
+    fn plain_sprite_text_resolves_to_whole_physical_pixels_at_a_fractional_scale() {
+        let ui = 1440.0f32 / 1080.0;
+        // 21 logical px ask for 28 physical px.
+        let want = 21.0 * ui;
+        // Fonts of 14 and 30: the nearest-by-height face (14) has an exact multiple (2x = 28).
+        let drawn = plain_drawn_height(&[14.0, 30.0], 21.0, ui);
+        assert!((drawn - 28.0).abs() < 1e-3, "kept the face and doubled it: {drawn}");
+        // Fonts of 19 and 30: the nearest face (19) only offers 19 (68%); the mod's 30 px font
+        // is nearer to the request and inside the bound.
+        let drawn = plain_drawn_height(&[19.0, 30.0], 21.0, ui);
+        assert!((drawn - 30.0).abs() < 1e-3, "took the font nearest the request: {drawn}");
+        assert!(drawn >= want * PLAIN_MIN_SHARE && drawn <= want * 1.15, "{drawn} vs {want}");
+        // A face whose nearest multiple is inside the lower bound but over the upper one is
+        // not kept: 23 px doubles to 46 for a 35 px request; the mod's 30 px font is taken.
+        let drawn = plain_drawn_height(&[23.0, 30.0], 26.0, ui);
+        assert!((drawn - 30.0).abs() < 1e-3, "{drawn}");
+        // A larger request: 12 logical px at this scale is 16 physical; 8 and 15 px fonts.
+        let drawn = plain_drawn_height(&[8.0, 15.0], 12.0, ui);
+        assert!((drawn - 16.0).abs() < 1.0 + 1e-3, "within a pixel of the request: {drawn}");
+    }
+
+    /// A mod with a single font size: the whole multiple nearest the request (the larger on a
+    /// tie), even when it is below the bound because no other font exists.
+    #[test]
+    fn plain_sprite_text_with_one_font_size_takes_the_nearest_multiple() {
+        let ui = 1440.0f32 / 1080.0;
+        // 21 logical px = 28 physical: 19 (9 away) beats 38 (10 away); no font fits the bound.
+        assert!((plain_drawn_height(&[19.0], 21.0, ui) - 19.0).abs() < 1e-3);
+        // 60 logical px = 80 physical: 76 (4 away) beats 95.
+        assert!((plain_drawn_height(&[19.0], 60.0, ui) - 76.0).abs() < 1e-3);
+        // A tie takes the larger: 30 requested physical = 22.5 logical; 20 and 40 are 10 away each.
+        assert!((plain_drawn_height(&[20.0], 22.5, ui) - 40.0).abs() < 1e-3);
     }
 
     #[test]

@@ -1211,8 +1211,8 @@ fn installed_titles_render_on_gpu() {
             ChildOf(root),
             children![sprite_text_styled("Centred Title", head, blue, style(head))],
         ));
-        // The two non-crisp paths: plain `sprite_text` (the Refit-layout HUD's) and a `scaled`
-        // caption (stock group tiles), both laid out at the size's own fractional scale.
+        // Plain `sprite_text` (the Refit-layout HUD's: crisp, size-preserving choice) and a
+        // `scaled` caption (stock group tiles: the only path still at a fractional scale).
         app.world_mut().spawn((at(3.1, 20.0), ChildOf(root), children![sprite_text("Plain sprite text 0123456789", 21.0, white)]));
         app.world_mut().spawn((
             at(3.1, 28.0),
@@ -1243,6 +1243,117 @@ fn installed_titles_render_on_gpu() {
         if let Ok(dir) = std::env::var("STA64_HUD_CAPTURE_DIR") {
             std::fs::create_dir_all(&dir).unwrap();
             rgba.save(std::path::Path::new(&dir).join(format!("titles-{tag}-{}x{}.png", size.x, size.y))).unwrap();
+        }
+    }
+}
+
+/// Local font-size check of the Refit (non-stock) HUD on an install's fonts: draws it for one
+/// selected unit and for a group of constructors at the sizes in `STA64_HUD_SIZES`, prints one
+/// `label:` line per sprite text (text, requested size, drawn glyph height in physical px, own
+/// and parent box widths, `OVERFLOW` where the text is wider or taller than a parent box) and
+/// keeps the frame in `STA64_HUD_CAPTURE_DIR`. Set `STA64_GPU_TESTS=1 STA64_HUD_TESTS=1
+/// STA64_TEST_INSTALL` and optional `STA64_TEST_MOD`. Frames show game art: never commit them.
+#[test]
+fn installed_refit_hud_labels_on_gpu() {
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") || std::env::var("STA64_HUD_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_HUD_TESTS=1 STA64_TEST_INSTALL");
+        return;
+    }
+    let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
+    let active_mod = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
+    for size in sizes(&[UVec2::new(3440, 1440)]) {
+        for group in [0usize, 4] {
+            let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).expect("installed VFS");
+            let mut hud_feed = feed(&vfs, GameOptions::default(), group);
+            if group > 0 {
+                hud_feed.selected = hud_feed.view.units.iter().rev().filter(|u| u.owner == hud_feed.player
+                    && hud_feed.content.as_ref().unwrap().unit(u.def).is_some_and(|d| d.class.0 == "constructionrig"))
+                    .take(group).map(|u| u.id).collect();
+            }
+            let selection = hud_feed.selected.clone();
+            let radar_feed = RadarFeed {
+                view: hud_feed.view.clone(),
+                player: hud_feed.player,
+                selected: selection.clone(),
+                content: hud_feed.content.clone(),
+                camera: None,
+            };
+            let profile = UiProfile::Lcars;
+            let mut app = App::new();
+            app.add_plugins(
+                DefaultPlugins
+                    .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
+                    .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
+                    .disable::<bevy::gilrs::GilrsPlugin>()
+                    .disable::<bevy::winit::WinitPlugin>()
+                    .disable::<bevy::log::LogPlugin>(),
+            );
+            configure_sets(&mut app);
+            app.insert_resource(ClearColor(Color::BLACK))
+                .insert_resource(profile)
+                .insert_resource(crate::input::hover::HoveredUnit(None))
+                .insert_resource(profile.theme())
+                .insert_resource(Mounted(vfs))
+                .insert_resource(HudConfig { gui: None, aspect: size.x as f32 / size.y as f32, fit: env_fit(), fit_scale: false, log: false })
+                .insert_resource(UiScale(size.y as f32 / 1080.0))
+                .insert_resource(hud_feed)
+                .insert_resource(radar_feed)
+                .insert_resource(ExternalFeed)
+                .insert_resource(Selection(selection))
+                .init_resource::<ButtonInput<MouseButton>>()
+                .init_resource::<ButtonInput<KeyCode>>()
+                .add_plugins(HudPlugin)
+                .add_systems(Update, aim_roots.before(GameSet::Ui));
+            let mut image = Image::new_target_texture(size.x, size.y, bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb, None);
+            image.asset_usage = RenderAssetUsages::RENDER_WORLD;
+            let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+            let camera = app
+                .world_mut()
+                .spawn((Camera2d, Camera { order: 1, clear_color: ClearColorConfig::Custom(Color::BLACK), ..default() }, RenderTarget::from(target.clone()), Msaa::Off))
+                .id();
+            app.insert_resource(CaptureCamera(camera));
+            app.finish();
+            app.cleanup();
+            for _ in 0..24 {
+                app.update();
+            }
+            let ui = size.y as f32 / 1080.0;
+            let mut rows = Vec::new();
+            let mut q = app.world_mut().query::<(Entity, &crate::ui::sprite_font::SpriteText, &ComputedNode, Option<&ChildOf>, Option<&Children>)>();
+            for (_, text, node, parent, kids) in q.iter(app.world()) {
+                let drawn = kids
+                    .and_then(|k| k.iter().find_map(|c| app.world().get::<ComputedNode>(c)))
+                    .map_or(0.0, |c| c.size().y);
+                let (pw, ph) = parent
+                    .and_then(|p| app.world().get::<ComputedNode>(p.parent()))
+                    .map_or((0.0, 0.0), |c| (c.size().x, c.size().y));
+                let over = pw > 0.0 && ph > 0.0 && (node.size().x > pw + 1.0 || node.size().y > ph + 1.0);
+                rows.push(format!(
+                    "label: group={group} {:?} want={:.1}px drawn_h={:.0}px own={:.0}x{:.0} parent={:.0}x{:.0}{}",
+                    text.text, text.size * ui, drawn, node.size().x, node.size().y, pw, ph, if over { " OVERFLOW" } else { "" }
+                ));
+            }
+            rows.sort();
+            for r in &rows {
+                eprintln!("{r}");
+            }
+            let frames = Arc::new(Mutex::new(Vec::<Image>::new()));
+            let output = Arc::clone(&frames);
+            app.world_mut().spawn(Screenshot::image(target)).observe(move |shot: On<ScreenshotCaptured>| {
+                output.lock().unwrap().push(shot.image.clone());
+            });
+            for _ in 0..60 {
+                app.update();
+                if !frames.lock().unwrap().is_empty() {
+                    break;
+                }
+            }
+            let shot = frames.lock().unwrap().first().cloned().expect("refit frame");
+            let rgba = shot.try_into_dynamic().expect("refit frame image").to_rgba8();
+            if let Ok(dir) = std::env::var("STA64_HUD_CAPTURE_DIR") {
+                std::fs::create_dir_all(&dir).unwrap();
+                rgba.save(std::path::Path::new(&dir).join(format!("refit-g{group}-{}x{}.png", size.x, size.y))).unwrap();
+            }
         }
     }
 }
