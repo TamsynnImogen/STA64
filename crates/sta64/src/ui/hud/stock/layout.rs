@@ -277,6 +277,17 @@ impl StockLayout {
         })
     }
 
+    /// A panel-relative rectangle moved right by `dx` canvas units before scaling (a position on a
+    /// row of equal slots, such as the Armada I speed rail), then by `origin`.
+    pub fn at_shifted(&self, origin: Vec2, key: &str, dx: i32) -> Option<R> {
+        let mut raw = self.raw_rect(key).filter(|r| r.w > 0 && r.h > 0)?;
+        raw.x = raw.x.saturating_add(dx);
+        let mut r = self.scaled(raw);
+        r.x += origin.x;
+        r.y += origin.y;
+        Some(r)
+    }
+
     /// Count is authoritative. Only existing numbered CFG rectangles below it draw.
     pub fn pieces(&self, prefix: &str) -> Vec<Piece> {
         self.canvas_pieces(prefix).into_iter().map(|(frame, name, rect)| Piece { rect: self.scaled(rect), name, frame }).collect()

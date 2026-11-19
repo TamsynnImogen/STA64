@@ -949,6 +949,115 @@ fn installed_armada1_stock_hud_renders_on_gpu() {
     }
 }
 
+/// The Armada I speed rail's TRANSPORT button on the install's own content, in a windowless GPU frame: a
+/// crewed own ship selected, the button drawn at the rail's place from the sheet, the press arming the pick.
+/// Set `STA64_GPU_TESTS=1 STA64_TEST_A1_INSTALL=<Armada I root>`; `STA64_HUD_CAPTURE_DIR` keeps the frame
+/// locally (it shows game art: never commit it).
+#[test]
+fn installed_armada1_speed_rail_transport_button_renders_on_gpu() {
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_TEST_A1_INSTALL=<Armada I root>");
+        return;
+    }
+    let Some(install) = std::env::var_os("STA64_TEST_A1_INSTALL") else {
+        eprintln!("SKIP: set STA64_TEST_A1_INSTALL=<Armada I root>");
+        return;
+    };
+    let (cfg, spr) = ("gui_fed.cfg", "gui_federation.spr");
+    let size = UVec2::new(1920, 1080);
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), None).expect("installed A1 VFS");
+    let layout = crate::game::gui_layout(&vfs, cfg).expect("installed gui cfg");
+    let fit = super::layout::HudFit::ALL[0];
+    let stock = StockLayout::for_aspect_fit(&layout, size.x as f32 / size.y as f32, fit);
+    let mut hud_feed = feed(&vfs, GameOptions::default(), 1);
+    // The selection: an own ship with crew in the view (the shared start has a builder ship).
+    let crewed: Vec<_> = hud_feed.view.units.iter().filter(|u| u.owner == PlayerId(0) && u.crew.is_some()).map(|u| (u.id, u.crew)).collect();
+    eprintln!("own crewed units: {crewed:?}");
+    let pick = crewed.first().expect("an own unit with crew").0;
+    hud_feed.selected = vec![pick];
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
+            .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
+            .disable::<bevy::winit::WinitPlugin>()
+            .disable::<bevy::log::LogPlugin>(),
+    );
+    configure_sets(&mut app);
+    app.insert_resource(ClearColor(Color::BLACK))
+        .insert_resource(UiProfile::Armada1)
+        .insert_resource(UiProfile::Armada1.theme())
+        .insert_resource(Mounted(vfs))
+        .insert_resource(GuiSkin { table: Some(spr.into()) })
+        .insert_resource(HudConfig { gui: Some(layout), aspect: size.x as f32 / size.y as f32, fit, fit_scale: false, log: false })
+        .insert_resource(UiScale(size.y as f32 / 1080.0))
+        .insert_resource(Selection(hud_feed.selected.clone()))
+        .insert_resource(hud_feed)
+        .insert_resource(ExternalFeed)
+        .init_resource::<ButtonInput<MouseButton>>()
+        .init_resource::<ButtonInput<KeyCode>>()
+        .add_plugins(HudPlugin)
+        .add_systems(Update, aim_roots_hud.before(GameSet::Ui));
+    let mut image = Image::new_target_texture(size.x, size.y, bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb, None);
+    image.asset_usage = RenderAssetUsages::RENDER_WORLD;
+    let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+    let camera = app
+        .world_mut()
+        .spawn((Camera2d, Camera { order: 1, clear_color: ClearColorConfig::Custom(Color::BLACK), ..default() }, RenderTarget::from(target.clone()), Msaa::Off))
+        .id();
+    app.insert_resource(CaptureCamera(camera));
+    app.finish();
+    app.cleanup();
+    for _ in 0..16 {
+        app.update();
+    }
+    let adapter = app.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>().cloned().or_else(|| {
+        app.get_sub_app(bevy::render::RenderApp).and_then(|r| r.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>().cloned())
+    });
+    let Some(adapter) = adapter else {
+        eprintln!("SKIP: no render adapter");
+        return;
+    };
+    if crate::bench::frames::is_software_adapter(adapter.device_type, &adapter.name) {
+        eprintln!("SKIP: hardware adapter unavailable");
+        return;
+    }
+    // The button: the install's own art name, at the rail's place computed from the sheet.
+    let want = super::a1::speed::rect(&stock, 6).expect("the sheet has the rail keys");
+    let found: Vec<_> = app
+        .world_mut()
+        .query::<(&super::super::panels::GridCell, &GuiButton, &Node)>()
+        .iter(app.world())
+        .filter(|(c, _, _)| c.0 == super::super::Act::Target(super::super::model::TargetMode::Transport))
+        .map(|(_, b, n)| (b.names.clone(), n.left, n.top, n.width))
+        .collect();
+    assert_eq!(found, vec![(vec!["b_transport".to_owned()], Val::Px(want.x), Val::Px(want.y), Val::Px(want.w))], "one transport button on the rail");
+    let button = app.world_mut().query::<(Entity, &super::super::panels::GridCell)>().iter(app.world()).find(|(_, c)| c.0 == super::super::Act::Target(super::super::model::TargetMode::Transport)).map(|(e, _)| e).unwrap();
+    crate::ui::theme::click(app.world_mut(), button);
+    app.update();
+    assert_eq!(app.world().resource::<super::super::HudState>().targeting, Some(super::super::model::TargetMode::Transport), "the press arms the pick");
+    let frames = Arc::new(Mutex::new(Vec::<Image>::new()));
+    let output = Arc::clone(&frames);
+    app.world_mut().spawn(Screenshot::image(target)).observe(move |shot: On<ScreenshotCaptured>| {
+        output.lock().unwrap().push(shot.image.clone());
+    });
+    for _ in 0..60 {
+        app.update();
+        if !frames.lock().unwrap().is_empty() {
+            break;
+        }
+    }
+    let shot = frames.lock().unwrap().first().cloned().expect("a GPU capture");
+    let rgba = shot.try_into_dynamic().expect("GPU image conversion").to_rgba8();
+    let coloured = rgba.pixels().filter(|p| p[0] > 20 || p[1] > 20 || p[2] > 20).count();
+    eprintln!("rail frame: {coloured} nonblack pixels");
+    assert!(coloured > 500, "the HUD rendered");
+    if let Ok(dir) = std::env::var("STA64_HUD_CAPTURE_DIR") {
+        std::fs::create_dir_all(&dir).unwrap();
+        rgba.save(std::path::Path::new(&dir).join("rail-transport-a1-fed-1920x1080.png")).unwrap();
+    }
+}
+
 /// UI-42: hovering an Armada I build button shows its `needs:` line, in a windowless GPU frame.
 /// The unit is the install's real starting construction ship; the tooltip is STA64's own (the
 /// original's place for it is not established). Set `STA64_GPU_TESTS=1
