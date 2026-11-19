@@ -498,8 +498,15 @@ fn update(
     switch: Res<SwitchParams>,
     mut stats: ResMut<CullStats>,
     menu: Option<Res<crate::frontend::scene::MenuScene>>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
 ) {
     *stats = CullStats::default();
+    // A cineractive is a model view, like the menu scene: no symbol, marker, number or
+    // line is drawn while it runs, and a model is drawn at any distance (what is drawn
+    // far away is the open question of the maximum viewing distance, see TODO.md).
+    // The player's Tab choice comes back with the cutscene's end.
+    let mode = if crate::ui::presentation::cutscene_running(cine) { Mode::Off } else { *mode };
+    let mode = &mode;
     // The menu scene is a model view: nothing is a symbol, and what a match left is undone.
     if menu.is_some() {
         clear_unprojected(&mut objects, &mut icons, &mut sv);
@@ -973,6 +980,58 @@ mod view_tests {
         high.update();
         assert!(view(&high).active);
         assert_eq!(visible(&mut high, 1), Visibility::Hidden);
+    }
+
+    /// While a cineractive runs nothing is a symbol (no icon node, grid, height bar or
+    /// fleet number), however high or far the camera; the model shows. The icon state is
+    /// back as soon as the cutscene ends.
+    #[test]
+    fn a_cineractive_draws_models_only() {
+        let us = [unit(1, 1, 0.0, 0.0, 0.0), unit(2, 1, 20.0, 0.0, 0.0)];
+        let mut app = rig(&world(&us), None, 9000.0);
+        app.update();
+        app.update();
+        assert!(view(&app).active);
+        assert_eq!(visible(&mut app, 1), Visibility::Hidden);
+        app.insert_resource(crate::ui::presentation::CineractiveState { on: true, skippable: true });
+        app.update();
+        assert!(!view(&app).active);
+        assert!(view(&app).icons.is_empty() && view(&app).bars.is_empty() && view(&app).folded.is_empty());
+        assert_eq!(view(&app).grid_lines, 0);
+        assert_eq!(visible(&mut app, 1), Visibility::Inherited);
+        assert_eq!(visible(&mut app, 2), Visibility::Inherited);
+        let mut icons = app.world_mut().query::<(&Icon, &Node)>();
+        assert!(icons.iter(app.world()).all(|(_, n)| n.display == Display::None));
+        // Over: the hand-off decides again.
+        app.insert_resource(crate::ui::presentation::CineractiveState::default());
+        app.update();
+        assert!(view(&app).active);
+        assert_eq!(visible(&mut app, 1), Visibility::Hidden);
+    }
+
+    /// The player's Always choice is kept through a cutscene (the stored mode is not
+    /// touched) and comes back with its end, even from a camera low enough for Auto to
+    /// draw models.
+    #[test]
+    fn the_players_always_choice_survives_a_cineractive() {
+        let us = [unit(1, 1, 0.0, 0.0, 0.0)];
+        let mut app = rig(&world(&us), None, 300.0);
+        *app.world_mut().resource_mut::<Mode>() = Mode::Always;
+        app.update();
+        app.update();
+        assert!(view(&app).active);
+        assert_eq!(visible(&mut app, 1), Visibility::Hidden);
+        app.insert_resource(crate::ui::presentation::CineractiveState { on: true, skippable: true });
+        app.update();
+        assert_eq!(*app.world().resource::<Mode>(), Mode::Always);
+        assert!(!view(&app).active && view(&app).icons.is_empty());
+        assert_eq!(visible(&mut app, 1), Visibility::Inherited);
+        app.insert_resource(crate::ui::presentation::CineractiveState::default());
+        app.update();
+        assert_eq!(*app.world().resource::<Mode>(), Mode::Always);
+        assert!(view(&app).active);
+        assert_eq!(view(&app).icons.len(), 1);
+        assert_eq!(visible(&mut app, 1), Visibility::Hidden);
     }
 
     #[test]
