@@ -958,8 +958,9 @@ fn rebuild(
     let mut map_lights: Vec<(Vec3, Option<[f32; 3]>)> = Vec::new();
     let mut nebulae = 0usize;
     let mut units = 0usize;
-    // Recipe classes retain both their selectable model and positions for a gas field.
-    let mut gas: std::collections::BTreeMap<String, (Option<sta_surface::nebula::NebulaRecipe>, f32, Vec<[f32; 3]>)> = Default::default();
+    // Cache each class's recipe lookup, including misses, together with its radius and centres.
+    type NebulaClass = (Option<sta_surface::nebula::NebulaRecipe>, f32, Vec<[f32; 3]>);
+    let mut gas = std::collections::BTreeMap::<String, NebulaClass>::new();
     let mut stock_nebulae = Vec::new();
     let mut hidden = 0usize;
 
