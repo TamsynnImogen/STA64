@@ -690,6 +690,59 @@ f_bridgeBackground_1 = 320 0 320 480
         q.iter(app.world()).filter(|(c, _)| c.parent() == root).map(|(_, n)| n.clone()).collect()
     }
 
+    /// The real `drive` system, Framed, with art made for the test: the spawned nodes put the pieces
+    /// and the clip on one origin (the defect of the first version: pieces at the window's left,
+    /// the clip inside a centred group).
+    #[test]
+    fn drive_places_the_pieces_and_the_clip_through_one_centred_transform() {
+        const CUTS: &str = "\
+f_bridgeBackground = \"f_bridge_panel\"
+f_bridgeBackgroundSize = 3
+f_bridgeBackground_0 = 0 0 213 480
+f_bridgeBackground_1 = 213 0 427 240
+f_bridgeBackground_2 = 213 240 427 240
+";
+        let spr = b"f_bridge_panel.0 tile 0 0 1 1\nf_bridge_panel.1 tile 0 0 1 1\nf_bridge_panel.2 tile 0 0 1 1\n".to_vec();
+        for (w, h) in [(2752u32, 1152u32), (800, 1280), (1280, 960)] {
+            let (vfs, _tmp) = mount(&[("sprites/gui_global.spr", spr.clone()), ("textures/rgb/tile.tga", tga())]);
+            let (mut app, image) = app(true, Some(1));
+            app.world_mut().query::<&mut Window>().single_mut(app.world_mut()).unwrap().resolution = (w, h).into();
+            app.insert_resource(Mounted(vfs)).insert_resource(HudConfig { gui: Some(gui(CUTS)), ..default() });
+            play(&mut app, &image);
+            assert_eq!(app.world().resource::<BridgeOverlay>().built.as_ref().map(|b| b.mode), Some(Mode::Framed), "{w}x{h}");
+            let entity = app.world().resource::<BridgeOverlay>().entity.unwrap();
+            let mut q = app.world_mut().query::<(&ChildOf, &Node, &ImageNode)>();
+            let rect = |n: &Node| {
+                let px = |v: Val, of: f32| match v {
+                    Val::Percent(p) => p * of / 100.0,
+                    other => panic!("{other:?}"),
+                };
+                R::new(px(n.left, w as f32), px(n.top, h as f32), px(n.width, w as f32), px(n.height, h as f32))
+            };
+            let (mut clip, mut pieces) = (Vec::new(), Vec::new());
+            for (c, n, i) in q.iter(app.world()).filter(|(c, _, _)| c.parent() == entity) {
+                let _ = c;
+                if i.image.id() == image.id() { clip.push(rect(n)) } else { pieces.push(rect(n)) }
+            }
+            assert_eq!((clip.len(), pieces.len()), (1, 3), "{w}x{h}: the clip is drawn once, over three pieces");
+            let l = layout(Vec2::new(w as f32, h as f32), Some(1), CANVAS);
+            let close = |a: R, b: R| (a.x - b.x).abs() < 0.01 && (a.y - b.y).abs() < 0.01 && (a.w - b.w).abs() < 0.01 && (a.h - b.h).abs() < 0.01;
+            // The pieces' union is the centred group; the first piece starts at its left edge.
+            let left = pieces.iter().map(|p| p.x).fold(f32::MAX, f32::min);
+            let top = pieces.iter().map(|p| p.y).fold(f32::MAX, f32::min);
+            let right = pieces.iter().map(|p| p.right()).fold(0.0, f32::max);
+            let bottom = pieces.iter().map(|p| p.bottom()).fold(0.0, f32::max);
+            let union = R::new(left, top, right - left, bottom - top);
+            assert!(close(union, l.group), "{w}x{h}: pieces {union:?} vs group {:?}", l.group);
+            assert!(pieces.iter().any(|p| (p.x - l.group.x).abs() < 0.01), "{w}x{h}");
+            // The clip is the opening mapped through the same transform, inside the group.
+            let fit = SceneFit::new(Vec2::new(w as f32, h as f32), CANVAS);
+            assert!(close(clip[0], fit.place(movie_rect(Some(1)))), "{w}x{h}: clip {:?}", clip[0]);
+            let g = l.group;
+            assert!(clip[0].x >= g.x && clip[0].y >= g.y && clip[0].right() <= g.right() && clip[0].bottom() <= g.bottom(), "{w}x{h}");
+        }
+    }
+
     #[test]
     fn without_frame_art_the_clip_plays_full_screen_on_black_and_the_overlay_goes_with_the_clip() {
         let (mut app, image) = app(true, Some(1));
