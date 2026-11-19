@@ -68,7 +68,9 @@ fn feed(vfs: &sta_vfs::Vfs, options: GameOptions, group: usize) -> HudFeed {
         sim.step(&commands);
     }
     let view = sim.view();
-    let selected = view.units.iter().find(|u| u.owner == PlayerId(0)).expect("authored start unit").id;
+    let selected = view.units.iter().find(|u| {
+        u.owner == PlayerId(0) && u.flags.contains(sta_sim::view::UnitFlags::SELECTABLE)
+    }).expect("selectable authored start unit").id;
     HudFeed { view, player: PlayerId(0), selected: vec![selected], content: Some(db), ..Default::default() }
 }
 
@@ -85,7 +87,7 @@ fn resolved_pieces(app: &mut App, pieces: &[super::layout::Piece]) -> usize {
 }
 
 #[derive(Clone, Copy)]
-enum HoverCapture { Selected, Low, Other, BuildPage, ColonyShip, Group(usize) }
+enum HoverCapture { Selected, SelectedHover, Low, Other, BuildPage, ColonyShip, Group(usize) }
 
 /// Independent installed-data expectation: current crew is compared with its
 /// actual live capacity, not crewCost. Resolve authored palette/thresholds.
@@ -130,6 +132,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     let original = hud_feed.selected[0];
     let hover = match hover_mode {
         HoverCapture::Selected | HoverCapture::BuildPage => None,
+        HoverCapture::SelectedHover => Some(original),
         HoverCapture::Group(count) => {
             hud_feed.selected = hud_feed.view.units.iter().rev().filter(|u| u.owner == hud_feed.player
                 && hud_feed.content.as_ref().unwrap().unit(u.def).is_some_and(|d| d.class.0 == "constructionrig"))
@@ -422,11 +425,11 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         let actual = app.world_mut().query::<(&super::infobar::InfoBarField,&crate::ui::sprite_font::SpriteText,&Visibility,Option<&Children>)>()
             .iter(app.world()).find(|(kind,_,_,_)| **kind==*field)
             .map(|(_,text,visibility,children)| (text.text.clone(),text.color,*visibility,children.map(|c| c.iter().collect::<Vec<_>>()).unwrap_or_default()));
-        if stock.rect(key).is_none() {
+        if stock.info_area(bar_variant).is_none() || stock.rect(key).is_none() {
             assert!(actual.is_none(),"{label}: disabled InfoBar {key}");
             continue;
         }
-        let (text,colour,visibility,children)=actual.expect("authored InfoBar text slot");
+        let (text,colour,visibility,children)=actual.unwrap_or_else(|| panic!("{label}: authored InfoBar text slot {key}"));
         assert_eq!(text,expected.clone().unwrap_or_default(),"{label}: hovered InfoBar {key}");
         assert_eq!(visibility,if expected.is_some() {Visibility::Inherited} else {Visibility::Hidden});
         if expected.is_some() {
@@ -618,7 +621,7 @@ fn installed_stock_hud_renders_on_gpu() {
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();
         capture_one(
             vfs, profile, UVec2::new(1280, 720), "gui_federation16x9.cfg",
-            "fo4-hover-low-16x9", GameOptions::default(), HoverCapture::Low,
+            "fo4-hover-selected-16x9", GameOptions::default(), HoverCapture::SelectedHover,
         );
     }
 }
