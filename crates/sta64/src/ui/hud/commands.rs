@@ -95,7 +95,7 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
         move_order: mobile,
         attack,
         build: !def.build.list.is_empty() && !u.flags.contains(UnitFlags::BUILDING),
-        rally: EntityKind::producer_def(def) && def.movement.max_speed == Fixed::ZERO
+        rally: EntityKind::producer_def(def)
             && !def.build.list.is_empty() && !u.flags.contains(UnitFlags::BUILDING),
         mine: mobile && def.mines(),
         colonize: mobile && def.raw.bool("colony_ship").unwrap_or(false) && sta_sim::colony::is_pod_ship(db, def),
