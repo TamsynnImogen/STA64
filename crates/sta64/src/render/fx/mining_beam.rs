@@ -8,7 +8,9 @@
 //! stated by a player).
 //!
 //! The beam's colour: a group's lighting-material `diffuse` multiplies its texture (`SpawnCtx::diffuse_tint`),
-//! as the unlit additive path otherwise drops it. For a model whose texture is colourless the diffuse is
+//! as the unlit additive path otherwise drops it. The numbers are gamma-space values, as on the lit hull path,
+//! so the material carries their sRGB decode (exact against a gamma-space multiply for a pure power curve,
+//! approximate for the sRGB curve and for the additive blend). For a model whose texture is colourless the diffuse is
 //! the only colour the data gives (read from data); that the original shows it is stated by a player.
 //!
 //! The model is loaded and drawn by the same code as a unit's. A weapon whose ordnance has no
@@ -272,7 +274,9 @@ mod tests {
     #[test]
     fn a_beam_takes_its_colour_from_the_lighting_material_diffuse() {
         let (_, tinted) = spawn_authored(BEAM_UNLIT, true, [0.2, 0.4, 1.0]);
-        assert_eq!(tinted, vec![LinearRgba::new(0.2, 0.4, 1.0, 1.0)]);
+        // The numbers are gamma-space, as on the lit hull path: the material carries their sRGB decode.
+        assert_eq!(tinted, vec![Color::srgb(0.2, 0.4, 1.0).to_linear()]);
+        assert_ne!(tinted, vec![LinearRgba::new(0.2, 0.4, 1.0, 1.0)], "not read as linear values");
         let (_, plain) = spawn_authored(BEAM_UNLIT, false, [0.2, 0.4, 1.0]);
         assert_eq!(plain, vec![LinearRgba::WHITE]);
     }

@@ -140,7 +140,7 @@ pub struct SpawnCtx<'a, 'w, 's> {
     /// (node offsets and vertices) but not sprite sizes or particles.
     pub scale: f32,
     /// An unlit group takes its lighting material's `diffuse` as its colour (multiplied with its
-    /// texture), instead of white. Off for every spawn but an effect model that carries its colour
+    /// texture), instead of white. The values are taken as sRGB (gamma-space) numbers, as the lit hull path does. Off for every spawn but an effect model that carries its colour
     /// in the lighting material (a mining beam).
     pub diffuse_tint: bool,
 }
@@ -591,7 +591,9 @@ fn spawn_mesh(
             ctx.team
         } else if let (true, true, Some(m)) = (ctx.diffuse_tint, unlit_group, lm) {
             let [r, g, b] = m.diffuse;
-            Color::LinearRgba(LinearRgba::new(r, g, b, 1.0))
+            // The lit hull path multiplies these numbers as stored (gamma space, `hulls.wesl`); the
+            // sRGB-decoded value times the (sRGB-decoded) texture is that multiply for a pure power law.
+            Color::srgb(r, g, b)
         } else {
             Color::WHITE
         };
