@@ -194,8 +194,21 @@ EOS
   mkdir -p "$tmp/notws"; echo /elsewhere/x > "$cd_/.agent-cargo-worktree"
   mkdir -p "$cd_/debug/.fingerprint/$fpm" "$cd_/debug/.fingerprint/$fpd"
   ( cd "$tmp/notws" && git init -q . 2>/dev/null; PATH="$tmp/bin:$PATH" STA64_SCCACHE=0 STA64_LOCK_DIR="$tmp/locks" STA64_CHECK_DIR="$cd_" "$w" --check check -p x >"$tmp/o8" 2>&1 )
-  expect cdir-failclosed "$(cat "$tmp/o8")" "ALL, no workspace members found"
+  expect cdir-failclosed "$(cat "$tmp/o8")" "ALL, workspace member names not all found"
   [ ! -e "$cd_/debug/.fingerprint/$fpd" ] && [ ! -e "$cd_/debug/.fingerprint/$fpm" ] || { echo "FAIL cdir-failclosed-removed"; fails=$((fails+1)); }
+  # a member whose name does not parse (here: unquoted) => fail closed as well.
+  mkdir -p "$tmp/badws/m"; ( cd "$tmp/badws" && git init -q . 2>/dev/null )
+  printf '[workspace]\nmembers = ["m"]\n' > "$tmp/badws/Cargo.toml"; printf '[package]\nname = x\n' > "$tmp/badws/m/Cargo.toml"
+  echo /elsewhere/x > "$cd_/.agent-cargo-worktree"; mkdir -p "$cd_/debug/.fingerprint/$fpd"
+  ( cd "$tmp/badws" && PATH="$tmp/bin:$PATH" STA64_SCCACHE=0 STA64_LOCK_DIR="$tmp/locks" STA64_CHECK_DIR="$cd_" "$w" --check check -p x >"$tmp/o9" 2>&1 )
+  expect cdir-badname "$(cat "$tmp/o9")" "ALL, workspace member names not all found"
+  [ ! -e "$cd_/debug/.fingerprint/$fpd" ] || { echo "FAIL cdir-badname-removed"; fails=$((fails+1)); }
+  # single-quoted names parse: only the member's fingerprint goes
+  printf "[package]\nname = 'x'\n" > "$tmp/badws/m/Cargo.toml"; echo /elsewhere/x > "$cd_/.agent-cargo-worktree"
+  mkdir -p "$cd_/debug/.fingerprint/$fpd" "$cd_/debug/.fingerprint/x-0123456789abcdef"
+  ( cd "$tmp/badws" && PATH="$tmp/bin:$PATH" STA64_SCCACHE=0 STA64_LOCK_DIR="$tmp/locks" STA64_CHECK_DIR="$cd_" "$w" --check check -p x >"$tmp/o10" 2>&1 )
+  expect cdir-squote "$(cat "$tmp/o10")" "invalidated 1 workspace"
+  [ -d "$cd_/debug/.fingerprint/$fpd" ] && [ ! -e "$cd_/debug/.fingerprint/x-0123456789abcdef" ] || { echo "FAIL cdir-squote-removed"; fails=$((fails+1)); }
   # other classes never touch it:
   echo /elsewhere/other-worktree > "$cd_/.agent-cargo-worktree"; mkdir "$cd_/debug/.fingerprint/$fpm"
   PATH="$tmp/bin:$PATH" STA64_SCCACHE=0 STA64_LOCK_DIR="$tmp/locks" STA64_CHECK_DIR="$cd_" "$w" --heavy check -p x >/dev/null 2>&1

@@ -365,14 +365,18 @@ if [ "$class" = check ]; then
   if [ "$last" != "$here" ]; then
     mkdir -p "$check_dir" 2>/dev/null
     # Names of the workspace members, from [workspace] members of the root manifest.
-    names=" "
+    names=" "; nman=0; nname=0
+    pname() { sed -n "s/^name[[:space:]]*=[[:space:]]*[\"']\\([^\"']*\\)[\"'].*/\\1/p" "$1" | head -n 1; }
     for m in $(sed -n '/^[[:space:]]*members[[:space:]]*=/,/\]/p' "$here/Cargo.toml" 2>/dev/null | grep -o '"[^"]*"' | tr -d '"'); do
       for f in "$here"/$m/Cargo.toml; do
-        [ -f "$f" ] && names="$names$(sed -n 's/^name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -n 1) "
+        [ -f "$f" ] || continue
+        nman=$((nman + 1)); nm=$(pname "$f")
+        [ -n "$nm" ] && { names="$names$nm "; nname=$((nname + 1)); }
       done
     done
-    [ -f "$here/Cargo.toml" ] && names="$names$(sed -n 's/^name[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$here/Cargo.toml" | head -n 1) "
-    all=0; [ "$names" = " " ] || [ "$names" = "  " ] && all=1   # fail closed: no names found => invalidate everything
+    # fail closed: no names, or fewer names than member manifests => invalidate everything
+    all=0; { [ -z "${names// /}" ] || [ "$nname" -lt "$nman" ]; } && all=1
+    [ -f "$here/Cargo.toml" ] && names="$names$(pname "$here/Cargo.toml") "
     n=0
     for fp in "$check_dir"/.fingerprint "$check_dir"/*/.fingerprint "$check_dir"/*/*/.fingerprint; do
       [ -d "$fp" ] || continue
@@ -389,7 +393,7 @@ if [ "$class" = check ]; then
       done
     done
     printf '%s\n' "$here" > "$stamp" 2>/dev/null
-    echo "agent-cargo: check dir last used from ${last:-nowhere}; invalidated $n $([ "$all" = 1 ] && echo '(ALL, no workspace members found)' || echo workspace) crate fingerprint(s), dependencies stay cached" >&2
+    echo "agent-cargo: check dir last used from ${last:-nowhere}; invalidated $n $([ "$all" = 1 ] && echo '(ALL, workspace member names not all found)' || echo workspace) crate fingerprint(s), dependencies stay cached" >&2
   fi
 fi
 
