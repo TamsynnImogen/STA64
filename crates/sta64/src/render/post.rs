@@ -143,7 +143,8 @@ fn cycle_preset(keys: Option<Res<ButtonInput<KeyCode>>>, mut fx: ResMut<PostFx>)
     }
 }
 
-type NotBackground = (With<Camera3d>, Without<BackgroundCamera>);
+type NewNotBackground = (Added<Camera3d>, Without<BackgroundCamera>, Without<crate::render::action_camera::ActionCamera>);
+type NotBackground = (With<Camera3d>, Without<BackgroundCamera>, Without<crate::render::action_camera::ActionCamera>);
 
 /// Put the settings on the cameras: when they change, and on new cameras.
 ///
@@ -155,7 +156,7 @@ pub fn apply(
     mut commands: Commands,
     fx: Res<PostFx>,
     cams: Query<Entity, NotBackground>,
-    added: Query<Entity, (Added<Camera3d>, Without<BackgroundCamera>)>,
+    added: Query<Entity, NewNotBackground>,
     marked: Query<(), With<PostFxMsaa>>,
     profile: Option<Res<crate::render::profile::RenderProfile>>,
     effects: Option<Res<crate::render::profile::ProfileEffects>>,
@@ -238,6 +239,21 @@ mod tests {
 
     fn has<C: Component>(app: &App, e: Entity) -> bool {
         app.world().entity(e).contains::<C>()
+    }
+
+    #[test]
+    fn the_action_view_cameras_get_no_post_effects_and_no_msaa_change() {
+        let mut app = App::new();
+        app.set_error_handler(bevy::ecs::error::panic).add_plugins(PostFxPlugin { initial: PostFx::cinematic() });
+        let scene = app.world_mut().spawn((Camera3d::default(), Msaa::Off, crate::render::action_camera::ActionCamera)).id();
+        let sky = app.world_mut().spawn((Camera3d::default(), Msaa::Off, BackgroundCamera, crate::render::action_camera::ActionSky)).id();
+        app.update();
+        app.world_mut().insert_resource(PostFx { bloom: true, auto_exposure: true, aa: Aa::Smaa, vignette: true, ..default() });
+        app.update();
+        for e in [scene, sky] {
+            assert!(!has::<Bloom>(&app, e) && !has::<AutoExposure>(&app, e) && !has::<Hdr>(&app, e) && !has::<Smaa>(&app, e) && !has::<Vignette>(&app, e));
+            assert_eq!(app.world().get::<Msaa>(e), Some(&Msaa::Off));
+        }
     }
 
     #[test]

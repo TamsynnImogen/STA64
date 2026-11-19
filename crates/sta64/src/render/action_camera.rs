@@ -180,7 +180,16 @@ pub fn picture_size(size: Vec2) -> UVec2 {
 }
 
 #[derive(Component)]
-struct ActionSky;
+pub struct ActionSky;
+
+/// Measurement hook of the performance runs (`bench/perf.rs`): a headless app has no HUD, so
+/// this stands in for the visible picture node (its size) and says which cameras are on.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+pub struct ActionBench {
+    pub size: Vec2,
+    pub sky: bool,
+    pub scene: bool,
+}
 
 pub struct ActionCameraPlugin;
 
@@ -195,12 +204,18 @@ impl Plugin for ActionCameraPlugin {
             .add_systems(PostUpdate, grid_layer.run_if(resource_exists::<bevy::gizmos::config::GizmoConfigStore>))
             .add_systems(
                 PostUpdate,
-                (layer_overlays, (log_fights, gather).chain().run_if(resource_exists::<SimLink>), subject, sync_cameras)
+                (layer_overlays, (log_fights, gather.run_if(picture_wanted)).chain().run_if(resource_exists::<SimLink>), subject, sync_cameras)
                     .chain()
                     .after(bevy::transform::TransformSystems::Propagate)
                     .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
             );
     }
+}
+
+/// Whether a picture of the action view can be seen (or a perf run stands in for one): the
+/// candidates are gathered and the cameras run only then, so a profile with no such window pays nothing.
+fn picture_wanted(pictures: Query<&InheritedVisibility, With<ActionPicture>>, bench: Option<Res<ActionBench>>) -> bool {
+    bench.is_some() || pictures.iter().any(|v| v.get())
 }
 
 /// The strategic grid is a gizmo: it goes to [`OVERLAY_LAYER`] too (once).
@@ -312,9 +327,14 @@ fn sync_cameras(
     main: Query<(&GlobalTransform, &Projection), (crate::map::MainCamera, Without<ActionSky>)>,
     mut scene: Query<(&mut Transform, &mut GlobalTransform, &mut Camera), (With<ActionCamera>, Without<ActionSky>)>,
     mut sky: Query<(&mut Transform, &mut GlobalTransform, &mut Camera), (With<ActionSky>, Without<ActionCamera>)>,
+    bench: Option<Res<ActionBench>>,
+    menu: Option<Res<crate::ui::ingame_menu::InGameMenu>>,
+    movies: Option<Res<crate::media::Movies>>,
 ) {
     // Only while the picture can be seen: a hidden match UI (loading, a cineractive) costs no passes.
-    let size = pictures.iter().filter(|(_, v)| v.get()).map(|(n, _)| n.size()).find(|s| s.x > 0.0 && s.y > 0.0);
+    // Not drawn while the in-game menu is over it or a mission clip plays in the panel: nobody sees it.
+    let covered = bench.is_none() && (menu.is_some_and(|m| m.open) || movies.is_some_and(|m| m.panel_busy()));
+    let size = pictures.iter().filter(|(_, v)| v.get() && !covered).map(|(n, _)| n.size()).find(|s| s.x > 0.0 && s.y > 0.0).or(bench.as_ref().map(|b| b.size));
     let (Some(view), Some(size), Ok((main_tf, projection))) = (view, size, main.single()) else {
         // The cameras stay, switched off: showing the picture again costs neither a black frame
         // nor a new target.
@@ -325,9 +345,16 @@ fn sync_cameras(
         }
         return;
     };
-    for (.., mut cam) in scene.iter_mut().chain(sky.iter_mut()) {
-        if !cam.is_active {
-            cam.is_active = true;
+    for (.., mut cam) in scene.iter_mut() {
+        let on = bench.as_ref().is_none_or(|b| b.scene);
+        if cam.is_active != on {
+            cam.is_active = on;
+        }
+    }
+    for (.., mut cam) in sky.iter_mut() {
+        let on = bench.as_ref().is_none_or(|b| b.sky);
+        if cam.is_active != on {
+            cam.is_active = on;
         }
     }
     let want = picture_size(size);
@@ -338,7 +365,14 @@ fn sync_cameras(
         img.resize(bevy::render::render_resource::Extent3d { width: want.x, height: want.y, depth_or_array_layers: 1 });
     }
     let target = subject.0.and_then(|id| entities.as_ref()?.0.get(&id)).and_then(|&e| bodies.get(e).ok());
-    let pose = target.map(|(gt, radius)| frame(gt.translation(), radius.map_or(20.0, |r| r.0)));
+    let mut pose = target.map(|(gt, radius)| frame(gt.translation(), radius.map_or(20.0, |r| r.0)));
+    if pose.is_none() && bench.is_some() {
+        // Measurement only: look at the ground point the map camera looks at.
+        let f = main_tf.forward().as_vec3();
+        if f.y < -0.01 {
+            pose = Some(frame(main_tf.translation() + f * (-main_tf.translation().y / f.y), 30.0));
+        }
+    }
     if scene.is_empty() {
         let projection = match projection {
             Projection::Perspective(p) => Projection::Perspective(PerspectiveProjection { fov: FOV, ..p.clone() }),
@@ -349,6 +383,8 @@ fn sync_cameras(
             MatchEntity,
             ActionCamera,
             Camera3d::default(),
+            // A small picture: no multisampling (the post effects and quality settings skip these cameras).
+            Msaa::Off,
             // An intermediate picture: no tonemapper, so no dithering either.
             bevy::core_pipeline::tonemapping::DebandDither::Disabled,
             Camera { order: -9, clear_color: ClearColorConfig::None, ..default() },
@@ -362,6 +398,7 @@ fn sync_cameras(
             ActionSky,
             BackgroundCamera,
             Camera3d::default(),
+            Msaa::Off,
             bevy::core_pipeline::tonemapping::DebandDither::Disabled,
             Camera { order: -10, ..default() },
             RenderTarget::from(view.image.clone()),
