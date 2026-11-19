@@ -193,6 +193,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             .collect::<Vec<_>>()
     };
     let bar_variant = super::layout::info_variant(&super::super::model::info(&hud_feed));
+    let has_info_bar = stock.info_area(bar_variant).is_some();
     let info = stock.pieces(match bar_variant {
         0 => "infoLowBackgroundPanel",
         1 => "infoMiddleBackgroundPanel",
@@ -425,7 +426,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         let actual = app.world_mut().query::<(&super::infobar::InfoBarField,&crate::ui::sprite_font::SpriteText,&Visibility,Option<&Children>)>()
             .iter(app.world()).find(|(kind,_,_,_)| **kind==*field)
             .map(|(_,text,visibility,children)| (text.text.clone(),text.color,*visibility,children.map(|c| c.iter().collect::<Vec<_>>()).unwrap_or_default()));
-        if stock.info_area(bar_variant).is_none() || stock.rect(key).is_none() {
+        if !has_info_bar || stock.rect(key).is_none() {
             assert!(actual.is_none(),"{label}: disabled InfoBar {key}");
             continue;
         }
@@ -476,7 +477,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         .unwrap_or_else(|| panic!("{label}: no GPU capture"));
     let dynamic = shot.try_into_dynamic().expect("GPU image conversion");
     let rgba = dynamic.to_rgba8();
-    if hover.is_some() && crew_tint == Some(Color::srgb(1.0, 0.0, 0.0)) {
+    if has_info_bar && hover.is_some() && crew_tint == Some(Color::srgb(1.0, 0.0, 0.0)) {
         let origin=stock.info_origin(bar_variant)+stock.point(&format!("infoBarOffset_{bar_variant}")).unwrap_or(Vec2::ZERO);
         let scale=size.y as f32/1080.0;
         for key in ["crew_amt", "icon_crew_amt"] {
@@ -528,7 +529,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     let shows_hull = expected_bar.iter().any(|(field, _, value)| {
         *field == super::infobar::InfoBarField::Hull && value.is_some()
     });
-    if shows_hull && stock.colour("hull_color").is_none() && stock.colour("systemIconHealthyColor").is_none() {
+    if has_info_bar && shows_hull && stock.colour("hull_color").is_none() && stock.colour("systemIconHealthyColor").is_none() {
         let origin=stock.info_origin(bar_variant)+stock.point(&format!("infoBarOffset_{bar_variant}")).unwrap_or(Vec2::ZERO);
         if let Some(rect)=stock.at(origin,"icon_hull") {
             let scale=size.y as f32/1080.0;
