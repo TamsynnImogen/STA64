@@ -792,6 +792,17 @@ fn sky_follows_camera(camera: Query<&Transform, (MainCamera, Without<Sky>)>, mut
     }
 }
 
+/// Insert the map's own team colours as a resource when the map has them and no skirmish runs; remove
+/// the old map's otherwise. Returns what was inserted.
+fn set_map_team_colours(commands: &mut Commands, map: &sta_bzn::Map, skirmish: bool) -> Option<crate::viewer::MapTeamColours> {
+    let colours = if skirmish { None } else { crate::viewer::MapTeamColours::from_map(map) };
+    match &colours {
+        Some(m) => commands.insert_resource(m.clone()),
+        None => commands.remove_resource::<crate::viewer::MapTeamColours>(),
+    }
+    colours
+}
+
 #[allow(clippy::too_many_arguments)]
 fn rebuild(
     mut commands: Commands,
@@ -952,11 +963,7 @@ fn rebuild(
     let neutral = teams.0.first().map(|t| t.1).unwrap_or(Color::WHITE);
     // The map's own team colours (Armada I maps with a team table) apply where the player picked none:
     // not in a skirmish, whose set-up is the player's pick. A mission or the map view takes the map's.
-    let map_team_colours = if skirmish_cfg.is_none() { crate::viewer::MapTeamColours::from_map(&map) } else { None };
-    match &map_team_colours {
-        Some(m) => commands.insert_resource(m.clone()),
-        None => commands.remove_resource::<crate::viewer::MapTeamColours>(),
-    }
+    let map_team_colours = set_map_team_colours(&mut commands, &map, skirmish_cfg.is_some());
     let root = commands.spawn((MapRoot,
         crate::ui::hud::object_footprints::MapFootprintRegions(map_def.clone()),
         Transform::IDENTITY, Visibility::default())).id();
@@ -1559,6 +1566,30 @@ mod tests {
         plain.max_dist = 3_000.0;
         assert_eq!(plain.clamp_dist(5_000.0, pitch, 0.0), 3_000.0);
         assert_eq!(plain.clamp_dist(10.0, pitch, 0.0), 50.0);
+    }
+
+    /// The map view's step that publishes the map's own team colours: inserted for a map with a table and
+    /// no skirmish, removed for a skirmish, a map without a table, and the next map.
+    #[test]
+    fn the_map_view_inserts_and_removes_the_map_team_colours() {
+        use crate::viewer::MapTeamColours;
+        #[derive(Resource)]
+        struct Step(sta_bzn::Map, bool);
+        fn run(mut commands: Commands, step: Res<Step>) {
+            set_map_team_colours(&mut commands, &step.0, step.1);
+        }
+        let with = sta_bzn::Map { team_colours: vec![[0, 0], [2, 3]], ..Default::default() };
+        let mut app = App::new();
+        app.add_systems(Update, run);
+        let mut go = |app: &mut App, map: &sta_bzn::Map, skirmish: bool| {
+            app.insert_resource(Step(map.clone(), skirmish));
+            app.update();
+            app.world().get_resource::<MapTeamColours>().cloned()
+        };
+        assert_eq!(go(&mut app, &with, false), Some(MapTeamColours(vec![[0, 0], [2, 3]])));
+        assert_eq!(go(&mut app, &with, true), None, "a skirmish's own set-up wins");
+        assert!(go(&mut app, &with, false).is_some());
+        assert_eq!(go(&mut app, &sta_bzn::Map::default(), false), None, "the next map has no table");
     }
 
     #[test]

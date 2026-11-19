@@ -121,21 +121,20 @@ impl TeamColours {
     }
 }
 
-/// The palette entry names in the order the Armada I engine numbers them: a map's team table
-/// stores an entry number, not a name (read from the executable, static; the engine loads
-/// `teamcolor.odf` by these key names into a table in this order). An entry the palette lacks (a
-/// mod's shorter file) has no colour here.
+/// The palette's entry names in the order an Armada I map's team table numbers them (the table stores
+/// an entry number, not a name; read from the executable, static). An entry the palette lacks (a mod's
+/// shorter file) has no colour here.
 pub const ARMADA_ONE_PALETTE_NAMES: [&str; 27] = [
     "empty", "white", "red", "blue", "green", "yellow", "purple", "cyan", "brown", "orange", "pink", "magenta", "gray", "black", "ferengi", "dominion",
     "klingon", "romulan", "borg", "federation", "cardassian", "breen", "sona", "alien", "brickred", "burntsienna", "cerulean",
 ];
 
-/// The colours an Armada I map's own team table gives its teams (`sta_bzn::Map::team_colours`):
-/// the entry a team's hulls take, and the entry its map-view marks take (the engine keeps both
-/// per team; read from the executable, static: ships are drawn with the first, the map and radar
-/// use the second). Inserted by the map view for a map with that table when no skirmish or
-/// multiplayer set-up (where the player's own pick overrides the map, as the original's lobby does)
-/// is running; a campaign mission takes the map's colours. Neutral and unowned objects keep theirs.
+/// The colours an Armada I map's own team table gives its teams (`sta_bzn::Map::team_colours`): the entry
+/// a team's hulls take and the entry its marks take (read from the executable, static: the map keeps both
+/// per team; STA64 draws hulls with the first and marks with the second). Inserted by the map view for a
+/// map with that table when no skirmish or multiplayer set-up (where the player's own pick overrides the
+/// map, as the original's lobby does) is running; a campaign mission takes the map's colours. Removed when
+/// the match ends and on a remount. Neutral and unowned objects keep theirs.
 #[derive(Resource, Clone, Debug, PartialEq, Eq, Default)]
 pub struct MapTeamColours(pub Vec<[u32; 2]>);
 
@@ -164,6 +163,21 @@ impl MapTeamColours {
     pub fn map(&self, palette: &TeamColours, team: u32) -> Option<Color> {
         self.entry(palette, team, 1)
     }
+}
+
+/// The colour a seat's hulls (and hulls under construction) are drawn in: the map's hull entry where a
+/// [`MapTeamColours`] applies, else the palette's entry for the seat ([`TeamColours::owner_colour`]).
+pub fn owner_hull_colour(palette: Option<&TeamColours>, map: Option<&MapTeamColours>, owner: PlayerId) -> Option<Color> {
+    let palette = palette?;
+    map.and_then(|m| m.hull(palette, u32::from(owner.0) + 1)).or_else(|| palette.owner_colour(owner))
+}
+
+/// The colour a seat's marks are drawn in (strategic symbols, map view icons): the map's map entry where a
+/// [`MapTeamColours`] applies, else as [`owner_hull_colour`]. The in-match radar and minimap do not follow it
+/// yet (TODO.md).
+pub fn owner_mark_colour(palette: Option<&TeamColours>, map: Option<&MapTeamColours>, owner: PlayerId) -> Option<Color> {
+    let palette = palette?;
+    map.and_then(|m| m.map(palette, u32::from(owner.0) + 1)).or_else(|| palette.owner_colour(owner))
 }
 
 #[derive(Component)]

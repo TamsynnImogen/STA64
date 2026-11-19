@@ -213,9 +213,8 @@ fn light_colour(recs: &[Rec<'_>], from: usize) -> Option<[f32; 3]> {
     c.iter().all(|v| v.is_finite()).then_some(c)
 }
 
-/// The team table that ends the object list: nine blocks of seven records right before the mission
-/// descriptor, each `f32 f32 i32 f32 f32 i32 i32` (resource figures, then the hull colour entry and the
-/// map colour entry). Empty when the records before `mission_at` do not have exactly that shape.
+/// The map's team table: nine blocks of seven numeric records right before the mission descriptor; the last two
+/// records of a block are the hull and map colour entries. Empty when the records do not have that shape.
 fn team_colour_block(recs: &[Rec<'_>], mission_at: usize) -> Vec<[u32; 2]> {
     const SHAPE: [u32; 7] = [5, 5, 4, 5, 5, 4, 4];
     let Some(start) = mission_at.checked_sub(9 * SHAPE.len()) else { return Vec::new() };
