@@ -100,7 +100,7 @@ fn apply(
     mut last: Local<Option<RenderQuality>>,
     cameras: Query<
         (Entity, Has<DepthPrepass>, Has<crate::map::BackgroundCamera>),
-        (With<Camera3d>, Without<crate::render::shadows::ShadowCamera>, Without<crate::render::post::PostFxMsaa>),
+        (With<Camera3d>, Without<crate::render::shadows::ShadowCamera>, Without<crate::render::post::PostFxMsaa>, Without<crate::render::action_camera::ActionCamera>, Without<crate::render::action_camera::ActionSky>),
     >,
     added: Query<(), Added<Camera3d>>,
 ) {
