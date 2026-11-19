@@ -14,9 +14,8 @@
 //!   for it says it shows more buttons and names help, palette and the options menu (read from data); a
 //!   static reading of the executable agrees. An older reading took it as moving the panel between two
 //!   rectangles; the two readings are not reconciled. The start state is collapsed, at each new match too
-//!   (stated by a player). The split is read from data: the second row is the cfg areas below the panel's
-//!   own rectangle (menu, help, palette); idle, toggle, comm, objectives and more lie inside it and always
-//!   show. INTERIM: what the original draws around the second row is not established: buttons only, no
+//!   (stated by a player). The split is STA64's rule, graded read from data: the second row is menu, help
+//!   and palette ([`SECOND_ROW`]); idle, toggle, comm, objectives and more always show. INTERIM: what the original draws around the second row is not established: buttons only, no
 //!   invented art. Esc opens the in-game menu whatever is shown.
 //!
 //! The panel is the cfg's `buttonPanelArea` with its `buttonBackgroundPanel` end pieces (read from data),
@@ -70,14 +69,8 @@ const fn keys(area: &'static str, sprite: &'static str, default_sprite: &'static
 pub(in crate::ui::hud) const SECOND_ROW: [&str; 3] = ["menuButtonArea", "helpButtonArea", "paletteButtonArea"];
 
 /// Whether the second row shows (the player's, kept while the HUD is rebuilt; false at each match start: stated by a player).
-#[derive(Resource)]
+#[derive(Resource, Default)]
 pub(in crate::ui) struct ShowMore(pub bool);
-
-impl Default for ShowMore {
-    fn default() -> Self {
-        Self(false)
-    }
-}
 
 /// A new match starts with the second row hidden.
 pub(in crate::ui::hud) fn reset_more(mut more: ResMut<ShowMore>) {
