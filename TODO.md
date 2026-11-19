@@ -637,6 +637,22 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] WORKPLAN owed (missions lane): the order after LUA-31 is SIM-46 packages and LUA-33/LUA-34, then LUA-32, then LUA-35, and the snapshot, Edit and protocol numbers written in rows LUA-32 to LUA-35 are stale: the coordinator re-assigns them when the SIM-46 needs are stated.
 - [ ] WORKPLAN owed (LUA-37): the row says a forced end is refused outside dev or cheat mode, while LUA-29 found the original needs no dev mode in single-player missions: settle when LUA-37 starts.
 
+### SIM-75 nebula effects (slice 1)
+
+- [?] Nebula effects, in a skirmish on a map with nebulae (any profile): fly a ship into each kind of nebula the map has; it slows (every nebula whose definition has no `craft_speed_coefficient` halves the speed), a damaging one wears its shields and hull down, one with `regenValue`/`repairValue` restores shields and damaged systems, one with `disable*` keys stops its weapons, shields, crew or cloak while inside. Leaving ends the effect at once.
+- [ ] SIM-75 interim: the systems a nebula switches off come back the tick the craft leaves; the original keeps them off a moment longer and restores the shields to their strength on entry (read from the executable, static). Needs per-craft state (slice 2, snapshot).
+- [ ] SIM-75 interim: the speed fraction scales both impulse and warp speed and the cap bounds both; how the original's steering applies the two is not established.
+- [ ] SIM-75 interim: `damageVariance` of a nebula is not applied (the random range of the term is not established).
+- [ ] SIM-75 interim: a destroyed system is not repaired by `repairValue`; whether the original repairs it is not established.
+- [ ] SIM-75 interim: nebula damage hits the first shield pool under directional shields (an STA64 option; the originals have one pool).
+- [ ] SIM-75: which unit types besides freighters `disableWeapons` spares is not established; none is spared.
+- [ ] SIM-75: the life-support drain of `disableCrew` runs only under the casualty model (`crew_loss_on_hit`); Armada I and native profiles get none yet.
+- [ ] SIM-75: phase-cloaked craft are not affected in the original; STA64 has no phase cloak yet.
+- [ ] SIM-75 not built: `disableSensors` (sensor range down to the damaged range), `hideContents` (hidden from enemy sensors; who still sees into the nebula is not established; a target in a hiding nebula is not an automatic target for a craft outside one), `clearEffects`, the effects tied to `nebulaType`, `lifeTimer`.
+- [ ] SIM-75 not built: the computer voice on entering a hazardous nebula and the warning on low crew or shields (client cue), the nebula's `ambientSound`.
+- [ ] SIM-75 not built: the AI avoids damaging and crew-killing nebulae when choosing explore and queue spots, and AI craft flee into a repairing nebula.
+- [ ] SIM-75: Armada I rule not modelled: there a nebula's kind follows its ODF name, so definitions with other names share one kind (read from the executable, static); STA64 keys every definition as its own kind. Needs a profile table, not a hard-coded list.
+
 ## Backward compatibility gaps (Armada I, Armada II, Fleet Operations)
 
 What the original games read or do that STA64 does not yet, so original
@@ -820,8 +836,8 @@ Grouped by the object class that reads the key, most-used first; within a line, 
 - [ ] [A2] smooth (8): `backwardAccel`, `pitchAlpha`, `pitchOmega`, `rollCoupling`, `pitchAlphaFractionAtRest`, `pitchOmegaFractionAtRest`, `pitchDefault`, `pitchDefaultSpeed`
 - [ ] [A1 A2] fireball explosion (5): `Length`, `dbName`, `shockwave`, `shockwaveDelay`, `shockwaveMinimum`
 - [ ] [A2] fireball explosion (1): `blameTheShooter`
-- [ ] [A1 A2] nebula (19): `blue_glow_range`, `green_glow_range`, `one_in_n_chance_of_light_source`, `red_glow_range`, `damageValue`, `min_speed_change`, `speed_change_period_divisor`, `speed_change_range`, `disableCloak`, `disableCrew`, `disableShields`, `hideContents`, `craft_speed_coefficient`, `craft_speed_limit`, `regenValue`, `repairValue`, `clearEffects`, `damageCrewModifier`, `damageHullModifier`
-- [ ] [A2] nebula (3): `canWeBuildInHere`, `nebulaType`, `craft_max_speed_fraction`
+- [ ] [A1 A2] nebula (8): `blue_glow_range`, `green_glow_range`, `one_in_n_chance_of_light_source`, `red_glow_range`, `min_speed_change`, `speed_change_period_divisor`, `speed_change_range`, `clearEffects` (SIM-75 reads the effect keys; `disableSensors` and `hideContents` are read, not applied)
+- [ ] [A2] nebula (2): `canWeBuildInHere`, `nebulaType`
 - [ ] [A1] shipyard (1): `dockingBuffer`
 - [ ] [A1 A2] shipyard (1): `buildAnimation`
 - [ ] [A2] shipyard (7): `decommissionFacility`, `repairAnimation`, `alwaysRecomputeRallyPoint`, `dilithiumRecyclingFraction`, `metalRecyclingFraction`, `recycleExchangeRate`, `fix`

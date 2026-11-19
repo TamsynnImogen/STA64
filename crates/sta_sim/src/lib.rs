@@ -57,6 +57,7 @@ pub mod present;
 pub mod production;
 mod avoid;
 mod nav;
+mod nebula;
 mod regions;
 mod watchdog;
 pub mod orders;
@@ -485,11 +486,14 @@ impl Sim {
             plans.extend(warps);
             plans.sort_by_key(|p| p.0);
         }
+        // SIM-75: who is in which nebula, from the positions at the tick's start.
+        let nebulae = self.nebula_contents();
+        let speed_caps = if nebulae.is_empty() { Vec::new() } else { self.nebula_speed_caps(&nebulae) };
         // Before routing and avoidance replace targets with detours.
         let gate_goers = self.wormhole_goers();
         let routed = self.route_orders();
         let held = self.steer_around();
-        self.step_kinematics(&plans);
+        self.step_kinematics(&plans, &speed_caps);
         self.restore_targets(held);
         self.restore_targets(routed);
         self.step_wormholes(&gate_goers);
@@ -502,6 +506,7 @@ impl Sim {
             let returned = self.transports.expire(self.tick);
             self.restore_carrier_shields(&returned);
             combat::damage::recharge(&mut self.units, &db, &self.switches, &self.subsystems, &self.transports);
+            let nebula_holds = if nebulae.is_empty() { nebula::Holds::default() } else { self.nebula_systems(&db, &nebulae) };
             self.activate_team_change_weapons(&db);
             let cloak_from = self.events.len();
             self.specials.step(&mut self.units, &db, &mut self.events);
@@ -509,6 +514,7 @@ impl Sim {
             let from = self.events.len();
             let mut held = if db.features().builder_hold_fire { self.production.builders_at_work() } else { Vec::new() };
             held.extend(self.scripted.holding_fire());
+            held.extend(nebula_holds.held.iter().copied());
             self.weapons.hold_fire(held);
             let crew_delay = self.crew_weapon_delays(&db);
             self.weapons.set_crew_delay(crew_delay);
@@ -527,7 +533,10 @@ impl Sim {
             // casualty hits whose final hull-damage event may become zero.
             self.recrew.note_hits(&self.units, &db, &self.events[from..], self.tick);
             let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
-            let killed = combat::damage::apply(&mut self.units, &db, &mut self.events, from, &mut casualties);
+            let mut killed = combat::damage::apply(&mut self.units, &db, &mut self.events, from, &mut casualties);
+            if !nebulae.is_empty() {
+                killed.extend(self.nebula_damage(&db, &nebulae));
+            }
             // Pulses and arrivals after the hits, before the latch upkeep (SIM-46).
             self.step_transports();
             self.step_recrew();
@@ -536,6 +545,7 @@ impl Sim {
             self.step_recycles();
             let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
             combat::casualty::step(&mut self.units, &db, &mut casualties);
+            combat::casualty::nebula_life_support(&mut self.units, &db, &mut casualties, &nebula_holds.life_support_off);
             for (id, by) in killed {
                 lost.extend(self.units.get(id).map(|u| u.owner));
                 self.despawn(id, by);

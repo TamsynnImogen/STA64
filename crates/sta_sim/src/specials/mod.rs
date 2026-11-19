@@ -502,6 +502,19 @@ impl Specials {
                 _ => {}
             }
         }
+        self.drop_cloaks(units, db, events, drop);
+    }
+
+    /// SIM-75: craft in a nebula with `disableCloak` lose an engaging or
+    /// engaged cloak, as a hit that decloaks does.
+    pub(crate) fn force_decloak(&mut self, units: &mut Entities, db: &ContentDb, events: &mut Vec<SimEvent>, ids: Vec<EntityId>) {
+        if self.cloak.is_empty() || ids.is_empty() {
+            return;
+        }
+        self.drop_cloaks(units, db, events, ids);
+    }
+
+    fn drop_cloaks(&mut self, units: &mut Entities, db: &ContentDb, events: &mut Vec<SimEvent>, mut drop: Vec<EntityId>) {
         drop.sort();
         drop.dedup();
         for id in drop {
