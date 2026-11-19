@@ -472,7 +472,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         .unwrap_or_else(|| panic!("{label}: no GPU capture"));
     let dynamic = shot.try_into_dynamic().expect("GPU image conversion");
     let rgba = dynamic.to_rgba8();
-    if crew_tint == Some(Color::srgb(1.0, 0.0, 0.0)) {
+    if hover.is_some() && crew_tint == Some(Color::srgb(1.0, 0.0, 0.0)) {
         let origin=stock.info_origin(bar_variant)+stock.point(&format!("infoBarOffset_{bar_variant}")).unwrap_or(Vec2::ZERO);
         let scale=size.y as f32/1080.0;
         for key in ["crew_amt", "icon_crew_amt"] {
@@ -521,7 +521,10 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             eprintln!("{label}: resource_{id} colour-matched text pixels={matching}");
         }
     }
-    if !matches!(hover_mode, HoverCapture::Group(_)) && stock.colour("hull_color").is_none() && stock.colour("systemIconHealthyColor").is_none() {
+    let shows_hull = expected_bar.iter().any(|(field, _, value)| {
+        *field == super::infobar::InfoBarField::Hull && value.is_some()
+    });
+    if shows_hull && stock.colour("hull_color").is_none() && stock.colour("systemIconHealthyColor").is_none() {
         let origin=stock.info_origin(bar_variant)+stock.point(&format!("infoBarOffset_{bar_variant}")).unwrap_or(Vec2::ZERO);
         if let Some(rect)=stock.at(origin,"icon_hull") {
             let scale=size.y as f32/1080.0;
@@ -610,6 +613,12 @@ fn installed_stock_hud_renders_on_gpu() {
             let vfs=sta_vfs::Vfs::mount_install(std::path::Path::new(&install),active_mod.as_deref()).unwrap();
             capture_one(vfs,profile,UVec2::new(1280,720),"gui_fed.cfg",label,GameOptions::default(),mode);
         }
+    } else {
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();
+        capture_one(
+            vfs, profile, UVec2::new(1280, 720), "gui_federation16x9.cfg",
+            "fo4-hover-low-16x9", GameOptions::default(), HoverCapture::Low,
+        );
     }
 }
 
