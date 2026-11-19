@@ -98,6 +98,7 @@ fn installed_defiant_draws_offscreen() {
                 model_key: path.clone(),
                 unlit: false,
                 scale: 0.8,
+                diffuse_tint: false,
             };
             let stats = spawn(&mut ctx, &model, root);
             assert!(stats.meshes > 0 && stats.triangles > 0);

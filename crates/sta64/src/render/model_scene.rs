@@ -139,6 +139,10 @@ pub struct SpawnCtx<'a, 'w, 's> {
     /// The ODF's `ScaleSOD`. As in the engine it scales the model's positions
     /// (node offsets and vertices) but not sprite sizes or particles.
     pub scale: f32,
+    /// An unlit group takes its lighting material's `diffuse` as its colour (multiplied with its
+    /// texture), instead of white. Off for every spawn but an effect model that carries its colour
+    /// in the lighting material (a mining beam).
+    pub diffuse_tint: bool,
 }
 
 /// Spawn `model` under `root`. Only the finest LOD level of each LOD switch is shown.
@@ -582,7 +586,15 @@ fn spawn_mesh(
         let lm = model.lighting_material(&group.material);
         let team = native.is_none() && crate::render::hulls::is_team_material(&group.material);
         let self_illum = lm.is_some_and(|m| m.self_illuminating);
-        let base_color = if team { ctx.team } else { Color::WHITE };
+        let unlit_group = additive || self_illum || ctx.unlit;
+        let base_color = if team {
+            ctx.team
+        } else if let (true, true, Some(m)) = (ctx.diffuse_tint, unlit_group, lm) {
+            let [r, g, b] = m.diffuse;
+            Color::LinearRgba(LinearRgba::new(r, g, b, 1.0))
+        } else {
+            Color::WHITE
+        };
         let mut material = if let Some((pbr_model, source)) = native {
             pbr::material(&mut ctx.textures, pbr_model, source, ctx.normal_maps, ctx.unlit, stats,
             )
@@ -595,7 +607,7 @@ fn spawn_mesh(
             emissive: if glow.is_some() { LinearRgba::WHITE } else { LinearRgba::BLACK },
             emissive_texture: glow,
             alpha_mode,
-            unlit: additive || self_illum || ctx.unlit,
+            unlit: unlit_group,
             double_sided: two_sided,
             cull_mode: if two_sided { None } else { Some(Face::Back) },
             reflectance: mspec.reflectance,
@@ -896,6 +908,7 @@ mod tests {
                 model_key: "mplan.sod".into(),
                 unlit: false,
                 scale: 3.0,
+                diffuse_tint: false,
             };
             let named = spawn_planet_nimbus(&mut ctx, "MPlan.SOD", root);
             let lower = spawn_planet_nimbus(&mut ctx, "mplan.sod", root);

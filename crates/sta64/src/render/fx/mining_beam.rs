@@ -7,6 +7,10 @@
 //! model reference read from data; the scale rule read from the executable, static; the cone look
 //! stated by a player).
 //!
+//! The beam's colour: a group's lighting-material `diffuse` multiplies its texture (`SpawnCtx::diffuse_tint`),
+//! as the unlit additive path otherwise drops it. For a model whose texture is colourless the diffuse is
+//! the only colour the data gives (read from data); that the original shows it is stated by a player.
+//!
 //! The model is loaded and drawn by the same code as a unit's. A weapon whose ordnance has no
 //! such model (not installed, or a mod's own) keeps the recipe-drawn ribbon of [`super::weapons`].
 
@@ -133,9 +137,11 @@ pub(super) fn attach_models(
             damaged: false,
             normal_maps: false,
             parts: Some(&mut parts),
-            model_key: path,
+            // Its own cache entry: the tinted parts must not be shared with a plain spawn of the model.
+            model_key: format!("{path}#beam"),
             unlit: BEAM_UNLIT,
             scale: 1.0,
+            diffuse_tint: true,
         };
         model_scene::spawn(&mut ctx, &model, e);
         commands
@@ -193,18 +199,17 @@ mod tests {
         assert_eq!(blends(&named), ["opaque", "alpha"]);
     }
 
-    /// A beam's model spawn makes no hull part, so the shadow system adds no caster for it; the same
-    /// model spawned the way a unit is does (the test would otherwise prove nothing).
-    #[test]
-    fn a_beam_model_has_no_hull_part_and_so_casts_no_shadow() {
+    /// An authored one-triangle beam model whose colour lives in its lighting material (the texture is
+    /// absent, so white), spawned as `spawn` says; returns the hull parts made and the material colours.
+    fn spawn_authored(unlit: bool, diffuse_tint: bool, diffuse: [f32; 3]) -> (usize, Vec<LinearRgba>) {
         use crate::render::hulls::HullPart;
         use bevy::ecs::world::CommandQueue;
         use bevy::image::CompressedImageFormats;
-        use sta_assets::model::{Group, Mesh as M, Node, NodeKind, SourceFormat};
+        use sta_assets::model::{Group, LightingMaterial, Mesh as M, Node, NodeKind, SourceFormat};
         let model = Model {
             format: SourceFormat::M3d,
             version: 2.06,
-            materials: Vec::new(),
+            materials: vec![LightingMaterial { name: "m".into(), ambient: [0.5; 3], diffuse, specular: [1.0; 3], power: 50.0, model: 0, self_illuminating: false }],
             nodes: vec![Node {
                 name: "beam".into(),
                 parent: None,
@@ -223,37 +228,53 @@ mod tests {
             pbr: None,
         };
         let table = sta_assets::a2fmt::spr::SpriteTable::parse(b"sprite_table\n@reference=64\n");
-        let hull_parts = |unlit: bool| {
-            let vfs = sta_vfs::Vfs::default();
-            let (mut meshes, mut materials, mut images) = (Assets::<Mesh>::default(), Assets::<StandardMaterial>::default(), Assets::<Image>::default());
-            let mut cache = TextureCache::default();
-            let mut world = World::new();
-            let root = world.spawn((Transform::IDENTITY, Visibility::default())).id();
-            let mut queue = CommandQueue::default();
-            {
-                let mut commands = Commands::new(&mut queue, &world);
-                let mut ctx = SpawnCtx {
-                    commands: &mut commands,
-                    meshes: &mut meshes,
-                    materials: &mut materials,
-                    textures: Loader { vfs: &vfs, cache: &mut cache, images: &mut images, formats: CompressedImageFormats::NONE },
-                    team: Color::WHITE,
-                    borg: false,
-                    sprites: &table,
-                    damaged: false,
-                    normal_maps: false,
-                    parts: None,
-                    model_key: "beam".into(),
-                    unlit,
-                    scale: 1.0,
-                };
-                model_scene::spawn(&mut ctx, &model, root);
-            }
-            queue.apply(&mut world);
-            world.query::<&HullPart>().iter(&world).count()
-        };
-        assert_eq!(hull_parts(BEAM_UNLIT), 0);
-        assert!(hull_parts(false) > 0, "a unit-style spawn of the same model has a hull part");
+        let vfs = sta_vfs::Vfs::default();
+        let (mut meshes, mut materials, mut images) = (Assets::<Mesh>::default(), Assets::<StandardMaterial>::default(), Assets::<Image>::default());
+        let mut cache = TextureCache::default();
+        let mut world = World::new();
+        let root = world.spawn((Transform::IDENTITY, Visibility::default())).id();
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            let mut ctx = SpawnCtx {
+                commands: &mut commands,
+                meshes: &mut meshes,
+                materials: &mut materials,
+                textures: Loader { vfs: &vfs, cache: &mut cache, images: &mut images, formats: CompressedImageFormats::NONE },
+                team: Color::WHITE,
+                borg: false,
+                sprites: &table,
+                damaged: false,
+                normal_maps: false,
+                parts: None,
+                model_key: "beam".into(),
+                unlit,
+                scale: 1.0,
+                diffuse_tint,
+            };
+            model_scene::spawn(&mut ctx, &model, root);
+        }
+        queue.apply(&mut world);
+        let hulls = world.query::<&HullPart>().iter(&world).count();
+        (hulls, materials.iter().map(|(_, m)| m.base_color.to_linear()).collect())
+    }
+
+    /// A beam's model spawn makes no hull part, so the shadow system adds no caster for it; the same
+    /// model spawned the way a unit is does (the test would otherwise prove nothing).
+    #[test]
+    fn a_beam_model_has_no_hull_part_and_so_casts_no_shadow() {
+        assert_eq!(spawn_authored(BEAM_UNLIT, true, [0.2, 0.4, 1.0]).0, 0);
+        assert!(spawn_authored(false, false, [0.2, 0.4, 1.0]).0 > 0, "a unit-style spawn of the same model has a hull part");
+    }
+
+    /// The colour of a beam whose model carries it in the lighting material reaches the drawn material:
+    /// the diffuse, not white. A spawn without the tint stays white (every other model is unchanged).
+    #[test]
+    fn a_beam_takes_its_colour_from_the_lighting_material_diffuse() {
+        let (_, tinted) = spawn_authored(BEAM_UNLIT, true, [0.2, 0.4, 1.0]);
+        assert_eq!(tinted, vec![LinearRgba::new(0.2, 0.4, 1.0, 1.0)]);
+        let (_, plain) = spawn_authored(BEAM_UNLIT, false, [0.2, 0.4, 1.0]);
+        assert_eq!(plain, vec![LinearRgba::WHITE]);
     }
 
     #[test]
