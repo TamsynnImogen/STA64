@@ -427,6 +427,8 @@ pub struct ObjectivesView {
     pub visible: bool,
     pub title: String,
     pub briefing: String,
+    /// The file's text after its first goal (a hint), drawn under the goals.
+    pub notes: String,
     pub items: Vec<ObjectiveLine>,
 }
 
@@ -443,6 +445,7 @@ impl ObjectivesView {
     pub fn fill(&mut self, objectives: &[Objective], briefing: Option<&ObjectiveBriefing>) {
         self.title = briefing.map(|b| b.title.clone()).unwrap_or_default();
         self.briefing = briefing.map(|b| b.text.clone()).unwrap_or_default();
+        self.notes = briefing.map(|b| b.notes.clone()).unwrap_or_default();
         self.items = objectives
             .iter()
             .map(|o| ObjectiveLine { text: if o.description.is_empty() { o.title.clone() } else { format!("{}: {}", o.title, o.description) }, state: o.state })
@@ -854,7 +857,7 @@ struct TitleLayer;
 struct FadeOverlay;
 
 #[derive(Component)]
-struct PanelRoot;
+pub(crate) struct PanelRoot;
 
 #[derive(Component)]
 struct OkButton;
@@ -923,14 +926,15 @@ struct PanelContent {
     message: Option<u32>,
     title: String,
     body: String,
+    notes: String,
     lines: Vec<ObjectiveLine>,
 }
 
 fn panel_content(view: &ObjectivesView, queue: &MessageQueue) -> Option<PanelContent> {
     if let Some(m) = queue.0.front() {
-        return Some(PanelContent { message: Some(m.id), title: m.title.clone(), body: m.text.clone(), lines: Vec::new() });
+        return Some(PanelContent { message: Some(m.id), title: m.title.clone(), body: m.text.clone(), notes: String::new(), lines: Vec::new() });
     }
-    view.visible.then(|| PanelContent { message: None, title: view.title.clone(), body: view.briefing.clone(), lines: view.items.clone() })
+    view.visible.then(|| PanelContent { message: None, title: view.title.clone(), body: view.briefing.clone(), notes: view.notes.clone(), lines: view.items.clone() })
 }
 
 fn fixed(strings: Option<&Strings>, key: &str, fallback: &str) -> String {
@@ -969,6 +973,11 @@ pub(crate) struct ObjectivesLayout {
     pub text: [f32; 4],
     pub header: [f32; 4],
     pub ok: [f32; 4],
+    /// `objectivesBlackArea`, when the cfg has it.
+    pub black: Option<[f32; 4]>,
+    /// The cfg gives the title its own rectangle (`objectivesTitleInformationArea`); one that gives only a
+    /// text area (Armada I's) has a single text block.
+    pub separate: bool,
     pub title_colour: Option<Color>,
     pub summary_colour: Option<Color>,
     pub text_colour: Option<Color>,
@@ -985,19 +994,17 @@ impl ObjectivesLayout {
         };
         let colour = |key: &str| cfg.and_then(|c| c.colours.get(key)).map(|c| Color::srgba(c.r, c.g, c.b, c.a));
         let name = |key: &str| cfg.and_then(|c| c.names.get(key)).cloned();
-        let canvas = cfg.map(|c| c.canvas).filter(|c| c.0 > 0 && c.1 > 0).map_or((1600.0, 1200.0), |c| (c.0 as f32, c.1 as f32));
         ObjectivesLayout {
-            canvas,
+            canvas: crate::ui::objectives_panel::canvas_of(cfg),
             // `objectivesPanelArea` is a panel key: the cfg keeps it with the panel.
-            panel: cfg
-                .and_then(|c| c.panels.iter().find(|(k, _)| k.eq_ignore_ascii_case("objectives")).and_then(|(_, p)| p.area))
-                .filter(|r| r.w > 0 && r.h > 0)
-                .map_or([192.0, 80.0, 1280.0, 1024.0], |r| [r.x as f32, r.y as f32, r.w as f32, r.h as f32]),
+            panel: crate::ui::objectives_panel::panel_area(cfg),
             title: rect("objectivesTitleInformationArea", [30.0, 50.0, 1200.0, 50.0]),
             summary: rect("objectivesSummaryInformationArea", [30.0, 120.0, 1200.0, 40.0]),
             text: rect("objectivesTextInformationArea", [50.0, 160.0, 1200.0, 485.0]),
             header: rect("objectivesHeaderInformationArea", [30.0, 392.0, 1200.0, 45.0]),
             ok: rect("objectivesOkayButtonArea", [952.0, 948.0, 252.0, 60.0]),
+            black: cfg.and_then(|c| c.rects.get("objectivesBlackArea")).filter(|r| r.w > 0 && r.h > 0).map(|r| [r.x as f32, r.y as f32, r.w as f32, r.h as f32]),
+            separate: cfg.is_none_or(|c| c.rects.get("objectivesTitleInformationArea").is_some_and(|r| r.w > 0 && r.h > 0)),
             title_colour: colour("objectivesTitleColor"),
             summary_colour: colour("objectivesSummaryColor"),
             text_colour: colour("objectivesTextColor"),
@@ -1009,10 +1016,22 @@ impl ObjectivesLayout {
     }
 }
 
+/// What the stock panel was drawn on: redrawn when the picture, the window's aspect or the fit changes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct StockKey {
+    art: Option<u32>,
+    aspect_bits: u32,
+    fit: crate::ui::hud::stock::layout::HudFit,
+}
+
 /// The panel on the cfg's rectangles (see [`ObjectivesLayout`]). Text blocks are placed at
 /// their rectangles' tops: the title, the briefing heading, the briefing in the text area,
 /// the objectives heading and the objective lines under it.
-#[allow(clippy::too_many_arguments)]
+///
+/// In a stock profile with the game's art ([`crate::ui::objectives_panel`]) the panel is the cfg's picture, placed as
+/// one group on the window; without art, or in the STA64 profile, it is STA64's own dark panel over the
+/// whole canvas.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn draw_panel(
     mut commands: Commands,
     theme: Res<Theme>,
@@ -1021,13 +1040,32 @@ fn draw_panel(
     view: Res<ObjectivesView>,
     queue: Res<MessageQueue>,
     roots: Query<Entity, With<PanelRoot>>,
-    mut shown: Local<Option<(PanelContent, ObjectivesLayout)>>,
+    mut shown: Local<Option<(PanelContent, ObjectivesLayout, StockKey)>>,
+    profile: Option<Res<crate::ui::profile::UiProfile>>,
+    window: Option<Single<&Window, With<bevy::window::PrimaryWindow>>>,
+    mounted: Option<Res<crate::viewer::Mounted>>,
+    images: Option<ResMut<Assets<Image>>>,
+    art: Option<ResMut<crate::ui::objectives_panel::ObjectivesArt>>,
 ) {
-    let layout = ObjectivesLayout::from_cfg(hud.as_deref().and_then(|h| h.gui.as_ref()));
+    use crate::ui::objectives_panel as op;
+    let gui = hud.as_deref().and_then(|h| h.gui.as_ref());
+    let layout = ObjectivesLayout::from_cfg(gui);
     let want = panel_content(&view, &queue);
+    let art_node = match (want.is_some() && profile.as_deref().is_some_and(|p| p.is_stock()), art, images) {
+        (true, Some(mut art), Some(mut images)) => {
+            if mounted.as_ref().is_some_and(|m| m.is_changed()) {
+                art.reset(true);
+            }
+            art.get(gui, mounted.as_ref().map(|m| &m.0), &mut images).map(|a| (a, art.generation))
+        }
+        _ => None,
+    };
+    let fit = hud.as_deref().map_or_else(Default::default, |h| h.fit);
+    let aspect = window.as_ref().filter(|w| w.height() > 0.0).map(|w| w.width() / w.height()).or_else(|| hud.as_deref().map(|h| h.aspect)).unwrap_or(4.0 / 3.0);
+    let key = StockKey { art: art_node.as_ref().map(|a| a.1), aspect_bits: aspect.to_bits(), fit };
     let same = match (&want, shown.as_ref()) {
         (None, None) => true,
-        (Some(w), Some((c, l))) => w == c && *l == layout,
+        (Some(w), Some((c, l, k))) => w == c && *l == layout && *k == key,
         _ => false,
     };
     if same && !theme.is_changed() {
@@ -1036,62 +1074,151 @@ fn draw_panel(
     for e in &roots {
         commands.entity(e).despawn();
     }
-    *shown = want.clone().map(|c| (c, layout.clone()));
+    *shown = want.clone().map(|c| (c, layout.clone(), key));
     let Some(c) = want else { return };
+    let stock = art_node.map(|a| a.0);
     let s = strings.as_deref();
     let l = &layout;
     let [px, py, pw, ph] = l.panel;
     let pct = |v: f32, of: f32| Val::Percent(v / of * 100.0);
     let at = |r: [f32; 4]| Node { position_type: PositionType::Absolute, left: pct(r[0], pw), top: pct(r[1], ph), width: pct(r[2], pw), flex_direction: FlexDirection::Column, ..default() };
+    // A box on a cfg rectangle, its content kept at the box's left edge and vertically centred.
+    let boxed = |r: [f32; 4], justify: JustifyContent| Node {
+        position_type: PositionType::Absolute,
+        left: pct(r[0], pw),
+        top: pct(r[1], ph),
+        width: pct(r[2], pw),
+        height: pct(r[3], ph),
+        align_items: AlignItems::Center,
+        justify_content: justify,
+        ..default()
+    };
     let text = |t: String, size: f32, colour: Color| sprite_text_styled(t, size, colour, SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent());
     let line = |t: String, colour: Color| (Node { margin: UiRect::bottom(Val::Px(theme.gap)), ..default() }, children![text(t, theme.text_size, colour)]);
     let summary_colour = l.summary_colour.unwrap_or(Color::srgb(0.8, 1.0, 1.0));
     let header_colour = l.header_colour.unwrap_or(summary_colour);
     let text_colour = l.text_colour.unwrap_or(theme.text);
     let ok = fixed(s, &l.ok_text, "OK");
+    let frac = if stock.is_some() { op::panel_fractions(l.canvas, l.panel, aspect, fit) } else { [px / l.canvas.0, py / l.canvas.1, pw / l.canvas.0, ph / l.canvas.1] };
     let mut panel = commands.spawn((
         PanelRoot,
-        Node { position_type: PositionType::Absolute, left: pct(px, l.canvas.0), top: pct(py, l.canvas.1), width: pct(pw, l.canvas.0), height: pct(ph, l.canvas.1), ..default() },
-        BackgroundColor(theme.panel.with_alpha(0.92)),
+        Node { position_type: PositionType::Absolute, left: Val::Percent(frac[0] * 100.0), top: Val::Percent(frac[1] * 100.0), width: Val::Percent(frac[2] * 100.0), height: Val::Percent(frac[3] * 100.0), ..default() },
         GlobalZIndex(OBJECTIVES_Z),
     ));
+    if stock.is_none() {
+        panel.insert(BackgroundColor(theme.panel.with_alpha(0.92)));
+    }
+    let complete_colour = |state: ObjectiveState| match state {
+        ObjectiveState::Active => text_colour,
+        ObjectiveState::Complete => theme.good,
+        ObjectiveState::Failed => theme.bad,
+    };
     panel.with_children(|p| {
-        if !c.title.is_empty() {
-            p.spawn((at(l.title), children![text(c.title.clone(), theme.heading_size, l.title_colour.unwrap_or(theme.title))]));
-        }
-        if c.message.is_none()
-            && !c.body.is_empty()
-            && let Some(h) = heading_text(s, "GUI_OD_BRIEFING_SUMMARY", "BRIEFING SUMMARY:")
-        {
-            p.spawn((at(l.summary), children![text(h, theme.heading_size, summary_colour)]));
-        }
-        if !c.body.is_empty() {
-            p.spawn((at(l.text), children![line(c.body.clone(), text_colour)]));
-        }
-        if c.message.is_none() && !c.lines.is_empty() {
-            // Objective files may carry the heading themselves as the last line of the briefing text; then it is
-            // not drawn twice. Limit: the comparison is with the table's heading, or the English fallback when
-            // the table has none, so a translated game without the string but with a translated text line can
-            // still show two.
-            let heading = fixed(s, "GUI_OD_OBJECTIVES", "OBJECTIVES:");
-            if !text_ends_with_heading(&c.body, &heading) {
-                p.spawn((at(l.header), children![text(heading, theme.heading_size, header_colour)]));
+        if let Some(art) = &stock {
+            // The black area first, then the cfg's pieces, abutting at whole canvas units.
+            if let Some(b) = art.black {
+                p.spawn((Node { height: pct(b[3], ph), ..at(b) }, BackgroundColor(Color::BLACK)));
             }
-            let below = [l.text[0], l.header[1] + l.header[3], l.text[2], 0.0];
-            p.spawn(at(below)).with_children(|list| {
-                for o in &c.lines {
-                    let colour = match o.state {
-                        ObjectiveState::Active => text_colour,
-                        ObjectiveState::Complete => theme.good,
-                        ObjectiveState::Failed => theme.bad,
-                    };
-                    list.spawn(line(format!("* {}", o.text), colour));
+            for piece in &art.pieces {
+                let r = op::snapped(piece.rect);
+                p.spawn((
+                    Node { position_type: PositionType::Absolute, left: pct(r[0], pw), top: pct(r[1], ph), width: pct(r[2], pw), height: pct(r[3], ph), ..default() },
+                    ImageNode { image: piece.image.clone(), rect: Some(piece.crop), ..default() },
+                ));
+            }
+        }
+        let single = stock.is_some() && !l.separate;
+        if single {
+            // One text area (the cfg has no title rectangle): the file's text in order, inside the black area
+            // (where it starts is not measured: interim).
+            let area = stock.as_ref().and_then(|a| a.black).unwrap_or(l.text);
+            let heading = fixed(s, "GUI_OD_OBJECTIVES", "OBJECTIVES:");
+            p.spawn(at(area)).with_children(|block| {
+                if !c.title.is_empty() {
+                    block.spawn(line(c.title.clone(), text_colour));
+                }
+                if !c.body.is_empty() {
+                    block.spawn(line(c.body.clone(), text_colour));
+                }
+                if c.message.is_none() && !c.lines.is_empty() {
+                    if !text_ends_with_heading(&c.body, &heading) {
+                        block.spawn(line(heading, text_colour));
+                    }
+                    for o in &c.lines {
+                        block.spawn(line(format!("* {}", o.text), complete_colour(o.state)));
+                    }
+                }
+                if !c.notes.is_empty() {
+                    block.spawn(line(c.notes.clone(), text_colour));
                 }
             });
+        } else {
+            let stock_text = stock.is_some();
+            if !c.title.is_empty() {
+                let colour = l.title_colour.unwrap_or(theme.title);
+                if stock_text {
+                    // Centred in its rectangle (seen in one frame of the Armada II window).
+                    p.spawn((boxed(l.title, JustifyContent::Center), children![sprite_text_styled(c.title.clone(), theme.heading_size, colour, SpriteTextStyle::role(font_role(&theme, theme.heading_size)).centered_in_box())]));
+                } else {
+                    p.spawn((at(l.title), children![text(c.title.clone(), theme.heading_size, colour)]));
+                }
+            }
+            // Left aligned and vertically centred in its rectangle in the stock panel (seen in one frame of the
+            // Armada II window); at the rectangle's top in STA64's own.
+            let heading_box = |r: [f32; 4]| if stock_text { boxed(r, JustifyContent::FlexStart) } else { at(r) };
+            if c.message.is_none()
+                && !c.body.is_empty()
+                && let Some(h) = heading_text(s, "GUI_OD_BRIEFING_SUMMARY", "BRIEFING SUMMARY:")
+            {
+                p.spawn((heading_box(l.summary), children![text(h, theme.heading_size, summary_colour)]));
+            }
+            if !c.body.is_empty() {
+                p.spawn((at(l.text), children![line(c.body.clone(), text_colour)]));
+            }
+            if c.message.is_none() && !c.lines.is_empty() {
+                // Objective files may carry the heading themselves as the last line of the briefing text; then it is
+                // not drawn twice. Limit: the comparison is with the table's heading, or the English fallback when
+                // the table has none, so a translated game without the string but with a translated text line can
+                // still show two.
+                let heading = fixed(s, "GUI_OD_OBJECTIVES", "OBJECTIVES:");
+                if !text_ends_with_heading(&c.body, &heading) {
+                    p.spawn((heading_box(l.header), children![text(heading, theme.heading_size, header_colour)]));
+                }
+                let below = [l.text[0], l.header[1] + l.header[3], l.text[2], 0.0];
+                p.spawn(at(below)).with_children(|list| {
+                    for o in &c.lines {
+                        let colour = complete_colour(o.state);
+                        if stock_text {
+                            // A mark column and a text column, so a wrapped line hangs under its own text.
+                            list.spawn((Node { margin: UiRect::bottom(Val::Px(theme.gap)), column_gap: Val::Px(theme.gap), ..default() }, children![
+                                (Node { flex_shrink: 0.0, ..default() }, children![text(op::mark(o.state == ObjectiveState::Complete).to_owned(), theme.text_size, colour)]),
+                                (Node { flex_grow: 1.0, flex_basis: Val::Px(0.0), ..default() }, children![text(o.text.clone(), theme.text_size, colour)]),
+                            ]));
+                        } else {
+                            list.spawn(line(format!("* {}", o.text), colour));
+                        }
+                    }
+                    if !c.notes.is_empty() {
+                        list.spawn(line(c.notes.clone(), text_colour));
+                    }
+                });
+            }
         }
-        let mut ok_button = p.spawn((Node { position_type: PositionType::Absolute, left: pct(l.ok[0], pw), top: pct(l.ok[1], ph), ..default() },));
-        ok_button.with_children(|b| {
+        let ok_node = if stock.is_some() {
+            Node { position_type: PositionType::Absolute, left: pct(l.ok[0], pw), top: pct(l.ok[1], ph), width: pct(l.ok[2], pw), height: pct(l.ok[3], ph), ..default() }
+        } else {
+            Node { position_type: PositionType::Absolute, left: pct(l.ok[0], pw), top: pct(l.ok[1], ph), ..default() }
+        };
+        let fill = stock.is_some();
+        p.spawn(ok_node).with_children(|b| {
             let mut e = b.spawn((OkButton, button(&theme, &ok, l.ok[2])));
+            if fill {
+                // The button takes the cfg rectangle at the group's scale.
+                e.entry::<Node>().and_modify(|mut n| {
+                    n.width = Val::Percent(100.0);
+                    n.height = Val::Percent(100.0);
+                });
+            }
             if let Some(img) = &l.ok_image {
                 // The cfg's okay border image (the hover frame) is not drawn: the sprite button has no hover art.
                 e.insert(crate::ui::gui_sprites::GuiButton { names: vec![img.clone()], keep_label: true });
@@ -1176,6 +1303,7 @@ impl Plugin for PresentationPlugin {
             .init_resource::<crate::render::cull::ScriptView>()
             .add_message::<crate::audio::SoundStarted>()
             .init_resource::<ObjectivesView>()
+            .init_resource::<crate::ui::objectives_panel::ObjectivesArt>()
             .init_resource::<MessageQueue>()
             .add_systems(OnEnter(crate::app::AppState::FrontEnd), (reset_presentation, reset_bridge))
             .add_message::<ScriptReply>()
@@ -2042,5 +2170,153 @@ mod tests {
         assert_eq!(l.title_colour, Some(Color::srgba(1.0, 0.0, 0.0, 1.0)));
         assert_eq!((l.ok_image.as_deref(), l.ok_text.as_str()), (Some("ok_spr"), "MY_OK"));
         assert_eq!(l.text_colour, None, "an absent colour keeps the theme's");
+    }
+
+    mod stock_panel {
+        use super::*;
+        use crate::ui::hud::HudConfig;
+        use crate::ui::objectives_panel::fixtures::{CFG, CFG_OVERSIZE, CFG_SINGLE, art_install, gui, mount};
+        use crate::ui::profile::UiProfile;
+
+        fn stock_app(cfg: &str, aspect: f32, profile: UiProfile, install: Option<sta_vfs::Vfs>) -> App {
+            let mut app = app();
+            app.insert_resource(Theme::default())
+                .insert_resource(profile)
+                .insert_resource(HudConfig { gui: Some(gui(cfg)), aspect, ..default() })
+                .init_resource::<Assets<Image>>();
+            if let Some(vfs) = install {
+                app.insert_resource(crate::viewer::Mounted(vfs));
+            }
+            app.update();
+            app
+        }
+
+        fn open(app: &mut App, notes: &str) {
+            let obj = [
+                Objective { id: 1, title: "Find".into(), description: String::new(), state: ObjectiveState::Active },
+                Objective { id: 2, title: "Hold".into(), description: String::new(), state: ObjectiveState::Complete },
+            ];
+            let mut v = app.world_mut().resource_mut::<ObjectivesView>();
+            v.fill(&obj, Some(&ObjectiveBriefing { file: "f".into(), title: "Mission 1".into(), text: "Go.".into(), notes: notes.into() }));
+            v.visible = true;
+            app.update();
+        }
+
+        fn texts(app: &mut App) -> Vec<String> {
+            app.world_mut().query::<&SpriteText>().iter(app.world()).map(|t| t.text.clone()).collect()
+        }
+
+        fn pieces(app: &mut App) -> usize {
+            app.world_mut().query::<&ImageNode>().iter(app.world()).count()
+        }
+
+        fn root(app: &mut App) -> (Node, bool) {
+            let (n, bg) = app.world_mut().query_filtered::<(&Node, Option<&BackgroundColor>), With<PanelRoot>>().single(app.world()).map(|(n, b)| (n.clone(), b.is_some_and(|b| b.0.alpha() > 0.0))).unwrap();
+            (n, bg)
+        }
+
+        fn pct(v: Val) -> f32 {
+            let Val::Percent(p) = v else { panic!("{v:?}") };
+            p
+        }
+
+        #[test]
+        fn a_stock_profile_draws_the_cfg_pieces_and_no_backdrop_of_its_own() {
+            let (vfs, _t) = art_install();
+            let mut app = stock_app(CFG, 4.0 / 3.0, UiProfile::Armada2, Some(vfs));
+            open(&mut app, "HINT: hold.");
+            assert_eq!(pieces(&mut app), 2, "one picture per cfg piece");
+            let (n, backdrop) = root(&mut app);
+            assert!(!backdrop, "the art is the panel");
+            // The panel area of the cfg (100 50 400 300 on 800 x 600), as fractions of a 4:3 window.
+            assert!((pct(n.left) - 12.5).abs() < 0.1 && (pct(n.top) - 50.0 / 6.0).abs() < 0.1 && (pct(n.width) - 50.0).abs() < 0.1, "{n:?}");
+            let t = texts(&mut app);
+            for want in ["Mission 1", "BRIEFING SUMMARY:", "Go.", "OBJECTIVES:", "[  ]", "[X]", "Find", "Hold", "HINT: hold."] {
+                assert!(t.iter().any(|x| x == want), "{want}: {t:?}");
+            }
+            assert!(!t.iter().any(|x| x.starts_with("* ")), "the stock panel marks its lines: {t:?}");
+        }
+
+        #[test]
+        fn on_a_wide_window_the_panel_keeps_its_aspect_and_is_centred_with_the_sheet() {
+            let (vfs, _t) = art_install();
+            let mut app = stock_app(CFG, 16.0 / 9.0, UiProfile::Armada2, Some(vfs));
+            open(&mut app, "");
+            let (n, _) = root(&mut app);
+            // Physical shape: width fraction of a 16:9 window over its height fraction is the panel's 4:3.
+            let shape = (pct(n.width) * 16.0) / (pct(n.height) * 9.0);
+            assert!((shape - 400.0 / 300.0).abs() < 1e-2, "{shape}");
+            // The group (a 4:3 sheet at 16:9) is centred: the panel's left edge is the margin plus 1/8 of the group.
+            let margin = (1.0 - 0.75) / 2.0;
+            assert!((pct(n.left) / 100.0 - (margin + 0.125 * 0.75)).abs() < 1e-2, "{n:?}");
+            // A player who chose the stretched layout gets the sheet over the whole window.
+            app.world_mut().resource_mut::<HudConfig>().fit = crate::ui::hud::stock::layout::HudFit::Stretched;
+            app.update();
+            let (n, _) = root(&mut app);
+            assert!((pct(n.width) - 50.0).abs() < 0.1, "{n:?}");
+        }
+
+        #[test]
+        fn without_art_or_in_the_sta64_profile_the_panel_keeps_its_own_look() {
+            let (vfs, _t) = art_install();
+            // STA64's own profile never reads the art.
+            let mut own = stock_app(CFG, 4.0 / 3.0, UiProfile::Lcars, Some(vfs));
+            open(&mut own, "");
+            assert_eq!(pieces(&mut own), 0);
+            assert!(root(&mut own).1, "the dark backdrop");
+            assert!(texts(&mut own).iter().any(|x| x == "* Find"), "its own line marks");
+            // A stock profile whose cfg pieces cannot be had: the same panel, the reason logged once.
+            let (vfs, _t2) = art_install();
+            let mut no_art = stock_app(CFG_OVERSIZE, 4.0 / 3.0, UiProfile::Armada2, Some(vfs));
+            open(&mut no_art, "");
+            assert_eq!(pieces(&mut no_art), 0);
+            assert!(root(&mut no_art).1);
+            let (empty, _t3) = mount(&[]);
+            let mut no_sprites = stock_app(CFG, 4.0 / 3.0, UiProfile::Armada2, Some(empty));
+            open(&mut no_sprites, "");
+            assert_eq!((pieces(&mut no_sprites), root(&mut no_sprites).1), (0, true));
+            // No install mounted at all: also the own panel, and the art takes over once it is there.
+            let mut none = stock_app(CFG, 4.0 / 3.0, UiProfile::Armada2, None);
+            open(&mut none, "");
+            assert_eq!(pieces(&mut none), 0);
+            let (vfs, _t4) = art_install();
+            none.insert_resource(crate::viewer::Mounted(vfs));
+            none.update();
+            assert_eq!(pieces(&mut none), 2);
+        }
+
+        #[test]
+        fn a_cfg_with_one_text_area_sets_the_file_in_order_inside_the_black_area() {
+            let (vfs, _t) = art_install();
+            let mut app = stock_app(CFG_SINGLE, 4.0 / 3.0, UiProfile::Armada1, Some(vfs));
+            open(&mut app, "HINT: hold.");
+            assert_eq!(pieces(&mut app), 2);
+            let mut t = texts(&mut app);
+            t.sort();
+            let mut want = ["Mission 1", "Go.", "OBJECTIVES:", "* Find", "* Hold", "HINT: hold.", "OK"].map(String::from).to_vec();
+            want.sort();
+            assert_eq!(t, want, "one block and the OK label");
+            let blacks = app.world_mut().query::<&BackgroundColor>().iter(app.world()).filter(|b| b.0 == Color::BLACK).count();
+            assert_eq!(blacks, 1, "the cfg's black area");
+            let orange = app.world_mut().query::<&SpriteText>().iter(app.world()).all(|t| t.text == "OK" || t.text.starts_with('*') || t.color == Color::srgb(1.0, 0.5, 0.0) || t.color == Theme::default().good);
+            assert!(orange, "the cfg's text colour");
+        }
+
+        #[test]
+        fn the_panel_opens_and_closes_with_its_content_and_carries_a_message() {
+            let (vfs, _t) = art_install();
+            let mut app = stock_app(CFG, 4.0 / 3.0, UiProfile::Armada2, Some(vfs));
+            assert!(app.world_mut().query::<&PanelRoot>().iter(app.world()).next().is_none(), "closed");
+            open(&mut app, "");
+            assert_eq!(pieces(&mut app), 2);
+            app.world_mut().resource_mut::<ObjectivesView>().visible = false;
+            app.update();
+            assert_eq!(pieces(&mut app), 0, "closed: the pictures go with it");
+            app.world_mut().write_message(MessageBox { id: 2, title: "Orders".into(), text: "Hold.".into() });
+            app.update();
+            let t = texts(&mut app);
+            assert_eq!(pieces(&mut app), 2, "a message box is the same panel");
+            assert!(t.iter().any(|x| x == "Orders") && t.iter().any(|x| x == "Hold.") && !t.iter().any(|x| x == "BRIEFING SUMMARY:"), "{t:?}");
+        }
     }
 }
