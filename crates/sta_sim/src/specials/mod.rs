@@ -133,6 +133,16 @@ pub fn point_defence_slot(db: &ContentDb, u: &UnitDef) -> Option<u8> {
     specials_indexed(db, u).position(|(_, k, _)| k == SpecialKind::PointDefence).map(|n| n as u8)
 }
 
+/// Whether the pool holds enough energy to switch on a toggleable PD weapon.
+/// Switching off does not require energy.
+pub fn point_defence_has_energy(db: &ContentDb, weapon: &WeaponDef, energy: Option<Fixed>) -> bool {
+    match energy {
+        Some(energy) if db.weapon_features(weapon).pd_debt_timer => energy >= weapon.energy_cost,
+        Some(energy) => energy > Fixed::ZERO || weapon.energy_cost == Fixed::ZERO,
+        None => weapon.energy_cost == Fixed::ZERO,
+    }
+}
+
 pub fn cloak_def(db: &ContentDb, u: &UnitDef) -> Option<CloakDef> {
     let (_, w) = specials_of(db, u).find(|s| s.0 == SpecialKind::Cloak)?;
     Some(CloakDef {
