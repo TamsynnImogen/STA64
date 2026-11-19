@@ -1111,9 +1111,12 @@ fn resolve_text(
             .get(e)
             .map(|children| children.iter().collect())
             .unwrap_or_default();
-        // Styled (kit) text is drawn crisp: a font and whole multiple that put glyph texels
-        // on whole physical pixels. Plain `sprite_text` keeps its scaled drawing.
-        let crisp = if styled && !style.native && !style.scaled && scalable.is_none() {
+        // Text is drawn crisp: a font and whole multiple that put glyph texels on whole physical
+        // pixels, so a nearest-sampled sheet shows even strokes. Plain `sprite_text` (the
+        // Refit layout's labels, radar captions) takes the same path as styled text: at the
+        // size's own fractional scale its texels came out one or two pixels wide at random
+        // (measured on a 3440 x 1440 frame). Only `native` and `scaled` text keeps its own size.
+        let crisp = if !style.native && !style.scaled && scalable.is_none() {
             // A sprite font's nominal height carries leading above and below its ink; a
             // label with a readable floor asks for the font that inks as tall as the
             // TTF of that size (`STOCK_INK`), not one of that nominal height.
@@ -1477,7 +1480,8 @@ mod tests {
             .iter()
             .collect();
         assert_eq!(same, original);
-        assert_eq!(app.world().get::<Node>(same[1]).unwrap().left, Val::Px(8.5));
+        // Crisp text: the second glyph's pen position (8.5) rounds to a whole pixel.
+        assert_eq!(app.world().get::<Node>(same[1]).unwrap().left, Val::Px(9.0));
         assert_eq!(
             app.world().get::<ImageNode>(same[0]).unwrap().rect,
             Some(Rect::new(10.0, 0.0, 18.5, 12.0))
@@ -2336,6 +2340,40 @@ mod tests {
         let kid = app.world().get::<Children>(e).unwrap()[0];
         let Val::Px(w) = app.world().get::<Node>(kid).unwrap().width else { panic!() };
         assert!(((w * 2.0) - (w * 2.0).round()).abs() < 1e-3);
+    }
+
+    /// Plain `sprite_text` (no style) is crisp too: whole physical pixels at a non-integer
+    /// UI scale, where its fractional scale used to put texels on uneven pixels.
+    #[test]
+    fn plain_sprite_text_resolves_to_whole_physical_pixels_at_a_fractional_scale() {
+        let ui = 1440.0f32 / 1080.0;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<SpriteFonts>()
+            .init_resource::<GlyphWords>()
+            .insert_resource(UiScale(ui))
+            .add_systems(Update, resolve_text);
+        let mut f = ttf_like(19.0);
+        f.name = "fontmedium".into();
+        let mut lf = LoadedFont::new(f, vec![(Handle::default(), UVec2::new(256, 256))]);
+        lf.font.reference = None;
+        app.world_mut().resource_mut::<SpriteFonts>().fonts.insert("fontmedium".into(), lf);
+        let e = app.world_mut().spawn(sprite_text("Federation campaign", 21.0, Color::WHITE)).id();
+        app.update();
+        let kids: Vec<Entity> = app.world().get::<Children>(e).unwrap().iter().collect();
+        assert!(!kids.is_empty());
+        for k in kids {
+            let n = app.world().get::<Node>(k).unwrap();
+            for v in [n.left, n.top, n.width, n.height] {
+                let Val::Px(v) = v else { panic!("px") };
+                let phys = v * ui;
+                assert!((phys - phys.round()).abs() < 1e-3, "{phys} is not a whole physical pixel");
+            }
+            // Whole multiple of the font's texels (19 px glyphs, 1x or 2x), not a fractional one.
+            let Val::Px(h) = n.height else { panic!("px") };
+            let mult = h * ui / 19.0;
+            assert!((mult - mult.round()).abs() < 1e-3, "{mult} is not a whole multiple of the font's texels");
+        }
     }
 
     #[test]

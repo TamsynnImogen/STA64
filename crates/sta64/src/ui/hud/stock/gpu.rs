@@ -86,6 +86,17 @@ fn resolved_pieces(app: &mut App, pieces: &[super::layout::Piece]) -> usize {
         .count()
 }
 
+/// `STA64_HUD_SIZES=3440x1440,2752x1152` replaces a test's frame sizes (a local check at the
+/// window a player reports); without it the test's own list.
+fn sizes(default: &[UVec2]) -> Vec<UVec2> {
+    let Ok(list) = std::env::var("STA64_HUD_SIZES") else { return default.to_vec() };
+    let parsed: Vec<UVec2> = list
+        .split(',')
+        .filter_map(|s| s.trim().split_once('x').and_then(|(w, h)| Some(UVec2::new(w.parse().ok()?, h.parse().ok()?))))
+        .collect();
+    if parsed.is_empty() { default.to_vec() } else { parsed }
+}
+
 #[derive(Clone, Copy)]
 enum HoverCapture { Selected, SelectedHover, Low, Other, BuildPage, ColonyShip, Group(usize) }
 
@@ -641,7 +652,7 @@ fn installed_armada1_resource_readouts_render_on_gpu() {
         eprintln!("SKIP: set STA64_TEST_A1_INSTALL=<Armada I root>");
         return;
     };
-    for size in [UVec2::new(1280, 720), UVec2::new(2560, 1080), UVec2::new(3840, 1080)] {
+    for size in sizes(&[UVec2::new(1280, 720), UVec2::new(2560, 1080), UVec2::new(3840, 1080)]) {
     for (cfg, spr, label) in [
         ("gui_fed.cfg", "gui_federation.spr", "a1-fed"),
         ("gui_kli.cfg", "gui_klingon.spr", "a1-kli"),
@@ -834,7 +845,7 @@ fn installed_armada1_stock_hud_renders_on_gpu() {
         return;
     };
     for fit in super::layout::HudFit::ALL {
-    for size in [UVec2::new(1024, 768), UVec2::new(1920, 1080), UVec2::new(2560, 1080)] {
+    for size in sizes(&[UVec2::new(1024, 768), UVec2::new(1920, 1080), UVec2::new(2560, 1080)]) {
     for (cfg, spr, label) in [
         ("gui_fed.cfg", "gui_federation.spr", "a1-fed"),
         ("gui_kli.cfg", "gui_klingon.spr", "a1-kli"),
@@ -1108,5 +1119,130 @@ fn installed_armada1_build_costs_tooltip_renders_on_gpu() {
     if let Ok(dir) = std::env::var("STA64_HUD_CAPTURE_DIR") {
         std::fs::create_dir_all(&dir).unwrap();
         rgba.save(std::path::Path::new(&dir).join(format!("stock-{label}.png"))).unwrap();
+    }
+}
+
+/// Local font-sharpness check: the stock HUD of the installed game at the frame sizes in
+/// `STA64_HUD_SIZES` (default: a 3440 x 1440 and a 2752 x 1152 window), kept in
+/// `STA64_HUD_CAPTURE_DIR` for measuring glyph edges. Set `STA64_GPU_TESTS=1 STA64_HUD_TESTS=1
+/// STA64_TEST_INSTALL STA64_HUD_PROFILE=a2|fo` and optional `STA64_TEST_MOD`. Frames show game
+/// art: never commit them.
+#[test]
+fn installed_stock_hud_font_edges_on_gpu() {
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") || std::env::var("STA64_HUD_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_HUD_TESTS=1 STA64_TEST_INSTALL STA64_HUD_PROFILE=a2|fo");
+        return;
+    }
+    let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
+    let active_mod = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
+    let (profile, cfg, tag) = match std::env::var("STA64_HUD_PROFILE").as_deref() {
+        Ok("a2") => (UiProfile::Armada2, "gui_fed.cfg", "a2"),
+        Ok("fo") => (UiProfile::FleetOps, "gui_federation16x9.cfg", "fo4"),
+        _ => panic!("set STA64_HUD_PROFILE=a2 or fo"),
+    };
+    for size in sizes(&[UVec2::new(3440, 1440), UVec2::new(2752, 1152)]) {
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).expect("installed stock VFS");
+        capture_one(vfs, profile, size, cfg, &format!("{tag}-edges-{}x{}", size.x, size.y), GameOptions::default(), HoverCapture::Selected);
+    }
+}
+
+/// Local font-sharpness check: mission-start titles as `ui::presentation` draws them (a typed
+/// title, a subtitle, a centred title; blue and white) over black at the sizes in
+/// `STA64_HUD_SIZES`, in the installed game's sprite fonts. Set `STA64_GPU_TESTS=1
+/// STA64_HUD_TESTS=1 STA64_TEST_INSTALL STA64_HUD_PROFILE=a1|a2|fo`, optional `STA64_TEST_MOD`
+/// and `STA64_HUD_CAPTURE_DIR`. Frames show game art: never commit them.
+#[test]
+fn installed_titles_render_on_gpu() {
+    use crate::ui::sprite_font::{SpriteFontPlugin, SpriteTextStyle, sprite_text, sprite_text_styled};
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") || std::env::var("STA64_HUD_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_HUD_TESTS=1 STA64_TEST_INSTALL STA64_HUD_PROFILE=a1|a2|fo");
+        return;
+    }
+    let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
+    let active_mod = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
+    let (profile, tag) = match std::env::var("STA64_HUD_PROFILE").as_deref() {
+        Ok("a1") => (UiProfile::Armada1, "a1"),
+        Ok("a2") => (UiProfile::Armada2, "a2"),
+        Ok("fo") => (UiProfile::FleetOps, "fo4"),
+        _ => panic!("set STA64_HUD_PROFILE=a1, a2 or fo"),
+    };
+    for size in sizes(&[UVec2::new(3440, 1440), UVec2::new(2752, 1152)]) {
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).expect("installed VFS");
+        let theme = profile.theme();
+        let mut app = App::new();
+        app.add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
+                .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
+                .disable::<bevy::gilrs::GilrsPlugin>()
+                .disable::<bevy::winit::WinitPlugin>()
+                .disable::<bevy::log::LogPlugin>(),
+        );
+        configure_sets(&mut app);
+        app.insert_resource(ClearColor(Color::BLACK))
+            .insert_resource(profile)
+            .insert_resource(theme.clone())
+            .insert_resource(Mounted(vfs))
+            .insert_resource(UiScale(size.y as f32 / 1080.0))
+            .add_plugins(SpriteFontPlugin);
+        let mut image = Image::new_target_texture(size.x, size.y, bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb, None);
+        image.asset_usage = RenderAssetUsages::RENDER_WORLD;
+        let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+        let camera = app
+            .world_mut()
+            .spawn((Camera2d, Camera { clear_color: ClearColorConfig::Custom(Color::BLACK), ..default() }, RenderTarget::from(target.clone()), Msaa::Off))
+            .id();
+        let role = |s: f32| crate::ui::theme::font_role(&theme, s);
+        let blue = crate::ui::presentation::title_colour(false);
+        let white = crate::ui::presentation::title_colour(true);
+        let blue = Color::srgb(blue[0], blue[1], blue[2]);
+        let white = Color::srgb(white[0], white[1], white[2]);
+        let (head, body) = (theme.heading_size, theme.text_size);
+        let at = |left: f32, top: f32| Node { position_type: PositionType::Absolute, left: Val::Percent(left), top: Val::Percent(top), max_width: Val::Percent(80.0), ..default() };
+        let root = app
+            .world_mut()
+            .spawn((Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, UiTargetCamera(camera)))
+            .id();
+        let style = |s: f32| SpriteTextStyle::role(role(s)).wrap_to_parent();
+        app.world_mut().spawn((at(3.1, 4.2), ChildOf(root), children![sprite_text_styled("Sample Title 0123456789", head, blue, style(head))]));
+        app.world_mut().spawn((at(3.1, 12.0), ChildOf(root), children![sprite_text_styled("Sample subtitle line 0123456789", body, white, style(body))]));
+        app.world_mut().spawn((
+            Node { position_type: PositionType::Absolute, left: Val::Percent(0.0), width: Val::Percent(100.0), justify_content: JustifyContent::Center, top: Val::Percent(50.0), ..default() },
+            ChildOf(root),
+            children![sprite_text_styled("Centred Title", head, blue, style(head))],
+        ));
+        // The two non-crisp paths: plain `sprite_text` (the Refit-layout HUD's) and a `scaled`
+        // caption (stock group tiles), both laid out at the size's own fractional scale.
+        app.world_mut().spawn((at(3.1, 20.0), ChildOf(root), children![sprite_text("Plain sprite text 0123456789", 21.0, white)]));
+        app.world_mut().spawn((
+            at(3.1, 28.0),
+            ChildOf(root),
+            children![sprite_text_styled("Scaled caption 0123456789", 17.0, white, SpriteTextStyle { scaled: true, ..SpriteTextStyle::role(role(17.0)) })],
+        ));
+        app.finish();
+        app.cleanup();
+        for _ in 0..16 {
+            app.update();
+        }
+        let frames = Arc::new(Mutex::new(Vec::<Image>::new()));
+        let output = Arc::clone(&frames);
+        app.world_mut().spawn(Screenshot::image(target)).observe(move |shot: On<ScreenshotCaptured>| {
+            output.lock().unwrap().push(shot.image.clone());
+        });
+        for _ in 0..60 {
+            app.update();
+            if !frames.lock().unwrap().is_empty() {
+                break;
+            }
+        }
+        let shot = frames.lock().unwrap().first().cloned().expect("title frame");
+        let rgba = shot.try_into_dynamic().expect("title frame image").to_rgba8();
+        let ink = rgba.pixels().filter(|p| p[0] > 20 || p[1] > 20 || p[2] > 20).count();
+        eprintln!("{tag} titles {}x{}: {ink} lit pixels", size.x, size.y);
+        assert!(ink > 200, "{tag}: no title ink");
+        if let Ok(dir) = std::env::var("STA64_HUD_CAPTURE_DIR") {
+            std::fs::create_dir_all(&dir).unwrap();
+            rgba.save(std::path::Path::new(&dir).join(format!("titles-{tag}-{}x{}.png", size.x, size.y))).unwrap();
+        }
     }
 }
