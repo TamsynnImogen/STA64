@@ -8,13 +8,14 @@
 //! - [`costs`]: the `needs:` line of the build and research tooltips and the named refusal (UI-42).
 //! - [`action`]: the cinematic window (UI-53): the COMM and MENU buttons above the action camera's
 //!   picture.
+//! - [`speed`]: the speed rail's TRANSPORT button (UI-40 follow-up), placed from the `speed*` keys.
 //! - [`info`]: the single-selection info panel (`infoSingle*` keys: name, class, shield bar,
 //!   construction and energy bars, crew, race icon).
 //!
 //! The whole 640x480 sheet scales as one piece (`StockLayout`, ADR 0008 H1 to H3, Centred or
 //! Stretched); panel groups never separate. Evidence for the keys: read from data (the Armada I
 //! install's `gui_<race>.cfg`). Not drawn yet, each a later package (TODO lines in the PR):
-//! the speed rail's contents (its empty panel is drawn from the `speed*` frame pieces),
+//! the speed rail's special weapon slots and tractor beam (the transport button is [`speed`]),
 //! multi-selection icons and the system icons (`infoMulti*`, `infoSystem*`), and the dialogs.
 //! While a mission clip plays in the cinematic window, `hud::cinematic` (UI-39) draws over it.
 
@@ -22,6 +23,7 @@ pub(in crate::ui::hud) mod action;
 pub(super) mod control;
 pub(in crate::ui::hud) mod costs;
 pub(super) mod info;
+pub(in crate::ui::hud) mod speed;
 
 use bevy::{picking::Pickable, prelude::*};
 
