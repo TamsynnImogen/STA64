@@ -77,10 +77,16 @@ pub struct ObjectivesArt {
 }
 
 impl ObjectivesArt {
-    /// Forget the picture (the mount or the cfg changed); the sprite pages are kept unless `all`.
-    pub(crate) fn reset(&mut self, all: bool) {
-        self.loaded = None;
-        if all {
+    /// Whether a picture is held.
+    #[cfg(test)]
+    pub(crate) fn is_loaded(&self) -> bool {
+        matches!(self.loaded, Some(Ok(_)))
+    }
+
+    /// Let go of a loaded picture and its sprite pages (the panel closed); a failure from the data stays.
+    pub(crate) fn release(&mut self) {
+        if matches!(self.loaded, Some(Ok(_))) {
+            self.loaded = None;
             self.cache = GuiSprites::default();
         }
     }
