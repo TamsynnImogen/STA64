@@ -68,7 +68,7 @@ mod pd;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use sta_content::{Aip, Availability, ContentDb, Owned, Unmet, WeaponKind};
+use sta_content::{Aip, Availability, ContentDb, Owned, Profile, Unmet, WeaponKind};
 use sta_core::{ContentKey, EntityId, Fixed, PlayerId, Tick, Vec3};
 use sta_sim::SimEvent;
 use sta_sim::command::{Command, CommandKind, Order};
@@ -646,14 +646,34 @@ impl SkirmishController {
                 None => u.build.list.iter().map(|d| d.key).filter(|&k| k != ContentKey::NONE).collect(),
             }
         };
-        // How many of `key` the AIP's list wants in all, if it lists it.
-        let list_limit = |key: ContentKey| -> Option<usize> {
-            let name = db.name(key)?;
-            rows.iter().find(|r| sta_content::techtree::stem(&r.unit) == name).map(|r| match r.max.filter(|&m| m > 0) {
+        // Roots counts promoted and replacement units with equal positive tags toward the same
+        // AIP build goal. The tech tree and ordinary role totals above still use the actual ODF.
+        let variant_tag = |key: ContentKey| {
+            db.unit(key)
+                .filter(|_| db.profile() == Profile::Fo4)
+                .and_then(|unit| unit.stats.distance_below_grid)
+                .filter(|tag| *tag > Fixed::ZERO)
+        };
+        let list_count = |total: &BTreeMap<ContentKey, usize>, key| {
+            if let Some(tag) = variant_tag(key) {
+                total.iter().filter(|(key, _)| variant_tag(**key) == Some(tag)).map(|(_, n)| n).sum()
+            } else {
+                total.get(&key).copied().unwrap_or(0)
+            }
+        };
+        let mut list_limits = BTreeMap::new();
+        let mut variant_limits = BTreeMap::<Fixed, usize>::new();
+        for r in &rows {
+            let Some(key) = db.key(&sta_content::techtree::stem(&r.unit)) else { continue };
+            let limit = match r.max.filter(|&m| m > 0) {
                 Some(m) => m as usize,
                 None => ((r.count.to_bits() >> 32).max(1)) as usize,
-            })
-        };
+            };
+            list_limits.entry(key).or_insert(limit);
+            if let Some(tag) = variant_tag(key) {
+                variant_limits.entry(tag).and_modify(|n| *n = (*n).max(limit)).or_insert(limit);
+            }
+        }
 
         // Without an AIP, a yard's miner may be locked behind a station the
         // rig can build. Use the tech tree's missing prerequisite rather than
@@ -717,11 +737,16 @@ impl SkirmishController {
                         opts.contains(&k)
                             && !is_station(&db, k)
                             && role_of(&db, k) != Role::Miner
-                            && list_limit(k).is_some_and(|lim| total.get(&k).copied().unwrap_or(0) < lim)
+                            && list_limits.get(&k).is_some_and(|&lim| list_count(&total, k) < lim)
                     });
             }
             if want.is_none() && !saving && armies < params::ARMY_CAP {
-                let mut ships: Vec<ContentKey> = opts.iter().copied().filter(|&k| role_of(&db, k) == Role::Warship).collect();
+                let mut ships: Vec<ContentKey> = opts.iter().copied()
+                    .filter(|&k| role_of(&db, k) == Role::Warship)
+                    // The fallback must not immediately rebuild a promoted ship whose family met the AIP goal.
+                    .filter(|&k| variant_tag(k).and_then(|tag| variant_limits.get(&tag))
+                        .is_none_or(|&lim| list_count(&total, k) < lim))
+                    .collect();
                 // Strongest (dearest) first; the cheapest when nothing is affordable, to save.
                 ships.sort_by_key(|&k| (std::cmp::Reverse(cost_sum(&db, k)), k));
                 let pay: Vec<ContentKey> = ships.iter().copied().filter(|&k| affordable(k, &reserve)).collect();
@@ -763,7 +788,7 @@ impl SkirmishController {
                 .find(|&k| {
                     opts.contains(&k)
                         && is_station(&db, k)
-                        && list_limit(k).is_some_and(|lim| total.get(&k).copied().unwrap_or(0) < lim)
+                        && list_limits.get(&k).is_some_and(|&lim| list_count(&total, k) < lim)
                         // An orbital station needs a free planet orbit (SIM-62).
                         && (!db.unit(k).is_some_and(sta_sim::production::orbit::is_orbital) || orbit_site(&taken, r.pos).is_some())
                 })
