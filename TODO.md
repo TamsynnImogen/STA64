@@ -805,7 +805,7 @@ Grouped by the object class that reads the key, most-used first; within a line, 
 - [ ] [FO] race (17): `allowGiveBiomatter`, `allowGiveCrew`, `allowGiveDilithium`, `allowGiveLatinum`, `allowGiveMetal`, `canGainXP`, `AIFreightersPerMoon`, `giveToOtherRaceBiomatterRatio`, `giveToOtherRaceCrewRatio`, `giveToOtherRaceDilithiumRatio`, `giveToOtherRaceLatinumRatio`, `giveToOtherRaceMetalRatio`, `usesBiomatter`, `usesCrew`, `usesDilithium`, `usesLatinum`, `usesMetal`
 - [ ] [A1 A2] holding beam (6): `lengthScale`, `radiusScale`, `boardingDelay`, `boardingInterval`, `boardingSize`, `targetRange`
 - [ ] [A1] mining station (1): `dockingBuffer`
-- [ ] [A1 A2] mining station (1): `freighterName`
+- [x] [A1 A2 FO] mining station (1): `freighterName` (free unit when a rig finishes the station)
 - [ ] [A2] mining station (1): `checkValidResourceInterval`
 - [ ] [A2] smooth (8): `backwardAccel`, `pitchAlpha`, `pitchOmega`, `rollCoupling`, `pitchAlphaFractionAtRest`, `pitchOmegaFractionAtRest`, `pitchDefault`, `pitchDefaultSpeed`
 - [ ] [A1 A2] fireball explosion (5): `Length`, `dbName`, `shockwave`, `shockwaveDelay`, `shockwaveMinimum`
@@ -1150,3 +1150,7 @@ FO total: 396 of 474 key names in its `gui_*.cfg` files and hook reads are not m
 - [ ] Armada I `InStopMode` (found on `fed2`): raises "the world view carries no order state"; stock rules that wait for a unit to be idle never fire. Needs the view to carry order state (a format change).
 - [ ] Armada I `Attack(unit, target, n)` (found on `fed2`): a held order whose target died before the replay raises "not alive" and the script step is cut short; what the original does for a dead target is not read.
 - [ ] Held calls, `fed2` (found): `SetRedAlert`, `SetGreenAlert` and `SetYellowAlert` on a just-built object were not held with the other setters and raised; now held. Other A1 calls on a pending handle that a stock script makes were not surveyed.
+- [ ] Mining station free unit (`freighterName`): not measured on screen that a map-placed, script-spawned or captured station gets none (static read: only rig completion spawns it).
+- [ ] Mining station free unit: not measured whether it mines by itself after docking (original queues it at the station's dock; STA64 stands it at the dock node and does not auto-mine).
+- [ ] Mining station free unit: interim, station crew lower than the unit's cost stops at zero (the original does not clamp); a model without the dock node uses STA64's own spot ahead of the station.
+- [ ] Mining station free unit: whether it counts against fleet cap or officers is not read; STA64 charges nothing and counts it as a live actor.
