@@ -104,9 +104,9 @@ pub(crate) fn takes_attack(db: &ContentDb, units: &Entities, player: PlayerId, i
 }
 
 /// Can a player order this craft to attack (HUD, right-click, hotkey)? Armed
-/// ([`armed`]) and not a class with `canAttack = 0`. The class key's effect on
-/// an explicit attack order is stated by a player (interim): the executable
-/// shows the order itself is not refused by the key, only the HUD button hides.
+/// ([`armed`]) and not a class with `canAttack = 0`. Refusing the explicit order
+/// is stated by a player (interim); the class key does not refuse it (read from
+/// the executable, static).
 pub fn can_attack(db: &ContentDb, def: &sta_content::UnitDef) -> bool {
     armed(db, def) && crate::movement::approach::class_may_attack(def)
 }
@@ -463,11 +463,10 @@ impl Weapons {
                 let Some(w) = db.weapon(hp.weapon.key) else {
                     continue;
                 };
-                // A tool (tractor, mining or repair beam) does no regular fire: a craft
-                // that carries only tools never fights (stated by a player and measured
-                // earlier for orders; the `special` key marks them but also real attack
-                // weapons the engine fires by special autonomy, not modelled: interim
-                // stand-in is the tool class).
+                // A tool (tractor, mining or repair beam) does no regular fire (stated by a
+                // player; measured earlier for orders). A weapon definition may carry
+                // `special` and still attack; STA64 does not model special-weapon
+                // autonomy, so the tool class stands in (interim).
                 if !attacks_units(w) || w.resource.is_some() {
                     continue;
                 }

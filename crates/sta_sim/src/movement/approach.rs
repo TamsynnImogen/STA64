@@ -122,7 +122,7 @@ pub(crate) fn class_may_attack(def: &UnitDef) -> bool {
 /// pursuit and assist require the class key `canAttack` (default 1) and a weapon
 /// that attacks units and is not marked by its `special` key as a special weapon
 /// (read from the executable, static; also in Roots). Where a weapon carries no
-/// `special` key the tool-class test of `attacks_units` stands in (interim). A craft
+/// `special` key the tool-class test of `attacks_units` stands in (interim; STA64 does not model special-weapon autonomy). A craft
 /// that fails stays where it is; whether it flees is not measured, not modelled.
 pub(crate) fn engages_alone(db: &ContentDb, def: &UnitDef) -> bool {
     class_may_attack(def)
