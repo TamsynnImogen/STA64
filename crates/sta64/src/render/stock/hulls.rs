@@ -85,6 +85,14 @@ pub(crate) fn is_borg_glow(name: &str) -> bool {
     name.get(..10).is_some_and(|p| p.eq_ignore_ascii_case("team_bglow"))
 }
 
+/// A CPU copy of the Armada I team-face formula of `hulls.wesl`'s `shade_stock`, kept next to the shader
+/// for its test: the lit colour of one channel is the texture times `clamp(ambient + team x diffuse
+/// light)`, so the team colour tints the diffuse term only and the ambient term is untinted.
+#[cfg(test)]
+fn team_face_channel(texture: f32, scene_ambient: f32, team: f32, diffuse_light: f32) -> f32 {
+    texture * (scene_ambient + team * diffuse_light).clamp(0.0, 1.0)
+}
+
 /// Registers the stock hull look: `Effect::Hulls` has a stock implementation, which
 /// `HullView` reads to write each hull material in the stock way.
 pub struct StockHullsPlugin;
@@ -287,6 +295,22 @@ mod tests {
 
         let src = include_str!("../hulls.wesl");
         assert!(src.contains("if k.mdif.a > 0.5"));
+    }
+
+    /// The team-face formula, executed: the team colour tints the diffuse term only; the ambient term is
+    /// untinted; a base face (team colour white) is the same formula with a white tint.
+    #[test]
+    fn the_team_colour_tints_the_diffuse_term_only() {
+        let (tex, amb, light) = (0.8_f32, 0.2_f32, 0.5_f32);
+        // No light: the ambient term alone, whatever the team colour.
+        assert_eq!(team_face_channel(tex, amb, 0.3, 0.0), team_face_channel(tex, amb, 0.9, 0.0));
+        assert!((team_face_channel(tex, amb, 0.3, 0.0) - tex * amb).abs() < 1e-6);
+        // Lit: the team colour scales the diffuse part.
+        let (a, b) = (team_face_channel(tex, amb, 0.4, light), team_face_channel(tex, amb, 0.8, light));
+        assert!((b - a - tex * 0.4 * light).abs() < 1e-6);
+        // A white tint is the base-face sum, clamped.
+        assert!((team_face_channel(tex, amb, 1.0, light) - tex * (amb + light)).abs() < 1e-6);
+        assert_eq!(team_face_channel(1.0, 0.8, 1.0, 0.9), 1.0, "clamped to 1");
     }
 
     #[test]
