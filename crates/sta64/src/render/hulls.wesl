@@ -162,11 +162,13 @@ fn shade_stock(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>, sm: vec3<f32>, em: vec
     let v = normalize(k.eye.xyz - wp);
     // mamb.a 2 (Armada I): the vertex starts from scene ambient + material ambient; else their product.
     var sum = select(k.mamb.rgb * k.amb.rgb, k.mamb.rgb + k.amb.rgb, k.mamb.a > 1.5);
+    var sum_diffuse = vec3<f32>(0.0);
     var spec = vec3<f32>(0.0);
     for (var j = 0; j < 4; j++) {
         let l = k.dvec[j].xyz;
         let c = k.dcol[j].rgb;
         sum += k.mdif.rgb * c * max(0.0, dot(n, l));
+        sum_diffuse += k.mdif.rgb * c * max(0.0, dot(n, l));
         let h = normalize(l + v);
         if dot(n, l) > 0.0 {
             spec += c * pow(max(0.0, dot(n, h)), k.mspc.a);
@@ -183,7 +185,14 @@ fn shade_stock(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>, sm: vec3<f32>, em: vec
     if k.map.x > 0.5 {
         highlight = mapped_highlight(n, wp, sm);
     }
-    let lit = ts * to_srgb(k.tint.rgb) * sum + highlight;
+    var lit = ts * to_srgb(k.tint.rgb) * sum + highlight;
+    if k.mdif.a > 0.5 {
+        // An Armada I team face: the team colour is the diffuse colour, so it tints the light terms and not the
+        // ambient one (`sum` is the clamped sum; the ambient part alone is the scene's ambient light here).
+        let amb_only = clamp(k.mamb.rgb + k.amb.rgb, vec3<f32>(0.0), vec3<f32>(1.0));
+        let dif = sum_diffuse;
+        lit = ts * clamp(amb_only + to_srgb(k.tint.rgb) * dif, vec3<f32>(0.0), vec3<f32>(1.0)) + highlight;
+    }
     let c = clamp(mix(lit, ts * max(k.amb.a, 1.0), saturate(t.a * min(k.amb.a, 1.0))), vec3<f32>(0.0), vec3<f32>(1.0));
     return vec4<f32>(add_emissive(from_srgb(c), em), k.misc.x);
 }
