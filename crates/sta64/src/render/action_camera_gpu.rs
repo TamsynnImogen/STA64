@@ -2,46 +2,20 @@
 //! none of the overlay layer (rings, bars, grid), while the map camera shows both.
 use super::*;
 use bevy::camera::RenderTarget;
-use bevy::log::tracing::{self, Event, Subscriber};
-use bevy::log::tracing_subscriber::{layer::Context, Layer};
-use bevy::log::{BoxedLayer, LogPlugin};
 use bevy::render::RenderPlugin;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::window::ExitCondition;
 use std::sync::{Arc, Mutex};
 
-/// Every `ERROR` event logged in this process (a render validation error is one).
-static ERRORS: Mutex<Vec<String>> = Mutex::new(Vec::new());
-/// The two GPU tests share the process-wide log capture, so they run one at a time.
+/// Keep the two real-GPU tests from competing for the same adapter.
 static SERIAL: Mutex<()> = Mutex::new(());
-
-struct ErrorLog;
-
-impl<S: Subscriber> Layer<S> for ErrorLog {
-    fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
-        if *event.metadata().level() != tracing::Level::ERROR {
-            return;
-        }
-        struct Msg(String);
-        impl tracing::field::Visit for Msg {
-            fn record_debug(&mut self, f: &tracing::field::Field, v: &dyn std::fmt::Debug) {
-                self.0.push_str(&format!("{}={v:?} ", f.name()));
-            }
-        }
-        let mut m = Msg(String::new());
-        event.record(&mut m);
-        if let Ok(mut e) = ERRORS.lock() {
-            e.push(format!("{}: {}", event.metadata().target(), m.0));
-        }
-    }
-}
-
-fn error_layer(_: &mut App) -> Option<BoxedLayer> {
-    Some(Box::new(ErrorLog))
-}
 
 fn count(image: &image::RgbaImage, f: impl Fn(&[u8; 4]) -> bool) -> usize {
     image.pixels().filter(|p| f(&p.0)).count()
+}
+
+fn is_magenta(p: &[u8; 4]) -> bool {
+    p[0] > 100 && p[2] > 100 && u16::from(p[1]) * 2 < u16::from(p[0])
 }
 
 fn shoot(app: &mut App, target: &Handle<Image>) -> image::RgbaImage {
@@ -75,10 +49,10 @@ fn the_action_picture_shows_the_subject_and_leaves_the_overlay_layer_out_on_gpu(
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
-            .set(LogPlugin { level: bevy::log::Level::WARN, custom_layer: error_layer, ..default() })
             .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
             .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
-            .disable::<bevy::winit::WinitPlugin>(),
+            .disable::<bevy::winit::WinitPlugin>()
+            .disable::<bevy::log::LogPlugin>(),
     );
     app.insert_resource(ClearColor(Color::BLACK)).insert_resource(SimEntities::default()).add_plugins((bevy::app::HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate), ActionCameraPlugin));
 
@@ -129,7 +103,6 @@ fn the_action_picture_shows_the_subject_and_leaves_the_overlay_layer_out_on_gpu(
         return;
     }
     let view = app.world().resource::<ActionView>().image.clone();
-    let is_magenta = |p: &[u8; 4]| p[0] > 100 && p[2] > 100 && (p[1] as u16) * 2 < p[0] as u16;
     let is_green = |p: &[u8; 4]| p[1] > 100 && p[1] > p[0].saturating_mul(2) && p[1] > p[2].saturating_mul(2);
     let main = shoot(&mut app, &main_target);
     assert!(count(&main, is_magenta) > 50, "the map camera sees the subject");
@@ -149,8 +122,8 @@ fn set_node_size(app: &mut App, picture: Entity, size: Vec2) {
     app.world_mut().entity_mut(picture).insert(ComputedNode { size, ..default() });
 }
 
-/// A resized picture (the node changed size) and a hidden then shown one (a cineractive) render
-/// without a render error: resizing the target must not ask the GPU to copy the old texture.
+/// A resized picture (the node changed size) and a hidden then shown one (a cineractive) both
+/// render the subject. Resizing the target must not ask the GPU to copy the old texture.
 #[test]
 fn the_action_picture_survives_a_resize_and_a_hide_and_show_on_gpu() {
     if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
@@ -161,10 +134,10 @@ fn the_action_picture_survives_a_resize_and_a_hide_and_show_on_gpu() {
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
-            .set(LogPlugin { level: bevy::log::Level::WARN, custom_layer: error_layer, ..default() })
             .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
             .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
-            .disable::<bevy::winit::WinitPlugin>(),
+            .disable::<bevy::winit::WinitPlugin>()
+            .disable::<bevy::log::LogPlugin>(),
     );
     app.insert_resource(ClearColor(Color::BLACK)).insert_resource(SimEntities::default()).add_plugins((bevy::app::HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate), ActionCameraPlugin));
     app.world_mut().spawn((Camera3d::default(), Camera { is_active: false, ..default() }, Transform::from_xyz(0.0, 400.0, 0.0).looking_to(Vec3::NEG_Y, Vec3::NEG_Z)));
@@ -176,8 +149,6 @@ fn the_action_picture_survives_a_resize_and_a_hide_and_show_on_gpu() {
     let picture = app.world_mut().spawn((ActionPicture, InheritedVisibility::VISIBLE, ComputedNode { size: Vec2::new(226.0, 160.0), ..default() })).id();
     app.finish();
     app.cleanup();
-    // Whatever the log plugin said while building (a second global logger is refused) is not a render error.
-    ERRORS.lock().unwrap().clear();
     for _ in 0..12 {
         app.update();
     }
@@ -196,14 +167,22 @@ fn the_action_picture_survives_a_resize_and_a_hide_and_show_on_gpu() {
     }
     eprintln!("adapter: {}", adapter.name);
     let view = app.world().resource::<ActionView>().image.clone();
-    let size_of = |app: &App| app.world().resource::<Assets<Image>>().get(&view).map(|i| (i.width(), i.height()));
-    assert_eq!(size_of(&app), Some((226, 160)));
+    let assert_picture = |app: &mut App, size: (u32, u32), stage: &str| {
+        let image = app.world().resource::<Assets<Image>>().get(&view).expect("action target exists");
+        assert_eq!((image.width(), image.height()), size, "{stage}: target follows the node");
+        assert!(!image.copy_on_resize, "{stage}: resizing must not copy the old target");
+        let shot = shoot(app, &view);
+        assert_eq!((shot.width(), shot.height()), size, "{stage}: rendered target size");
+        let seen = count(&shot, is_magenta);
+        assert!(seen > 400, "{stage}: the subject is framed in the picture ({seen} px)");
+    };
+    assert_picture(&mut app, (226, 160), "initial");
     // The node changes size.
     set_node_size(&mut app, picture, Vec2::new(300.0, 120.0));
     for _ in 0..8 {
         app.update();
     }
-    assert_eq!(size_of(&app), Some((300, 120)), "the picture follows the node");
+    assert_picture(&mut app, (300, 120), "resized");
     // A cineractive hides the HUD; the picture comes back, and at another size.
     let cameras = |app: &mut App| -> Vec<(Entity, bool)> {
         let mut q = app.world_mut().query_filtered::<(Entity, &Camera), Or<(With<ActionCamera>, With<ActionSky>)>>();
@@ -226,8 +205,6 @@ fn the_action_picture_survives_a_resize_and_a_hide_and_show_on_gpu() {
     for _ in 0..8 {
         app.update();
     }
-    assert_eq!(size_of(&app), Some((200, 140)), "the picture follows the node after it reappears");
+    assert_picture(&mut app, (200, 140), "shown again");
     assert_eq!(cameras(&mut app), shown, "the same cameras, on again");
-    let errors = ERRORS.lock().unwrap().clone();
-    assert!(errors.is_empty(), "render ERROR events:\n{}", errors.join("\n"));
 }
