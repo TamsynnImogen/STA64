@@ -58,7 +58,7 @@ impl Install {
         };
         write(
             "odf/other/races.odf",
-            b"numberOfRaces = 2\nrace0 = \"alpha.odf\"\nrace1 = \"beta.odf\"\n",
+            b"numberOfRaces = 3\nrace0 = \"alpha.odf\"\nrace1 = \"beta.odf\"\nrace2 = \"gamma.odf\"\n",
         );
         write(
             "odf/other/alpha.odf",
@@ -68,6 +68,24 @@ impl Install {
             "odf/other/beta.odf",
             b"name = \"betaNode\"\ninstantActionSlot = 1\nfactionTextureSuffix = \"_b\"\n",
         );
+        write(
+            "odf/other/gamma.odf",
+            b"name = \"gammaNode\"\ninstantActionSlot = 2\n",
+        );
+        // The mod declares the specular convention; the base map is (10, 20, 30), beta's (200, 100, 50).
+        write("ART_CFG.h", b"#define A2FO_SPECULAR_SUFFIX \"_specular\"\n");
+        let texel = |r: u8, g: u8, b: u8| {
+            let mut t = vec![0u8; 18];
+            t[2] = 2;
+            t[12] = 1;
+            t[14] = 1;
+            t[16] = 24;
+            t[17] = 0x20;
+            t.extend_from_slice(&[b, g, r]);
+            t
+        };
+        write("Textures/RGB/paint_specular.tga", &texel(10, 20, 30));
+        write("Textures/RGB/paint_specular_b.tga", &texel(200, 100, 50));
         let mut tga = vec![0u8; 18];
         tga[2] = 2;
         tga[12] = 1;
@@ -108,7 +126,7 @@ fn view(owner: u8) -> WorldView {
         energy: None,
         autonomy: None,
     });
-    view.appearance.factions = vec![(PlayerId(0), "alpha".into()), (PlayerId(1), "beta".into())];
+    view.appearance.factions = vec![(PlayerId(0), "alpha".into()), (PlayerId(1), "beta".into()), (PlayerId(2), "gamma".into())];
     view
 }
 
@@ -354,6 +372,22 @@ fn run_capture_test(auxiliary_maps: bool) {
         assert_eq!(restored.texture, alpha_texture);
         assert_eq!(restored.normal.as_ref(), Some(&normal));
     } else {
+        // The declared specular map follows the captured faction and goes back to the base one
+        // when the capture returns to a faction with no suffix (no stale faction map).
+        let red = |app: &App| {
+            let maps = app.world().get::<crate::render::mapped::HullMaps>(part).expect("maps declared");
+            let image = app.world().resource::<Assets<Image>>().get(maps.specular.as_ref().expect("specular map")).unwrap();
+            image.data.as_ref().unwrap()[0]
+        };
+        assert_eq!(red(&app), 200, "beta's own map, the faction suffix last");
+        app.world_mut().resource_mut::<SimLink>().feed(Arc::new(view(2)));
+        app.world_mut().entity_mut(root).insert(TeamColour(Color::srgb(0.3, 0.3, 0.3)));
+        app.update();
+        assert_eq!(red(&app), 10, "back to no faction: the base map, not beta's");
+        app.world_mut().resource_mut::<SimLink>().feed(Arc::new(view(1)));
+        app.world_mut().entity_mut(root).insert(TeamColour(Color::srgb(0.1, 0.7, 0.9)));
+        app.update();
+        assert_eq!(red(&app), 200);
         assert!(beta_glow.is_none());
         assert!(beta_specular.is_none());
         assert_eq!(app.world().get::<HullSource>(part).unwrap().source, private);

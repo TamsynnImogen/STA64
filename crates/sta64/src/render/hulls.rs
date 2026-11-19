@@ -94,6 +94,11 @@ pub struct HullParams {
     pub mamb: Vec4,
     pub mdif: Vec4,
     pub mspc: Vec4,
+    /// Specular and emissive maps (RND-38, `mapped.rs`): x 1 with a specular map, y 1 with an
+    /// emissive map.
+    pub map: Vec4,
+    /// The highlight of a part with a specular map: colour and exponent (`mapped::highlight_params`).
+    pub mhl: Vec4,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
@@ -110,7 +115,25 @@ pub struct HullMaterial {
     /// The Key's shadow map, read by `hulls.wesl` when `params.shp.x` says there is one.
     #[texture(5)]
     pub shadow: Option<Handle<Image>>,
+    /// The specular map (RND-38): its RGB masks the highlight, read when `params.map.x` says there is one.
+    #[texture(6)]
+    #[sampler(7)]
+    pub spec_map: Option<Handle<Image>>,
+    /// The emissive map (RND-38), added after lighting when `params.map.y` says there is one. Its own
+    /// sampler: the map's repeat sampler, whatever the specular binding holds.
+    #[texture(8)]
+    #[sampler(9)]
+    pub emissive_map: Option<Handle<Image>>,
     pub double_sided: bool,
+}
+
+impl HullMaterial {
+    /// Carry a part's specular and emissive maps (RND-38) into the material and its flags.
+    pub fn set_maps(&mut self, maps: Option<&crate::render::mapped::HullMaps>, switches: crate::render::mapped::MapSwitches) {
+        self.spec_map = maps.and_then(|m| m.specular.clone()).filter(|_| switches.specular);
+        self.emissive_map = maps.and_then(|m| m.emissive.clone()).filter(|_| switches.emissive);
+        self.params.map = Vec4::new(self.spec_map.is_some() as u8 as f32, self.emissive_map.is_some() as u8 as f32, 0.0, 0.0);
+    }
 }
 
 /// What a hull pipeline differs by.
@@ -234,6 +257,7 @@ impl Plugin for HullPlugin {
             .init_resource::<HullLighting>()
             .init_resource::<HullView>()
             .init_resource::<HullMaterials>()
+            .insert_resource(crate::render::mapped::MapSwitches::from_env())
             .add_plugins(crate::render::stock::hulls::StockHullsPlugin)
             .add_systems(Update, (toggle, update_view, apply.in_set(HullApply), follow_source).chain());
     }
@@ -328,9 +352,13 @@ fn update_view(
         // The profile changed: every hull material is made again in the other look.
         for (id, (h, part)) in &made.0 {
             if let (Some(std), Some(mut m)) = (standard.get(*id), materials.get_mut(h)) {
-                let shadow = m.shadow.clone();
+                let (shadow, spec, emissive) = (m.shadow.clone(), m.spec_map.clone(), m.emissive_map.clone());
                 *m = hull_material(std, part, &view);
                 m.shadow = shadow;
+                let (s, e) = (spec.is_some(), emissive.is_some());
+                m.spec_map = spec;
+                m.emissive_map = emissive;
+                m.params.map = Vec4::new(s as u8 as f32, e as u8 as f32, 0.0, 0.0);
             }
         }
     }
@@ -367,6 +395,7 @@ pub fn hull_material(m: &StandardMaterial, part: &HullPart, view: &HullView) -> 
     if view.stock {
         crate::render::stock::hulls::apply_material(&mut params, m, part, view.armada_one);
     }
+    params.mhl = crate::render::mapped::highlight_params(part.stock.as_ref());
     set_source(&mut params, m);
     view.write(&mut params);
     HullMaterial {
@@ -374,6 +403,8 @@ pub fn hull_material(m: &StandardMaterial, part: &HullPart, view: &HullView) -> 
         texture: m.base_color_texture.clone(),
         normal: m.normal_map_texture.clone(),
         shadow: view.shadow.clone(),
+        spec_map: None,
+        emissive_map: None,
         double_sided: m.double_sided || m.cull_mode.is_none(),
     }
 }
@@ -395,13 +426,15 @@ fn apply(
     standard: Res<Assets<StandardMaterial>>,
     mut hulls: ResMut<Assets<HullMaterial>>,
     mut made: ResMut<HullMaterials>,
-    fresh: Query<(Entity, &HullPart, &MeshMaterial3d<StandardMaterial>), Without<HullSource>>,
+    fresh: Query<(Entity, &HullPart, &MeshMaterial3d<StandardMaterial>, Option<&crate::render::mapped::HullMaps>), Without<HullSource>>,
     mut shown: Query<(Entity, &mut HullSource)>,
+    switches: Option<Res<crate::render::mapped::MapSwitches>>,
 ) {
+    let switches = switches.map_or_else(crate::render::mapped::MapSwitches::default, |s| *s);
     if !fresh.is_empty() {
         made.0.retain(|id, _| standard.contains(*id));
     }
-    for (e, part, mat) in &fresh {
+    for (e, part, mat, maps) in &fresh {
         let Some(std) = standard.get(&mat.0) else { continue };
         if !takes_hull_look(std, part) {
             continue;
@@ -411,11 +444,14 @@ fn apply(
             // Refresh its cached conversion before showing it again.
             if let Some(mut material) = hulls.get_mut(&*handle) {
                 *material = hull_material(std, part, &view);
+                material.set_maps(maps, switches);
             }
             *cached_part = *part;
             handle.clone()
         } else {
-            let handle = hulls.add(hull_material(std, part, &view));
+            let mut material = hull_material(std, part, &view);
+            material.set_maps(maps, switches);
+            let handle = hulls.add(material);
             made.0.insert(mat.0.id(), (handle.clone(), *part));
             handle
         };
@@ -713,7 +749,7 @@ mod gpu {
     use bevy::render::RenderPlugin;
     use bevy::window::ExitCondition;
 
-    use super::{HullLighting, HullPart, HullPlugin};
+    use super::{HullLighting, HullMaterial, HullPart, HullPlugin};
 
     static ERRORS: Mutex<Vec<String>> = Mutex::new(Vec::new());
     static FRAMES: Mutex<Vec<(String, Vec<u8>)>> = Mutex::new(Vec::new());
@@ -925,9 +961,102 @@ mod gpu {
         eprintln!("reflected hull: bare {before} lit pixels; prepass {after}; silhouette mismatch {mismatch}");
         assert!(before > 500 && after * 100 >= before * 95, "depth prepass hides reflected hull: {before} -> {after}");
         assert!(mismatch <= before / 50, "depth prepass changes reflected silhouette by {mismatch} pixels");
+        // RND-38: a specular map masks the highlight and an emissive map adds to the lit colour,
+        // on the pipeline Bevy made from the shader (maps set straight on the hull materials).
+        {
+            use crate::render::mapped::{HullMaps, MapSwitches};
+            let flat = |rgb: [u8; 3], srgb: bool| {
+                let format = if srgb { TextureFormat::Rgba8UnormSrgb } else { TextureFormat::Rgba8Unorm };
+                Image::new(Extent3d { width: 2, height: 2, depth_or_array_layers: 1 }, TextureDimension::D2, [rgb[0], rgb[1], rgb[2], 255].repeat(4), format, RenderAssetUsages::RENDER_WORLD)
+            };
+            let (white, black, red) = {
+                let mut images = app.world_mut().resource_mut::<Assets<Image>>();
+                (images.add(flat([255, 255, 255], false)), images.add(flat([0, 0, 0], false)), images.add(flat([255, 0, 0], true)))
+            };
+            let set = |app: &mut App, spec: Option<Handle<Image>>, emissive: Option<Handle<Image>>| {
+                let maps = HullMaps { specular: spec, emissive };
+                let ids: Vec<_> = app.world().resource::<Assets<HullMaterial>>().iter().map(|(id, _)| id).collect();
+                let mut assets = app.world_mut().resource_mut::<Assets<HullMaterial>>();
+                for id in ids {
+                    if let Some(mut m) = assets.get_mut(id) {
+                        m.set_maps(Some(&maps), MapSwitches::default());
+                    }
+                }
+            };
+            let sum = |d: &[u8], c: usize| d.chunks_exact(4).map(|p| p[c] as u64).sum::<u64>();
+            let take = |app: &mut App, name: &str| {
+                for _ in 0..4 {
+                    app.update();
+                }
+                capture(app, &target, name);
+                let frame = FRAMES.lock().unwrap().iter().rev().find(|f| f.0 == name).unwrap().1.clone();
+                save(name, &frame);
+                frame
+            };
+            // Upright again: the reflected part above shades inside out, which hides every highlight.
+            app.world_mut().entity_mut(subject).insert(Transform::IDENTITY);
+            set(&mut app, None, None);
+            let base = take(&mut app, "mapped-none");
+            set(&mut app, Some(white.clone()), None);
+            let lit = take(&mut app, "mapped-white");
+            set(&mut app, Some(black.clone()), None);
+            let masked = take(&mut app, "mapped-black");
+            set(&mut app, None, Some(red));
+            let glow = take(&mut app, "mapped-emissive");
+            eprintln!("RND-38 sums (G): none {} white {} black {}; (R): none {} emissive {}; (G): emissive {}", sum(&base, 1), sum(&lit, 1), sum(&masked, 1), sum(&base, 0), sum(&glow, 0), sum(&glow, 1));
+            assert!(sum(&lit, 1) > sum(&base, 1), "a white specular map adds the default highlight");
+            assert!(sum(&masked, 1) <= sum(&base, 1), "a black map adds none");
+            assert!(sum(&glow, 0) > sum(&base, 0) + 10_000, "a red emissive map adds red");
+            assert!(sum(&glow, 1) <= sum(&base, 1) + 1_000, "and only red");
+
+            // The Stock look draws the same masks: no highlight of its own here (the part states no
+            // lighting material), so a white map adds the defaults' highlight and a black one nothing.
+            app.insert_resource(crate::render::profile::RenderProfile::Stock);
+            for _ in 0..4 {
+                app.update();
+            }
+            set(&mut app, None, None);
+            let s_base = take(&mut app, "mapped-stock-none");
+            set(&mut app, Some(white.clone()), None);
+            let s_lit = take(&mut app, "mapped-stock-white");
+            set(&mut app, Some(black.clone()), None);
+            let s_masked = take(&mut app, "mapped-stock-black");
+            eprintln!("RND-38 stock sums (G): none {} white {} black {}", sum(&s_base, 1), sum(&s_lit, 1), sum(&s_masked, 1));
+            assert!(sum(&s_lit, 1) > sum(&s_base, 1) + 1_000, "Stock look: a white specular map adds the default highlight");
+            assert!(sum(&s_masked, 1) <= sum(&s_base, 1) + 1_000, "Stock look: a black map adds none");
+
+            // An emissive map alone, on UVs well outside 0..1: its own repeat sampler tiles it, so the
+            // glow keeps its pattern (a clamped sampler would smear the edge texel over the sphere).
+            let strip = {
+                let mut i = Image::new(Extent3d { width: 2, height: 1, depth_or_array_layers: 1 }, TextureDimension::D2, vec![255, 0, 0, 255, 0, 0, 0, 255], TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
+                i.sampler = crate::render::textures::repeat_sampler();
+                app.world_mut().resource_mut::<Assets<Image>>().add(i)
+            };
+            set(&mut app, None, None);
+            let plain1 = take(&mut app, "mapped-uv1-none");
+            set(&mut app, None, Some(strip.clone()));
+            let tiled1 = take(&mut app, "mapped-uv1-strip");
+            let mesh = app.world().entity(subject).get::<Mesh3d>().unwrap().0.clone();
+            if let Some(mut m) = app.world_mut().resource_mut::<Assets<Mesh>>().get_mut(&mesh)
+                && let Some(bevy::mesh::VertexAttributeValues::Float32x2(uv)) = m.attribute_mut(Mesh::ATTRIBUTE_UV_0)
+            {
+                for u in uv.iter_mut() {
+                    *u = [u[0] * 4.0, u[1] * 4.0];
+                }
+            }
+            set(&mut app, None, None);
+            let plain4 = take(&mut app, "mapped-uv4-none");
+            set(&mut app, None, Some(strip));
+            let tiled4 = take(&mut app, "mapped-uv4-strip");
+            let (d1, d4) = (sum(&tiled1, 0) as i64 - sum(&plain1, 0) as i64, sum(&tiled4, 0) as i64 - sum(&plain4, 0) as i64);
+            eprintln!("RND-38 emissive-only red gain: UV 0..1 {d1}, UV 0..4 {d4}");
+            assert!(d1 > 10_000, "the strip glows on UVs inside 0..1");
+            assert!(d4 * 10 > d1 * 6, "and on UVs outside 0..1 as much (repeat), not smeared from the edge ({d4} vs {d1})");
+        }
         let errors = ERRORS.lock().unwrap().clone();
         assert!(errors.is_empty(), "shader/pipeline ERROR events:\n{}", errors.join("\n"));
     }
+
 }
 
 #[cfg(test)]

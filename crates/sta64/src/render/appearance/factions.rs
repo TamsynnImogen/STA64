@@ -80,6 +80,11 @@ impl FactionCatalogue {
         catalogue
     }
 
+    /// The faction texture suffixes the races declare (a diffuse may already end in one).
+    pub fn suffixes(&self) -> Vec<&str> {
+        self.factions.iter().filter_map(|f| f.suffix.as_deref()).collect()
+    }
+
     pub fn get(&self, identifier: &str) -> Option<&Faction> {
         let key = identifier.trim().to_ascii_lowercase();
         self.factions.get(*self.aliases.get(&key)?)
