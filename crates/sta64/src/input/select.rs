@@ -6,9 +6,11 @@
 //! - Shift (the `AddModifier` key) click adds an unselected unit, removes a
 //!   selected one.
 //! - Left drag (over 6 px) box-selects own *ships* (craft, as the content
-//!   classes them) whose centre is in the box; stations are never taken by a
-//!   box. Shift keeps the old selection.
-//! - Ships and stations are never selected together (stock: `Select` refuses
+//!   classes them) whose centre is in the box. Roots also admits stationary
+//!   producers with an authored build hardpoint and build list. When a Roots
+//!   box includes combat craft, low-priority craft and producers are skipped.
+//!   Shift keeps the old selection.
+//! - Clicks never mix ships and stations (stock: `Select` refuses
 //!   anything but own ships once something is selected). A click picks one
 //!   station when nothing, or another station, is selected; Shift-click of a
 //!   station while ships are selected is refused; Shift-click of a ship over a
@@ -176,6 +178,31 @@ fn is_station(link: &SimLink, content: &ContentRes, id: EntityId) -> bool {
         .filter(|u| !u.flags.contains(sta_sim::view::UnitFlags::DYING))
         .and_then(|u| content.0.unit(u.def))
         .is_some_and(|d| EntityKind::of_def(d) == EntityKind::Station)
+}
+
+/// Roots' selectable shipyards/starbases need both authored launch metadata
+/// and a resolved build list. The hardpoint's presence is not inferred from a
+/// resolved launch point, which can be absent when no model was loaded.
+fn roots_box_producer(link: &SimLink, content: &ContentRes, id: EntityId) -> bool {
+    link.curr().unit(id)
+        .filter(|u| u.hull[0] > sta_sim::Fixed::ZERO && !u.flags.contains(sta_sim::view::UnitFlags::DYING))
+        .and_then(|u| content.0.unit(u.def))
+        .is_some_and(|d| {
+            EntityKind::of_def(d) == EntityKind::Station
+                && !d.build.list.is_empty()
+                && d.raw.str("buildHardpoint").is_some_and(|node| !node.trim().is_empty())
+        })
+}
+
+fn roots_preferred_combat(link: &SimLink, content: &ContentRes, id: EntityId) -> bool {
+    link.curr().unit(id)
+        .filter(|u| u.hull[0] > sta_sim::Fixed::ZERO && !u.flags.contains(sta_sim::view::UnitFlags::DYING))
+        .and_then(|u| content.0.unit(u.def))
+        .is_some_and(|d| {
+            EntityKind::of_def(d) == EntityKind::Craft
+                && d.raw.i64("preferredSelect") != Some(0)
+                && sta_sim::combat::weapons::can_attack(&content.0, d)
+        })
 }
 
 /// Roots: a ship built by a grouped station inherits that station's number.
@@ -539,18 +566,32 @@ pub fn select(
     let content = content.as_deref();
     let ship = |id: EntityId| is_ship(&link, content, id);
     if dragging {
-        // A box takes ships only; Shift adds them to ships (a selected station is dropped).
-        sel.retain(|&s| ship(s));
+        let roots = content.filter(|c| c.0.profile() == sta_content::Profile::Fo4);
+        // Shift keeps existing eligible members; ordinary stations still drop.
+        sel.retain(|&s| ship(s) || roots.is_some_and(|c| roots_box_producer(&link, c, s)));
         let (lo, hi) = (start.min(cursor), start.max(cursor));
+        let mut candidates = Vec::new();
         for (u, _, gt, strategic) in &units {
             if is_own(&link, u.0)
-                && ship(u.0)
+                && (ship(u.0) || roots.is_some_and(|c| roots_box_producer(&link, c, u.0)))
                 && let Some(p) = aim.project(visual_centre(gt, strategic))
                 && p.cmpge(lo).all()
                 && p.cmple(hi).all()
             {
-                push_unique(&mut sel, u.0);
+                candidates.push(u.0);
             }
+        }
+        let prefer_combat = roots.is_some_and(|c| candidates.iter().any(|&id| roots_preferred_combat(&link, c, id)));
+        for id in candidates {
+            if prefer_combat && roots.is_some_and(|c| {
+                roots_box_producer(&link, c, id)
+                    || link.curr().unit(id)
+                        .and_then(|u| c.0.unit(u.def))
+                        .is_some_and(|d| d.raw.i64("preferredSelect") == Some(0))
+            }) {
+                continue;
+            }
+            push_unique(&mut sel, id);
         }
     } else if let Some(id) = unit_under_where(cursor, aim.ray, &units, |id| target_seen(link.curr(), local.as_deref().and_then(|l| l.0), id)) {
         // (With a local player only what its team sees is clickable: kept-drawn scenery outside the sensors is no fog leak; without one, everything drawn is.)
@@ -1041,6 +1082,74 @@ mod tests {
         // A box over two stations (and nothing else) selects nothing either.
         drag(&mut app, (150.0, 150.0), (650.0, 350.0));
         assert!(sel(&app).is_empty());
+    }
+
+    /// The same drawn units with authored Roots selection metadata and a typed
+    /// attack mount; no installed content or OS input is needed.
+    fn producer_box_app(profile: sta_content::Profile) -> App {
+        use sta_content::{DefRef, Hardpoint, UnitDef, WeaponDef, WeaponKind};
+
+        let raw = |name: &str, text: &str| {
+            let text = text.to_owned();
+            Arc::new(sta_odf::resolve(name, &mut |_| Some(text.clone())).unwrap())
+        };
+        let mut low = UnitDef::new("low", "craft");
+        low.raw = raw("low", "preferredSelect = 0\n");
+        let mut combat = UnitDef::new("combat", "craft");
+        combat.hardpoints.push(Hardpoint { weapon: DefRef::new("beam"), node: "hp01".into(), arc: None });
+        let utility = UnitDef::new("utility", "craft");
+        let mut yard = UnitDef::new("yard", "shipyard");
+        yard.raw = raw("yard", "buildHardpoint = \"build\"\n");
+        yard.build.list.push(DefRef::new("combat"));
+        let mut missing = UnitDef::new("missing", "shipyard");
+        missing.build.list.push(DefRef::new("combat"));
+        let mut empty = UnitDef::new("empty", "shipyard");
+        empty.raw = raw("empty", "buildHardpoint = \"build\"\n");
+        let db = sta_content::ContentDb::builder()
+            .profile(profile)
+            .unit(low).unit(combat).unit(utility).unit(yard).unit(missing).unit(empty)
+            .weapon(WeaponDef::new("beam", "phaser", WeaponKind::Beam))
+            .build().unwrap();
+        let mut app = build_with_profile(false, profile);
+        let mut view = (**app.world().resource::<SimLink>().curr()).clone();
+        for u in &mut view.units {
+            let name = match u.id { A | E | F | D => "low", B => "combat", C => "utility", Y1 | Y2 => "yard", _ => unreachable!() };
+            u.def = db.key(name).unwrap();
+        }
+        view.units.push(unit(9, db.key("missing").unwrap().0, 0, 400.0, 300.0));
+        view.units.push(unit(10, db.key("empty").unwrap().0, 0, 500.0, 300.0));
+        app.world_mut().spawn((SimEntity(EntityId(9)), SelectRadius(50.0), GlobalTransform::from(Transform::from_xyz(400.0, 0.0, 300.0))));
+        app.world_mut().spawn((SimEntity(EntityId(10)), SelectRadius(50.0), GlobalTransform::from(Transform::from_xyz(500.0, 0.0, 300.0))));
+        app.insert_resource(ContentRes(Arc::new(db)));
+        app.insert_resource(SimLink::new(Box::new(Frozen(Arc::new(view))), Box::new(LocalRouter::new()), PlayerId(0)));
+        app
+    }
+
+    #[test]
+    fn roots_box_takes_producers_alone_and_prefers_combat_in_a_mixed_box() {
+        let mut roots = producer_box_app(sta_content::Profile::Fo4);
+        drag(&mut roots, (150.0, 150.0), (650.0, 350.0));
+        assert_eq!(sel(&roots), [Y1, Y2], "two authored producers, but not yards missing a hardpoint or build list");
+        press(&mut roots, KeyCode::ShiftLeft);
+        drag(&mut roots, (50.0, 50.0), (350.0, 150.0));
+        assert_eq!(sel(&roots), [Y1, Y2, B], "Shift box keeps selected producers and adds the preferred candidate");
+        release(&mut roots, KeyCode::ShiftLeft);
+        step(&mut roots);
+        drag(&mut roots, (50.0, 50.0), (650.0, 350.0));
+        assert_eq!(sel(&roots), [B, C], "combat excludes producers and explicit low priority craft, not ordinary utility craft");
+
+        let mut dying = producer_box_app(sta_content::Profile::Fo4);
+        let mut view = (**dying.world().resource::<SimLink>().curr()).clone();
+        view.units.iter_mut().find(|u| u.id == Y2).unwrap().flags = UnitFlags::DYING;
+        dying.insert_resource(SimLink::new(Box::new(Frozen(Arc::new(view))), Box::new(LocalRouter::new()), PlayerId(0)));
+        drag(&mut dying, (150.0, 150.0), (650.0, 350.0));
+        assert_eq!(sel(&dying), [Y1], "a dying producer is not box eligible");
+
+        let mut other = producer_box_app(sta_content::Profile::Native);
+        drag(&mut other, (150.0, 150.0), (650.0, 350.0));
+        assert!(sel(&other).is_empty(), "other profiles still exclude stations");
+        drag(&mut other, (50.0, 50.0), (650.0, 350.0));
+        assert_eq!(sel(&other), [A, B, C], "other profiles retain their craft-only box behavior");
     }
 
     #[test]
