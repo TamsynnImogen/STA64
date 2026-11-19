@@ -97,6 +97,8 @@ pub struct MoonPart {
 #[derive(Component)]
 struct MoonDark;
 
+/// Interim: the Stock shell is hull-lit only while its blend group is one the hull look takes (opaque or
+/// cut-out); an additive or alpha-blended group would bypass it (not checked in a frame).
 /// Give moon shells the look the profile says: Refit's dark opaque shell, or (Stock) the model's own
 /// material back, which the hull look then lights from the SOD's lighting material. Idempotent each frame,
 /// after the hull look has given new parts their material.
@@ -110,7 +112,7 @@ fn moon_shell_look(
 ) {
     let stock = nimbus_drawn(profile.as_deref(), effects.as_deref());
     for (e, part, is_dark) in &parts {
-        if part.kind != MoonKind::Shell || stock != !is_dark {
+        if part.kind != MoonKind::Shell || stock != is_dark {
             continue;
         }
         let mut c = commands.entity(e);
