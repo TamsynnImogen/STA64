@@ -224,6 +224,7 @@ impl Plugin for ViewerPlugin {
                     model_scene::animate,
                     crate::render::anim::play_idle,
                     crate::render::anim::play_events,
+                    sprites::share_materials,
                     sprites::animate,
                     sprites::face_camera,
                     crate::render::particles::simulate,
@@ -231,7 +232,8 @@ impl Plugin for ViewerPlugin {
                 )
                     .chain()
                     .run_if(crate::platform::foreground),
-            );
+            )
+            .add_plugins(sprites::SpriteMaterialsPlugin { in_match_only: false });
     }
 }
 

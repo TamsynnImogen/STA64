@@ -528,6 +528,7 @@ impl Plugin for MapPlugin {
                     hud_toggle,
                     fps,
                     model_scene::animate,
+                    crate::render::sprites::share_materials,
                     crate::render::sprites::animate,
                     crate::render::sprites::face_camera,
                     crate::render::particles::simulate,
@@ -537,7 +538,9 @@ impl Plugin for MapPlugin {
                     .after(crate::app::GameSet::SimLink)
                     .run_if(crate::game::flow::match_running)
                     .run_if(crate::platform::foreground),
-            );
+            )
+            // After visibility, before extraction: only what some camera draws is written.
+            .add_plugins(crate::render::sprites::SpriteMaterialsPlugin { in_match_only: true });
     }
 }
 
