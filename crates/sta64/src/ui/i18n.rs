@@ -386,6 +386,8 @@ mod tests {
         "ui/theme/gallery.rs",
         // Shared test modules that are whole files.
         "tests.rs",
+        // Opt-in GPU frame tests: sample texts for font measurements, not game UI.
+        "ui/hud/stock/gpu.rs",
         // This file's own lint source text.
         "ui/i18n.rs",
     ];
