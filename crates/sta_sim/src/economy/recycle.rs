@@ -3,6 +3,8 @@
 //!
 //! - *Order (S).* `Order::Decommission { units, yard }` for live, finished, own crafts and
 //!   stations that a script has not made undecommissionable (`SetCanBeDecommissioned`).
+//!   Roots/FO4 also refuses a station while a launched hostile transporter party is in
+//!   flight to it (D: installed Roots `Engine_Changelog.txt:64`; exact pulse timing ours).
 //! - *Where (S, D).* A station, or a craft with `recyclesInPlace = 1`, is recycled where it
 //!   stands. Any other craft goes to the named yard when it is one of its owner's live,
 //!   finished yards with `decommissionFacility = 1`, else to the best such yard: the highest
@@ -28,10 +30,11 @@
 //!
 //! Not done: `destroyedBiomatterCost`, `recycler`
 //! / `recycleExchangeRate`, `eventDecommission` and the deconstruction effect, Roots' rule
-//! against decommissioning a ship being boarded, the shared yard queue.
+//! against decommissioning a ship being boarded, between-pulse boarding state, the Borg
+//! holding beam, and the shared yard queue.
 
 use serde::{Deserialize, Serialize};
-use sta_content::ContentDb;
+use sta_content::{ContentDb, Profile};
 use sta_core::{EntityId, Fixed, PlayerId, Tick, Vec3};
 
 use crate::Sim;
@@ -171,6 +174,7 @@ impl Sim {
                 || (player.is_player() && u.owner != player)
                 || self.switches.get(id).no_decommission
                 || self.recycles.job_of(id).is_some()
+                || (db.profile() == Profile::Fo4 && u.kind == EntityKind::Station && self.has_incoming_hostile_party(id, u.owner))
             {
                 continue;
             }
