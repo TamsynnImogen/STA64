@@ -21,7 +21,7 @@
 //! - Selected units' icons get a green outline; clicks and drag boxes select by
 //!   icon when it shows (see `input::select`).
 
-use crate::render::cull::{CullParams, CullStats};
+use crate::render::cull::{CullParams, CullStats, ScriptView};
 use crate::render::lod_switch::{self, Class, Representation, SwitchParams};
 use crate::render::units::{FromView, NeedsModel, SelectRadius, TeamColour};
 use crate::sim_link::{Selection, SimEntity};
@@ -162,9 +162,9 @@ pub fn symbol_for_radius(mode: Mode, previous: bool, px: f32) -> bool {
     lod_switch::decide(mode, prev, px, 0.0, &CullParams::default(), t) == Representation::Symbol
 }
 
-fn gate_model(s: &mut Strategic, visibility: &mut Visibility, symbol: bool) -> bool {
+fn gate_model(s: &mut Strategic, visibility: &mut Visibility, symbol: bool, gone: bool) -> bool {
     let externally_hidden = s.owned_visibility.is_none() && *visibility == Visibility::Hidden;
-    if symbol && !externally_hidden {
+    if (symbol || gone) && !externally_hidden {
         if s.owned_visibility.is_none() {
             s.owned_visibility = Some(*visibility);
         }
@@ -283,6 +283,7 @@ impl Plugin for StrategicPlugin {
         app.init_resource::<Mode>()
             .init_resource::<StrategicView>()
             .init_resource::<CullParams>()
+            .init_resource::<ScriptView>()
             .init_resource::<CullStats>()
             .init_resource::<SwitchParams>()
             .add_systems(Startup, make_masks)
@@ -494,19 +495,26 @@ fn update(
     mut sv: ResMut<StrategicView>,
     images: Res<Assets<Image>>,
     ui_scale: Option<Res<UiScale>>,
-    cull: Res<CullParams>,
+    limits: crate::render::cull::ViewLimits,
     switch: Res<SwitchParams>,
     mut stats: ResMut<CullStats>,
     menu: Option<Res<crate::frontend::scene::MenuScene>>,
     cine: Option<Res<crate::ui::presentation::CineractiveState>>,
 ) {
     *stats = CullStats::default();
-    // A cineractive is a model view, like the menu scene: no symbol, marker, number or
-    // line is drawn while it runs, and a model is drawn at any distance (what is drawn
-    // far away is the open question of the maximum viewing distance, see TODO.md).
-    // The player's Tab choice comes back with the cutscene's end.
-    let mode = if crate::ui::presentation::cutscene_running(cine) { Mode::Off } else { *mode };
+    // A cineractive is a model view, like the menu scene: no symbol, marker, number or line is
+    // drawn while it runs. What is drawn is the original's rule ([`CullParams::cineractive_hides`]):
+    // a model whole up to the limits of the view (the cineractive far plane, and in the games
+    // that cull by distance the object culling distance), nothing past them. The player's Tab
+    // choice comes back with the cutscene's end.
+    let cutscene = crate::ui::presentation::cutscene_running(cine);
+    let mode = if cutscene { Mode::Off } else { *mode };
     let mode = &mode;
+    // The script's distances replace the file's; the map symbols take over from the model a
+    // little later than the originals stop drawing it (STA64's own, `SYMBOL_DISTANCE_FACTOR`).
+    let limits = limits.get();
+    let cull = &limits.for_symbols();
+    let hide = &limits;
     // The menu scene is a model view: nothing is a symbol, and what a match left is undone.
     if menu.is_some() {
         clear_unprojected(&mut objects, &mut icons, &mut sv);
@@ -550,10 +558,11 @@ fn update(
         let root_scale = gt.to_scale_rotation_translation().0.abs().max_element();
         let projected_radius = if depth > 1.0 { s.radius * root_scale * focal / depth } else { f32::INFINITY };
         let distance = CullParams::distance(eye, pos);
-        stats.count(&cull, distance);
+        stats.count(cull, distance);
         let previous = if s.symbol { Representation::Symbol } else { Representation::Model };
-        let symbol = lod_switch::decide(*mode, previous, projected_radius, distance, &cull, switch.of(Class::of(s.shape))) == Representation::Symbol;
-        let eligible = gate_model(&mut s, &mut visibility, symbol);
+        let symbol = lod_switch::decide(*mode, previous, projected_radius, distance, cull, switch.of(Class::of(s.shape))) == Representation::Symbol;
+        let gone = cutscene && hide.cineractive_hides(distance, depth, s.radius * root_scale);
+        let eligible = gate_model(&mut s, &mut visibility, symbol, gone);
         s.shown = if symbol && eligible && screen.is_some() { 1.0 } else { 0.0 };
         if let Some(p) = screen {
             s.screen = p;
@@ -680,13 +689,13 @@ mod tests {
         // No SimEntity is needed: this is the same gate used for static roots.
         let mut static_root = Strategic::new(Shape::Square, Color::WHITE, 20.0);
         let mut visible = Visibility::Visible;
-        assert!(gate_model(&mut static_root, &mut visible, true));
+        assert!(gate_model(&mut static_root, &mut visible, true, false));
         assert_eq!(visible, Visibility::Hidden);
         assert!(static_root.symbol);
-        assert!(gate_model(&mut static_root, &mut visible, false));
+        assert!(gate_model(&mut static_root, &mut visible, false, false));
         assert_eq!(visible, Visibility::Visible);
         let mut hidden = Visibility::Hidden;
-        assert!(!gate_model(&mut static_root, &mut hidden, true));
+        assert!(!gate_model(&mut static_root, &mut hidden, true, false));
         assert_eq!(hidden, Visibility::Hidden);
         assert_eq!(static_root.owned_visibility, None);
     }
@@ -877,19 +886,22 @@ mod view_tests {
             app.update();
             app.update();
         };
-        // Huge on screen: only the distance decides. d = sqrt(x^2 + 250^2).
+        // Huge on screen: only the distance decides, the handoff distance being the culling
+        // distance times the symbol factor. d = sqrt(x^2 + 250^2).
+        let k = crate::render::cull::SYMBOL_DISTANCE_FACTOR;
+        let (cull, band) = (2800.0 * k, 2520.0 * k);
         let d = |x: f32| (x * x + 250.0f32 * 250.0).sqrt();
-        place(&mut app, 2000.0);
-        assert!(d(2000.0) < 2520.0);
+        place(&mut app, 2000.0 * k);
+        assert!(d(2000.0 * k) < band);
         assert!(!app.world().get::<Strategic>(far).unwrap().symbol);
-        place(&mut app, 2800.0);
-        assert!(d(2800.0) >= 2800.0);
+        place(&mut app, cull);
+        assert!(d(cull) >= cull);
         assert!(app.world().get::<Strategic>(far).unwrap().symbol);
-        place(&mut app, 2600.0); // inside the culling distance, inside the band
-        assert!(d(2600.0) > 2520.0 && d(2600.0) < 2800.0);
+        place(&mut app, 2600.0 * k); // inside the handoff distance, inside the band
+        assert!(d(2600.0 * k) > band && d(2600.0 * k) < cull);
         assert!(app.world().get::<Strategic>(far).unwrap().symbol);
-        place(&mut app, 2400.0);
-        assert!(d(2400.0) < 2520.0);
+        place(&mut app, 2400.0 * k);
+        assert!(d(2400.0 * k) < band);
         assert!(!app.world().get::<Strategic>(far).unwrap().symbol);
         assert!(app.world().resource::<CullStats>().objects >= 1);
     }
@@ -1032,6 +1044,88 @@ mod view_tests {
         assert!(view(&app).active);
         assert_eq!(view(&app).icons.len(), 1);
         assert_eq!(visible(&mut app, 1), Visibility::Hidden);
+    }
+
+    fn cineractive(app: &mut App, on: bool) {
+        app.insert_resource(crate::ui::presentation::CineractiveState { on, skippable: on });
+        app.update();
+    }
+
+    /// In a cineractive of a game that culls by distance (Armada II family) a model is whole
+    /// inside the culling distance and gone past it, with no symbol either way; the script's
+    /// distance replaces the file's; out of the cutscene the same objects are symbols past the
+    /// handoff distance, which is later than the culling distance.
+    #[test]
+    fn a_cineractive_culls_models_at_the_object_culling_distance_without_symbols() {
+        // Camera 9000 up, so the distance counts a quarter of it (2250): x = 1000 is 2462 away
+        // (inside 2800), x = 4000 is 4590 away.
+        let us = [unit(1, 1, 1000.0, 0.0, 0.0), unit(2, 1, 4000.0, 0.0, 0.0)];
+        let mut app = rig(&world(&us), None, 9000.0);
+        app.update();
+        app.update();
+        cineractive(&mut app, true);
+        assert_eq!(visible(&mut app, 1), Visibility::Inherited);
+        assert_eq!(visible(&mut app, 2), Visibility::Hidden, "past the culling distance: not drawn");
+        assert!(!view(&app).active && view(&app).icons.is_empty(), "and no symbol takes its place");
+        // A script's distance: 5000 brings the far one back, 1200 takes the near one away.
+        app.world_mut().resource_mut::<ScriptView>().cull = Some(5000.0);
+        app.update();
+        assert_eq!(visible(&mut app, 2), Visibility::Inherited);
+        app.world_mut().resource_mut::<ScriptView>().cull = Some(1200.0);
+        app.update();
+        assert_eq!(visible(&mut app, 1), Visibility::Hidden);
+        app.world_mut().resource_mut::<ScriptView>().cull = None;
+        // The cutscene's end: the models are small at that height, so both are symbols again.
+        cineractive(&mut app, false);
+        assert_eq!(visible(&mut app, 1), Visibility::Hidden);
+        assert_eq!(visible(&mut app, 2), Visibility::Hidden);
+        assert_eq!(view(&app).icons.len(), 2);
+    }
+
+    /// The cineractive far plane: a script's `SetClippingDistance` replaces the executable's constant,
+    /// and a game with no object culling (Armada I) is limited by it alone.
+    #[test]
+    fn a_cineractive_far_plane_hides_what_lies_wholly_past_it() {
+        let us = [unit(1, 1, 0.0, 0.0, 0.0)];
+        // Armada I: far plane 1000, no culling by distance.
+        let mut a1 = rig(&world(&us), None, 1200.0);
+        *a1.world_mut().resource_mut::<CullParams>() = CullParams {
+            object_culling: false,
+            cineractive_far: crate::render::cull::CINERACTIVE_FAR_A1,
+            ..CullParams::default()
+        };
+        a1.update();
+        a1.update();
+        cineractive(&mut a1, true);
+        assert_eq!(visible(&mut a1, 1), Visibility::Hidden, "1200 away is past 1000");
+        camera_height(&mut a1, 900.0);
+        assert_eq!(visible(&mut a1, 1), Visibility::Inherited);
+        // Armada II: the far plane is a script's.
+        let mut a2 = rig(&world(&us), None, 6000.0);
+        a2.update();
+        a2.update();
+        cineractive(&mut a2, true);
+        assert_eq!(visible(&mut a2, 1), Visibility::Inherited);
+        a2.world_mut().resource_mut::<ScriptView>().far = Some(4000.0);
+        a2.update();
+        assert_eq!(visible(&mut a2, 1), Visibility::Hidden, "6000 is past a script's 4000");
+    }
+
+    /// Normal play: the swap to a symbol is later than the culling distance by the named factor.
+    #[test]
+    fn the_symbol_handoff_is_later_than_the_culling_distance() {
+        // Camera low (300): x = 3000 is about 3015 away: past the culling distance of 2800,
+        // inside the handoff distance (3500). Its projected size is above the pixel threshold
+        // for a large static root, so only the distance decides.
+        let mut app = rig(&world(&[]), None, 300.0);
+        let root = app.world_mut().spawn((Strategic::new(Shape::Square, Color::WHITE, 4000.0), Transform::from_xyz(3000.0, 0.0, 0.0), Visibility::Inherited)).id();
+        app.update();
+        app.update();
+        assert_eq!(static_state(&mut app, root).1, false, "a model at 3015, past 2800");
+        app.world_mut().get_mut::<Transform>(root).unwrap().translation.x = 3600.0;
+        app.update();
+        app.update();
+        assert_eq!(static_state(&mut app, root).1, true, "a symbol at 3612, past 3500");
     }
 
     #[test]

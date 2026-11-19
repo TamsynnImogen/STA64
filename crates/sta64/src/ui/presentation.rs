@@ -464,6 +464,14 @@ fn num(a: &Arg) -> Option<f32> {
     }
 }
 
+/// What a mission's script sets for the whole client, one parameter of [`consume`]: the sound
+/// multiplier and the view's limits.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct MissionSettings<'w> {
+    mute: ResMut<'w, crate::audio::SoundMute>,
+    view: ResMut<'w, crate::render::cull::ScriptView>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn consume(
     mut events: MessageReader<SimMsg>,
@@ -481,8 +489,9 @@ pub(crate) fn consume(
     reports: Option<Res<crate::audio::ReportsSoundLengths>>,
     mut replies: MessageWriter<ScriptReply>,
     mut bridge: MessageWriter<BridgeScene>,
-    mut mute: ResMut<crate::audio::SoundMute>,
+    mut settings: MissionSettings,
 ) {
+    let MissionSettings { mute, view } = &mut settings;
     for SimMsg(e) in events.read() {
         let SimEvent::Present(p) = e else { continue };
         if let Some(log) = log.as_mut() {
@@ -594,6 +603,9 @@ pub(crate) fn consume(
                     unhandled.note(name);
                 }
             }
+            // A2 `SetObjectCullingDistance(d)`, `RestoreObjectCullingDistance()` and
+            // `SetClippingDistance(d)`: the view's limits ([`crate::render::cull::ScriptView`]).
+            Presentation::Call { name, args } if view.apply(name, args.first().and_then(num)) => {}
             Presentation::Call { name, args } if name.starts_with("A1.") && BridgeScene::from_call(name, args).is_some() => {
                 bridge.write(BridgeScene::from_call(name, args).unwrap());
             }
@@ -703,9 +715,17 @@ fn sound_replies(
 /// A restart of the mission in place (the sim's tick going back) drops the messages of the run
 /// before it: their ids restart at 1, so a stale entry would end the new run's wait or stop the
 /// new run's stream of the same id. What still plays is stopped, stream by stream.
-fn clear_sounds_on_restart(link: Option<Res<crate::sim_link::SimLink>>, mut sounds: ResMut<ScriptSounds>, mut stop: MessageWriter<StopScriptSound>, mut mute: ResMut<crate::audio::SoundMute>) {
+fn clear_sounds_on_restart(
+    link: Option<Res<crate::sim_link::SimLink>>,
+    mut sounds: ResMut<ScriptSounds>,
+    mut stop: MessageWriter<StopScriptSound>,
+    mut mute: ResMut<crate::audio::SoundMute>,
+    mut view: ResMut<crate::render::cull::ScriptView>,
+) {
     let Some(link) = link else { return };
     if sounds.restarted(link.curr().tick) {
+        // The new run sets its own view limits.
+        *view = default();
         // The new run's intro mutes (and un-mutes) for itself.
         *mute = default();
         for (id, _, _) in std::mem::take(&mut sounds.pending) {
@@ -1146,6 +1166,7 @@ impl Plugin for PresentationPlugin {
             .init_resource::<BridgeState>()
             .add_message::<BridgeScene>()
             .init_resource::<ScriptSounds>()
+            .init_resource::<crate::render::cull::ScriptView>()
             .add_message::<crate::audio::SoundStarted>()
             .init_resource::<ObjectivesView>()
             .init_resource::<MessageQueue>()
@@ -1500,6 +1521,49 @@ mod tests {
         app.world_mut().resource_mut::<NextState<crate::app::AppState>>().set(crate::app::AppState::FrontEnd);
         app.update();
         assert_eq!(level(&app), 1.0, "leaving the match un-mutes");
+    }
+
+    fn view_call(name: &str, args: Vec<Arg>) -> Presentation {
+        Presentation::Call { name: name.into(), args }
+    }
+
+    /// The three view calls of Armada II set the client's [`ScriptView`](crate::render::cull::ScriptView)
+    /// and are not listed as unhandled; Restore puts the file's distance back, a value that is not
+    /// a positive number is ignored, and a restart in place clears the lot.
+    #[test]
+    fn the_view_calls_set_the_script_view_and_a_restart_clears_it() {
+        use crate::render::cull::ScriptView;
+        use crate::sim_link::SimLink;
+        use sta_sim::command::LocalRouter;
+        use sta_sim::WorldSource;
+        let link_at = |ticks: u32| {
+            let mut sim = sta_sim::Sim::new(1);
+            for _ in 0..ticks {
+                sim.step(&[]);
+            }
+            SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), sta_core::PlayerId(0))
+        };
+        let mut app = app();
+        frozen(&mut app);
+        app.insert_resource(link_at(5));
+        app.update();
+        let view = |app: &App| *app.world().resource::<ScriptView>();
+        let n = |v: i32| Arg::Num(Fixed::from_int(v));
+        send(&mut app, view_call("A2.SetObjectCullingDistance", vec![n(1800)]));
+        send(&mut app, view_call("A2.SetClippingDistance", vec![n(4000)]));
+        assert_eq!(view(&app), ScriptView { cull: Some(1800.0), far: Some(4000.0) });
+        send(&mut app, view_call("A2.SetObjectCullingDistance", vec![n(-5)]));
+        send(&mut app, view_call("A2.SetObjectCullingDistance", vec![Arg::Bool(true)]));
+        assert_eq!(view(&app).cull, Some(1800.0), "not a distance: ignored");
+        send(&mut app, view_call("A2.RestoreObjectCullingDistance", vec![]));
+        assert_eq!(view(&app), ScriptView { cull: None, far: Some(4000.0) }, "Restore is the culling distance only");
+        for name in ["A2.SetObjectCullingDistance", "A2.RestoreObjectCullingDistance", "A2.SetClippingDistance"] {
+            assert_eq!(app.world().resource::<Unhandled>().count(name), 0);
+        }
+        send(&mut app, view_call("A2.SetObjectCullingDistance", vec![n(3000)]));
+        app.insert_resource(link_at(0));
+        app.update();
+        assert_eq!(view(&app), ScriptView::default(), "a restart in place sets its own");
     }
 
     #[test]
