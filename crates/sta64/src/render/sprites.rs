@@ -113,8 +113,10 @@ fn colour_bits(c: [f32; 3]) -> [u32; 3] {
 /// fade is not 1 takes a private copy while it is ([`animate_materials`]).
 pub fn share_materials(
     mut added: Query<(&mut SpriteFx, &mut MeshMaterial3d<StandardMaterial>), Added<SpriteFx>>,
-    mut known: Local<std::collections::HashMap<ShareKey, Handle<StandardMaterial>>>,
-    materials: Res<Assets<StandardMaterial>>,
+    // The ids of the shared materials, not handles: the cache does not keep a look alive that no
+    // node uses any more (a dead id fails `get_strong_handle`, and the next node makes a new look).
+    mut known: Local<std::collections::HashMap<ShareKey, AssetId<StandardMaterial>>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     for (mut f, mut mm) in &mut added {
         let Some(m) = materials.get(&mm.0) else { continue };
@@ -125,16 +127,16 @@ pub fn share_materials(
             anim: f.node_anim.clone(),
             colour: colour_bits(f.colour),
         };
-        match known.get(&key).filter(|h| materials.contains(h.id())) {
+        let alive = known.get(&key).and_then(|id| materials.get_strong_handle(*id));
+        match alive {
             Some(shared) => {
-                if mm.0 != *shared {
+                if mm.0 != shared {
                     mm.0 = shared.clone();
                 }
-                f.material = shared.clone();
+                f.material = shared;
             }
             None => {
-                // Weak: the cache does not keep a look alive that no node uses any more.
-                known.insert(key, mm.0.clone_weak());
+                known.insert(key, mm.0.id());
             }
         }
     }
