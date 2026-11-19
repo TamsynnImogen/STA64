@@ -21,7 +21,7 @@ Games: the stock data of Armada I (A1), Armada II (A2) and Fleet Operations (FO)
 | bridge | 32 | 0 | 0 | 5 | 27 |
 | build box | 6 | 0 | 0 | 4 | 2 |
 | button panel | 18 | 12 | 1 | 5 | 0 |
-| cinematic | 19 | 3 | 0 | 7 | 9 |
+| cinematic | 19 | 7 | 0 | 7 | 5 |
 | comm panel | 183 | 0 | 0 | 28 | 155 |
 | command palette | 12 | 6 | 0 | 0 | 6 |
 | control panel | 8 | 1 | 0 | 7 | 0 |
@@ -39,13 +39,13 @@ Games: the stock data of Armada I (A1), Armada II (A2) and Fleet Operations (FO)
 | screen | 2 | 0 | 2 | 0 | 0 |
 | speed rail | 10 | 0 | 0 | 6 | 4 |
 | tooltip and cursor | 7 | 2 | 0 | 0 | 5 |
-| **all** | **581** | **149** | **5** | **156** | **271** |
+| **all** | **581** | **153** | **5** | **156** | **267** |
 
 By game (a key set by several games counts in each):
 
 | game | keys | drawn | typed | built | missing |
 |---|---:|---:|---:|---:|---:|
-| A1 | 351 | 61 | 1 | 109 | 180 |
+| A1 | 351 | 65 | 1 | 109 | 176 |
 | A2 | 443 | 117 | 4 | 89 | 233 |
 | FO | 474 | 132 | 5 | 101 | 236 |
 
@@ -141,14 +141,14 @@ By game (a key set by several games counts in each):
 | `cinematicBackgroundPanelArea` | A1 A2 FO | built |
 | `cinematicBackgroundPanelSize` | A1 A2 FO | built |
 | `cinematicCommBorder` | A1 | missing |
-| `cinematicCommButton` | A1 | missing |
-| `cinematicCommButtonArea` | A1 | missing |
+| `cinematicCommButton` | A1 | drawn |
+| `cinematicCommButtonArea` | A1 | drawn |
 | `cinematicDefaultBackground` | A1 A2 FO | missing |
 | `cinematicDefaultCursor` | A1 A2 FO | built |
 | `cinematicDisplayArea` | A1 A2 FO | drawn |
 | `cinematicMenuBorder` | A1 | missing |
-| `cinematicMenuButton` | A1 | missing |
-| `cinematicMenuButtonArea` | A1 | missing |
+| `cinematicMenuButton` | A1 | drawn |
+| `cinematicMenuButtonArea` | A1 | drawn |
 | `cinematicMinimizedPanel` | A1 | missing |
 | `cinematicMinimizedPanel_#` | A1 | missing |
 | `cinematicMinimizedPanelArea` | A1 | built |
