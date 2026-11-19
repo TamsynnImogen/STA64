@@ -439,6 +439,7 @@ fn rebuild(
         model_key: name.clone(),
         unlit: false,
         scale: 1.0,
+        diffuse_tint: false,
     };
     let stats = model_scene::spawn(&mut ctx, &model, root);
 

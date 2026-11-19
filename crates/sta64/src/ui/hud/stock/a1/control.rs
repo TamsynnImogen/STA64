@@ -13,14 +13,16 @@
 //! the stock slot positions: Repair, Stand Down, the alert states, Patrol, Guard, Decommission and
 //! Self-Destruct (their sim orders or the HUD's target pick are later work; TODO lines in the
 //! PR). A station shows none of the Orders-page commands, locked or not: which of them the stock
-//! HUD shows for a station is not measured (TODO line). Not drawn: Transport, Transport Special,
-//! Upgrade and Research Upgrade (UI-40 and later).
+//! HUD shows for a station is not measured (TODO line). Not drawn: Transport Special, Upgrade and
+//! Research Upgrade (later). Transport has no control-grid slot where the install's command data gives it none; it
+//! sits on the speed rail ([`super::speed`]), whose buttons the same grid carries (cells from
+//! `speed::RAIL_BASE`).
 
 use bevy::prelude::*;
 use sta_content::{ButtonSlots, SlotCommand, button_slots::SLOTS};
 
 use super::super::{StockState, layout::StockLayout};
-use super::costs;
+use super::{costs, speed};
 use crate::ui::{
     i18n::{Strings, tr},
     hud::{
@@ -28,6 +30,7 @@ use crate::ui::{
         layout::R,
         model::{self, Act, Button, HudFeed, Look, Page, TargetMode, UnitOrder},
     },
+    gui_sprites::GuiImage,
     theme::Theme,
 };
 
@@ -181,9 +184,19 @@ pub(in crate::ui::hud) fn spawn_grid(
     let rects = cells(layout);
     let mut solid = Vec::new();
     for b in buttons {
-        let Some(Some(rect)) = rects.get(b.cell) else { continue };
-        solid.push(*rect);
-        super::super::spawn_button(commands, parent, theme, *rect, b, &state.native, hud);
+        let rect = if b.cell >= speed::RAIL_BASE {
+            // A speed rail position: the stock sheet places it, and its separator goes with it.
+            let Some(rect) = speed::rect(layout, b.cell - speed::RAIL_BASE) else { continue };
+            if let Some((r, name)) = speed::separator(layout) {
+                commands.spawn((super::node(r), bevy::picking::Pickable::IGNORE, GuiImage::new(name), ChildOf(parent)));
+            }
+            Some(rect)
+        } else {
+            rects.get(b.cell).copied().flatten()
+        };
+        let Some(rect) = rect else { continue };
+        solid.push(rect);
+        super::super::spawn_button(commands, parent, theme, rect, b, &state.native, hud);
     }
     solid
 }

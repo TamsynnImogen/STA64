@@ -84,6 +84,7 @@ fn spawn_fixture(
             model_key: "fx_cruiser.glb".into(),
             unlit,
             scale: 1.0,
+            diffuse_tint: false,
         };
         spawn(&mut ctx, model, root)
     };
