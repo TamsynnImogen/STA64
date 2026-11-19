@@ -77,6 +77,11 @@ pub fn drawn_units(view: &WorldView, local: Option<PlayerId>, reveal: bool) -> V
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct TeamColour(pub Color);
 
+/// The colour the unit's strategic symbol is drawn in (an Armada I map's own table gives marks their own
+/// entry); absent, the symbol follows [`TeamColour`].
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct MarkColour(pub Color);
+
 /// Hull now over hull max, 0..1 (1 when the unit has no hull).
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct HullShare(pub f32);
@@ -175,6 +180,7 @@ pub fn sync_units(
     local: Res<LocalPlayer>,
     cine: Option<Res<crate::ui::presentation::CineractiveState>>,
     teams: Option<Res<TeamColours>>,
+    map_teams: Option<Res<crate::viewer::MapTeamColours>>,
     mut map: ResMut<SimEntities>,
     existing: Query<(Entity, &SimEntity), Without<FromView>>,
     mut live: Query<(&mut HullShare, &mut UnitOwner, Has<Cloaked>), With<FromView>>,
@@ -222,7 +228,14 @@ pub fn sync_units(
         if owner == sta_sim::world::NEUTRAL {
             return Color::WHITE;
         }
-        teams.as_ref().and_then(|t| t.owner_colour(owner)).unwrap_or(Color::WHITE)
+        // An Armada I map's own team table, where one applies (`MapTeamColours`): seat n is team n + 1.
+        crate::viewer::owner_hull_colour(teams.as_deref(), map_teams.as_deref(), owner).unwrap_or(Color::WHITE)
+    };
+    let mark = |owner: PlayerId| {
+        if owner == sta_sim::world::NEUTRAL {
+            return Color::WHITE;
+        }
+        crate::viewer::owner_mark_colour(teams.as_deref(), map_teams.as_deref(), owner).unwrap_or(Color::WHITE)
     };
     let mut stale: BTreeSet<EntityId> = BTreeSet::new();
     for (id, u) in want {
@@ -235,7 +248,7 @@ pub fn sync_units(
                 }
                 if o.0 != u.owner {
                     o.0 = u.owner;
-                    commands.entity(e).insert(TeamColour(colour(u.owner)));
+                    commands.entity(e).insert((TeamColour(colour(u.owner)), MarkColour(mark(u.owner))));
                 }
                 if cloaked != was_cloaked {
                     if cloaked {
@@ -258,6 +271,7 @@ pub fn sync_units(
             SimEntity(id),
             UnitOwner(u.owner),
             TeamColour(colour(u.owner)),
+            MarkColour(mark(u.owner)),
             HullShare(share),
             Transform::from_translation(pos).with_rotation(rot),
             Visibility::default(),
@@ -300,7 +314,7 @@ pub struct UnitModels {
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn attach_models(
     mut commands: Commands,
-    pending: Query<(Entity, &NeedsModel, &TeamColour, Option<&UnitOwner>, Option<&SimEntity>, Option<&crate::render::construction::ConstructionPreview>, Option<&crate::render::build_visuals::BuildVisual>,
+    pending: Query<(Entity, &NeedsModel, &TeamColour, Option<&UnitOwner>, Option<&SimEntity>, Option<&crate::render::construction::ConstructionPreview>, Option<&crate::render::build_visuals::BuildVisual>, Option<&MarkColour>,
     )>,
     mut moons: ResMut<crate::render::moons::MoonVariants>,
     mut silhouettes: Option<ResMut<crate::render::strategic::Silhouettes>>,
@@ -317,7 +331,7 @@ pub(crate) fn attach_models(
     device: Option<Res<RenderDevice>>,
 ) {
     let formats = device.map(|d| CompressedImageFormats::from_features(d.features())).unwrap_or(CompressedImageFormats::BC);
-    for (e, need, team, owner, sim, preview, build_visual) in &pending {
+    for (e, need, team, owner, sim, preview, build_visual, mark) in &pending {
         commands.entity(e).remove::<NeedsModel>();
         let Some(def) = content.0.unit(need.0) else { continue;
         };
@@ -375,7 +389,7 @@ pub(crate) fn attach_models(
         }
         let class = def.class.0.as_str();
         if owned && !matches!(class, "background_obj" | "latinum" | "asteroidfield" | "nebula_obj" | "planet" | "wormhole_obj") {
-            let mut icon = crate::render::strategic::Strategic::new(crate::render::strategic::shape_for(class, mobile), team.0, radius,
+            let mut icon = crate::render::strategic::Strategic::new(crate::render::strategic::shape_for(class, mobile), mark.map_or(team.0, |m| m.0), radius,
             ).with_centre(centre);
             let sv = tables.0.sprite(&format!("{}_sv", def.model));
             let tex = sv.and_then(|sprite| {
@@ -642,6 +656,38 @@ mod view_tests {
         assert_eq!(map, live);
         assert_eq!(ents.len(), live.len(), "orphan or duplicate SimEntity entities");
         assert_eq!(ents.into_iter().collect::<BTreeSet<_>>(), live);
+    }
+
+    /// A map's own team colours reach hulls and marks through `sync_units` while the resource is there, and
+    /// a unit drawn after it is gone (the match ended: `clear_match`) takes the palette's colours.
+    #[test]
+    fn the_map_team_colours_apply_while_present_and_not_after_they_are_removed() {
+        use crate::viewer::MapTeamColours;
+        let mut app = app_with(
+            scripted(
+                "{ units: [
+                    { id: 1, owner: 0, hull: 100, rails: [{ at: 0, pos: { x: 0, y: 0, z: 0 } }] },
+                    { id: 2, owner: 0, hull: 100, rails: [{ at: 20, pos: { x: 5, y: 0, z: 7 } }] },
+                ] }",
+            ),
+            None,
+        );
+        // Seat 0 is team 1: hull entry 2 (`red`), mark entry 3 (`blue`); the palette alone gives it `blue`.
+        app.insert_resource(MapTeamColours(vec![[0, 0], [2, 3]]));
+        for _ in 0..3 {
+            app.update();
+        }
+        let map = app.world().resource::<SimEntities>().0.clone();
+        assert_eq!(app.world().get::<TeamColour>(map[&EntityId(1)]).unwrap().0, Color::srgb(1.0, 0.0, 0.0));
+        assert_eq!(app.world().get::<MarkColour>(map[&EntityId(1)]).unwrap().0, Color::srgb(0.0, 0.0, 1.0));
+        app.world_mut().remove_resource::<MapTeamColours>();
+        for _ in 0..40 {
+            app.update();
+        }
+        let map = app.world().resource::<SimEntities>().0.clone();
+        let late = map.get(&EntityId(2)).copied().expect("the second unit appeared");
+        assert_eq!(app.world().get::<TeamColour>(late).unwrap().0, Color::srgb(0.0, 0.0, 1.0), "the palette's entry for seat 0");
+        assert_eq!(app.world().get::<MarkColour>(late).unwrap().0, Color::srgb(0.0, 0.0, 1.0));
     }
 
     #[test]

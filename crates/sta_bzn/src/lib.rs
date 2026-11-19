@@ -108,6 +108,10 @@ pub struct Map {
     /// the entry-0 position (the map's centre).
     pub start_locs: Vec<StartLoc>,
     pub objects: Vec<MapObject>,
+    /// Armada I only: the map's team table's two palette entry numbers per team, `[hull, map]`, team 0 first
+    /// (nine teams: neutral, then 1 to 8), numbered as STA64's `ARMADA_ONE_PALETTE_NAMES` lists the palette
+    /// keys. Empty when the map has no such table, and for every other game. Presentation data only.
+    pub team_colours: Vec<[u32; 2]>,
     /// Named paths (`AiPaths`) of Armada II / Fleet Operations maps, in file order (CON-47).
     pub paths: Vec<MapPath>,
     /// Retained A1-specific source data; absent for existing A2 binary/text maps.

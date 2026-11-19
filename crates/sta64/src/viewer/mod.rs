@@ -121,6 +121,65 @@ impl TeamColours {
     }
 }
 
+/// The palette's entry names in the order an Armada I map's team table numbers them (the table stores
+/// an entry number, not a name; read from the executable, static). An entry the palette lacks (a mod's
+/// shorter file) has no colour here.
+pub const ARMADA_ONE_PALETTE_NAMES: [&str; 27] = [
+    "empty", "white", "red", "blue", "green", "yellow", "purple", "cyan", "brown", "orange", "pink", "magenta", "gray", "black", "ferengi", "dominion",
+    "klingon", "romulan", "borg", "federation", "cardassian", "breen", "sona", "alien", "brickred", "burntsienna", "cerulean",
+];
+
+/// The colours an Armada I map's own team table gives its teams (`sta_bzn::Map::team_colours`): the entry
+/// a team's hulls take and the entry its marks take (read from the executable, static: the map keeps both
+/// per team; STA64 draws hulls with the first and marks with the second). Inserted by the map view for a
+/// map with that table when no skirmish or multiplayer set-up (where the player's own pick overrides the
+/// map, as the original's lobby does) is running; a campaign mission takes the map's colours. Removed when
+/// the match ends and on a remount. Neutral and unowned objects keep theirs.
+#[derive(Resource, Clone, Debug, PartialEq, Eq, Default)]
+pub struct MapTeamColours(pub Vec<[u32; 2]>);
+
+impl MapTeamColours {
+    /// `None` when the map carries no team table.
+    pub fn from_map(map: &sta_bzn::Map) -> Option<MapTeamColours> {
+        (!map.team_colours.is_empty()).then(|| MapTeamColours(map.team_colours.clone()))
+    }
+
+    fn entry(&self, palette: &TeamColours, team: u32, which: usize) -> Option<Color> {
+        if team == 0 {
+            return None;
+        }
+        let n = *self.0.get(team as usize)?.get(which)? as usize;
+        let name = ARMADA_ONE_PALETTE_NAMES.get(n)?;
+        palette.0.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, c)| *c)
+    }
+
+    /// The colour of a 1-based team's hulls, or `None` (neutral, past the table, or an entry the
+    /// palette lacks): the caller keeps what it had.
+    pub fn hull(&self, palette: &TeamColours, team: u32) -> Option<Color> {
+        self.entry(palette, team, 0)
+    }
+
+    /// The colour of a 1-based team's map-view marks; `None` as for [`Self::hull`].
+    pub fn map(&self, palette: &TeamColours, team: u32) -> Option<Color> {
+        self.entry(palette, team, 1)
+    }
+}
+
+/// The colour a seat's hulls (and hulls under construction) are drawn in: the map's hull entry where a
+/// [`MapTeamColours`] applies, else the palette's entry for the seat ([`TeamColours::owner_colour`]).
+pub fn owner_hull_colour(palette: Option<&TeamColours>, map: Option<&MapTeamColours>, owner: PlayerId) -> Option<Color> {
+    let palette = palette?;
+    map.and_then(|m| m.hull(palette, u32::from(owner.0) + 1)).or_else(|| palette.owner_colour(owner))
+}
+
+/// The colour a seat's marks are drawn in (strategic symbols, map view icons): the map's map entry where a
+/// [`MapTeamColours`] applies, else as [`owner_hull_colour`]. The in-match radar and minimap do not follow it
+/// yet (TODO.md).
+pub fn owner_mark_colour(palette: Option<&TeamColours>, map: Option<&MapTeamColours>, owner: PlayerId) -> Option<Color> {
+    let palette = palette?;
+    map.and_then(|m| m.map(palette, u32::from(owner.0) + 1)).or_else(|| palette.owner_colour(owner))
+}
+
 #[derive(Component)]
 struct ModelRoot;
 
@@ -500,6 +559,77 @@ mod team_colour_tests {
         assert_eq!(t.0[t.default_index()].0, "white");
         let fed = t.0.iter().find(|(n, _)| n == "federation").unwrap().1.to_srgba();
         assert!((fed.red - 0.9).abs() < 1e-6 && fed.red == fed.green && fed.green == fed.blue);
+    }
+
+    fn palette() -> TeamColours {
+        TeamColours(vec![
+            ("empty".into(), Color::srgb(0.5, 0.5, 0.5)),
+            ("white".into(), Color::srgb(0.9, 0.9, 0.9)),
+            ("red".into(), Color::srgb(1.0, 0.0, 0.0)),
+            ("blue".into(), Color::srgb(0.0, 0.0, 1.0)),
+            ("federation".into(), Color::srgb(0.1, 0.2, 0.3)),
+        ])
+    }
+
+    /// Authored table: team 1 hull = `federation`, map = `white`; team 2 hull = `blue`, map = `red`.
+    fn table() -> MapTeamColours {
+        MapTeamColours(vec![[0, 0], [19, 1], [3, 2]])
+    }
+
+    #[test]
+    fn hulls_and_the_map_view_take_the_two_different_entries() {
+        let (p, m) = (palette(), table());
+        assert_eq!(m.hull(&p, 1), Some(Color::srgb(0.1, 0.2, 0.3)));
+        assert_eq!(m.map(&p, 1), Some(Color::srgb(0.9, 0.9, 0.9)));
+        assert_eq!(m.hull(&p, 2), Some(Color::srgb(0.0, 0.0, 1.0)));
+        assert_eq!(m.map(&p, 2), Some(Color::srgb(1.0, 0.0, 0.0)));
+    }
+
+    #[test]
+    fn neutral_teams_and_missing_entries_keep_what_the_caller_has() {
+        let (p, m) = (palette(), table());
+        assert_eq!(m.hull(&p, 0), None, "team 0 is neutral");
+        assert_eq!(m.hull(&p, 3), None, "past the table");
+        // Entry 4 (`green`) is not in this palette: no colour, the caller's own stays.
+        let m = MapTeamColours(vec![[0, 0], [4, 4]]);
+        assert_eq!(m.hull(&p, 1), None);
+    }
+
+    #[test]
+    fn the_name_list_covers_the_palette_the_loader_names() {
+        let t = TeamColours(TeamColours::parse(STOCK_TEAMCOLOR));
+        assert!(t.0.iter().take(14).all(|(n, _)| ARMADA_ONE_PALETTE_NAMES.contains(&n.as_str())));
+        assert_eq!(ARMADA_ONE_PALETTE_NAMES[19], "federation");
+    }
+
+    #[test]
+    fn a_map_with_no_team_table_gives_no_override() {
+        assert_eq!(MapTeamColours::from_map(&sta_bzn::Map::default()), None);
+        let map = sta_bzn::Map { team_colours: vec![[0, 0], [1, 1]], ..Default::default() };
+        assert_eq!(MapTeamColours::from_map(&map), Some(MapTeamColours(vec![[0, 0], [1, 1]])));
+    }
+
+    /// Install-gated (`STA64_TEST_INSTALL`, skips without it): every Armada I map's team table resolves to
+    /// entries the install's palette has. No values are asserted.
+    #[test]
+    fn every_installed_armada_one_map_table_resolves_to_palette_entries() {
+        let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
+        let Ok(vfs) = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), std::env::var("STA64_TEST_MOD").ok().as_deref()) else { return };
+        let palette = TeamColours::load(&vfs);
+        let mut checked = 0;
+        for name in vfs.list("bzn").into_iter().filter(|n| n.to_ascii_lowercase().ends_with(".bzn")) {
+            let Some(Ok(data)) = vfs.read(&name) else { continue };
+            let Ok(map) = sta_bzn::parse(&data) else { continue };
+            if map.a1.is_none() || map.team_colours.is_empty() {
+                continue;
+            }
+            let table = MapTeamColours::from_map(&map).unwrap();
+            for team in 1..map.team_colours.len() as u32 {
+                assert!(table.hull(&palette, team).is_some() && table.map(&palette, team).is_some(), "{name}: team {team} has an entry the palette lacks");
+            }
+            checked += 1;
+        }
+        eprintln!("checked {checked} maps with a team table");
     }
 
     #[test]
