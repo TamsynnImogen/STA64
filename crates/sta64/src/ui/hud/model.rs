@@ -258,6 +258,8 @@ pub enum TargetMode {
     Colonize,
     /// The stock TRANSPORT command: pick a ship or station to beam crew to or board.
     Transport,
+    /// Roots TRANSPORT_ATTACK: the stock capture command uses eligible ready transporters.
+    TransportAttack,
     /// The stock REPAIR command: pick a repair yard, or anywhere for the best one (SIM-40).
     Repair,
     /// The stock DECOMMISSION command: pick a yard, or anywhere for the best one or in place (SIM-45).
@@ -414,7 +416,7 @@ pub fn short(name: &str) -> String {
     name.chars().take(12).collect::<String>().to_uppercase()
 }
 
-fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
+pub(super) fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
     let (sprite_names, keep_label) = match &act {
         Act::OpenBuild => (vec!["b_build".into()], false),
         Act::OpenFormations => (vec!["b_form".into()], false),
@@ -427,6 +429,7 @@ fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
         Act::Target(TargetMode::Mine) => (vec!["b_harvest".into()], false),
         Act::Target(TargetMode::Colonize) => (vec!["b_colonize".into()], false),
         Act::Target(TargetMode::Transport) => (vec!["b_transport".into()], false),
+        Act::Target(TargetMode::TransportAttack) => (vec!["b_capture".into()], false),
         Act::Target(TargetMode::Repair) => (vec!["b_repair".into()], false),
         Act::Target(TargetMode::Decommission) => (vec!["b_decom".into()], false),
         Act::Cancel(_) => (vec!["b_cancel".into()], false),

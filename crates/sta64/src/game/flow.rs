@@ -147,7 +147,7 @@ impl Plugin for FlowPlugin {
 /// from the new mount; systems that already follow `Mounted`'s change (fonts, fog art, i18n,
 /// HUD sprites, cull and weapon tables, radar colours) need nothing here.
 #[allow(clippy::too_many_arguments)]
-fn invalidate_mount_caches(
+pub(crate) fn invalidate_mount_caches(
     vfs: Res<Mounted>,
     textures: Option<ResMut<crate::render::textures::TextureCache>>,
     parts: Option<ResMut<crate::render::model_scene::PartCache>>,
@@ -156,6 +156,7 @@ fn invalidate_mount_caches(
     silhouettes: Option<ResMut<crate::render::strategic::Silhouettes>>,
     surfaces: Option<ResMut<crate::render::surfaces::Surfaces>>,
     tables: Option<ResMut<crate::render::sprites::SpriteTables>>,
+    bridge_art: Option<ResMut<crate::ui::bridge_scene::BridgeArt>>,
 ) {
     fn reset<T: Resource<Mutability = bevy::ecs::component::Mutable> + Default>(r: Option<ResMut<T>>) {
         if let Some(mut r) = r {
@@ -168,6 +169,7 @@ fn invalidate_mount_caches(
     reset(moons);
     reset(silhouettes);
     reset(surfaces);
+    reset(bridge_art);
     if let Some(mut t) = tables {
         t.0 = Arc::new(sta_assets::load_sprite_table(&vfs.0));
     }

@@ -50,6 +50,15 @@ PANELS = [
 ]
 STATES = ["drawn", "typed", "built", "missing"]
 
+# Known limits recorded by the Armada I action-window implementation.
+# Keep these separate from source detection so missing keys stay in the totals.
+MISSING_REASONS = {
+    "cinematiccommborder": "Placement still needs an original-game reference.",
+    "cinematicmenuborder": "Placement still needs an original-game reference.",
+    "cinematicminimizedpanel": "Armada I panel minimization is pending.",
+    "cinematicminimizedpanel_#": "Armada I panel minimization is pending.",
+}
+
 
 def literals(paths):
     out = set()
@@ -136,6 +145,7 @@ def report(repo):
         "| missing | none of the above |",
         "",
         "A state says the name is used, not that the element is drawn correctly.",
+        "Annotated missing rows record known implementation limits and still count as missing.",
         "Games: the stock data of Armada I (A1), Armada II (A2) and Fleet Operations (FO) that set the key.",
         "",
         "## Summary",
@@ -159,7 +169,9 @@ def report(repo):
         out += ["", f"## {p}", "", "| key | games | state |", "|---|---|---|"]
         for q, key, games, state in rows:
             if q == p:
-                out.append(f"| `{key}` | {' '.join(games)} | {state} |")
+                reason = MISSING_REASONS.get(key.lower()) if state == "missing" else None
+                detail = f"{state} ({reason})" if reason else state
+                out.append(f"| `{key}` | {' '.join(games)} | {detail} |")
     return "\n".join(out) + "\n"
 
 

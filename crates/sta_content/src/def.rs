@@ -526,6 +526,8 @@ pub struct UnitStatsDef {
     pub avoidance_class: Option<i32>,
     /// `collisionRadius`.
     pub collision_radius: Option<Fixed>,
+    /// `distanceBelowGrid`: a shared AI build-list identity in the Roots profile when positive.
+    pub distance_below_grid: Option<Fixed>,
     /// `shieldPad`.
     pub shield_pad: Option<Fixed>,
     /// `maxExtraWeapons` (Armada II).

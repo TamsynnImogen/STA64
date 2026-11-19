@@ -648,6 +648,7 @@ fn spawn_mesh(
             self_illum,
             cut_alpha: group.blend == "default" && !self_illum,
             stock: lm.map(crate::render::stock::hulls::StockLight::from_material),
+            team_face: team && !crate::render::stock::hulls::is_borg_glow(&group.material),
         },
         );
         // Specular and emissive maps the mod declares for this diffuse (RND-38); nothing is looked

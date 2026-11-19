@@ -262,7 +262,7 @@ pub struct TransportsRec {
 }
 
 /// May this carrier transport attack (Roots): the switch and `weldingAnimSpeed = 0`.
-fn attack_capable(db: &ContentDb, d: &UnitDef) -> bool {
+pub fn attack_capable(db: &ContentDb, d: &UnitDef) -> bool {
     db.unit_features(d).transport_attack_by_weld && d.transport.welding_anim_speed == Some(Fixed::ZERO)
 }
 
@@ -463,6 +463,16 @@ impl Sim {
     /// The transporter state (read-only).
     pub fn transports(&self) -> &Transports {
         &self.transports
+    }
+
+    /// A launched party that would fight this owner if it arrived now. Transport
+    /// orders and shield holds alone are not boarding; arrival also loses a party
+    /// whose source left the world and checks the party's current diplomatic view.
+    pub(crate) fn has_incoming_hostile_party(&self, target: EntityId, owner: PlayerId) -> bool {
+        let diplomacy = Diplomacy::new(&self.players, &self.relations);
+        self.transports.parties.iter().any(|p| {
+            p.target == target && self.units.get(p.source).is_some() && diplomacy.is_enemy(p.team, owner)
+        })
     }
 
     /// `Order::Transport`: see the module docs. The order is taken for a unit that

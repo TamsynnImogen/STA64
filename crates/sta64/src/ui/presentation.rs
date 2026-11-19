@@ -13,7 +13,7 @@
 //! | objectives and briefing (host state, not a `Presentation`) | the modal panel of [`ObjectivesView`], toggled with Alt+O | rectangles of `objectivesPanelArea` and the text areas in A2 stock `gui_glob16x12.cfg`, the A1 `gui_glob.cfg` panel; the completed-line tick **not measured** |
 //! | a message box ([`MessageBox`]) | the same panel with an OK button | the original's message display reuses the objectives keys |
 //! | `Movie`, `StopMovie` | MED-03; an in-panel movie goes to the HUD's cinematic window or viewscreen (UI-39, `ui/hud/cinematic.rs`) | the Armada II call raises the cinematic view (executable, static); the Armada I clip's rectangle inside the bridge scene is **not measured** |
-//! | A1 `PreLoadBridgeScene`, `SetBridgeSceneRace`, `ShowBridgeScene`, `ShowBridgeOnScreen` | typed as [`BridgeScene`] and kept in [`BridgeState`]; the bridge backdrop and layers are not drawn (UI-39: the clip plays in the HUD's viewscreen) | race number 1 to 4 from the stock scripts; what `ShowBridgeOnScreen` selects is **not measured** |
+//! | A1 `PreLoadBridgeScene`, `SetBridgeSceneRace`, `ShowBridgeScene`, `ShowBridgeOnScreen` | typed as [`BridgeScene`] and kept in [`BridgeState`]; the bridge frame and the clip's rectangle are drawn by [`super::bridge_scene`] while `PlayBridgeMovie` plays (the animated layers are not) | race number 1 to 4 from the stock scripts; what `ShowBridgeOnScreen` selects is **not measured** |
 //! | `Sound`, `StopSound` | [`PlayScriptSound`] (its own UI-bus stream, mixed with what plays, no queue or cut) / [`StopScriptSound`] (that stream alone; a stale id is ignored) (the audio lane resolves the name); the script's `IsAudioMessageDone` turns true when the clip's length has played ([`ScriptReply::SoundDone`], from `audio::SoundStarted`), at once if nothing plays it | clip length from the decoded file; the wait is measured for A1 only, for A2 and Fleet Ops **not measured** |
 //! | `Music`, `StopMusic`, `Effect`, `WaitForKey`, other `Call`s | **not shown** (audio and effects lanes); each kind is listed once in [`Unhandled`] | |
 //!
@@ -90,6 +90,13 @@ fn bridge_state(mut events: MessageReader<BridgeScene>, mut state: ResMut<Bridge
         }
     }
 }
+
+/// Global z of the script's titles, its objectives panel and its fade; the pause box and the in-game menu
+/// sit above ([`super::pause_box::PAUSE_BOX_Z`], [`super::ingame_menu::MENU_Z`]), the bridge scene below
+/// all of them ([`super::bridge_scene::BRIDGE_SCENE_Z`]).
+pub const TITLES_Z: i32 = 900;
+pub const OBJECTIVES_Z: i32 = 920;
+pub const FADE_Z: i32 = 950;
 
 /// A2's layout space (stock `screenWidth` / `screenHeight` of `gui_glob16x12.cfg`).
 pub const A2_CANVAS: Vec2 = Vec2::new(1600.0, 1200.0);
@@ -464,6 +471,14 @@ fn num(a: &Arg) -> Option<f32> {
     }
 }
 
+/// What a mission's script sets for the whole client, one parameter of [`consume`]: the sound
+/// multiplier and the view's limits.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct MissionSettings<'w> {
+    mute: ResMut<'w, crate::audio::SoundMute>,
+    view: ResMut<'w, crate::render::cull::ScriptView>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn consume(
     mut events: MessageReader<SimMsg>,
@@ -481,8 +496,9 @@ pub(crate) fn consume(
     reports: Option<Res<crate::audio::ReportsSoundLengths>>,
     mut replies: MessageWriter<ScriptReply>,
     mut bridge: MessageWriter<BridgeScene>,
-    mut mute: ResMut<crate::audio::SoundMute>,
+    mut settings: MissionSettings,
 ) {
+    let MissionSettings { mute, view } = &mut settings;
     for SimMsg(e) in events.read() {
         let SimEvent::Present(p) = e else { continue };
         if let Some(log) = log.as_mut() {
@@ -594,6 +610,9 @@ pub(crate) fn consume(
                     unhandled.note(name);
                 }
             }
+            // A2 `SetObjectCullingDistance(d)`, `RestoreObjectCullingDistance()` and
+            // `SetClippingDistance(d)`: the view's limits ([`crate::render::cull::ScriptView`]).
+            Presentation::Call { name, args } if view.apply(name, args.first().and_then(num)) => {}
             Presentation::Call { name, args } if name.starts_with("A1.") && BridgeScene::from_call(name, args).is_some() => {
                 bridge.write(BridgeScene::from_call(name, args).unwrap());
             }
@@ -703,9 +722,17 @@ fn sound_replies(
 /// A restart of the mission in place (the sim's tick going back) drops the messages of the run
 /// before it: their ids restart at 1, so a stale entry would end the new run's wait or stop the
 /// new run's stream of the same id. What still plays is stopped, stream by stream.
-fn clear_sounds_on_restart(link: Option<Res<crate::sim_link::SimLink>>, mut sounds: ResMut<ScriptSounds>, mut stop: MessageWriter<StopScriptSound>, mut mute: ResMut<crate::audio::SoundMute>) {
+fn clear_sounds_on_restart(
+    link: Option<Res<crate::sim_link::SimLink>>,
+    mut sounds: ResMut<ScriptSounds>,
+    mut stop: MessageWriter<StopScriptSound>,
+    mut mute: ResMut<crate::audio::SoundMute>,
+    mut view: ResMut<crate::render::cull::ScriptView>,
+) {
     let Some(link) = link else { return };
     if sounds.restarted(link.curr().tick) {
+        // The new run sets its own view limits.
+        *view = default();
         // The new run's intro mutes (and un-mutes) for itself.
         *mute = default();
         for (id, _, _) in std::mem::take(&mut sounds.pending) {
@@ -833,12 +860,12 @@ struct PanelRoot;
 struct OkButton;
 
 fn spawn_layers(mut commands: Commands) {
-    commands.spawn((TitleLayer, Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, GlobalZIndex(900), Pickable::IGNORE));
+    commands.spawn((TitleLayer, Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, GlobalZIndex(TITLES_Z), Pickable::IGNORE));
     commands.spawn((
         FadeOverlay,
         Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
         BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
-        GlobalZIndex(950),
+        GlobalZIndex(FADE_Z),
         Pickable::IGNORE,
     ));
 }
@@ -1026,7 +1053,7 @@ fn draw_panel(
         PanelRoot,
         Node { position_type: PositionType::Absolute, left: pct(px, l.canvas.0), top: pct(py, l.canvas.1), width: pct(pw, l.canvas.0), height: pct(ph, l.canvas.1), ..default() },
         BackgroundColor(theme.panel.with_alpha(0.92)),
-        GlobalZIndex(920),
+        GlobalZIndex(OBJECTIVES_Z),
     ));
     panel.with_children(|p| {
         if !c.title.is_empty() {
@@ -1146,6 +1173,7 @@ impl Plugin for PresentationPlugin {
             .init_resource::<BridgeState>()
             .add_message::<BridgeScene>()
             .init_resource::<ScriptSounds>()
+            .init_resource::<crate::render::cull::ScriptView>()
             .add_message::<crate::audio::SoundStarted>()
             .init_resource::<ObjectivesView>()
             .init_resource::<MessageQueue>()
@@ -1500,6 +1528,49 @@ mod tests {
         app.world_mut().resource_mut::<NextState<crate::app::AppState>>().set(crate::app::AppState::FrontEnd);
         app.update();
         assert_eq!(level(&app), 1.0, "leaving the match un-mutes");
+    }
+
+    fn view_call(name: &str, args: Vec<Arg>) -> Presentation {
+        Presentation::Call { name: name.into(), args }
+    }
+
+    /// The three view calls of Armada II set the client's [`ScriptView`](crate::render::cull::ScriptView)
+    /// and are not listed as unhandled; Restore puts the file's distance back, a value that is not
+    /// a positive number is ignored, and a restart in place clears the lot.
+    #[test]
+    fn the_view_calls_set_the_script_view_and_a_restart_clears_it() {
+        use crate::render::cull::ScriptView;
+        use crate::sim_link::SimLink;
+        use sta_sim::command::LocalRouter;
+        use sta_sim::WorldSource;
+        let link_at = |ticks: u32| {
+            let mut sim = sta_sim::Sim::new(1);
+            for _ in 0..ticks {
+                sim.step(&[]);
+            }
+            SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), sta_core::PlayerId(0))
+        };
+        let mut app = app();
+        frozen(&mut app);
+        app.insert_resource(link_at(5));
+        app.update();
+        let view = |app: &App| *app.world().resource::<ScriptView>();
+        let n = |v: i32| Arg::Num(Fixed::from_int(v));
+        send(&mut app, view_call("A2.SetObjectCullingDistance", vec![n(1800)]));
+        send(&mut app, view_call("A2.SetClippingDistance", vec![n(4000)]));
+        assert_eq!(view(&app), ScriptView { cull: Some(1800.0), far: Some(4000.0) });
+        send(&mut app, view_call("A2.SetObjectCullingDistance", vec![n(-5)]));
+        send(&mut app, view_call("A2.SetObjectCullingDistance", vec![Arg::Bool(true)]));
+        assert_eq!(view(&app).cull, Some(1800.0), "not a distance: ignored");
+        send(&mut app, view_call("A2.RestoreObjectCullingDistance", vec![]));
+        assert_eq!(view(&app), ScriptView { cull: None, far: Some(4000.0) }, "Restore is the culling distance only");
+        for name in ["A2.SetObjectCullingDistance", "A2.RestoreObjectCullingDistance", "A2.SetClippingDistance"] {
+            assert_eq!(app.world().resource::<Unhandled>().count(name), 0);
+        }
+        send(&mut app, view_call("A2.SetObjectCullingDistance", vec![n(3000)]));
+        app.insert_resource(link_at(0));
+        app.update();
+        assert_eq!(view(&app), ScriptView::default(), "a restart in place sets its own");
     }
 
     #[test]

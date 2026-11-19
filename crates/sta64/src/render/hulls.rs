@@ -59,6 +59,10 @@ pub struct HullPart {
     pub cut_alpha: bool,
     /// The group's SOD lighting material, for the Stock profile (`render/stock/hulls.rs`).
     pub stock: Option<crate::render::stock::hulls::StockLight>,
+    /// The group is a team face the original draws with the team colour in place of its material's
+    /// colours (a `team*` material, the Borg glow family left out). Only the Armada I Stock look reads it
+    /// (`render/stock/hulls.rs`).
+    pub team_face: bool,
 }
 
 /// Hull lighting on (Refit's look) or off (Bevy's PBR, as before): the A/B switch.

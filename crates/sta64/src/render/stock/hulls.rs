@@ -14,6 +14,12 @@
 //! stations rest on the static read and the shared code path and were not compared. Which of the
 //! engine's two lighting paths runs is not established.
 //!
+//! On an Armada I install a team face (a `team*` material, the Borg glow family left out) is drawn
+//! with the team colour in place of its material's colours: the engine's material state takes black
+//! for the ambient slot and the team colour for the diffuse and specular slots (read from the executable,
+//! static; the slot naming is inferred from the SOD file order, and that the texture alone multiplies the
+//! ambient term is inferred). See [`apply_material`].
+//!
 //! The specular term is read from data and was never isolated in a frame comparison (the
 //! Armada II comparison judged whole-frame luminance). An Armada I install (`Sta1Classic`)
 //! draws no specular term: its SOD materials mostly carry one authoring default specular, and
@@ -75,8 +81,16 @@ impl StockLight {
 }
 
 /// The Borg glow material family (`team_Bglow`, `team_Bglow_1`), excluded from the placeholder rule.
-fn is_borg_glow(name: &str) -> bool {
+pub(crate) fn is_borg_glow(name: &str) -> bool {
     name.get(..10).is_some_and(|p| p.eq_ignore_ascii_case("team_bglow"))
+}
+
+/// A CPU copy of the Armada I team-face formula of `hulls.wesl`'s `shade_stock`, kept next to the shader
+/// for its test: the lit colour of one channel is the texture times `clamp(ambient + team x diffuse
+/// light)`, so the team colour tints the diffuse term only and the ambient term is untinted.
+#[cfg(test)]
+fn team_face_channel(texture: f32, scene_ambient: f32, team: f32, diffuse_light: f32) -> f32 {
+    texture * (scene_ambient + team * diffuse_light).clamp(0.0, 1.0)
 }
 
 /// Registers the stock hull look: `Effect::Hulls` has a stock implementation, which
@@ -103,6 +117,16 @@ pub fn apply_material(p: &mut crate::render::hulls::HullParams, _m: &StandardMat
     // (read from the executable, static; see `hulls.wesl`'s `shade_stock`).
     p.mamb = Vec3::from(l.ambient).extend(if armada_one { 2.0 } else { 1.0 });
     p.mdif = Vec3::from(l.diffuse).extend(0.0);
+    if armada_one && part.team_face {
+        // A team face (Armada I): the draw state takes no colour from the group's own material. Its ambient
+        // slot is black, its diffuse slot is the team colour, which the shader applies to the diffuse term
+        // only (`mdif.w` 1), so the ambient term is the scene's ambient light alone. Read from the
+        // executable, static; which slot is ambient and which diffuse is inferred from the SOD file order,
+        // and that nothing else multiplies the ambient term is inferred (not measured). The specular slot is
+        // also set to the team colour in the original: not drawn here (Armada I draws no specular term).
+        p.mamb = Vec4::new(0.0, 0.0, 0.0, 2.0);
+        p.mdif = Vec3::ONE.extend(1.0);
+    }
     // Armada I: no highlight. The colour is zeroed (the data is still read); the shader's specular term is untouched.
     let specular = if armada_one { [0.0; 3] } else { l.specular };
     p.mspc = Vec3::from(specular).extend(l.power.max(1.0));
@@ -241,6 +265,52 @@ mod tests {
         assert_eq!(hull.params.mdif, Vec4::new(1.0, 1.0, 1.0, 0.0));
         let tint = Color::srgb(0.2, 0.4, 0.9).to_linear();
         assert_eq!(hull.params.tint, Vec4::new(tint.red, tint.green, tint.blue, 0.0));
+    }
+
+    /// Armada I: a team face takes no ambient from its material and the team colour is its diffuse colour,
+    /// applied to the diffuse term only; a base face and every other profile are as they were.
+    #[test]
+    fn armada_one_team_face_ignores_its_materials_ambient() {
+        let std = StandardMaterial::default();
+        let team = HullPart { stock: Some(StockLight::from_material(&material("team_fed", [1.0, 0.0, 0.0]))), team_face: true, ..default() };
+        let base = HullPart { stock: Some(StockLight::from_material(&material("base_fed", [1.0, 1.0, 0.93]))), team_face: false, ..default() };
+        let mut a1 = HullView::default();
+        a1.set_stock(true);
+        a1.set_armada_one(true);
+        let mut other = HullView::default();
+        other.set_stock(true);
+
+        let t = hull_material(&std, &team, &a1).params;
+        assert_eq!(t.mamb, Vec4::new(0.0, 0.0, 0.0, 2.0), "no ambient from the team material");
+        assert_eq!(t.mdif, Vec4::new(1.0, 1.0, 1.0, 1.0), "the diffuse flag: the shader tints the diffuse term only");
+
+        let b = hull_material(&std, &base, &a1).params;
+        assert_eq!(b.mamb, Vec4::new(0.5, 0.5, 0.5, 2.0), "a base face keeps its ambient");
+        assert_eq!(b.mdif, Vec4::new(1.0, 1.0, 0.93, 0.0));
+
+        // Armada II, Fleet Operations and Roots: the team face is drawn as before.
+        let o = hull_material(&std, &team, &other).params;
+        assert_eq!(o.mamb, Vec4::new(0.5, 0.5, 0.5, 1.0));
+        assert_eq!(o.mdif, Vec4::new(1.0, 1.0, 1.0, 0.0));
+
+        let src = include_str!("../hulls.wesl");
+        assert!(src.contains("if k.mdif.a > 0.5"));
+    }
+
+    /// The team-face formula, executed: the team colour tints the diffuse term only; the ambient term is
+    /// untinted; a base face (team colour white) is the same formula with a white tint.
+    #[test]
+    fn the_team_colour_tints_the_diffuse_term_only() {
+        let (tex, amb, light) = (0.8_f32, 0.2_f32, 0.5_f32);
+        // No light: the ambient term alone, whatever the team colour.
+        assert_eq!(team_face_channel(tex, amb, 0.3, 0.0), team_face_channel(tex, amb, 0.9, 0.0));
+        assert!((team_face_channel(tex, amb, 0.3, 0.0) - tex * amb).abs() < 1e-6);
+        // Lit: the team colour scales the diffuse part.
+        let (a, b) = (team_face_channel(tex, amb, 0.4, light), team_face_channel(tex, amb, 0.8, light));
+        assert!((b - a - tex * 0.4 * light).abs() < 1e-6);
+        // A white tint is the base-face sum, clamped.
+        assert!((team_face_channel(tex, amb, 1.0, light) - tex * (amb + light)).abs() < 1e-6);
+        assert_eq!(team_face_channel(1.0, 0.8, 1.0, 0.9), 1.0, "clamped to 1");
     }
 
     #[test]
