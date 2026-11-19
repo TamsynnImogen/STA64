@@ -6,9 +6,11 @@
 //! - Shift (the `AddModifier` key) click adds an unselected unit, removes a
 //!   selected one.
 //! - Left drag (over 6 px) box-selects own *ships* (craft, as the content
-//!   classes them) whose centre is in the box; stations are never taken by a
-//!   box. Shift keeps the old selection.
-//! - Ships and stations are never selected together (stock: `Select` refuses
+//!   classes them) whose centre is in the box. Roots also admits stationary
+//!   producers with an authored build hardpoint and build list. When a Roots
+//!   box includes combat craft, low-priority craft and producers are skipped.
+//!   Shift keeps the old selection.
+//! - Clicks never mix ships and stations (stock: `Select` refuses
 //!   anything but own ships once something is selected). A click picks one
 //!   station when nothing, or another station, is selected; Shift-click of a
 //!   station while ships are selected is refused; Shift-click of a ship over a
@@ -22,7 +24,8 @@
 //! - Control groups 1..9: `N` selects the group (dead units drop out); a
 //!   second `N` within 750 ms centres the camera on the group, on the member
 //!   nearest the group's mean ("the centre of the bulk"). `Alt+N` selects and
-//!   centres at once (stock's Shift+N). `Ctrl+N` replaces the group with the
+//!   centres at once (stock's Shift+N). In Roots, `Alt+N` recalls only live
+//!   stations when the group contains one. `Ctrl+N` replaces the group with the
 //!   selection (empty selection empties it). `Shift+N` and `Ctrl+Shift+N` add
 //!   the selection and keep what is there (QOL-4); with nothing selected they
 //!   do nothing. A unit is in one group at a time: binding takes it out of
@@ -39,6 +42,7 @@
 //! cursor, ray and projection through [`Aim`].
 
 use bevy::prelude::*;
+use sta_sim::event::SimEvent;
 use sta_sim::world::EntityKind;
 use sta_sim::{ContentKey, EntityId};
 
@@ -46,7 +50,7 @@ use super::orders::Aim;
 use super::keys::{Action, KeyBindings};
 use crate::render::strategic::Strategic;
 use crate::render::units::SelectRadius;
-use crate::sim_link::{ContentRes, Selection, SelectionChanged, SimEntity, SimLink};
+use crate::sim_link::{ContentRes, Selection, SelectionChanged, SimEntity, SimLink, SimMsg};
 
 /// Seconds within which a second click counts as a double click.
 const DOUBLE: f64 = 0.4;
@@ -167,6 +171,65 @@ fn is_own(link: &SimLink, id: EntityId) -> bool {
 fn is_ship(link: &SimLink, content: Option<&ContentRes>, id: EntityId) -> bool {
     let (Some(content), Some(u)) = (content, link.curr().unit(id)) else { return true };
     content.0.unit(u.def).is_none_or(|d| EntityKind::of_def(d) == EntityKind::Craft)
+}
+
+fn is_station(link: &SimLink, content: &ContentRes, id: EntityId) -> bool {
+    link.curr().unit(id)
+        .filter(|u| !u.flags.contains(sta_sim::view::UnitFlags::DYING))
+        .and_then(|u| content.0.unit(u.def))
+        .is_some_and(|d| EntityKind::of_def(d) == EntityKind::Station)
+}
+
+/// Roots' selectable shipyards/starbases need both authored launch metadata
+/// and a resolved build list. The hardpoint's presence is not inferred from a
+/// resolved launch point, which can be absent when no model was loaded.
+fn roots_box_producer(link: &SimLink, content: &ContentRes, id: EntityId) -> bool {
+    link.curr().unit(id)
+        .filter(|u| u.hull[0] > sta_sim::Fixed::ZERO && !u.flags.contains(sta_sim::view::UnitFlags::DYING))
+        .and_then(|u| content.0.unit(u.def))
+        .is_some_and(|d| {
+            EntityKind::of_def(d) == EntityKind::Station
+                && !d.build.list.is_empty()
+                && d.raw.str("buildHardpoint").is_some_and(|node| !node.trim().is_empty())
+        })
+}
+
+fn roots_preferred_combat(link: &SimLink, content: &ContentRes, id: EntityId) -> bool {
+    link.curr().unit(id)
+        .filter(|u| u.hull[0] > sta_sim::Fixed::ZERO && !u.flags.contains(sta_sim::view::UnitFlags::DYING))
+        .and_then(|u| content.0.unit(u.def))
+        .is_some_and(|d| {
+            EntityKind::of_def(d) == EntityKind::Craft
+                && d.raw.i64("preferredSelect") != Some(0)
+                && sta_sim::combat::weapons::can_attack(&content.0, d)
+        })
+}
+
+/// Roots: a ship built by a grouped station inherits that station's number.
+/// The sim event arrives after input; this runs before the next key recall.
+pub fn inherit_built_ship_group(
+    mut events: MessageReader<SimMsg>,
+    link: Res<SimLink>,
+    content: Option<Res<ContentRes>>,
+    mut groups: ResMut<ControlGroups>,
+) {
+    let Some(content) = content.filter(|c| c.0.profile() == sta_content::Profile::Fo4) else { return };
+    for SimMsg(event) in events.read() {
+        let SimEvent::Built { builder, id } = event else { continue };
+        if !is_own(&link, *builder) || !is_station(&link, &content, *builder) {
+            continue;
+        }
+        let own_live_craft = link.curr().unit(*id)
+            .filter(|u| u.owner == link.player() && !u.flags.contains(sta_sim::view::UnitFlags::DYING))
+            .and_then(|u| content.0.unit(u.def))
+            .is_some_and(|d| EntityKind::of_def(d) == EntityKind::Craft);
+        if !own_live_craft {
+            continue;
+        }
+        if let Some(group) = groups.groups.iter().position(|group| group.contains(builder)) {
+            bind_group(&mut groups, group, vec![*id], true);
+        }
+    }
 }
 
 /// Shift-click `id` into `sel` (the own selection) without ever mixing ships and
@@ -368,16 +431,22 @@ pub fn select_keys(
             let alive: Vec<EntityId> = groups.groups[n].iter().copied().filter(|&id| is_own(&link, id)).collect();
             groups.groups[n] = alive.clone();
             if !alive.is_empty() {
+                let stations: Vec<EntityId> = if let Some(c) = content.as_deref().filter(|c| alt && c.0.profile() == sta_content::Profile::Fo4) {
+                    alive.iter().copied().filter(|&id| is_station(&link, c, id)).collect()
+                } else {
+                    Vec::new()
+                };
+                let recalled = if stations.is_empty() { alive } else { stations };
                 let double = groups.last_tap.is_some_and(|(t, g)| g == n && now - t <= GROUP_TAP);
                 if double || alt {
-                    if let Some(c) = bulk_centre(&link, &alive) {
+                    if let Some(c) = bulk_centre(&link, &recalled) {
                         focus.write(CameraFocus(c));
                     }
                     groups.last_tap = None;
                 } else {
                     groups.last_tap = Some((now, n));
                 }
-                selection.0 = alive;
+                selection.0 = recalled;
                 cap(&mut selection.0, *max);
             }
         }
@@ -497,18 +566,32 @@ pub fn select(
     let content = content.as_deref();
     let ship = |id: EntityId| is_ship(&link, content, id);
     if dragging {
-        // A box takes ships only; Shift adds them to ships (a selected station is dropped).
-        sel.retain(|&s| ship(s));
+        let roots = content.filter(|c| c.0.profile() == sta_content::Profile::Fo4);
+        // Shift keeps existing eligible members; ordinary stations still drop.
+        sel.retain(|&s| ship(s) || roots.is_some_and(|c| roots_box_producer(&link, c, s)));
         let (lo, hi) = (start.min(cursor), start.max(cursor));
+        let mut candidates = Vec::new();
         for (u, _, gt, strategic) in &units {
             if is_own(&link, u.0)
-                && ship(u.0)
+                && (ship(u.0) || roots.is_some_and(|c| roots_box_producer(&link, c, u.0)))
                 && let Some(p) = aim.project(visual_centre(gt, strategic))
                 && p.cmpge(lo).all()
                 && p.cmple(hi).all()
             {
-                push_unique(&mut sel, u.0);
+                candidates.push(u.0);
             }
+        }
+        let prefer_combat = roots.is_some_and(|c| candidates.iter().any(|&id| roots_preferred_combat(&link, c, id)));
+        for id in candidates {
+            if prefer_combat && roots.is_some_and(|c| {
+                roots_box_producer(&link, c, id)
+                    || link.curr().unit(id)
+                        .and_then(|u| c.0.unit(u.def))
+                        .is_some_and(|d| d.raw.i64("preferredSelect") == Some(0))
+            }) {
+                continue;
+            }
+            push_unique(&mut sel, id);
         }
     } else if let Some(id) = unit_under_where(cursor, aim.ray, &units, |id| target_seen(link.curr(), local.as_deref().and_then(|l| l.0), id)) {
         // (With a local player only what its team sees is clickable: kept-drawn scenery outside the sensors is no fog leak; without one, everything drawn is.)
@@ -663,7 +746,11 @@ mod tests {
     }
 
     fn build(real: bool) -> App {
-        let mut db = ContentDb::builder();
+        build_with_profile(real, sta_content::Profile::Native)
+    }
+
+    fn build_with_profile(real: bool, profile: sta_content::Profile) -> App {
+        let mut db = ContentDb::builder().profile(profile);
         for (name, class) in [("cls1", "craft"), ("cls2", "craft"), ("yard", "shipyard")] {
             db = db.unit(sta_content::UnitDef::new(name, class));
         }
@@ -997,6 +1084,74 @@ mod tests {
         assert!(sel(&app).is_empty());
     }
 
+    /// The same drawn units with authored Roots selection metadata and a typed
+    /// attack mount; no installed content or OS input is needed.
+    fn producer_box_app(profile: sta_content::Profile) -> App {
+        use sta_content::{DefRef, Hardpoint, UnitDef, WeaponDef, WeaponKind};
+
+        let raw = |name: &str, text: &str| {
+            let text = text.to_owned();
+            Arc::new(sta_odf::resolve(name, &mut |_| Some(text.clone())).unwrap())
+        };
+        let mut low = UnitDef::new("low", "craft");
+        low.raw = raw("low", "preferredSelect = 0\n");
+        let mut combat = UnitDef::new("combat", "craft");
+        combat.hardpoints.push(Hardpoint { weapon: DefRef::new("beam"), node: "hp01".into(), arc: None });
+        let utility = UnitDef::new("utility", "craft");
+        let mut yard = UnitDef::new("yard", "shipyard");
+        yard.raw = raw("yard", "buildHardpoint = \"build\"\n");
+        yard.build.list.push(DefRef::new("combat"));
+        let mut missing = UnitDef::new("missing", "shipyard");
+        missing.build.list.push(DefRef::new("combat"));
+        let mut empty = UnitDef::new("empty", "shipyard");
+        empty.raw = raw("empty", "buildHardpoint = \"build\"\n");
+        let db = sta_content::ContentDb::builder()
+            .profile(profile)
+            .unit(low).unit(combat).unit(utility).unit(yard).unit(missing).unit(empty)
+            .weapon(WeaponDef::new("beam", "phaser", WeaponKind::Beam))
+            .build().unwrap();
+        let mut app = build_with_profile(false, profile);
+        let mut view = (**app.world().resource::<SimLink>().curr()).clone();
+        for u in &mut view.units {
+            let name = match u.id { A | E | F | D => "low", B => "combat", C => "utility", Y1 | Y2 => "yard", _ => unreachable!() };
+            u.def = db.key(name).unwrap();
+        }
+        view.units.push(unit(9, db.key("missing").unwrap().0, 0, 400.0, 300.0));
+        view.units.push(unit(10, db.key("empty").unwrap().0, 0, 500.0, 300.0));
+        app.world_mut().spawn((SimEntity(EntityId(9)), SelectRadius(50.0), GlobalTransform::from(Transform::from_xyz(400.0, 0.0, 300.0))));
+        app.world_mut().spawn((SimEntity(EntityId(10)), SelectRadius(50.0), GlobalTransform::from(Transform::from_xyz(500.0, 0.0, 300.0))));
+        app.insert_resource(ContentRes(Arc::new(db)));
+        app.insert_resource(SimLink::new(Box::new(Frozen(Arc::new(view))), Box::new(LocalRouter::new()), PlayerId(0)));
+        app
+    }
+
+    #[test]
+    fn roots_box_takes_producers_alone_and_prefers_combat_in_a_mixed_box() {
+        let mut roots = producer_box_app(sta_content::Profile::Fo4);
+        drag(&mut roots, (150.0, 150.0), (650.0, 350.0));
+        assert_eq!(sel(&roots), [Y1, Y2], "two authored producers, but not yards missing a hardpoint or build list");
+        press(&mut roots, KeyCode::ShiftLeft);
+        drag(&mut roots, (50.0, 50.0), (350.0, 150.0));
+        assert_eq!(sel(&roots), [Y1, Y2, B], "Shift box keeps selected producers and adds the preferred candidate");
+        release(&mut roots, KeyCode::ShiftLeft);
+        step(&mut roots);
+        drag(&mut roots, (50.0, 50.0), (650.0, 350.0));
+        assert_eq!(sel(&roots), [B, C], "combat excludes producers and explicit low priority craft, not ordinary utility craft");
+
+        let mut dying = producer_box_app(sta_content::Profile::Fo4);
+        let mut view = (**dying.world().resource::<SimLink>().curr()).clone();
+        view.units.iter_mut().find(|u| u.id == Y2).unwrap().flags = UnitFlags::DYING;
+        dying.insert_resource(SimLink::new(Box::new(Frozen(Arc::new(view))), Box::new(LocalRouter::new()), PlayerId(0)));
+        drag(&mut dying, (150.0, 150.0), (650.0, 350.0));
+        assert_eq!(sel(&dying), [Y1], "a dying producer is not box eligible");
+
+        let mut other = producer_box_app(sta_content::Profile::Native);
+        drag(&mut other, (150.0, 150.0), (650.0, 350.0));
+        assert!(sel(&other).is_empty(), "other profiles still exclude stations");
+        drag(&mut other, (50.0, 50.0), (650.0, 350.0));
+        assert_eq!(sel(&other), [A, B, C], "other profiles retain their craft-only box behavior");
+    }
+
     #[test]
     fn shift_box_over_a_selected_station_drops_it() {
         let mut app = app();
@@ -1225,6 +1380,74 @@ mod tests {
         let focus: Vec<_> = app.world_mut().resource_mut::<Messages<CameraFocus>>().drain().collect();
         assert_eq!(focus.len(), 1);
         assert!((focus[0].0 - Vec3::new(500.0, 0.0, 100.0)).length() < 1.0);
+    }
+
+    #[test]
+    fn roots_alt_group_recalls_station_from_mixed_group_without_changing_membership() {
+        let mut app = build_with_profile(false, sta_content::Profile::Fo4);
+        click(&mut app, 200.0, 200.0);
+        assert_eq!(sel(&app), [Y1]);
+        ctrl_digit(&mut app, KeyCode::Digit1);
+        click(&mut app, 100.0, 100.0);
+        press(&mut app, KeyCode::ShiftLeft);
+        tap(&mut app, KeyCode::Digit1);
+        release(&mut app, KeyCode::ShiftLeft);
+        step(&mut app);
+        assert_eq!(group(&app, 0), [A, Y1]);
+
+        tap(&mut app, KeyCode::Digit1);
+        assert_eq!(sorted(sel(&app)), [A, Y1], "ordinary recall keeps its full group");
+        press(&mut app, KeyCode::AltLeft);
+        tap(&mut app, KeyCode::Digit1);
+        release(&mut app, KeyCode::AltLeft);
+        assert_eq!(sel(&app), [Y1]);
+        assert_eq!(group(&app, 0), [A, Y1]);
+        let focus: Vec<_> = app.world_mut().resource_mut::<Messages<CameraFocus>>().drain().collect();
+        assert_eq!(focus.len(), 1);
+        assert!((focus[0].0 - Vec3::new(200.0, 0.0, 200.0)).length() < 1.0);
+    }
+
+    #[test]
+    fn roots_alt_ship_only_and_other_profile_mixed_recall_stay_full() {
+        let mut roots = build_with_profile(false, sta_content::Profile::Fo4);
+        roots.world_mut().resource_mut::<ControlGroups>().groups[0] = vec![A, B];
+        press(&mut roots, KeyCode::AltLeft);
+        tap(&mut roots, KeyCode::Digit1);
+        release(&mut roots, KeyCode::AltLeft);
+        assert_eq!(sel(&roots), [A, B]);
+
+        let mut other = app();
+        other.world_mut().resource_mut::<ControlGroups>().groups[0] = vec![A, Y1];
+        press(&mut other, KeyCode::AltLeft);
+        tap(&mut other, KeyCode::Digit1);
+        release(&mut other, KeyCode::AltLeft);
+        assert_eq!(sel(&other), [A, Y1]);
+        assert_eq!(group(&other, 0), [A, Y1]);
+    }
+
+    #[test]
+    fn roots_built_ship_inherits_station_group_without_changing_selection() {
+        let mut roots = build_with_profile(true, sta_content::Profile::Fo4);
+        step(&mut roots);
+        roots.world_mut().resource_mut::<ControlGroups>().groups[0] = vec![Y1, A];
+        roots.world_mut().resource_mut::<Selection>().0 = vec![C];
+        roots.world_mut().write_message(SimMsg(SimEvent::Built { builder: Y1, id: B }));
+        step(&mut roots);
+        assert_eq!(group(&roots, 0), [A, B, Y1]);
+        assert_eq!(sel(&roots), [C], "building a ship does not select it");
+        tap(&mut roots, KeyCode::Digit1);
+        assert_eq!(sorted(sel(&roots)), [A, B, Y1], "the next recall sees the inherited ship");
+
+        roots.world_mut().write_message(SimMsg(SimEvent::Built { builder: A, id: F }));
+        step(&mut roots);
+        assert_eq!(group(&roots, 0), [A, B, Y1], "a grouped craft is not a station builder");
+
+        let mut other = build_with_profile(true, sta_content::Profile::Native);
+        step(&mut other);
+        other.world_mut().resource_mut::<ControlGroups>().groups[0] = vec![Y1];
+        other.world_mut().write_message(SimMsg(SimEvent::Built { builder: Y1, id: B }));
+        step(&mut other);
+        assert_eq!(group(&other, 0), [Y1], "other profiles keep their group behavior");
     }
 
     #[test]
