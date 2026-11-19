@@ -47,7 +47,7 @@ pub fn beam_transform(from: Vec3, to: Vec3, radius: f32, length: f32) -> Transfo
 
 /// INTERIM (not established): a model that names no blend mode (the loader gives it `opaque`) is drawn
 /// additive, as a beam is. A model that names a blend on any group keeps every group as loaded, its
-/// unnamed groups too (opaque, lit). Listed in TODO.md.
+/// unnamed groups too (opaque, unlit). Listed in TODO.md.
 fn additive_if_plain(nodes: &mut [sta_assets::model::Node]) {
     use sta_assets::model::NodeKind;
     let named = nodes.iter().any(|n| matches!(&n.kind, NodeKind::Mesh(m) if m.groups.iter().any(|g| g.blend != "opaque")));
