@@ -400,6 +400,9 @@ fn press(
     cells: Query<&GridCell>,
     tiles: Query<&GroupTile>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
+    bindings: Option<Res<crate::input::keys::KeyBindings>>,
+    menu: Option<Res<crate::ui::ingame_menu::InGameMenu>>,
+    scene: Option<Res<crate::frontend::scene::MenuScene>>,
     feed: Res<HudFeed>,
     mut state: ResMut<HudState>,
     mut queue: ResMut<CommandQueue>,
@@ -414,6 +417,15 @@ fn press(
         clicks.read().for_each(drop);
         return;
     }
+    let pd_hotkey_slot = (scene.is_none()
+        && menu.as_deref().is_none_or(|menu| !menu.open)
+        && keys.as_deref().zip(bindings.as_deref()).is_some_and(|(keys, bindings)|
+            bindings.just_pressed(crate::input::keys::Action::PointDefence, keys)))
+        .then(|| commands::shared(&feed).specials.into_iter()
+            .find(|(_, kind)| *kind == sta_sim::specials::SpecialKind::PointDefence)
+            .map(|(slot, _)| slot))
+        .flatten();
+    let mut clicked_pd_slot = None;
     for ButtonClicked(e) in clicks.read() {
         if let Ok(GroupTile(id)) = tiles.get(*e) {
             let shift = keys
@@ -476,17 +488,37 @@ fn press(
                 ));
             }
             other => {
-                if let Some((kind, units)) = command(&feed, other) {
-                    if matches!(&kind, CommandKind::Order(Order::Stop { .. })) { clear_order_targets(&mut targets, &units); }
-                    if let CommandKind::Order(o) = &kind
-                        && let Some(k) = OrderKind::of(o)
-                    {
-                        issued.write(OrderIssued { units, kind: k });
-                    }
-                    queue.0.push(kind);
+                if let Act::Special(slot) = other
+                    && Some(*slot) == pd_hotkey_slot
+                {
+                    clicked_pd_slot = Some(*slot);
                 }
+                issue_command(&feed, other, &mut queue, &mut issued, &mut targets);
             }
         }
+    }
+    if let Some(slot) = pd_hotkey_slot
+        && clicked_pd_slot != Some(slot)
+    {
+        issue_command(&feed, &Act::Special(slot), &mut queue, &mut issued, &mut targets);
+    }
+}
+
+fn issue_command(
+    feed: &HudFeed,
+    act: &Act,
+    queue: &mut CommandQueue,
+    issued: &mut MessageWriter<OrderIssued>,
+    targets: &mut OrderTargets,
+) {
+    if let Some((kind, units)) = command(feed, act) {
+        if matches!(&kind, CommandKind::Order(Order::Stop { .. })) { clear_order_targets(targets, &units); }
+        if let CommandKind::Order(o) = &kind
+            && let Some(k) = OrderKind::of(o)
+        {
+            issued.write(OrderIssued { units, kind: k });
+        }
+        queue.0.push(kind);
     }
 }
 
@@ -1330,3 +1362,5 @@ mod colonize_tests;
 mod transport_tests;
 #[cfg(test)]
 mod recrew_tests;
+#[cfg(test)]
+mod pd_tests;

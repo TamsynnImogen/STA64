@@ -12,7 +12,7 @@ use sta_sim::command::{CommandKind, Order};
 use sta_sim::movement::{FORM_COLUMN, FORM_LINE, FORM_WEDGE};
 use sta_sim::{ContentKey, EntityId, Fixed, PlayerId, UnitView, WorldView};
 
-use crate::ui::i18n::{tr, tooltip_key};
+use crate::ui::i18n::{tr, trf, tooltip_key};
 use super::layout::{GRID_COLS, GRID_ROWS, InfoHeight};
 use super::commands;
 
@@ -216,7 +216,7 @@ pub enum Act {
     Back,
     /// Arm a map target; completed by the HUD's target click system.
     Target(TargetMode),
-    /// The sim currently supports cloak as a special slot toggle.
+    /// A supported special slot toggle (cloak or point defence).
     Special(u8),
     /// UI-02's stop on the own selection.
     Stop,
@@ -271,6 +271,42 @@ pub enum Look {
     Poor,
     /// Not buildable yet: shown, disabled.
     Locked,
+}
+
+/// Live state of the shared point-defence slot. A mixed selection keeps its
+/// per-unit toggle behaviour: the button reports the mixture rather than
+/// claiming every unit is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PointDefenceState {
+    Off,
+    On,
+    Mixed,
+}
+
+/// Whether this selection can send the point-defence toggle, and what it shows.
+/// The sim initializes an absent energy row to the unit's authored pool before
+/// handling a special order, so use that same initial value here.
+fn point_defence_state(feed: &HudFeed, slot: u8) -> Option<(PointDefenceState, bool)> {
+    let db = feed.content.as_deref()?;
+    let mut on = 0;
+    let mut total = 0;
+    let mut ready = false;
+    for unit in feed.selected_units().into_iter().filter(|u| u.owner == feed.player) {
+        let def = db.unit(unit.def)?;
+        let (kind, weapon) = sta_sim::specials::specials_of(db, def).nth(slot as usize)?;
+        if kind != sta_sim::specials::SpecialKind::PointDefence { return None; }
+        let active = feed.view.point_defence_on(unit.id, slot);
+        on += usize::from(active);
+        total += 1;
+        let energy = unit.energy.map(|pool| pool[0])
+            .or_else(|| sta_sim::specials::energy_def(def).map(|pool| pool.max));
+        ready |= active || sta_sim::specials::point_defence_has_energy(db, weapon, energy);
+    }
+    if total == 0 { return None; }
+    let state = if on == 0 { PointDefenceState::Off }
+        else if on == total { PointDefenceState::On }
+        else { PointDefenceState::Mixed };
+    Some((state, ready))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -543,11 +579,22 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
     }
     for (i, (slot, kind)) in caps.specials.iter().enumerate() {
         if let Some(cell) = [5, 10, 11, 12, 13, 14].get(i) {
-            let (label, tip) = match kind {
-                sta_sim::specials::SpecialKind::PointDefence => (tr("Point defence"), tooltip_key("Toggle point defence")),
-                _ => (tr("Cloak"), tooltip_key("Toggle cloak")),
-            };
-            out.push(button(*cell, &label, Act::Special(*slot), &tip));
+            let act = Act::Special(*slot);
+            if *kind == sta_sim::specials::SpecialKind::PointDefence {
+                let Some((state, ready)) = point_defence_state(feed, *slot) else { continue };
+                let status = match state {
+                    PointDefenceState::Off => tr("Off"),
+                    PointDefenceState::On => tr("On"),
+                    PointDefenceState::Mixed => tr("Mixed"),
+                };
+                let label = trf("PD: {0}", &[&status]);
+                let tip = trf("Point defence: {0}", &[&status]);
+                let mut b = button(*cell, &label, act, &tip);
+                if !ready { b.look = Look::Locked; }
+                out.push(b);
+            } else {
+                out.push(button(*cell, &tr("Cloak"), act, &tooltip_key("Toggle cloak")));
+            }
         }
     }
     out.sort_by_key(|b| b.cell);
@@ -580,7 +627,9 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
             }),
             own,
         )),
-        Act::Special(slot) if caps.specials.iter().any(|s| s.0 == *slot) => Some((
+        Act::Special(slot) if caps.specials.iter().any(|s| s.0 == *slot
+            && (s.1 != sta_sim::specials::SpecialKind::PointDefence
+                || point_defence_state(feed, *slot).is_some_and(|(_, ready)| ready))) => Some((
             CommandKind::Order(Order::Special {
                 units: own.clone(),
                 slot: *slot,

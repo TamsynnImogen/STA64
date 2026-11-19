@@ -426,10 +426,14 @@ mod tests {
         features.point_defense_cycles = true;
         let mut build = ContentDb::builder().profile(fake.profile()).features(features);
         for w in fake.weapons() {
-            build = build.weapon(w.clone());
+            let mut w = w.clone();
+            if w.odf == "fx_pd" { w.energy_cost = Fixed::from_int(3); }
+            build = build.weapon(w);
         }
         for u in fake.units() {
-            build = build.unit(u.clone());
+            let mut u = u.clone();
+            if u.odf == "fx_station" { u.special_energy_max = Fixed::from_int(10); }
+            build = build.unit(u);
         }
         let db = Arc::new(build.build().unwrap());
         let station = UnitView {
@@ -437,11 +441,28 @@ mod tests {
             heading: (Fixed::ZERO, Fixed::ONE), speed: Fixed::ZERO, hull: [Fixed::ONE; 2], shields: [[Fixed::ZERO; 2]; 4],
             crew: None, energy: None, autonomy: None, flags: UnitFlags::SELECTABLE, progress: None,
         };
-        let feed = HudFeed { view: Arc::new(WorldView { units: vec![station], ..Default::default() }), player: PlayerId(1), selected: vec![EntityId(1)], content: Some(db), ..Default::default() };
+        let mut feed = HudFeed { view: Arc::new(WorldView { units: vec![station], ..Default::default() }), player: PlayerId(1), selected: vec![EntityId(1)], content: Some(db), ..Default::default() };
         let specials = shared(&feed).specials;
         let Some(&(slot, _)) = specials.iter().find(|(_, k)| *k == SpecialKind::PointDefence) else { panic!("{specials:?}") };
         let b = grid(&feed, Page::Top).into_iter().find(|b| b.act == Act::Special(slot)).expect("a point-defence button");
-        assert_eq!(b.label, "POINT DEFENCE");
+        assert_eq!(b.label, "PD: OFF");
+        assert_eq!(b.look, crate::ui::hud::model::Look::Ready); // absent pool starts at its authored cap
         assert!(matches!(command(&feed, &Act::Special(slot)), Some((CommandKind::Order(Order::Special { slot: s, .. }), _)) if s == slot));
+        Arc::make_mut(&mut feed.view).units[0].energy = Some([Fixed::ZERO, Fixed::from_int(10)]);
+        let b = grid(&feed, Page::Top).into_iter().find(|b| b.act == Act::Special(slot)).unwrap();
+        assert_eq!(b.look, crate::ui::hud::model::Look::Locked);
+        assert!(command(&feed, &Act::Special(slot)).is_none());
+        Arc::make_mut(&mut feed.view).active_point_defence = vec![(EntityId(1), slot)];
+        let b = grid(&feed, Page::Top).into_iter().find(|b| b.act == Act::Special(slot)).unwrap();
+        assert_eq!(b.label, "PD: ON");
+        assert_eq!(b.look, crate::ui::hud::model::Look::Ready);
+        assert!(command(&feed, &Act::Special(slot)).is_some()); // turning off needs no energy
+        let mut second = feed.view.units[0].clone();
+        second.id = EntityId(2);
+        Arc::make_mut(&mut feed.view).units.push(second);
+        feed.selected.push(EntityId(2));
+        let b = grid(&feed, Page::Top).into_iter().find(|b| b.act == Act::Special(slot)).unwrap();
+        assert_eq!(b.label, "PD: MIXED");
+        assert_eq!(b.look, crate::ui::hud::model::Look::Ready);
     }
 }
