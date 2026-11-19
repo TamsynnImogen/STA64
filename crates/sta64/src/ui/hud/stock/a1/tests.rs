@@ -55,10 +55,10 @@ cinematicCommButton = \"cine_comm\"
 cinematicMenuButton = \"cine_menu\"
 cinematicCommButtonArea = 12 12 50 16
 cinematicMenuButtonArea = 72 12 50 16
-speedPanelArea = 146 327 247 40
-speedSingleButtonArea = 15 4 32 32
-speedSeparatorArea = 15 4 8 33
-speedSingleButtonGap = 3
+speedPanelArea = 100 200 300 50
+speedSingleButtonArea = 10 6 24 20
+speedSeparatorArea = 10 6 6 30
+speedSingleButtonGap = 5
 speedSeparator = \"sep_sprite\"
 ";
 
@@ -392,7 +392,7 @@ fn without_the_action_view_resource_there_is_no_picture_node() {
     assert_eq!(app.world_mut().query_filtered::<(), With<ActionPicture>>().iter(app.world()).count(), 0);
 }
 
-// ---- the speed rail's TRANSPORT button (authored sheet; Armada I's family, not the install's numbers)
+// ---- the speed rail's TRANSPORT button (the sheet's rail numbers above are made up for the test, not any install's)
 
 use sta_content::Profile;
 use sta_sim::view::{UnitFlags, UnitView};
@@ -454,12 +454,12 @@ fn rail_app(f: HudFeed) -> App {
 #[test]
 fn the_rail_positions_come_from_the_sheet_keys() {
     let l = StockLayout::new(&layout_cfg(), Vec2::new(640.0, 480.0));
-    // Origin (146, 327); a button advances by its width and the gap (32 + 3), the separator by its own
-    // width and the gap (8 + 3); position 5 is the separator, position 6 transport.
-    assert_eq!(speed::rect(&l, 0), Some(R::new(161.0, 331.0, 32.0, 32.0)));
-    assert_eq!(speed::rect(&l, 4), Some(R::new(301.0, 331.0, 32.0, 32.0)));
-    assert_eq!(speed::rect(&l, 5), Some(R::new(336.0, 331.0, 8.0, 33.0)));
-    assert_eq!(speed::rect(&l, 6), Some(R::new(347.0, 331.0, 32.0, 32.0)));
+    // Origin (100, 200); a button advances by its width and the gap (24 + 5), the separator by its own
+    // width and the gap (6 + 5); position 5 is the separator, position 6 transport.
+    assert_eq!(speed::rect(&l, 0), Some(R::new(110.0, 206.0, 24.0, 20.0)));
+    assert_eq!(speed::rect(&l, 4), Some(R::new(226.0, 206.0, 24.0, 20.0)));
+    assert_eq!(speed::rect(&l, 5), Some(R::new(255.0, 206.0, 6.0, 30.0)));
+    assert_eq!(speed::rect(&l, 6), Some(R::new(266.0, 206.0, 24.0, 20.0)));
     assert_eq!(speed::rect(&l, 7), None);
     assert_eq!(speed::separator(&l).map(|(_, name)| name), Some("sep_sprite".to_owned()));
     // Inside the panel, and on 16:9 the same shape under the one factor.
@@ -467,7 +467,7 @@ fn the_rail_positions_come_from_the_sheet_keys() {
     let w = StockLayout::for_aspect(&layout_cfg(), 16.0 / 9.0);
     let (a, b) = (speed::rect(&w, 0).unwrap(), speed::rect(&w, 6).unwrap());
     assert_eq!(a.w, b.w);
-    assert!(((b.x - a.x) / w.scale - 186.0).abs() < 1.5, "five buttons and the separator, each with the gap: {} {}", a.x, b.x);
+    assert!(((b.x - a.x) / w.scale - 156.0).abs() < 1.5, "five buttons and the separator, each with the gap: {} {}", a.x, b.x);
 }
 
 #[test]

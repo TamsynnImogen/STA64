@@ -14,7 +14,7 @@
 //! Self-Destruct (their sim orders or the HUD's target pick are later work; TODO lines in the
 //! PR). A station shows none of the Orders-page commands, locked or not: which of them the stock
 //! HUD shows for a station is not measured (TODO line). Not drawn: Transport Special, Upgrade and
-//! Research Upgrade (later). Transport is not a slot here (`BUTTON_LOCATION_TRANSPORT` is -1): it
+//! Research Upgrade (later). Transport has no control-grid slot where the install's command data gives it none; it
 //! sits on the speed rail ([`super::speed`]), whose buttons the same grid carries (cells from
 //! `speed::RAIL_BASE`).
 

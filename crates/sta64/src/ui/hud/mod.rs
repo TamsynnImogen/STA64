@@ -710,7 +710,6 @@ fn target_mode_available(feed: &HudFeed, mode: TargetMode) -> bool {
     }
 }
 
-/// Resolve a grid target against the current view, after capability and ownership checks.
 /// For the headless mission run: the Armada I rail's transport button for `feed`'s selection (its look,
 /// `None` without the button) and the orders its pick sends on a click at `target`.
 #[cfg(test)]
@@ -719,6 +718,7 @@ pub(crate) fn a1_rail_transport(feed: &HudFeed, target: EntityId) -> (Option<mod
     (look, target_order(feed, TargetMode::Transport, Some(target), None).map(|(orders, _)| orders))
 }
 
+/// Resolve a grid target against the current view, after capability and ownership checks.
 fn target_order(
     feed: &HudFeed,
     mode: TargetMode,

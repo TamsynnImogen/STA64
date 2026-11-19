@@ -267,7 +267,7 @@ fn install_gated_a1_fed3_transport_through_the_rail_button_flow_and_the_mission_
     }
     pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
     eprintln!("range {range}, candidate pairs (distance, carrier, target): {:?}", &pairs[..pairs.len().min(8)]);
-    let (d, c, t) = pairs.iter().copied().find(|&(_, c, t)| {
+    let (d, c, t) = pairs.iter().copied().filter(|p| p.0 <= range).find(|&(_, c, t)| {
         let carrier = view.unit(c).unwrap();
         let (look, orders) = a1_rail_transport(&feed_for(carrier), t);
         look == Some(Look::Ready) && orders.is_some()
@@ -287,9 +287,8 @@ fn install_gated_a1_fed3_transport_through_the_rail_button_flow_and_the_mission_
     let after_view = run.app.world().resource::<SimLink>().real_curr().clone();
     let after = (crew(after_view.unit(c).unwrap()).unwrap().0, crew(after_view.unit(t).unwrap()).unwrap().0);
     eprintln!("ticks {} -> {}, distance {d}, carrier/target crew {before:?} -> {after:?}", tick0, run.app.world().resource::<SimLink>().curr().tick);
-    if d <= range {
-        assert!(after.0 < before.0 && after.1 > before.1, "the carrier's crew moved to the target: {before:?} -> {after:?}");
-    }
+    assert!(d <= range, "no ready pair within the data's range ({d} > {range}); the run cannot prove crew moved");
+    assert!(after.0 < before.0 && after.1 > before.1, "the carrier's crew moved to the target: {before:?} -> {after:?}");
     let w = run.app.world();
     assert!(w.resource::<MissionRun>().outcome.is_none(), "the mission goes on");
     assert!(!w.resource::<crate::ui::presentation::ObjectivesView>().items.is_empty(), "the objectives are still issued");

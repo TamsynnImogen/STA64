@@ -1,6 +1,6 @@
-//! The Armada I speed rail's TRANSPORT button (UI-40 follow-up): Armada I does not put the transport
-//! command on the control panel (`BUTTON_LOCATION_TRANSPORT` is -1) but on the speed rail above the
-//! ship display.
+//! The Armada I speed rail's TRANSPORT button (UI-40 follow-up). STA64's rule: no control-grid slot
+//! where the install's command data gives the command none; on the Armada I HUD the transport command
+//! sits on the speed rail above the ship display.
 //!
 //! Rules and their grade (read from the executable, static, and from the install's cfg and manual):
 //! - The rail has seven positions, left to right, in the sheet's `speedSingleButtonArea` rectangle
