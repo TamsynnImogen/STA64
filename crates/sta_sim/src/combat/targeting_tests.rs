@@ -377,3 +377,35 @@ fn a_player_attack_order_is_refused_for_a_class_that_may_not_attack_scripts_keep
     WorldSource::step(&mut sim, &[at(PlayerId::BENCH, 1)]);
     assert_eq!(sim.weapons.attack_of(c), Some(e));
 }
+
+fn colonising_def() -> sta_content::WeaponDef {
+    let mut pod = sta_content::WeaponDef::new("st_pod", "colonizerpod", sta_content::WeaponKind::Projectile);
+    pod.range = Fixed::from_int(400);
+    pod.damage = Fixed::ONE;
+    pod.refire = 30;
+    pod.shot_speed = Fixed::from_int(100);
+    pod.colonize = Some(sta_content::ColonizePodDef { party_size: Fixed::from_int(100), orbit_range: Fixed::from_int(150) });
+    pod
+}
+
+#[test]
+fn a_craft_with_only_a_colonising_weapon_does_not_fight() {
+    let only_pod = |u: &mut UnitDef| u.hardpoints[0].weapon = sta_content::DefRef::new("st_pod");
+    let p = Profile::Sta2Classic;
+    // Hit while idle: stays, takes no assist.
+    let (engaged, moved) = answers_fire(variant_db(p, vec![colonising_def()], only_pod));
+    assert!(!engaged && moved < Fixed::ONE, "{engaged} {moved:?}");
+    // Never fires, and a player's attack order is refused.
+    let mut sim = approach_tests::sim(variant_db(p, vec![colonising_def()], only_pod));
+    let db = Arc::clone(sim.content.as_ref().unwrap());
+    let c = sim.spawn_def(db.key("st_variant").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
+    let e = sim.spawn_def(db.key("st_target").unwrap(), PlayerId(2), v(0, 200), AHEAD).unwrap();
+    let at = Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Attack { units: vec![c], target: e }) };
+    let mut shots = 0;
+    for i in 0..30 * 20 {
+        let cmds = if i == 0 { vec![at.clone()] } else { Vec::new() };
+        shots += WorldSource::step(&mut sim, &cmds).events.iter().filter(|ev| matches!(ev, SimEvent::Fired { shooter, .. } if *shooter == c)).count();
+    }
+    assert_eq!(shots, 0);
+    assert_eq!(sim.weapons.attack_of(c), None);
+}

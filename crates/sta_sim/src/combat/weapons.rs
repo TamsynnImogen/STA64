@@ -82,12 +82,14 @@ pub fn facing(heading: (Fixed, Fixed), at: Vec3, from: Vec3) -> u8 {
 
 /// Does this weapon attack units? Not point defence or a special, and not a
 /// tool: a mining beam or a tractor beam (ordnance classes `minebm`,
-/// `tractor_bm`). Measured on stock A2 and Roots + STA2 Classic: a
+/// `tractor_bm`), nor a colonising weapon (ordnance class `colonizerpod`, the
+/// definition's `colonize`), which only the colonise order uses (stated by a
+/// player: interim). Measured on stock A2 and Roots + STA2 Classic: a
 /// freighter and a construction ship neither vote nor take part in an attack
 /// order (the engine's own "can attack" test was not read).
 pub fn attacks_units(w: &sta_content::WeaponDef) -> bool {
     let tool = matches!(w.class.0.as_str(), "minebm" | "tractor_bm");
-    w.kind != WeaponKind::PointDefence && !crate::specials::is_special(w) && !tool
+    w.kind != WeaponKind::PointDefence && !crate::specials::is_special(w) && !tool && w.colonize.is_none()
 }
 
 /// Does `id` take an `Attack` order on `target` from `player` (any unit, for
