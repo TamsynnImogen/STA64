@@ -72,7 +72,6 @@ impl Action {
         Action::Group(7),
         Action::Group(8),
         Action::Stop,
-        Action::PointDefence,
         Action::Formation(FORM_LINE),
         Action::Formation(FORM_COLUMN),
         Action::Formation(FORM_WEDGE),
@@ -83,6 +82,7 @@ impl Action {
         Action::RevealShroud,
         Action::PauseGame,
         Action::SelectNextShip,
+        Action::PointDefence,
     ];
 
     pub fn name(self) -> String {
