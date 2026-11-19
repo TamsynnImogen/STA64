@@ -364,9 +364,10 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             );
         }
     }
+    // The persistent menu and objectives buttons are outside the command palette.
     let commands = app
         .world_mut()
-        .query::<(&GuiButton, &ImageNode)>()
+        .query_filtered::<(&GuiButton, &ImageNode), With<super::super::GridCell>>()
         .iter(app.world())
         .count();
     if matches!(hover_mode, HoverCapture::ColonyShip) {
