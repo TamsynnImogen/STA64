@@ -18,6 +18,18 @@
 //! ([`VERTICAL_SCALE`]). Stock also scales the distance by the object's radius for
 //! some classes; that is not done here.
 //!
+//! Two more limits belong to the view, and one script can move each:
+//!
+//! | value | where it comes from | applies |
+//! |---|---|---|
+//! | object culling distance | `cfgOBJECT_CULLING_DISTANCE`; Armada II's `SetObjectCullingDistance` replaces it and `RestoreObjectCullingDistance` puts the `ART_CFG.h` value back | in every view (read from the executable, static), not only in a cineractive; Armada I has neither key nor calls |
+//! | cineractive far plane | compiled into the executable ([`CINERACTIVE_FAR_A2`], Armada I [`CINERACTIVE_FAR_A1`]); Armada II's `SetClippingDistance` replaces it | while a cineractive runs (read from the executable, static) |
+//!
+//! `ART_CFG.h` also has a key `CINERACTIVE_FAR_CLIPPING_PLANE`; no executable reads it (static), so
+//! it has no effect and STA64 does not read it either. The script calls reach the client as
+//! presentation events ([`ScriptView`]); they are not simulation state, so no hash, snapshot or
+//! replay holds them.
+//!
 //! What STA64 does with it: [`CullParams::fade`] is 1 inside the band, falls to 0 at
 //! the culling distance and the strategic handoff ([`super::lod_switch`]) takes the
 //! object from its model to its symbol there instead of letting it vanish, and
@@ -50,6 +62,19 @@ pub const VERTICAL_SCALE: f32 = 0.25;
 /// `DETAIL_n_LOD_0..3_DISTANCE` of every shipped file.
 pub const DEFAULT_LOD: [f32; 4] = [1000.0, 500.0, 300.0, 100.0];
 
+/// The far plane of a cineractive in Armada II and the Fleet Operations family: a constant of the
+/// executable, which no `ART_CFG.h` key sets (read from the executable, static; the file's
+/// `CINERACTIVE_FAR_CLIPPING_PLANE` is not read).
+pub const CINERACTIVE_FAR_A2: f32 = 20000.0;
+/// The same for Armada I (read from the executable, static; same units as its `FAR_CLIPPING_PLANE`).
+pub const CINERACTIVE_FAR_A1: f32 = 1000.0;
+/// STA64's own presentation value, not game data: in normal play a model turns into its map
+/// symbol at this multiple of the culling distance (the originals draw nothing there). Was 1.0.
+/// The distance is the engine's (euclidean, the vertical scaled by a quarter), so a point at
+/// the edge of a wide view is farther than one at the centre at the same depth; the multiple
+/// moves both a little later.
+pub const SYMBOL_DISTANCE_FACTOR: f32 = 1.25;
+
 /// The distances in force.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct CullParams {
@@ -61,11 +86,16 @@ pub struct CullParams {
     pub near: f32,
     /// Camera distance inside which the next, finer LOD shows.
     pub lod: [f32; 4],
+    /// The file states an object culling distance (Armada II family). Armada I does not and
+    /// culls no object by distance.
+    pub object_culling: bool,
+    /// The far plane while a cineractive runs (the executable's constant; a script call moves it).
+    pub cineractive_far: f32,
 }
 
 impl Default for CullParams {
     fn default() -> Self {
-        CullParams { cull: DEFAULT_CULL, fade_from: FADE_FROM, far: DEFAULT_FAR, near: DEFAULT_NEAR, lod: DEFAULT_LOD }
+        CullParams { cull: DEFAULT_CULL, fade_from: FADE_FROM, far: DEFAULT_FAR, near: DEFAULT_NEAR, lod: DEFAULT_LOD, object_culling: true, cineractive_far: CINERACTIVE_FAR_A2 }
     }
 }
 
@@ -91,7 +121,29 @@ impl CullParams {
         let far = pos("FAR_CLIPPING_PLANE", d.far);
         // No culling key (Armada I): nothing is drawn past the far plane either.
         let cull = pos("cfgOBJECT_CULLING_DISTANCE", d.cull.min(far));
-        CullParams { cull, fade_from: d.fade_from, far, near: pos("NEAR_CLIPPING_PLANE", d.near), lod }
+        let object_culling = c.f32("cfgOBJECT_CULLING_DISTANCE").is_some_and(|x| x > 0.0);
+        let cineractive_far = if object_culling { CINERACTIVE_FAR_A2 } else { CINERACTIVE_FAR_A1 };
+        CullParams { cull, fade_from: d.fade_from, far, near: pos("NEAR_CLIPPING_PLANE", d.near), lod, object_culling, cineractive_far }
+    }
+
+    /// These limits with a script's changes applied.
+    pub fn with_script(&self, script: &ScriptView) -> CullParams {
+        CullParams { cull: script.cull.unwrap_or(self.cull), cineractive_far: script.far.unwrap_or(self.cineractive_far), ..*self }
+    }
+
+    /// The distances for the model-to-symbol handoff of normal play: the culling distance
+    /// scaled by [`SYMBOL_DISTANCE_FACTOR`], the fade band moving with it.
+    pub fn for_symbols(&self) -> CullParams {
+        CullParams { cull: self.cull * SYMBOL_DISTANCE_FACTOR, ..*self }
+    }
+
+    /// Whether a cineractive draws no model of this object: it lies wholly past the cineractive
+    /// far plane (`depth` along the view minus `radius`; the sphere test is Refit's reading of the
+    /// engine, not measured for the exact measure), or, where the game culls by distance, past
+    /// the culling distance. The fade before it (0.9 of the distance onwards) is not drawn: the
+    /// model is whole until it goes.
+    pub fn cineractive_hides(&self, distance: f32, depth: f32, radius: f32) -> bool {
+        depth - radius > self.cineractive_far || (self.object_culling && self.fade(distance) <= 0.0)
     }
 
     /// The engine's distance of an object from the camera, for culling.
@@ -117,6 +169,46 @@ impl CullParams {
     /// levels shows `min(index, levels - 1)` (`a2fmt::sod::Sod::lod_levels`).
     pub fn lod_index(&self, distance: f32) -> usize {
         self.lod.iter().filter(|&&l| distance < l).count()
+    }
+}
+
+/// What the mission scripts of Armada II set for the view: the object culling distance
+/// (`SetObjectCullingDistance`, back to the file's with `RestoreObjectCullingDistance`) and the
+/// cineractive far plane (`SetClippingDistance`). Presentation state of the client, read from the
+/// events the scripts raise; nothing of it is in the simulation, a snapshot or a replay. It is
+/// cleared when a mission starts, ends or restarts in place; a save does not hold it, so a
+/// mission loaded from a save has the file's distance until its script sets one again.
+#[derive(Resource, Default, Clone, Copy, PartialEq, Debug)]
+pub struct ScriptView {
+    pub cull: Option<f32>,
+    pub far: Option<f32>,
+}
+
+impl ScriptView {
+    /// Takes a presentation call by its name and arguments; false when it is not one of the three.
+    /// A value that is not a positive number is ignored, as the file's keys are.
+    pub fn apply(&mut self, name: &str, value: Option<f32>) -> bool {
+        let positive = value.filter(|v| v.is_finite() && *v > 0.0);
+        match name {
+            "A2.SetObjectCullingDistance" => self.cull = positive.or(self.cull),
+            "A2.RestoreObjectCullingDistance" => self.cull = None,
+            "A2.SetClippingDistance" => self.far = positive.or(self.far),
+            _ => return false,
+        }
+        true
+    }
+}
+
+/// The limits in force with a script's changes, for a system with many parameters.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct ViewLimits<'w> {
+    file: Res<'w, CullParams>,
+    script: Res<'w, ScriptView>,
+}
+
+impl ViewLimits<'_> {
+    pub fn get(&self) -> CullParams {
+        self.file.with_script(&self.script)
     }
 }
 
@@ -148,10 +240,18 @@ pub struct CullPlugin;
 impl Plugin for CullPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CullParams>()
+            .init_resource::<ScriptView>()
             .init_resource::<CullStats>()
             .init_resource::<RenderMarks>()
+            .add_systems(OnEnter(crate::app::AppState::Loading), forget_script_view)
+            .add_systems(OnExit(crate::app::AppState::InGame), forget_script_view)
             .add_systems(Update, (load.run_if(resource_exists_and_changed::<Mounted>), mark_view.run_if(resource_changed::<CullParams>), mark_counts));
     }
+}
+
+/// A mission's script settings end with it.
+fn forget_script_view(mut view: ResMut<ScriptView>) {
+    *view = ScriptView::default();
 }
 
 /// The mounted files' `ART_CFG.h` (the same read `map` and `space` make).
@@ -250,6 +350,74 @@ mod tests {
         let p = CullParams::default();
         let at = |d| p.lod_index(d);
         assert_eq!([at(2000.0), at(900.0), at(400.0), at(200.0), at(50.0)], [0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn the_games_view_limits_come_from_the_file_and_the_executable() {
+        let a2 = CullParams::from_cfg(Some(&CfgH::parse("float cfgOBJECT_CULLING_DISTANCE = 2800.0;\nfloat CINERACTIVE_FAR_CLIPPING_PLANE = 7000.0;\n")));
+        assert!(a2.object_culling);
+        assert_eq!(a2.cineractive_far, CINERACTIVE_FAR_A2, "the file's key of that name is not read");
+        let a1 = CullParams::from_cfg(Some(&CfgH::parse("float FAR_CLIPPING_PLANE = 1400.0;\nfloat CINERACTIVE_FAR_CLIPPING_PLANE = 900.0;\n")));
+        assert!(!a1.object_culling);
+        assert_eq!(a1.cineractive_far, CINERACTIVE_FAR_A1);
+    }
+
+    #[test]
+    fn script_calls_replace_the_culling_distance_and_the_cineractive_far_plane() {
+        let mut v = ScriptView::default();
+        let p = CullParams::default();
+        assert_eq!(p.with_script(&v), p);
+        assert!(v.apply("A2.SetObjectCullingDistance", Some(1500.0)));
+        assert!(v.apply("A2.SetClippingDistance", Some(4000.0)));
+        assert!(!v.apply("A2.MuteSounds", Some(1.0)));
+        let s = p.with_script(&v);
+        assert_eq!((s.cull, s.cineractive_far, s.far), (1500.0, 4000.0, p.far));
+        assert!(v.apply("A2.RestoreObjectCullingDistance", None));
+        assert_eq!(p.with_script(&v).cull, p.cull);
+        assert_eq!(p.with_script(&v).cineractive_far, 4000.0);
+    }
+
+    #[test]
+    fn a_cineractive_hides_past_the_far_plane_and_where_the_game_culls_past_the_distance() {
+        let a2 = CullParams::default();
+        // Inside both: whole, even in the fade band (the fade is not drawn).
+        assert!(!a2.cineractive_hides(2700.0, 100.0, 10.0));
+        assert!(a2.cineractive_hides(2800.0, 100.0, 10.0));
+        // Past the far plane by its whole sphere only.
+        assert!(!a2.cineractive_hides(100.0, 20005.0, 10.0));
+        assert!(a2.cineractive_hides(100.0, 20011.0, 10.0));
+        // Armada I culls no object by distance: only its far plane.
+        let a1 = CullParams { object_culling: false, cineractive_far: CINERACTIVE_FAR_A1, ..a2 };
+        assert!(!a1.cineractive_hides(1.0e6, 900.0, 10.0));
+        assert!(a1.cineractive_hides(500.0, 1011.0, 10.0));
+        // The symbol handoff of normal play comes later than the culling distance.
+        let sym = a2.for_symbols();
+        assert_eq!(sym.cull, a2.cull * SYMBOL_DISTANCE_FACTOR);
+        assert_eq!(sym.fade(a2.cull), 1.0);
+        assert_eq!(sym.fade(sym.cull), 0.0);
+    }
+
+    /// The match's end and the next match's loading drop what a script set.
+    #[test]
+    fn script_settings_end_with_the_mission() {
+        let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin).init_state::<crate::app::AppState>().add_plugins(CullPlugin);
+        app.update();
+        let set = |app: &mut App| *app.world_mut().resource_mut::<ScriptView>() = ScriptView { cull: Some(1000.0), far: Some(2000.0) };
+        for to in [crate::app::AppState::InGame, crate::app::AppState::FrontEnd] {
+            set(&mut app);
+            app.world_mut().resource_mut::<NextState<crate::app::AppState>>().set(to);
+            app.update();
+            app.update();
+            if to == crate::app::AppState::FrontEnd {
+                assert_eq!(*app.world().resource::<ScriptView>(), ScriptView::default(), "leaving the match");
+            }
+        }
+        set(&mut app);
+        app.world_mut().resource_mut::<NextState<crate::app::AppState>>().set(crate::app::AppState::Loading);
+        app.update();
+        app.update();
+        assert_eq!(*app.world().resource::<ScriptView>(), ScriptView::default(), "loading a mission");
     }
 
     #[test]
