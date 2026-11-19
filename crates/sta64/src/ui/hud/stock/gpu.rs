@@ -68,7 +68,9 @@ fn feed(vfs: &sta_vfs::Vfs, options: GameOptions, group: usize) -> HudFeed {
         sim.step(&commands);
     }
     let view = sim.view();
-    let selected = view.units.iter().find(|u| u.owner == PlayerId(0)).expect("authored start unit").id;
+    let selected = view.units.iter().find(|u| {
+        u.owner == PlayerId(0) && u.flags.contains(sta_sim::view::UnitFlags::SELECTABLE)
+    }).expect("selectable authored start unit").id;
     HudFeed { view, player: PlayerId(0), selected: vec![selected], content: Some(db), ..Default::default() }
 }
 
@@ -85,7 +87,7 @@ fn resolved_pieces(app: &mut App, pieces: &[super::layout::Piece]) -> usize {
 }
 
 #[derive(Clone, Copy)]
-enum HoverCapture { Selected, Low, Other, BuildPage, ColonyShip, Group(usize) }
+enum HoverCapture { Selected, SelectedHover, Low, Other, BuildPage, ColonyShip, Group(usize) }
 
 /// Independent installed-data expectation: current crew is compared with its
 /// actual live capacity, not crewCost. Resolve authored palette/thresholds.
@@ -130,6 +132,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     let original = hud_feed.selected[0];
     let hover = match hover_mode {
         HoverCapture::Selected | HoverCapture::BuildPage => None,
+        HoverCapture::SelectedHover => Some(original),
         HoverCapture::Group(count) => {
             hud_feed.selected = hud_feed.view.units.iter().rev().filter(|u| u.owner == hud_feed.player
                 && hud_feed.content.as_ref().unwrap().unit(u.def).is_some_and(|d| d.class.0 == "constructionrig"))
@@ -165,21 +168,32 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         assert_eq!(unit.crew, Some([Fixed::from_int(150), Fixed::from_int(1500)]));
         assert_eq!(crew_tint, Some(Color::srgb(1.0, 0.0, 0.0)), "Classic starbase at10percent must be red");
     }
-    let mut expected_bar = Vec::new();
     let percent = |now: i128, max: i128| (max > 0).then(|| (now * 200 + max).div_euclid(max * 2).to_string());
     let whole = |value: Fixed| { let bits=value.to_bits(); if bits>0 { (bits/Fixed::ONE.to_bits()).max(1) } else { bits/Fixed::ONE.to_bits() } };
-    if let Some(unit) = source {
+    let expected_bar = {
         use super::infobar::InfoBarField::{Name,Hull,Shields,Crew,Energy};
-        let shield = unit.shields.iter().fold([0_i128;2], |[n,m],s| [n+i128::from(s[0].to_bits()),m+i128::from(s[1].to_bits())]);
-        expected_bar = vec![
-            (Name,"shipName",Some(if hover.is_some() {hud_feed.unit_label(unit)} else {hud_feed.name(unit)})),
-            (Hull,"hull",percent(i128::from(unit.hull[0].to_bits()),i128::from(unit.hull[1].to_bits()))),
-            (Shields,"shields",percent(shield[0],shield[1])),
-            (Crew,"crew_amt",unit.crew.map(|v| whole(v[0]).to_string())),
-            (Energy,"energy_amt",unit.energy.and_then(|v| percent(i128::from(v[0].to_bits()),i128::from(v[1].to_bits())))),
+        // The InfoBar is driven by hover. Selection alone fills the separate info panel.
+        let hovered = hover.map(|id| hud_feed.view.unit(id).expect("hovered fixture unit"));
+        let expected = hovered.map(|unit| {
+            let shield = unit.shields.iter().fold([0_i128;2], |[n,m],s| [n+i128::from(s[0].to_bits()),m+i128::from(s[1].to_bits())]);
+            [
+                Some(hud_feed.unit_label(unit)),
+                percent(i128::from(unit.hull[0].to_bits()),i128::from(unit.hull[1].to_bits())),
+                percent(shield[0],shield[1]),
+                unit.crew.map(|v| whole(v[0]).to_string()),
+                unit.energy.and_then(|v| percent(i128::from(v[0].to_bits()),i128::from(v[1].to_bits()))),
+            ]
+        });
+        let fields = [
+            (Name,"shipName"), (Hull,"hull"), (Shields,"shields"),
+            (Crew,"crew_amt"), (Energy,"energy_amt"),
         ];
-    }
+        fields.into_iter().zip(expected.unwrap_or_default())
+            .map(|((field, key), value)| (field, key, value))
+            .collect::<Vec<_>>()
+    };
     let bar_variant = super::layout::info_variant(&super::super::model::info(&hud_feed));
+    let has_info_bar = stock.info_area(bar_variant).is_some();
     let info = stock.pieces(match bar_variant {
         0 => "infoLowBackgroundPanel",
         1 => "infoMiddleBackgroundPanel",
@@ -354,9 +368,10 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             );
         }
     }
+    // The persistent menu and objectives buttons are outside the command palette.
     let commands = app
         .world_mut()
-        .query::<(&GuiButton, &ImageNode)>()
+        .query_filtered::<(&GuiButton, &ImageNode), With<super::super::GridCell>>()
         .iter(app.world())
         .count();
     if matches!(hover_mode, HoverCapture::ColonyShip) {
@@ -411,11 +426,11 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         let actual = app.world_mut().query::<(&super::infobar::InfoBarField,&crate::ui::sprite_font::SpriteText,&Visibility,Option<&Children>)>()
             .iter(app.world()).find(|(kind,_,_,_)| **kind==*field)
             .map(|(_,text,visibility,children)| (text.text.clone(),text.color,*visibility,children.map(|c| c.iter().collect::<Vec<_>>()).unwrap_or_default()));
-        if stock.rect(key).is_none() {
+        if !has_info_bar || stock.rect(key).is_none() {
             assert!(actual.is_none(),"{label}: disabled InfoBar {key}");
             continue;
         }
-        let (text,colour,visibility,children)=actual.expect("authored InfoBar text slot");
+        let (text,colour,visibility,children)=actual.unwrap_or_else(|| panic!("{label}: authored InfoBar text slot {key}"));
         assert_eq!(text,expected.clone().unwrap_or_default(),"{label}: hovered InfoBar {key}");
         assert_eq!(visibility,if expected.is_some() {Visibility::Inherited} else {Visibility::Hidden});
         if expected.is_some() {
@@ -462,7 +477,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         .unwrap_or_else(|| panic!("{label}: no GPU capture"));
     let dynamic = shot.try_into_dynamic().expect("GPU image conversion");
     let rgba = dynamic.to_rgba8();
-    if crew_tint == Some(Color::srgb(1.0, 0.0, 0.0)) {
+    if has_info_bar && hover.is_some() && crew_tint == Some(Color::srgb(1.0, 0.0, 0.0)) {
         let origin=stock.info_origin(bar_variant)+stock.point(&format!("infoBarOffset_{bar_variant}")).unwrap_or(Vec2::ZERO);
         let scale=size.y as f32/1080.0;
         for key in ["crew_amt", "icon_crew_amt"] {
@@ -511,7 +526,10 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             eprintln!("{label}: resource_{id} colour-matched text pixels={matching}");
         }
     }
-    if !matches!(hover_mode, HoverCapture::Group(_)) && stock.colour("hull_color").is_none() && stock.colour("systemIconHealthyColor").is_none() {
+    let shows_hull = expected_bar.iter().any(|(field, _, value)| {
+        *field == super::infobar::InfoBarField::Hull && value.is_some()
+    });
+    if has_info_bar && shows_hull && stock.colour("hull_color").is_none() && stock.colour("systemIconHealthyColor").is_none() {
         let origin=stock.info_origin(bar_variant)+stock.point(&format!("infoBarOffset_{bar_variant}")).unwrap_or(Vec2::ZERO);
         if let Some(rect)=stock.at(origin,"icon_hull") {
             let scale=size.y as f32/1080.0;
@@ -600,6 +618,12 @@ fn installed_stock_hud_renders_on_gpu() {
             let vfs=sta_vfs::Vfs::mount_install(std::path::Path::new(&install),active_mod.as_deref()).unwrap();
             capture_one(vfs,profile,UVec2::new(1280,720),"gui_fed.cfg",label,GameOptions::default(),mode);
         }
+    } else {
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();
+        capture_one(
+            vfs, profile, UVec2::new(1280, 720), "gui_federation16x9.cfg",
+            "fo4-hover-selected-16x9", GameOptions::default(), HoverCapture::SelectedHover,
+        );
     }
 }
 
