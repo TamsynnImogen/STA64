@@ -107,6 +107,35 @@ class TodoTests(unittest.TestCase):
         self.assertEqual((self.root / "TODO.md").read_text(encoding="utf-8"), TODO)
         self.assertTrue((self.root / "todo.d" / "fix-a.md").exists())
 
+    def test_crlf_no_trailing_newline_and_empty_fragment(self):
+        (self.root / "todo.d" / "fix-a.md").write_bytes(b"## Later\r\n- [ ] crlf item")
+        self.frag("fix-b.md", "\n\n")
+        self.assertEqual(self.run_main("fold")[0], 0)
+        text = (self.root / "TODO.md").read_text(encoding="utf-8")
+        self.assertTrue(text.endswith("- [x] done item\n- [ ] crlf item\n"))
+        self.assertNotIn("\r", text)
+        self.assertEqual(sorted(p.name for p in (self.root / "todo.d").iterdir()), ["README.md"])
+
+    def test_second_fold_changes_nothing(self):
+        self.frag("fix-a.md", "- [?] a\n")
+        self.assertEqual(self.run_main("fold")[0], 0)
+        once = (self.root / "TODO.md").read_text(encoding="utf-8")
+        self.assertEqual(self.run_main("fold")[0], 0)
+        self.assertEqual((self.root / "TODO.md").read_text(encoding="utf-8"), once)
+
+    def test_check_flags_files_without_md_extension(self):
+        self.frag("fix-a.txt", "- [ ] x\n")
+        code, _, err = self.run_main("check")
+        self.assertEqual(code, 1)
+        self.assertIn("todo.d/fix-a.txt: not a .md file", err)
+
+    def test_non_utf8_fragment_is_a_message_not_a_traceback(self):
+        (self.root / "todo.d" / "fix-a.md").write_bytes(b"- [ ] \xff\n")
+        with self.assertRaises(SystemExit) as ctx:
+            self.run_main("check")
+        self.assertIn("not UTF-8", str(ctx.exception.code))
+        self.assertEqual((self.root / "TODO.md").read_text(encoding="utf-8"), TODO)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -117,4 +117,5 @@ STA64_TEST_A1_INSTALL="/path/to/Star Trek Armada" cargo test -p sta64 --lib map:
 
 The installed tests require their environment explicitly and remain ignored in
 ordinary CI. Synthetic coverage uses only generated data and owned temporary
-directories. Manual front-end/skirmish checks are appended to `TODO.md`.
+directories. Manual front-end/skirmish checks go in the check list (`TODO.md`, or a
+`todo.d/` fragment for new lines).

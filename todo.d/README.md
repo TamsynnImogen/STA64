@@ -6,7 +6,11 @@ lines, so a merge to `main` no longer puts every other open PR in conflict.
 
 - **Name:** the branch name with `/` turned into `-`, plus `.md`
   (`fix/mining-sound` -> `todo.d/fix-mining-sound.md`). Known before the PR
-  exists and unique per branch.
+  exists and unique per branch. Should two branch names map to the same
+  file (`fix/a-b` and `fix-a/b`, or names differing only in case, which
+  collide on macOS and Windows), the second PR adds a suffix (`-2`). A
+  second PR from a reused branch name adds to that branch's fragment if it
+  is still there, or creates it again if a fold deleted it.
 - **Content:** exactly `TODO.md`'s format. Headings are copied from `TODO.md`
   (`## Later`, `### Follow-ups from ...`); lines before the first heading
   belong to `## Needs your check`. Each section starts with a check line.

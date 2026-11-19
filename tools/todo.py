@@ -32,7 +32,7 @@ def fragments(root):
     d = root / FRAGMENT_DIR
     if not d.is_dir():
         return []
-    return sorted(p for p in d.glob("*.md") if p.name not in RESERVED)
+    return sorted(p for p in d.glob("*.md") if p.name not in RESERVED and p.is_file())
 
 
 def parse_fragment(text):
@@ -57,13 +57,25 @@ def parse_fragment(text):
     return out
 
 
+def read(path):
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        raise SystemExit(f"{path}: not UTF-8 ({e})")
+
+
 def problems(root):
-    todo = (root / "TODO.md").read_text(encoding="utf-8").splitlines()
+    todo = read(root / "TODO.md").splitlines()
     headings = {line.rstrip() for line in todo if is_heading(line)}
     found = []
+    d = root / FRAGMENT_DIR
+    if d.is_dir():
+        for other in sorted(d.iterdir()):
+            if other.name not in RESERVED and (other.suffix != ".md" or not other.is_file()):
+                found.append(f"{other.relative_to(root)}: not a .md file, never listed or folded")
     for frag in fragments(root):
         rel = frag.relative_to(root)
-        for heading, body in parse_fragment(frag.read_text(encoding="utf-8")):
+        for heading, body in parse_fragment(read(frag)):
             if heading not in headings:
                 found.append(f"{rel}: heading not in TODO.md: {heading!r}")
             if body and not CHECK.match(body[0]):
@@ -75,7 +87,7 @@ def cmd_list(root, show_all, pattern):
     rx = re.compile(pattern, re.IGNORECASE) if pattern else None
     for path in [root / "TODO.md"] + fragments(root):
         rel = path.relative_to(root)
-        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        for n, line in enumerate(read(path).splitlines(), 1):
             m = CHECK.match(line)
             if not m or (not show_all and m.group(1) not in OPEN_MARKS):
                 continue
@@ -104,10 +116,10 @@ def cmd_fold(root, dry_run):
         print("fold: nothing changed", file=sys.stderr)
         return 1
     todo_path = root / "TODO.md"
-    lines = todo_path.read_text(encoding="utf-8").splitlines()
+    lines = read(todo_path).splitlines()
     frags = fragments(root)
     for frag in frags:
-        for heading, body in parse_fragment(frag.read_text(encoding="utf-8")):
+        for heading, body in parse_fragment(read(frag)):
             end = section_end(lines, heading)
             lines[end:end] = body
             print(f"{frag.relative_to(root)}: {len(body)} line(s) -> {heading}")
