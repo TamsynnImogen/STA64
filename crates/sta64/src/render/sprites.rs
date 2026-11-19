@@ -83,7 +83,7 @@ pub struct SpritePrivate(pub Handle<StandardMaterial>);
 
 /// What decides a sprite node's material content, so equal nodes can share one material.
 #[derive(Hash, PartialEq, Eq)]
-struct ShareKey {
+pub struct ShareKey {
     texture: Option<AssetId<Image>>,
     alpha: (u8, u32),
     sprite: String,
