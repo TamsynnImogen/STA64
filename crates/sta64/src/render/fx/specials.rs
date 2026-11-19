@@ -1118,6 +1118,7 @@ fn attach_bee_models(
             model_key: path,
             unlit: false,
             scale: 1.0,
+            diffuse_tint: false,
         };
         model_scene::spawn(&mut ctx, &model, e);
     }

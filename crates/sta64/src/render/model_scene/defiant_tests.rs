@@ -120,6 +120,7 @@ fn classic_defiant_has_visible_opaque_hull_parts() {
                     model_key: path.clone(),
                     unlit: false,
                     scale: 1.0,
+                    diffuse_tint: false,
                 };
                 let stats = spawn(&mut ctx, &model, root);
                 (stats, cache.map)

@@ -1091,6 +1091,7 @@ fn rebuild(
                     model_key: path,
                     unlit: false,
                     scale,
+                    diffuse_tint: false,
                 };
                 tris += model_scene::spawn(&mut ctx, &model, rock).triangles;
                 rocks += 1;
@@ -1216,6 +1217,7 @@ fn rebuild(
             model_key: path,
             unlit: false,
             scale,
+            diffuse_tint: false,
         };
         let stats = model_scene::spawn(&mut ctx, &model, entity);
         // An Armada I planet's nimbus (`planets.spr`), looked up by the planet's model name.
@@ -1271,6 +1273,7 @@ fn rebuild(
                 model_key: format!("sky:{path}"),
                 unlit: true,
                 scale: 1.0,
+                diffuse_tint: false,
             };
             model_scene::spawn(&mut ctx, &model, sky);
             sky_note = path;
