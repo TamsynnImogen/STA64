@@ -473,7 +473,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         planet_colonizable: _, planet_civilian_population_modifier: _, planet_max_population: _, can_have_orbital_station: _, fleet_cap: _, orbit_time: _, a1_borg: _, station_mining: _, node_income: _, race: _,
         model: _, scale: _, movement: _, hull: _, shields: _, initial_hull: _, initial_shields: _,
         crew: _, maximum_crew: _, facility: _, has_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
-        sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
+        free_unit: _, dock: _, sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
         max_dilithium: _, mining_rate: _, transfer_rate: _, resource: _, features: _,
         confinement: _, nebula_pathing: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
         crew_gain: _, transport: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, repair_attachment: _, stats: _, raw: _,
@@ -558,6 +558,13 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // SIM-39, SIM-55: only when set, so content without the keys keeps its digest.
     if u.sane_crew_loss {
         c.flag("sane_crew_loss", true);
+    }
+    // `freighterName` (mining station): only when set, so content without the key keeps its digest.
+    if let Some(name) = &u.free_unit {
+        c.text("free_unit", name);
+        if let Some(d) = &u.dock {
+            c.raw("dock", &format!("[{}]", [d.offset.0, d.offset.1, d.dir.0, d.dir.1].map(fixed_text).join(",")));
+        }
     }
     if u.system_hit_points.iter().any(|f| *f != Fixed::ZERO) {
         c.list("system_hit_points", u.system_hit_points.map(fixed_text));

@@ -19,7 +19,7 @@
 //! | `repair` | authored `enginesRepairTime`, `weaponsRepairTime`, `shieldGeneratorRepairTime`, `lifeSupportRepairTime`, `sensorsRepairTime` seconds per system hit point before runtime modifiers; `repairFacility`, `repairHardpoint`, `repairSide`, `canShipyardRepair` (metadata only; no effective defaults) |
 //! | `sounds` | `eventSelect`, `eventAcknowledge`, `eventAttack`, `ambientSound` (event and file names, resolved by the client) |
 //! | `fx` | `fireball` |
-//! | specials, mining | `maxSpecialEnergy`, `specialEnergyRate`, `miner` (`miner = 0` says not a miner even for class `freighter`: [`UnitDef::mines`]), `maxdilithium`, `miningRate`, `dilithiumTransferRate`, `resource` |
+//! | specials, mining | `maxSpecialEnergy`, `specialEnergyRate`, `miner` (`miner = 0` says not a miner even for class `freighter`: [`UnitDef::mines`]), `maxdilithium`, `miningRate`, `dilithiumTransferRate`, `resource`, `freighterName` (a mining station's free unit, `free_unit`) |
 
 use sta_core::{Fixed, TICK_HZ};
 use sta_odf::Odf;
@@ -291,6 +291,11 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
     d.mining_rate = r.fixed("miningRate");
     d.transfer_rate = r.fixed("dilithiumTransferRate");
     d.resource = r.text("resource").map(|t| resource_id(&t));
+    // A mining station's free unit (`freighterName`; the engine's default "Unknown" is none).
+    d.free_unit = r
+        .text("freighterName")
+        .map(|t| t.trim().trim_matches('"').trim().to_ascii_lowercase())
+        .filter(|t| !t.is_empty() && t != "unknown");
     // SIM-23: a nebula's path-planner cost (`pathing_cost`, a whole number
     // in every stock and FO file; a fraction rounds) and `addToPathPlanner`.
     if d.class.0.eq_ignore_ascii_case("nebula_obj") {

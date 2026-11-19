@@ -433,6 +433,15 @@ pub struct UnitDef {
     /// Where finished units leave this builder; `None`: not read (the unit
     /// appears at the builder's centre, as before SIM-16).
     pub launch: Option<LaunchPoint>,
+    /// `freighterName` of a mining station: the unit (lower-cased ODF name) that
+    /// appears free when a construction rig finishes the station; `None`: no key
+    /// or the engine's "Unknown" default. Not resolved against the database: a
+    /// name that is not a unit spawns nothing.
+    pub free_unit: Option<String>,
+    /// Where that unit appears: the station's dock node (`dockingHardpoint`,
+    /// default `dock`), read from its model like [`launch`](UnitDef::launch).
+    /// Only set when `free_unit` is.
+    pub dock: Option<LaunchPoint>,
     /// Bounding radius of the model times `ScaleSOD`, units (SIM-21); zero:
     /// not read, the unit takes no room.
     pub radius: Fixed,
@@ -622,6 +631,8 @@ impl UnitDef {
             hardpoints: Vec::new(),
             build: BuildDef::default(),
             launch: None,
+            free_unit: None,
+            dock: None,
             radius: Fixed::ZERO,
             sounds: SoundRefs::default(),
             fx: FxRefs::default(),
