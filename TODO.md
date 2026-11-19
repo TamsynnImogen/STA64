@@ -753,7 +753,7 @@ XML (Fleet Operations techtree):
 - [ ] Map tech tree, not built: multiplayer matches and the lobby start from the default tree, not the map's (both peers must derive the same tree before it can be switched on; the content digest check would refuse a mismatch).
 - [ ] Map tech tree, not built: the lobby's named game-option trees (they replace the map's tree in a skirmish) are not offered.
 - [ ] Map tech tree, not built: tech flags in a tree (research items) do not gate weapons or cloaking through the tree; the computer player's request for units honours the tree only through the existing build-option check.
-- [ ] Map tech tree, interim: the cell position of a shown build item is its place in the builder's list; the executables give each item its own button position, which is assumed equal to the list order (not compared). The empty-cell look applies to text-tree skirmish games in both HUD looks, STA64's own layout included (the build page is one model; a note for mod authors). An XML tree keeps the inferred unlisted-slot fallback and compacts hidden items.
+- [ ] Map tech tree, interim: the cell position of a shown build item is its place in the builder's list; not compared with the original. The empty-cell look applies to text-tree skirmish games in both HUD looks, STA64's own layout included (the build page is one model; a note for mod authors). An XML tree keeps the inferred unlisted-slot fallback and compacts hidden items.
 - [ ] Map tech tree, not traced: whether the original refuses a direct build order for an unavailable item (STA64's sim refuses it).
 
 Other text files opened by fixed name:

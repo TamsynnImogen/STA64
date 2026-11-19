@@ -367,7 +367,7 @@ pub struct BuildItem {
     /// other, except that in a text tech tree an item that cannot be built (withheld or not
     /// listed) leaves its own cell empty and the others keep their positions (read from the
     /// executable, static, Armada I and II; the cell position is the item's place in the builder's
-    /// list, which is assumed to be the position the executable uses: interim).
+    /// list, not compared with the original: interim).
     pub slot: usize,
 }
 
