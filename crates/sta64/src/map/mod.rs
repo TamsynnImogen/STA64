@@ -458,8 +458,6 @@ type MapState<'w> = (
     ResMut<'w, AnimClock>,
     ResMut<'w, CameraLimits>,
     ResMut<'w, Assets<crate::render::planet::PlanetMaterial>>,
-    ResMut<'w, Assets<crate::render::nebula::NebulaMaterial>>,
-    Res<'w, crate::render::nebula::NoiseVolume>,
     Res<'w, MapSeat>,
     Option<Res<'w, crate::game::SkirmishCfg>>,
     Option<Res<'w, crate::game::mission_host::MissionLaunch>>,
@@ -518,6 +516,7 @@ impl Plugin for MapPlugin {
                     crate::clock::advance_idle_clock.run_if(not(resource_exists::<crate::sim_link::SimLink>).or_else(resource_exists::<crate::sim_link::SimHeld>)),
                     input,
                     rebuild,
+                    crate::render::stock::nebula::switch,
                     radar_click.run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free),
                     // Under the in-game menu (UI-34) the camera stands still.
                     pan_keys.run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free),
@@ -813,7 +812,7 @@ fn rebuild(
     lighting: Lighting,
 ) {
     let (mut silhouettes, mut ambient, mut lights) = lighting;
-    let (mut particles, mut selection, mut queue, mut clock, mut limits, mut planet_materials, mut nebula_materials, noise, seat, skirmish_cfg, mission_launch, profile, profile_effects, mut net) = state;
+    let (mut particles, mut selection, mut queue, mut clock, mut limits, mut planet_materials, seat, skirmish_cfg, mission_launch, profile, profile_effects, mut net) = state;
     let gas_volumes = crate::render::stock::nebula::volumetric(profile.as_deref(), profile_effects.as_deref());
     if !browser.dirty {
         return;
@@ -959,8 +958,10 @@ fn rebuild(
     let mut map_lights: Vec<(Vec3, Option<[f32; 3]>)> = Vec::new();
     let mut nebulae = 0usize;
     let mut units = 0usize;
-    // Nebula classes drawn as gas: (recipe, radius, positions in Bevy space).
-    let mut gas: std::collections::BTreeMap<String, (sta_surface::nebula::NebulaRecipe, f32, Vec<[f32; 3]>)> = Default::default();
+    // Cache each class's recipe lookup, including misses, together with its radius and centres.
+    type NebulaClass = (Option<sta_surface::nebula::NebulaRecipe>, f32, Vec<[f32; 3]>);
+    let mut gas = std::collections::BTreeMap::<String, NebulaClass>::new();
+    let mut stock_nebulae = Vec::new();
     let mut hidden = 0usize;
 
     for o in &map.objects {
@@ -981,6 +982,21 @@ fn rebuild(
             hidden += 1;
             continue;
         }
+        // Gather each class's recipe once, independent of the current render profile.
+        let gas_class = odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("nebula_obj") || c.eq_ignore_ascii_case("latinum"));
+        let has_gas = if gas_class {
+            let key = o.odf.to_ascii_lowercase();
+            let entry = gas.entry(key.clone()).or_insert_with(|| {
+                let latinum = odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("latinum"));
+                let radius = if latinum { FIELD_RADIUS } else { odf.f32("effectRadius").filter(|r| *r > 10.0 && *r < 5000.0).unwrap_or(300.0) };
+                (crate::render::nebula::recipe(&vfs.0, &key), radius, Vec::new())
+            });
+            if entry.0.is_some() {
+                entry.2.push([o.transform[9], o.transform[10], -o.transform[11]]);
+                if gas_volumes { nebulae += 1; }
+            }
+            entry.0.is_some()
+        } else { false };
         // Every nebula carries a light in its glow colour (Refit's lights.rs: the ODF's
         // red/green/blue_glow x 1.4, out to 8x its falloff; a gas class takes its
         // recipe's hue at that strength). Calibrated against the key light at the
@@ -989,7 +1005,7 @@ fn rebuild(
             let glow = Vec3::new(odf.f32("red_glow").unwrap_or(0.0), odf.f32("green_glow").unwrap_or(0.0), odf.f32("blue_glow").unwrap_or(0.0));
             let strength = glow.length();
             if strength > 0.0 {
-                let hue = crate::render::nebula::recipe(&vfs.0, &o.odf).map(|r| Vec3::from(r.gas_a)).filter(|h| h.length() > 0.0).unwrap_or(glow);
+                let hue = gas.get(&o.odf.to_ascii_lowercase()).and_then(|g| g.0.as_ref()).map(|r| Vec3::from(r.gas_a)).filter(|h| h.length() > 0.0).unwrap_or(glow);
                 let c = hue / hue.max_element().max(1e-3);
                 let start = odf.f32("glow_falloff_start").unwrap_or(60.0) * 8.0;
                 let reach = start + odf.f32("glow_falloff_range").unwrap_or(60.0) * 8.0;
@@ -1004,22 +1020,6 @@ fn rebuild(
                     Transform::from_xyz(o.transform[9], o.transform[10], -o.transform[11]),
                     ChildOf(root),
                 ));
-            }
-        }
-        // A nebula class with a gas recipe: drawn as one field, not as billboards.
-        if odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("nebula_obj") || c.eq_ignore_ascii_case("latinum")) {
-            let key = o.odf.to_ascii_lowercase();
-            let entry = gas.entry(key.clone()).or_insert_with(|| {
-                let r = crate::render::nebula::recipe(&vfs.0, &key);
-                let latinum = odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("latinum"));
-                let radius = if latinum { FIELD_RADIUS } else { odf.f32("effectRadius").filter(|r| *r > 10.0 && *r < 5000.0).unwrap_or(300.0) };
-                (r.unwrap_or_else(|| sta_surface::nebula::NebulaRecipe::parse("")), radius, Vec::new())
-            });
-            if gas_volumes && crate::render::nebula::recipe(&vfs.0, &key).is_some() {
-                entry.2.push([o.transform[9], o.transform[10], -o.transform[11]]);
-                nebulae += 1;
-                drawn += 1;
-                continue;
             }
         }
         if odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("asteroidfield")) {
@@ -1123,7 +1123,7 @@ fn rebuild(
         let moon = sim_def.and_then(|d| catalogue.moons.moon_for(&vfs.0, &content, d, o.entity_id as u64));
         let (def, odf) = moon.map_or((def, odf), |m| (m, &*m.raw));
         let Some((path, model)) = catalogue.model(&vfs.0, &def.model) else {
-            no_model += 1;
+            if has_gas && gas_volumes { drawn += 1; } else { no_model += 1; }
             continue;
         };
         let scale = odf.f32("ScaleSOD").filter(|s| *s > 0.0).unwrap_or(1.0);
@@ -1132,7 +1132,8 @@ fn rebuild(
         // Background objects (suns, background planets, wrecks, gates) stay where the
         // map puts them but are drawn before the scene, which they never hide.
         let background_obj = odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("background_obj"));
-        let entity = commands.spawn((tf, Visibility::default(), ChildOf(root))).id();
+        let entity = commands.spawn((tf, if has_gas && gas_volumes { Visibility::Hidden } else { Visibility::Inherited }, ChildOf(root))).id();
+        if has_gas { stock_nebulae.push(entity); }
         if background_obj {
             commands.entity(entity).insert(BackgroundObject);
         }
@@ -1207,7 +1208,9 @@ fn rebuild(
         if class == "planet_obj" {
             model_scene::spawn_planet_nimbus(&mut ctx, &def.model, entity);
         }
-        tris += stats.triangles;
+        if !has_gas || !gas_volumes {
+            tris += stats.triangles;
+        }
         drawn += 1;
     }
 
@@ -1287,9 +1290,13 @@ fn rebuild(
     }
 
     // Nebula fields, one per class with a recipe.
-    let classes = gas.values().filter(|g| !g.2.is_empty()).count();
-    for (_, (recipe, radius, pos)) in gas.into_iter().filter(|g| !g.1 .2.is_empty()) {
-        crate::render::nebula::spawn_field(&mut commands, &mut meshes, &mut nebula_materials, &mut images, &noise, recipe, radius, &pos, root);
+    let gas: Vec<_> = gas.into_values().filter_map(|(recipe, radius, pos)| recipe.filter(|_| !pos.is_empty()).map(|recipe| (recipe, radius, pos))).collect();
+    let classes = if gas_volumes { gas.len() } else { 0 };
+    if !gas.is_empty() {
+        // The chained profile system prepares fields for an initial Refit load or a later switch.
+        commands.entity(root).insert(crate::render::stock::nebula::MapNebulae {
+            gas, boards: stock_nebulae, fields: Vec::new(), volumetric: false,
+        });
     }
 
     // Lights: the map's dlights if it has them, else the defaults.

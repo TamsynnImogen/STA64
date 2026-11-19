@@ -105,6 +105,7 @@ fn metadata<'a>(native: &'a NativeCommands, act: &Act) -> Option<&'a NativeComma
         Act::Target(TargetMode::Rally) => "rally",
         Act::Target(TargetMode::Colonize) => "colonize",
         Act::Target(TargetMode::Transport) => "transport",
+        Act::Target(TargetMode::TransportAttack) => "capture",
         Act::Target(TargetMode::Repair) => "repair",
         Act::Target(TargetMode::Decommission) => "decom",
         Act::Stop => "stop",
@@ -139,6 +140,19 @@ fn buttons(feed: &HudFeed, page: Page, native: &NativeCommands) -> Vec<Button> {
     // gives it a place (Armada I puts it on its speed rail, a later package); the fallback cell is for
     // STA64's own layout.
     buttons.retain(|b| b.act != Act::Target(TargetMode::Transport) || metadata(native, &b.act).is_some_and(|m| m.preferred.is_some()));
+    // Capture is an authored stock command in the trade palette. It has no LCARS
+    // fallback cell: adding one would compete with the existing special slots.
+    if matches!(page, Page::Top | Page::Native(_))
+        && native.get("capture").is_some_and(|m| m.preferred.is_some() && m.command.eq_ignore_ascii_case("TRANSPORT_ATTACK"))
+        && super::commands::shared(feed).transport_attack_ready
+    {
+        buttons.push(model::button(
+            usize::MAX,
+            &crate::ui::i18n::tr("Capture"),
+            Act::Target(TargetMode::TransportAttack),
+            &crate::ui::i18n::tooltip_key("Transport attack"),
+        ));
+    }
     if page == Page::Formations && buttons.iter().any(|b| matches!(b.act, Act::Formation(_))) {
         let formations: Vec<_> = native.formations().collect();
         if !formations.is_empty() {
@@ -667,5 +681,56 @@ mod recrew_tests {
         assert_eq!(recrew.verbose.as_deref(), Some("GUI_CP_RECREW_VTOOLTIP"));
         Arc::make_mut(&mut feed.view).units[0].crew = Some([Fixed::from_int(100); 2]);
         assert_eq!(buttons(&feed, Page::Native(0), &native).iter().find(|b| b.act == Act::Recrew).unwrap().look, Look::Locked);
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+    use std::sync::Arc;
+    use sta_sim::{EntityId, Fixed, PlayerId, Vec3, WorldView};
+    use sta_sim::view::{UnitFlags, UnitView};
+
+    #[test]
+    fn authored_capture_stays_in_trade_menu_and_uses_localized_keys() {
+        let mut carrier = sta_content::UnitDef::new("ui_carrier", "craft");
+        carrier.transport.welding_anim_speed = Some(Fixed::ZERO);
+        let db = Arc::new(sta_content::ContentDb::builder()
+            .profile(sta_content::Profile::Fo4)
+            .features(sta_content::Profile::Fo4.features())
+            .unit(carrier).build().unwrap());
+        let unit = UnitView {
+            id: EntityId(1), def: db.key("ui_carrier").unwrap(), owner: PlayerId(1),
+            pos: Vec3::ZERO, heading: (Fixed::ZERO, Fixed::ONE), speed: Fixed::ZERO,
+            hull: [Fixed::ONE; 2], shields: [[Fixed::ZERO; 2]; 4],
+            crew: Some([Fixed::from_int(40), Fixed::from_int(50)]), energy: None, autonomy: None,
+            flags: UnitFlags::SELECTABLE, progress: None,
+        };
+        let feed = HudFeed {
+            view: Arc::new(WorldView { units: vec![unit], ..Default::default() }),
+            player: PlayerId(1), selected: vec![EntityId(1)], content: Some(db), ..Default::default()
+        };
+        let mut native = NativeCommands::default();
+        native.groups.push("trade".into());
+        native.commands.insert("capture".into(), NativeCommand {
+            odf: "capture.odf".into(), command: "TRANSPORT_ATTACK".into(), button: "capture".into(),
+            preferred: Some([0, 10]), menu: Some("trade".into()),
+            tooltip: Some("GUI_CP_TRANSPORT_ATTACK_TOOLTIP".into()),
+            verbose: Some("GUI_CP_TRANSPORT_ATTACK_VTOOLTIP".into()),
+            normal: None, hovered: None, pressed: None, disabled: None, active: None,
+        });
+        let top = buttons(&feed, Page::Top, &native);
+        assert!(top.iter().any(|b| b.act == Act::OpenNativeMenu(0)));
+        assert!(!top.iter().any(|b| b.act == Act::Target(TargetMode::TransportAttack)));
+        for page in [Page::Build, Page::Formations] {
+            assert!(!buttons(&feed, page, &native).iter().any(|b| b.act == Act::Target(TargetMode::TransportAttack)));
+        }
+        let trade = buttons(&feed, Page::Native(0), &native);
+        let capture = trade.iter().find(|b| b.act == Act::Target(TargetMode::TransportAttack)).unwrap();
+        assert_eq!(capture.sprite_names, ["b_capture", "capture"]);
+        assert_eq!(capture.tip, "GUI_CP_TRANSPORT_ATTACK_TOOLTIP");
+        assert_eq!(capture.verbose.as_deref(), Some("GUI_CP_TRANSPORT_ATTACK_VTOOLTIP"));
+        native.commands.clear();
+        assert!(!buttons(&feed, Page::Top, &native).iter().any(|b| b.act == Act::Target(TargetMode::TransportAttack)));
     }
 }

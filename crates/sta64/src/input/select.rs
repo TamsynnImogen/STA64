@@ -22,7 +22,8 @@
 //! - Control groups 1..9: `N` selects the group (dead units drop out); a
 //!   second `N` within 750 ms centres the camera on the group, on the member
 //!   nearest the group's mean ("the centre of the bulk"). `Alt+N` selects and
-//!   centres at once (stock's Shift+N). `Ctrl+N` replaces the group with the
+//!   centres at once (stock's Shift+N). In Roots, `Alt+N` recalls only live
+//!   stations when the group contains one. `Ctrl+N` replaces the group with the
 //!   selection (empty selection empties it). `Shift+N` and `Ctrl+Shift+N` add
 //!   the selection and keep what is there (QOL-4); with nothing selected they
 //!   do nothing. A unit is in one group at a time: binding takes it out of
@@ -39,6 +40,7 @@
 //! cursor, ray and projection through [`Aim`].
 
 use bevy::prelude::*;
+use sta_sim::event::SimEvent;
 use sta_sim::world::EntityKind;
 use sta_sim::{ContentKey, EntityId};
 
@@ -46,7 +48,7 @@ use super::orders::Aim;
 use super::keys::{Action, KeyBindings};
 use crate::render::strategic::Strategic;
 use crate::render::units::SelectRadius;
-use crate::sim_link::{ContentRes, Selection, SelectionChanged, SimEntity, SimLink};
+use crate::sim_link::{ContentRes, Selection, SelectionChanged, SimEntity, SimLink, SimMsg};
 
 /// Seconds within which a second click counts as a double click.
 const DOUBLE: f64 = 0.4;
@@ -167,6 +169,40 @@ fn is_own(link: &SimLink, id: EntityId) -> bool {
 fn is_ship(link: &SimLink, content: Option<&ContentRes>, id: EntityId) -> bool {
     let (Some(content), Some(u)) = (content, link.curr().unit(id)) else { return true };
     content.0.unit(u.def).is_none_or(|d| EntityKind::of_def(d) == EntityKind::Craft)
+}
+
+fn is_station(link: &SimLink, content: &ContentRes, id: EntityId) -> bool {
+    link.curr().unit(id)
+        .filter(|u| !u.flags.contains(sta_sim::view::UnitFlags::DYING))
+        .and_then(|u| content.0.unit(u.def))
+        .is_some_and(|d| EntityKind::of_def(d) == EntityKind::Station)
+}
+
+/// Roots: a ship built by a grouped station inherits that station's number.
+/// The sim event arrives after input; this runs before the next key recall.
+pub fn inherit_built_ship_group(
+    mut events: MessageReader<SimMsg>,
+    link: Res<SimLink>,
+    content: Option<Res<ContentRes>>,
+    mut groups: ResMut<ControlGroups>,
+) {
+    let Some(content) = content.filter(|c| c.0.profile() == sta_content::Profile::Fo4) else { return };
+    for SimMsg(event) in events.read() {
+        let SimEvent::Built { builder, id } = event else { continue };
+        if !is_own(&link, *builder) || !is_station(&link, &content, *builder) {
+            continue;
+        }
+        let own_live_craft = link.curr().unit(*id)
+            .filter(|u| u.owner == link.player() && !u.flags.contains(sta_sim::view::UnitFlags::DYING))
+            .and_then(|u| content.0.unit(u.def))
+            .is_some_and(|d| EntityKind::of_def(d) == EntityKind::Craft);
+        if !own_live_craft {
+            continue;
+        }
+        if let Some(group) = groups.groups.iter().position(|group| group.contains(builder)) {
+            bind_group(&mut groups, group, vec![*id], true);
+        }
+    }
 }
 
 /// Shift-click `id` into `sel` (the own selection) without ever mixing ships and
@@ -368,16 +404,22 @@ pub fn select_keys(
             let alive: Vec<EntityId> = groups.groups[n].iter().copied().filter(|&id| is_own(&link, id)).collect();
             groups.groups[n] = alive.clone();
             if !alive.is_empty() {
+                let stations: Vec<EntityId> = if let Some(c) = content.as_deref().filter(|c| alt && c.0.profile() == sta_content::Profile::Fo4) {
+                    alive.iter().copied().filter(|&id| is_station(&link, c, id)).collect()
+                } else {
+                    Vec::new()
+                };
+                let recalled = if stations.is_empty() { alive } else { stations };
                 let double = groups.last_tap.is_some_and(|(t, g)| g == n && now - t <= GROUP_TAP);
                 if double || alt {
-                    if let Some(c) = bulk_centre(&link, &alive) {
+                    if let Some(c) = bulk_centre(&link, &recalled) {
                         focus.write(CameraFocus(c));
                     }
                     groups.last_tap = None;
                 } else {
                     groups.last_tap = Some((now, n));
                 }
-                selection.0 = alive;
+                selection.0 = recalled;
                 cap(&mut selection.0, *max);
             }
         }
@@ -663,7 +705,11 @@ mod tests {
     }
 
     fn build(real: bool) -> App {
-        let mut db = ContentDb::builder();
+        build_with_profile(real, sta_content::Profile::Native)
+    }
+
+    fn build_with_profile(real: bool, profile: sta_content::Profile) -> App {
+        let mut db = ContentDb::builder().profile(profile);
         for (name, class) in [("cls1", "craft"), ("cls2", "craft"), ("yard", "shipyard")] {
             db = db.unit(sta_content::UnitDef::new(name, class));
         }
@@ -1225,6 +1271,74 @@ mod tests {
         let focus: Vec<_> = app.world_mut().resource_mut::<Messages<CameraFocus>>().drain().collect();
         assert_eq!(focus.len(), 1);
         assert!((focus[0].0 - Vec3::new(500.0, 0.0, 100.0)).length() < 1.0);
+    }
+
+    #[test]
+    fn roots_alt_group_recalls_station_from_mixed_group_without_changing_membership() {
+        let mut app = build_with_profile(false, sta_content::Profile::Fo4);
+        click(&mut app, 200.0, 200.0);
+        assert_eq!(sel(&app), [Y1]);
+        ctrl_digit(&mut app, KeyCode::Digit1);
+        click(&mut app, 100.0, 100.0);
+        press(&mut app, KeyCode::ShiftLeft);
+        tap(&mut app, KeyCode::Digit1);
+        release(&mut app, KeyCode::ShiftLeft);
+        step(&mut app);
+        assert_eq!(group(&app, 0), [A, Y1]);
+
+        tap(&mut app, KeyCode::Digit1);
+        assert_eq!(sorted(sel(&app)), [A, Y1], "ordinary recall keeps its full group");
+        press(&mut app, KeyCode::AltLeft);
+        tap(&mut app, KeyCode::Digit1);
+        release(&mut app, KeyCode::AltLeft);
+        assert_eq!(sel(&app), [Y1]);
+        assert_eq!(group(&app, 0), [A, Y1]);
+        let focus: Vec<_> = app.world_mut().resource_mut::<Messages<CameraFocus>>().drain().collect();
+        assert_eq!(focus.len(), 1);
+        assert!((focus[0].0 - Vec3::new(200.0, 0.0, 200.0)).length() < 1.0);
+    }
+
+    #[test]
+    fn roots_alt_ship_only_and_other_profile_mixed_recall_stay_full() {
+        let mut roots = build_with_profile(false, sta_content::Profile::Fo4);
+        roots.world_mut().resource_mut::<ControlGroups>().groups[0] = vec![A, B];
+        press(&mut roots, KeyCode::AltLeft);
+        tap(&mut roots, KeyCode::Digit1);
+        release(&mut roots, KeyCode::AltLeft);
+        assert_eq!(sel(&roots), [A, B]);
+
+        let mut other = app();
+        other.world_mut().resource_mut::<ControlGroups>().groups[0] = vec![A, Y1];
+        press(&mut other, KeyCode::AltLeft);
+        tap(&mut other, KeyCode::Digit1);
+        release(&mut other, KeyCode::AltLeft);
+        assert_eq!(sel(&other), [A, Y1]);
+        assert_eq!(group(&other, 0), [A, Y1]);
+    }
+
+    #[test]
+    fn roots_built_ship_inherits_station_group_without_changing_selection() {
+        let mut roots = build_with_profile(true, sta_content::Profile::Fo4);
+        step(&mut roots);
+        roots.world_mut().resource_mut::<ControlGroups>().groups[0] = vec![Y1, A];
+        roots.world_mut().resource_mut::<Selection>().0 = vec![C];
+        roots.world_mut().write_message(SimMsg(SimEvent::Built { builder: Y1, id: B }));
+        step(&mut roots);
+        assert_eq!(group(&roots, 0), [A, B, Y1]);
+        assert_eq!(sel(&roots), [C], "building a ship does not select it");
+        tap(&mut roots, KeyCode::Digit1);
+        assert_eq!(sorted(sel(&roots)), [A, B, Y1], "the next recall sees the inherited ship");
+
+        roots.world_mut().write_message(SimMsg(SimEvent::Built { builder: A, id: F }));
+        step(&mut roots);
+        assert_eq!(group(&roots, 0), [A, B, Y1], "a grouped craft is not a station builder");
+
+        let mut other = build_with_profile(true, sta_content::Profile::Native);
+        step(&mut other);
+        other.world_mut().resource_mut::<ControlGroups>().groups[0] = vec![Y1];
+        other.world_mut().write_message(SimMsg(SimEvent::Built { builder: Y1, id: B }));
+        step(&mut other);
+        assert_eq!(group(&other, 0), [Y1], "other profiles keep their group behavior");
     }
 
     #[test]

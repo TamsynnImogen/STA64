@@ -32,6 +32,8 @@ pub struct Capabilities {
     /// family has the derelict latch (Armada I is refused for now) and its crew is above the
     /// transporter floor. When false the button is shown disabled.
     pub transport_ready: bool,
+    /// At least one ready carrier has the Roots transport-attack switch and zero weld speed.
+    pub transport_attack_ready: bool,
     /// At least one selected transporter belongs to a game family the sim takes the order for
     /// (tells a greyed press apart: the family is refused, or the crew is too low).
     pub transport_family: bool,
@@ -104,6 +106,7 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
         decommission: matches!(kind, EntityKind::Craft | EntityKind::Station) && !u.flags.contains(UnitFlags::BUILDING) && u.progress.is_none_or(|p| p >= Fixed::ONE),
         transport_family: t.family,
         transport_ready: t.ready,
+        transport_attack_ready: t.ready && sta_sim::combat::boarding::attack_capable(db, def),
         recrew,
         recrew_ready,
         specials,
@@ -151,6 +154,7 @@ pub fn shared(feed: &HudFeed) -> Capabilities {
         // Transport shows when any selected unit is a transporter and is ready when any can take the order.
         common.transport |= next.transport;
         common.transport_ready |= next.transport_ready;
+        common.transport_attack_ready |= next.transport_attack_ready;
         common.transport_family |= next.transport_family;
         // Only the craft of a mixed selection that can go to a yard take the order (see `repairers`).
         common.repair |= next.repair;
@@ -191,10 +195,13 @@ pub fn colony_ships(feed: &HudFeed, ids: &[EntityId]) -> Vec<EntityId> {
     ids.iter().copied().filter(|id| feed.view.unit(*id).is_some_and(|u| one(db, u).colonize)).collect()
 }
 
-/// The members of `ids` the sim takes a Transport order from (the rest of a mixed selection do not receive it).
-pub fn transporters(feed: &HudFeed, ids: &[EntityId]) -> Vec<EntityId> {
+/// Ready carriers for the selected transport command, including the extra Roots attack gate.
+pub fn transporters(feed: &HudFeed, ids: &[EntityId], attack: bool) -> Vec<EntityId> {
     let Some(db) = feed.content.as_deref() else { return Vec::new() };
-    ids.iter().copied().filter(|id| feed.view.unit(*id).is_some_and(|u| one(db, u).transport_ready)).collect()
+    ids.iter().copied().filter(|id| feed.view.unit(*id).is_some_and(|u| {
+        let caps = one(db, u);
+        if attack { caps.transport_attack_ready } else { caps.transport_ready }
+    })).collect()
 }
 
 #[cfg(test)]

@@ -124,6 +124,15 @@ mod tests {
     /// [`game`] with every unit passed through `patch` first, and an
     /// `edit_page` unit (a map-editor page) added.
     fn game_with(tree: Option<&str>, teams: [u8; 2], patch: impl Fn(&mut UnitDef)) -> Sim {
+        game_with_extra_unit(tree, teams, patch, None)
+    }
+
+    fn game_with_extra_unit(
+        tree: Option<&str>,
+        teams: [u8; 2],
+        patch: impl Fn(&mut UnitDef),
+        extra: Option<UnitDef>,
+    ) -> Sim {
         let fake = sta_content::fake::db();
         let mut b = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
         for w in fake.weapons() {
@@ -133,6 +142,9 @@ mod tests {
             let mut u = u.clone();
             patch(&mut u);
             b = b.unit(u);
+        }
+        if let Some(extra) = extra {
+            b = b.unit(extra);
         }
         if tree.is_some() {
             b = b.unit(UnitDef::new("edit_page", "craft"));
@@ -308,5 +320,47 @@ mod tests {
         spawn(&mut other, "fx_cruiser", P1);
         spawn(&mut other, "fx_cruiser", P1);
         assert!(build(&mut other, P0, yard, "fx_cruiser"));
+    }
+
+    #[test]
+    fn a_fleet_cap_pod_counts_only_when_owned_and_finished_and_survives_snapshot() {
+        // The installed Roots tech1.xml uses a signed cap weight for all_ai_pod.
+        let cap = std::sync::Arc::new(sta_content::CapacityList {
+            name: "fx_unitcap_pod".into(),
+            max: 2,
+            members: vec![("fx_cruiser".into(), 1), ("fx_unitcap_pod".into(), -1)],
+            ..Default::default()
+        });
+        let mut pod = UnitDef::new("fx_unitcap_pod", "pod");
+        pod.race = "fx".into();
+        pod.hull = Fixed::from_int(100);
+        let mut sim = game_with_extra_unit(Some(TREE), [0, 1], |u| {
+            if u.odf == "fx_cruiser" {
+                u.fleet_cap = Some(cap.clone());
+            }
+        }, Some(pod));
+        let yard = spawn(&mut sim, "fx_yard", P0);
+        spawn(&mut sim, "fx_cruiser", P0);
+        spawn(&mut sim, "fx_cruiser", P0);
+        let before = sim.economy.stock_of(P0);
+        assert!(!build(&mut sim, P0, yard, "fx_cruiser"), "2 owned cruisers fill the cap");
+        assert_eq!(sim.economy.stock_of(P0), before, "a refused build is not charged");
+
+        spawn(&mut sim, "fx_unitcap_pod", P1);
+        assert!(!build(&mut sim, P0, yard, "fx_cruiser"), "a rival pod does not free capacity");
+        let unfinished = spawn(&mut sim, "fx_unitcap_pod", P0);
+        sim.units.get_mut(unfinished).unwrap().progress = Some(Fixed::from_f64(0.5));
+        assert!(!build(&mut sim, P0, yard, "fx_cruiser"), "an unfinished own pod does not free capacity");
+        sim.units.get_mut(unfinished).unwrap().progress = None;
+
+        let snapshot = sim.snapshot();
+        let mut restored = Sim::from_snapshot(&snapshot, sim.content().cloned()).unwrap();
+        assert_eq!(restored.snapshot(), snapshot);
+        assert_eq!(restored.digest(), sim.digest());
+
+        assert!(build(&mut sim, P0, yard, "fx_cruiser"), "the finished own pod leaves room for a third cruiser");
+        assert!(build(&mut restored, P0, yard, "fx_cruiser"), "the third cruiser is admitted after restore");
+        assert_eq!(sim.production_view(), restored.production_view());
+        assert_eq!(sim.digest(), restored.digest());
     }
 }
