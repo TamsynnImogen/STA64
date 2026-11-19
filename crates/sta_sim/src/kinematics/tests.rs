@@ -162,6 +162,29 @@ fn turning_at_rest_follows_the_fractions() {
     assert_ne!(b.heading, NORTH);
 }
 
+/// A craft that cannot turn at rest (both fractions 0) and stops with turn left over
+/// settles instead of spinning for ever (capture of a capital ship that kept turning on the
+/// spot with no target; the spin-down rate is interim).
+#[test]
+fn leftover_turn_settles_for_a_craft_that_cannot_turn_at_rest() {
+    let mut u = craft(stock_battleship(), NORTH);
+    u.speed = f(40.0);
+    u.omega = f(-5.0);
+    for _ in 0..2000 {
+        step(Model::Smooth, &mut u, Leg::default());
+    }
+    assert_eq!(u.speed, Fixed::ZERO);
+    assert_eq!(u.omega, Fixed::ZERO, "still spinning");
+    // Same with a target close enough to count as arrived.
+    let mut w = craft(stock_battleship(), NORTH);
+    w.omega = f(0.8);
+    w.target = Some(v(1, 0, 1));
+    for _ in 0..2000 {
+        step(Model::Smooth, &mut w, Leg::default());
+    }
+    assert_eq!(w.omega, Fixed::ZERO, "still spinning with a target at hand");
+}
+
 /// No slowing to turn: facing away, a unit asks for full speed.
 #[test]
 fn no_slowing_to_turn() {
