@@ -2,6 +2,7 @@
 //! and the rest build on it.
 
 pub mod presentation;
+pub mod bridge_scene;
 pub mod profile;
 pub mod cursor;
 pub mod gui_sprites;

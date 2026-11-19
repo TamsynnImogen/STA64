@@ -13,7 +13,7 @@
 //! | objectives and briefing (host state, not a `Presentation`) | the modal panel of [`ObjectivesView`], toggled with Alt+O | rectangles of `objectivesPanelArea` and the text areas in A2 stock `gui_glob16x12.cfg`, the A1 `gui_glob.cfg` panel; the completed-line tick **not measured** |
 //! | a message box ([`MessageBox`]) | the same panel with an OK button | the original's message display reuses the objectives keys |
 //! | `Movie`, `StopMovie` | MED-03; an in-panel movie goes to the HUD's cinematic window or viewscreen (UI-39, `ui/hud/cinematic.rs`) | the Armada II call raises the cinematic view (executable, static); the Armada I clip's rectangle inside the bridge scene is **not measured** |
-//! | A1 `PreLoadBridgeScene`, `SetBridgeSceneRace`, `ShowBridgeScene`, `ShowBridgeOnScreen` | typed as [`BridgeScene`] and kept in [`BridgeState`]; the bridge backdrop and layers are not drawn (UI-39: the clip plays in the HUD's viewscreen) | race number 1 to 4 from the stock scripts; what `ShowBridgeOnScreen` selects is **not measured** |
+//! | A1 `PreLoadBridgeScene`, `SetBridgeSceneRace`, `ShowBridgeScene`, `ShowBridgeOnScreen` | typed as [`BridgeScene`] and kept in [`BridgeState`]; the bridge frame and the clip's rectangle are drawn by [`super::bridge_scene`] while `PlayBridgeMovie` plays (the animated layers are not) | race number 1 to 4 from the stock scripts; what `ShowBridgeOnScreen` selects is **not measured** |
 //! | `Sound`, `StopSound` | [`PlayScriptSound`] (its own UI-bus stream, mixed with what plays, no queue or cut) / [`StopScriptSound`] (that stream alone; a stale id is ignored) (the audio lane resolves the name); the script's `IsAudioMessageDone` turns true when the clip's length has played ([`ScriptReply::SoundDone`], from `audio::SoundStarted`), at once if nothing plays it | clip length from the decoded file; the wait is measured for A1 only, for A2 and Fleet Ops **not measured** |
 //! | `Music`, `StopMusic`, `Effect`, `WaitForKey`, other `Call`s | **not shown** (audio and effects lanes); each kind is listed once in [`Unhandled`] | |
 //!
@@ -90,6 +90,13 @@ fn bridge_state(mut events: MessageReader<BridgeScene>, mut state: ResMut<Bridge
         }
     }
 }
+
+/// Global z of the script's titles, its objectives panel and its fade; the pause box and the in-game menu
+/// sit above ([`super::pause_box::PAUSE_BOX_Z`], [`super::ingame_menu::MENU_Z`]), the bridge scene below
+/// all of them ([`super::bridge_scene::BRIDGE_SCENE_Z`]).
+pub const TITLES_Z: i32 = 900;
+pub const OBJECTIVES_Z: i32 = 920;
+pub const FADE_Z: i32 = 950;
 
 /// A2's layout space (stock `screenWidth` / `screenHeight` of `gui_glob16x12.cfg`).
 pub const A2_CANVAS: Vec2 = Vec2::new(1600.0, 1200.0);
@@ -853,12 +860,12 @@ struct PanelRoot;
 struct OkButton;
 
 fn spawn_layers(mut commands: Commands) {
-    commands.spawn((TitleLayer, Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, GlobalZIndex(900), Pickable::IGNORE));
+    commands.spawn((TitleLayer, Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, GlobalZIndex(TITLES_Z), Pickable::IGNORE));
     commands.spawn((
         FadeOverlay,
         Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
         BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.0)),
-        GlobalZIndex(950),
+        GlobalZIndex(FADE_Z),
         Pickable::IGNORE,
     ));
 }
@@ -1046,7 +1053,7 @@ fn draw_panel(
         PanelRoot,
         Node { position_type: PositionType::Absolute, left: pct(px, l.canvas.0), top: pct(py, l.canvas.1), width: pct(pw, l.canvas.0), height: pct(ph, l.canvas.1), ..default() },
         BackgroundColor(theme.panel.with_alpha(0.92)),
-        GlobalZIndex(920),
+        GlobalZIndex(OBJECTIVES_Z),
     ));
     panel.with_children(|p| {
         if !c.title.is_empty() {
