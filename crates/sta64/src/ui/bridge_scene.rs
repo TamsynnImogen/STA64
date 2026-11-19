@@ -6,16 +6,14 @@
 //! view, which has no HUD. STA64 therefore plays an Armada I mission's in-panel movie here
 //! ([`BridgeScreen`]) and leaves the HUD's panel to Armada II.
 //!
-//! **Layout** (read from the executable, static, unless said): the scene is a 640x480 picture, the
-//! race's `<p>bridge_panel` sprite (`<p>bridgeBackground`, `<p>bridgeBackgroundSize` and
-//! `<p>bridgeBackground_<n>` of the gui cfg; `<p>` is `f_` `k_` `r_` `b_` by the bridge type of
-//! `SetBridgeSceneRace`, `d_` before one is set), and the clip is stretched to a fixed 400x200
-//! rectangle of it, per race ([`movie_rect`]; no cfg key places it). The art has a magenta window
-//! where the screen is and is drawn over the clip, so the clip shows through it (draw order read
-//! from the executable; that the engine keys magenta is **not measured**, the sprite header says
-//! `@skip=off`). The 640x480 group keeps its aspect and is centred as a whole on other window
-//! aspects (the stock look rule, ADR 0008), black around it (what the original draws in the bars is
-//! **not measured**). The animated `<p>bridgeLayer<n>` lights are not drawn yet (TODO.md).
+//! **Layout.** STA64 lays the scene out on the cfg canvas ([`CANVAS`] by default), stretches the clip
+//! to [`movie_rect`] (read from the executable, static) and draws the frame art over it with
+//! [`WINDOW_KEY`] keyed transparent (interim, not measured). The frame is the race's
+//! `<p>bridge_panel` sprite (`<p>bridgeBackground`, `<p>bridgeBackgroundSize` and
+//! `<p>bridgeBackground_<n>` of the gui cfg; `<p>` by the bridge type of `SetBridgeSceneRace`). The
+//! group keeps its aspect and is centred as a whole on other window aspects (the stock look rule,
+//! ADR 0008), black around it (what the original draws in the bars is **not measured**). The
+//! animated `<p>bridgeLayer<n>` lights are not drawn yet (TODO.md).
 //!
 //! **Fallback.** No frame art (a mod without the sprites or the cfg keys, no install): the clip is
 //! drawn on black at its own aspect over the whole window, and the reason is logged once.
@@ -45,14 +43,13 @@ use crate::media::{BridgeScreen, Movies};
 use crate::sim_link::ContentRes;
 use crate::viewer::Mounted;
 
-/// The scene's own space where the gui cfg sets none: the stock gui cfg's bridge rectangles are in it.
+/// The canvas of the scene where the gui cfg sets none.
 pub const CANVAS: Vec2 = Vec2::new(640.0, 480.0);
 
 /// Global z of the overlay: over the HUD (its panels are far below), under every presentation layer.
 pub const BRIDGE_SCENE_Z: i32 = 800;
 
-/// The pixel colour of the art's screen window (read from the stock tiles; the key is only
-/// applied to this art).
+/// The colour STA64 keys transparent in the frame art (interim, not measured; applied to this art only).
 const WINDOW_KEY: [u8; 3] = [255, 0, 255];
 
 /// The cfg key prefix of a bridge type: 1 Federation, 2 Klingon, 3 Romulan, 4 Borg, the default scene
@@ -67,7 +64,7 @@ pub fn prefix(race: Option<i32>) -> &'static str {
     }
 }
 
-/// Where the clip goes in the 640x480 scene (`x y w h`), per bridge type; fixed in the executable
+/// Where the clip goes in the scene (`x y w h`), per bridge type; fixed in the executable
 /// (read from the executable, static), not in any data file. TODO: a cfg key for mods.
 pub fn movie_rect(race: Option<i32>) -> [f32; 4] {
     match race {
@@ -79,7 +76,7 @@ pub fn movie_rect(race: Option<i32>) -> [f32; 4] {
     }
 }
 
-/// The scene on a window: the 640x480 group (centred, aspect kept) and the clip's rectangle in it.
+/// The scene on a window: the scene group (centred, aspect kept) and the clip's rectangle in it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BridgeLayout {
     pub group: R,
@@ -91,7 +88,7 @@ pub fn canvas_of(gui: Option<&sta_content::GuiLayout>) -> Vec2 {
     gui.map(|g| g.canvas).filter(|c| c.0 > 0 && c.1 > 0).map_or(CANVAS, |c| Vec2::new(c.0 as f32, c.1 as f32))
 }
 
-/// The clip's rectangle is in the executable's 640x480 units; on a cfg canvas of another size it is
+/// The clip's rectangle is in the units of [`CANVAS`]; on a cfg canvas of another size it is
 /// scaled with it, so it stays over the art's window.
 pub fn layout(window: Vec2, race: Option<i32>, canvas: Vec2) -> BridgeLayout {
     let (scale, group) = fit_canvas(canvas, window);
