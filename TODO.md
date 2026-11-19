@@ -2,6 +2,8 @@
 
 Live working list. Milestones live in [docs/ROADMAP.md](docs/ROADMAP.md);
 this file is what's being worked on now and what needs checking by eye.
+Lines from recent PRs wait in [todo.d/](todo.d/README.md) until folded in here;
+`tools/todo.py` lists the open lines of both.
 
 Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your check in game/viewer
 
