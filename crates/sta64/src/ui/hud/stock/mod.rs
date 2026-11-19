@@ -1,6 +1,6 @@
 //! CFG/SPR presentation of the shared HUD actions. No simulation policy lives here.
 pub(in crate::ui::hud) mod a1;
-pub(in crate::ui::hud) mod buttons;
+pub(in crate::ui) mod buttons;
 mod commands;
 mod info;
 pub(super) mod infobar;
@@ -342,7 +342,7 @@ pub(super) fn refresh(
     mut hud: ResMut<HudState>,
     mounted: Option<Res<Mounted>>,
     strings: Option<Res<crate::ui::i18n::Strings>>,
-    action: Option<Res<crate::render::action_camera::ActionView>>,
+    (action, more): (Option<Res<crate::render::action_camera::ActionView>>, Res<buttons::ShowMore>),
     roots: Query<Entity, With<HudRoot>>,
     bodies: Query<Entity, With<StockBody>>,
     legacy: Query<Entity, With<HudBody>>,
@@ -447,7 +447,7 @@ pub(super) fn refresh(
         a1::action::spawn(&mut commands, body, &layout, &theme, strings.as_deref(), action.as_deref());
     }
     if !a1 && replaced {
-        buttons::spawn(&mut commands, body, &layout, &theme);
+        buttons::spawn(&mut commands, body, &layout, &theme, more.0);
     }
     let now = model::info(&feed);
     let a1_shape = a1.then(|| a1::info::extra(&feed).map(|e| e.shape(&state.info_style))).flatten();
@@ -602,6 +602,10 @@ pub(super) fn refresh(
         *r = R::new(left, r.y, (right - left).max(0.0), r.h);
     }
     state.solid.retain(|r| r.w > 0.0);
+    // The button panel is a group anchored at the window's edge: solid where it is, outside the sheet's area too.
+    if !a1 {
+        state.solid.extend(buttons::panel_rect(&layout));
+    }
     state.grid = next;
     state.page = hud.page;
     state.layout = Some(layout);

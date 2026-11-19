@@ -9,13 +9,24 @@
 //!   as idle is its overview's own list (not read); here it is an own craft that
 //!   can move and stands still, not building or docked (ours), taken in turn;
 //! - **comm**, **help** (cycles three tooltip states), **palette** (the popup
-//!   palette), **more** (moves the panel between two rectangles) and **toggle**
-//!   (swaps cameras) drive systems STA64 does not have yet: drawn, disabled.
+//!   palette) and **toggle** (swaps cameras) drive systems STA64 does not have yet: drawn, disabled.
+//! - **more** shows and hides the second row (menu, help, palette). Grades: the install's tooltip text
+//!   for it says it shows more buttons and names help, palette and the options menu (read from data); a
+//!   static reading of the executable agrees. An older reading took it as moving the panel between two
+//!   rectangles; the two readings are not reconciled. INTERIM: the start state is not measured, so all
+//!   buttons show at match start (and again at each new match); what the original draws around the second
+//!   row is not established: buttons only, no invented art. Esc opens the in-game menu whatever is shown.
+//!
+//! The panel is the cfg's `buttonPanelArea` with its `buttonBackgroundPanel` end pieces (read from data),
+//! anchored as one group at the window's right edge on a window wider than the sheet
+//! ([`StockLayout::panel_at_right_edge`]); the buttons' areas are relative to it.
 
 use bevy::prelude::*;
 use sta_sim::view::UnitFlags;
 
 use super::layout::StockLayout;
+use crate::ui::hud::layout::R;
+use bevy::picking::Pickable;
 use super::node;
 use crate::input::select::CameraFocus;
 use crate::ui::gui_sprites::{GuiButton, GuiButtonColors};
@@ -33,6 +44,8 @@ pub(in crate::ui::hud) enum PanelButton {
     Idle,
     /// The Armada I action camera's picture (UI-53): a click goes to what it shows.
     ActionView,
+    /// Shows or hides the second row (menu, help, palette).
+    More,
     /// A system STA64 does not have yet.
     Unavailable,
 }
@@ -51,6 +64,32 @@ const fn keys(area: &'static str, sprite: &'static str, default_sprite: &'static
     PanelKeys { area, sprite, default_sprite, act, tip }
 }
 
+/// The buttons that show only while "more" is on.
+pub(in crate::ui::hud) const SECOND_ROW: [&str; 3] = ["menuButtonArea", "helpButtonArea", "paletteButtonArea"];
+
+/// Whether the second row shows (the player's, kept while the HUD is rebuilt; true at each match start: interim).
+#[derive(Resource)]
+pub(in crate::ui) struct ShowMore(pub bool);
+
+impl Default for ShowMore {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+/// A new match starts with every button shown.
+pub(in crate::ui::hud) fn reset_more(mut more: ResMut<ShowMore>) {
+    more.0 = ShowMore::default().0;
+}
+
+/// The button panel's group: its rectangle (the buttons' areas are relative to it).
+#[derive(Component)]
+pub(in crate::ui::hud) struct ButtonPanelGroup;
+
+/// A button of the second row.
+#[derive(Component)]
+pub(in crate::ui::hud) struct SecondRow;
+
 pub(in crate::ui::hud) const BUTTONS: [PanelKeys; 8] = [
     keys("menuButtonArea", "menuButton", "menu_button", PanelButton::Menu, "Menu"),
     keys("commButtonArea", "commButton", "comm_button", PanelButton::Unavailable, "Communications"),
@@ -59,7 +98,7 @@ pub(in crate::ui::hud) const BUTTONS: [PanelKeys; 8] = [
     keys("objectivesButtonArea", "objectivesButton", "objectives_button", PanelButton::Objectives, "Objectives"),
     keys("helpButtonArea", "helpButton", "help_button", PanelButton::Unavailable, "Help"),
     keys("paletteButtonArea", "paletteButton", "palette_button", PanelButton::Unavailable, "Command palette"),
-    keys("moreButtonArea", "moreButton", "more_button", PanelButton::Unavailable, "More"),
+    keys("moreButtonArea", "moreButton", "more_button", PanelButton::More, "More"),
 ];
 
 /// The sprite of a button: the cfg's, else the engine's default.
@@ -67,22 +106,57 @@ pub(in crate::ui::hud) fn sprite(layout: &StockLayout, k: &PanelKeys) -> String 
     layout.name(k.sprite).unwrap_or(k.default_sprite).to_owned()
 }
 
-/// Spawn every button whose area the cfg authors (a zero rectangle hides it).
-pub(in crate::ui::hud) fn spawn(commands: &mut Commands, parent: Entity, layout: &StockLayout, theme: &Theme) {
+/// The panel's rectangle: the cfg's `buttonPanelArea` placed at the right edge, or, when the cfg has
+/// none, the whole sheet (the buttons' areas then count from its corner).
+pub(in crate::ui::hud) fn panel_rect(layout: &StockLayout) -> Option<R> {
+    layout.panel_at_right_edge("button")
+}
+
+/// Spawn the panel group: its background pieces and every button whose area the cfg authors (a zero
+/// rectangle hides it).
+pub(in crate::ui::hud) fn spawn(commands: &mut Commands, parent: Entity, layout: &StockLayout, theme: &Theme, more: bool) {
+    let area = panel_rect(layout).unwrap_or(R::new(0.0, 0.0, 0.0, 0.0));
+    let group = commands
+        .spawn((
+            ButtonPanelGroup,
+            Pickable::IGNORE,
+            Node { position_type: PositionType::Absolute, left: Val::Px(area.x), top: Val::Px(area.y), width: Val::Px(area.w), height: Val::Px(area.h), ..default() },
+            ChildOf(parent),
+        ))
+        .id();
+    super::a1::frame_pieces(commands, group, layout, "button", Vec2::ZERO);
     for k in &BUTTONS {
         let Some(rect) = layout.rect(k.area) else { continue };
         let state = if k.act == PanelButton::Unavailable { WidgetState::Disabled } else { WidgetState::Normal };
-        commands.spawn((
+        let second = SECOND_ROW.contains(&k.area);
+        let mut node = node(rect);
+        if second && !more {
+            node.display = Display::None;
+        }
+        let mut button = commands.spawn((
             k.act,
             UiButton,
             state,
             GuiButtonColors::default(),
             Tooltip::new(k.tip.to_owned()),
             GuiButton { names: vec![sprite(layout, k)], keep_label: false },
-            node(rect),
+            node,
             BackgroundColor(theme.button),
-            ChildOf(parent),
+            ChildOf(group),
         ));
+        if second {
+            button.insert(SecondRow);
+        }
+    }
+}
+
+/// Show or hide the second row as [`ShowMore`] says.
+pub(in crate::ui::hud) fn apply_more(more: Res<ShowMore>, mut rows: Query<&mut Node, With<SecondRow>>) {
+    if !more.is_changed() {
+        return;
+    }
+    for mut node in &mut rows {
+        node.display = if more.0 { Display::Flex } else { Display::None };
     }
 }
 
@@ -112,9 +186,9 @@ pub(in crate::ui::hud) fn press(
     objectives: Option<ResMut<ObjectivesView>>,
     mut menu: MessageWriter<OpenInGameMenu>,
     mut focus: MessageWriter<CameraFocus>,
-    subject: Option<Res<crate::render::action_camera::ActionSubject>>,
-    entities: Option<Res<crate::sim_link::SimEntities>>,
+    (subject, entities): (Option<Res<crate::render::action_camera::ActionSubject>>, Option<Res<crate::sim_link::SimEntities>>),
     mut last: Local<Option<sta_sim::EntityId>>,
+    mut more: ResMut<ShowMore>,
 ) {
     let mut objectives = objectives;
     for ButtonClicked(entity) in clicks.read() {
@@ -122,6 +196,7 @@ pub(in crate::ui::hud) fn press(
             Ok(PanelButton::Menu) => {
                 menu.write(OpenInGameMenu);
             }
+            Ok(PanelButton::More) => more.0 = !more.0,
             Ok(PanelButton::Objectives) => {
                 if let Some(o) = objectives.as_mut() {
                     o.visible = true;

@@ -157,6 +157,7 @@ impl Plugin for HudPlugin {
             .init_resource::<crate::ui::cursor::WantedCursor>()
             .init_resource::<crate::input::hover::HoveredUnit>()
             .init_resource::<stock::StockState>()
+            .init_resource::<stock::buttons::ShowMore>()
             .init_resource::<status::StatusFeed>()
             .init_resource::<status_gpu::StatusUiState>()
             .init_resource::<cinematic::CinematicState>()
@@ -168,6 +169,7 @@ impl Plugin for HudPlugin {
             .add_message::<OrderIssued>()
             .add_message::<SelectionChanged>()
             .init_resource::<Selection>()
+            .add_systems(OnEnter(crate::app::AppState::Loading), stock::buttons::reset_more)
             .add_systems(Startup, panels::spawn_root.after(crate::ui::radar::spawn_radar))
             .add_systems(
                 Update,
@@ -179,7 +181,7 @@ impl Plugin for HudPlugin {
                     refresh,
                     (stock::refresh, stock::update_values, (status::sync, status_gpu::refresh, status_gpu::update_values).chain()).chain(),
                     stock::active,
-                    (stock::navigate, stock::buttons::press).chain(),
+                    (stock::navigate, stock::buttons::press, stock::buttons::apply_more).chain(),
                     panels::update_values.before(super::theme::WidgetPaint),
                     host,
                     pointer,

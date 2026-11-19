@@ -570,3 +570,27 @@ fn direct_match_controls_apply_after_input_and_reset_only_keys() {
     assert_eq!(app.world().resource::<KeyBindings>().keys(Action::GameMenu), [KeyCode::Escape]);
     assert_eq!(app.world().resource::<Settings>().music, 13.0);
 }
+
+/// The stock button panel's second row can be hidden with its "more" button; Esc (the menu key) opens
+/// the menu all the same, so the player never loses it.
+#[test]
+fn escape_opens_the_menu_while_the_button_panels_second_row_is_hidden() {
+    let mut app = app();
+    start_match(&mut app);
+    app.world_mut().resource_mut::<crate::ui::hud::stock::buttons::ShowMore>().0 = false;
+    settle(&mut app, 2);
+    key(&mut app, KeyCode::Escape);
+    assert_eq!(menu(&app), InGameMenu { open: true, page: MenuPage::Main });
+}
+
+/// Interim: every button shows at the start of each match (the original's start state is not measured).
+#[test]
+fn a_new_match_shows_every_button_again() {
+    let mut app = app();
+    start_match(&mut app);
+    assert!(app.world().resource::<crate::ui::hud::stock::buttons::ShowMore>().0, "shown at the first match");
+    app.world_mut().resource_mut::<crate::ui::hud::stock::buttons::ShowMore>().0 = false;
+    // What entering the loading state of a match runs.
+    app.world_mut().run_schedule(OnEnter(AppState::Loading));
+    assert!(app.world().resource::<crate::ui::hud::stock::buttons::ShowMore>().0, "shown again after a new match loads");
+}
