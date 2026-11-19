@@ -749,6 +749,13 @@ XML (Fleet Operations techtree):
 - [ ] `[FO]` `race` on `<object>` is used twice in FO data; find what the game does with it.
 - [ ] `[FO]` `devtech.xml`, `freetech.xml` not named; `TECHTREE_DEFAULT_FILE` (header) unread.
 
+- [?] Map tech tree (fix/mission-build-restrictions): play a campaign mission whose map names a restricted tech tree (header key `techTreeFilename`) and check that the build page omits the restricted items (their cells stay empty at their position) and that an order for one is refused; a map naming a tree the install lacks logs a warning and plays with the default tree. Grade: read from the executable, static (Armada II), Armada I partly.
+- [ ] Map tech tree, not built: multiplayer matches and the lobby start from the default tree, not the map's (both peers must derive the same tree before it can be switched on; the content digest check would refuse a mismatch).
+- [ ] Map tech tree, not built: the lobby's named game-option trees (they replace the map's tree in a skirmish) are not offered.
+- [ ] Map tech tree, not built: tech flags in a tree (research items) do not gate weapons or cloaking through the tree; the computer player's request for units honours the tree only through the existing build-option check.
+- [ ] Map tech tree, interim: the rule "an unlisted item in a text tree is not buildable and its cell stays empty" is read for Armada II and assumed for Armada I; Armada I's hide-versus-grey for unmet prerequisites is not read (kept greyed). The empty-cell look also applies to text-tree skirmish games in both HUD looks (the build page is one model). An XML tree keeps the inferred unlisted-slot fallback and compacts hidden items.
+- [ ] Map tech tree, not traced: whether the original refuses a direct build order for an unavailable item (STA64's sim refuses it).
+
 Other text files opened by fixed name:
 - [ ] `[A1]` `gamekey.map`; `[A1 A2]` `lang.ini`, `texture.dat`; `[A1]` `lang.txt` not named.
 

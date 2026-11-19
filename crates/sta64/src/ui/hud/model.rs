@@ -363,6 +363,11 @@ pub struct BuildItem {
     pub cost: Vec<f32>,
     /// Why it is locked.
     pub why: Option<String>,
+    /// The build cell it sits in, counted over the cells the page offers. Items follow each
+    /// other, except that in a text tech tree an item that cannot be built (withheld or not
+    /// listed) leaves its own cell empty and the others keep their positions (read from the
+    /// executable, static, for Armada II; assumed for Armada I: interim).
+    pub slot: usize,
 }
 
 fn unmet(u: &Unmet) -> String {
@@ -385,7 +390,7 @@ pub fn build_items(feed: &HudFeed, builder: &UnitView) -> Vec<BuildItem> {
     let Some(def) = db.unit(builder.def) else { return Vec::new() };
     let stock: Vec<f32> = feed.view.player(feed.player).map(|p| p.resources.iter().map(|f| f.to_f32()).collect()).unwrap_or_default();
     let poor = |cost: &[f32]| cost.iter().enumerate().any(|(i, c)| *c > stock.get(i).copied().unwrap_or(0.0));
-    let item = |odf: &str, key: ContentKey, avail: Option<&Availability>| -> Option<BuildItem> {
+    let item = |odf: &str, key: ContentKey, avail: Option<&Availability>, slot: usize| -> Option<BuildItem> {
         let u = db.unit(key)?;
         let cost: Vec<f32> = u.build.cost.iter().map(|c| c.to_f32()).collect();
         let (look, why) = match avail {
@@ -395,14 +400,25 @@ pub fn build_items(feed: &HudFeed, builder: &UnitView) -> Vec<BuildItem> {
             Some(Availability::Withheld) => (Look::Locked, Some("cannot be built".into())),
             Some(Availability::NotListed) => (Look::Locked, Some("not in the tech tree".into())),
         };
-        Some(BuildItem { odf: odf.to_owned(), key, look, cost, why })
+        Some(BuildItem { odf: odf.to_owned(), key, look, cost, why, slot })
     };
     match db.tech_tree() {
         Some(tree) => {
             let state = tech_state(feed, db, &def.race);
-            tree.build_options(db, &def.odf, &state, false).iter().filter_map(|o| item(&o.def.odf, o.def.key, Some(&o.availability))).collect()
+            let mut out: Vec<BuildItem> = Vec::new();
+            for (i, o) in tree.build_options(db, &def.odf, &state, false).iter().enumerate() {
+                // A text tree: what cannot be built leaves its cell empty, the others keep theirs.
+                if tree.is_text() && matches!(o.availability, Availability::Withheld | Availability::NotListed) {
+                    continue;
+                }
+                let slot = if tree.is_text() { i } else { out.len() };
+                if let Some(b) = item(&o.def.odf, o.def.key, Some(&o.availability), slot) {
+                    out.push(b);
+                }
+            }
+            out
         }
-        None => def.build.list.iter().filter_map(|d| item(&d.odf, d.key, None)).collect(),
+        None => def.build.list.iter().enumerate().filter_map(|(i, d)| item(&d.odf, d.key, None, i)).collect(),
     }
 }
 
@@ -506,8 +522,9 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
         let names = resource_model(feed);
         let site = feed.def(b).is_some_and(deploys_at_site);
         let mut out = Vec::new();
-        let cells = (0..capacity).filter(|c| *c != CANCEL_CELL && *c != BACK_CELL);
-        for (cell, it) in cells.zip(&items) {
+        let cells: Vec<usize> = (0..capacity).filter(|c| *c != CANCEL_CELL && *c != BACK_CELL).collect();
+        for it in &items {
+            let Some(&cell) = cells.get(it.slot) else { continue };
             let definition = feed.content.as_deref().and_then(|db| db.unit(it.key));
             let verbose = match &it.why {
                 Some(w) => format!("{}. Cost: {}", w, cost_text(&it.cost, &names)),
@@ -1283,6 +1300,28 @@ mod tests {
         let f = feed(db_with(Some(TREE)), units, &[2]);
         assert_eq!(look(&f, "fx_frigate"), Some((Look::Ready, None)));
         assert_eq!(owned_counts(&f).get("fx_station"), Some(&1));
+    }
+
+    /// A text tree that leaves an item out empties that item's cell; the other cells keep their
+    /// positions (interim for Armada I, see `BuildItem::slot`).
+    #[test]
+    fn a_text_tree_leaves_the_cell_of_an_unbuildable_item_empty() {
+        let db = db_with(Some(TREE));
+        let units = vec![unit(&db, 2, "fx_yard", 1, 100.0, None)];
+        let omitting = "fx_yard 0\nfx_frigate 0\n";
+        let f = feed(db_with(Some(omitting)), units.clone(), &[2]);
+        let g = grid(&f, Page::Build);
+        assert!(!g.iter().any(|b| b.cell == 0 && matches!(b.act, Act::Build { .. })), "the omitted cruiser's cell is empty");
+        assert!(g.iter().any(|b| b.cell == 1 && matches!(b.act, Act::Build { .. })), "the frigate keeps its cell");
+        let withheld = "fx_yard 0\nfx_frigate 0\nfx_cruiser -1\n";
+        let f = feed(db_with(Some(withheld)), units.clone(), &[2]);
+        let g = grid(&f, Page::Build);
+        assert!(!g.iter().any(|b| b.cell == 0 && matches!(b.act, Act::Build { .. })));
+        // The unrestricted tree is unchanged: both cells are there.
+        let f = feed(db_with(Some(TREE)), units, &[2]);
+        let g = grid(&f, Page::Build);
+        assert!(g.iter().any(|b| b.cell == 0 && matches!(b.act, Act::Build { .. })));
+        assert!(g.iter().any(|b| b.cell == 1 && matches!(b.act, Act::Build { .. })));
     }
 
     #[test]

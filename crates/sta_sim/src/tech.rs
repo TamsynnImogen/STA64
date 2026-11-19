@@ -150,8 +150,14 @@ mod tests {
             b = b.unit(UnitDef::new("edit_page", "craft"));
         }
         if let Some(t) = tree {
-            let (t, w) = TechTree::parse("t.tt", t);
+            // A tree starting with `#xml-fallback` stands for the XML form (the inferred
+            // unlisted-slot fallback is its rule; a text tree blocks unlisted items).
+            let (t, w) = TechTree::parse("t.tt", t.trim_start_matches("#xml-fallback\n"));
             assert!(w.is_empty(), "{w:?}");
+            let mut t = t;
+            if tree.is_some_and(|x| x.starts_with("#xml-fallback")) {
+                t.name = "t.xml".into();
+            }
             b = b.tech_tree(t);
         }
         let seat = |id: u8, team: u8| PlayerSetup {
@@ -233,14 +239,14 @@ mod tests {
 
     #[test]
     fn a_flagged_slot_is_allowed_to_humans() {
-        let mut sim = yard_game("fx_yard 0\n", true, false);
+        let mut sim = yard_game("#xml-fallback\nfx_yard 0\n", true, false);
         let yard = spawn(&mut sim, "fx_yard", P0);
         assert!(build(&mut sim, P0, yard, "fx_cruiser"));
     }
 
     #[test]
     fn a_builder_with_no_flags_offers_unlisted_slots_to_humans() {
-        let mut sim = yard_game("fx_yard 0\n", false, true);
+        let mut sim = yard_game("#xml-fallback\nfx_yard 0\n", false, true);
         let yard = spawn(&mut sim, "fx_yard", P0);
         assert!(build(&mut sim, P0, yard, "fx_cruiser"));
     }
@@ -248,7 +254,7 @@ mod tests {
     #[test]
     fn a_tail_slot_is_blocked_for_humans_and_allowed_for_ai() {
         // Slot 1 is bare while slot 3 is flagged. P0 is Human, P1 is Ai.
-        let mut sim = yard_game("fx_yard 0\n", false, false);
+        let mut sim = yard_game("#xml-fallback\nfx_yard 0\n", false, false);
         let mine = spawn(&mut sim, "fx_yard", P0);
         let theirs = spawn(&mut sim, "fx_yard", P1);
         assert!(!build(&mut sim, P0, mine, "fx_cruiser"));
@@ -257,7 +263,7 @@ mod tests {
 
     #[test]
     fn editor_pages_are_blocked_even_for_ai() {
-        let mut sim = yard_game("fx_yard 0\n", false, true);
+        let mut sim = yard_game("#xml-fallback\nfx_yard 0\n", false, true);
         let theirs = spawn(&mut sim, "fx_yard", P1);
         assert!(!build(&mut sim, P1, theirs, "edit_page"));
     }
@@ -269,6 +275,36 @@ mod tests {
         let theirs = spawn(&mut sim, "fx_yard", P1);
         assert!(!build(&mut sim, P0, mine, "fx_cruiser"));
         assert!(!build(&mut sim, P1, theirs, "fx_cruiser"));
+    }
+
+    /// A map's own text tree restricts by leaving items out: the sim refuses an unlisted item
+    /// even for a builder without flagged slots, for humans and AI seats alike; listed items are
+    /// unchanged. (Armada II executable, static; Armada I assumed: interim.)
+    #[test]
+    fn a_text_tree_that_omits_an_item_refuses_it_for_every_seat() {
+        let mut sim = yard_game("fx_yard 0\nfx_frigate 0\n", false, true);
+        let mine = spawn(&mut sim, "fx_yard", P0);
+        let theirs = spawn(&mut sim, "fx_yard", P1);
+        assert!(build(&mut sim, P0, mine, "fx_frigate"), "listed: unchanged");
+        assert!(!build(&mut sim, P0, mine, "fx_cruiser"), "omitted: refused");
+        assert!(!build(&mut sim, P1, theirs, "fx_cruiser"), "omitted: refused for the AI seat");
+    }
+
+    /// The restriction is part of the content, so it survives a snapshot reload with the same
+    /// content and a reload with the default tree is refused loudly.
+    #[test]
+    fn the_restriction_survives_a_snapshot_reload_and_a_wrong_tree_is_refused() {
+        let mut sim = yard_game("fx_yard 0\nfx_frigate 0\n", false, true);
+        spawn(&mut sim, "fx_yard", P0);
+        let bytes = sim.snapshot();
+        let db = sim.content().unwrap().clone();
+        let mut loaded = Sim::from_snapshot(&bytes, Some(db.clone())).unwrap();
+        let yard = loaded.units.iter().find(|e| e.owner == P0).map(|e| e.id).unwrap();
+        assert!(build(&mut loaded, P0, yard, "fx_frigate"));
+        assert!(!build(&mut loaded, P0, yard, "fx_cruiser"));
+        let other = yard_game("fx_yard 0\nfx_frigate 0\nfx_cruiser 0\n", false, true);
+        let wrong = other.content().unwrap().clone();
+        assert!(matches!(Sim::from_snapshot(&bytes, Some(wrong)), Err(crate::snapshot::SnapshotError::ContentMismatch { .. })));
     }
 
     #[test]

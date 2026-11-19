@@ -227,6 +227,22 @@ pub(crate) struct MissionSide {
     pub(crate) local: Option<crate::game::LocalRace>,
 }
 
+/// The content with the tech tree the map names for its game: the mount's default tree when the map
+/// names none, names it already, or names one the mount lacks (logged).
+pub(crate) fn with_map_tech_tree(content: Arc<ContentDb>, vfs: &sta_vfs::Vfs, file: &str, map: &str) -> Arc<ContentDb> {
+    let (swapped, warnings) = content.with_map_tech_tree(vfs, file);
+    for w in &warnings {
+        warn!("map {map}: tech tree {}: {}", w.file, w.message);
+    }
+    match swapped {
+        Some(db) => {
+            info!("map {map}: tech tree {file}");
+            Arc::new(db)
+        }
+        None => content,
+    }
+}
+
 /// The sim of a campaign mission (INT-M6): the campaign's seats over the converted map, the
 /// mission's script attached as the link's controller.
 pub(crate) fn build_mission_sim(
@@ -863,6 +879,9 @@ fn rebuild(
             return;
         }
     };
+    // The game plays with the tech tree its map names (`techTreeFilename`); a tree the install lacks
+    // leaves the default one, with a log line.
+    let content = with_map_tech_tree(content, &vfs.0, &map.tech_tree_file, &name);
     // A match from the multiplayer lobby (INT-M5): the sim is the host's `Start` over this
     // machine's own copy of the map, refused unless it is the host's map.
     let mut net_match = net.take();
