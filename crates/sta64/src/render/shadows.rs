@@ -10,7 +10,12 @@
 //!   at *proxies*: one child entity per hull mesh ([`HullPart`]) on [`SHADOW_LAYER`]
 //!   only, drawn with [`ShadowCasterMaterial`], so the real hulls and their materials
 //!   are untouched and the main camera never draws a proxy. A proxy follows its mesh's
-//!   visibility and transform.
+//!   visibility and transform. It keeps its own layer under a parent that propagates one
+//!   (`PropagateOver`): a background object's layer reaching it put the depth colours of
+//!   the map on the background camera's picture over the object.
+//! - A hull drawn on the background layer (`map::BACKGROUND_LAYER`: background objects,
+//!   drawn before the scene, which they never hide) casts nothing: its proxy is on no
+//!   layer and is not fitted ([`proxy_layers`]).
 //! - The target is a half-float image (Bevy blits a camera's half-float main texture to
 //!   it), so the depth is split over two channels (`shadows.wesl`); [`unpack`] is the
 //!   Rust side of it.
@@ -22,6 +27,7 @@
 //! Not ported: the cut-out hulls cast solid (Refit's casters read the texture's alpha),
 //! planets cast no shadow into the map, and hulls that are cloaked still cast.
 
+use bevy::app::PropagateOver;
 use bevy::asset::{embedded_asset, AssetPath, RenderAssetUsages};
 use bevy::camera::primitives::{Frustum, Sphere};
 use bevy::camera::visibility::{RenderLayers, VisibilitySystems};
@@ -200,7 +206,7 @@ impl Plugin for ShadowPlugin {
         app.add_plugins(MaterialPlugin::<ShadowCasterMaterial>::default())
             .init_resource::<crate::render::quality::RenderQuality>()
             .add_systems(Startup, setup)
-            .add_systems(Update, add_proxies)
+            .add_systems(Update, (add_proxies, proxy_layers_follow).chain())
             .add_systems(
                 PostUpdate,
                 update
@@ -248,13 +254,23 @@ fn setup(mut commands: Commands, mut images: ResMut<Assets<Image>>, mut material
     ));
 }
 
+/// The layers of a hull mesh's proxy, from the mesh's own (none: the scene's): the shadow
+/// camera's, unless the mesh is drawn on the background layer, whose objects cast nothing.
+pub fn proxy_layers(mesh: Option<&RenderLayers>) -> RenderLayers {
+    if mesh.is_some_and(|l| l.intersects(&RenderLayers::layer(crate::map::BACKGROUND_LAYER))) {
+        RenderLayers::none()
+    } else {
+        RenderLayers::layer(SHADOW_LAYER)
+    }
+}
+
 /// Gives each hull mesh its proxy, and keeps the proxy's mesh the mesh's. A proxy whose mesh
 /// was despawned the frame it was made has no parent (the hierarchy drops it): it goes.
 #[allow(clippy::type_complexity)]
 fn add_proxies(
     mut commands: Commands,
     caster: Res<CasterMaterial>,
-    fresh: Query<(Entity, &Mesh3d), (With<HullPart>, Without<Proxied>, Without<ShadowProxy>)>,
+    fresh: Query<(Entity, &Mesh3d, Option<&RenderLayers>), (With<HullPart>, Without<Proxied>, Without<ShadowProxy>)>,
     changed: Query<(&Mesh3d, &Proxied), Changed<Mesh3d>>,
     mut proxies: Query<&mut Mesh3d, (With<ShadowProxy>, Without<Proxied>)>,
     orphans: Query<Entity, (With<ShadowProxy>, Without<ChildOf>)>,
@@ -262,9 +278,18 @@ fn add_proxies(
     for e in &orphans {
         commands.entity(e).try_despawn();
     }
-    for (e, mesh) in &fresh {
+    for (e, mesh, layers) in &fresh {
         let proxy = commands
-            .spawn((ShadowProxy, Mesh3d(mesh.0.clone()), MeshMaterial3d(caster.0.clone()), RenderLayers::layer(SHADOW_LAYER), Transform::IDENTITY, ChildOf(e)))
+            .spawn((
+                ShadowProxy,
+                Mesh3d(mesh.0.clone()),
+                MeshMaterial3d(caster.0.clone()),
+                proxy_layers(layers),
+                // Its layer is its own: a parent's propagated layer (a background object's) is not.
+                PropagateOver::<RenderLayers>::default(),
+                Transform::IDENTITY,
+                ChildOf(e),
+            ))
             .id();
         commands.entity(e).try_insert(Proxied(proxy));
     }
@@ -273,6 +298,22 @@ fn add_proxies(
             && m.0 != mesh.0
         {
             m.0 = mesh.0.clone();
+        }
+    }
+}
+
+/// Keeps each proxy's layers to its mesh's ([`proxy_layers`]): a mesh's layer can arrive
+/// after its proxy was made (propagated from a background object in `PostUpdate`).
+fn proxy_layers_follow(
+    meshes: Query<(Option<&RenderLayers>, &Proxied), Without<ShadowProxy>>,
+    mut proxies: Query<&mut RenderLayers, (With<ShadowProxy>, Without<Proxied>)>,
+) {
+    for (layers, p) in &meshes {
+        let want = proxy_layers(layers);
+        if let Ok(mut l) = proxies.get_mut(p.0)
+            && *l != want
+        {
+            *l = want;
         }
     }
 }
@@ -302,7 +343,7 @@ fn update(
     quality: Res<crate::render::quality::RenderQuality>,
     main: Query<&Frustum, MainCamera>,
     lights: Query<(&GlobalTransform, &DirectionalLight), Without<ShadowCamera>>,
-    proxies: Query<(&GlobalTransform, &bevy::camera::primitives::Aabb, &InheritedVisibility), (With<ShadowProxy>, Without<ShadowCamera>)>,
+    proxies: Query<(&GlobalTransform, &bevy::camera::primitives::Aabb, &InheritedVisibility, &RenderLayers), (With<ShadowProxy>, Without<ShadowCamera>)>,
     mut camera: Query<(&mut Camera, &mut Transform, &mut GlobalTransform, &mut Projection), With<ShadowCamera>>,
     mut shadow: ResMut<KeyShadow>,
     mut hull_view: Option<ResMut<HullView>>,
@@ -320,8 +361,8 @@ fn update(
         let frustum = main.single().ok()?;
         let casters: Vec<(Vec3, f32)> = proxies
             .iter()
-            .filter(|(_, _, vis)| vis.get())
-            .map(|(g, a, _)| sphere(g, a))
+            .filter(|(_, _, vis, layers)| vis.get() && layers.intersects(&RenderLayers::layer(SHADOW_LAYER)))
+            .map(|(g, a, _, _)| sphere(g, a))
             .filter(|&(c, r)| can_shade(frustum, c, r, to_key))
             .collect();
         fit(&casters, to_key, SIZE)
@@ -399,10 +440,55 @@ mod tests {
                 GlobalTransform::default(),
                 bevy::camera::primitives::Aabb::from_min_max(-Vec3::ONE, Vec3::ONE),
                 InheritedVisibility::VISIBLE,
+                RenderLayers::layer(SHADOW_LAYER),
             ));
         }
         app.update();
         app.world().get::<Camera>(cam).expect("camera").is_active
+    }
+
+    /// The layers each hull mesh's proxy ends up on, after a few frames: one hull in the
+    /// scene and one under a background object (whose layer propagates to its children).
+    fn proxy_layers_after_frames() -> (RenderLayers, RenderLayers, RenderLayers) {
+        let mut app = App::new();
+        app.add_plugins(bevy::app::HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate))
+            .insert_resource(CasterMaterial(Handle::default()))
+            .add_systems(Update, (add_proxies, proxy_layers_follow).chain());
+        let scene = app.world_mut().spawn((Mesh3d(Handle::default()), HullPart::default())).id();
+        let background = app
+            .world_mut()
+            .spawn((Transform::default(), bevy::app::Propagate(RenderLayers::layer(crate::map::BACKGROUND_LAYER))))
+            .id();
+        let node = app.world_mut().spawn((Transform::default(), ChildOf(background))).id();
+        let planet = app.world_mut().spawn((Mesh3d(Handle::default()), HullPart::default(), ChildOf(node))).id();
+        for _ in 0..8 {
+            app.update();
+        }
+        let proxy = |app: &App, e: Entity| app.world().get::<Proxied>(e).expect("proxied").0;
+        let layers = |app: &App, e: Entity| app.world().get::<RenderLayers>(e).cloned().expect("layers");
+        let (sp, pp) = (proxy(&app, scene), proxy(&app, planet));
+        (layers(&app, sp), layers(&app, pp), layers(&app, planet))
+    }
+
+    /// Regression: a background object's propagated layer reached its hulls' proxies, so the
+    /// background camera drew the map's depth colours (red and green) over the object, and
+    /// a planet's see-through cloud shell showed them in place of the ground under it.
+    #[test]
+    fn a_background_objects_proxies_are_not_on_its_layer_and_cast_nothing() {
+        let (scene, planet_proxy, planet) = proxy_layers_after_frames();
+        assert_eq!(scene, RenderLayers::layer(SHADOW_LAYER), "a scene hull casts");
+        assert!(planet.intersects(&RenderLayers::layer(crate::map::BACKGROUND_LAYER)), "the hull itself stays on the background layer");
+        assert!(!planet_proxy.intersects(&RenderLayers::layer(crate::map::BACKGROUND_LAYER)), "a proxy on the background camera's layer");
+        assert_eq!(planet_proxy, RenderLayers::none(), "a background object casts nothing");
+    }
+
+    #[test]
+    fn proxy_layers_by_the_meshs_layer() {
+        assert_eq!(proxy_layers(None), RenderLayers::layer(SHADOW_LAYER));
+        // A hull the camera does not draw (the GPU tests' ship) still casts.
+        assert_eq!(proxy_layers(Some(&RenderLayers::layer(2))), RenderLayers::layer(SHADOW_LAYER));
+        assert_eq!(proxy_layers(Some(&RenderLayers::layer(crate::map::BACKGROUND_LAYER))), RenderLayers::none());
+        assert_eq!(proxy_layers(Some(&RenderLayers::from_layers(&[0, crate::map::BACKGROUND_LAYER]))), RenderLayers::none());
     }
 
     /// Regression guard (a pass is skipped when nothing needs it, whatever the machine's speed):
