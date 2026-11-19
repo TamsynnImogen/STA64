@@ -570,3 +570,14 @@ fn direct_match_controls_apply_after_input_and_reset_only_keys() {
     assert_eq!(app.world().resource::<KeyBindings>().keys(Action::GameMenu), [KeyCode::Escape]);
     assert_eq!(app.world().resource::<Settings>().music, 13.0);
 }
+
+/// The stock button panel hides its menu button until its "more" button is pressed; Esc (the menu key)
+/// opens the menu all the same, so the player never loses it.
+#[test]
+fn escape_opens_the_menu_while_the_button_panels_second_row_is_hidden() {
+    let mut app = app();
+    start_match(&mut app);
+    assert!(!app.world().resource::<crate::ui::hud::stock::buttons::ShowMore>().0, "the second row is hidden");
+    key(&mut app, KeyCode::Escape);
+    assert_eq!(menu(&app), InGameMenu { open: true, page: MenuPage::Main });
+}
