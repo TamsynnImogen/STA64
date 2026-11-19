@@ -53,6 +53,10 @@ pub const TOGGLES: &[(&str, &str)] = &[
     ("neb-full", "nebula march at the view's size (one ray per pixel, the box path)"),
     ("neb-half", "nebula march at half size per axis (`nebula_lowres.rs`)"),
     ("neb-quarter", "nebula march at a quarter size per axis"),
+    ("action", "the Armada I HUD's action cameras (sky and scene) on, rendering a picture of the panel's size (`STA64_PERF_ACTION_SIZE`, WxH)"),
+    ("action-sky", "only the action view's sky camera on"),
+    ("action-scene", "only the action view's scene camera on"),
+    ("action-msaa4", "with `action`: the action cameras multisampled 4x, as before the fix (default now: off)"),
     ("freeze-rocks", "rock materials not rewritten when the camera moves (lighting goes stale: measurement only)"),
     ("freeze-hulls", "hull materials not rewritten when the camera moves (measurement only)"),
 ];
@@ -337,7 +341,7 @@ fn other_processes() -> Vec<(String, usize)> {
 }
 
 /// Switch the scene to the current variant: classes hidden, settings set. Runs on a change.
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn apply_variant(
     mut run: ResMut<PerfRun>,
     mut classes: Query<(
@@ -358,7 +362,16 @@ fn apply_variant(
     hulls: Option<ResMut<crate::render::hulls::HullLighting>>,
     quality: Option<ResMut<crate::render::quality::RenderQuality>>,
     switches: Option<ResMut<crate::render::quality::PerfSwitches>>,
+    mut commands: Commands,
+    action: Option<Res<crate::render::action_camera::ActionBench>>,
+    mut action_cams: Query<&mut Msaa, Or<(With<crate::render::action_camera::ActionCamera>, With<crate::render::action_camera::ActionSky>)>>,
 ) {
+    for mut m in &mut action_cams {
+        let want = if run.plan.get(run.at).is_some_and(|&i| run.variants[i].1.iter().any(|x| x == "action-msaa4")) { Msaa::Sample4 } else { Msaa::Off };
+        if *m != want {
+            *m = want;
+        }
+    }
     // Every frame, not only on a change: the map spawns its objects over the first frames.
     let want = run.plan.get(run.at).copied();
     let Some(i) = want else { return };
@@ -405,6 +418,17 @@ fn apply_variant(
         if *w != want {
             *w = want;
         }
+    }
+    let size = std::env::var("STA64_PERF_ACTION_SIZE")
+        .ok()
+        .and_then(|s| s.split_once('x').and_then(|(w, h)| Some(Vec2::new(w.parse().ok()?, h.parse().ok()?))))
+        .unwrap_or(Vec2::new(360.0, 260.0));
+    let both = on("action");
+    let bench = (both || on("action-sky") || on("action-scene")).then_some(crate::render::action_camera::ActionBench { size, sky: both || on("action-sky"), scene: both || on("action-scene") });
+    match (bench, action.as_deref()) {
+        (Some(b), a) if a != Some(&b) => commands.insert_resource(b),
+        (None, Some(_)) => commands.remove_resource::<crate::render::action_camera::ActionBench>(),
+        _ => {}
     }
     run.applied = want;
 }

@@ -114,7 +114,7 @@ impl Plugin for WeaponFxPlugin {
         );
         app.add_systems(
             Update,
-            (spawn_fx, update_fx, attach_visuals, apply_alpha)
+            (spawn_fx, update_fx, attach_visuals, super::mining_beam::attach_models.run_if(super::mining_beam::can_attach), apply_alpha)
                 .chain()
                 .in_set(GameSet::Interpolate)
                 .distributive_run_if(resource_exists::<SimLink>)
@@ -292,12 +292,12 @@ fn update_fx(
     clock: Res<AnimClock>,
     link: Res<SimLink>,
     camera: Query<&GlobalTransform, crate::map::MainCamera>,
-    mut q: Query<(Entity, &mut WeaponFx, &mut Transform, &mut FxAlpha)>,
+    mut q: Query<(Entity, &mut WeaponFx, &mut Transform, &mut FxAlpha, Option<&super::mining_beam::ModelBeam>)>,
 ) {
     let now_ticks = clock.now() * TICK_HZ as f64;
     let alpha = clock.alpha();
     let eye = camera.single().ok().map(|c| c.translation());
-    for (e, mut fx, mut tf, mut a) in &mut q {
+    for (e, mut fx, mut tf, mut a, model_beam) in &mut q {
         let age = (now_ticks - fx.fired as f64) as f32;
         if age >= fx.life {
             cmds.entity(e).try_despawn();
@@ -330,6 +330,11 @@ fn update_fx(
         }
         let r = fx.recipe.clone();
         match fx.kind {
+            FxKind::Beam if model_beam.is_some() => {
+                // The ordnance's own model, from the firing point to the target (`mining_beam`).
+                let m = model_beam.expect("checked");
+                *tf = super::mining_beam::beam_transform(fx.from, fx.to, m.radius, m.length);
+            }
             FxKind::Beam => {
                 let d = fx.to - fx.from;
                 let len = d.length().max(1e-3);

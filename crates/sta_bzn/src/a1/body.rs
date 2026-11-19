@@ -213,6 +213,19 @@ fn light_colour(recs: &[Rec<'_>], from: usize) -> Option<[f32; 3]> {
     c.iter().all(|v| v.is_finite()).then_some(c)
 }
 
+/// The map's team table: nine blocks of seven numeric records right before the mission descriptor; the last two
+/// records of a block are the hull and map colour entries. Empty when the records do not have that shape.
+fn team_colour_block(recs: &[Rec<'_>], mission_at: usize) -> Vec<[u32; 2]> {
+    const SHAPE: [u32; 7] = [5, 5, 4, 5, 5, 4, 4];
+    let Some(start) = mission_at.checked_sub(9 * SHAPE.len()) else { return Vec::new() };
+    let block = &recs[start..mission_at];
+    if !block.iter().enumerate().all(|(i, r)| is(r, SHAPE[i % SHAPE.len()], 4)) {
+        return Vec::new();
+    }
+    let word = |r: &Rec<'_>| u32::from_le_bytes(r.data.try_into().unwrap());
+    block.chunks_exact(SHAPE.len()).map(|b| [word(&b[5]), word(&b[6])]).collect()
+}
+
 fn mission(recs: &[Rec<'_>]) -> bool {
     is(&recs[0], 2, 40) && is(&recs[1], 8, 4) && is(&recs[2], 2, 64) && is(&recs[3], 2, 64) && is(&recs[4], 0, 64)
 }
@@ -392,9 +405,11 @@ pub(crate) fn parse_map(data: &[u8], header: Header) -> Result<Map, BznError> {
     }
     let min_extent = target.min;
     let size = [0, 1, 2].map(|i| target.max[i] - target.min[i]);
+    let team_colours = team_colour_block(&recs, mission_at);
     Ok(Map {
         version: header.version,
         binary: true,
+        team_colours,
         mission_type,
         description,
         file_name,
@@ -422,4 +437,39 @@ pub(crate) fn parse_map(data: &[u8], header: Header) -> Result<Map, BznError> {
         }),
         ..Default::default()
     })
+}
+
+#[cfg(test)]
+mod team_colour_tests {
+    use super::*;
+
+    fn rec(kind: u32, v: u32) -> (u32, Vec<u8>) {
+        (kind, v.to_le_bytes().to_vec())
+    }
+
+    fn block(colours: &[[u32; 2]]) -> Vec<(u32, Vec<u8>)> {
+        colours.iter().flat_map(|c| [rec(5, 0), rec(5, 0), rec(4, 0), rec(5, 0), rec(5, 0), rec(4, c[0]), rec(4, c[1])]).collect()
+    }
+
+    fn read(owned: &[(u32, Vec<u8>)]) -> Vec<[u32; 2]> {
+        let recs: Vec<Rec<'_>> = owned.iter().map(|(k, d)| Rec { kind: *k, data: d }).collect();
+        team_colour_block(&recs, recs.len())
+    }
+
+    #[test]
+    fn nine_blocks_before_the_mission_are_read() {
+        let colours: Vec<[u32; 2]> = (0..9).map(|n| [n + 10, n]).collect();
+        assert_eq!(read(&block(&colours)), colours);
+    }
+
+    #[test]
+    fn a_missing_or_misshapen_block_reads_as_empty() {
+        assert!(read(&[]).is_empty());
+        let eight: Vec<[u32; 2]> = (0..8).map(|n| [n, n]).collect();
+        let mut recs = block(&eight);
+        assert!(read(&recs).is_empty(), "eight blocks are not the table");
+        recs = block(&(0..9).map(|n| [n, n]).collect::<Vec<_>>());
+        recs[12].0 = 5;
+        assert!(read(&recs).is_empty(), "a record of the wrong kind");
+    }
 }

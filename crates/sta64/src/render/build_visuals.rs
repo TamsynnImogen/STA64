@@ -153,6 +153,7 @@ fn sync_build_visuals(
     content: Res<ContentRes>,
     local: Res<LocalPlayer>,
     teams: Option<Res<TeamColours>>,
+    map_teams: Option<Res<crate::viewer::MapTeamColours>>,
     mut existing: Query<(
         Entity,
         &BuildVisual,
@@ -199,10 +200,8 @@ fn sync_build_visuals(
         if retained.contains(&next.key.builder) {
             continue;
         }
-        let colour = teams
-            .as_ref()
-            .and_then(|t| t.owner_colour(next.key.owner))
-            .unwrap_or(Color::WHITE);
+        let colour = crate::viewer::owner_hull_colour(teams.as_deref(), map_teams.as_deref(), next.key.owner).unwrap_or(Color::WHITE);
+        let mark = crate::viewer::owner_mark_colour(teams.as_deref(), map_teams.as_deref(), next.key.owner).unwrap_or(Color::WHITE);
         let mut root = commands.spawn((
             Name::new(match next.key.kind {
                 Kind::Ship => "yard construction hull",
@@ -212,6 +211,7 @@ fn sync_build_visuals(
             crate::map::MatchEntity,
             NeedsModel(next.key.def),
             TeamColour(colour),
+            crate::render::units::MarkColour(mark),
             pose(next.pos, next.heading),
             Visibility::Inherited,
         ));

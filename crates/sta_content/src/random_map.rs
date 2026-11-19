@@ -511,6 +511,7 @@ pub fn generate_with(seed: u32, players: u8, table: &Table, set: Option<&str>, c
         race: "federation".into(),
         start_count: g.starts.len() as i32,
         start_locs,
+        team_colours: Vec::new(),
         objects,
         paths: g.paths,
         a1: None,

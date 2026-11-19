@@ -148,6 +148,7 @@ impl Plugin for FlowPlugin {
 /// HUD sprites, cull and weapon tables, radar colours) need nothing here.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn invalidate_mount_caches(
+    mut commands: Commands,
     vfs: Res<Mounted>,
     textures: Option<ResMut<crate::render::textures::TextureCache>>,
     parts: Option<ResMut<crate::render::model_scene::PartCache>>,
@@ -157,12 +158,15 @@ pub(crate) fn invalidate_mount_caches(
     surfaces: Option<ResMut<crate::render::surfaces::Surfaces>>,
     tables: Option<ResMut<crate::render::sprites::SpriteTables>>,
     bridge_art: Option<ResMut<crate::ui::bridge_scene::BridgeArt>>,
+    objectives_art: Option<ResMut<crate::ui::objectives_panel::ObjectivesArt>>,
 ) {
     fn reset<T: Resource<Mutability = bevy::ecs::component::Mutable> + Default>(r: Option<ResMut<T>>) {
         if let Some(mut r) = r {
             *r = T::default();
         }
     }
+    // A table from the old mount's map names entries of another palette.
+    commands.remove_resource::<crate::viewer::MapTeamColours>();
     reset(textures);
     reset(parts);
     reset(models);
@@ -170,6 +174,7 @@ pub(crate) fn invalidate_mount_caches(
     reset(silhouettes);
     reset(surfaces);
     reset(bridge_art);
+    reset(objectives_art);
     if let Some(mut t) = tables {
         t.0 = Arc::new(sta_assets::load_sprite_table(&vfs.0));
     }
@@ -311,6 +316,8 @@ fn clear_match(
         }
     }
     commands.remove_resource::<ActiveMatch>();
+    // The map's own team colours end with its match: the menu scene's ships take the palette's.
+    commands.remove_resource::<crate::viewer::MapTeamColours>();
     commands.remove_resource::<SimLink>();
     commands.remove_resource::<SkirmishCfg>();
     commands.remove_resource::<LocalRace>();

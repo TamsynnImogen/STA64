@@ -1298,6 +1298,126 @@ mod button_panel {
         assert!(msgs.iter_current_update_messages().count() + msgs.len() > 0, "a focus request was sent");
     }
 
+    /// The cfg of a button panel at the sheet's top right: a 266 x 40 panel 11 units from the right edge,
+    /// two end pieces, a first row and a second row below it.
+    fn placed_config(aspect: f32) -> HudConfig {
+        let text = format!(
+            "{CFG}buttonPanelArea = 1323 8 266 40\nbuttonBackgroundPanel = \"bbp\"\nbuttonBackgroundPanelArea = 0 0 266 40\nbuttonBackgroundPanelSize = 2\nbuttonBackgroundPanel_0 = 0 0 21 40\nbuttonBackgroundPanel_1 = 245 0 21 40\n\
+             idleButtonArea = 25 0 40 40\nobjectivesButtonArea = 157 0 40 40\nmoreButtonArea = 201 0 40 40\nmenuButtonArea = 201 45 40 40\n"
+        );
+        let (cfg, warnings) = GuiCfg::parse("panel.cfg", &text);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        HudConfig { gui: Some(cfg.layout_auto()), aspect, fit_scale: false, ..default() }
+    }
+
+    fn group_rect(app: &mut App) -> (Vec2, Vec2) {
+        let (node,) = app.world_mut().query_filtered::<(&Node,), With<buttons::ButtonPanelGroup>>().single(app.world()).unwrap();
+        let px = |v: Val| if let Val::Px(p) = v { p } else { panic!("{v:?}") };
+        (Vec2::new(px(node.left), px(node.top)), Vec2::new(px(node.width), px(node.height)))
+    }
+
+    #[test]
+    fn the_group_sits_at_the_sheets_top_right_with_its_end_pieces_and_the_buttons_inside_it() {
+        let mut app = app_with_content_and_config(content(), placed_config(4.0 / 3.0), UiProfile::Armada2);
+        app.update();
+        let layout = app.world().resource::<StockState>().layout.clone().unwrap();
+        let (pos, size) = group_rect(&mut app);
+        let panel = layout.panel("button").unwrap();
+        assert_eq!((pos.x, pos.y, size.x, size.y), (panel.x, panel.y, panel.w, panel.h));
+        assert!(pos.x + size.x <= layout.hud.right() && (layout.hud.right() - (pos.x + size.x)).abs() < 20.0, "at the right edge: {pos:?} {size:?}");
+        let pieces = app.world_mut().query_filtered::<&Node, (With<crate::ui::gui_sprites::GuiImage>, Without<buttons::PanelButton>)>().iter(app.world()).count();
+        assert!(pieces >= 2, "the two end pieces are drawn");
+        // Every button is a child of the group (its area is relative to it).
+        let group = app.world_mut().query_filtered::<Entity, With<buttons::ButtonPanelGroup>>().single(app.world()).unwrap();
+        let n = app.world_mut().query::<(&buttons::PanelButton, &ChildOf)>().iter(app.world()).filter(|(_, c)| c.parent() == group).count();
+        assert_eq!(n, 4);
+    }
+
+    #[test]
+    fn on_a_wide_window_the_whole_group_moves_to_the_window_edge_and_keeps_its_size() {
+        let narrow = {
+            let app = app_with_content_and_config(content(), placed_config(4.0 / 3.0), UiProfile::Armada2);
+            app.world().resource::<StockState>().layout.clone().unwrap().panel("button").unwrap()
+        };
+        for aspect in [16.0_f32 / 9.0, 21.0 / 9.0, 32.0 / 9.0] {
+            let app = app_with_content_and_config(content(), placed_config(aspect), UiProfile::Armada2);
+            let state = app.world().resource::<StockState>();
+            let layout = state.layout.as_ref().unwrap();
+            let r = layout.panel_at_right_edge("button").unwrap();
+            assert_eq!((r.w, r.h, r.y), (narrow.w, narrow.h, narrow.y), "{aspect}: size and height are the sheet's");
+            let margin = 1080.0 * aspect - r.right();
+            assert!((margin - (1600.0 - 1589.0) * layout.scale).abs() <= 1.0, "{aspect}: {margin}");
+            assert!(state.solid.iter().any(|s| s.contains(Vec2::new(r.x + 5.0, r.y + 5.0))), "{aspect}: pointer-solid");
+        }
+        // Stretched covers the window already: nothing moves.
+        let mut cfg = placed_config(21.0 / 9.0);
+        cfg.fit = crate::ui::hud::stock::layout::HudFit::Stretched;
+        let app = app_with_content_and_config(content(), cfg, UiProfile::Armada2);
+        let layout = app.world().resource::<StockState>().layout.clone().unwrap();
+        assert_eq!(layout.panel_at_right_edge("button"), layout.panel("button"));
+    }
+
+    #[test]
+    fn the_group_overlaps_no_other_stock_panel_at_any_width() {
+        for aspect in [1.0_f32, 5.0 / 4.0, 4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0] {
+            let app = app_with_content_and_config(content(), placed_config(aspect), UiProfile::Armada2);
+            let state = app.world().resource::<StockState>();
+            let layout = state.layout.as_ref().unwrap();
+            let r = layout.panel_at_right_edge("button").unwrap();
+            let overlaps = |o: R| r.x < o.right() && o.x < r.right() && r.y < o.bottom() && o.y < r.bottom();
+            for name in ["resource", "minimap"] {
+                assert!(!layout.panel(name).is_some_and(overlaps), "{aspect}: {name}");
+            }
+            assert!(!layout.info_area(0).is_some_and(overlaps), "{aspect}: info");
+            assert!(r.right() <= layout.screen.x + 0.5, "{aspect}: on screen");
+        }
+    }
+
+    #[test]
+    fn every_button_shows_at_the_start_and_more_hides_and_shows_the_second_row_and_menu_opens_the_in_game_menu() {
+        let mut app = app_with_content_and_config(content(), placed_config(4.0 / 3.0), UiProfile::Armada2);
+        app.update();
+        let find = |app: &mut App, b: PanelButton| {
+            app.world_mut().query::<(Entity, &PanelButton)>().iter(app.world()).find(|(_, p)| **p == b).map(|(e, _)| e).unwrap()
+        };
+        let display = |app: &App, e: Entity| app.world().get::<Node>(e).unwrap().display;
+        let (menu, more, idle) = (find(&mut app, PanelButton::Menu), find(&mut app, PanelButton::More), find(&mut app, PanelButton::Idle));
+        assert_eq!(display(&app, menu), Display::Flex, "interim: the menu button shows at the start");
+        assert_eq!(display(&app, idle), Display::Flex);
+        // The menu button, visible, opens the menu through the real press system.
+        click(app.world_mut(), menu);
+        app.update();
+        let msgs = app.world().resource::<Messages<crate::ui::ingame_menu::OpenInGameMenu>>();
+        assert!(msgs.iter_current_update_messages().count() + msgs.len() > 0, "the in-game menu opens");
+        click(app.world_mut(), more);
+        app.update();
+        app.update();
+        assert_eq!(display(&app, menu), Display::None);
+        assert_eq!(display(&app, idle), Display::Flex, "the first row stays");
+        // The hidden state survives a rebuild of the HUD (a layout change).
+        app.world_mut().resource_mut::<HudConfig>().aspect = 21.0 / 9.0;
+        app.update();
+        app.update();
+        let menu = find(&mut app, PanelButton::Menu);
+        assert_eq!(display(&app, menu), Display::None);
+        let more = find(&mut app, PanelButton::More);
+        click(app.world_mut(), more);
+        app.update();
+        app.update();
+        let menu = find(&mut app, PanelButton::Menu);
+        assert_eq!(display(&app, menu), Display::Flex);
+    }
+
+    #[test]
+    fn a_cfg_without_a_panel_area_or_background_still_gives_usable_buttons() {
+        let text = format!("{CFG}idleButtonArea = 25 0 40 40\nmenuButtonArea = 201 45 40 40\n");
+        let (cfg, _) = GuiCfg::parse("panel.cfg", &text);
+        let config = HudConfig { gui: Some(cfg.layout_auto()), aspect: 21.0 / 9.0, fit_scale: false, ..default() };
+        let mut app = app_with_content_and_config(content(), config, UiProfile::Armada2);
+        app.update();
+        assert_eq!(app.world_mut().query::<&PanelButton>().iter(app.world()).count(), 2);
+    }
+
     #[test]
     fn next_idle_takes_the_idle_ships_in_turn() {
         let db = content();
