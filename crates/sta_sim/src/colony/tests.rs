@@ -785,3 +785,49 @@ fn a_snapshot_row_with_made_row_but_not_active_is_refused() {
     let bytes = crate::snapshot::chain_with_colonies(&sim.snapshot(), &rec);
     assert!(Sim::from_snapshot(&bytes, Some(db)).is_err());
 }
+
+// ---- the orbit ----
+
+#[test]
+fn the_orbit_point_is_on_the_circle_ahead_clockwise_at_the_planet_height() {
+    let planet = Vec3 { x: n(10), y: n(7), z: n(-20) };
+    let ship = Vec3 { x: n(10) + n(500), y: n(99), z: n(-20) };
+    let p = orbit_point(planet, ship, n(250), Fixed::ZERO).unwrap();
+    // 30 degrees ahead of the ship's bearing, towards negative z for a ship on +x (clockwise seen from above):
+    // cos 30 = 0.8660254, sin 30 = 0.5.
+    close(p.x - planet.x, 250.0 * 0.866_025_403_784, 0.01);
+    close(p.z - planet.z, -125.0, 0.01);
+    assert_eq!(p.y, n(7));
+    // On top of the centre there is no bearing.
+    assert!(orbit_point(planet, planet, n(250), Fixed::ZERO).is_none());
+    // A point nearer than tooCloseToTurn + margin is pushed out along the ship-to-point line:
+    // the ship is 250 out on +x, the point 129.9 away, so it moves to 310 away.
+    let near = orbit_point(planet, Vec3 { x: n(10) + n(250), y: n(0), z: n(-20) }, n(250), n(300)).unwrap();
+    let (dx, dz) = (near.x - (planet.x + n(250)), near.z - planet.z);
+    close(dx * dx + dz * dz, 310.0 * 310.0, 1.0);
+}
+
+#[test]
+fn a_ship_launching_pods_circles_the_planet_clockwise_while_it_fires() {
+    let mut sim = game(content(true));
+    let planet = spawn(&mut sim, "fx_pl_h", NEUTRAL, at(0, 0));
+    let s = spawn(&mut sim, "fx_colony", PlayerId(0), at(300, 0));
+    assert!(colonize(&mut sim, 0, s, planet));
+    run(&mut sim, 60);
+    assert!(sim.colonies().process(s).is_some_and(|p| p.active), "launching");
+    // Clockwise seen from above: the bearing's cross product with the step is negative (x * dz - z * dx < 0).
+    let (mut turned, mut last) = (Fixed::ZERO, None::<Vec3>);
+    for _ in 0..240 {
+        sim.step(&[]);
+        let u = sim.unit(s).expect("still colonizing");
+        let r2 = u.pos.x * u.pos.x + u.pos.z * u.pos.z;
+        // Orbit radius orbitRange + planet radius = 250; the path may differ from the circle but stays near it.
+        assert!(r2 > n(150 * 150) && r2 < n(350 * 350), "radius squared {r2:?}");
+        assert_eq!(u.pos.y, Fixed::ZERO, "planet height");
+        if let Some(l) = last {
+            turned = turned + (l.x * (u.pos.z - l.z) - l.z * (u.pos.x - l.x));
+        }
+        last = Some(u.pos);
+    }
+    assert!(turned < Fixed::ZERO, "clockwise, got {turned:?}");
+}
