@@ -45,10 +45,9 @@ pub fn beam_transform(from: Vec3, to: Vec3, radius: f32, length: f32) -> Transfo
     tf
 }
 
-/// INTERIM (not established): a model of a file version before 1.7 names no blend mode, so the loader
-/// draws it opaque and lit, which no beam can be. Its lighting material is named `add_...` and the
-/// same beam models of the later versions declare `additive`; until the pre-1.7 texture-material modes
-/// are read, such a beam is drawn additive. A model that names a blend mode keeps it. Listed in TODO.md.
+/// INTERIM (not established): a model that names no blend mode (the loader gives it `opaque`) is drawn
+/// additive, as a beam is. A model that names a blend on any group keeps every group as loaded, its
+/// unnamed groups too (opaque, lit). Listed in TODO.md.
 fn additive_if_plain(nodes: &mut [sta_assets::model::Node]) {
     use sta_assets::model::NodeKind;
     let named = nodes.iter().any(|n| matches!(&n.kind, NodeKind::Mesh(m) if m.groups.iter().any(|g| g.blend != "opaque")));
@@ -63,6 +62,10 @@ fn additive_if_plain(nodes: &mut [sta_assets::model::Node]) {
         }
     }
 }
+
+/// A beam is drawn unlit: that also keeps it out of the hull look, whose parts the shadow system turns
+/// into shadow casters (a beam casts no shadow).
+const BEAM_UNLIT: bool = true;
 
 /// The render assets the model beams need exist (not in windowless tests).
 pub(super) fn can_attach(
@@ -131,7 +134,7 @@ pub(super) fn attach_models(
             normal_maps: false,
             parts: Some(&mut parts),
             model_key: path,
-            unlit: false,
+            unlit: BEAM_UNLIT,
             scale: 1.0,
         };
         model_scene::spawn(&mut ctx, &model, e);
@@ -188,6 +191,69 @@ mod tests {
         let mut named = vec![node("opaque"), node("alpha")];
         additive_if_plain(&mut named);
         assert_eq!(blends(&named), ["opaque", "alpha"]);
+    }
+
+    /// A beam's model spawn makes no hull part, so the shadow system adds no caster for it; the same
+    /// model spawned the way a unit is does (the test would otherwise prove nothing).
+    #[test]
+    fn a_beam_model_has_no_hull_part_and_so_casts_no_shadow() {
+        use crate::render::hulls::HullPart;
+        use bevy::ecs::world::CommandQueue;
+        use bevy::image::CompressedImageFormats;
+        use sta_assets::model::{Group, Mesh as M, Node, NodeKind, SourceFormat};
+        let model = Model {
+            format: SourceFormat::M3d,
+            version: 2.06,
+            materials: Vec::new(),
+            nodes: vec![Node {
+                name: "beam".into(),
+                parent: None,
+                children: Vec::new(),
+                transform: sta_assets::a2fmt::Matrix34::IDENTITY,
+                kind: NodeKind::Mesh(M {
+                    positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0]],
+                    uvs: vec![[0.0, 0.0]; 3],
+                    groups: vec![Group { material: "m".into(), blend: "additive".into(), maps: Default::default(), faces: vec![[(0, 0), (1, 1), (2, 2)]] }],
+                    two_sided: false,
+                }),
+            }],
+            channels: Vec::new(),
+            flipbooks: Vec::new(),
+            warnings: Vec::new(),
+            pbr: None,
+        };
+        let table = sta_assets::a2fmt::spr::SpriteTable::parse(b"sprite_table\n@reference=64\n");
+        let hull_parts = |unlit: bool| {
+            let vfs = sta_vfs::Vfs::default();
+            let (mut meshes, mut materials, mut images) = (Assets::<Mesh>::default(), Assets::<StandardMaterial>::default(), Assets::<Image>::default());
+            let mut cache = TextureCache::default();
+            let mut world = World::new();
+            let root = world.spawn((Transform::IDENTITY, Visibility::default())).id();
+            let mut queue = CommandQueue::default();
+            {
+                let mut commands = Commands::new(&mut queue, &world);
+                let mut ctx = SpawnCtx {
+                    commands: &mut commands,
+                    meshes: &mut meshes,
+                    materials: &mut materials,
+                    textures: Loader { vfs: &vfs, cache: &mut cache, images: &mut images, formats: CompressedImageFormats::NONE },
+                    team: Color::WHITE,
+                    borg: false,
+                    sprites: &table,
+                    damaged: false,
+                    normal_maps: false,
+                    parts: None,
+                    model_key: "beam".into(),
+                    unlit,
+                    scale: 1.0,
+                };
+                model_scene::spawn(&mut ctx, &model, root);
+            }
+            queue.apply(&mut world);
+            world.query::<&HullPart>().iter(&world).count()
+        };
+        assert_eq!(hull_parts(BEAM_UNLIT), 0);
+        assert!(hull_parts(false) > 0, "a unit-style spawn of the same model has a hull part");
     }
 
     #[test]

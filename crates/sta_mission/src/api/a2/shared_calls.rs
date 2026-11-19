@@ -3,7 +3,9 @@
 //! sound muting, the background geometry, the fade removal and team relations
 //! (the resource writes are in `resource_calls`, LUA-22). Each validates its arguments by
 //! the DLL's signature (read from the executable, static: the decorated names), retains the request as a
-//! `Presentation::Call` for a future consumer and, for the ones that change
+//! `Presentation::Call` (`SetObjectCullingDistance`, `RestoreObjectCullingDistance` and
+//! `SetClippingDistance` are consumed by the client's view limits, `render::cull::ScriptView`:
+//! presentation state, not simulation state) and, for the ones that change
 //! game state, is counted in `unsupported()`; none raises. What each does in
 //! the original is not measured; nothing here claims an effect.
 
