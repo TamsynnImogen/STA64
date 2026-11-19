@@ -433,6 +433,15 @@ pub struct UnitDef {
     /// Where finished units leave this builder; `None`: not read (the unit
     /// appears at the builder's centre, as before SIM-16).
     pub launch: Option<LaunchPoint>,
+    /// `freighterName` of a mining station: the unit (lower-cased ODF name) that
+    /// appears free when a construction rig finishes the station; `None`: no key
+    /// or the engine's "Unknown" default. Not resolved against the database: a
+    /// name that is not a unit spawns nothing.
+    pub free_unit: Option<String>,
+    /// Where that unit appears: the station's dock node (`dockingHardpoint`,
+    /// default `dock`), read from its model like [`launch`](UnitDef::launch).
+    /// Only set when `free_unit` is.
+    pub dock: Option<LaunchPoint>,
     /// Bounding radius of the model times `ScaleSOD`, units (SIM-21); zero:
     /// not read, the unit takes no room.
     pub radius: Fixed,
@@ -624,6 +633,8 @@ impl UnitDef {
             hardpoints: Vec::new(),
             build: BuildDef::default(),
             launch: None,
+            free_unit: None,
+            dock: None,
             radius: Fixed::ZERO,
             sounds: SoundRefs::default(),
             fx: FxRefs::default(),
@@ -682,6 +693,11 @@ pub struct WeaponDef {
     pub fire_sound: Option<String>,
     /// Ordnance or beam effect name (resolved client-side).
     pub fx: Option<String>,
+    /// A mining beam's drawn size: ordnance `radiusScale` and `lengthScale` (read from data;
+    /// the client scales the `shotGeometry` model by `(radius, radius, length / lengthScale)`).
+    /// `None` for every other weapon and for a mining beam with neither key. Render only: not
+    /// digested.
+    pub shot_scale: Option<ShotScale>,
     /// Specials: ticks to engage or disengage (`effectTimer`).
     pub effect_ticks: Tick,
     /// Specials: energy drained per second while active (`energyDrainRate`).
@@ -724,6 +740,13 @@ pub struct WeaponDef {
     /// Typed only: the sim rules that apply them are SIM-73.
     pub base: WeaponBaseDef,
     pub raw: Arc<sta_odf::Odf>,
+}
+
+/// A mining beam's `radiusScale` and `lengthScale` (ordnance keys, read from data).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShotScale {
+    pub radius: Fixed,
+    pub length: Fixed,
 }
 
 /// A value with per-target rows (CON-54): `key = base` followed by
@@ -977,6 +1000,7 @@ impl WeaponDef {
             duration: 0,
             fire_sound: None,
             fx: None,
+            shot_scale: None,
             effect_ticks: 0,
             energy_drain: Fixed::ZERO,
             energy_cost: Fixed::ZERO,

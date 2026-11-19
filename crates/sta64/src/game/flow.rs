@@ -148,6 +148,7 @@ impl Plugin for FlowPlugin {
 /// HUD sprites, cull and weapon tables, radar colours) need nothing here.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn invalidate_mount_caches(
+    mut commands: Commands,
     vfs: Res<Mounted>,
     textures: Option<ResMut<crate::render::textures::TextureCache>>,
     parts: Option<ResMut<crate::render::model_scene::PartCache>>,
@@ -164,6 +165,8 @@ pub(crate) fn invalidate_mount_caches(
             *r = T::default();
         }
     }
+    // A table from the old mount's map names entries of another palette.
+    commands.remove_resource::<crate::viewer::MapTeamColours>();
     reset(textures);
     reset(parts);
     reset(models);
@@ -313,6 +316,8 @@ fn clear_match(
         }
     }
     commands.remove_resource::<ActiveMatch>();
+    // The map's own team colours end with its match: the menu scene's ships take the palette's.
+    commands.remove_resource::<crate::viewer::MapTeamColours>();
     commands.remove_resource::<SimLink>();
     commands.remove_resource::<SkirmishCfg>();
     commands.remove_resource::<LocalRace>();

@@ -18,7 +18,7 @@ pub(super) struct Launch {
 }
 
 /// Local `(x, z)` (+z ahead) turned to world by the builder's heading.
-fn turn(h: (Fixed, Fixed), v: (Fixed, Fixed)) -> (Fixed, Fixed) {
+pub(super) fn turn(h: (Fixed, Fixed), v: (Fixed, Fixed)) -> (Fixed, Fixed) {
     (v.0 * h.1 + v.1 * h.0, v.1 * h.1 - v.0 * h.0)
 }
 
