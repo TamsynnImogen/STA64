@@ -168,6 +168,15 @@ pub struct PanelScreen {
     pub kind: PanelKind,
 }
 
+/// The image an Armada I mission's bridge movie (`PlayBridgeMovie`) is written to. The bridge
+/// scene's overlay ([`crate::ui::bridge_scene`]) inserts it while an Armada I game runs and shows
+/// the picture inside the bridge frame; while it exists, a mission's in-panel movie goes here and
+/// not to the HUD's [`PanelScreen`] (that stays for Armada II's `PlayCinematicMovie`).
+#[derive(Resource, Clone)]
+pub struct BridgeScreen {
+    pub image: Handle<Image>,
+}
+
 /// The player a movie is fitted into: its picture's size, to place it in the window.
 #[derive(Component)]
 struct MovieOverlay {
@@ -248,6 +257,12 @@ impl Movies {
     #[cfg(test)]
     pub(crate) fn queue_for_test(&mut self, request: PlayMovie) {
         self.pending.push_back(request);
+    }
+
+    /// Drop every waiting request, as a test of another module ends a clip it queued.
+    #[cfg(test)]
+    pub(crate) fn stop_for_test(&mut self) {
+        self.pending.clear();
     }
 
     /// A fullscreen movie is playing or queued.
