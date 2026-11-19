@@ -639,7 +639,8 @@ impl Sim {
             }
         }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), alerts: self.alerts.levels(), enemy_hit: self.alerts.hits(), ally_attacks: self.alerts.ally_rows().to_vec(), special_forces: self.switches.special_forces(), mission_switches: self.mission_switches, ..self.attrs.view() } }
+        let active_point_defence = self.content.as_deref().map_or_else(Vec::new, |db| self.weapons.active_point_defence(db, &self.units));
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), alerts: self.alerts.levels(), enemy_hit: self.alerts.hits(), ally_attacks: self.alerts.ally_rows().to_vec(), special_forces: self.switches.special_forces(), mission_switches: self.mission_switches, ..self.attrs.view() }, active_point_defence }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content

@@ -258,6 +258,7 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] Armada I build costs in the stock HUD (#824): in an Armada I mission select a construction ship, open Build and rest the pointer on a priced build button; the tooltip should list the resources and officers the unit costs and say which ones you are short of. Placing it while short refuses with a notice naming the missing resource.
 - [?] Armada I selection marker (#935): change the mounted content while units are selected and check that markers pick up the new texture. Reported in the re-review of #935 from reading the code (not observed in a run): markers that exist when the content changes keep the old texture until they respawn.
 - [?] Armada I Stock lighting, scenes without a map (#934): the front-end menu, the viewer and bench scenes take zero scene ambient under the Armada I rule. That is a stated default, not checked against the original; check the front-end menu on an Armada I install by eye.
+- [?] Point-defence state and hotkey (UI-31, #962): select a unit with toggleable point defence. Click its command button or press P (rebindable under Controls) and check that it reports On, then returns to Off when special energy runs out. Below the activation threshold, check that the button is disabled until there is enough energy. Repeat on the Stock and LCARS HUDs.
 
 ## Checked earlier (morning list)
 

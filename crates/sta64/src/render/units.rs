@@ -733,7 +733,7 @@ mod view_tests {
     }
 
     fn view(tick: u64, units: Vec<UnitView>, visibility: Vec<(PlayerId, Vec<EntityId>)>) -> WorldView {
-        WorldView { tick, digest: 0, units, players: Vec::new(), visibility, perceived_owners: Vec::new(), appearance: Default::default(), attrs: Default::default(), colonies: Vec::new() }
+        WorldView { tick, units, visibility, ..WorldView::default() }
     }
 
     #[test]
