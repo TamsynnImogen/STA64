@@ -35,8 +35,11 @@
 //! `enter_px` < `return_px` and the band's 0.9 give the gap that stops a flicker.
 //! `Always` and `Off` (Tab) override. The pixel thresholds are STA64's own
 //! presentation policy per object class ([`SwitchParams`]); the games define no
-//! pixel size for it. The distances are the games' (`cfgOBJECT_CULLING_DISTANCE`,
-//! see [`super::cull`]).
+//! pixel size for it. The distances are the games' (`cfgOBJECT_CULLING_DISTANCE`, or the
+//! one an Armada II script set, see [`super::cull`]), scaled by STA64's own
+//! `SYMBOL_DISTANCE_FACTOR`: the originals draw nothing past their distance, the symbol
+//! is STA64's, and it takes over a little later. While a cineractive runs there are no
+//! symbols and this module is not consulted (`render::strategic`).
 
 use bevy::prelude::*;
 
