@@ -673,6 +673,7 @@ pub(in crate::ui::hud) fn node_fraction(status: Option<&crate::ui::hud::status::
         .map_or(1.0, |n| (n.amount.to_f32() / n.start.to_f32()).clamp(0.0, 1.0))
 }
 
+#[allow(clippy::too_many_arguments)] // Bevy injects these system parameters.
 pub(in crate::ui::hud) fn update(
     feed: Res<HudFeed>,
     status: Option<Res<crate::ui::hud::status::StatusFeed>>,
