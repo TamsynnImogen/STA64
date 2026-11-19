@@ -115,12 +115,13 @@ fn node_system(name: &str) -> Option<usize> {
     NODES.iter().find(|(n, _)| name.eq_ignore_ascii_case(n)).map(|&(_, i)| i)
 }
 
-/// Bit `i` set: system `i` (view order) is offline, whether destroyed, held off or
-/// disabled: the view's one answer, [`sta_sim::appearance::SystemAppearance::enabled`].
-/// A unit the view lists no systems for has none offline.
+/// Bit `i` set: system `i` (view order) is offline: not enabled (held off or disabled,
+/// [`sta_sim::appearance::SystemAppearance::enabled`]) or at zero health (destroyed,
+/// including a script's damage edit that did not switch it off). A unit the view lists
+/// no systems for has none offline.
 pub fn systems_off_bits(view: &sta_sim::appearance::AppearanceView, id: EntityId) -> u8 {
     let Some(systems) = view.systems(id) else { return 0 };
-    systems.iter().enumerate().fold(0, |bits, (i, s)| if s.is_some_and(|s| !s.enabled) { bits | (1 << i) } else { bits })
+    systems.iter().enumerate().fold(0, |bits, (i, s)| if s.is_some_and(|s| !s.enabled || s.health[0] <= sta_sim::Fixed::ZERO) { bits | (1 << i) } else { bits })
 }
 
 /// Whether the damage-state node `name` shows, or `None` for any other node.
@@ -893,12 +894,13 @@ mod view_tests {
         for other in ["hull", "geometry", "hp01", "borg", ""] {
             assert_eq!(damage_node_shown(other, 0.0, 0b11111), None, "{other:?} is not a damage node");
         }
-        // The offline bits come from the view's `enabled` alone: destroyed (health 0) and
-        // disabled or held off (health full) both count, a system the unit lacks does not.
+        // Offline is "not enabled" or "zero health": destroyed and switched off (health 0), disabled or
+        // held off (health full), and zero health that was never switched off all count; a system
+        // the unit lacks and a damaged but working one do not.
         use sta_sim::appearance::{AppearanceView, SystemAppearance};
         let sys = |enabled, hp| Some(SystemAppearance { enabled, health: [Fixed::from_int(hp), Fixed::from_int(20)] });
-        let view = AppearanceView { systems: vec![(EntityId(1), [sys(false, 0), sys(false, 20), sys(true, 20), None, sys(true, 7)])], ..AppearanceView::default() };
-        assert_eq!(systems_off_bits(&view, EntityId(1)), 0b00011);
+        let view = AppearanceView { systems: vec![(EntityId(1), [sys(false, 0), sys(false, 20), sys(true, 0), None, sys(true, 7)])], ..AppearanceView::default() };
+        assert_eq!(systems_off_bits(&view, EntityId(1)), 0b00111);
         assert_eq!(systems_off_bits(&view, EntityId(2)), 0);
     }
 
