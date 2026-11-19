@@ -23,10 +23,10 @@
 //! | value | where it comes from | applies |
 //! |---|---|---|
 //! | object culling distance | `cfgOBJECT_CULLING_DISTANCE`; Armada II's `SetObjectCullingDistance` replaces it and `RestoreObjectCullingDistance` puts the `ART_CFG.h` value back | in every view (read from the executable, static), not only in a cineractive; Armada I has neither key nor calls |
-//! | cineractive far plane | compiled into the executable ([`CINERACTIVE_FAR_A2`], Armada I [`CINERACTIVE_FAR_A1`]); Armada II's `SetClippingDistance` replaces it | while a cineractive runs (read from the executable, static) |
+//! | cineractive far plane | a value of the game itself, not of the file ([`CINERACTIVE_FAR_A2`], Armada I [`CINERACTIVE_FAR_A1`]); Armada II's `SetClippingDistance` replaces it | while a cineractive runs (read from the executable, static) |
 //!
-//! `ART_CFG.h` also has a key `CINERACTIVE_FAR_CLIPPING_PLANE`; no executable reads it (static), so
-//! it has no effect and STA64 does not read it either. The script calls reach the client as
+//! `ART_CFG.h` also has a key `CINERACTIVE_FAR_CLIPPING_PLANE`: it has no effect in the games
+//! (read from the executable, static), so STA64 does not read it either. The script calls reach the client as
 //! presentation events ([`ScriptView`]); they are not simulation state, so no hash, snapshot or
 //! replay holds them.
 //!
@@ -62,11 +62,11 @@ pub const VERTICAL_SCALE: f32 = 0.25;
 /// `DETAIL_n_LOD_0..3_DISTANCE` of every shipped file.
 pub const DEFAULT_LOD: [f32; 4] = [1000.0, 500.0, 300.0, 100.0];
 
-/// The far plane of a cineractive in Armada II and the Fleet Operations family: a constant of the
-/// executable, which no `ART_CFG.h` key sets (read from the executable, static; the file's
-/// `CINERACTIVE_FAR_CLIPPING_PLANE` is not read).
+/// The far plane of a cineractive in Armada II and the Fleet Operations family: the game's own
+/// value, which no `ART_CFG.h` key sets (read from the executable, static).
 pub const CINERACTIVE_FAR_A2: f32 = 20000.0;
-/// The same for Armada I (read from the executable, static; same units as its `FAR_CLIPPING_PLANE`).
+/// The same for Armada I (read from the executable, static; taken to be in the units of its
+/// `FAR_CLIPPING_PLANE`, not measured).
 pub const CINERACTIVE_FAR_A1: f32 = 1000.0;
 /// STA64's own presentation value, not game data: in normal play a model turns into its map
 /// symbol at this multiple of the culling distance (the originals draw nothing there). Was 1.0.
@@ -89,7 +89,7 @@ pub struct CullParams {
     /// The file states an object culling distance (Armada II family). Armada I does not and
     /// culls no object by distance.
     pub object_culling: bool,
-    /// The far plane while a cineractive runs (the executable's constant; a script call moves it).
+    /// The far plane while a cineractive runs (the game's own value; a script call moves it).
     pub cineractive_far: f32,
 }
 
@@ -245,7 +245,7 @@ impl Plugin for CullPlugin {
             .init_resource::<RenderMarks>()
             .add_systems(OnEnter(crate::app::AppState::Loading), forget_script_view)
             .add_systems(OnExit(crate::app::AppState::InGame), forget_script_view)
-            .add_systems(Update, (load.run_if(resource_exists_and_changed::<Mounted>), mark_view.run_if(resource_changed::<CullParams>), mark_counts));
+            .add_systems(Update, (load.run_if(resource_exists_and_changed::<Mounted>), mark_view.run_if(|file: Res<CullParams>, script: Res<ScriptView>| file.is_changed() || script.is_changed()), mark_counts));
     }
 }
 
@@ -267,7 +267,11 @@ fn tick(clock: &Option<Res<AnimClock>>) -> u64 {
     clock.as_ref().map_or(0, |c| c.tick())
 }
 
-fn mark_view(params: Res<CullParams>, clock: Option<Res<AnimClock>>, mut marks: ResMut<RenderMarks>) {
+/// `cull=` is the culling distance in force (the file's, or the script's while one is set); the
+/// symbol handoff of normal play lies at [`SYMBOL_DISTANCE_FACTOR`] times it, and `render.cull`
+/// counts against the distance printed here.
+fn mark_view(file: Res<CullParams>, script: Res<ScriptView>, clock: Option<Res<AnimClock>>, mut marks: ResMut<RenderMarks>) {
+    let params = file.with_script(&script);
     marks.0.push(Mark {
         tick: tick(&clock),
         kind: "render.view",
@@ -354,10 +358,10 @@ mod tests {
 
     #[test]
     fn the_games_view_limits_come_from_the_file_and_the_executable() {
-        let a2 = CullParams::from_cfg(Some(&CfgH::parse("float cfgOBJECT_CULLING_DISTANCE = 2800.0;\nfloat CINERACTIVE_FAR_CLIPPING_PLANE = 7000.0;\n")));
+        let a2 = CullParams::from_cfg(Some(&CfgH::parse("float cfgOBJECT_CULLING_DISTANCE = 1234.0;\nfloat CINERACTIVE_FAR_CLIPPING_PLANE = 4321.0;\n")));
         assert!(a2.object_culling);
         assert_eq!(a2.cineractive_far, CINERACTIVE_FAR_A2, "the file's key of that name is not read");
-        let a1 = CullParams::from_cfg(Some(&CfgH::parse("float FAR_CLIPPING_PLANE = 1400.0;\nfloat CINERACTIVE_FAR_CLIPPING_PLANE = 900.0;\n")));
+        let a1 = CullParams::from_cfg(Some(&CfgH::parse("float FAR_CLIPPING_PLANE = 777.0;\nfloat CINERACTIVE_FAR_CLIPPING_PLANE = 555.0;\n")));
         assert!(!a1.object_culling);
         assert_eq!(a1.cineractive_far, CINERACTIVE_FAR_A1);
     }
@@ -379,17 +383,18 @@ mod tests {
 
     #[test]
     fn a_cineractive_hides_past_the_far_plane_and_where_the_game_culls_past_the_distance() {
-        let a2 = CullParams::default();
+        // Authored limits: culling distance 1000, cineractive far plane 5000.
+        let a2 = CullParams { cull: 1000.0, cineractive_far: 5000.0, ..CullParams::default() };
         // Inside both: whole, even in the fade band (the fade is not drawn).
-        assert!(!a2.cineractive_hides(2700.0, 100.0, 10.0));
-        assert!(a2.cineractive_hides(2800.0, 100.0, 10.0));
+        assert!(!a2.cineractive_hides(950.0, 100.0, 10.0));
+        assert!(a2.cineractive_hides(1000.0, 100.0, 10.0));
         // Past the far plane by its whole sphere only.
-        assert!(!a2.cineractive_hides(100.0, 20005.0, 10.0));
-        assert!(a2.cineractive_hides(100.0, 20011.0, 10.0));
-        // Armada I culls no object by distance: only its far plane.
-        let a1 = CullParams { object_culling: false, cineractive_far: CINERACTIVE_FAR_A1, ..a2 };
-        assert!(!a1.cineractive_hides(1.0e6, 900.0, 10.0));
-        assert!(a1.cineractive_hides(500.0, 1011.0, 10.0));
+        assert!(!a2.cineractive_hides(100.0, 5005.0, 10.0));
+        assert!(a2.cineractive_hides(100.0, 5011.0, 10.0));
+        // A game that culls no object by distance (Armada I): only its far plane.
+        let a1 = CullParams { object_culling: false, cineractive_far: 400.0, ..a2 };
+        assert!(!a1.cineractive_hides(1.0e6, 390.0, 10.0));
+        assert!(a1.cineractive_hides(50.0, 411.0, 10.0));
         // The symbol handoff of normal play comes later than the culling distance.
         let sym = a2.for_symbols();
         assert_eq!(sym.cull, a2.cull * SYMBOL_DISTANCE_FACTOR);
