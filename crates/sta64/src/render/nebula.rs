@@ -221,20 +221,23 @@ pub fn near_fade(dist: f32, half_size: f32) -> f32 {
 /// "where one hides another"; its exact rule is not known to us. `(centre, radius)` per
 /// nebula; an eye inside a nebula is not occluded by it.
 pub fn occlusion(eye: Vec3, nebulae: &[(Vec3, f32)]) -> Vec<f32> {
-    let disc = |c: Vec3, r: f32| {
-        let d = c - eye;
-        let dist = d.length().max(1e-3);
-        (d / dist, dist, (r / dist).min(1.0).asin())
-    };
-    nebulae
+    // Each nebula's disc once (direction, distance, angular radius), not once per pair: the
+    // pair loop below is O(n^2) and the disc costs a square root and an arcsine.
+    let discs: Vec<(Vec3, f32, f32)> = nebulae
+        .iter()
+        .map(|&(c, r)| {
+            let d = c - eye;
+            let dist = d.length().max(1e-3);
+            (d / dist, dist, (r / dist).min(1.0).asin())
+        })
+        .collect();
+    discs
         .iter()
         .enumerate()
-        .map(|(i, &(ci, ri))| {
-            let (di, dist_i, ai) = disc(ci, ri);
+        .map(|(i, &(di, dist_i, ai))| {
             let mut k = 1.0f32;
-            for (j, &(cj, rj)) in nebulae.iter().enumerate() {
-                let (dj, dist_j, aj) = disc(cj, rj);
-                if j == i || dist_j >= dist_i || dist_j < rj {
+            for (j, &(dj, dist_j, aj)) in discs.iter().enumerate() {
+                if j == i || dist_j >= dist_i || dist_j < nebulae[j].1 {
                     continue;
                 }
                 let theta = di.dot(dj).clamp(-1.0, 1.0).acos();
@@ -530,6 +533,49 @@ fn update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The per-pair form the occlusion had before the discs were computed once.
+    fn occlusion_reference(eye: Vec3, nebulae: &[(Vec3, f32)]) -> Vec<f32> {
+        let disc = |c: Vec3, r: f32| {
+            let d = c - eye;
+            let dist = d.length().max(1e-3);
+            (d / dist, dist, (r / dist).min(1.0).asin())
+        };
+        nebulae
+            .iter()
+            .enumerate()
+            .map(|(i, &(ci, ri))| {
+                let (di, dist_i, ai) = disc(ci, ri);
+                let mut k = 1.0f32;
+                for (j, &(cj, rj)) in nebulae.iter().enumerate() {
+                    let (dj, dist_j, aj) = disc(cj, rj);
+                    if j == i || dist_j >= dist_i || dist_j < rj {
+                        continue;
+                    }
+                    let theta = di.dot(dj).clamp(-1.0, 1.0).acos();
+                    let cover = ((aj + ai - theta) / (2.0 * ai).max(1e-4)).clamp(0.0, 1.0);
+                    k *= 1.0 - OCCLUDE * cover;
+                }
+                k
+            })
+            .collect()
+    }
+
+    #[test]
+    fn occlusion_is_the_same_as_the_per_pair_form_on_a_crowd() {
+        // A fixed pseudo-random crowd, an eye outside and one inside some of the discs.
+        let mut x = 0x2545f491u32;
+        let mut next = || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            (x % 10_000) as f32 / 10_000.0
+        };
+        let crowd: Vec<(Vec3, f32)> = (0..150).map(|_| (Vec3::new(next() * 6000.0, next() * 100.0, next() * 6000.0), 60.0 + next() * 600.0)).collect();
+        for eye in [Vec3::new(3000.0, 1200.0, -500.0), Vec3::new(1500.0, 40.0, 2500.0)] {
+            assert_eq!(occlusion(eye, &crowd), occlusion_reference(eye, &crowd));
+        }
+    }
 
     #[test]
     fn near_fade_ramps_from_a_quarter_to_a_quarter_past_the_whole() {
