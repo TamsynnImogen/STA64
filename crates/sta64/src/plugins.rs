@@ -94,6 +94,8 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
         app.add_plugins(crate::ui::cursor::CursorPlugin);
         // UI-30: titles, fades, the objectives panel and the replies for mission presentation.
         app.add_plugins(crate::ui::presentation::PresentationPlugin);
+        // Armada I: a mission's bridge movie plays in the bridge scene (the cineractive view has no HUD).
+        app.add_plugins(crate::ui::bridge_scene::BridgeScenePlugin);
         if front_end {
             // INT-M4: the front end's screens over the menu scene, the loading screen.
             app.add_plugins(crate::frontend::scene::MenuScenePlugin);

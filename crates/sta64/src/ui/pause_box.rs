@@ -7,6 +7,9 @@
 
 use bevy::prelude::*;
 
+/// Global z of the pause box.
+pub const PAUSE_BOX_Z: i32 = 930;
+
 use super::hud::HudConfig;
 use super::i18n::Strings;
 use super::ingame_menu::{InGameMenu, PlayerPause};
@@ -112,7 +115,7 @@ pub(crate) fn draw(
             PauseBoxRoot,
             Node { position_type: PositionType::Absolute, left: pct(px, l.canvas.0), top: pct(py, l.canvas.1), width: pct(pw, l.canvas.0), height: pct(ph, l.canvas.1), ..default() },
             BackgroundColor(fill),
-            GlobalZIndex(930),
+            GlobalZIndex(PAUSE_BOX_Z),
         ))
         .with_children(|p| {
             if let Some(name) = &l.background {
