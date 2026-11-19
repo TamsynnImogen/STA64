@@ -40,10 +40,13 @@ use sta_vfs::Vfs;
 
 use crate::viewer::Mounted;
 
-/// Plain text's whole multiple may draw at most this share smaller than asked (15% below),
-/// unless no font of the mod allows it.
+/// Plain text's whole multiple may draw at most this share smaller than asked (15% below).
+/// Where no font and multiple of the mod fits both bounds, plain text is not crisp: it is
+/// drawn at exactly the requested size, as before.
 pub const PLAIN_MIN_SHARE: f32 = 0.85;
-/// ... and at most this share larger (15% above), so a label does not outgrow its box.
+/// ... and at most this share larger (15% above). That keeps a label near the size its box was
+/// laid out for whichever font is taken; a box sized for the label's own text still grows or
+/// shrinks with the font's glyph widths, which differ between the mod's fonts.
 pub const PLAIN_MAX_SHARE: f32 = 1.15;
 
 /// One glyph of a page: its top left corner and width, in the page's reference texels.
@@ -674,14 +677,19 @@ impl SpriteFonts {
     /// The font and whole multiple for plain (unstyled) text, which has no role and was
     /// once drawn at exactly `size` in the font nearest `size` (STA64's old fractional
     /// path): the same face ([`pick`](Self::pick) of `size`) at the whole multiple whose
-    /// drawn height is NEAREST to `desired` physical pixels (a tie takes the larger, so a
+    /// drawn height is nearest to `desired` physical pixels (a tie takes the larger, so a
     /// label never shrinks on a tie), provided that lies within [`PLAIN_MIN_SHARE`] below
-    /// and [`PLAIN_MAX_SHARE`] above the request. When the face offers no such multiple, the
-    /// nearest drawn height over all the mod's fonts and multiples inside the lower bound;
-    /// when none is inside it (a mod whose fonts are all taller or too coarse), the nearest
-    /// of all.
+    /// and [`PLAIN_MAX_SHARE`] above the request. When the face has no such multiple, each
+    /// of the mod's fonts is tried at its own nearest multiple and the nearest drawn height
+    /// inside both bounds wins. `None` when no font fits both bounds (a request below the
+    /// smallest font, a gap between sizes, a size of zero or less): the caller then draws
+    /// the text at exactly the requested size on the fractional path, never a crisp size
+    /// outside the bounds.
     pub fn crisp_plain(&self, size: f32, desired: f32) -> Option<(&LoadedFont, u32)> {
-        let floor = desired * PLAIN_MIN_SHARE;
+        if !(size > 0.0 && desired > 0.0) {
+            return None;
+        }
+        let (floor, ceil) = (desired * PLAIN_MIN_SHARE, desired * PLAIN_MAX_SHARE);
         // The multiples of one font bracketing `desired`; the nearer (the larger on a tie).
         let best_k = |h: f32| -> (u32, f32) {
             let lo = ((desired / h).floor() as u32).max(1);
@@ -690,31 +698,27 @@ impl SpriteFonts {
             let k = if dh <= dl { hi } else { lo };
             (k, h * k as f32)
         };
+        let inside = |drawn: f32| drawn >= floor && drawn <= ceil;
         if let Some(f) = self.pick(size).filter(|f| f.font.height() > 0.0) {
             let (k, drawn) = best_k(f.font.height());
-            if drawn >= floor && drawn <= desired * PLAIN_MAX_SHARE {
+            if inside(drawn) {
                 return Some((f, k));
             }
         }
-        let mut cands: Vec<(&LoadedFont, u32, f32)> = self
-            .fonts
+        // Nearest drawn height, the larger on a tie, then the smaller multiple.
+        self.fonts
             .values()
             .filter(|f| f.font.height() > 0.0)
             .map(|f| {
                 let (k, drawn) = best_k(f.font.height());
                 (f, k, drawn)
             })
-            .collect();
-        // Nearest drawn height, the larger on a tie, then the smaller multiple.
-        cands.sort_by(|a, b| {
-            let (da, db) = ((a.2 - desired).abs(), (b.2 - desired).abs());
-            da.total_cmp(&db).then(b.2.total_cmp(&a.2)).then(a.1.cmp(&b.1))
-        });
-        cands
-            .iter()
-            .find(|c| c.2 >= floor)
-            .or_else(|| cands.first())
-            .map(|&(f, k, _)| (f, k))
+            .filter(|c| inside(c.2))
+            .min_by(|a, b| {
+                let (da, db) = ((a.2 - desired).abs(), (b.2 - desired).abs());
+                da.total_cmp(&db).then(b.2.total_cmp(&a.2)).then(a.1.cmp(&b.1))
+            })
+            .map(|(f, k, _)| (f, k))
     }
 
     /// Like [`crisp`](Self::crisp) but never smaller than `desired` (less 0.5 px): when the
@@ -1169,8 +1173,9 @@ fn resolve_text(
         // size ([`SpriteFonts::crisp`]). Plain `sprite_text` (the Refit layout's labels, radar
         // captions) has no role and was drawn at exactly its size in the font nearest to it; it
         // keeps that face and takes the whole multiple whose drawn height is nearest to the
-        // size, within [`PLAIN_MIN_SHARE`] ([`SpriteFonts::crisp_plain`]), so it may take
-        // another of the mod's fonts when the face has no multiple that close. Only `native` and
+        // size, within [`PLAIN_MIN_SHARE`] and [`PLAIN_MAX_SHARE`] ([`SpriteFonts::crisp_plain`]),
+        // so it may take another of the mod's fonts when the face has no multiple that close;
+        // where no font fits it stays at exactly its size on the fractional path. `native` and
         // `scaled` text keeps its own fractional size.
         let crisp = if !style.native && !style.scaled && scalable.is_none() {
             // A sprite font's nominal height carries leading above and below its ink; a
@@ -2401,9 +2406,9 @@ mod tests {
     }
 
     /// Drawn glyph height in physical pixels of plain `sprite_text` of `size` logical px at
-    /// UiScale `ui` in a mod whose fonts have the given heights; every node edge is asserted
-    /// to sit on a whole physical pixel on the way.
-    fn plain_drawn_height(heights: &[f32], size: f32, ui: f32) -> f32 {
+    /// UiScale `ui` in a mod whose fonts have the given heights, and whether every node edge
+    /// sat on a whole physical pixel (the crisp path); `None` when nothing was drawn.
+    fn plain_drawn(heights: &[f32], size: f32, ui: f32) -> Option<(f32, bool)> {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<SpriteFonts>()
@@ -2419,25 +2424,32 @@ mod tests {
         }
         let e = app.world_mut().spawn(sprite_text("Federation campaign", size, Color::WHITE)).id();
         app.update();
-        let kids: Vec<Entity> = app.world().get::<Children>(e).unwrap().iter().collect();
-        assert!(!kids.is_empty());
+        let kids: Vec<Entity> = app.world().get::<Children>(e)?.iter().collect();
+        let mut whole = true;
         let mut drawn = 0.0;
         for k in kids {
             let n = app.world().get::<Node>(k).unwrap();
             for v in [n.left, n.top, n.width, n.height] {
                 let Val::Px(v) = v else { panic!("px") };
                 let phys = v * ui;
-                assert!((phys - phys.round()).abs() < 1e-3, "{phys} is not a whole physical pixel");
+                whole &= (phys - phys.round()).abs() < 1e-3;
             }
             let Val::Px(h) = n.height else { panic!("px") };
             drawn = h * ui;
         }
+        (drawn > 0.0).then_some((drawn, whole))
+    }
+
+    /// The crisp drawn height (every edge on a whole physical pixel), or a failure.
+    fn plain_crisp(heights: &[f32], size: f32, ui: f32) -> f32 {
+        let (drawn, whole) = plain_drawn(heights, size, ui).expect("drawn");
+        assert!(whole, "{drawn} is not on whole physical pixels");
         drawn
     }
 
     /// Plain `sprite_text` (no style) is crisp too: whole physical pixels at a non-integer UI
     /// scale, and its drawn height stays near the requested height (nearest whole multiple,
-    /// within `PLAIN_MIN_SHARE` below it when the mod's fonts allow it), on the same face as
+    /// within `PLAIN_MIN_SHARE` below and `PLAIN_MAX_SHARE` above it), on the same face as
     /// before when that face has a multiple that close.
     #[test]
     fn plain_sprite_text_resolves_to_whole_physical_pixels_at_a_fractional_scale() {
@@ -2445,33 +2457,61 @@ mod tests {
         // 21 logical px ask for 28 physical px.
         let want = 21.0 * ui;
         // Fonts of 14 and 30: the nearest-by-height face (14) has an exact multiple (2x = 28).
-        let drawn = plain_drawn_height(&[14.0, 30.0], 21.0, ui);
+        let drawn = plain_crisp(&[14.0, 30.0], 21.0, ui);
         assert!((drawn - 28.0).abs() < 1e-3, "kept the face and doubled it: {drawn}");
         // Fonts of 19 and 30: the nearest face (19) only offers 19 (68%); the mod's 30 px font
-        // is nearer to the request and inside the bound.
-        let drawn = plain_drawn_height(&[19.0, 30.0], 21.0, ui);
+        // is nearer to the request and inside the bounds.
+        let drawn = plain_crisp(&[19.0, 30.0], 21.0, ui);
         assert!((drawn - 30.0).abs() < 1e-3, "took the font nearest the request: {drawn}");
-        assert!(drawn >= want * PLAIN_MIN_SHARE && drawn <= want * 1.15, "{drawn} vs {want}");
+        assert!(drawn >= want * PLAIN_MIN_SHARE && drawn <= want * PLAIN_MAX_SHARE, "{drawn} vs {want}");
         // A face whose nearest multiple is inside the lower bound but over the upper one is
         // not kept: 23 px doubles to 46 for a 35 px request; the mod's 30 px font is taken.
-        let drawn = plain_drawn_height(&[23.0, 30.0], 26.0, ui);
+        let drawn = plain_crisp(&[23.0, 30.0], 26.0, ui);
         assert!((drawn - 30.0).abs() < 1e-3, "{drawn}");
-        // A larger request: 12 logical px at this scale is 16 physical; 8 and 15 px fonts.
-        let drawn = plain_drawn_height(&[8.0, 15.0], 12.0, ui);
+        // A small request: 12 logical px at this scale is 16 physical; 8 and 15 px fonts.
+        let drawn = plain_crisp(&[8.0, 15.0], 12.0, ui);
         assert!((drawn - 16.0).abs() < 1.0 + 1e-3, "within a pixel of the request: {drawn}");
     }
 
     /// A mod with a single font size: the whole multiple nearest the request (the larger on a
-    /// tie), even when it is below the bound because no other font exists.
+    /// tie) while it is inside the bounds; outside them the text is not crisp.
     #[test]
     fn plain_sprite_text_with_one_font_size_takes_the_nearest_multiple() {
         let ui = 1440.0f32 / 1080.0;
-        // 21 logical px = 28 physical: 19 (9 away) beats 38 (10 away); no font fits the bound.
-        assert!((plain_drawn_height(&[19.0], 21.0, ui) - 19.0).abs() < 1e-3);
         // 60 logical px = 80 physical: 76 (4 away) beats 95.
-        assert!((plain_drawn_height(&[19.0], 60.0, ui) - 76.0).abs() < 1e-3);
-        // A tie takes the larger: 30 requested physical = 22.5 logical; 20 and 40 are 10 away each.
-        assert!((plain_drawn_height(&[20.0], 22.5, ui) - 40.0).abs() < 1e-3);
+        assert!((plain_crisp(&[19.0], 60.0, ui) - 76.0).abs() < 1e-3);
+        // Font 25, request 30 physical (22.5 logical): 25 is 17% under, 50 is far over, so
+        // nothing fits and the text keeps its exact size.
+        let (drawn, _) = plain_drawn(&[25.0], 22.5, ui).expect("drawn");
+        assert!((drawn - 30.0).abs() < 0.01, "{drawn}");
+        // Font 16, request 24 physical (18 logical): 16 and 32 are 8 away each (a tie that
+        // would take the larger), but 32 is 33% over and 16 is 33% under: exact size.
+        let (drawn, _) = plain_drawn(&[16.0], 18.0, ui).expect("drawn");
+        assert!((drawn - 24.0).abs() < 0.01, "{drawn}");
+        // Font 10, request 20 physical (15 logical): exact at 2x.
+        assert!((plain_crisp(&[10.0], 15.0, ui) - 20.0).abs() < 1e-3);
+    }
+
+    /// Nothing fits both bounds: the text is drawn at exactly the requested size on the old
+    /// fractional path, never a crisp size outside the bounds.
+    #[test]
+    fn plain_sprite_text_outside_every_bound_keeps_its_exact_size() {
+        // UI scale below 1 and a request smaller than every font of the mod: 10 logical px at
+        // 0.5 is 5 physical; the smallest font is 14 (2.8 times too large at 1x).
+        let ui = 0.5f32;
+        let (drawn, _) = plain_drawn(&[14.0, 30.0], 10.0, ui).expect("drawn");
+        assert!((drawn - 5.0).abs() < 0.01, "exact requested size, not the 14 px font: {drawn}");
+        // Fonts 14 and 30, a 100 px request: 3x of 30 is 90, inside the bounds, so crisp.
+        let ui = 1.0f32;
+        let drawn = plain_crisp(&[14.0, 30.0], 100.0, ui);
+        assert!((drawn - 90.0).abs() < 1e-3, "{drawn}");
+        // A gap where nothing fits: only a 30 px font, a 50 px request (30 is 40% under, 60 is
+        // 20% over): exact size.
+        let (drawn, _) = plain_drawn(&[30.0], 50.0, ui).expect("drawn");
+        assert!((drawn - 50.0).abs() < 0.01, "{drawn}");
+        // A size of zero or less draws nothing.
+        assert!(plain_drawn(&[14.0, 30.0], 0.0, ui).is_none());
+        assert!(plain_drawn(&[14.0, 30.0], -3.0, ui).is_none());
     }
 
     #[test]

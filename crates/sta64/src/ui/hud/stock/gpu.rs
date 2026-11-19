@@ -1249,7 +1249,7 @@ fn installed_titles_render_on_gpu() {
 
 /// Local font-size check of the Refit (non-stock) HUD on an install's fonts: draws it for one
 /// selected unit and for a group of constructors at the sizes in `STA64_HUD_SIZES`, prints one
-/// `label:` line per sprite text (text, requested size, drawn glyph height in physical px, own
+/// `label:` line per sprite text (styled or plain, text, requested size, drawn glyph height in physical px, own
 /// and parent box widths, `OVERFLOW` where the text is wider or taller than a parent box) and
 /// keeps the frame in `STA64_HUD_CAPTURE_DIR`. Set `STA64_GPU_TESTS=1 STA64_HUD_TESTS=1
 /// STA64_TEST_INSTALL` and optional `STA64_TEST_MOD`. Frames show game art: never commit them.
@@ -1319,8 +1319,8 @@ fn installed_refit_hud_labels_on_gpu() {
             }
             let ui = size.y as f32 / 1080.0;
             let mut rows = Vec::new();
-            let mut q = app.world_mut().query::<(Entity, &crate::ui::sprite_font::SpriteText, &ComputedNode, Option<&ChildOf>, Option<&Children>)>();
-            for (_, text, node, parent, kids) in q.iter(app.world()) {
+            let mut q = app.world_mut().query::<(Entity, &crate::ui::sprite_font::SpriteText, &ComputedNode, Option<&ChildOf>, Option<&Children>, Has<crate::ui::sprite_font::SpriteTextStyle>)>();
+            for (_, text, node, parent, kids, styled) in q.iter(app.world()) {
                 let drawn = kids
                     .and_then(|k| k.iter().find_map(|c| app.world().get::<ComputedNode>(c)))
                     .map_or(0.0, |c| c.size().y);
@@ -1329,8 +1329,8 @@ fn installed_refit_hud_labels_on_gpu() {
                     .map_or((0.0, 0.0), |c| (c.size().x, c.size().y));
                 let over = pw > 0.0 && ph > 0.0 && (node.size().x > pw + 1.0 || node.size().y > ph + 1.0);
                 rows.push(format!(
-                    "label: group={group} {:?} want={:.1}px drawn_h={:.0}px own={:.0}x{:.0} parent={:.0}x{:.0}{}",
-                    text.text, text.size * ui, drawn, node.size().x, node.size().y, pw, ph, if over { " OVERFLOW" } else { "" }
+                    "label: group={group} {} {:?} want={:.1}px drawn_h={:.0}px own={:.0}x{:.0} parent={:.0}x{:.0}{}",
+                    if styled { "styled" } else { "plain" }, text.text, text.size * ui, drawn, node.size().x, node.size().y, pw, ph, if over { " OVERFLOW" } else { "" }
                 ));
             }
             rows.sort();
