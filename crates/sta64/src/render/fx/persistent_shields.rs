@@ -167,7 +167,7 @@ fn sync_outlines(
         Option<&SelectRadius>,
         Option<&Visibility>,
     )>,
-    cameras: Query<&GlobalTransform, With<Camera3d>>,
+    cameras: Query<&GlobalTransform, crate::map::MainCamera>,
     meshes: Option<ResMut<Assets<Mesh>>>,
     mut materials: Option<ResMut<Assets<PersistentShieldMaterial>>>,
     mut state: ResMut<OutlineState>,

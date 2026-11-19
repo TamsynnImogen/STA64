@@ -187,12 +187,14 @@ impl Plugin for NebulaPlugin {
         embedded_asset!(app, "nebula.wesl");
         app.add_plugins((MaterialPlugin::<NebulaMaterial>::default(), crate::render::nebula_lowres::NebulaLowResPlugin))
             .init_resource::<NoiseVolume>()
-            .add_systems(Update, (poll_noise, fade_boards))
-            .add_systems(PostUpdate, update.after(TransformSystems::Propagate).after(crate::render::shadows::ShadowSet));
+            .add_systems(Update, poll_noise)
+            .add_systems(PostUpdate, (fade_boards, update.after(crate::render::shadows::ShadowSet))
+                .after(TransformSystems::Propagate)
+                .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate));
     }
 }
 
-/// A stock nebula drawn as billboards (a class without a gas recipe): its puffs dim
+/// A stock nebula drawn as billboards: its puffs dim
 /// with the eye's nearness and with the nebulae in front of it (RND-05).
 #[derive(Component)]
 pub struct NebulaBoards {
@@ -248,13 +250,13 @@ pub fn occlusion(eye: Vec3, nebulae: &[(Vec3, f32)]) -> Vec<f32> {
 fn fade_boards(
     mut commands: Commands,
     camera: Query<&GlobalTransform, crate::map::MainCamera>,
-    nebulae: Query<(Entity, &GlobalTransform, &NebulaBoards)>,
+    nebulae: Query<(Entity, &GlobalTransform, &NebulaBoards, &InheritedVisibility)>,
     children: Query<&Children>,
     mut puffs: Query<(&GlobalTransform, &Transform, Option<&mut crate::render::sprites::SpriteFade>), With<crate::render::sprites::SpriteFx>>,
 ) {
     let Ok(cam) = camera.single() else { return };
     let eye = cam.translation();
-    let list: Vec<_> = nebulae.iter().map(|(e, g, b)| (e, g.translation(), b.radius)).collect();
+    let list: Vec<_> = nebulae.iter().filter(|(_, _, _, v)| v.get()).map(|(e, g, b, _)| (e, g.translation(), b.radius)).collect();
     let occ = occlusion(eye, &list.iter().map(|&(_, c, r)| (c, r)).collect::<Vec<_>>());
     for (&(root, _, _), occ) in list.iter().zip(occ) {
         for e in children.iter_descendants(root) {
@@ -336,7 +338,7 @@ pub fn spawn_field(
     radius: f32,
     pos: &[[f32; 3]],
     parent: Entity,
-) {
+) -> Entity {
     let radius = if recipe.radius > 10.0 && recipe.radius < 5000.0 { recipe.radius } else { radius };
     let reach = radius * recipe.extent;
     let env = envelope(&recipe, radius, pos);
@@ -429,7 +431,8 @@ pub fn spawn_field(
             lightning: Lightning::new(seed),
             last: -1.0,
         },
-    ));
+        Visibility::default(),
+    )).id()
 }
 
 /// Each frame: the camera, the key light, the flow's drift and the edge-on dimming.
@@ -440,7 +443,7 @@ fn update(
     lights: Query<(&GlobalTransform, &DirectionalLight)>,
     shadow: Option<Res<crate::render::shadows::KeyShadow>>,
     quality: Option<Res<crate::render::quality::RenderQuality>>,
-    mut fields: Query<(Entity, &mut NebulaField, Has<LowResGas>)>,
+    mut fields: Query<(Entity, &mut NebulaField, Has<LowResGas>, &InheritedVisibility)>,
     mut materials: ResMut<Assets<NebulaMaterial>>,
     clock: Res<crate::clock::AnimClock>,
 ) {
@@ -452,7 +455,7 @@ fn update(
         0 => cam_size.map_or(1, |s| crate::render::quality::auto_nebula_scale(s.x, s.y)),
         d => d,
     };
-    let low = divisor > 1 && quality.as_deref().is_none_or(|q| q.depth_prepass) && matches!(proj, Projection::Perspective(_)) && !fields.is_empty();
+    let low = divisor > 1 && quality.as_deref().is_none_or(|q| q.depth_prepass) && matches!(proj, Projection::Perspective(_)) && fields.iter().any(|(_, _, _, visible)| visible.get());
     if low {
         commands.entity(cam_entity).insert(NebulaLowRes { divisor });
     } else if has_low {
@@ -473,11 +476,11 @@ fn update(
     };
     let fwd = cam.forward().as_vec3();
     let t = clock.wall() as f32;
-    for (entity, mut f, has) in &mut fields {
+    for (entity, mut f, has, visible) in &mut fields {
         // While the low-resolution path draws the gas, the box is on no camera's layers.
-        if low && !has {
+        if low && visible.get() && !has {
             commands.entity(entity).insert((LowResGas, RenderLayers::none()));
-        } else if !low && has {
+        } else if (!low || !visible.get()) && has {
             commands.entity(entity).remove::<(LowResGas, RenderLayers)>();
         }
         let f = &mut *f;

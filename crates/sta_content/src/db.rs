@@ -699,6 +699,12 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     if let Some(on) = u.stats.add_to_planner {
         c.raw("add_to_planner", if on { "1" } else { "0" });
     }
+    // AI-05: the Roots planner treats definitions with the same positive tag as one build item.
+    if db.profile() == Profile::Fo4
+        && let Some(tag) = u.stats.distance_below_grid.filter(|tag| *tag > Fixed::ZERO)
+    {
+        c.fixed("distance_below_grid", tag);
+    }
     // SIM-73: the shooter's planet keys, only under the target-mask switch and only when set.
     if db.unit_features(u).weapon_target_masks && (u.stats.can_attack_planets.is_some() || u.stats.can_only_attack_planets.is_some()) {
         let flag = |b: Option<bool>| b.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string());
