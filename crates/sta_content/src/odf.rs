@@ -445,6 +445,14 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
             *b = DefRef::new(n);
             true
         });
+        if let Some(name) = def.free_unit.take() {
+            let n = stem(&name);
+            if unit_names.contains(&n) {
+                def.free_unit = Some(n);
+            } else {
+                warnings.push(Warning::new(&file, format!("freighterName {name} is not a defined unit; no free unit")));
+            }
+        }
         builder = builder.unit(def);
     }
 

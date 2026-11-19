@@ -2,21 +2,19 @@
 //! station whose def names `freighterName`, that unit appears for the
 //! station's owner at the station's dock node.
 //!
-//! Rule (read from the executables, static; on screen not measured):
+//! Rule STA64 follows (read from the executables, static; on screen not measured):
 //! - Only the completion of a station welded by a rig. A station placed by a
 //!   map, spawned or replaced by a mission script, or taken over gets none:
-//!   those paths never reach [`spawn`] (it is called from the weld
-//!   completion only).
+//!   those paths never reach [`spawn`] (called from the weld completion only),
+//!   and neither does a yard queue.
 //! - The unit is created for the station's owner at the pose of the dock
 //!   node (`dockingHardpoint`, default `dock`); it costs no resources, no
 //!   build time and no officers, and its starting crew (`crewCost`) is taken
-//!   from the station's crew. Interim: the original does not clamp the
-//!   station's crew at zero when it is lower than that cost; here it stops
-//!   at zero.
-//! - First act: the original queues it at the station's dock. STA64 has no
-//!   dock queue state, so it stands at the dock node; whether it then mines
-//!   by itself is not measured and not done.
-//! - A name that is not a unit, or an absent key, spawns nothing.
+//!   from the station's crew. Interim: the station's crew stops at zero when
+//!   it is lower than that cost.
+//! - First act: it stands at the dock node. Whether it then mines by itself
+//!   is not measured and not done.
+//! - A name that is not a unit (the loader warns), or an absent key, spawns nothing.
 //! - A def without a readable dock node (STA64's own fallback, interim):
 //!   [`sta_content::launch::DOCK_FALLBACK_AHEAD`] units in front of the station.
 
