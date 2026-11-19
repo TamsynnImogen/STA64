@@ -40,6 +40,7 @@
 //! cursor, ray and projection through [`Aim`].
 
 use bevy::prelude::*;
+use sta_sim::event::SimEvent;
 use sta_sim::world::EntityKind;
 use sta_sim::{ContentKey, EntityId};
 
@@ -47,7 +48,7 @@ use super::orders::Aim;
 use super::keys::{Action, KeyBindings};
 use crate::render::strategic::Strategic;
 use crate::render::units::SelectRadius;
-use crate::sim_link::{ContentRes, Selection, SelectionChanged, SimEntity, SimLink};
+use crate::sim_link::{ContentRes, Selection, SelectionChanged, SimEntity, SimLink, SimMsg};
 
 /// Seconds within which a second click counts as a double click.
 const DOUBLE: f64 = 0.4;
@@ -175,6 +176,33 @@ fn is_station(link: &SimLink, content: &ContentRes, id: EntityId) -> bool {
         .filter(|u| !u.flags.contains(sta_sim::view::UnitFlags::DYING))
         .and_then(|u| content.0.unit(u.def))
         .is_some_and(|d| EntityKind::of_def(d) == EntityKind::Station)
+}
+
+/// Roots: a ship built by a grouped station inherits that station's number.
+/// The sim event arrives after input; this runs before the next key recall.
+pub fn inherit_built_ship_group(
+    mut events: MessageReader<SimMsg>,
+    link: Res<SimLink>,
+    content: Option<Res<ContentRes>>,
+    mut groups: ResMut<ControlGroups>,
+) {
+    let Some(content) = content.filter(|c| c.0.profile() == sta_content::Profile::Fo4) else { return };
+    for SimMsg(event) in events.read() {
+        let SimEvent::Built { builder, id } = event else { continue };
+        if !is_own(&link, *builder) || !is_station(&link, &content, *builder) {
+            continue;
+        }
+        let own_live_craft = link.curr().unit(*id)
+            .filter(|u| u.owner == link.player() && !u.flags.contains(sta_sim::view::UnitFlags::DYING))
+            .and_then(|u| content.0.unit(u.def))
+            .is_some_and(|d| EntityKind::of_def(d) == EntityKind::Craft);
+        if !own_live_craft {
+            continue;
+        }
+        if let Some(group) = groups.groups.iter().position(|group| group.contains(builder)) {
+            bind_group(&mut groups, group, vec![*id], true);
+        }
+    }
 }
 
 /// Shift-click `id` into `sel` (the own selection) without ever mixing ships and
@@ -1286,6 +1314,31 @@ mod tests {
         release(&mut other, KeyCode::AltLeft);
         assert_eq!(sel(&other), [A, Y1]);
         assert_eq!(group(&other, 0), [A, Y1]);
+    }
+
+    #[test]
+    fn roots_built_ship_inherits_station_group_without_changing_selection() {
+        let mut roots = build_with_profile(true, sta_content::Profile::Fo4);
+        step(&mut roots);
+        roots.world_mut().resource_mut::<ControlGroups>().groups[0] = vec![Y1, A];
+        roots.world_mut().resource_mut::<Selection>().0 = vec![C];
+        roots.world_mut().write_message(SimMsg(SimEvent::Built { builder: Y1, id: B }));
+        step(&mut roots);
+        assert_eq!(group(&roots, 0), [A, B, Y1]);
+        assert_eq!(sel(&roots), [C], "building a ship does not select it");
+        tap(&mut roots, KeyCode::Digit1);
+        assert_eq!(sorted(sel(&roots)), [A, B, Y1], "the next recall sees the inherited ship");
+
+        roots.world_mut().write_message(SimMsg(SimEvent::Built { builder: A, id: F }));
+        step(&mut roots);
+        assert_eq!(group(&roots, 0), [A, B, Y1], "a grouped craft is not a station builder");
+
+        let mut other = build_with_profile(true, sta_content::Profile::Native);
+        step(&mut other);
+        other.world_mut().resource_mut::<ControlGroups>().groups[0] = vec![Y1];
+        other.world_mut().write_message(SimMsg(SimEvent::Built { builder: Y1, id: B }));
+        step(&mut other);
+        assert_eq!(group(&other, 0), [Y1], "other profiles keep their group behavior");
     }
 
     #[test]
