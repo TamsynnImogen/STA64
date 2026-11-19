@@ -879,12 +879,13 @@ fn rebuild(
             return;
         }
     };
-    // The game plays with the tech tree its map names (`techTreeFilename`); a tree the install lacks
-    // leaves the default one, with a log line.
-    let content = with_map_tech_tree(content, &vfs.0, &map.tech_tree_file, &name);
     // A match from the multiplayer lobby (INT-M5): the sim is the host's `Start` over this
     // machine's own copy of the map, refused unless it is the host's map.
     let mut net_match = net.take();
+    // The game plays with the tech tree its map names (`techTreeFilename`); a tree the install lacks
+    // leaves the default one, with a log line.
+    // A lobby match keeps the default tree (its sim comes from the host's setup; the HUD must agree).
+    let content = if net_match.is_some() { content } else { with_map_tech_tree(content, &vfs.0, &map.tech_tree_file, &name) };
     let side = match net_match.take() {
         Some(nm) => {
             let own = MapDef::convert_bzn_named_in(&map, &name, &content, &vfs.0, &index).map;
