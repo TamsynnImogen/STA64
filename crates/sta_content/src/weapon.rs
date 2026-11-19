@@ -263,6 +263,11 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
                 // the sim and the drawn beam both read it (read from data; the kind is unchanged).
                 if ord_class.as_deref() == Some(MINING_BEAM_CLASS) {
                     d.duration = o.ticks("lifespan");
+                    // Its drawn size: `radiusScale` (default 1) and `lengthScale` (a length divisor; 1 if
+                    // absent or not positive) of the ordnance, read from data.
+                    let radius = o.num("radiusScale").filter(|v| *v > 0.0).unwrap_or(1.0);
+                    let length = o.num("lengthScale").filter(|v| *v > 0.0).unwrap_or(1.0);
+                    d.shot_scale = Some(crate::def::ShotScale { radius: Fixed::from_f64(radius), length: Fixed::from_f64(length) });
                 }
             }
         }
@@ -324,6 +329,17 @@ mod tests {
         assert_eq!((b.need_target, b.beneficial, b.switch_to_attack, b.cloak_enable, b.warp_enable), (Some(true), Some(false), Some(true), Some(true), Some(false)));
         assert_eq!((b.crew_affects_weapon_delay, b.ignore_valid_as_target), (Some(false), Some(true)));
         assert_eq!(b.regular_weapon_delay, Some(Fixed::from_f64(1.5)));
+    }
+
+    #[test]
+    fn a_mining_beam_reads_its_radius_and_length_scale_and_other_classes_do_not() {
+        let w = "classLabel = \"cannon\"\nordName = \"o\"\n";
+        let (m, _) = with_ordnance(w, "classLabel = \"minebm\"\nlifeSpan = 1\nradiusScale = 2.5\nlengthScale = 5\nshotGeometry = \"x.sod\"\n");
+        assert_eq!(m.shot_scale, Some(crate::def::ShotScale { radius: Fixed::from_f64(2.5), length: Fixed::from_int(5) }));
+        let (bare, _) = with_ordnance(w, "classLabel = \"minebm\"\nlifeSpan = 1\n");
+        assert_eq!(bare.shot_scale.map(|s| (s.radius, s.length)), Some((Fixed::ONE, Fixed::ONE)));
+        let (t, _) = with_ordnance(w, "classLabel = \"photontorpedo\"\nradiusScale = 2.5\nlengthScale = 5\n");
+        assert_eq!(t.shot_scale, None);
     }
 
     #[test]
