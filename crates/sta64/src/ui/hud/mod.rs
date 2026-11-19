@@ -465,6 +465,9 @@ fn press(
                 let why = if commands::shared(&feed).transport_family { "Cannot transport: no crew to spare" } else { "Transporters are not available in this game yet" };
                 notices.write(Notice::new(Severity::Warn, tr(why)));
             }
+            Act::Target(TargetMode::TransportAttack) => {
+                notices.write(Notice::new(Severity::Warn, tr("Cannot transport attack: no eligible crew to spare")));
+            }
             Act::Build {
                 builder,
                 what,
@@ -648,6 +651,8 @@ fn armed_cursor_name(mode: TargetMode, valid: bool) -> &'static str {
         (TargetMode::Colonize, false) => "c_nocolonize",
         (TargetMode::Transport, true) => "c_transport",
         (TargetMode::Transport, false) => "c_notransport",
+        (TargetMode::TransportAttack, true) => "c_capture",
+        (TargetMode::TransportAttack, false) => "c_nocapture",
         (TargetMode::Repair, true) => "c_repair",
         (TargetMode::Repair, false) => "c_norepair",
         // The installs have c_decommission and no refusal art of its own.
@@ -695,6 +700,7 @@ fn target_mode_available(feed: &HudFeed, mode: TargetMode) -> bool {
         TargetMode::Rally => c.rally,
         TargetMode::Colonize => c.colonize,
         TargetMode::Transport => c.transport_ready,
+        TargetMode::TransportAttack => c.transport_attack_ready,
         TargetMode::Repair => c.repair,
         TargetMode::Decommission => c.decommission,
     }
@@ -744,16 +750,17 @@ fn target_order(
             ids = ships.clone();
             vec![Order::Colonize { units: ships, planet }]
         }
-        TargetMode::Transport => {
+        TargetMode::Transport | TargetMode::TransportAttack => {
             let id = target?;
             if !transport_target(feed, id) { return None; }
-            let carriers = commands::transporters(feed, &ids);
+            let attack = mode == TargetMode::TransportAttack;
             // The target is never its own carrier (the sim drops it too); nothing left, nothing to send.
-            let carriers: Vec<EntityId> = carriers.into_iter().filter(|c| *c != id).collect();
+            let carriers: Vec<EntityId> = commands::transporters(feed, &ids, attack)
+                .into_iter().filter(|c| *c != id).collect();
             if carriers.is_empty() { return None; }
-            // Range, shields and the target's side are the sim's to judge: stock does not approach, and neither does the sim.
+            // The sim checks range, shields and the target's side for both commands.
             ids = carriers.clone();
-            vec![Order::Transport { units: carriers, target: id, attack: false }]
+            vec![Order::Transport { units: carriers, target: id, attack }]
         }
         TargetMode::Repair => {
             // SIM-41: repair ships aimed at a ship that is not a yard repair it with their beam.
@@ -913,6 +920,40 @@ mod target_tests {
     }
 
     fn mine_available(f: &HudFeed) -> bool { target_mode_available(f, TargetMode::Mine) }
+
+    #[test]
+    fn roots_transport_attack_uses_only_ready_zero_weld_carriers() {
+        let fake = sta_content::fake::db();
+        let mut builder = sta_content::ContentDb::builder()
+            .profile(sta_content::Profile::Fo4)
+            .features(sta_content::Profile::Fo4.features());
+        for weapon in fake.weapons() { builder = builder.weapon(weapon.clone()); }
+        for unit in fake.units() {
+            let mut unit = unit.clone();
+            if unit.odf == "fx_cruiser" { unit.transport.welding_anim_speed = Some(Fixed::ZERO); }
+            builder = builder.unit(unit);
+        }
+        let mut f = feed(&[1, 2]);
+        f.content = Some(Arc::new(builder.build().unwrap()));
+        let view = Arc::make_mut(&mut f.view);
+        view.units[0].crew = Some([Fixed::from_int(40), Fixed::from_int(50)]);
+        view.units[1].crew = Some([Fixed::from_int(40), Fixed::from_int(50)]);
+        view.units[3].crew = Some([Fixed::from_int(30), Fixed::from_int(50)]);
+        view.units[3].shields = [[Fixed::from_int(50), Fixed::from_int(50)]; 4];
+        view.players = vec![player(1, 1, None), player(2, 2, None)];
+        assert_eq!(armed_cursor_name(TargetMode::TransportAttack, true), "c_capture");
+        assert_eq!(armed_cursor_name(TargetMode::TransportAttack, false), "c_nocapture");
+        assert!(matches!(target_order(&f, TargetMode::TransportAttack, Some(EntityId(4)), None),
+            Some((orders, ids)) if ids == vec![EntityId(1)]
+                && matches!(orders.as_slice(), [Order::Transport { units, target: EntityId(4), attack: true }] if units == &[EntityId(1)])));
+        assert!(matches!(target_order(&f, TargetMode::Transport, Some(EntityId(4)), None),
+            Some((orders, _)) if matches!(orders.as_slice(), [Order::Transport { attack: false, .. }])));
+        f.selected = vec![EntityId(2)];
+        assert!(!target_mode_available(&f, TargetMode::TransportAttack));
+        assert!(target_order(&f, TargetMode::TransportAttack, Some(EntityId(4)), None).is_none());
+        f.selected = vec![EntityId(1)];
+        assert!(target_order(&f, TargetMode::TransportAttack, Some(EntityId(1)), None).is_none());
+    }
 
     #[test]
     fn repair_targets_a_repair_yard_or_lets_the_sim_choose() {

@@ -262,7 +262,7 @@ pub struct TransportsRec {
 }
 
 /// May this carrier transport attack (Roots): the switch and `weldingAnimSpeed = 0`.
-fn attack_capable(db: &ContentDb, d: &UnitDef) -> bool {
+pub fn attack_capable(db: &ContentDb, d: &UnitDef) -> bool {
     db.unit_features(d).transport_attack_by_weld && d.transport.welding_anim_speed == Some(Fixed::ZERO)
 }
 
