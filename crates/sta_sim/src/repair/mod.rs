@@ -2,6 +2,7 @@
 
 pub mod dock;
 pub mod service;
+pub mod ship;
 pub mod time;
 pub mod yard;
 
@@ -12,3 +13,5 @@ pub use yard::{YardCandidate, select_a2_yard};
 
 #[cfg(test)]
 mod service_tests;
+#[cfg(test)]
+mod ship_tests;

@@ -29,8 +29,11 @@
 //! the sim uses (class `freighter`, or `miner 1`). Not modelled: which
 //! resource kinds a miner class can mine (every miner votes Mine on every
 //! resource), a freighter's vote on its drop-off station, and the originals'
-//! colonise, transport, trade and repair-other votes (STA64 has no such
-//! orders yet).
+//! colonise, transport and trade votes.
+//!
+//! Repair-other (SIM-41): a repair ship votes Repair on a damaged ship (hull short) of its own
+//! player or a confirmed ally, giving `Order::Repair` with the ship as target; the sim takes
+//! only the repair ships (a ship short only of a system is judged by the sim, not voted on).
 
 use sta_content::ContentDb;
 use sta_core::{EntityId, Fixed};
@@ -67,9 +70,30 @@ pub fn takers(db: Option<&ContentDb>, view: &WorldView, order: &Order) -> Vec<En
         Order::Mine { units, .. } => keep(units, &|db, id| is_miner(db, view, id)),
         Order::Attack { units, .. } => keep(units, &|db, id| is_armed(db, view, id)),
         Order::Rally { builders, .. } => builders.clone(),
+        Order::Repair { units, yard: Some(t) } if db.is_some_and(|db| view.unit(*t).and_then(|u| db.unit(u.def)).is_some_and(|d| EntityKind::of_def(d) == EntityKind::Craft)) => {
+            keep(units, &|db, id| is_repair_ship(db, view, id))
+        }
         Order::Move { units, .. } => units.clone(),
         _ => Vec::new(),
     }
+}
+
+fn is_repair_ship(db: &ContentDb, view: &WorldView, id: EntityId) -> bool {
+    view.unit(id).and_then(|u| db.unit(u.def)).is_some_and(|d| d.class.0.eq_ignore_ascii_case("repairship"))
+}
+
+/// The clicking player or a confirmed ally of theirs (a stated Ally relation, else the same team).
+fn is_friend(view: &WorldView, me: PlayerId, owner: PlayerId) -> bool {
+    if owner == me {
+        return true;
+    }
+    if !owner.is_player() {
+        return false;
+    }
+    if let Some(relation) = view.player(me).and_then(|p| p.relations.iter().find(|(id, _)| *id == owner).map(|(_, r)| *r)) {
+        return relation == Relation::Ally;
+    }
+    matches!((view.player(me), view.player(owner)), (Some(a), Some(b)) if a.team == b.team)
 }
 
 fn is_enemy(view: &WorldView, me: PlayerId, owner: PlayerId) -> bool {
@@ -109,6 +133,7 @@ pub fn rally_builders(db: Option<&ContentDb>, view: &WorldView, me: PlayerId, ow
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Vote {
     Mine = 4,
+    Repair = 6,
     Attack = 7,
 }
 
@@ -138,6 +163,9 @@ pub fn context_order(db: Option<&ContentDb>, view: &WorldView, me: PlayerId, own
         return enemy.then(|| Order::Attack { units: own.to_vec(), target });
     };
     let resource = is_resource(db, view, target);
+    let damaged_friend = is_friend(view, me, t.owner)
+        && t.hull[0] < t.hull[1]
+        && db.unit(t.def).is_some_and(|d| EntityKind::of_def(d) == EntityKind::Craft);
     let vote = own
         .iter()
         .filter_map(|&id| {
@@ -145,6 +173,8 @@ pub fn context_order(db: Option<&ContentDb>, view: &WorldView, me: PlayerId, own
                 Some(Vote::Mine)
             } else if enemy && id != target && is_armed(db, view, id) {
                 Some(Vote::Attack)
+            } else if damaged_friend && id != target && is_repair_ship(db, view, id) {
+                Some(Vote::Repair)
             } else {
                 None
             }
@@ -153,6 +183,7 @@ pub fn context_order(db: Option<&ContentDb>, view: &WorldView, me: PlayerId, own
     Some(match vote {
         Vote::Mine => Order::Mine { units: own.to_vec(), node: target },
         Vote::Attack => Order::Attack { units: own.to_vec(), target },
+        Vote::Repair => Order::Repair { units: own.to_vec(), yard: Some(target) },
     })
 }
 

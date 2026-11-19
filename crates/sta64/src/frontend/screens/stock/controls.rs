@@ -72,6 +72,7 @@ fn action_label(action: Action) -> String {
         Action::SelectType => tr("Select same type"),
         Action::Group(n) => trf("Group {0}", &[&(n + 1)]),
         Action::Stop => tr("Stop"),
+        Action::PointDefence => tr("Toggle point defence"),
         Action::Formation(sta_sim::movement::FORM_LINE) => tr("Line formation"),
         Action::Formation(sta_sim::movement::FORM_COLUMN) => tr("Column formation"),
         Action::Formation(_) => tr("Wedge formation"),
@@ -81,6 +82,7 @@ fn action_label(action: Action) -> String {
         Action::RevealFog => tr("Toggle fog"),
         Action::RevealShroud => tr("Toggle shroud"),
         Action::PauseGame => tr("Pause game"),
+        Action::SelectNextShip => tr("Select damaged ships (Roots) / next ship"),
     }
 }
 
@@ -258,7 +260,7 @@ mod tests {
         let mut bindings = KeyBindings::default();
         let mut draft = ControlsDraft::default();
         draft.reload(&bindings);
-        assert_eq!(draft.text.len(), 23);
+        assert_eq!(draft.text.len(), Action::ALL.len());
         draft.text[0] = "KeyQ".into();
         draft.page = 3;
         draft.text[21] = "KeyH".into();

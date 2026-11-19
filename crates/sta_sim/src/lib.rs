@@ -218,6 +218,8 @@ pub struct Sim {
     recrew: recrew::Recrews,
     /// Yard repair queues (SIM-40); in the digest and the snapshot once any exists.
     repairs: repair::Repairs,
+    /// Units being decommissioned (SIM-45); in the digest once any exists.
+    recycles: economy::recycle::Recycles,
     /// Mission-wide switches (LUA-41), saved; hashed only when not the default.
     mission_switches: mission_switches::MissionSwitches,
 }
@@ -262,6 +264,7 @@ impl Sim {
             transports: Default::default(),
             recrew: Default::default(),
             repairs: Default::default(),
+            recycles: Default::default(),
             mission_switches: Default::default(),
         }
     }
@@ -302,6 +305,7 @@ impl Sim {
             self.colonies_after_order(c.player, o);
             self.transports_after_order(c.player, o);
             self.repairs_after_order(c.player, o);
+            self.recycles_after_order(c.player, o);
         }
         ok
     }
@@ -459,6 +463,7 @@ impl Sim {
                 self.production.order_rally(db, &self.units, c.player, builders, *at)
             }
             Order::Repair { units, yard } => self.apply_repair(c.player, units, *yard),
+            Order::Decommission { units, yard } => self.apply_decommission(c.player, units, *yard),
             Order::Recrew { units, on } => self.order_recrew(c.player, units, *on),
         }
     }
@@ -526,7 +531,9 @@ impl Sim {
             // Pulses and arrivals after the hits, before the latch upkeep (SIM-46).
             self.step_transports();
             self.step_recrew();
+            self.auto_repair();
             self.step_repairs();
+            self.step_recycles();
             let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
             combat::casualty::step(&mut self.units, &db, &mut casualties);
             for (id, by) in killed {
@@ -632,7 +639,8 @@ impl Sim {
             }
         }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), alerts: self.alerts.levels(), enemy_hit: self.alerts.hits(), ally_attacks: self.alerts.ally_rows().to_vec(), special_forces: self.switches.special_forces(), mission_switches: self.mission_switches, ..self.attrs.view() } }
+        let active_point_defence = self.content.as_deref().map_or_else(Vec::new, |db| self.weapons.active_point_defence(db, &self.units));
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), alerts: self.alerts.levels(), enemy_hit: self.alerts.hits(), ally_attacks: self.alerts.ally_rows().to_vec(), special_forces: self.switches.special_forces(), mission_switches: self.mission_switches, ..self.attrs.view() }, active_point_defence }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content

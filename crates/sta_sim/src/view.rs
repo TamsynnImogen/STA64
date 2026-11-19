@@ -44,9 +44,16 @@ pub struct WorldView {
     /// the planet's [`UnitView::owner`].
     #[serde(default)]
     pub colonies: Vec<crate::colony::ColonyView>,
+    /// Switched-on point defence, sorted by entity id and `Order::Special` slot.
+    #[serde(default)]
+    pub active_point_defence: Vec<(EntityId, u8)>,
 }
 
 impl WorldView {
+    pub fn point_defence_on(&self, id: EntityId, slot: u8) -> bool {
+        self.active_point_defence.binary_search(&(id, slot)).is_ok()
+    }
+
     pub fn perceived_owner(&self, id: EntityId) -> Option<PlayerId> {
         let unit = self.unit(id)?;
         Some(match self.perceived_owners.binary_search_by_key(&id, |row| row.0) {

@@ -12,7 +12,7 @@ use sta_sim::command::{CommandKind, Order};
 use sta_sim::movement::{FORM_COLUMN, FORM_LINE, FORM_WEDGE};
 use sta_sim::{ContentKey, EntityId, Fixed, PlayerId, UnitView, WorldView};
 
-use crate::ui::i18n::{tr, tooltip_key};
+use crate::ui::i18n::{tr, trf, tooltip_key};
 use super::layout::{GRID_COLS, GRID_ROWS, InfoHeight};
 use super::commands;
 
@@ -126,6 +126,14 @@ pub struct Tile {
     pub id: EntityId,
     pub name: String,
     pub hull: f32,
+    /// The shields' share over all facings; `None` without shields.
+    pub shield: Option<f32>,
+}
+
+/// A unit's shields as one share over all facings, `None` without shields.
+fn shield_frac(u: &UnitView) -> Option<f32> {
+    let (now, max) = u.shields.iter().fold((0.0, 0.0), |(n, m), s| (n + s[0].to_f32(), m + s[1].to_f32()));
+    (max > 0.0).then(|| (now / max).clamp(0.0, 1.0))
 }
 
 /// The info panel's content.
@@ -161,8 +169,6 @@ pub fn info(feed: &HudFeed) -> Info {
                     (identity.name, identity.captain, identity.registry)
                 },
             );
-            let shields: Vec<[Fixed; 2]> = u.shields.to_vec();
-            let (now, max) = shields.iter().fold((0.0, 0.0), |(n, m), s| (n + s[0].to_f32(), m + s[1].to_f32()));
             Info::Single(Single {
                 id: u.id,
                 name: feed.given_name(u).map_or(name, str::to_owned),
@@ -173,12 +179,12 @@ pub fn info(feed: &HudFeed) -> Info {
                 hull: frac(u.hull),
                 hull_now: u.hull[0].to_f32().round() as i32,
                 hull_max: u.hull[1].to_f32().round() as i32,
-                shield: (max > 0.0).then(|| (now / max).clamp(0.0, 1.0)),
+                shield: shield_frac(u),
                 progress: u.progress.map(|p| p.to_f32().clamp(0.0, 1.0)),
                 builder: def.is_some_and(|d| !d.build.list.is_empty()) && finished(u),
             })
         }
-        many => Info::Group(many.iter().map(|u| Tile { id: u.id, name: feed.name(u), hull: frac(u.hull) }).collect()),
+        many => Info::Group(many.iter().map(|u| Tile { id: u.id, name: feed.name(u), hull: frac(u.hull), shield: shield_frac(u) }).collect()),
     }
 }
 
@@ -210,7 +216,7 @@ pub enum Act {
     Back,
     /// Arm a map target; completed by the HUD's target click system.
     Target(TargetMode),
-    /// The sim currently supports cloak as a special slot toggle.
+    /// A supported special slot toggle (cloak or point defence).
     Special(u8),
     /// UI-02's stop on the own selection.
     Stop,
@@ -253,6 +259,8 @@ pub enum TargetMode {
     Transport,
     /// The stock REPAIR command: pick a repair yard, or anywhere for the best one (SIM-40).
     Repair,
+    /// The stock DECOMMISSION command: pick a yard, or anywhere for the best one or in place (SIM-45).
+    Decommission,
 }
 
 /// How a button looks.
@@ -263,6 +271,42 @@ pub enum Look {
     Poor,
     /// Not buildable yet: shown, disabled.
     Locked,
+}
+
+/// Live state of the shared point-defence slot. A mixed selection keeps its
+/// per-unit toggle behaviour: the button reports the mixture rather than
+/// claiming every unit is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PointDefenceState {
+    Off,
+    On,
+    Mixed,
+}
+
+/// Whether this selection can send the point-defence toggle, and what it shows.
+/// The sim initializes an absent energy row to the unit's authored pool before
+/// handling a special order, so use that same initial value here.
+fn point_defence_state(feed: &HudFeed, slot: u8) -> Option<(PointDefenceState, bool)> {
+    let db = feed.content.as_deref()?;
+    let mut on = 0;
+    let mut total = 0;
+    let mut ready = false;
+    for unit in feed.selected_units().into_iter().filter(|u| u.owner == feed.player) {
+        let def = db.unit(unit.def)?;
+        let (kind, weapon) = sta_sim::specials::specials_of(db, def).nth(slot as usize)?;
+        if kind != sta_sim::specials::SpecialKind::PointDefence { return None; }
+        let active = feed.view.point_defence_on(unit.id, slot);
+        on += usize::from(active);
+        total += 1;
+        let energy = unit.energy.map(|pool| pool[0])
+            .or_else(|| sta_sim::specials::energy_def(def).map(|pool| pool.max));
+        ready |= active || sta_sim::specials::point_defence_has_energy(db, weapon, energy);
+    }
+    if total == 0 { return None; }
+    let state = if on == 0 { PointDefenceState::Off }
+        else if on == total { PointDefenceState::On }
+        else { PointDefenceState::Mixed };
+    Some((state, ready))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -383,6 +427,7 @@ fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
         Act::Target(TargetMode::Colonize) => (vec!["b_colonize".into()], false),
         Act::Target(TargetMode::Transport) => (vec!["b_transport".into()], false),
         Act::Target(TargetMode::Repair) => (vec!["b_repair".into()], false),
+        Act::Target(TargetMode::Decommission) => (vec!["b_decom".into()], false),
         Act::Cancel(_) => (vec!["b_cancel".into()], false),
         Act::Formation(_) => (Vec::new(), false),
         // No verified native ID for these actions; use the existing label.
@@ -524,14 +569,32 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
         // Cell 1 is the producers' Rally; a craft that can move is never one.
         out.push(button(1, &tr("Repair"), Act::Target(TargetMode::Repair), &tooltip_key("Repair at a shipyard")));
     }
+    if caps.decommission {
+        out.push(button(13, &tr("Decommission"), Act::Target(TargetMode::Decommission), &tooltip_key("Decommission")));
+    }
     if caps.recrew {
         let mut b = button(9, &tr("Recrew"), Act::Recrew, &tooltip_key("Recrew"));
         if !caps.recrew_ready { b.look = Look::Locked; }
         out.push(b);
     }
-    for (i, (slot, _)) in caps.specials.iter().enumerate() {
+    for (i, (slot, kind)) in caps.specials.iter().enumerate() {
         if let Some(cell) = [5, 10, 11, 12, 13, 14].get(i) {
-            out.push(button(*cell, &tr("Cloak"), Act::Special(*slot), &tooltip_key("Toggle cloak")));
+            let act = Act::Special(*slot);
+            if *kind == sta_sim::specials::SpecialKind::PointDefence {
+                let Some((state, ready)) = point_defence_state(feed, *slot) else { continue };
+                let status = match state {
+                    PointDefenceState::Off => tr("Off"),
+                    PointDefenceState::On => tr("On"),
+                    PointDefenceState::Mixed => tr("Mixed"),
+                };
+                let label = trf("PD: {0}", &[&status]);
+                let tip = trf("Point defence: {0}", &[&status]);
+                let mut b = button(*cell, &label, act, &tip);
+                if !ready { b.look = Look::Locked; }
+                out.push(b);
+            } else {
+                out.push(button(*cell, &tr("Cloak"), act, &tooltip_key("Toggle cloak")));
+            }
         }
     }
     out.sort_by_key(|b| b.cell);
@@ -564,7 +627,9 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
             }),
             own,
         )),
-        Act::Special(slot) if caps.specials.iter().any(|s| s.0 == *slot) => Some((
+        Act::Special(slot) if caps.specials.iter().any(|s| s.0 == *slot
+            && (s.1 != sta_sim::specials::SpecialKind::PointDefence
+                || point_defence_state(feed, *slot).is_some_and(|(_, ready)| ready))) => Some((
             CommandKind::Order(Order::Special {
                 units: own.clone(),
                 slot: *slot,
@@ -849,8 +914,8 @@ mod tests {
         let g = grid(&f, Page::Top);
         assert_eq!(
             g.iter().map(|b| b.cell).collect::<Vec<_>>(),
-            [1, 2, 3, 6, 7],
-            "mobile armed craft (1: Repair, SIM-40)"
+            [1, 2, 3, 6, 7, 13],
+            "mobile armed craft (1: Repair, SIM-40; 13: Decommission, SIM-45)"
         );
         let stop = g.iter().find(|b| b.act == Act::Stop).unwrap();
         assert_eq!(
@@ -1067,10 +1132,11 @@ mod tests {
         let db = db.build().unwrap();
         let f = feed(db, vec![unit(&fake, 2, "fx_yard", 1, 100.0, None)], &[2]);
         let top = grid(&f, Page::Top);
-        assert_eq!(top.iter().map(|b| b.cell).collect::<Vec<_>>(), [0, 1, 6]);
+        assert_eq!(top.iter().map(|b| b.cell).collect::<Vec<_>>(), [0, 1, 6, 13]);
         assert_eq!(top[0].sprite_names, ["b_build"]);
         assert_eq!(top[1].sprite_names, ["b_rally"]);
         assert_eq!(top[2].sprite_names, ["b_stop"]);
+        assert_eq!(top[3].sprite_names, ["b_decom"]);
         let build = grid(&f, Page::Build);
         assert_eq!(build.iter().map(|b| b.cell).collect::<Vec<_>>(), [0, 1, 4, 9]);
         assert_eq!(build[0].sprite_names, ["b_fed_excelsior", "b_fx_cruiser"]);

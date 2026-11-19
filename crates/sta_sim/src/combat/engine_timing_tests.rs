@@ -513,3 +513,42 @@ fn pd_changes_raise_events_and_the_slot_helper_finds_the_weapon() {
     let def = plain.unit(plain.key("fx_station").unwrap()).unwrap();
     assert_eq!(crate::specials::point_defence_slot(&plain, def), None);
 }
+
+#[test]
+fn active_point_defence_view_uses_special_slots_and_survives_restore() {
+    let db = content(
+        |f| f.pd_energy = true,
+        |units, weapons| {
+            let pd = weapons.iter_mut().find(|w| w.odf == "fx_pd").unwrap();
+            pd.energy_cost = Fixed::from_int(30);
+            let station = units.iter_mut().find(|u| u.odf == "fx_station").unwrap();
+            station.special_energy_max = Fixed::from_int(4);
+            // The station starts with a normal weapon then PD. Copy that PD
+            // hardpoint so special slot 1 corresponds to hardpoint index 2.
+            station.hardpoints.push(station.hardpoints[1].clone());
+        },
+    );
+    let (mut sim, _, station) = pd_scene(db, 0);
+    assert!(!sim.view().point_defence_on(station, 1));
+    let order = cmd(PlayerId(2), CommandKind::Order(Order::Special {
+        units: vec![station],
+        slot: 1,
+        target: Target::None,
+    }));
+    let out = sim.step(&[order]);
+    assert!(!out.view.point_defence_on(station, 0));
+    assert!(out.view.point_defence_on(station, 1));
+    assert!(!out.view.point_defence_on(station, 2));
+
+    let content = Arc::clone(sim.content().unwrap());
+    let restored = Sim::from_snapshot(&sim.snapshot(), Some(content)).unwrap();
+    assert_eq!(restored.digest(), sim.digest());
+    assert!(restored.view().point_defence_on(station, 1));
+
+    let log = crate::fake::ViewLog::record(&mut sim, [vec![], vec![], vec![]]);
+    let mut log = crate::fake::ViewLog::from_bytes(&log.to_bytes()).unwrap();
+    assert!(log.view().point_defence_on(station, 1));
+    assert!(log.step(&[]).view.point_defence_on(station, 1));
+    assert!(log.step(&[]).view.point_defence_on(station, 1));
+    assert!(!log.step(&[]).view.point_defence_on(station, 1));
+}
