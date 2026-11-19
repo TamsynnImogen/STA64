@@ -8,17 +8,18 @@
 //! - **idle** moves the camera to an idle ship. Which ships the original counts
 //!   as idle is its overview's own list (not read); here it is an own craft that
 //!   can move and stands still, not building or docked (ours), taken in turn;
+//! - **comm**, **help** (cycles three tooltip states), **palette** (the popup
+//!   palette) and **toggle** (swaps cameras) drive systems STA64 does not have yet: drawn, disabled.
+//! - **more** shows and hides the second row (menu, help, palette). Grades: the install's tooltip text
+//!   for it says it shows more buttons and names help, palette and the options menu (read from data); a
+//!   static reading of the executable agrees. An older reading took it as moving the panel between two
+//!   rectangles; the two readings are not reconciled. INTERIM: the start state is not measured, so all
+//!   buttons show at match start (and again at each new match); what the original draws around the second
+//!   row is not established: buttons only, no invented art. Esc opens the in-game menu whatever is shown.
 //!
 //! The panel is the cfg's `buttonPanelArea` with its `buttonBackgroundPanel` end pieces (read from data),
 //! anchored as one group at the window's right edge on a window wider than the sheet
-//! ([`StockLayout::panel_at_right_edge`]); the buttons' areas are relative to it. **more** shows and hides
-//! the menu, help and palette buttons (read from the executable, static, and from the install's own
-//! tooltip text for it; the start state, hidden, follows from that text and is not measured). What
-//! the original draws around the second row is not established: buttons only, no invented art. Hiding
-//! the second row is INTERIM until both are measured; Esc opens the in-game menu whatever is shown.
-//!
-//! - **comm**, **help** (cycles three tooltip states), **palette** (the popup
-//!   palette) and **toggle** (swaps cameras) drive systems STA64 does not have yet: drawn, disabled.
+//! ([`StockLayout::panel_at_right_edge`]); the buttons' areas are relative to it.
 
 use bevy::prelude::*;
 use sta_sim::view::UnitFlags;
@@ -66,9 +67,20 @@ const fn keys(area: &'static str, sprite: &'static str, default_sprite: &'static
 /// The buttons that show only while "more" is on.
 pub(in crate::ui::hud) const SECOND_ROW: [&str; 3] = ["menuButtonArea", "helpButtonArea", "paletteButtonArea"];
 
-/// Whether the second row shows (the player's, kept while the HUD is rebuilt).
-#[derive(Resource, Default)]
+/// Whether the second row shows (the player's, kept while the HUD is rebuilt; true at each match start: interim).
+#[derive(Resource)]
 pub(in crate::ui) struct ShowMore(pub bool);
+
+impl Default for ShowMore {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+/// A new match starts with every button shown.
+pub(in crate::ui::hud) fn reset_more(mut more: ResMut<ShowMore>) {
+    more.0 = ShowMore::default().0;
+}
 
 /// The button panel's group: its rectangle (the buttons' areas are relative to it).
 #[derive(Component)]

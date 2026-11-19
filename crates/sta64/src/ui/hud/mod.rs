@@ -169,6 +169,7 @@ impl Plugin for HudPlugin {
             .add_message::<OrderIssued>()
             .add_message::<SelectionChanged>()
             .init_resource::<Selection>()
+            .add_systems(OnEnter(crate::app::AppState::Loading), stock::buttons::reset_more)
             .add_systems(Startup, panels::spawn_root.after(crate::ui::radar::spawn_radar))
             .add_systems(
                 Update,
