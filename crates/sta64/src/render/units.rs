@@ -419,6 +419,7 @@ pub(crate) fn attach_models(
             model_key: path,
             unlit: false,
             scale: if scale > 0.0 { scale } else { 1.0 },
+            diffuse_tint: false,
         };
         let progress = preview.map(|p| p.0).or_else(|| sim
             .and_then(|unit| link.curr().unit(unit.0))

@@ -19,7 +19,7 @@ use crate::ui::hud::{
     model::{Act, Look, Page, TargetMode, UnitOrder},
     panels::GridCell,
 };
-use crate::ui::{profile::UiProfile, theme::click};
+use crate::ui::{gui_sprites::GuiImage, profile::UiProfile, theme::click};
 
 /// An authored sheet in Armada I's key family, on the 640 x 480 canvas.
 const CFG: &str = "\
@@ -55,6 +55,11 @@ cinematicCommButton = \"cine_comm\"
 cinematicMenuButton = \"cine_menu\"
 cinematicCommButtonArea = 12 12 50 16
 cinematicMenuButtonArea = 72 12 50 16
+speedPanelArea = 100 200 300 50
+speedSingleButtonArea = 10 6 24 20
+speedSeparatorArea = 10 6 6 30
+speedSingleButtonGap = 5
+speedSeparator = \"sep_sprite\"
 ";
 
 /// Authored slots: not the install's numbers.
@@ -385,4 +390,139 @@ fn without_the_action_view_resource_there_is_no_picture_node() {
     use crate::render::action_camera::ActionPicture;
     let mut app = app(4.0 / 3.0);
     assert_eq!(app.world_mut().query_filtered::<(), With<ActionPicture>>().iter(app.world()).count(), 0);
+}
+
+// ---- the speed rail's TRANSPORT button (the sheet's rail numbers above are made up for the test, not any install's)
+
+use sta_content::Profile;
+use sta_sim::view::{UnitFlags, UnitView};
+use super::speed;
+
+/// `fake::db()`'s units under Armada I's game family (every crewed craft may transport).
+fn a1_db() -> Arc<ContentDb> {
+    let fake = sta_content::fake::db();
+    let mut b = ContentDb::builder().profile(Profile::Sta1Classic).features(Profile::Sta1Classic.features());
+    for w in fake.weapons() {
+        b = b.weapon(w.clone());
+    }
+    for u in fake.units() {
+        b = b.unit(u.clone());
+    }
+    Arc::new(b.build().unwrap())
+}
+
+/// Own cruiser 1 with `crew` of 50 (None: no crew in the view), enemy cruiser 2 with 30 of 50.
+fn rail_feed(crew: Option<i32>) -> HudFeed {
+    let db = a1_db();
+    let unit = |id: u32, owner: u8, x: f32, c: Option<[Fixed; 2]>| UnitView {
+        id: EntityId(id), def: db.key("fx_cruiser").unwrap(), owner: PlayerId(owner), pos: sta_sim::Vec3::from_f32([x, 0.0, 0.0]),
+        heading: (Fixed::ZERO, Fixed::ONE), speed: Fixed::ZERO, hull: [Fixed::ONE; 2], shields: [[Fixed::ZERO; 2]; 4], crew: c,
+        energy: None, autonomy: None, flags: UnitFlags::SELECTABLE, progress: None,
+    };
+    let view = sta_sim::WorldView {
+        units: vec![
+            unit(1, 1, 0.0, crew.map(|c| [Fixed::from_int(c), Fixed::from_int(50)])),
+            unit(2, 2, 100.0, Some([Fixed::from_int(30), Fixed::from_int(50)])),
+        ],
+        players: vec![
+            PlayerView { crew: None, id: PlayerId(1), team: TeamId(1), resources: Vec::new(), officers: [Fixed::ZERO; 2], eliminated: false, relations: Vec::new() },
+            PlayerView { crew: None, id: PlayerId(2), team: TeamId(2), resources: Vec::new(), officers: [Fixed::ZERO; 2], eliminated: false, relations: Vec::new() },
+        ],
+        ..Default::default()
+    };
+    HudFeed { view: Arc::new(view), player: PlayerId(1), selected: vec![EntityId(1)], content: Some(db), ..Default::default() }
+}
+
+fn rail_app(f: HudFeed) -> App {
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins);
+    configure_sets(&mut app);
+    app.insert_resource(UiProfile::Armada1)
+        .insert_resource(HudConfig { gui: Some(layout_cfg()), aspect: 4.0 / 3.0, fit_scale: false, ..default() })
+        .insert_resource(f)
+        .insert_resource(ExternalFeed)
+        .insert_resource(Selection(vec![EntityId(1)]))
+        .init_resource::<ButtonInput<MouseButton>>()
+        .init_resource::<ButtonInput<KeyCode>>()
+        .add_plugins(HudPlugin);
+    app.world_mut().resource_mut::<StockState>().slots = Some(ButtonSlots::from_header(HEADER).0);
+    app.update();
+    app.update();
+    app
+}
+
+#[test]
+fn the_rail_positions_come_from_the_sheet_keys() {
+    let l = StockLayout::new(&layout_cfg(), Vec2::new(640.0, 480.0));
+    // Origin (100, 200); a button advances by its width and the gap (24 + 5), the separator by its own
+    // width and the gap (6 + 5); position 5 is the separator, position 6 transport.
+    assert_eq!(speed::rect(&l, 0), Some(R::new(110.0, 206.0, 24.0, 20.0)));
+    assert_eq!(speed::rect(&l, 4), Some(R::new(226.0, 206.0, 24.0, 20.0)));
+    assert_eq!(speed::rect(&l, 5), Some(R::new(255.0, 206.0, 6.0, 30.0)));
+    assert_eq!(speed::rect(&l, 6), Some(R::new(266.0, 206.0, 24.0, 20.0)));
+    assert_eq!(speed::rect(&l, 7), None);
+    assert_eq!(speed::separator(&l).map(|(_, name)| name), Some("sep_sprite".to_owned()));
+    // Inside the panel, and on 16:9 the same shape under the one factor.
+    assert!(speed::rect(&l, 6).unwrap().right() <= l.panel("speed").unwrap().right());
+    let w = StockLayout::for_aspect(&layout_cfg(), 16.0 / 9.0);
+    let (a, b) = (speed::rect(&w, 0).unwrap(), speed::rect(&w, 6).unwrap());
+    assert_eq!(a.w, b.w);
+    assert!(((b.x - a.x) / w.scale - 156.0).abs() < 1.5, "five buttons and the separator, each with the gap: {} {}", a.x, b.x);
+}
+
+#[test]
+fn the_rail_shows_transport_for_a_crewed_selection_with_the_game_art() {
+    let b = speed::buttons(&rail_feed(Some(40)), None);
+    let [t] = b.as_slice() else { panic!("{b:?}") };
+    assert_eq!(t.act, Act::Target(TargetMode::Transport));
+    assert_eq!(t.sprite_names, ["b_transport"]);
+    assert_eq!(t.look, Look::Ready);
+    assert_eq!(t.cell, speed::RAIL_BASE + 6);
+    // Crew at or below the carrier floor: shown, disabled (the sim would drop the order).
+    assert_eq!(speed::buttons(&rail_feed(Some(8)), None)[0].look, Look::Locked);
+    // No crew in the view, someone else's unit selected, nothing selected: no button.
+    assert!(speed::buttons(&rail_feed(None), None).is_empty());
+    let mut other = rail_feed(Some(40));
+    other.selected = vec![EntityId(2)];
+    assert!(speed::buttons(&other, None).is_empty());
+    assert!(speed::buttons(&HudFeed::default(), None).is_empty());
+}
+
+#[test]
+fn the_rail_button_is_drawn_at_its_place_with_its_separator_and_not_on_the_control_grid() {
+    let mut app = rail_app(rail_feed(Some(40)));
+    let t = cell(&mut app, |a| *a == Act::Target(TargetMode::Transport));
+    let l = StockLayout::for_aspect(&layout_cfg(), 4.0 / 3.0);
+    let node = app.world().get::<Node>(t).unwrap();
+    let want = speed::rect(&l, 6).unwrap();
+    assert_eq!((node.left, node.top, node.width, node.height), (Val::Px(want.x), Val::Px(want.y), Val::Px(want.w), Val::Px(want.h)));
+    let sep = speed::rect(&l, 5).unwrap();
+    let seps = find::<GuiImage>(&mut app, |_| true)
+        .into_iter()
+        .filter(|e| app.world().get::<Node>(*e).is_some_and(|n| n.left == Val::Px(sep.x) && n.top == Val::Px(sep.y)))
+        .count();
+    assert_eq!(seps, 1, "one separator at the rail's sixth position");
+    // The control grid keeps its slots: Transport takes none of them (BUTTON_LOCATION_TRANSPORT is -1).
+    assert!(acts(&mut app).contains(&Act::Stop));
+    // No transporter selected: neither button nor separator.
+    let mut none = rail_app(rail_feed(None));
+    assert!(!acts(&mut none).contains(&Act::Target(TargetMode::Transport)));
+}
+
+#[test]
+fn pressing_the_rail_button_arms_the_pick_and_the_click_issues_one_transport_order() {
+    let mut app = rail_app(rail_feed(Some(40)));
+    let t = cell(&mut app, |a| *a == Act::Target(TargetMode::Transport));
+    press(&mut app, t);
+    assert_eq!(app.world().resource::<HudState>().targeting, Some(TargetMode::Transport));
+    // The click on a unit takes the same target gate and order as the Armada II button.
+    let f = app.world().resource::<HudFeed>().clone();
+    let (orders, _) = crate::ui::hud::target_order(&f, TargetMode::Transport, Some(EntityId(2)), None).expect("an enemy ship is a valid pick");
+    assert!(matches!(orders.as_slice(), [Order::Transport { units, target: EntityId(2), attack: false }] if units == &[EntityId(1)]), "{orders:?}");
+    // Disabled: no pick is armed, nothing is sent.
+    let mut low = rail_app(rail_feed(Some(8)));
+    let t = cell(&mut low, |a| *a == Act::Target(TargetMode::Transport));
+    press(&mut low, t);
+    assert_eq!(low.world().resource::<HudState>().targeting, None);
+    assert!(low.world().resource::<CommandQueue>().0.is_empty());
 }
