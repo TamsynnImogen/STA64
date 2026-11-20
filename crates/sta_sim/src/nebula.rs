@@ -30,9 +30,11 @@
 //!   holds fire. `disableCrew`: life support is off (the casualty model's
 //!   drain). `disableCloak`: an engaging or engaged cloak drops.
 //!   **Interim:** in the original the systems stay off a moment after the
-//!   craft leaves and the shields come back at the strength they had on
-//!   entry; here they are on again the tick the craft is out and the shields
-//!   recharge from 0 (both need per-craft state). Which unit types besides
+//!   craft leaves (read from the executable, static; not measured; not
+//!   implemented, it needs a rule the notes do not give); here they are on
+//!   again the tick the craft is out. The shields come back at the strength
+//!   they had on entry, after a delay, in the Armada II family ([`shields`]);
+//!   Armada I recharges from 0. Which unit types besides
 //!   freighters the weapons rule spares is not established; none is spared.
 //! - Speed (craft only): a throttle fraction that starts at 1 and a cap that
 //!   starts at the larger of impulse and warp speed. Each kind lowers the
@@ -53,6 +55,8 @@
 //!   established; here impulse and warp speed are both scaled by the fraction
 //!   and bounded by the cap.
 //!
+//! Shields after leaving, Armada II family: see [`shields`] (snapshot format 39).
+//!
 //! Not yet: `disableSensors`, `hideContents`, `clearEffects`, the entry
 //! voice, the AI's handling (see TODO.md). A map without nebula effects takes
 //! the early return: no draws, no change to its digests.
@@ -63,6 +67,9 @@ use sta_core::{EntityId, Fixed, TICK_HZ, Vec3};
 use crate::view::UnitFlags;
 use crate::world::{Entity, EntityKind};
 use crate::Sim;
+
+mod shields;
+pub(crate) use shields::{NebulaShields, NebulaShieldsRec};
 
 /// Width of a containment cell, world units (read from the executable, static).
 pub const CELL: i32 = 50;
@@ -303,4 +310,6 @@ impl Sim {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
+#[cfg(test)]
+mod shield_tests;

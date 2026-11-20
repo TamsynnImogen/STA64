@@ -26,6 +26,7 @@
 //! Format 36 (SIM-40) appends the yard repair queues.
 //! Format 37 (SIM-41) adds the repair ships' beam targets to the repair record (version 2).
 //! Format 38 (SIM-45) appends the decommissions (merged after 37; renumbered so the two layouts differ).
+//! Format 39 (SIM-75) appends the shields a nebula took from craft and gives back.
 //!
 //! The state types of other crates (`MoveStats`) have no serde, so the body
 //! uses small mirror records here instead of touching those crates.
@@ -64,7 +65,7 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// tell the file from a valid one by version.
 /// Format 34 appends the mission switches (LUA-41).
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 38;
+pub const FORMAT_VERSION: u16 = 39;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
@@ -72,6 +73,10 @@ mod recrew_tests;
 #[cfg(test)]
 #[path = "snapshot/repairs_tests.rs"]
 mod repairs_tests;
+
+#[cfg(test)]
+#[path = "snapshot/nebula_shields_tests.rs"]
+mod nebula_shields_tests;
 
 #[cfg(test)]
 #[path = "snapshot/guard_tests.rs"]
@@ -502,6 +507,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&self.mission_switches.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.repairs.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.recycles.to_rec()).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&self.nebula_shields.to_rec()).expect("snapshot serialises"));
         out
     }
 
@@ -582,6 +588,7 @@ impl Sim {
         let mission_switches = crate::mission_switches::MissionSwitches::from_rec(switches_rec).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         let (repairs_rec, rest): (crate::repair::RepairsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         let (recycles_rec, rest): (crate::economy::recycle::RecyclesRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        let (nebula_shields_rec, rest): (crate::nebula::NebulaShieldsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -729,6 +736,7 @@ impl Sim {
             .ok_or_else(|| SnapshotError::Corrupt("invalid station recrew record".into()))?;
         let repairs = crate::repair::Repairs::from_rec(repairs_rec, |id| units.contains(id)).ok_or_else(|| corrupt("repair queues"))?;
         let recycles = crate::economy::recycle::Recycles::from_rec(recycles_rec, |id| units.contains(id)).ok_or_else(|| corrupt("decommissions"))?;
+        let nebula_shields = crate::nebula::NebulaShields::from_rec(nebula_shields_rec, b.tick, |id| units.contains(id)).ok_or_else(|| corrupt("nebula shields"))?;
         let mut economy = crate::economy::Economy::from_rec(&b.economy);
         economy.restore_personnel(personnel_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         economy.restore_adjust(adjust_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
@@ -771,6 +779,7 @@ impl Sim {
             recrew,
             repairs,
             recycles,
+            nebula_shields,
             mission_switches,
         };
         sim.refresh_seat_rules();

@@ -144,6 +144,7 @@ impl Sim {
         self.recrew.remove(id);
         self.repairs.remove_entity(id);
         self.recycles.remove_entity(id);
+        self.nebula_shields.remove_entity(id);
         self.scripted.remove(id);
         self.switches.remove(id);
         self.alerts.remove(id);
