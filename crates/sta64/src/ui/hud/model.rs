@@ -363,6 +363,14 @@ pub struct BuildItem {
     pub cost: Vec<f32>,
     /// Why it is locked.
     pub why: Option<String>,
+    /// The build cell it sits in, counted over the cells the page offers (the cancel and back
+    /// cells are not counted). Items follow each other, except that in a text tech tree an item
+    /// that cannot be built (withheld or not listed) leaves its own cell empty and the others
+    /// keep their positions (read from the executable, static, Armada I and II; the cell position
+    /// is the item's place in the builder's list, not compared with the original: interim).
+    /// Without a tree, with an XML tree, and for an item a requirement hides, items are packed
+    /// (as before; not compared with the original).
+    pub slot: usize,
 }
 
 fn unmet(u: &Unmet) -> String {
@@ -381,11 +389,23 @@ fn unmet(u: &Unmet) -> String {
 /// one (what the sim will accept, SIM-09), else the def's list as it stands.
 /// Buttons the tree hides are left out.
 pub fn build_items(feed: &HudFeed, builder: &UnitView) -> Vec<BuildItem> {
-    let Some(db) = feed.content.as_deref() else { return Vec::new() };
-    let Some(def) = db.unit(builder.def) else { return Vec::new() };
+    build_layout(feed, builder).0
+}
+
+/// The build cells with no item in a text tree (the cells of unbuildable items), below the last
+/// cell the builder's list reaches. Empty without a text tree.
+pub(super) fn build_holes(feed: &HudFeed, builder: &UnitView) -> Vec<usize> {
+    let (items, cells) = build_layout(feed, builder);
+    (0..cells).filter(|c| !items.iter().any(|i| i.slot == *c)).collect()
+}
+
+/// The items and the number of cells the list reaches (items plus the empty cells of a text tree).
+fn build_layout(feed: &HudFeed, builder: &UnitView) -> (Vec<BuildItem>, usize) {
+    let Some(db) = feed.content.as_deref() else { return (Vec::new(), 0) };
+    let Some(def) = db.unit(builder.def) else { return (Vec::new(), 0) };
     let stock: Vec<f32> = feed.view.player(feed.player).map(|p| p.resources.iter().map(|f| f.to_f32()).collect()).unwrap_or_default();
     let poor = |cost: &[f32]| cost.iter().enumerate().any(|(i, c)| *c > stock.get(i).copied().unwrap_or(0.0));
-    let item = |odf: &str, key: ContentKey, avail: Option<&Availability>| -> Option<BuildItem> {
+    let item = |odf: &str, key: ContentKey, avail: Option<&Availability>, slot: usize| -> Option<BuildItem> {
         let u = db.unit(key)?;
         let cost: Vec<f32> = u.build.cost.iter().map(|c| c.to_f32()).collect();
         let (look, why) = match avail {
@@ -395,15 +415,67 @@ pub fn build_items(feed: &HudFeed, builder: &UnitView) -> Vec<BuildItem> {
             Some(Availability::Withheld) => (Look::Locked, Some("cannot be built".into())),
             Some(Availability::NotListed) => (Look::Locked, Some("not in the tech tree".into())),
         };
-        Some(BuildItem { odf: odf.to_owned(), key, look, cost, why })
+        Some(BuildItem { odf: odf.to_owned(), key, look, cost, why, slot })
     };
     match db.tech_tree() {
         Some(tree) => {
             let state = tech_state(feed, db, &def.race);
-            tree.build_options(db, &def.odf, &state, false).iter().filter_map(|o| item(&o.def.odf, o.def.key, Some(&o.availability))).collect()
+            let mut out: Vec<BuildItem> = Vec::new();
+            let mut cells = 0;
+            for o in tree.build_options(db, &def.odf, &state, false).iter() {
+                if matches!(o.availability, Availability::Locked { hidden: true, .. }) {
+                    continue;
+                }
+                // A text tree: what cannot be built keeps its cell, empty; the others keep theirs.
+                if tree.is_text() && matches!(o.availability, Availability::Withheld | Availability::NotListed) {
+                    cells += 1;
+                    continue;
+                }
+                if let Some(b) = item(&o.def.odf, o.def.key, Some(&o.availability), cells) {
+                    out.push(b);
+                    cells += 1;
+                }
+            }
+            (out, cells)
         }
-        None => def.build.list.iter().filter_map(|d| item(&d.odf, d.key, None)).collect(),
+        None => {
+            let out: Vec<BuildItem> = def.build.list.iter().filter_map(|d| item(&d.odf, d.key, None, 0)).enumerate().map(|(i, mut b)| {
+                b.slot = i;
+                b
+            }).collect();
+            let n = out.len();
+            (out, n)
+        }
     }
+}
+
+/// The build buttons of a builder with the build cell (`BuildItem::slot`) each sits in; the
+/// button's own `cell` is not set. The stock HUDs place them by that cell.
+pub(super) fn build_item_buttons(feed: &HudFeed, b: &UnitView) -> Vec<(usize, Button)> {
+    let items = build_items(feed, b);
+    let names = resource_model(feed);
+    let site = feed.def(b).is_some_and(deploys_at_site);
+    items
+        .iter()
+        .map(|it| {
+            let definition = feed.content.as_deref().and_then(|db| db.unit(it.key));
+            let verbose = match &it.why {
+                Some(w) => format!("{}. Cost: {}", w, cost_text(&it.cost, &names)),
+                None => format!("Cost: {}", cost_text(&it.cost, &names)),
+            };
+            let btn = Button {
+                cell: 0,
+                label: short(&it.odf),
+                act: Act::Build { builder: b.id, what: it.key, odf: it.odf.clone(), site },
+                look: it.look,
+                tip: definition.and_then(|d| d.raw.str("tooltip")).map(str::to_owned).unwrap_or_else(|| format!("Build {}", it.odf)),
+                verbose: Some(definition.and_then(|d| d.raw.str("verboseTooltip")).map_or(verbose, str::to_owned)),
+                sprite_names: definition.map_or_else(Vec::new, |def| build_sprite_names(&def.model, &it.odf)),
+                keep_label: false,
+            };
+            (it.slot, btn)
+        })
+        .collect()
 }
 
 fn cost_text(cost: &[f32], names: &ResourceModel) -> String {
@@ -473,6 +545,34 @@ pub fn deploys_at_site(def: &UnitDef) -> bool {
     !EntityKind::producer_def(def) && EntityKind::of_def(def) == EntityKind::Craft
 }
 
+/// The build buttons of the selected builder with the build cell each sits in (`BuildItem::slot`),
+/// the buttons' own `cell` unset: the stock HUDs place them themselves.
+pub(super) fn build_buttons_by_slot(feed: &HudFeed) -> Vec<(usize, Button)> {
+    if feed.own_selection().is_empty() {
+        return Vec::new();
+    }
+    let builder = commands::shared(feed).build.then(|| builder(feed)).flatten();
+    builder.map(|b| build_item_buttons(feed, b)).unwrap_or_default()
+}
+
+/// The empty build cells of the selected builder's page (a text tree's unbuildable items).
+pub(super) fn build_holes_of(feed: &HudFeed) -> Vec<usize> {
+    if feed.own_selection().is_empty() {
+        return Vec::new();
+    }
+    let builder = commands::shared(feed).build.then(|| builder(feed)).flatten();
+    builder.map(|b| build_holes(feed, b)).unwrap_or_default()
+}
+
+/// How many empty build cells lie below a build button's own cell, given the empty cells
+/// (`holes`): a stock palette that packs its buttons adds this to the button's place in the list.
+/// A build button is found by its cell in the full-capacity grid. Zero for any other button.
+pub(super) fn holes_before(button: &Button, holes: &[usize]) -> usize {
+    let Act::Build { .. } = button.act else { return 0 };
+    let slot = button.cell - usize::from(button.cell > CANCEL_CELL) - usize::from(button.cell > BACK_CELL);
+    holes.iter().filter(|h| **h < slot).count()
+}
+
 /// The cells of the grid for the selection.
 ///
 /// Top page: Build (Q) when a builder is selected; Stop (S) and the three
@@ -502,35 +602,12 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
     if page == Page::Build
         && let Some(b) = builder
     {
-        let items = build_items(feed, b);
-        let names = resource_model(feed);
-        let site = feed.def(b).is_some_and(deploys_at_site);
         let mut out = Vec::new();
-        let cells = (0..capacity).filter(|c| *c != CANCEL_CELL && *c != BACK_CELL);
-        for (cell, it) in cells.zip(&items) {
-            let definition = feed.content.as_deref().and_then(|db| db.unit(it.key));
-            let verbose = match &it.why {
-                Some(w) => format!("{}. Cost: {}", w, cost_text(&it.cost, &names)),
-                None => format!("Cost: {}", cost_text(&it.cost, &names)),
-            };
-            out.push(Button {
-                cell,
-                label: short(&it.odf),
-                act: Act::Build {
-                    builder: b.id,
-                    what: it.key,
-                    odf: it.odf.clone(),
-                    site,
-                },
-                look: it.look,
-                tip: definition.and_then(|d| d.raw.str("tooltip")).map(str::to_owned)
-                    .unwrap_or_else(|| format!("Build {}", it.odf)),
-                verbose: Some(definition.and_then(|d| d.raw.str("verboseTooltip"))
-                    .map_or(verbose, str::to_owned)),
-                sprite_names: feed.content.as_deref().and_then(|db| db.unit(it.key))
-                    .map_or_else(Vec::new, |def| build_sprite_names(&def.model, &it.odf)),
-                keep_label: false,
-            });
+        // The capacity may be `usize::MAX` (the stock palettes), so the cells are walked, never collected.
+        for (slot, mut btn) in build_item_buttons(feed, b) {
+            let Some(cell) = (0..capacity).filter(|c| *c != CANCEL_CELL && *c != BACK_CELL).nth(slot) else { continue };
+            btn.cell = cell;
+            out.push(btn);
         }
         out.push(button(CANCEL_CELL, &tr("Cancel"), Act::Cancel(b.id), &tooltip_key("Cancel the queue")));
         out.push(button(BACK_CELL, &tr("Back"), Act::Back, &tooltip_key("Back")));
@@ -1283,6 +1360,237 @@ mod tests {
         let f = feed(db_with(Some(TREE)), units, &[2]);
         assert_eq!(look(&f, "fx_frigate"), Some((Look::Ready, None)));
         assert_eq!(owned_counts(&f).get("fx_station"), Some(&1));
+    }
+
+    /// A text tree that leaves an item out empties that item's cell; the other cells keep their
+    /// positions (see `BuildItem::slot`).
+    #[test]
+    fn a_text_tree_leaves_the_cell_of_an_unbuildable_item_empty() {
+        let db = db_with(Some(TREE));
+        let units = vec![unit(&db, 2, "fx_yard", 1, 100.0, None)];
+        let omitting = "fx_yard 0\nfx_frigate 0\n";
+        let f = feed(db_with(Some(omitting)), units.clone(), &[2]);
+        let g = grid(&f, Page::Build);
+        assert!(!g.iter().any(|b| b.cell == 0 && matches!(b.act, Act::Build { .. })), "the omitted cruiser's cell is empty");
+        assert!(g.iter().any(|b| b.cell == 1 && matches!(b.act, Act::Build { .. })), "the frigate keeps its cell");
+        let withheld = "fx_yard 0\nfx_frigate 0\nfx_cruiser -1\n";
+        let f = feed(db_with(Some(withheld)), units.clone(), &[2]);
+        let g = grid(&f, Page::Build);
+        assert!(!g.iter().any(|b| b.cell == 0 && matches!(b.act, Act::Build { .. })));
+        // The unrestricted tree is unchanged: both cells are there.
+        let f = feed(db_with(Some(TREE)), units, &[2]);
+        let g = grid(&f, Page::Build);
+        assert!(g.iter().any(|b| b.cell == 0 && matches!(b.act, Act::Build { .. })));
+        assert!(g.iter().any(|b| b.cell == 1 && matches!(b.act, Act::Build { .. })));
+    }
+
+    /// `db_with` with a yard that builds three things (cruiser, frigate, miner).
+    fn wide_db(tree: &str) -> ContentDb {
+        wide_db_of(tree, &["fx_cruiser", "fx_frigate", "fx_miner"])
+    }
+
+    /// `db_with` with a yard that builds the given things.
+    fn wide_db_of(tree: &str, list: &[&str]) -> ContentDb {
+        let fake = sta_content::fake::db();
+        let mut b = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for w in fake.weapons() {
+            b = b.weapon(w.clone());
+        }
+        for u in fake.units() {
+            let mut u = u.clone();
+            if u.odf == "fx_yard" {
+                u.build.list = list.iter().map(|d| DefRef::new(*d)).collect();
+            }
+            b = b.unit(u);
+        }
+        b.tech_tree(TechTree::parse("t.tt", tree).0).build().unwrap()
+    }
+
+    const WIDE_ALL: &str = "fx_yard 0\nfx_cruiser 0\nfx_frigate 0\nfx_miner 0\n";
+    /// The frigate, the middle item, is left out.
+    const WIDE_HOLE: &str = "fx_yard 0\nfx_cruiser 0\nfx_miner 0\n";
+
+    fn wide_feed(tree: &str) -> HudFeed {
+        feed_of(wide_db(tree))
+    }
+
+    fn feed_of(db: ContentDb) -> HudFeed {
+        let units = vec![unit(&db, 2, "fx_yard", 1, 100.0, None)];
+        feed(db, units, &[2])
+    }
+
+    fn cells_of(buttons: &[Button]) -> Vec<(String, usize)> {
+        buttons.iter().map(|b| (b.label.clone(), b.cell)).collect()
+    }
+
+    /// The build page with an unlimited capacity (what the stock palettes ask for) answers at once
+    /// and keeps the hole rule: no allocation sized by the capacity.
+    #[test]
+    fn the_build_page_with_unlimited_capacity_keeps_the_hole() {
+        let g = grid_with_capacity(&wide_feed(WIDE_HOLE), Page::Build, usize::MAX);
+        let items: Vec<usize> = g.iter().filter(|b| matches!(b.act, Act::Build { .. })).map(|b| b.cell).collect();
+        assert_eq!(items, vec![0, 2], "the frigate's cell 1 stays empty");
+        let g = grid_with_capacity(&wide_feed(WIDE_ALL), Page::Build, usize::MAX);
+        let items: Vec<usize> = g.iter().filter(|b| matches!(b.act, Act::Build { .. })).map(|b| b.cell).collect();
+        assert_eq!(items, vec![0, 1, 2]);
+    }
+
+    /// Armada I's stock HUD places build buttons by their build cell: the omitted item's slot stays
+    /// empty, the others keep theirs; an unrestricted tree fills the slots in order as before.
+    #[test]
+    fn the_armada_one_hud_leaves_the_omitted_items_slot_empty() {
+        use crate::ui::hud::stock::a1::control;
+        let slots = sta_content::ButtonSlots::from_header("int BUTTON_LOCATION_CANCEL = 4;\nint BUTTON_LOCATION_BACK = 5;\n").0;
+        let build = |tree: &str| -> Vec<(String, usize)> {
+            let b = control::buttons(&wide_feed(tree), Page::Build, &slots, None);
+            cells_of(&b.iter().filter(|b| matches!(b.act, Act::Build { .. })).cloned().collect::<Vec<_>>())
+        };
+        // Free slots are 1, 2, 3, 6, ... (cancel 4, back 5): cells 0, 1, 2, 5.
+        assert_eq!(build(WIDE_ALL).iter().map(|c| c.1).collect::<Vec<_>>(), vec![0, 1, 2]);
+        let held = build(WIDE_HOLE);
+        assert_eq!(held.iter().map(|c| c.1).collect::<Vec<_>>(), vec![0, 2], "slot of the frigate empty, miner keeps its slot");
+        let all = build(WIDE_ALL);
+        assert_eq!(held[0], all[0]);
+        assert_eq!(held[1].1, all[2].1);
+        // Cancel and back stay where the slot map puts them.
+        let b = control::buttons(&wide_feed(WIDE_HOLE), Page::Build, &slots, None);
+        assert!(b.iter().any(|b| b.cell == 3 && matches!(b.act, Act::Cancel(_))));
+        assert!(b.iter().any(|b| b.cell == 4 && b.act == Act::Back));
+    }
+
+    /// The palette HUD (Armada II and Fleet Operations looks) packs its buttons in list order but
+    /// leaves the omitted item's cell empty; unrestricted it packs exactly as before.
+    #[test]
+    fn the_palette_hud_leaves_the_omitted_items_cell_empty() {
+        use crate::ui::hud::stock::{buttons, place_buttons};
+        let native = crate::ui::hud::stock::commands::NativeCommands::default();
+        let place = |tree: &str| -> Vec<(usize, String)> {
+            let f = wide_feed(tree);
+            let next = buttons(&f, Page::Build, &native);
+            let holes = build_holes_of(&f);
+            let p = place_buttons(&next, 20, 0, &holes);
+            assert!(!p.paged);
+            p.shown.iter().map(|(i, b)| (*i, b.label.clone())).collect()
+        };
+        let all = place(WIDE_ALL);
+        // Unchanged from the packed order: three items, then cancel, then back.
+        assert_eq!(all.iter().map(|c| c.0).collect::<Vec<_>>(), vec![0, 1, 2, 3, 4]);
+        let held = place(WIDE_HOLE);
+        assert_eq!(held.iter().map(|c| c.0).collect::<Vec<_>>(), vec![0, 2, 3, 4], "cell 1 is empty, the miner stays third");
+        assert_eq!(held[0].1, all[0].1);
+        assert_eq!(held[1].1, all[2].1);
+    }
+
+    /// The palette placement of the build page with the given command metadata: the list in
+    /// order with the cell index each button takes, checked for the invariants that hold for every
+    /// sort order (indices strictly increase along the list, so no two buttons share a cell).
+    fn palette_placement(f: &HudFeed, native: &crate::ui::hud::stock::commands::NativeCommands, capacity: usize, page: usize) -> (Vec<(usize, Act)>, usize) {
+        use crate::ui::hud::stock::{buttons, place_buttons};
+        let next = buttons(f, Page::Build, native);
+        let p = place_buttons(&next, capacity, page, &build_holes_of(f));
+        let mut seen = std::collections::BTreeSet::new();
+        for (i, _) in &p.shown {
+            assert!(seen.insert(*i), "two buttons share cell {i}");
+        }
+        let pos: Vec<usize> = p.shown.iter().filter(|(_, b)| !p.paged || !matches!(b.act, Act::Back | Act::Cancel(_))).map(|(i, _)| *i).collect();
+        assert!(pos.windows(2).all(|w| w[0] < w[1]), "indices strictly increase along the list: {pos:?}");
+        (p.shown.iter().map(|(i, b)| (*i, b.act.clone())).collect(), p.pages)
+    }
+
+    fn cell_of(placed: &[(usize, Act)], pick: impl Fn(&Act) -> bool) -> usize {
+        placed.iter().find(|(_, a)| pick(a)).map(|(i, _)| *i).expect("button placed")
+    }
+
+    fn is_item(odf: &'static str) -> impl Fn(&Act) -> bool {
+        move |a| matches!(a, Act::Build { odf: o, .. } if o == odf)
+    }
+
+    /// Command metadata that gives Cancel a high priority and a position, as an install's does:
+    /// Cancel then sorts before the build buttons.
+    fn native_with_cancel() -> crate::ui::hud::stock::commands::NativeCommands {
+        use crate::ui::hud::stock::commands::{NativeCommand, NativeCommands};
+        let mut native = NativeCommands::default();
+        native.commands.insert("cancelbuild".into(), NativeCommand {
+            odf: "cancelbuild.odf".into(), command: "NONE".into(), button: "b_cancel".into(),
+            preferred: Some([0, 3]), menu: None, tooltip: None, verbose: None,
+            normal: None, hovered: None, pressed: None, disabled: None, active: None,
+        });
+        native
+    }
+
+    /// Cancel carries command metadata and sorts before the build buttons: with a hole, Cancel and
+    /// a build item never share a cell, the hole is where the omitted item was, and the
+    /// unrestricted list places as the plain list order.
+    #[test]
+    fn the_palette_with_cancel_metadata_keeps_cells_apart_and_the_hole_in_place() {
+        let native = native_with_cancel();
+        let (all, _) = palette_placement(&wide_feed(WIDE_ALL), &native, 20, 0);
+        assert_eq!(all.iter().map(|c| c.0).collect::<Vec<_>>(), vec![0, 1, 2, 3, 4]);
+        assert!(matches!(all[0].1, Act::Cancel(_)), "Cancel sorts first with this metadata");
+        let (held, _) = palette_placement(&wide_feed(WIDE_HOLE), &native, 20, 0);
+        let (cancel, cruiser, miner) = (cell_of(&held, |a| matches!(a, Act::Cancel(_))), cell_of(&held, is_item("fx_cruiser")), cell_of(&held, is_item("fx_miner")));
+        assert_eq!((cancel, cruiser, miner), (0, 1, 3), "the frigate's cell 2 is empty");
+        assert_eq!(cell_of(&held, |a| *a == Act::Back), 4);
+        assert!(!held.iter().any(|(i, _)| *i == 2));
+    }
+
+    /// A hole and paging together: the pages are counted over the cells with the hole, the hole
+    /// stays on its page and the pinned Back and Cancel are on every page.
+    #[test]
+    fn a_hole_and_paging_work_together() {
+        let list = ["fx_cruiser", "fx_frigate", "fx_miner", "fx_station", "fx_yard", "fx_moon"];
+        // The frigate is left out: items on cells 0, 2, 3, 4, 5; capacity 7 leaves 3 cells a page.
+        let f = feed_of(wide_db_of("fx_yard 0\nfx_cruiser 0\nfx_miner 0\nfx_station 0\nfx_moon 0\n", &list));
+        let native = crate::ui::hud::stock::commands::NativeCommands::default();
+        let (p0, pages) = palette_placement(&f, &native, 7, 0);
+        assert_eq!(pages, 2);
+        let items = |p: &[(usize, Act)]| p.iter().filter(|(_, a)| matches!(a, Act::Build { .. })).map(|(i, _)| *i).collect::<Vec<_>>();
+        let pinned = |p: &[(usize, Act)]| p.iter().filter(|(_, a)| matches!(a, Act::Back | Act::Cancel(_))).map(|(i, _)| *i).collect::<Vec<_>>();
+        assert_eq!(items(&p0), vec![0, 2], "page one: the cruiser, the empty cell 1, the miner");
+        assert_eq!(pinned(&p0), vec![3, 4]);
+        let (p1, _) = palette_placement(&f, &native, 7, 1);
+        assert_eq!(items(&p1), vec![0, 1, 2], "page two: the next three items");
+        assert_eq!(pinned(&p1), vec![3, 4]);
+    }
+
+    /// An omitted item after the last offered one pushes nothing: Cancel and Back follow the last
+    /// offered item as if the list ended there (interim: not compared with the original).
+    #[test]
+    fn a_trailing_omitted_item_does_not_push_cancel_or_back() {
+        let native = crate::ui::hud::stock::commands::NativeCommands::default();
+        let (trailing, _) = palette_placement(&wide_feed("fx_yard 0\nfx_cruiser 0\nfx_frigate 0\n"), &native, 20, 0);
+        assert_eq!(trailing.iter().map(|c| c.0).collect::<Vec<_>>(), vec![0, 1, 2, 3]);
+        let a1 = sta_content::ButtonSlots::from_header("int BUTTON_LOCATION_CANCEL = 4;\nint BUTTON_LOCATION_BACK = 5;\n").0;
+        let b = crate::ui::hud::stock::a1::control::buttons(&wide_feed("fx_yard 0\nfx_cruiser 0\nfx_frigate 0\n"), Page::Build, &a1, None);
+        assert!(b.iter().any(|b| b.cell == 3 && matches!(b.act, Act::Cancel(_))) && b.iter().any(|b| b.cell == 4 && b.act == Act::Back));
+    }
+
+    /// Install-gated: the palette HUD's build page with the real command metadata of each install
+    /// named by `STA64_TEST_A1_INSTALL`, `STA64_TEST_A2_STOCK_INSTALL`, `STA64_TEST_ROOTS_INSTALL`
+    /// or `STA64_TEST_INSTALL` (read at run time, nothing committed). Only invariants are
+    /// asserted: no two buttons share a cell, the unrestricted list places as the plain list
+    /// order, and with a restricted tree the omitted item's cell is empty.
+    #[test]
+    fn installed_command_metadata_keeps_the_palette_cells_apart() {
+        let vars = ["STA64_TEST_A1_INSTALL", "STA64_TEST_A2_STOCK_INSTALL", "STA64_TEST_ROOTS_INSTALL", "STA64_TEST_INSTALL"];
+        let mut ran = 0;
+        for var in vars {
+            let Some(root) = std::env::var_os(var) else { continue };
+            let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), None).unwrap();
+            let native = crate::ui::hud::stock::commands::NativeCommands::load(&vfs);
+            ran += 1;
+            let (all, _) = palette_placement(&wide_feed(WIDE_ALL), &native, 40, 0);
+            assert_eq!(all.iter().map(|c| c.0).collect::<Vec<_>>(), (0..all.len()).collect::<Vec<_>>(), "{var}: unrestricted is the plain list order");
+            let (held, _) = palette_placement(&wide_feed(WIDE_HOLE), &native, 40, 0);
+            let (cruiser, miner) = (cell_of(&held, is_item("fx_cruiser")), cell_of(&held, is_item("fx_miner")));
+            let between = held.iter().filter(|(i, _)| *i > cruiser && *i < miner).count();
+            // The omitted frigate's cell lies between them and holds nothing.
+            assert_eq!(miner - cruiser - 1, between + 1, "{var}: exactly one empty cell between the cruiser and the miner");
+            assert_eq!(held.len(), all.len() - 1, "{var}: the omitted item is gone, nothing else");
+        }
+        if ran == 0 {
+            eprintln!("SKIP: set STA64_TEST_A1_INSTALL, STA64_TEST_A2_STOCK_INSTALL, STA64_TEST_ROOTS_INSTALL or STA64_TEST_INSTALL");
+        }
     }
 
     #[test]

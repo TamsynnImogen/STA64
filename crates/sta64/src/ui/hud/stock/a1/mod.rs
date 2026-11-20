@@ -20,7 +20,7 @@
 //! While a mission clip plays in the cinematic window, `hud::cinematic` (UI-39) draws over it.
 
 pub(in crate::ui::hud) mod action;
-pub(super) mod control;
+pub(in crate::ui::hud) mod control;
 pub(in crate::ui::hud) mod costs;
 pub(super) mod info;
 pub(in crate::ui::hud) mod speed;

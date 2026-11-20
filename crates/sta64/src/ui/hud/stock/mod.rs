@@ -1,7 +1,7 @@
 //! CFG/SPR presentation of the shared HUD actions. No simulation policy lives here.
 pub(in crate::ui::hud) mod a1;
 pub(in crate::ui) mod buttons;
-mod commands;
+pub(in crate::ui::hud) mod commands;
 mod info;
 pub(super) mod infobar;
 pub mod layout;
@@ -134,7 +134,7 @@ fn menu_button(id: u32, name: &str) -> Button {
 
 /// Native menus contain HUD actions with an explicit capability gate; ODF
 /// metadata cannot bypass live Recrew eligibility.
-fn buttons(feed: &HudFeed, page: Page, native: &NativeCommands) -> Vec<Button> {
+pub(in crate::ui::hud) fn buttons(feed: &HudFeed, page: Page, native: &NativeCommands) -> Vec<Button> {
     let mut buttons = model::grid_with_capacity(feed, page, usize::MAX);
     // The stock HUD shows only what the original shows: TRANSPORT only where the install's command data
     // gives it a place (Armada I has none here: it puts it on its speed rail, `a1::speed`); the fallback
@@ -257,6 +257,65 @@ fn command_rank(command: &str) -> u8 {
         "SPECIAL_ATTACK" => 16,
         _ => 5,
     }
+}
+
+/// What a palette shows: the buttons with the cell index each takes, whether the list is paged
+/// and how many pages there are.
+pub(in crate::ui::hud) struct Placed<'a> {
+    pub shown: Vec<(usize, &'a Button)>,
+    pub paged: bool,
+    pub pages: usize,
+    pub page: usize,
+}
+
+/// Places a page's buttons on a palette of `capacity` cells. The buttons are packed in list
+/// order, except that the build page leaves a cell empty for each of `holes` (the build cells of
+/// items a text tree does not offer, `BuildItem::slot`); with no holes the placement is the
+/// plain list order. A list longer than the palette is paged, Back and Cancel stay on every page.
+pub(in crate::ui::hud) fn place_buttons<'a>(next: &'a [Button], capacity: usize, build_page: usize, holes: &[usize]) -> Placed<'a> {
+    // The cell index of each button: its place in the list plus an offset that counts the empty
+    // build cells before it. The list is sorted by command rank and position, so Cancel, Back and
+    // other buttons may sit anywhere among the build buttons. Invariant: the offset only changes
+    // at a build button (to the number of empty cells below its build cell) and never goes down
+    // along the list, so the indices strictly increase and no two buttons share a cell, whatever
+    // the sort order. A button that is not a build item keeps the offset of the build button
+    // before it; empty cells after the last build item push nothing (interim: whether the
+    // original pushes Cancel and Back along is not measured).
+    let index = |content: &[&Button]| -> Vec<usize> {
+        let mut offset = 0;
+        content
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                if matches!(b.act, Act::Build { .. }) {
+                    offset = offset.max(model::holes_before(b, holes));
+                }
+                i + offset
+            })
+            .collect()
+    };
+    let all: Vec<&Button> = next.iter().collect();
+    let all_index = index(&all);
+    let pinned: Vec<&Button> = next.iter().filter(|b| matches!(b.act, Act::Back | Act::Cancel(_))).collect();
+    let total = all_index.last().map_or(0, |i| i + 1);
+    let paged = total.max(next.len()) > capacity && capacity >= pinned.len() + 3;
+    let slots = if paged { capacity - 2 - pinned.len() } else { capacity };
+    let content: Vec<&Button> = next.iter().filter(|b| !paged || !matches!(b.act, Act::Back | Act::Cancel(_))).collect();
+    let content_index = index(&content);
+    let total = content_index.last().map_or(0, |i| i + 1);
+    let pages = total.div_ceil(slots.max(1)).max(1);
+    let page = build_page.min(pages - 1);
+    let start = page * slots;
+    let mut shown: Vec<(usize, &Button)> = content
+        .iter()
+        .zip(&content_index)
+        .filter(|(_, i)| **i >= start && **i < start + slots)
+        .map(|(b, i)| (i - start, *b))
+        .collect();
+    if paged {
+        shown.extend(pinned.iter().enumerate().map(|(i, b)| (slots + i, *b)));
+    }
+    Placed { shown, paged, pages, page }
 }
 
 fn visible_cells(p: &PaletteLayout, hud: R) -> Vec<R> {
@@ -528,29 +587,11 @@ pub(super) fn refresh(
     } else if let Some(palette) = layout.palette() {
         let cells = visible_cells(&palette, layout.hud);
         let capacity = cells.len();
-        let pinned: Vec<_> = next
-            .iter()
-            .filter(|b| matches!(b.act, Act::Back | Act::Cancel(_)))
-            .collect();
-        let paged = next.len() > capacity && capacity >= pinned.len() + 3;
-        let slots = if paged { capacity - 2 - pinned.len() } else { capacity };
-        let content: Vec<_> = next
-            .iter()
-            .filter(|b| !paged || !matches!(b.act, Act::Back | Act::Cancel(_)))
-            .collect();
-        let pages = content.len().div_ceil(slots.max(1)).max(1);
-        state.build_page = state.build_page.min(pages - 1);
-        let start = state.build_page * slots;
-        let mut shown: Vec<_> = content
-            .iter()
-            .skip(start)
-            .take(slots)
-            .enumerate()
-            .map(|(i, b)| (i, *b))
-            .collect();
-        if paged {
-            shown.extend(pinned.iter().enumerate().map(|(i, b)| (slots + i, *b)));
-        }
+        let holes = if hud.page == Page::Build { model::build_holes_of(&feed) } else { Vec::new() };
+        let place = place_buttons(&next, capacity, state.build_page, &holes);
+        state.build_page = place.page;
+        let (paged, pages) = (place.paged, place.pages);
+        let shown = place.shown;
         state.solid.extend(shown.iter().map(|(i, _)| cells[*i]));
         if paged {
             state.solid.extend_from_slice(&cells[capacity - 2..]);
