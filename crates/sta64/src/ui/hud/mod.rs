@@ -28,6 +28,8 @@
 // Wired into the game by INT-M3; until then only the frame runs and tests use it.
 #![allow(dead_code)]
 
+mod avatar;
+pub(crate) use avatar::closed as avatar_choice_closed;
 mod cinematic;
 mod footprint;
 pub(crate) mod object_footprints;
@@ -153,6 +155,7 @@ impl Plugin for HudPlugin {
             .init_resource::<UiScale>()
             .init_resource::<HudFeed>()
             .init_resource::<HudState>()
+            .init_resource::<avatar::ChoiceState>()
             .init_resource::<HudPointer>()
             .init_resource::<crate::ui::cursor::WantedCursor>()
             .init_resource::<crate::input::hover::HoveredUnit>()
@@ -180,10 +183,10 @@ impl Plugin for HudPlugin {
                     fit_screen,
                     refresh,
                     (status::sync, stock::refresh, stock::update_values, stock::update_hull_tints, status_gpu::refresh, status_gpu::update_values).chain(),
-                    stock::active,
-                    (stock::navigate, stock::buttons::press, stock::buttons::apply_more).chain(),
+                    (avatar::refresh, stock::active).chain(),
+                    (stock::navigate, stock::buttons::press, stock::buttons::apply_more).chain().run_if(avatar::closed),
                     panels::update_values.before(super::theme::WidgetPaint),
-                    host,
+                    (avatar::press, host).chain(),
                     pointer,
                     crate::input::hover::track.run_if(not(resource_exists::<ExternalFeed>)),
                     stock::infobar::update,
@@ -197,7 +200,7 @@ impl Plugin for HudPlugin {
                     ghost::update_ghost,
                     ghost::tint_ghost,
                     (ghost::sync_footprints, object_footprints::sync_object_footprints).chain(),
-                    (super::gui_sprites::paint.after(super::theme::WidgetPaint), stock::update_backdrop_fallback).chain(),
+                    (super::gui_sprites::paint.after(super::theme::WidgetPaint), stock::update_backdrop_fallback, stock::update_weapon_icon_visibility).chain(),
                 )
                     .chain()
                     .in_set(GameSet::Ui)
@@ -384,9 +387,10 @@ fn pointer(
     state: Res<HudState>,
     stock: Res<stock::StockState>,
     status: Res<status_gpu::StatusUiState>,
+    avatar: Res<avatar::ChoiceState>,
     mut out: ResMut<HudPointer>,
 ) {
-    let over = window.and_then(|w| w.cursor_position()).is_some_and(|c| {
+    let over = avatar.is_open() || window.and_then(|w| w.cursor_position()).is_some_and(|c| {
         let p = c / scale.0.max(1e-3);
         if status.fallback_card().is_some_and(|r| r.contains(p)) { true }
         else if stock.layout.is_some() { stock.solid.iter().any(|r| r.contains(p)) }
@@ -407,7 +411,7 @@ fn press(
     bindings: Option<Res<crate::input::keys::KeyBindings>>,
     menu: Option<Res<crate::ui::ingame_menu::InGameMenu>>,
     scene: Option<Res<crate::frontend::scene::MenuScene>>,
-    (feed, stock): (Res<HudFeed>, Option<Res<stock::StockState>>),
+    (feed, stock, avatar): (Res<HudFeed>, Option<Res<stock::StockState>>, Option<Res<avatar::ChoiceState>>),
     mut state: ResMut<HudState>,
     mut queue: ResMut<CommandQueue>,
     mut issued: MessageWriter<OrderIssued>,
@@ -417,7 +421,7 @@ fn press(
     mut targets: ResMut<OrderTargets>,
     cheat: Option<Res<crate::cheats::input::CheatInput>>,
 ) {
-    if cheat.is_some_and(|c| c.open || c.blocked_this_frame) {
+    if avatar.is_some_and(|state| state.is_open()) || cheat.is_some_and(|c| c.open || c.blocked_this_frame) {
         clicks.read().for_each(drop);
         return;
     }

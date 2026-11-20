@@ -80,9 +80,11 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
         });
     let specials = specials_of(db, def)
         .enumerate()
-        .filter_map(|(slot, (kind, _weapon))| {
+        .filter_map(|(slot, (kind, weapon))| {
             // Point defence is listed only where its energy toggle is supported.
-            (slot <= u8::MAX as usize && matches!(kind, SpecialKind::Cloak | SpecialKind::PointDefence | SpecialKind::Replace)).then_some((slot as u8, kind))
+            (slot <= u8::MAX as usize
+                && matches!(kind, SpecialKind::Cloak | SpecialKind::PointDefence | SpecialKind::Replace)
+                && !super::avatar::choice_weapon(def, kind, weapon)).then_some((slot as u8, kind))
         })
         .collect();
     let t = transport_state(db, def, kind, u);

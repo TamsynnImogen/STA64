@@ -6,7 +6,7 @@ use bevy::camera::RenderTarget;
 use bevy::prelude::*;
 use bevy::render::RenderPlugin;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
-use bevy::ui::{UiScale, UiTargetCamera};
+use bevy::ui::{UiGlobalTransform, UiScale, UiTargetCamera};
 use bevy::window::ExitCondition;
 use sta_content::ContentDb;
 use sta_sim::{Fixed, PlayerId, TeamId, WorldSource};
@@ -98,7 +98,7 @@ fn sizes(default: &[UVec2]) -> Vec<UVec2> {
 }
 
 #[derive(Clone, Copy)]
-enum HoverCapture { Selected, SelectedHover, Low, Other, BuildPage, ColonyShip, Group(usize) }
+enum HoverCapture { Selected, SelectedHover, Low, Other, BuildPage, ColonyShip, Group(usize), Avatar, WeaponIcons }
 
 /// Independent installed-data expectation: current crew is compared with its
 /// actual live capacity, not crewCost. Resolve authored palette/thresholds.
@@ -152,6 +152,14 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             None
         }
         HoverCapture::Low => { hud_feed.selected.clear(); Some(original) },
+        HoverCapture::Avatar => { hud_feed.selected.clear(); None },
+        HoverCapture::WeaponIcons => {
+            let def = hud_feed.content.as_ref().unwrap().key("fed_intrepidy").expect("FO4 Intrepid");
+            let mut view = (*hud_feed.view).clone();
+            view.units.iter_mut().find(|u| u.id == original).unwrap().def = def;
+            hud_feed.view = Arc::new(view);
+            None
+        }
         // UI-38: the start unit's view row (same id, so it stays visible) with a colony ship's definition.
         HoverCapture::ColonyShip => {
             let Some(def) = hud_feed.content.as_ref().unwrap().key("fcolony") else {
@@ -286,6 +294,9 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         ))
         .id();
     app.insert_resource(CaptureCamera(camera));
+    if matches!(hover_mode, HoverCapture::Avatar) {
+        app.insert_resource(crate::render::units::LocalPlayer(Some(PlayerId(0))));
+    }
     if matches!(hover_mode, HoverCapture::BuildPage) {
         // The builder's build page: command-button labels and PREV/NEXT when it has pages.
         app.world_mut().resource_mut::<super::super::HudState>().page = super::super::Page::Build;
@@ -325,6 +336,38 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             .filter(|(sprite, image)| sprite.names.iter().any(|name| name == "fed_outpost_si") && image.rect.is_some())
             .count();
         assert_eq!(count, 1, "{label}: FO4 outpost systems atlas entry must resolve");
+    }
+
+    if matches!(hover_mode, HoverCapture::Avatar) {
+        let mut query = app.world_mut().query_filtered::<(&GuiButton, &ImageNode, &ComputedNode, &UiGlobalTransform), With<super::super::avatar::Portrait>>();
+        let mut choices: Vec<_> = query.iter(app.world()).collect();
+        choices.sort_by(|a, b| a.3.translation.x.total_cmp(&b.3.translation.x));
+        assert_eq!(choices.len(), 2, "both full-size avatar portraits resolve");
+        assert_eq!(choices[0].0.names, ["b_avatar_fed_mayson"]);
+        assert_eq!(choices[1].0.names, ["b_avatar_fed_risner"]);
+        let panel = stock.panel("CommandInfoBar").expect("FO4 choice panel");
+        let first = stock.at(Vec2::new(panel.x, panel.y), "CommandInfoBarButtonRect").expect("FO4 portrait rect");
+        let stride = stock.number("CommandInfoBarButtonDistance").unwrap() as f32 * stock.scale_x;
+        for (_, image, node, _) in &choices {
+            assert_eq!(image.rect.unwrap().size(), Vec2::splat(256.0));
+            assert_eq!(node.size, Vec2::new(first.w, first.h));
+        }
+        let first_center = Vec2::new(first.x + first.w / 2.0, first.y + first.h / 2.0);
+        assert!(choices[0].3.translation.distance(first_center) < 1.0);
+        assert!(choices[1].3.translation.distance(first_center + Vec2::new(stride, 0.0)) < 1.0);
+        let center_x = (choices[0].3.translation.x + choices[1].3.translation.x) * 0.5;
+        assert!((center_x - size.x as f32 / 2.0).abs() < 1.0);
+    }
+    if matches!(hover_mode, HoverCapture::WeaponIcons) {
+        let mut query = app.world_mut().query::<(&super::weapon_icons::WeaponIcon, &GuiImage, &ImageNode, &Visibility)>();
+        let mut slots: Vec<_> = query.iter(app.world()).map(|(icon, name, image, visibility)| {
+            assert!(image.rect.is_some());
+            assert_eq!(*visibility, Visibility::Inherited);
+            assert_eq!(name.names.last().unwrap(), "systemicon_default");
+            icon.slot
+        }).collect();
+        slots.sort_unstable();
+        assert_eq!(slots, [1, 2, 3, 4], "all mounted Intrepid weapon icons resolve");
     }
 
     if let HoverCapture::Group(count) = hover_mode {
@@ -403,8 +446,8 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             .count();
         assert_eq!(colonize, 1, "{label}: one COLONIZE button with the stock art name");
     }
-    if matches!(hover_mode, HoverCapture::Low) {
-        assert_eq!(commands, 0, "{label}: hovering must not enable selection commands");
+    if matches!(hover_mode, HoverCapture::Low | HoverCapture::Avatar) {
+        assert_eq!(commands, 0, "{label}: selection commands require a selection");
     } else {
         assert!(commands > 0, "{label}: no command button art resolved");
     }
@@ -645,6 +688,12 @@ fn installed_stock_hud_renders_on_gpu() {
             vfs, profile, UVec2::new(1280, 720), "gui_federation16x9.cfg",
             "fo4-hover-selected-16x9", GameOptions::default(), HoverCapture::SelectedHover,
         );
+        if active_mod.as_deref() == Some("FO4") {
+            for (mode, label) in [(HoverCapture::Avatar, "fo4-start-avatar"), (HoverCapture::WeaponIcons, "fo4-intrepid-system-icons")] {
+                let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();
+                capture_one(vfs, profile, UVec2::new(1920, 1080), "gui_federation16x9.cfg", label, GameOptions::default(), mode);
+            }
+        }
     }
 }
 

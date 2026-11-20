@@ -574,6 +574,9 @@ fn spawn_single(
     let def = feed.view.unit(single.id).and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def)));
     let is_node = def.is_some_and(|d| super::super::status::node_slot(d).is_some());
     let backdrop = def.and_then(|d| system_background(commands, root, layout, origin, &d.model));
+    if let (Some(backdrop), Some(def), Some(db)) = (backdrop, def, feed.content.as_deref()) {
+        super::weapon_icons::spawn(commands, root, layout, origin, backdrop, def, db);
+    }
     if let Some(r) = chosen_rect(
         layout,
         origin,

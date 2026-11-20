@@ -77,6 +77,7 @@ impl Plugin for InputPlugin {
                     .distributive_run_if(not(resource_exists::<crate::frontend::scene::MenuScene>))
                     // The in-game menu (UI-34) is over the match: nothing under it takes a click or a key.
                     .distributive_run_if(crate::ui::ingame_menu::menu_closed)
+                    .distributive_run_if(crate::ui::hud::avatar_choice_closed)
                     .distributive_run_if(crate::cheats::input::game_input_free),
             );
     }

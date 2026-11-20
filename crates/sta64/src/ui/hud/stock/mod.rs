@@ -4,6 +4,8 @@ pub(in crate::ui) mod buttons;
 pub(in crate::ui::hud) mod commands;
 mod info;
 pub(super) use info::update_backdrop_fallback;
+mod weapon_icons;
+pub(super) use weapon_icons::update_visibility as update_weapon_icon_visibility;
 mod orders;
 pub(super) mod infobar;
 pub mod layout;
