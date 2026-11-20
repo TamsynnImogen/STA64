@@ -423,7 +423,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         .query::<(&super::info::StockText, &crate::ui::sprite_font::SpriteText, &Children)>()
         .iter(app.world())
     {
-        let super::info::StockText::Resource(id) = *kind;
+        let super::info::StockText::Resource(id) = *kind else { continue };
         let expected = stock.colour(&format!("resource_{id}_color")).unwrap_or(defaults[id]);
         assert_eq!(text.color, expected, "{label}: resource_{id} CFG/default tint");
         // Sprite text resolves to glyph images (the TTF fallback to Text); each carries the tint.

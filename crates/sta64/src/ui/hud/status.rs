@@ -24,6 +24,50 @@ pub(crate) struct StatusFeed {
     pub systems: Vec<sta_sim::combat::damage::SystemView>,
 }
 
+/// The stock slot a selected resource node yields. A harvestable latinum
+/// field names its slot through its class, as in the simulation.
+pub(super) fn node_slot(def: &sta_content::UnitDef) -> Option<usize> {
+    if !sta_sim::world::EntityKind::mineable_def(def) {
+        return None;
+    }
+    let slot = if def.class.0 == "latinum" { 1 } else { def.resource.unwrap_or(0) };
+    (usize::from(slot) < sta_content::resources::SLOTS).then_some(usize::from(slot))
+}
+
+pub(super) fn node_status(feed: Option<&StatusFeed>, id: sta_sim::EntityId) -> Option<&sta_sim::economy::view::NodeView> {
+    feed?.nodes.iter().find(|node| node.entity == id)
+}
+
+pub(super) fn node_fraction(feed: Option<&StatusFeed>, id: sta_sim::EntityId) -> f32 {
+    node_status(feed, id)
+        .filter(|n| !n.infinite && n.start > Fixed::ZERO)
+        .map_or(1.0, |n| (n.amount.to_f32() / n.start.to_f32()).clamp(0.0, 1.0))
+}
+
+pub(super) fn population_text(feed: &HudFeed, id: sta_sim::EntityId) -> Option<String> {
+    if !crate::input::select::target_seen(&feed.view, Some(feed.player), id) {
+        return None;
+    }
+    let db = feed.content.as_deref()?;
+    let def = db.unit(feed.view.unit(id)?.def)?;
+    if def.planet_role != Some(sta_content::PlanetRole::Producer) {
+        return None;
+    }
+    // An uncolonized planet need not have a colony row. Its cap is still data.
+    let (current, cap) = match feed.view.colonies.binary_search_by_key(&id, |row| row.id) {
+        Ok(i) => {
+            let row = &feed.view.colonies[i];
+            (row.population, row.max_population)
+        }
+        Err(_) => (Fixed::ZERO, db.rules().population()?.cap(def.planet_max_population)),
+    };
+    if cap <= Fixed::ZERO {
+        return None;
+    }
+    let whole = |n: Fixed| n.to_bits() / Fixed::ONE.to_bits();
+    Some(crate::ui::i18n::trf("Population {0}/{1}", &[&whole(current), &whole(cap)]))
+}
+
 /// Keep optional status at the same simulation tick as the regular HUD feed.
 /// External frame feeds and ended games must not inherit the last game's rows.
 pub(super) fn sync(

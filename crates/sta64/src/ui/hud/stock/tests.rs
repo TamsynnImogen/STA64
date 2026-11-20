@@ -847,6 +847,39 @@ fn profile_and_selection_changes_preserve_root_camera_and_state() {
 }
 
 #[test]
+fn selected_moon_draws_a_live_resource_bar_in_the_stock_panel() {
+    use bevy::ecs::system::RunSystemOnce;
+    use sta_sim::economy::view::NodeView;
+
+    let mut app = app();
+    let id = EntityId(1);
+    {
+        let mut feed = app.world_mut().resource_mut::<HudFeed>();
+        let moon = feed.content.as_ref().unwrap().key("fx_moon").unwrap();
+        let unit = &mut Arc::make_mut(&mut feed.view).units[0];
+        unit.def = moon;
+        unit.owner = sta_sim::world::NEUTRAL;
+    }
+    app.update();
+    app.world_mut().resource_mut::<crate::ui::hud::status::StatusFeed>().nodes = vec![NodeView {
+        entity: id,
+        resource: 0,
+        amount: Fixed::from_int(100),
+        start: Fixed::from_int(400),
+        infinite: false,
+    }];
+    app.world_mut().run_system_once(info::update).unwrap();
+    let world = app.world_mut();
+    let fills: Vec<_> = world.query::<(&info::StockBar, &Node)>().iter(world).collect();
+    assert!(!fills.iter().any(|(bar, _)| matches!(bar, info::StockBar::Hull(_))));
+    let [(width, expected)] = fills.iter().filter_map(|(bar, node)| match bar {
+        info::StockBar::Node(full_width) => Some((node.width, Val::Px(*full_width * 0.25))),
+        _ => None,
+    }).collect::<Vec<_>>().try_into().expect("one resource bar");
+    assert_eq!(width, expected);
+}
+
+#[test]
 fn numeric_values_patch_existing_stock_entities() {
     let mut app = app();
     // The info bar follows the pointer: hover the selected ship to read its values there.
@@ -856,9 +889,9 @@ fn numeric_values_patch_existing_stock_entities() {
         app.world_mut()
             .query::<(Entity, &info::StockText, &SpriteText)>()
             .iter(app.world())
-            .map(|(e, kind, text)| {
-                let info::StockText::Resource(id) = kind;
-                (e, *id, text.text.clone())
+            .filter_map(|(e, kind, text)| match kind {
+                info::StockText::Resource(id) => Some((e, *id, text.text.clone())),
+                info::StockText::Population(_) => None,
             })
             .collect()
     };

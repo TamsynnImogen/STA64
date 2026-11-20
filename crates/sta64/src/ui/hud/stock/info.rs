@@ -7,6 +7,7 @@ use sta_sim::{EntityId, Fixed};
 use super::super::layout::R;
 use super::super::model::{self, HudFeed, Info};
 use super::super::panels::GroupTile;
+use super::super::status::node_fraction;
 use super::layout::{StockLayout, info_variant};
 use crate::ui::gui_sprites::{GuiImage, GuiImageSampling};
 use crate::ui::notices::Tooltip;
@@ -22,6 +23,7 @@ pub(in crate::ui::hud) use identity::{IdentityField, IdentityText};
 #[derive(Component, Clone, Copy)]
 pub(in crate::ui::hud) enum StockText {
     Resource(usize),
+    Population(EntityId),
 }
 
 #[derive(Component, Clone, Copy)]
@@ -38,19 +40,30 @@ pub(in crate::ui::hud) enum StockBar {
     Node(f32),
 }
 
-/// UI-48: the bar a resource node shows, from its definition: a planet giving metal draws the
-/// planet-metal bar, any other dilithium node (a moon) the dilithium bar. Keys, sprite names and
-/// colours from data; which node takes which bar is ours (the original's info-bar code not read).
+/// Use the authored planet-metal bar for metal-producing planets and the
+/// dilithium bar geometry for other mineable nodes.
 fn node_bar(def: &sta_content::UnitDef) -> Option<(&'static str, &'static str, &'static str)> {
-    if !sta_sim::world::EntityKind::mineable_def(def) {
-        return None;
+    match super::super::status::node_slot(def)? {
+        2 if def.planet_role == Some(sta_content::PlanetRole::Producer) => {
+            Some(("infoSinglePlanetMetalBarArea", "infoSinglePlanetMetalBarDisableColor", "infoSinglePlanetMetalBarColor"))
+        }
+        _ => Some(("infoSingleDilithiumBarArea", "infoSingleDilithiumBarDisableColor", "infoSingleDilithiumBarColor")),
     }
-    match (def.class.0.as_str(), def.resource.unwrap_or(0)) {
-        ("planet", 2) => Some(("infoSinglePlanetMetalBarArea", "infoSinglePlanetMetalBarDisableColor", "infoSinglePlanetMetalBarColor")),
-        ("latinum", _) => None,
-        (_, 0) => Some(("infoSingleDilithiumBarArea", "infoSingleDilithiumBarDisableColor", "infoSingleDilithiumBarColor")),
-        _ => None,
-    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn spawn_node_bar(
+    commands: &mut Commands, root: Entity, layout: &StockLayout, origin: Vec2,
+    def: &sta_content::UnitDef, fallback: Option<R>, theme: &Theme,
+) {
+    let Some((area, track, fill)) = node_bar(def) else { return };
+    let Some(r) = layout.at(origin, area).or_else(|| layout.raw_rect(area).is_none().then_some(fallback).flatten()) else { return };
+    let slot = super::super::status::node_slot(def).expect("node bar has a resource");
+    // The authored dilithium fill is for slot 0. Other resources sharing the
+    // rectangle retain their own palette if the game has no dedicated panel.
+    let fill_keys: &[&str] = if slot == 0 || area == "infoSinglePlanetMetalBarArea" { &[fill] } else { &[] };
+    let fallback_tint = resource_colour(layout, slot + 2, theme.accent);
+    cfg_bar(commands, root, layout, r, 1.0, (&[track], fill_keys, fallback_tint), StockBar::Node(r.w), area.trim_end_matches("Area"));
 }
 
 /// UI-48: a system icon of the single-selection card, by cfg slot (`infoSystemIcon_<n>`: 0
@@ -530,6 +543,8 @@ fn spawn_single(
     origin: Vec2,
     single: &model::Single,
 ) {
+    let def = feed.view.unit(single.id).and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def)));
+    let is_node = def.is_some_and(|d| super::super::status::node_slot(d).is_some());
     if let Some(r) = chosen_rect(
         layout,
         origin,
@@ -580,13 +595,14 @@ fn spawn_single(
     {
         wireframe_layers_of(commands, root, r, &def.model, Some(single.id));
     }
-    if let Some(r) = chosen_rect(
+    let hull_rect = chosen_rect(
         layout,
         origin,
         single.builder,
         "infoBuildHullBar",
         "infoSingleHullBarArea",
-    ) {
+    );
+    if !is_node && let Some(r) = hull_rect {
         let fills: &[&str] = if single.builder { &["infoBuildHullBarColor", "infoSingleHullBarColor"] } else { &["infoSingleHullBarColor"] };
         cfg_bar(commands, root, layout, r, single.hull, (&["infoSingleHullBarDisableColor", "infoSingleShieldBarDisableColor"], fills, native_hull_tint(single.hull)), StockBar::Hull(r.w), "infoSingleHullBar");
     }
@@ -607,15 +623,22 @@ fn spawn_single(
     {
         bar(commands, root, r, progress, bar_colours(layout, &["infoSingleConstructionBarDisableColor"], &["infoSingleConstructionBarColor"], theme.warn), StockBar::Progress(r.w));
     }
-    if let Some((area, track, fill)) = feed.view.unit(single.id).and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def))).and_then(node_bar)
-        && let Some(r) = layout.at(origin, area)
-    {
-        // Full until the status feed says otherwise (`update` fills it every frame).
-        cfg_bar(commands, root, layout, r, 1.0, (&[track], &[fill], theme.accent), StockBar::Node(r.w), area.trim_end_matches("Area"));
+    if let Some(def) = def {
+        spawn_node_bar(commands, root, layout, origin, def, hull_rect, theme);
+    }
+    if let Some(population) = super::super::status::population_text(feed, single.id) {
+        // Reuse alignment from the planet owner row when present. A separate
+        // line preserves the CFG's resource bar and title geometry.
+        let anchor = layout.at(origin, "infoSinglePlanetTeamTextArea")
+            .or_else(|| layout.at(origin, "infoSingleClassTextArea"));
+        if let Some(r) = anchor {
+            let line = R::new(r.x, r.bottom() + 3.0, r.w.max(190.0 * layout.scale_x), r.h);
+            let entity = text(commands, root, line, population, theme.text, theme.micro_size, Some(StockText::Population(single.id)));
+            clip_to_rect(commands, entity, false);
+        }
     }
     // The stock engine gives the system picture and health percentage their
     // own rectangles. Read both from the mounted CFG.
-    let def = feed.view.unit(single.id).and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def)));
     if let Some(def) = def.filter(|d| d.system_hit_points.iter().any(|hp| *hp > Fixed::ZERO)) {
         for (slot, system) in SLOT_SYSTEM.into_iter().enumerate() {
             let icon = chosen_rect(layout, origin, single.builder, &format!("infoBuildSystemIcon_{slot}"), &format!("infoSystemIcon_{slot}"));
@@ -746,14 +769,6 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout,
     }
 }
 
-/// A node's amount left over its start (UI-48), 1 for an infinite node or one the feed lacks.
-pub(in crate::ui::hud) fn node_fraction(status: Option<&crate::ui::hud::status::StatusFeed>, id: EntityId) -> f32 {
-    status
-        .and_then(|s| s.nodes.iter().find(|n| n.entity == id))
-        .filter(|n| !n.infinite && n.start > sta_sim::Fixed::ZERO)
-        .map_or(1.0, |n| (n.amount.to_f32() / n.start.to_f32()).clamp(0.0, 1.0))
-}
-
 #[allow(clippy::too_many_arguments)] // Bevy injects these system parameters.
 pub(in crate::ui::hud) fn update(
     feed: Res<HudFeed>,
@@ -811,8 +826,10 @@ pub(in crate::ui::hud) fn update(
         }
     }
     for (kind, mut text) in &mut texts {
-        let StockText::Resource(id) = kind;
-        let value = resource_text(&feed, *id).unwrap_or_default();
+        let value = match *kind {
+            StockText::Resource(id) => resource_text(&feed, id),
+            StockText::Population(id) => super::super::status::population_text(&feed, id),
+        }.unwrap_or_default();
         if text.text != value {
             text.text = value;
         }

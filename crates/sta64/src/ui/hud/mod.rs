@@ -299,7 +299,7 @@ fn refresh(
         }
         if layout_changed || drawn.as_ref().is_none_or(|d| !panels::same_info(&d.info, &now.info)) {
             clear(&mut commands, kids);
-            panels::fill_info(&mut commands, &theme, e, &now.info, Vec2::new(row.info.w, row.info.h));
+            panels::fill_info(&mut commands, &theme, e, &now.info, Vec2::new(row.info.w, row.info.h), &feed);
         }
     }
     if let Ok((e, mut node, kids)) = grid_panel.single_mut() {

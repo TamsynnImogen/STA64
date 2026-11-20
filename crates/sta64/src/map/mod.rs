@@ -177,11 +177,36 @@ impl Placed {
     }
 }
 
+/// The displayed radius of a producer planet without a model, before or after
+/// its map-linked pick ghost is rebuilt from the content definition.
+const PLANET_FALLBACK_RADIUS: f32 = 500.0;
+
+fn producer_pick_radius(def: &sta_content::UnitDef) -> f32 {
+    let radius = def.radius.to_f32();
+    if radius > 0.0 {
+        radius.max(5.0)
+    } else {
+        let scale = def.scale.to_f32();
+        PLANET_FALLBACK_RADIUS * if scale > 0.0 { scale } else { 1.0 }
+    }
+}
+
+fn linked_planet_pick_radius(def: &sta_content::UnitDef, displayed_radius: f32) -> Option<f32> {
+    matches!(def.planet_role, Some(sta_content::PlanetRole::Producer))
+        .then_some(displayed_radius.max(5.0))
+}
+
 /// The click radius of a sim object the map draws some other way (a planet, a resource node
 /// without a mesh of its own): its definition's `radius`, for a thing a player can mine or colonise (a resource node, a
 /// producer planet). `None` for scenery, background planets included.
 pub(crate) fn ghost_pick_radius(def: &sta_content::UnitDef) -> Option<f32> {
     let r = def.radius.to_f32();
+    if matches!(def.planet_role, Some(sta_content::PlanetRole::Background)) {
+        return None;
+    }
+    if matches!(def.planet_role, Some(sta_content::PlanetRole::Producer)) {
+        return Some(producer_pick_radius(def));
+    }
     if def.resource.is_some() {
         return Some(resource_pick_radius(r));
     }
@@ -192,7 +217,7 @@ pub(crate) fn ghost_pick_radius(def: &sta_content::UnitDef) -> Option<f32> {
     if def.class.0.eq_ignore_ascii_case("wormhole_obj") && r > 0.0 {
         return Some(r.max(5.0));
     }
-    (matches!(def.planet_role, Some(sta_content::PlanetRole::Producer)) && r > 0.0).then_some(r.max(5.0))
+    None
 }
 
 /// The radius a latinum nebula (a resource volume) is drawn as gas at, and so the
@@ -977,6 +1002,9 @@ fn rebuild(
     let mut gas = std::collections::BTreeMap::<String, NebulaClass>::new();
     let mut stock_nebulae = Vec::new();
     let mut hidden = 0usize;
+    // The planet renderer may know a body radius that the sim definition does
+    // not (notably its model-less fallback). Keep it for the separate pick ghost.
+    let mut planet_pick_radii = HashMap::<EntityId, f32>::new();
 
     for o in &map.objects {
         let sim_key = content.key(&o.odf).filter(|&k| content.unit(k).is_some());
@@ -1111,7 +1139,7 @@ fn rebuild(
                 .model(&vfs.0, &def.model)
                 .and_then(|(_, m)| m.bounds())
                 .map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).max_element() * 0.5)
-                .unwrap_or(500.0)
+                .unwrap_or(PLANET_FALLBACK_RADIUS)
                 * scale;
             let ground = odf.str("groundTextureName").unwrap_or("").to_owned();
             let atmo = odf.str("atmosphereTextureName").filter(|a| !a.is_empty()).unwrap_or("PA_ECFR0").to_owned();
@@ -1120,6 +1148,9 @@ fn rebuild(
             // it (below) stays, as nothing here takes it.
             if let Some(id) = sim_key.and_then(|k| placed.peek(k, o)) {
                 commands.entity(entity).insert(crate::render::planet::PlanetColony(id));
+                if let Some(pick) = sim_key.and_then(|k| content.unit(k)).and_then(|d| linked_planet_pick_radius(d, radius)) {
+                    planet_pick_radii.insert(id, pick);
+                }
             }
             let mut loader = Loader {
                 vfs: &vfs.0,
@@ -1393,7 +1424,7 @@ fn rebuild(
         // A planet or a resource node the renderer draws some other way is still clicked for its
         // info and as a mining target: its pick body comes from the data, not from a mesh.
         if let Some(u) = ghost_view.unit(id)
-            && let Some(r) = content.unit(u.def).and_then(ghost_pick_radius)
+            && let Some(r) = planet_pick_radii.get(&id).copied().or_else(|| content.unit(u.def).and_then(ghost_pick_radius))
         {
             ghost.insert((Transform::from_translation(crate::render::units::to_bevy(u.pos.to_f32())), SelectRadius(r)));
         }
@@ -1690,6 +1721,22 @@ mod tests {
         assert_eq!(ghost_pick_radius(&planet), Some(130.0));
         planet.planet_role = Some(sta_content::PlanetRole::Background);
         assert_eq!(ghost_pick_radius(&planet), None, "a backdrop planet is scenery");
+    }
+
+    #[test]
+    fn model_less_colonizable_producer_uses_its_displayed_planet_radius_for_picking() {
+        let mut planet = sta_content::UnitDef::new("colony_planet", "planet");
+        planet.planet_role = Some(sta_content::PlanetRole::Producer);
+        planet.planet_colonizable = true;
+        planet.scale = Fixed::from_f64(0.5);
+        assert_eq!(planet.radius, Fixed::ZERO);
+        let displayed = PLANET_FALLBACK_RADIUS * 0.5;
+        assert_eq!(linked_planet_pick_radius(&planet, displayed), Some(displayed));
+        assert_eq!(ghost_pick_radius(&planet), Some(displayed), "a rebuilt ghost keeps the fallback radius");
+
+        planet.planet_role = Some(sta_content::PlanetRole::Background);
+        assert_eq!(linked_planet_pick_radius(&planet, displayed), None);
+        assert_eq!(ghost_pick_radius(&planet), None, "background planets remain scenery");
     }
 
     /// A latinum nebula (no model extent) and a dilithium moon, seen from tilted cameras (the pick is a ray test, so the

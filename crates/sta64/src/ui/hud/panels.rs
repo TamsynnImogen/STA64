@@ -26,10 +26,10 @@ pub struct InfoPanel;
 pub struct GridPanel;
 
 #[derive(Component, Clone, Copy)]
-pub(super) enum ValueText { Resource(usize), Hull, Shield, Built }
+pub(super) enum ValueText { Resource(usize), Hull, Shield, Built, Node(EntityId), Population(EntityId) }
 
 #[derive(Component, Clone, Copy)]
-pub(super) enum ValueBar { Hull, Shield, Built, Group(EntityId) }
+pub(super) enum ValueBar { Hull, Shield, Built, Group(EntityId), Node(EntityId) }
 
 /// Numbers do not change the row's structure.
 pub(super) fn same_resources(a: &[ResEntry], b: &[ResEntry]) -> bool {
@@ -55,6 +55,7 @@ pub(super) fn update_values(
     feed: Res<super::model::HudFeed>,
     layout: Res<super::HudLayoutRes>,
     theme: Res<Theme>,
+    status: Res<super::status::StatusFeed>,
     mut texts: Query<(&ValueText, &mut crate::ui::sprite_font::SpriteText)>,
     mut bars: Query<(&ValueBar, Option<&mut crate::ui::theme::ProgressBar>, Option<&mut Node>, Option<&mut BackgroundColor>)>,
 ) {
@@ -66,6 +67,11 @@ pub(super) fn update_values(
             (ValueText::Hull, Info::Single(s)) => Some(format!("{}/{}", s.hull_now, s.hull_max)),
             (ValueText::Shield, Info::Single(s)) => s.shield.map(|v| format!("{}%", (v*100.0).round() as i32)),
             (ValueText::Built, Info::Single(s)) => s.progress.map(|v| format!("{}%", (v*100.0).round() as i32)),
+            (ValueText::Node(id), _) => Some(super::status::node_status(Some(&status), *id).map_or_else(String::new, |n| {
+                let whole = |v: sta_sim::Fixed| v.to_bits() / sta_sim::Fixed::ONE.to_bits();
+                if n.infinite { tr("Infinite") } else { format!("{}/{}", whole(n.amount), whole(n.start)) }
+            })),
+            (ValueText::Population(id), _) => Some(super::status::population_text(&feed, *id).unwrap_or_default()),
             _ => None,
         };
         if let Some(value) = value && text.text != value { text.text = value; }
@@ -76,6 +82,7 @@ pub(super) fn update_values(
             (ValueBar::Shield, Info::Single(s)) => s.shield,
             (ValueBar::Built, Info::Single(s)) => s.progress,
             (ValueBar::Group(id), Info::Group(tiles)) => tiles.iter().find(|t| t.id == *id).map(|t| t.hull),
+            (ValueBar::Node(id), _) => Some(super::status::node_fraction(Some(&status), *id)),
             _ => None,
         };
         let Some(value) = value else { continue };
@@ -255,19 +262,19 @@ fn bar_row(theme: &Theme, label: &str, value: f32, shown: String, w: f32, kind: 
 }
 
 /// The info panel's frame and content, for a panel of `size`.
-pub fn fill_info(commands: &mut Commands, theme: &Theme, panel: Entity, info: &Info, size: Vec2) {
+pub fn fill_info(commands: &mut Commands, theme: &Theme, panel: Entity, info: &Info, size: Vec2, feed: &super::model::HudFeed) {
     commands.entity(panel).insert(if matches!(info, Info::None) { Visibility::Hidden } else { Visibility::Inherited });
     let mut p = commands.entity(panel);
     match info {
         Info::None => {}
         Info::Single(s) => {
-            fill_single(&mut p, theme, s, size);
+            fill_single(&mut p, theme, s, size, feed);
         }
         Info::Group(tiles) => fill_group(&mut p, theme, tiles, size),
     }
 }
 
-fn fill_single(p: &mut EntityCommands, theme: &Theme, s: &Single, size: Vec2) {
+fn fill_single(p: &mut EntityCommands, theme: &Theme, s: &Single, size: Vec2, feed: &super::model::HudFeed) {
     let bar = ((size.x - 2.0 * theme.pad - theme.side_bar) * 0.5).clamp(120.0, 360.0);
     let name_colour = if s.own { theme.title } else { theme.bad };
     p.with_child((
@@ -275,14 +282,23 @@ fn fill_single(p: &mut EntityCommands, theme: &Theme, s: &Single, size: Vec2) {
         Pickable::IGNORE,
         children![text(s.name.to_uppercase(), theme.heading_size, name_colour), text(s.class.to_uppercase(), theme.small_size, theme.text_dim)],
     ));
-    p.with_child(bar_row(theme, &tr("Hull"), s.hull, format!("{}/{}", s.hull_now, s.hull_max), bar, ValueBar::Hull, ValueText::Hull));
+    let def = feed.view.unit(s.id).and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def)));
+    if let Some(slot) = def.and_then(super::status::node_slot) {
+        let names = super::model::resource_model(feed);
+        p.with_child(bar_row(theme, names.name(slot), 1.0, String::new(), bar, ValueBar::Node(s.id), ValueText::Node(s.id)));
+    } else {
+        p.with_child(bar_row(theme, &tr("Hull"), s.hull, format!("{}/{}", s.hull_now, s.hull_max), bar, ValueBar::Hull, ValueText::Hull));
+    }
+    if let Some(population) = super::status::population_text(feed, s.id) {
+        p.with_child((ValueText::Population(s.id), text(population, theme.small_size, theme.text)));
+    }
     if let Some(sh) = s.shield {
         p.with_child(bar_row(theme, &tr("Shield"), sh, format!("{}%", (sh * 100.0).round() as i32), bar, ValueBar::Shield, ValueText::Shield));
     }
     if let Some(pr) = s.progress {
         p.with_child(bar_row(theme, &tr("Built"), pr, format!("{}%", (pr * 100.0).round() as i32), bar, ValueBar::Built, ValueText::Built));
     }
-    if s.builder {
+    if s.builder && def.is_none_or(|d| d.planet_role != Some(sta_content::PlanetRole::Producer)) {
         p.with_child(text(tr("Select Build in the grid to queue ships"), theme.small_size, theme.text_dim));
     }
 }
