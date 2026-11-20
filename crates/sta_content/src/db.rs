@@ -217,12 +217,14 @@ impl ContentDb {
     }
 
     /// [`Self::with_map_tech_tree`] for the map named `map` (a file stem under
-    /// `bzn/`, `.bzn` then `.sol`): the tree its header names. This is how every
-    /// tool that rebuilds the content of a game it did not start (the bench's
-    /// capture check and desync diagnosis) gets the content the game ran on;
-    /// the game itself has the parsed map and calls [`Self::with_map_tech_tree`]
-    /// with its `techTreeFilename`. A map that cannot be read leaves the current
-    /// tree, with a warning.
+    /// `bzn/`, `.bzn` then `.sol`): the tree its header names. It is for tools
+    /// that rebuild the content of a game they did not start (the bench's
+    /// capture check; not `sta-bench desync`, whose lobby matches keep the
+    /// default tree); the game itself has the parsed map and calls
+    /// [`Self::with_map_tech_tree`] with its `techTreeFilename`. A map that
+    /// cannot be read leaves the current tree, with a warning. The capture check
+    /// always applies the map's tree, which is right only while lobby matches
+    /// are never captured.
     pub fn with_named_map_tech_tree(&self, vfs: &sta_vfs::Vfs, map: &str) -> (Option<ContentDb>, Vec<Warning>) {
         let Some(read) = vfs.read(&format!("bzn/{map}.bzn")).or_else(|| vfs.read(&format!("bzn/{map}.sol"))) else {
             return (None, vec![Warning::new(map, "map not found in the mount; its tech tree is not applied")]);
