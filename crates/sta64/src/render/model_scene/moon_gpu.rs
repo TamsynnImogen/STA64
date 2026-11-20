@@ -36,7 +36,8 @@ fn installed_moon_has_no_highlight_and_a_lit_core() {
                 synchronous_pipeline_compilation: true,
                 ..default()
             })
-            .disable::<bevy::winit::WinitPlugin>(),
+            .disable::<bevy::winit::WinitPlugin>()
+            .disable::<bevy::log::LogPlugin>(),
     );
     app.add_plugins(crate::render::hulls::HullPlugin);
     app.insert_resource(crate::render::profile::RenderProfile::Stock);
@@ -147,13 +148,15 @@ fn installed_moon_has_no_highlight_and_a_lit_core() {
     for (name, s) in &stats {
         assert!(s.lit > 500, "{name}: the moon is invisible: {s:?}");
         assert!(s.core > 50, "{name}: no glow shell shows through the rock: {s:?}");
+        // A regression check of STA64's own frame, not a statement about the original's look.
         assert!(s.core_mean_b > s.rock_mean, "{name}: the core is not brighter than the rock: {s:?}");
+        assert_eq!(s.core_white, 0, "{name}: a highlight on the shell: {s:?}");
+        assert_eq!(s.rock_hot, 0, "{name}: a highlight on the rock: {s:?}");
     }
 }
 
 /// What a frame of the moon shows, read from its pixels.
 #[derive(Debug)]
-#[allow(dead_code)]
 struct MoonFrame {
     /// Pixels brighter than the clear colour.
     lit: usize,
@@ -194,11 +197,11 @@ impl MoonFrame {
 }
 
 /// Install-gated, no GPU: the moon's rock and glow shell, built from the install's lighting materials, take no
-/// specular colour under the Stock look (their lighting model is not 2), whatever specular their data carries.
+/// specular colour under the Stock look whatever specular their data carries.
 #[test]
 fn installed_moon_materials_draw_no_highlight_in_the_stock_look() {
     use crate::render::hulls::{hull_material, HullPart, HullView};
-    use crate::render::stock::hulls::{draws_specular, StockLight};
+    use crate::render::stock::hulls::StockLight;
     let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
         eprintln!("SKIP: set STA64_TEST_INSTALL");
         return;
@@ -220,7 +223,6 @@ fn installed_moon_materials_draw_no_highlight_in_the_stock_look() {
             seen += 1;
             let part = HullPart { stock: Some(StockLight::from_material(lm)), ..default() };
             let m = hull_material(&StandardMaterial::default(), &part, &view);
-            assert!(!draws_specular(lm.model), "{}: a moon material of model 2", group.material);
             assert_eq!(m.params.mspc.truncate(), Vec3::ZERO, "{}: highlight colour", group.material);
         }
     }
