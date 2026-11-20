@@ -128,11 +128,11 @@ fn from_srgb(c: vec3<f32>) -> vec3<f32> {
 }
 
 // A specular map's highlight (A2FOExtensions): per light, its colour times (N.H)^power, front
-// facing, times the highlight colour (a Phong material's own, else the defaults), times the
+// facing, times the highlight colour and the
 // map's RGB. The lights are the look's own (`dvec`, `dcol`).
 fn mapped_highlight(n: vec3<f32>, wp: vec3<f32>, mask: vec3<f32>) -> vec3<f32> {
     let v = normalize(k.eye.xyz - wp);
-    // A Phong material's own colour and exponent, or the defaults; a zero of either is no highlight.
+    // The mapped defaults, or the authored Phong values when enabled.
     let col = k.mhl.rgb;
     let pw = k.mhl.w;
     if pw <= 0.0 || max(col.x, max(col.y, col.z)) <= 0.0 {

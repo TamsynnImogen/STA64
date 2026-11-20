@@ -261,7 +261,7 @@ impl Plugin for HullPlugin {
             .init_resource::<HullLighting>()
             .init_resource::<HullView>()
             .init_resource::<HullMaterials>()
-            .insert_resource(crate::render::mapped::MapSwitches::from_env())
+            .insert_resource(crate::render::mapped::MapSwitches::startup())
             .add_plugins(crate::render::stock::hulls::StockHullsPlugin)
             .add_systems(Update, (toggle, update_view, apply.in_set(HullApply), follow_source).chain());
     }
@@ -399,7 +399,8 @@ pub fn hull_material(m: &StandardMaterial, part: &HullPart, view: &HullView) -> 
     if view.stock {
         crate::render::stock::hulls::apply_material(&mut params, m, part, view.armada_one);
     }
-    params.mhl = crate::render::mapped::highlight_params(part.stock.as_ref());
+    let mapped = crate::render::mapped::MapSwitches::startup();
+    params.mhl = crate::render::mapped::highlight_params(part.stock.as_ref(), mapped.specular_material_colours);
     set_source(&mut params, m);
     view.write(&mut params);
     HullMaterial {
