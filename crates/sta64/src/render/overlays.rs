@@ -21,6 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod geometry;
 pub mod marker;
+pub mod readout;
 #[cfg(test)]
 mod gpu;
 pub use geometry::{GaugeStyle, ModelBounds};
@@ -30,10 +31,11 @@ use bevy::transform::helper::TransformHelper;
 use sta_sim::{EntityId, UnitView};
 
 use crate::app::GameSet;
-use crate::input::hover::HoveredUnit;
+use crate::input::hover::{HoverReadout, HoveredUnit};
 use crate::input::orders::OrderTargets;
 use crate::render::units::{HullShare, SelectRadius, TeamColour, to_bevy};
-use crate::sim_link::{Selection, SimEntities, SimLink};
+use crate::sim_link::{ContentRes, Selection, SimEntities, SimLink};
+use crate::ui::profile::UiProfile;
 
 /// Radius used for units without a [`SelectRadius`].
 const DEFAULT_RADIUS: f32 = 5.0;
@@ -43,6 +45,8 @@ pub enum OverlayKind {
     Ring,
     HullBar,
     ShieldBar,
+    /// The special-energy bar, Armada II readout only.
+    EnergyBar,
     Line,
 }
 
@@ -63,6 +67,10 @@ pub struct BarFill {
 #[derive(Component)]
 struct Billboard;
 
+/// A bar of the Armada II hover readout: additive, its colour follows the readout fade and its share.
+#[derive(Component)]
+struct ReadoutBar;
+
 /// How many overlay pieces exist, refreshed every frame.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct OverlayCounts {
@@ -77,6 +85,7 @@ struct OverlayAssets {
     quad: Handle<Mesh>,
     line_mesh: Handle<Mesh>,
     bar_back: Handle<StandardMaterial>,
+    readout_back: Handle<StandardMaterial>,
     hull: Handle<StandardMaterial>,
     shield: Handle<StandardMaterial>,
     line: Handle<StandardMaterial>,
@@ -90,11 +99,12 @@ impl Plugin for OverlaysPlugin {
             .init_resource::<GaugeStyle>()
             .init_resource::<OrderTargets>()
             .init_resource::<OverlayCounts>()
+            .init_resource::<HoverReadout>()
             .init_resource::<marker::MarkerArt>()
             .add_systems(Startup, make_assets.run_if(resource_exists::<Assets<Mesh>>).run_if(resource_exists::<Assets<StandardMaterial>>))
             .add_systems(
                 Update,
-                (marker::load_art, sync_overlays, marker::orient, update_bars, update_lines, billboard.after(crate::viewer::orbit_camera), count)
+                (crate::input::hover::tick_readout, marker::load_art, sync_overlays, marker::orient, update_bars, update_lines, billboard.after(crate::viewer::orbit_camera), count)
                     .chain()
                     .in_set(GameSet::Render)
                     .distributive_run_if(resource_exists::<SimLink>)
@@ -113,12 +123,18 @@ fn unlit(colour: Color) -> StandardMaterial {
     }
 }
 
+/// The readout's bars add their colour to the frame (the original's bar material is additive).
+fn additive(colour: Color) -> StandardMaterial {
+    StandardMaterial { base_color: colour, unlit: true, cull_mode: None, alpha_mode: AlphaMode::Add, ..default() }
+}
+
 fn make_assets(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mats: ResMut<Assets<StandardMaterial>>) {
     commands.insert_resource(OverlayAssets {
         ring: meshes.add(Annulus::new(0.96, 1.0)),
         quad: meshes.add(Rectangle::new(1.0, 1.0)),
         line_mesh: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
         bar_back: mats.add(unlit(Color::srgba(0.05, 0.05, 0.05, 0.8))),
+        readout_back: mats.add(additive(Color::srgb(readout::BACKGROUND, readout::BACKGROUND, readout::BACKGROUND))),
         hull: mats.add(unlit(Color::srgb(0.2, 0.9, 0.3))),
         shield: mats.add(unlit(Color::srgb(0.3, 0.6, 1.0))),
         line: mats.add(unlit(Color::srgba(0.3, 1.0, 0.4, 0.4))),
@@ -143,15 +159,19 @@ fn sync_overlays(
     hovered: Option<Res<HoveredUnit>>,
     cine: Option<Res<crate::ui::presentation::CineractiveState>>,
     art: Res<marker::MarkerArt>,
+    profile: Option<Res<UiProfile>>,
+    readout: Res<HoverReadout>,
+    content: Option<Res<ContentRes>>,
     ents: Res<SimEntities>,
     link: Res<SimLink>,
     targets: Res<OrderTargets>,
     assets: Res<OverlayAssets>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     units: Query<(Option<&SelectRadius>, Option<&TeamColour>, Option<&HullShare>)>,
-    existing: Query<(Entity, &Overlay, Has<marker::Marker>)>,
+    existing: Query<(Entity, &Overlay, Has<marker::Marker>, Has<ReadoutBar>)>,
 ) {
     let mut want: BTreeMap<(EntityId, OverlayKind), Entity> = BTreeMap::new();
+    let readout_look = readout::wanted(profile.as_deref());
     // The Armada I marker also shows under the hovered unit, selected or not, except while a
     // cineractive runs: hover tracking goes on then and ships sweeping under the resting cursor
     // would flicker markers. Only this overlay is gated; hover for the HUD is unchanged. A
@@ -169,17 +189,41 @@ fn sync_overlays(
             continue;
         }
         want.insert((*id, OverlayKind::Ring), root);
-        want.insert((*id, OverlayKind::HullBar), root);
-        if link.curr().unit(*id).and_then(shield_share).is_some() {
-            want.insert((*id, OverlayKind::ShieldBar), root);
+        if !readout_look {
+            want.insert((*id, OverlayKind::HullBar), root);
+            if link.curr().unit(*id).and_then(shield_share).is_some() {
+                want.insert((*id, OverlayKind::ShieldBar), root);
+            }
         }
         if targets.0.contains_key(id) {
             want.insert((*id, OverlayKind::Line), root);
         }
     }
+    // Armada II: bars are a hover readout, not a permanent overlay (see [`readout`]). Selection alone
+    // shows none; the selection ring above is unchanged.
+    if readout_look && readout.bars_up() {
+        let candidates: BTreeSet<EntityId> = selection.0.iter().copied().chain(readout.unit).collect();
+        for id in candidates {
+            let (Some(&root), Some(u)) = (ents.0.get(&id), link.curr().unit(id)) else { continue };
+            if units.get(root).is_err() {
+                continue;
+            }
+            let selected = selection.0.contains(&id);
+            if !readout::shows(&readout, id, u.owner, selected, readout::is_starbase(content.as_deref(), u.def)) {
+                continue;
+            }
+            let [shield, hull, energy] = readout::shares(u);
+            for (kind, share) in [(OverlayKind::ShieldBar, shield), (OverlayKind::HullBar, hull), (OverlayKind::EnergyBar, energy)] {
+                if share.is_some() {
+                    want.insert((id, kind), root);
+                }
+            }
+        }
+    }
     let mut have: BTreeSet<(EntityId, OverlayKind)> = BTreeSet::new();
-    for (e, o, is_marker) in &existing {
-        let stale = o.kind == OverlayKind::Ring && is_marker != art.art.is_some();
+    for (e, o, is_marker, is_readout) in &existing {
+        let is_bar = matches!(o.kind, OverlayKind::HullBar | OverlayKind::ShieldBar | OverlayKind::EnergyBar);
+        let stale = (o.kind == OverlayKind::Ring && is_marker != art.art.is_some()) || (is_bar && is_readout != readout_look);
         if stale || !(want.contains_key(&(o.unit, o.kind)) && have.insert((o.unit, o.kind))) {
             commands.entity(e).try_despawn();
         }
@@ -216,7 +260,21 @@ fn sync_overlays(
                     Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)).with_scale(Vec3::splat(radius)),
                 ));
             }
-            OverlayKind::HullBar | OverlayKind::ShieldBar => {
+            OverlayKind::HullBar | OverlayKind::ShieldBar | OverlayKind::EnergyBar if readout_look => {
+                // Placeholder geometry and colour: the billboard and `update_bars` set both each frame.
+                let fill = commands
+                    .spawn((
+                        BarFill { share: 1.0 },
+                        Mesh3d(assets.quad.clone()),
+                        MeshMaterial3d(mats.add(additive(Color::BLACK))),
+                        Transform::from_xyz(0.0, 0.0, 0.01),
+                    ))
+                    .id();
+                let bar = commands.spawn((Name::new("readout bar"), overlay, Billboard, ReadoutBar, ChildOf(root), Transform::default(), Visibility::Hidden)).id();
+                commands.spawn((ChildOf(bar), Mesh3d(assets.quad.clone()), MeshMaterial3d(assets.readout_back.clone()), Transform::default()));
+                commands.entity(fill).insert(ChildOf(bar));
+            }
+            OverlayKind::HullBar | OverlayKind::ShieldBar | OverlayKind::EnergyBar => {
                 let (w, h, y) = bar_geometry(radius);
                 let (mat, share, y) = if kind == OverlayKind::HullBar {
                     (assets.hull.clone(), hull.map_or(1.0, |s| s.0), y)
@@ -240,26 +298,41 @@ fn sync_overlays(
     }
 }
 
-/// Set each fill from the hull share or the view's shields.
+/// Set each fill from the hull share or the view's shields; the readout's bars also take their colour.
 fn update_bars(
     link: Res<SimLink>,
+    readout: Res<HoverReadout>,
     hulls: Query<&HullShare>,
     ents: Res<SimEntities>,
-    bars: Query<(&Overlay, &Children)>,
-    mut fills: Query<(&mut BarFill, &mut Transform)>,
+    bars: Query<(&Overlay, &Children, Has<ReadoutBar>)>,
+    mut fills: Query<(&mut BarFill, &mut Transform, &MeshMaterial3d<StandardMaterial>)>,
+    mut mats: ResMut<Assets<StandardMaterial>>,
 ) {
-    for (o, kids) in &bars {
+    for (o, kids, is_readout) in &bars {
         let share = match o.kind {
             OverlayKind::HullBar => ents.0.get(&o.unit).and_then(|e| hulls.get(*e).ok()).map(|h| h.0),
             OverlayKind::ShieldBar => link.curr().unit(o.unit).and_then(shield_share),
+            OverlayKind::EnergyBar => link.curr().unit(o.unit).and_then(|u| readout::shares(u)[2]),
             _ => continue,
         };
         let Some(share) = share else { continue };
+        let f = readout.fade;
+        let colour = match o.kind {
+            OverlayKind::ShieldBar => readout::shield_colour(share, f),
+            OverlayKind::HullBar => readout::hull_colour(share, f),
+            _ => readout::energy_colour(f),
+        };
         for k in kids.iter() {
-            if let Ok((mut f, mut tf)) = fills.get_mut(k) {
-                f.share = share;
+            if let Ok((mut fill, mut tf, material)) = fills.get_mut(k) {
+                fill.share = share;
                 tf.translation.x = -(1.0 - share) * 0.5;
                 tf.scale = Vec3::new(share, 1.0, 1.0);
+                if is_readout && let Some(mut m) = mats.get_mut(&material.0) {
+                    let c = Color::srgb(colour[0], colour[1], colour[2]);
+                    if m.base_color != c {
+                        m.base_color = c;
+                    }
+                }
             }
         }
     }
@@ -310,7 +383,12 @@ fn billboard(
                 let (bounds, radius) = parents.get(p.parent()).ok()?;
                 let bounds = bounds.copied().unwrap_or_else(|| ModelBounds::fallback(radius.map_or(DEFAULT_RADIUS, |r| r.0)));
                 let (screen, depth) = geometry::project(bounds, parent.to_matrix(), clip, size)?;
-                let rect = geometry::bar_rect(screen, overlay.kind == OverlayKind::ShieldBar, *style)?;
+                let row = match overlay.kind {
+                    OverlayKind::ShieldBar => -1,
+                    OverlayKind::EnergyBar => 1,
+                    _ => 0,
+                };
+                let rect = geometry::bar_row_rect(screen, row, *style)?;
                 let world = geometry::world_bar(rect, depth, inverse, size, rotation)?;
                 Some(GlobalTransform::from(world).reparented_to(&parent))
             });
@@ -334,7 +412,7 @@ fn count(mut counts: ResMut<OverlayCounts>, q: Query<&Overlay>) {
     for o in &q {
         match o.kind {
             OverlayKind::Ring => c.rings += 1,
-            OverlayKind::HullBar | OverlayKind::ShieldBar => c.bars += 1,
+            OverlayKind::HullBar | OverlayKind::ShieldBar | OverlayKind::EnergyBar => c.bars += 1,
             OverlayKind::Line => c.lines += 1,
         }
     }
@@ -416,6 +494,70 @@ mod tests {
         assert_eq!(counts(&app), OverlayCounts::default());
         let mut q = app.world_mut().query::<&Overlay>();
         assert_eq!(q.iter(app.world()).count(), 0);
+    }
+
+    const MIXED: &str = "{ units: [
+        { id: 1, owner: 0, hull: 100, rails: [{ at: 0, pos: { x: 0, y: 0, z: 0 } }] },
+        { id: 2, owner: 0, hull: 100, rails: [{ at: 0, pos: { x: 9, y: 0, z: 0 } }] },
+        { id: 3, owner: 1, hull: 100, rails: [{ at: 0, pos: { x: 18, y: 0, z: 0 } }] },
+    ] }";
+
+    fn bar_units(app: &mut App) -> Vec<(EntityId, OverlayKind)> {
+        let mut q = app.world_mut().query::<&Overlay>();
+        let mut v: Vec<_> = q.iter(app.world()).filter(|o| matches!(o.kind, OverlayKind::HullBar | OverlayKind::ShieldBar | OverlayKind::EnergyBar)).map(|o| (o.unit, o.kind)).collect();
+        v.sort();
+        v
+    }
+
+    fn hover(app: &mut App, unit: Option<(u32, u8)>, fade: f32) {
+        *app.world_mut().resource_mut::<HoverReadout>() = HoverReadout { unit: unit.map(|u| EntityId(u.0)), team: unit.map(|u| PlayerId(u.1)), fade };
+    }
+
+    #[test]
+    fn armada_ii_bars_are_a_hover_readout_and_selection_alone_shows_none() {
+        let mut app = rig(MIXED);
+        app.update();
+        app.world_mut().insert_resource(UiProfile::Armada2);
+        select(&mut app, &[1, 3]);
+        sync(&mut app);
+        assert_eq!(counts_now(&mut app), OverlayCounts { rings: 2, bars: 0, lines: 0 }, "selected only: the rings stay, no bars");
+        // Resting on unit 2 (team 0) for less than a second: nothing yet.
+        hover(&mut app, Some((2, 0)), 0.5);
+        sync(&mut app);
+        assert!(bar_units(&mut app).is_empty());
+        // Past the threshold: the hovered unit and the selected unit of its team, not the other team's.
+        hover(&mut app, Some((2, 0)), 0.51);
+        sync(&mut app);
+        assert_eq!(bar_units(&mut app), vec![(EntityId(1), OverlayKind::HullBar), (EntityId(2), OverlayKind::HullBar)]);
+        // Hovering an enemy of the selection: bars on the enemy only.
+        hover(&mut app, Some((3, 1)), 0.9);
+        select(&mut app, &[1]);
+        sync(&mut app);
+        assert_eq!(bar_units(&mut app), vec![(EntityId(3), OverlayKind::HullBar)]);
+        // Nothing hovered: nothing, whatever the fade.
+        hover(&mut app, None, 1.0);
+        sync(&mut app);
+        assert!(bar_units(&mut app).is_empty());
+        let mut q = app.world_mut().query::<&Overlay>();
+        assert_eq!(q.iter(app.world()).filter(|o| o.kind == OverlayKind::Ring).count(), 1, "the selection marker is untouched");
+    }
+
+    #[test]
+    fn the_other_looks_keep_their_permanent_bars() {
+        for profile in [None, Some(UiProfile::Lcars), Some(UiProfile::Armada1), Some(UiProfile::FleetOps)] {
+            let mut app = rig(MIXED);
+            app.update();
+            if let Some(p) = profile {
+                app.world_mut().insert_resource(p);
+            }
+            hover(&mut app, Some((2, 0)), 1.0);
+            select(&mut app, &[1, 3]);
+            sync(&mut app);
+            assert_eq!(bar_units(&mut app), vec![(EntityId(1), OverlayKind::HullBar), (EntityId(3), OverlayKind::HullBar)], "{profile:?}: selected units, no hover rule");
+            hover(&mut app, None, 0.0);
+            sync(&mut app);
+            assert_eq!(bar_units(&mut app).len(), 2, "{profile:?}: the fade does not matter");
+        }
     }
 
     fn give_marker_art(app: &mut App) {
