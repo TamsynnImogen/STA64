@@ -41,8 +41,10 @@
 //!   Armada II, single runs: impulse speed is that fraction of its value).
 //!   Armada II family (every profile but Armada I): a kind without the
 //!   fraction does not change speed, whatever `craft_speed_coefficient` and
-//!   `craft_speed_limit` say (measured; a coefficient far below the measured
-//!   ones is not). **Interim, not measured:** warp speed under a fraction is
+//!   `craft_speed_limit` say. Grade: measured on stock Armada II 1.1, single
+//!   runs (a coefficient far below the measured ones is not). Fleet
+//!   Operations 3 and 4 and the Roots lineage take it by engine family (not
+//!   measured); the Native profile follows it by STA64's own choice. **Interim, not measured:** warp speed under a fraction is
 //!   scaled by it and bounded by the cap. **Interim, not measured:** Armada I
 //!   (`Sta1Classic`) keeps the older coefficient rule: a kind without the
 //!   fraction lowers the fraction to `craft_speed_coefficient` (0.5 when the
@@ -126,7 +128,8 @@ fn speed_caps(db: &ContentDb, u: &Entity, keys: &[ContentKey]) -> Option<(Fixed,
     let mut fraction = Fixed::ONE;
     let mut cap = impulse.max(warp);
     // Interim, not measured: Armada I keeps the coefficient rule; the Armada
-    // II family ignores the coefficient and the limit (measured).
+    // II family ignores the coefficient and the limit (measured on stock
+    // Armada II 1.1 only; the other family profiles by engine family, Native by choice).
     let coefficient_rule = db.profile() == Profile::Sta1Classic;
     for e in keys.iter().filter_map(|k| effects(db, *k)) {
         match e.max_speed_fraction {
