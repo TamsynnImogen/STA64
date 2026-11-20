@@ -4,6 +4,12 @@
 //! in map space:
 //!
 //! - `Fired`: the weapon's `fireSound` at the shooter.
+//! - [`MiningShot`] (a freighter's or an orbital station's mining beam, which is a client-side
+//!   shot and not a `Fired`): the mining weapon's `fireSound` at the miner, once per shot, as for any
+//!   weapon. A weapon whose definition names no `fireSound` is silent. Rule: the weapon fires through
+//!   the same path as every weapon and plays its `fireSound` once per shot (read from the executable,
+//!   static; the key from data). Whether a long clip is cut at the next shot or at the end of the
+//!   beam is not established: each shot starts its own clip (INTERIM, see TODO.md).
 //! - `Hit`: [`SfxNames::shield_hit`] when shields took damage, else [`SfxNames::hull_hit`],
 //!   at the impact point. (`WeaponDef` has no `hitSound` yet; until CON-03 maps it these
 //!   are the stock `xhit_*` files.)
@@ -124,6 +130,7 @@ impl Plugin for SfxPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<SimMsg>()
             .add_message::<PlaySound>()
+            .add_message::<crate::render::mining::MiningShot>()
             .init_resource::<SfxConfig>()
             .init_resource::<SfxState>()
             .add_systems(OnEnter(crate::app::AppState::Loading), forget_units)
@@ -149,6 +156,7 @@ fn run_sfx(
     cfg: Res<SfxConfig>,
     cam: Query<&GlobalTransform, crate::map::MainCamera>,
     mut msgs: MessageReader<SimMsg>,
+    mut mining: MessageReader<crate::render::mining::MiningShot>,
     mut st: ResMut<SfxState>,
     cine: Option<Res<crate::ui::presentation::CineractiveState>>,
     script_sounds: Option<Res<crate::ui::presentation::ScriptSounds>>,
@@ -162,6 +170,7 @@ fn run_sfx(
     let cutscene = crate::ui::presentation::event_voices_silenced(crate::ui::presentation::cutscene_running(cine), script_sounds.as_deref(), movies.as_deref());
     let (Some(link), Some(content)) = (link, content) else {
         msgs.clear();
+        mining.clear();
         return;
     };
     let st = &mut *st;
@@ -218,6 +227,12 @@ fn run_sfx(
                 want.push((if facility { names.built_facility.clone() } else { names.built_ship.clone() }, pos));
             }
             _ => {}
+        }
+    }
+    for shot in mining.read() {
+        let (Some(&(pos, _, owner)), Some(name)) = (st.seen.get(&shot.shooter), db.weapon(shot.weapon).and_then(|w| w.fire_sound.clone())) else { continue };
+        if sees(shot.shooter, owner) {
+            want.push((name, pos));
         }
     }
     if want.is_empty() {
@@ -323,6 +338,31 @@ mod tests {
                 sfx("fx_explode_small", 600.0),
             ]
         );
+    }
+
+    /// A mining shot of `weapon` (a fake definition's name) by unit 1 at the unit 2 node.
+    fn mining_shot(app: &mut App, weapon: &str) {
+        let key = sta_content::fake::db().key(weapon).unwrap();
+        app.world_mut().write_message(crate::render::mining::MiningShot { shooter: EntityId(1), weapon: key, node: EntityId(2) });
+    }
+
+    const MINER_ONLY: &str = r#"{ units: [{ id: 1, def: "fx_cruiser", owner: 0, hull: 800, rails: [{ at: 0, pos: { x: 5, y: 0, z: 7 } }] }], events: [] }"#;
+
+    #[test]
+    fn a_mining_shot_plays_the_weapons_fire_sound_at_the_miner_once() {
+        let (mut app, log) = scene(MINER_ONLY, Some(PlayerId(0)));
+        mining_shot(&mut app, "fx_beam");
+        let got = run(&mut app, &log, 4);
+        assert_eq!(got, vec![("fx_beam_fire".to_owned(), Bus::Sfx, Some([5.0, 0.0, 7.0]))]);
+        assert!(run(&mut app, &log, 30).is_empty(), "no shot, no sound: nothing keeps playing after the beam ends");
+    }
+
+    #[test]
+    fn a_mining_weapon_that_names_no_sound_is_silent() {
+        let (mut app, log) = scene(MINER_ONLY, Some(PlayerId(0)));
+        assert!(sta_content::fake::db().weapon(sta_content::fake::db().key("fx_pd").unwrap()).unwrap().fire_sound.is_none());
+        mining_shot(&mut app, "fx_pd");
+        assert!(run(&mut app, &log, 4).is_empty());
     }
 
     #[test]
