@@ -639,6 +639,7 @@ pub(super) fn navigate(mut clicks: MessageReader<ButtonClicked>, nav: Query<&Sto
 }
 
 pub(super) use info::update as update_values;
+pub(super) use info::update_hull_tints;
 
 #[cfg(test)]
 mod gpu;

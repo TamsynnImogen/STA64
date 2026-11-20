@@ -179,7 +179,7 @@ impl Plugin for HudPlugin {
                     feed_from_link.run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<ExternalFeed>)),
                     fit_screen,
                     refresh,
-                    (stock::refresh, stock::update_values, (status::sync, status_gpu::refresh, status_gpu::update_values).chain()).chain(),
+                    (status::sync, stock::refresh, stock::update_values, stock::update_hull_tints, status_gpu::refresh, status_gpu::update_values).chain(),
                     stock::active,
                     (stock::navigate, stock::buttons::press, stock::buttons::apply_more).chain(),
                     panels::update_values.before(super::theme::WidgetPaint),

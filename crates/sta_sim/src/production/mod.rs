@@ -470,6 +470,7 @@ impl Production {
         eco: &mut Economy,
         events: &mut Vec<SimEvent>,
         confinement: &mut crate::boundary::state::Confinement,
+        bounds: Option<(sta_core::Vec3, sta_core::Vec3)>,
     ) {
         if self.is_empty() {
             return;
@@ -495,7 +496,7 @@ impl Production {
                     units.get_mut(id).expect("completed weld").target = target;
                 }
                 events.push(SimEvent::Built { builder, id });
-                free_unit::spawn(units, db, id, confinement, events);
+                free_unit::spawn(units, db, eco, id, confinement, events);
             } else {
                 s.progress = Some(Fixed::from_int(done as i32) / Fixed::from_int(ticks as i32));
             }
@@ -517,13 +518,19 @@ impl Production {
                     let Item { def, owner, .. } = q.remove(0);
                     if let Some(d) = db.unit(def) {
                         // SIM-16: out of the builder's launch hardpoint.
-                        let out = match db.unit(yard_def) {
+                        let builder = db.unit(yard_def);
+                        let out = match builder {
                             Some(b) => launch::place(b, pos, heading),
                             None => launch::Launch { pos, heading, exit: None },
                         };
                         let mut unit = Entity::from_def(d, db.features(), owner, out.pos, out.heading);
                         if unit.orderable() {
-                            unit.target = self.rallies.destination(yard, owner, units).or(out.exit);
+                            unit.target = self.rallies.destination(yard, owner, units).or_else(|| {
+                                let a2 = matches!(db.profile(), sta_content::Profile::Sta2Classic | sta_content::Profile::Fo3 | sta_content::Profile::Fo4);
+                                builder.filter(|_| a2)
+                                    .and_then(|b| launch::default_rally(b, pos, out.heading, bounds))
+                                    .or(out.exit)
+                            });
                         }
                         let id = units.spawn(unit);
                         confinement.initialize(units.get_mut(id).expect("spawned"));

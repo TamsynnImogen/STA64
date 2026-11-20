@@ -163,6 +163,31 @@ mod tests {
     }
 
     #[test]
+    fn skirmish_spawns_every_authored_standard_unit_above_stock_a2s_nine_slots() {
+        let mut race_odf = String::from("name=fx\ninstantActionSlot=0\n");
+        for n in 1..=12 {
+            race_odf.push_str(&format!("standardUnits{n}=fx_miner\n"));
+        }
+        race_odf.push_str("standardUnits40=fx_yard\n");
+        let (races, warnings) = Races::load_with(&mut |name, version| match (name, version) {
+            ("races.odf", 0) => Some("race0=fx".into()),
+            ("fx.odf", 0) => Some(race_odf.clone()),
+            _ => None,
+        });
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let s = setup();
+        let (sim, warnings) = Sim::from_setup_with_starts(&s, &races);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let view = sim.view();
+        for seat in [PlayerId(0), PlayerId(1)] {
+            let units = view.visible_to(seat).into_iter().filter(|u| u.owner == seat);
+            let units = names(&s, units);
+            assert_eq!(&units[..12], ["fx_miner"; 12]);
+            assert_eq!(&units[12..], ["fx_yard"]);
+        }
+    }
+
+    #[test]
     fn unresolved_authored_entries_warn_once_across_seats() {
         // Authored placement is covered here; missing FO lifecycle effects are separate.
         let s = setup();

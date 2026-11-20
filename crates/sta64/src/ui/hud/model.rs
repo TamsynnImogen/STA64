@@ -90,7 +90,7 @@ pub(super) fn finished(u: &UnitView) -> bool {
     u.progress.is_none_or(|p| p >= Fixed::ONE)
 }
 
-fn frac(v: [Fixed; 2]) -> f32 {
+pub(super) fn frac(v: [Fixed; 2]) -> f32 {
     let max = v[1].to_f32();
     if max <= 0.0 { 0.0 } else { (v[0].to_f32() / max).clamp(0.0, 1.0) }
 }
