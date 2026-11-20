@@ -205,6 +205,7 @@ fn sync(
             suffix.map(str::to_owned),
             rgba,
         );
+        let off = super::units::systems_off_bits(&view.appearance, sim.0);
         let state = state.entry(root).or_default();
         let material_changed = state.signature.as_ref() != Some(&signature);
         state.signature = Some(signature);
@@ -280,7 +281,7 @@ fn sync(
                 && unit.progress.is_some_and(|p| p < sta_core::Fixed::ONE);
             let ordinary = !construction_hidden
                 && (native
-                    || super::units::damage_threshold(name).is_none_or(|limit| share.0 < limit));
+                    || super::units::damage_node_shown(name, share.0, off).unwrap_or(true));
             let faction = !catalogue.is_faction_node(name)
                 || faction_name.is_some_and(|f| f.eq_ignore_ascii_case(name));
             let mut visible = ordinary && faction;

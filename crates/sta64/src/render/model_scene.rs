@@ -71,6 +71,8 @@ struct CachedPart {
     hull: Option<crate::render::hulls::HullPart>,
     /// The mod's specular and emissive maps for the group's diffuse (RND-38), when it declares any.
     maps: Option<crate::render::mapped::HullMaps>,
+    /// The part belongs to a dilithium moon (its rock or its `glowdmoon` shell): `rock::MoonPart`.
+    moon: Option<crate::render::rock::MoonKind>,
 }
 
 /// Face groups that take the owner's team colour.
@@ -634,8 +636,9 @@ fn spawn_mesh(
         }
         normal_present |= material.normal_map_texture.is_some();
         bumped |= normal_present;
-        // A dilithium moon's glow shell is drawn dark (RND-05).
-        let material = if crate::render::rock::is_moon_shell(&group.material) { crate::render::rock::shell_material(two_sided) } else { material };
+        // A dilithium moon's glow shell keeps the model's own material: the Stock look lights it by the SOD's
+        // lighting material like any hull; Refit's dark shell is put on by `rock::moon_shell_look` (RND-05).
+        let moon_shell = crate::render::rock::is_moon_shell(&group.material);
         // A texture with a surface recipe: the part becomes a rock once baked, its
         // surface looked up about the mesh's centre over its extents.
         let rock = maps.diffuse.as_deref().filter(|n| crate::render::surfaces::recipe_text(ctx.textures.vfs, n).is_some()).map(|n| {
@@ -658,7 +661,12 @@ fn spawn_mesh(
         });
         // A `default` mesh's texture alpha is a cut-out where its group is not
         // self-illuminating (open girders), as Refit's hulls draw it.
-        let hull = (native.is_none() && !ctx.unlit && rock.is_none()).then_some(crate::render::hulls::HullPart {
+        let moon = if moon_shell {
+            Some(crate::render::rock::MoonKind::Shell)
+        } else {
+            rock.as_ref().filter(|r| r.moon).map(|_| crate::render::rock::MoonKind::Rock)
+        };
+        let hull = (native.is_none() && !ctx.unlit && (rock.is_none() || moon.is_some())).then_some(crate::render::hulls::HullPart {
             self_illum,
             cut_alpha: group.blend == "default" && !self_illum,
             stock: lm.map(crate::render::stock::hulls::StockLight::from_material),
@@ -677,6 +685,7 @@ fn spawn_mesh(
             rock,
             hull,
             maps: mapped,
+            moon,
         };
         if let Some(cache) = ctx.parts.as_mut() {
             cache.map.insert(cache_key, part.clone());
@@ -749,6 +758,9 @@ fn spawn_part(ctx: &mut SpawnCtx, part: &CachedPart, parent: Entity, surface: (u
     }
     if let Some(m) = &part.maps {
         e.insert(m.clone());
+    }
+    if let Some(kind) = part.moon {
+        e.insert(crate::render::rock::MoonPart { source: part.material.clone(), kind });
     }
     if let Some((animation, offset)) = flipbook {
         e.insert(UvFlipbook {
