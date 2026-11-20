@@ -97,7 +97,7 @@ pub(crate) fn takes_attack(db: &ContentDb, units: &Entities, player: PlayerId, i
     id != target
         && units
             .get(id)
-            .is_some_and(|u| (!player.is_player() || u.owner == player) && db.unit(u.def).is_some_and(|d| can_attack(db, d)))
+            .is_some_and(|u| !u.is_unfinished() && (!player.is_player() || u.owner == player) && db.unit(u.def).is_some_and(|d| can_attack(db, d)))
 }
 
 /// Armed for an attack order: a hardpoint whose weapon [`attacks_units`].
@@ -435,6 +435,12 @@ impl Weapons {
             if def.hardpoints.is_empty() || def.class.0 == "u_ball_obj" {
                 continue;
             }
+            // A station under construction fires nothing and has no mounts yet; they are
+            // made, with their initial reload, on the first tick it is complete
+            // (stated by a player: stock stations shoot only once completed).
+            if u.is_unfinished() {
+                continue;
+            }
             // SIM-35: a weapon is created with an initial reload, also when
             // its unit starts with weapons off. A unit's mounts are made the
             // first tick it is seen, the creation tick for all practical
@@ -552,7 +558,7 @@ impl Weapons {
     ) -> bool {
         let mut any = false;
         for &id in ids {
-            let Some(u) = units.get(id).filter(|u| (!player.is_player() || u.owner == player) && u.hull[0] > Fixed::ZERO) else {
+            let Some(u) = units.get(id).filter(|u| (!player.is_player() || u.owner == player) && u.hull[0] > Fixed::ZERO && !u.is_unfinished()) else {
                 continue;
             };
             let Some(def) = db.unit(u.def) else { continue };

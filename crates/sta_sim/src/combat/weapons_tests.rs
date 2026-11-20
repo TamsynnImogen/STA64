@@ -361,3 +361,38 @@ fn invalid_as_target_units_are_not_picked_automatically() {
         assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })), "order, invalid={invalid}");
     }
 }
+
+fn shooter_fired(ev: &[(u64, SimEvent)]) -> bool {
+    ev.iter().any(|(_, e)| matches!(e, SimEvent::Fired { .. }))
+}
+
+/// A station under construction does not acquire or fire; once complete it does (stated by a
+/// player). The unit stands in for the station: the gate is on the build progress.
+#[test]
+fn an_armed_unit_under_construction_holds_fire_until_complete() {
+    let (mut sim, shooter, target) = firing(v(2000, 0, 2300));
+    sim.units.get_mut(shooter).unwrap().progress = Some(Fixed::from_int(1) / Fixed::from_int(2));
+    let ordered = sim.step(&[attack(1, shooter, target)]).events;
+    assert!(sim.weapons.attack_of(shooter).is_none(), "an unfinished unit takes no attack order");
+    assert!(!ordered.iter().any(|e| matches!(e, SimEvent::Fired { shooter: s, .. } if *s == shooter)));
+    let ev = run(&mut sim, None, 120);
+    assert!(!shooter_fired(&ev), "no shot while under construction");
+
+    sim.units.get_mut(shooter).unwrap().progress = None;
+    let ev = run(&mut sim, None, 120);
+    assert!(shooter_fired(&ev), "fires once complete");
+}
+
+/// A save and reload in the middle of construction keeps the state: still no fire, then fire.
+#[test]
+fn a_snapshot_in_the_middle_of_construction_keeps_the_unfinished_state() {
+    let (mut sim, shooter, _) = firing(v(2000, 0, 2300));
+    sim.units.get_mut(shooter).unwrap().progress = Some(Fixed::from_int(1) / Fixed::from_int(4));
+    let _ = run(&mut sim, None, 30);
+    let bytes = sim.snapshot();
+    let mut restored = Sim::from_snapshot(&bytes, sim.content.clone()).unwrap();
+    assert_eq!(restored.unit(shooter).unwrap().progress, sim.unit(shooter).unwrap().progress);
+    assert!(!shooter_fired(&run(&mut restored, None, 120)));
+    restored.units.get_mut(shooter).unwrap().progress = None;
+    assert!(shooter_fired(&run(&mut restored, None, 120)));
+}
