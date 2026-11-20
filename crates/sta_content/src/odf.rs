@@ -598,6 +598,7 @@ mod tests {
         assert_eq!(kind_of(&o("classLabel = \"craft\"")), Kind::Unit);
         assert_eq!(kind_of(&o("classLabel = \"Weird\"\nunitName = \"x\"")), Kind::Unit);
         assert_eq!(kind_of(&o("classLabel = \"weird\"\nwpnName = \"x\"")), Kind::Weapon);
+        assert_eq!(kind_of(&o("classLabel = \"replaceweapon\"")), Kind::Weapon);
         assert_eq!(kind_of(&o("classLabel = \"phaser\"")), Kind::Other);
         assert_eq!(kind_of(&o("impulseSpeed = 1")), Kind::Other);
     }

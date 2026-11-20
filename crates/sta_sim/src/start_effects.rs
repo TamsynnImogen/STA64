@@ -514,7 +514,7 @@ mod tests {
         }
         assert!(sim.unit(pod).is_some(), "the faction object stays");
         assert!(sim.start_effects.is_empty());
-        assert_eq!(unsupported(&db, db.key("gated").unwrap()), ["need_officers: requiredOfficers 299999 (unit-cap replacement) is not simulated"]);
+        assert_eq!(unsupported(&db, db.key("gated").unwrap()), ["need_officers: requiredOfficers 299999 is unavailable for legacy startup rules"]);
     }
 
     #[test]
