@@ -39,8 +39,9 @@ pub const MAGIC: [u8; 4] = *b"S64N";
 /// appends `Edit::WarpSpeed`, tag 47 (LUA-31); 11 appends `Order::Transport`, tag 18
 /// (SIM-46); 12 appends `Order::Recrew`, tag 19 (SIM-70); 13 appends `Order::Guard`, tag 20 (LUA-39);
 /// 14 appends `Edit::MissionSwitch`, tag 48 (LUA-41); 15 appends
-/// `TeamOp::ResourceAdd`, tag 7 (repeated resource grants).
-pub const PROTOCOL_VERSION: u16 = 15;
+/// `TeamOp::ResourceAdd`, tag 7 (repeated resource grants); 16 appends
+/// `Order::Alert`, tag 22.
+pub const PROTOCOL_VERSION: u16 = 16;
 /// Magic, version and body length.
 pub const HEADER_LEN: usize = 10;
 /// Largest frame, header included.
@@ -2136,7 +2137,7 @@ mod tests {
     #[test]
     fn golden_encoding_is_pinned() {
         let all: Vec<u8> = samples().iter().flat_map(|m| encode(m).unwrap()).collect();
-        assert_eq!(PROTOCOL_VERSION, 15);
+        assert_eq!(PROTOCOL_VERSION, 16);
         assert_eq!(
             fnv1a64(&all),
             GOLDEN,
@@ -2144,7 +2145,7 @@ mod tests {
         );
     }
 
-    const GOLDEN: u64 = 2106338790910784012;
+    const GOLDEN: u64 = 1914100460860780199;
 
     /// Tags are positional and never move: NET-04 appended 22 to 28 after
     /// `Sections` (21), the last tag of protocol 2.
@@ -2171,6 +2172,7 @@ mod tests {
             (18, Order::Transport { units: vec![EntityId(4)], target: EntityId(9), attack: false }),
             (19, Order::Recrew { units: vec![EntityId(4)], on: None }),
             (21, Order::Decommission { units: vec![EntityId(4)], yard: None }),
+            (22, Order::Alert { units: vec![EntityId(4)], level: sta_sim::command::AlertState::Green }),
         ] {
             let bytes = postcard::to_allocvec(&order).unwrap();
             assert_eq!(bytes[0], expected);
@@ -2248,8 +2250,8 @@ mod tests {
     fn header_is_little_endian_and_frozen() {
         let bytes = encode(&Message::Ping { nonce: 0 }).unwrap();
         // Ping is tag 12, nonce 0: two body bytes.
-        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 15, 0, 2, 0, 0, 0, 12, 0]);
-        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 15, 0, 0, 0, 0, 0]);
+        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 16, 0, 2, 0, 0, 0, 12, 0]);
+        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 16, 0, 0, 0, 0, 0]);
     }
 
     #[test]

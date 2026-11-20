@@ -585,10 +585,13 @@ fn draw_tip(
     mut boxed: Single<&mut Node, With<TipBox>>,
     mut words: Single<&mut SpriteText, With<TipText>>,
 ) {
-    let shown = hover.target.and_then(|e| tips.get(e).ok()).and_then(|t| t.text_at(hover.rest));
-    let shown = shown.map(|text| strings.as_ref().map_or(text, |s| s.tooltip_text(text)))
-        .filter(|text| !text.is_empty())
-        .or_else(|| unit.as_deref().and_then(|u| u.0.as_deref()).filter(|t| !t.is_empty()));
+    let shown = if let Some(tip) = hover.target.and_then(|e| tips.get(e).ok()) {
+        tip.text_at(hover.rest)
+            .map(|text| strings.as_ref().map_or(text, |s| s.tooltip_text(text)))
+            .filter(|text| !text.is_empty())
+    } else {
+        unit.as_deref().and_then(|u| u.0.as_deref()).filter(|text| !text.is_empty())
+    };
     let Some(shown) = shown else {
         boxed.display = Display::None;
         return;
@@ -1015,6 +1018,27 @@ mod tests {
         assert_eq!(app.world_mut().query_filtered::<&Node, With<TipBox>>().single(app.world()).unwrap().display, Display::None);
     }
 
+    #[test]
+    fn empty_short_hides_unit_tip_until_verbose_and_native_empty_stays_hidden() {
+        use crate::ui::i18n::Strings;
+        let mut app = rig();
+        app.update();
+        let e = app.world_mut().spawn(Tooltip::new("").verbose("GUI_DETAILS")).id();
+        app.world_mut().resource_mut::<UnitTip>().0 = Some("USS Test".into());
+        app.insert_resource(Strings::from_game("english", "\"GUI_DETAILS\", \"Native details\""));
+        let display = |app: &mut App| app.world_mut().query_filtered::<&Node, With<TipBox>>().single(app.world()).unwrap().display;
+        *app.world_mut().resource_mut::<TipHover>() = TipHover { target: Some(e), rest: TIP_SHORT_SECS };
+        app.update();
+        assert_eq!(display(&mut app), Display::None);
+        app.world_mut().resource_mut::<TipHover>().rest = TIP_VERBOSE_SECS;
+        app.update();
+        assert_eq!(display(&mut app), Display::Flex);
+        assert_eq!(app.world_mut().query_filtered::<&SpriteText, With<TipText>>().single(app.world()).unwrap().text, "Native details");
+        app.insert_resource(Strings::from_game("english", "\"GUI_DETAILS\", \"\""));
+        app.update();
+        assert_eq!(display(&mut app), Display::None);
+    }
+
     /// Installed assets are local-only. Exercise the exact stop-command key
     /// reported in a screenshot through mounted I18nPlugin and tooltip drawing.
     #[test]
@@ -1047,9 +1071,9 @@ mod tests {
         for (rest, expected) in [TIP_SHORT_SECS, TIP_VERBOSE_SECS].into_iter().zip(expected) {
             *app.world_mut().resource_mut::<TipHover>() = TipHover { target: Some(e), rest };
             app.update();
-            let text = app.world_mut().query_filtered::<&Text, With<TipText>>().single(app.world()).unwrap();
-            assert_eq!(text.0, expected);
-            eprintln!("mounted stop tooltip ({rest}s): {}", text.0);
+            let text = app.world_mut().query_filtered::<&SpriteText, With<TipText>>().single(app.world()).unwrap();
+            assert_eq!(text.text, expected);
+            eprintln!("mounted stop tooltip ({rest}s): {}", text.text);
             assert_eq!(app.world_mut().query_filtered::<&Node, With<TipBox>>().single(app.world()).unwrap().display, Display::Flex);
         }
     }

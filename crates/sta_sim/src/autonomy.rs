@@ -62,12 +62,14 @@ impl Autonomy {
         self.set.insert(id, levels);
     }
 
-    /// A new craft takes the content's default levels (`RTS_CFG.h`
+    /// A new craft or station takes the content's default levels (`RTS_CFG.h`
     /// `CRAFT_DEFAULT_*_AUTONOMY`, CON-46), written as an explicit row when
     /// they differ from [`ENGINE_DEFAULT`] (SIM-36). Not for other kinds.
     pub(crate) fn spawned(&mut self, units: &Entities, id: EntityId, default: [u8; 2]) {
-        let craft = units.get(id).is_some_and(|u| u.kind == crate::world::EntityKind::Craft);
-        if craft && default != ENGINE_DEFAULT && default.iter().all(|v| *v <= 2) {
+        let eligible = units.get(id).is_some_and(|u| {
+            matches!(u.kind, crate::world::EntityKind::Craft | crate::world::EntityKind::Station)
+        });
+        if eligible && default != ENGINE_DEFAULT && default.iter().all(|v| *v <= 2) {
             self.set.insert(id, default);
         }
     }
@@ -76,7 +78,7 @@ impl Autonomy {
         self.set.remove(id);
     }
 
-    /// An `Order::Autonomy`: every listed craft `player` may order (any, for
+    /// An `Order::Autonomy`: every listed craft or station `player` may order (any, for
     /// scripts and the bench) takes the level. True when at least one did.
     pub(crate) fn order(
         &mut self,
@@ -93,7 +95,8 @@ impl Autonomy {
         let mut any = false;
         for &id in ids {
             let ok = units.get(id).is_some_and(|u| {
-                u.kind == crate::world::EntityKind::Craft
+                matches!(u.kind, crate::world::EntityKind::Craft | crate::world::EntityKind::Station)
+                    && !u.flags.contains(crate::view::UnitFlags::DYING)
                     && u.hull[0] > sta_core::Fixed::ZERO
                     && (!player.is_player() || u.owner == player)
             });

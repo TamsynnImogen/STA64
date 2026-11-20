@@ -58,10 +58,11 @@ pub(in crate::ui::hud) struct PanelKeys {
     pub default_sprite: &'static str,
     pub act: PanelButton,
     pub tip: &'static str,
+    pub verbose: Option<&'static str>,
 }
 
-const fn keys(area: &'static str, sprite: &'static str, default_sprite: &'static str, act: PanelButton, tip: &'static str) -> PanelKeys {
-    PanelKeys { area, sprite, default_sprite, act, tip }
+const fn keys(area: &'static str, sprite: &'static str, default_sprite: &'static str, act: PanelButton, tip: &'static str, verbose: Option<&'static str>) -> PanelKeys {
+    PanelKeys { area, sprite, default_sprite, act, tip, verbose }
 }
 
 /// The buttons that show only while "more" is on.
@@ -91,14 +92,14 @@ pub(in crate::ui::hud) struct ButtonPanelGroup;
 pub(in crate::ui::hud) struct SecondRow;
 
 pub(in crate::ui::hud) const BUTTONS: [PanelKeys; 8] = [
-    keys("menuButtonArea", "menuButton", "menu_button", PanelButton::Menu, "Menu"),
-    keys("commButtonArea", "commButton", "comm_button", PanelButton::Unavailable, "Communications"),
-    keys("idleButtonArea", "idleButton", "idle_button", PanelButton::Idle, "Next idle ship"),
-    keys("toggleButtonArea", "toggleButton", "toggle_button", PanelButton::Unavailable, "Toggle view"),
-    keys("objectivesButtonArea", "objectivesButton", "objectives_button", PanelButton::Objectives, "Objectives"),
-    keys("helpButtonArea", "helpButton", "help_button", PanelButton::Unavailable, "Help"),
-    keys("paletteButtonArea", "paletteButton", "palette_button", PanelButton::Unavailable, "Command palette"),
-    keys("moreButtonArea", "moreButton", "more_button", PanelButton::More, "More"),
+    keys("menuButtonArea", "menuButton", "menu_button", PanelButton::Menu, "Menu", None),
+    keys("commButtonArea", "commButton", "comm_button", PanelButton::Unavailable, "Communications", None),
+    keys("idleButtonArea", "idleButton", "idle_button", PanelButton::Idle, "Next idle ship", Some("Focus the next ship with no orders.")),
+    keys("toggleButtonArea", "toggleButton", "toggle_button", PanelButton::Unavailable, "Toggle view", Some("Switch between strategic and tactical views.")),
+    keys("objectivesButtonArea", "objectivesButton", "objectives_button", PanelButton::Objectives, "Objectives", Some("Show current mission objectives.")),
+    keys("helpButtonArea", "helpButton", "help_button", PanelButton::Unavailable, "Help", Some("Turn tooltip help on or off.")),
+    keys("paletteButtonArea", "paletteButton", "palette_button", PanelButton::Unavailable, "Command palette", Some("Switch the command palette between persistent and popup modes.")),
+    keys("moreButtonArea", "moreButton", "more_button", PanelButton::More, "More", Some("Show additional buttons, including Help, Palette, and Menu.")),
 ];
 
 /// The sprite of a button: the cfg's, else the engine's default.
@@ -133,12 +134,16 @@ pub(in crate::ui::hud) fn spawn(commands: &mut Commands, parent: Entity, layout:
         if second && !more {
             node.display = Display::None;
         }
+        let mut tip = Tooltip::new(k.tip);
+        if let Some(verbose) = k.verbose {
+            tip = tip.verbose(verbose);
+        }
         let mut button = commands.spawn((
             k.act,
             UiButton,
             state,
             GuiButtonColors::default(),
-            Tooltip::new(k.tip.to_owned()),
+            tip,
             GuiButton { names: vec![sprite(layout, k)], keep_label: false },
             node,
             BackgroundColor(theme.button),

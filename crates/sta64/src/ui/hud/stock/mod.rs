@@ -3,6 +3,7 @@ pub(in crate::ui::hud) mod a1;
 pub(in crate::ui) mod buttons;
 mod commands;
 mod info;
+mod orders;
 pub(super) mod infobar;
 pub mod layout;
 
@@ -95,7 +96,7 @@ pub(super) fn queue_wireframe(commands: &mut Commands, root: Entity, r: R, model
 }
 
 fn metadata<'a>(native: &'a NativeCommands, act: &Act) -> Option<&'a NativeCommand> {
-    if let Act::NativeFormation(odf) = act {
+    if let Act::NativeFormation(odf) | Act::NativeOrder(odf) = act {
         return native.commands.get(odf);
     }
     native.get(match act {
@@ -117,16 +118,25 @@ fn metadata<'a>(native: &'a NativeCommands, act: &Act) -> Option<&'a NativeComma
 
 fn menu_button(id: u32, name: &str) -> Button {
     let mut sprite_names = vec![format!("b_{name}"), name.to_owned()];
-    if name.eq_ignore_ascii_case("orders") {
-        sprite_names.insert(0, "b_order".into());
-    }
+    let (tip, verbose) = match name {
+        "orders" => {
+            sprite_names.insert(0, "b_order".into());
+            ("GUI_CP_ORDER_TOOLTIP", Some("GUI_CP_ORDER_VTOOLTIP"))
+        }
+        "ai" => {
+            sprite_names.insert(0, "b_aiMenu".into());
+            ("GUI_CP_AI_MENU_TOOLTIP", Some("GUI_CP_AI_MENU_VTOOLTIP"))
+        }
+        "trade" => ("GUI_CP_TRADE_MENU_TOOLTIP", Some("GUI_CP_TRADE_MENU_VTOOLTIP")),
+        _ => (name, None),
+    };
     Button {
         cell: 0,
         label: name.to_uppercase(),
         act: Act::OpenNativeMenu(id),
         look: Look::Ready,
-        tip: name.to_owned(),
-        verbose: None,
+        tip: tip.to_owned(),
+        verbose: verbose.map(str::to_owned),
         sprite_names,
         keep_label: false,
     }
@@ -152,6 +162,15 @@ fn buttons(feed: &HudFeed, page: Page, native: &NativeCommands) -> Vec<Button> {
             Act::Target(TargetMode::TransportAttack),
             &crate::ui::i18n::tooltip_key("Transport attack"),
         ));
+    }
+    if matches!(page, Page::Top | Page::Native(_)) {
+        let selected = feed.selected_units();
+        for (odf, meta) in &native.commands {
+            let Some(kind) = orders::Kind::read(meta) else { continue };
+            if selected.iter().any(|u| kind.eligible(feed, meta, u)) {
+                buttons.push(model::button(usize::MAX, &meta.button, Act::NativeOrder(odf.clone()), &meta.button));
+            }
+        }
     }
     if page == Page::Formations && buttons.iter().any(|b| matches!(b.act, Act::Formation(_))) {
         let formations: Vec<_> = native.formations().collect();
@@ -202,6 +221,16 @@ fn buttons(feed: &HudFeed, page: Page, native: &NativeCommands) -> Vec<Button> {
         }
     }
     for button in &mut buttons {
+        let tooltip = match button.act {
+            Act::OpenBuild if button.tip == "Build" => Some(("GUI_CP_BUILD_TOOLTIP", "GUI_CP_BUILD_VTOOLTIP")),
+            Act::OpenFormations => Some(("GUI_CP_SET_FORMATION_TOOLTIP", "GUI_CP_SET_FORMATION_VTOOLTIP")),
+            Act::Back => Some(("GUI_CP_BACK_TOOLTIP", "GUI_CP_BACK_VTOOLTIP")),
+            _ => None,
+        };
+        if let Some((short, verbose)) = tooltip {
+            button.tip = short.to_owned();
+            button.verbose = Some(verbose.to_owned());
+        }
         if let Some(meta) = metadata(native, &button.act) {
             button.sprite_names = if matches!(button.act, Act::NativeFormation(_)) {
                 meta.formation_sprite_names()
@@ -234,8 +263,8 @@ fn buttons(feed: &HudFeed, page: Page, native: &NativeCommands) -> Vec<Button> {
             label: "BACK".into(),
             act: Act::Back,
             look: Look::Ready,
-            tip: "Back".into(),
-            verbose: None,
+            tip: "GUI_CP_BACK_TOOLTIP".into(),
+            verbose: Some("GUI_CP_BACK_VTOOLTIP".into()),
             sprite_names: vec!["b_back".into()],
             keep_label: false,
         });
@@ -617,12 +646,30 @@ pub(super) fn refresh(
     state.layout = Some(layout);
 }
 
-pub(super) fn active(hud: Res<HudState>, mut buttons: Query<(&GridCell, &mut GuiActive)>) {
+pub(super) fn active(
+    hud: Res<HudState>,
+    feed: Res<HudFeed>,
+    state: Res<StockState>,
+    mut buttons: Query<(&GridCell, &mut GuiActive)>,
+) {
     for (cell, mut active) in &mut buttons {
-        let next = matches!(cell.0,Act::Target(mode) if hud.targeting==Some(mode));
+        let next = match &cell.0 {
+            Act::NativeOrder(odf) => state.native.commands.get(odf)
+                .and_then(|record| orders::Kind::read(record).map(|kind| kind.active(&feed, record)))
+                .unwrap_or(false),
+            Act::Target(mode) => hud.targeting == Some(*mode),
+            _ => false,
+        };
         if active.0 != next {
             active.0 = next;
         }
+    }
+}
+
+impl StockState {
+    pub(super) fn command(&self, feed: &HudFeed, odf: &str) -> Option<(sta_sim::command::CommandKind, Vec<sta_sim::EntityId>)> {
+        let record = self.native.commands.get(odf)?;
+        orders::Kind::read(record)?.command(feed, record)
     }
 }
 
@@ -677,6 +724,7 @@ mod recrew_tests {
         native.commands.insert("recrew".into(), NativeCommand {
             odf: "recrew.odf".into(), command: "RECREW".into(), button: "recrew".into(),
             preferred: Some([0, 1]), menu: Some("Orders".into()),
+            source: Vec::new(),
             tooltip: Some("GUI_CP_RECREW_TOOLTIP".into()),
             verbose: Some("GUI_CP_RECREW_VTOOLTIP".into()),
             normal: None, hovered: None, pressed: None, disabled: None, active: None,
@@ -726,6 +774,7 @@ mod capture_tests {
         native.commands.insert("capture".into(), NativeCommand {
             odf: "capture.odf".into(), command: "TRANSPORT_ATTACK".into(), button: "capture".into(),
             preferred: Some([0, 10]), menu: Some("trade".into()),
+            source: Vec::new(),
             tooltip: Some("GUI_CP_TRANSPORT_ATTACK_TOOLTIP".into()),
             verbose: Some("GUI_CP_TRANSPORT_ATTACK_VTOOLTIP".into()),
             normal: None, hovered: None, pressed: None, disabled: None, active: None,

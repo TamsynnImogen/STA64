@@ -465,6 +465,7 @@ impl Sim {
             Order::Repair { units, yard } => self.apply_repair(c.player, units, *yard),
             Order::Decommission { units, yard } => self.apply_decommission(c.player, units, *yard),
             Order::Recrew { units, on } => self.order_recrew(c.player, units, *on),
+            Order::Alert { units, level } => self.order_alert(c.player, units, *level),
         }
     }
 
@@ -602,7 +603,7 @@ impl Sim {
             }
             view.flags = view.flags.with(view::UnitFlags::BUILDING, self.production.is_welding(entity.id));
             view.flags = view.flags.with(view::UnitFlags::DOCKED, docked.contains(&entity.id));
-            if matches!(entity.kind, EntityKind::Craft) {
+            if matches!(entity.kind, EntityKind::Craft | EntityKind::Station) {
                 view.autonomy = Some(self.autonomy.levels(entity.id));
             }
             view.energy = self.specials.energy_of(entity.id).and_then(|now| {

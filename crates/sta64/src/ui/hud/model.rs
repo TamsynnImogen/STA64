@@ -46,7 +46,7 @@ impl HudFeed {
         self.selected.iter().filter_map(|&id| self.view.unit(id)).filter(|u| !u.flags.contains(sta_sim::view::UnitFlags::DYING)).collect()
     }
 
-    fn def(&self, u: &UnitView) -> Option<&UnitDef> {
+    pub(super) fn def(&self, u: &UnitView) -> Option<&UnitDef> {
         self.content.as_deref().and_then(|c| c.unit(u.def))
     }
 
@@ -227,6 +227,8 @@ pub enum Act {
     Formation(u8),
     /// A loaded stock command ODF whose formation parameter has no verified sim mapping.
     NativeFormation(String),
+    /// An immediate command identified by its authored stock ODF.
+    NativeOrder(String),
     /// Drop a builder's queue: `Stop` on it (SIM-08's cancel).
     Cancel(EntityId),
     /// `Order::Build`; `site`: the builder is a craft and needs a place, so
@@ -435,7 +437,7 @@ pub(super) fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
         Act::Cancel(_) => (vec!["b_cancel".into()], false),
         Act::Formation(_) => (Vec::new(), false),
         // No verified native ID for these actions; use the existing label.
-        Act::Special(_) | Act::Build { .. } | Act::OpenNativeMenu(_) | Act::NativeFormation(_) | Act::OpenOrders | Act::Order(_) => (Vec::new(), false),
+        Act::Special(_) | Act::Build { .. } | Act::OpenNativeMenu(_) | Act::NativeFormation(_) | Act::OpenOrders | Act::Order(_) | Act::NativeOrder(_) => (Vec::new(), false),
     };
     Button { cell, label: label.to_uppercase(), act, look: Look::Ready, tip: tip.to_owned(), verbose: None, sprite_names, keep_label }
 }
@@ -525,7 +527,7 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
                 look: it.look,
                 tip: definition.and_then(|d| d.raw.str("tooltip")).map(str::to_owned)
                     .unwrap_or_else(|| format!("Build {}", it.odf)),
-                verbose: Some(definition.and_then(|d| d.raw.str("verboseTooltip"))
+                verbose: Some(definition.and_then(|d| d.raw.str("verboseTooltip").or_else(|| d.raw.str("verbose")))
                     .map_or(verbose, str::to_owned)),
                 sprite_names: feed.content.as_deref().and_then(|db| db.unit(it.key))
                     .map_or_else(Vec::new, |def| build_sprite_names(&def.model, &it.odf)),
@@ -600,7 +602,7 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
     for (i, (slot, kind)) in caps.specials.iter().enumerate() {
         if let Some(cell) = [5, 10, 11, 12, 13, 14].get(i) {
             let act = Act::Special(*slot);
-            if *kind == sta_sim::specials::SpecialKind::PointDefence {
+            let mut b = if *kind == sta_sim::specials::SpecialKind::PointDefence {
                 let Some((state, ready)) = point_defence_state(feed, *slot) else { continue };
                 let status = match state {
                     PointDefenceState::Off => tr("Off"),
@@ -611,14 +613,35 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
                 let tip = trf("Point defence: {0}", &[&status]);
                 let mut b = button(*cell, &label, act, &tip);
                 if !ready { b.look = Look::Locked; }
-                out.push(b);
+                b
             } else {
-                out.push(button(*cell, &tr("Cloak"), act, &tooltip_key("Toggle cloak")));
+                button(*cell, &tr("Cloak"), act, &tooltip_key("Toggle cloak"))
+            };
+            if let Some(weapon) = selected_special_weapon(feed, *slot) {
+                if let Some(tip) = weapon.raw.str("tooltip") {
+                    b.tip = tip.to_owned();
+                }
+                b.verbose = weapon.raw.str("verboseTooltip").or_else(|| weapon.raw.str("verbose")).map(str::to_owned);
             }
+            out.push(b);
         }
     }
     out.sort_by_key(|b| b.cell);
     out
+}
+
+/// A shared tooltip describes the slot when all selected owners use the same weapon.
+fn selected_special_weapon(feed: &HudFeed, slot: u8) -> Option<&sta_content::WeaponDef> {
+    let db = feed.content.as_deref()?;
+    let mut weapons = feed.selected_units().into_iter()
+        .filter(|u| u.owner == feed.player)
+        .map(|u| {
+            let def = feed.def(u)?;
+            let (_, weapon) = sta_sim::specials::specials_of(db, def).nth(slot as usize)?;
+            Some(weapon)
+        });
+    let weapon = weapons.next()??;
+    weapons.all(|other| other.is_some_and(|w| w.key == weapon.key)).then_some(weapon)
 }
 
 /// The command a button's press puts in the queue, with the units it speaks

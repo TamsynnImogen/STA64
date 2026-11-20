@@ -1232,7 +1232,7 @@ fn draw_panel(
                 e.insert(crate::ui::gui_sprites::GuiButton { names: vec![img.clone()], keep_label: true });
             }
             if let Some(tip) = &l.ok_tooltip {
-                e.insert(crate::ui::notices::Tooltip::new(fixed(s, tip, "")));
+                e.insert(crate::ui::notices::Tooltip::new(tip.clone()));
             }
         });
     });

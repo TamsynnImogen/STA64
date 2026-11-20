@@ -407,7 +407,7 @@ fn press(
     bindings: Option<Res<crate::input::keys::KeyBindings>>,
     menu: Option<Res<crate::ui::ingame_menu::InGameMenu>>,
     scene: Option<Res<crate::frontend::scene::MenuScene>>,
-    feed: Res<HudFeed>,
+    (feed, stock): (Res<HudFeed>, Option<Res<stock::StockState>>),
     mut state: ResMut<HudState>,
     mut queue: ResMut<CommandQueue>,
     mut issued: MessageWriter<OrderIssued>,
@@ -494,39 +494,44 @@ fn press(
                     trf("Place {0}: click the map (Esc cancels)", &[odf]),
                 ));
             }
+            Act::NativeOrder(odf) => {
+                if let Some(order) = stock.as_deref().and_then(|stock| stock.command(&feed, odf)) {
+                    issue_command(order, &mut queue, &mut issued, &mut targets);
+                }
+            }
             other => {
                 if let Act::Special(slot) = other
                     && Some(*slot) == pd_hotkey_slot
                 {
                     clicked_pd_slot = Some(*slot);
                 }
-                issue_command(&feed, other, &mut queue, &mut issued, &mut targets);
+                if let Some(order) = command(&feed, other) {
+                    issue_command(order, &mut queue, &mut issued, &mut targets);
+                }
             }
         }
     }
     if let Some(slot) = pd_hotkey_slot
         && clicked_pd_slot != Some(slot)
+        && let Some(order) = command(&feed, &Act::Special(slot))
     {
-        issue_command(&feed, &Act::Special(slot), &mut queue, &mut issued, &mut targets);
+        issue_command(order, &mut queue, &mut issued, &mut targets);
     }
 }
 
 fn issue_command(
-    feed: &HudFeed,
-    act: &Act,
+    (kind, units): (CommandKind, Vec<EntityId>),
     queue: &mut CommandQueue,
     issued: &mut MessageWriter<OrderIssued>,
     targets: &mut OrderTargets,
 ) {
-    if let Some((kind, units)) = command(feed, act) {
-        if matches!(&kind, CommandKind::Order(Order::Stop { .. })) { clear_order_targets(targets, &units); }
-        if let CommandKind::Order(o) = &kind
-            && let Some(k) = OrderKind::of(o)
-        {
-            issued.write(OrderIssued { units, kind: k });
-        }
-        queue.0.push(kind);
+    if matches!(&kind, CommandKind::Order(Order::Stop { .. })) { clear_order_targets(targets, &units); }
+    if let CommandKind::Order(o) = &kind
+        && let Some(k) = OrderKind::of(o)
+    {
+        issued.write(OrderIssued { units, kind: k });
     }
+    queue.0.push(kind);
 }
 
 /// The click that places an armed build: the point on the ground under the

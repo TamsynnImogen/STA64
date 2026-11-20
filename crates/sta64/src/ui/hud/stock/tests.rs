@@ -1031,6 +1031,7 @@ fn metadata_groups_only_available_actions() {
                 button: key.into(),
                 preferred: None,
                 menu: Some(menu.into()),
+                source: Vec::new(),
                 tooltip: Some("GUI_MOVE_TOOLTIP".into()),
                 verbose: Some("GUI_MOVE_VERBOSE".into()),
                 normal: None,
@@ -1070,6 +1071,7 @@ fn transport_shows_in_the_stock_palette_only_where_the_command_data_places_it() 
     assert!(transport(&NativeCommands::default()).is_none());
     let record = |preferred| NativeCommand {
         odf: "transport.odf".into(), command: "TRANSPORT".into(), button: "b_transport".into(), preferred, menu: None,
+        source: Vec::new(),
         tooltip: None, verbose: None, normal: None, hovered: None, pressed: None, disabled: None, active: None,
     };
     let mut native = NativeCommands::default();
@@ -1095,6 +1097,7 @@ fn native_formation_choices_keep_odf_identity_and_cannot_queue_orders() {
             button: "same_unrelated_button".into(),
             preferred: Some(preferred),
             menu: None,
+            source: Vec::new(),
             tooltip: Some(tip.into()),
             verbose: Some(format!("{tip}_VERBOSE")),
             normal: None,
@@ -1476,4 +1479,104 @@ mod button_panel {
         let wrap = buttons::next_idle(&feed, Some(then)).unwrap().id;
         assert_eq!((first, then, wrap), (EntityId(1), EntityId(7), EntityId(1)), "own ships only, wrapping");
     }
+}
+
+#[test]
+fn native_tara_requirements_gate_the_menu_and_dispatched_units() {
+    let raw = |body: &str| Arc::new(sta_odf::resolve("test.odf", &mut |_| Some(body.to_owned())).unwrap());
+    let fake = sta_content::fake::db();
+    let mut builder = ContentDb::builder();
+    for weapon in fake.weapons() {
+        builder = builder.weapon(weapon.clone());
+    }
+    for def in fake.units() {
+        let mut def = def.clone();
+        if def.odf == "fx_cruiser" {
+            def.raw = raw("alert = 1\ncombat = 1\ncan_sandd = 1\ncan_explore = 1\nshow_movement_autonomy = 1\n");
+            let mut scout = def.clone();
+            scout.odf = "scout_only".into();
+            scout.key = sta_content::DefRef::new("scout_only").key;
+            scout.raw = raw("combat = 1\ncan_sandd = 0\ncan_explore = 1\n");
+            builder = builder.unit(scout);
+        }
+        builder = builder.unit(def);
+    }
+    let db = Arc::new(builder.build().unwrap());
+    let mut app = app_with_content(db.clone());
+    let mut source = ScriptedSource::from_json5(
+        "{ units: [
+          { id: 1, def: 'fx_cruiser', owner: 1, hull: 100, rails: [{ at: 0, pos: { x: 0, y: 0, z: 0 } }] },
+          { id: 2, def: 'scout_only', owner: 1, hull: 100, rails: [{ at: 0, pos: { x: 0, y: 0, z: 0 } }] },
+          { id: 3, def: 'fx_cruiser', owner: 2, hull: 100, rails: [{ at: 0, pos: { x: 0, y: 0, z: 0 } }] }
+        ] }",
+        &db,
+    ).unwrap();
+    let mut view = (*source.step(&[]).view).clone();
+    view.units[0].autonomy = Some([1, 0]);
+    {
+        let mut feed = app.world_mut().resource_mut::<HudFeed>();
+        feed.view = Arc::new(view);
+        feed.selected = vec![EntityId(1), EntityId(2), EntityId(3)];
+    }
+    {
+        let mut state = app.world_mut().resource_mut::<StockState>();
+        state.native.groups = vec!["ai".into(), "orders".into()];
+        for (odf, command, menu, requirements) in [
+            ("scout", "SCOUT", "orders", "ship can_explore"),
+            ("sandd", "SEARCH_AND_DESTROY", "orders", "ship combat can_sandd"),
+            ("green", "GREEN_ALERT", "ai", "alert"),
+            ("red", "RED_ALERT", "ai", "alert"),
+            ("movemed", "MOVE_MED", "ai", "alert show_movement_autonomy"),
+            ("swhigh", "SPECIAL_WEAPON_AUTONOMY_HIGH", "ai", "alert show_sw_autonomy"),
+        ] {
+            state.native.commands.insert(odf.into(), NativeCommand {
+                odf: format!("{odf}.odf"),
+                command: command.into(),
+                button: odf.into(),
+                menu: Some(menu.into()),
+                source: requirements.split_whitespace().map(str::to_owned).collect(),
+                tooltip: Some(format!("TIP_{odf}")),
+                verbose: Some(format!("VERBOSE_{odf}")),
+                ..default()
+            });
+        }
+    }
+    app.update();
+    let orders = cell(&mut app, Act::OpenNativeMenu(1));
+    click(app.world_mut(), orders);
+    app.update();
+    let search = cell(&mut app, Act::NativeOrder("sandd".into()));
+    let tooltip = app.world().get::<Tooltip>(search).unwrap();
+    assert_eq!(tooltip.short, "TIP_sandd");
+    assert_eq!(tooltip.verbose.as_deref(), Some("VERBOSE_sandd"));
+    click(app.world_mut(), search);
+    app.update();
+    let scout = cell(&mut app, Act::NativeOrder("scout".into()));
+    click(app.world_mut(), scout);
+    app.update();
+    let back = cell(&mut app, Act::Back);
+    click(app.world_mut(), back);
+    app.update();
+    app.update();
+    let ai = cell(&mut app, Act::OpenNativeMenu(0));
+    click(app.world_mut(), ai);
+    app.update();
+    app.update();
+    let red = cell(&mut app, Act::NativeOrder("red".into()));
+    let medium = cell(&mut app, Act::NativeOrder("movemed".into()));
+    assert!(app.world().get::<GuiActive>(red).unwrap().0);
+    assert!(app.world().get::<GuiActive>(medium).unwrap().0);
+    assert!(!app.world().resource::<StockState>().grid.iter().any(|b| b.act == Act::NativeOrder("swhigh".into())));
+    let green = cell(&mut app, Act::NativeOrder("green".into()));
+    click(app.world_mut(), green);
+    app.update();
+    click(app.world_mut(), medium);
+    app.update();
+    use sta_sim::command::{AlertState, AutonomyKind, AutonomyLevel};
+    assert_eq!(app.world().resource::<CommandQueue>().0, [
+        CommandKind::Order(Order::SearchAndDestroy { units: vec![EntityId(1)] }),
+        CommandKind::Order(Order::Scout { units: vec![EntityId(1), EntityId(2)] }),
+        CommandKind::Order(Order::Alert { units: vec![EntityId(1)], level: AlertState::Green }),
+        CommandKind::Order(Order::Autonomy { units: vec![EntityId(1)], kind: AutonomyKind::Movement, level: AutonomyLevel::Medium }),
+    ]);
 }
