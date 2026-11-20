@@ -1185,11 +1185,13 @@ fn rebuild(
             commands.entity(entity).insert(crate::render::nebula::NebulaBoards { radius });
         }
         let units_before = units;
+        let mut is_sim_object = false;
         // What the sim made of the object (a unit of the content database) is drawn
         // by this entity: the ship moves with it and takes orders as one.
         // (The sim placed the moon in the marker's place: the same pick, see `MapDef::convert_bzn`.)
         if let Some(id) = moon.map(|m| m.key).or(sim_key).and_then(|k| placed.take(k, o)) {
             commands.entity(entity).insert(SimEntity(id));
+            is_sim_object = true;
             // A resource (a moon) is neutral and never moves but is clicked for its info and
             // as a mining target.
             if def.movement.max_speed > Fixed::ZERO || o.team > 0 || def.resource.is_some() || def.class.0.eq_ignore_ascii_case("wormhole_obj") {
@@ -1238,7 +1240,9 @@ fn rebuild(
             team,
             borg: false,
             sprites: &tables.0,
-            damaged: false,
+            // A unit of the sim keeps its damage-state nodes in the tree: `render::units::show_damage`
+            // shows them while the unit's systems are offline, as for a unit drawn by `attach_models`.
+            damaged: is_sim_object,
             normal_maps: true,
             parts: Some(&mut parts),
             model_key: path,

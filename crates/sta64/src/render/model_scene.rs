@@ -190,6 +190,9 @@ fn spawn_impl(
     if legacy && !ctx.borg {
         hidden.extend(model.borg_node());
     }
+    // Damage-state nodes kept in the tree start hidden: `units::show_damage` shows the ones the unit's
+    // systems and hull call for, so none (nor its emitters) shows for a frame before the state arrives.
+    let start_hidden: HashSet<usize> = if legacy && ctx.damaged { model.damage_nodes().into_iter().collect() } else { HashSet::new() };
     let mut visible_nodes = HashSet::new();
     let mut visible_stack: Vec<usize> = model.roots().collect();
     while let Some(index) = visible_stack.pop() {
@@ -248,7 +251,8 @@ fn spawn_impl(
         let parent = node.parent.and_then(|p| entities[p]).unwrap_or(root);
         let mut base = to_bevy(&node.transform);
         base.translation *= ctx.scale;
-        let mut e = ctx.commands.spawn((Name::new(node.name.clone()), base, Visibility::default(), ChildOf(parent),
+        let node_visibility = if start_hidden.contains(&i) { Visibility::Hidden } else { Visibility::default() };
+        let mut e = ctx.commands.spawn((Name::new(node.name.clone()), base, node_visibility, ChildOf(parent),
         ));
         e.insert(crate::render::appearance::ModelNode { root, index: i });
         if !legacy { e.insert(NativeNode); }
@@ -1020,5 +1024,72 @@ mod tests {
         let mut diffuses: Vec<[f32; 3]> = q.iter(&world).filter_map(|h| h.stock.map(|l| l.diffuse)).collect();
         diffuses.sort_by(|a, b| a[0].total_cmp(&b[0]));
         assert_eq!(diffuses, vec![crate::render::rock::SHELL_DIFFUSE, [0.3, 0.4, 0.6]]);
+    }
+
+    /// A model spawned with `damaged` keeps its damage-state nodes in the tree hidden, so none shows
+    /// (nor its emitters) before `units::show_damage` has the unit's state; without `damaged` they are
+    /// not spawned. Authored data, no install.
+    #[test]
+    fn damage_nodes_start_hidden_and_are_left_out_unless_damaged() {
+        use bevy::ecs::world::CommandQueue;
+        use bevy::image::CompressedImageFormats;
+        let node = |name: &str| sta_assets::model::Node {
+            name: name.into(),
+            parent: None,
+            children: vec![],
+            transform: Matrix34::IDENTITY,
+            kind: NodeKind::Mesh(ModelMesh {
+                positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                uvs: vec![[0.0, 0.0]],
+                groups: vec![Group { material: "plain".into(), blend: "default".into(), maps: sta_assets::model::Maps::default(), faces: vec![[(0, 0), (1, 0), (2, 0)]] }],
+                two_sided: false,
+            }),
+        };
+        let model = Model {
+            format: sta_assets::model::SourceFormat::Sod,
+            version: 1.8,
+            materials: vec![sta_assets::model::LightingMaterial { name: "plain".into(), ambient: [0.5; 3], diffuse: [0.3; 3], specular: [0.0; 3], power: 1.0, model: 1, self_illuminating: false }],
+            nodes: vec![node("hull"), node("damage"), node("engines"), node("life")],
+            channels: vec![],
+            flipbooks: vec![],
+            warnings: vec![],
+            pbr: None,
+        };
+        let sprites = SpriteTable::default();
+        let vfs = sta_vfs::Vfs::default();
+        for damaged in [false, true] {
+            let (mut meshes, mut materials, mut images) = (Assets::<Mesh>::default(), Assets::<StandardMaterial>::default(), Assets::<Image>::default());
+            let mut cache = crate::render::textures::TextureCache::default();
+            let mut world = World::new();
+            let root = world.spawn((Transform::IDENTITY, Visibility::default())).id();
+            let mut queue = CommandQueue::default();
+            {
+                let mut commands = Commands::new(&mut queue, &world);
+                let mut ctx = SpawnCtx {
+                    commands: &mut commands,
+                    meshes: &mut meshes,
+                    materials: &mut materials,
+                    textures: Loader { vfs: &vfs, cache: &mut cache, images: &mut images, formats: CompressedImageFormats::NONE },
+                    team: Color::WHITE,
+                    borg: false,
+                    sprites: &sprites,
+                    damaged,
+                    normal_maps: false,
+                    parts: None,
+                    model_key: "authored_damage".into(),
+                    unlit: false,
+                    scale: 1.0,
+                    diffuse_tint: false,
+                };
+                spawn(&mut ctx, &model, root);
+            }
+            queue.apply(&mut world);
+            let mut q = world.query::<(&Name, &Visibility)>();
+            let seen: std::collections::BTreeMap<String, Visibility> = q.iter(&world).map(|(n, v)| (n.to_string(), *v)).collect();
+            assert_eq!(seen.get("hull"), Some(&Visibility::Inherited), "damaged={damaged}: the hull is not a damage node");
+            for n in ["damage", "engines", "life"] {
+                assert_eq!(seen.get(n), damaged.then_some(&Visibility::Hidden), "damaged={damaged}: {n}");
+            }
+        }
     }
 }
