@@ -1,9 +1,15 @@
 //! Shields after leaving a shield-disabling nebula (SIM-75, slice 2).
 //!
-//! Rule (Armada II family; every profile but Armada I). Grade: measured on
-//! stock Armada II 1.1, single runs, two nebula classes; **interim**, because
-//! the delay below is a single-run measurement and not a data key.
-//! - While a craft is inside a kind with `disableShields`, its shields are held
+//! Rule (Armada II family; every profile but Armada I; the Native profile
+//! follows it by STA64's own choice). Grade: measured on stock Armada II 1.1,
+//! single runs, two nebula classes; **interim**, because the delay below is a
+//! single-run measurement and not a data key. **Not measured:** whether the
+//! shields return to the value on entry or to the maximum: every measured run
+//! entered with full shields, so the two readings are not told apart. STA64
+//! reads it as the value on entry, which is the same for a craft that entered
+//! at full strength; the record layout (format 39) is not final until that is
+//! measured.
+//! - While a craft (or station, which never leaves) is inside a kind with `disableShields`, its shields are held
 //!   at 0 (slice 1) and the value it had on entering is remembered.
 //! - After it is out of every such kind, the shields stay at 0 for
 //!   [`RETURN_DELAY`], then return in one step to the remembered value (not a
@@ -96,13 +102,13 @@ impl NebulaShields {
         NebulaShieldsRec { version: 1, rows: self.rows.iter().map(|(id, r)| (*id, r.entry.map(Fixed::to_bits), r.left.map_or(0, |t| t + 1))).collect() }
     }
 
-    /// Ascending craft that exist; pools in `0..=1_000_000_000` units.
-    pub(crate) fn from_rec(rec: NebulaShieldsRec, exists: impl Fn(EntityId) -> bool) -> Option<NebulaShields> {
+    /// Ascending craft that exist; pools in `0..=1_000_000_000` units; no leave tick after `tick`.
+    pub(crate) fn from_rec(rec: NebulaShieldsRec, tick: Tick, exists: impl Fn(EntityId) -> bool) -> Option<NebulaShields> {
         const LIMIT: i64 = 1_000_000_000i64 << 32;
         if rec.version != 1 || !rec.rows.windows(2).all(|w| w[0].0 < w[1].0) {
             return None;
         }
-        let ok = rec.rows.iter().all(|(id, pools, _)| exists(*id) && pools.iter().all(|p| (0..=LIMIT).contains(p)));
+        let ok = rec.rows.iter().all(|(id, pools, left)| exists(*id) && pools.iter().all(|p| (0..=LIMIT).contains(p)) && left.saturating_sub(1) <= tick);
         ok.then(|| NebulaShields {
             rows: rec.rows.into_iter().map(|(id, p, left)| (id, Row { entry: p.map(Fixed::from_bits), left: left.checked_sub(1) })).collect(),
         })
@@ -145,7 +151,7 @@ impl Sim {
             let Some(row) = self.nebula_shields.rows.get_mut(&id) else { continue };
             let left = *row.left.get_or_insert(tick);
             let entry = row.entry;
-            if tick < left + RETURN_DELAY {
+            if tick < left.saturating_add(RETURN_DELAY) {
                 if let Some(u) = self.units.get_mut(id) {
                     u.shields.now = [Fixed::ZERO; 4];
                 }

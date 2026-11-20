@@ -736,7 +736,7 @@ impl Sim {
             .ok_or_else(|| SnapshotError::Corrupt("invalid station recrew record".into()))?;
         let repairs = crate::repair::Repairs::from_rec(repairs_rec, |id| units.contains(id)).ok_or_else(|| corrupt("repair queues"))?;
         let recycles = crate::economy::recycle::Recycles::from_rec(recycles_rec, |id| units.contains(id)).ok_or_else(|| corrupt("decommissions"))?;
-        let nebula_shields = crate::nebula::NebulaShields::from_rec(nebula_shields_rec, |id| units.contains(id)).ok_or_else(|| corrupt("nebula shields"))?;
+        let nebula_shields = crate::nebula::NebulaShields::from_rec(nebula_shields_rec, b.tick, |id| units.contains(id)).ok_or_else(|| corrupt("nebula shields"))?;
         let mut economy = crate::economy::Economy::from_rec(&b.economy);
         economy.restore_personnel(personnel_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         economy.restore_adjust(adjust_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;

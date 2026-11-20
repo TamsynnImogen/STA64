@@ -65,6 +65,7 @@ fn the_entry_value_returns_in_one_step_after_the_delay_and_not_before() {
 
 #[test]
 fn the_value_on_entry_is_what_returns_even_when_it_was_not_full() {
+    // Entry value against the maximum for a craft that entered below it: not measured (STA64's reading).
     let (mut s, id) = world();
     s.units.get_mut(id).unwrap().shields.now = [Fixed::from_int(37), Fixed::from_int(11), Fixed::from_int(5), Fixed::from_int(2)];
     run(&mut s, 3);
@@ -198,14 +199,15 @@ fn a_save_in_the_middle_of_the_delay_loads_exactly_and_finishes_the_same() {
 }
 
 #[test]
-fn a_save_inside_the_nebula_round_trips_and_the_state_is_in_the_digest() {
-    let (mut s, id) = world();
-    let without = world_in(None, &[("fx_still", FAR)]).0;
+fn a_save_inside_the_nebula_round_trips_and_the_record_is_in_the_combat_digest() {
+    let (mut s, _) = world();
     run(&mut s, 3);
     let bytes = s.snapshot();
     let back = Sim::from_snapshot(&bytes, s.content().cloned()).unwrap();
     assert_eq!(back.snapshot(), bytes);
     assert_eq!(back.digest(), s.digest());
-    assert_ne!(s.digest(), without.digest());
-    let _ = id;
+    // The same tick, differing only in the record.
+    let mut bare = s.clone();
+    bare.nebula_shields = Default::default();
+    assert_eq!(s.section_digests().differing(&bare.section_digests()), ["combat"]);
 }

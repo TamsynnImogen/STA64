@@ -26,7 +26,11 @@ fn format_38_is_refused_and_a_forged_record_is_a_load_error() {
     assert_eq!(back.snapshot(), bytes, "save, load, save");
     // An unknown record version, a craft that does not exist, rows out of order, a missing record.
     let rec = |version, id: u32| NebulaShieldsRec { version, rows: vec![(EntityId(id), [0; 4], 0)] };
-    for bad in [rec(2, 1), rec(1, 9999)] {
+    let id = s.units.iter().next().unwrap().id.0;
+    let at = |pools: [i64; 4], left: u64| NebulaShieldsRec { version: 1, rows: vec![(EntityId(id), pools, left)] };
+    let future = s.tick + 2; // stored as left + 1: a leave tick after the snapshot's
+    let forged = [rec(2, 1), rec(1, 9999), at([0; 4], future), at([0; 4], u64::MAX), at([-1, 0, 0, 0], 0), at([1_000_000_001i64 << 32, 0, 0, 0], 0)];
+    for bad in forged {
         let forged = chain::with(&bytes, chain::NEBULA_SHIELDS, chain::enc(&bad));
         assert!(!chain::corrupt(&forged, s.content.clone()).is_empty());
     }
