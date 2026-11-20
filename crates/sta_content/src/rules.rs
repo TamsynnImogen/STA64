@@ -49,6 +49,8 @@ pub struct Rules {
     transporter: Option<TransporterRules>,
     /// The other typed `RTS_CFG.h` keys.
     pub cfg: CfgRules,
+    /// The render-only shot keys (not digested).
+    pub shots: ShotCfg,
     /// Armada I's header-level start (`cfgStarting*`), see [`LegacyStart`].
     legacy_start: LegacyStart,
 }
@@ -106,6 +108,49 @@ pub struct CrewRules {
     pub max_crew: Option<i64>,
     /// Race key (lower case, sorted) and its accumulation rate per second.
     pub races: Vec<(String, Fixed)>,
+}
+
+/// The two `RTS_CFG.h` keys that only change how weapon shots are drawn. Render only: not
+/// digested and not in [`TYPED_CFG_KEYS`] (D9, D10: peers that differ only in how a shot
+/// looks play together). `None`: the header does not set the key; the engine's own default
+/// for an absent key was not read (INTERIM: a render reads absent as the stock install
+/// values, 0 for the colour flag, and does not invent a lifetime).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ShotCfg {
+    /// `BEAM_MISS_LIFETIME` (float, seconds): how long, counted from the shot, a beam whose
+    /// target is lost keeps being drawn towards where it pointed (read from the executable,
+    /// static; the value is read from data).
+    pub beam_miss_lifetime: Option<Fixed>,
+    /// `NORMAL_WEAPON_TEAM_COLOR` (flag): when set, phasers, pulses and photon, poleron and
+    /// shield-removing torpedoes take the owner's team colour, else they are white (read
+    /// from the executable, static; the value is read from data).
+    pub normal_weapon_team_color: Option<bool>,
+}
+
+impl ShotCfg {
+    pub const KEYS: [&'static str; 2] = ["BEAM_MISS_LIFETIME", "NORMAL_WEAPON_TEAM_COLOR"];
+
+    /// Whether normal weapons take the owner's team colour (absent: no, INTERIM).
+    pub fn team_colour(&self) -> bool {
+        self.normal_weapon_team_color.unwrap_or(false)
+    }
+
+    fn from_cfg(cfg: &CfgH, warnings: &mut Vec<Warning>) -> ShotCfg {
+        let mut out = ShotCfg::default();
+        if cfg.raw("BEAM_MISS_LIFETIME").is_some() {
+            match cfg.f32("BEAM_MISS_LIFETIME").filter(|v| v.is_finite() && (0.0..=1.0e4).contains(v)) {
+                Some(v) => out.beam_miss_lifetime = Some(Fixed::from_f64(v as f64)),
+                None => warnings.push(Warning::new("RTS_CFG.h", "BEAM_MISS_LIFETIME is not a non-negative number; treated as unset")),
+            }
+        }
+        if cfg.raw("NORMAL_WEAPON_TEAM_COLOR").is_some() {
+            match cfg.f32("NORMAL_WEAPON_TEAM_COLOR").filter(|v| v.is_finite()) {
+                Some(v) => out.normal_weapon_team_color = Some(v != 0.0),
+                None => warnings.push(Warning::new("RTS_CFG.h", "NORMAL_WEAPON_TEAM_COLOR is not a number; treated as unset")),
+            }
+        }
+        out
+    }
 }
 
 /// The autonomy a new craft starts with (CON-46, D9), from `RTS_CFG.h`:
@@ -619,6 +664,7 @@ impl Rules {
         rules.autonomy = AutonomyRules::from_cfg(&cfg, &mut warnings);
         rules.approach = ApproachRules::from_cfg(&cfg, &mut warnings);
         rules.cfg = CfgRules::from_cfg(&cfg, &mut warnings);
+        rules.shots = ShotCfg::from_cfg(&cfg, &mut warnings);
         rules.transporter = TransporterRules::from_cfg(&cfg, &mut warnings);
         (rules, warnings)
     }
