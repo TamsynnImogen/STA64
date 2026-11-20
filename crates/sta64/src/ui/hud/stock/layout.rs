@@ -290,7 +290,19 @@ impl StockLayout {
 
     /// Count is authoritative. Only existing numbered CFG rectangles below it draw.
     pub fn pieces(&self, prefix: &str) -> Vec<Piece> {
-        self.canvas_pieces(prefix).into_iter().map(|(frame, name, rect)| Piece { rect: self.scaled(rect), name, frame }).collect()
+        let edge = |position: i32, scale: f32| (position as f32 * scale + 0.5).floor();
+        self.canvas_pieces(prefix)
+            .into_iter()
+            .map(|(frame, name, rect)| {
+                // Adjacent authored pieces share one rounded canvas boundary. Rounding
+                // position and width separately can leave a one-unit seam between them.
+                let x = edge(rect.x, self.scale_x);
+                let y = edge(rect.y, self.scale);
+                let right = edge(rect.x.saturating_add(rect.w), self.scale_x);
+                let bottom = edge(rect.y.saturating_add(rect.h), self.scale);
+                Piece { rect: R::new(x, y, right - x, bottom - y), name, frame }
+            })
+            .collect()
     }
 
     /// The pieces of [`Self::pieces`] in canvas units, unplaced (for a caller that places them itself).
@@ -485,6 +497,40 @@ mod tests {
         cfg.names.remove("ResourcePanel");
         let unnamed = StockLayout::new(&cfg, l.screen).pieces("resourcePanel");
         assert_eq!(unnamed[0].name, "default_sprite");
+    }
+
+    #[test]
+    fn adjacent_pieces_share_rounded_horizontal_and_vertical_edges() {
+        let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
+        cfg.numbers.insert("frameSize".into(), 3.0);
+        cfg.names.insert("frame".into(), "frame_sprite".into());
+        cfg.rects.insert("frame_0".into(), rect(1, 1, 1, 1));
+        cfg.rects.insert("frame_1".into(), rect(2, 1, 3, 1));
+        cfg.rects.insert("frame_2".into(), rect(1, 2, 1, 3));
+        cfg.rects.insert("singleControl".into(), rect(1, 1, 1, 1));
+        cfg.rects.insert("singlePanelArea".into(), rect(1, 1, 1, 1));
+
+        for (sx, sy, fit) in [
+            (0.75, 0.75, HudFit::Centred),
+            (1.0, 1.0, HudFit::Centred),
+            (1.25, 1.25, HudFit::Centred),
+            (1.5, 1.5, HudFit::Centred),
+            (1.25, 0.75, HudFit::Stretched),
+            (0.75, 1.25, HudFit::Stretched),
+        ] {
+            let layout = StockLayout::with_fit(&cfg, Vec2::new(1600.0 * sx, 1200.0 * sy), fit);
+            let pieces = layout.pieces("frame");
+            assert_eq!(pieces.iter().map(|p| (p.frame, p.name.as_str())).collect::<Vec<_>>(),
+                [(0, "frame_sprite"), (1, "frame_sprite"), (2, "frame_sprite")]);
+            assert_eq!(pieces[0].rect.right(), pieces[1].rect.x, "horizontal seam at {sx} x {sy}");
+            assert_eq!(pieces[0].rect.bottom(), pieces[2].rect.y, "vertical seam at {sx} x {sy}");
+        }
+
+        // The other rectangle consumers retain their independent size rounding.
+        let layout = StockLayout::new(&cfg, Vec2::new(2000.0, 1500.0));
+        assert_eq!(layout.rect("singleControl"), Some(R::new(1.0, 1.0, 1.0, 1.0)));
+        assert_eq!(layout.panel("single"), Some(R::new(1.0, 1.0, 1.0, 1.0)));
+        assert_eq!(layout.pieces("frame")[0].rect, R::new(1.0, 1.0, 2.0, 2.0));
     }
 
     /// The palette origin is read against a 1600x1200 reference (see `palette`): Fleet Ops'
