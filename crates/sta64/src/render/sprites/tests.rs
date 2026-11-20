@@ -204,3 +204,40 @@ fn the_invented_table_has_nodes_of_every_blend_mode() {
     assert_eq!((mode("adA"), mode("adB")), (AlphaMode::Add, AlphaMode::Add));
     assert_eq!((mode("cutA"), mode("cutB")), (AlphaMode::Mask(0.5), AlphaMode::Mask(0.5)));
 }
+
+/// The `Update` schedule of the map, specials and HUD plugins built together, as the game does.
+/// `contradiction` adds the opposite of one of the explicit orders (`animate` before `apply_fade`, `animate`
+/// before `tint_ghost`), which must make the build fail.
+fn build_game_update_schedule(contradiction: Option<&str>) -> Result<(), String> {
+    use bevy::state::app::StatesPlugin;
+    let mut app = App::new();
+    app.add_plugins((MinimalPlugins, StatesPlugin, bevy::asset::AssetPlugin::default()));
+    crate::app::configure_sets(&mut app);
+    app.insert_resource(AnimClock::new(ClockMode::Bench { step: 0.1 }, 0))
+        .add_plugins((crate::sim_link::SimLinkPlugin, crate::map::MapPlugin, crate::render::fx::specials::SpecialsFxPlugin, crate::ui::hud::HudPlugin));
+    match contradiction {
+        Some("apply_fade") => app.add_systems(Update, crate::render::fx::specials::apply_fade.before(animate)),
+        Some("tint_ghost") => app.add_systems(Update, crate::ui::hud::ghost::tint_ghost.before(animate)),
+        _ => &mut app,
+    };
+    match app.world_mut().try_schedule_scope(Update, |world, schedule| schedule.initialize(world).map(|_| ())) {
+        Ok(Ok(())) => Ok(()),
+        other => Err(format!("{other:?}")),
+    }
+}
+
+/// The map's animation chain is ordered before `apply_fade` and `tint_ghost`, so every system ahead of
+/// `animate` in that chain now runs before the sets after `Interpolate`. Bevy refuses an ordering cycle
+/// when the schedule is built, which would be a startup panic for every player.
+#[test]
+fn the_map_specials_and_hud_plugins_build_one_update_schedule_without_an_ordering_cycle() {
+    build_game_update_schedule(None).expect("the Update schedule builds");
+}
+
+/// Control for the test above: the opposite of each explicit order is a cycle and the build reports it, so
+/// the test above can fail, and both orders really are in the schedule.
+#[test]
+fn the_schedule_check_sees_an_ordering_cycle_against_each_explicit_order() {
+    assert!(build_game_update_schedule(Some("apply_fade")).is_err());
+    assert!(build_game_update_schedule(Some("tint_ghost")).is_err());
+}

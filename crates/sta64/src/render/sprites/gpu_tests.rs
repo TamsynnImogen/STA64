@@ -67,15 +67,20 @@ enum Path {
     Reference,
     /// The system under test (today the same one `main` has).
     New,
+    /// A deliberately broken path, a negative control: the reference system run in `Last`, after the
+    /// assets' events of the frame, so its writes reach the screen one frame late. Must NOT be byte-equal.
+    Late,
 }
 
-/// The camera: what the Stock and the Refit look differ by in the post chain.
+/// The camera: what the looks differ by in the post chain.
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Camera {
     /// No tonemapping, no MSAA.
     Stock,
     /// Default tonemapping, 4x MSAA.
-    Refit,
+    Tonemapped4x,
+    /// HDR, bloom, default tonemapping, 4x MSAA (the cinematic post chain's parts).
+    HdrBloom,
 }
 
 /// Frames of the scene at 12 times and camera places.
@@ -98,6 +103,7 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
     match path {
         Path::New => app.add_systems(Update, (animate, apply_fade, tint_ghost, face_camera).chain()),
         Path::Reference => app.add_systems(Update, (animate_reference, apply_fade, tint_ghost, face_camera).chain()),
+        Path::Late => app.add_systems(Update, (apply_fade, tint_ghost, face_camera).chain()).add_systems(Last, animate_reference),
     };
     let mut target = Image::new_target_texture(160, 120, TextureFormat::Rgba8UnormSrgb, None);
     target.asset_usage = bevy::asset::RenderAssetUsages::RENDER_WORLD;
@@ -109,7 +115,8 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
         .id();
     match camera {
         Camera::Stock => app.world_mut().entity_mut(cam).insert((Tonemapping::None, Msaa::Off)),
-        Camera::Refit => app.world_mut().entity_mut(cam).insert(Msaa::Sample4),
+        Camera::Tonemapped4x => app.world_mut().entity_mut(cam).insert(Msaa::Sample4),
+        Camera::HdrBloom => app.world_mut().entity_mut(cam).insert((bevy::camera::Hdr, bevy::post_process::bloom::Bloom::NATURAL, Msaa::Sample4)),
     };
     let quad = app.world_mut().resource_mut::<Assets<Mesh>>().add(unit_quad());
     let t = table();
@@ -234,7 +241,7 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
 }
 
 #[test]
-fn nodes_are_drawn_byte_equal_to_the_reference_path_on_gpu_from_both_cameras() {
+fn nodes_are_drawn_byte_equal_to_the_reference_path_on_gpu_from_three_cameras() {
     if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
         eprintln!("SKIP: set STA64_GPU_TESTS=1");
         return;
@@ -242,7 +249,7 @@ fn nodes_are_drawn_byte_equal_to_the_reference_path_on_gpu_from_both_cameras() {
     let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let _ = TABLE;
     let lit = |f: &Vec<u8>| f.chunks(4).filter(|p| p[0] > 8 || p[1] > 8 || p[2] > 8).count();
-    for camera in [Camera::Stock, Camera::Refit] {
+    for camera in [Camera::Stock, Camera::Tonemapped4x, Camera::HdrBloom] {
         let Some(old) = series(Path::Reference, camera) else { return };
         // Control: the reference against itself, so a difference below is the path's, not the harness'.
         let Some(again) = series(Path::Reference, camera) else { return };
@@ -257,4 +264,20 @@ fn nodes_are_drawn_byte_equal_to_the_reference_path_on_gpu_from_both_cameras() {
         // The frames differ from one another (time and camera move), so equality is not an empty scene's.
         assert!(old[0] != old[5]);
     }
+}
+
+/// Negative control: the harness fails when the picture differs. The reference system run one frame
+/// late must give frames that are not byte-equal to the reference's.
+#[test]
+fn a_path_that_writes_one_frame_late_is_not_byte_equal_to_the_reference_on_gpu() {
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_GPU_TESTS=1");
+        return;
+    }
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(old) = series(Path::Reference, Camera::Stock) else { return };
+    let Some(late) = series(Path::Late, Camera::Stock) else { return };
+    let differing = old.iter().zip(&late).filter(|(a, b)| a != b).count();
+    eprintln!("late path: {differing} of {} frames differ", old.len());
+    assert!(differing >= old.len() / 2, "only {differing} frames differ: the harness cannot see a one-frame lag");
 }
