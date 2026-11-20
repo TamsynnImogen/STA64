@@ -538,8 +538,17 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
         return out;
     }
     let mut out = Vec::new();
-    if builder.is_some() {
-        out.push(button(0, &tr("Build"), Act::OpenBuild, &tooltip_key("Build")));
+    if let Some(builder) = builder {
+        // Stock research.odf and planet.odf author `research = 1` for their
+        // context-sensitive menu, while its contents still use the build page.
+        let research = feed.def(builder).is_some_and(|def| def.raw.bool("research") == Some(true));
+        let caption = if research { "Research" } else { "Build" };
+        let mut opener = button(0, &tr(caption), Act::OpenBuild, &tooltip_key(if research { "Research menu" } else { "Build" }));
+        if research {
+            opener.sprite_names = vec!["b_research".into()];
+            opener.verbose = Some(tooltip_key("Open the research menu."));
+        }
+        out.push(opener);
     }
     if caps.rally {
         out.push(button(
@@ -986,6 +995,42 @@ mod tests {
             .is_empty()
         );
         assert!(grid(&feed(sta_content::fake::db(), Vec::new(), &[]), Page::Top).is_empty());
+    }
+
+    #[test]
+    fn authored_research_menu_uses_research_sprite_and_keeps_build_routing() {
+        let fake = sta_content::fake::db();
+        let mut db = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for weapon in fake.weapons() { db = db.weapon(weapon.clone()); }
+        for unit in fake.units() {
+            let mut unit = unit.clone();
+            if unit.odf == "fx_station" {
+                unit.raw = Arc::new(sta_odf::resolve("unit", &mut |_| Some("research = 1".into())).unwrap());
+            }
+            db = db.unit(unit);
+        }
+        let mut planet = UnitDef::new("fx_planet", "planet");
+        planet.build.list = vec![DefRef::new("fx_cruiser")];
+        planet.raw = Arc::new(sta_odf::resolve("unit", &mut |_| Some("research = 1".into())).unwrap());
+        db = db.unit(planet);
+        let db = db.build().unwrap();
+        for (odf, expected_label, expected_sprite) in [
+            ("fx_station", "RESEARCH", "b_research"),
+            ("fx_planet", "RESEARCH", "b_research"),
+            ("fx_yard", "BUILD", "b_build"),
+        ] {
+            let f = feed(db.clone(), vec![unit(&db, 2, odf, 1, 100.0, None)], &[2]);
+            let opener = grid(&f, Page::Top).into_iter().find(|b| b.act == Act::OpenBuild).unwrap();
+            assert_eq!(opener.label, expected_label, "{odf}");
+            assert_eq!(opener.tip, if expected_label == "RESEARCH" { "Research menu" } else { "Build" }, "{odf}");
+            assert_eq!(opener.sprite_names, [expected_sprite], "{odf}");
+            if expected_label == "RESEARCH" {
+                let strings = crate::ui::i18n::Strings::from_game("english", r#""GUI_CP_RESEARCH_TOOLTIP", "Native short", "GUI_CP_RESEARCH_VTOOLTIP", "Native verbose","#);
+                assert_eq!(strings.tooltip_text(&opener.tip), "Native short");
+                assert_eq!(strings.tooltip_text(opener.verbose.as_deref().unwrap()), "Native verbose");
+            }
+            assert!(grid(&f, Page::Build).iter().any(|b| matches!(b.act, Act::Build { .. })), "{odf}");
+        }
     }
 
     #[test]

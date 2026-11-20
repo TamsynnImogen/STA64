@@ -34,10 +34,11 @@ use sta_vfs::Vfs;
 /// STA64 call-site key -> the game's own string key, for the strings the
 /// original has. A game key missing from the install falls back to the
 /// English call-site text.
-pub const GAME_KEYS: &[(&str, &str)] = &[(
-    "Double click to return to strategic mode.",
-    "GUI_CV_MIN_TOOLTIP",
-)];
+pub const GAME_KEYS: &[(&str, &str)] = &[
+    ("Double click to return to strategic mode.", "GUI_CV_MIN_TOOLTIP"),
+    ("Research menu", "GUI_CP_RESEARCH_TOOLTIP"),
+    ("Open the research menu.", "GUI_CP_RESEARCH_VTOOLTIP"),
+];
 
 /// The active UI language, as the lower-case name its files use (`english`).
 #[derive(Resource, Debug, Clone, PartialEq, Eq)]
