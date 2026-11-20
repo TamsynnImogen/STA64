@@ -528,7 +528,9 @@ impl Plugin for MapPlugin {
                     hud_toggle,
                     fps,
                     model_scene::animate,
-                    crate::render::sprites::animate,
+                    // Before the systems that hand nodes material copies (the cloak and build fade, the
+                    // placement ghost), so the copy is taken from this frame's values.
+                    crate::render::sprites::animate.before(crate::render::fx::specials::apply_fade).before(crate::ui::hud::ghost::tint_ghost),
                     crate::render::sprites::face_camera,
                     crate::render::particles::simulate,
                     crate::render::particles::draw,
