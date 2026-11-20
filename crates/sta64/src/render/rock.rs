@@ -1,6 +1,8 @@
 //! Rocks with recipe surfaces: mesh parts whose texture names a recipe (the
 //! asteroids' `Master*`, the dilithium moons' `Mdmoon`) switch to Armada II Refit's
-//! rock look (`rock.wesl`) once their surface is baked.
+//! rock look (`rock.wesl`) once their surface is baked, under the Refit look only. The Stock look draws
+//! every one of them, a dilithium moon included, with the model's own materials (a moon's rock and its
+//! `glowdmoon` shell through the stock hull lighting, `stock/hulls.rs`).
 //!
 //! Settings are Refit's defaults: ambient (0.05, 0.05, 0.07), specular 0.7 with
 //! exponent 24 (times the texture's brightness and the recipe's Gloss), rim
@@ -62,8 +64,8 @@ pub fn is_moon_shell(material: &str) -> bool {
 }
 
 /// The glow shell as Refit draws it by default (`MoonShell=dark`): dark and opaque, so
-/// the rock's cut-outs show black where the cracks' light is not. Stock draws it added
-/// in the moon's colour; the cracks' own light stands in for that now.
+/// the rock's cut-outs show black where the cracks' light is not. Under the Refit look only; the Stock look
+/// draws the shell with the model's lighting material.
 pub fn shell_material(two_sided: bool) -> StandardMaterial {
     StandardMaterial {
         base_color: Color::BLACK,
@@ -71,6 +73,64 @@ pub fn shell_material(two_sided: bool) -> StandardMaterial {
         double_sided: two_sided,
         cull_mode: if two_sided { None } else { Some(bevy::render::render_resource::Face::Back) },
         ..default()
+    }
+}
+
+/// Which part of a dilithium moon a mesh part is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MoonKind {
+    /// The rock (texture with a cut-out net of fissures).
+    Rock,
+    /// The `glowdmoon` shell seen through the cut-outs.
+    Shell,
+}
+
+/// A part of a dilithium moon, with the model's own material, which the Stock look draws and the Refit look
+/// replaces (the rock by [`RockMaterial`], the shell by [`shell_material`]).
+#[derive(Component)]
+pub struct MoonPart {
+    pub source: Handle<StandardMaterial>,
+    pub kind: MoonKind,
+}
+
+/// The shell wears Refit's dark material.
+#[derive(Component)]
+struct MoonDark;
+
+/// Interim: the Stock shell is hull-lit only while its blend group is one the hull look takes (opaque or
+/// cut-out); an additive or alpha-blended group would bypass it (not checked in a frame).
+/// Give moon shells the look the profile says: Refit's dark opaque shell, or (Stock) the model's own
+/// material back, which the hull look then lights from the SOD's lighting material. Idempotent each frame,
+/// after the hull look has given new parts their material.
+fn moon_shell_look(
+    mut commands: Commands,
+    profile: Option<Res<RenderProfile>>,
+    effects: Option<Res<ProfileEffects>>,
+    mut standard: ResMut<Assets<StandardMaterial>>,
+    mut dark: Local<Option<(bool, Handle<StandardMaterial>)>>,
+    parts: Query<(Entity, &MoonPart, Has<MoonDark>)>,
+) {
+    let stock = nimbus_drawn(profile.as_deref(), effects.as_deref());
+    for (e, part, is_dark) in &parts {
+        if part.kind != MoonKind::Shell || stock != is_dark {
+            continue;
+        }
+        let mut c = commands.entity(e);
+        if stock {
+            c.remove::<(MoonDark, crate::render::hulls::HullSource)>().insert(MeshMaterial3d(part.source.clone()));
+        } else {
+            let two_sided = standard.get(&part.source).is_some_and(|m| m.double_sided);
+            let handle = match &*dark {
+                Some((t, h)) if *t == two_sided => h.clone(),
+                _ => {
+                    let h = standard.add(shell_material(two_sided));
+                    *dark = Some((two_sided, h.clone()));
+                    h
+                }
+            };
+            c.insert((MoonDark, MeshMaterial3d(handle)))
+                .remove::<(MeshMaterial3d<crate::render::hulls::HullMaterial>, crate::render::hulls::HullSource)>();
+        }
     }
 }
 
@@ -120,8 +180,8 @@ pub struct RockPart {
     pub recipe: String,
     pub centre: Vec3,
     pub inv_extent: Vec3,
-    /// Part of a dilithium moon (its model has the `glowdmoon` shell). Under the Stock look only these take the
-    /// recipe surface (the lit cracks stand in for the shell's glow); other rocks keep their texture.
+    /// Part of a dilithium moon (its model has the `glowdmoon` shell): it is also a [`MoonPart`], and takes the
+    /// stock hull look under the Stock look like the rest of the model.
     pub moon: bool,
 }
 
@@ -159,12 +219,13 @@ impl Plugin for RockPlugin {
         app.add_plugins(MaterialPlugin::<RockMaterial>::default())
             .init_resource::<RockMaterials>()
             .add_systems(Update, (apply.after(crate::render::surfaces::poll), revert_to_stock, forget, moon_nimbus))
+            .add_systems(Update, moon_shell_look.after(crate::render::hulls::HullApply))
             .add_systems(PostUpdate, update.after(TransformSystems::Propagate));
     }
 }
 
 /// A part waiting for its surface: the part and the material it has now.
-type WaitingPart = (Entity, &'static RockPart, Option<&'static MeshMaterial3d<StandardMaterial>>);
+type WaitingPart = (Entity, &'static RockPart, Option<&'static MeshMaterial3d<StandardMaterial>>, Option<&'static MoonPart>);
 
 /// Swap waiting parts to their rock material when the surface is ready.
 #[allow(clippy::too_many_arguments)]
@@ -179,10 +240,12 @@ fn apply(
     effects: Option<Res<ProfileEffects>>,
 ) {
     let stock = nimbus_drawn(profile.as_deref(), effects.as_deref());
-    for (e, part, old) in &parts {
-        if stock && !part.moon {
-            continue;
-        }
+    if stock {
+        return;
+    }
+    for (e, part, old, moon) in &parts {
+        // A moon's rock was waiting under the stock hull look: its own material is the way back.
+        let old = old.map(|o| o.0.clone()).or(moon.map(|m| m.source.clone()));
         let Some(b) = surfaces.request(&vfs.0, &part.recipe, crate::render::surfaces::ROCK_FACE) else { continue };
         let key = material_key(part);
         if let Some(m) = shared.0.get(&key) {
@@ -218,16 +281,18 @@ fn apply(
 #[derive(Component)]
 struct StockMaterial(Handle<StandardMaterial>);
 
-fn to_rock(commands: &mut Commands, e: Entity, old: Option<&MeshMaterial3d<StandardMaterial>>, rock: Handle<RockMaterial>) {
+fn to_rock(commands: &mut Commands, e: Entity, old: Option<Handle<StandardMaterial>>, rock: Handle<RockMaterial>) {
     let mut c = commands.entity(e);
-    c.insert((RockMat, MeshMaterial3d(rock))).remove::<MeshMaterial3d<StandardMaterial>>();
+    // A moon's rock may already wear the hull look (it is drawn with it until its surface is baked).
+    c.insert((RockMat, MeshMaterial3d(rock)))
+        .remove::<(MeshMaterial3d<StandardMaterial>, MeshMaterial3d<crate::render::hulls::HullMaterial>, crate::render::hulls::HullSource)>();
     if let Some(old) = old {
-        c.insert(StockMaterial(old.0.clone()));
+        c.insert(StockMaterial(old));
     }
 }
 
 /// After a switch to the Stock look, rocks that took the recipe surface under Refit's get their own material
-/// back; the moons keep theirs (their lit cracks stand in for the glow shell under both looks).
+/// back, the moons' rocks included (the hull look then lights them from their SOD material).
 fn revert_to_stock(
     mut commands: Commands,
     profile: Option<Res<RenderProfile>>,
@@ -237,10 +302,8 @@ fn revert_to_stock(
     if !nimbus_drawn(profile.as_deref(), effects.as_deref()) {
         return;
     }
-    for (e, part, stock) in &parts {
-        if !part.moon {
-            commands.entity(e).insert(MeshMaterial3d(stock.0.clone())).remove::<(RockMat, MeshMaterial3d<RockMaterial>)>();
-        }
+    for (e, _part, stock) in &parts {
+        commands.entity(e).insert(MeshMaterial3d(stock.0.clone())).remove::<(RockMat, MeshMaterial3d<RockMaterial>, StockMaterial)>();
     }
 }
 
@@ -331,12 +394,11 @@ mod tests {
         assert!(is_moon_nimbus("oreglow") && is_moon_nimbus("OreGlow") && !is_moon_nimbus("dmooninf"));
     }
 
-    /// The cause of the moons' missing glow under the Stock look: surface bakes were only uploaded while
-    /// the Refit planets drew, so a moon's recipe surface (the lit cracks) never arrived and the cut-out rock
-    /// showed the dark shell. Under Stock a moon takes it; an asteroid (same recipe system) keeps its stock
-    /// material, as the Stock look never changes how asteroids look.
+    /// The Stock look never gives a rock the recipe surface, a dilithium moon's included: the moon is drawn
+    /// with the model's own materials (the stock hull look), as the original draws it. Before this the moon
+    /// kept Refit's lit-cracks surface and dark shell under Stock.
     #[test]
-    fn stock_look_gives_moons_their_surface_and_leaves_asteroids_alone() {
+    fn stock_look_gives_no_rock_the_recipe_surface() {
         use crate::render::surfaces::Surfaces;
         let mut app = App::new();
         let mut effects = ProfileEffects::default();
@@ -354,24 +416,31 @@ mod tests {
         let part = |moon| RockPart { recipe: "mdmoon".into(), centre: Vec3::ZERO, inv_extent: Vec3::ONE, moon };
         let moon = app.world_mut().spawn(part(true)).id();
         let asteroid = app.world_mut().spawn(part(false)).id();
+        for _ in 0..60 {
+            app.update();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(app.world().get::<RockMat>(moon).is_none(), "a moon took Refit's surface under Stock");
+        assert!(app.world().get::<RockMat>(asteroid).is_none());
+        // Refit's look: both take it.
+        app.insert_resource(RenderProfile::Refit);
         let mut ready = false;
         for _ in 0..600 {
             app.update();
-            if app.world().get::<RockMat>(moon).is_some() {
+            if app.world().get::<RockMat>(moon).is_some() && app.world().get::<RockMat>(asteroid).is_some() {
                 ready = true;
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        assert!(ready, "the moon's recipe surface was never uploaded under the Stock look");
-        assert!(app.world().get::<RockMat>(asteroid).is_none(), "an asteroid kept its stock material under Stock");
+        assert!(ready, "the recipe surface was never uploaded under the Refit look");
     }
 
-    /// A run-time look switch Stock -> Refit -> Stock: an asteroid takes the recipe surface under Refit and gets
-    /// its own material back under Stock; a moon keeps its surface throughout. (Before this the rock kept the
-    /// recipe surface after the switch back, on main too.)
+    /// A run-time look switch Stock -> Refit -> Stock: rocks take the recipe surface under Refit and get their
+    /// own material back under Stock, the moon's rock too (it may have been waiting under the hull look, with no
+    /// `StandardMaterial` on the part, and then gets it back from its `MoonPart`).
     #[test]
-    fn a_look_round_trip_gives_asteroids_their_material_back_and_moons_keep_theirs() {
+    fn a_look_round_trip_gives_every_rock_its_material_back() {
         use crate::render::surfaces::Surfaces;
         let mut app = App::new();
         let mut effects = ProfileEffects::default();
@@ -387,9 +456,10 @@ mod tests {
             .init_resource::<Assets<crate::render::planet::PlanetMaterial>>()
             .add_systems(Update, (crate::render::planet::add_surface_systems(), apply, revert_to_stock).chain());
         let own = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial::default());
-        let part = |moon| (RockPart { recipe: "mdmoon".into(), centre: Vec3::ZERO, inv_extent: Vec3::ONE, moon }, MeshMaterial3d(own.clone()));
-        let moon = app.world_mut().spawn(part(true)).id();
-        let asteroid = app.world_mut().spawn(part(false)).id();
+        let part = |moon| RockPart { recipe: "mdmoon".into(), centre: Vec3::ZERO, inv_extent: Vec3::ONE, moon };
+        let asteroid = app.world_mut().spawn((part(false), MeshMaterial3d(own.clone()))).id();
+        // The moon's rock under the hull look: no standard material on the part, the source on its `MoonPart`.
+        let moon = app.world_mut().spawn((part(true), MoonPart { source: own.clone(), kind: MoonKind::Rock })).id();
         let run_until = |app: &mut App, done: &dyn Fn(&App) -> bool| {
             for _ in 0..600 {
                 app.update();
@@ -400,20 +470,46 @@ mod tests {
             }
             panic!("the surface never arrived");
         };
-        // Stock: the moon has its surface, the asteroid its own material.
-        run_until(&mut app, &|a| a.world().get::<RockMat>(moon).is_some());
-        assert!(app.world().get::<RockMat>(asteroid).is_none());
-        // Refit: the asteroid takes the recipe surface too.
+        app.update();
+        assert!(app.world().get::<RockMat>(asteroid).is_none() && app.world().get::<RockMat>(moon).is_none());
         app.insert_resource(RenderProfile::Refit);
-        run_until(&mut app, &|a| a.world().get::<RockMat>(asteroid).is_some());
+        run_until(&mut app, &|a| a.world().get::<RockMat>(asteroid).is_some() && a.world().get::<RockMat>(moon).is_some());
         assert!(app.world().get::<MeshMaterial3d<StandardMaterial>>(asteroid).is_none());
-        // Back to Stock: the asteroid is as it was, the moon keeps its surface.
         app.insert_resource(RenderProfile::Stock);
         app.update();
-        assert!(app.world().get::<RockMat>(asteroid).is_none());
-        assert_eq!(app.world().get::<MeshMaterial3d<StandardMaterial>>(asteroid).map(|m| m.0.id()), Some(own.id()));
-        assert!(app.world().get::<MeshMaterial3d<RockMaterial>>(asteroid).is_none());
-        assert!(app.world().get::<RockMat>(moon).is_some() && app.world().get::<MeshMaterial3d<RockMaterial>>(moon).is_some());
+        for e in [asteroid, moon] {
+            assert!(app.world().get::<RockMat>(e).is_none());
+            assert_eq!(app.world().get::<MeshMaterial3d<StandardMaterial>>(e).map(|m| m.0.id()), Some(own.id()));
+            assert!(app.world().get::<MeshMaterial3d<RockMaterial>>(e).is_none());
+        }
+    }
+
+    /// The moon's glow shell: its own material under Stock (lit from the SOD's lighting material by the hull look),
+    /// Refit's dark opaque one under Refit, and back.
+    #[test]
+    fn the_shell_is_dark_under_refit_only() {
+        let mut app = App::new();
+        let mut effects = ProfileEffects::default();
+        effects.register_stock(Effect::Scenery);
+        app.insert_resource(effects).insert_resource(RenderProfile::Stock).init_resource::<Assets<StandardMaterial>>().add_systems(Update, moon_shell_look);
+        let own = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial { base_color: Color::srgb(0.0, 0.5, 1.0), ..default() });
+        let shell = app.world_mut().spawn((MoonPart { source: own.clone(), kind: MoonKind::Shell }, MeshMaterial3d(own.clone()))).id();
+        let rock = app.world_mut().spawn((MoonPart { source: own.clone(), kind: MoonKind::Rock }, MeshMaterial3d(own.clone()))).id();
+        let material = |app: &App, e: Entity| app.world().get::<MeshMaterial3d<StandardMaterial>>(e).unwrap().0.id();
+        app.update();
+        assert_eq!(material(&app, shell), own.id(), "Stock keeps the model's material");
+        app.insert_resource(RenderProfile::Refit);
+        app.update();
+        let dark = material(&app, shell);
+        assert_ne!(dark, own.id());
+        assert!(app.world().get::<MoonDark>(shell).is_some());
+        let m = app.world().resource::<Assets<StandardMaterial>>().get(dark).unwrap();
+        assert!(m.unlit && m.base_color == Color::BLACK);
+        assert_eq!(material(&app, rock), own.id(), "only the shell is replaced here");
+        app.insert_resource(RenderProfile::Stock);
+        app.update();
+        assert_eq!(material(&app, shell), own.id());
+        assert!(app.world().get::<MoonDark>(shell).is_none());
     }
 
     #[test]

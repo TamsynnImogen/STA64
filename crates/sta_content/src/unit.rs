@@ -389,6 +389,7 @@ fn stats(odf: &Odf, file: &str, warnings: &mut Vec<Warning>) -> crate::def::Unit
         distance_below_grid: signed(&mut r, "distanceBelowGrid"),
         shield_pad: signed(&mut r, "shieldPad"),
         max_extra_weapons: whole(&mut r, "maxExtraWeapons"),
+        can_attack: r.flag("canAttack"),
         can_attack_planets: r.flag("canAttackPlanets"),
         can_only_attack_planets: r.flag("canOnlyAttackPlanets"),
         recycles_in_place: r.flag("recyclesInPlace"),
@@ -469,7 +470,7 @@ mod tests {
              enginesTargetHardpoints = \"e1\" \"e2\"\nsensorsTargetHardpoints = \"s1\"\nweaponsSparkTime = 1.5\n\
              shipType = \"F\"\nisHero = 1\nselfDestruct = \"GSelfD\"\nmissileDetonator = \"gdeton\"\ndefaultGreenAlert = 0\n\
              alwaysUseSpecialWeapons = 1\ndamagedScan = 250\navoidanceClass = 3\ncollisionRadius = 12.5\ndistanceBelowGrid = 50\nshieldPad = -2\n\
-             maxExtraWeapons = 2\ncanAttackPlanets = 1\ncanOnlyAttackPlanets = 0\nrecyclesInPlace = 1\n\
+             maxExtraWeapons = 2\ncanAttack = 0\ncanAttackPlanets = 1\ncanOnlyAttackPlanets = 0\nrecyclesInPlace = 1\n\
              shipIsBuiltByEvolution = 1\nshipIsBuiltByShips = 0\nhealthRate = 0.2\npercentNebulaWarn = 0.5\n\
              dockingSpeedFactor = 0.25\ndecommissionValue = 40\naiName = \"Fed_Destroyer\"\n",
         );
@@ -488,6 +489,7 @@ mod tests {
         assert_eq!((s.damaged_scan, s.avoidance_class, s.max_extra_weapons), (Some(Fixed::from_int(250)), Some(3), Some(2)));
         assert_eq!((s.collision_radius, s.shield_pad), (Some(Fixed::from_f64(12.5)), Some(Fixed::from_int(-2))));
         assert_eq!(s.distance_below_grid, Some(Fixed::from_int(50)));
+        assert_eq!(s.can_attack, Some(false));
         assert_eq!((s.can_attack_planets, s.can_only_attack_planets, s.recycles_in_place), (Some(true), Some(false), Some(true)));
         assert_eq!((s.built_by_evolution, s.built_by_ships), (Some(true), Some(false)));
         assert_eq!((s.health_rate, s.percent_nebula_warn), (Some(Fixed::from_f64(0.2f32 as f64)), Some(Fixed::from_f64(0.5))));

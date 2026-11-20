@@ -82,12 +82,14 @@ pub fn facing(heading: (Fixed, Fixed), at: Vec3, from: Vec3) -> u8 {
 
 /// Does this weapon attack units? Not point defence or a special, and not a
 /// tool: a mining beam or a tractor beam (ordnance classes `minebm`,
-/// `tractor_bm`). Measured on stock A2 and Roots + STA2 Classic: a
+/// `tractor_bm`), nor a colonising weapon (ordnance class `colonizerpod`, the
+/// definition's `colonize`), which only the colonise order uses (stated by a
+/// player: interim). Measured on stock A2 and Roots + STA2 Classic: a
 /// freighter and a construction ship neither vote nor take part in an attack
 /// order (the engine's own "can attack" test was not read).
 pub fn attacks_units(w: &sta_content::WeaponDef) -> bool {
     let tool = matches!(w.class.0.as_str(), "minebm" | "tractor_bm");
-    w.kind != WeaponKind::PointDefence && !crate::specials::is_special(w) && !tool
+    w.kind != WeaponKind::PointDefence && !crate::specials::is_special(w) && !tool && w.colonize.is_none()
 }
 
 /// Does `id` take an `Attack` order on `target` from `player` (any unit, for
@@ -97,11 +99,23 @@ pub(crate) fn takes_attack(db: &ContentDb, units: &Entities, player: PlayerId, i
     id != target
         && units
             .get(id)
-            .is_some_and(|u| (!player.is_player() || u.owner == player) && db.unit(u.def).is_some_and(|d| can_attack(db, d)))
+            .is_some_and(|u| {
+                !u.is_unfinished()
+                    && (!player.is_player() || u.owner == player)
+                    && db.unit(u.def).is_some_and(|d| armed(db, d) && (!player.is_player() || crate::movement::approach::class_may_attack(d)))
+            })
 }
 
-/// Armed for an attack order: a hardpoint whose weapon [`attacks_units`].
+/// Can a player order this craft to attack (HUD, right-click, hotkey)? Armed
+/// ([`armed`]) and not a class with `canAttack = 0`. Refusing the explicit order
+/// is stated by a player (interim); the class key does not refuse it (read from
+/// the executable, static).
 pub fn can_attack(db: &ContentDb, def: &sta_content::UnitDef) -> bool {
+    armed(db, def) && crate::movement::approach::class_may_attack(def)
+}
+
+/// A hardpoint whose weapon [`attacks_units`].
+pub fn armed(db: &ContentDb, def: &sta_content::UnitDef) -> bool {
     def.hardpoints.iter().any(|hp| db.weapon(hp.weapon.key).is_some_and(attacks_units))
 }
 
@@ -435,6 +449,12 @@ impl Weapons {
             if def.hardpoints.is_empty() || def.class.0 == "u_ball_obj" {
                 continue;
             }
+            // A station under construction fires nothing and has no mounts yet; they are
+            // made, with their initial reload, on the first tick it is complete
+            // (stated by a player: stock stations shoot only once completed).
+            if u.is_unfinished() {
+                continue;
+            }
             // SIM-35: a weapon is created with an initial reload, also when
             // its unit starts with weapons off. A unit's mounts are made the
             // first tick it is seen, the creation tick for all practical
@@ -452,7 +472,11 @@ impl Weapons {
                 let Some(w) = db.weapon(hp.weapon.key) else {
                     continue;
                 };
-                if w.kind == WeaponKind::PointDefence || crate::specials::is_special(w) || w.resource.is_some() {
+                // A tool (tractor, mining or repair beam) does no regular fire (stated by a
+                // player; measured earlier for orders). A weapon definition may carry
+                // `special` and still attack; STA64 does not model special-weapon
+                // autonomy, so the tool class stands in (interim).
+                if !attacks_units(w) || w.resource.is_some() {
                     continue;
                 }
                 if tick < START_HOLD_TICKS && db.weapon_features(w).start_fire_hold {
@@ -552,7 +576,7 @@ impl Weapons {
     ) -> bool {
         let mut any = false;
         for &id in ids {
-            let Some(u) = units.get(id).filter(|u| (!player.is_player() || u.owner == player) && u.hull[0] > Fixed::ZERO) else {
+            let Some(u) = units.get(id).filter(|u| (!player.is_player() || u.owner == player) && u.hull[0] > Fixed::ZERO && !u.is_unfinished()) else {
                 continue;
             };
             let Some(def) = db.unit(u.def) else { continue };

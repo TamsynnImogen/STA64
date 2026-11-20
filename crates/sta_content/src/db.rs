@@ -727,6 +727,10 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     {
         c.fixed("distance_below_grid", tag);
     }
+    // `canAttack = 0` keeps a class from taking up a fight by itself (read by `sta_sim::movement::approach`); only when set to 0.
+    if u.stats.can_attack == Some(false) {
+        c.raw("can_attack", "0");
+    }
     // SIM-73: the shooter's planet keys, only under the target-mask switch and only when set.
     if db.unit_features(u).weapon_target_masks && (u.stats.can_attack_planets.is_some() || u.stats.can_only_attack_planets.is_some()) {
         let flag = |b: Option<bool>| b.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string());
@@ -837,6 +841,10 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
         && let Some(l) = &w.base.damage_variance
     {
         c.raw("variance_rows", &table(l));
+    }
+    // The weapon's `special` key (read by `sta_sim::movement::approach`); only when set to 1.
+    if w.base.special == Some(true) {
+        c.raw("special", "1");
     }
     if features.weapon_cloak_fire && w.base.cloak_enable == Some(true) {
         c.raw("cloak_enable", "1");

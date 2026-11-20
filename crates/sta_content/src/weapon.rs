@@ -144,6 +144,7 @@ fn weapon_base(r: &mut Reader) -> WeaponBaseDef {
         switch_to_attack: r.flag("switchToAttack"),
         cloak_enable: r.flag("cloakEnable"),
         warp_enable: r.flag("warpEnable"),
+        special: r.flag("special"),
         crew_affects_weapon_delay: r.flag("crewAffectsWeaponDelay"),
         ignore_valid_as_target: r.flag("ignoreValidAsTarget"),
         regular_weapon_delay: signed(r, "regularWeaponDelay"),
@@ -314,7 +315,7 @@ mod tests {
              targetEnemyCraft = 1\ntargetEnemyBuildings = 0\ntargetAlliedCraft = 0\ntargetAlliedBuildings = 1\n\
              targetEnemyPlanets = 1\ntargetEnemyPlanetsOnly = 0\ntargetLocation = 1\nAItargetLocation = 0\n\
              needTarget = 1\nbeneficial = 0\nswitchToAttack = 1\ncloakEnable = 1\nwarpEnable = 0\n\
-             crewAffectsWeaponDelay = 0\nignoreValidAsTarget = 1\nregularWeaponDelay = 1.5\n",
+             crewAffectsWeaponDelay = 0\nignoreValidAsTarget = 1\nregularWeaponDelay = 1.5\nspecial = 1\n",
         );
         let b = &w.base;
         let hit = b.hit_chance.as_ref().unwrap();
@@ -329,6 +330,7 @@ mod tests {
         assert_eq!((b.need_target, b.beneficial, b.switch_to_attack, b.cloak_enable, b.warp_enable), (Some(true), Some(false), Some(true), Some(true), Some(false)));
         assert_eq!((b.crew_affects_weapon_delay, b.ignore_valid_as_target), (Some(false), Some(true)));
         assert_eq!(b.regular_weapon_delay, Some(Fixed::from_f64(1.5)));
+        assert_eq!(b.special, Some(true));
     }
 
     #[test]

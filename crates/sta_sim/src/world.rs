@@ -277,6 +277,12 @@ impl Entity {
         }
     }
 
+    /// A station still being welded (`progress` below one). Such a unit has no working
+    /// systems yet: it does not fire (stated by a player).
+    pub fn is_unfinished(&self) -> bool {
+        self.progress.is_some_and(|p| p < Fixed::ONE)
+    }
+
     /// Feed every field into the digest, in declaration order.
     pub(crate) fn hash_into(&self, h: &mut Fnv) {
         h.u64(self.id.0 as u64);
