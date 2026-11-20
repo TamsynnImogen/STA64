@@ -493,7 +493,10 @@ mod tests {
         let middle = spawn(&mut sim, 0);
         let newest = spawn(&mut sim, 0);
         let other_player = spawn(&mut sim, 1);
-        let view = sim.view();
+        let mut view = sim.view();
+        for unit in &mut view.units {
+            unit.hull = [Fixed::ONE; 2];
+        }
         let mut selection = Selection(vec![old]);
         let chain = [
             SimEvent::Replaced { old, new: middle, select: true },
