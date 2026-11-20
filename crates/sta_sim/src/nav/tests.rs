@@ -374,7 +374,9 @@ fn the_route_digest_is_pinned() {
     assert_eq!(sim.digest(), ROUTE_DIGEST, "got {:#x}", sim.digest());
 }
 
-const ROUTE_DIGEST: u64 = 0x1d78_4211_fb3e_13cb;
+/// SIM-75 moved it: the nebula has no `craft_speed_coefficient`, so the ship
+/// flies at half speed once inside it.
+const ROUTE_DIGEST: u64 = 0x31e5_f4ab_a01d_c800;
 
 #[test]
 fn a_group_crossing_a_nebula_keeps_out_of_it() {
