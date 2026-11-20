@@ -273,7 +273,27 @@ pub(in crate::ui::hud) struct Placed<'a> {
 /// items a text tree does not offer, `BuildItem::slot`); with no holes the placement is the
 /// plain list order. A list longer than the palette is paged, Back and Cancel stay on every page.
 pub(in crate::ui::hud) fn place_buttons<'a>(next: &'a [Button], capacity: usize, build_page: usize, holes: &[usize]) -> Placed<'a> {
-    let index = |content: &[&Button]| -> Vec<usize> { content.iter().enumerate().map(|(i, b)| i + model::holes_before(b, holes)).collect() };
+    // The cell index of each button: its place in the list plus an offset that counts the empty
+    // build cells before it. The list is sorted by command rank and position, so Cancel, Back and
+    // other buttons may sit anywhere among the build buttons. Invariant: the offset only changes
+    // at a build button (to the number of empty cells below its build cell) and never goes down
+    // along the list, so the indices strictly increase and no two buttons share a cell, whatever
+    // the sort order. A button that is not a build item keeps the offset of the build button
+    // before it; empty cells after the last build item push nothing (interim: whether the
+    // original pushes Cancel and Back along is not measured).
+    let index = |content: &[&Button]| -> Vec<usize> {
+        let mut offset = 0;
+        content
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                if matches!(b.act, Act::Build { .. }) {
+                    offset = offset.max(model::holes_before(b, holes));
+                }
+                i + offset
+            })
+            .collect()
+    };
     let all: Vec<&Button> = next.iter().collect();
     let all_index = index(&all);
     let pinned: Vec<&Button> = next.iter().filter(|b| matches!(b.act, Act::Back | Act::Cancel(_))).collect();

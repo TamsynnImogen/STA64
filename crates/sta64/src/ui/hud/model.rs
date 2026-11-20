@@ -564,18 +564,13 @@ pub(super) fn build_holes_of(feed: &HudFeed) -> Vec<usize> {
     builder.map(|b| build_holes(feed, b)).unwrap_or_default()
 }
 
-/// How many empty build cells lie before a build-page button, given the empty cells (`holes`): a
-/// stock palette that packs its buttons adds this to the button's place in the list. A build
-/// button is found by its cell in the full-capacity grid; cancel and back sit after the cells
-/// before their own.
+/// How many empty build cells lie below a build button's own cell, given the empty cells
+/// (`holes`): a stock palette that packs its buttons adds this to the button's place in the list.
+/// A build button is found by its cell in the full-capacity grid. Zero for any other button.
 pub(super) fn holes_before(button: &Button, holes: &[usize]) -> usize {
-    let before = match button.act {
-        Act::Build { .. } => button.cell - usize::from(button.cell > CANCEL_CELL) - usize::from(button.cell > BACK_CELL),
-        Act::Cancel(_) => CANCEL_CELL,
-        Act::Back => BACK_CELL - 1,
-        _ => return 0,
-    };
-    holes.iter().filter(|h| **h < before).count()
+    let Act::Build { .. } = button.act else { return 0 };
+    let slot = button.cell - usize::from(button.cell > CANCEL_CELL) - usize::from(button.cell > BACK_CELL);
+    holes.iter().filter(|h| **h < slot).count()
 }
 
 /// The cells of the grid for the selection.
@@ -1391,6 +1386,11 @@ mod tests {
 
     /// `db_with` with a yard that builds three things (cruiser, frigate, miner).
     fn wide_db(tree: &str) -> ContentDb {
+        wide_db_of(tree, &["fx_cruiser", "fx_frigate", "fx_miner"])
+    }
+
+    /// `db_with` with a yard that builds the given things.
+    fn wide_db_of(tree: &str, list: &[&str]) -> ContentDb {
         let fake = sta_content::fake::db();
         let mut b = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
         for w in fake.weapons() {
@@ -1399,7 +1399,7 @@ mod tests {
         for u in fake.units() {
             let mut u = u.clone();
             if u.odf == "fx_yard" {
-                u.build.list = vec![DefRef::new("fx_cruiser"), DefRef::new("fx_frigate"), DefRef::new("fx_miner")];
+                u.build.list = list.iter().map(|d| DefRef::new(*d)).collect();
             }
             b = b.unit(u);
         }
@@ -1411,7 +1411,10 @@ mod tests {
     const WIDE_HOLE: &str = "fx_yard 0\nfx_cruiser 0\nfx_miner 0\n";
 
     fn wide_feed(tree: &str) -> HudFeed {
-        let db = wide_db(tree);
+        feed_of(wide_db(tree))
+    }
+
+    fn feed_of(db: ContentDb) -> HudFeed {
         let units = vec![unit(&db, 2, "fx_yard", 1, 100.0, None)];
         feed(db, units, &[2])
     }
@@ -1476,6 +1479,118 @@ mod tests {
         assert_eq!(held.iter().map(|c| c.0).collect::<Vec<_>>(), vec![0, 2, 3, 4], "cell 1 is empty, the miner stays third");
         assert_eq!(held[0].1, all[0].1);
         assert_eq!(held[1].1, all[2].1);
+    }
+
+    /// The palette placement of the build page with the given command metadata: the list in
+    /// order with the cell index each button takes, checked for the invariants that hold for every
+    /// sort order (indices strictly increase along the list, so no two buttons share a cell).
+    fn palette_placement(f: &HudFeed, native: &crate::ui::hud::stock::commands::NativeCommands, capacity: usize, page: usize) -> (Vec<(usize, Act)>, usize) {
+        use crate::ui::hud::stock::{buttons, place_buttons};
+        let next = buttons(f, Page::Build, native);
+        let p = place_buttons(&next, capacity, page, &build_holes_of(f));
+        let mut seen = std::collections::BTreeSet::new();
+        for (i, _) in &p.shown {
+            assert!(seen.insert(*i), "two buttons share cell {i}");
+        }
+        let pos: Vec<usize> = p.shown.iter().filter(|(_, b)| !p.paged || !matches!(b.act, Act::Back | Act::Cancel(_))).map(|(i, _)| *i).collect();
+        assert!(pos.windows(2).all(|w| w[0] < w[1]), "indices strictly increase along the list: {pos:?}");
+        (p.shown.iter().map(|(i, b)| (*i, b.act.clone())).collect(), p.pages)
+    }
+
+    fn cell_of(placed: &[(usize, Act)], pick: impl Fn(&Act) -> bool) -> usize {
+        placed.iter().find(|(_, a)| pick(a)).map(|(i, _)| *i).expect("button placed")
+    }
+
+    fn is_item(odf: &'static str) -> impl Fn(&Act) -> bool {
+        move |a| matches!(a, Act::Build { odf: o, .. } if o == odf)
+    }
+
+    /// Command metadata that gives Cancel a high priority and a position, as an install's does:
+    /// Cancel then sorts before the build buttons.
+    fn native_with_cancel() -> crate::ui::hud::stock::commands::NativeCommands {
+        use crate::ui::hud::stock::commands::{NativeCommand, NativeCommands};
+        let mut native = NativeCommands::default();
+        native.commands.insert("cancelbuild".into(), NativeCommand {
+            odf: "cancelbuild.odf".into(), command: "NONE".into(), button: "b_cancel".into(),
+            preferred: Some([0, 3]), menu: None, tooltip: None, verbose: None,
+            normal: None, hovered: None, pressed: None, disabled: None, active: None,
+        });
+        native
+    }
+
+    /// Cancel carries command metadata and sorts before the build buttons: with a hole, Cancel and
+    /// a build item never share a cell, the hole is where the omitted item was, and the
+    /// unrestricted list places as the plain list order.
+    #[test]
+    fn the_palette_with_cancel_metadata_keeps_cells_apart_and_the_hole_in_place() {
+        let native = native_with_cancel();
+        let (all, _) = palette_placement(&wide_feed(WIDE_ALL), &native, 20, 0);
+        assert_eq!(all.iter().map(|c| c.0).collect::<Vec<_>>(), vec![0, 1, 2, 3, 4]);
+        assert!(matches!(all[0].1, Act::Cancel(_)), "Cancel sorts first with this metadata");
+        let (held, _) = palette_placement(&wide_feed(WIDE_HOLE), &native, 20, 0);
+        let (cancel, cruiser, miner) = (cell_of(&held, |a| matches!(a, Act::Cancel(_))), cell_of(&held, is_item("fx_cruiser")), cell_of(&held, is_item("fx_miner")));
+        assert_eq!((cancel, cruiser, miner), (0, 1, 3), "the frigate's cell 2 is empty");
+        assert_eq!(cell_of(&held, |a| *a == Act::Back), 4);
+        assert!(!held.iter().any(|(i, _)| *i == 2));
+    }
+
+    /// A hole and paging together: the pages are counted over the cells with the hole, the hole
+    /// stays on its page and the pinned Back and Cancel are on every page.
+    #[test]
+    fn a_hole_and_paging_work_together() {
+        let list = ["fx_cruiser", "fx_frigate", "fx_miner", "fx_station", "fx_yard", "fx_moon"];
+        // The frigate is left out: items on cells 0, 2, 3, 4, 5; capacity 7 leaves 3 cells a page.
+        let f = feed_of(wide_db_of("fx_yard 0\nfx_cruiser 0\nfx_miner 0\nfx_station 0\nfx_moon 0\n", &list));
+        let native = crate::ui::hud::stock::commands::NativeCommands::default();
+        let (p0, pages) = palette_placement(&f, &native, 7, 0);
+        assert_eq!(pages, 2);
+        let items = |p: &[(usize, Act)]| p.iter().filter(|(_, a)| matches!(a, Act::Build { .. })).map(|(i, _)| *i).collect::<Vec<_>>();
+        let pinned = |p: &[(usize, Act)]| p.iter().filter(|(_, a)| matches!(a, Act::Back | Act::Cancel(_))).map(|(i, _)| *i).collect::<Vec<_>>();
+        assert_eq!(items(&p0), vec![0, 2], "page one: the cruiser, the empty cell 1, the miner");
+        assert_eq!(pinned(&p0), vec![3, 4]);
+        let (p1, _) = palette_placement(&f, &native, 7, 1);
+        assert_eq!(items(&p1), vec![0, 1, 2], "page two: the next three items");
+        assert_eq!(pinned(&p1), vec![3, 4]);
+    }
+
+    /// An omitted item after the last offered one pushes nothing: Cancel and Back follow the last
+    /// offered item as if the list ended there (interim: not compared with the original).
+    #[test]
+    fn a_trailing_omitted_item_does_not_push_cancel_or_back() {
+        let native = crate::ui::hud::stock::commands::NativeCommands::default();
+        let (trailing, _) = palette_placement(&wide_feed("fx_yard 0\nfx_cruiser 0\nfx_frigate 0\n"), &native, 20, 0);
+        assert_eq!(trailing.iter().map(|c| c.0).collect::<Vec<_>>(), vec![0, 1, 2, 3]);
+        let a1 = sta_content::ButtonSlots::from_header("int BUTTON_LOCATION_CANCEL = 4;\nint BUTTON_LOCATION_BACK = 5;\n").0;
+        let b = crate::ui::hud::stock::a1::control::buttons(&wide_feed("fx_yard 0\nfx_cruiser 0\nfx_frigate 0\n"), Page::Build, &a1, None);
+        assert!(b.iter().any(|b| b.cell == 3 && matches!(b.act, Act::Cancel(_))) && b.iter().any(|b| b.cell == 4 && b.act == Act::Back));
+    }
+
+    /// Install-gated: the palette HUD's build page with the real command metadata of each install
+    /// named by `STA64_TEST_A1_INSTALL`, `STA64_TEST_A2_STOCK_INSTALL`, `STA64_TEST_ROOTS_INSTALL`
+    /// or `STA64_TEST_INSTALL` (read at run time, nothing committed). Only invariants are
+    /// asserted: no two buttons share a cell, the unrestricted list places as the plain list
+    /// order, and with a restricted tree the omitted item's cell is empty.
+    #[test]
+    fn installed_command_metadata_keeps_the_palette_cells_apart() {
+        let vars = ["STA64_TEST_A1_INSTALL", "STA64_TEST_A2_STOCK_INSTALL", "STA64_TEST_ROOTS_INSTALL", "STA64_TEST_INSTALL"];
+        let mut ran = 0;
+        for var in vars {
+            let Some(root) = std::env::var_os(var) else { continue };
+            let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), None).unwrap();
+            let native = crate::ui::hud::stock::commands::NativeCommands::load(&vfs);
+            ran += 1;
+            let (all, _) = palette_placement(&wide_feed(WIDE_ALL), &native, 40, 0);
+            assert_eq!(all.iter().map(|c| c.0).collect::<Vec<_>>(), (0..all.len()).collect::<Vec<_>>(), "{var}: unrestricted is the plain list order");
+            let (held, _) = palette_placement(&wide_feed(WIDE_HOLE), &native, 40, 0);
+            let (cruiser, miner) = (cell_of(&held, is_item("fx_cruiser")), cell_of(&held, is_item("fx_miner")));
+            let between = held.iter().filter(|(i, _)| *i > cruiser && *i < miner).count();
+            // The omitted frigate's cell lies between them and holds nothing.
+            assert_eq!(miner - cruiser - 1, between + 1, "{var}: exactly one empty cell between the cruiser and the miner");
+            assert_eq!(held.len(), all.len() - 1, "{var}: the omitted item is gone, nothing else");
+        }
+        if ran == 0 {
+            eprintln!("SKIP: set STA64_TEST_A1_INSTALL, STA64_TEST_A2_STOCK_INSTALL, STA64_TEST_ROOTS_INSTALL or STA64_TEST_INSTALL");
+        }
     }
 
     #[test]
