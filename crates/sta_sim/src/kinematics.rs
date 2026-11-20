@@ -719,10 +719,18 @@ mod smooth {
         apply(u, dyaw, ds);
     }
 
+    /// The rate at which a turn already under way is brought to rest. A craft whose
+    /// `turnAlphaFractionAtRest` is 0 has no turn acceleration once it stands still;
+    /// braking its leftover turn with that alone would keep it spinning forever, so it
+    /// then takes the full-speed rate. INTERIM: the original's spin-down is not measured.
+    fn spin_down_alpha(u: &Unit, lim: &Limits) -> Fixed {
+        if lim.alpha > Fixed::ZERO { lim.alpha } else { u.stats.turn_alpha * lim.omega_full }
+    }
+
     /// No target: brake to rest and stop turning.
     fn halt(u: &mut Unit, lim: &Limits, dt: Fixed) {
         let (ds, v) = vc(u.speed, Fixed::ZERO, lim.accel, dt);
-        let (dyaw, w) = vc(u.omega, Fixed::ZERO, lim.alpha, dt);
+        let (dyaw, w) = vc(u.omega, Fixed::ZERO, spin_down_alpha(u, lim), dt);
         u.speed = v.max(Fixed::ZERO);
         u.omega = w;
         apply(u, dyaw, ds);
@@ -820,7 +828,7 @@ mod smooth {
 
         // Turn toward the chase point, damped near the heading; or not at all.
         let (dyaw, w) = if close {
-            vc(u.omega, Fixed::ZERO, lim.alpha, dt)
+            vc(u.omega, Fixed::ZERO, spin_down_alpha(u, &lim), dt)
         } else {
             let err = atan2(cross, dot);
             let band = st.turn_control_angle * pi() / Fixed::from_int(180);
