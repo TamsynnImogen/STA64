@@ -2384,8 +2384,9 @@ mod tests {
         assert_eq!(peek_header(&bytes), Ok((1, bytes.len() - HEADER_LEN)));
         // A version notice from another build reads as its version.
         let mut notice = version_notice();
-        notice[4..6].copy_from_slice(&16u16.to_le_bytes());
-        assert_eq!(decode(&notice), Err(ProtoError::Version { found: 16 }));
+        let previous = PROTOCOL_VERSION - 1;
+        notice[4..6].copy_from_slice(&previous.to_le_bytes());
+        assert_eq!(decode(&notice), Err(ProtoError::Version { found: previous }));
         // Our own version with no body is not a message.
         assert_eq!(decode(&version_notice()), Err(ProtoError::Empty));
         bytes[0] = b'X';

@@ -767,7 +767,7 @@ fn cell(app: &mut App, act: Act) -> Entity {
         .query::<(Entity, &GridCell)>()
         .iter(app.world())
         .find(|(_, c)| c.0 == act)
-        .unwrap()
+        .unwrap_or_else(|| panic!("grid is missing {act:?}"))
         .0
 }
 
@@ -1554,6 +1554,7 @@ fn native_tara_requirements_gate_the_menu_and_dispatched_units() {
     app.update();
     let orders = cell(&mut app, Act::OpenNativeMenu(1));
     click(app.world_mut(), orders);
+    app.update();
     app.update();
     let search = cell(&mut app, Act::NativeOrder("sandd".into()));
     let tooltip = app.world().get::<Tooltip>(search).unwrap();
