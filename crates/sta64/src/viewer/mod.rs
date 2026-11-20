@@ -224,6 +224,7 @@ impl Plugin for ViewerPlugin {
                     model_scene::animate,
                     crate::render::anim::play_idle,
                     crate::render::anim::play_events,
+                    sprites::share_materials,
                     sprites::animate,
                     sprites::face_camera,
                     crate::render::particles::simulate,

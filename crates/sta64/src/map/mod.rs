@@ -528,6 +528,7 @@ impl Plugin for MapPlugin {
                     hud_toggle,
                     fps,
                     model_scene::animate,
+                    crate::render::sprites::share_materials,
                     crate::render::sprites::animate,
                     crate::render::sprites::face_camera,
                     crate::render::particles::simulate,
