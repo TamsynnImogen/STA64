@@ -119,7 +119,7 @@ fn slot_status(status: Option<&crate::ui::hud::status::StatusFeed>, id: EntityId
 
 fn health_label(health: Fixed) -> String {
     let percent = (health.to_f32().clamp(0.0, 1.0) * 100.0).round() as u32;
-    format!("{percent}%")
+    percent.to_string()
 }
 
 fn system_readout_rect(layout: &StockLayout, origin: Vec2, builder: bool, slot: usize, icon: Option<R>) -> Option<R> {
@@ -1502,8 +1502,9 @@ mod tests {
         assert_eq!(slot_tint(None, EntityId(5), 0), Color::srgb(0.2, 0.2, 0.2));
         assert_eq!(slot_tint(None, EntityId(5), 2), Color::srgb(0.0, 1.0, 0.0));
         assert_eq!(slot_tint(None, EntityId(9), 3), Color::srgb(0.0, 1.0, 0.0), "an unlisted unit is whole");
-        assert_eq!(health_label(slot_status(Some(&feed), EntityId(5), 1).0), "50%");
-        assert_eq!(health_label(slot_status(Some(&feed), EntityId(5), 4).0), "0%");
+        assert_eq!(health_label(slot_status(Some(&feed), EntityId(5), 1).0), "50");
+        assert_eq!(health_label(slot_status(Some(&feed), EntityId(5), 4).0), "0");
+        assert_eq!(health_label(slot_status(Some(&feed), EntityId(9), 0).0), "100");
         // With the palette (as Roots' STL mod sets it).
         let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
         let c = |r, g, b| Colour { r, g, b, a: 1.0 };

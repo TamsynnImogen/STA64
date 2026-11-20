@@ -194,18 +194,7 @@ fn buttons(feed: &HudFeed, page: Page, native: &NativeCommands) -> Vec<Button> {
             }
         }
     });
-    if let Page::Native(_) = page {
-        buttons.push(Button {
-            cell: usize::MAX,
-            label: "BACK".into(),
-            act: Act::Back,
-            look: Look::Ready,
-            tip: "Back".into(),
-            verbose: None,
-            sprite_names: vec!["b_back".into()],
-            keep_label: false,
-        });
-    } else {
+    if !matches!(page, Page::Native(_)) {
         for id in groups {
             if let Some(name) = native.menu_name(id) {
                 buttons.push(menu_button(id, name));
@@ -238,6 +227,19 @@ fn buttons(feed: &HudFeed, page: Page, native: &NativeCommands) -> Vec<Button> {
             .map_or((usize::MAX, b.cell), |[x, y]| (y, x));
         (rank, position)
     });
+    // Back is navigation, so it follows every command in a native submenu.
+    if matches!(page, Page::Native(_)) {
+        buttons.push(Button {
+            cell: usize::MAX,
+            label: "BACK".into(),
+            act: Act::Back,
+            look: Look::Ready,
+            tip: "Back".into(),
+            verbose: None,
+            sprite_names: vec!["b_back".into()],
+            keep_label: false,
+        });
+    }
     buttons
 }
 
