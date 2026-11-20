@@ -572,8 +572,10 @@ mod tests {
             (x % 10_000) as f32 / 10_000.0
         };
         let crowd: Vec<(Vec3, f32)> = (0..150).map(|_| (Vec3::new(next() * 6000.0, next() * 100.0, next() * 6000.0), 60.0 + next() * 600.0)).collect();
-        for eye in [Vec3::new(3000.0, 1200.0, -500.0), Vec3::new(1500.0, 40.0, 2500.0)] {
-            assert_eq!(occlusion(eye, &crowd), occlusion_reference(eye, &crowd));
+        // Eyes outside, inside some discs, and exactly at a nebula's centre (distance clamped to 1e-3).
+        for eye in [Vec3::new(3000.0, 1200.0, -500.0), Vec3::new(1500.0, 40.0, 2500.0), crowd[7].0, crowd[100].0] {
+            let (new, old) = (occlusion(eye, &crowd), occlusion_reference(eye, &crowd));
+            assert_eq!(new.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), old.iter().map(|v| v.to_bits()).collect::<Vec<_>>());
         }
     }
 

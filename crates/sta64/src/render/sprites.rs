@@ -148,3 +148,8 @@ pub fn face_camera(
         tf.rotation = parent_rot.inverse() * cam_rot;
     }
 }
+
+#[cfg(test)]
+mod tests;
+#[cfg(test)]
+mod gpu_tests;
