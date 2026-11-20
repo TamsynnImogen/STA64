@@ -582,9 +582,16 @@ fn draw_tip(
     tips: Query<&Tooltip>,
     unit: Option<Res<UnitTip>>,
     strings: Option<Res<crate::ui::i18n::Strings>>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
     mut boxed: Single<&mut Node, With<TipBox>>,
     mut words: Single<&mut SpriteText, With<TipText>>,
 ) {
+    // No tooltip of any kind over a cutscene (stated by a player): neither an interface element's
+    // nor the unit under the pointer. Hover tracking goes on; it shows again when the cutscene ends.
+    if crate::ui::presentation::cutscene_running(cine) {
+        boxed.display = Display::None;
+        return;
+    }
     let shown = hover.target.and_then(|e| tips.get(e).ok()).and_then(|t| t.text_at(hover.rest));
     let shown = shown.map(|text| strings.as_ref().map_or(text, |s| s.tooltip_text(text)))
         .filter(|text| !text.is_empty())
@@ -968,6 +975,39 @@ mod tests {
         app.world_mut().resource_mut::<UnitTip>().0 = None;
         app.update();
         assert_eq!(shown(&mut app).0, Display::None);
+    }
+
+    /// No tooltip while a cutscene runs, neither a HUD element's nor a hovered unit's; both return after it.
+    #[test]
+    fn no_tooltip_is_shown_during_a_cutscene() {
+        let mut app = rig();
+        app.init_resource::<crate::ui::presentation::CineractiveState>();
+        app.update();
+        let display = |app: &mut App| app.world_mut().query_filtered::<&Node, With<TipBox>>().single(app.world()).unwrap().display;
+        let e = app.world_mut().spawn(Tooltip::new("Metal")).id();
+        *app.world_mut().resource_mut::<TipHover>() = TipHover { target: Some(e), rest: 5.0 };
+        app.world_mut().resource_mut::<UnitTip>().0 = Some("USS Test".into());
+        app.update();
+        assert_eq!(display(&mut app), Display::Flex, "shown without a cutscene");
+        app.world_mut().resource_mut::<crate::ui::presentation::CineractiveState>().on = true;
+        for _ in 0..3 {
+            app.update();
+            assert_eq!(display(&mut app), Display::None, "the HUD element's tooltip");
+        }
+        *app.world_mut().resource_mut::<TipHover>() = TipHover::default();
+        app.update();
+        assert_eq!(display(&mut app), Display::None, "the hovered unit's tooltip");
+        app.world_mut().resource_mut::<crate::ui::presentation::CineractiveState>().on = false;
+        app.update();
+        assert_eq!(display(&mut app), Display::Flex, "the unit's tooltip returns");
+        *app.world_mut().resource_mut::<TipHover>() = TipHover { target: Some(e), rest: 5.0 };
+        app.world_mut().resource_mut::<crate::ui::presentation::CineractiveState>().on = true;
+        app.update();
+        assert_eq!(display(&mut app), Display::None);
+        app.world_mut().resource_mut::<crate::ui::presentation::CineractiveState>().on = false;
+        app.update();
+        let words = app.world_mut().query_filtered::<&SpriteText, With<TipText>>().single(app.world()).unwrap().text.clone();
+        assert_eq!(words, "Metal", "the element's tooltip returns");
     }
 
     #[test]

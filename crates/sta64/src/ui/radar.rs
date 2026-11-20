@@ -757,7 +757,8 @@ impl Plugin for RadarPlugin {
                     rebuild_on_theme_change,
                     spawn_radar,
                     feed_from_link.run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<super::hud::ExternalFeed>)),
-                    drag,
+                    // Not over a cutscene: the hidden square keeps its last cursor position.
+                    drag.run_if(not(crate::ui::presentation::cutscene_running)),
                     refresh,
                     paint_filters,
                 ).chain().in_set(GameSet::Ui).in_set(RadarUi).after(ProfileSync),
@@ -818,6 +819,31 @@ mod tests {
     use sta_sim::command::{Command, CommandKind, Order};
     use sta_sim::fake::ViewLog;
     use sta_sim::{Vec3 as SimVec3, WorldSource};
+
+    /// A drag begun on the square moves the camera; while a cutscene runs it sends nothing
+    /// (the hidden square keeps its last cursor position), and it works again after.
+    #[test]
+    fn the_minimap_drag_sends_no_click_during_a_cutscene() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<RadarClick>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .insert_resource(RadarState { map: Some(RadarMap { min: Vec2::ZERO, size: 100.0 }), ..default() })
+            .init_resource::<crate::ui::presentation::CineractiveState>()
+            .add_systems(Update, drag.run_if(not(crate::ui::presentation::cutscene_running)));
+        app.world_mut().spawn((RadarSquare, RelativeCursorPosition { cursor_over: true, normalized: Some(Vec2::ZERO), ..default() }));
+        let sent = |app: &mut App| app.world_mut().resource_mut::<Messages<RadarClick>>().drain().count();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.update();
+        assert_eq!(sent(&mut app), 1, "the drag sends clicks without a cutscene");
+        app.world_mut().resource_mut::<crate::ui::presentation::CineractiveState>().on = true;
+        app.update();
+        app.update();
+        assert_eq!(sent(&mut app), 0, "no click during a cutscene");
+        app.world_mut().resource_mut::<crate::ui::presentation::CineractiveState>().on = false;
+        app.update();
+        assert_eq!(sent(&mut app), 1, "it sends again after");
+    }
 
     const SCENE: &str = include_str!("../../tests/fixtures/radar.ini");
     const ME: PlayerId = PlayerId(1);
