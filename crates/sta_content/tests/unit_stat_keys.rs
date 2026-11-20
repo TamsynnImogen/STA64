@@ -53,7 +53,7 @@ fn every_new_key_is_counted_as_read_by_the_coverage_list() {
         "weaponsTargetHardpoints", "shieldGeneratorTargetHardpoints", "lifeSupportTargetHardpoints", "sensorsTargetHardpoints",
         "enginesSparkTime", "weaponsSparkTime", "shieldGeneratorSparkTime", "lifeSupportSparkTime", "sensorsSparkTime", "shipType", "isHero",
         "selfDestruct", "missileDetonator", "defaultGreenAlert", "alwaysUseSpecialWeapons", "damagedScan", "avoidanceClass", "collisionRadius",
-        "shieldPad", "maxExtraWeapons", "canAttackPlanets", "canOnlyAttackPlanets", "recyclesInPlace", "shipIsBuiltByEvolution",
+        "shieldPad", "maxExtraWeapons", "canAttack", "canAttackPlanets", "canOnlyAttackPlanets", "recyclesInPlace", "shipIsBuiltByEvolution",
         "shipIsBuiltByShips", "healthRate", "percentNebulaWarn", "dockingSpeedFactor", "decommissionValue", "aiName",
     ] {
         assert!(sta_content::coverage::READ_ODF_KEYS.contains(&k.to_ascii_lowercase().as_str()), "{k}");

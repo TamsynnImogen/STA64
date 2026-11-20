@@ -269,10 +269,6 @@ fn variant_db(profile: Profile, extra: Vec<sta_content::WeaponDef>, edit: impl F
     b.unit(v).build().expect("consistent").with_rules(base.rules().clone())
 }
 
-fn raw_with(text: &str) -> Arc<sta_odf::Odf> {
-    Arc::new(sta_odf::resolve("x", &mut |_| Some(text.to_owned())).unwrap())
-}
-
 /// An idle `st_variant` (player 1) at the origin with an armed, immobile enemy
 /// 300 away that shoots at it. Whether the variant ever got an attack order,
 /// and how far it moved, within 20 s.
@@ -297,7 +293,7 @@ fn an_idle_craft_answers_fire_by_closing_in_only_when_it_may_attack() {
     // Control: an armed craft engages as before.
     assert!(answers_fire(variant_db(p, vec![], |_| {})).0);
     // The class key `canAttack = 0`: stays, though it carries a regular weapon.
-    let no_attack = |u: &mut UnitDef| u.raw = raw_with("canAttack = 0\n");
+    let no_attack = |u: &mut UnitDef| u.stats.can_attack = Some(false);
     let (engaged, moved) = answers_fire(variant_db(p, vec![], no_attack));
     assert!(!engaged && moved < Fixed::ONE, "{engaged} {moved:?}");
     // A weapon whose `special` key marks it special does not make a pursuer.
@@ -306,7 +302,7 @@ fn an_idle_craft_answers_fire_by_closing_in_only_when_it_may_attack() {
     special.damage = Fixed::ONE;
     special.refire = 60;
     special.duration = 5;
-    special.raw = raw_with("special = 1\n");
+    special.base.special = Some(true);
     let only_special = |u: &mut UnitDef| u.hardpoints[0].weapon = sta_content::DefRef::new("st_special");
     let (engaged, moved) = answers_fire(variant_db(p, vec![special], only_special));
     assert!(!engaged && moved < Fixed::ONE, "{engaged} {moved:?}");
@@ -323,7 +319,7 @@ fn an_idle_craft_answers_fire_by_closing_in_only_when_it_may_attack() {
 #[test]
 fn a_craft_that_may_not_attack_keeps_its_move_order_and_an_explicit_attack_order() {
     let p = Profile::Sta2Classic;
-    let mut sim = approach_tests::sim(variant_db(p, vec![], |u| u.raw = raw_with("canAttack = 0\n")));
+    let mut sim = approach_tests::sim(variant_db(p, vec![], |u| u.stats.can_attack = Some(false)));
     let db = Arc::clone(sim.content.as_ref().unwrap());
     let c = sim.spawn_def(db.key("st_variant").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
     let e = sim.spawn_def(db.key("st_destroy").unwrap(), PlayerId(2), v(300, 0), AHEAD).unwrap();
@@ -367,7 +363,7 @@ fn a_craft_with_only_tools_never_fires_idle_or_moving() {
 
 #[test]
 fn a_player_attack_order_is_refused_for_a_class_that_may_not_attack_scripts_keep_theirs() {
-    let mut sim = approach_tests::sim(variant_db(Profile::Sta2Classic, vec![], |u| u.raw = raw_with("canAttack = 0\n")));
+    let mut sim = approach_tests::sim(variant_db(Profile::Sta2Classic, vec![], |u| u.stats.can_attack = Some(false)));
     let db = Arc::clone(sim.content.as_ref().unwrap());
     let c = sim.spawn_def(db.key("st_variant").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
     let e = sim.spawn_def(db.key("st_destroy").unwrap(), PlayerId(2), v(0, 300), AHEAD).unwrap();

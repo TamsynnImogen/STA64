@@ -115,7 +115,7 @@ pub(crate) fn attack_range(db: &ContentDb, def: &UnitDef) -> Option<Fixed> {
 
 /// The class key `canAttack` (default 1).
 pub(crate) fn class_may_attack(def: &UnitDef) -> bool {
-    def.raw.bool("canAttack").unwrap_or(true)
+    def.stats.can_attack.unwrap_or(true)
 }
 
 /// May `def` take up a fight by itself (assist, answering an attacker)? Automatic
@@ -130,7 +130,7 @@ pub(crate) fn engages_alone(db: &ContentDb, def: &UnitDef) -> bool {
             w.kind != WeaponKind::PointDefence
                 && crate::combat::weapons::attacks_units(w)
                 && w.resource.is_none()
-                && !w.raw.bool("special").unwrap_or(false)
+                && w.base.special != Some(true)
         })
 }
 
