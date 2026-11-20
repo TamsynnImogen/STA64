@@ -223,6 +223,7 @@ pub fn sync_units(
     mut map: ResMut<SimEntities>,
     existing: Query<(Entity, &SimEntity), Without<FromView>>,
     mut live: Query<LiveUnits, With<FromView>>,
+    mut placed: Query<(Option<&mut HullShare>, Option<&mut SystemsOff>), Without<FromView>>,
     mut seen: Local<Option<SeenKey>>,
     content: Option<Res<ContentRes>>,
 ) {
@@ -305,6 +306,30 @@ pub fn sync_units(
                         commands.entity(e).insert(Cloaked);
                     } else {
                         commands.entity(e).remove::<Cloaked>();
+                    }
+                }
+            } else if let Ok((was_hull, was_off)) = placed.get_mut(e) {
+                // A ship the map view drew for its own object: its damage state follows the
+                // view too (it is the same unit), or its system and hull nodes, hull bar and
+                // smoke would never change.
+                match was_hull {
+                    Some(mut was) => {
+                        if was.0 != share {
+                            was.0 = share;
+                        }
+                    }
+                    None => {
+                        commands.entity(e).insert(HullShare(share));
+                    }
+                }
+                match was_off {
+                    Some(mut was) => {
+                        if was.0 != off {
+                            was.0 = off;
+                        }
+                    }
+                    None => {
+                        commands.entity(e).insert(SystemsOff(off));
                     }
                 }
             } else if commands.get_entity(e).is_err() {
@@ -881,6 +906,31 @@ mod view_tests {
             }
         }
         assert!(seen.iter().max().is_some_and(|&t| t >= steps.len() - 1), "the last step was reached: {seen:?}");
+    }
+
+    /// A ship the map view drew for its own object (a `SimEntity` root that `sync_units` did not
+    /// make) follows its unit's offline systems and hull like any other: a derelict scout placed by a
+    /// map showed no venting because only `sync_units`' own roots had the state.
+    #[test]
+    fn a_ship_the_map_view_drew_shows_its_offline_systems_and_hull_too() {
+        let views = vec![view_with_system(0, 100, None), view_with_system(1, 40, Some(0)), view_with_system(2, 40, None)];
+        let mut app = app_with(Box::new(Views(views, 0)), None);
+        let root = app.world_mut().spawn((SimEntity(EntityId(1)), Visibility::default())).id();
+        let engines = app.world_mut().spawn((Name::new("engines"), Visibility::Hidden, ChildOf(root))).id();
+        let damage = app.world_mut().spawn((Name::new("damage"), Visibility::Hidden, ChildOf(root))).id();
+        let mut seen = BTreeSet::new();
+        for _ in 0..20 {
+            app.update();
+            let tick = app.world().resource::<SimLink>().curr().tick;
+            seen.insert(tick);
+            assert_eq!(app.world().resource::<SimEntities>().0[&EntityId(1)], root, "the map view's root stays the unit's root");
+            let shown = |app: &App, e| *app.world().get::<Visibility>(e).unwrap() != Visibility::Hidden;
+            assert_eq!(shown(&app, engines), tick == 1, "engines node at tick {tick}");
+            assert_eq!(shown(&app, damage), tick >= 1, "damage node at tick {tick}");
+            let share = app.world().get::<HullShare>(root).map(|h| h.0);
+            assert_eq!(share, Some(if tick == 0 { 1.0 } else { 0.4 }), "hull share at tick {tick}");
+        }
+        assert!(seen.contains(&2), "the last step was reached: {seen:?}");
     }
 
     #[test]
