@@ -523,9 +523,9 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
         let names = resource_model(feed);
         let site = feed.def(b).is_some_and(deploys_at_site);
         let mut out = Vec::new();
-        let cells: Vec<usize> = (0..capacity).filter(|c| *c != CANCEL_CELL && *c != BACK_CELL).collect();
+        // The capacity may be `usize::MAX` (the stock palettes), so the cells are walked, never collected.
         for it in &items {
-            let Some(&cell) = cells.get(it.slot) else { continue };
+            let Some(cell) = (0..capacity).filter(|c| *c != CANCEL_CELL && *c != BACK_CELL).nth(it.slot) else { continue };
             let definition = feed.content.as_deref().and_then(|db| db.unit(it.key));
             let verbose = match &it.why {
                 Some(w) => format!("{}. Cost: {}", w, cost_text(&it.cost, &names)),
