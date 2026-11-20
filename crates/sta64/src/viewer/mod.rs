@@ -232,8 +232,7 @@ impl Plugin for ViewerPlugin {
                 )
                     .chain()
                     .run_if(crate::platform::foreground),
-            )
-            .add_plugins(sprites::SpriteMaterialsPlugin { in_match_only: false });
+            );
     }
 }
 

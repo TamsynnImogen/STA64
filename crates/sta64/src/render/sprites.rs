@@ -109,8 +109,14 @@ fn colour_bits(c: [f32; 3]) -> [u32; 3] {
 
 /// Sprite nodes with the same texture, blend, sprite, animation and colour draw the same picture
 /// at every moment (colour and uv are functions of those and the clock): they share one material,
-/// so one write a frame serves all of them (a map has thousands of nebula puffs). A node whose
-/// fade is not 1 takes a private copy while it is ([`animate_materials`]).
+/// so one write a frame serves all of them (a map can hold very many nebula puffs). A node whose
+/// fade is not 1 takes a private copy while it is ([`animate`]); the copies stay with their node
+/// after the fade returns to 1 (one material per node that was ever faded). The cache holds one id
+/// per look and only grows with the number of looks.
+///
+/// Runs on a node once, when it is added. A node whose [`MeshMaterial3d`] is already some other
+/// system's copy (a placement ghost's tinted copy) keeps it; its `material` still becomes the shared
+/// one, and the look is read from and registered as `material`, never from that copy.
 pub fn share_materials(
     mut added: Query<(&mut SpriteFx, &mut MeshMaterial3d<StandardMaterial>), Added<SpriteFx>>,
     // The ids of the shared materials, not handles: the cache does not keep a look alive that no
@@ -119,7 +125,7 @@ pub fn share_materials(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     for (mut f, mut mm) in &mut added {
-        let Some(m) = materials.get(&mm.0) else { continue };
+        let Some(m) = materials.get(&f.material) else { continue };
         let key = ShareKey {
             texture: m.base_color_texture.as_ref().map(|h| h.id()),
             alpha: alpha_key(m.alpha_mode),
@@ -130,57 +136,95 @@ pub fn share_materials(
         let alive = known.get(&key).and_then(|id| materials.get_strong_handle(*id));
         match alive {
             Some(shared) => {
-                if mm.0 != shared {
+                if mm.0 == f.material {
                     mm.0 = shared.clone();
                 }
                 f.material = shared;
             }
             None => {
-                known.insert(key, mm.0.id());
+                known.insert(key, f.material.id());
             }
         }
     }
 }
 
-/// Registers [`animate_materials`] after visibility is known and before extraction.
-pub struct SpriteMaterialsPlugin {
-    /// Only while a match runs (the map view); the model viewer runs always.
-    pub in_match_only: bool,
-}
-
-impl Plugin for SpriteMaterialsPlugin {
-    fn build(&self, app: &mut App) {
-        let after = animate_materials.after(bevy::camera::visibility::VisibilitySystems::CheckVisibility);
-        if self.in_match_only {
-            app.add_systems(PostUpdate, after.run_if(crate::game::flow::match_running));
-        } else {
-            app.add_systems(PostUpdate, after);
-        }
-    }
-}
-
-/// Advance sprite-node visibility and sprite flipbooks. (The nodes' materials follow in
-/// [`animate_materials`], once visibility is known.)
+/// Advance sprite-node visibility, colour and uv, and sprite flipbooks.
+///
+/// The colour and uv go into the node's [`SpriteFx::material`], shared by all nodes of a look
+/// ([`share_materials`]), once per look and frame, in the same frame as the other animation so
+/// extraction sees them at once. A node whose [`SpriteFade`] is not exactly 1 draws with a private
+/// copy ([`SpritePrivate`]) that gets the faded colour. The node's [`MeshMaterial3d`] is only
+/// swapped between its shared material and its private copy: when it holds anything else (the copy
+/// the cloak and build fade or the placement ghost gave it) the node is left alone, and a faded
+/// node writes nothing, as that copy is what draws.
+#[allow(clippy::type_complexity)]
 pub fn animate(
+    mut commands: Commands,
     clock: Res<crate::clock::AnimClock>,
     tables: Res<SpriteTables>,
-    mut fx: Query<(&SpriteFx, Option<&crate::render::rock::MoonNimbus>, &mut Visibility)>,
+    mut fx: Query<(
+        Entity,
+        &SpriteFx,
+        Option<&SpriteFade>,
+        Option<&SpritePrivate>,
+        Option<&crate::render::rock::MoonNimbus>,
+        &mut Visibility,
+        &mut MeshMaterial3d<StandardMaterial>,
+    )>,
     flip: Query<&UvFlipbook>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let t = clock.wall() as f32;
     let table = &tables.0;
-    for (f, nimbus, mut vis) in &mut fx {
+    // Per look and frame: the colour its animation gives and whether it is drawn at all.
+    let mut looks: std::collections::HashMap<(&str, Option<&str>, [u32; 3]), (bool, [f32; 3])> = std::collections::HashMap::new();
+    for (e, f, fade, private, nimbus, mut vis, mut mm) in &mut fx {
+        let (drawn, col) = *looks.entry((f.sprite.as_str(), f.node_anim.as_deref(), colour_bits(f.colour))).or_insert_with(|| {
+            let mut col = f.colour;
+            let mut drawn = true;
+            if let Some(a) = f.node_anim.as_deref().and_then(|a| table.animation(a)) {
+                match spr_anim::value(a, t, spr_anim::LOOP) {
+                    Some(Value::Draw(false)) => drawn = false,
+                    Some(Value::Colour(c)) => col = c,
+                    _ => {}
+                }
+            }
+            (drawn, col)
+        });
         // A moon's nimbus is drawn under the Stock look only.
-        let mut shown = nimbus.is_none_or(|n| n.on);
-        if let Some(a) = f.node_anim.as_deref().and_then(|a| table.animation(a))
-            && let Some(Value::Draw(false)) = spr_anim::value(a, t, spr_anim::LOOP)
-        {
-            shown = false;
-        }
+        let shown = drawn && nimbus.is_none_or(|n| n.on);
         let want = if shown { Visibility::Inherited } else { Visibility::Hidden };
         if *vis != want {
             *vis = want;
+        }
+        if !shown {
+            continue;
+        }
+        let Some(sprite) = table.sprite(&f.sprite) else { continue };
+        let k = fade.map_or(1.0, |k| k.0);
+        let own = mm.0 == f.material || private.is_some_and(|p| mm.0 == p.0);
+        let target = if k == 1.0 {
+            f.material.clone()
+        } else if !own {
+            continue;
+        } else if let Some(p) = private {
+            p.0.clone()
+        } else {
+            let Some(base) = materials.get(&f.material).cloned() else { continue };
+            let h = materials.add(base);
+            commands.entity(e).insert(SpritePrivate(h.clone()));
+            h
+        };
+        if own && mm.0 != target {
+            mm.0 = target.clone();
+        }
+        // Write only on change: a write re-uploads the material.
+        let (c, uv) = (colour(if k == 1.0 { col } else { col.map(|c| c * k) }), uv_affine(spr_anim::sprite_uv(table, sprite, t)));
+        if materials.get(&target).is_some_and(|m| m.base_color != c || m.uv_transform != uv)
+            && let Some(mut m) = materials.get_mut(&target)
+        {
+            m.base_color = c;
+            m.uv_transform = uv;
         }
     }
     for f in &flip {
@@ -192,65 +236,6 @@ pub fn animate(
             {
                 m.uv_transform = uv;
             }
-        }
-    }
-}
-
-/// Colour and uv of the sprite nodes that some camera draws this frame, written into the material
-/// each points at (after visibility, before extraction: a node that comes into view gets this
-/// frame's values in the frame it is first drawn). A material is written only when it differs, so
-/// the nodes of one look cost one write, and a node outside every view none. Colour: the node's own,
-/// or its animation's, times its [`SpriteFade`]; a node whose fade is not exactly 1 draws with a
-/// private copy of its look's material ([`SpritePrivate`]).
-#[allow(clippy::type_complexity)]
-pub fn animate_materials(
-    mut commands: Commands,
-    clock: Res<crate::clock::AnimClock>,
-    tables: Res<SpriteTables>,
-    mut fx: Query<(Entity, &SpriteFx, Option<&SpriteFade>, Option<&SpritePrivate>, &ViewVisibility, &mut MeshMaterial3d<StandardMaterial>)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let t = clock.wall() as f32;
-    let table = &tables.0;
-    // Per look and frame: the colour its animation gives and the uv.
-    let mut looks: std::collections::HashMap<(&str, Option<&str>, [u32; 3]), Option<([f32; 3], Affine2)>> = std::collections::HashMap::new();
-    for (e, f, fade, private, seen, mut mm) in fx.iter_mut() {
-        if !seen.get() {
-            continue;
-        }
-        let key = (f.sprite.as_str(), f.node_anim.as_deref(), colour_bits(f.colour));
-        let Some((col, uv)) = *looks.entry(key).or_insert_with(|| {
-            let sprite = table.sprite(&f.sprite)?;
-            let mut col = f.colour;
-            if let Some(a) = f.node_anim.as_deref().and_then(|a| table.animation(a))
-                && let Some(Value::Colour(c)) = spr_anim::value(a, t, spr_anim::LOOP)
-            {
-                col = c;
-            }
-            Some((col, uv_affine(spr_anim::sprite_uv(table, sprite, t))))
-        }) else {
-            continue;
-        };
-        let k = fade.map_or(1.0, |k| k.0);
-        let target = if k == 1.0 {
-            f.material.clone()
-        } else if let Some(p) = private {
-            p.0.clone()
-        } else {
-            let Some(base) = materials.get(&f.material).cloned() else { continue };
-            let h = materials.add(base);
-            commands.entity(e).insert(SpritePrivate(h.clone()));
-            h
-        };
-        if mm.0 != target {
-            mm.0 = target.clone();
-        }
-        let c = colour(if k == 1.0 { col } else { col.map(|c| c * k) });
-        if materials.get(&target).is_some_and(|m| m.base_color != c || m.uv_transform != uv)
-            && let Some(mut m) = materials.get_mut(&target)
-        {
-            m.base_color = c;
-            m.uv_transform = uv;
         }
     }
 }

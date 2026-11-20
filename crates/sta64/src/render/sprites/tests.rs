@@ -1,4 +1,4 @@
-//! The sprite nodes' materials: the shared, visibility-gated path ([`super::animate_materials`])
+//! The sprite nodes' materials: the shared path ([`super::animate`])
 //! against the per-node path it replaced ([`animate_reference`], kept here for the tests only).
 use super::*;
 use crate::clock::{AnimClock, ClockMode};
@@ -39,7 +39,7 @@ pub(super) fn material_of(t: &SpriteTables, node: &str) -> (StandardMaterial, Sp
     (m, SpriteFx { node_anim: def.animation.clone(), sprite: def.sprite.clone(), colour: def.colour, material: Handle::default() }, Handle::default())
 }
 
-/// The system before the materials went to [`animate_materials`]: visibility and the material of
+/// The system before the materials were shared: visibility and the material of
 /// every node written every frame. Kept to compare against.
 pub(super) fn animate_reference(
     clock: Res<AnimClock>,
@@ -103,11 +103,6 @@ pub(super) fn fade_of(i: usize, n: usize) -> Option<f32> {
     }
 }
 
-/// Whether puff `i` is in some camera's view at frame `n` (the camera turns, so it comes and goes).
-fn in_view(i: usize, n: usize) -> bool {
-    (n + i) % 3 != 0
-}
-
 fn bits(c: Color) -> [u32; 4] {
     let c = c.to_srgba();
     [c.red.to_bits(), c.green.to_bits(), c.blue.to_bits(), c.alpha.to_bits()]
@@ -125,7 +120,7 @@ fn base_app(reference: bool) -> App {
     if reference {
         app.add_systems(Update, animate_reference);
     } else {
-        app.add_systems(Update, (share_materials, animate).chain()).add_plugins(SpriteMaterialsPlugin { in_match_only: false });
+        app.add_systems(Update, (share_materials, animate).chain());
     }
     app
 }
@@ -137,7 +132,7 @@ fn spawn_puffs(app: &mut App) -> Vec<Entity> {
             let (m, mut fx, _) = material_of(&t, NODES[i % NODES.len()]);
             let h = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(m);
             fx.material = h.clone();
-            app.world_mut().spawn((fx, MeshMaterial3d(h), Visibility::default(), ViewVisibility::HIDDEN)).id()
+            app.world_mut().spawn((fx, MeshMaterial3d(h), Visibility::default())).id()
         })
         .collect()
 }
@@ -154,7 +149,6 @@ fn set_frame(app: &mut App, puffs: &[Entity], n: usize) {
                 en.remove::<SpriteFade>();
             }
         }
-        en.insert(if in_view(i, n) { ViewVisibility::VISIBLE } else { ViewVisibility::HIDDEN });
     }
 }
 
@@ -171,7 +165,7 @@ fn the_shared_path_gives_every_drawn_node_the_colour_and_uv_of_the_per_node_path
         for i in 0..PUFFS {
             // What the nodes' visibility asks for is the same for every node, drawn or not.
             assert_eq!(old.world().get::<Visibility>(po[i]), new.world().get::<Visibility>(pn[i]), "visibility of {i} at {n}");
-            if !in_view(i, n) || old.world().get::<Visibility>(po[i]) == Some(&Visibility::Hidden) {
+            if old.world().get::<Visibility>(po[i]) == Some(&Visibility::Hidden) {
                 continue;
             }
             let mo = old.world().resource::<Assets<StandardMaterial>>().get(&old.world().get::<SpriteFx>(po[i]).unwrap().material).unwrap();
@@ -191,7 +185,7 @@ fn nodes_of_one_look_share_a_material_until_their_fade_is_not_one() {
     let puffs = spawn_puffs(&mut app);
     app.world_mut().resource_mut::<AnimClock>().advance_idle(0.0);
     for &e in &puffs {
-        app.world_mut().entity_mut(e).insert((SpriteFade(1.0), ViewVisibility::VISIBLE));
+        app.world_mut().entity_mut(e).insert(SpriteFade(1.0));
     }
     app.update();
     let handles: std::collections::HashSet<_> = puffs.iter().map(|&e| app.world().get::<MeshMaterial3d<StandardMaterial>>(e).unwrap().0.id()).collect();
@@ -207,33 +201,4 @@ fn nodes_of_one_look_share_a_material_until_their_fade_is_not_one() {
     assert_eq!(app.world().get::<MeshMaterial3d<StandardMaterial>>(puffs[0]).unwrap().0, shared);
     // The others kept the shared material throughout.
     assert_eq!(app.world().get::<MeshMaterial3d<StandardMaterial>>(puffs[NODES.len()]).unwrap().0, shared);
-}
-
-#[test]
-fn a_node_outside_every_view_is_not_written_and_is_current_the_frame_it_comes_into_view() {
-    let mut app = base_app(false);
-    let puffs = spawn_puffs(&mut app);
-    for &e in &puffs {
-        app.world_mut().entity_mut(e).insert(ViewVisibility::HIDDEN);
-    }
-    let before: Vec<_> = {
-        let m = app.world().resource::<Assets<StandardMaterial>>();
-        puffs.iter().map(|&e| bits(m.get(&app.world().get::<SpriteFx>(e).unwrap().material).unwrap().base_color)).collect()
-    };
-    for _ in 0..5 {
-        app.world_mut().resource_mut::<AnimClock>().advance_idle(0.0);
-        app.update();
-    }
-    let m = app.world().resource::<Assets<StandardMaterial>>();
-    let after: Vec<_> = puffs.iter().map(|&e| bits(m.get(&app.world().get::<SpriteFx>(e).unwrap().material).unwrap().base_color)).collect();
-    assert_eq!(before, after, "nothing out of view was written");
-    // Into view in one frame: this frame's colour is already there when the frame ends.
-    let e = puffs[0];
-    app.world_mut().entity_mut(e).insert(ViewVisibility::VISIBLE);
-    app.update();
-    let h = app.world().get::<MeshMaterial3d<StandardMaterial>>(e).unwrap().0.clone();
-    let t = app.world().resource::<AnimClock>().wall() as f32;
-    let a = app.world().resource::<SpriteTables>().0.animation("pulse").unwrap().clone();
-    let Some(Value::Colour(c)) = spr_anim::value(&a, t, spr_anim::LOOP) else { panic!("a colour") };
-    assert_eq!(bits(app.world().resource::<Assets<StandardMaterial>>().get(&h).unwrap().base_color), bits(colour(c)));
 }

@@ -1,10 +1,14 @@
 //! Real-GPU identity check of the sprite nodes' materials: the same invented scene (nebula-like
 //! puffs with colour cycles and fades, a blinking glow, a flat sprite, a moon nimbus) drawn through
-//! the per-node path ([`super::tests::animate_reference`]) and through the shared, visibility-gated
-//! one, at several times and camera positions; the two sets of frames must be byte-equal.
+//! the per-node path ([`super::tests::animate_reference`]) and through the shared
+//! one, at a new time and camera place every frame, with a cloaking unit and a placement ghost whose
+//! nodes the game's own systems give material copies; the two sets of frames must be byte-equal.
 //! Needs `STA64_GPU_TESTS=1` and a hardware adapter; skips otherwise.
 use super::tests::{NODES, TABLE, animate_reference, fade_of, material_of, table};
 use super::*;
+use crate::render::fx::specials::{UnitFade, apply_fade};
+use crate::ui::hud::ghost::{Ghost, tint_ghost};
+use sta_sim::ContentKey;
 use crate::clock::{AnimClock, ClockMode};
 use bevy::camera::RenderTarget;
 use bevy::render::RenderPlugin;
@@ -60,10 +64,16 @@ fn series(shared: bool) -> Option<Vec<Vec<u8>>> {
             .disable::<bevy::log::LogPlugin>(),
     );
     app.insert_resource(ClearColor(Color::BLACK)).insert_resource(table()).insert_resource(AnimClock::new(ClockMode::Bench { step: 0.137 }, 0));
+    // The clock moves on every update, as in the game. The ghost's and the fade's own systems run
+    // as in the game (they hand nodes material copies); the ghost's first, the worst case for sharing.
+    fn tick(mut clock: ResMut<AnimClock>) {
+        clock.advance_idle(0.0);
+    }
+    app.add_systems(Update, tick.before(animate_reference).before(animate));
     if shared {
-        app.add_systems(Update, (share_materials, animate, face_camera).chain()).add_plugins(SpriteMaterialsPlugin { in_match_only: false });
+        app.add_systems(Update, (tint_ghost, share_materials, animate, apply_fade, face_camera).chain());
     } else {
-        app.add_systems(Update, (animate_reference, face_camera).chain());
+        app.add_systems(Update, (tint_ghost, animate_reference, apply_fade, face_camera).chain());
     }
     let mut target = Image::new_target_texture(160, 120, TextureFormat::Rgba8UnormSrgb, None);
     target.asset_usage = bevy::asset::RenderAssetUsages::RENDER_WORLD;
@@ -93,6 +103,25 @@ fn series(shared: bool) -> Option<Vec<Vec<u8>>> {
         }
         puffs.push(e.id());
     }
+    // A cloaking unit and a placement ghost: their nodes are given material copies by the game's own
+    // systems. Same look as the puffs above (so, shared when sharing is on).
+    let family = |app: &mut App, root: Entity, nodes: &[usize]| {
+        for &i in nodes {
+            let (mut m, mut fx, _) = material_of(&t, NODES[i % NODES.len()]);
+            m.base_color_texture = Some(tex.clone());
+            let h = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(m);
+            fx.material = h.clone();
+            let child = app
+                .world_mut()
+                .spawn((Mesh3d(quad.clone()), MeshMaterial3d(h), Transform::from_xyz(i as f32 * 5.0 - 8.0, 0.0, 0.0).with_scale(Vec3::new(12.0, 12.0, 1.0)), Visibility::default(), fx, Billboard))
+                .id();
+            app.world_mut().entity_mut(root).add_child(child);
+        }
+    };
+    let unit = app.world_mut().spawn((UnitFade { cloak: 1.0, build: 1.0 }, Transform::from_xyz(-20.0, 20.0, 5.0), Visibility::default())).id();
+    family(&mut app, unit, &[0, 1, 2, 3]);
+    let ghost = app.world_mut().spawn((Ghost::pinned(ContentKey::NONE), Transform::from_xyz(18.0, -18.0, 5.0), Visibility::default())).id();
+    family(&mut app, ghost, &[0, 1, 2, 3]);
     app.finish();
     app.cleanup();
     for _ in 0..8 {
@@ -110,7 +139,9 @@ fn series(shared: bool) -> Option<Vec<Vec<u8>>> {
     let places = [Vec3::new(0.0, 0.0, 60.0), Vec3::new(70.0, 10.0, 40.0), Vec3::new(-90.0, 30.0, 30.0), Vec3::new(10.0, 80.0, 20.0)];
     let mut frames = Vec::new();
     for step in 0..12usize {
-        app.world_mut().resource_mut::<AnimClock>().advance_idle(0.0);
+        // The unit cloaks and decloaks, then builds up: its fade changes at every step.
+        let k = [1.0, 0.8, 0.5, 0.3, 0.3, 0.6, 1.0, 1.0, 0.7, 0.2, 0.5, 1.0][step];
+        *app.world_mut().get_mut::<UnitFade>(unit).unwrap() = if step % 2 == 0 { UnitFade { cloak: k, build: 1.0 } } else { UnitFade { cloak: 1.0, build: k } };
         // The camera turns about the scene, so puffs come into view and leave it.
         let at = places[step % places.len()];
         *app.world_mut().get_mut::<Transform>(cam).unwrap() = Transform::from_translation(at).looking_at(Vec3::new(0.0, 0.0, -10.0), Vec3::Y);
@@ -140,6 +171,15 @@ fn nodes_drawn_through_shared_materials_are_byte_equal_to_the_per_node_path_on_g
     let _ = TABLE;
     let Some(old) = series(false) else { return };
     let Some(new) = series(true) else { return };
+    // Control: the per-node path against itself, so a difference below is the sharing's, not the harness'.
+    let Some(again) = series(false) else { return };
+    for (n, (a, b)) in old.iter().zip(&again).enumerate() {
+        let mx = a.iter().zip(&new[n]).map(|(x, y)| x.abs_diff(*y)).max().unwrap();
+        let px = a.chunks(4).zip(new[n].chunks(4)).filter(|(p, q)| p != q).count();
+        let first = a.chunks(4).zip(new[n].chunks(4)).position(|(p, q)| p != q).unwrap_or(0);
+        eprintln!("frame {n}: max diff {mx}, {px} px of {}, first at ({}, {}) old {:?} new {:?}", a.len() / 4, first % 160, first / 160, &a[first * 4..first * 4 + 4], &new[n][first * 4..first * 4 + 4]);
+        eprintln!("control frame {n}: {} bytes differ; vs shared: {}", a.iter().zip(b).filter(|(x, y)| x != y).count(), a.iter().zip(&new[n]).filter(|(x, y)| x != y).count());
+    }
     assert_eq!(old.len(), new.len());
     let lit = |f: &Vec<u8>| f.chunks(4).filter(|p| p[0] > 8 || p[1] > 8 || p[2] > 8).count();
     for (n, (a, b)) in old.iter().zip(&new).enumerate() {

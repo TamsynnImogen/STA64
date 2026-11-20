@@ -538,9 +538,7 @@ impl Plugin for MapPlugin {
                     .after(crate::app::GameSet::SimLink)
                     .run_if(crate::game::flow::match_running)
                     .run_if(crate::platform::foreground),
-            )
-            // After visibility, before extraction: only what some camera draws is written.
-            .add_plugins(crate::render::sprites::SpriteMaterialsPlugin { in_match_only: true });
+            );
     }
 }
 
