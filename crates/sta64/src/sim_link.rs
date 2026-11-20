@@ -493,7 +493,7 @@ mod tests {
         let middle = spawn(&mut sim, 0);
         let newest = spawn(&mut sim, 0);
         let other_player = spawn(&mut sim, 1);
-        let mut view = sim.view();
+        let mut view = (*sim.view()).clone();
         for unit in &mut view.units {
             unit.hull = [Fixed::ONE; 2];
         }
