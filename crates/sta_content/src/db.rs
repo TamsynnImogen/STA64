@@ -504,7 +504,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         crew: _, maximum_crew: _, facility: _, has_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
         free_unit: _, dock: _, sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
         max_dilithium: _, mining_rate: _, transfer_rate: _, resource: _, features: _,
-        confinement: _, nebula_pathing: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
+        confinement: _, nebula_pathing: _, nebula_effects: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
         crew_gain: _, transport: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, repair_attachment: _, stats: _, raw: _,
     } = u;
     // `stats` (CON-55): only the keys a sim rule reads are digested (the planet keys
@@ -594,6 +594,21 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         if let Some(d) = &u.dock {
             c.raw("dock", &format!("[{}]", [d.offset.0, d.offset.1, d.dir.0, d.dir.1].map(fixed_text).join(",")));
         }
+    }
+    // SIM-75: only for nebulae, so other units keep their digest.
+    if let Some(n) = &u.nebula_effects {
+        let flags = [n.disable_weapons, n.disable_shields, n.disable_crew, n.disable_sensors, n.disable_cloak, n.hide_contents];
+        c.raw("nebula_effects", &group(
+            Canon::new()
+                .raw("disable", &flags.map(|f| if f { "1" } else { "0" }).concat())
+                .fixed("damage", n.damage)
+                .list("crew_loss", [n.crew_loss.threshold, n.crew_loss.shield, n.crew_loss.hull].map(fixed_text))
+                .fixed("regen", n.regen)
+                .fixed("repair", n.repair)
+                .fixed("speed_coefficient", n.speed_coefficient)
+                .opt_fixed("speed_limit", n.speed_limit)
+                .opt_fixed("max_speed_fraction", n.max_speed_fraction),
+        ));
     }
     if u.system_hit_points.iter().any(|f| *f != Fixed::ZERO) {
         c.list("system_hit_points", u.system_hit_points.map(fixed_text));

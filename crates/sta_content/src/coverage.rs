@@ -64,6 +64,10 @@ pub const READ_ODF_KEYS: &[&str] = &[
     "addtoplanner",
     // SIM-74: the crew-status reload multipliers (race ODF).
     "weaponyellow", "weaponred",
+    // SIM-75: nebula effects (`disablesensors`, `hidecontents` read, not applied yet).
+    "disableshields", "disablecrew", "disablesensors", "disablecloak", "hidecontents",
+    "damagevalue", "damagethreshold", "damagecrewmodifier", "damagehullmodifier", "regenvalue", "repairvalue",
+    "craft_speed_coefficient", "craft_speed_limit", "craft_max_speed_fraction",
     // Found by intersecting the keys of the installed ODFs with the string
     // literals of the loaders (`check_pack <root> --keys` lists the rest).
     "tooltip", "basename", "race", "fireball", "officercost", "curshields", "maxshields",
