@@ -477,6 +477,23 @@ pub fn load_install(root: &Path, active_mod: Option<&str>) -> Result<(Arc<Conten
     Ok((Arc::new(db), races))
 }
 
+/// [`load_install`], then the tech tree the map `map` names, as the game applies
+/// it (`ContentDb::with_map_tech_tree`, #1019): the content a game of that map
+/// ran on. A capture's content hash covers the tree, so replaying a capture of a
+/// map that names its own tree needs this. A tree that cannot be applied is
+/// reported on stderr and the default tree stays, as in the game.
+pub fn load_install_for_map(root: &Path, active_mod: Option<&str>, map: &str) -> Result<(Arc<ContentDb>, Races), CaptureError> {
+    let vfs = sta_vfs::Vfs::mount_install(root, active_mod).map_err(|e| CaptureError::Content(format!("mounting {}: {e}", root.display())))?;
+    let (index, _) = OdfIndex::build(&vfs);
+    let (db, _) = ContentDb::load(&vfs, &index).map_err(|e| CaptureError::Content(format!("content: {e}")))?;
+    let (races, _) = Races::load(&vfs, &index);
+    let (swapped, warnings) = db.with_named_map_tech_tree(&vfs, map);
+    for w in &warnings {
+        eprintln!("map {map}: tech tree {}: {}", w.file, w.message);
+    }
+    Ok((Arc::new(swapped.unwrap_or(db)), races))
+}
+
 /// `capture.md`.
 pub fn report(i: &CaptureIndex) -> String {
     let mut s = String::new();
