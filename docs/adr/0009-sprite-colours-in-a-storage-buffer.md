@@ -59,6 +59,16 @@ linear on the CPU, and the shader's power
 function is not bit-equal to the CPU's. Any exact design therefore ships the final
 linear colour, computed on the CPU with Bevy's own conversion.
 
+For reference: the original games (each statement: read from the executable,
+static; not measured). In the original games each nebula puff carries its own
+colour, set per sprite, and a nebula's fade only dims that colour; puffs share
+a few looks rather than each having its own material. The original draws
+translucent sprites back to front across the whole scene, one small draw per
+sprite, without merging sprites into larger batched draws. Sprites at exactly
+equal depth do keep a fixed order in the original, but it follows from the
+order objects happen to be submitted, not from a chosen rule; for additive
+puffs that order does not change the picture.
+
 Constraints that apply:
 
 - The Stock look must not change (WORKPLAN RND-22: Stock is the default; the
@@ -253,7 +263,11 @@ settings and a group toggled hidden and shown.
    other order than on main (one blended sprite on top of the other instead of
    under it; for additive ones a difference at rounding level)? Yes allows
    parity mode to be dropped, saving about 1 ms on the measured scene
-   (forecast). Without a decision, parity mode stays on.
+   (forecast). Without a decision, parity mode stays on. Background, not a
+   settlement: the original has a fixed but incidental tie order, and for
+   additive sprites the order does not affect the picture; STA64's sprite looks
+   use three blend modes (additive, alpha-blended and cut-out), so the answer
+   for the blended and cut-out looks is not given by that.
 2. Is carrying a forked copy of a Bevy shader (`sprite.wesl`, re-synced on
    every Bevy upgrade) acceptable? If not, the choice is between the
    unchanged per-node cost, the narrower options above (which do not remove
