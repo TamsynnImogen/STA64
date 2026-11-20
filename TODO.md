@@ -749,13 +749,6 @@ XML (Fleet Operations techtree):
 - [ ] `[FO]` `race` on `<object>` is used twice in FO data; find what the game does with it.
 - [ ] `[FO]` `devtech.xml`, `freetech.xml` not named; `TECHTREE_DEFAULT_FILE` (header) unread.
 
-- [?] Map tech tree (fix/mission-build-restrictions): play a campaign mission whose map names a restricted tech tree (header key `techTreeFilename`) and check that the build page omits the restricted items (their cells stay empty at their position) and that an order for one is refused; a map naming a tree the install lacks logs a warning and plays with the default tree. Grade: read from the executable, static (Armada I and II).
-- [ ] Map tech tree, not built: multiplayer matches and the lobby start from the default tree, not the map's (both peers must derive the same tree before it can be switched on; the content digest check would refuse a mismatch).
-- [ ] Map tech tree, not built: the lobby's named game-option trees (they replace the map's tree in a skirmish) are not offered.
-- [ ] Map tech tree, not built: tech flags in a tree (research items) do not gate weapons or cloaking through the tree; the computer player's request for units honours the tree only through the existing build-option check.
-- [ ] Map tech tree, interim: the cell position of a shown build item is its place in the builder's list; not compared with the original. The empty-cell look applies to text-tree skirmish games in both HUD looks, STA64's own layout included (the build page is one model; a note for mod authors). An XML tree keeps the inferred unlisted-slot fallback and compacts hidden items.
-- [ ] Map tech tree, not traced: whether the original refuses a direct build order for an unavailable item (STA64's sim refuses it).
-
 Other text files opened by fixed name:
 - [ ] `[A1]` `gamekey.map`; `[A1 A2]` `lang.ini`, `texture.dat`; `[A1]` `lang.txt` not named.
 
