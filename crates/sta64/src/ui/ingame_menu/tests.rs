@@ -583,14 +583,14 @@ fn escape_opens_the_menu_while_the_button_panels_second_row_is_hidden() {
     assert_eq!(menu(&app), InGameMenu { open: true, page: MenuPage::Main });
 }
 
-/// Interim: every button shows at the start of each match (the original's start state is not measured).
+/// The second row starts hidden at each match (stated by a player).
 #[test]
-fn a_new_match_shows_every_button_again() {
+fn a_new_match_hides_the_second_row_again() {
     let mut app = app();
     start_match(&mut app);
-    assert!(app.world().resource::<crate::ui::hud::stock::buttons::ShowMore>().0, "shown at the first match");
-    app.world_mut().resource_mut::<crate::ui::hud::stock::buttons::ShowMore>().0 = false;
+    assert!(!app.world().resource::<crate::ui::hud::stock::buttons::ShowMore>().0, "hidden at the first match");
+    app.world_mut().resource_mut::<crate::ui::hud::stock::buttons::ShowMore>().0 = true;
     // What entering the loading state of a match runs.
     app.world_mut().run_schedule(OnEnter(AppState::Loading));
-    assert!(app.world().resource::<crate::ui::hud::stock::buttons::ShowMore>().0, "shown again after a new match loads");
+    assert!(!app.world().resource::<crate::ui::hud::stock::buttons::ShowMore>().0, "hidden again after a new match loads");
 }
