@@ -65,7 +65,7 @@ fn the_entry_value_returns_in_one_step_after_the_delay_and_not_before() {
 
 #[test]
 fn the_value_on_entry_is_what_returns_even_when_it_was_not_full() {
-    // Entry value against the maximum for a craft that entered below it: not measured (STA64's reading).
+    // Entry value, not the maximum, for a craft that entered below it: measured (stock Armada II 1.1, five samples, two classes).
     let (mut s, id) = world();
     s.units.get_mut(id).unwrap().shields.now = [Fixed::from_int(37), Fixed::from_int(11), Fixed::from_int(5), Fixed::from_int(2)];
     run(&mut s, 3);
@@ -210,4 +210,18 @@ fn a_save_inside_the_nebula_round_trips_and_the_record_is_in_the_combat_digest()
     let mut bare = s.clone();
     bare.nebula_shields = Default::default();
     assert_eq!(s.section_digests().differing(&bare.section_digests()), ["combat"]);
+}
+
+#[test]
+fn a_damaged_generator_is_not_switched_off_by_the_nebula_so_the_shields_come_back() {
+    // Today's behaviour. The original sometimes gave nothing back; a generator below full hit points
+    // that stays off is the likely cause (read from the executable, static; not measured): TODO.
+    let (mut s, id) = world();
+    s.step(&[Command { player: PlayerId::SCRIPT, seq: 0, kind: CommandKind::Edit(Edit::SubsystemDamage(id, Subsystem::Shields, Fixed::from_int(30))) }]);
+    s.units.get_mut(id).unwrap().shields.now = [entry(); 4];
+    run(&mut s, 3);
+    teleport(&mut s, id, FAR);
+    run(&mut s, RETURN_DELAY as u32 + 1);
+    assert!(shields(&s, id) >= entry());
+    assert!(s.subsystem_state(id, Subsystem::Shields).unwrap().0, "the generator is still on");
 }

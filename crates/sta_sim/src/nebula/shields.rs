@@ -3,12 +3,13 @@
 //! Rule (Armada II family; every profile but Armada I; the Native profile
 //! follows it by STA64's own choice). Grade: measured on stock Armada II 1.1,
 //! single runs, two nebula classes; **interim**, because the delay below is a
-//! single-run measurement and not a data key. **Not measured:** whether the
-//! shields return to the value on entry or to the maximum: every measured run
-//! entered with full shields, so the two readings are not told apart. STA64
-//! reads it as the value on entry, which is the same for a craft that entered
-//! at full strength; the record layout (format 39) is not final until that is
-//! measured.
+//! single-run measurement and not a data key (it may derive from a per-class
+//! `shieldDelay` key plus a system off-timer: inferred, not proven). That the
+//! shields return to the value on entry and not to the maximum, and that
+//! recharge then continues from it, is **measured** (stock Armada II 1.1, five
+//! partial-shield samples over two classes). The record is taken on the first
+//! tick the shields are switched off and kept: not overwritten while the craft
+//! stays inside or comes back during the delay.
 //! - While a craft (or station, which never leaves) is inside a kind with `disableShields`, its shields are held
 //!   at 0 (slice 1) and the value it had on entering is remembered.
 //! - After it is out of every such kind, the shields stay at 0 for
@@ -21,7 +22,11 @@
 //! - Entering with the shields already at 0: that 0 is the remembered value,
 //!   so nothing comes back (the normal recharge goes on).
 //! - Shield generator switched off, or the unit a derelict, when the delay ends:
-//!   nothing is restored and the remembered value is dropped.
+//!   nothing is restored and the remembered value is dropped. (The original
+//!   sometimes gave nothing back at all; a generator below full hit points that
+//!   stays off is the likely cause, read from the executable, static, not
+//!   measured, and not implemented: here the generator is never switched off by
+//!   a nebula.)
 //! - Destroyed or removed during the delay: the state goes with it. A change of
 //!   owner or a capture does not touch it.
 //! - Two overlapping kinds with `disableShields`: it is "out" when out of both.
