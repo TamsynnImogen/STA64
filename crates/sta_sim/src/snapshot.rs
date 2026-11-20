@@ -669,7 +669,9 @@ impl Sim {
         }
         let weapons = Weapons::from_rec(b.weapons).ok_or_else(|| corrupt("weapons"))?;
         let autonomy = crate::autonomy::Autonomy::from_rec(autonomy_rows).ok_or_else(|| corrupt("autonomy"))?;
-        if autonomy.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
+        if autonomy.to_rec().iter().any(|(id, _)| {
+            units.get(*id).is_none_or(|u| !matches!(u.kind, EntityKind::Craft | EntityKind::Station))
+        }) {
             return Err(corrupt("autonomy entity"));
         }
         if watch_rows.iter().any(|(_, r)| r.since > b.tick || r.anchored > b.tick || r.born > b.tick) {
