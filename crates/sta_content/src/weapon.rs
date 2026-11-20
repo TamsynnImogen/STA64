@@ -172,10 +172,9 @@ fn ordnance_base(o: &mut Reader, b: &mut WeaponBaseDef) {
     b.travel_time_fraction = signed(o, "travelTimeFraction");
 }
 
-/// The definition of weapon `name`, and the arc its hardpoints are limited to.
-/// A non-negative number (the look keys are sizes and times); a negative one reads as absent.
+/// A finite, non-negative number (the look keys are sizes and times); anything else reads as absent.
 fn look_num(r: &mut Reader, key: &str) -> Option<f32> {
-    r.num(key).filter(|v| *v >= 0.0).map(|v| v as f32)
+    r.num(key).filter(|v| v.is_finite() && *v >= 0.0).map(|v| v as f32)
 }
 
 /// The ordnance look keys (see [`ShotLook`]). Read from data (key presence); the classes
@@ -213,6 +212,7 @@ fn shot_look(o: &mut Reader, class: &str) -> ShotLook {
     }
 }
 
+/// The definition of weapon `name`, and the arc its hardpoints are limited to.
 pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut Vec<Warning>) -> (WeaponDef, Option<FireArc>) {
     let file = format!("{}.odf", stem(name));
     let own = odf.class_label().unwrap_or("").trim().to_ascii_lowercase();
@@ -464,8 +464,8 @@ mod look_tests {
 
     #[test]
     fn keys_are_read_for_every_class() {
-        let l = look("photontorpedo", "Sprite = \"sp\"\nspriteDuration = 0.5\nRadius = 8\nLength = 30\nlifeSpan = 4\n");
-        assert_eq!((l.sprite.as_deref(), l.sprite_duration, l.radius, l.length, l.life_span), (Some("sp"), Some(0.5), Some(8.0), Some(30.0), Some(4.0)));
+        let l = look("photontorpedo", "Sprite = \"sp\"\nspriteDuration = 0.7\nRadius = 7.5\nLength = 33\nlifeSpan = 4\n");
+        assert_eq!((l.sprite.as_deref(), l.sprite_duration, l.radius, l.length, l.life_span), (Some("sp"), Some(0.7), Some(7.5), Some(33.0), Some(4.0)));
         assert_eq!((l.travel_time_fraction, l.flare, l.light), (None, None, None));
         assert_eq!(look("photontorpedo", ""), ShotLook::default());
     }
@@ -489,23 +489,23 @@ mod look_tests {
 
     #[test]
     fn a_light_needs_a_colour_and_defaults_its_falloff() {
-        let l = look("pphaser", "lightColor = 227 100 50\n").light.unwrap();
-        assert_eq!((l.color, l.falloff_start, l.falloff_range), ([227.0, 100.0, 50.0], 100.0, 5.0));
-        let l = look("photontorpedo", "lightColor = 0.5f 0.25 1\nlightFalloffStart = 50\nlightFalloffRange = 7\n").light.unwrap();
-        assert_eq!((l.color, l.falloff_start, l.falloff_range), ([0.5, 0.25, 1.0], 50.0, 7.0));
-        assert_eq!(look("pphaser", "lightFalloffStart = 50\n").light, None);
+        let l = look("pphaser", "lightColor = 210 90 40\n").light.unwrap();
+        assert_eq!((l.color, l.falloff_start, l.falloff_range), ([210.0, 90.0, 40.0], 100.0, 5.0));
+        let l = look("photontorpedo", "lightColor = 0.5f 0.25 1\nlightFalloffStart = 60\nlightFalloffRange = 9\n").light.unwrap();
+        assert_eq!((l.color, l.falloff_start, l.falloff_range), ([0.5, 0.25, 1.0], 60.0, 9.0));
+        assert_eq!(look("pphaser", "lightFalloffStart = 60\n").light, None);
         assert_eq!(look("pphaser", "lightColor = 1 2\n").light, None);
     }
 
     #[test]
     fn keys_are_inherited_through_includes_and_overridden() {
         let mut files = std::collections::HashMap::new();
-        files.insert("base", "classLabel = \"phaser\"\nRadius = 4\nlifeSpan = 1.5\nflareRadiusMultiplier = 2\nlightColor = 1 1 1\n");
-        files.insert("child", "#include \"base.odf\"\nRadius = 6\nflareSprite = \"y\"\n");
+        files.insert("base", "classLabel = \"phaser\"\nRadius = 3\nlifeSpan = 1.5\nflareRadiusMultiplier = 2\nlightColor = 1 1 1\n");
+        files.insert("child", "#include \"base.odf\"\nRadius = 5.5\nflareSprite = \"y\"\n");
         let w = sta_odf::resolve("w", &mut |_| Some("classLabel = \"cannon\"\nordName = \"o\"\n".to_owned())).unwrap();
         let o = sta_odf::resolve("child", &mut |n| files.get(n.trim_end_matches(".odf")).map(|s| (*s).to_owned())).unwrap();
         let l = weapon_def("w", &w, Some(&o), &mut Vec::new()).0.look;
-        assert_eq!((l.radius, l.life_span), (Some(6.0), Some(1.5)));
+        assert_eq!((l.radius, l.life_span), (Some(5.5), Some(1.5)));
         let f = l.flare.unwrap();
         assert_eq!((f.sprite.as_str(), f.radius_multiplier), ("y", 2.0));
         assert!(l.light.is_some());
@@ -513,7 +513,7 @@ mod look_tests {
 
     #[test]
     fn negative_and_malformed_values_read_as_absent() {
-        let l = look("phaser", "Radius = -3\nlifeSpan = soon\n");
-        assert_eq!((l.radius, l.life_span), (None, None));
+        let l = look("phaser", "Radius = -3\nlifeSpan = soon\nLength = inf\nspriteDuration = -inf\n");
+        assert_eq!((l.radius, l.life_span, l.length, l.sprite_duration), (None, None, None, None));
     }
 }

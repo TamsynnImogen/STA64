@@ -113,8 +113,8 @@ pub struct CrewRules {
 /// The two `RTS_CFG.h` keys that only change how weapon shots are drawn. Render only: not
 /// digested and not in [`TYPED_CFG_KEYS`] (D9, D10: peers that differ only in how a shot
 /// looks play together). `None`: the header does not set the key; the engine's own default
-/// for an absent key was not read (INTERIM: a render reads absent as the stock install
-/// values, 0 for the colour flag, and does not invent a lifetime).
+/// for an absent key was not read (INTERIM: a render reads an absent colour flag as off, no
+/// team colour, and invents no miss lifetime).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ShotCfg {
     /// `BEAM_MISS_LIFETIME` (float, seconds): how long, counted from the shot, a beam whose
@@ -977,6 +977,51 @@ impl Rules {
             out.push(DigestEntry::new(crate::digest::key("race:", &s.stem), value));
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod shot_cfg_tests {
+    use super::*;
+
+    fn parse(text: &str) -> (ShotCfg, usize) {
+        let mut w = Vec::new();
+        let c = ShotCfg::from_cfg(&CfgH::parse(text), &mut w);
+        (c, w.len())
+    }
+
+    #[test]
+    fn absent_keys_are_unset_without_a_warning() {
+        let (c, w) = parse("");
+        assert_eq!((c, w, c.team_colour()), (ShotCfg::default(), 0, false));
+    }
+
+    #[test]
+    fn the_miss_lifetime_is_a_bounded_number() {
+        let (c, w) = parse("float BEAM_MISS_LIFETIME = 0.3f;\n");
+        assert_eq!((c.beam_miss_lifetime, w), (Some(Fixed::from_f64(0.3f32 as f64)), 0));
+        for bad in ["-1", "x", "1e5"] {
+            let (c, w) = parse(&format!("float BEAM_MISS_LIFETIME = {bad};\n"));
+            assert_eq!((c.beam_miss_lifetime, w), (None, 1), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_team_colour_flag_reads_both_values_and_rejects_text() {
+        let (c, w) = parse("int NORMAL_WEAPON_TEAM_COLOR = 1;\n");
+        assert_eq!((c.normal_weapon_team_color, c.team_colour(), w), (Some(true), true, 0));
+        let (c, w) = parse("int NORMAL_WEAPON_TEAM_COLOR = 0;\n");
+        assert_eq!((c.normal_weapon_team_color, c.team_colour(), w), (Some(false), false, 0));
+        let (c, w) = parse("int NORMAL_WEAPON_TEAM_COLOR = x;\n");
+        assert_eq!((c.normal_weapon_team_color, w), (None, 1));
+    }
+
+    #[test]
+    fn the_keys_stay_out_of_the_digest() {
+        let (set, _) = parse("float BEAM_MISS_LIFETIME = 0.3f;\nint NORMAL_WEAPON_TEAM_COLOR = 1;\n");
+        assert_ne!(set, ShotCfg::default());
+        assert_eq!(Rules::default().digest_entries(), Rules { shots: set, ..Rules::default() }.digest_entries());
+        assert!(ShotCfg::KEYS.iter().all(|k| !TYPED_CFG_KEYS.contains(k)));
     }
 }
 
