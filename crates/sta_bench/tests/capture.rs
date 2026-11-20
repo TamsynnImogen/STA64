@@ -298,3 +298,49 @@ fn the_index_is_strict_json_and_the_older_json5_form_still_loads() {
     std::fs::write(dir.join(capture::INDEX_FILE), old).unwrap();
     assert_eq!(Capture::load(&dir).unwrap().index, cap.index);
 }
+
+/// A synthetic install (authored files only): a default tree, a smaller one, a
+/// map that names the smaller one, and a mod folder to mount.
+fn install_with_map_tree(name: &str) -> PathBuf {
+    let root = scratch(name);
+    let w = |rel: &str, bytes: &[u8]| {
+        let p = root.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, bytes).unwrap();
+    };
+    w("Data/techtree/tech1.tt", b"yard.odf 0\nship.odf 1 yard.odf\nbig.odf 1 yard.odf\n");
+    w("Data/techtree/small.tt", b"#include tech1.tt\nbig.odf -1\n");
+    w("Data/Mods/M/info.ini", b"[mod]\n");
+    let map = sta_bzn::Map { version: 3013, binary: false, tech_tree_file: "small.tt".into(), ..Default::default() };
+    w("Data/bzn/treemap.bzn", &sta_bzn::write::write(&map).unwrap());
+    root
+}
+
+/// The map's own tree is part of the content a game ran on, so the capture
+/// check must apply it as the game does (#1019).
+#[test]
+fn the_check_applies_the_tech_tree_the_map_names() {
+    let root = install_with_map_tree("map_tree_install");
+    let (default, races) = capture::load_install(&root, Some("M")).unwrap();
+    let (content, _) = capture::load_install_for_map(&root, Some("M"), "treemap").unwrap();
+    assert_ne!(default.hash(), content.hash(), "the map's tree changes the content hash");
+    // The map without a tree of its own keeps the default content.
+    let (same, _) = capture::load_install_for_map(&root, Some("M"), "no-such-map").unwrap();
+    assert_eq!(same.hash(), default.hash());
+
+    // A game of that map, as the game plays it: on the content with the map's tree.
+    let mut map = sta_content::MapDef::empty();
+    map.name = "treemap".into();
+    let s = setup(content.clone(), map, ["fx", "fx"]);
+    let mut game = Played::start(&s, None);
+    for _ in 0..20 {
+        game.step(&[]);
+    }
+    let mount = MountInfo { install_root: Some(root.display().to_string()), active_mod: Some("M".into()), ..Default::default() };
+    let cap = game.capture(&content, StartMode::Plain, mount);
+    let dir = cap.write(&scratch("map_tree_capture")).unwrap();
+    // Without the tree (what the check did before) the replay is refused for its content.
+    assert!(matches!(cap.verify(default, Some(&races)), Err(CaptureError::Replay(ReplayError::ContentMismatch { .. }))));
+    // The command takes the install and mod from the capture and passes.
+    assert_eq!(sta_bench::cli::main(vec!["capture".into(), "check".into(), dir.display().to_string()]), 0);
+}
