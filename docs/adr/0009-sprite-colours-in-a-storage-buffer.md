@@ -15,8 +15,8 @@ Sprite nodes (nebula puffs, glows, flat sprites, moon nimbi; the code is
 `crates/sta64/src/render/sprites.rs`) are billboard quads, each with its own
 `StandardMaterial` asset. The material's `base_color` is the look's animated
 sRGB colour multiplied by the node's `SpriteFade`, and `animate` writes it
-whenever it changes. Because the fade lives in the material colour, no two faded nodes of a look
-can share a material, and every node whose colour or fade changes is a
+whenever it changes. Because the fade lives in the material colour, faded nodes of a look cannot
+share a material unless their fades are bit-equal, and every node whose colour or fade changes is a
 material asset that changes.
 
 In this ADR, "main" is the code on the main branch today, and a node's
@@ -59,15 +59,10 @@ linear on the CPU, and the shader's power
 function is not bit-equal to the CPU's. Any exact design therefore ships the final
 linear colour, computed on the CPU with Bevy's own conversion.
 
-For reference: the original games (each statement: read from the executable,
-static; not measured). In the original games each nebula puff carries its own
-colour, set per sprite, and a nebula's fade only dims that colour; puffs share
-a few looks rather than each having its own material. The original draws
-translucent sprites back to front across the whole scene, one small draw per
-sprite, without merging sprites into larger batched draws. Sprites at exactly
-equal depth do keep a fixed order in the original, but it follows from the
-order objects happen to be submitted, not from a chosen rule; for additive
-puffs that order does not change the picture.
+For reference (read from the executable, static; not measured): in the
+original games a nebula's fade dims a puff's colour, and translucent sprites
+are drawn back to front. Where two sprites are at exactly equal depth, their
+order in the original follows no designed rule.
 
 Constraints that apply:
 
@@ -263,11 +258,12 @@ settings and a group toggled hidden and shown.
    other order than on main (one blended sprite on top of the other instead of
    under it; for additive ones a difference at rounding level)? Yes allows
    parity mode to be dropped, saving about 1 ms on the measured scene
-   (forecast). Without a decision, parity mode stays on. Background, not a
-   settlement: the original has a fixed but incidental tie order, and for
-   additive sprites the order does not affect the picture; STA64's sprite looks
-   use three blend modes (additive, alpha-blended and cut-out), so the answer
-   for the blended and cut-out looks is not given by that.
+   (forecast). Without a decision, parity mode stays on. Background: the
+   original's order at exactly equal depth follows no designed rule, and for
+   additive sprites the order does not change the picture (up to rounding), so
+   the question matters for the alpha-blended looks. Cut-out looks are drawn in
+   Bevy's binned alpha-mask phase, whose order is not affected by parity mode
+   (see "Tie order").
 2. Is carrying a forked copy of a Bevy shader (`sprite.wesl`, re-synced on
    every Bevy upgrade) acceptable? If not, the choice is between the
    unchanged per-node cost, the narrower options above (which do not remove
