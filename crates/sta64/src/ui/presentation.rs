@@ -1379,6 +1379,7 @@ mod tests {
     #[test]
     fn an_instant_clear_on_a_clear_screen_is_not_a_cineractives_first_fade() {
         let mut app = app();
+        frozen(&mut app);
         send(&mut app, Presentation::Cineractive { on: true, skippable: true });
         send(&mut app, Presentation::Fade { out: false, seconds: Fixed::ZERO, rgb: [0; 3] });
         assert_eq!(app.world().resource::<FadeState>().alpha, 0.0);
@@ -1410,6 +1411,7 @@ mod tests {
     #[test]
     fn titles_show_at_their_places_and_go_when_removed_or_timed_out() {
         let mut app = app();
+        frozen(&mut app);
         send(&mut app, Presentation::Title { id: 1, text: "Hello".into(), subtitle: false, seconds: None });
         send(&mut app, Presentation::Title { id: 2, text: "Sub".into(), subtitle: true, seconds: Some(secs(2)) });
         let t = app.world().resource::<Titles>();
@@ -1772,6 +1774,7 @@ mod tests {
     #[test]
     fn a_non_skippable_cineractive_yields_after_the_grace_and_ends_by_itself_in_the_end() {
         let mut app = app();
+        frozen(&mut app);
         send(&mut app, Presentation::Cineractive { on: true, skippable: false });
         let press = |app: &mut App, k: KeyCode| {
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
@@ -1815,6 +1818,7 @@ mod tests {
     #[test]
     fn space_skips_a_skippable_cineractive_once_and_the_script_gets_time_to_end_it() {
         let mut app = app();
+        frozen(&mut app);
         send(&mut app, Presentation::Cineractive { on: true, skippable: false });
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Space);
         app.update();
@@ -1848,6 +1852,7 @@ mod tests {
     #[test]
     fn a_cineractive_started_in_the_frame_the_skipped_one_ended_can_be_skipped_again() {
         let mut app = app();
+        frozen(&mut app);
         send(&mut app, Presentation::Cineractive { on: true, skippable: true });
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Space);
         app.update();
