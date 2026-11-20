@@ -285,6 +285,7 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] Derelict venting (#1059): a derelict ship inside a crew-draining nebula shows venting from its model's system nodes, and no flash of damage effects appears at match start.
 - [?] Moon fissures and cut-out parts (#1060): under Stock, the fissures of a dilithium moon glow on the lit side and on the dark side, and hull parts with cut-outs show what is behind them (no solid patches where holes should be).
 - [?] Nebula speed (#1055): under an Armada II family profile (stock Armada II, Fleet Operations, Roots, Native) ships are not slowed in a nebula whose definition declares `craft_speed_coefficient` but no `craft_max_speed_fraction`; one with the fraction slows them to that share of impulse speed. Under Armada I the coefficient still slows them (interim, not measured).
+- [?] Nebula shield return (#1063, Armada II family): after leaving a shield-disabling nebula the shields stay at zero for a few seconds, then return in one step to the value they had on entry and recharge from there.
 
 ## Checked earlier (morning list)
 
@@ -709,6 +710,19 @@ Run with `--mod "STA2 Classic Mod" --map a2_borg01` and a couple of FO4 maps.
 - [ ] Ship shadows (RND-15, #1060) are not cut-out (whole proxies); do it if wanted.
 - [ ] Bench scenario with a stock object definition (issue #1058): a bench scenario embeds a stock object definition; replace it with an authored fixture.
 - [ ] Install-gated `sta64` tests are never run in CI and several fail on main with an Armada II install (found in review of #1060; not caused by it): the front-end menu ship test (more ships in the menu than slots built: stale test or a real menu gap, to be decided), the `game::tests` skirmish and resource-moon tests (their default test map is absent from that install: they should skip or name a map every supported install has), a HUD builder-split test (its rule does not fit one race's content in that install: stale or written for another install), and a stock HUD GPU test that panics when its mod variable is unset (should skip). Fix the tests or the code they expose, and add a documented local command that runs all install-gated tests per install.
+- [ ] Nebula slice 2 (#1063): systems that stay off a moment after leaving (weapons hold, life support, sensors) are read from the executable, static, but their per-tick countdown is not established and the evidence is weak; not implemented, nothing reserved in the format.
+- [ ] Nebula shield return (#1063): the delay is one interim constant from a few measurement runs on two classes; measure more classes and whether it follows a data key of the craft (a per-class `shieldDelay` key plus a system off-timer is a candidate, inferred, not proven), then replace the constant.
+- [ ] Nebula shield return (#1063): the value restored on leaving is the value on entry, measured on partial-shield samples over two classes of Armada II 1.1 (grade: measured); the record layout stands.
+- [ ] Nebula shield return edge cases (#1063): re-entry, zero on entry, generator off, derelict, owner change, overlapping kinds and scripted shield edits in the delay are the simplest reading, not measured.
+- [ ] Nebula shield return (#1063): Armada I keeps the recharge from 0 (interim); Fleet Operations and Roots follow the Armada II family by engine family, not measured.
+- [ ] Nebula shield return (#1063): a generator below full hit points stays off after a nebula (read from the executable, static; not measured); STA64 does not switch the generator off in a nebula and restores the shields.
+- [ ] Nebula slice 3 and later (#1063), unchanged: sensors off, hidden contents, clear-effects, the entry voice (needs a latch in the format), the damage rate of the damaging class (needs a second measurement), warp in nebulae.
+- [ ] Digest (#1063): the records `recrew`, `repairs`, `recycles` and the nebula shield record are hashed into the combat section digest only, not into `Sim::digest` or `section_rows`; decide whether they should be.
+- [ ] WORKPLAN owed (#1063): the SIM-75 row still lists the off-timer under slice 2; update it in the docs batch (it was not implemented).
+- [ ] Snapshot format (#1063): the snapshot format is 39 since #1063; saves and snapshots of earlier versions are refused.
+- [ ] Briefing text (#1064) is split on blank lines at run time (front-end campaign screen and the mission host); if briefing text read from an install carries CRLF line endings the split never happens. Check whether the text is normalised earlier; if not, normalise on load and add a test with CRLF input (found in review of #1064; not verified).
+- [ ] Tests that assert on source text must not depend on line endings or indentation (a Windows checkout has CRLF): #1064 fixed three; keep the rule for new tests. PRs that touch the client get the `full-ci` label: #1060 merged with a Linux-only run and made main red on Windows (#1060, #1064).
+- [ ] The Windows `sta_net` test `injected_latency_stalls_but_never_diverges` flaked again on 2026-11-20 (one PR run); still unfixed (#1064 review).
 
 ## Backward compatibility gaps (Armada I, Armada II, Fleet Operations)
 
