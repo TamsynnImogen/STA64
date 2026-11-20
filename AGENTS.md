@@ -99,7 +99,13 @@ paths fall under an open freeze wait; ones elsewhere carry on.
 
 - PR title as the issue (`[SIM-04] Weapons and fire arcs`), body starting
   `Closes #NN`, then the *done when* evidence, files touched outside *owns*,
-  decisions the plan did not dictate, and new `TODO.md` check lines.
+  decisions the plan did not dictate, and the new check lines.
+- New check lines go in the PR's own fragment `todo.d/<branch>.md` (the
+  branch name with `/` turned into `-`, e.g. `todo.d/wp-SIM-04-weapons.md`),
+  never appended to `TODO.md`, so concurrent PRs do not conflict. Same
+  format and headings as `TODO.md`; see [todo.d/README.md](todo.d/README.md).
+  Tick or change a line where it currently lives. `tools/todo.py` lists the
+  open lines of both; a housekeeping PR folds the fragments into `TODO.md`.
 - Open it as a draft until the *done when* check passes on your branch; mark
   it ready after that. The user merges; agents never merge their own PRs.
 - CI on a PR runs `core crates` on `ubuntu-latest` always, and `sta64` on

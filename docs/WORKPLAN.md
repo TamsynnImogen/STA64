@@ -441,7 +441,7 @@ Every package owns the paths in its *owns* column. Hotspots and their rules:
 | Workspace `Cargo.toml` | Members written once in R0-2. A new external dependency is one line appended to `[workspace.dependencies]`, named in the PR description. A new crate needs a seam PR. |
 | `sta64/Cargo.toml`, `Cargo.lock` | Append one dependency per line. Never hand-merge `Cargo.lock`: rebase, then `cargo update -w`. |
 | `.github/workflows/*` | TOOL lane. Others request a job in their PR description; TOOL-06 adds it. |
-| `docs/ROADMAP.md`, `TODO.md` | Ticked only by INT packages and the user. `TODO.md` stays the user's eye-check list; packages add `[?]` lines only under "Needs your check", append-only. |
+| `docs/ROADMAP.md`, `TODO.md` | Ticked only by INT packages and the user. `TODO.md` stays the user's eye-check list; packages do not append to it: their new lines (`[?]` under "Needs your check") go in their own `todo.d/<branch>.md` fragment, which a housekeeping PR folds into `TODO.md` (`tools/todo.py fold`). |
 | `docs/NATIVE_FEATURES.md` | A package may change the Status cell of the rows it implements, nothing else. |
 | `docs/data/*` | Generated. Never hand-edited or hand-merged; rerun `tools/data_inventory.py`. |
 | `bench/scenes/`, `bench/scenarios/`, `fixtures/` | New files only; a package edits only files it added. Shared fixtures (`fixtures/content/`) are CON-04's; others append new files. |
@@ -980,7 +980,8 @@ where lanes meet in one PR.
   `seam/<slug>`. Never commit to `main` directly.
 - **One package per PR.** Title `[SIM-04] Weapons and fire arcs`. Body: the
   done-when evidence, files touched outside *owns* (should be none besides
-  `plugins.rs` and appended deps), new `TODO.md` check lines.
+  `plugins.rs` and appended deps), new check lines (in the PR's
+  `todo.d/<branch>.md` fragment, AGENTS.md "Finishing").
 - **Seam changes** go in their own small PR touching only seam files, with
   the reason, the callers affected, and updated fakes. Within a milestone
   seams change additively only (new variants, new fields with defaults, new
