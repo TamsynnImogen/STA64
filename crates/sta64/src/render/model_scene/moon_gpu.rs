@@ -1,9 +1,12 @@
 //! Optional, windowless frames of a dilithium moon under the Stock look (install-gated, nothing committed from it).
-//! `STA64_GPU_TESTS=1` and `STA64_TEST_INSTALL` (an Armada II or Armada I install); `STA64_GPU_OUT` keeps the PNGs
+//! `STA64_GPU_TESTS=1` and `STA64_TEST_INSTALL` (an Armada II or Armada I install; the flat-colour rule is asserted on the Armada II family only); `STA64_GPU_OUT` keeps the PNGs
 //! outside the repository. The moon is drawn through the real spawn path and the Stock hull look, lit by one
-//! white directional light, with no sprites (the nimbus is a separate sprite node).
+//! white directional light, with no sprites (the nimbus is a separate sprite node). The camera has a depth
+//! prepass and no tonemapper, like the map camera in the Stock look.
 use super::*;
 use bevy::camera::RenderTarget;
+use bevy::core_pipeline::prepass::DepthPrepass;
+use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::render::RenderPlugin;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::window::ExitCondition;
@@ -23,6 +26,12 @@ fn installed_moon_has_no_highlight_and_a_lit_core() {
     let model = sta_assets::load_model(&vfs, &path, fmt).unwrap();
     let (lo, hi) = model.bounds().expect("model bounds");
     let centre = Vec3::from(mirror(std::array::from_fn(|i| (lo[i] + hi[i]) * 0.5))) * 0.8;
+    // The shell's own data diffuse, read at run time: what the Stock look draws it as (model 0: unlit).
+    let shell = model
+        .materials
+        .iter()
+        .find(|m| crate::render::rock::is_moon_shell(&m.name))
+        .map(|m| (m.model, m.diffuse.map(|c| (c * 255.0).round() as i32)));
     let radius = (Vec3::from(hi) - Vec3::from(lo)).length() * 0.4;
     let mut app = App::new();
     app.add_plugins(
@@ -61,6 +70,8 @@ fn installed_moon_has_no_highlight_and_a_lit_core() {
             Camera3d::default(),
             RenderTarget::from(target.clone()),
             Msaa::Off,
+            Tonemapping::None,
+            DepthPrepass,
             Transform::from_translation(centre + Vec3::new(0.0, radius * 2.5, radius * 1.2))
                 .looking_at(centre, Vec3::Y),
         ))
@@ -111,7 +122,7 @@ fn installed_moon_has_no_highlight_and_a_lit_core() {
     app.cleanup();
     let frames = Arc::new(Mutex::new(Vec::<(String, Image)>::new()));
     let mut stats = Vec::new();
-    for (name, lit_from) in [("lit-front", Vec3::new(0.0, 1.0, 1.0)), ("lit-side", Vec3::new(1.0, 0.2, 0.2))] {
+    for (name, lit_from) in [("lit-front", Vec3::new(0.0, 1.0, 1.0)), ("lit-side", Vec3::new(1.0, 0.2, 0.2)), ("lit-back", Vec3::new(0.0, -0.3, -1.0))] {
         {
             let mut q = app.world_mut().query_filtered::<&mut Transform, With<DirectionalLight>>();
             for mut t in q.iter_mut(app.world_mut()) {
@@ -140,7 +151,7 @@ fn installed_moon_has_no_highlight_and_a_lit_core() {
             std::fs::create_dir_all(&dir).unwrap();
             rgba.save(std::path::Path::new(&dir).join(format!("moon-{name}.png"))).unwrap();
         }
-        stats.push((name, MoonFrame::of(&rgba)));
+        stats.push((name, MoonFrame::of(&rgba, shell.map(|s| s.1))));
     }
     for (name, s) in &stats {
         eprintln!("moon {model_key} {name}: {s:?}");
@@ -152,6 +163,33 @@ fn installed_moon_has_no_highlight_and_a_lit_core() {
         assert!(s.core_mean_b > s.rock_mean, "{name}: the core is not brighter than the rock: {s:?}");
         assert_eq!(s.core_white, 0, "{name}: a highlight on the shell: {s:?}");
         assert_eq!(s.rock_hot, 0, "{name}: a highlight on the rock: {s:?}");
+    }
+    // Rule (measured on the original for this material, Armada II 1.1): the shell is drawn unlit, in its
+    // own diffuse colour, on the lit and the dark side alike. `lit-back` has the light behind the moon,
+    // so the rock the camera sees is dark there.
+    let Some((model0, expected)) = shell else {
+        eprintln!("SKIP: no glow shell material in {model_key}");
+        return;
+    };
+    // The test app has no content profile, so it draws as the Armada II family does: the flat-colour rule is
+    // asserted only on an install of that family (the Armada II or Fleet Operations executable is present).
+    let root = std::path::Path::new(&root);
+    if !["Armada2.exe", "FleetOps.exe"].iter().any(|exe| root.join(exe).is_file()) {
+        eprintln!("SKIP: not an Armada II family install; the unlit rule is not asserted for it");
+        return;
+    }
+    if model0 != 0 {
+        eprintln!("SKIP: the shell's lighting material is model {model0}, not 0, in this install");
+        return;
+    }
+    for (name, s) in &stats {
+        assert!(s.core > 50 && s.flat * 10 >= s.core * 9, "{name}: the fissures do not show one flat shell colour {expected:?}: {s:?}");
+    }
+    for c in 0..3 {
+        let means: Vec<f32> = stats.iter().map(|(_, s)| s.mean[c]).collect();
+        let (lo, hi) = (means.iter().cloned().fold(f32::MAX, f32::min), means.iter().cloned().fold(f32::MIN, f32::max));
+        assert!(hi - lo <= 2.0, "channel {c}: the shell colour differs between lit and dark side: {means:?}");
+        assert!((means[0] - expected[c] as f32).abs() <= 3.0, "channel {c}: the shell is {} not its diffuse {}", means[0], expected[c]);
     }
 }
 
@@ -170,11 +208,16 @@ struct MoonFrame {
     core_white: usize,
     /// Rock pixels brighter than 0.9: a highlight on the rock.
     rock_hot: usize,
+    /// Core pixels within 3 of the shell's own diffuse (8-bit), when it is given.
+    flat: usize,
+    /// Mean colour of the core pixels.
+    mean: [f32; 3],
 }
 
 impl MoonFrame {
-    fn of(img: &image::RgbaImage) -> MoonFrame {
+    fn of(img: &image::RgbaImage, expected: Option<[i32; 3]>) -> MoonFrame {
         let (mut lit, mut core, mut core_b, mut rock, mut rock_sum, mut core_white, mut rock_hot) = (0, 0, 0u64, 0, 0u64, 0, 0);
+        let (mut flat, mut sum) = (0, [0u64; 3]);
         for p in img.pixels() {
             let (r, g, b) = (p[0] as u32, p[1] as u32, p[2] as u32);
             let top = r.max(g).max(b);
@@ -186,13 +229,17 @@ impl MoonFrame {
                 core += 1;
                 core_b += b as u64;
                 core_white += (r > 250) as usize;
+                sum[0] += r as u64;
+                sum[1] += g as u64;
+                sum[2] += b as u64;
+                flat += expected.is_some_and(|e| (r as i32 - e[0]).abs() <= 3 && (g as i32 - e[1]).abs() <= 3 && (b as i32 - e[2]).abs() <= 3) as usize;
             } else {
                 rock += 1;
                 rock_sum += top as u64;
                 rock_hot += (top > 230) as usize;
             }
         }
-        MoonFrame { lit, core, core_mean_b: core_b as f32 / core.max(1) as f32, rock_mean: rock_sum as f32 / rock.max(1) as f32, core_white, rock_hot }
+        MoonFrame { lit, core, core_mean_b: core_b as f32 / core.max(1) as f32, rock_mean: rock_sum as f32 / rock.max(1) as f32, core_white, rock_hot, flat, mean: sum.map(|v| v as f32 / core.max(1) as f32) }
     }
 }
 
