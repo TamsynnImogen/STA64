@@ -67,7 +67,7 @@ fn _every_sim_field_is_decided(s: &Sim) {
     let Sim {
         tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, starts: _, regions: _,
         bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, economy: _,
-        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, attrs: _, scripted: _, switches: _, relations: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _, transports: _, recrew: _, repairs: _, recycles: _, alerts: _, mission_switches: _,
+        production: _, victory: _, specials: _, autonomy: _, start_effects: _, replacements: _, nav: _, subsystems: _, attrs: _, scripted: _, switches: _, relations: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _, transports: _, recrew: _, repairs: _, recycles: _, alerts: _, mission_switches: _,
     } = s;
 }
 
@@ -136,6 +136,9 @@ impl Sim {
         // will exist, so they belong with the roster.
         if !self.start_effects.is_empty() {
             self.start_effects.hash_into(&mut h);
+        }
+        if !self.replacements.is_empty() {
+            self.replacements.hash_into(&mut h);
         }
         h.0
     }
@@ -331,6 +334,9 @@ impl Sim {
                 }
                 if !self.start_effects.is_empty() {
                     row(None, "start effects (hash)", block("start_effects", &|h| self.start_effects.hash_into(h)));
+                }
+                if !self.replacements.is_empty() {
+                    row(None, "replacement weapons (hash)", block("replaceweapon", &|h| self.replacements.hash_into(h)));
                 }
             }
             "movement" => {

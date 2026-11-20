@@ -217,7 +217,7 @@ pub enum Act {
     Back,
     /// Arm a map target; completed by the HUD's target click system.
     Target(TargetMode),
-    /// A supported special slot toggle (cloak or point defence).
+    /// An immediate supported special slot (including untargeted replace weapons).
     Special(u8),
     /// UI-02's stop on the own selection.
     Stop,
@@ -266,6 +266,8 @@ pub enum TargetMode {
     Repair,
     /// The stock DECOMMISSION command: pick a yard, or anywhere for the best one or in place (SIM-45).
     Decommission,
+    /// A replace weapon whose authored `needTarget` requires a map pick.
+    Special(u8),
 }
 
 /// How a button looks.
@@ -506,6 +508,7 @@ pub(super) fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
         Act::Target(TargetMode::TransportAttack) => (vec!["b_capture".into()], false),
         Act::Target(TargetMode::Repair) => (vec!["b_repair".into()], false),
         Act::Target(TargetMode::Decommission) => (vec!["b_decom".into()], false),
+        Act::Target(TargetMode::Special(_)) => (Vec::new(), false),
         Act::Cancel(_) => (vec!["b_cancel".into()], false),
         Act::Formation(_) => (Vec::new(), false),
         // No verified native ID for these actions; use the existing label.
@@ -678,7 +681,11 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
     }
     for (i, (slot, kind)) in caps.specials.iter().enumerate() {
         if let Some(cell) = [5, 10, 11, 12, 13, 14].get(i) {
-            let act = Act::Special(*slot);
+            let weapon = selected_special_weapon(feed, *slot);
+            let targeted = *kind == sta_sim::specials::SpecialKind::Replace
+                && special_targeted(feed, *slot) == Some(true);
+            if *kind == sta_sim::specials::SpecialKind::Replace && special_targeted(feed, *slot).is_none() { continue; }
+            let act = if targeted { Act::Target(TargetMode::Special(*slot)) } else { Act::Special(*slot) };
             let mut b = if *kind == sta_sim::specials::SpecialKind::PointDefence {
                 let Some((state, ready)) = point_defence_state(feed, *slot) else { continue };
                 let status = match state {
@@ -691,10 +698,17 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
                 let mut b = button(*cell, &label, act, &tip);
                 if !ready { b.look = Look::Locked; }
                 b
-            } else {
+            } else if *kind == sta_sim::specials::SpecialKind::Cloak {
                 button(*cell, &tr("Cloak"), act, &tooltip_key("Toggle cloak"))
+            } else {
+                let label = weapon.map_or("Replace", |w| w.odf.as_str());
+                button(*cell, &tr(label), act, &tooltip_key(label))
             };
-            if let Some(weapon) = selected_special_weapon(feed, *slot) {
+            if let Some(weapon) = weapon {
+                if *kind == sta_sim::specials::SpecialKind::Replace {
+                    let stem = weapon.odf.rsplit(['/', '\\']).next().unwrap_or(&weapon.odf).trim_end_matches(".odf");
+                    b.sprite_names = vec![format!("b_{stem}"), stem.to_owned()];
+                }
                 if let Some(tip) = weapon.raw.str("tooltip") {
                     b.tip = tip.to_owned();
                 }
@@ -719,6 +733,20 @@ fn selected_special_weapon(feed: &HudFeed, slot: u8) -> Option<&sta_content::Wea
         });
     let weapon = weapons.next()??;
     weapons.all(|other| other.is_some_and(|w| w.key == weapon.key)).then_some(weapon)
+}
+
+/// A shared replace slot must agree on whether its weapons require a map pick.
+pub(super) fn special_targeted(feed: &HudFeed, slot: u8) -> Option<bool> {
+    let db = feed.content.as_deref()?;
+    let mut units = feed.selected_units().into_iter().filter(|u| u.owner == feed.player);
+    let first = units.next()?;
+    let targeted = sta_sim::specials::specials_of(db, feed.def(first)?)
+        .nth(slot as usize).filter(|(kind, _)| *kind == sta_sim::specials::SpecialKind::Replace)?
+        .1.base.need_target == Some(true);
+    units.all(|u| feed.def(u).and_then(|def| sta_sim::specials::specials_of(db, def).nth(slot as usize))
+        .is_some_and(|(kind, weapon)| kind == sta_sim::specials::SpecialKind::Replace
+            && (weapon.base.need_target == Some(true)) == targeted))
+        .then_some(targeted)
 }
 
 /// The command a button's press puts in the queue, with the units it speaks
@@ -749,7 +777,9 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
         )),
         Act::Special(slot) if caps.specials.iter().any(|s| s.0 == *slot
             && (s.1 != sta_sim::specials::SpecialKind::PointDefence
-                || point_defence_state(feed, *slot).is_some_and(|(_, ready)| ready))) => Some((
+                || point_defence_state(feed, *slot).is_some_and(|(_, ready)| ready))
+            && (s.1 != sta_sim::specials::SpecialKind::Replace
+                || special_targeted(feed, *slot) == Some(false))) => Some((
             CommandKind::Order(Order::Special {
                 units: own.clone(),
                 slot: *slot,

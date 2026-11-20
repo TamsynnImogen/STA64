@@ -96,6 +96,7 @@ pub const WEAPON_CLASSES: &[&str] = &[
     "areamissile",
     "toggleweapon",
     "utilityweapon",
+    "replaceweapon",
     "cloakingdevice",
     "cloakingdeviceimp",
     "ordnancedefenseweapon",

@@ -776,7 +776,7 @@ pub struct WeaponDef {
     /// `resourceweapon` class only (SIM-24): what the weapon adds to its
     /// owner's stock and who it works for. `None` for every other class.
     pub resource: Option<ResourceWeaponDef>,
-    /// An instant `replaceweapon` (SIM-28); `None` for every other weapon.
+    /// A `replaceweapon`, including manual activation (SIM-28); `None` for other weapons.
     pub replace: Option<crate::lifecycle::ReplaceDef>,
     /// The colonizer pod this weapon launches (SIM-30): set when the ordnance's
     /// class is `ColonizerPod`; `None` for every other weapon.

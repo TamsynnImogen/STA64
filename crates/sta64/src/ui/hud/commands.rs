@@ -81,9 +81,8 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
     let specials = specials_of(db, def)
         .enumerate()
         .filter_map(|(slot, (kind, _weapon))| {
-            // UI-31: the toggleable point defence too (the sim lists it as a special only where its
-            // energy rule is on); `Order::Special` on its slot toggles it.
-            (slot <= u8::MAX as usize && matches!(kind, SpecialKind::Cloak | SpecialKind::PointDefence)).then_some((slot as u8, kind))
+            // Point defence is listed only where its energy toggle is supported.
+            (slot <= u8::MAX as usize && matches!(kind, SpecialKind::Cloak | SpecialKind::PointDefence | SpecialKind::Replace)).then_some((slot as u8, kind))
         })
         .collect();
     let t = transport_state(db, def, kind, u);

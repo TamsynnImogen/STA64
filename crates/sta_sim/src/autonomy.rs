@@ -74,6 +74,15 @@ impl Autonomy {
         }
     }
 
+    pub(crate) fn copy_to(&mut self, from: EntityId, to: EntityId) {
+        let levels = self.levels(from);
+        if levels == ENGINE_DEFAULT {
+            self.set.remove(to);
+        } else {
+            self.set.insert(to, levels);
+        }
+    }
+
     pub(crate) fn remove(&mut self, id: EntityId) {
         self.set.remove(id);
     }

@@ -79,6 +79,7 @@ pub mod spatial;
 pub mod spawn;
 pub mod start;
 mod start_effects;
+mod replacement;
 pub mod attrs;
 pub mod team_pool;
 #[cfg(test)]
@@ -188,6 +189,7 @@ pub struct Sim {
     alerts: alert::Alerts,
     /// Pending start-helper lifecycle steps (SIM-28); in the digest once any exist.
     start_effects: start_effects::StartEffects,
+    replacements: replacement::Replacements,
     /// Move orders that make no progress (stuck detector): in snapshots, not in the digest.
     watchdog: watchdog::Watchdog,
     /// Path planner grids and fields (SIM-23): a memo, not in the digest.
@@ -252,6 +254,7 @@ impl Sim {
             engagement: Default::default(),
             alerts: Default::default(),
             start_effects: Default::default(),
+            replacements: Default::default(),
             watchdog: Default::default(),
             nav: Default::default(),
             subsystems: Default::default(),
@@ -443,9 +446,10 @@ impl Sim {
                 let Some(db) = self.content.clone() else { return false };
                 self.specials.order_cloak(&db, &self.units, c.player, units, *on)
             }
-            Order::Special { units, slot, .. } => {
+            Order::Special { units, slot, target } => {
                 let Some(db) = self.content.clone() else { return false };
-                self.weapons.order_special(self.tick, &db, &self.units, &mut self.specials, &mut self.rng, &mut self.events, c.player, units, *slot)
+                let toggled = self.weapons.order_special(self.tick, &db, &self.units, &mut self.specials, &mut self.rng, &mut self.events, c.player, units, *slot);
+                self.order_replacements(&db, c.player, units, *slot, *target) || toggled
             }
             Order::Autonomy { units, kind, level } => {
                 self.autonomy.order(&self.units, c.player, units, *kind, *level)
@@ -723,6 +727,9 @@ impl Sim {
         }
         if !self.start_effects.is_empty() {
             self.start_effects.hash_into(&mut h);
+        }
+        if !self.replacements.is_empty() {
+            self.replacements.hash_into(&mut h);
         }
         if !self.subsystems.is_empty() {
             self.subsystems.hash_into(&mut h);

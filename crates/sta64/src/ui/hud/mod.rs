@@ -670,6 +670,8 @@ fn armed_cursor_name(mode: TargetMode, valid: bool) -> &'static str {
         // Installed tables have c_rally but no c_norally; use the move refusal art.
         (TargetMode::Rally, true) => "c_rally",
         (TargetMode::Rally, false) => "c_nomove",
+        (TargetMode::Special(_), true) => "c_attack",
+        (TargetMode::Special(_), false) => "c_noattack",
     }
 }
 
@@ -712,6 +714,8 @@ fn target_mode_available(feed: &HudFeed, mode: TargetMode) -> bool {
         TargetMode::TransportAttack => c.transport_attack_ready,
         TargetMode::Repair => c.repair,
         TargetMode::Decommission => c.decommission,
+        TargetMode::Special(slot) => c.specials.contains(&(slot, sta_sim::specials::SpecialKind::Replace))
+            && model::special_targeted(feed, slot) == Some(true),
     }
 }
 
@@ -814,6 +818,13 @@ fn target_order(
                 None => Target::Point(point?),
             };
             vec![Order::Rally { builders: ids.clone(), at }]
+        }
+        TargetMode::Special(slot) => {
+            let at = match target.and_then(|id| feed.view.unit(id).filter(|u| !u.flags.contains(UnitFlags::DYING)).map(|_| id)) {
+                Some(id) => Target::Entity(id),
+                None => Target::Point(point?),
+            };
+            vec![Order::Special { units: ids.clone(), slot, target: at }]
         }
     };
     Some((orders, ids))

@@ -9,7 +9,11 @@
 //!
 //! - **Expiry.** A hidden object with `autoExpireTime` (else `lifeTimer`) removes
 //!   itself that many seconds after it appears.
-//! - **Instant replacement.** A hardpoint weapon of class `replaceweapon` with
+//! Authored ReplaceWeapon ODFs use the shared replacement runtime. This
+//! scheduler also retains the original startup behavior for synthetic rules
+//! which do not supply the native options.
+//!
+//! - **Legacy instant replacement.** A hardpoint weapon of class `replaceweapon` with
 //!   `replacementInstantPlayer` / `AI` / `Derelict` set for the owner's kind
 //!   fires `replacementInstantDelay` seconds after a hidden object appears;
 //!   a visible object fires only for an AI owner with `replacementInstantAI`.
@@ -147,7 +151,8 @@ impl Sim {
         }
         for (i, hp) in def.hardpoints.iter().enumerate().take(256) {
             if let Some(r) = db.weapon(hp.weapon.key).and_then(|w| w.replace.as_ref()).filter(|r| {
-                r.required_officers.is_none() && r.fires_for(kind) && (def.hidden || kind == Owner::Ai)
+                r.fires_for(kind) && (r.options != Default::default()
+                    || (r.required_officers.is_none() && (def.hidden || kind == Owner::Ai)))
             }) {
                 self.start_effects.add(Row { at: self.tick + r.delay, id, act: Act::Replace(i as u8) });
             }
@@ -175,6 +180,16 @@ impl Sim {
         let Some(def) = db.unit(source.def) else { return };
         let Some(weapon) = def.hardpoints.get(hardpoint as usize).and_then(|hp| db.weapon(hp.weapon.key)) else { return };
         let Some(r) = weapon.replace.as_ref() else { return };
+        if r.options != Default::default() {
+            if !r.fires_for(self.owner_kind(source.owner)) {
+                return;
+            }
+            self.execute_replacement(db, id, hardpoint as usize, weapon, crate::command::Target::None, false);
+            if r.options.cycle > 0 && self.units.contains(id) {
+                self.start_effects.add(Row { at: self.tick.saturating_add(r.options.cycle), id, act: Act::Replace(hardpoint) });
+            }
+            return;
+        }
         // A visible delayed source may have changed owner since registration.
         // Its AI-only admission must still hold at fire time.
         if !def.hidden && (self.owner_kind(source.owner) != Owner::Ai || !r.fires_for(Owner::Ai) || r.required_officers.is_some()) {
@@ -203,14 +218,14 @@ impl Sim {
         };
         let mut out = Vec::new();
         for entry in chosen {
-            let total: u64 = entry.classes.iter().map(|c| u64::from(c.weight)).sum();
+            let total: u64 = entry.classes.iter().map(|c| c.weight.max(0) as u64).sum();
             let class = if total > 0 {
                 let mut roll = self.rng.next_u64() % total;
                 entry.classes.iter().filter(|c| c.weight > 0).find(|c| {
-                    if roll < u64::from(c.weight) {
+                    if roll < c.weight.max(0) as u64 {
                         true
                     } else {
-                        roll -= u64::from(c.weight);
+                        roll -= c.weight.max(0) as u64;
                         false
                     }
                 })
@@ -236,13 +251,17 @@ pub fn unsupported(db: &ContentDb, key: sta_core::ContentKey) -> Vec<String> {
             let Some(w) = db.weapon(hp.weapon.key) else { continue };
             match &w.replace {
                 Some(r) => {
-                    if !matches!(r.mode, 0 | 2) {
+                    let native = r.options != Default::default();
+                    let supported = if native { (0..=4).contains(&r.mode) } else { matches!(r.mode, 0 | 2) };
+                    if !supported {
                         out.push(format!("{}: replacementMode {} is not simulated", w.odf, r.mode));
                     }
-                    if let Some(n) = r.required_officers {
-                        out.push(format!("{}: requiredOfficers {n} (unit-cap replacement) is not simulated", w.odf));
+                    if let Some(n) = r.required_officers.filter(|_| !native) {
+                        out.push(format!("{}: requiredOfficers {n} is unavailable for legacy startup rules", w.odf));
                     }
-                    for class in r.entries.iter().flat_map(|e| &e.classes).filter(|_| r.required_officers.is_none()) {
+                    for class in r.entries.iter().flat_map(|e| &e.classes)
+                        .filter(|c| !c.odf.is_empty() && (native || r.required_officers.is_none()))
+                    {
                         match db.key(&class.odf).filter(|&c| db.unit(c).is_some()) {
                             Some(c) if !seen.contains(&c) => {
                                 seen.push(c);
@@ -301,13 +320,13 @@ mod tests {
         d
     }
 
-    fn class(odf: &str, weight: u32, x: i32) -> ReplaceClass {
+    fn class(odf: &str, weight: i32, x: i32) -> ReplaceClass {
         ReplaceClass { odf: odf.into(), weight, offset: [Fixed::from_int(x), Fixed::ZERO, Fixed::ZERO] }
     }
 
     fn replace(name: &str, instant: [bool; 3], delay: Tick, mode: i64, required: Option<i64>, entries: Vec<ReplaceEntry>) -> WeaponDef {
         let mut w = WeaponDef::new(name, "replaceweapon", WeaponKind::Beam);
-        w.replace = Some(ReplaceDef { instant, delay, mode, required_officers: required, entries });
+        w.replace = Some(ReplaceDef { instant, delay, mode, required_officers: required, entries, options: Default::default() });
         w
     }
 
@@ -502,7 +521,7 @@ mod tests {
     fn weights_draw_from_the_sim_generator_deterministically() {
         let pick = |seed: u64| {
             let mut sim = Sim::new(seed);
-            let r = ReplaceDef { instant: [true; 3], delay: 0, mode: 2, required_officers: None, entries: vec![entry(None, vec![class("a", 35, 0), class("b", 35, 0), class("c", 25, 0)])] };
+            let r = ReplaceDef { instant: [true; 3], delay: 0, mode: 2, required_officers: None, entries: vec![entry(None, vec![class("a", 35, 0), class("b", 35, 0), class("c", 25, 0)])], options: Default::default() };
             (0..64).map(|_| sim.pick_replacements(&r, "x")[0].0.clone()).collect::<Vec<_>>()
         };
         assert_eq!(pick(9), pick(9));
