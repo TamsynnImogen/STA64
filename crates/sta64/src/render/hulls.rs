@@ -158,6 +158,23 @@ impl Material for HullMaterial {
         ShaderRef::Path(AssetPath::parse("embedded://sta64/render/hulls.wesl").into_owned())
     }
 
+    /// A cut-out part is a mask material, and its depth prepass runs a fragment shader with the same alpha
+    /// test as the colour pass, so a texel the test rejects writes no depth. Bevy 0.20.1 gives a prepass
+    /// pipeline a fragment stage only for a mask material that names a prepass fragment shader
+    /// (`MAY_DISCARD` plus `get_shader(PrepassFragmentShader)`); an opaque part keeps the depth-only
+    /// pipeline, so non-cut parts are drawn as before. That holds only while no camera has a normal,
+    /// motion-vector or deferred prepass and no unclipped-depth emulation runs: otherwise Bevy uses this
+    /// output-less shader for EVERY hull part and every hull's prepass pipeline breaks (none does today).
+    /// The same pipeline serves Bevy's shadow depth pass, which no light enables; the ship shadows
+    /// (`shadows.rs`) use their own caster material and are not cut-out.
+    fn alpha_mode(&self) -> AlphaMode {
+        if self.params.cut.x > 0.5 { AlphaMode::Mask(0.5) } else { AlphaMode::Opaque }
+    }
+
+    fn prepass_fragment_shader() -> ShaderRef {
+        ShaderRef::Path(AssetPath::parse("embedded://sta64/render/hulls_prepass.wesl").into_owned())
+    }
+
     fn specialize(
         _: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
@@ -257,6 +274,7 @@ pub struct HullPlugin;
 impl Plugin for HullPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "hulls.wesl");
+        embedded_asset!(app, "hulls_prepass.wesl");
         app.add_plugins(MaterialPlugin::<HullMaterial>::default())
             .init_resource::<HullLighting>()
             .init_resource::<HullView>()
@@ -660,9 +678,34 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e:?}"));
     }
 
+    /// The cut-out prepass shader parses and validates, and tests the same alpha as the colour pass.
+    #[test]
+    fn prepass_shader_validates_and_cuts_like_the_colour_pass() {
+        let raw = include_str!("hulls_prepass.wesl");
+        let src = raw.replace("constants::MATERIAL_BIND_GROUP", "3");
+        let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
+        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        assert!(raw.contains("k.cut.x > 0.5 && t.a < 0.5"));
+        assert!(include_str!("hulls.wesl").contains("k.cut.x > 0.5 && t.a < 0.5"));
+    }
+
+    /// Only a cut-out part is a mask material (the one with a prepass fragment stage); the rest stay opaque.
+    #[test]
+    fn only_cut_parts_are_mask_materials() {
+        let view = HullView::default();
+        let cut = hull_material(&standard(), &HullPart { cut_alpha: true, ..default() }, &view);
+        assert!(matches!(cut.alpha_mode(), AlphaMode::Mask(_)));
+        let plain = hull_material(&standard(), &HullPart::default(), &view);
+        assert!(matches!(plain.alpha_mode(), AlphaMode::Opaque));
+    }
+
     /// The path `embedded_asset!` registers must be the one the material asks for.
     #[test]
     fn shader_path_matches_embedded_registration() {
+        let registered = bevy::asset::embedded_path!("src", "hulls_prepass.wesl");
+        assert_eq!(registered.to_string_lossy().replace('\\', "/"), "sta64/render/hulls_prepass.wesl");
         let registered = bevy::asset::embedded_path!("src", "hulls.wesl");
         assert_eq!(registered.to_string_lossy().replace('\\', "/"), "sta64/render/hulls.wesl");
     }
@@ -1062,6 +1105,10 @@ mod gpu {
     }
 
 }
+
+#[cfg(test)]
+#[path = "hulls/cutout_gpu.rs"]
+mod cutout_gpu;
 
 #[cfg(test)]
 #[path = "hulls/appearance_tests.rs"]
