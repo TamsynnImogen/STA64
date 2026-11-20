@@ -768,6 +768,8 @@ mod tests {
         ];
         let view = Arc::new(WorldView { units, ..default() });
         let mut app = App::new();
+        // Time stands still: a double click or tap is two inputs within the window, not a race with the runner.
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::ZERO));
         app.add_plugins(MinimalPlugins)
             .add_message::<SelectionChanged>()
             .add_message::<CameraFocus>()
