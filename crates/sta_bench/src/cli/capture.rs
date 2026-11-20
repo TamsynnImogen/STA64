@@ -68,7 +68,7 @@ fn check(o: &Opts) -> Outcome {
         let Some(install) = install else {
             return Err(Fail::Error("the capture records no install: pass --install <root> [--mod <name>], or --fake for a capture of the bench's fake content".into()));
         };
-        let (db, races) = capture::load_install(&install, active.as_deref()).map_err(|e| Fail::Error(e.to_string()))?;
+        let (db, races) = capture::load_install_for_map(&install, active.as_deref(), &i.map).map_err(|e| Fail::Error(e.to_string()))?;
         (db, Some(races))
     };
     // Fake content has no race files: its starts come from the default loadout.

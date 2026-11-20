@@ -374,8 +374,8 @@ fn the_route_digest_is_pinned() {
     assert_eq!(sim.digest(), ROUTE_DIGEST, "got {:#x}", sim.digest());
 }
 
-/// SIM-75 moved it: the nebula has no `craft_speed_coefficient`, so the ship
-/// flies at half speed once inside it.
+/// SIM-75 moved it (nebula effects entered the sim state); the route keeps the
+/// ship out of the nebula, so the speed rule does not touch it.
 const ROUTE_DIGEST: u64 = 0x31e5_f4ab_a01d_c800;
 
 #[test]
