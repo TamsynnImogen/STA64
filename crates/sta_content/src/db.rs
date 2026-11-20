@@ -187,6 +187,35 @@ impl ContentDb {
         self
     }
 
+    /// The database gated by the tech tree a map names with its header key
+    /// `techTreeFilename` (a file name, `.tt` or `.xml`, looked up by stem as
+    /// [`TechTree::find`] does): `Some` when that swaps the tree. An empty name,
+    /// `none`, or the tree already in use gives `None` (keep this database). A
+    /// tree the mount lacks, that fails to load or that has no entries gives
+    /// `None` and a warning that the current tree stays (the caller logs it).
+    /// Read from the executable, static (Armada I and II): the
+    /// game plays with the tree its map names.
+    pub fn with_map_tech_tree(&self, vfs: &sta_vfs::Vfs, name: &str) -> (Option<ContentDb>, Vec<Warning>) {
+        let name = name.trim();
+        let file_stem = |n: &str| {
+            let n = n.trim().rsplit(['/', '\\']).next().unwrap_or("").to_ascii_lowercase();
+            n.strip_suffix(".tt").or_else(|| n.strip_suffix(".xml")).map(str::to_owned).unwrap_or(n)
+        };
+        let stem = file_stem(name);
+        if stem.is_empty() || stem == "none" || self.tech.as_ref().is_some_and(|t| file_stem(&t.name) == stem) {
+            return (None, Vec::new());
+        }
+        match TechTree::from_vfs(vfs, &stem) {
+            Ok(Some((tree, w))) if !tree.is_empty() => (Some(self.clone().with_tech_tree(tree)), w),
+            Ok(Some((_, mut w))) => {
+                w.push(Warning::new(name, "map tech tree has no entries; the current tree stays"));
+                (None, w)
+            }
+            Ok(None) => (None, vec![Warning::new(name, "map tech tree not found in the mount; the current tree stays")]),
+            Err(e) => (None, vec![Warning::new(name, format!("map tech tree unreadable ({e}); the current tree stays"))]),
+        }
+    }
+
     /// Build a database from definitions made in code (fakes) or JSON5.
     pub fn builder() -> ContentBuilder {
         ContentBuilder::default()
