@@ -110,9 +110,11 @@ impl TeamColours {
         let Some(key) = i.checked_sub(1).and_then(|i| MP_KEYS.get(i)) else {
             return neutral();
         };
-        let mut numbered = self.0.iter().filter(|(name, _)| name.starts_with("mpcolor")).peekable();
+        let mut numbered = self.0.iter()
+            .filter(|(name, _)| name.get(..7).is_some_and(|prefix| prefix.eq_ignore_ascii_case("mpcolor")))
+            .peekable();
         if numbered.peek().is_some() {
-            numbered.find(|(name, _)| name == key).map(|(_, colour)| *colour).or_else(neutral)
+            numbered.find(|(name, _)| name.eq_ignore_ascii_case(key)).map(|(_, colour)| *colour).or_else(neutral)
         } else {
             self.0.get(i).map(|(_, colour)| *colour).or_else(neutral)
         }
@@ -124,7 +126,7 @@ impl TeamColours {
 
     /// The viewer starts on team one's pale grey where the palette provides it.
     pub fn default_index(&self) -> usize {
-        self.0.iter().position(|(n, _)| n == "mpcolor01")
+        self.0.iter().position(|(n, _)| n.eq_ignore_ascii_case("mpcolor01"))
             .or_else(|| self.0.iter().position(|(n, _)| n.eq_ignore_ascii_case("white")))
             .unwrap_or(0)
     }
@@ -688,6 +690,6 @@ mod team_colour_tests {
         assert_eq!(colours.team_colour(16), neutral);
         assert_eq!(colours.team_colour(0), neutral);
         assert_eq!(colours.owner_colour(sta_sim::world::NEUTRAL), neutral);
-        assert_eq!(colours.0[colours.default_index()].0, "mpcolor01");
+        assert_eq!(colours.0[colours.default_index()].0, "MPCOLOR01");
     }
 }

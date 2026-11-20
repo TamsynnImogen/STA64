@@ -197,7 +197,7 @@ impl Plugin for HudPlugin {
                     ghost::update_ghost,
                     ghost::tint_ghost,
                     (ghost::sync_footprints, object_footprints::sync_object_footprints).chain(),
-                    super::gui_sprites::paint.after(super::theme::WidgetPaint),
+                    (super::gui_sprites::paint.after(super::theme::WidgetPaint), stock::update_backdrop_fallback).chain(),
                 )
                     .chain()
                     .in_set(GameSet::Ui)

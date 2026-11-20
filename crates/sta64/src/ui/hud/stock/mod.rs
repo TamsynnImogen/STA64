@@ -3,6 +3,7 @@ pub(in crate::ui::hud) mod a1;
 pub(in crate::ui) mod buttons;
 pub(in crate::ui::hud) mod commands;
 mod info;
+pub(super) use info::update_backdrop_fallback;
 mod orders;
 pub(super) mod infobar;
 pub mod layout;

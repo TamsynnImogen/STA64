@@ -398,14 +398,26 @@ fn model_stem(model: &str) -> String {
 /// Fleet Ops names the single-selection systems backdrop after the equipped
 /// model. The GUI sprite painter leaves it transparent when the SPR entry or
 /// its texture is absent, preserving the stock icon/value layout.
-fn system_background(commands: &mut Commands, root: Entity, layout: &StockLayout, origin: Vec2, model: &str) {
-    let Some(r) = layout.at(origin, "infoSingleSystemsDisplay") else { return };
+fn system_background(commands: &mut Commands, root: Entity, layout: &StockLayout, origin: Vec2, model: &str) -> Option<Entity> {
+    let r = layout.at(origin, "infoSingleSystemsDisplay")?;
     let stem = model_stem(model);
-    if stem.is_empty() { return; }
-    commands.entity(root).with_child((
-        node(r), Pickable::IGNORE,
-        GuiImage::new(format!("{stem}_si")),
-    ));
+    if stem.is_empty() { return None; }
+    Some(commands.spawn((node(r), Pickable::IGNORE, GuiImage::new(format!("{stem}_si")), ChildOf(root))).id())
+}
+
+#[derive(Component)]
+pub(in crate::ui::hud) struct BackdropFallback(Entity);
+
+pub(in crate::ui::hud) fn update_backdrop_fallback(
+    pictures: Query<(), With<ImageNode>>,
+    mut fallbacks: Query<(&BackdropFallback, &mut Visibility)>,
+) {
+    for (BackdropFallback(backdrop), mut visibility) in &mut fallbacks {
+        let next = if pictures.contains(*backdrop) { Visibility::Hidden } else { Visibility::Inherited };
+        if *visibility != next {
+            *visibility = next;
+        }
+    }
 }
 
 fn wireframe_names(model: &str, layer: usize) -> Vec<String> {
@@ -422,7 +434,7 @@ fn wireframe_names(model: &str, layer: usize) -> Vec<String> {
 
 /// Native Wireframe::Render draws five independent GUI SPR layers in one square.
 pub(super) fn wireframe_layers(commands: &mut Commands, root: Entity, r: R, model: &str) {
-    wireframe_layers_of(commands, root, r, model, None);
+    wireframe_layers_of(commands, root, r, model, None, None);
 }
 
 /// UI-28: a wireframe layer of a unit on the panel, tinted by its system's state each frame.
@@ -455,7 +467,7 @@ fn layer_tint(status: Option<&crate::ui::hud::status::StatusFeed>, w: WireLayer)
 }
 
 /// [`wireframe_layers`] for a unit whose layers follow its systems' state (`None`: plain art).
-pub(super) fn wireframe_layers_of(commands: &mut Commands, root: Entity, r: R, model: &str, unit: Option<EntityId>) {
+fn wireframe_layers_of(commands: &mut Commands, root: Entity, r: R, model: &str, unit: Option<EntityId>, backdrop: Option<Entity>) {
     let stem = model_stem(model);
     if stem.is_empty() {
         return;
@@ -466,6 +478,9 @@ pub(super) fn wireframe_layers_of(commands: &mut Commands, root: Entity, r: R, m
         let mut e = commands.spawn((node(r), Pickable::IGNORE, image, ChildOf(root)));
         if let Some(unit) = unit {
             e.insert(WireLayer { unit, layer });
+        }
+        if let Some(backdrop) = backdrop {
+            e.insert(BackdropFallback(backdrop));
         }
     }
 }
@@ -558,6 +573,7 @@ fn spawn_single(
 ) {
     let def = feed.view.unit(single.id).and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def)));
     let is_node = def.is_some_and(|d| super::super::status::node_slot(d).is_some());
+    let backdrop = def.and_then(|d| system_background(commands, root, layout, origin, &d.model));
     if let Some(r) = chosen_rect(
         layout,
         origin,
@@ -603,10 +619,9 @@ fn spawn_single(
     }
     identity::spawn(commands, root, layout, theme, origin, single);
     if let Some(r) = wireframe_rect(layout, origin, single.builder)
-        && let Some(unit) = feed.view.unit(single.id)
-        && let Some(def) = feed.content.as_deref().and_then(|db| db.unit(unit.def))
+        && let Some(def) = def
     {
-        wireframe_layers_of(commands, root, r, &def.model, Some(single.id));
+        wireframe_layers_of(commands, root, r, &def.model, Some(single.id), backdrop);
     }
     let hull_rect = chosen_rect(
         layout,
@@ -638,7 +653,6 @@ fn spawn_single(
     }
     if let Some(def) = def {
         spawn_node_bar(commands, root, layout, origin, def, hull_rect, theme);
-        system_background(commands, root, layout, origin, &def.model);
     }
     if let Some(population) = super::super::status::population_text(feed, single.id) {
         // Reuse alignment from the planet owner row when present. A separate
@@ -723,7 +737,7 @@ fn spawn_group(
             && let Some(unit) = feed.view.unit(tile.id)
             && let Some(def) = feed.content.as_deref().and_then(|db| db.unit(unit.def))
         {
-            wireframe_layers_of(commands, entity, wireframe, &def.model, Some(tile.id));
+            wireframe_layers_of(commands, entity, wireframe, &def.model, Some(tile.id), None);
         }
         if !small {
             // Existing incomplete CFGs retain the icon inset when no name key exists.
@@ -1020,7 +1034,7 @@ mod tests {
         {
             let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
             let mut commands = Commands::new(&mut queue, &world);
-            system_background(&mut commands, root, &layout, Vec2::new(30.0, 40.0), "models/Fed_ConSt.SOD");
+            assert!(system_background(&mut commands, root, &layout, Vec2::new(30.0, 40.0), "models/Fed_ConSt.SOD").is_some());
         }
         queue.apply(&mut world);
         let child = world.get::<Children>(root).unwrap()[0];
@@ -1036,11 +1050,27 @@ mod tests {
         let mut queue = CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, &world);
-            system_background(&mut commands, root, &disabled, Vec2::ZERO, "Fed_ConSt.SOD");
-            system_background(&mut commands, root, &absent, Vec2::ZERO, "Fed_ConSt.SOD");
+            assert!(system_background(&mut commands, root, &disabled, Vec2::ZERO, "Fed_ConSt.SOD").is_none());
+            assert!(system_background(&mut commands, root, &absent, Vec2::ZERO, "Fed_ConSt.SOD").is_none());
         }
         queue.apply(&mut world);
         assert_eq!(world.get::<Children>(root).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn system_backdrop_hides_the_wireframe_only_when_its_image_resolves() {
+        let mut app = App::new();
+        app.add_systems(Update, update_backdrop_fallback);
+        let backdrop = app.world_mut().spawn_empty().id();
+        let fallback = app.world_mut().spawn((BackdropFallback(backdrop), Visibility::Inherited)).id();
+        app.update();
+        assert_eq!(app.world().get::<Visibility>(fallback), Some(&Visibility::Inherited));
+        app.world_mut().entity_mut(backdrop).insert(ImageNode::default());
+        app.update();
+        assert_eq!(app.world().get::<Visibility>(fallback), Some(&Visibility::Hidden));
+        app.world_mut().entity_mut(backdrop).remove::<ImageNode>();
+        app.update();
+        assert_eq!(app.world().get::<Visibility>(fallback), Some(&Visibility::Inherited));
     }
 
     #[test]
