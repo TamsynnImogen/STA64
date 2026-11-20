@@ -204,7 +204,9 @@ mod tests {
         assert_eq!(unlit(false, true, 2), 0.0);
         assert_eq!(unlit(true, true, 0), 0.0, "Armada I: not measured, lit as before");
         assert_eq!(unlit(false, false, 0), 0.0, "the Refit look is untouched");
-        assert!(include_str!("../hulls.wesl").contains("if k.cut.w > 0.5 {\n        sum = k.mdif.rgb;"));
+        // Whitespace-insensitive: a Windows checkout turns the shader's LF into CRLF.
+        let shader = include_str!("../hulls.wesl").split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(shader.contains("if k.cut.w > 0.5 { sum = k.mdif.rgb;"));
     }
 
     /// Armada I adds the scene ambient to the material's; Armada II and Fleet Operations multiply them.
