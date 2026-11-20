@@ -1580,7 +1580,7 @@ mod tests {
         let mut native = NativeCommands::default();
         native.commands.insert("cancelbuild".into(), NativeCommand {
             odf: "cancelbuild.odf".into(), command: "NONE".into(), button: "b_cancel".into(),
-            preferred: Some([0, 3]), menu: None, tooltip: None, verbose: None,
+            preferred: Some([0, 3]), menu: None, source: Vec::new(), tooltip: None, verbose: None,
             normal: None, hovered: None, pressed: None, disabled: None, active: None,
         });
         native
