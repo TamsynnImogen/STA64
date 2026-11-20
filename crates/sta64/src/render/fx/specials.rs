@@ -167,8 +167,8 @@ pub struct ManualFade;
 
 /// Original handle of a material this module replaced with a per-unit clone.
 #[derive(Component)]
-struct FadeMat {
-    orig: Handle<StandardMaterial>,
+pub(crate) struct FadeMat {
+    pub(crate) orig: Handle<StandardMaterial>,
 }
 
 #[derive(Resource, Default)]
@@ -1125,7 +1125,7 @@ fn attach_bee_models(
 }
 
 /// Write [`UnitFade`] into the unit's mesh materials.
-fn apply_fade(
+pub(crate) fn apply_fade(
     mut cmds: Commands,
     mats: Option<ResMut<Assets<StandardMaterial>>>,
     roots: Query<(Entity, &UnitFade), Changed<UnitFade>>,
