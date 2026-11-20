@@ -17,6 +17,12 @@
 //! planet's colonizer; a planet that already has another colonizer, or is
 //! owned by someone else, stops the order.
 //!
+//! **Orbit.** While it launches pods the ship steers each tick at the point
+//! `ANCHOR_PURSUIT_POINT_ANGLE` ahead of it on the circle of radius `orbitRange +
+//! planet radius` round the planet's centre, clockwise seen from above, at the planet's
+//! height (read from the executable, static; the path the movement model flies, the
+//! speed and the on-screen direction are not measured).
+//!
 //! **Pods.** The first pod leaves at once, then one per `shotDelay` of the
 //! launcher; its payload is `min(colonists left, partySize)`, taken from the
 //! ship at launch. It lands at once (flight time: not measured) when the
@@ -204,6 +210,35 @@ pub(crate) fn approach_point(planet: Vec3, ship: Vec3, heading: (Fixed, Fixed), 
     let d = flat(ship, planet);
     let (ux, uz) = if d > Fixed::ZERO { (dx / d, dz / d) } else { (-heading.0, -heading.1) };
     Vec3 { x: planet.x + ux * want, y: ship.y, z: planet.z + uz * want }
+}
+
+/// RTS_CFG `ANCHOR_PURSUIT_POINT_ANGLE` (pi/6): cos and sin, as the miner orbit uses.
+const PURSUIT_COS: Fixed = Fixed::from_bits(3_719_550_787);
+const PURSUIT_SIN: Fixed = Fixed::from_bits(2_147_483_648);
+/// Margin beyond the ship's `tooCloseToTurn` (STA64 adaptation, as for the miner orbit).
+const PURSUIT_MARGIN: i32 = 10;
+
+/// Where a colonizing pod ship heads: the point `ANCHOR_PURSUIT_POINT_ANGLE` ahead of it on the circle of
+/// `radius` round the planet's centre (clockwise seen from above), at the planet's height. Read from the
+/// executable, static; speed, on-screen direction and the path are not measured. The push-out when the
+/// point is nearer than `tooCloseToTurn + margin` is STA64's adaptation to its movement model, not measured.
+pub(crate) fn orbit_point(planet: Vec3, ship: Vec3, radius: Fixed, too_close_to_turn: Fixed) -> Option<Vec3> {
+    let (dx, dz) = (ship.x - planet.x, ship.z - planet.z);
+    let len = flat(ship, planet);
+    if len < Fixed::ONE {
+        return None;
+    }
+    let (rx, rz) = (dx * PURSUIT_COS + dz * PURSUIT_SIN, dz * PURSUIT_COS - dx * PURSUIT_SIN);
+    let k = radius / len;
+    let mut p = (planet.x + rx * k, planet.z + rz * k);
+    let need = too_close_to_turn + Fixed::from_int(PURSUIT_MARGIN);
+    let (px, pz) = (p.0 - ship.x, p.1 - ship.z);
+    let away = (px * px + pz * pz).sqrt();
+    if away > Fixed::ZERO && away < need {
+        let f = need / away;
+        p = (ship.x + px * f, ship.z + pz * f);
+    }
+    Some(Vec3 { x: p.0, y: planet.y, z: p.1 })
 }
 
 /// The colonists one pod carries.
@@ -553,9 +588,9 @@ impl Sim {
             let seen = (|| {
                 let (ship, planet) = (self.units.get(id).filter(|u| alive(u))?, self.units.get(proc.planet).filter(|u| alive(u))?);
                 let (sdef, pdef) = (db.unit(ship.def)?, db.unit(planet.def)?);
-                Some((ship.pos, ship.heading, ship.owner, ship.target.is_some(), planet.pos, planet.owner, sdef.radius, pdef.radius, pdef.planet_max_population, pod_of(db, sdef)?))
+                Some((ship.pos, ship.heading, ship.owner, ship.target.is_some(), planet.pos, planet.owner, sdef.radius, pdef.radius, pdef.planet_max_population, pod_of(db, sdef)?, sdef.movement.too_close_to_turn))
             })();
-            let Some((spos, heading, owner, has_target, ppos, powner, sr, pr, level, pod)) = seen else {
+            let Some((spos, heading, owner, has_target, ppos, powner, sr, pr, level, pod, turn)) = seen else {
                 self.colonies.end_process(id, false);
                 continue;
             };
@@ -586,11 +621,13 @@ impl Sim {
                         p.active = true;
                         p.next_launch = self.tick;
                     }
-                    self.set_target(id, None);
                     self.movement.clear_waypoints(id);
                 }
                 _ => {}
             }
+            // While it launches pods the ship circles the planet (read from the executable, static).
+            let to = orbit_point(ppos, spos, pod.orbit_range + pr, turn);
+            self.set_target(id, to);
             if self.colonies.fire(id, self.tick, pod, rules.cap(level)) {
                 self.finish_colonization(id, proc.planet, owner, powner);
             }

@@ -26,6 +26,8 @@ pub(super) struct Query<'a> {
     pub exclude: EntityId,
     /// Only units this player can see.
     pub seen_by: Option<PlayerId>,
+    /// A building still under construction matches no named ODF (see [`unfinished_named`]).
+    pub unfinished_named: bool,
 }
 
 /// An omitted or empty ODF filter matches every unit.
@@ -34,6 +36,13 @@ pub(super) fn odf_ok(c: &Ctx, unit: &UnitView, filter: Option<&str>) -> bool {
         Some(s) if !s.is_empty() => stem(&c.odf_name(unit)).eq_ignore_ascii_case(stem(s)),
         _ => true,
     }
+}
+
+/// An unfinished building is not an object of its ODF yet: a search for a named ODF does not
+/// count it (stock A2: stated by a player, and read from the executable, static); a search with
+/// no ODF still does. Armada I, Fleet Operations and Roots: not looked at.
+pub(super) fn unfinished_named(unit: &UnitView, filter: Option<&str>) -> bool {
+    unit.progress.is_some_and(|p| p < sta_core::Fixed::ONE) && filter.is_some_and(|s| !s.is_empty())
 }
 
 /// Live units inside the query, nearest first, then by id. A seen-by query reads
@@ -50,6 +59,7 @@ pub(super) fn near<'c>(c: &'c Ctx, q: &Query) -> Vec<&'c UnitView> {
         .filter(|u| q.owner.is_none_or(|o| u.owner == o))
         .filter(|u| visible.as_ref().is_none_or(|v| v.contains(&u.id)))
         .filter(|u| odf_ok(c, u, q.odf))
+        .filter(|u| !(q.unfinished_named && unfinished_named(u, q.odf)))
         .map(|u| (dist(q.center, pos_f64(u.pos)), u))
         .filter(|(d, _)| *d <= q.radius)
         .collect();
