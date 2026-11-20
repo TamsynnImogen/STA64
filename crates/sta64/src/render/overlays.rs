@@ -20,6 +20,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 mod geometry;
+pub mod bubble;
 pub mod marker;
 #[cfg(test)]
 mod gpu;
@@ -91,6 +92,7 @@ impl Plugin for OverlaysPlugin {
             .init_resource::<OrderTargets>()
             .init_resource::<OverlayCounts>()
             .init_resource::<marker::MarkerArt>()
+            .add_plugins(bubble::BubblePlugin)
             .add_systems(Startup, make_assets.run_if(resource_exists::<Assets<Mesh>>).run_if(resource_exists::<Assets<StandardMaterial>>))
             .add_systems(
                 Update,
@@ -142,6 +144,7 @@ fn sync_overlays(
     selection: Res<Selection>,
     hovered: Option<Res<HoveredUnit>>,
     cine: Option<Res<crate::ui::presentation::CineractiveState>>,
+    profile: Option<Res<crate::ui::profile::UiProfile>>,
     art: Res<marker::MarkerArt>,
     ents: Res<SimEntities>,
     link: Res<SimLink>,
@@ -168,7 +171,10 @@ fn sync_overlays(
         if units.get(root).is_err() {
             continue;
         }
-        want.insert((*id, OverlayKind::Ring), root);
+        // The Armada II Stock look shows the selection as the bubble instead of the team annulus.
+        if !bubble::wanted(profile.as_deref()) {
+            want.insert((*id, OverlayKind::Ring), root);
+        }
         want.insert((*id, OverlayKind::HullBar), root);
         if link.curr().unit(*id).and_then(shield_share).is_some() {
             want.insert((*id, OverlayKind::ShieldBar), root);
