@@ -132,5 +132,9 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
             // not the viewer's silence.
             app.insert_resource(crate::audio::MusicContext::Game);
         }
+        // The footage event log (docs/FOOTAGE_LOG.md): a read-only observer, only when asked for.
+        if let Some(spec) = crate::footage::requested(cfg) {
+            app.add_plugins(crate::footage::FootagePlugin::from_cfg(spec, cfg));
+        }
     }
 }

@@ -142,6 +142,9 @@ pub struct LaunchConfig {
     pub perf: Option<crate::bench::perf::PerfOpts>,
     /// `--reveal fog,shroud,all` (UI-46): start with the fog and/or the shroud lifted: `(fog, shroud)`.
     pub reveal: (bool, bool),
+    /// `--footage-log [<path>]`: write the footage event log (docs/FOOTAGE_LOG.md); `Some("")`: no path
+    /// given (the default place). `STA64_FOOTAGE_LOG` asks for it too.
+    pub footage_log: Option<String>,
     /// Arguments not understood, kept for the warning.
     pub unknown: Vec<String>,
 }
@@ -181,6 +184,9 @@ Test bench (docs/TESTBENCH.md):
   --perf <out.json>        with --headless --install-content: a performance run of the scene's map (docs/TESTBENCH.md,
                            Performance runs; --perf-frames, --perf-warmup, --perf-reps, --perf-variants, --perf-camera)
   --postfx <a,b,..>        opt-in post effects: bloom smaa fxaa vignette chromatic exposure aces reinhard cinematic (F8 cycles)
+
+  --footage-log [<path>]   write a timestamped JSONL event log for cutting footage (file, folder, or the default place under
+                           the user data dir; STA64_FOOTAGE_LOG=<path>|1 does the same; docs/FOOTAGE_LOG.md)
 
   --lcars-ui               use the LCARS interface instead of the game/mod stock profile
   --ui-gallery             show every UI widget (LCARS kit)
@@ -242,6 +248,7 @@ impl LaunchConfig {
                     Some((f, s)) => cfg.reveal = (cfg.reveal.0 | f, cfg.reveal.1 | s),
                     None => cfg.unknown.push("--reveal (needs fog, shroud or all, comma separated)".into()),
                 },
+                "--footage-log" => cfg.footage_log = Some(value(&mut args).unwrap_or_default()),
                 "--help" | "-h" => cfg.help = true,
                 "--scene" => cfg.scene = value(&mut args).map(PathBuf::from),
                 "--headless" => cfg.headless = true,
@@ -358,6 +365,16 @@ mod tests {
         assert_eq!(parse("").mode(), Mode::FrontEnd);
         assert_eq!(parse("--install-root /g --mod FO").mode(), Mode::FrontEnd);
         assert_eq!(parse("").clock_mode(), ClockMode::Wall);
+    }
+
+    #[test]
+    fn footage_log_takes_an_optional_path() {
+        assert_eq!(parse("").footage_log, None);
+        assert_eq!(parse("--footage-log").footage_log.as_deref(), Some(""));
+        assert_eq!(parse("--footage-log /tmp/f.jsonl --skirmish x").footage_log.as_deref(), Some("/tmp/f.jsonl"));
+        let c = parse("--footage-log --skirmish x");
+        assert_eq!((c.footage_log.as_deref(), c.map.as_deref(), c.unknown.is_empty()), (Some(""), Some("x"), true));
+        assert!(USAGE.contains("--footage-log"));
     }
 
     #[test]
