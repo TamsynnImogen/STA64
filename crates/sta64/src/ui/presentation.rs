@@ -1730,6 +1730,8 @@ mod tests {
     #[test]
     fn a_cineractive_opens_black_and_its_end_clears_the_fade() {
         let mut app = app();
+        // Real time would run the 2 s fade-in between the test's own updates (a slow runner loses 1 % in 20 ms).
+        frozen(&mut app);
         send(&mut app, Presentation::Cineractive { on: true, skippable: true });
         send(&mut app, Presentation::Fade { out: false, seconds: Fixed::from_int(2), rgb: [0; 3] });
         assert!(app.world().resource::<FadeState>().alpha > 0.99, "the first fade in starts from black");

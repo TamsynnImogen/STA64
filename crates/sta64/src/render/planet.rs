@@ -909,7 +909,7 @@ mod tests {
     /// alpha 1 replaces what is behind it with black instead of adding to it.
     #[test]
     fn halo_adds_with_alpha_zero() {
-        let src = include_str!("planet.wesl");
+        let src = include_str!("planet.wesl").replace("\r\n", "\n");
         let halo = src.split("fn halo_light").nth(1).unwrap().split("\n}\n").next().unwrap();
         assert!(halo.contains("p.shine.w, 0.0)"), "{halo}");
     }
@@ -997,7 +997,8 @@ mod tests {
         let mut b2 = b;
         b2.eye = a.eye;
         assert_eq!(format!("{a:?}"), format!("{b2:?}"));
-        let stock = include_str!("planet.wesl").split("fn stock(").nth(1).unwrap().split("\n}\n").next().unwrap();
+        let src = include_str!("planet.wesl").replace("\r\n", "\n");
+        let stock = src.split("fn stock(").nth(1).unwrap().split("\n}\n").next().unwrap();
         assert!(!stock.contains("p.eye"), "the Stock look must not read the camera");
     }
 
