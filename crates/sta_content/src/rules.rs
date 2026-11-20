@@ -49,6 +49,8 @@ pub struct Rules {
     transporter: Option<TransporterRules>,
     /// The other typed `RTS_CFG.h` keys.
     pub cfg: CfgRules,
+    /// The render-only shot keys (not digested).
+    pub shots: ShotCfg,
     /// Armada I's header-level start (`cfgStarting*`), see [`LegacyStart`].
     legacy_start: LegacyStart,
 }
@@ -106,6 +108,49 @@ pub struct CrewRules {
     pub max_crew: Option<i64>,
     /// Race key (lower case, sorted) and its accumulation rate per second.
     pub races: Vec<(String, Fixed)>,
+}
+
+/// The two `RTS_CFG.h` keys that only change how weapon shots are drawn. Render only: not
+/// digested and not in [`TYPED_CFG_KEYS`] (D9, D10: peers that differ only in how a shot
+/// looks play together). `None`: the header does not set the key; the engine's own default
+/// for an absent key was not read (INTERIM: a render reads an absent colour flag as off, no
+/// team colour, and invents no miss lifetime).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ShotCfg {
+    /// `BEAM_MISS_LIFETIME` (float, seconds): how long, counted from the shot, a beam whose
+    /// target is lost keeps being drawn towards where it pointed (read from the executable,
+    /// static; the value is read from data).
+    pub beam_miss_lifetime: Option<Fixed>,
+    /// `NORMAL_WEAPON_TEAM_COLOR` (flag): when set, phasers, pulses and photon, poleron and
+    /// shield-removing torpedoes take the owner's team colour, else they are white (read
+    /// from the executable, static; the value is read from data).
+    pub normal_weapon_team_color: Option<bool>,
+}
+
+impl ShotCfg {
+    pub const KEYS: [&'static str; 2] = ["BEAM_MISS_LIFETIME", "NORMAL_WEAPON_TEAM_COLOR"];
+
+    /// Whether normal weapons take the owner's team colour (absent: no, INTERIM).
+    pub fn team_colour(&self) -> bool {
+        self.normal_weapon_team_color.unwrap_or(false)
+    }
+
+    fn from_cfg(cfg: &CfgH, warnings: &mut Vec<Warning>) -> ShotCfg {
+        let mut out = ShotCfg::default();
+        if cfg.raw("BEAM_MISS_LIFETIME").is_some() {
+            match cfg.f32("BEAM_MISS_LIFETIME").filter(|v| v.is_finite() && (0.0..=1.0e4).contains(v)) {
+                Some(v) => out.beam_miss_lifetime = Some(Fixed::from_f64(v as f64)),
+                None => warnings.push(Warning::new("RTS_CFG.h", "BEAM_MISS_LIFETIME is not a non-negative number; treated as unset")),
+            }
+        }
+        if cfg.raw("NORMAL_WEAPON_TEAM_COLOR").is_some() {
+            match cfg.f32("NORMAL_WEAPON_TEAM_COLOR").filter(|v| v.is_finite()) {
+                Some(v) => out.normal_weapon_team_color = Some(v != 0.0),
+                None => warnings.push(Warning::new("RTS_CFG.h", "NORMAL_WEAPON_TEAM_COLOR is not a number; treated as unset")),
+            }
+        }
+        out
+    }
 }
 
 /// The autonomy a new craft starts with (CON-46, D9), from `RTS_CFG.h`:
@@ -619,6 +664,7 @@ impl Rules {
         rules.autonomy = AutonomyRules::from_cfg(&cfg, &mut warnings);
         rules.approach = ApproachRules::from_cfg(&cfg, &mut warnings);
         rules.cfg = CfgRules::from_cfg(&cfg, &mut warnings);
+        rules.shots = ShotCfg::from_cfg(&cfg, &mut warnings);
         rules.transporter = TransporterRules::from_cfg(&cfg, &mut warnings);
         (rules, warnings)
     }
@@ -931,6 +977,51 @@ impl Rules {
             out.push(DigestEntry::new(crate::digest::key("race:", &s.stem), value));
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod shot_cfg_tests {
+    use super::*;
+
+    fn parse(text: &str) -> (ShotCfg, usize) {
+        let mut w = Vec::new();
+        let c = ShotCfg::from_cfg(&CfgH::parse(text), &mut w);
+        (c, w.len())
+    }
+
+    #[test]
+    fn absent_keys_are_unset_without_a_warning() {
+        let (c, w) = parse("");
+        assert_eq!((c, w, c.team_colour()), (ShotCfg::default(), 0, false));
+    }
+
+    #[test]
+    fn the_miss_lifetime_is_a_bounded_number() {
+        let (c, w) = parse("float BEAM_MISS_LIFETIME = 0.3f;\n");
+        assert_eq!((c.beam_miss_lifetime, w), (Some(Fixed::from_f64(0.3f32 as f64)), 0));
+        for bad in ["-1", "x", "1e5"] {
+            let (c, w) = parse(&format!("float BEAM_MISS_LIFETIME = {bad};\n"));
+            assert_eq!((c.beam_miss_lifetime, w), (None, 1), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_team_colour_flag_reads_both_values_and_rejects_text() {
+        let (c, w) = parse("int NORMAL_WEAPON_TEAM_COLOR = 1;\n");
+        assert_eq!((c.normal_weapon_team_color, c.team_colour(), w), (Some(true), true, 0));
+        let (c, w) = parse("int NORMAL_WEAPON_TEAM_COLOR = 0;\n");
+        assert_eq!((c.normal_weapon_team_color, c.team_colour(), w), (Some(false), false, 0));
+        let (c, w) = parse("int NORMAL_WEAPON_TEAM_COLOR = x;\n");
+        assert_eq!((c.normal_weapon_team_color, w), (None, 1));
+    }
+
+    #[test]
+    fn the_keys_stay_out_of_the_digest() {
+        let (set, _) = parse("float BEAM_MISS_LIFETIME = 0.3f;\nint NORMAL_WEAPON_TEAM_COLOR = 1;\n");
+        assert_ne!(set, ShotCfg::default());
+        assert_eq!(Rules::default().digest_entries(), Rules { shots: set, ..Rules::default() }.digest_entries());
+        assert!(ShotCfg::KEYS.iter().all(|k| !TYPED_CFG_KEYS.contains(k)));
     }
 }
 
