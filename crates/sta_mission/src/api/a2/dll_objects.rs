@@ -50,7 +50,7 @@ use sta_sim::view::UnitFlags;
 use super::objects::{handle, integer, live};
 use super::queries::craft_family;
 use crate::api::entity_ref::{EntityRef, SpawnHandle, SpawnStatus};
-use crate::api::search::stem;
+use crate::api::search::{stem, unfinished_named};
 use crate::api::{Ctx, Shared, edit_feedback, pos_f64, spawn, special_forces, to_vec3, vector};
 
 /// Handles at or above this are pending spawns (same range as `A1`).
@@ -423,7 +423,7 @@ fn nearest(c: &Ctx, q: &Search) -> Option<EntityId> {
             }
         }
         if let Some(odf) = q.odf
-            && (odf.is_empty() || !stem(&c.odf_name(u)).eq_ignore_ascii_case(stem(odf)))
+            && (odf.is_empty() || !stem(&c.odf_name(u)).eq_ignore_ascii_case(stem(odf)) || unfinished_named(u, Some(odf)))
         {
             continue;
         }

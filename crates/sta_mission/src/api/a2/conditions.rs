@@ -164,6 +164,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             .iter()
             .filter(|u| c.alive(u.id).is_some() && owner.is_none_or(|o| u.owner == o))
             .filter(|u| crate::api::search::odf_ok(c, u, odf.as_deref()))
+            .filter(|u| !crate::api::search::unfinished_named(u, odf.as_deref()))
             .count();
         Ok(n as i64)
     })?)?;
@@ -180,6 +181,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             odf: odf.as_deref(),
             exclude: centre.id,
             seen_by: None,
+            unfinished_named: true,
         };
         Ok(near(c, &q).len() as i64)
     })?)?;
@@ -198,6 +200,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             odf: odf.as_deref(),
             exclude: EntityId::NONE,
             seen_by: Some(observer),
+            unfinished_named: true,
         };
         Ok(near(c, &q).len() as i64)
     })?)?;
@@ -214,6 +217,7 @@ pub(super) fn install(lua: &Lua, ctx: &Shared, table: &Table) -> mlua::Result<()
             odf: odf.as_deref(),
             exclude: centre.id,
             seen_by: Some(centre.owner),
+            unfinished_named: true,
         };
         Ok(near(c, &q).len() as i64)
     })?)?;

@@ -362,6 +362,25 @@ fn a_craft_with_only_tools_never_fires_idle_or_moving() {
 }
 
 #[test]
+fn an_unfinished_craft_that_may_not_attack_takes_no_order_and_does_not_engage_when_finished() {
+    // Both rules at once: unfinished (no fire, no order) and a non-attacker (no assist, no pursuit).
+    let mut sim = approach_tests::sim(variant_db(Profile::Sta2Classic, vec![], |u| u.stats.can_attack = Some(false)));
+    let db = Arc::clone(sim.content.as_ref().unwrap());
+    let c = sim.spawn_def(db.key("st_variant").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
+    let e = sim.spawn_def(db.key("st_destroy").unwrap(), PlayerId(2), v(0, 300), (Fixed::ZERO, -Fixed::ONE)).unwrap();
+    sim.units.get_mut(c).unwrap().progress = Some(Fixed::from_int(1) / Fixed::from_int(2));
+    let at = Command { player: PlayerId::BENCH, seq: 0, kind: CommandKind::Order(Order::Attack { units: vec![c], target: e }) };
+    WorldSource::step(&mut sim, &[at]);
+    assert_eq!(sim.weapons.attack_of(c), None, "unfinished: no order, even a script's");
+    sim.units.get_mut(c).unwrap().progress = None;
+    for _ in 0..30 * 10 {
+        WorldSource::step(&mut sim, &[]);
+        assert_eq!(sim.weapons.attack_of(c), None, "finished, canAttack 0: no assist or answer");
+    }
+    assert!(sim.unit(c).unwrap().pos.z.abs() < Fixed::ONE);
+}
+
+#[test]
 fn a_player_attack_order_is_refused_for_a_class_that_may_not_attack_scripts_keep_theirs() {
     let mut sim = approach_tests::sim(variant_db(Profile::Sta2Classic, vec![], |u| u.stats.can_attack = Some(false)));
     let db = Arc::clone(sim.content.as_ref().unwrap());
