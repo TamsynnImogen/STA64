@@ -541,6 +541,9 @@ pub struct UnitStatsDef {
     pub shield_pad: Option<Fixed>,
     /// `maxExtraWeapons` (Armada II).
     pub max_extra_weapons: Option<i32>,
+    /// `canAttack`: 0 keeps the class from taking up a fight by itself (read by
+    /// `sta_sim::movement::approach`; default 1).
+    pub can_attack: Option<bool>,
     /// `canAttackPlanets` (Armada II).
     pub can_attack_planets: Option<bool>,
     /// `canOnlyAttackPlanets` (Armada II).
@@ -834,6 +837,8 @@ pub struct WeaponBaseDef {
     pub switch_to_attack: Option<bool>,
     /// `cloakEnable`: usable while cloaked.
     pub cloak_enable: Option<bool>,
+    /// `special`: the weapon is a special weapon (read by `sta_sim::movement::approach`).
+    pub special: Option<bool>,
     /// `warpEnable` (Armada II): usable at warp.
     pub warp_enable: Option<bool>,
     /// `crewAffectsWeaponDelay`.
