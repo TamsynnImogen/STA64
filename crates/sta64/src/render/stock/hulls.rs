@@ -27,6 +27,11 @@
 //! for a later specular port. The Refit look (`hulls.rs`, `hulls.wesl`'s other
 //! branch) keeps its own constants and is drawn under [`RenderProfile::Refit`].
 //!
+//! Rule: a material of lighting model 0 is drawn unlit in the Armada II family: the colour is its diffuse
+//! colour, with no ambient and no N.L term (measured for one material of an Armada II 1.1 install; applied
+//! to every model 0 material of Armada II, Fleet Operations and Roots by inference; Armada I not measured,
+//! lit as before: interim). See [`apply_material`].
+//!
 //! Data keys read: per SOD lighting material `ambient`, `diffuse`, `specular`, `power`,
 //! `self_illuminating`; the mesh's bump flag (read, and not drawn as relief); the map's ambient colour (`GlobalAmbientLight`) and its `dlight`
 //! colours (the scene's directional lights).
@@ -132,6 +137,12 @@ pub fn apply_material(p: &mut crate::render::hulls::HullParams, _m: &StandardMat
     p.misc = Vec4::new(1.0, 1.0, l.power.max(1.0), 1.0);
     p.rim = Vec4::ZERO;
     p.cut.z = 1.0;
+    // Lighting model 0 is drawn unlit: the colour is the material's diffuse, no ambient and no N.L term
+    // (`hulls.wesl`'s `shade_stock`, `cut.w` 1). Measured on the original for one material of an Armada II
+    // 1.1 install (the dilithium moon's glow shell); applied to every model 0 material of the Armada II family
+    // (Armada II, Fleet Operations, Roots) by inference from that one. Armada I is not measured and keeps
+    // lighting them (interim, see TODO).
+    p.cut.w = if l.model == 0 && !armada_one { 1.0 } else { 0.0 };
     // A bump-mapped mesh is the engine's GPU vertex path, not a look: the originals' Borg
     // faces show no relief (measured, `hull-borg` pairs), so the normal map is not applied.
     p.cut.y = 0.0;
@@ -174,6 +185,26 @@ mod tests {
                 assert_eq!(hull_material(&std, &part, &view).params.mspc, Vec4::new(0.0, 0.0, 0.0, 40.0), "model {model}");
             }
         }
+    }
+
+    /// A lighting model 0 material is drawn unlit in the Armada II family's Stock look; Armada I (not measured)
+    /// and the Refit look keep lighting it, and models 1 and 2 are lit everywhere. The shader branch is there.
+    #[test]
+    fn model_zero_is_unlit_in_the_armada_two_stock_look_only() {
+        let std = StandardMaterial::default();
+        let unlit = |armada_one: bool, stock: bool, model: u8| {
+            let mut view = HullView::default();
+            view.set_stock(stock);
+            view.set_armada_one(armada_one);
+            let part = HullPart { stock: Some(StockLight { model, ..lit() }), ..default() };
+            hull_material(&std, &part, &view).params.cut.w
+        };
+        assert_eq!(unlit(false, true, 0), 1.0);
+        assert_eq!(unlit(false, true, 1), 0.0);
+        assert_eq!(unlit(false, true, 2), 0.0);
+        assert_eq!(unlit(true, true, 0), 0.0, "Armada I: not measured, lit as before");
+        assert_eq!(unlit(false, false, 0), 0.0, "the Refit look is untouched");
+        assert!(include_str!("../hulls.wesl").contains("if k.cut.w > 0.5 {\n        sum = k.mdif.rgb;"));
     }
 
     /// Armada I adds the scene ambient to the material's; Armada II and Fleet Operations multiply them.

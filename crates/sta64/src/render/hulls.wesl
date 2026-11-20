@@ -20,7 +20,7 @@ struct HullParams {
     misc: vec4<f32>,  // x: alpha out; y: specular strength; z: its exponent; w: the Key's strength
     rim: vec4<f32>,   // rim light colour; a: its exponent
     eye: vec4<f32>,   // the camera, world
-    cut: vec4<f32>,   // x: 1 to cut out at texture alpha 0.5; y: the normal map's strength (0: none); z: the highlight knee
+    cut: vec4<f32>,   // x: 1 to cut out at texture alpha 0.5; y: the normal map's strength (0: none); z: the highlight knee; w: 1 draws a Stock model 0 material unlit
     uv: vec4<f32>,    // xy: the flipbook's UV offset
     dvec: array<vec4<f32>, 4>,  // towards each directional light
     dcol: array<vec4<f32>, 4>,  // its colour; a: 1 for the Key
@@ -173,6 +173,12 @@ fn shade_stock(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>, sm: vec3<f32>, em: vec
         if dot(n, l) > 0.0 {
             spec += c * pow(max(0.0, dot(n, h)), k.mspc.a);
         }
+    }
+    // Lighting model 0 (`cut.w` 1, Armada II family; measured for one material, inferred for the rest): drawn
+    // unlit, the colour is the material's diffuse, no ambient and no N.L (render/stock/hulls.rs).
+    if k.cut.w > 0.5 {
+        sum = k.mdif.rgb;
+        sum_diffuse = k.mdif.rgb;
     }
     // Armada I: the engine clamps the vertex colour to [0, 1] before the texture (read from the executable, static).
     if k.mamb.a > 1.5 {

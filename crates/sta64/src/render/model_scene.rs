@@ -639,8 +639,8 @@ fn spawn_mesh(
         }
         normal_present |= material.normal_map_texture.is_some();
         bumped |= normal_present;
-        // A dilithium moon's glow shell keeps the model's own material: the Stock look lights it by the SOD's
-        // lighting material like any hull; Refit's dark shell is put on by `rock::moon_shell_look` (RND-05).
+        // A dilithium moon's glow shell keeps the model's own material and diffuse colour (the Stock look draws
+        // a lighting model 0 material unlit, `render/stock/hulls.rs`); Refit's dark shell is put on by `rock::moon_shell_look` (RND-05).
         let moon_shell = crate::render::rock::is_moon_shell(&group.material);
         // A texture with a surface recipe: the part becomes a rock once baked, its
         // surface looked up about the mesh's centre over its extents.
@@ -672,12 +672,7 @@ fn spawn_mesh(
         let hull = (native.is_none() && !ctx.unlit && (rock.is_none() || moon.is_some())).then_some(crate::render::hulls::HullPart {
             self_illum,
             cut_alpha: group.blend == "default" && !self_illum,
-            stock: lm.map(crate::render::stock::hulls::StockLight::from_material).map(|mut l| {
-                if moon_shell {
-                    l.diffuse = crate::render::rock::SHELL_DIFFUSE;
-                }
-                l
-            }),
+            stock: lm.map(crate::render::stock::hulls::StockLight::from_material),
             team_face: team && !crate::render::stock::hulls::is_borg_glow(&group.material),
         },
         );
@@ -949,76 +944,5 @@ mod tests {
         assert_eq!(tf.scale, Vec3::new(200.0, 160.0, 1.0));
         assert_eq!(fx.colour, [1.0, 0.5, 0.1]);
         assert!(!nimbus.on, "hidden until the Stock look turns it on");
-    }
-
-    /// A `glowdmoon` group takes the shell colour in its stock lighting material; another group keeps its own
-    /// diffuse (authored data, no install).
-    #[test]
-    fn only_the_moon_shell_group_takes_the_shell_colour() {
-        use bevy::ecs::world::CommandQueue;
-        use bevy::image::CompressedImageFormats;
-        let lm = |name: &str, diffuse: [f32; 3]| sta_assets::model::LightingMaterial {
-            name: name.into(),
-            ambient: [0.5; 3],
-            diffuse,
-            specular: [0.0; 3],
-            power: 1.0,
-            model: 1,
-            self_illuminating: false,
-        };
-        let node = |name: &str, material: &str| sta_assets::model::Node {
-            name: name.into(),
-            parent: None,
-            children: vec![],
-            transform: Matrix34::IDENTITY,
-            kind: NodeKind::Mesh(ModelMesh {
-                positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-                uvs: vec![[0.0, 0.0]],
-                groups: vec![Group { material: material.into(), blend: "default".into(), maps: sta_assets::model::Maps::default(), faces: vec![[(0, 0), (1, 0), (2, 0)]] }],
-                two_sided: false,
-            }),
-        };
-        let model = Model {
-            format: sta_assets::model::SourceFormat::Sod,
-            version: 1.8,
-            materials: vec![lm("glowdmoon", [0.9, 0.1, 0.2]), lm("plain", [0.3, 0.4, 0.6])],
-            nodes: vec![node("shell", "glowdmoon"), node("plain", "plain")],
-            channels: vec![],
-            flipbooks: vec![],
-            warnings: vec![],
-            pbr: None,
-        };
-        let sprites = SpriteTable::default();
-        let vfs = sta_vfs::Vfs::default();
-        let (mut meshes, mut materials, mut images) = (Assets::<Mesh>::default(), Assets::<StandardMaterial>::default(), Assets::<Image>::default());
-        let mut cache = crate::render::textures::TextureCache::default();
-        let mut world = World::new();
-        let root = world.spawn((Transform::IDENTITY, Visibility::default())).id();
-        let mut queue = CommandQueue::default();
-        {
-            let mut commands = Commands::new(&mut queue, &world);
-            let mut ctx = SpawnCtx {
-                commands: &mut commands,
-                meshes: &mut meshes,
-                materials: &mut materials,
-                textures: Loader { vfs: &vfs, cache: &mut cache, images: &mut images, formats: CompressedImageFormats::NONE },
-                team: Color::WHITE,
-                borg: false,
-                sprites: &sprites,
-                damaged: false,
-                normal_maps: false,
-                parts: None,
-                model_key: "authored".into(),
-                unlit: false,
-                scale: 1.0,
-                diffuse_tint: false,
-            };
-            spawn(&mut ctx, &model, root);
-        }
-        queue.apply(&mut world);
-        let mut q = world.query::<&crate::render::hulls::HullPart>();
-        let mut diffuses: Vec<[f32; 3]> = q.iter(&world).filter_map(|h| h.stock.map(|l| l.diffuse)).collect();
-        diffuses.sort_by(|a, b| a[0].total_cmp(&b[0]));
-        assert_eq!(diffuses, vec![crate::render::rock::SHELL_DIFFUSE, [0.3, 0.4, 0.6]]);
     }
 }
