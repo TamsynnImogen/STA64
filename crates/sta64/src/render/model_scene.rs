@@ -32,6 +32,9 @@ mod defiant_tests;
 #[cfg(test)]
 #[path = "model_scene/defiant_gpu.rs"]
 mod defiant_gpu;
+#[cfg(test)]
+#[path = "model_scene/moon_gpu.rs"]
+mod moon_gpu;
 
 /// Step-keyed SOD animation on one node. Keys are evenly spaced over `period`.
 #[derive(Component)]
@@ -669,7 +672,12 @@ fn spawn_mesh(
         let hull = (native.is_none() && !ctx.unlit && (rock.is_none() || moon.is_some())).then_some(crate::render::hulls::HullPart {
             self_illum,
             cut_alpha: group.blend == "default" && !self_illum,
-            stock: lm.map(crate::render::stock::hulls::StockLight::from_material),
+            stock: lm.map(crate::render::stock::hulls::StockLight::from_material).map(|mut l| {
+                if moon_shell {
+                    l.diffuse = crate::render::rock::SHELL_DIFFUSE;
+                }
+                l
+            }),
             team_face: team && !crate::render::stock::hulls::is_borg_glow(&group.material),
         },
         );

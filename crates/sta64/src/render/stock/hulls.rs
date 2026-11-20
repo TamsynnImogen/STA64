@@ -24,8 +24,9 @@
 //! Armada II comparison judged whole-frame luminance). An Armada I install (`Sta1Classic`)
 //! draws no specular term: its SOD materials mostly carry one authoring default specular, and
 //! a modder states the original shows no sheen there (grade: stated by a modder, not
-//! measured). Armada II and Fleet Operations still draw the term (not measured). The values
-//! are still read, for a later specular port. The Refit look (`hulls.rs`, `hulls.wesl`'s other
+//! measured). Armada II and Fleet Operations draw the term for a lighting material of model 2 only
+//! ([`draws_specular`]; read from the executable, static, not compared in a frame), so a resource moon, whose
+//! materials are of model 0 and 1, shows no highlight. The values are still read, for a later specular port. The Refit look (`hulls.rs`, `hulls.wesl`'s other
 //! branch) keeps its own constants and is drawn under [`RenderProfile::Refit`].
 //!
 //! Data keys read: per SOD lighting material `ambient`, `diffuse`, `specular`, `power`,
@@ -107,6 +108,16 @@ impl Plugin for StockHullsPlugin {
     }
 }
 
+/// Whether a SOD lighting material of this `model` byte gets a specular highlight in the Stock look.
+/// Rule: the engine's draw path switches the device's specular state on for a lighting material of model 2
+/// only (read from the executable, static, Armada II and Armada I; the call that sets the state takes
+/// "model == 2" as its argument). A material of model 0 or 1, as a resource moon's rock and glow shell are,
+/// is lit without a highlight whatever specular colour its data carries. Not compared in a frame of the
+/// original; Fleet Operations runs the Armada II engine and is not read separately.
+pub fn draws_specular(model: u8) -> bool {
+    model == 2
+}
+
 /// Writes the stock look into a hull material's parameters (a part with no lighting
 /// material, e.g. a glTF, takes the engine's default white one; an M3D's material carries
 /// no ambient colour, so only the lights reach it).
@@ -128,7 +139,8 @@ pub fn apply_material(p: &mut crate::render::hulls::HullParams, _m: &StandardMat
         p.mdif = Vec3::ONE.extend(1.0);
     }
     // Armada I: no highlight. The colour is zeroed (the data is still read); the shader's specular term is untouched.
-    let specular = if armada_one { [0.0; 3] } else { l.specular };
+    // Armada II and Fleet Operations: the highlight only for a lighting material of model 2 (see [`draws_specular`]).
+    let specular = if armada_one || !draws_specular(l.model) { [0.0; 3] } else { l.specular };
     p.mspc = Vec3::from(specular).extend(l.power.max(1.0));
     p.misc = Vec4::new(1.0, 1.0, l.power.max(1.0), 1.0);
     p.rim = Vec4::ZERO;
@@ -144,7 +156,7 @@ mod tests {
     use crate::render::hulls::{hull_material, HullPart, HullView};
 
     fn lit() -> StockLight {
-        StockLight { ambient: [0.5; 3], diffuse: [0.9, 0.8, 0.7], specular: [0.2; 3], power: 40.0, model: 1 }
+        StockLight { ambient: [0.5; 3], diffuse: [0.9, 0.8, 0.7], specular: [0.2; 3], power: 40.0, model: 2 }
     }
 
     #[test]
@@ -174,6 +186,20 @@ mod tests {
         other.set_stock(true);
         assert_eq!(hull_material(&std, &part, &a1).params.mspc, Vec4::new(0.0, 0.0, 0.0, 40.0));
         assert_eq!(hull_material(&std, &part, &other).params.mspc, Vec4::new(0.2, 0.2, 0.2, 40.0));
+    }
+
+    /// A lighting material of model 0 or 1 gets no highlight in the Stock look, whatever specular it carries
+    /// (a resource moon's rock and glow shell); model 2 keeps it.
+    #[test]
+    fn only_model_two_draws_a_highlight() {
+        let std = StandardMaterial::default();
+        let mut view = HullView::default();
+        view.set_stock(true);
+        for (model, want) in [(0u8, 0.0f32), (1, 0.0), (2, 0.2)] {
+            let part = HullPart { stock: Some(StockLight { model, specular: [0.2; 3], ..lit() }), ..default() };
+            assert_eq!(hull_material(&std, &part, &view).params.mspc.x, want, "model {model}");
+        }
+        assert!(!draws_specular(0) && !draws_specular(1) && draws_specular(2));
     }
 
     /// Armada I adds the scene ambient to the material's; Armada II and Fleet Operations multiply them.

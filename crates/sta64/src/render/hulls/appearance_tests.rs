@@ -446,7 +446,7 @@ fn specular_app() -> (App, Entity) {
                     diffuse: [0.9, 0.8, 0.7],
                     specular: [0.2, 0.3, 0.4],
                     power: 40.0,
-                    model: 1,
+                    model: 2,
                 }),
                 ..default()
             },

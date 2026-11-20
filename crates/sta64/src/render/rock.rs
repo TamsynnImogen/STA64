@@ -63,6 +63,12 @@ pub fn is_moon_shell(material: &str) -> bool {
     material.eq_ignore_ascii_case("glowdmoon")
 }
 
+/// The diffuse colour the engine gives the glow shell's lighting material in the Stock look, in place of the
+/// one in the SOD (read from the executable, static, Armada II): a fixed blue, scaled by the share of the
+/// moon's resource left (full here: the share is not implemented, interim, see TODO). Nothing else is set on
+/// it (no emissive colour, no blend change, no light): the shell is an ordinarily lit diffuse material.
+pub const SHELL_DIFFUSE: [f32; 3] = [0.0, 0.5, 1.0];
+
 /// The glow shell as Refit draws it by default (`MoonShell=dark`): dark and opaque, so
 /// the rock's cut-outs show black where the cracks' light is not. Under the Refit look only; the Stock look
 /// draws the shell with the model's lighting material.
@@ -386,6 +392,12 @@ mod tests {
 
     /// The original draws the moon's blue nimbus (`oreglow`, `lights.spr`; read from data); the Stock look
     /// does, Refit's look (and an app without the profile resources) hides it, as Refit's `MoonNimbus=0`.
+    /// The shell's engine colour is the fixed blue at full share, not the SOD's own diffuse.
+    #[test]
+    fn the_shell_takes_the_engine_blue() {
+        assert_eq!(SHELL_DIFFUSE, [0.0, 0.5, 1.0]);
+    }
+
     #[test]
     fn moon_nimbus_is_shown_under_the_stock_look_only() {
         assert!(nimbus_on(Some(RenderProfile::Stock)));
