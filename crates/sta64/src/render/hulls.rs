@@ -158,11 +158,15 @@ impl Material for HullMaterial {
         ShaderRef::Path(AssetPath::parse("embedded://sta64/render/hulls.wesl").into_owned())
     }
 
-    /// A cut-out part is a mask material, and its depth prepass (and shadow depth pass) runs a fragment
-    /// shader with the same alpha test as the colour pass, so a texel the test rejects writes no depth.
-    /// Bevy 0.20.1 gives a prepass pipeline a fragment stage only for a mask material that names a
-    /// prepass fragment shader (`MAY_DISCARD` plus `get_shader(PrepassFragmentShader)`); an opaque part
-    /// keeps the depth-only pipeline, so non-cut parts are drawn exactly as before.
+    /// A cut-out part is a mask material, and its depth prepass runs a fragment shader with the same alpha
+    /// test as the colour pass, so a texel the test rejects writes no depth. Bevy 0.20.1 gives a prepass
+    /// pipeline a fragment stage only for a mask material that names a prepass fragment shader
+    /// (`MAY_DISCARD` plus `get_shader(PrepassFragmentShader)`); an opaque part keeps the depth-only
+    /// pipeline, so non-cut parts are drawn as before. That holds only while no camera has a normal,
+    /// motion-vector or deferred prepass and no unclipped-depth emulation runs: otherwise Bevy uses this
+    /// output-less shader for EVERY hull part and every hull's prepass pipeline breaks (none does today).
+    /// The same pipeline serves Bevy's shadow depth pass, which no light enables; the ship shadows
+    /// (`shadows.rs`) use their own caster material and are not cut-out.
     fn alpha_mode(&self) -> AlphaMode {
         if self.params.cut.x > 0.5 { AlphaMode::Mask(0.5) } else { AlphaMode::Opaque }
     }

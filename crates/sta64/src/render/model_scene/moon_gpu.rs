@@ -1,5 +1,5 @@
 //! Optional, windowless frames of a dilithium moon under the Stock look (install-gated, nothing committed from it).
-//! `STA64_GPU_TESTS=1` and `STA64_TEST_INSTALL` (an Armada II or Armada I install); `STA64_GPU_OUT` keeps the PNGs
+//! `STA64_GPU_TESTS=1` and `STA64_TEST_INSTALL` (an Armada II or Armada I install; the flat-colour rule is asserted on the Armada II family only); `STA64_GPU_OUT` keeps the PNGs
 //! outside the repository. The moon is drawn through the real spawn path and the Stock hull look, lit by one
 //! white directional light, with no sprites (the nimbus is a separate sprite node). The camera has a depth
 //! prepass and no tonemapper, like the map camera in the Stock look.
@@ -171,6 +171,13 @@ fn installed_moon_has_no_highlight_and_a_lit_core() {
         eprintln!("SKIP: no glow shell material in {model_key}");
         return;
     };
+    // The test app has no content profile, so it draws as the Armada II family does: the flat-colour rule is
+    // asserted only on an install of that family (the Armada II or Fleet Operations executable is present).
+    let root = std::path::Path::new(&root);
+    if !["Armada2.exe", "FleetOps.exe"].iter().any(|exe| root.join(exe).is_file()) {
+        eprintln!("SKIP: not an Armada II family install; the unlit rule is not asserted for it");
+        return;
+    }
     if model0 != 0 {
         eprintln!("SKIP: the shell's lighting material is model {model0}, not 0, in this install");
         return;

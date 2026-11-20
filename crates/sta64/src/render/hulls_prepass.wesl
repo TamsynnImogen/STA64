@@ -1,7 +1,10 @@
-// Hulls, depth prepass (and shadow depth pass) of a cut-out part: the colour pass's alpha test, so a texel
-// it rejects writes no depth and what lies behind it (a moon's glow shell, the sky) is not hidden by it.
-// Bevy runs this only for a mask material (`HullMaterial::alpha_mode`); an opaque part keeps the
-// depth-only pipeline. The uniform struct is the front of `HullParams` (the buffer is larger).
+// Hulls, depth prepass of a cut-out part: the colour pass's alpha test, so a texel it rejects writes no
+// depth and what lies behind it (a moon's glow shell, the sky) is not hidden by it. Bevy runs this only for
+// a mask material (`HullMaterial::alpha_mode`); an opaque part keeps the depth-only pipeline, as long as no
+// camera has a normal, motion-vector or deferred prepass and no unclipped-depth emulation runs (else this
+// output-less shader is used for every hull part and breaks every hull's prepass pipeline). Bevy's shadow
+// depth pass would use it too if a light enabled shadow maps (none does; the ship shadows are separate).
+// The uniform struct is the front of `HullParams` (the buffer is larger).
 
 struct HullParams {
     amb: vec4<f32>,

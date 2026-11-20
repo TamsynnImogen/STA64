@@ -139,7 +139,7 @@ pub fn apply_material(p: &mut crate::render::hulls::HullParams, _m: &StandardMat
     p.cut.z = 1.0;
     // Lighting model 0 is drawn unlit: the colour is the material's diffuse, no ambient and no N.L term
     // (`hulls.wesl`'s `shade_stock`, `cut.w` 1). Measured on the original for one material of an Armada II
-    // 1.1 install (the dilithium moon's glow shell); applied to every model 0 material of the Armada II family
+    // 1.1 install; applied to every model 0 material of the Armada II family
     // (Armada II, Fleet Operations, Roots) by inference from that one. Armada I is not measured and keeps
     // lighting them (interim, see TODO).
     p.cut.w = if l.model == 0 && !armada_one { 1.0 } else { 0.0 };
