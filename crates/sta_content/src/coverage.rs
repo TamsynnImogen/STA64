@@ -49,7 +49,7 @@ pub const READ_ODF_KEYS: &[&str] = &[
     "targetenemybuildings", "targetalliedcraft", "targetalliedbuildings", "targetenemyplanets",
     "targetenemyplanetsonly", "targetlocation", "aitargetlocation", "needtarget", "beneficial",
     "switchtoattack", "cloakenable", "warpenable", "crewaffectsweapondelay", "ignorevalidastarget",
-    "regularweapondelay", "ignoreshield", "forceinvalidatetarget", "canattackstations", "specialvalue",
+    "special", "regularweapondelay", "ignoreshield", "forceinvalidatetarget", "canattackstations", "specialvalue",
     "shieldduration", "omegaturn", "seektime", "shotaccel", "detectradius", "traveltimefraction",
     // CON-55: unit stat keys (typed; applied by SIM-74).
     "intrinsicvalue", "criticalhitpercent", "hulltargethardpoints", "criticaltargethardpoints",
