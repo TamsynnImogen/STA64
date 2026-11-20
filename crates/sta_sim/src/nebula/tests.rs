@@ -12,7 +12,7 @@ use crate::setup::{Control, GameOptions, GameSetup, PlayerSetup};
 use crate::specials::CloakState;
 use crate::WorldSource;
 
-fn v(x: i32, z: i32) -> Vec3 {
+pub(crate) fn v(x: i32, z: i32) -> Vec3 {
     Vec3 { x: Fixed::from_int(x), y: Fixed::ZERO, z: Fixed::from_int(z) }
 }
 
@@ -38,13 +38,14 @@ fn nebula(odf: &str, text: &str) -> UnitDef {
 /// - `fx_cap`: `craft_speed_coefficient = 1`, `craft_speed_limit = 30`
 /// - `fx_burn`, `fx_burn2`: 60 damage per second, shields off
 /// - `fx_calm`: no slowing, `regenValue = 30`, `repairValue = 3`
+/// - `fx_still`, `fx_still2`: no slowing, shields off (nothing else)
 /// - `fx_quiet`: no slowing, weapons, life support and cloak off
-fn content(crew_loss: bool) -> Arc<ContentDb> {
+pub(crate) fn content(crew_loss: bool) -> Arc<ContentDb> {
     content_in(crew_loss, None)
 }
 
 /// As [`content`], under `profile` (none: the fake content's own).
-fn content_in(crew_loss: bool, profile: Option<Profile>) -> Arc<ContentDb> {
+pub(crate) fn content_in(crew_loss: bool, profile: Option<Profile>) -> Arc<ContentDb> {
     let fake = sta_content::fake::db();
     let (cloakers, devices) = crate::specials::fixture::defs();
     let mut features = fake.features().clone();
@@ -69,6 +70,8 @@ fn content_in(crew_loss: bool, profile: Option<Profile>) -> Arc<ContentDb> {
         ("fx_burn", format!("{calm}damageValue = 60\ndisableShields = 1\n")),
         ("fx_burn2", format!("{calm}damageValue = 60\ndisableShields = 1\n")),
         ("fx_calm", format!("{calm}regenValue = 30\nrepairValue = 3\n")),
+        ("fx_still", format!("{calm}disableShields = 1\n")),
+        ("fx_still2", format!("{calm}disableShields = 1\n")),
         ("fx_quiet", format!("{calm}disableWeapons = 1\ndisableCrew = 1\ndisableCloak = 1\n")),
     ] {
         b = b.unit(nebula(odf, &text));
@@ -78,12 +81,12 @@ fn content_in(crew_loss: bool, profile: Option<Profile>) -> Arc<ContentDb> {
     Arc::new(b.build().unwrap().with_rules(Rules::default().with_pathing(off)))
 }
 
-fn neb(odf: &str, at: Vec3, radius: i32) -> Region {
+pub(crate) fn neb(odf: &str, at: Vec3, radius: i32) -> Region {
     Region { kind: RegionKind::Nebula, odf: odf.into(), shape: RegionShape::Sphere { centre: at, radius: Fixed::from_int(radius) } }
 }
 
 /// A sim on a map whose minimum corner is the origin (the cells start there).
-fn sim_with(regions: Vec<Region>, db: Arc<ContentDb>) -> Sim {
+pub(crate) fn sim_with(regions: Vec<Region>, db: Arc<ContentDb>) -> Sim {
     let mut map = MapDef::empty();
     map.bounds = (Vec3 { x: Fixed::ZERO, y: Fixed::from_int(-500), z: Fixed::ZERO }, Vec3 { x: Fixed::from_int(8000), y: Fixed::from_int(500), z: Fixed::from_int(8000) });
     map.regions = regions;
@@ -95,7 +98,7 @@ fn sim(regions: Vec<Region>) -> Sim {
     sim_with(regions, content(false))
 }
 
-fn put(sim: &mut Sim, odf: &str, player: u8, at: Vec3) -> EntityId {
+pub(crate) fn put(sim: &mut Sim, odf: &str, player: u8, at: Vec3) -> EntityId {
     let key = sim.content().unwrap().key(odf).unwrap();
     sim.spawn_def(key, PlayerId(player), at, (Fixed::ONE, Fixed::ZERO)).unwrap()
 }
@@ -104,7 +107,7 @@ fn order(sim: &mut Sim, player: u8, kind: Order) -> Vec<SimEvent> {
     sim.step(&[Command { player: PlayerId(player), seq: 0, kind: CommandKind::Order(kind) }]).events
 }
 
-fn run(sim: &mut Sim, ticks: u32) -> Vec<SimEvent> {
+pub(crate) fn run(sim: &mut Sim, ticks: u32) -> Vec<SimEvent> {
     (0..ticks).flat_map(|_| sim.step(&[]).events).collect()
 }
 
