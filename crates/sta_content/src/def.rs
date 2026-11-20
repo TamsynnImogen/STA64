@@ -611,12 +611,16 @@ pub struct NebulaEffects {
     /// `repairValue` (whole number): system hit points per second.
     pub repair: Fixed,
     /// `craft_speed_coefficient` (default 0.5): a multiple of the craft's speed.
+    /// Applied under the Armada I profile only (interim, not measured); the
+    /// Armada II family ignores it (sta_sim `nebula::speed_caps`).
     pub speed_coefficient: Fixed,
     /// `craft_speed_limit`: a speed cap; `None` for a negative value (the
-    /// default -1, no cap).
+    /// default -1, no cap). Applied under the Armada I profile only; ignored by
+    /// the Armada II family.
     pub speed_limit: Option<Fixed>,
     /// `craft_max_speed_fraction`: above 0 it replaces the two keys above: the
-    /// speed is capped at this fraction of impulse speed.
+    /// speed is capped at this fraction of impulse speed. The only one of the
+    /// three that slows a craft in the Armada II family.
     pub max_speed_fraction: Option<Fixed>,
 }
 

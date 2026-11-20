@@ -36,18 +36,28 @@
 //!   freighters the weapons rule spares is not established; none is spared.
 //! - Speed (craft only): a throttle fraction that starts at 1 and a cap that
 //!   starts at the larger of impulse and warp speed. Each kind lowers the
-//!   fraction to `craft_speed_coefficient` (0.5 when the key is absent) and
-//!   the cap to `craft_speed_limit` when that is 0 or more; a kind with
-//!   `craft_max_speed_fraction` above 0 instead lowers the fraction to it and
-//!   the cap to that fraction of impulse speed (no warp). **Interim:** how the
-//!   original's steering applies the two is not established; here impulse and
-//!   warp speed are both scaled by the fraction and bounded by the cap.
+//!   fraction to `craft_max_speed_fraction` and the cap to that fraction of
+//!   impulse speed, for a kind with the key above 0 (measured on stock
+//!   Armada II, single runs: impulse speed is that fraction of its value).
+//!   Armada II family (every profile but Armada I): a kind without the
+//!   fraction does not change speed, whatever `craft_speed_coefficient` and
+//!   `craft_speed_limit` say. Grade: measured on stock Armada II 1.1, single
+//!   runs (a coefficient far below the measured ones is not). Fleet
+//!   Operations 3 and 4 and the Roots lineage take it by engine family (not
+//!   measured); the Native profile follows it by STA64's own choice. **Interim, not measured:** warp speed under a fraction is
+//!   scaled by it and bounded by the cap. **Interim, not measured:** Armada I
+//!   (`Sta1Classic`) keeps the older coefficient rule: a kind without the
+//!   fraction lowers the fraction to `craft_speed_coefficient` (0.5 when the
+//!   key is absent) and the cap to `craft_speed_limit` when that is 0 or more.
+//!   **Interim:** how the original's steering applies these is not
+//!   established; here impulse and warp speed are both scaled by the fraction
+//!   and bounded by the cap.
 //!
 //! Not yet: `disableSensors`, `hideContents`, `clearEffects`, the entry
 //! voice, the AI's handling (see TODO.md). A map without nebula effects takes
 //! the early return: no draws, no change to its digests.
 
-use sta_content::{ContentDb, ContentKey, NebulaEffects, RegionKind, RegionShape};
+use sta_content::{ContentDb, ContentKey, NebulaEffects, Profile, RegionKind, RegionShape};
 use sta_core::{EntityId, Fixed, TICK_HZ, Vec3};
 
 use crate::view::UnitFlags;
@@ -117,18 +127,23 @@ fn speed_caps(db: &ContentDb, u: &Entity, keys: &[ContentKey]) -> Option<(Fixed,
     let (impulse, warp) = (u.stats.max_speed, u.stats.warp_speed);
     let mut fraction = Fixed::ONE;
     let mut cap = impulse.max(warp);
+    // Interim, not measured: Armada I keeps the coefficient rule; the Armada
+    // II family ignores the coefficient and the limit (measured on stock
+    // Armada II 1.1 only; the other family profiles by engine family, Native by choice).
+    let coefficient_rule = db.profile() == Profile::Sta1Classic;
     for e in keys.iter().filter_map(|k| effects(db, *k)) {
         match e.max_speed_fraction {
             Some(f) => {
                 cap = cap.min(impulse * f);
                 fraction = fraction.min(f);
             }
-            None => {
+            None if coefficient_rule => {
                 fraction = fraction.min(e.speed_coefficient);
                 if let Some(limit) = e.speed_limit {
                     cap = cap.min(limit);
                 }
             }
+            None => {}
         }
     }
     let floor = crate::speed_override::HELD_SPEED;
