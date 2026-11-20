@@ -261,13 +261,14 @@ impl Sim {
             };
             let Some(new) = self.spawn_unqueued_def(key, source.owner, entry, source.heading) else { continue };
             self.replacements.0.insert(new, Actor { parent: Some(source.def), original: Some(original), mounts: Vec::new() });
-            if let Some(race) = &race_override {
+            let new_vessel = self.units.get(new).is_some_and(|unit| {
+                matches!(unit.kind, EntityKind::Craft | EntityKind::Station)
+            });
+            if new_vessel && let Some(race) = &race_override {
                 self.attrs.set_race(new, race);
             }
             if options.transfer_stats {
-                if matches!(source.kind, EntityKind::Craft | EntityKind::Station)
-                    && self.units.get(new).is_some_and(|unit| matches!(unit.kind, EntityKind::Craft | EntityKind::Station))
-                {
+                if matches!(source.kind, EntityKind::Craft | EntityKind::Station) && new_vessel {
                     self.autonomy.copy_to(id, new);
                     self.edit_alert(new, self.alert_of(id));
                 }
