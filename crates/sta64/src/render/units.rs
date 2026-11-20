@@ -208,6 +208,9 @@ fn pick_bodies(mut commands: Commands, link: Res<SimLink>, content: Res<ContentR
 /// What `sync_units` last drew: the view, the local player and whether a cineractive revealed the view.
 type SeenKey = (Arc<WorldView>, Option<PlayerId>, bool);
 
+/// The view-spawned units `sync_units` updates in place.
+type LiveUnits = (&'static mut HullShare, &'static mut UnitOwner, Has<Cloaked>, Option<&'static mut SystemsOff>);
+
 /// Diff the current view against [`SimEntities`].
 #[allow(clippy::too_many_arguments)]
 pub fn sync_units(
@@ -219,7 +222,7 @@ pub fn sync_units(
     map_teams: Option<Res<crate::viewer::MapTeamColours>>,
     mut map: ResMut<SimEntities>,
     existing: Query<(Entity, &SimEntity), Without<FromView>>,
-    mut live: Query<(&mut HullShare, &mut UnitOwner, Has<Cloaked>, Option<&mut SystemsOff>), With<FromView>>,
+    mut live: Query<LiveUnits, With<FromView>>,
     mut seen: Local<Option<SeenKey>>,
     content: Option<Res<ContentRes>>,
 ) {
