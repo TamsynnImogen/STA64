@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use sta_content::{ContentDb, MapDef, PathingRules, Region, RegionKind, RegionShape, Rules, UnitDef};
+use sta_content::{ContentDb, MapDef, PathingRules, Profile, Region, RegionKind, RegionShape, Rules, UnitDef};
 use sta_core::{EntityId, Fixed, PlayerId, TeamId, Vec3};
 
 use super::*;
@@ -32,17 +32,23 @@ fn nebula(odf: &str, text: &str) -> UnitDef {
 /// Fake content, the cloakers, a cruiser with system hit points, and these
 /// authored nebulae (the kinds the tests need, no game data):
 /// - `fx_slow`: no keys (the speed coefficient's default)
+/// - `fx_half`: `craft_speed_coefficient = 0.6`
 /// - `fx_drag`: `craft_max_speed_fraction = 0.4`
 /// - `fx_cap`: `craft_speed_coefficient = 1`, `craft_speed_limit = 30`
 /// - `fx_burn`, `fx_burn2`: 60 damage per second, shields off
 /// - `fx_calm`: no slowing, `regenValue = 30`, `repairValue = 3`
 /// - `fx_quiet`: no slowing, weapons, life support and cloak off
 fn content(crew_loss: bool) -> Arc<ContentDb> {
+    content_in(crew_loss, None)
+}
+
+/// As [`content`], under `profile` (none: the fake content's own).
+fn content_in(crew_loss: bool, profile: Option<Profile>) -> Arc<ContentDb> {
     let fake = sta_content::fake::db();
     let (cloakers, devices) = crate::specials::fixture::defs();
     let mut features = fake.features().clone();
     features.crew_loss_on_hit = crew_loss;
-    let mut b = ContentDb::builder().profile(fake.profile()).features(features);
+    let mut b = ContentDb::builder().profile(profile.unwrap_or(fake.profile())).features(features);
     for w in fake.weapons().cloned().chain(devices) {
         b = b.weapon(w);
     }
@@ -55,6 +61,7 @@ fn content(crew_loss: bool) -> Arc<ContentDb> {
     let calm = "craft_speed_coefficient = 1\n";
     for (odf, text) in [
         ("fx_slow", String::new()),
+        ("fx_half", "craft_speed_coefficient = 0.6\n".to_owned()),
         ("fx_drag", "craft_max_speed_fraction = 0.4\n".to_owned()),
         ("fx_cap", "craft_speed_coefficient = 1\ncraft_speed_limit = 30\n".to_owned()),
         ("fx_burn", format!("{calm}damageValue = 60\ndisableShields = 1\n")),
@@ -172,9 +179,9 @@ fn damage_can_destroy() {
 }
 
 /// The fastest the cruiser goes on a long move through the nebula `odf`
-/// (none: open space), and its own top speed.
-fn top_speed(odf: Option<&str>) -> (Fixed, Fixed) {
-    let mut s = sim(odf.map(|o| vec![neb(o, v(2500, 1000), 2400)]).unwrap_or_default());
+/// (none: open space) under `profile`, and its own top speed.
+fn top_speed_in(profile: Profile, odf: Option<&str>) -> (Fixed, Fixed) {
+    let mut s = sim_with(odf.map(|o| vec![neb(o, v(2500, 1000), 2400)]).unwrap_or_default(), content_in(false, Some(profile)));
     let id = put(&mut s, "fx_cruiser", 1, v(500, 1000));
     order(&mut s, 1, Order::Move { units: vec![id], to: v(4500, 1000), queue: false });
     let mut top = Fixed::ZERO;
@@ -187,26 +194,48 @@ fn top_speed(odf: Option<&str>) -> (Fixed, Fixed) {
     (top, u.stats.max_speed.max(u.stats.warp_speed))
 }
 
+/// The Armada II family profiles (Native, Fleet Operations 3 and 4, stock
+/// Armada II) all take the measured rule.
+const A2_FAMILY: [Profile; 4] = [Profile::Native, Profile::Fo3, Profile::Fo4, Profile::Sta2Classic];
+
 #[test]
-fn an_absent_coefficient_halves_the_speed() {
-    let (open, own) = top_speed(None);
+fn a2_without_a_fraction_the_speed_is_unchanged() {
+    for profile in A2_FAMILY {
+        let (open, own) = top_speed_in(profile, None);
+        assert!(open > own / Fixed::from_int(2) + f(1.0), "{profile:?}: the open-space run is fast enough to tell: {open:?}");
+        // Absent coefficient, a coefficient of 0.6, a limit with coefficient 1:
+        // none of them slows the craft.
+        for odf in ["fx_slow", "fx_half", "fx_cap"] {
+            let (top, _) = top_speed_in(profile, Some(odf));
+            assert_eq!(top, open, "{profile:?} {odf}");
+        }
+    }
+}
+
+#[test]
+fn a2_a_max_speed_fraction_caps_at_that_share_of_impulse() {
+    for profile in A2_FAMILY {
+        let (top, _) = top_speed_in(profile, Some("fx_drag"));
+        let impulse = Fixed::from_int(140);
+        assert!(top <= impulse * f(0.4f32 as f64) + f(0.01), "{profile:?}: {top:?}");
+        assert!(top > impulse * f(0.3), "{profile:?}: {top:?}");
+    }
+}
+
+/// Interim, not measured: Armada I keeps the coefficient rule.
+#[test]
+fn a1_keeps_the_coefficient_rule() {
+    let p = Profile::Sta1Classic;
+    let (open, own) = top_speed_in(p, None);
     assert!(open > own / Fixed::from_int(2) + f(1.0), "the open-space run is fast enough to tell: {open:?}");
-    let (slow, own) = top_speed(Some("fx_slow"));
-    assert!(slow <= own / Fixed::from_int(2) + f(0.01), "{slow:?} of {own:?}");
-}
-
-#[test]
-fn a_max_speed_fraction_caps_at_that_share_of_impulse() {
-    let (top, _) = top_speed(Some("fx_drag"));
-    let impulse = Fixed::from_int(140);
-    assert!(top <= impulse * f(0.4f32 as f64) + f(0.01), "{top:?}");
-    assert!(top > impulse * f(0.3), "{top:?}");
-}
-
-#[test]
-fn a_speed_limit_caps_the_speed() {
-    let (top, _) = top_speed(Some("fx_cap"));
+    let (slow, own) = top_speed_in(p, Some("fx_slow"));
+    assert!(slow <= own / Fixed::from_int(2) + f(0.01), "an absent coefficient halves: {slow:?} of {own:?}");
+    let (half, own) = top_speed_in(p, Some("fx_half"));
+    assert!(half <= own * f(0.6) + f(0.01) && half > own * f(0.5), "{half:?} of {own:?}");
+    let (top, _) = top_speed_in(p, Some("fx_cap"));
     assert!(top <= Fixed::from_int(30) + f(0.01) && top > Fixed::from_int(25), "{top:?}");
+    let (drag, _) = top_speed_in(p, Some("fx_drag"));
+    assert!(drag <= Fixed::from_int(140) * f(0.4f32 as f64) + f(0.01), "{drag:?}");
 }
 
 #[test]
