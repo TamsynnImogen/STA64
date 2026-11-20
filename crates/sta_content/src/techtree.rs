@@ -456,6 +456,16 @@ impl TechTree {
         }
     }
 
+    /// Whether this tree was read from a text (`.tt`) file. In a text tree an
+    /// item the tree does not list is not buildable and its build cell stays
+    /// empty at its position (read from the executable, static, Armada I and II), so [`availability_for_builder`](TechTree::availability_for_builder)
+    /// lets no unlisted item through. The XML form keeps the inferred
+    /// fallback (ADR 0004: mods ship either format in any profile, so the rule
+    /// keys on the format, not the profile).
+    pub fn is_text(&self) -> bool {
+        self.name.to_ascii_lowercase().ends_with(".tt")
+    }
+
     /// Whether `odf` may be built by `builder` (a unit ODF of `db`) for a
     /// player in `state`; `ai` says the player is computer-controlled. This
     /// is [`availability`](TechTree::availability) except for items the tree
@@ -478,7 +488,7 @@ impl TechTree {
     /// undocumented; this is inferred from install data.
     pub fn availability_for_builder(&self, db: &ContentDb, odf: &str, builder: &str, state: &dyn TechState, ai: bool) -> Availability {
         let a = self.availability(odf, state);
-        let a = if a == Availability::NotListed && self.unlisted_item_allowed(db, odf, builder, ai) {
+        let a = if a == Availability::NotListed && !self.is_text() && self.unlisted_item_allowed(db, odf, builder, ai) {
             Availability::Available
         } else {
             a
@@ -1252,7 +1262,9 @@ mod tests {
     #[test]
     fn unlisted_items_follow_the_flagged_slot_rule() {
         let me = Owned::new("fx");
-        let t = tt("yard 0\nlisted 0\nwithheld -1\n");
+        let mut t = tt("yard 0\nlisted 0\nwithheld -1\n");
+        // The inferred fallback is the XML form's (a text tree blocks unlisted items).
+        t.name = "t.xml".into();
         // A builder that flags some slots: `tail*` slots are bare.
         let slots = "builditem1 = \"flagged\"\nbuilditem1availability = 0\n\
             builditem2 = \"prov\"\nbuilditem2provided = 1\n\
@@ -1287,9 +1299,21 @@ mod tests {
     #[test]
     fn a_builder_without_flags_offers_its_unlisted_slots_to_everyone() {
         let me = Owned::new("fx");
-        let t = tt("menu 0\n");
+        let mut t = tt("menu 0\n");
+        t.name = "t.xml".into();
         let db = rule_db("menu", "builditem1 = \"mod_a\"\nbuilditem2 = \"mod_b\"\n", &[("mod_a", ""), ("mod_b", "")]);
         assert!(t.availability_for_builder(&db, "mod_a", "menu", &me, false).is_available());
         assert!(t.availability_for_builder(&db, "mod_b", "menu", &me, true).is_available());
+    }
+
+    #[test]
+    fn a_text_tree_blocks_every_unlisted_item_even_of_a_menu_builder() {
+        let me = Owned::new("fx");
+        let t = tt("menu 0\nlisted 0\n");
+        assert!(t.is_text());
+        let db = rule_db("menu", "builditem1 = \"listed\"\nbuilditem2 = \"omitted\"\n", &[("listed", ""), ("omitted", "")]);
+        assert!(t.availability_for_builder(&db, "listed", "menu", &me, false).is_available());
+        assert_eq!(t.availability_for_builder(&db, "omitted", "menu", &me, false), Availability::NotListed);
+        assert_eq!(t.availability_for_builder(&db, "omitted", "menu", &me, true), Availability::NotListed);
     }
 }

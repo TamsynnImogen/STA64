@@ -231,15 +231,20 @@ pub(crate) fn clear_derelict(t: &mut Entity, def: &UnitDef, ctx: &mut Ctx) {
 /// One hit under the casualty model; returns the shield and hull damage it
 /// really did and whether it emptied the pool.
 pub(crate) fn hit(t: &mut Entity, def: &UnitDef, w: &WeaponDef, db: &ContentDb, ctx: &mut Ctx, pool: usize, damage: Fixed) -> (Fixed, Fixed, bool) {
-    let k = &def.casualty;
     // SIM-73 `weapon_target_damage` (off by default): the target's own variance row.
     let variance = if db.weapon_features(w).weapon_target_damage { super::hit_roll::variance_for(db, w, t) } else { w.damage_variance };
     let d = varied(damage, variance, ctx.rng);
+    after_variance(t, def, db, ctx, pool, d, w.crew_loss.unwrap_or_default())
+}
+
+/// [`hit`] after the variance draw: `d` damage with the crew law `lc`. Nebula
+/// damage (SIM-75) enters here with the nebula's own crew-law keys.
+pub(crate) fn after_variance(t: &mut Entity, def: &UnitDef, db: &ContentDb, ctx: &mut Ctx, pool: usize, d: Fixed, lc: sta_content::OrdnanceCrewLoss) -> (Fixed, Fixed, bool) {
+    let k = &def.casualty;
     let protection = k.shield_protection.or(db.rules().cfg.shield_damage_protection).unwrap_or(Fixed::ONE).max(Fixed::ZERO).min(Fixed::ONE);
     let s_part = mul(d, protection);
     let mut h = d - s_part;
     let held = t.shields.now[pool];
-    let lc = w.crew_loss.unwrap_or_default();
     if held > Fixed::ZERO && lc.threshold > Fixed::ZERO && protection < Fixed::ONE {
         let e = s_part - lc.threshold;
         if e > Fixed::ZERO {
@@ -296,5 +301,22 @@ pub(crate) fn step(units: &mut Entities, db: &ContentDb, ctx: &mut Ctx) {
             let loss = percent_of(mul(def.casualty.life_support_loss, dt), now) + dt;
             kill_crew(t, ctx, loss);
         }
+    }
+}
+
+/// SIM-75: the same drain for units whose life support a nebula switches off
+/// this tick (`ids` ascending), unless [`step`] already drained them.
+pub(crate) fn nebula_life_support(units: &mut Entities, db: &ContentDb, ctx: &mut Ctx, ids: &[EntityId]) {
+    let dt = Fixed::ONE / Fixed::from_int(TICK_HZ as i32);
+    for &id in ids {
+        let Some(t) = units.get_mut(id).filter(|t| t.hull[0] > Fixed::ZERO) else { continue };
+        let Some(def) = db.unit(t.def).filter(|d| db.unit_features(d).crew_loss_on_hit) else { continue };
+        let Some([now, _]) = t.crew else { continue };
+        let row = ctx.subsystems.get(id).unwrap_or_default();
+        if row.derelict || system_off(t, &row, LIFE_SUPPORT) || system_dead(def, &row, LIFE_SUPPORT) {
+            continue;
+        }
+        let loss = percent_of(mul(def.casualty.life_support_loss, dt), now) + dt;
+        kill_crew(t, ctx, loss);
     }
 }

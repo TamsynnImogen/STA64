@@ -251,3 +251,176 @@ fn engagement_memory_is_digested_snapshotted_and_forgotten_after_a_second() {
     }
     assert!(sim.engagement.is_empty());
 }
+
+/// A craft variant `name` of the approach scene's armed ship, built by `edit`
+/// on its weapon list and class keys (authored data).
+fn variant_db(profile: Profile, extra: Vec<sta_content::WeaponDef>, edit: impl Fn(&mut UnitDef)) -> ContentDb {
+    let base = approach_tests::db(profile, Some(1100));
+    let mut b = ContentDb::builder().profile(base.profile()).features(base.features().clone());
+    for w in base.weapons().chain(extra.iter()) {
+        b = b.weapon(w.clone());
+    }
+    for u in base.units() {
+        b = b.unit(u.clone());
+    }
+    let mut v = base.unit(base.key("st_destroy").unwrap()).unwrap().clone();
+    v.odf = "st_variant".into();
+    edit(&mut v);
+    b.unit(v).build().expect("consistent").with_rules(base.rules().clone())
+}
+
+/// An idle `st_variant` (player 1) at the origin with an armed, immobile enemy
+/// 300 away that shoots at it. Whether the variant ever got an attack order,
+/// and how far it moved, within 20 s.
+fn answers_fire(db: ContentDb) -> (bool, Fixed) {
+    let mut sim = approach_tests::sim(db);
+    let db = Arc::clone(sim.content.as_ref().unwrap());
+    let c = sim.spawn_def(db.key("st_variant").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
+    let e = sim.spawn_def(db.key("st_destroy").unwrap(), PlayerId(2), v(0, 300), (Fixed::ZERO, -Fixed::ONE)).unwrap();
+    let ee = sim.units.get_mut(e).unwrap();
+    ee.flags = ee.flags.with(crate::view::UnitFlags::ENGINES_OFF, true);
+    let mut engaged = false;
+    for _ in 0..30 * 20 {
+        WorldSource::step(&mut sim, &[]);
+        engaged |= sim.weapons.attack_of(c).is_some();
+    }
+    (engaged, (sim.unit(c).unwrap().pos.z).abs())
+}
+
+#[test]
+fn an_idle_craft_answers_fire_by_closing_in_only_when_it_may_attack() {
+    let p = Profile::Sta2Classic;
+    // Control: an armed craft engages as before.
+    assert!(answers_fire(variant_db(p, vec![], |_| {})).0);
+    // The class key `canAttack = 0`: stays, though it carries a regular weapon.
+    let no_attack = |u: &mut UnitDef| u.stats.can_attack = Some(false);
+    let (engaged, moved) = answers_fire(variant_db(p, vec![], no_attack));
+    assert!(!engaged && moved < Fixed::ONE, "{engaged} {moved:?}");
+    // A weapon whose `special` key marks it special does not make a pursuer.
+    let mut special = sta_content::WeaponDef::new("st_special", "phaser", sta_content::WeaponKind::Beam);
+    special.range = Fixed::from_int(400);
+    special.damage = Fixed::ONE;
+    special.refire = 60;
+    special.duration = 5;
+    special.base.special = Some(true);
+    let only_special = |u: &mut UnitDef| u.hardpoints[0].weapon = sta_content::DefRef::new("st_special");
+    let (engaged, moved) = answers_fire(variant_db(p, vec![special], only_special));
+    assert!(!engaged && moved < Fixed::ONE, "{engaged} {moved:?}");
+    // A tractor beam (tool class, no `special` key in this data): the interim stand-in.
+    let mut tool = sta_content::WeaponDef::new("st_tool", "tractor_bm", sta_content::WeaponKind::Beam);
+    tool.range = Fixed::from_int(200);
+    tool.refire = 60;
+    tool.duration = 5;
+    let only_tool = |u: &mut UnitDef| u.hardpoints[0].weapon = sta_content::DefRef::new("st_tool");
+    let (engaged, moved) = answers_fire(variant_db(p, vec![tool], only_tool));
+    assert!(!engaged && moved < Fixed::ONE, "{engaged} {moved:?}");
+}
+
+#[test]
+fn a_craft_that_may_not_attack_keeps_its_move_order_and_an_explicit_attack_order() {
+    let p = Profile::Sta2Classic;
+    let mut sim = approach_tests::sim(variant_db(p, vec![], |u| u.stats.can_attack = Some(false)));
+    let db = Arc::clone(sim.content.as_ref().unwrap());
+    let c = sim.spawn_def(db.key("st_variant").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
+    let e = sim.spawn_def(db.key("st_destroy").unwrap(), PlayerId(2), v(300, 0), AHEAD).unwrap();
+    let mv = Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![c], to: v(0, 1500), queue: false }) };
+    WorldSource::step(&mut sim, &[mv]);
+    for _ in 0..30 * 40 {
+        WorldSource::step(&mut sim, &[]);
+    }
+    assert!((sim.unit(c).unwrap().pos.z - Fixed::from_int(1500)).abs() < Fixed::from_int(5));
+    // A script's attack order is still taken; a player's is refused (next test).
+    let at = Command { player: PlayerId::BENCH, seq: 1, kind: CommandKind::Order(Order::Attack { units: vec![c], target: e }) };
+    WorldSource::step(&mut sim, &[at]);
+    assert_eq!(sim.weapons.attack_of(c), Some(e));
+}
+
+fn tool_def() -> sta_content::WeaponDef {
+    let mut tool = sta_content::WeaponDef::new("st_tool", "tractor_bm", sta_content::WeaponKind::Beam);
+    tool.range = Fixed::from_int(400);
+    tool.damage = Fixed::ONE;
+    tool.refire = 30;
+    tool.duration = 5;
+    tool
+}
+
+#[test]
+fn a_craft_with_only_tools_never_fires_idle_or_moving() {
+    let only_tool = |u: &mut UnitDef| u.hardpoints[0].weapon = sta_content::DefRef::new("st_tool");
+    let mut sim = approach_tests::sim(variant_db(Profile::Sta2Classic, vec![tool_def()], only_tool));
+    let db = Arc::clone(sim.content.as_ref().unwrap());
+    let c = sim.spawn_def(db.key("st_variant").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
+    let e = sim.spawn_def(db.key("st_target").unwrap(), PlayerId(2), v(0, 200), AHEAD).unwrap();
+    let mv = Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![c], to: v(0, 900), queue: false }) };
+    let mut shots = 0;
+    for i in 0..30 * 30 {
+        let cmds = if i == 0 { vec![mv.clone()] } else { Vec::new() };
+        shots += WorldSource::step(&mut sim, &cmds).events.iter().filter(|ev| matches!(ev, SimEvent::Fired { shooter, .. } if *shooter == c)).count();
+    }
+    assert_eq!(shots, 0);
+    assert!(sim.unit(e).unwrap().hull[0] == sim.unit(e).unwrap().hull[1]);
+}
+
+#[test]
+fn an_unfinished_craft_that_may_not_attack_takes_no_order_and_does_not_engage_when_finished() {
+    // Both rules at once: unfinished (no fire, no order) and a non-attacker (no assist, no pursuit).
+    let mut sim = approach_tests::sim(variant_db(Profile::Sta2Classic, vec![], |u| u.stats.can_attack = Some(false)));
+    let db = Arc::clone(sim.content.as_ref().unwrap());
+    let c = sim.spawn_def(db.key("st_variant").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
+    let e = sim.spawn_def(db.key("st_destroy").unwrap(), PlayerId(2), v(0, 300), (Fixed::ZERO, -Fixed::ONE)).unwrap();
+    sim.units.get_mut(c).unwrap().progress = Some(Fixed::from_int(1) / Fixed::from_int(2));
+    let at = Command { player: PlayerId::BENCH, seq: 0, kind: CommandKind::Order(Order::Attack { units: vec![c], target: e }) };
+    WorldSource::step(&mut sim, &[at]);
+    assert_eq!(sim.weapons.attack_of(c), None, "unfinished: no order, even a script's");
+    sim.units.get_mut(c).unwrap().progress = None;
+    for _ in 0..30 * 10 {
+        WorldSource::step(&mut sim, &[]);
+        assert_eq!(sim.weapons.attack_of(c), None, "finished, canAttack 0: no assist or answer");
+    }
+    assert!(sim.unit(c).unwrap().pos.z.abs() < Fixed::ONE);
+}
+
+#[test]
+fn a_player_attack_order_is_refused_for_a_class_that_may_not_attack_scripts_keep_theirs() {
+    let mut sim = approach_tests::sim(variant_db(Profile::Sta2Classic, vec![], |u| u.stats.can_attack = Some(false)));
+    let db = Arc::clone(sim.content.as_ref().unwrap());
+    let c = sim.spawn_def(db.key("st_variant").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
+    let e = sim.spawn_def(db.key("st_destroy").unwrap(), PlayerId(2), v(0, 300), AHEAD).unwrap();
+    let at = |player, seq| Command { player, seq, kind: CommandKind::Order(Order::Attack { units: vec![c], target: e }) };
+    WorldSource::step(&mut sim, &[at(PlayerId(1), 0)]);
+    assert_eq!(sim.weapons.attack_of(c), None);
+    WorldSource::step(&mut sim, &[at(PlayerId::BENCH, 1)]);
+    assert_eq!(sim.weapons.attack_of(c), Some(e));
+}
+
+fn colonising_def() -> sta_content::WeaponDef {
+    let mut pod = sta_content::WeaponDef::new("st_pod", "colonizerpod", sta_content::WeaponKind::Projectile);
+    pod.range = Fixed::from_int(400);
+    pod.damage = Fixed::ONE;
+    pod.refire = 30;
+    pod.shot_speed = Fixed::from_int(100);
+    pod.colonize = Some(sta_content::ColonizePodDef { party_size: Fixed::from_int(100), orbit_range: Fixed::from_int(150) });
+    pod
+}
+
+#[test]
+fn a_craft_with_only_a_colonising_weapon_does_not_fight() {
+    let only_pod = |u: &mut UnitDef| u.hardpoints[0].weapon = sta_content::DefRef::new("st_pod");
+    let p = Profile::Sta2Classic;
+    // Hit while idle: stays, takes no assist.
+    let (engaged, moved) = answers_fire(variant_db(p, vec![colonising_def()], only_pod));
+    assert!(!engaged && moved < Fixed::ONE, "{engaged} {moved:?}");
+    // Never fires, and a player's attack order is refused.
+    let mut sim = approach_tests::sim(variant_db(p, vec![colonising_def()], only_pod));
+    let db = Arc::clone(sim.content.as_ref().unwrap());
+    let c = sim.spawn_def(db.key("st_variant").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
+    let e = sim.spawn_def(db.key("st_target").unwrap(), PlayerId(2), v(0, 200), AHEAD).unwrap();
+    let at = Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Attack { units: vec![c], target: e }) };
+    let mut shots = 0;
+    for i in 0..30 * 20 {
+        let cmds = if i == 0 { vec![at.clone()] } else { Vec::new() };
+        shots += WorldSource::step(&mut sim, &cmds).events.iter().filter(|ev| matches!(ev, SimEvent::Fired { shooter, .. } if *shooter == c)).count();
+    }
+    assert_eq!(shots, 0);
+    assert_eq!(sim.weapons.attack_of(c), None);
+}

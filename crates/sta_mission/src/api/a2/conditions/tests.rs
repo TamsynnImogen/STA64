@@ -362,3 +362,27 @@ fn count_capital_ships_counts_ship_types_a_to_d_and_f() {
         assert_eq!(eval::<i64>(&rt, "return A2.CountCapitalShips(0)"), want, "shipType {ty}");
     }
 }
+
+/// A building under construction is not yet an object of its ODF: the named counts report it only
+/// once the build is complete (stated by a player; stock A2 read from the executable, static).
+#[test]
+fn a_building_under_construction_is_not_counted_by_name_until_complete() {
+    let mut s = scene();
+    let station = s.ids[2];
+    let set = |s: &mut Scene, p: Option<Fixed>| s.view.units.iter_mut().find(|u| u.id == station).unwrap().progress = p;
+
+    set(&mut s, Some(Fixed::from_int(1) / Fixed::from_int(2)));
+    let rt = runtime(&s);
+    assert_eq!(eval::<i64>(&rt, "return A2.CountUnits(0, 'fx_station')"), 0);
+    assert_eq!(eval::<i64>(&rt, "return A2.CountUnitsNearObject(a, 400, 0, 'fx_station')"), 0);
+    assert_eq!(eval::<i64>(&rt, "return A2.CountVisibleUnitsNearObject(a, 99999, 0, true, 'fx_station')"), 0);
+    assert_eq!(eval::<i64>(&rt, "return A2.CountStations(0)"), 0);
+    assert_eq!(eval::<i64>(&rt, "return A2.CountUnits(0, nil)"), 2, "a search with no ODF still sees the object");
+    assert_eq!(eval::<i64>(&rt, "return A2.CountUnits(1, 'fx_cruiser')"), 1, "finished units are unchanged");
+
+    set(&mut s, None);
+    let rt = runtime(&s);
+    assert_eq!(eval::<i64>(&rt, "return A2.CountUnits(0, 'fx_station')"), 1);
+    assert_eq!(eval::<i64>(&rt, "return A2.CountUnitsNearObject(a, 400, 0, 'fx_station')"), 1);
+    assert_eq!(eval::<i64>(&rt, "return A2.CountStations(0)"), 1);
+}

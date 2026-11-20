@@ -187,6 +187,35 @@ impl ContentDb {
         self
     }
 
+    /// The database gated by the tech tree a map names with its header key
+    /// `techTreeFilename` (a file name, `.tt` or `.xml`, looked up by stem as
+    /// [`TechTree::find`] does): `Some` when that swaps the tree. An empty name,
+    /// `none`, or the tree already in use gives `None` (keep this database). A
+    /// tree the mount lacks, that fails to load or that has no entries gives
+    /// `None` and a warning that the current tree stays (the caller logs it).
+    /// Read from the executable, static (Armada I and II): the
+    /// game plays with the tree its map names.
+    pub fn with_map_tech_tree(&self, vfs: &sta_vfs::Vfs, name: &str) -> (Option<ContentDb>, Vec<Warning>) {
+        let name = name.trim();
+        let file_stem = |n: &str| {
+            let n = n.trim().rsplit(['/', '\\']).next().unwrap_or("").to_ascii_lowercase();
+            n.strip_suffix(".tt").or_else(|| n.strip_suffix(".xml")).map(str::to_owned).unwrap_or(n)
+        };
+        let stem = file_stem(name);
+        if stem.is_empty() || stem == "none" || self.tech.as_ref().is_some_and(|t| file_stem(&t.name) == stem) {
+            return (None, Vec::new());
+        }
+        match TechTree::from_vfs(vfs, &stem) {
+            Ok(Some((tree, w))) if !tree.is_empty() => (Some(self.clone().with_tech_tree(tree)), w),
+            Ok(Some((_, mut w))) => {
+                w.push(Warning::new(name, "map tech tree has no entries; the current tree stays"));
+                (None, w)
+            }
+            Ok(None) => (None, vec![Warning::new(name, "map tech tree not found in the mount; the current tree stays")]),
+            Err(e) => (None, vec![Warning::new(name, format!("map tech tree unreadable ({e}); the current tree stays"))]),
+        }
+    }
+
     /// Build a database from definitions made in code (fakes) or JSON5.
     pub fn builder() -> ContentBuilder {
         ContentBuilder::default()
@@ -475,7 +504,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         crew: _, maximum_crew: _, facility: _, has_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
         free_unit: _, dock: _, sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
         max_dilithium: _, mining_rate: _, transfer_rate: _, resource: _, features: _,
-        confinement: _, nebula_pathing: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
+        confinement: _, nebula_pathing: _, nebula_effects: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
         crew_gain: _, transport: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, repair_attachment: _, stats: _, raw: _,
     } = u;
     // `stats` (CON-55): only the keys a sim rule reads are digested (the planet keys
@@ -565,6 +594,21 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         if let Some(d) = &u.dock {
             c.raw("dock", &format!("[{}]", [d.offset.0, d.offset.1, d.dir.0, d.dir.1].map(fixed_text).join(",")));
         }
+    }
+    // SIM-75: only for nebulae, so other units keep their digest.
+    if let Some(n) = &u.nebula_effects {
+        let flags = [n.disable_weapons, n.disable_shields, n.disable_crew, n.disable_sensors, n.disable_cloak, n.hide_contents];
+        c.raw("nebula_effects", &group(
+            Canon::new()
+                .raw("disable", &flags.map(|f| if f { "1" } else { "0" }).concat())
+                .fixed("damage", n.damage)
+                .list("crew_loss", [n.crew_loss.threshold, n.crew_loss.shield, n.crew_loss.hull].map(fixed_text))
+                .fixed("regen", n.regen)
+                .fixed("repair", n.repair)
+                .fixed("speed_coefficient", n.speed_coefficient)
+                .opt_fixed("speed_limit", n.speed_limit)
+                .opt_fixed("max_speed_fraction", n.max_speed_fraction),
+        ));
     }
     if u.system_hit_points.iter().any(|f| *f != Fixed::ZERO) {
         c.list("system_hit_points", u.system_hit_points.map(fixed_text));
@@ -712,6 +756,10 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     {
         c.fixed("distance_below_grid", tag);
     }
+    // `canAttack = 0` keeps a class from taking up a fight by itself (read by `sta_sim::movement::approach`); only when set to 0.
+    if u.stats.can_attack == Some(false) {
+        c.raw("can_attack", "0");
+    }
     // SIM-73: the shooter's planet keys, only under the target-mask switch and only when set.
     if db.unit_features(u).weapon_target_masks && (u.stats.can_attack_planets.is_some() || u.stats.can_only_attack_planets.is_some()) {
         let flag = |b: Option<bool>| b.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string());
@@ -822,6 +870,10 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
         && let Some(l) = &w.base.damage_variance
     {
         c.raw("variance_rows", &table(l));
+    }
+    // The weapon's `special` key (read by `sta_sim::movement::approach`); only when set to 1.
+    if w.base.special == Some(true) {
+        c.raw("special", "1");
     }
     if features.weapon_cloak_fire && w.base.cloak_enable == Some(true) {
         c.raw("cloak_enable", "1");

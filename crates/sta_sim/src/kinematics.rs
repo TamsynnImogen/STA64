@@ -318,7 +318,9 @@ fn face(model: Model, u: &mut Unit, p: Vec3, dt: Fixed) {
 impl Sim {
     /// Step every mobile unit under the content's movement model; units
     /// with an approach plan (ascending id) step under it.
-    pub(crate) fn step_kinematics(&mut self, plans: &[(sta_core::EntityId, Plan)]) {
+    /// `caps`: SIM-75 nebula speed caps, `(craft, (impulse, warp))` ascending,
+    /// in force for this step only.
+    pub(crate) fn step_kinematics(&mut self, plans: &[(sta_core::EntityId, Plan)], caps: &[(sta_core::EntityId, (Fixed, Fixed))]) {
         let model = match self.content.as_deref() {
             Some(db) => Model::for_content(db),
             None => Model::of(Profile::default()),
@@ -335,6 +337,11 @@ impl Sim {
             let previous = u.pos;
             let a1 = if model == Model::A1 { db.and_then(|db| a1::params(db, u.def)) } else { None };
             let plan = plans.binary_search_by_key(&u.id, |p| p.0).ok().map(|i| plans[i].1);
+            let cap = caps.binary_search_by_key(&u.id, |c| c.0).ok().map(|i| caps[i].1);
+            let own = (u.stats.max_speed, u.stats.warp_speed);
+            if let Some((impulse, warp)) = cap {
+                (u.stats.max_speed, u.stats.warp_speed) = (impulse, warp);
+            }
             match (&a1, plan) {
                 // Armada I (SIM-66): its own step; no warp phase, no drop-out.
                 (Some(p), plan) => a1::step(u, p, queued, plan),
@@ -343,6 +350,7 @@ impl Sim {
                 (None, None) if u.speed > u.stats.max_speed => step_planned(model, u, Leg { queued, a1: None }, Plan::default()),
                 (None, None) => step(model, u, Leg { queued, a1: None }),
             }
+            (u.stats.max_speed, u.stats.warp_speed) = own;
             if self.confinement.is_active() && u.pos != previous {
                 let radius = db.and_then(|db| db.unit(u.def)).map_or(Fixed::ZERO, |d| d.radius * Fixed::from_int(3) / Fixed::from_int(4));
                 crate::avoid::constrain_position(&mut self.confinement, u, previous, radius, &obstacles);
@@ -719,10 +727,18 @@ mod smooth {
         apply(u, dyaw, ds);
     }
 
+    /// The rate at which a turn already under way is brought to rest. A craft whose
+    /// `turnAlphaFractionAtRest` is 0 has no turn acceleration once it stands still;
+    /// braking its leftover turn with that alone would keep it spinning forever, so it
+    /// then takes the full-speed rate. INTERIM: the original's spin-down is not measured.
+    fn spin_down_alpha(u: &Unit, lim: &Limits) -> Fixed {
+        if lim.alpha > Fixed::ZERO { lim.alpha } else { u.stats.turn_alpha * lim.omega_full }
+    }
+
     /// No target: brake to rest and stop turning.
     fn halt(u: &mut Unit, lim: &Limits, dt: Fixed) {
         let (ds, v) = vc(u.speed, Fixed::ZERO, lim.accel, dt);
-        let (dyaw, w) = vc(u.omega, Fixed::ZERO, lim.alpha, dt);
+        let (dyaw, w) = vc(u.omega, Fixed::ZERO, spin_down_alpha(u, lim), dt);
         u.speed = v.max(Fixed::ZERO);
         u.omega = w;
         apply(u, dyaw, ds);
@@ -820,7 +836,7 @@ mod smooth {
 
         // Turn toward the chase point, damped near the heading; or not at all.
         let (dyaw, w) = if close {
-            vc(u.omega, Fixed::ZERO, lim.alpha, dt)
+            vc(u.omega, Fixed::ZERO, spin_down_alpha(u, &lim), dt)
         } else {
             let err = atan2(cross, dot);
             let band = st.turn_control_angle * pi() / Fixed::from_int(180);

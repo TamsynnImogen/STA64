@@ -475,6 +475,9 @@ pub struct UnitDef {
     /// Path-planner rules of a `nebula_obj` (SIM-23); `None` for every other
     /// class, and for content that predates them.
     pub nebula_pathing: Option<NebulaPathing>,
+    /// What a `nebula_obj` does to the craft inside it (SIM-75); `None` for
+    /// every other class.
+    pub nebula_effects: Option<NebulaEffects>,
     /// `avoidMe = 1`: other units steer around and keep out of this one
     /// (moons and balls in Fleet Operations, SIM-21).
     pub avoid_me: bool,
@@ -541,6 +544,9 @@ pub struct UnitStatsDef {
     pub shield_pad: Option<Fixed>,
     /// `maxExtraWeapons` (Armada II).
     pub max_extra_weapons: Option<i32>,
+    /// `canAttack`: 0 keeps the class from taking up a fight by itself (read by
+    /// `sta_sim::movement::approach`; default 1).
+    pub can_attack: Option<bool>,
     /// `canAttackPlanets` (Armada II).
     pub can_attack_planets: Option<bool>,
     /// `canOnlyAttackPlanets` (Armada II).
@@ -574,6 +580,44 @@ pub struct NebulaPathing {
     pub cost: Option<i64>,
     /// `addToPathPlanner` (default 1): 0 leaves the nebula out of planning.
     pub planned: bool,
+}
+
+/// What a `nebula_obj` does to the craft inside it (SIM-75), from its ODF.
+/// Key names and defaults: read from the executable, static (Armada I and
+/// Armada II share them; Armada I has no `craft_max_speed_fraction`). Rates are
+/// per second.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NebulaEffects {
+    /// `disableWeapons`: weapons off inside.
+    pub disable_weapons: bool,
+    /// `disableShields`: shield generator off inside.
+    pub disable_shields: bool,
+    /// `disableCrew`: life support off inside.
+    pub disable_crew: bool,
+    /// `disableSensors`: sensors off inside (read, not applied yet).
+    pub disable_sensors: bool,
+    /// `disableCloak`: no cloak inside.
+    pub disable_cloak: bool,
+    /// `hideContents`: craft inside are hidden (read, not applied yet).
+    pub hide_contents: bool,
+    /// `damageValue`: damage per second.
+    pub damage: Fixed,
+    /// `damageThreshold` (default 50), `damageCrewModifier` (0.2) and
+    /// `damageHullModifier` (0.1): the crew law of that damage, as an
+    /// ordnance's `damageThreshold`, `shieldCrewModifier`, `hullCrewModifier`.
+    pub crew_loss: OrdnanceCrewLoss,
+    /// `regenValue` (whole number): shield points per second.
+    pub regen: Fixed,
+    /// `repairValue` (whole number): system hit points per second.
+    pub repair: Fixed,
+    /// `craft_speed_coefficient` (default 0.5): a multiple of the craft's speed.
+    pub speed_coefficient: Fixed,
+    /// `craft_speed_limit`: a speed cap; `None` for a negative value (the
+    /// default -1, no cap).
+    pub speed_limit: Option<Fixed>,
+    /// `craft_max_speed_fraction`: above 0 it replaces the two keys above: the
+    /// speed is capped at this fraction of impulse speed.
+    pub max_speed_fraction: Option<Fixed>,
 }
 
 impl UnitDef {
@@ -649,6 +693,7 @@ impl UnitDef {
             features: None,
             confinement: crate::ConfinementOverrides::default(),
             nebula_pathing: None,
+            nebula_effects: None,
             avoid_me: false,
             hidden: false,
             invalid_as_target: false,
@@ -834,6 +879,8 @@ pub struct WeaponBaseDef {
     pub switch_to_attack: Option<bool>,
     /// `cloakEnable`: usable while cloaked.
     pub cloak_enable: Option<bool>,
+    /// `special`: the weapon is a special weapon (read by `sta_sim::movement::approach`).
+    pub special: Option<bool>,
     /// `warpEnable` (Armada II): usable at warp.
     pub warp_enable: Option<bool>,
     /// `crewAffectsWeaponDelay`.

@@ -303,11 +303,42 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
             cost: r.num("pathing_cost").map(|v| v.round() as i64),
             planned: r.num("addToPathPlanner").is_none_or(|v| v != 0.0),
         });
+        d.nebula_effects = Some(nebula_effects(&mut r));
     }
 
     d.stats = stats(odf, &file, warnings);
     d.movement = movement(phys, &file, warnings);
     d
+}
+
+/// SIM-75: the effect keys of a `nebula_obj` (names and defaults read from the
+/// executable, static). The flags count when non-zero; `regenValue` and
+/// `repairValue` are whole numbers (a fraction is cut toward zero).
+fn nebula_effects(r: &mut Reader) -> crate::NebulaEffects {
+    let on = |r: &mut Reader, key: &str| r.num(key).is_some_and(|v| v != 0.0);
+    let real = |r: &mut Reader, key: &str, default: f32| Fixed::from_f64(r.num(key).unwrap_or(default as f64));
+    let whole = |r: &mut Reader, key: &str| Fixed::from_f64(r.num(key).unwrap_or(0.0).trunc().max(0.0));
+    let limit = real(r, "craft_speed_limit", -1.0);
+    let fraction = real(r, "craft_max_speed_fraction", 0.0);
+    crate::NebulaEffects {
+        disable_weapons: on(r, "disableWeapons"),
+        disable_shields: on(r, "disableShields"),
+        disable_crew: on(r, "disableCrew"),
+        disable_sensors: on(r, "disableSensors"),
+        disable_cloak: on(r, "disableCloak"),
+        hide_contents: on(r, "hideContents"),
+        damage: real(r, "damageValue", 0.0).max(Fixed::ZERO),
+        crew_loss: crate::OrdnanceCrewLoss {
+            threshold: real(r, "damageThreshold", 50.0).max(Fixed::ZERO),
+            shield: real(r, "damageCrewModifier", 0.2).max(Fixed::ZERO),
+            hull: real(r, "damageHullModifier", 0.1).max(Fixed::ZERO),
+        },
+        regen: whole(r, "regenValue"),
+        repair: whole(r, "repairValue"),
+        speed_coefficient: real(r, "craft_speed_coefficient", 0.5).max(Fixed::ZERO),
+        speed_limit: (limit >= Fixed::ZERO).then_some(limit),
+        max_speed_fraction: (fraction > Fixed::ZERO).then_some(fraction),
+    }
 }
 
 /// The ODF key stems of the five systems, in `system_hit_points` order.
@@ -358,6 +389,7 @@ fn stats(odf: &Odf, file: &str, warnings: &mut Vec<Warning>) -> crate::def::Unit
         distance_below_grid: signed(&mut r, "distanceBelowGrid"),
         shield_pad: signed(&mut r, "shieldPad"),
         max_extra_weapons: whole(&mut r, "maxExtraWeapons"),
+        can_attack: r.flag("canAttack"),
         can_attack_planets: r.flag("canAttackPlanets"),
         can_only_attack_planets: r.flag("canOnlyAttackPlanets"),
         recycles_in_place: r.flag("recyclesInPlace"),
@@ -397,6 +429,40 @@ mod tests {
     }
 
     #[test]
+    fn nebula_effect_keys_are_read_with_their_defaults() {
+        let (d, w) = unit("classLabel = \"nebula_obj\"\neffectRadius = 300\n");
+        assert!(w.is_empty(), "{w:?}");
+        let n = d.nebula_effects.expect("a nebula_obj has effects");
+        assert!(!(n.disable_weapons || n.disable_shields || n.disable_crew || n.disable_sensors || n.disable_cloak || n.hide_contents));
+        assert_eq!((n.damage, n.regen, n.repair), (Fixed::ZERO, Fixed::ZERO, Fixed::ZERO));
+        assert_eq!(n.crew_loss.threshold, Fixed::from_int(50));
+        assert_eq!(n.crew_loss.shield, Fixed::from_f64(0.2f32 as f64));
+        assert_eq!(n.crew_loss.hull, Fixed::from_f64(0.1f32 as f64));
+        assert_eq!(n.speed_coefficient, Fixed::from_f64(0.5), "an absent coefficient halves the speed");
+        assert_eq!((n.speed_limit, n.max_speed_fraction), (None, None));
+
+        let (d, w) = unit(
+            "classLabel = \"nebula_obj\"\ndisableWeapons = 1\ndisableShields = 1\ndisableCrew = 2\ndisableSensors = 1\n\
+             disableCloak = 1\nhideContents = 1\ndamageValue = 12\ndamageThreshold = 5\ndamageCrewModifier = 0.5\n\
+             damageHullModifier = 0.25\nregenValue = 7.9\nrepairValue = 3\ncraft_speed_coefficient = 0.75\n\
+             craft_speed_limit = 40\ncraft_max_speed_fraction = 0.6\n",
+        );
+        assert!(w.is_empty(), "{w:?}");
+        let n = d.nebula_effects.unwrap();
+        assert!(n.disable_weapons && n.disable_shields && n.disable_crew && n.disable_sensors && n.disable_cloak && n.hide_contents);
+        assert_eq!(n.damage, Fixed::from_int(12));
+        assert_eq!(n.crew_loss.threshold, Fixed::from_int(5));
+        assert_eq!(n.regen, Fixed::from_int(7), "a whole number: the fraction is cut");
+        assert_eq!(n.repair, Fixed::from_int(3));
+        assert_eq!(n.speed_coefficient, Fixed::from_f64(0.75));
+        assert_eq!(n.speed_limit, Some(Fixed::from_int(40)));
+        assert_eq!(n.max_speed_fraction, Some(Fixed::from_f64(0.6f32 as f64)));
+
+        let (d, _) = unit("classLabel = \"craft\"\n");
+        assert!(d.nebula_effects.is_none());
+    }
+
+    #[test]
     fn stat_keys_are_read() {
         let (d, w) = unit(
             "classLabel = \"craft\"\nintrinsicValue = 0.45f\ncriticalHitPercent = 5\n\
@@ -404,7 +470,7 @@ mod tests {
              enginesTargetHardpoints = \"e1\" \"e2\"\nsensorsTargetHardpoints = \"s1\"\nweaponsSparkTime = 1.5\n\
              shipType = \"F\"\nisHero = 1\nselfDestruct = \"GSelfD\"\nmissileDetonator = \"gdeton\"\ndefaultGreenAlert = 0\n\
              alwaysUseSpecialWeapons = 1\ndamagedScan = 250\navoidanceClass = 3\ncollisionRadius = 12.5\ndistanceBelowGrid = 50\nshieldPad = -2\n\
-             maxExtraWeapons = 2\ncanAttackPlanets = 1\ncanOnlyAttackPlanets = 0\nrecyclesInPlace = 1\n\
+             maxExtraWeapons = 2\ncanAttack = 0\ncanAttackPlanets = 1\ncanOnlyAttackPlanets = 0\nrecyclesInPlace = 1\n\
              shipIsBuiltByEvolution = 1\nshipIsBuiltByShips = 0\nhealthRate = 0.2\npercentNebulaWarn = 0.5\n\
              dockingSpeedFactor = 0.25\ndecommissionValue = 40\naiName = \"Fed_Destroyer\"\n",
         );
@@ -423,6 +489,7 @@ mod tests {
         assert_eq!((s.damaged_scan, s.avoidance_class, s.max_extra_weapons), (Some(Fixed::from_int(250)), Some(3), Some(2)));
         assert_eq!((s.collision_radius, s.shield_pad), (Some(Fixed::from_f64(12.5)), Some(Fixed::from_int(-2))));
         assert_eq!(s.distance_below_grid, Some(Fixed::from_int(50)));
+        assert_eq!(s.can_attack, Some(false));
         assert_eq!((s.can_attack_planets, s.can_only_attack_planets, s.recycles_in_place), (Some(true), Some(false), Some(true)));
         assert_eq!((s.built_by_evolution, s.built_by_ships), (Some(true), Some(false)));
         assert_eq!((s.health_rate, s.percent_nebula_warn), (Some(Fixed::from_f64(0.2f32 as f64)), Some(Fixed::from_f64(0.5))));

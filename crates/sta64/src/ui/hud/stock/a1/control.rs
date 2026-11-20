@@ -107,10 +107,11 @@ pub(in crate::ui::hud) fn buttons(feed: &HudFeed, page: Page, slots: &ButtonSlot
             let cancel = slots.slot(SlotCommand::Cancel);
             let back = slots.slot(SlotCommand::Back);
             let free = (1..=SLOTS).filter(|s| Some(*s) != cancel && Some(*s) != back);
-            let items = model::grid_with_capacity(feed, Page::Build, usize::MAX);
-            let mut it = items.into_iter().filter(|b| matches!(b.act, Act::Build { .. }));
-            for slot in free {
-                let Some(mut item) = it.next() else { break };
+            // A build item sits in the free slot its build cell counts (`BuildItem::slot`): an item a
+            // text tree leaves out leaves its slot empty and the others keep theirs.
+            let items = model::build_buttons_by_slot(feed);
+            for (cell, mut item) in items {
+                let Some(slot) = free.clone().nth(cell) else { continue };
                 item.cell = usize::from(slot - 1);
                 annotate(&mut item, feed, strings);
                 put(item);
