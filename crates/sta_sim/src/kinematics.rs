@@ -318,7 +318,9 @@ fn face(model: Model, u: &mut Unit, p: Vec3, dt: Fixed) {
 impl Sim {
     /// Step every mobile unit under the content's movement model; units
     /// with an approach plan (ascending id) step under it.
-    pub(crate) fn step_kinematics(&mut self, plans: &[(sta_core::EntityId, Plan)]) {
+    /// `caps`: SIM-75 nebula speed caps, `(craft, (impulse, warp))` ascending,
+    /// in force for this step only.
+    pub(crate) fn step_kinematics(&mut self, plans: &[(sta_core::EntityId, Plan)], caps: &[(sta_core::EntityId, (Fixed, Fixed))]) {
         let model = match self.content.as_deref() {
             Some(db) => Model::for_content(db),
             None => Model::of(Profile::default()),
@@ -335,6 +337,11 @@ impl Sim {
             let previous = u.pos;
             let a1 = if model == Model::A1 { db.and_then(|db| a1::params(db, u.def)) } else { None };
             let plan = plans.binary_search_by_key(&u.id, |p| p.0).ok().map(|i| plans[i].1);
+            let cap = caps.binary_search_by_key(&u.id, |c| c.0).ok().map(|i| caps[i].1);
+            let own = (u.stats.max_speed, u.stats.warp_speed);
+            if let Some((impulse, warp)) = cap {
+                (u.stats.max_speed, u.stats.warp_speed) = (impulse, warp);
+            }
             match (&a1, plan) {
                 // Armada I (SIM-66): its own step; no warp phase, no drop-out.
                 (Some(p), plan) => a1::step(u, p, queued, plan),
@@ -343,6 +350,7 @@ impl Sim {
                 (None, None) if u.speed > u.stats.max_speed => step_planned(model, u, Leg { queued, a1: None }, Plan::default()),
                 (None, None) => step(model, u, Leg { queued, a1: None }),
             }
+            (u.stats.max_speed, u.stats.warp_speed) = own;
             if self.confinement.is_active() && u.pos != previous {
                 let radius = db.and_then(|db| db.unit(u.def)).map_or(Fixed::ZERO, |d| d.radius * Fixed::from_int(3) / Fixed::from_int(4));
                 crate::avoid::constrain_position(&mut self.confinement, u, previous, radius, &obstacles);
