@@ -38,7 +38,7 @@ fn db() -> Arc<ContentDb> {
         let mut p = UnitDef::new(odf, "planet");
         p.planet_role = Some(PlanetRole::Producer);
         p.planet_colonizable = colonizable;
-        p.planet_max_population = 1;
+        p.planet_max_population = u8::from(colonizable);
         p.radius = n(100);
         p
     };
@@ -180,6 +180,7 @@ fn visible_planet_population_tracks_the_colony_and_clears_in_fog() {
     let mut f = feed(&[10], |_, _| {});
     let planet = EntityId(10);
     assert_eq!(population_text(&f, planet).as_deref(), Some("Population 0/1000"));
+    assert_eq!(population_text(&f, EntityId(15)).as_deref(), Some("Population 0/0"));
     assert_eq!(population_text(&f, EntityId(1)), None);
     let view = Arc::make_mut(&mut f.view);
     view.colonies.insert(0, ColonyView {

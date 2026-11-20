@@ -39,9 +39,13 @@ pub(super) fn node_status(feed: Option<&StatusFeed>, id: sta_sim::EntityId) -> O
 }
 
 pub(super) fn node_fraction(feed: Option<&StatusFeed>, id: sta_sim::EntityId) -> f32 {
-    node_status(feed, id)
-        .filter(|n| !n.infinite && n.start > Fixed::ZERO)
-        .map_or(1.0, |n| (n.amount.to_f32() / n.start.to_f32()).clamp(0.0, 1.0))
+    match node_status(feed, id) {
+        Some(n) if !n.infinite && n.start > Fixed::ZERO => {
+            (n.amount.to_f32() / n.start.to_f32()).clamp(0.0, 1.0)
+        }
+        Some(n) if !n.infinite => 0.0,
+        _ => 1.0,
+    }
 }
 
 pub(super) fn population_text(feed: &HudFeed, id: sta_sim::EntityId) -> Option<String> {
@@ -61,9 +65,6 @@ pub(super) fn population_text(feed: &HudFeed, id: sta_sim::EntityId) -> Option<S
         }
         Err(_) => (Fixed::ZERO, db.rules().population()?.cap(def.planet_max_population)),
     };
-    if cap <= Fixed::ZERO {
-        return None;
-    }
     let whole = |n: Fixed| n.to_bits() / Fixed::ONE.to_bits();
     Some(crate::ui::i18n::trf("Population {0}/{1}", &[&whole(current), &whole(cap)]))
 }

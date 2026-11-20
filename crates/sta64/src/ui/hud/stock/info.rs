@@ -1479,6 +1479,8 @@ mod tests {
         let feed = |n| crate::ui::hud::status::StatusFeed { nodes: vec![n], ..Default::default() };
         assert_eq!(node_fraction(Some(&feed(node(100, false))), EntityId(5)), 0.25);
         assert_eq!(node_fraction(Some(&feed(node(100, true))), EntityId(5)), 1.0, "infinite: always full");
+        let empty = sta_sim::economy::view::NodeView { start: Fixed::ZERO, ..node(0, false) };
+        assert_eq!(node_fraction(Some(&feed(empty)), EntityId(5)), 0.0);
         assert_eq!(node_fraction(None, EntityId(5)), 1.0);
     }
 
