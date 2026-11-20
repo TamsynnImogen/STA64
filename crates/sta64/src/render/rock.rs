@@ -63,6 +63,12 @@ pub fn is_moon_shell(material: &str) -> bool {
     material.eq_ignore_ascii_case("glowdmoon")
 }
 
+/// The diffuse colour of a `glowdmoon` shell in the Stock look, in place of the SOD's own, at full share.
+/// Rule: the shell takes this colour scaled by the share of resource left (read from the Armada II
+/// executable, static); interim: full share, the scaling is not implemented. Armada I, Fleet Operations and
+/// Roots (same material name) take it by assumption, not read.
+pub const SHELL_DIFFUSE: [f32; 3] = [0.0, 0.5, 1.0];
+
 /// The glow shell as Refit draws it by default (`MoonShell=dark`): dark and opaque, so
 /// the rock's cut-outs show black where the cracks' light is not. Under the Refit look only; the Stock look
 /// draws the shell with the model's lighting material.

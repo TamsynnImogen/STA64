@@ -466,7 +466,7 @@ fn specular_of(app: &App, part: Entity) -> Vec4 {
 }
 
 #[test]
-fn armada_one_install_zeroes_the_stock_specular_colour() {
+fn armada_one_install_draws_no_stock_specular() {
     let (mut app, part) = specular_app();
     app.insert_resource(content_of(sta_content::Profile::Sta1Classic));
     app.update();
@@ -474,18 +474,18 @@ fn armada_one_install_zeroes_the_stock_specular_colour() {
 }
 
 #[test]
-fn other_profiles_keep_the_stock_specular_colour() {
+fn other_profiles_draw_no_stock_specular_either() {
     let (mut app, part) = specular_app();
     app.insert_resource(content_of(sta_content::Profile::Sta2Classic));
     app.update();
-    assert_eq!(specular_of(&app, part), Vec4::new(0.2, 0.3, 0.4, 40.0));
+    assert_eq!(specular_of(&app, part), Vec4::new(0.0, 0.0, 0.0, 40.0));
 }
 
 #[test]
-fn a_material_built_before_content_arrives_is_rebuilt_without_specular() {
+fn a_material_built_before_content_arrives_has_no_specular() {
     let (mut app, part) = specular_app();
     app.update();
-    assert_eq!(specular_of(&app, part), Vec4::new(0.2, 0.3, 0.4, 40.0), "no content yet: the term is kept");
+    assert_eq!(specular_of(&app, part), Vec4::new(0.0, 0.0, 0.0, 40.0));
     app.insert_resource(content_of(sta_content::Profile::Sta1Classic));
     app.update();
     assert_eq!(specular_of(&app, part), Vec4::new(0.0, 0.0, 0.0, 40.0));

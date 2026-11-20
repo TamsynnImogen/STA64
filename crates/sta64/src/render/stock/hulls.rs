@@ -20,12 +20,11 @@
 //! static; the slot naming is inferred from the SOD file order, and that the texture alone multiplies the
 //! ambient term is inferred). See [`apply_material`].
 //!
-//! The specular term is read from data and was never isolated in a frame comparison (the
-//! Armada II comparison judged whole-frame luminance). An Armada I install (`Sta1Classic`)
-//! draws no specular term: its SOD materials mostly carry one authoring default specular, and
-//! a modder states the original shows no sheen there (grade: stated by a modder, not
-//! measured). Armada II and Fleet Operations still draw the term (not measured). The values
-//! are still read, for a later specular port. The Refit look (`hulls.rs`, `hulls.wesl`'s other
+//! Rule: the Stock look draws no specular term on a SOD material, in any install (stated by the repo owner,
+//! grade: stated, not measured). Read from the executable, static: a highlight needs a lighting material of
+//! model 2, so a material of model 0 or 1 draws none whatever its data carries. Whether a model 2 material
+//! draws a highlight in the original is not established (open question, TODO). The values are still read,
+//! for a later specular port. The Refit look (`hulls.rs`, `hulls.wesl`'s other
 //! branch) keeps its own constants and is drawn under [`RenderProfile::Refit`].
 //!
 //! Data keys read: per SOD lighting material `ambient`, `diffuse`, `specular`, `power`,
@@ -127,9 +126,9 @@ pub fn apply_material(p: &mut crate::render::hulls::HullParams, _m: &StandardMat
         p.mamb = Vec4::new(0.0, 0.0, 0.0, 2.0);
         p.mdif = Vec3::ONE.extend(1.0);
     }
-    // Armada I: no highlight. The colour is zeroed (the data is still read); the shader's specular term is untouched.
-    let specular = if armada_one { [0.0; 3] } else { l.specular };
-    p.mspc = Vec3::from(specular).extend(l.power.max(1.0));
+    // No highlight in the Stock look, any install: the colour is zeroed (the data is still read); the shader's
+    // specular term is untouched.
+    p.mspc = Vec3::ZERO.extend(l.power.max(1.0));
     p.misc = Vec4::new(1.0, 1.0, l.power.max(1.0), 1.0);
     p.rim = Vec4::ZERO;
     p.cut.z = 1.0;
@@ -158,22 +157,23 @@ mod tests {
         let stock = hull_material(&std, &part, &view);
         assert_eq!(stock.params.mamb, Vec4::new(0.5, 0.5, 0.5, 1.0));
         assert_eq!(stock.params.mdif, Vec4::new(0.9, 0.8, 0.7, 0.0));
-        assert_eq!(stock.params.mspc, Vec4::new(0.2, 0.2, 0.2, 40.0));
+        assert_eq!(stock.params.mspc, Vec4::new(0.0, 0.0, 0.0, 40.0), "no highlight in the Stock look");
         assert_eq!(stock.params.rim, Vec4::ZERO, "no rim light in the original");
     }
 
-    /// Armada I draws no specular term; Armada II and Fleet Operations keep theirs.
+    /// The Stock look draws no highlight on any install and for any lighting model.
     #[test]
-    fn armada_one_draws_armada_one() {
+    fn stock_draws_no_highlight() {
         let std = StandardMaterial::default();
-        let part = HullPart { stock: Some(lit()), ..default() };
-        let mut a1 = HullView::default();
-        a1.set_stock(true);
-        a1.set_armada_one(true);
-        let mut other = HullView::default();
-        other.set_stock(true);
-        assert_eq!(hull_material(&std, &part, &a1).params.mspc, Vec4::new(0.0, 0.0, 0.0, 40.0));
-        assert_eq!(hull_material(&std, &part, &other).params.mspc, Vec4::new(0.2, 0.2, 0.2, 40.0));
+        for armada_one in [false, true] {
+            let mut view = HullView::default();
+            view.set_stock(true);
+            view.set_armada_one(armada_one);
+            for model in 0u8..=2 {
+                let part = HullPart { stock: Some(StockLight { model, specular: [0.2; 3], ..lit() }), ..default() };
+                assert_eq!(hull_material(&std, &part, &view).params.mspc, Vec4::new(0.0, 0.0, 0.0, 40.0), "model {model}");
+            }
+        }
     }
 
     /// Armada I adds the scene ambient to the material's; Armada II and Fleet Operations multiply them.
