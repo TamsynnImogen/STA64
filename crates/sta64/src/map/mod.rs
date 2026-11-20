@@ -1012,7 +1012,7 @@ fn rebuild(
     ambient.color = Color::srgb(a[0].clamp(0.0, 1.0), a[1].clamp(0.0, 1.0), a[2].clamp(0.0, 1.0));
     ambient.brightness = 250.0;
 
-    let neutral = teams.0.first().map(|t| t.1).unwrap_or(Color::WHITE);
+    let neutral = teams.team_colour(0).unwrap_or(Color::WHITE);
     // The map's own team colours (Armada I maps with a team table) apply where the player picked none:
     // not in a skirmish, whose set-up is the player's pick. A mission or the map view takes the map's.
     let map_team_colours = set_map_team_colours(&mut commands, &map, skirmish_cfg.is_some());

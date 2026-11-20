@@ -395,6 +395,19 @@ fn model_stem(model: &str) -> String {
     }
 }
 
+/// Fleet Ops names the single-selection systems backdrop after the equipped
+/// model. The GUI sprite painter leaves it transparent when the SPR entry or
+/// its texture is absent, preserving the stock icon/value layout.
+fn system_background(commands: &mut Commands, root: Entity, layout: &StockLayout, origin: Vec2, model: &str) {
+    let Some(r) = layout.at(origin, "infoSingleSystemsDisplay") else { return };
+    let stem = model_stem(model);
+    if stem.is_empty() { return; }
+    commands.entity(root).with_child((
+        node(r), Pickable::IGNORE,
+        GuiImage::new(format!("{stem}_si")),
+    ));
+}
+
 fn wireframe_names(model: &str, layer: usize) -> Vec<String> {
     let stem = model_stem(model);
     if stem.is_empty() || !(1..=5).contains(&layer) {
@@ -625,6 +638,7 @@ fn spawn_single(
     }
     if let Some(def) = def {
         spawn_node_bar(commands, root, layout, origin, def, hull_rect, theme);
+        system_background(commands, root, layout, origin, &def.model);
     }
     if let Some(population) = super::super::status::population_text(feed, single.id) {
         // Reuse alignment from the planet owner row when present. A separate
@@ -994,6 +1008,39 @@ mod tests {
             ["fed_constw1", "fed_const_s"]
         );
         assert_eq!(wireframe_names("models/Fed_ConSt.SOD", 5), ["fed_constw5"]);
+    }
+
+    #[test]
+    fn system_backdrop_uses_model_sprite_and_only_an_authored_visible_rect() {
+        let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
+        cfg.rects.insert("infoSingleSystemsDisplay".into(), Rect { x: 10, y: 18, w: 512, h: 128 });
+        let mut world = World::new();
+        let root = world.spawn(Node::default()).id();
+        let mut queue = CommandQueue::default();
+        {
+            let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+            let mut commands = Commands::new(&mut queue, &world);
+            system_background(&mut commands, root, &layout, Vec2::new(30.0, 40.0), "models/Fed_ConSt.SOD");
+        }
+        queue.apply(&mut world);
+        let child = world.get::<Children>(root).unwrap()[0];
+        let image = world.get::<GuiImage>(child).unwrap();
+        assert_eq!(image.names, ["fed_const_si"]);
+        let node = world.get::<Node>(child).unwrap();
+        assert_eq!((node.left, node.top, node.width, node.height),
+            (Val::Px(40.0), Val::Px(58.0), Val::Px(512.0), Val::Px(128.0)));
+
+        cfg.rects.insert("infoSingleSystemsDisplay".into(), Rect { x: 10, y: 18, w: 0, h: 128 });
+        let disabled = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+        let absent = StockLayout::new(&GuiLayout::default(), Vec2::new(1600.0, 1200.0));
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            system_background(&mut commands, root, &disabled, Vec2::ZERO, "Fed_ConSt.SOD");
+            system_background(&mut commands, root, &absent, Vec2::ZERO, "Fed_ConSt.SOD");
+        }
+        queue.apply(&mut world);
+        assert_eq!(world.get::<Children>(root).unwrap().len(), 1);
     }
 
     #[test]

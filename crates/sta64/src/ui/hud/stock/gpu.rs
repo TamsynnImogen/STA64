@@ -317,6 +317,16 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         return;
     }
 
+    if profile == UiProfile::FleetOps
+        && std::env::var("STA64_TEST_MOD").as_deref() == Ok("FO4")
+        && matches!(hover_mode, HoverCapture::Selected | HoverCapture::SelectedHover)
+    {
+        let count = app.world_mut().query::<(&GuiImage, &ImageNode)>().iter(app.world())
+            .filter(|(sprite, image)| sprite.names.iter().any(|name| name == "fed_outpost_si") && image.rect.is_some())
+            .count();
+        assert_eq!(count, 1, "{label}: FO4 outpost systems atlas entry must resolve");
+    }
+
     if let HoverCapture::Group(count) = hover_mode {
         let ids = app.world().resource::<HudFeed>().selected.clone();
         let rendered: Vec<_> = app.world_mut().query::<(Entity, &super::super::panels::GroupTile)>()
