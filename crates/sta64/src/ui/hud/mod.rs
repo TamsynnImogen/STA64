@@ -643,7 +643,11 @@ fn order_at_aim(
     target_order(feed, mode, target, ground_point(aim.ray, y))
 }
 
-fn armed_cursor_name(mode: TargetMode, valid: bool) -> &'static str {
+/// The cursor of an armed pick, `valid` when a click would give an order (the table of
+/// `input::context::decide`). INTERIM: armed Attack over open space or an own ship, which the
+/// original answers with the attack cursor (measured), shows the refusal here because STA64 gives no
+/// order there; Patrol, Guard and special weapons are not armed modes of STA64 yet.
+pub(crate) fn armed_cursor_name(mode: TargetMode, valid: bool) -> &'static str {
     match (mode, valid) {
         (TargetMode::Move, true) => "c_move",
         (TargetMode::Move, false) => "c_nomove",

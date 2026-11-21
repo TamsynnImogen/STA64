@@ -505,7 +505,9 @@ pub(crate) fn attach_models(
             let chunks = construction_chunk_count(def);
             model_scene::spawn_construction(&mut ctx, &model, e, chunks, 0.0)
         } else {
-            model_scene::spawn(&mut ctx, &model, e)
+            // A resource rock's model turns on a pivot below the unit, which `place` leaves alone.
+            let under = crate::render::spin::rock_pivot(ctx.commands, e, &def.class.0, def.raw.f32("rotationSpeed"), sim.map_or(0, |s| s.0.0 as u64));
+            model_scene::spawn(&mut ctx, &model, under)
         };
         if def.class.0.eq_ignore_ascii_case("planet_obj") {
             model_scene::spawn_planet_nimbus(&mut ctx, &def.model, e);

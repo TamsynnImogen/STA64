@@ -525,6 +525,35 @@ mod tests {
         assert!(near.translation.y > at.y, "from above");
     }
 
+    /// #1073: the window is quiet (its cameras switched off) while a mission clip waits for or plays
+    /// in the movie panel, which shares the window's layout keys, and wakes when the clip is over.
+    #[test]
+    fn the_cameras_go_quiet_while_a_clip_plays_in_the_panel() {
+        use crate::media::{MovieId, MovieTarget, Movies, PlayMovie};
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Assets<Image>>()
+            .init_resource::<ActionSubject>()
+            .init_resource::<Movies>()
+            .insert_resource(ActionView { image: Handle::default() })
+            .add_systems(Update, sync_cameras);
+        app.world_mut().spawn((Camera3d::default(), Transform::default(), GlobalTransform::default(), Projection::default()));
+        app.world_mut().spawn((ActionPicture, ComputedNode { size: Vec2::new(200.0, 100.0), ..default() }, InheritedVisibility::VISIBLE));
+        let active = |app: &mut App| -> Vec<bool> {
+            app.world_mut().query_filtered::<&Camera, Or<(With<ActionCamera>, With<ActionSky>)>>().iter(app.world()).map(|c| c.is_active).collect()
+        };
+        app.update();
+        app.update();
+        assert_eq!(active(&mut app), [true, true], "the picture is seen: the pair runs");
+        let target = MovieTarget::Panel(Handle::default());
+        app.world_mut().resource_mut::<Movies>().queue_for_test(PlayMovie { id: MovieId(1), name: String::new(), target, skippable: false });
+        app.update();
+        assert_eq!(active(&mut app), [false, false], "a clip in the panel: quiet");
+        app.world_mut().resource_mut::<Movies>().stop_for_test();
+        app.update();
+        assert_eq!(active(&mut app), [true, true], "the clip is over: the picture runs again");
+    }
+
     #[test]
     fn the_picture_follows_the_node_and_stays_within_bounds() {
         assert_eq!(picture_size(Vec2::new(226.4, 160.0)), UVec2::new(226, 160));

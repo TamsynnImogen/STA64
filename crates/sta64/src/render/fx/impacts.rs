@@ -48,7 +48,7 @@ use crate::sim_link::{ContentRes, SimEntities, SimEntity, SimLink, SimMsg};
 /// Hull share under which a unit smokes lightly, and heavily.
 pub const SMOKE_LIGHT: f32 = 0.5;
 pub const SMOKE_HEAVY: f32 = 0.25;
-const DEFAULT_RADIUS: f32 = 30.0;
+pub(super) const DEFAULT_RADIUS: f32 = 30.0;
 /// `[Sparks]` `HitSparks`, `BlastSparks`, `BurstTime` (s), `SparkSpeed` (times the
 /// particle's size), `SparkSpread`, `SparkLife` (s), `SparkBrightness`; the drag and
 /// the tail time are `sparks.rs`' literals.
@@ -468,10 +468,15 @@ fn age_secs(clock: &AnimClock, fx: &ImpactFx) -> f32 {
     ((clock.now() * TICK_HZ as f64 - fx.fired as f64) as f32 - fx.delay) / TICK_HZ as f32
 }
 
+/// The shield ellipsoid's rotation (the unit's heading) and semi-axes for a unit of this radius.
+/// The one rule for the shield's shape, shared with the stock beams' end point (`stock_shots`).
+pub(super) fn shield_axes(heading: Vec3, radius: f32) -> (Quat, Vec3) {
+    (Transform::IDENTITY.looking_to(heading, Vec3::Y).rotation, ELLIPSOID * radius)
+}
+
 /// The shield's place now: centre (the unit's, live), heading, ellipsoid.
 fn shield_frame(fx: &ImpactFx, centre: Vec3) -> (Vec3, Quat, Vec3, Vec3) {
-    let rot = Transform::IDENTITY.looking_to(fx.heading, Vec3::Y).rotation;
-    let scale = ELLIPSOID * fx.radius;
+    let (rot, scale) = shield_axes(fx.heading, fx.radius);
     // Where the hit struck, on the unit sphere of the ellipsoid.
     let local = (rot.inverse() * fx.dir) / scale;
     (centre, rot, scale, local.normalize_or(Vec3::NEG_Z))

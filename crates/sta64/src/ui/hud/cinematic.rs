@@ -50,7 +50,7 @@ pub(super) fn stock_spec(layout: &StockLayout) -> Option<Spec> {
         .or_else(|| layout.rect("cinematicBackgroundArea"))
         .map_or(panel, shift);
     let pieces = layout
-        .pieces("cinematicBackgroundPanel")
+        .pieces_in("cinematic", "cinematicBackgroundPanel")
         .into_iter()
         .map(|p| (shift(p.rect), p.name, p.frame))
         .collect();
