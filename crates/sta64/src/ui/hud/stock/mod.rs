@@ -380,6 +380,7 @@ fn spawn_button(
     b: &Button,
     native: &NativeCommands,
     hud: &HudState,
+    feed: Option<&HudFeed>,
 ) {
     let state = if b.look == Look::Locked {
         WidgetState::Disabled
@@ -398,6 +399,17 @@ fn spawn_button(
     let mut tip = Tooltip::new(b.tip.clone());
     if let Some(v) = &b.verbose {
         tip = tip.verbose(v.clone());
+    }
+    // The Armada II stock look composes a build item from its definition's keys and costs, and fills a
+    // command's hotkey slot with the key bound for it where STA64 has a binding (interim: Stop only).
+    match &b.act {
+        Act::Build { builder, what, .. } => {
+            if let Some(parts) = feed.and_then(|f| model::build_tip_parts(f, *builder, *what)) {
+                tip = tip.stock_build(parts);
+            }
+        }
+        Act::Stop => tip = tip.bound_to(crate::input::keys::Action::Stop),
+        _ => {}
     }
     commands.spawn((
         GridCell(b.act.clone()),
@@ -667,6 +679,7 @@ pub(super) fn refresh(
                     button,
                     &state.native,
                     &hud,
+                    Some(&feed),
                 );
             }
             if paged {

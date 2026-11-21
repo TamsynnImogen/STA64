@@ -182,11 +182,43 @@ impl ChatLog {
 pub struct Tooltip {
     pub short: String,
     pub verbose: Option<String>,
+    /// What the Armada II stock look adds from the string table; every other look ignores it.
+    pub stock: Option<super::hud::stock::tooltip_text::StockTip>,
+    /// The action whose bound key the stock look puts into the text's hotkey slot (interim: only the
+    /// actions STA64 has a binding for).
+    pub bound: Option<crate::input::keys::Action>,
 }
 
 impl Tooltip {
     pub fn new(short: impl Into<String>) -> Tooltip {
-        Tooltip { short: short.into(), verbose: None }
+        Tooltip { short: short.into(), verbose: None, stock: None, bound: None }
+    }
+
+    /// Under the stock look: a build item's composition.
+    pub fn stock_build(mut self, parts: super::hud::stock::tooltip_text::BuildTipParts) -> Tooltip {
+        self.stock = Some(super::hud::stock::tooltip_text::StockTip::Build(parts));
+        self
+    }
+
+    /// The key bound for `action` fills the text's hotkey slot under the stock look.
+    pub fn bound_to(mut self, action: crate::input::keys::Action) -> Tooltip {
+        self.bound = Some(action);
+        self
+    }
+
+    /// The text of the stock look after `rest` seconds of the hover, composed from the string table
+    /// (`look`) where the tooltip carries a [`StockTip`](super::hud::stock::tooltip_text::StockTip),
+    /// else as [`text_at_with`](Self::text_at_with) resolved: nothing before the short delay, the
+    /// short text from it, the verbose text from the verbose delay.
+    pub fn stock_text_at(&self, rest: f32, delays: &TipDelays, look: super::hud::stock::tooltip_text::Lookup) -> Option<String> {
+        use super::hud::stock::tooltip_text::{StockTip, build_short, build_verbose};
+        let verbose = rest >= delays.verbose;
+        let shown = rest >= delays.short;
+        match &self.stock {
+            Some(StockTip::Build(p)) if shown => Some(if verbose { build_verbose(p, look) } else { build_short(p, look) }),
+            // No stock composition: today's text.
+            _ => self.text_at_with(rest, delays).map(look),
+        }
     }
 
     pub fn verbose(mut self, text: impl Into<String>) -> Tooltip {
@@ -661,6 +693,13 @@ fn unit_tip(
     }
 }
 
+/// The character a key types, for a letter or digit key.
+fn key_char(key: KeyCode) -> Option<char> {
+    let name = format!("{key:?}");
+    let one = |rest: &str| (rest.chars().count() == 1).then(|| rest.chars().next()).flatten();
+    name.strip_prefix("Key").and_then(one).or_else(|| name.strip_prefix("Digit").and_then(one))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_tip(
     hover: Res<TipHover>,
@@ -672,6 +711,8 @@ fn draw_tip(
     fonts: Option<Res<super::sprite_font::SpriteFonts>>,
     canvas: Option<Res<super::stock_font::StockTextCanvas>>,
     cine: Option<Res<crate::ui::presentation::CineractiveState>>,
+    bindings: Option<Res<crate::input::keys::KeyBindings>>,
+    mut marks: ResMut<super::stock_tooltip::TipMarks>,
     mut boxed: Single<&mut Node, With<TipBox>>,
     mut words: Single<&mut SpriteText, With<TipText>>,
 ) {
@@ -685,15 +726,28 @@ fn draw_tip(
     let stock = super::stock_tooltip::stock_tip(profile.as_deref(), fonts.as_deref(), canvas.as_deref());
     let look = |key: &str| strings.as_ref().map_or_else(|| key.to_owned(), |s| s.tooltip_text(key).to_owned());
     // An interface element under the pointer owns the tooltip; the unit behind it has none.
+    let mut underline = Vec::new();
     let shown = match hover.target {
         Some(e) => tips
             .get(e)
             .ok()
-            .and_then(|t| t.text_at_with(hover.rest, &delays))
-            .map(look)
+            .and_then(|t| {
+                if !stock {
+                    return t.text_at_with(hover.rest, &delays).map(look);
+                }
+                // The stock look: the string table's composition, the hotkey slot filled with the
+                // key the player bound where STA64 knows it, the markers consumed.
+                let bound = t.bound.and_then(|a| bindings.as_deref().and_then(|b| b.keys(a).first().copied())).and_then(key_char);
+                let (text, marked) = super::hud::stock::tooltip_text::hotkey_text(&t.stock_text_at(hover.rest, &delays, &look)?, bound);
+                underline = marked;
+                Some(text)
+            })
             .filter(|text| !text.is_empty()),
         None => unit.as_deref().and_then(|u| u.text(stock, &delays, &look)),
     };
+    if marks.0 != underline {
+        marks.0 = underline;
+    }
     let Some(shown) = shown else {
         boxed.display = Display::None;
         return;
@@ -807,6 +861,8 @@ impl Plugin for NoticePlugin {
             .init_resource::<UnitTip>()
             .init_resource::<TipDelays>()
             .init_resource::<TipStock>()
+            .init_resource::<super::stock_tooltip::TipMarks>()
+            .init_resource::<super::stock_tooltip::TipDelayCache>()
             .add_observer(on_over)
             .add_observer(on_out)
             .add_systems(Startup, spawn_roots)
