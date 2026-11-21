@@ -9,10 +9,21 @@ fn only_a1_types_first_prefix_values_and_hashes_the_effective_result() {
         }).unwrap().0;
         let db = load("100");
         let def = db.unit(db.key("ship").unwrap()).unwrap();
-        assert_eq!(def.hull, Fixed::from_int(if profile == Profile::Sta1Classic { 100 } else { 300 }), "{profile:?}");
-        assert_eq!(def.raw.source("maxHealth").unwrap().line, if profile == Profile::Sta1Classic { 3 } else { 5 });
+        assert_eq!(def.hull, Fixed::from_int(match profile { Profile::Sta1Classic => 100, Profile::Sta2Classic => 200, _ => 300 }), "{profile:?}");
+        assert_eq!(def.raw.source("maxHealth").unwrap().line, match profile { Profile::Sta1Classic => 3, Profile::Sta2Classic => 4, _ => 5 });
         assert_eq!(db.hash() == load("101").hash(), profile != Profile::Sta1Classic, "{profile:?}");
     }
+}
+
+#[test]
+fn a2_digest_tracks_first_typed_value_but_ignores_shadowed_duplicate() {
+    let load = |first: i32, second: i32| load_with(Profile::Sta2Classic, &Overrides::default(), &["ship".into()], &mut |name, version| {
+        (name == "ship.odf" && version == 0).then(|| format!("classLabel=craft\nunitName=Test\nmaxHealth={first}\nMAXHEALTH={second}\n"))
+    }).unwrap().0;
+    let original = load(200, 300);
+    assert_eq!(original.unit(original.key("ship").unwrap()).unwrap().hull, Fixed::from_int(200));
+    assert_eq!(original.hash(), load(200, 301).hash());
+    assert_ne!(original.hash(), load(201, 300).hash());
 }
 
 #[test]

@@ -5,9 +5,10 @@
 //! - `//` starts a comment (outside quoted strings).
 //! - `#include "other.odf"` pulls in another ODF. Includes are resolved by file
 //!   name across all known ODF folders, so the folder is organisational only.
-//! - Later assignments override earlier ones, so an ODF's own keys override
-//!   anything it includes. [`LookupPolicy::PrefixFirst`] explicitly selects
-//!   the Armada I first-prefix rule instead; ordinary resolvers stay exact.
+//! - An ODF's own keys override anything it includes. Ordinary resolvers use
+//!   the last exact assignment. [`LookupPolicy::ExactFirst`] selects the first
+//!   exact assignment within each file for stock Armada II, while
+//!   [`LookupPolicy::PrefixFirst`] selects the Armada I first-prefix rule.
 //! - Quoted list rows may continue an assignment on following lines.
 //! - Fleet Operations layers its files (a mod's over its parent's over the
 //!   game's). An include of the root file's own name is its **next version
@@ -155,7 +156,7 @@ fn unquote(s: &str) -> &str {
         .unwrap_or(s)
 }
 
-/// A fully resolved ODF: includes flattened, last assignment wins.
+/// A fully resolved ODF with includes flattened under its lookup policy.
 fn number(value: &str) -> Option<&str> {
     let first = value.split_whitespace().next()?;
     Some(first.trim_end_matches(';').trim_end_matches(['f', 'F']).trim_end_matches(';'))
@@ -179,6 +180,10 @@ pub enum LookupPolicy {
     /// Whole-key matching, with later assignments replacing earlier ones.
     #[default]
     Exact,
+    /// Whole-key matching, with the first assignment in each file winning.
+    /// A file's own keys still override its includes. Stock Armada II rule:
+    /// measured on the running game for two keys; other value types unmeasured.
+    ExactFirst,
     /// First case-insensitive prefix match, own assignments before includes.
     /// Armada I rule: read from the executable, static; lexer parity unmeasured.
     PrefixFirst,
@@ -423,7 +428,11 @@ fn apply(
         }
     }
     w.stack.pop();
+    let mut seen_in_file = std::collections::HashSet::new();
     for e in &raw.entries {
+        if odf.policy == LookupPolicy::ExactFirst && !seen_in_file.insert(e.key.to_ascii_lowercase()) {
+            continue;
+        }
         odf.set(&e.key, &e.value, &e.rows, KeySource { file: std::sync::Arc::clone(&file_arc), version, line: e.line });
     }
     Ok(())

@@ -43,6 +43,23 @@ fn exact_default_still_uses_last_whole_assignment() {
 }
 
 #[test]
+fn exact_first_keeps_first_whole_assignment_per_file_and_own_keys_override_includes() {
+    let odf = resolve_layered_with_policy("ship", LookupPolicy::ExactFirst, &mut |name, version| match (name, version) {
+        ("ship.odf", 0) => Some("#include \"ship.odf\"\n#include \"base.odf\"\nkeyExtra=9\nKEY=10\n\"first.odf\" 0.5\nkey=20\n\"second.odf\" 0.7\n".into()),
+        ("ship.odf", 1) => Some("key=30\nfromParent=1\n".into()),
+        ("base.odf", 0) => Some("key=40\nfromBase=2\n".into()),
+        _ => None,
+    }).unwrap();
+    assert_eq!(odf.i64("key"), Some(10));
+    assert_eq!(odf.source("key").unwrap().line, 4);
+    assert_eq!(odf.source("key").unwrap().version, 0);
+    assert_eq!(odf.rows("key").collect::<Vec<_>>(), ["\"first.odf\" 0.5"]);
+    assert_eq!(odf.i64("fromParent"), Some(1));
+    assert_eq!(odf.i64("fromBase"), Some(2));
+    assert_eq!(odf.raw("keyEx"), None); // exact, not a prefix lookup
+}
+
+#[test]
 fn audit_includes_unwritten_queries_and_sorts_without_hash_order() {
     let odf = resolve(LookupPolicy::PrefixFirst);
     let changes = odf.lookup_changes();
