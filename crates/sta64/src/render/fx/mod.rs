@@ -12,6 +12,7 @@ pub mod recipe;
 pub mod shield;
 pub mod specials;
 pub mod stock_flares;
+pub mod stock_shield_hits;
 pub mod stock_shots;
 pub mod weapons;
 
