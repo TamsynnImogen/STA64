@@ -34,7 +34,7 @@ mod tests;
 pub(crate) mod view;
 
 pub use crate::frontend::lobby::{LobbyPlugin, MpFields, Multiplayer, NetGameReady, NetLaunch};
-pub use data::{ActiveMod, Browse, MAX_SEATS, MapEntry, ModEntry, ModLaunchOptions, SKIRMISH_AI, ScreenData, Seat, SeatControl, SelectedMod, SettingKey, Settings, SetupDraft, SetupFog, WindowSize};
+pub use data::{ActiveMod, Browse, MAX_SEATS, MapEntry, ModEntry, SKIRMISH_AI, ScreenData, Seat, SeatControl, SelectedMod, SettingKey, Settings, SetupDraft, SetupFog, WindowSize};
 pub use view::{Act, ScreenRoot};
 
 use crate::app::{AppState, GameSet};
@@ -428,9 +428,6 @@ pub(crate) fn on_buttons(
     screen: Res<State<Screen>>,
     mut map_return: ResMut<MapReturn>,
     mut notices: Option<ResMut<Messages<crate::ui::notices::Notice>>>,
-    launch_options: Res<ModLaunchOptions>,
-    flow: Option<Res<crate::game::flow::FlowConfig>>,
-    mut scroll: ResMut<ListScroll>,
 ) {
     use crate::ui::notices::{Notice, Severity};
     let Some(mut draft) = draft else { return };
@@ -544,14 +541,7 @@ pub(crate) fn on_buttons(
                 if launch.random_placement || launch.seats.iter().any(|seat| seat.race == data::RANDOM_SIDE) {
                     launch.seed = menu_random();
                 }
-                if let Some(mut setup) = launch.to_setup(&data) {
-                    if launch_options.no_ai {
-                        for player in &mut setup.players {
-                            if matches!(player.control, sta_sim::setup::Control::Ai(_)) {
-                                player.control = sta_sim::setup::Control::Idle;
-                            }
-                        }
-                    }
+                if let Some(setup) = launch.to_setup(&data) {
                     start.write(StartGame(setup, launch.speed, launch.launch_colours(&data), launch.fog));
                 }
             }
