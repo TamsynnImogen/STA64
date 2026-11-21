@@ -106,19 +106,11 @@ impl MapKeys {
     }
 }
 
-/// A nebula's drawn radius, world units: `effectRadius`, in range, else the default. The map view
-/// draws its gas with the same function. INTERIM as the minimap's footprint: the original's
-/// footprint for a nebula is markedly larger than this (measured once), because its class radius
-/// was not read exactly.
-pub fn nebula_radius(odf: &Odf) -> f32 {
-    odf.f32("effectRadius").filter(|r| *r > 10.0 && *r < 5000.0).unwrap_or(300.0)
-}
-
-/// An asteroid field's radius, world units: `fieldRadius`, else the default; shared with the map
-/// view's rocks. INTERIM as the minimap's belt footprint (not measured).
-pub fn field_radius(odf: &Odf) -> f32 {
-    odf.f32("fieldRadius").unwrap_or(200.0)
-}
+/// A nebula's and an asteroid field's radius: `sta_content`'s one reading of the keys (the
+/// sim's region conversion and the map view use it too). INTERIM as the minimap's footprint: the
+/// original's footprint for a nebula is markedly larger than this (measured once), because its
+/// class radius was not read exactly.
+pub use sta_content::{field_radius, nebula_radius};
 
 /// What the minimap reads of a definition, cached per definition so a frame reads no keys.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -730,19 +722,19 @@ mod tests {
     /// the grid; texels are written, so two overlapping fields are a union.
     #[test]
     fn a_field_is_a_circle_of_radius_times_multiplier_and_overlaps_are_a_union() {
-        // 6400 wide: 50 units a texel. Radius 260 x 5 = 1300 = 26 texels, centred on texel 64.
-        let p = build(&[planet(Vec2::new(3200.0, 3200.0), 260.0, 5.0)], &square(6400.0), &mut textures);
+        // 6400 wide: 50 units a texel. Radius 250 x 4 = 1000 = 20 texels, centred on texel 64.
+        let p = build(&[planet(Vec2::new(3200.0, 3200.0), 250.0, 4.0)], &square(6400.0), &mut textures);
         let set = |x, y| pixel(&p.field, x, y) == FIELD_COLOUR;
-        assert!(set(64, 64) && set(64 + 25, 64) && set(64 - 26, 64) && set(64, 64 + 25));
-        assert!(!set(64 + 26, 64) && !set(64 - 27, 64) && !set(64 + 19, 64 + 19));
+        assert!(set(64, 64) && set(64 + 19, 64) && set(64 - 20, 64) && set(64, 64 + 19));
+        assert!(!set(64 + 20, 64) && !set(64 - 21, 64) && !set(64 + 15, 64 + 15));
         let area = p.field.chunks(4).filter(|c| c[..3] == FIELD_COLOUR).count() as f32;
-        assert!((area - std::f32::consts::PI * 26.0 * 26.0).abs() < 40.0, "{area}");
+        assert!((area - std::f32::consts::PI * 20.0 * 20.0).abs() < 40.0, "{area}");
         assert!(p.map.chunks(4).all(|c| c[..3] == [0, 0, 0]), "a field has no sprite");
-        // The multiplier scales the radius: x 2.5 halves it.
-        let half = build(&[planet(Vec2::new(3200.0, 3200.0), 260.0, 2.5)], &square(6400.0), &mut textures);
-        assert!(pixel(&half.field, 64 + 12, 64) == FIELD_COLOUR && pixel(&half.field, 64 + 14, 64) == [0, 0, 0]);
+        // The multiplier scales the radius: x 2 halves it.
+        let half = build(&[planet(Vec2::new(3200.0, 3200.0), 250.0, 2.0)], &square(6400.0), &mut textures);
+        assert!(pixel(&half.field, 64 + 9, 64) == FIELD_COLOUR && pixel(&half.field, 64 + 11, 64) == [0, 0, 0]);
         // Overlapping fields: every texel is the colour, never a sum.
-        let two = build(&[planet(Vec2::new(3200.0, 3200.0), 260.0, 5.0), planet(Vec2::new(3400.0, 3200.0), 260.0, 5.0)], &square(6400.0), &mut textures);
+        let two = build(&[planet(Vec2::new(3200.0, 3200.0), 250.0, 4.0), planet(Vec2::new(3400.0, 3200.0), 250.0, 4.0)], &square(6400.0), &mut textures);
         assert!(two.field.chunks(4).all(|c| c[..3] == FIELD_COLOUR || c[..3] == [0, 0, 0]));
         assert_eq!(pixel(&two.field, 66, 64), FIELD_COLOUR);
         assert!(two.field.chunks(4).filter(|c| c[..3] == FIELD_COLOUR).count() > p.field.chunks(4).filter(|c| c[..3] == FIELD_COLOUR).count());
@@ -792,8 +784,8 @@ mod tests {
         }
         let mut planet = UnitDef::new("lt_planet", "planet");
         planet.raw = Arc::new(odf("classLabel = \"planet\"\nmapSprite = \"sprite_a\"\nmapIcon = \"icon_a\"\n"));
-        planet.radius = Fixed::from_int(260);
-        let db = builder.unit(planet).build().unwrap().with_rules(Rules::from_header("int cfgPLANET_DEWARP_RADIUS_MULTIPLIER = 5;\n").0);
+        planet.radius = Fixed::from_int(250);
+        let db = builder.unit(planet).build().unwrap().with_rules(Rules::from_header("int cfgPLANET_DEWARP_RADIUS_MULTIPLIER = 4;\n").0);
         let db = Arc::new(db);
         let seat = |id, control| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control };
         let setup = GameSetup {
@@ -857,13 +849,13 @@ mod tests {
         let nodes: Vec<(LayerPicture, Node, i32)> = s.app.world_mut().query::<(&LayerPicture, &Node, &ZIndex)>().iter(s.app.world()).map(|(l, n, z)| (*l, n.clone(), z.0)).collect();
         assert_eq!(nodes.len(), 2);
         assert!(nodes.iter().all(|(_, n, z)| n.width == Val::Percent(100.0) && n.height == Val::Percent(100.0) && *z < 0));
-        // The picture holds a sprite square and a field circle of 1300 world units (26 texels).
+        // The picture holds a sprite square and a field circle of 1000 world units (20 texels).
         let handles: Vec<Handle<AdditiveImage>> = s.app.world_mut().query::<&MaterialNode<AdditiveImage>>().iter(s.app.world()).map(|m| m.0.clone()).collect();
         let (mats, imgs) = (s.app.world().resource::<Assets<AdditiveImage>>(), s.app.world().resource::<Assets<Image>>());
         let whole = |h: &Handle<AdditiveImage>| imgs.get(&mats.get(h).unwrap().image).unwrap().data.clone().unwrap();
         let pictures: Vec<Vec<u8>> = handles.iter().map(whole).collect();
-        assert!(pictures.iter().any(|p| pixel(p, 64 + 25, 64) == FIELD_COLOUR && pixel(p, 64 + 26, 64) == [0, 0, 0]));
-        assert!(pictures.iter().any(|p| pixel(p, 64 + 2, 64 - 2) == [100, 50, 0]), "the sprite is 260 units = 5 texels wide");
+        assert!(pictures.iter().any(|p| pixel(p, 64 + 19, 64) == FIELD_COLOUR && pixel(p, 64 + 20, 64) == [0, 0, 0]));
+        assert!(pictures.iter().any(|p| pixel(p, 64 + 2, 64 - 2) == [100, 50, 0]), "the sprite is 250 units = 5 texels wide");
         // A ship moving about is no object of the layers.
         s.spawn(s.ship, 0, 100.0, 100.0);
         s.show();
@@ -888,6 +880,41 @@ mod tests {
         assert_eq!(objects, statics.0);
     }
 
+    /// The map path that had the nebula bug: map objects of the nebula and belt classes with a
+    /// `mapSprite` key are taken from the map (they are regions of the sim, not sim units, though
+    /// the content database defines them), at the shared radius, once each; hidden objects, other
+    /// classes and objects without the key are not.
+    #[test]
+    fn the_map_feeds_its_nebulae_and_belts_once_even_when_the_content_defines_them() {
+        let def = |name: &str, class: &str, extra: &str| {
+            let mut d = UnitDef::new(name, class);
+            d.raw = Arc::new(odf(&format!("classLabel = \"{class}\"\n{extra}")));
+            d
+        };
+        let db = ContentDb::builder()
+            .unit(def("lt_nebula", "nebula_obj", "mapSprite = \"sprite_a\"\neffectRadius = 450\n"))
+            .unit(def("lt_default_nebula", "nebula_obj", "mapSprite = \"sprite_a\"\n"))
+            .unit(def("lt_belt", "asteroidfield", "mapSprite = \"sprite_a\"\nfieldRadius = 125\n"))
+            .unit(def("lt_hidden", "nebula_obj", "mapSprite = \"sprite_a\"\nhidden = 1\n"))
+            .unit(def("lt_bare_nebula", "nebula_obj", "effectRadius = 450\n"))
+            .unit(def("lt_planet_like", "planet", "mapSprite = \"sprite_a\"\n"))
+            .build()
+            .unwrap();
+        let at = |odf: &str, x: f32, z: f32| {
+            let mut transform = [0.0; 12];
+            (transform[9], transform[11]) = (x, z);
+            sta_bzn::MapObject { odf: odf.into(), transform, ..Default::default() }
+        };
+        let map = sta_bzn::Map {
+            objects: vec![at("lt_nebula", 100.0, 200.0), at("lt_default_nebula", 1.0, 2.0), at("lt_belt", 300.0, 400.0), at("lt_hidden", 5.0, 5.0), at("lt_bare_nebula", 6.0, 6.0), at("lt_planet_like", 7.0, 7.0), at("lt_unknown", 8.0, 8.0)],
+            ..Default::default()
+        };
+        let statics = RadarStatics::of_map(&map, &db);
+        let sprite = Some("sprite_a".to_owned());
+        let obj = |x, z, radius| LayerObject { at: Vec2::new(x, z), radius, sprite: sprite.clone(), warp_radius: None };
+        assert_eq!(statics.0, [obj(100.0, 200.0, 450.0), obj(1.0, 2.0, 300.0), obj(300.0, 400.0, 125.0)]);
+    }
+
     /// A planet's keys: its sprite is in the picture, its field is its radius times the rule's
     /// multiplier, and it has an icon so no dot.
     #[test]
@@ -897,7 +924,7 @@ mod tests {
         let view = WorldSource::view(&s.sim);
         let defs = DefCache::default();
         let o = layer_objects(&view, Some(&s.db), &RadarStatics::default(), &defs);
-        assert_eq!(o, [LayerObject { at: Vec2::new(3200.0, 3200.0), radius: 260.0, sprite: Some("sprite_a".into()), warp_radius: Some(1300.0) }]);
+        assert_eq!(o, [LayerObject { at: Vec2::new(3200.0, 3200.0), radius: 250.0, sprite: Some("sprite_a".into()), warp_radius: Some(1000.0) }]);
         let table = SpriteTable::parse(b"sprite_table\n@reference=8\nicon_a\ttex_i\t0\t0\t4\t4\n");
         let icon = |db: &Arc<ContentDb>, def| icon_info(&defs.get(db, def).unwrap(), &table).map(|i| (i.texture, i.texels));
         assert_eq!(icon(&s.db, s.planet), Some(("tex_i".into(), 4.0)));

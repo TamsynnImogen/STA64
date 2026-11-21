@@ -1114,14 +1114,14 @@ mod field_cfg_tests {
 
     #[test]
     fn the_field_radius_is_the_bounding_radius_times_the_class_multiplier() {
-        let (rules, _) = Rules::from_header("int cfgPLANET_DEWARP_RADIUS_MULTIPLIER = 5;\nint cfgBLACKHOLE_DEWARP_RADIUS_MULTIPLIER = 100;\n");
+        let (rules, _) = Rules::from_header("int cfgPLANET_DEWARP_RADIUS_MULTIPLIER = 4;\nint cfgBLACKHOLE_DEWARP_RADIUS_MULTIPLIER = 100;\n");
         let def = |class: &str, radius: i32| {
             let mut d = UnitDef::new("t", class);
             d.raw = std::sync::Arc::new(sta_odf::resolve("t", &mut |_| Some(format!("classLabel = \"{class}\"\n"))).unwrap());
             d.radius = Fixed::from_int(radius);
             d
         };
-        assert_eq!(rules.warp_suppression_radius(&def("planet", 260)), Some(Fixed::from_int(1300)));
+        assert_eq!(rules.warp_suppression_radius(&def("planet", 260)), Some(Fixed::from_int(1040)));
         assert_eq!(rules.warp_suppression_radius(&def("blackhole_obj", 10)), Some(Fixed::from_int(1000)));
         assert_eq!(rules.warp_suppression_radius(&def("craft", 10)), None);
         assert_eq!(rules.warp_suppression_radius(&def("planet", 0)), None, "an unread radius");

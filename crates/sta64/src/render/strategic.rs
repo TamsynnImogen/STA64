@@ -14,8 +14,8 @@
 //!   support craft.
 //! - Each icon replaces its model below [`SYMBOL_ENTER_PX`] and returns to the
 //!   model above [`MODEL_RETURN_PX`]. Tab cycles auto / always / off.
-//! - Zoomed out past [`STRATEGIC_HEIGHT`] the view gains a grid on the
-//!   map plane, and a height bar drops from each unit to it. Icons within
+//! - Zoomed out past [`STRATEGIC_HEIGHT`] a height bar drops from each unit to
+//!   the map plane (the grid on it is `render::map_grid`'s, in every look). Icons within
 //!   [`STACK_RADIUS_PX`] on screen merge into one fleet icon with a count badge,
 //!   grouped by id order (see [`stack`]).
 //! - Selected units' icons get a green outline; clicks and drag boxes select by
@@ -194,9 +194,6 @@ pub enum Mode {
 pub const STRATEGIC_HEIGHT: f32 = 2500.0;
 /// Icons closer than this on screen merge into one fleet icon.
 pub const STACK_RADIUS_PX: f32 = 28.0;
-/// Grid cell edge in world units, and cells drawn each way from the view centre.
-pub const GRID_STEP: f32 = 500.0;
-pub const GRID_HALF_CELLS: i32 = 12;
 
 /// A fleet icon: one unit, or several merged. `leader` is the lowest id.
 #[derive(Clone, Debug, PartialEq)]
@@ -233,7 +230,6 @@ pub struct StrategicView {
     pub active: bool,
     pub icons: Vec<StackIcon>,
     pub bars: Vec<HeightBar>,
-    pub grid_lines: usize,
     /// Units whose own icon is folded into another's.
     pub folded: std::collections::BTreeSet<EntityId>,
 }
@@ -411,22 +407,12 @@ pub(crate) fn ensure_icons(
     }
 }
 
-fn draw(view: Res<StrategicView>, camera: Query<&Transform, crate::map::MainCamera>, mut gizmos: Gizmos) {
+fn draw(view: Res<StrategicView>, mut gizmos: Gizmos) {
     if !view.active {
         return;
     }
-    let Ok(tf) = camera.single() else { return };
-    // The grid is centred on where the camera looks at the plane.
-    let fwd = tf.forward().as_vec3();
-    let hit = if fwd.y < -1e-3 { tf.translation + fwd * (-tf.translation.y / fwd.y) } else { Vec3::new(tf.translation.x, 0.0, tf.translation.z) };
-    let (cx, cz) = ((hit.x / GRID_STEP).round() * GRID_STEP, (hit.z / GRID_STEP).round() * GRID_STEP);
-    let half = GRID_HALF_CELLS as f32 * GRID_STEP;
-    let col = Color::srgba(0.4, 0.6, 0.8, 0.25);
-    for i in -GRID_HALF_CELLS..=GRID_HALF_CELLS {
-        let o = i as f32 * GRID_STEP;
-        gizmos.line(Vec3::new(cx + o, 0.0, cz - half), Vec3::new(cx + o, 0.0, cz + half), col);
-        gizmos.line(Vec3::new(cx - half, 0.0, cz + o), Vec3::new(cx + half, 0.0, cz + o), col);
-    }
+    // The zoomed-out view no longer draws a grid of its own: the original's map grid
+    // (`render::map_grid`, shown by its mode) is the one grid, in every look.
     for b in view.bars.iter().filter(|b| b.length() > 0.0) {
         gizmos.line(b.top, b.bottom, Color::srgba(0.8, 0.9, 1.0, 0.5));
     }
@@ -546,7 +532,6 @@ fn update(
         Mode::Off => false,
         Mode::Auto => eye.y.abs() > STRATEGIC_HEIGHT,
     };
-    sv.grid_lines = if sv.active { (GRID_HALF_CELLS as usize * 2 + 1) * 2 } else { 0 };
     sv.icons.clear();
     sv.bars.clear();
     sv.folded.clear();
@@ -651,7 +636,6 @@ fn clear_unprojected(
     view.icons.clear();
     view.bars.clear();
     view.folded.clear();
-    view.grid_lines = 0;
     for (_, mut s, mut visibility, _) in objects.iter_mut() {
         s.shown = 0.0;
         s.symbol = false;
@@ -944,7 +928,6 @@ mod view_tests {
         let lens: Vec<f32> = v.bars.iter().map(|b| b.length()).collect();
         assert_eq!(lens, vec![0.0, 120.0, 40.0]);
         assert!(v.bars.iter().all(|b| b.bottom.y == 0.0 && b.bottom.x == b.top.x));
-        assert_eq!(v.grid_lines, 50);
     }
 
     #[test]
@@ -1009,7 +992,6 @@ mod view_tests {
         app.update();
         assert!(!view(&app).active);
         assert!(view(&app).icons.is_empty() && view(&app).bars.is_empty() && view(&app).folded.is_empty());
-        assert_eq!(view(&app).grid_lines, 0);
         assert_eq!(visible(&mut app, 1), Visibility::Inherited);
         assert_eq!(visible(&mut app, 2), Visibility::Inherited);
         let mut icons = app.world_mut().query::<(&Icon, &Node)>();
@@ -1167,7 +1149,6 @@ mod view_tests {
         }
         assert!(app.world().contains_resource::<crate::frontend::scene::MenuScene>());
         assert!(!view(&app).active, "no grid behind the menu");
-        assert_eq!(view(&app).grid_lines, 0);
         assert!(view(&app).icons.is_empty() && view(&app).bars.is_empty());
         // Icons that existed before the scene opened are the match's; the scene adds none.
         let before = icons(&mut app);

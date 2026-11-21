@@ -61,6 +61,7 @@ pub use strings::{LabelMap, StringTable};
 pub use race::{
     Loadout, RaceBoarding, RaceCrew, RaceDef, RaceRepair, Races, SeatRaceRule, StartingResources, dominant_race,
 };
+pub use map::{field_radius, nebula_radius};
 pub use repair_geometry::RepairAttachment;
 pub use resources::ResourceModel;
 pub use rules::{ApproachRules, AutonomyRules, CfgRules, CrewRules, FieldCfg, LegacyStart, OfficerLimit, PathingRules, PopulationRules, Rules, ShotCfg, TransporterRules, TYPED_CFG_KEYS};

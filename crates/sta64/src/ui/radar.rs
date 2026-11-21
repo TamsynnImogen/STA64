@@ -215,6 +215,20 @@ pub struct RadarClick {
     /// Map space (x, z).
     pub at: Vec2,
     pub button: PointerButton,
+    /// The point is inside the map's rectangle, not in a strip of the square beside it (a map
+    /// that is not square leaves strips; orders are not given from them).
+    pub inside_map: bool,
+}
+
+impl RadarState {
+    /// Whether the map point `p` lies inside the map's rectangle.
+    pub fn inside_map(&self, p: Vec2) -> bool {
+        match (self.bounds, self.map) {
+            (Some((lo, hi)), _) => p.cmpge(lo).all() && p.cmple(hi).all(),
+            (None, Some(m)) => p.cmpge(m.min).all() && p.cmple(m.min + Vec2::splat(m.size)).all(),
+            (None, None) => false,
+        }
+    }
 }
 
 /// One blip, in the square's `(u, v)`.
@@ -242,7 +256,7 @@ impl Blip {
     }
 }
 
-fn standing(view: &WorldView, player: PlayerId, owner: PlayerId) -> Standing {
+pub fn standing(view: &WorldView, player: PlayerId, owner: PlayerId) -> Standing {
     if owner == player {
         return Standing::Own;
     }
@@ -706,6 +720,15 @@ pub fn set_filter(state: &mut RadarState, station: bool, to: Option<Filter>) {
     *f = to.unwrap_or(f.next());
 }
 
+/// The click for a pointer at `normalized` (the square's own `-0.5..0.5` coordinates, so
+/// independent of its pixel size and of the window): the map point under it, and whether that
+/// point is inside the map's rectangle.
+pub fn click_at(state: &RadarState, map: RadarMap, normalized: Vec2, button: PointerButton) -> RadarClick {
+    let uv = (normalized + Vec2::splat(0.5)).clamp(Vec2::ZERO, Vec2::ONE);
+    let at = map.to_world(uv);
+    RadarClick { at, button, inside_map: state.inside_map(at) }
+}
+
 fn on_click(
     ev: On<PointerClick>,
     dots: Query<&FilterDot>,
@@ -722,8 +745,7 @@ fn on_click(
     } else if let (Ok(rel), Some(map)) = (squares.get(e), state.map)
         && let Some(p) = rel.normalized
     {
-        let uv = (p + Vec2::splat(0.5)).clamp(Vec2::ZERO, Vec2::ONE);
-        out.write(RadarClick { at: map.to_world(uv), button: ev.button });
+        out.write(click_at(&state, map, p, ev.button));
     }
 }
 
@@ -746,8 +768,7 @@ fn drag(
     if *held
         && let Some(p) = rel.normalized
     {
-        let uv = (p + Vec2::splat(0.5)).clamp(Vec2::ZERO, Vec2::ONE);
-        out.write(RadarClick { at: map.to_world(uv), button: PointerButton::Primary });
+        out.write(click_at(&state, map, p, PointerButton::Primary));
     }
 }
 

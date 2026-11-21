@@ -99,8 +99,9 @@ pub const REFIT_EFFECTS: &[(Effect, &str, &[&str])] = &[
 ];
 
 /// Original, profile-independent presentation shaders. These are available
-/// under both looks and are not part of the preserved Refit-derived effects.
-pub const SHARED_SHADERS: &[&str] = &["fx/persistent_shields.wesl", "fx/stock_shots.wesl"];
+/// under both looks and are not part of the preserved Refit-derived effects. The selection bubble's
+/// follows the UI profile (the Armada II look, `overlays::armada2_look`), not this render profile.
+pub const SHARED_SHADERS: &[&str] = &["fx/persistent_shields.wesl", "fx/stock_shots.wesl", "overlays/bubble.wesl"];
 
 /// Which effects have a stock implementation registered.
 #[derive(Resource, Default, Debug)]
@@ -249,7 +250,7 @@ mod tests {
         let named: Vec<&str> = REFIT_EFFECTS.iter().flat_map(|(_, _, s)| s.iter().copied()).chain(SHARED_SHADERS.iter().copied()).collect();
         for e in crate::render::shader_shadow::EMBEDDED {
             let rel = e.trim_start_matches("render/");
-            if rel != "fog.wesl" {
+            if !matches!(rel, "fog.wesl" | "map_grid.wesl") {
                 assert!(named.contains(&rel), "{rel} is registered under no effect");
             }
         }

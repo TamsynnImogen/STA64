@@ -96,6 +96,8 @@ pub const READ_ODF_PREFIXES: &[&str] = &["weapon", "builditem", "feature_", "sta
 /// rules ([`crate::TYPED_CFG_KEYS`], which count as read too).
 pub const READ_CFG_KEYS: &[&str] = &[
     "SCROLL_BORDER_WIDTH",
+    "cfgSTRATEGIC_GRID_RENDER",
+    "cfgTACTICAL_GRID_RENDER",
     "cfgSOUND_BUTTON_SAMPLE",
     "cfgSOUND_SHELL_BUTTON_HOVER",
     "cfgSOUND_SHELL_BUTTON_CLICK",
