@@ -545,6 +545,7 @@ impl Plugin for MapPlugin {
                     crate::viewer::orbit_camera.run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free),
                     radar_camera,
                     spin,
+                    crate::render::spin::turn,
                     sky_follows_camera,
                     hud,
                     hud_toggle,
@@ -1145,7 +1146,12 @@ fn rebuild(
                 * scale;
             let ground = odf.str("groundTextureName").unwrap_or("").to_owned();
             let atmo = odf.str("atmosphereTextureName").filter(|a| !a.is_empty()).unwrap_or("PA_ECFR0").to_owned();
-            let entity = commands.spawn((to_bevy(&Matrix34 { m: o.transform }), Visibility::default(), ChildOf(root))).id();
+            let planet_tf = to_bevy(&Matrix34 { m: o.transform });
+            let entity = commands.spawn((planet_tf, Visibility::default(), ChildOf(root))).id();
+            // The body turns about its own vertical axis on game time (#1047, visual only).
+            if let Some(rate) = crate::render::spin::planet_turn(crate::render::spin::object_key(o.entity_id, [o.transform[9], o.transform[10], o.transform[11]]), odf.f32("rotationSpeed")) {
+                commands.entity(entity).insert(crate::render::spin::Turn { base: planet_tf.rotation, axis: Vec3::Y, rate });
+            }
             // The sim's planet at this place gives the body its cities (RND-12); the ghost entity that stands for
             // it (below) stays, as nothing here takes it.
             if let Some(id) = sim_key.and_then(|k| placed.peek(k, o)) {
@@ -1253,7 +1259,9 @@ fn rebuild(
             scale,
             diffuse_tint: false,
         };
-        let stats = model_scene::spawn(&mut ctx, &model, entity);
+        // A resource rock's model turns on a pivot below the object, which `render::units::place` leaves alone.
+        let under = crate::render::spin::rock_pivot(ctx.commands, entity, &class, odf.f32("rotationSpeed"), crate::render::spin::object_key(o.entity_id, [o.transform[9], o.transform[10], o.transform[11]]));
+        let stats = model_scene::spawn(&mut ctx, &model, under);
         // An Armada I planet's nimbus (`planets.spr`), looked up by the planet's model name.
         if class == "planet_obj" {
             model_scene::spawn_planet_nimbus(&mut ctx, &def.model, entity);
