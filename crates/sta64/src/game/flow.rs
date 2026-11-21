@@ -35,7 +35,7 @@ use super::{LocalRace, SkirmishCfg, verdict};
 use crate::app::{AppState, GameSet};
 use crate::frontend::loading::{LoadInfo, LoadProgress, LoadReport, LoadStage};
 use crate::frontend::scene::{MenuMap, MenuSceneConfig};
-use crate::frontend::screens::{ActiveMod, MapEntry, ModChosen, ScreenData, SetupDraft, StartGame};
+use crate::frontend::screens::{ActiveMod, Browse, MapEntry, ModChosen, ModLaunchOptions, Screen, ScreenData, SelectedMod, SetupDraft, StartGame};
 use crate::map::{Catalogue, MapBrowser, MapSeat};
 use crate::sim_link::{CommandQueue, Selection, SimLink};
 use crate::ui::notices::{Notice, Severity};
@@ -139,7 +139,7 @@ impl Plugin for FlowPlugin {
                 Update,
                 (
                     on_start.run_if(in_state(AppState::FrontEnd)),
-                    remount.run_if(in_state(AppState::FrontEnd)).run_if(resource_exists::<FlowConfig>),
+                    remount.after(crate::frontend::screens::on_buttons).run_if(in_state(AppState::FrontEnd)).run_if(resource_exists::<FlowConfig>),
                     drive_load.run_if(in_state(AppState::Loading)),
                     (leave_keys, on_leave).chain().run_if(in_state(AppState::InGame)),
                     show_match_ui.after(crate::ui::presentation::consume),
@@ -473,9 +473,19 @@ fn remount(
     mut catalogue: ResMut<Catalogue>,
     mut browser: ResMut<MapBrowser>,
     mut notices: MessageWriter<Notice>,
+    browse: Option<Res<Browse>>,
+    mut next: Option<ResMut<NextState<Screen>>>,
+    (intro, ids, movies): (
+        Option<Res<crate::media::IntroSettings>>,
+        Option<ResMut<crate::media::MovieIds>>,
+        Option<ResMut<Messages<crate::media::PlayMovie>>>,
+    ),
 ) {
     let Some(ModChosen(folder)) = chosen.read().last().cloned() else { return };
-    let Some(root) = &config.install_root else { return };
+    let Some(root) = &config.install_root else {
+        notices.write(Notice::new(Severity::Bad, "No game install is available"));
+        return;
+    };
     let vfs = match sta_vfs::Vfs::mount_install(root, folder.as_deref()) {
         Ok(v) => v,
         Err(e) => {
@@ -483,8 +493,8 @@ fn remount(
             return;
         }
     };
-    *catalogue = Catalogue::default();
-    match front_end_data(&vfs, &mut catalogue, Some(root)) {
+    let mut next_catalogue = Catalogue::default();
+    match front_end_data(&vfs, &mut next_catalogue, Some(root)) {
         Ok(d) => {
             info!("mounted {}", vfs.layers().iter().map(|l| l.name()).collect::<Vec<_>>().join(" -> "));
             browser.mount_summary = crate::mount_summary(root, &vfs);
@@ -502,8 +512,20 @@ fn remount(
             return;
         }
     }
+    *catalogue = next_catalogue;
+    if let Some(browse) = browse {
+        let options = ModLaunchOptions { no_intro: browse.mod_no_intro, no_ai: browse.mod_no_ai };
+        commands.insert_resource(options);
+        if !options.no_intro && intro.is_some_and(|i| i.enabled) && let (Some(mut ids), Some(mut movies)) = (ids, movies) {
+            crate::media::intro::queue_sequence(&vfs, &mut ids, |movie| { movies.write(movie); });
+        }
+    }
     mounted.0 = vfs;
+    commands.insert_resource(SelectedMod(folder.clone()));
     commands.insert_resource(ActiveMod(folder));
+    if let Some(next) = &mut next {
+        next.set(Screen::Main);
+    }
 }
 
 /// Make the campaign resources match the mount: the book when the install has campaigns, none

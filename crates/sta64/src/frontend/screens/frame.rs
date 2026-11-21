@@ -34,12 +34,23 @@ pub fn parse(name: &str) -> Option<Screen> {
 
 /// Add the screens to a frame run: a 2D camera into the capture image
 /// `target`, the UI scaled to the 1080-unit screen, the front end entered.
-pub fn add_overlay(app: &mut App, screen: Screen, target: Handle<Image>, frame_size: (u32, u32)) {
+pub fn add_overlay(app: &mut App, screen: Screen, target: Handle<Image>, frame_size: (u32, u32), cfg: &crate::app::LaunchConfig) {
+    let mut data = ScreenData::fake();
+    if screen == Screen::ModSelect && let Some(root) = &cfg.install_root {
+        let install_data = root.join("Data");
+        data.mods = ScreenData::mods_in(if install_data.is_dir() { &install_data } else { root }).0;
+        data.base_name = root.file_name().map(|name| name.to_string_lossy().into_owned());
+        let folder = cfg.active_mod.clone();
+        let mod_row = folder.as_deref().and_then(|name| data.mods.iter().position(|m| m.folder.eq_ignore_ascii_case(name))).map_or(0, |index| index + 1);
+        app.insert_resource(super::ActiveMod(folder.clone()))
+            .insert_resource(super::SelectedMod(folder))
+            .insert_resource(super::Browse { mod_row, ..default() });
+    }
     let (frame_width, frame_height) = frame_size;
     let scale = frame_height as f32 / 1080.0;
     app.insert_resource(UiScale(scale))
         .insert_resource(super::stock::StockBox(super::stock::layout::fit_box(Vec2::new(frame_width as f32 / scale, frame_height as f32 / scale))))
-        .insert_resource(ScreenData::fake())
+        .insert_resource(data)
         .insert_resource(ScreensConfig { own_camera: false, fit_scale: false, start: screen, ..default() })
         .insert_state(AppState::FrontEnd)
         .add_plugins(ScreensPlugin)

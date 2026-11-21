@@ -84,10 +84,14 @@ fn queue_intro(settings: Res<IntroSettings>, vfs: Option<Res<Mounted>>, mut ids:
         return;
     }
     let Some(vfs) = vfs else { return };
-    let names = sequence(&vfs.0);
+    queue_sequence(&vfs.0, &mut ids, |movie| { play.write(movie); });
+}
+
+pub(crate) fn queue_sequence(vfs: &Vfs, ids: &mut MovieIds, mut enqueue: impl FnMut(PlayMovie)) {
+    let names = sequence(vfs);
     info!("intro: {}", if names.is_empty() { "no movies in this install".to_owned() } else { names.join(", ") });
     for name in names {
-        play.write(PlayMovie { id: ids.next(), name, target: MovieTarget::Fullscreen, skippable: true });
+        enqueue(PlayMovie { id: ids.next(), name, target: MovieTarget::Fullscreen, skippable: true });
     }
 }
 
