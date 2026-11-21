@@ -45,7 +45,7 @@ pub struct SkirmishCfg {
 
 impl SkirmishCfg {
     pub fn from_launch(cfg: &LaunchConfig) -> SkirmishCfg {
-        SkirmishCfg { seat: cfg.seat.unwrap_or(0), opponent: cfg.opponent, race: cfg.race.clone(), opponent_race: cfg.opponent_race.clone() }
+        SkirmishCfg { seat: cfg.seat.unwrap_or(0), opponent: if cfg.noai { Opponent::Idle } else { cfg.opponent }, race: cfg.race.clone(), opponent_race: cfg.opponent_race.clone() }
     }
 }
 

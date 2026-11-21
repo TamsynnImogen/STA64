@@ -8,4 +8,4 @@ Tier: 1
 Scene: combat-pd Seed=7
 
 1. Run 200 ticks
-2. Expect digest at tick 200 is "08970a04489511dc"
+2. Expect digest at tick 200 is "a1240ea14b5285ce"

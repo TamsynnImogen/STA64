@@ -60,6 +60,10 @@ pub struct ModEntry {
     pub authors: Vec<String>,
     pub version: Option<String>,
     pub parent: Option<String>,
+    pub standalone: bool,
+    pub asset_version: Option<u32>,
+    pub website: Option<String>,
+    pub blocked: Option<String>,
 }
 
 impl From<&sta_vfs::mods::ModInfo> for ModEntry {
@@ -71,6 +75,12 @@ impl From<&sta_vfs::mods::ModInfo> for ModEntry {
             authors: m.authors.clone(),
             version: m.version.clone(),
             parent: m.parent.clone(),
+            standalone: m.standalone,
+            asset_version: m.asset_version,
+            website: m.website.as_ref().map(|url| {
+                if url.contains(':') { url.clone() } else { format!("https://{url}") }
+            }),
+            blocked: None,
         }
     }
 }
@@ -110,7 +120,17 @@ impl ScreenData {
     /// Every mod in a `Data` folder (CON-13), and a note for each folder skipped.
     pub fn mods_in(data: &Path) -> (Vec<ModEntry>, Vec<String>) {
         match sta_vfs::mods::list_mods(data) {
-            Ok((mods, notes)) => (mods.iter().map(ModEntry::from).collect(), notes),
+            Ok((mods, notes)) => {
+                let entries = mods.iter().map(|m| {
+                    let mut entry = ModEntry::from(m);
+                    match sta_vfs::mod_chain_info(data, &m.folder) {
+                        Ok(chain) => entry.standalone |= chain.first().is_some_and(|top| top.standalone),
+                        Err(error) => entry.blocked = Some(error.to_string()),
+                    }
+                    entry
+                }).collect();
+                (entries, notes)
+            }
             Err(e) => (Vec::new(), vec![e.to_string()]),
         }
     }
@@ -138,6 +158,10 @@ impl ScreenData {
             authors: vec!["Fake Author".into()],
             version: Some("1.0".into()),
             parent: parent.map(str::to_owned),
+            standalone: parent.is_none(),
+            asset_version: Some(50000),
+            website: None,
+            blocked: None,
         };
         ScreenData {
             base_name: Some("Fake Install".into()),
@@ -612,6 +636,15 @@ pub struct Browse {
     pub map: usize,
     /// Mod select: 0 is the base game, `n` is `mods[n - 1]`.
     pub mod_row: usize,
+    pub mod_no_intro: bool,
+    pub mod_no_ai: bool,
+}
+
+/// Options selected at the launch of the current mod.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct ModLaunchOptions {
+    pub no_intro: bool,
+    pub no_ai: bool,
 }
 
 /// A setting the settings screen edits.

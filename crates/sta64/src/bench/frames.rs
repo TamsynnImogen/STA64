@@ -375,7 +375,7 @@ pub fn add_loading(app: &mut App, cfg: &LaunchConfig) {
 /// `crate::frontend::screens::frame` has the names.
 pub fn add_screen(app: &mut App, cfg: &LaunchConfig, screen: crate::frontend::screens::Screen) {
     let target = app.world().resource::<Capture>().target.clone();
-    crate::frontend::screens::frame::add_overlay(app, screen, target, cfg.frame_size.unwrap_or((640, 360)));
+    crate::frontend::screens::frame::add_overlay(app, screen, target, cfg.frame_size.unwrap_or((640, 360)), cfg);
 }
 
 /// `STA64_UI_HUD=1`: the UI-04 HUD over the frame (with the radar and notices it
