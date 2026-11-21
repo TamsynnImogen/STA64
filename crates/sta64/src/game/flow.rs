@@ -39,7 +39,7 @@ use crate::frontend::screens::{ActiveMod, MapEntry, ModChosen, ScreenData, Setup
 use crate::map::{Catalogue, MapBrowser, MapSeat};
 use crate::sim_link::{CommandQueue, Selection, SimLink};
 use crate::ui::notices::{Notice, Severity};
-use crate::viewer::Mounted;
+use crate::viewer::{Mounted, TeamColours};
 
 /// Present when the app runs the front end flow (the map view then waits for the
 /// loading screen instead of building at start).
@@ -58,6 +58,10 @@ pub struct ActiveMatch {
     /// Frames in the current phase.
     pub frames: u32,
 }
+
+/// The mount's palette to restore after an Instant Action colour choice.
+#[derive(Resource)]
+struct MatchPaletteBackup(Option<TeamColours>);
 
 /// Leave the match for the front end.
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,10 +204,11 @@ fn on_start(
     mut next: ResMut<NextState<AppState>>,
     mut notices: MessageWriter<Notice>,
     net: Option<Res<super::net_match::NetStart>>,
+    mounted_palette: Option<Res<TeamColours>>,
     info: Option<ResMut<LoadInfo>>,
     progress: Option<ResMut<LoadProgress>>,
 ) {
-    let Some(StartGame(setup, speed)) = starts.read().last().cloned() else { return };
+    let Some(StartGame(setup, speed, palette)) = starts.read().last().cloned() else { return };
     let local = match net.as_ref().and_then(|start| start.0.as_ref()) {
         Some(match_) => Ok(Some(match_.me)),
         None => local_seat(&setup),
@@ -222,6 +227,10 @@ fn on_start(
     }
     if let Some(mut p) = progress {
         p.begin();
+    }
+    if let Some(palette) = palette {
+        commands.insert_resource(MatchPaletteBackup(mounted_palette.as_deref().cloned()));
+        commands.insert_resource(palette);
     }
     commands.insert_resource(MapSeat(local.map(|p| p.0)));
     commands.insert_resource(ActiveMatch { setup, local, speed, requested: false, frames: 0 });
@@ -314,6 +323,7 @@ fn clear_match(
     progress: Option<ResMut<LoadProgress>>,
     mut leave: ResMut<Messages<LeaveMatch>>,
     entities: Option<ResMut<crate::sim_link::SimEntities>>,
+    palette: Option<Res<MatchPaletteBackup>>,
 ) {
     // The match's ships are the link's: they go with it, so the menu scene (whose sim reuses the
     // ids 1.. ) does not inherit their models, symbols and hidden visibility.
@@ -323,6 +333,14 @@ fn clear_match(
         }
     }
     commands.remove_resource::<ActiveMatch>();
+    if let Some(palette) = palette {
+        if let Some(original) = &palette.0 {
+            commands.insert_resource(original.clone());
+        } else {
+            commands.remove_resource::<TeamColours>();
+        }
+        commands.remove_resource::<MatchPaletteBackup>();
+    }
     // The map's own team colours end with its match: the menu scene's ships take the palette's.
     commands.remove_resource::<crate::viewer::MapTeamColours>();
     commands.remove_resource::<SimLink>();
@@ -439,7 +457,8 @@ pub(crate) fn front_end_data(vfs: &sta_vfs::Vfs, catalogue: &mut Catalogue, inst
     info!("front end: {} multiplayer maps of {}, {} mods, in {:.1?}", maps.len(), names.len(), mods.len(), t0.elapsed());
     let menu_music = races.playable().into_iter().find_map(|r| r.single_player_music.clone()).into_iter().collect();
     let scene = MenuSceneConfig::new(db.clone(), MenuMap::from_vfs(vfs), MapDef::empty());
-    Ok(FrontEndData { screens: ScreenData { content: db, races, maps, mods, base_name: install_root.and_then(|r| r.file_name()).map(|n| n.to_string_lossy().into_owned()) }, scene, menu_music })
+    let colours = TeamColours::load(vfs);
+    Ok(FrontEndData { screens: ScreenData { content: db, races, colours, maps, mods, base_name: install_root.and_then(|r| r.file_name()).map(|n| n.to_string_lossy().into_owned()) }, scene, menu_music })
 }
 
 /// Use mod: remount the install with it and refill the lists. The scene shows
@@ -470,6 +489,7 @@ fn remount(
             browser.mount_summary = crate::mount_summary(root, &vfs);
             browser.maps = d.screens.maps.iter().map(|m| m.def.name.clone()).collect();
             commands.insert_resource(SetupDraft::new(&d.screens));
+            commands.insert_resource(d.screens.colours.clone());
             commands.insert_resource(d.screens);
             commands.insert_resource(MenuSceneSource(d.scene));
             commands.insert_resource(MenuMusic(d.menu_music));

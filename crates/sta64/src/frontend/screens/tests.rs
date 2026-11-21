@@ -145,7 +145,7 @@ fn every_screen_is_reached_by_state_and_replaces_the_last() {
     let mut app = app();
     let want: [(Screen, &str, usize); 5] = [
         (Screen::SinglePlayer, "Single player", 6),
-        (Screen::Setup, "Instant action", 2 * 3 + 8),
+        (Screen::Setup, "Instant action", 2 * 3 + 8 + 9),
         (Screen::MapSelect, "Select map", 2),
         (Screen::Settings, "Options", 1),
         (Screen::ModSelect, "Mods", 2),
@@ -246,6 +246,62 @@ fn map_rows_count_only_distinct_playable_starts_and_keep_their_ids() {
     let setup = draft.to_setup(&data).unwrap();
     assert_eq!(setup.players.iter().map(|p| p.id).collect::<Vec<_>>(), [PlayerId(1), PlayerId(4)]);
     assert_eq!(SetupDraft::from_setup(&setup, &data), Some(draft));
+}
+
+#[test]
+fn cancelling_advanced_reverts_edits_and_ok_keeps_them() {
+    use crate::clock::MatchSpeed;
+
+    let mut app = app();
+    go(&mut app, Screen::Setup);
+    press(&mut app, Act::Goto(Screen::Advanced));
+    press(&mut app, Act::CycleResources);
+    press(&mut app, Act::CycleMatchSpeed);
+    press(&mut app, Act::CloseAdvanced(false));
+    assert_eq!(screen(&app), Screen::Setup);
+    assert_eq!(draft(&app).options.starting_resources, StartingResources::Normal);
+    assert_eq!(draft(&app).speed, MatchSpeed::Normal);
+
+    press(&mut app, Act::Goto(Screen::Advanced));
+    press(&mut app, Act::CycleResources);
+    press(&mut app, Act::CycleMatchSpeed);
+    press(&mut app, Act::CloseAdvanced(true));
+    assert_eq!(screen(&app), Screen::Setup);
+    assert_eq!(draft(&app).options.starting_resources, StartingResources::Lots);
+    assert_eq!(draft(&app).speed, MatchSpeed::Fast);
+}
+
+#[test]
+fn authored_preview_hides_fallback_dots_and_refreshes_on_remount() {
+    use super::preview::{AuthoredPreview, PreviewFallback};
+    use crate::viewer::Mounted;
+
+    let root = a2_install();
+    let bzn = root.join("Data/bzn");
+    std::fs::create_dir_all(&bzn).unwrap();
+    let data = ScreenData::fake();
+    let stem = &data.maps[0].def.name;
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([80, 140, 220, 255])).save(bzn.join(format!("{stem}.png"))).unwrap();
+    let mut app = app_with_data(data);
+    app.init_resource::<Assets<Image>>();
+    app.insert_resource(Mounted(sta_vfs::Vfs::mount_install(&root, None).unwrap()));
+    app.world_mut().resource_mut::<ScreensConfig>().layout = stock::ScreenLayout::Stock;
+    go(&mut app, Screen::Setup);
+    let nodes = |app: &mut App| {
+        let world = app.world_mut();
+        let art = world.query_filtered::<Option<&ImageNode>, With<AuthoredPreview>>().single(world).unwrap().is_some();
+        let dots = *world.query_filtered::<&Visibility, With<PreviewFallback>>().single(world).unwrap();
+        (art, dots)
+    };
+    assert_eq!(nodes(&mut app), (true, Visibility::Hidden));
+    go(&mut app, Screen::Main);
+    let fallback = a2_install();
+    app.insert_resource(Mounted(sta_vfs::Vfs::mount_install(&fallback, None).unwrap()));
+    settle(&mut app);
+    go(&mut app, Screen::Setup);
+    assert_eq!(nodes(&mut app), (false, Visibility::Inherited));
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::remove_dir_all(&fallback).unwrap();
 }
 
 fn race(name: &str, slot: Option<i64>) -> RaceDef {

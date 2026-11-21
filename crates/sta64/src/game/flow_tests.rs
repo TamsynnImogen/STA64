@@ -163,6 +163,34 @@ fn front_end_to_match_and_back() {
 }
 
 #[test]
+fn instant_action_applies_the_chosen_palette_and_restores_the_mount() {
+    use crate::viewer::{TeamColours, owner_hull_colour, owner_mark_colour};
+    use sta_sim::PlayerId;
+
+    let (mut app, _) = app();
+    let original = app.world().resource::<ScreenData>().colours.clone();
+    let first = original.owner_colour(PlayerId(0));
+    let second = original.owner_colour(PlayerId(1));
+    app.insert_resource(original);
+    settle(&mut app, 4);
+    press(&mut app, Act::Goto(Screen::Setup));
+    press(&mut app, Act::PickTeamColour(1));
+    press(&mut app, Act::Launch);
+    settle(&mut app, 50);
+    assert_eq!(state(&app), AppState::InGame);
+    let palette = app.world().resource::<TeamColours>();
+    assert_eq!(owner_hull_colour(Some(palette), None, PlayerId(0)), second);
+    assert_eq!(owner_mark_colour(Some(palette), None, PlayerId(1)), first);
+    let active = app.world().resource::<ActiveMatch>();
+    assert_ne!(active.setup.players[0].team, active.setup.players[1].team);
+    app.world_mut().write_message(LeaveMatch);
+    settle(&mut app, 4);
+    let restored = app.world().resource::<TeamColours>();
+    assert_eq!(restored.owner_colour(PlayerId(0)), first);
+    assert_eq!(restored.owner_colour(PlayerId(1)), second);
+}
+
+#[test]
 fn observer_starts_without_taking_any_of_the_four_map_seats() {
     let (mut app, _) = app();
     settle(&mut app, 4);
@@ -173,7 +201,7 @@ fn observer_starts_without_taking_any_of_the_four_map_seats() {
     let setup = draft.to_setup(&data).expect("observer setup");
     assert_eq!(setup.players.len(), 4);
     assert!(setup.players.iter().all(|p| matches!(p.control, sta_sim::setup::Control::Ai(_))));
-    app.world_mut().write_message(crate::frontend::screens::StartGame(setup, crate::clock::MatchSpeed::Normal));
+    app.world_mut().write_message(crate::frontend::screens::StartGame(setup, crate::clock::MatchSpeed::Normal, None));
     for _ in 0..200 {
         app.update();
         if state(&app) == AppState::InGame {

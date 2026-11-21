@@ -105,12 +105,15 @@ pub enum Slot {
     HeadControl,
     HeadSide,
     HeadTeam,
+    SeatColour(usize),
     SeatControl(usize),
     SeatSide(usize),
     SeatTeam(usize),
     ModeLabel,
     ModePlay,
     ModeObserve,
+    RandomColour,
+    Palette(usize),
     MapInfo,
     Preview,
     SelectMap,
@@ -124,6 +127,7 @@ pub enum Slot {
     AdvancedOfficers,
     AdvancedSpeed,
     AdvancedDefault,
+    AdvancedCancel,
     AdvancedClose,
     // Options.
     OptionsTitle,
@@ -134,18 +138,29 @@ pub enum Slot {
 /// Seats the Game Setup table has room for.
 pub const TABLE_ROWS: usize = 8;
 
-/// Game Setup's table: left of x 450 and above y 260, headings between y 40 and 80,
-/// the player, side and team columns classified from x 41, 200 and 370 (Refit's bounds; the multiplayer screen's own columns are at x 203 and 375). The
-/// rows run from y 80 on; the stock palette of colours under the table (to y 320)
-/// has no counterpart in a `GameSetup`, so the rows may take its room: arranged.
-pub const TABLE_TOP: f32 = 80.0;
-pub const TABLE_BOTTOM: f32 = 320.0;
-pub const COL_X: [f32; 3] = [41.0, 200.0, 370.0];
-pub const COL_RIGHT: f32 = 450.0;
+/// Game Setup's player panel stays left of x 454. These are arranged regions
+/// within it; the palette and match-mode controls occupy the space below rows.
+pub const TABLE_TOP: f32 = 119.0;
+pub const TABLE_BOTTOM: f32 = 383.0;
+pub const COL_X: [f32; 3] = [67.0, 217.0, 365.0];
+pub const COL_RIGHT: f32 = 449.0;
 
 /// Design height of one table row.
 pub fn row_pitch() -> f32 {
     (TABLE_BOTTOM - TABLE_TOP) / TABLE_ROWS as f32
+}
+
+/// The map image uses the design height as its single scale, so a wide box
+/// gives it side margins instead of stretching the authored square texture.
+pub fn placed_rect(slot: Slot, b: Vec2) -> Rect {
+    if slot == Slot::Preview {
+        let size = region(slot).h * b.y / DESIGN.y;
+        let centre_x = 621.0 * b.x / DESIGN.x;
+        let top = region(slot).y * b.y / DESIGN.y;
+        Rect::new(centre_x - size / 2.0, top, centre_x + size / 2.0, top + size)
+    } else {
+        region(slot).px(b)
+    }
 }
 
 /// The region of `slot`.
@@ -178,34 +193,38 @@ pub fn region(slot: Slot) -> Region {
         Slot::SpBack => a(24.0, 560.0, 200.0, 34.0),
         Slot::SpLoad => a(576.0, 560.0, 200.0, 34.0),
         // Game setup.
-        Slot::SetupTitle => m(0.0, 0.0, 800.0, 30.0),
-        Slot::HeadControl => m(COL_X[0], 40.0, col_w(0), 40.0),
-        Slot::HeadSide => m(COL_X[1], 40.0, col_w(1), 40.0),
-        Slot::HeadTeam => m(COL_X[2], 40.0, col_w(2), 40.0),
+        Slot::SetupTitle => a(26.0, 8.0, 750.0, 40.0),
+        Slot::HeadControl => a(COL_X[0], 76.0, col_w(0), 34.0),
+        Slot::HeadSide => a(COL_X[1], 76.0, col_w(1), 34.0),
+        Slot::HeadTeam => a(COL_X[2], 76.0, col_w(2), 34.0),
+        Slot::SeatColour(i) => a(42.0, TABLE_TOP + row_pitch() * i as f32 + 8.0, 17.0, 17.0),
         Slot::SeatControl(i) => row(0, i),
         Slot::SeatSide(i) => row(1, i),
         Slot::SeatTeam(i) => row(2, i),
         // Match mode is outside the map's seat rows, in the free area below the table.
-        Slot::ModeLabel => a(41.0, 345.0, 70.0, 36.0),
-        Slot::ModePlay => a(119.0, 345.0, 145.0, 36.0),
-        Slot::ModeObserve => a(272.0, 345.0, 145.0, 36.0),
-        // The map's labels are right of x 480 and above y 125 (measured).
-        Slot::MapInfo => m(480.0, 40.0, 300.0, 85.0),
-        Slot::Preview => m(627.0, 129.0, 155.0, 155.0),
-        // The settings sit beside the preview, right of x 480 (measured bound).
-        Slot::SelectMap => a(480.0, 129.0, 140.0, 40.0),
-        Slot::Resources => a(480.0, 177.0, 140.0, 40.0),
-        Slot::Officers => a(480.0, 225.0, 140.0, 40.0),
-        Slot::Advanced => a(480.0, 273.0, 140.0, 40.0),
-        // The bottom row is below y 560 (measured bound).
-        Slot::SetupBack => a(24.0, 560.0, 200.0, 34.0),
-        Slot::Launch => a(576.0, 560.0, 200.0, 34.0),
-        Slot::AdvancedTitle => a(100.0, 35.0, 600.0, 40.0),
-        Slot::AdvancedResources => a(170.0, 155.0, 460.0, 50.0),
-        Slot::AdvancedOfficers => a(170.0, 225.0, 460.0, 50.0),
-        Slot::AdvancedSpeed => a(170.0, 295.0, 460.0, 50.0),
-        Slot::AdvancedDefault => a(170.0, 395.0, 210.0, 45.0),
-        Slot::AdvancedClose => a(420.0, 395.0, 210.0, 45.0),
+        Slot::ModeLabel => a(42.0, 472.0, 52.0, 34.0),
+        Slot::ModePlay => a(101.0, 472.0, 148.0, 34.0),
+        Slot::ModeObserve => a(257.0, 472.0, 166.0, 34.0),
+        Slot::RandomColour => a(42.0, 409.0, 140.0, 34.0),
+        Slot::Palette(i) => a(192.0 + (i % 8) as f32 * 27.0, 412.0 + (i / 8) as f32 * 25.0, 17.0, 17.0),
+        // Map title and preview in the right-hand panel (arranged).
+        Slot::MapInfo => a(483.0, 76.0, 280.0, 62.0),
+        Slot::Preview => a(518.0, 146.0, 206.0, 206.0),
+        // Available map and option controls sit below the preview.
+        Slot::SelectMap => a(483.0, 366.0, 280.0, 34.0),
+        Slot::Resources => a(483.0, 407.0, 280.0, 34.0),
+        Slot::Officers => a(483.0, 448.0, 280.0, 34.0),
+        Slot::Advanced => a(483.0, 489.0, 280.0, 34.0),
+        // The footer is anchored below both panels.
+        Slot::SetupBack => a(24.0, 554.0, 200.0, 34.0),
+        Slot::Launch => a(576.0, 554.0, 200.0, 34.0),
+        Slot::AdvancedTitle => a(173.0, 117.0, 454.0, 40.0),
+        Slot::AdvancedResources => a(173.0, 196.0, 215.0, 40.0),
+        Slot::AdvancedOfficers => a(173.0, 250.0, 215.0, 40.0),
+        Slot::AdvancedSpeed => a(412.0, 196.0, 215.0, 40.0),
+        Slot::AdvancedClose => a(173.0, 439.0, 130.0, 36.0),
+        Slot::AdvancedCancel => a(335.0, 439.0, 130.0, 36.0),
+        Slot::AdvancedDefault => a(497.0, 439.0, 130.0, 36.0),
         // Options: not measured.
         Slot::OptionsTitle => a(100.0, 16.0, 600.0, 30.0),
         Slot::OptionsBody => a(100.0, 60.0, 600.0, 470.0),
@@ -252,17 +271,17 @@ mod tests {
 
     #[test]
     fn measured_bounds_hold_between_regions() {
-        // Table left of the map column, map info above the preview, preview right of
-        // the settings, bottom row under everything.
+        // Player rows stay left of the map panel; map info, preview, options
+        // and footer follow from top to bottom.
         let r = |s| region(s).rect();
         assert!(r(Slot::SeatTeam(7)).max.x <= 450.0 && r(Slot::SeatTeam(7)).max.x <= r(Slot::MapInfo).min.x);
         assert!(r(Slot::MapInfo).max.y <= r(Slot::Preview).min.y);
-        assert!(r(Slot::Resources).max.x <= r(Slot::Preview).min.x);
+        assert!(r(Slot::Preview).max.y <= r(Slot::Resources).min.y);
         assert!(r(Slot::SeatControl(7)).max.y <= r(Slot::Launch).min.y);
-        assert!(r(Slot::Launch).min.y >= 560.0);
-        // The three table columns start where the stock columns do.
+        assert!(r(Slot::Launch).min.y >= 550.0);
+        // The three table columns retain their arranged panel positions.
         assert_eq!([r(Slot::SeatControl(0)).min.x, r(Slot::SeatSide(0)).min.x, r(Slot::SeatTeam(0)).min.x], COL_X);
-        assert_eq!(region(Slot::Preview).rect(), Rect::new(627.0, 129.0, 782.0, 284.0));
+        assert_eq!(region(Slot::Preview).rect(), Rect::new(518.0, 146.0, 724.0, 352.0));
     }
 
     #[test]

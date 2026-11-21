@@ -9,6 +9,7 @@ use sta_content::{ContentDb, Fixed, MapDef, StartPos, StartingResources, Vec3 as
 use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::{PlayerId, TeamId};
 use crate::clock::MatchSpeed;
+use crate::viewer::TeamColours;
 
 /// The registry name of the computer opponent (`sta_ai::Registry::builtin`).
 pub const SKIRMISH_AI: &str = "skirmish";
@@ -78,6 +79,7 @@ impl From<&sta_vfs::mods::ModInfo> for ModEntry {
 pub struct ScreenData {
     pub content: Arc<ContentDb>,
     pub races: Arc<sta_content::Races>,
+    pub colours: TeamColours,
     pub maps: Vec<MapEntry>,
     pub mods: Vec<ModEntry>,
     /// What the mod select screen calls the plain install (its folder's name);
@@ -138,6 +140,7 @@ impl ScreenData {
             base_name: Some("Fake Install".into()),
             content: Arc::new(sta_content::fake::db()),
             races: Arc::new(sta_content::Races::default()),
+            colours: TeamColours::default(),
             maps: vec![MapEntry::new(two), MapEntry::new(four)],
             mods: vec![m("fx_balance", "Balance Pack", "Rebalances every ship.", None), m("fx_ships", "Extra Ships", "Adds a cruiser.", Some("fx_balance"))],
         }
@@ -210,14 +213,17 @@ pub struct SetupDraft {
     pub options: GameOptions,
     pub speed: MatchSpeed,
     pub observing: bool,
+    /// Pick from the mounted multiplayer palette, or use the seat default.
+    pub colour: Option<usize>,
     pub(crate) return_row: usize,
+    pub(crate) advanced_backup: Option<(GameOptions, MatchSpeed)>,
 }
 
 impl SetupDraft {
     /// The first map, seat 0 the player, the others computers, every seat its
     /// own team, the races in turn.
     pub fn new(data: &ScreenData) -> SetupDraft {
-        let mut d = SetupDraft { map: 0, seed: 1, seats: Vec::new(), options: GameOptions::default(), speed: MatchSpeed::Normal, observing: false, return_row: 0 };
+        let mut d = SetupDraft { map: 0, seed: 1, seats: Vec::new(), options: GameOptions::default(), speed: MatchSpeed::Normal, observing: false, colour: None, return_row: 0, advanced_backup: None };
         d.set_map(data, 0);
         d
     }
@@ -266,6 +272,41 @@ impl SetupDraft {
             let row = self.return_row.min(self.seats.len().saturating_sub(1));
             self.select_control(row, SeatControl::Human);
         }
+    }
+
+    fn local_row(&self) -> Option<usize> {
+        if self.observing {
+            return None;
+        }
+        self.seats.iter().position(|seat| seat.control == SeatControl::Human)
+    }
+
+    pub fn pick_colour(&mut self, data: &ScreenData, choice: usize) {
+        if self.local_row().is_some() && choice < data.colours.swatches().len() {
+            self.colour = Some(choice);
+        }
+    }
+
+    /// The default swatch is the actual marked colour of the local start.
+    pub fn active_swatch(&self, data: &ScreenData) -> Option<usize> {
+        let row = self.local_row()?;
+        let colour = data.colours.owner_colour(PlayerId(data.maps.get(self.map)?.playable_starts().get(row)?.slot));
+        let swatches = data.colours.swatches();
+        self.colour.filter(|&index| index < swatches.len()).or_else(|| swatches.iter().position(|&swatch| Some(swatch) == colour))
+    }
+
+    pub fn effective_colours(&self, data: &ScreenData) -> TeamColours {
+        if let Some(choice) = self.colour
+            && let Some(&colour) = data.colours.swatches().get(choice)
+            && let Some(row) = self.local_row()
+            && let Some(map) = data.maps.get(self.map)
+        {
+            let players: Vec<_> = map.playable_starts().iter().map(|start| PlayerId(start.slot)).collect();
+            if let Some(&local) = players.get(row) {
+                return data.colours.with_local_colour(local, colour, &players);
+            }
+        }
+        data.colours.clone()
     }
 
     pub fn select_control(&mut self, row: usize, control: SeatControl) {
@@ -369,7 +410,9 @@ impl SetupDraft {
             options: setup.options.clone(),
             speed: MatchSpeed::Normal,
             observing: human.is_none(),
+            colour: None,
             return_row: human.unwrap_or_default(),
+            advanced_backup: None,
         })
     }
 }
