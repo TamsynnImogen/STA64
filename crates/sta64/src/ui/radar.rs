@@ -415,7 +415,7 @@ fn spawn_stock(commands: &mut Commands, root: Entity, theme: &Theme, cfg: &HudCo
     commands.entity(root).add_child(chrome);
     let Some(_) = area else { return };
 
-    for piece in layout.pieces("minimapBackgroundPanel") {
+    for piece in layout.pieces_in("minimap", "minimapBackgroundPanel") {
         commands.spawn((
             stock_rect(piece.rect),
             GuiImage::new(piece.name).with_frame(piece.frame),
