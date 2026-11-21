@@ -27,12 +27,12 @@
 //!   cinematic action view, `Z`, and minimising the panel (`cinematicMinimizedPanel*`,
 //!   Ctrl-F4) are not built (TODO lines).
 
-use bevy::{picking::Pickable, prelude::*};
+use bevy::prelude::*;
 
-use super::super::{buttons::PanelButton, info::readout, layout::StockLayout};
-use super::{frame_pieces, node, panel_origin};
+use super::super::{buttons::PanelButton, info::readout, layout::StockLayout, window};
+use super::node;
 use crate::{
-    render::action_camera::{ActionPicture, ActionView},
+    render::action_camera::ActionView,
     ui::{
         gui_sprites::{GuiButton, GuiButtonColors},
         i18n::Strings,
@@ -73,25 +73,10 @@ fn words(strings: Option<&Strings>, key: &str, fallback: &str) -> String {
     strings.map(|s| s.tooltip_text(key)).filter(|t| *t != key).unwrap_or(fallback).replace('^', "")
 }
 
-/// Spawn the window: the dark display, the action picture, the frame art over its edges, the two
-/// buttons. Does nothing when the cfg has no `cinematicPanelArea`.
+/// Spawn the window: the shared parts (dark display, action picture, frame art over its edges;
+/// [`super::super::window`]) and the two buttons. Does nothing when the cfg has no `cinematicPanelArea`.
 pub(in crate::ui::hud) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout, theme: &Theme, strings: Option<&Strings>, view: Option<&ActionView>) {
-    let Some((_, origin)) = panel_origin(layout, "cinematic") else { return };
-    let display = layout.at(origin, "cinematicDisplayArea").or_else(|| layout.at(origin, "cinematicBackgroundArea"));
-    if let Some(r) = display {
-        commands.entity(root).with_child((node(r), BackgroundColor(Color::BLACK), Pickable::IGNORE));
-        if let Some(view) = view {
-            commands.entity(root).with_child((
-                ActionPicture,
-                PanelButton::ActionView,
-                UiButton,
-                WidgetState::Normal,
-                node(r),
-                ImageNode::new(view.image.clone()),
-            ));
-        }
-    }
-    frame_pieces(commands, root, layout, "cinematic", origin);
+    let Some(origin) = window::spawn(commands, root, layout, view, false) else { return };
     for k in &BUTTONS {
         let Some(r) = layout.at(origin, k.area) else { continue };
         let Some(sprite) = layout.name(k.sprite) else { continue };
