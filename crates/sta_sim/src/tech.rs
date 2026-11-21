@@ -118,6 +118,7 @@ pub(crate) fn build_allowed(
 
 /// Replacement checks tech and fleet capacity independently. The projected
 /// census omits the retiring source; a source kept as a parent still counts.
+#[allow(clippy::too_many_arguments)] // the replacement inputs, kept as separate seams
 pub(crate) fn replacement_allowed(
     db: &ContentDb, units: &Entities, seats: &[(PlayerId, TeamId)], ai_seats: &[PlayerId],
     source: EntityId, what: ContentKey, ignore_tech: bool, ignore_cap: bool,
