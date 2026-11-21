@@ -2,11 +2,15 @@
 //!
 //! A square of [`RADAR_SIDE`] units at the bottom left, in an LCARS panel of the
 //! theme (UI-03), with the two filter strips above it. What it draws, in
-//! Refit's order: the dark backing; one blip per unit the player's side sees
-//! (ships round, stations square, never under 7 / 10 units; a white ring round
-//! a selected unit; moons and planets as dim discs); and the camera's outline.
-//! Refit's fog masks, pings and the map's picture need seam data the views do
-//! not carry yet (see the notes on [`RadarFeed`]).
+//! Refit's order: the dark backing; the static layers and map-icon sprites
+//! ([`super::radar_layers`]); one blip per unit the player's side sees (ships
+//! round, stations square, never under 7 / 10 units; a white ring round a
+//! selected unit; moons and planets as dim discs); fog and shroud; the camera's
+//! outline; and black strips where the square is not map. In the stock look
+//! the dots are filled squares of a few texels of the 128 x 128 grid, with no
+//! ring ([`Blip::texels`]).
+//! Pings and last-known enemies need seam data the views do not carry yet (see
+//! the notes on [`RadarFeed`]).
 //!
 //! - Colours: the sim has no per-team map colour, so a blip is coloured by the
 //!   player's relation to its owner, Refit's fallback: own `good`, ally
@@ -198,6 +202,9 @@ pub struct RadarState {
     pub map: Option<RadarMap>,
     /// Set the map once and keep it: the real map's box from the game setup.
     pub map_fixed: bool,
+    /// The map's own rectangle (x, z) inside the square, when the game setup gave one. Without
+    /// it the whole square counts as the map.
+    pub bounds: Option<(Vec2, Vec2)>,
 }
 
 /// The map point the player clicked on the square.
@@ -216,6 +223,10 @@ pub struct Blip {
     pub standing: Standing,
     pub at: Vec2,
     pub selected: bool,
+    /// The stock look's edge in texels of the 128 x 128 grid: the definition's `mapSize` key,
+    /// else 2 for a ship, 3 for a station, 1 for the rest (read from the executable, static;
+    /// no data key carries the defaults).
+    pub texels: f32,
 }
 
 impl Blip {
@@ -263,7 +274,8 @@ fn kind(content: Option<&ContentDb>, def: sta_sim::ContentKey) -> Kind {
 }
 
 /// The blips the player's radar shows: what its side sees (`visible_to`), minus
-/// what the filters hide, and not what is dying, in id order.
+/// what the filters hide, not what is dying and not what has a `mapIcon` sprite (an icon
+/// replaces its dot), in id order.
 pub fn blips(feed: &RadarFeed, state: &RadarState, map: &RadarMap) -> Vec<Blip> {
     let db = feed.content.as_deref();
     feed.view
@@ -271,6 +283,10 @@ pub fn blips(feed: &RadarFeed, state: &RadarState, map: &RadarMap) -> Vec<Blip> 
         .into_iter()
         .filter(|u| !u.flags.contains(UnitFlags::DYING))
         .filter_map(|u| {
+            let keys = db.and_then(|c| c.unit(u.def)).map(|d| super::radar_layers::MapKeys::of(&d.raw)).unwrap_or_default();
+            if keys.icon.is_some() {
+                return None;
+            }
             let kind = kind(db, u.def);
             let st = standing(&feed.view, feed.player, u.owner);
             let filter = match kind {
@@ -284,6 +300,11 @@ pub fn blips(feed: &RadarFeed, state: &RadarState, map: &RadarMap) -> Vec<Blip> 
                 standing: st,
                 at: map.to_square(Vec2::new(u.pos.x.to_f32(), u.pos.z.to_f32())),
                 selected: feed.selected.contains(&u.id),
+                texels: keys.size.unwrap_or(match kind {
+                    Kind::Ship => super::radar_layers::SHIP_TEXELS,
+                    Kind::Station => super::radar_layers::STATION_TEXELS,
+                    Kind::Body => super::radar_layers::OTHER_TEXELS,
+                }),
             })
         })
         .collect()
@@ -324,6 +345,11 @@ struct RadarChrome;
 /// The map square; blips and the camera outline are its children.
 #[derive(Component)]
 pub struct RadarSquare;
+
+/// On the square of the stock look: its dots are filled squares of the stock's texel sizes
+/// with no selection ring.
+#[derive(Component)]
+pub struct StockRadar;
 
 #[derive(Component)]
 pub struct RadarBlip(pub EntityId);
@@ -436,6 +462,7 @@ fn spawn_stock(commands: &mut Commands, root: Entity, theme: &Theme, cfg: &HudCo
     }
     commands.spawn((
         RadarSquare,
+        StockRadar,
         RelativeCursorPosition::default(),
         Node { overflow: Overflow::clip(), ..stock_rect(display) },
         BackgroundColor(Color::NONE),
@@ -537,12 +564,12 @@ pub fn refresh(
     feed: Res<RadarFeed>,
     mut state: ResMut<RadarState>,
     mut ents: ResMut<BlipEntities>,
-    square: Query<(Entity, &Node), (With<RadarSquare>, Without<RadarCamera>)>,
+    square: Query<(Entity, &Node, Has<StockRadar>), (With<RadarSquare>, Without<RadarCamera>)>,
     mut nodes: Query<(&mut Node, &mut BackgroundColor, &mut BorderColor), (Without<RadarCamera>, Without<RadarSquare>)>,
     outline: Query<(Entity, &RadarCamera)>,
     mut lines_q: Query<(&mut Node, &mut UiTransform), (With<RadarCamera>, Without<RadarSquare>)>,
 ) {
-    let Ok((square, square_node)) = square.single() else { return };
+    let Ok((square, square_node, stock)) = square.single() else { return };
     if !state.map_fixed
         && let Some(fit) = RadarMap::fit(&feed.view)
     {
@@ -561,19 +588,34 @@ pub fn refresh(
     let t = &*theme;
     for b in &list {
         let d = b.size();
-        let node = Node {
-            position_type: PositionType::Absolute,
-            left: Val::Percent(b.at.x * 100.0),
-            top: Val::Percent(b.at.y * 100.0),
-            margin: UiRect::all(Val::Px(-d / 2.0)),
-            width: Val::Px(d),
-            height: Val::Px(d),
-            border: UiRect::all(Val::Px(if b.selected { 2.0 } else { 0.0 })),
-            border_radius: if b.kind == Kind::Station { BorderRadius::ZERO } else { BorderRadius::MAX },
-            ..default()
+        // The stock look: a filled square of `texels` of the 128 grid (a share of the square, so
+        // the same at any size), no ring. The other look keeps its round dots and ring.
+        let node = if stock {
+            let side = b.texels / super::radar_layers::GRID as f32 * 100.0;
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Percent(b.at.x * 100.0),
+                top: Val::Percent(b.at.y * 100.0),
+                margin: UiRect::all(Val::Percent(-side / 2.0)),
+                width: Val::Percent(side),
+                height: Val::Percent(side),
+                ..default()
+            }
+        } else {
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Percent(b.at.x * 100.0),
+                top: Val::Percent(b.at.y * 100.0),
+                margin: UiRect::all(Val::Px(-d / 2.0)),
+                width: Val::Px(d),
+                height: Val::Px(d),
+                border: UiRect::all(Val::Px(if b.selected { 2.0 } else { 0.0 })),
+                border_radius: if b.kind == Kind::Station { BorderRadius::ZERO } else { BorderRadius::MAX },
+                ..default()
+            }
         };
         let bg = blip_colour(t, b);
-        let ring = if b.selected { Color::WHITE } else { Color::NONE };
+        let ring = if b.selected && !stock { Color::WHITE } else { Color::NONE };
         match ents.0.get(&b.id).and_then(|&e| nodes.get_mut(e).ok()) {
             Some((mut n, mut c, mut br)) => {
                 if *n != node {
@@ -634,7 +676,8 @@ pub fn refresh(
                 }
             }
             None => {
-                commands.spawn((RadarCamera(i), node, tf, BackgroundColor(Color::WHITE), Pickable::IGNORE, ChildOf(square)));
+                // Over the fog; under the black strips (`radar_layers`).
+                commands.spawn((RadarCamera(i), node, tf, BackgroundColor(Color::WHITE), ZIndex(5), Pickable::IGNORE, ChildOf(square)));
             }
         }
     }
@@ -745,6 +788,7 @@ impl Plugin for RadarPlugin {
             app.add_plugins(ThemePlugin);
         }
         app.add_plugins(super::radar_fog::RadarFogPlugin)
+            .add_plugins(super::radar_layers::RadarLayersPlugin)
             .init_resource::<RadarFeed>()
             .init_resource::<RadarState>()
             .init_resource::<BlipEntities>()
@@ -1247,4 +1291,82 @@ minimapDisplayArea = 16 19 320 320
             }
         }
     }
+
+    /// The stock look draws a dot as a filled square of its texels of the 128 grid (a share of the
+    /// square, so the same at any size) with no selection ring; the other look keeps its round
+    /// dots, its sizes in units and its ring.
+    #[test]
+    fn stock_dots_are_filled_squares_of_texels_with_no_ring_and_the_other_look_keeps_its_own() {
+        for stock in [true, false] {
+            let (mut log, db, flagship) = log();
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins).init_resource::<Assets<Image>>();
+            configure_sets(&mut app);
+            if stock {
+                app.insert_resource(UiProfile::Armada2);
+                app.insert_resource(stock_config());
+            }
+            app.add_plugins(RadarPlugin);
+            let map = RadarMap::of_bounds(Vec2::ZERO, Vec2::splat(2000.0));
+            app.world_mut().resource_mut::<RadarState>().map = Some(map);
+            app.world_mut().resource_mut::<RadarState>().map_fixed = true;
+            let mut feed = omniscient(feed_at(&mut log, &db, 0));
+            feed.selected = vec![flagship];
+            let list = blips(&feed, app.world().resource::<RadarState>(), &map);
+            app.world_mut().resource_mut::<RadarFeed>().clone_from(&feed);
+            app.update();
+            assert_eq!(count::<StockRadar>(&mut app), usize::from(stock));
+            let mut seen = Vec::new();
+            for (blip, node, ring) in app.world_mut().query::<(&RadarBlip, &Node, &BorderColor)>().iter(app.world()) {
+                let b = list.iter().find(|b| b.id == blip.0).unwrap();
+                seen.push(b.kind);
+                if stock {
+                    let side = Val::Percent(b.texels / 128.0 * 100.0);
+                    assert_eq!((node.width, node.height, node.border, node.border_radius), (side, side, UiRect::all(Val::Px(0.0)), BorderRadius::ZERO), "{b:?}");
+                    assert_eq!(*ring, BorderColor::all(Color::NONE), "no ring on a selected unit: {b:?}");
+                } else {
+                    assert_eq!((node.width, node.height), (Val::Px(b.size()), Val::Px(b.size())), "{b:?}");
+                    let want = if b.selected { Color::WHITE } else { Color::NONE };
+                    assert_eq!(*ring, BorderColor::all(want), "{b:?}");
+                }
+            }
+            assert_eq!(seen.len(), list.len());
+            // Ship 2 texels, station 3, a moon 1 (no `mapSize` in the authored definitions).
+            let texels = |k| list.iter().find(|b| b.kind == k).map(|b| b.texels);
+            assert_eq!((texels(Kind::Ship), texels(Kind::Station), texels(Kind::Body)), (Some(2.0), Some(3.0), Some(1.0)));
+        }
+    }
+
+    /// The stock draw order of the square's layers, by their stacking: the pictures and icons
+    /// under the dots, then fog, the camera's outline and the black strips.
+    #[test]
+    fn the_squares_layers_stack_in_the_stock_order() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<Assets<Image>>();
+        configure_sets(&mut app);
+        app.insert_resource(UiProfile::Armada2);
+        app.insert_resource(stock_config());
+        app.add_plugins(RadarPlugin);
+        let map = RadarMap::of_bounds(Vec2::ZERO, Vec2::new(2000.0, 1000.0));
+        {
+            let mut st = app.world_mut().resource_mut::<RadarState>();
+            st.map = Some(map);
+            st.map_fixed = true;
+            st.bounds = Some((Vec2::ZERO, Vec2::new(2000.0, 1000.0)));
+        }
+        app.world_mut().resource_mut::<RadarFeed>().camera = Some([Vec2::new(500.0, 200.0), Vec2::new(1500.0, 200.0), Vec2::new(1500.0, 800.0), Vec2::new(500.0, 800.0)]);
+        app.insert_resource(FogState { grid: FogGrid::new([0.0, 0.0], [2000.0, 2000.0]), updates: 1 });
+        app.update();
+        app.update();
+        let z = |app: &mut App, f: fn(&mut World) -> Option<i32>| f(app.world_mut());
+        let fog = z(&mut app, |w| w.query_filtered::<&ZIndex, With<RadarFog>>().iter(w).next().map(|z| z.0));
+        let camera = z(&mut app, |w| w.query_filtered::<&ZIndex, With<RadarCamera>>().iter(w).next().map(|z| z.0));
+        let strip = z(&mut app, |w| w.query_filtered::<&ZIndex, With<crate::ui::radar_layers::RadarStrip>>().iter(w).next().map(|z| z.0));
+        // Dots have the default index 0: pictures and icons (negative) < dots (0) < fog < camera < strips.
+        assert!(matches!((fog, camera, strip), (Some(f), Some(c), Some(s)) if 0 < f && f < c && c < s), "{fog:?} {camera:?} {strip:?}");
+        // A 2:1 map: the strips above and below the map are black nodes.
+        let strips = app.world_mut().query::<(&crate::ui::radar_layers::RadarStrip, &BackgroundColor)>().iter(app.world()).filter(|(_, c)| c.0 == Color::BLACK).count();
+        assert_eq!(strips, 4);
+    }
 }
+

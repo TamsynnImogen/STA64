@@ -181,11 +181,14 @@ fn paint_fog(
                 .spawn((
                     RadarFog,
                     fog_image(handle),
+                    // Over the dots, under the camera's outline: the stock order.
+                    ZIndex(1),
                     Node { position_type: PositionType::Absolute, left: Val::Px(0.0), top: Val::Px(0.0), width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
                     bevy::picking::Pickable::IGNORE,
                 ))
                 .id();
-            // First child: under every blip and the camera's outline.
+            // First child: under every blip and the camera's outline (the stacking index, not
+            // the child order, puts it over the dots).
             commands.entity(sq).insert_children(0, &[e]);
         }
     }

@@ -51,6 +51,8 @@ pub struct Rules {
     pub cfg: CfgRules,
     /// The render-only shot keys (not digested).
     pub shots: ShotCfg,
+    /// The render-only warp-suppression multipliers (not digested).
+    pub fields: FieldCfg,
     /// Armada I's header-level start (`cfgStarting*`), see [`LegacyStart`].
     legacy_start: LegacyStart,
 }
@@ -150,6 +152,38 @@ impl ShotCfg {
             }
         }
         out
+    }
+}
+
+/// The two `RTS_CFG.h` keys that size the warp-suppression fields the minimap draws: a planet's
+/// bounding radius and a black hole's, each times its multiplier (read from the executable,
+/// static; the values are read from data). Render only: not digested and not in
+/// [`TYPED_CFG_KEYS`] (D9, D10: peers that differ only in how the minimap looks play together).
+/// `None`: the header does not set the key, and no field is drawn for that class (the engine's
+/// own default for an absent key was not read; INTERIM).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FieldCfg {
+    /// `cfgPLANET_DEWARP_RADIUS_MULTIPLIER`.
+    pub planet_dewarp_radius_multiplier: Option<Fixed>,
+    /// `cfgBLACKHOLE_DEWARP_RADIUS_MULTIPLIER`.
+    pub black_hole_dewarp_radius_multiplier: Option<Fixed>,
+}
+
+impl FieldCfg {
+    pub const KEYS: [&'static str; 2] = ["cfgPLANET_DEWARP_RADIUS_MULTIPLIER", "cfgBLACKHOLE_DEWARP_RADIUS_MULTIPLIER"];
+
+    fn from_cfg(cfg: &CfgH, warnings: &mut Vec<Warning>) -> FieldCfg {
+        let mut read = |key: &str| -> Option<Fixed> {
+            cfg.raw(key)?;
+            match cfg.f32(key).filter(|v| v.is_finite() && (0.0..=1.0e4).contains(v)) {
+                Some(v) => Some(Fixed::from_f64(v as f64)),
+                None => {
+                    warnings.push(Warning::new("RTS_CFG.h", format!("{key} is not a non-negative number; treated as unset")));
+                    None
+                }
+            }
+        };
+        FieldCfg { planet_dewarp_radius_multiplier: read(Self::KEYS[0]), black_hole_dewarp_radius_multiplier: read(Self::KEYS[1]) }
     }
 }
 
@@ -665,6 +699,7 @@ impl Rules {
         rules.approach = ApproachRules::from_cfg(&cfg, &mut warnings);
         rules.cfg = CfgRules::from_cfg(&cfg, &mut warnings);
         rules.shots = ShotCfg::from_cfg(&cfg, &mut warnings);
+        rules.fields = FieldCfg::from_cfg(&cfg, &mut warnings);
         rules.transporter = TransporterRules::from_cfg(&cfg, &mut warnings);
         (rules, warnings)
     }
@@ -848,6 +883,11 @@ impl Rules {
         Ok((rules, warnings))
     }
 
+    /// The minimap's warp-suppression multipliers, as the header sets them (render only).
+    pub fn fields(&self) -> FieldCfg {
+        self.fields
+    }
+
     /// Armada I's header-level start, for a race that authors none.
     pub fn legacy_start(&self) -> LegacyStart {
         self.legacy_start
@@ -1022,6 +1062,40 @@ mod shot_cfg_tests {
         assert_ne!(set, ShotCfg::default());
         assert_eq!(Rules::default().digest_entries(), Rules { shots: set, ..Rules::default() }.digest_entries());
         assert!(ShotCfg::KEYS.iter().all(|k| !TYPED_CFG_KEYS.contains(k)));
+    }
+}
+
+#[cfg(test)]
+mod field_cfg_tests {
+    use super::*;
+
+    fn parse(text: &str) -> (FieldCfg, usize) {
+        let mut w = Vec::new();
+        let c = FieldCfg::from_cfg(&CfgH::parse(text), &mut w);
+        (c, w.len())
+    }
+
+    #[test]
+    fn absent_keys_are_unset_without_a_warning() {
+        assert_eq!(parse(""), (FieldCfg::default(), 0));
+    }
+
+    #[test]
+    fn both_multipliers_are_read_and_bad_values_are_unset() {
+        let (c, w) = parse("float cfgPLANET_DEWARP_RADIUS_MULTIPLIER = 4.5f;\nint cfgBLACKHOLE_DEWARP_RADIUS_MULTIPLIER = 100;\n");
+        assert_eq!((c.planet_dewarp_radius_multiplier, c.black_hole_dewarp_radius_multiplier, w), (Some(Fixed::from_f64(4.5)), Some(Fixed::from_int(100)), 0));
+        let (c, w) = parse("float cfgPLANET_DEWARP_RADIUS_MULTIPLIER = -2;\nint cfgBLACKHOLE_DEWARP_RADIUS_MULTIPLIER = x;\n");
+        assert_eq!((c, w), (FieldCfg::default(), 2));
+        let (rules, _) = Rules::from_header("int cfgPLANET_DEWARP_RADIUS_MULTIPLIER = 3;\n");
+        assert_eq!(rules.fields().planet_dewarp_radius_multiplier, Some(Fixed::from_int(3)));
+    }
+
+    #[test]
+    fn the_keys_stay_out_of_the_digest() {
+        let (set, _) = parse("int cfgPLANET_DEWARP_RADIUS_MULTIPLIER = 3;\n");
+        assert_ne!(set, FieldCfg::default());
+        assert_eq!(Rules::default().digest_entries(), Rules { fields: set, ..Rules::default() }.digest_entries());
+        assert!(FieldCfg::KEYS.iter().all(|k| !TYPED_CFG_KEYS.contains(k)));
     }
 }
 

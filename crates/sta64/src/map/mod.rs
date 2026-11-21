@@ -968,6 +968,7 @@ fn rebuild(
             if let Some(mut st) = w.get_resource_mut::<crate::ui::radar::RadarState>() {
                 st.map = Some(crate::ui::radar::RadarMap::of_bounds(rlo, rhi));
                 st.map_fixed = true;
+                st.bounds = Some((rlo, rhi));
             }
         });
         commands.insert_resource(crate::ui::hud::ghost::PlacementBounds(Some((lo, hi))));
@@ -980,6 +981,8 @@ fn rebuild(
     // what the renderer reads that the sim's database does not carry.
     let star_odf = map.starfield_odf.trim_end_matches(".odf").trim_end_matches(".ODF").to_owned();
     let db = Arc::new(catalogue.legacy.db(&vfs.0, map.objects.iter().map(|o| o.odf.as_str()).chain([star_odf.as_str()])));
+    // The nebulae and belts of the minimap's layers (the sim's units come from its view).
+    commands.insert_resource(crate::ui::radar_layers::RadarStatics::of_map(&map, &db, &content));
     let formats = device
         .map(|d| CompressedImageFormats::from_features(d.features()))
         .unwrap_or(CompressedImageFormats::BC);

@@ -63,7 +63,7 @@ pub use race::{
 };
 pub use repair_geometry::RepairAttachment;
 pub use resources::ResourceModel;
-pub use rules::{ApproachRules, AutonomyRules, CfgRules, CrewRules, LegacyStart, OfficerLimit, PathingRules, PopulationRules, Rules, ShotCfg, TransporterRules, TYPED_CFG_KEYS};
+pub use rules::{ApproachRules, AutonomyRules, CfgRules, CrewRules, FieldCfg, LegacyStart, OfficerLimit, PathingRules, PopulationRules, Rules, ShotCfg, TransporterRules, TYPED_CFG_KEYS};
 pub use digest::{ContentDigest, DigestEntry, EntryDiff};
 pub use profile::{resolve_features, DetectStep, Detection, Overrides, ROOTS_ASSET_VERSION, FEATURE_NAMES, ODF_KEY_PREFIX};
 pub use techtree::{Availability, BuildOption, CapacityList, Condition, Owned, Requirement, TechEntry, TechState, TechTree, TtSource, Unmet};
