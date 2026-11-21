@@ -154,9 +154,10 @@ impl StockLayout {
     ///
     /// Deliberate rule of STA64: pieces that abut in the sheet abut on screen, with no gap and no
     /// overlap, in both fits and at any window size and scale factor. At sizes where the sheet's units do
-    /// not map to whole pixels the original's own joins are not stable (grade: measured on frames of the
-    /// original at two sizes, and read from the executable, static), while its art is seamless at its
-    /// native sizes; at scale 1 this is identical to the original.
+    /// not map to whole pixels the original leaves one-pixel gaps between abutting tiles (grade: measured on
+    /// one native frame of the original at a fractional scale, and read from the executable, static), while
+    /// its art is seamless at scale 1 (measured on a native frame); at scale 1 this is identical to the
+    /// original.
     fn edge(&self, u: f32, horizontal: bool) -> f32 {
         if horizontal {
             self.hud.x + (u * self.scale_x + 0.5).floor()
@@ -835,7 +836,8 @@ mod tests {
             assert!(a.h > 0.0 || (r.h as f32 * l.scale) < 1.0, "{label} {prefix}: a piece vanished");
             let old = l.scaled(*r);
             assert!((a.x - (base.x + old.x)).abs() <= 1.0 && (a.y - (base.y + old.y)).abs() <= 1.0, "{label} {prefix}: moved by more than the rounding");
-            assert!((a.right() - (base.x + old.x + old.w)).abs() <= 2.0, "{label} {prefix}: moved by more than the rounding");
+            assert!((a.right() - (base.x + old.x + old.w)).abs() <= 1.0, "{label} {prefix}: right edge moved by more than the rounding");
+            assert!((a.bottom() - (base.y + old.y + old.h)).abs() <= 1.0, "{label} {prefix}: bottom edge moved by more than the rounding");
         }
         for (i, (ra, a)) in raw.iter().zip(&abs).enumerate() {
             for (rb, b) in raw.iter().zip(&abs).skip(i + 1) {
@@ -962,6 +964,6 @@ mod tests {
                 }
             }
         }
-        eprintln!("checked {checked} piece sets");
+        assert!(checked > 0, "an install root is set but no gui cfg piece set was checked: wrong path or no gui*.cfg");
     }
 }
