@@ -46,10 +46,11 @@ impl MatchSpeed {
     }
 
     pub fn label(self) -> &'static str {
+        // Stock sprite fonts need the ASCII multiplier suffix.
         match self {
-            Self::Slow => "0.5×",
-            Self::Normal => "1×",
-            Self::Fast => "2×",
+            Self::Slow => "0.5x",
+            Self::Normal => "1x",
+            Self::Fast => "2x",
         }
     }
 
@@ -262,7 +263,8 @@ mod tests {
     #[test]
     fn instant_action_speed_scales_wall_ticks_and_keeps_fixed_bench_steps() {
         let two_ticks = 2.0 / TICK_HZ as f64;
-        for (speed, expected) in [(MatchSpeed::Slow, 1), (MatchSpeed::Normal, 2), (MatchSpeed::Fast, 4)] {
+        for (speed, label, expected) in [(MatchSpeed::Slow, "0.5x", 1), (MatchSpeed::Normal, "1x", 2), (MatchSpeed::Fast, "2x", 4)] {
+            assert_eq!(speed.label(), label);
             let mut wall = AnimClock::default();
             wall.set_match_speed(speed);
             assert_eq!(wall.begin_frame(two_ticks), expected);
