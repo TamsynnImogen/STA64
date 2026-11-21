@@ -25,8 +25,15 @@ use bevy::prelude::*;
 use bevy::window::{CursorOptions, PrimaryWindow};
 use sta_assets::a2fmt::spr::{Animation, Auto, Field, Sprite, SpriteTable};
 
-use super::gui_sprites::{GuiImageSampling, GuiSprites, crop, page, read_table};
+use super::gui_sprites::{GuiImageSampling, GuiSprites, crop, page};
 use crate::viewer::Mounted;
+
+/// The sprite table the cursors are read from: cursor sprites are resolved against the whole sprite
+/// table rooted at `sprites.spr` and its includes (highest mod layer first), as every other sprite
+/// is, so the flipbooks a sprite names are found (read from data).
+pub(crate) fn load_table(vfs: &sta_vfs::Vfs) -> SpriteTable {
+    sta_assets::load_sprite_table(vfs)
+}
 
 /// The sprite name of the plain pointer.
 pub const DEFAULT: &str = "standard_cursor";
@@ -64,6 +71,35 @@ struct CursorSprites {
 
 #[derive(Component)]
 struct CursorNode;
+
+/// Is the camera being dragged? The drawn cursor is hidden for as long as it is (rule: grade read
+/// from the executable, static, for the original's own camera buttons; INTERIM: STA64 applies it
+/// to its own camera buttons, `OrbitButtons`, which are not the original's; with pan bound to the
+/// right button, as in the viewer, the cursor is hidden while a right-click order's button is held).
+/// While the window is not focused no drag is assumed. The engine does not release mouse buttons on
+/// a focus loss, so a button held at that moment can still read as pressed on refocus (when the
+/// release was lost); [`DragGuard`] then ignores it until it has been released or freshly pressed.
+pub(crate) fn camera_drag(buttons: &ButtonInput<MouseButton>, orbit: &crate::viewer::OrbitButtons, focused: bool, guard: &mut DragGuard) -> bool {
+    if !focused {
+        guard.stale = [true, true];
+        return false;
+    }
+    let mut drag = false;
+    for (i, b) in [Some(orbit.rotate), orbit.pan].into_iter().enumerate() {
+        let Some(b) = b else { continue };
+        if guard.stale[i] && (buttons.just_pressed(b) || !buttons.pressed(b)) {
+            guard.stale[i] = false;
+        }
+        drag |= buttons.pressed(b) && !guard.stale[i];
+    }
+    drag
+}
+
+/// Which drag buttons were held across a focus loss and have not been seen released since.
+#[derive(Default, Debug)]
+pub(crate) struct DragGuard {
+    stale: [bool; 2],
+}
 
 /// The frames of a cursor sprite in texture pixels, its hotspot, and the period. `anim` is the
 /// flipbook the sprite names, when the table has it: an `offset` animation generated `@auto=row`
@@ -122,7 +158,7 @@ fn resolve(name: &str, sprites: &mut CursorSprites, vfs: &sta_vfs::Vfs, images: 
         let table = sprites.table.as_ref()?;
         let sprite = table.sprite(name)?.clone();
         let anim = sprite.anims.first().and_then(|id| table.animation(id)).cloned();
-        let (handle, size) = page(&sprite, GuiImageSampling::Nearest, vfs, &mut sprites.cache, images, formats)?;
+        let (handle, size) = page(&sprite, GuiImageSampling::Linear, vfs, &mut sprites.cache, images, formats)?;
         let (frames, origin, period) = frames_of(&sprite, anim.as_ref(), size)?;
         Some(CursorArt { image: handle, frames, origin, period })
     })();
@@ -160,7 +196,11 @@ fn place(
     ui_scale: Option<Res<UiScale>>,
     race: Option<Res<crate::game::LocalRace>>,
     settings: Option<Res<crate::frontend::screens::Settings>>,
-    time: Res<Time>,
+    // INTERIM (not measured): the animation clock is real time, so it also runs while the game is paused.
+    mut guard: Local<DragGuard>,
+    time: Res<Time<Real>>,
+    buttons: Option<Res<ButtonInput<MouseButton>>>,
+    orbit: Option<Res<crate::viewer::OrbitButtons>>,
     mut sprites: ResMut<CursorSprites>,
     mut window: Query<(&Window, Option<&mut CursorOptions>), With<PrimaryWindow>>,
     mut nodes: Query<(Entity, &mut Node, &mut ImageNode, &mut Visibility), With<CursorNode>>,
@@ -169,13 +209,15 @@ fn place(
     if !sprites.loaded || mounted.as_ref().is_some_and(|m| m.is_changed()) {
         sprites.cache = GuiSprites::default();
         sprites.resolved.clear();
-        sprites.table = mounted.as_ref().map(|m| read_table(&m.0, "sprites/cursor.spr"));
+        sprites.table = mounted.as_ref().map(|m| load_table(&m.0));
         sprites.loaded = true;
     }
     let formats = device.as_ref().map(|d| CompressedImageFormats::from_features(d.features())).unwrap_or_else(CompressedImageFormats::empty);
     let pointer = window.single().ok().and_then(|(w, _)| w.cursor_position());
+    let focused = window.single().ok().is_none_or(|(w, _)| w.focused);
+    let dragging = buttons.as_deref().zip(orbit.as_deref()).is_some_and(|(b, o)| camera_drag(b, o, focused, &mut guard));
     let art = match (&mounted, pointer) {
-        (Some(m), Some(_)) => {
+        (Some(m), Some(_)) if !dragging => {
             let vfs = &m.0;
             let race = race.as_deref().map(|r| r.name.as_str()).filter(|n| !n.is_empty());
             candidates(wanted.0, race).iter().find_map(|name| resolve(name, &mut sprites, vfs, &mut images, formats))
@@ -183,7 +225,8 @@ fn place(
         _ => None,
     };
     if let Ok((_, Some(mut options))) = window.single_mut() {
-        let visible = art.is_none();
+        // Hidden too while the camera is dragged: no OS cursor either.
+        let visible = art.is_none() && !dragging;
         if options.visible != visible {
             options.visible = visible;
         }
@@ -272,6 +315,94 @@ mod tests {
         assert_eq!(period, 0.0);
     }
 
+    /// The three-file chain the engine reads: a root that includes the table declaring the
+    /// flipbooks, then the cursor table that only names them.
+    fn chain(files: &'static [(&'static str, &'static str)]) -> SpriteTable {
+        SpriteTable::load("sprites.spr", |name| files.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, d)| d.as_bytes().to_vec()))
+    }
+
+    const FILES: &[(&str, &str)] = &[
+        ("sprites.spr", "sprite_table\n@include tex_anim.spr\n@include cursor.spr\n"),
+        ("tex_anim.spr", "sprite_table\n@animation flip4\noffset 4 1.0 step\n@auto=row\n@keyframes\n"),
+        ("cursor.spr", "sprite_table\n@referenceWidth=128\n@referenceHeight=64\nspin tex_a 0 0 32 32 @anim=flip4 @cursor @origin=(3,5)\n"),
+    ];
+
+    #[test]
+    fn the_include_chain_yields_the_frames() {
+        let t = chain(FILES);
+        let s = t.sprite("spin").unwrap();
+        let (frames, _, period) = frames_of(s, s.anims.first().and_then(|i| t.animation(i)), UVec2::new(128, 64)).unwrap();
+        assert_eq!(frames.len(), 4);
+        assert_eq!(period, 1.0);
+    }
+
+    /// Only the cursor table mounted (a mod that ships just it): the flipbook is unknown, so one
+    /// still frame, and nothing panics.
+    #[test]
+    fn the_cursor_table_alone_falls_back_to_one_frame() {
+        let t = SpriteTable::load("cursor.spr", |name| FILES.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, d)| d.as_bytes().to_vec()));
+        let s = t.sprite("spin").unwrap();
+        assert!(s.anims.first().and_then(|i| t.animation(i)).is_none());
+        let (frames, _, period) = frames_of(s, None, UVec2::new(128, 64)).unwrap();
+        assert_eq!((frames.len(), period), (1, 0.0));
+        assert_eq!(frame_at(frames.len(), period, 123.4), 0);
+    }
+
+    /// Time is an argument, not read from a clock: a frozen time gives a fixed frame.
+    #[test]
+    fn the_frame_follows_the_given_time_and_loops() {
+        let t = chain(FILES);
+        let s = t.sprite("spin").unwrap();
+        let (frames, _, period) = frames_of(s, s.anims.first().and_then(|i| t.animation(i)), UVec2::new(128, 64)).unwrap();
+        let at = |secs: f32| frame_at(frames.len(), period, secs);
+        assert_eq!([at(0.0), at(0.3), at(0.6), at(0.9), at(1.0), at(2.3)], [0, 1, 2, 3, 0, 1]);
+    }
+
+    #[test]
+    fn the_camera_drag_hides_the_cursor() {
+        let orbit = crate::viewer::OrbitButtons { rotate: MouseButton::Middle, pan: None };
+        let mut g = DragGuard::default();
+        let mut b = ButtonInput::<MouseButton>::default();
+        assert!(!camera_drag(&b, &orbit, true, &mut g));
+        b.press(MouseButton::Right);
+        assert!(!camera_drag(&b, &orbit, true, &mut g), "a right click is an order, not a camera drag");
+        b.press(MouseButton::Middle);
+        assert!(camera_drag(&b, &orbit, true, &mut g));
+        b.release(MouseButton::Middle);
+        assert!(!camera_drag(&b, &orbit, true, &mut g));
+        let pan = crate::viewer::OrbitButtons { rotate: MouseButton::Left, pan: Some(MouseButton::Right) };
+        assert!(camera_drag(&b, &pan, true, &mut g));
+    }
+
+    /// A drag in progress when the window loses focus: no drag while unfocused, and on refocus a
+    /// button still reading as pressed (the release was lost) is ignored until released or freshly pressed.
+    #[test]
+    fn a_stale_press_does_not_hide_the_cursor_after_refocus() {
+        let orbit = crate::viewer::OrbitButtons { rotate: MouseButton::Middle, pan: None };
+        let mut g = DragGuard::default();
+        let mut b = ButtonInput::<MouseButton>::default();
+        b.press(MouseButton::Middle);
+        assert!(camera_drag(&b, &orbit, true, &mut g));
+        b.clear();
+        assert!(!camera_drag(&b, &orbit, false, &mut g), "unfocused");
+        // The frame after refocus: still held, never seen released.
+        assert!(!camera_drag(&b, &orbit, true, &mut g), "stale held button");
+        assert!(!camera_drag(&b, &orbit, true, &mut g), "and it stays ignored while held");
+        // Released, then pressed again: a fresh drag.
+        b.release(MouseButton::Middle);
+        assert!(!camera_drag(&b, &orbit, true, &mut g));
+        b.clear();
+        b.press(MouseButton::Middle);
+        assert!(camera_drag(&b, &orbit, true, &mut g), "a fresh press hides it");
+        // Refocus where the input was reset and the button is pressed anew in the same frame.
+        b.clear();
+        assert!(!camera_drag(&b, &orbit, false, &mut g));
+        b.release(MouseButton::Middle);
+        b.clear();
+        b.press(MouseButton::Middle);
+        assert!(camera_drag(&b, &orbit, true, &mut g), "just pressed after refocus counts");
+    }
+
     #[test]
     fn missing_animation_or_bad_rect_is_handled() {
         let t = table();
@@ -330,18 +461,32 @@ mod tests {
         let Ok(root) = std::env::var("STA64_TEST_INSTALL") else { return };
         let m = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), m.as_deref()).unwrap();
-        let table = read_table(&vfs, "sprites/cursor.spr");
-        for name in [DEFAULT, "c_attack", "c_mining", "c_rally", "c_wormin"] {
+        let table = load_table(&vfs);
+        let mut animated = 0;
+        for name in [DEFAULT, "c_move", "c_attack", "c_mining", "c_rally", "c_wormin"] {
             let sprite = table.sprite(name).unwrap_or_else(|| panic!("{name}: no such cursor sprite"));
             let (path, format) = sta_assets::find_texture(&vfs, &sprite.texture).unwrap_or_else(|| panic!("{name}: no texture {}", sprite.texture));
             let rgba = sta_assets::decode_rgba(&vfs, &path, format).unwrap_or_else(|e| panic!("{name}: {e:?}"));
             let size = UVec2::new(rgba.width, rgba.height);
             let anim = sprite.anims.first().and_then(|id| table.animation(id));
-            let (frames, origin, _) = frames_of(sprite, anim, size).unwrap_or_else(|| panic!("{name}: rectangle outside the texture"));
+            let (frames, origin, period) = frames_of(sprite, anim, size).unwrap_or_else(|| panic!("{name}: rectangle outside the texture"));
             let cell = frames[0].size();
             assert!(frames.iter().all(|f| (f.size() - cell).abs().max_element() < 1e-3), "{name}: frames differ in size");
             assert!(origin.x <= cell.x && origin.y <= cell.y, "{name}: hotspot {origin:?} outside the {cell:?} cell");
+            // The rule: a sprite that names an offset flipbook the table declares yields one frame per
+            // step of it, and a positive period. The expectation is the mounted data's own.
+            if let Some(a) = anim.filter(|a| a.field == Field::Offset && a.auto.is_some_and(|m| matches!(m, Auto::Row | Auto::Column | Auto::Square))) {
+                animated += 1;
+                assert!(frames.len() > 1, "{name}: names the flipbook {} but yields one frame", a.id);
+                assert!(frames.len() <= a.auto_offsets().len() && period > 0.0, "{name}: frames {} period {period}", frames.len());
+            } else {
+                assert_eq!(frames.len(), 1, "{name}: no flipbook, one frame");
+            }
         }
+        // The rule: a flipbook a cursor sprite names resolves against the whole table.
+        let pointer = table.sprite(DEFAULT).unwrap();
+        assert!(pointer.anims.first().is_none_or(|id| table.animation(id).is_some()), "the pointer names a flipbook the chain does not declare");
+        eprintln!("animated cursors among those asked for: {animated}");
         // UI-45: where the table has race variants, each playable race's `name` finds its own.
         let db_index = sta_content::OdfIndex::build(&vfs).0;
         let (races, _) = sta_content::Races::load(&vfs, &db_index);
