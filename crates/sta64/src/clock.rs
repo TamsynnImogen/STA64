@@ -205,7 +205,7 @@ pub fn advance_idle_clock(time: Res<Time<Real>>, mut clock: ResMut<AnimClock>) {
 }
 
 /// SplitMix64 finaliser: a cheap, well-mixed, portable hash of a `u64`.
-fn splitmix64(mut z: u64) -> u64 {
+pub(crate) fn splitmix64(mut z: u64) -> u64 {
     z = z.wrapping_add(0x9e37_79b9_7f4a_7c15);
     z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
