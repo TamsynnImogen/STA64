@@ -26,9 +26,10 @@
 //!   derived at fire time as distance / `shot_speed` (the sim hits on arrival) and
 //!   progress is linear in anim time; removed on the matching `Hit` or at arrival.
 //! - **Muzzle flash**: a flare at the shooter for every shot, for Refit's
-//!   `MuzzleTime` (0.5 s), standing in for its muzzle light. Under the Stock look only a phaser
-//!   class gets it (the original's one muzzle flare), and a point-defence shot, which has no stock
-//!   drawing yet and would show nothing, keeps it (INTERIM).
+//!   `MuzzleTime` (0.5 s), standing in for its muzzle light. Under the Stock look a shot with a stock
+//!   drawing takes none of this (its muzzle and impact flares are `stock_flares.rs`'s); only a point-defence
+//!   shot, which has no stock drawing yet and would show nothing, keeps the flash (INTERIM), and a phaser
+//!   class shot that falls back to this drawing (no `Sprite`, say) keeps its flash too.
 //! - **Stock shots** (`stock_shots.rs`): under the Stock look a class with a stock drawing is
 //!   spawned there instead, and nothing of the above is.
 //! - Point-defence shots only flash.
