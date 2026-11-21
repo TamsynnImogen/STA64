@@ -483,7 +483,7 @@ fn layer_tint(status: Option<&crate::ui::hud::status::StatusFeed>, w: WireLayer)
 }
 
 /// [`wireframe_layers`] for a unit whose layers follow its systems' state (`None`: plain art).
-fn wireframe_layers_of(commands: &mut Commands, root: Entity, r: R, model: &str, unit: Option<EntityId>, backdrop: Option<Entity>) {
+pub(super) fn wireframe_layers_of(commands: &mut Commands, root: Entity, r: R, model: &str, unit: Option<EntityId>, backdrop: Option<Entity>) {
     let stem = model_stem(model);
     if stem.is_empty() {
         return;

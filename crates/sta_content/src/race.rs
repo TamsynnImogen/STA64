@@ -4,6 +4,8 @@
 //! ODF (read from the installs, Armada II and Fleet Operations alike) holds:
 //!
 //! - `name`: the race key unit definitions carry (`unitedfederation`);
+//! - `displaykey` (or Armada I's `displayname`): the localized key or literal
+//!   caption shown in the race picker, separate from that race key;
 //! - `instantactionslot`: its nonnegative place in the skirmish setup, including
 //!   zero; absent or invalid slots do not make a modern race playable;
 //! - `interfaceconfiguration`: its GUI cfg (`gui_federation.cfg`), and its music:
@@ -422,7 +424,7 @@ impl Races {
                     races.push(RaceDef {
                         stem: s,
                         name,
-                        display_key: text("displaykey"),
+                        display_key: text("displaykey").or_else(|| if a1_menu { text("displayname") } else { None }),
                         slot,
                         interface: text("interfaceconfiguration"),
                         interface_sprites: text("interfacesprites"),
@@ -797,6 +799,26 @@ mod tests {
         assert_eq!(races.get("blank").unwrap().display_key, None);
         assert_eq!(races.get("absent").unwrap().display_key, None);
         assert_eq!(races.playable().iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["internal_fed", "internal_borg"]);
+    }
+
+    #[test]
+    fn a1_display_name_is_a_caption_fallback_without_changing_race_ids() {
+        let (races, warnings) = Races::load_with_policy(Profile::Fo4, true, &mut loader(&[
+            ("races", "race0=fed\nrace1=borg\nrace2=blank"),
+            ("fed", "name=federation\ndisplayName=\"Federation\"\ninterfaceConfiguration=gui_fed.cfg"),
+            ("borg", "name=borg\ndisplayName=\"Borg Collective\"\ndisplayKey=GUI_RD_BORG\ninterfaceConfiguration=gui_bor.cfg"),
+            ("blank", "name=blank\ndisplayName=\" \"\ninterfaceConfiguration=gui_blank.cfg"),
+        ]));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(races.playable().iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["federation", "borg", "blank"]);
+        assert_eq!(races.get_playable("federation").unwrap().display_key.as_deref(), Some("Federation"));
+        assert_eq!(races.get_playable("borg").unwrap().display_key.as_deref(), Some("GUI_RD_BORG"));
+        assert_eq!(races.get_playable("blank").unwrap().display_key, None);
+        let (modern, _) = Races::load_with_profile(Profile::Fo4, &mut loader(&[
+            ("races", "race0=fed"),
+            ("fed", "name=federation\ndisplayName=\"Federation\"\ninstantActionSlot=0"),
+        ]));
+        assert_eq!(modern.get_playable("federation").unwrap().display_key, None);
     }
 
     #[test]

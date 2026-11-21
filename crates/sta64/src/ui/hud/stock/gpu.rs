@@ -942,8 +942,9 @@ fn installed_group_names_render_on_gpu() {
 /// UI-19: the Armada I stock HUD (`UiProfile::Armada1`) on the install's own content: the four
 /// races at 4:3, 16:9 and 21:9, Centred and Stretched, in windowless GPU frames, plus a slot click
 /// that must queue an order. The sim is the install's real starting state (a headless start).
-/// Set `STA64_GPU_TESTS=1 STA64_TEST_A1_INSTALL=<Armada I root>`; `STA64_HUD_CAPTURE_DIR` keeps
-/// the frames locally (they show game art: never commit them).
+/// For an A1Compat mount, set `STA64_TEST_A1_INSTALL` to the Roots install and
+/// `STA64_TEST_A1_MOD` to its mod folder. `STA64_GPU_TESTS=1` opts in. Save
+/// local frames with `STA64_HUD_CAPTURE_DIR`.
 #[test]
 fn installed_armada1_stock_hud_renders_on_gpu() {
     if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
@@ -954,6 +955,7 @@ fn installed_armada1_stock_hud_renders_on_gpu() {
         eprintln!("SKIP: set STA64_TEST_A1_INSTALL=<Armada I root>");
         return;
     };
+    let compat_mod = std::env::var("STA64_TEST_A1_MOD").ok();
     for fit in super::layout::HudFit::ALL {
     for size in sizes(&[UVec2::new(1024, 768), UVec2::new(1920, 1080), UVec2::new(2560, 1080)]) {
     for (cfg, spr, label) in [
@@ -962,12 +964,24 @@ fn installed_armada1_stock_hud_renders_on_gpu() {
         ("gui_rom.cfg", "gui_romulan.spr", "a1-rom"),
         ("gui_bor.cfg", "gui_borg.spr", "a1-bor"),
     ] {
+        if compat_mod.is_some() && cfg != "gui_fed.cfg" {
+            continue;
+        }
         let label = &format!("{label}-{}x{}-{}", size.x, size.y, fit.key());
-        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), None).expect("installed A1 VFS");
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), compat_mod.as_deref()).expect("installed A1 VFS");
+        if compat_mod.is_some() {
+            assert!(sta_content::profile::a1_compat(&vfs), "the mod must require A1Compat");
+            assert_eq!(
+                crate::ui::profile::resolve_profile(Some(&vfs), Default::default(), &Default::default()),
+                UiProfile::Armada1,
+            );
+        }
         let layout = crate::game::gui_layout(&vfs, cfg).unwrap_or_else(|| panic!("installed {cfg} missing"));
         let stock = StockLayout::for_aspect_fit(&layout, size.x as f32 / size.y as f32, fit);
         assert_eq!(stock.canvas, Vec2::new(640.0, 480.0), "{label}: one 640 x 480 sheet");
         let hud_feed = feed(&vfs, GameOptions::default(), 0);
+        let team = Color::srgb(0.25, 0.5, 1.0);
+        let palette = crate::viewer::TeamColours::load(&vfs).with_local_colour(hud_feed.player, team, &[hud_feed.player]);
         let mut app = App::new();
         app.add_plugins(
             DefaultPlugins
@@ -981,6 +995,7 @@ fn installed_armada1_stock_hud_renders_on_gpu() {
         app.insert_resource(ClearColor(Color::BLACK))
             .insert_resource(UiProfile::Armada1)
             .insert_resource(UiProfile::Armada1.theme())
+            .insert_resource(palette)
             .insert_resource(Mounted(vfs))
             .insert_resource(GuiSkin { table: Some(spr.into()) })
             .insert_resource(HudConfig { gui: Some(layout), aspect: size.x as f32 / size.y as f32, fit, fit_scale: false, log: false })
@@ -1016,11 +1031,26 @@ fn installed_armada1_stock_hud_renders_on_gpu() {
             eprintln!("SKIP {label}: hardware adapter unavailable");
             return;
         }
-        // The slot map came from the install's game_cfg.h and the grid is built from it.
+        // The slot map came from the install's header or its A1Compat defaults.
         let slots = app.world().resource::<super::StockState>().slots.clone().expect("slot map loaded");
         assert!(!slots.is_empty(), "{label}: game_cfg.h gave no slots");
         let cells = app.world_mut().query::<&super::super::panels::GridCell>().iter(app.world()).count();
         assert!(cells > 0, "{label}: no control buttons");
+        if compat_mod.is_some() {
+            use super::a1::info::LiveTint;
+            let resolved_buttons = app.world_mut()
+                .query::<(&super::super::panels::GridCell, &ImageNode)>()
+                .iter(app.world())
+                .count();
+            assert!(resolved_buttons > 0, "{label}: command sprites did not resolve");
+            let resolved_badge = app.world_mut()
+                .query::<(&LiveTint, &ImageNode)>()
+                .iter(app.world())
+                .filter(|(tint, image)| matches!(tint, LiveTint::Race(_)) && image.color == team)
+                .count();
+            assert!(resolved_badge > 0, "{label}: team tint did not reach badge art");
+            eprintln!("{label}: {resolved_buttons} resolved command sprites, {resolved_badge} tinted badge sprites");
+        }
         // A click on a Stop slot (or the first ready order slot) queues an order.
         let slot_button = app
             .world_mut()

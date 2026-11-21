@@ -3,8 +3,9 @@
 //! What is generic (the cfg reader, `StockLayout`, the radar, the resource strip, the sprite
 //! tables) is reused from the Armada II stock HUD. What is Armada I's own lives here:
 //! - [`control`]: the control panel, a fixed grid of twelve slots (`controlButton1..12`) whose
-//!   commands the install's `game_cfg.h` places (`BUTTON_LOCATION_*`, ADR 0004 D9, D11), with the
-//!   Orders page behind the Orders button, and the build page.
+//!   commands the install's `game_cfg.h` places (`BUTTON_LOCATION_*`, ADR 0004 D9, D11). On an
+//!   A1Compat mount, absent keys use the stock Armada I slots. The grid includes the Orders and
+//!   build pages.
 //! - [`costs`]: the `needs:` line of the build and research tooltips and the named refusal (UI-42).
 //! - [`action`]: the cinematic window (UI-53): the COMM and MENU buttons above the action camera's
 //!   picture.

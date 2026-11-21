@@ -497,8 +497,13 @@ pub(super) fn refresh(
     }
     let a1 = a1::is_a1(profile.as_deref());
     if a1 && state.slots.is_none() && let Some(m) = mounted.as_ref() {
-        // UI-19: `game_cfg.h` as the mod chain inherits it (ADR 0004 D9, D11).
-        state.slots = Some(match ButtonSlots::load(&m.0) {
+        // The inherited A2/FO header of an A1Compat mod can omit Armada I's keys.
+        let loaded = if sta_content::profile::a1_compat(&m.0) {
+            ButtonSlots::load_a1_compat(&m.0)
+        } else {
+            ButtonSlots::load(&m.0)
+        };
+        state.slots = Some(match loaded {
             Ok((slots, warnings)) => {
                 for w in &warnings {
                     warn!("hud: {}: {}", w.file, w.message);
@@ -761,6 +766,7 @@ pub(super) fn navigate(mut clicks: MessageReader<ButtonClicked>, nav: Query<&Sto
 
 pub(super) use info::update as update_values;
 pub(super) use info::update_hull_tints;
+pub(super) use a1::info::update_tints as update_a1_tints;
 
 #[cfg(test)]
 mod gpu;
