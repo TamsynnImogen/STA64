@@ -52,6 +52,15 @@ pub fn is_software_adapter(kind: impl std::fmt::Debug, name: &str) -> bool {
         || ["warp", "llvmpipe", "swiftshader", "lavapipe", "microsoft basic render"].iter().any(|s| n.contains(s))
 }
 
+/// The one lock every GPU test of this crate takes while it draws: they run in parallel by default, and a
+/// frame captured after a fixed number of updates is load-sensitive. A test that panicked while holding it
+/// does not poison the others.
+#[cfg(test)]
+pub fn gpu_serial() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Frames held at tick 0 before anything is captured, so the first draw is
 /// not racing asset and pipeline setup.
 const WARMUP: u32 = 5;

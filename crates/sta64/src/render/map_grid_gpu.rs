@@ -19,7 +19,6 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::window::ExitCondition;
 use std::sync::{Arc, Mutex};
 
-static SERIAL: Mutex<()> = Mutex::new(());
 
 const SIZE: u32 = 512;
 /// The row the vertical lines are read on: above the cube and clear of the horizontal lines.
@@ -152,7 +151,7 @@ fn the_grid_is_one_dim_additive_line_under_the_cube_and_the_fog_on_gpu() {
         eprintln!("SKIP: set STA64_GPU_TESTS=1");
         return;
     }
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let _serial = crate::bench::frames::gpu_serial();
     // Stock look, MSAA off.
     let Some(stock) = frame("stock-msaa-off", Setup { tonemapping: Tonemapping::None, msaa: Msaa::Off, layers: both_layers() }) else { return };
     let lines = marks(&stock, LINE_ROW);

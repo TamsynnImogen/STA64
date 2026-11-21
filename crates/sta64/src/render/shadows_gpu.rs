@@ -121,6 +121,7 @@ fn a_ship_inside_a_nebula_darkens_the_gas_behind_it() {
         eprintln!("SKIP: set STA64_GPU_TESTS=1 to run the GPU shadow test");
         return;
     }
+    let _serial = crate::bench::frames::gpu_serial();
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -230,6 +231,7 @@ fn a_hull_in_a_ships_shadow_is_darker_and_does_not_shadow_itself() {
         eprintln!("SKIP: set STA64_GPU_TESTS=1 to run the GPU shadow test");
         return;
     }
+    let _serial = crate::bench::frames::gpu_serial();
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins

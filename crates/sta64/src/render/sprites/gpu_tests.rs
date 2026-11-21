@@ -24,7 +24,6 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::window::ExitCondition;
 use std::sync::{Arc, Mutex};
 
-static SERIAL: Mutex<()> = Mutex::new(());
 
 fn shoot(app: &mut App, target: &Handle<Image>) -> Vec<u8> {
     let out = Arc::new(Mutex::new(None::<Image>));
@@ -246,7 +245,7 @@ fn nodes_are_drawn_byte_equal_to_the_reference_path_on_gpu_from_three_cameras() 
         eprintln!("SKIP: set STA64_GPU_TESTS=1");
         return;
     }
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let _serial = crate::bench::frames::gpu_serial();
     let _ = TABLE;
     let lit = |f: &Vec<u8>| f.chunks(4).filter(|p| p[0] > 8 || p[1] > 8 || p[2] > 8).count();
     for camera in [Camera::Stock, Camera::Tonemapped4x, Camera::HdrBloom] {
@@ -274,7 +273,7 @@ fn a_path_that_writes_one_frame_late_is_not_byte_equal_to_the_reference_on_gpu()
         eprintln!("SKIP: set STA64_GPU_TESTS=1");
         return;
     }
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let _serial = crate::bench::frames::gpu_serial();
     let Some(old) = series(Path::Reference, Camera::Stock) else { return };
     let Some(late) = series(Path::Late, Camera::Stock) else { return };
     let differing = old.iter().zip(&late).filter(|(a, b)| a != b).count();
