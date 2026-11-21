@@ -409,6 +409,11 @@ impl Setup {
     fn new(rules: ShotCfg) -> Setup {
         Setup { db: content(rules), shields: false, target_def: "t_target", target_z: 600, target_x: 0, target_until: None, shooter_until: None, events: Vec::new() }
     }
+    /// A beam fired at tick `at` at a place (the point the target unit stands at), not at a unit.
+    fn fire_at_point(mut self, at: u64, weapon: &'static str, hardpoint: u8) -> Self {
+        self.events.push((at, weapon, hardpoint, 0));
+        self
+    }
     /// A shot fired at tick `at`: weapon name, hardpoint, target unit.
     fn fire(mut self, at: u64, weapon: &'static str, hardpoint: u8) -> Self {
         self.events.push((at, weapon, hardpoint, 2));
@@ -419,7 +424,7 @@ impl Setup {
         let mut ev = String::new();
         for (at, w, hp, target) in &self.events {
             let k = self.db.key(w).unwrap().0;
-            ev += &format!("{{ at: {at}, event: {{ Fired: {{ shooter: 1, weapon: {k}, hardpoint: {hp}, target: {{ Entity: {target} }} }} }} }},");
+            ev += &format!("{{ at: {at}, event: {{ Fired: {{ shooter: 1, weapon: {k}, hardpoint: {hp}, target: {} }} }} }},", if *target == 0 { "{ Point: { x: 0, y: 0, z: 600 } }".to_owned() } else { format!("{{ Entity: {target} }}") });
         }
         let text = format!(
             "{{ units: [
@@ -932,9 +937,18 @@ fn the_impact_flare_appears_on_hull_hits_only() {
 
 #[test]
 fn a_beam_at_a_point_and_the_other_classes_raise_no_impact_flare() {
-    let setup = Setup::new(ShotCfg::default()).fire(4, "w_pulse", 1).fire(4, "w_torp", 2).fire(4, "w_art", 4).fire(4, "w_tractor", 3);
+    let setup = Setup::new(ShotCfg::default()).fire(4, "w_pulse", 1).fire(4, "w_torp", 2).fire(4, "w_art", 4).fire(4, "w_tractor", 3).fire_at_point(4, "w_phaser", 0);
     let mut app = setup.app(Some(RenderProfile::Stock));
-    assert!(seen(&mut app, 90, FlareKind::Impact).is_empty());
+    // The phaser at a place is drawn (a stock beam), muzzle flare and all, but has no object to land on.
+    let mut beam = false;
+    let mut impacts = Vec::new();
+    for _ in 0..90 {
+        app.update();
+        beam |= shots(&mut app).iter().any(|s| s.path == ShotPath::Ribbon);
+        impacts.extend(of_kind(&flares(&mut app), FlareKind::Impact));
+    }
+    assert!(beam, "the beam at a point was not fired");
+    assert!(impacts.is_empty());
 }
 
 #[test]
@@ -1208,12 +1222,15 @@ fn gpu_a_shot_adds_to_the_frame_and_the_texture_alpha_does_not_darken_it() {
         eprintln!("SKIP: set STA64_GPU_TESTS=1 to draw a stock shot");
         return;
     }
+    let _serial = crate::bench::frames::gpu_serial();
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
             .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
             .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
             .set(ImagePlugin::default_linear())
+            // The global logger is set once per process; the tests that read shader errors from it need it for themselves.
+            .disable::<bevy::log::LogPlugin>()
             .disable::<bevy::winit::WinitPlugin>(),
     );
     if let Some(info) = app.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>()
@@ -1354,12 +1371,15 @@ fn gpu_the_atlas_is_drawn_in_its_cell_the_right_way_round_and_in_frame_order() {
         eprintln!("SKIP: set STA64_GPU_TESTS=1 to draw the atlas test");
         return;
     }
+    let _serial = crate::bench::frames::gpu_serial();
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
             .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
             .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
             .set(ImagePlugin::default_linear())
+            // The global logger is set once per process; the tests that read shader errors from it need it for themselves.
+            .disable::<bevy::log::LogPlugin>()
             .disable::<bevy::winit::WinitPlugin>(),
     );
     if let Some(info) = app.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>() {
@@ -1371,21 +1391,22 @@ fn gpu_the_atlas_is_drawn_in_its_cell_the_right_way_round_and_in_frame_order() {
     }
     app.add_plugins(StockShotsMaterialPlugin).insert_resource(ClearColor(Color::BLACK));
 
-    // The atlas: four 32 x 32 cells in a row. Cell k is one flat colour, its top left 8 x 8 texels are white.
+    // The atlas: a 2 x 2 grid of 32 x 32 cells, frame k at column k % 2, row k / 2 (frames 2 and 3 are in the second
+    // row). Cell k is one flat colour, its top left 8 x 8 texels are white.
     let frame_colour = [[255u8, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0]];
     let mut data = Vec::new();
-    for y in 0..32 {
-        for x in 0..128 {
-            let c = if x % 32 < 8 && y < 8 { [255, 255, 255] } else { frame_colour[x / 32] };
+    for y in 0..64 {
+        for x in 0..64 {
+            let c = if x % 32 < 8 && y % 32 < 8 { [255, 255, 255] } else { frame_colour[x / 32 + 2 * (y / 32)] };
             data.extend_from_slice(&[c[0], c[1], c[2], 255]);
         }
     }
-    let mut atlas = Image::new(Extent3d { width: 128, height: 32, depth_or_array_layers: 1 }, TextureDimension::D2, data, TextureFormat::Rgba8Unorm, RenderAssetUsages::RENDER_WORLD);
+    let mut atlas = Image::new(Extent3d { width: 64, height: 64, depth_or_array_layers: 1 }, TextureDimension::D2, data, TextureFormat::Rgba8Unorm, RenderAssetUsages::RENDER_WORLD);
     atlas.sampler = ImageSampler::nearest();
     let texture = app.world_mut().resource_mut::<Assets<Image>>().add(atlas);
 
-    // Its sprite table and content, resolved the way the game resolves them: one sprite, four frames a second.
-    let table = SpriteTable::parse(b"sprite_table\n@referenceWidth=128\n@referenceHeight=32\n@tmaterial=additive\natlas tex_atlas 0 0 32 32 @anim=flip4\n@animation flip4\noffset 4 1.0 step\n@auto=row\n@keyframes\n");
+    // Its sprite table and content, resolved the way the game resolves them: one sprite, four frames in a second, row by row.
+    let table = SpriteTable::parse(b"sprite_table\n@referenceWidth=64\n@referenceHeight=64\n@tmaterial=additive\natlas tex_atlas 0 0 32 32 @anim=flip4\n@animation flip4\noffset 4 1.0 step\n@auto=square\n@keyframes\n");
     let db = ContentBuilder::default().weapon(weapon("w_atlas", "phaser", WeaponKind::Beam, ShotLook { life_span: Some(1.0), ..look("atlas") })).build().unwrap();
     let sprites = ShotSprites::build(&table, &db);
     let sprite = sprites.get("atlas").expect("the authored sprite resolves").clone();

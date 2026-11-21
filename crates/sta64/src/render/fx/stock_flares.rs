@@ -47,8 +47,8 @@ pub const MAX_PER_OBJECT: usize = 4;
 pub const MAX_TOTAL: usize = 200;
 /// The longest a muzzle flare lasts, seconds (read from the executable, static).
 pub const MUZZLE_LIFE_CAP: f32 = 10.0;
-/// The sprite of a beam's impact flare: a constant, no data key names it (read from the executable,
-/// static).
+/// The sprite-table name STA64 looks up for a beam's impact flare. No data key names it; the original uses
+/// this fixed name (read from the executable, static). A mod's sprite table may define it.
 pub const IMPACT_SPRITE: &str = "explosion1";
 /// The impact flare's half size in `Radius` (read from the executable, static; measured).
 pub const IMPACT_SIZE_FACTOR: f32 = 2.0;
