@@ -345,7 +345,17 @@ pub(super) fn collect_hits(
     let alpha = clock.alpha();
     fractions.0.retain(|r| r.3 + FRACTION_KEEP > tick);
     let mut used: BTreeSet<Entity> = BTreeSet::new();
-    for SimMsg(ev) in msgs.read() {
+    let hits: Vec<&SimEvent> = msgs.read().map(|m| &m.0).filter(|e| matches!(e, SimEvent::Hit { .. })).collect();
+    // What every hit of this batch (one sim tick when the game runs at its speed) took from each pool: in the original
+    // none of the beams has landed yet, so the level before is the pool plus ALL of it, not only the beam's own.
+    // INTERIM with #1068; a frame that runs several ticks adds back the earlier ticks' hits too.
+    let mut taken: std::collections::BTreeMap<(EntityId, u8), f32> = std::collections::BTreeMap::new();
+    for ev in &hits {
+        if let SimEvent::Hit { target, facing, shield, .. } = ev {
+            *taken.entry((*target, (*facing).min(3))).or_default() += shield.to_f32().max(0.0);
+        }
+    }
+    for ev in hits {
         let SimEvent::Hit { target, by, weapon, facing, shield, .. } = ev else { continue };
         let absorbed = shield.to_f32();
         if !ctx.shield_hits_stock() || absorbed <= 0.0 {
@@ -363,7 +373,7 @@ pub(super) fn collect_hits(
         let [now, max] = unit.shields[usize::from(*facing).min(3)].map(|v| v.to_f32());
         if ctx.stock_path(def) == Some(ShotPath::Ribbon) {
             // Made when the beam reaches its target (`stock_shots.rs`); its level is what this hit left plus what it took.
-            fractions.0.push((*by, *weapon, *target, tick, beam_fraction_before(now, absorbed, max)));
+            fractions.0.push((*by, *weapon, *target, tick, beam_fraction_before(now, taken[&(*target, (*facing).min(3))], max)));
             continue;
         }
         // The side the shot came from: the reverse of a stock-drawn shot's flight, else toward the shooter (INTERIM).
@@ -505,15 +515,27 @@ pub(super) fn animate_caps(clock: Res<AnimClock>, tables: Option<Res<SpriteTable
     }
 }
 
-/// Load the cap's model and texture from the mounted files, once, when the first cap is wanted.
+/// Whether the model load was tried for the mounted files.
+#[derive(Resource, Default)]
+pub struct CapLoadState {
+    pub tried: bool,
+}
+
+/// The mounted game or mod changed: the cap of the old files goes and the load may be tried again, a failed one too.
+pub(super) fn reset_on_remount(mut cmds: Commands, mut state: ResMut<CapLoadState>) {
+    state.tried = false;
+    cmds.remove_resource::<ShieldCapAssets>();
+}
+
+/// Load the cap's model and texture from the mounted files, once per mount, when the first cap is wanted.
 pub(super) fn load_assets(
     mut cmds: Commands,
     vfs: Res<crate::viewer::Mounted>,
     mut loader: crate::render::textures::LoaderParams,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut tried: Local<bool>,
+    mut state: ResMut<CapLoadState>,
 ) {
-    if std::mem::replace(&mut *tried, true) {
+    if std::mem::replace(&mut state.tried, true) {
         return;
     }
     let Some((_, model)) = super::mining_beam::load_named_model(&vfs.0, DEFAULT_MODEL, "shield hit model") else {
@@ -537,7 +559,9 @@ impl Plugin for StockShieldHitsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ProfileEffects>();
         app.world_mut().resource_mut::<ProfileEffects>().register_stock(Effect::ShieldHits);
-        app.init_resource::<ShieldCapQueue>().init_resource::<BeamFractions>();
+        app.init_resource::<ShieldCapQueue>().init_resource::<BeamFractions>().init_resource::<CapLoadState>();
+        // A new mount drops the cap of the old files; `.chain()` below runs the reload after it.
+        app.add_systems(Update, reset_on_remount.run_if(resource_exists_and_changed::<crate::viewer::Mounted>).before(load_assets).in_set(GameSet::Interpolate));
         app.add_systems(
             Update,
             (

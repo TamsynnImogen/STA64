@@ -75,7 +75,7 @@ use sta_sim::command::Target;
 use sta_sim::{ContentKey, EntityId, SimEvent, TICK_HZ, Tick};
 
 use super::stock_flares::{self, Anchor, Flare, FlareKind, FlareSpec, NodeParticles};
-use super::stock_shield_hits::{self, CapOrigin, CapRequest, ShieldCapQueue};
+use super::stock_shield_hits::{self, BeamFractions, CapOrigin, CapRequest, ShieldCapQueue};
 use super::weapons::{point, shifted, shot_seed};
 use crate::app::GameSet;
 use crate::clock::AnimClock;
@@ -394,6 +394,8 @@ pub struct StockShot {
     to: Vec3,
     last_body: Option<Body>,
     last_end: Vec3,
+    /// Where the beam would end on the shield ellipsoid whatever the view shows (the shield cap's pole follows it).
+    shield_end: Vec3,
     /// The target was already gone from the view when the shot was fired (the shot killed it).
     pinned: bool,
     /// The muzzle flare this shot raises on its first frame (a beam of a class with one).
@@ -413,7 +415,7 @@ impl StockShot {
 
     /// Where a beam ends now (its last end while the target is live).
     pub(super) fn beam_end_now(&self) -> Vec3 {
-        self.last_end
+        self.shield_end
     }
 }
 
@@ -581,6 +583,7 @@ impl StockShots<'_, '_> {
             to,
             last_body: pinned.then(|| Body::point(to)),
             last_end: to,
+            shield_end: to,
             pinned,
             muzzle_flare,
             impact_flare,
@@ -602,6 +605,7 @@ pub(super) fn update_shots(
     ctx: StockShots,
     mut store: ResMut<NodeParticles>,
     mut caps: ResMut<ShieldCapQueue>,
+    fractions: Res<BeamFractions>,
     mut q: Query<(Entity, &mut StockShot)>,
 ) {
     let alpha = clock.alpha();
@@ -677,6 +681,9 @@ pub(super) fn update_shots(
             };
             if !lost {
                 s.last_end = end;
+                if let Some(b) = s.last_body.as_ref() {
+                    s.shield_end = beam_end(start, &Body { shields_up: true, ..b.clone() }, false);
+                }
             }
             // The beam first reaches its target after the grow, once: a hull hit raises the impact flare, any
             // other hit (shields up) the stock shield cap (`stock_shield_hits`), its pole at the beam's end.
@@ -684,7 +691,12 @@ pub(super) fn update_shots(
                 s.arrived = true;
                 let spec = s.impact_flare.take();
                 if let (Target::Entity(id), Some(body)) = (s.target, s.last_body.as_ref()) {
-                    if stock_flares::hull_hit(body, s.ignore_shield) {
+                    // The beam's own `Hit` says whether the shield absorbed it. The sim applies a beam's damage on the fire
+                    // tick, so a beam that emptied the shield finds it down at arrival; in the original its damage lands at the
+                    // end of its life and the shield is still up: an absorbed beam makes a cap, not the impact flare (INTERIM,
+                    // until #1068). No record (no `Hit` delivered): the view decides, as before.
+                    let absorbed = !body.planet && !s.ignore_shield && ctx.shield_hits_stock() && fractions.before(s.shooter, s.weapon, id, s.fired).is_some();
+                    if !absorbed && stock_flares::hull_hit(body, s.ignore_shield) {
                         if let Some(spec) = spec {
                             let flare = Flare {
                                 kind: FlareKind::Impact,
@@ -706,7 +718,7 @@ pub(super) fn update_shots(
                             target: id,
                             weapon: s.weapon,
                             shooter: s.shooter,
-                            dir: stock_shield_hits::dir_toward(rot, axes, end - body.centre),
+                            dir: stock_shield_hits::dir_toward(rot, axes, s.shield_end - body.centre),
                             born: now_ticks,
                             origin: CapOrigin::Beam { fired: s.fired },
                             fraction: None,

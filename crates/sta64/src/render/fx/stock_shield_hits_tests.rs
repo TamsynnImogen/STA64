@@ -249,7 +249,7 @@ fn the_cap_is_drawn_from_the_finest_level_of_detail_only_in_render_space_with_it
 // In a world
 // ---------------------------------------------------------------------------------------------
 
-const TABLE: &str = "sprite_table\n@referenceWidth=128\n@referenceHeight=128\n@tmaterial=additive\nbeamspr tex_beam 0 0 32 32\ntorpspr tex_torp 0 32 32 32\n";
+const TABLE: &str = "sprite_table\n@referenceWidth=128\n@referenceHeight=128\n@tmaterial=additive\nbeamspr tex_beam 0 0 32 32\ntorpspr tex_torp 0 32 32 32\nexplosion1 tex_impact 0 64 32 32\n";
 
 fn look(sprite: &str) -> ShotLook {
     ShotLook { sprite: Some(sprite.into()), radius: Some(4.0), ..default() }
@@ -562,6 +562,78 @@ fn no_cap_for_ignore_shield_a_planet_shields_down_or_a_hit_the_shield_did_not_ta
         let seen = run(&mut app, 70);
         assert!(seen.is_empty(), "{what}: a cap was made");
     }
+}
+
+fn impact_flares(app: &mut App) -> usize {
+    app.world_mut().query::<&crate::render::fx::stock_flares::Flare>().iter(app.world()).filter(|f| f.kind == crate::render::fx::stock_flares::FlareKind::Impact).count()
+}
+
+/// Runs `scene` and gives the most caps and the most impact flares seen at once, and the caps' fractions.
+fn caps_and_flares(scene: &Scene) -> (usize, usize, Vec<f32>) {
+    let mut app = scene.app(Some(RenderProfile::Stock));
+    let (mut c, mut f, mut fr) = (0, 0, Vec::new());
+    for _ in 0..60 {
+        app.update();
+        let now = caps(&mut app);
+        c = c.max(now.len());
+        if now.len() > fr.len() {
+            fr = now.iter().map(|x| x.fraction).collect();
+        }
+        f = f.max(impact_flares(&mut app));
+    }
+    (c, f, fr)
+}
+
+#[test]
+fn a_beam_the_shield_absorbed_makes_a_cap_even_if_it_emptied_the_shield_and_one_it_did_not_the_flare() {
+    // The beam emptied the pool (the view shows 0 of 100 after its damage, 20 taken): a cap at the level before (0.2), no flare.
+    let mut empties = Scene::new(1).fire(4, "w_phaser").hit(4, "w_phaser", 20, 0);
+    empties.pool = [0, 100];
+    let (c, f, fr) = caps_and_flares(&empties);
+    assert_eq!((c, f), (1, 0), "an absorbed beam: a cap and no impact flare");
+    assert_eq!(fr, vec![0.2]);
+    // The shield did not take it (shields were already down): the impact flare, no cap.
+    let mut down = Scene::new(1).fire(4, "w_phaser").hit(4, "w_phaser", 0, 30);
+    down.pool = [0, 100];
+    assert_eq!(caps_and_flares(&down).0, 0);
+    assert_eq!(caps_and_flares(&down).1, 1);
+    // Shields up and absorbing, not emptied: a cap, no flare, as before.
+    let up = Scene::new(1).fire(4, "w_phaser").hit(4, "w_phaser", 20, 0);
+    let (c, f, _) = caps_and_flares(&up);
+    assert_eq!((c, f), (1, 0));
+}
+
+#[test]
+fn beams_on_one_tick_and_pool_all_see_the_level_before_all_of_that_ticks_damage() {
+    // Two beams in one tick took 20 and 10 from a pool that shows 30 of 100 afterwards: both were fired at a pool of 60.
+    let scene = Scene::new(1).fire(4, "w_phaser").fire(4, "w_phaser").hit(4, "w_phaser", 20, 0).hit(4, "w_phaser", 10, 0);
+    let (c, _, fr) = caps_and_flares(&scene);
+    assert_eq!(c, 2);
+    assert!(fr.iter().all(|f| (f - 0.6).abs() < 1e-6), "{fr:?}");
+}
+
+#[test]
+fn the_cap_model_is_dropped_and_loaded_again_when_the_mounted_files_change_and_a_failed_load_is_retried() {
+    use crate::render::textures::TextureCache;
+    let mut app = App::new();
+    app.add_plugins(MinimalPlugins)
+        .insert_resource(crate::viewer::Mounted(sta_vfs::Vfs::default()))
+        .init_resource::<TextureCache>()
+        .init_resource::<Assets<Mesh>>()
+        .init_resource::<Assets<Image>>()
+        .init_resource::<CapLoadState>();
+    app.add_systems(Update, reset_on_remount.run_if(resource_exists_and_changed::<crate::viewer::Mounted>));
+    app.update();
+    let assets = ShieldCapAssets { mesh: default(), texture: default(), flipbook: None, r_db: 4.0 };
+    app.insert_resource(assets);
+    app.world_mut().resource_mut::<CapLoadState>().tried = true;
+    app.update();
+    assert!(app.world().get_resource::<ShieldCapAssets>().is_some() && app.world().resource::<CapLoadState>().tried, "nothing changed: kept");
+    // Another game or mod is mounted: the old cap goes and the load may be tried again.
+    app.world_mut().resource_mut::<crate::viewer::Mounted>().0 = sta_vfs::Vfs::default();
+    app.update();
+    assert!(app.world().get_resource::<ShieldCapAssets>().is_none());
+    assert!(!app.world().resource::<CapLoadState>().tried, "a failed load is tried again after a change");
 }
 
 /// A hit with shield and hull both taking damage, in a world under `profile`: the caps and the Refit shells it makes.
