@@ -12,9 +12,9 @@
 //! Pings and last-known enemies need seam data the views do not carry yet (see
 //! the notes on [`RadarFeed`]).
 //!
-//! - Colours: the sim has no per-team map colour, so a blip is coloured by the
-//!   player's relation to its owner, Refit's fallback: own `good`, ally
-//!   `accent2`, enemy `bad`, neutral `warn`.
+//! - Colours: player-owned blips use the loaded team palette (and a map's mark
+//!   colour where supplied). Without one, Refit's relation colours remain the
+//!   fallback: own `good`, ally `accent2`, enemy `bad`, neutral `warn`.
 //! - Filters: ships and stations each cycle all / allies / enemies / neutral
 //!   (allies include the player's own). Click a dot to pick a state; click the
 //!   name to go to the next, as stock.
@@ -172,7 +172,7 @@ impl RadarMap {
 /// bench in frame runs, and by tests.
 ///
 /// Not carried by the views yet, so not drawn: fog and shroud masks (needs
-/// the scan grids, SIM-12), pings, last-known enemies, per-team map colours.
+/// the scan grids, SIM-12), pings, last-known enemies.
 #[derive(Resource, Clone)]
 pub struct RadarFeed {
     pub view: Arc<WorldView>,
@@ -235,6 +235,7 @@ impl RadarState {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Blip {
     pub id: EntityId,
+    pub owner: PlayerId,
     pub kind: Kind,
     pub standing: Standing,
     pub at: Vec2,
@@ -314,6 +315,7 @@ pub fn blips(feed: &RadarFeed, state: &RadarState, map: &RadarMap, stock: bool) 
             };
             filter.passes(st).then(|| Blip {
                 id: u.id,
+                owner: u.owner,
                 kind,
                 standing: st,
                 at: map.to_square(Vec2::new(u.pos.x.to_f32(), u.pos.z.to_f32())),
@@ -580,6 +582,8 @@ pub fn refresh(
     mut commands: Commands,
     theme: Res<Theme>,
     feed: Res<RadarFeed>,
+    teams: Option<Res<crate::viewer::TeamColours>>,
+    map_teams: Option<Res<crate::viewer::MapTeamColours>>,
     mut state: ResMut<RadarState>,
     mut ents: ResMut<BlipEntities>,
     square: Query<(Entity, &Node, Has<StockRadar>), (With<RadarSquare>, Without<RadarCamera>)>,
@@ -632,8 +636,11 @@ pub fn refresh(
                 ..default()
             }
         };
-        let bg = blip_colour(t, b);
-        let ring = if b.selected && !stock { Color::WHITE } else { Color::NONE };
+        let mark = b.owner.is_player()
+            .then(|| crate::viewer::owner_mark_colour(teams.as_deref(), map_teams.as_deref(), b.owner))
+            .flatten();
+        let bg = mark.unwrap_or_else(|| blip_colour(t, b));
+        let ring = if b.selected && !stock { mark.unwrap_or(Color::WHITE) } else { Color::NONE };
         match ents.0.get(&b.id).and_then(|&e| nodes.get_mut(e).ok()) {
             Some((mut n, mut c, mut br)) => {
                 if *n != node {
@@ -1360,6 +1367,56 @@ minimapDisplayArea = 16 19 320 320
             let texels = |k| list.iter().find(|b| b.kind == k).map(|b| b.texels);
             assert_eq!((texels(Kind::Ship), texels(Kind::Station), texels(Kind::Body)), (Some(2.0), Some(3.0), Some(1.0)));
         }
+    }
+
+    #[test]
+    fn player_blips_and_selected_ring_follow_mark_palette_changes() {
+        use crate::viewer::{MapTeamColours, TeamColours};
+
+        let (mut log, db, flagship) = log();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<Assets<Image>>();
+        configure_sets(&mut app);
+        app.add_plugins(RadarPlugin);
+        app.world_mut().resource_mut::<RadarState>().map = Some(RadarMap::of_bounds(Vec2::ZERO, Vec2::splat(2000.0)));
+        app.world_mut().resource_mut::<RadarState>().map_fixed = true;
+        let mut feed = omniscient(feed_at(&mut log, &db, 0));
+        feed.selected = vec![flagship];
+        let enemy = feed.view.units.iter().find(|u| u.owner == PlayerId(2)).unwrap().id;
+        app.world_mut().resource_mut::<RadarFeed>().clone_from(&feed);
+
+        let red = Color::srgb(1.0, 0.0, 0.0);
+        let blue = Color::srgb(0.0, 0.0, 1.0);
+        let colours = TeamColours(vec![
+            ("empty".into(), Color::WHITE),
+            ("white".into(), Color::WHITE),
+            ("blue".into(), blue),
+            ("red".into(), red),
+        ]);
+        let colour_of = |app: &mut App, id| {
+            app.world_mut().query::<(&RadarBlip, &BackgroundColor, &BorderColor)>()
+                .iter(app.world())
+                .find(|(blip, _, _)| blip.0 == id)
+                .map(|(_, bg, ring)| (bg.0, *ring))
+                .unwrap()
+        };
+        app.update();
+        let fallback = colour_of(&mut app, flagship);
+        assert_eq!(fallback.1, BorderColor::all(Color::WHITE));
+        app.insert_resource(colours);
+        app.update();
+        // PlayerId(1) and PlayerId(2) use entries 2 and 3, irrespective of relation.
+        assert_eq!(colour_of(&mut app, flagship), (blue, BorderColor::all(blue)));
+        assert_eq!(colour_of(&mut app, enemy).0, red);
+
+        // A map's mark entry supersedes its hull/seat colour, even on existing nodes.
+        app.insert_resource(MapTeamColours(vec![[0, 0], [0, 1], [0, 2], [0, 3]]));
+        app.update();
+        assert_eq!(colour_of(&mut app, flagship), (red, BorderColor::all(red)));
+        assert_eq!(colour_of(&mut app, enemy).0, blue);
+        app.world_mut().remove_resource::<TeamColours>();
+        app.update();
+        assert_eq!(colour_of(&mut app, flagship), fallback);
     }
 
     /// The stock draw order of the square's layers, by their stacking: the pictures and icons
