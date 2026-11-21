@@ -5,6 +5,7 @@ pub(in crate::ui::hud) mod commands;
 mod info;
 pub(super) mod infobar;
 pub mod layout;
+mod window;
 
 use super::layout::R;
 use super::{
@@ -514,6 +515,8 @@ pub(super) fn refresh(
     }
     if !a1 && replaced {
         buttons::spawn(&mut commands, body, &layout, &theme, more.0);
+        // #1073: the cinematic window, when the mounted layout declares one (nothing otherwise).
+        window::spawn_a2(&mut commands, body, &layout, action.as_deref());
     }
     let now = model::info(&feed);
     let a1_shape = a1.then(|| a1::info::extra(&feed).map(|e| e.shape(&state.info_style))).flatten();
@@ -579,6 +582,10 @@ pub(super) fn refresh(
                 .into_iter()
                 .filter_map(|key| layout.at(origin, key)),
         );
+    }
+    if !a1 {
+        // The window's art takes the pointer like the other panels (none when the layout declares it off).
+        state.solid.extend(layout.panel("cinematic"));
     }
     if a1 {
         if rebuild {
