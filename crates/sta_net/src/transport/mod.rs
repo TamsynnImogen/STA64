@@ -22,5 +22,5 @@ pub mod wire;
 pub use client::{
     CloseReason, ClientOptions, ConnectError, NetControl, NetTransport,
 };
-pub use relay::{CloseCause, CloseLogHandle, CloseRecord, Misuse, Relay, RelayConfig, CLOSE_LOG};
-pub use wire::{RefuseReason, RoomCode};
+pub use relay::{CloseCause, CloseLogHandle, CloseRecord, LogSink, Misuse, Relay, RelayConfig, CLOSE_LOG};
+pub use wire::{ReadStats, RefuseReason, RoomCode};

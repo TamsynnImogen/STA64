@@ -493,8 +493,22 @@ pub struct EnvelopeReader {
     partial_since: Option<Instant>,
     /// Reads that ended in a timeout, and reads that failed with the
     /// Windows pending-I/O error that counts as one (diagnostics only).
-    timeouts: u64,
-    spurious: u64,
+    stats: ReadStats,
+}
+
+/// Read timeouts one [`EnvelopeReader`] has seen (diagnostics only).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ReadStats {
+    /// Reads that timed out.
+    pub timeouts: u64,
+    /// Reads that failed with the pending-I/O error counted as a timeout.
+    pub spurious: u64,
+    /// Of `timeouts`, those that happened while part of an envelope was
+    /// held (a partial length prefix, or a prefix and an incomplete body):
+    /// the window in which a lost byte would put the reader out of step.
+    pub partial_timeouts: u64,
+    /// The same for `spurious`.
+    pub partial_spurious: u64,
 }
 
 const CHUNK: usize = 4096;
@@ -514,10 +528,9 @@ impl EnvelopeReader {
         self.buf.len()
     }
 
-    /// Reads that timed out so far, and reads that failed with the spurious
-    /// pending-I/O error (997 on Windows) so far.
-    pub fn read_timeouts(&self) -> (u64, u64) {
-        (self.timeouts, self.spurious)
+    /// The read timeouts seen so far.
+    pub fn read_stats(&self) -> ReadStats {
+        self.stats
     }
 
     fn take_complete(&mut self) -> Result<Option<Vec<u8>>, ReadError> {
@@ -572,7 +585,8 @@ impl EnvelopeReader {
                 }
             }
             Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
-                self.timeouts += 1;
+                self.stats.timeouts += 1;
+                self.stats.partial_timeouts += u64::from(!self.buf.is_empty());
                 Ok(Polled::Idle)
             }
             Err(e) if e.kind() == ErrorKind::Interrupted => Ok(Polled::Idle),
@@ -585,7 +599,8 @@ impl EnvelopeReader {
             // this way at once, every time, from spinning its thread until
             // the caller's wall-clock deadline.
             Err(e) if spurious_pending(&e) => {
-                self.spurious += 1;
+                self.stats.spurious += 1;
+                self.stats.partial_spurious += u64::from(!self.buf.is_empty());
                 std::thread::sleep(std::time::Duration::from_millis(5));
                 Ok(Polled::Idle)
             }

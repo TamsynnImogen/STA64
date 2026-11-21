@@ -22,8 +22,8 @@ use sta_net::proto::{
 };
 use sta_net::transport::wire::{ClientMsg, RoomCode, ServerMsg, MAX_ENVELOPE_BYTES};
 use sta_net::transport::{
-    ClientOptions, CloseCause, CloseLogHandle, CloseReason, CloseRecord, ConnectError, Misuse,
-    NetControl, NetTransport, RefuseReason, Relay, RelayConfig, CLOSE_LOG,
+    ClientOptions, CloseCause, CloseLogHandle, CloseReason, CloseRecord, ConnectError, LogSink,
+    Misuse, NetControl, NetTransport, RefuseReason, Relay, RelayConfig, CLOSE_LOG,
 };
 use sta_sim::command::{Command, CommandKind, Edit, Order};
 use sta_sim::setup::GameOptions;
@@ -46,7 +46,16 @@ fn wait_until(limit: Duration, what: &str, mut cond: impl FnMut() -> bool) {
 }
 
 fn relay_with(cfg: RelayConfig) -> Relay {
-    Relay::bind("127.0.0.1:0", cfg).expect("bind an ephemeral port")
+    Relay::bind_with_log("127.0.0.1:0", cfg, Arc::new(|_| {})).expect("bind an ephemeral port")
+}
+
+/// A relay whose log lines are collected.
+fn relay_logging(cfg: RelayConfig) -> (Relay, Arc<Mutex<Vec<String>>>) {
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let l = lines.clone();
+    let sink: LogSink = Arc::new(move |line| l.lock().unwrap().push(line.to_owned()));
+    let r = Relay::bind_with_log("127.0.0.1:0", cfg, sink).expect("bind an ephemeral port");
+    (r, lines)
 }
 
 fn relay() -> Relay {
@@ -1543,8 +1552,12 @@ fn a_client_that_closes_is_recorded_clean_or_with_its_half_envelope() {
     drop(s);
     let c = close_where(&r, "the close with unparsed bytes", |c| c.unparsed == 2);
     assert_eq!(c.cause, CloseCause::ClientClosed);
-    assert!(c.read_timeouts >= 1, "a connection idle for 150 ms saw no read timeout");
-    assert_eq!(c.spurious_pending, 0);
+    assert!(c.reads.timeouts >= 1, "a connection idle for 150 ms saw no read timeout");
+    // The two bytes were held across them: the hazard window is counted.
+    assert!(c.reads.partial_timeouts >= 1, "{c}");
+    assert!(c.reads.partial_timeouts <= c.reads.timeouts);
+    assert_eq!(c.reads.spurious, 0);
+    assert_eq!(c.reads.partial_spurious, 0);
 }
 
 #[test]
@@ -1585,7 +1598,18 @@ fn leaving_a_kick_and_a_refusal_are_recorded() {
     let c = close_where(&r, "a kick", |c| c.cause == CloseCause::Kicked);
     assert_eq!(c.seat, Some(1));
     drop(b);
-    // A join to a room that does not exist.
+}
+
+#[test]
+fn refused_and_dropped_before_a_seat_are_counted_and_summarised_not_logged_each() {
+    let (mut r, lines) = relay_logging(RelayConfig {
+        max_connections_per_ip: 1,
+        // No periodic summary mid-test, however slow the runner: the one
+        // line comes with the shutdown.
+        log_summary_every: Duration::from_secs(3600),
+        ..RelayConfig::default()
+    });
+    // A join to a room that does not exist is refused.
     let mut s = raw(r.local_addr());
     let m = ClientMsg::Join {
         code: RoomCode::random().unwrap(),
@@ -1593,15 +1617,76 @@ fn leaving_a_kick_and_a_refusal_are_recorded() {
         password: vec![],
     };
     s.write_all(&m.encode().unwrap()).unwrap();
-    close_where(&r, "a refusal", |c| c.cause == CloseCause::Refused(RefuseReason::NoRoom));
+    wait_until(SHORT, "the refusal", || r.unseated_pending() == 1);
+    wait_until(SHORT, "the slot to be free", || r.connections() == 0);
+    // One admitted connection now holds the only slot.
+    let _keep = raw(r.local_addr());
+    wait_until(SHORT, "the admission", || r.connections() == 1);
+    // A thousand attempts over the limit, in batches the accept backlog can
+    // take (a full backlog only delays a connection, but by whole seconds).
+    for batch in 1..=20u64 {
+        for _ in 0..50 {
+            drop(TcpStream::connect(r.local_addr()).unwrap());
+        }
+        wait_until(SHORT, "the batch to be counted", || r.unseated_pending() >= 1 + batch * 50);
+    }
+    assert_eq!(r.unseated_pending(), 1001);
+    assert!(lines.lock().unwrap().is_empty(), "{:?}", lines.lock().unwrap());
+    // Not kept in the bounded list either: they would push out real records.
+    assert!(r.closes().is_empty());
+    r.shutdown();
+    let lines = lines.lock().unwrap();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(
+        lines[0].contains("1001 connections")
+            && lines[0].contains("limit: 1000")
+            && lines[0].contains("join refused: 1"),
+        "{}",
+        lines[0]
+    );
+}
+
+#[test]
+fn a_blocked_log_does_not_hold_a_departure_or_a_connection_count() {
+    let release = Arc::new(AtomicBool::new(false));
+    let entered = Arc::new(AtomicBool::new(false));
+    let (rel, ent) = (release.clone(), entered.clone());
+    let sink: LogSink = Arc::new(move |_| {
+        ent.store(true, Ordering::SeqCst);
+        let end = Instant::now() + SHORT;
+        while !rel.load(Ordering::SeqCst) && Instant::now() < end {
+            thread::sleep(Duration::from_millis(2));
+        }
+    });
+    let r = Relay::bind_with_log("127.0.0.1:0", RelayConfig::default(), sink).unwrap();
+    let (mut host, code) = open_room(r.local_addr());
+    let hc = host.control();
+    let mut s = raw_join(r.local_addr(), code);
+    // A seated connection that fails to decode is logged (the sink blocks).
+    s.write_all(&envelope(&[3, 0xFF])).unwrap();
+    wait_until(SHORT, "the log write to start", || entered.load(Ordering::SeqCst));
+    // While it is blocked the seat is already gone and released.
+    wait_until(SHORT, "the departure", || {
+        let _ = host.poll();
+        hc.take_departures().contains(&PlayerId(1))
+    });
+    wait_until(SHORT, "the connection count", || r.connections() == 1);
+    assert!(r.closes().is_empty(), "recorded before the log write returned");
+    release.store(true, Ordering::SeqCst);
+    close_where(&r, "the record", |c| matches!(c.cause, CloseCause::DecodeFailed(_)));
 }
 
 #[test]
 fn the_deadlines_are_recorded() {
-    let r = relay_with(fast_cfg());
+    // The idle deadline is long: it is checked before the half-sent
+    // envelope's, and must not be able to win on a starved runner.
+    let r = relay_with(RelayConfig {
+        idle_timeout: Duration::from_secs(30),
+        ..fast_cfg()
+    });
     let _silent = raw(r.local_addr());
     close_where(&r, "the handshake deadline", |c| c.cause == CloseCause::HandshakeTimeout);
-    let (_host, code) = open_room_with(r.local_addr(), &quick_opts());
+    let (_host, code) = open_room(r.local_addr());
     let mut s = raw_join(r.local_addr(), code);
     s.write_all(&[9, 0]).unwrap();
     let c = close_where(&r, "the half-sent envelope deadline", |c| {
@@ -1651,4 +1736,24 @@ fn the_close_records_can_be_read_while_connections_come_and_go() {
     wait_until(SHORT, "the log to fill", || r.closes().len() == CLOSE_LOG);
     wait_until(SHORT, "the connections to be released", || r.connections() == 0);
     assert_eq!(r.closes().len(), CLOSE_LOG);
+}
+
+#[test]
+fn the_refusal_summary_is_logged_periodically_while_the_count_is_nonzero() {
+    let (r, lines) = relay_logging(RelayConfig {
+        max_connections: 0,
+        log_summary_every: Duration::from_millis(200),
+        ..RelayConfig::default()
+    });
+    for _ in 0..5 {
+        drop(TcpStream::connect(r.local_addr()).unwrap());
+    }
+    wait_until(SHORT, "a summary line", || !lines.lock().unwrap().is_empty());
+    let first = lines.lock().unwrap()[0].clone();
+    assert!(first.contains("connections refused or dropped before a seat"), "{first}");
+    assert!(first.contains("limit:"), "{first}");
+    // Nothing more while nothing new is refused.
+    thread::sleep(Duration::from_millis(500));
+    let n = lines.lock().unwrap().len();
+    assert!(n <= 5, "{n} lines for 5 attempts");
 }

@@ -20,14 +20,15 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::io::{ErrorKind, Write};
 use std::net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use super::wire::{
-    ClientMsg, EnvelopeReader, Polled, ReadError, RefuseReason, RoomCode, ServerMsg, TokenBucket,
+    ClientMsg, EnvelopeReader, Polled, ReadError, ReadStats, RefuseReason, RoomCode, ServerMsg,
+    TokenBucket,
 };
 use crate::proto::MAX_SEATS;
 
@@ -74,6 +75,9 @@ pub struct RelayConfig {
     /// How long a connection over its byte rate is throttled (not read) before
     /// it is cut off.
     pub throttle_limit: Duration,
+    /// At most one summary line of the connections refused or dropped before
+    /// a seat per this interval (they are not logged one by one).
+    pub log_summary_every: Duration,
 }
 
 impl Default for RelayConfig {
@@ -95,8 +99,20 @@ impl Default for RelayConfig {
             outgoing_queue: 1024,
             outgoing_bytes: 1024 * 1024,
             throttle_limit: Duration::from_secs(5),
+            log_summary_every: Duration::from_secs(10),
         }
     }
+}
+
+/// Where the relay writes its log lines (one line per call, no newline).
+/// [`Relay::bind`] writes to stderr; tests silence or capture it.
+pub type LogSink = Arc<dyn Fn(&str) + Send + Sync>;
+
+fn stderr_sink() -> LogSink {
+    // Not `eprintln!`, which panics when stderr cannot be written.
+    Arc::new(|line| {
+        let _ = writeln!(std::io::stderr(), "{line}");
+    })
 }
 
 /// How many close records the relay keeps; the oldest is dropped first.
@@ -237,13 +253,14 @@ pub struct CloseRecord {
     pub lived: Duration,
     /// Time since the relay started when it ended.
     pub at: Duration,
-    /// Bytes read but not yet parsed into an envelope when it ended.
+    /// Bytes read but not yet parsed into an envelope when it ended. For a
+    /// bad length this includes the bad 4-byte prefix; for a decode failure
+    /// it excludes the envelope that failed (already taken from the buffer).
     pub unparsed: usize,
-    /// Reads that timed out over the connection's life.
-    pub read_timeouts: u64,
-    /// Reads that failed with the pending-I/O error (997) that counts as a
-    /// timeout, on Windows.
-    pub spurious_pending: u64,
+    /// Read timeouts over the connection's life, the reads that failed with
+    /// the pending-I/O error (997, Windows) that counts as one, and those of
+    /// each that happened while part of an envelope was held.
+    pub reads: ReadStats,
 }
 
 impl fmt::Display for CloseRecord {
@@ -254,13 +271,15 @@ impl fmt::Display for CloseRecord {
         }
         write!(
             f,
-            " closed at {} ms after {} ms: {}; {} bytes unparsed, {} read timeouts, {} pending-I/O errors",
+            " closed at {} ms after {} ms: {}; {} bytes unparsed, {} read timeouts ({} with a partial envelope held), {} pending-I/O errors ({} with a partial envelope held)",
             self.at.as_millis(),
             self.lived.as_millis(),
             self.cause,
             self.unparsed,
-            self.read_timeouts,
-            self.spurious_pending
+            self.reads.timeouts,
+            self.reads.partial_timeouts,
+            self.reads.spurious,
+            self.reads.partial_spurious
         )
     }
 }
@@ -352,16 +371,82 @@ struct Shared {
     stop: AtomicBool,
     started: Instant,
     closes: Mutex<CloseLog>,
+    sink: LogSink,
+    /// Connections ended before a seat that are only counted (one summary
+    /// line per interval, not a line each: their rate is the peer's).
+    unseated: Unseated,
+}
+
+#[derive(Default)]
+struct Unseated {
+    limit: AtomicU64,
+    join_refused: AtomicU64,
+    rate_limited: AtomicU64,
+    other: AtomicU64,
 }
 
 impl Shared {
-    /// Keeps and logs a close record. Never panics, whatever the locks'
-    /// state or stderr's.
+    /// Keeps and logs a close record, after the departure was processed and
+    /// with no relay lock held: a slow log sink must never delay a seat's
+    /// departure marker or release its connection count. Never panics,
+    /// whatever the locks' state.
+    ///
+    /// A connection refused at the limit or at join (rate limiting included)
+    /// is counted and summarised, and not kept in the bounded list, where a
+    /// flood of them would push out the records that matter. Other
+    /// connections that end before a seat are kept but also only counted for
+    /// the log.
     fn record(&self, r: CloseRecord) {
-        if !r.cause.is_routine() || (r.cause == CloseCause::ClientClosed && r.unparsed > 0) {
-            let _ = writeln!(std::io::stderr(), "relay: {r}");
+        let u = &self.unseated;
+        match r.cause {
+            CloseCause::NotAdmitted => {
+                u.limit.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            CloseCause::Refused(RefuseReason::RateLimited) => {
+                u.rate_limited.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            CloseCause::Refused(_) => {
+                u.join_refused.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            _ => {}
+        }
+        let loud = !r.cause.is_routine() || (r.cause == CloseCause::ClientClosed && r.unparsed > 0);
+        if loud && r.seat.is_none() {
+            u.other.fetch_add(1, Ordering::Relaxed);
+        } else if loud {
+            (self.sink)(&format!("relay: {r}"));
         }
         self.closes.lock().unwrap_or_else(PoisonError::into_inner).push(r);
+    }
+
+    /// Logs and resets the counts of connections refused or dropped before a
+    /// seat, if there are any.
+    fn summarise(&self, window: Duration) {
+        let u = &self.unseated;
+        let (a, b, c, d) = (
+            u.limit.swap(0, Ordering::Relaxed),
+            u.join_refused.swap(0, Ordering::Relaxed),
+            u.rate_limited.swap(0, Ordering::Relaxed),
+            u.other.swap(0, Ordering::Relaxed),
+        );
+        if a + b + c + d > 0 {
+            (self.sink)(&format!(
+                "relay: {} connections refused or dropped before a seat within the last {} s (limit: {a}, join refused: {b}, rate-limited: {c}, other: {d})",
+                a + b + c + d,
+                window.as_secs().max(1)
+            ));
+        }
+    }
+
+    fn unseated_pending(&self) -> u64 {
+        let u = &self.unseated;
+        [&u.limit, &u.join_refused, &u.rate_limited, &u.other]
+            .iter()
+            .map(|c| c.load(Ordering::Relaxed))
+            .sum()
     }
 }
 
@@ -380,6 +465,15 @@ impl Relay {
     /// Listens on `addr` (port 0 for an ephemeral one) and serves until
     /// [`Relay::shutdown`] or drop.
     pub fn bind(addr: impl ToSocketAddrs, cfg: RelayConfig) -> std::io::Result<Relay> {
+        Relay::bind_with_log(addr, cfg, stderr_sink())
+    }
+
+    /// [`Relay::bind`] with the relay's log lines going to `sink`.
+    pub fn bind_with_log(
+        addr: impl ToSocketAddrs,
+        cfg: RelayConfig,
+        sink: LogSink,
+    ) -> std::io::Result<Relay> {
         let listener = TcpListener::bind(addr)?;
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
@@ -389,6 +483,8 @@ impl Relay {
             stop: AtomicBool::new(false),
             started: Instant::now(),
             closes: Mutex::new(CloseLog::default()),
+            sink,
+            unseated: Unseated::default(),
         });
         let s = shared.clone();
         let accept = thread::Builder::new()
@@ -420,6 +516,12 @@ impl Relay {
         self.close_log().snapshot()
     }
 
+    /// Connections refused at the limit or at join, or dropped before a seat,
+    /// not yet in a logged summary.
+    pub fn unseated_pending(&self) -> u64 {
+        self.shared.unseated_pending()
+    }
+
     /// A handle on the close records that outlives borrowing the relay.
     pub fn close_log(&self) -> CloseLogHandle {
         CloseLogHandle(self.shared.clone())
@@ -431,6 +533,7 @@ impl Relay {
         self.shared.stop.store(true, Ordering::SeqCst);
         if let Some(h) = self.accept.take() {
             let _ = h.join();
+            self.shared.summarise(self.shared.cfg.log_summary_every);
         }
     }
 }
@@ -459,10 +562,19 @@ fn prune(st: &mut State, cfg: &RelayConfig) {
 
 fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>) {
     let mut last_prune = Instant::now();
+    let mut last_summary = Instant::now();
     while !shared.stop.load(Ordering::SeqCst) {
         if last_prune.elapsed() > Duration::from_secs(5) {
             last_prune = Instant::now();
             prune(&mut lock(&shared.state), &shared.cfg);
+        }
+        if last_summary.elapsed() >= shared.cfg.log_summary_every && shared.unseated_pending() > 0 {
+            last_summary = Instant::now();
+            // On a thread of its own: a blocked log must not stop accepts.
+            let s = shared.clone();
+            let _ = thread::Builder::new()
+                .name("relay-log".into())
+                .spawn(move || s.summarise(s.cfg.log_summary_every));
         }
         match listener.accept() {
             Ok((stream, peer)) => {
@@ -472,7 +584,18 @@ fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>) {
                     .spawn(move || serve(stream, peer.ip(), &s));
                 // No thread to spare: the stream was moved into the closure
                 // and is dropped with it.
-                drop(spawned);
+                if spawned.is_err() {
+                    shared.record(CloseRecord {
+                        conn: 0,
+                        ip: limit_key(peer.ip()),
+                        seat: None,
+                        cause: CloseCause::SetupFailed,
+                        lived: Duration::ZERO,
+                        at: shared.started.elapsed(),
+                        unparsed: 0,
+                        reads: ReadStats::default(),
+                    });
+                }
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => thread::sleep(POLL / 5),
             Err(_) => thread::sleep(POLL),
@@ -847,8 +970,7 @@ struct Ended {
     seat: Option<usize>,
     cause: CloseCause,
     unparsed: usize,
-    timeouts: u64,
-    spurious: u64,
+    reads: ReadStats,
 }
 
 fn serve(stream: TcpStream, ip: IpAddr, shared: &Arc<Shared>) {
@@ -864,8 +986,7 @@ fn serve(stream: TcpStream, ip: IpAddr, shared: &Arc<Shared>) {
             lived: born.elapsed(),
             at: shared.started.elapsed(),
             unparsed: e.unparsed,
-            read_timeouts: e.timeouts,
-            spurious_pending: e.spurious,
+            reads: e.reads,
         });
     };
     let bare = |cause: CloseCause| Ended {
@@ -873,8 +994,7 @@ fn serve(stream: TcpStream, ip: IpAddr, shared: &Arc<Shared>) {
         seat: None,
         cause,
         unparsed: 0,
-        timeouts: 0,
-        spurious: 0,
+        reads: ReadStats::default(),
     };
     let _ = stream.set_nodelay(true);
     // The listener is non-blocking (so `accept` can poll the stop flag); a
@@ -904,19 +1024,22 @@ fn serve(stream: TcpStream, ip: IpAddr, shared: &Arc<Shared>) {
         st.next_conn
     };
     let ended = serve_admitted(stream, ip, conn, shared);
-    let held = ended.held;
-    record(conn, ended);
-    let mut st = lock(&shared.state);
-    if let Some((code, seat)) = held {
-        depart(&mut st, cfg, code, seat, conn, None);
-    }
-    st.connections = st.connections.saturating_sub(1);
-    if let Some(ipst) = st.ips.get_mut(&ip) {
-        ipst.connections = ipst.connections.saturating_sub(1);
-        if ipst.connections == 0 && ipst.rooms == 0 && ipst.failed.is_empty() {
-            st.ips.remove(&ip);
+    // The departure first, exactly as before the close records existed; the
+    // record (and with it any log write) only after the state lock is gone.
+    {
+        let mut st = lock(&shared.state);
+        if let Some((code, seat)) = ended.held {
+            depart(&mut st, cfg, code, seat, conn, None);
+        }
+        st.connections = st.connections.saturating_sub(1);
+        if let Some(ipst) = st.ips.get_mut(&ip) {
+            ipst.connections = ipst.connections.saturating_sub(1);
+            if ipst.connections == 0 && ipst.rooms == 0 && ipst.failed.is_empty() {
+                st.ips.remove(&ip);
+            }
         }
     }
+    record(conn, ended);
 }
 
 /// Serves one admitted connection; says what ended it and the seat it still
@@ -928,8 +1051,7 @@ fn serve_admitted(stream: TcpStream, ip: IpAddr, conn: ConnId, shared: &Arc<Shar
         seat: None,
         cause: CloseCause::SetupFailed,
         unparsed: 0,
-        timeouts: 0,
-        spurious: 0,
+        reads: ReadStats::default(),
     };
     let Ok(mut sock) = stream.try_clone() else {
         return setup_failed();
@@ -969,14 +1091,12 @@ fn serve_admitted(stream: TcpStream, ip: IpAddr, conn: ConnId, shared: &Arc<Shar
         .unwrap_or_else(PoisonError::into_inner)
         .take()
         .unwrap_or(CloseCause::Removed);
-    let (timeouts, spurious) = reader.read_timeouts();
     Ended {
         held: end.held,
         seat: end.seat,
         cause,
         unparsed: reader.buffered(),
-        timeouts,
-        spurious,
+        reads: reader.read_stats(),
     }
 }
 
@@ -1185,8 +1305,7 @@ mod tests {
             lived: Duration::ZERO,
             at: Duration::ZERO,
             unparsed: 0,
-            read_timeouts: 0,
-            spurious_pending: 0,
+            reads: ReadStats::default(),
         }
     }
 
