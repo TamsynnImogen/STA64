@@ -38,6 +38,8 @@ pub const GAME_KEYS: &[(&str, &str)] = &[
     ("Double click to return to strategic mode.", "GUI_CV_MIN_TOOLTIP"),
     ("Research menu", "GUI_CP_RESEARCH_TOOLTIP"),
     ("Open the research menu.", "GUI_CP_RESEARCH_VTOOLTIP"),
+    ("Evolve menu", "GUI_CP_EVOLVE_TOOLTIP"),
+    ("Open the evolve menu.", "GUI_CP_EVOLVE_VTOOLTIP"),
 ];
 
 /// Button-panel hover text uses native keys without changing unrelated UI captions.
