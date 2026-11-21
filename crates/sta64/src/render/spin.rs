@@ -4,14 +4,15 @@
 //! turns about a fixed tilted axis of its own at a rate from the definition's `rotationSpeed`
 //! (no key: [`ROCK_DEFAULT_RATE`]; zero: still). A planet (`classLabel = planet`) turns about
 //! its own vertical axis from its own `rotationSpeed` (no key: [`PLANET_DEFAULT_RATE`]).
-//! The turn follows game time ([`AnimClock::now`]) and so stands while the game is paused.
+//! The turn follows the match's game time, the sim's tick plus the interpolation alpha, so it stands while
+//! the game is paused, starts from phase zero with each match, and every client (and a loaded save) shows
+//! the same pose at the same tick.
 //! Grade: read from the executable, static; that a moon tumbles with its shell and that its glow
 //! halo does not turn: measured on one install; the numeric rate: not measured.
 //!
-//! The original draws each object's factors from a sequence that is not reproducible; STA64
-//! derives them from a stable object key within the original's ranges ([`rock_turn`],
-//! [`planet_turn`]). The ranges are read from the executable, static; the per-object draw, the
-//! axis direction and the sense are STA64's (interim).
+//! STA64 derives each object's factors deterministically from a stable object key within ranges
+//! ([`rock_turn`], [`planet_turn`]). The ranges are read from the executable, static; the per-object
+//! draw, the axis direction and the sense are STA64's (interim).
 //!
 //! The turn is a visual transform of a pivot entity below the object (or, for a planet, of the
 //! planet's own entity, which no sim heading drives). No sim state, no digest and no file format
@@ -21,7 +22,9 @@
 //! that `face_camera` re-aims against its parents' rotation, so it keeps facing the camera.
 
 use crate::clock::AnimClock;
+use crate::sim_link::SimLink;
 use bevy::prelude::*;
+use sta_sim::TICK_HZ;
 
 /// Rate in rad/s of a resource rock whose definition has no `rotationSpeed` (read from the
 /// executable, static).
@@ -101,9 +104,17 @@ pub fn rock_pivot(commands: &mut Commands, parent: Entity, class: &str, rotation
     commands.spawn((Transform::IDENTITY, Visibility::default(), Turn { base: Quat::IDENTITY, axis, rate }, ChildOf(parent))).id()
 }
 
-/// Turn every [`Turn`] to game time.
-pub fn turn(clock: Res<AnimClock>, mut q: Query<(&Turn, &mut Transform)>) {
-    let now = clock.now();
+/// Game seconds of a match at sim tick `tick` and interpolation `alpha` of the next.
+pub fn game_seconds(tick: u64, alpha: f32) -> f64 {
+    (tick as f64 + alpha.clamp(0.0, 1.0) as f64) / TICK_HZ as f64
+}
+
+/// Turn every [`Turn`] to the match's game time. Without a sim (a viewer) the animation clock's own tick stands in.
+pub fn turn(clock: Res<AnimClock>, link: Option<Res<SimLink>>, mut q: Query<(&Turn, &mut Transform)>) {
+    let now = match link {
+        Some(l) => game_seconds(l.curr().tick, clock.alpha()),
+        None => clock.now(),
+    };
     for (t, mut tf) in &mut q {
         let want = t.at(now);
         if tf.rotation != want {
@@ -119,24 +130,49 @@ mod tests {
     use crate::render::sprites::Billboard;
     use sta_sim::TICK_HZ;
 
-    /// An app with the turn system and a clock that runs only when the test steps it.
+    /// A world that stands at one view.
+    struct Held(std::sync::Arc<sta_sim::WorldView>);
+
+    impl sta_sim::WorldSource for Held {
+        fn view(&self) -> std::sync::Arc<sta_sim::WorldView> {
+            self.0.clone()
+        }
+        fn step(&mut self, _: &[sta_sim::command::Command]) -> sta_sim::TickOutput {
+            sta_sim::TickOutput { view: self.0.clone(), events: Vec::new() }
+        }
+    }
+
+    fn view_at(tick: u64) -> std::sync::Arc<sta_sim::WorldView> {
+        std::sync::Arc::new(sta_sim::WorldView { tick, ..Default::default() })
+    }
+
+    /// An app with the turn system, a match at tick 0 and a clock that moves only when the test says.
     fn rig() -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, TransformPlugin))
             .insert_resource(AnimClock::new(ClockMode::Bench { step: 1.0 / TICK_HZ as f64 }, 1))
+            .insert_resource(SimLink::new(Box::new(Held(view_at(0))), Box::new(sta_sim::command::LocalRouter::new()), sta_sim::PlayerId::BENCH))
             .add_systems(Update, (turn, crate::render::sprites::face_camera).chain());
         app
     }
 
-    /// `ticks` sim ticks, one per frame (the clock steps by hand).
+    /// `ticks` frames of the match, one sim tick each unless the game is paused (a paused sim runs none).
     fn run(app: &mut App, ticks: u32) {
         for _ in 0..ticks {
-            let mut clock = app.world_mut().resource_mut::<AnimClock>();
-            let n = clock.begin_frame(0.0);
-            for _ in 0..n {
-                clock.ticked();
+            let paused = {
+                let mut clock = app.world_mut().resource_mut::<AnimClock>();
+                let n = clock.begin_frame(0.0);
+                for _ in 0..n {
+                    clock.ticked();
+                }
+                clock.end_frame();
+                clock.paused()
+            };
+            if !paused {
+                let mut link = app.world_mut().resource_mut::<SimLink>();
+                let next = link.curr().tick + 1;
+                link.feed(view_at(next));
             }
-            clock.end_frame();
             app.update();
         }
     }
@@ -226,6 +262,39 @@ mod tests {
         app.world_mut().resource_mut::<AnimClock>().set_paused(false);
         run(&mut app, 15);
         assert!(rotation(&app, e).angle_between(before) > 0.1);
+    }
+
+    #[test]
+    fn a_fresh_match_starts_at_phase_zero_whatever_the_app_has_played() {
+        let mut app = rig();
+        // An app that has already played matches: its animation clock's own tick is far ahead.
+        for _ in 0..500 {
+            app.world_mut().resource_mut::<AnimClock>().ticked();
+        }
+        let base = Quat::from_rotation_x(0.3);
+        let e = app.world_mut().spawn((Transform::IDENTITY, Turn { base, axis: Vec3::Y, rate: 1.0 })).id();
+        app.update();
+        assert_eq!(rotation(&app, e), base);
+    }
+
+    #[test]
+    fn the_pose_is_a_function_of_the_sim_tick() {
+        let turn_at = |extra_clock_ticks: u32| {
+            let mut app = rig();
+            for _ in 0..extra_clock_ticks {
+                app.world_mut().resource_mut::<AnimClock>().ticked();
+            }
+            let e = app.world_mut().spawn((Transform::IDENTITY, Turn { base: Quat::IDENTITY, axis: Vec3::Y, rate: 0.7 })).id();
+            // A loaded save or a second player's client reaches tick 45 at once.
+            app.world_mut().resource_mut::<SimLink>().feed(view_at(45));
+            app.update();
+            rotation(&app, e)
+        };
+        let want = Quat::from_rotation_y(0.7 * 1.5);
+        assert!(turn_at(0).angle_between(want) < 1e-4);
+        assert!(turn_at(900).angle_between(want) < 1e-4);
+        assert_eq!(game_seconds(45, 0.0), 1.5);
+        assert_eq!(game_seconds(45, 0.5), 45.5 / TICK_HZ as f64);
     }
 
     #[test]

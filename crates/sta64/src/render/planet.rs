@@ -69,6 +69,33 @@ pub struct PlanetParams {
     pub surf_cloud: Vec4,
     pub surf_drift: Vec4,
     pub surf_misc: Vec4,
+    /// The body's rotation, as the columns of the matrix that takes its own frame to the world (xyz; w unused). All
+    /// zero (a body no `update` has reached) means no rotation: the shader checks.
+    pub rot0: Vec4,
+    pub rot1: Vec4,
+    pub rot2: Vec4,
+}
+
+/// The columns a [`PlanetParams`] carries for a body turned by `rotation`.
+pub fn body_axes(rotation: Quat) -> [Vec4; 3] {
+    let m = Mat3::from_quat(rotation);
+    [m.x_axis.extend(0.0), m.y_axis.extend(0.0), m.z_axis.extend(0.0)]
+}
+
+/// The recipe surface's sample direction for a world offset `v` from the body's centre, as the shader takes it: into
+/// the body's frame (so a turned body shows its picture turned), then mirrored into the files' left-handed space.
+/// Kept in step with `planet.wesl`'s `surface`; the light's direction is carried into the same frame by
+/// [`body_frame`] and stays fixed in the world.
+#[cfg(test)]
+pub fn surface_direction(axes: &[Vec4; 3], v: Vec3) -> Vec3 {
+    let local = body_frame(axes, v);
+    Vec3::new(local.x, local.y, -local.z).normalize_or_zero()
+}
+
+/// A world vector in the body's frame (the transpose of the rotation applied).
+#[cfg(test)]
+pub fn body_frame(axes: &[Vec4; 3], v: Vec3) -> Vec3 {
+    Vec3::new(axes[0].truncate().dot(v), axes[1].truncate().dot(v), axes[2].truncate().dot(v))
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
@@ -456,6 +483,7 @@ fn update(
             let Some(mut m) = materials.get_mut(h) else { continue };
             let p = &mut m.params;
             p.centre = centre.extend(1.0);
+            [p.rot0, p.rot1, p.rot2] = body_axes(gt.compute_transform().rotation);
             p.eye = cam.translation().extend(1.0);
             p.mode.y = stock as u32 as f32;
             let (k, f) = if stock { (1.0, 1.0) } else { (SUN, FILL) };
@@ -896,6 +924,36 @@ mod tests {
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)
             .unwrap_or_else(|e| panic!("{e:?}"));
+    }
+
+    /// The recipe surface is sampled in the body's frame: a body turned about its pole shows a given surface
+    /// point where the turn carries it, so the picture turns with the body; the light stays fixed in the world, so
+    /// the lit side does not turn with it (#1047).
+    #[test]
+    fn a_turned_body_samples_a_turned_direction_and_the_light_stays_in_the_world() {
+        use super::{body_axes, body_frame, surface_direction};
+        let still = body_axes(Quat::IDENTITY);
+        let turn = Quat::from_rotation_y(1.1);
+        let turned = body_axes(turn);
+        // A fixed point of the surface, at body-frame direction `u`, is at world offset `turn * u` once the body turned.
+        for u in [Vec3::new(1.0, 0.2, -0.3), Vec3::new(-0.4, 0.5, 0.8), Vec3::Y] {
+            let u = u.normalize();
+            let before = surface_direction(&still, u * 500.0);
+            let after = surface_direction(&turned, turn * u * 500.0);
+            assert!((before - after).length() < 1e-5, "the same surface point samples the same direction: {before} {after}");
+        }
+        // A world direction that stood over one point now stands over another.
+        let w = Vec3::new(0.3, 0.1, 0.9).normalize();
+        assert!((surface_direction(&still, w * 500.0) - surface_direction(&turned, w * 500.0)).length() > 0.1);
+        // The light is a world vector: in the body's frame it turns the other way, so a surface point's light is the
+        // dot of the fixed light with the point's turned world place, and differs from before the turn.
+        let light = Vec3::new(0.6, 0.3, -0.7).normalize();
+        let point = Vec3::new(-0.2, 0.7, 0.4).normalize();
+        let lit_after = body_frame(&turned, light).dot(point);
+        assert!((lit_after - light.dot(turn * point)).abs() < 1e-5);
+        assert!((lit_after - light.dot(point)).abs() > 0.05);
+        // No rotation is all zeros (a body no update has reached): the shader's identity case; identity is the same.
+        assert_eq!(body_axes(Quat::IDENTITY)[0].truncate(), Vec3::X);
     }
 
     /// The cause of the "huge rings": under the map camera's `DepthPrepass` the opaque ground wrote
