@@ -364,6 +364,9 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             assert!(image.rect.is_some());
             assert_eq!(*visibility, Visibility::Inherited);
             assert_eq!(name.names.last().unwrap(), "systemicon_default");
+            if icon.slot == 1 {
+                assert_eq!(image.color, super::weapon_icons::READY);
+            }
             icon.slot
         }).collect();
         slots.sort_unstable();

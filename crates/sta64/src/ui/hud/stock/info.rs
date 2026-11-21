@@ -587,11 +587,12 @@ fn spawn_single(
     origin: Vec2,
     single: &model::Single,
 ) {
-    let def = feed.view.unit(single.id).and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def)));
+    let unit = feed.view.unit(single.id);
+    let def = unit.and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def)));
     let is_node = def.is_some_and(|d| super::super::status::node_slot(d).is_some());
     let backdrop = def.and_then(|d| system_background(commands, root, layout, origin, &d.model));
-    if let (Some(backdrop), Some(def), Some(db)) = (backdrop, def, feed.content.as_deref()) {
-        super::weapon_icons::spawn(commands, root, layout, origin, backdrop, def, db);
+    if let (Some(backdrop), Some(unit), Some(db)) = (backdrop, unit, feed.content.as_deref()) {
+        super::weapon_icons::spawn(commands, root, layout, origin, backdrop, unit, db);
     }
     if let Some(r) = chosen_rect(
         layout,

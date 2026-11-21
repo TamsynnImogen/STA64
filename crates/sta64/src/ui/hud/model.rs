@@ -344,12 +344,12 @@ pub fn resource_model(feed: &HudFeed) -> ResourceModel {
 
 /// A shipyard's or builder's tech state, from the view: what the player owns
 /// finished, its race, and the races of its allies.
-fn tech_state(feed: &HudFeed, db: &ContentDb, race: &str) -> Owned {
+pub(super) fn tech_state(feed: &HudFeed, db: &ContentDb, race: &str, player: PlayerId) -> Owned {
     let mut state = Owned::new(&race.to_ascii_lowercase());
-    let me = feed.view.player(feed.player);
+    let me = feed.view.player(player);
     for u in feed.view.units.iter().filter(|u| finished(u)) {
         let Some(def) = db.unit(u.def) else { continue };
-        if u.owner == feed.player {
+        if u.owner == player {
             state = state.with(&def.odf.to_ascii_lowercase(), 1);
         } else if me.is_some_and(|m| feed.view.player(u.owner).is_some_and(|o| o.team == m.team)) {
             state = state.with_ally(&def.race.to_ascii_lowercase());
@@ -423,7 +423,7 @@ fn build_layout(feed: &HudFeed, builder: &UnitView) -> (Vec<BuildItem>, usize) {
     };
     match db.tech_tree() {
         Some(tree) => {
-            let state = tech_state(feed, db, &def.race);
+            let state = tech_state(feed, db, &def.race, feed.player);
             let mut out: Vec<BuildItem> = Vec::new();
             let mut cells = 0;
             for o in tree.build_options(db, &def.odf, &state, false).iter() {

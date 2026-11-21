@@ -1,8 +1,10 @@
 //! Fleet Operations weapon pictures over the single-selection systems backdrop.
 
 use bevy::prelude::*;
-use sta_content::{ContentDb, UnitDef};
+use sta_content::{Availability, ContentDb};
+use sta_sim::{ContentKey, EntityId, Fixed, UnitView};
 
+use super::super::{HudFeed, model::tech_state};
 use super::{layout::StockLayout, node};
 use crate::ui::{gui_sprites::GuiImage, notices::Tooltip};
 
@@ -15,6 +17,30 @@ const WEAPON_SLOTS: usize = 32;
 pub(in crate::ui::hud) struct WeaponIcon {
     pub slot: usize,
     backdrop: Entity,
+    unit: EntityId,
+    weapon: ContentKey,
+}
+
+// FleetOpsHook ShipSystemIcon_Render (0x1ed458) follows these RGB globals
+// back to ArmadaL's ST3D_Colour initializers at 0x61ffb0, 0x61fff0 and
+// 0x620070. The depleted underlay is literal RGB in the DLL at 0x1ed773.
+pub(super) const READY: Color = Color::srgb(0.0, 1.0, 0.0);
+const NEGATIVE: Color = Color::srgb(1.0, 1.0, 0.0);
+const TECH_LOCKED: Color = Color::srgb(0.5, 0.5, 0.5);
+
+fn weapon_tint(locked: bool, energy: Fixed, cost: Fixed) -> Color {
+    if locked {
+        TECH_LOCKED
+    } else if cost <= Fixed::ZERO || energy >= cost {
+        READY
+    } else if energy < Fixed::ZERO {
+        NEGATIVE
+    } else {
+        // STA64 tints one image. Blend the native foreground and underlay
+        // in proportion to the charge until there is energy for a full shot.
+        let charge = energy.to_f32() / cost.to_f32();
+        Color::srgb(0.25 * (1.0 - charge), 0.2 + 0.8 * charge, 0.0)
+    }
 }
 
 fn icon_position(raw: &sta_odf::Odf, slot: usize) -> Option<Vec2> {
@@ -63,9 +89,10 @@ pub(super) fn spawn(
     layout: &StockLayout,
     origin: Vec2,
     backdrop: Entity,
-    def: &UnitDef,
+    unit: &UnitView,
     db: &ContentDb,
 ) {
+    let Some(def) = db.unit(unit.def) else { return };
     let (Some(display), Some(size)) = (
         layout.at(origin, "infoSingleSystemsDisplay"),
         layout.at(origin, "infoSingleSystemsIcon"),
@@ -90,7 +117,7 @@ pub(super) fn spawn(
             continue;
         };
         let stem = weapon_stem(&weapon.odf);
-        let mut image = GuiImage::new(format!("i_{stem}"));
+        let mut image = GuiImage::new(format!("i_{stem}")).with_color(READY);
         // The pinned DLL at RVA 0x10f2fc names this ordered fallback.
         image.names.push("systemicon_default".to_owned());
         let tip = weapon.raw.str("tooltip").unwrap_or(&weapon.odf);
@@ -106,21 +133,64 @@ pub(super) fn spawn(
             node(icon_rect(display, size, position)),
             image,
             tooltip,
-            WeaponIcon { slot, backdrop },
+            WeaponIcon {
+                slot,
+                backdrop,
+                unit: unit.id,
+                weapon: weapon.key,
+            },
             Visibility::Hidden,
             ChildOf(root),
         ));
     }
 }
 
+pub(in crate::ui::hud) fn update_tint(
+    feed: Res<HudFeed>,
+    mut icons: Query<(&WeaponIcon, &mut GuiImage)>,
+) {
+    // Only the single-selection card owns these sprites.
+    let Some(unit) = icons
+        .iter()
+        .next()
+        .and_then(|(icon, _)| feed.view.unit(icon.unit))
+    else {
+        return;
+    };
+    let Some(db) = feed.content.as_deref() else {
+        return;
+    };
+    let Some(def) = db.unit(unit.def) else { return };
+    let energy = unit.energy.map_or(def.special_energy_max, |[now, _]| now);
+    let tech = db
+        .tech_tree()
+        .map(|tree| (tree, tech_state(&feed, db, &def.race, unit.owner)));
+    for (icon, mut image) in &mut icons {
+        let Some(weapon) = db.weapon(icon.weapon) else {
+            continue;
+        };
+        let locked = weapon.base.special == Some(true)
+            && tech.as_ref().is_some_and(|(tree, owned)| {
+                matches!(
+                    tree.availability(&weapon.odf, owned),
+                    Availability::Locked { .. } | Availability::Withheld
+                )
+            });
+        let color = weapon_tint(locked, energy, weapon.energy_cost);
+        if image.color != color {
+            image.color = color;
+        }
+    }
+}
+
 /// The GUI painter removes `ImageNode` when the mounted backdrop SPR or its
-/// texture cannot be resolved. Do not show icons over a transparent backdrop.
+/// texture cannot be resolved. An unresolved icon also loses its hover target.
 pub(in crate::ui::hud) fn update_visibility(
     pictures: Query<(), With<ImageNode>>,
-    mut icons: Query<(&WeaponIcon, &mut Visibility)>,
+    mut icons: Query<(Entity, &WeaponIcon, &mut Visibility)>,
 ) {
-    for (icon, mut visibility) in &mut icons {
-        let next = if pictures.contains(icon.backdrop) {
+    for (entity, icon, mut visibility) in &mut icons {
+        let next = if pictures.contains(icon.backdrop) && pictures.contains(entity) {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -135,6 +205,20 @@ pub(in crate::ui::hud) fn update_visibility(
 mod tests {
     use super::*;
     use crate::ui::hud::layout::R;
+
+    #[test]
+    fn weapon_tints_follow_native_palette_with_live_charge() {
+        let f = Fixed::from_int;
+        assert_eq!(weapon_tint(false, f(0), f(0)), Color::srgb(0.0, 1.0, 0.0));
+        assert_eq!(weapon_tint(false, f(10), f(10)), Color::srgb(0.0, 1.0, 0.0));
+        assert_eq!(weapon_tint(false, f(0), f(10)), Color::srgb(0.25, 0.2, 0.0));
+        assert_eq!(
+            weapon_tint(false, f(5), f(10)),
+            Color::srgb(0.125, 0.6, 0.0)
+        );
+        assert_eq!(weapon_tint(false, f(-1), f(10)), Color::srgb(1.0, 1.0, 0.0));
+        assert_eq!(weapon_tint(true, f(10), f(10)), Color::srgb(0.5, 0.5, 0.5));
+    }
 
     #[test]
     fn sparse_positions_keep_odf_slot_and_both_percentage_axes() {
