@@ -52,9 +52,12 @@
 //!   applies it at the end of `lifeSpan`. The beam is drawn for the data's `lifeSpan` from the
 //!   fire event, whatever the sim's timing; a target the shot killed on the fire tick is held at
 //!   its last place for the beam's life (INTERIM).
-//! - **Flares and lights** are a later package: under the Stock look a shot with a stock drawing
-//!   gets no muzzle flash and no impact flare (INTERIM), and a weapon whose class has no muzzle
-//!   flare gets none either ([`has_muzzle_flare`]).
+//! - **Flares** are `stock_flares.rs`: under the Stock look a beam weapon whose ordnance carries
+//!   `flareSprite` gets its muzzle flare and a beam that lands on a hull its impact flare; STA64's own
+//!   muzzle flash stays only for point-defence shots, which have no stock drawing yet (INTERIM), and
+//!   a weapon whose class has no muzzle flare gets none ([`has_muzzle_flare`]).
+//! - **Lights** (`lightColor`) are not drawn: the Stock hulls take directional lights only, and the
+//!   attenuation of a point light is not read.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -71,6 +74,7 @@ use sta_content::WeaponDef;
 use sta_sim::command::Target;
 use sta_sim::{ContentKey, EntityId, SimEvent, TICK_HZ, Tick};
 
+use super::stock_flares::{self, Anchor, Flare, FlareKind, FlareSpec, NodeParticles};
 use super::weapons::{point, shifted, shot_seed};
 use crate::app::GameSet;
 use crate::clock::AnimClock;
@@ -229,8 +233,13 @@ pub struct ShotSprites {
 impl ShotSprites {
     pub fn build(table: &SpriteTable, db: &sta_content::ContentDb) -> ShotSprites {
         let mut map = BTreeMap::new();
-        for w in db.weapons() {
-            let Some(name) = w.look.sprite.as_deref() else { continue };
+        // The shots' sprites, their muzzle flares' and the impact flare's.
+        let names = db
+            .weapons()
+            .flat_map(|w| [w.look.sprite.as_deref(), w.look.flare.as_ref().map(|f| f.sprite.as_str())])
+            .flatten()
+            .chain(std::iter::once(stock_flares::IMPACT_SPRITE));
+        for name in names {
             let key = name.to_ascii_lowercase();
             if map.contains_key(&key) {
                 continue;
@@ -386,6 +395,10 @@ pub struct StockShot {
     last_end: Vec3,
     /// The target was already gone from the view when the shot was fired (the shot killed it).
     pinned: bool,
+    /// The muzzle flare this shot raises on its first frame (a beam of a class with one).
+    muzzle_flare: Option<FlareSpec>,
+    /// The impact flare's sprite and size, until the beam has reached its target (once per beam).
+    impact_flare: Option<FlareSpec>,
     pub geom: Geom,
 }
 
@@ -416,16 +429,26 @@ impl StockShots<'_, '_> {
     }
 
     /// The entity of node `node` in unit `unit`'s posed model.
-    fn find_node(&self, unit: EntityId, node: &str) -> Option<Entity> {
+    pub(super) fn find_node(&self, unit: EntityId, node: &str) -> Option<Entity> {
         let root = *self.ents.as_ref()?.0.get(&unit)?;
         self.children.iter_descendants(root).find(|e| self.named.get(*e).is_ok_and(|(name, _)| name.as_str().eq_ignore_ascii_case(node)))
     }
 
     /// Where a node found by [`Self::find_node`] is now, from the unit's own origin (render space).
-    fn node_offset(&self, unit: EntityId, node: Entity) -> Option<Vec3> {
+    pub(super) fn node_offset(&self, unit: EntityId, node: Entity) -> Option<Vec3> {
         let root = *self.ents.as_ref()?.0.get(&unit)?;
         let base = self.transforms.get(root).ok()?.translation();
         Some(self.transforms.get(node).ok()?.translation() - base)
+    }
+
+    /// Whether `object`'s model is visible (no model, or none known: yes).
+    pub(super) fn object_visible(&self, object: EntityId, visibility: &Query<&InheritedVisibility>) -> bool {
+        self.ents.as_ref().and_then(|m| m.0.get(&object)).and_then(|e| visibility.get(*e).ok()).is_none_or(|v| v.get())
+    }
+
+    /// Whether a flare may name `sprite`: it is an additive sprite of the table (the drawing is additive).
+    fn flare_sprite_usable(&self, sprite: &str) -> bool {
+        self.tables.as_ref().and_then(|t| t.0.sprite(sprite)).is_some_and(|s| spr_anim::sprite_blend(&s.material) == SpriteBlend::Add)
     }
 
     fn body(&self, link: &SimLink, id: EntityId, alpha: f32, offsets: &Option<Res<crate::render::mining::VisualOffsets>>, hardpoint: Option<Entity>) -> Option<Body> {
@@ -497,6 +520,19 @@ impl StockShots<'_, '_> {
         let flight = if per_tick > 0.0 { (muzzle.distance(to) / per_tick).ceil().max(1.0) } else { 1.0 };
         let life = if spec.path == ShotPath::Ribbon { spec.life * TICK_HZ as f32 } else { flight };
         let miss = content.0.rules().shots.beam_miss_lifetime.map(|m| m.to_f32() * TICK_HZ as f32);
+        let ribbon = spec.path == ShotPath::Ribbon;
+        // A beam's flares (`stock_flares`): the muzzle flare of a class that carries `flareSprite`, the impact flare.
+        let muzzle_flare = def
+            .look
+            .flare
+            .as_ref()
+            .filter(|f| ribbon && has_muzzle_flare(&def.class.0) && self.flare_sprite_usable(&f.sprite))
+            .map(|f| FlareSpec { sprite: f.sprite.to_ascii_lowercase(), half: spec.radius * f.radius_multiplier, life: stock_flares::muzzle_life(spec.life, spec.travel) * TICK_HZ as f32 });
+        let impact_flare = (ribbon && self.flare_sprite_usable(stock_flares::IMPACT_SPRITE)).then(|| FlareSpec {
+            sprite: stock_flares::IMPACT_SPRITE.to_owned(),
+            half: spec.radius * stock_flares::IMPACT_SIZE_FACTOR,
+            life: stock_flares::IMPACT_LIFE * TICK_HZ as f32,
+        });
         cmds.spawn(StockShot {
             path: spec.path,
             shooter,
@@ -520,6 +556,8 @@ impl StockShots<'_, '_> {
             last_body: pinned.then(|| Body::point(to)),
             last_end: to,
             pinned,
+            muzzle_flare,
+            impact_flare,
             geom: Geom::None,
         });
         true
@@ -535,6 +573,7 @@ fn update_shots(
     clock: Res<AnimClock>,
     link: Res<SimLink>,
     ctx: StockShots,
+    mut store: ResMut<NodeParticles>,
     mut q: Query<(Entity, &mut StockShot)>,
 ) {
     let alpha = clock.alpha();
@@ -564,6 +603,22 @@ fn update_shots(
         } else {
             s.muzzle
         };
+        // The muzzle flare begins with the shot, at the hardpoint, in the shot's colour.
+        if let Some(spec) = s.muzzle_flare.take() {
+            let flare = Flare {
+                kind: FlareKind::Muzzle,
+                object: s.shooter,
+                sprite: spec.sprite,
+                half: spec.half,
+                colour: s.colour,
+                born: s.fired as f64,
+                life: spec.life,
+                anchor: Anchor::Node(s.node),
+                at: start,
+                shown: true,
+            };
+            store.spawn(&mut cmds, flare);
+        }
         if s.path == ShotPath::Ribbon {
             let live = match s.target {
                 Target::Entity(id) => ctx.body(&link, id, alpha, &offsets, s.target_node),
@@ -594,6 +649,27 @@ fn update_shots(
             };
             if !lost {
                 s.last_end = end;
+            }
+            // The beam first reaches its target after the grow: a hull hit raises the impact flare, once.
+            if !lost && !s.pinned && age >= s.travel * s.life && s.impact_flare.is_some() {
+                let spec = s.impact_flare.take().expect("checked");
+                if let (Target::Entity(id), Some(body)) = (s.target, s.last_body.as_ref())
+                    && stock_flares::hull_hit(body, s.ignore_shield)
+                {
+                    let flare = Flare {
+                        kind: FlareKind::Impact,
+                        object: id,
+                        sprite: spec.sprite,
+                        half: spec.half,
+                        colour: Vec3::ONE,
+                        born: now_ticks,
+                        life: spec.life,
+                        anchor: Anchor::Frame(stock_flares::to_local(body.heading, end - body.centre)),
+                        at: end,
+                        shown: true,
+                    };
+                    store.spawn(&mut cmds, flare);
+                }
             }
             let (a, b) = beam_segment(start, end, age, s.life, s.travel);
             s.geom = Geom::Segment { a, b };
@@ -725,25 +801,11 @@ fn refresh_sprites(tables: Option<Res<SpriteTables>>, content: Option<Res<Conten
     }
 }
 
-/// Lay the frame's shots out in their sprites' meshes.
-#[allow(clippy::too_many_arguments)]
-fn draw_shots(
-    mut cmds: Commands,
-    clock: Res<AnimClock>,
-    sprites: Res<ShotSprites>,
-    camera: Query<&GlobalTransform, crate::map::MainCamera>,
-    shots: Query<&StockShot>,
-    mut batches: ResMut<ShotBatches>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut mats: ResMut<Assets<StockShotMaterial>>,
-    mut loader: crate::render::textures::LoaderParams,
-    mut missing: Local<BTreeSet<String>>,
-) {
-    let Ok(cam) = camera.single() else { return };
-    let (eye, right, up) = (cam.translation(), cam.right().as_vec3(), cam.up().as_vec3());
-    let t = clock.now() as f32;
+/// One quad per live shot and shown flare, by sprite: the shots' own geometry (a ribbon or streak from its
+/// texture's start to its end, a screen-aligned square for a sprite or a flare).
+fn lay_out<'a>(shots: impl Iterator<Item = &'a StockShot>, flares: impl Iterator<Item = &'a Flare>, sprites: &ShotSprites, eye: Vec3, right: Vec3, up: Vec3) -> BTreeMap<String, Geo> {
     let mut geo: BTreeMap<String, Geo> = BTreeMap::new();
-    for s in &shots {
+    for s in shots {
         let Some(sprite) = sprites.get_lower(&s.sprite) else { continue };
         let g = geo.entry(s.sprite.clone()).or_default();
         match s.geom {
@@ -755,6 +817,33 @@ fn draw_shots(
             Geom::None => {}
         }
     }
+    for f in flares.filter(|f| f.shown) {
+        if sprites.get_lower(&f.sprite).is_some() {
+            geo.entry(f.sprite.clone()).or_default().quad(billboard_corners(f.at, right, up, f.half), 1.0, f.colour);
+        }
+    }
+    geo
+}
+
+/// Lay the frame's shots out in their sprites' meshes.
+#[allow(clippy::too_many_arguments)]
+fn draw_shots(
+    mut cmds: Commands,
+    clock: Res<AnimClock>,
+    sprites: Res<ShotSprites>,
+    camera: Query<&GlobalTransform, crate::map::MainCamera>,
+    shots: Query<&StockShot>,
+    flares: Query<&Flare>,
+    mut batches: ResMut<ShotBatches>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut mats: ResMut<Assets<StockShotMaterial>>,
+    mut loader: crate::render::textures::LoaderParams,
+    mut missing: Local<BTreeSet<String>>,
+) {
+    let Ok(cam) = camera.single() else { return };
+    let (eye, right, up) = (cam.translation(), cam.right().as_vec3(), cam.up().as_vec3());
+    let t = clock.now() as f32;
+    let mut geo = lay_out(shots.iter(), flares.iter(), &sprites, eye, right, up);
     for k in batches.map.keys().cloned().collect::<Vec<_>>() {
         geo.entry(k).or_default();
     }
@@ -810,7 +899,16 @@ impl Plugin for StockShotsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ProfileEffects>();
         app.world_mut().resource_mut::<ProfileEffects>().register_stock(Effect::Shots);
-        app.init_resource::<ShotSprites>().init_resource::<ShotBatches>();
+        app.init_resource::<ShotSprites>().init_resource::<ShotBatches>().init_resource::<NodeParticles>();
+        app.add_systems(
+            Update,
+            stock_flares::update_flares
+                .before(update_shots)
+                .after(super::weapons::update_fx)
+                .in_set(GameSet::Interpolate)
+                .distributive_run_if(resource_exists::<SimLink>)
+                .distributive_run_if(resource_exists::<ContentRes>),
+        );
         app.add_systems(
             Update,
             update_shots.after(super::weapons::update_fx).in_set(GameSet::Interpolate).distributive_run_if(resource_exists::<SimLink>).distributive_run_if(resource_exists::<ContentRes>),

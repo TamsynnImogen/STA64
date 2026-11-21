@@ -8,7 +8,6 @@ use bevy::window::ExitCondition;
 use std::sync::{Arc, Mutex};
 
 /// Keep the two real-GPU tests from competing for the same adapter.
-static SERIAL: Mutex<()> = Mutex::new(());
 
 fn count(image: &image::RgbaImage, f: impl Fn(&[u8; 4]) -> bool) -> usize {
     image.pixels().filter(|p| f(&p.0)).count()
@@ -45,7 +44,7 @@ fn the_action_picture_shows_the_subject_and_leaves_the_overlay_layer_out_on_gpu(
         eprintln!("SKIP: set STA64_GPU_TESTS=1");
         return;
     }
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let _serial = crate::bench::frames::gpu_serial();
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -142,7 +141,7 @@ fn the_action_picture_survives_a_resize_and_a_hide_and_show_on_gpu() {
         eprintln!("SKIP: set STA64_GPU_TESTS=1");
         return;
     }
-    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let _serial = crate::bench::frames::gpu_serial();
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
