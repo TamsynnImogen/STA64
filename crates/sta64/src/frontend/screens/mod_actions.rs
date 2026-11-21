@@ -89,6 +89,8 @@ fn open_website(url: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let opener = "open";
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let _ = url;
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     return Err("Opening websites is unavailable on this platform".to_owned());
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
