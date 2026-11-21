@@ -303,6 +303,237 @@ fn a_world_target_without_verbose_text_keeps_its_short_text_and_other_looks_show
     assert_eq!(tip.text(false, &d, &look).as_deref(), Some("Plain"));
 }
 
+fn words(app: &mut App) -> String {
+    app.world_mut().query_filtered::<&SpriteText, With<TipText>>().single(app.world()).unwrap().text.clone()
+}
+
+fn style(app: &mut App) -> SpriteTextStyle {
+    app.world_mut().query_filtered::<&SpriteTextStyle, With<TipText>>().single(app.world()).unwrap().clone()
+}
+
+fn hover(app: &mut App, tip: Tooltip, rest: f32) {
+    let e = app.world_mut().spawn(tip).id();
+    *app.world_mut().resource_mut::<TipHover>() = TipHover { target: Some(e), rest };
+    app.update();
+}
+
+fn stock_rig() -> App {
+    let size = Vec2::new(800.0, 600.0);
+    rig(UiProfile::Armada2, canvas(size, size, HudFit::Centred), size, Vec2::new(250.0, 180.0))
+}
+
+#[test]
+fn the_underline_rules_sit_on_the_marked_glyph_cells_across_wraps_and_alignment() {
+    let f = fonts();
+    let font = &f.fonts["fontfinal4_10"].font;
+    let at = |text: &str, marks: &[usize], wrap: Option<f32>, align| font.underline_rects(text, marks, Vec2::ONE, true, wrap, align);
+    // Glyphs 10 wide and 14 high: one pixel on the bottom row of each marked cell.
+    assert_eq!(at("Hi there", &[0, 3], None, crate::ui::sprite_font::Align::Left), [[0.0, 13.0, 10.0, 1.0], [30.0, 13.0, 10.0, 1.0]]);
+    // A wrap drops the space it breaks at: the mark on it gives no rule, the next line's marks count from its start.
+    assert_eq!(at("aaa bbb", &[3, 4, 6], Some(35.0), crate::ui::sprite_font::Align::Left), [[0.0, 27.0, 10.0, 1.0], [20.0, 27.0, 10.0, 1.0]]);
+    // An explicit break likewise.
+    assert_eq!(at("a\nb", &[2], None, crate::ui::sprite_font::Align::Left), [[0.0, 27.0, 10.0, 1.0]]);
+    // Centred text is aligned inside the wrap width first.
+    assert_eq!(at("ab", &[0], Some(100.0), crate::ui::sprite_font::Align::Center), [[40.0, 13.0, 10.0, 1.0]]);
+    // No marks, or marks past the text: none; thicker at a larger scale.
+    assert!(at("ab", &[], None, crate::ui::sprite_font::Align::Left).is_empty() && at("ab", &[9], None, crate::ui::sprite_font::Align::Left).is_empty());
+    assert_eq!(font.underline_rects("a", &[0], Vec2::splat(2.0), true, None, crate::ui::sprite_font::Align::Left), [[0.0, 26.0, 20.0, 2.0]]);
+}
+
+#[test]
+fn under_the_stock_look_a_button_text_drops_the_marker_and_the_marked_glyphs_are_handed_to_the_text() {
+    let mut app = stock_rig();
+    hover(&mut app, Tooltip::new("^Zap <^Z>"), 10.0);
+    assert_eq!(words(&mut app), "Zap <Z>");
+    assert_eq!(app.world().resource::<TipMarks>().0, [0, 5]);
+    assert_eq!(style(&mut app).underline, [0, 5]);
+    // A text without a marker is untouched and marks nothing.
+    hover(&mut app, Tooltip::new("Plain <F2>"), 10.0);
+    assert_eq!(words(&mut app), "Plain <F2>");
+    assert!(app.world().resource::<TipMarks>().0.is_empty());
+    assert!(style(&mut app).underline.is_empty());
+}
+
+#[test]
+fn a_bound_key_fills_the_slot_and_the_string_keeps_its_letter_where_there_is_no_binding() {
+    use crate::input::keys::{Action, KeyBindings};
+    let mut app = stock_rig();
+    app.insert_resource(KeyBindings::default());
+    // Stop's default is S: the string's letter is replaced by the binding.
+    hover(&mut app, Tooltip::new("^Halt <^H>").bound_to(Action::Stop), 10.0);
+    assert_eq!(words(&mut app), "Halt <S>");
+    assert_eq!(app.world().resource::<TipMarks>().0, [0, 6]);
+    app.world_mut().resource_mut::<KeyBindings>().rebind(Action::Stop, KeyCode::Digit4);
+    app.update();
+    assert_eq!(words(&mut app), "Halt <4>");
+    // A key that is no letter or digit leaves the string's own letter.
+    app.world_mut().resource_mut::<KeyBindings>().rebind(Action::Stop, KeyCode::F5);
+    app.update();
+    assert_eq!(words(&mut app), "Halt <H>");
+    // No action named: the string's letter.
+    hover(&mut app, Tooltip::new("^Halt <^H>"), 10.0);
+    assert_eq!(words(&mut app), "Halt <H>");
+}
+
+#[test]
+fn the_group_buttons_take_the_string_table_keys_when_it_has_them_and_their_own_labels_when_not() {
+    use crate::ui::i18n::Strings;
+    let mut app = stock_rig();
+    app.insert_resource(Strings::from_pairs("english", &[("K_SHORT", "Short key text"), ("K_LONG", "Long key text: more.")]));
+    let tip = || Tooltip::new("Own label").verbose("Own long label").stock_keys("K_SHORT", "K_LONG");
+    hover(&mut app, tip(), 1.0);
+    assert_eq!(words(&mut app), "Short key text");
+    hover(&mut app, tip(), 10.0);
+    assert_eq!(words(&mut app), "Long key text: more.");
+    // The table has the short key but not the verbose one: the short text stays.
+    app.insert_resource(Strings::from_pairs("english", &[("K_SHORT", "Short key text")]));
+    app.update();
+    assert_eq!(words(&mut app), "Short key text");
+    // The table lacks the keys: today's labels.
+    app.insert_resource(Strings::from_pairs("english", &[]));
+    app.update();
+    assert_eq!(words(&mut app), "Own long label");
+    hover(&mut app, tip(), 1.0);
+    assert_eq!(words(&mut app), "Own label");
+}
+
+#[test]
+fn a_build_item_is_composed_from_the_table_under_the_stock_look() {
+    use crate::ui::hud::stock::tooltip_text::{BuildTipParts, CostPart};
+    use crate::ui::i18n::Strings;
+    let mut app = stock_rig();
+    app.insert_resource(Strings::from_pairs(
+        "english",
+        &[("K_TIP", "Zed Class"), ("K_VERB", "About zeds."), ("K_LABEL", "<F9>"), ("GUI_CP_DILITHIUM_RES", "dust"), ("GUI_CP_CREW_RES", "hands")],
+    ));
+    let parts = BuildTipParts {
+        tooltip: "K_TIP".into(),
+        verbose: Some("K_VERB".into()),
+        hotkey: Some("K_LABEL".into()),
+        cost: vec![
+            CostPart { key: "GUI_CP_DILITHIUM_RES", fallback: "dilithium".into(), amount: 30.0 },
+            CostPart { key: "GUI_CP_METAL_RES", fallback: "metal".into(), amount: 0.0 },
+            CostPart { key: "GUI_CP_CREW_RES", fallback: "crew".into(), amount: 5.0 },
+        ],
+    };
+    let tip = || Tooltip::new("K_TIP").stock_build(parts.clone());
+    hover(&mut app, tip(), 1.0);
+    assert_eq!(words(&mut app), "Zed Class: <F9>\n( 30 d / 5 h )");
+    hover(&mut app, tip(), 10.0);
+    assert_eq!(words(&mut app), "Zed Class: <F9>\nAbout zeds.\n( 30 dust / 5 hands )");
+    // Before the short delay nothing shows, as for every tooltip.
+    hover(&mut app, tip(), 0.1);
+    assert_eq!(node(&mut app).display, Display::None);
+}
+
+/// Every other look keeps the text as the button gave it: no marker handling, no hotkey slot, no
+/// string-table keys, no build composition.
+#[test]
+fn other_looks_keep_the_buttons_text_markers_and_keys_as_they_are() {
+    use crate::input::keys::{Action, KeyBindings};
+    use crate::ui::hud::stock::tooltip_text::BuildTipParts;
+    use crate::ui::i18n::Strings;
+    let size = Vec2::new(800.0, 600.0);
+    let mut cases: Vec<App> = [UiProfile::Lcars, UiProfile::Armada1, UiProfile::FleetOps]
+        .into_iter()
+        .map(|p| rig(p, canvas(size, size, HudFit::Centred), size, Vec2::new(250.0, 180.0)))
+        .collect();
+    let mut no_rule = stock_rig();
+    no_rule.world_mut().resource_mut::<SpriteFonts>().stock_family = false;
+    cases.push(no_rule);
+    for app in &mut cases {
+        app.insert_resource(KeyBindings::default());
+        app.insert_resource(Strings::from_pairs("english", &[("K_SHORT", "Key text"), ("K_TIP", "Zed Class")]));
+        hover(app, Tooltip::new("^Halt <^H>").bound_to(Action::Stop), 10.0);
+        assert_eq!(words(app), "^Halt <^H>");
+        assert!(app.world().resource::<TipMarks>().0.is_empty());
+        hover(app, Tooltip::new("Own label").stock_keys("K_SHORT", "K_SHORT"), 10.0);
+        assert_eq!(words(app), "Own label");
+        let parts = BuildTipParts { tooltip: "K_TIP".into(), ..default() };
+        hover(app, Tooltip::new("K_TIP").stock_build(parts), 10.0);
+        assert_eq!(words(app), "Zed Class");
+        assert!(!app.world().resource::<TipStock>().0 && style(app).underline.is_empty());
+    }
+}
+
+fn scratch_install(name: &str, delay: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("sta64-tip-{}-{name}", std::process::id()));
+    let file = dir.join("Data/odf/other/component.odf");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(file, format!("tooltipDelay = {delay}\n")).unwrap();
+    dir
+}
+
+/// A rebuild of the stock HUD or a live resize changes the canvas, not the content: the component
+/// definition is read again only when the mounted content changes.
+#[test]
+fn the_delays_are_read_once_per_mount_not_on_every_hud_rebuild() {
+    let (a, b) = (scratch_install("a", "0.25"), scratch_install("b", "0.75"));
+    let mut app = stock_rig();
+    assert_eq!(app.world().resource::<TipDelayCache>().reads, 0, "no mount, no read");
+    app.insert_resource(crate::viewer::Mounted(sta_vfs::Vfs::mount_install(&a, None).unwrap()));
+    app.update();
+    assert_eq!(app.world().resource::<TipDelayCache>().reads, 1);
+    assert_eq!(app.world().resource::<TipDelays>().short, 0.25);
+    // The HUD rebuilds (a new canvas value each time), the window resizes: no further read.
+    for w in [1280.0, 1920.0, 800.0] {
+        let hud = Vec2::new(w, w * 0.75);
+        app.insert_resource(canvas(hud, hud, HudFit::Centred));
+        app.update();
+    }
+    assert_eq!(app.world().resource::<TipDelayCache>().reads, 1, "a rebuild without a content change re-reads nothing");
+    assert_eq!(app.world().resource::<TipDelays>().short, 0.25);
+    // The look leaving the stock gate and returning does not read again either.
+    app.insert_resource(UiProfile::Lcars);
+    app.update();
+    assert_eq!(*app.world().resource::<TipDelays>(), TipDelays::default());
+    app.insert_resource(UiProfile::Armada2);
+    app.update();
+    assert_eq!(app.world().resource::<TipDelayCache>().reads, 1);
+    assert_eq!(app.world().resource::<TipDelays>().short, 0.25);
+    // New content: read again.
+    app.insert_resource(crate::viewer::Mounted(sta_vfs::Vfs::mount_install(&b, None).unwrap()));
+    app.update();
+    assert_eq!(app.world().resource::<TipDelayCache>().reads, 2);
+    assert_eq!(app.world().resource::<TipDelays>().short, 0.75);
+    for dir in [a, b] {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// Measured at one window size: a click on the hovered button, or a key press, neither dismisses its
+/// tooltip nor restarts its clock. The stock look draws the tooltip from the hover alone: no system
+/// of it reads the buttons or the keys.
+#[test]
+fn a_click_or_a_key_press_neither_dismisses_the_tooltip_nor_restarts_its_clock() {
+    use bevy::input::ButtonInput;
+    let mut app = stock_rig();
+    app.init_resource::<ButtonInput<KeyCode>>().init_resource::<ButtonInput<MouseButton>>();
+    let tip = || Tooltip::new("Short").verbose("Long");
+    hover(&mut app, tip(), 1.0);
+    let target = app.world().resource::<TipHover>().target;
+    assert_eq!(words(&mut app), "Short");
+    app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyZ);
+    app.update();
+    {
+        let h = app.world().resource::<TipHover>();
+        assert_eq!(h.target, target, "the hover target is kept");
+        assert!(h.rest >= 1.0, "the clock is not restarted: {}", h.rest);
+    }
+    assert_eq!(node(&mut app).display, Display::Flex);
+    assert_eq!(words(&mut app), "Short");
+    app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::KeyZ);
+    app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+    app.update();
+    assert_eq!(node(&mut app).display, Display::Flex);
+    // The verbose step still arrives on the unchanged clock.
+    app.world_mut().resource_mut::<TipHover>().rest = 3.5;
+    app.update();
+    assert_eq!(words(&mut app), "Long");
+}
+
 /// Installed assets are local-only: the mounted component definition gives the two delays and the
 /// string table resolves a class's world tooltip keys and the two separators. Compares structure,
 /// commits no text. Set `STA64_TOOLTIP_TESTS=1 STA64_TEST_INSTALL` (and optionally `STA64_TEST_MOD`).
@@ -345,6 +576,85 @@ fn installed_delays_and_world_tooltip_strings_resolve() {
     let want = format!("Authored Name {sep} {}{}\n{}", look(p.tooltip.as_deref().unwrap()), look(TOOLTIP_SEPARATE_KEY), look(p.verbose.as_deref().unwrap()));
     assert_eq!(verbose, want);
     assert!(verbose.lines().count() >= 2);
+}
+
+/// Installed assets are local-only: the mounted table resolves the pieces of a command's tooltip, the
+/// group's key pairs, the cost line's keys and a build item's composition. Compares structure only and
+/// commits no text. Set `STA64_TOOLTIP_TESTS=1 STA64_TEST_INSTALL` (and optionally `STA64_TEST_MOD`).
+#[test]
+fn installed_command_and_build_item_pieces_resolve() {
+    use crate::ui::hud::stock::tooltip_text::*;
+    if std::env::var("STA64_TOOLTIP_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_TOOLTIP_TESTS=1 STA64_TEST_INSTALL and optional STA64_TEST_MOD");
+        return;
+    }
+    let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
+    let active_mod = std::env::var("STA64_TEST_MOD").ok().filter(|s| !s.is_empty());
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();
+    let strings = crate::ui::i18n::Strings::load(&vfs, "english");
+    let look = |k: &str| strings.tooltip_text(k).to_owned();
+    let (index, _) = sta_content::OdfIndex::build(&vfs);
+    let load = |stem: &str| sta_odf::resolve_layered(stem, &mut |n, v| index.load(&vfs, n, v)).ok();
+
+    // One command: its short and verbose keys resolve, the marker is consumed and the letter in the
+    // brackets is the bound one.
+    let stop = load("stop").expect("the installed stop command");
+    for key in ["tooltip", "verbose"] {
+        let k = stop.str(key).expect("command key").to_owned();
+        let text = look(&k);
+        assert_ne!(text, k, "{key} resolves");
+        let (shown, marks) = hotkey_text(&text, Some('x'));
+        assert!(!shown.contains(HOTKEY_MARK), "the marker is consumed");
+        eprintln!("command {key}: {} marked glyph(s), slot filled: {}", marks.len(), shown.contains("<X>"));
+        assert!(!marks.is_empty() && shown.contains("<X>"), "the name and the slot are marked and the bound letter is in the slot");
+    }
+
+    // The group's key pairs.
+    for (short, verbose) in [
+        ("GUI_BP_MAIN_MENU", "GUI_CV_MAIN_TOOLTIP"),
+        ("GUI_BP_COMM_MENU", "GUI_CV_COMM_TOOLTIP"),
+        ("GUI_BP_IDLE_TOOLTIP", "GUI_BP_IDLE_VTOOLTIP"),
+        ("GUI_BP_MORE_TOOLTIP", "GUI_BP_MORE_VTOOLTIP"),
+    ] {
+        assert!(look(short) != short && look(verbose) != verbose, "{short}");
+    }
+
+    // The cost line's pieces.
+    for key in [COST_START_KEY, COST_SEPARATE_KEY, COST_END_KEY, "GUI_CP_DILITHIUM_RES", "GUI_CP_METAL_RES", "GUI_CP_CREW_RES", "GUI_CP_OFFICERS_RES"] {
+        assert_ne!(look(key), key, "{key}");
+    }
+
+    // One build item: a class with a tooltip key, a hotkey label and a dilithium cost.
+    let mut found = None;
+    for (stem, _) in index.iter() {
+        let Some(odf) = load(stem) else { continue };
+        let key = |k: &str| odf.str(k).map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned);
+        if let (Some(tooltip), Some(hotkey)) = (key("tooltip"), key("hotkeyLabel"))
+            && odf.f32("dilithiumCost").is_some_and(|c| c > 0.0)
+            && look(&tooltip) != tooltip
+            && look(&hotkey) != hotkey
+        {
+            found = Some(BuildTipParts {
+                tooltip,
+                verbose: key("verboseTooltip"),
+                hotkey: Some(hotkey),
+                cost: vec![CostPart { key: "GUI_CP_DILITHIUM_RES", fallback: "dilithium".into(), amount: 7.0 }],
+            });
+            break;
+        }
+    }
+    let p = found.expect("an installed class with tooltip, hotkeyLabel and a dilithium cost");
+    let short = build_short(&p, &look);
+    let verbose = build_verbose(&p, &look);
+    let (open, close) = (look(COST_START_KEY), look(COST_END_KEY));
+    let lines: Vec<&str> = short.lines().collect();
+    assert_eq!(lines.len(), 2, "name line and cost line");
+    assert!(lines[0].contains(&look(p.hotkey.as_deref().unwrap())), "the hotkey label follows the name");
+    assert!(lines[1].starts_with(&open) && lines[1].ends_with(&close) && lines[1].contains(" 7 "), "the cost line is bracketed");
+    assert_eq!(verbose.lines().next(), lines.first().copied(), "the verbose text starts with the same line");
+    let full = look("GUI_CP_DILITHIUM_RES");
+    assert!(verbose.lines().last().unwrap().contains(&full), "the verbose cost line has the full name");
+    assert!(!lines[1].contains(&full) || full.chars().count() == 1, "the short one has only the first letter");
 }
 
 /// The box on a GPU frame: a flat colour of the layout key, no border, the size the rule gives.

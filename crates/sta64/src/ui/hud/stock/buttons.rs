@@ -58,11 +58,15 @@ pub(in crate::ui::hud) struct PanelKeys {
     pub sprite: &'static str,
     pub default_sprite: &'static str,
     pub act: PanelButton,
+    /// STA64's own English label, shown where the table lacks the keys or the look is not Armada II's.
     pub tip: &'static str,
+    /// The string-table keys of the short and the verbose tooltip (the Armada II stock look; read
+    /// from the executable, static; texts read from data).
+    pub keys: (&'static str, &'static str),
 }
 
-const fn keys(area: &'static str, sprite: &'static str, default_sprite: &'static str, act: PanelButton, tip: &'static str) -> PanelKeys {
-    PanelKeys { area, sprite, default_sprite, act, tip }
+const fn keys(area: &'static str, sprite: &'static str, default_sprite: &'static str, act: PanelButton, tip: &'static str, keys: (&'static str, &'static str)) -> PanelKeys {
+    PanelKeys { area, sprite, default_sprite, act, tip, keys }
 }
 
 /// The buttons that show only while "more" is on.
@@ -86,14 +90,14 @@ pub(in crate::ui::hud) struct ButtonPanelGroup;
 pub(in crate::ui::hud) struct SecondRow;
 
 pub(in crate::ui::hud) const BUTTONS: [PanelKeys; 8] = [
-    keys("menuButtonArea", "menuButton", "menu_button", PanelButton::Menu, "Menu"),
-    keys("commButtonArea", "commButton", "comm_button", PanelButton::Unavailable, "Communications"),
-    keys("idleButtonArea", "idleButton", "idle_button", PanelButton::Idle, "Next idle ship"),
-    keys("toggleButtonArea", "toggleButton", "toggle_button", PanelButton::Unavailable, "Toggle view"),
-    keys("objectivesButtonArea", "objectivesButton", "objectives_button", PanelButton::Objectives, "Objectives"),
-    keys("helpButtonArea", "helpButton", "help_button", PanelButton::Unavailable, "Help"),
-    keys("paletteButtonArea", "paletteButton", "palette_button", PanelButton::Unavailable, "Command palette"),
-    keys("moreButtonArea", "moreButton", "more_button", PanelButton::More, "More"),
+    keys("menuButtonArea", "menuButton", "menu_button", PanelButton::Menu, "Menu", ("GUI_BP_MAIN_MENU", "GUI_CV_MAIN_TOOLTIP")),
+    keys("commButtonArea", "commButton", "comm_button", PanelButton::Unavailable, "Communications", ("GUI_BP_COMM_MENU", "GUI_CV_COMM_TOOLTIP")),
+    keys("idleButtonArea", "idleButton", "idle_button", PanelButton::Idle, "Next idle ship", ("GUI_BP_IDLE_TOOLTIP", "GUI_BP_IDLE_VTOOLTIP")),
+    keys("toggleButtonArea", "toggleButton", "toggle_button", PanelButton::Unavailable, "Toggle view", ("GUI_BP_TOGGLE_TOOLTIP", "GUI_BP_TOGGLE_VTOOLTIP")),
+    keys("objectivesButtonArea", "objectivesButton", "objectives_button", PanelButton::Objectives, "Objectives", ("GUI_BP_OBJECTIVES_TOOLTIP", "GUI_BP_OBJECTIVES_VTOOLTIP")),
+    keys("helpButtonArea", "helpButton", "help_button", PanelButton::Unavailable, "Help", ("GUI_BP_HELP_TOOLTIP", "GUI_BP_HELP_VTOOLTIP")),
+    keys("paletteButtonArea", "paletteButton", "palette_button", PanelButton::Unavailable, "Command palette", ("GUI_BP_PALETTE_TOOLTIP", "GUI_BP_PALETTE_VTOOLTIP")),
+    keys("moreButtonArea", "moreButton", "more_button", PanelButton::More, "More", ("GUI_BP_MORE_TOOLTIP", "GUI_BP_MORE_VTOOLTIP")),
 ];
 
 /// The sprite of a button: the cfg's, else the engine's default.
@@ -133,7 +137,7 @@ pub(in crate::ui::hud) fn spawn(commands: &mut Commands, parent: Entity, layout:
             UiButton,
             state,
             GuiButtonColors::default(),
-            Tooltip::new(k.tip.to_owned()),
+            Tooltip::new(k.tip.to_owned()).stock_keys(k.keys.0, k.keys.1),
             GuiButton { names: vec![sprite(layout, k)], keep_label: false },
             node,
             BackgroundColor(theme.button),

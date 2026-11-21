@@ -378,6 +378,47 @@ impl SpriteFont {
 }
 
 impl SpriteFont {
+    /// Rules under the glyph cells at `marks` (indices of characters of `text`), as `[x, y, w, h]` in
+    /// the units of [`layout_block_xy`](Self::layout_block_xy) with the same arguments: one rule per
+    /// mark, as wide as the glyph's advance, as thick as a texel of the font at this scale (at least
+    /// one), on the bottom row of the line's cell. A mark on a space the wrap removed, or past the
+    /// text, gives none. Measured at one window size (one tooltip frame): the rule is one pixel
+    /// thick on the last row of the 15 px line cell and spans the glyph cell; its thickness at other
+    /// scales is interim (one texel).
+    pub fn underline_rects(&self, text: &str, marks: &[usize], scale: Vec2, round_up: bool, max_width: Option<f32>, align: Align) -> Vec<[f32; 4]> {
+        let lines = match max_width {
+            Some(w) => wrap_lines(text, w, &|s| self.layout_xy(s, scale, round_up).width),
+            None => text.split('\n').map(str::to_owned).collect(),
+        };
+        let block = self.layout_block_xy(text, scale, round_up, max_width, align).width;
+        let h = self.height() * scale.y;
+        let thick = scale.y.round().max(1.0);
+        let all: Vec<char> = text.chars().collect();
+        let width = |chars: &[char]| self.layout_xy(&chars.iter().collect::<String>(), scale, round_up).width;
+        let mut out = Vec::new();
+        let mut start = 0usize;
+        for (row, line) in lines.iter().enumerate() {
+            let chars: Vec<char> = line.chars().collect();
+            let dx = match align {
+                Align::Left => 0.0,
+                Align::Center => ((block - width(&chars)) / 2.0).max(0.0),
+                Align::Right => (block - width(&chars)).max(0.0),
+            };
+            for &m in marks.iter().filter(|&&m| m >= start && m < start + chars.len()) {
+                let k = m - start;
+                out.push([width(&chars[..k]) + dx, row as f32 * h + h - thick, width(&chars[k..=k]), thick]);
+            }
+            start += chars.len();
+            // The wrap drops one space or line break where it breaks a line.
+            if matches!(all.get(start), Some(' ' | '\n')) {
+                start += 1;
+            }
+        }
+        out
+    }
+}
+
+impl SpriteFont {
     /// [`layout_block`](Self::layout_block) at an integer `k` times the font's texels, every
     /// rectangle rounded to whole pixels: glyph texels land on whole physical pixels, so a
     /// nearest-sampled sheet stays crisp and each pen position is the rounded running
@@ -999,7 +1040,15 @@ pub struct SpriteTextStyle {
     /// ([`stock_font::StockPlace`](crate::ui::stock_font::StockPlace)). `None`, or a zero
     /// rectangle: the plain placement of the node.
     pub place: Option<StockPlace>,
+    /// Indices of characters of the text to draw underlined, in the text colour, on the stock path
+    /// ([`SpriteFont::underline_rects`]). Ignored on every other path (text with a character the
+    /// font lacks included).
+    pub underline: Vec<usize>,
 }
+
+/// A rule drawn under a glyph of a [`SpriteTextStyle::underline`] mark.
+#[derive(Component)]
+pub struct UnderlineRule;
 
 #[allow(dead_code)]
 impl SpriteTextStyle {
@@ -1241,6 +1290,7 @@ fn resolve_text(
     children: Query<&Children>,
     mut images: Query<&mut ImageNode>,
     mut texts: Query<&mut TextColor, With<Text>>,
+    mut rules: Query<&mut BackgroundColor, With<UnderlineRule>>,
 ) {
     // Physical pixels per logical px (UI scale x the window's scale factor).
     let px = (ui_scale.map_or(1.0, |u| u.0) * window.single().map_or(1.0, |w| w.scale_factor())).max(0.1);
@@ -1277,6 +1327,10 @@ fn resolve_text(
                     && c.0 != t.color
                 {
                     c.0 = t.color;
+                } else if let Ok(mut rule) = rules.get_mut(kid)
+                    && rule.0 != t.color
+                {
+                    rule.0 = t.color;
                 }
             }
             continue;
@@ -1452,6 +1506,24 @@ fn resolve_text(
         }
         for &stale in existing.iter().skip(used) {
             commands.entity(stale).despawn();
+        }
+        if let Some((_, _, k)) = stock.filter(|_| !style.underline.is_empty()) {
+            for r in f.font.underline_rects(&t.text, &style.underline, k, true, style.wrap.map(|w| w * px), style.align) {
+                let r = r.map(f32::round);
+                commands.entity(e).with_child((
+                    UnderlineRule,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(r[0] * inv),
+                        top: Val::Px(r[1] * inv),
+                        width: Val::Px(r[2] * inv),
+                        height: Val::Px(r[3] * inv),
+                        ..default()
+                    },
+                    BackgroundColor(t.color),
+                    Pickable::IGNORE,
+                ));
+            }
         }
         commands.entity(e).insert(SpriteLaid { text: t.text.clone(), size: t.size, untinted, mixed: false });
     }
@@ -3118,6 +3190,45 @@ mod tests {
         let n = node(&app, wide);
         assert_eq!((px(n.left), px(n.top), px(n.width), px(n.height)), (-7.0, 0.0, 24.0, 20.0), "(9 - 24) / 2 = -7.5 snaps to -7; one line");
         assert!(node(&app, wide).overflow == Overflow::visible());
+    }
+
+    /// Marked glyphs of stock text get a one-pixel rule on the bottom row of their cell, in the text
+    /// colour; the same style outside the stock rule draws none, and a recolour recolours the rule.
+    #[test]
+    fn marked_stock_glyphs_get_a_rule_in_the_text_colour() {
+        use crate::ui::hud::stock::layout::HudFit::Centred;
+        let mut images = Assets::<Image>::default();
+        let fonts = authored_family(&mut images);
+        let sq = Vec2::new(1600.0, 1200.0);
+        let mut app = resolve_app(fonts, canvas(sq, sq, Centred));
+        let red = Color::srgb(1.0, 0.0, 0.0);
+        let marked = SpriteTextStyle { underline: vec![1], ..SpriteTextStyle::default().stock_label() };
+        let a = app.world_mut().spawn(sprite_text_styled("ab", 18.0, red, marked.clone())).id();
+        let outside = SpriteTextStyle { underline: vec![1], ..SpriteTextStyle::default().at_least_size() };
+        let b = app.world_mut().spawn(sprite_text_styled("ab", 18.0, red, outside)).id();
+        app.update();
+        let px = |v: Val| if let Val::Px(v) = v { v } else { panic!("px") };
+        let rules = |app: &App, e: Entity| -> Vec<(Node, Color)> {
+            app.world().get::<Children>(e).unwrap().iter().filter(|k| app.world().get::<UnderlineRule>(*k).is_some()).map(|k| (app.world().get::<Node>(k).unwrap().clone(), app.world().get::<BackgroundColor>(k).unwrap().0)).collect()
+        };
+        let r = rules(&app, a);
+        assert_eq!(r.len(), 1);
+        // The default role draws its 20-high font 1:1: 'b' starts after one 6-wide advance; the rule is
+        // one pixel on the cell's last row.
+        assert_eq!((px(r[0].0.left), px(r[0].0.top), px(r[0].0.width), px(r[0].0.height)), (6.0, 19.0, 6.0, 1.0));
+        assert_eq!(r[0].1, red);
+        assert_eq!(app.world().get::<Children>(a).unwrap().len(), 3, "two glyphs and the rule");
+        assert!(rules(&app, b).is_empty(), "outside the stock rule nothing is underlined");
+        // A recolour recolours the rule without laying the text out again.
+        let green = Color::srgb(0.0, 1.0, 0.0);
+        app.world_mut().get_mut::<SpriteText>(a).unwrap().color = green;
+        app.update();
+        assert_eq!(rules(&app, a)[0].1, green);
+        // The marks gone: the rule goes with them.
+        app.world_mut().get_mut::<SpriteTextStyle>(a).unwrap().underline.clear();
+        app.update();
+        assert!(rules(&app, a).is_empty());
+        assert_eq!(app.world().get::<Children>(a).unwrap().len(), 2);
     }
 
     /// STA64's fallback labels keep the plain path: no role font, no placement, the same
