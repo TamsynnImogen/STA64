@@ -53,6 +53,7 @@ pub struct ActiveMatch {
     /// No local seat in an Observer match.
     pub local: Option<PlayerId>,
     pub speed: crate::clock::MatchSpeed,
+    pub fog: crate::frontend::screens::SetupFog,
     /// The build was asked for (the builder's cue); false while the loading screen comes up.
     pub requested: bool,
     /// Frames in the current phase.
@@ -208,7 +209,7 @@ fn on_start(
     info: Option<ResMut<LoadInfo>>,
     progress: Option<ResMut<LoadProgress>>,
 ) {
-    let Some(StartGame(setup, speed, palette)) = starts.read().last().cloned() else { return };
+    let Some(StartGame(setup, speed, palette, fog)) = starts.read().last().cloned() else { return };
     let local = match net.as_ref().and_then(|start| start.0.as_ref()) {
         Some(match_) => Ok(Some(match_.me)),
         None => local_seat(&setup),
@@ -233,7 +234,7 @@ fn on_start(
         commands.insert_resource(palette);
     }
     commands.insert_resource(MapSeat(local.map(|p| p.0)));
-    commands.insert_resource(ActiveMatch { setup, local, speed, requested: false, frames: 0 });
+    commands.insert_resource(ActiveMatch { setup, local, speed, fog, requested: false, frames: 0 });
     next.set(AppState::Loading);
 }
 

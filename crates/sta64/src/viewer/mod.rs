@@ -161,6 +161,16 @@ impl TeamColours {
         result
     }
 
+    pub(crate) fn remap_players(&self, before: &[PlayerId], after: &[PlayerId]) -> Self {
+        let mut result = self.clone();
+        for (&from, &to) in before.iter().zip(after) {
+            if from != to && let Some(colour) = self.owner_colour(from) {
+                result.set_seat_colour(to, colour);
+            }
+        }
+        result
+    }
+
     fn set_seat_colour(&mut self, owner: PlayerId, colour: Color) {
         let i = usize::from(owner.0);
         if self.0.iter().any(|(name, _)| name.get(..7).is_some_and(|prefix| prefix.eq_ignore_ascii_case("mpcolor"))) {

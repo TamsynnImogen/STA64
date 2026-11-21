@@ -109,16 +109,19 @@ pub enum Slot {
     SeatControl(usize),
     SeatSide(usize),
     SeatTeam(usize),
-    ModeLabel,
-    ModePlay,
-    ModeObserve,
     RandomColour,
     Palette(usize),
     MapInfo,
     Preview,
     SelectMap,
+    PreviewVisibility,
+    StartMarkers,
     Resources,
-    Officers,
+    DefaultSettings,
+    SaveSettings,
+    LoadSettings,
+    Fog,
+    RandomPlacement,
     Advanced,
     SetupBack,
     Launch,
@@ -139,7 +142,7 @@ pub enum Slot {
 pub const TABLE_ROWS: usize = 8;
 
 /// Game Setup's player panel stays left of x 454. These are arranged regions
-/// within it; the palette and match-mode controls occupy the space below rows.
+/// within it; the palette occupies the strip below the rows.
 pub const TABLE_TOP: f32 = 119.0;
 pub const TABLE_BOTTOM: f32 = 383.0;
 pub const COL_X: [f32; 3] = [67.0, 217.0, 365.0];
@@ -150,17 +153,33 @@ pub fn row_pitch() -> f32 {
     (TABLE_BOTTOM - TABLE_TOP) / TABLE_ROWS as f32
 }
 
-/// The map image uses the design height as its single scale, so a wide box
-/// gives it side margins instead of stretching the authored square texture.
-pub fn placed_rect(slot: Slot, b: Vec2) -> Rect {
-    if slot == Slot::Preview {
-        let size = region(slot).h * b.y / DESIGN.y;
-        let centre_x = 621.0 * b.x / DESIGN.x;
-        let top = region(slot).y * b.y / DESIGN.y;
-        Rect::new(centre_x - size / 2.0, top, centre_x + size / 2.0, top + size)
-    } else {
-        region(slot).px(b)
+/// Palette controls follow the last real seat, leaving no empty roster rows.
+pub fn setup_region(slot: Slot, seats: usize) -> Region {
+    let mut r = region(slot);
+    if matches!(slot, Slot::RandomColour | Slot::Palette(_)) {
+        r.y += (seats.min(TABLE_ROWS) as f32 - TABLE_ROWS as f32) * row_pitch();
     }
+    r
+}
+
+pub fn setup_rect(slot: Slot, b: Vec2, seats: usize) -> Rect {
+    let r = setup_region(slot, seats);
+    match slot {
+        Slot::Preview | Slot::SeatColour(_) | Slot::Palette(_) => square_rect(r, b),
+        _ => r.px(b),
+    }
+}
+
+/// Use the vertical scale for both axes of the preview and colour chips.
+fn square_rect(region: Region, b: Vec2) -> Rect {
+    let rect = region.px(b);
+    let size = rect.height();
+    let left = rect.center().x - size / 2.0;
+    Rect::new(left, rect.min.y, left + size, rect.max.y)
+}
+
+pub fn placed_rect(slot: Slot, b: Vec2) -> Rect {
+    setup_rect(slot, b, TABLE_ROWS)
 }
 
 /// The region of `slot`.
@@ -197,24 +216,26 @@ pub fn region(slot: Slot) -> Region {
         Slot::HeadControl => a(COL_X[0], 76.0, col_w(0), 34.0),
         Slot::HeadSide => a(COL_X[1], 76.0, col_w(1), 34.0),
         Slot::HeadTeam => a(COL_X[2], 76.0, col_w(2), 34.0),
-        Slot::SeatColour(i) => a(42.0, TABLE_TOP + row_pitch() * i as f32 + 8.0, 17.0, 17.0),
+        Slot::SeatColour(i) => a(42.0, TABLE_TOP + row_pitch() * i as f32 + 11.5, 10.0, 10.0),
         Slot::SeatControl(i) => row(0, i),
         Slot::SeatSide(i) => row(1, i),
         Slot::SeatTeam(i) => row(2, i),
-        // Match mode is outside the map's seat rows, in the free area below the table.
-        Slot::ModeLabel => a(42.0, 472.0, 52.0, 34.0),
-        Slot::ModePlay => a(101.0, 472.0, 148.0, 34.0),
-        Slot::ModeObserve => a(257.0, 472.0, 166.0, 34.0),
-        Slot::RandomColour => a(42.0, 409.0, 140.0, 34.0),
-        Slot::Palette(i) => a(192.0 + (i % 8) as f32 * 27.0, 412.0 + (i / 8) as f32 * 25.0, 17.0, 17.0),
+        Slot::RandomColour => a(42.0, 398.0, 100.0, 37.0),
+        Slot::Palette(i) => a(150.0 + i as f32 * 12.0, 411.5, 10.0, 10.0),
         // Map title and preview in the right-hand panel (arranged).
         Slot::MapInfo => a(483.0, 76.0, 280.0, 62.0),
-        Slot::Preview => a(518.0, 146.0, 206.0, 206.0),
-        // Available map and option controls sit below the preview.
-        Slot::SelectMap => a(483.0, 366.0, 280.0, 34.0),
-        Slot::Resources => a(483.0, 407.0, 280.0, 34.0),
-        Slot::Officers => a(483.0, 448.0, 280.0, 34.0),
-        Slot::Advanced => a(483.0, 489.0, 280.0, 34.0),
+        Slot::Preview => a(483.0, 143.0, 145.0, 145.0),
+        // Map choices beside the preview; settings below it.
+        Slot::SelectMap => a(634.0, 143.0, 129.0, 37.0),
+        Slot::PreviewVisibility => a(634.0, 181.0, 129.0, 37.0),
+        Slot::StartMarkers => a(634.0, 219.0, 129.0, 37.0),
+        Slot::Fog => a(634.0, 257.0, 129.0, 37.0),
+        Slot::RandomPlacement => a(634.0, 295.0, 129.0, 37.0),
+        Slot::Resources => a(483.0, 334.0, 135.0, 37.0),
+        Slot::DefaultSettings => a(628.0, 334.0, 135.0, 37.0),
+        Slot::SaveSettings => a(483.0, 374.0, 135.0, 37.0),
+        Slot::LoadSettings => a(628.0, 374.0, 135.0, 37.0),
+        Slot::Advanced => a(483.0, 414.0, 280.0, 37.0),
         // The footer is anchored below both panels.
         Slot::SetupBack => a(24.0, 554.0, 200.0, 34.0),
         Slot::Launch => a(576.0, 554.0, 200.0, 34.0),
@@ -281,7 +302,7 @@ mod tests {
         assert!(r(Slot::Launch).min.y >= 550.0);
         // The three table columns retain their arranged panel positions.
         assert_eq!([r(Slot::SeatControl(0)).min.x, r(Slot::SeatSide(0)).min.x, r(Slot::SeatTeam(0)).min.x], COL_X);
-        assert_eq!(region(Slot::Preview).rect(), Rect::new(518.0, 146.0, 724.0, 352.0));
+        assert_eq!(region(Slot::Preview).rect(), Rect::new(483.0, 143.0, 628.0, 288.0));
     }
 
     #[test]

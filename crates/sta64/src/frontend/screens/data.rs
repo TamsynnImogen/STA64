@@ -8,11 +8,14 @@ use bevy::prelude::*;
 use sta_content::{ContentDb, Fixed, MapDef, StartPos, StartingResources, Vec3 as SimVec3};
 use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::{PlayerId, TeamId};
-use crate::clock::MatchSpeed;
+use crate::clock::{MatchSpeed, splitmix64};
 use crate::viewer::TeamColours;
 
 /// The registry name of the computer opponent (`sta_ai::Registry::builtin`).
 pub const SKIRMISH_AI: &str = "skirmish";
+
+/// An unresolved side selection in the setup menu.
+pub const RANDOM_SIDE: &str = "";
 
 /// Most seats a game setup offers, whatever the map lists.
 pub const MAX_SEATS: usize = PlayerId::MAX_PLAYERS as usize;
@@ -202,6 +205,88 @@ pub struct Seat {
     pub team: u8,
 }
 
+/// Which visibility layers Instant Action starts with.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SetupFog {
+    #[default]
+    Both,
+    FogOnly,
+    Neither,
+    ShroudOnly,
+}
+
+impl SetupFog {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Both => Self::FogOnly,
+            Self::FogOnly => Self::ShroudOnly,
+            Self::ShroudOnly => Self::Neither,
+            Self::Neither => Self::Both,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Both => "Shroud On, Fog On",
+            Self::FogOnly => "Shroud Off, Fog On",
+            Self::Neither => "Shroud Off, Fog Off",
+            Self::ShroudOnly => "Shroud On, Fog Off",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Both => "both",
+            Self::FogOnly => "fog",
+            Self::Neither => "none",
+            Self::ShroudOnly => "shroud",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        [Self::Both, Self::FogOnly, Self::Neither, Self::ShroudOnly].into_iter().find(|mode| mode.key() == key)
+    }
+
+    /// Flags that lift the fog, then the shroud.
+    pub fn lifted(self) -> (bool, bool) {
+        (matches!(self, Self::Neither | Self::ShroudOnly), matches!(self, Self::Neither | Self::FogOnly))
+    }
+}
+
+/// Which start positions the setup minimap labels.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SetupStartMarkers {
+    #[default]
+    All,
+    Available,
+    Allies,
+    None,
+}
+
+impl SetupStartMarkers {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "Show All",
+            Self::Available => "Show Available",
+            Self::Allies => "Show Allies",
+            Self::None => "Show None",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Available => "available",
+            Self::Allies => "allies",
+            Self::None => "none",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        [Self::All, Self::Available, Self::Allies, Self::None].into_iter().find(|mode| mode.key() == key)
+    }
+}
+
 /// Game setup's choices so far; [`SetupDraft::to_setup`] makes the
 /// [`GameSetup`] a match starts from, [`SetupDraft::from_setup`] reads one back.
 #[derive(Resource, Debug, Clone, PartialEq, Eq)]
@@ -213,6 +298,10 @@ pub struct SetupDraft {
     pub options: GameOptions,
     pub speed: MatchSpeed,
     pub observing: bool,
+    pub fog: SetupFog,
+    pub random_placement: bool,
+    pub preview_visible: bool,
+    pub start_markers: SetupStartMarkers,
     /// Pick from the mounted multiplayer palette, or use the seat default.
     pub colour: Option<usize>,
     pub(crate) return_row: usize,
@@ -223,7 +312,7 @@ impl SetupDraft {
     /// The first map, seat 0 the player, the others computers, every seat its
     /// own team, the races in turn.
     pub fn new(data: &ScreenData) -> SetupDraft {
-        let mut d = SetupDraft { map: 0, seed: 1, seats: Vec::new(), options: GameOptions::default(), speed: MatchSpeed::Normal, observing: false, colour: None, return_row: 0, advanced_backup: None };
+        let mut d = SetupDraft { map: 0, seed: 1, seats: Vec::new(), options: GameOptions::default(), speed: MatchSpeed::Normal, observing: false, fog: SetupFog::default(), random_placement: false, preview_visible: true, start_markers: SetupStartMarkers::All, colour: None, return_row: 0, advanced_backup: None };
         d.set_map(data, 0);
         d
     }
@@ -236,6 +325,9 @@ impl SetupDraft {
             self.options.officer_limit = 0;
         }
         let slots = data.maps.get(self.map).map_or(0, MapEntry::slots);
+        if self.colour.is_some_and(|choice| choice >= data.colours.swatches().len()) {
+            self.colour = None;
+        }
         let races = data.races();
         self.seats.truncate(slots);
         self.return_row = self.return_row.min(slots.saturating_sub(1));
@@ -281,15 +373,55 @@ impl SetupDraft {
         self.seats.iter().position(|seat| seat.control == SeatControl::Human)
     }
 
+    pub fn observer_row(&self) -> Option<usize> {
+        (self.observing && self.return_row < self.seats.len()).then_some(self.return_row)
+    }
+
+    // In Observer the same colour controls the computer occupying the former local row.
+    fn colour_row(&self) -> Option<usize> {
+        self.local_row().or_else(|| self.observer_row())
+    }
+
+    pub fn colour_enabled(&self) -> bool {
+        self.colour_row().is_some()
+    }
+
+    pub fn show_start_marker(&self, row: usize) -> bool {
+        let Some(seat) = self.seats.get(row) else { return false };
+        let available = seat.control == SeatControl::Idle;
+        let local = self.local_row();
+        match self.start_markers {
+            SetupStartMarkers::All => true,
+            SetupStartMarkers::None => false,
+            SetupStartMarkers::Available => available || local == Some(row),
+            SetupStartMarkers::Allies => available || local.is_some_and(|local| self.seats[local].team == seat.team),
+        }
+    }
+
+    pub fn cycle_start_markers(&mut self) {
+        use SetupStartMarkers::*;
+        self.start_markers = match (self.random_placement, self.start_markers) {
+            (true, All) => None,
+            (false, All) => Available,
+            (false, Available) => Allies,
+            _ => All,
+        };
+    }
+
+    pub fn toggle_placement(&mut self) {
+        self.random_placement = !self.random_placement;
+        self.start_markers = SetupStartMarkers::All;
+    }
+
     pub fn pick_colour(&mut self, data: &ScreenData, choice: usize) {
-        if self.local_row().is_some() && choice < data.colours.swatches().len() {
+        if self.colour_enabled() && choice < data.colours.swatches().len() {
             self.colour = Some(choice);
         }
     }
 
     /// The default swatch is the actual marked colour of the local start.
     pub fn active_swatch(&self, data: &ScreenData) -> Option<usize> {
-        let row = self.local_row()?;
+        let row = self.colour_row()?;
         let colour = data.colours.owner_colour(PlayerId(data.maps.get(self.map)?.playable_starts().get(row)?.slot));
         let swatches = data.colours.swatches();
         self.colour.filter(|&index| index < swatches.len()).or_else(|| swatches.iter().position(|&swatch| Some(swatch) == colour))
@@ -298,7 +430,7 @@ impl SetupDraft {
     pub fn effective_colours(&self, data: &ScreenData) -> TeamColours {
         if let Some(choice) = self.colour
             && let Some(&colour) = data.colours.swatches().get(choice)
-            && let Some(row) = self.local_row()
+            && let Some(row) = self.colour_row()
             && let Some(map) = data.maps.get(self.map)
         {
             let players: Vec<_> = map.playable_starts().iter().map(|start| PlayerId(start.slot)).collect();
@@ -307,6 +439,31 @@ impl SetupDraft {
             }
         }
         data.colours.clone()
+    }
+
+    /// Keep each row's colour when its assigned start changes for the match.
+    pub fn launch_colours(&self, data: &ScreenData) -> Option<TeamColours> {
+        if !self.random_placement && self.colour.is_none() {
+            return None;
+        }
+        let colours = self.effective_colours(data);
+        if self.random_placement {
+            let map = data.maps.get(self.map)?;
+            return Some(colours.remap_players(&self.row_slots(map, false), &self.row_slots(map, true)));
+        }
+        Some(colours)
+    }
+
+    fn row_slots(&self, map: &MapEntry, random: bool) -> Vec<PlayerId> {
+        let mut slots: Vec<_> = map.playable_starts().iter().map(|start| PlayerId(start.slot)).collect();
+        if random {
+            let mut seed = self.seed ^ 0x628e_c4ad_e897_a6d3;
+            for end in (1..slots.len()).rev() {
+                seed = splitmix64(seed);
+                slots.swap(end, (seed % (end as u64 + 1)) as usize);
+            }
+        }
+        slots
     }
 
     pub fn select_control(&mut self, row: usize, control: SeatControl) {
@@ -342,17 +499,30 @@ impl SetupDraft {
         let races = data.races();
         let Some(seat) = self.seats.get_mut(row) else { return };
         if let Some(i) = races.iter().position(|r| *r == seat.race) {
-            seat.race = races[(i + 1) % races.len()].clone();
+            seat.race = races.get(i + 1).map_or_else(|| RANDOM_SIDE.to_owned(), String::clone);
         } else if let Some(r) = races.first() {
             seat.race = r.clone();
         }
     }
 
-    pub fn cycle_team(&mut self, row: usize) {
-        let n = self.seats.len() as u8;
-        if let Some(seat) = self.seats.get_mut(row) {
-            seat.team = (seat.team + 1) % n.max(1);
+    pub fn choose_team(&mut self, row: usize, index: usize) {
+        let count = self.seats.len();
+        let Some(control) = self.seats.get(row).map(|seat| seat.control) else { return };
+        if index < count {
+            if self.observer_row() == Some(row) {
+                self.set_observing(false);
+            }
+            self.seats[row].team = index as u8;
+        } else if index == count && control == SeatControl::Human {
+            self.set_observing(true);
         }
+    }
+
+    pub fn cycle_team(&mut self, row: usize) {
+        let Some(seat) = self.seats.get(row) else { return };
+        let choices = self.seats.len() + usize::from(seat.control == SeatControl::Human);
+        let index = if self.observer_row() == Some(row) { 0 } else { (usize::from(seat.team) + 1) % choices };
+        self.choose_team(row, index);
     }
 
     pub fn cycle_resources(&mut self) {
@@ -369,27 +539,32 @@ impl SetupDraft {
         }
     }
 
-    /// The setup a match starts from. A row uses the map's authored start slot.
+    /// Resolve random choices against the match seed and the map's authored starts.
     pub fn to_setup(&self, data: &ScreenData) -> Option<GameSetup> {
         let map = data.maps.get(self.map)?;
-        let starts = map.playable_starts();
+        let starts = self.row_slots(map, self.random_placement);
         let races = data.races();
         let human_count = self.seats.iter().filter(|s| s.control == SeatControl::Human).count();
         if starts.len() < 2 || starts.len() != self.seats.len() || human_count != usize::from(!self.observing)
-            || races.is_empty() || self.seats.iter().any(|s| !races.iter().any(|r| r.eq_ignore_ascii_case(&s.race)))
+            || races.is_empty() || self.seats.iter().any(|s| s.race != RANDOM_SIDE && !races.iter().any(|r| r.eq_ignore_ascii_case(&s.race)))
         {
             return None;
         }
+        let mut players: Vec<_> = self.seats.iter().zip(starts).enumerate().map(|(row, (seat, id))| {
+            let race = if seat.race == RANDOM_SIDE {
+                let roll = splitmix64(self.seed ^ 0xa1cc_5d20_abca_5197 ^ row as u64);
+                races[(roll % races.len() as u64) as usize].clone()
+            } else {
+                seat.race.clone()
+            };
+            PlayerSetup { id, team: TeamId(seat.team), race, control: seat.control.control() }
+        }).collect();
+        players.sort_by_key(|player| player.id);
         Some(GameSetup {
             seed: self.seed,
             map: map.def.clone(),
             content: data.content.clone(),
-            players: self
-                .seats
-                .iter()
-                .zip(starts)
-                .map(|(s, start)| PlayerSetup { id: PlayerId(start.slot), team: TeamId(s.team), race: s.race.clone(), control: s.control.control() })
-                .collect(),
+            players,
             options: self.options.clone(),
         })
     }
@@ -410,6 +585,10 @@ impl SetupDraft {
             options: setup.options.clone(),
             speed: MatchSpeed::Normal,
             observing: human.is_none(),
+            fog: SetupFog::default(),
+            random_placement: false,
+            preview_visible: true,
+            start_markers: SetupStartMarkers::All,
             colour: None,
             return_row: human.unwrap_or_default(),
             advanced_backup: None,

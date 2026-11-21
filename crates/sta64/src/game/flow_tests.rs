@@ -201,7 +201,7 @@ fn observer_starts_without_taking_any_of_the_four_map_seats() {
     let setup = draft.to_setup(&data).expect("observer setup");
     assert_eq!(setup.players.len(), 4);
     assert!(setup.players.iter().all(|p| matches!(p.control, sta_sim::setup::Control::Ai(_))));
-    app.world_mut().write_message(crate::frontend::screens::StartGame(setup, crate::clock::MatchSpeed::Normal, None));
+    app.world_mut().write_message(crate::frontend::screens::StartGame(setup, crate::clock::MatchSpeed::Normal, None, Default::default()));
     for _ in 0..200 {
         app.update();
         if state(&app) == AppState::InGame {

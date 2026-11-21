@@ -111,20 +111,15 @@ pub(super) fn on_dropdowns(mut changes: MessageReader<DropdownChanged>, seats: Q
                 }
             }
             Col::Race => {
-                if let (Some(id), Some(seat)) = (data.races().get(c.index), draft.seats.get_mut(row)) {
-                    seat.race.clone_from(id);
+                let race = match c.index.checked_sub(1) {
+                    Some(index) => data.races().get(index).cloned(),
+                    None => Some(super::data::RANDOM_SIDE.to_owned()),
+                };
+                if let (Some(id), Some(seat)) = (race, draft.seats.get_mut(row)) {
+                    seat.race = id;
                 }
             }
-            Col::Team => {
-                let count = draft.seats.len();
-                if let Some(seat) = draft.seats.get_mut(row) {
-                    if c.index < count {
-                        seat.team = c.index as u8;
-                    } else if c.index == count && seat.control == SeatControl::Human {
-                        draft.set_observing(true);
-                    }
-                }
-            }
+            Col::Team => draft.choose_team(row, c.index),
         }
     }
 }

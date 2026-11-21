@@ -150,7 +150,11 @@ fn check_layout(screen: Screen, want: &[Slot]) {
             let mut rects = Vec::new();
             for (slot, e) in &all {
                 let r = node_rect(&app, *e);
-                let want_r = layout::placed_rect(*slot, b);
+                let want_r = if screen == Screen::Setup {
+                    layout::setup_rect(*slot, b, app.world().resource::<SetupDraft>().seats.len())
+                } else {
+                    layout::placed_rect(*slot, b)
+                };
                 for (got, exp) in [(r.min.x, want_r.min.x), (r.min.y, want_r.min.y), (r.max.x, want_r.max.x), (r.max.y, want_r.max.y)] {
                     assert!((got - exp).abs() < 0.01, "{ctx}: {slot:?} {r:?} is not its region {want_r:?}");
                 }
@@ -198,12 +202,54 @@ fn single_player_layout_in_every_window_and_scale() {
 
 #[test]
 fn setup_layout_in_every_window_and_scale() {
-    let mut want = vec![Slot::SetupTitle, Slot::HeadControl, Slot::HeadSide, Slot::HeadTeam, Slot::ModeLabel, Slot::ModePlay, Slot::ModeObserve, Slot::RandomColour, Slot::MapInfo, Slot::Preview, Slot::SelectMap, Slot::Resources, Slot::Officers, Slot::Advanced, Slot::SetupBack, Slot::Launch];
+    let mut want = vec![Slot::SetupTitle, Slot::HeadControl, Slot::HeadSide, Slot::HeadTeam, Slot::RandomColour, Slot::MapInfo, Slot::Preview, Slot::SelectMap, Slot::PreviewVisibility, Slot::StartMarkers, Slot::Resources, Slot::DefaultSettings, Slot::SaveSettings, Slot::LoadSettings, Slot::Fog, Slot::RandomPlacement, Slot::Advanced, Slot::SetupBack, Slot::Launch];
     // The fake map has two seats.
     for i in 0..2 {
         want.extend([Slot::SeatColour(i), Slot::SeatControl(i), Slot::SeatSide(i), Slot::SeatTeam(i)]);
     }
     check_layout(Screen::Setup, &want);
+}
+
+#[test]
+fn setup_keeps_real_seat_rows_and_all_sixteen_colours_in_one_strip() {
+    for count in [2, 3, 8] {
+        let mut data = four_races();
+        let mut map = data.maps[1].def.as_ref().clone();
+        map.starts = (0..count).map(|i| {
+            let mut start = map.starts[i % map.starts.len()].clone();
+            start.slot = i as u8;
+            start
+        }).collect();
+        data.maps = vec![crate::frontend::screens::data::MapEntry::new(map)];
+        let palette = (1..=16).map(|i| format!("mpcolor{i:02} = {} 0.3 0.6", i as f32 / 16.0)).collect::<Vec<_>>().join("\n");
+        data.colours = crate::viewer::TeamColours(crate::viewer::TeamColours::parse(&palette));
+        let mut app = app_with(data, None, 1.0);
+        go(&mut app, Screen::Setup);
+        let all = placed(&mut app);
+        assert_eq!(all.iter().filter(|(slot, _)| matches!(slot, Slot::SeatControl(_))).count(), count);
+        assert_eq!(all.iter().filter(|(slot, _)| matches!(slot, Slot::Palette(_))).count(), 16);
+        for i in 0..16 {
+            let r = layout::setup_region(Slot::Palette(i), count).rect();
+            assert!(r.min.x >= layout::setup_region(Slot::RandomColour, count).rect().max.x);
+            assert!(r.max.x <= 454.0);
+            assert!(r.min.y >= region(Slot::SeatControl(count - 1)).rect().max.y);
+            assert_eq!(r.min.y, layout::setup_region(Slot::Palette(0), count).rect().min.y);
+        }
+    }
+}
+
+#[test]
+fn setup_minimap_toggle_hides_the_image_child_but_keeps_its_frame() {
+    let mut app = app_with(four_races(), None, 1.0);
+    go(&mut app, Screen::Setup);
+    assert!(placed(&mut app).iter().any(|(slot, _)| *slot == Slot::Preview));
+    press(&mut app, Act::TogglePreview);
+    assert!(!app.world().resource::<SetupDraft>().preview_visible);
+    let mut q = app.world_mut().query_filtered::<&Visibility, With<crate::frontend::screens::preview::AuthoredPreview>>();
+    assert_eq!(*q.single(app.world()).unwrap(), Visibility::Hidden);
+    assert!(placed(&mut app).iter().any(|(slot, _)| *slot == Slot::Preview));
+    press(&mut app, Act::CycleStartMarkers);
+    assert_eq!(app.world().resource::<SetupDraft>().start_markers.label(), "Show Available");
 }
 
 #[test]
@@ -219,9 +265,22 @@ fn setup_colour_and_observer_controls_follow_the_local_seat() {
     assert!(placed(&mut app).iter().any(|(slot, _)| *slot == Slot::SeatColour(0)));
     press(&mut app, Act::PickTeamColour(1));
     assert_eq!(app.world().resource::<SetupDraft>().colour, Some(1));
-    press(&mut app, Act::SetObserving(true));
-    assert!(!app.world_mut().query::<&Act>().iter(app.world()).any(|a| matches!(a, Act::PickTeamColour(_) | Act::RandomTeamColour)));
-    assert!(app.world_mut().query::<&Act>().iter(app.world()).any(|a| *a == Act::SetObserving(false)));
+    let team = dropdown_of(&mut app, 0, Col::Team);
+    pick(&mut app, team, teams);
+    assert!(app.world().resource::<SetupDraft>().observing);
+    let team = dropdown_of(&mut app, 0, Col::Team);
+    assert_eq!(app.world().get::<Dropdown>(team).unwrap().value(), Some("Observer"));
+    assert!(app.world_mut().query::<&Act>().iter(app.world()).any(|a| matches!(a, Act::PickTeamColour(_) | Act::RandomTeamColour)));
+    let data = app.world().resource::<ScreenData>().clone();
+    let before = app.world().resource::<SetupDraft>().effective_colours(&data).owner_colour(sta_sim::PlayerId(0));
+    press(&mut app, Act::RandomTeamColour);
+    let draft = app.world().resource::<SetupDraft>();
+    assert_ne!(draft.active_swatch(&data), Some(1));
+    assert_ne!(draft.effective_colours(&data).owner_colour(sta_sim::PlayerId(0)), before);
+    let team = dropdown_of(&mut app, 0, Col::Team);
+    pick(&mut app, team, 0);
+    assert!(!app.world().resource::<SetupDraft>().observing);
+    assert_eq!(app.world().resource::<SetupDraft>().seats[0].control, SeatControl::Human);
 }
 
 #[test]
@@ -232,7 +291,7 @@ fn advanced_contains_only_modal_actions() {
     assert!(actions.contains(&Act::CloseAdvanced(true)));
     assert!(actions.contains(&Act::CloseAdvanced(false)));
     assert!(actions.contains(&Act::DefaultOptions));
-    assert!(!actions.iter().any(|a| matches!(a, Act::Launch | Act::PickMap | Act::SetObserving(_) | Act::PickTeamColour(_))));
+    assert!(!actions.iter().any(|a| matches!(a, Act::Launch | Act::PickMap | Act::PickTeamColour(_))));
     assert_eq!(app.world_mut().query::<&Dropdown>().iter(app.world()).count(), 0);
 }
 
@@ -247,19 +306,21 @@ fn advanced_layout_in_every_window_and_scale() {
 }
 
 #[test]
-fn match_mode_is_separate_from_seats_and_advanced_options_reset() {
+fn observer_is_selected_in_remembered_team_row_and_advanced_options_reset() {
     let mut app = app_with(four_races(), None, 1.0);
     go(&mut app, Screen::Setup);
-    assert!(region(Slot::SeatControl(layout::TABLE_ROWS - 1)).rect().max.y <= region(Slot::ModePlay).rect().min.y);
+    assert!(region(Slot::SeatControl(layout::TABLE_ROWS - 1)).rect().max.y <= layout::setup_region(Slot::RandomColour, layout::TABLE_ROWS).rect().min.y);
     assert!(!app.world().resource::<SetupDraft>().observing);
-    press(&mut app, Act::SetObserving(true));
+    let team = dropdown_of(&mut app, 0, Col::Team);
+    pick(&mut app, team, 2);
     assert!(app.world().resource::<SetupDraft>().observing);
     assert!(app.world().resource::<SetupDraft>().seats.iter().all(|seat| seat.control != SeatControl::Human));
     let field = dropdown_of(&mut app, 0, Col::Control);
     assert_eq!(app.world().get::<Dropdown>(field).unwrap().options.len(), 2);
     pick(&mut app, field, 1);
     assert_eq!(app.world().resource::<SetupDraft>().seats[0].control, SeatControl::Idle);
-    press(&mut app, Act::SetObserving(false));
+    let team = dropdown_of(&mut app, 0, Col::Team);
+    pick(&mut app, team, 0);
     assert_eq!(app.world().resource::<SetupDraft>().seats.iter().filter(|seat| seat.control == SeatControl::Human).count(), 1);
 
     press(&mut app, Act::Goto(Screen::Advanced));
@@ -358,7 +419,8 @@ fn the_faction_dropdown_lists_the_playable_factions_in_skirmish_order() {
     assert!(!ids.iter().any(|i| i == "observer"), "a race without a skirmish slot is not offered: {ids:?}");
     assert_eq!(ids.len(), 4);
     // The dropdown shows the same factions in the same order (these have no display key).
-    assert_eq!(options, ids);
+    assert_eq!(options[0], "Random");
+    assert_eq!(options[1..], ids);
     // Each seat has one, and each shows its own seat's side.
     let two = app.world().resource::<SetupDraft>().seats.clone();
     for (i, seat) in two.iter().enumerate() {
@@ -374,9 +436,9 @@ fn setup_dropdowns_edit_the_draft_and_launch_round_trips() {
     go(&mut app, Screen::Setup);
     // Seat 1: side Romulan (index 2), team 1, control Idle; seat 0: Klingon.
     let f = dropdown_of(&mut app, 1, Col::Race);
-    pick(&mut app, f, 2);
+    pick(&mut app, f, 3);
     let f = dropdown_of(&mut app, 0, Col::Race);
-    pick(&mut app, f, 1);
+    pick(&mut app, f, 2);
     let f = dropdown_of(&mut app, 1, Col::Team);
     pick(&mut app, f, 0);
     let f = dropdown_of(&mut app, 1, Col::Control);
