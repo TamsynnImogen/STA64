@@ -34,7 +34,8 @@ pub(crate) struct Situation<'a> {
     /// The order the right-click gives on the unit under the pointer, from the group vote.
     pub hover: Option<&'a Order>,
     /// The right-click on open space or on a unit without an order would move someone: some selected
-    /// unit is not a structure, and the pointer's ray meets the map plane.
+    /// unit is not a builder that is busy building (the sim's `BUILDING` flag), and the pointer's ray
+    /// meets the map plane.
     pub moves: bool,
     /// The selection is stationary builders, whose right-click is a rally (STA64's own rule).
     pub rally: bool,
@@ -46,7 +47,7 @@ pub(crate) struct Situation<'a> {
 /// space or any unit without a vote gives `c_move` (measured); the vote's own order gives its cursor
 /// (attack measured, the others read from the executable, static: mine, repair, wormhole); over a HUD
 /// panel and during a cutscene the arrow. INTERIM, not measured: a selection whose right-click gives
-/// nothing (structures that are not rallying builders) shows `c_select`; stationary builders show
+/// nothing (only builders busy building, or a ray that misses the map plane) shows `c_select`; stationary builders show
 /// `c_rally` on a passive right-click, which is STA64's rule, the originals give a yard's rally through
 /// its button. Armed picks use the HUD's table; where STA64 gives no order the refusal cursor shows
 /// (the original gives attack, patrol and guard on the ground or on own ships; STA64 has no such
@@ -106,10 +107,12 @@ pub fn cursor(
     let icon = aim.0.filter(|_| !own.is_empty()).and_then(|a| unit_under_where(a.cursor, a.ray, &units, |t| target_seen(link.curr(), local.as_deref().and_then(|l| l.0), t))).and_then(|t| {
         context_order(content.as_deref().map(|c| &*c.0), link.curr(), link.player(), &own, t)
     });
-    let rally = aim.0.is_some() && rally_builders(content.as_deref().map(|c| &*c.0), link.curr(), link.player(), &own);
-    // The move `orders::order` would give: units that are not structures, a point on their mean-height plane.
+    let rally = rally_builders(content.as_deref().map(|c| &*c.0), link.curr(), link.player(), &own);
+    // The move `orders::order` would give: units that are not busy building, a point on their mean-height plane.
     let heights: Vec<f32> = own.iter().filter_map(|&id| link.curr().unit(id)).filter(|u| !u.flags.contains(sta_sim::view::UnitFlags::BUILDING)).map(|u| u.pos.to_f32()[1]).collect();
     let moves = !heights.is_empty() && aim.0.is_some_and(|a| plane_hit(a.ray, heights.iter().sum::<f32>() / heights.len() as f32));
+    // A rally needs the same reachable plane the click needs (it gives nothing otherwise).
+    let rally = rally && moves;
     // The armed pick (the HUD's system) writes over this when it is on.
     let over_hud = hud.is_some_and(|h| h.0);
     wanted.0 = decide(&Situation { cutscene, over_hud, armed: None, own_selected: !own.is_empty(), hover: icon.as_ref(), moves, rally });
@@ -170,8 +173,8 @@ mod tests {
 
     /// Seat 0 (us) has a miner and a cruiser; seat 1 a cruiser; a moon owned
     /// by seat 0 (the wrongly-owned case) and one owned by nobody. Returns
-    /// ids `[miner, cruiser, enemy, moon_owned, moon_free, yard, rig, second_yard, ally]`.
-    fn app(select: usize) -> (App, [EntityId; 9]) {
+    /// ids `[miner, cruiser, enemy, moon_owned, moon_free, yard, rig, second_yard, ally, station]`.
+    fn app(select: usize) -> (App, [EntityId; 10]) {
         let fake = fake::db();
         let mut builder = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
         for unit in fake.units() {
@@ -184,7 +187,10 @@ mod tests {
         rig.movement = fake.unit(fake.key("fx_cruiser").unwrap()).unwrap().movement;
         rig.build.list = vec![DefRef::new("fx_station")];
         rig.hull = Fixed::from_int(100);
-        let db = Arc::new(builder.unit(rig).build().unwrap());
+        // A station that builds nothing: no rally, and not busy building.
+        let mut turret = UnitDef::new("fx_turret", "starbase");
+        turret.hull = Fixed::from_int(100);
+        let db = Arc::new(builder.unit(rig).unit(turret).build().unwrap());
         let seat = |id, control| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control };
         let setup = GameSetup {
             seed: 1,
@@ -201,7 +207,7 @@ mod tests {
         let h = (Fixed::ZERO, Fixed::ONE);
         let at = |x: f32| SimVec3::from_f32([x, 0.0, 0.0]);
         let mut spawn = |odf: &str, owner: u8, x: f32| sim.spawn_def(db.key(odf).unwrap(), PlayerId(owner), at(x), h).unwrap();
-        let ids = [spawn("fx_miner", 0, 0.0), spawn("fx_cruiser", 0, 100.0), spawn("fx_cruiser", 1, -3000.0), spawn("fx_moon", 0, 3000.0), spawn("fx_moon", 255, 6000.0), spawn("fx_yard", 0, 9000.0), spawn("fx_rig", 0, 12000.0), spawn("fx_yard", 0, 15000.0), spawn("fx_cruiser", 2, -6000.0)];
+        let ids = [spawn("fx_miner", 0, 0.0), spawn("fx_cruiser", 0, 100.0), spawn("fx_cruiser", 1, -3000.0), spawn("fx_moon", 0, 3000.0), spawn("fx_moon", 255, 6000.0), spawn("fx_yard", 0, 9000.0), spawn("fx_rig", 0, 12000.0), spawn("fx_yard", 0, 15000.0), spawn("fx_cruiser", 2, -6000.0), spawn("fx_turret", 0, 18000.0)];
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<OrderIssued>()
@@ -259,7 +265,7 @@ mod tests {
     fn decide_without_own_selection_is_select_and_without_a_move_it_is_select() {
         let none = Situation { moves: true, ..Default::default() };
         assert_eq!(decide(&none), "c_select");
-        // Own units selected but the click would do nothing (structures only).
+        // Own units selected but the click would do nothing (only a busy builder).
         assert_eq!(decide(&Situation { own_selected: true, ..Default::default() }), "c_select");
         // Stationary builders: STA64's rally (interim).
         assert_eq!(decide(&Situation { own_selected: true, rally: true, ..Default::default() }), "c_rally");
@@ -290,35 +296,75 @@ mod tests {
         assert!(!plane_hit(Ray3d::new(Vec3::new(0.0, 1000.0, 0.0), Dir3::X), 0.0));
     }
 
+    /// The kind of the first command of a click, as a cursor key it must agree with.
+    fn kind_cursor(cmds: &[CommandKind]) -> Option<&'static str> {
+        match cmds.first()? {
+            CommandKind::Order(Order::Attack { .. }) => Some("c_attack"),
+            CommandKind::Order(Order::Mine { .. }) => Some("c_mining"),
+            CommandKind::Order(Order::Rally { .. }) => Some("c_rally"),
+            CommandKind::Order(Order::Move { .. }) => Some("c_move"),
+            _ => None,
+        }
+    }
+
     /// Cursor and order are one decision: for each situation, the cursor the system wants is the
-    /// one of the order a right-click gives in the same frame.
+    /// one of the order a right-click gives in the same frame, and the click gives one.
     #[test]
     fn the_cursor_matches_the_order_a_right_click_gives() {
-        // (selected index into the app's ids, x of the click, expected cursor, expected order is a Move)
-        let cases: [(usize, f32, &str, bool); 7] = [
-            (1, 20000.0, "c_move", true),   // a cruiser over open space
-            (1, -6000.0, "c_move", true),   // over an ally's ship
-            (1, 6000.0, "c_move", true),    // a warship over a free moon
-            (1, -3000.0, "c_attack", false), // over an enemy
-            (0, 3000.0, "c_mining", false), // a miner over a moon
-            (5, 10000.0, "c_rally", false), // a stationary yard (interim rally)
-            (6, 13000.0, "c_move", true),   // a mobile rig
+        let cases: [(usize, f32, &str); 8] = [
+            (1, 20000.0, "c_move"),   // a cruiser over open space
+            (1, -6000.0, "c_move"),   // over an ally's ship
+            (1, 6000.0, "c_move"),    // a warship over a free moon
+            (1, -3000.0, "c_attack"), // over an enemy
+            (0, 3000.0, "c_mining"),  // a miner over a moon
+            (5, 10000.0, "c_rally"),  // a stationary yard (interim rally)
+            (6, 13000.0, "c_move"),   // a mobile rig
+            (9, 19000.0, "c_move"),   // a station that builds nothing: the click moves it today
         ];
-        for (select, x, cursor_name, is_move) in cases {
+        for (select, x, cursor_name) in cases {
             let (mut app, _) = app(select);
             app.init_resource::<crate::ui::cursor::WantedCursor>();
             let cmds = right_click_at(&mut app, x);
             app.world_mut().run_system_once(cursor).unwrap();
             assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, cursor_name, "select {select} at {x}: {cmds:?}");
-            assert_eq!(cmds.iter().all(|c| matches!(c, CommandKind::Order(Order::Move { .. }))) && !cmds.is_empty(), is_move, "select {select} at {x}: {cmds:?}");
+            assert_eq!(kind_cursor(&cmds), Some(cursor_name), "select {select} at {x}: the click must give the order of the cursor: {cmds:?}");
         }
-        // No own selection: no order, and the select cursor.
-        let (mut app, _) = app(1);
+    }
+
+    /// Where the click gives nothing the cursor is the select cursor: no own selection; a builder busy
+    /// building (the sim's `BUILDING` flag); a ray that never meets the map plane.
+    #[test]
+    fn the_select_cursor_shows_where_the_click_gives_nothing() {
+        let wanted = |app: &App| app.world().resource::<crate::ui::cursor::WantedCursor>().0;
+        // No own selection.
+        let (mut app, _) = self::app(1);
         app.init_resource::<crate::ui::cursor::WantedCursor>();
         app.world_mut().insert_resource(Selection(Vec::new()));
         assert!(right_click_at(&mut app, 20000.0).is_empty());
         app.world_mut().run_system_once(cursor).unwrap();
-        assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_select");
+        assert_eq!(wanted(&app), "c_select");
+        // An own rig busy building.
+        let (mut app, ids) = self::app(6);
+        app.init_resource::<crate::ui::cursor::WantedCursor>();
+        let mut view = (**app.world().resource::<SimLink>().curr()).clone();
+        let rig = view.units.iter_mut().find(|u| u.id == ids[6]).unwrap();
+        rig.flags = UnitFlags(rig.flags.0 | UnitFlags::BUILDING.0);
+        app.insert_resource(SimLink::new(Box::new(ViewSource(Arc::new(view))), Box::new(LocalRouter::new()), PlayerId(0)));
+        assert!(right_click_at(&mut app, 13000.0).is_empty());
+        app.world_mut().run_system_once(cursor).unwrap();
+        assert_eq!(wanted(&app), "c_select");
+        // A ray above the horizon: no ground point, so no order, for a ship and for a rallying yard.
+        for select in [1, 5] {
+            let (mut app, _) = self::app(select);
+            app.init_resource::<crate::ui::cursor::WantedCursor>();
+            let ray = Ray3d::new(Vec3::new(0.0, 1000.0, 0.0), Dir3::Y);
+            app.world_mut().resource_mut::<Aim>().0 = Some(AimState { cursor: Vec2::ZERO, ray, clip_from_world: Mat4::IDENTITY, size: Vec2::new(800.0, 600.0) });
+            app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
+            app.update();
+            assert!(app.world().resource::<CommandQueue>().0.is_empty(), "select {select}");
+            app.world_mut().run_system_once(cursor).unwrap();
+            assert_eq!(wanted(&app), "c_select", "select {select}");
+        }
     }
 
     #[test]

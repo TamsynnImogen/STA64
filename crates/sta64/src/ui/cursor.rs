@@ -28,10 +28,9 @@ use sta_assets::a2fmt::spr::{Animation, Auto, Field, Sprite, SpriteTable};
 use super::gui_sprites::{GuiImageSampling, GuiSprites, crop, page};
 use crate::viewer::Mounted;
 
-/// The sprite table the cursors are read from: `sprites.spr` and its includes, the way the engine
-/// loads it (highest mod layer first). The cursor sprites name their flipbooks, but those are
-/// declared in a table included before the cursor one; `cursor.spr` read alone has none, so every
-/// cursor would stand still (issue 1034; read from data).
+/// The sprite table the cursors are read from: cursor sprites are resolved against the whole sprite
+/// table rooted at `sprites.spr` and its includes (highest mod layer first), as every other sprite
+/// is, so the flipbooks a sprite names are found (read from data).
 pub(crate) fn load_table(vfs: &sta_vfs::Vfs) -> SpriteTable {
     sta_assets::load_sprite_table(vfs)
 }
@@ -75,9 +74,12 @@ struct CursorNode;
 
 /// Is the camera being dragged? The drawn cursor is hidden for as long as it is (rule: grade read
 /// from the executable, static, for the original's own camera buttons; INTERIM: STA64 applies it
-/// to its own camera buttons, `OrbitButtons`, which are not the original's).
-pub(crate) fn camera_drag(buttons: &ButtonInput<MouseButton>, orbit: &crate::viewer::OrbitButtons) -> bool {
-    buttons.pressed(orbit.rotate) || orbit.pan.is_some_and(|b| buttons.pressed(b))
+/// to its own camera buttons, `OrbitButtons`, which are not the original's; with pan bound to the
+/// right button, as in the viewer, the cursor is hidden while a right-click order's button is held).
+/// A window that is not focused never ends a drag it did not see released, so no drag is
+/// assumed then (the release is not delivered to an unfocused window).
+pub(crate) fn camera_drag(buttons: &ButtonInput<MouseButton>, orbit: &crate::viewer::OrbitButtons, focused: bool) -> bool {
+    focused && (buttons.pressed(orbit.rotate) || orbit.pan.is_some_and(|b| buttons.pressed(b)))
 }
 
 /// The frames of a cursor sprite in texture pixels, its hotspot, and the period. `anim` is the
@@ -175,6 +177,7 @@ fn place(
     ui_scale: Option<Res<UiScale>>,
     race: Option<Res<crate::game::LocalRace>>,
     settings: Option<Res<crate::frontend::screens::Settings>>,
+    // INTERIM (not measured): the animation clock is real time, so it also runs while the game is paused.
     time: Res<Time<Real>>,
     buttons: Option<Res<ButtonInput<MouseButton>>>,
     orbit: Option<Res<crate::viewer::OrbitButtons>>,
@@ -191,8 +194,8 @@ fn place(
     }
     let formats = device.as_ref().map(|d| CompressedImageFormats::from_features(d.features())).unwrap_or_else(CompressedImageFormats::empty);
     let pointer = window.single().ok().and_then(|(w, _)| w.cursor_position());
-    // INTERIM (not measured): the animation clock is real time, so it also runs while the game is paused.
-    let dragging = buttons.as_deref().zip(orbit.as_deref()).is_some_and(|(b, o)| camera_drag(b, o));
+    let focused = window.single().ok().is_none_or(|(w, _)| w.focused);
+    let dragging = buttons.as_deref().zip(orbit.as_deref()).is_some_and(|(b, o)| camera_drag(b, o, focused));
     let art = match (&mounted, pointer) {
         (Some(m), Some(_)) if !dragging => {
             let vfs = &m.0;
@@ -339,15 +342,19 @@ mod tests {
     fn the_camera_drag_hides_the_cursor() {
         let orbit = crate::viewer::OrbitButtons { rotate: MouseButton::Middle, pan: None };
         let mut b = ButtonInput::<MouseButton>::default();
-        assert!(!camera_drag(&b, &orbit));
+        assert!(!camera_drag(&b, &orbit, true));
         b.press(MouseButton::Right);
-        assert!(!camera_drag(&b, &orbit), "a right click is an order, not a camera drag");
+        assert!(!camera_drag(&b, &orbit, true), "a right click is an order, not a camera drag");
         b.press(MouseButton::Middle);
-        assert!(camera_drag(&b, &orbit));
+        assert!(camera_drag(&b, &orbit, true));
         b.release(MouseButton::Middle);
-        assert!(!camera_drag(&b, &orbit));
+        assert!(!camera_drag(&b, &orbit, true));
         let pan = crate::viewer::OrbitButtons { rotate: MouseButton::Left, pan: Some(MouseButton::Right) };
-        assert!(camera_drag(&b, &pan));
+        assert!(camera_drag(&b, &pan, true));
+        // The window lost focus mid-drag: the release is never seen, but the cursor is not hidden.
+        b.press(MouseButton::Middle);
+        assert!(camera_drag(&b, &orbit, true));
+        assert!(!camera_drag(&b, &orbit, false));
     }
 
     #[test]
@@ -430,7 +437,7 @@ mod tests {
                 assert_eq!(frames.len(), 1, "{name}: no flipbook, one frame");
             }
         }
-        // The plain pointer's flipbook is declared outside `cursor.spr`: the full chain finds it.
+        // The rule: a flipbook a cursor sprite names resolves against the whole table.
         let pointer = table.sprite(DEFAULT).unwrap();
         assert!(pointer.anims.first().is_none_or(|id| table.animation(id).is_some()), "the pointer names a flipbook the chain does not declare");
         eprintln!("animated cursors among those asked for: {animated}");
