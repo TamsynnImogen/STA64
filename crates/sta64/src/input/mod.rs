@@ -47,6 +47,7 @@ impl Plugin for InputPlugin {
             .init_resource::<keys::KeyBindings>()
             .init_resource::<select::MaxSelection>()
             .add_message::<select::CameraFocus>()
+            .add_message::<crate::ui::radar::RadarClick>()
             .init_resource::<orders::OrderTargets>()
             .init_resource::<orders::Aim>()
             .add_systems(Startup, select::spawn_select_box)
@@ -66,6 +67,7 @@ impl Plugin for InputPlugin {
                     // A click on the HUD, or the one that places a build, is not the map's.
                     select::select.run_if(crate::ui::hud::map_input_free).run_if(not(crate::ui::presentation::cutscene_running)),
                     orders::order.run_if(crate::ui::hud::map_input_free).run_if(not(crate::ui::presentation::cutscene_running)),
+                    orders::radar_order,
                     orders::prune_targets,
                     context::cursor,
                 )

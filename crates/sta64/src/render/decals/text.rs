@@ -230,6 +230,7 @@ mod tests {
                 texture: "synthetic".into(),
                 height: 1.0,
                 glyphs,
+                material: None,
             }],
         };
         let mut pixels = vec![0; width as usize * height as usize * 4];
@@ -285,6 +286,7 @@ mod tests {
                 texture: "p".into(),
                 height: 1.0,
                 glyphs,
+                material: None,
             }],
         };
         let page = Rgba {

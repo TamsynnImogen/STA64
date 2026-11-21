@@ -348,6 +348,47 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         }
     }
 
+    // Every placed stock text sits in its rectangle by the rule (the line box centred or left by
+    // the rectangle's size minus one, whole-pixel origin, a taller box overflowing evenly), and is
+    // neither wrapped nor clipped. Labels outside the rule (STA64's fallbacks) are listed with
+    // their visibility only.
+    {
+        use crate::ui::sprite_font::{SpriteText, SpriteTextStyle};
+        use crate::ui::stock_font::{VAlign, HAlign};
+        let window_scale = app.world_mut().query::<&Window>().iter(app.world()).next().map_or(1.0, |w| w.scale_factor());
+        let ui_px = app.world().get_resource::<UiScale>().map_or(1.0, |u| u.0) * window_scale;
+        let on_path = app.world().get_resource::<crate::ui::sprite_font::SpriteFonts>().is_some_and(|f| f.stock_family);
+        let mut texts = app.world_mut().query::<(&SpriteText, &SpriteTextStyle, &ComputedNode, &bevy::ui::UiGlobalTransform, &ChildOf, &InheritedVisibility)>();
+        let (mut checked, mut wrong) = (0, Vec::new());
+        for (text, style, node, at, parent, shown) in texts.iter(app.world()) {
+            let slot = app.world().get::<ComputedNode>(parent.parent());
+            let slot_at = app.world().get::<bevy::ui::UiGlobalTransform>(parent.parent());
+            let (Some(slot), Some(slot_at)) = (slot, slot_at) else { continue };
+            let (own, room) = (node.size(), slot.size());
+            if own.x <= 0.0 {
+                continue;
+            }
+            let rel = (at.translation - own / 2.0) - (slot_at.translation - room / 2.0);
+            let Some(place) = style.place.filter(|p| on_path && p.rect.x > 0.0 && style.stock.is_some()) else {
+                if style.stock.is_none() {
+                    eprintln!("{label}: FALLBACK {:?} {own} in {room} visible={}", text.text, shown.get());
+                }
+                continue;
+            };
+            checked += 1;
+            let want = Vec2::new(
+                match place.h { HAlign::Left => 0.0, HAlign::Centre => ((place.rect.x - 1.0) * ui_px - own.x) / 2.0 },
+                match place.v { VAlign::Top => 0.0, VAlign::Centre => ((place.rect.y - 1.0) * ui_px - own.y) / 2.0, VAlign::Bottom => (place.rect.y - 1.0) * ui_px - own.y },
+            );
+            eprintln!("{label}: PLACE {:?} box {own} in slot {room}: top {:.1} (rule {:.1}), left {:.1} (rule {:.1})", text.text, rel.y, want.y, rel.x, want.x);
+            if (rel - want).abs().max_element() > 1.5 || style.wrap.is_some() || style.wrap_parent {
+                wrong.push(format!("{:?} at {rel} (rule {want}), wraps: {}", text.text, style.wrap.is_some() || style.wrap_parent));
+            }
+        }
+        eprintln!("{label}: {checked} placed stock text nodes checked against the placement rule");
+        assert!(wrong.is_empty(), "{label}: stock text not placed by the rule: {wrong:?}");
+    }
+
     let roots = app
         .world_mut()
         .query_filtered::<&UiTargetCamera, With<HudRoot>>()
@@ -592,16 +633,23 @@ fn installed_stock_hud_renders_on_gpu() {
         _ => panic!("set STA64_HUD_PROFILE=a2 or fo for the mounted install"),
     };
     // 21:9 and 32:9 windows (UI-37): the sheet is scaled by one factor and centred.
-    for (size, ratio) in [
-        (UVec2::new(1024, 768), "4x3"),
-        (UVec2::new(1280, 720), "16x9"),
-        (UVec2::new(1920, 1080), "16x9-1080"),
-        (UVec2::new(2560, 1080), "21x9"),
-        (UVec2::new(3840, 1080), "32x9"),
-        (UVec2::new(2752, 1152), "2752x1152"),
-    ] {
-        let cfg = match (profile, ratio) {
+    let mut list = vec![
+        (UVec2::new(1024, 768), "4x3".to_owned()),
+        (UVec2::new(1280, 720), "16x9".to_owned()),
+        (UVec2::new(1920, 1080), "16x9-1080".to_owned()),
+        (UVec2::new(2560, 1080), "21x9".to_owned()),
+        (UVec2::new(3840, 1080), "32x9".to_owned()),
+        (UVec2::new(2752, 1152), "2752x1152".to_owned()),
+    ];
+    // `STA64_HUD_SIZES` replaces the list (the wide windows take the 16:9 sheet for Fleet Operations).
+    if std::env::var("STA64_HUD_SIZES").is_ok() {
+        list = sizes(&[]).into_iter().map(|s| (s, format!("{}x{}", s.x, s.y))).collect();
+    }
+    for (size, ratio) in list {
+        let wide = size.x * 9 >= size.y * 16;
+        let cfg = match (profile, ratio.as_str()) {
             (UiProfile::Armada2, _) => "gui_fed.cfg",
+            (UiProfile::FleetOps, _) if std::env::var("STA64_HUD_SIZES").is_ok() => if wide { "gui_federation16x9.cfg" } else { "gui_federation.cfg" },
             (UiProfile::FleetOps, "16x9" | "16x9-1080" | "21x9" | "32x9" | "2752x1152") => "gui_federation16x9.cfg",
             (UiProfile::FleetOps, _) => "gui_federation.cfg",
             _ => unreachable!(),

@@ -969,6 +969,7 @@ fn rebuild(
             if let Some(mut st) = w.get_resource_mut::<crate::ui::radar::RadarState>() {
                 st.map = Some(crate::ui::radar::RadarMap::of_bounds(rlo, rhi));
                 st.map_fixed = true;
+                st.bounds = Some((rlo, rhi));
             }
         });
         commands.insert_resource(crate::ui::hud::ghost::PlacementBounds(Some((lo, hi))));
