@@ -545,11 +545,15 @@ impl CityRaces {
     /// From the race ODFs through a layered loader (as `Races::load` reads them). Lookup follows `Races::get`: the
     /// ODF's stem first, then the playable race of that key, then any, so two definitions that share a key (an observer
     /// and the race it observes) give the playable one's answer, whatever their order in the file.
-    pub fn from_loader(races: &sta_content::Races, load: &mut dyn FnMut(&str, usize) -> Option<String>) -> Self {
+    fn from_loader(
+        races: &sta_content::Races,
+        profile: sta_content::Profile,
+        load: &mut sta_content::odf::Loader<'_>,
+    ) -> Self {
         let mut by_key: std::collections::BTreeMap<String, (bool, Option<CityRace>)> = std::collections::BTreeMap::new();
         let mut by_stem = std::collections::BTreeMap::new();
         for race in races.iter() {
-            let city = sta_odf::resolve_layered(&race.stem, load).ok().and_then(|odf| {
+            let city = sta_content::odf::resolve_exact_for_profile(&race.stem, profile, load).ok().and_then(|odf| {
                 let texture = odf.str("citytexturename").map(str::trim).unwrap_or("");
                 if texture.is_empty() {
                     return None;
@@ -573,7 +577,7 @@ impl CityRaces {
     }
 
     pub fn load(vfs: &sta_vfs::Vfs, index: &sta_content::OdfIndex, races: &sta_content::Races) -> Self {
-        Self::from_loader(races, &mut |name, version| index.load(vfs, name, version))
+        Self::from_loader(races, sta_content::Profile::detect(vfs), &mut |name, version| index.load(vfs, name, version))
     }
 
     pub fn get(&self, race: &str) -> Option<&CityRace> {
@@ -1174,12 +1178,12 @@ mod tests {
                 _ => None,
             }
         });
-        let cities = super::CityRaces::from_loader(&races, &mut |name, version| {
+        let cities = super::CityRaces::from_loader(&races, sta_content::Profile::Sta2Classic, &mut |name, version| {
             if version != 0 {
                 return None;
             }
             match name.trim_end_matches(".odf") {
-                "a" => Some("name=Alpha\ncityTextureName=\"ECFR\"\nnumCities=35.0".into()),
+                "a" => Some("name=Alpha\ncityTextureName=\"ECFR\"\nnumCities=35.0\nnumCities=12.0".into()),
                 "b" => Some("name=beta\ncityTextureName=\"BORG\"".into()),
                 "c" => Some("name=gamma\ncityTextureName=\"\"".into()),
                 _ => None,
@@ -1242,7 +1246,7 @@ mod tests {
             ("a", 0) => Some("name=fx\ncityTextureName=\"TEST\"\nnumCities=10.0".into()),
             _ => None,
         });
-        super::CityRaces::from_loader(&races, &mut |name, version| match (name.trim_end_matches(".odf"), version) {
+        super::CityRaces::from_loader(&races, sta_content::Profile::Native, &mut |name, version| match (name.trim_end_matches(".odf"), version) {
             ("a", 0) => Some("name=fx\ncityTextureName=\"TEST\"\nnumCities=10.0".into()),
             _ => None,
         })
@@ -1453,7 +1457,7 @@ mod tests {
             }
         };
         let (races, _) = sta_content::Races::load_with(&mut |n, v| load(n, v));
-        let cities = super::CityRaces::from_loader(&races, &mut |n, v| load(n, v));
+        let cities = super::CityRaces::from_loader(&races, sta_content::Profile::Sta2Classic, &mut |n, v| load(n, v));
         assert_eq!(cities.get("federation").map(|c| c.texture.as_str()), Some("ECFR"));
         assert_eq!(cities.get("observer").map(|c| c.texture.as_str()), Some("OBS"), "the stem first");
     }

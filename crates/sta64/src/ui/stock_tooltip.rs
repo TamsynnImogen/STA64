@@ -209,7 +209,8 @@ pub fn delays_from(component: Option<&sta_odf::Odf>) -> TipDelays {
 /// The resolved component definition of a mounted install or mod, `None` without one.
 pub fn read_component(vfs: &sta_vfs::Vfs) -> Option<sta_odf::Odf> {
     let (index, _) = sta_content::OdfIndex::build(vfs);
-    sta_odf::resolve_layered("component", &mut |name, version| index.load(vfs, name, version)).ok()
+    let profile = sta_content::Profile::detect(vfs);
+    sta_content::odf::resolve_exact_for_profile("component", profile, &mut |name, version| index.load(vfs, name, version)).ok()
 }
 
 /// The delays of the mounted content's component definition, read once per mount: a stock HUD

@@ -27,6 +27,7 @@ pub struct FactionCatalogue {
 
 impl FactionCatalogue {
     pub fn load(vfs: &Vfs) -> Self {
+        let profile = sta_content::Profile::detect(vfs);
         let (index, index_warnings) = OdfIndex::build(vfs);
         let (races, race_warnings) = Races::load(vfs, &index);
         for warning in index_warnings.into_iter().chain(race_warnings) {
@@ -42,7 +43,7 @@ impl FactionCatalogue {
                 );
                 continue;
             }
-            let odf = match sta_odf::resolve_layered(&race.stem, &mut |name, version| {
+            let odf = match sta_content::odf::resolve_exact_for_profile(&race.stem, profile, &mut |name, version| {
                 index.load(vfs, name, version)
             }) {
                 Ok(odf) => odf,

@@ -156,7 +156,6 @@ fn unquote(s: &str) -> &str {
         .unwrap_or(s)
 }
 
-/// A fully resolved ODF with includes flattened under its lookup policy.
 fn number(value: &str) -> Option<&str> {
     let first = value.split_whitespace().next()?;
     Some(first.trim_end_matches(';').trim_end_matches(['f', 'F']).trim_end_matches(';'))
@@ -206,6 +205,7 @@ pub struct LookupChange {
     pub source: KeySource,
 }
 
+/// A fully resolved ODF with includes flattened under its lookup policy.
 #[derive(Debug, Clone, Default)]
 pub struct Odf {
     pub name: String,
