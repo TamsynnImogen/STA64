@@ -1628,7 +1628,7 @@ fn refused_and_dropped_before_a_seat_are_counted_and_summarised_not_logged_each(
         for _ in 0..50 {
             drop(TcpStream::connect(r.local_addr()).unwrap());
         }
-        wait_until(SHORT, "the batch to be counted", || r.unseated_pending() >= 1 + batch * 50);
+        wait_until(SHORT, "the batch to be counted", || r.unseated_pending() > batch * 50);
     }
     assert_eq!(r.unseated_pending(), 1001);
     assert!(lines.lock().unwrap().is_empty(), "{:?}", lines.lock().unwrap());
