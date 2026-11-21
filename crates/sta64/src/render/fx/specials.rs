@@ -349,12 +349,19 @@ fn read_events(
     mut msgs: MessageReader<SimMsg>,
     clock: Res<AnimClock>,
     link: Res<SimLink>,
+    content: Option<Res<ContentRes>>,
     mut cons: ResMut<Construction>,
 ) {
     let mut immediately_started = None;
     for SimMsg(ev) in msgs.read() {
         match ev {
             SimEvent::BuildStarted { builder, what } => {
+                if link.curr().unit(*builder)
+                    .and_then(|unit| content.as_ref()?.0.unit(unit.def))
+                    .is_some_and(sta_content::UnitDef::is_evolver)
+                {
+                    continue;
+                }
                 cons.pending.push((*builder, *what));
                 immediately_started = Some((*builder, *what));
             }

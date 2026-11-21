@@ -14,7 +14,7 @@ use crate::clock::AnimClock;
 use crate::render::construction::{ConstructionEdges, ConstructionPart, ConstructionPreview};
 use crate::render::fx::quad::{self, FxQuadMaterial, Look};
 use crate::render::units::{LocalPlayer, NeedsModel, TeamColour, to_bevy};
-use crate::sim_link::{ContentRes, SimLink};
+use crate::sim_link::{ContentRes, SimEntity, SimLink};
 use crate::ui::hud::ghost::{Ghost, PinnedBlueprint};
 use crate::viewer::TeamColours;
 
@@ -30,7 +30,21 @@ pub struct BuildVisual {
 enum Kind {
     Blueprint,
     Ship,
+    Cocoon,
 }
+
+impl BuildVisual {
+    pub(super) fn model_override(&self) -> Option<&'static str> {
+        // Armada II's Evolver uses this mounted model during construction.
+        (self.kind == Kind::Cocoon).then_some("8472_cocoon")
+    }
+}
+
+#[derive(Component)]
+pub(super) struct CocoonMesh;
+
+#[derive(Component)]
+pub(super) struct EmbryoMesh;
 
 fn active_head(row: &ProductionView) -> Option<(&ProductionJobView, &ConstructionSiteView)> {
     let (job, site) = (row.jobs.first()?, row.site.as_ref()?);
@@ -69,9 +83,10 @@ impl Plugin for BuildVisualsPlugin {
         );
         app.add_systems(
             PostUpdate,
-            sync_sparks
-                .after(crate::render::construction::sync_reveal)
-                .run_if(resource_exists::<SimLink>),
+            (
+                sync_sparks.after(crate::render::construction::sync_reveal),
+                sync_embryo_meshes.before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
+            ).run_if(resource_exists::<SimLink>),
         );
     }
 }
@@ -92,44 +107,31 @@ fn wanted(link: &SimLink, content: &ContentRes, local: &LocalPlayer) -> Vec<Want
         let Some(def) = content.0.unit(job.def) else {
             continue;
         };
-        let Some(kind) = classify(
-            EntityKind::of_def(def),
-            job.paid,
-            job.started,
-            site.entity.is_some(),
-        ) else {
+        let Some(builder) = curr.unit(row.builder) else { continue };
+        let evolves = content.0.unit(builder.def).is_some_and(sta_content::UnitDef::is_evolver);
+        let kind = if evolves && job.started && job.paid {
+            Some(Kind::Cocoon)
+        } else {
+            classify(EntityKind::of_def(def), job.paid, job.started, site.entity.is_some())
+        };
+        let Some(kind) = kind else {
             continue;
         };
-        let shown = match (kind, site.entity) {
-            (Kind::Blueprint, None) => {
-                let Some(builder) = curr.unit(row.builder) else {
-                    continue;
-                };
-                if builder.owner != link.player() || !visible.contains(&builder.id) {
-                    continue;
-                }
-                builder
+        if site.entity.is_some() || !visible.contains(&builder.id)
+            || if kind == Kind::Blueprint {
+                builder.owner != link.player()
+            } else {
+                builder.flags.contains(UnitFlags::CLOAKED) && local.0 != Some(builder.owner)
             }
-            (Kind::Ship, None) => {
-                let Some(builder) = curr.unit(row.builder) else {
-                    continue;
-                };
-                if !visible.contains(&builder.id)
-                    || (builder.flags.contains(UnitFlags::CLOAKED)
-                        && local.0 != Some(builder.owner))
-                {
-                    continue;
-                }
-                builder
-            }
-            (_, Some(_)) => continue,
-        };
+        {
+            continue;
+        }
         out.push(Wanted {
             key: BuildVisual {
                 builder: row.builder,
                 def: job.def,
                 kind,
-                owner: shown.owner,
+                owner: builder.owner,
             },
             pos: to_bevy(site.pos.to_f32()),
             heading: Vec2::new(site.heading.0.to_f32(), site.heading.1.to_f32()),
@@ -137,6 +139,29 @@ fn wanted(link: &SimLink, content: &ContentRes, local: &LocalPlayer) -> Vec<Want
         });
     }
     out
+}
+
+fn sync_embryo_meshes(
+    link: Res<SimLink>,
+    cocoons: Query<&BuildVisual, With<CocoonMesh>>,
+    units: Query<&SimEntity>,
+    mut embryos: Query<(&ChildOf, &mut Visibility), With<EmbryoMesh>>,
+) {
+    let loaded: HashSet<_> = cocoons.iter().map(|visual| visual.builder).collect();
+    // Armada II stops drawing the embryo one third of the way into the build.
+    // If the mounted cocoon model could not be loaded, keep drawing the embryo.
+    let concealed: HashSet<_> = link.production().iter().filter_map(|row| {
+        (loaded.contains(&row.builder)
+            && row.jobs.first().is_some_and(|job| job.progress.to_f32() > 1.0 / 3.0))
+            .then_some(row.builder)
+    }).collect();
+    for (parent, mut visibility) in &mut embryos {
+        let hidden = units.get(parent.parent()).is_ok_and(|unit| concealed.contains(&unit.0));
+        let next = if hidden { Visibility::Hidden } else { Visibility::Inherited };
+        if *visibility != next {
+            *visibility = next;
+        }
+    }
 }
 
 fn pose(pos: Vec3, heading: Vec2) -> Transform {
@@ -206,6 +231,7 @@ fn sync_build_visuals(
             Name::new(match next.key.kind {
                 Kind::Ship => "yard construction hull",
                 Kind::Blueprint => "station blueprint",
+                Kind::Cocoon => "evolution cocoon",
             }),
             next.key,
             crate::map::MatchEntity,
@@ -222,6 +248,7 @@ fn sync_build_visuals(
             Kind::Blueprint => {
                 root.insert((PinnedBlueprint, Ghost::pinned(next.key.def)));
             }
+            Kind::Cocoon => {}
         }
     }
 }
