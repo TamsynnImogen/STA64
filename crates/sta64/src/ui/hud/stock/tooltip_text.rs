@@ -185,12 +185,9 @@ pub struct BuildTipParts {
     pub cost: Vec<CostPart>,
 }
 
-/// What a button's tooltip takes from the string table under the stock look, beyond its own text.
+/// What a button's tooltip takes from the definitions under the stock look, beyond its own text.
 #[derive(Clone, Debug, PartialEq)]
 pub enum StockTip {
-    /// A pair of string-table keys; the button's own short and verbose text stand in when the table
-    /// lacks the short key.
-    Keys { short: &'static str, verbose: &'static str },
     /// A build item: class text, hotkey label and cost line.
     Build(BuildTipParts),
 }

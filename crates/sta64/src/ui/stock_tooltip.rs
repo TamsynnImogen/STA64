@@ -50,8 +50,7 @@
 //! the player has bound for the command where STA64 knows the binding (implemented for Stop, the
 //! actions of `input::keys` with a letter or digit key; interim), else the string's own letter. A build
 //! item is composed from its definition (class `tooltip`, `verboseTooltip`, `hotkeyLabel`, costs) and the
-//! string table's `GUI_CP_*` keys; the top-right group takes its `GUI_BP_*` and `GUI_CV_*` key pairs
-//! when the table has them. A click on the hovered button or a key press neither dismisses the
+//! string table's `GUI_CP_*` keys. A click on the hovered button or a key press neither dismisses the
 //! tooltip nor restarts its clock (measured at one window size; pinned by a test: nothing of this
 //! module reads either).
 //!

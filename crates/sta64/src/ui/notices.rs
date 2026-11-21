@@ -194,12 +194,6 @@ impl Tooltip {
         Tooltip { short: short.into(), verbose: None, stock: None, bound: None }
     }
 
-    /// Under the stock look: the string-table key pair, the plain texts standing in without it.
-    pub fn stock_keys(mut self, short: &'static str, verbose: &'static str) -> Tooltip {
-        self.stock = Some(super::hud::stock::tooltip_text::StockTip::Keys { short, verbose });
-        self
-    }
-
     /// Under the stock look: a build item's composition.
     pub fn stock_build(mut self, parts: super::hud::stock::tooltip_text::BuildTipParts) -> Tooltip {
         self.stock = Some(super::hud::stock::tooltip_text::StockTip::Build(parts));
@@ -222,16 +216,7 @@ impl Tooltip {
         let shown = rest >= delays.short;
         match &self.stock {
             Some(StockTip::Build(p)) if shown => Some(if verbose { build_verbose(p, look) } else { build_short(p, look) }),
-            Some(StockTip::Keys { short, verbose: v }) if look(short) != *short => {
-                if !shown {
-                    None
-                } else if verbose && look(v) != *v {
-                    Some(look(v))
-                } else {
-                    Some(look(short))
-                }
-            }
-            // No stock composition, or the table lacks its keys: today's text.
+            // No stock composition: today's text.
             _ => self.text_at_with(rest, delays).map(look),
         }
     }

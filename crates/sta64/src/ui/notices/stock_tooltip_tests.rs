@@ -376,28 +376,6 @@ fn a_bound_key_fills_the_slot_and_the_string_keeps_its_letter_where_there_is_no_
 }
 
 #[test]
-fn the_group_buttons_take_the_string_table_keys_when_it_has_them_and_their_own_labels_when_not() {
-    use crate::ui::i18n::Strings;
-    let mut app = stock_rig();
-    app.insert_resource(Strings::from_pairs("english", &[("K_SHORT", "Short key text"), ("K_LONG", "Long key text: more.")]));
-    let tip = || Tooltip::new("Own label").verbose("Own long label").stock_keys("K_SHORT", "K_LONG");
-    hover(&mut app, tip(), 1.0);
-    assert_eq!(words(&mut app), "Short key text");
-    hover(&mut app, tip(), 10.0);
-    assert_eq!(words(&mut app), "Long key text: more.");
-    // The table has the short key but not the verbose one: the short text stays.
-    app.insert_resource(Strings::from_pairs("english", &[("K_SHORT", "Short key text")]));
-    app.update();
-    assert_eq!(words(&mut app), "Short key text");
-    // The table lacks the keys: today's labels.
-    app.insert_resource(Strings::from_pairs("english", &[]));
-    app.update();
-    assert_eq!(words(&mut app), "Own long label");
-    hover(&mut app, tip(), 1.0);
-    assert_eq!(words(&mut app), "Own label");
-}
-
-#[test]
 fn a_build_item_is_composed_from_the_table_under_the_stock_look() {
     use crate::ui::hud::stock::tooltip_text::{BuildTipParts, CostPart};
     use crate::ui::i18n::Strings;
@@ -443,12 +421,10 @@ fn other_looks_keep_the_buttons_text_markers_and_keys_as_they_are() {
     cases.push(no_rule);
     for app in &mut cases {
         app.insert_resource(KeyBindings::default());
-        app.insert_resource(Strings::from_pairs("english", &[("K_SHORT", "Key text"), ("K_TIP", "Zed Class")]));
+        app.insert_resource(Strings::from_pairs("english", &[("K_TIP", "Zed Class")]));
         hover(app, Tooltip::new("^Halt <^H>").bound_to(Action::Stop), 10.0);
         assert_eq!(words(app), "^Halt <^H>");
         assert!(app.world().resource::<TipMarks>().0.is_empty());
-        hover(app, Tooltip::new("Own label").stock_keys("K_SHORT", "K_SHORT"), 10.0);
-        assert_eq!(words(app), "Own label");
         let parts = BuildTipParts { tooltip: "K_TIP".into(), ..default() };
         hover(app, Tooltip::new("K_TIP").stock_build(parts), 10.0);
         assert_eq!(words(app), "Zed Class");
@@ -579,7 +555,7 @@ fn installed_delays_and_world_tooltip_strings_resolve() {
 }
 
 /// Installed assets are local-only: the mounted table resolves the pieces of a command's tooltip, the
-/// group's key pairs, the cost line's keys and a build item's composition. Compares structure only and
+/// cost line's keys and a build item's composition. Compares structure only and
 /// commits no text. Set `STA64_TOOLTIP_TESTS=1 STA64_TEST_INSTALL` (and optionally `STA64_TEST_MOD`).
 #[test]
 fn installed_command_and_build_item_pieces_resolve() {
@@ -607,16 +583,6 @@ fn installed_command_and_build_item_pieces_resolve() {
         assert!(!shown.contains(HOTKEY_MARK), "the marker is consumed");
         eprintln!("command {key}: {} marked glyph(s), slot filled: {}", marks.len(), shown.contains("<X>"));
         assert!(!marks.is_empty() && shown.contains("<X>"), "the name and the slot are marked and the bound letter is in the slot");
-    }
-
-    // The group's key pairs.
-    for (short, verbose) in [
-        ("GUI_BP_MAIN_MENU", "GUI_CV_MAIN_TOOLTIP"),
-        ("GUI_BP_COMM_MENU", "GUI_CV_COMM_TOOLTIP"),
-        ("GUI_BP_IDLE_TOOLTIP", "GUI_BP_IDLE_VTOOLTIP"),
-        ("GUI_BP_MORE_TOOLTIP", "GUI_BP_MORE_VTOOLTIP"),
-    ] {
-        assert!(look(short) != short && look(verbose) != verbose, "{short}");
     }
 
     // The cost line's pieces.

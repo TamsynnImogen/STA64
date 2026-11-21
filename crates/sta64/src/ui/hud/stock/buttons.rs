@@ -58,16 +58,12 @@ pub(in crate::ui::hud) struct PanelKeys {
     pub sprite: &'static str,
     pub default_sprite: &'static str,
     pub act: PanelButton,
-    /// STA64's own English label, shown where the table lacks the keys or the look is not Armada II's.
     pub tip: &'static str,
     pub verbose: Option<&'static str>,
-    /// The string-table keys of the short and the verbose tooltip (the Armada II stock look; read
-    /// from the executable, static; texts read from data).
-    pub keys: (&'static str, &'static str),
 }
 
-const fn keys(area: &'static str, sprite: &'static str, default_sprite: &'static str, act: PanelButton, tip: &'static str, verbose: Option<&'static str>, keys: (&'static str, &'static str)) -> PanelKeys {
-    PanelKeys { area, sprite, default_sprite, act, tip, verbose, keys }
+const fn keys(area: &'static str, sprite: &'static str, default_sprite: &'static str, act: PanelButton, tip: &'static str, verbose: Option<&'static str>) -> PanelKeys {
+    PanelKeys { area, sprite, default_sprite, act, tip, verbose }
 }
 
 /// The buttons that show only while "more" is on.
@@ -91,14 +87,14 @@ pub(in crate::ui::hud) struct ButtonPanelGroup;
 pub(in crate::ui::hud) struct SecondRow;
 
 pub(in crate::ui::hud) const BUTTONS: [PanelKeys; 8] = [
-    keys("menuButtonArea", "menuButton", "menu_button", PanelButton::Menu, "Menu", None, ("GUI_BP_MAIN_MENU", "GUI_CV_MAIN_TOOLTIP")),
-    keys("commButtonArea", "commButton", "comm_button", PanelButton::Unavailable, "Communications", None, ("GUI_BP_COMM_MENU", "GUI_CV_COMM_TOOLTIP")),
-    keys("idleButtonArea", "idleButton", "idle_button", PanelButton::Idle, "Next idle ship", Some("Focus the next ship with no orders."), ("GUI_BP_IDLE_TOOLTIP", "GUI_BP_IDLE_VTOOLTIP")),
-    keys("toggleButtonArea", "toggleButton", "toggle_button", PanelButton::Unavailable, "Toggle view", Some("Switch between strategic and tactical views."), ("GUI_BP_TOGGLE_TOOLTIP", "GUI_BP_TOGGLE_VTOOLTIP")),
-    keys("objectivesButtonArea", "objectivesButton", "objectives_button", PanelButton::Objectives, "Objectives", Some("Show current mission objectives."), ("GUI_BP_OBJECTIVES_TOOLTIP", "GUI_BP_OBJECTIVES_VTOOLTIP")),
-    keys("helpButtonArea", "helpButton", "help_button", PanelButton::Unavailable, "Help", Some("Turn tooltip help on or off."), ("GUI_BP_HELP_TOOLTIP", "GUI_BP_HELP_VTOOLTIP")),
-    keys("paletteButtonArea", "paletteButton", "palette_button", PanelButton::Unavailable, "Command palette", Some("Switch the command palette between persistent and popup modes."), ("GUI_BP_PALETTE_TOOLTIP", "GUI_BP_PALETTE_VTOOLTIP")),
-    keys("moreButtonArea", "moreButton", "more_button", PanelButton::More, "More", Some("Show additional buttons, including Help, Palette, and Menu."), ("GUI_BP_MORE_TOOLTIP", "GUI_BP_MORE_VTOOLTIP")),
+    keys("menuButtonArea", "menuButton", "menu_button", PanelButton::Menu, "Menu", None),
+    keys("commButtonArea", "commButton", "comm_button", PanelButton::Unavailable, "Communications", None),
+    keys("idleButtonArea", "idleButton", "idle_button", PanelButton::Idle, "Next idle ship", Some("Focus the next ship with no orders.")),
+    keys("toggleButtonArea", "toggleButton", "toggle_button", PanelButton::Unavailable, "Toggle view", Some("Switch between strategic and tactical views.")),
+    keys("objectivesButtonArea", "objectivesButton", "objectives_button", PanelButton::Objectives, "Objectives", Some("Show current mission objectives.")),
+    keys("helpButtonArea", "helpButton", "help_button", PanelButton::Unavailable, "Help", Some("Turn tooltip help on or off.")),
+    keys("paletteButtonArea", "paletteButton", "palette_button", PanelButton::Unavailable, "Command palette", Some("Switch the command palette between persistent and popup modes.")),
+    keys("moreButtonArea", "moreButton", "more_button", PanelButton::More, "More", Some("Show additional buttons, including Help, Palette, and Menu.")),
 ];
 
 /// The sprite of a button: the cfg's, else the engine's default.
@@ -133,7 +129,7 @@ pub(in crate::ui::hud) fn spawn(commands: &mut Commands, parent: Entity, layout:
         if second && !more {
             node.display = Display::None;
         }
-        let mut tip = Tooltip::new(k.tip).stock_keys(k.keys.0, k.keys.1);
+        let mut tip = Tooltip::new(k.tip);
         if let Some(verbose) = k.verbose {
             tip = tip.verbose(verbose);
         }

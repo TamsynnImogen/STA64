@@ -483,7 +483,7 @@ pub(super) fn build_item_buttons(feed: &HudFeed, b: &UnitView) -> Vec<(usize, Bu
 }
 
 /// What the Armada II stock tooltip of a build item is made of: the class's `tooltip`, `verboseTooltip`
-/// and `hotkeyLabel` keys and its costs in the fixed order dilithium, metal, latinum, biomatter, crew,
+/// (else `verbose`) and `hotkeyLabel` keys and its costs in the fixed order dilithium, metal, latinum, biomatter, crew,
 /// officers (keys `GUI_CP_*_RES`; read from the executable, static; the composition measured at one window
 /// size). The officer word is the builder's race's (interim: the builder's race stands in for the player's).
 pub(super) fn build_tip_parts(feed: &HudFeed, builder: EntityId, what: ContentKey) -> Option<crate::ui::hud::stock::tooltip_text::BuildTipParts> {
@@ -509,7 +509,7 @@ pub(super) fn build_tip_parts(feed: &HudFeed, builder: EntityId, what: ContentKe
     };
     Some(BuildTipParts {
         tooltip: key("tooltip").unwrap_or_else(|| format!("Build {}", def.odf)),
-        verbose: key("verboseTooltip"),
+        verbose: key("verboseTooltip").or_else(|| key("verbose")),
         hotkey: key("hotkeyLabel"),
         cost: vec![
             slot(0, "GUI_CP_DILITHIUM_RES"),
