@@ -660,15 +660,30 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
         return out;
     }
     let mut out = Vec::new();
+    let mut evolve_extra = false;
     if let Some(builder) = builder {
-        // Stock research.odf and planet.odf author `research = 1` for their
-        // context-sensitive menu, while its contents still use the build page.
-        let research = feed.def(builder).is_some_and(|def| def.raw.bool("research") == Some(true));
-        let caption = if research { "Research" } else { "Build" };
-        let mut opener = button(0, &tr(caption), Act::OpenBuild, &tooltip_key(if research { "Research menu" } else { "Build" }));
+        // A class with the research key gets the Research menu button, while its
+        // contents still use the build page.
+        let key = |k: &str| feed.def(builder).is_some_and(|def| def.raw.bool(k) == Some(true));
+        let research = key("research");
+        // The evolve key gives an Evolve button by the same mechanism (own sprite name and
+        // tooltip keys; it opens the same item page). Read from data: the keys; that they choose
+        // the button is read from the executable, static; no frame of the original yet.
+        // An evolve-only class has it in the opener's place; a class with a builder key keeps
+        // Build and gets Evolve in the first free cell (below). INTERIM: the position of a second
+        // menu button is STA64's choice, not determined for the original.
+        // INTERIM: a class with the research key and the evolve key shows Research only; the
+        // static reading says both would show, so this is STA64's choice.
+        let evolve = key("evolve") && !research;
+        let builds = key("builder_ship") || key("builder_facility");
+        evolve_extra = evolve && builds;
+        let caption = if research { "Research" } else if evolve && !builds { "Evolve" } else { "Build" };
+        let mut opener = button(0, &tr(caption), Act::OpenBuild, &tooltip_key(if research { "Research menu" } else if caption == "Evolve" { "Evolve menu" } else { "Build" }));
         if research {
             opener.sprite_names = vec!["b_research".into()];
             opener.verbose = Some(tooltip_key("Open the research menu."));
+        } else if caption == "Evolve" {
+            opener = evolve_button(0);
         }
         out.push(opener);
     }
@@ -757,8 +772,20 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
             out.push(b);
         }
     }
+    if evolve_extra {
+        let cell = (0..).find(|c| !out.iter().any(|b| b.cell == *c)).unwrap_or(0);
+        out.push(evolve_button(cell));
+    }
     out.sort_by_key(|b| b.cell);
     out
+}
+
+/// The Evolve menu button: it opens the same item page as Build (`Act::OpenBuild`).
+fn evolve_button(cell: usize) -> Button {
+    let mut b = button(cell, &tr("Evolve"), Act::OpenBuild, &tooltip_key("Evolve menu"));
+    b.sprite_names = vec!["b_evolve".into()];
+    b.verbose = Some(tooltip_key("Open the evolve menu."));
+    b
 }
 
 /// A shared tooltip describes the slot when all selected owners use the same weapon.
@@ -1785,5 +1812,115 @@ mod tests {
         assert_eq!(r.iter().map(|e| (e.name.as_str(), e.id, e.text.as_str())).collect::<Vec<_>>(), [("Dilithium", 0, "3000"), ("Tritanium", 1, "20"), ("Supply", 3, "0"), ("officers", 4, "3/10")]);
         let names = resource_model(&f);
         assert_eq!(cost_text(&[261.0, 181.0, 0.0, 10.0], &names), "261 Dilithium, 181 Tritanium, 10 Supply");
+    }
+
+    /// A def with an item list and the given raw keys (authored data).
+    fn menu_def(odf: &str, class: &str, keys: &str) -> UnitDef {
+        let mut def = UnitDef::new(odf, class);
+        def.build.list = vec![DefRef::new("fx_cruiser")];
+        def.raw = Arc::new(sta_odf::resolve(odf, &mut |_| Some(keys.to_owned())).unwrap());
+        def
+    }
+
+    fn menu_feed(units: Vec<UnitDef>, mobile_miner: bool) -> HudFeed {
+        let fake = sta_content::fake::db();
+        let mut db = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for weapon in fake.weapons() { db = db.weapon(weapon.clone()); }
+        for unit in fake.units() {
+            if !(mobile_miner && unit.odf == "fx_miner") { db = db.unit(unit.clone()); }
+        }
+        let first = units[0].odf.clone();
+        for u in units { db = db.unit(u); }
+        let db = db.build().unwrap();
+        feed(db.clone(), vec![unit(&db, 2, &first, 1, 100.0, None)], &[2])
+    }
+
+    fn openers(f: &HudFeed) -> Vec<(usize, Vec<String>)> {
+        grid(f, Page::Top).into_iter().filter(|b| b.act == Act::OpenBuild).map(|b| (b.cell, b.sprite_names)).collect()
+    }
+
+    #[test]
+    fn the_evolve_key_gives_an_evolve_menu_button() {
+        // Evolve-only: the Evolve button takes the opener's cell, same action as Build.
+        let f = menu_feed(vec![menu_def("m_evolve", "station", "evolve = 1\n")], false);
+        assert_eq!(openers(&f), [(0, vec!["b_evolve".to_string()])]);
+        let b = grid(&f, Page::Top).into_iter().find(|b| b.act == Act::OpenBuild).unwrap();
+        assert_eq!((b.label.as_str(), b.tip.as_str(), b.verbose.as_deref()), ("EVOLVE", "Evolve menu", Some("Open the evolve menu.")));
+        let strings = crate::ui::i18n::Strings::from_game("english", r#""GUI_CP_EVOLVE_TOOLTIP", "s", "GUI_CP_EVOLVE_VTOOLTIP", "v","#);
+        assert_eq!((strings.tooltip_text(&b.tip), strings.tooltip_text(b.verbose.as_deref().unwrap())), ("s", "v"));
+        assert!(grid(&f, Page::Build).iter().any(|b| matches!(b.act, Act::Build { .. })), "the same item page");
+        // Research keeps winning (one button).
+        let f = menu_feed(vec![menu_def("m_evolve", "station", "evolve = 1\nresearch = 1\n")], false);
+        assert_eq!(openers(&f), [(0, vec!["b_research".to_string()])]);
+    }
+
+    /// INTERIM placement: a builder with the evolve key keeps Build in the opener's cell and gets
+    /// Evolve in the first free cell, never one a command already holds (a mobile builder that mines).
+    #[test]
+    fn a_builder_with_the_evolve_key_shows_both_buttons_in_distinct_cells() {
+        let mut miner = sta_content::fake::db().units().find(|u| u.odf == "fx_miner").unwrap().clone();
+        miner.build.list = vec![DefRef::new("fx_cruiser")];
+        miner.raw = Arc::new(sta_odf::resolve("fx_miner", &mut |_| Some("builder_facility = 1\nevolve = 1\n".into())).unwrap());
+        let f = menu_feed(vec![miner], true);
+        let g = grid(&f, Page::Top);
+        let mine = g.iter().find(|b| b.act == Act::Target(TargetMode::Mine)).expect("it mines").cell;
+        let o = openers(&f);
+        assert_eq!(o.len(), 2);
+        assert_eq!(o[0], (0, vec!["b_build".to_string()]));
+        assert_eq!(o[1].1, ["b_evolve"]);
+        assert_ne!(o[1].0, mine);
+        let mut cells: Vec<usize> = g.iter().map(|b| b.cell).collect();
+        cells.sort_unstable();
+        cells.dedup();
+        assert_eq!(cells.len(), g.len(), "no two buttons share a cell");
+        let others: Vec<usize> = g.iter().filter(|b| b.sprite_names != ["b_evolve"]).map(|b| b.cell).collect();
+        assert_eq!(Some(o[1].0), (0..).find(|c| !others.contains(c)), "the first free cell");
+    }
+
+    /// Install-gated (`STA64_TEST_A2_STOCK_INSTALL`, read at run time, structure only): every class
+    /// with an item list shows the menu button(s) its keys give, found by sprite name; research and
+    /// planet classes, builder-ship and builder-facility classes and evolve classes exist, and the
+    /// three sprite names resolve in a mounted GUI sprite table.
+    #[test]
+    fn installed_classes_show_the_menu_button_their_keys_give() {
+        let Some(root) = std::env::var_os("STA64_TEST_A2_STOCK_INSTALL") else {
+            eprintln!("SKIP: set STA64_TEST_A2_STOCK_INSTALL");
+            return;
+        };
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), None).unwrap();
+        let (index, _) = sta_content::OdfIndex::build(&vfs);
+        let (db, _) = ContentDb::load(&vfs, &index).unwrap();
+        let (mut research, mut planet, mut ship, mut facility, mut evolve) = (0, 0, 0, 0, 0);
+        for def in db.units().filter(|d| !d.build.list.is_empty()) {
+            let key = |k: &str| def.raw.bool(k) == Some(true);
+            let builds = key("builder_ship") || key("builder_facility");
+            let expected: Vec<&str> = if key("research") {
+                vec!["b_research"]
+            } else if key("evolve") && builds {
+                vec!["b_build", "b_evolve"]
+            } else if key("evolve") {
+                vec!["b_evolve"]
+            } else {
+                vec!["b_build"]
+            };
+            let f = feed(db.clone(), vec![unit(&db, 2, &def.odf, 1, 100.0, None)], &[2]);
+            let got: Vec<String> = openers(&f).into_iter().flat_map(|(_, s)| s).collect();
+            assert_eq!(got, expected, "{}", def.odf);
+            research += usize::from(key("research") && def.planet_role.is_none());
+            planet += usize::from(key("research") && def.planet_role.is_some());
+            ship += usize::from(key("builder_ship") && !key("research"));
+            facility += usize::from(key("builder_facility") && !key("research"));
+            evolve += usize::from(key("evolve") && !key("research"));
+        }
+        assert!(research > 0 && planet > 0 && ship > 0 && facility > 0 && evolve > 0, "{research} {planet} {ship} {facility} {evolve}");
+        let tables: Vec<_> = vfs
+            .list("sprites")
+            .into_iter()
+            .filter(|p| p.rsplit('/').next().is_some_and(|f| f.starts_with("gui_") && f.ends_with(".spr")))
+            .map(|p| crate::ui::gui_sprites::read_table(&vfs, &p))
+            .collect();
+        for name in ["b_build", "b_research", "b_evolve"] {
+            assert!(tables.iter().any(|t| t.sprite(name).is_some() || t.sprite(&format!("{name}.0")).is_some()), "{name} resolves");
+        }
     }
 }
