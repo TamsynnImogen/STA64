@@ -12,8 +12,8 @@
 //!   build time and no officers, and its starting crew (`crewCost`) is taken
 //!   from the station's crew. Interim: the station's crew stops at zero when
 //!   it is lower than that cost.
-//! - First act: it stands at the dock node. Whether it then mines by itself
-//!   is not measured and not done.
+//! - First act: a freighter heads for the nearest compatible live resource
+//!   node, measured from the station origin; without one it stays idle.
 //! - A name that is not a unit (the loader warns), or an absent key, spawns nothing.
 //! - A def without a readable dock node (STA64's own fallback, interim):
 //!   [`sta_content::launch::DOCK_FALLBACK_AHEAD`] units in front of the station.
@@ -28,6 +28,7 @@ use crate::world::{Entities, Entity};
 pub(super) fn spawn(
     units: &mut Entities,
     db: &ContentDb,
+    eco: &mut crate::economy::Economy,
     station: EntityId,
     confinement: &mut crate::boundary::state::Confinement,
     events: &mut Vec<SimEvent>,
@@ -55,5 +56,6 @@ pub(super) fn spawn(
     if let Some(c) = units.get_mut(station).and_then(|s| s.crew.as_mut()) {
         c[0] = (c[0] - cost).max(Fixed::ZERO);
     }
+    eco.start_free_miner(db, units, station, id);
     events.push(SimEvent::Spawned { id });
 }

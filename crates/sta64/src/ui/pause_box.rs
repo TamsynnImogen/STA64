@@ -135,7 +135,7 @@ pub(crate) fn draw(
                     ));
                 }
                 if let Some(tip) = &l.button_tooltip {
-                    e.insert(super::notices::Tooltip::new(text_of(s, tip, "")));
+                    e.insert(super::notices::Tooltip::new(tip.clone()));
                 }
             });
             p.spawn((at(l.text), Pickable::IGNORE, children![sprite_text_styled(label, theme.heading_size, l.text_colour.unwrap_or(theme.text), SpriteTextStyle::role(font_role(&theme, theme.heading_size)).centered().wrap_to_parent())]));

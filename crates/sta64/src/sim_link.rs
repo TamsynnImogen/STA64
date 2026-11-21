@@ -429,6 +429,8 @@ fn step_sim(
     mut link: ResMut<SimLink>,
     mut queue: ResMut<CommandQueue>,
     mut out: MessageWriter<SimMsg>,
+    mut selection: ResMut<Selection>,
+    mut selection_changed: MessageWriter<SelectionChanged>,
     removals: Option<Res<ScriptRemovals>>,
 ) {
     for kind in queue.0.drain(..) {
@@ -445,14 +447,73 @@ fn step_sim(
         if let Some(r) = &removals {
             events.retain(|e| !matches!(e, SimEvent::Destroyed { id, .. } if r.take(*id)));
         }
+        if remap_replaced_selection(&mut selection, &events, link.real_curr(), link.player()) {
+            selection_changed.write(SelectionChanged);
+        }
         out.write_batch(events.into_iter().map(SimMsg));
     }
     clock.end_frame();
 }
 
+/// Follow replacement events in their emitted order, then validate the final
+/// identity. An intermediate replacement can already be gone by this tick's view.
+fn remap_replaced_selection(selection: &mut Selection, events: &[SimEvent], view: &WorldView, player: PlayerId) -> bool {
+    let mut changed = false;
+    for selected in &mut selection.0 {
+        let original = *selected;
+        let mut next = original;
+        for event in events {
+            if let SimEvent::Replaced { old, new, select: true } = event
+                && *old == next
+            {
+                next = *new;
+            }
+        }
+        if next != original && view.unit(next).is_some_and(|u| u.owner == player
+            && !u.flags.contains(sta_sim::view::UnitFlags::DYING)
+            && u.hull[0] > sta_sim::Fixed::ZERO)
+        {
+            *selected = next;
+            changed = true;
+        }
+    }
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacement_selection_follows_chain_without_selecting_unselected_units() {
+        let mut sim = Sim::new(1);
+        let spawn = |sim: &mut Sim, owner| sim.spawn(owner, SimVec3::ZERO,
+            (Fixed::ZERO, Fixed::ONE), MoveStats::from_f32(140.0, 100.0, 1.0, 1.0, 1.0));
+        let old = spawn(&mut sim, 0);
+        let middle = spawn(&mut sim, 0);
+        let newest = spawn(&mut sim, 0);
+        let other_player = spawn(&mut sim, 1);
+        let mut view = (*sim.view()).clone();
+        for unit in &mut view.units {
+            unit.hull = [Fixed::ONE; 2];
+        }
+        let mut selection = Selection(vec![old]);
+        let chain = [
+            SimEvent::Replaced { old, new: middle, select: true },
+            SimEvent::Replaced { old: middle, new: newest, select: true },
+        ];
+        assert!(remap_replaced_selection(&mut selection, &chain, &view, PlayerId(0)));
+        assert_eq!(selection.0, [newest]);
+        assert!(!remap_replaced_selection(&mut selection, &chain, &view, PlayerId(0)));
+        assert_eq!(selection.0, [newest]);
+        let mut selection = Selection(vec![old]);
+        assert!(!remap_replaced_selection(&mut selection,
+            &[SimEvent::Replaced { old, new: other_player, select: true }], &view, PlayerId(0)));
+        assert_eq!(selection.0, [old]);
+        assert!(!remap_replaced_selection(&mut selection,
+            &[SimEvent::Replaced { old, new: middle, select: false }], &view, PlayerId(0)));
+        assert_eq!(selection.0, [old]);
+    }
     use bevy::ecs::system::RunSystemOnce;
     use bevy::time::TimeUpdateStrategy;
     use sta_sim::command::LocalRouter;

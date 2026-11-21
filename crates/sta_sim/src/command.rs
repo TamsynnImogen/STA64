@@ -122,6 +122,8 @@ pub enum Order {
     /// its cost and its crew: see [`crate::economy::recycle`]. `Some(yard)` names the yard; `None`
     /// lets the sim choose. Appended tag 21 preserves every preceding Order tag and payload.
     Decommission { units: Vec<EntityId>, yard: Option<EntityId> },
+    /// Change the combat alert of owned ships and stations.
+    Alert { units: Vec<EntityId>, level: AlertState },
 }
 
 /// Which autonomy an [`Order::Autonomy`] sets.
@@ -659,7 +661,8 @@ mod tests {
             (18, Order::Transport { units: u.clone(), target: id, attack: false }),
             (19, Order::Recrew { units: u.clone(), on: None }),
             (20, Order::Guard { units: u.clone(), ward: id }),
-            (21, Order::Decommission { units: u, yard: Some(id) }),
+            (21, Order::Decommission { units: u.clone(), yard: Some(id) }),
+            (22, Order::Alert { units: u, level: AlertState::Green }),
         ];
         for (tag, o) in orders {
             let bytes = postcard::to_allocvec(&o).unwrap();

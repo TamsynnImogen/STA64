@@ -144,7 +144,7 @@ fn installed_defiant_unit_attaches_visible_hull() {
 
 /// With `STA64_TEST_INSTALL` (+ `STA64_TEST_MOD`, `STA64_TEST_MAP`, default `4alliance`): a skirmish
 /// as the player sees it at the start. Every resource node the local seat sees is drawn from the
-/// view the way the client does (`sync_units`, `attach_models`, `ensure_icons`) and must be the
+/// view the way the client does (`sync_units`, `attach_models`, `pick_bodies`, `ensure_icons`) and must be the
 /// unit a click on it picks (left click: selection; right click: Mine order for a miner; the Mine
 /// command's target click: the same pick), from a high and from a low camera, whichever resource it
 /// holds. Regression of a playtest report: a dilithium moon on STA2 Classic could not be selected.
@@ -208,6 +208,8 @@ fn install_visible_resource_nodes_are_pickable_and_minable() {
     app.world_mut().run_system_once(sync_units).unwrap();
     app.world_mut().flush();
     app.world_mut().run_system_once(attach_models).unwrap();
+    app.world_mut().flush();
+    app.world_mut().run_system_once(pick_bodies).unwrap();
     app.world_mut().flush();
     app.world_mut().run_system_once(crate::render::strategic::ensure_icons).unwrap();
     app.world_mut().flush();

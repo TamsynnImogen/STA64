@@ -7,8 +7,8 @@
 //! with its dot, coloured by the race's `crewYellowStatus` and `crewRedStatus`.
 //! The sprite bars are drawn clipped to their fill, so the art is the game's own.
 //!
-//! Not in the unit view yet, hence not drawn (TODO lines in the PR): the officers readout, the
-//! dilithium bar. Multi-selection (`infoMulti*`) and the system icons (`infoSystem*`) are later
+//! The resource bar follows the shared node feed. Multi-selection (`infoMulti*`) and the
+//! system icons (`infoSystem*`) are later
 //! packages; the Armada II group tiles are not used.
 
 use bevy::{picking::Pickable, prelude::*};
@@ -169,7 +169,12 @@ fn single_card(
     }
     // Bars. The shield bar shows the hull fraction when the unit has no shields.
     let tint = |key: &str| layout.colour(key).unwrap_or(Color::WHITE);
-    if let Some(r) = layout.at(origin, "infoSingleShieldBarArea") {
+    let def = feed.view.unit(single.id).and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def)));
+    let node_def = def.filter(|d| crate::ui::hud::status::node_slot(d).is_some());
+    let shield_rect = layout.at(origin, "infoSingleShieldBarArea");
+    if let Some(def) = node_def {
+        super::super::info::spawn_node_bar(commands, root, layout, origin, def, shield_rect, theme);
+    } else if let Some(r) = shield_rect {
         let name = layout.name("infoSingleShieldBar").unwrap_or_default();
         let (value, kind) = match single.shield {
             Some(s) => (s, StockBar::Shield(r.w)),

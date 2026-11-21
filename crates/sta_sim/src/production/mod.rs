@@ -163,6 +163,31 @@ fn finished(e: &Entity) -> bool {
     e.progress.is_none_or(|p| p >= Fixed::ONE)
 }
 
+/// Resolved, non-null `pushBuildItem0..9` in authored slot order. Gaps and
+/// unresolved class names are skipped; repeated class names remain repeated.
+fn push_build_defs(db: &ContentDb, units: &Entities, id: EntityId) -> Vec<ContentKey> {
+    let Some(yard) = units.get(id) else { return Vec::new() };
+    let Some(def) = db.unit(yard.def) else { return Vec::new() };
+    if !finished(yard) || !EntityKind::producer_def(def) {
+        return Vec::new();
+    }
+    sta_content::lifecycle::push_build_items(&def.raw)
+        .filter_map(|name| db.key(&name).filter(|&key| db.unit(key).is_some()))
+        .collect()
+}
+
+impl crate::Sim {
+    /// Enqueue an already finished producer's ODF push-build items once.
+    /// Call on creation or replacement, never on routine per-tick updates.
+    pub(crate) fn push_build_items(&mut self, id: EntityId) -> usize {
+        let Some(db) = self.content.as_deref() else { return 0 };
+        let defs = push_build_defs(db, &self.units, id);
+        defs.into_iter().filter(|&what| {
+            self.production.push_build_item(db, &self.units, &mut self.economy, id, what)
+        }).count()
+    }
+}
+
 fn ticks_of(db: &ContentDb, def: ContentKey) -> u64 {
     db.unit(def).map_or(1, |d| d.build.ticks.max(1))
 }
@@ -198,6 +223,37 @@ fn refund(eco: &mut Economy, db: &ContentDb, p: PlayerId, def: ContentKey) {
 }
 
 impl Production {
+    /// Admit one ODF push-build item through the yard's ordinary queue rules.
+    /// The callback's items need not appear in the player's build list.
+    fn push_build_item(
+        &mut self,
+        db: &ContentDb,
+        units: &Entities,
+        eco: &mut Economy,
+        yard: EntityId,
+        what: ContentKey,
+    ) -> bool {
+        let Some(y) = units.get(yard) else { return false };
+        let Some(bd) = db.unit(y.def) else { return false };
+        if !finished(y) || !EntityKind::producer_def(bd) || db.unit(what).is_none() {
+            return false;
+        }
+        let limit = db.build_queue_limit(bd) as usize;
+        if self.queues.get(yard).is_some_and(|q| q.len() >= limit) || limit == 0 {
+            return false;
+        }
+        let paid = db.unit_features(bd).pay_on_queue;
+        if paid && !(self.officers_admit(units, db, eco, y.owner, what) && pay(eco, db, y.owner, what)) {
+            return false;
+        }
+        let item = Item { def: what, owner: y.owner, done: 0, started: false, paid };
+        match self.queues.get_mut(yard) {
+            Some(q) => q.push(item),
+            None => { self.queues.insert(yard, vec![item]); }
+        }
+        true
+    }
+
     pub fn is_empty(&self) -> bool {
         self.queues.is_empty() && self.deploys.is_empty() && self.welds.is_empty() && self.rallies.is_empty()
     }
@@ -470,11 +526,13 @@ impl Production {
         eco: &mut Economy,
         events: &mut Vec<SimEvent>,
         confinement: &mut crate::boundary::state::Confinement,
+        bounds: Option<(sta_core::Vec3, sta_core::Vec3)>,
     ) {
         if self.is_empty() {
             return;
         }
         self.rallies.prune(units);
+        let mut newly_finished = Vec::new();
         let welds: Vec<EntityId> = self.welds.iter().map(|(id, _)| id).collect();
         for id in welds {
             if !units.contains(id) {
@@ -495,7 +553,8 @@ impl Production {
                     units.get_mut(id).expect("completed weld").target = target;
                 }
                 events.push(SimEvent::Built { builder, id });
-                free_unit::spawn(units, db, id, confinement, events);
+                free_unit::spawn(units, db, eco, id, confinement, events);
+                newly_finished.push(id);
             } else {
                 s.progress = Some(Fixed::from_int(done as i32) / Fixed::from_int(ticks as i32));
             }
@@ -517,18 +576,25 @@ impl Production {
                     let Item { def, owner, .. } = q.remove(0);
                     if let Some(d) = db.unit(def) {
                         // SIM-16: out of the builder's launch hardpoint.
-                        let out = match db.unit(yard_def) {
+                        let builder = db.unit(yard_def);
+                        let out = match builder {
                             Some(b) => launch::place(b, pos, heading),
                             None => launch::Launch { pos, heading, exit: None },
                         };
                         let mut unit = Entity::from_def(d, db.features(), owner, out.pos, out.heading);
                         if unit.orderable() {
-                            unit.target = self.rallies.destination(yard, owner, units).or(out.exit);
+                            unit.target = self.rallies.destination(yard, owner, units).or_else(|| {
+                                let a2 = matches!(db.profile(), sta_content::Profile::Sta2Classic | sta_content::Profile::Fo3 | sta_content::Profile::Fo4);
+                                builder.filter(|_| a2)
+                                    .and_then(|b| launch::default_rally(b, pos, out.heading, bounds))
+                                    .or(out.exit)
+                            });
                         }
                         let id = units.spawn(unit);
                         confinement.initialize(units.get_mut(id).expect("spawned"));
                         events.push(SimEvent::Built { builder: yard, id });
                         events.push(SimEvent::Spawned { id });
+                        newly_finished.push(id);
                     }
                 }
             }
@@ -553,6 +619,14 @@ impl Production {
             }
             if q.is_empty() {
                 self.queues.remove(yard);
+            }
+        }
+
+        // A welded or yard-built producer first receives its push-build items
+        // when construction completes. The spawn path handles initial actors.
+        for id in newly_finished {
+            for what in push_build_defs(db, units, id) {
+                self.push_build_item(db, units, eco, id, what);
             }
         }
 
@@ -736,6 +810,9 @@ mod charge_tests;
 
 #[cfg(test)]
 mod queue_limit_tests;
+
+#[cfg(test)]
+mod push_build_tests;
 
 #[cfg(test)]
 mod start_charge_tests;

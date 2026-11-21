@@ -151,6 +151,46 @@ fn each_builder_sends_every_queued_ship_to_its_own_rally() {
 }
 
 #[test]
+fn a2_default_rally_uses_the_yards_launch_axis_until_overridden() {
+    let mut setup = setup();
+    let mut db = ContentDb::builder()
+        .profile(sta_content::Profile::Sta2Classic)
+        .features(setup.content.features().clone());
+    for def in setup.content.units() {
+        let mut def = def.clone();
+        if def.odf == "fx_yard" {
+            def.radius = Fixed::from_int(100);
+            def.launch = Some(sta_content::LaunchPoint {
+                offset: (Fixed::ZERO, Fixed::ZERO),
+                dir: (Fixed::ONE, Fixed::ZERO),
+                clear: def.radius,
+                node: Some("build".into()),
+            });
+        }
+        db = db.unit(def);
+    }
+    setup.content = Arc::new(db.build().unwrap());
+    let map = Arc::make_mut(&mut setup.map);
+    map.bounds = (p(-5000, -5000), p(5000, 5000));
+    map.objects[0].pos = p(4950, 0);
+    let mut sim = Sim::from_setup(&setup);
+    let command = build(&sim, YARD);
+    accepted(&mut sim, &[command]);
+    let made = completed(&mut sim, 2);
+    assert_eq!(made.len(), 1);
+    let station = sim.unit(YARD).unwrap().pos;
+    let reflected = Vec3 { x: station.x - Fixed::from_int(300), ..station };
+    assert_eq!(sim.unit(made[0].1).unwrap().target, Some(reflected));
+
+    let command = build(&sim, YARD);
+    let manual = p(4850, 600);
+    accepted(&mut sim, &[rally(&[YARD], Target::Point(manual)), command]);
+    let made = completed(&mut sim, 2);
+    assert_eq!(made.len(), 1);
+    assert_eq!(sim.unit(made[0].1).unwrap().target, Some(manual));
+}
+
+#[test]
 fn entity_rally_samples_the_current_position_at_each_completion() {
     let mut s = Sim::from_setup(&setup());
     let cmd = build(&s, YARD);

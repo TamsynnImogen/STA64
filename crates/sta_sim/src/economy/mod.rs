@@ -419,6 +419,40 @@ impl Economy {
         !ids.is_empty()
     }
 
+    /// Send a newly built station's free freighter to its nearest usable node.
+    /// This is an initial job only; subsequent player orders use `order_mine`.
+    pub(crate) fn start_free_miner(
+        &mut self,
+        db: &ContentDb,
+        units: &Entities,
+        station: EntityId,
+        miner: EntityId,
+    ) {
+        let Some(s) = units.get(station) else { return };
+        let Some(u) = units.get(miner).filter(|u| u.owner == s.owner && cfg_of(db, u.def).is_some()) else { return };
+        let Some(def) = db.unit(s.def) else { return };
+        let handles = def.station_mining.and_then(|m| m.can_handle)
+            .unwrap_or([true, false, false, false]);
+        let nearest = units.iter()
+            .filter(|n| {
+                n.kind == EntityKind::Resource
+                    && !n.flags.contains(crate::view::UnitFlags::DYING)
+                    && db.unit(n.def).is_none_or(EntityKind::mineable_def)
+            })
+            .filter(|n| {
+                let slot = usize::from(node_resource(db, n.def));
+                handles.get(slot).copied().unwrap_or(false)
+                    && (is_infinite(db, n.def)
+                        || self.nodes.get(n.id).copied().unwrap_or_else(|| start_amount(db, n.def)) > Fixed::ZERO)
+            })
+            .map(|n| (dist(s.pos, n.pos), n.id))
+            .min_by_key(|&(distance, id)| (distance, id))
+            .map(|(_, id)| id);
+        if let Some(node) = nearest {
+            self.order_mine(db, units, u.owner, &[miner], node);
+        }
+    }
+
     /// A move or stop suspends mining; carried cargo remains physical state.
     pub(crate) fn cancel(&mut self, units: &Entities, player: PlayerId, ids: &[EntityId]) {
         for &id in ids {
