@@ -183,6 +183,8 @@ mod tests {
             for w in [&mut a, &mut b] {
                 w.raw = Default::default();
                 w.features = None;
+                // Render only, not hashed: the fake carries none.
+                w.look = Default::default();
             }
             assert_eq!(format!("{a:#?}"), format!("{b:#?}"), "{}", a.odf);
         }

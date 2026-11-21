@@ -54,7 +54,7 @@ fn black_area(commands: &mut Commands, root: Entity, layout: &StockLayout, name:
 
 /// A panel's background pieces (`<panel>BackgroundPanel_n`) at their native frames.
 pub(super) fn frame_pieces(commands: &mut Commands, root: Entity, layout: &StockLayout, name: &str, origin: Vec2) {
-    for piece in layout.pieces(&format!("{name}BackgroundPanel")) {
+    for piece in layout.pieces_in(name, &format!("{name}BackgroundPanel")) {
         let r = R::new(origin.x + piece.rect.x, origin.y + piece.rect.y, piece.rect.w, piece.rect.h);
         commands.entity(root).with_child((node(r), Pickable::IGNORE, GuiImage::new(piece.name).with_frame(piece.frame)));
     }
