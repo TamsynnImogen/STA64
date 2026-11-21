@@ -18,6 +18,7 @@ use crate::ui::{
     notices::Tooltip,
     profile::UiProfile,
     sprite_font::{SpriteTextStyle, sprite_text_styled},
+    stock_font::{StockCanvas, StockTextCanvas},
     theme::{ButtonClicked, Theme, UiButton, WidgetState},
 };
 use crate::viewer::Mounted;
@@ -386,7 +387,8 @@ fn spawn_button(
                 b.label.clone(),
                 (rect.h * 0.22).clamp(18.0, 22.0),
                 theme.text,
-                SpriteTextStyle::default().centered().wrapped(rect.w).stock_label(),
+                // STA64's fallback label (shown only where the sprite is missing), not in the original.
+                SpriteTextStyle::default().centered().wrapped(rect.w).stock_fallback(),
             ),
         )],
     ));
@@ -417,6 +419,7 @@ pub(super) fn refresh(
         }
         if state.cfg.is_some() {
             commands.insert_resource(crate::render::overlays::GaugeStyle::default());
+            commands.insert_resource(StockTextCanvas::default());
         }
         state.layout = None;
         state.loaded = false;
@@ -479,6 +482,11 @@ pub(super) fn refresh(
             .gui
             .as_ref()
             .map(|cfg| StockLayout::for_aspect_fit(cfg, config.aspect, config.fit));
+        commands.insert_resource(StockTextCanvas(state.layout.as_ref().map(|l| StockCanvas {
+            hud: Vec2::new(l.hud.w, l.hud.h),
+            window: l.screen,
+            fit: l.fit,
+        })));
         commands.insert_resource(crate::render::overlays::GaugeStyle::from_cfg(
             state.layout.as_ref().and_then(|layout| layout.number("selectionGaugeHeight")),
             state.layout.as_ref().and_then(|layout| layout.number("selectionGaugeGap")),
@@ -638,7 +646,7 @@ pub(super) fn refresh(
                         ChildOf(parent),
                         children![(
                             // Where the TTF label sat before: top left, unwrapped.
-                            sprite_text_styled(label, 18.0, theme.text, SpriteTextStyle::default().stock_label()),
+                            sprite_text_styled(label, 18.0, theme.text, SpriteTextStyle::default().stock_fallback()),
                         )],
                     ));
                 }

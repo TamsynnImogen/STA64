@@ -87,7 +87,7 @@ fn text(
     stock: bool,
 ) {
     let style = SpriteTextStyle::default().centered().wrapped(r.w);
-    let style = if stock { style.stock_label() } else { style };
+    let style = if stock { style.stock_fallback() } else { style };
     let wrapper = commands
         .spawn((
             Node {

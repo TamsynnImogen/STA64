@@ -153,7 +153,7 @@ pub(super) fn spawn(
                 .id();
             commands.spawn((
                 field,
-                sprite_text_styled("", theme.small_size.max(18.0), theme.text, SpriteTextStyle::default().stock_label()),
+                sprite_text_styled("", theme.small_size.max(18.0), theme.text, SpriteTextStyle::default().stock_fallback()),
                 Visibility::Hidden,
                 ChildOf(wrapper),
             ));
