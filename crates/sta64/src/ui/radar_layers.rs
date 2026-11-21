@@ -1000,15 +1000,21 @@ mod tests {
             app.world().resource::<Assets<AdditiveImage>>().get(&material).unwrap().tint
         };
         s.show();
+        // The sim initially spawns planets as neutral. Supply the owned view
+        // the radar receives after colonisation.
+        let mut view = (*s.app.world().resource::<RadarFeed>().view).clone();
+        view.units.iter_mut().find(|u| u.id == owned).unwrap().owner = PlayerId(0);
+        s.app.world_mut().resource_mut::<RadarFeed>().view = Arc::new(view);
+        s.app.update();
         assert_eq!(tint_of(&mut s.app, owned), UNTINTED);
         assert_eq!(tint_of(&mut s.app, neutral), UNTINTED);
 
         s.app.insert_resource(TeamColours(vec![("empty".into(), Color::WHITE), ("red".into(), Color::srgb(1.0, 0.0, 0.0)), ("blue".into(), Color::srgb(0.0, 0.0, 1.0))]));
-        s.show();
+        s.app.update();
         assert_eq!(tint_of(&mut s.app, owned), Vec4::new(1.0, 0.0, 0.0, 1.0));
         assert_eq!(tint_of(&mut s.app, neutral), UNTINTED);
         s.app.insert_resource(MapTeamColours(vec![[0, 0], [0, 3], [0, 2]]));
-        s.show();
+        s.app.update();
         assert_eq!(tint_of(&mut s.app, owned), Vec4::new(0.0, 0.0, 1.0, 1.0));
         // The icon node survives a capture; its material must follow the new owner.
         let mut captured = (*s.app.world().resource::<RadarFeed>().view).clone();
@@ -1017,7 +1023,7 @@ mod tests {
         s.app.update();
         assert_eq!(tint_of(&mut s.app, owned), Vec4::new(1.0, 0.0, 0.0, 1.0));
         s.app.world_mut().remove_resource::<TeamColours>();
-        s.show();
+        s.app.update();
         assert_eq!(tint_of(&mut s.app, owned), UNTINTED);
     }
 

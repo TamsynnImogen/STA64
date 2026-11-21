@@ -1382,12 +1382,17 @@ minimapDisplayArea = 16 19 320 320
         app.world_mut().resource_mut::<RadarState>().map_fixed = true;
         let mut feed = omniscient(feed_at(&mut log, &db, 0));
         feed.selected = vec![flagship];
-        let enemy = feed.view.units.iter().find(|u| u.owner.is_player() && u.owner != ME).unwrap().id;
+        let enemy = feed.view.units.iter().find(|u| u.owner == PlayerId(2)).unwrap().id;
         app.world_mut().resource_mut::<RadarFeed>().clone_from(&feed);
 
         let red = Color::srgb(1.0, 0.0, 0.0);
         let blue = Color::srgb(0.0, 0.0, 1.0);
-        let colours = TeamColours(vec![("empty".into(), Color::WHITE), ("red".into(), red), ("blue".into(), blue)]);
+        let colours = TeamColours(vec![
+            ("empty".into(), Color::WHITE),
+            ("white".into(), Color::WHITE),
+            ("blue".into(), blue),
+            ("red".into(), red),
+        ]);
         let colour_of = |app: &mut App, id| {
             app.world_mut().query::<(&RadarBlip, &BackgroundColor, &BorderColor)>()
                 .iter(app.world())
@@ -1400,12 +1405,12 @@ minimapDisplayArea = 16 19 320 320
         assert_eq!(fallback.1, BorderColor::all(Color::WHITE));
         app.insert_resource(colours);
         app.update();
-        // Seat 1 is palette entry 1; seat 2 is entry 2, irrespective of relation.
+        // PlayerId(1) and PlayerId(2) use entries 2 and 3, irrespective of relation.
         assert_eq!(colour_of(&mut app, flagship), (blue, BorderColor::all(blue)));
         assert_eq!(colour_of(&mut app, enemy).0, red);
 
         // A map's mark entry supersedes its hull/seat colour, even on existing nodes.
-        app.insert_resource(MapTeamColours(vec![[0, 0], [0, 3], [0, 2]]));
+        app.insert_resource(MapTeamColours(vec![[0, 0], [0, 1], [0, 2], [0, 3]]));
         app.update();
         assert_eq!(colour_of(&mut app, flagship), (red, BorderColor::all(red)));
         assert_eq!(colour_of(&mut app, enemy).0, blue);
