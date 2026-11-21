@@ -13,10 +13,6 @@ use crate::viewer::Mounted;
 #[derive(Component)]
 pub(super) struct AuthoredPreview;
 
-/// Numbered start positions shown when the map has no usable preview image.
-#[derive(Component)]
-pub(super) struct PreviewFallback;
-
 #[derive(Default)]
 pub(super) struct PreviewCache {
     map: Option<String>,
@@ -36,7 +32,6 @@ pub(super) fn sync_preview(
     images: Option<ResMut<Assets<Image>>>,
     mut cache: Local<PreviewCache>,
     previews: Query<Entity, With<AuthoredPreview>>,
-    mut fallbacks: Query<&mut Visibility, With<PreviewFallback>>,
 ) {
     let mounted_changed = mounted.as_ref().is_some_and(|m| m.is_changed());
     if mounted_changed {
@@ -75,14 +70,6 @@ pub(super) fn sync_preview(
         });
     } else {
         commands.entity(preview).remove::<ImageNode>();
-    }
-    let visibility = if cache.image.is_some() {
-        Visibility::Hidden
-    } else {
-        Visibility::Inherited
-    };
-    for mut fallback in &mut fallbacks {
-        *fallback = visibility;
     }
 }
 

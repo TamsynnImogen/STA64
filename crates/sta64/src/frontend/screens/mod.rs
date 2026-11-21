@@ -26,13 +26,14 @@ use sta_sim::setup::GameSetup;
 mod data;
 pub mod frame;
 mod preview;
+mod presets;
 pub mod stock;
 #[cfg(test)]
 mod tests;
 pub(crate) mod view;
 
 pub use crate::frontend::lobby::{LobbyPlugin, MpFields, Multiplayer, NetGameReady, NetLaunch};
-pub use data::{ActiveMod, Browse, MAX_SEATS, MapEntry, ModEntry, SKIRMISH_AI, ScreenData, Seat, SeatControl, SelectedMod, SettingKey, Settings, SetupDraft, WindowSize};
+pub use data::{ActiveMod, Browse, MAX_SEATS, MapEntry, ModEntry, SKIRMISH_AI, ScreenData, Seat, SeatControl, SelectedMod, SettingKey, Settings, SetupDraft, SetupFog, WindowSize};
 pub use view::{Act, ScreenRoot};
 
 use crate::app::{AppState, GameSet};
@@ -114,7 +115,7 @@ pub enum Col {
 /// Launch was pressed: start a match from this setup. INT-M4 connects it to
 /// INT-M3's match start (loading screen, then `AppState::InGame`).
 #[derive(Message, Debug, Clone)]
-pub struct StartGame(pub GameSetup, pub crate::clock::MatchSpeed, pub Option<crate::viewer::TeamColours>);
+pub struct StartGame(pub GameSetup, pub crate::clock::MatchSpeed, pub Option<crate::viewer::TeamColours>, pub SetupFog);
 
 /// Use mod was pressed: `Some(folder)` for a mod, `None` for the base game.
 /// The host remounts the install with it (`Vfs::mount_install`'s `active_mod`).
@@ -378,6 +379,11 @@ fn track_scroll(theme: Res<crate::ui::theme::Theme>, mut boxes: Query<(&ScrollBo
     }
 }
 
+fn menu_random() -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |time| time.as_nanos() as u64);
+    crate::clock::splitmix64(now)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn on_buttons(
     mut clicks: MessageReader<ButtonClicked>,
@@ -392,7 +398,9 @@ fn on_buttons(
     mut exit: MessageWriter<AppExit>,
     screen: Res<State<Screen>>,
     mut map_return: ResMut<MapReturn>,
+    mut notices: Option<ResMut<Messages<crate::ui::notices::Notice>>>,
 ) {
+    use crate::ui::notices::{Notice, Severity};
     let Some(mut draft) = draft else { return };
     for ButtonClicked(e) in clicks.read() {
         let Ok(&act) = acts.get(*e) else { continue };
@@ -434,16 +442,34 @@ fn on_buttons(
             Act::CycleResources => draft.cycle_resources(),
             Act::CycleOfficerLimit => draft.cycle_officer_limit(&data),
             Act::CycleMatchSpeed => draft.speed = draft.speed.next(),
-            Act::SetObserving(observing) => draft.set_observing(observing),
+            Act::CycleFog => draft.fog = draft.fog.next(),
+            Act::ToggleRandomPlacement => draft.toggle_placement(),
+            Act::TogglePreview => draft.preview_visible = !draft.preview_visible,
+            Act::CycleStartMarkers => draft.cycle_start_markers(),
+            Act::SaveSetup | Act::LoadSetup => {
+                let result = if act == Act::SaveSetup {
+                    presets::save(&draft, &data).map(|()| "Game settings saved")
+                } else {
+                    presets::load(&data).map(|saved| {
+                        *draft = saved;
+                        "Game settings loaded"
+                    })
+                };
+                let (severity, message) = match result {
+                    Ok(text) => (Severity::Info, crate::ui::i18n::tr(text)),
+                    Err(error) => (Severity::Bad, error),
+                };
+                if let Some(notices) = &mut notices {
+                    notices.write(Notice::new(severity, message));
+                }
+            }
             Act::PickTeamColour(index) => draft.pick_colour(&data, index),
             Act::RandomTeamColour => {
                 let swatches = data.colours.swatches();
                 let selected = draft.active_swatch(&data);
                 let choices: Vec<_> = (0..swatches.len()).filter(|&i| Some(i) != selected).collect();
                 if !choices.is_empty() {
-                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0, |t| t.as_nanos() as u64);
-                    let index = crate::clock::splitmix64(now) as usize % choices.len();
+                    let index = (menu_random() % choices.len() as u64) as usize;
                     draft.pick_colour(&data, choices[index]);
                 }
             }
@@ -457,11 +483,20 @@ fn on_buttons(
             Act::DefaultOptions => {
                 draft.options = Default::default();
                 draft.speed = crate::clock::MatchSpeed::Normal;
+                if *screen.get() == Screen::Setup {
+                    draft.fog = SetupFog::default();
+                    draft.random_placement = false;
+                    draft.preview_visible = true;
+                    draft.start_markers = Default::default();
+                }
             }
             Act::Launch => {
-                if let Some(setup) = draft.to_setup(&data) {
-                    let colours = (!draft.observing && draft.colour.is_some()).then(|| draft.effective_colours(&data));
-                    start.write(StartGame(setup, draft.speed, colours));
+                let mut launch = draft.clone();
+                if launch.random_placement || launch.seats.iter().any(|seat| seat.race == data::RANDOM_SIDE) {
+                    launch.seed = menu_random();
+                }
+                if let Some(setup) = launch.to_setup(&data) {
+                    start.write(StartGame(setup, launch.speed, launch.launch_colours(&data), launch.fog));
                 }
             }
             Act::Exit => {
