@@ -300,23 +300,23 @@ mod tests {
 
     #[test]
     fn a_taller_line_box_is_centred_with_a_negative_offset_and_snapped() {
-        // Authored: a 20-unit-high slot, a font of 15-unit frame height at twice the scale.
-        let place = StockPlace { h: HAlign::Left, v: VAlign::Centre, rect: Vec2::new(340.0, 20.0) };
+        // Authored: a 22-unit-high slot, a font of 15-unit frame height at twice the scale.
+        let place = StockPlace { h: HAlign::Left, v: VAlign::Centre, rect: Vec2::new(330.0, 22.0) };
         let block = Vec2::new(100.0, 30.0);
-        // Height minus one: (19 - 30) / 2.
-        assert_eq!(place_offset(&place, block, 1.0), Vec2::new(0.0, -5.5));
-        assert_eq!(snap(place_offset(&place, block, 1.0)), Vec2::new(0.0, -5.0));
-        // At 1.5 physical px per unit: (28.5 - 45) / 2 with a block of 45 px.
-        assert_eq!(place_offset(&place, Vec2::new(100.0, 45.0), 1.5).y, -8.25);
+        // Height minus one: (21 - 30) / 2.
+        assert_eq!(place_offset(&place, block, 1.0), Vec2::new(0.0, -4.5));
+        assert_eq!(snap(place_offset(&place, block, 1.0)), Vec2::new(0.0, -4.0));
+        // At 1.5 physical px per unit: (31.5 - 45) / 2 with a block of 45 px.
+        assert_eq!(place_offset(&place, Vec2::new(100.0, 45.0), 1.5).y, -6.75);
         assert_eq!(snap(Vec2::new(2.5, -2.5)), Vec2::new(3.0, -2.0));
     }
 
     #[test]
     fn centred_pens_use_the_width_minus_one() {
-        let place = StockPlace { h: HAlign::Centre, v: VAlign::Centre, rect: Vec2::new(116.0, 26.0) };
-        // A 31-high line in a 26-high slot; a 40-wide run in a 116-wide one: (115 - 40) / 2.
+        let place = StockPlace { h: HAlign::Centre, v: VAlign::Centre, rect: Vec2::new(110.0, 28.0) };
+        // A 31-high line in a 28-high slot; a 40-wide run in a 110-wide one: (109 - 40) / 2.
         let o = place_offset(&place, Vec2::new(40.0, 31.0), 1.0);
-        assert_eq!(o, Vec2::new(37.5, -3.0));
+        assert_eq!(o, Vec2::new(34.5, -2.0));
         // Top-left and bottom alignment.
         let top = StockPlace { h: HAlign::Left, v: VAlign::Top, rect: Vec2::new(50.0, 20.0) };
         assert_eq!(place_offset(&top, Vec2::new(10.0, 31.0), 1.0), Vec2::ZERO);
