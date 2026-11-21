@@ -132,7 +132,7 @@ pub struct Tile {
 }
 
 /// A unit's shields as one share over all facings, `None` without shields.
-fn shield_frac(u: &UnitView) -> Option<f32> {
+pub(super) fn shield_frac(u: &UnitView) -> Option<f32> {
     let (now, max) = u.shields.iter().fold((0.0, 0.0), |(n, m), s| (n + s[0].to_f32(), m + s[1].to_f32()));
     (max > 0.0).then(|| (now / max).clamp(0.0, 1.0))
 }
