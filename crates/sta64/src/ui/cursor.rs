@@ -76,10 +76,29 @@ struct CursorNode;
 /// from the executable, static, for the original's own camera buttons; INTERIM: STA64 applies it
 /// to its own camera buttons, `OrbitButtons`, which are not the original's; with pan bound to the
 /// right button, as in the viewer, the cursor is hidden while a right-click order's button is held).
-/// A window that is not focused never ends a drag it did not see released, so no drag is
-/// assumed then (the release is not delivered to an unfocused window).
-pub(crate) fn camera_drag(buttons: &ButtonInput<MouseButton>, orbit: &crate::viewer::OrbitButtons, focused: bool) -> bool {
-    focused && (buttons.pressed(orbit.rotate) || orbit.pan.is_some_and(|b| buttons.pressed(b)))
+/// While the window is not focused no drag is assumed. The engine does not release mouse buttons on
+/// a focus loss, so a button held at that moment can still read as pressed on refocus (when the
+/// release was lost); [`DragGuard`] then ignores it until it has been released or freshly pressed.
+pub(crate) fn camera_drag(buttons: &ButtonInput<MouseButton>, orbit: &crate::viewer::OrbitButtons, focused: bool, guard: &mut DragGuard) -> bool {
+    if !focused {
+        guard.stale = [true, true];
+        return false;
+    }
+    let mut drag = false;
+    for (i, b) in [Some(orbit.rotate), orbit.pan].into_iter().enumerate() {
+        let Some(b) = b else { continue };
+        if guard.stale[i] && (buttons.just_pressed(b) || !buttons.pressed(b)) {
+            guard.stale[i] = false;
+        }
+        drag |= buttons.pressed(b) && !guard.stale[i];
+    }
+    drag
+}
+
+/// Which drag buttons were held across a focus loss and have not been seen released since.
+#[derive(Default, Debug)]
+pub(crate) struct DragGuard {
+    stale: [bool; 2],
 }
 
 /// The frames of a cursor sprite in texture pixels, its hotspot, and the period. `anim` is the
@@ -178,6 +197,7 @@ fn place(
     race: Option<Res<crate::game::LocalRace>>,
     settings: Option<Res<crate::frontend::screens::Settings>>,
     // INTERIM (not measured): the animation clock is real time, so it also runs while the game is paused.
+    mut guard: Local<DragGuard>,
     time: Res<Time<Real>>,
     buttons: Option<Res<ButtonInput<MouseButton>>>,
     orbit: Option<Res<crate::viewer::OrbitButtons>>,
@@ -195,7 +215,7 @@ fn place(
     let formats = device.as_ref().map(|d| CompressedImageFormats::from_features(d.features())).unwrap_or_else(CompressedImageFormats::empty);
     let pointer = window.single().ok().and_then(|(w, _)| w.cursor_position());
     let focused = window.single().ok().is_none_or(|(w, _)| w.focused);
-    let dragging = buttons.as_deref().zip(orbit.as_deref()).is_some_and(|(b, o)| camera_drag(b, o, focused));
+    let dragging = buttons.as_deref().zip(orbit.as_deref()).is_some_and(|(b, o)| camera_drag(b, o, focused, &mut guard));
     let art = match (&mounted, pointer) {
         (Some(m), Some(_)) if !dragging => {
             let vfs = &m.0;
@@ -341,20 +361,46 @@ mod tests {
     #[test]
     fn the_camera_drag_hides_the_cursor() {
         let orbit = crate::viewer::OrbitButtons { rotate: MouseButton::Middle, pan: None };
+        let mut g = DragGuard::default();
         let mut b = ButtonInput::<MouseButton>::default();
-        assert!(!camera_drag(&b, &orbit, true));
+        assert!(!camera_drag(&b, &orbit, true, &mut g));
         b.press(MouseButton::Right);
-        assert!(!camera_drag(&b, &orbit, true), "a right click is an order, not a camera drag");
+        assert!(!camera_drag(&b, &orbit, true, &mut g), "a right click is an order, not a camera drag");
         b.press(MouseButton::Middle);
-        assert!(camera_drag(&b, &orbit, true));
+        assert!(camera_drag(&b, &orbit, true, &mut g));
         b.release(MouseButton::Middle);
-        assert!(!camera_drag(&b, &orbit, true));
+        assert!(!camera_drag(&b, &orbit, true, &mut g));
         let pan = crate::viewer::OrbitButtons { rotate: MouseButton::Left, pan: Some(MouseButton::Right) };
-        assert!(camera_drag(&b, &pan, true));
-        // The window lost focus mid-drag: the release is never seen, but the cursor is not hidden.
+        assert!(camera_drag(&b, &pan, true, &mut g));
+    }
+
+    /// A drag in progress when the window loses focus: no drag while unfocused, and on refocus a
+    /// button still reading as pressed (the release was lost) is ignored until released or freshly pressed.
+    #[test]
+    fn a_stale_press_does_not_hide_the_cursor_after_refocus() {
+        let orbit = crate::viewer::OrbitButtons { rotate: MouseButton::Middle, pan: None };
+        let mut g = DragGuard::default();
+        let mut b = ButtonInput::<MouseButton>::default();
         b.press(MouseButton::Middle);
-        assert!(camera_drag(&b, &orbit, true));
-        assert!(!camera_drag(&b, &orbit, false));
+        assert!(camera_drag(&b, &orbit, true, &mut g));
+        b.clear();
+        assert!(!camera_drag(&b, &orbit, false, &mut g), "unfocused");
+        // The frame after refocus: still held, never seen released.
+        assert!(!camera_drag(&b, &orbit, true, &mut g), "stale held button");
+        assert!(!camera_drag(&b, &orbit, true, &mut g), "and it stays ignored while held");
+        // Released, then pressed again: a fresh drag.
+        b.release(MouseButton::Middle);
+        assert!(!camera_drag(&b, &orbit, true, &mut g));
+        b.clear();
+        b.press(MouseButton::Middle);
+        assert!(camera_drag(&b, &orbit, true, &mut g), "a fresh press hides it");
+        // Refocus where the input was reset and the button is pressed anew in the same frame.
+        b.clear();
+        assert!(!camera_drag(&b, &orbit, false, &mut g));
+        b.release(MouseButton::Middle);
+        b.clear();
+        b.press(MouseButton::Middle);
+        assert!(camera_drag(&b, &orbit, true, &mut g), "just pressed after refocus counts");
     }
 
     #[test]
