@@ -769,6 +769,10 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     if let Some(on) = u.stats.add_to_planner {
         c.raw("add_to_planner", if on { "1" } else { "0" });
     }
+    let push_items: Vec<_> = crate::lifecycle::push_build_items(&u.raw).map(|name| quoted(&name)).collect();
+    if !push_items.is_empty() {
+        c.list("push_build_items", push_items);
+    }
     // AI-05: the Roots planner treats definitions with the same positive tag as one build item.
     if db.profile() == Profile::Fo4
         && let Some(tag) = u.stats.distance_below_grid.filter(|tag| *tag > Fixed::ZERO)
@@ -789,21 +793,39 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
 
 /// A start helper's replacement rule (SIM-28).
 fn replace_text(r: &crate::lifecycle::ReplaceDef) -> String {
-    let crate::lifecycle::ReplaceDef { instant, delay, mode, required_officers, entries } = r;
+    let crate::lifecycle::ReplaceDef { instant, delay, mode, required_officers, entries, options } = r;
     let entries = entries.iter().map(|e| {
         let classes = e.classes.iter().map(|c| {
             group(Canon::new().text("odf", &c.odf.to_ascii_lowercase()).int("weight", c.weight).list("offset", c.offset.map(fixed_text)))
         });
         group(Canon::new().raw("condition", &e.condition.as_deref().map_or_else(|| "-".into(), quoted)).list("classes", classes))
     });
-    group(
-        Canon::new()
+    let mut c = Canon::new();
+    c
             .list("instant", instant.map(|b| u8::from(b).to_string()))
             .int("delay", *delay)
             .int("mode", *mode)
             .raw("required_officers", &required_officers.map_or_else(|| "-".into(), |n| n.to_string()))
-            .list("entries", entries),
-    )
+            .list("entries", entries);
+    if options != &crate::lifecycle::ReplaceOptions::default() {
+        c.flag("keep_name", options.keep_name)
+            .flag("keep_owner", options.keep_owner)
+            .flag("reset_crew", options.reset_crew)
+            .flag("reset_energy", options.reset_energy)
+            .flag("maintain_orders", options.maintain_orders)
+            .flag("ignore_same_class", options.ignore_same_class)
+            .flag("ignore_tech_tree", options.ignore_tech_tree)
+            .flag("find_open_spot", options.find_open_spot)
+            .flag("warp_in", options.warp_in)
+            .flag("transfer_stats", options.transfer_stats)
+            .int("select_mode", options.select_mode)
+            .int("concurrent_children", options.concurrent_children as i128)
+            .int("cycle", options.cycle)
+            .list("cost", options.cost.map(fixed_text))
+            .fixed("crew_cost", options.crew_cost)
+            .fixed("warp_speed", options.warp_speed);
+    }
+    group(&mut c)
 }
 
 fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {

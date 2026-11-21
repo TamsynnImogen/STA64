@@ -274,6 +274,16 @@ impl Sim {
 
     /// `Edit::Alert`: a live craft or station (a prop, a shot, a dying unit and
     /// a gone one are rejected). Red drops the row.
+    pub(crate) fn order_alert(&mut self, owner: PlayerId, ids: &[EntityId], level: AlertState) -> bool {
+        let mut accepted = false;
+        for &id in ids {
+            if self.unit(id).is_some_and(|u| !owner.is_player() || u.owner == owner) {
+                accepted |= self.edit_alert(id, level);
+            }
+        }
+        accepted
+    }
+
     pub(crate) fn edit_alert(&mut self, id: EntityId, to: AlertState) -> bool {
         let live = self.units.get(id).is_some_and(|u| {
             matches!(u.kind, EntityKind::Craft | EntityKind::Station) && u.hull[0] > sta_core::Fixed::ZERO && !u.flags.contains(UnitFlags::DYING)

@@ -68,6 +68,8 @@ pub enum SimEvent {
     /// SIM-22 hold keeps the order). Not hashed. Appended to preserve every
     /// existing postcard event tag.
     OrderAbandoned { id: EntityId },
+    /// A replacement weapon retired one object and created its successor.
+    Replaced { old: EntityId, new: EntityId, select: bool },
 }
 
 /// Where a freighter is in `ToNode -> Mining -> ToDock -> Unloading` ([`SimEvent::MinerPhase`]).

@@ -7,7 +7,8 @@
 //! were not read, so no value is invented). Grades: key names read from data;
 //! which object reads which key read from the executable, static.
 //!
-//! - Station (`p_mining` only): `miningMultiplier`, `resourcesCanHandle`.
+//! - Station (`p_mining`): `miningMultiplier`, `resourcesCanHandle`.
+//!   A station with a resolved `freighterName` also reads the resource mask.
 //! - Resource node (the ODF a planet's `resource` names): `miningRate`,
 //!   `trickleAmount`, `trickleMiningRateFraction`, `isInfinite`, `amt<slot>`.
 //! - Race: `miningRateModifier` (see [`crate::Races::mining_rate_modifiers`]).
@@ -23,7 +24,7 @@ use sta_odf::Odf;
 use crate::resources::{KEYS, SLOTS};
 use crate::{ResourceModel, Warning};
 
-/// The station keys of a class `p_mining` station.
+/// The station mining keys, including a free freighter's resource mask.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StationMining {
     /// `miningMultiplier`: the station's factor on the node's mining rate.
@@ -79,19 +80,20 @@ pub(crate) fn read_nonneg(file: &str, odf: &Odf, key: &str, warnings: &mut Vec<W
     }
 }
 
-/// The station keys, for class `p_mining` only; `None` for every other class
-/// and for a station with neither key.
+/// Station keys: the multiplier belongs to `p_mining`; a resolved free-unit
+/// station may also declare the resources its first freighter should seek.
 pub(crate) fn resolve_station(
     file: &str,
     odf: &Odf,
     class: &str,
+    has_free_unit: bool,
     model: &ResourceModel,
     warnings: &mut Vec<Warning>,
 ) -> Option<StationMining> {
-    if class != "p_mining" {
+    if class != "p_mining" && !has_free_unit {
         return None;
     }
-    let multiplier = read_nonneg(file, odf, "miningMultiplier", warnings);
+    let multiplier = (class == "p_mining").then(|| read_nonneg(file, odf, "miningMultiplier", warnings)).flatten();
     let can_handle = odf.raw("resourcesCanHandle").map(|raw| {
         let mut mask = [false; SLOTS];
         for word in raw.split_whitespace().map(|w| w.trim_matches('"')).filter(|w| !w.is_empty()) {

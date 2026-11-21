@@ -54,6 +54,7 @@ pub enum SpecialKind {
     /// A point-defence weapon, toggled like a special when
     /// `Features::pd_energy` is on (SIM-34; `combat/pd.rs` runs it).
     PointDefence,
+    Replace,
 }
 
 impl SpecialKind {
@@ -61,6 +62,7 @@ impl SpecialKind {
     pub fn of(w: &WeaponDef) -> Option<SpecialKind> {
         match w.class.0.as_str() {
             "cloakingdevice" | "cloakingdeviceimp" => Some(SpecialKind::Cloak),
+            _ if w.replace.is_some() => Some(SpecialKind::Replace),
             _ if w.kind == sta_content::WeaponKind::PointDefence => Some(SpecialKind::PointDefence),
             _ => None,
         }
@@ -116,14 +118,18 @@ pub fn specials_indexed<'a>(
     db: &'a ContentDb,
     u: &'a UnitDef,
 ) -> impl Iterator<Item = (usize, SpecialKind, &'a WeaponDef)> {
-    u.hardpoints.iter().enumerate().filter_map(|(i, h)| {
+    let supported = || u.hardpoints.iter().enumerate().filter_map(|(i, h)| {
         let w = db.weapon(h.weapon.key)?;
         let kind = SpecialKind::of(w)?;
-        // A PD weapon is a special (and takes a slot) only under `pd_energy` with
-        // `point_defense_cycles`, the bits its toggle needs,
-        // so slot numbers of other content do not shift.
-        (kind != SpecialKind::PointDefence || { let f = db.weapon_features(w); f.pd_energy && f.point_defense_cycles }).then_some((i, kind, w))
-    })
+        let enabled = kind != SpecialKind::PointDefence || {
+            let f = db.weapon_features(w);
+            f.pd_energy && f.point_defense_cycles
+        };
+        enabled.then_some((i, kind, w))
+    });
+    // Existing cloak and point-defence slot numbers are used by scripts and AI.
+    supported().filter(|(_, kind, _)| *kind != SpecialKind::Replace)
+        .chain(supported().filter(|(_, kind, _)| *kind == SpecialKind::Replace))
 }
 
 /// The `Order::Special` slot of the unit's point-defence weapon, when point
@@ -299,7 +305,7 @@ impl Specials {
             any |= match kind {
                 Some(SpecialKind::Cloak) => self.cloak_one(db, units, player, id, None),
                 // Toggled by `Weapons::order_special`, which routes it.
-                Some(SpecialKind::PointDefence) | None => false,
+                Some(SpecialKind::PointDefence | SpecialKind::Replace) | None => false,
             };
         }
         any

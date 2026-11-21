@@ -65,7 +65,7 @@ impl Sim {
             };
             let owner = o.owner.map_or(NEUTRAL, PlayerId);
             let id = sim
-                .spawn_def(key, owner, o.pos, o.heading)
+                .spawn_unqueued_def(key, owner, o.pos, o.heading)
                 .expect("key resolved to a unit");
             sim.confinement.map_loaded(sim.units.get_mut(id).expect("spawned"));
             if let Some(label) = &o.label {
@@ -79,6 +79,20 @@ impl Sim {
     /// Spawn an entity at the definition's starting hull and shield strengths.
     /// `None` without content, or when `key` is not a unit.
     pub fn spawn_def(
+        &mut self,
+        key: ContentKey,
+        owner: PlayerId,
+        pos: Vec3,
+        heading: (Fixed, Fixed),
+    ) -> Option<EntityId> {
+        let id = self.spawn_unqueued_def(key, owner, pos, heading)?;
+        self.push_build_items(id);
+        Some(id)
+    }
+
+    /// Materialize a definition. Replacements finalize only after the cost
+    /// debit; preplaced map objects have no final-construction callback.
+    pub(crate) fn spawn_unqueued_def(
         &mut self,
         key: ContentKey,
         owner: PlayerId,
@@ -137,6 +151,7 @@ impl Sim {
         self.production.remove_rally_entity(id);
         self.production.remove_weld_site(id);
         self.start_effects.remove(id);
+        self.replacements.remove(id);
         self.subsystems.remove(id);
         self.attrs.remove(id);
         self.colonies.remove_entity(id);
