@@ -12,6 +12,7 @@ use super::layout::{StockLayout, info_variant};
 use crate::ui::gui_sprites::{GuiImage, GuiImageSampling};
 use crate::ui::notices::Tooltip;
 use crate::ui::sprite_font::{FontRole, SpriteText, SpriteTextStyle, sprite_text_styled};
+use crate::ui::stock_font::{HAlign, StockTextCanvas, VAlign};
 use crate::ui::theme::{Theme, UiButton, WidgetState};
 
 #[path = "identity.rs"]
@@ -155,7 +156,10 @@ pub(super) fn picture(commands: &mut Commands, root: Entity, r: R, name: &str, f
 }
 
 pub(super) fn text(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>) -> Entity {
-    text_styled(commands, root, r, value, color, size, kind, SpriteTextStyle::default().stock_label())
+    // Name and class lines and the numbers beside the bars: left, vertically centred (the
+    // original's rule for these elements; grade in `stock_font::StockPlace`).
+    let style = SpriteTextStyle::default().stock_label().placed(HAlign::Left, VAlign::Centre);
+    text_styled(commands, root, r, value, color, size, kind, style)
 }
 
 /// A resource readout: the number is centred, both ways, in its cfg text rectangle, not
@@ -164,11 +168,15 @@ pub(super) fn text(commands: &mut Commands, root: Entity, r: R, value: String, c
 /// both axes (rectangles scaled per axis from the sheet). Armada I: not measured (its
 /// rectangle sits centred in its panel, which suggests the same rule); TODO.md has the check.
 pub(super) fn readout(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>) -> Entity {
-    text_styled(commands, root, r, value, color, size, kind, SpriteTextStyle::default().stock_label().centered_in_box())
+    let style = SpriteTextStyle::default().stock_label().centered_in_box().placed(HAlign::Centre, VAlign::Centre);
+    text_styled(commands, root, r, value, color, size, kind, style)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn text_styled(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>, style: SpriteTextStyle) -> Entity {
+fn text_styled(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>, mut style: SpriteTextStyle) -> Entity {
+    if let Some(place) = style.place.as_mut() {
+        place.rect = Vec2::new(r.w, r.h);
+    }
     // SpriteFontPlugin replaces the SpriteText entity's Node while resolving glyphs.
     // Keep authored placement on a separate parent that it never rewrites.
     let mut wrap_node = node(r);
@@ -198,6 +206,14 @@ fn text_styled(commands: &mut Commands, root: Entity, r: R, value: String, color
 pub(super) fn clip_to_rect(commands: &mut Commands, text: Entity, vertical: bool) {
     commands.queue(move |world: &mut World| {
         let Some(parent) = world.get::<ChildOf>(text).map(ChildOf::parent) else { return };
+        // The original never clips text to its rectangle: on the stock text path (Armada II
+        // family) a long free-text name runs on, as there. The clip stays for every other path.
+        if world.get::<SpriteTextStyle>(text).is_some_and(|s| s.place.is_some())
+            && world.get_resource::<crate::ui::sprite_font::SpriteFonts>().is_some_and(|f| f.stock_family)
+            && world.get_resource::<StockTextCanvas>().is_some_and(|c| c.0.is_some())
+        {
+            return;
+        }
         if let Some(mut node) = world.get_mut::<Node>(parent) {
             node.overflow = if vertical { Overflow::clip() } else { Overflow::clip_x() };
         }
@@ -503,7 +519,7 @@ fn spawn_separate_resources(commands: &mut Commands, root: Entity, layout: &Stoc
             continue;
         }
         let origin = Vec2::new(area.x, area.y);
-        for piece in layout.pieces(&format!("{prefix}BackgroundPanel")) {
+        for piece in layout.pieces_in(prefix, &format!("{prefix}BackgroundPanel")) {
             picture(commands, root, place(origin, piece.rect), &piece.name, piece.frame);
         }
         if let Some(name) = layout.name(&format!("{prefix}Icon"))
@@ -528,7 +544,7 @@ pub(super) fn spawn_resource(commands: &mut Commands, root: Entity, layout: &Sto
         return;
     };
     let origin = Vec2::new(area.x, area.y);
-    for piece in layout.pieces("resourcePanel") {
+    for piece in layout.pieces_in("resource", "resourcePanel") {
         picture(commands, root, place(origin, piece.rect), &piece.name, piece.frame);
     }
     // CFG resource IDs are different from the shared four-slot stock vector.
@@ -779,7 +795,8 @@ fn spawn_group(
 /// mounted sprite fonts. Compact names honor micro size as the HUD scales.
 fn group_label_style(layout: &StockLayout, width: f32) -> SpriteTextStyle {
     let role = layout.name("InformationFont").and_then(FontRole::from_name).unwrap_or(FontRole::Small);
-    SpriteTextStyle { scaled: true, tint_all: true, ..SpriteTextStyle::role(role).wrapped(width) }
+    // Stock text (declared-material filter); `scaled` keeps its own size, so no role rule.
+    SpriteTextStyle { scaled: true, tint_all: true, stock: Some(crate::ui::stock_font::StockRole::Default), ..SpriteTextStyle::role(role).wrapped(width) }
 }
 
 pub(super) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme) {
@@ -790,7 +807,7 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout,
         return;
     };
     let origin = Vec2::new(area.x, area.y);
-    for piece in layout.pieces(info_background(variant)) {
+    for piece in layout.pieces_from(info_background(variant), layout.info_canvas_origin(variant)) {
         picture(commands, root, place(origin, piece.rect), &piece.name, piece.frame);
     }
     match &info {

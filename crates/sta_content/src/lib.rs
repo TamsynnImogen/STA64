@@ -51,7 +51,7 @@ pub use aip::{Aip, AipList, AipValue, AipVar, BuildItem};
 pub use confinement::{ConfinementInitial, ConfinementOverrides, ConfinementRules, ConfinementSpatial};
 pub use a1_physics::{A1Borg, A1Dynamics};
 pub use db::{ContentBuilder, ContentDb, DEFAULT_TECH_TREE};
-pub use def::{BuildDef, CasualtyDef, ClassLabel, ColonizePodDef, DefRef, FireArc, FxRefs, Hardpoint, LaunchPoint, Lookup, MoveStats, NebulaEffects, NebulaPathing, OrdnanceCrewLoss, RepairDef, ResourceWeaponDef, ShieldDef, ShotScale, SoundRefs, TargetMaskDef, ToHitDef, TransportDef, UnitDef, UnitStatsDef, WeaponBaseDef, WeaponDef, WeaponKind};
+pub use def::{BuildDef, CasualtyDef, ClassLabel, ColonizePodDef, DefRef, FireArc, FxRefs, Hardpoint, LaunchPoint, Lookup, MoveStats, NebulaEffects, NebulaPathing, OrdnanceCrewLoss, RepairDef, ResourceWeaponDef, ShieldDef, ShotFlare, ShotLight, ShotLook, ShotScale, SoundRefs, TargetMaskDef, ToHitDef, TransportDef, UnitDef, UnitStatsDef, WeaponBaseDef, WeaponDef, WeaponKind};
 pub use features::{Features, Profile};
 pub use orbital_income::{NodeIncome, StationMining};
 pub use planet::PlanetRole;
@@ -61,9 +61,10 @@ pub use strings::{LabelMap, StringTable};
 pub use race::{
     Loadout, RaceBoarding, RaceCrew, RaceDef, RaceRepair, Races, SeatRaceRule, StartingResources, dominant_race,
 };
+pub use map::{field_radius, nebula_radius};
 pub use repair_geometry::RepairAttachment;
 pub use resources::ResourceModel;
-pub use rules::{ApproachRules, AutonomyRules, CfgRules, CrewRules, LegacyStart, OfficerLimit, PathingRules, PopulationRules, Rules, TransporterRules, TYPED_CFG_KEYS};
+pub use rules::{ApproachRules, AutonomyRules, CfgRules, CrewRules, FieldCfg, LegacyStart, OfficerLimit, PathingRules, PopulationRules, Rules, ShotCfg, TransporterRules, TYPED_CFG_KEYS};
 pub use digest::{ContentDigest, DigestEntry, EntryDiff};
 pub use profile::{resolve_features, DetectStep, Detection, Overrides, ROOTS_ASSET_VERSION, FEATURE_NAMES, ODF_KEY_PREFIX};
 pub use techtree::{Availability, BuildOption, CapacityList, Condition, Owned, Requirement, TechEntry, TechState, TechTree, TtSource, Unmet};

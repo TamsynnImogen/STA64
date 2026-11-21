@@ -28,6 +28,9 @@ struct PlanetParams {
     surf_cloud: vec4<f32>,    // rgb: the clouds' colour; a: their opacity
     surf_drift: vec4<f32>,    // cos, sin of the drift; the shadow's strength; its reach
     surf_misc: vec4<f32>,     // x: the relief's strength; y: 1 with clouds
+    rot0: vec4<f32>,          // the body's rotation: columns taking its own frame to the world (all zero: none)
+    rot1: vec4<f32>,
+    rot2: vec4<f32>,
 };
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> p: PlanetParams;
@@ -154,6 +157,22 @@ fn halo_light(i: FragIn) -> vec4<f32> {
     return vec4<f32>(p.haze.rgb * l * dens * p.halo.z * p.shine.w, 0.0);
 }
 
+// A world vector in the body's own frame, and back: the recipe surface is a picture on the body, so a body
+// that turns carries it round (the light stays fixed in the world).
+fn to_body(v: vec3<f32>) -> vec3<f32> {
+    if dot(p.rot0.xyz, p.rot0.xyz) < 0.5 {
+        return v;
+    }
+    return vec3<f32>(dot(p.rot0.xyz, v), dot(p.rot1.xyz, v), dot(p.rot2.xyz, v));
+}
+
+fn from_body(u: vec3<f32>) -> vec3<f32> {
+    if dot(p.rot0.xyz, p.rot0.xyz) < 0.5 {
+        return u;
+    }
+    return p.rot0.xyz * u.x + p.rot1.xyz * u.y + p.rot2.xyz * u.z;
+}
+
 // The baked cubes are in the files' left-handed space; the world is mirrored on Z.
 fn mirror(v: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(v.x, v.y, -v.z);
@@ -169,11 +188,11 @@ fn drifted(d: vec3<f32>) -> vec3<f32> {
 // sphere; fissures glow, most on the night side.
 fn surface(i: FragIn) -> vec4<f32> {
     let wp = i.world_position.xyz;
-    let d = normalize(mirror(wp - p.centre.xyz));
+    let d = normalize(mirror(to_body(wp - p.centre.xyz)));
     let a = textureSample(s_albedo, s_albedo_sampler, d);
     let b = textureSample(s_relief, s_relief_sampler, d);
-    let ns = normalize(mirror(normalize(d + (b.rgb - 0.5) * p.surf_misc.x)));
-    let lo = normalize(mirror(p.dvec0.xyz));
+    let ns = from_body(normalize(mirror(normalize(d + (b.rgb - 0.5) * p.surf_misc.x))));
+    let lo = normalize(mirror(to_body(p.dvec0.xyz)));
     let cl = textureSample(s_clouds, s_clouds_sampler, drifted(d)).r * p.surf_cloud.a * p.surf_misc.y;
     let cs = textureSample(s_clouds, s_clouds_sampler, drifted(normalize(d + (lo - d * dot(lo, d)) * p.surf_drift.w))).r;
     let key = 1.0 - p.surf_drift.z * cs * p.surf_cloud.a * p.surf_misc.y;

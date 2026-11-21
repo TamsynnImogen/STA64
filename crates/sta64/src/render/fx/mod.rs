@@ -11,6 +11,8 @@ pub mod quad;
 pub mod recipe;
 pub mod shield;
 pub mod specials;
+pub mod stock_flares;
+pub mod stock_shots;
 pub mod weapons;
 
 use bevy::prelude::*;
@@ -21,7 +23,7 @@ pub struct FxMaterialsPlugin;
 
 impl Plugin for FxMaterialsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((quad::FxQuadPlugin, shield::ShieldPlugin, fire::FirePlugin)).add_systems(Startup, warm_up).add_systems(Update, end_warm_up);
+        app.add_plugins((quad::FxQuadPlugin, shield::ShieldPlugin, fire::FirePlugin, stock_shots::StockShotsMaterialPlugin)).add_systems(Startup, warm_up).add_systems(Update, end_warm_up);
     }
 }
 

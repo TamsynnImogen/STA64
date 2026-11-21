@@ -747,6 +747,8 @@ pub struct WeaponDef {
     /// `None` for every other weapon and for a mining beam with neither key. Render only: not
     /// digested.
     pub shot_scale: Option<ShotScale>,
+    /// What the stock look draws the shot from (ordnance look keys). Render only: not digested.
+    pub look: ShotLook,
     /// Specials: ticks to engage or disengage (`effectTimer`).
     pub effect_ticks: Tick,
     /// Specials: energy drained per second while active (`energyDrainRate`).
@@ -796,6 +798,79 @@ pub struct WeaponDef {
 pub struct ShotScale {
     pub radius: Fixed,
     pub length: Fixed,
+}
+
+/// The data a stock shot is drawn from: the ordnance ODF's look keys, plus the defaults
+/// STA64 applies where a key is absent. Render only: nothing here is read by the sim or
+/// digested (D10: peers that differ only in how a shot looks play together). Every
+/// `Option` is `None` when the key is absent and no default is known. Lengths are in
+/// world units, times in seconds. Evidence grades: key names and which classes read them
+/// "read from the executable, static"; presence of a key "read from data".
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ShotLook {
+    /// `Sprite`: the sprite's name in the sprite tables (any ordnance class).
+    pub sprite: Option<String>,
+    /// `spriteDuration`: when above 0 and the sprite is animated, it replaces the length of
+    /// the sprite's first animation channel. The sprite is shared between shots, so which
+    /// class wins when several name it is INTERIM: class load order not determined.
+    pub sprite_duration: Option<f32>,
+    /// `Radius`: a ribbon's full width, or a billboard's half size (class dependent).
+    pub radius: Option<f32>,
+    /// `Length`: a pulse's streak length.
+    pub length: Option<f32>,
+    /// `lifeSpan`: the shot's life, every ordnance class (the sim-facing `WeaponDef::duration`
+    /// stays beams-only).
+    pub life_span: Option<f32>,
+    /// `travelTimeFraction`, beam classes only ([`BEAM_CLASSES`](crate::weapon::BEAM_CLASSES)):
+    /// the share of `lifeSpan` the beam takes to grow out and to retract. The key, else
+    /// [`ShotLook::DEFAULT_TRAVEL_TIME_FRACTION`]. `None` for other classes.
+    pub travel_time_fraction: Option<f32>,
+    /// The muzzle flare, class `phaser` only.
+    pub flare: Option<ShotFlare>,
+    /// The point light the shot carries (`lightColor`); `None` without that key.
+    pub light: Option<ShotLight>,
+}
+
+impl ShotLook {
+    /// `travelTimeFraction` when the key is absent (read from the executable, static).
+    pub const DEFAULT_TRAVEL_TIME_FRACTION: f32 = 0.1;
+}
+
+/// A phaser's muzzle flare: `flareSprite` and `flareRadiusMultiplier` of the ordnance ODF.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShotFlare {
+    /// `flareSprite`, else [`ShotFlare::DEFAULT_SPRITE`].
+    pub sprite: String,
+    /// `flareRadiusMultiplier`, else [`ShotFlare::DEFAULT_RADIUS_MULTIPLIER`]; the flare's
+    /// half size is `Radius` times this.
+    pub radius_multiplier: f32,
+}
+
+impl ShotFlare {
+    /// `flareSprite` when absent (read from the executable, static).
+    pub const DEFAULT_SPRITE: &'static str = "pflare";
+    /// `flareRadiusMultiplier` when absent (read from the executable, static).
+    pub const DEFAULT_RADIUS_MULTIPLIER: f32 = 1.4;
+}
+
+/// A shot's point light: `lightColor`, `lightFalloffStart`, `lightFalloffRange`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShotLight {
+    /// `lightColor`'s three numbers as authored. Their scale (0..1 or 0..255) is INTERIM:
+    /// not determined; the existing recipe reading treats a maximum above 1 as 0..255.
+    pub color: [f32; 3],
+    /// `lightFalloffStart`, else [`ShotLight::DEFAULT_FALLOFF_START`].
+    pub falloff_start: f32,
+    /// `lightFalloffRange`, else [`ShotLight::DEFAULT_FALLOFF_RANGE`]. How start and range
+    /// shape the attenuation is INTERIM: the formula was not read.
+    pub falloff_range: f32,
+}
+
+impl ShotLight {
+    /// `lightFalloffStart` when absent (read from the executable, static).
+    pub const DEFAULT_FALLOFF_START: f32 = 100.0;
+    /// `lightFalloffRange` when absent (read from the executable, static).
+    pub const DEFAULT_FALLOFF_RANGE: f32 = 5.0;
 }
 
 /// A value with per-target rows (CON-54): `key = base` followed by
@@ -1052,6 +1127,7 @@ impl WeaponDef {
             fire_sound: None,
             fx: None,
             shot_scale: None,
+            look: ShotLook::default(),
             effect_ticks: 0,
             energy_drain: Fixed::ZERO,
             energy_cost: Fixed::ZERO,

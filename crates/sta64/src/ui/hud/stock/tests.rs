@@ -1591,3 +1591,183 @@ fn native_tara_requirements_gate_the_menu_and_dispatched_units() {
         CommandKind::Order(Order::Autonomy { units: vec![EntityId(1)], kind: AutonomyKind::Movement, level: AutonomyLevel::Medium }),
     ]);
 }
+
+// ---- the Armada II cinematic window (#1073): authored layout data only, no install numbers
+
+/// A sheet that declares the window: the panel, the display, three frame pieces and the still.
+const WINDOW_CFG: &str = "\
+screenWidth = 1600
+screenHeight = 1200
+minimapPanelArea = 0 800 400 400
+cinematicPanelArea = 1200 800 400 400
+cinematicDisplayArea = 20 30 300 300
+cinematicBackgroundPanel = \"cine_frame\"
+cinematicBackgroundPanelSize = 3
+cinematicBackgroundPanel_0 = 0 0 400 30
+cinematicBackgroundPanel_1 = 0 30 20 340
+cinematicBackgroundPanel_2 = 0 370 400 30
+cinematicDefaultBackground = \"cine_still\"
+";
+
+/// The same sheet with the window declared off (no area, a zero size).
+const OFF_CFG: &str = "\
+screenWidth = 1600
+screenHeight = 1200
+minimapPanelArea = 0 800 400 400
+cinematicPanelArea = -1 -1 0 0
+cinematicDisplayArea = 0 0 0 0
+cinematicBackgroundPanelSize = 0
+";
+
+fn window_app(cfg: &str, aspect: f32, fit: super::layout::HudFit, view: bool) -> App {
+    let (parsed, warnings) = GuiCfg::parse("authored_window.cfg", cfg);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let config = HudConfig { gui: Some(parsed.layout_auto()), aspect, fit, fit_scale: false, ..default() };
+    let mut app = app_with_content_and_config(content(), config, UiProfile::Armada2);
+    if view {
+        app.world_mut().insert_resource(crate::render::action_camera::ActionView { image: Handle::default() });
+        // Rebuild the body with the picture's resource in place.
+        app.world_mut().resource_mut::<HudConfig>().aspect += 0.001;
+        app.update();
+        app.update();
+    }
+    app
+}
+
+fn px(n: &Node) -> R {
+    let (Val::Px(x), Val::Px(y), Val::Px(w), Val::Px(h)) = (n.left, n.top, n.width, n.height) else { panic!("px") };
+    R::new(x, y, w, h)
+}
+
+fn art_named(app: &mut App, name: &str) -> Vec<(usize, R)> {
+    let mut found: Vec<(usize, R)> = app
+        .world_mut()
+        .query::<(&crate::ui::gui_sprites::GuiImage, &Node)>()
+        .iter(app.world())
+        .filter(|(g, _)| g.names.first().is_some_and(|n| n == name))
+        .map(|(g, n)| (g.frame, px(n)))
+        .collect();
+    found.sort_by_key(|f| f.0);
+    found
+}
+
+fn picture_nodes(app: &mut App) -> Vec<R> {
+    app.world_mut().query_filtered::<&Node, With<crate::render::action_camera::ActionPicture>>().iter(app.world()).map(px).collect()
+}
+
+#[test]
+fn a_layout_that_declares_the_window_gets_panel_frame_still_and_picture_in_both_fits() {
+    use super::layout::HudFit;
+    for fit in HudFit::ALL {
+        for aspect in [4.0_f32 / 3.0, 16.0 / 9.0, 21.0 / 9.0] {
+            let mut app = window_app(WINDOW_CFG, aspect, fit, true);
+            let layout = app.world().resource::<StockState>().layout.clone().unwrap();
+            let panel = layout.panel("cinematic").expect("the declared panel");
+            let origin = Vec2::new(panel.x, panel.y);
+            let display = layout.at(origin, "cinematicDisplayArea").unwrap();
+            let want: Vec<(usize, R)> = layout
+                .pieces_in("cinematic", "cinematicBackgroundPanel")
+                .into_iter()
+                .map(|p| (p.frame, R::new(origin.x + p.rect.x, origin.y + p.rect.y, p.rect.w, p.rect.h)))
+                .collect();
+            assert_eq!(want.len(), 3);
+            assert_eq!(art_named(&mut app, "cine_frame"), want, "{fit:?} {aspect}: frame pieces at the declared rectangles");
+            assert_eq!(art_named(&mut app, "cine_still"), vec![(0, display)], "{fit:?} {aspect}: the still picture fills the display");
+            assert_eq!(picture_nodes(&mut app), vec![display], "{fit:?} {aspect}: the live picture is in the display");
+            // The panel group moves as a whole with the sheet: everything stays inside it.
+            let inside = |r: R| r.x >= layout.hud.x - 0.5 && r.right() <= layout.hud.right() + 0.5 && r.y >= layout.hud.y - 0.5 && r.bottom() <= layout.hud.bottom() + 0.5;
+            assert!(inside(panel) && inside(display), "{fit:?} {aspect}");
+            // Centred keeps the picture's aspect on every window; Stretched scales per axis like every panel.
+            if fit == HudFit::Centred {
+                assert!((display.w / display.h - 1.0).abs() < 0.01, "{aspect}: the 1:1 display stays square");
+            }
+            // The window has no buttons of its own and shields the pointer.
+            let buttons = app.world_mut().query::<&super::buttons::PanelButton>().iter(app.world()).filter(|b| matches!(b, super::buttons::PanelButton::Menu | super::buttons::PanelButton::Unavailable)).count();
+            assert_eq!(buttons, 0, "{fit:?} {aspect}");
+            assert!(app.world().resource::<StockState>().solid.contains(&panel), "{fit:?} {aspect}: the panel takes the pointer");
+        }
+    }
+}
+
+#[test]
+fn without_the_action_view_the_window_still_draws_its_frame_and_still_but_no_picture() {
+    let mut app = window_app(WINDOW_CFG, 16.0 / 9.0, super::layout::HudFit::Centred, false);
+    assert_eq!(art_named(&mut app, "cine_frame").len(), 3);
+    assert_eq!(art_named(&mut app, "cine_still").len(), 1);
+    assert!(picture_nodes(&mut app).is_empty());
+}
+
+#[test]
+fn a_layout_that_declares_the_window_off_or_not_at_all_gets_no_window() {
+    use super::layout::HudFit;
+    for cfg in [OFF_CFG, "screenWidth = 1600\nscreenHeight = 1200\nminimapPanelArea = 0 800 400 400\n"] {
+        for fit in HudFit::ALL {
+            let mut app = window_app(cfg, 16.0 / 9.0, fit, true);
+            assert!(art_named(&mut app, "cine_frame").is_empty() && art_named(&mut app, "cine_still").is_empty());
+            assert!(picture_nodes(&mut app).is_empty(), "{fit:?}: no live picture");
+            let layout = app.world().resource::<StockState>().layout.clone().unwrap();
+            assert!(layout.panel("cinematic").is_none());
+        }
+    }
+}
+
+#[test]
+fn the_movie_panel_and_the_window_read_the_same_keys_and_the_window_goes_quiet_while_a_clip_plays() {
+    use super::layout::HudFit;
+    // One layout, one spec: the movie panel's display is the window's picture rectangle.
+    let app = window_app(WINDOW_CFG, 16.0 / 9.0, HudFit::Centred, true);
+    let layout = app.world().resource::<StockState>().layout.clone().unwrap();
+    let spec = crate::ui::hud::cinematic::stock_spec(&layout).expect("the movie panel");
+    let panel = layout.panel("cinematic").unwrap();
+    let display = layout.at(Vec2::new(panel.x, panel.y), "cinematicDisplayArea").unwrap();
+    assert_eq!((spec.panel, spec.display), (panel, display));
+    // The window's camera pair goes quiet while a clip waits for or plays in a panel:
+    // `render::action_camera::tests::the_cameras_go_quiet_while_a_clip_plays_in_the_panel`.
+}
+
+/// Install-gated (`STA64_TEST_A2_STOCK_INSTALL`, `STA64_TEST_ROOTS_INSTALL` or `STA64_TEST_INSTALL`,
+/// read at run time, no numbers committed): for every mounted `gui_*.cfg`, the window exists exactly
+/// when the layout declares a visible cinematic panel; then its frame pieces and its still picture
+/// resolve in the install's GUI sprite tables. A layout that declares it off yields no window.
+#[test]
+fn installed_layouts_give_a_window_exactly_where_they_declare_one_and_its_art_resolves() {
+    let mut ran = 0;
+    for var in ["STA64_TEST_A2_STOCK_INSTALL", "STA64_TEST_ROOTS_INSTALL", "STA64_TEST_INSTALL"] {
+        let Some(root) = std::env::var_os(var) else { continue };
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), None).unwrap();
+        let tables: Vec<_> = vfs
+            .list("sprites")
+            .into_iter()
+            .filter(|p| p.rsplit('/').next().is_some_and(|f| f.starts_with("gui_") && f.ends_with(".spr")))
+            .map(|p| crate::ui::gui_sprites::read_table(&vfs, &p))
+            .collect();
+        let resolves = |name: &str, frame: usize| {
+            tables.iter().any(|t| t.sprite(&format!("{name}.{frame}")).is_some() || (frame == 0 && t.sprite(name).is_some()))
+        };
+        for cfg in vfs.list("misc").into_iter().filter(|p| p.rsplit('/').next().is_some_and(|f| f.starts_with("gui_") && f.ends_with(".cfg"))) {
+            let file = cfg.rsplit('/').next().unwrap();
+            let Some(gui) = crate::game::gui_layout(&vfs, file) else { continue };
+            let layout = StockLayout::for_aspect_fit(&gui, 4.0 / 3.0, super::layout::HudFit::Centred);
+            let mut world = World::new();
+            let root_entity = world.spawn_empty().id();
+            let mut queue = bevy::ecs::world::CommandQueue::default();
+            let drawn = window::spawn_a2(&mut Commands::new(&mut queue, &world), root_entity, &layout, None);
+            queue.apply(&mut world);
+            assert_eq!(drawn, layout.panel("cinematic").is_some(), "{var} {file}: a window exactly where the layout declares one");
+            if !drawn {
+                assert_eq!(world.entity(root_entity).get::<Children>().map_or(0, |c| c.len()), 0, "{var} {file}: nothing drawn");
+                continue;
+            }
+            ran += 1;
+            for piece in layout.pieces_in("cinematic", "cinematicBackgroundPanel") {
+                assert!(resolves(&piece.name, piece.frame), "{var} {file}: frame piece {} does not resolve", piece.frame);
+            }
+            if let Some(still) = layout.name("cinematicDefaultBackground") {
+                assert!(resolves(still, 0), "{var} {file}: the still picture does not resolve");
+            }
+        }
+    }
+    if ran == 0 {
+        eprintln!("SKIP (or no layout declares the window): set STA64_TEST_A2_STOCK_INSTALL, STA64_TEST_ROOTS_INSTALL or STA64_TEST_INSTALL");
+    }
+}

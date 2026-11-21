@@ -365,12 +365,12 @@ impl MapDef {
             };
             match class.as_str() {
                 "asteroidfield" => {
-                    let radius = odf.f32("fieldRadius").filter(|r| *r > 0.0).unwrap_or(200.0);
+                    let radius = field_radius(&odf);
                     map.regions.push(Region { kind: RegionKind::AsteroidField, odf: o.odf.clone(), shape: RegionShape::Sphere { centre: pos, radius: fx(radius) } });
                     counts.regions += 1;
                 }
                 "nebula_obj" => {
-                    let radius = odf.f32("effectRadius").filter(|r| *r > 10.0 && *r < 5000.0).unwrap_or(300.0);
+                    let radius = nebula_radius(&odf);
                     map.regions.push(Region { kind: RegionKind::Nebula, odf: o.odf.clone(), shape: RegionShape::Sphere { centre: pos, radius: fx(radius) } });
                     counts.regions += 1;
                 }
@@ -454,6 +454,18 @@ impl MapDef {
 /// Class label of the weapon that swaps a marker for another object.
 const REPLACE_CLASS: &str = "replaceweapon";
 
+/// A nebula's radius, world units: `effectRadius` when in range, else the default. The one
+/// reading of the key: the sim's region conversion, the map view and the minimap all use it.
+pub fn nebula_radius(odf: &sta_odf::Odf) -> f32 {
+    odf.f32("effectRadius").filter(|r| *r > 10.0 && *r < 5000.0).unwrap_or(300.0)
+}
+
+/// An asteroid field's radius, world units: `fieldRadius` when positive, else the default; the
+/// one reading, shared like [`nebula_radius`].
+pub fn field_radius(odf: &sta_odf::Odf) -> f32 {
+    odf.f32("fieldRadius").filter(|r| *r > 0.0).unwrap_or(200.0)
+}
+
 /// The moon definitions a resource marker (`trigger_dilithium`, ...) is swapped for when
 /// the map starts: for each of its weapons that is a `replaceweapon`, the
 /// `replacement0class<N>` ODFs (N from 0 up, until one is missing) that the database defines
@@ -484,6 +496,21 @@ pub fn moon_variants(db: &ContentDb, def: &crate::UnitDef, odfs: &mut OdfLookup)
 
 #[cfg(test)]
 mod tests {
+    /// The one reading of the radius keys: the region conversion uses it (the values the sim has
+    /// always had), the map view and the minimap too.
+    #[test]
+    fn the_nebula_and_belt_radius_keys_have_one_reading() {
+        let odf = |text: &str| sta_odf::resolve("t", &mut |_| Some(text.to_owned())).unwrap();
+        assert_eq!(nebula_radius(&odf("effectRadius = 450\n")), 450.0);
+        assert_eq!(nebula_radius(&odf("")), 300.0);
+        assert_eq!(nebula_radius(&odf("effectRadius = 5\n")), 300.0);
+        assert_eq!(nebula_radius(&odf("effectRadius = 9000\n")), 300.0);
+        assert_eq!(field_radius(&odf("fieldRadius = 125\n")), 125.0);
+        assert_eq!(field_radius(&odf("")), 200.0);
+        assert_eq!(field_radius(&odf("fieldRadius = 0\n")), 200.0);
+        assert_eq!(field_radius(&odf("fieldRadius = -4\n")), 200.0);
+    }
+
     use super::*;
 
     #[test]

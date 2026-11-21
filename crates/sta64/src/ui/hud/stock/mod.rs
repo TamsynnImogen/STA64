@@ -9,6 +9,8 @@ pub(super) use weapon_icons::update_visibility as update_weapon_icon_visibility;
 mod orders;
 pub(super) mod infobar;
 pub mod layout;
+pub(in crate::ui) mod tooltip_text;
+mod window;
 
 use super::layout::R;
 use super::{
@@ -21,6 +23,7 @@ use crate::ui::{
     notices::Tooltip,
     profile::UiProfile,
     sprite_font::{SpriteTextStyle, sprite_text_styled},
+    stock_font::{StockCanvas, StockTextCanvas},
     theme::{ButtonClicked, Theme, UiButton, WidgetState},
 };
 use crate::viewer::Mounted;
@@ -419,7 +422,8 @@ fn spawn_button(
                 b.label.clone(),
                 (rect.h * 0.22).clamp(18.0, 22.0),
                 theme.text,
-                SpriteTextStyle::default().centered().wrapped(rect.w).stock_label(),
+                // STA64's fallback label (shown only where the sprite is missing), not in the original.
+                SpriteTextStyle::default().centered().wrapped(rect.w).stock_fallback(),
             ),
         )],
     ));
@@ -450,6 +454,7 @@ pub(super) fn refresh(
         }
         if state.cfg.is_some() {
             commands.insert_resource(crate::render::overlays::GaugeStyle::default());
+            commands.insert_resource(StockTextCanvas::default());
         }
         state.layout = None;
         state.loaded = false;
@@ -512,6 +517,11 @@ pub(super) fn refresh(
             .gui
             .as_ref()
             .map(|cfg| StockLayout::for_aspect_fit(cfg, config.aspect, config.fit));
+        commands.insert_resource(StockTextCanvas(state.layout.as_ref().map(|l| StockCanvas {
+            hud: Vec2::new(l.hud.w, l.hud.h),
+            window: l.screen,
+            fit: l.fit,
+        })));
         commands.insert_resource(crate::render::overlays::GaugeStyle::from_cfg(
             state.layout.as_ref().and_then(|layout| layout.number("selectionGaugeHeight")),
             state.layout.as_ref().and_then(|layout| layout.number("selectionGaugeGap")),
@@ -541,6 +551,8 @@ pub(super) fn refresh(
     }
     if !a1 && replaced {
         buttons::spawn(&mut commands, body, &layout, &theme, more.0);
+        // #1073: the cinematic window, when the mounted layout declares one (nothing otherwise).
+        window::spawn_a2(&mut commands, body, &layout, action.as_deref());
     }
     let now = model::info(&feed);
     let a1_shape = a1.then(|| a1::info::extra(&feed).map(|e| e.shape(&state.info_style))).flatten();
@@ -607,6 +619,10 @@ pub(super) fn refresh(
                 .filter_map(|key| layout.at(origin, key)),
         );
     }
+    if !a1 {
+        // The window's art takes the pointer like the other panels (none when the layout declares it off).
+        state.solid.extend(layout.panel("cinematic"));
+    }
     if a1 {
         if rebuild {
             if !replaced {
@@ -665,7 +681,7 @@ pub(super) fn refresh(
                         ChildOf(parent),
                         children![(
                             // Where the TTF label sat before: top left, unwrapped.
-                            sprite_text_styled(label, 18.0, theme.text, SpriteTextStyle::default().stock_label()),
+                            sprite_text_styled(label, 18.0, theme.text, SpriteTextStyle::default().stock_fallback()),
                         )],
                     ));
                 }

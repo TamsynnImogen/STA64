@@ -223,6 +223,8 @@ pub struct Sim {
     repairs: repair::Repairs,
     /// Units being decommissioned (SIM-45); in the digest once any exists.
     recycles: economy::recycle::Recycles,
+    /// Shields a shield-disabling nebula took and gives back (SIM-75 slice 2); in the digest once any exists.
+    nebula_shields: nebula::NebulaShields,
     /// Mission-wide switches (LUA-41), saved; hashed only when not the default.
     mission_switches: mission_switches::MissionSwitches,
 }
@@ -269,6 +271,7 @@ impl Sim {
             recrew: Default::default(),
             repairs: Default::default(),
             recycles: Default::default(),
+            nebula_shields: Default::default(),
             mission_switches: Default::default(),
         }
     }
@@ -510,8 +513,10 @@ impl Sim {
             self.economy.orbital_income(&db, &self.units, self.tick, &race_modifiers);
             let returned = self.transports.expire(self.tick);
             self.restore_carrier_shields(&returned);
+            let shields_off = if nebulae.is_empty() { Vec::new() } else { self.nebula_shields_enter(&db, &nebulae) };
             combat::damage::recharge(&mut self.units, &db, &self.switches, &self.subsystems, &self.transports);
             let nebula_holds = if nebulae.is_empty() { nebula::Holds::default() } else { self.nebula_systems(&db, &nebulae) };
+            self.nebula_shields_tail(&shields_off);
             self.activate_team_change_weapons(&db);
             let cloak_from = self.events.len();
             self.specials.step(&mut self.units, &db, &mut self.events);

@@ -258,6 +258,8 @@ mod tests {
     fn app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins).add_message::<SimMsg>().add_plugins(CinematicCameraPlugin);
+        // Time stands still: the once-a-second limit on loose shots is then not a race with the runner.
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::ZERO));
         app.world_mut().spawn((
             Orbit { focus: Vec3::new(1.0, 0.0, 2.0), yaw: 0.3, pitch: 0.7, dist: 400.0, home: (Vec3::ZERO, 1.0) },
             Transform::default(),

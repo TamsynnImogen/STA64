@@ -72,9 +72,16 @@ pub(super) fn project(bounds: ModelBounds, world: Mat4, clip: Mat4, size: Vec2) 
     (depth.is_finite()).then_some((Rect { min: min.floor(), max: max.ceil() }, depth))
 }
 
+#[cfg(test)]
 pub(super) fn bar_rect(bounds: Rect, shield: bool, style: GaugeStyle) -> Option<Rect> {
+    bar_row_rect(bounds, if shield { -1 } else { 0 }, style)
+}
+
+/// A gauge row: -1 shield (above the box top), 0 hull (at it), +1 special energy (below it), each a
+/// bar height plus gap apart. The Armada II readout has all three [static]; the other looks two.
+pub(super) fn bar_row_rect(bounds: Rect, row: i32, style: GaugeStyle) -> Option<Rect> {
     if style.height <= 0.0 { return None; }
-    let top = bounds.min.y - if shield { style.height + style.gap } else { 0.0 };
+    let top = bounds.min.y + row as f32 * (style.height + style.gap);
     Some(Rect::from_corners(Vec2::new(bounds.min.x, top), Vec2::new(bounds.max.x + 1.0, top + style.height)))
 }
 
@@ -105,6 +112,9 @@ mod tests {
         assert_eq!(hull.size(), Vec2::new(101.0, 2.0));
         assert_eq!(shield.max.y + 2.0, hull.min.y);
         assert_eq!(hull.min.y, bounds.min.y);
+        let energy = bar_row_rect(bounds, 1, GaugeStyle::default()).unwrap();
+        assert_eq!(energy.min.y, hull.min.y + 4.0, "energy row is four pixels below the hull row");
+        assert_eq!(energy.size(), hull.size());
         assert!(bar_rect(bounds, false, GaugeStyle::from_cfg(Some(0.0), None)).is_none());
         assert_eq!(GaugeStyle::from_cfg(Some(f64::NAN), Some(-1.0)), GaugeStyle::default());
         assert_eq!(GaugeStyle::from_cfg(Some(3.0), Some(4.0)), GaugeStyle { height: 3.0, gap: 4.0 });
