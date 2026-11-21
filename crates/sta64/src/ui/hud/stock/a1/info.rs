@@ -12,13 +12,13 @@
 //! packages; the Armada II group tiles are not used.
 
 use bevy::{picking::Pickable, prelude::*};
-use sta_sim::Fixed;
+use sta_sim::{EntityId, Fixed};
 
 use super::super::{
     infobar::InfoStyle,
     layout::StockLayout,
 };
-use super::super::info::{StockBar, node, picture, text, wireframe_layers};
+use super::super::info::{StockBar, bar_colours, node, picture, text, wireframe_layers_of};
 use crate::ui::{
     gui_sprites::{GuiImage, GuiImageSampling},
     hud::{
@@ -27,6 +27,7 @@ use crate::ui::{
     },
     theme::Theme,
 };
+use crate::viewer::{MapTeamColours, TeamColours, owner_hull_colour};
 
 /// What the panel shows besides [`Single`]: values the shared model does not carry.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -42,6 +43,42 @@ pub struct Extra {
 /// The crew readout's text, patched in place as the crew changes.
 #[derive(Component)]
 pub(in crate::ui::hud) struct CrewText;
+
+/// The native RaceIcon and ShieldBar read these colours from the selected object on draw.
+#[derive(Component, Clone, Copy)]
+pub(in crate::ui::hud) enum LiveTint {
+    Race(EntityId),
+    Shield(EntityId),
+}
+
+// Armada I ShieldBar: the filled sprite blends from red at zero to green at full
+// strength (read from Armada.exe, static). Use the existing hull display for shieldless units.
+fn shield_tint(fraction: f32) -> Color {
+    Color::srgb(1.0 - fraction, fraction, 0.0)
+}
+
+pub(in crate::ui::hud) fn update_tints(
+    feed: Res<HudFeed>,
+    palette: Option<Res<TeamColours>>,
+    map: Option<Res<MapTeamColours>>,
+    mut pictures: Query<(&LiveTint, &mut GuiImage)>,
+) {
+    for (tint, mut image) in &mut pictures {
+        let colour = match *tint {
+            LiveTint::Race(id) => feed
+                .view
+                .unit(id)
+                .and_then(|unit| owner_hull_colour(palette.as_deref(), map.as_deref(), unit.owner)),
+            LiveTint::Shield(id) => feed.view.unit(id).map(|unit| {
+                shield_tint(model::shield_frac(unit).unwrap_or_else(|| model::frac(unit.hull)))
+            }),
+        }
+        .unwrap_or(Color::WHITE);
+        if image.color != colour {
+            image.color = colour;
+        }
+    }
+}
 
 /// What decides whether the card must be rebuilt: which fields exist, the race and the crew dot's
 /// colour. The values themselves (energy, crew count) are patched in place by `info::update`, so
@@ -97,25 +134,40 @@ fn key_rect(layout: &StockLayout, origin: Vec2, keys: &[&str]) -> Option<R> {
     keys.iter().find_map(|k| layout.at(origin, k))
 }
 
-/// A sprite bar: the sprite clipped to `value` of its width over a dark track. `kind` makes the
-/// clipped part follow live values.
-fn sprite_bar(commands: &mut Commands, root: Entity, r: R, sprite: &str, value: f32, kind: Option<StockBar>, tint: Color) {
+/// Armada I StandardBar draws a tinted track and a clipped fill using the same sprite.
+fn sprite_bar(
+    commands: &mut Commands,
+    root: Entity,
+    r: R,
+    sprite: &str,
+    value: f32,
+    (track, fill): (Color, Color),
+    kind: StockBar,
+) -> Entity {
     let track = commands
-        .spawn((node(r), BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.5)), Pickable::IGNORE, ChildOf(root)))
+        .spawn((
+            node(r),
+            GuiImage::new(sprite).with_color(track).with_sampling(GuiImageSampling::Linear),
+            Pickable::IGNORE,
+            ChildOf(root),
+        ))
         .id();
-    let mut clip = commands.spawn((
-        Node { width: Val::Px(r.w * value.clamp(0.0, 1.0)), height: Val::Percent(100.0), overflow: Overflow::clip(), ..default() },
-        Pickable::IGNORE,
-        ChildOf(track),
-        children![(
+    let clip = commands
+        .spawn((
+            Node { width: Val::Px(r.w * value.clamp(0.0, 1.0)), height: Val::Percent(100.0), overflow: Overflow::clip(), ..default() },
+            Pickable::IGNORE,
+            kind,
+            ChildOf(track),
+        ))
+        .id();
+    commands
+        .spawn((
             Node { position_type: PositionType::Absolute, left: Val::Px(0.0), top: Val::Px(0.0), width: Val::Px(r.w), height: Val::Px(r.h), ..default() },
             Pickable::IGNORE,
-            GuiImage::new(sprite).with_color(tint).with_sampling(GuiImageSampling::Linear),
-        )],
-    ));
-    if let Some(kind) = kind {
-        clip.insert(kind);
-    }
+            GuiImage::new(sprite).with_color(fill).with_sampling(GuiImageSampling::Linear),
+            ChildOf(clip),
+        ))
+        .id()
 }
 
 /// The panel's dynamic content: the resource strip, and for one selected unit its card.
@@ -146,12 +198,18 @@ fn single_card(
             picture(commands, root, r, name, 0);
         }
     };
-    // Race icon: the bar, then the emblem in its display area.
-    pic(commands, "infoSingleRaceIcon", "infoSingleRaceIconArea");
+    // RaceIcon draws both layers in the selected owner's colour. A1Compat restores
+    // the bar in Roots, where the native insignia and team palette are still available.
+    if let Some(r) = layout.at(origin, "infoSingleRaceIconArea") {
+        let sprite = layout.name("infoSingleRaceIconBackground")
+            .or_else(|| layout.name("infoSingleRaceIcon"))
+            .unwrap_or("race_icon_bar");
+        commands.entity(root).with_child((node(r), Pickable::IGNORE, GuiImage::new(sprite), LiveTint::Race(single.id)));
+    }
     if let Some(r) = layout.at(origin, "infoSingleRaceIconDisplayArea") {
         let mut image = GuiImage::new("").with_sampling(GuiImageSampling::Linear);
         image.names = emblem_names(&extra.race);
-        commands.entity(root).with_child((node(r), Pickable::IGNORE, image));
+        commands.entity(root).with_child((node(r), Pickable::IGNORE, image, LiveTint::Race(single.id)));
     }
     pic(commands, "infoSingleNameTextBackground", "infoSingleNameTextBackgroundArea");
     let colour = |key: &str, fallback: Color| layout.colour(key).unwrap_or(fallback);
@@ -165,31 +223,36 @@ fn single_card(
         && let Some(unit) = feed.view.unit(single.id)
         && let Some(def) = feed.content.as_deref().and_then(|db| db.unit(unit.def))
     {
-        wireframe_layers(commands, root, r, &def.model);
+        wireframe_layers_of(commands, root, r, &def.model, Some(unit.id), None);
     }
     // Bars. The shield bar shows the hull fraction when the unit has no shields.
-    let tint = |key: &str| layout.colour(key).unwrap_or(Color::WHITE);
     let def = feed.view.unit(single.id).and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def)));
     let node_def = def.filter(|d| crate::ui::hud::status::node_slot(d).is_some());
     let shield_rect = layout.at(origin, "infoSingleShieldBarArea");
     if let Some(def) = node_def {
         super::super::info::spawn_node_bar(commands, root, layout, origin, def, shield_rect, theme);
     } else if let Some(r) = shield_rect {
-        let name = layout.name("infoSingleShieldBar").unwrap_or_default();
+        let name = layout.name("infoSingleShieldBar").unwrap_or("large_shield_bar");
         let (value, kind) = match single.shield {
             Some(s) => (s, StockBar::Shield(r.w)),
             None => (single.hull, StockBar::Hull(r.w)),
         };
-        sprite_bar(commands, root, r, name, value, Some(kind), Color::WHITE);
+        let colours = bar_colours(layout, &["infoSingleShieldBarDisableColor"], &["infoSingleShieldBarColor"], shield_tint(value));
+        let bar = sprite_bar(commands, root, r, name, value, colours, kind);
+        if layout.colour("infoSingleShieldBarColor").is_none() {
+            commands.entity(bar).insert(LiveTint::Shield(single.id));
+        }
     }
     if let Some(progress) = single.progress {
         if let Some(r) = layout.at(origin, "infoSingleConstructionBarArea") {
             let name = layout.name("infoSingleConstructionBar").unwrap_or_default();
-            sprite_bar(commands, root, r, name, progress, Some(StockBar::Progress(r.w)), tint("infoSingleConstructionBarColor"));
+            let colours = bar_colours(layout, &["infoSingleConstructionBarDisableColor"], &["infoSingleConstructionBarColor"], Color::WHITE);
+            sprite_bar(commands, root, r, name, progress, colours, StockBar::Progress(r.w));
         }
     } else if let (Some(energy), Some(r)) = (extra.energy, layout.at(origin, "infoSingleEnergyBarArea")) {
-        let name = layout.name("infoSingleEnergyBar").unwrap_or_default();
-        sprite_bar(commands, root, r, name, energy, Some(StockBar::Energy(r.w)), tint("infoSingleEnergyBarColor"));
+        let name = layout.name("infoSingleEnergyBar").unwrap_or("large_energy_bar");
+        let colours = bar_colours(layout, &["infoSingleEnergyBarDisableColor"], &["infoSingleEnergyBarColor"], Color::WHITE);
+        sprite_bar(commands, root, r, name, energy, colours, StockBar::Energy(r.w));
     }
     // Crew: label bar, label, value and the dot.
     if let Some((now, ratio)) = extra.crew {
@@ -201,7 +264,8 @@ fn single_card(
             text(commands, root, r, label, crew_colour, theme.micro_size, None);
         }
         if let Some(r) = layout.at(origin, "infoSingleCrewTextInformationArea") {
-            let entity = text(commands, root, r, now.to_string(), crew_colour, theme.micro_size, None);
+            // The compatibility renderer keeps the live crew amount green.
+            let entity = text(commands, root, r, now.to_string(), Color::srgb(0.0, 1.0, 0.0), theme.micro_size, None);
             commands.entity(entity).insert(CrewText);
         }
         if let (Some(name), Some(r)) = (layout.name("infoSingleCrewDot"), layout.at(origin, "infoSingleCrewDotArea")) {
