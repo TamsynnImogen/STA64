@@ -394,7 +394,7 @@ fn spawn_separate_resources(commands: &mut Commands, root: Entity, layout: &Stoc
             continue;
         }
         let origin = Vec2::new(area.x, area.y);
-        for piece in layout.pieces(&format!("{prefix}BackgroundPanel")) {
+        for piece in layout.pieces_in(prefix, &format!("{prefix}BackgroundPanel")) {
             picture(commands, root, place(origin, piece.rect), &piece.name, piece.frame);
         }
         if let Some(name) = layout.name(&format!("{prefix}Icon"))
@@ -419,7 +419,7 @@ pub(super) fn spawn_resource(commands: &mut Commands, root: Entity, layout: &Sto
         return;
     };
     let origin = Vec2::new(area.x, area.y);
-    for piece in layout.pieces("resourcePanel") {
+    for piece in layout.pieces_in("resource", "resourcePanel") {
         picture(commands, root, place(origin, piece.rect), &piece.name, piece.frame);
     }
     // CFG resource IDs are different from the shared four-slot stock vector.
@@ -655,7 +655,7 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout,
         return;
     };
     let origin = Vec2::new(area.x, area.y);
-    for piece in layout.pieces(info_background(variant)) {
+    for piece in layout.pieces_from(info_background(variant), layout.info_canvas_origin(variant)) {
         picture(commands, root, place(origin, piece.rect), &piece.name, piece.frame);
     }
     match &info {

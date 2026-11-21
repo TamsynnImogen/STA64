@@ -148,6 +148,37 @@ impl StockLayout {
         )
     }
 
+    /// One edge of the sheet, in whole screen units, from its absolute canvas coordinate `u` on the
+    /// horizontal axis (`x`) or the vertical one. Every piece edge goes through here and is rounded
+    /// once, so two edges at the same canvas coordinate are the same screen coordinate.
+    ///
+    /// Deliberate rule of STA64: pieces that abut in the sheet abut on screen, with no gap and no
+    /// overlap, in both fits and at any window size and scale factor. At sizes where the sheet's units do
+    /// not map to whole pixels the original leaves one-pixel gaps between abutting tiles (grade: measured on
+    /// one native frame of the original at a fractional scale, and read from the executable, static), while
+    /// its art is seamless at scale 1 (measured on a native frame); at scale 1 this is identical to the
+    /// original.
+    fn edge(&self, u: f32, horizontal: bool) -> f32 {
+        if horizontal {
+            self.hud.x + (u * self.scale_x + 0.5).floor()
+        } else {
+            self.hud.y + (u * self.scale + 0.5).floor()
+        }
+    }
+
+    /// A canvas rectangle whose parent starts at canvas point `origin` (the panel's own origin, which
+    /// [`Self::placed`] puts on screen with the same edge function), relative to that parent's screen
+    /// origin. Adding the placed origin gives `edge(origin + x)`, the absolute edge, rounded once.
+    fn scaled_in(&self, origin: (i32, i32), r: Rect) -> R {
+        let (ox, oy) = (origin.0 as f32, origin.1 as f32);
+        let (px, py) = (self.edge(ox, true), self.edge(oy, false));
+        let l = self.edge(ox + r.x as f32, true);
+        let t = self.edge(oy + r.y as f32, false);
+        let right = self.edge(ox + r.x as f32 + r.w as f32, true);
+        let bottom = self.edge(oy + r.y as f32 + r.h as f32, false);
+        R::new(l - px, t - py, right - l, bottom - t)
+    }
+
     /// A canvas rectangle in screen units: scaled and moved by the centring offset.
     fn placed(&self, r: Rect) -> R {
         let mut out = self.scaled(r);
@@ -256,13 +287,7 @@ impl StockLayout {
     }
 
     pub fn info_area(&self, variant: usize) -> Option<R> {
-        let panel = self.cfg.panels.get("info")?;
-        let raw = panel
-            .variants
-            .get(&u32::try_from(variant).ok()?)
-            .copied()
-            .or(panel.area)?;
-        (raw.w > 0 && raw.h > 0).then(|| self.placed(raw))
+        self.info_raw(variant).map(|raw| self.placed(raw))
     }
 
     pub fn info_origin(&self, variant: usize) -> Vec2 {
@@ -289,8 +314,35 @@ impl StockLayout {
     }
 
     /// Count is authoritative. Only existing numbered CFG rectangles below it draw.
+    /// Rectangles are relative to the canvas origin; see [`Self::pieces_from`].
     pub fn pieces(&self, prefix: &str) -> Vec<Piece> {
-        self.canvas_pieces(prefix).into_iter().map(|(frame, name, rect)| Piece { rect: self.scaled(rect), name, frame }).collect()
+        self.pieces_from(prefix, (0, 0))
+    }
+
+    /// The pieces of [`Self::pieces`] for a panel whose area starts at canvas point `origin`, relative
+    /// to that panel's placed origin (`panel`, `info_area`). Every edge is the sheet's absolute edge
+    /// rounded once, so neighbouring pieces share it exactly (see `edge`).
+    pub fn pieces_from(&self, prefix: &str, origin: (i32, i32)) -> Vec<Piece> {
+        self.canvas_pieces(prefix)
+            .into_iter()
+            .map(|(frame, name, rect)| Piece { rect: self.scaled_in(origin, rect), name, frame })
+            .collect()
+    }
+
+    /// The pieces of the panel `panel` (`<panel>PanelArea`): [`Self::pieces_from`] at its canvas origin.
+    pub fn pieces_in(&self, panel: &str, prefix: &str) -> Vec<Piece> {
+        let origin = self.raw_rect(&format!("{panel}PanelArea")).map_or((0, 0), |r| (r.x, r.y));
+        self.pieces_from(prefix, origin)
+    }
+
+    /// The canvas origin of the info panel's variant (the area [`Self::info_area`] places).
+    pub fn info_canvas_origin(&self, variant: usize) -> (i32, i32) {
+        self.info_raw(variant).map_or((0, 0), |r| (r.x, r.y))
+    }
+
+    fn info_raw(&self, variant: usize) -> Option<Rect> {
+        let panel = self.cfg.panels.get("info")?;
+        panel.variants.get(&u32::try_from(variant).ok()?).copied().or(panel.area).filter(|r| r.w > 0 && r.h > 0)
     }
 
     /// The pieces of [`Self::pieces`] in canvas units, unplaced (for a caller that places them itself).
@@ -756,5 +808,162 @@ mod tests {
         for count in [17, 30] {
             assert_eq!(info_variant(&Info::Group(vec![tile.clone(); count])), 2);
         }
+    }
+
+    const WINDOWS: [(f32, f32); 7] =
+        [(1280.0, 720.0), (1366.0, 768.0), (1440.0, 1080.0), (1920.0, 1080.0), (2560.0, 1080.0), (2752.0, 1152.0), (3440.0, 1440.0)];
+    const FACTORS: [f32; 3] = [1.0, 1.25, 1.5];
+
+    /// The edge a UI layout puts on the physical grid for a logical coordinate: rounded absolute.
+    fn physical(v: f32, factor: f32) -> f32 {
+        (v * factor).round()
+    }
+
+    /// Every pair of the prefix's pieces that abut in the sheet (or are disjoint) is placed so that it
+    /// abuts (or stays disjoint) on screen, in logical units and after physical-pixel rounding at
+    /// `factor`, and each placed piece's edges stay within one unit of the separately rounded ones.
+    fn assert_joined(l: &StockLayout, prefix: &str, origin: (i32, i32), factor: f32, label: &str) {
+        let raw: Vec<Rect> = l.canvas_pieces(prefix).into_iter().map(|p| p.2).collect();
+        let placed = l.pieces_from(prefix, origin);
+        assert_eq!(raw.len(), placed.len());
+        let base = l.placed(rect(origin.0, origin.1, 0, 0));
+        let abs: Vec<R> = placed.iter().map(|p| R::new(base.x + p.rect.x, base.y + p.rect.y, p.rect.w, p.rect.h)).collect();
+        for (r, a) in raw.iter().zip(&abs) {
+            assert!(a.w >= 0.0 && a.h >= 0.0, "{label} {prefix}: negative size");
+            // Once-rounded edges keep every piece at least `floor(size)` units wide; only a sliver thinner than
+            // one screen unit can round to nothing.
+            assert!(a.w > 0.0 || (r.w as f32 * l.scale_x) < 1.0, "{label} {prefix}: a piece vanished");
+            assert!(a.h > 0.0 || (r.h as f32 * l.scale) < 1.0, "{label} {prefix}: a piece vanished");
+            let old = l.scaled(*r);
+            assert!((a.x - (base.x + old.x)).abs() <= 1.0 && (a.y - (base.y + old.y)).abs() <= 1.0, "{label} {prefix}: moved by more than the rounding");
+            assert!((a.right() - (base.x + old.x + old.w)).abs() <= 1.0, "{label} {prefix}: right edge moved by more than the rounding");
+            assert!((a.bottom() - (base.y + old.y + old.h)).abs() <= 1.0, "{label} {prefix}: bottom edge moved by more than the rounding");
+        }
+        for (i, (ra, a)) in raw.iter().zip(&abs).enumerate() {
+            for (rb, b) in raw.iter().zip(&abs).skip(i + 1) {
+                let rows = ra.y < rb.y + rb.h && rb.y < ra.y + ra.h;
+                let cols = ra.x < rb.x + rb.w && rb.x < ra.x + ra.w;
+                for (lo_r, lo, hi_r, hi, shared, what) in [
+                    (ra, a, rb, b, rows, "x"),
+                    (rb, b, ra, a, rows, "x"),
+                ] {
+                    if shared && lo_r.x + lo_r.w == hi_r.x {
+                        assert_eq!(lo.right(), hi.x, "{label} {prefix}: {what} join opened");
+                        assert_eq!(physical(lo.right(), factor), physical(hi.x, factor), "{label} {prefix}: physical {what} join opened");
+                    }
+                }
+                for (lo_r, lo, hi_r, hi) in [(ra, a, rb, b), (rb, b, ra, a)] {
+                    if cols && lo_r.y + lo_r.h == hi_r.y {
+                        assert_eq!(lo.bottom(), hi.y, "{label} {prefix}: y join opened");
+                        assert_eq!(physical(lo.bottom(), factor), physical(hi.y, factor), "{label} {prefix}: physical y join opened");
+                    }
+                }
+                if !rows || !cols {
+                    continue;
+                }
+            }
+        }
+        // Disjoint in the sheet stays disjoint on screen (no overlap).
+        for (i, (ra, a)) in raw.iter().zip(&abs).enumerate() {
+            for (rb, b) in raw.iter().zip(&abs).skip(i + 1) {
+                let sheet_overlap = ra.x < rb.x + rb.w && rb.x < ra.x + ra.w && ra.y < rb.y + rb.h && rb.y < ra.y + ra.h;
+                let screen_overlap = a.x < b.right() && b.x < a.right() && a.y < b.bottom() && b.y < a.bottom();
+                assert!(sheet_overlap || !screen_overlap, "{label} {prefix}: pieces overlap on screen");
+            }
+        }
+    }
+
+    /// A row of three tiles and a column under them, abutting in the sheet's units, inside two panels.
+    fn abutting_sheet() -> GuiLayout {
+        let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
+        let mut info = Panel { name: "Info".into(), area: Some(rect(333, 777, 600, 300)), ..Default::default() };
+        info.background = Some("tile".into());
+        info.background_size = Some(5);
+        for (i, r) in [rect(0, 0, 16, 41), rect(16, 0, 107, 41), rect(123, 0, 150, 41), rect(0, 41, 273, 63), rect(0, 104, 273, 7)].into_iter().enumerate() {
+            info.pieces.insert(i as u32, r);
+        }
+        cfg.panels.insert("info".into(), info);
+        cfg
+    }
+
+    /// Regression, authored numbers: at the factor 0.9 (1440x1080 on a 1600x1200 sheet) the pieces 16|107|150
+    /// wide were rounded one by one and left a one unit gap before the third piece.
+    #[test]
+    fn neighbouring_pieces_abut_where_separate_rounding_opened_a_gap() {
+        let cfg = abutting_sheet();
+        let l = StockLayout::new(&cfg, Vec2::new(1440.0, 1080.0));
+        assert_eq!(l.scale, 0.9);
+        // The separately rounded rectangles (the old placement) do not join: 14+96 = 110, then 111.
+        let old: Vec<R> = l.canvas_pieces("infoBackgroundPanel").iter().map(|p| l.scaled(p.2)).collect();
+        assert_eq!(old[1].right() + 1.0, old[2].x);
+        let p = l.pieces_from("infoBackgroundPanel", (333, 777));
+        assert_eq!(p[0].rect.right(), p[1].rect.x);
+        assert_eq!(p[1].rect.right(), p[2].rect.x);
+        assert_eq!(p[0].rect.bottom(), p[3].rect.y);
+        assert_eq!(p[3].rect.bottom(), p[4].rect.y);
+    }
+
+    /// Both fits, the listed window sizes, scale factors 1, 1.25 and 1.5 (logical window = physical / factor).
+    #[test]
+    fn pieces_abut_at_every_window_size_fit_and_scale_factor() {
+        let cfg = abutting_sheet();
+        for fit in [HudFit::Centred, HudFit::Stretched] {
+            for (w, h) in WINDOWS {
+                for factor in FACTORS {
+                    let l = StockLayout::with_fit(&cfg, Vec2::new(w / factor, h / factor), fit);
+                    assert_joined(&l, "infoBackgroundPanel", (333, 777), factor, &format!("{fit:?} {w}x{h} @{factor}"));
+                    assert_joined(&l, "infoBackgroundPanel", (0, 0), factor, &format!("{fit:?} {w}x{h} @{factor} from origin"));
+                }
+            }
+        }
+    }
+
+    /// With `STA64_TEST_INSTALL` and/or `STA64_TEST_A1_INSTALL` (install roots, read at run time): the
+    /// adjacency rule over every installed `gui*.cfg` and every piece set it declares.
+    #[test]
+    fn installed_gui_cfgs_have_no_gap_or_overlap_between_adjacent_pieces() {
+        let roots: Vec<_> = ["STA64_TEST_INSTALL", "STA64_TEST_A1_INSTALL"].iter().filter_map(std::env::var_os).collect();
+        if roots.is_empty() {
+            eprintln!("SKIP: set STA64_TEST_INSTALL and/or STA64_TEST_A1_INSTALL to an install root");
+            return;
+        }
+        let mut checked = 0;
+        for root in roots {
+            let Ok(vfs) = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), None) else { continue };
+            for path in vfs.list("misc") {
+                let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
+                let lower = name.to_ascii_lowercase();
+                if !lower.starts_with("gui") || !lower.ends_with(".cfg") {
+                    continue;
+                }
+                let Some(cfg) = crate::game::gui_layout(&vfs, &name) else { continue };
+                let mut prefixes: Vec<(String, (i32, i32))> = Vec::new();
+                for (key, panel) in &cfg.panels {
+                    let origin = panel.area.map_or((0, 0), |r| (r.x, r.y));
+                    prefixes.push((format!("{key}BackgroundPanel"), origin));
+                }
+                for (key, _) in &cfg.numbers {
+                    if let Some(prefix) = key.strip_suffix("Size").filter(|p| !p.is_empty()) {
+                        let panel = prefix.strip_suffix("Panel").unwrap_or(prefix);
+                        let origin = cfg.rects.iter().find(|(k, _)| k.eq_ignore_ascii_case(&format!("{panel}PanelArea"))).map_or((0, 0), |(_, r)| (r.x, r.y));
+                        prefixes.push((prefix.to_owned(), origin));
+                    }
+                }
+                for fit in [HudFit::Centred, HudFit::Stretched] {
+                    for (w, h) in WINDOWS {
+                        for factor in FACTORS {
+                            let l = StockLayout::with_fit(&cfg, Vec2::new(w / factor, h / factor), fit);
+                            for (prefix, origin) in &prefixes {
+                                if l.canvas_pieces(prefix).len() > 1 {
+                                    assert_joined(&l, prefix, *origin, factor, &format!("{name} {fit:?} {w}x{h} @{factor}"));
+                                    checked += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(checked > 0, "an install root is set but no gui cfg piece set was checked: wrong path or no gui*.cfg");
     }
 }
