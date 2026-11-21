@@ -39,6 +39,22 @@ pub(crate) struct Situation<'a> {
     pub moves: bool,
     /// The selection is stationary builders, whose right-click is a rally (STA64's own rule).
     pub rally: bool,
+    /// The pointer is over the minimap's square (it is HUD, but its right-click is an order).
+    pub minimap: Option<MinimapPointer>,
+}
+
+/// The pointer over the minimap, reduced to what the cursor needs (what `orders::radar_order` reads).
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct MinimapPointer {
+    /// The map point under it is inside the map's rectangle, not in a strip.
+    pub inside_map: bool,
+    /// The click is a plain move, not a warp move (`orders::minimap_plain`: Alt, the queue
+    /// modifier or Armada I content).
+    pub plain: bool,
+    /// Some selected own unit would be moved (not a builder busy building).
+    pub movers: bool,
+    /// The selection is stationary builders: the click is a rally.
+    pub rally: bool,
 }
 
 /// The cursor sprite for what a right-click would do (names are the install's own `cursor.spr` keys).
@@ -54,7 +70,22 @@ pub(crate) struct Situation<'a> {
 /// order yet, so its present behaviour stays, interim).
 pub(crate) fn decide(s: &Situation) -> &'static str {
     use crate::ui::cursor::DEFAULT;
-    if s.cutscene || s.over_hud {
+    if s.cutscene {
+        return DEFAULT;
+    }
+    // Over the minimap: what its right-click gives (`orders::radar_order`): with an own selection
+    // and a point inside the map, a rally for producers, else a warp move (cursor `c_warp`, measured)
+    // or, with Alt, a plain move (`c_move`, read from the executable, static); otherwise the
+    // panel's arrow (no selection: measured; a strip or armed pick: the click does nothing).
+    if let Some(m) = s.minimap {
+        return match (s.own_selected && m.inside_map && s.armed.is_none(), m.rally, m.movers, m.plain) {
+            (true, true, true, _) => "c_rally",
+            (true, false, true, false) => "c_warp",
+            (true, false, true, true) => "c_move",
+            _ => DEFAULT,
+        };
+    }
+    if s.over_hud {
         return DEFAULT;
     }
     if let Some((mode, valid)) = s.armed {
@@ -99,6 +130,10 @@ pub fn cursor(
     hud: Option<Res<crate::ui::hud::HudPointer>>,
     mut wanted: ResMut<crate::ui::cursor::WantedCursor>,
     cine: Option<Res<crate::ui::presentation::CineractiveState>>,
+    radar: Query<&bevy::ui::RelativeCursorPosition, With<crate::ui::radar::RadarSquare>>,
+    radar_state: Option<Res<crate::ui::radar::RadarState>>,
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    bindings: Option<Res<super::keys::KeyBindings>>,
 ) {
     // Over a cutscene no order is on offer (selection and orders are gated the same way), so the
     // cursor stays the arrow: the selection is kept, inert, and the cursor reads it again afterwards.
@@ -111,11 +146,21 @@ pub fn cursor(
     // The move `orders::order` would give: units that are not busy building, a point on their mean-height plane.
     let heights: Vec<f32> = own.iter().filter_map(|&id| link.curr().unit(id)).filter(|u| !u.flags.contains(sta_sim::view::UnitFlags::BUILDING)).map(|u| u.pos.to_f32()[1]).collect();
     let moves = !heights.is_empty() && aim.0.is_some_and(|a| plane_hit(a.ray, heights.iter().sum::<f32>() / heights.len() as f32));
+    // The minimap's right-click needs no ray, only a point inside the map.
+    let minimap = radar.iter().find(|r| r.cursor_over).zip(radar_state.as_deref().and_then(|s| s.map.map(|m| (s, m)))).and_then(|(r, (s, m))| {
+        let at = crate::ui::radar::click_at(s, m, r.normalized?, bevy::picking::pointer::PointerButton::Secondary);
+        Some(MinimapPointer {
+            inside_map: at.inside_map,
+            plain: keys.as_deref().zip(bindings.as_deref()).is_some_and(|(k, b)| super::orders::minimap_plain(k, b, content.as_deref().map(|c| &*c.0))),
+            movers: !heights.is_empty(),
+            rally,
+        })
+    });
     // A rally needs the same reachable plane the click needs (it gives nothing otherwise).
     let rally = rally && moves;
     // The armed pick (the HUD's system) writes over this when it is on.
     let over_hud = hud.is_some_and(|h| h.0);
-    wanted.0 = decide(&Situation { cutscene, over_hud, armed: None, own_selected: !own.is_empty(), hover: icon.as_ref(), moves, rally });
+    wanted.0 = decide(&Situation { cutscene, over_hud, armed: None, own_selected: !own.is_empty(), hover: icon.as_ref(), moves, rally, minimap });
     let want = match icon {
         Some(Order::Attack { .. }) => SystemCursorIcon::Crosshair,
         Some(Order::Mine { .. } | Order::Rally { .. }) => SystemCursorIcon::Pointer,
@@ -242,6 +287,24 @@ mod tests {
 
     fn situation<'a>(hover: Option<&'a Order>) -> Situation<'a> {
         Situation { own_selected: true, moves: true, hover, ..Default::default() }
+    }
+
+    /// Over the minimap the cursor shows what its right-click gives: the warp cursor with a movable
+    /// own selection inside the map, the move cursor with Alt, a rally for producers; the arrow
+    /// without a selection, in a strip, with nothing to move and in a cutscene.
+    #[test]
+    fn decide_over_the_minimap_follows_the_warp_move_the_click_gives() {
+        let pointer = MinimapPointer { inside_map: true, plain: false, movers: true, rally: false };
+        let on = |p: MinimapPointer| Situation { own_selected: true, over_hud: true, minimap: Some(p), ..Default::default() };
+        assert_eq!(decide(&on(pointer)), "c_warp");
+        assert_eq!(decide(&on(MinimapPointer { plain: true, ..pointer })), "c_move");
+        assert_eq!(decide(&on(MinimapPointer { rally: true, ..pointer })), "c_rally");
+        let arrow = crate::ui::cursor::DEFAULT;
+        assert_eq!(decide(&on(MinimapPointer { inside_map: false, ..pointer })), arrow, "a strip: the click does nothing");
+        assert_eq!(decide(&on(MinimapPointer { movers: false, ..pointer })), arrow);
+        assert_eq!(decide(&Situation { own_selected: false, ..on(pointer) }), arrow, "no selection: the panel's arrow");
+        assert_eq!(decide(&Situation { cutscene: true, ..on(pointer) }), arrow);
+        assert_eq!(decide(&Situation { armed: Some((TargetMode::Attack, true)), ..on(pointer) }), arrow, "armed picks are not aimed from the minimap");
     }
 
     #[test]
