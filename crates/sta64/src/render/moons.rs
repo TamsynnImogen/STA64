@@ -64,7 +64,7 @@ pub fn variants_of(
 ) -> Vec<ContentKey> {
     // The sim places the same moon (`sta_content::map::moon_variants`), picked by the object's id.
     sta_content::map::moon_variants(db, def, &mut |n| {
-        sta_odf::resolve_layered(n, &mut *load).ok().map(std::sync::Arc::new)
+        sta_content::odf::resolve_exact_for_profile(n, db.profile(), load).ok().map(std::sync::Arc::new)
     })
 }
 
