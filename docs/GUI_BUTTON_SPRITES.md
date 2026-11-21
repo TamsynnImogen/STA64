@@ -22,7 +22,7 @@ remain in the shared widget/command systems. Native files inspected have one
 image per core command, so widget states tint that image rather than inventing
 hover/pressed asset names.
 
-Verified IDs: `b_build`, `b_move`, `b_attack`, `b_stop`, `b_rally`, `b_cancel`, `b_back`, `b_harvest` (the Mine target), and `b_research` (the Research menu button; resolves in the mounted sprite table, install-gated test). `b_evolve` is used for the Evolve menu button but not yet verified.
+Verified IDs: `b_build`, `b_move`, `b_attack`, `b_stop`, `b_rally`, `b_cancel`, `b_back`, `b_harvest` (the Mine target), `b_research` and `b_evolve` (the Research and Evolve menu buttons; both resolve in the mounted sprite table, install-gated test).
 Build items try `b_` plus their resolved `basename`/model first, then ODF stem;
 FO4's `fed_excelsiorA`, for example, uses `b_fed_excelsior`. Build-list ordering
 does not change. Formations keep their labels with generic `b_form`: the data

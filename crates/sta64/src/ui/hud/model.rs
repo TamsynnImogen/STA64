@@ -666,14 +666,19 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
         return out;
     }
     let mut out = Vec::new();
+    let mut extra_menus = Vec::new();
     if let Some(b) = builder {
-        // The first menu button keeps Build's cell (and so its hotkey); a unit with several
-        // menus puts the others in cells a producer leaves free (4 and 8 are mobile-only).
-        let menus = feed.def(b).map_or_else(|| vec![Act::OpenBuild], item_menus);
-        for (act, cell) in menus.into_iter().zip([0, 4, 8]) {
+        // The first menu button takes Build's cell. Any further one (a class carrying two of the
+        // keys, which real data has) goes into the first free cell once the other buttons are
+        // placed (below). INTERIM: where the original puts a second menu button is not
+        // determined (it keeps research, build and evolve as separate top-level entries); this
+        // placement is STA64's own.
+        let mut menus = feed.def(b).map_or_else(|| vec![Act::OpenBuild], item_menus).into_iter();
+        if let Some(act) = menus.next() {
             let (label, tip) = menu_words(&act);
-            out.push(button(cell, &tr(label), act, &tooltip_key(tip)));
+            out.push(button(0, &tr(label), act, &tooltip_key(tip)));
         }
+        extra_menus.extend(menus);
     }
     if caps.rally {
         out.push(button(
@@ -741,6 +746,12 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
                 out.push(button(*cell, &tr("Cloak"), act, &tooltip_key("Toggle cloak")));
             }
         }
+    }
+    // INTERIM placement of the second and third menu button (see above): the first free cell, in order.
+    for act in extra_menus {
+        let cell = (0..).find(|c| !out.iter().any(|b| b.cell == *c)).unwrap_or(0);
+        let (label, tip) = menu_words(&act);
+        out.push(button(cell, &tr(label), act, &tooltip_key(tip)));
     }
     out.sort_by_key(|b| b.cell);
     out
@@ -1769,12 +1780,44 @@ mod tests {
             assert_eq!(b.iter().map(|b| &b.act).collect::<Vec<_>>(), [&Act::OpenBuild]);
             assert_eq!(b[0].sprite_names, ["b_build"]);
         }
-        // Both keys: both buttons, Build keeps cell 0.
+        // Both keys: both buttons, Build in cell 0, Research in the first free cell (INTERIM placement).
         let b = top_menus(&mut f, 14);
-        assert_eq!(b.iter().map(|b| (&b.act, b.cell)).collect::<Vec<_>>(), [(&Act::OpenBuild, 0), (&Act::OpenResearch, 4)]);
+        assert_eq!(b.iter().map(|b| (&b.act, b.cell)).collect::<Vec<_>>(), [(&Act::OpenBuild, 0), (&Act::OpenResearch, 1)]);
         // INTERIM: a list and none of the keys falls back to Build.
         let b = top_menus(&mut f, 15);
         assert_eq!(b.iter().map(|b| &b.act).collect::<Vec<_>>(), [&Act::OpenBuild]);
+    }
+
+    /// A mobile builder carrying two menu keys that also mines: its two menu buttons and the
+    /// Mine button never share a cell, and the second menu button takes the first free cell.
+    #[test]
+    fn a_second_menu_button_never_shares_a_cell() {
+        let fake = sta_content::fake::db();
+        let mut miner = fake.units().find(|u| u.odf == "fx_miner").unwrap().clone();
+        miner.build.list = vec![DefRef::new("fx_station")];
+        miner.raw = Arc::new(sta_odf::resolve("fx_miner", &mut |_| Some("builder_facility = 1\nevolve = 1\n".into())).unwrap());
+        let mut b = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for w in fake.weapons() {
+            b = b.weapon(w.clone());
+        }
+        for u in fake.units().filter(|u| u.odf != "fx_miner") {
+            b = b.unit(u.clone());
+        }
+        let db = b.unit(miner).build().unwrap();
+        let units = vec![unit(&db, 3, "fx_miner", 1, 100.0, None)];
+        let f = feed(db, units, &[3]);
+        let g = grid(&f, Page::Top);
+        let cell_of = |a: Act| g.iter().find(|b| b.act == a).map(|b| b.cell).unwrap();
+        let mine = cell_of(Act::Target(TargetMode::Mine));
+        let (build, evolve) = (cell_of(Act::OpenBuild), cell_of(Act::OpenEvolve));
+        assert_eq!(build, 0);
+        assert_ne!(evolve, mine);
+        let mut cells: Vec<usize> = g.iter().map(|b| b.cell).collect();
+        cells.sort_unstable();
+        cells.dedup();
+        assert_eq!(cells.len(), g.len(), "no two buttons share a cell");
+        let others: Vec<usize> = g.iter().filter(|b| b.act != Act::OpenEvolve).map(|b| b.cell).collect();
+        assert_eq!(Some(evolve), (0..).find(|c| !others.contains(c)), "the first free cell");
     }
 
     #[test]
@@ -1801,7 +1844,7 @@ mod tests {
     /// structure only, nothing committed): every mounted definition with an item list resolves its
     /// menu buttons from its own keys (a research-key class gets Research, a builder-key class
     /// Build), a research-key class, a builder-ship class and a builder-facility class exist, and
-    /// both sprite names resolve in a mounted GUI sprite table.
+    /// the three sprite names resolve in a mounted GUI sprite table.
     #[test]
     fn installed_definitions_choose_their_menu_buttons_from_their_keys() {
         let mut ran = 0;
@@ -1833,7 +1876,10 @@ mod tests {
                 .filter(|p| p.rsplit('/').next().is_some_and(|f| f.starts_with("gui_") && f.ends_with(".spr")))
                 .map(|p| crate::ui::gui_sprites::read_table(&vfs, &p))
                 .collect();
-            for name in ["b_build", "b_research"] {
+            if var == "STA64_TEST_A2_STOCK_INSTALL" {
+                assert!(research_planet > 0, "{var}: a planet class carries the research key and an item list");
+            }
+            for name in ["b_build", "b_research", "b_evolve"] {
                 assert!(tables.iter().any(|t| t.sprite(name).is_some() || t.sprite(&format!("{name}.0")).is_some()), "{var}: {name} resolves");
             }
             ran += 1;
