@@ -8,7 +8,8 @@
 //!
 //! Inheritance: a file's own keys win over anything it includes; includes are searched
 //! in the order written, depth first. Within one file, when a key is written twice,
-//! the later one wins. Names are matched ASCII case-insensitively, keys likewise.
+//! the later one wins by default. [`Odf::load_layered_first`] selects the first
+//! assignment within each file for stock Armada II. Names are matched ASCII case-insensitively, keys likewise.
 //! Includes name a file anywhere under `odf/`, by file name alone.
 //!
 //! Fleet Operations layers its files (a mod's over its parent's over the game's), and an
@@ -172,6 +173,34 @@ impl Odf {
         };
         let mut w = Walk { root: name.to_ascii_lowercase(), version: 0, stack: &mut stack, budget: &mut budget };
         load_rec(name, 0, &mut counted, &mut w).ok_or_else(|| Error::NotFound(String::from(name)))
+    }
+
+    /// Layered resolution with the first assignment of each case-insensitive
+    /// key in a file winning. The existing file-over-includes and include-order
+    /// rules remain unchanged. Stock Armada II same-file rule: measured on the
+    /// running game for two keys; other value types are unmeasured.
+    pub fn load_layered_first<F>(name: &str, fetch: F) -> Result<Odf, Error>
+    where
+        F: FnMut(&str, usize) -> Option<Vec<u8>>,
+    {
+        let mut odf = Self::load_layered(name, fetch)?;
+        odf.keep_first_assignments();
+        Ok(odf)
+    }
+
+    fn keep_first_assignments(&mut self) {
+        let mut seen = Vec::<String>::new();
+        self.file.entries.retain(|entry| {
+            if seen.iter().any(|key| key.eq_ignore_ascii_case(&entry.key)) {
+                false
+            } else {
+                seen.push(entry.key.clone());
+                true
+            }
+        });
+        for parent in &mut self.parents {
+            parent.keep_first_assignments();
+        }
     }
 
     pub fn parse_single(name: &str, data: &[u8]) -> Odf {
@@ -392,6 +421,29 @@ mod tests {
         // Unlayered, the same include is a loop and is cut.
         let odf = Odf::load("a.odf", |n| (n == "a.odf").then(|| b"#include \"a.odf\"\nx = 1\n".to_vec())).unwrap();
         assert_eq!(odf.missing, ["a.odf"]);
+    }
+
+    #[test]
+    fn first_layered_assignment_keeps_own_and_include_precedence() {
+        let fetch = |name: &str, version| match (name, version) {
+            ("ship.odf", 0) => Some(b"#include \"ship.odf\"\n#include \"left.odf\"\n#include \"right.odf\"\nkeyExtra=9\nKEY=10\n\"first.odf\" 0.5\nkey=20\n\"second.odf\" 0.7\n".to_vec()),
+            ("ship.odf", 1) => Some(b"key=30\nparent=1\n".to_vec()),
+            ("left.odf", 0) => Some(b"shared=40\nshared=41\n".to_vec()),
+            ("right.odf", 0) => Some(b"shared=50\n".to_vec()),
+            _ => None,
+        };
+        let original = Odf::load_layered("ship.odf", fetch).unwrap();
+        assert_eq!(original.get_i32("key"), Some(20));
+        assert_eq!(original.get_i32("shared"), Some(41));
+        let first = Odf::load_layered_first("ship.odf", fetch).unwrap();
+        assert_eq!(first.get_i32("key"), Some(10));
+        assert_eq!(first.get("keyEx"), None); // whole-key matching stays exact
+        assert_eq!(first.get_i32("parent"), Some(1));
+        assert_eq!(first.get_i32("shared"), Some(40)); // first include still wins
+        assert_eq!(first.file.entries.len(), 2);
+        assert_eq!(first.file.entries[1].line, 5);
+        assert_eq!(first.file.entries[1].value, "10 \"first.odf\" 0.5");
+        assert_eq!(OdfFile::parse(b"key=1\nkey=2\n").entries.len(), 2);
     }
 
     #[test]
