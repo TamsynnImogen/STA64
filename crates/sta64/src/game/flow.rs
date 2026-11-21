@@ -460,6 +460,12 @@ pub(crate) fn front_end_data(vfs: &sta_vfs::Vfs, catalogue: &mut Catalogue, inst
     Ok(FrontEndData { screens: ScreenData { content: db, races, colours, maps, mods, base_name: install_root.and_then(|r| r.file_name()).map(|n| n.to_string_lossy().into_owned()) }, scene, menu_music })
 }
 
+type RemountIntro<'w> = (
+    Option<Res<'w, crate::media::IntroSettings>>,
+    Option<ResMut<'w, crate::media::MovieIds>>,
+    Option<ResMut<'w, Messages<crate::media::PlayMovie>>>,
+);
+
 /// Use mod: remount the install with it and refill the lists. The scene shows
 /// the new content from the next time the front end opens it.
 #[allow(clippy::too_many_arguments)]
@@ -473,11 +479,7 @@ fn remount(
     mut notices: MessageWriter<Notice>,
     browse: Option<Res<Browse>>,
     mut next: Option<ResMut<NextState<Screen>>>,
-    (intro, ids, movies): (
-        Option<Res<crate::media::IntroSettings>>,
-        Option<ResMut<crate::media::MovieIds>>,
-        Option<ResMut<Messages<crate::media::PlayMovie>>>,
-    ),
+    (intro, ids, movies): RemountIntro,
 ) {
     let Some(ModChosen(folder)) = chosen.read().last().cloned() else { return };
     let Some(root) = &config.install_root else {
