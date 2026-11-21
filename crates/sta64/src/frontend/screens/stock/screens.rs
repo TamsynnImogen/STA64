@@ -8,14 +8,16 @@ use bevy::math::{Rect, Vec2};
 use bevy::prelude::*;
 use bevy::ui::UiTargetCamera;
 use sta_content::StartingResources;
+use sta_sim::PlayerId;
 
 use super::layout::{self, Slot, region};
 use crate::app::AppState;
 use crate::frontend::screens::data::SeatControl;
+use crate::frontend::screens::preview::{AuthoredPreview, PreviewFallback};
 use crate::frontend::screens::view::{Ctx, ScreenRoot, SettingSlider, SettingToggle};
 use crate::frontend::screens::{Act, Col, Screen, SettingKey};
 use crate::ui::i18n::{tr, trf};
-use crate::ui::theme::{disabled_button, dropdown, kit_button, kit_text, label, slider_focusable, tab_bar, tab_panel};
+use crate::ui::theme::{UiButton, WidgetState, disabled_button, dropdown, kit_button, kit_text, label, slider_focusable, tab_bar, tab_panel};
 
 /// A control placed by the layout: which slot, so tests and systems find it.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +97,67 @@ fn off_button(p: &mut Box_, ctx: &Ctx, b: Vec2, slot: Slot, text: &str) {
     put(p, slot, r, disabled_button(ctx.theme, text, r.width()));
 }
 
+/// Dark framed regions keep the setup's table and map readable over the menu scene.
+/// They are inert; interactive children are placed separately above them.
+fn frame(p: &mut Box_, r: Rect, colour: Color, border: Color) {
+    p.spawn((
+        Pickable::IGNORE,
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(r.min.x), top: Val::Px(r.min.y),
+            width: Val::Px(r.width()), height: Val::Px(r.height()),
+            border: UiRect::all(Val::Px(1.0)),
+            ..default()
+        },
+        BackgroundColor(colour), BorderColor::all(border),
+    ));
+}
+
+fn static_label(p: &mut Box_, r: Rect, theme: &crate::ui::theme::Theme, text: String) {
+    p.spawn((
+        Pickable::IGNORE,
+        Node { position_type: PositionType::Absolute, left: Val::Px(r.min.x), top: Val::Px(r.min.y), width: Val::Px(r.width()), height: Val::Px(r.height()), align_items: AlignItems::Center, ..default() },
+        children![kit_text(theme, text, theme.heading_size, theme.text)],
+    ));
+}
+
+fn setup_frames(p: &mut Box_, ctx: &Ctx, b: Vec2) {
+    let k = b / layout::DESIGN;
+    let scaled = |x: f32, y: f32, w: f32, h: f32| Rect::new(x * k.x, y * k.y, (x + w) * k.x, (y + h) * k.y);
+    frame(p, scaled(24.0, 54.0, 430.0, 481.0), ctx.theme.panel, ctx.theme.accent2);
+    frame(p, scaled(466.0, 54.0, 310.0, 481.0), ctx.theme.panel, ctx.theme.accent2);
+}
+
+fn map_preview(p: &mut Box_, ctx: &Ctx, b: Vec2, placed: bool) {
+    let t = ctx.theme;
+    let pv = layout::placed_rect(Slot::Preview, b);
+    let mut preview = p.spawn((
+        AuthoredPreview,
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(pv.min.x), top: Val::Px(pv.min.y),
+            width: Val::Px(pv.width()), height: Val::Px(pv.height()),
+            border: UiRect::all(Val::Px(1.0)), ..default()
+        },
+        BackgroundColor(t.track), BorderColor::all(t.accent2),
+    ));
+    if placed { preview.insert(Placed(Slot::Preview)); }
+    preview.with_children(|c| {
+        c.spawn((
+            PreviewFallback,
+            Visibility::Inherited,
+            Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
+        )).with_children(|c| {
+            for (i, (fx, fy)) in preview_dots(ctx).into_iter().enumerate() {
+                c.spawn((
+                    Node { position_type: PositionType::Absolute, left: Val::Percent(fx * 100.0), top: Val::Percent(fy * 100.0), ..default() },
+                    children![kit_text(t, (i + 1).to_string(), t.small_size, t.accent)],
+                ));
+            }
+        });
+    });
+}
+
 fn single_player(p: &mut Box_, ctx: &Ctx, b: Vec2) {
     // The cards stand where the stock panels do, in the stock order of the label keys. With the
     // installed campaigns (UI-25) each is the shell's slot: it opens its mission list, or stays off
@@ -117,6 +180,7 @@ fn single_player(p: &mut Box_, ctx: &Ctx, b: Vec2) {
 }
 
 fn setup(p: &mut Box_, ctx: &Ctx, b: Vec2) {
+    setup_frames(p, ctx, b);
     let t = ctx.theme;
     let draft = ctx.draft;
     let races = race_ids(ctx);
@@ -127,14 +191,24 @@ fn setup(p: &mut Box_, ctx: &Ctx, b: Vec2) {
     let control_refs: Vec<&str> = controls.iter().map(String::as_str).collect();
     let teams: Vec<String> = (0..draft.seats.len().max(1)).map(|i| cap(ctx, &format!("team_{}", i + 1), &trf("Team {0}", &[&(i + 1)]))).collect();
     let team_refs: Vec<&str> = teams.iter().map(String::as_str).collect();
+    let colours = draft.effective_colours(ctx.data);
+    let starts = ctx.data.maps.get(draft.map).map(|m| m.playable_starts()).unwrap_or_default();
 
     let title = region(Slot::SetupTitle).px(b);
-    put(p, Slot::SetupTitle, title, kit_text(t, t.caps(&cap(ctx, "instant_action", "Instant action"), t.caps_titles), t.title_size, t.title));
+    put(p, Slot::SetupTitle, title, kit_text(t, t.caps(&cap(ctx, "game_setup", "Game setup"), t.caps_titles), t.title_size, t.title));
     for (slot, text) in [(Slot::HeadControl, tr("Player")), (Slot::HeadSide, tr("Side")), (Slot::HeadTeam, tr("Team"))] {
         put(p, slot, region(slot).px(b), label(t, &text));
     }
     for (i, seat) in draft.seats.iter().enumerate().take(layout::TABLE_ROWS) {
         let at = |slot: Slot| region(slot).px(b);
+        if let Some(start) = starts.get(i) {
+            let chip = at(Slot::SeatColour(i));
+            let colour = colours.owner_colour(PlayerId(start.slot)).unwrap_or(t.text_dim);
+            put(p, Slot::SeatColour(i), chip, (
+                Node { width: Val::Px(chip.width()), height: Val::Px(chip.height()), border: UiRect::all(Val::Px(1.0)), ..default() },
+                BackgroundColor(colour), BorderColor::all(t.accent2),
+            ));
+        }
         let control = control_choices.iter().position(|c| *c == seat.control).unwrap_or(0);
         let r = at(Slot::SeatControl(i));
         put(p, Slot::SeatControl(i), r, (dropdown(t, &control_refs, control, r.width()), SeatDrop { row: i, col: Col::Control }));
@@ -142,7 +216,32 @@ fn setup(p: &mut Box_, ctx: &Ctx, b: Vec2) {
         let r = at(Slot::SeatSide(i));
         put(p, Slot::SeatSide(i), r, (dropdown(t, &race_refs, side, r.width()), SeatDrop { row: i, col: Col::Race }));
         let r = at(Slot::SeatTeam(i));
-        put(p, Slot::SeatTeam(i), r, (dropdown(t, &team_refs, usize::from(seat.team), r.width()), SeatDrop { row: i, col: Col::Team }));
+        if seat.control == SeatControl::Human && !draft.observing {
+            let mut choices = team_refs.clone();
+            let observer = tr("Observer");
+            choices.push(observer.as_str());
+            put(p, Slot::SeatTeam(i), r, (dropdown(t, &choices, usize::from(seat.team), r.width()), SeatDrop { row: i, col: Col::Team }));
+        } else {
+            put(p, Slot::SeatTeam(i), r, (dropdown(t, &team_refs, usize::from(seat.team), r.width()), SeatDrop { row: i, col: Col::Team }));
+        }
+    }
+    if draft.observing {
+        off_button(p, ctx, b, Slot::RandomColour, &tr("Random colour"));
+    } else {
+        act_button(p, ctx, b, Slot::RandomColour, &tr("Random colour"), Act::RandomTeamColour);
+    }
+    let selected = draft.active_swatch(ctx.data);
+    for (i, colour) in ctx.data.colours.swatches().into_iter().enumerate() {
+        let r = region(Slot::Palette(i)).px(b);
+        let edge = if selected == Some(i) { t.accent } else { t.accent2 };
+        let mut chip = p.spawn((
+            Name::new(trf("Player colour {0}", &[&(i + 1)])),
+            Placed(Slot::Palette(i)),
+            Node { position_type: PositionType::Absolute, left: Val::Px(r.min.x), top: Val::Px(r.min.y), width: Val::Px(r.width()), height: Val::Px(r.height()), border: UiRect::all(Val::Px(2.0)), ..default() },
+            BorderColor::all(edge),
+            children![(Node { width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, BackgroundColor(colour), Pickable::IGNORE)],
+        ));
+        if !draft.observing { chip.insert((UiButton, WidgetState::Normal, Act::PickTeamColour(i))); }
     }
     put(p, Slot::ModeLabel, region(Slot::ModeLabel).px(b), label(t, &tr("Mode")));
     let play = if draft.observing { "Play" } else { "Play (selected)" };
@@ -162,29 +261,7 @@ fn setup(p: &mut Box_, ctx: &Ctx, b: Vec2) {
             None => label(t, &tr("No maps found.")),
         },
     );
-    let pv = region(Slot::Preview).px(b);
-    p.spawn((
-        Placed(Slot::Preview),
-        Node {
-            position_type: PositionType::Absolute,
-            left: Val::Px(pv.min.x),
-            top: Val::Px(pv.min.y),
-            width: Val::Px(pv.width()),
-            height: Val::Px(pv.height()),
-            border: UiRect::all(Val::Px(1.0)),
-            ..default()
-        },
-        BackgroundColor(t.track),
-        BorderColor::all(t.accent2),
-    ))
-    .with_children(|c| {
-        for (i, (fx, fy)) in preview_dots(ctx).into_iter().enumerate() {
-            c.spawn((
-                Node { position_type: PositionType::Absolute, left: Val::Percent(fx * 100.0), top: Val::Percent(fy * 100.0), ..default() },
-                children![kit_text(t, (i + 1).to_string(), t.small_size, t.accent)],
-            ));
-        }
-    });
+    map_preview(p, ctx, b, true);
     if map.is_some() {
         act_button(p, ctx, b, Slot::SelectMap, &cap(ctx, "select_map", "Select map"), Act::PickMap);
     } else {
@@ -219,7 +296,23 @@ fn setup(p: &mut Box_, ctx: &Ctx, b: Vec2) {
 }
 
 fn advanced(p: &mut Box_, ctx: &Ctx, b: Vec2) {
+    // Static setup context behind the modal. It has no actions or focusable
+    // dropdowns, so pointer and keyboard input cannot reach setup controls.
+    setup_frames(p, ctx, b);
     let t = ctx.theme;
+    map_preview(p, ctx, b, false);
+    let k = b / layout::DESIGN;
+    let scaled = |x: f32, y: f32, w: f32, h: f32| Rect::new(x * k.x, y * k.y, (x + w) * k.x, (y + h) * k.y);
+    static_label(p, scaled(27.0, 8.0, 430.0, 40.0), t, tr("Game setup"));
+    static_label(p, scaled(42.0, 75.0, 390.0, 35.0), t, tr("Players"));
+    if let Some(map) = ctx.data.maps.get(ctx.draft.map) {
+        static_label(p, scaled(483.0, 75.0, 280.0, 58.0), t, trf("Map: {0}  ({1} players)", &[&map.title(), &map.slots()]));
+    }
+    frame(p, scaled(151.0, 101.0, 498.0, 394.0), t.panel, t.accent);
+    frame(p, scaled(168.0, 177.0, 225.0, 232.0), t.panel, t.accent2);
+    frame(p, scaled(407.0, 177.0, 225.0, 232.0), t.panel, t.accent2);
+    static_label(p, scaled(177.0, 162.0, 205.0, 31.0), t, tr("Match settings"));
+    static_label(p, scaled(415.0, 162.0, 205.0, 31.0), t, tr("Game speed"));
     let title = region(Slot::AdvancedTitle).px(b);
     put(p, Slot::AdvancedTitle, title, kit_text(t, t.caps(&tr("Advanced"), t.caps_titles), t.title_size, t.title));
     let (key, fallback) = match ctx.draft.options.starting_resources {
@@ -240,7 +333,8 @@ fn advanced(p: &mut Box_, ctx: &Ctx, b: Vec2) {
     }
     act_button(p, ctx, b, Slot::AdvancedSpeed, &trf("Game speed: {0}", &[&ctx.draft.speed.label()]), Act::CycleMatchSpeed);
     act_button(p, ctx, b, Slot::AdvancedDefault, &tr("Default"), Act::DefaultOptions);
-    act_button(p, ctx, b, Slot::AdvancedClose, &tr("Close"), Act::Goto(Screen::Setup));
+    act_button(p, ctx, b, Slot::AdvancedClose, &tr("OK"), Act::CloseAdvanced(true));
+    act_button(p, ctx, b, Slot::AdvancedCancel, &tr("Cancel"), Act::CloseAdvanced(false));
 }
 
 /// The picked map's start positions as fractions of the preview frame.

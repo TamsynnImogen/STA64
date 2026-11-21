@@ -150,7 +150,7 @@ fn check_layout(screen: Screen, want: &[Slot]) {
             let mut rects = Vec::new();
             for (slot, e) in &all {
                 let r = node_rect(&app, *e);
-                let want_r = region(*slot).px(b);
+                let want_r = layout::placed_rect(*slot, b);
                 for (got, exp) in [(r.min.x, want_r.min.x), (r.min.y, want_r.min.y), (r.max.x, want_r.max.x), (r.max.y, want_r.max.y)] {
                     assert!((got - exp).abs() < 0.01, "{ctx}: {slot:?} {r:?} is not its region {want_r:?}");
                 }
@@ -176,6 +176,8 @@ fn check_layout(screen: Screen, want: &[Slot]) {
             // The row pitch holds a dropdown at the theme's height.
             if screen == Screen::Setup {
                 assert!(region(Slot::SeatSide(0)).px(b).height() + 0.01 >= theme.button_h, "{ctx}: rows are too tight");
+                let preview = layout::placed_rect(Slot::Preview, b);
+                assert!((preview.width() - preview.height()).abs() < 0.01, "{ctx}: map preview is stretched");
             }
         }
     }
@@ -196,12 +198,42 @@ fn single_player_layout_in_every_window_and_scale() {
 
 #[test]
 fn setup_layout_in_every_window_and_scale() {
-    let mut want = vec![Slot::SetupTitle, Slot::HeadControl, Slot::HeadSide, Slot::HeadTeam, Slot::ModeLabel, Slot::ModePlay, Slot::ModeObserve, Slot::MapInfo, Slot::Preview, Slot::SelectMap, Slot::Resources, Slot::Officers, Slot::Advanced, Slot::SetupBack, Slot::Launch];
+    let mut want = vec![Slot::SetupTitle, Slot::HeadControl, Slot::HeadSide, Slot::HeadTeam, Slot::ModeLabel, Slot::ModePlay, Slot::ModeObserve, Slot::RandomColour, Slot::MapInfo, Slot::Preview, Slot::SelectMap, Slot::Resources, Slot::Officers, Slot::Advanced, Slot::SetupBack, Slot::Launch];
     // The fake map has two seats.
     for i in 0..2 {
-        want.extend([Slot::SeatControl(i), Slot::SeatSide(i), Slot::SeatTeam(i)]);
+        want.extend([Slot::SeatColour(i), Slot::SeatControl(i), Slot::SeatSide(i), Slot::SeatTeam(i)]);
     }
     check_layout(Screen::Setup, &want);
+}
+
+#[test]
+fn setup_colour_and_observer_controls_follow_the_local_seat() {
+    let mut app = app_with(four_races(), None, 1.0);
+    go(&mut app, Screen::Setup);
+    let local = dropdown_of(&mut app, 0, Col::Team);
+    let remote = dropdown_of(&mut app, 1, Col::Team);
+    let teams = app.world().resource::<SetupDraft>().seats.len();
+    assert_eq!(app.world().get::<Dropdown>(local).unwrap().options.last().map(String::as_str), Some("Observer"));
+    assert_eq!(app.world().get::<Dropdown>(remote).unwrap().options.len(), teams);
+    assert!(app.world_mut().query::<&Act>().iter(app.world()).any(|a| *a == Act::RandomTeamColour));
+    assert!(placed(&mut app).iter().any(|(slot, _)| *slot == Slot::SeatColour(0)));
+    press(&mut app, Act::PickTeamColour(1));
+    assert_eq!(app.world().resource::<SetupDraft>().colour, Some(1));
+    press(&mut app, Act::SetObserving(true));
+    assert!(!app.world_mut().query::<&Act>().iter(app.world()).any(|a| matches!(a, Act::PickTeamColour(_) | Act::RandomTeamColour)));
+    assert!(app.world_mut().query::<&Act>().iter(app.world()).any(|a| *a == Act::SetObserving(false)));
+}
+
+#[test]
+fn advanced_contains_only_modal_actions() {
+    let mut app = app();
+    go(&mut app, Screen::Advanced);
+    let actions: Vec<_> = app.world_mut().query::<&Act>().iter(app.world()).copied().collect();
+    assert!(actions.contains(&Act::CloseAdvanced(true)));
+    assert!(actions.contains(&Act::CloseAdvanced(false)));
+    assert!(actions.contains(&Act::DefaultOptions));
+    assert!(!actions.iter().any(|a| matches!(a, Act::Launch | Act::PickMap | Act::SetObserving(_) | Act::PickTeamColour(_))));
+    assert_eq!(app.world_mut().query::<&Dropdown>().iter(app.world()).count(), 0);
 }
 
 #[test]
@@ -211,7 +243,7 @@ fn options_layout_in_every_window_and_scale() {
 
 #[test]
 fn advanced_layout_in_every_window_and_scale() {
-    check_layout(Screen::Advanced, &[Slot::AdvancedTitle, Slot::AdvancedResources, Slot::AdvancedOfficers, Slot::AdvancedSpeed, Slot::AdvancedDefault, Slot::AdvancedClose]);
+    check_layout(Screen::Advanced, &[Slot::AdvancedTitle, Slot::AdvancedResources, Slot::AdvancedOfficers, Slot::AdvancedSpeed, Slot::AdvancedDefault, Slot::AdvancedClose, Slot::AdvancedCancel]);
 }
 
 #[test]
@@ -239,7 +271,7 @@ fn match_mode_is_separate_from_seats_and_advanced_options_reset() {
     press(&mut app, Act::DefaultOptions);
     assert_eq!(app.world().resource::<SetupDraft>().options, sta_sim::setup::GameOptions::default());
     assert_eq!(app.world().resource::<SetupDraft>().speed, crate::clock::MatchSpeed::Normal);
-    press(&mut app, Act::Goto(Screen::Setup));
+    press(&mut app, Act::CloseAdvanced(true));
     assert_eq!(*app.world().resource::<State<Screen>>().get(), Screen::Setup);
 }
 
@@ -288,7 +320,7 @@ fn the_stock_arrangement_holds_in_a_window() {
     let (c, s, t) = (at(&app, Slot::SeatControl(0)), at(&app, Slot::SeatSide(0)), at(&app, Slot::SeatTeam(0)));
     assert!(c.max.x <= s.min.x && s.max.x <= t.min.x);
     assert!(t.max.x <= at(&app, Slot::MapInfo).min.x);
-    assert!(at(&app, Slot::Resources).max.x <= at(&app, Slot::Preview).min.x);
+    assert!(at(&app, Slot::Preview).max.y <= at(&app, Slot::Resources).min.y);
     assert!(at(&app, Slot::Preview).max.y <= at(&app, Slot::Launch).min.y);
     let b_scale = app.world().resource::<StockBox>().0.y / 1080.0;
     go(&mut app, Screen::Main);

@@ -25,6 +25,7 @@ use sta_sim::setup::GameSetup;
 
 mod data;
 pub mod frame;
+mod preview;
 pub mod stock;
 #[cfg(test)]
 mod tests;
@@ -113,7 +114,7 @@ pub enum Col {
 /// Launch was pressed: start a match from this setup. INT-M4 connects it to
 /// INT-M3's match start (loading screen, then `AppState::InGame`).
 #[derive(Message, Debug, Clone)]
-pub struct StartGame(pub GameSetup, pub crate::clock::MatchSpeed);
+pub struct StartGame(pub GameSetup, pub crate::clock::MatchSpeed, pub Option<crate::viewer::TeamColours>);
 
 /// Use mod was pressed: `Some(folder)` for a mod, `None` for the base game.
 /// The host remounts the install with it (`Vfs::mount_install`'s `active_mod`).
@@ -173,7 +174,7 @@ impl Plugin for ScreensPlugin {
         }
         if !app.world().contains_resource::<ScreenData>() {
             let empty = sta_content::ContentDb::builder().build().expect("empty content");
-            app.insert_resource(ScreenData { content: std::sync::Arc::new(empty), races: std::sync::Arc::new(sta_content::Races::default()), maps: Vec::new(), mods: Vec::new(), base_name: None });
+            app.insert_resource(ScreenData { content: std::sync::Arc::new(empty), races: std::sync::Arc::new(sta_content::Races::default()), colours: Default::default(), maps: Vec::new(), mods: Vec::new(), base_name: None });
         }
         if !app.world().contains_resource::<State<AppState>>() {
             app.init_state::<AppState>();
@@ -217,6 +218,10 @@ impl Plugin for ScreensPlugin {
                 .after(rebuild)
                 .after(crate::ui::theme::WidgetPaint)
                 .after(crate::ui::theme::KitSet)
+                .run_if(in_state(AppState::FrontEnd)))
+            .add_systems(Update, preview::sync_preview
+                .in_set(GameSet::Ui)
+                .after(rebuild)
                 .run_if(in_state(AppState::FrontEnd)));
     }
 }
@@ -277,7 +282,7 @@ fn on_keys(
 ) {
     if *screen.get() == Screen::Advanced {
         if keys.just_pressed(KeyCode::Escape)
-            && let Some((e, _)) = acts.iter().find(|(_, act)| **act == Act::Goto(Screen::Setup))
+            && let Some((e, _)) = acts.iter().find(|(_, act)| **act == Act::CloseAdvanced(false))
         {
             clicks.write(ButtonClicked(e));
         }
@@ -393,6 +398,10 @@ fn on_buttons(
         let Ok(&act) = acts.get(*e) else { continue };
         match act {
             Act::Goto(s) => {
+                if s == Screen::Advanced && *screen.get() == Screen::Setup {
+                    let backup = (draft.options.clone(), draft.speed);
+                    draft.advanced_backup = Some(backup);
+                }
                 // Map select's Cancel goes back to whoever opened it.
                 if *screen.get() == Screen::MapSelect && s == Screen::Setup {
                     next.set(std::mem::take(&mut *map_return).0);
@@ -426,13 +435,33 @@ fn on_buttons(
             Act::CycleOfficerLimit => draft.cycle_officer_limit(&data),
             Act::CycleMatchSpeed => draft.speed = draft.speed.next(),
             Act::SetObserving(observing) => draft.set_observing(observing),
+            Act::PickTeamColour(index) => draft.pick_colour(&data, index),
+            Act::RandomTeamColour => {
+                let swatches = data.colours.swatches();
+                let selected = draft.active_swatch(&data);
+                let choices: Vec<_> = (0..swatches.len()).filter(|&i| Some(i) != selected).collect();
+                if !choices.is_empty() {
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |t| t.as_nanos() as u64);
+                    let index = crate::clock::splitmix64(now) as usize % choices.len();
+                    draft.pick_colour(&data, choices[index]);
+                }
+            }
+            Act::CloseAdvanced(accept) => {
+                if let Some((options, speed)) = draft.advanced_backup.take() && !accept {
+                    draft.options = options;
+                    draft.speed = speed;
+                }
+                next.set(Screen::Setup);
+            }
             Act::DefaultOptions => {
                 draft.options = Default::default();
                 draft.speed = crate::clock::MatchSpeed::Normal;
             }
             Act::Launch => {
                 if let Some(setup) = draft.to_setup(&data) {
-                    start.write(StartGame(setup, draft.speed));
+                    let colours = (!draft.observing && draft.colour.is_some()).then(|| draft.effective_colours(&data));
+                    start.write(StartGame(setup, draft.speed, colours));
                 }
             }
             Act::Exit => {

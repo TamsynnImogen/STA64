@@ -3,13 +3,15 @@
 //!
 //! - `STA64_UI_SCREEN=<name>`: draw that screen over the bench's frame, on
 //!   [`ScreenData::fake`]: `main`, `single`, `setup`, `advanced`, `map`, `settings`, `mods`.
+//! - `STA64_UI_MAP=<stem>`: show that installed map's preview and the mounted
+//!   palette on the setup frame.
 //!
 //! The screen's root is printed once as a `screen:` line.
 
 use bevy::camera::RenderTarget;
 use bevy::prelude::*;
 
-use super::{Screen, ScreenData, ScreenRoot, ScreensCamera, ScreensConfig, ScreensPlugin};
+use super::{MapEntry, Screen, ScreenData, ScreenRoot, ScreensCamera, ScreensConfig, ScreensPlugin};
 use crate::app::{AppState, GameSet};
 
 /// The screen `STA64_UI_SCREEN` names.
@@ -41,6 +43,7 @@ pub fn add_overlay(app: &mut App, screen: Screen, target: Handle<Image>, frame_s
         .insert_resource(ScreensConfig { own_camera: false, fit_scale: false, start: screen, ..default() })
         .insert_state(AppState::FrontEnd)
         .add_plugins(ScreensPlugin)
+        .add_systems(PreStartup, use_installed_preview_fixture)
         .add_systems(Startup, move |mut commands: Commands| {
             let cam = commands
                 .spawn((Camera2d, Camera { order: 1, clear_color: ClearColorConfig::None, ..default() }, RenderTarget::from(target.clone()), Msaa::Off))
@@ -48,6 +51,16 @@ pub fn add_overlay(app: &mut App, screen: Screen, target: Handle<Image>, frame_s
             commands.insert_resource(ScreensCamera(cam));
         })
         .add_systems(Update, announce.in_set(GameSet::Ui));
+}
+
+fn use_installed_preview_fixture(mounted: Option<Res<crate::viewer::Mounted>>, mut data: ResMut<ScreenData>) {
+    let (Some(mounted), Ok(stem)) = (mounted, std::env::var("STA64_UI_MAP")) else { return };
+    let Some(Ok(bytes)) = mounted.0.read(&format!("bzn/{stem}.bzn")) else { return };
+    let Ok(source) = sta_bzn::parse(&bytes) else { return };
+    let (mut map, _) = sta_content::MapDef::from_bzn(&source, &data.content);
+    map.name = stem;
+    data.maps = vec![MapEntry::new(map)];
+    data.colours = crate::viewer::TeamColours::load(&mounted.0);
 }
 
 fn announce(roots: Query<&ScreenRoot, Added<ScreenRoot>>) {

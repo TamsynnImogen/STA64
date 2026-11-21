@@ -116,9 +116,13 @@ pub(super) fn on_dropdowns(mut changes: MessageReader<DropdownChanged>, seats: Q
                 }
             }
             Col::Team => {
-                let last = draft.seats.len().saturating_sub(1);
+                let count = draft.seats.len();
                 if let Some(seat) = draft.seats.get_mut(row) {
-                    seat.team = c.index.min(last) as u8;
+                    if c.index < count {
+                        seat.team = c.index as u8;
+                    } else if c.index == count && seat.control == SeatControl::Human {
+                        draft.set_observing(true);
+                    }
                 }
             }
         }

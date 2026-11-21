@@ -14,7 +14,7 @@ use super::data::WindowSize;
 use super::{Col, ListScroll, Screen};
 use crate::app::AppState;
 use crate::ui::i18n::{tr, trf};
-use crate::ui::theme::{Theme, button, disabled_button, kit_panel, label, list, slider, toggle};
+use crate::ui::theme::{Theme, UiButton, WidgetState, button, disabled_button, kit_panel, label, list, slider, toggle};
 
 #[cfg(not(target_os = "android"))]
 use crate::ui::theme::dropdown;
@@ -40,6 +40,9 @@ pub enum Act {
     CycleOfficerLimit,
     CycleMatchSpeed,
     SetObserving(bool),
+    PickTeamColour(usize),
+    RandomTeamColour,
+    CloseAdvanced(bool),
     DefaultOptions,
     Launch,
     Exit,
@@ -215,6 +218,11 @@ fn setup(ctx: &Ctx) -> impl Bundle {
     let map = ctx.data.maps.get(draft.map).map(|m| (m.title().to_owned(), m.slots()));
     let can_launch = draft.to_setup(ctx.data).is_some();
     let race_labels: Vec<_> = draft.seats.iter().map(|seat| ctx.data.race_label(&seat.race, ctx.strings)).collect();
+    let palette = draft.effective_colours(ctx.data);
+    let row_colours: Vec<_> = ctx.data.maps.get(draft.map).into_iter().flat_map(|map| map.playable_starts())
+        .map(|start| palette.owner_colour(sta_sim::PlayerId(start.slot)).unwrap_or(t.text_off)).collect();
+    let swatches = ctx.data.colours.swatches();
+    let current_colour = draft.active_swatch(ctx.data);
     let (resource_key, resource_fallback) = match draft.options.starting_resources {
         StartingResources::Normal => ("sr_normal", "Resources: Normal"),
         StartingResources::Lots => ("sr_lots", "Resources: Lots"),
@@ -241,12 +249,32 @@ fn setup(ctx: &Ctx) -> impl Bundle {
             p.spawn((
                 row(t.gap),
                 children![
-                    cell(&t, 130.0, &trf("Player {0}", &[&(i + 1)])),
+                    (Node { width: Val::Px(130.0), column_gap: Val::Px(t.gap), align_items: AlignItems::Center, ..default() },
+                        children![
+                            (Node { width: Val::Px(15.0), height: Val::Px(15.0), ..default() }, BackgroundColor(row_colours.get(i).copied().unwrap_or(t.text_off))),
+                            label(&t, &trf("Player {0}", &[&(i + 1)])),
+                        ]),
                     (button(&t, seat.control.label(), 200.0 - t.gap), Act::Cycle(i, Col::Control)),
                     (button(&t, &race_labels[i], 260.0 - t.gap), Act::Cycle(i, Col::Race)),
                     (button(&t, &trf("Team {0}", &[&(seat.team + 1)]), 160.0 - t.gap), Act::Cycle(i, Col::Team)),
                 ],
             ));
+        }
+        if !draft.observing && !swatches.is_empty() {
+            p.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: Val::Px(8.0), row_gap: Val::Px(6.0), align_items: AlignItems::Center, ..default() }).with_children(|r| {
+                r.spawn((button(&t, &tr("Random colour"), 200.0), Act::RandomTeamColour));
+                for (i, colour) in swatches.iter().copied().enumerate() {
+                    r.spawn((
+                        Name::new(trf("Player colour {0}", &[&(i + 1)])),
+                        UiButton,
+                        WidgetState::Normal,
+                        Node { width: Val::Px(30.0), height: Val::Px(30.0), border: UiRect::all(Val::Px(2.0)), ..default() },
+                        BorderColor::all(if current_colour == Some(i) { t.title } else { t.track }),
+                        children![(Node { width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, BackgroundColor(colour), Pickable::IGNORE)],
+                        Act::PickTeamColour(i),
+                    ));
+                }
+            });
         }
         p.spawn(row(t.gap)).with_children(|r| {
             r.spawn(label(&t, &tr("Mode")));
@@ -307,8 +335,9 @@ fn advanced(ctx: &Ctx) -> impl Bundle {
         }
         p.spawn((button(&t, &speed, 360.0), Act::CycleMatchSpeed));
         p.spawn(row(t.gap)).with_children(|r| {
+            r.spawn((button(&t, &tr("OK"), 140.0), Act::CloseAdvanced(true)));
+            r.spawn((button(&t, &tr("Cancel"), 140.0), Act::CloseAdvanced(false)));
             r.spawn((button(&t, &tr("Default"), 170.0), Act::DefaultOptions));
-            r.spawn((button(&t, &tr("Close"), 170.0), Act::Goto(Screen::Setup)));
         });
     })
 }
