@@ -531,7 +531,9 @@ fn spawn_separate_resources(commands: &mut Commands, root: Entity, layout: &Stoc
             continue;
         };
         let value = resource_text(feed, id).unwrap_or_default();
-        readout(commands, root, r, value, theme.text, theme.small_size, Some(StockText::Resource(id)));
+        // Armada.exe's DilithiumDisplay, CrewDisplay and OfficerDisplay all
+        // pass the same 0.5 RGB grey to the font draw (read from the binary).
+        readout(commands, root, r, value, Color::srgb(0.5, 0.5, 0.5), theme.small_size, Some(StockText::Resource(id)));
     }
 }
 
