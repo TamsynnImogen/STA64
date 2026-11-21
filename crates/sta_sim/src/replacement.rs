@@ -256,8 +256,14 @@ impl Sim {
         let mut spawned = Vec::new();
         for (key, [x, y, z]) in choices {
             // Each result joins the census before the next one is admitted.
-            if !crate::tech::replacement_allowed(db, &self.units, &self.players, &self.ai_seats,
-                id, key, true, options.ignore_fleet_cap, options.keep_owner, false).1 {
+            // Retain this mode's tech test (including mode 1's reversal), so
+            // an XML alternative must still satisfy tech and cap together.
+            let (available, capacity) = crate::tech::replacement_allowed(
+                db, &self.units, &self.players, &self.ai_seats, id, key,
+                matches!(rule.mode, 3 | 4) || options.ignore_tech_tree || options.warp_in,
+                options.ignore_fleet_cap, options.keep_owner, rule.mode == 1,
+            );
+            if !capacity || (rule.mode == 1) == available {
                 continue;
             }
             let (hx, hz) = source.heading;
@@ -437,7 +443,8 @@ mod tests {
         ))).unwrap();
         let mut weapon = WeaponDef::new("replace_test", "replaceweapon", WeaponKind::Beam);
         weapon.replace = sta_content::lifecycle::replace_def(&raw);
-        let (tree, warnings) = TechTree::parse("replace.tt", tree_text);
+        let tree_name = if tree_text.trim_start().starts_with('<') { "replace.xml" } else { "replace.tt" };
+        let (tree, warnings) = TechTree::parse(tree_name, tree_text);
         assert!(warnings.is_empty());
         let db = Arc::new(ContentDb::builder().unit(base).unit(result).weapon(weapon).tech_tree(tree).build().unwrap());
         let old = db.key("replace_base").unwrap();
@@ -525,14 +532,45 @@ mod tests {
     }
 
     #[test]
+    fn multi_result_replacement_keeps_xml_group_tech_and_cap_together() {
+        let xml = r#"<techtree>
+            <capacitylist name="replace_cap" maxCapValue="1"><obj>replace_result</obj></capacitylist>
+            <capacitylist name="spare_cap" maxCapValue="1"><obj>other</obj></capacitylist>
+            <object ODF="replace_base"/>
+            <object ODF="replace_result">
+                <requirement logicGroups="1"><obj>replace_base</obj><capList>replace_cap</capList></requirement>
+                <requirement logicGroups="2"><obj>missing</obj><capList>spare_cap</capList></requirement>
+            </object>
+        </techtree>"#;
+        let (mut sim, _, old, new) = capped_fixture_with_tree("replacement1Class0 = replace_result\n", false, xml);
+        let source = sim.spawn_def(old, OWNER, Vec3::ZERO, HEADING).unwrap();
+        sim.step(&[use_weapon(source, Target::None)]);
+        assert!(!sim.units.contains(source));
+        assert_eq!(sim.units.iter().filter(|u| u.def == new).count(), 1);
+    }
+
+    #[test]
+    fn return_to_original_keeps_its_tech_bypass() {
+        let (mut sim, _, old, _) = capped_fixture_with_tree(
+            "replacementMode = 4\n", false, "replace_base -1\nreplace_result 0\n",
+        );
+        let source = sim.spawn_def(old, OWNER, Vec3::ZERO, HEADING).unwrap();
+        sim.step(&[use_weapon(source, Target::None)]);
+        assert!(!sim.units.contains(source));
+        assert_eq!(sim.units.iter().filter(|u| u.def == old).count(), 1);
+    }
+
+    #[test]
     fn delayed_instant_replacement_rechecks_capacity_when_it_fires() {
-        let odf = "replacementInstantPlayer = 1\nreplacementInstantDelay = 0.1\n";
+        let odf = "replacementInstantPlayer = 1\nreplacementInstantDelay = 0.1\nDilithiumCost = 5\n";
         let (mut sim, _, old, new) = capped_fixture(odf, false);
         let source = sim.spawn_def(old, OWNER, Vec3::ZERO, HEADING).unwrap();
         sim.spawn_def(new, OWNER, Vec3::ZERO, HEADING).unwrap();
+        let stock = sim.economy.stock_of(OWNER);
         for _ in 0..5 { sim.step(&[]); }
         assert!(sim.units.contains(source));
         assert_eq!(sim.units.iter().filter(|u| u.def == new).count(), 1);
+        assert_eq!(sim.economy.stock_of(OWNER), stock);
 
         let (mut sim, _, old, new) = capped_fixture(&format!("{odf}replacementIgnoreFleetCap = 1\n"), false);
         let source = sim.spawn_def(old, OWNER, Vec3::ZERO, HEADING).unwrap();
