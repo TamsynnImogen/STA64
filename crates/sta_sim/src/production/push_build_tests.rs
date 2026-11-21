@@ -20,9 +20,8 @@ fn game() -> Sim {
     yard.build.ticks = 2;
     yard.build.queue_limit = Some(10);
     yard.build.list = vec![DefRef::new("push_yard")];
-    yard.raw = Arc::new(sta_odf::resolve("push_yard", &mut |_| Some(
-        "pushBuildItem0 = push_product\npushBuildItem2 = NULL\npushBuildItem3 = push_product\npushBuildItem4 = missing_class\n".into()
-    )).unwrap());
+    // Slots 0, 3 and 4 of an authored ODF (2 is `null`): the loader types them in order.
+    yard.stats.push_build_items = vec!["push_product".into(), "push_product".into(), "missing_class".into()];
 
     let mut starter = UnitDef::new("push_starter", "shipyard");
     starter.hull = Fixed::from_int(100);
@@ -75,8 +74,10 @@ fn normally_completed_producer_receives_push_queue_once() {
     for _ in 0..4 {
         let out = sim.step(&[]);
         for event in out.events {
-            if let SimEvent::Built { builder, id } = event {
-                if builder == starter { built_yard = Some(id); }
+            if let SimEvent::Built { builder, id } = event
+                && builder == starter
+            {
+                built_yard = Some(id);
             }
         }
         if built_yard.is_some() { break; }

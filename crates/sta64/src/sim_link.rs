@@ -423,6 +423,7 @@ impl Plugin for SimLinkPlugin {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // Bevy injects these system parameters.
 fn step_sim(
     time: Res<Time<Real>>,
     mut clock: ResMut<AnimClock>,
