@@ -355,7 +355,8 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     {
         use crate::ui::sprite_font::{SpriteText, SpriteTextStyle};
         use crate::ui::stock_font::{VAlign, HAlign};
-        let ui_px = app.world().get_resource::<UiScale>().map_or(1.0, |u| u.0);
+        let window_scale = app.world_mut().query::<&Window>().iter(app.world()).next().map_or(1.0, |w| w.scale_factor());
+        let ui_px = app.world().get_resource::<UiScale>().map_or(1.0, |u| u.0) * window_scale;
         let on_path = app.world().get_resource::<crate::ui::sprite_font::SpriteFonts>().is_some_and(|f| f.stock_family);
         let mut texts = app.world_mut().query::<(&SpriteText, &SpriteTextStyle, &ComputedNode, &bevy::ui::UiGlobalTransform, &ChildOf, &InheritedVisibility)>();
         let (mut checked, mut wrong) = (0, Vec::new());
