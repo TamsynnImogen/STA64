@@ -147,7 +147,10 @@ impl Sim {
             } else {
                 Some(lineage.and_then(|actor| actor.original).unwrap_or(source))
             };
-            return key.filter(|&key| db.unit(key).is_some()).map(|key| (key, [Fixed::ZERO; 3])).into_iter().collect();
+            return key.filter(|&key| db.unit(key).is_some())
+                .filter(|&key| crate::tech::replacement_allowed(db, &self.units, &self.players, &self.ai_seats,
+                    id, key, true, options.ignore_fleet_cap, options.keep_owner, false).1)
+                .map(|key| (key, [Fixed::ZERO; 3])).into_iter().collect();
         }
         let owner = self.units.get(id).expect("replacement source exists").owner;
         let race = self.attrs.player_race(owner)
@@ -166,10 +169,13 @@ impl Sim {
             if options.ignore_same_class && key == source {
                 continue;
             }
-            let available = options.ignore_tech_tree || options.warp_in
-                || crate::tech::build_allowed(db, &self.units, &self.players, &self.ai_seats, id, key);
+            let (available, capacity) = crate::tech::replacement_allowed(
+                db, &self.units, &self.players, &self.ai_seats, id, key,
+                options.ignore_tech_tree || options.warp_in, options.ignore_fleet_cap, options.keep_owner,
+                rule.mode == 1,
+            );
             // The DLL's mode 1 explicitly reverses the ordinary tech test.
-            if (rule.mode == 1) == available {
+            if !capacity || (rule.mode == 1) == available {
                 continue;
             }
             let offset = if rule.mode == 2 {
@@ -249,6 +255,11 @@ impl Sim {
         let race_override = self.attrs.race(id).map(str::to_owned);
         let mut spawned = Vec::new();
         for (key, [x, y, z]) in choices {
+            // Each result joins the census before the next one is admitted.
+            if !crate::tech::replacement_allowed(db, &self.units, &self.players, &self.ai_seats,
+                id, key, true, options.ignore_fleet_cap, options.keep_owner, false).1 {
+                continue;
+            }
             let (hx, hz) = source.heading;
             let mut at = Vec3 { x: aim.x + hz * x + hx * z, y: aim.y + y, z: aim.z - hx * x + hz * z };
             if options.find_open_spot || options.warp_in {
@@ -367,7 +378,7 @@ impl Sim {
 mod tests {
     use super::*;
     use crate::{WorldSource, command::{Command, CommandKind}, setup::{Control, GameOptions, GameSetup, PlayerSetup}};
-    use sta_content::{DefRef, Hardpoint, MapDef, UnitDef, WeaponKind};
+    use sta_content::{CapacityList, DefRef, Hardpoint, MapDef, TechTree, UnitDef, WeaponKind};
     use sta_core::TeamId;
     use std::sync::Arc;
 
@@ -403,6 +414,132 @@ mod tests {
 
     fn use_weapon(id: EntityId, target: Target) -> Command {
         Command { player: OWNER, seq: 0, kind: CommandKind::Order(Order::Special { units: vec![id], slot: 0, target }) }
+    }
+
+    fn capped_fixture(odf: &str, source_in_cap: bool) -> (Sim, Arc<ContentDb>, ContentKey, ContentKey) {
+        capped_fixture_with_tree(odf, source_in_cap, "replace_base 0\nreplace_result 0\n")
+    }
+
+    fn capped_fixture_with_tree(odf: &str, source_in_cap: bool, tree_text: &str) -> (Sim, Arc<ContentDb>, ContentKey, ContentKey) {
+        let mut base = UnitDef::new("replace_base", "craft");
+        base.hull = Fixed::from_int(100);
+        base.hardpoints.push(Hardpoint { weapon: DefRef::new("replace_test"), node: "hp01".into(), arc: None });
+        let mut result = UnitDef::new("replace_result", "craft");
+        result.hull = Fixed::from_int(100);
+        result.fleet_cap = Some(Arc::new(CapacityList {
+            name: "replace_cap".into(), max: 1,
+            members: if source_in_cap { vec![("replace_base".into(), 1), ("replace_result".into(), 1)] }
+                else { vec![("replace_result".into(), 1)] },
+            ..Default::default()
+        }));
+        let raw = sta_odf::resolve("replace_test", &mut |_| Some(format!(
+            "classLabel = replaceweapon\nreplacement0Class0 = replace_result\n{odf}"
+        ))).unwrap();
+        let mut weapon = WeaponDef::new("replace_test", "replaceweapon", WeaponKind::Beam);
+        weapon.replace = sta_content::lifecycle::replace_def(&raw);
+        let (tree, warnings) = TechTree::parse("replace.tt", tree_text);
+        assert!(warnings.is_empty());
+        let db = Arc::new(ContentDb::builder().unit(base).unit(result).weapon(weapon).tech_tree(tree).build().unwrap());
+        let old = db.key("replace_base").unwrap();
+        let new = db.key("replace_result").unwrap();
+        let sim = Sim::from_setup(&GameSetup {
+            seed: 7, content: db.clone(), map: Arc::new(MapDef::empty()),
+            players: vec![
+                PlayerSetup { id: OWNER, team: TeamId(1), race: "test".into(), control: Control::Human },
+                PlayerSetup { id: PlayerId(2), team: TeamId(2), race: "test".into(), control: Control::Ai("test".into()) },
+            ],
+            options: GameOptions::default(),
+        });
+        (sim, db, old, new)
+    }
+
+    #[test]
+    fn replacement_projects_retired_source_but_counts_kept_parent_against_cap() {
+        let (mut sim, db, old, new) = capped_fixture("", true);
+        let source = sim.spawn_def(old, OWNER, Vec3::ZERO, HEADING).unwrap();
+        sim.step(&[use_weapon(source, Target::None)]);
+        assert!(!sim.units.contains(source));
+        assert_eq!(sim.units.iter().filter(|u| u.def == new).count(), 1);
+        assert_eq!(Sim::from_snapshot(&sim.snapshot(), Some(db)).unwrap().digest(), sim.digest());
+
+        let (mut sim, _, old, new) = capped_fixture("replacementKeepOwner = 1\n", true);
+        let source = sim.spawn_def(old, OWNER, Vec3::ZERO, HEADING).unwrap();
+        sim.step(&[use_weapon(source, Target::None)]);
+        assert!(sim.units.contains(source));
+        assert!(!sim.units.iter().any(|u| u.def == new));
+    }
+
+    #[test]
+    fn replacement_ignore_fleet_cap_only_bypasses_capacity() {
+        let (mut sim, db, old, new) = capped_fixture("replacementKeepOwner = 1\nreplacementIgnoreFleetCap = 1\n", true);
+        let source = sim.spawn_def(old, OWNER, Vec3::ZERO, HEADING).unwrap();
+        sim.step(&[use_weapon(source, Target::None)]);
+        assert!(sim.units.contains(source));
+        assert_eq!(sim.units.iter().filter(|u| u.def == new).count(), 1);
+        assert_eq!(Sim::from_snapshot(&sim.snapshot(), Some(db)).unwrap().digest(), sim.digest());
+
+        let (mut sim, _, old, new) = capped_fixture("replacementKeepOwner = 1\nignoreTechTree = 1\n", true);
+        let source = sim.spawn_def(old, OWNER, Vec3::ZERO, HEADING).unwrap();
+        sim.step(&[use_weapon(source, Target::None)]);
+        assert!(sim.units.contains(source));
+        assert!(!sim.units.iter().any(|u| u.def == new));
+
+        let (mut sim, _, old, new) = capped_fixture_with_tree(
+            "replacementIgnoreFleetCap = 1\n", false,
+            "replace_base 0\nreplace_result 1 missing_prerequisite\n",
+        );
+        let source = sim.spawn_def(old, OWNER, Vec3::ZERO, HEADING).unwrap();
+        sim.step(&[use_weapon(source, Target::None)]);
+        assert!(sim.units.contains(source));
+        assert!(!sim.units.iter().any(|u| u.def == new), "the cap flag does not bypass tech");
+    }
+
+    #[test]
+    fn replacement_cap_counts_only_own_results_and_flag_changes_content_digest() {
+        let (mut sim, _, old, new) = capped_fixture("", false);
+        sim.spawn_def(new, PlayerId(2), Vec3::ZERO, HEADING).unwrap();
+        let source = sim.spawn_def(old, OWNER, Vec3::ZERO, HEADING).unwrap();
+        sim.step(&[use_weapon(source, Target::None)]);
+        assert_eq!(sim.units.iter().filter(|u| u.def == new && u.owner == OWNER).count(), 1);
+
+        let (mut full, _, old, new) = capped_fixture("", false);
+        full.spawn_def(new, OWNER, Vec3::ZERO, HEADING).unwrap();
+        let source = full.spawn_def(old, OWNER, Vec3::ZERO, HEADING).unwrap();
+        full.step(&[use_weapon(source, Target::None)]);
+        assert!(full.units.contains(source));
+        assert_eq!(full.units.iter().filter(|u| u.def == new && u.owner == OWNER).count(), 1);
+
+        let (_, ordinary, _, _) = capped_fixture("", false);
+        let (_, explicit_false, _, _) = capped_fixture("replacementIgnoreFleetCap = 0\n", false);
+        let (_, bypass, _, _) = capped_fixture("replacementIgnoreFleetCap = 1\n", false);
+        assert_eq!(ordinary.hash(), explicit_false.hash());
+        assert_ne!(ordinary.hash(), bypass.hash());
+    }
+
+    #[test]
+    fn multi_result_replacement_rechecks_capacity_after_each_spawn() {
+        let (mut sim, _, old, new) = capped_fixture("replacement1Class0 = replace_result\n", false);
+        let source = sim.spawn_def(old, OWNER, Vec3::ZERO, HEADING).unwrap();
+        sim.step(&[use_weapon(source, Target::None)]);
+        assert_eq!(sim.units.iter().filter(|u| u.def == new).count(), 1);
+    }
+
+    #[test]
+    fn delayed_instant_replacement_rechecks_capacity_when_it_fires() {
+        let odf = "replacementInstantPlayer = 1\nreplacementInstantDelay = 0.1\n";
+        let (mut sim, _, old, new) = capped_fixture(odf, false);
+        let source = sim.spawn_def(old, OWNER, Vec3::ZERO, HEADING).unwrap();
+        sim.spawn_def(new, OWNER, Vec3::ZERO, HEADING).unwrap();
+        for _ in 0..5 { sim.step(&[]); }
+        assert!(sim.units.contains(source));
+        assert_eq!(sim.units.iter().filter(|u| u.def == new).count(), 1);
+
+        let (mut sim, _, old, new) = capped_fixture(&format!("{odf}replacementIgnoreFleetCap = 1\n"), false);
+        let source = sim.spawn_def(old, OWNER, Vec3::ZERO, HEADING).unwrap();
+        sim.spawn_def(new, OWNER, Vec3::ZERO, HEADING).unwrap();
+        for _ in 0..5 { sim.step(&[]); }
+        assert!(!sim.units.contains(source));
+        assert_eq!(sim.units.iter().filter(|u| u.def == new).count(), 2);
     }
 
     #[test]
