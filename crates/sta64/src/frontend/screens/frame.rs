@@ -53,7 +53,7 @@ pub fn add_overlay(app: &mut App, screen: Screen, target: Handle<Image>, frame_s
         .add_systems(Update, announce.in_set(GameSet::Ui));
 }
 
-fn use_installed_preview_fixture(mounted: Option<Res<crate::viewer::Mounted>>, mut data: ResMut<ScreenData>) {
+fn use_installed_preview_fixture(mut commands: Commands, mounted: Option<Res<crate::viewer::Mounted>>, mut data: ResMut<ScreenData>) {
     let (Some(mounted), Ok(stem)) = (mounted, std::env::var("STA64_UI_MAP")) else { return };
     let Some(Ok(bytes)) = mounted.0.read(&format!("bzn/{stem}.bzn")) else { return };
     let Ok(source) = sta_bzn::parse(&bytes) else { return };
@@ -61,6 +61,9 @@ fn use_installed_preview_fixture(mounted: Option<Res<crate::viewer::Mounted>>, m
     map.name = stem;
     data.maps = vec![MapEntry::new(map)];
     data.colours = crate::viewer::TeamColours::load(&mounted.0);
+    let profile = crate::ui::profile::resolve_profile(Some(&mounted.0), Default::default(), &Default::default());
+    commands.insert_resource(profile.theme());
+    commands.insert_resource(profile);
 }
 
 fn announce(roots: Query<&ScreenRoot, Added<ScreenRoot>>) {
