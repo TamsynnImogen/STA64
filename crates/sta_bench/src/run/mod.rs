@@ -727,7 +727,7 @@ pub fn fake_content() -> ContentDb {
     let mut world = UnitDef::new("fx_world", "planet");
     world.model = "fx_world".into();
     world.radius = Fixed::from_int(400);
-    b = b.unit(bulk).unit(world).unit(nav::metreon());
+    b = b.unit(bulk).unit(world).unit(nav::route_hazard());
     b.unit(dread).tech_tree(tree).build().expect("fake content plus a rig is consistent")
 }
 

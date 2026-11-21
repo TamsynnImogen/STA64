@@ -22,34 +22,31 @@ fn sphere(kind: RegionKind, odf: &str, x: i32, z: i32, r: i32) -> Region {
     }
 }
 
-/// `fx_metreon`: stock Armada II's Metreon gas nebula (`mnebula7.odf`):
-/// `pathing_cost = 2000`, damaging and cloak-disabling. Loaded from ODF
-/// text through the content loader, so the planner reads it exactly as it
-/// reads an install's.
-pub(super) fn metreon() -> UnitDef {
-    const ODF: &str = "classLabel = \"nebula_obj\"\nunitName = \"Big Metreon Gas Nebula\"\nnebulaType = 2\n\
-        effectRadius = 400\npathing_cost = 2000\ndisableWeapons = 0\ndisableShields = 0\ndisableSensors = 0\n\
-        disableCrew = 0\ndisableCloak = 1\ndamageValue = 25\nlifeTimer = 0\nhideContents = 0\n";
-    let stems = ["fx_metreon".to_owned()];
+/// An authored hazard nebula with a pathing cost above open space (100).
+/// Loaded through the ODF content path used for an install's nebulae.
+pub(super) fn route_hazard() -> UnitDef {
+    const ODF: &str =
+        "classLabel = \"nebula_obj\"\nunitName = \"Route Hazard\"\npathing_cost = 1700\n";
+    let stems = ["fx_route_hazard".to_owned()];
     let (db, warnings) = sta_content::odf::load_with(
         Profile::default(),
         &Default::default(),
         &stems,
         &mut |_, version| (version == 0).then(|| ODF.to_owned()),
     )
-    .expect("the Metreon ODF loads");
+    .expect("the route hazard ODF loads");
     db.units()
-        .find(|u| u.odf.eq_ignore_ascii_case("fx_metreon"))
-        .unwrap_or_else(|| panic!("no fx_metreon def: {warnings:?}"))
+        .find(|u| u.odf.eq_ignore_ascii_case("fx_route_hazard"))
+        .unwrap_or_else(|| panic!("no fx_route_hazard def: {warnings:?}"))
         .clone()
 }
 
-/// `fx_nebula_cross`: an empty map with one Metreon nebula, a sphere of 400
+/// `fx_nebula_cross`: an empty map with one authored hazard nebula, a sphere of 400
 /// centred on (0, 0, 1500).
 pub(super) fn nebula_map() -> MapDef {
     let mut map = MapDef::empty();
     map.name = "fx_nebula_cross".into();
-    map.regions = vec![sphere(RegionKind::Nebula, "fx_metreon", 0, 1500, 400)];
+    map.regions = vec![sphere(RegionKind::Nebula, "fx_route_hazard", 0, 1500, 400)];
     map
 }
 
