@@ -387,7 +387,8 @@ fn spawn_button(
                 b.label.clone(),
                 (rect.h * 0.22).clamp(18.0, 22.0),
                 theme.text,
-                SpriteTextStyle::default().centered().wrapped(rect.w).stock_label(),
+                // STA64's fallback label (shown only where the sprite is missing), not in the original.
+                SpriteTextStyle::default().centered().wrapped(rect.w).stock_fallback(),
             ),
         )],
     ));
@@ -645,7 +646,7 @@ pub(super) fn refresh(
                         ChildOf(parent),
                         children![(
                             // Where the TTF label sat before: top left, unwrapped.
-                            sprite_text_styled(label, 18.0, theme.text, SpriteTextStyle::default().stock_label()),
+                            sprite_text_styled(label, 18.0, theme.text, SpriteTextStyle::default().stock_fallback()),
                         )],
                     ));
                 }

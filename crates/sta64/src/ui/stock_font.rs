@@ -126,6 +126,61 @@ pub fn glyph_scale(choice: &StockChoice, canvas: Vec2) -> Vec2 {
     canvas / STOCK_SPACE * (STOCK_SPACE.x / choice.tier as f32)
 }
 
+/// Horizontal alignment of a stock text's line box in its rectangle.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HAlign {
+    #[default]
+    Left,
+    Centre,
+}
+
+/// Vertical alignment of a stock text's line box in its rectangle.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VAlign {
+    #[default]
+    Top,
+    Centre,
+    Bottom,
+}
+
+/// How a stock text sits in its layout rectangle (`rect`: width and height in layout units,
+/// as the sheet states them). Per element: unit name and class lines and the numbers beside
+/// the info panel's bars are left and vertically centred; resource readouts are centred both
+/// ways; objectives text is top left. Grade: measured on native frames at two or three
+/// sizes, and read from the executable, static.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct StockPlace {
+    pub h: HAlign,
+    pub v: VAlign,
+    pub rect: Vec2,
+}
+
+/// The offset of a text block (`text`: its width and its height, lines times the font's
+/// frame height times the glyph scale, no leading, in physical px) from the top left of its
+/// rectangle, in physical px at `px` physical px per layout unit. The rectangle's effective
+/// size is its width and height minus one layout unit (measured); a block larger than the
+/// rectangle gets a negative offset and is neither clipped nor wrapped. Not snapped: see
+/// [`snap`].
+pub fn place_offset(place: &StockPlace, text: Vec2, px: f32) -> Vec2 {
+    let room = (place.rect - Vec2::ONE) * px;
+    let x = match place.h {
+        HAlign::Left => 0.0,
+        HAlign::Centre => (room.x - text.x) / 2.0,
+    };
+    let y = match place.v {
+        VAlign::Top => 0.0,
+        VAlign::Centre => (room.y - text.y) / 2.0,
+        VAlign::Bottom => room.y - text.y,
+    };
+    Vec2::new(x, y)
+}
+
+/// A text origin on the whole physical pixel grid, halves rounding up (measured: the
+/// original snaps its text origin to its pixel grid).
+pub fn snap(v: Vec2) -> Vec2 {
+    Vec2::new((v.x + 0.5).floor(), (v.y + 0.5).floor())
+}
+
 /// The HUD the stock text is drawn in, in the HUD's layout units (before the UI scale): set by the stock HUD while it is
 /// shown, absent otherwise (then stock text keeps the plain path).
 #[derive(Resource, Default, Clone, Copy, Debug, PartialEq)]
@@ -239,5 +294,31 @@ mod tests {
         assert_eq!(choose(StockRole::Default, 1440.0, &all).unwrap().target, 18);
         let c = StockCanvas { hud: Vec2::new(1600.0, 1200.0), window: Vec2::new(2752.0, 1152.0), fit: HudFit::Centred };
         assert!((c.width(0.9) - 1440.0).abs() < 1e-2);
+    }
+
+    #[test]
+    fn a_taller_line_box_is_centred_with_a_negative_offset_and_snapped() {
+        // Authored: a 20-unit-high slot, a font of 15-unit frame height at twice the scale.
+        let place = StockPlace { h: HAlign::Left, v: VAlign::Centre, rect: Vec2::new(340.0, 20.0) };
+        let block = Vec2::new(100.0, 30.0);
+        // Height minus one: (19 - 30) / 2.
+        assert_eq!(place_offset(&place, block, 1.0), Vec2::new(0.0, -5.5));
+        assert_eq!(snap(place_offset(&place, block, 1.0)), Vec2::new(0.0, -5.0));
+        // At 1.5 physical px per unit: (28.5 - 45) / 2 with a block of 45 px.
+        assert_eq!(place_offset(&place, Vec2::new(100.0, 45.0), 1.5).y, -8.25);
+        assert_eq!(snap(Vec2::new(2.5, -2.5)), Vec2::new(3.0, -2.0));
+    }
+
+    #[test]
+    fn centred_pens_use_the_width_minus_one() {
+        let place = StockPlace { h: HAlign::Centre, v: VAlign::Centre, rect: Vec2::new(116.0, 26.0) };
+        // A 31-high line in a 26-high slot; a 40-wide run in a 116-wide one: (115 - 40) / 2.
+        let o = place_offset(&place, Vec2::new(40.0, 31.0), 1.0);
+        assert_eq!(o, Vec2::new(37.5, -3.0));
+        // Top-left and bottom alignment.
+        let top = StockPlace { h: HAlign::Left, v: VAlign::Top, rect: Vec2::new(50.0, 20.0) };
+        assert_eq!(place_offset(&top, Vec2::new(10.0, 31.0), 1.0), Vec2::ZERO);
+        let bottom = StockPlace { v: VAlign::Bottom, ..top };
+        assert_eq!(place_offset(&bottom, Vec2::new(10.0, 15.0), 1.0).y, 4.0);
     }
 }

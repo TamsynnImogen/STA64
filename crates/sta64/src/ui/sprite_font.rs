@@ -41,7 +41,7 @@ use sta_vfs::Vfs;
 use crate::viewer::Mounted;
 
 pub use crate::ui::stock_font::GlyphFilter;
-use crate::ui::stock_font::{StockChoice, StockRole, StockTextCanvas};
+use crate::ui::stock_font::{HAlign, StockChoice, StockPlace, StockRole, StockTextCanvas, VAlign, place_offset, snap};
 
 /// Plain text's whole multiple may draw at most this share smaller than asked (15% below).
 /// Where no font and multiple of the mod fits both bounds, plain text is not crisp: it is
@@ -995,6 +995,10 @@ pub struct SpriteTextStyle {
     /// rule ([`crate::ui::stock_font`]) and, in every profile, sampled as the page's declared
     /// material says. `None` keeps the plain crisp path, as every other look does.
     pub stock: Option<StockRole>,
+    /// Where the line box sits in the text's layout rectangle on the stock path
+    /// ([`stock_font::StockPlace`](crate::ui::stock_font::StockPlace)). `None`, or a zero
+    /// rectangle: the plain placement of the node.
+    pub place: Option<StockPlace>,
 }
 
 #[allow(dead_code)]
@@ -1027,6 +1031,18 @@ impl SpriteTextStyle {
     pub fn stock_label(self) -> Self {
         let stock = self.stock.or(Some(StockRole::Default));
         SpriteTextStyle { tint_all: true, stock, ..self.at_least_size() }
+    }
+    /// How the stock HUD draws a label that is STA64's fallback and has no counterpart in the
+    /// original (a command button's text where its sprite is missing, the page buttons): the
+    /// plain path with today's font, size and wrapping, outside the stock font rule.
+    pub fn stock_fallback(self) -> Self {
+        SpriteTextStyle { tint_all: true, ..self.at_least_size() }
+    }
+    /// Place the line box in a rectangle of the stock path (the rectangle's size is set where
+    /// the text is spawned).
+    pub fn placed(mut self, h: HAlign, v: VAlign) -> Self {
+        self.place = Some(StockPlace { h, v, rect: Vec2::ZERO });
+        self
     }
     /// Stock HUD text of `role` (see [`stock`](Self::stock)).
     pub fn stock_role(mut self, role: StockRole) -> Self {
@@ -1389,12 +1405,24 @@ fn resolve_text(
             (f.font.layout_block(&t.text, scale, style.wrap, style.align), 1.0)
         };
         let physical = crisp.is_some() || stock.is_some();
+        // The stock path places the line box in its rectangle (R0 of the placement rule):
+        // absolute, at a whole-pixel offset that may be negative; nothing is clipped.
+        let placed = stock
+            .and(style.place)
+            .filter(|p| p.rect.x > 0.0 && p.rect.y > 0.0)
+            .map(|p| snap(place_offset(&p, Vec2::new(lay.width, lay.height), px)));
         commands.entity(e).insert(Node {
+            position_type: if placed.is_some() { PositionType::Absolute } else { PositionType::Relative },
+            left: placed.map_or(Val::Auto, |o| Val::Px(o.x * inv)),
             width: Val::Px(if physical { lay.width * inv } else { lay.width.ceil() }),
             height: Val::Px(if physical { lay.height * inv } else { lay.height.ceil() }),
             // The taller font of a floored label sits on the TTF's baseline (A2 stock,
             // measured: its ink ends 3 px lower at 18 px without this).
-            top: Val::Px(if stock.is_none() && crisp.is_some() && style.min_size && !style.in_box { -t.size * STOCK_LIFT } else { 0.0 }),
+            top: Val::Px(match placed {
+                Some(o) => o.y * inv,
+                None if stock.is_none() && crisp.is_some() && style.min_size && !style.in_box => -t.size * STOCK_LIFT,
+                None => 0.0,
+            }),
             flex_shrink: 0.0,
             ..default()
         });
@@ -3056,5 +3084,64 @@ mod tests {
                 assert!(got.is_none(), "{label}: {profile:?} keeps the plain path");
             }
         }
+    }
+
+    /// The placed stock text of authored fonts: the line box sits in its rectangle by the rule,
+    /// with a negative offset when it is taller, a snapped origin, no wrap and no clip.
+    #[test]
+    fn placed_stock_text_follows_the_rule_in_its_rectangle() {
+        use crate::ui::hud::stock::layout::HudFit::Centred;
+        let mut images = Assets::<Image>::default();
+        let fonts = authored_family(&mut images);
+        let sq = Vec2::new(1600.0, 1200.0);
+        let mut app = resolve_app(fonts, canvas(sq, sq, Centred));
+        let spawn = |app: &mut App, text: &str, h, v, rect: Vec2| {
+            let mut style = SpriteTextStyle::default().stock_label().placed(h, v);
+            style.place.as_mut().unwrap().rect = rect;
+            app.world_mut().spawn(sprite_text_styled(text, 18.0, Color::WHITE, style)).id()
+        };
+        // The default role draws its 20-high font 1:1 here (a line box of 20) with 5.5-wide
+        // glyphs advancing 6. A 10-high rectangle: (9 - 20) / 2 = -5.5, snapped to -5.
+        let left = spawn(&mut app, "ab", HAlign::Left, VAlign::Centre, Vec2::new(50.0, 10.0));
+        // Centred both ways: x (49 - 12) / 2 = 18.5, snapped to 19.
+        let both = spawn(&mut app, "ab", HAlign::Centre, VAlign::Centre, Vec2::new(50.0, 10.0));
+        // Wider than its rectangle: negative x, not wrapped (one row), not clipped.
+        let wide = spawn(&mut app, "abcd", HAlign::Centre, VAlign::Top, Vec2::new(10.0, 40.0));
+        app.update();
+        let px = |v: Val| if let Val::Px(v) = v { v } else { panic!("px") };
+        let node = |app: &App, e: Entity| app.world().get::<Node>(e).unwrap().clone();
+        let n = node(&app, left);
+        assert_eq!((n.position_type, px(n.left), px(n.top)), (PositionType::Absolute, 0.0, -5.0));
+        assert_eq!(px(n.height), 20.0);
+        let n = node(&app, both);
+        assert_eq!((px(n.left), px(n.top), px(n.width)), (19.0, -5.0, 12.0));
+        let n = node(&app, wide);
+        assert_eq!((px(n.left), px(n.top), px(n.width), px(n.height)), (-7.0, 0.0, 24.0, 20.0), "(9 - 24) / 2 = -7.5 snaps to -7; one line");
+        assert!(node(&app, wide).overflow == Overflow::visible());
+    }
+
+    /// STA64's fallback labels keep the plain path: no role font, no placement, the same
+    /// nodes as the style they had before the stock rule.
+    #[test]
+    fn fallback_labels_take_the_plain_path_like_before() {
+        use crate::ui::hud::stock::layout::HudFit::Centred;
+        let mut images = Assets::<Image>::default();
+        let fonts = authored_family(&mut images);
+        let sq = Vec2::new(1600.0, 1200.0);
+        let mut app = resolve_app(fonts, canvas(sq, sq, Centred));
+        let fallback = SpriteTextStyle::default().centered().wrapped(40.0).stock_fallback();
+        assert_eq!(fallback.stock, None);
+        assert_eq!(fallback.place, None);
+        let before = SpriteTextStyle { tint_all: true, ..SpriteTextStyle::default().centered().wrapped(40.0).at_least_size() };
+        assert_eq!(fallback, before);
+        let a = app.world_mut().spawn(sprite_text_styled("STOP", 18.0, Color::WHITE, fallback)).id();
+        let b = app.world_mut().spawn(sprite_text_styled("STOP", 18.0, Color::WHITE, before)).id();
+        app.update();
+        let kids = |e: Entity| -> Vec<(Handle<Image>, Node)> {
+            app.world().get::<Children>(e).unwrap().iter().map(|k| (app.world().get::<ImageNode>(k).unwrap().image.clone(), app.world().get::<Node>(k).unwrap().clone())).collect()
+        };
+        assert_eq!(kids(a).len(), kids(b).len());
+        assert_eq!(app.world().get::<Node>(a).unwrap().top, app.world().get::<Node>(b).unwrap().top);
+        assert_eq!(app.world().get::<Node>(a).unwrap().position_type, PositionType::Relative);
     }
 }
