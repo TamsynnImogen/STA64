@@ -270,7 +270,7 @@ fn number<T: std::str::FromStr>(value: &str, key: &str) -> Result<T, String> {
 fn encode(value: &str) -> String {
     let mut out = String::new();
     for byte in value.bytes() {
-        if byte == b'%' || byte == b'\n' || byte == b'\r' || !(0x20..0x7f).contains(&byte) {
+        if byte == b'%' || !(0x20..0x7f).contains(&byte) {
             out.push_str(&format!("%{byte:02X}"));
         } else {
             out.push(char::from(byte));

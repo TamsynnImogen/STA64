@@ -153,6 +153,7 @@ pub fn run(cfg: LaunchConfig) {
         // INT-M4: no mode flag, so the front end; a match is built from its setup screen.
         app.insert_resource(frontend::screens::SelectedMod(cfg.active_mod.clone()));
         app.insert_resource(frontend::screens::ActiveMod(cfg.active_mod.clone()));
+        app.insert_resource(frontend::screens::ModLaunchOptions { no_intro: cfg.nointro, no_ai: cfg.noai });
         let rts = sta_content::layered::cfg_h(&vfs, "RTS_CFG.h");
         let mut catalogue = map::Catalogue::default();
         let mut screens = frontend::screens::ScreensConfig::default();
