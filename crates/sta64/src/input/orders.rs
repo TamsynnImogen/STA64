@@ -187,6 +187,19 @@ pub(crate) fn ground_order(g: &Ground, at: GroundAt, out: &mut OrderOut) {
     out.issued.push(OrderIssued { units: picked.iter().map(|p| p.0).collect(), kind: OrderKind::Move });
 }
 
+/// The minimap's right-click gives a plain move, not a warp move: Alt is held (read from the
+/// executable, static); or the queue modifier is held (INTERIM: the original keeps the queue on a
+/// warp move, read from the executable, static, but STA64's warp-move order does not queue yet and
+/// would wipe the unit's queued legs, so the plain queued move is given); or the content is
+/// Armada I's (INTERIM: its rule was not read, and its craft that fly warp themselves are not given
+/// a warp job by this click). The minimap cursor reads the same answer. Alt is the keyboard's Alt,
+/// not a rebindable action.
+pub(crate) fn minimap_plain(keys: &ButtonInput<KeyCode>, bindings: &KeyBindings, content: Option<&sta_content::ContentDb>) -> bool {
+    keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight])
+        || bindings.pressed(Action::AddModifier, keys)
+        || content.is_some_and(|c| c.profile() == sta_content::Profile::Sta1Classic)
+}
+
 /// A right-click on the minimap (`RadarClick`, Secondary, inside the map's rectangle): the same
 /// order a right-click on that ground point would give (no hit-test of a unit's dot: the click
 /// gives the point, never a unit), except that a plain move becomes a warp move unless Alt is
@@ -229,8 +242,7 @@ pub fn radar_order(
         me: link.player(),
         own: &own,
         queue_mod: bindings.pressed(Action::AddModifier, &keys),
-        // Interim: Alt is the keyboard's Alt, not a rebindable action.
-        warp: !keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]),
+        warp: !minimap_plain(&keys, &bindings, content.as_deref().map(|c| &*c.0)),
     };
     let mut acks = Vec::new();
     for at in clicks {
@@ -557,15 +569,102 @@ mod tests {
     }
 
     #[test]
-    fn alt_keeps_the_plain_move_and_the_queue_modifier_queues() {
+    fn alt_or_the_queue_modifier_gives_a_plain_move_and_shift_appends_the_leg() {
         let (mut app, [a, ..]) = radar_app();
         let to = SimVec3::from_f32([2000.0, 0.0, 700.0]);
         let (cmds, _) = radar_click(&mut app, Vec2::new(2000.0, 700.0), SEC, true, &[KeyCode::AltRight]);
         assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: false })]);
+        // INTERIM: the queue modifier gives the plain queued move (a warp move would wipe the
+        // queue in today's sim).
         let (cmds, _) = radar_click(&mut app, Vec2::new(2000.0, 700.0), SEC, true, &[KeyCode::ShiftLeft]);
-        assert_eq!(cmds, [CommandKind::Order(Order::MoveWarp { units: vec![a], to, queue: true })]);
+        assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: true })]);
         let (cmds, _) = radar_click(&mut app, Vec2::new(2000.0, 700.0), SEC, true, &[KeyCode::ShiftLeft, KeyCode::AltLeft]);
         assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: true })]);
+    }
+
+    /// Armada I content: no warp job from the minimap (INTERIM: its rule was not read).
+    #[test]
+    fn armada_one_content_gets_a_plain_move_from_the_minimap() {
+        let db = sta_content::fake::db();
+        let a1 = sta_content::ContentDb::builder().profile(sta_content::Profile::Sta1Classic).features(db.features().clone()).build().unwrap();
+        let (keys, bindings) = (ButtonInput::<KeyCode>::default(), KeyBindings::default());
+        assert!(minimap_plain(&keys, &bindings, Some(&a1)));
+        assert_eq!(minimap_plain(&keys, &bindings, Some(&db)), db.profile() == sta_content::Profile::Sta1Classic);
+        assert!(!minimap_plain(&keys, &bindings, None));
+    }
+
+    /// A shift-queued minimap click appends its leg: the sim is run, and the ship still visits the
+    /// legs it had before, in order, then the new one.
+    #[test]
+    fn a_queued_minimap_click_keeps_the_earlier_legs_in_the_sim() {
+        use sta_content::fake;
+        use sta_core::TeamId;
+        use sta_sim::command::Command;
+        use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
+        use sta_sim::WorldSource;
+        // Two identical sims of authored content: one the order systems read, one stepped.
+        let make = || {
+            let db = std::sync::Arc::new(fake::db());
+            let seat = |id, control| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control };
+            let setup = GameSetup {
+                seed: 1,
+                map: std::sync::Arc::new(fake::two_bases()),
+                content: db.clone(),
+                players: vec![seat(0, Control::Human), seat(1, Control::Idle)],
+                options: GameOptions::default(),
+            };
+            let mut sim = Sim::from_setup(&setup);
+            let id = sim.spawn_def(db.key("fx_cruiser").unwrap(), PlayerId(0), SimVec3::from_f32([5000.0, 0.0, 5000.0]), (Fixed::ZERO, Fixed::ONE)).unwrap();
+            (sim, db, id)
+        };
+        let (read, db, a) = make();
+        let (mut sim, _, same) = make();
+        assert_eq!(a, same);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<OrderIssued>()
+            .add_message::<RadarClick>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<CommandQueue>()
+            .init_resource::<OrderTargets>()
+            .init_resource::<KeyBindings>()
+            .init_resource::<crate::ui::presentation::CineractiveState>()
+            .insert_resource(ContentRes(db))
+            .insert_resource(Selection(vec![a]))
+            .insert_resource(SimLink::new(Box::new(read), Box::new(LocalRouter::new()), PlayerId(0)))
+            .add_systems(Update, radar_order);
+        let at = |x: f32, z: f32| Vec2::new(5000.0 + x, 5000.0 + z);
+        // The first leg by a plain click (Alt), then two queued minimap clicks.
+        let mut cmds = Vec::new();
+        cmds.extend(radar_click(&mut app, at(300.0, 0.0), SEC, true, &[KeyCode::AltLeft]).0);
+        cmds.extend(radar_click(&mut app, at(300.0, 400.0), SEC, true, &[KeyCode::ShiftLeft]).0);
+        cmds.extend(radar_click(&mut app, at(700.0, 400.0), SEC, true, &[KeyCode::ShiftLeft]).0);
+        assert_eq!(cmds.len(), 3);
+        assert!(cmds.iter().all(|c| matches!(c, CommandKind::Order(Order::Move { .. }))), "{cmds:?}");
+        // One tick each, as the player's clicks come.
+        for (i, kind) in cmds.into_iter().enumerate() {
+            WorldSource::step(&mut sim, &[Command { player: PlayerId(0), seq: i as u32, kind }]);
+        }
+        let dist = |sim: &Sim, p: Vec2| {
+            let u = sim.view().unit(a).unwrap().pos.to_f32();
+            Vec2::new(u[0], u[2]).distance(p)
+        };
+        // The first tick at which the ship is within reach of each point.
+        let legs = [at(300.0, 0.0), at(300.0, 400.0), at(700.0, 400.0)];
+        let mut first: [Option<u32>; 3] = [None; 3];
+        for tick in 0..60_000 {
+            WorldSource::step(&mut sim, &[]);
+            for (slot, p) in first.iter_mut().zip(legs) {
+                if slot.is_none() && dist(&sim, p) < 80.0 {
+                    *slot = Some(tick);
+                }
+            }
+            if first[2].is_some() {
+                break;
+            }
+        }
+        let [f, s, l] = first.map(|t| t.expect("every leg is visited"));
+        assert!(f < s && s < l, "visited in order: {f} {s} {l}");
     }
 
     #[test]
@@ -674,11 +773,14 @@ mod tests {
         let map = state.map.unwrap();
         for window in [Vec2::new(1600.0, 1200.0), Vec2::new(1920.0, 1080.0), Vec2::new(3440.0, 1440.0)] {
             for side in [160.0_f32, 300.0, 320.0 * window.y / 1200.0] {
-                // Pixel positions of three world points inside the square, then back.
+                // The square sits at the bottom left of the window; the pointer is a window pixel.
+                let top_left = Vec2::new(10.0, window.y - 10.0 - side);
+                let centre = top_left + Vec2::splat(side / 2.0);
                 for world in [Vec2::new(0.0, 1000.0), Vec2::new(2000.0, 2000.0), Vec2::new(4900.0, 3400.0)] {
-                    let uv = map.to_square(world);
-                    let px = uv * side; // from the square's top left
-                    let normalized = px / side - Vec2::splat(0.5);
+                    let pixel = top_left + map.to_square(world) * side;
+                    // What Bevy's `RelativeCursorPosition` gives: the pointer from the node's
+                    // centre in units of its size.
+                    let normalized = (pixel - centre) / side;
                     let c = click_at(&state, map, normalized, SEC);
                     assert!((c.at - world).length() < 0.01, "{window:?} {side}: {:?} vs {world:?}", c.at);
                     assert!(c.inside_map);

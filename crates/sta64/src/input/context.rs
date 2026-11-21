@@ -48,8 +48,9 @@ pub(crate) struct Situation<'a> {
 pub(crate) struct MinimapPointer {
     /// The map point under it is inside the map's rectangle, not in a strip.
     pub inside_map: bool,
-    /// Alt is held: the click is a plain move, else a warp move.
-    pub alt: bool,
+    /// The click is a plain move, not a warp move (`orders::minimap_plain`: Alt, the queue
+    /// modifier or Armada I content).
+    pub plain: bool,
     /// Some selected own unit would be moved (not a builder busy building).
     pub movers: bool,
     /// The selection is stationary builders: the click is a rally.
@@ -77,7 +78,7 @@ pub(crate) fn decide(s: &Situation) -> &'static str {
     // or, with Alt, a plain move (`c_move`, read from the executable, static); otherwise the
     // panel's arrow (no selection: measured; a strip or armed pick: the click does nothing).
     if let Some(m) = s.minimap {
-        return match (s.own_selected && m.inside_map && s.armed.is_none(), m.rally, m.movers, m.alt) {
+        return match (s.own_selected && m.inside_map && s.armed.is_none(), m.rally, m.movers, m.plain) {
             (true, true, true, _) => "c_rally",
             (true, false, true, false) => "c_warp",
             (true, false, true, true) => "c_move",
@@ -132,6 +133,7 @@ pub fn cursor(
     radar: Query<&bevy::ui::RelativeCursorPosition, With<crate::ui::radar::RadarSquare>>,
     radar_state: Option<Res<crate::ui::radar::RadarState>>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
+    bindings: Option<Res<super::keys::KeyBindings>>,
 ) {
     // Over a cutscene no order is on offer (selection and orders are gated the same way), so the
     // cursor stays the arrow: the selection is kept, inert, and the cursor reads it again afterwards.
@@ -149,7 +151,7 @@ pub fn cursor(
         let at = crate::ui::radar::click_at(s, m, r.normalized?, bevy::picking::pointer::PointerButton::Secondary);
         Some(MinimapPointer {
             inside_map: at.inside_map,
-            alt: keys.as_deref().is_some_and(|k| k.any_pressed([KeyCode::AltLeft, KeyCode::AltRight])),
+            plain: keys.as_deref().zip(bindings.as_deref()).is_some_and(|(k, b)| super::orders::minimap_plain(k, b, content.as_deref().map(|c| &*c.0))),
             movers: !heights.is_empty(),
             rally,
         })
@@ -292,10 +294,10 @@ mod tests {
     /// without a selection, in a strip, with nothing to move and in a cutscene.
     #[test]
     fn decide_over_the_minimap_follows_the_warp_move_the_click_gives() {
-        let pointer = MinimapPointer { inside_map: true, alt: false, movers: true, rally: false };
+        let pointer = MinimapPointer { inside_map: true, plain: false, movers: true, rally: false };
         let on = |p: MinimapPointer| Situation { own_selected: true, over_hud: true, minimap: Some(p), ..Default::default() };
         assert_eq!(decide(&on(pointer)), "c_warp");
-        assert_eq!(decide(&on(MinimapPointer { alt: true, ..pointer })), "c_move");
+        assert_eq!(decide(&on(MinimapPointer { plain: true, ..pointer })), "c_move");
         assert_eq!(decide(&on(MinimapPointer { rally: true, ..pointer })), "c_rally");
         let arrow = crate::ui::cursor::DEFAULT;
         assert_eq!(decide(&on(MinimapPointer { inside_map: false, ..pointer })), arrow, "a strip: the click does nothing");
