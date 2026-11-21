@@ -623,6 +623,8 @@ pub(super) fn refresh(
     if !a1 {
         // The window's art takes the pointer like the other panels (none when the layout declares it off).
         state.solid.extend(layout.panel("cinematic"));
+        // The button group is placed like every other panel; its solid rectangles come from the same rect.
+        state.solid.extend(buttons::solid(&layout, more.0));
     }
     if a1 {
         if rebuild {
@@ -698,10 +700,6 @@ pub(super) fn refresh(
         *r = R::new(left, r.y, (right - left).max(0.0), r.h);
     }
     state.solid.retain(|r| r.w > 0.0);
-    // The button panel is a group anchored at the window's edge: solid where it is, outside the sheet's area too.
-    if !a1 {
-        state.solid.extend(buttons::panel_rect(&layout));
-    }
     state.grid = next;
     state.page = hud.page;
     state.layout = Some(layout);

@@ -18,9 +18,11 @@
 //!   and palette ([`SECOND_ROW`]); idle, toggle, comm, objectives and more always show. INTERIM: what the original draws around the second row is not established: buttons only, no
 //!   invented art. Esc opens the in-game menu whatever is shown.
 //!
-//! The panel is the cfg's `buttonPanelArea` with its `buttonBackgroundPanel` end pieces (read from data),
-//! anchored as one group at the window's right edge on a window wider than the sheet
-//! ([`StockLayout::panel_at_right_edge`]); the buttons' areas are relative to it.
+//! The panel is the cfg's `buttonPanelArea` with its `buttonBackgroundPanel` end pieces (read from data).
+//! It is placed like every other stock panel: at its sheet position inside the clamped, centred HUD area
+//! (ADR 0008 H1/H2, [`StockLayout::panel`]), as one group (group node, end pieces, buttons; the buttons'
+//! areas are relative to it), and its pointer-solid rectangles come from the same placed rectangle
+//! ([`solid`]). A group at the window's edge is a declared anchor (ADR 0008 H5), not built.
 
 use bevy::prelude::*;
 use sta_sim::view::UnitFlags;
@@ -102,10 +104,24 @@ pub(in crate::ui::hud) fn sprite(layout: &StockLayout, k: &PanelKeys) -> String 
     layout.name(k.sprite).unwrap_or(k.default_sprite).to_owned()
 }
 
-/// The panel's rectangle: the cfg's `buttonPanelArea` placed at the right edge, or, when the cfg has
-/// none, the whole sheet (the buttons' areas then count from its corner).
+/// The panel's rectangle: the cfg's `buttonPanelArea` placed in the HUD area like every stock panel, or,
+/// when the cfg has none, nothing (the buttons' areas then count from the window's corner).
 pub(in crate::ui::hud) fn panel_rect(layout: &StockLayout) -> Option<R> {
-    layout.panel_at_right_edge("button")
+    layout.panel("button")
+}
+
+/// The pointer-solid rectangles of the group: the panel's placed rectangle and, while the second row
+/// shows, each shown second-row button's rectangle (they lie below the panel), so a click on a button
+/// never also reaches the world. INTERIM: the original grows one hit rectangle over the row (read from
+/// the executable, static); STA64 covers the buttons' own areas.
+pub(in crate::ui::hud) fn solid(layout: &StockLayout, more: bool) -> Vec<R> {
+    let Some(panel) = panel_rect(layout) else { return Vec::new() };
+    let mut out = vec![panel];
+    if more {
+        let origin = Vec2::new(panel.x, panel.y);
+        out.extend(SECOND_ROW.iter().filter_map(|key| layout.at(origin, key)));
+    }
+    out
 }
 
 /// Spawn the panel group: its background pieces and every button whose area the cfg authors (a zero
