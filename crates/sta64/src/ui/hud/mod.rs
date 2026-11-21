@@ -380,6 +380,7 @@ fn host(
 }
 
 /// Is the window cursor over a HUD panel?
+#[allow(clippy::too_many_arguments)] // Bevy injects these system parameters.
 fn pointer(
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     scale: Res<UiScale>,

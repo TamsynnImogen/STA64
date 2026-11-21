@@ -54,11 +54,11 @@ use bevy::shader::ShaderRef;
 use sta_sim::EntityId;
 use sta_sim::view::Relation;
 
-use super::{ModelBounds, armada2_look};
+use super::{ModelBounds, SelectionPalette, armada2_look};
 use crate::app::GameSet;
 use crate::input::hover::HoveredUnit;
 use crate::render::action_camera::OVERLAY_LAYER;
-use crate::render::units::{HullShare, SelectRadius, TeamColour};
+use crate::render::units::{HullShare, MarkColour, SelectRadius, TeamColour};
 use crate::sim_link::{Selection, SimEntities, SimLink};
 use crate::ui::profile::UiProfile;
 use crate::ui::radar::{Standing, standing};
@@ -392,9 +392,10 @@ fn sync_bubbles(
     art: Res<BubbleArt>,
     ents: Res<SimEntities>,
     link: Res<SimLink>,
+    palette: SelectionPalette,
     mut pulses: ResMut<Pulses>,
     mut mats: ResMut<Assets<BubbleMaterial>>,
-    units: Query<(Option<&ModelBounds>, Option<&SelectRadius>, Option<&TeamColour>, Option<&HullShare>)>,
+    units: Query<(Option<&ModelBounds>, Option<&SelectRadius>, Option<&MarkColour>, Option<&TeamColour>, Option<&HullShare>)>,
     mut existing: Query<(Entity, &Bubble, &MeshMaterial3d<BubbleMaterial>, &mut Mesh3d, &mut Transform)>,
 ) {
     let mut want: BTreeMap<(EntityId, Pass), (Entity, Vec3, Vec3)> = BTreeMap::new(); // root, scale, colour
@@ -406,15 +407,15 @@ fn sync_bubbles(
         pulses.0.retain(|id, _| selection.0.contains(id));
         for id in ids {
             let (Some(&root), Some(unit)) = (ents.0.get(&id), view.unit(id)) else { continue };
-            let Ok((bounds, radius, team, hull)) = units.get(root) else { continue };
+            let Ok((bounds, radius, mark, team, hull)) = units.get(root) else { continue };
             let (selected, hovered) = (selection.0.contains(&id), hover == Some(id));
             let h = hull.map_or(1.0, |s| s.0).clamp(0.0, 1.0);
             let phase = pulses.0.entry(id).or_insert(0.0);
             if selected {
                 *phase = (*phase + phase_rate(h) * dt) % std::f32::consts::TAU;
             }
-            let team = team.map_or(FALLBACK_TEAM, |c| {
-                let c = c.0.to_srgba();
+            let team = palette.colour(Some(unit.owner), mark, team).map_or(FALLBACK_TEAM, |c| {
+                let c = c.to_srgba();
                 Vec3::new(c.red, c.green, c.blue)
             });
             let l = look(selected, hovered, true, relation(view, link.player(), unit.owner), team, pulse(h, *phase));
@@ -688,6 +689,25 @@ mod tests {
                 app.update();
                 assert!(passes(&mut app).is_empty(), "{other:?} keeps its own markers");
             }
+        }
+
+        #[test]
+        fn the_outer_ring_uses_the_map_mark_colour_of_its_owner() {
+            use crate::viewer::{MapTeamColours, TeamColours};
+
+            let (mut app, _) = rig(UiProfile::Armada2);
+            app.insert_resource(TeamColours(vec![
+                ("empty".into(), Color::WHITE),
+                ("white".into(), Color::WHITE),
+                ("red".into(), Color::srgb(1.0, 0.0, 0.0)),
+                ("blue".into(), Color::srgb(0.0, 0.0, 1.0)),
+            ]));
+            app.insert_resource(MapTeamColours(vec![[0, 0], [1, 1], [3, 2]]));
+            app.insert_resource(HoveredUnit(Some(EntityId(1))));
+            app.update();
+            let mut q = app.world_mut().query::<(&Bubble, &MeshMaterial3d<BubbleMaterial>)>();
+            let (_, ring) = q.iter(app.world()).find(|(b, _)| b.pass == Pass::Outer).unwrap();
+            assert_eq!(app.world().resource::<Assets<BubbleMaterial>>().get(&ring.0).unwrap().colour, linear(Vec3::X));
         }
 
         #[test]

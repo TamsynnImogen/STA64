@@ -31,14 +31,15 @@ pub use geometry::{GaugeStyle, ModelBounds};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::transform::helper::TransformHelper;
-use sta_sim::{EntityId, UnitView};
+use sta_sim::{EntityId, PlayerId, UnitView};
 
 use crate::app::GameSet;
 use crate::input::hover::{HoverReadout, HoveredUnit};
 use crate::input::orders::OrderTargets;
-use crate::render::units::{HullShare, SelectRadius, TeamColour, to_bevy};
+use crate::render::units::{HullShare, MarkColour, SelectRadius, TeamColour, to_bevy};
 use crate::sim_link::{ContentRes, Selection, SimEntities, SimLink};
 use crate::ui::profile::UiProfile;
+use crate::viewer::{MapTeamColours, TeamColours, owner_mark_colour};
 
 /// Radius used for units without a [`SelectRadius`].
 const DEFAULT_RADIUS: f32 = 5.0;
@@ -77,6 +78,23 @@ struct ReadoutInputs<'w> {
     readout: Res<'w, HoverReadout>,
     content: Option<Res<'w, ContentRes>>,
     art: Res<'w, readout::BarArt>,
+}
+
+/// A selection outline follows its current owner's mark colour, even on roots placed by a map.
+#[derive(SystemParam)]
+struct SelectionPalette<'w> {
+    teams: Option<Res<'w, TeamColours>>,
+    map: Option<Res<'w, MapTeamColours>>,
+}
+
+impl SelectionPalette<'_> {
+    fn colour(&self, owner: Option<PlayerId>, mark: Option<&MarkColour>, hull: Option<&TeamColour>) -> Option<Color> {
+        owner
+            .filter(|owner| owner.is_player())
+            .and_then(|owner| owner_mark_colour(self.teams.as_deref(), self.map.as_deref(), owner))
+            .or_else(|| mark.map(|mark| mark.0))
+            .or_else(|| hull.map(|hull| hull.0))
+    }
 }
 
 /// The sprite crop of a special-energy fill, so its UV can follow the share.
@@ -170,7 +188,7 @@ fn bar_geometry(radius: f32) -> (f32, f32, f32) {
     (radius * 2.0, 0.4, radius + 3.0)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn sync_overlays(
     mut commands: Commands,
     selection: Res<Selection>,
@@ -178,18 +196,22 @@ fn sync_overlays(
     cine: Option<Res<crate::ui::presentation::CineractiveState>>,
     art: Res<marker::MarkerArt>,
     inputs: ReadoutInputs,
+    palette: SelectionPalette,
     ents: Res<SimEntities>,
     link: Res<SimLink>,
     targets: Res<OrderTargets>,
     assets: Res<OverlayAssets>,
     mut mats: ResMut<Assets<StandardMaterial>>,
-    units: Query<(Option<&SelectRadius>, Option<&TeamColour>, Option<&HullShare>)>,
-    existing: Query<(Entity, &Overlay, Has<marker::Marker>, Has<ReadoutBar>)>,
+    units: Query<(Option<&SelectRadius>, Option<&MarkColour>, Option<&TeamColour>, Option<&HullShare>)>,
+    existing: Query<(Entity, &Overlay, Has<marker::Marker>, Has<ReadoutBar>, Option<&MeshMaterial3d<StandardMaterial>>)>,
 ) {
     let mut want: BTreeMap<(EntityId, OverlayKind), Entity> = BTreeMap::new();
     let ReadoutInputs { profile, readout, content, art: bar_art } = inputs;
     let readout_look = armada2_look(profile.as_deref());
     let cutscene = crate::ui::presentation::cutscene_running(cine);
+    let ring_colour = |id, mark, hull| {
+        palette.colour(link.curr().unit(id).map(|unit| unit.owner), mark, hull).unwrap_or(Color::srgb(0.3, 1.0, 0.4))
+    };
     // The Armada I marker also shows under the hovered unit, selected or not, except while a
     // cineractive runs: hover tracking goes on then and ships sweeping under the resting cursor
     // would flicker markers. Only this overlay is gated; hover for the HUD is unchanged. A
@@ -242,18 +264,32 @@ fn sync_overlays(
         }
     }
     let mut have: BTreeSet<(EntityId, OverlayKind)> = BTreeSet::new();
-    for (e, o, is_marker, is_readout) in &existing {
+    for (e, o, is_marker, is_readout, material) in &existing {
         let is_bar = matches!(o.kind, OverlayKind::HullBar | OverlayKind::ShieldBar | OverlayKind::EnergyBar);
         let stale = (o.kind == OverlayKind::Ring && is_marker != art.art.is_some()) || (is_bar && is_readout != readout_look);
-        if stale || !(want.contains_key(&(o.unit, o.kind)) && have.insert((o.unit, o.kind))) {
+        let key = (o.unit, o.kind);
+        let Some(&root) = want.get(&key).filter(|_| !stale && have.insert(key)) else {
             commands.entity(e).try_despawn();
+            continue;
+        };
+        if o.kind == OverlayKind::Ring
+            && !is_marker
+            && let Some(material) = material
+            && let Ok((_, mark, hull, _)) = units.get(root)
+        {
+            let colour = ring_colour(o.unit, mark, hull);
+            if mats.get(&material.0).is_some_and(|m| m.base_color != colour)
+                && let Some(mut m) = mats.get_mut(&material.0)
+            {
+                m.base_color = colour;
+            }
         }
     }
     for ((id, kind), root) in want {
         if have.contains(&(id, kind)) {
             continue;
         }
-        let Ok((radius, colour, hull)) = units.get(root) else { continue };
+        let Ok((radius, mark, team, hull)) = units.get(root) else { continue };
         let radius = radius.map_or(DEFAULT_RADIUS, |r| r.0);
         let overlay = Overlay { unit: id, kind };
         match kind {
@@ -270,7 +306,7 @@ fn sync_overlays(
                 ));
             }
             OverlayKind::Ring => {
-                let colour = colour.map_or(Color::srgb(0.3, 1.0, 0.4), |c| c.0);
+                let colour = ring_colour(id, mark, team);
                 // Annulus faces +Z; lay it on the ground.
                 commands.spawn((
                     Name::new("selection ring"),
@@ -463,13 +499,12 @@ mod tests {
     use crate::app::configure_sets;
     use crate::render::units::{LocalPlayer, add_view_systems};
     use crate::sim_link::SimLinkPlugin;
-    use crate::viewer::TeamColours;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::time::TimeUpdateStrategy;
     use std::time::Duration;
     use sta_sim::command::LocalRouter;
     use sta_sim::fake::ScriptedSource;
-    use sta_sim::{Fixed, PlayerId, Vec3 as SimVec3};
+    use sta_sim::{Fixed, Vec3 as SimVec3};
 
     fn rig(text: &str) -> App {
         let mut app = App::new();
@@ -795,6 +830,32 @@ mod tests {
         app.world_mut().resource_mut::<OrderTargets>().0.clear();
         app.update();
         assert_eq!(counts(&app).lines, 0);
+    }
+
+    #[test]
+    fn fleet_ops_ring_tracks_the_current_seat_palette_without_root_colours() {
+        const SECOND_SEAT: &str = "{ units: [
+            { id: 1, owner: 1, hull: 100, rails: [{ at: 0, pos: { x: 0, y: 0, z: 0 } }] },
+        ] }";
+        let mut app = rig(SECOND_SEAT);
+        let red = Color::srgb(0.9, 0.1, 0.1);
+        let blue = Color::srgb(0.1, 0.3, 0.9);
+        app.insert_resource(UiProfile::FleetOps);
+        app.insert_resource(TeamColours(vec![("mpcolor01".into(), Color::WHITE), ("mpcolor02".into(), red)]));
+        select(&mut app, &[1]);
+        app.update();
+        app.update();
+        let root = app.world().resource::<SimEntities>().0[&EntityId(1)];
+        app.world_mut().entity_mut(root).remove::<(MarkColour, TeamColour)>();
+        let mut q = app.world_mut().query::<(Entity, &Overlay, &MeshMaterial3d<StandardMaterial>)>();
+        let (ring, _, material) = q.iter(app.world()).find(|(_, o, _)| o.kind == OverlayKind::Ring).unwrap();
+        let material = material.0.clone();
+        assert_eq!(app.world().resource::<Assets<StandardMaterial>>().get(&material).unwrap().base_color, red);
+
+        app.world_mut().resource_mut::<TeamColours>().0[1].1 = blue;
+        app.update();
+        assert_eq!(app.world().get::<MeshMaterial3d<StandardMaterial>>(ring).unwrap().0, material);
+        assert_eq!(app.world().resource::<Assets<StandardMaterial>>().get(&material).unwrap().base_color, blue);
     }
 
     #[test]

@@ -556,6 +556,9 @@ pub struct UnitStatsDef {
     /// `addToPlanner` (Armada II craft and stations): 0 keeps the unit out of
     /// the path planner (stock orbital stations). Read by `sta_sim::nav`.
     pub add_to_planner: Option<bool>,
+    /// `pushBuildItem0..9`: the final-build queue entries in slot order, as class
+    /// stems (gaps and `null` skipped, repeats kept); read by `sta_sim::production`.
+    pub push_build_items: Vec<String>,
     /// `shipIsBuiltByEvolution` (Armada II).
     pub built_by_evolution: Option<bool>,
     /// `shipIsBuiltByShips` (Armada II).

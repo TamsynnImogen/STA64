@@ -171,8 +171,9 @@ fn push_build_defs(db: &ContentDb, units: &Entities, id: EntityId) -> Vec<Conten
     if !finished(yard) || !EntityKind::producer_def(def) {
         return Vec::new();
     }
-    sta_content::lifecycle::push_build_items(&def.raw)
-        .filter_map(|name| db.key(&name).filter(|&key| db.unit(key).is_some()))
+    def.stats.push_build_items
+        .iter()
+        .filter_map(|name| db.key(name).filter(|&key| db.unit(key).is_some()))
         .collect()
 }
 

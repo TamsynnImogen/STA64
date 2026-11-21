@@ -184,8 +184,7 @@ pub fn owner_hull_colour(palette: Option<&TeamColours>, map: Option<&MapTeamColo
 }
 
 /// The colour a seat's marks are drawn in (strategic symbols, map view icons): the map's map entry where a
-/// [`MapTeamColours`] applies, else as [`owner_hull_colour`]. The in-match radar and minimap do not follow it
-/// yet (TODO.md).
+/// [`MapTeamColours`] applies, else as [`owner_hull_colour`].
 pub fn owner_mark_colour(palette: Option<&TeamColours>, map: Option<&MapTeamColours>, owner: PlayerId) -> Option<Color> {
     let palette = palette?;
     map.and_then(|m| m.map(palette, u32::from(owner.0) + 1)).or_else(|| palette.owner_colour(owner))
