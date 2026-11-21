@@ -383,7 +383,7 @@ impl SpriteFont {
     /// mark, as wide as the glyph's advance, as thick as a texel of the font at this scale (at least
     /// one), on the bottom row of the line's cell. A mark on a space the wrap removed, or past the
     /// text, gives none. Measured at one window size (one tooltip frame): the rule is one pixel
-    /// thick on the last row of the 15 px line cell and spans the glyph cell; its thickness at other
+    /// thick on the last row of the line cell and spans the glyph cell; its thickness at other
     /// scales is interim (one texel).
     pub fn underline_rects(&self, text: &str, marks: &[usize], scale: Vec2, round_up: bool, max_width: Option<f32>, align: Align) -> Vec<[f32; 4]> {
         let lines = match max_width {

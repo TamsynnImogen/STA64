@@ -517,7 +517,7 @@ pub(super) fn build_tip_parts(feed: &HudFeed, builder: EntityId, what: ContentKe
             slot(1, "GUI_CP_LATINUM_RES"),
             slot(3, "GUI_CP_BIOMATTER_RES"),
             CostPart { key: "GUI_CP_CREW_RES", fallback: "crew".into(), amount: def.crew.to_f32() },
-            CostPart { key: officers, fallback: "officer(s)".into(), amount: def.build.officers.to_f32() },
+            CostPart { key: officers, fallback: "officers".into() /* STA64's own fallback word */, amount: def.build.officers.to_f32() },
         ],
     })
 }
