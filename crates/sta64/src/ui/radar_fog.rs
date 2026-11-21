@@ -20,7 +20,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::ui::widget::NodeImageMode;
 use sta_vfs::Vfs;
 
-use super::radar::{RadarMap, RadarSquare, RadarState};
+use super::radar::{RadarMap, RadarSquare, RadarState, StockRadar};
 use crate::render::fog::{FogGrid, FogState};
 use crate::viewer::Mounted;
 
@@ -143,18 +143,18 @@ fn load_colours(vfs: Option<Res<Mounted>>, mut colours: ResMut<FogColours>) {
 }
 
 /// Keep the picture current: rebuilt when the sight, the map's box or the colours change.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn paint_fog(
     mut commands: Commands,
     fog: Option<Res<FogState>>,
     state: Res<RadarState>,
     colours: Res<FogColours>,
     images: Option<ResMut<Assets<Image>>>,
-    square: Query<(Entity, Option<&Children>), With<RadarSquare>>,
+    square: Query<(Entity, Option<&Children>, Has<StockRadar>), With<RadarSquare>>,
     mut nodes: Query<&mut ImageNode, With<RadarFog>>,
     mut last: Local<Option<(u32, RadarMap, FogColours)>>,
 ) {
-    let (Some(fog), Some(map), Some(mut images), Ok((sq, kids))) = (fog, state.map, images, square.single()) else { return };
+    let (Some(fog), Some(map), Some(mut images), Ok((sq, kids, stock))) = (fog, state.map, images, square.single()) else { return };
     let key = (fog.updates, map, *colours);
     let existing = kids.and_then(|k| k.iter().find(|e| nodes.contains(*e)));
     if existing.is_some() && *last == Some(key) {
@@ -181,14 +181,15 @@ fn paint_fog(
                 .spawn((
                     RadarFog,
                     fog_image(handle),
-                    // Over the dots, under the camera's outline: the stock order.
-                    ZIndex(1),
                     Node { position_type: PositionType::Absolute, left: Val::Px(0.0), top: Val::Px(0.0), width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
                     bevy::picking::Pickable::IGNORE,
                 ))
                 .id();
-            // First child: under every blip and the camera's outline (the stacking index, not
-            // the child order, puts it over the dots).
+            // The stock look: fog over the dots, under the camera's outline (the stacking index).
+            // The other look keeps its order: the first child, under every blip.
+            if stock {
+                commands.entity(e).insert(ZIndex(1));
+            }
             commands.entity(sq).insert_children(0, &[e]);
         }
     }

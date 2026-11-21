@@ -205,6 +205,8 @@ pub struct RadarState {
     /// The map's own rectangle (x, z) inside the square, when the game setup gave one. Without
     /// it the whole square counts as the map.
     pub bounds: Option<(Vec2, Vec2)>,
+    /// What the minimap reads of each definition, cached (no key is read per unit per frame).
+    pub defs: super::radar_layers::DefCache,
 }
 
 /// The map point the player clicked on the square.
@@ -274,17 +276,19 @@ fn kind(content: Option<&ContentDb>, def: sta_sim::ContentKey) -> Kind {
 }
 
 /// The blips the player's radar shows: what its side sees (`visible_to`), minus
-/// what the filters hide, not what is dying and not what has a `mapIcon` sprite (an icon
-/// replaces its dot), in id order.
-pub fn blips(feed: &RadarFeed, state: &RadarState, map: &RadarMap) -> Vec<Blip> {
+/// what the filters hide, not what is dying and, in the stock look, not what has a `mapIcon`
+/// sprite (an icon replaces its dot), in id order.
+pub fn blips(feed: &RadarFeed, state: &RadarState, map: &RadarMap, stock: bool) -> Vec<Blip> {
     let db = feed.content.as_deref();
     feed.view
         .visible_to(feed.player)
         .into_iter()
         .filter(|u| !u.flags.contains(UnitFlags::DYING))
         .filter_map(|u| {
-            let keys = db.and_then(|c| c.unit(u.def)).map(|d| super::radar_layers::MapKeys::of(&d.raw)).unwrap_or_default();
-            if keys.icon.is_some() {
+            let info = feed.content.as_ref().and_then(|c| state.defs.get(c, u.def));
+            // The stock look draws these objects as icons instead (`radar_layers`); the other
+            // look keeps its dot for every object.
+            if stock && info.as_ref().is_some_and(|i| i.keys.icon.is_some()) {
                 return None;
             }
             let kind = kind(db, u.def);
@@ -300,7 +304,7 @@ pub fn blips(feed: &RadarFeed, state: &RadarState, map: &RadarMap) -> Vec<Blip> 
                 standing: st,
                 at: map.to_square(Vec2::new(u.pos.x.to_f32(), u.pos.z.to_f32())),
                 selected: feed.selected.contains(&u.id),
-                texels: keys.size.unwrap_or(match kind {
+                texels: info.as_ref().and_then(|i| i.keys.size).unwrap_or(match kind {
                     Kind::Ship => super::radar_layers::SHIP_TEXELS,
                     Kind::Station => super::radar_layers::STATION_TEXELS,
                     Kind::Body => super::radar_layers::OTHER_TEXELS,
@@ -576,7 +580,7 @@ pub fn refresh(
         state.map = Some(state.map.map_or(fit, |m| m.grow(fit)));
     }
     let Some(map) = state.map else { return };
-    let list = blips(&feed, &state, &map);
+    let list = blips(&feed, &state, &map, stock);
     let live: Vec<EntityId> = list.iter().map(|b| b.id).collect();
     ents.0.retain(|id, e| {
         let keep = live.contains(id);
@@ -937,9 +941,9 @@ mod tests {
         let map = RadarMap::fit(&feed.view).unwrap();
         // The sim's visibility shows: of the rival's three units only the
         // raider near the flagship is seen.
-        let seen = blips(&fogged, &state, &map);
+        let seen = blips(&fogged, &state, &map, false);
         assert_eq!((seen.len(), seen.iter().filter(|b| b.standing == Standing::Enemy).count()), (6, 1), "{seen:?}");
-        let b = blips(&feed, &state, &map);
+        let b = blips(&feed, &state, &map, false);
         assert_eq!(b.len(), 8, "{b:?}");
         assert_eq!(ships(&b).len(), 5);
         assert_eq!(b.iter().filter(|b| b.kind == Kind::Station).count(), 2);
@@ -955,7 +959,7 @@ mod tests {
         assert!(rival.y < flag.y && rival.x > flag.x, "the rival base is north-east of the flagship");
         // The recorded flagship moves; its blip follows it.
         let later = omniscient(feed_at(&mut log, &db, 80));
-        let b2 = blips(&later, &state, &map);
+        let b2 = blips(&later, &state, &map, false);
         let p1 = at(&b2, flagship);
         assert!(p1.x > flag.x && p1.y < flag.y, "{flag} -> {p1}");
     }
@@ -966,14 +970,14 @@ mod tests {
         let feed = omniscient(feed_at(&mut log, &db, 0));
         let map = RadarMap::fit(&feed.view).unwrap();
         let mut state = RadarState { ships: Filter::Enemies, stations: Filter::Allies, ..default() };
-        let b = blips(&feed, &state, &map);
+        let b = blips(&feed, &state, &map, false);
         assert!(ships(&b).iter().all(|b| b.standing == Standing::Enemy) && ships(&b).len() == 2);
         let stations: Vec<_> = b.iter().filter(|b| b.kind == Kind::Station).collect();
         assert!(stations.len() == 1 && stations[0].standing == Standing::Own);
         // Bodies ignore the filters; nothing else is neutral here.
         state.ships = Filter::Neutral;
         state.stations = Filter::Neutral;
-        let b = blips(&feed, &state, &map);
+        let b = blips(&feed, &state, &map, false);
         assert_eq!(b.len(), 1);
         assert_eq!(b[0].kind, Kind::Body);
         // Clicking cycles as stock does.
@@ -992,7 +996,7 @@ mod tests {
         view.units[0].flags = view.units[0].flags | UnitFlags::DYING;
         feed.view = Arc::new(view);
         let map = RadarMap::fit(&feed.view).unwrap();
-        assert_eq!(blips(&feed, &RadarState::default(), &map).len(), 7);
+        assert_eq!(blips(&feed, &RadarState::default(), &map, false).len(), 7);
 
         let small = RadarMap { min: Vec2::new(0.0, 0.0), size: 1000.0 };
         let far = RadarMap { min: Vec2::new(2000.0, -500.0), size: 1000.0 };
@@ -1312,7 +1316,7 @@ minimapDisplayArea = 16 19 320 320
             app.world_mut().resource_mut::<RadarState>().map_fixed = true;
             let mut feed = omniscient(feed_at(&mut log, &db, 0));
             feed.selected = vec![flagship];
-            let list = blips(&feed, app.world().resource::<RadarState>(), &map);
+            let list = blips(&feed, app.world().resource::<RadarState>(), &map, stock);
             app.world_mut().resource_mut::<RadarFeed>().clone_from(&feed);
             app.update();
             assert_eq!(count::<StockRadar>(&mut app), usize::from(stock));

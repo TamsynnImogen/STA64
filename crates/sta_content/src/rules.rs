@@ -5,7 +5,7 @@
 //! [`TransporterRules`] (SIM-46 P0), which the sim does not read yet.
 
 use crate::digest::{Canon, DigestEntry, quoted};
-use crate::{RaceBoarding, RaceRepair, Races, SeatRaceRule, Warning};
+use crate::{RaceBoarding, RaceRepair, Races, SeatRaceRule, UnitDef, Warning};
 use sta_assets::cfg_h::CfgH;
 use sta_core::Fixed;
 
@@ -161,6 +161,11 @@ impl ShotCfg {
 /// [`TYPED_CFG_KEYS`] (D9, D10: peers that differ only in how the minimap looks play together).
 /// `None`: the header does not set the key, and no field is drawn for that class (the engine's
 /// own default for an absent key was not read; INTERIM).
+///
+/// The whole rule (which classes have a field, and its radius) lives in one place,
+/// [`Rules::warp_suppression_radius`]. The first sim reader of it (the "no warp inside the field"
+/// rule, issue #1012) moves both keys into [`TYPED_CFG_KEYS`] and the digest (D10), so the minimap
+/// and the sim read one definition.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FieldCfg {
     /// `cfgPLANET_DEWARP_RADIUS_MULTIPLIER`.
@@ -888,6 +893,23 @@ impl Rules {
         self.fields
     }
 
+    /// The radius of the warp-suppression field of a unit of this definition, world units: its
+    /// bounding radius (`UnitDef::radius`) times the class's multiplier; `None` for a class with no
+    /// field, an unset multiplier or an unread radius.
+    ///
+    /// Grades. Planets (`classLabel` `planet`): read from the executable, static; the multiplier
+    /// key is read from data. Black holes (`blackhole_obj`): INTERIM, inferred from the key's name,
+    /// the rule itself was not read in the executable. Armada I has the same data keys; its
+    /// executable was not read.
+    pub fn warp_suppression_radius(&self, def: &UnitDef) -> Option<Fixed> {
+        let multiplier = match def.raw.class_label()?.to_ascii_lowercase().as_str() {
+            "planet" => self.fields.planet_dewarp_radius_multiplier,
+            "blackhole_obj" => self.fields.black_hole_dewarp_radius_multiplier,
+            _ => None,
+        }?;
+        (def.radius > Fixed::ZERO).then(|| def.radius * multiplier)
+    }
+
     /// Armada I's header-level start, for a race that authors none.
     pub fn legacy_start(&self) -> LegacyStart {
         self.legacy_start
@@ -1088,6 +1110,22 @@ mod field_cfg_tests {
         assert_eq!((c, w), (FieldCfg::default(), 2));
         let (rules, _) = Rules::from_header("int cfgPLANET_DEWARP_RADIUS_MULTIPLIER = 3;\n");
         assert_eq!(rules.fields().planet_dewarp_radius_multiplier, Some(Fixed::from_int(3)));
+    }
+
+    #[test]
+    fn the_field_radius_is_the_bounding_radius_times_the_class_multiplier() {
+        let (rules, _) = Rules::from_header("int cfgPLANET_DEWARP_RADIUS_MULTIPLIER = 5;\nint cfgBLACKHOLE_DEWARP_RADIUS_MULTIPLIER = 100;\n");
+        let def = |class: &str, radius: i32| {
+            let mut d = UnitDef::new("t", class);
+            d.raw = std::sync::Arc::new(sta_odf::resolve("t", &mut |_| Some(format!("classLabel = \"{class}\"\n"))).unwrap());
+            d.radius = Fixed::from_int(radius);
+            d
+        };
+        assert_eq!(rules.warp_suppression_radius(&def("planet", 260)), Some(Fixed::from_int(1300)));
+        assert_eq!(rules.warp_suppression_radius(&def("blackhole_obj", 10)), Some(Fixed::from_int(1000)));
+        assert_eq!(rules.warp_suppression_radius(&def("craft", 10)), None);
+        assert_eq!(rules.warp_suppression_radius(&def("planet", 0)), None, "an unread radius");
+        assert_eq!(Rules::default().warp_suppression_radius(&def("planet", 260)), None, "an unset key");
     }
 
     #[test]
