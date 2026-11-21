@@ -491,6 +491,10 @@ pub struct EnvelopeReader {
     buf: Vec<u8>,
     /// When the oldest byte of the envelope in progress arrived.
     partial_since: Option<Instant>,
+    /// Reads that ended in a timeout, and reads that failed with the
+    /// Windows pending-I/O error that counts as one (diagnostics only).
+    timeouts: u64,
+    spurious: u64,
 }
 
 const CHUNK: usize = 4096;
@@ -508,6 +512,12 @@ impl EnvelopeReader {
     /// Bytes held; bounded by `MAX_ENVELOPE_BYTES + 4 + CHUNK`.
     pub fn buffered(&self) -> usize {
         self.buf.len()
+    }
+
+    /// Reads that timed out so far, and reads that failed with the spurious
+    /// pending-I/O error (997 on Windows) so far.
+    pub fn read_timeouts(&self) -> (u64, u64) {
+        (self.timeouts, self.spurious)
     }
 
     fn take_complete(&mut self) -> Result<Option<Vec<u8>>, ReadError> {
@@ -562,6 +572,7 @@ impl EnvelopeReader {
                 }
             }
             Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                self.timeouts += 1;
                 Ok(Polled::Idle)
             }
             Err(e) if e.kind() == ErrorKind::Interrupted => Ok(Polled::Idle),
@@ -574,6 +585,7 @@ impl EnvelopeReader {
             // this way at once, every time, from spinning its thread until
             // the caller's wall-clock deadline.
             Err(e) if spurious_pending(&e) => {
+                self.spurious += 1;
                 std::thread::sleep(std::time::Duration::from_millis(5));
                 Ok(Polled::Idle)
             }

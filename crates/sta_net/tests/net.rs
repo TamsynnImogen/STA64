@@ -22,8 +22,8 @@ use sta_net::proto::{
 };
 use sta_net::transport::wire::{ClientMsg, RoomCode, ServerMsg, MAX_ENVELOPE_BYTES};
 use sta_net::transport::{
-    ClientOptions, CloseReason, ConnectError, NetControl, NetTransport, RefuseReason, Relay,
-    RelayConfig,
+    ClientOptions, CloseCause, CloseLogHandle, CloseReason, CloseRecord, ConnectError, Misuse,
+    NetControl, NetTransport, RefuseReason, Relay, RelayConfig, CLOSE_LOG,
 };
 use sta_sim::command::{Command, CommandKind, Edit, Order};
 use sta_sim::setup::GameOptions;
@@ -272,6 +272,8 @@ struct Game {
     last_ran: Vec<Instant>,
     /// Proxies whose byte counters the stall message reports: (label, read, written).
     watched: Vec<(String, Proxy)>,
+    /// The relay's close records, printed by the stall report.
+    relay_closes: Option<CloseLogHandle>,
 }
 
 /// `proxies[i]` (if any) is the address peer `i` uses instead of the relay's.
@@ -310,6 +312,7 @@ fn game(relay: SocketAddr, st: &Start, proxies: &[Option<SocketAddr>]) -> Game {
         ticks_run: vec![0; n],
         last_ran: vec![Instant::now(); n],
         watched: Vec::new(),
+        relay_closes: None,
     }
 }
 
@@ -375,6 +378,11 @@ impl Game {
         });
     }
 
+    /// Has the stall message report why `relay` closed connections.
+    fn watch_relay(&mut self, relay: &Relay) {
+        self.relay_closes = Some(relay.close_log());
+    }
+
     /// Has the stall message report `proxy`'s forwarded byte counters.
     fn watch(&mut self, label: &str, proxy: &Proxy) {
         self.watched.push((label.to_owned(), proxy.clone()));
@@ -411,6 +419,13 @@ impl Game {
             ));
             for end in proxy.ends.lock().map(|e| e.clone()).unwrap_or_default() {
                 out.push_str(&format!("  {end}\n"));
+            }
+        }
+        if let Some(log) = &self.relay_closes {
+            let closes = log.snapshot();
+            out.push_str(&format!("relay: {} connections ended\n", closes.len()));
+            for c in closes {
+                out.push_str(&format!("  {c}\n"));
             }
         }
         out
@@ -530,6 +545,7 @@ fn injected_latency_stalls_but_never_diverges() {
         &start(3, 3, 2),
         &[None, Some(p1.addr), Some(p2.addr)],
     );
+    g.watch_relay(&r);
     g.watch("peer 1 (60 ms)", &p1);
     g.watch("peer 2 (25 ms)", &p2);
     g.spawn_forces(2);
@@ -1460,4 +1476,179 @@ fn frame_size_constants_agree_with_the_envelope() {
     let _ = Action::Pause;
     let _ = Fixed::ONE;
     let _ = Duration::ZERO;
+}
+
+// ---------------------------------------------------------------------------
+// Why the relay closed a connection
+// ---------------------------------------------------------------------------
+
+/// The newest close record that matches, once the relay has made one (the
+/// connection's thread records after the peer already saw the close).
+fn close_where(r: &Relay, what: &str, pred: impl Fn(&CloseRecord) -> bool) -> CloseRecord {
+    let mut found = None;
+    wait_until(SHORT, what, || {
+        found = r.closes().into_iter().rev().find(|c| pred(c));
+        found.is_some()
+    });
+    found.unwrap()
+}
+
+#[test]
+fn a_zero_or_oversized_length_prefix_is_recorded_with_its_value() {
+    let r = relay();
+    let mut s = raw(r.local_addr());
+    s.write_all(&0u32.to_le_bytes()).unwrap();
+    let c = close_where(&r, "the zero length", |c| c.cause == CloseCause::BadLength(0));
+    assert_eq!(c.seat, None);
+    assert_eq!(c.unparsed, 4);
+    let big = MAX_ENVELOPE_BYTES + 1;
+    let mut s = raw(r.local_addr());
+    s.write_all(&(big as u32).to_le_bytes()).unwrap();
+    close_where(&r, "the oversized length", |c| c.cause == CloseCause::BadLength(big));
+}
+
+#[test]
+fn an_envelope_that_does_not_decode_is_recorded_with_the_decoders_text() {
+    let r = relay();
+    let mut s = raw(r.local_addr());
+    s.write_all(&envelope(&[0xEE, 1, 2, 3])).unwrap();
+    let c = close_where(&r, "the decode failure", |c| {
+        matches!(c.cause, CloseCause::DecodeFailed(_))
+    });
+    let CloseCause::DecodeFailed(text) = &c.cause else { unreachable!() };
+    assert!(text.contains("kind"), "{text}");
+    // A bad frame inside a data envelope, from a seated client.
+    let (_host, code) = open_room(r.local_addr());
+    let mut s = raw_join(r.local_addr(), code);
+    s.write_all(&envelope(&[3, 0xFF])).unwrap();
+    let c = close_where(&r, "the bad frame", |c| {
+        c.seat == Some(1) && matches!(c.cause, CloseCause::DecodeFailed(_))
+    });
+    assert_eq!(c.unparsed, 0);
+}
+
+#[test]
+fn a_client_that_closes_is_recorded_clean_or_with_its_half_envelope() {
+    let r = relay();
+    let (_host, code) = open_room(r.local_addr());
+    drop(raw_join(r.local_addr(), code));
+    let c = close_where(&r, "the clean close", |c| c.seat == Some(1));
+    assert_eq!(c.cause, CloseCause::ClientClosed);
+    assert_eq!(c.unparsed, 0);
+    // Two bytes of a length prefix, then gone.
+    let mut s = raw_join(r.local_addr(), code);
+    s.write_all(&[9, 0]).unwrap();
+    // Let a read see them before the close.
+    thread::sleep(Duration::from_millis(150));
+    drop(s);
+    let c = close_where(&r, "the close with unparsed bytes", |c| c.unparsed == 2);
+    assert_eq!(c.cause, CloseCause::ClientClosed);
+    assert!(c.read_timeouts >= 1, "a connection idle for 150 ms saw no read timeout");
+    assert_eq!(c.spurious_pending, 0);
+}
+
+#[test]
+fn protocol_misuse_is_recorded_by_kind() {
+    let r = relay();
+    // Not a create or join first.
+    let mut s = raw(r.local_addr());
+    s.write_all(&envelope(&[4])).unwrap();
+    close_where(&r, "a keepalive first", |c| {
+        c.cause == CloseCause::Misuse(Misuse::NotOpenOrJoin)
+    });
+    // Create twice.
+    let mut s = raw(r.local_addr());
+    let create = ClientMsg::Create { password: vec![] }.encode().unwrap();
+    s.write_all(&create).unwrap();
+    assert!(matches!(read_server(&mut s, SHORT), Some(ServerMsg::Created { .. })));
+    s.write_all(&create).unwrap();
+    close_where(&r, "a second create", |c| {
+        c.cause == CloseCause::Misuse(Misuse::RepeatedOpenOrJoin) && c.seat == Some(0)
+    });
+    // A non-host's kick.
+    let (_host, code) = open_room(r.local_addr());
+    let mut s = raw_join(r.local_addr(), code);
+    s.write_all(&ClientMsg::Kick(2).encode().unwrap()).unwrap();
+    let c = close_where(&r, "a non-host kick", |c| c.cause == CloseCause::Misuse(Misuse::HostOnly));
+    assert_eq!(c.seat, Some(1));
+}
+
+#[test]
+fn leaving_a_kick_and_a_refusal_are_recorded() {
+    let r = relay();
+    let (host, code) = open_room(r.local_addr());
+    let mut a = raw_join(r.local_addr(), code);
+    a.write_all(&ClientMsg::Leave.encode().unwrap()).unwrap();
+    close_where(&r, "a leave", |c| c.cause == CloseCause::ClientLeft && c.seat == Some(1));
+    let b = raw_join(r.local_addr(), code);
+    host.control().kick(PlayerId(1)).unwrap();
+    let c = close_where(&r, "a kick", |c| c.cause == CloseCause::Kicked);
+    assert_eq!(c.seat, Some(1));
+    drop(b);
+    // A join to a room that does not exist.
+    let mut s = raw(r.local_addr());
+    let m = ClientMsg::Join {
+        code: RoomCode::random().unwrap(),
+        reclaim: None,
+        password: vec![],
+    };
+    s.write_all(&m.encode().unwrap()).unwrap();
+    close_where(&r, "a refusal", |c| c.cause == CloseCause::Refused(RefuseReason::NoRoom));
+}
+
+#[test]
+fn the_deadlines_are_recorded() {
+    let r = relay_with(fast_cfg());
+    let _silent = raw(r.local_addr());
+    close_where(&r, "the handshake deadline", |c| c.cause == CloseCause::HandshakeTimeout);
+    let (_host, code) = open_room_with(r.local_addr(), &quick_opts());
+    let mut s = raw_join(r.local_addr(), code);
+    s.write_all(&[9, 0]).unwrap();
+    let c = close_where(&r, "the half-sent envelope deadline", |c| {
+        c.cause == CloseCause::FrameTimeout
+    });
+    assert_eq!(c.unparsed, 2);
+    assert_eq!(c.seat, Some(1));
+}
+
+#[test]
+fn shutting_down_is_recorded() {
+    let mut r = relay();
+    let log = r.close_log();
+    let (_host, _) = open_room(r.local_addr());
+    r.shutdown();
+    wait_until(SHORT, "the shutdown record", || {
+        log.snapshot().iter().any(|c| c.cause == CloseCause::RelayShutdown)
+    });
+}
+
+#[test]
+fn the_close_records_can_be_read_while_connections_come_and_go() {
+    let r = relay();
+    let log = r.close_log();
+    let stop = Arc::new(AtomicBool::new(false));
+    let reader = {
+        let stop = stop.clone();
+        thread::spawn(move || {
+            let mut most = 0;
+            while !stop.load(Ordering::SeqCst) {
+                most = most.max(log.snapshot().len());
+            }
+            most
+        })
+    };
+    let addr = r.local_addr();
+    for _ in 0..(CLOSE_LOG / 2) {
+        drop(raw(addr));
+    }
+    wait_until(SHORT, "the records", || r.closes().len() == CLOSE_LOG / 2);
+    stop.store(true, Ordering::SeqCst);
+    assert!(reader.join().unwrap() <= CLOSE_LOG);
+    // Never more than the bound, however many connections ended.
+    for _ in 0..CLOSE_LOG {
+        drop(raw(addr));
+    }
+    wait_until(SHORT, "the log to fill", || r.closes().len() == CLOSE_LOG);
+    wait_until(SHORT, "the connections to be released", || r.connections() == 0);
+    assert_eq!(r.closes().len(), CLOSE_LOG);
 }
