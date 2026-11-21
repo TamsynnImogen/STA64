@@ -22,10 +22,12 @@ use std::collections::{BTreeMap, BTreeSet};
 mod geometry;
 pub mod marker;
 pub mod readout;
+pub use readout::armada2_look;
 #[cfg(test)]
 mod gpu;
 pub use geometry::{GaugeStyle, ModelBounds};
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::transform::helper::TransformHelper;
 use sta_sim::{EntityId, UnitView};
@@ -67,6 +69,19 @@ pub struct BarFill {
 #[derive(Component)]
 struct Billboard;
 
+/// What the Armada II hover readout needs in [`sync_overlays`], in one parameter.
+#[derive(SystemParam)]
+struct ReadoutInputs<'w> {
+    profile: Option<Res<'w, UiProfile>>,
+    readout: Res<'w, HoverReadout>,
+    content: Option<Res<'w, ContentRes>>,
+    art: Res<'w, readout::BarArt>,
+}
+
+/// The sprite crop of a special-energy fill, so its UV can follow the share.
+#[derive(Component)]
+struct EnergyCrop(readout::RowArt);
+
 /// A bar of the Armada II hover readout: additive, its colour follows the readout fade and its share.
 #[derive(Component)]
 struct ReadoutBar;
@@ -100,11 +115,12 @@ impl Plugin for OverlaysPlugin {
             .init_resource::<OrderTargets>()
             .init_resource::<OverlayCounts>()
             .init_resource::<HoverReadout>()
+            .init_resource::<readout::BarArt>()
             .init_resource::<marker::MarkerArt>()
             .add_systems(Startup, make_assets.run_if(resource_exists::<Assets<Mesh>>).run_if(resource_exists::<Assets<StandardMaterial>>))
             .add_systems(
                 Update,
-                (crate::input::hover::tick_readout, marker::load_art, sync_overlays, marker::orient, update_bars, update_lines, billboard.after(crate::viewer::orbit_camera), count)
+                (crate::input::hover::tick_readout, marker::load_art, readout::load_art, sync_overlays, marker::orient, update_bars, update_lines, billboard.after(crate::viewer::orbit_camera), count)
                     .chain()
                     .in_set(GameSet::Render)
                     .distributive_run_if(resource_exists::<SimLink>)
@@ -159,9 +175,7 @@ fn sync_overlays(
     hovered: Option<Res<HoveredUnit>>,
     cine: Option<Res<crate::ui::presentation::CineractiveState>>,
     art: Res<marker::MarkerArt>,
-    profile: Option<Res<UiProfile>>,
-    readout: Res<HoverReadout>,
-    content: Option<Res<ContentRes>>,
+    inputs: ReadoutInputs,
     ents: Res<SimEntities>,
     link: Res<SimLink>,
     targets: Res<OrderTargets>,
@@ -171,13 +185,15 @@ fn sync_overlays(
     existing: Query<(Entity, &Overlay, Has<marker::Marker>, Has<ReadoutBar>)>,
 ) {
     let mut want: BTreeMap<(EntityId, OverlayKind), Entity> = BTreeMap::new();
-    let readout_look = readout::wanted(profile.as_deref());
+    let ReadoutInputs { profile, readout, content, art: bar_art } = inputs;
+    let readout_look = armada2_look(profile.as_deref());
+    let cutscene = crate::ui::presentation::cutscene_running(cine);
     // The Armada I marker also shows under the hovered unit, selected or not, except while a
     // cineractive runs: hover tracking goes on then and ships sweeping under the resting cursor
     // would flicker markers. Only this overlay is gated; hover for the HUD is unchanged. A
     // selection kept through the cutscene keeps its marker.
     if art.art.is_some()
-        && !crate::ui::presentation::cutscene_running(cine)
+        && !cutscene
         && let Some(id) = hovered.as_ref().and_then(|h| h.0)
         && let Some(&root) = ents.0.get(&id)
     {
@@ -201,7 +217,8 @@ fn sync_overlays(
     }
     // Armada II: bars are a hover readout, not a permanent overlay (see [`readout`]). Selection alone
     // shows none; the selection ring above is unchanged.
-    if readout_look && readout.bars_up() {
+    // Interim: none while a cineractive runs (not established for the original).
+    if readout_look && !cutscene && readout.bars_up() {
         let candidates: BTreeSet<EntityId> = selection.0.iter().copied().chain(readout.unit).collect();
         for id in candidates {
             let (Some(&root), Some(u)) = (ents.0.get(&id), link.curr().unit(id)) else { continue };
@@ -262,14 +279,23 @@ fn sync_overlays(
             }
             OverlayKind::HullBar | OverlayKind::ShieldBar | OverlayKind::EnergyBar if readout_look => {
                 // Placeholder geometry and colour: the billboard and `update_bars` set both each frame.
+                let row = match kind {
+                    OverlayKind::ShieldBar => 0,
+                    OverlayKind::HullBar => 1,
+                    _ => 2,
+                };
+                let art = bar_art.rows[row].as_ref();
                 let fill = commands
                     .spawn((
                         BarFill { share: 1.0 },
                         Mesh3d(assets.quad.clone()),
-                        MeshMaterial3d(mats.add(additive(Color::BLACK))),
+                        MeshMaterial3d(mats.add(readout::fill_material(art))),
                         Transform::from_xyz(0.0, 0.0, 0.01),
                     ))
                     .id();
+                if kind == OverlayKind::EnergyBar && let Some(a) = art {
+                    commands.entity(fill).insert(EnergyCrop(a.clone()));
+                }
                 let bar = commands.spawn((Name::new("readout bar"), overlay, Billboard, ReadoutBar, ChildOf(root), Transform::default(), Visibility::Hidden)).id();
                 commands.spawn((ChildOf(bar), Mesh3d(assets.quad.clone()), MeshMaterial3d(assets.readout_back.clone()), Transform::default()));
                 commands.entity(fill).insert(ChildOf(bar));
@@ -305,7 +331,7 @@ fn update_bars(
     hulls: Query<&HullShare>,
     ents: Res<SimEntities>,
     bars: Query<(&Overlay, &Children, Has<ReadoutBar>)>,
-    mut fills: Query<(&mut BarFill, &mut Transform, &MeshMaterial3d<StandardMaterial>)>,
+    mut fills: Query<(&mut BarFill, &mut Transform, &MeshMaterial3d<StandardMaterial>, Option<&EnergyCrop>)>,
     mut mats: ResMut<Assets<StandardMaterial>>,
 ) {
     for (o, kids, is_readout) in &bars {
@@ -323,7 +349,7 @@ fn update_bars(
             _ => readout::energy_colour(f),
         };
         for k in kids.iter() {
-            if let Ok((mut fill, mut tf, material)) = fills.get_mut(k) {
+            if let Ok((mut fill, mut tf, material, crop)) = fills.get_mut(k) {
                 fill.share = share;
                 tf.translation.x = -(1.0 - share) * 0.5;
                 tf.scale = Vec3::new(share, 1.0, 1.0);
@@ -331,6 +357,12 @@ fn update_bars(
                     let c = Color::srgb(colour[0], colour[1], colour[2]);
                     if m.base_color != c {
                         m.base_color = c;
+                    }
+                    if let Some(crop) = crop {
+                        let uv = readout::energy_uv(&crop.0, share);
+                        if m.uv_transform != uv {
+                            m.uv_transform = uv;
+                        }
                     }
                 }
             }
@@ -540,6 +572,25 @@ mod tests {
         assert!(bar_units(&mut app).is_empty());
         let mut q = app.world_mut().query::<&Overlay>();
         assert_eq!(q.iter(app.world()).filter(|o| o.kind == OverlayKind::Ring).count(), 1, "the selection marker is untouched");
+    }
+
+    #[test]
+    fn no_readout_bars_during_a_cineractive_and_none_for_a_neutral_hover() {
+        let mut app = rig(MIXED);
+        app.update();
+        app.world_mut().insert_resource(UiProfile::Armada2);
+        select(&mut app, &[1]);
+        hover(&mut app, Some((2, 0)), 1.0);
+        app.world_mut().insert_resource(crate::ui::presentation::CineractiveState { on: true, skippable: true });
+        sync(&mut app);
+        assert!(bar_units(&mut app).is_empty(), "interim: no readout bars in a cutscene");
+        app.world_mut().insert_resource(crate::ui::presentation::CineractiveState::default());
+        sync(&mut app);
+        assert_eq!(bar_units(&mut app).len(), 2);
+        // A neutral hover carries no team in the readout: nothing shows, selected units included.
+        *app.world_mut().resource_mut::<HoverReadout>() = HoverReadout { unit: Some(EntityId(2)), team: None, fade: 1.0 };
+        sync(&mut app);
+        assert!(bar_units(&mut app).is_empty());
     }
 
     #[test]
