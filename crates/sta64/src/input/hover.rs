@@ -1,7 +1,7 @@
 //! The live unit under the map cursor, independent of the current selection.
 
 use bevy::prelude::*;
-use sta_sim::EntityId;
+use sta_sim::{EntityId, PlayerId};
 
 use super::orders::Aim;
 use super::select::{AimState, Targetable, target_seen, unit_under_where};
@@ -12,6 +12,63 @@ use crate::ui::hud::{HudFeed, HudPointer};
 /// The current live map hover, when one is valid.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HoveredUnit(pub Option<EntityId>);
+
+/// The Armada II hover readout: how long the pointer has rested on one team's units, for the
+/// health bars (issue 1046). The bars appear above [`HoverReadout::BARS_ABOVE`] and brighten with
+/// the fade. Only the Armada II look reads it; every other look ignores it.
+///
+/// Rules (grades: "static" is read from the Armada II executable):
+/// - `fade` grows by `dt / FADE_SECONDS` each display tick and is capped at 1 [static].
+/// - It resets to 0 when the hovered unit's team changes [static]. "Nothing hovered" and a neutral
+///   (unowned) unit are one team, which shows no bars [static; measured on an unowned planet]: the
+///   fade runs between them and shows nothing. Moving straight to another unit of the same team
+///   keeps it [static].
+/// - The clock is real time, not sim time: it keeps running while the game is paused [measured at
+///   normal speed]. Its behaviour at other game speeds was not measured: interim, real time is used.
+/// - Within the frame of a team change the fade is 0 and does not also grow; the order inside one
+///   tick is not established [interim, one frame].
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq)]
+pub struct HoverReadout {
+    /// The hovered unit.
+    pub unit: Option<EntityId>,
+    /// Its team (owner); `None` while nothing is hovered or the unit is neutral (unowned).
+    pub team: Option<PlayerId>,
+    /// 0 to 1.
+    pub fade: f32,
+}
+
+impl HoverReadout {
+    /// Seconds for the fade to run from 0 to 1 [static].
+    pub const FADE_SECONDS: f32 = 2.0;
+    /// Bars are drawn only above this fade, so from 1.0 s on [static, measured].
+    pub const BARS_ABOVE: f32 = 0.5;
+
+    /// One display tick of `dt` seconds with the unit under the pointer and its team (`None` for
+    /// nothing hovered or a neutral unit).
+    pub fn tick(&mut self, dt: f32, unit: Option<EntityId>, team: Option<PlayerId>) {
+        self.unit = unit;
+        if team != self.team {
+            self.team = team;
+            self.fade = 0.0;
+        } else {
+            self.fade = (self.fade + dt.max(0.0) / Self::FADE_SECONDS).min(1.0);
+        }
+    }
+
+    /// Whether the bars are up at all.
+    pub fn bars_up(&self) -> bool {
+        self.unit.is_some() && self.team.is_some() && self.fade > Self::BARS_ABOVE
+    }
+}
+
+/// Run the readout on real time, so it goes on while the game is paused.
+pub fn tick_readout(time: Option<Res<Time<Real>>>, hovered: Option<Res<HoveredUnit>>, link: Option<Res<SimLink>>, mut readout: ResMut<HoverReadout>) {
+    let dt = time.map_or(0.0, |t| t.delta_secs());
+    let unit = hovered.and_then(|h| h.0).and_then(|id| link.as_deref()?.curr().unit(id).map(|u| (id, u.owner)));
+    // The original's team 0 is STA64's neutral owner: the same team as "nothing hovered".
+    let team = unit.map(|(_, owner)| owner).filter(|o| *o != sta_sim::world::NEUTRAL);
+    readout.tick(dt, unit.map(|(id, _)| id), team);
+}
 
 /// Track the current map hover without changing selection or issuing orders.
 pub fn track(
@@ -289,5 +346,116 @@ mod tests {
             .insert_resource(aim(Vec2::ZERO, Vec3::ZERO, Dir3::NEG_Z));
         app.update();
         assert_eq!(app.world().resource::<HoveredUnit>().0, None);
+    }
+    #[test]
+    fn readout_timing_team_and_pause_rules() {
+        let (a, b, c) = ((EntityId(1), PlayerId(1)), (EntityId(2), PlayerId(1)), (EntityId(3), PlayerId(2)));
+        let mut r = HoverReadout::default();
+        let t = |r: &mut HoverReadout, dt: f32, h: Option<(EntityId, PlayerId)>| r.tick(dt, h.map(|x| x.0), h.map(|x| x.1));
+        t(&mut r, 0.1, Some(a));
+        // First sight of a team is a change from "nothing": the fade starts at 0.
+        assert_eq!(r.fade, 0.0);
+        for _ in 0..99 {
+            t(&mut r, 0.01, Some(a));
+        }
+        assert!(!r.bars_up(), "0.99 s: absent (fade {})", r.fade);
+        t(&mut r, 0.02, Some(a));
+        assert!(r.bars_up(), "1.01 s: present (fade {})", r.fade);
+        // Full exactly when 2 s have run, not before.
+        let mut r = HoverReadout::default();
+        t(&mut r, 0.0, Some(a));
+        t(&mut r, 1.0, Some(a));
+        assert_eq!(r.fade, 0.5);
+        assert!(!r.bars_up(), "exactly 1.0 s: not yet");
+        t(&mut r, 0.99, Some(a));
+        assert!(r.fade < 1.0);
+        t(&mut r, 0.01, Some(a));
+        assert!((r.fade - 1.0).abs() < 1e-6, "full at 2.0 s: {}", r.fade);
+        t(&mut r, 5.0, Some(a));
+        assert_eq!(r.fade, 1.0, "capped");
+        // A same-team handover keeps the fade and the bars.
+        t(&mut r, 0.01, Some(b));
+        assert_eq!((r.unit, r.fade), (Some(b.0), 1.0));
+        // Another team resets it.
+        t(&mut r, 0.01, Some(c));
+        assert!(!r.bars_up());
+        assert_eq!(r.fade, 0.0);
+        t(&mut r, 1.5, Some(c));
+        assert!(r.bars_up());
+        // Nothing hovered is a team of its own: the fade resets and nothing is up.
+        t(&mut r, 0.01, None);
+        assert!(!r.bars_up());
+        assert_eq!((r.unit, r.team, r.fade), (None, None, 0.0));
+        t(&mut r, 10.0, None);
+        assert!(!r.bars_up(), "no unit, no bars");
+        // The next hover starts from 0 again.
+        t(&mut r, 0.01, Some(a));
+        assert_eq!(r.fade, 0.0);
+    }
+
+    #[test]
+    fn neutral_units_are_the_team_of_nothing_and_show_no_bars() {
+        let mut r = HoverReadout::default();
+        // A neutral unit hovered for ages: the fade runs but nothing is up.
+        r.tick(0.0, Some(EntityId(9)), None);
+        r.tick(5.0, Some(EntityId(9)), None);
+        assert_eq!(r.fade, 1.0);
+        assert!(!r.bars_up());
+        // Nothing to neutral does not reset the fade.
+        r.tick(0.1, None, None);
+        assert_eq!(r.fade, 1.0);
+        r.tick(0.1, Some(EntityId(9)), None);
+        assert_eq!(r.fade, 1.0);
+        // From neutral to an own unit it is a team change: reset.
+        r.tick(0.1, Some(EntityId(1)), Some(PlayerId(1)));
+        assert_eq!(r.fade, 0.0);
+        // Own to neutral resets as well.
+        r.tick(3.0, Some(EntityId(1)), Some(PlayerId(1)));
+        assert!(r.bars_up());
+        r.tick(0.1, Some(EntityId(9)), None);
+        assert!(!r.bars_up());
+        assert_eq!(r.fade, 0.0);
+    }
+
+    #[test]
+    fn the_system_maps_a_neutral_owner_to_no_team() {
+        use bevy::time::TimeUpdateStrategy;
+        use std::time::Duration;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(100)))
+            .init_resource::<HoverReadout>()
+            .insert_resource(HoveredUnit(Some(EntityId(1))))
+            .add_systems(Update, tick_readout);
+        let view = WorldView { units: vec![{ let mut u = unit(1, UnitFlags::SELECTABLE); u.owner = sta_sim::world::NEUTRAL; u }], ..Default::default() };
+        app.insert_resource(SimLink::new(Box::new(Frozen(Arc::new(view))), Box::new(LocalRouter::new()), PlayerId(0)));
+        for _ in 0..30 {
+            app.update();
+        }
+        let r = *app.world().resource::<HoverReadout>();
+        assert_eq!((r.unit, r.team), (Some(EntityId(1)), None));
+        assert!(!r.bars_up(), "a hovered neutral unit shows no bars");
+    }
+
+    #[test]
+    fn readout_runs_on_real_time_while_the_sim_is_paused() {
+        use bevy::time::TimeUpdateStrategy;
+        use std::time::Duration;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(100)))
+            .init_resource::<HoverReadout>()
+            .insert_resource(HoveredUnit(Some(EntityId(1))))
+            .add_systems(Update, tick_readout);
+        // Pause the virtual (game) clock: the readout must not care.
+        app.world_mut().resource_mut::<Time<Virtual>>().pause();
+        let view = WorldView { units: vec![{ let mut u = unit(1, UnitFlags::SELECTABLE); u.owner = PlayerId(3); u }], ..Default::default() };
+        app.insert_resource(SimLink::new(Box::new(Frozen(Arc::new(view))), Box::new(LocalRouter::new()), PlayerId(0)));
+        for _ in 0..16 {
+            app.update();
+        }
+        let r = *app.world().resource::<HoverReadout>();
+        assert_eq!(r.team, Some(PlayerId(3)));
+        assert!(r.bars_up(), "fade {} after real time", r.fade);
     }
 }
