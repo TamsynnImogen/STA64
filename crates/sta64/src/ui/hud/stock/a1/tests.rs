@@ -374,6 +374,9 @@ fn the_picture_is_drawn_in_the_display_area_and_a_click_goes_to_the_subject() {
     let panel = layout.panel("cinematic").unwrap();
     let picture = app.world_mut().query_filtered::<(Entity, &Node), With<ActionPicture>>().iter(app.world()).map(|(e, n)| (e, n.clone())).collect::<Vec<_>>();
     assert_eq!(picture.len(), 1);
+    // #1073: the shared window code left the Armada I buttons in place.
+    let buttons = app.world_mut().query::<&crate::ui::hud::stock::buttons::PanelButton>().iter(app.world()).filter(|b| matches!(b, crate::ui::hud::stock::buttons::PanelButton::Menu | crate::ui::hud::stock::buttons::PanelButton::Unavailable)).count();
+    assert_eq!(buttons, 2, "the Armada I window keeps its COMM and MENU buttons");
     let want = layout.at(Vec2::new(panel.x, panel.y), "cinematicDisplayArea").unwrap();
     assert_eq!((picture[0].1.left, picture[0].1.width), (Val::Px(want.x), Val::Px(want.w)));
     press(&mut app, picture[0].0);
