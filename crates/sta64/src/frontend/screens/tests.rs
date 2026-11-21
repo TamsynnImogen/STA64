@@ -145,7 +145,7 @@ fn every_screen_is_reached_by_state_and_replaces_the_last() {
     let mut app = app();
     let want: [(Screen, &str, usize); 5] = [
         (Screen::SinglePlayer, "Single player", 6),
-        (Screen::Setup, "Instant action", 2 * 3 + 5),
+        (Screen::Setup, "Instant action", 2 * 3 + 8),
         (Screen::MapSelect, "Select map", 2),
         (Screen::Settings, "Options", 1),
         (Screen::ModSelect, "Mods", 2),
@@ -226,6 +226,26 @@ fn setup_round_trips_through_a_game_setup() {
     // The sim takes it as it is.
     let sim = sta_sim::Sim::from_setup(&setup);
     assert_eq!(sta_sim::WorldSource::view(&sim).players.len(), 4);
+}
+
+#[test]
+fn map_rows_count_only_distinct_playable_starts_and_keep_their_ids() {
+    let mut data = ScreenData::fake();
+    let map = Arc::make_mut(&mut data.maps[0].def);
+    let mut duplicate = map.starts[0].clone();
+    map.starts[0].slot = 4;
+    map.starts[1].slot = 1;
+    duplicate.slot = 4;
+    map.starts.push(duplicate.clone());
+    duplicate.slot = PlayerId::MAX_PLAYERS;
+    map.starts.push(duplicate);
+
+    let draft = SetupDraft::new(&data);
+    assert_eq!(data.maps[0].slots(), 2);
+    assert_eq!(draft.seats.len(), 2);
+    let setup = draft.to_setup(&data).unwrap();
+    assert_eq!(setup.players.iter().map(|p| p.id).collect::<Vec<_>>(), [PlayerId(1), PlayerId(4)]);
+    assert_eq!(SetupDraft::from_setup(&setup, &data), Some(draft));
 }
 
 fn race(name: &str, slot: Option<i64>) -> RaceDef {

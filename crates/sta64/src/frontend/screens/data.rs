@@ -8,12 +8,13 @@ use bevy::prelude::*;
 use sta_content::{ContentDb, Fixed, MapDef, StartPos, StartingResources, Vec3 as SimVec3};
 use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::{PlayerId, TeamId};
+use crate::clock::MatchSpeed;
 
 /// The registry name of the computer opponent (`sta_ai::Registry::builtin`).
 pub const SKIRMISH_AI: &str = "skirmish";
 
 /// Most seats a game setup offers, whatever the map lists.
-pub const MAX_SEATS: usize = 8;
+pub const MAX_SEATS: usize = PlayerId::MAX_PLAYERS as usize;
 
 /// A map the player can pick.
 #[derive(Debug, Clone)]
@@ -31,9 +32,17 @@ impl MapEntry {
         self.def.label.as_deref().unwrap_or(&self.def.name)
     }
 
+    /// Playable starts ordered by their authored slot IDs.
+    pub fn playable_starts(&self) -> Vec<&StartPos> {
+        let mut starts: Vec<_> = self.def.starts.iter().filter(|start| PlayerId(start.slot).is_player()).collect();
+        starts.sort_by_key(|start| start.slot);
+        starts.dedup_by_key(|start| start.slot);
+        starts
+    }
+
     /// Seats the map has start positions for.
     pub fn slots(&self) -> usize {
-        self.def.starts.len().clamp(1, MAX_SEATS)
+        self.playable_starts().len()
     }
 }
 
@@ -199,13 +208,16 @@ pub struct SetupDraft {
     pub seed: u64,
     pub seats: Vec<Seat>,
     pub options: GameOptions,
+    pub speed: MatchSpeed,
+    pub observing: bool,
+    pub(crate) return_row: usize,
 }
 
 impl SetupDraft {
     /// The first map, seat 0 the player, the others computers, every seat its
     /// own team, the races in turn.
     pub fn new(data: &ScreenData) -> SetupDraft {
-        let mut d = SetupDraft { map: 0, seed: 1, seats: Vec::new(), options: GameOptions::default() };
+        let mut d = SetupDraft { map: 0, seed: 1, seats: Vec::new(), options: GameOptions::default(), speed: MatchSpeed::Normal, observing: false, return_row: 0 };
         d.set_map(data, 0);
         d
     }
@@ -217,44 +229,72 @@ impl SetupDraft {
         if self.options.officer_limit as usize >= data.content.rules().officer_limits.len() {
             self.options.officer_limit = 0;
         }
-        let slots = data.maps.get(self.map).map_or(1, MapEntry::slots);
+        let slots = data.maps.get(self.map).map_or(0, MapEntry::slots);
         let races = data.races();
         self.seats.truncate(slots);
+        self.return_row = self.return_row.min(slots.saturating_sub(1));
         while self.seats.len() < slots {
             let i = self.seats.len();
             self.seats.push(Seat {
-                control: if i == 0 { SeatControl::Human } else { SeatControl::Computer },
+                control: SeatControl::Computer,
                 race: races.get(i % races.len().max(1)).cloned().unwrap_or_default(),
                 team: i as u8,
             });
         }
-        if !self.seats.iter().any(|s| s.control == SeatControl::Human) {
-            self.seats[0].control = SeatControl::Human;
+        for seat in &mut self.seats {
+            seat.team %= slots as u8;
+        }
+        if !self.observing && !self.seats.iter().any(|s| s.control == SeatControl::Human)
+            && let Some(seat) = self.seats.get_mut(self.return_row)
+        {
+            seat.control = SeatControl::Human;
         }
     }
 
-    /// Step a seat's control. The player is on one seat: taking it hands the
-    /// old seat to a computer; stepping off the only player hands the role to
-    /// the next seat.
-    pub fn cycle_control(&mut self, row: usize) {
+    /// Change the local role independently of the map's participant count.
+    pub fn set_observing(&mut self, observing: bool) {
+        if self.observing == observing {
+            return;
+        }
+        self.observing = observing;
+        if observing {
+            if let Some((row, seat)) = self.seats.iter_mut().enumerate().find(|(_, s)| s.control == SeatControl::Human) {
+                self.return_row = row;
+                seat.control = SeatControl::Computer;
+            }
+        } else {
+            let row = self.return_row.min(self.seats.len().saturating_sub(1));
+            self.select_control(row, SeatControl::Human);
+        }
+    }
+
+    pub fn select_control(&mut self, row: usize, control: SeatControl) {
         let Some(old) = self.seats.get(row).map(|s| s.control) else { return };
-        let mut new = old.next();
+        if old == control || (self.observing && control == SeatControl::Human) {
+            return;
+        }
         if old == SeatControl::Human {
-            // Stepping off the player: the next seat takes the role.
             let other = (row + 1) % self.seats.len();
             if other == row {
                 return;
             }
             self.seats[other].control = SeatControl::Human;
-            new = SeatControl::Computer;
-        } else if new == SeatControl::Human {
+            self.return_row = other;
+        } else if control == SeatControl::Human {
             for s in &mut self.seats {
                 if s.control == SeatControl::Human {
                     s.control = SeatControl::Computer;
                 }
             }
+            self.return_row = row;
         }
-        self.seats[row].control = new;
+        self.seats[row].control = control;
+    }
+
+    pub fn cycle_control(&mut self, row: usize) {
+        let Some(seat) = self.seats.get(row) else { return };
+        let next = seat.control.next();
+        self.select_control(row, if self.observing && next == SeatControl::Human { SeatControl::Computer } else { next });
     }
 
     pub fn cycle_race(&mut self, data: &ScreenData, row: usize) {
@@ -288,12 +328,15 @@ impl SetupDraft {
         }
     }
 
-    /// The setup a match starts from: seat `i` is `PlayerId(i)` on the map's
-    /// start slot `i`. `None` when the draft names no map.
+    /// The setup a match starts from. A row uses the map's authored start slot.
     pub fn to_setup(&self, data: &ScreenData) -> Option<GameSetup> {
         let map = data.maps.get(self.map)?;
+        let starts = map.playable_starts();
         let races = data.races();
-        if races.is_empty() || self.seats.iter().any(|s| !races.iter().any(|r| r.eq_ignore_ascii_case(&s.race))) {
+        let human_count = self.seats.iter().filter(|s| s.control == SeatControl::Human).count();
+        if starts.len() < 2 || starts.len() != self.seats.len() || human_count != usize::from(!self.observing)
+            || races.is_empty() || self.seats.iter().any(|s| !races.iter().any(|r| r.eq_ignore_ascii_case(&s.race)))
+        {
             return None;
         }
         Some(GameSetup {
@@ -303,8 +346,8 @@ impl SetupDraft {
             players: self
                 .seats
                 .iter()
-                .enumerate()
-                .map(|(i, s)| PlayerSetup { id: PlayerId(i as u8), team: TeamId(s.team), race: s.race.clone(), control: s.control.control() })
+                .zip(starts)
+                .map(|(s, start)| PlayerSetup { id: PlayerId(start.slot), team: TeamId(s.team), race: s.race.clone(), control: s.control.control() })
                 .collect(),
             options: self.options.clone(),
         })
@@ -313,11 +356,20 @@ impl SetupDraft {
     /// The draft a setup came from; `None` when its map is not in the list.
     pub fn from_setup(setup: &GameSetup, data: &ScreenData) -> Option<SetupDraft> {
         let map = data.maps.iter().position(|m| m.def.name == setup.map.name)?;
+        let starts = data.maps[map].playable_starts();
+        let seats = starts.iter().map(|start| {
+            let p = setup.players.iter().find(|p| p.id.0 == start.slot)?;
+            Some(Seat { control: SeatControl::of(&p.control), race: p.race.clone(), team: p.team.0 })
+        }).collect::<Option<Vec<_>>>()?;
+        let human = seats.iter().position(|s| s.control == SeatControl::Human);
         Some(SetupDraft {
             map,
             seed: setup.seed,
-            seats: setup.players.iter().map(|p| Seat { control: SeatControl::of(&p.control), race: p.race.clone(), team: p.team.0 }).collect(),
+            seats,
             options: setup.options.clone(),
+            speed: MatchSpeed::Normal,
+            observing: human.is_none(),
+            return_row: human.unwrap_or_default(),
         })
     }
 }

@@ -2,7 +2,7 @@
 //! GPU frame test: an environment switch, not a flag (`app.rs` is INT-M3's).
 //!
 //! - `STA64_UI_SCREEN=<name>`: draw that screen over the bench's frame, on
-//!   [`ScreenData::fake`]: `main`, `single`, `setup`, `map`, `settings`, `mods`.
+//!   [`ScreenData::fake`]: `main`, `single`, `setup`, `advanced`, `map`, `settings`, `mods`.
 //!
 //! The screen's root is printed once as a `screen:` line.
 
@@ -22,6 +22,7 @@ pub fn parse(name: &str) -> Option<Screen> {
         "main" => Screen::Main,
         "single" => Screen::SinglePlayer,
         "setup" => Screen::Setup,
+        "advanced" => Screen::Advanced,
         "map" => Screen::MapSelect,
         "settings" => Screen::Settings,
         "mods" => Screen::ModSelect,

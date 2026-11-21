@@ -56,10 +56,12 @@ pub struct SimLink {
     /// The game so far as a replay, when something asked for one (the playtest
     /// capture, TOOL-14): what each tick was given, never read by the sim.
     log: Option<Replay>,
-    /// UI-46: the views the client draws and reads, when the player lifted the fog (see
-    /// [`SimLink::set_fog_lifted`]); `None` otherwise, when they are `prev` and `curr`.
+    /// Presentation views when the player lifted the fog or this link is an observer;
+    /// `None` otherwise, when they are `prev` and `curr`.
     lifted: Option<(Arc<WorldView>, Arc<WorldView>)>,
     fog_lifted: bool,
+    /// A read-only client with no player seat. Only presentation views are unrestricted.
+    observer: bool,
 }
 
 impl SimLink {
@@ -69,7 +71,7 @@ impl SimLink {
         let cargo = source.cargo_view();
         let nodes = source.node_view();
         let systems = source.system_view();
-        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, cargo, nodes, systems, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None, lifted: None, fog_lifted: false }
+        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, cargo, nodes, systems, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None, lifted: None, fog_lifted: false, observer: false }
     }
 
     /// Log every tick into `replay` (a [`Replay::new`] header of the game's
@@ -97,6 +99,18 @@ impl SimLink {
     pub fn with_controllers(mut self, controllers: Vec<Box<dyn Controller>>) -> SimLink {
         self.controllers = SyncCell::new(controllers);
         self
+    }
+
+    /// Present the whole world without taking a player seat or sending client commands.
+    /// Controllers still read the simulation's real view and submit their own commands.
+    pub fn with_observer(mut self) -> SimLink {
+        self.observer = true;
+        self.refresh_lifted();
+        self
+    }
+
+    pub fn is_observer(&self) -> bool {
+        self.observer
     }
 
     /// How many controllers run.
@@ -153,7 +167,19 @@ impl SimLink {
     }
 
     fn refresh_lifted(&mut self) {
-        self.lifted = self.fog_lifted.then(|| (all_seen(&self.prev), all_seen(&self.curr)));
+        self.lifted = (self.observer || self.fog_lifted).then(|| (self.presentation_view(&self.prev), self.presentation_view(&self.curr)));
+    }
+
+    fn presentation_view(&self, view: &Arc<WorldView>) -> Arc<WorldView> {
+        if !self.observer {
+            return all_seen(view);
+        }
+        if view.visibility.is_empty() {
+            return view.clone();
+        }
+        let mut shown = (**view).clone();
+        shown.visibility.clear();
+        Arc::new(shown)
     }
 
     pub fn player(&self) -> PlayerId {
@@ -162,6 +188,9 @@ impl SimLink {
 
     /// Stamp a command as this client's next and hand it to the router.
     pub fn submit(&mut self, kind: CommandKind) {
+        if self.observer {
+            return;
+        }
         let cmd = Command { player: self.player, seq: self.seq, kind };
         self.seq += 1;
         self.router.get().submit(cmd);
@@ -172,6 +201,9 @@ impl SimLink {
     /// BENCH has its own reserved identity, separate from the mission's SCRIPT sequence.
     /// The router and replay log see these requests exactly like any existing bench command.
     pub(crate) fn submit_sandbox(&mut self, kind: CommandKind) {
+        if self.observer {
+            return;
+        }
         let cmd = Command { player: PlayerId::BENCH, seq: self.seq, kind };
         self.seq += 1;
         self.router.get().submit(cmd);
@@ -225,7 +257,7 @@ impl SimLink {
         // While lifted, the new shown `prev` is the old shown `curr`: no second copy.
         let old_shown = self.lifted.take().map(|l| l.1);
         self.prev = std::mem::replace(&mut self.curr, out.view);
-        self.lifted = self.fog_lifted.then(|| (old_shown.unwrap_or_else(|| all_seen(&self.prev)), all_seen(&self.curr)));
+        self.lifted = (self.observer || self.fog_lifted).then(|| (old_shown.unwrap_or_else(|| self.presentation_view(&self.prev)), self.presentation_view(&self.curr)));
         let mut cmds = Vec::new();
         for c in self.controllers.get().iter_mut() {
             c.think(&self.curr, &out.events, &mut cmds);
@@ -423,6 +455,7 @@ impl Plugin for SimLinkPlugin {
     }
 }
 
+#[allow(clippy::too_many_arguments)] // Bevy injects these system parameters.
 fn step_sim(
     time: Res<Time<Real>>,
     mut clock: ResMut<AnimClock>,
@@ -519,6 +552,48 @@ mod tests {
     use sta_sim::command::LocalRouter;
     use sta_sim::{Fixed, MoveStats, Sim};
     use std::time::Duration;
+
+    #[test]
+    fn observer_presents_every_unit_and_cannot_submit_commands() {
+        let mut sim = Sim::new(1);
+        let a = sim.spawn(0, SimVec3::ZERO, (Fixed::ZERO, Fixed::ONE), MoveStats::from_f32(140.0, 100.0, 1.0, 1.0, 1.0));
+        let b = sim.spawn(0, SimVec3::ZERO, (Fixed::ZERO, Fixed::ONE), MoveStats::from_f32(140.0, 100.0, 1.0, 1.0, 1.0));
+        let mut restricted = (*sim.view()).clone();
+        restricted.visibility = vec![(PlayerId(0), vec![a])];
+        let mut link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), PlayerId::BENCH).with_observer();
+        link.feed(Arc::new(restricted.clone()));
+        link.feed(Arc::new(restricted));
+
+        assert!(link.is_observer());
+        assert_eq!(link.real_curr().visible_to(PlayerId::BENCH).len(), 0);
+        assert_eq!(link.real_curr().visible_to(PlayerId(0)).len(), 1);
+        assert_eq!(link.prev().visible_to(PlayerId::BENCH).len(), 2);
+        assert_eq!(link.curr().visible_to(PlayerId::BENCH).len(), 2);
+        assert_eq!(link.curr().visibility.len(), 0);
+        assert!(link.curr().unit(b).is_some());
+
+        link.set_fog_lifted(true);
+        link.set_fog_lifted(false);
+        assert_eq!(link.curr().visible_to(PlayerId::BENCH).len(), 2);
+        link.submit(CommandKind::Order(Order::Stop { units: vec![a] }));
+        link.submit_sandbox(CommandKind::Order(Order::Stop { units: vec![b] }));
+        assert_eq!(link.seq, 0);
+        assert!(link.router.get().take_ready(1).unwrap().is_empty());
+    }
+
+    #[test]
+    fn observer_does_not_suppress_controller_commands() {
+        let mut sim = Sim::new(1);
+        let id = sim.spawn(0, SimVec3::ZERO, (Fixed::ZERO, Fixed::ONE), MoveStats::from_f32(140.0, 100.0, 1.0, 1.0, 1.0));
+        let killer = Killer { due: vec![(1, id, false)], removals: ScriptRemovals::default(), seq: 0 };
+        let mut link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), PlayerId::BENCH)
+            .with_controllers(vec![Box::new(killer)]).with_observer();
+        assert!(link.tick().is_some());
+        let queued = link.router.get().take_ready(2).unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].player, PlayerId::SCRIPT);
+        assert!(matches!(&queued[0].kind, CommandKind::Edit(sta_sim::command::Edit::Kill(killed)) if *killed == id));
+    }
 
     #[derive(Resource, Default)]
     struct Seen(Vec<SimEvent>);
