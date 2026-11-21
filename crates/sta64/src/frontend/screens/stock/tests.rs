@@ -196,7 +196,7 @@ fn single_player_layout_in_every_window_and_scale() {
 
 #[test]
 fn setup_layout_in_every_window_and_scale() {
-    let mut want = vec![Slot::SetupTitle, Slot::HeadControl, Slot::HeadSide, Slot::HeadTeam, Slot::MapInfo, Slot::Preview, Slot::SelectMap, Slot::Resources, Slot::Officers, Slot::SetupBack, Slot::Launch];
+    let mut want = vec![Slot::SetupTitle, Slot::HeadControl, Slot::HeadSide, Slot::HeadTeam, Slot::ModeLabel, Slot::ModePlay, Slot::ModeObserve, Slot::MapInfo, Slot::Preview, Slot::SelectMap, Slot::Resources, Slot::Officers, Slot::Advanced, Slot::SetupBack, Slot::Launch];
     // The fake map has two seats.
     for i in 0..2 {
         want.extend([Slot::SeatControl(i), Slot::SeatSide(i), Slot::SeatTeam(i)]);
@@ -207,6 +207,69 @@ fn setup_layout_in_every_window_and_scale() {
 #[test]
 fn options_layout_in_every_window_and_scale() {
     check_layout(Screen::Settings, &[Slot::OptionsTitle, Slot::OptionsBody, Slot::OptionsBack]);
+}
+
+#[test]
+fn advanced_layout_in_every_window_and_scale() {
+    check_layout(Screen::Advanced, &[Slot::AdvancedTitle, Slot::AdvancedResources, Slot::AdvancedOfficers, Slot::AdvancedSpeed, Slot::AdvancedDefault, Slot::AdvancedClose]);
+}
+
+#[test]
+fn match_mode_is_separate_from_seats_and_advanced_options_reset() {
+    let mut app = app_with(four_races(), None, 1.0);
+    go(&mut app, Screen::Setup);
+    assert!(region(Slot::SeatControl(layout::TABLE_ROWS - 1)).rect().max.y <= region(Slot::ModePlay).rect().min.y);
+    assert!(!app.world().resource::<SetupDraft>().observing);
+    press(&mut app, Act::SetObserving(true));
+    assert!(app.world().resource::<SetupDraft>().observing);
+    assert!(app.world().resource::<SetupDraft>().seats.iter().all(|seat| seat.control != SeatControl::Human));
+    let field = dropdown_of(&mut app, 0, Col::Control);
+    assert_eq!(app.world().get::<Dropdown>(field).unwrap().options.len(), 2);
+    pick(&mut app, field, 1);
+    assert_eq!(app.world().resource::<SetupDraft>().seats[0].control, SeatControl::Idle);
+    press(&mut app, Act::SetObserving(false));
+    assert_eq!(app.world().resource::<SetupDraft>().seats.iter().filter(|seat| seat.control == SeatControl::Human).count(), 1);
+
+    press(&mut app, Act::Goto(Screen::Advanced));
+    press(&mut app, Act::CycleResources);
+    assert_eq!(app.world().resource::<SetupDraft>().options.starting_resources, sta_content::StartingResources::Lots);
+    assert_eq!(app.world().resource::<SetupDraft>().speed, crate::clock::MatchSpeed::Normal);
+    press(&mut app, Act::CycleMatchSpeed);
+    assert_eq!(app.world().resource::<SetupDraft>().speed, crate::clock::MatchSpeed::Normal.next());
+    press(&mut app, Act::DefaultOptions);
+    assert_eq!(app.world().resource::<SetupDraft>().options, sta_sim::setup::GameOptions::default());
+    assert_eq!(app.world().resource::<SetupDraft>().speed, crate::clock::MatchSpeed::Normal);
+    press(&mut app, Act::Goto(Screen::Setup));
+    assert_eq!(*app.world().resource::<State<Screen>>().get(), Screen::Setup);
+}
+
+#[test]
+fn advanced_officer_choice_uses_authored_rule_and_default_resets_it() {
+    let mut data = four_races();
+    let (rules, warnings) = sta_content::Rules::from_header(
+        "int MP_OFFICER_LIST_SIZE = 2; Officer MP_OFFICER_LIMIT[2] = {\"ol_normal\", 600, \"ol_more\", 900};",
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    data.content = Arc::new(data.content.as_ref().clone().with_rules(rules));
+    let mut app = app_with(data, None, 1.0);
+    go(&mut app, Screen::Advanced);
+    press(&mut app, Act::CycleOfficerLimit);
+    assert_eq!(app.world().resource::<SetupDraft>().options.officer_limit, 1);
+    press(&mut app, Act::DefaultOptions);
+    assert_eq!(app.world().resource::<SetupDraft>().options.officer_limit, 0);
+}
+
+#[test]
+fn plain_advanced_speed_cycles_and_resets() {
+    let mut app = app();
+    app.world_mut().resource_mut::<ScreensConfig>().layout = ScreenLayout::Plain;
+    settle(&mut app);
+    go(&mut app, Screen::Advanced);
+    assert!(placed(&mut app).is_empty());
+    press(&mut app, Act::CycleMatchSpeed);
+    assert_eq!(app.world().resource::<SetupDraft>().speed, crate::clock::MatchSpeed::Fast);
+    press(&mut app, Act::DefaultOptions);
+    assert_eq!(app.world().resource::<SetupDraft>().speed, crate::clock::MatchSpeed::Normal);
 }
 
 #[test]
