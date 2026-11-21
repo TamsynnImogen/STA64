@@ -46,7 +46,7 @@ impl HudFeed {
         self.selected.iter().filter_map(|&id| self.view.unit(id)).filter(|u| !u.flags.contains(sta_sim::view::UnitFlags::DYING)).collect()
     }
 
-    fn def(&self, u: &UnitView) -> Option<&UnitDef> {
+    pub(super) fn def(&self, u: &UnitView) -> Option<&UnitDef> {
         self.content.as_deref().and_then(|c| c.unit(u.def))
     }
 
@@ -90,7 +90,7 @@ pub(super) fn finished(u: &UnitView) -> bool {
     u.progress.is_none_or(|p| p >= Fixed::ONE)
 }
 
-fn frac(v: [Fixed; 2]) -> f32 {
+pub(super) fn frac(v: [Fixed; 2]) -> f32 {
     let max = v[1].to_f32();
     if max <= 0.0 { 0.0 } else { (v[0].to_f32() / max).clamp(0.0, 1.0) }
 }
@@ -217,7 +217,7 @@ pub enum Act {
     Back,
     /// Arm a map target; completed by the HUD's target click system.
     Target(TargetMode),
-    /// A supported special slot toggle (cloak or point defence).
+    /// An immediate supported special slot (including untargeted replace weapons).
     Special(u8),
     /// UI-02's stop on the own selection.
     Stop,
@@ -227,6 +227,8 @@ pub enum Act {
     Formation(u8),
     /// A loaded stock command ODF whose formation parameter has no verified sim mapping.
     NativeFormation(String),
+    /// An immediate command identified by its authored stock ODF.
+    NativeOrder(String),
     /// Drop a builder's queue: `Stop` on it (SIM-08's cancel).
     Cancel(EntityId),
     /// `Order::Build`; `site`: the builder is a craft and needs a place, so
@@ -264,6 +266,8 @@ pub enum TargetMode {
     Repair,
     /// The stock DECOMMISSION command: pick a yard, or anywhere for the best one or in place (SIM-45).
     Decommission,
+    /// A replace weapon whose authored `needTarget` requires a map pick.
+    Special(u8),
 }
 
 /// How a button looks.
@@ -340,12 +344,12 @@ pub fn resource_model(feed: &HudFeed) -> ResourceModel {
 
 /// A shipyard's or builder's tech state, from the view: what the player owns
 /// finished, its race, and the races of its allies.
-fn tech_state(feed: &HudFeed, db: &ContentDb, race: &str) -> Owned {
+pub(super) fn tech_state(feed: &HudFeed, db: &ContentDb, race: &str, player: PlayerId) -> Owned {
     let mut state = Owned::new(&race.to_ascii_lowercase());
-    let me = feed.view.player(feed.player);
+    let me = feed.view.player(player);
     for u in feed.view.units.iter().filter(|u| finished(u)) {
         let Some(def) = db.unit(u.def) else { continue };
-        if u.owner == feed.player {
+        if u.owner == player {
             state = state.with(&def.odf.to_ascii_lowercase(), 1);
         } else if me.is_some_and(|m| feed.view.player(u.owner).is_some_and(|o| o.team == m.team)) {
             state = state.with_ally(&def.race.to_ascii_lowercase());
@@ -419,7 +423,7 @@ fn build_layout(feed: &HudFeed, builder: &UnitView) -> (Vec<BuildItem>, usize) {
     };
     match db.tech_tree() {
         Some(tree) => {
-            let state = tech_state(feed, db, &def.race);
+            let state = tech_state(feed, db, &def.race, feed.player);
             let mut out: Vec<BuildItem> = Vec::new();
             let mut cells = 0;
             for o in tree.build_options(db, &def.odf, &state, false).iter() {
@@ -469,7 +473,7 @@ pub(super) fn build_item_buttons(feed: &HudFeed, b: &UnitView) -> Vec<(usize, Bu
                 act: Act::Build { builder: b.id, what: it.key, odf: it.odf.clone(), site },
                 look: it.look,
                 tip: definition.and_then(|d| d.raw.str("tooltip")).map(str::to_owned).unwrap_or_else(|| format!("Build {}", it.odf)),
-                verbose: Some(definition.and_then(|d| d.raw.str("verboseTooltip")).map_or(verbose, str::to_owned)),
+                verbose: Some(definition.and_then(|d| d.raw.str("verboseTooltip").or_else(|| d.raw.str("verbose"))).map_or(verbose, str::to_owned)),
                 sprite_names: definition.map_or_else(Vec::new, |def| build_sprite_names(&def.model, &it.odf)),
                 keep_label: false,
             };
@@ -544,10 +548,11 @@ pub(super) fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
         Act::Target(TargetMode::TransportAttack) => (vec!["b_capture".into()], false),
         Act::Target(TargetMode::Repair) => (vec!["b_repair".into()], false),
         Act::Target(TargetMode::Decommission) => (vec!["b_decom".into()], false),
+        Act::Target(TargetMode::Special(_)) => (Vec::new(), false),
         Act::Cancel(_) => (vec!["b_cancel".into()], false),
         Act::Formation(_) => (Vec::new(), false),
         // No verified native ID for these actions; use the existing label.
-        Act::Special(_) | Act::Build { .. } | Act::OpenNativeMenu(_) | Act::NativeFormation(_) | Act::OpenOrders | Act::Order(_) => (Vec::new(), false),
+        Act::Special(_) | Act::Build { .. } | Act::OpenNativeMenu(_) | Act::NativeFormation(_) | Act::OpenOrders | Act::Order(_) | Act::NativeOrder(_) => (Vec::new(), false),
     };
     Button { cell, label: label.to_uppercase(), act, look: Look::Ready, tip: tip.to_owned(), verbose: None, sprite_names, keep_label }
 }
@@ -655,8 +660,17 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
         return out;
     }
     let mut out = Vec::new();
-    if builder.is_some() {
-        out.push(button(0, &tr("Build"), Act::OpenBuild, &tooltip_key("Build")));
+    if let Some(builder) = builder {
+        // Stock research.odf and planet.odf author `research = 1` for their
+        // context-sensitive menu, while its contents still use the build page.
+        let research = feed.def(builder).is_some_and(|def| def.raw.bool("research") == Some(true));
+        let caption = if research { "Research" } else { "Build" };
+        let mut opener = button(0, &tr(caption), Act::OpenBuild, &tooltip_key(if research { "Research menu" } else { "Build" }));
+        if research {
+            opener.sprite_names = vec!["b_research".into()];
+            opener.verbose = Some(tooltip_key("Open the research menu."));
+        }
+        out.push(opener);
     }
     if caps.rally {
         out.push(button(
@@ -707,8 +721,12 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
     }
     for (i, (slot, kind)) in caps.specials.iter().enumerate() {
         if let Some(cell) = [5, 10, 11, 12, 13, 14].get(i) {
-            let act = Act::Special(*slot);
-            if *kind == sta_sim::specials::SpecialKind::PointDefence {
+            let weapon = selected_special_weapon(feed, *slot);
+            let targeted = *kind == sta_sim::specials::SpecialKind::Replace
+                && special_targeted(feed, *slot) == Some(true);
+            if *kind == sta_sim::specials::SpecialKind::Replace && special_targeted(feed, *slot).is_none() { continue; }
+            let act = if targeted { Act::Target(TargetMode::Special(*slot)) } else { Act::Special(*slot) };
+            let mut b = if *kind == sta_sim::specials::SpecialKind::PointDefence {
                 let Some((state, ready)) = point_defence_state(feed, *slot) else { continue };
                 let status = match state {
                     PointDefenceState::Off => tr("Off"),
@@ -719,14 +737,56 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
                 let tip = trf("Point defence: {0}", &[&status]);
                 let mut b = button(*cell, &label, act, &tip);
                 if !ready { b.look = Look::Locked; }
-                out.push(b);
+                b
+            } else if *kind == sta_sim::specials::SpecialKind::Cloak {
+                button(*cell, &tr("Cloak"), act, &tooltip_key("Toggle cloak"))
             } else {
-                out.push(button(*cell, &tr("Cloak"), act, &tooltip_key("Toggle cloak")));
+                let label = weapon.map_or("Replace", |w| w.odf.as_str());
+                button(*cell, &tr(label), act, &tooltip_key(label))
+            };
+            if let Some(weapon) = weapon {
+                if *kind == sta_sim::specials::SpecialKind::Replace {
+                    let stem = weapon.odf.rsplit(['/', '\\']).next().unwrap_or(&weapon.odf).trim_end_matches(".odf");
+                    b.sprite_names = vec![format!("b_{stem}"), stem.to_owned()];
+                }
+                if let Some(tip) = weapon.raw.str("tooltip") {
+                    b.tip = tip.to_owned();
+                }
+                b.verbose = weapon.raw.str("verboseTooltip").or_else(|| weapon.raw.str("verbose")).map(str::to_owned);
             }
+            out.push(b);
         }
     }
     out.sort_by_key(|b| b.cell);
     out
+}
+
+/// A shared tooltip describes the slot when all selected owners use the same weapon.
+fn selected_special_weapon(feed: &HudFeed, slot: u8) -> Option<&sta_content::WeaponDef> {
+    let db = feed.content.as_deref()?;
+    let mut weapons = feed.selected_units().into_iter()
+        .filter(|u| u.owner == feed.player)
+        .map(|u| {
+            let def = feed.def(u)?;
+            let (_, weapon) = sta_sim::specials::specials_of(db, def).nth(slot as usize)?;
+            Some(weapon)
+        });
+    let weapon = weapons.next()??;
+    weapons.all(|other| other.is_some_and(|w| w.key == weapon.key)).then_some(weapon)
+}
+
+/// A shared replace slot must agree on whether its weapons require a map pick.
+pub(super) fn special_targeted(feed: &HudFeed, slot: u8) -> Option<bool> {
+    let db = feed.content.as_deref()?;
+    let mut units = feed.selected_units().into_iter().filter(|u| u.owner == feed.player);
+    let first = units.next()?;
+    let targeted = sta_sim::specials::specials_of(db, feed.def(first)?)
+        .nth(slot as usize).filter(|(kind, _)| *kind == sta_sim::specials::SpecialKind::Replace)?
+        .1.base.need_target == Some(true);
+    units.all(|u| feed.def(u).and_then(|def| sta_sim::specials::specials_of(db, def).nth(slot as usize))
+        .is_some_and(|(kind, weapon)| kind == sta_sim::specials::SpecialKind::Replace
+            && (weapon.base.need_target == Some(true)) == targeted))
+        .then_some(targeted)
 }
 
 /// The command a button's press puts in the queue, with the units it speaks
@@ -757,7 +817,9 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
         )),
         Act::Special(slot) if caps.specials.iter().any(|s| s.0 == *slot
             && (s.1 != sta_sim::specials::SpecialKind::PointDefence
-                || point_defence_state(feed, *slot).is_some_and(|(_, ready)| ready))) => Some((
+                || point_defence_state(feed, *slot).is_some_and(|(_, ready)| ready))
+            && (s.1 != sta_sim::specials::SpecialKind::Replace
+                || special_targeted(feed, *slot) == Some(false))) => Some((
             CommandKind::Order(Order::Special {
                 units: own.clone(),
                 slot: *slot,
@@ -1103,6 +1165,42 @@ mod tests {
             .is_empty()
         );
         assert!(grid(&feed(sta_content::fake::db(), Vec::new(), &[]), Page::Top).is_empty());
+    }
+
+    #[test]
+    fn authored_research_menu_uses_research_sprite_and_keeps_build_routing() {
+        let fake = sta_content::fake::db();
+        let mut db = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for weapon in fake.weapons() { db = db.weapon(weapon.clone()); }
+        for unit in fake.units() {
+            let mut unit = unit.clone();
+            if unit.odf == "fx_station" {
+                unit.raw = Arc::new(sta_odf::resolve("unit", &mut |_| Some("research = 1".into())).unwrap());
+            }
+            db = db.unit(unit);
+        }
+        let mut planet = UnitDef::new("fx_planet", "planet");
+        planet.build.list = vec![DefRef::new("fx_cruiser")];
+        planet.raw = Arc::new(sta_odf::resolve("unit", &mut |_| Some("research = 1".into())).unwrap());
+        db = db.unit(planet);
+        let db = db.build().unwrap();
+        for (odf, expected_label, expected_sprite) in [
+            ("fx_station", "RESEARCH", "b_research"),
+            ("fx_planet", "RESEARCH", "b_research"),
+            ("fx_yard", "BUILD", "b_build"),
+        ] {
+            let f = feed(db.clone(), vec![unit(&db, 2, odf, 1, 100.0, None)], &[2]);
+            let opener = grid(&f, Page::Top).into_iter().find(|b| b.act == Act::OpenBuild).unwrap();
+            assert_eq!(opener.label, expected_label, "{odf}");
+            assert_eq!(opener.tip, if expected_label == "RESEARCH" { "Research menu" } else { "Build" }, "{odf}");
+            assert_eq!(opener.sprite_names, [expected_sprite], "{odf}");
+            if expected_label == "RESEARCH" {
+                let strings = crate::ui::i18n::Strings::from_game("english", r#""GUI_CP_RESEARCH_TOOLTIP", "Native short", "GUI_CP_RESEARCH_VTOOLTIP", "Native verbose","#);
+                assert_eq!(strings.tooltip_text(&opener.tip), "Native short");
+                assert_eq!(strings.tooltip_text(opener.verbose.as_deref().unwrap()), "Native verbose");
+            }
+            assert!(grid(&f, Page::Build).iter().any(|b| matches!(b.act, Act::Build { .. })), "{odf}");
+        }
     }
 
     #[test]
@@ -1552,7 +1650,7 @@ mod tests {
         let mut native = NativeCommands::default();
         native.commands.insert("cancelbuild".into(), NativeCommand {
             odf: "cancelbuild.odf".into(), command: "NONE".into(), button: "b_cancel".into(),
-            preferred: Some([0, 3]), menu: None, tooltip: None, verbose: None,
+            preferred: Some([0, 3]), menu: None, source: Vec::new(), tooltip: None, verbose: None,
             normal: None, hovered: None, pressed: None, disabled: None, active: None,
         });
         native

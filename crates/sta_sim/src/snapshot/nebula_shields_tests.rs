@@ -15,10 +15,9 @@ fn mid_delay() -> Sim {
 
 #[test]
 fn format_38_is_refused_and_a_forged_record_is_a_load_error() {
-    assert_eq!(FORMAT_VERSION, 39);
     let s = mid_delay();
     let bytes = s.snapshot();
-    assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), 39);
+    assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), FORMAT_VERSION);
     let mut old = bytes.clone();
     old[4..6].copy_from_slice(&38u16.to_le_bytes());
     assert!(matches!(Sim::from_snapshot(&old, s.content.clone()), Err(SnapshotError::FormatVersion { found: 38 })));

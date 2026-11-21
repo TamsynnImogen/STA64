@@ -539,6 +539,40 @@ mod tests {
         assert_eq!(unnamed[0].name, "default_sprite");
     }
 
+    #[test]
+    fn adjacent_pieces_share_rounded_horizontal_and_vertical_edges() {
+        let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
+        cfg.numbers.insert("frameSize".into(), 3.0);
+        cfg.names.insert("frame".into(), "frame_sprite".into());
+        cfg.rects.insert("frame_0".into(), rect(1, 1, 1, 1));
+        cfg.rects.insert("frame_1".into(), rect(2, 1, 3, 1));
+        cfg.rects.insert("frame_2".into(), rect(1, 2, 1, 3));
+        cfg.rects.insert("singleControl".into(), rect(1, 1, 1, 1));
+        cfg.rects.insert("singlePanelArea".into(), rect(1, 1, 1, 1));
+
+        for (sx, sy, fit) in [
+            (0.75, 0.75, HudFit::Centred),
+            (1.0, 1.0, HudFit::Centred),
+            (1.25, 1.25, HudFit::Centred),
+            (1.5, 1.5, HudFit::Centred),
+            (1.25, 0.75, HudFit::Stretched),
+            (0.75, 1.25, HudFit::Stretched),
+        ] {
+            let layout = StockLayout::with_fit(&cfg, Vec2::new(1600.0 * sx, 1200.0 * sy), fit);
+            let pieces = layout.pieces("frame");
+            assert_eq!(pieces.iter().map(|p| (p.frame, p.name.as_str())).collect::<Vec<_>>(),
+                [(0, "frame_sprite"), (1, "frame_sprite"), (2, "frame_sprite")]);
+            assert_eq!(pieces[0].rect.right(), pieces[1].rect.x, "horizontal seam at {sx} x {sy}");
+            assert_eq!(pieces[0].rect.bottom(), pieces[2].rect.y, "vertical seam at {sx} x {sy}");
+        }
+
+        // The other rectangle consumers retain their independent size rounding.
+        let layout = StockLayout::new(&cfg, Vec2::new(2000.0, 1500.0));
+        assert_eq!(layout.rect("singleControl"), Some(R::new(1.0, 1.0, 1.0, 1.0)));
+        assert_eq!(layout.panel("single"), Some(R::new(1.0, 1.0, 1.0, 1.0)));
+        assert_eq!(layout.pieces("frame")[0].rect, R::new(1.0, 1.0, 2.0, 2.0));
+    }
+
     /// The palette origin is read against a 1600x1200 reference (see `palette`): Fleet Ops'
     /// 16:9 sheet (canvas 2134x1200, minimap panel 351 wide, popupPaletteXA 264) and 16:10
     /// sheet (1920x1200, 293) start the command cells at 352 canvas units, right of the

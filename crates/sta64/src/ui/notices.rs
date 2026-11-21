@@ -1238,6 +1238,31 @@ mod tests {
         assert_eq!(app.world_mut().query_filtered::<&Node, With<TipBox>>().single(app.world()).unwrap().display, Display::None);
     }
 
+    #[test]
+    fn empty_short_hides_unit_tip_until_verbose_and_native_empty_stays_hidden() {
+        use crate::ui::i18n::Strings;
+        let mut app = rig();
+        app.update();
+        let e = app.world_mut().spawn(Tooltip::new("").verbose("GUI_DETAILS")).id();
+        *app.world_mut().resource_mut::<UnitTip>() = UnitTip {
+            target: Some(sta_sim::EntityId(1)),
+            plain: "USS Test".into(),
+            ..default()
+        };
+        app.insert_resource(Strings::from_game("english", "\"GUI_DETAILS\", \"Native details\""));
+        let display = |app: &mut App| app.world_mut().query_filtered::<&Node, With<TipBox>>().single(app.world()).unwrap().display;
+        *app.world_mut().resource_mut::<TipHover>() = TipHover { target: Some(e), rest: TIP_SHORT_SECS };
+        app.update();
+        assert_eq!(display(&mut app), Display::None);
+        app.world_mut().resource_mut::<TipHover>().rest = TIP_VERBOSE_SECS;
+        app.update();
+        assert_eq!(display(&mut app), Display::Flex);
+        assert_eq!(app.world_mut().query_filtered::<&SpriteText, With<TipText>>().single(app.world()).unwrap().text, "Native details");
+        app.insert_resource(Strings::from_game("english", "\"GUI_DETAILS\", \"\""));
+        app.update();
+        assert_eq!(display(&mut app), Display::None);
+    }
+
     /// Installed assets are local-only. Exercise the exact stop-command key
     /// reported in a screenshot through mounted I18nPlugin and tooltip drawing.
     #[test]

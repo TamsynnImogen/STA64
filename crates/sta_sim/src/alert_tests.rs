@@ -370,3 +370,16 @@ fn a_starbase_follows_the_same_gate_and_takes_alert_edits() {
     assert_eq!(fires(Some(AlertState::Yellow), false), 0, "yellow without a hit");
     assert!(fires(Some(AlertState::Yellow), true) > 0, "yellow after a hit");
 }
+
+#[test]
+fn player_alert_applies_only_to_owned_live_actors_and_uses_the_combat_gate() {
+    let (mut sim, own, enemy) = duel();
+    let order = Command {
+        player: PlayerId(1),
+        seq: 1,
+        kind: CommandKind::Order(Order::Alert { units: vec![enemy, own, EntityId(999)], level: AlertState::Green }),
+    };
+    assert_eq!(fired_by(&mut sim, own, 180, vec![order]), 0);
+    assert_eq!(sim.alert_of(enemy), AlertState::Red);
+    assert_eq!(sim.alert_of(own), AlertState::Green);
+}

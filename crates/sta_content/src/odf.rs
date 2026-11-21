@@ -96,6 +96,7 @@ pub const WEAPON_CLASSES: &[&str] = &[
     "areamissile",
     "toggleweapon",
     "utilityweapon",
+    "replaceweapon",
     "cloakingdevice",
     "cloakingdeviceimp",
     "ordnancedefenseweapon",
@@ -413,7 +414,6 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
             crate::planet::resolve_civilian_population_modifier(&file, odf, profile, def.planet_role, &mut warnings);
         def.planet_max_population = crate::planet::resolve_max_population(&file, odf, def.planet_role, &mut warnings);
         def.orbit_time = crate::planet::resolve_orbit_time(&file, odf, &def.class.0, &mut warnings);
-        def.station_mining = crate::orbital_income::resolve_station(&file, odf, &def.class.0, &model, &mut warnings);
         def.build.queue_limit = build_queue_limit(&file, odf, &mut warnings);
         def.is_starbase = station_flag(&file, odf, profile, &mut warnings);
         let mut native = Overrides::default();
@@ -453,6 +453,7 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
                 warnings.push(Warning::new(&file, format!("freighterName {name} is not a defined unit; no free unit")));
             }
         }
+        def.station_mining = crate::orbital_income::resolve_station(&file, odf, &def.class.0, def.free_unit.is_some(), &model, &mut warnings);
         builder = builder.unit(def);
     }
 
@@ -577,11 +578,27 @@ mod tests {
     }
 
     #[test]
+    fn free_unit_station_resolves_resource_mask_without_orbital_multiplier() {
+        let files = [
+            ("station.odf", "classLabel = \"mining\"\nunitName = \"Station\"\nfreighterName = \"freighter\"\nresourcesCanHandle = \"metal\"\nminingMultiplier = 2\n"),
+            ("freighter.odf", "classLabel = \"freighter\"\nunitName = \"Freighter\"\n"),
+        ];
+        let (db, _) = load_with(Profile::Fo4, &Overrides::default(), &["station".into(), "freighter".into()], &mut |name, _| {
+            files.iter().find(|(file, _)| *file == name).map(|(_, text)| (*text).to_owned())
+        }).unwrap();
+        let station = db.unit(db.key("station").unwrap()).unwrap();
+        assert_eq!(station.free_unit.as_deref(), Some("freighter"));
+        assert_eq!(station.station_mining.unwrap().multiplier, None);
+        assert_eq!(station.station_mining.unwrap().can_handle, Some([false, false, true, false]));
+    }
+
+    #[test]
     fn kinds() {
         let o = |t: &str| sta_odf::resolve("x", &mut |_| Some(t.to_owned())).unwrap();
         assert_eq!(kind_of(&o("classLabel = \"craft\"")), Kind::Unit);
         assert_eq!(kind_of(&o("classLabel = \"Weird\"\nunitName = \"x\"")), Kind::Unit);
         assert_eq!(kind_of(&o("classLabel = \"weird\"\nwpnName = \"x\"")), Kind::Weapon);
+        assert_eq!(kind_of(&o("classLabel = \"replaceweapon\"")), Kind::Weapon);
         assert_eq!(kind_of(&o("classLabel = \"phaser\"")), Kind::Other);
         assert_eq!(kind_of(&o("impulseSpeed = 1")), Kind::Other);
     }

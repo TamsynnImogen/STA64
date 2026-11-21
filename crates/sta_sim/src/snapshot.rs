@@ -27,6 +27,7 @@
 //! Format 37 (SIM-41) adds the repair ships' beam targets to the repair record (version 2).
 //! Format 38 (SIM-45) appends the decommissions (merged after 37; renumbered so the two layouts differ).
 //! Format 39 (SIM-75) appends the shields a nebula took from craft and gives back.
+//! Format 40 adds ReplaceWeapon lineage, reload and child tracking after the nebula shields.
 //!
 //! The state types of other crates (`MoveStats`) have no serde, so the body
 //! uses small mirror records here instead of touching those crates.
@@ -65,7 +66,7 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// tell the file from a valid one by version.
 /// Format 34 appends the mission switches (LUA-41).
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 39;
+pub const FORMAT_VERSION: u16 = 40;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
@@ -508,6 +509,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&self.repairs.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.recycles.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.nebula_shields.to_rec()).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&self.replacements.record()).expect("snapshot serialises"));
         out
     }
 
@@ -589,6 +591,7 @@ impl Sim {
         let (repairs_rec, rest): (crate::repair::RepairsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         let (recycles_rec, rest): (crate::economy::recycle::RecyclesRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         let (nebula_shields_rec, rest): (crate::nebula::NebulaShieldsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        let (replacement_rec, rest): (crate::replacement::Record, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -676,7 +679,9 @@ impl Sim {
         }
         let weapons = Weapons::from_rec(b.weapons).ok_or_else(|| corrupt("weapons"))?;
         let autonomy = crate::autonomy::Autonomy::from_rec(autonomy_rows).ok_or_else(|| corrupt("autonomy"))?;
-        if autonomy.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
+        if autonomy.to_rec().iter().any(|(id, _)| {
+            units.get(*id).is_none_or(|u| !matches!(u.kind, EntityKind::Craft | EntityKind::Station))
+        }) {
             return Err(corrupt("autonomy entity"));
         }
         if watch_rows.iter().any(|(_, r)| r.since > b.tick || r.anchored > b.tick || r.born > b.tick) {
@@ -740,6 +745,8 @@ impl Sim {
         let mut economy = crate::economy::Economy::from_rec(&b.economy);
         economy.restore_personnel(personnel_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         economy.restore_adjust(adjust_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
+        let replacements = crate::replacement::Replacements::restore(replacement_rec, &units)
+            .ok_or_else(|| corrupt("replacement weapon state"))?;
         let mut sim = Sim {
             tick: b.tick,
             rng: Rng(b.rng),
@@ -766,6 +773,7 @@ impl Sim {
             engagement,
             alerts,
             start_effects,
+            replacements,
             nav: Default::default(),
             subsystems,
             scripted,

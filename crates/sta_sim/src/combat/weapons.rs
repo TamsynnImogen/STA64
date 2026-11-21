@@ -260,6 +260,14 @@ impl Weapons {
         self.attack.insert(unit, target);
     }
 
+    pub(crate) fn retarget_replacement_shots(&mut self, old: EntityId, new: EntityId) {
+        for shot in &mut self.shots {
+            if shot.target == old {
+                shot.target = new;
+            }
+        }
+    }
+
     pub fn attack_of(&self, unit: EntityId) -> Option<EntityId> {
         self.attack.get(unit).copied()
     }
@@ -581,6 +589,7 @@ impl Weapons {
             };
             let Some(def) = db.unit(u.def) else { continue };
             let Some((i, kind, w)) = specials::specials_indexed(db, def).nth(slot as usize) else { continue };
+            if kind == specials::SpecialKind::Replace { continue; }
             self.init_mounts(tick, db, id, def, rng);
             let timing = db.weapon_features(w).weapon_shot_timing;
             if timing && self.mounts.get(id).is_some_and(|m| m[i].ready > tick) {

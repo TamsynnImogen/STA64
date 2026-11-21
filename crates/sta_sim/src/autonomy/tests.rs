@@ -40,11 +40,11 @@ fn view_levels(sim: &Sim, id: EntityId) -> Option<[u8; 2]> {
 }
 
 #[test]
-fn craft_start_at_the_engine_defaults_and_the_order_changes_one_level() {
+fn ships_and_stations_start_at_the_engine_defaults_and_the_order_changes_one_level() {
     let (mut sim, _, ship, station) = scene();
     sim.step(&[]);
     assert_eq!(view_levels(&sim, ship), Some([1, 0]));
-    assert_eq!(view_levels(&sim, station), None, "only craft carry autonomy");
+    assert_eq!(view_levels(&sim, station), Some([1, 0]));
     sim.step(&[set(1, ship, AutonomyKind::Movement, AutonomyLevel::High)]);
     assert_eq!(view_levels(&sim, ship), Some([2, 0]));
     sim.step(&[set(1, ship, AutonomyKind::SpecialWeapon, AutonomyLevel::Medium)]);
@@ -52,13 +52,15 @@ fn craft_start_at_the_engine_defaults_and_the_order_changes_one_level() {
 }
 
 #[test]
-fn only_the_owner_orders_and_only_craft() {
+fn only_the_owner_can_order_autonomy_for_a_craft_or_station() {
     let (mut sim, _, ship, station) = scene();
     let out = sim.step(&[set(2, ship, AutonomyKind::Movement, AutonomyLevel::Low)]);
     assert!(out.events.iter().any(|e| matches!(e, crate::SimEvent::Rejected { .. })));
-    let out = sim.step(&[set(1, station, AutonomyKind::Movement, AutonomyLevel::Low)]);
+    let out = sim.step(&[set(2, station, AutonomyKind::Movement, AutonomyLevel::Low)]);
     assert!(out.events.iter().any(|e| matches!(e, crate::SimEvent::Rejected { .. })));
+    sim.step(&[set(1, station, AutonomyKind::Movement, AutonomyLevel::Low)]);
     assert_eq!(view_levels(&sim, ship), Some([1, 0]));
+    assert_eq!(view_levels(&sim, station), Some([0, 0]));
 }
 
 #[test]
@@ -150,7 +152,7 @@ fn a_restored_sim_carries_the_definitions_warp_speed_like_a_live_one() {
 /// SIM-36: a new craft takes `RTS_CFG.h`'s default autonomy as an explicit
 /// row (Roots and FO 4.0: 1 and 2); the engine default writes none.
 #[test]
-fn spawned_crafts_take_the_content_default_as_explicit_rows() {
+fn spawned_crafts_and_stations_take_the_content_default_as_explicit_rows() {
     let rules = sta_content::Rules::default().with_autonomy(sta_content::AutonomyRules { movement: 1, special_weapon: 2 });
     let db = Arc::new(sta_content::fake::db().with_rules(rules));
     let seat = |id| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control: Control::Idle };
@@ -164,11 +166,11 @@ fn spawned_crafts_take_the_content_default_as_explicit_rows() {
     let ship = sim.spawn_def(db.key("fx_frigate").unwrap(), PlayerId(1), at(0), AHEAD).unwrap();
     let station = sim.spawn_def(db.key("fx_station").unwrap(), PlayerId(1), at(3000), AHEAD).unwrap();
     assert_eq!(sim.autonomy.levels(ship), [1, 2]);
-    assert_eq!(sim.autonomy.to_rec(), vec![(ship, [1, 2])], "stations carry no row");
-    assert_eq!(view_levels(&sim, station), None);
-    // Setting the engine default removes nothing it should not: the row now says [1, 0] by absence.
+    assert_eq!(sim.autonomy.to_rec(), vec![(ship, [1, 2]), (station, [1, 2])]);
+    assert_eq!(view_levels(&sim, station), Some([1, 2]));
+    // Returning one actor to the engine default drops only its row.
     WorldSource::step(&mut sim, &[set(1, ship, AutonomyKind::SpecialWeapon, AutonomyLevel::Low)]);
-    assert!(sim.autonomy.to_rec().is_empty());
+    assert_eq!(sim.autonomy.to_rec(), vec![(station, [1, 2])]);
     let back = Sim::from_snapshot(&sim.snapshot(), Some(Arc::clone(&db))).unwrap();
     assert_eq!(back.digest(), sim.digest());
 
