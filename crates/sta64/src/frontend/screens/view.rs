@@ -33,8 +33,13 @@ pub enum Act {
     PickMod,
     /// Map select's Select Map: take the picked map into the draft.
     TakeMap,
-    /// Mod select's Use Mod.
+    /// Launch the selected mod.
     UseMod,
+    ToggleModModules,
+    ToggleModNoIntro,
+    ToggleModNoAi,
+    CreateModShortcut,
+    VisitModWebsite,
     Cycle(usize, Col),
     CycleResources,
     CycleFog,
@@ -92,6 +97,7 @@ pub struct ModList;
 pub struct ScrollBox {
     pub selected: Option<usize>,
     pub count: usize,
+    pub row_h: f32,
 }
 
 /// The share of the window height (percent) a list's box may take; the title
@@ -101,7 +107,7 @@ pub const LIST_MAX_VH: f32 = 55.0;
 /// A [`list`] in a [`ScrollBox`] that scrolls to `scroll`.
 fn scroll_list(theme: &Theme, rows: &[&str], picked: Option<usize>, scroll: f32, marker: impl Component) -> impl Bundle {
     (
-        ScrollBox { selected: picked, count: rows.len() },
+        ScrollBox { selected: picked, count: rows.len(), row_h: theme.list_row_h },
         Node { flex_direction: FlexDirection::Column, max_height: Val::Vh(LIST_MAX_VH), overflow: Overflow::scroll_y(), ..default() },
         ScrollPosition(Vec2::new(0.0, scroll)),
         children![(list(theme, rows, picked), marker)],
@@ -142,7 +148,7 @@ pub fn spawn(commands: &mut Commands, screen: Screen, ctx: &Ctx, camera: Option<
         Screen::Advanced => frame(commands, ctx, screen, camera, &tr("Advanced"), 760.0, advanced(ctx)),
         Screen::MapSelect => frame(commands, ctx, screen, camera, &tr("Select map"), 760.0, map_select(ctx)),
         Screen::Settings => frame(commands, ctx, screen, camera, &tr("Options"), 760.0, settings(ctx)),
-        Screen::ModSelect => frame(commands, ctx, screen, camera, &tr("Mods"), 900.0, mod_select(ctx)),
+        Screen::ModSelect => super::mod_manager::spawn(commands, ctx, camera),
         // Drawn by `frontend::campaign` (UI-25) and `frontend::lobby` (UI-11), which have their own systems.
         Screen::Missions | Screen::Briefing | Screen::Debrief | Screen::Multiplayer | Screen::HostGame | Screen::JoinGame | Screen::Lobby => {}
     }
@@ -395,43 +401,5 @@ fn settings(ctx: &Ctx) -> impl Bundle {
         p.spawn((row(t.gap), children![cell(&t, 240.0, &tr("LCARS interface")), (toggle(&t, &tr("On"), s.lcars_ui, 220.0), SettingToggle(SettingKey::LcarsUi))]));
         p.spawn(label(&t, &tr("Off uses the game/mod default.")));
         p.spawn((button(&t, &tr("Previous menu"), 220.0), Act::Goto(Screen::Main)));
-    })
-}
-
-fn mod_select(ctx: &Ctx) -> impl Bundle {
-    let t = ctx.theme.clone();
-    let base = ctx.data.base_name.clone().unwrap_or_else(|| tr("Base game"));
-    let mut names = vec![base.clone()];
-    names.extend(ctx.data.mods.iter().map(|m| m.name.clone()));
-    let scroll = ctx.scroll.offset;
-    let picked = ctx.browse.mod_row.min(names.len() - 1);
-    let mut details = Vec::new();
-    match picked.checked_sub(1).and_then(|i| ctx.data.mods.get(i)) {
-        None => details.push(trf("{0}, as installed, without a mod.", &[&base])),
-        Some(m) => {
-            details.push(format!("{}{}", m.name, m.version.as_deref().map(|v| format!("  v{v}")).unwrap_or_default()));
-            if !m.authors.is_empty() {
-                details.push(trf("By {0}", &[&m.authors.join(", ")]));
-            }
-            if let Some(parent) = &m.parent {
-                details.push(trf("Needs {0}", &[parent]));
-            }
-            if !m.description.is_empty() {
-                details.push(m.description.clone());
-            }
-        }
-    }
-    let current = match &ctx.selected.0 {
-        Some(f) => trf("In use: {0}", &[f]),
-        None => trf("In use: {0}", &[&base]),
-    };
-    content(ctx.theme, move |p| {
-        let rows: Vec<&str> = names.iter().map(String::as_str).collect();
-        p.spawn(scroll_list(&t, &rows, Some(picked), scroll, ModList));
-        for d in &details {
-            p.spawn(label(&t, d));
-        }
-        p.spawn(label(&t, &current));
-        p.spawn((row(t.gap), children![(button(&t, &tr("Use mod"), 220.0), Act::UseMod), (button(&t, &tr("Previous menu"), 220.0), Act::Goto(Screen::Main))]));
     })
 }

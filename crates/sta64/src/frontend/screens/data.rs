@@ -60,10 +60,31 @@ pub struct ModEntry {
     pub authors: Vec<String>,
     pub version: Option<String>,
     pub parent: Option<String>,
+    pub standalone: bool,
+    pub asset_version: Option<u32>,
+    pub website: Option<String>,
+    pub blocked: Option<String>,
+    /// Module names from info.ini, with required entries marked.
+    pub modules: Vec<(String, bool)>,
 }
 
 impl From<&sta_vfs::mods::ModInfo> for ModEntry {
     fn from(m: &sta_vfs::mods::ModInfo) -> ModEntry {
+        let mut modules: Vec<(String, bool)> = Vec::new();
+        for (key, name) in m.ini.section("modules") {
+            let key = key.to_ascii_lowercase();
+            let required = key.starts_with("required");
+            let index = key.strip_prefix("required").or_else(|| key.strip_prefix("active"));
+            let name = name.trim();
+            if name.is_empty() || !index.is_some_and(|i| !i.is_empty() && i.bytes().all(|n| n.is_ascii_digit())) {
+                continue;
+            }
+            if let Some((_, was_required)) = modules.iter_mut().find(|(existing, _)| existing.eq_ignore_ascii_case(name)) {
+                *was_required |= required;
+            } else {
+                modules.push((name.to_owned(), required));
+            }
+        }
         ModEntry {
             folder: m.folder.clone(),
             name: m.name.clone(),
@@ -71,6 +92,13 @@ impl From<&sta_vfs::mods::ModInfo> for ModEntry {
             authors: m.authors.clone(),
             version: m.version.clone(),
             parent: m.parent.clone(),
+            standalone: m.standalone,
+            asset_version: m.asset_version,
+            website: m.website.as_ref().map(|url| {
+                if url.contains(':') { url.clone() } else { format!("https://{url}") }
+            }),
+            blocked: None,
+            modules,
         }
     }
 }
@@ -110,7 +138,17 @@ impl ScreenData {
     /// Every mod in a `Data` folder (CON-13), and a note for each folder skipped.
     pub fn mods_in(data: &Path) -> (Vec<ModEntry>, Vec<String>) {
         match sta_vfs::mods::list_mods(data) {
-            Ok((mods, notes)) => (mods.iter().map(ModEntry::from).collect(), notes),
+            Ok((mods, notes)) => {
+                let entries = mods.iter().map(|m| {
+                    let mut entry = ModEntry::from(m);
+                    match sta_vfs::mod_chain_info(data, &m.folder) {
+                        Ok(chain) => entry.standalone |= chain.first().is_some_and(|top| top.standalone),
+                        Err(error) => entry.blocked = Some(error.to_string()),
+                    }
+                    entry
+                }).collect();
+                (entries, notes)
+            }
             Err(e) => (Vec::new(), vec![e.to_string()]),
         }
     }
@@ -138,6 +176,11 @@ impl ScreenData {
             authors: vec!["Fake Author".into()],
             version: Some("1.0".into()),
             parent: parent.map(str::to_owned),
+            standalone: parent.is_none(),
+            asset_version: Some(50000),
+            website: None,
+            blocked: None,
+            modules: vec![("ExampleModule".into(), false)],
         };
         ScreenData {
             base_name: Some("Fake Install".into()),
@@ -612,6 +655,16 @@ pub struct Browse {
     pub map: usize,
     /// Mod select: 0 is the base game, `n` is `mods[n - 1]`.
     pub mod_row: usize,
+    pub mod_modules: bool,
+    pub mod_no_intro: bool,
+    pub mod_no_ai: bool,
+}
+
+/// Options selected at the launch of the current mod.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct ModLaunchOptions {
+    pub no_intro: bool,
+    pub no_ai: bool,
 }
 
 /// A setting the settings screen edits.

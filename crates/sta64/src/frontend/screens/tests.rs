@@ -152,7 +152,7 @@ fn every_screen_is_reached_by_state_and_replaces_the_last() {
         (Screen::Setup, "Instant action", 2 * 3 + 8 + 11),
         (Screen::MapSelect, "Select map", 2),
         (Screen::Settings, "Options", 1),
-        (Screen::ModSelect, "Mods", 2),
+        (Screen::ModSelect, "Mods", 6 + usize::from(cfg!(target_os = "linux"))),
     ];
     for (s, title, buttons) in want {
         go(&mut app, s);
@@ -721,14 +721,14 @@ fn mod_select_lists_the_mods_and_reports_the_choice() {
     assert_eq!(count::<ListItem>(&mut app), 3, "the base game and two mods");
     assert!(has_text(&mut app, "Balance Pack"));
     assert!(has_text(&mut app, "Fake Install"), "the base entry is named after the install");
-    assert!(has_text(&mut app, "In use: Fake Install"));
+    assert!(has_text(&mut app, "Active"));
     let first = app.world_mut().query::<&ListItem>().iter(app.world()).map(|i| i.0).min();
     assert_eq!(first, Some(0), "the list starts with the base entry");
     let row = app.world_mut().query::<(Entity, &ListItem)>().iter(app.world()).find(|(_, i)| i.0 == 2).unwrap().0;
     click(app.world_mut(), row);
     settle(&mut app);
     assert_eq!(count::<ModList>(&mut app), 1);
-    assert!(has_text(&mut app, "Needs fx_balance"), "the picked mod's details show");
+    assert!(has_text(&mut app, "Requires: Balance Pack"), "the installed parent uses its display name");
     assert!(has_text(&mut app, "Adds a cruiser."));
     press(&mut app, Act::UseMod);
     assert_eq!(screen(&app), Screen::Main);
@@ -736,7 +736,6 @@ fn mod_select_lists_the_mods_and_reports_the_choice() {
     assert_eq!(app.world().resource::<Seen>().chosen, [ModChosen(Some("fx_ships".into()))]);
     // Back on the screen the mod in use is picked; the base game is a choice too.
     press(&mut app, Act::PickMod);
-    assert!(has_text(&mut app, "In use: fx_ships"));
     assert_eq!(app.world().resource::<Browse>().mod_row, 2);
     let base = app.world_mut().query::<(Entity, &ListItem)>().iter(app.world()).find(|(_, i)| i.0 == 0).unwrap().0;
     click(app.world_mut(), base);
@@ -745,7 +744,6 @@ fn mod_select_lists_the_mods_and_reports_the_choice() {
     assert_eq!(app.world().resource::<SelectedMod>().0, None);
     assert_eq!(app.world().resource::<Seen>().chosen.last(), Some(&ModChosen(None)), "choosing the base entry remounts with no mod");
     press(&mut app, Act::PickMod);
-    assert!(has_text(&mut app, "In use: Fake Install"));
     assert_eq!(app.world().resource::<Browse>().mod_row, 0, "the base entry is current when no mod is mounted");
 }
 
@@ -1005,4 +1003,37 @@ fn installed_race_display_keys_resolve_federation_caption() {
     let strings = crate::ui::i18n::Strings::load(&vfs, "english");
     assert_eq!(data.race_label(&id, Some(&strings)), "Federation");
     eprintln!("race caption: {} id={id} displayKey={display_key} -> Federation", active.as_deref().unwrap_or("base"));
+}
+
+
+#[test]
+fn mod_manager_shows_modules_and_marks_unmountable_rows() {
+    let mut data = ScreenData::fake();
+    data.mods[1].blocked = Some("Missing parent".into());
+    let mut app = app_with_data(data);
+    press(&mut app, Act::PickMod);
+    let select = |app: &mut App, index| {
+        let row = app.world_mut().query::<(Entity, &ListItem)>().iter(app.world()).find(|(_, item)| item.0 == index).unwrap().0;
+        click(app.world_mut(), row);
+        settle(app);
+    };
+    select(&mut app, 1);
+    press(&mut app, Act::ToggleModModules);
+    assert!(has_text(&mut app, "ExampleModule"));
+    press(&mut app, Act::ToggleModModules);
+    select(&mut app, 2);
+    assert!(has_text(&mut app, "Cannot launch: Missing parent"));
+    assert!(!app.world_mut().query::<&Act>().iter(app.world()).any(|act| *act == Act::UseMod));
+    assert!(app.world().resource::<Seen>().chosen.is_empty());
+}
+
+#[test]
+fn mod_no_ai_leaves_local_computer_seats_idle() {
+    let mut app = app();
+    app.world_mut().resource_mut::<ModLaunchOptions>().no_ai = true;
+    go(&mut app, Screen::Setup);
+    press(&mut app, Act::Launch);
+    let started = started(&mut app);
+    assert_eq!(started[0].players[0].control, Control::Human);
+    assert_eq!(started[0].players[1].control, Control::Idle);
 }
