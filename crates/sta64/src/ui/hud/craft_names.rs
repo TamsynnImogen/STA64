@@ -11,6 +11,14 @@ pub(crate) fn unit_name(def: &UnitDef) -> Option<&str> {
         .filter(|name| !name.is_empty())
 }
 
+/// The craft name a unit's definition gives it from `possibleCraftNames` (the stable choice
+/// [`identity`] makes), or `None` when the definition authors none: then [`identity`] falls back
+/// to the type caption, which is not a craft name.
+pub(crate) fn pool_name(def: &UnitDef, id: EntityId) -> Option<String> {
+    let has_pool = rows(def.raw.raw("possibleCraftNames").unwrap_or_default()).iter().any(|name| !name.trim().is_empty());
+    has_pool.then(|| identity(def, id).name)
+}
+
 pub(super) fn instance(def: &UnitDef, id: EntityId) -> String {
     identity(def, id).name
 }
