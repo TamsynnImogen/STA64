@@ -23,7 +23,7 @@
 
 use bevy::math::Vec2;
 
-use crate::frontend::screens::stock::layout::{Grade, Region, row_pitch};
+use crate::frontend::screens::stock::layout::{Grade, Region};
 
 /// Each part of the multiplayer screens, by what it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -93,6 +93,7 @@ pub const LIGHT_X: f32 = 14.0;
 pub const COL_X: [f32; 3] = [41.0, 203.0, 375.0];
 pub const COL_RIGHT: f32 = 450.0;
 pub const TABLE_TOP: f32 = 80.0;
+const TABLE_ROW_PITCH: f32 = 30.0;
 /// Width of the Kick button at the right end of the player column (arranged).
 const KICK_W: f32 = 52.0;
 
@@ -100,7 +101,7 @@ const KICK_W: f32 = 52.0;
 pub fn region(slot: MSlot) -> Region {
     let col = |c: usize, i: usize| {
         let next = COL_X.get(c + 1).copied().unwrap_or(COL_RIGHT);
-        (COL_X[c], TABLE_TOP + row_pitch() * i as f32, next - COL_X[c] - 10.0, row_pitch())
+        (COL_X[c], TABLE_TOP + TABLE_ROW_PITCH * i as f32, next - COL_X[c] - 10.0, TABLE_ROW_PITCH)
     };
     match slot {
         MSlot::Title => m(0.0, 0.0, 800.0, 30.0),
