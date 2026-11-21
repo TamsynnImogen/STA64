@@ -236,6 +236,7 @@ impl Profile {
             // can toggle point defence (UI-31); then SIM-37's one-line flip:
             // `Sta2Classic` `pd_energy`, `Fo4` `pd_energy` + `pd_debt_timer`.
             Profile::Sta2Classic => Features {
+                shield_zero_hold: true,
                 turrets: true,
                 point_defense_cycles: true,
                 weapon_shot_timing: true,
@@ -527,7 +528,7 @@ fn read_ini_named(root: &Path, name: &str) -> Option<Ini> {
 }
 
 /// Switch names, in `Features` declaration order.
-pub const FEATURE_NAMES: [&str; 41] = [
+pub const FEATURE_NAMES: [&str; 42] = [
     "weapon_damage_controls",
     "point_defense_cycles",
     "fire_arcs",
@@ -569,6 +570,7 @@ pub const FEATURE_NAMES: [&str; 41] = [
     "transport_attack_by_weld",
     "weapon_cloak_fire",
     "crew_weapon_delay",
+    "shield_zero_hold",
 ];
 
 impl Features {
@@ -615,6 +617,7 @@ impl Features {
             "transport_attack_by_weld" => &mut self.transport_attack_by_weld,
             "weapon_cloak_fire" => &mut self.weapon_cloak_fire,
             "crew_weapon_delay" => &mut self.crew_weapon_delay,
+            "shield_zero_hold" => &mut self.shield_zero_hold,
             _ => return None,
         })
     }
@@ -874,7 +877,8 @@ mod tests {
             "builder_hold_fire",
             "target_score",
             "idle_assist",
-            "assist_on_ally_fire"
+            "assist_on_ally_fire",
+            "shield_zero_hold"
         ]);
     }
 

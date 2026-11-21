@@ -50,6 +50,7 @@ pub(crate) fn content_in(crew_loss: bool, profile: Option<Profile>) -> Arc<Conte
     let (cloakers, devices) = crate::specials::fixture::defs();
     let mut features = fake.features().clone();
     features.crew_loss_on_hit = crew_loss;
+    features.shield_zero_hold = profile == Some(Profile::Sta2Classic);
     let mut b = ContentDb::builder().profile(profile.unwrap_or(fake.profile())).features(features);
     for w in fake.weapons().cloned().chain(devices) {
         b = b.weapon(w);
@@ -274,6 +275,19 @@ fn regeneration_adds_shields_and_repair_mends_live_systems() {
     assert_eq!(engines_open, Fixed::from_int(50));
     assert!(near(engines, Fixed::from_int(47)), "3 a second: {engines:?}");
     assert_eq!(sensors, Fixed::from_int(100), "a destroyed system is not repaired (interim)");
+}
+
+#[test]
+fn nebula_regeneration_waits_for_an_empty_shield_pool_hold() {
+    let at = v(1000, 1000);
+    let mut s = sim_with(vec![neb("fx_calm", at, 300)], content_in(false, Some(Profile::Sta2Classic)));
+    let id = put(&mut s, "fx_cruiser", 1, at);
+    s.units.get_mut(id).unwrap().shields.now[0] = Fixed::ZERO;
+    s.zero_shield_holds.hold(id, 0, 2);
+    run(&mut s, 2);
+    assert_eq!(s.unit(id).unwrap().shields.now[0], Fixed::ZERO);
+    run(&mut s, 1);
+    assert!(s.unit(id).unwrap().shields.now[0] > Fixed::ZERO);
 }
 
 #[test]

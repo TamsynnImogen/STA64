@@ -67,7 +67,7 @@ fn _every_sim_field_is_decided(s: &Sim) {
     let Sim {
         tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, starts: _, regions: _,
         bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, economy: _,
-        production: _, victory: _, specials: _, autonomy: _, start_effects: _, replacements: _, nav: _, subsystems: _, attrs: _, scripted: _, switches: _, relations: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _, transports: _, recrew: _, repairs: _, recycles: _, nebula_shields: _, alerts: _, mission_switches: _,
+        production: _, victory: _, specials: _, autonomy: _, start_effects: _, replacements: _, nav: _, subsystems: _, zero_shield_holds: _, attrs: _, scripted: _, switches: _, relations: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _, transports: _, recrew: _, repairs: _, recycles: _, nebula_shields: _, alerts: _, mission_switches: _,
     } = s;
 }
 
@@ -218,6 +218,9 @@ impl Sim {
         self.alerts.hash_into(&mut h);
         if !self.subsystems.is_empty() {
             self.subsystems.hash_into(&mut h);
+        }
+        if !self.zero_shield_holds.is_empty() {
+            self.zero_shield_holds.hash_into(&mut h);
         }
         if !self.scripted.is_empty() {
             self.scripted.hash_into(&mut h);
@@ -397,6 +400,9 @@ impl Sim {
                 }
                 if !self.transports.is_empty() {
                     row(None, "transports, parties in flight, shield holds (hash)", block("transports", &|h| self.transports.hash_into(h)));
+                }
+                if !self.zero_shield_holds.is_empty() {
+                    row(None, "shield zero holds (hash)", block("shield-zero-holds", &|h| self.zero_shield_holds.hash_into(h)));
                 }
                 if !self.relations.is_empty() {
                     row(None, "mission relations (hash)", block("relations", &|h| self.relations.hash_into(h)));

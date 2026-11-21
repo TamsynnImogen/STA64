@@ -153,6 +153,7 @@ impl Sim {
         self.start_effects.remove(id);
         self.replacements.remove(id);
         self.subsystems.remove(id);
+        self.zero_shield_holds.remove(id);
         self.attrs.remove(id);
         self.colonies.remove_entity(id);
         self.transports.remove_entity(id);
