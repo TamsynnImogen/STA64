@@ -23,7 +23,9 @@ alphaspr tex_alpha 0 0 32 32\n\
 @animation flip4\noffset 4 1.0 step\n@auto=row\n@keyframes\n";
 
 fn table() -> SpriteTable {
-    SpriteTable::parse(TABLE.as_bytes())
+    // The flares' sprites too: a flare sprite of its own and the impact flare's constant one.
+    let text = TABLE.replacen("@tmaterial=alpha", &format!("flarespr tex_flare 0 0 32 32 @anim=flip4\n{} tex_impact 0 32 32 32 @anim=flip4\n@tmaterial=alpha", stock_flares::IMPACT_SPRITE), 1);
+    SpriteTable::parse(text.as_bytes())
 }
 
 fn look(sprite: &str) -> ShotLook {
@@ -42,7 +44,8 @@ fn weapon(odf: &str, class: &str, kind: WeaponKind, look: ShotLook) -> WeaponDef
 
 /// A phaser with a one-second life and a fifth of it to grow and to retract.
 fn phaser() -> WeaponDef {
-    weapon("w_phaser", "phaser", WeaponKind::Beam, ShotLook { life_span: Some(1.0), travel_time_fraction: Some(0.2), ..look("beamspr") })
+    let flare = sta_content::ShotFlare { sprite: "flarespr".into(), radius_multiplier: 2.0 };
+    weapon("w_phaser", "phaser", WeaponKind::Beam, ShotLook { life_span: Some(1.0), travel_time_fraction: Some(0.2), flare: Some(flare), ..look("beamspr") })
 }
 fn pulse() -> WeaponDef {
     weapon("w_pulse", "pphaser", WeaponKind::Projectile, ShotLook { length: Some(30.0), ..look("pulsespr") })
@@ -335,6 +338,18 @@ fn content(rules: ShotCfg) -> ContentDb {
     r.shots = rules;
     ContentBuilder::default()
         .weapon(phaser())
+        .weapon({
+            let mut w = phaser();
+            w.odf = "w_phaser_ign".into();
+            w.base.ignore_shield = Some(true);
+            w
+        })
+        .weapon({
+            let mut w = phaser();
+            w.odf = "w_phaser_plain".into();
+            w.look.flare = None;
+            w
+        })
         .weapon(pulse())
         .weapon(torpedo())
         .weapon(tractor())
@@ -383,6 +398,8 @@ struct Setup {
     /// Unit 2's def and a rail point (the target); `until` ends it.
     target_def: &'static str,
     target_z: i32,
+    /// Where unit 2 is at tick 300 (it starts at x = 0): it moves along x.
+    target_x: i32,
     target_until: Option<u64>,
     shooter_until: Option<u64>,
     events: Vec<(u64, &'static str, u8, u64)>,
@@ -390,7 +407,7 @@ struct Setup {
 
 impl Setup {
     fn new(rules: ShotCfg) -> Setup {
-        Setup { db: content(rules), shields: false, target_def: "t_target", target_z: 600, target_until: None, shooter_until: None, events: Vec::new() }
+        Setup { db: content(rules), shields: false, target_def: "t_target", target_z: 600, target_x: 0, target_until: None, shooter_until: None, events: Vec::new() }
     }
     /// A shot fired at tick `at`: weapon name, hardpoint, target unit.
     fn fire(mut self, at: u64, weapon: &'static str, hardpoint: u8) -> Self {
@@ -407,10 +424,12 @@ impl Setup {
         let text = format!(
             "{{ units: [
                 {{ id: 1, def: \"t_ship\", owner: 0, hull: 800, rails: [{{ at: 0, pos: {{ x: 0, y: 0, z: 0 }} }}, {{ at: 300, pos: {{ x: 60, y: 0, z: 0 }} }}]{} }},
-                {{ id: 2, def: \"{}\", owner: 1, hull: 400, rails: [{{ at: 0, pos: {{ x: 0, y: 0, z: {} }} }}]{} }},
+                {{ id: 2, def: \"{}\", owner: 1, hull: 400, rails: [{{ at: 0, pos: {{ x: 0, y: 0, z: {} }} }}, {{ at: 300, pos: {{ x: {}, y: 0, z: {} }} }}]{} }},
             ], events: [{ev}] }}",
             until(self.shooter_until),
             self.target_def,
+            self.target_z,
+            self.target_x,
             self.target_z,
             until(self.target_until)
         );
@@ -809,6 +828,287 @@ fn sprites_resolve_with_the_ordnance_duration_of_their_content() {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Flares
+// ---------------------------------------------------------------------------------------------
+
+fn flares(app: &mut App) -> Vec<Flare> {
+    let mut v: Vec<Flare> = app.world_mut().query::<&Flare>().iter(app.world()).cloned().collect();
+    v.sort_by(|a, b| (a.object.0, a.born).partial_cmp(&(b.object.0, b.born)).unwrap());
+    v
+}
+
+fn of_kind(v: &[Flare], kind: FlareKind) -> Vec<Flare> {
+    v.iter().filter(|f| f.kind == kind).cloned().collect()
+}
+
+/// Every flare of `kind` the app shows over `frames` frames, once each (by object and birth).
+fn seen(app: &mut App, frames: usize, kind: FlareKind) -> Vec<Flare> {
+    let mut all: Vec<Flare> = Vec::new();
+    for _ in 0..frames {
+        app.update();
+        for f in of_kind(&flares(app), kind) {
+            if !all.iter().any(|g| g.object == f.object && g.born == f.born) {
+                all.push(f);
+            }
+        }
+    }
+    all
+}
+
+/// The model of unit `id`: a root and named nodes at given offsets (render space).
+fn model(app: &mut App, id: u32, nodes: &[(&str, Vec3)]) -> Entity {
+    let root = app.world_mut().spawn((GlobalTransform::default(), InheritedVisibility::VISIBLE)).id();
+    for (name, at) in nodes {
+        app.world_mut().spawn((Name::new(name.to_string()), GlobalTransform::from_translation(*at), ChildOf(root)));
+    }
+    app.world_mut().resource_mut::<SimEntities>().0.insert(EntityId(id), root);
+    root
+}
+
+#[test]
+fn the_muzzle_flare_lasts_the_part_of_the_life_after_the_grow_up_to_the_cap() {
+    assert!((stock_flares::muzzle_life(1.0, 0.2) - 0.8).abs() < 1e-6);
+    assert_eq!(stock_flares::muzzle_life(20.0, 0.1), stock_flares::MUZZLE_LIFE_CAP, "capped");
+    assert_eq!(stock_flares::muzzle_life(1.0, 0.0), 1.0);
+    assert_eq!(stock_flares::muzzle_life(1.0, 1.0), 0.0);
+}
+
+#[test]
+fn only_the_ordnance_class_that_has_a_flare_raises_a_muzzle_flare_sized_and_timed_from_the_data() {
+    let setup = Setup::new(ShotCfg::default())
+        .fire(4, "w_phaser", 0)
+        .fire(4, "w_pulse", 1)
+        .fire(4, "w_torp", 2)
+        .fire(4, "w_tractor", 3)
+        .fire(4, "w_art", 4)
+        .fire(4, "w_phaser_plain", 0);
+    let mut app = setup.app(Some(RenderProfile::Stock));
+    let muzzle = seen(&mut app, 12, FlareKind::Muzzle);
+    assert_eq!(muzzle.len(), 1, "{muzzle:?}");
+    let f = &muzzle[0];
+    assert_eq!(f.object, EntityId(1));
+    assert_eq!(f.sprite, "flarespr");
+    // Radius 4 times the multiplier 2; (1 - 0.2) of a 1 s life span, 24 ticks; the shot's colour (white).
+    assert_eq!(f.half, 8.0);
+    assert_eq!(f.life, 0.8 * TICK_HZ as f32);
+    assert_eq!(f.colour, Vec3::ONE);
+}
+
+#[test]
+fn the_impact_flare_appears_on_hull_hits_only() {
+    // (shields up, target, weapon) and whether a hull hit.
+    let cases = [
+        (false, "t_target", "w_phaser", 1),
+        (true, "t_target", "w_phaser", 0),
+        (true, "t_target", "w_phaser_ign", 1),
+        (true, "t_planet", "w_phaser", 1),
+        (false, "t_planet", "w_phaser", 1),
+    ];
+    for (shields, target, weapon, want) in cases {
+        let mut setup = Setup::new(ShotCfg::default()).fire(4, weapon, 0);
+        setup.shields = shields;
+        setup.target_def = target;
+        let mut app = setup.app(Some(RenderProfile::Stock));
+        let mut impacts: Vec<Flare> = Vec::new();
+        let mut fired = None;
+        for _ in 0..45 {
+            app.update();
+            fired = fired.or_else(|| shots(&mut app).first().map(|s| s.fired));
+            for f in of_kind(&flares(&mut app), FlareKind::Impact) {
+                if !impacts.iter().any(|g| g.born == f.born) {
+                    impacts.push(f);
+                }
+            }
+        }
+        assert_eq!(impacts.len(), want, "shields up {shields}, {target}, {weapon}");
+        if let Some(f) = impacts.first() {
+            // Radius 4 times 2, one second, white, on the target, born when the beam reaches it (a fifth of 30 ticks after the shot).
+            assert_eq!((f.object, f.half, f.life, f.colour, f.sprite.as_str()), (EntityId(2), 8.0, TICK_HZ as f32, Vec3::ONE, stock_flares::IMPACT_SPRITE));
+            let after = f.born - fired.unwrap() as f64;
+            assert!((5.99..7.5).contains(&after), "born {after} ticks after the shot");
+        }
+    }
+}
+
+#[test]
+fn a_beam_at_a_point_and_the_other_classes_raise_no_impact_flare() {
+    let setup = Setup::new(ShotCfg::default()).fire(4, "w_pulse", 1).fire(4, "w_torp", 2).fire(4, "w_art", 4).fire(4, "w_tractor", 3);
+    let mut app = setup.app(Some(RenderProfile::Stock));
+    assert!(seen(&mut app, 90, FlareKind::Impact).is_empty());
+}
+
+#[test]
+fn flares_follow_their_objects() {
+    let mut setup = Setup::new(ShotCfg::default()).fire(4, "w_phaser", 0);
+    setup.target_x = 300;
+    let mut app = setup.app(Some(RenderProfile::Stock));
+    // The muzzle's node 20 ahead of the moving ship; the target's hull hardpoint 7 right and 2 ahead of its centre.
+    model(&mut app, 1, &[("HP_Phaser", Vec3::new(0.0, 0.0, -20.0))]);
+    model(&mut app, 2, &[("hull_a", Vec3::new(7.0, 0.0, -2.0)), ("hull_b", Vec3::new(7.0, 0.0, -2.0))]);
+    let (mut muzzle_x, mut impact_x) = (Vec::new(), Vec::new());
+    for _ in 0..40 {
+        app.update();
+        let centre = {
+            let w = app.world();
+            point(w.resource::<SimLink>(), EntityId(2), w.resource::<AnimClock>().alpha()).unwrap()
+        };
+        for f in flares(&mut app) {
+            match f.kind {
+                FlareKind::Muzzle => {
+                    assert!((f.at.z - -20.0).abs() < 1e-3, "{}", f.at);
+                    muzzle_x.push(f.at.x);
+                }
+                FlareKind::Impact => {
+                    // In the target's frame: the same offset from its centre whatever it has moved.
+                    assert!((f.at - centre).distance(Vec3::new(7.0, 0.0, -2.0)) < 1e-2, "{} from the target at {centre}", f.at);
+                    impact_x.push(f.at.x);
+                }
+            }
+        }
+    }
+    assert!(muzzle_x.len() > 10 && impact_x.len() > 10, "{} / {}", muzzle_x.len(), impact_x.len());
+    assert!(muzzle_x.last().unwrap() > muzzle_x.first().unwrap(), "the muzzle flare stood still while the ship moved");
+    assert!(impact_x.last().unwrap() - impact_x.first().unwrap() > 5.0, "the impact flare stood still while the target moved");
+}
+
+#[test]
+fn a_muzzle_flare_ends_before_its_beam_and_with_its_owner() {
+    let mut app = Setup::new(ShotCfg::default()).fire(4, "w_phaser", 0).app(Some(RenderProfile::Stock));
+    let mut muzzle_last = 0;
+    let mut beam_last = 0;
+    for i in 0..45 {
+        app.update();
+        if !of_kind(&flares(&mut app), FlareKind::Muzzle).is_empty() {
+            muzzle_last = i;
+        }
+        if !shots(&mut app).is_empty() {
+            beam_last = i;
+        }
+    }
+    assert!(muzzle_last + 4 <= beam_last, "the flare lasts 24 ticks of the beam's 30 (flare {muzzle_last}, beam {beam_last})");
+    assert!(app.world().resource::<NodeParticles>().total() == 0, "its slots are free again");
+    let mut setup = Setup::new(ShotCfg::default()).fire(4, "w_phaser", 0);
+    setup.shooter_until = Some(10);
+    let mut app = setup.app(Some(RenderProfile::Stock));
+    for _ in 0..20 {
+        app.update();
+    }
+    assert!(of_kind(&flares(&mut app), FlareKind::Muzzle).is_empty(), "the owner is gone");
+}
+
+#[test]
+fn at_most_four_flares_live_per_object() {
+    let mut setup = Setup::new(ShotCfg::default());
+    for t in 4..10 {
+        setup = setup.fire(t, "w_phaser", 0);
+    }
+    let mut app = setup.app(Some(RenderProfile::Stock));
+    let (mut most_muzzle, mut most_impact) = (0, 0);
+    let mut fired = Vec::new();
+    for _ in 0..50 {
+        app.update();
+        let now = flares(&mut app);
+        most_muzzle = most_muzzle.max(of_kind(&now, FlareKind::Muzzle).len());
+        most_impact = most_impact.max(of_kind(&now, FlareKind::Impact).len());
+        let store = app.world().resource::<NodeParticles>();
+        assert!(store.live(EntityId(1)) <= 4 && store.live(EntityId(2)) <= 4);
+        assert_eq!(store.total(), now.len(), "the store knows exactly the live flares");
+        for s in shots(&mut app) {
+            if !fired.contains(&s.fired) {
+                fired.push(s.fired);
+            }
+        }
+    }
+    assert_eq!((most_muzzle, most_impact), (4, 4), "six beams, four flares of each kind");
+    assert_eq!(fired.len(), 6);
+    // The newest lose (INTERIM): the muzzle flares that were drawn are those of the first four beams.
+    let mut app = {
+        let mut s = Setup::new(ShotCfg::default());
+        for t in 4..10 {
+            s = s.fire(t, "w_phaser", 0);
+        }
+        s.app(Some(RenderProfile::Stock))
+    };
+    let muzzle = seen(&mut app, 12, FlareKind::Muzzle);
+    let mut born: Vec<f64> = muzzle.iter().map(|f| f.born).collect();
+    born.sort_by(f64::total_cmp);
+    fired.sort_unstable();
+    assert_eq!(born, fired[..4].iter().map(|t| *t as f64).collect::<Vec<_>>());
+}
+
+#[test]
+fn the_cap_is_four_per_object_and_two_hundred_in_all_for_any_kind_of_particle() {
+    let mut world = World::new();
+    let mut store = NodeParticles::default();
+    // Four on one object, the fifth is refused; another object has its own four.
+    for _ in 0..4 {
+        let e = world.spawn_empty().id();
+        assert!(store.admit(EntityId(1), e));
+    }
+    let e = world.spawn_empty().id();
+    assert!(!store.admit(EntityId(1), e) && !store.has_room(EntityId(1)));
+    assert!(store.admit(EntityId(2), e));
+    // Fifty objects of four fill it to two hundred; no object has room after that.
+    for obj in 10..60 {
+        for _ in 0..4 {
+            let e = world.spawn_empty().id();
+            if store.total() < stock_flares::MAX_TOTAL {
+                assert!(store.admit(EntityId(obj), e), "object {obj}");
+            }
+        }
+    }
+    assert_eq!(store.total(), stock_flares::MAX_TOTAL);
+    assert!(!store.has_room(EntityId(999)) && !store.admit(EntityId(999), e));
+    // A slot given back is free again.
+    let first = store.slots_for_test()[0];
+    store.release(first);
+    assert!(store.has_room(EntityId(999)));
+}
+
+#[test]
+fn flares_are_drawn_only_while_their_object_is_visible() {
+    let mut app = Setup::new(ShotCfg::default()).fire(4, "w_phaser", 0).app(Some(RenderProfile::Stock));
+    let root = model(&mut app, 1, &[("HP_Phaser", Vec3::new(0.0, 0.0, -20.0))]);
+    app.world_mut().entity_mut(root).insert(InheritedVisibility::HIDDEN);
+    for _ in 0..12 {
+        app.update();
+    }
+    let hidden = of_kind(&flares(&mut app), FlareKind::Muzzle);
+    assert_eq!(hidden.len(), 1, "a hidden object's flare still exists and holds its slot");
+    assert!(!hidden[0].shown);
+    let sprites = ShotSprites::build(&table(), app.world().resource::<ContentRes>().0.as_ref());
+    let quads = |v: &[Flare]| lay_out(std::iter::empty(), v.iter(), &sprites, Vec3::Z * 100.0, Vec3::X, Vec3::Y).values().map(|g| g.idx.len() / 6).sum::<usize>();
+    assert_eq!(quads(&hidden), 0);
+    app.world_mut().entity_mut(root).insert(InheritedVisibility::VISIBLE);
+    app.update();
+    let shown = of_kind(&flares(&mut app), FlareKind::Muzzle);
+    assert!(shown[0].shown);
+    assert_eq!(quads(&shown), 1);
+    // The quad is a screen-aligned square of twice the half size about the flare.
+    let g = &lay_out(std::iter::empty(), shown.iter(), &sprites, Vec3::Z * 100.0, Vec3::X, Vec3::Y)["flarespr"];
+    let (min, max) = g.pos.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(a, b), p| (a.min(Vec3::from(*p)), b.max(Vec3::from(*p))));
+    assert!((max - min - Vec3::new(16.0, 16.0, 0.0)).length() < 1e-3);
+}
+
+#[test]
+fn the_remaster_look_raises_no_flares_and_the_flare_sprites_are_resolved_for_the_stock_one() {
+    let setup = mixed_setup(ShotCfg::default());
+    for profile in [None, Some(RenderProfile::Refit)] {
+        let mut app = setup.app(profile);
+        for _ in 0..120 {
+            app.update();
+            assert!(flares(&mut app).is_empty());
+        }
+        assert_eq!(app.world().resource::<NodeParticles>().total(), 0);
+    }
+    // Under Stock the same scene raises them; the sprites table of the content holds the flares' sprites.
+    let mut app = setup.app(Some(RenderProfile::Stock));
+    assert!(!seen(&mut app, 120, FlareKind::Muzzle).is_empty());
+    let sprites = ShotSprites::build(&table(), &setup.db);
+    assert!(sprites.get("flarespr").is_some() && sprites.get(stock_flares::IMPACT_SPRITE).is_some());
+}
+
+// ---------------------------------------------------------------------------------------------
 // Against the mounted files
 // ---------------------------------------------------------------------------------------------
 
@@ -848,6 +1148,42 @@ fn install_every_stock_shot_resolves_its_sprite_and_texture() {
     }
     eprintln!("{with_path} shot definitions with a stock path, {drawn} drawn the stock way, fallbacks by reason: {fallbacks:?}");
     assert!(with_path > 0 && drawn > 0, "no shot definition took the stock path ({with_path} with a class path, {drawn} drawn)");
+    assert!(bad.is_empty(), "{bad:#?}");
+}
+
+/// With `STA64_TEST_INSTALL` (+ `STA64_TEST_MOD`): every shot definition with a muzzle flare resolves its
+/// flare sprite in the mounted sprite table and finds its texture, and so does the impact flare's.
+#[test]
+fn install_every_flare_resolves_its_sprite_and_texture() {
+    let Ok(root) = std::env::var("STA64_TEST_INSTALL") else {
+        eprintln!("SKIP: STA64_TEST_INSTALL names no install");
+        return;
+    };
+    let m = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), m.as_deref()).unwrap();
+    let (index, _) = sta_content::OdfIndex::build(&vfs);
+    let (db, _) = ContentDb::load(&vfs, &index).unwrap();
+    let table = sta_assets::load_sprite_table(&vfs);
+    let usable = |name: &str| -> Result<(), String> {
+        let s = table.sprite(name).ok_or(format!("sprite {name} is in no sprite table"))?;
+        if spr_anim::sprite_blend(&s.material) != SpriteBlend::Add {
+            return Err(format!("sprite {name} is not additive"));
+        }
+        sta_assets::find_texture(&vfs, &s.texture).map(|_| ()).ok_or(format!("texture of sprite {name} is not mounted"))
+    };
+    let (mut with_flare, mut bad) = (0, Vec::new());
+    for w in db.weapons() {
+        let Some(f) = w.look.flare.as_ref() else { continue };
+        with_flare += 1;
+        if let Err(e) = usable(&f.sprite) {
+            bad.push(format!("{}: {e}", w.odf));
+        }
+    }
+    if let Err(e) = usable(stock_flares::IMPACT_SPRITE) {
+        bad.push(format!("the impact flare: {e}"));
+    }
+    eprintln!("{with_flare} shot definitions with a muzzle flare");
+    assert!(with_flare > 0, "no definition has a flare");
     assert!(bad.is_empty(), "{bad:#?}");
 }
 
@@ -960,4 +1296,191 @@ fn gpu_a_shot_adds_to_the_frame_and_the_texture_alpha_does_not_darken_it() {
     // Behind the green surface the shot is not seen at all (red stays 0 where the shot would add grey).
     let hidden = px(24, 23);
     assert!(hidden[0] <= 3 && hidden[2] <= 3, "the shot shows through an opaque surface in front: {hidden:?}");
+}
+
+/// A stock shot as the update system leaves it, for the layout and the frame tests.
+fn authored_shot(path: ShotPath, geom: Geom, radius: f32, sprite: &str) -> StockShot {
+    StockShot {
+        path,
+        shooter: EntityId(1),
+        weapon: ContentKey(0),
+        target: Target::Entity(EntityId(2)),
+        fired: 0,
+        life: 100.0,
+        sprite: sprite.to_owned(),
+        radius,
+        length: 0.0,
+        colour: Vec3::ONE,
+        travel: 0.0,
+        range: 1000.0,
+        ignore_shield: false,
+        miss: None,
+        node: None,
+        target_node: None,
+        muzzle: Vec3::ZERO,
+        per_tick: 0.0,
+        to: Vec3::ZERO,
+        last_body: None,
+        last_end: Vec3::ZERO,
+        pinned: false,
+        muzzle_flare: None,
+        impact_flare: None,
+        geom,
+    }
+}
+
+/// With `STA64_GPU_TESTS=1` and a hardware adapter: an AUTHORED atlas (one flat colour per flipbook frame, and a
+/// white marker in the top left corner of every cell) drawn through the shot layout and material that
+/// `draw_shots` uses, for a ribbon, a streak and a billboard, read back from the frame:
+/// - the cell: only the frame's colour (and the marker) shows, none of its neighbours;
+/// - the texture's start: at the beam's muzzle end for the ribbon, at the head for the streak;
+/// - no flipped axis: the marker is at the texture's top left, which a ribbon puts on its + side (the side
+///   the eye-relative cross product gives), the billboard at the screen's top left;
+/// - the frame order at a given game time: the colour at four times a quarter of the flipbook apart.
+///
+/// Prints SKIP and passes otherwise.
+#[test]
+fn gpu_the_atlas_is_drawn_in_its_cell_the_right_way_round_and_in_frame_order() {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::camera::RenderTarget;
+    use bevy::image::ImageSampler;
+    use bevy::render::RenderPlugin;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
+    use bevy::window::ExitCondition;
+    use std::sync::Mutex;
+
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_GPU_TESTS=1 to draw the atlas test");
+        return;
+    }
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
+            .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
+            .set(ImagePlugin::default_linear())
+            .disable::<bevy::winit::WinitPlugin>(),
+    );
+    if let Some(info) = app.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>() {
+        eprintln!("adapter: {} ({:?})", info.name, info.device_type);
+        if crate::bench::frames::is_software_adapter(info.device_type, &info.name) {
+            eprintln!("SKIP: only a software adapter is available ({})", info.name);
+            return;
+        }
+    }
+    app.add_plugins(StockShotsMaterialPlugin).insert_resource(ClearColor(Color::BLACK));
+
+    // The atlas: four 32 x 32 cells in a row. Cell k is one flat colour, its top left 8 x 8 texels are white.
+    let frame_colour = [[255u8, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 0]];
+    let mut data = Vec::new();
+    for y in 0..32 {
+        for x in 0..128 {
+            let c = if x % 32 < 8 && y < 8 { [255, 255, 255] } else { frame_colour[x / 32] };
+            data.extend_from_slice(&[c[0], c[1], c[2], 255]);
+        }
+    }
+    let mut atlas = Image::new(Extent3d { width: 128, height: 32, depth_or_array_layers: 1 }, TextureDimension::D2, data, TextureFormat::Rgba8Unorm, RenderAssetUsages::RENDER_WORLD);
+    atlas.sampler = ImageSampler::nearest();
+    let texture = app.world_mut().resource_mut::<Assets<Image>>().add(atlas);
+
+    // Its sprite table and content, resolved the way the game resolves them: one sprite, four frames a second.
+    let table = SpriteTable::parse(b"sprite_table\n@referenceWidth=128\n@referenceHeight=32\n@tmaterial=additive\natlas tex_atlas 0 0 32 32 @anim=flip4\n@animation flip4\noffset 4 1.0 step\n@auto=row\n@keyframes\n");
+    let db = ContentBuilder::default().weapon(weapon("w_atlas", "phaser", WeaponKind::Beam, ShotLook { life_span: Some(1.0), ..look("atlas") })).build().unwrap();
+    let sprites = ShotSprites::build(&table, &db);
+    let sprite = sprites.get("atlas").expect("the authored sprite resolves").clone();
+
+    // The camera 1 pixel per world unit at z = 0: a 128 x 128 target, a 45 degree view, the eye at 64 / tan(22.5 degrees).
+    let eye = Vec3::new(0.0, 0.0, 64.0 / (std::f32::consts::FRAC_PI_8).tan());
+    // Ribbon: from the muzzle (-60, -20) to (0, -20), 16 wide. Streak: head (55, 40), tail (15, 40), 24 wide. Billboard: centre (-40, 30), half 12.
+    let ribbon = authored_shot(ShotPath::Ribbon, Geom::Segment { a: Vec3::new(-60.0, -20.0, 0.0), b: Vec3::new(0.0, -20.0, 0.0) }, 16.0, "atlas");
+    let streak = authored_shot(ShotPath::Streak, Geom::Segment { a: Vec3::new(55.0, 40.0, 0.0), b: Vec3::new(15.0, 40.0, 0.0) }, 24.0, "atlas");
+    let billboard = authored_shot(ShotPath::Sprite, Geom::Billboard { c: Vec3::new(-40.0, 30.0, 0.0) }, 12.0, "atlas");
+    let shots = [ribbon, streak, billboard];
+    let g = &lay_out(shots.iter(), std::iter::empty(), &sprites, eye, Vec3::X, Vec3::Y)["atlas"];
+    let mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, g.pos.clone())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; g.pos.len()])
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, g.uv.clone())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, g.col.clone())
+        .with_inserted_indices(Indices::U32(g.idx.clone()));
+    let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(mesh);
+    let params_at = |t: f32| ShotParams { rect: Vec4::from(sprite.rect_at(t)), flags: Vec4::new(f32::from(sprite.tile_u), 0.0, 0.0, 0.0) };
+    let material = app.world_mut().resource_mut::<Assets<StockShotMaterial>>().add(StockShotMaterial { params: params_at(0.0), texture });
+    app.world_mut().spawn((Mesh3d(mesh), MeshMaterial3d(material.clone()), Transform::IDENTITY));
+    let mut target = Image::new_target_texture(128, 128, TextureFormat::Rgba8UnormSrgb, None);
+    target.asset_usage = RenderAssetUsages::RENDER_WORLD;
+    let target = app.world_mut().resource_mut::<Assets<Image>>().add(target);
+    app.world_mut().spawn((
+        Camera3d::default(),
+        RenderTarget::from(target.clone()),
+        Msaa::Off,
+        bevy::core_pipeline::tonemapping::Tonemapping::None,
+        Transform::from_translation(eye).looking_at(Vec3::ZERO, Vec3::Y),
+    ));
+    app.finish();
+    app.cleanup();
+    for _ in 0..90 {
+        app.update();
+    }
+    let capture = |app: &mut App| {
+        let frames = Arc::new(Mutex::new(Vec::<Image>::new()));
+        let out = Arc::clone(&frames);
+        app.world_mut().spawn(Screenshot::image(target.clone())).observe(move |shot: On<ScreenshotCaptured>| out.lock().unwrap().push(shot.image.clone()));
+        for _ in 0..60 {
+            app.update();
+            if !frames.lock().unwrap().is_empty() {
+                break;
+            }
+        }
+        let frame = frames.lock().unwrap().first().cloned().expect("no capture");
+        frame.try_into_dynamic().unwrap().to_rgba8()
+    };
+    // Game time (seconds) at the middle of each frame of the flipbook, whose first channel is a second long.
+    for (k, t) in [0.125f32, 0.375, 0.625, 0.875].into_iter().enumerate() {
+        app.world_mut().resource_mut::<Assets<StockShotMaterial>>().get_mut(&material).unwrap().params = params_at(t);
+        for _ in 0..3 {
+            app.update();
+        }
+        let rgba = capture(&mut app);
+        let px = |x: u32, y: u32| {
+            let p = rgba.get_pixel(x, y).0;
+            [p[0], p[1], p[2]]
+        };
+        let (want, white, black) = (frame_colour[k], [255u8, 255, 255], [0u8, 0, 0]);
+        let near = |got: [u8; 3], want: [u8; 3]| got.iter().zip(want).all(|(g, w)| (i32::from(*g) - i32::from(w)).abs() <= 12);
+        let check = |what: &str, x: u32, y: u32, want: [u8; 3]| {
+            let got = px(x, y);
+            assert!(near(got, want), "frame {k} (game time {t}): {what} at ({x}, {y}) is {got:?}, expected {want:?}");
+        };
+        // Billboard, a 24 px square at x 12..36, y 22..46: the marker at its top left (a quarter of a side, 6 px), nothing else white.
+        check("billboard marker", 14, 24, white);
+        check("billboard, marker's right", 20, 24, want);
+        check("billboard, marker's below", 14, 30, want);
+        check("billboard top right", 33, 24, want);
+        check("billboard bottom left", 14, 43, want);
+        check("billboard bottom right", 33, 43, want);
+        check("billboard middle", 24, 34, want);
+        for (x, y) in [(8, 34), (40, 34), (24, 18), (24, 50)] {
+            check("outside the billboard", x, y, black);
+        }
+        // Ribbon, x 4..64 (the texture stretched once from the muzzle at the left to the end), rows 76..92, its + side below
+        // (the cross product of the muzzle's and the end's directions from the eye points down): the marker at the muzzle's bottom.
+        check("ribbon marker (muzzle end, + side)", 8, 90, white);
+        check("ribbon, muzzle end, - side", 8, 79, want);
+        check("ribbon, beside the marker", 24, 90, want);
+        check("ribbon, far end, - side", 58, 79, want);
+        check("ribbon, far end, + side", 58, 90, want);
+        check("ribbon middle", 30, 84, want);
+        check("beyond the ribbon's muzzle end", 1, 84, black);
+        check("beyond the ribbon's far end", 68, 84, black);
+        // Streak, x 79..119 with its head at the right, rows 12..36, its + side above: the marker at the head's top.
+        check("streak marker (head, + side)", 115, 14, white);
+        check("streak, head, - side", 115, 30, want);
+        check("streak, tail, + side", 85, 14, want);
+        check("streak, tail, - side", 85, 30, want);
+        check("streak middle", 100, 24, want);
+        check("beyond the streak's head", 123, 24, black);
+        check("beyond the streak's tail", 75, 24, black);
+    }
 }
