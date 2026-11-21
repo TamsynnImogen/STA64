@@ -8,19 +8,22 @@
 //!   `tooltipTextColor` (read from data), with no border and no shadow (static; measured on the
 //!   planet frame: one flat colour, no edge pixels of another).
 //! - The text is the default stock font role ([`StockRole::Default`]), top-left, wrapped by words at
-//!   [`TIP_WRAP_UNITS`] (explicit line breaks kept), never clipped (static; measured: widest line
-//!   under the limit on one frame).
+//!   [`TIP_WRAP_UNITS`] (explicit line breaks kept), never clipped (wrap width: static, and measured
+//!   at one window size, where a verbose box is 550 units plus the padding wide).
 //! - All sizes are in the HUD's virtual units: the 1600x1200 viewport the HUD is laid out in
 //!   ([`STOCK_SPACE`]), one unit being `hud width / 1600` physical px across and `hud height / 1200`
 //!   down. The box is the text block plus [`TIP_PAD_X`] on both sides, [`TIP_PAD_TOP`] above and
-//!   [`TIP_PAD_BOTTOM`] below (static; box size measured on every frame at 800x600).
-//! - Position, from the pointer in virtual units (static; measured on four frames at 800x600 and one
-//!   at 1280x720): the text's left is the pointer's x snapped to the pixel grid, at least [`TIP_EDGE`]
+//!   [`TIP_PAD_BOTTOM`] below (static; box size, a line count times the line pitch plus a constant,
+//!   measured at one window size on frames of one to six lines).
+//! - Position, from the pointer in virtual units (static; measured at 800x600 on many frames and at
+//!   1280x720 on one): the text's left is the pointer's x snapped to the pixel grid, at least [`TIP_EDGE`]
 //!   from the left, and pulled left so the box ends [`TIP_PAD_X`] short of the viewport's right edge
 //!   when it would cross it; the text's top is the pointer's y plus [`TIP_BELOW`], or above the
 //!   pointer (`y - (height + TIP_FLIP_GAP)`) when `y + height + TIP_FLIP_MARGIN` reaches the
-//!   viewport's bottom; snapped, and not above the top. The flip, the top clamp and the left clamp
-//!   were not seen in any frame (static only).
+//!   viewport's bottom; snapped, and not above the top. Measured at one window size: the flip and its
+//!   threshold (a box of one line stays below where one of six lines flips above, at the same
+//!   pointer) and the right clamp. The left clamp (the pointer did not reach it) and the top clamp
+//!   (the box lies below the pointer there) are static only.
 //! - The viewport the clamps use is the HUD's virtual viewport, not the window: on a centred wide HUD
 //!   the tooltip stays inside the HUD area. Interim: the rule is read from the executable and fits
 //!   frames at two sizes, but no frame reached an edge on a wide window.
@@ -41,8 +44,23 @@
 //! replaces the short one; a target without verbose text keeps its short text. One real-time clock
 //! serves every kind of target: interim, the original has two clocks that agree at normal game speed.
 //!
-//! Not done (see the PR): the fixed-frame and off modes of the profile's tooltip setting, dismissal on
-//! click or key, behaviour while a button is held, the two clocks at other game speeds.
+//! Buttons (the same gate; text in [`tooltip_text`](super::hud::stock::tooltip_text)): the hotkey
+//! marker `^` is consumed and the character after it drawn underlined, in a command's name and again
+//! inside its angle brackets (measured at one window size); the letter inside the brackets is the key
+//! the player has bound for the command where STA64 knows the binding (implemented for Stop, the
+//! actions of `input::keys` with a letter or digit key; interim), else the string's own letter. A build
+//! item is composed from its definition (class `tooltip`, `verboseTooltip`, `hotkeyLabel`, costs) and the
+//! string table's `GUI_CP_*` keys. A click on the hovered button or a key press neither dismisses the
+//! tooltip nor restarts its clock (measured at one window size; pinned by a test: nothing of this
+//! module reads either).
+//!
+//! Where a text holds a character the font lacks, the stock box does not apply and the plain box
+//! shows it (consuming the markers, drawing no underline), with the stock delays and composition: a
+//! glyph-coverage fallback like the other stock text, which only a stock Armada II install can hit.
+//!
+//! Not done (see the PR): the fixed-frame and off modes of the profile's tooltip setting, behaviour
+//! while a button is held, the two clocks at other game speeds, the components that show the verbose text
+//! at once (not isolated; possibly a bench artefact).
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -54,7 +72,7 @@ use super::stock_font::{STOCK_SPACE, StockRole, StockTextCanvas};
 use super::theme::Theme;
 use crate::viewer::Mounted;
 
-/// Widest line of the text, in virtual units. Static.
+/// Widest line of the text, in virtual units. Read from the executable, static; measured at one window size.
 pub const TIP_WRAP_UNITS: f32 = 550.0;
 /// Padding left and right of the text, in virtual units. Static, measured.
 pub const TIP_PAD_X: f32 = 6.0;
@@ -65,12 +83,13 @@ pub const TIP_PAD_BOTTOM: f32 = 6.0;
 /// The text's top below the pointer, in virtual units. Static, measured.
 pub const TIP_BELOW: f32 = 56.0;
 /// Room the text and padding need below the pointer before the tooltip flips above, in virtual
-/// units beyond the text's height. Static.
+/// units beyond the text's height. Static; measured at one window size.
 pub const TIP_FLIP_MARGIN: f32 = 64.0;
-/// Distance of the flipped text's bottom from the pointer, in virtual units. Static.
+/// Distance of the flipped text's bottom from the pointer, in virtual units. Static; measured at one window size.
 pub const TIP_FLIP_GAP: f32 = 4.0;
 /// Least distance of the text's left from the viewport's left edge, and of the text's right end from the
-/// right edge when the right clamp applies, in virtual units. Static.
+/// right edge when the right clamp applies, in virtual units. Static; the right clamp measured at one
+/// window size, the left clamp not reached by any measurement.
 pub const TIP_EDGE: f32 = 12.0;
 /// Whole pixels the drawn box sits below the rule's origin. Measured at one window size (800x600);
 /// cause not determined; not confirmed on a native frame of another size.
@@ -193,6 +212,22 @@ pub fn read_component(vfs: &sta_vfs::Vfs) -> Option<sta_odf::Odf> {
     sta_odf::resolve_layered("component", &mut |name, version| index.load(vfs, name, version)).ok()
 }
 
+/// The delays of the mounted content's component definition, read once per mount: a stock HUD
+/// rebuild or a live window resize changes the canvas, not the content, and must not read the
+/// definition index again (it is rebuilt from the whole mount on every read).
+#[derive(Resource, Default, Debug)]
+pub struct TipDelayCache {
+    /// The delays of the current mount; `None` before the first read and after the mount changed.
+    pub delays: Option<TipDelays>,
+    /// How many times a definition was read (for tests).
+    pub reads: u32,
+}
+
+/// The characters of the shown tooltip text to draw underlined (the hotkey markers the stock look
+/// consumed), as indices into the text.
+#[derive(Resource, Default, Debug, Clone, PartialEq, Eq)]
+pub struct TipMarks(pub Vec<usize>);
+
 /// Keep [`TipDelays`] in step with the mounted install: under the Armada II stock look the delays
 /// of its component definition, else STA64's own.
 pub fn load_tip_delays(
@@ -200,9 +235,14 @@ pub fn load_tip_delays(
     profile: Option<Res<UiProfile>>,
     fonts: Option<Res<SpriteFonts>>,
     canvas: Option<Res<StockTextCanvas>>,
+    mut cache: ResMut<TipDelayCache>,
     mut delays: ResMut<TipDelays>,
 ) {
-    let changed = vfs.as_ref().is_some_and(|v| v.is_changed())
+    let mounted = vfs.as_ref().is_some_and(|v| v.is_changed());
+    if mounted && cache.delays.is_some() {
+        cache.delays = None;
+    }
+    let changed = mounted
         || profile.as_ref().is_some_and(|p| p.is_changed())
         || fonts.as_ref().is_some_and(|f| f.is_changed())
         || canvas.as_ref().is_some_and(|c| c.is_changed());
@@ -210,7 +250,15 @@ pub fn load_tip_delays(
         return;
     }
     let want = if stock_tip(profile.as_deref(), fonts.as_deref(), canvas.as_deref()) {
-        delays_from(vfs.as_deref().and_then(|v| read_component(&v.0)).as_ref())
+        match cache.delays {
+            Some(d) => d,
+            None => {
+                let d = delays_from(vfs.as_deref().and_then(|v| read_component(&v.0)).as_ref());
+                cache.reads += u32::from(vfs.is_some());
+                cache.delays = Some(d);
+                d
+            }
+        }
     } else {
         TipDelays::default()
     };
@@ -235,6 +283,7 @@ pub fn stock_tip_box(
     ui_scale: Option<Res<UiScale>>,
     window: Query<&Window, With<PrimaryWindow>>,
     mut active: ResMut<TipStock>,
+    marks: Res<TipMarks>,
     mut boxed: Single<&mut Node, With<TipBox>>,
     mut words: Single<(&SpriteText, &mut SpriteTextStyle), With<TipText>>,
 ) {
@@ -264,7 +313,7 @@ pub fn stock_tip_box(
     if !active.0 {
         active.0 = true;
     }
-    let style = SpriteTextStyle { tint_all: true, ..SpriteTextStyle::default().stock_role(StockRole::Default).wrapped(wrap_logical(canvas.hud)) };
+    let style = SpriteTextStyle { tint_all: true, underline: marks.0.clone(), ..SpriteTextStyle::default().stock_role(StockRole::Default).wrapped(wrap_logical(canvas.hud)) };
     set(&mut words.1, style);
     let Some(cursor) = window.and_then(Window::cursor_position) else { return };
     let per_unit = canvas.hud * px / STOCK_SPACE;

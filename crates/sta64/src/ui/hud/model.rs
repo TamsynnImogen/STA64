@@ -482,6 +482,46 @@ pub(super) fn build_item_buttons(feed: &HudFeed, b: &UnitView) -> Vec<(usize, Bu
         .collect()
 }
 
+/// What the Armada II stock tooltip of a build item is made of: the class's `tooltip`, `verboseTooltip`
+/// (else `verbose`) and `hotkeyLabel` keys and its costs in the fixed order dilithium, metal, latinum, biomatter, crew,
+/// officers (keys `GUI_CP_*_RES`; read from the executable, static; the composition measured at one window
+/// size). The officer word is the builder's race's (interim: the builder's race stands in for the player's).
+pub(super) fn build_tip_parts(feed: &HudFeed, builder: EntityId, what: ContentKey) -> Option<crate::ui::hud::stock::tooltip_text::BuildTipParts> {
+    use crate::ui::hud::stock::tooltip_text::{BuildTipParts, CostPart};
+    let db = feed.content.as_deref()?;
+    let def = db.unit(what)?;
+    let names = resource_model(feed);
+    let key = |k: &str| def.raw.str(k).map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned);
+    let race = feed.view.unit(builder).and_then(|u| db.unit(u.def)).map_or_else(String::new, |d| d.race.to_ascii_lowercase());
+    let officers = if race.contains("borg") {
+        "GUI_CP_BORG_OFF_RES"
+    } else if race.contains("rom") {
+        "GUI_CP_ROM_OFF_RES"
+    } else if race.contains("8472") {
+        "GUI_CP_8472_OFF_RES"
+    } else {
+        "GUI_CP_OFFICERS_RES"
+    };
+    let slot = |slot: usize, key: &'static str| CostPart {
+        key,
+        fallback: names.name(slot).to_lowercase(),
+        amount: def.build.cost.get(slot).map_or(0.0, |c| c.to_f32()),
+    };
+    Some(BuildTipParts {
+        tooltip: key("tooltip").unwrap_or_else(|| format!("Build {}", def.odf)),
+        verbose: key("verboseTooltip").or_else(|| key("verbose")),
+        hotkey: key("hotkeyLabel"),
+        cost: vec![
+            slot(0, "GUI_CP_DILITHIUM_RES"),
+            slot(2, "GUI_CP_METAL_RES"),
+            slot(1, "GUI_CP_LATINUM_RES"),
+            slot(3, "GUI_CP_BIOMATTER_RES"),
+            CostPart { key: "GUI_CP_CREW_RES", fallback: "crew".into(), amount: def.crew.to_f32() },
+            CostPart { key: officers, fallback: "officers".into() /* STA64's own fallback word */, amount: def.build.officers.to_f32() },
+        ],
+    })
+}
+
 fn cost_text(cost: &[f32], names: &ResourceModel) -> String {
     let parts: Vec<String> = cost.iter().enumerate().filter(|(_, c)| **c > 0.0).map(|(i, c)| format!("{} {}", *c as i64, names.name(i))).collect();
     if parts.is_empty() { "free".into() } else { parts.join(", ") }
