@@ -54,8 +54,8 @@ pub enum Action {
     /// `select_next_ship` (UI-32): on Roots every damaged combat ship on screen, elsewhere the
     /// next own ship. Stock binds it to `[` and Roots to W (W pans the camera here).
     SelectNextShip,
-    /// Held with the reveal modifier: cycle the map grid's mode (grid, grid with height bars, none). The
-    /// original's `grid_toggle` is Alt+G in its `Input.map`, which STA64 does not read: STA64's own binding.
+    /// Held with the reveal modifier: cycle the map grid's mode (grid, grid with height bars, none). STA64's own
+    /// binding (interim); Alt+G by default.
     GridToggle,
 }
 

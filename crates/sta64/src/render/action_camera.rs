@@ -23,9 +23,9 @@
 //!   keeps its last pose.
 //! - The framing, a fixed oblique angle at a distance that fits the unit's selection radius, is
 //!   **not measured** either, and so is how the original moves the camera.
-//! - Selection rings, hull and shield bars (the [`Overlay`] pieces) and the strategic grid are on
-//!   [`OVERLAY_LAYER`], which only the main camera draws: seen in one frame that the original's
-//!   window has none of them.
+//! - Selection rings, hull and shield bars (the [`Overlay`] pieces), the strategic view's height bars (gizmos)
+//!   and the map grid (`render::map_grid`) are on [`OVERLAY_LAYER`], which only the main camera draws: seen in
+//!   one frame that the original's window has none of them.
 //! - Not drawn in the window: nebulae (their march belongs to the main camera) and, while the
 //!   main view shows a ship as a symbol (zoomed far out), its model, because the model is hidden
 //!   by that handoff for every camera. Billboarded effects face the main camera. All **not
@@ -51,7 +51,7 @@ use sta_sim::command::Target;
 use sta_sim::Fixed;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// The layer of what only the map's own camera draws: selection rings and bars, the strategic grid.
+/// The layer of what only the map's own camera draws: selection rings and bars, the strategic view's bars, the map grid.
 pub const OVERLAY_LAYER: usize = 3;
 
 /// Vertical field of view of the action camera (the map camera's default).
@@ -218,7 +218,7 @@ fn picture_wanted(pictures: Query<&InheritedVisibility, With<ActionPicture>>, be
     bench.is_some() || pictures.iter().any(|v| v.get())
 }
 
-/// The strategic grid is a gizmo: it goes to [`OVERLAY_LAYER`] too (once).
+/// The strategic view's height bars are gizmos: they go to [`OVERLAY_LAYER`] too (once).
 fn grid_layer(mut store: ResMut<bevy::gizmos::config::GizmoConfigStore>, mut done: Local<bool>) {
     if !*done {
         store.config_mut::<bevy::gizmos::config::DefaultGizmoConfigGroup>().0.render_layers = RenderLayers::layer(OVERLAY_LAYER);

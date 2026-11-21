@@ -19,11 +19,15 @@
 //!   and not part of the resolved sim rules of D10).
 //! - The cell size and the colour are not cfg keys: code constants, so a mod cannot change them.
 //!
+//! The line is drawn by the hardware as one device pixel; under multisampling it can resolve wider and
+//! dimmer (measured by the GPU frame test, not tuned).
+//!
 //! Interim (marked, see the PR): STA64 has one orbit camera, mapped to the original's normal view; the
 //! tactical view has no camera here, its key is read and kept. The height bars of mode 1 are STA64's own
 //! strategic-view bars (drawn by `render::strategic` whenever that view is active), so mode 1 draws
-//! the grid as mode 0 does. The key binding is STA64's own (Alt+G, the `input.map` default of the
-//! original, which STA64 does not read). The mission call that sets grid visibility stays unwired.
+//! the grid as mode 0 does. The key binding is STA64's own, interim (Alt+G); STA64 does not read an input map
+//! for it. The mission call that sets grid visibility stays unwired (STA64's choice, interim; stated in a
+//! third-party note, not verified).
 //!
 //! One mesh: a line list rebuilt only when the map bounds change, one entity, one draw.
 //! Both looks draw it the same way; a look's post chain (tone mapping, bloom) may change the dim colour
@@ -32,14 +36,20 @@
 use crate::app::GameSet;
 use crate::input::keys::{Action, KeyBindings};
 use crate::render::fog::FogBounds;
-use bevy::asset::RenderAssetUsages;
+use bevy::asset::{AssetPath, RenderAssetUsages, embedded_asset};
+use bevy::camera::visibility::RenderLayers;
 use bevy::mesh::PrimitiveTopology;
+use bevy::pbr::MaterialPlugin;
 use bevy::prelude::*;
+use bevy::render::render_resource::AsBindGroup;
+use bevy::shader::ShaderRef;
 
 /// World units between two lines (read from the executable, static; no data key).
 pub const GRID_SIZE: f32 = 100.0;
 /// The lines' colour, added in framebuffer terms (read from the executable, static; no data key).
 pub const GRID_COLOUR: [f32; 3] = [0.149, 0.128, 0.0];
+/// The material's sort bias: far below the fog layers' (`render::fog`), so the grid draws first of the blended things.
+pub const GRID_SORT: f32 = -1.0e7;
 /// `RTS_CFG.h` key of the original's normal view's initial mode (read from data).
 pub const STRATEGIC_KEY: &str = "cfgSTRATEGIC_GRID_RENDER";
 /// `RTS_CFG.h` key of the original's tactical view's initial mode (read from data).
@@ -81,8 +91,8 @@ impl GridMode {
     }
 }
 
-/// The mode of each of the original's views. A cfg with no such key gives "none" (interim: the key is
-/// absent in a definition the grid default of which is not established).
+/// The mode of each of the original's views. A cfg without a key gives "none" for that view (interim: no default is
+/// established for that case).
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct GridModes {
     /// The normal RTS view: STA64's orbit camera (interim mapping).
@@ -128,6 +138,39 @@ fn grid_mesh(b: &FogBounds) -> Mesh {
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 1.0, 0.0]; n])
 }
 
+/// The lines' material: a constant colour, added. A material of its own (and not `StandardMaterial`) because the
+/// sort bias that puts the grid before the fog layers would be a GPU depth bias there, which line lists refuse.
+#[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
+pub struct GridMaterial {
+    #[uniform(0)]
+    pub colour: LinearRgba,
+}
+
+impl Material for GridMaterial {
+    fn fragment_shader() -> ShaderRef {
+        ShaderRef::Path(AssetPath::parse("embedded://sta64/render/map_grid.wesl").into_owned())
+    }
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Add
+    }
+    /// Sort only: the grid is the first blended layer.
+    fn depth_bias(&self) -> f32 {
+        GRID_SORT
+    }
+    fn enable_prepass() -> bool {
+        false
+    }
+    fn enable_shadows() -> bool {
+        false
+    }
+}
+
+/// Register the material and its shader (a render app is needed; the pure tests have none).
+pub fn add_material(app: &mut App) {
+    embedded_asset!(app, "map_grid.wesl");
+    app.add_plugins(MaterialPlugin::<GridMaterial>::default());
+}
+
 /// The grid's one entity; `bounds` is what its mesh was built for, `builds` how many times a mesh was built.
 #[derive(Component, Debug)]
 pub struct MapGrid {
@@ -150,7 +193,7 @@ fn update(
     modes: Res<GridModes>,
     bounds: Option<Res<FogBounds>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<GridMaterial>>,
     mut grid: Query<(&mut MapGrid, &mut Mesh3d, &mut Visibility)>,
 ) {
     let want = modes.rts.shown() && bounds.is_some();
@@ -168,21 +211,19 @@ fn update(
         }
         return;
     }
-    // Additive, unlit, depth tested and not written (alpha-added materials never write). The colour is the
-    // framebuffer's own, so it goes in as sRGB.
-    let material = materials.add(StandardMaterial {
-        base_color: Color::srgb(GRID_COLOUR[0], GRID_COLOUR[1], GRID_COLOUR[2]),
-        unlit: true,
-        alpha_mode: AlphaMode::Add,
-        ..default()
-    });
+    // Additive, depth tested and not written (a blended pass writes none). The colour is the framebuffer's own,
+    // so it goes in as sRGB.
+    let material = materials.add(GridMaterial { colour: Color::srgb(GRID_COLOUR[0], GRID_COLOUR[1], GRID_COLOUR[2]).to_linear() });
     commands.spawn((
         MapGrid { bounds: now, builds: 1 },
         Mesh3d(meshes.add(grid_mesh(&bounds))),
         MeshMaterial3d(material),
+        bevy::light::NotShadowCaster,
         Transform::IDENTITY,
         if want { Visibility::Inherited } else { Visibility::Hidden },
         bevy::camera::visibility::NoFrustumCulling,
+        // Only the map's own camera draws it: not the action camera's window.
+        RenderLayers::layer(crate::render::action_camera::OVERLAY_LAYER),
         crate::map::MatchEntity,
     ));
 }
@@ -191,15 +232,22 @@ pub struct MapGridPlugin;
 
 impl Plugin for MapGridPlugin {
     fn build(&self, app: &mut App) {
+        if app.get_sub_app(bevy::render::RenderApp).is_some() {
+            add_material(app);
+        }
         app.init_resource::<GridModes>().init_resource::<KeyBindings>().add_systems(
             Update,
             (
                 toggle.in_set(GameSet::Input).run_if(crate::game::flow::match_running).run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free),
-                update.in_set(GameSet::Render).run_if(resource_exists::<Assets<Mesh>>).run_if(resource_exists::<Assets<StandardMaterial>>).run_if(not(resource_exists::<crate::frontend::scene::MenuScene>)),
+                update.in_set(GameSet::Render).run_if(resource_exists::<Assets<Mesh>>).run_if(resource_exists::<Assets<GridMaterial>>).run_if(crate::game::flow::match_running).run_if(not(resource_exists::<crate::frontend::scene::MenuScene>)),
             ),
         );
     }
 }
+
+#[cfg(test)]
+#[path = "map_grid_gpu.rs"]
+mod gpu;
 
 #[cfg(test)]
 mod tests {
@@ -270,7 +318,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<Assets<Mesh>>()
-            .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<Assets<GridMaterial>>()
             .insert_resource(modes)
             
             .insert_resource(FogBounds { min: Vec2::new(0.0, 0.0), max: Vec2::new(1000.0, 450.0) })
@@ -300,6 +348,46 @@ mod tests {
         assert_eq!(grids(&mut app), vec![(2, Visibility::Inherited)]);
         let mesh = app.world_mut().query::<&Mesh3d>().single(app.world()).unwrap().0.clone();
         assert_eq!(app.world().resource::<Assets<Mesh>>().get(&mesh).unwrap().count_vertices(), (4 + 4) * 2);
+    }
+
+    #[test]
+    fn the_grid_is_on_the_overlay_layer_and_sorts_before_the_fog() {
+        let mut app = rig(GridModes { rts: GridMode::Grid, tactical: GridMode::None });
+        let layers = app.world_mut().query_filtered::<&RenderLayers, With<MapGrid>>().single(app.world()).unwrap().clone();
+        assert_eq!(layers, RenderLayers::layer(crate::render::action_camera::OVERLAY_LAYER));
+        let handle = app.world_mut().query_filtered::<&MeshMaterial3d<GridMaterial>, With<MapGrid>>().single(app.world()).unwrap().0.clone();
+        let bias = Material::depth_bias(app.world().resource::<Assets<GridMaterial>>().get(&handle).unwrap());
+        assert!(bias < -1.0e6, "far below the fog layers' bias: {bias}");
+    }
+
+    #[test]
+    fn the_grid_does_not_come_back_after_the_match_ends() {
+        use crate::app::AppState;
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .init_state::<AppState>()
+            .insert_resource(crate::game::flow::Flow)
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<GridMaterial>>()
+            .insert_resource(GridModes { rts: GridMode::Grid, tactical: GridMode::None })
+            .insert_resource(FogBounds { min: Vec2::ZERO, max: Vec2::splat(500.0) })
+            .add_plugins(MapGridPlugin);
+        crate::app::configure_sets(&mut app);
+        let go = |app: &mut App, to: AppState| {
+            app.world_mut().resource_mut::<NextState<AppState>>().set(to);
+            app.update();
+            app.update();
+        };
+        go(&mut app, AppState::InGame);
+        assert_eq!(grids(&mut app).len(), 1, "the match draws its grid");
+        // Back at the front end: the match's entities go (`map::clear_match`), the bounds resource stays.
+        let e = app.world_mut().query_filtered::<Entity, With<MapGrid>>().single(app.world()).unwrap();
+        app.world_mut().entity_mut(e).despawn();
+        go(&mut app, AppState::FrontEnd);
+        for _ in 0..3 {
+            app.update();
+        }
+        assert!(grids(&mut app).is_empty(), "no grid is respawned in the front end");
     }
 
     #[test]
