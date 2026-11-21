@@ -9,10 +9,9 @@
 //!
 //! - **FrontEnd.** The screens ([`crate::frontend::screens`]) show over the menu
 //!   scene; menu music plays (`audio::music` follows [`AppState`]).
-//! - **StartGame.** The setup the screens produced is turned into a
-//!   [`SkirmishCfg`] (what `--skirmish` reads), the loading screen comes up, and
-//!   a few frames later the match is built by whatever builds matches (the map
-//!   view's `rebuild` in the game, the same path `--skirmish` uses).
+//! - **StartGame.** The whole Instant Action setup is retained while the
+//!   loading screen comes up. The map view builds its sim from those players
+//!   and options a few frames later.
 //! - **Loading.** Waits for the build to put a [`SimLink`] up and for the loading
 //!   screen to finish, then `InGame`. A build that fails returns to the front end
 //!   with a notice.
@@ -29,10 +28,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use bevy::prelude::*;
 use sta_content::MapDef;
+use sta_sim::PlayerId;
 use sta_sim::setup::{Control, GameSetup};
 
 use super::{LocalRace, SkirmishCfg, verdict};
-use crate::app::{AppState, GameSet, Opponent};
+use crate::app::{AppState, GameSet};
 use crate::frontend::loading::{LoadInfo, LoadProgress, LoadReport, LoadStage};
 use crate::frontend::scene::{MenuMap, MenuSceneConfig};
 use crate::frontend::screens::{ActiveMod, MapEntry, ModChosen, ScreenData, SetupDraft, StartGame};
@@ -50,6 +50,9 @@ pub struct Flow;
 #[derive(Resource, Debug, Clone)]
 pub struct ActiveMatch {
     pub setup: GameSetup,
+    /// No local seat in an Observer match.
+    pub local: Option<PlayerId>,
+    pub speed: crate::clock::MatchSpeed,
     /// The build was asked for (the builder's cue); false while the loading screen comes up.
     pub requested: bool,
     /// Frames in the current phase.
@@ -89,24 +92,24 @@ pub fn match_running(state: Option<Res<State<AppState>>>, flow: Option<Res<Flow>
     }
 }
 
-/// What a setup asks of a skirmish: the first human seat plays; the first other
-/// seat is the opponent (a match has two for now). Seat ids are the start slots.
-pub fn skirmish_of(setup: &GameSetup) -> Result<SkirmishCfg, String> {
-    let me = setup.players.iter().find(|p| p.control == Control::Human).ok_or("the setup has no human seat")?;
-    let them = setup.players.iter().find(|p| p.id != me.id).ok_or("the setup has no opponent seat")?;
-    if setup.players.len() > 2 {
-        warn!("setup has {} seats; a match has two for now (seat {} against seat {})", setup.players.len(), me.id.0, them.id.0);
+/// Validate the offline roster and return the local participant, if playing.
+fn local_seat(setup: &GameSetup) -> Result<Option<PlayerId>, &'static str> {
+    if setup.players.len() < 2 {
+        return Err("Instant Action needs at least two map seats");
     }
-    Ok(SkirmishCfg {
-        seat: me.id.0,
-        // A seat the host runs (`RemoteAi` on a peer that is not the host) is an AI seat all the same.
-        opponent: match them.control {
-            Control::Ai(_) | Control::RemoteAi(_) => Opponent::Skirmish,
-            _ => Opponent::Idle,
-        },
-        race: Some(me.race.clone()),
-        opponent_race: Some(them.race.clone()),
-    })
+    let mut ids = std::collections::BTreeSet::new();
+    if setup.players.iter().any(|p| !p.id.is_player() || !ids.insert(p.id) || setup.map.start_for(p.id.0).is_none()) {
+        return Err("each participant needs a different playable map start");
+    }
+    if setup.players.iter().any(|p| !matches!(p.control, Control::Human | Control::Ai(_) | Control::Idle)) {
+        return Err("Instant Action only supports local participants");
+    }
+    let mut humans = setup.players.iter().filter(|p| p.control == Control::Human);
+    let local = humans.next().map(|p| p.id);
+    if humans.next().is_some() {
+        return Err("Instant Action only supports one local player");
+    }
+    Ok(local)
 }
 
 pub struct FlowPlugin;
@@ -196,28 +199,32 @@ fn on_start(
     mut commands: Commands,
     mut next: ResMut<NextState<AppState>>,
     mut notices: MessageWriter<Notice>,
+    net: Option<Res<super::net_match::NetStart>>,
     info: Option<ResMut<LoadInfo>>,
     progress: Option<ResMut<LoadProgress>>,
 ) {
-    let Some(StartGame(setup)) = starts.read().last().cloned() else { return };
-    let cfg = match skirmish_of(&setup) {
-        Ok(c) => c,
+    let Some(StartGame(setup, speed)) = starts.read().last().cloned() else { return };
+    let local = match net.as_ref().and_then(|start| start.0.as_ref()) {
+        Some(match_) => Ok(Some(match_.me)),
+        None => local_seat(&setup),
+    };
+    let local = match local {
+        Ok(player) => player,
         Err(e) => {
             warn!("start: {e}");
             notices.write(Notice::new(Severity::Bad, format!("Cannot start: {e}")));
             return;
         }
     };
-    info!("start: {} on {}, seat {} against {:?}", setup.players.len(), setup.map.name, cfg.seat, cfg.opponent);
+    info!("start: {} map seats on {}, local seat {:?}", setup.players.len(), setup.map.name, local.map(|p| p.0));
     if let Some(mut info) = info {
         *info = LoadInfo::from_map(&setup.map);
     }
     if let Some(mut p) = progress {
         p.begin();
     }
-    commands.insert_resource(MapSeat(Some(cfg.seat)));
-    commands.insert_resource(cfg);
-    commands.insert_resource(ActiveMatch { setup, requested: false, frames: 0 });
+    commands.insert_resource(MapSeat(local.map(|p| p.0)));
+    commands.insert_resource(ActiveMatch { setup, local, speed, requested: false, frames: 0 });
     next.set(AppState::Loading);
 }
 
@@ -419,12 +426,9 @@ pub(crate) fn front_end_data(vfs: &sta_vfs::Vfs, catalogue: &mut Catalogue, inst
         for warning in converted.warnings.iter().filter(|w| w.file.ends_with(".mdf")) {
             debug!("{warning}");
         }
-        let def = converted.map;
-        let mut slots: Vec<u8> = def.starts.iter().map(|s| s.slot).collect();
-        slots.sort_unstable();
-        slots.dedup();
-        if slots.len() >= 2 {
-            maps.push(MapEntry::new(def));
+        let map = MapEntry::new(converted.map);
+        if map.slots() >= 2 {
+            maps.push(map);
         }
     }
     let data_dir = install_root.map(|r| if r.join("Data").is_dir() { r.join("Data") } else { r.to_path_buf() });

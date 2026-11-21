@@ -769,7 +769,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     if let Some(on) = u.stats.add_to_planner {
         c.raw("add_to_planner", if on { "1" } else { "0" });
     }
-    let push_items: Vec<_> = crate::lifecycle::push_build_items(&u.raw).map(|name| quoted(&name)).collect();
+    let push_items: Vec<_> = u.stats.push_build_items.iter().map(|name| quoted(name)).collect();
     if !push_items.is_empty() {
         c.list("push_build_items", push_items);
     }
@@ -1035,6 +1035,9 @@ mod tests {
     use super::*;
     use crate::def::WeaponKind;
 
+    /// Written out from the text the previous code (a read of `raw` in `unit_text`) produced.
+    const EXPECTED_YARD_TEXT: &str = "class=\"shipyard\";race=\"\";starbase=0;planet_role=-;planet_crew_gain=0;planet_crew_modifier=-;planet_colonizable=0;planet_civilian_population_modifier=0;movement=[0,1,0,1,0,0,0,50,150,20,0,70];hull=100;shields=0;shield_rate=0;initial_hull=100;initial_shields=0;crew=0;crew_capacity=0;sensor=0;hardpoints=[];cost=[];build_ticks=0;officers=0;queue_limit=5;builds=[];flagged_slots=-;launch=-;special_energy=0;special_energy_rate=0;miner=0;max_dilithium=0;mining_rate=0;transfer_rate=0;resource=-;nebula_pathing=-;avoid_me=0;hidden=0;invalid_as_target=0;life=-;crew_gain=0;features=[];confinement=-;push_build_items=[\"alpha\",\"beta\",\"alpha\"]";
+
     #[test]
     fn keys_follow_sorted_names_whatever_the_insertion_order() {
         let a = ContentDb::builder()
@@ -1056,6 +1059,20 @@ mod tests {
         assert!(a.unit(ContentKey(1)).is_none());
         assert!(a.weapon(ContentKey(1)).is_some());
         assert_eq!(a.hash(), b.hash());
+    }
+
+    /// The push-build items come from the loaded definition's typed field; the
+    /// unit text (and so the content digest) is the text the raw-ODF read gave.
+    #[test]
+    fn push_build_items_digest_text_is_the_authored_text() {
+        let odf = sta_odf::resolve("yard", &mut |_| {
+            Some("classLabel = \"shipyard\"\nmaxHealth = 100\npushBuildItem0 = Alpha.odf\npushBuildItem2 = NULL\npushBuildItem3 = beta\npushBuildItem4 = alpha\n".into())
+        })
+        .unwrap();
+        let mut warnings = Vec::new();
+        let def = crate::unit::unit_def("yard", &odf, None, &mut warnings);
+        let db = ContentDb::builder().unit(def.clone()).build().unwrap();
+        assert_eq!(unit_text(&db, &def), EXPECTED_YARD_TEXT);
     }
 
     #[test]

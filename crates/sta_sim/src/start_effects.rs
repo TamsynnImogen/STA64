@@ -9,9 +9,9 @@
 //!
 //! - **Expiry.** A hidden object with `autoExpireTime` (else `lifeTimer`) removes
 //!   itself that many seconds after it appears.
-//! Authored ReplaceWeapon ODFs use the shared replacement runtime. This
-//! scheduler also retains the original startup behavior for synthetic rules
-//! which do not supply the native options.
+//!   Authored ReplaceWeapon ODFs use the shared replacement runtime. This
+//!   scheduler also retains the original startup behavior for synthetic rules
+//!   which do not supply the native options.
 //!
 //! - **Legacy instant replacement.** A hardpoint weapon of class `replaceweapon` with
 //!   `replacementInstantPlayer` / `AI` / `Derelict` set for the owner's kind

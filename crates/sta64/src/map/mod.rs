@@ -9,6 +9,7 @@
 //! map, PgUp/PgDn x10, WASD pan, middle-drag orbit, wheel zoom, R reset view.
 
 use crate::clock::AnimClock;
+use crate::game::flow::ActiveMatch;
 use crate::render::model_scene::{self, PartCache, SpawnCtx, to_bevy};
 use crate::render::sprites::SpriteTables;
 use crate::render::textures::{Loader, TextureCache};
@@ -336,6 +337,22 @@ pub(crate) fn build_sim(
     SimSide { warnings: converted.warnings.len() + spawn_warnings.len(), setup, sim, controllers, skirmish: plan, mission: None }
 }
 
+/// The setup screen already resolved every participant, team and option.
+fn build_instant_action(map: MapDef, content: Arc<ContentDb>, races: &sta_content::Races, selected: &ActiveMatch) -> SimSide {
+    let setup = GameSetup { map: Arc::new(map), content, ..selected.setup.clone() };
+    let (sim, warnings, controllers) = crate::game::start(&setup, races);
+    for warning in warnings.iter().take(20) {
+        debug!("{}: {}", warning.file, warning.message);
+    }
+    let race = selected.local.and_then(|id| setup.players.iter().find(|p| p.id == id)).map_or("observer", |p| p.race.as_str());
+    let skirmish = Some(Ok(crate::game::Seats {
+        players: setup.players.clone(),
+        local: crate::game::local_race(races, race),
+        summary: format!("instant action: {} map seats, {}", setup.players.len(), selected.local.map_or_else(|| "observing".into(), |id| format!("playing seat {}", id.0))),
+    }));
+    SimSide { setup, sim, warnings: warnings.len(), controllers, skirmish, mission: None }
+}
+
 /// The seats of a map: every owner and start slot, and the one the client plays.
 fn seats(map: &MapDef, me: Option<u8>, race: &str) -> Vec<PlayerSetup> {
     let n = map.objects.iter().filter_map(|o| o.owner).chain(map.starts.iter().map(|s| s.slot)).chain(me).max().map_or(1, |m| m as usize + 1);
@@ -507,6 +524,7 @@ type MapState<'w> = (
     ResMut<'w, Assets<crate::render::planet::PlanetMaterial>>,
     Res<'w, MapSeat>,
     Option<Res<'w, crate::game::SkirmishCfg>>,
+    Option<Res<'w, ActiveMatch>>,
     Option<Res<'w, crate::game::mission_host::MissionLaunch>>,
     Option<Res<'w, crate::render::profile::RenderProfile>>,
     Option<Res<'w, crate::render::profile::ProfileEffects>>,
@@ -707,13 +725,13 @@ fn setup(mut commands: Commands) {
 /// Camera distance a skirmish opens at, over the player's start.
 const START_DIST: f32 = 2500.0;
 
-fn input(keys: Res<ButtonInput<KeyCode>>, mut browser: ResMut<MapBrowser>, mut orbit: Query<&mut Orbit>, skirmish: Option<Res<crate::game::SkirmishCfg>>) {
+fn input(keys: Res<ButtonInput<KeyCode>>, mut browser: ResMut<MapBrowser>, mut orbit: Query<&mut Orbit>, skirmish: Option<Res<crate::game::SkirmishCfg>>, instant: Option<Res<ActiveMatch>>) {
     let n = browser.maps.len() as isize;
     if n == 0 {
         return;
     }
     // A match stays on its map: the browser's keys are the map viewer's.
-    let browsing = skirmish.is_none();
+    let browsing = skirmish.is_none() && instant.is_none();
     let step = [
         (KeyCode::ArrowRight, 1),
         (KeyCode::ArrowLeft, -1),
@@ -873,7 +891,7 @@ fn rebuild(
     lighting: Lighting,
 ) {
     let (mut silhouettes, mut ambient, mut lights) = lighting;
-    let (mut particles, mut selection, mut queue, mut clock, mut limits, mut planet_materials, seat, skirmish_cfg, mission_launch, profile, profile_effects, mut net) = state;
+    let (mut particles, mut selection, mut queue, mut clock, mut limits, mut planet_materials, seat, skirmish_cfg, instant, mission_launch, profile, profile_effects, mut net) = state;
     let gas_volumes = crate::render::stock::nebula::volumetric(profile.as_deref(), profile_effects.as_deref());
     if !browser.dirty {
         return;
@@ -916,6 +934,10 @@ fn rebuild(
     // A match from the multiplayer lobby (INT-M5): the sim is the host's `Start` over this
     // machine's own copy of the map, refused unless it is the host's map.
     let mut net_match = net.take();
+    let instant = instant.filter(|_| mission_launch.is_none() && net_match.is_none());
+    if let Some(active) = &instant {
+        clock.set_match_speed(active.speed);
+    }
     // The game plays with the tech tree its map names (`techTreeFilename`); a tree the install lacks
     // leaves the default one, with a log line.
     let content = with_map_tech_tree(content, &vfs.0, &map.tech_tree_file, &name, net_match.is_some());
@@ -937,10 +959,16 @@ fn rebuild(
         }
         None => None,
     };
-    let SimSide { setup, sim, warnings: sim_warnings, controllers, skirmish, mission } = match (side, mission_launch.as_deref()) {
-        (Some(side), _) => side,
-        (None, Some(launch)) => build_mission_sim(&map, &name, &content, &index, &vfs.0, &races, launch),
-        (None, None) => build_sim(&map, &name, &content, &index, &vfs.0, seat.0, skirmish_cfg.as_deref().map(|c| (c, &*races))),
+    let SimSide { setup, sim, warnings: sim_warnings, controllers, skirmish, mission } = match (side, mission_launch.as_deref(), instant.as_deref()) {
+        (Some(side), _, _) => side,
+        (None, Some(launch), _) => build_mission_sim(&map, &name, &content, &index, &vfs.0, &races, launch),
+        (None, None, Some(active)) => {
+            let converted = MapDef::convert_bzn_named_in(&map, &name, &content, &vfs.0, &index);
+            let mut side = build_instant_action(converted.map, content.clone(), &races, active);
+            side.warnings += converted.warnings.len();
+            side
+        }
+        (None, None, None) => build_sim(&map, &name, &content, &index, &vfs.0, seat.0, skirmish_cfg.as_deref().map(|c| (c, &*races))),
     };
     let mut skirmish_note = None;
     let mut played_race = None;
@@ -1021,7 +1049,7 @@ fn rebuild(
     let neutral = teams.team_colour(0).unwrap_or(Color::WHITE);
     // The map's own team colours (Armada I maps with a team table) apply where the player picked none:
     // not in a skirmish, whose set-up is the player's pick. A mission or the map view takes the map's.
-    let map_team_colours = set_map_team_colours(&mut commands, &map, skirmish_cfg.is_some());
+    let map_team_colours = set_map_team_colours(&mut commands, &map, skirmish_cfg.is_some() || instant.is_some());
     let root = commands.spawn((MapRoot,
         crate::ui::hud::object_footprints::MapFootprintRegions(map_def.clone()),
         Transform::IDENTITY, Visibility::default())).id();
@@ -1487,13 +1515,11 @@ fn rebuild(
             }
             Err(why) => net_error = Some(why),
         },
-        None => crate::capture::arm(
-            &mut commands,
-            SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), seat_player.unwrap_or(PlayerId::BENCH)).with_controllers(controllers),
-            &setup,
-            is_match,
-            &vfs.0,
-        ),
+        None => {
+            let link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), seat_player.unwrap_or(PlayerId::BENCH)).with_controllers(controllers);
+            let link = if instant.as_ref().is_some_and(|active| active.local.is_none()) { link.with_observer() } else { link };
+            crate::capture::arm(&mut commands, link, &setup, is_match, &vfs.0);
+        }
     }
 
     missing.sort();
@@ -1585,11 +1611,11 @@ fn fps(
     }
 }
 
-fn hud(browser: Res<MapBrowser>, skirmish: Option<Res<crate::game::SkirmishCfg>>, mut q: Query<&mut Text, With<MapHud>>) {
+fn hud(browser: Res<MapBrowser>, skirmish: Option<Res<crate::game::SkirmishCfg>>, instant: Option<Res<ActiveMatch>>, mut q: Query<&mut Text, With<MapHud>>) {
     if !browser.is_changed() {
         return;
     }
-    let keys = if skirmish.is_some() { "" } else { "Left/Right map  PgUp/PgDn x10  " };
+    let keys = if skirmish.is_some() || instant.is_some() { "" } else { "Left/Right map  PgUp/PgDn x10  " };
     for mut t in &mut q {
         t.0 = format!(
             "STA64 {} map view\n{}\n\n{}\n\nleft click/drag select (Shift adds)  right click move  Space stop\n\
@@ -1606,10 +1632,11 @@ fn hud(browser: Res<MapBrowser>, skirmish: Option<Res<crate::game::SkirmishCfg>>
 fn hud_toggle(
     keys: Res<ButtonInput<KeyCode>>,
     skirmish: Option<Res<crate::game::SkirmishCfg>>,
+    instant: Option<Res<ActiveMatch>>,
     mut shown: Local<Option<bool>>,
     mut q: Query<&mut Visibility, With<MapHud>>,
 ) {
-    let shown = shown.get_or_insert(skirmish.is_none());
+    let shown = shown.get_or_insert(skirmish.is_none() && instant.is_none());
     if keys.just_pressed(KeyCode::F11) {
         *shown = !*shown;
     }
@@ -1626,6 +1653,46 @@ mod a1_start_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn instant_action_applies_the_full_roster_and_starting_options_for_play_and_observe() {
+        use super::*;
+        use crate::frontend::screens::{ScreenData, SeatControl, SetupDraft};
+        use sta_content::{Rules, StartingResources};
+        use sta_sim::WorldSource;
+
+        let mut data = ScreenData::fake();
+        let rules = Rules::from_header(r#"
+            int MP_OFFICER_LIST_SIZE = 2;
+            Officer MP_OFFICER_LIMIT[2] = { "ol_normal", 600, "ol_small", 300 };
+        "#).0;
+        data.content = Arc::new((*data.content).clone().with_rules(rules));
+        for observing in [false, true] {
+            let mut draft = SetupDraft::new(&data);
+            draft.set_map(&data, 1);
+            draft.select_control(2, SeatControl::Human);
+            draft.set_observing(observing);
+            draft.seats[3].team = 1;
+            draft.options.starting_resources = StartingResources::Lots;
+            draft.options.officer_limit = 1;
+            let setup = draft.to_setup(&data).unwrap();
+            let local = (!observing).then_some(PlayerId(2));
+            let active = ActiveMatch { setup, local, speed: Default::default(), requested: true, frames: 0 };
+            let side = build_instant_action((*active.setup.map).clone(), data.content.clone(), &data.races, &active);
+            assert_eq!(side.setup.players, active.setup.players);
+            assert_eq!(side.setup.options, active.setup.options);
+            let view = side.sim.view();
+            assert_eq!(side.controllers.len(), if observing { 4 } else { 3 });
+            assert_eq!(view.players.len(), 4);
+            assert_eq!(view.player(PlayerId(3)).unwrap().team, TeamId(1));
+            let loadout = data.races.loadout_with_mode(&data.content, "fx", StartingResources::Lots);
+            for p in &view.players {
+                assert_eq!(p.officers[1], Fixed::from_int(300));
+                assert_eq!(p.resources[0], loadout.stock[0]);
+                assert!(view.units.iter().any(|u| u.owner == p.id));
+            }
+        }
+    }
+
     /// A map's tree is loaded for a local game; a lobby match keeps the default content (the
     /// same `Arc`) so the HUD agrees with the host's sim. Content rebuilt from the same map and
     /// name has the same digest (a save of such a game reloads against it).

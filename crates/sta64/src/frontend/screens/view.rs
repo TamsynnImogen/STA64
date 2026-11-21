@@ -38,6 +38,9 @@ pub enum Act {
     Cycle(usize, Col),
     CycleResources,
     CycleOfficerLimit,
+    CycleMatchSpeed,
+    SetObserving(bool),
+    DefaultOptions,
     Launch,
     Exit,
 }
@@ -128,6 +131,7 @@ pub fn spawn(commands: &mut Commands, screen: Screen, ctx: &Ctx, camera: Option<
         Screen::Main => frame(commands, ctx, screen, camera, &tr("Star Trek Armada"), 520.0, main_menu(ctx)),
         Screen::SinglePlayer => frame(commands, ctx, screen, camera, &tr("Single player"), 620.0, single_player(ctx)),
         Screen::Setup => frame(commands, ctx, screen, camera, &tr("Instant action"), 960.0, setup(ctx)),
+        Screen::Advanced => frame(commands, ctx, screen, camera, &tr("Advanced"), 760.0, advanced(ctx)),
         Screen::MapSelect => frame(commands, ctx, screen, camera, &tr("Select map"), 760.0, map_select(ctx)),
         Screen::Settings => frame(commands, ctx, screen, camera, &tr("Options"), 760.0, settings(ctx)),
         Screen::ModSelect => frame(commands, ctx, screen, camera, &tr("Mods"), 900.0, mod_select(ctx)),
@@ -244,6 +248,11 @@ fn setup(ctx: &Ctx) -> impl Bundle {
                 ],
             ));
         }
+        p.spawn(row(t.gap)).with_children(|r| {
+            r.spawn(label(&t, &tr("Mode")));
+            r.spawn((button(&t, &if draft.observing { tr("Play") } else { tr("Play (selected)") }, 180.0), Act::SetObserving(false)));
+            r.spawn((button(&t, &if draft.observing { tr("Observe (selected)") } else { tr("Observe") }, 180.0), Act::SetObserving(true)));
+        });
         match &map {
             Some((title, slots)) => {
                 p.spawn((row(t.gap), children![label(&t, &trf("Map: {0}  ({1} players)", &[&title, &slots])), (button(&t, &tr("Select map"), 220.0), Act::PickMap)]));
@@ -260,6 +269,7 @@ fn setup(ctx: &Ctx) -> impl Bundle {
                 r.spawn(disabled_button(&t, &tr("Officer limit unavailable"), 360.0));
             }
         });
+        p.spawn((button(&t, &tr("Advanced"), 220.0), Act::Goto(Screen::Advanced)));
         p.spawn(row(t.gap)).with_children(|r| {
             if can_launch {
                 r.spawn((button(&t, &tr("Launch"), 220.0), Act::Launch));
@@ -267,6 +277,38 @@ fn setup(ctx: &Ctx) -> impl Bundle {
                 r.spawn(disabled_button(&t, &tr("Launch"), 220.0));
             }
             r.spawn((button(&t, &tr("Previous menu"), 220.0), Act::Goto(Screen::Main)));
+        });
+    })
+}
+
+fn advanced(ctx: &Ctx) -> impl Bundle {
+    let t = ctx.theme.clone();
+    let draft = ctx.draft.clone();
+    let speed = trf("Game speed: {0}", &[&draft.speed.label()]);
+    let resources = match draft.options.starting_resources {
+        StartingResources::Normal => ("sr_normal", "Resources: Normal"),
+        StartingResources::Lots => ("sr_lots", "Resources: Lots"),
+    };
+    let resources = ctx.strings.and_then(|s| s.native_label(resources.0))
+        .filter(|s| !s.trim().is_empty()).map(str::to_owned).unwrap_or_else(|| tr(resources.1));
+    let officer = ctx.data.content.rules().officer_limits.get(draft.options.officer_limit as usize).map(|choice| {
+        let caption = ctx.strings.and_then(|s| s.native_label(&choice.key))
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| (!choice.key.trim().is_empty()).then_some(choice.key.as_str()))
+            .map(str::to_owned).unwrap_or_else(|| tr("Officer limit unavailable"));
+        format!("{caption}: {}", choice.value)
+    });
+    content(ctx.theme, move |p| {
+        p.spawn((button(&t, &resources, 360.0), Act::CycleResources));
+        if let Some(caption) = &officer {
+            p.spawn((button(&t, caption, 360.0), Act::CycleOfficerLimit));
+        } else {
+            p.spawn(disabled_button(&t, &tr("Officer limit unavailable"), 360.0));
+        }
+        p.spawn((button(&t, &speed, 360.0), Act::CycleMatchSpeed));
+        p.spawn(row(t.gap)).with_children(|r| {
+            r.spawn((button(&t, &tr("Default"), 170.0), Act::DefaultOptions));
+            r.spawn((button(&t, &tr("Close"), 170.0), Act::Goto(Screen::Setup)));
         });
     })
 }

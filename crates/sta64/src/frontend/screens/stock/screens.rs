@@ -58,6 +58,7 @@ pub fn spawn(commands: &mut Commands, screen: Screen, ctx: &Ctx, camera: Option<
             Screen::Main => super::main_menu::spawn(p, ctx, b),
             Screen::SinglePlayer => single_player(p, ctx, b),
             Screen::Setup => setup(p, ctx, b),
+            Screen::Advanced => advanced(p, ctx, b),
             Screen::Settings => settings(p, ctx, b),
             _ => {}
         });
@@ -121,7 +122,8 @@ fn setup(p: &mut Box_, ctx: &Ctx, b: Vec2) {
     let races = race_ids(ctx);
     let race_labels: Vec<String> = races.iter().map(|r| ctx.data.race_label(r, ctx.strings)).collect();
     let race_refs: Vec<&str> = race_labels.iter().map(String::as_str).collect();
-    let controls = [SeatControl::Human, SeatControl::Computer, SeatControl::Idle].map(|c| tr(c.label()));
+    let control_choices: &[SeatControl] = if draft.observing { &[SeatControl::Computer, SeatControl::Idle] } else { &[SeatControl::Human, SeatControl::Computer, SeatControl::Idle] };
+    let controls: Vec<String> = control_choices.iter().map(|c| tr(c.label())).collect();
     let control_refs: Vec<&str> = controls.iter().map(String::as_str).collect();
     let teams: Vec<String> = (0..draft.seats.len().max(1)).map(|i| cap(ctx, &format!("team_{}", i + 1), &trf("Team {0}", &[&(i + 1)]))).collect();
     let team_refs: Vec<&str> = teams.iter().map(String::as_str).collect();
@@ -133,7 +135,7 @@ fn setup(p: &mut Box_, ctx: &Ctx, b: Vec2) {
     }
     for (i, seat) in draft.seats.iter().enumerate().take(layout::TABLE_ROWS) {
         let at = |slot: Slot| region(slot).px(b);
-        let control = [SeatControl::Human, SeatControl::Computer, SeatControl::Idle].iter().position(|c| *c == seat.control).unwrap_or(0);
+        let control = control_choices.iter().position(|c| *c == seat.control).unwrap_or(0);
         let r = at(Slot::SeatControl(i));
         put(p, Slot::SeatControl(i), r, (dropdown(t, &control_refs, control, r.width()), SeatDrop { row: i, col: Col::Control }));
         let side = races.iter().position(|id| id.eq_ignore_ascii_case(&seat.race)).unwrap_or(0);
@@ -142,6 +144,11 @@ fn setup(p: &mut Box_, ctx: &Ctx, b: Vec2) {
         let r = at(Slot::SeatTeam(i));
         put(p, Slot::SeatTeam(i), r, (dropdown(t, &team_refs, usize::from(seat.team), r.width()), SeatDrop { row: i, col: Col::Team }));
     }
+    put(p, Slot::ModeLabel, region(Slot::ModeLabel).px(b), label(t, &tr("Mode")));
+    let play = if draft.observing { "Play" } else { "Play (selected)" };
+    let observe = if draft.observing { "Observe (selected)" } else { "Observe" };
+    act_button(p, ctx, b, Slot::ModePlay, &tr(play), Act::SetObserving(false));
+    act_button(p, ctx, b, Slot::ModeObserve, &tr(observe), Act::SetObserving(true));
 
     // The map window: its labels above the preview, the preview, the settings beside it.
     let map = ctx.data.maps.get(draft.map);
@@ -201,6 +208,7 @@ fn setup(p: &mut Box_, ctx: &Ctx, b: Vec2) {
         Some(caption) => act_button(p, ctx, b, Slot::Officers, &caption, Act::CycleOfficerLimit),
         None => off_button(p, ctx, b, Slot::Officers, &tr("Officer limit unavailable")),
     }
+    act_button(p, ctx, b, Slot::Advanced, &tr("Advanced"), Act::Goto(Screen::Advanced));
 
     act_button(p, ctx, b, Slot::SetupBack, &cap(ctx, "previous_menu", "Previous menu"), Act::Goto(Screen::Main));
     if draft.to_setup(ctx.data).is_some() {
@@ -210,14 +218,37 @@ fn setup(p: &mut Box_, ctx: &Ctx, b: Vec2) {
     }
 }
 
+fn advanced(p: &mut Box_, ctx: &Ctx, b: Vec2) {
+    let t = ctx.theme;
+    let title = region(Slot::AdvancedTitle).px(b);
+    put(p, Slot::AdvancedTitle, title, kit_text(t, t.caps(&tr("Advanced"), t.caps_titles), t.title_size, t.title));
+    let (key, fallback) = match ctx.draft.options.starting_resources {
+        StartingResources::Normal => ("sr_normal", "Resources: Normal"),
+        StartingResources::Lots => ("sr_lots", "Resources: Lots"),
+    };
+    act_button(p, ctx, b, Slot::AdvancedResources, &cap(ctx, key, fallback), Act::CycleResources);
+    let officer = ctx.data.content.rules().officer_limits.get(ctx.draft.options.officer_limit as usize).map(|choice| {
+        let caption = ctx.strings.and_then(|s| s.native_label(&choice.key))
+            .filter(|c| !c.trim().is_empty())
+            .or_else(|| (!choice.key.trim().is_empty()).then_some(choice.key.as_str()))
+            .map_or_else(|| tr("Officer limit unavailable"), str::to_owned);
+        format!("{caption}: {}", choice.value)
+    });
+    match officer {
+        Some(caption) => act_button(p, ctx, b, Slot::AdvancedOfficers, &caption, Act::CycleOfficerLimit),
+        None => off_button(p, ctx, b, Slot::AdvancedOfficers, &tr("Officer limit unavailable")),
+    }
+    act_button(p, ctx, b, Slot::AdvancedSpeed, &trf("Game speed: {0}", &[&ctx.draft.speed.label()]), Act::CycleMatchSpeed);
+    act_button(p, ctx, b, Slot::AdvancedDefault, &tr("Default"), Act::DefaultOptions);
+    act_button(p, ctx, b, Slot::AdvancedClose, &tr("Close"), Act::Goto(Screen::Setup));
+}
+
 /// The picked map's start positions as fractions of the preview frame.
 pub fn preview_dots(ctx: &Ctx) -> Vec<(f32, f32)> {
     let Some(m) = ctx.data.maps.get(ctx.draft.map) else { return Vec::new() };
     let f = |v: sta_content::Fixed| v.to_f32();
     let (lo, hi) = (&m.def.bounds.0, &m.def.bounds.1);
-    let mut starts: Vec<_> = m.def.starts.iter().collect();
-    starts.sort_by_key(|s| s.slot);
-    starts
+    m.playable_starts()
         .iter()
         .take(layout::TABLE_ROWS)
         .map(|s| layout::preview_point((f(s.pos.x), f(s.pos.z)), (f(lo.x), f(lo.z)), (f(hi.x), f(hi.z))))
