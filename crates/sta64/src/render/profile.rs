@@ -75,6 +75,11 @@ pub enum Effect {
     Post,
     /// RND-15: nebula and hull shadows.
     Shadows,
+    /// The weapon shots a class has a stock drawing for (#1041): ribbons, streaks and sprites.
+    /// Finer than [`Effect::Weapons`], which is never registered as stock: a class without a
+    /// stock version here keeps its Refit-derived drawing in both looks, and the spawn code
+    /// chooses per class (`fx/stock_shots.rs`).
+    Shots,
 }
 
 /// What stays in the repository under Refit: each effect, its package, and the
@@ -89,11 +94,13 @@ pub const REFIT_EFFECTS: &[(Effect, &str, &[&str])] = &[
     (Effect::Specials, "RND-11", &[]),
     (Effect::Post, "RND-14", &[]),
     (Effect::Shadows, "RND-15", &["shadows.wesl"]),
+    // The Refit look of a shot is `Effect::Weapons`' (`fx/quad.wesl`); `Shots` adds the stock one.
+    (Effect::Shots, "RND-09", &[]),
 ];
 
 /// Original, profile-independent presentation shaders. These are available
 /// under both looks and are not part of the preserved Refit-derived effects.
-pub const SHARED_SHADERS: &[&str] = &["fx/persistent_shields.wesl"];
+pub const SHARED_SHADERS: &[&str] = &["fx/persistent_shields.wesl", "fx/stock_shots.wesl"];
 
 /// Which effects have a stock implementation registered.
 #[derive(Resource, Default, Debug)]
