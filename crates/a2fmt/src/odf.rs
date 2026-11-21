@@ -9,7 +9,8 @@
 //! Inheritance: a file's own keys win over anything it includes; includes are searched
 //! in the order written, depth first. Within one file, when a key is written twice,
 //! the later one wins by default. [`Odf::load_layered_first`] selects the first
-//! assignment within each file for stock Armada II. Names are matched ASCII case-insensitively, keys likewise.
+//! assignment within each file for stock Armada II. Names and keys are matched
+//! ASCII case-insensitively.
 //! Includes name a file anywhere under `odf/`, by file name alone.
 //!
 //! Fleet Operations layers its files (a mod's over its parent's over the game's), and an
@@ -19,6 +20,7 @@
 //! read, takes the next version below the last one taken, as Fleet Operations' file
 //! system does. Stock has no versions, so there such an include is a loop and is cut.
 
+use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -189,15 +191,8 @@ impl Odf {
     }
 
     fn keep_first_assignments(&mut self) {
-        let mut seen = Vec::<String>::new();
-        self.file.entries.retain(|entry| {
-            if seen.iter().any(|key| key.eq_ignore_ascii_case(&entry.key)) {
-                false
-            } else {
-                seen.push(entry.key.clone());
-                true
-            }
-        });
+        let mut seen = BTreeSet::new();
+        self.file.entries.retain(|entry| seen.insert(entry.key.to_ascii_lowercase()));
         for parent in &mut self.parents {
             parent.keep_first_assignments();
         }

@@ -358,16 +358,17 @@ mod tests {
 
     #[test]
     fn a2_info_threshold_duplicates_keep_first_while_fo_keeps_last() {
-        for (profile, expected) in [("Sta2Classic", 0.6), ("Fo4", 0.3)] {
-            let root = std::env::temp_dir().join(format!("sta64_infobar_duplicate_{profile}_{}", std::process::id()));
+        for (profile, expected) in [(Profile::Sta2Classic, 0.6), (Profile::Fo4, 0.3)] {
+            let name = profile.name();
+            let root = std::env::temp_dir().join(format!("sta64_infobar_duplicate_{name}_{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&root);
             let data = root.join("Data");
             std::fs::create_dir_all(data.join("odf/other")).unwrap();
-            std::fs::write(data.join("info.ini"), format!("[Mod]\nProfile={profile}\n")).unwrap();
+            std::fs::write(data.join("info.ini"), format!("[Mod]\nProfile={name}\n")).unwrap();
             std::fs::write(data.join("odf/other/races.odf"), "numberOfRaces=1\nrace0=demo\n").unwrap();
             std::fs::write(data.join("odf/other/demo.odf"), "name=Demo\ncrewYellowStatus=0.6\nCREWYELLOWSTATUS=0.3\n").unwrap();
             let vfs = Vfs::mount_install(&root, None).unwrap();
-            assert_eq!(Profile::detect(&vfs).name(), profile);
+            assert_eq!(Profile::detect(&vfs), profile);
             let style = InfoStyle::load(&vfs);
             assert_eq!(style.thresholds.get("demo").unwrap().0, expected);
             std::fs::remove_dir_all(&root).unwrap();
