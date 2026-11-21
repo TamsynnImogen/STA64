@@ -694,7 +694,7 @@ pub struct SpriteFonts {
 
 impl SpriteFonts {
     /// The font, glyph scale (physical px per texel, per axis) and filter the stock rule gives
-    /// `role` for a HUD of `canvas` (logical) at `px` physical px per logical px. `None` when
+    /// `role` for a HUD of `canvas` (layout units) at `px` physical px per layout unit. `None` when
     /// the install is not of the Armada II family, the role has no font file, or no HUD is
     /// shown: the caller then keeps the plain path. Reusable by any stock-look text.
     pub fn stock_choice(&self, role: StockRole, canvas: &StockTextCanvas, px: f32) -> Option<(&LoadedFont, StockChoice, Vec2)> {
@@ -915,7 +915,10 @@ fn load_fonts(
             .collect();
         let (mut pages, mut linear) = (Vec::new(), Vec::new());
         for (i, (px, size)) in decoded.into_iter().enumerate() {
-            let wants = stock_family || material_filter(font.pages[i].material.as_deref()) == GlyphFilter::Linear;
+            // Linear copies only where linear can be drawn: a role-set font in the family that
+            // runs the rule, or a page whose declared material says so.
+            let role_set = stock_family && font.name.starts_with(crate::ui::stock_font::STOCK_FONT_PREFIX);
+            let wants = role_set || material_filter(font.pages[i].material.as_deref()) == GlyphFilter::Linear;
             let (page, smooth) = upload_page(px, size, &mut images, wants);
             pages.push(page);
             linear.push(smooth);
@@ -2867,8 +2870,8 @@ mod tests {
         }
     }
 
-    /// The role sets of an authored Armada II-family install: the default role's four sizes,
-    /// the title role's three (the top tier's size is absent) and the big role's one.
+    /// Authored role sets: the default role's four sizes, three sizes for the title role
+    /// (the one for the top tier left out) and one for the big role.
     fn authored_family(images: &mut Assets<Image>) -> SpriteFonts {
         let mut fonts = SpriteFonts { stock_family: true, ..default() };
         for n in [10u32, 13, 16, 20, 15, 19, 24] {
@@ -2997,8 +3000,8 @@ mod tests {
         assert!(!p.is_empty() && p.iter().all(|(i, _)| nears.contains(i)), "plain text samples nearest");
     }
 
-    /// A page declaring the linear material gets the linear copy for stock text outside the
-    /// role rule (a family without the rule, Armada I's data), and only for stock text.
+    /// A page that declares a linear material gets the linear copy for stock text outside the
+    /// role rule (an install without the rule), and only for stock text.
     #[test]
     fn a_linear_page_is_drawn_through_a_linear_sampler_for_stock_text_only() {
         let mut images = Assets::<Image>::default();

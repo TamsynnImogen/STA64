@@ -348,6 +348,30 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         }
     }
 
+    // Every stock text node stays inside the placement parent its rectangle authors (the stock
+    // font rule sizes text by the HUD, not by its slot): collected, then reported together.
+    {
+        let mut texts = app.world_mut().query::<(&crate::ui::sprite_font::SpriteText, &crate::ui::sprite_font::SpriteTextStyle, &ComputedNode, &ChildOf)>();
+        let mut checked = 0;
+        let mut over = Vec::new();
+        for (text, style, node, parent) in texts.iter(app.world()) {
+            if style.stock.is_none() {
+                continue;
+            }
+            let Some(slot) = app.world().get::<ComputedNode>(parent.parent()) else { continue };
+            let (own, room) = (node.size(), slot.size());
+            if own.x <= 0.0 || room.x <= 0.0 {
+                continue;
+            }
+            checked += 1;
+            if own.x > room.x + 1.0 || own.y > room.y + 1.0 {
+                over.push(format!("{:?} {own} in {room}", text.text));
+            }
+        }
+        eprintln!("{label}: {checked} stock text nodes checked against their placement parent");
+        assert!(over.is_empty(), "{label}: stock text overflows its slot (physical px): {over:?}");
+    }
+
     let roots = app
         .world_mut()
         .query_filtered::<&UiTargetCamera, With<HudRoot>>()

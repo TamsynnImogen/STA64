@@ -126,7 +126,7 @@ pub fn glyph_scale(choice: &StockChoice, canvas: Vec2) -> Vec2 {
     canvas / STOCK_SPACE * (STOCK_SPACE.x / choice.tier as f32)
 }
 
-/// The HUD the stock text is drawn in, in logical px: set by the stock HUD while it is
+/// The HUD the stock text is drawn in, in the HUD's layout units (before the UI scale): set by the stock HUD while it is
 /// shown, absent otherwise (then stock text keeps the plain path).
 #[derive(Resource, Default, Clone, Copy, Debug, PartialEq)]
 pub struct StockTextCanvas(pub Option<StockCanvas>);
@@ -141,7 +141,7 @@ pub struct StockCanvas {
 }
 
 impl StockCanvas {
-    /// Effective width in physical px at `px` physical px per logical px.
+    /// Effective width in physical px at `px` physical px per layout unit.
     pub fn width(&self, px: f32) -> f32 {
         effective_width(self.fit, self.hud.x * px, self.window.x * px)
     }
@@ -156,8 +156,7 @@ impl StockCanvas {
 mod tests {
     use super::*;
 
-    /// An authored set shaped like the original's: sizes for every tier of the base, except
-    /// one tier of the title role.
+    /// An authored set: a font exists for every size except the listed ones.
     fn has_all_but(missing: &'static [u32]) -> impl Fn(u32) -> bool {
         move |n| !missing.contains(&n)
     }
@@ -166,7 +165,7 @@ mod tests {
     fn sizes_come_from_the_tiers_and_the_missing_one_shifts_the_index() {
         let all = |_: u32| true;
         assert_eq!(loaded_sizes(StockRole::Default, &all), vec![(10, 800), (13, 1024), (16, 1280), (20, 1600)]);
-        // The title role's 30 is absent: its 24 stands at the third tier, not the fourth.
+        // With the top title size left out, the largest stands at the third tier, not the fourth.
         let no30 = has_all_but(&[30]);
         assert_eq!(loaded_sizes(StockRole::Title, &no30), vec![(15, 800), (19, 1024), (24, 1280)]);
         // A missing size in the middle shifts the later ones down.
@@ -198,9 +197,9 @@ mod tests {
         assert_eq!(f(1920.0), GlyphFilter::Linear);
     }
 
-    /// The measured 1600x1200 frame, as an authored set of the same shape: the default role
-    /// draws 1:1 and nearest; the title role, with no size at the top tier, draws its largest
-    /// at the third tier's scale and linear.
+    /// The rule on a 1600x1200 canvas with authored sets: the default role draws 1:1 and
+    /// nearest; a title set with its top size left out draws its largest at the third tier's
+    /// scale and linear.
     #[test]
     fn the_measured_square_frame_with_authored_sets() {
         let canvas = Vec2::new(1600.0, 1200.0);
@@ -212,7 +211,7 @@ mod tests {
         assert_eq!((t.size, t.target, t.filter, glyph_scale(&t, canvas)), (24, 30, GlyphFilter::Linear, Vec2::splat(1.25)));
     }
 
-    /// The measured 16:9 frame: stretched over the window, the second axis scales on its own.
+    /// A stretched 1280x720 canvas: the second axis scales on its own.
     #[test]
     fn the_measured_wide_frame_with_authored_sets() {
         let (w, h) = (1280.0, 720.0);
