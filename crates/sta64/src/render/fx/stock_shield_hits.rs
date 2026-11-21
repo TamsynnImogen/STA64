@@ -40,7 +40,7 @@
 //!   (measured), depth write off (INTERIM: not established).
 //! - **Animation and life.** The model's material names a texture flipbook (a sprite-table animation); its cell
 //!   is picked from the game clock, the same for every cap, frozen while the game is paused, a new hit does not
-//!   start at cell 0 (measured; the rule is [`flipbook_rect`]'s). A cap lives `shieldDuration` seconds ([`DEFAULT_DURATION`] without the key),
+//!   start at cell 0 (measured on shot sheets at one window size; the same evaluator for model-material flipbooks: read from the executable, static; the rule is [`flipbook_rect`]'s). A cap lives `shieldDuration` seconds ([`DEFAULT_DURATION`] without the key),
 //!   a hard cut on the game clock, no fade (measured).
 //! - **Not drawn here**: the shields-down bands (they wait for the sim's zero-shield hold, issue #1101), the
 //!   per-ordnance `shieldGeometryName` (not typed) and the special-weapon shield types, the cloak rule, a beam's
@@ -127,22 +127,11 @@ pub fn cap_frame(centre: Vec3, rot: Quat, axes: Vec3, r_db: f32, dir: Vec3) -> (
 }
 
 /// The flipbook's texture offset, as a material rectangle `(u, v, 1, 1)` added to the model's own
-/// coordinates, at game time `t` seconds for the animation `anim` (its time offset `offset`). For an `@auto` sheet
-/// (square, row or column) the cell is floor(time / (length / frames)) modulo the frame count, which is the rule
-/// measured on the original (the last cell is shown too); any other animation follows the sprite table's own rule
-/// (`spr_anim::value`). No animation or an unknown one: the model's own coordinates.
+/// coordinates, at game time `t` seconds for the animation `anim` (its time offset `offset`), by the sprite table's
+/// own evaluator (`spr_anim::value`), the one the shots use. No animation or an unknown one: the model's own
+/// coordinates.
 pub fn flipbook_rect(table: &sta_assets::a2fmt::spr::SpriteTable, anim: Option<(&str, f32)>, t: f32) -> Vec4 {
-    use sta_assets::a2fmt::spr::Auto;
-    let Some((a, time)) = anim.and_then(|(id, offset)| table.animation(id).map(|a| (a, t + offset))) else { return Vec4::new(0.0, 0.0, 1.0, 1.0) };
-    let sheet = matches!(a.auto, Some(Auto::Square | Auto::Row | Auto::Column)) && a.length > 0.0 && a.key_count > 0;
-    let off = if sheet {
-        let offsets = a.auto_offsets();
-        let n = offsets.len() as i64;
-        let cell = ((f64::from(time) / (f64::from(a.length) / n as f64)).floor() as i64).rem_euclid(n);
-        offsets[cell as usize]
-    } else {
-        spr_anim::offset_of(spr_anim::value(a, time, spr_anim::LOOP))
-    };
+    let off = anim.and_then(|(id, offset)| table.animation(id).map(|a| spr_anim::offset_of(spr_anim::value(a, t + offset, spr_anim::LOOP)))).unwrap_or([0.0, 0.0]);
     Vec4::new(off[0], off[1], 1.0, 1.0)
 }
 

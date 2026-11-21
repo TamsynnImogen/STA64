@@ -76,13 +76,17 @@ fn flipbook_table() -> SpriteTable {
 fn the_flipbook_cell_comes_from_the_game_time_the_same_for_every_cap() {
     let t = flipbook_table();
     let cell = |game: f32| flipbook_rect(&t, Some(("cells", 0.0)), game);
-    // Sixteen frames in half a second: the slot of frame k is [k, k + 1) frame lengths, the last cell included.
-    let frame = 0.5 / 16.0;
+    // Sixteen frames in half a second, by the helper's rule: the slot is floor(time * 16 / (length + 0.05)), so a slot is
+    // 0.55 / 16 long and the last cell is not reached within the half second.
+    let frame = 0.55 / 16.0;
     // Frame k at the middle of its slot: column k % 4, row k / 4, a quarter of the sheet each.
-    for k in 0..16u32 {
+    for k in 0..15u32 {
         let r = cell((k as f32 + 0.5) * frame);
         assert_eq!((r.x, r.y, r.z, r.w), ((k % 4) as f32 * 0.25, (k / 4) as f32 * 0.25, 1.0, 1.0), "frame {k}");
     }
+    // Just before the loop ends it still shows the cell before the last one.
+    assert_eq!(cell(0.4999).x, 0.5);
+    assert_eq!(cell(0.4999).y, 0.75);
     // It loops: half a second on is the first cell again; a time long after a hit's birth is whatever the clock says.
     assert_eq!(cell(0.5 + 0.5 * frame), cell(0.5 * frame));
     assert_eq!(cell(0.5 * 240.0 + 5.5 * frame), cell(5.5 * frame));
@@ -879,8 +883,8 @@ fn gpu_the_cap_adds_in_its_level_colour_in_its_cell_with_the_pole_at_the_hit_and
     let img = capture(&mut app);
     assert!(near(px(&img, 64, 64), [0, srgb(2.0 * GAIN * quarter), 0]), "two caps: {:?}", px(&img, 64, 64));
 
-    // The flipbook cell follows the game clock: at tick 5 of the game (a sixth of a second) the sheet shows cell 5, an eighth of full.
-    show(&mut app, vec![cap(Vec3::Z, 1.0)], 5, 0.0);
+    // The flipbook cell follows the game clock: at tick 6 of the game (a fifth of a second) the sheet shows cell 5, an eighth of full.
+    show(&mut app, vec![cap(Vec3::Z, 1.0)], 6, 0.0);
     let img = capture(&mut app);
     assert!(near(px(&img, 64, 64), [0, srgb(GAIN * 32.0 / 255.0), 0]), "cell 5: {:?}", px(&img, 64, 64));
 
