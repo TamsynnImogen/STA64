@@ -80,6 +80,10 @@ pub enum Effect {
     /// stock version here keeps its Refit-derived drawing in both looks, and the spawn code
     /// chooses per class (`fx/stock_shots.rs`).
     Shots,
+    /// The shield hit (#1041): a cap on the shield ellipsoid (`fx/stock_shield_hits.rs`). Finer than
+    /// [`Effect::Impacts`], which also covers hull sparks, explosions and smoke and is never registered as
+    /// stock: under Stock the Refit shield shell is not drawn, everything else `Impacts` draws still is.
+    ShieldHits,
 }
 
 /// What stays in the repository under Refit: each effect, its package, and the
@@ -96,6 +100,8 @@ pub const REFIT_EFFECTS: &[(Effect, &str, &[&str])] = &[
     (Effect::Shadows, "RND-15", &["shadows.wesl"]),
     // The Refit look of a shot is `Effect::Weapons`' (`fx/quad.wesl`); `Shots` adds the stock one.
     (Effect::Shots, "RND-09", &[]),
+    // The Refit look of a shield hit is `Effect::Impacts`' shell (`fx/shield.wesl`); `ShieldHits` adds the stock one.
+    (Effect::ShieldHits, "RND-10", &[]),
 ];
 
 /// Original, profile-independent presentation shaders. These are available

@@ -12,6 +12,8 @@ struct Params {
     rect: vec4<f32>,
     // x: 1 when u repeats inside the rectangle (a tiled sprite).
     flags: vec4<f32>,
+    // rgb multiplies the texture and the vertex colour (white for a shot; the shield cap's colour and gain).
+    tint: vec4<f32>,
 };
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> k: Params;
@@ -37,5 +39,5 @@ fn fragment(in: FragIn) -> @location(0) vec4<f32> {
     }
     let uv = k.rect.xy + local * k.rect.zw;
     let texel = textureSampleGrad(shot_texture, shot_sampler, uv, dx, dy);
-    return vec4<f32>(texel.rgb * in.color.rgb, 0.0);
+    return vec4<f32>(texel.rgb * in.color.rgb * k.tint.rgb, 0.0);
 }

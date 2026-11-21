@@ -9,8 +9,9 @@
 //!   killer is the `by` of the first lethal `Hit`; kills are returned in that
 //!   order, for `Sim::despawn` (`Destroyed`, removal). Later hits that tick on
 //!   a unit already dead do no damage.
-//! - [`recharge`] gives every shield pool its definition's `recharge` per tick
-//!   (capped at `max`), before the tick's hits. No delay after a hit.
+//! - [`recharge`] gives each unheld pool its definition's `recharge` per tick
+//!   (capped at `max`), before the tick's hits. Stock A2 holds an emptied pool
+//!   for `shieldDelay` after the last hit while empty (measured).
 //!
 //! - Planets with a population row (SIM-30): the hull damage of a hit becomes
 //!   population loss (`0.1 x damage`) and the hull is untouched, hit by hit.
@@ -38,7 +39,7 @@
 
 use serde::{Deserialize, Serialize};
 use sta_content::ContentDb;
-use sta_core::{EntityId, Fixed, PlayerId};
+use sta_core::{EntityId, Fixed, PlayerId, Tick};
 
 use crate::command::Subsystem;
 use crate::event::SimEvent;
@@ -46,9 +47,69 @@ use crate::view::UnitFlags;
 use crate::world::{Entities, EntityKind, Fnv, Table};
 use crate::Sim;
 
+/// Empty shield pools held until an absolute tick (exclusive), by unit and facing.
+/// A zero entry has no hold; inactive rows are removed before hashing or saving.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ZeroShieldHolds {
+    rows: Table<[Tick; 4]>,
+}
+
+impl ZeroShieldHolds {
+    pub(crate) fn is_empty(&self) -> bool { self.rows.is_empty() }
+    pub(crate) fn remove(&mut self, id: EntityId) { self.rows.remove(id); }
+    pub(crate) fn until(&self, id: EntityId, pool: usize) -> Tick {
+        self.rows.get(id).map_or(0, |r| r[pool])
+    }
+    pub(crate) fn hold(&mut self, id: EntityId, pool: usize, until: Tick) {
+        let mut row = self.rows.get(id).copied().unwrap_or([0; 4]);
+        row[pool] = row[pool].max(until);
+        self.rows.insert(id, row);
+    }
+    pub(crate) fn clear_pool(&mut self, id: EntityId, pool: usize) {
+        let Some(mut row) = self.rows.get(id).copied() else { return };
+        row[pool] = 0;
+        if row == [0; 4] { self.rows.remove(id); } else { self.rows.insert(id, row); }
+    }
+    pub(crate) fn to_rows(&self) -> Vec<(EntityId, [Tick; 4])> {
+        self.rows.iter().map(|(id, r)| (id, *r)).collect()
+    }
+    pub(crate) fn from_rows(rows: Vec<(EntityId, [Tick; 4])>, tick: Tick, units: &Entities, db: Option<&ContentDb>) -> Option<Self> {
+        let valid = rows.iter().all(|(id, row)| {
+            let Some(u) = units.get(*id) else { return false };
+            let Some(def) = db.and_then(|db| db.unit(u.def)) else { return false };
+            let enabled = db.is_some_and(|db| db.unit_features(def).shield_zero_hold);
+            let pools = if u.shields.directional { 4 } else { 1 };
+            // The step increments its tick after damage. A one-tick hold can
+            // therefore have `until == tick` in a valid end-of-step snapshot.
+            enabled && u.kind == EntityKind::Craft && row[..pools].iter().any(|&t| t >= tick && t != 0)
+                && row[..pools].iter().all(|&t| t == 0 || t >= tick)
+                && row[pools..].iter().all(|&t| t == 0)
+        });
+        valid.then(|| Table::from_rows(rows)).flatten().map(|rows| Self { rows })
+    }
+    pub(crate) fn hash_into(&self, h: &mut Fnv) {
+        h.str("shield-zero-holds-v1");
+        h.u64(self.rows.len() as u64);
+        for (id, row) in self.rows.iter() {
+            h.u64(id.0 as u64);
+            for until in row { h.u64(*until); }
+        }
+    }
+}
+
 /// Recharge every unit's shields by its definition's rate.
-pub(crate) fn recharge(units: &mut Entities, db: &ContentDb, switches: &crate::switches::SwitchTable, subsystems: &Subsystems, transports: &super::boarding::Transports) {
+pub(crate) fn recharge(units: &mut Entities, db: &ContentDb, switches: &crate::switches::SwitchTable, subsystems: &Subsystems, transports: &super::boarding::Transports, holds: &mut ZeroShieldHolds, tick: Tick) {
     for u in units.iter_mut() {
+        let pools = if u.shields.directional { 4 } else { 1 };
+        let mut held = [false; 4];
+        for pool in 0..pools {
+            let until = holds.until(u.id, pool);
+            if until > tick && u.shields.now[pool] == Fixed::ZERO {
+                held[pool] = true;
+            } else if until != 0 {
+                holds.clear_pool(u.id, pool);
+            }
+        }
         // Hold disabled shields at zero even after loading an older snapshot which stored the
         // off bit alongside charged pools, or a script tried to refill a disabled generator.
         if subsystems.get(u.id).is_some_and(|r| r.off & (1 << system(Subsystem::Shields)) != 0) {
@@ -77,9 +138,9 @@ pub(crate) fn recharge(units: &mut Entities, db: &ContentDb, switches: &crate::s
                 u.hull[0] = if u.hull[1] - u.hull[0] <= rate { u.hull[1] } else { u.hull[0] + rate };
             }
         }
-        let pools = if u.shields.directional { 4 } else { 1 };
-        for now in &mut u.shields.now[..pools] {
-            if *now < max {
+        for pool in 0..pools {
+            let now = &mut u.shields.now[pool];
+            if !held[pool] && *now < max {
                 *now = (*now + rate).min(max);
             }
         }
@@ -94,6 +155,8 @@ pub(crate) fn apply(
     events: &mut Vec<SimEvent>,
     from: usize,
     ctx: &mut super::casualty::Ctx,
+    holds: &mut ZeroShieldHolds,
+    tick: Tick,
 ) -> Vec<(EntityId, Option<EntityId>)> {
     let mut killed = Vec::new();
     let tail = events.split_off(from);
@@ -135,6 +198,17 @@ pub(crate) fn apply(
                     damage - shield
                 }
             };
+            if damage > Fixed::ZERO && t.kind == EntityKind::Craft && t.shields.max > Fixed::ZERO && t.shields.now[pool] == Fixed::ZERO {
+                if let Some(def) = db.unit(t.def).filter(|def| db.unit_features(def).shield_zero_hold) {
+                    // The emptying hit and every later hit at zero restart the timer.
+                    let delay = def.transport.shield_delay.map_or(
+                        super::boarding::TransportRules::of(db).target_shield_hold,
+                        super::boarding::ticks,
+                    );
+                    let until = tick.saturating_add(delay);
+                    if until > tick { holds.hold(target, pool, until); }
+                }
+            }
             if ctx.colonies.has_row(target) {
                 // SIM-30, a planet with a population row: damage that reaches the
                 // hull costs `0.1 x damage` people and the hull stays, so every hit

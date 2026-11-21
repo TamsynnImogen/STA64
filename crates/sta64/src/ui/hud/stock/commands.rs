@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::{log::warn, prelude::Color};
 use sta_assets::a2fmt::odf::Odf;
-use sta_content::OdfIndex;
+use sta_content::{OdfIndex, Profile};
 use sta_vfs::Vfs;
 
 #[derive(Clone, Debug, Default)]
@@ -111,8 +111,11 @@ impl NativeCommands {
         for warning in warnings {
             warn!("stock HUD command ODF index: {warning}");
         }
-        let resolve =
-            |name: &str| Odf::load_layered(name, |n, version| index.load(vfs, n, version).map(String::into_bytes)).ok();
+        let a2_first = Profile::detect(vfs) == Profile::Sta2Classic;
+        let resolve = |name: &str| {
+            let fetch = |n: &str, version| index.load(vfs, n, version).map(String::into_bytes);
+            if a2_first { Odf::load_layered_first(name, fetch) } else { Odf::load_layered(name, fetch) }.ok()
+        };
         let mut names = Vec::new();
         if let Some(all) = resolve("allcommands.odf") {
             names.extend(all.get_strs("commandNames").into_iter().map(str::to_owned));
@@ -298,6 +301,20 @@ mod tests {
         let attack = loaded.get("attack").unwrap();
         assert_eq!(attack.tooltip, None);
         assert_eq!(attack.verbose.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn a2_command_duplicates_keep_first_while_fo_keeps_last() {
+        let a2 = Install::new("a2_duplicate");
+        a2.file("Data/odf/commands/allcommands.odf", "commandNames=\"attack\"\n")
+            .file("Data/odf/commands/attack.odf", "commandName=ATTACK\nbuttonName=first\nBUTTONNAME=second\n");
+        assert_eq!(NativeCommands::load(&a2.mount(None)).get("attack").unwrap().button, "first");
+
+        let fo = Install::new("fo_duplicate");
+        fo.file("Data/info.ini", "[Mod]\nProfile=Fo4\n")
+            .file("Data/odf/commands/allcommands.odf", "commandNames=\"attack\"\n")
+            .file("Data/odf/commands/attack.odf", "commandName=ATTACK\nbuttonName=first\nBUTTONNAME=second\n");
+        assert_eq!(NativeCommands::load(&fo.mount(None)).get("attack").unwrap().button, "second");
     }
 
     #[test]

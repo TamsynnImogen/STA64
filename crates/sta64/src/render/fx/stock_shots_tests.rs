@@ -311,7 +311,7 @@ fn the_material_adds_exactly_and_writes_no_depth() {
 fn the_shader_validates_and_adds_no_alpha_or_brightness() {
     let src = include_str!("stock_shots.wesl");
     super::super::validate_wgsl(src);
-    assert!(src.contains("vec4<f32>(texel.rgb * in.color.rgb, 0.0)"), "the output is texture times vertex colour, alpha 0");
+    assert!(src.contains("vec4<f32>(texel.rgb * in.color.rgb * k.tint.rgb, 0.0)"), "the output is texture times vertex colour times the tint, alpha 0");
 }
 
 #[test]
@@ -1264,7 +1264,7 @@ fn gpu_a_shot_adds_to_the_frame_and_the_texture_alpha_does_not_darken_it() {
         .with_inserted_indices(Indices::U32(g.idx.clone()));
     let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(mesh);
     let shot = app.world_mut().resource_mut::<Assets<StockShotMaterial>>().add(StockShotMaterial {
-        params: ShotParams { rect: Vec4::new(0.0, 0.0, 1.0, 1.0), flags: Vec4::ZERO },
+        params: ShotParams { rect: Vec4::new(0.0, 0.0, 1.0, 1.0), flags: Vec4::ZERO, tint: Vec4::ONE },
         texture,
     });
     app.world_mut().spawn((Mesh3d(mesh), MeshMaterial3d(shot), Transform::IDENTITY));
@@ -1339,9 +1339,11 @@ fn authored_shot(path: ShotPath, geom: Geom, radius: f32, sprite: &str) -> Stock
         to: Vec3::ZERO,
         last_body: None,
         last_end: Vec3::ZERO,
+        shield_end: Vec3::ZERO,
         pinned: false,
         muzzle_flare: None,
         impact_flare: None,
+        arrived: false,
         geom,
     }
 }
@@ -1426,7 +1428,7 @@ fn gpu_the_atlas_is_drawn_in_its_cell_the_right_way_round_and_in_frame_order() {
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, g.col.clone())
         .with_inserted_indices(Indices::U32(g.idx.clone()));
     let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(mesh);
-    let params_at = |t: f32| ShotParams { rect: Vec4::from(sprite.rect_at(t)), flags: Vec4::new(f32::from(sprite.tile_u), 0.0, 0.0, 0.0) };
+    let params_at = |t: f32| ShotParams { rect: Vec4::from(sprite.rect_at(t)), flags: Vec4::new(f32::from(sprite.tile_u), 0.0, 0.0, 0.0), tint: Vec4::ONE };
     let material = app.world_mut().resource_mut::<Assets<StockShotMaterial>>().add(StockShotMaterial { params: params_at(0.0), texture });
     app.world_mut().spawn((Mesh3d(mesh), MeshMaterial3d(material.clone()), Transform::IDENTITY));
     let mut target = Image::new_target_texture(128, 128, TextureFormat::Rgba8UnormSrgb, None);

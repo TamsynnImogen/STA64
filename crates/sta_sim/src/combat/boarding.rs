@@ -108,7 +108,7 @@ pub(crate) struct TransportRules {
 }
 
 /// Seconds as ticks, rounded to the nearest; negative reads as zero.
-fn ticks(seconds: Fixed) -> Tick {
+pub(crate) fn ticks(seconds: Fixed) -> Tick {
     ((i128::from(seconds.to_bits().max(0)) * i128::from(TICK_HZ) + (1 << 31)) >> 32) as Tick
 }
 

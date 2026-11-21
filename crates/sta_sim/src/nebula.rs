@@ -241,8 +241,9 @@ impl Sim {
                 {
                     let (gain, max) = (e.regen * dt(), u.shields.max);
                     let pools = if u.shields.directional { 4 } else { 1 };
-                    for now in &mut u.shields.now[..pools] {
-                        if *now < max {
+                    for pool in 0..pools {
+                        let now = &mut u.shields.now[pool];
+                        if *now < max && (self.zero_shield_holds.until(id, pool) <= self.tick || *now > Fixed::ZERO) {
                             *now = (*now + gain).min(max);
                         }
                     }

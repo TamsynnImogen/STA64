@@ -115,6 +115,8 @@ impl Plugin for WeaponFxPlugin {
         app.add_plugins(super::super::mining::MiningPlugin).add_plugins(super::super::orbital_beam::OrbitalBeamPlugin);
         // The Stock look's shots (#1041): registers `Effect::Shots` as having a stock version.
         app.add_plugins(super::stock_shots::StockShotsPlugin);
+        // The Stock look's shield hit (#1041): registers `Effect::ShieldHits`, hooked into the stock beams and shots.
+        app.add_plugins(super::stock_shield_hits::StockShieldHitsPlugin);
         app.init_resource::<OrdnanceRecipes>().add_systems(
             Update,
             load_recipes.run_if(resource_exists_and_changed::<crate::viewer::Mounted>).before(spawn_fx),
