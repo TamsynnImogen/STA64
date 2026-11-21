@@ -1522,7 +1522,7 @@ fn a_layout_that_declares_the_window_gets_panel_frame_still_and_picture_in_both_
             let origin = Vec2::new(panel.x, panel.y);
             let display = layout.at(origin, "cinematicDisplayArea").unwrap();
             let want: Vec<(usize, R)> = layout
-                .pieces("cinematicBackgroundPanel")
+                .pieces_in("cinematic", "cinematicBackgroundPanel")
                 .into_iter()
                 .map(|p| (p.frame, R::new(origin.x + p.rect.x, origin.y + p.rect.y, p.rect.w, p.rect.h)))
                 .collect();
@@ -1615,7 +1615,7 @@ fn installed_layouts_give_a_window_exactly_where_they_declare_one_and_its_art_re
                 continue;
             }
             ran += 1;
-            for piece in layout.pieces("cinematicBackgroundPanel") {
+            for piece in layout.pieces_in("cinematic", "cinematicBackgroundPanel") {
                 assert!(resolves(&piece.name, piece.frame), "{var} {file}: frame piece {} does not resolve", piece.frame);
             }
             if let Some(still) = layout.name("cinematicDefaultBackground") {
