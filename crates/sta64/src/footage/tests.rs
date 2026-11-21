@@ -8,7 +8,7 @@ use sta_core::{PlayerId, TeamId};
 use sta_sim::replay::Replay;
 use sta_sim::command::LocalRouter;
 use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
-use sta_sim::Sim;
+use sta_sim::{Sim, WorldSource};
 
 use super::*;
 use crate::media::MovieId;
@@ -48,26 +48,6 @@ fn the_first_record_is_start_and_movies_are_logged_by_name() {
     assert!(lines.windows(2).all(|w| w[0]["ms"].as_u64() <= w[1]["ms"].as_u64() && w[0]["t"].as_f64() <= w[1]["t"].as_f64()));
 }
 
-#[test]
-fn cutscene_and_exit_edges() {
-    let sink = MemSink::default();
-    let mut app = app(&sink);
-    app.init_resource::<CineractiveState>();
-    app.update();
-    app.world_mut().resource_mut::<CineractiveState>().on = true;
-    app.world_mut().resource_mut::<CineractiveState>().skippable = true;
-    app.update();
-    app.update();
-    *app.world_mut().resource_mut::<CineractiveState>() = CineractiveState::default();
-    app.update();
-    app.world_mut().write_message(AppExit::Success);
-    app.update();
-    let lines = sink.lines();
-    let cut: Vec<_> = lines.iter().filter(|l| l["type"] == "cutscene").map(|l| (l["on"].as_bool().unwrap(), l["skippable"].as_bool().unwrap())).collect();
-    assert_eq!(cut, [(true, true), (false, false)]);
-    assert_eq!(types(&sink).last().unwrap(), "stop");
-}
-
 fn setup() -> GameSetup {
     let seat = |i: u8, control| PlayerSetup { id: PlayerId(i), team: TeamId(i), race: "fx".into(), control };
     GameSetup {
@@ -79,34 +59,184 @@ fn setup() -> GameSetup {
     }
 }
 
-#[test]
-fn a_match_is_logged_once_with_its_tick_and_the_pause() {
-    let s = setup();
-    let (sim, _) = Sim::from_setup_with_starts(&s, &Races::default());
-    let sink = MemSink::default();
-    let mut app = app(&sink);
-    app.add_plugins(SimLinkPlugin).insert_resource(ContentRes(s.content.clone()));
-    let link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), PlayerId(0)).with_replay(Replay::new(&s));
-    app.insert_resource(link).insert_resource(MatchMeta { start: sta_bench::capture::StartMode::Starts, mount: Default::default() });
-    for _ in 0..40 {
+/// A fresh match link, and the ids of units of both seats.
+fn match_link(s: &GameSetup) -> (SimLink, Vec<EntityId>) {
+    let (sim, _) = Sim::from_setup_with_starts(s, &Races::default());
+    let ids = sim.view().units.iter().map(|u| u.id).collect();
+    (SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), PlayerId(0)).with_replay(Replay::new(s)), ids)
+}
+
+fn meta() -> MatchMeta {
+    MatchMeta { start: sta_bench::capture::StartMode::Starts, mount: Default::default() }
+}
+
+/// The app with a match running (the sim link steps from the clock).
+fn match_app(sink: &MemSink, s: &GameSetup) -> (App, Vec<EntityId>) {
+    let mut app = app(sink);
+    app.add_plugins(SimLinkPlugin).insert_resource(ContentRes(s.content.clone())).init_resource::<CineractiveState>();
+    let (link, ids) = match_link(s);
+    app.insert_resource(link).insert_resource(meta());
+    (app, ids)
+}
+
+fn run(app: &mut App, frames: u32) {
+    for _ in 0..frames {
         app.update();
     }
+}
+
+fn of<'a>(lines: &'a [Value], ty: &str) -> Vec<&'a Value> {
+    lines.iter().filter(|l| l["type"] == ty).collect()
+}
+
+#[test]
+fn cutscene_pause_and_exit_close_what_is_open() {
+    let sink = MemSink::default();
+    let s = setup();
+    let (mut app, _) = match_app(&sink, &s);
+    run(&mut app, 5);
+    *app.world_mut().resource_mut::<CineractiveState>() = CineractiveState { on: true, skippable: true };
     app.world_mut().resource_mut::<AnimClock>().set_paused(true);
+    run(&mut app, 3);
+    app.world_mut().write_message(AppExit::Success);
     app.update();
     let lines = sink.lines();
-    let matches: Vec<_> = lines.iter().filter(|l| l["type"] == "match").collect();
-    assert_eq!(matches.len(), 1, "{:?}", types(&sink));
-    let m = matches[0];
-    assert_eq!(m["mode"], "skirmish");
-    assert_eq!(m["mod"], "Fleet Ops Roots");
-    assert!(m["profile"].is_string() && m["game"].is_string());
-    assert_eq!(m["players"].as_array().unwrap().len(), 2);
-    assert_eq!(m["players"][0]["control"], "human");
-    assert_eq!(m["local_seat"], 0);
+    let cut: Vec<_> = of(&lines, "cutscene").iter().map(|l| (l["on"].as_bool().unwrap(), l["reason"].as_str().map(str::to_owned))).collect();
+    assert_eq!(cut, [(true, None), (false, Some("exit".into()))]);
+    let pause: Vec<_> = of(&lines, "pause").iter().map(|l| (l["on"].as_bool().unwrap(), l["reason"].as_str().map(str::to_owned))).collect();
+    assert_eq!(pause, [(true, None), (false, Some("exit".into()))]);
+    assert_eq!(types(&sink).last().unwrap(), "stop");
+    assert_eq!(lines.last().unwrap()["code"], 0);
+}
+
+#[test]
+fn leaving_the_match_closes_intervals_with_a_reason_and_no_false_resume() {
+    let sink = MemSink::default();
+    let s = setup();
+    let (mut app, _) = match_app(&sink, &s);
+    run(&mut app, 5);
+    *app.world_mut().resource_mut::<CineractiveState>() = CineractiveState { on: true, skippable: false };
+    app.world_mut().resource_mut::<AnimClock>().set_paused(true);
+    run(&mut app, 2);
+    app.world_mut().remove_resource::<SimLink>();
+    run(&mut app, 3);
+    let lines = sink.lines();
+    let off: Vec<_> = lines.iter().filter(|l| l["on"] == false).map(|l| (l["type"].as_str().unwrap(), l["reason"].as_str().unwrap_or(""))).collect();
+    assert_eq!(off, [("cutscene", "match_end"), ("pause", "match_end")]);
+    assert!(of(&lines, "cutscene").len() == 2 && of(&lines, "pause").len() == 2, "no second on after the match: {:?}", types(&sink));
+}
+
+#[test]
+fn a_match_is_logged_with_the_app_state_stuck_at_boot() {
+    // `--skirmish` has an `AppState` that never leaves `Boot`; no `Flow` runs.
+    let sink = MemSink::default();
+    let s = setup();
+    let mut app = app(&sink);
+    app.add_plugins(bevy::state::app::StatesPlugin).init_state::<AppState>();
+    app.add_plugins(SimLinkPlugin).insert_resource(ContentRes(s.content.clone()));
+    app.insert_resource(match_link(&s).0).insert_resource(meta());
+    run(&mut app, 5);
+    let lines = sink.lines();
+    assert_eq!(*app.world().resource::<State<AppState>>().get(), AppState::Boot);
+    assert_eq!(of(&lines, "match").len(), 1, "{:?}", types(&sink));
+    let m = of(&lines, "match")[0];
+    assert_eq!((m["mode"].as_str(), m["mod"].as_str(), m["local_seat"].as_u64()), (Some("skirmish"), Some("Fleet Ops Roots"), Some(0)));
+    assert_eq!((m["players"].as_array().unwrap().len(), m["players"][0]["control"].as_str()), (2, Some("human")));
     assert_eq!(m["map"], s.map.name.as_str());
-    let pause = lines.iter().find(|l| l["type"] == "pause").expect("a pause record");
-    assert_eq!(pause["on"], true);
-    assert!(pause["tick"].as_u64().unwrap() > 0, "the match runs on a tick");
+    assert!(m["profile"].is_string() && m["game"].is_string());
+    assert!(lines.last().unwrap()["tick"].is_u64());
+}
+
+#[test]
+fn with_the_front_end_flow_a_match_waits_for_in_game_and_a_second_one_starts_fresh() {
+    let sink = MemSink::default();
+    let s = setup();
+    let mut app = app(&sink);
+    app.add_plugins(bevy::state::app::StatesPlugin).init_state::<AppState>();
+    app.add_plugins(SimLinkPlugin).insert_resource(ContentRes(s.content.clone())).insert_resource(Flow).init_resource::<CineractiveState>();
+    app.insert_resource(match_link(&s).0).insert_resource(meta());
+    run(&mut app, 3);
+    assert!(of(&sink.lines(), "match").is_empty(), "loading is not a match yet");
+    let shot = |app: &mut App| {
+        let at = Spot::Position(sta_sim::Vec3::from_f32([1.0, 2.0, 3.0]));
+        app.world_mut().write_message(SimMsg(SimEvent::Present(Presentation::Shot { from: at.clone(), at, seconds: Fixed::ZERO })));
+        app.update();
+    };
+    let go = |app: &mut App, state| {
+        app.world_mut().resource_mut::<NextState<AppState>>().set(state);
+        run(app, 3);
+    };
+    go(&mut app, AppState::InGame);
+    shot(&mut app);
+    shot(&mut app);
+    app.world_mut().resource_mut::<FootageState>().verdict = Some("victory");
+    go(&mut app, AppState::FrontEnd);
+    app.world_mut().remove_resource::<SimLink>();
+    run(&mut app, 2);
+    // A second match, with its own link.
+    app.insert_resource(match_link(&s).0);
+    go(&mut app, AppState::InGame);
+    shot(&mut app);
+    let lines = sink.lines();
+    assert_eq!(of(&lines, "match").len(), 2, "{:?}", types(&sink));
+    let shots: Vec<_> = of(&lines, "shot").iter().map(|l| l["shot"].as_u64().unwrap()).collect();
+    assert_eq!(shots, [1, 2, 1], "the shot counter restarts with the match");
+    assert_eq!(app.world().resource::<FootageState>().verdict, None);
+    let states: Vec<_> = of(&lines, "app_state").iter().map(|l| l["state"].as_str().unwrap().to_owned()).collect();
+    assert_eq!(states, ["boot", "in_game", "front_end", "in_game"]);
+}
+
+#[test]
+fn events_outside_a_match_are_dropped_and_unseen_units_are_not_reported() {
+    let sink = MemSink::default();
+    let s = setup();
+    let (mut app, ids) = match_app(&sink, &s);
+    app.world_mut().remove_resource::<SimLink>();
+    let id = ids[0];
+    app.world_mut().write_message(SimMsg(SimEvent::Destroyed { id, by: None }));
+    run(&mut app, 3);
+    let (link, _) = match_link(&s);
+    app.insert_resource(link);
+    run(&mut app, 3);
+    assert!(of(&sink.lines(), "destroyed").is_empty(), "no match, no record");
+    // Seen units are reported, with class and owner; a unit nobody saw is not.
+    app.world_mut().write_message(SimMsg(SimEvent::Destroyed { id, by: Some(ids[1]) }));
+    app.world_mut().write_message(SimMsg(SimEvent::Destroyed { id: EntityId(900_000), by: None }));
+    run(&mut app, 2);
+    let lines = sink.lines();
+    let d = of(&lines, "destroyed");
+    assert_eq!(d.len(), 1);
+    assert_eq!((d[0]["id"].as_u64(), d[0]["by"].as_u64()), (Some(u64::from(id.0)), Some(u64::from(ids[1].0))));
+    assert!(d[0]["class"].is_string() && d[0]["owner"].is_u64());
+}
+
+#[test]
+fn shields_down_is_one_record_per_unit_and_facing_until_it_is_up() {
+    let sink = MemSink::default();
+    let s = setup();
+    let (mut app, ids) = match_app(&sink, &s);
+    run(&mut app, 3);
+    for facing in [0, 0, 0, 1, 0] {
+        app.world_mut().write_message(SimMsg(SimEvent::ShieldsDown { id: ids[0], facing }));
+    }
+    run(&mut app, 1);
+    let lines = sink.lines();
+    let f: Vec<_> = of(&lines, "shields_down").iter().map(|l| l["facing"].as_u64().unwrap()).collect();
+    assert_eq!(f, [0, 1]);
+}
+
+#[test]
+fn sight_decides_what_a_record_may_say() {
+    let seen = |class: &str| Seen { class: Some(class.into()), owner: 1 };
+    let last: BTreeMap<EntityId, Seen> = BTreeMap::from([(EntityId(1), seen("a"))]);
+    let now: BTreeSet<EntityId> = BTreeSet::from([EntityId(2)]);
+    let views = |id: EntityId| (id == EntityId(2)).then(|| seen("b"));
+    // Seen last frame: its remembered class, even when it is gone from both views.
+    assert_eq!(resolve_seen(EntityId(1), &last, &now, views), Some(seen("a")));
+    // Drawn now only (just built): from the views.
+    assert_eq!(resolve_seen(EntityId(2), &last, &now, views), Some(seen("b")));
+    // Neither: fogged, no record.
+    assert_eq!(resolve_seen(EntityId(3), &last, &now, views), None);
 }
 
 #[test]

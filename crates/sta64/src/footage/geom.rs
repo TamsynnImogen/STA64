@@ -10,15 +10,63 @@ use sta_content::Profile;
 /// This is a cutting hint, not a rules decision: nothing in the game reads it, and the raw
 /// profile and mod are always logged next to it. `Fo4` covers both Fleet Operations 4 and the
 /// "Roots" content, so it reads `roots` when any of `mod_names` (the active mod's folder and
-/// `[Mod] Name`, and the mounted mod layers) contains "roots" case-insensitively, else `fo4`.
+/// `[Mod] Name`, the mounted mod layers, and the `[Mod] Name` of every mounted `info.ini`) has
+/// "roots" as a whole word ([`has_word`]), else `fo4`.
 pub fn game_label(profile: Profile, mod_names: &[&str]) -> &'static str {
     match profile {
         Profile::Sta1Classic => "a1",
         Profile::Sta2Classic => "a2",
         Profile::Fo3 => "dw",
-        Profile::Fo4 if mod_names.iter().any(|n| n.to_ascii_lowercase().contains("roots")) => "roots",
+        Profile::Fo4 if mod_names.iter().any(|n| has_word(n, "roots")) => "roots",
         Profile::Fo4 => "fo4",
         Profile::Native => "native",
+    }
+}
+
+/// Whether `text` has `word` as a whole word, ignoring case. Words split at anything that is not
+/// a letter or digit and at a lower-case letter followed by an upper-case one (`FleetOpsRoots`),
+/// so "Grassroots" does not match and "Fleet Ops Roots" does.
+pub fn has_word(text: &str, word: &str) -> bool {
+    let mut cur = String::new();
+    let mut prev_lower = false;
+    let mut words = Vec::new();
+    for c in text.chars() {
+        if (!c.is_alphanumeric() || (prev_lower && c.is_uppercase())) && !cur.is_empty() {
+            words.push(std::mem::take(&mut cur));
+        }
+        if c.is_alphanumeric() {
+            cur.push(c);
+        }
+        prev_lower = c.is_lowercase();
+    }
+    words.push(cur);
+    words.iter().any(|w| w.eq_ignore_ascii_case(word))
+}
+
+/// Keys reported once until they are released: `shields_down` for a unit's facing is raised on
+/// every hit while the shield is down, and the log wants one record per spell.
+#[derive(Debug, Clone)]
+pub struct Latch<K: Ord + Copy>(BTreeSet<K>);
+
+impl<K: Ord + Copy> Default for Latch<K> {
+    fn default() -> Self {
+        Latch(BTreeSet::new())
+    }
+}
+
+impl<K: Ord + Copy> Latch<K> {
+    /// `true` the first time `k` is noted since it was last released.
+    pub fn note(&mut self, k: K) -> bool {
+        self.0.insert(k)
+    }
+
+    /// Keeps only the keys `still_held` says so for.
+    pub fn retain(&mut self, still_held: impl Fn(&K) -> bool) {
+        self.0.retain(|k| still_held(k));
+    }
+
+    pub fn clear(&mut self) {
+        self.0.clear();
     }
 }
 
@@ -161,6 +209,16 @@ impl<K: Ord + Copy> FightWatch<K> {
         self.last.clear();
         self.on = false;
     }
+
+    /// A fight is on, as far as the last [`edge`](Self::edge) said.
+    pub fn is_on(&self) -> bool {
+        self.on
+    }
+
+    /// Marks the fight over without an edge (the caller wrote the `off` record).
+    pub fn close(&mut self) {
+        self.clear();
+    }
 }
 
 #[cfg(test)]
@@ -177,6 +235,9 @@ mod tests {
         assert_eq!(game_label(Profile::Fo4, &["Fleet Ops 4.0"]), "fo4");
         assert_eq!(game_label(Profile::Fo4, &["fo-ROOTS-1"]), "roots");
         assert_eq!(game_label(Profile::Fo4, &["Data", "Fleet Operations Roots"]), "roots");
+        assert_eq!(game_label(Profile::Fo4, &["FleetOpsRoots"]), "roots");
+        assert_eq!(game_label(Profile::Fo4, &["Grassroots Edition"]), "fo4");
+        assert_eq!(game_label(Profile::Fo4, &["Rootsmod"]), "fo4");
     }
 
     fn at(x: f32, y: f32, radius: f32) -> Projected {
@@ -254,6 +315,18 @@ mod tests {
         t.reset([3, 4]);
         assert_eq!(t.update(0.0, &set(&[3, 4])), []);
         assert_eq!(t.update(0.1, &set(&[3, 4, 5])), [Edge::Enter(5)]);
+    }
+
+    #[test]
+    fn a_latch_reports_once_until_released() {
+        let mut l = Latch::default();
+        assert!(l.note((1u32, 0u8)));
+        assert!(!l.note((1, 0)));
+        assert!(l.note((1, 1)));
+        // Facing 0 is back up; facing 1 is still down.
+        l.retain(|k| k.1 == 1);
+        assert!(l.note((1, 0)));
+        assert!(!l.note((1, 1)));
     }
 
     fn step(f: &mut FightWatch<u32>, now: f64) -> Option<bool> {

@@ -248,7 +248,8 @@ impl LaunchConfig {
                     Some((f, s)) => cfg.reveal = (cfg.reveal.0 | f, cfg.reveal.1 | s),
                     None => cfg.unknown.push("--reveal (needs fog, shroud or all, comma separated)".into()),
                 },
-                "--footage-log" => cfg.footage_log = Some(value(&mut args).unwrap_or_default()),
+                // A path never starts with `-`: `--footage-log -nointro` is two flags.
+                "--footage-log" => cfg.footage_log = Some(args.next_if(|a| !a.starts_with('-')).unwrap_or_default()),
                 "--help" | "-h" => cfg.help = true,
                 "--scene" => cfg.scene = value(&mut args).map(PathBuf::from),
                 "--headless" => cfg.headless = true,
@@ -374,6 +375,8 @@ mod tests {
         assert_eq!(parse("--footage-log /tmp/f.jsonl --skirmish x").footage_log.as_deref(), Some("/tmp/f.jsonl"));
         let c = parse("--footage-log --skirmish x");
         assert_eq!((c.footage_log.as_deref(), c.map.as_deref(), c.unknown.is_empty()), (Some(""), Some("x"), true));
+        let c = parse("--footage-log -nointro");
+        assert_eq!((c.footage_log.as_deref(), c.nointro, c.unknown.is_empty()), (Some(""), true, true));
         assert!(USAGE.contains("--footage-log"));
     }
 

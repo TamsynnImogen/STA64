@@ -110,12 +110,35 @@ pub fn default_dir() -> PathBuf {
     captures.parent().map_or_else(|| captures.join("footage"), |p| p.join("footage"))
 }
 
-/// Opens the file, with its folders, for appending lines.
-pub fn open(path: &Path) -> std::io::Result<std::fs::File> {
+/// Creates a new file for this run, with its folders. A path that is taken (an earlier run, or
+/// the same second) gets `-2`, `-3`, ... before its extension; a file is never overwritten or
+/// shared. Returns the file and the path it ended up at.
+pub fn open_new(path: &Path) -> std::io::Result<(std::fs::File, PathBuf)> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::OpenOptions::new().create(true).append(true).open(path)
+    for n in 1..1000 {
+        let p = suffixed(path, n);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&p) {
+            Ok(f) => return Ok((f, p)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "no free file name"))
+}
+
+/// `path` for `n` 1, else `<stem>-<n>.<ext>`.
+fn suffixed(path: &Path, n: u32) -> PathBuf {
+    if n <= 1 {
+        return path.to_path_buf();
+    }
+    let stem = path.file_stem().map_or_else(|| "footage".into(), |s| s.to_string_lossy().into_owned());
+    let name = match path.extension() {
+        Some(e) => format!("{stem}-{n}.{}", e.to_string_lossy()),
+        None => format!("{stem}-{n}"),
+    };
+    path.with_file_name(name)
 }
 
 #[cfg(test)]
@@ -158,6 +181,21 @@ mod tests {
         assert_eq!(target_path("/tmp/x/", ms, d), Path::new("/tmp/x/20231114-221320.jsonl"));
         let tmp = std::env::temp_dir();
         assert_eq!(target_path(tmp.to_str().unwrap(), ms, d), tmp.join("20231114-221320.jsonl"));
+    }
+
+    #[test]
+    fn every_run_gets_its_own_file() {
+        let dir = std::env::temp_dir().join(format!("sta64-footage-test-{}-unique", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let want = dir.join("run.jsonl");
+        let (_, first) = open_new(&want).unwrap();
+        let (_, second) = open_new(&want).unwrap();
+        let (_, third) = open_new(&want).unwrap();
+        assert_eq!((first, second, third), (want.clone(), dir.join("run-2.jsonl"), dir.join("run-3.jsonl")));
+        let (_, bare) = open_new(&dir.join("noext")).unwrap();
+        let (_, bare2) = open_new(&dir.join("noext")).unwrap();
+        assert_eq!((bare, bare2), (dir.join("noext"), dir.join("noext-2")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -9,18 +9,23 @@ touch determinism. Off unless asked for; off, none of it runs.
 ## Switching it on
 
 - `--footage-log [<path>]` on the command line, or `STA64_FOOTAGE_LOG=<path>` in the environment
-  (the flag wins). `0`, `off` and an empty value mean off.
+  (the flag wins). `0`, `off` and an empty value mean off. A word starting with `-` is never
+  taken as the path (`--footage-log -nointro` is two flags).
 - `<path>` is a file, a folder (an existing one, or a value ending in `/`: the file inside is
   named by its start), or nothing / `1` for the default place.
 - Default place: `footage/<UTC stamp>.jsonl` in the per-user data directory, next to the
   `captures/` folder (`$XDG_DATA_HOME/sta64/footage/`, `~/.local/share/sta64/footage/`,
   `%LOCALAPPDATA%\sta64\footage\`, `~/Library/Application Support/sta64/footage/`; it follows
   `STA64_CAPTURE_DIR`, see `docs/TESTBENCH.md`). Never inside an install.
-- The game logs one `info!` line with the path. A file that cannot be opened is a warning and the
-  game carries on without the log.
+- Every run writes its own file: a name that is taken (an earlier run, or the same second) gets
+  `-2`, `-3`, ... before the extension (`run.jsonl`, `run-2.jsonl`); a file is never overwritten
+  or appended to. The game logs one `info!` line with the final path. A file that cannot be
+  opened is a warning and the game carries on without the log.
+- Lines are buffered and written out once per frame in which something was logged, and at exit.
+  A kill or a crash loses at most the last frame.
 
 Windowed runs only (the front end, `--map`, `--skirmish`, `--view`); the headless bench does not
-write it.
+write it, and a windowed `--scene` run writes only `start` (it has no match).
 
 ## Format
 
@@ -39,28 +44,33 @@ are player numbers; numbers are rounded to 3 decimals; a field that is not known
 
 | `type` | When | Fields |
 |---|---|---|
-| `start` | the first frame | `format`, `build` (`version`, `commit`, `os`, `arch`, `debug`), `pid`, `started_at` (RFC 3339 UTC), `window` (`width`, `height`, `physical_width`, `physical_height`, or `null`) |
+| `start` | the first frame | `format`, `build` (`version`, `commit`, `os`, `arch`, `debug`), `pid`, `started_at` (RFC 3339 UTC; the stamp of this record itself, so it agrees with its `ms`; `t` counts from the plugin's start, a little before), `window` (`width`, `height`, `physical_width`, `physical_height`, or `null`) |
 | `app_state` | every change of the app's state | `state` (`boot`, `front_end`, `loading`, `in_game`, `viewer`), `from` |
-| `match` | once when a match becomes `in_game` | `profile` (the content profile, e.g. `Fo4`), `mod` (the active mod's folder), `mod_name` (its `[Mod] Name`, when the front end lists it), `mounted` (layer names, top first), `game`, `ui_profile`, `map`, `map_label`, `mode` (`mission`, `skirmish`, `map`, `net`), `campaign`, `mission` (index; missions only), `local_race`, `local_seat`, `players` (`id`, `team`, `race`, `control`) |
+| `match` | once when a match becomes `in_game` | `profile` (the content profile, e.g. `Fo4`), `mod` (the active mod's folder), `mod_name` (its `[Mod] Name`, when the front end lists it), `mounted` (layer names, top first), `game`, `ui_profile`, `map`, `map_label`, `mode` (`mission`, `skirmish`, `map`, `net`), `campaign`, `mission` (index; missions only), `local_race`, `local_seat` (`null` when observing, with no seat), `players` (`id`, `team`, `race`, `control`) |
 | `movie_start` | a pre-rendered movie is asked for | `id`, `name`, `target` (`fullscreen`, `panel`), `skippable` |
 | `movie_end` | it is over | `id`, `name`, `outcome` (`completed`, `skipped`, `stopped`, `failed`), `reason` (failures) |
-| `cutscene` | a script's cineractive turns on or off (a skip by the player counts) | `on`, `skippable` |
-| `shot` | a camera shot of a cineractive | `shot` (number in this match), `from`, `at` (`{"entity":id}`, `{"pos":[x,y,z]}` or `{"path":name,"index":n}`), `seconds` |
+| `cutscene` | a script's cineractive turns on or off (a skip by the player counts) | `on`, `skippable`, `reason` (only on an `off` written because the match or the app ended) |
+| `shot` | a camera shot of a cineractive | `shot` (number in this match), `from`, `at` (`{"entity":id}`, `{"pos":[x,y,z]}` or `{"path":name,"index":n}`, `{"path":name}`, or `{"other":true}` for a kind not typed yet), `seconds` |
 | `title` | a script shows a title | `text`, `subtitle` |
 | `mission_begin` / `mission_end` | the campaign flow starts / closes a mission | `map` (begin), `campaign`, `mission`; `outcome` (`won`, `lost`) and `outcome_tick` (end) |
 | `verdict` | the match is decided for the local player | `result` (`victory`, `defeat`) |
 | `eliminated` | a player is eliminated | `player` |
-| `pause` | the game is paused or resumed | `on` |
-| `destroyed` | a unit is destroyed | `id`, `by`, `class`, `owner` |
-| `shields_down` | a unit's shields fail on a facing | `id`, `facing` (0 fore, 1 aft, 2 port, 3 starboard), `class`, `owner` |
+| `pause` | the game is paused or resumed | `on`, `reason` (a pause still on when the match or the app ended is closed with it, never with a false resume) |
+| `destroyed` | a unit the local player saw is destroyed | `id`, `by`, `class`, `owner` |
+| `shields_down` | a seen unit's shields fail on a facing; once per unit and facing until that shield reads above zero again (the sim raises the event on every hit while it is down) | `id`, `facing` (0 fore, 1 aft, 2 port, 3 starboard), `class`, `owner` |
 | `built` | a unit is finished | `id`, `builder`, `class`, `owner` |
 | `cloak` | a unit cloaks or decloaks | `id`, `on`, `class`, `owner` |
-| `fight` | a fight starts or stops anywhere the local player can see | `on`, `units` (fighting now) |
-| `fight_in_frame` | a fighting unit enters or leaves the main camera's frame | `on`, `units`, and on `on` the `classes` of those in frame |
+| `fight` | a fight starts or stops anywhere the local player can see | `on`, `units` (fighting now), `reason` (an `off` written because the match or the app ended) |
+| `fight_in_frame` | a fighting unit enters or leaves the main camera's frame | `on`, `units`, and on `on` the `classes` of those in frame, `reason` as for `fight` |
 | `cast` | the list of units in frame (see below) | `why` (`cutscene`, `shot`, `fight`), `shot`, `total`, `units` (`id`, `class`, `name`, `owner`, `race`, `x`, `y`, `size`) |
 | `enter` / `leave` | during a cineractive, a unit enters or leaves the frame between casts | as a `cast` unit (`enter`); `id`, `class` (`leave`) |
 | `camera` | the main camera's orbit pose moved (looked at about once a second) | `focus` (x, y, z), `yaw`, `pitch`, `dist` |
-| `stop` | the app exits | `code` |
+| `stop` | the app exits, however (a closed window too); intervals still open are closed first, with `reason` `exit` | `code` |
+
+Records about units (`destroyed`, `shields_down`, `built`, `cloak`) are written only for units
+the local player has seen (drawn last frame, or in the previous or current view); anything in
+the fog is dropped, with no "unseen" variant, so the file does not reveal enemy activity there.
+A unit killed within the one frame it first became visible may be dropped too.
 
 `class` is the unit's ODF name; `name` its on-screen name. A fight is the action camera's rule:
 a unit is fighting for 6 seconds after it fired or was hit, and only units the local player sees
@@ -98,7 +108,13 @@ frame. `t` is the same time from the log's own start, for reading without a reco
   casts tell what was on screen.
 - `game` is a cutting hint, not a rules decision: `a1` (Armada I), `a2` (Armada II), `dw` (Fleet
   Operations 3.x), `fo4`, `roots` (the Fleet Operations 4 profile with a mounted mod whose folder,
-  name or parent layer contains "roots"), `native`. The raw `profile` and `mod` are logged next
+  name, parent layer or mounted `info.ini` `[Mod] Name` has "roots" as a whole word, so
+  `FleetOpsRoots` and "Fleet Ops Roots" match, "Grassroots" does not; a plain Roots install reads
+  `roots` only if its own `info.ini` names it so), `native`. The raw `profile` and `mod` are logged next
   to it; trust those over the label.
 - The `cast` waits for the camera: a shot followed by another within 0.3 s gets no cast of its own.
+- A `shot` outside a cineractive (a script's camera request) also gets its `cast`.
+- "In frame" is the main camera's whole viewport: HUD panels drawn over the map are not excluded.
+- A unit whose centre is behind the camera (or the projection fails for) is not in frame, even
+  if a big model's edge would reach in.
 - A match played over the network has no `mounted` list and `mode` is `net`.
