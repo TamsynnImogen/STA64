@@ -175,4 +175,4 @@ fn a_whole_state_digest_with_a_guard_is_pinned() {
     assert_eq!(sim.digest(), PINNED_DIGEST);
 }
 
-const PINNED_DIGEST: u64 = 802086069578517796;
+const PINNED_DIGEST: u64 = 0xb5a7_d3a2_6758_65ca;

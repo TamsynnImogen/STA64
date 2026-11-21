@@ -155,11 +155,13 @@ pub struct Features {
     /// (SIM-74; read from the stock Armada II executable, static, not
     /// measured). Off everywhere until measured.
     pub crew_weapon_delay: bool,
+    /// Stock Armada II: an empty shield pool waits `shieldDelay` after its last hit.
+    pub shield_zero_hold: bool,
 }
 
 impl Features {
     /// Every switch, in declaration order, for the content hash.
-    pub(crate) fn bits(&self) -> [bool; 41] {
+    pub(crate) fn bits(&self) -> [bool; 42] {
         [
             self.weapon_damage_controls,
             self.point_defense_cycles,
@@ -202,6 +204,7 @@ impl Features {
             self.transport_attack_by_weld,
             self.weapon_cloak_fire,
             self.crew_weapon_delay,
+            self.shield_zero_hold,
         ]
     }
 }

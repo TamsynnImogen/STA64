@@ -15,6 +15,8 @@ mod casualty_tests;
 #[cfg(test)]
 mod damage_tests;
 #[cfg(test)]
+mod shield_zero_tests;
+#[cfg(test)]
 pub(crate) mod subsystem_tests;
 #[cfg(test)]
 mod pool_regen_tests;
