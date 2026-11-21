@@ -152,7 +152,7 @@ fn every_screen_is_reached_by_state_and_replaces_the_last() {
         (Screen::Setup, "Instant action", 2 * 3 + 8 + 11),
         (Screen::MapSelect, "Select map", 2),
         (Screen::Settings, "Options", 1),
-        (Screen::ModSelect, "Mods", 6 + usize::from(cfg!(target_os = "linux"))),
+        (Screen::ModSelect, "Mods", 5 + usize::from(cfg!(target_os = "linux"))),
     ];
     for (s, title, buttons) in want {
         go(&mut app, s);
@@ -1007,7 +1007,7 @@ fn installed_race_display_keys_resolve_federation_caption() {
 
 
 #[test]
-fn mod_manager_shows_modules_and_marks_unmountable_rows() {
+fn mod_manager_marks_unmountable_rows() {
     let mut data = ScreenData::fake();
     data.mods[1].blocked = Some("Missing parent".into());
     let mut app = app_with_data(data);
@@ -1018,9 +1018,8 @@ fn mod_manager_shows_modules_and_marks_unmountable_rows() {
         settle(app);
     };
     select(&mut app, 1);
-    press(&mut app, Act::ToggleModModules);
-    assert!(has_text(&mut app, "ExampleModule"));
-    press(&mut app, Act::ToggleModModules);
+    assert!(has_text(&mut app, "Launch mod"));
+    assert!(!has_text(&mut app, "Modules"));
     select(&mut app, 2);
     assert!(has_text(&mut app, "Cannot launch: Missing parent"));
     assert!(!app.world_mut().query::<&Act>().iter(app.world()).any(|act| *act == Act::UseMod));

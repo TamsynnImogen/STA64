@@ -291,33 +291,6 @@ fn on_keys(
         }
         return;
     }
-    if *screen.get() == Screen::ModSelect && browse.mod_modules {
-        if keys.just_pressed(KeyCode::Escape) {
-            if let Some((e, _)) = acts.iter().find(|(_, act)| **act == Act::ToggleModModules) {
-                clicks.write(ButtonClicked(e));
-            }
-        } else if let Ok(b) = boxes.single() {
-            let view_h = scroll.view_h;
-            let max = (b.count as f32 * b.row_h - view_h).max(0.0);
-            let offset = if keys.just_pressed(KeyCode::ArrowUp) {
-                scroll.offset - b.row_h
-            } else if keys.just_pressed(KeyCode::ArrowDown) {
-                scroll.offset + b.row_h
-            } else if keys.just_pressed(KeyCode::PageUp) {
-                scroll.offset - view_h
-            } else if keys.just_pressed(KeyCode::PageDown) {
-                scroll.offset + view_h
-            } else if keys.just_pressed(KeyCode::Home) {
-                0.0
-            } else if keys.just_pressed(KeyCode::End) {
-                max
-            } else {
-                return;
-            };
-            scroll.offset = offset.clamp(0.0, max);
-        }
-        return;
-    }
     let (take, back) = match screen.get() {
         Screen::MapSelect => (Act::TakeMap, Act::Goto(Screen::Setup)),
         Screen::ModSelect => (Act::UseMod, Act::Goto(Screen::Main)),
@@ -430,7 +403,6 @@ pub(crate) fn on_buttons(
     mut notices: Option<ResMut<Messages<crate::ui::notices::Notice>>>,
     launch_options: Res<ModLaunchOptions>,
     flow: Option<Res<crate::game::flow::FlowConfig>>,
-    mut scroll: ResMut<ListScroll>,
 ) {
     use crate::ui::notices::{Notice, Severity};
     let Some(mut draft) = draft else { return };
@@ -458,7 +430,6 @@ pub(crate) fn on_buttons(
                 browse.mod_row = selected.0.as_ref().and_then(|f| data.mods.iter().position(|m| m.folder.eq_ignore_ascii_case(f))).map_or(0, |i| i + 1);
                 browse.mod_no_intro = launch_options.no_intro;
                 browse.mod_no_ai = launch_options.no_ai;
-                browse.mod_modules = false;
                 next.set(Screen::ModSelect);
             }
             Act::TakeMap => {
@@ -477,10 +448,6 @@ pub(crate) fn on_buttons(
                     next.set(Screen::Main);
                 }
                 chosen.write(ModChosen(folder));
-            }
-            Act::ToggleModModules => {
-                browse.mod_modules = !browse.mod_modules;
-                *scroll = ListScroll { pending: !browse.mod_modules, ..default() };
             }
             Act::ToggleModNoIntro => browse.mod_no_intro = !browse.mod_no_intro,
             Act::ToggleModNoAi => browse.mod_no_ai = !browse.mod_no_ai,

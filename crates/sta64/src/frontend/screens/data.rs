@@ -64,27 +64,10 @@ pub struct ModEntry {
     pub asset_version: Option<u32>,
     pub website: Option<String>,
     pub blocked: Option<String>,
-    /// Module names from info.ini, with required entries marked.
-    pub modules: Vec<(String, bool)>,
 }
 
 impl From<&sta_vfs::mods::ModInfo> for ModEntry {
     fn from(m: &sta_vfs::mods::ModInfo) -> ModEntry {
-        let mut modules: Vec<(String, bool)> = Vec::new();
-        for (key, name) in m.ini.section("modules") {
-            let key = key.to_ascii_lowercase();
-            let required = key.starts_with("required");
-            let index = key.strip_prefix("required").or_else(|| key.strip_prefix("active"));
-            let name = name.trim();
-            if name.is_empty() || !index.is_some_and(|i| !i.is_empty() && i.bytes().all(|n| n.is_ascii_digit())) {
-                continue;
-            }
-            if let Some((_, was_required)) = modules.iter_mut().find(|(existing, _)| existing.eq_ignore_ascii_case(name)) {
-                *was_required |= required;
-            } else {
-                modules.push((name.to_owned(), required));
-            }
-        }
         ModEntry {
             folder: m.folder.clone(),
             name: m.name.clone(),
@@ -98,7 +81,6 @@ impl From<&sta_vfs::mods::ModInfo> for ModEntry {
                 if url.contains(':') { url.clone() } else { format!("https://{url}") }
             }),
             blocked: None,
-            modules,
         }
     }
 }
@@ -180,7 +162,6 @@ impl ScreenData {
             asset_version: Some(50000),
             website: None,
             blocked: None,
-            modules: vec![("ExampleModule".into(), false)],
         };
         ScreenData {
             base_name: Some("Fake Install".into()),
@@ -655,7 +636,6 @@ pub struct Browse {
     pub map: usize,
     /// Mod select: 0 is the base game, `n` is `mods[n - 1]`.
     pub mod_row: usize,
-    pub mod_modules: bool,
     pub mod_no_intro: bool,
     pub mod_no_ai: bool,
 }
