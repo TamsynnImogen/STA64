@@ -86,6 +86,19 @@ pub(super) fn can_attach(
     vfs.is_some() && tables.is_some() && cache.is_some() && parts.is_some() && meshes.is_some() && materials.is_some() && images.is_some()
 }
 
+/// The model `name` (a file stem) from the mounted files, with the path it came from; a model that is
+/// absent gives `None`, one that fails to load `None` with a warning naming `what`. Shared by the effects
+/// that draw an ordnance's or an effect's own model (this beam, the stock shield cap).
+pub(super) fn load_named_model(vfs: &sta_vfs::Vfs, name: &str, what: &str) -> Option<(String, Model)> {
+    sta_assets::find_model(vfs, name).and_then(|(path, fmt)| match sta_assets::load_model(vfs, &path, fmt) {
+        Ok(m) => Some((path, m)),
+        Err(err) => {
+            warn!("{what} {name}: {err}");
+            None
+        }
+    })
+}
+
 /// Models by file stem, loaded once.
 #[derive(Default)]
 pub(super) struct BeamModels(HashMap<String, Option<(String, Arc<Model>)>>);
@@ -115,15 +128,9 @@ pub(super) fn attach_models(
             .0
             .entry(key.clone())
             .or_insert_with(|| {
-                sta_assets::find_model(&vfs.0, &key).and_then(|(path, fmt)| match sta_assets::load_model(&vfs.0, &path, fmt) {
-                    Ok(mut m) => {
-                        additive_if_plain(&mut m.nodes);
-                        Some((path, Arc::new(m)))
-                    }
-                    Err(err) => {
-                        warn!("mining beam model {key}: {err}");
-                        None
-                    }
+                load_named_model(&vfs.0, &key, "mining beam model").map(|(path, mut m)| {
+                    additive_if_plain(&mut m.nodes);
+                    (path, Arc::new(m))
                 })
             })
             .clone();
