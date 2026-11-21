@@ -207,6 +207,16 @@ impl StockCanvas {
         effective_width(self.fit, self.hud.x * px, self.window.x * px)
     }
 
+    /// The HUD rectangle's top left in the window's layout units: centred on the window with the
+    /// Centred fit (the origin snaps to whole units, as the HUD's own layout does), the window's
+    /// corner with the Stretched fit.
+    pub fn origin(&self) -> Vec2 {
+        match self.fit {
+            HudFit::Centred => ((self.window - self.hud) / 2.0).round().max(Vec2::ZERO),
+            HudFit::Stretched => Vec2::ZERO,
+        }
+    }
+
     /// The HUD rectangle in physical px.
     pub fn physical(&self, px: f32) -> Vec2 {
         self.hud * px
