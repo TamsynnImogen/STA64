@@ -969,6 +969,7 @@ fn rebuild(
             if let Some(mut st) = w.get_resource_mut::<crate::ui::radar::RadarState>() {
                 st.map = Some(crate::ui::radar::RadarMap::of_bounds(rlo, rhi));
                 st.map_fixed = true;
+                st.bounds = Some((rlo, rhi));
             }
         });
         commands.insert_resource(crate::ui::hud::ghost::PlacementBounds(Some((lo, hi))));
@@ -983,6 +984,8 @@ fn rebuild(
     // what the renderer reads that the sim's database does not carry.
     let star_odf = map.starfield_odf.trim_end_matches(".odf").trim_end_matches(".ODF").to_owned();
     let db = Arc::new(catalogue.legacy.db(&vfs.0, map.objects.iter().map(|o| o.odf.as_str()).chain([star_odf.as_str()])));
+    // The nebulae and belts of the minimap's layers (the sim's units come from its view).
+    commands.insert_resource(crate::ui::radar_layers::RadarStatics::of_map(&map, &db));
     let formats = device
         .map(|d| CompressedImageFormats::from_features(d.features()))
         .unwrap_or(CompressedImageFormats::BC);
@@ -1032,7 +1035,7 @@ fn rebuild(
             let key = o.odf.to_ascii_lowercase();
             let entry = gas.entry(key.clone()).or_insert_with(|| {
                 let latinum = odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("latinum"));
-                let radius = if latinum { FIELD_RADIUS } else { odf.f32("effectRadius").filter(|r| *r > 10.0 && *r < 5000.0).unwrap_or(300.0) };
+                let radius = if latinum { FIELD_RADIUS } else { crate::ui::radar_layers::nebula_radius(odf) };
                 (crate::render::nebula::recipe(&vfs.0, &key), radius, Vec::new())
             });
             if entry.0.is_some() {
@@ -1074,7 +1077,7 @@ fn rebuild(
             let mut rng = Lcg(o.entity_id as u32 as u64 ^ 0x9e37_79b9_7f4a_7c15);
             let (lo, hi) = (odf.i64("minAsteroids").unwrap_or(3).max(0), odf.i64("maxAsteroids").unwrap_or(6).max(0));
             let count = lo + ((hi - lo + 1) as f32 * rng.next()) as i64;
-            let radius = odf.f32("fieldRadius").unwrap_or(200.0);
+            let radius = crate::ui::radar_layers::field_radius(odf);
             let scale = odf.f32("ScaleSOD").or_else(|| odf.f32("scaleSOD")).filter(|s| *s > 0.0).unwrap_or(1.0);
             let orbit = odf.f32("orbitingSpeed").unwrap_or(0.0).to_radians();
             let tumble = odf.f32("rotationSpeed").unwrap_or(0.0);
@@ -1189,7 +1192,7 @@ fn rebuild(
         }
         // A stock nebula drawn as billboards: its puffs fade near and behind others.
         if odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("nebula_obj")) {
-            let radius = odf.f32("effectRadius").filter(|r| *r > 10.0 && *r < 5000.0).unwrap_or(300.0);
+            let radius = crate::ui::radar_layers::nebula_radius(odf);
             commands.entity(entity).insert(crate::render::nebula::NebulaBoards { radius });
         }
         let units_before = units;

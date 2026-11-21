@@ -20,6 +20,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 mod geometry;
+pub mod bubble;
 pub mod marker;
 pub mod readout;
 pub use readout::armada2_look;
@@ -117,6 +118,7 @@ impl Plugin for OverlaysPlugin {
             .init_resource::<HoverReadout>()
             .init_resource::<readout::BarArt>()
             .init_resource::<marker::MarkerArt>()
+            .add_plugins(bubble::BubblePlugin)
             .add_systems(Startup, make_assets.run_if(resource_exists::<Assets<Mesh>>).run_if(resource_exists::<Assets<StandardMaterial>>))
             .add_systems(
                 Update,
@@ -204,8 +206,10 @@ fn sync_overlays(
         if units.get(root).is_err() {
             continue;
         }
-        want.insert((*id, OverlayKind::Ring), root);
+        // The Armada II look shows the selection as the bubble (see [`bubble`]) instead of the team
+        // annulus.
         if !readout_look {
+            want.insert((*id, OverlayKind::Ring), root);
             want.insert((*id, OverlayKind::HullBar), root);
             if link.curr().unit(*id).and_then(shield_share).is_some() {
                 want.insert((*id, OverlayKind::ShieldBar), root);
@@ -216,7 +220,7 @@ fn sync_overlays(
         }
     }
     // Armada II: bars are a hover readout, not a permanent overlay (see [`readout`]). Selection alone
-    // shows none; the selection ring above is unchanged.
+    // shows none, and the team annulus gives way to the selection bubble.
     // Interim: none while a cineractive runs (not established for the original).
     if readout_look && !cutscene && readout.bars_up() {
         let candidates: BTreeSet<EntityId> = selection.0.iter().copied().chain(readout.unit).collect();
@@ -552,7 +556,7 @@ mod tests {
         app.world_mut().insert_resource(UiProfile::Armada2);
         select(&mut app, &[1, 3]);
         sync(&mut app);
-        assert_eq!(counts_now(&mut app), OverlayCounts { rings: 2, bars: 0, lines: 0 }, "selected only: the rings stay, no bars");
+        assert_eq!(counts_now(&mut app), OverlayCounts { rings: 0, bars: 0, lines: 0 }, "selected only: no bars, and no team annulus (the bubble shows the selection)");
         // Resting on unit 2 (team 0) for less than a second: nothing yet.
         hover(&mut app, Some((2, 0)), 0.5);
         sync(&mut app);
@@ -571,7 +575,7 @@ mod tests {
         sync(&mut app);
         assert!(bar_units(&mut app).is_empty());
         let mut q = app.world_mut().query::<&Overlay>();
-        assert_eq!(q.iter(app.world()).filter(|o| o.kind == OverlayKind::Ring).count(), 1, "the selection marker is untouched");
+        assert_eq!(q.iter(app.world()).filter(|o| o.kind == OverlayKind::Ring).count(), 0, "no team annulus under the bubble look");
     }
 
     #[test]

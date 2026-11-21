@@ -31,7 +31,10 @@ pub const ENV: &str = "STA64_DEV_SHADER_SHADOW";
 /// Where in the mounted files a shadow lives, before the embedded path.
 pub const VFS_DIR: &str = "shaders";
 
-/// Every embedded `.wesl`, by the path under `embedded://sta64/`.
+/// Every embedded RENDERER `.wesl` (under `render/`), by the path under `embedded://sta64/`. Shaders
+/// outside `render/` (the minimap's `ui/radar_additive.wesl`) are not listed, so they cannot be
+/// shadowed; `render::profile`'s test ties this list to the render effects, which is why the list
+/// was not widened (batch line).
 pub const EMBEDDED: &[&str] = &[
     "render/fog.wesl",
     "render/hulls.wesl",
@@ -47,6 +50,7 @@ pub const EMBEDDED: &[&str] = &[
     "render/fx/shield.wesl",
     "render/fx/persistent_shields.wesl",
     "render/fx/stock_shots.wesl",
+    "render/overlays/bubble.wesl",
 ];
 
 /// Whether the environment switches shadowing on.
@@ -86,6 +90,7 @@ fn embedded_source(path: &str) -> Option<&'static [u8]> {
         "render/fx/shield.wesl" => include_bytes!("fx/shield.wesl"),
         "render/fx/persistent_shields.wesl" => include_bytes!("fx/persistent_shields.wesl"),
         "render/fx/stock_shots.wesl" => include_bytes!("fx/stock_shots.wesl"),
+        "render/overlays/bubble.wesl" => include_bytes!("overlays/bubble.wesl"),
         _ => return None,
     })
 }
