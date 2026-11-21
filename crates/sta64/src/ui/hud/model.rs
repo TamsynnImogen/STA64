@@ -622,8 +622,8 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
     let mut out = Vec::new();
     let mut evolve_extra = false;
     if let Some(builder) = builder {
-        // Stock research.odf and planet.odf author `research = 1` for their
-        // context-sensitive menu, while its contents still use the build page.
+        // A class with the research key gets the Research menu button, while its
+        // contents still use the build page.
         let key = |k: &str| feed.def(builder).is_some_and(|def| def.raw.bool(k) == Some(true));
         let research = key("research");
         // The evolve key gives an Evolve button by the same mechanism (own sprite name and
@@ -632,6 +632,8 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
         // An evolve-only class has it in the opener's place; a class with a builder key keeps
         // Build and gets Evolve in the first free cell (below). INTERIM: the position of a second
         // menu button is STA64's choice, not determined for the original.
+        // INTERIM: a class with the research key and the evolve key shows Research only; the
+        // static reading says both would show, so this is STA64's choice.
         let evolve = key("evolve") && !research;
         let builds = key("builder_ship") || key("builder_facility");
         evolve_extra = evolve && builds;
