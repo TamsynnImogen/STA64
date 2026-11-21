@@ -1298,18 +1298,18 @@ mod button_panel {
         assert!(msgs.iter_current_update_messages().count() + msgs.len() > 0, "a focus request was sent");
     }
 
-    /// The cfg of a button panel at the sheet's top right: a 266 x 40 panel 11 units from the right edge,
-    /// two end pieces, a first row and a second row below it.
+    /// The cfg of an authored button panel near the sheet's top right (own numbers, not any game's): two end
+    /// pieces, a first row and a second row below it.
     fn placed_config(aspect: f32) -> HudConfig {
-        sheet_config(1600, 1323, aspect)
+        sheet_config(1600, 1338, aspect)
     }
 
-    /// The same panel on a sheet `canvas_w` units wide, its area starting at `area_x` (a 16:9 sheet).
+    /// The same panel on a sheet `canvas_w` units wide, its area starting at `area_x` (a wider authored sheet).
     fn sheet_config(canvas_w: i32, area_x: i32, aspect: f32) -> HudConfig {
         let cfg_text = CFG.replace("screenWidth = 1600", &format!("screenWidth = {canvas_w}"));
         let text = format!(
-            "{cfg_text}buttonPanelArea = {area_x} 8 266 40\nbuttonBackgroundPanel = \"bbp\"\nbuttonBackgroundPanelArea = 0 0 266 40\nbuttonBackgroundPanelSize = 2\nbuttonBackgroundPanel_0 = 0 0 21 40\nbuttonBackgroundPanel_1 = 245 0 21 40\n\
-             idleButtonArea = 25 0 40 40\nobjectivesButtonArea = 157 0 40 40\nmoreButtonArea = 201 0 40 40\nmenuButtonArea = 201 45 40 40\n"
+            "{cfg_text}buttonPanelArea = {area_x} 14 240 36\nbuttonBackgroundPanel = \"bbp\"\nbuttonBackgroundPanelArea = 0 0 240 36\nbuttonBackgroundPanelSize = 2\nbuttonBackgroundPanel_0 = 0 0 18 36\nbuttonBackgroundPanel_1 = 222 0 18 36\n\
+             idleButtonArea = 28 2 32 32\nobjectivesButtonArea = 124 2 32 32\nmoreButtonArea = 172 2 32 32\nmenuButtonArea = 172 40 32 32\n"
         );
         let (cfg, warnings) = GuiCfg::parse("panel.cfg", &text);
         assert!(warnings.is_empty(), "{warnings:?}");
@@ -1330,7 +1330,7 @@ mod button_panel {
         let (pos, size) = group_rect(&mut app);
         let panel = layout.panel("button").unwrap();
         assert_eq!((pos.x, pos.y, size.x, size.y), (panel.x, panel.y, panel.w, panel.h));
-        assert!(pos.x + size.x <= layout.hud.right() && (layout.hud.right() - (pos.x + size.x)).abs() < 20.0, "at the sheet's right edge: {pos:?} {size:?}");
+        assert!(pos.x + size.x <= layout.hud.right() && (layout.hud.right() - (pos.x + size.x)).abs() < 30.0, "at the sheet's right edge: {pos:?} {size:?}");
         let pieces = app.world_mut().query_filtered::<&Node, (With<crate::ui::gui_sprites::GuiImage>, Without<buttons::PanelButton>)>().iter(app.world()).count();
         assert!(pieces >= 2, "the two end pieces are drawn");
         // Every button is a child of the group (its area is relative to it).
@@ -1342,7 +1342,7 @@ mod button_panel {
     #[test]
     fn the_group_is_placed_inside_the_clamped_centred_area_like_every_panel_with_its_pointer_rect_from_the_same_rect() {
         // ADR 0008 H1/H2: a 4:3 sheet and a 16:9 sheet, four window aspects, the Centred fit.
-        for (canvas_w, area_x) in [(1600, 1323), (2134, 1857)] {
+        for (canvas_w, area_x) in [(1600, 1338), (2000, 1738)] {
             for aspect in [4.0_f32 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 32.0 / 9.0] {
                 let mut app = app_with_content_and_config(content(), sheet_config(canvas_w, area_x, aspect), UiProfile::Armada2);
                 let (layout, solid) = {
@@ -1353,8 +1353,8 @@ mod button_panel {
                 let r = layout.panel("button").unwrap();
                 // Size and sheet-relative position are the sheet's (to the rounding of whole units).
                 let s = layout.scale;
-                assert!((r.w - 266.0 * s).abs() <= 1.0 && (r.h - 40.0 * s).abs() <= 1.0, "{tag}: size {r:?}");
-                assert!(((r.x - layout.hud.x) - area_x as f32 * s).abs() <= 1.0 && ((r.y - layout.hud.y) - 8.0 * s).abs() <= 1.0, "{tag}: place {r:?}");
+                assert!((r.w - 240.0 * s).abs() <= 1.0 && (r.h - 36.0 * s).abs() <= 1.0, "{tag}: size {r:?}");
+                assert!(((r.x - layout.hud.x) - area_x as f32 * s).abs() <= 1.0 && ((r.y - layout.hud.y) - 14.0 * s).abs() <= 1.0, "{tag}: place {r:?}");
                 assert!(r.x >= layout.hud.x && r.right() <= layout.hud.right() && r.y >= layout.hud.y && r.bottom() <= layout.hud.bottom(), "{tag}: inside the HUD area");
                 // Drawn rectangle (the group node) and pointer-solid rectangle are the one placed rect.
                 let (pos, size) = group_rect(&mut app);
@@ -1370,7 +1370,7 @@ mod button_panel {
         let state = app.world().resource::<StockState>();
         let layout = state.layout.as_ref().unwrap();
         let r = layout.panel("button").unwrap();
-        assert!((r.right() - 1589.0 * layout.scale_x).abs() <= 1.0, "stretched: the sheet's place on the whole window: {r:?}");
+        assert!((r.right() - 1578.0 * layout.scale_x).abs() <= 1.0, "stretched: the sheet's place on the whole window: {r:?}");
         assert!(state.solid.contains(&r));
     }
 
@@ -1453,7 +1453,7 @@ mod button_panel {
 
     #[test]
     fn a_cfg_without_a_panel_area_or_background_still_gives_usable_buttons() {
-        let text = format!("{CFG}idleButtonArea = 25 0 40 40\nmenuButtonArea = 201 45 40 40\n");
+        let text = format!("{CFG}idleButtonArea = 28 2 32 32\nmenuButtonArea = 172 40 32 32\n");
         let (cfg, _) = GuiCfg::parse("panel.cfg", &text);
         let config = HudConfig { gui: Some(cfg.layout_auto()), aspect: 21.0 / 9.0, fit_scale: false, ..default() };
         let mut app = app_with_content_and_config(content(), config, UiProfile::Armada2);
