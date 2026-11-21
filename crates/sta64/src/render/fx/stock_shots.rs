@@ -42,7 +42,8 @@
 //!   exists); a craft otherwise a hull hardpoint of the target, chosen at fire from its
 //!   `hullTargetHardpoints` by the shot's hash (INTERIM: the original chooses per shot, the rule
 //!   is not determined), the centre without one.
-//! - **Early ends** (read from the executable, static): the owner gone ends the beam at once; a
+//! - **Early ends** (read from the executable, static): the owner gone ends a beam at once (a shot in
+//!   flight flies on: the sim still delivers its hit); a
 //!   target lost while `BEAM_MISS_LIFETIME` (counted from the shot) still runs moves the end to
 //!   the weapon's range along the last direction until it has run; lost after that, the beam
 //!   ends at once; a target further than the square root of two times the range ends it at
@@ -134,20 +135,29 @@ pub struct ShotSpec {
 /// The stock drawing of `def`, if its class has one and its data carries what the drawing reads:
 /// `Sprite` (an additive sprite of the table), `Radius`, and `Length` (pulses) or `lifeSpan` (beams).
 pub fn shot_spec(def: &WeaponDef, table: &SpriteTable) -> Option<ShotSpec> {
-    let path = class_path(&def.class.0)?;
+    shot_spec_or_reason(def, table).ok()
+}
+
+/// [`shot_spec`], or why the class's shot keeps today's drawing.
+pub fn shot_spec_or_reason(def: &WeaponDef, table: &SpriteTable) -> Result<ShotSpec, &'static str> {
+    let path = class_path(&def.class.0).ok_or("its class has no stock drawing")?;
     let look = &def.look;
-    let name = look.sprite.as_deref()?;
-    let sprite = table.sprite(name)?;
+    let name = look.sprite.as_deref().ok_or("no Sprite key")?;
+    let sprite = table.sprite(name).ok_or("its Sprite is in no sprite table")?;
     if spr_anim::sprite_blend(&sprite.material) != SpriteBlend::Add {
-        return None;
+        return Err("its sprite is not additive");
     }
-    let radius = look.radius.filter(|r| *r > 0.0)?;
+    let radius = look.radius.filter(|r| *r > 0.0).ok_or("no Radius key")?;
     let (length, life, travel) = match path {
-        ShotPath::Ribbon => (0.0, look.life_span.filter(|l| *l > 0.0)?, look.travel_time_fraction.unwrap_or(sta_content::ShotLook::DEFAULT_TRAVEL_TIME_FRACTION).clamp(0.0, 1.0)),
-        ShotPath::Streak => (look.length.filter(|l| *l > 0.0)?, 0.0, 0.0),
+        ShotPath::Ribbon => (
+            0.0,
+            look.life_span.filter(|l| *l > 0.0).ok_or("no lifeSpan key")?,
+            look.travel_time_fraction.unwrap_or(sta_content::ShotLook::DEFAULT_TRAVEL_TIME_FRACTION).clamp(0.0, 1.0),
+        ),
+        ShotPath::Streak => (look.length.filter(|l| *l > 0.0).ok_or("no Length key")?, 0.0, 0.0),
         ShotPath::Sprite => (0.0, 0.0, 0.0),
     };
-    Some(ShotSpec { path, sprite: name.to_owned(), radius, length, life, travel })
+    Ok(ShotSpec { path, sprite: name.to_owned(), radius, length, life, travel })
 }
 
 /// [`shot_spec`] under a look: the Remaster look (`Refit`) never takes the stock path.
@@ -234,6 +244,11 @@ impl ShotSprites {
 
     pub fn get(&self, name: &str) -> Option<&ShotSprite> {
         self.map.get(&name.to_ascii_lowercase())
+    }
+
+    /// [`Self::get`] for a name already in lower case (no allocation).
+    fn get_lower(&self, name: &str) -> Option<&ShotSprite> {
+        self.map.get(name)
     }
 }
 
@@ -358,9 +373,10 @@ pub struct StockShot {
     ignore_shield: bool,
     /// `BEAM_MISS_LIFETIME` in ticks, when the header sets it.
     miss: Option<f32>,
-    /// The firing hardpoint's node, and the target hardpoint chosen at fire.
-    node: Option<String>,
-    target_node: Option<String>,
+    /// The firing hardpoint's node, and the target hardpoint chosen at fire, as entities of the posed
+    /// models (found once, at fire; none where the model lacks the node).
+    node: Option<Entity>,
+    target_node: Option<Entity>,
     /// Where it left, and the speed per tick (projectiles).
     muzzle: Vec3,
     per_tick: f32,
@@ -399,17 +415,20 @@ impl StockShots<'_, '_> {
         }
     }
 
-    /// Where `node` of unit `unit`'s posed model is, from the unit's own origin (render space).
-    fn node_offset(&self, unit: EntityId, node: &str) -> Option<Vec3> {
+    /// The entity of node `node` in unit `unit`'s posed model.
+    fn find_node(&self, unit: EntityId, node: &str) -> Option<Entity> {
         let root = *self.ents.as_ref()?.0.get(&unit)?;
-        let base = self.transforms.get(root).ok()?.translation();
-        self.children.iter_descendants(root).find_map(|e| {
-            let (name, t) = self.named.get(e).ok()?;
-            name.as_str().eq_ignore_ascii_case(node).then(|| t.translation() - base)
-        })
+        self.children.iter_descendants(root).find(|e| self.named.get(*e).is_ok_and(|(name, _)| name.as_str().eq_ignore_ascii_case(node)))
     }
 
-    fn body(&self, link: &SimLink, id: EntityId, alpha: f32, offsets: &Option<Res<crate::render::mining::VisualOffsets>>, hardpoint: Option<&str>) -> Option<Body> {
+    /// Where a node found by [`Self::find_node`] is now, from the unit's own origin (render space).
+    fn node_offset(&self, unit: EntityId, node: Entity) -> Option<Vec3> {
+        let root = *self.ents.as_ref()?.0.get(&unit)?;
+        let base = self.transforms.get(root).ok()?.translation();
+        Some(self.transforms.get(node).ok()?.translation() - base)
+    }
+
+    fn body(&self, link: &SimLink, id: EntityId, alpha: f32, offsets: &Option<Res<crate::render::mining::VisualOffsets>>, hardpoint: Option<Entity>) -> Option<Body> {
         let u = link.curr().unit(id)?;
         let centre = point(link, id, alpha)? + shifted(offsets, id);
         let heading = Vec3::new(u.heading.0.to_f32(), 0.0, -u.heading.1.to_f32()).normalize_or(Vec3::NEG_Z);
@@ -451,8 +470,8 @@ impl StockShots<'_, '_> {
         };
         let Some(shooter_view) = link.curr().unit(shooter) else { return false };
         let Some(from) = point(link, shooter, alpha).map(|p| p + shifted(offsets, shooter)) else { return false };
-        let node = content.0.unit(shooter_view.def).and_then(|d| d.hardpoints.get(hardpoint as usize)).map(|h| h.node.clone());
-        let muzzle = from + node.as_deref().and_then(|n| self.node_offset(shooter, n)).unwrap_or(Vec3::ZERO);
+        let node = content.0.unit(shooter_view.def).and_then(|d| d.hardpoints.get(hardpoint as usize)).and_then(|h| self.find_node(shooter, &h.node));
+        let muzzle = from + node.and_then(|n| self.node_offset(shooter, n)).unwrap_or(Vec3::ZERO);
         let seed = shot_seed(shooter, weapon, clock.tick());
         let target_node = match target {
             Target::Entity(id) => link
@@ -462,7 +481,8 @@ impl StockShots<'_, '_> {
                 .and_then(|u| content.0.unit(u.def))
                 .map(|d| d.stats.hull_target_hardpoints.iter().filter(|n| !n.is_empty()).collect::<Vec<_>>())
                 .filter(|v| !v.is_empty())
-                .map(|v| v[(seed * 100.0) as usize % v.len()].clone()),
+                .map(|v| v[(seed * 100.0) as usize % v.len()].clone())
+                .and_then(|name| self.find_node(*id, &name)),
             _ => None,
         };
         let colour = if content.0.rules().shots.team_colour() && takes_team_colour(&def.class.0) {
@@ -484,7 +504,7 @@ impl StockShots<'_, '_> {
             target: *target,
             fired: clock.tick(),
             life,
-            sprite: spec.sprite,
+            sprite: spec.sprite.to_ascii_lowercase(),
             radius: spec.radius,
             length: spec.length,
             colour,
@@ -530,22 +550,23 @@ fn update_shots(
     }
     for (e, mut s) in &mut q {
         let age = (now_ticks - s.fired as f64) as f32;
-        // The owner gone ends the shot at once.
-        let Some(shooter_at) = point(&link, s.shooter, alpha) else {
-            cmds.entity(e).try_despawn();
-            continue;
-        };
         if age >= s.life {
             cmds.entity(e).try_despawn();
             continue;
         }
-        let start = match s.path {
-            ShotPath::Ribbon => shooter_at + shifted(&offsets, s.shooter) + s.node.as_deref().and_then(|n| ctx.node_offset(s.shooter, n)).unwrap_or(Vec3::ZERO),
-            _ => s.muzzle,
+        // The owner gone ends a beam at once; a shot in flight flies on (the sim still delivers its hit).
+        let start = if s.path == ShotPath::Ribbon {
+            let Some(shooter_at) = point(&link, s.shooter, alpha) else {
+                cmds.entity(e).try_despawn();
+                continue;
+            };
+            shooter_at + shifted(&offsets, s.shooter) + s.node.and_then(|n| ctx.node_offset(s.shooter, n)).unwrap_or(Vec3::ZERO)
+        } else {
+            s.muzzle
         };
         if s.path == ShotPath::Ribbon {
             let live = match s.target {
-                Target::Entity(id) => ctx.body(&link, id, alpha, &offsets, s.target_node.as_deref()),
+                Target::Entity(id) => ctx.body(&link, id, alpha, &offsets, s.target_node),
                 Target::Point(p) => Some(Body::point(to_bevy(p.to_f32()))),
                 _ => None,
             };
@@ -723,9 +744,8 @@ fn draw_shots(
     let t = clock.now() as f32;
     let mut geo: BTreeMap<String, Geo> = BTreeMap::new();
     for s in &shots {
-        let key = s.sprite.to_ascii_lowercase();
-        let Some(sprite) = sprites.get(&key) else { continue };
-        let g = geo.entry(key).or_default();
+        let Some(sprite) = sprites.get_lower(&s.sprite) else { continue };
+        let g = geo.entry(s.sprite.clone()).or_default();
         match s.geom {
             Geom::Segment { a, b } => {
                 let u_end = if s.path == ShotPath::Ribbon && sprite.tile_u { a.distance(b) / sprite.rect_width } else { 1.0 };

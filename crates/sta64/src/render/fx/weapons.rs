@@ -156,9 +156,9 @@ fn recipe_for(def: &sta_content::WeaponDef, recipes: &OrdnanceRecipes) -> Recipe
     }
     let shape = if def.kind == WeaponKind::Beam { Shape::Beam } else { Shape::Bolt };
     let mut r = Recipe::new(shape);
-    // `lightColor`, read by the content layer (`ShotLook::light`); its scale (0..1 or 0..255) is guessed from the maximum.
-    let odf = match def.look.light.as_ref().map(|l| l.color) {
-        Some([r, g, b]) if r.max(g).max(b) > 0.0 => Some(Vec3::new(r, g, b) / if r.max(g).max(b) > 1.0 { 255.0 } else { 1.0 }),
+    let light: Vec<f32> = def.raw.list("lightColor").iter().filter_map(|t| t.trim_end_matches(['f', 'F', ';']).parse().ok()).collect();
+    let odf = match light[..] {
+        [r, g, b, ..] if r.max(g).max(b) > 0.0 => Some(Vec3::new(r, g, b) / if r.max(g).max(b) > 1.0 { 255.0 } else { 1.0 }),
         _ => None,
     };
     if let Some(c) = name_colour(&def.class.0, def.fx.as_deref()).or(odf) {
@@ -593,5 +593,33 @@ mod tests {
         assert!(alphas[..=at].windows(2).all(|w| w[1] >= w[0]) && alphas[at..].windows(2).all(|w| w[1] <= w[0]));
         assert!(alphas[0] < peak && alphas[alphas.len() - 1] < peak);
         assert!(a.last().unwrap().is_empty(), "FX left after the timeline: {:?}", a.last());
+    }
+
+    /// The Remaster look's colour of a weapon with no recipe of its own, as it is on `main`: a class and
+    /// effect name colour, else the WEAPON's own ODF `lightColor` (not the ordnance's `ShotLook::light`),
+    /// else the recipe default. The numbers are what `main` gives, pinned.
+    #[test]
+    fn the_recipe_colour_is_the_weapons_own_light_colour_as_on_main() {
+        use sta_content::{ShotLight, WeaponDef};
+        let weapon = |class: &str, text: &str, ordnance_light: Option<[f32; 3]>| {
+            let mut w = WeaponDef::new("x", class, WeaponKind::Projectile);
+            w.raw = std::sync::Arc::new(sta_odf::resolve("x", &mut |_| Some(text.to_owned())).unwrap());
+            w.look.light = ordnance_light.map(|color| ShotLight { color, falloff_start: 100.0, falloff_range: 5.0 });
+            w
+        };
+        let recipes = OrdnanceRecipes::default();
+        let col = |w: &WeaponDef| recipe_for(w, &recipes).col;
+        let default = Recipe::new(Shape::Bolt).col;
+        // 0..255 scale, from the weapon's ODF; a different ordnance light is ignored.
+        let orange = col(&weapon("artillery", "[X]\nlightColor = 255 128 0\n", Some([0.0, 0.0, 255.0])));
+        assert_eq!(orange, Vec3::new(1.0, 128.0 / 255.0, 0.0));
+        // 0..1 scale.
+        assert_eq!(col(&weapon("artillery", "[X]\nlightColor = 0.5 0.25 1.0\n", None)), Vec3::new(0.5, 0.25, 1.0));
+        // No light colour on the weapon: the default, whatever the ordnance carries.
+        assert_eq!(col(&weapon("artillery", "[X]\n", Some([255.0, 0.0, 0.0]))), default);
+        // A class name colour wins over the light.
+        assert_eq!(col(&weapon("photontorpedo", "[X]\nlightColor = 255 0 0\n", None)), Vec3::new(0.3, 0.6, 1.0));
+        // An unparsable token is skipped (as `main` parses it).
+        assert_eq!(col(&weapon("artillery", "[X]\nlightColor = bad 255 0 0\n", None)), Vec3::new(1.0, 0.0, 0.0));
     }
 }

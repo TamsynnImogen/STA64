@@ -8,6 +8,7 @@ use sta_content::{ContentBuilder, ContentDb, DefRef, Hardpoint, ShotCfg, ShotLoo
 use sta_sim::command::LocalRouter;
 use sta_sim::fake::ScriptedSource;
 use sta_sim::{Fixed, PlayerId, TickOutput, WorldSource, WorldView};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -457,6 +458,10 @@ fn mixed_setup(rules: ShotCfg) -> Setup {
     s
 }
 
+/// The stock path stays off under the Remaster look: with the profile resources set to Refit the effects
+/// of a mixed scene are bit for bit those of the same code without them (today's path). What `main`
+/// itself produces for the recipe colours is pinned in `weapons.rs`
+/// (`the_recipe_colour_is_the_weapons_own_light_colour_as_on_main`).
 #[test]
 fn the_remaster_look_spawns_what_it_always_did() {
     let setup = mixed_setup(ShotCfg::default());
@@ -693,6 +698,23 @@ fn a_beam_ends_when_its_owner_is_gone_and_when_the_target_is_beyond_root_two_tim
 }
 
 #[test]
+fn a_shot_in_flight_flies_on_when_its_shooter_is_gone_and_a_beam_does_not() {
+    let mut setup = Setup::new(ShotCfg::default()).fire(4, "w_pulse", 1).fire(4, "w_torp", 2).fire(4, "w_phaser", 0);
+    setup.shooter_until = Some(10);
+    let mut app = setup.app(Some(RenderProfile::Stock));
+    for i in 0..40 {
+        app.update();
+        let paths: Vec<ShotPath> = shots(&mut app).iter().map(|s| s.path).collect();
+        if i > 14 {
+            // The owner went at tick 10: the beam is gone, the streak and the sprite still fly (flight is 60 ticks).
+            assert!(!paths.contains(&ShotPath::Ribbon), "frame {i}: {paths:?}");
+            assert!(paths.contains(&ShotPath::Streak) && paths.contains(&ShotPath::Sprite), "frame {i}: {paths:?}");
+            assert!(shots(&mut app).iter().all(|s| s.geom != Geom::None));
+        }
+    }
+}
+
+#[test]
 fn a_pulse_streak_and_a_torpedo_sprite_fly_to_their_target_and_end_on_the_hit() {
     let setup = Setup::new(ShotCfg::default()).fire(4, "w_pulse", 1).fire(4, "w_torp", 2);
     let mut app = setup.app(Some(RenderProfile::Stock));
@@ -701,22 +723,21 @@ fn a_pulse_streak_and_a_torpedo_sprite_fly_to_their_target_and_end_on_the_hit() 
         app.update();
         for s in shots(&mut app) {
             let a = age(&app, &s);
-            // 300 units/s is 10 per tick; flight 60 ticks. Like every effect, a shot reads the clock as it was
-            // when the frame's systems ran, up to a third of a tick behind the test's reading: hence the slack.
+            // The flight takes a whole number of ticks (its distance over 10 a tick, rounded up): the shot's own speed.
             let flown = s.muzzle.distance(s.to) / s.life * a;
             match s.geom {
                 Geom::Segment { a: head, b: tail } => {
                     streaks += 1;
                     assert_eq!(s.path, ShotPath::Streak);
-                    assert!((head.distance(s.muzzle) - (flown + 10.0)).abs() < 0.5, "head {head} after {a} ticks");
+                    assert!((head.distance(s.muzzle) - (flown + 10.0)).abs() < 0.2, "head {head} after {a} ticks");
                     // min(Length = 30, distance flown) back along the path.
-                    assert!((head.distance(tail) - 30.0f32.min(flown + 10.0)).abs() < 0.5, "{} long after {a} ticks", head.distance(tail));
+                    assert!((head.distance(tail) - 30.0f32.min(flown + 10.0)).abs() < 0.2, "{} long after {a} ticks", head.distance(tail));
                     assert_eq!(s.radius, 4.0);
                 }
                 Geom::Billboard { c } => {
                     sprites += 1;
                     assert_eq!(s.path, ShotPath::Sprite);
-                    assert!((c.distance(s.muzzle) - flown).abs() < 0.5, "sprite at {c} after {a} ticks");
+                    assert!((c.distance(s.muzzle) - flown).abs() < 0.2, "sprite at {c} after {a} ticks");
                 }
                 Geom::None => {}
             }
@@ -805,16 +826,28 @@ fn install_every_stock_shot_resolves_its_sprite_and_texture() {
     let (db, _) = ContentDb::load(&vfs, &index).unwrap();
     let table = sta_assets::load_sprite_table(&vfs);
     let (mut with_path, mut drawn, mut bad) = (0, 0, Vec::new());
+    let mut fallbacks: BTreeMap<&'static str, usize> = BTreeMap::new();
     for w in db.weapons().filter(|w| class_path(&w.class.0).is_some()) {
         with_path += 1;
-        let Some(name) = w.look.sprite.as_deref() else { continue };
-        match table.sprite(name) {
-            None => bad.push(format!("{}: sprite {name} is in no sprite table", w.odf)),
-            Some(s) if sta_assets::find_texture(&vfs, &s.texture).is_none() => bad.push(format!("{}: texture of sprite {name} is not mounted", w.odf)),
-            Some(_) => drawn += usize::from(shot_spec(w, &table).is_some()),
+        if let Some(name) = w.look.sprite.as_deref()
+            && let Some(s) = table.sprite(name)
+            && sta_assets::find_texture(&vfs, &s.texture).is_none()
+        {
+            bad.push(format!("{}: texture of sprite {name} is not mounted", w.odf));
+        }
+        match shot_spec_or_reason(w, &table) {
+            Ok(_) => drawn += 1,
+            Err(why) => {
+                *fallbacks.entry(why).or_default() += 1;
+                eprintln!("fallback: {} ({}): {why}", w.odf, w.class.0);
+                if why == "its Sprite is in no sprite table" {
+                    bad.push(format!("{}: sprite is in no sprite table", w.odf));
+                }
+            }
         }
     }
-    eprintln!("{with_path} shot definitions with a stock path, {drawn} drawn the stock way");
+    eprintln!("{with_path} shot definitions with a stock path, {drawn} drawn the stock way, fallbacks by reason: {fallbacks:?}");
+    assert!(with_path > 0 && drawn > 0, "no shot definition took the stock path ({with_path} with a class path, {drawn} drawn)");
     assert!(bad.is_empty(), "{bad:#?}");
 }
 
