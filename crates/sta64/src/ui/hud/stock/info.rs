@@ -644,7 +644,8 @@ fn spawn_group(
 /// mounted sprite fonts. Compact names honor micro size as the HUD scales.
 fn group_label_style(layout: &StockLayout, width: f32) -> SpriteTextStyle {
     let role = layout.name("InformationFont").and_then(FontRole::from_name).unwrap_or(FontRole::Small);
-    SpriteTextStyle { scaled: true, tint_all: true, ..SpriteTextStyle::role(role).wrapped(width) }
+    // Stock text (declared-material filter); `scaled` keeps its own size, so no role rule.
+    SpriteTextStyle { scaled: true, tint_all: true, stock: Some(crate::ui::stock_font::StockRole::Default), ..SpriteTextStyle::role(role).wrapped(width) }
 }
 
 pub(super) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme) {

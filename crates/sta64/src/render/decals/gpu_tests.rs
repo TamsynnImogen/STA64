@@ -44,6 +44,7 @@ fn registry() -> sta_assets::Rgba {
                     w: 5.0,
                 })
                 .collect(),
+            material: None,
         }],
     };
     text::rasterize(
