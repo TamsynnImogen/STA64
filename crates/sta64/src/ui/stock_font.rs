@@ -134,7 +134,9 @@ pub enum HAlign {
     Centre,
 }
 
-/// Vertical alignment of a stock text's line box in its rectangle.
+/// Vertical alignment of a stock text's line box in its rectangle. (`Bottom` is part of the
+/// rule; no element uses it yet.)
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum VAlign {
     #[default]
