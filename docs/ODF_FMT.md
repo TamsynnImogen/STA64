@@ -38,7 +38,7 @@ or a check failed, 2 usage or I/O error.
   file is the file header and stays on top. Entries never cross a `#` directive or a
   `[section]` row. Keys the table does not name form the last group, in file
   order. A file where a key occurs twice (any case), or with a line that is not
-  UTF-8, starting with a byte-order mark or holding a bare CR is only whitespace-formatted, because order decides which duplicate wins.
+  UTF-8, starting with a byte-order mark or holding a bare CR is only whitespace-formatted, because order decides which duplicate wins: stock Armada II keeps the first assignment in one file; STA64's Fleet Operations and generic exact paths currently keep the last.
 
 ## The group table
 

@@ -75,6 +75,7 @@ use sta_sim::command::Target;
 use sta_sim::{ContentKey, EntityId, SimEvent, TICK_HZ, Tick};
 
 use super::stock_flares::{self, Anchor, Flare, FlareKind, FlareSpec, NodeParticles};
+use super::stock_shield_hits::{self, BeamFractions, CapOrigin, CapRequest, ShieldCapQueue};
 use super::weapons::{point, shifted, shot_seed};
 use crate::app::GameSet;
 use crate::clock::AnimClock;
@@ -393,13 +394,29 @@ pub struct StockShot {
     to: Vec3,
     last_body: Option<Body>,
     last_end: Vec3,
+    /// Where the beam would end on the shield ellipsoid whatever the view shows (the shield cap's pole follows it).
+    shield_end: Vec3,
     /// The target was already gone from the view when the shot was fired (the shot killed it).
     pinned: bool,
     /// The muzzle flare this shot raises on its first frame (a beam of a class with one).
     muzzle_flare: Option<FlareSpec>,
     /// The impact flare's sprite and size, until the beam has reached its target (once per beam).
     impact_flare: Option<FlareSpec>,
+    /// A beam has reached its target (once per beam): its flare or its shield cap was raised then.
+    arrived: bool,
     pub geom: Geom,
+}
+
+impl StockShot {
+    /// A shot's direction of flight, from its muzzle to the target's last place (projectiles).
+    pub(super) fn flight_dir(&self) -> Vec3 {
+        (self.to - self.muzzle).normalize_or(Vec3::Z)
+    }
+
+    /// Where a beam ends now (its last end while the target is live).
+    pub(super) fn beam_end_now(&self) -> Vec3 {
+        self.shield_end
+    }
 }
 
 /// The nodes and bodies of the render side, for the systems of this module.
@@ -446,12 +463,23 @@ impl StockShots<'_, '_> {
         self.ents.as_ref().and_then(|m| m.0.get(&object)).and_then(|e| visibility.get(*e).ok()).is_none_or(|v| v.get())
     }
 
+    /// How `def` is drawn under the Stock look, or `None`: the Refit look, or a class without a stock drawing.
+    pub(super) fn stock_path(&self, def: &WeaponDef) -> Option<ShotPath> {
+        let tables = self.tables.as_deref()?;
+        stock_spec(self.look(), def, &tables.0).map(|s| s.path)
+    }
+
+    /// Whether the stock shield hit (`Effect::ShieldHits`) is the one drawing.
+    pub(super) fn shield_hits_stock(&self) -> bool {
+        matches!((self.profile.as_deref(), self.effects.as_deref()), (Some(p), Some(e)) if e.implementation(*p, Effect::ShieldHits) == RenderProfile::Stock)
+    }
+
     /// Whether a flare may name `sprite`: it is an additive sprite of the table (the drawing is additive).
     fn flare_sprite_usable(&self, sprite: &str) -> bool {
         self.tables.as_ref().and_then(|t| t.0.sprite(sprite)).is_some_and(|s| spr_anim::sprite_blend(&s.material) == SpriteBlend::Add)
     }
 
-    fn body(&self, link: &SimLink, id: EntityId, alpha: f32, offsets: &Option<Res<crate::render::mining::VisualOffsets>>, hardpoint: Option<Entity>) -> Option<Body> {
+    pub(super) fn body(&self, link: &SimLink, id: EntityId, alpha: f32, offsets: &Option<Res<crate::render::mining::VisualOffsets>>, hardpoint: Option<Entity>) -> Option<Body> {
         let u = link.curr().unit(id)?;
         let centre = point(link, id, alpha)? + shifted(offsets, id);
         let heading = Vec3::new(u.heading.0.to_f32(), 0.0, -u.heading.1.to_f32()).normalize_or(Vec3::NEG_Z);
@@ -555,9 +583,11 @@ impl StockShots<'_, '_> {
             to,
             last_body: pinned.then(|| Body::point(to)),
             last_end: to,
+            shield_end: to,
             pinned,
             muzzle_flare,
             impact_flare,
+            arrived: false,
             geom: Geom::None,
         });
         true
@@ -566,7 +596,7 @@ impl StockShots<'_, '_> {
 
 /// Advance every stock shot to this frame: its ends, its timeline, its end of life.
 #[allow(clippy::too_many_arguments)]
-fn update_shots(
+pub(super) fn update_shots(
     mut cmds: Commands,
     offsets: Option<Res<crate::render::mining::VisualOffsets>>,
     mut msgs: MessageReader<SimMsg>,
@@ -574,6 +604,8 @@ fn update_shots(
     link: Res<SimLink>,
     ctx: StockShots,
     mut store: ResMut<NodeParticles>,
+    mut caps: ResMut<ShieldCapQueue>,
+    fractions: Res<BeamFractions>,
     mut q: Query<(Entity, &mut StockShot)>,
 ) {
     let alpha = clock.alpha();
@@ -649,26 +681,49 @@ fn update_shots(
             };
             if !lost {
                 s.last_end = end;
+                if let Some(b) = s.last_body.as_ref() {
+                    s.shield_end = beam_end(start, &Body { shields_up: true, ..b.clone() }, false);
+                }
             }
-            // The beam first reaches its target after the grow: a hull hit raises the impact flare, once.
-            if !lost && !s.pinned && age >= s.travel * s.life && s.impact_flare.is_some() {
-                let spec = s.impact_flare.take().expect("checked");
-                if let (Target::Entity(id), Some(body)) = (s.target, s.last_body.as_ref())
-                    && stock_flares::hull_hit(body, s.ignore_shield)
-                {
-                    let flare = Flare {
-                        kind: FlareKind::Impact,
-                        object: id,
-                        sprite: spec.sprite,
-                        half: spec.half,
-                        colour: Vec3::ONE,
-                        born: now_ticks,
-                        life: spec.life,
-                        anchor: Anchor::Frame(stock_flares::to_local(body.heading, end - body.centre)),
-                        at: end,
-                        shown: true,
-                    };
-                    store.spawn(&mut cmds, flare);
+            // The beam first reaches its target after the grow, once: a hull hit raises the impact flare, any
+            // other hit (shields up) the stock shield cap (`stock_shield_hits`), its pole at the beam's end.
+            if !lost && !s.pinned && !s.arrived && age >= s.travel * s.life {
+                s.arrived = true;
+                let spec = s.impact_flare.take();
+                if let (Target::Entity(id), Some(body)) = (s.target, s.last_body.as_ref()) {
+                    // The beam's own `Hit` says whether the shield absorbed it. The sim applies a beam's damage on the fire
+                    // tick, so a beam that emptied the shield finds it down at arrival; in the original its damage lands at the
+                    // end of its life and the shield is still up: an absorbed beam makes a cap, not the impact flare (INTERIM,
+                    // until #1068). No record (no `Hit` delivered): the view decides, as before.
+                    let absorbed = !body.planet && !s.ignore_shield && ctx.shield_hits_stock() && fractions.before(s.shooter, s.weapon, id, s.fired).is_some();
+                    if !absorbed && stock_flares::hull_hit(body, s.ignore_shield) {
+                        if let Some(spec) = spec {
+                            let flare = Flare {
+                                kind: FlareKind::Impact,
+                                object: id,
+                                sprite: spec.sprite,
+                                half: spec.half,
+                                colour: Vec3::ONE,
+                                born: now_ticks,
+                                life: spec.life,
+                                anchor: Anchor::Frame(stock_flares::to_local(body.heading, end - body.centre)),
+                                at: end,
+                                shown: true,
+                            };
+                            store.spawn(&mut cmds, flare);
+                        }
+                    } else if ctx.shield_hits_stock() {
+                        let (rot, axes) = super::impacts::shield_axes(body.heading, body.radius);
+                        caps.0.push(CapRequest {
+                            target: id,
+                            weapon: s.weapon,
+                            shooter: s.shooter,
+                            dir: stock_shield_hits::dir_toward(rot, axes, s.shield_end - body.centre),
+                            born: now_ticks,
+                            origin: CapOrigin::Beam { fired: s.fired },
+                            fraction: None,
+                        });
+                    }
                 }
             }
             let (a, b) = beam_segment(start, end, age, s.life, s.travel);
@@ -700,12 +755,20 @@ fn update_shots(
 // Material
 // ---------------------------------------------------------------------------------------------
 
-#[derive(Clone, Copy, Default, ShaderType, Debug, PartialEq)]
+#[derive(Clone, Copy, ShaderType, Debug, PartialEq)]
 pub struct ShotParams {
     /// The texture rectangle `u, v, w, h`.
     pub rect: Vec4,
     /// x: the sprite repeats in u inside its rectangle.
     pub flags: Vec4,
+    /// Multiplies the texture and the vertex colour (rgb): white for the shots, the shield cap's colour and gain.
+    pub tint: Vec4,
+}
+
+impl Default for ShotParams {
+    fn default() -> ShotParams {
+        ShotParams { rect: Vec4::ZERO, flags: Vec4::ZERO, tint: Vec4::ONE }
+    }
 }
 
 /// One shot sprite's page: texture times vertex colour, added to the frame.
@@ -868,7 +931,7 @@ fn draw_shots(
         }
         let b = &batches.map[&key];
         // The flipbook frame is the sprite's, shared by every shot of it, on the game clock.
-        let params = ShotParams { rect: Vec4::from(sprite.rect_at(t)), flags: Vec4::new(f32::from(sprite.tile_u), 0.0, 0.0, 0.0) };
+        let params = ShotParams { rect: Vec4::from(sprite.rect_at(t)), flags: Vec4::new(f32::from(sprite.tile_u), 0.0, 0.0, 0.0), tint: Vec4::ONE };
         if mats.get(&b.material).is_some_and(|m| m.params != params)
             && let Some(mut m) = mats.get_mut(&b.material)
         {
@@ -899,6 +962,7 @@ impl Plugin for StockShotsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ProfileEffects>();
         app.world_mut().resource_mut::<ProfileEffects>().register_stock(Effect::Shots);
+        app.init_resource::<ShieldCapQueue>();
         app.init_resource::<ShotSprites>().init_resource::<ShotBatches>().init_resource::<NodeParticles>();
         app.add_systems(
             Update,
