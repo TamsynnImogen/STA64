@@ -201,6 +201,17 @@ fn a_header_without_keys_gives_an_empty_grid() {
 }
 
 #[test]
+fn a1_compat_stock_slots_show_selected_unit_commands() {
+    let slots = ButtonSlots::a1_compat_from_header("").0;
+    let b = control::buttons(&selection_feed(), Page::Top, &slots, None);
+    let at = |slot: usize| b.iter().find(|b| b.cell == slot - 1).map(|b| b.act.clone());
+    assert_eq!(at(1), Some(Act::Target(TargetMode::Move)));
+    assert_eq!(at(2), Some(Act::Target(TargetMode::Attack)));
+    assert_eq!(at(3), Some(Act::Stop));
+    assert_eq!(at(5), Some(Act::OpenOrders));
+}
+
+#[test]
 fn clicking_slots_issues_orders_through_the_shared_path_and_pages() {
     let mut app = app(4.0 / 3.0);
     let stop = cell(&mut app, |a| *a == Act::Stop);

@@ -144,22 +144,52 @@ pub struct ButtonSlots {
 impl ButtonSlots {
     /// Read the keys of an expanded header text. A later assignment replaces an earlier one.
     pub fn from_header(text: &str) -> (Self, Vec<Warning>) {
+        Self::parse_header(text, false)
+    }
+
+    /// Armada I's stock values for an A1Compat mod whose A2/FO parent has no
+    /// `BUTTON_LOCATION_*` keys. Explicit mod values, including -1 and invalid
+    /// values, take precedence. The original Armada I executable reads these
+    /// keys and its stock `game_cfg.h` supplies these values (read from data and
+    /// the executable, static).
+    pub fn a1_compat_from_header(text: &str) -> (Self, Vec<Warning>) {
+        Self::parse_header(text, true)
+    }
+
+    fn parse_header(text: &str, a1_compat: bool) -> (Self, Vec<Warning>) {
         let mut found: BTreeMap<String, String> = BTreeMap::new();
         for (name, value, _) in crate::layered::scan(text) {
             found.insert(name, value);
         }
         let mut out = Self::default();
         let mut warnings = Vec::new();
-        for command in SlotCommand::ALL {
-            let Some(value) = found.get(command.key()) else { continue };
+        // Ordered to match SlotCommand::ALL. These are the stock Armada I
+        // game_cfg.h values, not values copied from any game file at runtime.
+        const A1_SLOTS: [i8; 25] = [
+            -1, -1, 1, 2, 3, 4, 5, 6, 8, 7, 7, 9, 10, 11, 1, 2, 3, 4, 5, 6, 7, 10, 11, 11, 12,
+        ];
+        for (command, stock_slot) in SlotCommand::ALL.into_iter().zip(A1_SLOTS) {
+            let Some(value) = found.get(command.key()) else {
+                if a1_compat {
+                    out.slots.insert(command, stock_slot);
+                }
+                continue;
+            };
             match value.trim().parse::<i32>() {
                 Ok(n) if n == -1 || (1..=i32::from(SLOTS)).contains(&n) => {
                     out.slots.insert(command, n as i8);
                 }
-                _ => warnings.push(Warning::new(
-                    FILE,
-                    format!("{} is not -1 or a slot from 1 to {SLOTS}; treated as unset", command.key()),
-                )),
+                _ => {
+                    if a1_compat {
+                        // An authored but invalid value must not silently turn
+                        // into a stock button in the compatibility profile.
+                        out.slots.insert(command, -1);
+                    }
+                    warnings.push(Warning::new(
+                        FILE,
+                        format!("{} is not -1 or a slot from 1 to {SLOTS}; treated as unset", command.key()),
+                    ));
+                }
             }
         }
         (out, warnings)
@@ -167,11 +197,21 @@ impl ButtonSlots {
 
     /// Read `game_cfg.h` as the mod chain inherits it (D11). An include cycle is an error.
     pub fn load(vfs: &Vfs) -> Result<(Self, Vec<Warning>), crate::ContentError> {
+        Self::load_with(vfs, false)
+    }
+
+    /// Load the mounted header with Armada I stock values only for missing
+    /// keys. Call this only for an A1Compat mount; native A1 stays data-only.
+    pub fn load_a1_compat(vfs: &Vfs) -> Result<(Self, Vec<Warning>), crate::ContentError> {
+        Self::load_with(vfs, true)
+    }
+
+    fn load_with(vfs: &Vfs, a1_compat: bool) -> Result<(Self, Vec<Warning>), crate::ContentError> {
         let Some(resolved) = crate::layered::resolve(vfs, FILE, 0).map_err(|e| crate::ContentError::IncludeCycle(e.0))? else {
-            return Ok((Self::default(), Vec::new()));
+            return Ok((if a1_compat { Self::a1_compat_from_header("").0 } else { Self::default() }, Vec::new()));
         };
         let mut warnings = resolved.warnings;
-        let (slots, parsed) = Self::from_header(&resolved.text);
+        let (slots, parsed) = Self::parse_header(&resolved.text, a1_compat);
         warnings.extend(parsed);
         Ok((slots, warnings))
     }
@@ -271,5 +311,49 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         assert!(w.is_empty(), "{w:?}");
         assert_eq!((s.slot(SlotCommand::Move), s.slot(SlotCommand::Attack)), (Some(6), Some(10)));
+    }
+
+    #[test]
+    fn a1_compat_fills_only_absent_keys() {
+        let (slots, warnings) = ButtonSlots::a1_compat_from_header(
+            "int BUTTON_LOCATION_MOVE = 9;\n\
+             int BUTTON_LOCATION_ATTACK = -1;\n\
+             int BUTTON_LOCATION_STOP = 99;\n\
+             int BUTTON_LOCATION_ORDER_SCOUT = 8;\n",
+        );
+        assert_eq!(slots.slot(SlotCommand::Move), Some(9), "mod override wins");
+        assert_eq!(slots.slot(SlotCommand::Attack), None, "authored -1 stays hidden");
+        assert_eq!(slots.slot(SlotCommand::Stop), None, "invalid authored slot does not get a stock button");
+        assert_eq!(slots.slot(SlotCommand::Orders), Some(5), "absent key gets the stock slot");
+        assert_eq!(slots.slot(SlotCommand::Scout), Some(8), "orders-page override wins");
+        assert_eq!(slots.slot(SlotCommand::Back), Some(12));
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("BUTTON_LOCATION_STOP"));
+        assert_eq!(ButtonSlots::from_header("").0, ButtonSlots::default(), "native A1 still requires its own data");
+    }
+
+    #[test]
+    fn a1_compat_loads_stock_slots_when_fo_parent_has_no_location_keys() {
+        let d = std::env::temp_dir().join(format!("sta_slots_a1compat_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        for (p, text) in [
+            ("Data/game_cfg.h", "int SOME_FO_SETTING = 1;\n"),
+            ("Data/Mods/A1Compat/info.ini", "[Mod]\nName=A1Compat\n"),
+        ] {
+            let p = d.join(p);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        }
+        let vfs = Vfs::mount_install(&d, Some("A1Compat")).unwrap();
+        let native = ButtonSlots::load(&vfs).unwrap().0;
+        let (compat, warnings) = ButtonSlots::load_a1_compat(&vfs).unwrap();
+        let _ = std::fs::remove_dir_all(&d);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(native.is_empty());
+        assert_eq!(compat.slot(SlotCommand::Move), Some(1));
+        assert_eq!(compat.slot(SlotCommand::Stop), Some(3));
+        assert_eq!(compat.slot(SlotCommand::Orders), Some(5));
+        assert_eq!(compat.slot(SlotCommand::Back), Some(12));
+        assert_eq!(compat.slot(SlotCommand::Transport), None);
     }
 }
