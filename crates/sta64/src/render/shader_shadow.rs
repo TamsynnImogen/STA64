@@ -47,6 +47,7 @@ pub const EMBEDDED: &[&str] = &[
     "render/fx/shield.wesl",
     "render/fx/persistent_shields.wesl",
     "render/fx/stock_shots.wesl",
+    "render/overlays/bubble.wesl",
 ];
 
 /// Whether the environment switches shadowing on.
@@ -86,6 +87,7 @@ fn embedded_source(path: &str) -> Option<&'static [u8]> {
         "render/fx/shield.wesl" => include_bytes!("fx/shield.wesl"),
         "render/fx/persistent_shields.wesl" => include_bytes!("fx/persistent_shields.wesl"),
         "render/fx/stock_shots.wesl" => include_bytes!("fx/stock_shots.wesl"),
+        "render/overlays/bubble.wesl" => include_bytes!("overlays/bubble.wesl"),
         _ => return None,
     })
 }
