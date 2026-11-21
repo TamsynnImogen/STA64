@@ -199,6 +199,7 @@ fn close_scene(mut commands: Commands) {
 }
 
 /// StartGame: remember the setup, tell the match what it is, show the loading screen.
+#[allow(clippy::too_many_arguments)]
 fn on_start(
     mut starts: MessageReader<StartGame>,
     mut commands: Commands,
@@ -316,6 +317,7 @@ fn on_leave(mut leave: MessageReader<LeaveMatch>, mut next: ResMut<NextState<App
 
 /// Back at the front end: the match's resources go. (The map's entities go in
 /// `map::clear_match`; music, the scene and the screens follow the state.)
+#[allow(clippy::too_many_arguments)]
 fn clear_match(
     mut commands: Commands,
     selection: Option<ResMut<Selection>>,
