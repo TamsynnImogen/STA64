@@ -5,6 +5,7 @@ pub(in crate::ui::hud) mod commands;
 mod info;
 pub(super) mod infobar;
 pub mod layout;
+pub(in crate::ui) mod tooltip_text;
 mod window;
 
 use super::layout::R;

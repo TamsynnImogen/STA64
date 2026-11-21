@@ -22,3 +22,4 @@ pub mod display;
 pub mod graphics;
 pub mod sprite_font;
 pub mod stock_font;
+pub mod stock_tooltip;
