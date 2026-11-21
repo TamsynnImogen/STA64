@@ -971,6 +971,8 @@ fn rebuild(
             }
         });
         commands.insert_resource(crate::ui::hud::ghost::PlacementBounds(Some((lo, hi))));
+        // The map grid's first mode per view, from the mounted `RTS_CFG.h` (a new match starts from it again).
+        commands.insert_resource(crate::render::map_grid::GridModes::from_cfg(sta_content::layered::cfg_h(&vfs.0, "RTS_CFG.h").as_ref()));
         commands.insert_resource(crate::render::fog::FogBounds {
             min: Vec2::new(lo.x.to_f32(), lo.z.to_f32()),
             max: Vec2::new(hi.x.to_f32(), hi.z.to_f32()),

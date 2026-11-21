@@ -83,6 +83,7 @@ fn action_label(action: Action) -> String {
         Action::RevealShroud => tr("Toggle shroud"),
         Action::PauseGame => tr("Pause game"),
         Action::SelectNextShip => tr("Select damaged ships (Roots) / next ship"),
+        Action::GridToggle => tr("Cycle map grid (with reveal modifier)"),
     }
 }
 
