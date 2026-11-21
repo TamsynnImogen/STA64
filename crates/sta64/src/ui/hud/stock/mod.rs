@@ -137,6 +137,11 @@ fn menu_button(id: u32, name: &str) -> Button {
 /// Native menus contain HUD actions with an explicit capability gate; ODF
 /// metadata cannot bypass live Recrew eligibility.
 pub(in crate::ui::hud) fn buttons(feed: &HudFeed, page: Page, native: &NativeCommands) -> Vec<Button> {
+    buttons_with(feed, page, native, None)
+}
+
+/// [`buttons`] with the mounted string table, which gives the item-page menu buttons their tooltips.
+pub(in crate::ui::hud) fn buttons_with(feed: &HudFeed, page: Page, native: &NativeCommands, strings: Option<&crate::ui::i18n::Strings>) -> Vec<Button> {
     let mut buttons = model::grid_with_capacity(feed, page, usize::MAX);
     // The stock HUD shows only what the original shows: TRANSPORT only where the install's command data
     // gives it a place (Armada I has none here: it puts it on its speed rail, `a1::speed`); the fallback
@@ -226,6 +231,18 @@ pub(in crate::ui::hud) fn buttons(feed: &HudFeed, page: Page, native: &NativeCom
             }
             if let Some(verbose) = &meta.verbose {
                 button.verbose = Some(verbose.clone());
+            }
+        }
+    }
+    // The item-page menu buttons take the string table's short and verbose tooltips when the
+    // mounted table has the keys (otherwise the source text stays).
+    if let Some(strings) = strings {
+        for button in &mut buttons {
+            if let Some((short, verbose)) = model::menu_tip_keys(&button.act)
+                && strings.has_game_key(short)
+            {
+                button.tip = short.to_owned();
+                button.verbose = strings.has_game_key(verbose).then(|| verbose.to_owned());
             }
         }
     }
@@ -557,7 +574,7 @@ pub(super) fn refresh(
     let mut next = if a1 {
         state.slots.as_ref().map_or_else(Vec::new, |slots| a1::control::buttons(&feed, hud.page, slots, strings.as_deref()))
     } else {
-        buttons(&feed, hud.page, &state.native)
+        buttons_with(&feed, hud.page, &state.native, strings.as_deref())
     };
     if a1 {
         // The speed rail is on every page: the transport button is not a control slot.
@@ -565,7 +582,7 @@ pub(super) fn refresh(
     }
     if !a1 && matches!(hud.page, Page::Native(_)) && next.iter().all(|b| b.act == Act::Back) {
         hud.page = Page::Top;
-        next = buttons(&feed, hud.page, &state.native);
+        next = buttons_with(&feed, hud.page, &state.native, strings.as_deref());
     }
     if state.page != hud.page {
         state.build_page = 0;
@@ -796,5 +813,52 @@ mod capture_tests {
         assert_eq!(capture.verbose.as_deref(), Some("GUI_CP_TRANSPORT_ATTACK_VTOOLTIP"));
         native.commands.clear();
         assert!(!buttons(&feed, Page::Top, &native).iter().any(|b| b.act == Act::Target(TargetMode::TransportAttack)));
+    }
+}
+
+#[cfg(test)]
+mod menu_tip_tests {
+    use super::*;
+    use crate::ui::i18n::Strings;
+    use sta_sim::view::UnitView;
+    use sta_sim::{EntityId, Fixed, PlayerId, Vec3, WorldView};
+
+    fn feed_with(keys: &str) -> HudFeed {
+        let mut def = sta_content::UnitDef::new("m_research", "station");
+        def.build.list = vec![sta_content::DefRef::new("m_research")];
+        def.raw = std::sync::Arc::new(sta_odf::resolve("m", &mut |_| Some(keys.to_owned())).unwrap());
+        let db = sta_content::ContentDb::builder().unit(def).build().unwrap();
+        let f = Fixed::from_int;
+        let unit = UnitView {
+            id: EntityId(1), def: db.key("m_research").unwrap(), owner: PlayerId(1), pos: Vec3::ZERO,
+            heading: (Fixed::ZERO, Fixed::ONE), speed: Fixed::ZERO, hull: [f(100), f(100)], shields: [[f(1), f(1)]; 4],
+            crew: None, energy: None, autonomy: None, flags: sta_sim::view::UnitFlags::SELECTABLE, progress: None,
+        };
+        HudFeed { view: std::sync::Arc::new(WorldView { units: vec![unit], ..Default::default() }), player: PlayerId(1), selected: vec![EntityId(1)], content: Some(std::sync::Arc::new(db)), ..Default::default() }
+    }
+
+    fn menu(feed: &HudFeed, strings: Option<&Strings>) -> Button {
+        buttons_with(feed, Page::Top, &NativeCommands::default(), strings)
+            .into_iter()
+            .find(|b| matches!(b.act, Act::OpenBuild | Act::OpenResearch | Act::OpenEvolve))
+            .unwrap()
+    }
+
+    #[test]
+    fn menu_buttons_take_the_string_table_tooltips_when_it_has_the_keys() {
+        let feed = feed_with("research = 1\n");
+        let table = Strings::from_game("english", "\"GUI_CP_RESEARCH_TOOLTIP\", \"a\", \"GUI_CP_RESEARCH_VTOOLTIP\", \"b\"");
+        let b = menu(&feed, Some(&table));
+        assert_eq!((b.act.clone(), b.tip.as_str(), b.verbose.as_deref()), (Act::OpenResearch, "GUI_CP_RESEARCH_TOOLTIP", Some("GUI_CP_RESEARCH_VTOOLTIP")));
+        assert_eq!(b.sprite_names, ["b_research"]);
+        // A table without the keys leaves the source text; no table the same.
+        let b = menu(&feed, Some(&Strings::from_game("english", "\"OTHER\", \"x\"")));
+        assert_eq!((b.tip.as_str(), b.verbose.clone()), ("Research", None));
+        assert_eq!(menu(&feed, None).tip, "Research");
+        // Build's own keys apply to the Build button.
+        let build = feed_with("builder_ship = 1\n");
+        let table = Strings::from_game("english", "\"GUI_CP_BUILD_TOOLTIP\", \"a\"");
+        let b = menu(&build, Some(&table));
+        assert_eq!((b.act.clone(), b.tip.as_str(), b.verbose.clone()), (Act::OpenBuild, "GUI_CP_BUILD_TOOLTIP", None));
     }
 }

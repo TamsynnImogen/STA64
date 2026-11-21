@@ -571,3 +571,27 @@ fn a_refused_placement_names_the_resource_on_armada_one_and_keeps_the_old_text_e
     assert_eq!(refused_notice_texts(Some(UiProfile::FleetOps)), [generic]);
     assert_eq!(refused_notice_texts(Some(UiProfile::Armada1)), ["Cannot build: not enough dilithium"]);
 }
+
+/// The Research button (a class with the research key) opens the same item page the Build button
+/// opens, and the page lists the same items.
+#[test]
+fn the_research_button_opens_the_same_page_as_build() {
+    let fake = sta_content::fake::db();
+    let mut b = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+    for w in fake.weapons() {
+        b = b.weapon(w.clone());
+    }
+    for u in fake.units() {
+        let mut u = u.clone();
+        if u.odf == "fx_yard" {
+            u.raw = Arc::new(sta_odf::resolve("fx_yard", &mut |_| Some("research = 1\n".into())).unwrap());
+        }
+        b = b.unit(u);
+    }
+    let mut app = app(b.build().unwrap(), &[2]);
+    assert!(!app.world_mut().query::<&GridCell>().iter(app.world()).any(|c| c.0 == Act::OpenBuild));
+    let open = cell(&mut app, |a| *a == Act::OpenResearch);
+    press(&mut app, open);
+    assert_eq!(app.world().resource::<HudState>().page, Page::Build);
+    assert!(app.world_mut().query::<&GridCell>().iter(app.world()).any(|c| matches!(c.0, Act::Build { .. })));
+}

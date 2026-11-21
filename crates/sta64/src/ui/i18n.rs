@@ -120,6 +120,11 @@ impl Strings {
         self.game.get_or_key(key)
     }
 
+    /// Whether the mounted game table has an entry for `key`.
+    pub fn has_game_key(&self, key: &str) -> bool {
+        self.game.get(key).is_some()
+    }
+
     /// Tooltip entries in the native header are authoritative, including empty
     /// entries. STA64 language/source text is a fallback only for missing keys.
     pub fn tooltip_text<'a>(&'a self, key: &'a str) -> &'a str {

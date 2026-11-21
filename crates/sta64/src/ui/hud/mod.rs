@@ -447,7 +447,7 @@ fn press(
             continue;
         };
         match act {
-            Act::OpenBuild => state.page = Page::Build,
+            Act::OpenBuild | Act::OpenResearch | Act::OpenEvolve => state.page = Page::Build,
             Act::OpenNativeMenu(id) => state.page = Page::Native(*id),
             Act::OpenOrders => state.page = Page::Orders,
             Act::OpenFormations if commands::shared(&feed).move_order => state.page = Page::Formations,

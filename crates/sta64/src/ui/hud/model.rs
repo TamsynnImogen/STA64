@@ -208,6 +208,10 @@ pub enum Page {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Act {
     OpenBuild,
+    /// The Research menu button: opens the same item page as [`Act::OpenBuild`] (see [`item_menus`]).
+    OpenResearch,
+    /// The Evolve menu button: opens the same item page as [`Act::OpenBuild`] (see [`item_menus`]).
+    OpenEvolve,
     OpenFormations,
     OpenNativeMenu(u32),
     /// Armada I's Orders button: open the Orders page.
@@ -491,6 +495,8 @@ pub fn short(name: &str) -> String {
 pub(super) fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
     let (sprite_names, keep_label) = match &act {
         Act::OpenBuild => (vec!["b_build".into()], false),
+        Act::OpenResearch => (vec!["b_research".into()], false),
+        Act::OpenEvolve => (vec!["b_evolve".into()], false),
         Act::OpenFormations => (vec!["b_form".into()], false),
         Act::Target(TargetMode::Move) => (vec!["b_move".into()], false),
         Act::Target(TargetMode::Attack) => (vec!["b_attack".into()], false),
@@ -529,6 +535,51 @@ fn build_sprite_names(model: &str, odf: &str) -> Vec<String> {
         }
     }
     names
+}
+
+/// Which top-level menu buttons lead to a unit's item page (all of them open the same page; the
+/// button only differs). Chosen by the class's boolean definition keys: `builder_ship` and
+/// `builder_facility` give Build, `research` gives Research, `evolve` gives Evolve; a class with
+/// several shows several. Grade: the keys and their values are read from data; that they choose the
+/// button is read from the executable, static; no frame of the original shows it yet.
+/// INTERIM: a class with an item list and none of the keys keeps Build (STA64's fallback; the
+/// original's rule for such a class is not determined).
+pub(super) fn item_menus(def: &UnitDef) -> Vec<Act> {
+    let key = |k: &str| def.raw.bool(k).unwrap_or(false);
+    let mut out = Vec::new();
+    if key("builder_ship") || key("builder_facility") {
+        out.push(Act::OpenBuild);
+    }
+    if key("research") {
+        out.push(Act::OpenResearch);
+    }
+    if key("evolve") {
+        out.push(Act::OpenEvolve);
+    }
+    if out.is_empty() {
+        out.push(Act::OpenBuild);
+    }
+    out
+}
+
+/// The label and the source tooltip text of an item-page menu button.
+fn menu_words(act: &Act) -> (&'static str, &'static str) {
+    match act {
+        Act::OpenResearch => ("Research", "Research"),
+        Act::OpenEvolve => ("Evolve", "Evolve"),
+        _ => ("Build", "Build"),
+    }
+}
+
+/// The string-table keys (short, verbose) of an item-page menu button's tooltip, for a stock HUD
+/// whose mounted table has them. Read from the executable, static.
+pub(super) fn menu_tip_keys(act: &Act) -> Option<(&'static str, &'static str)> {
+    match act {
+        Act::OpenBuild => Some(("GUI_CP_BUILD_TOOLTIP", "GUI_CP_BUILD_VTOOLTIP")),
+        Act::OpenResearch => Some(("GUI_CP_RESEARCH_TOOLTIP", "GUI_CP_RESEARCH_VTOOLTIP")),
+        Act::OpenEvolve => Some(("GUI_CP_EVOLVE_TOOLTIP", "GUI_CP_EVOLVE_VTOOLTIP")),
+        _ => None,
+    }
 }
 
 /// The first selected own unit that can build: the grid's builder.
@@ -615,8 +666,14 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
         return out;
     }
     let mut out = Vec::new();
-    if builder.is_some() {
-        out.push(button(0, &tr("Build"), Act::OpenBuild, &tooltip_key("Build")));
+    if let Some(b) = builder {
+        // The first menu button keeps Build's cell (and so its hotkey); a unit with several
+        // menus puts the others in cells a producer leaves free (4 and 8 are mobile-only).
+        let menus = feed.def(b).map_or_else(|| vec![Act::OpenBuild], item_menus);
+        for (act, cell) in menus.into_iter().zip([0, 4, 8]) {
+            let (label, tip) = menu_words(&act);
+            out.push(button(cell, &tr(label), act, &tooltip_key(tip)));
+        }
     }
     if caps.rally {
         out.push(button(
@@ -700,7 +757,7 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
             Some((CommandKind::Order(Order::SearchAndDestroy { units: own.clone() }), own))
         }
         Act::Order(UnitOrder::Scout) if caps.move_order => Some((CommandKind::Order(Order::Scout { units: own.clone() }), own)),
-        Act::OpenBuild | Act::OpenFormations | Act::OpenNativeMenu(_) | Act::OpenOrders | Act::Order(_) | Act::Back | Act::Target(_) | Act::NativeFormation(_) => None,
+        Act::OpenBuild | Act::OpenResearch | Act::OpenEvolve | Act::OpenFormations | Act::OpenNativeMenu(_) | Act::OpenOrders | Act::Order(_) | Act::Back | Act::Target(_) | Act::NativeFormation(_) => None,
         Act::Recrew => {
             let units = commands::recrew_stations(feed, &own);
             (!units.is_empty()).then(|| (CommandKind::Order(Order::Recrew { units: units.clone(), on: None }), units))
@@ -1647,5 +1704,142 @@ mod tests {
         assert_eq!(r.iter().map(|e| (e.name.as_str(), e.id, e.text.as_str())).collect::<Vec<_>>(), [("Dilithium", 0, "3000"), ("Tritanium", 1, "20"), ("Supply", 3, "0"), ("officers", 4, "3/10")]);
         let names = resource_model(&f);
         assert_eq!(cost_text(&[261.0, 181.0, 0.0, 10.0], &names), "261 Dilithium, 181 Tritanium, 10 Supply");
+    }
+
+    /// A unit def with an item list whose raw definition carries `keys` (authored data).
+    fn menu_def(odf: &str, class: &str, keys: &str) -> sta_content::UnitDef {
+        let mut def = sta_content::UnitDef::new(odf, class);
+        def.build.list = vec![DefRef::new("fx_station")];
+        def.raw = Arc::new(sta_odf::resolve(odf, &mut |_| Some(keys.to_owned())).unwrap());
+        def
+    }
+
+    fn menu_feed(defs: Vec<sta_content::UnitDef>) -> HudFeed {
+        let fake = sta_content::fake::db();
+        let mut b = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for w in fake.weapons() {
+            b = b.weapon(w.clone());
+        }
+        for u in fake.units() {
+            b = b.unit(u.clone());
+        }
+        for d in defs {
+            b = b.unit(d);
+        }
+        let db = b.build().unwrap();
+        let units = ["m_research", "m_planet", "m_yard", "m_const", "m_both", "m_plain"]
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| db.key(o).is_some())
+            .map(|(i, o)| unit(&db, 10 + i as u32, o, 1, 100.0, None))
+            .collect();
+        feed(db, units, &[])
+    }
+
+    fn menu_defs() -> Vec<sta_content::UnitDef> {
+        vec![
+            menu_def("m_research", "station", "research = 1\n"),
+            menu_def("m_planet", "planet", "research = 1\nplanet = 1\n"),
+            menu_def("m_yard", "station", "builder_ship = 1\n"),
+            menu_def("m_const", "construction", "builder_facility = 1\n"),
+            menu_def("m_both", "station", "builder_ship = 1\nresearch = 1\n"),
+            menu_def("m_plain", "station", "alert = 0\n"),
+        ]
+    }
+
+    fn top_menus(f: &mut HudFeed, id: u32) -> Vec<Button> {
+        f.selected = vec![EntityId(id)];
+        grid(f, Page::Top).into_iter().filter(|b| matches!(b.act, Act::OpenBuild | Act::OpenResearch | Act::OpenEvolve)).collect()
+    }
+
+    #[test]
+    fn the_definition_keys_choose_the_menu_button() {
+        let mut f = menu_feed(menu_defs());
+        // A research-key station with a non-empty list: Research, its sprite and tooltip, no Build.
+        let b = top_menus(&mut f, 10);
+        assert_eq!(b.iter().map(|b| &b.act).collect::<Vec<_>>(), [&Act::OpenResearch]);
+        assert_eq!((b[0].cell, b[0].label.as_str(), b[0].tip.as_str()), (0, "RESEARCH", "Research"));
+        assert_eq!(b[0].sprite_names, ["b_research"]);
+        // A planet-like definition with the key and one item likewise.
+        let b = top_menus(&mut f, 11);
+        assert_eq!(b.iter().map(|b| &b.act).collect::<Vec<_>>(), [&Act::OpenResearch]);
+        // A yard and a construction ship keep Build.
+        for id in [12, 13] {
+            let b = top_menus(&mut f, id);
+            assert_eq!(b.iter().map(|b| &b.act).collect::<Vec<_>>(), [&Act::OpenBuild]);
+            assert_eq!(b[0].sprite_names, ["b_build"]);
+        }
+        // Both keys: both buttons, Build keeps cell 0.
+        let b = top_menus(&mut f, 14);
+        assert_eq!(b.iter().map(|b| (&b.act, b.cell)).collect::<Vec<_>>(), [(&Act::OpenBuild, 0), (&Act::OpenResearch, 4)]);
+        // INTERIM: a list and none of the keys falls back to Build.
+        let b = top_menus(&mut f, 15);
+        assert_eq!(b.iter().map(|b| &b.act).collect::<Vec<_>>(), [&Act::OpenBuild]);
+    }
+
+    #[test]
+    fn the_evolve_key_gives_the_evolve_button() {
+        let mut f = menu_feed(vec![menu_def("m_research", "station", "evolve = 1\n")]);
+        let b = top_menus(&mut f, 10);
+        assert_eq!(b.iter().map(|b| &b.act).collect::<Vec<_>>(), [&Act::OpenEvolve]);
+        assert_eq!(b[0].sprite_names, ["b_evolve"]);
+        assert_eq!(menu_tip_keys(&Act::OpenEvolve), Some(("GUI_CP_EVOLVE_TOOLTIP", "GUI_CP_EVOLVE_VTOOLTIP")));
+    }
+
+    #[test]
+    fn the_research_button_opens_the_same_page_as_build() {
+        let mut f = menu_feed(menu_defs());
+        f.selected = vec![EntityId(10)];
+        // The page is the builder's own item list whichever button leads to it.
+        let items = |f: &HudFeed| grid(f, Page::Build).into_iter().filter(|b| matches!(b.act, Act::Build { .. })).count();
+        assert_eq!(items(&f), 1);
+        assert_eq!(command(&f, &Act::OpenResearch), None);
+        assert_eq!(command(&f, &Act::OpenEvolve), None);
+    }
+
+    /// Install-gated (`STA64_TEST_A2_STOCK_INSTALL`, `STA64_TEST_ROOTS_INSTALL`, read at run time,
+    /// structure only, nothing committed): every mounted definition with an item list resolves its
+    /// menu buttons from its own keys (a research-key class gets Research, a builder-key class
+    /// Build), a research-key class, a builder-ship class and a builder-facility class exist, and
+    /// both sprite names resolve in a mounted GUI sprite table.
+    #[test]
+    fn installed_definitions_choose_their_menu_buttons_from_their_keys() {
+        let mut ran = 0;
+        for var in ["STA64_TEST_A2_STOCK_INSTALL", "STA64_TEST_ROOTS_INSTALL"] {
+            let Some(root) = std::env::var_os(var) else { continue };
+            let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), None).unwrap();
+            let (index, _) = sta_content::OdfIndex::build(&vfs);
+            let (db, _) = ContentDb::load(&vfs, &index).unwrap();
+            let (mut research, mut research_planet, mut ship, mut facility) = (0, 0, 0, 0);
+            for def in db.units().filter(|d| !d.build.list.is_empty()) {
+                let key = |k: &str| def.raw.bool(k).unwrap_or(false);
+                let menus = item_menus(def);
+                assert!(!menus.is_empty(), "{var}: a listed class always has a button");
+                assert_eq!(menus.contains(&Act::OpenResearch), key("research"), "{var}: research key");
+                assert_eq!(menus.contains(&Act::OpenEvolve), key("evolve"), "{var}: evolve key");
+                if key("builder_ship") || key("builder_facility") {
+                    assert!(menus.contains(&Act::OpenBuild), "{var}: builder keys give Build");
+                }
+                research += usize::from(key("research"));
+                research_planet += usize::from(key("research") && def.planet_role.is_some());
+                ship += usize::from(key("builder_ship"));
+                facility += usize::from(key("builder_facility"));
+            }
+            assert!(research > 0 && ship > 0 && facility > 0, "{var}: the three classes exist ({research} {ship} {facility})");
+            eprintln!("{var}: research-key classes with a list: {research}, of them planets: {research_planet}");
+            let tables: Vec<_> = vfs
+                .list("sprites")
+                .into_iter()
+                .filter(|p| p.rsplit('/').next().is_some_and(|f| f.starts_with("gui_") && f.ends_with(".spr")))
+                .map(|p| crate::ui::gui_sprites::read_table(&vfs, &p))
+                .collect();
+            for name in ["b_build", "b_research"] {
+                assert!(tables.iter().any(|t| t.sprite(name).is_some() || t.sprite(&format!("{name}.0")).is_some()), "{var}: {name} resolves");
+            }
+            ran += 1;
+        }
+        if ran == 0 {
+            eprintln!("SKIP: set STA64_TEST_A2_STOCK_INSTALL or STA64_TEST_ROOTS_INSTALL");
+        }
     }
 }
