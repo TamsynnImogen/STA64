@@ -68,10 +68,19 @@ alien = 0.8 0.8 0.8
 /// Team colours from `teamcolor.odf` ([`TEAMCOLOR_PATHS`]), in file order.
 /// The stock palette ([`STOCK_TEAMCOLOR`]) is used when the file is absent.
 /// The hull shader multiplies lit texels by the colour, as the engine does.
-#[derive(Resource)]
+#[derive(Resource, Clone, Debug)]
 pub struct TeamColours(pub Vec<(String, Color)>);
 
+impl Default for TeamColours {
+    fn default() -> Self {
+        Self(Self::parse(STOCK_TEAMCOLOR))
+    }
+}
+
 impl TeamColours {
+    const SEATS: [&'static str; PlayerId::MAX_PLAYERS as usize] =
+        ["mpcolor01", "mpcolor02", "mpcolor03", "mpcolor04", "mpcolor05", "mpcolor06", "mpcolor07", "mpcolor08"];
+
     pub fn parse(text: &str) -> Vec<(String, Color)> {
         sta_odf::parse(text)
             .entries
@@ -102,12 +111,9 @@ impl TeamColours {
     /// A 1-based BZN team uses its numbered Fleet Ops key or the legacy file position.
     /// Missing teams and team 0 use the neutral entry.
     pub fn team_colour(&self, team: u32) -> Option<Color> {
-        const MP_KEYS: [&str; PlayerId::MAX_PLAYERS as usize] = [
-            "mpcolor01", "mpcolor02", "mpcolor03", "mpcolor04", "mpcolor05", "mpcolor06", "mpcolor07", "mpcolor08",
-        ];
         let neutral = || self.named_colour("empty").or_else(|| self.0.first().map(|t| t.1));
         let i = team as usize;
-        let Some(key) = i.checked_sub(1).and_then(|i| MP_KEYS.get(i)) else {
+        let Some(key) = i.checked_sub(1).and_then(|i| Self::SEATS.get(i)) else {
             return neutral();
         };
         let mut numbered = self.0.iter()
@@ -117,6 +123,69 @@ impl TeamColours {
             numbered.find(|(name, _)| name.eq_ignore_ascii_case(key)).map(|(_, colour)| *colour).or_else(neutral)
         } else {
             self.0.get(i).map(|(_, colour)| *colour).or_else(neutral)
+        }
+    }
+
+    /// The Instant Action palette, in numbered order for Fleet Ops or seat order for legacy data.
+    pub fn swatches(&self) -> Vec<Color> {
+        let mut numbered: Vec<_> = self.0.iter().filter_map(|(key, colour)| {
+            let prefix = key.get(..7)?;
+            if !prefix.eq_ignore_ascii_case("mpcolor") {
+                return None;
+            }
+            let index = key.get(7..)?.parse::<u8>().ok()?;
+            (1..=16).contains(&index).then_some((index, *colour))
+        }).collect();
+        if numbered.is_empty() {
+            return self.0.iter().skip(1).take(Self::SEATS.len()).map(|(_, colour)| *colour).collect();
+        }
+        numbered.sort_by_key(|&(index, _)| index);
+        numbered.dedup_by_key(|(index, _)| *index);
+        numbered.into_iter().map(|(_, colour)| colour).collect()
+    }
+
+    /// Apply the local player's choice to a match palette. An occupied colour exchanges with
+    /// the local player's default so the two seats remain distinguishable.
+    pub fn with_local_colour(&self, local: PlayerId, colour: Color, players: &[PlayerId]) -> Self {
+        let mut result = self.clone();
+        if !local.is_player() {
+            return result;
+        }
+        if let Some(old) = self.owner_colour(local)
+            && old != colour
+            && let Some(&other) = players.iter().find(|&&id| id.is_player() && id != local && self.owner_colour(id) == Some(colour))
+        {
+            result.set_seat_colour(other, old);
+        }
+        result.set_seat_colour(local, colour);
+        result
+    }
+
+    pub(crate) fn remap_players(&self, before: &[PlayerId], after: &[PlayerId]) -> Self {
+        let mut result = self.clone();
+        for (&from, &to) in before.iter().zip(after) {
+            if from != to && let Some(colour) = self.owner_colour(from) {
+                result.set_seat_colour(to, colour);
+            }
+        }
+        result
+    }
+
+    fn set_seat_colour(&mut self, owner: PlayerId, colour: Color) {
+        let i = usize::from(owner.0);
+        if self.0.iter().any(|(name, _)| name.get(..7).is_some_and(|prefix| prefix.eq_ignore_ascii_case("mpcolor"))) {
+            let name = Self::SEATS[i];
+            if let Some((_, value)) = self.0.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(name)) {
+                *value = colour;
+            } else {
+                self.0.push((name.into(), colour));
+            }
+        } else {
+            let neutral = self.team_colour(0).unwrap_or(Color::WHITE);
+            while self.0.len() <= i + 1 {
+                self.0.push((format!("seat{}", self.0.len()), neutral));
+            }
+            self.0[i + 1].1 = colour;
         }
     }
 
@@ -690,5 +759,23 @@ mod team_colour_tests {
         assert_eq!(colours.team_colour(0), neutral);
         assert_eq!(colours.owner_colour(sta_sim::world::NEUTRAL), neutral);
         assert_eq!(colours.0[colours.default_index()].0, "MPCOLOR01");
+    }
+
+    #[test]
+    fn numbered_picker_includes_extra_swatches_and_swaps_an_occupied_colour() {
+        let palette = TeamColours(TeamColours::parse(
+            "mpcolor02 = 1 0 0\nmpcolor16 = 0 1 0\nempty = 0.5 0.5 0.5\nMPCOLOR01 = 0 0 1\n",
+        ));
+        let (blue, red, green) = (Color::srgb(0.0, 0.0, 1.0), Color::srgb(1.0, 0.0, 0.0), Color::srgb(0.0, 1.0, 0.0));
+        assert_eq!(palette.swatches(), [blue, red, green]);
+        let local = PlayerId(0);
+        let opponent = PlayerId(1);
+        let swapped = palette.with_local_colour(local, red, &[local, opponent]);
+        assert_eq!(swapped.owner_colour(local), Some(red));
+        assert_eq!(swapped.owner_colour(opponent), Some(blue));
+        let extra = palette.with_local_colour(local, green, &[local, opponent]);
+        assert_eq!(extra.owner_colour(local), Some(green));
+        assert_eq!(extra.owner_colour(opponent), Some(red));
+        assert_eq!(extra.team_colour(0), palette.team_colour(0));
     }
 }

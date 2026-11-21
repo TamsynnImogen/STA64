@@ -60,6 +60,7 @@ pub struct SimLink {
     /// `None` otherwise, when they are `prev` and `curr`.
     lifted: Option<(Arc<WorldView>, Arc<WorldView>)>,
     fog_lifted: bool,
+    match_fog_lifted: bool,
     /// A read-only client with no player seat. Only presentation views are unrestricted.
     observer: bool,
 }
@@ -71,7 +72,7 @@ impl SimLink {
         let cargo = source.cargo_view();
         let nodes = source.node_view();
         let systems = source.system_view();
-        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, cargo, nodes, systems, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None, lifted: None, fog_lifted: false, observer: false }
+        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, cargo, nodes, systems, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None, lifted: None, fog_lifted: false, match_fog_lifted: false, observer: false }
     }
 
     /// Log every tick into `replay` (a [`Replay::new`] header of the game's
@@ -166,8 +167,16 @@ impl SimLink {
         self.fog_lifted
     }
 
+    pub(crate) fn with_match_fog_lifted(mut self, lifted: bool) -> Self {
+        self.match_fog_lifted = lifted;
+        if lifted {
+            self.refresh_lifted();
+        }
+        self
+    }
+
     fn refresh_lifted(&mut self) {
-        self.lifted = (self.observer || self.fog_lifted).then(|| (self.presentation_view(&self.prev), self.presentation_view(&self.curr)));
+        self.lifted = (self.observer || self.fog_lifted || self.match_fog_lifted).then(|| (self.presentation_view(&self.prev), self.presentation_view(&self.curr)));
     }
 
     fn presentation_view(&self, view: &Arc<WorldView>) -> Arc<WorldView> {
@@ -257,7 +266,7 @@ impl SimLink {
         // While lifted, the new shown `prev` is the old shown `curr`: no second copy.
         let old_shown = self.lifted.take().map(|l| l.1);
         self.prev = std::mem::replace(&mut self.curr, out.view);
-        self.lifted = (self.observer || self.fog_lifted).then(|| (old_shown.unwrap_or_else(|| self.presentation_view(&self.prev)), self.presentation_view(&self.curr)));
+        self.lifted = (self.observer || self.fog_lifted || self.match_fog_lifted).then(|| (old_shown.unwrap_or_else(|| self.presentation_view(&self.prev)), self.presentation_view(&self.curr)));
         let mut cmds = Vec::new();
         for c in self.controllers.get().iter_mut() {
             c.think(&self.curr, &out.events, &mut cmds);

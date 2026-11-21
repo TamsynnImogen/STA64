@@ -1516,7 +1516,8 @@ fn rebuild(
             Err(why) => net_error = Some(why),
         },
         None => {
-            let link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), seat_player.unwrap_or(PlayerId::BENCH)).with_controllers(controllers);
+            let link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), seat_player.unwrap_or(PlayerId::BENCH)).with_controllers(controllers)
+                .with_match_fog_lifted(instant.as_ref().is_some_and(|active| active.fog.lifted().0));
             let link = if instant.as_ref().is_some_and(|active| active.local.is_none()) { link.with_observer() } else { link };
             crate::capture::arm(&mut commands, link, &setup, is_match, &vfs.0);
         }
@@ -1676,7 +1677,7 @@ mod tests {
             draft.options.officer_limit = 1;
             let setup = draft.to_setup(&data).unwrap();
             let local = (!observing).then_some(PlayerId(2));
-            let active = ActiveMatch { setup, local, speed: Default::default(), requested: true, frames: 0 };
+            let active = ActiveMatch { setup, local, speed: Default::default(), fog: Default::default(), requested: true, frames: 0 };
             let side = build_instant_action((*active.setup.map).clone(), data.content.clone(), &data.races, &active);
             assert_eq!(side.setup.players, active.setup.players);
             assert_eq!(side.setup.options, active.setup.options);
