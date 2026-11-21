@@ -280,6 +280,8 @@ pub fn build(objects: &[LayerObject], map: &RadarMap, texture: &mut dyn FnMut(&s
 
 // ---- drawing: an additive UI material ---------------------------------------
 
+const UNTINTED: Vec4 = Vec4::ZERO;
+
 /// A picture drawn additively (`dst + src`, alpha ignored) with the sampler of its image. `rect`
 /// is the part of the image drawn, `[u, v, w, h]`.
 #[derive(AsBindGroup, Asset, TypePath, Debug, Clone)]
@@ -289,6 +291,9 @@ pub struct AdditiveImage {
     #[texture(1)]
     #[sampler(2)]
     pub image: Handle<Image>,
+    /// Linear team RGB and a 0/1 switch for preserving the source RGB or recolouring its intensity.
+    #[uniform(3)]
+    pub tint: Vec4,
 }
 
 impl UiMaterial for AdditiveImage {
@@ -474,7 +479,7 @@ pub fn update_layers(
     };
     let (map_image, field_image) = (make(made.map), make(made.field));
     for (which, image, z) in [(LayerPicture::Map, map_image, -4), (LayerPicture::Field, field_image, -3)] {
-        let material = materials.add(AdditiveImage { rect: Vec4::new(0.0, 0.0, 1.0, 1.0), image });
+        let material = materials.add(AdditiveImage { rect: Vec4::new(0.0, 0.0, 1.0, 1.0), image, tint: UNTINTED });
         let existing = kids.and_then(|k| k.iter().find(|e| pictures.get(*e).is_ok_and(|(w, _)| *w == which)));
         match existing {
             Some(e) => {
@@ -524,19 +529,21 @@ pub fn update_icons(
     mut commands: Commands,
     feed: Res<RadarFeed>,
     state: Res<RadarState>,
+    teams: Option<Res<crate::viewer::TeamColours>>,
+    map_teams: Option<Res<crate::viewer::MapTeamColours>>,
     tables: Option<Res<SpriteTables>>,
     mounted: Option<Res<Mounted>>,
     images: Option<ResMut<Assets<Image>>>,
     materials: Option<ResMut<Assets<AdditiveImage>>>,
     mut textures: ResMut<RadarTextures>,
     square: Query<(Entity, Has<StockRadar>), With<RadarSquare>>,
-    mut icons: Query<(Entity, &RadarIcon, &mut Node)>,
+    mut icons: Query<(Entity, &RadarIcon, &mut Node, &MaterialNode<AdditiveImage>)>,
     mut found: Local<BTreeMap<EntityId, Entity>>,
     mut resolved: Local<ResolvedIcons>,
 ) {
     let (Some(mut images), Some(mut materials), Some(map), Ok((sq, stock))) = (images, materials, state.map, square.single()) else { return };
     let (Some(db), Some(tables), true) = (feed.content.as_ref(), tables, stock) else {
-        for (e, _, _) in &icons {
+        for (e, _, _, _) in &icons {
             commands.entity(e).despawn();
         }
         found.clear();
@@ -547,7 +554,7 @@ pub fn update_icons(
         *resolved = (ids.0, ids.1, BTreeMap::new());
     }
     let vfs = mounted.as_ref().map(|m| &m.0);
-    let mut want: BTreeMap<EntityId, (Vec2, sta_sim::ContentKey)> = BTreeMap::new();
+    let mut want: BTreeMap<EntityId, (Vec2, sta_sim::ContentKey, sta_sim::PlayerId)> = BTreeMap::new();
     for u in feed.view.visible_to(feed.player) {
         if u.flags.contains(sta_sim::view::UnitFlags::DYING) {
             continue;
@@ -558,7 +565,7 @@ pub fn update_icons(
         }
         resolved.2.entry(u.def).or_insert_with(|| icon_info(&def, &tables.0));
         if resolved.2.get(&u.def).is_some_and(Option::is_some) {
-            want.insert(u.id, (map.to_square(Vec2::new(u.pos.x.to_f32(), u.pos.z.to_f32())), u.def));
+            want.insert(u.id, (map.to_square(Vec2::new(u.pos.x.to_f32(), u.pos.z.to_f32())), u.def, u.owner));
         }
     }
     found.retain(|id, e| {
@@ -568,8 +575,18 @@ pub fn update_icons(
         }
         keep
     });
-    for (id, (at, def)) in want {
+    for (id, (at, def, owner)) in want {
         let Some(Some(info)) = resolved.2.get(&def) else { continue };
+        let tint = if owner.is_player() {
+            crate::viewer::owner_mark_colour(teams.as_deref(), map_teams.as_deref(), owner)
+                .map(|colour| {
+                    let c = colour.to_linear();
+                    Vec4::new(c.red, c.green, c.blue, 1.0)
+                })
+                .unwrap_or(UNTINTED)
+        } else {
+            UNTINTED
+        };
         let side = info.texels / GRID as f32 * 100.0;
         let node = Node {
             position_type: PositionType::Absolute,
@@ -581,15 +598,20 @@ pub fn update_icons(
             ..default()
         };
         if let Some(e) = found.get(&id) {
-            if let Ok((_, _, mut n)) = icons.get_mut(*e)
-                && *n != node
-            {
-                *n = node;
+            if let Ok((_, _, mut n, material)) = icons.get_mut(*e) {
+                if *n != node {
+                    *n = node;
+                }
+                if materials.get(&material.0).is_some_and(|m| m.tint != tint)
+                    && let Some(mut material) = materials.get_mut(&material.0)
+                {
+                    material.tint = tint;
+                }
             }
             continue;
         }
         let Some(image) = textures.handle(vfs, &mut images, &info.texture) else { continue };
-        let material = materials.add(AdditiveImage { rect: Vec4::from(info.uv), image });
+        let material = materials.add(AdditiveImage { rect: Vec4::from(info.uv), image, tint });
         let e = commands.spawn((RadarIcon(id), MaterialNode(material), node, ZIndex(-2), bevy::picking::Pickable::IGNORE, ChildOf(sq))).id();
         found.insert(id, e);
     }
@@ -957,6 +979,48 @@ mod tests {
         assert_eq!(n.margin.left, Val::Percent(-1.5625));
     }
 
+    #[test]
+    fn authored_icons_follow_owner_mark_colours_and_keep_neutral_untinted() {
+        use crate::viewer::{MapTeamColours, TeamColours};
+
+        let mut s = scene();
+        s.app.add_systems(Update, update_icons);
+        s.app.world_mut().resource_mut::<RadarState>().map = Some(square(6400.0));
+        let sq = s.app.world_mut().query_filtered::<Entity, With<RadarSquare>>().single(s.app.world()).unwrap();
+        s.app.world_mut().entity_mut(sq).insert(StockRadar);
+        s.app.world_mut().resource_mut::<RadarTextures>().insert("tex_i", Texture { width: 4, height: 4, rgba: flat(4, 4, [200, 100, 50]).rgba.clone() });
+        let owned = s.spawn(s.planet, 0, 1600.0, 4800.0);
+        let neutral = s.spawn(s.planet, sta_sim::world::NEUTRAL.0, 4800.0, 1600.0);
+        let tint_of = |app: &mut App, id| {
+            let material = app.world_mut().query::<(&RadarIcon, &MaterialNode<AdditiveImage>)>()
+                .iter(app.world())
+                .find(|(icon, _)| icon.0 == id)
+                .map(|(_, material)| material.0.clone())
+                .unwrap();
+            app.world().resource::<Assets<AdditiveImage>>().get(&material).unwrap().tint
+        };
+        s.show();
+        assert_eq!(tint_of(&mut s.app, owned), UNTINTED);
+        assert_eq!(tint_of(&mut s.app, neutral), UNTINTED);
+
+        s.app.insert_resource(TeamColours(vec![("empty".into(), Color::WHITE), ("red".into(), Color::srgb(1.0, 0.0, 0.0)), ("blue".into(), Color::srgb(0.0, 0.0, 1.0))]));
+        s.show();
+        assert_eq!(tint_of(&mut s.app, owned), Vec4::new(1.0, 0.0, 0.0, 1.0));
+        assert_eq!(tint_of(&mut s.app, neutral), UNTINTED);
+        s.app.insert_resource(MapTeamColours(vec![[0, 0], [0, 3], [0, 2]]));
+        s.show();
+        assert_eq!(tint_of(&mut s.app, owned), Vec4::new(0.0, 0.0, 1.0, 1.0));
+        // The icon node survives a capture; its material must follow the new owner.
+        let mut captured = (*s.app.world().resource::<RadarFeed>().view).clone();
+        captured.units.iter_mut().find(|u| u.id == owned).unwrap().owner = PlayerId(1);
+        s.app.world_mut().resource_mut::<RadarFeed>().view = Arc::new(captured);
+        s.app.update();
+        assert_eq!(tint_of(&mut s.app, owned), Vec4::new(1.0, 0.0, 0.0, 1.0));
+        s.app.world_mut().remove_resource::<TeamColours>();
+        s.show();
+        assert_eq!(tint_of(&mut s.app, owned), UNTINTED);
+    }
+
     /// An object with a `mapIcon` gets no dot; the others do, with the stock sizes in texels, and a
     /// definition's `mapSize` overrides them.
     #[test]
@@ -1083,7 +1147,7 @@ mod tests {
         );
         crate::app::configure_sets(&mut app);
         app.init_resource::<RadarFeed>().init_resource::<RadarState>().add_plugins(RadarLayersPlugin);
-        let mut target = Image::new_target_texture(64, 64, TextureFormat::Rgba8UnormSrgb, None);
+        let mut target = Image::new_target_texture(64, 96, TextureFormat::Rgba8UnormSrgb, None);
         target.asset_usage = RenderAssetUsages::RENDER_WORLD;
         let target = app.world_mut().resource_mut::<Assets<Image>>().add(target);
         let camera = app
@@ -1101,23 +1165,25 @@ mod tests {
         );
         picture.sampler = ImageSampler::nearest();
         let picture = app.world_mut().resource_mut::<Assets<Image>>().add(picture);
-        let (whole, right) = {
+        let (whole, right, tinted) = {
             let mut m = app.world_mut().resource_mut::<Assets<AdditiveImage>>();
             (
-                m.add(AdditiveImage { rect: Vec4::new(0.0, 0.0, 1.0, 1.0), image: picture.clone() }),
-                m.add(AdditiveImage { rect: Vec4::new(0.5, 0.0, 0.5, 1.0), image: picture.clone() }),
+                m.add(AdditiveImage { rect: Vec4::new(0.0, 0.0, 1.0, 1.0), image: picture.clone(), tint: UNTINTED }),
+                m.add(AdditiveImage { rect: Vec4::new(0.5, 0.0, 0.5, 1.0), image: picture.clone(), tint: UNTINTED }),
+                m.add(AdditiveImage { rect: Vec4::new(0.5, 0.5, 0.5, 0.5), image: picture, tint: Vec4::new(0.0, 1.0, 1.0, 1.0) }),
             )
         };
-        let fill = Node { position_type: PositionType::Absolute, left: Val::Px(0.0), top: Val::Px(0.0), width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() };
+        let fill = Node { position_type: PositionType::Absolute, left: Val::Px(0.0), top: Val::Px(0.0), width: Val::Percent(100.0), height: Val::Px(64.0), ..default() };
         // Left half of the frame: the whole picture over black. Right half: over a grey backing,
         // and the right half of the picture drawn across all of it.
         app.world_mut().spawn((
-            Node { position_type: PositionType::Absolute, width: Val::Px(64.0), height: Val::Px(64.0), ..default() },
+            Node { position_type: PositionType::Absolute, width: Val::Px(64.0), height: Val::Px(96.0), ..default() },
             UiTargetCamera(camera),
             children![
                 (Node { left: Val::Px(0.0), width: Val::Px(32.0), ..fill.clone() }, MaterialNode(whole)),
                 (Node { left: Val::Px(32.0), width: Val::Px(32.0), ..fill.clone() }, BackgroundColor(Color::srgb_u8(60, 60, 60))),
-                (Node { left: Val::Px(32.0), width: Val::Px(32.0), ..fill }, MaterialNode(right)),
+                (Node { left: Val::Px(32.0), width: Val::Px(32.0), ..fill.clone() }, MaterialNode(right)),
+                (Node { top: Val::Px(64.0), width: Val::Px(32.0), height: Val::Px(32.0), ..fill }, MaterialNode(tinted)),
             ],
         ));
         app.finish();
@@ -1170,6 +1236,7 @@ mod tests {
         assert!(near(at(48, 8), want), "{:?} vs {want:?}", at(48, 8));
         let want = [sum(60, 100), sum(60, 100), sum(60, 0)];
         assert!(near(at(48, 56), want), "{:?} vs {want:?}", at(48, 56));
+        assert!(near(at(16, 80), [0, 100, 100]), "cyan tint on a yellow texel: {:?}", at(16, 80));
     }
 
     /// With `STA64_TEST_INSTALL` (a mounted install): every `mapSprite` and `mapIcon` key of its
