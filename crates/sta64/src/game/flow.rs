@@ -206,8 +206,7 @@ fn on_start(
     mut notices: MessageWriter<Notice>,
     net: Option<Res<super::net_match::NetStart>>,
     mounted_palette: Option<Res<TeamColours>>,
-    info: Option<ResMut<LoadInfo>>,
-    progress: Option<ResMut<LoadProgress>>,
+    (info, progress): (Option<ResMut<LoadInfo>>, Option<ResMut<LoadProgress>>),
 ) {
     let Some(StartGame(setup, speed, palette, fog)) = starts.read().last().cloned() else { return };
     let local = match net.as_ref().and_then(|start| start.0.as_ref()) {
@@ -320,8 +319,7 @@ fn clear_match(
     mut commands: Commands,
     selection: Option<ResMut<Selection>>,
     queue: Option<ResMut<CommandQueue>>,
-    seat: Option<ResMut<MapSeat>>,
-    progress: Option<ResMut<LoadProgress>>,
+    (seat, progress): (Option<ResMut<MapSeat>>, Option<ResMut<LoadProgress>>),
     mut leave: ResMut<Messages<LeaveMatch>>,
     entities: Option<ResMut<crate::sim_link::SimEntities>>,
     palette: Option<Res<MatchPaletteBackup>>,
@@ -462,6 +460,12 @@ pub(crate) fn front_end_data(vfs: &sta_vfs::Vfs, catalogue: &mut Catalogue, inst
     Ok(FrontEndData { screens: ScreenData { content: db, races, colours, maps, mods, base_name: install_root.and_then(|r| r.file_name()).map(|n| n.to_string_lossy().into_owned()) }, scene, menu_music })
 }
 
+type RemountIntro<'w> = (
+    Option<Res<'w, crate::media::IntroSettings>>,
+    Option<ResMut<'w, crate::media::MovieIds>>,
+    Option<ResMut<'w, Messages<crate::media::PlayMovie>>>,
+);
+
 /// Use mod: remount the install with it and refill the lists. The scene shows
 /// the new content from the next time the front end opens it.
 #[allow(clippy::too_many_arguments)]
@@ -475,11 +479,7 @@ fn remount(
     mut notices: MessageWriter<Notice>,
     browse: Option<Res<Browse>>,
     mut next: Option<ResMut<NextState<Screen>>>,
-    (intro, ids, movies): (
-        Option<Res<crate::media::IntroSettings>>,
-        Option<ResMut<crate::media::MovieIds>>,
-        Option<ResMut<Messages<crate::media::PlayMovie>>>,
-    ),
+    (intro, ids, movies): RemountIntro,
 ) {
     let Some(ModChosen(folder)) = chosen.read().last().cloned() else { return };
     let Some(root) = &config.install_root else {
