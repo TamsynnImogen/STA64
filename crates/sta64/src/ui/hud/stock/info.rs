@@ -818,7 +818,7 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout,
     }
 }
 
-#[allow(clippy::too_many_arguments)] // Bevy injects these system parameters.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)] // Bevy injects these system parameters.
 pub(in crate::ui::hud) fn update(
     feed: Res<HudFeed>,
     status: Option<Res<crate::ui::hud::status::StatusFeed>>,
