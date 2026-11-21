@@ -16,6 +16,10 @@
 //!   resolved when the tooltip is shown. Read from data; the lookup order from the executable, static.
 //! - One colour for the whole box, no per-line colour. Read from the executable, static.
 //!
+//! STA64's own reading: without a `tooltip` key a non-craft shows the class name (the original shows its
+//! object name; whether that is the same text is not determined). Planets are hoverable units here and take
+//! the craft form; nebulae and moons are not hoverable units and show no tooltip (gap).
+//!
 //! STA64's own, where the original gives nothing to follow: a key the table lacks shows as it is
 //! written (a literal authored caption), and a separator the table lacks falls back to
 //! [`CLASS_SEPARATOR_FALLBACK`] / [`TOOLTIP_SEPARATOR_FALLBACK`] (no install, a mod without the keys).

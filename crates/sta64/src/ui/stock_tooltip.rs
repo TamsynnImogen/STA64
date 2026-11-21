@@ -27,7 +27,12 @@
 //! - The box follows the pointer while it is shown and is drawn above the HUD panels (static; one
 //!   frame shows it over the minimap).
 //! - The drawn box sits [`TIP_BOX_SHIFT`] and the text pen [`TIP_TEXT_SHIFT`] whole pixels off the
-//!   rule's origin: measured on frames at 800x600 (and one at 1280x720); the cause is not determined.
+//!   rule's origin (grades on the constants: the text's is the engine's quad shift, the box's is
+//!   measured at one size with its cause not determined).
+//! - One gate ([`stock_tip`]) serves the box, the delays and the world text: the Armada II look with
+//!   the stock font rule (`SpriteFonts::stock_family`) and a stock HUD canvas. Fleet Operations 3.x,
+//!   Dominion War and any other look that shares the Armada II look but not the font rule keep today's
+//!   box, delays and name-only world tooltip (not examined).
 //!
 //! Delays: `tooltipDelay` and `verboseTooltipDelay` of the component definition file
 //! (`odf/other/component.odf`), the defaults [`TipDelays::STOCK`] when a key is absent. Keys read from
@@ -67,9 +72,13 @@ pub const TIP_FLIP_GAP: f32 = 4.0;
 /// Least distance of the text's left from the viewport's left edge, and of the text's right end from the
 /// right edge when the right clamp applies, in virtual units. Static.
 pub const TIP_EDGE: f32 = 12.0;
-/// Whole pixels the drawn box sits below the rule's origin. Measured; cause not determined.
+/// Whole pixels the drawn box sits below the rule's origin. Measured at one window size (800x600);
+/// cause not determined; not confirmed on a native frame of another size.
 pub const TIP_BOX_SHIFT: Vec2 = Vec2::new(0.0, 1.0);
-/// Whole pixels the text pen sits right of and below the rule's origin. Measured; cause not determined.
+/// Whole pixels the text pen sits right of and below the rule's origin: the engine's quad shift (the
+/// pixel-centre convention of its renderer; read from the executable, static, measured). The stock HUD
+/// text placement (`stock_font::place_offset`) deliberately drops it, since it places text relative to
+/// its rectangle; the tooltip keeps it for the text-to-box offset the frames show.
 pub const TIP_TEXT_SHIFT: Vec2 = Vec2::new(1.0, 1.0);
 
 /// Where the tooltip goes, in virtual units of the HUD viewport.
@@ -140,6 +149,13 @@ pub fn wrap_logical(hud: Vec2) -> f32 {
     TIP_WRAP_UNITS * hud.x / STOCK_SPACE.x
 }
 
+/// The one condition for the stock tooltip: the Armada II look, the stock font rule of the mounted
+/// install and a stock HUD on screen. Everything else (STA64's own HUD, Fleet Operations, Dominion War,
+/// other installs, no HUD) keeps the plain box, STA64's delays and the name-only unit tooltip.
+pub fn stock_tip(profile: Option<&UiProfile>, fonts: Option<&SpriteFonts>, canvas: Option<&StockTextCanvas>) -> bool {
+    profile == Some(&UiProfile::Armada2) && fonts.is_some_and(|f| f.stock_family) && canvas.is_some_and(|c| c.0.is_some())
+}
+
 /// Whether the box is laid out by the stock rule this frame (the plain placement then stands down).
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TipStock(pub bool);
@@ -179,12 +195,21 @@ pub fn read_component(vfs: &sta_vfs::Vfs) -> Option<sta_odf::Odf> {
 
 /// Keep [`TipDelays`] in step with the mounted install: under the Armada II stock look the delays
 /// of its component definition, else STA64's own.
-pub fn load_tip_delays(vfs: Option<Res<Mounted>>, profile: Option<Res<UiProfile>>, mut delays: ResMut<TipDelays>) {
-    let changed = vfs.as_ref().is_some_and(|v| v.is_changed()) || profile.as_ref().is_some_and(|p| p.is_changed());
+pub fn load_tip_delays(
+    vfs: Option<Res<Mounted>>,
+    profile: Option<Res<UiProfile>>,
+    fonts: Option<Res<SpriteFonts>>,
+    canvas: Option<Res<StockTextCanvas>>,
+    mut delays: ResMut<TipDelays>,
+) {
+    let changed = vfs.as_ref().is_some_and(|v| v.is_changed())
+        || profile.as_ref().is_some_and(|p| p.is_changed())
+        || fonts.as_ref().is_some_and(|f| f.is_changed())
+        || canvas.as_ref().is_some_and(|c| c.is_changed());
     if !changed {
         return;
     }
-    let want = if profile.as_deref() == Some(&UiProfile::Armada2) {
+    let want = if stock_tip(profile.as_deref(), fonts.as_deref(), canvas.as_deref()) {
         delays_from(vfs.as_deref().and_then(|v| read_component(&v.0)).as_ref())
     } else {
         TipDelays::default()
@@ -219,7 +244,7 @@ pub fn stock_tip_box(
     let window = window.single().ok();
     let scale_factor = window.map_or(1.0, |w| w.scale_factor());
     let px = (ui_scale.map_or(1.0, |u| u.0) * scale_factor).max(0.1);
-    let stock = profile.as_deref() == Some(&UiProfile::Armada2);
+    let stock = stock_tip(profile.as_deref(), fonts.as_deref(), canvas.as_deref());
     let canvas = canvas.as_deref().filter(|_| stock);
     let block = canvas.zip(fonts.as_deref()).and_then(|(c, f)| measure(f, c, px, &words.0.text));
     let (Some(canvas), Some(block)) = (canvas.and_then(|c| c.0), block) else {

@@ -28,7 +28,7 @@ fn authored_font(w: u32, h: u32) -> SpriteFont {
 
 fn fonts() -> SpriteFonts {
     let mut f = SpriteFonts { stock_family: true, ..default() };
-    f.fonts.insert("fontfinal4_10".into(), LoadedFont::new(authored_font(10, 15), vec![(Handle::default(), UVec2::new(256, 256))]));
+    f.fonts.insert("fontfinal4_10".into(), LoadedFont::new(authored_font(10, 14), vec![(Handle::default(), UVec2::new(256, 256))]));
     f
 }
 
@@ -99,9 +99,9 @@ fn placement_goldens_with_authored_numbers() {
 fn the_box_is_the_text_block_with_its_padding_on_whole_pixels() {
     let s = Vec2::splat(0.5);
     let place = tooltip_place(Vec2::new(500.0, 200.0), Vec2::new(400.0, 60.0), s);
-    let at = physical_box(&place, Vec2::new(200.0, 30.0), s, Vec2::ZERO);
+    let at = physical_box(&place, Vec2::new(200.0, 28.0), s, Vec2::ZERO);
     assert_eq!(at.pen, Vec2::new(251.0, 129.0));
-    assert_eq!(at.rect.size(), Vec2::new(206.0, 34.0));
+    assert_eq!(at.rect.size(), Vec2::new(206.0, 32.0));
     assert_eq!((at.rect.min.x, at.rect.min.y), (247.0, 128.0));
 }
 
@@ -109,14 +109,14 @@ fn the_box_is_the_text_block_with_its_padding_on_whole_pixels() {
 fn text_measures_and_wraps_at_the_width_with_authored_advances() {
     let f = fonts();
     let c = canvas(Vec2::new(800.0, 600.0), Vec2::new(800.0, 600.0), HudFit::Centred);
-    assert_eq!(measure(&f, &c, 1.0, "Hello"), Some(Vec2::new(50.0, 15.0)));
+    assert_eq!(measure(&f, &c, 1.0, "Hello"), Some(Vec2::new(50.0, 14.0)));
     // 550 units are 275 px: 27 glyphs of 10 px.
     let long = "aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd";
     let m = measure(&f, &c, 1.0, long).unwrap();
-    assert_eq!(m.y, 30.0);
+    assert_eq!(m.y, 28.0);
     assert!(m.x <= 275.0 && m.x >= 200.0, "{m:?}");
     // Explicit breaks stay.
-    assert_eq!(measure(&f, &c, 1.0, "a\nb\nc").unwrap().y, 45.0);
+    assert_eq!(measure(&f, &c, 1.0, "a\nb\nc").unwrap().y, 42.0);
     // A character the font lacks leaves the plain path.
     assert_eq!(measure(&f, &c, 1.0, "caf\u{4e2d}"), None);
     // No stock rule without a HUD or outside the family.
@@ -131,7 +131,7 @@ fn the_stock_box_has_no_border_the_cfg_colours_and_sits_below_the_pointer() {
     let n = node(&mut app);
     assert_eq!(n.display, Display::Flex);
     assert_eq!((px(n.left), px(n.top)), (247.0, 208.0));
-    assert_eq!((px(n.width), px(n.height)), (56.0, 19.0));
+    assert_eq!((px(n.width), px(n.height)), (56.0, 18.0));
     assert_eq!(n.border, UiRect::ZERO);
     assert_eq!((px(n.padding.left), px(n.padding.top)), (4.0, 1.0));
     let bg = app.world_mut().query_filtered::<&BackgroundColor, With<TipBox>>().single(app.world()).unwrap().0;
@@ -192,6 +192,33 @@ fn other_looks_and_profiles_keep_the_plain_box() {
     show(&mut app, "Hello");
     assert!(!app.world().resource::<TipStock>().0);
     assert_eq!(node(&mut app).border, UiRect::left(Val::Px(4.0)));
+}
+
+/// The Armada II look without the stock font rule (Fleet Operations 3.x, Dominion War, another install)
+/// keeps today's behaviour: the plain box, STA64's delays and the name-only unit tooltip at once.
+#[test]
+fn the_armada_ii_look_without_the_stock_font_rule_changes_nothing() {
+    let size = Vec2::new(800.0, 600.0);
+    let mut app = rig(UiProfile::Armada2, canvas(size, size, HudFit::Centred), size, Vec2::new(250.0, 180.0));
+    app.world_mut().resource_mut::<SpriteFonts>().stock_family = false;
+    app.update();
+    assert_eq!(*app.world().resource::<TipDelays>(), TipDelays::default());
+    // A unit under the pointer: the plain name at once, not the composed text.
+    app.world_mut().insert_resource(UnitTip { target: Some(sta_sim::EntityId(1)), plain: "Plain".into(), parts: parts(), rest: 0.0 });
+    app.update();
+    let words = app.world_mut().query_filtered::<&SpriteText, With<TipText>>().single(app.world()).unwrap().text.clone();
+    assert_eq!(words, "Plain");
+    let n = node(&mut app);
+    assert_eq!(n.display, Display::Flex);
+    assert!(!app.world().resource::<TipStock>().0);
+    assert_eq!(n.border, UiRect::left(Val::Px(4.0)));
+    assert_eq!((px(n.left), px(n.top)), (266.0, 200.0));
+    // A button's tooltip takes the old delay, too.
+    *app.world_mut().resource_mut::<UnitTip>() = UnitTip::default();
+    let e = app.world_mut().spawn(Tooltip::new("Btn")).id();
+    *app.world_mut().resource_mut::<TipHover>() = TipHover { target: Some(e), rest: 0.4 };
+    app.update();
+    assert_eq!(node(&mut app).display, Display::Flex);
 }
 
 #[test]
@@ -387,8 +414,8 @@ fn gpu_frame_of_the_box_is_flat_and_borderless() {
     };
     let fill = [0.25, 0.5, 0.75];
     let clear = [0.2, 0.25, 0.3];
-    // The box is 56 x 19 px at (247, 208) (the placement rule at this window; authored 10 px glyphs).
-    let (l, t, r, b) = (247u32, 208u32, 247 + 56, 208 + 19);
+    // The box is 56 x 18 px at (247, 208) (the placement rule at this window; authored 10 px glyphs).
+    let (l, t, r, b) = (247u32, 208u32, 247 + 56, 208 + 18);
     for (x, y) in [(l, t), (r - 1, t), (l, b - 1), (r - 1, b - 1), (l + 2, t + 9), (l + 28, t + 9)] {
         assert!(near(x, y, fill), "({x},{y}) is not the fill: {:?}", rgba.get_pixel(x, y));
     }
@@ -397,5 +424,5 @@ fn gpu_frame_of_the_box_is_flat_and_borderless() {
         assert!(near(x, y, clear), "({x},{y}) is not clear: {:?}", rgba.get_pixel(x, y));
     }
     let flat = (t..b).flat_map(|y| (l..r).map(move |x| (x, y))).filter(|&(x, y)| near(x, y, fill)).count();
-    assert_eq!(flat, 56 * 19, "the box is one flat colour");
+    assert_eq!(flat, 56 * 18, "the box is one flat colour");
 }

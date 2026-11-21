@@ -669,6 +669,8 @@ fn draw_tip(
     strings: Option<Res<crate::ui::i18n::Strings>>,
     delays: Option<Res<TipDelays>>,
     profile: Option<Res<super::profile::UiProfile>>,
+    fonts: Option<Res<super::sprite_font::SpriteFonts>>,
+    canvas: Option<Res<super::stock_font::StockTextCanvas>>,
     cine: Option<Res<crate::ui::presentation::CineractiveState>>,
     mut boxed: Single<&mut Node, With<TipBox>>,
     mut words: Single<&mut SpriteText, With<TipText>>,
@@ -680,7 +682,7 @@ fn draw_tip(
         return;
     }
     let delays = delays.map_or_else(TipDelays::default, |d| *d);
-    let stock = profile.as_deref() == Some(&super::profile::UiProfile::Armada2);
+    let stock = super::stock_tooltip::stock_tip(profile.as_deref(), fonts.as_deref(), canvas.as_deref());
     let look = |key: &str| strings.as_ref().map_or_else(|| key.to_owned(), |s| s.tooltip_text(key).to_owned());
     // An interface element under the pointer owns the tooltip; the unit behind it has none.
     let shown = match hover.target {
