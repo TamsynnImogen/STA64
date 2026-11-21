@@ -11,10 +11,12 @@ struct Rect {
 @group(1) @binding(0) var<uniform> area: Rect;
 @group(1) @binding(1) var picture: texture_2d<f32>;
 @group(1) @binding(2) var picture_s: sampler;
+@group(1) @binding(3) var<uniform> tint: vec4<f32>;
 
 @fragment
 fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
     let uv = area.rect.xy + in.uv * area.rect.zw;
     let c = textureSample(picture, picture_s, uv);
-    return vec4<f32>(c.rgb, 1.0);
+    let intensity = max(c.r, max(c.g, c.b));
+    return vec4<f32>(mix(c.rgb, intensity * tint.rgb, tint.a), 1.0);
 }
