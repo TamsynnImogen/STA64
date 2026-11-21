@@ -229,7 +229,7 @@ impl Blip {
     }
 }
 
-fn standing(view: &WorldView, player: PlayerId, owner: PlayerId) -> Standing {
+pub fn standing(view: &WorldView, player: PlayerId, owner: PlayerId) -> Standing {
     if owner == player {
         return Standing::Own;
     }
