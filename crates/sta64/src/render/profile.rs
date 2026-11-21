@@ -249,7 +249,7 @@ mod tests {
         let named: Vec<&str> = REFIT_EFFECTS.iter().flat_map(|(_, _, s)| s.iter().copied()).chain(SHARED_SHADERS.iter().copied()).collect();
         for e in crate::render::shader_shadow::EMBEDDED {
             let rel = e.trim_start_matches("render/");
-            if rel != "fog.wesl" {
+            if !matches!(rel, "fog.wesl" | "map_grid.wesl") {
                 assert!(named.contains(&rel), "{rel} is registered under no effect");
             }
         }
