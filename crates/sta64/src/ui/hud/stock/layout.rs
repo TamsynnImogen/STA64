@@ -271,21 +271,6 @@ impl StockLayout {
             .map(|r| self.placed(r))
     }
 
-    /// A panel that sits at the window's right edge as a whole: on a window wider than the centred sheet
-    /// (`Centred`) its distance to the sheet's right edge is kept, measured from the window's right edge
-    /// instead; its size, art and vertical place stay the sheet's. Otherwise the same as [`Self::panel`].
-    /// The button panel's own rule (the player's statement: the buttons belong in the top right corner of
-    /// the screen); ADR 0008 H5's `anchor = "top right"` for a group.
-    pub fn panel_at_right_edge(&self, name: &str) -> Option<R> {
-        let raw = self.raw_rect(&format!("{name}PanelArea")).filter(|r| r.w > 0 && r.h > 0)?;
-        let mut out = self.placed(raw);
-        if self.fit == HudFit::Centred && self.hud.x > 0.0 {
-            let gap = (self.canvas.x - (raw.x + raw.w) as f32).max(0.0) * self.scale_x;
-            out.x = (self.screen.x - gap - out.w).round();
-        }
-        Some(out)
-    }
-
     pub fn info_area(&self, variant: usize) -> Option<R> {
         self.info_raw(variant).map(|raw| self.placed(raw))
     }

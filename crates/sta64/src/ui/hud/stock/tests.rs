@@ -1301,8 +1301,14 @@ mod button_panel {
     /// The cfg of a button panel at the sheet's top right: a 266 x 40 panel 11 units from the right edge,
     /// two end pieces, a first row and a second row below it.
     fn placed_config(aspect: f32) -> HudConfig {
+        sheet_config(1600, 1323, aspect)
+    }
+
+    /// The same panel on a sheet `canvas_w` units wide, its area starting at `area_x` (a 16:9 sheet).
+    fn sheet_config(canvas_w: i32, area_x: i32, aspect: f32) -> HudConfig {
+        let cfg_text = CFG.replace("screenWidth = 1600", &format!("screenWidth = {canvas_w}"));
         let text = format!(
-            "{CFG}buttonPanelArea = 1323 8 266 40\nbuttonBackgroundPanel = \"bbp\"\nbuttonBackgroundPanelArea = 0 0 266 40\nbuttonBackgroundPanelSize = 2\nbuttonBackgroundPanel_0 = 0 0 21 40\nbuttonBackgroundPanel_1 = 245 0 21 40\n\
+            "{cfg_text}buttonPanelArea = {area_x} 8 266 40\nbuttonBackgroundPanel = \"bbp\"\nbuttonBackgroundPanelArea = 0 0 266 40\nbuttonBackgroundPanelSize = 2\nbuttonBackgroundPanel_0 = 0 0 21 40\nbuttonBackgroundPanel_1 = 245 0 21 40\n\
              idleButtonArea = 25 0 40 40\nobjectivesButtonArea = 157 0 40 40\nmoreButtonArea = 201 0 40 40\nmenuButtonArea = 201 45 40 40\n"
         );
         let (cfg, warnings) = GuiCfg::parse("panel.cfg", &text);
@@ -1317,14 +1323,14 @@ mod button_panel {
     }
 
     #[test]
-    fn the_group_sits_at_the_sheets_top_right_with_its_end_pieces_and_the_buttons_inside_it() {
+    fn the_group_sits_at_the_sheets_top_right_in_the_hud_area_with_its_end_pieces_and_the_buttons_inside_it() {
         let mut app = app_with_content_and_config(content(), placed_config(4.0 / 3.0), UiProfile::Armada2);
         app.update();
         let layout = app.world().resource::<StockState>().layout.clone().unwrap();
         let (pos, size) = group_rect(&mut app);
         let panel = layout.panel("button").unwrap();
         assert_eq!((pos.x, pos.y, size.x, size.y), (panel.x, panel.y, panel.w, panel.h));
-        assert!(pos.x + size.x <= layout.hud.right() && (layout.hud.right() - (pos.x + size.x)).abs() < 20.0, "at the right edge: {pos:?} {size:?}");
+        assert!(pos.x + size.x <= layout.hud.right() && (layout.hud.right() - (pos.x + size.x)).abs() < 20.0, "at the sheet's right edge: {pos:?} {size:?}");
         let pieces = app.world_mut().query_filtered::<&Node, (With<crate::ui::gui_sprites::GuiImage>, Without<buttons::PanelButton>)>().iter(app.world()).count();
         assert!(pieces >= 2, "the two end pieces are drawn");
         // Every button is a child of the group (its area is relative to it).
@@ -1334,27 +1340,54 @@ mod button_panel {
     }
 
     #[test]
-    fn on_a_wide_window_the_whole_group_moves_to_the_window_edge_and_keeps_its_size() {
-        let narrow = {
-            let app = app_with_content_and_config(content(), placed_config(4.0 / 3.0), UiProfile::Armada2);
-            app.world().resource::<StockState>().layout.clone().unwrap().panel("button").unwrap()
-        };
-        for aspect in [16.0_f32 / 9.0, 21.0 / 9.0, 32.0 / 9.0] {
-            let app = app_with_content_and_config(content(), placed_config(aspect), UiProfile::Armada2);
-            let state = app.world().resource::<StockState>();
-            let layout = state.layout.as_ref().unwrap();
-            let r = layout.panel_at_right_edge("button").unwrap();
-            assert_eq!((r.w, r.h, r.y), (narrow.w, narrow.h, narrow.y), "{aspect}: size and height are the sheet's");
-            let margin = 1080.0 * aspect - r.right();
-            assert!((margin - (1600.0 - 1589.0) * layout.scale).abs() <= 1.0, "{aspect}: {margin}");
-            assert!(state.solid.iter().any(|s| s.contains(Vec2::new(r.x + 5.0, r.y + 5.0))), "{aspect}: pointer-solid");
+    fn the_group_is_placed_inside_the_clamped_centred_area_like_every_panel_with_its_pointer_rect_from_the_same_rect() {
+        // ADR 0008 H1/H2: a 4:3 sheet and a 16:9 sheet, four window aspects, the Centred fit.
+        for (canvas_w, area_x) in [(1600, 1323), (2134, 1857)] {
+            for aspect in [4.0_f32 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 32.0 / 9.0] {
+                let mut app = app_with_content_and_config(content(), sheet_config(canvas_w, area_x, aspect), UiProfile::Armada2);
+                let (layout, solid) = {
+                    let state = app.world().resource::<StockState>();
+                    (state.layout.clone().unwrap(), state.solid.clone())
+                };
+                let tag = format!("sheet {canvas_w}, window {aspect}");
+                let r = layout.panel("button").unwrap();
+                // Size and sheet-relative position are the sheet's (to the rounding of whole units).
+                let s = layout.scale;
+                assert!((r.w - 266.0 * s).abs() <= 1.0 && (r.h - 40.0 * s).abs() <= 1.0, "{tag}: size {r:?}");
+                assert!(((r.x - layout.hud.x) - area_x as f32 * s).abs() <= 1.0 && ((r.y - layout.hud.y) - 8.0 * s).abs() <= 1.0, "{tag}: place {r:?}");
+                assert!(r.x >= layout.hud.x && r.right() <= layout.hud.right() && r.y >= layout.hud.y && r.bottom() <= layout.hud.bottom(), "{tag}: inside the HUD area");
+                // Drawn rectangle (the group node) and pointer-solid rectangle are the one placed rect.
+                let (pos, size) = group_rect(&mut app);
+                assert_eq!((pos.x, pos.y, size.x, size.y), (r.x, r.y, r.w, r.h), "{tag}: drawn");
+                assert!(solid.contains(&r), "{tag}: pointer-solid equals the drawn rect");
+                assert!(solid.iter().all(|o| o.x >= layout.hud.x - 0.5 && o.right() <= layout.hud.right() + 0.5), "{tag}: no solid outside the HUD area");
+            }
         }
-        // Stretched covers the window already: nothing moves.
+        // Stretched fills the window: the rect is the sheet's, scaled per axis, and solid.
         let mut cfg = placed_config(21.0 / 9.0);
         cfg.fit = crate::ui::hud::stock::layout::HudFit::Stretched;
         let app = app_with_content_and_config(content(), cfg, UiProfile::Armada2);
+        let state = app.world().resource::<StockState>();
+        let layout = state.layout.as_ref().unwrap();
+        let r = layout.panel("button").unwrap();
+        assert!((r.right() - 1589.0 * layout.scale_x).abs() <= 1.0, "stretched: the sheet's place on the whole window: {r:?}");
+        assert!(state.solid.contains(&r));
+    }
+
+    #[test]
+    fn a_click_on_a_shown_second_row_button_is_pointer_solid_and_a_hidden_one_is_not() {
+        let mut app = app_with_content_and_config(content(), placed_config(4.0 / 3.0), UiProfile::Armada2);
+        app.update();
+        let more = app.world_mut().query::<(Entity, &PanelButton)>().iter(app.world()).find(|(_, p)| **p == PanelButton::More).map(|(e, _)| e).unwrap();
         let layout = app.world().resource::<StockState>().layout.clone().unwrap();
-        assert_eq!(layout.panel_at_right_edge("button"), layout.panel("button"));
+        let panel = layout.panel("button").unwrap();
+        let second = layout.at(Vec2::new(panel.x, panel.y), "menuButtonArea").unwrap();
+        let centre = Vec2::new(second.x + second.w / 2.0, second.y + second.h / 2.0);
+        assert!(!app.world().resource::<StockState>().solid.iter().any(|r| r.contains(centre)), "hidden: the world's");
+        click(app.world_mut(), more);
+        app.update();
+        app.update();
+        assert!(app.world().resource::<StockState>().solid.iter().any(|r| r.contains(centre)), "shown: not the world's");
     }
 
     #[test]
@@ -1363,7 +1396,7 @@ mod button_panel {
             let app = app_with_content_and_config(content(), placed_config(aspect), UiProfile::Armada2);
             let state = app.world().resource::<StockState>();
             let layout = state.layout.as_ref().unwrap();
-            let r = layout.panel_at_right_edge("button").unwrap();
+            let r = layout.panel("button").unwrap();
             let overlaps = |o: R| r.x < o.right() && o.x < r.right() && r.y < o.bottom() && o.y < r.bottom();
             for name in ["resource", "minimap"] {
                 assert!(!layout.panel(name).is_some_and(overlaps), "{aspect}: {name}");
