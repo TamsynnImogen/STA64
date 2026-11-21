@@ -4,51 +4,64 @@
 //! Rules (grades: M measured on the running original, S read from the executable, static, P stated
 //! by a player, I interim: STA64's stand-in until the named item lands):
 //! - Mesh: the install's `select` model through the VFS, so a mod that supplies another shape changes
-//!   the bubble [S, read from data at run time]. Without it an authored ellipsoid is drawn [I].
+//!   the bubble [S, read from data at run time]. It is recentred on the middle of its bounds at load
+//!   (a mod's shape may be off-centre; the draw order below relies on a centred mesh) [STA64's rule].
+//!   Without the model an authored ellipsoid is drawn [I].
 //! - Size: the unit's shield ellipsoid semi-axes, each at least [`MIN_AXIS`], times
 //!   [`FIT`] over the mesh's bounding radius [S]. The ellipsoid is the model box half-extents times
 //!   [`BOX_TO_SHIELD`], centred on the unit [I: until the sim provides the ellipsoid fitted to the
-//!   vertices; whether the minimum applies before or after the model scale is not established].
+//!   vertices; whether the minimum applies before or after the model scale is not established; here
+//!   it applies after, to the already scaled box].
 //! - Pass 1 (inner, scale 1): selected craft, its relation colour times the damage pulse; selected
 //!   non-craft, the team colour times [`DIM`]; hovered only, black. Pass 2 (outer, scale
 //!   [`OUTER_SCALE`]): hovered, the full team colour; else a selected craft, the team colour times
 //!   [`DIM`]; else none [M for craft and the four states, S for non-craft]. Pass 1 and a dimmed pass 2
 //!   take [`PROFILE_FACTOR`]; the full hover colour does not [M].
-//! - Additive, flat, unlit. Pass 1 writes depth even when black, so the shell is hidden inside the
-//!   disc and only the ring shows [M]. Only the far surface behind the hull is drawn (front faces
-//!   culled) and the depth test is strict, so nothing is added over hull pixels [M].
+//! - Additive, flat, unlit. The shell is hidden inside the disc and only the ring shows, and nothing
+//!   is added over hull pixels [M: the outcome]. That pass 1 writes depth, even when black, and that
+//!   only front faces are culled with a strict depth test are the mechanism inferred from that
+//!   outcome, not measured themselves [S for the strict compare].
 //! - Only the inner pass pulses; the ring is steady [M]. The pulse runs on real time, also while the
 //!   game is paused [S: the display tick].
 //! - Follows the unit's rotation (a child of the unit root). Not drawn while a cineractive runs [S].
-//!   Other cameras that see the main scene draw it too; a dedicated main-view layer is not set up [I].
+//!   Drawn by the main camera only: the bubble is on [`OVERLAY_LAYER`] like the other selection
+//!   overlays, so the action camera's window has none [S: main view only].
 //! - Left out, logged as open: the co-player blink, the warp stretch, team 0's colour in a real game.
 //!
-//! Active under the Armada II profile only. Armada I keeps its marker ([`super::marker`]); Fleet
-//! Operations, Roots and the Remaster look keep the team annulus.
+//! Active under the Armada II look ([`super::armada2_look`], the one gate shared with the hover
+//! readout) only. Armada I keeps its marker ([`super::marker`]); Fleet Operations 4 (Roots) and
+//! the Remaster look keep the team annulus. Fleet Operations 3.x runs under the Armada II UI
+//! profile, so it takes the bubble and loses the annulus: not measured there.
 //!
 //! Depth in Bevy: the material draws in the transparent phase, sorted back to front by the mesh
-//! centre. Both passes share the centre, so the inner pass is sorted first by a depth bias on the
-//! outer one, and its pipeline sets depth write on. Opaque hulls, drawn before, have written depth
-//! (also through the depth prepass); other transparent effects that sort after an inner pass are
-//! hidden where they lie behind its far surface, as they are in the original.
+//! centre plus a bias. Both passes share the centre (the mesh is recentred), so the outer pass gets
+//! a bias above the inner one, and the inner pipeline sets depth write on. Opaque hulls, drawn
+//! before, have written depth. A large bias common to both passes ([`SORT_BIAS`]) draws the bubble
+//! after every other transparent item, so a beam or glow passing behind a selected ship is not cut
+//! by the inner pass's depth write. That order is STA64's rule; what the original shows there is
+//! not measured. Between several bubbles the order stays back to front, and a nearer unit's
+//! pixels behind a farther unit's far surface are dropped: not measured either.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use bevy::camera::visibility::RenderLayers;
 use bevy::asset::{AssetPath, RenderAssetUsages, embedded_asset};
 use bevy::mesh::{Indices, MeshVertexBufferLayoutRef};
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, CompareFunction, Face, PrimitiveTopology, RenderPipelineDescriptor, SpecializedMeshPipelineError};
 use bevy::shader::ShaderRef;
+use sta_sim::EntityId;
 use sta_sim::view::Relation;
-use sta_sim::{EntityId, WorldView};
 
-use super::ModelBounds;
+use super::{ModelBounds, armada2_look};
 use crate::app::GameSet;
 use crate::input::hover::HoveredUnit;
+use crate::render::action_camera::OVERLAY_LAYER;
 use crate::render::units::{HullShare, SelectRadius, TeamColour};
 use crate::sim_link::{Selection, SimEntities, SimLink};
 use crate::ui::profile::UiProfile;
+use crate::ui::radar::{Standing, standing};
 use crate::viewer::Mounted;
 
 /// The shield ellipsoid's smallest semi-axis [S].
@@ -64,14 +77,20 @@ pub const DIM: f32 = 0.25;
 /// The pulse's amplitude per unit of missing hull [M].
 pub const PULSE_AMPLITUDE: f32 = 0.2;
 /// The profile's brightness factor: the stock default of a graphics-options slider [S: its label is
-/// not identified; the bench's own setting was a step higher]. Replace when settings carry it.
+/// not identified]. Replace when settings carry it.
 pub const PROFILE_FACTOR: f32 = 0.625;
 /// Relation colours of a selected craft's inner pass [M for enemy and ally, S for neutral].
 pub const ENEMY: Vec3 = Vec3::new(0.7, 0.0, 1.0);
 pub const NEUTRAL: Vec3 = Vec3::new(0.0, 0.7, 1.0);
 pub const ALLY: Vec3 = Vec3::new(0.6, 0.6, 0.6);
-/// Sort bias that puts the outer pass after the inner one (view distance, tiny against any scene).
-const OUTER_SORT_BIAS: f32 = 0.05;
+/// Sort bias common to both passes: far above any view distance of a scene, so the bubble draws after
+/// every other transparent item [STA64's rule; the original's order is not measured].
+const SORT_BIAS: f32 = 100_000.0;
+/// The outer pass's extra bias, so it draws after the inner one. Both centres coincide (the mesh is
+/// recentred), so any positive step works; the f32 spacing at [`SORT_BIAS`] is about 0.008.
+const OUTER_STEP: f32 = 1.0;
+/// The team colour of a unit without one [STA64's stand-in, interim].
+const FALLBACK_TEAM: Vec3 = Vec3::splat(0.9);
 
 /// Which of the two passes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -119,7 +138,7 @@ impl Material for BubbleMaterial {
     }
 
     fn depth_bias(&self) -> f32 {
-        if self.inner { 0.0 } else { OUTER_SORT_BIAS }
+        if self.inner { SORT_BIAS } else { SORT_BIAS + OUTER_STEP }
     }
 
     fn enable_prepass() -> bool {
@@ -168,11 +187,6 @@ impl Plugin for BubblePlugin {
     }
 }
 
-/// Armada II Stock look only.
-pub fn wanted(profile: Option<&UiProfile>) -> bool {
-    profile.is_some_and(|p| *p == UiProfile::Armada2)
-}
-
 // ---------------------------------------------------------------- rules (pure)
 
 /// The shield ellipsoid's semi-axes from the model box [I].
@@ -204,19 +218,12 @@ pub fn relation_colour(r: Relation) -> Vec3 {
     }
 }
 
-/// How `owner`'s units stand to `player`: its own and allied ones ally, other teams enemy, ownerless neutral.
-pub fn relation(view: &WorldView, player: sta_sim::PlayerId, owner: sta_sim::PlayerId) -> Relation {
-    if owner == player {
-        return Relation::Ally;
-    }
-    let Some(me) = view.player(player) else { return Relation::Neutral };
-    if let Some((_, r)) = me.relations.iter().find(|(p, _)| *p == owner) {
-        return *r;
-    }
-    match view.player(owner) {
-        Some(o) if o.team == me.team => Relation::Ally,
-        Some(_) => Relation::Enemy,
-        None => Relation::Neutral,
+/// How `owner`'s units stand to `player`, from the radar's rule: own and allied ally.
+pub fn relation(view: &sta_sim::WorldView, player: sta_sim::PlayerId, owner: sta_sim::PlayerId) -> Relation {
+    match standing(view, player, owner) {
+        Standing::Own | Standing::Ally => Relation::Ally,
+        Standing::Enemy => Relation::Enemy,
+        Standing::Neutral => Relation::Neutral,
     }
 }
 
@@ -261,7 +268,7 @@ pub struct BubbleArt {
 /// The install's bubble model flattened into one triangle list in render space (the legacy Z flip
 /// applied), wound outward whatever the file's winding, with its bounding radius.
 pub fn mesh_from_model(model: &sta_assets::model::Model) -> Option<(Mesh, f32)> {
-    let mut hidden: BTreeSet<usize> = model.coarse_lods().into_iter().collect();
+    let hidden: BTreeSet<usize> = model.coarse_lods().into_iter().collect();
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
     'nodes: for (i, node) in model.nodes.iter().enumerate() {
@@ -288,9 +295,14 @@ pub fn mesh_from_model(model: &sta_assets::model::Model) -> Option<(Mesh, f32)> 
             }
         }
     }
-    hidden.clear();
     if indices.len() < 3 {
         return None;
+    }
+    // Recentre on the middle of the bounds: the draw order of the two passes needs a centred mesh.
+    let (lo, hi) = positions.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), p| (lo.min(Vec3::from(*p)), hi.max(Vec3::from(*p))));
+    let middle = (lo + hi) * 0.5;
+    for p in &mut positions {
+        *p = (Vec3::from(*p) - middle).to_array();
     }
     let radius = positions.iter().map(|p| Vec3::from(*p).length()).fold(0.0, f32::max);
     if !(radius.is_finite() && radius > 0.0) {
@@ -309,7 +321,6 @@ pub fn mesh_from_model(model: &sta_assets::model::Model) -> Option<(Mesh, f32)> 
             t.swap(1, 2);
         }
     }
-    indices.truncate(indices.len() / 3 * 3);
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_indices(Indices::U32(indices));
@@ -322,7 +333,7 @@ fn interim_mesh() -> Mesh {
 }
 
 fn load_art(mut art: ResMut<BubbleArt>, profile: Option<Res<UiProfile>>, mounted: Option<Res<Mounted>>, mut meshes: ResMut<Assets<Mesh>>) {
-    if !wanted(profile.as_deref()) {
+    if !armada2_look(profile.as_deref()) {
         return;
     }
     if art.mesh.is_none() {
@@ -387,7 +398,7 @@ fn sync_bubbles(
     mut existing: Query<(Entity, &Bubble, &MeshMaterial3d<BubbleMaterial>, &mut Mesh3d, &mut Transform)>,
 ) {
     let mut want: BTreeMap<(EntityId, Pass), (Entity, Vec3, Vec3)> = BTreeMap::new(); // root, scale, colour
-    if wanted(profile.as_deref()) && !crate::ui::presentation::cutscene_running(cine) && art.mesh.is_some() {
+    if armada2_look(profile.as_deref()) && !crate::ui::presentation::cutscene_running(cine) && art.mesh.is_some() {
         let dt = time.map_or(0.0, |t| t.delta_secs());
         let hover = hovered.as_ref().and_then(|h| h.0);
         let ids: BTreeSet<EntityId> = selection.0.iter().copied().chain(hover).collect();
@@ -402,7 +413,7 @@ fn sync_bubbles(
             if selected {
                 *phase = (*phase + phase_rate(h) * dt) % std::f32::consts::TAU;
             }
-            let team = team.map_or(Vec3::splat(0.9), |c| {
+            let team = team.map_or(FALLBACK_TEAM, |c| {
                 let c = c.0.to_srgba();
                 Vec3::new(c.red, c.green, c.blue)
             });
@@ -451,6 +462,8 @@ fn sync_bubbles(
         commands.spawn((
             Name::new(if pass == Pass::Inner { "selection bubble" } else { "selection bubble ring" }),
             Bubble { unit: id, pass },
+            // The main camera's overlay layer only: the action camera's window draws none.
+            RenderLayers::layer(OVERLAY_LAYER),
             ChildOf(root),
             Mesh3d(handle.clone()),
             MeshMaterial3d(mats.add(BubbleMaterial { colour: linear(colour), inner: pass == Pass::Inner })),
@@ -524,11 +537,11 @@ mod tests {
 
     #[test]
     fn only_the_armada_two_stock_look_draws_it() {
-        assert!(wanted(Some(&UiProfile::Armada2)));
-        assert!(!wanted(Some(&UiProfile::Armada1)));
-        assert!(!wanted(Some(&UiProfile::FleetOps)));
-        assert!(!wanted(Some(&UiProfile::Lcars)));
-        assert!(!wanted(None));
+        assert!(armada2_look(Some(&UiProfile::Armada2)));
+        assert!(!armada2_look(Some(&UiProfile::Armada1)));
+        assert!(!armada2_look(Some(&UiProfile::FleetOps)));
+        assert!(!armada2_look(Some(&UiProfile::Lcars)));
+        assert!(!armada2_look(None));
     }
 
     #[test]
@@ -561,11 +574,14 @@ mod tests {
             pbr: None,
         };
         let (mesh, radius) = mesh_from_model(&model).expect("a mesh");
-        assert!((radius - 2.0).abs() < 1e-5);
+        // Recentred on the middle of its bounds (x from -1 to 2 here): radius measured from there.
+        assert!((radius - 4.25_f32.sqrt()).abs() < 1e-5, "{radius}");
         let Some(Indices::U32(idx)) = mesh.indices().cloned() else { panic!("indices") };
         let p: Vec<Vec3> = mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap().as_float3().unwrap().iter().map(|v| Vec3::from(*v)).collect();
         let vol: f32 = idx.chunks_exact(3).map(|t| p[t[0] as usize].dot(p[t[1] as usize].cross(p[t[2] as usize]))).sum();
         assert!(vol > 0.0, "outward");
+        let (lo, hi) = p.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), v| (lo.min(*v), hi.max(*v)));
+        assert!(((lo + hi) * 0.5).length() < 1e-5, "the bounds are centred on the origin");
     }
 
     /// Install-gated (`STA64_TEST_A2_INSTALL`, an Armada II root): the bubble model loads from the
@@ -587,7 +603,7 @@ mod tests {
     mod ecs {
         use super::*;
         use sta_sim::command::{Command, LocalRouter};
-        use sta_sim::{ContentKey, Fixed, PlayerId, TickOutput, UnitView, WorldSource};
+        use sta_sim::{ContentKey, Fixed, PlayerId, TickOutput, UnitView, WorldSource, WorldView};
         use bevy::time::TimeUpdateStrategy;
         use std::sync::Arc;
 
@@ -672,6 +688,27 @@ mod tests {
                 app.update();
                 assert!(passes(&mut app).is_empty(), "{other:?} keeps its own markers");
             }
+        }
+
+        #[test]
+        fn the_bubble_is_on_the_overlay_layer_only() {
+            use bevy::camera::visibility::RenderLayers;
+            let (mut app, _) = rig(UiProfile::Armada2);
+            app.world_mut().resource_mut::<Selection>().0 = vec![EntityId(1)];
+            app.update();
+            let mut q = app.world_mut().query::<(&Bubble, &RenderLayers)>();
+            let layers: Vec<_> = q.iter(app.world()).map(|(_, l)| l.clone()).collect();
+            assert_eq!(layers.len(), 2);
+            for l in layers {
+                assert_eq!(l, RenderLayers::layer(OVERLAY_LAYER));
+                assert!(!l.intersects(&RenderLayers::layer(0)), "the action camera (layer 0 only) does not draw it");
+            }
+        }
+
+        #[test]
+        fn the_bubble_draws_after_every_ordinary_transparent_item_and_the_outer_after_the_inner() {
+            let m = |inner| BubbleMaterial { colour: Vec4::ZERO, inner };
+            assert!(m(true).depth_bias() >= SORT_BIAS && m(false).depth_bias() > m(true).depth_bias());
         }
 
         #[test]

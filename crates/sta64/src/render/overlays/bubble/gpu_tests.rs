@@ -102,6 +102,7 @@ fn the_inner_pass_masks_the_ring_and_nothing_is_added_over_the_hull() {
         Camera::default(),
         RenderTarget::from(target.clone()),
         Msaa::Off,
+        bevy::camera::visibility::RenderLayers::from_layers(&[0, crate::render::action_camera::OVERLAY_LAYER]),
         Transform::from_xyz(0.0, 0.0, 180.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cuboid::new(40.0, 24.0, 20.0));
@@ -188,4 +189,30 @@ fn the_inner_pass_masks_the_ring_and_nothing_is_added_over_the_hull() {
     let ring = selected.get_pixel(dr + 2, y);
     assert!(ring[0] > d[0] && ring[0] < 70, "the dim ring: {ring:?} against {d:?}");
     assert!(hover.get_pixel(hr - 2, y)[0] > 180, "the hover ring is white");
+
+    // Ordering against other transparent items: an additive ribbon lying behind the unit's far
+    // surface but sorted nearer than the unit (a material bias stands for a beam's midpoint) is not
+    // cut by the inner pass: inside the disc the frame shows the ribbon and the disc.
+    let ribbon_mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(Rectangle::new(120.0, 8.0));
+    let ribbon_mat = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial {
+        base_color: Color::srgb(0.2, 0.2, 0.2),
+        unlit: true,
+        alpha_mode: AlphaMode::Add,
+        cull_mode: None,
+        depth_bias: 1000.0,
+        ..default()
+    });
+    app.world_mut().spawn((
+        Mesh3d(ribbon_mesh),
+        MeshMaterial3d(ribbon_mat),
+        Transform::from_xyz(0.0, 10.0, -40.0),
+        bevy::camera::visibility::RenderLayers::from_layers(&[0, crate::render::action_camera::OVERLAY_LAYER]),
+    ));
+    let ribbon_only = frame(&mut app, false, false, Color::WHITE);
+    let ribbon_disc = frame(&mut app, true, false, Color::BLACK);
+    let probe = (SIZE.x / 2 + 150, 312);
+    let (r, rd) = (ribbon_only.get_pixel(probe.0, probe.1)[0], ribbon_disc.get_pixel(probe.0, probe.1)[0]);
+    assert!(r > 20, "the ribbon is in the frame: {r}");
+    // Adding in linear light: a display value of about 24 on top of one of about 53 gives about 60.
+    assert!(rd >= r + 4, "the disc and the ribbon add inside the disc: ribbon {r}, both {rd}, disc {}", d[0]);
 }
