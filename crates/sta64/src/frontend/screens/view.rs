@@ -35,7 +35,6 @@ pub enum Act {
     TakeMap,
     /// Launch the selected mod.
     UseMod,
-    ToggleModModules,
     ToggleModNoIntro,
     ToggleModNoAi,
     CreateModShortcut,

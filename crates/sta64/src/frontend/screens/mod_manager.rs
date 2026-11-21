@@ -213,8 +213,6 @@ pub(super) fn spawn(commands: &mut Commands, ctx: &Ctx, camera: Option<Entity>) 
         .map(|why| trf("Cannot launch: {0}", &[why]))
         .or_else(|| selected.map(|m| m.description.clone()))
         .unwrap_or_else(|| tr("Launch the original installation without a mod."));
-    let modules = selected.map(|m| m.modules.clone()).unwrap_or_default();
-    let modules_open = ctx.browse.mod_modules;
     let no_intro = ctx.browse.mod_no_intro;
     let no_ai = ctx.browse.mod_no_ai;
     let scroll = ctx.scroll.offset;
@@ -253,84 +251,40 @@ pub(super) fn spawn(commands: &mut Commands, ctx: &Ctx, camera: Option<Entity>) 
                         ..default()
                     },
                     Children::spawn(SpawnWith(move |p: &mut ChildSpawner| {
-                        if modules_open {
-                            p.spawn((
+                        heading(p, &theme);
+                        p.spawn((
+                            ScrollBox {
+                                selected: Some(picked),
+                                count,
+                                row_h: ROW_H,
+                            },
+                            Node {
+                                width: Val::Percent(100.0),
+                                max_height: Val::Vh(49.0),
+                                overflow: Overflow::scroll_y(),
+                                ..default()
+                            },
+                            ScrollPosition(Vec2::new(0.0, scroll)),
+                        ))
+                        .with_children(|box_| {
+                            box_.spawn((
+                                List {
+                                    selected: Some(picked),
+                                },
+                                ModList,
                                 Node {
                                     width: Val::Percent(100.0),
-                                    max_height: Val::Vh(49.0),
                                     flex_direction: FlexDirection::Column,
-                                    overflow: Overflow::scroll_y(),
+                                    flex_shrink: 0.0,
                                     ..default()
                                 },
-                                ScrollBox {
-                                    selected: None,
-                                    count: modules.len().max(1),
-                                    row_h: ROW_H,
-                                },
-                                ScrollPosition(Vec2::new(0.0, scroll)),
                             ))
                             .with_children(|list| {
-                                if modules.is_empty() {
-                                    list.spawn(text(
-                                        &theme,
-                                        tr("No modules listed"),
-                                        theme.text_dim,
-                                        theme.small_size,
-                                    ));
-                                }
-                                for (name, required) in &modules {
-                                    let line = if *required {
-                                        trf("{0}  ·  Required", &[name])
-                                    } else {
-                                        name.clone()
-                                    };
-                                    list.spawn((
-                                        Node {
-                                            height: Val::Px(ROW_H),
-                                            flex_shrink: 0.0,
-                                            align_items: AlignItems::Center,
-                                            ..default()
-                                        },
-                                        children![text(&theme, line, theme.text, theme.small_size)],
-                                    ));
+                                for (index, value) in rows.iter().enumerate() {
+                                    row(list, &theme, index, value, index == picked);
                                 }
                             });
-                        } else {
-                            heading(p, &theme);
-                            p.spawn((
-                                ScrollBox {
-                                    selected: Some(picked),
-                                    count,
-                                    row_h: ROW_H,
-                                },
-                                Node {
-                                    width: Val::Percent(100.0),
-                                    max_height: Val::Vh(49.0),
-                                    overflow: Overflow::scroll_y(),
-                                    ..default()
-                                },
-                                ScrollPosition(Vec2::new(0.0, scroll)),
-                            ))
-                            .with_children(|box_| {
-                                box_.spawn((
-                                    List {
-                                        selected: Some(picked),
-                                    },
-                                    ModList,
-                                    Node {
-                                        width: Val::Percent(100.0),
-                                        flex_direction: FlexDirection::Column,
-                                        flex_shrink: 0.0,
-                                        ..default()
-                                    },
-                                ))
-                                .with_children(|list| {
-                                    for (index, value) in rows.iter().enumerate() {
-                                        row(list, &theme, index, value, index == picked);
-                                    }
-                                });
-                            });
-                        }
+                        });
                         p.spawn((
                             Node {
                                 max_height: Val::Px(36.0),
@@ -375,18 +329,6 @@ pub(super) fn spawn(commands: &mut Commands, ctx: &Ctx, camera: Option<Entity>) 
                                     180.0,
                                 ),
                                 Act::ToggleModNoAi,
-                            ));
-                            bar.spawn((
-                                button(
-                                    &theme,
-                                    &if modules_open {
-                                        tr("Hide modules")
-                                    } else {
-                                        tr("Modules")
-                                    },
-                                    170.0,
-                                ),
-                                Act::ToggleModModules,
                             ));
                             if blocked {
                                 bar.spawn(disabled_button(&theme, &tr("Launch mod"), 180.0));
