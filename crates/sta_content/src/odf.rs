@@ -289,7 +289,11 @@ fn station_flag(file: &str, odf: &Odf, profile: Profile, warnings: &mut Vec<Warn
 
 /// One profile hand-over for all content-side ODF consumers (ADR 0004 D4/D5).
 pub(crate) fn resolve_for_profile(name: &str, profile: Profile, loader: &mut Loader<'_>) -> std::result::Result<Odf, sta_odf::OdfError> {
-    let policy = if profile == Profile::Sta1Classic { sta_odf::LookupPolicy::PrefixFirst } else { sta_odf::LookupPolicy::Exact };
+    let policy = match profile {
+        Profile::Sta1Classic => sta_odf::LookupPolicy::PrefixFirst,
+        Profile::Sta2Classic => sta_odf::LookupPolicy::ExactFirst,
+        _ => sta_odf::LookupPolicy::Exact,
+    };
     sta_odf::resolve_layered_with_policy(name, policy, loader)
 }
 
