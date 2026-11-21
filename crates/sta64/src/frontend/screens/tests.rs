@@ -18,12 +18,16 @@ use crate::ui::theme::{ButtonClicked, ListItem, Slider, SliderChanged, Toggle, T
 #[derive(Resource, Default)]
 struct Seen {
     start: Vec<GameSetup>,
+    fog: Vec<SetupFog>,
     chosen: Vec<ModChosen>,
     exits: usize,
 }
 
 fn record(mut seen: ResMut<Seen>, mut a: MessageReader<StartGame>, mut b: MessageReader<ModChosen>, mut c: MessageReader<AppExit>) {
-    seen.start.extend(a.read().map(|m| m.0.clone()));
+    for start in a.read() {
+        seen.start.push(start.0.clone());
+        seen.fog.push(start.3);
+    }
     seen.chosen.extend(b.read().cloned());
     seen.exits += c.read().count();
 }
@@ -145,7 +149,7 @@ fn every_screen_is_reached_by_state_and_replaces_the_last() {
     let mut app = app();
     let want: [(Screen, &str, usize); 5] = [
         (Screen::SinglePlayer, "Single player", 6),
-        (Screen::Setup, "Instant action", 2 * 3 + 8),
+        (Screen::Setup, "Instant action", 2 * 3 + 8 + 11),
         (Screen::MapSelect, "Select map", 2),
         (Screen::Settings, "Options", 1),
         (Screen::ModSelect, "Mods", 2),
@@ -221,7 +225,9 @@ fn setup_round_trips_through_a_game_setup() {
     assert_eq!(setup.players[3].team, TeamId(0));
     assert_eq!(setup.players[2].team, TeamId(2));
     assert!(setup.players.iter().all(|p| p.race == "fx"));
-    // And back: the same draft.
+    // The finished setup records the resolved faction for a replay.
+    assert_eq!(d.seats[1].race, data::RANDOM_SIDE);
+    d.seats[1].race.clone_from(&setup.players[1].race);
     assert_eq!(SetupDraft::from_setup(&setup, &data), Some(d));
     // The sim takes it as it is.
     let sim = sta_sim::Sim::from_setup(&setup);
@@ -248,6 +254,60 @@ fn map_rows_count_only_distinct_playable_starts_and_keep_their_ids() {
     assert_eq!(SetupDraft::from_setup(&setup, &data), Some(draft));
 }
 
+#[test]
+fn cancelling_advanced_reverts_edits_and_ok_keeps_them() {
+    use crate::clock::MatchSpeed;
+
+    let mut app = app();
+    go(&mut app, Screen::Setup);
+    press(&mut app, Act::Goto(Screen::Advanced));
+    press(&mut app, Act::CycleResources);
+    press(&mut app, Act::CycleMatchSpeed);
+    press(&mut app, Act::CloseAdvanced(false));
+    assert_eq!(screen(&app), Screen::Setup);
+    assert_eq!(draft(&app).options.starting_resources, StartingResources::Normal);
+    assert_eq!(draft(&app).speed, MatchSpeed::Normal);
+
+    press(&mut app, Act::Goto(Screen::Advanced));
+    press(&mut app, Act::CycleResources);
+    press(&mut app, Act::CycleMatchSpeed);
+    press(&mut app, Act::CloseAdvanced(true));
+    assert_eq!(screen(&app), Screen::Setup);
+    assert_eq!(draft(&app).options.starting_resources, StartingResources::Lots);
+    assert_eq!(draft(&app).speed, MatchSpeed::Fast);
+}
+
+#[test]
+fn authored_preview_refreshes_on_remount() {
+    use super::preview::AuthoredPreview;
+    use crate::viewer::Mounted;
+
+    let root = a2_install();
+    let bzn = root.join("Data/bzn");
+    std::fs::create_dir_all(&bzn).unwrap();
+    let data = ScreenData::fake();
+    let stem = &data.maps[0].def.name;
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([80, 140, 220, 255])).save(bzn.join(format!("{stem}.png"))).unwrap();
+    let mut app = app_with_data(data);
+    app.init_resource::<Assets<Image>>();
+    app.insert_resource(Mounted(sta_vfs::Vfs::mount_install(&root, None).unwrap()));
+    app.world_mut().resource_mut::<ScreensConfig>().layout = stock::ScreenLayout::Stock;
+    go(&mut app, Screen::Setup);
+    let shows_art = |app: &mut App| {
+        let world = app.world_mut();
+        world.query_filtered::<Option<&ImageNode>, With<AuthoredPreview>>().single(world).unwrap().is_some()
+    };
+    assert!(shows_art(&mut app));
+    go(&mut app, Screen::Main);
+    let fallback = a2_install();
+    app.insert_resource(Mounted(sta_vfs::Vfs::mount_install(&fallback, None).unwrap()));
+    settle(&mut app);
+    go(&mut app, Screen::Setup);
+    assert!(!shows_art(&mut app));
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::remove_dir_all(&fallback).unwrap();
+}
+
 fn race(name: &str, slot: Option<i64>) -> RaceDef {
     RaceDef {
         stem: name.into(), name: name.into(), display_key: None, slot, interface: None, interface_sprites: None,
@@ -271,7 +331,7 @@ fn starting_choices_follow_authored_rows_into_launch_and_round_trip() {
     let mut app = app_with_data(data);
     go(&mut app, Screen::Setup);
     assert!(has_text(&mut app, "Resources: Normal"));
-    assert!(has_text(&mut app, "ol_normal: 600"));
+    assert!(!has_text(&mut app, "Officer Limit: Normal (600)"));
     assert_eq!(
         draft(&app).options.starting_resources,
         StartingResources::Normal
@@ -279,15 +339,18 @@ fn starting_choices_follow_authored_rows_into_launch_and_round_trip() {
     assert_eq!(draft(&app).options.officer_limit, 0);
     press(&mut app, Act::CycleResources);
     assert!(has_text(&mut app, "Resources: Lots"));
+    press(&mut app, Act::Goto(Screen::Advanced));
+    assert!(has_text(&mut app, "Officer Limit: Normal (600)"));
     for (index, caption) in [
-        (1, "ol_restricted: 300"),
-        (2, "ol_more: 800"),
-        (3, "ol_max: 999"),
+        (1, "Officer Limit: Restricted (300)"),
+        (2, "Officer Limit: More (800)"),
+        (3, "Officer Limit: Max (999)"),
     ] {
         press(&mut app, Act::CycleOfficerLimit);
         assert_eq!(draft(&app).options.officer_limit, index);
         assert!(has_text(&mut app, caption), "missing {caption}");
     }
+    press(&mut app, Act::CloseAdvanced(true));
     press(&mut app, Act::Launch);
     let sent = started(&mut app);
     assert_eq!(sent.len(), 1);
@@ -297,8 +360,10 @@ fn starting_choices_follow_authored_rows_into_launch_and_round_trip() {
         SetupDraft::from_setup(&sent[0], app.world().resource::<ScreenData>()),
         Some(draft(&app))
     );
+    press(&mut app, Act::Goto(Screen::Advanced));
     press(&mut app, Act::CycleOfficerLimit);
     assert_eq!(draft(&app).options.officer_limit, 0);
+    press(&mut app, Act::CloseAdvanced(true));
     press(&mut app, Act::CycleResources);
     assert_eq!(
         draft(&app).options.starting_resources,
@@ -316,12 +381,12 @@ fn custom_officer_order_and_zero_are_preserved_and_mount_change_resets_choice() 
     "#,
     );
     let mut app = app_with_data(data);
-    go(&mut app, Screen::Setup);
-    assert!(has_text(&mut app, "unusual: 17"));
+    go(&mut app, Screen::Advanced);
+    assert!(has_text(&mut app, "unusual (17)"));
     press(&mut app, Act::CycleOfficerLimit);
-    assert!(has_text(&mut app, "none: 0"));
+    assert!(has_text(&mut app, "none (0)"));
     press(&mut app, Act::CycleOfficerLimit);
-    assert!(has_text(&mut app, "ol_normal: 600"));
+    assert!(has_text(&mut app, "Officer Limit: Normal (600)"));
     // Map changes retain an authored choice while the same mount stays active.
     let mounted = app.world().resource::<ScreenData>().clone();
     app.world_mut()
@@ -340,7 +405,7 @@ fn custom_officer_order_and_zero_are_preserved_and_mount_change_resets_choice() 
     );
     settle(&mut app);
     assert_eq!(draft(&app).options.officer_limit, 0);
-    assert!(has_text(&mut app, "only: 0"));
+    assert!(has_text(&mut app, "only (0)"));
 }
 
 #[test]
@@ -359,8 +424,78 @@ fn race_picker_uses_catalogue_slots_even_without_start_units() {
     draft.cycle_race(&data, 0);
     assert_eq!(draft.seats[0].race, "later");
     draft.cycle_race(&data, 0);
+    assert_eq!(draft.seats[0].race, data::RANDOM_SIDE);
+    let random = &draft.to_setup(&data).unwrap().players[0].race;
+    assert!(data.races().contains(random));
+    assert_eq!(*random, draft.to_setup(&data).unwrap().players[0].race);
+    draft.cycle_race(&data, 0);
     assert_eq!(draft.seats[0].race, "zero");
     assert_eq!(draft.to_setup(&data).unwrap().players[0].race, "zero");
+}
+
+#[test]
+fn placement_keeps_colour_and_teams_with_roster_rows() {
+    let data = ScreenData::fake();
+    let mut draft = SetupDraft::new(&data);
+    draft.set_map(&data, 1);
+    draft.pick_colour(&data, 2);
+    let fixed = draft.to_setup(&data).unwrap();
+    let fixed_colours = draft.effective_colours(&data);
+    draft.toggle_placement();
+
+    let shuffled = (1..10)
+        .find_map(|seed| {
+            draft.seed = seed;
+            let setup = draft.to_setup(&data).unwrap();
+            (setup.players[0].team != fixed.players[0].team).then_some(setup)
+        })
+        .expect("a seeded shuffle moves the initial occupant");
+    assert_eq!(draft.to_setup(&data).unwrap().players, shuffled.players);
+    let shuffled_colours = draft.launch_colours(&data).unwrap();
+    for before in &fixed.players {
+        let after = shuffled.players.iter().find(|player| player.team == before.team).unwrap();
+        assert_eq!(after.control, before.control);
+        assert_eq!(after.race, before.race);
+        assert_eq!(shuffled_colours.owner_colour(after.id), fixed_colours.owner_colour(before.id));
+    }
+}
+
+#[test]
+fn fog_choice_carries_into_launch_and_defaults_restore_settings() {
+    let mut app = app();
+    go(&mut app, Screen::Setup);
+    press(&mut app, Act::CycleFog);
+    press(&mut app, Act::ToggleRandomPlacement);
+    assert_eq!(draft(&app).fog, SetupFog::FogOnly);
+    assert!(draft(&app).random_placement);
+    press(&mut app, Act::Launch);
+    assert_eq!(app.world().resource::<Seen>().fog, [SetupFog::FogOnly]);
+    press(&mut app, Act::DefaultOptions);
+    assert_eq!(draft(&app).fog, SetupFog::Both);
+    assert!(!draft(&app).random_placement);
+}
+
+#[test]
+fn start_markers_follow_the_local_slot_alliances_and_placement_mode() {
+    use super::data::SetupStartMarkers;
+    let data = ScreenData::fake();
+    let mut draft = SetupDraft::new(&data);
+    draft.set_map(&data, 1);
+    draft.seats[1].team = draft.seats[0].team;
+    draft.select_control(3, SeatControl::Idle);
+    let markers = |draft: &SetupDraft| (0..4).filter(|&row| draft.show_start_marker(row)).collect::<Vec<_>>();
+
+    assert_eq!(markers(&draft), [0, 1, 2, 3]);
+    draft.cycle_start_markers();
+    assert_eq!(markers(&draft), [0, 3]);
+    draft.cycle_start_markers();
+    assert_eq!(markers(&draft), [0, 1, 3]);
+    draft.set_observing(true);
+    assert_eq!(markers(&draft), [3]);
+    draft.toggle_placement();
+    draft.cycle_start_markers();
+    assert_eq!(draft.start_markers, SetupStartMarkers::None);
+    assert!(markers(&draft).is_empty());
 }
 
 #[test]
