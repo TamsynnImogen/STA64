@@ -46,6 +46,8 @@ pub enum Screen {
     SinglePlayer,
     /// Game setup, as Instant Action opens it.
     Setup,
+    /// Instant Action match options.
+    Advanced,
     MapSelect,
     Settings,
     ModSelect,
@@ -111,7 +113,7 @@ pub enum Col {
 /// Launch was pressed: start a match from this setup. INT-M4 connects it to
 /// INT-M3's match start (loading screen, then `AppState::InGame`).
 #[derive(Message, Debug, Clone)]
-pub struct StartGame(pub GameSetup);
+pub struct StartGame(pub GameSetup, pub crate::clock::MatchSpeed);
 
 /// Use mod was pressed: `Some(folder)` for a mod, `None` for the base game.
 /// The host remounts the install with it (`Vfs::mount_install`'s `active_mod`).
@@ -273,6 +275,14 @@ fn on_keys(
     mut scroll: ResMut<ListScroll>,
     mut clicks: MessageWriter<ButtonClicked>,
 ) {
+    if *screen.get() == Screen::Advanced {
+        if keys.just_pressed(KeyCode::Escape)
+            && let Some((e, _)) = acts.iter().find(|(_, act)| **act == Act::Goto(Screen::Setup))
+        {
+            clicks.write(ButtonClicked(e));
+        }
+        return;
+    }
     let (take, back) = match screen.get() {
         Screen::MapSelect => (Act::TakeMap, Act::Goto(Screen::Setup)),
         Screen::ModSelect => (Act::UseMod, Act::Goto(Screen::Main)),
@@ -414,9 +424,15 @@ fn on_buttons(
             Act::Cycle(row, Col::Team) => draft.cycle_team(row),
             Act::CycleResources => draft.cycle_resources(),
             Act::CycleOfficerLimit => draft.cycle_officer_limit(&data),
+            Act::CycleMatchSpeed => draft.speed = draft.speed.next(),
+            Act::SetObserving(observing) => draft.set_observing(observing),
+            Act::DefaultOptions => {
+                draft.options = Default::default();
+                draft.speed = crate::clock::MatchSpeed::Normal;
+            }
             Act::Launch => {
                 if let Some(setup) = draft.to_setup(&data) {
-                    start.write(StartGame(setup));
+                    start.write(StartGame(setup, draft.speed));
                 }
             }
             Act::Exit => {
