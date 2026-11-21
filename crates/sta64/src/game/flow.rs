@@ -206,8 +206,7 @@ fn on_start(
     mut notices: MessageWriter<Notice>,
     net: Option<Res<super::net_match::NetStart>>,
     mounted_palette: Option<Res<TeamColours>>,
-    info: Option<ResMut<LoadInfo>>,
-    progress: Option<ResMut<LoadProgress>>,
+    (info, progress): (Option<ResMut<LoadInfo>>, Option<ResMut<LoadProgress>>),
 ) {
     let Some(StartGame(setup, speed, palette, fog)) = starts.read().last().cloned() else { return };
     let local = match net.as_ref().and_then(|start| start.0.as_ref()) {
@@ -320,8 +319,7 @@ fn clear_match(
     mut commands: Commands,
     selection: Option<ResMut<Selection>>,
     queue: Option<ResMut<CommandQueue>>,
-    seat: Option<ResMut<MapSeat>>,
-    progress: Option<ResMut<LoadProgress>>,
+    (seat, progress): (Option<ResMut<MapSeat>>, Option<ResMut<LoadProgress>>),
     mut leave: ResMut<Messages<LeaveMatch>>,
     entities: Option<ResMut<crate::sim_link::SimEntities>>,
     palette: Option<Res<MatchPaletteBackup>>,
