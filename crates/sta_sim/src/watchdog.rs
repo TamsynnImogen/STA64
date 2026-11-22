@@ -112,7 +112,7 @@ impl Sim {
         let ids: Vec<EntityId> = self.units.iter().map(|u| u.id).collect();
         for id in ids {
             let Some(u) = self.units.get(id) else { continue };
-            let watched = u.kind == EntityKind::Craft && u.mobile() && u.stats.max_speed > crate::speed_override::HELD_SPEED && !self.production.is_welding(id) && !self.production.is_deploying(id);
+            let watched = (u.kind == EntityKind::Craft || u.mobile_station) && u.mobile() && u.stats.max_speed > crate::speed_override::HELD_SPEED && !self.production.is_welding(id) && !self.production.is_deploying(id);
             let Some(target) = u.target.filter(|_| watched) else {
                 self.watchdog.remove(id);
                 continue;

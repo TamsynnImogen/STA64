@@ -13,6 +13,16 @@ pub struct ProductionView {
     pub builder: EntityId,
     pub jobs: Vec<ProductionJobView>,
     pub site: Option<ConstructionSiteView>,
+    /// A yard's aperture during the interval between build and release.
+    pub portal: Option<LaunchPortalView>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LaunchPortalView {
+    pub def: ContentKey,
+    pub pos: Vec3,
+    pub heading: (Fixed, Fixed),
+    pub open: Fixed,
 }
 
 /// Only a paid, started head is an actual in-yard hull.
@@ -59,9 +69,16 @@ impl Production {
             if jobs.is_empty() {
                 continue;
             }
+            let launch = db.unit(unit.def).and_then(|builder| db.launch_wormhole(builder).map(|gate| (builder, gate)));
+            let portal = launch.and_then(|(builder, gate)| {
+                let head = queue.first().filter(|job| job.started)?;
+                let elapsed = head.done.checked_sub(ticks_of(db, head.def))?;
+                let out = launch::through_wormhole(builder, unit.pos, unit.heading);
+                Some(LaunchPortalView { def: gate.key, pos: out.pos, heading: out.heading, open: progress(elapsed, gate.wormhole_open_ticks()) })
+            });
             let site = jobs
                 .first()
-                .filter(|job| job.started && job.paid)
+                .filter(|job| job.started && job.paid && launch.is_none())
                 .map(|job| {
                     let (pos, heading) =
                         db.unit(unit.def).map_or((unit.pos, unit.heading), |def| {
@@ -84,6 +101,7 @@ impl Production {
                     builder,
                     jobs,
                     site,
+                    portal,
                 },
             );
         }
@@ -115,6 +133,7 @@ impl Production {
                         heading,
                         entity: None,
                     }),
+                    portal: None,
                 },
             );
         }
@@ -138,6 +157,7 @@ impl Production {
                         heading: unit.heading,
                         entity: Some(id),
                     }),
+                    portal: None,
                 },
             );
         }

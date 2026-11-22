@@ -380,7 +380,7 @@ impl Sim {
         let movers: Vec<EntityId> = self
             .units
             .iter()
-            .filter(|u| u.kind == EntityKind::Craft && u.mobile() && u.target.is_some())
+            .filter(|u| (u.kind == EntityKind::Craft || u.mobile_station) && u.mobile() && u.target.is_some())
             .map(|u| u.id)
             .collect();
         let mut held = Vec::new();

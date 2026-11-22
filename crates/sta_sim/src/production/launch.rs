@@ -60,6 +60,17 @@ pub(super) fn place(builder: &UnitDef, pos: Vec3, heading: (Fixed, Fixed)) -> La
     }
 }
 
+/// A portal occupies the full build hardpoint, including its height.
+pub(super) fn through_wormhole(builder: &UnitDef, pos: Vec3, heading: (Fixed, Fixed)) -> Launch {
+    let mut out = place(builder, pos, heading);
+    let height = builder.launch.as_ref().map_or(Fixed::ZERO, |p| p.height);
+    out.pos.y = out.pos.y + height;
+    if let Some(exit) = &mut out.exit {
+        exit.y = exit.y + height;
+    }
+    out
+}
+
 /// Armada II's default rally uses the construction matrix's horizontal forward
 /// axis and the station's bounding sphere (read from the executable, static).
 /// If the point would cross an edge, reverse that axis and try the same offset.
@@ -118,6 +129,7 @@ mod tests {
         let mut d = UnitDef::new("y", "shipyard");
         d.launch = Some(LaunchPoint {
             offset: (n(10), n(0)),
+            height: Fixed::ZERO,
             dir: (n(0), n(1)),
             clear: n(100),
             node: Some("hp99".into()),

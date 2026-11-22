@@ -257,6 +257,12 @@ impl ContentDb {
         }
     }
 
+    /// The aperture ODF named by a yard, resolved through the mounted data.
+    pub fn launch_wormhole(&self, builder: &UnitDef) -> Option<&UnitDef> {
+        let name = crate::odf::stem(builder.raw.str("wormhole")?);
+        self.key(&name).and_then(|key| self.unit(key)).filter(|unit| unit.class.0 == "wormhole_obj")
+    }
+
     pub fn weapon(&self, k: ContentKey) -> Option<&WeaponDef> {
         match self.defs.get(k.0 as usize) {
             Some((_, Def::Weapon(w))) => Some(w),
@@ -598,6 +604,14 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // Peers using the old constructor behavior would diverge on Evolution.
     if u.is_evolver() {
         c.flag("evolves_in_place", true);
+    }
+    if u.allows_station_motion() {
+        c.flag("ship_motion", true);
+    }
+    if let Some(gate) = db.launch_wormhole(u) {
+        c.text("launch_wormhole", &gate.odf)
+            .int("wormhole_open_ticks", gate.wormhole_open_ticks())
+            .fixed("launch_height", u.launch.as_ref().map_or(Fixed::ZERO, |point| point.height));
     }
     // SIM-70: absent authored flags keep the prior digest; explicit false is
     // distinct from absence because it excludes a station from recrewing.

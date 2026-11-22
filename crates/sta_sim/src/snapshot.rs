@@ -394,6 +394,7 @@ impl EntityRec {
             .ok_or_else(|| SnapshotError::Corrupt(format!("entity kind {}", self.kind)))?;
         let s = self.stats;
         Ok(Entity {
+            mobile_station: false,
             id: self.id,
             kind,
             def: self.def,
@@ -623,6 +624,7 @@ impl Sim {
             for id in ids {
                 let Some(unit) = units.get_mut(id) else { continue };
                 if let Some(def) = db.unit(unit.def) {
+                    unit.mobile_station = unit.kind == EntityKind::Station && def.allows_station_motion();
                     unit.stats.warp_speed = def.movement.warp_speed;
                     unit.stats.too_close_for_warp = def.movement.too_close_for_warp;
                     unit.stats.heading_close_for_warp = def.movement.heading_close_for_warp;
@@ -699,7 +701,7 @@ impl Sim {
             return Err(SnapshotError::Corrupt("order watch row from the future".into()));
         }
         let watchdog = crate::watchdog::Watchdog::from_rec(watch_rows).ok_or_else(|| corrupt("order watch rows"))?;
-        if watchdog.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
+        if watchdog.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft && !u.mobile_station)) {
             return Err(SnapshotError::Corrupt("order watch entity is not a craft".into()));
         }
         let scripted = crate::orders::Scripted::from_rows(scripted_rows).ok_or_else(|| corrupt("scripted order rows"))?;

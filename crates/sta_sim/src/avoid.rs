@@ -168,7 +168,7 @@ impl Sim {
         let mut held = Vec::new();
         let mut blocked = Vec::new();
         for (u, &ur) in self.units.iter_mut().zip(&radii) {
-            if !u.mobile() || u.kind != EntityKind::Craft {
+            if !u.mobile() || (u.kind != EntityKind::Craft && !u.mobile_station) {
                 continue;
             }
             let Some(real) = u.target else { continue };

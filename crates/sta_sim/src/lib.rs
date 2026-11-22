@@ -363,7 +363,10 @@ impl Sim {
                     self.weapons.stop_attack(&self.units, c.player, &unlocked);
                     self.economy.cancel(&self.units, c.player, &unlocked);
                     if let Some(db) = self.content.clone() {
-                        self.production.cancel(&db, &self.units, &mut self.economy, c.player, &unlocked);
+                        let cancel: Vec<_> = unlocked.iter().copied()
+                            .filter(|&id| !self.units.get(id).is_some_and(|u| u.mobile_station))
+                            .collect();
+                        self.production.cancel(&db, &self.units, &mut self.economy, c.player, &cancel);
                     }
                 }
                 let taken = self.apply_movement(c.player, &Order::Move { units: unlocked.clone(), to: *to, queue: *queue });
@@ -573,14 +576,17 @@ impl Sim {
             self.economy.step_passive(&self.units, db, &self.players, &self.ai_seats, self.tick);
             self.economy.step_crew(&self.units, db, &self.attrs, self.tick, &colony_crew);
             let from = self.events.len();
-            let evolved = self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement, self.bounds);
+            let completed = self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement, self.bounds);
             self.inherit_builder_races(from);
             self.inherit_builder_alert(from);
             let built: Vec<EntityId> = self.events[from..].iter().filter_map(|e| match e { SimEvent::Spawned { id } => Some(*id), _ => None }).collect();
             for id in built {
                 self.default_autonomy(id);
             }
-            for (embryo, product) in evolved {
+            for (unit, rally) in completed.gate_rallies {
+                self.movement.set_waypoints(unit, vec![rally]);
+            }
+            for (embryo, product) in completed.evolved {
                 self.autonomy.copy_to(embryo, product);
                 if self.units.get(product).is_some_and(|unit| unit.kind == world::EntityKind::Craft) {
                     self.weapons.retarget_replacement_shots(embryo, product);

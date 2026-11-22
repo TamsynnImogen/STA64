@@ -353,13 +353,19 @@ fn read_events(
     mut cons: ResMut<Construction>,
 ) {
     let mut immediately_started = None;
+    let uses_wormhole = |builder| {
+        let Some(db) = content.as_deref() else { return false };
+        link.curr().unit(builder).and_then(|unit| db.0.unit(unit.def))
+            .is_some_and(|def| db.0.launch_wormhole(def).is_some())
+    };
     for SimMsg(ev) in msgs.read() {
         match ev {
             SimEvent::BuildStarted { builder, what } => {
-                if link.curr().unit(*builder)
+                if uses_wormhole(*builder) || link.curr().unit(*builder)
                     .and_then(|unit| content.as_ref()?.0.unit(unit.def))
                     .is_some_and(sta_content::UnitDef::is_evolver)
                 {
+                    immediately_started = None;
                     continue;
                 }
                 cons.pending.push((*builder, *what));
@@ -386,6 +392,9 @@ fn read_events(
             SimEvent::Built { builder, id } => {
                 immediately_started = None;
                 cons.pending.retain(|(b, _)| b != builder);
+                if uses_wormhole(*builder) {
+                    continue;
+                }
                 if let Some(at) = point(&link, *id, clock.alpha()) {
                     cmds.spawn(fx(
                         SpecialKind::BuiltFlash,

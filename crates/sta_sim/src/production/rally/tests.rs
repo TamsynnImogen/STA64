@@ -162,6 +162,7 @@ fn a2_default_rally_uses_the_yards_launch_axis_until_overridden() {
             def.radius = Fixed::from_int(100);
             def.launch = Some(sta_content::LaunchPoint {
                 offset: (Fixed::ZERO, Fixed::ZERO),
+                height: Fixed::ZERO,
                 dir: (Fixed::ONE, Fixed::ZERO),
                 clear: def.radius,
                 node: Some("build".into()),

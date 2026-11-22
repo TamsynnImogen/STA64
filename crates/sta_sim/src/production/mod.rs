@@ -11,6 +11,8 @@
 //!     when its def has none), then [`SimEvent::Built`] and `Spawned`; the
 //!     next item starts
 //!     in that same tick.
+//!     A yard with a resolved `wormhole` opens that aperture after the build
+//!     timer and releases the ship at its build hardpoint after opening.
 //!   - A **craft** (construction rig) needs `at: Some(site)`. It steers there;
 //!     within [`deploy_reach`] of the site (the rig's slow-turn orbit plus a margin, from its ODF movement stats) it deploys: the
 //!     station entity appears at the site (`progress` 0,
@@ -141,6 +143,12 @@ pub struct Production {
     deploys: Table<Deploy>,
     /// By the station being welded.
     welds: Table<Weld>,
+}
+
+#[derive(Default)]
+pub(crate) struct Completions {
+    pub evolved: Vec<(EntityId, EntityId)>,
+    pub gate_rallies: Vec<(EntityId, Vec3)>,
 }
 
 /// `(def, owner, done, started, paid)`.
@@ -553,10 +561,10 @@ impl Production {
         events: &mut Vec<SimEvent>,
         confinement: &mut crate::boundary::state::Confinement,
         bounds: Option<(sta_core::Vec3, sta_core::Vec3)>,
-    ) -> Vec<(EntityId, EntityId)> {
-        let mut evolved = Vec::new();
+    ) -> Completions {
+        let mut completed = Completions::default();
         if self.is_empty() {
-            return evolved;
+            return completed;
         }
         self.rallies.prune(units);
         let mut newly_finished = Vec::new();
@@ -596,35 +604,47 @@ impl Production {
             let (pos, heading, yard_def) = (y.pos, y.heading, y.def);
             let builder = db.unit(yard_def);
             let evolves = builder.is_some_and(sta_content::UnitDef::is_evolver);
+            let portal = builder.and_then(|d| db.launch_wormhole(d));
             let q = self.queues.get_mut(yard).expect("listed");
             if let Some(head) = q.first_mut()
                 && head.started
             {
-                head.done += 1;
-                if head.done >= ticks_of(db, head.def) {
+                head.done = head.done.saturating_add(1);
+                let delay = portal.map_or(0, sta_content::UnitDef::wormhole_open_ticks);
+                if head.done >= ticks_of(db, head.def).saturating_add(delay) {
                     let Item { def, owner, .. } = q.remove(0);
                     if let Some(d) = db.unit(def) {
                         // SIM-16: out of the builder's launch hardpoint.
                         let out = match builder {
+                            Some(b) if portal.is_some() => launch::through_wormhole(b, pos, heading),
                             Some(b) if !evolves => launch::place(b, pos, heading),
                             _ => launch::Launch { pos, heading, exit: None },
                         };
                         let mut unit = Entity::from_def(d, db.features(), owner, out.pos, out.heading);
+                        let mut follow = None;
                         if unit.orderable() && !evolves {
-                            unit.target = self.rallies.destination(yard, owner, units).or_else(|| {
+                            let rally = self.rallies.destination(yard, owner, units).or_else(|| {
                                 let a2 = matches!(db.profile(), sta_content::Profile::Sta2Classic | sta_content::Profile::Fo3 | sta_content::Profile::Fo4);
                                 builder.filter(|_| a2)
                                     .and_then(|b| launch::default_rally(b, pos, out.heading, bounds))
-                                    .or(out.exit)
                             });
+                            if let Some(exit) = out.exit.filter(|_| portal.is_some()) {
+                                unit.target = Some(exit);
+                                follow = rally.filter(|&rally| rally != exit);
+                            } else {
+                                unit.target = rally.or(out.exit);
+                            }
                         }
                         let id = units.spawn(unit);
+                        if let Some(rally) = follow {
+                            completed.gate_rallies.push((id, rally));
+                        }
                         confinement.initialize(units.get_mut(id).expect("spawned"));
                         events.push(SimEvent::Built { builder: yard, id });
                         events.push(SimEvent::Spawned { id });
                         newly_finished.push(id);
                         if evolves {
-                            evolved.push((yard, id));
+                            completed.evolved.push((yard, id));
                         }
                     }
                 }
@@ -729,7 +749,7 @@ impl Production {
             });
             events.push(SimEvent::Spawned { id });
         }
-        evolved
+        completed
     }
 
     pub(crate) fn hash_into(&self, h: &mut Fnv) {
