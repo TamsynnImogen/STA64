@@ -1433,6 +1433,38 @@ mod button_panel {
         assert!(app.world().resource::<StockState>().solid.iter().any(|r| r.contains(centre)), "shown: not the world's");
     }
 
+    /// The solid rectangles with the second row open or closed, and the points of the gap between the rows
+    /// and of the empty part of the second row, for a profile.
+    fn gap_probe(profile: UiProfile, open: bool) -> (bool, bool) {
+        let mut app = app_with_content_and_config(content(), placed_config(4.0 / 3.0), profile);
+        app.update();
+        if open {
+            let more = app.world_mut().query::<(Entity, &PanelButton)>().iter(app.world()).find(|(_, p)| **p == PanelButton::More).map(|(e, _)| e).unwrap();
+            click(app.world_mut(), more);
+            app.update();
+            app.update();
+        }
+        let state = app.world().resource::<StockState>();
+        let layout = state.layout.as_ref().unwrap();
+        let panel = layout.panel("button").unwrap();
+        let second = layout.at(Vec2::new(panel.x, panel.y), "menuButtonArea").unwrap();
+        let hit = |p: Vec2| state.solid.iter().any(|r| r.contains(p));
+        // Between the rows (below the panel, above the second row) and left of the second row's buttons.
+        (hit(Vec2::new(panel.x + panel.w / 2.0, panel.bottom() + 1.0)), hit(Vec2::new(panel.x + 10.0, second.y + 5.0)))
+    }
+
+    #[test]
+    fn in_the_armada_ii_look_one_pointer_rect_covers_both_rows_while_the_second_row_is_open() {
+        assert_eq!(gap_probe(UiProfile::Armada2, true), (true, true), "open: the gap and the empty part are the HUD's");
+        assert_eq!(gap_probe(UiProfile::Armada2, false), (false, false), "closed: the first row's area only");
+    }
+
+    #[test]
+    fn the_fleet_operations_look_keeps_the_buttons_own_areas_while_the_second_row_is_open() {
+        assert_eq!(gap_probe(UiProfile::FleetOps, true), (false, false));
+        assert_eq!(gap_probe(UiProfile::FleetOps, false), (false, false));
+    }
+
     #[test]
     fn the_group_overlaps_no_other_stock_panel_at_any_width() {
         for aspect in [1.0_f32, 5.0 / 4.0, 4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0] {
