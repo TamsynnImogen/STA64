@@ -63,6 +63,7 @@ pub use race::{
 };
 pub use map::{field_radius, nebula_radius};
 pub use repair_geometry::RepairAttachment;
+pub use def::ResearchSlot;
 pub use resources::ResourceModel;
 pub use rules::{ApproachRules, AutonomyRules, CfgRules, CrewRules, FieldCfg, LegacyStart, OfficerLimit, PathingRules, PopulationRules, Rules, ShotCfg, TransporterRules, TYPED_CFG_KEYS};
 pub use digest::{ContentDigest, DigestEntry, EntryDiff};

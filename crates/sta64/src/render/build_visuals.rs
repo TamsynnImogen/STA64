@@ -74,6 +74,17 @@ struct Wanted {
     pos: Vec3,
     heading: Vec2,
     progress: f32,
+    research_axes: Option<[sta_sim::Vec3; 3]>,
+}
+
+impl Wanted {
+    fn transform(&self) -> Transform {
+        let mut transform = pose(self.pos, self.heading);
+        if let Some(axes) = self.research_axes {
+            transform.rotation = super::units::research_rotation(axes);
+        }
+        transform
+    }
 }
 
 /// Register after units' view systems; the caller also registers the module.
@@ -203,8 +214,11 @@ fn wanted(link: &SimLink, content: &ContentRes, local: &LocalPlayer) -> Vec<Want
         };
         let Some(builder) = curr.unit(row.builder) else { continue };
         let evolves = content.0.unit(builder.def).is_some_and(sta_content::UnitDef::is_evolver);
+        let research_axes = row.research.as_ref().and_then(|research| research.active_axes);
         let kind = if evolves && job.started && job.paid {
             Some(Kind::Cocoon)
+        } else if research_axes.is_some() {
+            Some(Kind::Ship)
         } else {
             classify(EntityKind::of_def(def), job.paid, job.started, site.entity.is_some())
         };
@@ -230,6 +244,7 @@ fn wanted(link: &SimLink, content: &ContentRes, local: &LocalPlayer) -> Vec<Want
             pos: to_bevy(site.pos.to_f32()),
             heading: Vec2::new(site.heading.0.to_f32(), site.heading.1.to_f32()),
             progress: job.progress.to_f32().clamp(0.0, 1.0),
+            research_axes,
         });
     }
     out
@@ -309,7 +324,7 @@ fn sync_build_visuals(
             continue;
         }
         let Some(next) = next else { continue };
-        *transform = pose(next.pos, next.heading);
+        *transform = next.transform();
         if let Some(mut preview) = preview {
             preview.0 = next.progress;
         }
@@ -332,7 +347,7 @@ fn sync_build_visuals(
             NeedsModel(next.key.def),
             TeamColour(colour),
             crate::render::units::MarkColour(mark),
-            pose(next.pos, next.heading),
+            next.transform(),
             Visibility::Inherited,
         ));
         match next.key.kind {
@@ -450,6 +465,7 @@ mod tests {
         let other = ContentKey(8);
         let row = ProductionView {
             portal: None,
+            research: None,
             builder: EntityId(3),
             jobs: vec![
                 ProductionJobView {

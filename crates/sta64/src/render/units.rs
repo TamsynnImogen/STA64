@@ -582,21 +582,44 @@ pub fn to_bevy(p: [f32; 3]) -> Vec3 {
     Vec3::new(p[0], p[1], -p[2])
 }
 
+pub(super) fn research_rotation(axes: [sta_sim::Vec3; 3]) -> Quat {
+    let [_, y, z] = axes.map(|v| to_bevy(v.to_f32()));
+    // The model's local +Z is mirrored as well as the world axes.
+    Transform::IDENTITY.looking_to(z, y).rotation
+}
+
 /// Place each unit between its last two ticks.
 pub(crate) fn place(link: Res<SimLink>, clock: Res<AnimClock>, mut q: Query<(&SimEntity, &mut Transform)>) {
     let alpha = clock.alpha().clamp(0.0, 1.0);
+    let pod_axes: std::collections::BTreeMap<_, _> = link.production().iter()
+        .filter_map(|row| row.research.as_ref())
+        .flat_map(|research| research.pods.iter())
+        .map(|pod| (pod.entity, pod.axes))
+        .collect();
     for (u, mut tf) in &mut q {
         let Some((pos, h)) = link.interpolate(u.0, alpha) else { continue };
         tf.translation = to_bevy(pos);
         // The model's front (+Z in the files) is Bevy's -Z after the mirror, which
         // is what `looking_to` points along the heading.
-        tf.rotation = Transform::IDENTITY.looking_to(Vec3::new(h[0], 0.0, -h[1]), Vec3::Y).rotation;
+        tf.rotation = pod_axes.get(&u.0).copied().map_or_else(
+            || Transform::IDENTITY.looking_to(Vec3::new(h[0], 0.0, -h[1]), Vec3::Y).rotation,
+            research_rotation,
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn research_rotation_follows_a_tilted_legacy_socket() {
+        let axes = [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]]
+            .map(sta_sim::Vec3::from_f32);
+        let rotation = research_rotation(axes);
+        assert!((rotation * Vec3::NEG_Z).abs_diff_eq(Vec3::NEG_Y, 0.0001));
+        assert!((rotation * Vec3::Y).abs_diff_eq(Vec3::NEG_Z, 0.0001));
+    }
     use crate::app::configure_sets;
     use crate::sim_link::{CommandQueue, SimLinkPlugin};
     use bevy::time::TimeUpdateStrategy;

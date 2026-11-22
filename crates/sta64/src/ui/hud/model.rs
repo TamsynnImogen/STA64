@@ -11,6 +11,7 @@ use sta_content::{Availability, ContentDb, Owned, ResourceModel, Unmet, UnitDef}
 use sta_sim::command::{CommandKind, Order};
 use sta_sim::world::EntityKind;
 use sta_sim::movement::{FORM_COLUMN, FORM_LINE, FORM_WEDGE};
+use sta_sim::production::view::{ProductionView, ResearchBlock};
 use sta_sim::{ContentKey, EntityId, Fixed, PlayerId, UnitView, WorldView};
 
 use crate::ui::i18n::{tr, trf, tooltip_key};
@@ -30,13 +31,15 @@ pub struct HudFeed {
     pub player: PlayerId,
     pub selected: Vec<EntityId>,
     pub content: Option<Arc<ContentDb>>,
+    /// Queue and research eligibility from the same tick as `view`.
+    pub production: Vec<ProductionView>,
     /// The names the map gave its objects (host-only, see [`super::instance_names`]).
     pub names: super::instance_names::InstanceNames,
 }
 
 impl Default for HudFeed {
     fn default() -> Self {
-        HudFeed { view: Arc::default(), player: PlayerId(0), selected: Vec::new(), content: None, names: Default::default() }
+        HudFeed { view: Arc::default(), player: PlayerId(0), selected: Vec::new(), content: None, production: Vec::new(), names: Default::default() }
     }
 }
 
@@ -409,16 +412,26 @@ fn build_layout(feed: &HudFeed, builder: &UnitView) -> (Vec<BuildItem>, usize) {
     let Some(def) = db.unit(builder.def) else { return (Vec::new(), 0) };
     let stock: Vec<f32> = feed.view.player(feed.player).map(|p| p.resources.iter().map(|f| f.to_f32()).collect()).unwrap_or_default();
     let poor = |cost: &[f32]| cost.iter().enumerate().any(|(i, c)| *c > stock.get(i).copied().unwrap_or(0.0));
+    let research = feed.production.iter().find(|row| row.builder == builder.id).and_then(|row| row.research.as_ref());
     let item = |odf: &str, key: ContentKey, avail: Option<&Availability>, slot: usize| -> Option<BuildItem> {
         let u = db.unit(key)?;
         let cost: Vec<f32> = u.build.cost.iter().map(|c| c.to_f32()).collect();
-        let (look, why) = match avail {
+        let (mut look, mut why) = match avail {
             None | Some(Availability::Available) => (if poor(&cost) { Look::Poor } else { Look::Ready }, None),
             Some(Availability::Locked { hidden: true, .. }) => return None,
             Some(Availability::Locked { unmet: m, .. }) => (Look::Locked, Some(m.iter().map(unmet).collect::<Vec<_>>().join(", "))),
             Some(Availability::Withheld) => (Look::Locked, Some("cannot be built".into())),
             Some(Availability::NotListed) => (Look::Locked, Some("not in the tech tree".into())),
         };
+        if let Some(block) = research.and_then(|r| r.unavailable.iter().find(|(what, _)| *what == key).map(|(_, block)| block)) {
+            let reason = match block {
+                ResearchBlock::AlreadyResearched => "already researched",
+                ResearchBlock::Queued => "research already queued",
+                ResearchBlock::NoSlot => "no research slot available",
+            };
+            look = Look::Locked;
+            why = Some(why.map_or_else(|| reason.to_owned(), |existing| format!("{existing}, {reason}")));
+        }
         Some(BuildItem { odf: odf.to_owned(), key, look, cost, why, slot })
     };
     match db.tech_tree() {
@@ -1518,6 +1531,34 @@ mod tests {
         let f = feed(db_with(Some(TREE)), units, &[2]);
         assert_eq!(look(&f, "fx_frigate"), Some((Look::Ready, None)));
         assert_eq!(owned_counts(&f).get("fx_station"), Some(&1));
+    }
+
+    #[test]
+    fn research_refusals_lock_visible_build_items_without_moving_their_cells() {
+        use sta_sim::production::view::ResearchView;
+
+        let db = db_with(None);
+        let mut f = feed(db.clone(), vec![unit(&db, 2, "fx_yard", 1, 100.0, None)], &[2]);
+        let cruiser = db.units().find(|u| u.odf == "fx_cruiser").unwrap().key;
+        for (block, reason) in [
+            (ResearchBlock::AlreadyResearched, "already researched"),
+            (ResearchBlock::Queued, "research already queued"),
+            (ResearchBlock::NoSlot, "no research slot available"),
+        ] {
+            f.production = vec![ProductionView {
+                builder: EntityId(2),
+                jobs: Vec::new(),
+                site: None,
+                portal: None,
+                research: Some(ResearchView { unavailable: vec![(cruiser, block)], pods: Vec::new(), active_axes: None }),
+            }];
+            let buttons = grid(&f, Page::Build);
+            assert_eq!(buttons[0].cell, 0);
+            assert_eq!(buttons[0].look, Look::Locked);
+            assert!(buttons[0].verbose.as_deref().unwrap().contains(reason));
+            assert_eq!(buttons[1].cell, 1);
+            assert_eq!(buttons[1].look, Look::Ready);
+        }
     }
 
     /// A text tree that leaves an item out empties that item's cell; the other cells keep their

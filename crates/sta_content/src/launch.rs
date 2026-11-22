@@ -195,10 +195,11 @@ fn point_at(def: &UnitDef, sod: Option<&Sod>, name: Option<&str>) -> LaunchPoint
 }
 
 /// Fill `launch` of every unit that builds something.
-pub fn attach<'a>(vfs: &sta_vfs::Vfs, units: impl Iterator<Item = &'a mut UnitDef>) {
+pub fn attach<'a>(vfs: &sta_vfs::Vfs, units: impl Iterator<Item = &'a mut UnitDef>) -> Vec<Warning> {
+    let mut warnings = Vec::new();
     let mut sods: BTreeMap<String, Option<Sod>> = BTreeMap::new();
     for u in units {
-        if u.build.list.is_empty() && u.free_unit.is_none() {
+        if u.build.list.is_empty() && u.free_unit.is_none() && u.research_slots.is_empty() {
             continue;
         }
         let key = u
@@ -216,5 +217,15 @@ pub fn attach<'a>(vfs: &sta_vfs::Vfs, units: impl Iterator<Item = &'a mut UnitDe
         if u.free_unit.is_some() {
             u.dock = Some(dock_point(u, sod.as_ref()));
         }
+        for slot in &mut u.research_slots {
+            slot.pose = sod.as_ref().and_then(|sod| {
+                crate::RepairAttachment::from_sod(sod, sod.find(&slot.node)?)
+            });
+            if slot.pose.is_none() {
+                warnings.push(Warning::new(format!("sod/{key}.sod"),
+                    format!("{}: podHardpoints entry {} has no usable SOD pose", u.odf, slot.node)));
+            }
+        }
     }
+    warnings
 }

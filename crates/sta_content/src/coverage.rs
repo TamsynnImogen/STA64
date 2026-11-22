@@ -38,7 +38,7 @@ pub const READ_ODF_KEYS: &[&str] = &[
     "energydrainrate", "fieldradius", "firearc", "fire_arcs", "forwardaccel", "groundtexturename",
     "impulsespeed", "is_starbase", "lightcolor", "maxasteroids", "maxcrewgain", "maxhealth",
     "maxspecialenergy", "minasteroids", "minimappanelarea", "nolatinum", "numberofraces",
-    "numberofworkerbees", "orbitingspeed", "ordname", "physicsfile", "possiblecraftnames",
+    "numberofworkerbees", "orbitingspeed", "ordname", "physicsfile", "possiblecraftnames", "podhardpoints", "isupgrade",
     "preferredposition", "queueinstantdeduct", "radius", "rotationspeed", "scalesod", "shotdelay",
     "specialenergycost", "specialenergyrate", "turnalpha", "turnomega", "turnomegafractionatrest",
     "unitname", "weldingbeamsprite", "workerbeehardpoints", "wreckage", "wpnname", "sta64_mapconfinementinitial",

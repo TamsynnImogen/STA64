@@ -17,6 +17,16 @@ pub struct RepairAttachment {
     pub axes: [Vec3; 3],
 }
 
+impl RepairAttachment {
+    pub(crate) fn from_sod(sod: &a2fmt::sod::Sod, index: usize) -> Option<Self> {
+        let transform = sod.model_transform(index);
+        transform.m.iter().copied().all(representable).then(|| Self {
+            origin: Vec3::from_f32(transform.translation()),
+            axes: [0, 1, 2].map(|axis| Vec3::from_f32(transform.axis(axis))),
+        })
+    }
+}
+
 fn representable(v: f32) -> bool {
     let v = f64::from(v);
     v.is_finite() && (-2147483648.0..2147483648.0).contains(&v)
@@ -59,8 +69,8 @@ pub fn attach<'a>(
             ));
             continue;
         };
-        let transform = sod.model_transform(index);
-        if !transform.m.iter().copied().all(representable) {
+        unit.repair_attachment = RepairAttachment::from_sod(sod, index);
+        if unit.repair_attachment.is_none() {
             warnings.push(Warning::new(
                 format!("sod/{key}.sod"),
                 format!(
@@ -68,12 +78,7 @@ pub fn attach<'a>(
                     unit.odf
                 ),
             ));
-            continue;
         }
-        unit.repair_attachment = Some(RepairAttachment {
-            origin: Vec3::from_f32(transform.translation()),
-            axes: [0, 1, 2].map(|axis| Vec3::from_f32(transform.axis(axis))),
-        });
     }
     warnings
 }
