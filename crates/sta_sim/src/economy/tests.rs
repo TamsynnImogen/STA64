@@ -509,7 +509,8 @@ fn rec_round_trips_mid_trip() {
     assert!(mine(&mut sim, 0, m, moon));
     run(&mut sim, 1000);
     let rec = sim.economy.to_rec();
-    let back = Economy::from_rec(&rec);
+    let mut back = Economy::from_rec(&rec);
+    back.restore_docks(sim.economy.dock_rows(), &sim.units, sim.tick).unwrap();
     assert_eq!(back, sim.economy);
     let mut h1 = Fnv::new();
     let mut h2 = Fnv::new();
@@ -565,4 +566,78 @@ pub(crate) fn mid_mining() -> (Sim, Arc<sta_content::ContentDb>) {
     run(&mut sim, 1000);
     let db = Arc::clone(sim.content().unwrap());
     (sim, db)
+}
+
+#[test]
+fn a_busy_berth_services_freighters_in_arrival_order_after_reload() {
+    use crate::event::MinerPhase;
+
+    let mut sim = game();
+    let base = spawn(&mut sim, "fx_station", PlayerId(0), v(0, 0));
+    let near = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, 0));
+    let middle = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, -300));
+    let far = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, -600));
+    // Give the last arrival the lowest id to distinguish FIFO from id order.
+    let last = spawn(&mut sim, "fx_miner", PlayerId(0), v(0, -600));
+    let second = spawn(&mut sim, "fx_miner", PlayerId(0), v(0, -300));
+    let first = spawn(&mut sim, "fx_miner", PlayerId(0), v(0, 0));
+    assert!(mine(&mut sim, 0, first, near));
+    run(&mut sim, 90);
+    assert!(mine(&mut sim, 0, second, middle));
+    run(&mut sim, 30);
+    assert!(mine(&mut sim, 0, last, far));
+    run(&mut sim, 340);
+
+    let joined = |id| {
+        sim.economy
+            .dock_rows()
+            .into_iter()
+            .find(|row| row.0 == id && row.1 == base)
+            .and_then(|row| row.2)
+            .expect("freighter in the arrival queue")
+    };
+    assert!(joined(first) < joined(second) && joined(second) < joined(last));
+    assert_eq!(sim.economy.miners.get(first).unwrap().phase, Phase::Unloading);
+    assert_eq!(sim.economy.miners.get(second).unwrap().phase, Phase::ToDock);
+    assert_eq!(sim.economy.miners.get(last).unwrap().phase, Phase::ToDock);
+    let mut restored = Sim::from_snapshot(&sim.snapshot(), sim.content().cloned()).unwrap();
+    let mut docked = Vec::new();
+    for _ in 0..2400 {
+        let step = sim.step(&[]);
+        let replay = restored.step(&[]);
+        assert_eq!(step.view.digest, replay.view.digest);
+        assert_eq!(step.events, replay.events);
+        for event in step.events {
+            if let SimEvent::MinerPhase { id, phase: MinerPhase::Unloading, .. } = event {
+                docked.push(id);
+            }
+        }
+        assert!(sim.economy.miners.iter().filter(|(_, m)| m.phase == Phase::Unloading).count() <= 1);
+        if docked.len() == 2 {
+            break;
+        }
+    }
+    assert_eq!(docked, vec![second, last]);
+}
+
+#[test]
+fn a_destroyed_transfer_station_does_not_credit_undelivered_cargo() {
+    let mut sim = game();
+    let station = spawn(&mut sim, "fx_station", PlayerId(0), v(0, 0));
+    let moon = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, 0));
+    let miner = spawn(&mut sim, "fx_miner", PlayerId(0), v(0, 0));
+    assert!(mine(&mut sim, 0, miner, moon));
+    run(&mut sim, 310);
+    assert_eq!(sim.economy.miners.get(miner).unwrap().phase, Phase::Unloading);
+    let credited = stock(&sim, 0, 0);
+    let remaining = sim.economy.cargo(miner).unwrap();
+    assert!(credited > Fixed::ZERO && remaining > Fixed::ZERO);
+    assert!(sim.despawn(station, None));
+    run(&mut sim, 30);
+    assert_eq!(stock(&sim, 0, 0), credited);
+    assert_eq!(sim.economy.cargo(miner), Some(remaining));
+
+    spawn(&mut sim, "fx_station", PlayerId(0), v(0, 0));
+    run(&mut sim, 310);
+    assert_eq!(stock(&sim, 0, 0), credited + remaining);
 }

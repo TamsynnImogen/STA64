@@ -18,6 +18,7 @@ pub mod theme;
 pub mod radar;
 pub mod radar_fog;
 pub mod radar_layers;
+mod radar_sampling;
 pub mod settings;
 pub mod display;
 pub mod graphics;

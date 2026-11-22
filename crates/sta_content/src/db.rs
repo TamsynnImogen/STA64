@@ -528,7 +528,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         model: _, scale: _, movement: _, hull: _, shields: _, initial_hull: _, initial_shields: _,
         crew: _, maximum_crew: _, facility: _, has_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
         free_unit: _, dock: _, sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
-        max_dilithium: _, mining_rate: _, transfer_rate: _, resource: _, features: _,
+        max_dilithium: _, mining_rate: _, transfer_rate: _, freight_transfer: _, resource: _, features: _,
         confinement: _, nebula_pathing: _, nebula_effects: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
         crew_gain: _, transport: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, repair_attachment: _, research_slots: _, research_station_upgrade: _, stats: _, raw: _,
     } = u;
@@ -604,6 +604,13 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // Peers using the old constructor behavior would diverge on Evolution.
     if u.is_evolver() {
         c.flag("evolves_in_place", true);
+    }
+    if let Some(rates) = u.freight_transfer {
+        c.list("freight_transfer", rates.into_iter().map(fixed_text));
+        if let Some(berth) = u.dock.as_ref().filter(|p| p.node.is_some()) {
+            c.list("freight_berth", [berth.offset.0, berth.height, berth.offset.1, berth.dir.0, berth.dir.1]
+                .into_iter().map(fixed_text));
+        }
     }
     if u.research_station_upgrade {
         c.flag("research_station_upgrade", true);
