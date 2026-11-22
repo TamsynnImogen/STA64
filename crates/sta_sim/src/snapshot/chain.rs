@@ -24,8 +24,8 @@ pub(super) const MISSION_SWITCHES: usize = 24;
 pub(super) const REPAIRS: usize = 25;
 pub(super) const RECYCLES: usize = 26;
 pub(super) const NEBULA_SHIELDS: usize = 27;
-/// Number of segments [`split`] returns (header plus thirty-two records).
-pub(super) const LEN: usize = 33;
+/// Number of segments [`split`] returns (header plus thirty-one records).
+pub(super) const LEN: usize = 32;
 
 fn cut<T: serde::de::DeserializeOwned>(rest: &mut &[u8], out: &mut Vec<Vec<u8>>) {
     let (_, tail): (T, _) = postcard::take_from_bytes(rest).expect("record parses");
@@ -68,7 +68,6 @@ pub(super) fn split(bytes: &[u8]) -> Vec<Vec<u8>> {
     cut::<ZeroShieldHoldsRec>(&mut rest, &mut out);
     cut::<crate::production::research::ResearchRec>(&mut rest, &mut out);
     cut::<crate::economy::dock::DockRec>(&mut rest, &mut out);
-    cut::<crate::production::officer_upgrades::OfficerUpgradeRec>(&mut rest, &mut out);
     assert!(rest.is_empty(), "the chain covers the whole snapshot");
     assert_eq!(out.len(), LEN);
     out
