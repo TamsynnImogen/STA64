@@ -1466,6 +1466,22 @@ mod button_panel {
     }
 
     #[test]
+    fn only_the_armada_ii_looks_group_buttons_carry_the_display_space_tint() {
+        for (profile, want) in [(UiProfile::Armada2, true), (UiProfile::FleetOps, false)] {
+            let mut app = app_with_content_and_config(content(), placed_config(4.0 / 3.0), profile);
+            app.update();
+            let tinted = app.world_mut().query_filtered::<&crate::ui::gui_sprites::DisplayTint, With<PanelButton>>().iter(app.world()).count();
+            let buttons = app.world_mut().query::<&PanelButton>().iter(app.world()).count();
+            assert!(buttons >= 4);
+            assert_eq!(tinted, if want { buttons } else { 0 }, "{profile:?}");
+            let others = app.world_mut().query_filtered::<(), (With<crate::ui::gui_sprites::DisplayTint>, Without<PanelButton>)>().iter(app.world()).count();
+            assert_eq!(others, 0, "no other button carries it");
+        }
+        let t = buttons::GROUP_TINT;
+        assert!(t.hovered.iter().chain(&t.pressed).all(|v| *v > 0.0));
+    }
+
+    #[test]
     fn the_group_overlaps_no_other_stock_panel_at_any_width() {
         for aspect in [1.0_f32, 5.0 / 4.0, 4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0] {
             let app = app_with_content_and_config(content(), placed_config(aspect), UiProfile::Armada2);
