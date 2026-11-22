@@ -1038,8 +1038,11 @@ fn rebuild(
     // what the renderer reads that the sim's database does not carry.
     let star_odf = map.starfield_odf.trim_end_matches(".odf").trim_end_matches(".ODF").to_owned();
     let db = Arc::new(catalogue.legacy.db(&vfs.0, map.objects.iter().map(|o| o.odf.as_str()).chain([star_odf.as_str()])));
-    // The nebulae and belts of the minimap's layers (the sim's units come from its view).
-    commands.insert_resource(crate::ui::radar_layers::RadarStatics::of_map(&map, &db));
+    // The minimap's regions and scenery. Prefer definitions with SOD geometry attached.
+    let armada1_radar = content.profile() == sta_content::Profile::Sta1Classic || sta_content::profile::a1_compat(&vfs.0);
+    commands.insert_resource(crate::ui::radar_layers::RadarStatics::of_map(&map, armada1_radar, |name| {
+        content.key(name).and_then(|key| content.unit(key)).or_else(|| db.key(name).and_then(|key| db.unit(key)))
+    }));
     let formats = device
         .map(|d| CompressedImageFormats::from_features(d.features()))
         .unwrap_or(CompressedImageFormats::BC);

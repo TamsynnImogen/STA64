@@ -168,7 +168,7 @@ fn paint_fog(
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::default(),
     );
-    img.sampler = ImageSampler::nearest(); // cells stay square, as stock's
+    img.sampler = ImageSampler::linear();
     let handle = images.add(img);
     match existing {
         Some(e) => {
@@ -279,7 +279,9 @@ mod tests {
         let first = app.world().get::<Children>(sq).unwrap()[0];
         assert!(app.world().get::<RadarFog>(first).is_some());
         let handle = app.world().get::<ImageNode>(first).unwrap().image.clone();
-        let data = app.world().resource::<Assets<Image>>().get(&handle).unwrap().data.clone().unwrap();
+        let image = app.world().resource::<Assets<Image>>().get(&handle).unwrap();
+        assert_eq!(image.sampler, ImageSampler::linear());
+        let data = image.data.as_ref().unwrap();
         assert_eq!(data[3], 255, "top left is shroud");
         let bottom_left = ((FOG_PIXELS - 2) * FOG_PIXELS + 1) * 4;
         assert_eq!(data[bottom_left + 3], 0, "bottom left is in sight");
