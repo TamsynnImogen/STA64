@@ -1779,7 +1779,13 @@ fn the_refusal_summary_is_logged_periodically_while_the_count_is_nonzero() {
 
 #[test]
 fn closes_before_a_seat_cannot_push_out_the_records_of_seated_connections() {
-    let r = relay();
+    // Many garbage connections from one address: no default limit may turn
+    // them into refusals.
+    let r = relay_with(RelayConfig {
+        max_connections: 10_000,
+        max_connections_per_ip: 10_000,
+        ..RelayConfig::default()
+    });
     let (_host, code) = open_room(r.local_addr());
     let mut s = raw_join(r.local_addr(), code);
     s.write_all(&ClientMsg::Leave.encode().unwrap()).unwrap();

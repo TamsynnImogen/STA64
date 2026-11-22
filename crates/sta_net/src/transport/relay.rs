@@ -644,6 +644,11 @@ impl Relay {
 
     /// Stops accepting and closes every connection; connection threads end
     /// within one poll interval.
+    ///
+    /// The summary thread logs a last summary of the closes before a seat;
+    /// those that end after it are counted ([`Relay::unseated`]) but not
+    /// logged. With a log sink that blocks, this and drop take up to one
+    /// second (the summary thread is then left to end by itself).
     pub fn shutdown(&mut self) {
         self.shared.stop.store(true, Ordering::SeqCst);
         if let Some(h) = self.accept.take() {
