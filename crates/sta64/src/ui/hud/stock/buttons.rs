@@ -33,7 +33,7 @@ use crate::ui::profile::UiProfile;
 use bevy::picking::Pickable;
 use super::node;
 use crate::input::select::CameraFocus;
-use crate::ui::gui_sprites::{GuiButton, GuiButtonColors};
+use crate::ui::gui_sprites::{DisplayTint, GuiButton, GuiButtonColors};
 use crate::ui::hud::HudFeed;
 use crate::ui::ingame_menu::OpenInGameMenu;
 use crate::ui::notices::Tooltip;
@@ -68,6 +68,11 @@ pub(in crate::ui::hud) struct PanelKeys {
 const fn keys(area: &'static str, sprite: &'static str, default_sprite: &'static str, act: PanelButton, tip: &'static str, verbose: Option<&'static str>) -> PanelKeys {
     PanelKeys { area, sprite, default_sprite, act, tip, verbose }
 }
+
+/// The hover and pressed tints of the group's buttons in the Armada II look: a per-channel multiplier of the
+/// button picture in display (sRGB-encoded) values, clamped at white. Grade: measured at one window size,
+/// hover on three buttons, pressed on one button.
+pub(in crate::ui::hud) const GROUP_TINT: DisplayTint = DisplayTint { hovered: [1.355, 0.979, 0.786], pressed: [1.589, 1.384, 1.261] };
 
 /// The buttons that show only while "more" is on.
 pub(in crate::ui::hud) const SECOND_ROW: [&str; 3] = ["menuButtonArea", "helpButtonArea", "paletteButtonArea"];
@@ -135,7 +140,7 @@ pub(in crate::ui::hud) fn solid(layout: &StockLayout, more: bool, profile: Optio
 
 /// Spawn the panel group: its background pieces and every button whose area the cfg authors (a zero
 /// rectangle hides it).
-pub(in crate::ui::hud) fn spawn(commands: &mut Commands, parent: Entity, layout: &StockLayout, theme: &Theme, more: bool) {
+pub(in crate::ui::hud) fn spawn(commands: &mut Commands, parent: Entity, layout: &StockLayout, theme: &Theme, more: bool, display_tint: bool) {
     let area = panel_rect(layout).unwrap_or(R::new(0.0, 0.0, 0.0, 0.0));
     let group = commands
         .spawn((
@@ -171,6 +176,9 @@ pub(in crate::ui::hud) fn spawn(commands: &mut Commands, parent: Entity, layout:
         ));
         if second {
             button.insert(SecondRow);
+        }
+        if display_tint {
+            button.insert(GROUP_TINT);
         }
     }
 }

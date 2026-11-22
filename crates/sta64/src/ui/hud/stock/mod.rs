@@ -568,7 +568,7 @@ pub(super) fn refresh(
         a1::action::spawn(&mut commands, body, &layout, &theme, strings.as_deref(), action.as_deref());
     }
     if !a1 && replaced {
-        buttons::spawn(&mut commands, body, &layout, &theme, more.0);
+        buttons::spawn(&mut commands, body, &layout, &theme, more.0, profile.as_deref() == Some(&UiProfile::Armada2));
         // #1073: the cinematic window, when the mounted layout declares one (nothing otherwise).
         window::spawn_a2(&mut commands, body, &layout, action.as_deref());
     }

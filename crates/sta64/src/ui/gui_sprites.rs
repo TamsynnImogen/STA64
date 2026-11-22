@@ -16,9 +16,11 @@ use sta_assets::a2fmt::spr::{Skip, Sprite, SpriteTable};
 use crate::ui::theme::{UiButton, WidgetState};
 use crate::viewer::Mounted;
 
-type PageKey = (String, Option<[u8; 3]>, GuiImageSampling);
+/// A display-space tint's factors as bit patterns (a hashable key).
+type TintKey = Option<[u32; 3]>;
+type PageKey = (String, Option<[u8; 3]>, GuiImageSampling, TintKey);
 type PageImage = (Handle<Image>, UVec2);
-type ArtKey = (Vec<String>, usize, GuiImageSource, bool, GuiImageSampling);
+type ArtKey = (Vec<String>, usize, GuiImageSource, bool, GuiImageSampling, TintKey);
 type ResolvedArt = Option<(Handle<Image>, Rect)>;
 
 #[derive(Resource, Default)]
@@ -63,6 +65,29 @@ impl Default for GuiButtonColors {
             active: Color::WHITE,
         }
     }
+}
+
+/// Opt-in per button: while hovered or pressed the picture is replaced by a copy multiplied per channel in
+/// display (sRGB-encoded) values and clamped at white, drawn with a white tint, instead of the generic tint
+/// (which multiplies in linear light). Factors are for hover and pressed. Other states and buttons without
+/// this component are untouched.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct DisplayTint {
+    pub hovered: [f32; 3],
+    pub pressed: [f32; 3],
+}
+
+/// Multiply RGBA8 pixels per channel in display values, rounded and clamped to 0..=255; alpha is untouched.
+pub(crate) fn display_multiply(rgba: &mut [u8], k: [f32; 3]) {
+    for px in rgba.chunks_exact_mut(4) {
+        for (c, k) in px[..3].iter_mut().zip(k) {
+            *c = (*c as f32 * k + 0.5).floor().clamp(0.0, 255.0) as u8;
+        }
+    }
+}
+
+fn tint_key(k: [f32; 3]) -> TintKey {
+    Some(k.map(f32::to_bits))
 }
 
 /// Marks an armed command so its normal artwork can use the active tint.
@@ -188,11 +213,25 @@ pub(crate) fn page(
     images: &mut Assets<Image>,
     formats: CompressedImageFormats,
 ) -> Option<(Handle<Image>, UVec2)> {
+    page_tinted(sprite, sampling, vfs, cache, images, formats, None)
+}
+
+/// [`page`], optionally multiplied in display space (decoded pages only: `None` for a format that is not
+/// decoded to CPU pixels here, so the caller keeps the plain picture).
+fn page_tinted(
+    sprite: &Sprite,
+    sampling: GuiImageSampling,
+    vfs: &sta_vfs::Vfs,
+    cache: &mut GuiSprites,
+    images: &mut Assets<Image>,
+    formats: CompressedImageFormats,
+    tint: Option<[f32; 3]>,
+) -> Option<(Handle<Image>, UVec2)> {
     let key_colour = match sprite.skip {
         Skip::Colour(c) => Some(c),
         Skip::Unset | Skip::Off => None,
     };
-    let key = (sprite.texture.to_ascii_lowercase(), key_colour, sampling);
+    let key = (sprite.texture.to_ascii_lowercase(), key_colour, sampling, tint.and_then(tint_key));
     if let Some(found) = cache.pages.get(&key) {
         return found.clone();
     }
@@ -205,6 +244,9 @@ pub(crate) fn page(
                         px[3] = 0;
                     }
                 }
+            }
+            if let Some(k) = tint {
+                display_multiply(&mut rgba.pixels, k);
             }
             Image::new(
                 Extent3d {
@@ -220,7 +262,7 @@ pub(crate) fn page(
         } else {
             // Bevy handles PNG/KTX2. Colour-keyed pages need CPU pixels, so
             // unsupported keyed formats deliberately fall back to the label.
-            if key_colour.is_some() {
+            if key_colour.is_some() || tint.is_some() {
                 return None;
             }
             let ext = match format {
@@ -295,7 +337,24 @@ fn art(
     images: &mut Assets<Image>,
     formats: CompressedImageFormats,
 ) -> Option<(Handle<Image>, Rect)> {
-    let key = (names.to_vec(), frame, source, numbered, sampling);
+    art_tinted(names, frame, source, numbered, sampling, shared, vfs, cache, images, formats, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn art_tinted(
+    names: &[String],
+    frame: usize,
+    source: GuiImageSource,
+    numbered: bool,
+    sampling: GuiImageSampling,
+    shared: Option<&SpriteTable>,
+    vfs: &sta_vfs::Vfs,
+    cache: &mut GuiSprites,
+    images: &mut Assets<Image>,
+    formats: CompressedImageFormats,
+    tint: Option<[f32; 3]>,
+) -> Option<(Handle<Image>, Rect)> {
+    let key = (names.to_vec(), frame, source, numbered, sampling, tint.and_then(tint_key));
     if let Some(found) = cache.resolved.get(&key) {
         return found.clone();
     }
@@ -307,7 +366,7 @@ fn art(
     };
     let mut found = None;
     for sprite in candidates {
-        let Some((handle, size)) = page(&sprite, sampling, vfs, cache, images, formats) else {
+        let Some((handle, size)) = page_tinted(&sprite, sampling, vfs, cache, images, formats, tint) else {
             continue;
         };
         if let Some(rect) = crop(&sprite, size) {
@@ -340,6 +399,7 @@ pub fn paint(
             Option<&mut ImageNode>,
             Option<&Children>,
             Option<&mut BackgroundColor>,
+            Option<&DisplayTint>,
         ),
         (With<UiButton>, Without<GuiImage>),
     >,
@@ -350,7 +410,7 @@ pub fn paint(
     mut labels: Query<&mut Visibility, With<GuiButtonLabel>>,
 ) {
     let (Some(mut sprites), Some(mut images)) = (sprites, images) else {
-        for (entity, _, _, _, _, image, children, _) in &mut buttons {
+        for (entity, _, _, _, _, image, children, _, _) in &mut buttons {
             if image.is_some() {
                 commands.entity(entity).remove::<ImageNode>();
             }
@@ -400,8 +460,22 @@ pub fn paint(
         sprites.global = None;
         sprites.loaded = false;
     }
-    for (entity, button, state, colors, active, image, children, background) in &mut buttons {
-        let found = if has_sources {
+    for (entity, button, state, colors, active, image, children, background, display_tint) in &mut buttons {
+        // A display-space tint draws a pre-multiplied copy with a white tint; where that copy cannot be
+        // built, the plain picture keeps the generic tint.
+        let factors = display_tint.and_then(|t| match state {
+            WidgetState::Hovered => Some(t.hovered),
+            WidgetState::Pressed => Some(t.pressed),
+            _ => None,
+        });
+        let mut copy = None;
+        if has_sources && let Some(k) = factors {
+            copy = art_tinted(&button.names, 0, GuiImageSource::Gui, false, GuiImageSampling::Nearest, None,
+                &mounted.as_ref().unwrap().0, &mut sprites, &mut images, formats, Some(k));
+        }
+        let found = if copy.is_some() {
+            copy.clone()
+        } else if has_sources {
             art(&button.names, 0, GuiImageSource::Gui, false, GuiImageSampling::Nearest, None,
                 &mounted.as_ref().unwrap().0, &mut sprites, &mut images, formats)
         } else {
@@ -414,13 +488,13 @@ pub fn paint(
                 image: handle.clone(),
                 rect: Some(*rect),
                 image_mode: bevy::ui::widget::NodeImageMode::Stretch,
-                color: match state {
+                color: if copy.is_some() { Color::WHITE } else { match state {
                     WidgetState::Normal if active.is_some_and(|a| a.0) => colors.active,
                     WidgetState::Normal => colors.normal,
                     WidgetState::Hovered => colors.hovered,
                     WidgetState::Pressed => colors.pressed,
                     WidgetState::Disabled => colors.disabled,
-                },
+                } },
                 ..default()
             };
             if let Some(mut image) = image {
@@ -489,6 +563,74 @@ pub fn paint(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn display_multiply_scales_each_channel_in_display_values_clamps_at_white_and_keeps_alpha() {
+        let k = [1.355, 0.979, 0.786];
+        // 200 * 1.355 = 271 clamps; 100 * 0.979 = 97.9 rounds to 98; 0 stays 0; alpha untouched.
+        let mut px = [200, 100, 0, 77, 10, 10, 10, 255];
+        display_multiply(&mut px, k);
+        // A dark texel: 13.55 -> 14, 9.79 -> 10, 7.86 -> 8.
+        assert_eq!(px, [255, 98, 0, 77, 14, 10, 8, 255]);
+        let mut unit = [1, 2, 3, 4];
+        display_multiply(&mut unit, [1.0; 3]);
+        assert_eq!(unit, [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn a_display_tint_button_draws_a_premultiplied_copy_while_hovered_or_pressed_and_no_other_button_changes() {
+        let root = std::env::temp_dir().join(format!("sta64-display-tint-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let data = root.join("Data");
+        fs::create_dir_all(data.join("sprites")).unwrap();
+        fs::create_dir_all(data.join("textures/rgb")).unwrap();
+        fs::write(data.join("sprites/gui_global.spr"), b"face face 0 0 2 2\n").unwrap();
+        let mut tga = vec![0u8; 18];
+        tga[2] = 2;
+        tga[12] = 2;
+        tga[14] = 2;
+        tga[16] = 24;
+        for _ in 0..4 {
+            tga.extend_from_slice(&[40, 100, 150]); // blue, green, red
+        }
+        fs::write(data.join("textures/rgb/face.tga"), tga).unwrap();
+        let vfs = sta_vfs::Vfs::mount_install(&root, None).unwrap();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Assets<Image>>()
+            .init_resource::<GuiSprites>()
+            .insert_resource(GuiSkin { table: None })
+            .insert_resource(Mounted(vfs))
+            .add_systems(Update, paint);
+        let tint = DisplayTint { hovered: [1.355, 0.979, 0.786], pressed: [1.5, 1.0, 0.5] };
+        let spawn = |app: &mut App, with: bool| {
+            let mut e = app.world_mut().spawn((UiButton, WidgetState::Normal, GuiButton { names: vec!["face".into()], keep_label: false }, Node::default(), BackgroundColor(Color::WHITE)));
+            if with {
+                e.insert(tint);
+            }
+            e.id()
+        };
+        let (tinted, plain) = (spawn(&mut app, true), spawn(&mut app, false));
+        let pixel = |app: &App, e: Entity| {
+            let node = app.world().get::<ImageNode>(e).unwrap();
+            (app.world().resource::<Assets<Image>>().get(&node.image).unwrap().data.as_ref().unwrap()[..3].to_vec(), node.color)
+        };
+        app.update();
+        assert_eq!(pixel(&app, tinted), (vec![150, 100, 40], Color::WHITE), "normal: the plain picture");
+        for (state, expect) in [(WidgetState::Hovered, [203, 98, 31]), (WidgetState::Pressed, [225, 100, 20])] {
+            *app.world_mut().get_mut::<WidgetState>(tinted).unwrap() = state;
+            *app.world_mut().get_mut::<WidgetState>(plain).unwrap() = state;
+            app.update();
+            assert_eq!(pixel(&app, tinted), (expect.to_vec(), Color::WHITE), "{state:?}: multiplied in display values, white tint");
+            let (data, colour) = pixel(&app, plain);
+            assert_eq!(data, vec![150, 100, 40], "{state:?}: a button without the component keeps the picture");
+            assert_ne!(colour, Color::WHITE, "{state:?}: and the generic tint");
+        }
+        *app.world_mut().get_mut::<WidgetState>(tinted).unwrap() = WidgetState::Disabled;
+        app.update();
+        assert_eq!(pixel(&app, tinted), (vec![150, 100, 40], GuiButtonColors::default().disabled), "disabled: generic");
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn crop_scales_each_axis_and_rejects_invalid_rectangles() {
