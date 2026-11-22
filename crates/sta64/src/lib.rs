@@ -20,6 +20,7 @@ mod platform;
 
 mod audio;
 mod capture;
+mod footage;
 mod frontend;
 mod input;
 mod map;
