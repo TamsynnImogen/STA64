@@ -10,50 +10,28 @@
 //! shroud is opaque; the fog lets the map show through at [`FOG_ALPHA`] (Refit's
 //! measured match to stock).
 //!
-//! The picture is built from [`FogGrid`] (the same grid the 3D view's fog uses), one
-//! pixel per [`FOG_PIXELS`]th of the square, so it is blocky like stock's cells.
+//! The minimap samples [`FogGrid`] directly. Reconstructing its masks with the same cubic
+//! filter as the 3D fog rounds the stair steps in the cell grid at display resolution.
 
-use bevy::asset::RenderAssetUsages;
+use bevy::asset::{AssetPath, RenderAssetUsages, embedded_asset};
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use bevy::ui::widget::NodeImageMode;
+use bevy::render::render_resource::{AsBindGroup, Extent3d, ShaderType, TextureDimension, TextureFormat};
+use bevy::shader::ShaderRef;
+use bevy::ui_render::UiMaterialPlugin;
+use bevy::ui_render::ui_material::UiMaterial;
 use sta_vfs::Vfs;
 
 use super::radar::{RadarMap, RadarSquare, RadarState, StockRadar};
-use crate::render::fog::{FogGrid, FogState};
+use crate::render::fog::{FogGrid, FogState, Layer};
 use crate::viewer::Mounted;
 
-/// Pixels along the fog picture's side (stock's sprites are 128 x 128).
-pub const FOG_PIXELS: usize = 128;
 /// How much of the map the fog hides (Refit draws it at 60%).
 pub const FOG_ALPHA: f32 = 0.6;
 
 /// Stock's own colours when the mounted data has no `Gfog`/`Gshroud`: Fleet Ops'.
 pub const DEFAULT_FOG: [u8; 3] = [8, 8, 8];
 pub const DEFAULT_SHROUD: [u8; 3] = [30, 36, 50];
-
-/// What a map point is to the player.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Sight {
-    /// In sight now: nothing drawn over it.
-    Visible,
-    /// Seen before, not in sight now: the fog.
-    Explored,
-    /// Never in sight (or off the grid): the shroud.
-    Unexplored,
-}
-
-/// The state of a map point (x, z).
-pub fn sight_at(grid: &FogGrid, x: f32, z: f32) -> Sight {
-    if grid.visible_at(x, z) {
-        Sight::Visible
-    } else if grid.explored_at(x, z) {
-        Sight::Explored
-    } else {
-        Sight::Unexplored
-    }
-}
 
 /// The two layers' colours, as the mounted data has them.
 #[derive(Resource, Debug, Clone, Copy, PartialEq)]
@@ -69,15 +47,6 @@ impl Default for FogColours {
 }
 
 impl FogColours {
-    /// RGBA of a state: transparent, the fog at [`FOG_ALPHA`], the opaque shroud.
-    pub fn rgba(&self, s: Sight) -> [u8; 4] {
-        match s {
-            Sight::Visible => [0, 0, 0, 0],
-            Sight::Explored => [self.fog[0], self.fog[1], self.fog[2], (FOG_ALPHA * 255.0).round() as u8],
-            Sight::Unexplored => [self.shroud[0], self.shroud[1], self.shroud[2], 255],
-        }
-    }
-
     /// Read `Gfog` and `Gshroud` from the mounted data (mean texel of each); a missing
     /// texture keeps the Fleet Ops default.
     pub fn read(vfs: &Vfs) -> FogColours {
@@ -107,31 +76,70 @@ pub fn mean_colour(rgba: &[u8]) -> Option<[u8; 3]> {
     (n > 0).then(|| [0, 1, 2].map(|i| (sum[i] / n) as u8))
 }
 
-/// The picture of the player's sight over the radar's map box: `side` x `side` RGBA
-/// pixels, row 0 the top (north, the largest z).
-pub fn fog_pixels(grid: &FogGrid, map: &RadarMap, colours: &FogColours, side: usize) -> Vec<u8> {
-    let mut out = Vec::with_capacity(side * side * 4);
-    for row in 0..side {
-        for col in 0..side {
-            let uv = Vec2::new((col as f32 + 0.5) / side as f32, (row as f32 + 0.5) / side as f32);
-            let p = map.to_world(uv);
-            out.extend_from_slice(&colours.rgba(sight_at(grid, p.x, p.y)));
+/// A material over the radar square, using the 3D fog grid's masks and the radar's colours.
+#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+pub(super) struct RadarFogMaterial {
+    #[uniform(0)]
+    pub params: RadarFogParams,
+    #[texture(1)]
+    #[sampler(2)]
+    mask: Handle<Image>,
+}
+
+#[derive(ShaderType, Debug, Clone, Copy, PartialEq)]
+pub(super) struct RadarFogParams {
+    fog: Vec4,
+    shroud: Vec4,
+    /// Transform the square's top-down UVs to the grid's bottom-up UVs.
+    pub mask_uv: Vec4,
+}
+
+impl UiMaterial for RadarFogMaterial {
+    fn fragment_shader() -> ShaderRef {
+        ShaderRef::Path(AssetPath::parse("embedded://sta64/ui/radar_fog.wesl").into_owned())
+    }
+}
+
+impl RadarFogParams {
+    fn new(grid: &FogGrid, map: &RadarMap, colours: &FogColours) -> Self {
+        let linear = |[r, g, b]: [u8; 3], alpha| {
+            let c = Color::srgb_u8(r, g, b).to_linear();
+            Vec4::new(c.red, c.green, c.blue, alpha)
+        };
+        let extent = Vec2::new(grid.w as f32, grid.h as f32) * grid.cell;
+        let offset = (map.to_world(Vec2::ZERO) - Vec2::from_array(grid.min)) / extent;
+        let scale = Vec2::new(map.size, -map.size) / extent;
+        Self {
+            fog: linear(colours.fog, FOG_ALPHA),
+            shroud: linear(colours.shroud, 1.0),
+            mask_uv: Vec4::new(offset.x, offset.y, scale.x, scale.y),
         }
     }
-    out
 }
 
-/// The node that carries the picture, under the blips.
+fn mask_data(grid: &FogGrid) -> Vec<u8> {
+    grid.mask(Layer::Fog)
+        .into_iter()
+        .zip(grid.mask(Layer::Shroud))
+        .flat_map(|(fog, shroud)| [fog, shroud])
+        .collect()
+}
+
+fn mask_image(grid: &FogGrid, data: Vec<u8>) -> Image {
+    let mut image = Image::new(
+        Extent3d { width: grid.w as u32, height: grid.h as u32, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rg8Unorm,
+        RenderAssetUsages::default(),
+    );
+    image.sampler = ImageSampler::linear();
+    image
+}
+
+/// The node that carries the fog and shroud over the radar square.
 #[derive(Component)]
 pub struct RadarFog;
-
-/// The picture as a UI image. `Stretch`, never the default `Auto`: `Auto` draws the square
-/// 128 x 128 picture contained and centred in its box, so wherever the box is not square
-/// (any window wider or narrower than the HUD sheet's canvas stretches the stock display
-/// area) the shroud no longer lay over the map the blips and the background sprite fill.
-fn fog_image(handle: Handle<Image>) -> ImageNode {
-    ImageNode { image: handle, image_mode: NodeImageMode::Stretch, ..default() }
-}
 
 /// (Re)read the colours when the mounted install changes.
 fn load_colours(vfs: Option<Res<Mounted>>, mut colours: ResMut<FogColours>) {
@@ -142,7 +150,7 @@ fn load_colours(vfs: Option<Res<Mounted>>, mut colours: ResMut<FogColours>) {
     }
 }
 
-/// Keep the picture current: rebuilt when the sight, the map's box or the colours change.
+/// Keep the radar's mask in sync with the player's fog grid.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn paint_fog(
     mut commands: Commands,
@@ -150,55 +158,72 @@ fn paint_fog(
     state: Res<RadarState>,
     colours: Res<FogColours>,
     images: Option<ResMut<Assets<Image>>>,
+    mut materials: ResMut<Assets<RadarFogMaterial>>,
     square: Query<(Entity, Option<&Children>, Has<StockRadar>), With<RadarSquare>>,
-    mut nodes: Query<&mut ImageNode, With<RadarFog>>,
-    mut last: Local<Option<(u32, RadarMap, FogColours)>>,
+    nodes: Query<&MaterialNode<RadarFogMaterial>, With<RadarFog>>,
+    mut last: Local<Option<(RadarMap, FogColours)>>,
 ) {
     let (Some(fog), Some(map), Some(mut images), Ok((sq, kids, stock))) = (fog, state.map, images, square.single()) else { return };
-    let key = (fog.updates, map, *colours);
-    let existing = kids.and_then(|k| k.iter().find(|e| nodes.contains(*e)));
-    if existing.is_some() && *last == Some(key) {
+    let key = (map, *colours);
+    let existing = kids.and_then(|children| children.iter().find_map(|e| nodes.get(e).ok()));
+    if existing.is_some() && !fog.is_changed() && *last == Some(key) {
         return;
     }
     *last = Some(key);
-    let mut img = Image::new(
-        Extent3d { width: FOG_PIXELS as u32, height: FOG_PIXELS as u32, depth_or_array_layers: 1 },
-        TextureDimension::D2,
-        fog_pixels(&fog.grid, &map, &colours, FOG_PIXELS),
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::default(),
-    );
-    img.sampler = ImageSampler::nearest(); // cells stay square, as stock's
-    let handle = images.add(img);
-    match existing {
-        Some(e) => {
-            if let Ok(mut node) = nodes.get_mut(e) {
-                node.image = handle;
+    let grid = &fog.grid;
+    let params = RadarFogParams::new(grid, &map, &colours);
+    let data = mask_data(grid);
+    if let Some(node) = existing
+        && let Some(material) = materials.get(&node.0)
+        && let Some(mask) = images.get(&material.mask)
+    {
+        let size = mask.texture_descriptor.size;
+        let mask_handle = material.mask.clone();
+        let size_changed = size.width as usize != grid.w || size.height as usize != grid.h;
+        let params_changed = material.params != params;
+        if size_changed {
+            let mask = images.add(mask_image(grid, data));
+            *materials.get_mut(&node.0).unwrap() = RadarFogMaterial { params, mask };
+        } else {
+            if params_changed {
+                materials.get_mut(&node.0).unwrap().params = params;
+            }
+            if mask.data.as_deref() != Some(data.as_slice()) {
+                images.get_mut(&mask_handle).unwrap().data = Some(data);
             }
         }
-        None => {
-            let e = commands
-                .spawn((
-                    RadarFog,
-                    fog_image(handle),
-                    Node { position_type: PositionType::Absolute, left: Val::Px(0.0), top: Val::Px(0.0), width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
-                    bevy::picking::Pickable::IGNORE,
-                ))
-                .id();
-            // The stock look: fog over the dots, under the camera's outline (the stacking index).
-            // The other look keeps its order: the first child, under every blip.
-            if stock {
-                commands.entity(e).insert(ZIndex(1));
-            }
-            commands.entity(sq).insert_children(0, &[e]);
-        }
+        return;
     }
+
+    let mask = images.add(mask_image(grid, data));
+    let material = materials.add(RadarFogMaterial { params, mask });
+    let node = commands
+        .spawn((
+            RadarFog,
+            MaterialNode(material),
+            Node { position_type: PositionType::Absolute, left: Val::Px(0.0), top: Val::Px(0.0), width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
+            bevy::picking::Pickable::IGNORE,
+        ))
+        .id();
+    // Stock draws fog over its dots. The other look keeps it as the first child under the dots.
+    if stock {
+        commands.entity(node).insert(ZIndex(1));
+    }
+    commands.entity(sq).insert_children(0, &[node]);
 }
 
 pub struct RadarFogPlugin;
 
 impl Plugin for RadarFogPlugin {
     fn build(&self, app: &mut App) {
+        if app.world().contains_resource::<bevy::asset::io::embedded::EmbeddedAssetRegistry>() {
+            embedded_asset!(app, "radar_fog.wesl");
+        }
+        if app.get_sub_app(bevy::render::RenderApp).is_some() {
+            app.add_plugins(UiMaterialPlugin::<RadarFogMaterial>::default());
+        } else {
+            app.init_resource::<Assets<RadarFogMaterial>>();
+        }
         app.init_resource::<FogColours>().add_systems(
             Update,
             (load_colours, paint_fog).chain().after(super::radar::refresh).in_set(crate::app::GameSet::Ui),
@@ -225,35 +250,13 @@ mod tests {
     }
 
     #[test]
-    fn sight_follows_the_grid() {
-        let (g, c) = grid();
-        assert_eq!(sight_at(&g, 0.5 * c, 0.5 * c), Sight::Visible);
-        assert_eq!(sight_at(&g, 3.5 * c, 0.5 * c), Sight::Explored);
-        assert_eq!(sight_at(&g, 0.5 * c, 3.5 * c), Sight::Unexplored);
-        assert_eq!(sight_at(&g, -10.0, 0.0), Sight::Unexplored, "off the grid is shroud");
-    }
-
-    #[test]
-    fn states_map_to_stock_colours() {
-        let fo = FogColours::default();
-        assert_eq!(fo.rgba(Sight::Visible)[3], 0);
-        assert_eq!(fo.rgba(Sight::Unexplored), [30, 36, 50, 255], "Gshroud.tga of Fleet Ops, opaque");
-        assert_eq!(fo.rgba(Sight::Explored), [8, 8, 8, 153], "Gfog.tga of Fleet Ops at 60%");
-    }
-
-    /// The picture's rows: north (large z) on top, so the lower-left quadrant of the map
-    /// is the picture's lower left.
-    #[test]
-    fn picture_puts_each_state_in_its_place() {
-        let (g, c) = grid();
-        let map = RadarMap::of_bounds(Vec2::ZERO, Vec2::splat(4.0 * c));
-        let col = FogColours::default();
-        let px = fog_pixels(&g, &map, &col, 8);
-        let at = |x: usize, y: usize| <[u8; 4]>::try_from(&px[(y * 8 + x) * 4..][..4]).unwrap();
-        assert_eq!(at(1, 6), col.rgba(Sight::Visible));
-        assert_eq!(at(6, 6), col.rgba(Sight::Explored));
-        assert_eq!(at(1, 1), col.rgba(Sight::Unexplored));
-        assert_eq!(at(6, 1), col.rgba(Sight::Unexplored));
+    fn the_mask_preserves_visible_explored_and_unexplored_cells() {
+        let (g, _) = grid();
+        let pixels = mask_data(&g);
+        let at = |x: usize, z: usize| &pixels[(z * g.w + x) * 2..][..2];
+        assert_eq!(at(0, 0), [0, 0], "visible");
+        assert_eq!(at(3, 0), [255, 0], "explored");
+        assert_eq!(at(0, 3), [255, 255], "unexplored");
     }
 
     #[test]
@@ -278,11 +281,135 @@ mod tests {
         let sq = app.world_mut().query_filtered::<Entity, With<RadarSquare>>().single(app.world()).unwrap();
         let first = app.world().get::<Children>(sq).unwrap()[0];
         assert!(app.world().get::<RadarFog>(first).is_some());
-        let handle = app.world().get::<ImageNode>(first).unwrap().image.clone();
-        let data = app.world().resource::<Assets<Image>>().get(&handle).unwrap().data.clone().unwrap();
-        assert_eq!(data[3], 255, "top left is shroud");
-        let bottom_left = ((FOG_PIXELS - 2) * FOG_PIXELS + 1) * 4;
-        assert_eq!(data[bottom_left + 3], 0, "bottom left is in sight");
+        let handle = &app.world().get::<MaterialNode<RadarFogMaterial>>(first).unwrap().0;
+        let material = app.world().resource::<Assets<RadarFogMaterial>>().get(handle).unwrap();
+        assert_eq!(material.params.mask_uv, Vec4::new(0.0, 1.0, 1.0, -1.0));
+        assert_eq!((material.params.fog.w, material.params.shroud.w), (FOG_ALPHA, 1.0));
+        let image = app.world().resource::<Assets<Image>>().get(&material.mask).unwrap();
+        assert_eq!(image.sampler, ImageSampler::linear());
+        let data = image.data.as_ref().unwrap();
+        assert_eq!(data[..2], [0, 0], "southwest is in sight");
+        let north_west = 3 * 4 * 2;
+        assert_eq!(data[north_west..north_west + 2], [255, 255], "northwest is shrouded");
+    }
+
+    /// Compare the live material with the old bilinear RGBA mask at about six display pixels
+    /// per sensor cell, close to the reported stair steps. Use the same circular cell mask.
+    #[test]
+    fn the_drawn_shroud_rounds_the_sensor_grid_on_the_gpu() {
+        use bevy::camera::RenderTarget;
+        use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
+        use bevy::ui::UiTargetCamera;
+        use std::sync::{Arc, Mutex};
+
+        if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+            eprintln!("SKIP: set STA64_GPU_TESTS=1");
+            return;
+        }
+        let _gpu = crate::bench::frames::gpu_serial();
+        const SIDE: u32 = 320;
+        let mut app = App::new();
+        app.add_plugins(DefaultPlugins
+            .set(WindowPlugin { primary_window: None, exit_condition: bevy::window::ExitCondition::DontExit, ..default() })
+            .set(bevy::render::RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
+            .disable::<bevy::winit::WinitPlugin>()
+            .disable::<bevy::gilrs::GilrsPlugin>()
+            .disable::<bevy::log::LogPlugin>());
+        crate::app::configure_sets(&mut app);
+        app.add_plugins(RadarFogPlugin);
+        let map = RadarMap::of_bounds(Vec2::ZERO, Vec2::splat(6400.0));
+        let mut state = RadarState::default();
+        state.map = Some(map);
+        let mut grid = FogGrid::new([0.0; 2], [6400.0; 2]);
+        let centre = Vec2::new(24.3, 26.1);
+        for z in 0..grid.h {
+            for x in 0..grid.w {
+                if (Vec2::new(x as f32, z as f32) + Vec2::splat(0.5)).distance(centre) < 9.2 {
+                    grid.set_cell_for_test(x, z, true, true);
+                }
+            }
+        }
+        let centre_px = map.to_square(centre * grid.cell) * SIDE as f32;
+        let mut old = Vec::new();
+        for y in 0..128 {
+            for x in 0..128 {
+                let p = map.to_world((Vec2::new(x as f32, y as f32) + Vec2::splat(0.5)) / 128.0);
+                old.extend([0, 0, 0, if grid.explored_at(p.x, p.y) { 0 } else { 255 }]);
+            }
+        }
+        app.insert_resource(state)
+            .insert_resource(FogState { grid, updates: 1 })
+            .insert_resource(FogColours { fog: [0; 3], shroud: [0; 3] });
+        let mut target = Image::new_target_texture(2 * SIDE, SIDE, TextureFormat::Rgba8UnormSrgb, None);
+        target.asset_usage = RenderAssetUsages::RENDER_WORLD;
+        let mut old = Image::new(Extent3d { width: 128, height: 128, depth_or_array_layers: 1 },
+            TextureDimension::D2, old, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default());
+        old.sampler = ImageSampler::linear();
+        let mut images = app.world_mut().resource_mut::<Assets<Image>>();
+        let (target, old) = (images.add(target), images.add(old));
+        let camera = app.world_mut().spawn((
+            Camera2d, Camera { clear_color: ClearColorConfig::Custom(Color::WHITE), ..default() },
+            RenderTarget::from(target.clone()), Msaa::Off,
+        )).id();
+        let panel = Node { position_type: PositionType::Absolute, width: Val::Px(SIDE as f32), height: Val::Px(SIDE as f32), ..default() };
+        app.world_mut().spawn((panel.clone(), UiTargetCamera(camera), ImageNode {
+            image: old,
+            image_mode: bevy::ui::widget::NodeImageMode::Stretch,
+            ..default()
+        }));
+        app.world_mut().spawn((Node { left: Val::Px(SIDE as f32), ..panel }, UiTargetCamera(camera), RadarSquare, StockRadar));
+        app.finish();
+        app.cleanup();
+        for _ in 0..16 {
+            app.update();
+        }
+        let adapter = app.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>().cloned()
+            .or_else(|| app.get_sub_app(bevy::render::RenderApp).and_then(|r| r.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>().cloned()))
+            .expect("STA64_GPU_TESTS=1 needs an adapter");
+        if crate::bench::frames::is_software_adapter(adapter.device_type, &adapter.name) {
+            eprintln!("SKIP: hardware adapter unavailable ({})", adapter.name);
+            return;
+        }
+        let frames = Arc::new(Mutex::new(None::<Image>));
+        let out = Arc::clone(&frames);
+        app.world_mut().spawn(Screenshot::image(target)).observe(move |shot: On<ScreenshotCaptured>| {
+            *out.lock().unwrap() = Some(shot.image.clone());
+        });
+        for _ in 0..60 {
+            app.update();
+            if frames.lock().unwrap().is_some() {
+                break;
+            }
+        }
+        let rgba = frames.lock().unwrap().take().expect("captured the fog material").try_into_dynamic().unwrap().to_rgba8();
+        if let Some(dir) = std::env::var_os("STA64_UI_CAPTURE_DIR") {
+            let dir = std::path::PathBuf::from(dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            rgba.save(dir.join("radar-shroud-comparison.png")).unwrap();
+        }
+        let red = |p: Vec2| f32::from(super::super::radar_sampling::sample_rgb(
+            rgba.as_raw(), (2 * SIDE) as usize, SIDE as usize, p / Vec2::new((2 * SIDE) as f32, SIDE as f32),
+        )[0]);
+        let roughness = |offset| {
+            let centre = centre_px + Vec2::new(offset, 0.0);
+            assert_eq!(red(centre), 255.0, "the known visible centre stays clear");
+            assert_eq!(red(centre + Vec2::splat(90.0)), 0.0, "distant unexplored cells stay opaque");
+            let radii: Vec<_> = (0..128).map(|i| {
+                let angle = i as f32 * std::f32::consts::TAU / 128.0;
+                let direction = Vec2::from_angle(angle);
+                let (mut lo, mut hi) = (40.0, 75.0);
+                for _ in 0..11 {
+                    let mid = (lo + hi) / 2.0;
+                    if red(centre + direction * mid) >= 184.0 { lo = mid } else { hi = mid }
+                }
+                (lo + hi) / 2.0
+            }).collect();
+            (0..128).map(|i| (radii[(i + 1) % 128] - 2.0 * radii[i] + radii[(i + 127) % 128]).powi(2)).sum::<f32>() / 128.0
+        };
+        let old = roughness(0.0);
+        let smooth = roughness(SIDE as f32);
+        eprintln!("{} shroud edge roughness: bilinear {old:.3}, reconstructed {smooth:.3}", adapter.name);
+        assert!(smooth < 0.85 * old, "the grid outline should be smoother: {smooth:.3} vs {old:.3}");
     }
 
     /// Install-gated: the mounted mods' own textures give the colours.
