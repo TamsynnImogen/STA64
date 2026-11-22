@@ -6,24 +6,25 @@
 //! code does; measured: on the original in a bench session):
 //!
 //! - **The model** is the shields-down model ([`MODEL`]; the name STA64 looks up, no data key names it; read from
-//!   the executable, static), found through the mounted files (a mod's replacement included). It is a few
-//!   additive, two-sided band meshes, each spinning on its own channel, each with a texture flipbook (read from data).
+//!   the executable, static), found through the mounted files (a mod's replacement included). Each of its mesh
+//!   nodes is drawn as one band, additive and two-sided, with the node's own channel and flipbook where the model has them.
 //! - **Frame**: the target's transform, then the shield ellipsoid's axes divided by the model's database radius
-//!   (`stock_shield_hits::database_radius`), so the bands lie on the ellipsoid (read from data, measured). The
+//!   (`stock_shield_hits::database_radius`), so a model whose vertices lie at its database radius lies on the ellipsoid (read from data, measured). The
 //!   ellipsoid is `impacts::shield_axes` (INTERIM, until SIM-32).
 //! - **When**: the bands appear in the tick a shield pool reaches zero (the sim's `ShieldsDown` event, measured) and
 //!   are removed in the tick the pool is above zero again, which the sim's zero-shield hold (feature
-//!   `shield_zero_hold`, #1101) puts `shieldDelay` after the last damage taken at zero (measured on three events). The
+//!   `shield_zero_hold`, #1101) puts `shieldDelay` after the last damage taken at zero (measured). The
 //!   client reads only the view: the pool at zero for the whole hold. Nothing is drawn for a craft whose
 //!   definition's features lack `shield_zero_hold`: without the hold the pool is above zero on the next tick and the
 //!   effect would flicker for one frame (the narrowest reading; INTERIM, the original's rule for such profiles is
 //!   not established).
-//! - **Directional pools**: one effect per pool the event names, ended by that pool's own value; the geometry
-//!   is the model's whole bands, not limited to the facing (INTERIM: the original's per-pool behaviour is not
-//!   established, nor whether two pools down at once draw twice).
-//! - **Spin**: the model's channels, step-keyed and evenly spaced over their period, a full turn in four seconds,
-//!   positive in the original's frame (measured); run on the game clock (INTERIM: the clock the original spins on
-//!   is not stated).
+//! - **One effect per craft**, started by the first `ShieldsDown` event for the craft and ended when none of its pools
+//!   is at zero (a craft under the hold has one pool in the original; a second simultaneous effect would add brightness
+//!   nobody measured). For a mod with directional pools this is INTERIM: what the original draws per pool is not
+//!   established. The effect is started by the event, never derived from the view alone: a pool can be at zero for
+//!   other reasons than the hold, and what the original draws then is not established.
+//! - **Spin**: the model's channels, step-keyed and evenly spaced over their period (read from data); the sense as
+//!   the original draws it (measured); run on the game clock (INTERIM: the clock the original spins on is not stated).
 //! - **Flipbook**: the animation the model names for each band with its own time offset (read from data; the
 //!   evaluator the shots use; not measured for these bands: INTERIM).
 //! - **Colour and blend**: unlit, texel times [`GAIN`] times white, added exactly (texture alpha ignored), two-sided, depth
@@ -37,7 +38,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use sta_assets::model::{Model, NodeKind};
-use sta_sim::{EntityId, SimEvent};
+use sta_sim::{EntityId, Fixed, SimEvent};
 use std::collections::{BTreeSet, HashMap};
 
 use super::impacts::shield_axes;
@@ -161,11 +162,10 @@ pub struct BandAsset {
     pub flipbook: Option<(String, f32)>,
 }
 
-/// One craft's shields-down effect for one pool. Tests key on `(unit, facing)`.
+/// One craft's shields-down effect. Tests key on the unit.
 #[derive(Component, Debug, Clone)]
 pub struct ShieldsDown {
     pub unit: EntityId,
-    pub facing: u8,
     /// Its target is visible: only then it is drawn.
     pub shown: bool,
 }
@@ -181,7 +181,13 @@ pub fn wanted(hold: bool, pool_now: f32, pool_max: f32) -> bool {
     hold && pool_max > 0.0 && pool_now <= 0.0
 }
 
-/// Start the effect of each `ShieldsDown` event; end the effect of a pool that is above zero again or whose unit is gone.
+/// Whether any pool of the craft is at zero (a pool with a size and nothing in it).
+fn any_pool_down(pools: &[[Fixed; 2]; 4]) -> bool {
+    pools.iter().any(|p| p[1] > Fixed::ZERO && p[0] <= Fixed::ZERO)
+}
+
+/// Start the effect of a craft's first `ShieldsDown` event; end it when none of the craft's pools is at zero, the unit is gone,
+/// or the Stock look is off.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn track(
     mut cmds: Commands,
@@ -192,20 +198,18 @@ pub(super) fn track(
     mut live: Query<(Entity, &mut ShieldsDown)>,
 ) {
     let stock = ctx.shield_hits_stock();
-    let pool = |id: EntityId, facing: u8| link.curr().unit(id).map(|u| u.shields[usize::from(facing).min(3)].map(|v| v.to_f32()));
-    // End first: a pool above zero or a unit gone.
-    let mut have: BTreeSet<(EntityId, u8)> = BTreeSet::new();
+    let mut have: BTreeSet<EntityId> = BTreeSet::new();
     for (e, s) in &mut live {
-        match pool(s.unit, s.facing) {
-            Some([now, _]) if stock && now <= 0.0 => {
-                have.insert((s.unit, s.facing));
+        match link.curr().unit(s.unit) {
+            Some(u) if stock && any_pool_down(&u.shields) => {
+                have.insert(s.unit);
             }
             _ => cmds.entity(e).try_despawn(),
         }
     }
     for SimMsg(ev) in msgs.read() {
         let SimEvent::ShieldsDown { id, facing } = ev else { continue };
-        if !stock || have.contains(&(*id, *facing)) {
+        if !stock || have.contains(id) {
             continue;
         }
         let Some(unit) = link.curr().unit(*id) else { continue };
@@ -217,8 +221,8 @@ pub(super) fn track(
         if !wanted(content.0.unit_features(def).shield_zero_hold, now, max) {
             continue;
         }
-        have.insert((*id, *facing));
-        cmds.spawn((ShieldsDown { unit: *id, facing: *facing, shown: true }, Transform::IDENTITY, Visibility::Hidden));
+        have.insert(*id);
+        cmds.spawn((ShieldsDown { unit: *id, shown: true }, Transform::IDENTITY, Visibility::Hidden));
     }
 }
 

@@ -43,9 +43,9 @@ fn node(name: &str, parent: Option<usize>, m: Matrix34, kind: NodeKind) -> Node 
 }
 
 /// Three bands under a null node: `left` and `right` stand still at different flipbook offsets, `spin` turns about y on a
-/// channel of 120 keys over four seconds.
+/// channel of eight keys over two seconds (45 degrees each).
 fn authored_model() -> Model {
-    let keys: Vec<Matrix34> = (0..120).map(|k| about_y(k as f32 * 3.0, [0.0, 30.0, 0.0])).collect();
+    let keys: Vec<Matrix34> = (0..8).map(|k| about_y(k as f32 * 45.0, [0.0, 30.0, 0.0])).collect();
     Model {
         format: SourceFormat::Sod,
         version: 1.8,
@@ -57,7 +57,7 @@ fn authored_model() -> Model {
             node("right", Some(0), about_y(0.0, [30.0, -30.0, 0.0]), NodeKind::Mesh(square(10.0))),
             node("spin", Some(0), about_y(0.0, [0.0, 30.0, 0.0]), NodeKind::Mesh(square(10.0))),
         ],
-        channels: vec![Channel { node: "spin".into(), period: 4.0, keys: Keys::Matrix(keys) }],
+        channels: vec![Channel { node: "spin".into(), period: 2.0, keys: Keys::Matrix(keys) }],
         // Four frames of a second; the helper's rule puts time 0.55 s in frame 2.
         flipbooks: vec![("left".into(), "cells".into(), 0.0), ("right".into(), "cells".into(), 0.55), ("spin".into(), "cells".into(), 0.0)],
         warnings: Vec::new(),
@@ -87,14 +87,14 @@ fn a_band_spins_in_steps_of_its_channel_evenly_over_the_period_and_loops() {
     let geo = band_geometry(&authored_model()).unwrap();
     let b = &geo.bands[2];
     let at = |t: f32| band_transform(&b.parent, &b.local, b.keys.as_ref(), t);
-    // 120 keys over four seconds: a key every 1/30 s, three degrees each; a quarter turn at one second.
-    assert!(at(1.0).rotation.angle_between(Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2)) < 1e-3, "{:?}", at(1.0).rotation);
+    // Eight keys over two seconds: a key every quarter second, 45 degrees each; a quarter turn at half a second.
+    assert!(at(0.5).rotation.angle_between(Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2)) < 1e-3, "{:?}", at(0.5).rotation);
     // (The model's rotation about +y turns the other way in render space, which mirrors z: the sense is the model's.)
     // A step: the key holds until the next one.
-    assert_eq!(at(1.0), at(1.0 + 0.5 / 30.0));
-    assert_ne!(at(1.0), at(1.0 + 1.0 / 30.0));
-    // A full turn in four seconds, then the same again; a static band stays where its node is.
-    assert_eq!(at(4.0 + 1.0), at(1.0));
+    assert_eq!(at(0.5), at(0.5 + 0.1));
+    assert_ne!(at(0.5), at(0.5 + 0.25));
+    // A full turn over the period, then the same again; a static band stays where its node is.
+    assert_eq!(at(2.0 + 0.5), at(0.5));
     assert!((at(0.0).translation - Vec3::new(0.0, 30.0, 0.0)).length() < 1e-4);
     let l = &geo.bands[0];
     assert_eq!(band_transform(&l.parent, &l.local, l.keys.as_ref(), 2.7).translation, Vec3::new(-30.0, -30.0, 0.0));
@@ -158,7 +158,7 @@ fn content(hold: bool) -> ContentDb {
 }
 
 /// The effects present per frame as `(unit, facing)` lists, for `frames` frames of a world under `profile`.
-fn run(hold: bool, profile: Option<RenderProfile>, now: fn(u64) -> [i32; 4], events: &str, until: Option<u64>, frames: usize) -> (Vec<Vec<(u32, u8)>>, usize) {
+fn run(hold: bool, profile: Option<RenderProfile>, now: fn(u64) -> [i32; 4], events: &str, until: Option<u64>, frames: usize) -> (Vec<Vec<u32>>, usize) {
     let db = content(hold);
     let text = format!(
         "{{ units: [
@@ -188,7 +188,7 @@ fn run(hold: bool, profile: Option<RenderProfile>, now: fn(u64) -> [i32; 4], eve
     let (mut rows, mut shells) = (Vec::new(), 0);
     for _ in 0..frames {
         app.update();
-        let mut v: Vec<(u32, u8)> = app.world_mut().query::<&ShieldsDown>().iter(app.world()).map(|s| (s.unit.0, s.facing)).collect();
+        let mut v: Vec<u32> = app.world_mut().query::<&ShieldsDown>().iter(app.world()).map(|s| s.unit.0).collect();
         v.sort();
         rows.push(v);
         shells = shells.max(app.world_mut().query::<&ImpactFx>().iter(app.world()).filter(|f| f.kind == ImpactKind::Shield).count());
@@ -212,7 +212,7 @@ fn the_effect_is_there_while_the_pool_is_at_zero_after_the_event_and_gone_when_i
     assert!((9..=12).contains(&first), "appeared at frame {first}");
     let last = rows.iter().rposition(|r| !r.is_empty()).unwrap();
     assert!((36..=40).contains(&last), "gone after frame {last}: the pool is above zero again from tick 40");
-    assert!(rows[first..=last].iter().all(|r| r == &[(2, 1)]), "one effect for the pool, all the while: {:?}", &rows[first..=last]);
+    assert!(rows[first..=last].iter().all(|r| r == &[2]), "one effect for the craft, all the while: {:?}", &rows[first..=last]);
     assert!(rows[last + 1..].iter().all(Vec::is_empty), "it does not come back");
 }
 
@@ -241,7 +241,7 @@ fn nothing_for_a_profile_without_the_hold_where_the_pool_is_back_on_the_next_tic
 }
 
 #[test]
-fn directional_pools_only_the_facing_that_is_down_and_each_ends_with_its_own_pool() {
+fn directional_pools_one_effect_per_craft_from_the_first_event_until_no_pool_is_at_zero() {
     fn two(tick: u64) -> [i32; 4] {
         match tick {
             10..=29 => [60, 0, 0, 60],
@@ -250,13 +250,14 @@ fn directional_pools_only_the_facing_that_is_down_and_each_ends_with_its_own_poo
         }
     }
     let (rows, _) = run(true, Some(RenderProfile::Stock), two, &(down(10, 1) + &down(12, 2)), None, 70);
-    // Both pools are down: facing 1 and facing 2, and never facing 0 or 3.
-    assert!(rows.iter().any(|r| r == &[(2, 1), (2, 2)]));
-    assert!(rows.iter().flatten().all(|(_, f)| *f == 1 || *f == 2));
-    // After tick 30 only the facing still at zero.
-    assert!(rows[35..45].iter().all(|r| r == &[(2, 2)]), "{:?}", &rows[35..45]);
+    // Two pools down, one effect: never two at once.
+    assert!(rows.iter().all(|r| r.len() <= 1));
+    let first = rows.iter().position(|r| !r.is_empty()).expect("the effect appeared");
+    assert!((9..=12).contains(&first), "{first}");
+    // After tick 30 one pool is still at zero: the effect stays, and it ends when the last pool is back.
+    assert!(rows[35..45].iter().all(|r| r == &[2]), "{:?}", &rows[35..45]);
     assert!(rows[55..].iter().all(Vec::is_empty));
-    // An event for a facing whose pool is above zero makes nothing.
+    // An event for a pool above zero, with no pool at zero, makes nothing.
     let (rows, _) = run(true, Some(RenderProfile::Stock), one_pool, &down(10, 3), None, 30);
     assert!(rows.iter().all(Vec::is_empty));
 }
@@ -296,7 +297,7 @@ fn the_assets_are_dropped_and_loaded_again_when_the_mounted_files_change() {
 /// assets, visual spawn, spin and flipbook systems, read back from the frame:
 /// - added to what is there, the texture's alpha darkens nothing;
 /// - each band takes its own flipbook cell (their time offsets differ) from the game clock, times the white gain;
-/// - a band spins on its channel: face on at the start, edge on a quarter turn (one second) later.
+/// - a band spins on its channel: face on at the start, edge on a quarter turn (half a second) later.
 ///
 /// Prints SKIP and passes otherwise.
 #[test]
@@ -369,7 +370,7 @@ fn gpu_the_bands_add_in_their_own_cells_and_spin_on_the_game_clock() {
         Transform::from_translation(eye).looking_at(Vec3::ZERO, Vec3::Y),
     ));
     // The effect's frame: the ellipsoid is a sphere of the model's database radius, so the model's own size shows.
-    app.world_mut().spawn((ShieldsDown { unit: EntityId(2), facing: 1, shown: true }, Transform::IDENTITY, Visibility::Inherited));
+    app.world_mut().spawn((ShieldsDown { unit: EntityId(2), shown: true }, Transform::IDENTITY, Visibility::Inherited));
     app.finish();
     app.cleanup();
     let capture = |app: &mut App| {
@@ -416,8 +417,8 @@ fn gpu_the_bands_add_in_their_own_cells_and_spin_on_the_game_clock() {
     let img = capture(&mut app);
     assert!(near(px(&img, 34, 94), [srgb(0.2 + a); 3]), "additive: {:?}", px(&img, 34, 94));
     assert!(near(px(&img, 5, 5), [srgb(0.2); 3]));
-    // One second of game time on, the spinning band has turned a quarter and stands edge on; the cells moved on.
-    show(&mut app, TICK_HZ as u64, 0.0);
+    // Half a second of game time on, the spinning band has turned a quarter and stands edge on; the cells moved on.
+    show(&mut app, TICK_HZ as u64 / 2, 0.0);
     let img = capture(&mut app);
     assert!(near(px(&img, 64, 34), [0, 0, 0]), "spinning band edge on: {:?}", px(&img, 64, 34));
 }
