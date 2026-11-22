@@ -756,12 +756,15 @@ fn draw_tip(
             .ok()
             .and_then(|t| {
                 if !stock {
-                    // The plain HUD's already-composed verbose fallback can carry a locked
-                    // reason when the class has no authored verbose key.
-                    if matches!(&t.stock, Some(super::hud::stock::tooltip_text::StockTip::Build(parts)) if parts.verbose.is_none())
-                        && hover.rest >= delays.verbose && t.verbose.is_some()
-                    {
-                        return t.text_at_with(hover.rest, &delays).map(look);
+                    if let Some(super::hud::stock::tooltip_text::StockTip::Build(parts)) = &t.stock {
+                        // A free item has no cost line. The plain HUD's generated verbose
+                        // fallback can also carry a lock reason when the class has no key.
+                        let costs = parts.cost.iter().any(|cost| cost.amount > 0.0);
+                        let lock_details = hover.rest >= delays.verbose
+                            && parts.verbose.is_none() && t.verbose.is_some();
+                        if !costs || lock_details {
+                            return t.text_at_with(hover.rest, &delays).map(look);
+                        }
                     }
                     return t.stock_text_at(hover.rest, &delays, &look);
                 }

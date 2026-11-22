@@ -342,13 +342,14 @@ fn hovering_between_children_keeps_the_hud_tooltip_clock() {
     app.world_mut().resource_mut::<TipHover>().rest = TipDelays::STOCK.short;
     app.update();
     assert_eq!(words(&mut app), "Short");
+    let before = app.world().resource::<TipHover>().rest;
 
     // Out/Over from the child bubble through the parent on internal movement.
     // The backend does not send a Leave for their shared parent.
     app.world_mut().trigger(PointerOut { entity: child, pointer: pointer.clone(), hit: hit.clone() });
     app.world_mut().trigger(PointerOver { entity: child, pointer: pointer.clone(), hit: hit.clone() });
     assert_eq!(app.world().resource::<TipHover>().target, Some(parent));
-    assert_eq!(app.world().resource::<TipHover>().rest, TipDelays::STOCK.short);
+    assert_eq!(app.world().resource::<TipHover>().rest, before);
     app.world_mut().resource_mut::<TipHover>().rest = TipDelays::STOCK.verbose;
     app.update();
     assert_eq!(words(&mut app), "Verbose");
@@ -361,13 +362,18 @@ fn hovering_between_children_keeps_the_hud_tooltip_clock() {
 
 #[test]
 fn plain_box_keeps_build_composition_and_an_existing_verbose_lock_reason() {
-    use crate::ui::hud::stock::tooltip_text::BuildTipParts;
+    use crate::ui::hud::stock::tooltip_text::{BuildTipParts, CostPart};
     let size = Vec2::new(800.0, 600.0);
     let mut app = rig(UiProfile::FleetOps, canvas(size, size, HudFit::Centred), size, Vec2::ZERO);
-    let parts = BuildTipParts { tooltip: "BUILD_KEY".into(), ..default() };
+    let parts = BuildTipParts {
+        tooltip: "BUILD_KEY".into(),
+        cost: vec![CostPart { key: "DIL", fallback: "dilithium".into(), amount: 125.0 }],
+        ..default()
+    };
     app.insert_resource(crate::ui::i18n::Strings::from_game("english", "\"BUILD_KEY\", \"Native build\""));
     hover(&mut app, Tooltip::new("BUILD_KEY").verbose("Locked: missing tech").stock_build(parts), TipDelays::default().short);
-    assert_eq!(words(&mut app), "Native build:");
+    let short = words(&mut app);
+    assert!(short.starts_with("Native build:") && short.contains("125"), "{short:?}");
     app.world_mut().resource_mut::<TipHover>().rest = TipDelays::default().verbose;
     app.update();
     assert_eq!(words(&mut app), "Locked: missing tech");

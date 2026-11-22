@@ -1114,7 +1114,7 @@ mod tests {
 
         let view = sta_sim::combat::damage::SystemView {
             entity: EntityId(5),
-            health: [Fixed::ONE, Fixed::ONE, Fixed::ZERO, Fixed::ONE, Fixed::ONE],
+            health: [Fixed::ONE, Fixed::ZERO, Fixed::ONE, Fixed::ONE, Fixed::ONE],
             on: [true; 5],
         };
         let feed = crate::ui::hud::status::StatusFeed { systems: vec![view], ..Default::default() };
