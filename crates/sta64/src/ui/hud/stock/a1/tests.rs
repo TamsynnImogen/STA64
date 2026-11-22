@@ -325,7 +325,7 @@ fn the_crew_label_uses_its_cfg_colour_and_the_amount_is_green() {
 fn absent_identity_colours_use_black_and_the_class_has_its_panel_piece() {
     let mut app = app(4.0 / 3.0);
     let cfg = CFG.replace("infoSingleCrewTextColor = 0 1 0", "");
-    let sheet = format!("{cfg}\ninfoSingleBackground=single_background\ninfoSingleBackgroundSize=1\ninfoSingleBackground_0=90 12 112 11\n");
+    let sheet = format!("{cfg}\ninfoSingleBackground=\"single_background\"\ninfoSingleBackgroundSize=1\ninfoSingleBackground_0=90 12 112 11\n");
     let (cfg, warnings) = GuiCfg::parse("a1_text.cfg", &sheet);
     assert!(warnings.is_empty(), "{warnings:?}");
     app.world_mut().resource_mut::<HudConfig>().gui = Some(cfg.layout_auto());
