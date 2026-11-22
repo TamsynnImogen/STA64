@@ -22,7 +22,7 @@
 
 use std::collections::VecDeque;
 
-use bevy::picking::events::{PointerOut, PointerOver};
+use bevy::picking::events::{PointerEnter, PointerLeave};
 use bevy::prelude::*;
 use bevy::time::Real;
 use bevy::window::PrimaryWindow;
@@ -201,23 +201,43 @@ impl Tooltip {
         self
     }
 
+    /// The stock resource text has two integer slots, resolved after localization.
+    pub fn stock_two_numbers(mut self, first: i64, second: i64) -> Tooltip {
+        self.stock = Some(super::hud::stock::tooltip_text::StockTip::TwoNumbers(first, second));
+        self
+    }
+
+    pub fn stock_class_details(mut self) -> Tooltip {
+        self.stock = Some(super::hud::stock::tooltip_text::StockTip::ClassDetails);
+        self
+    }
+
     /// The key bound for `action` fills the text's hotkey slot under the stock look.
     pub fn bound_to(mut self, action: crate::input::keys::Action) -> Tooltip {
         self.bound = Some(action);
         self
     }
 
-    /// The text of the stock look after `rest` seconds of the hover, composed from the string table
+    /// The text after `rest` seconds of the hover, composed from the string table
     /// (`look`) where the tooltip carries a [`StockTip`](super::hud::stock::tooltip_text::StockTip),
     /// else as [`text_at_with`](Self::text_at_with) resolved: nothing before the short delay, the
     /// short text from it, the verbose text from the verbose delay.
     pub fn stock_text_at(&self, rest: f32, delays: &TipDelays, look: super::hud::stock::tooltip_text::Lookup) -> Option<String> {
-        use super::hud::stock::tooltip_text::{StockTip, build_short, build_verbose};
+        use super::hud::stock::tooltip_text::{StockTip, build_short, build_verbose, class_details, two_numbers};
         let verbose = rest >= delays.verbose;
         let shown = rest >= delays.short;
         match &self.stock {
             Some(StockTip::Build(p)) if shown => Some(if verbose { build_verbose(p, look) } else { build_short(p, look) }),
-            // No stock composition: today's text.
+            Some(StockTip::TwoNumbers(first, second)) if shown => {
+                let key = if verbose { self.verbose.as_deref().unwrap_or(&self.short) } else { &self.short };
+                Some(two_numbers(key, *first, *second, look))
+            }
+            Some(StockTip::ClassDetails) if shown => Some(if verbose {
+                class_details(&self.short, self.verbose.as_deref(), look)
+            } else {
+                look(&self.short)
+            }),
+            // No structured composition: today's text.
             _ => self.text_at_with(rest, delays).map(look),
         }
     }
@@ -589,13 +609,13 @@ fn draw_chat(
     }
 }
 
-fn on_over(ev: On<PointerOver>, tips: Query<(), With<Tooltip>>, mut hover: ResMut<TipHover>) {
+fn on_over(ev: On<PointerEnter>, tips: Query<(), With<Tooltip>>, mut hover: ResMut<TipHover>) {
     if tips.contains(ev.entity) && hover.target != Some(ev.entity) {
         *hover = TipHover { target: Some(ev.entity), rest: 0.0 };
     }
 }
 
-fn on_out(ev: On<PointerOut>, mut hover: ResMut<TipHover>) {
+fn on_out(ev: On<PointerLeave>, mut hover: ResMut<TipHover>) {
     if hover.target == Some(ev.entity) {
         *hover = TipHover::default();
     }
@@ -736,7 +756,17 @@ fn draw_tip(
             .ok()
             .and_then(|t| {
                 if !stock {
-                    return t.text_at_with(hover.rest, &delays).map(look);
+                    if let Some(super::hud::stock::tooltip_text::StockTip::Build(parts)) = &t.stock {
+                        // A free item has no cost line. The plain HUD's generated verbose
+                        // fallback can also carry a lock reason when the class has no key.
+                        let costs = parts.cost.iter().any(|cost| cost.amount > 0.0);
+                        let lock_details = hover.rest >= delays.verbose
+                            && parts.verbose.is_none() && t.verbose.is_some();
+                        if !costs || lock_details {
+                            return t.text_at_with(hover.rest, &delays).map(look);
+                        }
+                    }
+                    return t.stock_text_at(hover.rest, &delays, &look);
                 }
                 // The stock look: the string table's composition, the hotkey slot filled with the
                 // key the player bound where STA64 knows it, the markers consumed.

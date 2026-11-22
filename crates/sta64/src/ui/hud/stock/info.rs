@@ -11,6 +11,7 @@ use super::super::status::node_fraction;
 use super::layout::{StockLayout, info_variant};
 use crate::ui::gui_sprites::{GuiImage, GuiImageSampling};
 use crate::ui::notices::Tooltip;
+use crate::ui::profile::UiProfile;
 use crate::ui::sprite_font::{FontRole, SpriteText, SpriteTextStyle, sprite_text_styled};
 use crate::ui::stock_font::{HAlign, StockTextCanvas, VAlign};
 use crate::ui::theme::{Theme, UiButton, WidgetState};
@@ -83,6 +84,33 @@ pub(in crate::ui::hud) struct FallbackHullTint(StockBar);
 /// The sim's system index ([`sta_sim::combat::damage::SystemView`] order: engines, weapons,
 /// shield generator, life support, sensors) of cfg slot `n`.
 const SLOT_SYSTEM: [usize; 5] = [4, 2, 1, 0, 3];
+
+/// The resolved ODF retains inherited keys. An omitted key has no authored
+/// maximum in STA64's content model, so it keeps the stock icon default.
+const SYSTEM_HP_KEYS: [&str; 5] = [
+    "enginesHitPoints", "weaponsHitPoints", "shieldGeneratorHitPoints",
+    "lifeSupportHitPoints", "sensorsHitPoints",
+];
+
+fn system_slot_visible(def: &sta_content::UnitDef, slot: usize) -> bool {
+    let system = SLOT_SYSTEM[slot];
+    def.raw.f32(SYSTEM_HP_KEYS[system]).is_none()
+        || def.system_hit_points[system] > Fixed::ZERO
+}
+
+/// SystemText::GetTooltip uses its selected object's authored class tooltip, while its verbose
+/// branch localizes the system name. `SLOT_SYSTEM` maps each CFG icon to STA64's system order.
+fn system_tip(def: &sta_content::UnitDef, slot: usize, profile: Option<UiProfile>) -> Tooltip {
+    if profile == Some(UiProfile::FleetOps) {
+        let mut tip = Tooltip::new(def.raw.str("tooltip").unwrap_or_default());
+        if let Some(verbose) = def.raw.str("verboseTooltip") {
+            tip = tip.verbose(verbose);
+        }
+        return tip.stock_class_details();
+    }
+    let key = ["ENG", "WPN", "SHLD", "LS", "SENS"][SLOT_SYSTEM[slot]];
+    Tooltip::new(def.raw.str("tooltip").unwrap_or_default()).verbose(format!("GUI_SD_REPAIR_SYS_{key}"))
+}
 
 /// CFG keys use the A2FOExtensions thresholds. Stock Armada II uses a green
 /// icon, a quarter-green base plus a three-quarter-green wedge for damage,
@@ -173,7 +201,18 @@ pub(super) fn readout(commands: &mut Commands, root: Entity, r: R, value: String
 }
 
 #[allow(clippy::too_many_arguments)]
-fn text_styled(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>, mut style: SpriteTextStyle) -> Entity {
+fn readout_tip(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>, tip: Option<Tooltip>) -> Entity {
+    let style = SpriteTextStyle::default().stock_label().centered_in_box().placed(HAlign::Centre, VAlign::Centre);
+    text_styled_with_tip(commands, root, r, value, color, size, kind, style, tip)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn text_styled(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>, style: SpriteTextStyle) -> Entity {
+    text_styled_with_tip(commands, root, r, value, color, size, kind, style, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn text_styled_with_tip(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>, mut style: SpriteTextStyle, tip: Option<Tooltip>) -> Entity {
     if let Some(place) = style.place.as_mut() {
         place.rect = Vec2::new(r.w, r.h);
     }
@@ -186,7 +225,11 @@ fn text_styled(commands: &mut Commands, root: Entity, r: R, value: String, color
         wrap_node.align_items = AlignItems::Center;
         wrap_node.justify_content = JustifyContent::Center;
     }
-    let wrapper = commands.spawn((wrap_node, Pickable::IGNORE)).id();
+    let wrapper = if let Some(tip) = tip {
+        commands.spawn((wrap_node, tip)).id()
+    } else {
+        commands.spawn((wrap_node, Pickable::IGNORE)).id()
+    };
     let size = if style.min_size { size.max(18.0) } else { size };
     let mut e = commands.spawn(sprite_text_styled(value, size, color, style));
     if let Some(kind) = kind {
@@ -354,6 +397,35 @@ fn resource_text(feed: &HudFeed, id: usize) -> Option<String> {
     }
     let slot = resource_slot(id)?;
     player.resources.get(slot).map(|v| whole(*v).to_string())
+}
+
+/// Resource IDs and keys are the branches in Armada2.exe ResourceComponent::GetTooltip and
+/// GetVerboseTooltip. Keep keys until display so the mounted native header wins, including blanks.
+fn resource_tip(feed: &HudFeed, id: usize) -> Option<Tooltip> {
+    if id == 0 {
+        let available = feed.view.player(feed.player).and_then(|p| p.crew);
+        let capacity = feed.view.attrs.seats.iter().find(|s| s.player == feed.player).and_then(|s| s.crew_capacity);
+        return Some(match (available, capacity) {
+            (Some(available), Some(capacity)) => Tooltip::new("GUI_RD_CREW_TOOLTIP").verbose("GUI_RD_CREW_VTOOLTIP").stock_two_numbers(whole(available), whole(capacity)),
+            _ => Tooltip::new(""),
+        });
+    }
+    let officer_stem = feed.view.attrs.seats.iter().find(|s| s.player == feed.player)
+        .and_then(|s| s.race.as_deref()).map(str::to_ascii_lowercase).map_or("OFFICERS", |race| {
+            if race.contains("borg") { "BORG_OFF" }
+            else if race.contains("rom") { "ROM_OFF" }
+            else if race.contains("8472") { "8472_OFF" }
+            else { "OFFICERS" }
+        });
+    let stem = match id {
+        1 => officer_stem,
+        2 => "DILITHIUM",
+        3 => "LATINUM",
+        4 => "METAL",
+        5 => "BIOMATTER",
+        _ => return None,
+    };
+    Some(Tooltip::new(format!("GUI_RD_{stem}_TOOLTIP")).verbose(format!("GUI_RD_{stem}_VTOOLTIP")))
 }
 
 /// Stock A2's resource palette (read from the executable, static). Roots' authored
@@ -532,7 +604,7 @@ fn spawn_separate_resources(commands: &mut Commands, root: Entity, layout: &Stoc
         let value = resource_text(feed, id).unwrap_or_default();
         // Armada.exe's DilithiumDisplay, CrewDisplay and OfficerDisplay all
         // pass the same 0.5 RGB grey to the font draw (read from the binary).
-        readout(commands, root, r, value, Color::srgb(0.5, 0.5, 0.5), theme.small_size, Some(StockText::Resource(id)));
+        readout_tip(commands, root, r, value, Color::srgb(0.5, 0.5, 0.5), theme.small_size, Some(StockText::Resource(id)), resource_tip(feed, id));
     }
 }
 
@@ -566,7 +638,7 @@ pub(super) fn spawn_resource(commands: &mut Commands, root: Entity, layout: &Sto
             continue;
         };
         let color = resource_colour(layout, id, theme.text);
-        readout(
+        readout_tip(
             commands,
             root,
             r,
@@ -574,6 +646,7 @@ pub(super) fn spawn_resource(commands: &mut Commands, root: Entity, layout: &Sto
             color,
             theme.small_size,
             Some(StockText::Resource(id)),
+            resource_tip(feed, id),
         );
     }
 }
@@ -585,6 +658,7 @@ fn spawn_single(
     layout: &StockLayout,
     feed: &HudFeed,
     theme: &Theme,
+    profile: Option<UiProfile>,
     origin: Vec2,
     single: &model::Single,
 ) {
@@ -690,16 +764,19 @@ fn spawn_single(
     // own rectangles. Read both from the mounted CFG.
     if let Some(def) = def.filter(|d| d.system_hit_points.iter().any(|hp| *hp > Fixed::ZERO)) {
         for (slot, system) in SLOT_SYSTEM.into_iter().enumerate() {
+            if !system_slot_visible(def, slot) {
+                continue;
+            }
             let icon = chosen_rect(layout, origin, single.builder, &format!("infoBuildSystemIcon_{slot}"), &format!("infoSystemIcon_{slot}"));
             if let Some(r) = icon {
-                commands.entity(root).with_child((node(r), Pickable::IGNORE, SystemIcon(slot), GuiImage::new("infosystem").with_frame(slot)));
+                commands.entity(root).with_child((node(r), system_tip(def, slot, profile), SystemIcon(slot), GuiImage::new("infosystem").with_frame(slot)));
             }
             if def.system_hit_points[system] > Fixed::ZERO
                 && let Some(r) = system_readout_rect(layout, origin, single.builder, slot, icon)
             {
-                let label = text_styled(
+                let label = text_styled_with_tip(
                     commands, root, r, String::new(), theme.text, r.h * 0.8, None,
-                    SpriteTextStyle { tint_all: true, ..default() }.centered_in_box(),
+                    SpriteTextStyle { tint_all: true, ..default() }.centered_in_box(), Some(system_tip(def, slot, profile)),
                 );
                 commands.entity(label).insert(SystemHealth(slot));
                 clip_to_rect(commands, label, false);
@@ -801,7 +878,7 @@ fn group_label_style(layout: &StockLayout, width: f32) -> SpriteTextStyle {
     SpriteTextStyle { scaled: true, tint_all: true, stock: Some(crate::ui::stock_font::StockRole::Default), ..SpriteTextStyle::role(role).wrapped(width) }
 }
 
-pub(super) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme) {
+pub(super) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme, profile: Option<UiProfile>) {
     spawn_resource(commands, root, layout, feed, theme);
     let info = model::info(feed);
     let variant = info_variant(&info);
@@ -814,7 +891,7 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout,
     }
     match &info {
         Info::None => {}
-        Info::Single(single) => spawn_single(commands, root, layout, feed, theme, origin, single),
+        Info::Single(single) => spawn_single(commands, root, layout, feed, theme, profile, origin, single),
         Info::Group(tiles) => spawn_group(commands, root, layout, feed, theme, origin, variant, tiles),
     }
 }
@@ -823,7 +900,9 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout,
 pub(in crate::ui::hud) fn update(
     feed: Res<HudFeed>,
     status: Option<Res<crate::ui::hud::status::StatusFeed>>,
-    mut texts: Query<(&StockText, &mut SpriteText)>,
+    mut texts: Query<(Entity, &StockText, &mut SpriteText)>,
+    parents: Query<&ChildOf>,
+    mut tips: Query<&mut Tooltip>,
     mut bars: Query<(&StockBar, &mut Node)>,
     mut crew: Query<&mut SpriteText, (With<super::a1::info::CrewText>, Without<StockText>)>,
     mut health_labels: Query<(&SystemHealth, &mut SpriteText), (Without<StockText>, Without<super::a1::info::CrewText>)>,
@@ -875,7 +954,15 @@ pub(in crate::ui::hud) fn update(
             text.text = value;
         }
     }
-    for (kind, mut text) in &mut texts {
+    for (entity, kind, mut text) in &mut texts {
+        if let StockText::Resource(id) = *kind
+            && let Ok(parent) = parents.get(entity)
+            && let Ok(mut tip) = tips.get_mut(parent.parent())
+            && let Some(next) = resource_tip(&feed, id)
+            && *tip != next
+        {
+            *tip = next;
+        }
         let value = match *kind {
             StockText::Resource(id) => resource_text(&feed, id),
             StockText::Population(id) => super::super::status::population_text(&feed, id),
@@ -919,6 +1006,121 @@ mod tests {
         view::{PlayerView, WorldView},
     };
     use std::sync::Arc;
+
+    #[test]
+    fn native_resource_keys_and_pickable_readout_area() {
+        let mut feed = HudFeed { player: PlayerId(1), ..default() };
+        feed.view = Arc::new(WorldView {
+            players: vec![PlayerView {
+                id: PlayerId(1), team: TeamId(1), resources: vec![Fixed::ZERO; 4],
+                officers: [Fixed::ZERO; 2], eliminated: false, relations: Vec::new(), crew: Some(Fixed::from_int(7)),
+            }],
+            ..default()
+        });
+        Arc::make_mut(&mut feed.view).attrs.seats.push(sta_sim::attrs::SeatView {
+            player: PlayerId(1), race: Some("borg".into()), crew_capacity: Some(Fixed::from_int(12)), ..default()
+        });
+        let look = |key: &str| match key {
+            "GUI_RD_CREW_TOOLTIP" => "Crew: %d/%d".to_owned(),
+            "GUI_RD_CREW_VTOOLTIP" => "Crew: %d/%d available".to_owned(),
+            _ => key.to_owned(),
+        };
+        let delays = crate::ui::stock_tooltip::TipDelays::STOCK;
+        let crew = resource_tip(&feed, 0).unwrap();
+        assert_eq!(crew.stock_text_at(delays.short, &delays, &look).as_deref(), Some("Crew: 7/12"));
+        assert_eq!(crew.stock_text_at(delays.verbose, &delays, &look).as_deref(), Some("Crew: 7/12 available"));
+        assert_eq!(resource_tip(&feed, 1).unwrap().short, "GUI_RD_BORG_OFF_TOOLTIP");
+        assert_eq!(resource_tip(&feed, 2).unwrap().verbose.as_deref(), Some("GUI_RD_DILITHIUM_VTOOLTIP"));
+
+        let mut world = World::new();
+        let root = world.spawn(Node::default()).id();
+        let rect = R::new(20.0, 30.0, 90.0, 22.0);
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            readout_tip(&mut commands, root, rect, "7".into(), Color::WHITE, 12.0, Some(StockText::Resource(0)), Some(crew));
+        }
+        queue.apply(&mut world);
+        let (node, tip) = world.query::<(&Node, &Tooltip)>().single(&world).unwrap();
+        assert_eq!((node.left, node.top, node.width, node.height), (Val::Px(20.0), Val::Px(30.0), Val::Px(90.0), Val::Px(22.0)));
+        assert_eq!(tip.short, "GUI_RD_CREW_TOOLTIP");
+        assert!(world.query::<(&Tooltip, &Pickable)>().iter(&world).next().is_none(), "the tooltip wrapper remains pickable");
+    }
+
+    #[test]
+    fn resource_tooltip_is_present_before_the_player_feed_and_recomposes_when_crew_arrives() {
+        let mut feed = HudFeed { player: PlayerId(1), ..default() };
+        assert_eq!(resource_tip(&feed, 2).unwrap().short, "GUI_RD_DILITHIUM_TOOLTIP");
+        assert_eq!(resource_tip(&feed, 0).unwrap().short, "");
+        Arc::make_mut(&mut feed.view).players.push(PlayerView {
+            id: PlayerId(1), team: TeamId(1), resources: vec![Fixed::ZERO; 4],
+            officers: [Fixed::ZERO; 2], eliminated: false, relations: Vec::new(), crew: Some(Fixed::from_int(4)),
+        });
+        assert_eq!(resource_tip(&feed, 0).unwrap().short, "", "capacity is still absent");
+        Arc::make_mut(&mut feed.view).attrs.seats.push(sta_sim::attrs::SeatView {
+            player: PlayerId(1), crew_capacity: Some(Fixed::from_int(9)), ..default()
+        });
+        let tip = resource_tip(&feed, 0).unwrap();
+        assert_eq!(tip.short, "GUI_RD_CREW_TOOLTIP");
+        assert_eq!(tip.stock_text_at(3.0, &crate::ui::stock_tooltip::TipDelays::STOCK, &|key| {
+            if key == "GUI_RD_CREW_VTOOLTIP" { "Crew: %d/%d".into() } else { key.into() }
+        }).as_deref(), Some("Crew: 4/9"));
+    }
+
+    #[test]
+    fn system_text_uses_authored_short_and_native_verbose_keys() {
+        let odf = sta_odf::resolve("ship", &mut |_| Some("tooltip = \"SHIP_TIP\"\nverboseTooltip = \"SHIP_VERBOSE\"\n".to_owned())).unwrap();
+        let mut warnings = Vec::new();
+        let def = sta_content::unit::unit_def("ship", &odf, None, &mut warnings);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let a2 = |slot| system_tip(&def, slot, Some(UiProfile::Armada2));
+        assert_eq!(a2(0).short, "SHIP_TIP");
+        assert_eq!(a2(0).verbose.as_deref(), Some("GUI_SD_REPAIR_SYS_SENS"));
+        assert_eq!(a2(1).verbose.as_deref(), Some("GUI_SD_REPAIR_SYS_SHLD"));
+        assert_eq!(a2(2).verbose.as_deref(), Some("GUI_SD_REPAIR_SYS_WPN"));
+        assert_eq!(a2(3).verbose.as_deref(), Some("GUI_SD_REPAIR_SYS_ENG"));
+        assert_eq!(a2(4).verbose.as_deref(), Some("GUI_SD_REPAIR_SYS_LS"));
+        let fo = system_tip(&def, 0, Some(UiProfile::FleetOps));
+        assert_eq!(fo.verbose.as_deref(), Some("SHIP_VERBOSE"));
+        let delays = crate::ui::stock_tooltip::TipDelays::STOCK;
+        let look = |key: &str| match key {
+            "SHIP_TIP" => "Class tip".into(),
+            "SHIP_VERBOSE" => "Class details".into(),
+            "GUI_CP_TOOLTIP_SEPARATE" => ":".into(),
+            other => other.into(),
+        };
+        assert_eq!(fo.stock_text_at(delays.short, &delays, &look).as_deref(), Some("Class tip"));
+        assert_eq!(fo.stock_text_at(delays.verbose, &delays, &look).as_deref(), Some("Class tip:\nClass details"));
+    }
+
+    #[test]
+    fn system_visibility_uses_resolved_maximum_not_current_damage() {
+        let odf = sta_odf::resolve("child", &mut |name| {
+            Some(if name.eq_ignore_ascii_case("base.odf") {
+                "sensorsHitPoints = 0\nweaponsHitPoints = 40\n".to_owned()
+            } else {
+                "#include \"base.odf\"\nenginesHitPoints = 0\n".to_owned()
+            })
+        }).unwrap();
+        let mut warnings = Vec::new();
+        let def = sta_content::unit::unit_def("child", &odf, None, &mut warnings);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(def.raw.raw("sensorsHitPoints"), Some("0"), "inherited zero remains resolved");
+        assert!(!system_slot_visible(&def, 0), "inherited zero hides sensors");
+        assert!(!system_slot_visible(&def, 3), "local zero hides engines");
+        assert!(system_slot_visible(&def, 2), "positive weapons maximum remains visible");
+        assert!(system_slot_visible(&def, 1), "omitted shield maximum keeps its icon default");
+        assert!(system_slot_visible(&def, 4), "omitted life-support maximum keeps its icon default");
+
+        let view = sta_sim::combat::damage::SystemView {
+            entity: EntityId(5),
+            health: [Fixed::ONE, Fixed::ZERO, Fixed::ONE, Fixed::ONE, Fixed::ONE],
+            on: [true; 5],
+        };
+        let feed = crate::ui::hud::status::StatusFeed { systems: vec![view], ..Default::default() };
+        assert_eq!(slot_status(Some(&feed), EntityId(5), 2).0, Fixed::ZERO);
+        assert!(system_slot_visible(&def, 2), "destroyed weapons keep their icon and readout");
+    }
 
     /// UI-48: a stock bar's track and fill come from the cfg when it names them.
     #[test]
@@ -978,7 +1180,7 @@ mod tests {
         let mut queue = CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, &world);
-            spawn_single(&mut commands, root, &layout, &feed, &theme, Vec2::ZERO, &single);
+            spawn_single(&mut commands, root, &layout, &feed, &theme, Some(UiProfile::Armada2), Vec2::ZERO, &single);
             spawn_group(&mut commands, root, &layout, &feed, &theme, Vec2::ZERO, 1, &[tile.clone(), short]);
         }
         queue.apply(&mut world);

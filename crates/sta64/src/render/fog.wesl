@@ -3,10 +3,10 @@
 // Ported from Armada II Refit's render3d/mods/overlays/shaders/overlays.hlsl
 // (`ps_fog_bspline`, `finish`; MIT, Copyright (c) 2026 Cedric Haase, see fog.NOTICE.md
 // next to this file). The mask is a texture with one texel per cell of the grid:
-// 1 where the layer hides the cell, 0 where it shows it. Filtered bilinearly that is a
-// mask with a corner at every cell; here it is reconstructed with a cubic B-spline
-// (four bilinear taps), so a disc of cells reads as a circle, and the edge is a
-// smoothstep about a threshold of it, never narrower than a pixel or so (fwidth).
+// 1 outside, 0 inside, signed distance normalized to 0.5 on the sensor contour.
+// A cubic B-spline (four bilinear taps) reconstructs the distance between sampled
+// cell centres. The edge is a smoothstep about the contour, never narrower than
+// a pixel or so (fwidth).
 //
 // Differences from Refit: its texture also carries the layer's art (alpha 1, rgb the
 // art, hidden cells only), which is divided out of the filtered colour; here the mask is all

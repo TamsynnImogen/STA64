@@ -286,6 +286,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] Nebula speed (#1055): under an Armada II family profile (stock Armada II, Fleet Operations, Roots, Native) ships are not slowed in a nebula whose definition declares `craft_speed_coefficient` but no `craft_max_speed_fraction`; one with the fraction slows them to that share of impulse speed. Under Armada I the coefficient still slows them (interim, not measured).
 - [?] Nebula shield return (#1063, Armada II family): after leaving a shield-disabling nebula the shields stay at zero for a few seconds, then return in one step to the value they had on entry and recharge from there.
 
+- [?] Sensor edges and HUD tooltips. Move a scout slowly with fog and shroud on and compare the rounded edge in the world view and on the minimap. Select a ship or builder whose resolved ODF sets one system maximum to zero and damage a different system to zero. The authored-zero system should disappear. The damaged system should still show its icon and 0. Hover the resource readouts, system icons and command buttons until short and verbose text appear. Check a building with an authored verbose tooltip for its cost line.
+
 ## Checked earlier (morning list)
 
 - [x] Construction live-feedback fixes accepted (2026-11-11, `construction-a1666d0`): the user confirmed visible beams, later chunk reveal and the constructor staying fixed under normal/queued movement. Automated Stop/cancellation and snapshot checks pass. FPS was not reported; this does not complete broader native/Android checks above.

@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use sta_sim::EntityId;
 
 use super::layout::{CELL, CELL_GAP, GRID_COLS, GRID_PAD, GRID_ROWS, HudLayout, InfoHeight};
-use super::model::{Act, Button, Info, Look, ResEntry, Single, Tile};
+use super::model::{self, Act, Button, HudFeed, Info, Look, ResEntry, Single, Tile};
 use crate::ui::gui_sprites::{GuiButton, GuiButtonLabel};
 use crate::ui::i18n::{tr, trf};
 use crate::ui::notices::Tooltip;
@@ -355,7 +355,7 @@ fn tile(theme: &Theme, t: &Tile) -> impl Bundle {
 }
 
 /// The grid: [`GRID_COLS`] x [`GRID_ROWS`] cells, the empty ones as dim slots.
-pub fn fill_grid(commands: &mut Commands, theme: &Theme, panel: Entity, buttons: &[Button]) {
+pub fn fill_grid(commands: &mut Commands, theme: &Theme, panel: Entity, buttons: &[Button], feed: &HudFeed) {
     let mut p = commands.entity(panel);
     for cell in 0..GRID_COLS * GRID_ROWS {
         let (c, r) = (cell % GRID_COLS, cell / GRID_COLS);
@@ -370,6 +370,14 @@ pub fn fill_grid(commands: &mut Commands, theme: &Theme, panel: Entity, buttons:
                 let mut tip = Tooltip::new(b.tip.clone());
                 if let Some(v) = &b.verbose {
                     tip = tip.verbose(v.clone());
+                }
+                // An authored verbose string replaces the generated cost line
+                // in the button model. Compose that string with its costs here.
+                if let Act::Build { builder, what, .. } = &b.act
+                    && let Some(parts) = model::build_tip_parts(feed, *builder, *what)
+                    && parts.verbose.is_some()
+                {
+                    tip = tip.stock_build(parts);
                 }
                 p.with_child((
                     GridCell(b.act.clone()),
@@ -408,4 +416,43 @@ pub fn fill_grid(commands: &mut Commands, theme: &Theme, panel: Entity, buttons:
 pub fn layout_nodes(l: &HudLayout, height: Option<InfoHeight>) -> (super::layout::R, super::layout::R, super::layout::R) {
     let row = l.bottom_row(height);
     (l.resources, row.info, row.grid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::world::CommandQueue;
+    use sta_sim::Fixed;
+    use std::sync::Arc;
+
+    #[test]
+    fn lcars_build_tooltip_keeps_costs_with_authored_verbose_text() {
+        let odf = sta_odf::resolve("yard", &mut |_| {
+            Some("tooltip = \"YARD_NAME\"\nverboseTooltip = \"YARD_DETAILS\"\n".into())
+        }).unwrap();
+        let mut yard = sta_content::UnitDef::new("yard", "shipyard");
+        yard.raw = Arc::new(odf);
+        yard.build.cost = vec![Fixed::from_int(125)];
+        let db = Arc::new(sta_content::ContentDb::builder().unit(yard).build().unwrap());
+        let what = db.key("yard").unwrap();
+        let feed = HudFeed { content: Some(db), ..default() };
+        let b = model::button(0, "Yard", Act::Build {
+            builder: EntityId(1), what, odf: "yard".into(), site: true,
+        }, "YARD_NAME");
+
+        let mut world = World::new();
+        let panel = world.spawn(Node::default()).id();
+        let mut queue = CommandQueue::default();
+        fill_grid(&mut Commands::new(&mut queue, &world), &Theme::default(), panel, &[b], &feed);
+        queue.apply(&mut world);
+
+        let tip = world.query::<&Tooltip>().single(&world).unwrap();
+        let delays = crate::ui::stock_tooltip::TipDelays::default();
+        let text = tip.stock_text_at(delays.verbose, &delays, &|key| match key {
+            "YARD_NAME" => "Shipyard".into(),
+            "YARD_DETAILS" => "Builds ships.".into(),
+            _ => key.into(),
+        }).unwrap();
+        assert!(text.contains("Shipyard") && text.contains("Builds ships.") && text.contains("125"));
+    }
 }
