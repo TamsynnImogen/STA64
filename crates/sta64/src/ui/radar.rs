@@ -757,22 +757,19 @@ fn on_click(
 }
 
 /// The map point a radar click moves the camera to: a primary-button click (a held right button
-/// with no own selection is sent as one by [`drag`]) inside the map's rectangle; a point in a
+/// with an empty selection is sent as one by [`drag`]) inside the map's rectangle; a point in a
 /// strip beside a non-square map does nothing (read from the executable, static).
 pub fn camera_point(c: &RadarClick) -> Option<Vec2> {
     (c.button == PointerButton::Primary && c.inside_map).then_some(c.at)
 }
 
-/// Whether the feed's selection holds an own unit (what a right-click on the minimap would order).
-pub fn own_selected(feed: &RadarFeed) -> bool {
-    feed.selected.iter().any(|id| feed.view.unit(*id).is_some_and(|u| u.owner == feed.player))
-}
-
-/// Holding the left button on the square, or the right button with no own selection, keeps
+/// Holding the left button on the square, or the right button with an EMPTY selection, keeps
 /// sending camera clicks: dragging moves the camera along (`on_click` alone only sees the
 /// release). Read from the executable, static: the command button with an empty selection moves
 /// the camera to the map point every frame, like the other button; with a selection it orders
-/// (`input::orders::radar_order`). Only a point inside the map's rectangle moves it: a click or
+/// (`input::orders::radar_order`). INTERIM: a non-empty selection that holds no own unit (an
+/// inspected enemy) neither orders nor moves the camera; what the original does there is not
+/// established. Only a point inside the map's rectangle moves it: a click or
 /// drag in a strip of the square beside a non-square map does nothing (same grade). The same in
 /// every look: the input rules are not part of the look.
 fn drag(
@@ -788,7 +785,7 @@ fn drag(
         held[0] = rel.cursor_over;
     }
     if buttons.just_pressed(MouseButton::Right) {
-        held[1] = rel.cursor_over && !own_selected(&feed);
+        held[1] = rel.cursor_over && feed.selected.is_empty();
     }
     held[0] &= buttons.pressed(MouseButton::Left);
     held[1] &= buttons.pressed(MouseButton::Right);
@@ -945,8 +942,9 @@ mod tests {
         assert_eq!(sent(&mut app), 1, "it sends again after");
     }
 
-    /// The camera follows the left button, or the right button with no own selection, over a point
-    /// inside the map; the right button with an own selection orders instead (`radar_order`), and
+    /// The camera follows the left button, or the right button with an empty selection, over a point
+    /// inside the map; the right button with a selection orders instead (`radar_order`; an enemy-only
+    /// selection gives no order and no camera move, INTERIM), and
     /// a strip beside a non-square map does nothing for either (read from the executable, static;
     /// the same in every look).
     #[test]
@@ -954,16 +952,21 @@ mod tests {
         // A 2:1 map in its square: the middle half of the square's height is map.
         let (lo, hi) = (Vec2::ZERO, Vec2::new(2000.0, 1000.0));
         let (mut log, db, flagship) = log();
-        for (own, button, at, moves) in [
-            (false, MouseButton::Left, Vec2::ZERO, true),
-            (false, MouseButton::Right, Vec2::ZERO, true),
-            (true, MouseButton::Right, Vec2::ZERO, false),
-            (true, MouseButton::Left, Vec2::ZERO, true),
-            (false, MouseButton::Left, Vec2::new(0.0, 0.4), false),
-            (false, MouseButton::Right, Vec2::new(0.0, -0.4), false),
+        let enemy = omniscient(feed_at(&mut log, &db, 0)).view.units.iter().find(|u| u.owner != ME).unwrap().id;
+        // 0: empty selection, 1: an own unit, 2: an enemy only (inspected).
+        for (sel, button, at, moves) in [
+            (0, MouseButton::Left, Vec2::ZERO, true),
+            (0, MouseButton::Right, Vec2::ZERO, true),
+            (1, MouseButton::Right, Vec2::ZERO, false),
+            (2, MouseButton::Right, Vec2::ZERO, false),
+            (1, MouseButton::Left, Vec2::ZERO, true),
+            (2, MouseButton::Left, Vec2::ZERO, true),
+            (0, MouseButton::Left, Vec2::new(0.0, 0.4), false),
+            (0, MouseButton::Right, Vec2::new(0.0, -0.4), false),
         ] {
             let mut feed = omniscient(feed_at(&mut log, &db, 0));
-            feed.selected = if own { vec![flagship] } else { Vec::new() };
+            feed.selected = [Vec::new(), vec![flagship], vec![enemy]][sel].clone();
+            let own = sel;
             let mut app = App::new();
             app.add_plugins(MinimalPlugins)
                 .add_message::<RadarClick>()
