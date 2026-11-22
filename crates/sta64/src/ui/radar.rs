@@ -1342,20 +1342,17 @@ minimapDisplayArea = 16 19 320 320
     }
 
     /// The map layer (blips, camera outline) and the shroud layer share one box and one
-    /// transform at 4:3, 16:9 and 21:9, square and non-square maps: a world point lands on the
-    /// picture texel that holds its sight, and the picture is stretched to the whole box (the
-    /// default `Auto` image mode drew it contained, a square in the middle of a wide box).
+    /// transform at every HUD aspect, including non-square maps. A world point lands on the
+    /// corresponding sensor cell and the material covers the whole box.
     #[test]
     fn shroud_and_map_content_share_one_transform_at_any_aspect() {
         use crate::render::fog::CELL;
-        use crate::ui::radar_fog::{FOG_PIXELS, FogColours, Sight, fog_pixels};
-        use bevy::ui::widget::NodeImageMode;
+        use crate::ui::radar_fog::RadarFogMaterial;
         let maps = [
             (Vec2::ZERO, Vec2::new(120.0 * CELL, 120.0 * CELL)),
             (Vec2::new(-30.0 * CELL, 10.0 * CELL), Vec2::new(90.0 * CELL, 70.0 * CELL)),
             (Vec2::new(5.0 * CELL, -40.0 * CELL), Vec2::new(35.0 * CELL, 80.0 * CELL)),
         ];
-        let colours = FogColours::default();
         for aspect in [4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 32.0 / 9.0] {
             let config = HudConfig { gui: Some(fo_sheet()), aspect, ..default() };
             for (lo, hi) in maps {
@@ -1374,8 +1371,9 @@ minimapDisplayArea = 16 19 320 320
                 app.update();
                 let square = app.world_mut().query_filtered::<Entity, With<RadarSquare>>().single(app.world()).unwrap();
                 let fog = app.world().get::<Children>(square).unwrap()[0];
-                let image = app.world().get::<ImageNode>(fog).expect("the fog picture");
-                assert_eq!(image.image_mode, NodeImageMode::Stretch, "{aspect}: Auto would letterbox it");
+                let node_material = app.world().get::<MaterialNode<RadarFogMaterial>>(fog).expect("the fog material");
+                let material = app.world().resource::<Assets<RadarFogMaterial>>().get(&node_material.0).unwrap();
+                let transform = material.params.mask_uv;
                 let node = app.world().get::<Node>(fog).unwrap();
                 assert_eq!((node.left, node.top, node.width, node.height),
                     (Val::Px(0.0), Val::Px(0.0), Val::Percent(100.0), Val::Percent(100.0)));
@@ -1389,19 +1387,15 @@ minimapDisplayArea = 16 19 320 320
                 let (Val::Px(cw), Val::Px(ch)) = ({ let n = app.world().get::<Node>(chrome).unwrap(); (n.width, n.height) }) else { panic!("px chrome") };
                 assert!(cw <= hud.w && ch <= hud.h, "{aspect}: chrome {cw}x{ch} in {hud:?}");
 
-                // Blips and picture both place a world point at `to_square` of the box.
-                let grid_probe = FogGrid::new(lo.to_array(), hi.to_array());
-                let (cols, rows) = (grid_probe.w, grid_probe.h);
+                // The mask coordinates are in low-Z-first grid order; blip coordinates are top down.
+                let grid = &app.world().resource::<FogState>().grid;
+                let (cols, rows) = (grid.w, grid.h);
                 for (cx, cz) in [(0, 0), (cols - 1, 0), (0, rows - 1), (cols - 1, rows - 1), (cols / 2, rows / 2)] {
-                    let p = Vec2::new(lo.x + (cx as f32 + 0.5) * grid_probe.cell, lo.y + (cz as f32 + 0.5) * grid_probe.cell);
-                    let mut one = FogGrid::new(lo.to_array(), hi.to_array());
-                    one.set_cell_for_test(cx, cz, true, true);
-                    let px = fog_pixels(&one, &map, &colours, FOG_PIXELS);
+                    let p = lo + Vec2::new(cx as f32 + 0.5, cz as f32 + 0.5) * grid.cell;
                     let uv = map.to_square(p);
-                    let (col, row) = ((uv.x * FOG_PIXELS as f32) as usize, (uv.y * FOG_PIXELS as f32) as usize);
-                    let at = &px[(row * FOG_PIXELS + col) * 4..][..4];
-                    assert_eq!(at, colours.rgba(Sight::Visible), "{aspect} {lo:?}..{hi:?}: cell {cx},{cz} at {uv:?}");
-                    // A blip sits at the same `to_square` fraction of the same box.
+                    let mask_uv = Vec2::new(transform.x, transform.y) + uv * Vec2::new(transform.z, transform.w);
+                    let texel = mask_uv * Vec2::new(cols as f32, rows as f32);
+                    assert!(texel.distance(Vec2::new(cx as f32 + 0.5, cz as f32 + 0.5)) < 1.0e-4, "{aspect}: {lo:?}..{hi:?} cell {cx},{cz} mapped to {texel:?}");
                     assert!(map.to_world(uv).distance(p) < 1e-2);
                 }
             }
