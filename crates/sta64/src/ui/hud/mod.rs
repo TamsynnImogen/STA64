@@ -1043,7 +1043,7 @@ mod target_tests {
 
         app.world_mut().resource_mut::<HudState>().targeting = Some(TargetMode::TradeDestination);
         app.world_mut().resource_mut::<CommandQueue>().0.clear();
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().reset(MouseButton::Left);
         app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
         app.world_mut().run_system_once(place_on_click).unwrap();
         assert!(matches!(app.world().resource::<CommandQueue>().0.as_slice(),
