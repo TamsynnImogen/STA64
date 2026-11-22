@@ -476,6 +476,9 @@ pub struct UnitDef {
     pub mining_rate: Fixed,
     /// Units unloaded per second (`dilithiumTransferRate`); zero: not set.
     pub transfer_rate: Fixed,
+    /// The transfer interface's per-resource rates. Loaded receiver ODFs
+    /// use zero for an absent rate; hand-built definitions can omit the array.
+    pub freight_transfer: Option<[Fixed; crate::resources::SLOTS]>,
     /// Resource id a node gives (`resource`, text: latinum 1, metal or
     /// tritanium 2, biomatter 3, anything else 0); `None` when not set.
     pub resource: Option<u8>,
@@ -641,6 +644,11 @@ pub struct NebulaEffects {
 }
 
 impl UnitDef {
+    /// Armada II creates a freighter transfer interface for these classes.
+    pub fn receives_freight(&self) -> bool {
+        matches!(self.class.0.as_str(), "starbase" | "mining" | "trading_station")
+    }
+
     /// Armada II mobile producers such as Mother are authored as ships
     /// with movement physics and no fixed-facility flag (read from ODFs).
     pub fn allows_station_motion(&self) -> bool {
@@ -731,6 +739,7 @@ impl UnitDef {
             max_dilithium: Fixed::ZERO,
             mining_rate: Fixed::ZERO,
             transfer_rate: Fixed::ZERO,
+            freight_transfer: None,
             resource: None,
             features: None,
             confinement: crate::ConfinementOverrides::default(),

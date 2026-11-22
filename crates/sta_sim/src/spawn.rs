@@ -148,6 +148,7 @@ impl Sim {
         self.approach_warp.remove(id);
         self.watchdog.remove(id);
         self.engagement.remove(id);
+        self.economy.remove_docks(id);
         self.production.remove_rally_entity(id);
         self.production.remove_weld_site(id);
         for pod in self.production.remove_research_entity(id) {

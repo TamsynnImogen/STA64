@@ -199,7 +199,7 @@ pub fn attach<'a>(vfs: &sta_vfs::Vfs, units: impl Iterator<Item = &'a mut UnitDe
     let mut warnings = Vec::new();
     let mut sods: BTreeMap<String, Option<Sod>> = BTreeMap::new();
     for u in units {
-        if u.build.list.is_empty() && u.free_unit.is_none() && u.research_slots.is_empty() {
+        if u.build.list.is_empty() && u.free_unit.is_none() && u.research_slots.is_empty() && !u.receives_freight() {
             continue;
         }
         let key = u
@@ -214,7 +214,7 @@ pub fn attach<'a>(vfs: &sta_vfs::Vfs, units: impl Iterator<Item = &'a mut UnitDe
         if !u.build.list.is_empty() {
             u.launch = Some(launch_point(u, sod.as_ref()));
         }
-        if u.free_unit.is_some() {
+        if u.free_unit.is_some() || u.receives_freight() {
             u.dock = Some(dock_point(u, sod.as_ref()));
         }
         for slot in &mut u.research_slots {

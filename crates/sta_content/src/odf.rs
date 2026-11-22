@@ -467,6 +467,19 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
                 warnings.push(Warning::new(&file, format!("freighterName {name} is not a defined unit; no free unit")));
             }
         }
+        if def.receives_freight() {
+            const KEYS: [&str; 4] = ["dilithiumTransferRate", "latinumTransferRate", "metalTransferRate", "biomatterTransferRate"];
+            let mut rates = KEYS.map(|key| crate::orbital_income::read_nonneg(&file, odf, key, &mut warnings));
+            // Armada I has just the dilithium bank.
+            if profile == Profile::Sta1Classic && rates[0].is_none() {
+                rates[0] = Some(Fixed::from_int(15));
+            }
+            // A Native definition without transfer keys retains its default
+            // rates, including the synthetic pack shared with fake::db().
+            if profile != Profile::Native || KEYS.iter().any(|key| odf.raw(key).is_some()) {
+                def.freight_transfer = Some(rates.map(|rate| rate.unwrap_or(Fixed::ZERO)));
+            }
+        }
         def.station_mining = crate::orbital_income::resolve_station(&file, odf, &def.class.0, def.free_unit.is_some(), &model, &mut warnings);
         builder = builder.unit(def);
     }
