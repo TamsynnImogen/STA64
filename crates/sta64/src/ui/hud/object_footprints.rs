@@ -324,6 +324,7 @@ mod tests {
         feed.view = Arc::new(view);
         let mut rows = vec![ProductionView {
             portal: None,
+            research: None,
             builder: EntityId(9),
             jobs: vec![ProductionJobView {
                 def: db.key("station").unwrap(),

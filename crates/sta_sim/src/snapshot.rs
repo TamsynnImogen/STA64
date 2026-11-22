@@ -66,8 +66,9 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// tell the file from a valid one by version.
 /// Format 34 appends the mission switches (LUA-41).
 /// Format 41 appends stock A2 empty-shield recharge holds (#1101).
+/// Format 42 appends research station pod attachments.
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 41;
+pub const FORMAT_VERSION: u16 = 42;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
@@ -520,6 +521,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&self.nebula_shields.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.replacements.record()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&ZeroShieldHoldsRec { version: 1, rows: self.zero_shield_holds.to_rows() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&self.production.research_rows()).expect("snapshot serialises"));
         out
     }
 
@@ -604,6 +606,7 @@ impl Sim {
         let (replacement_rec, rest): (crate::replacement::Record, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         let (zero_shield_holds_rec, rest): (ZeroShieldHoldsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if zero_shield_holds_rec.version != 1 { return Err(SnapshotError::Corrupt("unknown shield zero hold record version".into())); }
+        let (research, rest): (crate::production::research::ResearchRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -762,6 +765,8 @@ impl Sim {
             .ok_or_else(|| corrupt("replacement weapon state"))?;
         let zero_shield_holds = crate::combat::damage::ZeroShieldHolds::from_rows(zero_shield_holds_rec.rows, b.tick, &units, content.as_deref())
             .ok_or_else(|| corrupt("shield zero holds"))?;
+        let mut production = crate::production::Production::from_rec(&b.production).ok_or_else(|| corrupt("rallies"))?;
+        production.restore_research(research, &units, content.as_deref()).ok_or_else(|| corrupt("research pods"))?;
         let mut sim = Sim {
             tick: b.tick,
             rng: Rng(b.rng),
@@ -779,7 +784,7 @@ impl Sim {
             movement,
             weapons,
             economy,
-            production: crate::production::Production::from_rec(&b.production).ok_or_else(|| corrupt("rallies"))?,
+            production,
             victory: crate::victory::Victory::from_rec(&b.victory),
             specials,
             autonomy,

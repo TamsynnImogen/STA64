@@ -245,6 +245,7 @@ mod tests {
             player: PlayerId(1),
             selected,
             content: Some(Arc::new(ContentDb::builder().build().unwrap())),
+            production: Vec::new(),
             names: Default::default(),
         }
     }
@@ -255,6 +256,7 @@ mod tests {
         let source = StatusFeed {
             production: vec![ProductionView {
                 portal: None,
+                research: None,
                 builder: EntityId(1),
                 jobs: vec![
                     ProductionJobView {
@@ -315,6 +317,7 @@ mod tests {
         let source = StatusFeed {
             production: vec![ProductionView {
                 portal: None,
+                research: None,
                 builder: EntityId(1),
                 jobs: vec![ProductionJobView {
                     def: ContentKey(11),

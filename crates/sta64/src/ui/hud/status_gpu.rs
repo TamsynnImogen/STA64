@@ -1201,6 +1201,7 @@ mod tests {
             player: PlayerId(1),
             selected: vec![EntityId(7)],
             content: None,
+            production: Vec::new(),
             names: Default::default(),
         });
         app.insert_resource(StatusFeed {

@@ -334,6 +334,14 @@ pub struct FxRefs {
 }
 
 /// A thing that can exist in the world: craft, station, yard, resource, moon.
+/// One ordered `podHardpoints` slot of an Armada II research station.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResearchSlot {
+    pub node: String,
+    pub reserved_for: Option<String>,
+    pub pose: Option<crate::RepairAttachment>,
+}
+
 #[derive(Debug, Clone)]
 pub struct UnitDef {
     /// Set by [`ContentDb`](crate::ContentDb) when it is built.
@@ -428,6 +436,9 @@ pub struct UnitDef {
     pub repair: RepairDef,
     /// Raw composed SOD transform of the authored repair node, when readable.
     pub repair_attachment: Option<crate::repair_geometry::RepairAttachment>,
+    pub research_slots: Vec<ResearchSlot>,
+    /// Station upgrade pods use the station origin instead of an external slot.
+    pub research_station_upgrade: bool,
     /// Sensor range, units.
     pub sensor: Fixed,
     pub hardpoints: Vec<Hardpoint>,
@@ -702,6 +713,8 @@ impl UnitDef {
             casualty: CasualtyDef::default(),
             repair: RepairDef::default(),
             repair_attachment: None,
+            research_slots: Vec::new(),
+            research_station_upgrade: false,
             sensor: Fixed::ZERO,
             hardpoints: Vec::new(),
             build: BuildDef::default(),

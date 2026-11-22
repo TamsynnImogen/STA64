@@ -233,6 +233,7 @@ pub fn feed_from_link(link: Res<SimLink>, selection: Res<Selection>, content: Op
     feed.player = link.player();
     feed.selected.clone_from(&selection.0);
     feed.content = content.map(|c| c.0.clone());
+    feed.production = link.production().to_vec();
 }
 
 /// Fit the UI to the primary window and keep the layout's aspect.

@@ -274,6 +274,15 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
         }
     }
     d.build.flagged_slots = crate::BuildDef::flagged_slots_of(odf);
+    if d.class.0 == "research" {
+        d.research_slots = odf.raw("podHardpoints").map_or_else(Vec::new, words).into_iter().enumerate().map(|(i, node)| {
+            let reserved_for = odf.bool(&format!("reserveItem{i}")).unwrap_or(false)
+                .then(|| odf.str(&format!("buildItem{i}")).map(crate::odf::stem))
+                .flatten();
+            crate::ResearchSlot { node, reserved_for, pose: None }
+        }).collect();
+    }
+    d.research_station_upgrade = d.class.0 == "pod" && odf.bool("isUpgrade").unwrap_or(false);
     d.avoid_me = odf.bool("avoidMe").unwrap_or(false);
 
     d.sounds.select = r.text("eventSelect").into_iter().collect();

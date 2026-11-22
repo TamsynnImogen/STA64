@@ -66,6 +66,7 @@ mod afford_tests;
 mod launch;
 pub(crate) mod officers;
 pub mod orbit;
+pub(crate) mod research;
 pub mod rally;
 pub mod site;
 pub mod view;
@@ -143,6 +144,7 @@ pub struct Production {
     deploys: Table<Deploy>,
     /// By the station being welded.
     welds: Table<Weld>,
+    research: Table<research::Attachment>,
 }
 
 #[derive(Default)]
@@ -247,6 +249,9 @@ impl Production {
         if !finished(y) || !EntityKind::producer_def(bd) || db.unit(what).is_none() {
             return false;
         }
+        if db.unit(what).is_some_and(|product| self.research_block(db, units, yard, bd, product).is_some()) {
+            return false;
+        }
         let limit = db.build_queue_limit(bd) as usize;
         if self.queues.get(yard).is_some_and(|q| q.len() >= limit) || limit == 0 {
             return false;
@@ -264,7 +269,8 @@ impl Production {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.queues.is_empty() && self.deploys.is_empty() && self.welds.is_empty() && self.rallies.is_empty()
+        self.queues.is_empty() && self.deploys.is_empty() && self.welds.is_empty()
+            && self.rallies.is_empty() && self.research.is_empty()
     }
 
     pub(crate) fn order_rally(
@@ -368,6 +374,9 @@ impl Production {
             return false;
         };
         if !bd.build.list.is_empty() && !bd.build.list.iter().any(|r| r.key == what) {
+            return false;
+        }
+        if self.research_block(db, units, builder, bd, product).is_some() {
             return false;
         }
         let evolves = bd.is_evolver();
@@ -614,14 +623,30 @@ impl Production {
                 if head.done >= ticks_of(db, head.def).saturating_add(delay) {
                     let Item { def, owner, .. } = q.remove(0);
                     if let Some(d) = db.unit(def) {
-                        // SIM-16: out of the builder's launch hardpoint.
+                        let mut attachment = None;
+                        // External research pods finish directly in an attachment slot.
                         let out = match builder {
+                            Some(b) if research::external_pod(b, d) => {
+                                let Some(slot) = self.completed_slot(units, yard, b, d) else {
+                                    refund(eco, db, owner, def);
+                                    if self.queues.get(yard).is_some_and(Vec::is_empty) {
+                                        self.queues.remove(yard);
+                                    }
+                                    continue;
+                                };
+                                let (pos, heading, _) = research::pose(y, b, slot).expect("usable slot");
+                                attachment = Some(research::Attachment { station: yard, slot });
+                                launch::Launch { pos, heading, exit: None }
+                            }
                             Some(b) if portal.is_some() => launch::through_wormhole(b, pos, heading),
                             Some(b) if !evolves => launch::place(b, pos, heading),
                             _ => launch::Launch { pos, heading, exit: None },
                         };
                         let mut unit = Entity::from_def(d, db.features(), owner, out.pos, out.heading);
                         let mut follow = None;
+                        if attachment.is_some() {
+                            unit.stats.max_speed = Fixed::ZERO;
+                        }
                         if unit.orderable() && !evolves {
                             let rally = self.rallies.destination(yard, owner, units).or_else(|| {
                                 let a2 = matches!(db.profile(), sta_content::Profile::Sta2Classic | sta_content::Profile::Fo3 | sta_content::Profile::Fo4);
@@ -636,6 +661,9 @@ impl Production {
                             }
                         }
                         let id = units.spawn(unit);
+                        if let Some(link) = attachment {
+                            self.research.insert(id, link);
+                        }
                         if let Some(rally) = follow {
                             completed.gate_rallies.push((id, rally));
                         }
@@ -782,6 +810,14 @@ impl Production {
             h.u64(w.ticks);
         }
         self.rallies.hash_into(h);
+        if !self.research.is_empty() {
+            h.u64(self.research.iter().count() as u64);
+            for (id, link) in self.research.iter() {
+                h.u64(u64::from(id.0));
+                h.u64(u64::from(link.station.0));
+                h.u64(link.slot as u64);
+            }
+        }
     }
 
     #[allow(dead_code)] // the snapshot calls it

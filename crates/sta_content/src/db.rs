@@ -172,8 +172,8 @@ impl ContentDb {
     /// [`with_launch_points`](ContentDb::with_launch_points) and warnings for
     /// unreadable collision geometry or authored repair nodes that cannot resolve.
     pub fn with_launch_points_warned(mut self, vfs: &sta_vfs::Vfs) -> (ContentDb, Vec<Warning>) {
-        crate::launch::attach(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }));
-        let mut warnings = crate::launch::attach_radii(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }));
+        let mut warnings = crate::launch::attach(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }));
+        warnings.extend(crate::launch::attach_radii(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None })));
         warnings.extend(crate::repair_geometry::attach(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None })));
         self.digest = digest_of(&self);
         (self, warnings)
@@ -530,7 +530,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         free_unit: _, dock: _, sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
         max_dilithium: _, mining_rate: _, transfer_rate: _, resource: _, features: _,
         confinement: _, nebula_pathing: _, nebula_effects: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
-        crew_gain: _, transport: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, repair_attachment: _, stats: _, raw: _,
+        crew_gain: _, transport: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, repair_attachment: _, research_slots: _, research_station_upgrade: _, stats: _, raw: _,
     } = u;
     // `stats` (CON-55): only the keys a sim rule reads are digested (the planet keys
     // under SIM-73's target-mask switch, below); the rest is typed only.
@@ -604,6 +604,21 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // Peers using the old constructor behavior would diverge on Evolution.
     if u.is_evolver() {
         c.flag("evolves_in_place", true);
+    }
+    if u.research_station_upgrade {
+        c.flag("research_station_upgrade", true);
+    }
+    if !u.research_slots.is_empty() {
+        let scale = if u.scale > Fixed::ZERO { u.scale } else { Fixed::ONE };
+        c.fixed("research_scale", scale);
+        c.list("research_slots", u.research_slots.iter().map(|slot| {
+            let reservation = slot.reserved_for.as_deref().unwrap_or("");
+            slot.pose.map_or_else(|| format!("{reservation}:-"), |pose| {
+                let values = [pose.origin, pose.axes[0], pose.axes[1], pose.axes[2]]
+                    .into_iter().flat_map(|v| [v.x, v.y, v.z]).map(fixed_text).collect::<Vec<_>>();
+                format!("{reservation}:{}", values.join(","))
+            })
+        }));
     }
     if u.allows_station_motion() {
         c.flag("ship_motion", true);

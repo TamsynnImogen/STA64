@@ -150,6 +150,9 @@ impl Sim {
         self.engagement.remove(id);
         self.production.remove_rally_entity(id);
         self.production.remove_weld_site(id);
+        for pod in self.production.remove_research_entity(id) {
+            self.remove_entity(pod, destroyed_by);
+        }
         self.start_effects.remove(id);
         self.replacements.remove(id);
         self.subsystems.remove(id);
