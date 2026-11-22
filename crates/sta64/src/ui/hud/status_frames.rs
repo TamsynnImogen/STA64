@@ -188,6 +188,7 @@ fn installed_status_queue_and_cargo_render_and_clear() {
         production: vec![ProductionView {
             portal: None,
             research: None,
+            officer_upgrades: None,
             builder: BUILDER,
             jobs: [
                 ("status_ship", 0.4, true, true),

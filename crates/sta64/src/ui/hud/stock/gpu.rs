@@ -71,7 +71,7 @@ fn feed(vfs: &sta_vfs::Vfs, options: GameOptions, group: usize) -> HudFeed {
     let selected = view.units.iter().find(|u| {
         u.owner == PlayerId(0) && u.flags.contains(sta_sim::view::UnitFlags::SELECTABLE)
     }).expect("selectable authored start unit").id;
-    HudFeed { view, player: PlayerId(0), selected: vec![selected], content: Some(db), ..Default::default() }
+    HudFeed { view, player: PlayerId(0), selected: vec![selected], content: Some(db), production: sim.production_view(), ..Default::default() }
 }
 
 fn resolved_pieces(app: &mut App, pieces: &[super::layout::Piece]) -> usize {
@@ -780,15 +780,17 @@ fn installed_armada1_resource_readouts_render_on_gpu() {
         // Expected values come from the content data, not from the view the HUD reads, so lost
         // starting values (the legacy RTS_CFG.h start, the officer cap) cannot pass as "" == "".
         // The feed is one Federation start for every cfg: only the layout differs per race.
-        let rules = hud_feed.content.as_ref().expect("content").rules();
-        let start = rules.legacy_start();
-        let cap = rules.officer_limit(GameOptions::default().officer_limit as usize).expect("officer cap");
-        let used = whole(player.officers[0]);
-        assert!(!used.is_empty());
+        let db = hud_feed.content.as_ref().expect("content");
+        let start = db.rules().legacy_start();
+        let base_gain: i32 = hud_feed.view.units.iter().filter(|unit| unit.owner == hud_feed.player)
+            .filter_map(|unit| db.unit(unit.def)?.a1_base_officers)
+            .map(|base| base.gain).sum();
+        let cap = db.a1_starting_officers().expect("officer cap") + base_gain;
+        let available = whole((Fixed::from_int(cap) - player.officers[0]).max(Fixed::ZERO));
         let expected = [
             (2_usize, start.dilithium.expect("legacy start dilithium").to_string()),
             (0, start.crew.expect("legacy start crew").to_string()),
-            (1, format!("{used}/{cap}")),
+            (1, format!("{available}/{cap}")),
         ];
         assert!(expected.iter().all(|(_, v)| !v.is_empty()));
         eprintln!("{label}: expected readouts {expected:?}");
@@ -979,7 +981,16 @@ fn installed_armada1_stock_hud_renders_on_gpu() {
         let layout = crate::game::gui_layout(&vfs, cfg).unwrap_or_else(|| panic!("installed {cfg} missing"));
         let stock = StockLayout::for_aspect_fit(&layout, size.x as f32 / size.y as f32, fit);
         assert_eq!(stock.canvas, Vec2::new(640.0, 480.0), "{label}: one 640 x 480 sheet");
-        let hud_feed = feed(&vfs, GameOptions::default(), 0);
+        let mut hud_feed = feed(&vfs, GameOptions::default(), 0);
+        let mut upgrade_key = None;
+        if compat_mod.is_some() {
+            let db = hud_feed.content.as_ref().unwrap();
+            let base = hud_feed.view.units.iter().find(|u| u.owner == hud_feed.player
+                && db.unit(u.def).is_some_and(|d| d.a1_base_officers.is_some())).expect("starting starbase");
+            hud_feed.selected = vec![base.id];
+            upgrade_key = db.unit(base.def).unwrap().a1_base_officers.unwrap().upgrade;
+            assert!(upgrade_key.is_some(), "the installed starbase has its race's officer upgrade");
+        }
         let team = Color::srgb(0.25, 0.5, 1.0);
         let palette = crate::viewer::TeamColours::load(&vfs).with_local_colour(hud_feed.player, team, &[hud_feed.player]);
         let mut app = App::new();
@@ -1038,6 +1049,11 @@ fn installed_armada1_stock_hud_renders_on_gpu() {
         assert!(cells > 0, "{label}: no control buttons");
         if compat_mod.is_some() {
             use super::a1::info::LiveTint;
+            let resolved_upgrade = app.world_mut()
+                .query::<(&super::super::panels::GridCell, &ImageNode)>()
+                .iter(app.world())
+                .any(|(cell, _)| matches!(cell.0, super::super::Act::Build { what, site: false, .. } if Some(what) == upgrade_key));
+            assert!(resolved_upgrade, "{label}: the officer upgrade sprite did not resolve in the main grid");
             let resolved_buttons = app.world_mut()
                 .query::<(&super::super::panels::GridCell, &ImageNode)>()
                 .iter(app.world())

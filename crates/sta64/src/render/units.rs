@@ -578,6 +578,27 @@ pub fn show_damage(
     }
 }
 
+/// An authored `oq` group contains numbered quarters `oq1`, `oq2`, etc.
+/// Only those exact numbered descendants follow completed Armada I base upgrades.
+pub(super) fn officer_quarter_number(model: &Model, index: usize) -> Option<u32> {
+    let node = model.nodes.get(index)?;
+    let name = node.name.to_ascii_lowercase();
+    let suffix = name.strip_prefix("oq")?;
+    if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let number = suffix.parse::<u32>().ok().filter(|number| *number > 0)?;
+    let mut parent = node.parent;
+    while let Some(index) = parent {
+        let ancestor = model.nodes.get(index)?;
+        if ancestor.name.eq_ignore_ascii_case("oq") {
+            return Some(number);
+        }
+        parent = ancestor.parent;
+    }
+    None
+}
+
 pub fn to_bevy(p: [f32; 3]) -> Vec3 {
     Vec3::new(p[0], p[1], -p[2])
 }
@@ -611,6 +632,27 @@ pub(crate) fn place(link: Res<SimLink>, clock: Res<AnimClock>, mut q: Query<(&Si
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn officer_quarters_match_only_exact_numbered_descendants_of_oq() {
+        use sta_assets::a2fmt::Matrix34;
+        use sta_assets::model::{Node, NodeKind, SourceFormat};
+
+        let names = ["root", "oq", "oq1", "oq2", "oq3_extra", "oq0", "oqx", "other", "oq4", "OQ5"];
+        let parents = [None, Some(0), Some(1), Some(2), Some(1), Some(1), Some(1), Some(0), Some(7), Some(2)];
+        let model = Model {
+            format: SourceFormat::Sod,
+            version: 1.93,
+            materials: vec![],
+            nodes: names.iter().zip(parents).map(|(name, parent)| Node {
+                name: (*name).into(), parent, children: vec![],
+                transform: Matrix34::IDENTITY, kind: NodeKind::Null,
+            }).collect(),
+            channels: vec![], flipbooks: vec![], warnings: vec![], pbr: None,
+        };
+        let got: Vec<_> = (0..model.nodes.len()).map(|i| officer_quarter_number(&model, i)).collect();
+        assert_eq!(got, [None, None, Some(1), Some(2), None, None, None, None, None, Some(5)]);
+    }
 
     #[test]
     fn research_rotation_follows_a_tilted_legacy_socket() {

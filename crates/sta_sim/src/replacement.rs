@@ -223,7 +223,7 @@ impl Sim {
         }
         let Some(def) = db.unit(source.def) else { return false };
         if let Some(n) = rule.required_officers.filter(|&n| n != 0)
-            && let Some(cap) = self.economy.officer_limit(source.owner)
+            && let Some(cap) = self.officer_limit(source.owner)
         {
             let required = Fixed::from_int(n.clamp(i32::MIN as i64, i32::MAX as i64) as i32);
             let after = self.officer_census(source.owner) + required;

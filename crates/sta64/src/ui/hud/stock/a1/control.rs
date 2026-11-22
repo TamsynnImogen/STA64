@@ -20,6 +20,7 @@
 
 use bevy::prelude::*;
 use sta_content::{ButtonSlots, SlotCommand, button_slots::SLOTS};
+use sta_sim::ContentKey;
 
 use super::super::{StockState, layout::StockLayout};
 use super::{costs, speed};
@@ -52,6 +53,10 @@ fn button(slot: u8, label: &str, act: Act, look: Look, icons: &[&str]) -> Button
         sprite_names: icons.iter().map(|s| (*s).to_owned()).collect(),
         keep_label: false,
     }
+}
+
+fn put(out: &mut Vec<Button>, button: Button) {
+    if !out.iter().any(|existing| existing.cell == button.cell) { out.push(button); }
 }
 
 /// The command a slot key stands for on the top and Orders pages: label, icon names, and the
@@ -90,6 +95,31 @@ fn command(c: SlotCommand, feed: &HudFeed) -> Option<(&'static str, &'static [&'
     })
 }
 
+/// The selected A1 starbase's officer quarter, when its own queue view can admit another.
+/// The ordinary build-list membership remains the command path's authority.
+fn officer_upgrade_key(feed: &HudFeed) -> Option<ContentKey> {
+    let db = feed.content.as_deref()?;
+    if !db.a1_officers() { return None; }
+    let base = model::builder(feed)?;
+    let policy = db.unit(base.def)?.a1_base_officers.as_ref()?;
+    let key = policy.upgrade?;
+    if db.unit(key)?.a1_officer_upgrade_gain.is_none()
+        || !db.unit(base.def)?.build.list.iter().any(|item| item.key == key)
+    {
+        return None;
+    }
+    Some(key)
+}
+
+fn officer_upgrade(feed: &HudFeed) -> Option<(ContentKey, u32)> {
+    let db = feed.content.as_deref()?;
+    let base = model::builder(feed)?;
+    let key = officer_upgrade_key(feed)?;
+    let policy = db.unit(base.def)?.a1_base_officers.as_ref()?;
+    let state = feed.production.iter().find(|row| row.builder == base.id)?.officer_upgrades.as_ref()?;
+    (state.completed < policy.maximum_upgrades).then_some((key, state.remaining))
+}
+
 /// The buttons of a page, one per slot (cell = slot - 1). A locked button carries
 /// `UnitOrder::Unavailable`, which `hud::command` never turns into an order.
 pub(in crate::ui::hud) fn buttons(feed: &HudFeed, page: Page, slots: &ButtonSlots, strings: Option<&Strings>) -> Vec<Button> {
@@ -97,11 +127,6 @@ pub(in crate::ui::hud) fn buttons(feed: &HudFeed, page: Page, slots: &ButtonSlot
         return Vec::new();
     }
     let mut out: Vec<Button> = Vec::new();
-    let mut put = |b: Button| {
-        if !out.iter().any(|o| o.cell == b.cell) {
-            out.push(b);
-        }
-    };
     match page {
         Page::Build => {
             let cancel = slots.slot(SlotCommand::Cancel);
@@ -109,36 +134,60 @@ pub(in crate::ui::hud) fn buttons(feed: &HudFeed, page: Page, slots: &ButtonSlot
             let free = (1..=SLOTS).filter(|s| Some(*s) != cancel && Some(*s) != back);
             // A build item sits in the free slot its build cell counts (`BuildItem::slot`): an item a
             // text tree leaves out leaves its slot empty and the others keep theirs.
+            let upgrade = officer_upgrade_key(feed);
             let items = model::build_buttons_by_slot(feed);
+            let skipped = items.iter().find(|(_, item)| matches!(item.act, Act::Build { what, .. } if Some(what) == upgrade)).map(|(slot, _)| *slot);
             for (cell, mut item) in items {
+                if matches!(item.act, Act::Build { what, .. } if Some(what) == upgrade) { continue; }
+                let cell = cell - usize::from(skipped.is_some_and(|slot| slot < cell));
                 let Some(slot) = free.clone().nth(cell) else { continue };
                 item.cell = usize::from(slot - 1);
                 annotate(&mut item, feed, strings);
-                put(item);
+                put(&mut out, item);
             }
             // TODO(UI-19): a build list longer than the free slots needs paging; the original's
             // rule is not measured.
             if let (Some(slot), Some(builder)) = (cancel, model::builder(feed)) {
-                put(button(slot, &tr("Cancel"), Act::Cancel(builder.id), Look::Ready, &["b_cancel"]));
+                put(&mut out, button(slot, &tr("Cancel"), Act::Cancel(builder.id), Look::Ready, &["b_cancel"]));
             }
             if let Some(slot) = back {
-                put(button(slot, &tr("Back"), Act::Back, Look::Ready, &["b_back"]));
+                put(&mut out, button(slot, &tr("Back"), Act::Back, Look::Ready, &["b_back"]));
             }
         }
         Page::Orders => {
             for (slot, c) in slots.page(true) {
                 if let Some((label, icons, act, look)) = command(c, feed) {
-                    put(button(slot, &tr(label), act, look, icons));
+                    put(&mut out, button(slot, &tr(label), act, look, icons));
                 }
             }
             if let Some(slot) = slots.slot(SlotCommand::Back) {
-                put(button(slot, &tr("Back"), Act::Back, Look::Ready, &["b_back"]));
+                put(&mut out, button(slot, &tr("Back"), Act::Back, Look::Ready, &["b_back"]));
             }
         }
         _ => {
             for (slot, c) in slots.page(false) {
                 if let Some((label, icons, act, look)) = command(c, feed) {
-                    put(button(slot, &tr(label), act, look, icons));
+                    put(&mut out, button(slot, &tr(label), act, look, icons));
+                }
+            }
+            // A1Compat's separate root command is the tenth logical cell. An
+            // ordinary command in that cell takes the first free cell, as the
+            // shared grid already does for an extra Evolve command.
+            if page == Page::Top
+                && let Some((key, remaining)) = officer_upgrade(feed)
+                && let Some((_, mut item)) = model::build_buttons_by_slot(feed).into_iter()
+                    .find(|(_, item)| matches!(item.act, Act::Build { what, .. } if what == key))
+            {
+                let occupant = out.iter().position(|b| b.cell == 9);
+                let free = (0..usize::from(SLOTS)).find(|cell| !out.iter().any(|b| b.cell == *cell));
+                if occupant.is_none() || free.is_some() {
+                    if let (Some(index), Some(cell)) = (occupant, free) { out[index].cell = cell; }
+                    item.cell = 9;
+                    if let Act::Build { site, .. } = &mut item.act { *site = false; }
+                    if remaining == 0 { item.look = Look::Locked; }
+                    if costs::crew_shortfall(feed, key) && item.look == Look::Ready { item.look = Look::Poor; }
+                    annotate(&mut item, feed, strings);
+                    out.push(item);
                 }
             }
         }
@@ -154,7 +203,10 @@ fn annotate(button: &mut Button, feed: &HudFeed, strings: Option<&Strings>) {
     let Act::Build { what, .. } = &button.act else { return };
     let Some(db) = feed.content.as_deref() else { return };
     let Some(needs) = costs::needs(db, *what) else { return };
-    let line = costs::line(strings, &model::resource_model(feed), &needs, costs::shortfall(feed, *what));
+    let mut line = costs::line(strings, &model::resource_model(feed), &needs, costs::shortfall(feed, *what));
+    if costs::shortfall(feed, *what).is_none() && costs::crew_shortfall(feed, *what) {
+        line.push_str(&format!(" ({})", crate::ui::i18n::trf("short of: {0}", &[&tr("crew")])));
+    }
     if line.is_empty() {
         return;
     }

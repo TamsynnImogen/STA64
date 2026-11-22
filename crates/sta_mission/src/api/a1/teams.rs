@@ -116,7 +116,8 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
     })?)?;
     // SIM-54: the team calls clamp to the team's maximum (Armada I `Team` calls, read from the
     // executable, static; nothing measured, A1 has no bench). Crew is the stock, clamped to the
-    // team's crew capacity; officers are the count in use, clamped to the cap. No floor at 0.
+    // team's crew capacity. For A1 officer progression, the officer pool is the
+    // vacancies under the derived cap; other profiles keep their existing counter.
     // The edit lands on the next tick, so the returned number is the rule applied to the view.
     for (name, op) in [
         ("SetOfficers", TeamOp::OfficersSetA1),
@@ -130,27 +131,31 @@ pub(super) fn install(lua: &Lua, env: &Env, a2: &Table, table: &Table) -> mlua::
                 return Err(mlua::Error::runtime(format!("A1.{name} requires a finite number")));
             }
             let x = sta_core::Fixed::from_f64(a[1].num().clamp(-1.0e9, 1.0e9));
-            let (pool, cap, used, officer_cap, has_limit) = {
+            let (pool, cap, current_officers, officer_cap, has_limit) = {
                 let c = e.ctx.borrow();
                 let view = c.view.player(team);
+                let [used, limit] = view.map_or([sta_core::Fixed::ZERO; 2], |p| p.officers);
+                let count = if c.content.as_deref().is_some_and(sta_content::ContentDb::a1_officers) {
+                    sta_core::Fixed::from_bits(limit.to_bits().saturating_sub(used.to_bits()))
+                } else { used };
                 (
                     view.and_then(|p| p.crew).unwrap_or(sta_core::Fixed::ZERO),
                     c.view.attrs.seats.iter().find(|s| s.player == team).and_then(|s| s.crew_capacity),
-                    view.map_or(sta_core::Fixed::ZERO, |p| p.officers[0]),
-                    view.map_or(sta_core::Fixed::ZERO, |p| p.officers[1]),
+                    count,
+                    limit,
                     c.view.attrs.seats.iter().any(|s| s.player == team && s.officer_limit.is_some()),
                 )
             };
             let after = match op {
                 // The sim refuses an officer edit for a seat with no limit: the count is unchanged.
                 TeamOp::OfficersSetA1 | TeamOp::OfficersAddA1 => {
-                    has_limit.then(|| officer_count_after(op, used, x, officer_cap)).flatten()
+                    has_limit.then(|| officer_count_after(op, current_officers, x, officer_cap)).flatten()
                 }
                 _ => cap.and_then(|cap| crew_pool_after(op, pool, x, cap)),
             };
             e.edit(name, Edit::TeamPool(team, op, x))?;
             Ok(Value::Number(f64::from(after.unwrap_or(match op {
-                TeamOp::OfficersSetA1 | TeamOp::OfficersAddA1 => used,
+                TeamOp::OfficersSetA1 | TeamOp::OfficersAddA1 => current_officers,
                 _ => pool,
             }).to_f32())))
         })?)?;

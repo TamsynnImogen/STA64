@@ -466,6 +466,7 @@ mod tests {
         let row = ProductionView {
             portal: None,
             research: None,
+            officer_upgrades: None,
             builder: EntityId(3),
             jobs: vec![
                 ProductionJobView {

@@ -128,6 +128,17 @@ pub fn kind_of(odf: &Odf) -> Kind {
     }
 }
 
+fn officer_integer(file: &str, odf: &Odf, key: &str, default: i32, max: i32, warnings: &mut Vec<Warning>) -> i32 {
+    let Some(raw) = odf.str(key) else { return default };
+    match raw.trim().parse::<i32>() {
+        Ok(n) => n.clamp(0, max),
+        _ => {
+            warnings.push(Warning::new(file, format!("{key} must be a signed 32-bit integer; using {default}")));
+            default
+        }
+    }
+}
+
 /// Reads typed numbers out of one ODF, listing the keys that do not parse.
 pub(crate) struct Reader<'a> {
     pub odf: &'a Odf,
@@ -310,6 +321,10 @@ pub fn resolve_exact_for_profile(name: &str, profile: Profile, loader: &mut Load
 /// Build the database from ODFs found by `stems`. [`load`] is this over an
 /// install; tests give an in-memory loader.
 pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], loader: &mut Loader<'_>) -> Result<(ContentDb, Vec<Warning>)> {
+    load_with_a1(profile, mod_overrides, stems, loader, false)
+}
+
+fn load_with_a1(profile: Profile, mod_overrides: &Overrides, stems: &[String], loader: &mut Loader<'_>, a1_module: bool) -> Result<(ContentDb, Vec<Warning>)> {
     let mut warnings = Vec::new();
     for name in &mod_overrides.unknown {
         warnings.push(Warning::new("info.ini", format!("[Features] {name} is not a feature switch")));
@@ -323,6 +338,8 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
         resolve_features(profile, &[mod_overrides, native, &own])
     };
     let mut resolved: BTreeMap<String, Option<Arc<Odf>>> = BTreeMap::new();
+    let features = resolve_features(profile, &[mod_overrides]);
+    let a1_officers = profile == Profile::Sta1Classic || a1_module || features.a1_compat;
     let mut get = |name: &str, warn: &mut Vec<Warning>, loader: &mut Loader<'_>| -> Option<Arc<Odf>> {
         let key = stem(name);
         if let Some(o) = resolved.get(&key) {
@@ -342,16 +359,34 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
     // First pass: classify.
     let mut units: Vec<(String, Arc<Odf>)> = Vec::new();
     let mut weapons: Vec<(String, Arc<Odf>)> = Vec::new();
+    let mut race_upgrades = BTreeMap::<String, String>::new();
+    let mut ambiguous_races = BTreeSet::<String>::new();
     for s in stems {
         let Some(odf) = get(s, &mut warnings, loader) else { continue };
+        if a1_officers && let (Some(race), Some(upgrade)) = (odf.str("name"), odf.str("officerUpgradeODF")) {
+            let race = race.trim().to_ascii_lowercase();
+            let upgrade = stem(upgrade);
+            if !race.is_empty() && !upgrade.is_empty() {
+                if race_upgrades.insert(race.clone(), upgrade.clone()).is_some_and(|old| old != upgrade) {
+                    ambiguous_races.insert(race);
+                }
+            }
+        }
         match kind_of(&odf) {
             Kind::Unit => units.push((s.clone(), odf)),
             Kind::Weapon => weapons.push((s.clone(), odf)),
+            Kind::Other if a1_officers && odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("upgrade")) => units.push((s.clone(), odf)),
             Kind::Other => {}
         }
     }
+    for race in ambiguous_races {
+        // Keep the race present so a conflicting declaration cannot trigger
+        // the compatibility fallback to a build item.
+        race_upgrades.insert(race.clone(), String::new());
+        warnings.push(Warning::new("races.odf", format!("conflicting officerUpgradeODF for race {race}; no officer upgrade resolved")));
+    }
 
-    let mut builder = ContentDb::builder().profile(profile).features(resolve_features(profile, &[mod_overrides]));
+    let mut builder = ContentDb::builder().profile(profile).features(features);
     let mut weapon_arcs = BTreeMap::new();
     let mut weapon_names = BTreeSet::new();
     let mut lookups = crate::weapon::LookupPool::default();
@@ -430,6 +465,16 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
         def.orbit_time = crate::planet::resolve_orbit_time(&file, odf, &def.class.0, &mut warnings);
         def.build.queue_limit = build_queue_limit(&file, odf, &mut warnings);
         def.is_starbase = station_flag(&file, odf, profile, &mut warnings);
+        if a1_officers && def.class.0 == "starbase" {
+            def.a1_base_officers = Some(crate::A1BaseOfficers {
+                gain: officer_integer(&file, odf, "officerGain", 20, 1_000_000, &mut warnings),
+                maximum_upgrades: officer_integer(&file, odf, "maximumUpgrades", 6, 256, &mut warnings) as u32,
+                upgrade: None,
+            });
+        }
+        if a1_officers && def.class.0 == "upgrade" {
+            def.a1_officer_upgrade_gain = Some(officer_integer(&file, odf, "officerGain", 15, 1_000_000, &mut warnings));
+        }
         let mut native = Overrides::default();
         if matches!(profile, Profile::Fo4 | Profile::Native)
             && let Some(on) = queue_instant_deduct(&file, odf, &mut warnings)
@@ -500,14 +545,14 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
     }
 
     // Names are unique by stem; `build` can only fail on a bug here.
-    let db = builder.build()?;
+    let db = builder.build()?.with_a1_officer_upgrades(a1_officers, &race_upgrades, &mut warnings);
     Ok((db, warnings))
 }
 
 /// Build the database from every ODF of a mounted install.
 pub fn load(vfs: &sta_vfs::Vfs, profile: Profile, index: &OdfIndex) -> Result<(ContentDb, Vec<Warning>)> {
     let stems: Vec<String> = index.iter().map(|(s, _)| s.to_owned()).collect();
-    load_with(profile, &Overrides::from_vfs(vfs), &stems, &mut |n, v| index.load(vfs, n, v))
+    load_with_a1(profile, &Overrides::from_vfs(vfs), &stems, &mut |n, v| index.load(vfs, n, v), crate::profile::a1_compat(vfs))
 }
 
 /// A `fleetCapFile` ODF (SIM-44) as a [`CapacityList`](crate::CapacityList): `fleetCapClass<n>`

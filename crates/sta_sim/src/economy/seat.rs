@@ -85,9 +85,9 @@ impl Economy {
     }
 
     /// One scripted team-pool edit. `capacity` is the derived crew capacity
-    /// without the script offset (None: unknown, the edit is refused), `census`
-    /// the live and reserved officers.
-    pub(crate) fn team_op(&mut self, player: PlayerId, op: TeamOp, x: Fixed, derived_capacity: Option<Fixed>, census: Fixed) -> bool {
+    /// without the script offset. The officer arguments carry the census,
+    /// its effective capacity, and whether to edit available officers.
+    pub(crate) fn team_op(&mut self, player: PlayerId, op: TeamOp, x: Fixed, derived_capacity: Option<Fixed>, officers: Option<(Fixed, Fixed, bool)>) -> bool {
         let offset = self.crew_capacity_adjust(player);
         let capacity = derived_capacity.map(|c| add(c, offset));
         match op {
@@ -105,10 +105,13 @@ impl Economy {
                 true
             }
             TeamOp::OfficersAddA1 | TeamOp::OfficersSetA1 => {
-                let Some(cap) = self.officer_limit(player) else { return false };
+                let Some((census, cap, available)) = officers else { return false };
                 let used = add(census, self.officer_adjust(player));
-                let to = officer_count_after(op, used, x, cap).expect("an officer op");
-                self.set_adjust(player, None, Some(Fixed::from_bits(to.to_bits().saturating_sub(census.to_bits()))));
+                let current = if available { Fixed::from_bits(cap.to_bits().saturating_sub(used.to_bits())) } else { used };
+                let next = officer_count_after(op, current, x, cap).expect("an officer op");
+                let next_used = if available { Fixed::from_bits(cap.to_bits().saturating_sub(next.to_bits())) } else { next };
+                let adjust = Fixed::from_bits(next_used.to_bits().saturating_sub(census.to_bits()));
+                self.set_adjust(player, None, Some(bound(adjust)));
                 true
             }
             TeamOp::ResourceAdd(_) => false,

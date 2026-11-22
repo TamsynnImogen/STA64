@@ -84,6 +84,7 @@ impl Sim {
         self.recycles.remove_entity(id);
         self.switches.edit(id, |s| s.special_forces = false);
         if previous_owner != to {
+            self.production.clear_officer_upgrades(id);
             self.reset_impulse(id);
             self.alerts.clear_hit(id);
         }

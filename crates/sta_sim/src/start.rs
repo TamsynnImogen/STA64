@@ -55,8 +55,10 @@ impl Sim {
             }
             let loadout = races.loadout_with_mode(&s.content, &p.race, s.options.starting_resources);
             sim.place_start(p.id, start, &loadout);
-            let limit = s.content.rules().officer_limit(s.options.officer_limit as usize).map(Fixed::from_int);
-            if limit.is_none() && !s.content.rules().officer_limits.is_empty() {
+            let a1 = s.content.a1_officers();
+            let limit = (!a1).then(|| s.content.rules().officer_limit(s.options.officer_limit as usize))
+                .flatten().map(Fixed::from_int);
+            if !a1 && limit.is_none() && !s.content.rules().officer_limits.is_empty() {
                 warnings.push(Warning::new("RTS_CFG.h", format!("officer choice {} is unavailable for player {}", s.options.officer_limit, p.id.0)));
             }
             sim.economy.set_personnel(p.id, loadout.crew, limit);

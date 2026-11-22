@@ -9,17 +9,18 @@
 //! them behind "needs:" for build and research buttons is read from the executable's string
 //! table, static. Its output order, whether it shows build time, and where it draws it are NOT
 //! established: this is the interim rule (STA64's own tooltip, content only; the line goes in the
-//! short and the verbose tooltip because the short one shows first). TODO: crew (`crewCost`
-//! exists on the unit, the sim neither charges nor checks it, so it is not listed).
+//! short and the verbose tooltip because the short one shows first). Ordinary unit crew is not a
+//! build cost. A1 officer-quarter upgrades separately consume the authored crew amount.
 //!
 //! The amounts are the definition's cost, unscaled: a seat race's cost scaling in the sim (the latinum
 //! factor of a race the data frees of latinum) is not reflected (TODO).
 //!
 //! The missing resource is named from `sta_sim::production::afford::build_shortfall`, the sim's
-//! own payment test over the client's view; nothing here compares stocks itself.
+//! own resource/officer payment test over the client's view. The separate A1 upgrade crew check
+//! uses the same player's crew stock.
 
 use sta_content::{ContentDb, ResourceModel};
-use sta_sim::ContentKey;
+use sta_sim::{ContentKey, Fixed};
 use sta_sim::production::afford::{Shortfall, build_shortfall};
 
 use crate::ui::{
@@ -34,6 +35,8 @@ pub struct Needs {
     /// `(resource slot, amount)` for each positive cost.
     pub slots: Vec<(usize, i64)>,
     pub officers: i64,
+    /// Crew consumed by an A1 officer-quarter upgrade only.
+    pub crew: i64,
     /// The unit's race name, for the officers word.
     pub race: String,
 }
@@ -58,6 +61,7 @@ pub(in crate::ui::hud) fn needs(db: &ContentDb, key: ContentKey) -> Option<Needs
             .map(|(i, c)| (i, whole(c.to_f32())))
             .collect(),
         officers: whole(def.build.officers.to_f32().max(0.0)),
+        crew: if db.a1_officers() && def.a1_officer_upgrade_gain.is_some() { whole(def.crew.to_f32().max(0.0)) } else { 0 },
         race: def.race.clone(),
     })
 }
@@ -109,6 +113,9 @@ pub(in crate::ui::hud) fn line(
     if needs.officers > 0 {
         parts.push(format!("{} {}", needs.officers, officers_word(strings, &needs.race)));
     }
+    if needs.crew > 0 {
+        parts.push(format!("{} {}", needs.crew, tr("crew")));
+    }
     if parts.is_empty() {
         return String::new();
     }
@@ -126,15 +133,27 @@ pub(in crate::ui::hud) fn shortfall(feed: &HudFeed, key: ContentKey) -> Option<S
     build_shortfall(db, feed.view.player(feed.player)?, key)
 }
 
+/// The A1 quarter's separate player-crew charge. An absent pool has zero available crew.
+pub(in crate::ui::hud) fn crew_shortfall(feed: &HudFeed, key: ContentKey) -> bool {
+    let Some(db) = feed.content.as_deref() else { return false };
+    let Some(def) = db.unit(key) else { return false };
+    if !db.a1_officers() || def.a1_officer_upgrade_gain.is_none() { return false; }
+    let Some(player) = feed.view.player(feed.player) else { return false };
+    player.crew.unwrap_or(Fixed::ZERO) < def.crew.max(Fixed::ZERO)
+}
+
 /// The refusal notice for a build the player cannot pay for, Armada I only (the other profiles keep
 /// their wording): `Cannot build: not enough dilithium`.
 pub(in crate::ui::hud) fn refusal(feed: &HudFeed, profile: Option<&UiProfile>, strings: Option<&Strings>, key: ContentKey) -> Option<String> {
     if !super::is_a1(profile) {
         return None;
     }
-    let short = shortfall(feed, key)?;
     let db = feed.content.as_deref()?;
     let needs = needs(db, key)?;
+    if shortfall(feed, key).is_none() && crew_shortfall(feed, key) {
+        return Some(trf("Cannot build: not enough {0}", &[&tr("crew")]));
+    }
+    let short = shortfall(feed, key)?;
     let word = short_word(strings, &crate::ui::hud::model::resource_model(feed), &needs, short);
     Some(trf("Cannot build: not enough {0}", &[&word]))
 }
@@ -219,7 +238,7 @@ mod tests {
         let table = "\"GUI_CP_REQUIRE\", \"requires\", \"GUI_CP_DILITHIUM_RES\", \"deut\", \"GUI_CP_OFFICERS_RES\", \"ofcr\", \"GUI_CP_ROMOFF_RES\", \"cent\"";
         let strings = Strings::from_game("english", table);
         let res = ResourceModel::default();
-        let mut n = Needs { slots: vec![(0, 7)], officers: 2, race: "fed".into() };
+        let mut n = Needs { slots: vec![(0, 7)], officers: 2, crew: 0, race: "fed".into() };
         assert_eq!(line(Some(&strings), &res, &n, None), "requires 7 deut, 2 ofcr");
         n.race = "romulan".into();
         assert_eq!(line(Some(&strings), &res, &n, None), "requires 7 deut, 2 cent");

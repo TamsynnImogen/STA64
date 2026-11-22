@@ -175,4 +175,4 @@ fn the_whole_step_regenerates_the_hull_and_a_damaged_state_digest_is_pinned() {
 }
 
 /// Pinned with the authored content above.
-const PINNED: u64 = 0xc15e3ed348d251a5;
+const PINNED: u64 = 0x8008_4ba9_ec07_802c;
