@@ -149,6 +149,7 @@ impl Sim {
         self.watchdog.remove(id);
         self.engagement.remove(id);
         self.economy.remove_docks(id);
+        self.economy.remove_trade_entity(&mut self.units, id);
         self.production.remove_rally_entity(id);
         self.production.remove_weld_site(id);
         self.production.clear_officer_upgrades(id);

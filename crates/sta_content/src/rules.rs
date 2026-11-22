@@ -30,6 +30,8 @@ pub struct Rules {
     /// What a team's race changes about the team (SIM-54): only the races
     /// whose rule is not the identity, lower-case key, first match wins.
     seat_races: Vec<(String, SeatRaceRule)>,
+    /// Race keys that disable trading with `canTrade = 0`; all others default true.
+    trade_denied: Vec<String>,
     /// Authored race repair metadata by ODF stem (SIM-40), absent when unset.
     race_repairs: Vec<(String, RaceRepair)>,
     /// `(race name, ODF stem)` for the rows above: a unit's race key is the name.
@@ -742,6 +744,21 @@ impl Rules {
         self
     }
 
+    /// Whether the race can trade; races without an explicit denial default true.
+    pub fn can_trade(&self, race: &str) -> bool {
+        let race = race.trim();
+        !self.trade_denied.iter().any(|k| k.eq_ignore_ascii_case(race))
+    }
+
+    /// Set races explicitly denied from trading (tests and content built in code).
+    pub fn with_trade_denied(mut self, races: Vec<String>) -> Self {
+        let mut races: Vec<_> = races.into_iter().map(|k| k.trim().to_ascii_lowercase()).filter(|k| !k.is_empty()).collect();
+        races.sort();
+        races.dedup();
+        self.trade_denied = races;
+        self
+    }
+
     /// The race's `miningRateModifier`, `None` when the race authors none (the
     /// engine default was not read). Content only: the sim's use of it is SIM-72's.
     pub fn race_mining_rate_modifier(&self, race: &str) -> Option<Fixed> {
@@ -890,6 +907,7 @@ impl Rules {
             rules.crew.get_or_insert_with(CrewRules::default).races = rates;
         }
         rules.seat_races = races.seat_rules().map(|(k, r)| (k.to_owned(), r)).collect();
+        rules.trade_denied = races.trade_denied_races().map(str::to_owned).collect();
         rules.race_mining = races.mining_rate_modifiers().map(|(k, v)| (k.to_owned(), v)).collect();
         rules = rules.with_race_repairs(races.repair_rules().map(|(stem, repair)| (stem.to_owned(), repair)).collect());
         rules.race_repair_stems = races.repair_stems().map(|(n, s)| (n.to_owned(), s.to_owned())).collect();
@@ -997,6 +1015,9 @@ impl Rules {
                 .map(|(k, r)| format!("{}:{}:{}", quoted(k), crate::digest::fixed_text(r.officer_multiplier), crate::digest::fixed_text(r.latinum_scale)))
                 .collect::<Vec<_>>();
             out.push(DigestEntry::new("race:seat-rules", format!("[{}]", rows.join(","))));
+        }
+        for race in &self.trade_denied {
+            out.push(DigestEntry::new(crate::digest::key("race-trade:", race), "can_trade=0"));
         }
         // SIM-69: the transport rules read these (sim-visible), only when set, so content without the keys keeps its digest.
         if let Some(t) = self.transporter {

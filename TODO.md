@@ -1077,7 +1077,8 @@ Grouped by the object class that reads the key, most-used first; within a line, 
 - [ ] [FO] uni ordnance (32): `affectedSystems`, `damageMode`, `disableWeaponsPercent`, `disableWeaponsTime`, `extraWeapon`, `extraWeaponPercent`, `extraWeaponTime`, `disableEnginesPercent`, `disableEnginesTime`, `disableSensorsPercent`, `disableSensorsTime`, `disableLifeSupportPercent`, `disableLifeSupportTime`, `boardingPercent`, `boardingRate`, `boardingTime`, `drainSpecialEnergyPercent`, `drainSpecialEnergyRate`, `drainSpecialEnergyTime`, `boardingCrewSubtract`, `disableShieldsPercent`, `disableShieldsTime`, `drainCrewPercent`, `drainCrewRate`, `drainCrewTime`, `drainHullPercent`, `drainHullRate`, `drainHullTime`, `drainShieldPercent`, `drainShieldRate`, `drainShieldTime`, `extraWeaponTimerReset`
 - [ ] [A1] race (4): `displayName`, `officerUpgradeODF`, `officerName`, `officerOperate`
 - [ ] [A1 A2] race (6): `weaponRed`, `weaponYellow`, `retreatStrength`, `officerRes`, `officerTooltip`, `officerVerboseTooltip`
-- [ ] [A2] race (11): `creationLabel`, `insufficientOfficersEvent`, `recycleDilithiumFraction`, `recycledLabel`, `recycleMetalFraction`, `atmosphereTint`, `canPlayCollectLatinum`, `affectedByPsionicInsanity`, `canPlayCaptureTheFlag`, `canPlayColonizePlanets`, `canTrade`
+- [ ] [A2] race (10): `creationLabel`, `insufficientOfficersEvent`, `recycleDilithiumFraction`, `recycledLabel`, `recycleMetalFraction`, `atmosphereTint`, `canPlayCollectLatinum`, `affectedByPsionicInsanity`, `canPlayCaptureTheFlag`, `canPlayColonizePlanets`
+- [x] [A2] race (1): `canTrade`
 - [ ] [FO] race (17): `allowGiveBiomatter`, `allowGiveCrew`, `allowGiveDilithium`, `allowGiveLatinum`, `allowGiveMetal`, `canGainXP`, `AIFreightersPerMoon`, `giveToOtherRaceBiomatterRatio`, `giveToOtherRaceCrewRatio`, `giveToOtherRaceDilithiumRatio`, `giveToOtherRaceLatinumRatio`, `giveToOtherRaceMetalRatio`, `usesBiomatter`, `usesCrew`, `usesDilithium`, `usesLatinum`, `usesMetal`
 - [ ] [A1 A2] holding beam (6): `lengthScale`, `radiusScale`, `boardingDelay`, `boardingInterval`, `boardingSize`, `targetRange`
 - [ ] [A1] mining station (1): `dockingBuffer`
@@ -1201,7 +1202,7 @@ Grouped by the object class that reads the key, most-used first; within a line, 
 - [ ] [A2 FO] separating weapon (1): `eventFire`
 - [ ] [A1] instant 4X mission (4): `hisPilots`, `hisScrap`, `myPilots`, `myScrap`
 - [ ] [A1 A2] repulsion field (1): `repulsionForce`
-- [ ] [A2] trading station (4): `cargoTransferRate`, `percentTradeProfit`, `cargoKey%d`, `cargoValue%d`
+- [x] [A2] trading station (4): `cargoTransferRate`, `percentTradeProfit`, `cargoKey%d`, `cargoValue%d`
 - [ ] [A2] bio pulse (8): `battleOrdnance`, `chargeDelay`, `damageRate`, `formationBehind`, `formationRadius`, `frigateOrdnance`, `mainDelay`, `specialEnergyLossRate`
 - [ ] [FO] detector weapon (4): `MarkColor`, `MarkRadius`, `MarkShrink`, `MarkTime`
 - [ ] [FO] cloaking device control (3): `disableShield`, `initialCloak`, `phaseCloak`
@@ -1224,7 +1225,7 @@ Grouped by the object class that reads the key, most-used first; within a line, 
 - [ ] [A1 A2] sensor array (1): `isTranswarpGate`
 - [ ] [FO] fighter (2): `supplyClasses`, `operationRange`
 - [ ] [A1 A2] fed repair team (1): `shieldsReturned`
-- [ ] [A2] cargo ship (1): `m_maxResource`
+- [x] [A2] cargo ship (1): `m_maxResource`
 - [ ] [A2] planet shield (2): `hitPercent`, `hitPoints`
 - [ ] [A2] popup palette (2): `commandHotkeys`, `controlDefaultCursor`
 - [ ] [A2] colonizing beam (2): `transferAmount`, `transferTime`
@@ -1367,6 +1368,7 @@ FO total: 396 of 474 key names in its `gui_*.cfg` files and hook reads are not m
 - [?] Species 8472 in STA2 Classic: watch an embryo's cocoon scale around its pivot, move the Mother while it builds an Active Embryo, and launch a Defender from the Fluidic Gate. The unfinished hull stays hidden. When construction finishes, the rift opens at the build hardpoint and the Defender clears it before turning toward its rally point. Cancel a second build during the opening and check that no ship emerges.
 - [?] Research pod slots: in STA2 Classic, research Tachyon Detection Grid at the Federation Research Facility. Check that the pod uses the first free authored hardpoint, grants its prerequisite only when finished, and disables its button until the pod is destroyed. Queue another pod to check the next socket, then save and reload. Native research slot selection and button disabling were read statically from the Armada II executable.
 - [?] Freighter drop-off: in STA2 Classic, send Federation freighters to a latinum nebula with a shipyard closer than the starbase. Check delivery at the starbase hp31 berth, one freighter unloading at a time, FIFO waiting positions and queue order after save/reload. The original transfer-interface and FIFO rules were read statically from Armada II.
+- [?] Armada II trade: in STA2 Classic, build a Trading Station and launch a Cargo Ship from the starbase. Check the Trade menu's resource exchanges, two-station latinum routes in both directions, and a full 500-unit shipment to an ally. Check that a second freighter waits while the berth is occupied, and that saving during loading preserves the route and hold. Rates and payouts follow the static Armada2.exe trace.
 
 - [ ] RND-33 hull customization: with an authored test ship, compare two faction owners and capture, missing texture fallback, faction subtree switching, destroyed/repaired subsystem parts and their effects; inspect projected scorch, existing registry images and optional registry text on curved/animated hulls under Stock and Refit. Check cloak/fog, save/load and second-match cleanup. Automated synthetic evidence is separate from this native/manual visual check.
 - [?] Stock resource readouts centred (fix/hud-resource-text): A1 and A2 stock HUD, at 4:3, 16:9 and 21:9: each resource number sits centred in its box (A2: in the bar slot; A1: in the black box, not touching its top or left edge), unchanged when the window is resized; also check STA2 Classic, FO 3.2.7, FO4 and Roots (they draw through the same helper; not measured); watch a counting value (999 to 1000): the number is re-centred per string.

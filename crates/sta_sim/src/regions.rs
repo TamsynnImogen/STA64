@@ -56,7 +56,7 @@ impl Sim {
                 u.pos.x = u.pos.x + dx;
                 u.pos.z = u.pos.z + dz;
                 if u.pos != previous {
-                    crate::avoid::constrain_position(&mut self.confinement, u, previous, radius, &obstacles);
+                    crate::avoid::constrain_position(&mut self.confinement, u, previous, radius, &obstacles, self.economy.trade_dock_of(u.id));
                 }
             }
         }

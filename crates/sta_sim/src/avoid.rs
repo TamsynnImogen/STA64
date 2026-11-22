@@ -84,6 +84,10 @@ impl Obstacle {
         (p.x - c.x).abs() <= reach && (p.z - c.z).abs() <= reach
     }
 
+    pub(crate) fn blocks(&self, owner: PlayerId, dock: Option<EntityId>) -> bool {
+        self.friend != Some(owner) && dock.is_none_or(|dock| self.source != Some(dock))
+    }
+
     /// Centre and radius of the circle steering goes round.
     fn circle(&self) -> (Vec3, Fixed) {
         match self.solid {
@@ -179,7 +183,8 @@ impl Sim {
                 Fixed::ZERO
             };
             let owner = u.owner;
-            let mine = || obstacles.iter().filter(move |o| o.friend != Some(owner));
+            let dock = self.economy.trade_dock_of(u.id);
+            let mine = || obstacles.iter().filter(move |o| o.blocks(owner, dock));
             let volume = self.confinement.active_volume(u);
             let solids: Vec<_> = if volume.is_some() { mine().map(|o| o.solid).collect() } else { Vec::new() };
             // A destination inside a solid ends at its edge: a margin beyond
@@ -371,13 +376,14 @@ impl Sim {
         let (mut shifts, lifts) = self.craft_shifts(&bodies);
         let obstacles = self.obstacles();
         for b in bodies.iter().filter(|body| body.movable) {
-            let owner = self.units.get(b.id).map(|u| u.owner);
+            let Some(unit) = self.units.get(b.id) else { continue };
+            let dock = self.economy.trade_dock_of(b.id);
             let at = shifts.binary_search_by_key(&b.id, |x| x.0);
             let (mut sx, mut sz) = at.map_or((Fixed::ZERO, Fixed::ZERO), |i| shifts[i].1);
             let from = (sx, sz);
             for o in obstacles
                 .iter()
-                .filter(|o| o.friend.is_none() || o.friend != owner)
+                .filter(|o| o.blocks(unit.owner, dock))
             {
                 let p = Vec3 {
                     x: b.pos.x + sx,
@@ -408,7 +414,7 @@ impl Sim {
                 }
                 if u.pos != previous {
                     let radius = bodies.binary_search_by_key(&id, |b| b.id).map_or(Fixed::ZERO, |i| bodies[i].radius);
-                    constrain_position(&mut self.confinement, u, previous, radius, &obstacles);
+                    constrain_position(&mut self.confinement, u, previous, radius, &obstacles, self.economy.trade_dock_of(id));
                 }
             }
         }
@@ -450,10 +456,11 @@ pub(crate) fn constrain_position(
     previous: Vec3,
     radius: Fixed,
     obstacles: &[Obstacle],
+    dock: Option<EntityId>,
 ) {
     let Some(volume) = confinement.position_updated(unit) else { return };
     use crate::boundary::contact::{contact, distance, legal_target};
-    let solids: Vec<_> = obstacles.iter().filter(|o| o.source != Some(unit.id) && o.friend != Some(unit.owner)).map(|o| o.solid).collect();
+    let solids: Vec<_> = obstacles.iter().filter(|o| o.source != Some(unit.id) && o.blocks(unit.owner, dock)).map(|o| o.solid).collect();
     let desired = unit.pos;
     if legal_target(&volume, previous, desired, radius, &solids) { return; }
     let replacement = solids.iter().enumerate().filter_map(|(index, solid)| {

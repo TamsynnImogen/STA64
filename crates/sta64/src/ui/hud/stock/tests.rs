@@ -1032,6 +1032,7 @@ fn metadata_groups_only_available_actions() {
                 preferred: None,
                 menu: Some(menu.into()),
                 source: Vec::new(),
+                param: None,
                 tooltip: Some("GUI_MOVE_TOOLTIP".into()),
                 verbose: Some("GUI_MOVE_VERBOSE".into()),
                 normal: None,
@@ -1071,7 +1072,7 @@ fn transport_shows_in_the_stock_palette_only_where_the_command_data_places_it() 
     assert!(transport(&NativeCommands::default()).is_none());
     let record = |preferred| NativeCommand {
         odf: "transport.odf".into(), command: "TRANSPORT".into(), button: "b_transport".into(), preferred, menu: None,
-        source: Vec::new(),
+        source: Vec::new(), param: None,
         tooltip: None, verbose: None, normal: None, hovered: None, pressed: None, disabled: None, active: None,
     };
     let mut native = NativeCommands::default();
@@ -1098,6 +1099,7 @@ fn native_formation_choices_keep_odf_identity_and_cannot_queue_orders() {
             preferred: Some(preferred),
             menu: None,
             source: Vec::new(),
+            param: None,
             tooltip: Some(tip.into()),
             verbose: Some(format!("{tip}_VERBOSE")),
             normal: None,

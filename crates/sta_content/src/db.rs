@@ -66,6 +66,12 @@ pub struct ContentDb {
 impl ContentDb {
     pub fn rules(&self) -> &crate::Rules { &self.rules }
 
+    /// Whether a race can trade. Unknown races and races without an authored
+    /// `canTrade = 0` default to true.
+    pub fn can_trade(&self, race: &str) -> bool {
+        self.rules.can_trade(race)
+    }
+
     /// Whether the resolved content uses Armada I officer rules.
     pub fn a1_officers(&self) -> bool {
         self.profile == Profile::Sta1Classic || self.a1_officer_policy
@@ -573,7 +579,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // set; `has_crew`, `assault`, `weldingAnimSpeed`, `eventTransport` are not read yet.
     let UnitDef {
         key: _, odf: _, class: _, is_starbase: _, planet_role: _, planet_crew_gain: _, planet_crew_modifier: _,
-        a1_base_officers: _, a1_officer_upgrade_gain: _,
+        a1_base_officers: _, a1_officer_upgrade_gain: _, trade_station: _, trade_cargo_capacity: _,
         planet_colonizable: _, planet_civilian_population_modifier: _, planet_max_population: _, can_have_orbital_station: _, fleet_cap: _, orbit_time: _, a1_borg: _, station_mining: _, node_income: _, race: _,
         model: _, scale: _, movement: _, hull: _, shields: _, initial_hull: _, initial_shields: _,
         crew: _, maximum_crew: _, facility: _, has_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
@@ -845,6 +851,19 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
             Canon::new()
                 .opt_fixed("multiplier", m.multiplier)
                 .raw("can_handle", &m.can_handle.map_or_else(|| "-".to_owned(), |h| format!("[{}]", h.map(|b| u8::from(b).to_string()).join(","))))));
+    }
+    if let Some(t) = &u.trade_station {
+        c.raw("trade_station", &group(
+            Canon::new()
+                .fixed("transfer_rate", t.transfer_rate)
+                .fixed("profit_share", t.profit_share)
+                .list("goods", t.goods.iter().map(|g| group(
+                    Canon::new().text("key", &g.key).fixed("value", g.value),
+                ))),
+        ));
+    }
+    if let Some(capacity) = u.trade_cargo_capacity {
+        c.fixed("trade_cargo_capacity", capacity);
     }
     if let Some(n) = u.node_income {
         c.raw("node_income", &group(

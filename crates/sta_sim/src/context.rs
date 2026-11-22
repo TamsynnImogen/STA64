@@ -38,7 +38,7 @@
 use sta_content::ContentDb;
 use sta_core::{EntityId, Fixed};
 
-use crate::command::{Order, Target};
+use crate::command::{Order, Target, TradeAction};
 use crate::view::{Relation, UnitFlags, WorldView};
 use crate::world::EntityKind;
 use crate::PlayerId;
@@ -50,6 +50,12 @@ fn is_resource(db: &ContentDb, view: &WorldView, id: EntityId) -> bool {
 
 fn is_miner(db: &ContentDb, view: &WorldView, id: EntityId) -> bool {
     view.unit(id).and_then(|u| db.unit(u.def)).is_some_and(|d| d.mines())
+}
+
+fn is_cargo_ship(db: &ContentDb, view: &WorldView, id: EntityId) -> bool {
+    view.unit(id).and_then(|u| db.unit(u.def)).is_some_and(|d| {
+        db.can_trade(&d.race) && d.trade_cargo_capacity.is_some_and(|v| v > Fixed::ZERO)
+    })
 }
 
 /// Armed for the vote, as the sim's `Order::Attack` takes it
@@ -68,6 +74,7 @@ pub fn takers(db: Option<&ContentDb>, view: &WorldView, order: &Order) -> Vec<En
     };
     match order {
         Order::Mine { units, .. } => keep(units, &|db, id| is_miner(db, view, id)),
+        Order::Trade { units, .. } => keep(units, &|db, id| is_cargo_ship(db, view, id)),
         Order::Attack { units, .. } => keep(units, &|db, id| is_armed(db, view, id)),
         Order::Rally { builders, .. } => builders.clone(),
         Order::Repair { units, yard: Some(t) } if db.is_some_and(|db| view.unit(*t).and_then(|u| db.unit(u.def)).is_some_and(|d| EntityKind::of_def(d) == EntityKind::Craft)) => {
@@ -134,6 +141,7 @@ pub fn rally_builders(db: Option<&ContentDb>, view: &WorldView, me: PlayerId, ow
 /// also ranks colonise 5, repair-other 6 and special attack 8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Vote {
+    Trade = 3,
     Mine = 4,
     Repair = 6,
     Attack = 7,
@@ -164,6 +172,9 @@ pub fn context_order(db: Option<&ContentDb>, view: &WorldView, me: PlayerId, own
         // No content to vote with: an enemy is attacked, as before content.
         return enemy.then(|| Order::Attack { units: own.to_vec(), target });
     };
+    let trade_station = t.owner.is_player()
+        && t.progress.is_none_or(|p| p >= Fixed::ONE)
+        && db.unit(t.def).is_some_and(|d| db.can_trade(&d.race) && d.trade_station.is_some());
     let resource = is_resource(db, view, target);
     let damaged_friend = is_friend(view, me, t.owner)
         && t.hull[0] < t.hull[1]
@@ -177,12 +188,15 @@ pub fn context_order(db: Option<&ContentDb>, view: &WorldView, me: PlayerId, own
                 Some(Vote::Attack)
             } else if damaged_friend && id != target && is_repair_ship(db, view, id) {
                 Some(Vote::Repair)
+            } else if trade_station && id != target && is_cargo_ship(db, view, id) {
+                Some(Vote::Trade)
             } else {
                 None
             }
         })
         .max()?;
     Some(match vote {
+        Vote::Trade => Order::Trade { units: own.to_vec(), action: TradeAction::Auto(target) },
         Vote::Mine => Order::Mine { units: own.to_vec(), node: target },
         Vote::Attack => Order::Attack { units: own.to_vec(), target },
         Vote::Repair => Order::Repair { units: own.to_vec(), yard: Some(target) },

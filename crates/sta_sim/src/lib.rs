@@ -480,6 +480,7 @@ impl Sim {
             Order::Decommission { units, yard } => self.apply_decommission(c.player, units, *yard),
             Order::Recrew { units, on } => self.order_recrew(c.player, units, *on),
             Order::Alert { units, level } => self.order_alert(c.player, units, *level),
+            Order::Trade { units, action } => self.order_trade(c.player, units, *action),
         }
     }
 
@@ -573,6 +574,7 @@ impl Sim {
         let colony_crew = self.content.as_deref().map(|db| self.colony_crew_income(db)).unwrap_or_default();
         if let Some(db) = &self.content {
             self.economy.step(&mut self.units, db, self.tick, &self.confinement, &mut self.events);
+            self.economy.step_trade(&mut self.units, economy::trade::TradeRules(db, &self.attrs), self.tick, &mut self.rng);
             self.economy.step_passive(&self.units, db, &self.players, &self.ai_seats, self.tick);
             self.economy.step_crew(&self.units, db, &self.attrs, self.tick, &colony_crew);
             let from = self.events.len();

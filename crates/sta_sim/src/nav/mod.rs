@@ -391,9 +391,10 @@ impl Sim {
             let Some(t) = u.target else { continue };
             let p = u.pos;
             let body = whole(self.body_radius(u.def));
+            let dock = self.economy.trade_dock_of(id);
             let solids: Vec<Solid> = obstacles
                 .iter()
-                .filter(|o| o.friend != Some(u.owner))
+                .filter(|o| o.blocks(u.owner, dock))
                 .map(|o| o.solid)
                 .collect();
             // The goal as SIM-21 will fly it: a target inside a solid ends

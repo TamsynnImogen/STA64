@@ -353,7 +353,7 @@ impl Sim {
             (u.stats.max_speed, u.stats.warp_speed) = own;
             if self.confinement.is_active() && u.pos != previous {
                 let radius = db.and_then(|db| db.unit(u.def)).map_or(Fixed::ZERO, |d| d.radius * Fixed::from_int(3) / Fixed::from_int(4));
-                crate::avoid::constrain_position(&mut self.confinement, u, previous, radius, &obstacles);
+                crate::avoid::constrain_position(&mut self.confinement, u, previous, radius, &obstacles, self.economy.trade_dock_of(u.id));
             }
         }
         if self.confinement.is_active() {
@@ -361,7 +361,7 @@ impl Sim {
                 if self.confinement.ticks(u) {
                     let previous = u.pos;
                     let radius = db.and_then(|db| db.unit(u.def)).map_or(Fixed::ZERO, |d| d.radius * Fixed::from_int(3) / Fixed::from_int(4));
-                    crate::avoid::constrain_position(&mut self.confinement, u, previous, radius, &obstacles);
+                    crate::avoid::constrain_position(&mut self.confinement, u, previous, radius, &obstacles, self.economy.trade_dock_of(u.id));
                 }
             }
         }
