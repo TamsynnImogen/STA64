@@ -10,8 +10,8 @@
 //! shroud is opaque; the fog lets the map show through at [`FOG_ALPHA`] (Refit's
 //! measured match to stock).
 //!
-//! The minimap samples [`FogGrid`] directly. Reconstructing its masks with the same cubic
-//! filter as the 3D fog rounds the stair steps in the cell grid at display resolution.
+//! The minimap samples [`FogGrid`]'s distance fields with the same cubic filter as
+//! the 3D fog, so the contours follow the sensor radii between the cell centres.
 
 use bevy::asset::{AssetPath, RenderAssetUsages, embedded_asset};
 use bevy::image::ImageSampler;
@@ -293,8 +293,8 @@ mod tests {
         assert_eq!(data[north_west..north_west + 2], [255, 255], "northwest is shrouded");
     }
 
-    /// Compare the live material with the old bilinear RGBA mask at about six display pixels
-    /// per sensor cell, close to the reported stair steps. Use the same circular cell mask.
+    /// Compare the binary and signed-distance masks in the same live material at about
+    /// six display pixels per sensor cell, close to the reported stair steps.
     #[test]
     fn the_drawn_shroud_rounds_the_sensor_grid_on_the_gpu() {
         use bevy::camera::RenderTarget;
@@ -321,42 +321,36 @@ mod tests {
         let mut state = RadarState::default();
         state.map = Some(map);
         let mut grid = FogGrid::new([0.0; 2], [6400.0; 2]);
+        let mut binary = grid.clone();
         let centre = Vec2::new(24.3, 26.1);
-        for z in 0..grid.h {
-            for x in 0..grid.w {
-                if (Vec2::new(x as f32, z as f32) + Vec2::splat(0.5)).distance(centre) < 9.2 {
-                    grid.set_cell_for_test(x, z, true, true);
+        let radius = 9.2;
+        for z in 0..binary.h {
+            for x in 0..binary.w {
+                if (Vec2::new(x as f32, z as f32) + Vec2::splat(0.5)).distance(centre) < radius {
+                    binary.set_cell_for_test(x, z, true, true);
                 }
             }
         }
         let centre_px = map.to_square(centre * grid.cell) * SIDE as f32;
-        let mut old = Vec::new();
-        for y in 0..128 {
-            for x in 0..128 {
-                let p = map.to_world((Vec2::new(x as f32, y as f32) + Vec2::splat(0.5)) / 128.0);
-                old.extend([0, 0, 0, if grid.explored_at(p.x, p.y) { 0 } else { 255 }]);
-            }
-        }
+        grid.set_sensor_for_test(centre * grid.cell, radius * grid.cell);
+        let colours = FogColours { fog: [0; 3], shroud: [0; 3] };
         app.insert_resource(state)
             .insert_resource(FogState { grid, updates: 1 })
-            .insert_resource(FogColours { fog: [0; 3], shroud: [0; 3] });
+            .insert_resource(colours);
         let mut target = Image::new_target_texture(2 * SIDE, SIDE, TextureFormat::Rgba8UnormSrgb, None);
         target.asset_usage = RenderAssetUsages::RENDER_WORLD;
-        let mut old = Image::new(Extent3d { width: 128, height: 128, depth_or_array_layers: 1 },
-            TextureDimension::D2, old, TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default());
-        old.sampler = ImageSampler::linear();
         let mut images = app.world_mut().resource_mut::<Assets<Image>>();
-        let (target, old) = (images.add(target), images.add(old));
+        let (target, mask) = (images.add(target), images.add(mask_image(&binary, mask_data(&binary))));
+        let old = app.world_mut().resource_mut::<Assets<RadarFogMaterial>>().add(RadarFogMaterial {
+            params: RadarFogParams::new(&binary, &map, &colours),
+            mask,
+        });
         let camera = app.world_mut().spawn((
             Camera2d, Camera { clear_color: ClearColorConfig::Custom(Color::WHITE), ..default() },
             RenderTarget::from(target.clone()), Msaa::Off,
         )).id();
         let panel = Node { position_type: PositionType::Absolute, width: Val::Px(SIDE as f32), height: Val::Px(SIDE as f32), ..default() };
-        app.world_mut().spawn((panel.clone(), UiTargetCamera(camera), ImageNode {
-            image: old,
-            image_mode: bevy::ui::widget::NodeImageMode::Stretch,
-            ..default()
-        }));
+        app.world_mut().spawn((panel.clone(), UiTargetCamera(camera), MaterialNode(old)));
         app.world_mut().spawn((Node { left: Val::Px(SIDE as f32), ..panel }, UiTargetCamera(camera), RadarSquare, StockRadar));
         app.finish();
         app.cleanup();
@@ -408,7 +402,7 @@ mod tests {
         };
         let old = roughness(0.0);
         let smooth = roughness(SIDE as f32);
-        eprintln!("{} shroud edge roughness: bilinear {old:.3}, reconstructed {smooth:.3}", adapter.name);
+        eprintln!("{} shroud edge roughness: binary {old:.3}, distance {smooth:.3}", adapter.name);
         assert!(smooth < 0.85 * old, "the grid outline should be smoother: {smooth:.3} vs {old:.3}");
     }
 

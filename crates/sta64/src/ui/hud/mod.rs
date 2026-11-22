@@ -320,7 +320,7 @@ fn refresh(
         }
         if layout_changed || drawn.as_ref().is_none_or(|d| d.grid != now.grid) {
             clear(&mut commands, kids);
-            panels::fill_grid(&mut commands, &theme, e, &now.grid);
+            panels::fill_grid(&mut commands, &theme, e, &now.grid, &feed);
         }
     }
     if config.log {

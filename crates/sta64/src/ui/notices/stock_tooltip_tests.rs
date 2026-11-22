@@ -323,6 +323,57 @@ fn stock_rig() -> App {
 }
 
 #[test]
+fn hovering_between_children_keeps_the_hud_tooltip_clock() {
+    use bevy::picking::backend::HitData;
+    use bevy::picking::events::{Pointer, PointerEnter, PointerLeave, PointerOut, PointerOver};
+    use bevy::picking::pointer::{Location, PointerId};
+
+    let mut app = stock_rig();
+    let parent = app.world_mut().spawn(Tooltip::new("Short").verbose("Verbose")).id();
+    let child = app.world_mut().spawn(ChildOf(parent)).id();
+    let camera = app.world_mut().spawn_empty().id();
+    let pointer = Pointer::new(
+        PointerId::Mouse,
+        Location { target: bevy::camera::NormalizedRenderTarget::None { width: 1, height: 1 }, position: Vec2::ZERO },
+    );
+    let hit = HitData::new(camera, 0.0, None, None);
+    app.world_mut().trigger(PointerEnter { entity: parent, pointer: pointer.clone(), hit: hit.clone(), is_in_bounds: true });
+    assert_eq!(app.world().resource::<TipHover>().target, Some(parent));
+    app.world_mut().resource_mut::<TipHover>().rest = TipDelays::STOCK.short;
+    app.update();
+    assert_eq!(words(&mut app), "Short");
+
+    // Out/Over from the child bubble through the parent on internal movement.
+    // The backend does not send a Leave for their shared parent.
+    app.world_mut().trigger(PointerOut { entity: child, pointer: pointer.clone(), hit: hit.clone() });
+    app.world_mut().trigger(PointerOver { entity: child, pointer: pointer.clone(), hit: hit.clone() });
+    assert_eq!(app.world().resource::<TipHover>().target, Some(parent));
+    assert_eq!(app.world().resource::<TipHover>().rest, TipDelays::STOCK.short);
+    app.world_mut().resource_mut::<TipHover>().rest = TipDelays::STOCK.verbose;
+    app.update();
+    assert_eq!(words(&mut app), "Verbose");
+
+    app.world_mut().trigger(PointerLeave { entity: parent, pointer, hit, was_in_bounds: true });
+    assert!(app.world().resource::<TipHover>().target.is_none());
+    app.update();
+    assert_eq!(node(&mut app).display, Display::None);
+}
+
+#[test]
+fn plain_box_keeps_build_composition_and_an_existing_verbose_lock_reason() {
+    use crate::ui::hud::stock::tooltip_text::BuildTipParts;
+    let size = Vec2::new(800.0, 600.0);
+    let mut app = rig(UiProfile::FleetOps, canvas(size, size, HudFit::Centred), size, Vec2::ZERO);
+    let parts = BuildTipParts { tooltip: "BUILD_KEY".into(), ..default() };
+    app.insert_resource(crate::ui::i18n::Strings::from_game("english", "\"BUILD_KEY\", \"Native build\""));
+    hover(&mut app, Tooltip::new("BUILD_KEY").verbose("Locked: missing tech").stock_build(parts), TipDelays::default().short);
+    assert_eq!(words(&mut app), "Native build:");
+    app.world_mut().resource_mut::<TipHover>().rest = TipDelays::default().verbose;
+    app.update();
+    assert_eq!(words(&mut app), "Locked: missing tech");
+}
+
+#[test]
 fn the_underline_rules_sit_on_the_marked_glyph_cells_across_wraps_and_alignment() {
     let f = fonts();
     let font = &f.fonts["fontfinal4_10"].font;
