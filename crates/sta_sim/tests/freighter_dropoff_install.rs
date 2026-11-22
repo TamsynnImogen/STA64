@@ -146,7 +146,7 @@ fn classic_freighter_unloads_at_the_authored_fbase_dock() {
         control: Control::Human,
     };
     let mut sim = Sim::from_setup(&GameSetup {
-        seed: 0xD20F_F,
+        seed: 0x000D_20FF,
         map: Arc::new(map),
         content: Arc::new(db),
         players: vec![seat(0), seat(1)],

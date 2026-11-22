@@ -366,10 +366,10 @@ fn load_with_a1(profile: Profile, mod_overrides: &Overrides, stems: &[String], l
         if a1_officers && let (Some(race), Some(upgrade)) = (odf.str("name"), odf.str("officerUpgradeODF")) {
             let race = race.trim().to_ascii_lowercase();
             let upgrade = stem(upgrade);
-            if !race.is_empty() && !upgrade.is_empty() {
-                if race_upgrades.insert(race.clone(), upgrade.clone()).is_some_and(|old| old != upgrade) {
-                    ambiguous_races.insert(race);
-                }
+            if !race.is_empty() && !upgrade.is_empty()
+                && race_upgrades.insert(race.clone(), upgrade.clone()).is_some_and(|old| old != upgrade)
+            {
+                ambiguous_races.insert(race);
             }
         }
         match kind_of(&odf) {
