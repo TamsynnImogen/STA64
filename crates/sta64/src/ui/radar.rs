@@ -756,26 +756,49 @@ fn on_click(
     }
 }
 
-/// Holding the left button on the square keeps sending clicks: dragging moves the camera along
-/// (`on_click` alone only sees the release).
+/// The map point a radar click moves the camera to: a primary-button click (a held right button
+/// with no own selection is sent as one by [`drag`]) inside the map's rectangle; a point in a
+/// strip beside a non-square map does nothing (read from the executable, static).
+pub fn camera_point(c: &RadarClick) -> Option<Vec2> {
+    (c.button == PointerButton::Primary && c.inside_map).then_some(c.at)
+}
+
+/// Whether the feed's selection holds an own unit (what a right-click on the minimap would order).
+pub fn own_selected(feed: &RadarFeed) -> bool {
+    feed.selected.iter().any(|id| feed.view.unit(*id).is_some_and(|u| u.owner == feed.player))
+}
+
+/// Holding the left button on the square, or the right button with no own selection, keeps
+/// sending camera clicks: dragging moves the camera along (`on_click` alone only sees the
+/// release). Read from the executable, static: the command button with an empty selection moves
+/// the camera to the map point every frame, like the other button; with a selection it orders
+/// (`input::orders::radar_order`). Only a point inside the map's rectangle moves it: a click or
+/// drag in a strip of the square beside a non-square map does nothing (same grade). The same in
+/// every look: the input rules are not part of the look.
 fn drag(
     buttons: Option<Res<ButtonInput<MouseButton>>>,
     squares: Query<&RelativeCursorPosition, With<RadarSquare>>,
     state: Res<RadarState>,
-    mut held: Local<bool>,
+    feed: Res<RadarFeed>,
+    mut held: Local<[bool; 2]>,
     mut out: MessageWriter<RadarClick>,
 ) {
     let (Some(buttons), Ok(rel), Some(map)) = (buttons, squares.single(), state.map) else { return };
     if buttons.just_pressed(MouseButton::Left) {
-        *held = rel.cursor_over;
+        held[0] = rel.cursor_over;
     }
-    if !buttons.pressed(MouseButton::Left) {
-        *held = false;
+    if buttons.just_pressed(MouseButton::Right) {
+        held[1] = rel.cursor_over && !own_selected(&feed);
     }
-    if *held
+    held[0] &= buttons.pressed(MouseButton::Left);
+    held[1] &= buttons.pressed(MouseButton::Right);
+    if (held[0] || held[1])
         && let Some(p) = rel.normalized
     {
-        out.write(click_at(&state, map, p, PointerButton::Primary));
+        let click = click_at(&state, map, p, PointerButton::Primary);
+        if click.inside_map {
+            out.write(click);
+        }
     }
 }
 
@@ -905,6 +928,7 @@ mod tests {
             .add_message::<RadarClick>()
             .init_resource::<ButtonInput<MouseButton>>()
             .insert_resource(RadarState { map: Some(RadarMap { min: Vec2::ZERO, size: 100.0 }), ..default() })
+            .init_resource::<RadarFeed>()
             .init_resource::<crate::ui::presentation::CineractiveState>()
             .add_systems(Update, drag.run_if(not(crate::ui::presentation::cutscene_running)));
         app.world_mut().spawn((RadarSquare, RelativeCursorPosition { cursor_over: true, normalized: Some(Vec2::ZERO), ..default() }));
@@ -919,6 +943,49 @@ mod tests {
         app.world_mut().resource_mut::<crate::ui::presentation::CineractiveState>().on = false;
         app.update();
         assert_eq!(sent(&mut app), 1, "it sends again after");
+    }
+
+    /// The camera follows the left button, or the right button with no own selection, over a point
+    /// inside the map; the right button with an own selection orders instead (`radar_order`), and
+    /// a strip beside a non-square map does nothing for either (read from the executable, static;
+    /// the same in every look).
+    #[test]
+    fn the_minimap_camera_follows_left_or_empty_selection_right_and_ignores_strips() {
+        // A 2:1 map in its square: the middle half of the square's height is map.
+        let (lo, hi) = (Vec2::ZERO, Vec2::new(2000.0, 1000.0));
+        let (mut log, db, flagship) = log();
+        for (own, button, at, moves) in [
+            (false, MouseButton::Left, Vec2::ZERO, true),
+            (false, MouseButton::Right, Vec2::ZERO, true),
+            (true, MouseButton::Right, Vec2::ZERO, false),
+            (true, MouseButton::Left, Vec2::ZERO, true),
+            (false, MouseButton::Left, Vec2::new(0.0, 0.4), false),
+            (false, MouseButton::Right, Vec2::new(0.0, -0.4), false),
+        ] {
+            let mut feed = omniscient(feed_at(&mut log, &db, 0));
+            feed.selected = if own { vec![flagship] } else { Vec::new() };
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins)
+                .add_message::<RadarClick>()
+                .init_resource::<ButtonInput<MouseButton>>()
+                .insert_resource(RadarState { map: Some(RadarMap::of_bounds(lo, hi)), map_fixed: true, bounds: Some((lo, hi)), ..default() })
+                .insert_resource(feed)
+                .add_systems(Update, drag);
+            app.world_mut().spawn((RadarSquare, RelativeCursorPosition { cursor_over: true, normalized: Some(at), ..default() }));
+            app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(button);
+            app.update();
+            let sent: Vec<RadarClick> = app.world_mut().resource_mut::<Messages<RadarClick>>().drain().collect();
+            assert_eq!(sent.iter().filter_map(camera_point).count(), usize::from(moves), "own={own} {button:?} {at}: {sent:?}");
+            assert!(sent.iter().all(|c| c.button == PointerButton::Primary && c.inside_map));
+        }
+    }
+
+    #[test]
+    fn only_a_primary_click_inside_the_map_is_a_camera_point() {
+        let click = |button, inside_map| RadarClick { at: Vec2::new(3.0, 4.0), button, inside_map };
+        assert_eq!(camera_point(&click(PointerButton::Primary, true)), Some(Vec2::new(3.0, 4.0)));
+        assert_eq!(camera_point(&click(PointerButton::Primary, false)), None, "a strip");
+        assert_eq!(camera_point(&click(PointerButton::Secondary, true)), None, "an order, not the camera");
     }
 
     const SCENE: &str = include_str!("../../tests/fixtures/radar.ini");
