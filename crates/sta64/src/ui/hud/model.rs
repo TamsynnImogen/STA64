@@ -572,7 +572,7 @@ pub(super) fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
 }
 
 /// A build icon follows the resolved model basename before the ODF stem.
-fn build_sprite_names(model: &str, odf: &str) -> Vec<String> {
+pub(super) fn build_sprite_names(model: &str, odf: &str) -> Vec<String> {
     let mut names = Vec::new();
     for source in [model, odf] {
         let basename = source.rsplit(['/', '\\']).next().unwrap_or(source).trim();

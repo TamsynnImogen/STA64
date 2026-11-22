@@ -111,7 +111,11 @@ fn the_installed_a1compat_starbase_offers_and_builds_each_races_upgrade() {
     let Ok(root) = std::env::var("STA64_TEST_A1_COMPAT_INSTALL") else { return; };
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some("STA1 Classic")).unwrap();
     let (index, _) = OdfIndex::build(&vfs);
-    let db = Arc::new(ContentDb::load(&vfs, &index).unwrap().0);
+    let db = ContentDb::load(&vfs, &index).unwrap().0;
+    let bytes = vfs.read("bzn/2blue.bzn").unwrap().unwrap();
+    let map = sta_bzn::parse(&bytes).unwrap();
+    let db = Arc::new(db.with_map_tech_tree(&vfs, &map.tech_tree_file).0.unwrap_or(db));
+    let map = Arc::new(MapDef::convert_bzn_named_in(&map, "2blue", &db, &vfs, &index).map);
     assert!(db.a1_officers(), "the required A1Compat module enables this policy");
     let (races, _) = Races::load(&vfs, &index);
     for (race, base, upgrade) in [
@@ -119,7 +123,7 @@ fn the_installed_a1compat_starbase_offers_and_builds_each_races_upgrade() {
         ("romulan", "rbase", "romoff"), ("borg", "bbase", "borgoff"),
     ] {
         let setup = GameSetup {
-            seed: 3, map: Arc::new(sta_content::fake::two_bases()), content: db.clone(),
+            seed: 3, map: map.clone(), content: db.clone(),
             players: vec![seat(0, race), seat(1, race)], options: GameOptions::default(),
         };
         let (mut sim, _) = Sim::from_setup_with_starts(&setup, &races);
@@ -128,11 +132,13 @@ fn the_installed_a1compat_starbase_offers_and_builds_each_races_upgrade() {
         let base_def = db.unit(base_key).unwrap();
         let base = sim.view().units.iter().find(|u| u.def == base_key && u.owner == PlayerId(0)).unwrap().id;
         assert_eq!(base_def.a1_base_officers.unwrap().upgrade, Some(upgrade), "{race}");
-        assert_eq!(capacity(&sim, 0), count(20), "{race}");
+        let initial_cap = capacity(&sim, 0);
         assert!(build(&mut sim, base, upgrade, 1), "{race}");
+        let row = sim.production_view().into_iter().find(|r| r.builder == base).unwrap();
+        assert!(row.jobs.first().is_some_and(|job| job.def == upgrade && job.started && job.paid), "{race}: {row:?}");
         for _ in 0..db.unit(upgrade).unwrap().build.ticks + 2 { sim.step(&[]); }
         assert_eq!(quarters(&sim, base), OfficerUpgradeView { completed: 1, remaining: 5 }, "{race}");
-        assert_eq!(capacity(&sim, 0), count(40), "{race}");
+        assert_eq!(capacity(&sim, 0), initial_cap + count(20), "{race}");
         assert!(!sim.view().units.iter().any(|u| u.def == upgrade));
     }
 }

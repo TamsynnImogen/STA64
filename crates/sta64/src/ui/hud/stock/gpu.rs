@@ -36,6 +36,10 @@ fn aim_roots(
 }
 
 fn feed(vfs: &sta_vfs::Vfs, options: GameOptions, group: usize) -> HudFeed {
+    feed_and_sim(vfs, options, group).0
+}
+
+fn feed_and_sim(vfs: &sta_vfs::Vfs, options: GameOptions, group: usize) -> (HudFeed, sta_sim::Sim) {
     // Exercise the real mounted content -> shared starting sim -> HUD path.
     // Fake ship/player values cannot expose a lost crew/officer binding.
     let (index, _) = sta_content::OdfIndex::build(vfs);
@@ -71,7 +75,8 @@ fn feed(vfs: &sta_vfs::Vfs, options: GameOptions, group: usize) -> HudFeed {
     let selected = view.units.iter().find(|u| {
         u.owner == PlayerId(0) && u.flags.contains(sta_sim::view::UnitFlags::SELECTABLE)
     }).expect("selectable authored start unit").id;
-    HudFeed { view, player: PlayerId(0), selected: vec![selected], content: Some(db), production: sim.production_view(), ..Default::default() }
+    let feed = HudFeed { view, player: PlayerId(0), selected: vec![selected], content: Some(db), production: sim.production_view(), ..Default::default() };
+    (feed, sim)
 }
 
 fn resolved_pieces(app: &mut App, pieces: &[super::layout::Piece]) -> usize {
@@ -981,7 +986,7 @@ fn installed_armada1_stock_hud_renders_on_gpu() {
         let layout = crate::game::gui_layout(&vfs, cfg).unwrap_or_else(|| panic!("installed {cfg} missing"));
         let stock = StockLayout::for_aspect_fit(&layout, size.x as f32 / size.y as f32, fit);
         assert_eq!(stock.canvas, Vec2::new(640.0, 480.0), "{label}: one 640 x 480 sheet");
-        let mut hud_feed = feed(&vfs, GameOptions::default(), 0);
+        let (mut hud_feed, sim) = feed_and_sim(&vfs, GameOptions::default(), 0);
         let mut upgrade_key = None;
         if compat_mod.is_some() {
             let db = hud_feed.content.as_ref().unwrap();
@@ -993,6 +998,7 @@ fn installed_armada1_stock_hud_renders_on_gpu() {
         }
         let team = Color::srgb(0.25, 0.5, 1.0);
         let palette = crate::viewer::TeamColours::load(&vfs).with_local_colour(hud_feed.player, team, &[hud_feed.player]);
+        let officer_content = hud_feed.content.clone();
         let mut app = App::new();
         app.add_plugins(
             DefaultPlugins
@@ -1080,6 +1086,45 @@ fn installed_armada1_stock_hud_renders_on_gpu() {
             assert!(!app.world().resource::<crate::sim_link::CommandQueue>().0.is_empty(), "{label}: the slot click queued no order");
             app.world_mut().resource_mut::<crate::sim_link::CommandQueue>().0.clear();
         }
+        let officer_check = upgrade_key.map(|what| {
+            use crate::sim_link::{CommandQueue, ContentRes, SimLink};
+            use sta_sim::command::{CommandKind, LocalRouter, Order};
+            let db = officer_content.unwrap();
+            let def = db.unit(what).unwrap();
+            let ticks = def.build.ticks;
+            let bonus = Fixed::from_int(def.a1_officer_upgrade_gain.unwrap());
+            let sprite = format!("b_{}", def.odf);
+            let button = app.world_mut()
+                .query::<(Entity, &super::super::panels::GridCell, &ImageNode)>()
+                .iter(app.world())
+                .find_map(|(entity, cell, _)| match cell.0 {
+                    super::super::Act::Build { builder, what: key, site: false, .. } if key == what => Some((entity, builder)),
+                    _ => None,
+                }).expect("rendered officer upgrade");
+            crate::ui::theme::click(app.world_mut(), button.0);
+            app.update();
+            let orders = std::mem::take(&mut app.world_mut().resource_mut::<CommandQueue>().0);
+            assert!(matches!(orders.as_slice(), [CommandKind::Order(Order::Build { builder, what: key, at: None })] if *builder == button.1 && *key == what), "{label}: {orders:?}");
+            let player = PlayerId(0);
+            let mut link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), player);
+            let starting_cap = link.curr().player(player).unwrap().officers[1];
+            for order in orders { link.submit(order); }
+            let events = link.tick().unwrap();
+            assert!(!events.iter().any(|e| matches!(e, sta_sim::SimEvent::Rejected { .. })), "{label}: {events:?}");
+            for _ in 0..ticks / 4 { link.tick().unwrap(); }
+            assert_eq!(link.curr().player(player).unwrap().officers[1], starting_cap);
+            app.world_mut().remove_resource::<ExternalFeed>();
+            app.insert_resource(ContentRes(db)).insert_resource(link);
+            for _ in 0..4 { app.update(); }
+            let resolved_job = app.world_mut().query::<(&GuiImage, &ImageNode)>().iter(app.world())
+                .any(|(art, _)| art.names.contains(&sprite));
+            assert!(resolved_job, "{label}: officer job sprite did not resolve on the speed rail");
+            use super::super::status_gpu::LiveValue;
+            let progress = app.world_mut().query::<(&LiveValue, &Node)>().iter(app.world())
+                .any(|(kind, node)| matches!(kind, LiveValue::QueueProgress(0, _)) && matches!(node.width, Val::Px(w) if w > 1.0));
+            assert!(progress, "{label}: no live officer build progress");
+            (ticks, starting_cap + bonus)
+        });
         let frames = Arc::new(Mutex::new(Vec::<Image>::new()));
         let output = Arc::clone(&frames);
         app.world_mut().spawn(Screenshot::image(target)).observe(move |shot: On<ScreenshotCaptured>| {
@@ -1099,6 +1144,11 @@ fn installed_armada1_stock_hud_renders_on_gpu() {
         if let Ok(dir) = std::env::var("STA64_HUD_CAPTURE_DIR") {
             std::fs::create_dir_all(&dir).unwrap();
             rgba.save(std::path::Path::new(&dir).join(format!("stock-{label}.png"))).unwrap();
+        }
+        if let Some((ticks, expected_cap)) = officer_check {
+            let mut link = app.world_mut().resource_mut::<crate::sim_link::SimLink>();
+            for _ in 0..ticks { link.tick().unwrap(); }
+            assert_eq!(link.curr().player(PlayerId(0)).unwrap().officers[1], expected_cap);
         }
     }
     }
