@@ -22,7 +22,7 @@
 //!   is UV-cropped to its share, the others are narrowed. A missing sprite leaves that bar untextured.
 //! - Interim: no readout bars while a cineractive runs (hover tracking goes on then); whether the
 //!   original draws them there is not established.
-//! - Not implemented: the damaged-system icons below the box, group numbers, the original's pick rules.
+//! - The group numbers and the damaged-system icons are in [`super::extras`]. Not implemented: the original's pick rules.
 
 use sta_content::ContentKey;
 use sta_sim::{PlayerId, UnitView};

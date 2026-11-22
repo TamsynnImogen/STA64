@@ -22,6 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 mod geometry;
 pub mod bubble;
 pub mod marker;
+pub mod extras;
 pub mod readout;
 pub use readout::armada2_look;
 #[cfg(test)]
@@ -140,7 +141,7 @@ impl Plugin for OverlaysPlugin {
             .add_systems(Startup, make_assets.run_if(resource_exists::<Assets<Mesh>>).run_if(resource_exists::<Assets<StandardMaterial>>))
             .add_systems(
                 Update,
-                (crate::input::hover::tick_readout, marker::load_art, readout::load_art, sync_overlays, marker::orient, update_bars, update_lines, billboard.after(crate::viewer::orbit_camera), count)
+                (crate::input::hover::tick_readout, marker::load_art, readout::load_art, sync_overlays, marker::orient, update_bars, update_lines, billboard.after(crate::viewer::orbit_camera), extras::sync_extras, count)
                     .chain()
                     .in_set(GameSet::Render)
                     .distributive_run_if(resource_exists::<SimLink>)
@@ -630,6 +631,28 @@ mod tests {
         *app.world_mut().resource_mut::<HoverReadout>() = HoverReadout { unit: Some(EntityId(2)), team: None, fade: 1.0 };
         sync(&mut app);
         assert!(bar_units(&mut app).is_empty());
+    }
+
+    #[test]
+    fn the_readout_extras_exist_only_in_the_armada_ii_look() {
+        use crate::input::select::ControlGroups;
+        for profile in [None, Some(UiProfile::Lcars), Some(UiProfile::Armada1), Some(UiProfile::FleetOps), Some(UiProfile::Armada2)] {
+            let mut app = rig(MIXED);
+            app.update();
+            if let Some(p) = profile {
+                app.world_mut().insert_resource(p);
+            }
+            app.init_resource::<ControlGroups>();
+            let stale = app.world_mut().spawn((extras::Extra { unit: EntityId(1), kind: extras::ExtraKind::Group }, Node::default())).id();
+            select(&mut app, &[1]);
+            hover(&mut app, Some((1, 0)), 1.0);
+            app.world_mut().run_system_once(extras::sync_extras).unwrap();
+            app.world_mut().flush();
+            // Without a camera nothing can be placed: the stale node goes in every look, and none appears.
+            assert!(app.world().get_entity(stale).is_err(), "{profile:?}");
+            let mut q = app.world_mut().query::<&extras::Extra>();
+            assert_eq!(q.iter(app.world()).count(), 0, "{profile:?}");
+        }
     }
 
     #[test]

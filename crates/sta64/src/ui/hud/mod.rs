@@ -41,6 +41,7 @@ pub mod model;
 pub mod commands;
 mod panels;
 pub mod stock;
+pub(crate) use status::StatusFeed;
 mod status;
 mod status_gpu;
 
