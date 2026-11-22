@@ -56,6 +56,7 @@ fn row(
     ProductionView {
         portal: None,
         research: None,
+        officer_upgrades: None,
         builder: EntityId(builder),
         jobs: vec![ProductionJobView {
             def,

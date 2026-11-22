@@ -611,6 +611,13 @@ impl Sim {
         Fixed::from_bits(census.to_bits().saturating_add(self.economy.officer_adjust(player).to_bits()))
     }
 
+    fn officer_limit(&self, player: PlayerId) -> Option<Fixed> {
+        match self.content.as_deref() {
+            Some(db) => self.production.officer_limit(&self.units, db, &self.economy, player),
+            None => self.economy.officer_limit(player),
+        }
+    }
+
     /// Production presentation at the current tick, derived from saved state.
     pub fn production_view(&self) -> Vec<production::view::ProductionView> {
         self.content.as_deref().map_or_else(Vec::new, |db| self.production.view(db, &self.units))
@@ -658,7 +665,7 @@ impl Sim {
                 id,
                 team,
                 resources: self.economy.stock_of(id),
-                officers: self.economy.officer_limit(id).map_or([Fixed::ZERO; 2], |limit| [self.officer_census(id), limit]),
+                officers: self.officer_limit(id).map_or([Fixed::ZERO; 2], |limit| [self.officer_census(id), limit]),
                 crew: self.economy.crew_of(id),
                 eliminated: self.victory.is_eliminated(id),
                 relations: self

@@ -55,7 +55,7 @@ impl Sim {
             let Some(key) = s
                 .content
                 .key(&o.odf)
-                .filter(|&k| s.content.unit(k).is_some())
+                .filter(|&k| s.content.unit(k).is_some_and(|d| d.a1_officer_upgrade_gain.is_none()))
             else {
                 warnings.push(Warning::new(
                     &o.odf,
@@ -100,7 +100,7 @@ impl Sim {
         heading: (Fixed, Fixed),
     ) -> Option<EntityId> {
         let content = self.content.as_ref()?;
-        let def = content.unit(key)?;
+        let def = content.unit(key).filter(|d| d.a1_officer_upgrade_gain.is_none())?;
         let id = self.units.spawn(Entity::from_def(
             def,
             content.features(),
@@ -151,6 +151,7 @@ impl Sim {
         self.economy.remove_docks(id);
         self.production.remove_rally_entity(id);
         self.production.remove_weld_site(id);
+        self.production.clear_officer_upgrades(id);
         for pod in self.production.remove_research_entity(id) {
             self.remove_entity(pod, destroyed_by);
         }

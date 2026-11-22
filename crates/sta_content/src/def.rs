@@ -342,6 +342,14 @@ pub struct ResearchSlot {
     pub pose: Option<crate::RepairAttachment>,
 }
 
+/// Resolved Armada I starbase officer rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct A1BaseOfficers {
+    pub gain: i32,
+    pub maximum_upgrades: u32,
+    pub upgrade: Option<ContentKey>,
+}
+
 #[derive(Debug, Clone)]
 pub struct UnitDef {
     /// Set by [`ContentDb`](crate::ContentDb) when it is built.
@@ -352,6 +360,10 @@ pub struct UnitDef {
     /// Resolved legacy `is_starbase` ODF flag, default false. This is
     /// independent of the simulation's actor kind or producer behavior.
     pub is_starbase: bool,
+    /// Armada I officer capacity supplied by a starbase.
+    pub a1_base_officers: Option<A1BaseOfficers>,
+    /// Armada I officer capacity supplied by an upgrade product.
+    pub a1_officer_upgrade_gain: Option<i32>,
     /// Resolved planet rule family, independent of actor kind and colony state.
     /// `None` retains the existing non-planet-metadata path; Native content
     /// opts in explicitly. Filled by the profile-aware ODF loader, or by an author.
@@ -690,6 +702,8 @@ impl UnitDef {
             odf: odf.to_owned(),
             class: ClassLabel::new(class),
             is_starbase: false,
+            a1_base_officers: None,
+            a1_officer_upgrade_gain: None,
             planet_role: None,
             planet_crew_gain: 0,
             planet_crew_modifier: None,

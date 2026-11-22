@@ -55,6 +55,8 @@ pub struct Rules {
     pub fields: FieldCfg,
     /// Armada I's header-level start (`cfgStarting*`), see [`LegacyStart`].
     legacy_start: LegacyStart,
+    /// Explicit `cfgMaxOfficers`, independently of the A2 officer limit keys.
+    a1_max_officers: Option<i32>,
 }
 
 const TYPED_LEN: usize = 4 + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + ApproachRules::KEYS.len() + CfgRules::KEYS.len() + LegacyStart::KEYS.len() + PopulationRules::KEYS.len();
@@ -689,6 +691,10 @@ impl Rules {
             }
         }
         rules.legacy_start = LegacyStart::from_cfg(&cfg, &mut warnings);
+        rules.a1_max_officers = cfg.raw("cfgMaxOfficers")
+            .and_then(|_| cfg.i64("cfgMaxOfficers"))
+            .and_then(|n| i32::try_from(n).ok())
+            .filter(|n| *n >= 0);
         // Armada I has no multiplayer officer list: `cfgMaxOfficers` is the one cap.
         if rules.officer_limits.is_empty() && cfg.raw("MP_OFFICER_LIMIT").is_none() && cfg.raw("SINGLE_PLAYER_OFFICER_LIMIT").is_none() && cfg.raw("cfgMaxOfficers").is_some() {
             match cfg.i64("cfgMaxOfficers").and_then(|v| i32::try_from(v).ok()).filter(|v| *v >= 0) {
@@ -916,6 +922,11 @@ impl Rules {
     /// Armada I's header-level start, for a race that authors none.
     pub fn legacy_start(&self) -> LegacyStart {
         self.legacy_start
+    }
+
+    /// Explicit `cfgMaxOfficers`; an inherited A2 cap is not used here.
+    pub fn a1_max_officers(&self) -> Option<i32> {
+        self.a1_max_officers
     }
 
     pub fn officer_limit(&self, choice: usize) -> Option<i32> {

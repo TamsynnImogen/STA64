@@ -182,7 +182,11 @@ impl crate::Sim {
                     crate::economy::Economy::derived_crew_capacity(&self.units, db, &self.attrs, player)
                         .map(|c| Fixed::from_bits(c.to_bits().saturating_add(self.economy.crew_capacity_adjust(player).to_bits())))
                 }),
-                officer_limit: self.economy.officer_base(player),
+                officer_limit: if self.content.as_deref().is_some_and(sta_content::ContentDb::a1_officers) {
+                    self.officer_limit(player)
+                } else {
+                    self.economy.officer_base(player)
+                },
             })
             .collect()
     }

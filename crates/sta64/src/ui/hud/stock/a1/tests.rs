@@ -3,10 +3,11 @@
 use std::sync::Arc;
 
 use bevy::prelude::*;
-use sta_content::{ButtonSlots, ContentDb, GuiCfg};
+use sta_content::{A1BaseOfficers, ButtonSlots, ContentDb, DefRef, GuiCfg, SlotCommand};
 use sta_sim::command::{CommandKind, Order};
 use sta_sim::fake::ScriptedSource;
 use sta_sim::view::PlayerView;
+use sta_sim::production::view::{OfficerUpgradeView, ProductionView};
 use sta_sim::{EntityId, Fixed, PlayerId, TeamId, WorldSource};
 
 use super::super::{StockBody, StockState, layout::StockLayout};
@@ -165,6 +166,74 @@ fn panel_rectangles_stay_in_the_sheet_group() {
 
 fn selection_feed() -> HudFeed {
     feed(&Arc::new(sta_content::fake::db()))
+}
+
+fn officer_feed(crew: Option<i32>, remaining: u32, completed: u32) -> HudFeed {
+    let fake = sta_content::fake::db();
+    let mut builder = ContentDb::builder().profile(sta_content::Profile::Sta1Classic);
+    for weapon in fake.weapons() { builder = builder.weapon(weapon.clone()); }
+    for unit in fake.units() {
+        let mut unit = unit.clone();
+        if unit.odf == "fx_cruiser" {
+            unit.build.list = vec![DefRef::new("fx_station"), DefRef::new("fx_frigate")];
+            unit.a1_base_officers = Some(A1BaseOfficers { gain: 10, maximum_upgrades: 2, upgrade: fake.key("fx_station") });
+        }
+        if unit.odf == "fx_station" {
+            unit.a1_officer_upgrade_gain = Some(5);
+            unit.crew = Fixed::from_int(20);
+            unit.build.cost = vec![Fixed::from_int(500), Fixed::ZERO, Fixed::ZERO, Fixed::ZERO];
+        }
+        builder = builder.unit(unit);
+    }
+    let db = Arc::new(builder.build().unwrap());
+    let mut feed = feed(&db);
+    let mut view = (*feed.view).clone();
+    view.players[0].resources[0] = Fixed::from_int(600);
+    view.players[0].crew = crew.map(Fixed::from_int);
+    feed.view = Arc::new(view);
+    feed.production = vec![ProductionView {
+        builder: EntityId(1), jobs: Vec::new(), site: None, portal: None, research: None,
+        officer_upgrades: Some(OfficerUpgradeView { completed, remaining }),
+    }];
+    feed
+}
+
+#[test]
+fn officer_quarter_uses_root_slot_authored_cost_and_queue_admission() {
+    let feed = officer_feed(Some(25), 2, 0);
+    let slots = ButtonSlots::a1_compat_from_header("").0;
+    let top = control::buttons(&feed, Page::Top, &slots, None);
+    let upgrade = top.iter().find(|b| b.cell == 9).expect("A1 root command");
+    let key = feed.content.as_ref().unwrap().key("fx_station").unwrap();
+    assert!(matches!(upgrade.act, Act::Build { what, site: false, .. } if what == key));
+    assert_eq!(upgrade.look, Look::Ready);
+    assert!(upgrade.tip.contains("500 dilithium, 20 crew"), "{}", upgrade.tip);
+    assert!(top.iter().any(|b| b.act == Act::OpenBuild && b.cell != 9));
+    assert!(matches!(crate::ui::hud::model::command(&feed, &upgrade.act), Some((CommandKind::Order(Order::Build { what, at: None, .. }), _)) if what == key));
+    let nested = control::buttons(&feed, Page::Build, &slots, None);
+    assert!(!nested.iter().any(|b| matches!(b.act, Act::Build { what, .. } if what == key)));
+    assert!(nested.iter().any(|b| matches!(b.act, Act::Build { .. })), "ordinary build stays");
+
+    let queued = officer_feed(None, 0, 0);
+    let button = control::buttons(&queued, Page::Top, &slots, None).into_iter().find(|b| b.cell == 9).unwrap();
+    assert_eq!(button.look, Look::Locked);
+    assert!(button.tip.contains("short of: crew"), "{}", button.tip);
+    assert!(crate::ui::hud::model::command(&queued, &button.act).is_none());
+    let complete = officer_feed(Some(25), 0, 2);
+    assert!(!control::buttons(&complete, Page::Top, &slots, None).iter().any(|b| matches!(b.act, Act::Build { what, .. } if what == key)));
+    assert!(!control::buttons(&complete, Page::Build, &slots, None).iter().any(|b| matches!(b.act, Act::Build { what, .. } if what == key)));
+}
+
+#[test]
+fn officer_quarter_moves_a_conflicting_ordinary_command_to_a_free_cell() {
+    let feed = officer_feed(Some(25), 1, 0);
+    let slots = ButtonSlots::a1_compat_from_header("").0
+        .with(SlotCommand::Move, Some(10))
+        .with(SlotCommand::Build, Some(1));
+    let top = control::buttons(&feed, Page::Top, &slots, None);
+    assert!(matches!(top.iter().find(|b| b.cell == 9).unwrap().act, Act::Build { .. }));
+    assert!(top.iter().any(|b| b.act == Act::Target(TargetMode::Move) && b.cell != 9));
+    assert!(top.iter().any(|b| b.act == Act::OpenBuild));
 }
 
 #[test]

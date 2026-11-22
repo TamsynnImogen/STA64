@@ -7,7 +7,7 @@ use sta_sim::{EntityId, Fixed};
 
 use super::layout::R;
 use super::model::{self, HudFeed, Info};
-use super::status::{self, JobState, SelectedStatus, StatusFeed};
+use super::status::{self, JobState, QueueItem, SelectedStatus, StatusFeed};
 use super::stock::{self, layout::StockLayout};
 use super::{HudConfig, HudLayoutRes, HudRoot};
 use crate::ui::gui_sprites::{GuiImage, GuiImageSampling};
@@ -36,6 +36,7 @@ struct Shape {
     cargo_resource: Option<u8>,
     construction: bool,
     slots: Vec<(usize, R)>,
+    speed_queue: bool,
     progress: Option<R>,
     cargo_bar: Option<R>,
     lcars_card: Option<R>,
@@ -182,17 +183,27 @@ fn stock_shape(
     status: &SelectedStatus,
     layout: &StockLayout,
     info: &Info,
+    armada_one: bool,
 ) -> Shape {
     let variant = stock::layout::info_variant(info);
     let origin = layout.info_origin(variant);
-    let slots: Vec<_> = (0..10)
+    let mut slots: Vec<_> = (0..10)
         .filter_map(|i| {
             layout
                 .at(origin, &format!("infoBuildQueue_{i}"))
                 .map(|r| (i, r))
         })
         .collect();
-    let progress = layout.at(origin, "infoProgressBar");
+    let mut speed_queue = false;
+    let mut progress = layout.at(origin, "infoProgressBar");
+    if armada_one && slots.is_empty() && !status.queue.is_empty() {
+        slots = stock::a1::speed::queue_slots(layout);
+        if let Some((_, head)) = slots.first() {
+            speed_queue = true;
+            let height = (head.h * 0.12).max(3.0);
+            progress = Some(R::new(head.x, head.y + head.h - height, head.w, height));
+        }
+    }
     let cargo_bar = layout.at(origin, "infoSingleDilithiumBarArea");
     let fallback_queue = slots.is_empty() && !status.queue.is_empty();
     let fallback_progress = !slots.is_empty()
@@ -242,6 +253,7 @@ fn stock_shape(
         cargo_resource: status.cargo.and_then(|c| c.resource),
         construction: status.construction.is_some(),
         slots,
+        speed_queue,
         progress,
         cargo_bar,
         lcars_card,
@@ -285,9 +297,22 @@ fn lcars_shape(
         cargo_resource: status.cargo.and_then(|c| c.resource),
         construction: status.construction.is_some(),
         slots: Vec::new(),
+        speed_queue: false,
         progress: None,
         cargo_bar: None,
         lcars_card: card,
+    }
+}
+
+fn queue_art(commands: &mut Commands, root: Entity, r: R, feed: &HudFeed, item: &QueueItem, build_icon: bool) {
+    let officer_upgrade = feed.content.as_deref().and_then(|db| db.unit(item.def))
+        .is_some_and(|def| def.a1_officer_upgrade_gain.is_some());
+    if (build_icon || officer_upgrade) && let Some(odf) = item.odf.as_deref() {
+        let mut art = GuiImage::new("");
+        art.names = model::build_sprite_names(item.model.as_deref().unwrap_or_default(), odf);
+        commands.spawn((rect(r), art, Pickable::IGNORE, ChildOf(root)));
+    } else if let Some(model) = item.model.as_deref() {
+        stock::queue_wireframe(commands, root, r, model);
     }
 }
 
@@ -342,9 +367,7 @@ fn draw_stock(
                 ChildOf(slot),
             ));
         }
-        if let Some(model) = item.model.as_deref() {
-            stock::queue_wireframe(commands, root, *r, model);
-        }
+        queue_art(commands, root, *r, feed, item, shape.speed_queue);
     }
     if status.queue.len() > shape.slots.len()
         && let Some((_, last)) = shape.slots.last()
@@ -478,9 +501,7 @@ fn draw_lcars(
     for (i, item) in status.queue.iter().take(10).enumerate() {
         let x = card.x + 8.0 + (i % columns) as f32 * (cell + 4.0);
         let top = y + (i / columns) as f32 * (cell + 12.0);
-        if let Some(model) = item.model.as_deref() {
-            stock::queue_wireframe(commands, root, R::new(x, top, cell, cell), model);
-        }
+        queue_art(commands, root, R::new(x, top, cell, cell), feed, item, false);
         if let Some(value) = item.progress {
             let bar = R::new(x, top + cell + 2.0, cell, 3.0);
             clipped_bar(
@@ -590,7 +611,8 @@ pub(super) fn refresh(
             state.last = None;
             return;
         };
-        stock_shape(info.id, &status, stock_layout, &Info::Single(info.clone()))
+        let armada_one = profile.as_deref() == Some(&UiProfile::Armada1);
+        stock_shape(info.id, &status, stock_layout, &Info::Single(info.clone()), armada_one)
     } else {
         lcars_shape(
             info.id,
@@ -701,7 +723,6 @@ mod tests {
 
     use super::*;
     use crate::ui::hud::model::Single;
-    use crate::ui::hud::status::QueueItem;
 
     fn info(builder: bool) -> Info {
         Info::Single(Single {
@@ -778,7 +799,7 @@ mod tests {
             },
         );
         let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
-        let shape = stock_shape(EntityId(7), &queued(), &layout, &info(true));
+        let shape = stock_shape(EntityId(7), &queued(), &layout, &info(true), false);
         assert_eq!(shape.slots.len(), 1);
         assert_eq!(shape.queue.len(), 2); // caller renders the extra-count badge
         assert!(shape.progress.is_some());
@@ -806,7 +827,7 @@ mod tests {
         );
         let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
         assert!(
-            stock_shape(EntityId(7), &queued(), &layout, &info(true))
+            stock_shape(EntityId(7), &queued(), &layout, &info(true), false)
                 .lcars_card
                 .is_some()
         );
@@ -857,7 +878,7 @@ mod tests {
             resource: None,
             fraction: 0.0,
         });
-        let shape = stock_shape(EntityId(7), &status, &layout, &info(true));
+        let shape = stock_shape(EntityId(7), &status, &layout, &info(true), false);
         assert_eq!(shape.slots.len(), 1);
         assert!(shape.cargo_bar.is_none());
         assert!(shape.lcars_card.is_some());
@@ -893,7 +914,7 @@ mod tests {
         );
         let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
         assert!(
-            stock_shape(EntityId(7), &queued(), &layout, &info(true))
+            stock_shape(EntityId(7), &queued(), &layout, &info(true), false)
                 .lcars_card
                 .is_some()
         );
@@ -908,7 +929,7 @@ mod tests {
         );
         let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
         assert!(
-            stock_shape(EntityId(7), &queued(), &layout, &info(true))
+            stock_shape(EntityId(7), &queued(), &layout, &info(true), false)
                 .lcars_card
                 .is_none()
         );
@@ -954,7 +975,7 @@ mod tests {
                 ..Default::default()
             };
             let selected = info(false);
-            let shape = stock_shape(EntityId(7), &status, &layout, &selected);
+            let shape = stock_shape(EntityId(7), &status, &layout, &selected, false);
             let mut world = World::new();
             let root = world.spawn_empty().id();
             world
@@ -1034,7 +1055,7 @@ mod tests {
         let mut status = queued();
         status.queue.truncate(1);
         let selected = info(true);
-        let shape = stock_shape(EntityId(7), &status, &layout, &selected);
+        let shape = stock_shape(EntityId(7), &status, &layout, &selected, false);
         let slot_rect = shape.slots[0].1;
         let progress_rect = shape.progress.unwrap();
         let mut world = World::new();
@@ -1109,6 +1130,7 @@ mod tests {
             cargo_resource: None,
             construction: false,
             slots: Vec::new(),
+            speed_queue: false,
             progress: None,
             cargo_bar: None,
             lcars_card: Some(card),
@@ -1157,8 +1179,8 @@ mod tests {
         let mut after = before.clone();
         after.queue[0].model = Some("models/replacement.sod".into());
         assert_ne!(
-            stock_shape(EntityId(7), &before, &layout, &info(true)),
-            stock_shape(EntityId(7), &after, &layout, &info(true))
+            stock_shape(EntityId(7), &before, &layout, &info(true), false),
+            stock_shape(EntityId(7), &after, &layout, &info(true), false)
         );
     }
 

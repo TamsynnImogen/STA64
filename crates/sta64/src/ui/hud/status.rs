@@ -257,6 +257,7 @@ mod tests {
             production: vec![ProductionView {
                 portal: None,
                 research: None,
+                officer_upgrades: None,
                 builder: EntityId(1),
                 jobs: vec![
                     ProductionJobView {
@@ -318,6 +319,7 @@ mod tests {
             production: vec![ProductionView {
                 portal: None,
                 research: None,
+                officer_upgrades: None,
                 builder: EntityId(1),
                 jobs: vec![ProductionJobView {
                     def: ContentKey(11),

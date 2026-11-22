@@ -56,6 +56,7 @@ pub struct ContentDb {
     /// Armada I's play-physics block (CON-52): only under `Sta1Classic`, and
     /// only when the file is there and usable.
     a1_play: Option<crate::A1Dynamics>,
+    a1_officer_policy: bool,
     /// The mounted layers' names, top first: informational (D10), recorded
     /// in replays and snapshots, never compared.
     packs: Vec<String>,
@@ -64,6 +65,54 @@ pub struct ContentDb {
 
 impl ContentDb {
     pub fn rules(&self) -> &crate::Rules { &self.rules }
+
+    /// Whether the resolved content uses Armada I officer rules.
+    pub fn a1_officers(&self) -> bool {
+        self.profile == Profile::Sta1Classic || self.a1_officer_policy
+    }
+
+    /// The explicit Armada I `cfgMaxOfficers`, when valid and representable.
+    pub fn a1_starting_officers(&self) -> Option<i32> {
+        self.a1_officers().then(|| self.rules.a1_max_officers()).flatten()
+    }
+
+    /// Resolve each A1 starbase's race upgrade after all definition keys exist.
+    pub(crate) fn with_a1_officer_upgrades(mut self, enabled: bool, races: &std::collections::BTreeMap<String, String>, warnings: &mut Vec<Warning>) -> Self {
+        self.a1_officer_policy = enabled;
+        if !self.a1_officers() { return self; }
+        let upgrades: std::collections::BTreeMap<String, ContentKey> = self.units()
+            .filter(|u| u.a1_officer_upgrade_gain.is_some())
+            .map(|u| (u.odf.clone(), u.key)).collect();
+        let upgrade_keys: std::collections::BTreeSet<ContentKey> = upgrades.values().copied().collect();
+        let native = self.profile == Profile::Sta1Classic;
+        for (_, def) in &mut self.defs {
+            let Def::Unit(base) = def else { continue };
+            let Some(mut officers) = base.a1_base_officers else { continue };
+            let file = format!("{}.odf", base.odf);
+            let named = races.get(&base.race.to_ascii_lowercase()).and_then(|s| upgrades.get(s)).copied();
+            let fallback = if !native && !races.contains_key(&base.race.to_ascii_lowercase()) {
+                let candidates: std::collections::BTreeSet<_> = base.build.list.iter()
+                    .filter(|item| upgrade_keys.contains(&item.key))
+                    .map(|item| item.key).collect();
+                if candidates.len() == 1 { candidates.iter().next().copied() } else { None }
+            } else { None };
+            officers.upgrade = named.or(fallback);
+            if named.is_none() && fallback.is_some() {
+                warnings.push(Warning::new(&file, "officer upgrade inferred from the only eligible build item"));
+            }
+            if races.contains_key(&base.race.to_ascii_lowercase()) && named.is_none() {
+                warnings.push(Warning::new(&file, "race officerUpgradeODF does not name a defined upgrade"));
+            }
+            base.build.list.retain(|item| !upgrade_keys.contains(&item.key) || Some(item.key) == officers.upgrade);
+            if let Some(key) = officers.upgrade && !base.build.list.iter().any(|item| item.key == key) {
+                let name = upgrades.iter().find_map(|(name, value)| (*value == key).then_some(name.clone())).expect("upgrade key came from map");
+                base.build.list.push(DefRef { odf: name, key });
+            }
+            base.a1_base_officers = Some(officers);
+        }
+        self.digest = digest_of(&self);
+        self
+    }
 
     /// Armada I's play-physics block (CON-52): `Some` only under
     /// `Sta1Classic` with a usable file. The movement model asks for it.
@@ -484,7 +533,7 @@ impl ContentBuilder {
             defs, profile: self.profile, features: self.features, resources,
             tech: self.tech.map(Arc::new), map_confinement, construction_confinement, has_map_confinement,
             map_confinement_warnings, rules: crate::Rules::default(),
-            a1_play: self.a1_play.filter(|_| self.profile == Profile::Sta1Classic), packs: Vec::new(),
+            a1_play: self.a1_play.filter(|_| self.profile == Profile::Sta1Classic), a1_officer_policy: false, packs: Vec::new(),
             digest: ContentDigest::default(),
         };
         db.digest = digest_of(&db);
@@ -524,6 +573,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // set; `has_crew`, `assault`, `weldingAnimSpeed`, `eventTransport` are not read yet.
     let UnitDef {
         key: _, odf: _, class: _, is_starbase: _, planet_role: _, planet_crew_gain: _, planet_crew_modifier: _,
+        a1_base_officers: _, a1_officer_upgrade_gain: _,
         planet_colonizable: _, planet_civilian_population_modifier: _, planet_max_population: _, can_have_orbital_station: _, fleet_cap: _, orbit_time: _, a1_borg: _, station_mining: _, node_income: _, race: _,
         model: _, scale: _, movement: _, hull: _, shields: _, initial_hull: _, initial_shields: _,
         crew: _, maximum_crew: _, facility: _, has_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
@@ -823,6 +873,17 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     if u.stats.can_attack == Some(false) {
         c.raw("can_attack", "0");
     }
+    if db.a1_officers() {
+        if let Some(base) = u.a1_base_officers {
+            let upgrade = base.upgrade.and_then(|key| db.name(key)).map_or_else(|| "-".to_owned(), quoted);
+            let mut rule = Canon::new();
+            rule.int("gain", base.gain).int("maximum_upgrades", base.maximum_upgrades).raw("upgrade", &upgrade);
+            c.raw("a1_base_officers", &group(&mut rule));
+        }
+        if let Some(gain) = u.a1_officer_upgrade_gain {
+            c.int("a1_officer_upgrade_gain", gain);
+        }
+    }
     // SIM-73: the shooter's planet keys, only under the target-mask switch and only when set.
     if db.unit_features(u).weapon_target_masks && (u.stats.can_attack_planets.is_some() || u.stats.can_only_attack_planets.is_some()) {
         let flag = |b: Option<bool>| b.map_or_else(|| "-".to_owned(), |b| u8::from(b).to_string());
@@ -1020,6 +1081,12 @@ fn digest_entries(db: &ContentDb) -> Vec<DigestEntry> {
     let mut out = db.rules.digest_entries();
     out.push(DigestEntry::new("content:profile", db.lineage()));
     out.push(DigestEntry::new("content:features", features_text(&db.features)));
+    if db.a1_officers() {
+        out.push(DigestEntry::new("content:a1-officer-progression", "enabled"));
+    }
+    if let Some(maximum) = db.a1_starting_officers() {
+        out.push(DigestEntry::new("content:a1-max-officers", maximum.to_string()));
+    }
     // CON-52: only when the model has its block, so every other content keeps its digest.
     if let Some(p) = db.a1_play_physics() {
         out.push(DigestEntry::new("content:a1-play-physics", crate::a1_physics::dynamics_text(p)));

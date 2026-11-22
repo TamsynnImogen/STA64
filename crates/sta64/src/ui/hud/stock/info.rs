@@ -350,8 +350,7 @@ fn resource_text(feed: &HudFeed, id: usize) -> Option<String> {
         return player.crew.map(|crew| whole(crew).to_string());
     }
     if id == 1 {
-        let [used, cap] = player.officers;
-        return Some(format!("{}/{}", whole(used), whole(cap)));
+        return Some(model::officer_text(feed, player.officers));
     }
     let slot = resource_slot(id)?;
     player.resources.get(slot).map(|v| whole(*v).to_string())
