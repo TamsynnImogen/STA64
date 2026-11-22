@@ -595,6 +595,10 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
             None => "-".to_owned(),
             Some(r) => format!("{{map={};construction={}}}", confinement_text(Some(r)), confinement_text(db.construction_confinement(u.key))),
         });
+    // Peers using the old constructor behavior would diverge on Evolution.
+    if u.is_evolver() {
+        c.flag("evolves_in_place", true);
+    }
     // SIM-70: absent authored flags keep the prior digest; explicit false is
     // distinct from absence because it excludes a station from recrewing.
     if let Some(facility) = u.facility {

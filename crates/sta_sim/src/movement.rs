@@ -216,7 +216,11 @@ impl Sim {
     /// Stop both residual velocity and old waypoints at the weld boundary.
     /// Also runs before physics so later target writers cannot restart a rig.
     pub(crate) fn hold_welding_builders(&mut self) {
-        for id in self.production.welding_builders() {
+        let mut locked = self.production.welding_builders();
+        if let Some(db) = &self.content {
+            locked.extend(self.production.stationary_evolvers(db, &self.units));
+        }
+        for id in locked {
             if let Some(unit) = self.units.get_mut(id) {
                 unit.target = None;
                 unit.speed = Fixed::ZERO;

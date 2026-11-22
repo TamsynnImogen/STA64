@@ -44,6 +44,10 @@ fn content(pay_on_queue: bool) -> Arc<ContentDb> {
 }
 
 fn game(pay_on_queue: bool) -> Sim {
+    game_with_content(content(pay_on_queue))
+}
+
+fn game_with_content(content: Arc<ContentDb>) -> Sim {
     let seat = |id| PlayerSetup {
         id: PlayerId(id),
         team: TeamId(id),
@@ -53,10 +57,80 @@ fn game(pay_on_queue: bool) -> Sim {
     Sim::from_setup(&GameSetup {
         seed: 3,
         map: Arc::new(sta_content::MapDef::empty()),
-        content: content(pay_on_queue),
+        content,
         players: vec![seat(0), seat(1)],
         options: GameOptions::default(),
     })
+}
+
+fn evolution_game() -> Sim {
+    let mut embryo = UnitDef::new("fx_embryo", "evolver");
+    embryo.race = "fx".into();
+    embryo.hull = Fixed::from_int(100);
+    embryo.movement = MoveStats::from_f32(140.0, 1.0, 1.0, 1.0, 0.2);
+    embryo.build.list = ["fx_evolved_ship", "fx_evolved_station"].map(sta_content::DefRef::new).to_vec();
+    let mut ship = UnitDef::new("fx_evolved_ship", "craft");
+    ship.hull = Fixed::from_int(100);
+    ship.build.ticks = 12;
+    ship.build.cost = vec![Fixed::from_int(40)];
+    let mut station = ship.clone();
+    station.odf = "fx_evolved_station".into();
+    station.class = sta_content::ClassLabel::new("research");
+    station.is_starbase = true;
+    let db = ContentDb::builder().unit(embryo).unit(ship).unit(station).build().unwrap();
+    let mut sim = game_with_content(Arc::new(db));
+    fund(&mut sim, 80);
+    sim
+}
+
+#[test]
+fn evolution_charges_once_and_consumes_the_embryo_at_completion() {
+    let mut sim = evolution_game();
+    let at = v(100, 220);
+    let embryo = spawn(&mut sim, "fx_embryo", at);
+    assert!(build(&mut sim, embryo, "fx_evolved_ship", None));
+    assert!(!build(&mut sim, embryo, "fx_evolved_ship", None));
+    assert_eq!(dilithium(&sim), Fixed::from_int(40));
+    assert!(sim.view().units.iter().all(|u| u.id == embryo));
+    let mut replaced = None;
+    for _ in 0..14 {
+        for event in sim.step(&[]).events {
+            if let SimEvent::Replaced { old, new, select: true } = event {
+                assert_eq!(old, embryo);
+                assert!(replaced.replace(new).is_none());
+            }
+        }
+    }
+    let product = sim.unit(replaced.expect("evolution completed")).unwrap();
+    assert_eq!(product.def, key(&sim, "fx_evolved_ship"));
+    assert_eq!(product.pos, at);
+    assert!(product.target.is_none());
+    assert!(sim.unit(embryo).is_none());
+    assert_eq!(dilithium(&sim), Fixed::from_int(40));
+}
+
+#[test]
+fn station_evolution_has_a_site_and_stop_cancels_the_cocoon() {
+    let mut sim = evolution_game();
+    let at = v(180, 300);
+    let embryo = spawn(&mut sim, "fx_embryo", at);
+    assert!(!build(&mut sim, embryo, "fx_evolved_station", None));
+    assert!(build(&mut sim, embryo, "fx_evolved_station", Some(at)));
+    let view = &sim.production_view()[0];
+    assert!(view.jobs[0].started);
+    assert_eq!(view.site.as_ref().unwrap().pos, at);
+    assert_eq!(view.site.as_ref().unwrap().entity, None);
+    let cancel = Order::Stop { units: vec![embryo] };
+    sim.step(&[cmd(P0, 8, CommandKind::Order(cancel))]);
+    assert!(sim.production_view().is_empty());
+    assert_eq!(dilithium(&sim), Fixed::from_int(80));
+    assert!(sim.unit(embryo).is_some());
+    assert!(build(&mut sim, embryo, "fx_evolved_station", Some(at)));
+    for _ in 0..14 {
+        sim.step(&[]);
+    }
+    assert!(sim.unit(embryo).is_none());
+    assert!(sim.view().units.iter().any(|u| u.def == key(&sim, "fx_evolved_station") && u.pos == at));
 }
 
 fn cmd(player: PlayerId, seq: u32, kind: CommandKind) -> Command {

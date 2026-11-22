@@ -322,6 +322,25 @@ fn the_crew_label_uses_its_cfg_colour_and_the_amount_is_green() {
 }
 
 #[test]
+fn absent_identity_colours_use_black_and_the_class_has_its_panel_piece() {
+    let mut app = app(4.0 / 3.0);
+    let cfg = CFG.replace("infoSingleCrewTextColor = 0 1 0", "");
+    let sheet = format!("{cfg}\ninfoSingleBackground=\"single_background\"\ninfoSingleBackgroundSize=1\ninfoSingleBackground_0=90 12 112 11\n");
+    let (cfg, warnings) = GuiCfg::parse("a1_text.cfg", &sheet);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    app.world_mut().resource_mut::<HudConfig>().gui = Some(cfg.layout_auto());
+    Arc::make_mut(&mut app.world_mut().resource_mut::<HudFeed>().view).units[0].crew =
+        Some([Fixed::from_int(90), Fixed::from_int(100)]);
+    app.update();
+    app.update();
+
+    let world = app.world_mut();
+    let mut texts = world.query::<&crate::ui::sprite_font::SpriteText>();
+    assert!(texts.iter(world).any(|t| t.text == "CREW" && t.color == Color::BLACK));
+    assert!(world.query::<&GuiImage>().iter(world).any(|i| i.names == ["single_background"]));
+}
+
+#[test]
 fn status_uses_authored_tracks_and_live_shield_and_team_tints() {
     use super::info::LiveTint;
     use crate::viewer::TeamColours;

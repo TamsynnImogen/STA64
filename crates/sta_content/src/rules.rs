@@ -390,7 +390,8 @@ impl TransporterRules {
 /// its race ODFs have none of Armada II's `normaldilithium` keys. Keys read
 /// from the stock data and named by the executable (static);
 /// that Instant Action grants exactly these is not measured on a running
-/// Armada I. Absent keys leave a field unset; no value is invented.
+/// Armada I. The executable reads the dilithium maximum when either start
+/// key is missing.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LegacyStart {
     /// `cfgStartingDilithium`: the dilithium stock of a seat.
@@ -402,7 +403,7 @@ pub struct LegacyStart {
 }
 
 impl LegacyStart {
-    const KEYS: [&'static str; 3] = ["cfgStartingCrew", "cfgStartingDilithium", "cfgMaxOfficers"];
+    const KEYS: [&'static str; 4] = ["cfgStartingCrew", "cfgStartingDilithium", "cfgMaxOfficers", "cfgMaxDilithium"];
 
     fn from_cfg(cfg: &CfgH, warnings: &mut Vec<Warning>) -> LegacyStart {
         let mut read = |key: &str| {
@@ -413,7 +414,9 @@ impl LegacyStart {
             }
             v
         };
-        LegacyStart { crew: read("cfgStartingCrew"), dilithium: read("cfgStartingDilithium"), // Same precedence as the officer list: `cfgMaxOfficers` counts only when no
+        let max_dilithium = cfg.i64("cfgMaxDilithium").filter(|v| *v >= 0).map(|v| v.min(1_000_000_000));
+        let mut start = |key| read(key).or_else(|| max_dilithium.filter(|_| cfg.raw(key).is_none()));
+        LegacyStart { crew: start("cfgStartingCrew"), dilithium: start("cfgStartingDilithium"), // Same precedence as the officer list: `cfgMaxOfficers` counts only when no
         // Armada II style officer key is present.
         officers: if cfg.raw("MP_OFFICER_LIMIT").is_none() && cfg.raw("SINGLE_PLAYER_OFFICER_LIMIT").is_none() {
             cfg.i64("cfgMaxOfficers").filter(|v| *v >= 0).map(|v| v.min(1_000_000_000))
@@ -1351,7 +1354,8 @@ mod cfg_tests {
         rules.cfg.biomatter_recycle_fraction = Some(Fixed::ONE);
         let pop = PopulationRules { levels: [Fixed::from_int(1000); 4], civilian_rate_modifier: Fixed::ONE };
         let d = ContentDigest::from_entries(rules.with_population(pop).digest_entries());
-        for k in TYPED_CFG_KEYS.iter().filter(|k| !matches!(**k, "MP_OFFICER_LIST_SIZE" | "SINGLE_PLAYER_OFFICER_LIMIT" | "cfgMaxOfficers")) {
+        // The dilithium maximum contributes through the effective starting amounts.
+        for k in TYPED_CFG_KEYS.iter().filter(|k| !matches!(**k, "MP_OFFICER_LIST_SIZE" | "SINGLE_PLAYER_OFFICER_LIMIT" | "cfgMaxOfficers" | "cfgMaxDilithium")) {
             assert!(d.get(&format!("RTS_CFG.h:{k}")).is_some(), "{k}");
         }
     }
@@ -1373,6 +1377,14 @@ mod legacy_start_tests {
         let d = ContentDigest::from_entries(r.digest_entries());
         assert_eq!(d.get("RTS_CFG.h:cfgStartingDilithium"), Some("1234"));
         assert_eq!(d.get("RTS_CFG.h:cfgStartingCrew"), Some("2345"));
+    }
+
+    #[test]
+    fn missing_armada_one_start_uses_the_dilithium_maximum() {
+        let (rules, warnings) = Rules::from_header("int cfgMaxDilithium = 900;\nint cfgStartingCrew = 0;\n");
+        assert!(warnings.is_empty());
+        assert_eq!(rules.legacy_start().dilithium, Some(900));
+        assert_eq!(rules.legacy_start().crew, Some(0));
     }
 
     #[test]

@@ -573,12 +573,20 @@ impl Sim {
             self.economy.step_passive(&self.units, db, &self.players, &self.ai_seats, self.tick);
             self.economy.step_crew(&self.units, db, &self.attrs, self.tick, &colony_crew);
             let from = self.events.len();
-            self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement, self.bounds);
+            let evolved = self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement, self.bounds);
             self.inherit_builder_races(from);
             self.inherit_builder_alert(from);
             let built: Vec<EntityId> = self.events[from..].iter().filter_map(|e| match e { SimEvent::Spawned { id } => Some(*id), _ => None }).collect();
             for id in built {
                 self.default_autonomy(id);
+            }
+            for (embryo, product) in evolved {
+                self.autonomy.copy_to(embryo, product);
+                if self.units.get(product).is_some_and(|unit| unit.kind == world::EntityKind::Craft) {
+                    self.weapons.retarget_replacement_shots(embryo, product);
+                }
+                self.retire(embryo);
+                self.events.push(SimEvent::Replaced { old: embryo, new: product, select: true });
             }
         }
         self.hold_welding_builders();
