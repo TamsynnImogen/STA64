@@ -497,6 +497,7 @@ fn count(mut counts: ResMut<OverlayCounts>, q: Query<&Overlay>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::sprite_font::SpriteText;
     use crate::app::configure_sets;
     use crate::render::units::{LocalPlayer, add_view_systems};
     use crate::sim_link::SimLinkPlugin;
@@ -634,7 +635,7 @@ mod tests {
     }
 
     #[test]
-    fn the_readout_extras_exist_only_in_the_armada_ii_look() {
+    fn the_group_number_exists_only_in_the_armada_ii_look() {
         use crate::input::select::ControlGroups;
         for profile in [None, Some(UiProfile::Lcars), Some(UiProfile::Armada1), Some(UiProfile::FleetOps), Some(UiProfile::Armada2)] {
             let mut app = rig(MIXED);
@@ -643,16 +644,66 @@ mod tests {
                 app.world_mut().insert_resource(p);
             }
             app.init_resource::<ControlGroups>();
-            let stale = app.world_mut().spawn((extras::Extra { unit: EntityId(1), kind: extras::ExtraKind::Group }, Node::default())).id();
+            let stale = app.world_mut().spawn((extras::GroupNumber { unit: EntityId(1) }, Node::default(), SpriteText { text: "1".into(), size: 16.0, color: Color::WHITE })).id();
             select(&mut app, &[1]);
             hover(&mut app, Some((1, 0)), 1.0);
             app.world_mut().run_system_once(extras::sync_extras).unwrap();
             app.world_mut().flush();
             // Without a camera nothing can be placed: the stale node goes in every look, and none appears.
             assert!(app.world().get_entity(stale).is_err(), "{profile:?}");
-            let mut q = app.world_mut().query::<&extras::Extra>();
+            let mut q = app.world_mut().query::<&extras::GroupNumber>();
             assert_eq!(q.iter(app.world()).count(), 0, "{profile:?}");
         }
+    }
+
+    #[test]
+    fn the_group_number_draws_at_the_anchor_in_the_armada_ii_look() {
+        use crate::input::select::ControlGroups;
+        use bevy::camera::{ComputedCameraValues, RenderTargetInfo, Viewport};
+        let mut app = rig(MIXED);
+        app.update();
+        app.world_mut().insert_resource(UiProfile::Armada2);
+        let mut groups = ControlGroups::default();
+        groups.groups[2] = vec![EntityId(1)];
+        app.insert_resource(groups);
+        let size = UVec2::new(1280, 720);
+        let camera_tf = Transform::from_xyz(0.0, 0.0, 60.0).looking_at(Vec3::ZERO, Vec3::Y);
+        app.world_mut().spawn((
+            Camera3d::default(),
+            camera_tf,
+            Camera {
+                computed: ComputedCameraValues { target_info: Some(RenderTargetInfo { physical_size: size, scale_factor: 1.0 }), ..default() },
+                viewport: Some(Viewport { physical_size: size, ..default() }),
+                ..default()
+            },
+        ));
+        select(&mut app, &[1]);
+        let run = |app: &mut App| {
+            app.world_mut().run_system_once(extras::sync_extras).unwrap();
+            app.world_mut().flush();
+        };
+        run(&mut app);
+        let mut q = app.world_mut().query::<(&extras::GroupNumber, &Node, &SpriteText)>();
+        let found: Vec<_> = q.iter(app.world()).map(|(g, n, t)| (g.unit, n.left, n.top, t.text.clone())).collect();
+        assert_eq!(found.len(), 1, "{found:?}");
+        // The anchor from the same projection the bars use.
+        let root = app.world().resource::<SimEntities>().0[&EntityId(1)];
+        let radius = app.world().get::<SelectRadius>(root).map_or(DEFAULT_RADIUS, |r| r.0);
+        let bounds = app.world().get::<ModelBounds>(root).copied().unwrap_or_else(|| ModelBounds::fallback(radius));
+        // The camera keeps its spawned projection (no aspect update system runs in this app).
+        let clip = Projection::default().get_clip_from_view() * camera_tf.to_matrix().inverse();
+        let world = app.world().get::<GlobalTransform>(root).map_or(Mat4::IDENTITY, |g| g.to_matrix());
+        let (b, _) = geometry::project(bounds, world, clip, Vec2::new(1280.0, 720.0)).unwrap();
+        let at = extras::group_anchor(b);
+        assert_eq!((found[0].0, found[0].3.as_str()), (EntityId(1), "3"));
+        assert_eq!((found[0].1, found[0].2), (Val::Px(at.x), Val::Px(at.y)));
+        // Unselected and not hovered: gone. Selected but in no group: none.
+        select(&mut app, &[]);
+        run(&mut app);
+        assert_eq!(q.iter(app.world()).count(), 0);
+        select(&mut app, &[2]);
+        run(&mut app);
+        assert_eq!(q.iter(app.world()).count(), 0, "in no group");
     }
 
     #[test]
