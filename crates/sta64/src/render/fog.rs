@@ -119,6 +119,8 @@ pub struct FogGrid {
     pub h: usize,
     visible: Vec<bool>,
     explored: Vec<bool>,
+    /// The last remembering update's sight, not yet in `explored`.
+    pending: Vec<bool>,
 }
 
 impl FogGrid {
@@ -128,7 +130,7 @@ impl FogGrid {
         let cell = CELL.max(size / MAX_CELLS as f32);
         let dim = |lo: f32, hi: f32| (((hi - lo) / cell).ceil() as usize).clamp(1, MAX_CELLS);
         let (w, h) = (dim(min[0], max[0]), dim(min[1], max[1]));
-        FogGrid { min, cell, w, h, visible: vec![false; w * h], explored: vec![false; w * h] }
+        FogGrid { min, cell, w, h, visible: vec![false; w * h], explored: vec![false; w * h], pending: vec![false; w * h] }
     }
 
     /// The cell of a sim-space point, if it is on the grid.
@@ -189,26 +191,51 @@ impl FogGrid {
     }
 
     /// Recompute what is in sight for `player` from `view`; what has been seen stays explored.
+    #[cfg(test)]
     pub fn observe(&mut self, view: &WorldView, player: PlayerId, content: Option<&ContentDb>) {
+        self.observe_with(view, player, content, true);
+    }
+
+    /// As [`observe`](Self::observe); with `remember` false (a cutscene runs) this update's sight is
+    /// not remembered. Interim rule, grade: stated by a player (2026-11-22), not measured on the
+    /// original: sight gained during a cutscene does not become explored ground. Whether the
+    /// original does this by a general rule or by a mission script call is not established (the
+    /// script call for the shroud stays unwired).
+    ///
+    /// The client learns that a cutscene began one system later than the view that came with it, so
+    /// an update's sight is held back and folded into the explored memory by the next update that
+    /// still runs outside a cutscene; an update inside one drops it. An omniscient view stays fully
+    /// explored.
+    pub fn observe_with(&mut self, view: &WorldView, player: PlayerId, content: Option<&ContentDb>, remember: bool) {
         self.visible.fill(false);
         if view.visibility.is_empty() {
             self.reveal_all();
+            self.pending.fill(false);
             return;
         }
         for (x, z, r) in sensor_discs(view, player, content) {
             self.reveal(x, z, r);
         }
-        for (e, v) in self.explored.iter_mut().zip(&self.visible) {
-            *e |= *v;
+        if remember {
+            for (e, p) in self.explored.iter_mut().zip(&self.pending) {
+                *e |= *p;
+            }
+            self.pending.copy_from_slice(&self.visible);
+        } else {
+            self.pending.fill(false);
         }
     }
 
-    /// UI-46: this grid as the player sees it with the shroud and/or the fog lifted (presentation
+    /// This grid as the player sees it: what is in sight counts as explored (the memory takes it in
+    /// one update later, see [`observe_with`](Self::observe_with)), and UI-46's lifting (presentation
     /// only; `self` keeps the real memory). Lifting the shroud counts every cell as explored; lifting
     /// the fog counts every explored cell as in sight, so with both lifted everything is in sight,
     /// and with the fog alone the unexplored ground stays black.
     pub fn lifted(&self, fog: bool, shroud: bool) -> FogGrid {
         let mut g = self.clone();
+        for (e, v) in g.explored.iter_mut().zip(&g.visible) {
+            *e |= *v;
+        }
         if shroud {
             g.explored.fill(true);
         }
@@ -458,6 +485,7 @@ struct Memo {
     /// What the sim's sensors have shown so far, whatever is lifted (UI-46); `FogState` holds the lifted copy.
     memory: Option<FogGrid>,
     shown_reveal: Option<(bool, bool)>,
+    shown_cutscene: Option<bool>,
 }
 
 /// Recompute the grid when the view, the player or the map changes; spawn the layers
@@ -481,7 +509,8 @@ fn update_fog(
     (net, active): (Option<Res<crate::game::net_match::NetGame>>, Option<Res<crate::game::flow::ActiveMatch>>),
     mut memo: Local<Memo>,
 ) {
-    let Memo { seen, art_generation, memory, shown_reveal } = &mut *memo;
+    let Memo { seen, art_generation, memory, shown_reveal, shown_cutscene } = &mut *memo;
+    let cutscene = cine.as_deref().is_some_and(|c| c.on);
     let Some(patterns) = patterns else { return };
     let Some(player) = local.0 else {
         // No local player: the whole map is shown.
@@ -497,16 +526,19 @@ fn update_fog(
         let (fog, shroud) = active.as_deref().map_or((false, false), |active| active.fog.lifted());
         (fog || reveal.as_deref().is_some_and(|r| r.fog), shroud || reveal.as_deref().is_some_and(|r| r.shroud))
     };
-    let fresh = state.is_none() || *shown_reveal != Some(lifted) || *art_generation != Some(patterns.generation) || !seen.as_ref().is_some_and(|(v, p)| Arc::ptr_eq(v, curr) && *p == local.0);
+    let fresh = state.is_none() || *shown_reveal != Some(lifted) || *shown_cutscene != Some(cutscene) || *art_generation != Some(patterns.generation) || !seen.as_ref().is_some_and(|(v, p)| Arc::ptr_eq(v, curr) && *p == local.0);
     let map_changed = memory.as_ref().is_some_and(|m| m.min != [bounds.min.x, bounds.min.y]);
     if fresh || map_changed {
         *seen = Some((curr.clone(), local.0));
         *shown_reveal = Some(lifted);
+        *shown_cutscene = Some(cutscene);
         let (mut grid, updates) = match (state.as_deref(), memory.take()) {
             (Some(s), Some(m)) if !map_changed => (m, s.updates),
             _ => (FogGrid::new([bounds.min.x, bounds.min.y], [bounds.max.x, bounds.max.y]), 0),
         };
-        grid.observe(curr, player, content.as_deref().map(|c| &*c.0));
+        // During a cutscene the layers are hidden anyway and the memory does not take the sight in;
+        // see `FogGrid::observe_with`.
+        grid.observe_with(curr, player, content.as_deref().map(|c| &*c.0), !cutscene);
         let shown = grid.lifted(lifted.0, lifted.1);
         *memory = Some(grid);
         let art_changed = *art_generation != Some(patterns.generation);
@@ -545,7 +577,7 @@ fn update_fog(
             Layer::Shroud => settings.shroud,
         };
         // Not in a cineractive: the cinematic view draws no fog or shroud (Refit, static).
-        let on = on && !cine.as_deref().is_some_and(|c| c.on);
+        let on = on && !cutscene;
         let want = if on { Visibility::Inherited } else { Visibility::Hidden };
         if *v != want {
             *v = want;
@@ -644,6 +676,8 @@ mod tests {
         let mut g = grid();
         g.observe(&view(vec![unit(1, 1, 0, 0)]), PlayerId(1), None);
         g.observe(&view(vec![unit(1, 1, 3000, 0)]), PlayerId(1), None);
+        // The picture is the shown copy: the memory takes the newest sight in one update later.
+        let g = g.lifted(false, false);
         assert!(!g.visible_at(0.0, 0.0) && g.explored_at(0.0, 0.0));
         assert!(g.visible_at(3000.0, 0.0) && g.explored_at(3000.0, 0.0));
         let m = g.mask(Layer::Fog);
@@ -653,6 +687,47 @@ mod tests {
         assert_eq!((m[at(0.0, 0.0)], s[at(0.0, 0.0)]), (255, 0), "fogged but not shrouded");
         assert_eq!((m[at(3000.0, 0.0)], s[at(3000.0, 0.0)]), (0, 0), "in sight");
         assert_eq!((m[at(-3000.0, 0.0)], s[at(-3000.0, 0.0)]), (255, 255), "never seen");
+    }
+
+    #[test]
+    fn sight_during_a_cutscene_is_not_remembered() {
+        let (home, away) = (view(vec![unit(1, 1, 0, 0)]), view(vec![unit(1, 1, 3000, 0)]));
+        let mut g = grid();
+        g.observe(&home, PlayerId(1), None);
+        g.observe(&home, PlayerId(1), None);
+        let before = g.counts().1;
+        g.observe_with(&away, PlayerId(1), None, false);
+        g.observe_with(&away, PlayerId(1), None, false);
+        assert!(g.visible_at(3000.0, 0.0), "what is in sight is still in sight");
+        assert!(!g.explored_at(3000.0, 0.0));
+        assert_eq!(g.counts().1, before, "the explored set is unchanged");
+        assert!(g.lifted(false, false).explored_at(3000.0, 0.0), "the shown copy has what is in sight");
+        g.observe(&home, PlayerId(1), None);
+        g.observe(&home, PlayerId(1), None);
+        assert!(!g.explored_at(3000.0, 0.0), "after the cutscene only what is seen from where the units are counts");
+    }
+
+    #[test]
+    fn the_update_that_still_reads_the_cutscene_as_off_is_not_remembered() {
+        // The view that moves the units arrives with the cutscene start; the first update still sees the state off.
+        let (home, away) = (view(vec![unit(1, 1, 0, 0)]), view(vec![unit(1, 1, 3000, 0)]));
+        let mut g = grid();
+        g.observe(&home, PlayerId(1), None);
+        g.observe(&away, PlayerId(1), None);
+        g.observe_with(&away, PlayerId(1), None, false);
+        g.observe_with(&away, PlayerId(1), None, false);
+        assert!(!g.explored_at(3000.0, 0.0));
+        assert!(g.explored_at(0.0, 0.0));
+    }
+
+    #[test]
+    fn ground_passed_in_one_update_outside_a_cutscene_is_explored_by_the_next() {
+        let (home, away) = (view(vec![unit(1, 1, 0, 0)]), view(vec![unit(1, 1, 3000, 0)]));
+        let mut g = grid();
+        g.observe(&home, PlayerId(1), None);
+        g.observe(&away, PlayerId(1), None);
+        g.observe(&home, PlayerId(1), None);
+        assert!(g.explored_at(3000.0, 0.0));
     }
 
     #[test]
@@ -726,5 +801,138 @@ mod tests {
     #[test]
     fn fog_shader_validates() {
         crate::render::fx::validate_wgsl(include_str!("fog.wesl"));
+    }
+
+    // The real systems in their real order: the view and the cutscene start arrive in one frame,
+    // `update_fog` (Render) runs before `presentation::consume` (Ui) turns the state on.
+    mod system {
+        use super::*;
+        use crate::sim_link::SimMsg;
+        use crate::ui::presentation::{CineractiveState, PresentationPlugin};
+        use sta_sim::command::LocalRouter;
+        use sta_sim::present::Presentation;
+        use sta_sim::source::WorldSource;
+        use sta_sim::{SimEvent, TickOutput};
+        use std::sync::Mutex;
+
+        type Next = Arc<Mutex<Option<TickOutput>>>;
+
+        struct Scripted(Next, Arc<WorldView>);
+
+        impl WorldSource for Scripted {
+            fn step(&mut self, _: &[sta_sim::command::Command]) -> TickOutput {
+                let out = self.0.lock().unwrap().take().expect("a tick is only taken when one is queued");
+                self.1 = out.view.clone();
+                out
+            }
+
+            fn view(&self) -> Arc<WorldView> {
+                self.1.clone()
+            }
+        }
+
+        #[derive(Resource)]
+        struct Feed(Next);
+
+        fn drive(mut link: ResMut<SimLink>, feed: Res<Feed>, mut out: MessageWriter<SimMsg>) {
+            if feed.0.lock().unwrap().is_some()
+                && let Some(events) = link.tick()
+            {
+                out.write_batch(events.into_iter().map(SimMsg));
+            }
+        }
+
+        struct Rig {
+            app: App,
+            next: Next,
+            tick: u64,
+        }
+
+        impl Rig {
+            fn new() -> Rig {
+                let next: Next = Arc::default();
+                let first = Arc::new(view(vec![]));
+                let mut app = App::new();
+                app.add_plugins(MinimalPlugins).init_resource::<ButtonInput<KeyCode>>().add_plugins(PresentationPlugin);
+                crate::app::configure_sets(&mut app);
+                app.init_resource::<Assets<Image>>()
+                    .init_resource::<Assets<Mesh>>()
+                    .init_resource::<Assets<FogMaterial>>()
+                    .init_resource::<FogSettings>()
+                    .insert_resource(FogPatterns { fog: (Handle::default(), Vec2::ONE), shroud: (Handle::default(), Vec2::ONE), generation: 0 })
+                    .insert_resource(FogBounds { min: Vec2::splat(-4096.0), max: Vec2::splat(4096.0) })
+                    .insert_resource(LocalPlayer(Some(PlayerId(1))))
+                    .insert_resource(Feed(next.clone()))
+                    .insert_resource(SimLink::new(Box::new(Scripted(next.clone(), first)), Box::new(LocalRouter::new()), PlayerId(1)))
+                    .add_systems(Update, (drive.in_set(GameSet::SimLink), update_fog.in_set(GameSet::Render)));
+                Rig { app, next, tick: 0 }
+            }
+
+            /// One frame; a new view and events arrive in it when given.
+            fn frame(&mut self, units: Option<Vec<UnitView>>, cine: Option<bool>) {
+                if units.is_some() || cine.is_some() {
+                    self.tick += 1;
+                    let mut v = match units {
+                        Some(u) => view(u),
+                        None => (*self.app.world().resource::<SimLink>().real_curr().clone()).clone(),
+                    };
+                    v.tick = self.tick;
+                    let events = cine.map(|on| SimEvent::Present(Presentation::Cineractive { on, skippable: false })).into_iter().collect();
+                    *self.next.lock().unwrap() = Some(TickOutput { view: Arc::new(v), events });
+                }
+                self.app.update();
+            }
+
+            fn explored(&self, x: f32) -> bool {
+                self.app.world().resource::<FogState>().grid.explored_at(x, 0.0)
+            }
+
+            fn seen(&self, x: f32) -> bool {
+                self.app.world().resource::<FogState>().grid.visible_at(x, 0.0)
+            }
+
+            fn updates(&self) -> u32 {
+                self.app.world().resource::<FogState>().updates
+            }
+
+            fn cutscene(&self) -> bool {
+                self.app.world().resource::<CineractiveState>().on
+            }
+        }
+
+        #[test]
+        fn a_cutscene_started_by_the_same_frame_as_the_units_moving_uncovers_nothing() {
+            let at = |x| Some(vec![unit(1, 1, x, 0)]);
+            let mut rig = Rig::new();
+            // Normal play at home.
+            rig.frame(at(0), None);
+            rig.frame(at(0), None);
+            assert!(rig.explored(0.0) && !rig.explored(3000.0));
+            // One frame: the units are placed far away and the cutscene starts.
+            rig.frame(at(3000), Some(true));
+            assert!(rig.cutscene(), "consume turned the state on after update_fog ran");
+                // The cutscene runs on: units move again.
+            rig.frame(at(-3000), None);
+            assert!(rig.seen(-3000.0) && rig.explored(-3000.0), "what is in sight is drawn as before");
+            assert!(!rig.explored(3000.0), "ground seen only in the frame the cutscene began is not explored");
+            // The end, no unit moved and no new view: the state flip recomputes.
+            let updates = rig.updates();
+            rig.frame(None, Some(false));
+            rig.frame(None, None);
+            assert!(!rig.cutscene());
+            assert!(rig.updates() > updates, "the end of the cutscene rebuilds the picture");
+            assert!(rig.explored(-3000.0), "the end positions count");
+            assert!(!rig.explored(3000.0) && !rig.seen(3000.0));
+            // A second cutscene straight after the first behaves the same.
+            rig.frame(at(1500), Some(true));
+            rig.frame(at(-1500), None);
+            assert!(!rig.explored(1500.0), "second cutscene: nothing uncovered");
+            assert!(rig.explored(-1500.0) && rig.seen(-1500.0));
+            rig.frame(None, Some(false));
+            rig.frame(None, None);
+            rig.frame(at(-1500), None);
+            assert!(rig.explored(-1500.0) && !rig.explored(1500.0) && !rig.explored(3000.0));
+            assert!(rig.explored(0.0), "what was explored before stays explored");
+        }
     }
 }
