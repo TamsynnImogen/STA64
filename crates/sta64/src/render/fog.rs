@@ -189,14 +189,30 @@ impl FogGrid {
     }
 
     /// Recompute what is in sight for `player` from `view`; what has been seen stays explored.
+    #[cfg(test)]
     pub fn observe(&mut self, view: &WorldView, player: PlayerId, content: Option<&ContentDb>) {
+        self.observe_with(view, player, content, true);
+    }
+
+    /// As [`observe`](Self::observe); with `remember` false the sight of this call is not folded into
+    /// the explored memory (a cutscene runs). Interim rule, grade: stated by a player (2026-11-22),
+    /// not measured on the original: sight gained during a cutscene does not become explored ground.
+    /// Whether the original does this by a general rule or by a mission script call is not
+    /// established (the script call for the shroud stays unwired).
+    pub fn observe_with(&mut self, view: &WorldView, player: PlayerId, content: Option<&ContentDb>, remember: bool) {
         self.visible.fill(false);
         if view.visibility.is_empty() {
             self.reveal_all();
+            if !remember {
+                self.visible.fill(true);
+            }
             return;
         }
         for (x, z, r) in sensor_discs(view, player, content) {
             self.reveal(x, z, r);
+        }
+        if !remember {
+            return;
         }
         for (e, v) in self.explored.iter_mut().zip(&self.visible) {
             *e |= *v;
@@ -207,8 +223,20 @@ impl FogGrid {
     /// only; `self` keeps the real memory). Lifting the shroud counts every cell as explored; lifting
     /// the fog counts every explored cell as in sight, so with both lifted everything is in sight,
     /// and with the fog alone the unexplored ground stays black.
+    #[cfg(test)]
     pub fn lifted(&self, fog: bool, shroud: bool) -> FogGrid {
+        self.shown(fog, shroud, false)
+    }
+
+    /// As [`lifted`](Self::lifted); with `in_sight_explored` the cells in sight now also count as
+    /// explored in the copy (the picture during a cutscene), while `self` keeps the memory.
+    pub fn shown(&self, fog: bool, shroud: bool, in_sight_explored: bool) -> FogGrid {
         let mut g = self.clone();
+        if in_sight_explored {
+            for (e, v) in g.explored.iter_mut().zip(&g.visible) {
+                *e |= *v;
+            }
+        }
         if shroud {
             g.explored.fill(true);
         }
@@ -458,6 +486,7 @@ struct Memo {
     /// What the sim's sensors have shown so far, whatever is lifted (UI-46); `FogState` holds the lifted copy.
     memory: Option<FogGrid>,
     shown_reveal: Option<(bool, bool)>,
+    shown_cutscene: Option<bool>,
 }
 
 /// Recompute the grid when the view, the player or the map changes; spawn the layers
@@ -481,7 +510,8 @@ fn update_fog(
     (net, active): (Option<Res<crate::game::net_match::NetGame>>, Option<Res<crate::game::flow::ActiveMatch>>),
     mut memo: Local<Memo>,
 ) {
-    let Memo { seen, art_generation, memory, shown_reveal } = &mut *memo;
+    let Memo { seen, art_generation, memory, shown_reveal, shown_cutscene } = &mut *memo;
+    let cutscene = cine.as_deref().is_some_and(|c| c.on);
     let Some(patterns) = patterns else { return };
     let Some(player) = local.0 else {
         // No local player: the whole map is shown.
@@ -497,17 +527,20 @@ fn update_fog(
         let (fog, shroud) = active.as_deref().map_or((false, false), |active| active.fog.lifted());
         (fog || reveal.as_deref().is_some_and(|r| r.fog), shroud || reveal.as_deref().is_some_and(|r| r.shroud))
     };
-    let fresh = state.is_none() || *shown_reveal != Some(lifted) || *art_generation != Some(patterns.generation) || !seen.as_ref().is_some_and(|(v, p)| Arc::ptr_eq(v, curr) && *p == local.0);
+    let fresh = state.is_none() || *shown_reveal != Some(lifted) || *shown_cutscene != Some(cutscene) || *art_generation != Some(patterns.generation) || !seen.as_ref().is_some_and(|(v, p)| Arc::ptr_eq(v, curr) && *p == local.0);
     let map_changed = memory.as_ref().is_some_and(|m| m.min != [bounds.min.x, bounds.min.y]);
     if fresh || map_changed {
         *seen = Some((curr.clone(), local.0));
         *shown_reveal = Some(lifted);
+        *shown_cutscene = Some(cutscene);
         let (mut grid, updates) = match (state.as_deref(), memory.take()) {
             (Some(s), Some(m)) if !map_changed => (m, s.updates),
             _ => (FogGrid::new([bounds.min.x, bounds.min.y], [bounds.max.x, bounds.max.y]), 0),
         };
-        grid.observe(curr, player, content.as_deref().map(|c| &*c.0));
-        let shown = grid.lifted(lifted.0, lifted.1);
+        // During a cutscene the picture keeps showing what is in sight (the layers are hidden then
+        // anyway), but the memory does not take it in; see `FogGrid::observe_with`.
+        grid.observe_with(curr, player, content.as_deref().map(|c| &*c.0), !cutscene);
+        let shown = grid.shown(lifted.0, lifted.1, cutscene);
         *memory = Some(grid);
         let art_changed = *art_generation != Some(patterns.generation);
         *art_generation = Some(patterns.generation);
@@ -545,7 +578,7 @@ fn update_fog(
             Layer::Shroud => settings.shroud,
         };
         // Not in a cineractive: the cinematic view draws no fog or shroud (Refit, static).
-        let on = on && !cine.as_deref().is_some_and(|c| c.on);
+        let on = on && !cutscene;
         let want = if on { Visibility::Inherited } else { Visibility::Hidden };
         if *v != want {
             *v = want;
@@ -653,6 +686,25 @@ mod tests {
         assert_eq!((m[at(0.0, 0.0)], s[at(0.0, 0.0)]), (255, 0), "fogged but not shrouded");
         assert_eq!((m[at(3000.0, 0.0)], s[at(3000.0, 0.0)]), (0, 0), "in sight");
         assert_eq!((m[at(-3000.0, 0.0)], s[at(-3000.0, 0.0)]), (255, 255), "never seen");
+    }
+
+    #[test]
+    fn sight_during_a_cutscene_is_not_remembered() {
+        let mut g = grid();
+        g.observe(&view(vec![unit(1, 1, 0, 0)]), PlayerId(1), None);
+        let before = g.counts().1;
+        g.observe_with(&view(vec![unit(1, 1, 3000, 0)]), PlayerId(1), None, false);
+        assert!(g.visible_at(3000.0, 0.0), "what is in sight is still in sight");
+        assert!(!g.explored_at(3000.0, 0.0));
+        assert_eq!(g.counts().1, before, "the explored set is unchanged");
+        assert!(g.shown(false, false, true).explored_at(3000.0, 0.0), "the picture during a cutscene still shows it");
+        // The cutscene ends: only what the units see where they are counts.
+        g.observe(&view(vec![unit(1, 1, 0, 0)]), PlayerId(1), None);
+        assert!(!g.explored_at(3000.0, 0.0));
+        let mut same = grid();
+        same.observe(&view(vec![unit(1, 1, 0, 0)]), PlayerId(1), None);
+        same.observe(&view(vec![unit(1, 1, 3000, 0)]), PlayerId(1), None);
+        assert!(same.explored_at(3000.0, 0.0), "the same move outside a cutscene marks the ground");
     }
 
     #[test]
