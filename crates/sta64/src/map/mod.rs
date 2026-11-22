@@ -753,15 +753,16 @@ fn input(keys: Res<ButtonInput<KeyCode>>, mut browser: ResMut<MapBrowser>, mut o
     }
 }
 
-/// A click or drag on the radar puts the camera over that map point.
+/// A click or drag on the radar puts the camera over that map point, when the point is inside
+/// the map's rectangle (a strip beside a non-square map does nothing).
 fn radar_click(
     mut clicks: MessageReader<crate::ui::radar::RadarClick>,
     limits: Res<CameraLimits>,
     mut q: Query<&mut Orbit>,
 ) {
-    let Some(c) = clicks.read().filter(|c| c.button == bevy::picking::pointer::PointerButton::Primary).last() else { return };
+    let Some(at) = clicks.read().filter_map(crate::ui::radar::camera_point).last() else { return };
     for mut o in &mut q {
-        let at = Vec3::new(c.at.x, 0.0, -c.at.y);
+        let at = Vec3::new(at.x, 0.0, -at.y);
         o.focus = at.clamp(limits.lo, limits.hi);
     }
 }
