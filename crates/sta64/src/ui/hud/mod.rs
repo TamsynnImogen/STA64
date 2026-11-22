@@ -1252,6 +1252,45 @@ mod target_tests {
         assert!(app.world().resource::<HudState>().targeting.is_none());
     }
 
+    /// The rally point is set only through the armed Rally command: the rally cursor shows, one left
+    /// click on the map queues the rally and disarms, and Escape or a right-click cancel without an
+    /// order. INTERIM, not established: what cancels the armed command in the original, and whether a
+    /// click on a unit sets the rally on that unit (STA64 does, as today). Armada I and the Fleet
+    /// Operations family follow this rule until shown otherwise.
+    #[test]
+    fn armed_rally_shows_its_cursor_and_one_left_click_sets_the_point_and_disarms() {
+        let mut app = click_app(feed(&[3]), HudState { targeting: Some(TargetMode::Rally), ..Default::default() }, 500.0);
+        app.world_mut().run_system_once(armed_cursor).unwrap();
+        assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_rally");
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut().run_system_once(place_on_click).unwrap();
+        assert!(matches!(
+            app.world().resource::<CommandQueue>().0.as_slice(),
+            [CommandKind::Order(Order::Rally { builders, at: Target::Point(_) })] if builders == &[EntityId(3)]
+        ));
+        assert!(app.world().resource::<HudState>().targeting.is_none());
+
+        // Disarmed: the next click gives nothing more.
+        app.world_mut().resource_mut::<CommandQueue>().0.clear();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut().run_system_once(place_on_click).unwrap();
+        assert!(app.world().resource::<CommandQueue>().0.is_empty());
+
+        // Escape and a right-click cancel without an order.
+        for cancel in [true, false] {
+            let mut app = click_app(feed(&[3]), HudState { targeting: Some(TargetMode::Rally), ..Default::default() }, 500.0);
+            if cancel {
+                app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+            } else {
+                app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
+            }
+            app.world_mut().run_system_once(place_on_click).unwrap();
+            assert!(app.world().resource::<HudState>().targeting.is_none());
+            assert!(app.world().resource::<CommandQueue>().0.is_empty());
+        }
+    }
+
     #[test]
     fn armed_attack_reaches_seen_target_behind_unseen_resource_and_refuses_seen_resource() {
         let mut f = feed(&[1]);

@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use bevy::prelude::*;
-use sta_sim::command::{CommandKind, Order, Target};
+use sta_sim::command::{CommandKind, Order};
 use sta_sim::{EntityId, Vec3 as SimVec3};
 
 use super::Pointer;
@@ -143,7 +143,7 @@ pub(crate) struct Ground<'a> {
     pub own: &'a [EntityId],
     /// The queue modifier is held.
     pub queue_mod: bool,
-    /// A plain move goes out as a warp move (the minimap's rule); rallies are unchanged.
+    /// A plain move goes out as a warp move (the minimap's rule).
     pub warp: bool,
 }
 
@@ -155,11 +155,17 @@ pub(crate) struct OrderOut<'a> {
     pub issued: &'a mut Vec<OrderIssued>,
 }
 
-/// The order a right-click on the ground gives: a rally for producers, else a formation move
-/// to the point (a warp move when `warp`). The one path of the main view's click and of the
-/// minimap's, so the queue modifier, the formation and the acknowledgement are alike.
+/// The order a right-click on the ground gives: a formation move to the point (a warp move when
+/// `warp`), and nothing for a selection of stationary builders: a rally point is set only by the
+/// armed Rally command, never by a plain right-click (rule stated by a player, not measured;
+/// Armada I and the Fleet Operations family follow it until shown otherwise). The one path of the
+/// main view's click and of the minimap's, so the queue modifier, the formation and the
+/// acknowledgement are alike.
 pub(crate) fn ground_order(g: &Ground, at: GroundAt, out: &mut OrderOut) {
     let Ground { content, view, me, own, queue_mod: shift, warp } = *g;
+    if super::context::rally_builders(content, view, me, own) {
+        return;
+    }
     // Positions in the sim's space; the order point is on the plane at the
     // selection's mean height.
     let picked: Vec<(EntityId, Vec3)> =
@@ -171,11 +177,6 @@ pub(crate) fn ground_order(g: &Ground, at: GroundAt, out: &mut OrderOut) {
     }
     let centre = picked.iter().fold(Vec3::ZERO, |a, (_, p)| a + *p) / picked.len() as f32;
     let Some(target) = at.on_plane(centre.y) else { return };
-    if super::context::rally_builders(content, view, me, own) {
-        clear_targets(out.targets, own);
-        out.queue.0.push(CommandKind::Order(Order::Rally { builders: own.to_vec(), at: Target::Point(SimVec3::from_f32(target.to_array())) }));
-        return;
-    }
     for (id, to) in formation_moves(&picked, centre, target) {
         let to = SimVec3::from_f32(to.to_array());
         if !shift {
@@ -752,10 +753,11 @@ mod tests {
         assert_eq!(cmds.len(), 1, "{a:?} orders again after it");
     }
 
-    /// A producer's right-click on the ground is a rally; the minimap's is the same rally (never
-    /// turned into a warp move).
+    /// Stationary builders take no order from a right-click, on the minimap as in the main view: a
+    /// rally point is set only by the armed Rally command. The minimap cursor reads the same answer
+    /// (`input::context`).
     #[test]
-    fn a_minimap_click_with_a_producer_selected_is_a_rally() {
+    fn a_minimap_click_with_a_producer_selected_gives_no_order() {
         use sta_content::fake;
         use sta_core::TeamId;
         use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
@@ -782,7 +784,7 @@ mod tests {
             .insert_resource(SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), PlayerId(0)))
             .add_systems(Update, radar_order);
         let (cmds, _) = radar_click(&mut app, Vec2::new(8000.0, 350.0), SEC, true, &[]);
-        assert_eq!(cmds, [CommandKind::Order(Order::Rally { builders: vec![yard], at: Target::Point(SimVec3::from_f32([8000.0, 0.0, 350.0])) })]);
+        assert!(cmds.is_empty(), "{cmds:?}");
     }
 
     /// The main view's order is the shared function with a ray: a plain move, the point on the
