@@ -39,6 +39,9 @@ pub(crate) struct Situation<'a> {
     pub moves: bool,
     /// The selection is stationary builders, whose right-click is a rally (STA64's own rule).
     pub rally: bool,
+    /// The click on open ground would be a warp move (`orders::world_warp`: Alt held, not with the
+    /// queue modifier, not on Armada I content).
+    pub warp: bool,
     /// The pointer is over the minimap's square (it is HUD, but its right-click is an order).
     pub minimap: Option<MinimapPointer>,
 }
@@ -102,6 +105,11 @@ pub(crate) fn decide(s: &Situation) -> &'static str {
         // A wormhole is the one target `context_order` answers with a move.
         Some(Order::Move { .. }) => "c_wormin",
         _ if s.rally => "c_rally",
+        // Alt over a place a selected own craft would be moved to: the warp cursor (read from the
+        // executable, static). INTERIM, narrowest reading: only where the plain cursor would be
+        // `c_move`, so any mover counts (as on the minimap), and a wormhole or a target with an
+        // order of its own keeps its cursor.
+        _ if s.moves && s.warp => "c_warp",
         _ if s.moves => "c_move",
         _ => "c_select",
     }
@@ -160,7 +168,8 @@ pub fn cursor(
     let rally = rally && moves;
     // The armed pick (the HUD's system) writes over this when it is on.
     let over_hud = hud.is_some_and(|h| h.0);
-    wanted.0 = decide(&Situation { cutscene, over_hud, armed: None, own_selected: !own.is_empty(), hover: icon.as_ref(), moves, rally, minimap });
+    let warp = keys.as_deref().zip(bindings.as_deref()).is_some_and(|(k, b)| super::orders::world_warp(k, b, content.as_deref().map(|c| &*c.0)));
+    wanted.0 = decide(&Situation { cutscene, over_hud, armed: None, own_selected: !own.is_empty(), hover: icon.as_ref(), moves, rally, warp, minimap });
     let want = match icon {
         Some(Order::Attack { .. }) => SystemCursorIcon::Crosshair,
         Some(Order::Mine { .. } | Order::Rally { .. }) => SystemCursorIcon::Pointer,
@@ -197,6 +206,8 @@ mod tests {
     use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
     use sta_sim::{PlayerId, Sim, TickOutput, Vec3 as SimVec3, WorldSource};
 
+    const A2: sta_content::Profile = sta_content::Profile::Sta2Classic;
+
     use super::super::keys::KeyBindings;
     use super::super::orders::{OrderTargets, order};
     use super::super::select::AimState;
@@ -220,8 +231,12 @@ mod tests {
     /// by seat 0 (the wrongly-owned case) and one owned by nobody. Returns
     /// ids `[miner, cruiser, enemy, moon_owned, moon_free, yard, rig, second_yard, ally, station]`.
     fn app(select: usize) -> (App, [EntityId; 10]) {
+        app_as(select, fake::db().profile())
+    }
+
+    fn app_as(select: usize, profile: sta_content::Profile) -> (App, [EntityId; 10]) {
         let fake = fake::db();
-        let mut builder = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        let mut builder = ContentDb::builder().profile(profile).features(fake.features().clone());
         for unit in fake.units() {
             builder = builder.unit(unit.clone());
         }
@@ -308,6 +323,20 @@ mod tests {
     }
 
     #[test]
+    fn decide_warp_cursor_only_where_the_plain_one_is_move() {
+        let warp = |hover| Situation { warp: true, ..situation(hover) };
+        assert_eq!(decide(&warp(None)), "c_warp");
+        assert_eq!(decide(&situation(None)), "c_move");
+        assert_eq!(decide(&Situation { moves: false, ..warp(None) }), "c_select");
+        assert_eq!(decide(&Situation { own_selected: false, ..warp(None) }), "c_select");
+        assert_eq!(decide(&Situation { rally: true, ..warp(None) }), "c_rally");
+        let wormhole = Order::Move { units: vec![EntityId(1)], to: SimVec3::from_f32([0.0; 3]), queue: false };
+        assert_eq!(decide(&warp(Some(&wormhole))), "c_wormin");
+        assert_eq!(decide(&Situation { over_hud: true, ..warp(None) }), crate::ui::cursor::DEFAULT);
+        assert_eq!(decide(&Situation { armed: Some((TargetMode::Attack, true)), ..warp(None) }), "c_attack");
+    }
+
+    #[test]
     fn decide_gives_the_cursor_of_each_order_and_move_by_default() {
         let u = vec![EntityId(1)];
         let attack = Order::Attack { units: u.clone(), target: EntityId(2) };
@@ -366,6 +395,7 @@ mod tests {
             CommandKind::Order(Order::Mine { .. }) => Some("c_mining"),
             CommandKind::Order(Order::Rally { .. }) => Some("c_rally"),
             CommandKind::Order(Order::Move { .. }) => Some("c_move"),
+            CommandKind::Order(Order::MoveWarp { .. }) => Some("c_warp"),
             _ => None,
         }
     }
@@ -391,6 +421,67 @@ mod tests {
             app.world_mut().run_system_once(cursor).unwrap();
             assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, cursor_name, "select {select} at {x}: {cmds:?}");
             assert_eq!(kind_cursor(&cmds), Some(cursor_name), "select {select} at {x}: the click must give the order of the cursor: {cmds:?}");
+        }
+    }
+
+    /// Alt held in the world: the warp cursor exactly where the click gives the warp move (open
+    /// space, an own craft, a free moon for a warship), the cursors of the targets with an order of
+    /// their own unchanged, the rally of stationary builders kept, and no warp cursor without Alt,
+    /// with the queue modifier or without a mover. The click goes through the minimap's order path.
+    #[test]
+    fn alt_gives_the_warp_cursor_and_the_warp_move_where_the_plain_cursor_is_move() {
+        let cases: [(usize, f32, &str); 8] = [
+            (1, 20000.0, "c_warp"),   // open space
+            (1, -6000.0, "c_warp"),   // over an ally's ship
+            (1, 6000.0, "c_warp"),    // a warship over a free moon
+            (1, -3000.0, "c_attack"), // over an enemy: its own order
+            (0, 3000.0, "c_mining"),  // a miner over a moon
+            (5, 10000.0, "c_rally"),  // a stationary yard
+            (6, 13000.0, "c_warp"),   // a mobile rig
+            (9, 19000.0, "c_warp"),   // a station that builds nothing (as the plain click)
+        ];
+        for (select, x, cursor_name) in cases {
+            let (mut app, _) = app_as(select, A2);
+            app.init_resource::<crate::ui::cursor::WantedCursor>();
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::AltLeft);
+            let cmds = right_click_at(&mut app, x);
+            app.world_mut().run_system_once(cursor).unwrap();
+            assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, cursor_name, "select {select} at {x}: {cmds:?}");
+            assert_eq!(kind_cursor(&cmds), Some(cursor_name), "select {select} at {x}: {cmds:?}");
+        }
+        // The queue modifier keeps the plain queued move and its cursor (INTERIM, as on the minimap).
+        let (mut app2, _) = app_as(1, A2);
+        app2.init_resource::<crate::ui::cursor::WantedCursor>();
+        for k in [KeyCode::AltLeft, KeyCode::ShiftLeft] {
+            app2.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(k);
+        }
+        let cmds = right_click_at(&mut app2, 20000.0);
+        app2.world_mut().run_system_once(cursor).unwrap();
+        assert_eq!(app2.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_move");
+        assert_eq!(kind_cursor(&cmds), Some("c_move"));
+        // A pointer whose ray misses the map plane: nothing to warp to.
+        let (mut app3, _) = app_as(1, A2);
+        app3.init_resource::<crate::ui::cursor::WantedCursor>();
+        app3.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::AltLeft);
+        let ray = Ray3d::new(Vec3::new(0.0, 1000.0, 0.0), Dir3::X);
+        app3.world_mut().resource_mut::<Aim>().0 = Some(AimState { cursor: Vec2::ZERO, ray, clip_from_world: Mat4::IDENTITY, size: Vec2::new(800.0, 600.0) });
+        app3.world_mut().run_system_once(cursor).unwrap();
+        assert_eq!(app3.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_select");
+    }
+
+    /// The rule was read from Armada II only: Fleet Operations, Roots, Armada I and STA64's own
+    /// content keep the plain move and the move cursor on Alt (INTERIM).
+    #[test]
+    fn alt_keeps_the_plain_move_and_cursor_on_other_profiles() {
+        use sta_content::Profile::*;
+        for profile in [Fo3, Fo4, Sta1Classic, Native] {
+            let (mut app, _) = app_as(1, profile);
+            app.init_resource::<crate::ui::cursor::WantedCursor>();
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::AltLeft);
+            let cmds = right_click_at(&mut app, 20000.0);
+            app.world_mut().run_system_once(cursor).unwrap();
+            assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_move", "{profile:?}");
+            assert_eq!(kind_cursor(&cmds), Some("c_move"), "{profile:?}: {cmds:?}");
         }
     }
 
