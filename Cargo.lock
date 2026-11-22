@@ -5714,6 +5714,7 @@ dependencies = [
  "kira",
  "naga",
  "png",
+ "serde_json",
  "sta_ai",
  "sta_assets",
  "sta_bench",
