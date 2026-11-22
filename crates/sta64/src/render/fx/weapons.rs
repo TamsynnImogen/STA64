@@ -117,6 +117,8 @@ impl Plugin for WeaponFxPlugin {
         app.add_plugins(super::stock_shots::StockShotsPlugin);
         // The Stock look's shield hit (#1041): registers `Effect::ShieldHits`, hooked into the stock beams and shots.
         app.add_plugins(super::stock_shield_hits::StockShieldHitsPlugin);
+        // The Stock look's shields-down effect (#1041), under the same gate.
+        app.add_plugins(super::stock_shields_down::StockShieldsDownPlugin);
         app.init_resource::<OrdnanceRecipes>().add_systems(
             Update,
             load_recipes.run_if(resource_exists_and_changed::<crate::viewer::Mounted>).before(spawn_fx),

@@ -80,7 +80,8 @@ pub enum Effect {
     /// stock version here keeps its Refit-derived drawing in both looks, and the spawn code
     /// chooses per class (`fx/stock_shots.rs`).
     Shots,
-    /// The shield hit (#1041): a cap on the shield ellipsoid (`fx/stock_shield_hits.rs`). Finer than
+    /// The shield hit and shields down (#1041): a cap on the shield ellipsoid (`fx/stock_shield_hits.rs`) and bands
+    /// while a pool is held at zero (`fx/stock_shields_down.rs`). Finer than
     /// [`Effect::Impacts`], which also covers hull sparks, explosions and smoke and is never registered as
     /// stock: under Stock the Refit shield shell is not drawn, everything else `Impacts` draws still is.
     ShieldHits,
