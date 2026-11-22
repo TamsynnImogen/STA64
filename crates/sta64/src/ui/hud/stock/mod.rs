@@ -641,7 +641,7 @@ pub(super) fn refresh(
         // The window's art takes the pointer like the other panels (none when the layout declares it off).
         state.solid.extend(layout.panel("cinematic"));
         // The button group is placed like every other panel; its solid rectangles come from the same rect.
-        state.solid.extend(buttons::solid(&layout, more.0));
+        state.solid.extend(buttons::solid(&layout, more.0, profile.as_deref().copied()));
     }
     if a1 {
         if rebuild {
