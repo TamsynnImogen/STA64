@@ -54,6 +54,7 @@ fn row(
     real: Option<EntityId>,
 ) -> ProductionView {
     ProductionView {
+        portal: None,
         builder: EntityId(builder),
         jobs: vec![ProductionJobView {
             def,
@@ -84,6 +85,50 @@ fn roots(app: &mut App) -> BTreeMap<EntityId, (Entity, ContentKey, Kind, Option<
     q.iter(world)
         .map(|(e, v, p)| (v.builder, (e, v.def, v.kind, p.map(|p| p.0))))
         .collect()
+}
+
+#[test]
+fn gate_uses_the_authored_aperture_at_the_launch_pose() {
+    let mut portal = sta_content::UnitDef::new("fx_gate", "wormhole_obj");
+    portal.raw = Arc::new(sta_odf::resolve("fx_gate", &mut |_| {
+        Some("ClosedScale = 0.125\nOpenScale = 2.375\n".into())
+    }).unwrap());
+    let fake = sta_content::fake::db();
+    let mut builder = sta_content::ContentDb::builder().unit(portal);
+    for unit in fake.units() {
+        builder = builder.unit(unit.clone());
+    }
+    for weapon in fake.weapons() {
+        builder = builder.weapon(weapon.clone());
+    }
+    let db = builder.build().unwrap();
+    let view = source_view(&db);
+    let product = db.key("fx_cruiser").unwrap();
+    let gate = db.key("fx_gate").unwrap();
+    let mut app = App::new();
+    app.init_resource::<Assets<Mesh>>()
+        .insert_resource(ContentRes(Arc::new(db)))
+        .insert_resource(LocalPlayer(Some(PlayerId(0))))
+        .add_systems(Update, (sync_build_visuals, sync_launch_portals));
+    let mut launch = row(1, product, 1.0, true, true, None);
+    launch.site = None;
+    let pos = sta_sim::Vec3::from_f32([10.0, 30.0, 50.0]);
+    launch.portal = Some(LaunchPortalView {
+        def: gate,
+        pos,
+        heading: (Fixed::ONE, Fixed::ZERO),
+        open: Fixed::from_f64(0.5),
+    });
+    install_link(&mut app, view, vec![launch]);
+    app.update();
+    assert!(roots(&mut app).is_empty());
+    let world = app.world_mut();
+    let (model, transform) = world.query_filtered::<(&NeedsModel, &Transform), With<LaunchPortal>>()
+        .single(world).unwrap();
+    assert_eq!(model.0, gate);
+    assert_eq!(transform.translation, to_bevy(pos.to_f32()));
+    assert_eq!(transform.scale, Vec3::splat(1.25));
+    assert!(transform.forward().abs_diff_eq(Vec3::X, 0.0001));
 }
 
 #[test]

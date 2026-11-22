@@ -58,7 +58,7 @@ impl SectionDigests {
 
 /// Fails to compile when `Entity` gains a field: give it a section below.
 fn _every_entity_field_has_a_section(e: &Entity) {
-    let Entity { id: _, kind: _, def: _, owner: _, pos: _, heading: _, speed: _, omega: _, target: _, stats: _, hull: _, shields: _, crew: _, flags: _, progress: _ } = e;
+    let Entity { id: _, kind: _, mobile_station: _, def: _, owner: _, pos: _, heading: _, speed: _, omega: _, target: _, stats: _, hull: _, shields: _, crew: _, flags: _, progress: _ } = e;
 }
 
 /// Fails to compile when `Sim` gains a field: decide its section (or that it is

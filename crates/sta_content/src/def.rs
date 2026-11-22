@@ -245,6 +245,8 @@ pub struct Hardpoint {
 pub struct LaunchPoint {
     /// Where the new unit appears, `(x, z)`.
     pub offset: (Fixed, Fixed),
+    /// Height of a gate aperture, relative to the builder's origin.
+    pub height: Fixed,
     /// Unit vector the new unit faces and leaves along, `(x, z)`.
     pub dir: (Fixed, Fixed),
     /// Radius of a circle round the builder's centre that the unit must leave.
@@ -628,6 +630,21 @@ pub struct NebulaEffects {
 }
 
 impl UnitDef {
+    /// Armada II mobile producers such as Mother are authored as ships
+    /// with movement physics and no fixed-facility flag (read from ODFs).
+    pub fn allows_station_motion(&self) -> bool {
+        matches!(self.class.0.as_str(), "starbase" | "shipyard" | "buildyard" | "research" | "mining" | "sensor" | "trading_station")
+            && self.movement.max_speed > Fixed::ZERO
+            && !self.is_starbase
+            && self.raw.bool("ship") == Some(true)
+    }
+
+    /// Wormhole opening duration. Armada II reads AnimationTime in seconds.
+    pub fn wormhole_open_ticks(&self) -> u64 {
+        let seconds = self.raw.f32("AnimationTime").filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(2.0);
+        ((f64::from(seconds) * f64::from(sta_core::TICK_HZ)).round() as u64).max(1)
+    }
+
     /// Armada II's embryo producer, consumed when its product finishes.
     pub fn is_evolver(&self) -> bool {
         self.class.0 == "evolver"

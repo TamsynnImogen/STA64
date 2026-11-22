@@ -40,6 +40,7 @@ fn installed_ghost_is_readable_without_lights() {
     let mut def = sta_content::UnitDef::new("gpu_blueprint", "shipyard");
     def.launch = Some(sta_content::LaunchPoint {
         offset: (sta_sim::Fixed::ZERO, sta_sim::Fixed::ZERO),
+        height: sta_sim::Fixed::ZERO,
         dir: (sta_sim::Fixed::ZERO, sta_sim::Fixed::ONE),
         clear: sta_sim::Fixed::from_f64(f64::from(radius) * 4.0 / 3.0),
         node: None,

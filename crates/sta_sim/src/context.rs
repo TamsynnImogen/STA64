@@ -110,11 +110,8 @@ fn is_enemy(view: &WorldView, me: PlayerId, owner: PlayerId) -> bool {
 }
 
 /// The whole selected group must consist of finished, own, stationary
-/// builders: producer stations (by class label: a station's definition may
-/// carry a positive speed, for example through a `physicsFile`, and that does
-/// not make it a craft)
-/// and builders that cannot move. Mobile construction rigs keep their
-/// right-click Move behavior.
+/// builders. Mobile producers and construction rigs keep their right-click
+/// Move behavior and producers can set rally points with the Rally command.
 pub fn rally_builders(db: Option<&ContentDb>, view: &WorldView, me: PlayerId, own: &[EntityId]) -> bool {
     let Some(db) = db else { return false };
     !own.is_empty() && own.iter().all(|&id| {
@@ -124,6 +121,7 @@ pub fn rally_builders(db: Option<&ContentDb>, view: &WorldView, me: PlayerId, ow
                 && u.progress.is_none_or(|p| p >= Fixed::ONE)
                 && db.unit(u.def).is_some_and(|d| {
                     !d.build.list.is_empty()
+                        && !EntityKind::orderable_def(d)
                         && (EntityKind::producer_def(d)
                             || (d.movement.max_speed == Fixed::ZERO
                                 && matches!(EntityKind::of_def(d), EntityKind::Station | EntityKind::Craft)))

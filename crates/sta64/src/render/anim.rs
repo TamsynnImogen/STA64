@@ -49,7 +49,9 @@
 //!
 //! The choice is read from the unit's content, never from a model or track name.
 use crate::clock::AnimClock;
-use crate::render::model_scene::{AnimKeys, NodeAnim};
+use crate::render::model_scene::NodeAnim;
+#[cfg(test)]
+use crate::render::model_scene::AnimKeys;
 use crate::sim_link::{SimEntities, SimMsg};
 use bevy::prelude::*;
 use sta_assets::model::Keys;
@@ -240,59 +242,40 @@ impl EventAnim {
     }
 }
 
-fn key_pose(track: &NodeAnim, k: usize) -> Transform {
-    match &track.keys {
-        AnimKeys::Matrix(keys) => keys[k],
-        AnimKeys::Scale(keys) => track.base.with_scale(Vec3::splat(keys[k])),
-    }
-}
-
-fn key_count(track: &NodeAnim) -> usize {
-    match &track.keys {
-        AnimKeys::Matrix(k) => k.len(),
-        AnimKeys::Scale(k) => k.len(),
-    }
-}
-
 /// The pose `elapsed` seconds into a play (`None`: at rest). A play runs the track
 /// forward over its period, then back over the same, and is over after both.
 /// Returns the pose and whether the play is still going.
 pub fn pose(track: &NodeAnim, elapsed: Option<f32>) -> (Transform, bool) {
-    let n = key_count(track);
     let Some(t) = elapsed else {
-        return (key_pose(track, 0), false);
+        return (track.pose_at(0.0), false);
     };
     if t >= 2.0 * track.period || t < 0.0 {
-        return (key_pose(track, 0), false);
+        return (track.pose_at(0.0), false);
     }
     let x = if t < track.period {
         t
     } else {
         2.0 * track.period - t
     };
-    let k = ((x / track.period * n as f32) as usize).min(n - 1);
-    (key_pose(track, k), true)
+    (track.pose_at(x / track.period), true)
 }
 
 /// The pose of a looped play `elapsed` seconds in (`None`: at rest on the first key):
 /// forward over the period, then again, as the engine's flag 1 does.
 pub fn loop_pose(track: &NodeAnim, elapsed: Option<f32>) -> Transform {
     let Some(t) = elapsed else {
-        return key_pose(track, 0);
+        return track.pose_at(0.0);
     };
-    let n = key_count(track);
-    let x = t.rem_euclid(track.period);
-    key_pose(track, ((x / track.period * n as f32) as usize).min(n - 1))
+    track.loop_at(t)
 }
 
 /// The pose of a forward-once play `elapsed` seconds in: it holds the last key at the end
 /// (the engine's flag 2); `None`: not started, the first key.
 pub fn once_pose(track: &NodeAnim, elapsed: Option<f32>) -> Transform {
     let Some(t) = elapsed else {
-        return key_pose(track, 0);
+        return track.pose_at(0.0);
     };
-    let n = key_count(track);
-    key_pose(track, ((t.max(0.0) / track.period * n as f32) as usize).min(n - 1))
+    track.pose_at((t.max(0.0) / track.period).min(1.0))
 }
 
 /// Whether the unit has finished construction (or never was under construction).
@@ -579,12 +562,11 @@ fn construction_pose(a: &mut EventAnim, now: f64, held: bool) -> (Transform, boo
     a.held = held;
     if held || a.closing_from.is_some() {
         let open = fraction(a);
-        let k = ((open * key_count(&a.track) as f32) as usize).min(key_count(&a.track) - 1);
         let going = held || open > 0.0;
         if !going {
             a.closing_from = None;
         }
-        (key_pose(&a.track, k), going)
+        (a.track.pose_at(open), going)
     } else {
         pose(&a.track, a.started.map(|s| (now - s) as f32))
     }

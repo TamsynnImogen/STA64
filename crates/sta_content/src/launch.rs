@@ -148,6 +148,7 @@ fn point_at(def: &UnitDef, sod: Option<&Sod>, name: Option<&str>) -> LaunchPoint
     let Some(sod) = sod else {
         return LaunchPoint {
             offset: (Fixed::ZERO, Fixed::ZERO),
+            height: Fixed::ZERO,
             dir: (Fixed::ZERO, Fixed::ONE),
             clear: Fixed::from_int(DEFAULT_CLEAR),
             node: None,
@@ -177,6 +178,7 @@ fn point_at(def: &UnitDef, sod: Option<&Sod>, name: Option<&str>) -> LaunchPoint
             let clear = clear.max((ox * ox + oz * oz).sqrt());
             LaunchPoint {
                 offset: (fx(ox), fx(oz)),
+                height: fx(t[1] * scale),
                 dir: (fx(dx), fx(dz)),
                 clear: fx(clear),
                 node: Some(n.to_owned()),
@@ -184,6 +186,7 @@ fn point_at(def: &UnitDef, sod: Option<&Sod>, name: Option<&str>) -> LaunchPoint
         }
         None => LaunchPoint {
             offset: (Fixed::ZERO, Fixed::ZERO),
+            height: Fixed::ZERO,
             dir: (Fixed::ZERO, Fixed::ONE),
             clear: fx(clear),
             node: None,
