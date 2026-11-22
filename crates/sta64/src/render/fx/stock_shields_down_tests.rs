@@ -116,6 +116,8 @@ fn the_effect_is_wanted_only_with_the_hold_and_a_pool_at_zero() {
 struct Pools {
     inner: ScriptedSource,
     now: fn(u64) -> [i32; 4],
+    /// Whether the view shows unit 2 cloaked at a tick.
+    cloak: fn(u64) -> bool,
     tick: u64,
 }
 
@@ -124,6 +126,9 @@ impl Pools {
         let mut v = (*view).clone();
         let now = (self.now)(self.tick);
         for u in v.units.iter_mut().filter(|u| u.id.0 >= 2) {
+            if (self.cloak)(self.tick) {
+                u.flags = u.flags | sta_sim::view::UnitFlags::CLOAKED;
+            }
             for f in 0..4 {
                 u.shields[f] = [Fixed::from_int(now[f]), Fixed::from_int(100)];
             }
@@ -159,6 +164,13 @@ fn content(hold: bool) -> ContentDb {
 
 /// The effects present per frame as `(unit, facing)` lists, for `frames` frames of a world under `profile`.
 fn run(hold: bool, profile: Option<RenderProfile>, now: fn(u64) -> [i32; 4], events: &str, until: Option<u64>, frames: usize) -> (Vec<Vec<u32>>, usize) {
+    let (rows, shells, _) = run_cloak(hold, profile, now, |_| false, events, until, frames);
+    (rows, shells)
+}
+
+/// [`run`] with a cloak per tick; also the effect's visibility per frame (`None`: no effect that frame).
+#[allow(clippy::type_complexity)]
+fn run_cloak(hold: bool, profile: Option<RenderProfile>, now: fn(u64) -> [i32; 4], cloak: fn(u64) -> bool, events: &str, until: Option<u64>, frames: usize) -> (Vec<Vec<u32>>, usize, Vec<Option<bool>>) {
     let db = content(hold);
     let text = format!(
         "{{ units: [
@@ -179,21 +191,22 @@ fn run(hold: bool, profile: Option<RenderProfile>, now: fn(u64) -> [i32; 4], eve
         .add_plugins(SimLinkPlugin)
         .insert_resource(ContentRes(Arc::new(db)))
         .insert_resource(SpriteTables(Arc::new(sheet_table())))
-        .insert_resource(SimLink::new(Box::new(Pools { inner, now, tick: 0 }), Box::new(LocalRouter::new()), PlayerId(0)));
+        .insert_resource(SimLink::new(Box::new(Pools { inner, now, cloak, tick: 0 }), Box::new(LocalRouter::new()), PlayerId(0)));
     if let Some(p) = profile {
         app.insert_resource(p);
     }
     app.add_plugins((crate::render::fx::weapons::WeaponFxPlugin, ImpactFxPlugin));
     configure_sets(&mut app);
-    let (mut rows, mut shells) = (Vec::new(), 0);
+    let (mut rows, mut shells, mut shown) = (Vec::new(), 0, Vec::new());
     for _ in 0..frames {
         app.update();
         let mut v: Vec<u32> = app.world_mut().query::<&ShieldsDown>().iter(app.world()).map(|s| s.unit.0).collect();
         v.sort();
         rows.push(v);
+        shown.push(app.world_mut().query::<(&ShieldsDown, &Visibility)>().iter(app.world()).next().map(|(s, v)| s.shown && *v != Visibility::Hidden));
         shells = shells.max(app.world_mut().query::<&ImpactFx>().iter(app.world()).filter(|f| f.kind == ImpactKind::Shield).count());
     }
-    (rows, shells)
+    (rows, shells, shown)
 }
 
 fn down(at: u64, facing: u8) -> String {
@@ -260,6 +273,26 @@ fn directional_pools_one_effect_per_craft_from_the_first_event_until_no_pool_is_
     // An event for a pool above zero, with no pool at zero, makes nothing.
     let (rows, _) = run(true, Some(RenderProfile::Stock), one_pool, &down(10, 3), None, 30);
     assert!(rows.iter().all(Vec::is_empty));
+}
+
+#[test]
+fn no_bands_while_the_view_shows_the_craft_cloaked_and_they_come_back_if_the_pool_is_still_at_zero() {
+    // Cloaked from tick 20 to 29 (the view's flag), the pool at zero from 10 to 39; the craft stays visible to the viewer.
+    fn cloaked(tick: u64) -> bool {
+        (20..30).contains(&tick)
+    }
+    let (rows, _, shown) = run_cloak(true, Some(RenderProfile::Stock), one_pool, cloaked, &down(10, 1), None, 60);
+    // Shown before the cloak, hidden (not ended) while cloaked, shown again after, gone with the pool.
+    assert_eq!(shown[16], Some(true));
+    assert!(shown[22..27].iter().all(|s| *s == Some(false)), "{:?}", &shown[22..27]);
+    assert!(rows[22..27].iter().all(|r| r == &[2]), "the effect is hidden, not ended");
+    assert_eq!(shown[33], Some(true), "back after the decloak with the pool still at zero");
+    assert!(shown[45..].iter().all(Option::is_none));
+    // Under the Remaster look nothing of this exists (its shell is drawn as before).
+    let (rows, shells, _) = run_cloak(true, Some(RenderProfile::Refit), one_pool, cloaked, &down(10, 1), None, 60);
+    assert!(rows.iter().all(Vec::is_empty));
+    assert_eq!(shells, 1);
+    assert!(hidden_by_cloak(true) && !hidden_by_cloak(false));
 }
 
 #[test]
