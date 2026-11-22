@@ -28,7 +28,8 @@ use bevy::time::Real;
 use bevy::window::PrimaryWindow;
 use sta_sim::{PlayerId, SimEvent, UnitView};
 
-use super::sprite_font::{SpriteText, SpriteTextStyle, sprite_text_styled};
+use super::sprite_font::{SpriteText, SpriteTextStyle, StockRoleMark, sprite_text_styled};
+use super::stock_font::StockRole;
 pub use super::stock_tooltip::TipDelays;
 use super::stock_tooltip::{TipStock, load_tip_delays, stock_tip_box};
 use super::theme::Theme;
@@ -550,7 +551,9 @@ fn draw_notices(
             commands.entity(root).with_child((
                 Node { padding: UiRect::axes(Val::Px(theme.pad), Val::Px(2.0)), max_width: Val::Percent(NOTICE_WIDTH_PCT), ..default() },
                 BackgroundColor(theme.panel.with_alpha(0.6)),
-                children![(NoticeLine(i), sprite_text_styled(a.shown(), theme.text_size, colour(&theme, a.severity), SpriteTextStyle::role(super::theme::font_role(&theme, theme.text_size)).wrap_to_parent()))],
+                // Notices are the title role of the stock font rule (read from the executable, static); their
+                // placement is not established, so only the font is taken.
+                children![(NoticeLine(i), StockRoleMark::new(StockRole::Title), sprite_text_styled(a.shown(), theme.text_size, colour(&theme, a.severity), SpriteTextStyle::role(super::theme::font_role(&theme, theme.text_size)).wrap_to_parent()))],
             ));
         }
         return;
@@ -1313,6 +1316,9 @@ mod tests {
         assert_eq!(notice_root.row_gap, Val::Px(new_theme.gap * 0.5));
         let lines = app.world_mut().query_filtered::<&SpriteText, With<NoticeLine>>().iter(app.world()).map(|t| (t.text.clone(), t.color)).collect::<Vec<_>>();
         assert_eq!(lines, vec![("Shields low".to_owned(), new_theme.warn)]);
+        // Notices are the title role of the stock font rule (the text takes it only under the stock gate).
+        let roles = app.world_mut().query_filtered::<&StockRoleMark, With<NoticeLine>>().iter(app.world()).map(|m| m.role).collect::<Vec<_>>();
+        assert_eq!(roles, vec![Some(StockRole::Title)]);
     }
 
     #[test]
