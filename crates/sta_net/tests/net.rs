@@ -1505,15 +1505,22 @@ fn close_where(r: &Relay, what: &str, pred: impl Fn(&CloseRecord) -> bool) -> Cl
 #[test]
 fn a_zero_or_oversized_length_prefix_is_recorded_with_its_value() {
     let r = relay();
-    let mut s = raw(r.local_addr());
+    let (_host, code) = open_room(r.local_addr());
+    let mut s = raw_join(r.local_addr(), code);
     s.write_all(&0u32.to_le_bytes()).unwrap();
     let c = close_where(&r, "the zero length", |c| c.cause == CloseCause::BadLength(0));
-    assert_eq!(c.seat, None);
+    assert_eq!(c.seat, Some(1));
     assert_eq!(c.unparsed, 4);
     let big = MAX_ENVELOPE_BYTES + 1;
-    let mut s = raw(r.local_addr());
+    let mut s = raw_join(r.local_addr(), code);
     s.write_all(&(big as u32).to_le_bytes()).unwrap();
     close_where(&r, "the oversized length", |c| c.cause == CloseCause::BadLength(big));
+    // Before a seat they are only counted.
+    for len in [0u32, big as u32] {
+        let mut s = raw(r.local_addr());
+        s.write_all(&len.to_le_bytes()).unwrap();
+    }
+    wait_until(SHORT, "the counts", || r.unseated().malformed == 2);
 }
 
 #[test]
@@ -1521,17 +1528,21 @@ fn an_envelope_that_does_not_decode_is_recorded_with_the_decoders_text() {
     let r = relay();
     let mut s = raw(r.local_addr());
     s.write_all(&envelope(&[0xEE, 1, 2, 3])).unwrap();
+    wait_until(SHORT, "the count", || r.unseated().malformed == 1);
+    // From a seated client: an unknown kind, and a bad frame inside a data
+    // envelope.
+    let (_host, code) = open_room(r.local_addr());
+    let mut s = raw_join(r.local_addr(), code);
+    s.write_all(&envelope(&[0xEE, 1, 2, 3])).unwrap();
     let c = close_where(&r, "the decode failure", |c| {
         matches!(c.cause, CloseCause::DecodeFailed(_))
     });
     let CloseCause::DecodeFailed(text) = &c.cause else { unreachable!() };
     assert!(text.contains("kind"), "{text}");
-    // A bad frame inside a data envelope, from a seated client.
-    let (_host, code) = open_room(r.local_addr());
     let mut s = raw_join(r.local_addr(), code);
     s.write_all(&envelope(&[3, 0xFF])).unwrap();
     let c = close_where(&r, "the bad frame", |c| {
-        c.seat == Some(1) && matches!(c.cause, CloseCause::DecodeFailed(_))
+        c.seat == Some(1) && matches!(&c.cause, CloseCause::DecodeFailed(t) if t.contains("frame"))
     });
     assert_eq!(c.unparsed, 0);
 }
@@ -1566,9 +1577,7 @@ fn protocol_misuse_is_recorded_by_kind() {
     // Not a create or join first.
     let mut s = raw(r.local_addr());
     s.write_all(&envelope(&[4])).unwrap();
-    close_where(&r, "a keepalive first", |c| {
-        c.cause == CloseCause::Misuse(Misuse::NotOpenOrJoin)
-    });
+    wait_until(SHORT, "a keepalive first to be counted", || r.unseated().malformed == 1);
     // Create twice.
     let mut s = raw(r.local_addr());
     let create = ClientMsg::Create { password: vec![] }.encode().unwrap();
@@ -1604,6 +1613,10 @@ fn leaving_a_kick_and_a_refusal_are_recorded() {
 fn refused_and_dropped_before_a_seat_are_counted_and_summarised_not_logged_each() {
     let (mut r, lines) = relay_logging(RelayConfig {
         max_connections_per_ip: 1,
+        // The keeper never sends a request: no handshake deadline may close
+        // it on a slow runner and free the slot.
+        handshake_timeout: Duration::from_secs(3600),
+        idle_timeout: Duration::from_secs(3600),
         // No periodic summary mid-test, however slow the runner: the one
         // line comes with the shutdown.
         log_summary_every: Duration::from_secs(3600),
@@ -1617,7 +1630,7 @@ fn refused_and_dropped_before_a_seat_are_counted_and_summarised_not_logged_each(
         password: vec![],
     };
     s.write_all(&m.encode().unwrap()).unwrap();
-    wait_until(SHORT, "the refusal", || r.unseated_pending() == 1);
+    wait_until(SHORT, "the refusal", || r.unseated().join_refused == 1);
     wait_until(SHORT, "the slot to be free", || r.connections() == 0);
     // One admitted connection now holds the only slot.
     let _keep = raw(r.local_addr());
@@ -1628,9 +1641,9 @@ fn refused_and_dropped_before_a_seat_are_counted_and_summarised_not_logged_each(
         for _ in 0..50 {
             drop(TcpStream::connect(r.local_addr()).unwrap());
         }
-        wait_until(SHORT, "the batch to be counted", || r.unseated_pending() > batch * 50);
+        wait_until(SHORT, "the batch to be counted", || r.unseated().total() > batch * 50);
     }
-    assert_eq!(r.unseated_pending(), 1001);
+    assert_eq!(r.unseated().total(), 1001);
     assert!(lines.lock().unwrap().is_empty(), "{:?}", lines.lock().unwrap());
     // Not kept in the bounded list either: they would push out real records.
     assert!(r.closes().is_empty());
@@ -1685,7 +1698,7 @@ fn the_deadlines_are_recorded() {
         ..fast_cfg()
     });
     let _silent = raw(r.local_addr());
-    close_where(&r, "the handshake deadline", |c| c.cause == CloseCause::HandshakeTimeout);
+    wait_until(SHORT, "the handshake deadline", || r.unseated().deadline == 1);
     let (_host, code) = open_room(r.local_addr());
     let mut s = raw_join(r.local_addr(), code);
     s.write_all(&[9, 0]).unwrap();
@@ -1723,18 +1736,24 @@ fn the_close_records_can_be_read_while_connections_come_and_go() {
         })
     };
     let addr = r.local_addr();
+    let (_host, code) = open_room(addr);
+    // Seated connections one after the other (the next one joins once the
+    // last seat is free again).
+    let one = |r: &Relay| {
+        drop(raw_join(addr, code));
+        wait_until(SHORT, "the seat to be released", || r.connections() == 1);
+    };
     for _ in 0..(CLOSE_LOG / 2) {
-        drop(raw(addr));
+        one(&r);
     }
     wait_until(SHORT, "the records", || r.closes().len() == CLOSE_LOG / 2);
     stop.store(true, Ordering::SeqCst);
     assert!(reader.join().unwrap() <= CLOSE_LOG);
     // Never more than the bound, however many connections ended.
     for _ in 0..CLOSE_LOG {
-        drop(raw(addr));
+        one(&r);
     }
     wait_until(SHORT, "the log to fill", || r.closes().len() == CLOSE_LOG);
-    wait_until(SHORT, "the connections to be released", || r.connections() == 0);
     assert_eq!(r.closes().len(), CLOSE_LOG);
 }
 
@@ -1756,4 +1775,67 @@ fn the_refusal_summary_is_logged_periodically_while_the_count_is_nonzero() {
     thread::sleep(Duration::from_millis(500));
     let n = lines.lock().unwrap().len();
     assert!(n <= 5, "{n} lines for 5 attempts");
+}
+
+#[test]
+fn closes_before_a_seat_cannot_push_out_the_records_of_seated_connections() {
+    let r = relay();
+    let (_host, code) = open_room(r.local_addr());
+    let mut s = raw_join(r.local_addr(), code);
+    s.write_all(&ClientMsg::Leave.encode().unwrap()).unwrap();
+    close_where(&r, "the leave", |c| c.cause == CloseCause::ClientLeft);
+    // Far more garbage connections than the list holds.
+    let n = CLOSE_LOG as u64 * 2;
+    for batch in 1..=4u64 {
+        for _ in 0..n / 4 {
+            let mut g = raw(r.local_addr());
+            g.write_all(&envelope(&[0xEE])).unwrap();
+        }
+        wait_until(SHORT, "the garbage to be counted", || r.unseated().malformed >= batch * n / 4);
+    }
+    assert_eq!(r.unseated().malformed, n);
+    assert!(r.closes().iter().any(|c| c.cause == CloseCause::ClientLeft));
+    assert!(r.closes().iter().all(|c| c.seat.is_some()), "{:?}", r.closes());
+}
+
+#[test]
+fn a_blocked_log_cannot_hang_the_shutdown_or_cost_more_than_one_thread() {
+    let release = Arc::new(AtomicBool::new(false));
+    let calls = Arc::new(AtomicU64::new(0));
+    let (rel, n) = (release.clone(), calls.clone());
+    let sink: LogSink = Arc::new(move |_| {
+        n.fetch_add(1, Ordering::SeqCst);
+        let end = Instant::now() + Duration::from_secs(30);
+        while !rel.load(Ordering::SeqCst) && Instant::now() < end {
+            thread::sleep(Duration::from_millis(2));
+        }
+    });
+    let mut r = Relay::bind_with_log(
+        "127.0.0.1:0",
+        RelayConfig {
+            log_summary_every: Duration::from_millis(50),
+            max_connections: 0,
+            ..RelayConfig::default()
+        },
+        sink,
+    )
+    .unwrap();
+    for _ in 0..10 {
+        drop(TcpStream::connect(r.local_addr()).unwrap());
+    }
+    wait_until(SHORT, "the summary thread to enter the sink", || {
+        calls.load(Ordering::SeqCst) == 1
+    });
+    // More refusals while it is blocked: still one call, no new thread.
+    for _ in 0..10 {
+        drop(TcpStream::connect(r.local_addr()).unwrap());
+    }
+    thread::sleep(Duration::from_millis(300));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    // Accepting goes on and the shutdown returns (it lets the blocked
+    // thread go after about a second).
+    let t = Instant::now();
+    r.shutdown();
+    assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
+    release.store(true, Ordering::SeqCst);
 }

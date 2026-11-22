@@ -22,7 +22,7 @@ use std::io::{ErrorKind, Write};
 use std::net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -76,7 +76,8 @@ pub struct RelayConfig {
     /// it is cut off.
     pub throttle_limit: Duration,
     /// At most one summary line of the connections refused or dropped before
-    /// a seat per this interval (they are not logged one by one).
+    /// a seat per this interval, from one thread for the relay's life (they
+    /// are not logged one by one).
     pub log_summary_every: Duration,
 }
 
@@ -372,9 +373,60 @@ struct Shared {
     started: Instant,
     closes: Mutex<CloseLog>,
     sink: LogSink,
-    /// Connections ended before a seat that are only counted (one summary
-    /// line per interval, not a line each: their rate is the peer's).
+    /// Connections ended before a seat, counted by kind (one summary line per
+    /// interval, not a line each: their rate is the peer's).
     unseated: Unseated,
+    /// What the last summary covered.
+    summary: Mutex<SummaryState>,
+    /// Set (with a wake-up) to stop the summary thread.
+    quit: Mutex<bool>,
+    wake: Condvar,
+}
+
+/// Connections that ended before they held a seat, by kind, counted from the
+/// start of the relay. Routine ends (the client closing without a request,
+/// the relay shutting down) are not counted.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct UnseatedCounts {
+    /// Not admitted: a connection limit was reached.
+    pub limit: u64,
+    /// Refused at join or create (full room, wrong password, no such room).
+    pub join_refused: u64,
+    /// Refused because of the failed-join rate limit.
+    pub rate_limited: u64,
+    /// A bad length prefix, an envelope that did not decode, or a request
+    /// the client may not make.
+    pub malformed: u64,
+    /// The handshake, half-sent envelope or idle deadline.
+    pub deadline: u64,
+    /// A read or write that failed or timed out.
+    pub io_error: u64,
+    /// Anything else (socket setup failed, ...).
+    pub other: u64,
+}
+
+impl UnseatedCounts {
+    pub fn total(&self) -> u64 {
+        self.limit
+            + self.join_refused
+            + self.rate_limited
+            + self.malformed
+            + self.deadline
+            + self.io_error
+            + self.other
+    }
+
+    fn since(&self, earlier: &UnseatedCounts) -> UnseatedCounts {
+        UnseatedCounts {
+            limit: self.limit - earlier.limit,
+            join_refused: self.join_refused - earlier.join_refused,
+            rate_limited: self.rate_limited - earlier.rate_limited,
+            malformed: self.malformed - earlier.malformed,
+            deadline: self.deadline - earlier.deadline,
+            io_error: self.io_error - earlier.io_error,
+            other: self.other - earlier.other,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -382,7 +434,51 @@ struct Unseated {
     limit: AtomicU64,
     join_refused: AtomicU64,
     rate_limited: AtomicU64,
+    malformed: AtomicU64,
+    deadline: AtomicU64,
+    io_error: AtomicU64,
     other: AtomicU64,
+}
+
+struct SummaryState {
+    at: Instant,
+    reported: UnseatedCounts,
+}
+
+impl Unseated {
+    fn load(&self) -> UnseatedCounts {
+        let l = |c: &AtomicU64| c.load(Ordering::Relaxed);
+        UnseatedCounts {
+            limit: l(&self.limit),
+            join_refused: l(&self.join_refused),
+            rate_limited: l(&self.rate_limited),
+            malformed: l(&self.malformed),
+            deadline: l(&self.deadline),
+            io_error: l(&self.io_error),
+            other: l(&self.other),
+        }
+    }
+
+    /// Counts a close before a seat; routine ends are not counted.
+    fn count(&self, cause: &CloseCause) {
+        let c = match cause {
+            CloseCause::NotAdmitted => &self.limit,
+            CloseCause::Refused(RefuseReason::RateLimited) => &self.rate_limited,
+            CloseCause::Refused(_) => &self.join_refused,
+            CloseCause::BadLength(_) | CloseCause::DecodeFailed(_) | CloseCause::Misuse(_) => {
+                &self.malformed
+            }
+            CloseCause::HandshakeTimeout | CloseCause::FrameTimeout | CloseCause::IdleTimeout => {
+                &self.deadline
+            }
+            CloseCause::ReadFailed { .. }
+            | CloseCause::WriteFailed { .. }
+            | CloseCause::WriteTimeout => &self.io_error,
+            CloseCause::ClientClosed | CloseCause::ClientLeft | CloseCause::RelayShutdown => return,
+            _ => &self.other,
+        };
+        c.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 impl Shared {
@@ -391,62 +487,69 @@ impl Shared {
     /// departure marker or release its connection count. Never panics,
     /// whatever the locks' state.
     ///
-    /// A connection refused at the limit or at join (rate limiting included)
-    /// is counted and summarised, and not kept in the bounded list, where a
-    /// flood of them would push out the records that matter. Other
-    /// connections that end before a seat are kept but also only counted for
-    /// the log.
+    /// Only the records of connections that held a seat go into the bounded
+    /// list and the log, one line each. Every close before a seat (refusals,
+    /// garbage, deadlines) is only counted by kind and summarised, so a flood
+    /// of them can neither flood the log nor push out the seated records.
     fn record(&self, r: CloseRecord) {
-        let u = &self.unseated;
-        match r.cause {
-            CloseCause::NotAdmitted => {
-                u.limit.fetch_add(1, Ordering::Relaxed);
-                return;
-            }
-            CloseCause::Refused(RefuseReason::RateLimited) => {
-                u.rate_limited.fetch_add(1, Ordering::Relaxed);
-                return;
-            }
-            CloseCause::Refused(_) => {
-                u.join_refused.fetch_add(1, Ordering::Relaxed);
-                return;
-            }
-            _ => {}
+        if r.seat.is_none() {
+            self.unseated.count(&r.cause);
+            return;
         }
-        let loud = !r.cause.is_routine() || (r.cause == CloseCause::ClientClosed && r.unparsed > 0);
-        if loud && r.seat.is_none() {
-            u.other.fetch_add(1, Ordering::Relaxed);
-        } else if loud {
+        if !r.cause.is_routine() || (r.cause == CloseCause::ClientClosed && r.unparsed > 0) {
             (self.sink)(&format!("relay: {r}"));
         }
         self.closes.lock().unwrap_or_else(PoisonError::into_inner).push(r);
     }
 
-    /// Logs and resets the counts of connections refused or dropped before a
-    /// seat, if there are any.
-    fn summarise(&self, window: Duration) {
-        let u = &self.unseated;
-        let (a, b, c, d) = (
-            u.limit.swap(0, Ordering::Relaxed),
-            u.join_refused.swap(0, Ordering::Relaxed),
-            u.rate_limited.swap(0, Ordering::Relaxed),
-            u.other.swap(0, Ordering::Relaxed),
-        );
-        if a + b + c + d > 0 {
+    /// Logs the closes before a seat since the last summary, if there were
+    /// any, with the time that summary covers.
+    fn summarise(&self) {
+        let (new, window) = {
+            let mut st = self.summary.lock().unwrap_or_else(PoisonError::into_inner);
+            let now = self.unseated.load();
+            let new = now.since(&st.reported);
+            let window = st.at.elapsed();
+            st.reported = now;
+            st.at = Instant::now();
+            (new, window)
+        };
+        if new.total() > 0 {
             (self.sink)(&format!(
-                "relay: {} connections refused or dropped before a seat within the last {} s (limit: {a}, join refused: {b}, rate-limited: {c}, other: {d})",
-                a + b + c + d,
-                window.as_secs().max(1)
+                "relay: {} connections refused or dropped before a seat in the last {:.1} s (limit: {}, join refused: {}, rate-limited: {}, malformed: {}, deadline: {}, io error: {}, other: {})",
+                new.total(),
+                window.as_secs_f64(),
+                new.limit,
+                new.join_refused,
+                new.rate_limited,
+                new.malformed,
+                new.deadline,
+                new.io_error,
+                new.other
             ));
         }
     }
+}
 
-    fn unseated_pending(&self) -> u64 {
-        let u = &self.unseated;
-        [&u.limit, &u.join_refused, &u.rate_limited, &u.other]
-            .iter()
-            .map(|c| c.load(Ordering::Relaxed))
-            .sum()
+/// The summary thread: one for the relay's life. Wakes every `every`, and
+/// once more when told to stop.
+fn summary_loop(shared: &Shared) {
+    let every = shared.cfg.log_summary_every.max(Duration::from_millis(50));
+    let mut quit = shared.quit.lock().unwrap_or_else(PoisonError::into_inner);
+    loop {
+        let (q, _) = shared
+            .wake
+            .wait_timeout_while(quit, every, |q| !*q)
+            .unwrap_or_else(PoisonError::into_inner);
+        quit = q;
+        let stopping = *quit;
+        // Never log with the lock held: the sink may block.
+        drop(quit);
+        shared.summarise();
+        if stopping {
+            return;
+        }
+        quit = shared.quit.lock().unwrap_or_else(PoisonError::into_inner);
     }
 }
 
@@ -459,6 +562,7 @@ pub struct Relay {
     shared: Arc<Shared>,
     addr: SocketAddr,
     accept: Option<JoinHandle<()>>,
+    summary: Option<JoinHandle<()>>,
 }
 
 impl Relay {
@@ -485,15 +589,26 @@ impl Relay {
             closes: Mutex::new(CloseLog::default()),
             sink,
             unseated: Unseated::default(),
+            summary: Mutex::new(SummaryState {
+                at: Instant::now(),
+                reported: UnseatedCounts::default(),
+            }),
+            quit: Mutex::new(false),
+            wake: Condvar::new(),
         });
         let s = shared.clone();
         let accept = thread::Builder::new()
             .name("relay-accept".into())
             .spawn(move || accept_loop(&listener, &s))?;
+        let s = shared.clone();
+        let summary = thread::Builder::new()
+            .name("relay-log".into())
+            .spawn(move || summary_loop(&s));
         Ok(Relay {
             shared,
             addr,
             accept: Some(accept),
+            summary: summary.ok(),
         })
     }
 
@@ -516,10 +631,10 @@ impl Relay {
         self.close_log().snapshot()
     }
 
-    /// Connections refused at the limit or at join, or dropped before a seat,
-    /// not yet in a logged summary.
-    pub fn unseated_pending(&self) -> u64 {
-        self.shared.unseated_pending()
+    /// Connections that ended before a seat, by kind, since the relay
+    /// started (they are not in [`Relay::closes`]).
+    pub fn unseated(&self) -> UnseatedCounts {
+        self.shared.unseated.load()
     }
 
     /// A handle on the close records that outlives borrowing the relay.
@@ -533,7 +648,21 @@ impl Relay {
         self.shared.stop.store(true, Ordering::SeqCst);
         if let Some(h) = self.accept.take() {
             let _ = h.join();
-            self.shared.summarise(self.shared.cfg.log_summary_every);
+        }
+        if let Some(h) = self.summary.take() {
+            // The summary thread logs a last summary and ends. If the log
+            // sink blocks, that is the one thread that blocks: shutdown waits
+            // for it up to a second and then lets it go (it ends when the
+            // sink returns; it holds nothing else).
+            *self.shared.quit.lock().unwrap_or_else(PoisonError::into_inner) = true;
+            self.shared.wake.notify_all();
+            let end = Instant::now() + Duration::from_secs(1);
+            while !h.is_finished() && Instant::now() < end {
+                thread::sleep(Duration::from_millis(2));
+            }
+            if h.is_finished() {
+                let _ = h.join();
+            }
         }
     }
 }
@@ -562,19 +691,10 @@ fn prune(st: &mut State, cfg: &RelayConfig) {
 
 fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>) {
     let mut last_prune = Instant::now();
-    let mut last_summary = Instant::now();
     while !shared.stop.load(Ordering::SeqCst) {
         if last_prune.elapsed() > Duration::from_secs(5) {
             last_prune = Instant::now();
             prune(&mut lock(&shared.state), &shared.cfg);
-        }
-        if last_summary.elapsed() >= shared.cfg.log_summary_every && shared.unseated_pending() > 0 {
-            last_summary = Instant::now();
-            // On a thread of its own: a blocked log must not stop accepts.
-            let s = shared.clone();
-            let _ = thread::Builder::new()
-                .name("relay-log".into())
-                .spawn(move || s.summarise(s.cfg.log_summary_every));
         }
         match listener.accept() {
             Ok((stream, peer)) => {
@@ -1300,7 +1420,7 @@ mod tests {
         CloseRecord {
             conn,
             ip: IpAddr::from([127, 0, 0, 1]),
-            seat: None,
+            seat: Some(1),
             cause: CloseCause::ClientClosed,
             lived: Duration::ZERO,
             at: Duration::ZERO,
