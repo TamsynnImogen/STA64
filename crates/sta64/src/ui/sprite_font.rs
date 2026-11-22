@@ -1104,6 +1104,59 @@ impl SpriteTextStyle {
     }
 }
 
+/// A text of the stock HUD's font rule, by role: the text takes the rule only while the one stock
+/// gate ([`stock_tip`](crate::ui::stock_tooltip::stock_tip): the Armada II look, the install's stock
+/// font rule, a stock HUD on screen) holds; otherwise it keeps the style it was spawned with. The
+/// optional placement is `(horizontal, vertical, rectangle in the sheet's units)` and applies on the
+/// stock path only. Grade: the roles read from the executable, static; the placements measured on
+/// native frames (see [`StockPlace`](crate::ui::stock_font::StockPlace)).
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct StockRoleMark {
+    /// `None`: a text whose role is not established; it keeps its own font.
+    pub role: Option<StockRole>,
+    pub place: Option<(HAlign, VAlign, Vec2)>,
+}
+
+impl StockRoleMark {
+    pub fn new(role: StockRole) -> Self {
+        Self { role: Some(role), place: None }
+    }
+
+    /// A text of a role the rule does not cover (it keeps today's path).
+    pub fn none() -> Self {
+        Self { role: None, place: None }
+    }
+
+    /// The same text placed in a rectangle of the sheet (`x y w h`, only its size is used).
+    pub fn placed(role: StockRole, h: HAlign, v: VAlign, rect: [f32; 4]) -> Self {
+        Self { role: Some(role), place: Some((h, v, Vec2::new(rect[2], rect[3]))) }
+    }
+}
+
+/// Switch every [`StockRoleMark`] text to the stock rule while the gate holds, and back when not.
+fn apply_stock_roles(
+    profile: Option<Res<crate::ui::profile::UiProfile>>,
+    fonts: Res<SpriteFonts>,
+    canvas: Option<Res<StockTextCanvas>>,
+    mut texts: Query<(&StockRoleMark, &mut SpriteTextStyle)>,
+) {
+    let on = crate::ui::stock_tooltip::stock_tip(profile.as_deref(), Some(&fonts), canvas.as_deref());
+    let units = canvas.as_deref().and_then(|c| c.0).map(|c| c.hud / crate::ui::stock_font::STOCK_SPACE);
+    for (mark, mut style) in &mut texts {
+        let role = on.then_some(mark.role).flatten();
+        let place = match (on, mark.place, units) {
+            (true, Some((h, v, rect)), Some(k)) if mark.role.is_some() => Some(StockPlace { h, v, rect: rect * k }),
+            _ => None,
+        };
+        if style.stock != role {
+            style.stock = role;
+        }
+        if style.place != place {
+            style.place = place;
+        }
+    }
+}
+
 /// What a [`SpriteText`] was last laid out as: a change of colour alone (a fade) then
 /// recolours the glyphs instead of laying the text out again.
 #[derive(Component, Clone, Debug)]
@@ -1566,7 +1619,7 @@ impl Plugin for SpriteFontPlugin {
             .add_systems(Update, fit_wrap)
             .add_systems(
                 PostUpdate,
-                (load_fonts, load_glyph_words, resolve_text)
+                (load_fonts, load_glyph_words, apply_stock_roles, resolve_text)
                     .chain()
                     .before(bevy::ui::UiSystems::Prepare)
                     .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
@@ -3254,5 +3307,101 @@ mod tests {
         assert_eq!(kids(a).len(), kids(b).len());
         assert_eq!(app.world().get::<Node>(a).unwrap().top, app.world().get::<Node>(b).unwrap().top);
         assert_eq!(app.world().get::<Node>(a).unwrap().position_type, PositionType::Relative);
+    }
+
+    fn role_app(fonts: SpriteFonts, canvas: StockTextCanvas, profile: crate::ui::profile::UiProfile) -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<GlyphWords>()
+            .insert_resource(fonts)
+            .insert_resource(canvas)
+            .insert_resource(profile)
+            .add_systems(Update, (apply_stock_roles, resolve_text).chain());
+        app
+    }
+
+    fn first_image(app: &App, e: Entity) -> Handle<Image> {
+        app.world().get::<ImageNode>(app.world().get::<Children>(e).unwrap()[0]).unwrap().image.clone()
+    }
+
+    /// Marked texts take the rule of their role (the same font and sampler the HUD's roles get) at
+    /// two window widths, and only while the one stock gate holds.
+    #[test]
+    fn marked_texts_take_their_roles_font_and_filter_at_two_widths() {
+        use crate::ui::hud::stock::layout::HudFit::{Centred, Stretched};
+        use crate::ui::profile::UiProfile;
+        for (hud, window, fit) in [
+            (Vec2::new(1600.0, 1200.0), Vec2::new(1600.0, 1200.0), Centred),
+            (Vec2::new(1280.0, 720.0), Vec2::new(1280.0, 720.0), Stretched),
+        ] {
+            let mut images = Assets::<Image>::default();
+            let fonts = authored_family(&mut images);
+            let c = canvas(hud, window, fit);
+            let want = |role| {
+                let (f, ch, _) = fonts.stock_choice(role, &c, 1.0).unwrap();
+                f.image(0, ch.filter).unwrap().clone()
+            };
+            let (title_want, default_want) = (want(StockRole::Title), want(StockRole::Default));
+            assert_ne!(title_want, default_want);
+            let mut app = role_app(fonts, c, UiProfile::Armada2);
+            let spawn = |app: &mut App, role: Option<StockRole>| {
+                let mark = role.map_or_else(StockRoleMark::none, StockRoleMark::new);
+                app.world_mut().spawn((mark, sprite_text_styled("ab", 18.0, Color::WHITE, SpriteTextStyle::default()))).id()
+            };
+            let (title, default, none) = (spawn(&mut app, Some(StockRole::Title)), spawn(&mut app, Some(StockRole::Default)), spawn(&mut app, None));
+            app.update();
+            assert_eq!(first_image(&app, title), title_want, "{hud}");
+            assert_eq!(first_image(&app, default), default_want, "{hud}");
+            assert_eq!(app.world().get::<SpriteTextStyle>(title).unwrap().stock, Some(StockRole::Title));
+            assert_eq!(app.world().get::<SpriteTextStyle>(none).unwrap().stock, None, "a text without a role keeps its path");
+        }
+    }
+
+    /// Outside the gate (STA64's own look, Fleet Operations' look, an install without the rule, no
+    /// HUD on screen) the marked texts keep the plain path of the style they were spawned with.
+    #[test]
+    fn marked_texts_keep_their_path_outside_the_stock_gate() {
+        use crate::ui::hud::stock::layout::HudFit::Centred;
+        use crate::ui::profile::UiProfile;
+        let sq = Vec2::new(1600.0, 1200.0);
+        let spawn_plain = |app: &mut App, marked: bool| {
+            let text = sprite_text_styled("ab", 18.0, Color::WHITE, SpriteTextStyle::default());
+            if marked { app.world_mut().spawn((StockRoleMark::placed(StockRole::Title, HAlign::Left, VAlign::Top, [0.0, 0.0, 50.0, 20.0]), text)).id() } else { app.world_mut().spawn(text).id() }
+        };
+        let cases: [(UiProfile, bool, bool); 4] = [
+            (UiProfile::Lcars, true, true),
+            (UiProfile::FleetOps, true, true),
+            (UiProfile::Armada2, false, true),
+            (UiProfile::Armada2, true, false),
+        ];
+        for (profile, family, hud) in cases {
+            let mut images = Assets::<Image>::default();
+            let mut fonts = authored_family(&mut images);
+            fonts.stock_family = family;
+            let canvas = if hud { canvas(sq, sq, Centred) } else { StockTextCanvas::default() };
+            let mut app = role_app(fonts, canvas, profile);
+            let (marked, plain) = (spawn_plain(&mut app, true), spawn_plain(&mut app, false));
+            app.update();
+            let style = app.world().get::<SpriteTextStyle>(marked).unwrap();
+            assert_eq!((style.stock, style.place), (None, None), "{profile:?} {family} {hud}");
+            let nodes = |e: Entity| -> Vec<Node> { app.world().get::<Children>(e).unwrap().iter().map(|k| app.world().get::<Node>(k).unwrap().clone()).collect() };
+            assert_eq!(nodes(marked), nodes(plain), "{profile:?} {family} {hud}");
+            assert_eq!(app.world().get::<Node>(marked).unwrap().position_type, PositionType::Relative);
+        }
+    }
+
+    /// The placement of a marked text is its sheet rectangle scaled to the HUD, on the stock path only.
+    #[test]
+    fn a_marked_placement_scales_its_sheet_rectangle_to_the_hud() {
+        use crate::ui::hud::stock::layout::HudFit::Centred;
+        use crate::ui::profile::UiProfile;
+        let mut images = Assets::<Image>::default();
+        let fonts = authored_family(&mut images);
+        let mut app = role_app(fonts, canvas(Vec2::new(1920.0, 1440.0), Vec2::new(3440.0, 1440.0), Centred), UiProfile::Armada2);
+        let e = app.world_mut().spawn((StockRoleMark::placed(StockRole::Title, HAlign::Centre, VAlign::Centre, [10.0, 20.0, 360.0, 40.0]), sprite_text_styled("ab", 18.0, Color::WHITE, SpriteTextStyle::default()))).id();
+        app.update();
+        let place = app.world().get::<SpriteTextStyle>(e).unwrap().place.unwrap();
+        assert_eq!((place.h, place.v), (HAlign::Centre, VAlign::Centre));
+        assert!((place.rect - Vec2::new(432.0, 48.0)).abs().max_element() < 1e-3, "{:?}", place.rect);
     }
 }
