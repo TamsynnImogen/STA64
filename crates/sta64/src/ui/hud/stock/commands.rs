@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::{log::warn, prelude::Color};
 use sta_assets::a2fmt::odf::Odf;
-use sta_content::OdfIndex;
+use sta_content::{OdfIndex, Profile};
 use sta_vfs::Vfs;
 
 #[derive(Clone, Debug, Default)]
@@ -15,13 +15,14 @@ pub struct NativeCommands {
     pub groups: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct NativeCommand {
     pub odf: String,
     pub command: String,
     pub button: String,
     pub preferred: Option<[usize; 2]>,
     pub menu: Option<String>,
+    pub source: Vec<String>,
     pub tooltip: Option<String>,
     pub verbose: Option<String>,
     pub normal: Option<Color>,
@@ -110,8 +111,11 @@ impl NativeCommands {
         for warning in warnings {
             warn!("stock HUD command ODF index: {warning}");
         }
-        let resolve =
-            |name: &str| Odf::load_layered(name, |n, version| index.load(vfs, n, version).map(String::into_bytes)).ok();
+        let a2_first = Profile::detect(vfs) == Profile::Sta2Classic;
+        let resolve = |name: &str| {
+            let fetch = |n: &str, version| index.load(vfs, n, version).map(String::into_bytes);
+            if a2_first { Odf::load_layered_first(name, fetch) } else { Odf::load_layered(name, fetch) }.ok()
+        };
         let mut names = Vec::new();
         if let Some(all) = resolve("allcommands.odf") {
             names.extend(all.get_strs("commandNames").into_iter().map(str::to_owned));
@@ -149,8 +153,9 @@ impl NativeCommands {
                     button: clean_str(&odf, "buttonName").unwrap_or_else(|| key.clone()),
                     preferred: preferred(&odf),
                     menu,
-                    tooltip: clean_str(&odf, "tooltip"),
-                    verbose: clean_str(&odf, "verbose"),
+                    source: odf.get_strs("source").into_iter().map(str::to_ascii_lowercase).collect(),
+                    tooltip: odf.get_str("tooltip").map(str::to_owned),
+                    verbose: odf.get_str("verbose").or_else(|| odf.get_str("verboseTooltip")).map(str::to_owned),
                     normal: colour(&odf, "colorNormal"),
                     hovered: colour(&odf, "colorMouseOver"),
                     pressed: colour(&odf, "colorPressed"),
@@ -281,6 +286,35 @@ mod tests {
         assert_eq!(recrew.tooltip.as_deref(), Some("GUI_CP_RECREW_TOOLTIP"));
         assert_eq!(recrew.verbose.as_deref(), Some("GUI_CP_RECREW_VTOOLTIP"));
         assert_eq!(recrew.menu.as_deref(), Some("Orders"));
+    }
+
+    #[test]
+    fn command_tooltips_keep_empty_values_and_accept_verbose_tooltip_alias() {
+        let install = Install::new("tooltip_alias");
+        install.file("Data/odf/commands/allcommands.odf", "commandNames = \"stop\" \"attack\"\n")
+            .file("Data/odf/commands/stop.odf", "commandName = \"STOP\"\ntooltip = \"\"\nverboseTooltip = \"GUI_STOP_DETAILS\"\n")
+            .file("Data/odf/commands/attack.odf", "commandName = \"ATTACK\"\nverbose = \"\"\nverboseTooltip = \"IGNORED_ALIAS\"\n");
+        let loaded = NativeCommands::load(&install.mount(None));
+        let stop = loaded.get("stop").unwrap();
+        assert_eq!(stop.tooltip.as_deref(), Some(""));
+        assert_eq!(stop.verbose.as_deref(), Some("GUI_STOP_DETAILS"));
+        let attack = loaded.get("attack").unwrap();
+        assert_eq!(attack.tooltip, None);
+        assert_eq!(attack.verbose.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn a2_command_duplicates_keep_first_while_fo_keeps_last() {
+        let a2 = Install::new("a2_duplicate");
+        a2.file("Data/odf/commands/allcommands.odf", "commandNames=\"attack\"\n")
+            .file("Data/odf/commands/attack.odf", "commandName=ATTACK\nbuttonName=first\nBUTTONNAME=second\n");
+        assert_eq!(NativeCommands::load(&a2.mount(None)).get("attack").unwrap().button, "first");
+
+        let fo = Install::new("fo_duplicate");
+        fo.file("Data/info.ini", "[Mod]\nProfile=Fo4\n")
+            .file("Data/odf/commands/allcommands.odf", "commandNames=\"attack\"\n")
+            .file("Data/odf/commands/attack.odf", "commandName=ATTACK\nbuttonName=first\nBUTTONNAME=second\n");
+        assert_eq!(NativeCommands::load(&fo.mount(None)).get("attack").unwrap().button, "second");
     }
 
     #[test]

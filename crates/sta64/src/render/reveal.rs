@@ -229,6 +229,18 @@ mod tests {
     }
 
     #[test]
+    fn turning_off_the_cheat_keeps_instant_actions_fog_setting() {
+        let world = view();
+        let mut link = SimLink::new(Box::new(Fixed1(world)), Box::new(sta_sim::command::LocalRouter::new()), PlayerId(1))
+            .with_match_fog_lifted(true);
+        link.set_fog_lifted(true);
+        link.set_fog_lifted(false);
+
+        assert_eq!(link.curr().visible_to(PlayerId(1)).len(), 2);
+        assert_eq!(link.real_curr().visible_to(PlayerId(1)).len(), 1);
+    }
+
+    #[test]
     fn a_chord_needs_alt() {
         let mut keys = ButtonInput::<KeyCode>::default();
         keys.press(KeyCode::KeyF);

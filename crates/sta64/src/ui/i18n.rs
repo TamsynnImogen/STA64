@@ -34,10 +34,31 @@ use sta_vfs::Vfs;
 /// STA64 call-site key -> the game's own string key, for the strings the
 /// original has. A game key missing from the install falls back to the
 /// English call-site text.
-pub const GAME_KEYS: &[(&str, &str)] = &[(
-    "Double click to return to strategic mode.",
-    "GUI_CV_MIN_TOOLTIP",
-)];
+pub const GAME_KEYS: &[(&str, &str)] = &[
+    ("Double click to return to strategic mode.", "GUI_CV_MIN_TOOLTIP"),
+    ("Research menu", "GUI_CP_RESEARCH_TOOLTIP"),
+    ("Open the research menu.", "GUI_CP_RESEARCH_VTOOLTIP"),
+    ("Evolve menu", "GUI_CP_EVOLVE_TOOLTIP"),
+    ("Open the evolve menu.", "GUI_CP_EVOLVE_VTOOLTIP"),
+];
+
+/// Button-panel hover text uses native keys without changing unrelated UI captions.
+const TOOLTIP_GAME_KEYS: &[(&str, &str)] = &[
+    ("Menu", "GUI_BP_MAIN_MENU"),
+    ("Communications", "GUI_BP_COMM_MENU"),
+    ("Next idle ship", "GUI_BP_IDLE_TOOLTIP"),
+    ("Focus the next ship with no orders.", "GUI_BP_IDLE_VTOOLTIP"),
+    ("Toggle view", "GUI_BP_TOGGLE_TOOLTIP"),
+    ("Switch between strategic and tactical views.", "GUI_BP_TOGGLE_VTOOLTIP"),
+    ("Objectives", "GUI_BP_OBJECTIVES_TOOLTIP"),
+    ("Show current mission objectives.", "GUI_BP_OBJECTIVES_VTOOLTIP"),
+    ("Help", "GUI_BP_HELP_TOOLTIP"),
+    ("Turn tooltip help on or off.", "GUI_BP_HELP_VTOOLTIP"),
+    ("Command palette", "GUI_BP_PALETTE_TOOLTIP"),
+    ("Switch the command palette between persistent and popup modes.", "GUI_BP_PALETTE_VTOOLTIP"),
+    ("More", "GUI_BP_MORE_TOOLTIP"),
+    ("Show additional buttons, including Help, Palette, and Menu.", "GUI_BP_MORE_VTOOLTIP"),
+];
 
 /// The active UI language, as the lower-case name its files use (`english`).
 #[derive(Resource, Debug, Clone, PartialEq, Eq)]
@@ -124,7 +145,7 @@ impl Strings {
     /// entries. STA64 language/source text is a fallback only for missing keys.
     pub fn tooltip_text<'a>(&'a self, key: &'a str) -> &'a str {
         self.game.get(key)
-            .or_else(|| GAME_KEYS.iter().find(|(source, _)| *source == key)
+            .or_else(|| GAME_KEYS.iter().chain(TOOLTIP_GAME_KEYS.iter()).find(|(source, _)| *source == key)
                 .and_then(|(_, native)| self.game.get(native)))
             .or_else(|| self.map.get(key).map(String::as_str))
             .unwrap_or(key)
@@ -333,6 +354,19 @@ mod tests {
         assert_eq!(strings.tooltip_text(GAME_KEYS[0].0), "Native strategic tip");
         // The tooltip priority does not change generic UI translation policy.
         assert_eq!(strings.map.get(GAME_KEYS[0].0).map(String::as_str), Some("STA64 strategic tip"));
+    }
+
+    #[test]
+    fn button_panel_tooltips_use_native_keys_without_rewriting_other_captions() {
+        let strings = Strings::from_game("english",
+            "\"GUI_BP_MAIN_MENU\", \"Options Menu\", \"GUI_BP_IDLE_TOOLTIP\", \"Idle Ship\", \"GUI_BP_IDLE_VTOOLTIP\", \"Next idle craft\", \"GUI_BP_HELP_TOOLTIP\", \"\"");
+        assert_eq!(strings.tooltip_text("Menu"), "Options Menu");
+        assert_eq!(strings.tooltip_text("Next idle ship"), "Idle Ship");
+        assert_eq!(strings.tooltip_text("Focus the next ship with no orders."), "Next idle craft");
+        assert_eq!(strings.tooltip_text("Help"), "");
+        assert_eq!(strings.tooltip_text("Communications"), "Communications");
+        assert_eq!(strings.tooltip_text("Show current mission objectives."), "Show current mission objectives.");
+        assert!(!strings.map.contains_key("Menu"));
     }
 
     #[test]

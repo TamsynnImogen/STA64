@@ -58,7 +58,7 @@ impl SectionDigests {
 
 /// Fails to compile when `Entity` gains a field: give it a section below.
 fn _every_entity_field_has_a_section(e: &Entity) {
-    let Entity { id: _, kind: _, def: _, owner: _, pos: _, heading: _, speed: _, omega: _, target: _, stats: _, hull: _, shields: _, crew: _, flags: _, progress: _ } = e;
+    let Entity { id: _, kind: _, mobile_station: _, def: _, owner: _, pos: _, heading: _, speed: _, omega: _, target: _, stats: _, hull: _, shields: _, crew: _, flags: _, progress: _ } = e;
 }
 
 /// Fails to compile when `Sim` gains a field: decide its section (or that it is
@@ -67,7 +67,7 @@ fn _every_sim_field_is_decided(s: &Sim) {
     let Sim {
         tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, starts: _, regions: _,
         bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, economy: _,
-        production: _, victory: _, specials: _, autonomy: _, start_effects: _, nav: _, subsystems: _, attrs: _, scripted: _, switches: _, relations: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _, transports: _, recrew: _, repairs: _, recycles: _, nebula_shields: _, alerts: _, mission_switches: _,
+        production: _, victory: _, specials: _, autonomy: _, start_effects: _, replacements: _, nav: _, subsystems: _, zero_shield_holds: _, attrs: _, scripted: _, switches: _, relations: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _, transports: _, recrew: _, repairs: _, recycles: _, nebula_shields: _, alerts: _, mission_switches: _,
     } = s;
 }
 
@@ -136,6 +136,9 @@ impl Sim {
         // will exist, so they belong with the roster.
         if !self.start_effects.is_empty() {
             self.start_effects.hash_into(&mut h);
+        }
+        if !self.replacements.is_empty() {
+            self.replacements.hash_into(&mut h);
         }
         h.0
     }
@@ -215,6 +218,9 @@ impl Sim {
         self.alerts.hash_into(&mut h);
         if !self.subsystems.is_empty() {
             self.subsystems.hash_into(&mut h);
+        }
+        if !self.zero_shield_holds.is_empty() {
+            self.zero_shield_holds.hash_into(&mut h);
         }
         if !self.scripted.is_empty() {
             self.scripted.hash_into(&mut h);
@@ -333,6 +339,9 @@ impl Sim {
                 if !self.start_effects.is_empty() {
                     row(None, "start effects (hash)", block("start_effects", &|h| self.start_effects.hash_into(h)));
                 }
+                if !self.replacements.is_empty() {
+                    row(None, "replacement weapons (hash)", block("replaceweapon", &|h| self.replacements.hash_into(h)));
+                }
             }
             "movement" => {
                 for e in self.units.iter() {
@@ -391,6 +400,9 @@ impl Sim {
                 }
                 if !self.transports.is_empty() {
                     row(None, "transports, parties in flight, shield holds (hash)", block("transports", &|h| self.transports.hash_into(h)));
+                }
+                if !self.zero_shield_holds.is_empty() {
+                    row(None, "shield zero holds (hash)", block("shield-zero-holds", &|h| self.zero_shield_holds.hash_into(h)));
                 }
                 if !self.relations.is_empty() {
                     row(None, "mission relations (hash)", block("relations", &|h| self.relations.hash_into(h)));

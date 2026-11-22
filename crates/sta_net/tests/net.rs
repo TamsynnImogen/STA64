@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -22,8 +22,8 @@ use sta_net::proto::{
 };
 use sta_net::transport::wire::{ClientMsg, RoomCode, ServerMsg, MAX_ENVELOPE_BYTES};
 use sta_net::transport::{
-    ClientOptions, CloseReason, ConnectError, NetControl, NetTransport, RefuseReason, Relay,
-    RelayConfig,
+    ClientOptions, CloseCause, CloseLogHandle, CloseReason, CloseRecord, ConnectError, LogSink,
+    Misuse, NetControl, NetTransport, RefuseReason, Relay, RelayConfig, CLOSE_LOG,
 };
 use sta_sim::command::{Command, CommandKind, Edit, Order};
 use sta_sim::setup::GameOptions;
@@ -46,7 +46,16 @@ fn wait_until(limit: Duration, what: &str, mut cond: impl FnMut() -> bool) {
 }
 
 fn relay_with(cfg: RelayConfig) -> Relay {
-    Relay::bind("127.0.0.1:0", cfg).expect("bind an ephemeral port")
+    Relay::bind_with_log("127.0.0.1:0", cfg, Arc::new(|_| {})).expect("bind an ephemeral port")
+}
+
+/// A relay whose log lines are collected.
+fn relay_logging(cfg: RelayConfig) -> (Relay, Arc<Mutex<Vec<String>>>) {
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let l = lines.clone();
+    let sink: LogSink = Arc::new(move |line| l.lock().unwrap().push(line.to_owned()));
+    let r = Relay::bind_with_log("127.0.0.1:0", cfg, sink).expect("bind an ephemeral port");
+    (r, lines)
 }
 
 fn relay() -> Relay {
@@ -98,6 +107,7 @@ fn expect_quiet(t: &mut NetTransport, for_: Duration) {
 // connection of the lockstep scenarios.
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 struct Proxy {
     addr: SocketAddr,
     hold: Arc<AtomicBool>,
@@ -105,6 +115,29 @@ struct Proxy {
     /// connections and both directions (stall diagnostics only).
     read: Arc<AtomicU64>,
     written: Arc<AtomicU64>,
+    /// How each pumped direction ended, with the time since the proxy
+    /// started (stall diagnostics only): who closed first.
+    ends: Arc<Mutex<Vec<String>>>,
+}
+
+/// What one pumped direction shares with the proxy.
+struct Tap {
+    dir: &'static str,
+    latency: Arc<AtomicU64>,
+    hold: Arc<AtomicBool>,
+    read: Arc<AtomicU64>,
+    written: Arc<AtomicU64>,
+    ends: Arc<Mutex<Vec<String>>>,
+    started: Instant,
+}
+
+impl Tap {
+    fn ended(&self, how: String) {
+        let at = self.started.elapsed().as_millis();
+        if let Ok(mut ends) = self.ends.lock() {
+            ends.push(format!("{} ended at {at} ms: {how}", self.dir));
+        }
+    }
 }
 
 impl Proxy {
@@ -116,18 +149,28 @@ impl Proxy {
         let (l, h) = (latency.clone(), hold.clone());
         let read = Arc::new(AtomicU64::new(0));
         let written = Arc::new(AtomicU64::new(0));
-        let (r2, w2) = (read.clone(), written.clone());
+        let ends = Arc::new(Mutex::new(Vec::new()));
+        let started = Instant::now();
+        let (r2, w2, e2) = (read.clone(), written.clone(), ends.clone());
         thread::spawn(move || {
             while let Ok((client, _)) = listener.accept() {
                 let Ok(server) = TcpStream::connect(target) else {
                     continue;
                 };
-                for (from, to) in [
-                    (client.try_clone().unwrap(), server.try_clone().unwrap()),
-                    (server, client),
+                for (dir, from, to) in [
+                    ("client to relay", client.try_clone().unwrap(), server.try_clone().unwrap()),
+                    ("relay to client", server, client),
                 ] {
-                    let (l, h) = (l.clone(), h.clone());
-                    pump(from, to, l, h, r2.clone(), w2.clone());
+                    let tap = Tap {
+                        dir,
+                        latency: l.clone(),
+                        hold: h.clone(),
+                        read: r2.clone(),
+                        written: w2.clone(),
+                        ends: e2.clone(),
+                        started,
+                    };
+                    pump(from, to, tap);
                 }
             }
         });
@@ -136,43 +179,51 @@ impl Proxy {
             hold,
             read,
             written,
+            ends,
         }
     }
 }
 
 /// One direction: bytes are written no earlier than `latency` after they were
 /// read, in order, and not at all while `hold` is set.
-fn pump(
-    mut from: TcpStream,
-    mut to: TcpStream,
-    latency: Arc<AtomicU64>,
-    hold: Arc<AtomicBool>,
-    read: Arc<AtomicU64>,
-    written: Arc<AtomicU64>,
-) {
+fn pump(mut from: TcpStream, mut to: TcpStream, tap: Tap) {
     let (tx, rx) = mpsc::channel::<(Instant, Vec<u8>)>();
+    let tap = Arc::new(tap);
+    let reader_tap = tap.clone();
     thread::spawn(move || {
+        let tap = reader_tap;
         let mut buf = [0u8; 8192];
-        while let Ok(n) = from.read(&mut buf) {
-            if n == 0 {
-                break;
-            }
-            read.fetch_add(n as u64, Ordering::SeqCst);
-            let due = Instant::now() + Duration::from_millis(latency.load(Ordering::SeqCst));
-            if tx.send((due, buf[..n].to_vec())).is_err() {
-                break;
+        loop {
+            match from.read(&mut buf) {
+                Ok(0) => {
+                    tap.ended("the sender closed (end of stream)".into());
+                    break;
+                }
+                Ok(n) => {
+                    tap.read.fetch_add(n as u64, Ordering::SeqCst);
+                    let due =
+                        Instant::now() + Duration::from_millis(tap.latency.load(Ordering::SeqCst));
+                    if tx.send((due, buf[..n].to_vec())).is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tap.ended(format!("read failed: {:?} (os {:?}): {e}", e.kind(), e.raw_os_error()));
+                    break;
+                }
             }
         }
     });
     thread::spawn(move || {
         while let Ok((due, bytes)) = rx.recv() {
-            while Instant::now() < due || hold.load(Ordering::SeqCst) {
+            while Instant::now() < due || tap.hold.load(Ordering::SeqCst) {
                 thread::sleep(Duration::from_millis(1));
             }
-            if to.write_all(&bytes).is_err() {
+            if let Err(e) = to.write_all(&bytes) {
+                tap.ended(format!("write failed: {:?} (os {:?}): {e}", e.kind(), e.raw_os_error()));
                 break;
             }
-            written.fetch_add(bytes.len() as u64, Ordering::SeqCst);
+            tap.written.fetch_add(bytes.len() as u64, Ordering::SeqCst);
         }
         let _ = to.shutdown(std::net::Shutdown::Both);
     });
@@ -226,8 +277,12 @@ struct Game {
     /// Per peer: what its last `step` returned, and how many ticks it ran.
     last_step: Vec<String>,
     ticks_run: Vec<u64>,
+    /// Per peer: when it last ran a tick (stall diagnostics only).
+    last_ran: Vec<Instant>,
     /// Proxies whose byte counters the stall message reports: (label, read, written).
-    watched: Vec<(String, Arc<AtomicU64>, Arc<AtomicU64>)>,
+    watched: Vec<(String, Proxy)>,
+    /// The relay's close records, printed by the stall report.
+    relay_closes: Option<CloseLogHandle>,
 }
 
 /// `proxies[i]` (if any) is the address peer `i` uses instead of the relay's.
@@ -264,7 +319,9 @@ fn game(relay: SocketAddr, st: &Start, proxies: &[Option<SocketAddr>]) -> Game {
         issued: vec![None; n],
         last_step: vec!["never stepped".to_owned(); n],
         ticks_run: vec![0; n],
+        last_ran: vec![Instant::now(); n],
         watched: Vec::new(),
+        relay_closes: None,
     }
 }
 
@@ -330,9 +387,14 @@ impl Game {
         });
     }
 
+    /// Has the stall message report why `relay` closed connections.
+    fn watch_relay(&mut self, relay: &Relay) {
+        self.relay_closes = Some(relay.close_log());
+    }
+
     /// Has the stall message report `proxy`'s forwarded byte counters.
     fn watch(&mut self, label: &str, proxy: &Proxy) {
-        self.watched.push((label.to_owned(), proxy.read.clone(), proxy.written.clone()));
+        self.watched.push((label.to_owned(), proxy.clone()));
     }
 
     /// Per peer: tick, the last step outcome, router state and connection
@@ -347,9 +409,10 @@ impl Game {
                 .map(|s| format!("{s}:{:?}", router.last_record(PlayerId(s))))
                 .collect();
             out.push_str(&format!(
-                "peer {i}: tick {} ({} run here), last step: {}, next turn {}, waiting on {:?}, last record per seat [{}], connection closed: {:?}\n",
+                "peer {i}: tick {} ({} run here, the last {} ms ago), last step: {}, next turn {}, waiting on {:?}, last record per seat [{}], connection closed: {:?}\n",
                 peer.tick(),
                 self.ticks_run[i],
+                self.last_ran[i].elapsed().as_millis(),
                 self.last_step[i],
                 router.next_turn(),
                 router.waiting_on(),
@@ -357,18 +420,29 @@ impl Game {
                 self.controls[i].close_reason(),
             ));
         }
-        for (label, read, written) in &self.watched {
+        for (label, proxy) in &self.watched {
             out.push_str(&format!(
                 "proxy {label}: {} bytes read, {} bytes written\n",
-                read.load(Ordering::SeqCst),
-                written.load(Ordering::SeqCst)
+                proxy.read.load(Ordering::SeqCst),
+                proxy.written.load(Ordering::SeqCst)
             ));
+            for end in proxy.ends.lock().map(|e| e.clone()).unwrap_or_default() {
+                out.push_str(&format!("  {end}\n"));
+            }
+        }
+        if let Some(log) = &self.relay_closes {
+            let closes = log.snapshot();
+            out.push_str(&format!("relay: {} connections ended\n", closes.len()));
+            for c in closes {
+                out.push_str(&format!("  {c}\n"));
+            }
         }
         out
     }
 
     /// Steps `live` peers (all when empty) to `target`, sleeping a little when
-    /// none can move so the sockets get a turn.
+    /// none can move so the sockets get a turn. The `WAIT` deadline covers the
+    /// whole run to `target`, not the time since the last step.
     fn run_to(&mut self, target: Tick, live: &[usize], orders: bool) {
         let live: Vec<usize> = if live.is_empty() {
             (0..self.peers.len()).collect()
@@ -390,6 +464,7 @@ impl Game {
                         StepOutcome::Ran { tick, .. } => {
                             progress = true;
                             self.ticks_run[i] += 1;
+                            self.last_ran[i] = Instant::now();
                             self.last_step[i] = format!("Ran to tick {tick}");
                         }
                         StepOutcome::Stalled { waiting } => {
@@ -404,7 +479,7 @@ impl Game {
             if !progress {
                 assert!(
                     Instant::now() < end,
-                    "no progress within {WAIT:?}\n{}",
+                    "tick {target} not reached within {WAIT:?}\n{}",
                     self.stall_report(target, &live)
                 );
                 thread::sleep(Duration::from_millis(1));
@@ -479,6 +554,7 @@ fn injected_latency_stalls_but_never_diverges() {
         &start(3, 3, 2),
         &[None, Some(p1.addr), Some(p2.addr)],
     );
+    g.watch_relay(&r);
     g.watch("peer 1 (60 ms)", &p1);
     g.watch("peer 2 (25 ms)", &p2);
     g.spawn_forces(2);
@@ -1409,4 +1485,363 @@ fn frame_size_constants_agree_with_the_envelope() {
     let _ = Action::Pause;
     let _ = Fixed::ONE;
     let _ = Duration::ZERO;
+}
+
+// ---------------------------------------------------------------------------
+// Why the relay closed a connection
+// ---------------------------------------------------------------------------
+
+/// The newest close record that matches, once the relay has made one (the
+/// connection's thread records after the peer already saw the close).
+fn close_where(r: &Relay, what: &str, pred: impl Fn(&CloseRecord) -> bool) -> CloseRecord {
+    let mut found = None;
+    wait_until(SHORT, what, || {
+        found = r.closes().into_iter().rev().find(|c| pred(c));
+        found.is_some()
+    });
+    found.unwrap()
+}
+
+#[test]
+fn a_zero_or_oversized_length_prefix_is_recorded_with_its_value() {
+    let r = relay();
+    let (_host, code) = open_room(r.local_addr());
+    let mut s = raw_join(r.local_addr(), code);
+    s.write_all(&0u32.to_le_bytes()).unwrap();
+    let c = close_where(&r, "the zero length", |c| c.cause == CloseCause::BadLength(0));
+    assert_eq!(c.seat, Some(1));
+    assert_eq!(c.unparsed, 4);
+    let big = MAX_ENVELOPE_BYTES + 1;
+    let mut s = raw_join(r.local_addr(), code);
+    s.write_all(&(big as u32).to_le_bytes()).unwrap();
+    close_where(&r, "the oversized length", |c| c.cause == CloseCause::BadLength(big));
+    // Before a seat they are only counted.
+    for len in [0u32, big as u32] {
+        let mut s = raw(r.local_addr());
+        s.write_all(&len.to_le_bytes()).unwrap();
+    }
+    wait_until(SHORT, "the counts", || r.unseated().malformed == 2);
+}
+
+#[test]
+fn an_envelope_that_does_not_decode_is_recorded_with_the_decoders_text() {
+    let r = relay();
+    let mut s = raw(r.local_addr());
+    s.write_all(&envelope(&[0xEE, 1, 2, 3])).unwrap();
+    wait_until(SHORT, "the count", || r.unseated().malformed == 1);
+    // From a seated client: an unknown kind, and a bad frame inside a data
+    // envelope.
+    let (_host, code) = open_room(r.local_addr());
+    let mut s = raw_join(r.local_addr(), code);
+    s.write_all(&envelope(&[0xEE, 1, 2, 3])).unwrap();
+    let c = close_where(&r, "the decode failure", |c| {
+        matches!(c.cause, CloseCause::DecodeFailed(_))
+    });
+    let CloseCause::DecodeFailed(text) = &c.cause else { unreachable!() };
+    assert!(text.contains("kind"), "{text}");
+    let mut s = raw_join(r.local_addr(), code);
+    s.write_all(&envelope(&[3, 0xFF])).unwrap();
+    let c = close_where(&r, "the bad frame", |c| {
+        c.seat == Some(1) && matches!(&c.cause, CloseCause::DecodeFailed(t) if t.contains("frame"))
+    });
+    assert_eq!(c.unparsed, 0);
+}
+
+#[test]
+fn a_client_that_closes_is_recorded_clean_or_with_its_half_envelope() {
+    let r = relay();
+    let (_host, code) = open_room(r.local_addr());
+    drop(raw_join(r.local_addr(), code));
+    let c = close_where(&r, "the clean close", |c| c.seat == Some(1));
+    assert_eq!(c.cause, CloseCause::ClientClosed);
+    assert_eq!(c.unparsed, 0);
+    // Two bytes of a length prefix, then gone.
+    let mut s = raw_join(r.local_addr(), code);
+    s.write_all(&[9, 0]).unwrap();
+    // Let a read see them before the close.
+    thread::sleep(Duration::from_millis(150));
+    drop(s);
+    let c = close_where(&r, "the close with unparsed bytes", |c| c.unparsed == 2);
+    assert_eq!(c.cause, CloseCause::ClientClosed);
+    assert!(c.reads.timeouts >= 1, "a connection idle for 150 ms saw no read timeout");
+    // The two bytes were held across them: the hazard window is counted.
+    assert!(c.reads.partial_timeouts >= 1, "{c}");
+    assert!(c.reads.partial_timeouts <= c.reads.timeouts);
+    assert_eq!(c.reads.spurious, 0);
+    assert_eq!(c.reads.partial_spurious, 0);
+}
+
+#[test]
+fn protocol_misuse_is_recorded_by_kind() {
+    let r = relay();
+    // Not a create or join first.
+    let mut s = raw(r.local_addr());
+    s.write_all(&envelope(&[4])).unwrap();
+    wait_until(SHORT, "a keepalive first to be counted", || r.unseated().malformed == 1);
+    // Create twice.
+    let mut s = raw(r.local_addr());
+    let create = ClientMsg::Create { password: vec![] }.encode().unwrap();
+    s.write_all(&create).unwrap();
+    assert!(matches!(read_server(&mut s, SHORT), Some(ServerMsg::Created { .. })));
+    s.write_all(&create).unwrap();
+    close_where(&r, "a second create", |c| {
+        c.cause == CloseCause::Misuse(Misuse::RepeatedOpenOrJoin) && c.seat == Some(0)
+    });
+    // A non-host's kick.
+    let (_host, code) = open_room(r.local_addr());
+    let mut s = raw_join(r.local_addr(), code);
+    s.write_all(&ClientMsg::Kick(2).encode().unwrap()).unwrap();
+    let c = close_where(&r, "a non-host kick", |c| c.cause == CloseCause::Misuse(Misuse::HostOnly));
+    assert_eq!(c.seat, Some(1));
+}
+
+#[test]
+fn leaving_a_kick_and_a_refusal_are_recorded() {
+    let r = relay();
+    let (host, code) = open_room(r.local_addr());
+    let mut a = raw_join(r.local_addr(), code);
+    a.write_all(&ClientMsg::Leave.encode().unwrap()).unwrap();
+    close_where(&r, "a leave", |c| c.cause == CloseCause::ClientLeft && c.seat == Some(1));
+    let b = raw_join(r.local_addr(), code);
+    host.control().kick(PlayerId(1)).unwrap();
+    let c = close_where(&r, "a kick", |c| c.cause == CloseCause::Kicked);
+    assert_eq!(c.seat, Some(1));
+    drop(b);
+}
+
+#[test]
+fn refused_and_dropped_before_a_seat_are_counted_and_summarised_not_logged_each() {
+    let (mut r, lines) = relay_logging(RelayConfig {
+        max_connections_per_ip: 1,
+        // The keeper never sends a request: no handshake deadline may close
+        // it on a slow runner and free the slot.
+        handshake_timeout: Duration::from_secs(3600),
+        idle_timeout: Duration::from_secs(3600),
+        // No periodic summary mid-test, however slow the runner: the one
+        // line comes with the shutdown.
+        log_summary_every: Duration::from_secs(3600),
+        ..RelayConfig::default()
+    });
+    // A join to a room that does not exist is refused.
+    let mut s = raw(r.local_addr());
+    let m = ClientMsg::Join {
+        code: RoomCode::random().unwrap(),
+        reclaim: None,
+        password: vec![],
+    };
+    s.write_all(&m.encode().unwrap()).unwrap();
+    wait_until(SHORT, "the refusal", || r.unseated().join_refused == 1);
+    wait_until(SHORT, "the slot to be free", || r.connections() == 0);
+    // One admitted connection now holds the only slot.
+    let _keep = raw(r.local_addr());
+    wait_until(SHORT, "the admission", || r.connections() == 1);
+    // A thousand attempts over the limit, in batches the accept backlog can
+    // take (a full backlog only delays a connection, but by whole seconds).
+    for batch in 1..=20u64 {
+        for _ in 0..50 {
+            drop(TcpStream::connect(r.local_addr()).unwrap());
+        }
+        wait_until(SHORT, "the batch to be counted", || r.unseated().total() > batch * 50);
+    }
+    assert_eq!(r.unseated().total(), 1001);
+    assert!(lines.lock().unwrap().is_empty(), "{:?}", lines.lock().unwrap());
+    // Not kept in the bounded list either: they would push out real records.
+    assert!(r.closes().is_empty());
+    r.shutdown();
+    let lines = lines.lock().unwrap();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(
+        lines[0].contains("1001 connections")
+            && lines[0].contains("limit: 1000")
+            && lines[0].contains("join refused: 1"),
+        "{}",
+        lines[0]
+    );
+}
+
+#[test]
+fn a_blocked_log_does_not_hold_a_departure_or_a_connection_count() {
+    let release = Arc::new(AtomicBool::new(false));
+    let entered = Arc::new(AtomicBool::new(false));
+    let (rel, ent) = (release.clone(), entered.clone());
+    let sink: LogSink = Arc::new(move |_| {
+        ent.store(true, Ordering::SeqCst);
+        let end = Instant::now() + SHORT;
+        while !rel.load(Ordering::SeqCst) && Instant::now() < end {
+            thread::sleep(Duration::from_millis(2));
+        }
+    });
+    let r = Relay::bind_with_log("127.0.0.1:0", RelayConfig::default(), sink).unwrap();
+    let (mut host, code) = open_room(r.local_addr());
+    let hc = host.control();
+    let mut s = raw_join(r.local_addr(), code);
+    // A seated connection that fails to decode is logged (the sink blocks).
+    s.write_all(&envelope(&[3, 0xFF])).unwrap();
+    wait_until(SHORT, "the log write to start", || entered.load(Ordering::SeqCst));
+    // While it is blocked the seat is already gone and released.
+    wait_until(SHORT, "the departure", || {
+        let _ = host.poll();
+        hc.take_departures().contains(&PlayerId(1))
+    });
+    wait_until(SHORT, "the connection count", || r.connections() == 1);
+    assert!(r.closes().is_empty(), "recorded before the log write returned");
+    release.store(true, Ordering::SeqCst);
+    close_where(&r, "the record", |c| matches!(c.cause, CloseCause::DecodeFailed(_)));
+}
+
+#[test]
+fn the_deadlines_are_recorded() {
+    // The idle deadline is long: it is checked before the half-sent
+    // envelope's, and must not be able to win on a starved runner.
+    let r = relay_with(RelayConfig {
+        idle_timeout: Duration::from_secs(30),
+        ..fast_cfg()
+    });
+    let _silent = raw(r.local_addr());
+    wait_until(SHORT, "the handshake deadline", || r.unseated().deadline == 1);
+    let (_host, code) = open_room(r.local_addr());
+    let mut s = raw_join(r.local_addr(), code);
+    s.write_all(&[9, 0]).unwrap();
+    let c = close_where(&r, "the half-sent envelope deadline", |c| {
+        c.cause == CloseCause::FrameTimeout
+    });
+    assert_eq!(c.unparsed, 2);
+    assert_eq!(c.seat, Some(1));
+}
+
+#[test]
+fn shutting_down_is_recorded() {
+    let mut r = relay();
+    let log = r.close_log();
+    let (_host, _) = open_room(r.local_addr());
+    r.shutdown();
+    wait_until(SHORT, "the shutdown record", || {
+        log.snapshot().iter().any(|c| c.cause == CloseCause::RelayShutdown)
+    });
+}
+
+#[test]
+fn the_close_records_can_be_read_while_connections_come_and_go() {
+    let r = relay();
+    let log = r.close_log();
+    let stop = Arc::new(AtomicBool::new(false));
+    let reader = {
+        let stop = stop.clone();
+        thread::spawn(move || {
+            let mut most = 0;
+            while !stop.load(Ordering::SeqCst) {
+                most = most.max(log.snapshot().len());
+            }
+            most
+        })
+    };
+    let addr = r.local_addr();
+    let (_host, code) = open_room(addr);
+    // Seated connections one after the other (the next one joins once the
+    // last seat is free again).
+    let one = |r: &Relay| {
+        drop(raw_join(addr, code));
+        wait_until(SHORT, "the seat to be released", || r.connections() == 1);
+    };
+    for _ in 0..(CLOSE_LOG / 2) {
+        one(&r);
+    }
+    wait_until(SHORT, "the records", || r.closes().len() == CLOSE_LOG / 2);
+    stop.store(true, Ordering::SeqCst);
+    assert!(reader.join().unwrap() <= CLOSE_LOG);
+    // Never more than the bound, however many connections ended.
+    for _ in 0..CLOSE_LOG {
+        one(&r);
+    }
+    wait_until(SHORT, "the log to fill", || r.closes().len() == CLOSE_LOG);
+    assert_eq!(r.closes().len(), CLOSE_LOG);
+}
+
+#[test]
+fn the_refusal_summary_is_logged_periodically_while_the_count_is_nonzero() {
+    let (r, lines) = relay_logging(RelayConfig {
+        max_connections: 0,
+        log_summary_every: Duration::from_millis(200),
+        ..RelayConfig::default()
+    });
+    for _ in 0..5 {
+        drop(TcpStream::connect(r.local_addr()).unwrap());
+    }
+    wait_until(SHORT, "a summary line", || !lines.lock().unwrap().is_empty());
+    let first = lines.lock().unwrap()[0].clone();
+    assert!(first.contains("connections refused or dropped before a seat"), "{first}");
+    assert!(first.contains("limit:"), "{first}");
+    // Nothing more while nothing new is refused.
+    thread::sleep(Duration::from_millis(500));
+    let n = lines.lock().unwrap().len();
+    assert!(n <= 5, "{n} lines for 5 attempts");
+}
+
+#[test]
+fn closes_before_a_seat_cannot_push_out_the_records_of_seated_connections() {
+    // Many garbage connections from one address: no default limit may turn
+    // them into refusals.
+    let r = relay_with(RelayConfig {
+        max_connections: 10_000,
+        max_connections_per_ip: 10_000,
+        ..RelayConfig::default()
+    });
+    let (_host, code) = open_room(r.local_addr());
+    let mut s = raw_join(r.local_addr(), code);
+    s.write_all(&ClientMsg::Leave.encode().unwrap()).unwrap();
+    close_where(&r, "the leave", |c| c.cause == CloseCause::ClientLeft);
+    // Far more garbage connections than the list holds.
+    let n = CLOSE_LOG as u64 * 2;
+    for batch in 1..=4u64 {
+        for _ in 0..n / 4 {
+            let mut g = raw(r.local_addr());
+            g.write_all(&envelope(&[0xEE])).unwrap();
+        }
+        wait_until(SHORT, "the garbage to be counted", || r.unseated().malformed >= batch * n / 4);
+    }
+    assert_eq!(r.unseated().malformed, n);
+    assert!(r.closes().iter().any(|c| c.cause == CloseCause::ClientLeft));
+    assert!(r.closes().iter().all(|c| c.seat.is_some()), "{:?}", r.closes());
+}
+
+#[test]
+fn a_blocked_log_cannot_hang_the_shutdown_or_cost_more_than_one_thread() {
+    let release = Arc::new(AtomicBool::new(false));
+    let calls = Arc::new(AtomicU64::new(0));
+    let (rel, n) = (release.clone(), calls.clone());
+    let sink: LogSink = Arc::new(move |_| {
+        n.fetch_add(1, Ordering::SeqCst);
+        let end = Instant::now() + Duration::from_secs(30);
+        while !rel.load(Ordering::SeqCst) && Instant::now() < end {
+            thread::sleep(Duration::from_millis(2));
+        }
+    });
+    let mut r = Relay::bind_with_log(
+        "127.0.0.1:0",
+        RelayConfig {
+            log_summary_every: Duration::from_millis(50),
+            max_connections: 0,
+            ..RelayConfig::default()
+        },
+        sink,
+    )
+    .unwrap();
+    for _ in 0..10 {
+        drop(TcpStream::connect(r.local_addr()).unwrap());
+    }
+    wait_until(SHORT, "the summary thread to enter the sink", || {
+        calls.load(Ordering::SeqCst) == 1
+    });
+    // More refusals while it is blocked: still one call, no new thread.
+    for _ in 0..10 {
+        drop(TcpStream::connect(r.local_addr()).unwrap());
+    }
+    thread::sleep(Duration::from_millis(300));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    // Accepting goes on and the shutdown returns (it lets the blocked
+    // thread go after about a second).
+    let t = Instant::now();
+    r.shutdown();
+    assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
+    release.store(true, Ordering::SeqCst);
 }

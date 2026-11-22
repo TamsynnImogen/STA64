@@ -767,7 +767,7 @@ fn cell(app: &mut App, act: Act) -> Entity {
         .query::<(Entity, &GridCell)>()
         .iter(app.world())
         .find(|(_, c)| c.0 == act)
-        .unwrap()
+        .unwrap_or_else(|| panic!("grid is missing {act:?}"))
         .0
 }
 
@@ -847,6 +847,39 @@ fn profile_and_selection_changes_preserve_root_camera_and_state() {
 }
 
 #[test]
+fn selected_moon_draws_a_live_resource_bar_in_the_stock_panel() {
+    use bevy::ecs::system::RunSystemOnce;
+    use sta_sim::economy::view::NodeView;
+
+    let mut app = app();
+    let id = EntityId(1);
+    {
+        let mut feed = app.world_mut().resource_mut::<HudFeed>();
+        let moon = feed.content.as_ref().unwrap().key("fx_moon").unwrap();
+        let unit = &mut Arc::make_mut(&mut feed.view).units[0];
+        unit.def = moon;
+        unit.owner = sta_sim::world::NEUTRAL;
+    }
+    app.update();
+    app.world_mut().resource_mut::<crate::ui::hud::status::StatusFeed>().nodes = vec![NodeView {
+        entity: id,
+        resource: 0,
+        amount: Fixed::from_int(100),
+        start: Fixed::from_int(400),
+        infinite: false,
+    }];
+    app.world_mut().run_system_once(info::update).unwrap();
+    let world = app.world_mut();
+    let fills: Vec<_> = world.query::<(&info::StockBar, &Node)>().iter(world).collect();
+    assert!(!fills.iter().any(|(bar, _)| matches!(bar, info::StockBar::Hull(_))));
+    let [(width, expected)] = fills.iter().filter_map(|(bar, node)| match bar {
+        info::StockBar::Node(full_width) => Some((node.width, Val::Px(*full_width * 0.25))),
+        _ => None,
+    }).collect::<Vec<_>>().try_into().expect("one resource bar");
+    assert_eq!(width, expected);
+}
+
+#[test]
 fn numeric_values_patch_existing_stock_entities() {
     let mut app = app();
     // The info bar follows the pointer: hover the selected ship to read its values there.
@@ -856,9 +889,9 @@ fn numeric_values_patch_existing_stock_entities() {
         app.world_mut()
             .query::<(Entity, &info::StockText, &SpriteText)>()
             .iter(app.world())
-            .map(|(e, kind, text)| {
-                let info::StockText::Resource(id) = kind;
-                (e, *id, text.text.clone())
+            .filter_map(|(e, kind, text)| match kind {
+                info::StockText::Resource(id) => Some((e, *id, text.text.clone())),
+                info::StockText::Population(_) => None,
             })
             .collect()
     };
@@ -985,15 +1018,20 @@ fn metadata_groups_only_available_actions() {
         groups: vec!["orders".into(), "unavailable".into()],
         ..default()
     };
-    for (key, menu) in [("move", "orders"), ("harvest", "unavailable")] {
+    for (key, command, menu) in [
+        ("move", "GO", "orders"),
+        ("attack", "ATTACK", "orders"),
+        ("harvest", "MINE", "unavailable"),
+    ] {
         native.commands.insert(
             key.into(),
             NativeCommand {
                 odf: format!("{key}.odf"),
-                command: key.into(),
+                command: command.into(),
                 button: key.into(),
                 preferred: None,
                 menu: Some(menu.into()),
+                source: Vec::new(),
                 tooltip: Some("GUI_MOVE_TOOLTIP".into()),
                 verbose: Some("GUI_MOVE_VERBOSE".into()),
                 normal: None,
@@ -1009,7 +1047,10 @@ fn metadata_groups_only_available_actions() {
     assert!(!shown.iter().any(|b| b.act == Act::OpenNativeMenu(1)));
     assert!(!shown.iter().any(|b| b.act == Act::Target(TargetMode::Mine)));
     let grouped = buttons(&feed, Page::Native(0), &native);
-    assert!(grouped.iter().any(|b| b.act == Act::Target(TargetMode::Move)));
+    assert_eq!(
+        grouped.iter().map(|b| &b.act).collect::<Vec<_>>(),
+        [&Act::Target(TargetMode::Move), &Act::Target(TargetMode::Attack), &Act::Back],
+    );
     let move_button = grouped.iter().find(|b| b.act == Act::Target(TargetMode::Move)).unwrap();
     assert_eq!(move_button.tip, "GUI_MOVE_TOOLTIP");
     assert_eq!(move_button.verbose.as_deref(), Some("GUI_MOVE_VERBOSE"));
@@ -1030,6 +1071,7 @@ fn transport_shows_in_the_stock_palette_only_where_the_command_data_places_it() 
     assert!(transport(&NativeCommands::default()).is_none());
     let record = |preferred| NativeCommand {
         odf: "transport.odf".into(), command: "TRANSPORT".into(), button: "b_transport".into(), preferred, menu: None,
+        source: Vec::new(),
         tooltip: None, verbose: None, normal: None, hovered: None, pressed: None, disabled: None, active: None,
     };
     let mut native = NativeCommands::default();
@@ -1055,6 +1097,7 @@ fn native_formation_choices_keep_odf_identity_and_cannot_queue_orders() {
             button: "same_unrelated_button".into(),
             preferred: Some(preferred),
             menu: None,
+            source: Vec::new(),
             tooltip: Some(tip.into()),
             verbose: Some(format!("{tip}_VERBOSE")),
             normal: None,
@@ -1298,12 +1341,18 @@ mod button_panel {
         assert!(msgs.iter_current_update_messages().count() + msgs.len() > 0, "a focus request was sent");
     }
 
-    /// The cfg of a button panel at the sheet's top right: a 266 x 40 panel 11 units from the right edge,
-    /// two end pieces, a first row and a second row below it.
+    /// The cfg of an authored button panel near the sheet's top right (own numbers, not any game's): two end
+    /// pieces, a first row and a second row below it.
     fn placed_config(aspect: f32) -> HudConfig {
+        sheet_config(1600, 1338, aspect)
+    }
+
+    /// The same panel on a sheet `canvas_w` units wide, its area starting at `area_x` (a wider authored sheet).
+    fn sheet_config(canvas_w: i32, area_x: i32, aspect: f32) -> HudConfig {
+        let cfg_text = CFG.replace("screenWidth = 1600", &format!("screenWidth = {canvas_w}"));
         let text = format!(
-            "{CFG}buttonPanelArea = 1323 8 266 40\nbuttonBackgroundPanel = \"bbp\"\nbuttonBackgroundPanelArea = 0 0 266 40\nbuttonBackgroundPanelSize = 2\nbuttonBackgroundPanel_0 = 0 0 21 40\nbuttonBackgroundPanel_1 = 245 0 21 40\n\
-             idleButtonArea = 25 0 40 40\nobjectivesButtonArea = 157 0 40 40\nmoreButtonArea = 201 0 40 40\nmenuButtonArea = 201 45 40 40\n"
+            "{cfg_text}buttonPanelArea = {area_x} 14 240 36\nbuttonBackgroundPanel = \"bbp\"\nbuttonBackgroundPanelArea = 0 0 240 36\nbuttonBackgroundPanelSize = 2\nbuttonBackgroundPanel_0 = 0 0 18 36\nbuttonBackgroundPanel_1 = 222 0 18 36\n\
+             idleButtonArea = 28 2 32 32\nobjectivesButtonArea = 124 2 32 32\nmoreButtonArea = 172 2 32 32\nmenuButtonArea = 172 40 32 32\n"
         );
         let (cfg, warnings) = GuiCfg::parse("panel.cfg", &text);
         assert!(warnings.is_empty(), "{warnings:?}");
@@ -1317,14 +1366,14 @@ mod button_panel {
     }
 
     #[test]
-    fn the_group_sits_at_the_sheets_top_right_with_its_end_pieces_and_the_buttons_inside_it() {
+    fn the_group_sits_at_the_sheets_top_right_in_the_hud_area_with_its_end_pieces_and_the_buttons_inside_it() {
         let mut app = app_with_content_and_config(content(), placed_config(4.0 / 3.0), UiProfile::Armada2);
         app.update();
         let layout = app.world().resource::<StockState>().layout.clone().unwrap();
         let (pos, size) = group_rect(&mut app);
         let panel = layout.panel("button").unwrap();
         assert_eq!((pos.x, pos.y, size.x, size.y), (panel.x, panel.y, panel.w, panel.h));
-        assert!(pos.x + size.x <= layout.hud.right() && (layout.hud.right() - (pos.x + size.x)).abs() < 20.0, "at the right edge: {pos:?} {size:?}");
+        assert!(pos.x + size.x <= layout.hud.right() && (layout.hud.right() - (pos.x + size.x)).abs() < 30.0, "at the sheet's right edge: {pos:?} {size:?}");
         let pieces = app.world_mut().query_filtered::<&Node, (With<crate::ui::gui_sprites::GuiImage>, Without<buttons::PanelButton>)>().iter(app.world()).count();
         assert!(pieces >= 2, "the two end pieces are drawn");
         // Every button is a child of the group (its area is relative to it).
@@ -1334,27 +1383,102 @@ mod button_panel {
     }
 
     #[test]
-    fn on_a_wide_window_the_whole_group_moves_to_the_window_edge_and_keeps_its_size() {
-        let narrow = {
-            let app = app_with_content_and_config(content(), placed_config(4.0 / 3.0), UiProfile::Armada2);
-            app.world().resource::<StockState>().layout.clone().unwrap().panel("button").unwrap()
-        };
-        for aspect in [16.0_f32 / 9.0, 21.0 / 9.0, 32.0 / 9.0] {
-            let app = app_with_content_and_config(content(), placed_config(aspect), UiProfile::Armada2);
-            let state = app.world().resource::<StockState>();
-            let layout = state.layout.as_ref().unwrap();
-            let r = layout.panel_at_right_edge("button").unwrap();
-            assert_eq!((r.w, r.h, r.y), (narrow.w, narrow.h, narrow.y), "{aspect}: size and height are the sheet's");
-            let margin = 1080.0 * aspect - r.right();
-            assert!((margin - (1600.0 - 1589.0) * layout.scale).abs() <= 1.0, "{aspect}: {margin}");
-            assert!(state.solid.iter().any(|s| s.contains(Vec2::new(r.x + 5.0, r.y + 5.0))), "{aspect}: pointer-solid");
+    fn the_group_is_placed_inside_the_clamped_centred_area_like_every_panel_with_its_pointer_rect_from_the_same_rect() {
+        // ADR 0008 H1/H2: a 4:3 sheet and a 16:9 sheet, four window aspects, the Centred fit.
+        for (canvas_w, area_x) in [(1600, 1338), (2000, 1738)] {
+            for aspect in [4.0_f32 / 3.0, 16.0 / 9.0, 21.0 / 9.0, 32.0 / 9.0] {
+                let mut app = app_with_content_and_config(content(), sheet_config(canvas_w, area_x, aspect), UiProfile::Armada2);
+                let (layout, solid) = {
+                    let state = app.world().resource::<StockState>();
+                    (state.layout.clone().unwrap(), state.solid.clone())
+                };
+                let tag = format!("sheet {canvas_w}, window {aspect}");
+                let r = layout.panel("button").unwrap();
+                // Size and sheet-relative position are the sheet's (to the rounding of whole units).
+                let s = layout.scale;
+                assert!((r.w - 240.0 * s).abs() <= 1.0 && (r.h - 36.0 * s).abs() <= 1.0, "{tag}: size {r:?}");
+                assert!(((r.x - layout.hud.x) - area_x as f32 * s).abs() <= 1.0 && ((r.y - layout.hud.y) - 14.0 * s).abs() <= 1.0, "{tag}: place {r:?}");
+                assert!(r.x >= layout.hud.x && r.right() <= layout.hud.right() && r.y >= layout.hud.y && r.bottom() <= layout.hud.bottom(), "{tag}: inside the HUD area");
+                // Drawn rectangle (the group node) and pointer-solid rectangle are the one placed rect.
+                let (pos, size) = group_rect(&mut app);
+                assert_eq!((pos.x, pos.y, size.x, size.y), (r.x, r.y, r.w, r.h), "{tag}: drawn");
+                assert!(solid.contains(&r), "{tag}: pointer-solid equals the drawn rect");
+                assert!(solid.iter().all(|o| o.x >= layout.hud.x - 0.5 && o.right() <= layout.hud.right() + 0.5), "{tag}: no solid outside the HUD area");
+            }
         }
-        // Stretched covers the window already: nothing moves.
+        // Stretched fills the window: the rect is the sheet's, scaled per axis, and solid.
         let mut cfg = placed_config(21.0 / 9.0);
         cfg.fit = crate::ui::hud::stock::layout::HudFit::Stretched;
         let app = app_with_content_and_config(content(), cfg, UiProfile::Armada2);
+        let state = app.world().resource::<StockState>();
+        let layout = state.layout.as_ref().unwrap();
+        let r = layout.panel("button").unwrap();
+        assert!((r.right() - 1578.0 * layout.scale_x).abs() <= 1.0, "stretched: the sheet's place on the whole window: {r:?}");
+        assert!(state.solid.contains(&r));
+    }
+
+    #[test]
+    fn a_click_on_a_shown_second_row_button_is_pointer_solid_and_a_hidden_one_is_not() {
+        let mut app = app_with_content_and_config(content(), placed_config(4.0 / 3.0), UiProfile::Armada2);
+        app.update();
+        let more = app.world_mut().query::<(Entity, &PanelButton)>().iter(app.world()).find(|(_, p)| **p == PanelButton::More).map(|(e, _)| e).unwrap();
         let layout = app.world().resource::<StockState>().layout.clone().unwrap();
-        assert_eq!(layout.panel_at_right_edge("button"), layout.panel("button"));
+        let panel = layout.panel("button").unwrap();
+        let second = layout.at(Vec2::new(panel.x, panel.y), "menuButtonArea").unwrap();
+        let centre = Vec2::new(second.x + second.w / 2.0, second.y + second.h / 2.0);
+        assert!(!app.world().resource::<StockState>().solid.iter().any(|r| r.contains(centre)), "hidden: the world's");
+        click(app.world_mut(), more);
+        app.update();
+        app.update();
+        assert!(app.world().resource::<StockState>().solid.iter().any(|r| r.contains(centre)), "shown: not the world's");
+    }
+
+    /// The solid rectangles with the second row open or closed, and the points of the gap between the rows
+    /// and of the empty part of the second row, for a profile.
+    fn gap_probe(profile: UiProfile, open: bool) -> (bool, bool) {
+        let mut app = app_with_content_and_config(content(), placed_config(4.0 / 3.0), profile);
+        app.update();
+        if open {
+            let more = app.world_mut().query::<(Entity, &PanelButton)>().iter(app.world()).find(|(_, p)| **p == PanelButton::More).map(|(e, _)| e).unwrap();
+            click(app.world_mut(), more);
+            app.update();
+            app.update();
+        }
+        let state = app.world().resource::<StockState>();
+        let layout = state.layout.as_ref().unwrap();
+        let panel = layout.panel("button").unwrap();
+        let second = layout.at(Vec2::new(panel.x, panel.y), "menuButtonArea").unwrap();
+        let hit = |p: Vec2| state.solid.iter().any(|r| r.contains(p));
+        // Between the rows (below the panel, above the second row) and left of the second row's buttons.
+        (hit(Vec2::new(panel.x + panel.w / 2.0, panel.bottom() + 1.0)), hit(Vec2::new(panel.x + 10.0, second.y + 5.0)))
+    }
+
+    #[test]
+    fn in_the_armada_ii_look_one_pointer_rect_covers_both_rows_while_the_second_row_is_open() {
+        assert_eq!(gap_probe(UiProfile::Armada2, true), (true, true), "open: the gap and the empty part are the HUD's");
+        assert_eq!(gap_probe(UiProfile::Armada2, false), (false, false), "closed: the first row's area only");
+    }
+
+    #[test]
+    fn the_fleet_operations_look_keeps_the_buttons_own_areas_while_the_second_row_is_open() {
+        assert_eq!(gap_probe(UiProfile::FleetOps, true), (false, false));
+        assert_eq!(gap_probe(UiProfile::FleetOps, false), (false, false));
+    }
+
+    #[test]
+    fn only_the_armada_ii_looks_group_buttons_carry_the_display_space_tint() {
+        for (profile, want) in [(UiProfile::Armada2, true), (UiProfile::FleetOps, false)] {
+            let mut app = app_with_content_and_config(content(), placed_config(4.0 / 3.0), profile);
+            app.update();
+            let tinted = app.world_mut().query_filtered::<&crate::ui::gui_sprites::DisplayTint, With<PanelButton>>().iter(app.world()).count();
+            let buttons = app.world_mut().query::<&PanelButton>().iter(app.world()).count();
+            assert!(buttons >= 4);
+            assert_eq!(tinted, if want { buttons } else { 0 }, "{profile:?}");
+            let others = app.world_mut().query_filtered::<(), (With<crate::ui::gui_sprites::DisplayTint>, Without<PanelButton>)>().iter(app.world()).count();
+            assert_eq!(others, 0, "no other button carries it");
+        }
+        let t = buttons::GROUP_TINT;
+        assert!(t.hovered.iter().chain(&t.pressed).all(|v| *v > 0.0));
     }
 
     #[test]
@@ -1363,7 +1487,7 @@ mod button_panel {
             let app = app_with_content_and_config(content(), placed_config(aspect), UiProfile::Armada2);
             let state = app.world().resource::<StockState>();
             let layout = state.layout.as_ref().unwrap();
-            let r = layout.panel_at_right_edge("button").unwrap();
+            let r = layout.panel("button").unwrap();
             let overlaps = |o: R| r.x < o.right() && o.x < r.right() && r.y < o.bottom() && o.y < r.bottom();
             for name in ["resource", "minimap"] {
                 assert!(!layout.panel(name).is_some_and(overlaps), "{aspect}: {name}");
@@ -1420,7 +1544,7 @@ mod button_panel {
 
     #[test]
     fn a_cfg_without_a_panel_area_or_background_still_gives_usable_buttons() {
-        let text = format!("{CFG}idleButtonArea = 25 0 40 40\nmenuButtonArea = 201 45 40 40\n");
+        let text = format!("{CFG}idleButtonArea = 28 2 32 32\nmenuButtonArea = 172 40 32 32\n");
         let (cfg, _) = GuiCfg::parse("panel.cfg", &text);
         let config = HudConfig { gui: Some(cfg.layout_auto()), aspect: 21.0 / 9.0, fit_scale: false, ..default() };
         let mut app = app_with_content_and_config(content(), config, UiProfile::Armada2);
@@ -1445,5 +1569,286 @@ mod button_panel {
         let then = buttons::next_idle(&feed, Some(first)).unwrap().id;
         let wrap = buttons::next_idle(&feed, Some(then)).unwrap().id;
         assert_eq!((first, then, wrap), (EntityId(1), EntityId(7), EntityId(1)), "own ships only, wrapping");
+    }
+}
+
+#[test]
+fn native_tara_requirements_gate_the_menu_and_dispatched_units() {
+    let raw = |body: &str| Arc::new(sta_odf::resolve("test.odf", &mut |_| Some(body.to_owned())).unwrap());
+    let fake = sta_content::fake::db();
+    let mut builder = ContentDb::builder();
+    for weapon in fake.weapons() {
+        builder = builder.weapon(weapon.clone());
+    }
+    for def in fake.units() {
+        let mut def = def.clone();
+        if def.odf == "fx_cruiser" {
+            def.raw = raw("alert = 1\ncombat = 1\ncan_sandd = 1\ncan_explore = 1\nshow_movement_autonomy = 1\n");
+            let mut scout = def.clone();
+            scout.odf = "scout_only".into();
+            scout.key = sta_content::DefRef::new("scout_only").key;
+            scout.raw = raw("combat = 1\ncan_sandd = 0\ncan_explore = 1\n");
+            builder = builder.unit(scout);
+        }
+        builder = builder.unit(def);
+    }
+    let db = Arc::new(builder.build().unwrap());
+    let mut app = app_with_content(db.clone());
+    let mut source = ScriptedSource::from_json5(
+        "{ units: [
+          { id: 1, def: 'fx_cruiser', owner: 1, hull: 100, rails: [{ at: 0, pos: { x: 0, y: 0, z: 0 } }] },
+          { id: 2, def: 'scout_only', owner: 1, hull: 100, rails: [{ at: 0, pos: { x: 0, y: 0, z: 0 } }] },
+          { id: 3, def: 'fx_cruiser', owner: 2, hull: 100, rails: [{ at: 0, pos: { x: 0, y: 0, z: 0 } }] }
+        ] }",
+        &db,
+    ).unwrap();
+    let mut view = (*source.step(&[]).view).clone();
+    view.units[0].autonomy = Some([1, 0]);
+    {
+        let mut feed = app.world_mut().resource_mut::<HudFeed>();
+        feed.view = Arc::new(view);
+        feed.selected = vec![EntityId(1), EntityId(2), EntityId(3)];
+    }
+    {
+        let mut state = app.world_mut().resource_mut::<StockState>();
+        state.native.groups = vec!["ai".into(), "orders".into()];
+        for (odf, command, menu, requirements) in [
+            ("scout", "SCOUT", "orders", "ship can_explore"),
+            ("sandd", "SEARCH_AND_DESTROY", "orders", "ship combat can_sandd"),
+            ("green", "GREEN_ALERT", "ai", "alert"),
+            ("red", "RED_ALERT", "ai", "alert"),
+            ("movemed", "MOVE_MED", "ai", "alert show_movement_autonomy"),
+            ("swhigh", "SPECIAL_WEAPON_AUTONOMY_HIGH", "ai", "alert show_sw_autonomy"),
+        ] {
+            state.native.commands.insert(odf.into(), NativeCommand {
+                odf: format!("{odf}.odf"),
+                command: command.into(),
+                button: odf.into(),
+                menu: Some(menu.into()),
+                source: requirements.split_whitespace().map(str::to_owned).collect(),
+                tooltip: Some(format!("TIP_{odf}")),
+                verbose: Some(format!("VERBOSE_{odf}")),
+                ..default()
+            });
+        }
+    }
+    app.update();
+    let orders = cell(&mut app, Act::OpenNativeMenu(1));
+    click(app.world_mut(), orders);
+    app.update();
+    app.update();
+    let search = cell(&mut app, Act::NativeOrder("sandd".into()));
+    let tooltip = app.world().get::<Tooltip>(search).unwrap();
+    assert_eq!(tooltip.short, "TIP_sandd");
+    assert_eq!(tooltip.verbose.as_deref(), Some("VERBOSE_sandd"));
+    click(app.world_mut(), search);
+    app.update();
+    let scout = cell(&mut app, Act::NativeOrder("scout".into()));
+    click(app.world_mut(), scout);
+    app.update();
+    let back = cell(&mut app, Act::Back);
+    click(app.world_mut(), back);
+    app.update();
+    app.update();
+    let ai = cell(&mut app, Act::OpenNativeMenu(0));
+    click(app.world_mut(), ai);
+    app.update();
+    app.update();
+    let red = cell(&mut app, Act::NativeOrder("red".into()));
+    let medium = cell(&mut app, Act::NativeOrder("movemed".into()));
+    assert!(app.world().get::<GuiActive>(red).unwrap().0);
+    assert!(app.world().get::<GuiActive>(medium).unwrap().0);
+    assert!(!app.world().resource::<StockState>().grid.iter().any(|b| b.act == Act::NativeOrder("swhigh".into())));
+    let green = cell(&mut app, Act::NativeOrder("green".into()));
+    click(app.world_mut(), green);
+    app.update();
+    click(app.world_mut(), medium);
+    app.update();
+    use sta_sim::command::{AlertState, AutonomyKind, AutonomyLevel};
+    assert_eq!(app.world().resource::<CommandQueue>().0, [
+        CommandKind::Order(Order::SearchAndDestroy { units: vec![EntityId(1)] }),
+        CommandKind::Order(Order::Scout { units: vec![EntityId(1), EntityId(2)] }),
+        CommandKind::Order(Order::Alert { units: vec![EntityId(1)], level: AlertState::Green }),
+        CommandKind::Order(Order::Autonomy { units: vec![EntityId(1)], kind: AutonomyKind::Movement, level: AutonomyLevel::Medium }),
+    ]);
+}
+
+// ---- the Armada II cinematic window (#1073): authored layout data only, no install numbers
+
+/// A sheet that declares the window: the panel, the display, three frame pieces and the still.
+const WINDOW_CFG: &str = "\
+screenWidth = 1600
+screenHeight = 1200
+minimapPanelArea = 0 800 400 400
+cinematicPanelArea = 1200 800 400 400
+cinematicDisplayArea = 20 30 300 300
+cinematicBackgroundPanel = \"cine_frame\"
+cinematicBackgroundPanelSize = 3
+cinematicBackgroundPanel_0 = 0 0 400 30
+cinematicBackgroundPanel_1 = 0 30 20 340
+cinematicBackgroundPanel_2 = 0 370 400 30
+cinematicDefaultBackground = \"cine_still\"
+";
+
+/// The same sheet with the window declared off (no area, a zero size).
+const OFF_CFG: &str = "\
+screenWidth = 1600
+screenHeight = 1200
+minimapPanelArea = 0 800 400 400
+cinematicPanelArea = -1 -1 0 0
+cinematicDisplayArea = 0 0 0 0
+cinematicBackgroundPanelSize = 0
+";
+
+fn window_app(cfg: &str, aspect: f32, fit: super::layout::HudFit, view: bool) -> App {
+    let (parsed, warnings) = GuiCfg::parse("authored_window.cfg", cfg);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let config = HudConfig { gui: Some(parsed.layout_auto()), aspect, fit, fit_scale: false, ..default() };
+    let mut app = app_with_content_and_config(content(), config, UiProfile::Armada2);
+    if view {
+        app.world_mut().insert_resource(crate::render::action_camera::ActionView { image: Handle::default() });
+        // Rebuild the body with the picture's resource in place.
+        app.world_mut().resource_mut::<HudConfig>().aspect += 0.001;
+        app.update();
+        app.update();
+    }
+    app
+}
+
+fn px(n: &Node) -> R {
+    let (Val::Px(x), Val::Px(y), Val::Px(w), Val::Px(h)) = (n.left, n.top, n.width, n.height) else { panic!("px") };
+    R::new(x, y, w, h)
+}
+
+fn art_named(app: &mut App, name: &str) -> Vec<(usize, R)> {
+    let mut found: Vec<(usize, R)> = app
+        .world_mut()
+        .query::<(&crate::ui::gui_sprites::GuiImage, &Node)>()
+        .iter(app.world())
+        .filter(|(g, _)| g.names.first().is_some_and(|n| n == name))
+        .map(|(g, n)| (g.frame, px(n)))
+        .collect();
+    found.sort_by_key(|f| f.0);
+    found
+}
+
+fn picture_nodes(app: &mut App) -> Vec<R> {
+    app.world_mut().query_filtered::<&Node, With<crate::render::action_camera::ActionPicture>>().iter(app.world()).map(px).collect()
+}
+
+#[test]
+fn a_layout_that_declares_the_window_gets_panel_frame_still_and_picture_in_both_fits() {
+    use super::layout::HudFit;
+    for fit in HudFit::ALL {
+        for aspect in [4.0_f32 / 3.0, 16.0 / 9.0, 21.0 / 9.0] {
+            let mut app = window_app(WINDOW_CFG, aspect, fit, true);
+            let layout = app.world().resource::<StockState>().layout.clone().unwrap();
+            let panel = layout.panel("cinematic").expect("the declared panel");
+            let origin = Vec2::new(panel.x, panel.y);
+            let display = layout.at(origin, "cinematicDisplayArea").unwrap();
+            let want: Vec<(usize, R)> = layout
+                .pieces_in("cinematic", "cinematicBackgroundPanel")
+                .into_iter()
+                .map(|p| (p.frame, R::new(origin.x + p.rect.x, origin.y + p.rect.y, p.rect.w, p.rect.h)))
+                .collect();
+            assert_eq!(want.len(), 3);
+            assert_eq!(art_named(&mut app, "cine_frame"), want, "{fit:?} {aspect}: frame pieces at the declared rectangles");
+            assert_eq!(art_named(&mut app, "cine_still"), vec![(0, display)], "{fit:?} {aspect}: the still picture fills the display");
+            assert_eq!(picture_nodes(&mut app), vec![display], "{fit:?} {aspect}: the live picture is in the display");
+            // The panel group moves as a whole with the sheet: everything stays inside it.
+            let inside = |r: R| r.x >= layout.hud.x - 0.5 && r.right() <= layout.hud.right() + 0.5 && r.y >= layout.hud.y - 0.5 && r.bottom() <= layout.hud.bottom() + 0.5;
+            assert!(inside(panel) && inside(display), "{fit:?} {aspect}");
+            // Centred keeps the picture's aspect on every window; Stretched scales per axis like every panel.
+            if fit == HudFit::Centred {
+                assert!((display.w / display.h - 1.0).abs() < 0.01, "{aspect}: the 1:1 display stays square");
+            }
+            // The window has no buttons of its own and shields the pointer.
+            let buttons = app.world_mut().query::<&super::buttons::PanelButton>().iter(app.world()).filter(|b| matches!(b, super::buttons::PanelButton::Menu | super::buttons::PanelButton::Unavailable)).count();
+            assert_eq!(buttons, 0, "{fit:?} {aspect}");
+            assert!(app.world().resource::<StockState>().solid.contains(&panel), "{fit:?} {aspect}: the panel takes the pointer");
+        }
+    }
+}
+
+#[test]
+fn without_the_action_view_the_window_still_draws_its_frame_and_still_but_no_picture() {
+    let mut app = window_app(WINDOW_CFG, 16.0 / 9.0, super::layout::HudFit::Centred, false);
+    assert_eq!(art_named(&mut app, "cine_frame").len(), 3);
+    assert_eq!(art_named(&mut app, "cine_still").len(), 1);
+    assert!(picture_nodes(&mut app).is_empty());
+}
+
+#[test]
+fn a_layout_that_declares_the_window_off_or_not_at_all_gets_no_window() {
+    use super::layout::HudFit;
+    for cfg in [OFF_CFG, "screenWidth = 1600\nscreenHeight = 1200\nminimapPanelArea = 0 800 400 400\n"] {
+        for fit in HudFit::ALL {
+            let mut app = window_app(cfg, 16.0 / 9.0, fit, true);
+            assert!(art_named(&mut app, "cine_frame").is_empty() && art_named(&mut app, "cine_still").is_empty());
+            assert!(picture_nodes(&mut app).is_empty(), "{fit:?}: no live picture");
+            let layout = app.world().resource::<StockState>().layout.clone().unwrap();
+            assert!(layout.panel("cinematic").is_none());
+        }
+    }
+}
+
+#[test]
+fn the_movie_panel_and_the_window_read_the_same_keys_and_the_window_goes_quiet_while_a_clip_plays() {
+    use super::layout::HudFit;
+    // One layout, one spec: the movie panel's display is the window's picture rectangle.
+    let app = window_app(WINDOW_CFG, 16.0 / 9.0, HudFit::Centred, true);
+    let layout = app.world().resource::<StockState>().layout.clone().unwrap();
+    let spec = crate::ui::hud::cinematic::stock_spec(&layout).expect("the movie panel");
+    let panel = layout.panel("cinematic").unwrap();
+    let display = layout.at(Vec2::new(panel.x, panel.y), "cinematicDisplayArea").unwrap();
+    assert_eq!((spec.panel, spec.display), (panel, display));
+    // The window's camera pair goes quiet while a clip waits for or plays in a panel:
+    // `render::action_camera::tests::the_cameras_go_quiet_while_a_clip_plays_in_the_panel`.
+}
+
+/// Install-gated (`STA64_TEST_A2_STOCK_INSTALL`, `STA64_TEST_ROOTS_INSTALL` or `STA64_TEST_INSTALL`,
+/// read at run time, no numbers committed): for every mounted `gui_*.cfg`, the window exists exactly
+/// when the layout declares a visible cinematic panel; then its frame pieces and its still picture
+/// resolve in the install's GUI sprite tables. A layout that declares it off yields no window.
+#[test]
+fn installed_layouts_give_a_window_exactly_where_they_declare_one_and_its_art_resolves() {
+    let mut ran = 0;
+    for var in ["STA64_TEST_A2_STOCK_INSTALL", "STA64_TEST_ROOTS_INSTALL", "STA64_TEST_INSTALL"] {
+        let Some(root) = std::env::var_os(var) else { continue };
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), None).unwrap();
+        let tables: Vec<_> = vfs
+            .list("sprites")
+            .into_iter()
+            .filter(|p| p.rsplit('/').next().is_some_and(|f| f.starts_with("gui_") && f.ends_with(".spr")))
+            .map(|p| crate::ui::gui_sprites::read_table(&vfs, &p))
+            .collect();
+        let resolves = |name: &str, frame: usize| {
+            tables.iter().any(|t| t.sprite(&format!("{name}.{frame}")).is_some() || (frame == 0 && t.sprite(name).is_some()))
+        };
+        for cfg in vfs.list("misc").into_iter().filter(|p| p.rsplit('/').next().is_some_and(|f| f.starts_with("gui_") && f.ends_with(".cfg"))) {
+            let file = cfg.rsplit('/').next().unwrap();
+            let Some(gui) = crate::game::gui_layout(&vfs, file) else { continue };
+            let layout = StockLayout::for_aspect_fit(&gui, 4.0 / 3.0, super::layout::HudFit::Centred);
+            let mut world = World::new();
+            let root_entity = world.spawn_empty().id();
+            let mut queue = bevy::ecs::world::CommandQueue::default();
+            let drawn = window::spawn_a2(&mut Commands::new(&mut queue, &world), root_entity, &layout, None);
+            queue.apply(&mut world);
+            assert_eq!(drawn, layout.panel("cinematic").is_some(), "{var} {file}: a window exactly where the layout declares one");
+            if !drawn {
+                assert_eq!(world.entity(root_entity).get::<Children>().map_or(0, |c| c.len()), 0, "{var} {file}: nothing drawn");
+                continue;
+            }
+            ran += 1;
+            for piece in layout.pieces_in("cinematic", "cinematicBackgroundPanel") {
+                assert!(resolves(&piece.name, piece.frame), "{var} {file}: frame piece {} does not resolve", piece.frame);
+            }
+            if let Some(still) = layout.name("cinematicDefaultBackground") {
+                assert!(resolves(still, 0), "{var} {file}: the still picture does not resolve");
+            }
+        }
+    }
+    if ran == 0 {
+        eprintln!("SKIP (or no layout declares the window): set STA64_TEST_A2_STOCK_INSTALL, STA64_TEST_ROOTS_INSTALL or STA64_TEST_INSTALL");
     }
 }

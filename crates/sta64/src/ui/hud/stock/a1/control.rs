@@ -197,7 +197,7 @@ pub(in crate::ui::hud) fn spawn_grid(
         };
         let Some(rect) = rect else { continue };
         solid.push(rect);
-        super::super::spawn_button(commands, parent, theme, rect, b, &state.native, hud);
+        super::super::spawn_button(commands, parent, theme, rect, b, &state.native, hud, None);
     }
     solid
 }

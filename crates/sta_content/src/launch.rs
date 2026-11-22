@@ -148,6 +148,7 @@ fn point_at(def: &UnitDef, sod: Option<&Sod>, name: Option<&str>) -> LaunchPoint
     let Some(sod) = sod else {
         return LaunchPoint {
             offset: (Fixed::ZERO, Fixed::ZERO),
+            height: Fixed::ZERO,
             dir: (Fixed::ZERO, Fixed::ONE),
             clear: Fixed::from_int(DEFAULT_CLEAR),
             node: None,
@@ -177,6 +178,7 @@ fn point_at(def: &UnitDef, sod: Option<&Sod>, name: Option<&str>) -> LaunchPoint
             let clear = clear.max((ox * ox + oz * oz).sqrt());
             LaunchPoint {
                 offset: (fx(ox), fx(oz)),
+                height: fx(t[1] * scale),
                 dir: (fx(dx), fx(dz)),
                 clear: fx(clear),
                 node: Some(n.to_owned()),
@@ -184,6 +186,7 @@ fn point_at(def: &UnitDef, sod: Option<&Sod>, name: Option<&str>) -> LaunchPoint
         }
         None => LaunchPoint {
             offset: (Fixed::ZERO, Fixed::ZERO),
+            height: Fixed::ZERO,
             dir: (Fixed::ZERO, Fixed::ONE),
             clear: fx(clear),
             node: None,
@@ -192,10 +195,11 @@ fn point_at(def: &UnitDef, sod: Option<&Sod>, name: Option<&str>) -> LaunchPoint
 }
 
 /// Fill `launch` of every unit that builds something.
-pub fn attach<'a>(vfs: &sta_vfs::Vfs, units: impl Iterator<Item = &'a mut UnitDef>) {
+pub fn attach<'a>(vfs: &sta_vfs::Vfs, units: impl Iterator<Item = &'a mut UnitDef>) -> Vec<Warning> {
+    let mut warnings = Vec::new();
     let mut sods: BTreeMap<String, Option<Sod>> = BTreeMap::new();
     for u in units {
-        if u.build.list.is_empty() && u.free_unit.is_none() {
+        if u.build.list.is_empty() && u.free_unit.is_none() && u.research_slots.is_empty() && !u.receives_freight() {
             continue;
         }
         let key = u
@@ -210,8 +214,18 @@ pub fn attach<'a>(vfs: &sta_vfs::Vfs, units: impl Iterator<Item = &'a mut UnitDe
         if !u.build.list.is_empty() {
             u.launch = Some(launch_point(u, sod.as_ref()));
         }
-        if u.free_unit.is_some() {
+        if u.free_unit.is_some() || u.receives_freight() {
             u.dock = Some(dock_point(u, sod.as_ref()));
         }
+        for slot in &mut u.research_slots {
+            slot.pose = sod.as_ref().and_then(|sod| {
+                crate::RepairAttachment::from_sod(sod, sod.find(&slot.node)?)
+            });
+            if slot.pose.is_none() {
+                warnings.push(Warning::new(format!("sod/{key}.sod"),
+                    format!("{}: podHardpoints entry {} has no usable SOD pose", u.odf, slot.node)));
+            }
+        }
     }
+    warnings
 }

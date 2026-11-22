@@ -14,7 +14,6 @@
 //! - **Camera.** The plugin spawns a 2D camera unless [`ScreensConfig::own_camera`]
 //!   is off (the menu scene, UI-06, has the camera then).
 
-// The screens are for INT-M4 to start; the binary does not yet.
 #![allow(dead_code, unused_imports)]
 
 use bevy::ecs::schedule::SystemCondition;
@@ -24,14 +23,18 @@ use bevy::window::PrimaryWindow;
 use sta_sim::setup::GameSetup;
 
 mod data;
+mod mod_actions;
+mod mod_manager;
 pub mod frame;
+mod preview;
+mod presets;
 pub mod stock;
 #[cfg(test)]
 mod tests;
 pub(crate) mod view;
 
 pub use crate::frontend::lobby::{LobbyPlugin, MpFields, Multiplayer, NetGameReady, NetLaunch};
-pub use data::{ActiveMod, Browse, MAX_SEATS, MapEntry, ModEntry, SKIRMISH_AI, ScreenData, Seat, SeatControl, SelectedMod, SettingKey, Settings, SetupDraft, WindowSize};
+pub use data::{ActiveMod, Browse, MAX_SEATS, MapEntry, ModEntry, ModLaunchOptions, SKIRMISH_AI, ScreenData, Seat, SeatControl, SelectedMod, SettingKey, Settings, SetupDraft, SetupFog, WindowSize};
 pub use view::{Act, ScreenRoot};
 
 use crate::app::{AppState, GameSet};
@@ -46,6 +49,8 @@ pub enum Screen {
     SinglePlayer,
     /// Game setup, as Instant Action opens it.
     Setup,
+    /// Instant Action match options.
+    Advanced,
     MapSelect,
     Settings,
     ModSelect,
@@ -111,7 +116,7 @@ pub enum Col {
 /// Launch was pressed: start a match from this setup. INT-M4 connects it to
 /// INT-M3's match start (loading screen, then `AppState::InGame`).
 #[derive(Message, Debug, Clone)]
-pub struct StartGame(pub GameSetup);
+pub struct StartGame(pub GameSetup, pub crate::clock::MatchSpeed, pub Option<crate::viewer::TeamColours>, pub SetupFog);
 
 /// Use mod was pressed: `Some(folder)` for a mod, `None` for the base game.
 /// The host remounts the install with it (`Vfs::mount_install`'s `active_mod`).
@@ -171,7 +176,7 @@ impl Plugin for ScreensPlugin {
         }
         if !app.world().contains_resource::<ScreenData>() {
             let empty = sta_content::ContentDb::builder().build().expect("empty content");
-            app.insert_resource(ScreenData { content: std::sync::Arc::new(empty), races: std::sync::Arc::new(sta_content::Races::default()), maps: Vec::new(), mods: Vec::new(), base_name: None });
+            app.insert_resource(ScreenData { content: std::sync::Arc::new(empty), races: std::sync::Arc::new(sta_content::Races::default()), colours: Default::default(), maps: Vec::new(), mods: Vec::new(), base_name: None });
         }
         if !app.world().contains_resource::<State<AppState>>() {
             app.init_state::<AppState>();
@@ -179,6 +184,7 @@ impl Plugin for ScreensPlugin {
         if !app.is_plugin_added::<SettingsControlsPlugin>() {
             app.add_plugins(SettingsControlsPlugin);
         }
+        app.add_systems(Update, mod_actions::on_external_actions.in_set(GameSet::Ui).run_if(in_state(AppState::FrontEnd)));
         app.init_state::<Screen>()
             .init_resource::<ScreensConfig>()
             .init_resource::<Settings>()
@@ -186,6 +192,7 @@ impl Plugin for ScreensPlugin {
             .init_resource::<SelectedMod>()
             .init_resource::<ActiveMod>()
             .init_resource::<Browse>()
+            .init_resource::<ModLaunchOptions>()
             .init_resource::<MapReturn>()
             .init_resource::<ListScroll>()
             .init_resource::<stock::StockBox>()
@@ -215,6 +222,10 @@ impl Plugin for ScreensPlugin {
                 .after(rebuild)
                 .after(crate::ui::theme::WidgetPaint)
                 .after(crate::ui::theme::KitSet)
+                .run_if(in_state(AppState::FrontEnd)))
+            .add_systems(Update, preview::sync_preview
+                .in_set(GameSet::Ui)
+                .after(rebuild)
                 .run_if(in_state(AppState::FrontEnd)));
     }
 }
@@ -266,13 +277,20 @@ fn open_list(mut scroll: ResMut<ListScroll>) {
 fn on_keys(
     keys: Res<ButtonInput<KeyCode>>,
     screen: Res<State<Screen>>,
-    theme: Res<crate::ui::theme::Theme>,
     boxes: Query<&ScrollBox>,
     acts: Query<(Entity, &Act)>,
     mut browse: ResMut<Browse>,
     mut scroll: ResMut<ListScroll>,
     mut clicks: MessageWriter<ButtonClicked>,
 ) {
+    if *screen.get() == Screen::Advanced {
+        if keys.just_pressed(KeyCode::Escape)
+            && let Some((e, _)) = acts.iter().find(|(_, act)| **act == Act::CloseAdvanced(false))
+        {
+            clicks.write(ButtonClicked(e));
+        }
+        return;
+    }
     let (take, back) = match screen.get() {
         Screen::MapSelect => (Act::TakeMap, Act::Goto(Screen::Setup)),
         Screen::ModSelect => (Act::UseMod, Act::Goto(Screen::Main)),
@@ -295,7 +313,7 @@ fn on_keys(
     if b.count == 0 {
         return;
     }
-    let page = if scroll.view_h > 0.0 { (scroll.view_h / theme.list_row_h).floor().max(1.0) as usize } else { 10 };
+    let page = if scroll.view_h > 0.0 { (scroll.view_h / b.row_h).floor().max(1.0) as usize } else { 10 };
     let last = b.count - 1;
     let cur = b.selected.unwrap_or(0).min(last);
     let want = if keys.just_pressed(KeyCode::ArrowDown) {
@@ -321,31 +339,31 @@ fn on_keys(
         *row = want;
     }
     if scroll.view_h > 0.0 {
-        scroll.offset = reveal(scroll.offset, want, b.count, theme.list_row_h, scroll.view_h);
+        scroll.offset = reveal(scroll.offset, want, b.count, b.row_h, scroll.view_h);
     } else {
         scroll.pending = true;
     }
 }
 
 /// The mouse wheel scrolls the open list.
-fn on_wheel(mut wheel: MessageReader<MouseWheel>, theme: Res<crate::ui::theme::Theme>, boxes: Query<&ScrollBox>, mut scroll: ResMut<ListScroll>) {
+fn on_wheel(mut wheel: MessageReader<MouseWheel>, boxes: Query<&ScrollBox>, mut scroll: ResMut<ListScroll>) {
     let Ok(b) = boxes.single() else {
         wheel.clear();
         return;
     };
     for w in wheel.read() {
         let dy = match w.unit {
-            MouseScrollUnit::Line => w.y * theme.list_row_h * 3.0,
+            MouseScrollUnit::Line => w.y * b.row_h * 3.0,
             MouseScrollUnit::Pixel => w.y,
         };
-        let max = (b.count as f32 * theme.list_row_h - scroll.view_h).max(0.0);
+        let max = (b.count as f32 * b.row_h - scroll.view_h).max(0.0);
         scroll.offset = (scroll.offset - dy).clamp(0.0, max);
     }
 }
 
 /// Keep the box's scroll and [`ListScroll`] in step: the offset goes to the
 /// box, and the box's laid-out height comes back.
-fn track_scroll(theme: Res<crate::ui::theme::Theme>, mut boxes: Query<(&ScrollBox, &ComputedNode, &mut ScrollPosition)>, mut scroll: ResMut<ListScroll>) {
+fn track_scroll(mut boxes: Query<(&ScrollBox, &ComputedNode, &mut ScrollPosition)>, mut scroll: ResMut<ListScroll>) {
     let Ok((b, node, mut pos)) = boxes.single_mut() else { return };
     let view_h = node.size.y * node.inverse_scale_factor;
     if view_h > 0.0 && (scroll.view_h - view_h).abs() > 0.01 {
@@ -354,7 +372,7 @@ fn track_scroll(theme: Res<crate::ui::theme::Theme>, mut boxes: Query<(&ScrollBo
     if scroll.pending && view_h > 0.0 {
         scroll.pending = false;
         if let Some(i) = b.selected {
-            scroll.offset = reveal(scroll.offset, i, b.count, theme.list_row_h, view_h);
+            scroll.offset = reveal(scroll.offset, i, b.count, b.row_h, view_h);
         }
     }
     if (pos.0.y - scroll.offset).abs() > 0.01 {
@@ -363,8 +381,13 @@ fn track_scroll(theme: Res<crate::ui::theme::Theme>, mut boxes: Query<(&ScrollBo
     }
 }
 
+fn menu_random() -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |time| time.as_nanos() as u64);
+    crate::clock::splitmix64(now)
+}
+
 #[allow(clippy::too_many_arguments)]
-fn on_buttons(
+pub(crate) fn on_buttons(
     mut clicks: MessageReader<ButtonClicked>,
     acts: Query<&Act>,
     mut next: ResMut<NextState<Screen>>,
@@ -377,12 +400,20 @@ fn on_buttons(
     mut exit: MessageWriter<AppExit>,
     screen: Res<State<Screen>>,
     mut map_return: ResMut<MapReturn>,
+    mut notices: Option<ResMut<Messages<crate::ui::notices::Notice>>>,
+    launch_options: Res<ModLaunchOptions>,
+    flow: Option<Res<crate::game::flow::FlowConfig>>,
 ) {
+    use crate::ui::notices::{Notice, Severity};
     let Some(mut draft) = draft else { return };
     for ButtonClicked(e) in clicks.read() {
         let Ok(&act) = acts.get(*e) else { continue };
         match act {
             Act::Goto(s) => {
+                if s == Screen::Advanced && *screen.get() == Screen::Setup {
+                    let backup = (draft.options.clone(), draft.speed);
+                    draft.advanced_backup = Some(backup);
+                }
                 // Map select's Cancel goes back to whoever opened it.
                 if *screen.get() == Screen::MapSelect && s == Screen::Setup {
                     next.set(std::mem::take(&mut *map_return).0);
@@ -397,6 +428,8 @@ fn on_buttons(
             }
             Act::PickMod => {
                 browse.mod_row = selected.0.as_ref().and_then(|f| data.mods.iter().position(|m| m.folder.eq_ignore_ascii_case(f))).map_or(0, |i| i + 1);
+                browse.mod_no_intro = launch_options.no_intro;
+                browse.mod_no_ai = launch_options.no_ai;
                 next.set(Screen::ModSelect);
             }
             Act::TakeMap => {
@@ -404,19 +437,89 @@ fn on_buttons(
                 next.set(std::mem::take(&mut *map_return).0);
             }
             Act::UseMod => {
-                let folder = browse.mod_row.checked_sub(1).and_then(|i| data.mods.get(i)).map(|m| m.folder.clone());
-                selected.0.clone_from(&folder);
+                let folder = if browse.mod_row == 0 {
+                    None
+                } else {
+                    let Some(entry) = data.mods.get(browse.mod_row - 1).filter(|m| m.blocked.is_none()) else { continue };
+                    Some(entry.folder.clone())
+                };
+                if flow.is_none() {
+                    selected.0.clone_from(&folder);
+                    next.set(Screen::Main);
+                }
                 chosen.write(ModChosen(folder));
-                next.set(Screen::Main);
             }
+            Act::ToggleModNoIntro => browse.mod_no_intro = !browse.mod_no_intro,
+            Act::ToggleModNoAi => browse.mod_no_ai = !browse.mod_no_ai,
+            Act::CreateModShortcut | Act::VisitModWebsite => {}
             Act::Cycle(row, Col::Control) => draft.cycle_control(row),
             Act::Cycle(row, Col::Race) => draft.cycle_race(&data, row),
             Act::Cycle(row, Col::Team) => draft.cycle_team(row),
             Act::CycleResources => draft.cycle_resources(),
             Act::CycleOfficerLimit => draft.cycle_officer_limit(&data),
+            Act::CycleMatchSpeed => draft.speed = draft.speed.next(),
+            Act::CycleFog => draft.fog = draft.fog.next(),
+            Act::ToggleRandomPlacement => draft.toggle_placement(),
+            Act::TogglePreview => draft.preview_visible = !draft.preview_visible,
+            Act::CycleStartMarkers => draft.cycle_start_markers(),
+            Act::SaveSetup | Act::LoadSetup => {
+                let result = if act == Act::SaveSetup {
+                    presets::save(&draft, &data).map(|()| "Game settings saved")
+                } else {
+                    presets::load(&data).map(|saved| {
+                        *draft = saved;
+                        "Game settings loaded"
+                    })
+                };
+                let (severity, message) = match result {
+                    Ok(text) => (Severity::Info, crate::ui::i18n::tr(text)),
+                    Err(error) => (Severity::Bad, error),
+                };
+                if let Some(notices) = &mut notices {
+                    notices.write(Notice::new(severity, message));
+                }
+            }
+            Act::PickTeamColour(index) => draft.pick_colour(&data, index),
+            Act::RandomTeamColour => {
+                let swatches = data.colours.swatches();
+                let selected = draft.active_swatch(&data);
+                let choices: Vec<_> = (0..swatches.len()).filter(|&i| Some(i) != selected).collect();
+                if !choices.is_empty() {
+                    let index = (menu_random() % choices.len() as u64) as usize;
+                    draft.pick_colour(&data, choices[index]);
+                }
+            }
+            Act::CloseAdvanced(accept) => {
+                if let Some((options, speed)) = draft.advanced_backup.take() && !accept {
+                    draft.options = options;
+                    draft.speed = speed;
+                }
+                next.set(Screen::Setup);
+            }
+            Act::DefaultOptions => {
+                draft.options = Default::default();
+                draft.speed = crate::clock::MatchSpeed::Normal;
+                if *screen.get() == Screen::Setup {
+                    draft.fog = SetupFog::default();
+                    draft.random_placement = false;
+                    draft.preview_visible = true;
+                    draft.start_markers = Default::default();
+                }
+            }
             Act::Launch => {
-                if let Some(setup) = draft.to_setup(&data) {
-                    start.write(StartGame(setup));
+                let mut launch = draft.clone();
+                if launch.random_placement || launch.seats.iter().any(|seat| seat.race == data::RANDOM_SIDE) {
+                    launch.seed = menu_random();
+                }
+                if let Some(mut setup) = launch.to_setup(&data) {
+                    if launch_options.no_ai {
+                        for player in &mut setup.players {
+                            if matches!(player.control, sta_sim::setup::Control::Ai(_)) {
+                                player.control = sta_sim::setup::Control::Idle;
+                            }
+                        }
+                    }
+                    start.write(StartGame(setup, launch.speed, launch.launch_colours(&data), launch.fog));
                 }
             }
             Act::Exit => {

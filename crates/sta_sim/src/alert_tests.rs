@@ -336,7 +336,7 @@ fn a_whole_state_digest_with_non_default_alert_state_is_pinned() {
     assert_eq!(sim.digest(), PINNED, "{:#x}", sim.digest());
 }
 
-const PINNED: u64 = 0xadcc_88cf_dd1c_9c68;
+const PINNED: u64 = 0xf936_92b0_f6e2_a5d6;
 
 fn fake_game() -> Sim {
     let seat = |id| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "fx".into(), control: Control::Idle };
@@ -369,4 +369,17 @@ fn a_starbase_follows_the_same_gate_and_takes_alert_edits() {
     assert_eq!(fires(Some(AlertState::Green), false), 0, "green");
     assert_eq!(fires(Some(AlertState::Yellow), false), 0, "yellow without a hit");
     assert!(fires(Some(AlertState::Yellow), true) > 0, "yellow after a hit");
+}
+
+#[test]
+fn player_alert_applies_only_to_owned_live_actors_and_uses_the_combat_gate() {
+    let (mut sim, own, enemy) = duel();
+    let order = Command {
+        player: PlayerId(1),
+        seq: 1,
+        kind: CommandKind::Order(Order::Alert { units: vec![enemy, own, EntityId(999)], level: AlertState::Green }),
+    };
+    assert_eq!(fired_by(&mut sim, own, 180, vec![order]), 0);
+    assert_eq!(sim.alert_of(enemy), AlertState::Red);
+    assert_eq!(sim.alert_of(own), AlertState::Green);
 }

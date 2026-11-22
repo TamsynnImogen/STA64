@@ -11,7 +11,8 @@
 //! - **Tooltips**: put a [`Tooltip`] on any node. The short text shows after
 //!   [`TIP_SHORT_SECS`] of rest, the verbose one (if any) after [`TIP_VERBOSE_SECS`]
 //!   (Refit's `s_tooltipDelay` and `s_verboseTooltipDelay`, `ui/HUD.md`, "The tooltips
-//!   at the pointer"), below and right of the pointer.
+//!   at the pointer"), below and right of the pointer. The Armada II stock look draws its own
+//!   box with the delays of the component definition ([`stock_tooltip`](super::stock_tooltip)).
 //!
 //! Time is real time, so notices run on while the game is paused. Text is Bevy's, as
 //! in the rest of the kit until the SDF font lands; no shader.
@@ -27,7 +28,10 @@ use bevy::time::Real;
 use bevy::window::PrimaryWindow;
 use sta_sim::{PlayerId, SimEvent, UnitView};
 
-use super::sprite_font::{SpriteText, SpriteTextStyle, sprite_text_styled};
+use super::sprite_font::{SpriteText, SpriteTextStyle, StockRoleMark, sprite_text_styled};
+use super::stock_font::StockRole;
+pub use super::stock_tooltip::TipDelays;
+use super::stock_tooltip::{TipStock, load_tip_delays, stock_tip_box};
 use super::theme::Theme;
 use crate::app::GameSet;
 use crate::sim_link::{ContentRes, SimLink, SimMsg};
@@ -179,11 +183,43 @@ impl ChatLog {
 pub struct Tooltip {
     pub short: String,
     pub verbose: Option<String>,
+    /// What the Armada II stock look adds from the string table; every other look ignores it.
+    pub stock: Option<super::hud::stock::tooltip_text::StockTip>,
+    /// The action whose bound key the stock look puts into the text's hotkey slot (interim: only the
+    /// actions STA64 has a binding for).
+    pub bound: Option<crate::input::keys::Action>,
 }
 
 impl Tooltip {
     pub fn new(short: impl Into<String>) -> Tooltip {
-        Tooltip { short: short.into(), verbose: None }
+        Tooltip { short: short.into(), verbose: None, stock: None, bound: None }
+    }
+
+    /// Under the stock look: a build item's composition.
+    pub fn stock_build(mut self, parts: super::hud::stock::tooltip_text::BuildTipParts) -> Tooltip {
+        self.stock = Some(super::hud::stock::tooltip_text::StockTip::Build(parts));
+        self
+    }
+
+    /// The key bound for `action` fills the text's hotkey slot under the stock look.
+    pub fn bound_to(mut self, action: crate::input::keys::Action) -> Tooltip {
+        self.bound = Some(action);
+        self
+    }
+
+    /// The text of the stock look after `rest` seconds of the hover, composed from the string table
+    /// (`look`) where the tooltip carries a [`StockTip`](super::hud::stock::tooltip_text::StockTip),
+    /// else as [`text_at_with`](Self::text_at_with) resolved: nothing before the short delay, the
+    /// short text from it, the verbose text from the verbose delay.
+    pub fn stock_text_at(&self, rest: f32, delays: &TipDelays, look: super::hud::stock::tooltip_text::Lookup) -> Option<String> {
+        use super::hud::stock::tooltip_text::{StockTip, build_short, build_verbose};
+        let verbose = rest >= delays.verbose;
+        let shown = rest >= delays.short;
+        match &self.stock {
+            Some(StockTip::Build(p)) if shown => Some(if verbose { build_verbose(p, look) } else { build_short(p, look) }),
+            // No stock composition: today's text.
+            _ => self.text_at_with(rest, delays).map(look),
+        }
     }
 
     pub fn verbose(mut self, text: impl Into<String>) -> Tooltip {
@@ -191,14 +227,21 @@ impl Tooltip {
         self
     }
 
-    /// What shows after `rest` seconds under the pointer.
+    /// What shows after `rest` seconds under the pointer, with STA64's own delays.
     pub fn text_at(&self, rest: f32) -> Option<&str> {
-        if rest >= TIP_VERBOSE_SECS
+        self.text_at_with(rest, &TipDelays::default())
+    }
+
+    /// What shows after `rest` seconds of the hover, counted from its start: nothing before the
+    /// short delay, the short text from it, the verbose text (replacing it) from the verbose delay;
+    /// a tooltip without verbose text keeps its short text.
+    pub fn text_at_with(&self, rest: f32, delays: &TipDelays) -> Option<&str> {
+        if rest >= delays.verbose
             && let Some(v) = &self.verbose
         {
             return Some(v);
         }
-        (rest >= TIP_SHORT_SECS).then_some(self.short.as_str())
+        (rest >= delays.short).then_some(self.short.as_str())
     }
 }
 
@@ -357,9 +400,9 @@ struct NoticeLine(usize);
 #[derive(Component)]
 struct ChatRoot;
 #[derive(Component)]
-struct TipBox;
+pub(crate) struct TipBox;
 #[derive(Component)]
-struct TipText;
+pub(crate) struct TipText;
 
 fn colour(theme: &Theme, s: Severity) -> Color {
     match s {
@@ -376,7 +419,7 @@ fn text(theme: &Theme, s: String, size: f32, color: Color) -> impl Bundle {
 }
 
 /// The tooltip wraps at the box's width.
-fn tip_style(theme: &Theme) -> SpriteTextStyle {
+pub(crate) fn tip_style(theme: &Theme) -> SpriteTextStyle {
     SpriteTextStyle::role(super::theme::font_role(theme, theme.small_size)).wrapped(theme.text_size * 20.0 - 2.0 * theme.pad - 4.0)
 }
 
@@ -508,7 +551,9 @@ fn draw_notices(
             commands.entity(root).with_child((
                 Node { padding: UiRect::axes(Val::Px(theme.pad), Val::Px(2.0)), max_width: Val::Percent(NOTICE_WIDTH_PCT), ..default() },
                 BackgroundColor(theme.panel.with_alpha(0.6)),
-                children![(NoticeLine(i), sprite_text_styled(a.shown(), theme.text_size, colour(&theme, a.severity), SpriteTextStyle::role(super::theme::font_role(&theme, theme.text_size)).wrap_to_parent()))],
+                // Notices are the title role of the stock font rule (read from the executable, static); their
+                // placement is not established, so only the font is taken.
+                children![(NoticeLine(i), StockRoleMark::new(StockRole::Title), sprite_text_styled(a.shown(), theme.text_size, colour(&theme, a.severity), SpriteTextStyle::role(super::theme::font_role(&theme, theme.text_size)).wrap_to_parent()))],
             ));
         }
         return;
@@ -556,13 +601,86 @@ fn on_out(ev: On<PointerOut>, mut hover: ResMut<TipHover>) {
     }
 }
 
-/// The name of the unit under the pointer, for the tooltip box when no interface element
-/// has one (the original's tooltip over objects, its `tooltip*` colours; which name it shows
-/// is ours: the one the selection card uses).
+/// The unit under the pointer, for the tooltip box when no interface element has one: what its tooltip
+/// is made of and how long the pointer has rested on it. Under the Armada II stock look it composes
+/// the original's short and verbose texts ([`tooltip_text`](super::hud::stock::tooltip_text)) and
+/// follows the stock delays; every other look shows the name the selection card uses, at once.
 #[derive(Resource, Default, Debug, Clone, PartialEq)]
-pub struct UnitTip(pub Option<String>);
+pub struct UnitTip {
+    pub target: Option<sta_sim::EntityId>,
+    /// The plain look's one line (STA64's own choice of name).
+    pub plain: String,
+    /// What the stock look composes from.
+    pub parts: super::hud::stock::tooltip_text::WorldTipParts,
+    /// Seconds the pointer has rested on `target`; reset when the target changes, not when the
+    /// pointer moves within it. Real time: interim, the original counts world objects on its
+    /// display tick, which agrees at normal game speed.
+    pub rest: f32,
+}
 
-fn unit_tip(hover: Option<Res<crate::input::hover::HoveredUnit>>, feed: Option<Res<crate::ui::hud::model::HudFeed>>, mut tip: ResMut<UnitTip>) {
+impl UnitTip {
+    /// One step of the hover clock: a new target (or none) restarts it, the same target adds `dt`.
+    pub fn step(&mut self, next: Option<(sta_sim::EntityId, String, super::hud::stock::tooltip_text::WorldTipParts)>, dt: f32) {
+        match next {
+            Some((id, plain, parts)) if self.target == Some(id) => {
+                self.rest += dt.max(0.0);
+                if self.plain != plain {
+                    self.plain = plain;
+                }
+                if self.parts != parts {
+                    self.parts = parts;
+                }
+            }
+            Some((id, plain, parts)) => *self = UnitTip { target: Some(id), plain, parts, rest: 0.0 },
+            None => {
+                if self.target.is_some() {
+                    *self = UnitTip::default();
+                }
+            }
+        }
+    }
+
+    /// What shows now: under the stock look nothing before the short delay, the short text from it, the
+    /// verbose text from the verbose delay; else the plain name, at once.
+    pub fn text(&self, stock: bool, delays: &TipDelays, look: super::hud::stock::tooltip_text::Lookup) -> Option<String> {
+        use super::hud::stock::tooltip_text::{world_short, world_verbose};
+        self.target?;
+        if !stock {
+            return Some(self.plain.clone()).filter(|t| !t.is_empty());
+        }
+        let text = if self.rest >= delays.verbose {
+            world_verbose(&self.parts, look)
+        } else if self.rest >= delays.short {
+            world_short(&self.parts, look)
+        } else {
+            return None;
+        };
+        Some(text).filter(|t| !t.is_empty())
+    }
+}
+
+/// What the hovered unit's tooltip is made of: the class's `unitName` (the class label without one),
+/// `tooltip` and `verboseTooltip` keys and the unit's craft name (a name a script or the map gave it, else
+/// the definition's craft-name pool). Every unit the pointer can rest on is a craft.
+fn world_parts(feed: &crate::ui::hud::model::HudFeed, u: &UnitView) -> super::hud::stock::tooltip_text::WorldTipParts {
+    use crate::ui::hud::model::craft_names;
+    let def = feed.content.as_deref().and_then(|c| c.unit(u.def));
+    let key = |k: &str| def.and_then(|d| d.raw.str(k)).map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned);
+    super::hud::stock::tooltip_text::WorldTipParts {
+        craft: true,
+        name: feed.given_name(u).map(str::to_owned).or_else(|| def.and_then(|d| craft_names::pool_name(d, u.id))),
+        class_name: def.map_or_else(String::new, |d| craft_names::unit_name(d).unwrap_or(&d.class.0).to_owned()),
+        tooltip: key("tooltip"),
+        verbose: key("verboseTooltip"),
+    }
+}
+
+fn unit_tip(
+    hover: Option<Res<crate::input::hover::HoveredUnit>>,
+    feed: Option<Res<crate::ui::hud::model::HudFeed>>,
+    time: Option<Res<Time<Real>>>,
+    mut tip: ResMut<UnitTip>,
+) {
     // Apps without the match's hover or feed (the front end) leave it alone.
     let (Some(hover), Some(feed)) = (hover, feed) else { return };
     let next = hover.0.and_then(|id| {
@@ -570,19 +688,34 @@ fn unit_tip(hover: Option<Res<crate::input::hover::HoveredUnit>>, feed: Option<R
         let shown = u.flags.contains(sta_sim::view::UnitFlags::SELECTABLE)
             && !u.flags.contains(sta_sim::view::UnitFlags::DYING)
             && feed.view.visible_to(feed.player).iter().any(|v| v.id == id);
-        shown.then(|| feed.name(u))
+        shown.then(|| (id, feed.name(u), world_parts(&feed, u)))
     });
-    if tip.0 != next {
-        tip.0 = next;
+    let dt = time.map_or(0.0, |t| t.delta_secs());
+    if next.is_some() || tip.target.is_some() {
+        tip.step(next, dt);
     }
 }
 
+/// The character a key types, for a letter or digit key.
+fn key_char(key: KeyCode) -> Option<char> {
+    let name = format!("{key:?}");
+    let one = |rest: &str| (rest.chars().count() == 1).then(|| rest.chars().next()).flatten();
+    name.strip_prefix("Key").and_then(one).or_else(|| name.strip_prefix("Digit").and_then(one))
+}
+
+#[allow(clippy::too_many_arguments)]
 fn draw_tip(
     hover: Res<TipHover>,
     tips: Query<&Tooltip>,
     unit: Option<Res<UnitTip>>,
     strings: Option<Res<crate::ui::i18n::Strings>>,
+    delays: Option<Res<TipDelays>>,
+    profile: Option<Res<super::profile::UiProfile>>,
+    fonts: Option<Res<super::sprite_font::SpriteFonts>>,
+    canvas: Option<Res<super::stock_font::StockTextCanvas>>,
     cine: Option<Res<crate::ui::presentation::CineractiveState>>,
+    bindings: Option<Res<crate::input::keys::KeyBindings>>,
+    mut marks: ResMut<super::stock_tooltip::TipMarks>,
     mut boxed: Single<&mut Node, With<TipBox>>,
     mut words: Single<&mut SpriteText, With<TipText>>,
 ) {
@@ -592,16 +725,38 @@ fn draw_tip(
         boxed.display = Display::None;
         return;
     }
-    let shown = hover.target.and_then(|e| tips.get(e).ok()).and_then(|t| t.text_at(hover.rest));
-    let shown = shown.map(|text| strings.as_ref().map_or(text, |s| s.tooltip_text(text)))
-        .filter(|text| !text.is_empty())
-        .or_else(|| unit.as_deref().and_then(|u| u.0.as_deref()).filter(|t| !t.is_empty()));
+    let delays = delays.map_or_else(TipDelays::default, |d| *d);
+    let stock = super::stock_tooltip::stock_tip(profile.as_deref(), fonts.as_deref(), canvas.as_deref());
+    let look = |key: &str| strings.as_ref().map_or_else(|| key.to_owned(), |s| s.tooltip_text(key).to_owned());
+    // An interface element under the pointer owns the tooltip; the unit behind it has none.
+    let mut underline = Vec::new();
+    let shown = match hover.target {
+        Some(e) => tips
+            .get(e)
+            .ok()
+            .and_then(|t| {
+                if !stock {
+                    return t.text_at_with(hover.rest, &delays).map(look);
+                }
+                // The stock look: the string table's composition, the hotkey slot filled with the
+                // key the player bound where STA64 knows it, the markers consumed.
+                let bound = t.bound.and_then(|a| bindings.as_deref().and_then(|b| b.keys(a).first().copied())).and_then(key_char);
+                let (text, marked) = super::hud::stock::tooltip_text::hotkey_text(&t.stock_text_at(hover.rest, &delays, &look)?, bound);
+                underline = marked;
+                Some(text)
+            })
+            .filter(|text| !text.is_empty()),
+        None => unit.as_deref().and_then(|u| u.text(stock, &delays, &look)),
+    };
+    if marks.0 != underline {
+        marks.0 = underline;
+    }
     let Some(shown) = shown else {
         boxed.display = Display::None;
         return;
     };
     if words.text != shown {
-        words.text = shown.to_owned();
+        words.text = shown;
     }
     boxed.display = Display::Flex;
 }
@@ -613,10 +768,15 @@ fn draw_tip(
 fn position_tip(
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     ui_scale: Option<Res<UiScale>>,
+    stock: Option<Res<TipStock>>,
     mut boxed: Query<(Entity, &ComputedNode, &mut Node, &mut UiGlobalTransform), With<TipBox>>,
     children: Query<&Children>,
     mut descendants: Query<&mut UiGlobalTransform, Without<TipBox>>,
 ) {
+    // The stock rule lays its own box out (`stock_tooltip`).
+    if stock.is_some_and(|s| s.0) {
+        return;
+    }
     let Some(w) = window else { return };
     let Some(pointer) = w.cursor_position() else { return };
     let Ok((entity, measured, mut node, mut transform)) = boxed.single_mut() else { return };
@@ -702,16 +862,22 @@ impl Plugin for NoticePlugin {
             .init_resource::<ChatLog>()
             .init_resource::<TipHover>()
             .init_resource::<UnitTip>()
+            .init_resource::<TipDelays>()
+            .init_resource::<TipStock>()
+            .init_resource::<super::stock_tooltip::TipMarks>()
+            .init_resource::<super::stock_tooltip::TipDelayCache>()
             .add_observer(on_over)
             .add_observer(on_out)
             .add_systems(Startup, spawn_roots)
-            .add_systems(Update, (events_to_notices.after(crate::ui::presentation::consume), collect, age, retheme, tip_cfg_colours, unit_tip, (draw_notices, draw_chat, draw_tip)).chain().in_set(GameSet::Ui).after(ProfileSync))
+            .add_systems(Update, (events_to_notices.after(crate::ui::presentation::consume), collect, age, retheme, tip_cfg_colours, load_tip_delays, unit_tip, (draw_notices, draw_chat, draw_tip), stock_tip_box).chain().in_set(GameSet::Ui).after(ProfileSync))
             .add_systems(PostUpdate, position_tip.after(bevy::ui::UiSystems::Layout).before(bevy::ui::UiSystems::PostLayout));
     }
 }
 
 #[cfg(test)]
 mod tooltip_layout_tests;
+#[cfg(test)]
+mod stock_tooltip_tests;
 
 #[cfg(test)]
 mod tests {
@@ -740,6 +906,11 @@ mod tests {
         configure_sets(&mut app);
         app.add_plugins(NoticePlugin);
         app
+    }
+
+    /// A hovered unit whose plain tooltip line is `name`.
+    fn unit_tip_named(name: &str) -> UnitTip {
+        UnitTip { target: Some(sta_sim::EntityId(1)), plain: name.to_owned(), ..default() }
     }
 
     fn texts(app: &mut App) -> Vec<String> {
@@ -963,7 +1134,7 @@ mod tests {
             let t = app.world_mut().query_filtered::<&SpriteText, With<TipText>>().single(app.world()).unwrap().text.clone();
             (d, t)
         };
-        app.world_mut().resource_mut::<UnitTip>().0 = Some("USS Test".into());
+        app.world_mut().insert_resource(unit_tip_named("USS Test"));
         app.update();
         assert_eq!(shown(&mut app), (Display::Flex, "USS Test".to_owned()));
         // A button's tooltip wins over the unit's.
@@ -972,7 +1143,7 @@ mod tests {
         app.update();
         assert_eq!(shown(&mut app).1, "Metal");
         *app.world_mut().resource_mut::<TipHover>() = TipHover::default();
-        app.world_mut().resource_mut::<UnitTip>().0 = None;
+        *app.world_mut().resource_mut::<UnitTip>() = UnitTip::default();
         app.update();
         assert_eq!(shown(&mut app).0, Display::None);
     }
@@ -986,7 +1157,7 @@ mod tests {
         let display = |app: &mut App| app.world_mut().query_filtered::<&Node, With<TipBox>>().single(app.world()).unwrap().display;
         let e = app.world_mut().spawn(Tooltip::new("Metal")).id();
         *app.world_mut().resource_mut::<TipHover>() = TipHover { target: Some(e), rest: 5.0 };
-        app.world_mut().resource_mut::<UnitTip>().0 = Some("USS Test".into());
+        app.world_mut().insert_resource(unit_tip_named("USS Test"));
         app.update();
         assert_eq!(display(&mut app), Display::Flex, "shown without a cutscene");
         app.world_mut().resource_mut::<crate::ui::presentation::CineractiveState>().on = true;
@@ -1055,6 +1226,31 @@ mod tests {
         assert_eq!(app.world_mut().query_filtered::<&Node, With<TipBox>>().single(app.world()).unwrap().display, Display::None);
     }
 
+    #[test]
+    fn empty_short_hides_unit_tip_until_verbose_and_native_empty_stays_hidden() {
+        use crate::ui::i18n::Strings;
+        let mut app = rig();
+        app.update();
+        let e = app.world_mut().spawn(Tooltip::new("").verbose("GUI_DETAILS")).id();
+        *app.world_mut().resource_mut::<UnitTip>() = UnitTip {
+            target: Some(sta_sim::EntityId(1)),
+            plain: "USS Test".into(),
+            ..default()
+        };
+        app.insert_resource(Strings::from_game("english", "\"GUI_DETAILS\", \"Native details\""));
+        let display = |app: &mut App| app.world_mut().query_filtered::<&Node, With<TipBox>>().single(app.world()).unwrap().display;
+        *app.world_mut().resource_mut::<TipHover>() = TipHover { target: Some(e), rest: TIP_SHORT_SECS };
+        app.update();
+        assert_eq!(display(&mut app), Display::None);
+        app.world_mut().resource_mut::<TipHover>().rest = TIP_VERBOSE_SECS;
+        app.update();
+        assert_eq!(display(&mut app), Display::Flex);
+        assert_eq!(app.world_mut().query_filtered::<&SpriteText, With<TipText>>().single(app.world()).unwrap().text, "Native details");
+        app.insert_resource(Strings::from_game("english", "\"GUI_DETAILS\", \"\""));
+        app.update();
+        assert_eq!(display(&mut app), Display::None);
+    }
+
     /// Installed assets are local-only. Exercise the exact stop-command key
     /// reported in a screenshot through mounted I18nPlugin and tooltip drawing.
     #[test]
@@ -1087,9 +1283,9 @@ mod tests {
         for (rest, expected) in [TIP_SHORT_SECS, TIP_VERBOSE_SECS].into_iter().zip(expected) {
             *app.world_mut().resource_mut::<TipHover>() = TipHover { target: Some(e), rest };
             app.update();
-            let text = app.world_mut().query_filtered::<&Text, With<TipText>>().single(app.world()).unwrap();
-            assert_eq!(text.0, expected);
-            eprintln!("mounted stop tooltip ({rest}s): {}", text.0);
+            let text = app.world_mut().query_filtered::<&SpriteText, With<TipText>>().single(app.world()).unwrap();
+            assert_eq!(text.text, expected);
+            eprintln!("mounted stop tooltip ({rest}s): {}", text.text);
             assert_eq!(app.world_mut().query_filtered::<&Node, With<TipBox>>().single(app.world()).unwrap().display, Display::Flex);
         }
     }
@@ -1120,6 +1316,9 @@ mod tests {
         assert_eq!(notice_root.row_gap, Val::Px(new_theme.gap * 0.5));
         let lines = app.world_mut().query_filtered::<&SpriteText, With<NoticeLine>>().iter(app.world()).map(|t| (t.text.clone(), t.color)).collect::<Vec<_>>();
         assert_eq!(lines, vec![("Shields low".to_owned(), new_theme.warn)]);
+        // Notices are the title role of the stock font rule (the text takes it only under the stock gate).
+        let roles = app.world_mut().query_filtered::<&StockRoleMark, With<NoticeLine>>().iter(app.world()).map(|m| m.role).collect::<Vec<_>>();
+        assert_eq!(roles, vec![Some(StockRole::Title)]);
     }
 
     #[test]

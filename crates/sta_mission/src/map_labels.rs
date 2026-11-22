@@ -92,9 +92,13 @@ pub fn find_label_gaps(map: &sta_bzn::Map, carried: &BTreeSet<String>, class_of:
 pub fn read_map_label_gaps(vfs: &Vfs, index: &OdfIndex, bzn: &str, carried: &BTreeSet<String>) -> Vec<LabelGap> {
     let Some(Ok(bytes)) = vfs.read(&format!("bzn/{bzn}")) else { return Vec::new() };
     let Ok(map) = sta_bzn::parse(&bytes) else { return Vec::new() };
+    let profile = sta_content::Profile::detect(vfs);
     let mut class_of = |odf: &str| {
         let k = odf.to_ascii_lowercase();
-        sta_odf::resolve_layered(&k, &mut |n, v| index.load(vfs, n, v)).ok().and_then(|d| d.class_label().map(|c| c.trim().to_ascii_lowercase())).unwrap_or_default()
+        sta_content::odf::resolve_exact_for_profile(&k, profile, &mut |n, v| index.load(vfs, n, v))
+            .ok()
+            .and_then(|d| d.class_label().map(|c| c.trim().to_ascii_lowercase()))
+            .unwrap_or_default()
     };
     find_label_gaps(&map, carried, &mut class_of)
 }

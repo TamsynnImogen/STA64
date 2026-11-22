@@ -5,7 +5,7 @@
 //! [`TransporterRules`] (SIM-46 P0), which the sim does not read yet.
 
 use crate::digest::{Canon, DigestEntry, quoted};
-use crate::{RaceBoarding, RaceRepair, Races, SeatRaceRule, Warning};
+use crate::{RaceBoarding, RaceRepair, Races, SeatRaceRule, UnitDef, Warning};
 use sta_assets::cfg_h::CfgH;
 use sta_core::Fixed;
 
@@ -49,6 +49,10 @@ pub struct Rules {
     transporter: Option<TransporterRules>,
     /// The other typed `RTS_CFG.h` keys.
     pub cfg: CfgRules,
+    /// The render-only shot keys (not digested).
+    pub shots: ShotCfg,
+    /// The render-only warp-suppression multipliers (not digested).
+    pub fields: FieldCfg,
     /// Armada I's header-level start (`cfgStarting*`), see [`LegacyStart`].
     legacy_start: LegacyStart,
 }
@@ -106,6 +110,86 @@ pub struct CrewRules {
     pub max_crew: Option<i64>,
     /// Race key (lower case, sorted) and its accumulation rate per second.
     pub races: Vec<(String, Fixed)>,
+}
+
+/// The two `RTS_CFG.h` keys that only change how weapon shots are drawn. Render only: not
+/// digested and not in [`TYPED_CFG_KEYS`] (D9, D10: peers that differ only in how a shot
+/// looks play together). `None`: the header does not set the key; the engine's own default
+/// for an absent key was not read (INTERIM: a render reads an absent colour flag as off, no
+/// team colour, and invents no miss lifetime).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ShotCfg {
+    /// `BEAM_MISS_LIFETIME` (float, seconds): how long, counted from the shot, a beam whose
+    /// target is lost keeps being drawn towards where it pointed (read from the executable,
+    /// static; the value is read from data).
+    pub beam_miss_lifetime: Option<Fixed>,
+    /// `NORMAL_WEAPON_TEAM_COLOR` (flag): when set, phasers, pulses and photon, poleron and
+    /// shield-removing torpedoes take the owner's team colour, else they are white (read
+    /// from the executable, static; the value is read from data).
+    pub normal_weapon_team_color: Option<bool>,
+}
+
+impl ShotCfg {
+    pub const KEYS: [&'static str; 2] = ["BEAM_MISS_LIFETIME", "NORMAL_WEAPON_TEAM_COLOR"];
+
+    /// Whether normal weapons take the owner's team colour (absent: no, INTERIM).
+    pub fn team_colour(&self) -> bool {
+        self.normal_weapon_team_color.unwrap_or(false)
+    }
+
+    fn from_cfg(cfg: &CfgH, warnings: &mut Vec<Warning>) -> ShotCfg {
+        let mut out = ShotCfg::default();
+        if cfg.raw("BEAM_MISS_LIFETIME").is_some() {
+            match cfg.f32("BEAM_MISS_LIFETIME").filter(|v| v.is_finite() && (0.0..=1.0e4).contains(v)) {
+                Some(v) => out.beam_miss_lifetime = Some(Fixed::from_f64(v as f64)),
+                None => warnings.push(Warning::new("RTS_CFG.h", "BEAM_MISS_LIFETIME is not a non-negative number; treated as unset")),
+            }
+        }
+        if cfg.raw("NORMAL_WEAPON_TEAM_COLOR").is_some() {
+            match cfg.f32("NORMAL_WEAPON_TEAM_COLOR").filter(|v| v.is_finite()) {
+                Some(v) => out.normal_weapon_team_color = Some(v != 0.0),
+                None => warnings.push(Warning::new("RTS_CFG.h", "NORMAL_WEAPON_TEAM_COLOR is not a number; treated as unset")),
+            }
+        }
+        out
+    }
+}
+
+/// The two `RTS_CFG.h` keys that size the warp-suppression fields the minimap draws: a planet's
+/// bounding radius and a black hole's, each times its multiplier (read from the executable,
+/// static; the values are read from data). Render only: not digested and not in
+/// [`TYPED_CFG_KEYS`] (D9, D10: peers that differ only in how the minimap looks play together).
+/// `None`: the header does not set the key, and no field is drawn for that class (the engine's
+/// own default for an absent key was not read; INTERIM).
+///
+/// The whole rule (which classes have a field, and its radius) lives in one place,
+/// [`Rules::warp_suppression_radius`]. The first sim reader of it (the "no warp inside the field"
+/// rule, issue #1012) moves both keys into [`TYPED_CFG_KEYS`] and the digest (D10), so the minimap
+/// and the sim read one definition.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FieldCfg {
+    /// `cfgPLANET_DEWARP_RADIUS_MULTIPLIER`.
+    pub planet_dewarp_radius_multiplier: Option<Fixed>,
+    /// `cfgBLACKHOLE_DEWARP_RADIUS_MULTIPLIER`.
+    pub black_hole_dewarp_radius_multiplier: Option<Fixed>,
+}
+
+impl FieldCfg {
+    pub const KEYS: [&'static str; 2] = ["cfgPLANET_DEWARP_RADIUS_MULTIPLIER", "cfgBLACKHOLE_DEWARP_RADIUS_MULTIPLIER"];
+
+    fn from_cfg(cfg: &CfgH, warnings: &mut Vec<Warning>) -> FieldCfg {
+        let mut read = |key: &str| -> Option<Fixed> {
+            cfg.raw(key)?;
+            match cfg.f32(key).filter(|v| v.is_finite() && (0.0..=1.0e4).contains(v)) {
+                Some(v) => Some(Fixed::from_f64(v as f64)),
+                None => {
+                    warnings.push(Warning::new("RTS_CFG.h", format!("{key} is not a non-negative number; treated as unset")));
+                    None
+                }
+            }
+        };
+        FieldCfg { planet_dewarp_radius_multiplier: read(Self::KEYS[0]), black_hole_dewarp_radius_multiplier: read(Self::KEYS[1]) }
+    }
 }
 
 /// The autonomy a new craft starts with (CON-46, D9), from `RTS_CFG.h`:
@@ -306,7 +390,8 @@ impl TransporterRules {
 /// its race ODFs have none of Armada II's `normaldilithium` keys. Keys read
 /// from the stock data and named by the executable (static);
 /// that Instant Action grants exactly these is not measured on a running
-/// Armada I. Absent keys leave a field unset; no value is invented.
+/// Armada I. The executable reads the dilithium maximum when either start
+/// key is missing.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LegacyStart {
     /// `cfgStartingDilithium`: the dilithium stock of a seat.
@@ -318,7 +403,7 @@ pub struct LegacyStart {
 }
 
 impl LegacyStart {
-    const KEYS: [&'static str; 3] = ["cfgStartingCrew", "cfgStartingDilithium", "cfgMaxOfficers"];
+    const KEYS: [&'static str; 4] = ["cfgStartingCrew", "cfgStartingDilithium", "cfgMaxOfficers", "cfgMaxDilithium"];
 
     fn from_cfg(cfg: &CfgH, warnings: &mut Vec<Warning>) -> LegacyStart {
         let mut read = |key: &str| {
@@ -329,7 +414,9 @@ impl LegacyStart {
             }
             v
         };
-        LegacyStart { crew: read("cfgStartingCrew"), dilithium: read("cfgStartingDilithium"), // Same precedence as the officer list: `cfgMaxOfficers` counts only when no
+        let max_dilithium = cfg.i64("cfgMaxDilithium").filter(|v| *v >= 0).map(|v| v.min(1_000_000_000));
+        let mut start = |key| read(key).or_else(|| max_dilithium.filter(|_| cfg.raw(key).is_none()));
+        LegacyStart { crew: start("cfgStartingCrew"), dilithium: start("cfgStartingDilithium"), // Same precedence as the officer list: `cfgMaxOfficers` counts only when no
         // Armada II style officer key is present.
         officers: if cfg.raw("MP_OFFICER_LIMIT").is_none() && cfg.raw("SINGLE_PLAYER_OFFICER_LIMIT").is_none() {
             cfg.i64("cfgMaxOfficers").filter(|v| *v >= 0).map(|v| v.min(1_000_000_000))
@@ -619,6 +706,8 @@ impl Rules {
         rules.autonomy = AutonomyRules::from_cfg(&cfg, &mut warnings);
         rules.approach = ApproachRules::from_cfg(&cfg, &mut warnings);
         rules.cfg = CfgRules::from_cfg(&cfg, &mut warnings);
+        rules.shots = ShotCfg::from_cfg(&cfg, &mut warnings);
+        rules.fields = FieldCfg::from_cfg(&cfg, &mut warnings);
         rules.transporter = TransporterRules::from_cfg(&cfg, &mut warnings);
         (rules, warnings)
     }
@@ -802,6 +891,28 @@ impl Rules {
         Ok((rules, warnings))
     }
 
+    /// The minimap's warp-suppression multipliers, as the header sets them (render only).
+    pub fn fields(&self) -> FieldCfg {
+        self.fields
+    }
+
+    /// The radius of the warp-suppression field of a unit of this definition, world units: its
+    /// bounding radius (`UnitDef::radius`) times the class's multiplier; `None` for a class with no
+    /// field, an unset multiplier or an unread radius.
+    ///
+    /// Grades. Planets (`classLabel` `planet`): read from the executable, static; the multiplier
+    /// key is read from data. Black holes (`blackhole_obj`): INTERIM, inferred from the key's name,
+    /// the rule itself was not read in the executable. Armada I has the same data keys; its
+    /// executable was not read.
+    pub fn warp_suppression_radius(&self, def: &UnitDef) -> Option<Fixed> {
+        let multiplier = match def.raw.class_label()?.to_ascii_lowercase().as_str() {
+            "planet" => self.fields.planet_dewarp_radius_multiplier,
+            "blackhole_obj" => self.fields.black_hole_dewarp_radius_multiplier,
+            _ => None,
+        }?;
+        (def.radius > Fixed::ZERO).then(|| def.radius * multiplier)
+    }
+
     /// Armada I's header-level start, for a race that authors none.
     pub fn legacy_start(&self) -> LegacyStart {
         self.legacy_start
@@ -931,6 +1042,101 @@ impl Rules {
             out.push(DigestEntry::new(crate::digest::key("race:", &s.stem), value));
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod shot_cfg_tests {
+    use super::*;
+
+    fn parse(text: &str) -> (ShotCfg, usize) {
+        let mut w = Vec::new();
+        let c = ShotCfg::from_cfg(&CfgH::parse(text), &mut w);
+        (c, w.len())
+    }
+
+    #[test]
+    fn absent_keys_are_unset_without_a_warning() {
+        let (c, w) = parse("");
+        assert_eq!((c, w, c.team_colour()), (ShotCfg::default(), 0, false));
+    }
+
+    #[test]
+    fn the_miss_lifetime_is_a_bounded_number() {
+        let (c, w) = parse("float BEAM_MISS_LIFETIME = 0.3f;\n");
+        assert_eq!((c.beam_miss_lifetime, w), (Some(Fixed::from_f64(0.3f32 as f64)), 0));
+        for bad in ["-1", "x", "1e5"] {
+            let (c, w) = parse(&format!("float BEAM_MISS_LIFETIME = {bad};\n"));
+            assert_eq!((c.beam_miss_lifetime, w), (None, 1), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_team_colour_flag_reads_both_values_and_rejects_text() {
+        let (c, w) = parse("int NORMAL_WEAPON_TEAM_COLOR = 1;\n");
+        assert_eq!((c.normal_weapon_team_color, c.team_colour(), w), (Some(true), true, 0));
+        let (c, w) = parse("int NORMAL_WEAPON_TEAM_COLOR = 0;\n");
+        assert_eq!((c.normal_weapon_team_color, c.team_colour(), w), (Some(false), false, 0));
+        let (c, w) = parse("int NORMAL_WEAPON_TEAM_COLOR = x;\n");
+        assert_eq!((c.normal_weapon_team_color, w), (None, 1));
+    }
+
+    #[test]
+    fn the_keys_stay_out_of_the_digest() {
+        let (set, _) = parse("float BEAM_MISS_LIFETIME = 0.3f;\nint NORMAL_WEAPON_TEAM_COLOR = 1;\n");
+        assert_ne!(set, ShotCfg::default());
+        assert_eq!(Rules::default().digest_entries(), Rules { shots: set, ..Rules::default() }.digest_entries());
+        assert!(ShotCfg::KEYS.iter().all(|k| !TYPED_CFG_KEYS.contains(k)));
+    }
+}
+
+#[cfg(test)]
+mod field_cfg_tests {
+    use super::*;
+
+    fn parse(text: &str) -> (FieldCfg, usize) {
+        let mut w = Vec::new();
+        let c = FieldCfg::from_cfg(&CfgH::parse(text), &mut w);
+        (c, w.len())
+    }
+
+    #[test]
+    fn absent_keys_are_unset_without_a_warning() {
+        assert_eq!(parse(""), (FieldCfg::default(), 0));
+    }
+
+    #[test]
+    fn both_multipliers_are_read_and_bad_values_are_unset() {
+        let (c, w) = parse("float cfgPLANET_DEWARP_RADIUS_MULTIPLIER = 4.5f;\nint cfgBLACKHOLE_DEWARP_RADIUS_MULTIPLIER = 100;\n");
+        assert_eq!((c.planet_dewarp_radius_multiplier, c.black_hole_dewarp_radius_multiplier, w), (Some(Fixed::from_f64(4.5)), Some(Fixed::from_int(100)), 0));
+        let (c, w) = parse("float cfgPLANET_DEWARP_RADIUS_MULTIPLIER = -2;\nint cfgBLACKHOLE_DEWARP_RADIUS_MULTIPLIER = x;\n");
+        assert_eq!((c, w), (FieldCfg::default(), 2));
+        let (rules, _) = Rules::from_header("int cfgPLANET_DEWARP_RADIUS_MULTIPLIER = 3;\n");
+        assert_eq!(rules.fields().planet_dewarp_radius_multiplier, Some(Fixed::from_int(3)));
+    }
+
+    #[test]
+    fn the_field_radius_is_the_bounding_radius_times_the_class_multiplier() {
+        let (rules, _) = Rules::from_header("int cfgPLANET_DEWARP_RADIUS_MULTIPLIER = 4;\nint cfgBLACKHOLE_DEWARP_RADIUS_MULTIPLIER = 100;\n");
+        let def = |class: &str, radius: i32| {
+            let mut d = UnitDef::new("t", class);
+            d.raw = std::sync::Arc::new(sta_odf::resolve("t", &mut |_| Some(format!("classLabel = \"{class}\"\n"))).unwrap());
+            d.radius = Fixed::from_int(radius);
+            d
+        };
+        assert_eq!(rules.warp_suppression_radius(&def("planet", 260)), Some(Fixed::from_int(1040)));
+        assert_eq!(rules.warp_suppression_radius(&def("blackhole_obj", 10)), Some(Fixed::from_int(1000)));
+        assert_eq!(rules.warp_suppression_radius(&def("craft", 10)), None);
+        assert_eq!(rules.warp_suppression_radius(&def("planet", 0)), None, "an unread radius");
+        assert_eq!(Rules::default().warp_suppression_radius(&def("planet", 260)), None, "an unset key");
+    }
+
+    #[test]
+    fn the_keys_stay_out_of_the_digest() {
+        let (set, _) = parse("int cfgPLANET_DEWARP_RADIUS_MULTIPLIER = 3;\n");
+        assert_ne!(set, FieldCfg::default());
+        assert_eq!(Rules::default().digest_entries(), Rules { fields: set, ..Rules::default() }.digest_entries());
+        assert!(FieldCfg::KEYS.iter().all(|k| !TYPED_CFG_KEYS.contains(k)));
     }
 }
 
@@ -1148,7 +1354,8 @@ mod cfg_tests {
         rules.cfg.biomatter_recycle_fraction = Some(Fixed::ONE);
         let pop = PopulationRules { levels: [Fixed::from_int(1000); 4], civilian_rate_modifier: Fixed::ONE };
         let d = ContentDigest::from_entries(rules.with_population(pop).digest_entries());
-        for k in TYPED_CFG_KEYS.iter().filter(|k| !matches!(**k, "MP_OFFICER_LIST_SIZE" | "SINGLE_PLAYER_OFFICER_LIMIT" | "cfgMaxOfficers")) {
+        // The dilithium maximum contributes through the effective starting amounts.
+        for k in TYPED_CFG_KEYS.iter().filter(|k| !matches!(**k, "MP_OFFICER_LIST_SIZE" | "SINGLE_PLAYER_OFFICER_LIMIT" | "cfgMaxOfficers" | "cfgMaxDilithium")) {
             assert!(d.get(&format!("RTS_CFG.h:{k}")).is_some(), "{k}");
         }
     }
@@ -1170,6 +1377,14 @@ mod legacy_start_tests {
         let d = ContentDigest::from_entries(r.digest_entries());
         assert_eq!(d.get("RTS_CFG.h:cfgStartingDilithium"), Some("1234"));
         assert_eq!(d.get("RTS_CFG.h:cfgStartingCrew"), Some("2345"));
+    }
+
+    #[test]
+    fn missing_armada_one_start_uses_the_dilithium_maximum() {
+        let (rules, warnings) = Rules::from_header("int cfgMaxDilithium = 900;\nint cfgStartingCrew = 0;\n");
+        assert!(warnings.is_empty());
+        assert_eq!(rules.legacy_start().dilithium, Some(900));
+        assert_eq!(rules.legacy_start().crew, Some(0));
     }
 
     #[test]

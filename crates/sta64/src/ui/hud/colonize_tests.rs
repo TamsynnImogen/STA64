@@ -38,7 +38,7 @@ fn db() -> Arc<ContentDb> {
         let mut p = UnitDef::new(odf, "planet");
         p.planet_role = Some(PlanetRole::Producer);
         p.planet_colonizable = colonizable;
-        p.planet_max_population = 1;
+        p.planet_max_population = u8::from(colonizable);
         p.radius = n(100);
         p
     };
@@ -171,4 +171,101 @@ fn without_population_rules_no_planet_is_a_target() {
     for u in f.content.as_deref().unwrap().units() { b = b.unit(u.clone()); }
     f.content = Some(Arc::new(b.build().unwrap()));
     assert!(colonize(&f, 10).is_none());
+}
+
+#[test]
+fn visible_planet_population_tracks_the_colony_and_clears_in_fog() {
+    use super::status::population_text;
+
+    let mut f = feed(&[10], |_, _| {});
+    let planet = EntityId(10);
+    assert_eq!(population_text(&f, planet).as_deref(), Some("Population 0/1000"));
+    assert_eq!(population_text(&f, EntityId(15)).as_deref(), Some("Population 0/0"));
+    assert_eq!(population_text(&f, EntityId(1)), None);
+    let view = Arc::make_mut(&mut f.view);
+    view.colonies.insert(0, ColonyView {
+        id: planet,
+        population: Fixed::from_int(125),
+        max_population: Fixed::from_int(1000),
+        colonizer: None,
+    });
+    assert_eq!(population_text(&f, planet).as_deref(), Some("Population 125/1000"));
+    Arc::make_mut(&mut f.view).visibility = vec![(ME, Vec::new())];
+    assert_eq!(population_text(&f, planet), None);
+}
+
+/// Stock A2's `planet.odf` gives colonized planets `buildItem0 = "shield"`.
+/// Exercise the mounted definition, the ownership transition, and the ordinary HUD build action.
+#[test]
+fn stock_a2_colonized_planet_offers_its_authored_shield_build() {
+    use sta_content::{MapDef, OdfIndex};
+    use sta_sim::command::{Command, CommandKind, Edit};
+    use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
+    use sta_sim::{Sim, SimEvent, WorldSource};
+
+    let Ok(root) = std::env::var("STA64_TEST_A2_STOCK_INSTALL") else { return };
+    let overlay = std::env::var("STA64_TEST_A2_STOCK_MOD").ok();
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), overlay.as_deref()).expect("Armada II mount");
+    let (index, _) = OdfIndex::build(&vfs);
+    let (db, _) = ContentDb::load(&vfs, &index).expect("stock A2 content");
+    let planet_def = db.key("PB_CLSSM").and_then(|key| db.unit(key)).expect("Class M planet");
+    let shield = db.key("shield").expect("planetary shield definition");
+    assert_eq!(planet_def.planet_role, Some(PlanetRole::Producer));
+    assert!(planet_def.build.list.iter().any(|item| item.key == shield), "stock planet.odf buildItem0");
+    assert!(db.key("fcolony").is_some(), "stock Federation colony ship");
+    let db = Arc::new(db);
+    let seat = |id| PlayerSetup { id: PlayerId(id), team: TeamId(id), race: "federation".into(), control: Control::Human };
+    let mut sim = Sim::from_setup(&GameSetup {
+        seed: 1,
+        map: Arc::new(MapDef::empty()),
+        content: db.clone(),
+        players: vec![seat(0), seat(1)],
+        options: GameOptions::default(),
+    });
+    let send = |sim: &mut Sim, player: PlayerId, kind: CommandKind| {
+        let out = sim.step(&[Command { player, seq: 0, kind }]);
+        assert!(!out.events.iter().any(|event| matches!(event, SimEvent::Rejected { .. })), "command rejected: {:?}", out.events);
+    };
+    let spawn = |sim: &mut Sim, odf: &str, owner: PlayerId, pos: Vec3| {
+        let key = db.key(odf).unwrap();
+        send(sim, PlayerId::BENCH, CommandKind::Edit(Edit::Spawn {
+            odf: key, player: owner, pos, heading: (Fixed::ZERO, Fixed::ONE),
+        }));
+        sim.view().units.iter().map(|unit| unit.id).max().unwrap()
+    };
+    let planet = spawn(&mut sim, "PB_CLSSM", NEUTRAL, Vec3::ZERO);
+    let ship = spawn(&mut sim, "fcolony", PlayerId(0), Vec3::ZERO);
+    let planet_feed = |sim: &Sim| HudFeed {
+        view: sim.view(), player: PlayerId(0), selected: vec![planet], content: Some(db.clone()), ..Default::default()
+    };
+    assert!(grid(&planet_feed(&sim), Page::Top).is_empty(), "neutral planet has no build commands");
+    send(&mut sim, PlayerId(0), CommandKind::Order(Order::Colonize { units: vec![ship], planet }));
+    for _ in 0..3_000 {
+        if sim.view().unit(planet).is_some_and(|unit| unit.owner == PlayerId(0)) { break; }
+        sim.step(&[]);
+    }
+    let player = PlayerId(0);
+    assert_eq!(sim.view().unit(planet).unwrap().owner, player, "colony ship must finish colonization");
+    let price = &db.unit(shield).unwrap().build.cost;
+    for (slot, &amount) in price.iter().enumerate().filter(|(_, amount)| **amount > Fixed::ZERO) {
+        send(&mut sim, PlayerId::BENCH, CommandKind::Edit(Edit::Cargo(player, slot as u8, amount)));
+    }
+    let crew = db.unit(shield).unwrap().crew;
+    if crew > Fixed::ZERO {
+        send(&mut sim, PlayerId::BENCH, CommandKind::Edit(Edit::TeamCrew(player, crew)));
+    }
+    let f = planet_feed(&sim);
+    assert!(f.view.colonies.iter().any(|colony| colony.id == planet && colony.population > Fixed::ZERO));
+    let opener = grid(&f, Page::Top).into_iter().find(|button| button.act == Act::OpenBuild).expect("Research menu opener");
+    assert_eq!(opener.sprite_names, ["b_research"]);
+    let shield_button = grid(&f, Page::Build).into_iter().find(|button| {
+        matches!(&button.act, Act::Build { what, .. } if *what == shield)
+    }).expect("authored planetary shield build item");
+    assert_eq!(shield_button.look, super::model::Look::Ready);
+    let (kind, units) = super::model::command(&f, &shield_button.act).expect("HUD build command");
+    assert_eq!(units, [planet]);
+    assert!(matches!(&kind, CommandKind::Order(Order::Build { builder, what, at: None }) if *builder == planet && *what == shield));
+    send(&mut sim, player, kind);
+    assert!(sim.production_view().iter().any(|queue| queue.builder == planet &&
+        queue.jobs.iter().any(|job| job.def == shield && job.paid && job.started)));
 }

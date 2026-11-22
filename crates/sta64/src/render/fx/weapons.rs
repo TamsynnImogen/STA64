@@ -26,7 +26,12 @@
 //!   derived at fire time as distance / `shot_speed` (the sim hits on arrival) and
 //!   progress is linear in anim time; removed on the matching `Hit` or at arrival.
 //! - **Muzzle flash**: a flare at the shooter for every shot, for Refit's
-//!   `MuzzleTime` (0.5 s), standing in for its muzzle light.
+//!   `MuzzleTime` (0.5 s), standing in for its muzzle light. Under the Stock look a shot with a stock
+//!   drawing takes none of this (its muzzle and impact flares are `stock_flares.rs`'s); only a point-defence
+//!   shot, which has no stock drawing yet and would show nothing, keeps the flash (INTERIM), and a phaser
+//!   class shot that falls back to this drawing (no `Sprite`, say) keeps its flash too.
+//! - **Stock shots** (`stock_shots.rs`): under the Stock look a class with a stock drawing is
+//!   spawned there instead, and nothing of the above is.
 //! - Point-defence shots only flash.
 //!
 //! Shots leave the shooter's centre: the view has no hardpoint positions yet (the sim
@@ -108,6 +113,12 @@ impl Plugin for WeaponFxPlugin {
         // are mounted (`ordnance/ordnance.ini`, D12).
         // RND-29: a freighter's mining beam is drawn as a shot of its mining weapon, from where it orbits.
         app.add_plugins(super::super::mining::MiningPlugin).add_plugins(super::super::orbital_beam::OrbitalBeamPlugin);
+        // The Stock look's shots (#1041): registers `Effect::Shots` as having a stock version.
+        app.add_plugins(super::stock_shots::StockShotsPlugin);
+        // The Stock look's shield hit (#1041): registers `Effect::ShieldHits`, hooked into the stock beams and shots.
+        app.add_plugins(super::stock_shield_hits::StockShieldHitsPlugin);
+        // The Stock look's shields-down effect (#1041), under the same gate.
+        app.add_plugins(super::stock_shields_down::StockShieldsDownPlugin);
         app.init_resource::<OrdnanceRecipes>().add_systems(
             Update,
             load_recipes.run_if(resource_exists_and_changed::<crate::viewer::Mounted>).before(spawn_fx),
@@ -162,12 +173,12 @@ fn recipe_for(def: &sta_content::WeaponDef, recipes: &OrdnanceRecipes) -> Recipe
     r
 }
 
-fn point(link: &SimLink, id: EntityId, alpha: f32) -> Option<Vec3> {
+pub(super) fn point(link: &SimLink, id: EntityId, alpha: f32) -> Option<Vec3> {
     link.interpolate(id, alpha).map(|(p, _)| to_bevy(p))
 }
 
 /// How far a unit is drawn from its sim place ([`super::super::mining`]).
-fn shifted(offsets: &Option<Res<super::super::mining::VisualOffsets>>, id: EntityId) -> Vec3 {
+pub(super) fn shifted(offsets: &Option<Res<super::super::mining::VisualOffsets>>, id: EntityId) -> Vec3 {
     offsets.as_ref().and_then(|o| o.0.get(&id)).copied().unwrap_or(Vec3::ZERO)
 }
 
@@ -180,7 +191,7 @@ fn target_point(link: &SimLink, offsets: &Option<Res<super::super::mining::Visua
 }
 
 /// A per-shot seed in 0..10.23, as Refit's `(hash & 1023) * 0.01`.
-fn shot_seed(shooter: EntityId, weapon: ContentKey, tick: Tick) -> f32 {
+pub(super) fn shot_seed(shooter: EntityId, weapon: ContentKey, tick: Tick) -> f32 {
     let mut h = 0x811c_9dc5u32;
     for x in [shooter.0, weapon.0, tick as u32] {
         h = (h ^ x).wrapping_mul(0x0100_0193);
@@ -204,6 +215,7 @@ pub(crate) fn spawn_fx(
     link: Res<SimLink>,
     content: Res<ContentRes>,
     live: Query<(Entity, &WeaponFx)>,
+    stock: super::stock_shots::StockShots,
 ) {
     let alpha = clock.alpha();
     // A freighter's mining beam is drawn as a shot but is not one for anyone else.
@@ -213,10 +225,15 @@ pub(crate) fn spawn_fx(
         .collect();
     for ev in msgs.read().map(|m| &m.0).chain(mined.iter()) {
         match ev {
-            SimEvent::Fired { shooter, weapon, target, .. } => {
+            SimEvent::Fired { shooter, weapon, hardpoint, target } => {
                 let Some(def) = content.0.weapon(*weapon) else { continue };
                 // A shooter drawn off its sim place (an orbiting miner) shoots from where it is drawn.
                 let Some(from) = point(&link, *shooter, alpha).map(|p| p + shifted(&offsets, *shooter)) else { continue };
+                // The Stock look draws the classes it has a drawing for as the original does (`stock_shots`);
+                // the Remaster look, and every other class, take what follows.
+                if stock.try_spawn(&mut cmds, &link, &clock, &offsets, def, *shooter, *weapon, *hardpoint, target) {
+                    continue;
+                }
                 // A target the shot has just killed is gone from this tick's view: its last place
                 // is in the one before, so the killing beam still reaches it.
                 let to = target_point(&link, &offsets, target, alpha)
@@ -244,7 +261,10 @@ pub(crate) fn spawn_fx(
                 };
                 // Refit's emitter flare: `Fx::flare` at the start, `Emitter` half widths.
                 let flare = Look::flare(recipe.col, FLARE_CORE, 3.5, recipe.star, FLARE_STAR_SHARP, 0.0, 20.0, seed);
-                cmds.spawn((mk(FxKind::Flash, FLASH_TICKS as f32, flare), FxAlpha(1.0), Transform::from_translation(from)));
+                // Under the Stock look only a class the original gives a muzzle flare gets one (`stock_shots`).
+                if stock.look() != crate::render::profile::RenderProfile::Stock || super::stock_shots::has_muzzle_flare(&def.class.0) || def.kind == WeaponKind::PointDefence {
+                    cmds.spawn((mk(FxKind::Flash, FLASH_TICKS as f32, flare), FxAlpha(1.0), Transform::from_translation(from)));
+                }
                 let per_tick = def.shot_speed.to_f32() / TICK_HZ as f32;
                 let flight = if per_tick > 0.0 { (from.distance(to) / per_tick).ceil().max(1.0) } else { 1.0 };
                 match def.kind {
@@ -286,7 +306,7 @@ fn envelope(age: f32, life: f32, fade_in: f32) -> f32 {
 }
 
 #[allow(clippy::type_complexity)]
-fn update_fx(
+pub(super) fn update_fx(
     mut cmds: Commands,
     offsets: Option<Res<super::super::mining::VisualOffsets>>,
     clock: Res<AnimClock>,
@@ -578,5 +598,33 @@ mod tests {
         assert!(alphas[..=at].windows(2).all(|w| w[1] >= w[0]) && alphas[at..].windows(2).all(|w| w[1] <= w[0]));
         assert!(alphas[0] < peak && alphas[alphas.len() - 1] < peak);
         assert!(a.last().unwrap().is_empty(), "FX left after the timeline: {:?}", a.last());
+    }
+
+    /// The Remaster look's colour of a weapon with no recipe of its own, as it is on `main`: a class and
+    /// effect name colour, else the WEAPON's own ODF `lightColor` (not the ordnance's `ShotLook::light`),
+    /// else the recipe default. The numbers are what `main` gives, pinned.
+    #[test]
+    fn the_recipe_colour_is_the_weapons_own_light_colour_as_on_main() {
+        use sta_content::{ShotLight, WeaponDef};
+        let weapon = |class: &str, text: &str, ordnance_light: Option<[f32; 3]>| {
+            let mut w = WeaponDef::new("x", class, WeaponKind::Projectile);
+            w.raw = std::sync::Arc::new(sta_odf::resolve("x", &mut |_| Some(text.to_owned())).unwrap());
+            w.look.light = ordnance_light.map(|color| ShotLight { color, falloff_start: 100.0, falloff_range: 5.0 });
+            w
+        };
+        let recipes = OrdnanceRecipes::default();
+        let col = |w: &WeaponDef| recipe_for(w, &recipes).col;
+        let default = Recipe::new(Shape::Bolt).col;
+        // 0..255 scale, from the weapon's ODF; a different ordnance light is ignored.
+        let orange = col(&weapon("artillery", "[X]\nlightColor = 255 128 0\n", Some([0.0, 0.0, 255.0])));
+        assert_eq!(orange, Vec3::new(1.0, 128.0 / 255.0, 0.0));
+        // 0..1 scale.
+        assert_eq!(col(&weapon("artillery", "[X]\nlightColor = 0.5 0.25 1.0\n", None)), Vec3::new(0.5, 0.25, 1.0));
+        // No light colour on the weapon: the default, whatever the ordnance carries.
+        assert_eq!(col(&weapon("artillery", "[X]\n", Some([255.0, 0.0, 0.0]))), default);
+        // A class name colour wins over the light.
+        assert_eq!(col(&weapon("photontorpedo", "[X]\nlightColor = 255 0 0\n", None)), Vec3::new(0.3, 0.6, 1.0));
+        // An unparsable token is skipped (as `main` parses it).
+        assert_eq!(col(&weapon("artillery", "[X]\nlightColor = bad 255 0 0\n", None)), Vec3::new(1.0, 0.0, 0.0));
     }
 }

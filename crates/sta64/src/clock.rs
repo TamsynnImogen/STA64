@@ -27,11 +27,48 @@ pub enum ClockMode {
     Bench { step: f64 },
 }
 
+/// Tick pacing for a local Instant Action match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MatchSpeed {
+    Slow,
+    #[default]
+    Normal,
+    Fast,
+}
+
+impl MatchSpeed {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Slow => Self::Normal,
+            Self::Normal => Self::Fast,
+            Self::Fast => Self::Slow,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        // Stock sprite fonts need the ASCII multiplier suffix.
+        match self {
+            Self::Slow => "0.5x",
+            Self::Normal => "1x",
+            Self::Fast => "2x",
+        }
+    }
+
+    fn multiplier(self) -> f64 {
+        match self {
+            Self::Slow => 0.5,
+            Self::Normal => 1.0,
+            Self::Fast => 2.0,
+        }
+    }
+}
+
 /// Anim time: sim time at the last tick plus `alpha` ticks. Stands while
 /// the sim is paused.
 #[derive(Resource, Debug, Clone)]
 pub struct AnimClock {
     mode: ClockMode,
+    speed: MatchSpeed,
     /// Ticks the sim has run.
     tick: Tick,
     /// Frame time not yet turned into ticks, in seconds.
@@ -78,11 +115,15 @@ impl AnimClock {
     pub const MAX_TICKS_PER_FRAME: u32 = 8;
 
     pub fn new(mode: ClockMode, seed: u64) -> AnimClock {
-        AnimClock { mode, tick: 0, debt: 0.0, alpha: 0.0, paused: false, seed, wall: 0.0, frame_dt: 0.0, skip_dt: false }
+        AnimClock { mode, speed: MatchSpeed::Normal, tick: 0, debt: 0.0, alpha: 0.0, paused: false, seed, wall: 0.0, frame_dt: 0.0, skip_dt: false }
     }
 
     pub fn mode(&self) -> ClockMode {
         self.mode
+    }
+
+    pub fn set_match_speed(&mut self, speed: MatchSpeed) {
+        self.speed = speed;
     }
 
     /// Anim time in seconds: sim time at the last tick plus alpha of a tick.
@@ -152,7 +193,10 @@ impl AnimClock {
         if self.paused {
             return 0;
         }
-        self.debt += dt;
+        self.debt += match self.mode {
+            ClockMode::Wall => dt * self.speed.multiplier(),
+            ClockMode::Bench { .. } => dt,
+        };
         ((self.debt * TICK_HZ as f64) as u32).min(Self::MAX_TICKS_PER_FRAME)
     }
 
@@ -205,7 +249,7 @@ pub fn advance_idle_clock(time: Res<Time<Real>>, mut clock: ResMut<AnimClock>) {
 }
 
 /// SplitMix64 finaliser: a cheap, well-mixed, portable hash of a `u64`.
-fn splitmix64(mut z: u64) -> u64 {
+pub(crate) fn splitmix64(mut z: u64) -> u64 {
     z = z.wrapping_add(0x9e37_79b9_7f4a_7c15);
     z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
@@ -215,6 +259,21 @@ fn splitmix64(mut z: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn instant_action_speed_scales_wall_ticks_and_keeps_fixed_bench_steps() {
+        let two_ticks = 2.0 / TICK_HZ as f64;
+        for (speed, label, expected) in [(MatchSpeed::Slow, "0.5x", 1), (MatchSpeed::Normal, "1x", 2), (MatchSpeed::Fast, "2x", 4)] {
+            assert_eq!(speed.label(), label);
+            let mut wall = AnimClock::default();
+            wall.set_match_speed(speed);
+            assert_eq!(wall.begin_frame(two_ticks), expected);
+            assert_eq!(wall.wall(), two_ticks);
+            let mut bench = AnimClock::new(ClockMode::Bench { step: two_ticks }, 0);
+            bench.set_match_speed(speed);
+            assert_eq!(bench.begin_frame(123.0), 2);
+        }
+    }
 
     /// Run frames of `dt` and return the ticks each frame ran.
     fn frames(clock: &mut AnimClock, dt: f64, n: usize) -> Vec<u32> {

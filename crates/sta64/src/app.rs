@@ -101,6 +101,8 @@ pub struct LaunchConfig {
     pub mission_report: bool,
     /// `--nointro` (the executables' own argument): skip the intro movies (MED-05).
     pub nointro: bool,
+    /// Skip local skirmish AI, leaving its slots idle.
+    pub noai: bool,
     /// `--skirmish [<map>]`: play a match on the map (the map view with a seat,
     /// starting forces, an opponent, the HUD and audio); `map` holds its name.
     pub skirmish: bool,
@@ -166,6 +168,7 @@ Usage: sta64 [options]
   --opponent-race <name>   with --skirmish: the opponent's race (default: the next playable one)
   --mission-report         print which mission script every map would run, then exit
   --nointro                skip the logo and title movies at start
+  --noai                   leave local skirmish AI slots idle
   --reveal <what>          start a single-player game with the fog and/or shroud lifted (fog, shroud, all; comma
                            separated; testing aid, drawing only; Alt+F and Alt+V toggle them in the game)
 
@@ -244,6 +247,7 @@ impl LaunchConfig {
                 "--lcars-ui" => cfg.lcars_ui = true,
                 "--mission-report" => cfg.mission_report = true,
                 "--nointro" | "-nointro" => cfg.nointro = true,
+                "--noai" | "-noai" => cfg.noai = true,
                 "--reveal" => match value(&mut args).as_deref().and_then(crate::render::reveal::parse_reveal) {
                     Some((f, s)) => cfg.reveal = (cfg.reveal.0 | f, cfg.reveal.1 | s),
                     None => cfg.unknown.push("--reveal (needs fog, shroud or all, comma separated)".into()),
@@ -378,6 +382,15 @@ mod tests {
         let c = parse("--footage-log -nointro");
         assert_eq!((c.footage_log.as_deref(), c.nointro, c.unknown.is_empty()), (Some(""), true, true));
         assert!(USAGE.contains("--footage-log"));
+    }
+
+    #[test]
+    fn noai_is_a_local_skirmish_launch_option() {
+        for flag in ["--noai", "-noai"] {
+            let cfg = parse(flag);
+            assert!(cfg.noai && cfg.unknown.is_empty());
+            assert_eq!(crate::game::SkirmishCfg::from_launch(&cfg).opponent, Opponent::Idle);
+        }
     }
 
     #[test]

@@ -3,8 +3,15 @@ pub(in crate::ui::hud) mod a1;
 pub(in crate::ui) mod buttons;
 pub(in crate::ui::hud) mod commands;
 mod info;
+pub(super) use info::update_backdrop_fallback;
+mod weapon_icons;
+pub(super) use weapon_icons::update_visibility as update_weapon_icon_visibility;
+pub(super) use weapon_icons::update_tint as update_weapon_icon_tint;
+mod orders;
 pub(super) mod infobar;
 pub mod layout;
+pub(in crate::ui) mod tooltip_text;
+mod window;
 
 use super::layout::R;
 use super::{
@@ -17,6 +24,7 @@ use crate::ui::{
     notices::Tooltip,
     profile::UiProfile,
     sprite_font::{SpriteTextStyle, sprite_text_styled},
+    stock_font::{StockCanvas, StockTextCanvas},
     theme::{ButtonClicked, Theme, UiButton, WidgetState},
 };
 use crate::viewer::Mounted;
@@ -95,7 +103,7 @@ pub(super) fn queue_wireframe(commands: &mut Commands, root: Entity, r: R, model
 }
 
 fn metadata<'a>(native: &'a NativeCommands, act: &Act) -> Option<&'a NativeCommand> {
-    if let Act::NativeFormation(odf) = act {
+    if let Act::NativeFormation(odf) | Act::NativeOrder(odf) = act {
         return native.commands.get(odf);
     }
     native.get(match act {
@@ -117,16 +125,25 @@ fn metadata<'a>(native: &'a NativeCommands, act: &Act) -> Option<&'a NativeComma
 
 fn menu_button(id: u32, name: &str) -> Button {
     let mut sprite_names = vec![format!("b_{name}"), name.to_owned()];
-    if name.eq_ignore_ascii_case("orders") {
-        sprite_names.insert(0, "b_order".into());
-    }
+    let (tip, verbose) = match name {
+        "orders" => {
+            sprite_names.insert(0, "b_order".into());
+            ("GUI_CP_ORDER_TOOLTIP", Some("GUI_CP_ORDER_VTOOLTIP"))
+        }
+        "ai" => {
+            sprite_names.insert(0, "b_aiMenu".into());
+            ("GUI_CP_AI_MENU_TOOLTIP", Some("GUI_CP_AI_MENU_VTOOLTIP"))
+        }
+        "trade" => ("GUI_CP_TRADE_MENU_TOOLTIP", Some("GUI_CP_TRADE_MENU_VTOOLTIP")),
+        _ => (name, None),
+    };
     Button {
         cell: 0,
         label: name.to_uppercase(),
         act: Act::OpenNativeMenu(id),
         look: Look::Ready,
-        tip: name.to_owned(),
-        verbose: None,
+        tip: tip.to_owned(),
+        verbose: verbose.map(str::to_owned),
         sprite_names,
         keep_label: false,
     }
@@ -152,6 +169,15 @@ pub(in crate::ui::hud) fn buttons(feed: &HudFeed, page: Page, native: &NativeCom
             Act::Target(TargetMode::TransportAttack),
             &crate::ui::i18n::tooltip_key("Transport attack"),
         ));
+    }
+    if matches!(page, Page::Top | Page::Native(_)) {
+        let selected = feed.selected_units();
+        for (odf, meta) in &native.commands {
+            let Some(kind) = orders::Kind::read(meta) else { continue };
+            if selected.iter().any(|u| kind.eligible(feed, meta, u)) {
+                buttons.push(model::button(usize::MAX, &meta.button, Act::NativeOrder(odf.clone()), &meta.button));
+            }
+        }
     }
     if page == Page::Formations && buttons.iter().any(|b| matches!(b.act, Act::Formation(_))) {
         let formations: Vec<_> = native.formations().collect();
@@ -194,18 +220,7 @@ pub(in crate::ui::hud) fn buttons(feed: &HudFeed, page: Page, native: &NativeCom
             }
         }
     });
-    if let Page::Native(_) = page {
-        buttons.push(Button {
-            cell: usize::MAX,
-            label: "BACK".into(),
-            act: Act::Back,
-            look: Look::Ready,
-            tip: "Back".into(),
-            verbose: None,
-            sprite_names: vec!["b_back".into()],
-            keep_label: false,
-        });
-    } else {
+    if !matches!(page, Page::Native(_)) {
         for id in groups {
             if let Some(name) = native.menu_name(id) {
                 buttons.push(menu_button(id, name));
@@ -213,6 +228,16 @@ pub(in crate::ui::hud) fn buttons(feed: &HudFeed, page: Page, native: &NativeCom
         }
     }
     for button in &mut buttons {
+        let tooltip = match button.act {
+            Act::OpenBuild if button.tip == "Build" => Some(("GUI_CP_BUILD_TOOLTIP", "GUI_CP_BUILD_VTOOLTIP")),
+            Act::OpenFormations => Some(("GUI_CP_SET_FORMATION_TOOLTIP", "GUI_CP_SET_FORMATION_VTOOLTIP")),
+            Act::Back => Some(("GUI_CP_BACK_TOOLTIP", "GUI_CP_BACK_VTOOLTIP")),
+            _ => None,
+        };
+        if let Some((short, verbose)) = tooltip {
+            button.tip = short.to_owned();
+            button.verbose = Some(verbose.to_owned());
+        }
         if let Some(meta) = metadata(native, &button.act) {
             button.sprite_names = if matches!(button.act, Act::NativeFormation(_)) {
                 meta.formation_sprite_names()
@@ -238,6 +263,19 @@ pub(in crate::ui::hud) fn buttons(feed: &HudFeed, page: Page, native: &NativeCom
             .map_or((usize::MAX, b.cell), |[x, y]| (y, x));
         (rank, position)
     });
+    // Back is navigation, so it follows every command in a native submenu.
+    if matches!(page, Page::Native(_)) {
+        buttons.push(Button {
+            cell: usize::MAX,
+            label: "BACK".into(),
+            act: Act::Back,
+            look: Look::Ready,
+            tip: "GUI_CP_BACK_TOOLTIP".into(),
+            verbose: Some("GUI_CP_BACK_VTOOLTIP".into()),
+            sprite_names: vec!["b_back".into()],
+            keep_label: false,
+        });
+    }
     buttons
 }
 
@@ -342,6 +380,7 @@ fn spawn_button(
     b: &Button,
     native: &NativeCommands,
     hud: &HudState,
+    feed: Option<&HudFeed>,
 ) {
     let state = if b.look == Look::Locked {
         WidgetState::Disabled
@@ -360,6 +399,17 @@ fn spawn_button(
     let mut tip = Tooltip::new(b.tip.clone());
     if let Some(v) = &b.verbose {
         tip = tip.verbose(v.clone());
+    }
+    // The Armada II stock look composes a build item from its definition's keys and costs, and fills a
+    // command's hotkey slot with the key bound for it where STA64 has a binding (interim: Stop only).
+    match &b.act {
+        Act::Build { builder, what, .. } => {
+            if let Some(parts) = feed.and_then(|f| model::build_tip_parts(f, *builder, *what)) {
+                tip = tip.stock_build(parts);
+            }
+        }
+        Act::Stop => tip = tip.bound_to(crate::input::keys::Action::Stop),
+        _ => {}
     }
     commands.spawn((
         GridCell(b.act.clone()),
@@ -385,7 +435,8 @@ fn spawn_button(
                 b.label.clone(),
                 (rect.h * 0.22).clamp(18.0, 22.0),
                 theme.text,
-                SpriteTextStyle::default().centered().wrapped(rect.w).stock_label(),
+                // STA64's fallback label (shown only where the sprite is missing), not in the original.
+                SpriteTextStyle::default().centered().wrapped(rect.w).stock_fallback(),
             ),
         )],
     ));
@@ -416,6 +467,7 @@ pub(super) fn refresh(
         }
         if state.cfg.is_some() {
             commands.insert_resource(crate::render::overlays::GaugeStyle::default());
+            commands.insert_resource(StockTextCanvas::default());
         }
         state.layout = None;
         state.loaded = false;
@@ -445,8 +497,13 @@ pub(super) fn refresh(
     }
     let a1 = a1::is_a1(profile.as_deref());
     if a1 && state.slots.is_none() && let Some(m) = mounted.as_ref() {
-        // UI-19: `game_cfg.h` as the mod chain inherits it (ADR 0004 D9, D11).
-        state.slots = Some(match ButtonSlots::load(&m.0) {
+        // The inherited A2/FO header of an A1Compat mod can omit Armada I's keys.
+        let loaded = if sta_content::profile::a1_compat(&m.0) {
+            ButtonSlots::load_a1_compat(&m.0)
+        } else {
+            ButtonSlots::load(&m.0)
+        };
+        state.slots = Some(match loaded {
             Ok((slots, warnings)) => {
                 for w in &warnings {
                     warn!("hud: {}: {}", w.file, w.message);
@@ -478,6 +535,11 @@ pub(super) fn refresh(
             .gui
             .as_ref()
             .map(|cfg| StockLayout::for_aspect_fit(cfg, config.aspect, config.fit));
+        commands.insert_resource(StockTextCanvas(state.layout.as_ref().map(|l| StockCanvas {
+            hud: Vec2::new(l.hud.w, l.hud.h),
+            window: l.screen,
+            fit: l.fit,
+        })));
         commands.insert_resource(crate::render::overlays::GaugeStyle::from_cfg(
             state.layout.as_ref().and_then(|layout| layout.number("selectionGaugeHeight")),
             state.layout.as_ref().and_then(|layout| layout.number("selectionGaugeGap")),
@@ -506,7 +568,9 @@ pub(super) fn refresh(
         a1::action::spawn(&mut commands, body, &layout, &theme, strings.as_deref(), action.as_deref());
     }
     if !a1 && replaced {
-        buttons::spawn(&mut commands, body, &layout, &theme, more.0);
+        buttons::spawn(&mut commands, body, &layout, &theme, more.0, profile.as_deref() == Some(&UiProfile::Armada2));
+        // #1073: the cinematic window, when the mounted layout declares one (nothing otherwise).
+        window::spawn_a2(&mut commands, body, &layout, action.as_deref());
     }
     let now = model::info(&feed);
     let a1_shape = a1.then(|| a1::info::extra(&feed).map(|e| e.shape(&state.info_style))).flatten();
@@ -573,6 +637,12 @@ pub(super) fn refresh(
                 .filter_map(|key| layout.at(origin, key)),
         );
     }
+    if !a1 {
+        // The window's art takes the pointer like the other panels (none when the layout declares it off).
+        state.solid.extend(layout.panel("cinematic"));
+        // The button group is placed like every other panel; its solid rectangles come from the same rect.
+        state.solid.extend(buttons::solid(&layout, more.0, profile.as_deref().copied()));
+    }
     if a1 {
         if rebuild {
             if !replaced {
@@ -614,6 +684,7 @@ pub(super) fn refresh(
                     button,
                     &state.native,
                     &hud,
+                    Some(&feed),
                 );
             }
             if paged {
@@ -631,7 +702,7 @@ pub(super) fn refresh(
                         ChildOf(parent),
                         children![(
                             // Where the TTF label sat before: top left, unwrapped.
-                            sprite_text_styled(label, 18.0, theme.text, SpriteTextStyle::default().stock_label()),
+                            sprite_text_styled(label, 18.0, theme.text, SpriteTextStyle::default().stock_fallback()),
                         )],
                     ));
                 }
@@ -647,21 +718,35 @@ pub(super) fn refresh(
         *r = R::new(left, r.y, (right - left).max(0.0), r.h);
     }
     state.solid.retain(|r| r.w > 0.0);
-    // The button panel is a group anchored at the window's edge: solid where it is, outside the sheet's area too.
-    if !a1 {
-        state.solid.extend(buttons::panel_rect(&layout));
-    }
     state.grid = next;
     state.page = hud.page;
     state.layout = Some(layout);
 }
 
-pub(super) fn active(hud: Res<HudState>, mut buttons: Query<(&GridCell, &mut GuiActive)>) {
+pub(super) fn active(
+    hud: Res<HudState>,
+    feed: Res<HudFeed>,
+    state: Res<StockState>,
+    mut buttons: Query<(&GridCell, &mut GuiActive)>,
+) {
     for (cell, mut active) in &mut buttons {
-        let next = matches!(cell.0,Act::Target(mode) if hud.targeting==Some(mode));
+        let next = match &cell.0 {
+            Act::NativeOrder(odf) => state.native.commands.get(odf)
+                .and_then(|record| orders::Kind::read(record).map(|kind| kind.active(&feed, record)))
+                .unwrap_or(false),
+            Act::Target(mode) => hud.targeting == Some(*mode),
+            _ => false,
+        };
         if active.0 != next {
             active.0 = next;
         }
+    }
+}
+
+impl StockState {
+    pub(super) fn command(&self, feed: &HudFeed, odf: &str) -> Option<(sta_sim::command::CommandKind, Vec<sta_sim::EntityId>)> {
+        let record = self.native.commands.get(odf)?;
+        orders::Kind::read(record)?.command(feed, record)
     }
 }
 
@@ -680,6 +765,8 @@ pub(super) fn navigate(mut clicks: MessageReader<ButtonClicked>, nav: Query<&Sto
 }
 
 pub(super) use info::update as update_values;
+pub(super) use info::update_hull_tints;
+pub(super) use a1::info::update_tints as update_a1_tints;
 
 #[cfg(test)]
 mod gpu;
@@ -715,6 +802,7 @@ mod recrew_tests {
         native.commands.insert("recrew".into(), NativeCommand {
             odf: "recrew.odf".into(), command: "RECREW".into(), button: "recrew".into(),
             preferred: Some([0, 1]), menu: Some("Orders".into()),
+            source: Vec::new(),
             tooltip: Some("GUI_CP_RECREW_TOOLTIP".into()),
             verbose: Some("GUI_CP_RECREW_VTOOLTIP".into()),
             normal: None, hovered: None, pressed: None, disabled: None, active: None,
@@ -764,6 +852,7 @@ mod capture_tests {
         native.commands.insert("capture".into(), NativeCommand {
             odf: "capture.odf".into(), command: "TRANSPORT_ATTACK".into(), button: "capture".into(),
             preferred: Some([0, 10]), menu: Some("trade".into()),
+            source: Vec::new(),
             tooltip: Some("GUI_CP_TRANSPORT_ATTACK_TOOLTIP".into()),
             verbose: Some("GUI_CP_TRANSPORT_ATTACK_VTOOLTIP".into()),
             normal: None, hovered: None, pressed: None, disabled: None, active: None,

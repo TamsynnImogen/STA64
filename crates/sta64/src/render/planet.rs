@@ -69,6 +69,33 @@ pub struct PlanetParams {
     pub surf_cloud: Vec4,
     pub surf_drift: Vec4,
     pub surf_misc: Vec4,
+    /// The body's rotation, as the columns of the matrix that takes its own frame to the world (xyz; w unused). All
+    /// zero (a body no `update` has reached) means no rotation: the shader checks.
+    pub rot0: Vec4,
+    pub rot1: Vec4,
+    pub rot2: Vec4,
+}
+
+/// The columns a [`PlanetParams`] carries for a body turned by `rotation`.
+pub fn body_axes(rotation: Quat) -> [Vec4; 3] {
+    let m = Mat3::from_quat(rotation);
+    [m.x_axis.extend(0.0), m.y_axis.extend(0.0), m.z_axis.extend(0.0)]
+}
+
+/// The recipe surface's sample direction for a world offset `v` from the body's centre, as the shader takes it: into
+/// the body's frame (so a turned body shows its picture turned), then mirrored into the files' left-handed space.
+/// Kept in step with `planet.wesl`'s `surface`; the light's direction is carried into the same frame by
+/// [`body_frame`] and stays fixed in the world.
+#[cfg(test)]
+pub fn surface_direction(axes: &[Vec4; 3], v: Vec3) -> Vec3 {
+    let local = body_frame(axes, v);
+    Vec3::new(local.x, local.y, -local.z).normalize_or_zero()
+}
+
+/// A world vector in the body's frame (the transpose of the rotation applied).
+#[cfg(test)]
+pub fn body_frame(axes: &[Vec4; 3], v: Vec3) -> Vec3 {
+    Vec3::new(axes[0].truncate().dot(v), axes[1].truncate().dot(v), axes[2].truncate().dot(v))
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
@@ -456,6 +483,7 @@ fn update(
             let Some(mut m) = materials.get_mut(h) else { continue };
             let p = &mut m.params;
             p.centre = centre.extend(1.0);
+            [p.rot0, p.rot1, p.rot2] = body_axes(gt.compute_transform().rotation);
             p.eye = cam.translation().extend(1.0);
             p.mode.y = stock as u32 as f32;
             let (k, f) = if stock { (1.0, 1.0) } else { (SUN, FILL) };
@@ -517,11 +545,15 @@ impl CityRaces {
     /// From the race ODFs through a layered loader (as `Races::load` reads them). Lookup follows `Races::get`: the
     /// ODF's stem first, then the playable race of that key, then any, so two definitions that share a key (an observer
     /// and the race it observes) give the playable one's answer, whatever their order in the file.
-    pub fn from_loader(races: &sta_content::Races, load: &mut dyn FnMut(&str, usize) -> Option<String>) -> Self {
+    fn from_loader(
+        races: &sta_content::Races,
+        profile: sta_content::Profile,
+        load: &mut sta_content::odf::Loader<'_>,
+    ) -> Self {
         let mut by_key: std::collections::BTreeMap<String, (bool, Option<CityRace>)> = std::collections::BTreeMap::new();
         let mut by_stem = std::collections::BTreeMap::new();
         for race in races.iter() {
-            let city = sta_odf::resolve_layered(&race.stem, load).ok().and_then(|odf| {
+            let city = sta_content::odf::resolve_exact_for_profile(&race.stem, profile, load).ok().and_then(|odf| {
                 let texture = odf.str("citytexturename").map(str::trim).unwrap_or("");
                 if texture.is_empty() {
                     return None;
@@ -545,7 +577,7 @@ impl CityRaces {
     }
 
     pub fn load(vfs: &sta_vfs::Vfs, index: &sta_content::OdfIndex, races: &sta_content::Races) -> Self {
-        Self::from_loader(races, &mut |name, version| index.load(vfs, name, version))
+        Self::from_loader(races, sta_content::Profile::detect(vfs), &mut |name, version| index.load(vfs, name, version))
     }
 
     pub fn get(&self, race: &str) -> Option<&CityRace> {
@@ -898,6 +930,36 @@ mod tests {
             .unwrap_or_else(|e| panic!("{e:?}"));
     }
 
+    /// The recipe surface is sampled in the body's frame: a body turned about its pole shows a given surface
+    /// point where the turn carries it, so the picture turns with the body; the light stays fixed in the world, so
+    /// the lit side does not turn with it (#1047).
+    #[test]
+    fn a_turned_body_samples_a_turned_direction_and_the_light_stays_in_the_world() {
+        use super::{body_axes, body_frame, surface_direction};
+        let still = body_axes(Quat::IDENTITY);
+        let turn = Quat::from_rotation_y(1.1);
+        let turned = body_axes(turn);
+        // A fixed point of the surface, at body-frame direction `u`, is at world offset `turn * u` once the body turned.
+        for u in [Vec3::new(1.0, 0.2, -0.3), Vec3::new(-0.4, 0.5, 0.8), Vec3::Y] {
+            let u = u.normalize();
+            let before = surface_direction(&still, u * 500.0);
+            let after = surface_direction(&turned, turn * u * 500.0);
+            assert!((before - after).length() < 1e-5, "the same surface point samples the same direction: {before} {after}");
+        }
+        // A world direction that stood over one point now stands over another.
+        let w = Vec3::new(0.3, 0.1, 0.9).normalize();
+        assert!((surface_direction(&still, w * 500.0) - surface_direction(&turned, w * 500.0)).length() > 0.1);
+        // The light is a world vector: in the body's frame it turns the other way, so a surface point's light is the
+        // dot of the fixed light with the point's turned world place, and differs from before the turn.
+        let light = Vec3::new(0.6, 0.3, -0.7).normalize();
+        let point = Vec3::new(-0.2, 0.7, 0.4).normalize();
+        let lit_after = body_frame(&turned, light).dot(point);
+        assert!((lit_after - light.dot(turn * point)).abs() < 1e-5);
+        assert!((lit_after - light.dot(point)).abs() > 0.05);
+        // No rotation is all zeros (a body no update has reached): the shader's identity case; identity is the same.
+        assert_eq!(body_axes(Quat::IDENTITY)[0].truncate(), Vec3::X);
+    }
+
     /// The cause of the "huge rings": under the map camera's `DepthPrepass` the opaque ground wrote
     /// depth in the prepass and drew nothing in the main pass. Planets take no prepass.
     #[test]
@@ -1116,12 +1178,12 @@ mod tests {
                 _ => None,
             }
         });
-        let cities = super::CityRaces::from_loader(&races, &mut |name, version| {
+        let cities = super::CityRaces::from_loader(&races, sta_content::Profile::Sta2Classic, &mut |name, version| {
             if version != 0 {
                 return None;
             }
             match name.trim_end_matches(".odf") {
-                "a" => Some("name=Alpha\ncityTextureName=\"ECFR\"\nnumCities=35.0".into()),
+                "a" => Some("name=Alpha\ncityTextureName=\"ECFR\"\nnumCities=35.0\nnumCities=12.0".into()),
                 "b" => Some("name=beta\ncityTextureName=\"BORG\"".into()),
                 "c" => Some("name=gamma\ncityTextureName=\"\"".into()),
                 _ => None,
@@ -1184,7 +1246,7 @@ mod tests {
             ("a", 0) => Some("name=fx\ncityTextureName=\"TEST\"\nnumCities=10.0".into()),
             _ => None,
         });
-        super::CityRaces::from_loader(&races, &mut |name, version| match (name.trim_end_matches(".odf"), version) {
+        super::CityRaces::from_loader(&races, sta_content::Profile::Native, &mut |name, version| match (name.trim_end_matches(".odf"), version) {
             ("a", 0) => Some("name=fx\ncityTextureName=\"TEST\"\nnumCities=10.0".into()),
             _ => None,
         })
@@ -1395,7 +1457,7 @@ mod tests {
             }
         };
         let (races, _) = sta_content::Races::load_with(&mut |n, v| load(n, v));
-        let cities = super::CityRaces::from_loader(&races, &mut |n, v| load(n, v));
+        let cities = super::CityRaces::from_loader(&races, sta_content::Profile::Sta2Classic, &mut |n, v| load(n, v));
         assert_eq!(cities.get("federation").map(|c| c.texture.as_str()), Some("ECFR"));
         assert_eq!(cities.get("observer").map(|c| c.texture.as_str()), Some("OBS"), "the stem first");
     }

@@ -40,7 +40,8 @@ use crate::app::GameSet;
 use crate::media::{MovieFinished, MovieId, mission::Requested};
 use crate::sim_link::{PlayScriptSound, SimMsg, StopScriptSound};
 use crate::ui::i18n::Strings;
-use crate::ui::sprite_font::{SpriteTextStyle, sprite_text_styled};
+use crate::ui::sprite_font::{SpriteTextStyle, StockRoleMark, sprite_text_styled};
+use crate::ui::stock_font::{HAlign, StockRole, VAlign};
 use crate::ui::theme::{ButtonClicked, Theme, UiButton, button, font_role};
 
 /// A1's bridge-scene calls as typed events (the sim raises them as untyped `Presentation::Call`s).
@@ -873,6 +874,12 @@ fn spawn_layers(mut commands: Commands) {
     ));
 }
 
+/// A typed title takes the title role of the stock font rule (read from the executable, static); a
+/// subtitle's role is not established and keeps today's font. Placement: the script's own.
+fn title_role(subtitle: bool) -> StockRoleMark {
+    if subtitle { StockRoleMark::none() } else { StockRoleMark::new(StockRole::Title) }
+}
+
 fn draw_titles(mut commands: Commands, theme: Res<Theme>, mut titles: ResMut<Titles>, layer: Query<(Entity, Option<&Children>), With<TitleLayer>>) {
     if !titles.dirty {
         return;
@@ -892,20 +899,20 @@ fn draw_titles(mut commands: Commands, theme: Res<Theme>, mut titles: ResMut<Tit
             let [r, g, bl] = title_colour(t.subtitle).map(|c| c * b);
             commands.entity(root).with_child((
                 Node { position_type: PositionType::Absolute, left: Val::Vh(at.x / A1_CANVAS.y * 100.0), top: Val::Vh(at.y / A1_CANVAS.y * 100.0), ..default() },
-                children![sprite_text_styled(t.text.clone(), size, Color::srgb(r, g, bl), SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent())],
+                children![(title_role(t.subtitle), sprite_text_styled(t.text.clone(), size, Color::srgb(r, g, bl), SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent()))],
             ));
             continue;
         }
         if t.centred {
             commands.entity(root).with_child((
                 Node { position_type: PositionType::Absolute, left: Val::Percent(0.0), width: Val::Percent(100.0), justify_content: JustifyContent::Center, top: Val::Percent(p.at.y / p.canvas.y * 100.0), ..default() },
-                children![sprite_text_styled(t.text.clone(), size, Color::srgb(colour[0], colour[1], colour[2]), SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent())],
+                children![(title_role(t.subtitle), sprite_text_styled(t.text.clone(), size, Color::srgb(colour[0], colour[1], colour[2]), SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent()))],
             ));
             continue;
         }
         commands.entity(root).with_child((
             Node { position_type: PositionType::Absolute, left: Val::Percent(p.at.x / p.canvas.x * 100.0), top: Val::Percent(p.at.y / p.canvas.y * 100.0), max_width: Val::Percent(80.0), ..default() },
-            children![sprite_text_styled(t.text.clone(), size, Color::srgb(colour[0], colour[1], colour[2]), SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent())],
+            children![(title_role(t.subtitle), sprite_text_styled(t.text.clone(), size, Color::srgb(colour[0], colour[1], colour[2]), SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent()))],
         ));
     }
 }
@@ -1100,7 +1107,11 @@ fn draw_panel(
     // original does with text that does not fit is not established: interim, no scroll bar is drawn).
     let ok_top = l.ok[1];
     let clipped = |r: [f32; 4]| Node { height: pct((r[1] + r[3]).min(ok_top).max(r[1]) - r[1], ph), overflow: Overflow::clip(), ..at(r) };
-    let text = |t: String, size: f32, colour: Color| sprite_text_styled(t, size, colour, SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent());
+    // The body and the list lines are the default role, flowing from the top left (the original's
+    // placement of the objectives text, measured at one size); headers and the title are the title
+    // role (read from the executable, static), placed in their rectangle by [`StockRoleMark`].
+    let text = |t: String, size: f32, colour: Color| (StockRoleMark::new(StockRole::Default), sprite_text_styled(t, size, colour, SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent()));
+    let header = |t: String, colour: Color, h: HAlign, v: VAlign, rect: [f32; 4]| (StockRoleMark::placed(StockRole::Title, h, v, rect, l.canvas), sprite_text_styled(t, theme.heading_size, colour, SpriteTextStyle::role(font_role(&theme, theme.heading_size)).wrap_to_parent()));
     let line = |t: String, colour: Color| (Node { margin: UiRect::bottom(Val::Px(theme.gap)), ..default() }, children![text(t, theme.text_size, colour)]);
     let summary_colour = l.summary_colour.unwrap_or(Color::srgb(0.8, 1.0, 1.0));
     let header_colour = l.header_colour.unwrap_or(summary_colour);
@@ -1165,7 +1176,7 @@ fn draw_panel(
                 let colour = l.title_colour.unwrap_or(theme.title);
                 if stock_text {
                     // Centred in its rectangle (seen in one frame of the Armada II window).
-                    p.spawn((boxed(l.title, JustifyContent::Center), children![sprite_text_styled(c.title.clone(), theme.heading_size, colour, SpriteTextStyle::role(font_role(&theme, theme.heading_size)).centered_in_box())]));
+                    p.spawn((boxed(l.title, JustifyContent::Center), children![(StockRoleMark::placed(StockRole::Title, HAlign::Centre, VAlign::Centre, l.title, l.canvas), sprite_text_styled(c.title.clone(), theme.heading_size, colour, SpriteTextStyle::role(font_role(&theme, theme.heading_size)).centered_in_box()))]));
                 } else {
                     p.spawn((at(l.title), children![text(c.title.clone(), theme.heading_size, colour)]));
                 }
@@ -1177,7 +1188,7 @@ fn draw_panel(
                 && !c.body.is_empty()
                 && let Some(h) = heading_text(s, "GUI_OD_BRIEFING_SUMMARY", "BRIEFING SUMMARY:")
             {
-                p.spawn((heading_box(l.summary), children![text(h, theme.heading_size, summary_colour)]));
+                p.spawn((heading_box(l.summary), children![header(h, summary_colour, HAlign::Left, VAlign::Top, l.summary)]));
             }
             if !c.body.is_empty() {
                 p.spawn((if stock_text { clipped(l.text) } else { at(l.text) }, children![line(c.body.clone(), text_colour)]));
@@ -1189,7 +1200,7 @@ fn draw_panel(
                 // still show two.
                 let heading = fixed(s, "GUI_OD_OBJECTIVES", "OBJECTIVES:");
                 if !text_ends_with_heading(&c.body, &heading) {
-                    p.spawn((heading_box(l.header), children![text(heading, theme.heading_size, header_colour)]));
+                    p.spawn((heading_box(l.header), children![header(heading, header_colour, HAlign::Left, VAlign::Top, l.header)]));
                 }
                 let below = [l.text[0], l.header[1] + l.header[3], l.text[2], 0.0];
                 let list_node = if stock_text { clipped([below[0], below[1], below[2], ok_top - below[1]]) } else { at(below) };
@@ -1232,7 +1243,7 @@ fn draw_panel(
                 e.insert(crate::ui::gui_sprites::GuiButton { names: vec![img.clone()], keep_label: true });
             }
             if let Some(tip) = &l.ok_tooltip {
-                e.insert(crate::ui::notices::Tooltip::new(fixed(s, tip, "")));
+                e.insert(crate::ui::notices::Tooltip::new(tip.clone()));
             }
         });
     });
@@ -2187,6 +2198,20 @@ mod tests {
         assert_eq!(l.text_colour, None, "an absent colour keeps the theme's");
     }
 
+    /// A typed title takes the title role of the stock font rule; a subtitle's role is not established.
+    #[test]
+    fn typed_titles_are_marked_for_the_title_role_and_subtitles_for_none() {
+        let mut app = app();
+        app.insert_resource(Theme::default());
+        frozen(&mut app);
+        send(&mut app, Presentation::Title { id: 1, text: "Hello".into(), subtitle: false, seconds: None });
+        send(&mut app, Presentation::Title { id: 2, text: "Sub".into(), subtitle: true, seconds: None });
+        app.update();
+        let marks: Vec<(String, Option<StockRole>)> = app.world_mut().query::<(&SpriteText, &StockRoleMark)>().iter(app.world()).map(|(t, m)| (t.text.clone(), m.role)).collect();
+        assert!(marks.contains(&("Hello".to_owned(), Some(StockRole::Title))), "{marks:?}");
+        assert!(marks.contains(&("Sub".to_owned(), None)), "{marks:?}");
+    }
+
     mod stock_panel {
         use super::*;
         use crate::ui::hud::HudConfig;
@@ -2250,6 +2275,23 @@ mod tests {
                 assert!(t.iter().any(|x| x == want), "{want}: {t:?}");
             }
             assert!(!t.iter().any(|x| x.starts_with("* ")), "the stock panel marks its lines: {t:?}");
+        }
+
+        /// The stock panel's title and headers are the title role, placed in their cfg rectangles (title centred,
+        /// headers top left); the body and the list lines are the default role and flow from the top left.
+        #[test]
+        fn the_stock_panel_marks_its_texts_by_role() {
+            let (vfs, _t) = art_install();
+            let mut app = stock_app(CFG, 4.0 / 3.0, UiProfile::Armada2, Some(vfs));
+            open(&mut app, "");
+            let marks: Vec<(String, StockRoleMark)> = app.world_mut().query::<(&SpriteText, &StockRoleMark)>().iter(app.world()).map(|(t, m)| (t.text.clone(), *m)).collect();
+            let mark = |text: &str| marks.iter().find(|(t, _)| t == text).unwrap_or_else(|| panic!("{text}: {marks:?}")).1;
+            assert_eq!(mark("Mission 1"), StockRoleMark::placed(StockRole::Title, HAlign::Centre, VAlign::Centre, [20.0, 10.0, 360.0, 40.0], (800.0, 600.0)));
+            assert_eq!(mark("BRIEFING SUMMARY:"), StockRoleMark::placed(StockRole::Title, HAlign::Left, VAlign::Top, [20.0, 60.0, 360.0, 30.0], (800.0, 600.0)));
+            assert_eq!(mark("OBJECTIVES:"), StockRoleMark::placed(StockRole::Title, HAlign::Left, VAlign::Top, [20.0, 200.0, 360.0, 30.0], (800.0, 600.0)));
+            for body in ["Go.", "Find", "Hold"] {
+                assert_eq!(mark(body), StockRoleMark::new(StockRole::Default), "{body}");
+            }
         }
 
         #[test]

@@ -132,6 +132,9 @@ impl TechEntry {
 pub trait TechState {
     /// How many of this ODF stem the player has.
     fn count(&self, odf: &str) -> u32;
+    /// Count against a capacity list. Replacement can project the holdings
+    /// after its source retires while other requirements see the live state.
+    fn capacity_count(&self, odf: &str) -> u32 { self.count(odf) }
     /// The player's race (lower-case, e.g. `borg`, `unitedfederation`).
     fn race(&self) -> &str;
     /// Whether the player has an ally of this race.
@@ -406,6 +409,10 @@ impl TechTree {
 
     /// Whether `odf` may be built by a player in `state`.
     pub fn availability(&self, odf: &str, state: &dyn TechState) -> Availability {
+        self.availability_with_capacity(odf, state, true)
+    }
+
+    fn availability_with_capacity(&self, odf: &str, state: &dyn TechState, check_capacity: bool) -> Availability {
         let me = stem(odf);
         let Some(entry) = self.entries.get(&me) else { return Availability::NotListed };
         if entry.withheld {
@@ -418,7 +425,7 @@ impl TechTree {
             match r.group {
                 Some(g) => groups.entry(g).or_default().push(r),
                 None => {
-                    let u = self.unmet_of(r, &me, state);
+                    let u = self.unmet_of(r, &me, state, check_capacity);
                     hidden |= r.hide_unavailable && !u.is_empty();
                     unmet.extend(u);
                 }
@@ -432,7 +439,7 @@ impl TechTree {
                 let mut u = Vec::new();
                 let mut h = false;
                 for r in rs {
-                    let m = self.unmet_of(r, &me, state);
+                    let m = self.unmet_of(r, &me, state, check_capacity);
                     h |= r.hide_unavailable && !m.is_empty();
                     u.extend(m);
                 }
@@ -487,23 +494,66 @@ impl TechTree {
     /// the HUD's build page ask this, so they agree. The engine's own rule is
     /// undocumented; this is inferred from install data.
     pub fn availability_for_builder(&self, db: &ContentDb, odf: &str, builder: &str, state: &dyn TechState, ai: bool) -> Availability {
-        let a = self.availability(odf, state);
+        self.availability_for_builder_with_capacity(db, odf, builder, state, ai, true)
+    }
+
+    /// The replacement tech test, with capacity handled separately against
+    /// projected post-replacement holdings.
+    pub fn availability_for_builder_without_capacity(&self, db: &ContentDb, odf: &str, builder: &str, state: &dyn TechState, ai: bool) -> Availability {
+        self.availability_for_builder_with_capacity(db, odf, builder, state, ai, false)
+    }
+
+    fn availability_for_builder_with_capacity(&self, db: &ContentDb, odf: &str, builder: &str, state: &dyn TechState, ai: bool, check_capacity: bool) -> Availability {
+        let a = self.availability_with_capacity(odf, state, check_capacity);
         let a = if a == Availability::NotListed && !self.is_text() && self.unlisted_item_allowed(db, odf, builder, ai) {
             Availability::Available
         } else {
             a
         };
         // SIM-44: the unit's own `fleetCapFile`, where no XML list of that name governs it.
-        if a == Availability::Available
+        if check_capacity && a == Availability::Available
             && let Some(cap) = db.key(&stem(odf)).and_then(|k| db.unit(k)).and_then(|u| u.fleet_cap.as_deref())
             && !self.caps.contains_key(&cap.name)
         {
-            let used: i64 = cap.members.iter().map(|(o, v)| v.saturating_mul(i64::from(state.count(o)))).fold(0i64, i64::saturating_add);
+            let used: i64 = cap.members.iter().map(|(o, v)| v.saturating_mul(i64::from(state.capacity_count(o)))).fold(0i64, i64::saturating_add);
             if used >= cap.max {
                 return Availability::Locked { unmet: vec![Unmet::CapacityFull(cap.name.clone())], hidden: false };
             }
         }
         a
+    }
+
+    /// Check only named capacity lists for a replacement candidate. A
+    /// grouped requirement passes if any group has capacity available.
+    pub fn capacity_available_for(&self, db: &ContentDb, odf: &str, state: &dyn TechState) -> bool {
+        let me = stem(odf);
+        let full = |name: &str| self.caps.get(name).is_some_and(|list| {
+            let used = list.members.iter().map(|(o, v)| v.saturating_mul(i64::from(state.capacity_count(o))))
+                .fold(0i64, i64::saturating_add);
+            used >= list.max
+        });
+        if let Some(entry) = self.entries.get(&me) {
+            let mut groups: BTreeMap<u32, bool> = BTreeMap::new();
+            for requirement in &entry.requirements {
+                let blocked = requirement.conditions.iter().any(|c| matches!(c, Condition::CapList(name) if full(name)));
+                if let Some(group) = requirement.group {
+                    *groups.entry(group).or_insert(false) |= blocked;
+                } else if blocked {
+                    return false;
+                }
+            }
+            if !groups.is_empty() && groups.values().all(|blocked| *blocked) {
+                return false;
+            }
+        }
+        if let Some(cap) = db.key(&me).and_then(|k| db.unit(k)).and_then(|u| u.fleet_cap.as_deref())
+            && !self.caps.contains_key(&cap.name)
+        {
+            let used = cap.members.iter().map(|(o, v)| v.saturating_mul(i64::from(state.capacity_count(o))))
+                .fold(0i64, i64::saturating_add);
+            return used < cap.max;
+        }
+        true
     }
 
     fn unlisted_item_allowed(&self, db: &ContentDb, odf: &str, builder: &str, ai: bool) -> bool {
@@ -552,7 +602,7 @@ impl TechTree {
         out
     }
 
-    fn unmet_of(&self, r: &Requirement, me: &str, state: &dyn TechState) -> Vec<Unmet> {
+    fn unmet_of(&self, r: &Requirement, me: &str, state: &dyn TechState, check_capacity: bool) -> Vec<Unmet> {
         let mut out = Vec::new();
         for c in &r.conditions {
             match c {
@@ -582,9 +632,10 @@ impl TechTree {
                     }
                 }
                 Condition::CapList(name) => {
+                    if !check_capacity { continue; }
                     // An undefined list was warned about at load; it imposes no limit.
                     if let Some(list) = self.caps.get(name) {
-                        let used: i64 = list.members.iter().map(|(o, v)| v * i64::from(state.count(o))).sum();
+                        let used: i64 = list.members.iter().map(|(o, v)| v * i64::from(state.capacity_count(o))).sum();
                         if used >= list.max {
                             out.push(Unmet::CapacityFull(name.clone()));
                         }
@@ -1190,6 +1241,10 @@ mod tests {
         assert!(t.availability("spec_a", &borg.clone().with("spec_a", 1)).is_available());
         assert!(!t.availability("spec_a", &borg.clone().with("spec_a", 2)).is_available());
         assert!(!t.availability("spec_a", &borg.clone().with("spec_b", 1)).is_available());
+        let full = borg.clone().with("spec_a", 2);
+        assert!(t.availability_with_capacity("spec_a", &full, false).is_available());
+        assert!(!t.capacity_available_for(&crate::fake::db(), "spec_a", &full));
+        assert!(t.capacity_available_for(&crate::fake::db(), "spec_a", &borg));
         // buildPossible and race.
         assert_eq!(t.availability("cube", &borg), Availability::Withheld);
         assert!(!t.entry("cube").unwrap().dependency_build_possible);
@@ -1199,6 +1254,24 @@ mod tests {
             Availability::Locked { unmet: vec![Unmet::WrongRace("borg".into())], hidden: false }
         );
         assert_eq!(t.prerequisites("warp"), ["base", "alt"]);
+    }
+
+    #[test]
+    fn a_group_must_satisfy_tech_and_capacity_together() {
+        let xml = r#"<techtree>
+            <capacitylist name="full" maxCapValue="1"><obj>used</obj></capacitylist>
+            <capacitylist name="open" maxCapValue="1"><obj>other</obj></capacitylist>
+            <object ODF="result">
+                <requirement logicGroups="1"><obj>owned</obj><capList>full</capList></requirement>
+                <requirement logicGroups="2"><obj>missing</obj><capList>open</capList></requirement>
+            </object>
+        </techtree>"#;
+        let (tree, warnings) = TechTree::parse("group.xml", xml);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let holdings = Owned::new("test").with("owned", 1).with("used", 1);
+        assert!(tree.availability_with_capacity("result", &holdings, false).is_available());
+        assert!(tree.capacity_available_for(&crate::fake::db(), "result", &holdings));
+        assert!(!tree.availability("result", &holdings).is_available());
     }
 
     #[test]

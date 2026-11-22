@@ -10,7 +10,8 @@
 //!   graded *measured* (Refit's bench on Armada II) or *arranged* (ours, not measured).
 //! - Game setup: a dropdown per seat for who plays, the side (every playable faction
 //!   of the install, in its skirmish order) and the team; the map's labels and a
-//!   preview of its start positions; resources and officer limit beside it;
+//!   preview of its start positions; match mode outside the seat rows, resources
+//!   and officer limit beside the preview and on Advanced;
 //!   Launch writes [`StartGame`](super::StartGame) with the draft's `GameSetup`.
 //! - Texts: the mounted `label.map` key where there is one, else translated English.
 
@@ -48,7 +49,7 @@ pub enum ScreenLayout {
 
 /// Whether the stock layout has this screen (the others keep UI-07's).
 pub fn covers(screen: Screen) -> bool {
-    matches!(screen, Screen::Main | Screen::SinglePlayer | Screen::Setup | Screen::Settings)
+    matches!(screen, Screen::Main | Screen::SinglePlayer | Screen::Setup | Screen::Advanced | Screen::Settings)
 }
 
 /// The size of the box the stock screens are laid out in, logical px: the window
@@ -103,18 +104,22 @@ pub(super) fn on_dropdowns(mut changes: MessageReader<DropdownChanged>, seats: Q
         let Ok(&SeatDrop { row, col }) = seats.get(c.entity) else { continue };
         refocus.0 = Some((row, col));
         match col {
-            Col::Control => set_control(&mut draft, row, [SeatControl::Human, SeatControl::Computer, SeatControl::Idle][c.index.min(2)]),
+            Col::Control => {
+                let choices: &[SeatControl] = if draft.observing { &[SeatControl::Computer, SeatControl::Idle] } else { &[SeatControl::Human, SeatControl::Computer, SeatControl::Idle] };
+                if let Some(&control) = choices.get(c.index) {
+                    set_control(&mut draft, row, control);
+                }
+            }
             Col::Race => {
-                if let (Some(id), Some(seat)) = (data.races().get(c.index), draft.seats.get_mut(row)) {
-                    seat.race.clone_from(id);
+                let race = match c.index.checked_sub(1) {
+                    Some(index) => data.races().get(index).cloned(),
+                    None => Some(super::data::RANDOM_SIDE.to_owned()),
+                };
+                if let (Some(id), Some(seat)) = (race, draft.seats.get_mut(row)) {
+                    seat.race = id;
                 }
             }
-            Col::Team => {
-                let last = draft.seats.len().saturating_sub(1);
-                if let Some(seat) = draft.seats.get_mut(row) {
-                    seat.team = c.index.min(last) as u8;
-                }
-            }
+            Col::Team => draft.choose_team(row, c.index),
         }
     }
 }
@@ -123,24 +128,7 @@ pub(super) fn on_dropdowns(mut changes: MessageReader<DropdownChanged>, seats: Q
 /// hands the old one to a computer, and a player stepping off passes the role to the
 /// next seat (a lone seat stays the player).
 pub fn set_control(draft: &mut SetupDraft, row: usize, to: SeatControl) {
-    let Some(old) = draft.seats.get(row).map(|s| s.control) else { return };
-    if old == to {
-        return;
-    }
-    if old == SeatControl::Human {
-        let other = (row + 1) % draft.seats.len();
-        if other == row {
-            return;
-        }
-        draft.seats[other].control = SeatControl::Human;
-    } else if to == SeatControl::Human {
-        for s in &mut draft.seats {
-            if s.control == SeatControl::Human {
-                s.control = SeatControl::Computer;
-            }
-        }
-    }
-    draft.seats[row].control = to;
+    draft.select_control(row, to);
 }
 
 /// Live display information. Device and backend selection belongs to renderer startup.

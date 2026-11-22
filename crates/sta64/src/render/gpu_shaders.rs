@@ -75,6 +75,7 @@ fn rock_planet_and_nebula_pipelines_build() {
         eprintln!("SKIP: set STA64_GPU_TESTS=1 to run the GPU shader test");
         return;
     }
+    let _serial = crate::bench::frames::gpu_serial();
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins

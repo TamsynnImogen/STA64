@@ -17,16 +17,18 @@
 //! disconnected rather than buffered without bound.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::io::Write;
+use std::fmt;
+use std::io::{ErrorKind, Write};
 use std::net::{IpAddr, Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use super::wire::{
-    ClientMsg, EnvelopeReader, Polled, ReadError, RefuseReason, RoomCode, ServerMsg, TokenBucket,
+    ClientMsg, EnvelopeReader, Polled, ReadError, ReadStats, RefuseReason, RoomCode, ServerMsg,
+    TokenBucket,
 };
 use crate::proto::MAX_SEATS;
 
@@ -73,6 +75,10 @@ pub struct RelayConfig {
     /// How long a connection over its byte rate is throttled (not read) before
     /// it is cut off.
     pub throttle_limit: Duration,
+    /// At most one summary line of the connections refused or dropped before
+    /// a seat per this interval, from one thread for the relay's life (they
+    /// are not logged one by one).
+    pub log_summary_every: Duration,
 }
 
 impl Default for RelayConfig {
@@ -94,8 +100,222 @@ impl Default for RelayConfig {
             outgoing_queue: 1024,
             outgoing_bytes: 1024 * 1024,
             throttle_limit: Duration::from_secs(5),
+            log_summary_every: Duration::from_secs(10),
         }
     }
+}
+
+/// Where the relay writes its log lines (one line per call, no newline).
+/// [`Relay::bind`] writes to stderr; tests silence or capture it.
+pub type LogSink = Arc<dyn Fn(&str) + Send + Sync>;
+
+fn stderr_sink() -> LogSink {
+    // Not `eprintln!`, which panics when stderr cannot be written.
+    Arc::new(|line| {
+        let _ = writeln!(std::io::stderr(), "{line}");
+    })
+}
+
+/// How many close records the relay keeps; the oldest is dropped first.
+pub const CLOSE_LOG: usize = 64;
+
+/// A request a client may not make in its state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Misuse {
+    /// The first message was not a create or a join.
+    NotOpenOrJoin,
+    /// A create or join from a connection that already holds a seat.
+    RepeatedOpenOrJoin,
+    /// A kick or an open/close request from a seat that is not the host.
+    HostOnly,
+}
+
+/// Why the relay ended a client connection (one case per place in the relay
+/// where a connection is dropped).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CloseCause {
+    /// A read failed with something other than a timeout.
+    ReadFailed { kind: ErrorKind, os: Option<i32> },
+    /// A length prefix of zero or over the maximum.
+    BadLength(usize),
+    /// An envelope that did not decode; the decoder's text.
+    DecodeFailed(String),
+    /// A request the client may not make.
+    Misuse(Misuse),
+    /// The relay refused the first message (room full, wrong password, ...).
+    Refused(RefuseReason),
+    /// No create or join within the handshake deadline.
+    HandshakeTimeout,
+    /// A half-sent envelope was not completed within its deadline.
+    FrameTimeout,
+    /// Nothing received within the idle deadline.
+    IdleTimeout,
+    /// Over the byte or frame rate for longer than the throttle limit.
+    RateLimit,
+    /// Writing to the client failed.
+    WriteFailed { kind: ErrorKind, os: Option<i32> },
+    /// Writing to the client timed out.
+    WriteTimeout,
+    /// The client ended its stream (EOF).
+    ClientClosed,
+    /// The client sent a leave request.
+    ClientLeft,
+    /// The host kicked this seat.
+    Kicked,
+    /// The client's outgoing queue was full: it could not keep up.
+    TooSlow,
+    /// The seat was removed from its room by another path.
+    Removed,
+    /// The relay was shutting down.
+    RelayShutdown,
+    /// Not admitted: the connection limits were reached.
+    NotAdmitted,
+    /// The socket could not be set up (options, clones, writer thread).
+    SetupFailed,
+}
+
+impl CloseCause {
+    /// Ends that are part of normal operation and not logged (a client
+    /// that closes in the middle of an envelope is logged all the same).
+    pub fn is_routine(&self) -> bool {
+        matches!(
+            self,
+            CloseCause::ClientClosed | CloseCause::ClientLeft | CloseCause::RelayShutdown
+        )
+    }
+
+    fn read_failed(e: &std::io::Error) -> CloseCause {
+        CloseCause::ReadFailed {
+            kind: e.kind(),
+            os: e.raw_os_error(),
+        }
+    }
+
+    fn write_failed(e: &std::io::Error) -> CloseCause {
+        if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) {
+            CloseCause::WriteTimeout
+        } else {
+            CloseCause::WriteFailed {
+                kind: e.kind(),
+                os: e.raw_os_error(),
+            }
+        }
+    }
+
+    /// Ends where the relay sends no refusal first.
+    fn silent(&self) -> bool {
+        matches!(
+            self,
+            CloseCause::HandshakeTimeout
+                | CloseCause::FrameTimeout
+                | CloseCause::IdleTimeout
+                | CloseCause::RelayShutdown
+        )
+    }
+}
+
+impl fmt::Display for CloseCause {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let os = |os: &Option<i32>| os.map_or(String::new(), |c| format!(" (os error {c})"));
+        match self {
+            CloseCause::ReadFailed { kind, os: c } => write!(f, "read failed: {kind:?}{}", os(c)),
+            CloseCause::BadLength(n) => write!(f, "bad length prefix {n}"),
+            CloseCause::DecodeFailed(e) => write!(f, "envelope did not decode: {e}"),
+            CloseCause::Misuse(m) => write!(f, "protocol misuse: {m:?}"),
+            CloseCause::Refused(r) => write!(f, "refused: {r}"),
+            CloseCause::HandshakeTimeout => f.write_str("handshake deadline"),
+            CloseCause::FrameTimeout => f.write_str("half-sent envelope deadline"),
+            CloseCause::IdleTimeout => f.write_str("idle deadline"),
+            CloseCause::RateLimit => f.write_str("over the rate limit too long"),
+            CloseCause::WriteFailed { kind, os: c } => write!(f, "write failed: {kind:?}{}", os(c)),
+            CloseCause::WriteTimeout => f.write_str("write timed out"),
+            CloseCause::ClientClosed => f.write_str("the client closed the stream"),
+            CloseCause::ClientLeft => f.write_str("the client left"),
+            CloseCause::Kicked => f.write_str("kicked by the host"),
+            CloseCause::TooSlow => f.write_str("outgoing queue full, the client is too slow"),
+            CloseCause::Removed => f.write_str("removed from its room"),
+            CloseCause::RelayShutdown => f.write_str("the relay shut down"),
+            CloseCause::NotAdmitted => f.write_str("connection limit reached"),
+            CloseCause::SetupFailed => f.write_str("socket setup failed"),
+        }
+    }
+}
+
+/// One ended client connection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CloseRecord {
+    /// The connection's number (0 when it was not admitted).
+    pub conn: u64,
+    pub ip: IpAddr,
+    /// The seat it held, once it had one.
+    pub seat: Option<u8>,
+    pub cause: CloseCause,
+    /// How long the connection lived.
+    pub lived: Duration,
+    /// Time since the relay started when it ended.
+    pub at: Duration,
+    /// Bytes read but not yet parsed into an envelope when it ended. For a
+    /// bad length this includes the bad 4-byte prefix; for a decode failure
+    /// it excludes the envelope that failed (already taken from the buffer).
+    pub unparsed: usize,
+    /// Read timeouts over the connection's life, the reads that failed with
+    /// the pending-I/O error (997, Windows) that counts as one, and those of
+    /// each that happened while part of an envelope was held.
+    pub reads: ReadStats,
+}
+
+impl fmt::Display for CloseRecord {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "connection {} from {}", self.conn, self.ip)?;
+        if let Some(s) = self.seat {
+            write!(f, " (seat {s})")?;
+        }
+        write!(
+            f,
+            " closed at {} ms after {} ms: {}; {} bytes unparsed, {} read timeouts ({} with a partial envelope held), {} pending-I/O errors ({} with a partial envelope held)",
+            self.at.as_millis(),
+            self.lived.as_millis(),
+            self.cause,
+            self.unparsed,
+            self.reads.timeouts,
+            self.reads.partial_timeouts,
+            self.reads.spurious,
+            self.reads.partial_spurious
+        )
+    }
+}
+
+/// The last [`CLOSE_LOG`] close records.
+#[derive(Default)]
+struct CloseLog(VecDeque<CloseRecord>);
+
+impl CloseLog {
+    fn push(&mut self, r: CloseRecord) {
+        if self.0.len() >= CLOSE_LOG {
+            self.0.pop_front();
+        }
+        self.0.push_back(r);
+    }
+}
+
+/// Reads the relay's close records from another thread.
+#[derive(Clone)]
+pub struct CloseLogHandle(Arc<Shared>);
+
+impl CloseLogHandle {
+    /// The last [`CLOSE_LOG`] ended connections and why, oldest first.
+    pub fn snapshot(&self) -> Vec<CloseRecord> {
+        let log = self.0.closes.lock().unwrap_or_else(PoisonError::into_inner);
+        log.0.iter().cloned().collect()
+    }
+}
+
+/// The cause another thread (the host's kick, a full queue, the writer)
+/// gave a connection's end; the first one wins.
+type CauseSlot = Mutex<Option<CloseCause>>;
+
+fn set_cause(slot: &CauseSlot, cause: CloseCause) {
+    slot.lock().unwrap_or_else(PoisonError::into_inner).get_or_insert(cause);
 }
 
 /// How long a blocked read waits before the loop looks at its deadlines.
@@ -116,6 +336,7 @@ struct Member {
     sock: TcpStream,
     /// Bytes queued for this member's writer, not yet written.
     queued: Arc<AtomicUsize>,
+    cause: Arc<CauseSlot>,
 }
 
 struct Room {
@@ -149,6 +370,187 @@ struct Shared {
     cfg: RelayConfig,
     state: Mutex<State>,
     stop: AtomicBool,
+    started: Instant,
+    closes: Mutex<CloseLog>,
+    sink: LogSink,
+    /// Connections ended before a seat, counted by kind (one summary line per
+    /// interval, not a line each: their rate is the peer's).
+    unseated: Unseated,
+    /// What the last summary covered.
+    summary: Mutex<SummaryState>,
+    /// Set (with a wake-up) to stop the summary thread.
+    quit: Mutex<bool>,
+    wake: Condvar,
+}
+
+/// Connections that ended before they held a seat, by kind, counted from the
+/// start of the relay. Routine ends (the client closing without a request,
+/// the relay shutting down) are not counted.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct UnseatedCounts {
+    /// Not admitted: a connection limit was reached.
+    pub limit: u64,
+    /// Refused at join or create (full room, wrong password, no such room).
+    pub join_refused: u64,
+    /// Refused because of the failed-join rate limit.
+    pub rate_limited: u64,
+    /// A bad length prefix, an envelope that did not decode, or a request
+    /// the client may not make.
+    pub malformed: u64,
+    /// The handshake, half-sent envelope or idle deadline.
+    pub deadline: u64,
+    /// A read or write that failed or timed out.
+    pub io_error: u64,
+    /// Anything else (socket setup failed, ...).
+    pub other: u64,
+}
+
+impl UnseatedCounts {
+    pub fn total(&self) -> u64 {
+        self.limit
+            + self.join_refused
+            + self.rate_limited
+            + self.malformed
+            + self.deadline
+            + self.io_error
+            + self.other
+    }
+
+    fn since(&self, earlier: &UnseatedCounts) -> UnseatedCounts {
+        UnseatedCounts {
+            limit: self.limit - earlier.limit,
+            join_refused: self.join_refused - earlier.join_refused,
+            rate_limited: self.rate_limited - earlier.rate_limited,
+            malformed: self.malformed - earlier.malformed,
+            deadline: self.deadline - earlier.deadline,
+            io_error: self.io_error - earlier.io_error,
+            other: self.other - earlier.other,
+        }
+    }
+}
+
+#[derive(Default)]
+struct Unseated {
+    limit: AtomicU64,
+    join_refused: AtomicU64,
+    rate_limited: AtomicU64,
+    malformed: AtomicU64,
+    deadline: AtomicU64,
+    io_error: AtomicU64,
+    other: AtomicU64,
+}
+
+struct SummaryState {
+    at: Instant,
+    reported: UnseatedCounts,
+}
+
+impl Unseated {
+    fn load(&self) -> UnseatedCounts {
+        let l = |c: &AtomicU64| c.load(Ordering::Relaxed);
+        UnseatedCounts {
+            limit: l(&self.limit),
+            join_refused: l(&self.join_refused),
+            rate_limited: l(&self.rate_limited),
+            malformed: l(&self.malformed),
+            deadline: l(&self.deadline),
+            io_error: l(&self.io_error),
+            other: l(&self.other),
+        }
+    }
+
+    /// Counts a close before a seat; routine ends are not counted.
+    fn count(&self, cause: &CloseCause) {
+        let c = match cause {
+            CloseCause::NotAdmitted => &self.limit,
+            CloseCause::Refused(RefuseReason::RateLimited) => &self.rate_limited,
+            CloseCause::Refused(_) => &self.join_refused,
+            CloseCause::BadLength(_) | CloseCause::DecodeFailed(_) | CloseCause::Misuse(_) => {
+                &self.malformed
+            }
+            CloseCause::HandshakeTimeout | CloseCause::FrameTimeout | CloseCause::IdleTimeout => {
+                &self.deadline
+            }
+            CloseCause::ReadFailed { .. }
+            | CloseCause::WriteFailed { .. }
+            | CloseCause::WriteTimeout => &self.io_error,
+            CloseCause::ClientClosed | CloseCause::ClientLeft | CloseCause::RelayShutdown => return,
+            _ => &self.other,
+        };
+        c.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+impl Shared {
+    /// Keeps and logs a close record, after the departure was processed and
+    /// with no relay lock held: a slow log sink must never delay a seat's
+    /// departure marker or release its connection count. Never panics,
+    /// whatever the locks' state.
+    ///
+    /// Only the records of connections that held a seat go into the bounded
+    /// list and the log, one line each. Every close before a seat (refusals,
+    /// garbage, deadlines) is only counted by kind and summarised, so a flood
+    /// of them can neither flood the log nor push out the seated records.
+    fn record(&self, r: CloseRecord) {
+        if r.seat.is_none() {
+            self.unseated.count(&r.cause);
+            return;
+        }
+        if !r.cause.is_routine() || (r.cause == CloseCause::ClientClosed && r.unparsed > 0) {
+            (self.sink)(&format!("relay: {r}"));
+        }
+        self.closes.lock().unwrap_or_else(PoisonError::into_inner).push(r);
+    }
+
+    /// Logs the closes before a seat since the last summary, if there were
+    /// any, with the time that summary covers.
+    fn summarise(&self) {
+        let (new, window) = {
+            let mut st = self.summary.lock().unwrap_or_else(PoisonError::into_inner);
+            let now = self.unseated.load();
+            let new = now.since(&st.reported);
+            let window = st.at.elapsed();
+            st.reported = now;
+            st.at = Instant::now();
+            (new, window)
+        };
+        if new.total() > 0 {
+            (self.sink)(&format!(
+                "relay: {} connections refused or dropped before a seat in the last {:.1} s (limit: {}, join refused: {}, rate-limited: {}, malformed: {}, deadline: {}, io error: {}, other: {})",
+                new.total(),
+                window.as_secs_f64(),
+                new.limit,
+                new.join_refused,
+                new.rate_limited,
+                new.malformed,
+                new.deadline,
+                new.io_error,
+                new.other
+            ));
+        }
+    }
+}
+
+/// The summary thread: one for the relay's life. Wakes every `every`, and
+/// once more when told to stop.
+fn summary_loop(shared: &Shared) {
+    let every = shared.cfg.log_summary_every.max(Duration::from_millis(50));
+    let mut quit = shared.quit.lock().unwrap_or_else(PoisonError::into_inner);
+    loop {
+        let (q, _) = shared
+            .wake
+            .wait_timeout_while(quit, every, |q| !*q)
+            .unwrap_or_else(PoisonError::into_inner);
+        quit = q;
+        let stopping = *quit;
+        // Never log with the lock held: the sink may block.
+        drop(quit);
+        shared.summarise();
+        if stopping {
+            return;
+        }
+        quit = shared.quit.lock().unwrap_or_else(PoisonError::into_inner);
+    }
 }
 
 fn lock(m: &Mutex<State>) -> MutexGuard<'_, State> {
@@ -160,12 +562,22 @@ pub struct Relay {
     shared: Arc<Shared>,
     addr: SocketAddr,
     accept: Option<JoinHandle<()>>,
+    summary: Option<JoinHandle<()>>,
 }
 
 impl Relay {
     /// Listens on `addr` (port 0 for an ephemeral one) and serves until
     /// [`Relay::shutdown`] or drop.
     pub fn bind(addr: impl ToSocketAddrs, cfg: RelayConfig) -> std::io::Result<Relay> {
+        Relay::bind_with_log(addr, cfg, stderr_sink())
+    }
+
+    /// [`Relay::bind`] with the relay's log lines going to `sink`.
+    pub fn bind_with_log(
+        addr: impl ToSocketAddrs,
+        cfg: RelayConfig,
+        sink: LogSink,
+    ) -> std::io::Result<Relay> {
         let listener = TcpListener::bind(addr)?;
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
@@ -173,15 +585,30 @@ impl Relay {
             cfg,
             state: Mutex::new(State::default()),
             stop: AtomicBool::new(false),
+            started: Instant::now(),
+            closes: Mutex::new(CloseLog::default()),
+            sink,
+            unseated: Unseated::default(),
+            summary: Mutex::new(SummaryState {
+                at: Instant::now(),
+                reported: UnseatedCounts::default(),
+            }),
+            quit: Mutex::new(false),
+            wake: Condvar::new(),
         });
         let s = shared.clone();
         let accept = thread::Builder::new()
             .name("relay-accept".into())
             .spawn(move || accept_loop(&listener, &s))?;
+        let s = shared.clone();
+        let summary = thread::Builder::new()
+            .name("relay-log".into())
+            .spawn(move || summary_loop(&s));
         Ok(Relay {
             shared,
             addr,
             accept: Some(accept),
+            summary: summary.ok(),
         })
     }
 
@@ -199,12 +626,48 @@ impl Relay {
         lock(&self.shared.state).connections
     }
 
+    /// The last [`CLOSE_LOG`] ended connections and why, oldest first.
+    pub fn closes(&self) -> Vec<CloseRecord> {
+        self.close_log().snapshot()
+    }
+
+    /// Connections that ended before a seat, by kind, since the relay
+    /// started (they are not in [`Relay::closes`]).
+    pub fn unseated(&self) -> UnseatedCounts {
+        self.shared.unseated.load()
+    }
+
+    /// A handle on the close records that outlives borrowing the relay.
+    pub fn close_log(&self) -> CloseLogHandle {
+        CloseLogHandle(self.shared.clone())
+    }
+
     /// Stops accepting and closes every connection; connection threads end
     /// within one poll interval.
+    ///
+    /// The summary thread logs a last summary of the closes before a seat;
+    /// those that end after it are counted ([`Relay::unseated`]) but not
+    /// logged. With a log sink that blocks, this and drop take up to one
+    /// second (the summary thread is then left to end by itself).
     pub fn shutdown(&mut self) {
         self.shared.stop.store(true, Ordering::SeqCst);
         if let Some(h) = self.accept.take() {
             let _ = h.join();
+        }
+        if let Some(h) = self.summary.take() {
+            // The summary thread logs a last summary and ends. If the log
+            // sink blocks, that is the one thread that blocks: shutdown waits
+            // for it up to a second and then lets it go (it ends when the
+            // sink returns; it holds nothing else).
+            *self.shared.quit.lock().unwrap_or_else(PoisonError::into_inner) = true;
+            self.shared.wake.notify_all();
+            let end = Instant::now() + Duration::from_secs(1);
+            while !h.is_finished() && Instant::now() < end {
+                thread::sleep(Duration::from_millis(2));
+            }
+            if h.is_finished() {
+                let _ = h.join();
+            }
         }
     }
 }
@@ -246,7 +709,18 @@ fn accept_loop(listener: &TcpListener, shared: &Arc<Shared>) {
                     .spawn(move || serve(stream, peer.ip(), &s));
                 // No thread to spare: the stream was moved into the closure
                 // and is dropped with it.
-                drop(spawned);
+                if spawned.is_err() {
+                    shared.record(CloseRecord {
+                        conn: 0,
+                        ip: limit_key(peer.ip()),
+                        seat: None,
+                        cause: CloseCause::SetupFailed,
+                        lived: Duration::ZERO,
+                        at: shared.started.elapsed(),
+                        unparsed: 0,
+                        reads: ReadStats::default(),
+                    });
+                }
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => thread::sleep(POLL / 5),
             Err(_) => thread::sleep(POLL),
@@ -295,9 +769,16 @@ impl Room {
 /// Removes `seat` of `code` (if `conn` still holds it), tells the others,
 /// and closes its socket. Members whose queue overflows while being told are
 /// removed in turn. Called with the state locked.
-fn depart(st: &mut State, cfg: &RelayConfig, code: RoomCode, seat: usize, conn: ConnId) {
-    let mut work = vec![(code, seat, conn)];
-    while let Some((code, seat, conn)) = work.pop() {
+fn depart(
+    st: &mut State,
+    cfg: &RelayConfig,
+    code: RoomCode,
+    seat: usize,
+    conn: ConnId,
+    why: Option<CloseCause>,
+) {
+    let mut work = vec![(code, seat, conn, why)];
+    while let Some((code, seat, conn, why)) = work.pop() {
         let Some(room) = st.rooms.get_mut(&code) else {
             continue;
         };
@@ -307,6 +788,9 @@ fn depart(st: &mut State, cfg: &RelayConfig, code: RoomCode, seat: usize, conn: 
         let Some(gone) = room.members[seat].take() else {
             continue;
         };
+        if let Some(why) = why {
+            set_cause(&gone.cause, why);
+        }
         let _ = gone.tx.try_send(Out::Close);
         let _ = gone.sock.shutdown(Shutdown::Both);
         if seat == 0 {
@@ -322,7 +806,7 @@ fn depart(st: &mut State, cfg: &RelayConfig, code: RoomCode, seat: usize, conn: 
             if let Some(m) = m
                 && !push(m, &marker, cfg.outgoing_bytes + 64)
             {
-                work.push((code, i, m.conn));
+                work.push((code, i, m.conn, Some(CloseCause::TooSlow)));
             }
         }
         if room.occupied() == 0 {
@@ -368,7 +852,7 @@ fn forward(st: &mut State, cfg: &RelayConfig, code: RoomCode, seat: usize, conn:
         }
     }
     for (i, c) in slow {
-        depart(st, cfg, code, i, c);
+        depart(st, cfg, code, i, c, Some(CloseCause::TooSlow));
     }
 }
 
@@ -390,6 +874,7 @@ struct Conn<'a> {
     tx: &'a SyncSender<Out>,
     queued: &'a Arc<AtomicUsize>,
     sock: &'a TcpStream,
+    cause: &'a Arc<CauseSlot>,
 }
 
 fn open_room(st: &mut State, cfg: &RelayConfig, c: Conn<'_>, password: Vec<u8>) -> Joined {
@@ -399,6 +884,7 @@ fn open_room(st: &mut State, cfg: &RelayConfig, c: Conn<'_>, password: Vec<u8>) 
         tx,
         queued,
         sock,
+        cause,
     } = c;
     let rooms_of_ip = st.ips.get(&ip).map_or(0, |s| s.rooms);
     if st.rooms.len() >= cfg.max_rooms || rooms_of_ip >= cfg.max_rooms_per_ip {
@@ -427,6 +913,7 @@ fn open_room(st: &mut State, cfg: &RelayConfig, c: Conn<'_>, password: Vec<u8>) 
         tx: tx.clone(),
         sock,
         queued: queued.clone(),
+        cause: cause.clone(),
     });
     st.rooms.insert(
         code,
@@ -457,6 +944,7 @@ fn join_room(
         tx,
         queued,
         sock,
+        cause,
     } = c;
     let now = Instant::now();
     let ipst = st.ips.entry(ip).or_default();
@@ -513,11 +1001,18 @@ fn join_room(
         tx: tx.clone(),
         sock,
         queued: queued.clone(),
+        cause: cause.clone(),
     });
     Joined::Yes { code, seat }
 }
 
-fn writer(mut sock: TcpStream, rx: &Receiver<Out>, keepalive: Duration, queued: &AtomicUsize) {
+fn writer(
+    mut sock: TcpStream,
+    rx: &Receiver<Out>,
+    keepalive: Duration,
+    queued: &AtomicUsize,
+    cause: &CauseSlot,
+) {
     let ka = ServerMsg::Keepalive.encode().unwrap_or_default();
     loop {
         let bytes = match rx.recv_timeout(keepalive) {
@@ -536,7 +1031,8 @@ fn writer(mut sock: TcpStream, rx: &Receiver<Out>, keepalive: Duration, queued: 
         ) {
             cur = now;
         }
-        if sock.write_all(&bytes).is_err() {
+        if let Err(e) = sock.write_all(&bytes) {
+            set_cause(cause, CloseCause::write_failed(&e));
             break;
         }
     }
@@ -544,7 +1040,7 @@ fn writer(mut sock: TcpStream, rx: &Receiver<Out>, keepalive: Duration, queued: 
 }
 
 /// Reads until a whole envelope arrives, a deadline passes, or the relay
-/// stops. `Ok(None)` is a timeout or a stop; the caller closes.
+/// stops; the error says which.
 fn read_msg(
     sock: &mut TcpStream,
     reader: &mut EnvelopeReader,
@@ -552,25 +1048,30 @@ fn read_msg(
     shared: &Shared,
     deadline: Option<Instant>,
     last_rx: &mut Instant,
-) -> Result<Option<ClientMsg>, ()> {
+) -> Result<ClientMsg, CloseCause> {
     loop {
         if shared.stop.load(Ordering::SeqCst) {
-            return Ok(None);
+            return Err(CloseCause::RelayShutdown);
         }
         let now = Instant::now();
-        if deadline.is_some_and(|d| now >= d)
-            || now.duration_since(*last_rx) > cfg.idle_timeout
-            || reader.partial_age().is_some_and(|a| a > cfg.frame_timeout)
-        {
-            return Ok(None);
+        if deadline.is_some_and(|d| now >= d) {
+            return Err(CloseCause::HandshakeTimeout);
+        }
+        if now.duration_since(*last_rx) > cfg.idle_timeout {
+            return Err(CloseCause::IdleTimeout);
+        }
+        if reader.partial_age().is_some_and(|a| a > cfg.frame_timeout) {
+            return Err(CloseCause::FrameTimeout);
         }
         match reader.poll(sock) {
             Ok(Polled::Payload(p)) => {
                 *last_rx = Instant::now();
-                return ClientMsg::decode(&p).map(Some).map_err(|_| ());
+                return ClientMsg::decode(&p).map_err(|e| CloseCause::DecodeFailed(e.to_string()));
             }
             Ok(Polled::Idle) => {}
-            Err(ReadError::Closed | ReadError::Io(_) | ReadError::BadLength(_)) => return Err(()),
+            Err(ReadError::Closed) => return Err(CloseCause::ClientClosed),
+            Err(ReadError::Io(e)) => return Err(CloseCause::read_failed(&e)),
+            Err(ReadError::BadLength(n)) => return Err(CloseCause::BadLength(n)),
         }
     }
 }
@@ -588,9 +1089,38 @@ fn limit_key(ip: IpAddr) -> IpAddr {
     }
 }
 
+/// What ended one admitted connection.
+struct Ended {
+    held: Option<(RoomCode, usize)>,
+    seat: Option<usize>,
+    cause: CloseCause,
+    unparsed: usize,
+    reads: ReadStats,
+}
+
 fn serve(stream: TcpStream, ip: IpAddr, shared: &Arc<Shared>) {
     let ip = limit_key(ip);
     let cfg = &shared.cfg;
+    let born = Instant::now();
+    let record = |conn: ConnId, e: Ended| {
+        shared.record(CloseRecord {
+            conn,
+            ip,
+            seat: e.seat.map(|s| s as u8),
+            cause: e.cause,
+            lived: born.elapsed(),
+            at: shared.started.elapsed(),
+            unparsed: e.unparsed,
+            reads: e.reads,
+        });
+    };
+    let bare = |cause: CloseCause| Ended {
+        held: None,
+        seat: None,
+        cause,
+        unparsed: 0,
+        reads: ReadStats::default(),
+    };
     let _ = stream.set_nodelay(true);
     // The listener is non-blocking (so `accept` can poll the stop flag); a
     // stream accepted from it inherits that on Windows and the BSDs, where
@@ -600,6 +1130,7 @@ fn serve(stream: TcpStream, ip: IpAddr, shared: &Arc<Shared>) {
         || stream.set_read_timeout(Some(POLL)).is_err()
         || stream.set_write_timeout(Some(WRITE_TIMEOUT)).is_err()
     {
+        record(0, bare(CloseCause::SetupFailed));
         return;
     }
     // Admission.
@@ -608,6 +1139,8 @@ fn serve(stream: TcpStream, ip: IpAddr, shared: &Arc<Shared>) {
         if st.connections >= cfg.max_connections
             || st.ips.get(&ip).is_some_and(|s| s.connections >= cfg.max_connections_per_ip)
         {
+            drop(st);
+            record(0, bare(CloseCause::NotAdmitted));
             return;
         }
         st.connections += 1;
@@ -615,60 +1148,101 @@ fn serve(stream: TcpStream, ip: IpAddr, shared: &Arc<Shared>) {
         st.next_conn += 1;
         st.next_conn
     };
-    let result = serve_admitted(stream, ip, conn, shared);
-    let mut st = lock(&shared.state);
-    if let Some((code, seat)) = result {
-        depart(&mut st, cfg, code, seat, conn);
-    }
-    st.connections = st.connections.saturating_sub(1);
-    if let Some(ipst) = st.ips.get_mut(&ip) {
-        ipst.connections = ipst.connections.saturating_sub(1);
-        if ipst.connections == 0 && ipst.rooms == 0 && ipst.failed.is_empty() {
-            st.ips.remove(&ip);
+    let ended = serve_admitted(stream, ip, conn, shared);
+    // The departure first, exactly as before the close records existed; the
+    // record (and with it any log write) only after the state lock is gone.
+    {
+        let mut st = lock(&shared.state);
+        if let Some((code, seat)) = ended.held {
+            depart(&mut st, cfg, code, seat, conn, None);
+        }
+        st.connections = st.connections.saturating_sub(1);
+        if let Some(ipst) = st.ips.get_mut(&ip) {
+            ipst.connections = ipst.connections.saturating_sub(1);
+            if ipst.connections == 0 && ipst.rooms == 0 && ipst.failed.is_empty() {
+                st.ips.remove(&ip);
+            }
         }
     }
+    record(conn, ended);
 }
 
-/// Serves one admitted connection; returns the seat it still holds, if any.
-fn serve_admitted(
-    stream: TcpStream,
-    ip: IpAddr,
-    conn: ConnId,
-    shared: &Arc<Shared>,
-) -> Option<(RoomCode, usize)> {
+/// Serves one admitted connection; says what ended it and the seat it still
+/// holds, if any.
+fn serve_admitted(stream: TcpStream, ip: IpAddr, conn: ConnId, shared: &Arc<Shared>) -> Ended {
     let cfg = &shared.cfg;
-    let mut sock = stream.try_clone().ok()?;
+    let setup_failed = || Ended {
+        held: None,
+        seat: None,
+        cause: CloseCause::SetupFailed,
+        unparsed: 0,
+        reads: ReadStats::default(),
+    };
+    let Ok(mut sock) = stream.try_clone() else {
+        return setup_failed();
+    };
     let (tx, rx) = sync_channel::<Out>(cfg.outgoing_queue.max(8));
-    let wsock = stream.try_clone().ok()?;
+    let Ok(wsock) = stream.try_clone() else {
+        return setup_failed();
+    };
     let keepalive = (cfg.idle_timeout / 3).max(Duration::from_millis(50));
     let queued = Arc::new(AtomicUsize::new(0));
     let q = queued.clone();
-    let wthread = thread::Builder::new()
+    let cause: Arc<CauseSlot> = Arc::new(Mutex::new(None));
+    let wc = cause.clone();
+    let Ok(wthread) = thread::Builder::new()
         .name("relay-write".into())
-        .spawn(move || writer(wsock, &rx, keepalive, &q))
-        .ok()?;
-    let held = serve_loop(&mut sock, &stream, ip, conn, shared, &tx, &queued);
+        .spawn(move || writer(wsock, &rx, keepalive, &q, &wc))
+    else {
+        return setup_failed();
+    };
+    let mut reader = EnvelopeReader::new();
+    let end = serve_loop(&mut sock, &mut reader, &stream, ip, conn, shared, &tx, &queued, &cause);
     // Whatever ended the loop, the writer must end too, and at once: nothing
     // is flushed to a departing seat, so a slow reader cannot delay its own
     // departure marker. The departure (if any) is made by the caller under
-    // the lock.
+    // the lock. A cause another thread already gave (a kick, a full queue, a
+    // failed write) is the real one; the loop's own is only what it saw of
+    // it, and from here on it outranks anything the writer meets while
+    // closing.
+    set_cause(&cause, end.cause);
     let _ = tx.try_send(Out::Close);
-    if held.is_some() {
+    if end.held.is_some() {
         let _ = stream.shutdown(Shutdown::Both);
     }
     let _ = wthread.join();
-    held
+    let cause = cause
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take()
+        .unwrap_or(CloseCause::Removed);
+    Ended {
+        held: end.held,
+        seat: end.seat,
+        cause,
+        unparsed: reader.buffered(),
+        reads: reader.read_stats(),
+    }
 }
 
+struct LoopEnd {
+    held: Option<(RoomCode, usize)>,
+    seat: Option<usize>,
+    cause: CloseCause,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn serve_loop(
     sock: &mut TcpStream,
+    reader: &mut EnvelopeReader,
     stream: &TcpStream,
     ip: IpAddr,
     conn: ConnId,
     shared: &Arc<Shared>,
     tx: &SyncSender<Out>,
     queued: &Arc<AtomicUsize>,
-) -> Option<(RoomCode, usize)> {
+    cause: &Arc<CauseSlot>,
+) -> LoopEnd {
     let cfg = &shared.cfg;
     let c = Conn {
         ip,
@@ -676,26 +1250,30 @@ fn serve_loop(
         tx,
         queued,
         sock: stream,
+        cause,
     };
-    let mut reader = EnvelopeReader::new();
     let mut last_rx = Instant::now();
     // The writer delivers the refusal before it sees the close that follows.
-    let refuse = |why: RefuseReason| -> Option<(RoomCode, usize)> {
+    let refuse = |why: RefuseReason, cause: CloseCause| -> LoopEnd {
         let _ = send_to(tx, &ServerMsg::Refused(why));
-        None
+        LoopEnd {
+            held: None,
+            seat: None,
+            cause,
+        }
     };
 
     // Handshake: the first message opens or joins a room, within a deadline.
     let first = read_msg(
         sock,
-        &mut reader,
+        reader,
         cfg,
         shared,
         Some(Instant::now() + cfg.handshake_timeout),
         &mut last_rx,
     );
     let (code, seat) = match first {
-        Ok(Some(ClientMsg::Create { password })) => {
+        Ok(ClientMsg::Create { password }) => {
             let mut st = lock(&shared.state);
             match open_room(&mut st, cfg, c, password) {
                 Joined::Yes { code, seat } => {
@@ -711,15 +1289,15 @@ fn serve_loop(
                 }
                 Joined::No(why) => {
                     drop(st);
-                    return refuse(why);
+                    return refuse(why, CloseCause::Refused(why));
                 }
             }
         }
-        Ok(Some(ClientMsg::Join {
+        Ok(ClientMsg::Join {
             code,
             reclaim,
             password,
-        })) => {
+        }) => {
             let mut st = lock(&shared.state);
             match join_room(&mut st, cfg, c, code, reclaim, &password) {
                 Joined::Yes { code, seat } => {
@@ -739,20 +1317,35 @@ fn serve_loop(
                 }
                 Joined::No(why) => {
                     drop(st);
-                    return refuse(why);
+                    return refuse(why, CloseCause::Refused(why));
                 }
             }
         }
-        Ok(Some(_)) | Err(()) => return refuse(RefuseReason::BadRequest),
-        Ok(None) => return None,
+        Ok(_) => {
+            return refuse(RefuseReason::BadRequest, CloseCause::Misuse(Misuse::NotOpenOrJoin));
+        }
+        Err(cause) if cause.silent() => {
+            return LoopEnd {
+                held: None,
+                seat: None,
+                cause,
+            };
+        }
+        Err(cause) => return refuse(RefuseReason::BadRequest, cause),
     };
 
+    let held = Some((code, seat));
+    let end = |cause: CloseCause| LoopEnd {
+        held,
+        seat: Some(seat),
+        cause,
+    };
     let mut bucket = TokenBucket::new(cfg.bytes_per_sec, cfg.burst_bytes.max(70_000));
     let mut frames = TokenBucket::new(cfg.frames_per_sec, cfg.burst_frames.max(1));
     loop {
-        let msg = match read_msg(sock, &mut reader, cfg, shared, None, &mut last_rx) {
-            Ok(Some(m)) => m,
-            Ok(None) | Err(()) => return Some((code, seat)),
+        let msg = match read_msg(sock, reader, cfg, shared, None, &mut last_rx) {
+            Ok(m) => m,
+            Err(cause) => return end(cause),
         };
         let size = match &msg {
             ClientMsg::Data { frame, .. } => frame.len() + 8,
@@ -762,8 +1355,11 @@ fn serve_loop(
         // the budget refills; cut off only if that goes on too long.
         let throttled = Instant::now();
         while !(bucket.take(size) && frames.take(1)) {
-            if throttled.elapsed() > cfg.throttle_limit || shared.stop.load(Ordering::SeqCst) {
-                return Some((code, seat));
+            if shared.stop.load(Ordering::SeqCst) {
+                return end(CloseCause::RelayShutdown);
+            }
+            if throttled.elapsed() > cfg.throttle_limit {
+                return end(CloseCause::RateLimit);
             }
             thread::sleep(Duration::from_millis(10));
         }
@@ -778,11 +1374,15 @@ fn serve_loop(
                     .get(&code)
                     .is_none_or(|r| r.members[seat].as_ref().is_none_or(|m| m.conn != conn))
                 {
-                    return None;
+                    return LoopEnd {
+                        held: None,
+                        seat: Some(seat),
+                        cause: CloseCause::Removed,
+                    };
                 }
             }
             ClientMsg::Keepalive => {}
-            ClientMsg::Leave => return Some((code, seat)),
+            ClientMsg::Leave => return end(CloseCause::ClientLeft),
             ClientMsg::Kick(target) if seat == 0 => {
                 let mut st = lock(&shared.state);
                 let target = usize::from(target);
@@ -793,7 +1393,7 @@ fn serve_loop(
                         .and_then(|r| r.members[target].as_ref())
                         .map(|m| m.conn)
                 {
-                    depart(&mut st, cfg, code, target, c);
+                    depart(&mut st, cfg, code, target, c, Some(CloseCause::Kicked));
                 }
             }
             ClientMsg::SetOpen(open) if seat == 0 => {
@@ -807,7 +1407,62 @@ fn serve_loop(
             }
             // A second Create or Join, or a host-only request from a
             // non-host: a broken or hostile client.
-            _ => return Some((code, seat)),
+            ClientMsg::Create { .. } | ClientMsg::Join { .. } => {
+                return end(CloseCause::Misuse(Misuse::RepeatedOpenOrJoin));
+            }
+            ClientMsg::Kick(_) | ClientMsg::SetOpen(_) => {
+                return end(CloseCause::Misuse(Misuse::HostOnly));
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rec(conn: u64) -> CloseRecord {
+        CloseRecord {
+            conn,
+            ip: IpAddr::from([127, 0, 0, 1]),
+            seat: Some(1),
+            cause: CloseCause::ClientClosed,
+            lived: Duration::ZERO,
+            at: Duration::ZERO,
+            unparsed: 0,
+            reads: ReadStats::default(),
+        }
+    }
+
+    #[test]
+    fn the_close_log_drops_the_oldest() {
+        let mut log = CloseLog::default();
+        for i in 0..(CLOSE_LOG as u64 + 6) {
+            log.push(rec(i));
+        }
+        assert_eq!(log.0.len(), CLOSE_LOG);
+        assert_eq!(log.0.front().map(|r| r.conn), Some(6));
+        assert_eq!(log.0.back().map(|r| r.conn), Some(CLOSE_LOG as u64 + 5));
+    }
+
+    #[test]
+    fn a_poisoned_lock_neither_panics_the_relay_nor_loses_the_log() {
+        let relay = Relay::bind("127.0.0.1:0", RelayConfig::default()).unwrap();
+        let shared = relay.shared.clone();
+        let _ = thread::spawn(move || {
+            let _held = shared.closes.lock().unwrap();
+            panic!("poison the close log");
+        })
+        .join();
+        relay.shared.record(rec(1));
+        assert_eq!(relay.closes().len(), 1);
+    }
+
+    #[test]
+    fn a_cause_slot_keeps_the_first_cause() {
+        let slot: CauseSlot = Mutex::new(None);
+        set_cause(&slot, CloseCause::Kicked);
+        set_cause(&slot, CloseCause::ClientClosed);
+        assert_eq!(slot.lock().unwrap().take(), Some(CloseCause::Kicked));
     }
 }

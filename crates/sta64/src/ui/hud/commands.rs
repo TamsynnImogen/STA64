@@ -65,8 +65,7 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
             ..Default::default()
         };
     }
-    let mobile = kind == EntityKind::Craft
-        && def.movement.max_speed > Fixed::ZERO
+    let mobile = EntityKind::orderable_def(def)
         && !u.flags.contains(UnitFlags::ENGINES_OFF)
         && !u.flags.contains(UnitFlags::BUILDING);
     // This is the resolved ODF's command-panel flag, not a raw sim rule.
@@ -80,10 +79,11 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
         });
     let specials = specials_of(db, def)
         .enumerate()
-        .filter_map(|(slot, (kind, _weapon))| {
-            // UI-31: the toggleable point defence too (the sim lists it as a special only where its
-            // energy rule is on); `Order::Special` on its slot toggles it.
-            (slot <= u8::MAX as usize && matches!(kind, SpecialKind::Cloak | SpecialKind::PointDefence)).then_some((slot as u8, kind))
+        .filter_map(|(slot, (kind, weapon))| {
+            // Point defence is listed only where its energy toggle is supported.
+            (slot <= u8::MAX as usize
+                && matches!(kind, SpecialKind::Cloak | SpecialKind::PointDefence | SpecialKind::Replace)
+                && !super::avatar::choice_weapon(def, kind, weapon)).then_some((slot as u8, kind))
         })
         .collect();
     let t = transport_state(db, def, kind, u);

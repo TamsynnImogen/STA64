@@ -60,6 +60,52 @@ pub(super) fn place(builder: &UnitDef, pos: Vec3, heading: (Fixed, Fixed)) -> La
     }
 }
 
+/// A portal occupies the full build hardpoint, including its height.
+pub(super) fn through_wormhole(builder: &UnitDef, pos: Vec3, heading: (Fixed, Fixed)) -> Launch {
+    let mut out = place(builder, pos, heading);
+    let height = builder.launch.as_ref().map_or(Fixed::ZERO, |p| p.height);
+    out.pos.y = out.pos.y + height;
+    if let Some(exit) = &mut out.exit {
+        exit.y = exit.y + height;
+    }
+    out
+}
+
+/// Armada II's default rally uses the construction matrix's horizontal forward
+/// axis and the station's bounding sphere (read from the executable, static).
+/// If the point would cross an edge, reverse that axis and try the same offset.
+pub(super) fn default_rally(
+    builder: &UnitDef,
+    pos: Vec3,
+    dir: (Fixed, Fixed),
+    bounds: Option<(Vec3, Vec3)>,
+) -> Option<Vec3> {
+    if builder.radius <= Fixed::ZERO {
+        return None;
+    }
+    let norm_sq = dir.0 * dir.0 + dir.1 * dir.1;
+    let (x, z) = if norm_sq < Fixed::from_f64(0.001) {
+        (Fixed::ONE, Fixed::ZERO)
+    } else {
+        let norm = norm_sq.sqrt();
+        (dir.0 / norm, dir.1 / norm)
+    };
+    let distance = builder.radius * Fixed::from_int(3);
+    let (dx, dz) = (distance * x, distance * z);
+    let reflect = |at: Fixed, delta: Fixed, low: Fixed, high: Fixed| {
+        let ahead = at + delta;
+        if ahead < low || ahead > high {
+            (at - delta).clamp(low, high)
+        } else {
+            ahead
+        }
+    };
+    let (x, z) = bounds.map_or((pos.x + dx, pos.z + dz), |(low, high)| {
+        (reflect(pos.x, dx, low.x, high.x), reflect(pos.z, dz, low.z, high.z))
+    });
+    Some(Vec3 { x, y: pos.y, z })
+}
+
 /// Whether `p` is outside the circle `l` leaves around a builder at `at`.
 #[cfg(test)]
 pub(super) fn is_clear(builder: &UnitDef, at: Vec3, p: Vec3) -> bool {
@@ -83,6 +129,7 @@ mod tests {
         let mut d = UnitDef::new("y", "shipyard");
         d.launch = Some(LaunchPoint {
             offset: (n(10), n(0)),
+            height: Fixed::ZERO,
             dir: (n(0), n(1)),
             clear: n(100),
             node: Some("hp99".into()),
@@ -128,5 +175,17 @@ mod tests {
         let l = place(&d, at, (n(0), n(1)));
         assert!(is_clear(&d, at, l.exit.unwrap()));
         assert!(!is_clear(&d, at, l.pos));
+    }
+
+    #[test]
+    fn default_rally_uses_three_radii_and_turns_inward_at_an_edge() {
+        let mut d = yard();
+        d.radius = n(100);
+        let pos = Vec3 { x: n(450), y: n(13), z: n(0) };
+        let low = Vec3 { x: n(-500), y: n(-100), z: n(-500) };
+        let high = Vec3 { x: n(500), y: n(100), z: n(500) };
+        let bounds = Some((low, high));
+        assert_eq!(default_rally(&d, pos, (n(1), n(0)), bounds), Some(Vec3 { x: n(150), ..pos }));
+        assert_eq!(default_rally(&d, pos, (n(0), n(1)), bounds), Some(Vec3 { z: n(300), ..pos }));
     }
 }

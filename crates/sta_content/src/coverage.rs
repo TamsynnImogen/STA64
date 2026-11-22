@@ -38,7 +38,7 @@ pub const READ_ODF_KEYS: &[&str] = &[
     "energydrainrate", "fieldradius", "firearc", "fire_arcs", "forwardaccel", "groundtexturename",
     "impulsespeed", "is_starbase", "lightcolor", "maxasteroids", "maxcrewgain", "maxhealth",
     "maxspecialenergy", "minasteroids", "minimappanelarea", "nolatinum", "numberofraces",
-    "numberofworkerbees", "orbitingspeed", "ordname", "physicsfile", "possiblecraftnames",
+    "numberofworkerbees", "orbitingspeed", "ordname", "physicsfile", "possiblecraftnames", "podhardpoints", "isupgrade",
     "preferredposition", "queueinstantdeduct", "radius", "rotationspeed", "scalesod", "shotdelay",
     "specialenergycost", "specialenergyrate", "turnalpha", "turnomega", "turnomegafractionatrest",
     "unitname", "weldingbeamsprite", "workerbeehardpoints", "wreckage", "wpnname", "sta64_mapconfinementinitial",
@@ -96,6 +96,8 @@ pub const READ_ODF_PREFIXES: &[&str] = &["weapon", "builditem", "feature_", "sta
 /// rules ([`crate::TYPED_CFG_KEYS`], which count as read too).
 pub const READ_CFG_KEYS: &[&str] = &[
     "SCROLL_BORDER_WIDTH",
+    "cfgSTRATEGIC_GRID_RENDER",
+    "cfgTACTICAL_GRID_RENDER",
     "cfgSOUND_BUTTON_SAMPLE",
     "cfgSOUND_SHELL_BUTTON_HOVER",
     "cfgSOUND_SHELL_BUTTON_CLICK",
@@ -105,6 +107,9 @@ pub const READ_CFG_KEYS: &[&str] = &[
     "DETAIL_2_STARFIELD_BACKGROUND_STAR_SIZE_VARIATION",
     "DETAIL_2_STARFIELD_BACKGROUND_STAR_MAX_DISTANCE",
     "DETAIL_2_STARFIELD_BACKGROUND_STAR_DISTANCE_VARIATION",
+    // The Stock look's weapon shots (`ShotCfg`, render only): the beam miss lifetime and the team colour flag.
+    "BEAM_MISS_LIFETIME",
+    "NORMAL_WEAPON_TEAM_COLOR",
 ];
 
 /// The cfg files checked for changed keys.

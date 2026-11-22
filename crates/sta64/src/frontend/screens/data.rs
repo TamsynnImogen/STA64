@@ -8,12 +8,17 @@ use bevy::prelude::*;
 use sta_content::{ContentDb, Fixed, MapDef, StartPos, StartingResources, Vec3 as SimVec3};
 use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::{PlayerId, TeamId};
+use crate::clock::{MatchSpeed, splitmix64};
+use crate::viewer::TeamColours;
 
 /// The registry name of the computer opponent (`sta_ai::Registry::builtin`).
 pub const SKIRMISH_AI: &str = "skirmish";
 
+/// An unresolved side selection in the setup menu.
+pub const RANDOM_SIDE: &str = "";
+
 /// Most seats a game setup offers, whatever the map lists.
-pub const MAX_SEATS: usize = 8;
+pub const MAX_SEATS: usize = PlayerId::MAX_PLAYERS as usize;
 
 /// A map the player can pick.
 #[derive(Debug, Clone)]
@@ -31,9 +36,17 @@ impl MapEntry {
         self.def.label.as_deref().unwrap_or(&self.def.name)
     }
 
+    /// Playable starts ordered by their authored slot IDs.
+    pub fn playable_starts(&self) -> Vec<&StartPos> {
+        let mut starts: Vec<_> = self.def.starts.iter().filter(|start| PlayerId(start.slot).is_player()).collect();
+        starts.sort_by_key(|start| start.slot);
+        starts.dedup_by_key(|start| start.slot);
+        starts
+    }
+
     /// Seats the map has start positions for.
     pub fn slots(&self) -> usize {
-        self.def.starts.len().clamp(1, MAX_SEATS)
+        self.playable_starts().len()
     }
 }
 
@@ -47,6 +60,10 @@ pub struct ModEntry {
     pub authors: Vec<String>,
     pub version: Option<String>,
     pub parent: Option<String>,
+    pub standalone: bool,
+    pub asset_version: Option<u32>,
+    pub website: Option<String>,
+    pub blocked: Option<String>,
 }
 
 impl From<&sta_vfs::mods::ModInfo> for ModEntry {
@@ -58,6 +75,12 @@ impl From<&sta_vfs::mods::ModInfo> for ModEntry {
             authors: m.authors.clone(),
             version: m.version.clone(),
             parent: m.parent.clone(),
+            standalone: m.standalone,
+            asset_version: m.asset_version,
+            website: m.website.as_ref().map(|url| {
+                if url.contains(':') { url.clone() } else { format!("https://{url}") }
+            }),
+            blocked: None,
         }
     }
 }
@@ -69,6 +92,7 @@ impl From<&sta_vfs::mods::ModInfo> for ModEntry {
 pub struct ScreenData {
     pub content: Arc<ContentDb>,
     pub races: Arc<sta_content::Races>,
+    pub colours: TeamColours,
     pub maps: Vec<MapEntry>,
     pub mods: Vec<ModEntry>,
     /// What the mod select screen calls the plain install (its folder's name);
@@ -96,7 +120,17 @@ impl ScreenData {
     /// Every mod in a `Data` folder (CON-13), and a note for each folder skipped.
     pub fn mods_in(data: &Path) -> (Vec<ModEntry>, Vec<String>) {
         match sta_vfs::mods::list_mods(data) {
-            Ok((mods, notes)) => (mods.iter().map(ModEntry::from).collect(), notes),
+            Ok((mods, notes)) => {
+                let entries = mods.iter().map(|m| {
+                    let mut entry = ModEntry::from(m);
+                    match sta_vfs::mod_chain_info(data, &m.folder) {
+                        Ok(chain) => entry.standalone |= chain.first().is_some_and(|top| top.standalone),
+                        Err(error) => entry.blocked = Some(error.to_string()),
+                    }
+                    entry
+                }).collect();
+                (entries, notes)
+            }
             Err(e) => (Vec::new(), vec![e.to_string()]),
         }
     }
@@ -124,11 +158,16 @@ impl ScreenData {
             authors: vec!["Fake Author".into()],
             version: Some("1.0".into()),
             parent: parent.map(str::to_owned),
+            standalone: parent.is_none(),
+            asset_version: Some(50000),
+            website: None,
+            blocked: None,
         };
         ScreenData {
             base_name: Some("Fake Install".into()),
             content: Arc::new(sta_content::fake::db()),
             races: Arc::new(sta_content::Races::default()),
+            colours: TeamColours::default(),
             maps: vec![MapEntry::new(two), MapEntry::new(four)],
             mods: vec![m("fx_balance", "Balance Pack", "Rebalances every ship.", None), m("fx_ships", "Extra Ships", "Adds a cruiser.", Some("fx_balance"))],
         }
@@ -190,6 +229,88 @@ pub struct Seat {
     pub team: u8,
 }
 
+/// Which visibility layers Instant Action starts with.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SetupFog {
+    #[default]
+    Both,
+    FogOnly,
+    Neither,
+    ShroudOnly,
+}
+
+impl SetupFog {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Both => Self::FogOnly,
+            Self::FogOnly => Self::ShroudOnly,
+            Self::ShroudOnly => Self::Neither,
+            Self::Neither => Self::Both,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Both => "Shroud On, Fog On",
+            Self::FogOnly => "Shroud Off, Fog On",
+            Self::Neither => "Shroud Off, Fog Off",
+            Self::ShroudOnly => "Shroud On, Fog Off",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Both => "both",
+            Self::FogOnly => "fog",
+            Self::Neither => "none",
+            Self::ShroudOnly => "shroud",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        [Self::Both, Self::FogOnly, Self::Neither, Self::ShroudOnly].into_iter().find(|mode| mode.key() == key)
+    }
+
+    /// Flags that lift the fog, then the shroud.
+    pub fn lifted(self) -> (bool, bool) {
+        (matches!(self, Self::Neither | Self::ShroudOnly), matches!(self, Self::Neither | Self::FogOnly))
+    }
+}
+
+/// Which start positions the setup minimap labels.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SetupStartMarkers {
+    #[default]
+    All,
+    Available,
+    Allies,
+    None,
+}
+
+impl SetupStartMarkers {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "Show All",
+            Self::Available => "Show Available",
+            Self::Allies => "Show Allies",
+            Self::None => "Show None",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Available => "available",
+            Self::Allies => "allies",
+            Self::None => "none",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        [Self::All, Self::Available, Self::Allies, Self::None].into_iter().find(|mode| mode.key() == key)
+    }
+}
+
 /// Game setup's choices so far; [`SetupDraft::to_setup`] makes the
 /// [`GameSetup`] a match starts from, [`SetupDraft::from_setup`] reads one back.
 #[derive(Resource, Debug, Clone, PartialEq, Eq)]
@@ -199,13 +320,23 @@ pub struct SetupDraft {
     pub seed: u64,
     pub seats: Vec<Seat>,
     pub options: GameOptions,
+    pub speed: MatchSpeed,
+    pub observing: bool,
+    pub fog: SetupFog,
+    pub random_placement: bool,
+    pub preview_visible: bool,
+    pub start_markers: SetupStartMarkers,
+    /// Pick from the mounted multiplayer palette, or use the seat default.
+    pub colour: Option<usize>,
+    pub(crate) return_row: usize,
+    pub(crate) advanced_backup: Option<(GameOptions, MatchSpeed)>,
 }
 
 impl SetupDraft {
     /// The first map, seat 0 the player, the others computers, every seat its
     /// own team, the races in turn.
     pub fn new(data: &ScreenData) -> SetupDraft {
-        let mut d = SetupDraft { map: 0, seed: 1, seats: Vec::new(), options: GameOptions::default() };
+        let mut d = SetupDraft { map: 0, seed: 1, seats: Vec::new(), options: GameOptions::default(), speed: MatchSpeed::Normal, observing: false, fog: SetupFog::default(), random_placement: false, preview_visible: true, start_markers: SetupStartMarkers::All, colour: None, return_row: 0, advanced_backup: None };
         d.set_map(data, 0);
         d
     }
@@ -217,61 +348,205 @@ impl SetupDraft {
         if self.options.officer_limit as usize >= data.content.rules().officer_limits.len() {
             self.options.officer_limit = 0;
         }
-        let slots = data.maps.get(self.map).map_or(1, MapEntry::slots);
+        let slots = data.maps.get(self.map).map_or(0, MapEntry::slots);
+        if self.colour.is_some_and(|choice| choice >= data.colours.swatches().len()) {
+            self.colour = None;
+        }
         let races = data.races();
         self.seats.truncate(slots);
+        self.return_row = self.return_row.min(slots.saturating_sub(1));
         while self.seats.len() < slots {
             let i = self.seats.len();
             self.seats.push(Seat {
-                control: if i == 0 { SeatControl::Human } else { SeatControl::Computer },
+                control: SeatControl::Computer,
                 race: races.get(i % races.len().max(1)).cloned().unwrap_or_default(),
                 team: i as u8,
             });
         }
-        if !self.seats.iter().any(|s| s.control == SeatControl::Human) {
-            self.seats[0].control = SeatControl::Human;
+        for seat in &mut self.seats {
+            seat.team %= slots as u8;
+        }
+        if !self.observing && !self.seats.iter().any(|s| s.control == SeatControl::Human)
+            && let Some(seat) = self.seats.get_mut(self.return_row)
+        {
+            seat.control = SeatControl::Human;
         }
     }
 
-    /// Step a seat's control. The player is on one seat: taking it hands the
-    /// old seat to a computer; stepping off the only player hands the role to
-    /// the next seat.
-    pub fn cycle_control(&mut self, row: usize) {
+    /// Change the local role independently of the map's participant count.
+    pub fn set_observing(&mut self, observing: bool) {
+        if self.observing == observing {
+            return;
+        }
+        self.observing = observing;
+        if observing {
+            if let Some((row, seat)) = self.seats.iter_mut().enumerate().find(|(_, s)| s.control == SeatControl::Human) {
+                self.return_row = row;
+                seat.control = SeatControl::Computer;
+            }
+        } else {
+            let row = self.return_row.min(self.seats.len().saturating_sub(1));
+            self.select_control(row, SeatControl::Human);
+        }
+    }
+
+    fn local_row(&self) -> Option<usize> {
+        if self.observing {
+            return None;
+        }
+        self.seats.iter().position(|seat| seat.control == SeatControl::Human)
+    }
+
+    pub fn observer_row(&self) -> Option<usize> {
+        (self.observing && self.return_row < self.seats.len()).then_some(self.return_row)
+    }
+
+    // In Observer the same colour controls the computer occupying the former local row.
+    fn colour_row(&self) -> Option<usize> {
+        self.local_row().or_else(|| self.observer_row())
+    }
+
+    pub fn colour_enabled(&self) -> bool {
+        self.colour_row().is_some()
+    }
+
+    pub fn show_start_marker(&self, row: usize) -> bool {
+        let Some(seat) = self.seats.get(row) else { return false };
+        let available = seat.control == SeatControl::Idle;
+        let local = self.local_row();
+        match self.start_markers {
+            SetupStartMarkers::All => true,
+            SetupStartMarkers::None => false,
+            SetupStartMarkers::Available => available || local == Some(row),
+            SetupStartMarkers::Allies => available || local.is_some_and(|local| self.seats[local].team == seat.team),
+        }
+    }
+
+    pub fn cycle_start_markers(&mut self) {
+        use SetupStartMarkers::*;
+        self.start_markers = match (self.random_placement, self.start_markers) {
+            (true, All) => None,
+            (false, All) => Available,
+            (false, Available) => Allies,
+            _ => All,
+        };
+    }
+
+    pub fn toggle_placement(&mut self) {
+        self.random_placement = !self.random_placement;
+        self.start_markers = SetupStartMarkers::All;
+    }
+
+    pub fn pick_colour(&mut self, data: &ScreenData, choice: usize) {
+        if self.colour_enabled() && choice < data.colours.swatches().len() {
+            self.colour = Some(choice);
+        }
+    }
+
+    /// The default swatch is the actual marked colour of the local start.
+    pub fn active_swatch(&self, data: &ScreenData) -> Option<usize> {
+        let row = self.colour_row()?;
+        let colour = data.colours.owner_colour(PlayerId(data.maps.get(self.map)?.playable_starts().get(row)?.slot));
+        let swatches = data.colours.swatches();
+        self.colour.filter(|&index| index < swatches.len()).or_else(|| swatches.iter().position(|&swatch| Some(swatch) == colour))
+    }
+
+    pub fn effective_colours(&self, data: &ScreenData) -> TeamColours {
+        if let Some(choice) = self.colour
+            && let Some(&colour) = data.colours.swatches().get(choice)
+            && let Some(row) = self.colour_row()
+            && let Some(map) = data.maps.get(self.map)
+        {
+            let players: Vec<_> = map.playable_starts().iter().map(|start| PlayerId(start.slot)).collect();
+            if let Some(&local) = players.get(row) {
+                return data.colours.with_local_colour(local, colour, &players);
+            }
+        }
+        data.colours.clone()
+    }
+
+    /// Keep each row's colour when its assigned start changes for the match.
+    pub fn launch_colours(&self, data: &ScreenData) -> Option<TeamColours> {
+        if !self.random_placement && self.colour.is_none() {
+            return None;
+        }
+        let colours = self.effective_colours(data);
+        if self.random_placement {
+            let map = data.maps.get(self.map)?;
+            return Some(colours.remap_players(&self.row_slots(map, false), &self.row_slots(map, true)));
+        }
+        Some(colours)
+    }
+
+    fn row_slots(&self, map: &MapEntry, random: bool) -> Vec<PlayerId> {
+        let mut slots: Vec<_> = map.playable_starts().iter().map(|start| PlayerId(start.slot)).collect();
+        if random {
+            let mut seed = self.seed ^ 0x628e_c4ad_e897_a6d3;
+            for end in (1..slots.len()).rev() {
+                seed = splitmix64(seed);
+                slots.swap(end, (seed % (end as u64 + 1)) as usize);
+            }
+        }
+        slots
+    }
+
+    pub fn select_control(&mut self, row: usize, control: SeatControl) {
         let Some(old) = self.seats.get(row).map(|s| s.control) else { return };
-        let mut new = old.next();
+        if old == control || (self.observing && control == SeatControl::Human) {
+            return;
+        }
         if old == SeatControl::Human {
-            // Stepping off the player: the next seat takes the role.
             let other = (row + 1) % self.seats.len();
             if other == row {
                 return;
             }
             self.seats[other].control = SeatControl::Human;
-            new = SeatControl::Computer;
-        } else if new == SeatControl::Human {
+            self.return_row = other;
+        } else if control == SeatControl::Human {
             for s in &mut self.seats {
                 if s.control == SeatControl::Human {
                     s.control = SeatControl::Computer;
                 }
             }
+            self.return_row = row;
         }
-        self.seats[row].control = new;
+        self.seats[row].control = control;
+    }
+
+    pub fn cycle_control(&mut self, row: usize) {
+        let Some(seat) = self.seats.get(row) else { return };
+        let next = seat.control.next();
+        self.select_control(row, if self.observing && next == SeatControl::Human { SeatControl::Computer } else { next });
     }
 
     pub fn cycle_race(&mut self, data: &ScreenData, row: usize) {
         let races = data.races();
         let Some(seat) = self.seats.get_mut(row) else { return };
         if let Some(i) = races.iter().position(|r| *r == seat.race) {
-            seat.race = races[(i + 1) % races.len()].clone();
+            seat.race = races.get(i + 1).map_or_else(|| RANDOM_SIDE.to_owned(), String::clone);
         } else if let Some(r) = races.first() {
             seat.race = r.clone();
         }
     }
 
-    pub fn cycle_team(&mut self, row: usize) {
-        let n = self.seats.len() as u8;
-        if let Some(seat) = self.seats.get_mut(row) {
-            seat.team = (seat.team + 1) % n.max(1);
+    pub fn choose_team(&mut self, row: usize, index: usize) {
+        let count = self.seats.len();
+        let Some(control) = self.seats.get(row).map(|seat| seat.control) else { return };
+        if index < count {
+            if self.observer_row() == Some(row) {
+                self.set_observing(false);
+            }
+            self.seats[row].team = index as u8;
+        } else if index == count && control == SeatControl::Human {
+            self.set_observing(true);
         }
+    }
+
+    pub fn cycle_team(&mut self, row: usize) {
+        let Some(seat) = self.seats.get(row) else { return };
+        let choices = self.seats.len() + usize::from(seat.control == SeatControl::Human);
+        let index = if self.observer_row() == Some(row) { 0 } else { (usize::from(seat.team) + 1) % choices };
+        self.choose_team(row, index);
     }
 
     pub fn cycle_resources(&mut self) {
@@ -288,24 +563,32 @@ impl SetupDraft {
         }
     }
 
-    /// The setup a match starts from: seat `i` is `PlayerId(i)` on the map's
-    /// start slot `i`. `None` when the draft names no map.
+    /// Resolve random choices against the match seed and the map's authored starts.
     pub fn to_setup(&self, data: &ScreenData) -> Option<GameSetup> {
         let map = data.maps.get(self.map)?;
+        let starts = self.row_slots(map, self.random_placement);
         let races = data.races();
-        if races.is_empty() || self.seats.iter().any(|s| !races.iter().any(|r| r.eq_ignore_ascii_case(&s.race))) {
+        let human_count = self.seats.iter().filter(|s| s.control == SeatControl::Human).count();
+        if starts.len() < 2 || starts.len() != self.seats.len() || human_count != usize::from(!self.observing)
+            || races.is_empty() || self.seats.iter().any(|s| s.race != RANDOM_SIDE && !races.iter().any(|r| r.eq_ignore_ascii_case(&s.race)))
+        {
             return None;
         }
+        let mut players: Vec<_> = self.seats.iter().zip(starts).enumerate().map(|(row, (seat, id))| {
+            let race = if seat.race == RANDOM_SIDE {
+                let roll = splitmix64(self.seed ^ 0xa1cc_5d20_abca_5197 ^ row as u64);
+                races[(roll % races.len() as u64) as usize].clone()
+            } else {
+                seat.race.clone()
+            };
+            PlayerSetup { id, team: TeamId(seat.team), race, control: seat.control.control() }
+        }).collect();
+        players.sort_by_key(|player| player.id);
         Some(GameSetup {
             seed: self.seed,
             map: map.def.clone(),
             content: data.content.clone(),
-            players: self
-                .seats
-                .iter()
-                .enumerate()
-                .map(|(i, s)| PlayerSetup { id: PlayerId(i as u8), team: TeamId(s.team), race: s.race.clone(), control: s.control.control() })
-                .collect(),
+            players,
             options: self.options.clone(),
         })
     }
@@ -313,11 +596,26 @@ impl SetupDraft {
     /// The draft a setup came from; `None` when its map is not in the list.
     pub fn from_setup(setup: &GameSetup, data: &ScreenData) -> Option<SetupDraft> {
         let map = data.maps.iter().position(|m| m.def.name == setup.map.name)?;
+        let starts = data.maps[map].playable_starts();
+        let seats = starts.iter().map(|start| {
+            let p = setup.players.iter().find(|p| p.id.0 == start.slot)?;
+            Some(Seat { control: SeatControl::of(&p.control), race: p.race.clone(), team: p.team.0 })
+        }).collect::<Option<Vec<_>>>()?;
+        let human = seats.iter().position(|s| s.control == SeatControl::Human);
         Some(SetupDraft {
             map,
             seed: setup.seed,
-            seats: setup.players.iter().map(|p| Seat { control: SeatControl::of(&p.control), race: p.race.clone(), team: p.team.0 }).collect(),
+            seats,
             options: setup.options.clone(),
+            speed: MatchSpeed::Normal,
+            observing: human.is_none(),
+            fog: SetupFog::default(),
+            random_placement: false,
+            preview_visible: true,
+            start_markers: SetupStartMarkers::All,
+            colour: None,
+            return_row: human.unwrap_or_default(),
+            advanced_backup: None,
         })
     }
 }
@@ -338,6 +636,15 @@ pub struct Browse {
     pub map: usize,
     /// Mod select: 0 is the base game, `n` is `mods[n - 1]`.
     pub mod_row: usize,
+    pub mod_no_intro: bool,
+    pub mod_no_ai: bool,
+}
+
+/// Options selected at the launch of the current mod.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct ModLaunchOptions {
+    pub no_intro: bool,
+    pub no_ai: bool,
 }
 
 /// A setting the settings screen edits.

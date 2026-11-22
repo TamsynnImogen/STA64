@@ -14,7 +14,9 @@
 //!   3 starboard), in the faction colour of the target's ODF initial. The strength is
 //!   `sqrt(damage / 60)` clamped to 0.6..1.8; a beam holds its spot for its duration
 //!   and fades over 0.25 s, a shot's decays at once (Refit's `hit_now`). `ShieldsDown`
-//!   is the strongest hit; Refit's lightning (`down_ps`) is not ported.
+//!   is the strongest hit; Refit's lightning (`down_ps`) is not ported. Only under the Remaster look
+//!   ([`Effect::ShieldHits`]): the Stock look draws `stock_shield_hits.rs`' cap instead, and nothing for
+//!   shields going down yet.
 //! - **Hull impact** (`Hit.hull > 0`): `HitSparks` (6) streaks from `Hit.at`.
 //! - **Explosion** (`Destroyed`): the fireball and shock ring sized by the unit's
 //!   `SelectRadius` (last seen, the unit is gone from the view): the radius
@@ -42,13 +44,14 @@ use super::shield::{self, Faction, ShieldFrame, ShieldMaterial};
 use super::weapons::FxAlpha;
 use crate::app::GameSet;
 use crate::clock::AnimClock;
+use crate::render::profile::{Effect, ProfileEffects, RenderProfile};
 use crate::render::units::{Cloaked, HullShare, SelectRadius, to_bevy};
 use crate::sim_link::{ContentRes, SimEntities, SimEntity, SimLink, SimMsg};
 
 /// Hull share under which a unit smokes lightly, and heavily.
 pub const SMOKE_LIGHT: f32 = 0.5;
 pub const SMOKE_HEAVY: f32 = 0.25;
-const DEFAULT_RADIUS: f32 = 30.0;
+pub(super) const DEFAULT_RADIUS: f32 = 30.0;
 /// `[Sparks]` `HitSparks`, `BlastSparks`, `BurstTime` (s), `SparkSpeed` (times the
 /// particle's size), `SparkSpread`, `SparkLife` (s), `SparkBrightness`; the drag and
 /// the tail time are `sparks.rs`' literals.
@@ -184,7 +187,7 @@ fn unit_dir(r: impl Fn(u8) -> f32) -> Vec3 {
     Vec3::new(s * a.cos(), y, s * a.sin())
 }
 
-fn facing_dir(heading: Vec3, facing: u8) -> Vec3 {
+pub(super) fn facing_dir(heading: Vec3, facing: u8) -> Vec3 {
     let right = heading.cross(Vec3::Y).normalize_or(Vec3::X);
     match facing {
         0 => heading,
@@ -220,6 +223,16 @@ pub(super) fn spark_at(from: Vec3, dir: Vec3, speed: f32, age: f32, life: f32) -
     Some((from + dir * travel(tail_t), from + dir * travel(age), 1.0 - age / life))
 }
 
+/// Whether the Refit shield shell is drawn for shield hits and shields down: under the Remaster look (or
+/// without the profile resources, as in the windowless tests) yes; under Stock the stock cap
+/// (`stock_shield_hits.rs`) takes its place. Hull sparks, explosions and smoke do not ask.
+pub(super) fn refit_shield_shell(profile: Option<&RenderProfile>, effects: Option<&ProfileEffects>) -> bool {
+    match (profile, effects) {
+        (Some(p), Some(e)) => e.implementation(*p, Effect::ShieldHits) == RenderProfile::Refit,
+        _ => true,
+    }
+}
+
 /// A mission or match starting or ending: the next sim's ids begin again, so what was seen of the last
 /// one must not answer for them.
 fn forget_units(mut seen: ResMut<Seen>) {
@@ -236,8 +249,17 @@ fn track(link: Res<SimLink>, content: Option<Res<ContentRes>>, ents: Option<Res<
 }
 
 #[allow(clippy::too_many_arguments)]
-fn spawn_impacts(mut cmds: Commands, mut msgs: MessageReader<SimMsg>, clock: Res<AnimClock>, content: Option<Res<ContentRes>>, mut seen: ResMut<Seen>) {
+fn spawn_impacts(
+    mut cmds: Commands,
+    mut msgs: MessageReader<SimMsg>,
+    clock: Res<AnimClock>,
+    content: Option<Res<ContentRes>>,
+    mut seen: ResMut<Seen>,
+    profile: Option<Res<RenderProfile>>,
+    effects: Option<Res<ProfileEffects>>,
+) {
     let tick = clock.tick();
+    let shell = refit_shield_shell(profile.as_deref(), effects.as_deref());
     for SimMsg(ev) in msgs.read() {
         match ev {
             SimEvent::Hit { target, weapon, facing, shield, hull, at, .. } => {
@@ -269,7 +291,7 @@ fn spawn_impacts(mut cmds: Commands, mut msgs: MessageReader<SimMsg>, clock: Res
                         Transform::from_translation(origin),
                     )
                 };
-                if shield.to_f32() > 0.0 {
+                if shell && shield.to_f32() > 0.0 {
                     let held = content.as_ref().and_then(|c| c.0.weapon(*weapon)).filter(|d| d.kind == WeaponKind::Beam).map(|d| d.duration as f32 / TICK_HZ as f32);
                     let secs = held.map_or(shield::keep_time(), |h| h + shield::FADE_OUT);
                     let (mut b, a, t) = mk(ImpactKind::Shield, 0, ticks(secs), s.pos, Vec3::ZERO, Color::WHITE);
@@ -285,7 +307,9 @@ fn spawn_impacts(mut cmds: Commands, mut msgs: MessageReader<SimMsg>, clock: Res
                     }
                 }
             }
-            SimEvent::ShieldsDown { id, facing } => {
+            // Under the Stock look nothing is drawn for shields going down yet (the lasting bands wait for the
+            // sim's zero-shield hold, #1101): the Refit shell is not the original's (#1041).
+            SimEvent::ShieldsDown { id, facing } if shell => {
                 let s = seen.0.get(id).copied().unwrap_or_default();
                 let dir = facing_dir(s.heading, *facing);
                 cmds.spawn((
@@ -468,10 +492,15 @@ fn age_secs(clock: &AnimClock, fx: &ImpactFx) -> f32 {
     ((clock.now() * TICK_HZ as f64 - fx.fired as f64) as f32 - fx.delay) / TICK_HZ as f32
 }
 
+/// The shield ellipsoid's rotation (the unit's heading) and semi-axes for a unit of this radius.
+/// The one rule for the shield's shape, shared with the stock beams' end point (`stock_shots`).
+pub(super) fn shield_axes(heading: Vec3, radius: f32) -> (Quat, Vec3) {
+    (Transform::IDENTITY.looking_to(heading, Vec3::Y).rotation, ELLIPSOID * radius)
+}
+
 /// The shield's place now: centre (the unit's, live), heading, ellipsoid.
 fn shield_frame(fx: &ImpactFx, centre: Vec3) -> (Vec3, Quat, Vec3, Vec3) {
-    let rot = Transform::IDENTITY.looking_to(fx.heading, Vec3::Y).rotation;
-    let scale = ELLIPSOID * fx.radius;
+    let (rot, scale) = shield_axes(fx.heading, fx.radius);
     // Where the hit struck, on the unit sphere of the ellipsoid.
     let local = (rot.inverse() * fx.dir) / scale;
     (centre, rot, scale, local.normalize_or(Vec3::NEG_Z))

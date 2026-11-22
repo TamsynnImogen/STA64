@@ -14,7 +14,7 @@ use super::data::WindowSize;
 use super::{Col, ListScroll, Screen};
 use crate::app::AppState;
 use crate::ui::i18n::{tr, trf};
-use crate::ui::theme::{Theme, button, disabled_button, kit_panel, label, list, slider, toggle};
+use crate::ui::theme::{Theme, UiButton, WidgetState, button, disabled_button, kit_panel, label, list, slider, toggle};
 
 #[cfg(not(target_os = "android"))]
 use crate::ui::theme::dropdown;
@@ -33,11 +33,26 @@ pub enum Act {
     PickMod,
     /// Map select's Select Map: take the picked map into the draft.
     TakeMap,
-    /// Mod select's Use Mod.
+    /// Launch the selected mod.
     UseMod,
+    ToggleModNoIntro,
+    ToggleModNoAi,
+    CreateModShortcut,
+    VisitModWebsite,
     Cycle(usize, Col),
     CycleResources,
+    CycleFog,
+    ToggleRandomPlacement,
+    TogglePreview,
+    CycleStartMarkers,
+    SaveSetup,
+    LoadSetup,
     CycleOfficerLimit,
+    CycleMatchSpeed,
+    PickTeamColour(usize),
+    RandomTeamColour,
+    CloseAdvanced(bool),
+    DefaultOptions,
     Launch,
     Exit,
 }
@@ -81,6 +96,7 @@ pub struct ModList;
 pub struct ScrollBox {
     pub selected: Option<usize>,
     pub count: usize,
+    pub row_h: f32,
 }
 
 /// The share of the window height (percent) a list's box may take; the title
@@ -90,7 +106,7 @@ pub const LIST_MAX_VH: f32 = 55.0;
 /// A [`list`] in a [`ScrollBox`] that scrolls to `scroll`.
 fn scroll_list(theme: &Theme, rows: &[&str], picked: Option<usize>, scroll: f32, marker: impl Component) -> impl Bundle {
     (
-        ScrollBox { selected: picked, count: rows.len() },
+        ScrollBox { selected: picked, count: rows.len(), row_h: theme.list_row_h },
         Node { flex_direction: FlexDirection::Column, max_height: Val::Vh(LIST_MAX_VH), overflow: Overflow::scroll_y(), ..default() },
         ScrollPosition(Vec2::new(0.0, scroll)),
         children![(list(theme, rows, picked), marker)],
@@ -128,9 +144,10 @@ pub fn spawn(commands: &mut Commands, screen: Screen, ctx: &Ctx, camera: Option<
         Screen::Main => frame(commands, ctx, screen, camera, &tr("Star Trek Armada"), 520.0, main_menu(ctx)),
         Screen::SinglePlayer => frame(commands, ctx, screen, camera, &tr("Single player"), 620.0, single_player(ctx)),
         Screen::Setup => frame(commands, ctx, screen, camera, &tr("Instant action"), 960.0, setup(ctx)),
+        Screen::Advanced => frame(commands, ctx, screen, camera, &tr("Advanced"), 760.0, advanced(ctx)),
         Screen::MapSelect => frame(commands, ctx, screen, camera, &tr("Select map"), 760.0, map_select(ctx)),
         Screen::Settings => frame(commands, ctx, screen, camera, &tr("Options"), 760.0, settings(ctx)),
-        Screen::ModSelect => frame(commands, ctx, screen, camera, &tr("Mods"), 900.0, mod_select(ctx)),
+        Screen::ModSelect => super::mod_manager::spawn(commands, ctx, camera),
         // Drawn by `frontend::campaign` (UI-25) and `frontend::lobby` (UI-11), which have their own systems.
         Screen::Missions | Screen::Briefing | Screen::Debrief | Screen::Multiplayer | Screen::HostGame | Screen::JoinGame | Screen::Lobby => {}
     }
@@ -210,7 +227,12 @@ fn setup(ctx: &Ctx) -> impl Bundle {
     let draft = ctx.draft.clone();
     let map = ctx.data.maps.get(draft.map).map(|m| (m.title().to_owned(), m.slots()));
     let can_launch = draft.to_setup(ctx.data).is_some();
-    let race_labels: Vec<_> = draft.seats.iter().map(|seat| ctx.data.race_label(&seat.race, ctx.strings)).collect();
+    let race_labels: Vec<_> = draft.seats.iter().map(|seat| if seat.race == super::data::RANDOM_SIDE { tr("Random") } else { ctx.data.race_label(&seat.race, ctx.strings) }).collect();
+    let palette = draft.effective_colours(ctx.data);
+    let row_colours: Vec<_> = ctx.data.maps.get(draft.map).into_iter().flat_map(|map| map.playable_starts())
+        .map(|start| palette.owner_colour(sta_sim::PlayerId(start.slot)).unwrap_or(t.text_off)).collect();
+    let swatches = ctx.data.colours.swatches();
+    let current_colour = draft.active_swatch(ctx.data);
     let (resource_key, resource_fallback) = match draft.options.starting_resources {
         StartingResources::Normal => ("sr_normal", "Resources: Normal"),
         StartingResources::Lots => ("sr_lots", "Resources: Lots"),
@@ -219,15 +241,6 @@ fn setup(ctx: &Ctx) -> impl Bundle {
         .filter(|text| !text.trim().is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| tr(resource_fallback));
-    let officer = ctx.data.content.rules().officer_limits.get(draft.options.officer_limit as usize)
-        .map(|choice| {
-            let caption = ctx.strings.and_then(|strings| strings.native_label(&choice.key))
-                .filter(|text| !text.trim().is_empty())
-                .or_else(|| (!choice.key.trim().is_empty()).then_some(choice.key.as_str()))
-                .map(str::to_owned)
-                .unwrap_or_else(|| tr("Officer limit unavailable"));
-            format!("{caption}: {}", choice.value)
-        });
     content(ctx.theme, move |p| {
         p.spawn((
             row(t.gap),
@@ -237,12 +250,32 @@ fn setup(ctx: &Ctx) -> impl Bundle {
             p.spawn((
                 row(t.gap),
                 children![
-                    cell(&t, 130.0, &trf("Player {0}", &[&(i + 1)])),
+                    (Node { width: Val::Px(130.0), column_gap: Val::Px(t.gap), align_items: AlignItems::Center, ..default() },
+                        children![
+                            (Node { width: Val::Px(15.0), height: Val::Px(15.0), ..default() }, BackgroundColor(row_colours.get(i).copied().unwrap_or(t.text_off))),
+                            label(&t, &trf("Player {0}", &[&(i + 1)])),
+                        ]),
                     (button(&t, seat.control.label(), 200.0 - t.gap), Act::Cycle(i, Col::Control)),
                     (button(&t, &race_labels[i], 260.0 - t.gap), Act::Cycle(i, Col::Race)),
-                    (button(&t, &trf("Team {0}", &[&(seat.team + 1)]), 160.0 - t.gap), Act::Cycle(i, Col::Team)),
+                    (button(&t, &if draft.observer_row() == Some(i) { tr("Observer") } else { trf("Team {0}", &[&(seat.team + 1)]) }, 160.0 - t.gap), Act::Cycle(i, Col::Team)),
                 ],
             ));
+        }
+        if draft.colour_enabled() && !swatches.is_empty() {
+            p.spawn(Node { flex_wrap: FlexWrap::Wrap, column_gap: Val::Px(8.0), row_gap: Val::Px(6.0), align_items: AlignItems::Center, ..default() }).with_children(|r| {
+                r.spawn((button(&t, &tr("Random colour"), 200.0), Act::RandomTeamColour));
+                for (i, colour) in swatches.iter().copied().enumerate() {
+                    r.spawn((
+                        Name::new(trf("Player colour {0}", &[&(i + 1)])),
+                        UiButton,
+                        WidgetState::Normal,
+                        Node { width: Val::Px(16.0), height: Val::Px(16.0), border: UiRect::all(Val::Px(2.0)), ..default() },
+                        BorderColor::all(if current_colour == Some(i) { t.title } else { t.track }),
+                        children![(Node { width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, BackgroundColor(colour), Pickable::IGNORE)],
+                        Act::PickTeamColour(i),
+                    ));
+                }
+            });
         }
         match &map {
             Some((title, slots)) => {
@@ -254,12 +287,15 @@ fn setup(ctx: &Ctx) -> impl Bundle {
         }
         p.spawn(row(t.gap)).with_children(|r| {
             r.spawn((button(&t, &resources, 280.0), Act::CycleResources));
-            if let Some(caption) = &officer {
-                r.spawn((button(&t, caption, 360.0), Act::CycleOfficerLimit));
-            } else {
-                r.spawn(disabled_button(&t, &tr("Officer limit unavailable"), 360.0));
-            }
+            r.spawn((button(&t, &tr(draft.fog.label()), 290.0), Act::CycleFog));
+            r.spawn((button(&t, &tr(if draft.random_placement { "Random Placement" } else { "Fixed Placement" }), 235.0), Act::ToggleRandomPlacement));
         });
+        p.spawn(row(t.gap)).with_children(|r| {
+            r.spawn((button(&t, &tr("Default Settings"), 220.0), Act::DefaultOptions));
+            r.spawn((button(&t, &tr("Save Settings"), 220.0), Act::SaveSetup));
+            r.spawn((button(&t, &tr("Load Settings"), 220.0), Act::LoadSetup));
+        });
+        p.spawn((button(&t, &tr("Advanced"), 220.0), Act::Goto(Screen::Advanced)));
         p.spawn(row(t.gap)).with_children(|r| {
             if can_launch {
                 r.spawn((button(&t, &tr("Launch"), 220.0), Act::Launch));
@@ -267,6 +303,48 @@ fn setup(ctx: &Ctx) -> impl Bundle {
                 r.spawn(disabled_button(&t, &tr("Launch"), 220.0));
             }
             r.spawn((button(&t, &tr("Previous menu"), 220.0), Act::Goto(Screen::Main)));
+        });
+    })
+}
+
+pub(super) fn officer_caption(ctx: &Ctx) -> Option<String> {
+    let choice = ctx.data.content.rules().officer_limits.get(ctx.draft.options.officer_limit as usize)?;
+    let fallback = match choice.key.as_str() {
+        "ol_normal" => "Officer Limit: Normal",
+        "ol_restricted" => "Officer Limit: Restricted",
+        "ol_more" => "Officer Limit: More",
+        "ol_max" => "Officer Limit: Max",
+        "" => "Officer limit",
+        custom => custom,
+    };
+    let caption = ctx.strings.and_then(|strings| strings.native_label(&choice.key))
+        .filter(|label| !label.trim().is_empty()).map_or_else(|| tr(fallback), str::to_owned);
+    Some(format!("{caption} ({})", choice.value))
+}
+
+fn advanced(ctx: &Ctx) -> impl Bundle {
+    let t = ctx.theme.clone();
+    let draft = ctx.draft.clone();
+    let speed = trf("Game speed: {0}", &[&draft.speed.label()]);
+    let resources = match draft.options.starting_resources {
+        StartingResources::Normal => ("sr_normal", "Resources: Normal"),
+        StartingResources::Lots => ("sr_lots", "Resources: Lots"),
+    };
+    let resources = ctx.strings.and_then(|s| s.native_label(resources.0))
+        .filter(|s| !s.trim().is_empty()).map(str::to_owned).unwrap_or_else(|| tr(resources.1));
+    let officer = officer_caption(ctx);
+    content(ctx.theme, move |p| {
+        p.spawn((button(&t, &resources, 360.0), Act::CycleResources));
+        if let Some(caption) = &officer {
+            p.spawn((button(&t, caption, 360.0), Act::CycleOfficerLimit));
+        } else {
+            p.spawn(disabled_button(&t, &tr("Officer limit unavailable"), 360.0));
+        }
+        p.spawn((button(&t, &speed, 360.0), Act::CycleMatchSpeed));
+        p.spawn(row(t.gap)).with_children(|r| {
+            r.spawn((button(&t, &tr("OK"), 140.0), Act::CloseAdvanced(true)));
+            r.spawn((button(&t, &tr("Cancel"), 140.0), Act::CloseAdvanced(false)));
+            r.spawn((button(&t, &tr("Default"), 170.0), Act::DefaultOptions));
         });
     })
 }
@@ -322,43 +400,5 @@ fn settings(ctx: &Ctx) -> impl Bundle {
         p.spawn((row(t.gap), children![cell(&t, 240.0, &tr("LCARS interface")), (toggle(&t, &tr("On"), s.lcars_ui, 220.0), SettingToggle(SettingKey::LcarsUi))]));
         p.spawn(label(&t, &tr("Off uses the game/mod default.")));
         p.spawn((button(&t, &tr("Previous menu"), 220.0), Act::Goto(Screen::Main)));
-    })
-}
-
-fn mod_select(ctx: &Ctx) -> impl Bundle {
-    let t = ctx.theme.clone();
-    let base = ctx.data.base_name.clone().unwrap_or_else(|| tr("Base game"));
-    let mut names = vec![base.clone()];
-    names.extend(ctx.data.mods.iter().map(|m| m.name.clone()));
-    let scroll = ctx.scroll.offset;
-    let picked = ctx.browse.mod_row.min(names.len() - 1);
-    let mut details = Vec::new();
-    match picked.checked_sub(1).and_then(|i| ctx.data.mods.get(i)) {
-        None => details.push(trf("{0}, as installed, without a mod.", &[&base])),
-        Some(m) => {
-            details.push(format!("{}{}", m.name, m.version.as_deref().map(|v| format!("  v{v}")).unwrap_or_default()));
-            if !m.authors.is_empty() {
-                details.push(trf("By {0}", &[&m.authors.join(", ")]));
-            }
-            if let Some(parent) = &m.parent {
-                details.push(trf("Needs {0}", &[parent]));
-            }
-            if !m.description.is_empty() {
-                details.push(m.description.clone());
-            }
-        }
-    }
-    let current = match &ctx.selected.0 {
-        Some(f) => trf("In use: {0}", &[f]),
-        None => trf("In use: {0}", &[&base]),
-    };
-    content(ctx.theme, move |p| {
-        let rows: Vec<&str> = names.iter().map(String::as_str).collect();
-        p.spawn(scroll_list(&t, &rows, Some(picked), scroll, ModList));
-        for d in &details {
-            p.spawn(label(&t, d));
-        }
-        p.spawn(label(&t, &current));
-        p.spawn((row(t.gap), children![(button(&t, &tr("Use mod"), 220.0), Act::UseMod), (button(&t, &tr("Previous menu"), 220.0), Act::Goto(Screen::Main))]));
     })
 }

@@ -19,12 +19,13 @@
 //! | `resource` (class `resourceweapon`) | `addDilithium`, `addLatinum`, `addMetal`, `addBiomatter`, `addCrew` (signed), `oneTimeMode`, `alwaysActivePlayer`, `alwaysActiveAI` |
 //! | `colonize` | ordnance class `ColonizerPod`: `partySize` (default 100), `orbitRange` (SIM-30) |
 //! | `base` (CON-54) | weapon: `hitChance` (+ rows), `stopToHitModifier`, `toHitStopModifier`, `impulseToHitModifier`, `toHitImpulseModifier`, `warpToHitModifier`, `toHitWarpModifier`, `slowToHitModifier`, `toHitSlowModifier`, `targetEnemyCraft`, `targetEnemyBuildings`, `targetAlliedCraft`, `targetAlliedBuildings`, `targetEnemyPlanets`, `targetEnemyPlanetsOnly`, `targetLocation`, `AItargetLocation`, `needTarget`, `beneficial`, `switchToAttack`, `cloakEnable`, `warpEnable`, `crewAffectsWeaponDelay`, `ignoreValidAsTarget`, `regularWeaponDelay`; ordnance: rows of `damageBase`, `damageVariance`, `damageThreshold`, `shieldCrewModifier`, `hullCrewModifier`, and `ignoreShield`, `forceInvalidateTarget`, `canAttackStations`, `specialValue`, `shieldDuration`, `omegaTurn`, `seekTime`, `shotAccel`, `detectRadius`, `travelTimeFraction` |
+//! | `look` | render only, not digested ([`ShotLook`]): ordnance `Sprite`, `spriteDuration`, `Radius`, `Length`, `lifeSpan` (every class), `travelTimeFraction` (beam classes, default 0.1), `flareSprite` / `flareRadiusMultiplier` (class `phaser`, defaults `pflare` / 1.4), `lightColor` with `lightFalloffStart` / `lightFalloffRange` (defaults 100 / 5) |
 //! | hardpoint arc | `restrictFireArc = 1` with `fireArc` as the half-width in radians (our reading) |
 
 use sta_core::Fixed;
 use sta_odf::Odf;
 
-use crate::def::{ClassLabel, FireArc, Lookup, ResourceWeaponDef, TargetMaskDef, ToHitDef, WeaponBaseDef, WeaponDef, WeaponKind};
+use crate::def::{ShotFlare, ShotLight, ShotLook, ClassLabel, FireArc, Lookup, ResourceWeaponDef, TargetMaskDef, ToHitDef, WeaponBaseDef, WeaponDef, WeaponKind};
 use crate::odf::{numbered, stem, Reader};
 use crate::Warning;
 
@@ -171,6 +172,46 @@ fn ordnance_base(o: &mut Reader, b: &mut WeaponBaseDef) {
     b.travel_time_fraction = signed(o, "travelTimeFraction");
 }
 
+/// A finite, non-negative number (the look keys are sizes and times); anything else reads as absent.
+fn look_num(r: &mut Reader, key: &str) -> Option<f32> {
+    r.num(key).filter(|v| v.is_finite() && *v >= 0.0).map(|v| v as f32)
+}
+
+/// The ordnance look keys (see [`ShotLook`]). Read from data (key presence); the classes
+/// that read `travelTimeFraction` and the flare keys, and their defaults, are read from the
+/// executable, static.
+fn shot_look(o: &mut Reader, class: &str) -> ShotLook {
+    let light = o.odf.list("lightColor");
+    let light = match light[..] {
+        [r, g, b, ..] => {
+            let n = |t: &str| t.trim_end_matches(['f', 'F', ';']).parse::<f32>().ok().filter(|v| v.is_finite() && *v >= 0.0);
+            match (n(r), n(g), n(b)) {
+                (Some(r), Some(g), Some(b)) => Some([r, g, b]),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let light = light.map(|color| ShotLight {
+        color,
+        falloff_start: look_num(o, "lightFalloffStart").unwrap_or(ShotLight::DEFAULT_FALLOFF_START),
+        falloff_range: look_num(o, "lightFalloffRange").unwrap_or(ShotLight::DEFAULT_FALLOFF_RANGE),
+    });
+    ShotLook {
+        sprite: o.text("sprite"),
+        sprite_duration: look_num(o, "spriteDuration"),
+        radius: look_num(o, "Radius"),
+        length: look_num(o, "Length"),
+        life_span: look_num(o, "lifeSpan"),
+        travel_time_fraction: BEAM_CLASSES.contains(&class).then(|| look_num(o, "travelTimeFraction").unwrap_or(ShotLook::DEFAULT_TRAVEL_TIME_FRACTION)),
+        flare: (class == "phaser").then(|| ShotFlare {
+            sprite: o.text("flareSprite").unwrap_or_else(|| ShotFlare::DEFAULT_SPRITE.to_owned()),
+            radius_multiplier: look_num(o, "flareRadiusMultiplier").unwrap_or(ShotFlare::DEFAULT_RADIUS_MULTIPLIER),
+        }),
+        light,
+    }
+}
+
 /// The definition of weapon `name`, and the arc its hardpoints are limited to.
 pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut Vec<Warning>) -> (WeaponDef, Option<FireArc>) {
     let file = format!("{}.odf", stem(name));
@@ -255,6 +296,7 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
         }
         d.damage_variance = o.fixed("damageVariance");
         d.fx = o.text("shotGeometry").or_else(|| o.text("sprite"));
+        d.look = shot_look(&mut o, ord_class.as_deref().unwrap_or(""));
         match kind {
             WeaponKind::Beam => d.duration = o.ticks("lifespan"),
             _ => {
@@ -407,5 +449,71 @@ mod tests {
         assert!(w.ordnance_defence && w.kind == WeaponKind::PointDefence);
         let w = parse("[WeaponClass]\nclassLabel = \"pointdefenselaser\"\n");
         assert!(!w.ordnance_defence);
+    }
+}
+
+#[cfg(test)]
+mod look_tests {
+    use super::*;
+
+    fn look(class: &str, body: &str) -> ShotLook {
+        let w = sta_odf::resolve("w", &mut |_| Some("classLabel = \"cannon\"\nordName = \"o\"\n".to_owned())).unwrap();
+        let o = sta_odf::resolve("o", &mut |_| Some(format!("classLabel = \"{class}\"\n{body}"))).unwrap();
+        weapon_def("w", &w, Some(&o), &mut Vec::new()).0.look
+    }
+
+    #[test]
+    fn keys_are_read_for_every_class() {
+        let l = look("photontorpedo", "Sprite = \"sp\"\nspriteDuration = 0.7\nRadius = 7.5\nLength = 33\nlifeSpan = 4\n");
+        assert_eq!((l.sprite.as_deref(), l.sprite_duration, l.radius, l.length, l.life_span), (Some("sp"), Some(0.7), Some(7.5), Some(33.0), Some(4.0)));
+        assert_eq!((l.travel_time_fraction, l.flare, l.light), (None, None, None));
+        assert_eq!(look("photontorpedo", ""), ShotLook::default());
+    }
+
+    #[test]
+    fn beam_classes_default_the_travel_time_fraction() {
+        assert_eq!(look("phaser", "").travel_time_fraction, Some(0.1));
+        assert_eq!(look("pdlbeam", "travelTimeFraction = 0.01\n").travel_time_fraction, Some(0.01));
+        assert_eq!(look("pphaser", "travelTimeFraction = 0.5\n").travel_time_fraction, None);
+    }
+
+    #[test]
+    fn only_phasers_have_a_flare_with_defaults_and_overrides() {
+        let f = look("phaser", "").flare.unwrap();
+        assert_eq!((f.sprite.as_str(), f.radius_multiplier), ("pflare", 1.4));
+        let f = look("phaser", "flareSprite = \"x\"\nflareRadiusMultiplier = 2\n").flare.unwrap();
+        assert_eq!((f.sprite.as_str(), f.radius_multiplier), ("x", 2.0));
+        assert_eq!(look("pdlbeam", "flareSprite = \"x\"\n").flare, None);
+        assert_eq!(look("pphaser", "").flare, None);
+    }
+
+    #[test]
+    fn a_light_needs_a_colour_and_defaults_its_falloff() {
+        let l = look("pphaser", "lightColor = 210 90 40\n").light.unwrap();
+        assert_eq!((l.color, l.falloff_start, l.falloff_range), ([210.0, 90.0, 40.0], 100.0, 5.0));
+        let l = look("photontorpedo", "lightColor = 0.5f 0.25 1\nlightFalloffStart = 60\nlightFalloffRange = 9\n").light.unwrap();
+        assert_eq!((l.color, l.falloff_start, l.falloff_range), ([0.5, 0.25, 1.0], 60.0, 9.0));
+        assert_eq!(look("pphaser", "lightFalloffStart = 60\n").light, None);
+        assert_eq!(look("pphaser", "lightColor = 1 2\n").light, None);
+    }
+
+    #[test]
+    fn keys_are_inherited_through_includes_and_overridden() {
+        let mut files = std::collections::HashMap::new();
+        files.insert("base", "classLabel = \"phaser\"\nRadius = 3\nlifeSpan = 1.5\nflareRadiusMultiplier = 2\nlightColor = 1 1 1\n");
+        files.insert("child", "#include \"base.odf\"\nRadius = 5.5\nflareSprite = \"y\"\n");
+        let w = sta_odf::resolve("w", &mut |_| Some("classLabel = \"cannon\"\nordName = \"o\"\n".to_owned())).unwrap();
+        let o = sta_odf::resolve("child", &mut |n| files.get(n.trim_end_matches(".odf")).map(|s| (*s).to_owned())).unwrap();
+        let l = weapon_def("w", &w, Some(&o), &mut Vec::new()).0.look;
+        assert_eq!((l.radius, l.life_span), (Some(5.5), Some(1.5)));
+        let f = l.flare.unwrap();
+        assert_eq!((f.sprite.as_str(), f.radius_multiplier), ("y", 2.0));
+        assert!(l.light.is_some());
+    }
+
+    #[test]
+    fn negative_and_malformed_values_read_as_absent() {
+        let l = look("phaser", "Radius = -3\nlifeSpan = soon\nLength = inf\nspriteDuration = -inf\n");
+        assert_eq!((l.radius, l.life_span, l.length, l.sprite_duration), (None, None, None, None));
     }
 }

@@ -6,7 +6,7 @@ use bevy::camera::RenderTarget;
 use bevy::prelude::*;
 use bevy::render::RenderPlugin;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
-use bevy::ui::{UiScale, UiTargetCamera};
+use bevy::ui::{UiGlobalTransform, UiScale, UiTargetCamera};
 use bevy::window::ExitCondition;
 use sta_content::ContentDb;
 use sta_sim::{Fixed, PlayerId, TeamId, WorldSource};
@@ -98,7 +98,7 @@ fn sizes(default: &[UVec2]) -> Vec<UVec2> {
 }
 
 #[derive(Clone, Copy)]
-enum HoverCapture { Selected, SelectedHover, Low, Other, BuildPage, ColonyShip, Group(usize) }
+enum HoverCapture { Selected, SelectedHover, Low, Other, BuildPage, ColonyShip, Group(usize), Avatar, WeaponIcons }
 
 /// Independent installed-data expectation: current crew is compared with its
 /// actual live capacity, not crewCost. Resolve authored palette/thresholds.
@@ -152,6 +152,14 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             None
         }
         HoverCapture::Low => { hud_feed.selected.clear(); Some(original) },
+        HoverCapture::Avatar => { hud_feed.selected.clear(); None },
+        HoverCapture::WeaponIcons => {
+            let def = hud_feed.content.as_ref().unwrap().key("fed_intrepidy").expect("FO4 Intrepid");
+            let mut view = (*hud_feed.view).clone();
+            view.units.iter_mut().find(|u| u.id == original).unwrap().def = def;
+            hud_feed.view = Arc::new(view);
+            None
+        }
         // UI-38: the start unit's view row (same id, so it stays visible) with a colony ship's definition.
         HoverCapture::ColonyShip => {
             let Some(def) = hud_feed.content.as_ref().unwrap().key("fcolony") else {
@@ -286,6 +294,9 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         ))
         .id();
     app.insert_resource(CaptureCamera(camera));
+    if matches!(hover_mode, HoverCapture::Avatar) {
+        app.insert_resource(crate::render::units::LocalPlayer(Some(PlayerId(0))));
+    }
     if matches!(hover_mode, HoverCapture::BuildPage) {
         // The builder's build page: command-button labels and PREV/NEXT when it has pages.
         app.world_mut().resource_mut::<super::super::HudState>().page = super::super::Page::Build;
@@ -317,6 +328,51 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         return;
     }
 
+    if profile == UiProfile::FleetOps
+        && std::env::var("STA64_TEST_MOD").as_deref() == Ok("FO4")
+        && matches!(hover_mode, HoverCapture::Selected | HoverCapture::SelectedHover)
+    {
+        let count = app.world_mut().query::<(&GuiImage, &ImageNode)>().iter(app.world())
+            .filter(|(sprite, image)| sprite.names.iter().any(|name| name == "fed_outpost_si") && image.rect.is_some())
+            .count();
+        assert_eq!(count, 1, "{label}: FO4 outpost systems atlas entry must resolve");
+    }
+
+    if matches!(hover_mode, HoverCapture::Avatar) {
+        let mut query = app.world_mut().query_filtered::<(&GuiButton, &ImageNode, &ComputedNode, &UiGlobalTransform), With<super::super::avatar::Portrait>>();
+        let mut choices: Vec<_> = query.iter(app.world()).collect();
+        choices.sort_by(|a, b| a.3.translation.x.total_cmp(&b.3.translation.x));
+        assert_eq!(choices.len(), 2, "both full-size avatar portraits resolve");
+        assert_eq!(choices[0].0.names, ["b_avatar_fed_mayson"]);
+        assert_eq!(choices[1].0.names, ["b_avatar_fed_risner"]);
+        let panel = stock.panel("CommandInfoBar").expect("FO4 choice panel");
+        let first = stock.at(Vec2::new(panel.x, panel.y), "CommandInfoBarButtonRect").expect("FO4 portrait rect");
+        let stride = stock.number("CommandInfoBarButtonDistance").unwrap() as f32 * stock.scale_x;
+        for (_, image, node, _) in &choices {
+            assert_eq!(image.rect.unwrap().size(), Vec2::splat(256.0));
+            assert_eq!(node.size, Vec2::new(first.w, first.h));
+        }
+        let first_center = Vec2::new(first.x + first.w / 2.0, first.y + first.h / 2.0);
+        assert!(choices[0].3.translation.distance(first_center) < 1.0);
+        assert!(choices[1].3.translation.distance(first_center + Vec2::new(stride, 0.0)) < 1.0);
+        let center_x = (choices[0].3.translation.x + choices[1].3.translation.x) * 0.5;
+        assert!((center_x - size.x as f32 / 2.0).abs() < 1.0);
+    }
+    if matches!(hover_mode, HoverCapture::WeaponIcons) {
+        let mut query = app.world_mut().query::<(&super::weapon_icons::WeaponIcon, &GuiImage, &ImageNode, &Visibility)>();
+        let mut slots: Vec<_> = query.iter(app.world()).map(|(icon, name, image, visibility)| {
+            assert!(image.rect.is_some());
+            assert_eq!(*visibility, Visibility::Inherited);
+            assert_eq!(name.names.last().unwrap(), "systemicon_default");
+            if icon.slot == 1 {
+                assert_eq!(image.color, super::weapon_icons::READY);
+            }
+            icon.slot
+        }).collect();
+        slots.sort_unstable();
+        assert_eq!(slots, [1, 2, 3, 4], "all mounted Intrepid weapon icons resolve");
+    }
+
     if let HoverCapture::Group(count) = hover_mode {
         let ids = app.world().resource::<HudFeed>().selected.clone();
         let rendered: Vec<_> = app.world_mut().query::<(Entity, &super::super::panels::GroupTile)>()
@@ -346,6 +402,47 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             assert!(height <= hull.y - rect.y + 1.0, "{label}: name {name:?} reaches hull: {height} > {}", hull.y - rect.y);
             eprintln!("{label}: {name:?} resolved {width}x{height}; name width {}, space to hull {}", rect.w, hull.y - rect.y);
         }
+    }
+
+    // Every placed stock text sits in its rectangle by the rule (the line box centred or left by
+    // the rectangle's size minus one, whole-pixel origin, a taller box overflowing evenly), and is
+    // neither wrapped nor clipped. Labels outside the rule (STA64's fallbacks) are listed with
+    // their visibility only.
+    {
+        use crate::ui::sprite_font::{SpriteText, SpriteTextStyle};
+        use crate::ui::stock_font::{VAlign, HAlign};
+        let window_scale = app.world_mut().query::<&Window>().iter(app.world()).next().map_or(1.0, |w| w.scale_factor());
+        let ui_px = app.world().get_resource::<UiScale>().map_or(1.0, |u| u.0) * window_scale;
+        let on_path = app.world().get_resource::<crate::ui::sprite_font::SpriteFonts>().is_some_and(|f| f.stock_family);
+        let mut texts = app.world_mut().query::<(&SpriteText, &SpriteTextStyle, &ComputedNode, &bevy::ui::UiGlobalTransform, &ChildOf, &InheritedVisibility)>();
+        let (mut checked, mut wrong) = (0, Vec::new());
+        for (text, style, node, at, parent, shown) in texts.iter(app.world()) {
+            let slot = app.world().get::<ComputedNode>(parent.parent());
+            let slot_at = app.world().get::<bevy::ui::UiGlobalTransform>(parent.parent());
+            let (Some(slot), Some(slot_at)) = (slot, slot_at) else { continue };
+            let (own, room) = (node.size(), slot.size());
+            if own.x <= 0.0 {
+                continue;
+            }
+            let rel = (at.translation - own / 2.0) - (slot_at.translation - room / 2.0);
+            let Some(place) = style.place.filter(|p| on_path && p.rect.x > 0.0 && style.stock.is_some()) else {
+                if style.stock.is_none() {
+                    eprintln!("{label}: FALLBACK {:?} {own} in {room} visible={}", text.text, shown.get());
+                }
+                continue;
+            };
+            checked += 1;
+            let want = Vec2::new(
+                match place.h { HAlign::Left => 0.0, HAlign::Centre => ((place.rect.x - 1.0) * ui_px - own.x) / 2.0 },
+                match place.v { VAlign::Top => 0.0, VAlign::Centre => ((place.rect.y - 1.0) * ui_px - own.y) / 2.0, VAlign::Bottom => (place.rect.y - 1.0) * ui_px - own.y },
+            );
+            eprintln!("{label}: PLACE {:?} box {own} in slot {room}: top {:.1} (rule {:.1}), left {:.1} (rule {:.1})", text.text, rel.y, want.y, rel.x, want.x);
+            if (rel - want).abs().max_element() > 1.5 || style.wrap.is_some() || style.wrap_parent {
+                wrong.push(format!("{:?} at {rel} (rule {want}), wraps: {}", text.text, style.wrap.is_some() || style.wrap_parent));
+            }
+        }
+        eprintln!("{label}: {checked} placed stock text nodes checked against the placement rule");
+        assert!(wrong.is_empty(), "{label}: stock text not placed by the rule: {wrong:?}");
     }
 
     let roots = app
@@ -393,8 +490,8 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             .count();
         assert_eq!(colonize, 1, "{label}: one COLONIZE button with the stock art name");
     }
-    if matches!(hover_mode, HoverCapture::Low) {
-        assert_eq!(commands, 0, "{label}: hovering must not enable selection commands");
+    if matches!(hover_mode, HoverCapture::Low | HoverCapture::Avatar) {
+        assert_eq!(commands, 0, "{label}: selection commands require a selection");
     } else {
         assert!(commands > 0, "{label}: no command button art resolved");
     }
@@ -423,7 +520,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         .query::<(&super::info::StockText, &crate::ui::sprite_font::SpriteText, &Children)>()
         .iter(app.world())
     {
-        let super::info::StockText::Resource(id) = *kind;
+        let super::info::StockText::Resource(id) = *kind else { continue };
         let expected = stock.colour(&format!("resource_{id}_color")).unwrap_or(defaults[id]);
         assert_eq!(text.color, expected, "{label}: resource_{id} CFG/default tint");
         // Sprite text resolves to glyph images (the TTF fallback to Text); each carries the tint.
@@ -592,16 +689,23 @@ fn installed_stock_hud_renders_on_gpu() {
         _ => panic!("set STA64_HUD_PROFILE=a2 or fo for the mounted install"),
     };
     // 21:9 and 32:9 windows (UI-37): the sheet is scaled by one factor and centred.
-    for (size, ratio) in [
-        (UVec2::new(1024, 768), "4x3"),
-        (UVec2::new(1280, 720), "16x9"),
-        (UVec2::new(1920, 1080), "16x9-1080"),
-        (UVec2::new(2560, 1080), "21x9"),
-        (UVec2::new(3840, 1080), "32x9"),
-        (UVec2::new(2752, 1152), "2752x1152"),
-    ] {
-        let cfg = match (profile, ratio) {
+    let mut list = vec![
+        (UVec2::new(1024, 768), "4x3".to_owned()),
+        (UVec2::new(1280, 720), "16x9".to_owned()),
+        (UVec2::new(1920, 1080), "16x9-1080".to_owned()),
+        (UVec2::new(2560, 1080), "21x9".to_owned()),
+        (UVec2::new(3840, 1080), "32x9".to_owned()),
+        (UVec2::new(2752, 1152), "2752x1152".to_owned()),
+    ];
+    // `STA64_HUD_SIZES` replaces the list (the wide windows take the 16:9 sheet for Fleet Operations).
+    if std::env::var("STA64_HUD_SIZES").is_ok() {
+        list = sizes(&[]).into_iter().map(|s| (s, format!("{}x{}", s.x, s.y))).collect();
+    }
+    for (size, ratio) in list {
+        let wide = size.x * 9 >= size.y * 16;
+        let cfg = match (profile, ratio.as_str()) {
             (UiProfile::Armada2, _) => "gui_fed.cfg",
+            (UiProfile::FleetOps, _) if std::env::var("STA64_HUD_SIZES").is_ok() => if wide { "gui_federation16x9.cfg" } else { "gui_federation.cfg" },
             (UiProfile::FleetOps, "16x9" | "16x9-1080" | "21x9" | "32x9" | "2752x1152") => "gui_federation16x9.cfg",
             (UiProfile::FleetOps, _) => "gui_federation.cfg",
             _ => unreachable!(),
@@ -635,6 +739,12 @@ fn installed_stock_hud_renders_on_gpu() {
             vfs, profile, UVec2::new(1280, 720), "gui_federation16x9.cfg",
             "fo4-hover-selected-16x9", GameOptions::default(), HoverCapture::SelectedHover,
         );
+        if active_mod.as_deref() == Some("FO4") {
+            for (mode, label) in [(HoverCapture::Avatar, "fo4-start-avatar"), (HoverCapture::WeaponIcons, "fo4-intrepid-system-icons")] {
+                let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref()).unwrap();
+                capture_one(vfs, profile, UVec2::new(1920, 1080), "gui_federation16x9.cfg", label, GameOptions::default(), mode);
+            }
+        }
     }
 }
 
@@ -832,8 +942,9 @@ fn installed_group_names_render_on_gpu() {
 /// UI-19: the Armada I stock HUD (`UiProfile::Armada1`) on the install's own content: the four
 /// races at 4:3, 16:9 and 21:9, Centred and Stretched, in windowless GPU frames, plus a slot click
 /// that must queue an order. The sim is the install's real starting state (a headless start).
-/// Set `STA64_GPU_TESTS=1 STA64_TEST_A1_INSTALL=<Armada I root>`; `STA64_HUD_CAPTURE_DIR` keeps
-/// the frames locally (they show game art: never commit them).
+/// For an A1Compat mount, set `STA64_TEST_A1_INSTALL` to the Roots install and
+/// `STA64_TEST_A1_MOD` to its mod folder. `STA64_GPU_TESTS=1` opts in. Save
+/// local frames with `STA64_HUD_CAPTURE_DIR`.
 #[test]
 fn installed_armada1_stock_hud_renders_on_gpu() {
     if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
@@ -844,6 +955,7 @@ fn installed_armada1_stock_hud_renders_on_gpu() {
         eprintln!("SKIP: set STA64_TEST_A1_INSTALL=<Armada I root>");
         return;
     };
+    let compat_mod = std::env::var("STA64_TEST_A1_MOD").ok();
     for fit in super::layout::HudFit::ALL {
     for size in sizes(&[UVec2::new(1024, 768), UVec2::new(1920, 1080), UVec2::new(2560, 1080)]) {
     for (cfg, spr, label) in [
@@ -852,12 +964,24 @@ fn installed_armada1_stock_hud_renders_on_gpu() {
         ("gui_rom.cfg", "gui_romulan.spr", "a1-rom"),
         ("gui_bor.cfg", "gui_borg.spr", "a1-bor"),
     ] {
+        if compat_mod.is_some() && cfg != "gui_fed.cfg" {
+            continue;
+        }
         let label = &format!("{label}-{}x{}-{}", size.x, size.y, fit.key());
-        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), None).expect("installed A1 VFS");
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), compat_mod.as_deref()).expect("installed A1 VFS");
+        if compat_mod.is_some() {
+            assert!(sta_content::profile::a1_compat(&vfs), "the mod must require A1Compat");
+            assert_eq!(
+                crate::ui::profile::resolve_profile(Some(&vfs), Default::default(), &Default::default()),
+                UiProfile::Armada1,
+            );
+        }
         let layout = crate::game::gui_layout(&vfs, cfg).unwrap_or_else(|| panic!("installed {cfg} missing"));
         let stock = StockLayout::for_aspect_fit(&layout, size.x as f32 / size.y as f32, fit);
         assert_eq!(stock.canvas, Vec2::new(640.0, 480.0), "{label}: one 640 x 480 sheet");
         let hud_feed = feed(&vfs, GameOptions::default(), 0);
+        let team = Color::srgb(0.25, 0.5, 1.0);
+        let palette = crate::viewer::TeamColours::load(&vfs).with_local_colour(hud_feed.player, team, &[hud_feed.player]);
         let mut app = App::new();
         app.add_plugins(
             DefaultPlugins
@@ -871,6 +995,7 @@ fn installed_armada1_stock_hud_renders_on_gpu() {
         app.insert_resource(ClearColor(Color::BLACK))
             .insert_resource(UiProfile::Armada1)
             .insert_resource(UiProfile::Armada1.theme())
+            .insert_resource(palette)
             .insert_resource(Mounted(vfs))
             .insert_resource(GuiSkin { table: Some(spr.into()) })
             .insert_resource(HudConfig { gui: Some(layout), aspect: size.x as f32 / size.y as f32, fit, fit_scale: false, log: false })
@@ -906,11 +1031,26 @@ fn installed_armada1_stock_hud_renders_on_gpu() {
             eprintln!("SKIP {label}: hardware adapter unavailable");
             return;
         }
-        // The slot map came from the install's game_cfg.h and the grid is built from it.
+        // The slot map came from the install's header or its A1Compat defaults.
         let slots = app.world().resource::<super::StockState>().slots.clone().expect("slot map loaded");
         assert!(!slots.is_empty(), "{label}: game_cfg.h gave no slots");
         let cells = app.world_mut().query::<&super::super::panels::GridCell>().iter(app.world()).count();
         assert!(cells > 0, "{label}: no control buttons");
+        if compat_mod.is_some() {
+            use super::a1::info::LiveTint;
+            let resolved_buttons = app.world_mut()
+                .query::<(&super::super::panels::GridCell, &ImageNode)>()
+                .iter(app.world())
+                .count();
+            assert!(resolved_buttons > 0, "{label}: command sprites did not resolve");
+            let resolved_badge = app.world_mut()
+                .query::<(&LiveTint, &ImageNode)>()
+                .iter(app.world())
+                .filter(|(tint, image)| matches!(tint, LiveTint::Race(_)) && image.color == team)
+                .count();
+            assert!(resolved_badge > 0, "{label}: team tint did not reach badge art");
+            eprintln!("{label}: {resolved_buttons} resolved command sprites, {resolved_badge} tinted badge sprites");
+        }
         // A click on a Stop slot (or the first ready order slot) queues an order.
         let slot_button = app
             .world_mut()

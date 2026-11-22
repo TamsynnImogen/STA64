@@ -11,6 +11,8 @@
 //!     when its def has none), then [`SimEvent::Built`] and `Spawned`; the
 //!     next item starts
 //!     in that same tick.
+//!     A yard with a resolved `wormhole` opens that aperture after the build
+//!     timer and releases the ship at its build hardpoint after opening.
 //!   - A **craft** (construction rig) needs `at: Some(site)`. It steers there;
 //!     within [`deploy_reach`] of the site (the rig's slow-turn orbit plus a margin, from its ODF movement stats) it deploys: the
 //!     station entity appears at the site (`progress` 0,
@@ -64,6 +66,7 @@ mod afford_tests;
 mod launch;
 pub(crate) mod officers;
 pub mod orbit;
+pub(crate) mod research;
 pub mod rally;
 pub mod site;
 pub mod view;
@@ -141,6 +144,13 @@ pub struct Production {
     deploys: Table<Deploy>,
     /// By the station being welded.
     welds: Table<Weld>,
+    research: Table<research::Attachment>,
+}
+
+#[derive(Default)]
+pub(crate) struct Completions {
+    pub evolved: Vec<(EntityId, EntityId)>,
+    pub gate_rallies: Vec<(EntityId, Vec3)>,
 }
 
 /// `(def, owner, done, started, paid)`.
@@ -161,6 +171,32 @@ pub struct ProductionRec {
 
 fn finished(e: &Entity) -> bool {
     e.progress.is_none_or(|p| p >= Fixed::ONE)
+}
+
+/// Resolved, non-null `pushBuildItem0..9` in authored slot order. Gaps and
+/// unresolved class names are skipped; repeated class names remain repeated.
+fn push_build_defs(db: &ContentDb, units: &Entities, id: EntityId) -> Vec<ContentKey> {
+    let Some(yard) = units.get(id) else { return Vec::new() };
+    let Some(def) = db.unit(yard.def) else { return Vec::new() };
+    if !finished(yard) || !EntityKind::producer_def(def) {
+        return Vec::new();
+    }
+    def.stats.push_build_items
+        .iter()
+        .filter_map(|name| db.key(name).filter(|&key| db.unit(key).is_some()))
+        .collect()
+}
+
+impl crate::Sim {
+    /// Enqueue an already finished producer's ODF push-build items once.
+    /// Call on creation or replacement, never on routine per-tick updates.
+    pub(crate) fn push_build_items(&mut self, id: EntityId) -> usize {
+        let Some(db) = self.content.as_deref() else { return 0 };
+        let defs = push_build_defs(db, &self.units, id);
+        defs.into_iter().filter(|&what| {
+            self.production.push_build_item(db, &self.units, &mut self.economy, id, what)
+        }).count()
+    }
 }
 
 fn ticks_of(db: &ContentDb, def: ContentKey) -> u64 {
@@ -198,8 +234,43 @@ fn refund(eco: &mut Economy, db: &ContentDb, p: PlayerId, def: ContentKey) {
 }
 
 impl Production {
+    /// Admit one ODF push-build item through the yard's ordinary queue rules.
+    /// The callback's items need not appear in the player's build list.
+    fn push_build_item(
+        &mut self,
+        db: &ContentDb,
+        units: &Entities,
+        eco: &mut Economy,
+        yard: EntityId,
+        what: ContentKey,
+    ) -> bool {
+        let Some(y) = units.get(yard) else { return false };
+        let Some(bd) = db.unit(y.def) else { return false };
+        if !finished(y) || !EntityKind::producer_def(bd) || db.unit(what).is_none() {
+            return false;
+        }
+        if db.unit(what).is_some_and(|product| self.research_block(db, units, yard, bd, product).is_some()) {
+            return false;
+        }
+        let limit = db.build_queue_limit(bd) as usize;
+        if self.queues.get(yard).is_some_and(|q| q.len() >= limit) || limit == 0 {
+            return false;
+        }
+        let paid = db.unit_features(bd).pay_on_queue;
+        if paid && !(self.officers_admit(units, db, eco, y.owner, what) && pay(eco, db, y.owner, what)) {
+            return false;
+        }
+        let item = Item { def: what, owner: y.owner, done: 0, started: false, paid };
+        match self.queues.get_mut(yard) {
+            Some(q) => q.push(item),
+            None => { self.queues.insert(yard, vec![item]); }
+        }
+        true
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.queues.is_empty() && self.deploys.is_empty() && self.welds.is_empty() && self.rallies.is_empty()
+        self.queues.is_empty() && self.deploys.is_empty() && self.welds.is_empty()
+            && self.rallies.is_empty() && self.research.is_empty()
     }
 
     pub(crate) fn order_rally(
@@ -244,6 +315,14 @@ impl Production {
         ids.sort();
         ids.dedup();
         ids
+    }
+
+    pub(crate) fn stationary_evolvers(&self, db: &ContentDb, units: &Entities) -> impl Iterator<Item = EntityId> {
+        self.queues.iter().filter_map(|(id, queue)| {
+            let head = queue.first().filter(|job| job.started)?;
+            let builder = db.unit(units.get(id)?.def)?;
+            (builder.is_evolver() && db.unit(head.def).is_some_and(|d| d.is_starbase)).then_some(id)
+        })
     }
 
     /// Builders flying to a build site or building there, ascending
@@ -291,13 +370,24 @@ impl Production {
             return false;
         }
         let (kind, owner, bdef) = (b.kind, b.owner, b.def);
-        let (Some(bd), Some(_)) = (db.unit(bdef), db.unit(what)) else {
+        let (Some(bd), Some(product)) = (db.unit(bdef), db.unit(what)) else {
             return false;
         };
         if !bd.build.list.is_empty() && !bd.build.list.iter().any(|r| r.key == what) {
             return false;
         }
-        let kind = if EntityKind::producer_def(bd) { EntityKind::Station } else { kind };
+        if self.research_block(db, units, builder, bd, product).is_some() {
+            return false;
+        }
+        let evolves = bd.is_evolver();
+        if evolves && (bd.build.list.is_empty() || self.queues.get(builder).is_some() || self.is_deploying(builder)) {
+            return false;
+        }
+        let kind = if EntityKind::producer_def(bd) || (evolves && !EntityKind::build_requires_site(bd, product)) {
+            EntityKind::Station
+        } else {
+            kind
+        };
         let pay_now = db.unit_features(bd).pay_on_queue;
         match kind {
             EntityKind::Station => {
@@ -341,6 +431,10 @@ impl Production {
                             })
                             .map(|(_, d)| d.at),
                     );
+                    orbiters.extend(self.stationary_evolvers(db, units).filter_map(|id| {
+                        let job = self.queues.get(id)?.first()?;
+                        orbit::is_orbital(db.unit(job.def)?).then_some(units.get(id)?.pos)
+                    }));
                     match orbit::snap(&planets, &orbiters, at) {
                         Ok(slot) => {
                             outward = Some(slot.heading);
@@ -366,6 +460,10 @@ impl Production {
                     .iter()
                     .filter(|(id, _)| *id != builder)
                     .map(|(_, d)| site::unit_bounds(db, d.def, d.at));
+                let cocoons = self.stationary_evolvers(db, units).filter_map(|id| {
+                    let job = self.queues.get(id)?.first()?;
+                    Some(site::unit_bounds(db, job.def, units.get(id)?.pos))
+                });
                 // An orbital station must overlap its attachment planet. It
                 // still cannot encroach on another object, region or site.
                 let limits = if parent_planet.is_some() {
@@ -378,6 +476,7 @@ impl Production {
                     site::unit_bounds(db, what, at),
                     obstacles
                         .chain(reserved)
+                        .chain(cocoons)
                         .chain(regions.iter().filter_map(site::region_bounds)),
                 )
                 .is_err()
@@ -403,7 +502,7 @@ impl Production {
                 );
                 // The rig parks beside the site, not on it: the structure
                 // goes up at `at` and the rig stops at its edge.
-                let ring = stand_ring(db, units, what, builder);
+                let ring = if evolves { Fixed::ZERO } else { stand_ring(db, units, what, builder) };
                 if let Some(r) = units.get_mut(builder) {
                     let (mut dx, mut dz) = (r.pos.x - at.x, r.pos.z - at.z);
                     let mut d = (dx * dx + dz * dz).sqrt();
@@ -470,11 +569,14 @@ impl Production {
         eco: &mut Economy,
         events: &mut Vec<SimEvent>,
         confinement: &mut crate::boundary::state::Confinement,
-    ) {
+        bounds: Option<(sta_core::Vec3, sta_core::Vec3)>,
+    ) -> Completions {
+        let mut completed = Completions::default();
         if self.is_empty() {
-            return;
+            return completed;
         }
         self.rallies.prune(units);
+        let mut newly_finished = Vec::new();
         let welds: Vec<EntityId> = self.welds.iter().map(|(id, _)| id).collect();
         for id in welds {
             if !units.contains(id) {
@@ -495,7 +597,8 @@ impl Production {
                     units.get_mut(id).expect("completed weld").target = target;
                 }
                 events.push(SimEvent::Built { builder, id });
-                free_unit::spawn(units, db, id, confinement, events);
+                free_unit::spawn(units, db, eco, id, confinement, events);
+                newly_finished.push(id);
             } else {
                 s.progress = Some(Fixed::from_int(done as i32) / Fixed::from_int(ticks as i32));
             }
@@ -508,27 +611,69 @@ impl Production {
                 continue;
             };
             let (pos, heading, yard_def) = (y.pos, y.heading, y.def);
+            let builder = db.unit(yard_def);
+            let evolves = builder.is_some_and(sta_content::UnitDef::is_evolver);
+            let portal = builder.and_then(|d| db.launch_wormhole(d));
             let q = self.queues.get_mut(yard).expect("listed");
             if let Some(head) = q.first_mut()
                 && head.started
             {
-                head.done += 1;
-                if head.done >= ticks_of(db, head.def) {
+                head.done = head.done.saturating_add(1);
+                let delay = portal.map_or(0, sta_content::UnitDef::wormhole_open_ticks);
+                if head.done >= ticks_of(db, head.def).saturating_add(delay) {
                     let Item { def, owner, .. } = q.remove(0);
                     if let Some(d) = db.unit(def) {
-                        // SIM-16: out of the builder's launch hardpoint.
-                        let out = match db.unit(yard_def) {
-                            Some(b) => launch::place(b, pos, heading),
-                            None => launch::Launch { pos, heading, exit: None },
+                        let mut attachment = None;
+                        // External research pods finish directly in an attachment slot.
+                        let out = match builder {
+                            Some(b) if research::external_pod(b, d) => {
+                                let Some(slot) = self.completed_slot(units, yard, b, d) else {
+                                    refund(eco, db, owner, def);
+                                    if self.queues.get(yard).is_some_and(Vec::is_empty) {
+                                        self.queues.remove(yard);
+                                    }
+                                    continue;
+                                };
+                                let (pos, heading, _) = research::pose(y, b, slot).expect("usable slot");
+                                attachment = Some(research::Attachment { station: yard, slot });
+                                launch::Launch { pos, heading, exit: None }
+                            }
+                            Some(b) if portal.is_some() => launch::through_wormhole(b, pos, heading),
+                            Some(b) if !evolves => launch::place(b, pos, heading),
+                            _ => launch::Launch { pos, heading, exit: None },
                         };
                         let mut unit = Entity::from_def(d, db.features(), owner, out.pos, out.heading);
-                        if unit.orderable() {
-                            unit.target = self.rallies.destination(yard, owner, units).or(out.exit);
+                        let mut follow = None;
+                        if attachment.is_some() {
+                            unit.stats.max_speed = Fixed::ZERO;
+                        }
+                        if unit.orderable() && !evolves {
+                            let rally = self.rallies.destination(yard, owner, units).or_else(|| {
+                                let a2 = matches!(db.profile(), sta_content::Profile::Sta2Classic | sta_content::Profile::Fo3 | sta_content::Profile::Fo4);
+                                builder.filter(|_| a2)
+                                    .and_then(|b| launch::default_rally(b, pos, out.heading, bounds))
+                            });
+                            if let Some(exit) = out.exit.filter(|_| portal.is_some()) {
+                                unit.target = Some(exit);
+                                follow = rally.filter(|&rally| rally != exit);
+                            } else {
+                                unit.target = rally.or(out.exit);
+                            }
                         }
                         let id = units.spawn(unit);
+                        if let Some(link) = attachment {
+                            self.research.insert(id, link);
+                        }
+                        if let Some(rally) = follow {
+                            completed.gate_rallies.push((id, rally));
+                        }
                         confinement.initialize(units.get_mut(id).expect("spawned"));
                         events.push(SimEvent::Built { builder: yard, id });
                         events.push(SimEvent::Spawned { id });
+                        newly_finished.push(id);
+                        if evolves {
+                            completed.evolved.push((yard, id));
+                        }
                     }
                 }
             }
@@ -556,6 +701,14 @@ impl Production {
             }
         }
 
+        // A welded or yard-built producer first receives its push-build items
+        // when construction completes. The spawn path handles initial actors.
+        for id in newly_finished {
+            for what in push_build_defs(db, units, id) {
+                self.push_build_item(db, units, eco, id, what);
+            }
+        }
+
         let rigs: Vec<EntityId> = self.deploys.iter().map(|(id, _)| id).collect();
         for rig in rigs {
             let d = *self.deploys.get(rig).expect("listed");
@@ -563,6 +716,7 @@ impl Production {
                 self.drop_deploy(db, eco, rig);
                 continue;
             };
+            let evolves = db.unit(r.def).is_some_and(sta_content::UnitDef::is_evolver);
             let (dx, dz) = (d.at.x - r.pos.x, d.at.z - r.pos.z);
             // The smooth model (SIM-15) stops a craft anywhere within
             // `tooCloseToTurn` of its point, so a rig there must be in reach.
@@ -571,7 +725,11 @@ impl Production {
                 crate::kinematics::Model::Native => deploy_reach(&r.stats),
             };
             // The rig stops beside the structure's footprint (SIM-21).
-            let reach = reach + stand_ring(db, units, d.def, rig);
+            let reach = if evolves {
+                r.stats.too_close_to_turn + crate::arrive_distance()
+            } else {
+                reach + stand_ring(db, units, d.def, rig)
+            };
             if (dx * dx + dz * dz).sqrt() > reach {
                 continue;
             }
@@ -582,6 +740,17 @@ impl Production {
             let Some(def) = db.unit(d.def) else { continue };
             if let Some(r) = units.get_mut(rig) {
                 r.target = None;
+                if evolves {
+                    r.pos = d.at;
+                    r.speed = Fixed::ZERO;
+                }
+            }
+            if evolves {
+                // Evolver::StartBuild turns the embryo at the site into a
+                // cocoon. The product is constructed only at FinishBuild.
+                self.queues.insert(rig, vec![Item { def: d.def, owner: d.owner, done: 0, started: true, paid: true }]);
+                events.push(SimEvent::BuildStarted { builder: rig, what: d.def });
+                continue;
             }
             // An orbital station faces along its planet's outward radial.
             let heading = if orbit::is_orbital(def) {
@@ -608,6 +777,7 @@ impl Production {
             });
             events.push(SimEvent::Spawned { id });
         }
+        completed
     }
 
     pub(crate) fn hash_into(&self, h: &mut Fnv) {
@@ -640,6 +810,14 @@ impl Production {
             h.u64(w.ticks);
         }
         self.rallies.hash_into(h);
+        if !self.research.is_empty() {
+            h.u64(self.research.iter().count() as u64);
+            for (id, link) in self.research.iter() {
+                h.u64(u64::from(id.0));
+                h.u64(u64::from(link.station.0));
+                h.u64(link.slot as u64);
+            }
+        }
     }
 
     #[allow(dead_code)] // the snapshot calls it
@@ -736,6 +914,9 @@ mod charge_tests;
 
 #[cfg(test)]
 mod queue_limit_tests;
+
+#[cfg(test)]
+mod push_build_tests;
 
 #[cfg(test)]
 mod start_charge_tests;

@@ -19,16 +19,16 @@ use crate::frontend::loading::LoadingPlugin;
 use crate::frontend::scene::{MenuMap, MenuScene, MenuSceneConfig, MenuSceneCorePlugin};
 use crate::frontend::screens::{Act, Screen, ScreenData, ScreensConfig, ScreensPlugin, SettingKey};
 use crate::game::flow::{ActiveMatch, FlowPlugin, MenuSceneSource};
-use crate::game::{LocalRace, SkirmishCfg};
+use crate::game::LocalRace;
 use crate::ui::theme::click;
 
 /// The map view's part, as in `game::flow_tests`: make the sim from the setup once the scene is gone.
-fn build_match(mut commands: Commands, active: Res<ActiveMatch>, link: Option<Res<SimLink>>, scene: Option<Res<MenuScene>>, cfg: Res<SkirmishCfg>) {
+fn build_match(mut commands: Commands, active: Res<ActiveMatch>, link: Option<Res<SimLink>>, scene: Option<Res<MenuScene>>) {
     if !active.requested || link.is_some() || scene.is_some() {
         return;
     }
     let (sim, _) = Sim::from_setup_with_warnings(&active.setup);
-    commands.insert_resource(SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), sta_sim::PlayerId(cfg.seat)));
+    commands.insert_resource(SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), active.local.expect("test setup has a player")));
     commands.insert_resource(LocalRace { name: "built".into(), interface: None, interface_sprites: None, music: Vec::new() });
 }
 
@@ -63,7 +63,7 @@ fn app() -> App {
             InGameMenuPlugin,
         ))
         .add_systems(OnEnter(AppState::FrontEnd), crate::map::clear_match)
-        .add_systems(Update, build_match.run_if(resource_exists::<ActiveMatch>).run_if(resource_exists::<SkirmishCfg>));
+        .add_systems(Update, build_match.run_if(resource_exists::<ActiveMatch>));
     app
 }
 
@@ -362,7 +362,7 @@ fn exit_to_the_main_menu_leaves_nothing_of_the_match_and_the_next_match_is_a_fre
     assert!(app.world().resource::<crate::input::select::ControlGroups>().groups.iter().all(Vec::is_empty));
     assert!(app.world().resource::<crate::input::orders::OrderTargets>().0.is_empty());
     assert!(!app.world().contains_resource::<ActiveMatch>());
-    assert!(!app.world().contains_resource::<SkirmishCfg>());
+    assert!(!app.world().contains_resource::<ActiveMatch>());
     assert!(app.world().resource::<crate::sim_link::Selection>().0.is_empty());
     assert!(app.world().contains_resource::<MenuScene>(), "the menu scene is back");
 

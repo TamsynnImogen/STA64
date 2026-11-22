@@ -54,10 +54,31 @@ impl EntityKind {
             }
     }
 
-    /// Stationary production is independent of a planet's body/resource kind.
+    /// Queue production is independent of the producer's movement and of a
+    /// planet's body/resource kind.
     pub fn producer_def(def: &UnitDef) -> bool {
         Self::of_def(def) == Self::Station
             || def.planet_role == Some(sta_content::PlanetRole::Producer)
+    }
+
+    /// The HUD and simulation follow the same movement rules. Being a ship
+    /// in the ODF also lets a station keep its producer class while moving.
+    pub fn orderable_def(def: &UnitDef) -> bool {
+        match Self::of_def(def) {
+            Self::Craft => def.movement.max_speed > Fixed::ZERO,
+            Self::Station => def.allows_station_motion(),
+            _ => false,
+        }
+    }
+
+    /// Construction rigs place a site. An Evolver does so for the products
+    /// whose `is_starbase` flag reserves a footprint in Armada II (static).
+    pub fn build_requires_site(builder: &UnitDef, product: &UnitDef) -> bool {
+        if builder.is_evolver() {
+            product.is_starbase
+        } else {
+            !Self::producer_def(builder) && Self::of_def(builder) == Self::Craft
+        }
     }
 
     /// The kind of a definition: by [`EntityKind::of`], except that a fixture of an unlisted
@@ -145,6 +166,8 @@ pub struct Entity {
     /// Set by [`Entities::spawn`].
     pub id: EntityId,
     pub kind: EntityKind,
+    /// Static capability from the content definition, rehydrated on load.
+    pub(crate) mobile_station: bool,
     /// [`ContentKey::NONE`] for entities not made from content (the legacy
     /// `Sim::spawn`).
     pub def: ContentKey,
@@ -193,6 +216,7 @@ impl Entity {
         Entity {
             id: EntityId::NONE,
             kind,
+            mobile_station: false,
             def,
             owner,
             pos,
@@ -232,6 +256,7 @@ impl Entity {
             owner
         };
         let mut e = Entity::new(kind, def.key, owner, pos, heading, def.movement);
+        e.mobile_station = kind == EntityKind::Station && def.allows_station_motion();
         e.hull = [def.initial_hull.unwrap_or(def.hull), def.hull];
         e.shields = Shields::full(def.shields.max, features.directional_shields);
         let strength = def.initial_shields.unwrap_or(def.shields.max);
@@ -251,7 +276,7 @@ impl Entity {
 
     /// Can take movement orders. Stop also applies to immobile craft/stations.
     pub fn orderable(&self) -> bool {
-        self.kind == EntityKind::Craft && self.stats.max_speed > Fixed::ZERO
+        (self.kind == EntityKind::Craft || self.mobile_station) && self.stats.max_speed > Fixed::ZERO
     }
 
     /// Steps under movement each tick.

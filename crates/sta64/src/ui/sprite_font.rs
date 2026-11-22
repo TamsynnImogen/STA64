@@ -40,6 +40,9 @@ use sta_vfs::Vfs;
 
 use crate::viewer::Mounted;
 
+pub use crate::ui::stock_font::GlyphFilter;
+use crate::ui::stock_font::{HAlign, StockChoice, StockPlace, StockRole, StockTextCanvas, VAlign, place_offset, snap};
+
 /// Plain text's whole multiple may draw at most this share smaller than asked (15% below).
 /// Where no font and multiple of the mod fits both bounds, plain text is not crisp: it is
 /// drawn at exactly the requested size, as before.
@@ -66,6 +69,19 @@ pub struct Page {
     pub height: f32,
     /// The glyphs of this page, in code order.
     pub glyphs: Vec<GlyphEntry>,
+    /// The `@tmaterial=` the file declares before this page line (lower case), if any.
+    pub material: Option<String>,
+}
+
+/// How a page's declared material samples it: `wormhole`, `default` and `alpha` filter
+/// linearly, `interface`, `font` and `nofilter` (and no declaration, and any other name)
+/// sample nearest. Grade: read from data (the key), the materials' meaning read from the
+/// executable, static; the engine can override it per font (see `stock_font`).
+pub fn material_filter(material: Option<&str>) -> GlyphFilter {
+    match material {
+        Some("wormhole" | "default" | "alpha") => GlyphFilter::Linear,
+        _ => GlyphFilter::Nearest,
+    }
 }
 
 /// A parsed font file.
@@ -103,7 +119,12 @@ impl SpriteFont {
             .map(|(w, h)| [w, h])
             .or_else(|| num("@reference=").map(|n| [n, n]));
         let mut pages = Vec::new();
-        for l in lines.iter().filter(|l| is_page_line(l)) {
+        for (line_no, l) in lines.iter().enumerate().filter(|(_, l)| is_page_line(l)) {
+            // The material in force at a page line is the last declaration above it.
+            let material = lines[..line_no].iter().rev().find_map(|m| {
+                let v = m.strip_prefix("@tmaterial=")?;
+                Some(v.split('#').next().unwrap_or("").trim().to_ascii_lowercase())
+            });
             let f: Vec<&str> = l.split('\t').collect();
             let texture = f.get(1).map(|s| s.trim()).unwrap_or("");
             // The glyph height is the last plain number before the `@anim=` fields (Roots'
@@ -153,6 +174,7 @@ impl SpriteFont {
                 texture: texture.to_owned(),
                 height,
                 glyphs,
+                material,
             });
         }
         let spacing = if lines.iter().any(|l| is_char_line(l)) { 1.0 } else { 0.0 };
@@ -216,6 +238,13 @@ impl SpriteFont {
     /// A character the font cannot draw is drawn as `?`, then skipped when that is
     /// missing too.
     pub fn layout(&self, text: &str, scale: f32) -> Layout {
+        self.layout_xy(text, Vec2::splat(scale), false)
+    }
+
+    /// [`layout`](Self::layout) with a scale per axis. With `round_up` the pen advances by each
+    /// glyph's scaled advance rounded up to a whole pixel (the stock HUD's rule, see
+    /// `stock_font`; a hair under a whole number counts as whole, against float noise).
+    pub fn layout_xy(&self, text: &str, scale: Vec2, round_up: bool) -> Layout {
         let h = self.height();
         let (mut x, mut y, mut width) = (0.0f32, 0.0f32, 0.0f32);
         let mut quads = Vec::new();
@@ -223,7 +252,7 @@ impl SpriteFont {
             if ch == '\n' {
                 width = width.max(x);
                 x = 0.0;
-                y += h * scale;
+                y += h * scale.y;
                 continue;
             }
             let code = windows_1252(ch);
@@ -236,16 +265,17 @@ impl SpriteFont {
             quads.push(GlyphQuad {
                 code,
                 page,
-                rect: [x, y, g.w * scale, h * scale],
+                rect: [x, y, g.w * scale.x, h * scale.y],
                 src: [g.x, g.y, g.w, h],
             });
-            x += (g.w + self.spacing) * scale;
+            let advance = (g.w + self.spacing) * scale.x;
+            x += if round_up { (advance - 1e-3).ceil() } else { advance };
         }
         let lines = text.split('\n').count().max(1);
         Layout {
             quads,
             width: width.max(x),
-            height: h * scale * lines as f32,
+            height: h * scale.y * lines as f32,
         }
     }
 }
@@ -310,12 +340,18 @@ impl SpriteFont {
     /// block (`max_width`, else the widest line). The block's `width` is that width and
     /// its `height` is one glyph height per line.
     pub fn layout_block(&self, text: &str, scale: f32, max_width: Option<f32>, align: Align) -> Layout {
+        self.layout_block_xy(text, Vec2::splat(scale), false, max_width, align)
+    }
+
+    /// [`layout_block`](Self::layout_block) with a scale per axis and optionally the pen
+    /// advance rounded up per glyph ([`layout_xy`](Self::layout_xy)).
+    pub fn layout_block_xy(&self, text: &str, scale: Vec2, round_up: bool, max_width: Option<f32>, align: Align) -> Layout {
         let lines = match max_width {
-            Some(w) => wrap_lines(text, w, &|s| self.measure(s, scale)),
+            Some(w) => wrap_lines(text, w, &|s| self.layout_xy(s, scale, round_up).width),
             None => text.split('\n').map(str::to_owned).collect(),
         };
-        let h = self.height() * scale;
-        let laid: Vec<Layout> = lines.iter().map(|l| self.layout(l, scale)).collect();
+        let h = self.height() * scale.y;
+        let laid: Vec<Layout> = lines.iter().map(|l| self.layout_xy(l, scale, round_up)).collect();
         let widest = laid.iter().fold(0.0f32, |m, l| m.max(l.width));
         // Left aligned text takes the width it needs; centred and right aligned text is
         // aligned inside the whole box.
@@ -338,6 +374,47 @@ impl SpriteFont {
             }
         }
         Layout { quads, width, height: h * laid.len().max(1) as f32 }
+    }
+}
+
+impl SpriteFont {
+    /// Rules under the glyph cells at `marks` (indices of characters of `text`), as `[x, y, w, h]` in
+    /// the units of [`layout_block_xy`](Self::layout_block_xy) with the same arguments: one rule per
+    /// mark, as wide as the glyph's advance, as thick as a texel of the font at this scale (at least
+    /// one), on the bottom row of the line's cell. A mark on a space the wrap removed, or past the
+    /// text, gives none. Measured at one window size (one tooltip frame): the rule is one pixel
+    /// thick on the last row of the line cell and spans the glyph cell; its thickness at other
+    /// scales is interim (one texel).
+    pub fn underline_rects(&self, text: &str, marks: &[usize], scale: Vec2, round_up: bool, max_width: Option<f32>, align: Align) -> Vec<[f32; 4]> {
+        let lines = match max_width {
+            Some(w) => wrap_lines(text, w, &|s| self.layout_xy(s, scale, round_up).width),
+            None => text.split('\n').map(str::to_owned).collect(),
+        };
+        let block = self.layout_block_xy(text, scale, round_up, max_width, align).width;
+        let h = self.height() * scale.y;
+        let thick = scale.y.round().max(1.0);
+        let all: Vec<char> = text.chars().collect();
+        let width = |chars: &[char]| self.layout_xy(&chars.iter().collect::<String>(), scale, round_up).width;
+        let mut out = Vec::new();
+        let mut start = 0usize;
+        for (row, line) in lines.iter().enumerate() {
+            let chars: Vec<char> = line.chars().collect();
+            let dx = match align {
+                Align::Left => 0.0,
+                Align::Center => ((block - width(&chars)) / 2.0).max(0.0),
+                Align::Right => (block - width(&chars)).max(0.0),
+            };
+            for &m in marks.iter().filter(|&&m| m >= start && m < start + chars.len()) {
+                let k = m - start;
+                out.push([width(&chars[..k]) + dx, row as f32 * h + h - thick, width(&chars[k..=k]), thick]);
+            }
+            start += chars.len();
+            // The wrap drops one space or line break where it breaks a line.
+            if matches!(all.get(start), Some(' ' | '\n')) {
+                start += 1;
+            }
+        }
+        out
     }
 }
 
@@ -619,11 +696,29 @@ pub struct LoadedFont {
     pub pages: Vec<(Handle<Image>, UVec2)>,
     /// Codes drawn as coloured pictures, untinted (see [`coloured_glyphs`]).
     pub coloured: BTreeSet<u8>,
+    /// Per page, the same texture with a linear sampler (clamp to edge), when the page may be
+    /// drawn linear: its material says so, or the font is one of the stock role sets.
+    pub linear: Vec<Option<Handle<Image>>>,
 }
 
 impl LoadedFont {
     pub fn new(font: SpriteFont, pages: Vec<(Handle<Image>, UVec2)>) -> Self {
-        LoadedFont { font, pages, coloured: BTreeSet::new() }
+        LoadedFont { font, pages, coloured: BTreeSet::new(), linear: Vec::new() }
+    }
+
+    /// The image of a page sampled as `filter`; the nearest one where the page has no linear copy.
+    pub fn image(&self, page: usize, filter: GlyphFilter) -> Option<&Handle<Image>> {
+        let nearest = &self.pages.get(page)?.0;
+        match (filter, self.linear.get(page)) {
+            (GlyphFilter::Linear, Some(Some(linear))) => Some(linear),
+            _ => Some(nearest),
+        }
+    }
+
+    /// How a page is sampled when the text is stock HUD text outside the role rule: as its
+    /// declared material says.
+    pub fn declared_filter(&self, page: usize) -> GlyphFilter {
+        material_filter(self.font.pages.get(page).and_then(|p| p.material.as_deref()))
     }
 }
 
@@ -632,9 +727,27 @@ impl LoadedFont {
 #[derive(Resource, Default)]
 pub struct SpriteFonts {
     pub fonts: BTreeMap<String, LoadedFont>,
+    /// The mounted install runs on the Armada II engine's stock font rule (profile
+    /// `Sta2Classic`): stock HUD text then follows [`stock_font`](crate::ui::stock_font).
+    /// Fleet Operations, Armada I and STA64's own profile keep the plain path.
+    pub stock_family: bool,
 }
 
 impl SpriteFonts {
+    /// The font, glyph scale (physical px per texel, per axis) and filter the stock rule gives
+    /// `role` for a HUD of `canvas` (layout units) at `px` physical px per layout unit. `None` when
+    /// the install is not of the Armada II family, the role has no font file, or no HUD is
+    /// shown: the caller then keeps the plain path. Reusable by any stock-look text.
+    pub fn stock_choice(&self, role: StockRole, canvas: &StockTextCanvas, px: f32) -> Option<(&LoadedFont, StockChoice, Vec2)> {
+        use crate::ui::stock_font::{STOCK_FONT_PREFIX, choose, glyph_scale};
+        let canvas = canvas.0.as_ref().filter(|_| self.stock_family)?;
+        let name = |n: u32| format!("{STOCK_FONT_PREFIX}{n}");
+        let has = |n: u32| self.named(&name(n)).is_some_and(|f| f.font.height() > 0.0);
+        let choice = choose(role, canvas.width(px), &has)?;
+        let font = self.named(&name(choice.size))?;
+        Some((font, choice, glyph_scale(&choice, canvas.physical(px))))
+    }
+
     /// The font file `name` (a stem, any case), if the mounted install has it and it fits.
     pub fn named(&self, name: &str) -> Option<&LoadedFont> {
         self.fonts.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, f)| f)
@@ -778,7 +891,9 @@ fn decode_page(vfs: &Vfs, texture: &str) -> Option<(Vec<u8>, UVec2)> {
     Some((rgba.pixels, UVec2::new(rgba.width, rgba.height)))
 }
 
-fn upload_page(pixels: Vec<u8>, size: UVec2, images: &mut Assets<Image>) -> (Handle<Image>, UVec2) {
+/// Upload a page: the nearest-sampled image and, when `linear`, a copy sampled linearly
+/// (both clamp to edge).
+fn upload_page(pixels: Vec<u8>, size: UVec2, images: &mut Assets<Image>, linear: bool) -> ((Handle<Image>, UVec2), Option<Handle<Image>>) {
     let mut img = Image::new(
         Extent3d {
             width: size.x,
@@ -791,7 +906,12 @@ fn upload_page(pixels: Vec<u8>, size: UVec2, images: &mut Assets<Image>) -> (Han
         RenderAssetUsages::RENDER_WORLD,
     );
     img.sampler = ImageSampler::nearest(); // "No filtering, ever" (the fonts' own note).
-    (images.add(img), size)
+    let smooth = linear.then(|| {
+        let mut copy = img.clone();
+        copy.sampler = ImageSampler::linear();
+        images.add(copy)
+    });
+    ((images.add(img), size), smooth)
 }
 
 /// (Re)load the fonts when the mounted install changes.
@@ -807,6 +927,8 @@ fn load_fonts(
         return;
     }
     fonts.fonts.clear();
+    fonts.stock_family = sta_content::Profile::detect(&vfs.0) == sta_content::Profile::Sta2Classic;
+    let stock_family = fonts.stock_family;
     for font in read_fonts(&vfs.0) {
         let decoded: Vec<_> = font
             .pages
@@ -832,11 +954,18 @@ fn load_fonts(
             .enumerate()
             .flat_map(|(i, (px, size))| coloured_glyphs(&font, i, *size, px))
             .collect();
-        let pages = decoded
-            .into_iter()
-            .map(|(px, size)| upload_page(px, size, &mut images))
-            .collect();
+        let (mut pages, mut linear) = (Vec::new(), Vec::new());
+        for (i, (px, size)) in decoded.into_iter().enumerate() {
+            // Linear copies only where linear can be drawn: a role-set font in the family that
+            // runs the rule, or a page whose declared material says so.
+            let role_set = stock_family && font.name.starts_with(crate::ui::stock_font::STOCK_FONT_PREFIX);
+            let wants = role_set || material_filter(font.pages[i].material.as_deref()) == GlyphFilter::Linear;
+            let (page, smooth) = upload_page(px, size, &mut images, wants);
+            pages.push(page);
+            linear.push(smooth);
+        }
         let mut loaded = LoadedFont::new(font, pages);
+        loaded.linear = linear;
         loaded.coloured = coloured;
         fonts.fonts.insert(loaded.font.name.clone(), loaded);
     }
@@ -903,7 +1032,23 @@ pub struct SpriteTextStyle {
     /// cfg text rectangle): the parent centres it and the baseline lift is not applied,
     /// since the lift would only move it off the centre.
     pub in_box: bool,
+    /// Stock HUD text (Stock look only): of this role in the Armada II engine family's font
+    /// rule ([`crate::ui::stock_font`]) and, in every profile, sampled as the page's declared
+    /// material says. `None` keeps the plain crisp path, as every other look does.
+    pub stock: Option<StockRole>,
+    /// Where the line box sits in the text's layout rectangle on the stock path
+    /// ([`stock_font::StockPlace`](crate::ui::stock_font::StockPlace)). `None`, or a zero
+    /// rectangle: the plain placement of the node.
+    pub place: Option<StockPlace>,
+    /// Indices of characters of the text to draw underlined, in the text colour, on the stock path
+    /// ([`SpriteFont::underline_rects`]). Ignored on every other path (text with a character the
+    /// font lacks included).
+    pub underline: Vec<usize>,
 }
+
+/// A rule drawn under a glyph of a [`SpriteTextStyle::underline`] mark.
+#[derive(Component)]
+pub struct UnderlineRule;
 
 #[allow(dead_code)]
 impl SpriteTextStyle {
@@ -933,11 +1078,83 @@ impl SpriteTextStyle {
     /// How the stock HUD draws its labels (UI-16): crisp, never below the readable size,
     /// every glyph (resource symbols too) in the label colour like the TTF text it replaces.
     pub fn stock_label(self) -> Self {
+        let stock = self.stock.or(Some(StockRole::Default));
+        SpriteTextStyle { tint_all: true, stock, ..self.at_least_size() }
+    }
+    /// How the stock HUD draws a label that is STA64's fallback and has no counterpart in the
+    /// original (a command button's text where its sprite is missing, the page buttons): the
+    /// plain path with today's font, size and wrapping, outside the stock font rule.
+    pub fn stock_fallback(self) -> Self {
         SpriteTextStyle { tint_all: true, ..self.at_least_size() }
+    }
+    /// Place the line box in a rectangle of the stock path (the rectangle's size is set where
+    /// the text is spawned).
+    pub fn placed(mut self, h: HAlign, v: VAlign) -> Self {
+        self.place = Some(StockPlace { h, v, rect: Vec2::ZERO });
+        self
+    }
+    /// Stock HUD text of `role` (see [`stock`](Self::stock)).
+    pub fn stock_role(mut self, role: StockRole) -> Self {
+        self.stock = Some(role);
+        self
     }
     pub fn wrapped(mut self, width: f32) -> Self {
         self.wrap = Some(width);
         self
+    }
+}
+
+/// A text of the stock HUD's font rule, by role: the text takes the rule only while the one stock
+/// gate ([`stock_tip`](crate::ui::stock_tooltip::stock_tip): the Armada II look, the install's stock
+/// font rule, a stock HUD on screen) holds; otherwise it keeps the style it was spawned with. The
+/// optional placement is `(horizontal, vertical, rectangle, canvas of its own sheet)`, both in the
+/// sheet's units, and applies on the stock path only; the rectangle is scaled by the HUD over that canvas. Grade: the roles read from the executable, static; the placements measured on
+/// native frames (see [`StockPlace`](crate::ui::stock_font::StockPlace)).
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct StockRoleMark {
+    /// `None`: a text whose role is not established; it keeps its own font.
+    pub role: Option<StockRole>,
+    pub place: Option<(HAlign, VAlign, Vec2, Vec2)>,
+}
+
+impl StockRoleMark {
+    pub fn new(role: StockRole) -> Self {
+        Self { role: Some(role), place: None }
+    }
+
+    /// A text of a role the rule does not cover (it keeps today's path).
+    pub fn none() -> Self {
+        Self { role: None, place: None }
+    }
+
+    /// The same text placed in a rectangle of a sheet (`x y w h`, only its size is used) whose
+    /// canvas is `canvas` (what the sheet's own layout uses, not a fixed reference).
+    pub fn placed(role: StockRole, h: HAlign, v: VAlign, rect: [f32; 4], canvas: (f32, f32)) -> Self {
+        Self { role: Some(role), place: Some((h, v, Vec2::new(rect[2], rect[3]), Vec2::new(canvas.0, canvas.1))) }
+    }
+}
+
+/// Switch every [`StockRoleMark`] text to the stock rule while the gate holds, and back when not.
+pub(crate) fn apply_stock_roles(
+    profile: Option<Res<crate::ui::profile::UiProfile>>,
+    fonts: Res<SpriteFonts>,
+    canvas: Option<Res<StockTextCanvas>>,
+    mut texts: Query<(&StockRoleMark, &mut SpriteTextStyle)>,
+) {
+    let on = crate::ui::stock_tooltip::stock_tip(profile.as_deref(), Some(&fonts), canvas.as_deref());
+    let hud = canvas.as_deref().and_then(|c| c.0).map(|c| c.hud);
+    for (mark, mut style) in &mut texts {
+        let role = on.then_some(mark.role).flatten();
+        let place = match (on, mark.place, hud) {
+            (true, Some((h, v, rect, sheet)), Some(hud)) if mark.role.is_some() && sheet.x > 0.0 && sheet.y > 0.0 => Some(StockPlace { h, v, rect: rect * hud / sheet }),
+            _ => None,
+        };
+        if style.stock != role {
+            style.stock = role;
+        }
+        if style.place != place {
+            style.place = place;
+        }
     }
 }
 
@@ -984,8 +1201,9 @@ fn load_glyph_words(vfs: Option<Res<Mounted>>, mut words: ResMut<GlyphWords>) {
 }
 
 /// One glyph quad as a UI image child.
-fn glyph_node(f: &LoadedFont, q: &GlyphQuad, inv: f32, crisp: bool, colour: Color) -> Option<impl Bundle> {
-    let (image, tex) = f.pages.get(q.page)?;
+fn glyph_node(f: &LoadedFont, q: &GlyphQuad, inv: f32, crisp: bool, colour: Color, filter: GlyphFilter) -> Option<impl Bundle> {
+    let (_, tex) = f.pages.get(q.page)?;
+    let image = f.image(q.page, filter)?;
     let rect = texel_rect(f.font.reference, *tex, q.src);
     Some((
         ImageNode { image: image.clone(), rect: Some(rect), color: colour, ..default() },
@@ -1094,7 +1312,8 @@ fn spawn_mixed(
                             let picture = styled && !style.tint_all && f.coloured.contains(&q.code);
                             untinted.push(picture);
                             let colour = if picture { Color::WHITE } else { t.color };
-                            if let Some(glyph) = glyph_node(f, q, inv, crisp, colour) {
+                            let filter = if style.stock.is_some() { f.declared_filter(q.page) } else { GlyphFilter::Nearest };
+                            if let Some(glyph) = glyph_node(f, q, inv, crisp, colour, filter) {
                                 run_node.spawn(glyph);
                             }
                         }
@@ -1119,17 +1338,24 @@ fn resolve_text(
         Option<&SpriteLaid>,
     )>,
     ui_scale: Option<Res<UiScale>>,
+    canvas: Option<Res<StockTextCanvas>>,
     window: Query<&Window, With<PrimaryWindow>>,
     mut last_px: Local<f32>,
     children: Query<&Children>,
     mut images: Query<&mut ImageNode>,
     mut texts: Query<&mut TextColor, With<Text>>,
+    mut rules: Query<&mut BackgroundColor, With<UnderlineRule>>,
 ) {
     // Physical pixels per logical px (UI scale x the window's scale factor).
     let px = (ui_scale.map_or(1.0, |u| u.0) * window.single().map_or(1.0, |w| w.scale_factor())).max(0.1);
     let px_changed = (*last_px - px).abs() > 1e-4;
     *last_px = px;
-    let all = fonts.is_changed() || px_changed || words.as_ref().is_some_and(|w| w.is_changed());
+    let all = fonts.is_changed()
+        || px_changed
+        || words.as_ref().is_some_and(|w| w.is_changed())
+        || canvas.as_ref().is_some_and(|c| c.is_changed());
+    let no_canvas = StockTextCanvas::default();
+    let canvas = canvas.as_deref().unwrap_or(&no_canvas);
     for (e, t, style, scalable, laid) in &q {
         let dirty = all
             || t.is_changed()
@@ -1155,6 +1381,10 @@ fn resolve_text(
                     && c.0 != t.color
                 {
                     c.0 = t.color;
+                } else if let Ok(mut rule) = rules.get_mut(kid)
+                    && rule.0 != t.color
+                {
+                    rule.0 = t.color;
                 }
             }
             continue;
@@ -1177,7 +1407,14 @@ fn resolve_text(
         // so it may take another of the mod's fonts when the face has no multiple that close;
         // where no font fits it stays at exactly its size on the fractional path. `native` and
         // `scaled` text keeps its own fractional size.
-        let crisp = if !style.native && !style.scaled && scalable.is_none() {
+        // Stock HUD text of the Armada II family: the role rule's font, glyph scale and filter.
+        // Text holding a character the font lacks keeps the plain path (the TTF run has no scale).
+        let stock = style
+            .stock
+            .filter(|_| !style.native && !style.scaled && scalable.is_none())
+            .and_then(|role| fonts.stock_choice(role, canvas, px))
+            .filter(|(f, ..)| !t.text.chars().any(|c| f.font.lacks(c)));
+        let crisp = if stock.is_none() && !style.native && !style.scaled && scalable.is_none() {
             // A sprite font's nominal height carries leading above and below its ink; a
             // label with a readable floor asks for the font that inks as tall as the
             // TTF of that size (`STOCK_INK`), not one of that nominal height.
@@ -1194,6 +1431,8 @@ fn resolve_text(
         };
         let font = if scalable.is_some() {
             None
+        } else if let Some((f, ..)) = stock {
+            Some(f)
         } else if let Some((f, _)) = crisp {
             Some(f)
         } else {
@@ -1265,18 +1504,33 @@ fn resolve_text(
             continue;
         }
         // `inv` turns the layout's units into logical px (physical for crisp text).
-        let (lay, inv) = if let Some((_, k)) = crisp {
+        let (lay, inv) = if let Some((_, _, k)) = stock {
+            (f.font.layout_block_xy(&t.text, k, true, style.wrap.map(|w| w * px), style.align), 1.0 / px)
+        } else if let Some((_, k)) = crisp {
             (f.font.layout_physical(&t.text, k, style.wrap.map(|w| w * px), style.align), 1.0 / px)
         } else {
             let scale = if style.native { 1.0 } else { t.size / f.font.height() };
             (f.font.layout_block(&t.text, scale, style.wrap, style.align), 1.0)
         };
+        let physical = crisp.is_some() || stock.is_some();
+        // The stock path places the line box in its rectangle (R0 of the placement rule):
+        // absolute, at a whole-pixel offset that may be negative; nothing is clipped.
+        let placed = stock
+            .and(style.place)
+            .filter(|p| p.rect.x > 0.0 && p.rect.y > 0.0)
+            .map(|p| snap(place_offset(&p, Vec2::new(lay.width, lay.height), px)));
         commands.entity(e).insert(Node {
-            width: Val::Px(if crisp.is_some() { lay.width * inv } else { lay.width.ceil() }),
-            height: Val::Px(if crisp.is_some() { lay.height * inv } else { lay.height.ceil() }),
+            position_type: if placed.is_some() { PositionType::Absolute } else { PositionType::Relative },
+            left: placed.map_or(Val::Auto, |o| Val::Px(o.x * inv)),
+            width: Val::Px(if physical { lay.width * inv } else { lay.width.ceil() }),
+            height: Val::Px(if physical { lay.height * inv } else { lay.height.ceil() }),
             // The taller font of a floored label sits on the TTF's baseline (A2 stock,
             // measured: its ink ends 3 px lower at 18 px without this).
-            top: Val::Px(if crisp.is_some() && style.min_size && !style.in_box { -t.size * STOCK_LIFT } else { 0.0 }),
+            top: Val::Px(match placed {
+                Some(o) => o.y * inv,
+                None if stock.is_none() && crisp.is_some() && style.min_size && !style.in_box => -t.size * STOCK_LIFT,
+                None => 0.0,
+            }),
             flex_shrink: 0.0,
             ..default()
         });
@@ -1285,7 +1539,12 @@ fn resolve_text(
         for q in &lay.quads {
             let picture = styled && !style.tint_all && f.coloured.contains(&q.code);
             let colour = if picture { Color::WHITE } else { t.color };
-            let Some(glyph) = glyph_node(f, q, inv, crisp.is_some(), colour) else {
+            let filter = match stock {
+                Some((_, choice, _)) => choice.filter,
+                None if style.stock.is_some() => f.declared_filter(q.page),
+                None => GlyphFilter::Nearest,
+            };
+            let Some(glyph) = glyph_node(f, q, inv, physical, colour, filter) else {
                 continue;
             };
             untinted.push(picture);
@@ -1301,6 +1560,24 @@ fn resolve_text(
         }
         for &stale in existing.iter().skip(used) {
             commands.entity(stale).despawn();
+        }
+        if let Some((_, _, k)) = stock.filter(|_| !style.underline.is_empty()) {
+            for r in f.font.underline_rects(&t.text, &style.underline, k, true, style.wrap.map(|w| w * px), style.align) {
+                let r = r.map(f32::round);
+                commands.entity(e).with_child((
+                    UnderlineRule,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(r[0] * inv),
+                        top: Val::Px(r[1] * inv),
+                        width: Val::Px(r[2] * inv),
+                        height: Val::Px(r[3] * inv),
+                        ..default()
+                    },
+                    BackgroundColor(t.color),
+                    Pickable::IGNORE,
+                ));
+            }
         }
         commands.entity(e).insert(SpriteLaid { text: t.text.clone(), size: t.size, untinted, mixed: false });
     }
@@ -1343,7 +1620,7 @@ impl Plugin for SpriteFontPlugin {
             .add_systems(Update, fit_wrap)
             .add_systems(
                 PostUpdate,
-                (load_fonts, load_glyph_words, resolve_text)
+                (load_fonts, load_glyph_words, apply_stock_roles, resolve_text)
                     .chain()
                     .before(bevy::ui::UiSystems::Prepare)
                     .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
@@ -2026,7 +2303,7 @@ mod tests {
             name: "T".into(),
             reference: None,
             spacing: 0.0,
-            pages: vec![Page { texture: "t".into(), height: h, glyphs }],
+            pages: vec![Page { texture: "t".into(), height: h, glyphs, material: None }],
         }
     }
 
@@ -2727,5 +3004,426 @@ mod tests {
             }
             assert!(page_fit(f, 0, size, &px).is_none_or(|v| v >= MIN_FIT), "{stem}: strips do not fit the sheet");
         }
+    }
+
+    // ---- Stock HUD text: role rule, per-axis scale, filters (authored data only) ----
+
+    /// An authored font named `name` whose glyphs are all `w` texels wide and `h` tall, its
+    /// one page declaring `material`.
+    fn authored(name: &str, h: f32, w: f32, material: Option<&str>) -> SpriteFont {
+        SpriteFont {
+            name: name.into(),
+            reference: None,
+            spacing: 0.0,
+            pages: vec![Page {
+                texture: "t".into(),
+                height: h,
+                glyphs: (0x20u8..=0x7e).map(|_| GlyphEntry { x: 0.0, y: 0.0, w }).collect(),
+                material: material.map(str::to_owned),
+            }],
+        }
+    }
+
+    /// Authored role sets: the default role's four sizes, three sizes for the title role
+    /// (the one for the top tier left out) and one for the big role.
+    fn authored_family(images: &mut Assets<Image>) -> SpriteFonts {
+        let mut fonts = SpriteFonts { stock_family: true, ..default() };
+        for n in [10u32, 13, 16, 20, 15, 19, 24] {
+            let name = format!("fontfinal4_{n}");
+            let near = images.add(Image::default());
+            let lin = images.add(Image::default());
+            let mut f = LoadedFont::new(authored(&name, n as f32, 5.5, Some("font")), vec![(near, UVec2::new(256, 256))]);
+            f.linear = vec![Some(lin)];
+            fonts.fonts.insert(name, f);
+        }
+        fonts
+    }
+
+    fn canvas(hud: Vec2, window: Vec2, fit: crate::ui::hud::stock::layout::HudFit) -> StockTextCanvas {
+        StockTextCanvas(Some(crate::ui::stock_font::StockCanvas { hud, window, fit }))
+    }
+
+    #[test]
+    fn page_materials_are_read_in_file_order() {
+        let text = SAMPLE
+            .replace("@referenceHeight=128\n", "@referenceHeight=128\n@tmaterial=Wormhole #smooth\n")
+            .replace("pageb\t", "@tmaterial=font\npageb\t");
+        let f = SpriteFont::parse("f", &text).unwrap();
+        let mats: Vec<_> = f.pages.iter().map(|p| p.material.as_deref()).collect();
+        assert_eq!(mats, [Some("wormhole"), Some("font")]);
+        assert_eq!(SpriteFont::parse("f", SAMPLE).unwrap().pages[0].material, None);
+        for m in ["wormhole", "default", "alpha"] {
+            assert_eq!(material_filter(Some(m)), GlyphFilter::Linear, "{m}");
+        }
+        for m in [Some("interface"), Some("font"), Some("nofilter"), Some("other"), None] {
+            assert_eq!(material_filter(m), GlyphFilter::Nearest, "{m:?}");
+        }
+    }
+
+    /// The two measured frames and the two wide windows, with sets of the same shape.
+    #[test]
+    fn the_stock_rule_picks_font_scale_and_filter_from_the_hud() {
+        use crate::ui::hud::stock::layout::HudFit::{Centred, Stretched};
+        let mut images = Assets::<Image>::default();
+        let fonts = authored_family(&mut images);
+        let pick = |role, hud: Vec2, win: Vec2, fit| {
+            let c = canvas(hud, win, fit);
+            let (f, ch, k) = fonts.stock_choice(role, &c, 1.0).unwrap();
+            (f.font.name.clone(), ch.filter, k)
+        };
+        let d = StockRole::Default;
+        // 1600x1200: the default role 1:1 nearest; the title role's 24 at the third tier's scale, linear.
+        let sq = Vec2::new(1600.0, 1200.0);
+        assert_eq!(pick(d, sq, sq, Centred), ("fontfinal4_20".into(), GlyphFilter::Nearest, Vec2::ONE));
+        assert_eq!(pick(StockRole::Title, sq, sq, Centred), ("fontfinal4_24".into(), GlyphFilter::Linear, Vec2::splat(1.25)));
+        // 1280x720 stretched: 16, one on x, three quarters on y, nearest.
+        let wide = Vec2::new(1280.0, 720.0);
+        assert_eq!(pick(d, wide, wide, Stretched), ("fontfinal4_16".into(), GlyphFilter::Nearest, Vec2::new(1.0, 0.75)));
+        // 3440x1440 centred: the canvas is 1920x1440, so the largest default size at 1.2.
+        let (name, filter, k) = pick(d, Vec2::new(1920.0, 1440.0), Vec2::new(3440.0, 1440.0), Centred);
+        assert_eq!((name.as_str(), filter), ("fontfinal4_20", GlyphFilter::Linear));
+        assert!((k - Vec2::splat(1.2)).abs().max_element() < 1e-5, "{k:?}");
+        // 1920x1080 centred: the canvas is 1440x1080, the 16 at 1.125, linear.
+        let (name, filter, k) = pick(d, Vec2::new(1440.0, 1080.0), Vec2::new(1920.0, 1080.0), Centred);
+        assert_eq!((name.as_str(), filter), ("fontfinal4_16", GlyphFilter::Linear));
+        assert!((k - Vec2::splat(1.125)).abs().max_element() < 1e-5, "{k:?}");
+        // The same window stretched: the window's width decides.
+        let (name, ..) = pick(d, Vec2::new(1920.0, 1080.0), Vec2::new(1920.0, 1080.0), Stretched);
+        assert_eq!(name, "fontfinal4_20");
+        // Another family, or no HUD shown: no choice.
+        let mut other = authored_family(&mut images);
+        other.stock_family = false;
+        assert!(other.stock_choice(d, &canvas(sq, sq, Centred), 1.0).is_none());
+        assert!(fonts.stock_choice(d, &StockTextCanvas::default(), 1.0).is_none());
+        // Physical pixels: the same HUD at twice the pixels per unit decides as the double width.
+        let (_, ch, _) = fonts.stock_choice(d, &canvas(Vec2::new(800.0, 600.0), sq, Centred), 2.0).unwrap();
+        assert_eq!((ch.size, ch.tier), (20, 1600));
+    }
+
+    #[test]
+    fn the_pen_advances_by_the_scaled_width_rounded_up() {
+        let f = authored("f", 10.0, 5.5, None);
+        let lay = f.layout_xy("abc", Vec2::new(1.2, 0.75), true);
+        let xs: Vec<f32> = lay.quads.iter().map(|q| q.rect[0]).collect();
+        assert_eq!(xs, [0.0, 7.0, 14.0], "5.5 * 1.2 = 6.6 advances 7");
+        assert!((lay.quads[0].rect[2] - 6.6).abs() < 1e-5 && (lay.quads[0].rect[3] - 7.5).abs() < 1e-5);
+        // A whole advance does not round up past itself.
+        let w = authored("w", 10.0, 17.0, None).layout_xy("ab", Vec2::ONE, true);
+        assert_eq!(w.quads[1].rect[0], 17.0);
+        // Without rounding the pen advances by the exact scaled width, as before.
+        let exact: Vec<f32> = f.layout_xy("abc", Vec2::splat(1.2), false).quads.iter().map(|q| q.rect[0]).collect();
+        assert_eq!(exact, f.layout("abc", 1.2).quads.iter().map(|q| q.rect[0]).collect::<Vec<_>>());
+    }
+
+    fn resolve_app(fonts: SpriteFonts, canvas: StockTextCanvas) -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<GlyphWords>()
+            .insert_resource(fonts)
+            .insert_resource(canvas)
+            .add_systems(Update, resolve_text);
+        app
+    }
+
+    /// Stock text draws with the role's font at the HUD's scale and the rule's sampler;
+    /// the same text without the stock style keeps the plain crisp path and nearest.
+    #[test]
+    fn stock_text_takes_the_rule_and_other_text_is_unchanged() {
+        use crate::ui::hud::stock::layout::HudFit::Centred;
+        let mut images = Assets::<Image>::default();
+        let fonts = authored_family(&mut images);
+        let nears: Vec<Handle<Image>> = fonts.fonts.values().map(|f| f.pages[0].0.clone()).collect();
+        let lin = fonts.named("fontfinal4_20").unwrap().linear[0].clone().unwrap();
+        let mut app = resolve_app(fonts, canvas(Vec2::new(1920.0, 1440.0), Vec2::new(3440.0, 1440.0), Centred));
+        let stock = app.world_mut().spawn(sprite_text_styled("ab", 18.0, Color::WHITE, SpriteTextStyle::default().stock_label())).id();
+        let plain = app.world_mut().spawn(sprite_text_styled("ab", 18.0, Color::WHITE, SpriteTextStyle::default().at_least_size())).id();
+        app.update();
+        let glyphs = |app: &App, e: Entity| -> Vec<(Handle<Image>, Node)> {
+            app.world().get::<Children>(e).unwrap().iter().map(|k| (app.world().get::<ImageNode>(k).unwrap().image.clone(), app.world().get::<Node>(k).unwrap().clone())).collect()
+        };
+        let s = glyphs(&app, stock);
+        assert_eq!(s.len(), 2);
+        assert!(s.iter().all(|(i, _)| *i == lin), "20 is not the target 24: linear");
+        let px = |v: Val| if let Val::Px(v) = v { v } else { panic!("px") };
+        assert!((px(s[0].1.width) - 6.6).abs() < 1e-4 && (px(s[0].1.height) - 24.0).abs() < 1e-4);
+        assert_eq!(px(s[1].1.left), 7.0);
+        // No baseline lift on the rule's path.
+        assert_eq!(px(app.world().get::<Node>(stock).unwrap().top), 0.0);
+        // Outside the stock style: nearest, and none of the rule's scale.
+        let p = glyphs(&app, plain);
+        assert!(!p.is_empty() && p.iter().all(|(i, _)| nears.contains(i)), "plain text samples nearest");
+    }
+
+    /// A page that declares a linear material gets the linear copy for stock text outside the
+    /// role rule (an install without the rule), and only for stock text.
+    #[test]
+    fn a_linear_page_is_drawn_through_a_linear_sampler_for_stock_text_only() {
+        let mut images = Assets::<Image>::default();
+        let (near, lin) = (images.add(Image::default()), images.add(Image::default()));
+        let mut f = LoadedFont::new(authored("font", 12.0, 6.0, Some("wormhole")), vec![(near.clone(), UVec2::new(64, 64))]);
+        f.linear = vec![Some(lin.clone())];
+        let mut fonts = SpriteFonts::default();
+        fonts.fonts.insert("font".into(), f);
+        let mut app = resolve_app(fonts, StockTextCanvas::default());
+        let stock = app.world_mut().spawn(sprite_text_styled("a", 12.0, Color::WHITE, SpriteTextStyle::default().stock_label())).id();
+        let other = app.world_mut().spawn(sprite_text_styled("a", 12.0, Color::WHITE, SpriteTextStyle::default())).id();
+        app.update();
+        let image = |e: Entity| app.world().get::<ImageNode>(app.world().get::<Children>(e).unwrap()[0]).unwrap().image.clone();
+        assert_eq!(image(stock), lin);
+        assert_eq!(image(other), near);
+    }
+
+    #[test]
+    fn uploaded_pages_carry_the_samplers_and_clamp_to_edge() {
+        let mut images = Assets::<Image>::default();
+        let ((near, _), smooth) = upload_page(vec![255; 4 * 4 * 4], UVec2::new(4, 4), &mut images, true);
+        let smooth = smooth.unwrap();
+        assert_eq!(images.get(&near).unwrap().sampler, ImageSampler::nearest());
+        assert_eq!(images.get(&smooth).unwrap().sampler, ImageSampler::linear());
+        let linear = images.get(&smooth).unwrap();
+        assert_eq!(linear.data, images.get(&near).unwrap().data);
+        let bevy::image::ImageSampler::Descriptor(d) = &linear.sampler else { panic!("descriptor") };
+        assert_eq!(d.address_mode_u, bevy::image::ImageAddressMode::ClampToEdge);
+        assert!(upload_page(vec![0; 4], UVec2::new(1, 1), &mut images, false).1.is_none());
+    }
+
+    /// Install-gated: every installed profile's fonts resolve through the rule where its
+    /// profile is the Armada II family, and are left alone elsewhere. Skips without installs.
+    #[test]
+    fn installed_role_sets_resolve_in_the_armada_ii_family_only() {
+        use crate::ui::hud::stock::layout::HudFit::Centred;
+        for (label, root, m) in installs() {
+            let Ok(vfs) = Vfs::mount_install(&root, m.as_deref()) else { continue };
+            let profile = sta_content::Profile::detect(&vfs);
+            eprintln!("{label}: {profile:?}");
+            let mut fonts = SpriteFonts { stock_family: profile == sta_content::Profile::Sta2Classic, ..default() };
+            for f in read_fonts(&vfs) {
+                fonts.fonts.insert(f.name.clone(), LoadedFont::new(f, vec![]));
+            }
+            let sq = Vec2::new(1600.0, 1200.0);
+            let c = canvas(sq, sq, Centred);
+            let got = fonts.stock_choice(StockRole::Default, &c, 1.0);
+            if fonts.stock_family && fonts.named("fontfinal4_20").is_some() {
+                let (f, ch, _) = got.unwrap_or_else(|| panic!("{label}: no default font"));
+                assert_eq!(f.font.name, format!("fontfinal4_{}", ch.size), "{label}");
+            } else if !fonts.stock_family {
+                assert!(got.is_none(), "{label}: {profile:?} keeps the plain path");
+            }
+        }
+    }
+
+    /// The placed stock text of authored fonts: the line box sits in its rectangle by the rule,
+    /// with a negative offset when it is taller, a snapped origin, no wrap and no clip.
+    #[test]
+    fn placed_stock_text_follows_the_rule_in_its_rectangle() {
+        use crate::ui::hud::stock::layout::HudFit::Centred;
+        let mut images = Assets::<Image>::default();
+        let fonts = authored_family(&mut images);
+        let sq = Vec2::new(1600.0, 1200.0);
+        let mut app = resolve_app(fonts, canvas(sq, sq, Centred));
+        let spawn = |app: &mut App, text: &str, h, v, rect: Vec2| {
+            let mut style = SpriteTextStyle::default().stock_label().placed(h, v);
+            style.place.as_mut().unwrap().rect = rect;
+            app.world_mut().spawn(sprite_text_styled(text, 18.0, Color::WHITE, style)).id()
+        };
+        // The default role draws its 20-high font 1:1 here (a line box of 20) with 5.5-wide
+        // glyphs advancing 6. A 10-high rectangle: (9 - 20) / 2 = -5.5, snapped to -5.
+        let left = spawn(&mut app, "ab", HAlign::Left, VAlign::Centre, Vec2::new(50.0, 10.0));
+        // Centred both ways: x (49 - 12) / 2 = 18.5, snapped to 19.
+        let both = spawn(&mut app, "ab", HAlign::Centre, VAlign::Centre, Vec2::new(50.0, 10.0));
+        // Wider than its rectangle: negative x, not wrapped (one row), not clipped.
+        let wide = spawn(&mut app, "abcd", HAlign::Centre, VAlign::Top, Vec2::new(10.0, 40.0));
+        app.update();
+        let px = |v: Val| if let Val::Px(v) = v { v } else { panic!("px") };
+        let node = |app: &App, e: Entity| app.world().get::<Node>(e).unwrap().clone();
+        let n = node(&app, left);
+        assert_eq!((n.position_type, px(n.left), px(n.top)), (PositionType::Absolute, 0.0, -5.0));
+        assert_eq!(px(n.height), 20.0);
+        let n = node(&app, both);
+        assert_eq!((px(n.left), px(n.top), px(n.width)), (19.0, -5.0, 12.0));
+        let n = node(&app, wide);
+        assert_eq!((px(n.left), px(n.top), px(n.width), px(n.height)), (-7.0, 0.0, 24.0, 20.0), "(9 - 24) / 2 = -7.5 snaps to -7; one line");
+        assert!(node(&app, wide).overflow == Overflow::visible());
+    }
+
+    /// Marked glyphs of stock text get a one-pixel rule on the bottom row of their cell, in the text
+    /// colour; the same style outside the stock rule draws none, and a recolour recolours the rule.
+    #[test]
+    fn marked_stock_glyphs_get_a_rule_in_the_text_colour() {
+        use crate::ui::hud::stock::layout::HudFit::Centred;
+        let mut images = Assets::<Image>::default();
+        let fonts = authored_family(&mut images);
+        let sq = Vec2::new(1600.0, 1200.0);
+        let mut app = resolve_app(fonts, canvas(sq, sq, Centred));
+        let red = Color::srgb(1.0, 0.0, 0.0);
+        let marked = SpriteTextStyle { underline: vec![1], ..SpriteTextStyle::default().stock_label() };
+        let a = app.world_mut().spawn(sprite_text_styled("ab", 18.0, red, marked.clone())).id();
+        let outside = SpriteTextStyle { underline: vec![1], ..SpriteTextStyle::default().at_least_size() };
+        let b = app.world_mut().spawn(sprite_text_styled("ab", 18.0, red, outside)).id();
+        app.update();
+        let px = |v: Val| if let Val::Px(v) = v { v } else { panic!("px") };
+        let rules = |app: &App, e: Entity| -> Vec<(Node, Color)> {
+            app.world().get::<Children>(e).unwrap().iter().filter(|k| app.world().get::<UnderlineRule>(*k).is_some()).map(|k| (app.world().get::<Node>(k).unwrap().clone(), app.world().get::<BackgroundColor>(k).unwrap().0)).collect()
+        };
+        let r = rules(&app, a);
+        assert_eq!(r.len(), 1);
+        // The default role draws its 20-high font 1:1: 'b' starts after one 6-wide advance; the rule is
+        // one pixel on the cell's last row.
+        assert_eq!((px(r[0].0.left), px(r[0].0.top), px(r[0].0.width), px(r[0].0.height)), (6.0, 19.0, 6.0, 1.0));
+        assert_eq!(r[0].1, red);
+        assert_eq!(app.world().get::<Children>(a).unwrap().len(), 3, "two glyphs and the rule");
+        assert!(rules(&app, b).is_empty(), "outside the stock rule nothing is underlined");
+        // A recolour recolours the rule without laying the text out again.
+        let green = Color::srgb(0.0, 1.0, 0.0);
+        app.world_mut().get_mut::<SpriteText>(a).unwrap().color = green;
+        app.update();
+        assert_eq!(rules(&app, a)[0].1, green);
+        // The marks gone: the rule goes with them.
+        app.world_mut().get_mut::<SpriteTextStyle>(a).unwrap().underline.clear();
+        app.update();
+        assert!(rules(&app, a).is_empty());
+        assert_eq!(app.world().get::<Children>(a).unwrap().len(), 2);
+    }
+
+    /// STA64's fallback labels keep the plain path: no role font, no placement, the same
+    /// nodes as the style they had before the stock rule.
+    #[test]
+    fn fallback_labels_take_the_plain_path_like_before() {
+        use crate::ui::hud::stock::layout::HudFit::Centred;
+        let mut images = Assets::<Image>::default();
+        let fonts = authored_family(&mut images);
+        let sq = Vec2::new(1600.0, 1200.0);
+        let mut app = resolve_app(fonts, canvas(sq, sq, Centred));
+        let fallback = SpriteTextStyle::default().centered().wrapped(40.0).stock_fallback();
+        assert_eq!(fallback.stock, None);
+        assert_eq!(fallback.place, None);
+        let before = SpriteTextStyle { tint_all: true, ..SpriteTextStyle::default().centered().wrapped(40.0).at_least_size() };
+        assert_eq!(fallback, before);
+        let a = app.world_mut().spawn(sprite_text_styled("STOP", 18.0, Color::WHITE, fallback)).id();
+        let b = app.world_mut().spawn(sprite_text_styled("STOP", 18.0, Color::WHITE, before)).id();
+        app.update();
+        let kids = |e: Entity| -> Vec<(Handle<Image>, Node)> {
+            app.world().get::<Children>(e).unwrap().iter().map(|k| (app.world().get::<ImageNode>(k).unwrap().image.clone(), app.world().get::<Node>(k).unwrap().clone())).collect()
+        };
+        assert_eq!(kids(a).len(), kids(b).len());
+        assert_eq!(app.world().get::<Node>(a).unwrap().top, app.world().get::<Node>(b).unwrap().top);
+        assert_eq!(app.world().get::<Node>(a).unwrap().position_type, PositionType::Relative);
+    }
+
+    fn role_app(fonts: SpriteFonts, canvas: StockTextCanvas, profile: crate::ui::profile::UiProfile) -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<GlyphWords>()
+            .insert_resource(fonts)
+            .insert_resource(canvas)
+            .insert_resource(profile)
+            .add_systems(Update, (apply_stock_roles, resolve_text).chain());
+        app
+    }
+
+    fn first_image(app: &App, e: Entity) -> Handle<Image> {
+        app.world().get::<ImageNode>(app.world().get::<Children>(e).unwrap()[0]).unwrap().image.clone()
+    }
+
+    /// Marked texts take the rule of their role (the same font and sampler the HUD's roles get) at
+    /// two window widths, and only while the one stock gate holds.
+    #[test]
+    fn marked_texts_take_their_roles_font_and_filter_at_two_widths() {
+        use crate::ui::hud::stock::layout::HudFit::{Centred, Stretched};
+        use crate::ui::profile::UiProfile;
+        for (hud, window, fit) in [
+            (Vec2::new(1600.0, 1200.0), Vec2::new(1600.0, 1200.0), Centred),
+            (Vec2::new(1280.0, 720.0), Vec2::new(1280.0, 720.0), Stretched),
+        ] {
+            let mut images = Assets::<Image>::default();
+            let fonts = authored_family(&mut images);
+            let c = canvas(hud, window, fit);
+            let want = |role| {
+                let (f, ch, _) = fonts.stock_choice(role, &c, 1.0).unwrap();
+                f.image(0, ch.filter).unwrap().clone()
+            };
+            let (title_want, default_want) = (want(StockRole::Title), want(StockRole::Default));
+            assert_ne!(title_want, default_want);
+            let mut app = role_app(fonts, c, UiProfile::Armada2);
+            let spawn = |app: &mut App, role: Option<StockRole>| {
+                let mark = role.map_or_else(StockRoleMark::none, StockRoleMark::new);
+                app.world_mut().spawn((mark, sprite_text_styled("ab", 18.0, Color::WHITE, SpriteTextStyle::default()))).id()
+            };
+            let (title, default, none) = (spawn(&mut app, Some(StockRole::Title)), spawn(&mut app, Some(StockRole::Default)), spawn(&mut app, None));
+            app.update();
+            assert_eq!(first_image(&app, title), title_want, "{hud}");
+            assert_eq!(first_image(&app, default), default_want, "{hud}");
+            assert_eq!(app.world().get::<SpriteTextStyle>(title).unwrap().stock, Some(StockRole::Title));
+            assert_eq!(app.world().get::<SpriteTextStyle>(none).unwrap().stock, None, "a text without a role keeps its path");
+        }
+    }
+
+    /// Outside the gate (STA64's own look, Fleet Operations' look, an install without the rule, no
+    /// HUD on screen) the marked texts keep the plain path of the style they were spawned with.
+    #[test]
+    fn marked_texts_keep_their_path_outside_the_stock_gate() {
+        use crate::ui::hud::stock::layout::HudFit::Centred;
+        use crate::ui::profile::UiProfile;
+        let sq = Vec2::new(1600.0, 1200.0);
+        let spawn_plain = |app: &mut App, marked: bool| {
+            let text = sprite_text_styled("ab", 18.0, Color::WHITE, SpriteTextStyle::default());
+            if marked { app.world_mut().spawn((StockRoleMark::placed(StockRole::Title, HAlign::Left, VAlign::Top, [0.0, 0.0, 50.0, 20.0], (1600.0, 1200.0)), text)).id() } else { app.world_mut().spawn(text).id() }
+        };
+        let cases: [(UiProfile, bool, bool); 4] = [
+            (UiProfile::Lcars, true, true),
+            (UiProfile::FleetOps, true, true),
+            (UiProfile::Armada2, false, true),
+            (UiProfile::Armada2, true, false),
+        ];
+        for (profile, family, hud) in cases {
+            let mut images = Assets::<Image>::default();
+            let mut fonts = authored_family(&mut images);
+            fonts.stock_family = family;
+            let canvas = if hud { canvas(sq, sq, Centred) } else { StockTextCanvas::default() };
+            let mut app = role_app(fonts, canvas, profile);
+            let (marked, plain) = (spawn_plain(&mut app, true), spawn_plain(&mut app, false));
+            app.update();
+            let style = app.world().get::<SpriteTextStyle>(marked).unwrap();
+            assert_eq!((style.stock, style.place), (None, None), "{profile:?} {family} {hud}");
+            let nodes = |e: Entity| -> Vec<Node> { app.world().get::<Children>(e).unwrap().iter().map(|k| app.world().get::<Node>(k).unwrap().clone()).collect() };
+            assert_eq!(nodes(marked), nodes(plain), "{profile:?} {family} {hud}");
+            assert_eq!(app.world().get::<Node>(marked).unwrap().position_type, PositionType::Relative);
+        }
+    }
+
+    /// The placement of a marked text is its sheet rectangle scaled to the HUD, on the stock path only.
+    #[test]
+    fn a_marked_placement_scales_its_sheet_rectangle_to_the_hud() {
+        use crate::ui::hud::stock::layout::HudFit::Centred;
+        use crate::ui::profile::UiProfile;
+        let mut images = Assets::<Image>::default();
+        let fonts = authored_family(&mut images);
+        let mut app = role_app(fonts, canvas(Vec2::new(1920.0, 1440.0), Vec2::new(3440.0, 1440.0), Centred), UiProfile::Armada2);
+        let e = app.world_mut().spawn((StockRoleMark::placed(StockRole::Title, HAlign::Centre, VAlign::Centre, [10.0, 20.0, 360.0, 40.0], (1600.0, 1200.0)), sprite_text_styled("ab", 18.0, Color::WHITE, SpriteTextStyle::default()))).id();
+        app.update();
+        let place = app.world().get::<SpriteTextStyle>(e).unwrap().place.unwrap();
+        assert_eq!((place.h, place.v), (HAlign::Centre, VAlign::Centre));
+        assert!((place.rect - Vec2::new(432.0, 48.0)).abs().max_element() < 1e-3, "{:?}", place.rect);
+    }
+
+    /// A sheet with its own canvas (not the 1600x1200 reference): the centred text ends up centred in
+    /// the box the sheet's layout gives, i.e. the rectangle scaled by the HUD over that canvas.
+    #[test]
+    fn a_centred_text_of_a_sheet_with_its_own_canvas_ends_up_centred() {
+        use crate::ui::hud::stock::layout::HudFit::Centred;
+        use crate::ui::profile::UiProfile;
+        let mut images = Assets::<Image>::default();
+        let fonts = authored_family(&mut images);
+        // A 1600x1200 HUD; the sheet is 800x600 with a 360x40 title rectangle: the box is 720x80 units.
+        let sq = Vec2::new(1600.0, 1200.0);
+        let mut app = role_app(fonts, canvas(sq, sq, Centred), UiProfile::Armada2);
+        let e = app.world_mut().spawn((StockRoleMark::placed(StockRole::Title, HAlign::Centre, VAlign::Centre, [20.0, 10.0, 360.0, 40.0], (800.0, 600.0)), sprite_text_styled("ab", 18.0, Color::WHITE, SpriteTextStyle::default()))).id();
+        app.update();
+        let node = app.world().get::<Node>(e).unwrap().clone();
+        let px = |v: Val| if let Val::Px(v) = v { v } else { panic!("px") };
+        // The title font at this HUD is 24 high (frame) at 1.25, glyphs 5.5 wide advancing 7: the
+        // block is 14 wide and 30 high in a 720 x 80 box: ((719 - 14) / 2, (79 - 30) / 2) = (352.5, 24.5).
+        assert_eq!(node.position_type, PositionType::Absolute);
+        assert_eq!((px(node.left), px(node.top), px(node.width), px(node.height)), (353.0, 25.0, 14.0, 30.0));
     }
 }

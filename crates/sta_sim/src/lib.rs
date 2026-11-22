@@ -79,6 +79,7 @@ pub mod spatial;
 pub mod spawn;
 pub mod start;
 mod start_effects;
+mod replacement;
 pub mod attrs;
 pub mod team_pool;
 #[cfg(test)]
@@ -188,6 +189,7 @@ pub struct Sim {
     alerts: alert::Alerts,
     /// Pending start-helper lifecycle steps (SIM-28); in the digest once any exist.
     start_effects: start_effects::StartEffects,
+    replacements: replacement::Replacements,
     /// Move orders that make no progress (stuck detector): in snapshots, not in the digest.
     watchdog: watchdog::Watchdog,
     /// Path planner grids and fields (SIM-23): a memo, not in the digest.
@@ -195,6 +197,8 @@ pub struct Sim {
     /// Subsystem switches and damage set by missions (SIM-55); in the digest
     /// once any exists.
     subsystems: combat::damage::Subsystems,
+    /// Stock A2 shield pools held at zero after damage; saved and hashed while active.
+    zero_shield_holds: combat::damage::ZeroShieldHolds,
     /// Mission-set unit names and races and seat races (SIM-54); in the digest once any exists.
     attrs: attrs::Attrs,
     /// Scripted orders (SIM-56); in the digest once any exists.
@@ -254,9 +258,11 @@ impl Sim {
             engagement: Default::default(),
             alerts: Default::default(),
             start_effects: Default::default(),
+            replacements: Default::default(),
             watchdog: Default::default(),
             nav: Default::default(),
             subsystems: Default::default(),
+            zero_shield_holds: Default::default(),
             attrs: Default::default(),
             scripted: Default::default(),
             switches: Default::default(),
@@ -357,7 +363,10 @@ impl Sim {
                     self.weapons.stop_attack(&self.units, c.player, &unlocked);
                     self.economy.cancel(&self.units, c.player, &unlocked);
                     if let Some(db) = self.content.clone() {
-                        self.production.cancel(&db, &self.units, &mut self.economy, c.player, &unlocked);
+                        let cancel: Vec<_> = unlocked.iter().copied()
+                            .filter(|&id| !self.units.get(id).is_some_and(|u| u.mobile_station))
+                            .collect();
+                        self.production.cancel(&db, &self.units, &mut self.economy, c.player, &cancel);
                     }
                 }
                 let taken = self.apply_movement(c.player, &Order::Move { units: unlocked.clone(), to: *to, queue: *queue });
@@ -446,9 +455,10 @@ impl Sim {
                 let Some(db) = self.content.clone() else { return false };
                 self.specials.order_cloak(&db, &self.units, c.player, units, *on)
             }
-            Order::Special { units, slot, .. } => {
+            Order::Special { units, slot, target } => {
                 let Some(db) = self.content.clone() else { return false };
-                self.weapons.order_special(self.tick, &db, &self.units, &mut self.specials, &mut self.rng, &mut self.events, c.player, units, *slot)
+                let toggled = self.weapons.order_special(self.tick, &db, &self.units, &mut self.specials, &mut self.rng, &mut self.events, c.player, units, *slot);
+                self.order_replacements(&db, c.player, units, *slot, *target) || toggled
             }
             Order::Autonomy { units, kind, level } => {
                 self.autonomy.order(&self.units, c.player, units, *kind, *level)
@@ -469,6 +479,7 @@ impl Sim {
             Order::Repair { units, yard } => self.apply_repair(c.player, units, *yard),
             Order::Decommission { units, yard } => self.apply_decommission(c.player, units, *yard),
             Order::Recrew { units, on } => self.order_recrew(c.player, units, *on),
+            Order::Alert { units, level } => self.order_alert(c.player, units, *level),
         }
     }
 
@@ -509,7 +520,7 @@ impl Sim {
             let returned = self.transports.expire(self.tick);
             self.restore_carrier_shields(&returned);
             let shields_off = if nebulae.is_empty() { Vec::new() } else { self.nebula_shields_enter(&db, &nebulae) };
-            combat::damage::recharge(&mut self.units, &db, &self.switches, &self.subsystems, &self.transports);
+            combat::damage::recharge(&mut self.units, &db, &self.switches, &self.subsystems, &self.transports, &mut self.zero_shield_holds, self.tick);
             let nebula_holds = if nebulae.is_empty() { nebula::Holds::default() } else { self.nebula_systems(&db, &nebulae) };
             self.nebula_shields_tail(&shields_off);
             self.activate_team_change_weapons(&db);
@@ -538,7 +549,7 @@ impl Sim {
             // casualty hits whose final hull-damage event may become zero.
             self.recrew.note_hits(&self.units, &db, &self.events[from..], self.tick);
             let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
-            let mut killed = combat::damage::apply(&mut self.units, &db, &mut self.events, from, &mut casualties);
+            let mut killed = combat::damage::apply(&mut self.units, &db, &mut self.events, from, &mut casualties, &mut self.zero_shield_holds, self.tick);
             if !nebulae.is_empty() {
                 killed.extend(self.nebula_damage(&db, &nebulae));
             }
@@ -561,16 +572,28 @@ impl Sim {
         self.step_colonies();
         let colony_crew = self.content.as_deref().map(|db| self.colony_crew_income(db)).unwrap_or_default();
         if let Some(db) = &self.content {
-            self.economy.step(&mut self.units, db, &mut self.events);
+            self.economy.step(&mut self.units, db, self.tick, &self.confinement, &mut self.events);
             self.economy.step_passive(&self.units, db, &self.players, &self.ai_seats, self.tick);
             self.economy.step_crew(&self.units, db, &self.attrs, self.tick, &colony_crew);
             let from = self.events.len();
-            self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement);
+            self.production.update_research_poses(db, &mut self.units);
+            let completed = self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement, self.bounds);
             self.inherit_builder_races(from);
             self.inherit_builder_alert(from);
             let built: Vec<EntityId> = self.events[from..].iter().filter_map(|e| match e { SimEvent::Spawned { id } => Some(*id), _ => None }).collect();
             for id in built {
                 self.default_autonomy(id);
+            }
+            for (unit, rally) in completed.gate_rallies {
+                self.movement.set_waypoints(unit, vec![rally]);
+            }
+            for (embryo, product) in completed.evolved {
+                self.autonomy.copy_to(embryo, product);
+                if self.units.get(product).is_some_and(|unit| unit.kind == world::EntityKind::Craft) {
+                    self.weapons.retarget_replacement_shots(embryo, product);
+                }
+                self.retire(embryo);
+                self.events.push(SimEvent::Replaced { old: embryo, new: product, select: true });
             }
         }
         self.hold_welding_builders();
@@ -617,7 +640,7 @@ impl Sim {
             }
             view.flags = view.flags.with(view::UnitFlags::BUILDING, self.production.is_welding(entity.id));
             view.flags = view.flags.with(view::UnitFlags::DOCKED, docked.contains(&entity.id));
-            if matches!(entity.kind, EntityKind::Craft) {
+            if matches!(entity.kind, EntityKind::Craft | EntityKind::Station) {
                 view.autonomy = Some(self.autonomy.levels(entity.id));
             }
             view.energy = self.specials.energy_of(entity.id).and_then(|now| {
@@ -728,8 +751,14 @@ impl Sim {
         if !self.start_effects.is_empty() {
             self.start_effects.hash_into(&mut h);
         }
+        if !self.replacements.is_empty() {
+            self.replacements.hash_into(&mut h);
+        }
         if !self.subsystems.is_empty() {
             self.subsystems.hash_into(&mut h);
+        }
+        if !self.zero_shield_holds.is_empty() {
+            self.zero_shield_holds.hash_into(&mut h);
         }
         if !self.scripted.is_empty() {
             self.scripted.hash_into(&mut h);

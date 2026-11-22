@@ -75,6 +75,16 @@ pub enum Effect {
     Post,
     /// RND-15: nebula and hull shadows.
     Shadows,
+    /// The weapon shots a class has a stock drawing for (#1041): ribbons, streaks and sprites.
+    /// Finer than [`Effect::Weapons`], which is never registered as stock: a class without a
+    /// stock version here keeps its Refit-derived drawing in both looks, and the spawn code
+    /// chooses per class (`fx/stock_shots.rs`).
+    Shots,
+    /// The shield hit and shields down (#1041): a cap on the shield ellipsoid (`fx/stock_shield_hits.rs`) and bands
+    /// while a pool is held at zero (`fx/stock_shields_down.rs`). Finer than
+    /// [`Effect::Impacts`], which also covers hull sparks, explosions and smoke and is never registered as
+    /// stock: under Stock the Refit shield shell is not drawn, everything else `Impacts` draws still is.
+    ShieldHits,
 }
 
 /// What stays in the repository under Refit: each effect, its package, and the
@@ -89,11 +99,16 @@ pub const REFIT_EFFECTS: &[(Effect, &str, &[&str])] = &[
     (Effect::Specials, "RND-11", &[]),
     (Effect::Post, "RND-14", &[]),
     (Effect::Shadows, "RND-15", &["shadows.wesl"]),
+    // The Refit look of a shot is `Effect::Weapons`' (`fx/quad.wesl`); `Shots` adds the stock one.
+    (Effect::Shots, "RND-09", &[]),
+    // The Refit look of a shield hit is `Effect::Impacts`' shell (`fx/shield.wesl`); `ShieldHits` adds the stock one.
+    (Effect::ShieldHits, "RND-10", &[]),
 ];
 
 /// Original, profile-independent presentation shaders. These are available
-/// under both looks and are not part of the preserved Refit-derived effects.
-pub const SHARED_SHADERS: &[&str] = &["fx/persistent_shields.wesl"];
+/// under both looks and are not part of the preserved Refit-derived effects. The selection bubble's
+/// follows the UI profile (the Armada II look, `overlays::armada2_look`), not this render profile.
+pub const SHARED_SHADERS: &[&str] = &["fx/persistent_shields.wesl", "fx/stock_shots.wesl", "overlays/bubble.wesl"];
 
 /// Which effects have a stock implementation registered.
 #[derive(Resource, Default, Debug)]
@@ -242,7 +257,7 @@ mod tests {
         let named: Vec<&str> = REFIT_EFFECTS.iter().flat_map(|(_, _, s)| s.iter().copied()).chain(SHARED_SHADERS.iter().copied()).collect();
         for e in crate::render::shader_shadow::EMBEDDED {
             let rel = e.trim_start_matches("render/");
-            if rel != "fog.wesl" {
+            if !matches!(rel, "fog.wesl" | "map_grid.wesl") {
                 assert!(named.contains(&rel), "{rel} is registered under no effect");
             }
         }

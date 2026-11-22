@@ -172,8 +172,8 @@ impl ContentDb {
     /// [`with_launch_points`](ContentDb::with_launch_points) and warnings for
     /// unreadable collision geometry or authored repair nodes that cannot resolve.
     pub fn with_launch_points_warned(mut self, vfs: &sta_vfs::Vfs) -> (ContentDb, Vec<Warning>) {
-        crate::launch::attach(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }));
-        let mut warnings = crate::launch::attach_radii(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }));
+        let mut warnings = crate::launch::attach(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }));
+        warnings.extend(crate::launch::attach_radii(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None })));
         warnings.extend(crate::repair_geometry::attach(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None })));
         self.digest = digest_of(&self);
         (self, warnings)
@@ -255,6 +255,12 @@ impl ContentDb {
             Some((_, Def::Unit(u))) => Some(u),
             _ => None,
         }
+    }
+
+    /// The aperture ODF named by a yard, resolved through the mounted data.
+    pub fn launch_wormhole(&self, builder: &UnitDef) -> Option<&UnitDef> {
+        let name = crate::odf::stem(builder.raw.str("wormhole")?);
+        self.key(&name).and_then(|key| self.unit(key)).filter(|unit| unit.class.0 == "wormhole_obj")
     }
 
     pub fn weapon(&self, k: ContentKey) -> Option<&WeaponDef> {
@@ -522,9 +528,9 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         model: _, scale: _, movement: _, hull: _, shields: _, initial_hull: _, initial_shields: _,
         crew: _, maximum_crew: _, facility: _, has_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
         free_unit: _, dock: _, sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
-        max_dilithium: _, mining_rate: _, transfer_rate: _, resource: _, features: _,
+        max_dilithium: _, mining_rate: _, transfer_rate: _, freight_transfer: _, resource: _, features: _,
         confinement: _, nebula_pathing: _, nebula_effects: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
-        crew_gain: _, transport: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, repair_attachment: _, stats: _, raw: _,
+        crew_gain: _, transport: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, repair_attachment: _, research_slots: _, research_station_upgrade: _, stats: _, raw: _,
     } = u;
     // `stats` (CON-55): only the keys a sim rule reads are digested (the planet keys
     // under SIM-73's target-mask switch, below); the rest is typed only.
@@ -595,6 +601,40 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
             None => "-".to_owned(),
             Some(r) => format!("{{map={};construction={}}}", confinement_text(Some(r)), confinement_text(db.construction_confinement(u.key))),
         });
+    // Peers using the old constructor behavior would diverge on Evolution.
+    if u.is_evolver() {
+        c.flag("evolves_in_place", true);
+    }
+    if let Some(rates) = u.freight_transfer {
+        c.list("freight_transfer", rates.into_iter().map(fixed_text));
+        if let Some(berth) = u.dock.as_ref().filter(|p| p.node.is_some()) {
+            c.list("freight_berth", [berth.offset.0, berth.height, berth.offset.1, berth.dir.0, berth.dir.1]
+                .into_iter().map(fixed_text));
+        }
+    }
+    if u.research_station_upgrade {
+        c.flag("research_station_upgrade", true);
+    }
+    if !u.research_slots.is_empty() {
+        let scale = if u.scale > Fixed::ZERO { u.scale } else { Fixed::ONE };
+        c.fixed("research_scale", scale);
+        c.list("research_slots", u.research_slots.iter().map(|slot| {
+            let reservation = slot.reserved_for.as_deref().unwrap_or("");
+            slot.pose.map_or_else(|| format!("{reservation}:-"), |pose| {
+                let values = [pose.origin, pose.axes[0], pose.axes[1], pose.axes[2]]
+                    .into_iter().flat_map(|v| [v.x, v.y, v.z]).map(fixed_text).collect::<Vec<_>>();
+                format!("{reservation}:{}", values.join(","))
+            })
+        }));
+    }
+    if u.allows_station_motion() {
+        c.flag("ship_motion", true);
+    }
+    if let Some(gate) = db.launch_wormhole(u) {
+        c.text("launch_wormhole", &gate.odf)
+            .int("wormhole_open_ticks", gate.wormhole_open_ticks())
+            .fixed("launch_height", u.launch.as_ref().map_or(Fixed::ZERO, |point| point.height));
+    }
     // SIM-70: absent authored flags keep the prior digest; explicit false is
     // distinct from absence because it excludes a station from recrewing.
     if let Some(facility) = u.facility {
@@ -769,6 +809,10 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     if let Some(on) = u.stats.add_to_planner {
         c.raw("add_to_planner", if on { "1" } else { "0" });
     }
+    let push_items: Vec<_> = u.stats.push_build_items.iter().map(|name| quoted(name)).collect();
+    if !push_items.is_empty() {
+        c.list("push_build_items", push_items);
+    }
     // AI-05: the Roots planner treats definitions with the same positive tag as one build item.
     if db.profile() == Profile::Fo4
         && let Some(tag) = u.stats.distance_below_grid.filter(|tag| *tag > Fixed::ZERO)
@@ -789,28 +833,49 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
 
 /// A start helper's replacement rule (SIM-28).
 fn replace_text(r: &crate::lifecycle::ReplaceDef) -> String {
-    let crate::lifecycle::ReplaceDef { instant, delay, mode, required_officers, entries } = r;
+    let crate::lifecycle::ReplaceDef { instant, delay, mode, required_officers, entries, options } = r;
     let entries = entries.iter().map(|e| {
         let classes = e.classes.iter().map(|c| {
             group(Canon::new().text("odf", &c.odf.to_ascii_lowercase()).int("weight", c.weight).list("offset", c.offset.map(fixed_text)))
         });
         group(Canon::new().raw("condition", &e.condition.as_deref().map_or_else(|| "-".into(), quoted)).list("classes", classes))
     });
-    group(
-        Canon::new()
+    let mut c = Canon::new();
+    c
             .list("instant", instant.map(|b| u8::from(b).to_string()))
             .int("delay", *delay)
             .int("mode", *mode)
             .raw("required_officers", &required_officers.map_or_else(|| "-".into(), |n| n.to_string()))
-            .list("entries", entries),
-    )
+            .list("entries", entries);
+    if options != &crate::lifecycle::ReplaceOptions::default() {
+        if options.ignore_fleet_cap {
+            c.flag("ignore_fleet_cap", true);
+        }
+        c.flag("keep_name", options.keep_name)
+            .flag("keep_owner", options.keep_owner)
+            .flag("reset_crew", options.reset_crew)
+            .flag("reset_energy", options.reset_energy)
+            .flag("maintain_orders", options.maintain_orders)
+            .flag("ignore_same_class", options.ignore_same_class)
+            .flag("ignore_tech_tree", options.ignore_tech_tree)
+            .flag("find_open_spot", options.find_open_spot)
+            .flag("warp_in", options.warp_in)
+            .flag("transfer_stats", options.transfer_stats)
+            .int("select_mode", options.select_mode)
+            .int("concurrent_children", options.concurrent_children as i128)
+            .int("cycle", options.cycle)
+            .list("cost", options.cost.map(fixed_text))
+            .fixed("crew_cost", options.crew_cost)
+            .fixed("warp_speed", options.warp_speed);
+    }
+    group(&mut c)
 }
 
 fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
     // Every field, as in `unit_text`.
     let WeaponDef {
         key: _, odf: _, class: _, kind: _, range: _, damage: _, refire: _, shot_speed: _,
-        duration: _, fire_sound: _, fx: _, shot_scale: _, effect_ticks: _, energy_drain: _, energy_cost: _,
+        duration: _, fire_sound: _, fx: _, shot_scale: _, look: _, effect_ticks: _, energy_drain: _, energy_cost: _,
         disable_weapons: _, decloak_on_hit: _, initial_shot_delay_modifier: _,
         ignore_shot_delay_effects: _, ordnance_defence: _, activate_on_team_change: _, crew_loss: _, damage_variance: _, resource: _, replace: _, colonize: _, base: _, features: _, raw: _,
     } = w;
@@ -1013,6 +1078,9 @@ mod tests {
     use super::*;
     use crate::def::WeaponKind;
 
+    /// Written out from the text the previous code (a read of `raw` in `unit_text`) produced.
+    const EXPECTED_YARD_TEXT: &str = "class=\"shipyard\";race=\"\";starbase=0;planet_role=-;planet_crew_gain=0;planet_crew_modifier=-;planet_colonizable=0;planet_civilian_population_modifier=0;movement=[0,1,0,1,0,0,0,50,150,20,0,70];hull=100;shields=0;shield_rate=0;initial_hull=100;initial_shields=0;crew=0;crew_capacity=0;sensor=0;hardpoints=[];cost=[];build_ticks=0;officers=0;queue_limit=5;builds=[];flagged_slots=-;launch=-;special_energy=0;special_energy_rate=0;miner=0;max_dilithium=0;mining_rate=0;transfer_rate=0;resource=-;nebula_pathing=-;avoid_me=0;hidden=0;invalid_as_target=0;life=-;crew_gain=0;features=[];confinement=-;push_build_items=[\"alpha\",\"beta\",\"alpha\"]";
+
     #[test]
     fn keys_follow_sorted_names_whatever_the_insertion_order() {
         let a = ContentDb::builder()
@@ -1034,6 +1102,20 @@ mod tests {
         assert!(a.unit(ContentKey(1)).is_none());
         assert!(a.weapon(ContentKey(1)).is_some());
         assert_eq!(a.hash(), b.hash());
+    }
+
+    /// The push-build items come from the loaded definition's typed field; the
+    /// unit text (and so the content digest) is the text the raw-ODF read gave.
+    #[test]
+    fn push_build_items_digest_text_is_the_authored_text() {
+        let odf = sta_odf::resolve("yard", &mut |_| {
+            Some("classLabel = \"shipyard\"\nmaxHealth = 100\npushBuildItem0 = Alpha.odf\npushBuildItem2 = NULL\npushBuildItem3 = beta\npushBuildItem4 = alpha\n".into())
+        })
+        .unwrap();
+        let mut warnings = Vec::new();
+        let def = crate::unit::unit_def("yard", &odf, None, &mut warnings);
+        let db = ContentDb::builder().unit(def.clone()).build().unwrap();
+        assert_eq!(unit_text(&db, &def), EXPECTED_YARD_TEXT);
     }
 
     #[test]

@@ -14,19 +14,20 @@
 //!   support craft.
 //! - Each icon replaces its model below [`SYMBOL_ENTER_PX`] and returns to the
 //!   model above [`MODEL_RETURN_PX`]. Tab cycles auto / always / off.
-//! - Zoomed out past [`STRATEGIC_HEIGHT`] the view gains a grid on the
-//!   map plane, and a height bar drops from each unit to it. Icons within
+//! - Zoomed out past [`STRATEGIC_HEIGHT`] a height bar drops from each unit to
+//!   the map plane (the grid on it is `render::map_grid`'s, in every look). Icons within
 //!   [`STACK_RADIUS_PX`] on screen merge into one fleet icon with a count badge,
 //!   grouped by id order (see [`stack`]).
-//! - Selected units' icons get a green outline; clicks and drag boxes select by
+//! - Selected units' icons get a team-coloured outline; clicks and drag boxes select by
 //!   icon when it shows (see `input::select`).
 
 use crate::render::cull::{CullParams, CullStats, ScriptView};
 use crate::render::lod_switch::{self, Class, Representation, SwitchParams};
-use crate::render::units::{FromView, NeedsModel, SelectRadius, TeamColour};
-use crate::sim_link::{Selection, SimEntity};
+use crate::render::units::{FromView, MarkColour, NeedsModel, SelectRadius, TeamColour, UnitOwner};
+use crate::sim_link::{Selection, SimEntity, SimLink};
 use sta_sim::EntityId;
 use bevy::asset::RenderAssetUsages;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
@@ -194,9 +195,6 @@ pub enum Mode {
 pub const STRATEGIC_HEIGHT: f32 = 2500.0;
 /// Icons closer than this on screen merge into one fleet icon.
 pub const STACK_RADIUS_PX: f32 = 28.0;
-/// Grid cell edge in world units, and cells drawn each way from the view centre.
-pub const GRID_STEP: f32 = 500.0;
-pub const GRID_HALF_CELLS: i32 = 12;
 
 /// A fleet icon: one unit, or several merged. `leader` is the lowest id.
 #[derive(Clone, Debug, PartialEq)]
@@ -233,7 +231,6 @@ pub struct StrategicView {
     pub active: bool,
     pub icons: Vec<StackIcon>,
     pub bars: Vec<HeightBar>,
-    pub grid_lines: usize,
     /// Units whose own icon is folded into another's.
     pub folded: std::collections::BTreeSet<EntityId>,
 }
@@ -274,6 +271,15 @@ struct Icon {
     outline: Entity,
     /// The count badge of a fleet icon.
     badge: Entity,
+}
+
+#[derive(SystemParam)]
+struct IconColours<'w, 's> {
+    selection: Res<'w, Selection>,
+    owners: Query<'w, 's, (Option<&'static UnitOwner>, Option<&'static MarkColour>, Has<FromView>)>,
+    link: Option<Res<'w, SimLink>>,
+    teams: Option<Res<'w, crate::viewer::TeamColours>>,
+    map_teams: Option<Res<'w, crate::viewer::MapTeamColours>>,
 }
 
 pub struct StrategicPlugin;
@@ -403,30 +409,20 @@ pub struct NoIcon;
 #[allow(clippy::type_complexity)]
 pub(crate) fn ensure_icons(
     mut commands: Commands,
-    units: Query<(Entity, Option<&TeamColour>, Option<&SelectRadius>), (With<FromView>, With<SimEntity>, Without<Strategic>, Without<NeedsModel>, Without<NoIcon>)>,
+    units: Query<(Entity, Option<&TeamColour>, Option<&MarkColour>, Option<&SelectRadius>), (With<FromView>, With<SimEntity>, Without<Strategic>, Without<NeedsModel>, Without<NoIcon>)>,
 ) {
-    for (e, colour, radius) in &units {
-        let colour = colour.map_or(Color::WHITE, |c| c.0);
+    for (e, colour, mark, radius) in &units {
+        let colour = mark.map(|c| c.0).or_else(|| colour.map(|c| c.0)).unwrap_or(Color::WHITE);
         commands.entity(e).insert(Strategic::new(Shape::Arrow, colour, radius.map_or(20.0, |r| r.0)));
     }
 }
 
-fn draw(view: Res<StrategicView>, camera: Query<&Transform, crate::map::MainCamera>, mut gizmos: Gizmos) {
+fn draw(view: Res<StrategicView>, mut gizmos: Gizmos) {
     if !view.active {
         return;
     }
-    let Ok(tf) = camera.single() else { return };
-    // The grid is centred on where the camera looks at the plane.
-    let fwd = tf.forward().as_vec3();
-    let hit = if fwd.y < -1e-3 { tf.translation + fwd * (-tf.translation.y / fwd.y) } else { Vec3::new(tf.translation.x, 0.0, tf.translation.z) };
-    let (cx, cz) = ((hit.x / GRID_STEP).round() * GRID_STEP, (hit.z / GRID_STEP).round() * GRID_STEP);
-    let half = GRID_HALF_CELLS as f32 * GRID_STEP;
-    let col = Color::srgba(0.4, 0.6, 0.8, 0.25);
-    for i in -GRID_HALF_CELLS..=GRID_HALF_CELLS {
-        let o = i as f32 * GRID_STEP;
-        gizmos.line(Vec3::new(cx + o, 0.0, cz - half), Vec3::new(cx + o, 0.0, cz + half), col);
-        gizmos.line(Vec3::new(cx - half, 0.0, cz + o), Vec3::new(cx + half, 0.0, cz + o), col);
-    }
+    // The zoomed-out view no longer draws a grid of its own: the original's map grid
+    // (`render::map_grid`, shown by its mode) is the one grid, in every look.
     for b in view.bars.iter().filter(|b| b.length() > 0.0) {
         gizmos.line(b.top, b.bottom, Color::srgba(0.8, 0.9, 1.0, 0.5));
     }
@@ -447,7 +443,7 @@ fn attach(mut commands: Commands, masks: Res<Masks>, added: Query<(Entity, &Stra
         // The ring, a little larger than the icon and centred on it.
         let outline = commands
             .spawn((
-                ImageNode { image: masks.ring.clone(), color: Color::srgb(0.3, 1.0, 0.4), ..default() },
+                ImageNode { image: masks.ring.clone(), color: s.colour, ..default() },
                 Node {
                     position_type: PositionType::Absolute,
                     left: Val::Percent(-25.0),
@@ -488,9 +484,9 @@ fn update(
     mode: Res<Mode>,
     camera: Query<(Entity, &Camera, &GlobalTransform, &Projection), crate::map::MainCamera>,
     mut objects: Query<(&GlobalTransform, &mut Strategic, &mut Visibility, Option<&SimEntity>), With<Strategic>>,
-    selection: Res<Selection>,
+    colours: IconColours,
     mut icons: Query<(Entity, &Icon, &mut Node, &mut ImageNode, &mut UiTransform, Option<&UiTargetCamera>)>,
-    mut outlines: Query<&mut Visibility, (Without<Icon>, Without<Strategic>)>,
+    mut outlines: Query<(&mut Visibility, Option<&mut ImageNode>), (Without<Icon>, Without<Strategic>)>,
     mut texts: Query<&mut Text>,
     mut sv: ResMut<StrategicView>,
     images: Res<Assets<Image>>,
@@ -546,7 +542,6 @@ fn update(
         Mode::Off => false,
         Mode::Auto => eye.y.abs() > STRATEGIC_HEIGHT,
     };
-    sv.grid_lines = if sv.active { (GRID_HALF_CELLS as usize * 2 + 1) * 2 } else { 0 };
     sv.icons.clear();
     sv.bars.clear();
     sv.folded.clear();
@@ -588,7 +583,19 @@ fn update(
             commands.entity(icon_e).despawn();
             continue;
         };
-        let selected = sim.is_some_and(|e| selection.0.contains(&e.0));
+        let (owner, mark, from_view) = colours.owners.get(icon.target).ok().unwrap_or((None, None, false));
+        let live_owner = sim.and_then(|id| colours.link.as_ref()?.curr().unit(id.0)).map(|unit| unit.owner);
+        // The simulation is authoritative for map-placed roots (which have no UnitOwner).
+        // Keep the authored Strategic tint so a neutral/custom root can return to it.
+        let tint = match live_owner.or_else(|| owner.map(|o| o.0)) {
+            Some(owner) if owner.is_player() => crate::viewer::owner_mark_colour(colours.teams.as_deref(), colours.map_teams.as_deref(), owner)
+                .or_else(|| mark.map(|m| m.0))
+                .unwrap_or(s.colour),
+            Some(_) if from_view => Color::WHITE,
+            Some(_) => s.colour,
+            None => mark.map_or(s.colour, |m| m.0),
+        };
+        let selected = sim.is_some_and(|e| colours.selection.0.contains(&e.0));
         let Some(p) = (s.shown > 0.0).then_some(s.screen) else {
             node.display = Display::None;
             continue;
@@ -600,7 +607,7 @@ fn update(
             s.shown = 0.0;
         }
         let count = id.and_then(|i| sv.icons.iter().find(|s| s.leader == i)).map_or(1, StackIcon::count);
-        if let Ok(mut v) = outlines.get_mut(icon.badge) {
+        if let Ok((mut v, _)) = outlines.get_mut(icon.badge) {
             *v = if count > 1 && !folded { Visibility::Inherited } else { Visibility::Hidden };
         }
         if count > 1
@@ -615,7 +622,7 @@ fn update(
         node.height = Val::Px(ui_size);
         node.left = Val::Px(ui_pos.x);
         node.top = Val::Px(ui_pos.y);
-        img.color = s.colour;
+        img.color = tint;
         // An atlas sprite: its rectangle in pixels once the atlas has loaded.
         if img.rect.is_none()
             && let (Some(uv), Some(h)) = (s.uv, s.image.as_ref())
@@ -635,8 +642,11 @@ fn update(
                 ui_tf.rotation = Rot2::radians(a.x.atan2(-a.y));
             }
         }
-        if let Ok(mut v) = outlines.get_mut(icon.outline) {
+        if let Ok((mut v, outline)) = outlines.get_mut(icon.outline) {
             *v = if selected { Visibility::Inherited } else { Visibility::Hidden };
+            if let Some(mut outline) = outline {
+                outline.color = tint;
+            }
         }
     }
 }
@@ -651,7 +661,6 @@ fn clear_unprojected(
     view.icons.clear();
     view.bars.clear();
     view.folded.clear();
-    view.grid_lines = 0;
     for (_, mut s, mut visibility, _) in objects.iter_mut() {
         s.shown = 0.0;
         s.symbol = false;
@@ -821,6 +830,57 @@ mod view_tests {
         (visibility, symbol, shown, display)
     }
 
+    fn icon_and_ring_colours(app: &mut App, root: Entity) -> (Color, Color) {
+        let mut icons = app.world_mut().query::<(&Icon, &ImageNode)>();
+        let (icon, image) = icons.iter(app.world()).find(|(i, _)| i.target == root).unwrap();
+        (image.color, app.world().get::<ImageNode>(icon.outline).unwrap().color)
+    }
+
+    #[test]
+    fn strategic_ring_tracks_owner_mark_and_preserves_custom_icon_tint() {
+        let mut app = rig(&world(&[unit(1, 0, 200.0, 0.0, 0.0)]), None, 2500.0);
+        let owned = app.world_mut().spawn((
+            Strategic::new(Shape::Arrow, Color::WHITE, 20.0),
+            UnitOwner(PlayerId(0)),
+            Transform::default(),
+            Visibility::Inherited,
+        )).id();
+        let custom = Color::srgb(0.8, 0.4, 0.2);
+        let static_root = app.world_mut().spawn((
+            Strategic::new(Shape::Square, custom, 20.0),
+            Transform::from_xyz(100.0, 0.0, 0.0),
+            Visibility::Inherited,
+        )).id();
+        let map_root = app.world_mut().spawn((
+            Strategic::new(Shape::Arrow, custom, 20.0),
+            SimEntity(EntityId(1)),
+            Transform::from_xyz(200.0, 0.0, 0.0),
+            Visibility::Inherited,
+        )).id();
+        app.update();
+        app.update();
+        let blue = Color::srgb(0.0, 0.0, 1.0);
+        assert_eq!(icon_and_ring_colours(&mut app, owned), (blue, blue));
+        assert_eq!(icon_and_ring_colours(&mut app, static_root), (custom, custom));
+        assert_eq!(icon_and_ring_colours(&mut app, map_root), (blue, blue));
+
+        app.world_mut().entity_mut(owned).insert(UnitOwner(PlayerId(1)));
+        app.update();
+        let red = Color::srgb(1.0, 0.0, 0.0);
+        assert_eq!(icon_and_ring_colours(&mut app, owned), (red, red));
+
+        let green = Color::srgb(0.0, 1.0, 0.0);
+        app.world_mut().resource_mut::<TeamColours>().0[2].1 = green;
+        app.update();
+        assert_eq!(icon_and_ring_colours(&mut app, owned), (green, green));
+        assert_eq!(icon_and_ring_colours(&mut app, static_root), (custom, custom));
+        assert_eq!(icon_and_ring_colours(&mut app, map_root), (blue, blue));
+
+        app.world_mut().entity_mut(owned).insert(UnitOwner(sta_sim::world::NEUTRAL));
+        app.update();
+        assert_eq!(icon_and_ring_colours(&mut app, owned), (Color::WHITE, Color::WHITE));
+    }
+
     #[test]
     fn static_roots_handoff_exclusively_at_projected_thresholds() {
         let mut app = rig(&world(&[]), None, 1600.0);
@@ -944,7 +1004,6 @@ mod view_tests {
         let lens: Vec<f32> = v.bars.iter().map(|b| b.length()).collect();
         assert_eq!(lens, vec![0.0, 120.0, 40.0]);
         assert!(v.bars.iter().all(|b| b.bottom.y == 0.0 && b.bottom.x == b.top.x));
-        assert_eq!(v.grid_lines, 50);
     }
 
     #[test]
@@ -1009,7 +1068,6 @@ mod view_tests {
         app.update();
         assert!(!view(&app).active);
         assert!(view(&app).icons.is_empty() && view(&app).bars.is_empty() && view(&app).folded.is_empty());
-        assert_eq!(view(&app).grid_lines, 0);
         assert_eq!(visible(&mut app, 1), Visibility::Inherited);
         assert_eq!(visible(&mut app, 2), Visibility::Inherited);
         let mut icons = app.world_mut().query::<(&Icon, &Node)>();
@@ -1167,7 +1225,6 @@ mod view_tests {
         }
         assert!(app.world().contains_resource::<crate::frontend::scene::MenuScene>());
         assert!(!view(&app).active, "no grid behind the menu");
-        assert_eq!(view(&app).grid_lines, 0);
         assert!(view(&app).icons.is_empty() && view(&app).bars.is_empty());
         // Icons that existed before the scene opened are the match's; the scene adds none.
         let before = icons(&mut app);

@@ -9,6 +9,7 @@
 //! map, PgUp/PgDn x10, WASD pan, middle-drag orbit, wheel zoom, R reset view.
 
 use crate::clock::AnimClock;
+use crate::game::flow::ActiveMatch;
 use crate::render::model_scene::{self, PartCache, SpawnCtx, to_bevy};
 use crate::render::sprites::SpriteTables;
 use crate::render::textures::{Loader, TextureCache};
@@ -177,11 +178,36 @@ impl Placed {
     }
 }
 
+/// The displayed radius of a producer planet without a model, before or after
+/// its map-linked pick ghost is rebuilt from the content definition.
+const PLANET_FALLBACK_RADIUS: f32 = 500.0;
+
+fn producer_pick_radius(def: &sta_content::UnitDef) -> f32 {
+    let radius = def.radius.to_f32();
+    if radius > 0.0 {
+        radius.max(5.0)
+    } else {
+        let scale = def.scale.to_f32();
+        PLANET_FALLBACK_RADIUS * if scale > 0.0 { scale } else { 1.0 }
+    }
+}
+
+fn linked_planet_pick_radius(def: &sta_content::UnitDef, displayed_radius: f32) -> Option<f32> {
+    matches!(def.planet_role, Some(sta_content::PlanetRole::Producer))
+        .then_some(displayed_radius.max(5.0))
+}
+
 /// The click radius of a sim object the map draws some other way (a planet, a resource node
 /// without a mesh of its own): its definition's `radius`, for a thing a player can mine or colonise (a resource node, a
 /// producer planet). `None` for scenery, background planets included.
 pub(crate) fn ghost_pick_radius(def: &sta_content::UnitDef) -> Option<f32> {
     let r = def.radius.to_f32();
+    if matches!(def.planet_role, Some(sta_content::PlanetRole::Background)) {
+        return None;
+    }
+    if matches!(def.planet_role, Some(sta_content::PlanetRole::Producer)) {
+        return Some(producer_pick_radius(def));
+    }
     if def.resource.is_some() {
         return Some(resource_pick_radius(r));
     }
@@ -192,7 +218,7 @@ pub(crate) fn ghost_pick_radius(def: &sta_content::UnitDef) -> Option<f32> {
     if def.class.0.eq_ignore_ascii_case("wormhole_obj") && r > 0.0 {
         return Some(r.max(5.0));
     }
-    (matches!(def.planet_role, Some(sta_content::PlanetRole::Producer)) && r > 0.0).then_some(r.max(5.0))
+    None
 }
 
 /// The radius a latinum nebula (a resource volume) is drawn as gas at, and so the
@@ -309,6 +335,22 @@ pub(crate) fn build_sim(
         debug!("{}: {}", w.file, w.message);
     }
     SimSide { warnings: converted.warnings.len() + spawn_warnings.len(), setup, sim, controllers, skirmish: plan, mission: None }
+}
+
+/// The setup screen already resolved every participant, team and option.
+fn build_instant_action(map: MapDef, content: Arc<ContentDb>, races: &sta_content::Races, selected: &ActiveMatch) -> SimSide {
+    let setup = GameSetup { map: Arc::new(map), content, ..selected.setup.clone() };
+    let (sim, warnings, controllers) = crate::game::start(&setup, races);
+    for warning in warnings.iter().take(20) {
+        debug!("{}: {}", warning.file, warning.message);
+    }
+    let race = selected.local.and_then(|id| setup.players.iter().find(|p| p.id == id)).map_or("observer", |p| p.race.as_str());
+    let skirmish = Some(Ok(crate::game::Seats {
+        players: setup.players.clone(),
+        local: crate::game::local_race(races, race),
+        summary: format!("instant action: {} map seats, {}", setup.players.len(), selected.local.map_or_else(|| "observing".into(), |id| format!("playing seat {}", id.0))),
+    }));
+    SimSide { setup, sim, warnings: warnings.len(), controllers, skirmish, mission: None }
 }
 
 /// The seats of a map: every owner and start slot, and the one the client plays.
@@ -482,6 +524,7 @@ type MapState<'w> = (
     ResMut<'w, Assets<crate::render::planet::PlanetMaterial>>,
     Res<'w, MapSeat>,
     Option<Res<'w, crate::game::SkirmishCfg>>,
+    Option<Res<'w, ActiveMatch>>,
     Option<Res<'w, crate::game::mission_host::MissionLaunch>>,
     Option<Res<'w, crate::render::profile::RenderProfile>>,
     Option<Res<'w, crate::render::profile::ProfileEffects>>,
@@ -545,6 +588,7 @@ impl Plugin for MapPlugin {
                     crate::viewer::orbit_camera.run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free),
                     radar_camera,
                     spin,
+                    crate::render::spin::turn,
                     sky_follows_camera,
                     hud,
                     hud_toggle,
@@ -681,13 +725,13 @@ fn setup(mut commands: Commands) {
 /// Camera distance a skirmish opens at, over the player's start.
 const START_DIST: f32 = 2500.0;
 
-fn input(keys: Res<ButtonInput<KeyCode>>, mut browser: ResMut<MapBrowser>, mut orbit: Query<&mut Orbit>, skirmish: Option<Res<crate::game::SkirmishCfg>>) {
+fn input(keys: Res<ButtonInput<KeyCode>>, mut browser: ResMut<MapBrowser>, mut orbit: Query<&mut Orbit>, skirmish: Option<Res<crate::game::SkirmishCfg>>, instant: Option<Res<ActiveMatch>>) {
     let n = browser.maps.len() as isize;
     if n == 0 {
         return;
     }
     // A match stays on its map: the browser's keys are the map viewer's.
-    let browsing = skirmish.is_none();
+    let browsing = skirmish.is_none() && instant.is_none();
     let step = [
         (KeyCode::ArrowRight, 1),
         (KeyCode::ArrowLeft, -1),
@@ -709,15 +753,16 @@ fn input(keys: Res<ButtonInput<KeyCode>>, mut browser: ResMut<MapBrowser>, mut o
     }
 }
 
-/// A click or drag on the radar puts the camera over that map point.
+/// A click or drag on the radar puts the camera over that map point, when the point is inside
+/// the map's rectangle (a strip beside a non-square map does nothing).
 fn radar_click(
     mut clicks: MessageReader<crate::ui::radar::RadarClick>,
     limits: Res<CameraLimits>,
     mut q: Query<&mut Orbit>,
 ) {
-    let Some(c) = clicks.read().filter(|c| c.button == bevy::picking::pointer::PointerButton::Primary).last() else { return };
+    let Some(at) = clicks.read().filter_map(crate::ui::radar::camera_point).last() else { return };
     for mut o in &mut q {
-        let at = Vec3::new(c.at.x, 0.0, -c.at.y);
+        let at = Vec3::new(at.x, 0.0, -at.y);
         o.focus = at.clamp(limits.lo, limits.hi);
     }
 }
@@ -847,7 +892,7 @@ fn rebuild(
     lighting: Lighting,
 ) {
     let (mut silhouettes, mut ambient, mut lights) = lighting;
-    let (mut particles, mut selection, mut queue, mut clock, mut limits, mut planet_materials, seat, skirmish_cfg, mission_launch, profile, profile_effects, mut net) = state;
+    let (mut particles, mut selection, mut queue, mut clock, mut limits, mut planet_materials, seat, skirmish_cfg, instant, mission_launch, profile, profile_effects, mut net) = state;
     let gas_volumes = crate::render::stock::nebula::volumetric(profile.as_deref(), profile_effects.as_deref());
     if !browser.dirty {
         return;
@@ -890,6 +935,10 @@ fn rebuild(
     // A match from the multiplayer lobby (INT-M5): the sim is the host's `Start` over this
     // machine's own copy of the map, refused unless it is the host's map.
     let mut net_match = net.take();
+    let instant = instant.filter(|_| mission_launch.is_none() && net_match.is_none());
+    if let Some(active) = &instant {
+        clock.set_match_speed(active.speed);
+    }
     // The game plays with the tech tree its map names (`techTreeFilename`); a tree the install lacks
     // leaves the default one, with a log line.
     let content = with_map_tech_tree(content, &vfs.0, &map.tech_tree_file, &name, net_match.is_some());
@@ -911,10 +960,16 @@ fn rebuild(
         }
         None => None,
     };
-    let SimSide { setup, sim, warnings: sim_warnings, controllers, skirmish, mission } = match (side, mission_launch.as_deref()) {
-        (Some(side), _) => side,
-        (None, Some(launch)) => build_mission_sim(&map, &name, &content, &index, &vfs.0, &races, launch),
-        (None, None) => build_sim(&map, &name, &content, &index, &vfs.0, seat.0, skirmish_cfg.as_deref().map(|c| (c, &*races))),
+    let SimSide { setup, sim, warnings: sim_warnings, controllers, skirmish, mission } = match (side, mission_launch.as_deref(), instant.as_deref()) {
+        (Some(side), _, _) => side,
+        (None, Some(launch), _) => build_mission_sim(&map, &name, &content, &index, &vfs.0, &races, launch),
+        (None, None, Some(active)) => {
+            let converted = MapDef::convert_bzn_named_in(&map, &name, &content, &vfs.0, &index);
+            let mut side = build_instant_action(converted.map, content.clone(), &races, active);
+            side.warnings += converted.warnings.len();
+            side
+        }
+        (None, None, None) => build_sim(&map, &name, &content, &index, &vfs.0, seat.0, skirmish_cfg.as_deref().map(|c| (c, &*races))),
     };
     let mut skirmish_note = None;
     let mut played_race = None;
@@ -968,9 +1023,12 @@ fn rebuild(
             if let Some(mut st) = w.get_resource_mut::<crate::ui::radar::RadarState>() {
                 st.map = Some(crate::ui::radar::RadarMap::of_bounds(rlo, rhi));
                 st.map_fixed = true;
+                st.bounds = Some((rlo, rhi));
             }
         });
         commands.insert_resource(crate::ui::hud::ghost::PlacementBounds(Some((lo, hi))));
+        // The map grid's first mode per view, from the mounted `RTS_CFG.h` (a new match starts from it again).
+        commands.insert_resource(crate::render::map_grid::GridModes::from_cfg(sta_content::layered::cfg_h(&vfs.0, "RTS_CFG.h").as_ref()));
         commands.insert_resource(crate::render::fog::FogBounds {
             min: Vec2::new(lo.x.to_f32(), lo.z.to_f32()),
             max: Vec2::new(hi.x.to_f32(), hi.z.to_f32()),
@@ -980,6 +1038,11 @@ fn rebuild(
     // what the renderer reads that the sim's database does not carry.
     let star_odf = map.starfield_odf.trim_end_matches(".odf").trim_end_matches(".ODF").to_owned();
     let db = Arc::new(catalogue.legacy.db(&vfs.0, map.objects.iter().map(|o| o.odf.as_str()).chain([star_odf.as_str()])));
+    // The minimap's regions and scenery. Prefer definitions with SOD geometry attached.
+    let armada1_radar = content.profile() == sta_content::Profile::Sta1Classic || sta_content::profile::a1_compat(&vfs.0);
+    commands.insert_resource(crate::ui::radar_layers::RadarStatics::of_map(&map, armada1_radar, |name| {
+        content.key(name).and_then(|key| content.unit(key)).or_else(|| db.key(name).and_then(|key| db.unit(key)))
+    }));
     let formats = device
         .map(|d| CompressedImageFormats::from_features(d.features()))
         .unwrap_or(CompressedImageFormats::BC);
@@ -987,10 +1050,10 @@ fn rebuild(
     ambient.color = Color::srgb(a[0].clamp(0.0, 1.0), a[1].clamp(0.0, 1.0), a[2].clamp(0.0, 1.0));
     ambient.brightness = 250.0;
 
-    let neutral = teams.0.first().map(|t| t.1).unwrap_or(Color::WHITE);
+    let neutral = teams.team_colour(0).unwrap_or(Color::WHITE);
     // The map's own team colours (Armada I maps with a team table) apply where the player picked none:
     // not in a skirmish, whose set-up is the player's pick. A mission or the map view takes the map's.
-    let map_team_colours = set_map_team_colours(&mut commands, &map, skirmish_cfg.is_some());
+    let map_team_colours = set_map_team_colours(&mut commands, &map, skirmish_cfg.is_some() || instant.is_some());
     let root = commands.spawn((MapRoot,
         crate::ui::hud::object_footprints::MapFootprintRegions(map_def.clone()),
         Transform::IDENTITY, Visibility::default())).id();
@@ -1004,6 +1067,9 @@ fn rebuild(
     let mut gas = std::collections::BTreeMap::<String, NebulaClass>::new();
     let mut stock_nebulae = Vec::new();
     let mut hidden = 0usize;
+    // The planet renderer may know a body radius that the sim definition does
+    // not (notably its model-less fallback). Keep it for the separate pick ghost.
+    let mut planet_pick_radii = HashMap::<EntityId, f32>::new();
 
     for o in &map.objects {
         let sim_key = content.key(&o.odf).filter(|&k| content.unit(k).is_some());
@@ -1029,7 +1095,7 @@ fn rebuild(
             let key = o.odf.to_ascii_lowercase();
             let entry = gas.entry(key.clone()).or_insert_with(|| {
                 let latinum = odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("latinum"));
-                let radius = if latinum { FIELD_RADIUS } else { odf.f32("effectRadius").filter(|r| *r > 10.0 && *r < 5000.0).unwrap_or(300.0) };
+                let radius = if latinum { FIELD_RADIUS } else { crate::ui::radar_layers::nebula_radius(odf) };
                 (crate::render::nebula::recipe(&vfs.0, &key), radius, Vec::new())
             });
             if entry.0.is_some() {
@@ -1071,7 +1137,7 @@ fn rebuild(
             let mut rng = Lcg(o.entity_id as u32 as u64 ^ 0x9e37_79b9_7f4a_7c15);
             let (lo, hi) = (odf.i64("minAsteroids").unwrap_or(3).max(0), odf.i64("maxAsteroids").unwrap_or(6).max(0));
             let count = lo + ((hi - lo + 1) as f32 * rng.next()) as i64;
-            let radius = odf.f32("fieldRadius").unwrap_or(200.0);
+            let radius = crate::ui::radar_layers::field_radius(odf);
             let scale = odf.f32("ScaleSOD").or_else(|| odf.f32("scaleSOD")).filter(|s| *s > 0.0).unwrap_or(1.0);
             let orbit = odf.f32("orbitingSpeed").unwrap_or(0.0).to_radians();
             let tumble = odf.f32("rotationSpeed").unwrap_or(0.0);
@@ -1138,15 +1204,23 @@ fn rebuild(
                 .model(&vfs.0, &def.model)
                 .and_then(|(_, m)| m.bounds())
                 .map(|(lo, hi)| (Vec3::from(hi) - Vec3::from(lo)).max_element() * 0.5)
-                .unwrap_or(500.0)
+                .unwrap_or(PLANET_FALLBACK_RADIUS)
                 * scale;
             let ground = odf.str("groundTextureName").unwrap_or("").to_owned();
             let atmo = odf.str("atmosphereTextureName").filter(|a| !a.is_empty()).unwrap_or("PA_ECFR0").to_owned();
-            let entity = commands.spawn((to_bevy(&Matrix34 { m: o.transform }), Visibility::default(), ChildOf(root))).id();
+            let planet_tf = to_bevy(&Matrix34 { m: o.transform });
+            let entity = commands.spawn((planet_tf, Visibility::default(), ChildOf(root))).id();
+            // The body turns about its own vertical axis on game time (#1047, visual only).
+            if let Some(rate) = crate::render::spin::planet_turn(crate::render::spin::object_key(o.entity_id, [o.transform[9], o.transform[10], o.transform[11]]), odf.f32("rotationSpeed")) {
+                commands.entity(entity).insert(crate::render::spin::Turn { base: planet_tf.rotation, axis: Vec3::Y, rate });
+            }
             // The sim's planet at this place gives the body its cities (RND-12); the ghost entity that stands for
             // it (below) stays, as nothing here takes it.
             if let Some(id) = sim_key.and_then(|k| placed.peek(k, o)) {
                 commands.entity(entity).insert(crate::render::planet::PlanetColony(id));
+                if let Some(pick) = sim_key.and_then(|k| content.unit(k)).and_then(|d| linked_planet_pick_radius(d, radius)) {
+                    planet_pick_radii.insert(id, pick);
+                }
             }
             let mut loader = Loader {
                 vfs: &vfs.0,
@@ -1181,7 +1255,7 @@ fn rebuild(
         }
         // A stock nebula drawn as billboards: its puffs fade near and behind others.
         if odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("nebula_obj")) {
-            let radius = odf.f32("effectRadius").filter(|r| *r > 10.0 && *r < 5000.0).unwrap_or(300.0);
+            let radius = crate::ui::radar_layers::nebula_radius(odf);
             commands.entity(entity).insert(crate::render::nebula::NebulaBoards { radius });
         }
         let units_before = units;
@@ -1250,7 +1324,9 @@ fn rebuild(
             scale,
             diffuse_tint: false,
         };
-        let stats = model_scene::spawn(&mut ctx, &model, entity);
+        // A resource rock's model turns on a pivot below the object, which `render::units::place` leaves alone.
+        let under = crate::render::spin::rock_pivot(ctx.commands, entity, &class, odf.f32("rotationSpeed"), crate::render::spin::object_key(o.entity_id, [o.transform[9], o.transform[10], o.transform[11]]));
+        let stats = model_scene::spawn(&mut ctx, &model, under);
         // An Armada I planet's nimbus (`planets.spr`), looked up by the planet's model name.
         if class == "planet_obj" {
             model_scene::spawn_planet_nimbus(&mut ctx, &def.model, entity);
@@ -1424,7 +1500,7 @@ fn rebuild(
         // A planet or a resource node the renderer draws some other way is still clicked for its
         // info and as a mining target: its pick body comes from the data, not from a mesh.
         if let Some(u) = ghost_view.unit(id)
-            && let Some(r) = content.unit(u.def).and_then(ghost_pick_radius)
+            && let Some(r) = planet_pick_radii.get(&id).copied().or_else(|| content.unit(u.def).and_then(ghost_pick_radius))
         {
             ghost.insert((Transform::from_translation(crate::render::units::to_bevy(u.pos.to_f32())), SelectRadius(r)));
         }
@@ -1443,13 +1519,12 @@ fn rebuild(
             }
             Err(why) => net_error = Some(why),
         },
-        None => crate::capture::arm(
-            &mut commands,
-            SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), seat_player.unwrap_or(PlayerId::BENCH)).with_controllers(controllers),
-            &setup,
-            is_match,
-            &vfs.0,
-        ),
+        None => {
+            let link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), seat_player.unwrap_or(PlayerId::BENCH)).with_controllers(controllers)
+                .with_match_fog_lifted(instant.as_ref().is_some_and(|active| active.fog.lifted().0));
+            let link = if instant.as_ref().is_some_and(|active| active.local.is_none()) { link.with_observer() } else { link };
+            crate::capture::arm(&mut commands, link, &setup, is_match, &vfs.0);
+        }
     }
 
     missing.sort();
@@ -1541,11 +1616,11 @@ fn fps(
     }
 }
 
-fn hud(browser: Res<MapBrowser>, skirmish: Option<Res<crate::game::SkirmishCfg>>, mut q: Query<&mut Text, With<MapHud>>) {
+fn hud(browser: Res<MapBrowser>, skirmish: Option<Res<crate::game::SkirmishCfg>>, instant: Option<Res<ActiveMatch>>, mut q: Query<&mut Text, With<MapHud>>) {
     if !browser.is_changed() {
         return;
     }
-    let keys = if skirmish.is_some() { "" } else { "Left/Right map  PgUp/PgDn x10  " };
+    let keys = if skirmish.is_some() || instant.is_some() { "" } else { "Left/Right map  PgUp/PgDn x10  " };
     for mut t in &mut q {
         t.0 = format!(
             "STA64 {} map view\n{}\n\n{}\n\nleft click/drag select (Shift adds)  right click move  Space stop\n\
@@ -1562,10 +1637,11 @@ fn hud(browser: Res<MapBrowser>, skirmish: Option<Res<crate::game::SkirmishCfg>>
 fn hud_toggle(
     keys: Res<ButtonInput<KeyCode>>,
     skirmish: Option<Res<crate::game::SkirmishCfg>>,
+    instant: Option<Res<ActiveMatch>>,
     mut shown: Local<Option<bool>>,
     mut q: Query<&mut Visibility, With<MapHud>>,
 ) {
-    let shown = shown.get_or_insert(skirmish.is_none());
+    let shown = shown.get_or_insert(skirmish.is_none() && instant.is_none());
     if keys.just_pressed(KeyCode::F11) {
         *shown = !*shown;
     }
@@ -1582,6 +1658,46 @@ mod a1_start_tests;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn instant_action_applies_the_full_roster_and_starting_options_for_play_and_observe() {
+        use super::*;
+        use crate::frontend::screens::{ScreenData, SeatControl, SetupDraft};
+        use sta_content::{Rules, StartingResources};
+        use sta_sim::WorldSource;
+
+        let mut data = ScreenData::fake();
+        let rules = Rules::from_header(r#"
+            int MP_OFFICER_LIST_SIZE = 2;
+            Officer MP_OFFICER_LIMIT[2] = { "ol_normal", 600, "ol_small", 300 };
+        "#).0;
+        data.content = Arc::new((*data.content).clone().with_rules(rules));
+        for observing in [false, true] {
+            let mut draft = SetupDraft::new(&data);
+            draft.set_map(&data, 1);
+            draft.select_control(2, SeatControl::Human);
+            draft.set_observing(observing);
+            draft.seats[3].team = 1;
+            draft.options.starting_resources = StartingResources::Lots;
+            draft.options.officer_limit = 1;
+            let setup = draft.to_setup(&data).unwrap();
+            let local = (!observing).then_some(PlayerId(2));
+            let active = ActiveMatch { setup, local, speed: Default::default(), fog: Default::default(), requested: true, frames: 0 };
+            let side = build_instant_action((*active.setup.map).clone(), data.content.clone(), &data.races, &active);
+            assert_eq!(side.setup.players, active.setup.players);
+            assert_eq!(side.setup.options, active.setup.options);
+            let view = side.sim.view();
+            assert_eq!(side.controllers.len(), if observing { 4 } else { 3 });
+            assert_eq!(view.players.len(), 4);
+            assert_eq!(view.player(PlayerId(3)).unwrap().team, TeamId(1));
+            let loadout = data.races.loadout_with_mode(&data.content, "fx", StartingResources::Lots);
+            for p in &view.players {
+                assert_eq!(p.officers[1], Fixed::from_int(300));
+                assert_eq!(p.resources[0], loadout.stock[0]);
+                assert!(view.units.iter().any(|u| u.owner == p.id));
+            }
+        }
+    }
+
     /// A map's tree is loaded for a local game; a lobby match keeps the default content (the
     /// same `Arc`) so the HUD agrees with the host's sim. Content rebuilt from the same map and
     /// name has the same digest (a save of such a game reloads against it).
@@ -1752,6 +1868,22 @@ mod tests {
         assert_eq!(ghost_pick_radius(&planet), None, "a backdrop planet is scenery");
     }
 
+    #[test]
+    fn model_less_colonizable_producer_uses_its_displayed_planet_radius_for_picking() {
+        let mut planet = sta_content::UnitDef::new("colony_planet", "planet");
+        planet.planet_role = Some(sta_content::PlanetRole::Producer);
+        planet.planet_colonizable = true;
+        planet.scale = Fixed::from_f64(0.5);
+        assert_eq!(planet.radius, Fixed::ZERO);
+        let displayed = PLANET_FALLBACK_RADIUS * 0.5;
+        assert_eq!(linked_planet_pick_radius(&planet, displayed), Some(displayed));
+        assert_eq!(ghost_pick_radius(&planet), Some(displayed), "a rebuilt ghost keeps the fallback radius");
+
+        planet.planet_role = Some(sta_content::PlanetRole::Background);
+        assert_eq!(linked_planet_pick_radius(&planet, displayed), None);
+        assert_eq!(ghost_pick_radius(&planet), None, "background planets remain scenery");
+    }
+
     /// A latinum nebula (no model extent) and a dilithium moon, seen from tilted cameras (the pick is a ray test, so the
     /// window shape cannot matter; the HUD's hit area is ruled out by the capture): a ray through the centre and inside the edge picks the node, one just outside
     /// does not.
@@ -1884,7 +2016,7 @@ mod tests {
                     wanted += 1;
                     // A resource marker is placed as its moon (`MapDef::convert_bzn`).
                     let moons = sta_content::map::moon_variants(&db, db.unit(k).unwrap(), &mut |n| {
-                        sta_odf::resolve_layered(n, &mut |n, v| index.load(&vfs, n, v)).ok().map(Arc::new)
+                        sta_content::odf::resolve_exact_for_profile(n, db.profile(), &mut |n, v| index.load(&vfs, n, v)).ok().map(Arc::new)
                     });
                     let k = moons.get(o.entity_id as u64 as usize % moons.len().max(1)).copied().unwrap_or(k);
                     found += usize::from(placed.take(k, o).is_some());

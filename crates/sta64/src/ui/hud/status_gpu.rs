@@ -87,7 +87,7 @@ fn text(
     stock: bool,
 ) {
     let style = SpriteTextStyle::default().centered().wrapped(r.w);
-    let style = if stock { style.stock_label() } else { style };
+    let style = if stock { style.stock_fallback() } else { style };
     let wrapper = commands
         .spawn((
             Node {
@@ -1201,6 +1201,7 @@ mod tests {
             player: PlayerId(1),
             selected: vec![EntityId(7)],
             content: None,
+            production: Vec::new(),
             names: Default::default(),
         });
         app.insert_resource(StatusFeed {

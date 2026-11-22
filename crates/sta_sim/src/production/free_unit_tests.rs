@@ -1,7 +1,7 @@
 //! The free unit of a mining station ([`super::super::free_unit`]), on authored data.
 
 use super::*;
-use sta_content::LaunchPoint;
+use sta_content::{LaunchPoint, StationMining};
 
 const STATION_CREW: i32 = 200;
 const FREE_CREW: i32 = 50;
@@ -23,6 +23,7 @@ fn content_free(free: Option<&str>, dock: bool) -> Arc<ContentDb> {
             if dock {
                 u.dock = Some(LaunchPoint {
                     offset: (Fixed::ZERO, Fixed::from_int(30)),
+                    height: Fixed::ZERO,
                     dir: (Fixed::ONE, Fixed::ZERO),
                     clear: Fixed::from_int(60),
                     node: Some("dock".into()),
@@ -66,6 +67,48 @@ fn built_station(content: Arc<ContentDb>) -> (Sim, EntityId) {
 fn miners(sim: &Sim) -> Vec<EntityId> {
     let k = key(sim, "fx_miner");
     sim.units.iter().filter(|e| e.def == k).map(|e| e.id).collect()
+}
+
+fn content_with_mining_mask(mask: [bool; 4]) -> Arc<ContentDb> {
+    let base = content_free(Some("fx_miner"), true);
+    let mut b = ContentDb::builder().profile(base.profile()).features(base.features().clone());
+    for w in base.weapons() {
+        b = b.weapon(w.clone());
+    }
+    for u in base.units() {
+        let mut u = u.clone();
+        if u.odf == "fx_station" {
+            u.station_mining = Some(StationMining { multiplier: None, can_handle: Some(mask) });
+        }
+        b = b.unit(u);
+    }
+    let mut metal = UnitDef::new("fx_metal_moon", "planet");
+    metal.resource = Some(2);
+    Arc::new(b.unit(metal).build().unwrap())
+}
+
+#[test]
+fn free_freighter_seeks_nearest_resource_the_station_accepts() {
+    let (mut sim, station) = built_station(content_with_mining_mask([false, false, true, false]));
+    let db = sim.content().unwrap().clone();
+    let heading = (Fixed::ZERO, Fixed::ONE);
+    let near_dilithium = sim.spawn_def(db.key("fx_moon").unwrap(), PlayerId(255), v(100, 0), heading).unwrap();
+    let far_metal = sim.spawn_def(db.key("fx_metal_moon").unwrap(), PlayerId(255), v(500, 0), heading).unwrap();
+    assert!(near_dilithium < far_metal);
+    sim.step(&[]);
+    let miner = miners(&sim)[0];
+    assert!(sim.economy.is_mining(miner));
+    assert!(sim.economy.to_rec().miners.iter().any(|row| row.0 == miner.0 && row.1 == far_metal.0));
+    assert_eq!(sim.unit(station).unwrap().progress, None);
+}
+
+#[test]
+fn free_freighter_stays_idle_for_an_authored_empty_resource_mask() {
+    let (mut sim, _) = built_station(content_with_mining_mask([false; 4]));
+    let db = sim.content().unwrap().clone();
+    sim.spawn_def(db.key("fx_moon").unwrap(), PlayerId(255), v(100, 0), (Fixed::ZERO, Fixed::ONE)).unwrap();
+    sim.step(&[]);
+    assert!(!sim.economy.is_mining(miners(&sim)[0]));
 }
 
 #[test]

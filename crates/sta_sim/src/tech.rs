@@ -39,6 +39,7 @@ pub struct Owned<'a> {
     race: String,
     /// Other seats on the player's team, ascending.
     allies: Vec<PlayerId>,
+    exclude: Option<EntityId>,
 }
 
 impl<'a> Owned<'a> {
@@ -55,7 +56,12 @@ impl<'a> Owned<'a> {
             .filter(|s| s.0 != player && Some(s.1) == team)
             .map(|s| s.0)
             .collect();
-        Owned { db, units, player, race: race.to_ascii_lowercase(), allies }
+        Owned { db, units, player, race: race.to_ascii_lowercase(), allies, exclude: None }
+    }
+
+    fn excluding(mut self, id: Option<EntityId>) -> Self {
+        self.exclude = id;
+        self
     }
 }
 
@@ -69,6 +75,13 @@ impl TechState for Owned<'_> {
         self.units
             .iter()
             .filter(|e| e.owner == self.player && e.def == key && finished(e))
+            .count() as u32
+    }
+
+    fn capacity_count(&self, odf: &str) -> u32 {
+        let Some(key) = self.db.key(odf) else { return 0 };
+        self.units.iter()
+            .filter(|e| Some(e.id) != self.exclude && e.owner == self.player && e.def == key && finished(e))
             .count() as u32
     }
 
@@ -101,6 +114,32 @@ pub(crate) fn build_allowed(
     let Some(name) = db.name(what) else { return false };
     let state = Owned::new(db, units, seats, b.owner, race);
     matches!(tree.availability_for_builder(db, name, db.name(b.def).unwrap_or(""), &state, ai_seats.contains(&b.owner)), Availability::Available)
+}
+
+/// Replacement checks tech and fleet capacity independently. The projected
+/// census omits the retiring source; a source kept as a parent still counts.
+#[allow(clippy::too_many_arguments)] // the replacement inputs, kept as separate seams
+pub(crate) fn replacement_allowed(
+    db: &ContentDb, units: &Entities, seats: &[(PlayerId, TeamId)], ai_seats: &[PlayerId],
+    source: EntityId, what: ContentKey, ignore_tech: bool, ignore_cap: bool,
+    keep_source: bool, reverse_tech: bool,
+) -> (bool, bool) {
+    let Some(tree) = db.tech_tree() else { return (true, true) };
+    let Some(b) = units.get(source) else { return (false, false) };
+    let race = db.unit(b.def).map_or("", |d| d.race.as_str());
+    let Some(name) = db.name(what) else { return (false, false) };
+    let Some(builder) = db.name(b.def) else { return (false, false) };
+    let state = Owned::new(db, units, seats, b.owner, race).excluding((!keep_source).then_some(source));
+    let ai = ai_seats.contains(&b.owner);
+    let capacity = ignore_cap || tree.capacity_available_for(db, name, &state);
+    let tech = ignore_tech || if reverse_tech || ignore_cap {
+        tree.availability_for_builder_without_capacity(db, name, builder, &state, ai).is_available()
+    } else {
+        // Keep XML logic groups intact: tech and capacity must hold in the
+        // same alternative group, not independently in different groups.
+        tree.availability_for_builder(db, name, builder, &state, ai).is_available()
+    };
+    (tech, capacity)
 }
 
 #[cfg(test)]

@@ -13,8 +13,8 @@ use sta_sim::Sim;
 use sta_sim::command::LocalRouter;
 
 use super::flow::*;
-use super::{LocalRace, SkirmishCfg};
-use crate::app::{AppState, Opponent, configure_sets};
+use super::LocalRace;
+use crate::app::{AppState, configure_sets};
 use crate::audio::{Call, CallLog, Mixer, MusicConfig, MusicContext, NullAudio};
 use crate::frontend::loading::{LoadProgress, LoadingPlugin};
 use crate::frontend::scene::{MenuMap, MenuScene, MenuSceneConfig, MenuSceneCorePlugin};
@@ -25,12 +25,13 @@ use crate::ui::theme::click;
 
 /// The map view's part, as a stand-in: once the build is asked for and the menu
 /// scene is gone, make the sim from the setup and link it.
-fn build_match(mut commands: Commands, active: Res<ActiveMatch>, link: Option<Res<SimLink>>, scene: Option<Res<MenuScene>>, cfg: Res<SkirmishCfg>) {
+fn build_match(mut commands: Commands, active: Res<ActiveMatch>, link: Option<Res<SimLink>>, scene: Option<Res<MenuScene>>) {
     if !active.requested || link.is_some() || scene.is_some() {
         return;
     }
     let (sim, _) = Sim::from_setup_with_warnings(&active.setup);
-    commands.insert_resource(SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), sta_sim::PlayerId(cfg.seat)));
+    let link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), active.local.unwrap_or(sta_sim::PlayerId::BENCH));
+    commands.insert_resource(if active.local.is_none() { link.with_observer() } else { link });
     commands.insert_resource(LocalRace { name: "built".into(), interface: None, interface_sprites: None, music: Vec::new() });
 }
 
@@ -53,7 +54,7 @@ fn app() -> (App, CallLog) {
         .insert_resource(MusicConfig { menu: vec!["audio-test:100".into()], calm: vec!["audio-test:200".into()], ..default() })
         .insert_resource(crate::clock::AnimClock::new(crate::clock::ClockMode::Wall, 0))
         .add_plugins((FlowPlugin, crate::sim_link::SimLinkPlugin, MenuSceneCorePlugin, ScreensPlugin, LoadingPlugin, crate::audio::AudioPlugin::default(), crate::input::InputPlugin, crate::ui::hud::HudPlugin))
-        .add_systems(Update, build_match.run_if(resource_exists::<ActiveMatch>).run_if(resource_exists::<SkirmishCfg>));
+        .add_systems(Update, build_match.run_if(resource_exists::<ActiveMatch>));
     (app, log)
 }
 
@@ -118,10 +119,9 @@ fn front_end_to_match_and_back() {
     settle(&mut app, 30); // every match system runs with the match's resources, no error handler panic
 
     // In the match: built from the setup's seats and map, menu screens gone, game music.
-    let cfg = app.world().resource::<SkirmishCfg>().clone();
-    assert_eq!(cfg.seat, want.players.iter().find(|p| p.control == sta_sim::setup::Control::Human).unwrap().id.0);
-    assert_eq!(cfg.opponent, Opponent::Skirmish);
-    assert_eq!(app.world().resource::<MapSeat>().0, Some(cfg.seat));
+    let player = want.players.iter().find(|p| p.control == sta_sim::setup::Control::Human).unwrap().id;
+    assert_eq!(app.world().resource::<ActiveMatch>().local, Some(player));
+    assert_eq!(app.world().resource::<MapSeat>().0, Some(player.0));
     let link = app.world().resource::<SimLink>();
     assert_eq!(link.curr().players.len(), want.players.len());
     assert!(app.world_mut().query::<&ScreenRoot>().iter(app.world()).next().is_none());
@@ -135,12 +135,11 @@ fn front_end_to_match_and_back() {
     assert_eq!(state(&app), AppState::FrontEnd);
     assert_eq!(screen(&app), Screen::Main);
     assert!(!app.world().contains_resource::<ActiveMatch>());
-    assert!(!app.world().contains_resource::<SkirmishCfg>());
     assert!(!app.world().contains_resource::<LocalRace>());
     assert!(!app.world().contains_resource::<crate::viewer::MapTeamColours>(), "the map's team colours end with the match");
     assert_eq!(app.world().resource::<MapSeat>().0, None);
     assert!(app.world().contains_resource::<MenuScene>(), "the scene is open again");
-    assert!(app.world().resource::<SimLink>().player() != sta_sim::PlayerId(cfg.seat), "only the scene's link is left");
+    assert!(app.world().resource::<SimLink>().player() != player, "only the scene's link is left");
     assert_eq!(*app.world().resource::<MusicContext>(), MusicContext::Menu);
     assert_eq!(plays(&log).last().map(String::as_str), Some("audio-test:100"));
 
@@ -164,21 +163,57 @@ fn front_end_to_match_and_back() {
 }
 
 #[test]
-fn a_setup_without_a_human_does_not_start() {
-    use crate::ui::notices::Notice;
+fn instant_action_applies_the_chosen_palette_and_restores_the_mount() {
+    use crate::viewer::{TeamColours, owner_hull_colour, owner_mark_colour};
+    use sta_sim::PlayerId;
+
+    let (mut app, _) = app();
+    let original = app.world().resource::<ScreenData>().colours.clone();
+    let first = original.owner_colour(PlayerId(0));
+    let second = original.owner_colour(PlayerId(1));
+    app.insert_resource(original);
+    settle(&mut app, 4);
+    press(&mut app, Act::Goto(Screen::Setup));
+    press(&mut app, Act::PickTeamColour(1));
+    press(&mut app, Act::Launch);
+    settle(&mut app, 50);
+    assert_eq!(state(&app), AppState::InGame);
+    let palette = app.world().resource::<TeamColours>();
+    assert_eq!(owner_hull_colour(Some(palette), None, PlayerId(0)), second);
+    assert_eq!(owner_mark_colour(Some(palette), None, PlayerId(1)), first);
+    let active = app.world().resource::<ActiveMatch>();
+    assert_ne!(active.setup.players[0].team, active.setup.players[1].team);
+    app.world_mut().write_message(LeaveMatch);
+    settle(&mut app, 4);
+    let restored = app.world().resource::<TeamColours>();
+    assert_eq!(restored.owner_colour(PlayerId(0)), first);
+    assert_eq!(restored.owner_colour(PlayerId(1)), second);
+}
+
+#[test]
+fn observer_starts_without_taking_any_of_the_four_map_seats() {
     let (mut app, _) = app();
     settle(&mut app, 4);
-    let setup = ScreenData::fake();
-    let mut s = crate::frontend::screens::SetupDraft::new(&setup);
-    for seat in &mut s.seats {
-        seat.control = crate::frontend::screens::SeatControl::Computer;
+    let data = ScreenData::fake();
+    let mut draft = crate::frontend::screens::SetupDraft::new(&data);
+    draft.set_map(&data, 1);
+    draft.set_observing(true);
+    let setup = draft.to_setup(&data).expect("observer setup");
+    assert_eq!(setup.players.len(), 4);
+    assert!(setup.players.iter().all(|p| matches!(p.control, sta_sim::setup::Control::Ai(_))));
+    app.world_mut().write_message(crate::frontend::screens::StartGame(setup, crate::clock::MatchSpeed::Normal, None, Default::default()));
+    for _ in 0..200 {
+        app.update();
+        if state(&app) == AppState::InGame {
+            break;
+        }
     }
-    let setup = s.to_setup(&setup).expect("setup");
-    assert!(skirmish_of(&setup).is_err());
-    app.world_mut().write_message(crate::frontend::screens::StartGame(setup));
-    settle(&mut app, 3);
-    assert_eq!(state(&app), AppState::FrontEnd);
-    let _ = app.world().resource::<Messages<Notice>>();
+    assert_eq!(state(&app), AppState::InGame);
+    assert_eq!(app.world().resource::<ActiveMatch>().local, None);
+    assert_eq!(app.world().resource::<MapSeat>().0, None);
+    let link = app.world().resource::<SimLink>();
+    assert!(link.is_observer());
+    assert_eq!(link.curr().players.len(), 4);
 }
 
 /// Every request that reached the mixer's queue, for a test to read.

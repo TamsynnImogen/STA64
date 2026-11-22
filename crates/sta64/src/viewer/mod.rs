@@ -65,13 +65,22 @@ sona = 0.8 0.8 0.8
 alien = 0.8 0.8 0.8
 ";
 
-/// Team colours from `teamcolor.odf` ([`TEAMCOLOR_PATHS`]), in file order: neutral,
-/// teams 1-8, then race colours. The stock palette ([`STOCK_TEAMCOLOR`]) when absent.
+/// Team colours from `teamcolor.odf` ([`TEAMCOLOR_PATHS`]), in file order.
+/// The stock palette ([`STOCK_TEAMCOLOR`]) is used when the file is absent.
 /// The hull shader multiplies lit texels by the colour, as the engine does.
-#[derive(Resource)]
+#[derive(Resource, Clone, Debug)]
 pub struct TeamColours(pub Vec<(String, Color)>);
 
+impl Default for TeamColours {
+    fn default() -> Self {
+        Self(Self::parse(STOCK_TEAMCOLOR))
+    }
+}
+
 impl TeamColours {
+    const SEATS: [&'static str; PlayerId::MAX_PLAYERS as usize] =
+        ["mpcolor01", "mpcolor02", "mpcolor03", "mpcolor04", "mpcolor05", "mpcolor06", "mpcolor07", "mpcolor08"];
+
     pub fn parse(text: &str) -> Vec<(String, Color)> {
         sta_odf::parse(text)
             .entries
@@ -92,32 +101,103 @@ impl TeamColours {
         TeamColours(parsed.unwrap_or_else(|| Self::parse(STOCK_TEAMCOLOR)))
     }
 
-    /// The palette entry of a sim owner (seat). The file numbers its entries 0 = neutral,
-    /// 1 to 8 = teams (entries 9 and up are spare and race colours, not teams), and a seat
-    /// is the BZN team minus one (`MapDef::convert_bzn`), so seat `n` takes entry `n + 1`.
-    /// An owner that is not a player seat takes the neutral entry (the first), and so does
-    /// a seat whose entry a shorter mod palette lacks. `None` only when the palette is empty.
-    ///
-    /// The unit view (`sync_units`) does not use this for the unowned owner: unowned units
-    /// keep plain white there, as before; the map view uses the neutral entry for them.
+    /// A sim seat is the BZN team minus one (`MapDef::convert_bzn`).
+    /// Owners outside the player seats use the neutral colour.
     pub fn owner_colour(&self, owner: PlayerId) -> Option<Color> {
-        if !owner.is_player() {
-            return self.0.first().map(|t| t.1);
-        }
-        self.team_colour(u32::from(owner.0) + 1)
+        let team = if owner.is_player() { u32::from(owner.0) + 1 } else { 0 };
+        self.team_colour(team)
     }
 
-    /// The palette entry of a 1-based BZN team; team 0, a team above `MAX_PLAYERS` and a
-    /// team beyond a shorter mod palette are neutral.
+    /// A 1-based BZN team uses its numbered Fleet Ops key or the legacy file position.
+    /// Missing teams and team 0 use the neutral entry.
     pub fn team_colour(&self, team: u32) -> Option<Color> {
-        let i = if team == 0 || team > u32::from(PlayerId::MAX_PLAYERS) { 0 } else { team as usize };
-        self.0.get(i).or_else(|| self.0.first()).map(|t| t.1)
+        let neutral = || self.named_colour("empty").or_else(|| self.0.first().map(|t| t.1));
+        let i = team as usize;
+        let Some(key) = i.checked_sub(1).and_then(|i| Self::SEATS.get(i)) else {
+            return neutral();
+        };
+        let mut numbered = self.0.iter()
+            .filter(|(name, _)| name.get(..7).is_some_and(|prefix| prefix.eq_ignore_ascii_case("mpcolor")))
+            .peekable();
+        if numbered.peek().is_some() {
+            numbered.find(|(name, _)| name.eq_ignore_ascii_case(key)).map(|(_, colour)| *colour).or_else(neutral)
+        } else {
+            self.0.get(i).map(|(_, colour)| *colour).or_else(neutral)
+        }
     }
 
-    /// The viewer's starting colour: `white`, the first real team after the neutral
-    /// `empty` entry (a pale grey, so hulls keep their own look), else the first entry.
+    /// The Instant Action palette, in numbered order for Fleet Ops or seat order for legacy data.
+    pub fn swatches(&self) -> Vec<Color> {
+        let mut numbered: Vec<_> = self.0.iter().filter_map(|(key, colour)| {
+            let prefix = key.get(..7)?;
+            if !prefix.eq_ignore_ascii_case("mpcolor") {
+                return None;
+            }
+            let index = key.get(7..)?.parse::<u8>().ok()?;
+            (1..=16).contains(&index).then_some((index, *colour))
+        }).collect();
+        if numbered.is_empty() {
+            return self.0.iter().skip(1).take(Self::SEATS.len()).map(|(_, colour)| *colour).collect();
+        }
+        numbered.sort_by_key(|&(index, _)| index);
+        numbered.dedup_by_key(|(index, _)| *index);
+        numbered.into_iter().map(|(_, colour)| colour).collect()
+    }
+
+    /// Apply the local player's choice to a match palette. An occupied colour exchanges with
+    /// the local player's default so the two seats remain distinguishable.
+    pub fn with_local_colour(&self, local: PlayerId, colour: Color, players: &[PlayerId]) -> Self {
+        let mut result = self.clone();
+        if !local.is_player() {
+            return result;
+        }
+        if let Some(old) = self.owner_colour(local)
+            && old != colour
+            && let Some(&other) = players.iter().find(|&&id| id.is_player() && id != local && self.owner_colour(id) == Some(colour))
+        {
+            result.set_seat_colour(other, old);
+        }
+        result.set_seat_colour(local, colour);
+        result
+    }
+
+    pub(crate) fn remap_players(&self, before: &[PlayerId], after: &[PlayerId]) -> Self {
+        let mut result = self.clone();
+        for (&from, &to) in before.iter().zip(after) {
+            if from != to && let Some(colour) = self.owner_colour(from) {
+                result.set_seat_colour(to, colour);
+            }
+        }
+        result
+    }
+
+    fn set_seat_colour(&mut self, owner: PlayerId, colour: Color) {
+        let i = usize::from(owner.0);
+        if self.0.iter().any(|(name, _)| name.get(..7).is_some_and(|prefix| prefix.eq_ignore_ascii_case("mpcolor"))) {
+            let name = Self::SEATS[i];
+            if let Some((_, value)) = self.0.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(name)) {
+                *value = colour;
+            } else {
+                self.0.push((name.into(), colour));
+            }
+        } else {
+            let neutral = self.team_colour(0).unwrap_or(Color::WHITE);
+            while self.0.len() <= i + 1 {
+                self.0.push((format!("seat{}", self.0.len()), neutral));
+            }
+            self.0[i + 1].1 = colour;
+        }
+    }
+
+    fn named_colour(&self, name: &str) -> Option<Color> {
+        self.0.iter().find(|(key, _)| key.eq_ignore_ascii_case(name)).map(|(_, colour)| *colour)
+    }
+
+    /// The viewer starts on team one's pale grey where the palette provides it.
     pub fn default_index(&self) -> usize {
-        self.0.iter().position(|(n, _)| n.eq_ignore_ascii_case("white")).unwrap_or(0)
+        self.0.iter().position(|(n, _)| n.eq_ignore_ascii_case("mpcolor01"))
+            .or_else(|| self.0.iter().position(|(n, _)| n.eq_ignore_ascii_case("white")))
+            .unwrap_or(0)
     }
 }
 
@@ -150,7 +230,7 @@ impl MapTeamColours {
         }
         let n = *self.0.get(team as usize)?.get(which)? as usize;
         let name = ARMADA_ONE_PALETTE_NAMES.get(n)?;
-        palette.0.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, c)| *c)
+        palette.named_colour(name)
     }
 
     /// The colour of a 1-based team's hulls, or `None` (neutral, past the table, or an entry the
@@ -173,8 +253,7 @@ pub fn owner_hull_colour(palette: Option<&TeamColours>, map: Option<&MapTeamColo
 }
 
 /// The colour a seat's marks are drawn in (strategic symbols, map view icons): the map's map entry where a
-/// [`MapTeamColours`] applies, else as [`owner_hull_colour`]. The in-match radar and minimap do not follow it
-/// yet (TODO.md).
+/// [`MapTeamColours`] applies, else as [`owner_hull_colour`].
 pub fn owner_mark_colour(palette: Option<&TeamColours>, map: Option<&MapTeamColours>, owner: PlayerId) -> Option<Color> {
     let palette = palette?;
     map.and_then(|m| m.map(palette, u32::from(owner.0) + 1)).or_else(|| palette.owner_colour(owner))
@@ -656,5 +735,47 @@ mod team_colour_tests {
         assert_eq!(long.team_colour(8), Some(Color::srgb(0.4, 0.0, 0.0)));
         assert_eq!(long.team_colour(9), Some(Color::srgb(0.0, 0.0, 0.0)));
         assert_eq!(TeamColours(Vec::new()).owner_colour(PlayerId(0)), None);
+    }
+
+    #[test]
+    fn fleet_ops_uses_numbered_team_colours_instead_of_file_positions() {
+        let colours = TeamColours(TeamColours::parse(
+            "mpcolor02 = 0.9 0.134 0.134\n\
+             empty = 0.3 0.3 0.3\n\
+             MPCOLOR01 = 0.9 0.9 0.9\n\
+             mpcolor08 = 0.549 0.243 0.8\n\
+             mpcolor16 = 1.0 0.659 0.659\n\
+             federation = 0.9 0.9 0.9\n",
+        ));
+        let white = Some(Color::srgb(0.9, 0.9, 0.9));
+        let red = Some(Color::srgb(0.9, 0.134, 0.134));
+        let neutral = Some(Color::srgb(0.3, 0.3, 0.3));
+        assert_eq!(owner_hull_colour(Some(&colours), None, PlayerId(0)), white);
+        assert_eq!(owner_mark_colour(Some(&colours), None, PlayerId(1)), red);
+        assert_eq!(colours.team_colour(1), white);
+        assert_eq!(colours.team_colour(8), Some(Color::srgb(0.549, 0.243, 0.8)));
+        assert_eq!(colours.team_colour(3), neutral);
+        assert_eq!(colours.team_colour(16), neutral);
+        assert_eq!(colours.team_colour(0), neutral);
+        assert_eq!(colours.owner_colour(sta_sim::world::NEUTRAL), neutral);
+        assert_eq!(colours.0[colours.default_index()].0, "MPCOLOR01");
+    }
+
+    #[test]
+    fn numbered_picker_includes_extra_swatches_and_swaps_an_occupied_colour() {
+        let palette = TeamColours(TeamColours::parse(
+            "mpcolor02 = 1 0 0\nmpcolor16 = 0 1 0\nempty = 0.5 0.5 0.5\nMPCOLOR01 = 0 0 1\n",
+        ));
+        let (blue, red, green) = (Color::srgb(0.0, 0.0, 1.0), Color::srgb(1.0, 0.0, 0.0), Color::srgb(0.0, 1.0, 0.0));
+        assert_eq!(palette.swatches(), [blue, red, green]);
+        let local = PlayerId(0);
+        let opponent = PlayerId(1);
+        let swapped = palette.with_local_colour(local, red, &[local, opponent]);
+        assert_eq!(swapped.owner_colour(local), Some(red));
+        assert_eq!(swapped.owner_colour(opponent), Some(blue));
+        let extra = palette.with_local_colour(local, green, &[local, opponent]);
+        assert_eq!(extra.owner_colour(local), Some(green));
+        assert_eq!(extra.owner_colour(opponent), Some(red));
+        assert_eq!(extra.team_colour(0), palette.team_colour(0));
     }
 }

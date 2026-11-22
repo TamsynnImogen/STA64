@@ -1,7 +1,7 @@
 //! Immutable production presentation, derived from persisted queue/site records.
 //! This optional `WorldSource` view leaves serialized `WorldView` unchanged.
 
-use super::{Production, launch, orbit, ticks_of};
+use super::{Production, launch, orbit, research, ticks_of};
 use crate::world::Entities;
 use sta_content::ContentDb;
 use sta_core::{ContentKey, EntityId, Fixed, Vec3};
@@ -13,6 +13,38 @@ pub struct ProductionView {
     pub builder: EntityId,
     pub jobs: Vec<ProductionJobView>,
     pub site: Option<ConstructionSiteView>,
+    /// A yard's aperture during the interval between build and release.
+    pub portal: Option<LaunchPortalView>,
+    pub research: Option<ResearchView>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResearchBlock {
+    AlreadyResearched,
+    Queued,
+    NoSlot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResearchPodView {
+    pub entity: EntityId,
+    pub slot: usize,
+    pub axes: [Vec3; 3],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResearchView {
+    pub unavailable: Vec<(ContentKey, ResearchBlock)>,
+    pub pods: Vec<ResearchPodView>,
+    pub active_axes: Option<[Vec3; 3]>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LaunchPortalView {
+    pub def: ContentKey,
+    pub pos: Vec3,
+    pub heading: (Fixed, Fixed),
+    pub open: Fixed,
 }
 
 /// Only a paid, started head is an actual in-yard hull.
@@ -59,21 +91,38 @@ impl Production {
             if jobs.is_empty() {
                 continue;
             }
+            let launch = db.unit(unit.def).and_then(|builder| db.launch_wormhole(builder).map(|gate| (builder, gate)));
+            let portal = launch.and_then(|(builder, gate)| {
+                let head = queue.first().filter(|job| job.started)?;
+                let elapsed = head.done.checked_sub(ticks_of(db, head.def))?;
+                let out = launch::through_wormhole(builder, unit.pos, unit.heading);
+                Some(LaunchPortalView { def: gate.key, pos: out.pos, heading: out.heading, open: progress(elapsed, gate.wormhole_open_ticks()) })
+            });
+            let mut research = db.unit(unit.def).filter(|d| !d.research_slots.is_empty())
+                .map(|def| self.research_view(db, units, unit, def));
             let site = jobs
                 .first()
-                .filter(|job| job.started && job.paid)
-                .map(|job| {
+                .filter(|job| job.started && job.paid && launch.is_none())
+                .and_then(|job| {
                     let (pos, heading) =
                         db.unit(unit.def).map_or((unit.pos, unit.heading), |def| {
+                            if def.is_evolver() {
+                                return (unit.pos, unit.heading);
+                            }
                             let out = launch::place(def, unit.pos, unit.heading);
                             (out.pos, out.heading)
                         });
-                    ConstructionSiteView {
-                        def: job.def,
-                        pos,
-                        heading,
-                        entity: None,
-                    }
+                    let (pos, heading) = if let Some(builder_def) = db.unit(unit.def)
+                        && let Some(product) = db.unit(job.def).filter(|d| research::external_pod(builder_def, d))
+                    {
+                        let slot = self.completed_slot(units, builder, builder_def, product)?;
+                        let (pos, heading, axes) = research::pose(unit, builder_def, slot)?;
+                        research.as_mut().expect("research station").active_axes = Some(axes);
+                        (pos, heading)
+                    } else {
+                        (pos, heading)
+                    };
+                    Some(ConstructionSiteView { def: job.def, pos, heading, entity: None })
                 });
             rows.insert(
                 builder,
@@ -81,6 +130,8 @@ impl Production {
                     builder,
                     jobs,
                     site,
+                    portal,
+                    research,
                 },
             );
         }
@@ -112,6 +163,8 @@ impl Production {
                         heading,
                         entity: None,
                     }),
+                    portal: None,
+                    research: None,
                 },
             );
         }
@@ -135,8 +188,20 @@ impl Production {
                         heading: unit.heading,
                         entity: Some(id),
                     }),
+                    portal: None,
+                    research: None,
                 },
             );
+        }
+        for unit in units.iter() {
+            if rows.contains_key(&unit.id) { continue; }
+            let Some(def) = db.unit(unit.def).filter(|d| !d.research_slots.is_empty()) else { continue; };
+            let research = self.research_view(db, units, unit, def);
+            if !research.unavailable.is_empty() || !research.pods.is_empty() {
+                rows.insert(unit.id, ProductionView {
+                    builder: unit.id, jobs: Vec::new(), site: None, portal: None, research: Some(research),
+                });
+            }
         }
         rows.into_values().collect()
     }

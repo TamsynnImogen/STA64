@@ -54,10 +54,13 @@ pub enum Action {
     /// `select_next_ship` (UI-32): on Roots every damaged combat ship on screen, elsewhere the
     /// next own ship. Stock binds it to `[` and Roots to W (W pans the camera here).
     SelectNextShip,
+    /// Held with the reveal modifier: cycle the map grid's mode (grid, grid with height bars, none). STA64's own
+    /// binding (interim); Alt+G by default.
+    GridToggle,
 }
 
 impl Action {
-    pub const ALL: [Action; 25] = [
+    pub const ALL: [Action; 26] = [
         Action::AddModifier,
         Action::GroupModifier,
         Action::CentreModifier,
@@ -83,6 +86,7 @@ impl Action {
         Action::PauseGame,
         Action::SelectNextShip,
         Action::PointDefence,
+        Action::GridToggle,
     ];
 
     pub fn name(self) -> String {
@@ -104,6 +108,7 @@ impl Action {
             Action::RevealShroud => "reveal_shroud".into(),
             Action::PauseGame => "pause_game".into(),
             Action::SelectNextShip => "select_next_ship".into(),
+            Action::GridToggle => "grid_toggle".into(),
         }
     }
 
@@ -147,6 +152,7 @@ impl Default for KeyBindings {
         m.insert(Action::RevealShroud, vec![KeyCode::KeyV]);
         m.insert(Action::PauseGame, vec![KeyCode::Pause]);
         m.insert(Action::SelectNextShip, vec![KeyCode::BracketLeft]);
+        m.insert(Action::GridToggle, vec![KeyCode::KeyG]);
         for (n, k) in DIGITS.into_iter().enumerate() {
             m.insert(Action::Group(n as u8), vec![k]);
         }

@@ -245,6 +245,8 @@ pub struct Hardpoint {
 pub struct LaunchPoint {
     /// Where the new unit appears, `(x, z)`.
     pub offset: (Fixed, Fixed),
+    /// Height of a gate aperture, relative to the builder's origin.
+    pub height: Fixed,
     /// Unit vector the new unit faces and leaves along, `(x, z)`.
     pub dir: (Fixed, Fixed),
     /// Radius of a circle round the builder's centre that the unit must leave.
@@ -332,6 +334,14 @@ pub struct FxRefs {
 }
 
 /// A thing that can exist in the world: craft, station, yard, resource, moon.
+/// One ordered `podHardpoints` slot of an Armada II research station.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResearchSlot {
+    pub node: String,
+    pub reserved_for: Option<String>,
+    pub pose: Option<crate::RepairAttachment>,
+}
+
 #[derive(Debug, Clone)]
 pub struct UnitDef {
     /// Set by [`ContentDb`](crate::ContentDb) when it is built.
@@ -426,6 +436,9 @@ pub struct UnitDef {
     pub repair: RepairDef,
     /// Raw composed SOD transform of the authored repair node, when readable.
     pub repair_attachment: Option<crate::repair_geometry::RepairAttachment>,
+    pub research_slots: Vec<ResearchSlot>,
+    /// Station upgrade pods use the station origin instead of an external slot.
+    pub research_station_upgrade: bool,
     /// Sensor range, units.
     pub sensor: Fixed,
     pub hardpoints: Vec<Hardpoint>,
@@ -463,6 +476,9 @@ pub struct UnitDef {
     pub mining_rate: Fixed,
     /// Units unloaded per second (`dilithiumTransferRate`); zero: not set.
     pub transfer_rate: Fixed,
+    /// The transfer interface's per-resource rates. Loaded receiver ODFs
+    /// use zero for an absent rate; hand-built definitions can omit the array.
+    pub freight_transfer: Option<[Fixed; crate::resources::SLOTS]>,
     /// Resource id a node gives (`resource`, text: latinum 1, metal or
     /// tritanium 2, biomatter 3, anything else 0); `None` when not set.
     pub resource: Option<u8>,
@@ -556,6 +572,9 @@ pub struct UnitStatsDef {
     /// `addToPlanner` (Armada II craft and stations): 0 keeps the unit out of
     /// the path planner (stock orbital stations). Read by `sta_sim::nav`.
     pub add_to_planner: Option<bool>,
+    /// `pushBuildItem0..9`: the final-build queue entries in slot order, as class
+    /// stems (gaps and `null` skipped, repeats kept); read by `sta_sim::production`.
+    pub push_build_items: Vec<String>,
     /// `shipIsBuiltByEvolution` (Armada II).
     pub built_by_evolution: Option<bool>,
     /// `shipIsBuiltByShips` (Armada II).
@@ -625,6 +644,31 @@ pub struct NebulaEffects {
 }
 
 impl UnitDef {
+    /// Armada II creates a freighter transfer interface for these classes.
+    pub fn receives_freight(&self) -> bool {
+        matches!(self.class.0.as_str(), "starbase" | "mining" | "trading_station")
+    }
+
+    /// Armada II mobile producers such as Mother are authored as ships
+    /// with movement physics and no fixed-facility flag (read from ODFs).
+    pub fn allows_station_motion(&self) -> bool {
+        matches!(self.class.0.as_str(), "starbase" | "shipyard" | "buildyard" | "research" | "mining" | "sensor" | "trading_station")
+            && self.movement.max_speed > Fixed::ZERO
+            && !self.is_starbase
+            && self.raw.bool("ship") == Some(true)
+    }
+
+    /// Wormhole opening duration. Armada II reads AnimationTime in seconds.
+    pub fn wormhole_open_ticks(&self) -> u64 {
+        let seconds = self.raw.f32("AnimationTime").filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(2.0);
+        ((f64::from(seconds) * f64::from(sta_core::TICK_HZ)).round() as u64).max(1)
+    }
+
+    /// Armada II's embryo producer, consumed when its product finishes.
+    pub fn is_evolver(&self) -> bool {
+        self.class.0 == "evolver"
+    }
+
     /// Whether the unit mines. The `miner` key decides when the ODF has one
     /// (stock `freight.odf` says `miner = 1`; the Data Miner, `fdata.odf`, is
     /// class `freighter` and says `miner = 0`); without it a `freighter` mines.
@@ -677,6 +721,8 @@ impl UnitDef {
             casualty: CasualtyDef::default(),
             repair: RepairDef::default(),
             repair_attachment: None,
+            research_slots: Vec::new(),
+            research_station_upgrade: false,
             sensor: Fixed::ZERO,
             hardpoints: Vec::new(),
             build: BuildDef::default(),
@@ -693,6 +739,7 @@ impl UnitDef {
             max_dilithium: Fixed::ZERO,
             mining_rate: Fixed::ZERO,
             transfer_rate: Fixed::ZERO,
+            freight_transfer: None,
             resource: None,
             features: None,
             confinement: crate::ConfinementOverrides::default(),
@@ -747,6 +794,8 @@ pub struct WeaponDef {
     /// `None` for every other weapon and for a mining beam with neither key. Render only: not
     /// digested.
     pub shot_scale: Option<ShotScale>,
+    /// What the stock look draws the shot from (ordnance look keys). Render only: not digested.
+    pub look: ShotLook,
     /// Specials: ticks to engage or disengage (`effectTimer`).
     pub effect_ticks: Tick,
     /// Specials: energy drained per second while active (`energyDrainRate`).
@@ -780,7 +829,7 @@ pub struct WeaponDef {
     /// `resourceweapon` class only (SIM-24): what the weapon adds to its
     /// owner's stock and who it works for. `None` for every other class.
     pub resource: Option<ResourceWeaponDef>,
-    /// An instant `replaceweapon` (SIM-28); `None` for every other weapon.
+    /// A `replaceweapon`, including manual activation (SIM-28); `None` for other weapons.
     pub replace: Option<crate::lifecycle::ReplaceDef>,
     /// The colonizer pod this weapon launches (SIM-30): set when the ordnance's
     /// class is `ColonizerPod`; `None` for every other weapon.
@@ -796,6 +845,79 @@ pub struct WeaponDef {
 pub struct ShotScale {
     pub radius: Fixed,
     pub length: Fixed,
+}
+
+/// The data a stock shot is drawn from: the ordnance ODF's look keys, plus the defaults
+/// STA64 applies where a key is absent. Render only: nothing here is read by the sim or
+/// digested (D10: peers that differ only in how a shot looks play together). Every
+/// `Option` is `None` when the key is absent and no default is known. Lengths are in
+/// world units, times in seconds. Evidence grades: key names and which classes read them
+/// "read from the executable, static"; presence of a key "read from data".
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ShotLook {
+    /// `Sprite`: the sprite's name in the sprite tables (any ordnance class).
+    pub sprite: Option<String>,
+    /// `spriteDuration`: when above 0 and the sprite is animated, it replaces the length of
+    /// the sprite's first animation channel. The sprite is shared between shots, so which
+    /// class wins when several name it is INTERIM: class load order not determined.
+    pub sprite_duration: Option<f32>,
+    /// `Radius`: a ribbon's full width, or a billboard's half size (class dependent).
+    pub radius: Option<f32>,
+    /// `Length`: a pulse's streak length.
+    pub length: Option<f32>,
+    /// `lifeSpan`: the shot's life, every ordnance class (the sim-facing `WeaponDef::duration`
+    /// stays beams-only).
+    pub life_span: Option<f32>,
+    /// `travelTimeFraction`, beam classes only ([`BEAM_CLASSES`](crate::weapon::BEAM_CLASSES)):
+    /// the share of `lifeSpan` the beam takes to grow out and to retract. The key, else
+    /// [`ShotLook::DEFAULT_TRAVEL_TIME_FRACTION`]. `None` for other classes.
+    pub travel_time_fraction: Option<f32>,
+    /// The muzzle flare, class `phaser` only.
+    pub flare: Option<ShotFlare>,
+    /// The point light the shot carries (`lightColor`); `None` without that key.
+    pub light: Option<ShotLight>,
+}
+
+impl ShotLook {
+    /// `travelTimeFraction` when the key is absent (read from the executable, static).
+    pub const DEFAULT_TRAVEL_TIME_FRACTION: f32 = 0.1;
+}
+
+/// A phaser's muzzle flare: `flareSprite` and `flareRadiusMultiplier` of the ordnance ODF.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShotFlare {
+    /// `flareSprite`, else [`ShotFlare::DEFAULT_SPRITE`].
+    pub sprite: String,
+    /// `flareRadiusMultiplier`, else [`ShotFlare::DEFAULT_RADIUS_MULTIPLIER`]; the flare's
+    /// half size is `Radius` times this.
+    pub radius_multiplier: f32,
+}
+
+impl ShotFlare {
+    /// `flareSprite` when absent (read from the executable, static).
+    pub const DEFAULT_SPRITE: &'static str = "pflare";
+    /// `flareRadiusMultiplier` when absent (read from the executable, static).
+    pub const DEFAULT_RADIUS_MULTIPLIER: f32 = 1.4;
+}
+
+/// A shot's point light: `lightColor`, `lightFalloffStart`, `lightFalloffRange`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShotLight {
+    /// `lightColor`'s three numbers as authored. Their scale (0..1 or 0..255) is INTERIM:
+    /// not determined; the existing recipe reading treats a maximum above 1 as 0..255.
+    pub color: [f32; 3],
+    /// `lightFalloffStart`, else [`ShotLight::DEFAULT_FALLOFF_START`].
+    pub falloff_start: f32,
+    /// `lightFalloffRange`, else [`ShotLight::DEFAULT_FALLOFF_RANGE`]. How start and range
+    /// shape the attenuation is INTERIM: the formula was not read.
+    pub falloff_range: f32,
+}
+
+impl ShotLight {
+    /// `lightFalloffStart` when absent (read from the executable, static).
+    pub const DEFAULT_FALLOFF_START: f32 = 100.0;
+    /// `lightFalloffRange` when absent (read from the executable, static).
+    pub const DEFAULT_FALLOFF_RANGE: f32 = 5.0;
 }
 
 /// A value with per-target rows (CON-54): `key = base` followed by
@@ -1052,6 +1174,7 @@ impl WeaponDef {
             fire_sound: None,
             fx: None,
             shot_scale: None,
+            look: ShotLook::default(),
             effect_ticks: 0,
             energy_drain: Fixed::ZERO,
             energy_cost: Fixed::ZERO,

@@ -11,6 +11,7 @@ use sta_content::{Availability, ContentDb, Owned, ResourceModel, Unmet, UnitDef}
 use sta_sim::command::{CommandKind, Order};
 use sta_sim::world::EntityKind;
 use sta_sim::movement::{FORM_COLUMN, FORM_LINE, FORM_WEDGE};
+use sta_sim::production::view::{ProductionView, ResearchBlock};
 use sta_sim::{ContentKey, EntityId, Fixed, PlayerId, UnitView, WorldView};
 
 use crate::ui::i18n::{tr, trf, tooltip_key};
@@ -30,13 +31,15 @@ pub struct HudFeed {
     pub player: PlayerId,
     pub selected: Vec<EntityId>,
     pub content: Option<Arc<ContentDb>>,
+    /// Queue and research eligibility from the same tick as `view`.
+    pub production: Vec<ProductionView>,
     /// The names the map gave its objects (host-only, see [`super::instance_names`]).
     pub names: super::instance_names::InstanceNames,
 }
 
 impl Default for HudFeed {
     fn default() -> Self {
-        HudFeed { view: Arc::default(), player: PlayerId(0), selected: Vec::new(), content: None, names: Default::default() }
+        HudFeed { view: Arc::default(), player: PlayerId(0), selected: Vec::new(), content: None, production: Vec::new(), names: Default::default() }
     }
 }
 
@@ -46,7 +49,7 @@ impl HudFeed {
         self.selected.iter().filter_map(|&id| self.view.unit(id)).filter(|u| !u.flags.contains(sta_sim::view::UnitFlags::DYING)).collect()
     }
 
-    fn def(&self, u: &UnitView) -> Option<&UnitDef> {
+    pub(super) fn def(&self, u: &UnitView) -> Option<&UnitDef> {
         self.content.as_deref().and_then(|c| c.unit(u.def))
     }
 
@@ -90,7 +93,7 @@ pub(super) fn finished(u: &UnitView) -> bool {
     u.progress.is_none_or(|p| p >= Fixed::ONE)
 }
 
-fn frac(v: [Fixed; 2]) -> f32 {
+pub(super) fn frac(v: [Fixed; 2]) -> f32 {
     let max = v[1].to_f32();
     if max <= 0.0 { 0.0 } else { (v[0].to_f32() / max).clamp(0.0, 1.0) }
 }
@@ -132,7 +135,7 @@ pub struct Tile {
 }
 
 /// A unit's shields as one share over all facings, `None` without shields.
-fn shield_frac(u: &UnitView) -> Option<f32> {
+pub(super) fn shield_frac(u: &UnitView) -> Option<f32> {
     let (now, max) = u.shields.iter().fold((0.0, 0.0), |(n, m), s| (n + s[0].to_f32(), m + s[1].to_f32()));
     (max > 0.0).then(|| (now / max).clamp(0.0, 1.0))
 }
@@ -217,7 +220,7 @@ pub enum Act {
     Back,
     /// Arm a map target; completed by the HUD's target click system.
     Target(TargetMode),
-    /// A supported special slot toggle (cloak or point defence).
+    /// An immediate supported special slot (including untargeted replace weapons).
     Special(u8),
     /// UI-02's stop on the own selection.
     Stop,
@@ -227,6 +230,8 @@ pub enum Act {
     Formation(u8),
     /// A loaded stock command ODF whose formation parameter has no verified sim mapping.
     NativeFormation(String),
+    /// An immediate command identified by its authored stock ODF.
+    NativeOrder(String),
     /// Drop a builder's queue: `Stop` on it (SIM-08's cancel).
     Cancel(EntityId),
     /// `Order::Build`; `site`: the builder is a craft and needs a place, so
@@ -264,6 +269,8 @@ pub enum TargetMode {
     Repair,
     /// The stock DECOMMISSION command: pick a yard, or anywhere for the best one or in place (SIM-45).
     Decommission,
+    /// A replace weapon whose authored `needTarget` requires a map pick.
+    Special(u8),
 }
 
 /// How a button looks.
@@ -340,12 +347,12 @@ pub fn resource_model(feed: &HudFeed) -> ResourceModel {
 
 /// A shipyard's or builder's tech state, from the view: what the player owns
 /// finished, its race, and the races of its allies.
-fn tech_state(feed: &HudFeed, db: &ContentDb, race: &str) -> Owned {
+pub(super) fn tech_state(feed: &HudFeed, db: &ContentDb, race: &str, player: PlayerId) -> Owned {
     let mut state = Owned::new(&race.to_ascii_lowercase());
-    let me = feed.view.player(feed.player);
+    let me = feed.view.player(player);
     for u in feed.view.units.iter().filter(|u| finished(u)) {
         let Some(def) = db.unit(u.def) else { continue };
-        if u.owner == feed.player {
+        if u.owner == player {
             state = state.with(&def.odf.to_ascii_lowercase(), 1);
         } else if me.is_some_and(|m| feed.view.player(u.owner).is_some_and(|o| o.team == m.team)) {
             state = state.with_ally(&def.race.to_ascii_lowercase());
@@ -405,21 +412,31 @@ fn build_layout(feed: &HudFeed, builder: &UnitView) -> (Vec<BuildItem>, usize) {
     let Some(def) = db.unit(builder.def) else { return (Vec::new(), 0) };
     let stock: Vec<f32> = feed.view.player(feed.player).map(|p| p.resources.iter().map(|f| f.to_f32()).collect()).unwrap_or_default();
     let poor = |cost: &[f32]| cost.iter().enumerate().any(|(i, c)| *c > stock.get(i).copied().unwrap_or(0.0));
+    let research = feed.production.iter().find(|row| row.builder == builder.id).and_then(|row| row.research.as_ref());
     let item = |odf: &str, key: ContentKey, avail: Option<&Availability>, slot: usize| -> Option<BuildItem> {
         let u = db.unit(key)?;
         let cost: Vec<f32> = u.build.cost.iter().map(|c| c.to_f32()).collect();
-        let (look, why) = match avail {
+        let (mut look, mut why) = match avail {
             None | Some(Availability::Available) => (if poor(&cost) { Look::Poor } else { Look::Ready }, None),
             Some(Availability::Locked { hidden: true, .. }) => return None,
             Some(Availability::Locked { unmet: m, .. }) => (Look::Locked, Some(m.iter().map(unmet).collect::<Vec<_>>().join(", "))),
             Some(Availability::Withheld) => (Look::Locked, Some("cannot be built".into())),
             Some(Availability::NotListed) => (Look::Locked, Some("not in the tech tree".into())),
         };
+        if let Some(block) = research.and_then(|r| r.unavailable.iter().find(|(what, _)| *what == key).map(|(_, block)| block)) {
+            let reason = match block {
+                ResearchBlock::AlreadyResearched => "already researched",
+                ResearchBlock::Queued => "research already queued",
+                ResearchBlock::NoSlot => "no research slot available",
+            };
+            look = Look::Locked;
+            why = Some(why.map_or_else(|| reason.to_owned(), |existing| format!("{existing}, {reason}")));
+        }
         Some(BuildItem { odf: odf.to_owned(), key, look, cost, why, slot })
     };
     match db.tech_tree() {
         Some(tree) => {
-            let state = tech_state(feed, db, &def.race);
+            let state = tech_state(feed, db, &def.race, feed.player);
             let mut out: Vec<BuildItem> = Vec::new();
             let mut cells = 0;
             for o in tree.build_options(db, &def.odf, &state, false).iter() {
@@ -454,11 +471,12 @@ fn build_layout(feed: &HudFeed, builder: &UnitView) -> (Vec<BuildItem>, usize) {
 pub(super) fn build_item_buttons(feed: &HudFeed, b: &UnitView) -> Vec<(usize, Button)> {
     let items = build_items(feed, b);
     let names = resource_model(feed);
-    let site = feed.def(b).is_some_and(deploys_at_site);
+    let builder = feed.def(b);
     items
         .iter()
         .map(|it| {
             let definition = feed.content.as_deref().and_then(|db| db.unit(it.key));
+            let site = builder.zip(definition).is_some_and(|(b, product)| EntityKind::build_requires_site(b, product));
             let verbose = match &it.why {
                 Some(w) => format!("{}. Cost: {}", w, cost_text(&it.cost, &names)),
                 None => format!("Cost: {}", cost_text(&it.cost, &names)),
@@ -469,13 +487,53 @@ pub(super) fn build_item_buttons(feed: &HudFeed, b: &UnitView) -> Vec<(usize, Bu
                 act: Act::Build { builder: b.id, what: it.key, odf: it.odf.clone(), site },
                 look: it.look,
                 tip: definition.and_then(|d| d.raw.str("tooltip")).map(str::to_owned).unwrap_or_else(|| format!("Build {}", it.odf)),
-                verbose: Some(definition.and_then(|d| d.raw.str("verboseTooltip")).map_or(verbose, str::to_owned)),
+                verbose: Some(definition.and_then(|d| d.raw.str("verboseTooltip").or_else(|| d.raw.str("verbose"))).map_or(verbose, str::to_owned)),
                 sprite_names: definition.map_or_else(Vec::new, |def| build_sprite_names(&def.model, &it.odf)),
                 keep_label: false,
             };
             (it.slot, btn)
         })
         .collect()
+}
+
+/// What the Armada II stock tooltip of a build item is made of: the class's `tooltip`, `verboseTooltip`
+/// (else `verbose`) and `hotkeyLabel` keys and its costs in the fixed order dilithium, metal, latinum, biomatter, crew,
+/// officers (keys `GUI_CP_*_RES`; read from the executable, static; the composition measured at one window
+/// size). The officer word is the builder's race's (interim: the builder's race stands in for the player's).
+pub(super) fn build_tip_parts(feed: &HudFeed, builder: EntityId, what: ContentKey) -> Option<crate::ui::hud::stock::tooltip_text::BuildTipParts> {
+    use crate::ui::hud::stock::tooltip_text::{BuildTipParts, CostPart};
+    let db = feed.content.as_deref()?;
+    let def = db.unit(what)?;
+    let names = resource_model(feed);
+    let key = |k: &str| def.raw.str(k).map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned);
+    let race = feed.view.unit(builder).and_then(|u| db.unit(u.def)).map_or_else(String::new, |d| d.race.to_ascii_lowercase());
+    let officers = if race.contains("borg") {
+        "GUI_CP_BORG_OFF_RES"
+    } else if race.contains("rom") {
+        "GUI_CP_ROM_OFF_RES"
+    } else if race.contains("8472") {
+        "GUI_CP_8472_OFF_RES"
+    } else {
+        "GUI_CP_OFFICERS_RES"
+    };
+    let slot = |slot: usize, key: &'static str| CostPart {
+        key,
+        fallback: names.name(slot).to_lowercase(),
+        amount: def.build.cost.get(slot).map_or(0.0, |c| c.to_f32()),
+    };
+    Some(BuildTipParts {
+        tooltip: key("tooltip").unwrap_or_else(|| format!("Build {}", def.odf)),
+        verbose: key("verboseTooltip").or_else(|| key("verbose")),
+        hotkey: key("hotkeyLabel"),
+        cost: vec![
+            slot(0, "GUI_CP_DILITHIUM_RES"),
+            slot(2, "GUI_CP_METAL_RES"),
+            slot(1, "GUI_CP_LATINUM_RES"),
+            slot(3, "GUI_CP_BIOMATTER_RES"),
+            CostPart { key: "GUI_CP_CREW_RES", fallback: "crew".into(), amount: def.crew.to_f32() },
+            CostPart { key: officers, fallback: "officers".into() /* STA64's own fallback word */, amount: def.build.officers.to_f32() },
+        ],
+    })
 }
 
 fn cost_text(cost: &[f32], names: &ResourceModel) -> String {
@@ -504,10 +562,11 @@ pub(super) fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
         Act::Target(TargetMode::TransportAttack) => (vec!["b_capture".into()], false),
         Act::Target(TargetMode::Repair) => (vec!["b_repair".into()], false),
         Act::Target(TargetMode::Decommission) => (vec!["b_decom".into()], false),
+        Act::Target(TargetMode::Special(_)) => (Vec::new(), false),
         Act::Cancel(_) => (vec!["b_cancel".into()], false),
         Act::Formation(_) => (Vec::new(), false),
         // No verified native ID for these actions; use the existing label.
-        Act::Special(_) | Act::Build { .. } | Act::OpenNativeMenu(_) | Act::NativeFormation(_) | Act::OpenOrders | Act::Order(_) => (Vec::new(), false),
+        Act::Special(_) | Act::Build { .. } | Act::OpenNativeMenu(_) | Act::NativeFormation(_) | Act::OpenOrders | Act::Order(_) | Act::NativeOrder(_) => (Vec::new(), false),
     };
     Button { cell, label: label.to_uppercase(), act, look: Look::Ready, tip: tip.to_owned(), verbose: None, sprite_names, keep_label }
 }
@@ -534,15 +593,6 @@ fn build_sprite_names(model: &str, odf: &str) -> Vec<String> {
 /// The first selected own unit that can build: the grid's builder.
 pub fn builder(feed: &HudFeed) -> Option<&UnitView> {
     feed.selected_units().into_iter().find(|u| u.owner == feed.player && finished(u) && feed.def(u).is_some_and(|d| !d.build.list.is_empty()))
-}
-
-/// Whether a builder of this def places what it builds on the map (a construction rig's ghost and
-/// site) instead of queueing it in place (a yard or starbase, with its rally point). The sim's own
-/// split: a producer station ([`EntityKind::producer_def`], by class label) queues, any other
-/// builder that is a craft deploys. Not a speed test: a station's definition may carry a positive
-/// speed (for example through a `physicsFile`), and that does not make it a craft.
-pub fn deploys_at_site(def: &UnitDef) -> bool {
-    !EntityKind::producer_def(def) && EntityKind::of_def(def) == EntityKind::Craft
 }
 
 /// The build buttons of the selected builder with the build cell each sits in (`BuildItem::slot`),
@@ -615,8 +665,33 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
         return out;
     }
     let mut out = Vec::new();
-    if builder.is_some() {
-        out.push(button(0, &tr("Build"), Act::OpenBuild, &tooltip_key("Build")));
+    let mut evolve_extra = false;
+    if let Some(builder) = builder {
+        // A class with the research key gets the Research menu button, while its
+        // contents still use the build page.
+        let key = |k: &str| feed.def(builder).is_some_and(|def| def.raw.bool(k) == Some(true));
+        let embryo = feed.def(builder).is_some_and(UnitDef::is_evolver);
+        let research = !embryo && key("research");
+        // The evolve key gives an Evolve button by the same mechanism (own sprite name and
+        // tooltip keys; it opens the same item page). Read from data: the keys; that they choose
+        // the button is read from the executable, static; no frame of the original yet.
+        // An evolve-only class has it in the opener's place; a class with a builder key keeps
+        // Build and gets Evolve in the first free cell (below). INTERIM: the position of a second
+        // menu button is STA64's choice, not determined for the original.
+        // INTERIM: a class with the research key and the evolve key shows Research only; the
+        // static reading says both would show, so this is STA64's choice.
+        let evolve = embryo || (key("evolve") && !research);
+        let builds = !embryo && (key("builder_ship") || key("builder_facility"));
+        evolve_extra = evolve && builds;
+        let caption = if research { "Research" } else if evolve && !builds { "Evolve" } else { "Build" };
+        let mut opener = button(0, &tr(caption), Act::OpenBuild, &tooltip_key(if research { "Research menu" } else if caption == "Evolve" { "Evolve menu" } else { "Build" }));
+        if research {
+            opener.sprite_names = vec!["b_research".into()];
+            opener.verbose = Some(tooltip_key("Open the research menu."));
+        } else if caption == "Evolve" {
+            opener = evolve_button(0);
+        }
+        out.push(opener);
     }
     if caps.rally {
         out.push(button(
@@ -667,8 +742,12 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
     }
     for (i, (slot, kind)) in caps.specials.iter().enumerate() {
         if let Some(cell) = [5, 10, 11, 12, 13, 14].get(i) {
-            let act = Act::Special(*slot);
-            if *kind == sta_sim::specials::SpecialKind::PointDefence {
+            let weapon = selected_special_weapon(feed, *slot);
+            let targeted = *kind == sta_sim::specials::SpecialKind::Replace
+                && special_targeted(feed, *slot) == Some(true);
+            if *kind == sta_sim::specials::SpecialKind::Replace && special_targeted(feed, *slot).is_none() { continue; }
+            let act = if targeted { Act::Target(TargetMode::Special(*slot)) } else { Act::Special(*slot) };
+            let mut b = if *kind == sta_sim::specials::SpecialKind::PointDefence {
                 let Some((state, ready)) = point_defence_state(feed, *slot) else { continue };
                 let status = match state {
                     PointDefenceState::Off => tr("Off"),
@@ -679,14 +758,68 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
                 let tip = trf("Point defence: {0}", &[&status]);
                 let mut b = button(*cell, &label, act, &tip);
                 if !ready { b.look = Look::Locked; }
-                out.push(b);
+                b
+            } else if *kind == sta_sim::specials::SpecialKind::Cloak {
+                button(*cell, &tr("Cloak"), act, &tooltip_key("Toggle cloak"))
             } else {
-                out.push(button(*cell, &tr("Cloak"), act, &tooltip_key("Toggle cloak")));
+                let label = weapon.map_or("Replace", |w| w.odf.as_str());
+                button(*cell, &tr(label), act, &tooltip_key(label))
+            };
+            if let Some(weapon) = weapon {
+                if *kind == sta_sim::specials::SpecialKind::Replace {
+                    let stem = weapon.odf.rsplit(['/', '\\']).next().unwrap_or(&weapon.odf).trim_end_matches(".odf");
+                    b.sprite_names = vec![format!("b_{stem}"), stem.to_owned()];
+                }
+                if let Some(tip) = weapon.raw.str("tooltip") {
+                    b.tip = tip.to_owned();
+                }
+                b.verbose = weapon.raw.str("verboseTooltip").or_else(|| weapon.raw.str("verbose")).map(str::to_owned);
             }
+            out.push(b);
         }
+    }
+    if evolve_extra {
+        let cell = (0..).find(|c| !out.iter().any(|b| b.cell == *c)).unwrap_or(0);
+        out.push(evolve_button(cell));
     }
     out.sort_by_key(|b| b.cell);
     out
+}
+
+/// The Evolve menu button: it opens the same item page as Build (`Act::OpenBuild`).
+fn evolve_button(cell: usize) -> Button {
+    let mut b = button(cell, &tr("Evolve"), Act::OpenBuild, &tooltip_key("Evolve menu"));
+    b.sprite_names = vec!["b_evolve".into()];
+    b.verbose = Some(tooltip_key("Open the evolve menu."));
+    b
+}
+
+/// A shared tooltip describes the slot when all selected owners use the same weapon.
+fn selected_special_weapon(feed: &HudFeed, slot: u8) -> Option<&sta_content::WeaponDef> {
+    let db = feed.content.as_deref()?;
+    let mut weapons = feed.selected_units().into_iter()
+        .filter(|u| u.owner == feed.player)
+        .map(|u| {
+            let def = feed.def(u)?;
+            let (_, weapon) = sta_sim::specials::specials_of(db, def).nth(slot as usize)?;
+            Some(weapon)
+        });
+    let weapon = weapons.next()??;
+    weapons.all(|other| other.is_some_and(|w| w.key == weapon.key)).then_some(weapon)
+}
+
+/// A shared replace slot must agree on whether its weapons require a map pick.
+pub(super) fn special_targeted(feed: &HudFeed, slot: u8) -> Option<bool> {
+    let db = feed.content.as_deref()?;
+    let mut units = feed.selected_units().into_iter().filter(|u| u.owner == feed.player);
+    let first = units.next()?;
+    let targeted = sta_sim::specials::specials_of(db, feed.def(first)?)
+        .nth(slot as usize).filter(|(kind, _)| *kind == sta_sim::specials::SpecialKind::Replace)?
+        .1.base.need_target == Some(true);
+    units.all(|u| feed.def(u).and_then(|def| sta_sim::specials::specials_of(db, def).nth(slot as usize))
+        .is_some_and(|(kind, weapon)| kind == sta_sim::specials::SpecialKind::Replace
+            && (weapon.base.need_target == Some(true)) == targeted))
+        .then_some(targeted)
 }
 
 /// The command a button's press puts in the queue, with the units it speaks
@@ -717,7 +850,9 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
         )),
         Act::Special(slot) if caps.specials.iter().any(|s| s.0 == *slot
             && (s.1 != sta_sim::specials::SpecialKind::PointDefence
-                || point_defence_state(feed, *slot).is_some_and(|(_, ready)| ready))) => Some((
+                || point_defence_state(feed, *slot).is_some_and(|(_, ready)| ready))
+            && (s.1 != sta_sim::specials::SpecialKind::Replace
+                || special_targeted(feed, *slot) == Some(false))) => Some((
             CommandKind::Order(Order::Special {
                 units: own.clone(),
                 slot: *slot,
@@ -1066,6 +1201,42 @@ mod tests {
     }
 
     #[test]
+    fn authored_research_menu_uses_research_sprite_and_keeps_build_routing() {
+        let fake = sta_content::fake::db();
+        let mut db = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for weapon in fake.weapons() { db = db.weapon(weapon.clone()); }
+        for unit in fake.units() {
+            let mut unit = unit.clone();
+            if unit.odf == "fx_station" {
+                unit.raw = Arc::new(sta_odf::resolve("unit", &mut |_| Some("research = 1".into())).unwrap());
+            }
+            db = db.unit(unit);
+        }
+        let mut planet = UnitDef::new("fx_planet", "planet");
+        planet.build.list = vec![DefRef::new("fx_cruiser")];
+        planet.raw = Arc::new(sta_odf::resolve("unit", &mut |_| Some("research = 1".into())).unwrap());
+        db = db.unit(planet);
+        let db = db.build().unwrap();
+        for (odf, expected_label, expected_sprite) in [
+            ("fx_station", "RESEARCH", "b_research"),
+            ("fx_planet", "RESEARCH", "b_research"),
+            ("fx_yard", "BUILD", "b_build"),
+        ] {
+            let f = feed(db.clone(), vec![unit(&db, 2, odf, 1, 100.0, None)], &[2]);
+            let opener = grid(&f, Page::Top).into_iter().find(|b| b.act == Act::OpenBuild).unwrap();
+            assert_eq!(opener.label, expected_label, "{odf}");
+            assert_eq!(opener.tip, if expected_label == "RESEARCH" { "Research menu" } else { "Build" }, "{odf}");
+            assert_eq!(opener.sprite_names, [expected_sprite], "{odf}");
+            if expected_label == "RESEARCH" {
+                let strings = crate::ui::i18n::Strings::from_game("english", r#""GUI_CP_RESEARCH_TOOLTIP", "Native short", "GUI_CP_RESEARCH_VTOOLTIP", "Native verbose","#);
+                assert_eq!(strings.tooltip_text(&opener.tip), "Native short");
+                assert_eq!(strings.tooltip_text(opener.verbose.as_deref().unwrap()), "Native verbose");
+            }
+            assert!(grid(&f, Page::Build).iter().any(|b| matches!(b.act, Act::Build { .. })), "{odf}");
+        }
+    }
+
+    #[test]
     fn capability_grid_filters_static_mixed_disabled_and_stale_selection() {
         let db = sta_content::fake::db();
         let units = vec![
@@ -1268,15 +1439,15 @@ mod tests {
         let (index, _) = sta_content::OdfIndex::build(&vfs);
         let Ok((db, _)) = ContentDb::load(&vfs, &index) else { return };
         let (mut queues, mut places) = (0, 0);
-        for u in db.units().filter(|u| !u.build.list.is_empty()) {
+        for u in db.units().filter(|u| !u.build.list.is_empty() && !u.is_evolver()) {
             let kinds: Vec<EntityKind> = u.build.list.iter().filter_map(|r| db.unit(r.key)).map(EntityKind::of_def).collect();
             let crafts = kinds.iter().any(|k| *k == EntityKind::Craft);
             let stations = kinds.iter().any(|k| *k == EntityKind::Station);
             if crafts && !stations {
-                assert!(!deploys_at_site(u), "{}: builds only craft, must queue in place", u.odf);
+                assert!(u.build.list.iter().filter_map(|item| db.unit(item.key)).all(|product| !EntityKind::build_requires_site(u, product)), "{}: builds only craft, must queue in place", u.odf);
                 queues += 1;
             } else if stations && !crafts && EntityKind::of_def(u) == EntityKind::Craft {
-                assert!(deploys_at_site(u), "{}: a craft that builds only stations places them", u.odf);
+                assert!(u.build.list.iter().filter_map(|item| db.unit(item.key)).all(|product| EntityKind::build_requires_site(u, product)), "{}: a craft that builds only stations places them", u.odf);
                 places += 1;
             }
         }
@@ -1360,6 +1531,34 @@ mod tests {
         let f = feed(db_with(Some(TREE)), units, &[2]);
         assert_eq!(look(&f, "fx_frigate"), Some((Look::Ready, None)));
         assert_eq!(owned_counts(&f).get("fx_station"), Some(&1));
+    }
+
+    #[test]
+    fn research_refusals_lock_visible_build_items_without_moving_their_cells() {
+        use sta_sim::production::view::ResearchView;
+
+        let db = db_with(None);
+        let mut f = feed(db.clone(), vec![unit(&db, 2, "fx_yard", 1, 100.0, None)], &[2]);
+        let cruiser = db.units().find(|u| u.odf == "fx_cruiser").unwrap().key;
+        for (block, reason) in [
+            (ResearchBlock::AlreadyResearched, "already researched"),
+            (ResearchBlock::Queued, "research already queued"),
+            (ResearchBlock::NoSlot, "no research slot available"),
+        ] {
+            f.production = vec![ProductionView {
+                builder: EntityId(2),
+                jobs: Vec::new(),
+                site: None,
+                portal: None,
+                research: Some(ResearchView { unavailable: vec![(cruiser, block)], pods: Vec::new(), active_axes: None }),
+            }];
+            let buttons = grid(&f, Page::Build);
+            assert_eq!(buttons[0].cell, 0);
+            assert_eq!(buttons[0].look, Look::Locked);
+            assert!(buttons[0].verbose.as_deref().unwrap().contains(reason));
+            assert_eq!(buttons[1].cell, 1);
+            assert_eq!(buttons[1].look, Look::Ready);
+        }
     }
 
     /// A text tree that leaves an item out empties that item's cell; the other cells keep their
@@ -1512,7 +1711,7 @@ mod tests {
         let mut native = NativeCommands::default();
         native.commands.insert("cancelbuild".into(), NativeCommand {
             odf: "cancelbuild.odf".into(), command: "NONE".into(), button: "b_cancel".into(),
-            preferred: Some([0, 3]), menu: None, tooltip: None, verbose: None,
+            preferred: Some([0, 3]), menu: None, source: Vec::new(), tooltip: None, verbose: None,
             normal: None, hovered: None, pressed: None, disabled: None, active: None,
         });
         native
@@ -1647,5 +1846,115 @@ mod tests {
         assert_eq!(r.iter().map(|e| (e.name.as_str(), e.id, e.text.as_str())).collect::<Vec<_>>(), [("Dilithium", 0, "3000"), ("Tritanium", 1, "20"), ("Supply", 3, "0"), ("officers", 4, "3/10")]);
         let names = resource_model(&f);
         assert_eq!(cost_text(&[261.0, 181.0, 0.0, 10.0], &names), "261 Dilithium, 181 Tritanium, 10 Supply");
+    }
+
+    /// A def with an item list and the given raw keys (authored data).
+    fn menu_def(odf: &str, class: &str, keys: &str) -> UnitDef {
+        let mut def = UnitDef::new(odf, class);
+        def.build.list = vec![DefRef::new("fx_cruiser")];
+        def.raw = Arc::new(sta_odf::resolve(odf, &mut |_| Some(keys.to_owned())).unwrap());
+        def
+    }
+
+    fn menu_feed(units: Vec<UnitDef>, mobile_miner: bool) -> HudFeed {
+        let fake = sta_content::fake::db();
+        let mut db = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for weapon in fake.weapons() { db = db.weapon(weapon.clone()); }
+        for unit in fake.units() {
+            if !(mobile_miner && unit.odf == "fx_miner") { db = db.unit(unit.clone()); }
+        }
+        let first = units[0].odf.clone();
+        for u in units { db = db.unit(u); }
+        let db = db.build().unwrap();
+        feed(db.clone(), vec![unit(&db, 2, &first, 1, 100.0, None)], &[2])
+    }
+
+    fn openers(f: &HudFeed) -> Vec<(usize, Vec<String>)> {
+        grid(f, Page::Top).into_iter().filter(|b| b.act == Act::OpenBuild).map(|b| (b.cell, b.sprite_names)).collect()
+    }
+
+    #[test]
+    fn the_evolve_key_gives_an_evolve_menu_button() {
+        // Evolve-only: the Evolve button takes the opener's cell, same action as Build.
+        let f = menu_feed(vec![menu_def("m_evolve", "station", "evolve = 1\n")], false);
+        assert_eq!(openers(&f), [(0, vec!["b_evolve".to_string()])]);
+        let b = grid(&f, Page::Top).into_iter().find(|b| b.act == Act::OpenBuild).unwrap();
+        assert_eq!((b.label.as_str(), b.tip.as_str(), b.verbose.as_deref()), ("EVOLVE", "Evolve menu", Some("Open the evolve menu.")));
+        let strings = crate::ui::i18n::Strings::from_game("english", r#""GUI_CP_EVOLVE_TOOLTIP", "s", "GUI_CP_EVOLVE_VTOOLTIP", "v","#);
+        assert_eq!((strings.tooltip_text(&b.tip), strings.tooltip_text(b.verbose.as_deref().unwrap())), ("s", "v"));
+        assert!(grid(&f, Page::Build).iter().any(|b| matches!(b.act, Act::Build { .. })), "the same item page");
+        // Research keeps winning (one button).
+        let f = menu_feed(vec![menu_def("m_evolve", "station", "evolve = 1\nresearch = 1\n")], false);
+        assert_eq!(openers(&f), [(0, vec!["b_research".to_string()])]);
+    }
+
+    /// INTERIM placement: a builder with the evolve key keeps Build in the opener's cell and gets
+    /// Evolve in the first free cell, never one a command already holds (a mobile builder that mines).
+    #[test]
+    fn a_builder_with_the_evolve_key_shows_both_buttons_in_distinct_cells() {
+        let mut miner = sta_content::fake::db().units().find(|u| u.odf == "fx_miner").unwrap().clone();
+        miner.build.list = vec![DefRef::new("fx_cruiser")];
+        miner.raw = Arc::new(sta_odf::resolve("fx_miner", &mut |_| Some("builder_facility = 1\nevolve = 1\n".into())).unwrap());
+        let f = menu_feed(vec![miner], true);
+        let g = grid(&f, Page::Top);
+        let mine = g.iter().find(|b| b.act == Act::Target(TargetMode::Mine)).expect("it mines").cell;
+        let o = openers(&f);
+        assert_eq!(o.len(), 2);
+        assert_eq!(o[0], (0, vec!["b_build".to_string()]));
+        assert_eq!(o[1].1, ["b_evolve"]);
+        assert_ne!(o[1].0, mine);
+        let mut cells: Vec<usize> = g.iter().map(|b| b.cell).collect();
+        cells.sort_unstable();
+        cells.dedup();
+        assert_eq!(cells.len(), g.len(), "no two buttons share a cell");
+        let others: Vec<usize> = g.iter().filter(|b| b.sprite_names != ["b_evolve"]).map(|b| b.cell).collect();
+        assert_eq!(Some(o[1].0), (0..).find(|c| !others.contains(c)), "the first free cell");
+    }
+
+    /// Install-gated (`STA64_TEST_A2_STOCK_INSTALL`, read at run time, structure only): every class
+    /// with an item list shows the menu button(s) its keys give, found by sprite name; research and
+    /// planet classes, builder-ship and builder-facility classes and evolve classes exist, and the
+    /// three sprite names resolve in a mounted GUI sprite table.
+    #[test]
+    fn installed_classes_show_the_menu_button_their_keys_give() {
+        let Some(root) = std::env::var_os("STA64_TEST_A2_STOCK_INSTALL") else {
+            eprintln!("SKIP: set STA64_TEST_A2_STOCK_INSTALL");
+            return;
+        };
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), None).unwrap();
+        let (index, _) = sta_content::OdfIndex::build(&vfs);
+        let (db, _) = ContentDb::load(&vfs, &index).unwrap();
+        let (mut research, mut planet, mut ship, mut facility, mut evolve) = (0, 0, 0, 0, 0);
+        for def in db.units().filter(|d| !d.build.list.is_empty()) {
+            let key = |k: &str| def.raw.bool(k) == Some(true);
+            let builds = key("builder_ship") || key("builder_facility");
+            let expected: Vec<&str> = if key("research") {
+                vec!["b_research"]
+            } else if key("evolve") && builds {
+                vec!["b_build", "b_evolve"]
+            } else if key("evolve") {
+                vec!["b_evolve"]
+            } else {
+                vec!["b_build"]
+            };
+            let f = feed(db.clone(), vec![unit(&db, 2, &def.odf, 1, 100.0, None)], &[2]);
+            let got: Vec<String> = openers(&f).into_iter().flat_map(|(_, s)| s).collect();
+            assert_eq!(got, expected, "{}", def.odf);
+            research += usize::from(key("research") && def.planet_role.is_none());
+            planet += usize::from(key("research") && def.planet_role.is_some());
+            ship += usize::from(key("builder_ship") && !key("research"));
+            facility += usize::from(key("builder_facility") && !key("research"));
+            evolve += usize::from(key("evolve") && !key("research"));
+        }
+        assert!(research > 0 && planet > 0 && ship > 0 && facility > 0 && evolve > 0, "{research} {planet} {ship} {facility} {evolve}");
+        let tables: Vec<_> = vfs
+            .list("sprites")
+            .into_iter()
+            .filter(|p| p.rsplit('/').next().is_some_and(|f| f.starts_with("gui_") && f.ends_with(".spr")))
+            .map(|p| crate::ui::gui_sprites::read_table(&vfs, &p))
+            .collect();
+        for name in ["b_build", "b_research", "b_evolve"] {
+            assert!(tables.iter().any(|t| t.sprite(name).is_some() || t.sprite(&format!("{name}.0")).is_some()), "{name} resolves");
+        }
     }
 }

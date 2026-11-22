@@ -28,6 +28,8 @@
 // Wired into the game by INT-M3; until then only the frame runs and tests use it.
 #![allow(dead_code)]
 
+mod avatar;
+pub(crate) use avatar::closed as avatar_choice_closed;
 mod cinematic;
 mod footprint;
 pub(crate) mod object_footprints;
@@ -153,6 +155,7 @@ impl Plugin for HudPlugin {
             .init_resource::<UiScale>()
             .init_resource::<HudFeed>()
             .init_resource::<HudState>()
+            .init_resource::<avatar::ChoiceState>()
             .init_resource::<HudPointer>()
             .init_resource::<crate::ui::cursor::WantedCursor>()
             .init_resource::<crate::input::hover::HoveredUnit>()
@@ -179,11 +182,19 @@ impl Plugin for HudPlugin {
                     feed_from_link.run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<ExternalFeed>)),
                     fit_screen,
                     refresh,
-                    (stock::refresh, stock::update_values, (status::sync, status_gpu::refresh, status_gpu::update_values).chain()).chain(),
-                    stock::active,
-                    (stock::navigate, stock::buttons::press, stock::buttons::apply_more).chain(),
+                    (
+                        status::sync,
+                        stock::refresh,
+                        stock::update_values,
+                        stock::update_hull_tints,
+                        stock::update_a1_tints,
+                        status_gpu::refresh,
+                        status_gpu::update_values,
+                    ).chain(),
+                    (avatar::refresh, stock::active).chain(),
+                    (stock::navigate, stock::buttons::press, stock::buttons::apply_more).chain().run_if(avatar::closed),
                     panels::update_values.before(super::theme::WidgetPaint),
-                    host,
+                    (avatar::press, host).chain(),
                     pointer,
                     crate::input::hover::track.run_if(not(resource_exists::<ExternalFeed>)),
                     stock::infobar::update,
@@ -197,7 +208,7 @@ impl Plugin for HudPlugin {
                     ghost::update_ghost,
                     ghost::tint_ghost,
                     (ghost::sync_footprints, object_footprints::sync_object_footprints).chain(),
-                    super::gui_sprites::paint.after(super::theme::WidgetPaint),
+                    (stock::update_weapon_icon_tint, super::gui_sprites::paint.after(super::theme::WidgetPaint), stock::update_backdrop_fallback, stock::update_weapon_icon_visibility).chain(),
                 )
                     .chain()
                     .in_set(GameSet::Ui)
@@ -222,6 +233,7 @@ pub fn feed_from_link(link: Res<SimLink>, selection: Res<Selection>, content: Op
     feed.player = link.player();
     feed.selected.clone_from(&selection.0);
     feed.content = content.map(|c| c.0.clone());
+    feed.production = link.production().to_vec();
 }
 
 /// Fit the UI to the primary window and keep the layout's aspect.
@@ -299,7 +311,7 @@ fn refresh(
         }
         if layout_changed || drawn.as_ref().is_none_or(|d| !panels::same_info(&d.info, &now.info)) {
             clear(&mut commands, kids);
-            panels::fill_info(&mut commands, &theme, e, &now.info, Vec2::new(row.info.w, row.info.h));
+            panels::fill_info(&mut commands, &theme, e, &now.info, Vec2::new(row.info.w, row.info.h), &feed);
         }
     }
     if let Ok((e, mut node, kids)) = grid_panel.single_mut() {
@@ -377,6 +389,7 @@ fn host(
 }
 
 /// Is the window cursor over a HUD panel?
+#[allow(clippy::too_many_arguments)] // Bevy injects these system parameters.
 fn pointer(
     window: Option<Single<&Window, With<PrimaryWindow>>>,
     scale: Res<UiScale>,
@@ -384,9 +397,10 @@ fn pointer(
     state: Res<HudState>,
     stock: Res<stock::StockState>,
     status: Res<status_gpu::StatusUiState>,
+    avatar: Res<avatar::ChoiceState>,
     mut out: ResMut<HudPointer>,
 ) {
-    let over = window.and_then(|w| w.cursor_position()).is_some_and(|c| {
+    let over = avatar.is_open() || window.and_then(|w| w.cursor_position()).is_some_and(|c| {
         let p = c / scale.0.max(1e-3);
         if status.fallback_card().is_some_and(|r| r.contains(p)) { true }
         else if stock.layout.is_some() { stock.solid.iter().any(|r| r.contains(p)) }
@@ -407,7 +421,7 @@ fn press(
     bindings: Option<Res<crate::input::keys::KeyBindings>>,
     menu: Option<Res<crate::ui::ingame_menu::InGameMenu>>,
     scene: Option<Res<crate::frontend::scene::MenuScene>>,
-    feed: Res<HudFeed>,
+    (feed, stock, avatar): (Res<HudFeed>, Option<Res<stock::StockState>>, Option<Res<avatar::ChoiceState>>),
     mut state: ResMut<HudState>,
     mut queue: ResMut<CommandQueue>,
     mut issued: MessageWriter<OrderIssued>,
@@ -417,7 +431,7 @@ fn press(
     mut targets: ResMut<OrderTargets>,
     cheat: Option<Res<crate::cheats::input::CheatInput>>,
 ) {
-    if cheat.is_some_and(|c| c.open || c.blocked_this_frame) {
+    if avatar.is_some_and(|state| state.is_open()) || cheat.is_some_and(|c| c.open || c.blocked_this_frame) {
         clicks.read().for_each(drop);
         return;
     }
@@ -494,39 +508,44 @@ fn press(
                     trf("Place {0}: click the map (Esc cancels)", &[odf]),
                 ));
             }
+            Act::NativeOrder(odf) => {
+                if let Some(order) = stock.as_deref().and_then(|stock| stock.command(&feed, odf)) {
+                    issue_command(order, &mut queue, &mut issued, &mut targets);
+                }
+            }
             other => {
                 if let Act::Special(slot) = other
                     && Some(*slot) == pd_hotkey_slot
                 {
                     clicked_pd_slot = Some(*slot);
                 }
-                issue_command(&feed, other, &mut queue, &mut issued, &mut targets);
+                if let Some(order) = command(&feed, other) {
+                    issue_command(order, &mut queue, &mut issued, &mut targets);
+                }
             }
         }
     }
     if let Some(slot) = pd_hotkey_slot
         && clicked_pd_slot != Some(slot)
+        && let Some(order) = command(&feed, &Act::Special(slot))
     {
-        issue_command(&feed, &Act::Special(slot), &mut queue, &mut issued, &mut targets);
+        issue_command(order, &mut queue, &mut issued, &mut targets);
     }
 }
 
 fn issue_command(
-    feed: &HudFeed,
-    act: &Act,
+    (kind, units): (CommandKind, Vec<EntityId>),
     queue: &mut CommandQueue,
     issued: &mut MessageWriter<OrderIssued>,
     targets: &mut OrderTargets,
 ) {
-    if let Some((kind, units)) = command(feed, act) {
-        if matches!(&kind, CommandKind::Order(Order::Stop { .. })) { clear_order_targets(targets, &units); }
-        if let CommandKind::Order(o) = &kind
-            && let Some(k) = OrderKind::of(o)
-        {
-            issued.write(OrderIssued { units, kind: k });
-        }
-        queue.0.push(kind);
+    if matches!(&kind, CommandKind::Order(Order::Stop { .. })) { clear_order_targets(targets, &units); }
+    if let CommandKind::Order(o) = &kind
+        && let Some(k) = OrderKind::of(o)
+    {
+        issued.write(OrderIssued { units, kind: k });
     }
+    queue.0.push(kind);
 }
 
 /// The click that places an armed build: the point on the ground under the
@@ -643,7 +662,11 @@ fn order_at_aim(
     target_order(feed, mode, target, ground_point(aim.ray, y))
 }
 
-fn armed_cursor_name(mode: TargetMode, valid: bool) -> &'static str {
+/// The cursor of an armed pick, `valid` when a click would give an order (the table of
+/// `input::context::decide`). INTERIM: armed Attack over open space or an own ship, which the
+/// original answers with the attack cursor (measured), shows the refusal here because STA64 gives no
+/// order there; Patrol, Guard and special weapons are not armed modes of STA64 yet.
+pub(crate) fn armed_cursor_name(mode: TargetMode, valid: bool) -> &'static str {
     match (mode, valid) {
         (TargetMode::Move, true) => "c_move",
         (TargetMode::Move, false) => "c_nomove",
@@ -665,6 +688,8 @@ fn armed_cursor_name(mode: TargetMode, valid: bool) -> &'static str {
         // Installed tables have c_rally but no c_norally; use the move refusal art.
         (TargetMode::Rally, true) => "c_rally",
         (TargetMode::Rally, false) => "c_nomove",
+        (TargetMode::Special(_), true) => "c_attack",
+        (TargetMode::Special(_), false) => "c_noattack",
     }
 }
 
@@ -707,6 +732,8 @@ fn target_mode_available(feed: &HudFeed, mode: TargetMode) -> bool {
         TargetMode::TransportAttack => c.transport_attack_ready,
         TargetMode::Repair => c.repair,
         TargetMode::Decommission => c.decommission,
+        TargetMode::Special(slot) => c.specials.contains(&(slot, sta_sim::specials::SpecialKind::Replace))
+            && model::special_targeted(feed, slot) == Some(true),
     }
 }
 
@@ -809,6 +836,13 @@ fn target_order(
                 None => Target::Point(point?),
             };
             vec![Order::Rally { builders: ids.clone(), at }]
+        }
+        TargetMode::Special(slot) => {
+            let at = match target.and_then(|id| feed.view.unit(id).filter(|u| !u.flags.contains(UnitFlags::DYING)).map(|_| id)) {
+                Some(id) => Target::Entity(id),
+                None => Target::Point(point?),
+            };
+            vec![Order::Special { units: ids.clone(), slot, target: at }]
         }
     };
     Some((orders, ids))

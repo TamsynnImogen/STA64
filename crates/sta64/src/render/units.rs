@@ -423,7 +423,8 @@ pub(crate) fn attach_models(
         }
         // A resource moon's marker is drawn as the moon the game swaps it for (RND-16).
         let def = moons.moon_for(&vfs.0, &content.0, def, sim.map_or(0, |s| s.0.0 as u64)).unwrap_or(def);
-        let key = def.model.to_ascii_lowercase().trim_end_matches(".sod").to_owned();
+        let override_model = build_visual.and_then(crate::render::build_visuals::BuildVisual::model_override);
+        let key = override_model.unwrap_or(&def.model).to_ascii_lowercase().trim_end_matches(".sod").to_owned();
         let found = models
             .models
             .entry(key.clone())
@@ -443,7 +444,7 @@ pub(crate) fn attach_models(
             warn!("unit model unavailable: id={:?} odf={} model={key}", sim.map(|s| s.0), def.odf);
             continue;
         };
-        let scale = def.scale.to_f32();
+        let scale = if override_model.is_some() { 1.0 } else { def.scale.to_f32() };
         // What the map view gives the ships it draws itself: a click radius from the
         // model's bounds, and for team-owned things a strategic icon of the right
         // shape (the mod's `<model>_sv` sprite, else a silhouette of the model). Units
@@ -505,8 +506,20 @@ pub(crate) fn attach_models(
             let chunks = construction_chunk_count(def);
             model_scene::spawn_construction(&mut ctx, &model, e, chunks, 0.0)
         } else {
-            model_scene::spawn(&mut ctx, &model, e)
+            // A resource rock's model turns on a pivot below the unit, which `place` leaves alone.
+            let under = if sim.is_some() && def.is_evolver() {
+                ctx.commands.spawn((
+                    crate::render::build_visuals::EmbryoMesh, Transform::IDENTITY, Visibility::Inherited, ChildOf(e),
+                )).id()
+            } else {
+                crate::render::spin::rock_pivot(ctx.commands, e, &def.class.0, def.raw.f32("rotationSpeed"), sim.map_or(0, |s| s.0.0 as u64))
+            };
+            model_scene::spawn(&mut ctx, &model, under)
         };
+        if override_model.is_some() {
+            commands.entity(e).insert(crate::render::build_visuals::CocoonMesh);
+            continue;
+        }
         if def.class.0.eq_ignore_ascii_case("planet_obj") {
             model_scene::spawn_planet_nimbus(&mut ctx, &def.model, e);
         }
@@ -569,21 +582,44 @@ pub fn to_bevy(p: [f32; 3]) -> Vec3 {
     Vec3::new(p[0], p[1], -p[2])
 }
 
+pub(super) fn research_rotation(axes: [sta_sim::Vec3; 3]) -> Quat {
+    let [_, y, z] = axes.map(|v| to_bevy(v.to_f32()));
+    // The model's local +Z is mirrored as well as the world axes.
+    Transform::IDENTITY.looking_to(z, y).rotation
+}
+
 /// Place each unit between its last two ticks.
 pub(crate) fn place(link: Res<SimLink>, clock: Res<AnimClock>, mut q: Query<(&SimEntity, &mut Transform)>) {
     let alpha = clock.alpha().clamp(0.0, 1.0);
+    let pod_axes: std::collections::BTreeMap<_, _> = link.production().iter()
+        .filter_map(|row| row.research.as_ref())
+        .flat_map(|research| research.pods.iter())
+        .map(|pod| (pod.entity, pod.axes))
+        .collect();
     for (u, mut tf) in &mut q {
         let Some((pos, h)) = link.interpolate(u.0, alpha) else { continue };
         tf.translation = to_bevy(pos);
         // The model's front (+Z in the files) is Bevy's -Z after the mirror, which
         // is what `looking_to` points along the heading.
-        tf.rotation = Transform::IDENTITY.looking_to(Vec3::new(h[0], 0.0, -h[1]), Vec3::Y).rotation;
+        tf.rotation = pod_axes.get(&u.0).copied().map_or_else(
+            || Transform::IDENTITY.looking_to(Vec3::new(h[0], 0.0, -h[1]), Vec3::Y).rotation,
+            research_rotation,
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn research_rotation_follows_a_tilted_legacy_socket() {
+        let axes = [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]]
+            .map(sta_sim::Vec3::from_f32);
+        let rotation = research_rotation(axes);
+        assert!((rotation * Vec3::NEG_Z).abs_diff_eq(Vec3::NEG_Y, 0.0001));
+        assert!((rotation * Vec3::Y).abs_diff_eq(Vec3::NEG_Z, 0.0001));
+    }
     use crate::app::configure_sets;
     use crate::sim_link::{CommandQueue, SimLinkPlugin};
     use bevy::time::TimeUpdateStrategy;

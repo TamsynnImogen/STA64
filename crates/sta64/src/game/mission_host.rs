@@ -360,7 +360,7 @@ fn on_start_mission(
         p.begin();
     }
     commands.insert_resource(MapSeat(Some(launch.player().0)));
-    commands.insert_resource(ActiveMatch { setup: launch.placeholder(data.content.clone()), requested: false, frames: 0 });
+    commands.insert_resource(ActiveMatch { setup: launch.placeholder(data.content.clone()), local: Some(launch.player()), speed: crate::clock::MatchSpeed::Normal, fog: Default::default(), requested: false, frames: 0 });
     commands.insert_resource(MissionRun { campaign, mission, began: false, outcome: None, close_at: None, leaving: false, errors_seen: 0, blocked: None });
     // The camera's paths are there before the sim's first tick: the sim runs from the loading
     // screen, and the script's first shot (`lookFrom(Path)` at tick 1) is consumed long before

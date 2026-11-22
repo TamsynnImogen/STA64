@@ -35,9 +35,9 @@
 //!
 //! - Specular map: RGB masks the highlight at the diffuse UVs (alpha unused). The highlight is
 //!   Blinn-Phong per directional light, light colour x (N.H)^power, front facing, N.L > 0, added
-//!   after texturing, times the mask. A Phong lighting material (model 2) always supplies its own
-//!   specular colour and power, where a zero colour or a zero power means no highlight; any other
-//!   part uses [`DEFAULT_STRENGTH`] on each channel and [`DEFAULT_POWER`].
+//!   after texturing, times the mask. The default strength and power match A2FOExtensions' Refit
+//!   path. `STA64_SPECULAR_MATERIAL_COLOURS=1` opts into a Phong material's own colour and power.
+//!   With that option, a zero colour or power means no highlight.
 //! - Emissive: the maps of a material are combined, the brightest value per RGB channel at each
 //!   texel (the first sets the size, the rest are scaled to it, alpha ignored), and added to the
 //!   lit colour in display (gamma) values, clipped at 1. Self-lit: lights, shadows and the team
@@ -56,10 +56,9 @@ use sta_assets::{pixels, Rgba, TextureFormat as Fmt};
 use crate::render::stock::hulls::StockLight;
 use crate::render::textures::{repeat_sampler, upload, Loader};
 
-/// The highlight colour on each channel of a part that is not Phong (the extension's
-/// `SpecularMapStrength`).
+/// The default highlight colour on each channel (the extension's `SpecularMapStrength`).
 pub const DEFAULT_STRENGTH: f32 = 0.5;
-/// The highlight power of a part that is not Phong (the extension's `SpecularMapPower`).
+/// The default highlight power (the extension's `SpecularMapPower`).
 pub const DEFAULT_POWER: f32 = 24.0;
 /// The system words of an emissive map's name, after the suffix.
 pub const EMISSIVE_WORDS: [&str; 6] = ["warp", "impulse", "shields", "life", "sensor", "weapons"];
@@ -156,19 +155,25 @@ pub fn split_faction<'a>(stem: &'a str, known: &[&str]) -> (&'a str, Option<Stri
 pub struct MapSwitches {
     pub specular: bool,
     pub emissive: bool,
+    pub specular_material_colours: bool,
 }
 
 impl Default for MapSwitches {
     fn default() -> Self {
-        MapSwitches { specular: true, emissive: true }
+        MapSwitches { specular: true, emissive: true, specular_material_colours: false }
     }
 }
 
 impl MapSwitches {
     /// `STA64_SPECULAR_MAPS` / `STA64_EMISSIVE_MAPS`: `0` turns one off.
+    /// `STA64_SPECULAR_MATERIAL_COLOURS=1` opts into authored Phong highlights.
     pub fn from_env() -> MapSwitches {
         let on = |k: &str| std::env::var(k).map_or(true, |v| v.trim() != "0");
-        MapSwitches { specular: on("STA64_SPECULAR_MAPS"), emissive: on("STA64_EMISSIVE_MAPS") }
+        MapSwitches {
+            specular: on("STA64_SPECULAR_MAPS"),
+            emissive: on("STA64_EMISSIVE_MAPS"),
+            specular_material_colours: std::env::var("STA64_SPECULAR_MATERIAL_COLOURS").is_ok_and(|value| value.trim() == "1"),
+        }
     }
 
     /// The environment's switches, read once.
@@ -191,11 +196,11 @@ impl HullMaps {
     }
 }
 
-/// The highlight colour (rgb) and power (w) of a part with a specular map: a Phong material's own
-/// (zero meaning no highlight), the defaults for anything else.
-pub fn highlight_params(stock: Option<&StockLight>) -> Vec4 {
+/// The highlight colour (rgb) and power (w) of a part with a specular map.
+/// A2FOExtensions defaults to the map's highlight settings even on Phong materials.
+pub fn highlight_params(stock: Option<&StockLight>, use_material_colours: bool) -> Vec4 {
     match stock {
-        Some(l) if l.model == 2 => Vec3::from(l.specular).extend(l.power),
+        Some(l) if use_material_colours && l.model == 2 => Vec3::from(l.specular).extend(l.power),
         _ => Vec3::splat(DEFAULT_STRENGTH).extend(DEFAULT_POWER),
     }
 }
@@ -610,7 +615,7 @@ mod tests {
         let s = MapSuffixes { specular: Some("_specular".into()), emissive: Some("_emissive_".into()) };
         let ((over, off), cached) = install.run(false, |l| {
             let over = l.hull_maps_with(&s, "ship", None, &[], MapSwitches::default(), 10);
-            let off = l.hull_maps_with(&s, "ship", None, &[], MapSwitches { specular: false, emissive: false }, MAX_SPECULAR_BYTES);
+            let off = l.hull_maps_with(&s, "ship", None, &[], MapSwitches { specular: false, emissive: false, ..MapSwitches::default() }, MAX_SPECULAR_BYTES);
             (over, off)
         });
         assert!(over.as_ref().is_some_and(|m| m.specular.is_none() && m.emissive.is_some()), "only the specular map is capped");
@@ -712,22 +717,29 @@ mod tests {
     }
 
     #[test]
-    fn a_phong_material_supplies_its_own_highlight_and_zero_means_none() {
+    fn opted_in_phong_material_supplies_its_own_highlight_and_zero_means_none() {
         let (n, l, v, one) = (Vec3::Z, Vec3::Z, Vec3::Z, Vec3::ONE);
-        let own = highlight_params(Some(&phong([0.0, 0.0, 1.0], 16.0, 2)));
+        let own = highlight_params(Some(&phong([0.0, 0.0, 1.0], 16.0, 2)), true);
         assert_eq!(highlight(n, l, v, one, own, one), Vec3::new(0.0, 0.0, 1.0));
         assert_eq!(highlight(n, l, v, one, own, Vec3::ZERO), Vec3::ZERO, "a black map removes it");
         assert_eq!(highlight(n, l, v, one, own, Vec3::new(1.0, 0.0, 0.0)), Vec3::ZERO, "a red map masks a blue highlight");
-        let no_colour = highlight_params(Some(&phong([0.0; 3], 16.0, 2)));
+        let no_colour = highlight_params(Some(&phong([0.0; 3], 16.0, 2)), true);
         assert_eq!(highlight(n, l, v, one, no_colour, one), Vec3::ZERO, "Phong with a zero specular: none, not the defaults");
-        let no_power = highlight_params(Some(&phong([1.0; 3], 0.0, 2)));
+        let no_power = highlight_params(Some(&phong([1.0; 3], 0.0, 2)), true);
         assert_eq!(highlight(n, l, v, one, no_power, one), Vec3::ZERO, "Phong with power 0: none");
     }
 
     #[test]
     fn anything_else_takes_the_defaults_whatever_its_specular_data() {
         let (n, l, v, one) = (Vec3::Z, Vec3::Z, Vec3::Z, Vec3::ONE);
-        for p in [highlight_params(Some(&phong([0.9, 0.1, 0.1], 3.0, 1))), highlight_params(Some(&phong([0.0; 3], 0.0, 0))), highlight_params(None)] {
+        let zero_gloss = phong([0.0; 3], 4.0, 2);
+        let use_material_colours = MapSwitches::default().specular_material_colours;
+        for p in [
+            highlight_params(Some(&zero_gloss), use_material_colours),
+            highlight_params(Some(&phong([0.9, 0.1, 0.1], 3.0, 1)), true),
+            highlight_params(Some(&phong([0.0; 3], 0.0, 0)), true),
+            highlight_params(None, true),
+        ] {
             assert_eq!(p, Vec4::new(0.5, 0.5, 0.5, 24.0));
             assert_eq!(highlight(n, l, v, one, p, one), Vec3::splat(DEFAULT_STRENGTH));
         }
@@ -753,6 +765,6 @@ mod tests {
 
     #[test]
     fn switches_default_on() {
-        assert_eq!(MapSwitches::default(), MapSwitches { specular: true, emissive: true });
+        assert_eq!(MapSwitches::default(), MapSwitches { specular: true, emissive: true, specular_material_colours: false });
     }
 }
