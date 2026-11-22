@@ -628,6 +628,11 @@ pub struct NebulaEffects {
 }
 
 impl UnitDef {
+    /// Armada II's embryo producer, consumed when its product finishes.
+    pub fn is_evolver(&self) -> bool {
+        self.class.0 == "evolver"
+    }
+
     /// Whether the unit mines. The `miner` key decides when the ODF has one
     /// (stock `freight.odf` says `miner = 1`; the Data Miner, `fdata.odf`, is
     /// class `freighter` and says `miner = 0`); without it a `freighter` mines.

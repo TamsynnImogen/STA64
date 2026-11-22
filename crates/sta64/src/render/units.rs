@@ -423,7 +423,8 @@ pub(crate) fn attach_models(
         }
         // A resource moon's marker is drawn as the moon the game swaps it for (RND-16).
         let def = moons.moon_for(&vfs.0, &content.0, def, sim.map_or(0, |s| s.0.0 as u64)).unwrap_or(def);
-        let key = def.model.to_ascii_lowercase().trim_end_matches(".sod").to_owned();
+        let override_model = build_visual.and_then(crate::render::build_visuals::BuildVisual::model_override);
+        let key = override_model.unwrap_or(&def.model).to_ascii_lowercase().trim_end_matches(".sod").to_owned();
         let found = models
             .models
             .entry(key.clone())
@@ -443,7 +444,7 @@ pub(crate) fn attach_models(
             warn!("unit model unavailable: id={:?} odf={} model={key}", sim.map(|s| s.0), def.odf);
             continue;
         };
-        let scale = def.scale.to_f32();
+        let scale = if override_model.is_some() { 1.0 } else { def.scale.to_f32() };
         // What the map view gives the ships it draws itself: a click radius from the
         // model's bounds, and for team-owned things a strategic icon of the right
         // shape (the mod's `<model>_sv` sprite, else a silhouette of the model). Units
@@ -506,9 +507,19 @@ pub(crate) fn attach_models(
             model_scene::spawn_construction(&mut ctx, &model, e, chunks, 0.0)
         } else {
             // A resource rock's model turns on a pivot below the unit, which `place` leaves alone.
-            let under = crate::render::spin::rock_pivot(ctx.commands, e, &def.class.0, def.raw.f32("rotationSpeed"), sim.map_or(0, |s| s.0.0 as u64));
+            let under = if sim.is_some() && def.is_evolver() {
+                ctx.commands.spawn((
+                    crate::render::build_visuals::EmbryoMesh, Transform::IDENTITY, Visibility::Inherited, ChildOf(e),
+                )).id()
+            } else {
+                crate::render::spin::rock_pivot(ctx.commands, e, &def.class.0, def.raw.f32("rotationSpeed"), sim.map_or(0, |s| s.0.0 as u64))
+            };
             model_scene::spawn(&mut ctx, &model, under)
         };
+        if override_model.is_some() {
+            commands.entity(e).insert(crate::render::build_visuals::CocoonMesh);
+            continue;
+        }
         if def.class.0.eq_ignore_ascii_case("planet_obj") {
             model_scene::spawn_planet_nimbus(&mut ctx, &def.model, e);
         }

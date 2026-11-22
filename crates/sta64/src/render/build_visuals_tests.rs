@@ -87,6 +87,29 @@ fn roots(app: &mut App) -> BTreeMap<EntityId, (Entity, ContentKey, Kind, Option<
 }
 
 #[test]
+fn a_loaded_cocoon_conceals_the_embryo_after_one_third_and_cancel_restores_it() {
+    let db = sta_content::fake::db();
+    let product = db.key("fx_cruiser").unwrap();
+    let view = source_view(&db);
+    let mut app = App::new();
+    app.add_systems(Update, sync_embryo_meshes);
+    let parent = app.world_mut().spawn(SimEntity(EntityId(1))).id();
+    let mesh = app.world_mut().spawn((EmbryoMesh, Visibility::Inherited, ChildOf(parent))).id();
+    let visual = BuildVisual { builder: EntityId(1), def: product, kind: Kind::Cocoon, owner: PlayerId(0) };
+    install_link(&mut app, view.clone(), vec![row(1, product, 0.5, true, true, None)]);
+    app.update();
+    assert_eq!(app.world().get::<Visibility>(mesh), Some(&Visibility::Inherited));
+
+    app.world_mut().spawn((visual, CocoonMesh));
+    app.update();
+    assert_eq!(app.world().get::<Visibility>(mesh), Some(&Visibility::Hidden));
+
+    install_link(&mut app, view, Vec::new());
+    app.update();
+    assert_eq!(app.world().get::<Visibility>(mesh), Some(&Visibility::Inherited));
+}
+
+#[test]
 fn production_roots_follow_head_rewind_cancel_and_independent_yards() {
     let db = sta_content::fake::db();
     let cruiser = db.key("fx_cruiser").unwrap();

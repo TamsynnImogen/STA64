@@ -65,6 +65,9 @@ impl Production {
                 .map(|job| {
                     let (pos, heading) =
                         db.unit(unit.def).map_or((unit.pos, unit.heading), |def| {
+                            if def.is_evolver() {
+                                return (unit.pos, unit.heading);
+                            }
                             let out = launch::place(def, unit.pos, unit.heading);
                             (out.pos, out.heading)
                         });

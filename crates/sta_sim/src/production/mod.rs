@@ -303,6 +303,14 @@ impl Production {
         ids
     }
 
+    pub(crate) fn stationary_evolvers(&self, db: &ContentDb, units: &Entities) -> impl Iterator<Item = EntityId> {
+        self.queues.iter().filter_map(|(id, queue)| {
+            let head = queue.first().filter(|job| job.started)?;
+            let builder = db.unit(units.get(id)?.def)?;
+            (builder.is_evolver() && db.unit(head.def).is_some_and(|d| d.is_starbase)).then_some(id)
+        })
+    }
+
     /// Builders flying to a build site or building there, ascending
     /// (SIM-36: stock construction ships hold fire meanwhile).
     pub(crate) fn builders_at_work(&self) -> Vec<EntityId> {
@@ -348,13 +356,21 @@ impl Production {
             return false;
         }
         let (kind, owner, bdef) = (b.kind, b.owner, b.def);
-        let (Some(bd), Some(_)) = (db.unit(bdef), db.unit(what)) else {
+        let (Some(bd), Some(product)) = (db.unit(bdef), db.unit(what)) else {
             return false;
         };
         if !bd.build.list.is_empty() && !bd.build.list.iter().any(|r| r.key == what) {
             return false;
         }
-        let kind = if EntityKind::producer_def(bd) { EntityKind::Station } else { kind };
+        let evolves = bd.is_evolver();
+        if evolves && (bd.build.list.is_empty() || self.queues.get(builder).is_some() || self.is_deploying(builder)) {
+            return false;
+        }
+        let kind = if EntityKind::producer_def(bd) || (evolves && !EntityKind::build_requires_site(bd, product)) {
+            EntityKind::Station
+        } else {
+            kind
+        };
         let pay_now = db.unit_features(bd).pay_on_queue;
         match kind {
             EntityKind::Station => {
@@ -398,6 +414,10 @@ impl Production {
                             })
                             .map(|(_, d)| d.at),
                     );
+                    orbiters.extend(self.stationary_evolvers(db, units).filter_map(|id| {
+                        let job = self.queues.get(id)?.first()?;
+                        orbit::is_orbital(db.unit(job.def)?).then_some(units.get(id)?.pos)
+                    }));
                     match orbit::snap(&planets, &orbiters, at) {
                         Ok(slot) => {
                             outward = Some(slot.heading);
@@ -423,6 +443,10 @@ impl Production {
                     .iter()
                     .filter(|(id, _)| *id != builder)
                     .map(|(_, d)| site::unit_bounds(db, d.def, d.at));
+                let cocoons = self.stationary_evolvers(db, units).filter_map(|id| {
+                    let job = self.queues.get(id)?.first()?;
+                    Some(site::unit_bounds(db, job.def, units.get(id)?.pos))
+                });
                 // An orbital station must overlap its attachment planet. It
                 // still cannot encroach on another object, region or site.
                 let limits = if parent_planet.is_some() {
@@ -435,6 +459,7 @@ impl Production {
                     site::unit_bounds(db, what, at),
                     obstacles
                         .chain(reserved)
+                        .chain(cocoons)
                         .chain(regions.iter().filter_map(site::region_bounds)),
                 )
                 .is_err()
@@ -460,7 +485,7 @@ impl Production {
                 );
                 // The rig parks beside the site, not on it: the structure
                 // goes up at `at` and the rig stops at its edge.
-                let ring = stand_ring(db, units, what, builder);
+                let ring = if evolves { Fixed::ZERO } else { stand_ring(db, units, what, builder) };
                 if let Some(r) = units.get_mut(builder) {
                     let (mut dx, mut dz) = (r.pos.x - at.x, r.pos.z - at.z);
                     let mut d = (dx * dx + dz * dz).sqrt();
@@ -528,9 +553,10 @@ impl Production {
         events: &mut Vec<SimEvent>,
         confinement: &mut crate::boundary::state::Confinement,
         bounds: Option<(sta_core::Vec3, sta_core::Vec3)>,
-    ) {
+    ) -> Vec<(EntityId, EntityId)> {
+        let mut evolved = Vec::new();
         if self.is_empty() {
-            return;
+            return evolved;
         }
         self.rallies.prune(units);
         let mut newly_finished = Vec::new();
@@ -568,6 +594,8 @@ impl Production {
                 continue;
             };
             let (pos, heading, yard_def) = (y.pos, y.heading, y.def);
+            let builder = db.unit(yard_def);
+            let evolves = builder.is_some_and(sta_content::UnitDef::is_evolver);
             let q = self.queues.get_mut(yard).expect("listed");
             if let Some(head) = q.first_mut()
                 && head.started
@@ -577,13 +605,12 @@ impl Production {
                     let Item { def, owner, .. } = q.remove(0);
                     if let Some(d) = db.unit(def) {
                         // SIM-16: out of the builder's launch hardpoint.
-                        let builder = db.unit(yard_def);
                         let out = match builder {
-                            Some(b) => launch::place(b, pos, heading),
-                            None => launch::Launch { pos, heading, exit: None },
+                            Some(b) if !evolves => launch::place(b, pos, heading),
+                            _ => launch::Launch { pos, heading, exit: None },
                         };
                         let mut unit = Entity::from_def(d, db.features(), owner, out.pos, out.heading);
-                        if unit.orderable() {
+                        if unit.orderable() && !evolves {
                             unit.target = self.rallies.destination(yard, owner, units).or_else(|| {
                                 let a2 = matches!(db.profile(), sta_content::Profile::Sta2Classic | sta_content::Profile::Fo3 | sta_content::Profile::Fo4);
                                 builder.filter(|_| a2)
@@ -596,6 +623,9 @@ impl Production {
                         events.push(SimEvent::Built { builder: yard, id });
                         events.push(SimEvent::Spawned { id });
                         newly_finished.push(id);
+                        if evolves {
+                            evolved.push((yard, id));
+                        }
                     }
                 }
             }
@@ -638,6 +668,7 @@ impl Production {
                 self.drop_deploy(db, eco, rig);
                 continue;
             };
+            let evolves = db.unit(r.def).is_some_and(sta_content::UnitDef::is_evolver);
             let (dx, dz) = (d.at.x - r.pos.x, d.at.z - r.pos.z);
             // The smooth model (SIM-15) stops a craft anywhere within
             // `tooCloseToTurn` of its point, so a rig there must be in reach.
@@ -646,7 +677,11 @@ impl Production {
                 crate::kinematics::Model::Native => deploy_reach(&r.stats),
             };
             // The rig stops beside the structure's footprint (SIM-21).
-            let reach = reach + stand_ring(db, units, d.def, rig);
+            let reach = if evolves {
+                r.stats.too_close_to_turn + crate::arrive_distance()
+            } else {
+                reach + stand_ring(db, units, d.def, rig)
+            };
             if (dx * dx + dz * dz).sqrt() > reach {
                 continue;
             }
@@ -657,6 +692,17 @@ impl Production {
             let Some(def) = db.unit(d.def) else { continue };
             if let Some(r) = units.get_mut(rig) {
                 r.target = None;
+                if evolves {
+                    r.pos = d.at;
+                    r.speed = Fixed::ZERO;
+                }
+            }
+            if evolves {
+                // Evolver::StartBuild turns the embryo at the site into a
+                // cocoon. The product is constructed only at FinishBuild.
+                self.queues.insert(rig, vec![Item { def: d.def, owner: d.owner, done: 0, started: true, paid: true }]);
+                events.push(SimEvent::BuildStarted { builder: rig, what: d.def });
+                continue;
             }
             // An orbital station faces along its planet's outward radial.
             let heading = if orbit::is_orbital(def) {
@@ -683,6 +729,7 @@ impl Production {
             });
             events.push(SimEvent::Spawned { id });
         }
+        evolved
     }
 
     pub(crate) fn hash_into(&self, h: &mut Fnv) {

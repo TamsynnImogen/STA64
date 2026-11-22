@@ -18,7 +18,7 @@ use super::super::{
     infobar::InfoStyle,
     layout::StockLayout,
 };
-use super::super::info::{StockBar, bar_colours, node, picture, text, wireframe_layers_of};
+use super::super::info::{StockBar, bar_colours, node, picture, place, text, wireframe_layers_of};
 use crate::ui::{
     gui_sprites::{GuiImage, GuiImageSampling},
     hud::{
@@ -198,6 +198,10 @@ fn single_card(
             picture(commands, root, r, name, 0);
         }
     };
+    // The class caption sits on the first piece of A1's inner identity panel.
+    for piece in layout.pieces_in("info", "infoSingleBackground") {
+        picture(commands, root, place(origin, piece.rect), &piece.name, piece.frame);
+    }
     // RaceIcon draws both layers in the selected owner's colour. A1Compat restores
     // the bar in Roots, where the native insignia and team palette are still available.
     if let Some(r) = layout.at(origin, "infoSingleRaceIconArea") {
@@ -212,12 +216,14 @@ fn single_card(
         commands.entity(root).with_child((node(r), Pickable::IGNORE, image, LiveTint::Race(single.id)));
     }
     pic(commands, "infoSingleNameTextBackground", "infoSingleNameTextBackgroundArea");
-    let colour = |key: &str, fallback: Color| layout.colour(key).unwrap_or(fallback);
+    // Armada.exe's GUI colour lookup supplies black to StandardText for a
+    // missing *TextColor. The artwork under these captions is light.
+    let colour = |key: &str| layout.colour(key).unwrap_or(Color::BLACK);
     if let Some(r) = key_rect(layout, origin, &["infoSingleNameTextInformationArea", "infoSingleNameTextArea"]) {
-        text(commands, root, r, single.name.clone(), colour("infoSingleNameTextColor", theme.text), theme.micro_size, None);
+        text(commands, root, r, single.name.clone(), colour("infoSingleNameTextColor"), theme.micro_size, None);
     }
     if let Some(r) = key_rect(layout, origin, &["infoSingleClassTextInformationArea", "infoSingleClassTextArea"]) {
-        text(commands, root, r, single.class.clone(), colour("infoSingleClassTextColor", theme.text_dim), theme.micro_size, None);
+        text(commands, root, r, single.class.clone(), colour("infoSingleClassTextColor"), theme.micro_size, None);
     }
     if let Some(r) = layout.at(origin, "infoSingleWireframeIconArea")
         && let Some(unit) = feed.view.unit(single.id)
@@ -257,7 +263,7 @@ fn single_card(
     // Crew: label bar, label, value and the dot.
     if let Some((now, ratio)) = extra.crew {
         pic(commands, "infoSingleCrewTextBackground", "infoSingleCrewTextBackgroundArea");
-        let crew_colour = layout.colour("infoSingleCrewTextColor").unwrap_or(theme.text);
+        let crew_colour = colour("infoSingleCrewTextColor");
         // UI-48: the label on its bar, a string-table key (`GUI_SD_TEXT_CREW_LABEL` in stock).
         if let (Some(key), Some(r)) = (layout.name("infoSingleCrewTextLabel"), layout.at(origin, "infoSingleCrewTextLabelArea")) {
             let label = strings.map(|s| s.game_text(key)).filter(|t| *t != key).unwrap_or("CREW").to_owned();
