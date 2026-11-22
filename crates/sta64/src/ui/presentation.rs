@@ -1111,7 +1111,7 @@ fn draw_panel(
     // placement of the objectives text, measured at one size); headers and the title are the title
     // role (read from the executable, static), placed in their rectangle by [`StockRoleMark`].
     let text = |t: String, size: f32, colour: Color| (StockRoleMark::new(StockRole::Default), sprite_text_styled(t, size, colour, SpriteTextStyle::role(font_role(&theme, size)).wrap_to_parent()));
-    let header = |t: String, colour: Color, h: HAlign, v: VAlign, rect: [f32; 4]| (StockRoleMark::placed(StockRole::Title, h, v, rect), sprite_text_styled(t, theme.heading_size, colour, SpriteTextStyle::role(font_role(&theme, theme.heading_size)).wrap_to_parent()));
+    let header = |t: String, colour: Color, h: HAlign, v: VAlign, rect: [f32; 4]| (StockRoleMark::placed(StockRole::Title, h, v, rect, l.canvas), sprite_text_styled(t, theme.heading_size, colour, SpriteTextStyle::role(font_role(&theme, theme.heading_size)).wrap_to_parent()));
     let line = |t: String, colour: Color| (Node { margin: UiRect::bottom(Val::Px(theme.gap)), ..default() }, children![text(t, theme.text_size, colour)]);
     let summary_colour = l.summary_colour.unwrap_or(Color::srgb(0.8, 1.0, 1.0));
     let header_colour = l.header_colour.unwrap_or(summary_colour);
@@ -1176,7 +1176,7 @@ fn draw_panel(
                 let colour = l.title_colour.unwrap_or(theme.title);
                 if stock_text {
                     // Centred in its rectangle (seen in one frame of the Armada II window).
-                    p.spawn((boxed(l.title, JustifyContent::Center), children![(StockRoleMark::placed(StockRole::Title, HAlign::Centre, VAlign::Centre, l.title), sprite_text_styled(c.title.clone(), theme.heading_size, colour, SpriteTextStyle::role(font_role(&theme, theme.heading_size)).centered_in_box()))]));
+                    p.spawn((boxed(l.title, JustifyContent::Center), children![(StockRoleMark::placed(StockRole::Title, HAlign::Centre, VAlign::Centre, l.title, l.canvas), sprite_text_styled(c.title.clone(), theme.heading_size, colour, SpriteTextStyle::role(font_role(&theme, theme.heading_size)).centered_in_box()))]));
                 } else {
                     p.spawn((at(l.title), children![text(c.title.clone(), theme.heading_size, colour)]));
                 }
@@ -2286,9 +2286,9 @@ mod tests {
             open(&mut app, "");
             let marks: Vec<(String, StockRoleMark)> = app.world_mut().query::<(&SpriteText, &StockRoleMark)>().iter(app.world()).map(|(t, m)| (t.text.clone(), *m)).collect();
             let mark = |text: &str| marks.iter().find(|(t, _)| t == text).unwrap_or_else(|| panic!("{text}: {marks:?}")).1;
-            assert_eq!(mark("Mission 1"), StockRoleMark::placed(StockRole::Title, HAlign::Centre, VAlign::Centre, [20.0, 10.0, 360.0, 40.0]));
-            assert_eq!(mark("BRIEFING SUMMARY:"), StockRoleMark::placed(StockRole::Title, HAlign::Left, VAlign::Top, [20.0, 60.0, 360.0, 30.0]));
-            assert_eq!(mark("OBJECTIVES:"), StockRoleMark::placed(StockRole::Title, HAlign::Left, VAlign::Top, [20.0, 200.0, 360.0, 30.0]));
+            assert_eq!(mark("Mission 1"), StockRoleMark::placed(StockRole::Title, HAlign::Centre, VAlign::Centre, [20.0, 10.0, 360.0, 40.0], (800.0, 600.0)));
+            assert_eq!(mark("BRIEFING SUMMARY:"), StockRoleMark::placed(StockRole::Title, HAlign::Left, VAlign::Top, [20.0, 60.0, 360.0, 30.0], (800.0, 600.0)));
+            assert_eq!(mark("OBJECTIVES:"), StockRoleMark::placed(StockRole::Title, HAlign::Left, VAlign::Top, [20.0, 200.0, 360.0, 30.0], (800.0, 600.0)));
             for body in ["Go.", "Find", "Hold"] {
                 assert_eq!(mark(body), StockRoleMark::new(StockRole::Default), "{body}");
             }

@@ -1107,14 +1107,14 @@ impl SpriteTextStyle {
 /// A text of the stock HUD's font rule, by role: the text takes the rule only while the one stock
 /// gate ([`stock_tip`](crate::ui::stock_tooltip::stock_tip): the Armada II look, the install's stock
 /// font rule, a stock HUD on screen) holds; otherwise it keeps the style it was spawned with. The
-/// optional placement is `(horizontal, vertical, rectangle in the sheet's units)` and applies on the
-/// stock path only. Grade: the roles read from the executable, static; the placements measured on
+/// optional placement is `(horizontal, vertical, rectangle, canvas of its own sheet)`, both in the
+/// sheet's units, and applies on the stock path only; the rectangle is scaled by the HUD over that canvas. Grade: the roles read from the executable, static; the placements measured on
 /// native frames (see [`StockPlace`](crate::ui::stock_font::StockPlace)).
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct StockRoleMark {
     /// `None`: a text whose role is not established; it keeps its own font.
     pub role: Option<StockRole>,
-    pub place: Option<(HAlign, VAlign, Vec2)>,
+    pub place: Option<(HAlign, VAlign, Vec2, Vec2)>,
 }
 
 impl StockRoleMark {
@@ -1127,25 +1127,26 @@ impl StockRoleMark {
         Self { role: None, place: None }
     }
 
-    /// The same text placed in a rectangle of the sheet (`x y w h`, only its size is used).
-    pub fn placed(role: StockRole, h: HAlign, v: VAlign, rect: [f32; 4]) -> Self {
-        Self { role: Some(role), place: Some((h, v, Vec2::new(rect[2], rect[3]))) }
+    /// The same text placed in a rectangle of a sheet (`x y w h`, only its size is used) whose
+    /// canvas is `canvas` (what the sheet's own layout uses, not a fixed reference).
+    pub fn placed(role: StockRole, h: HAlign, v: VAlign, rect: [f32; 4], canvas: (f32, f32)) -> Self {
+        Self { role: Some(role), place: Some((h, v, Vec2::new(rect[2], rect[3]), Vec2::new(canvas.0, canvas.1))) }
     }
 }
 
 /// Switch every [`StockRoleMark`] text to the stock rule while the gate holds, and back when not.
-fn apply_stock_roles(
+pub(crate) fn apply_stock_roles(
     profile: Option<Res<crate::ui::profile::UiProfile>>,
     fonts: Res<SpriteFonts>,
     canvas: Option<Res<StockTextCanvas>>,
     mut texts: Query<(&StockRoleMark, &mut SpriteTextStyle)>,
 ) {
     let on = crate::ui::stock_tooltip::stock_tip(profile.as_deref(), Some(&fonts), canvas.as_deref());
-    let units = canvas.as_deref().and_then(|c| c.0).map(|c| c.hud / crate::ui::stock_font::STOCK_SPACE);
+    let hud = canvas.as_deref().and_then(|c| c.0).map(|c| c.hud);
     for (mark, mut style) in &mut texts {
         let role = on.then_some(mark.role).flatten();
-        let place = match (on, mark.place, units) {
-            (true, Some((h, v, rect)), Some(k)) if mark.role.is_some() => Some(StockPlace { h, v, rect: rect * k }),
+        let place = match (on, mark.place, hud) {
+            (true, Some((h, v, rect, sheet)), Some(hud)) if mark.role.is_some() && sheet.x > 0.0 && sheet.y > 0.0 => Some(StockPlace { h, v, rect: rect * hud / sheet }),
             _ => None,
         };
         if style.stock != role {
@@ -3366,7 +3367,7 @@ mod tests {
         let sq = Vec2::new(1600.0, 1200.0);
         let spawn_plain = |app: &mut App, marked: bool| {
             let text = sprite_text_styled("ab", 18.0, Color::WHITE, SpriteTextStyle::default());
-            if marked { app.world_mut().spawn((StockRoleMark::placed(StockRole::Title, HAlign::Left, VAlign::Top, [0.0, 0.0, 50.0, 20.0]), text)).id() } else { app.world_mut().spawn(text).id() }
+            if marked { app.world_mut().spawn((StockRoleMark::placed(StockRole::Title, HAlign::Left, VAlign::Top, [0.0, 0.0, 50.0, 20.0], (1600.0, 1200.0)), text)).id() } else { app.world_mut().spawn(text).id() }
         };
         let cases: [(UiProfile, bool, bool); 4] = [
             (UiProfile::Lcars, true, true),
@@ -3398,10 +3399,31 @@ mod tests {
         let mut images = Assets::<Image>::default();
         let fonts = authored_family(&mut images);
         let mut app = role_app(fonts, canvas(Vec2::new(1920.0, 1440.0), Vec2::new(3440.0, 1440.0), Centred), UiProfile::Armada2);
-        let e = app.world_mut().spawn((StockRoleMark::placed(StockRole::Title, HAlign::Centre, VAlign::Centre, [10.0, 20.0, 360.0, 40.0]), sprite_text_styled("ab", 18.0, Color::WHITE, SpriteTextStyle::default()))).id();
+        let e = app.world_mut().spawn((StockRoleMark::placed(StockRole::Title, HAlign::Centre, VAlign::Centre, [10.0, 20.0, 360.0, 40.0], (1600.0, 1200.0)), sprite_text_styled("ab", 18.0, Color::WHITE, SpriteTextStyle::default()))).id();
         app.update();
         let place = app.world().get::<SpriteTextStyle>(e).unwrap().place.unwrap();
         assert_eq!((place.h, place.v), (HAlign::Centre, VAlign::Centre));
         assert!((place.rect - Vec2::new(432.0, 48.0)).abs().max_element() < 1e-3, "{:?}", place.rect);
+    }
+
+    /// A sheet with its own canvas (not the 1600x1200 reference): the centred text ends up centred in
+    /// the box the sheet's layout gives, i.e. the rectangle scaled by the HUD over that canvas.
+    #[test]
+    fn a_centred_text_of_a_sheet_with_its_own_canvas_ends_up_centred() {
+        use crate::ui::hud::stock::layout::HudFit::Centred;
+        use crate::ui::profile::UiProfile;
+        let mut images = Assets::<Image>::default();
+        let fonts = authored_family(&mut images);
+        // A 1600x1200 HUD; the sheet is 800x600 with a 360x40 title rectangle: the box is 720x80 units.
+        let sq = Vec2::new(1600.0, 1200.0);
+        let mut app = role_app(fonts, canvas(sq, sq, Centred), UiProfile::Armada2);
+        let e = app.world_mut().spawn((StockRoleMark::placed(StockRole::Title, HAlign::Centre, VAlign::Centre, [20.0, 10.0, 360.0, 40.0], (800.0, 600.0)), sprite_text_styled("ab", 18.0, Color::WHITE, SpriteTextStyle::default()))).id();
+        app.update();
+        let node = app.world().get::<Node>(e).unwrap().clone();
+        let px = |v: Val| if let Val::Px(v) = v { v } else { panic!("px") };
+        // The title font at this HUD is 24 high (frame) at 1.25, glyphs 5.5 wide advancing 7: the
+        // block is 14 wide and 30 high in a 720 x 80 box: ((719 - 14) / 2, (79 - 30) / 2) = (352.5, 24.5).
+        assert_eq!(node.position_type, PositionType::Absolute);
+        assert_eq!((px(node.left), px(node.top), px(node.width), px(node.height)), (353.0, 25.0, 14.0, 30.0));
     }
 }
