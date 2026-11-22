@@ -29,6 +29,7 @@ use sta_sim::view::UnitFlags;
 
 use super::layout::StockLayout;
 use crate::ui::hud::layout::R;
+use crate::ui::profile::UiProfile;
 use bevy::picking::Pickable;
 use super::node;
 use crate::input::select::CameraFocus;
@@ -110,17 +111,25 @@ pub(in crate::ui::hud) fn panel_rect(layout: &StockLayout) -> Option<R> {
     layout.panel("button")
 }
 
-/// The pointer-solid rectangles of the group: the panel's placed rectangle and, while the second row
-/// shows, each shown second-row button's rectangle (they lie below the panel), so a click on a button
-/// never also reaches the world. INTERIM: the original grows one hit rectangle over the row (read from
-/// the executable, static); STA64 covers the buttons' own areas.
-pub(in crate::ui::hud) fn solid(layout: &StockLayout, more: bool) -> Vec<R> {
+/// The pointer-solid rectangles of the group. Closed: the panel's placed rectangle (the first row). Open, in
+/// the Armada II look: ONE rectangle covering both rows, the panel's width from its top down to the lowest
+/// edge of the second-row buttons' areas (rule measured at one window size, in Armada II only: a click or
+/// hover anywhere in it, gaps and the empty part of the row included, never reaches the world or the
+/// minimap behind it). Other looks (Fleet Operations) keep the earlier interim: the shown second-row
+/// buttons' own areas, which is not compared with their original.
+pub(in crate::ui::hud) fn solid(layout: &StockLayout, more: bool, profile: Option<UiProfile>) -> Vec<R> {
     let Some(panel) = panel_rect(layout) else { return Vec::new() };
-    let mut out = vec![panel];
-    if more {
-        let origin = Vec2::new(panel.x, panel.y);
-        out.extend(SECOND_ROW.iter().filter_map(|key| layout.at(origin, key)));
+    if !more {
+        return vec![panel];
     }
+    let origin = Vec2::new(panel.x, panel.y);
+    let row: Vec<R> = SECOND_ROW.iter().filter_map(|key| layout.at(origin, key)).collect();
+    if profile == Some(UiProfile::Armada2) {
+        let bottom = row.iter().map(|r| r.bottom()).fold(panel.bottom(), f32::max);
+        return vec![R::new(panel.x, panel.y, panel.w, bottom - panel.y)];
+    }
+    let mut out = vec![panel];
+    out.extend(row);
     out
 }
 
