@@ -101,6 +101,7 @@ pub(crate) fn decide(s: &Situation) -> &'static str {
         Some(Order::Attack { .. }) => "c_attack",
         Some(Order::Mine { .. }) => "c_mining",
         Some(Order::Repair { .. }) => "c_repair",
+        Some(Order::Trade { .. }) => "c_etrade",
         Some(Order::Rally { .. }) => "c_rally",
         // A wormhole is the one target `context_order` answers with a move.
         Some(Order::Move { .. }) => "c_wormin",
@@ -172,7 +173,7 @@ pub fn cursor(
     wanted.0 = decide(&Situation { cutscene, over_hud, armed: None, own_selected: !own.is_empty(), hover: icon.as_ref(), moves, rally, warp, minimap });
     let want = match icon {
         Some(Order::Attack { .. }) => SystemCursorIcon::Crosshair,
-        Some(Order::Mine { .. } | Order::Rally { .. }) => SystemCursorIcon::Pointer,
+        Some(Order::Mine { .. } | Order::Rally { .. } | Order::Trade { .. }) => SystemCursorIcon::Pointer,
         None if rally => {
             SystemCursorIcon::Pointer
         }

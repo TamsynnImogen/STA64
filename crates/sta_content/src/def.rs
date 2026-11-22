@@ -350,6 +350,23 @@ pub struct A1BaseOfficers {
     pub upgrade: Option<ContentKey>,
 }
 
+/// One good accepted by an Armada II trading station.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TradeGood {
+    pub key: String,
+    pub value: Fixed,
+}
+
+/// Armada II trading station rules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TradeStationDef {
+    /// Resource transfer rate in units per second.
+    pub transfer_rate: Fixed,
+    /// Profit share as a normalized fraction (15 percent is 0.15).
+    pub profit_share: Fixed,
+    pub goods: Vec<TradeGood>,
+}
+
 #[derive(Debug, Clone)]
 pub struct UnitDef {
     /// Set by [`ContentDb`](crate::ContentDb) when it is built.
@@ -404,6 +421,10 @@ pub struct UnitDef {
     /// `miningMultiplier` and `resourcesCanHandle` of a class `p_mining` station
     /// (CON-51). `None` for other classes and for a station with neither key.
     pub station_mining: Option<crate::StationMining>,
+    /// Trade rules for `trading_station` class units.
+    pub trade_station: Option<TradeStationDef>,
+    /// Cargo capacity for `cargo_ship` class units.
+    pub trade_cargo_capacity: Option<Fixed>,
     /// The income keys of the resource node a planet names (`resource =`): mining
     /// rate, trickle, `isInfinite` and `amt<slot>` (CON-51). `None` when the node
     /// has none. Typed content only: the sim's use of it is SIM-72's.
@@ -715,6 +736,8 @@ impl UnitDef {
             orbit_time: None,
             a1_borg: None,
             station_mining: None,
+            trade_station: None,
+            trade_cargo_capacity: None,
             node_income: None,
             race: String::new(),
             model: String::new(),

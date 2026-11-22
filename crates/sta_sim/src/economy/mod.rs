@@ -56,6 +56,7 @@ pub mod recycle;
 #[cfg(test)]
 mod recycle_tests;
 mod seat;
+pub(crate) mod trade;
 pub mod view;
 
 /// What a fresh node holds.
@@ -275,6 +276,7 @@ pub struct Economy {
     nodes: Table<Fixed>,
     miners: Table<Miner>,
     docks: Table<dock::Ticket>,
+    traders: Table<trade::Merchant>,
     /// Miners whose work was ended or redirected by an order since the last step: announced
     /// there. Empty between steps, not part of the state.
     announce: Vec<EntityId>,
@@ -302,7 +304,7 @@ impl Economy {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.stock.is_empty() && self.nodes.is_empty() && self.miners.is_empty() && self.personnel.is_empty() && self.adjust.is_empty()
+        self.stock.is_empty() && self.nodes.is_empty() && self.miners.is_empty() && self.personnel.is_empty() && self.adjust.is_empty() && self.traders.is_empty()
     }
 
     /// A player's stock per resource id; empty until they have any.
@@ -455,14 +457,14 @@ impl Economy {
         }
     }
 
-    /// A move or stop suspends mining; carried cargo remains physical state.
+    /// A move or stop suspends freight work while preserving any cargo.
     pub(crate) fn cancel(&mut self, units: &Entities, player: PlayerId, ids: &[EntityId]) {
         for &id in ids {
-            if units
-                .get(id)
-                .is_some_and(|u| !player.is_player() || u.owner == player)
-                && let Some(mut m) = self.miners.get(id).copied()
-            {
+            if !units.get(id).is_some_and(|u| !player.is_player() || u.owner == player) {
+                continue;
+            }
+            self.suspend_trade(id);
+            if let Some(mut m) = self.miners.get(id).copied() {
                 self.announce.push(id);
                 self.docks.remove(id);
                 if m.cargo > Fixed::ZERO {
@@ -488,6 +490,7 @@ impl Economy {
         // An occupied berth stays reserved for this tick, even if its freighter
         // drains the last cargo before the next waiter is processed.
         let mut occupied = self.docked_stations(units);
+        occupied.extend(self.trade_berths());
         // Orders that took a freighter off its work (a stop, a move, a new order) say so.
         for id in std::mem::take(&mut self.announce) {
             let (phase, node) = self.miners.get(id).map_or((Phase::Idle, id), |m| (m.phase, m.node));
@@ -600,6 +603,7 @@ impl Economy {
                         }
                         let arrive = dock::arrival(db, def, berth.authored);
                         let ahead = self.queue_ahead(id, ticket)
+                            .chain(self.trade_queue_ahead(id, ticket))
                             .filter_map(|other| units.get(other))
                             .map(|other| dock::span(db, other.def, berth.authored))
                             .fold(Fixed::ZERO, |sum, width| sum + width);
@@ -730,6 +734,7 @@ impl Economy {
         }
         self.hash_personnel(h);
         self.hash_adjust(h);
+        self.hash_trade(h);
     }
 
     /// The state in plain form, for the snapshot.

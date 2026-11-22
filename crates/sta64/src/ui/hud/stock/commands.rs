@@ -23,6 +23,8 @@ pub struct NativeCommand {
     pub preferred: Option<[usize; 2]>,
     pub menu: Option<String>,
     pub source: Vec<String>,
+    /// Native integer argument used by resource trade commands.
+    pub param: Option<i32>,
     pub tooltip: Option<String>,
     pub verbose: Option<String>,
     pub normal: Option<Color>,
@@ -154,6 +156,7 @@ impl NativeCommands {
                     preferred: preferred(&odf),
                     menu,
                     source: odf.get_strs("source").into_iter().map(str::to_ascii_lowercase).collect(),
+                    param: odf.get("param").and_then(|value| value.trim().parse().ok()),
                     tooltip: odf.get_str("tooltip").map(str::to_owned),
                     verbose: odf.get_str("verbose").or_else(|| odf.get_str("verboseTooltip")).map(str::to_owned),
                     normal: colour(&odf, "colorNormal"),
@@ -225,10 +228,11 @@ mod tests {
     #[test]
     fn layered_commands_keep_own_values_and_recursive_includes() {
         let install = Install::new("layered");
-        install.file("Data/odf/commands/allcommands.odf", "commandNames =\n \"attack.odf\" \"move\"\n \"missing\"\n")
+        install.file("Data/odf/commands/allcommands.odf", "commandNames =\n \"attack.odf\" \"move\" \"buydil\"\n \"missing\"\n")
             .file("Data/odf/commands/attack.odf", "#include \"basebutton.odf\"\ncommandName = \"ATTACK\"\nbuttonName = \"attack_old\"\npreferredPosition = 1 2 0 0\n")
             .file("Data/odf/other/basebutton.odf", "tooltip = \"Base tooltip\"\ncolorNormal = 0.1 0.2 0.3\n")
             .file("Data/odf/commands/move.odf", "commandName = \"MOVE\"\nbuttonName = \"b_move\"\nmenu = \"Orders\"\n")
+            .file("Data/odf/commands/buydil.odf", "commandName = \"BUY_RESOURCE\"\nparam = 2\n")
             .file("Data/Mods/Child/info.ini", "[Mod]\nName=Child\n")
             .file("Data/Mods/Child/odf/commands/attack.odf", "#include \"attack.odf\"\nbuttonName = \"attack_new\"\ncolorMouseOver = 0.2 0.4 0.6 0.8\nmenu = \"Combat\"\n");
         let loaded = NativeCommands::load(&install.mount(Some("Child")));
@@ -242,6 +246,7 @@ mod tests {
         assert_eq!(attack.hovered, Some(Color::srgba(0.2, 0.4, 0.6, 0.8)));
         assert_eq!(attack.sprite_names(), ["b_attack_new", "attack_new"]);
         assert_eq!(loaded.get("MOVE").unwrap().sprite_names(), ["b_move", "move"]);
+        assert_eq!(loaded.get("buydil").unwrap().param, Some(2));
         assert!(loaded.get("missing").is_none());
         assert_eq!(loaded.groups, ["combat", "orders"]);
         assert_eq!(loaded.menu_id("ORDERS"), Some(1));

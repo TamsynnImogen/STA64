@@ -53,6 +53,25 @@ impl HudFeed {
         self.content.as_deref().and_then(|c| c.unit(u.def))
     }
 
+    pub(super) fn can_trade(&self, unit: &UnitView) -> bool {
+        self.content.as_deref().is_some_and(|db| {
+            let Some(def) = db.unit(unit.def) else { return false };
+            let race = self.view.attrs.races.binary_search_by_key(&unit.id, |row| row.0)
+                .ok().map_or(def.race.as_str(), |i| self.view.attrs.races[i].1.as_str());
+            db.can_trade(race)
+        })
+    }
+
+    pub(super) fn cargo_ship(&self, unit: &UnitView) -> bool {
+        unit.owner == self.player && unit.hull[0] > Fixed::ZERO && finished(unit)
+            && self.can_trade(unit)
+            && self.def(unit).is_some_and(|def| {
+                def.trade_cargo_capacity.is_some_and(|max| max > Fixed::ZERO)
+                    && def.raw.bool("cargo_ship") != Some(false)
+            })
+    }
+
+
     /// The name a script gave the unit (`WorldView::attrs::names`), else the one its map gave
     /// it, as written; the ODF caption and craft-name pool apply when neither exists.
     pub(crate) fn given_name(&self, u: &UnitView) -> Option<&str> {
@@ -269,6 +288,10 @@ pub enum TargetMode {
     Repair,
     /// The stock DECOMMISSION command: pick a yard, or anywhere for the best one or in place (SIM-45).
     Decommission,
+    /// Select a trading station as a cargo ship's trade source.
+    TradeSource,
+    /// Select a trading station as a cargo ship's trade destination.
+    TradeDestination,
     /// A replace weapon whose authored `needTarget` requires a map pick.
     Special(u8),
 }
@@ -561,6 +584,8 @@ pub(super) fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
         Act::Target(TargetMode::Transport) => (vec!["b_transport".into()], false),
         Act::Target(TargetMode::TransportAttack) => (vec!["b_capture".into()], false),
         Act::Target(TargetMode::Repair) => (vec!["b_repair".into()], false),
+        Act::Target(TargetMode::TradeSource) => (vec!["b_strade".into()], false),
+        Act::Target(TargetMode::TradeDestination) => (vec!["b_etrade".into()], false),
         Act::Target(TargetMode::Decommission) => (vec!["b_decom".into()], false),
         Act::Target(TargetMode::Special(_)) => (Vec::new(), false),
         Act::Cancel(_) => (vec!["b_cancel".into()], false),
@@ -833,7 +858,7 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
             Some((CommandKind::Order(Order::SearchAndDestroy { units: own.clone() }), own))
         }
         Act::Order(UnitOrder::Scout) if caps.move_order => Some((CommandKind::Order(Order::Scout { units: own.clone() }), own)),
-        Act::OpenBuild | Act::OpenFormations | Act::OpenNativeMenu(_) | Act::OpenOrders | Act::Order(_) | Act::Back | Act::Target(_) | Act::NativeFormation(_) => None,
+        Act::OpenBuild | Act::OpenFormations | Act::OpenNativeMenu(_) | Act::OpenOrders | Act::Order(_) | Act::Back | Act::Target(_) | Act::NativeFormation(_) | Act::NativeOrder(_) => None,
         Act::Recrew => {
             let units = commands::recrew_stations(feed, &own);
             (!units.is_empty()).then(|| (CommandKind::Order(Order::Recrew { units: units.clone(), on: None }), units))
@@ -1731,7 +1756,7 @@ mod tests {
         let mut native = NativeCommands::default();
         native.commands.insert("cancelbuild".into(), NativeCommand {
             odf: "cancelbuild.odf".into(), command: "NONE".into(), button: "b_cancel".into(),
-            preferred: Some([0, 3]), menu: None, source: Vec::new(), tooltip: None, verbose: None,
+            preferred: Some([0, 3]), menu: None, source: Vec::new(), param: None, tooltip: None, verbose: None,
             normal: None, hovered: None, pressed: None, disabled: None, active: None,
         });
         native

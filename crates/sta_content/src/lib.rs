@@ -51,7 +51,7 @@ pub use aip::{Aip, AipList, AipValue, AipVar, BuildItem};
 pub use confinement::{ConfinementInitial, ConfinementOverrides, ConfinementRules, ConfinementSpatial};
 pub use a1_physics::{A1Borg, A1Dynamics};
 pub use db::{ContentBuilder, ContentDb, DEFAULT_TECH_TREE};
-pub use def::{A1BaseOfficers, BuildDef, CasualtyDef, ClassLabel, ColonizePodDef, DefRef, FireArc, FxRefs, Hardpoint, LaunchPoint, Lookup, MoveStats, NebulaEffects, NebulaPathing, OrdnanceCrewLoss, RepairDef, ResourceWeaponDef, ShieldDef, ShotFlare, ShotLight, ShotLook, ShotScale, SoundRefs, TargetMaskDef, ToHitDef, TransportDef, UnitDef, UnitStatsDef, WeaponBaseDef, WeaponDef, WeaponKind};
+pub use def::{A1BaseOfficers, BuildDef, CasualtyDef, ClassLabel, ColonizePodDef, DefRef, FireArc, FxRefs, Hardpoint, LaunchPoint, Lookup, MoveStats, NebulaEffects, NebulaPathing, OrdnanceCrewLoss, RepairDef, ResourceWeaponDef, ShieldDef, ShotFlare, ShotLight, ShotLook, ShotScale, SoundRefs, TargetMaskDef, ToHitDef, TradeGood, TradeStationDef, TransportDef, UnitDef, UnitStatsDef, WeaponBaseDef, WeaponDef, WeaponKind};
 pub use features::{Features, Profile};
 pub use orbital_income::{NodeIncome, StationMining};
 pub use planet::PlanetRole;

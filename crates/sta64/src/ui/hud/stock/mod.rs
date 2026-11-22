@@ -116,6 +116,8 @@ fn metadata<'a>(native: &'a NativeCommands, act: &Act) -> Option<&'a NativeComma
         Act::Target(TargetMode::TransportAttack) => "capture",
         Act::Target(TargetMode::Repair) => "repair",
         Act::Target(TargetMode::Decommission) => "decom",
+        Act::Target(TargetMode::TradeSource) => "START_TRADE",
+        Act::Target(TargetMode::TradeDestination) => "END_TRADE",
         Act::Stop => "stop",
         Act::Recrew => "recrew",
         Act::Cancel(_) => "cancelbuild",
@@ -172,6 +174,14 @@ pub(in crate::ui::hud) fn buttons(feed: &HudFeed, page: Page, native: &NativeCom
     }
     if matches!(page, Page::Top | Page::Native(_)) {
         let selected = feed.selected_units();
+        if selected.iter().any(|unit| feed.cargo_ship(unit)) {
+            for mode in [TargetMode::TradeSource, TargetMode::TradeDestination] {
+                let act = Act::Target(mode);
+                if let Some(meta) = metadata(native, &act).filter(|meta| meta.preferred.is_some()) {
+                    buttons.push(model::button(usize::MAX, &meta.button, act, &meta.button));
+                }
+            }
+        }
         for (odf, meta) in &native.commands {
             let Some(kind) = orders::Kind::read(meta) else { continue };
             if selected.iter().any(|u| kind.eligible(feed, meta, u)) {
@@ -802,7 +812,7 @@ mod recrew_tests {
         native.commands.insert("recrew".into(), NativeCommand {
             odf: "recrew.odf".into(), command: "RECREW".into(), button: "recrew".into(),
             preferred: Some([0, 1]), menu: Some("Orders".into()),
-            source: Vec::new(),
+            source: Vec::new(), param: None,
             tooltip: Some("GUI_CP_RECREW_TOOLTIP".into()),
             verbose: Some("GUI_CP_RECREW_VTOOLTIP".into()),
             normal: None, hovered: None, pressed: None, disabled: None, active: None,
@@ -852,7 +862,7 @@ mod capture_tests {
         native.commands.insert("capture".into(), NativeCommand {
             odf: "capture.odf".into(), command: "TRANSPORT_ATTACK".into(), button: "capture".into(),
             preferred: Some([0, 10]), menu: Some("trade".into()),
-            source: Vec::new(),
+            source: Vec::new(), param: None,
             tooltip: Some("GUI_CP_TRANSPORT_ATTACK_TOOLTIP".into()),
             verbose: Some("GUI_CP_TRANSPORT_ATTACK_VTOOLTIP".into()),
             normal: None, hovered: None, pressed: None, disabled: None, active: None,

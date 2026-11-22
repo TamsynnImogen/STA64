@@ -113,6 +113,28 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
     let mut r = Reader { odf, file: &file, warnings };
 
     d.race = r.text("race").unwrap_or_default();
+    if d.class.0 == "trading_station" {
+        // Armada II's executable defaults: 15 units/s and ten percent profit.
+        let transfer_rate = r.num("cargoTransferRate").unwrap_or(15.0).max(0.0);
+        let profit_share = r.num("percentTradeProfit").unwrap_or(10.0).clamp(0.0, 100.0) / 100.0;
+        let mut goods = Vec::new();
+        for index in 1.. {
+            let key_name = format!("cargoKey{index}");
+            let Some(key) = r.text(&key_name) else { break };
+            let value_name = format!("cargoValue{index}");
+            let value = r.num(&value_name).unwrap_or(1.0).max(0.0);
+            goods.push(crate::TradeGood { key, value: Fixed::from_f64(value) });
+        }
+        d.trade_station = Some(crate::TradeStationDef {
+            transfer_rate: Fixed::from_f64(transfer_rate),
+            profit_share: Fixed::from_f64(profit_share),
+            goods,
+        });
+    }
+    if d.class.0 == "cargo_ship" {
+        // The Armada II cargo_ship constructor initializes m_maxResource to 150.
+        d.trade_cargo_capacity = Some(Fixed::from_f64(r.num("m_maxResource").unwrap_or(150.0).max(0.0)));
+    }
     d.model = r.text("basename").unwrap_or_else(|| stem(name));
     d.scale = match r.num("ScaleSOD") {
         Some(s) if s > 0.0 => Fixed::from_f64(s),

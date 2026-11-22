@@ -1,6 +1,6 @@
 //! Immediate orders from the stock command palette.
 
-use sta_sim::command::{AlertState, AutonomyKind, AutonomyLevel, CommandKind, Order};
+use sta_sim::command::{AlertState, AutonomyKind, AutonomyLevel, CommandKind, Order, TradeAction, TradeResource};
 use sta_sim::world::EntityKind;
 use sta_sim::{EntityId, Fixed, UnitView, view::UnitFlags};
 
@@ -13,6 +13,9 @@ pub(super) enum Kind {
     SearchAndDestroy,
     Alert(AlertState),
     Autonomy(AutonomyKind, AutonomyLevel),
+    Load(TradeResource),
+    Buy(TradeResource),
+    Sell(TradeResource),
 }
 
 impl Kind {
@@ -30,6 +33,9 @@ impl Kind {
             "SPECIAL_WEAPON_AUTONOMY_NONE" => Self::Autonomy(K::SpecialWeapon, L::Low),
             "SPECIAL_WEAPON_AUTONOMY_MED" => Self::Autonomy(K::SpecialWeapon, L::Medium),
             "SPECIAL_WEAPON_AUTONOMY_HIGH" => Self::Autonomy(K::SpecialWeapon, L::High),
+            "GIVE_RESOURCE" => Self::Load(TradeResource::from_native(record.param?)?),
+            "BUY_RESOURCE" => Self::Buy(TradeResource::from_native(record.param?)?),
+            "SELL_RESOURCE" => Self::Sell(TradeResource::from_native(record.param?)?),
             _ => return None,
         })
     }
@@ -46,11 +52,15 @@ impl Kind {
         let can_order = match self {
             Self::Scout | Self::SearchAndDestroy => mobile,
             Self::Alert(_) | Self::Autonomy(..) => matches!(kind, EntityKind::Craft | EntityKind::Station),
+            Self::Load(_) => feed.cargo_ship(u),
+            Self::Buy(_) | Self::Sell(_) => feed.can_trade(u) && def.trade_station.is_some(),
         };
         can_order && record.source.iter().all(|key| match key.as_str() {
             "ship" => kind == EntityKind::Craft,
             "facility" => kind == EntityKind::Station,
             "mobile" => mobile,
+            "cargo_ship" => feed.cargo_ship(u),
+            "trade_station" => feed.can_trade(u) && def.trade_station.is_some(),
             // Tara's command requirements are drawn from the resolved unit ODF.
             _ => def.raw.bool(key) == Some(true),
         })
@@ -70,6 +80,9 @@ impl Kind {
             Self::SearchAndDestroy => Order::SearchAndDestroy { units: ids },
             Self::Alert(level) => Order::Alert { units: ids, level },
             Self::Autonomy(kind, level) => Order::Autonomy { units: ids, kind, level },
+            Self::Load(resource) => Order::Trade { units: ids, action: TradeAction::Load(resource) },
+            Self::Buy(resource) => Order::Trade { units: ids, action: TradeAction::Buy(resource) },
+            Self::Sell(resource) => Order::Trade { units: ids, action: TradeAction::Sell(resource) },
         };
         Some((CommandKind::Order(order), units))
     }
@@ -87,7 +100,7 @@ impl Kind {
                 let slot = usize::from(kind == AutonomyKind::SpecialWeapon);
                 u.autonomy.is_some_and(|levels| levels[slot] == level as u8)
             }
-            Self::Scout | Self::SearchAndDestroy => false,
+            Self::Scout | Self::SearchAndDestroy | Self::Load(_) | Self::Buy(_) | Self::Sell(_) => false,
         })
     }
 }
