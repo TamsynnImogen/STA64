@@ -6,8 +6,9 @@
 //! `fog.NOTICE.md`).
 //!
 //! - [`FogGrid`] is the data, with no renderer in it: one cell per [`CELL`] world
-//!   units over the map, `visible` where a sensor of the local player's team reaches
-//!   the cell's centre and `explored` where one ever has. It is built from a
+//!   units over the map, with samples of the distance to the local team's sensor coverage.
+//!   The sign classifies its cell centre as visible or explored. The distance also
+//!   lets the shader place the contour between cells. It is built from a
 //!   [`WorldView`] and the content's sensor ranges, the same rule as
 //!   `sta_sim::sensors` (the views carry per-unit visibility only, not areas), and
 //!   answers `visible_at` / `explored_at` for any map point. The minimap (UI-05) can
@@ -16,8 +17,8 @@
 //! - [`FogPlugin`] keeps [`FogState`] current while [`LocalPlayer`] is `Some`, a
 //!   [`FogBounds`] resource says where the map is and a `SimLink` exists, and draws
 //!   the two layers: a quad over the map each, textured with the grid's mask and
-//!   shaded by `fog.wesl` (a cubic B-spline of the mask with a smoothstep edge, so a
-//!   disc of cells reads as a circle).
+//!   shaded by `fog.wesl` (a cubic B-spline of the distance samples with a smoothstep
+//!   edge).
 //! - A view with no visibility data is omniscient (S3): nothing is fogged.
 //!
 //! The sim works in the map's left-handed space; the renderer mirrors Z, so the
@@ -108,7 +109,8 @@ impl Default for FogSettings {
     }
 }
 
-/// The visibility of every cell of the map for one player.
+/// Visibility samples for one player's map. Bytes below 128 are inside the
+/// sensor contour. The bytes fade from 0 to 255 over a narrow band around it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FogGrid {
     /// The map's lowest corner `(x, z)` in sim space: cell `(0, 0)`'s.
@@ -117,8 +119,10 @@ pub struct FogGrid {
     pub cell: f32,
     pub w: usize,
     pub h: usize,
-    visible: Vec<bool>,
-    explored: Vec<bool>,
+    visible: Vec<u8>,
+    explored: Vec<u8>,
+    /// The last remembering update's sight, not yet in `explored`.
+    pending: Vec<u8>,
 }
 
 impl FogGrid {
@@ -128,7 +132,7 @@ impl FogGrid {
         let cell = CELL.max(size / MAX_CELLS as f32);
         let dim = |lo: f32, hi: f32| (((hi - lo) / cell).ceil() as usize).clamp(1, MAX_CELLS);
         let (w, h) = (dim(min[0], max[0]), dim(min[1], max[1]));
-        FogGrid { min, cell, w, h, visible: vec![false; w * h], explored: vec![false; w * h] }
+        FogGrid { min, cell, w, h, visible: vec![255; w * h], explored: vec![255; w * h], pending: vec![255; w * h] }
     }
 
     /// The cell of a sim-space point, if it is on the grid.
@@ -141,93 +145,144 @@ impl FogGrid {
     /// Is the point in sight now? Off the grid: no.
     #[allow(dead_code)] // read by the minimap (UI-05) and the tests
     pub fn visible_at(&self, x: f32, z: f32) -> bool {
-        self.cell_of(x, z).is_some_and(|i| self.visible[i])
+        self.cell_of(x, z).is_some_and(|i| self.visible[i] < 128)
     }
 
     /// Has the point ever been in sight? Off the grid: no.
     #[allow(dead_code)] // read by the minimap (UI-05) and the tests
     pub fn explored_at(&self, x: f32, z: f32) -> bool {
-        self.cell_of(x, z).is_some_and(|i| self.explored[i])
+        self.cell_of(x, z).is_some_and(|i| self.explored[i] < 128)
     }
 
     /// How many cells are in sight now / were ever.
     #[allow(dead_code)] // read by the minimap (UI-05) and the tests
     pub fn counts(&self) -> (usize, usize) {
-        (self.visible.iter().filter(|v| **v).count(), self.explored.iter().filter(|v| **v).count())
+        (self.visible.iter().filter(|&&v| v < 128).count(), self.explored.iter().filter(|&&v| v < 128).count())
     }
 
     /// Set one cell's state (tests of the minimap).
     #[cfg(test)]
     pub fn set_cell_for_test(&mut self, cx: usize, cz: usize, visible: bool, explored: bool) {
-        self.visible[cz * self.w + cx] = visible;
-        self.explored[cz * self.w + cx] = explored;
+        self.visible[cz * self.w + cx] = if visible { 0 } else { 255 };
+        self.explored[cz * self.w + cx] = if explored { 0 } else { 255 };
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_sensor_for_test(&mut self, centre: Vec2, radius: f32) {
+        self.reveal(centre.x, centre.y, radius);
+        self.explored.copy_from_slice(&self.visible);
     }
 
     /// Everything in sight (an omniscient view).
     fn reveal_all(&mut self) {
-        self.visible.fill(true);
-        self.explored.fill(true);
+        self.visible.fill(0);
+        self.explored.fill(0);
     }
 
-    /// The cells whose centre is within `r` of `(x, z)` are in sight (strictly, as
-    /// `sta_sim::sensors`' overlap test).
+    /// Stamp signed distances to the sensor's circle near its edge. Binary
+    /// texels encode only which side a centre fell on, so filtering those can
+    /// still put the contour as much as half a cell away from the radius.
     fn reveal(&mut self, x: f32, z: f32, r: f32) {
         let c = self.cell;
-        let lo = |p: f32, o: f32| (((p - r - o) / c).floor() as isize).max(0);
+        // Include all the samples the cubic filter uses along the contour.
+        let band = 2.0 * c;
+        let outer = r + band;
+        let outer2 = outer * outer;
+        let inner = (r - band).max(0.0);
+        let inner2 = inner * inner;
+        let r2 = r * r;
+        let lo = |p: f32, o: f32| (((p - outer - o) / c).floor() as isize).max(0);
+        let hi = |p: f32, o: f32, cells: usize| {
+            (((p + outer - o) / c).ceil() as isize).min(cells as isize - 1)
+        };
         let (x0, z0) = (lo(x, self.min[0]), lo(z, self.min[1]));
-        let x1 = ((((x + r - self.min[0]) / c).ceil()) as isize).min(self.w as isize - 1);
-        let z1 = ((((z + r - self.min[1]) / c).ceil()) as isize).min(self.h as isize - 1);
+        let (x1, z1) = (hi(x, self.min[0], self.w), hi(z, self.min[1], self.h));
         for cz in z0..=z1 {
             let dz = self.min[1] + (cz as f32 + 0.5) * c - z;
             for cx in x0..=x1 {
                 let dx = self.min[0] + (cx as f32 + 0.5) * c - x;
-                if dx * dx + dz * dz < r * r {
-                    self.visible[cz as usize * self.w + cx as usize] = true;
+                let d2 = dx * dx + dz * dz;
+                if d2 >= outer2 {
+                    continue;
                 }
+                let cell = &mut self.visible[cz as usize * self.w + cx as usize];
+                if *cell == 0 || d2 < inner2 {
+                    *cell = 0;
+                    continue;
+                }
+                let edge = ((d2.sqrt() - r) / band * 127.5 + 127.5).round() as u8;
+                // Keep the strict centre test, even when quantization rounds
+                // a centre just inside the radius to the other side.
+                let edge = if d2 < r2 { edge.min(127) } else { edge.max(128) };
+                *cell = (*cell).min(edge);
             }
         }
     }
 
     /// Recompute what is in sight for `player` from `view`; what has been seen stays explored.
+    #[cfg(test)]
     pub fn observe(&mut self, view: &WorldView, player: PlayerId, content: Option<&ContentDb>) {
-        self.visible.fill(false);
+        self.observe_with(view, player, content, true);
+    }
+
+    /// As [`observe`](Self::observe); with `remember` false (a cutscene runs) this update's sight is
+    /// not remembered. Interim rule, grade: stated by a player (2026-11-22), not measured on the
+    /// original: sight gained during a cutscene does not become explored ground. Whether the
+    /// original does this by a general rule or by a mission script call is not established (the
+    /// script call for the shroud stays unwired).
+    ///
+    /// The client learns that a cutscene began one system later than the view that came with it, so
+    /// an update's sight is held back and folded into the explored memory by the next update that
+    /// still runs outside a cutscene; an update inside one drops it. An omniscient view stays fully
+    /// explored.
+    pub fn observe_with(&mut self, view: &WorldView, player: PlayerId, content: Option<&ContentDb>, remember: bool) {
+        self.visible.fill(255);
         if view.visibility.is_empty() {
             self.reveal_all();
+            self.pending.fill(255);
             return;
         }
         for (x, z, r) in sensor_discs(view, player, content) {
             self.reveal(x, z, r);
         }
-        for (e, v) in self.explored.iter_mut().zip(&self.visible) {
-            *e |= *v;
+        if remember {
+            for (e, p) in self.explored.iter_mut().zip(&self.pending) {
+                *e = (*e).min(*p);
+            }
+            self.pending.copy_from_slice(&self.visible);
+        } else {
+            self.pending.fill(255);
         }
     }
 
-    /// UI-46: this grid as the player sees it with the shroud and/or the fog lifted (presentation
+    /// This grid as the player sees it: what is in sight counts as explored (the memory takes it in
+    /// one update later, see [`observe_with`](Self::observe_with)), and UI-46's lifting (presentation
     /// only; `self` keeps the real memory). Lifting the shroud counts every cell as explored; lifting
     /// the fog counts every explored cell as in sight, so with both lifted everything is in sight,
     /// and with the fog alone the unexplored ground stays black.
     pub fn lifted(&self, fog: bool, shroud: bool) -> FogGrid {
         let mut g = self.clone();
+        for (e, v) in g.explored.iter_mut().zip(&g.visible) {
+            *e = (*e).min(*v);
+        }
         if shroud {
-            g.explored.fill(true);
+            g.explored.fill(0);
         }
         if fog {
             for (v, e) in g.visible.iter_mut().zip(&g.explored) {
-                *v |= *e;
+                *v = (*v).min(*e);
             }
         }
         g
     }
 
-    /// One byte per cell, row by row from the map's low Z: 255 where the layer hides
-    /// the cell, 0 where it shows it. This is the texture `fog.wesl` reads.
+    /// One distance byte per cell, row by row from the map's low Z. The shader
+    /// interpolates the contour at 127.5 between the clear and covered samples.
     pub fn mask(&self, layer: Layer) -> Vec<u8> {
-        let shown = match layer {
-            Layer::Fog => &self.visible,
-            Layer::Shroud => &self.explored,
-        };
-        shown.iter().map(|s| if *s { 0 } else { 255 }).collect()
+        match layer {
+            Layer::Fog => self.visible.clone(),
+            Layer::Shroud => self.explored.clone(),
+        }
     }
 }
 
@@ -458,6 +513,7 @@ struct Memo {
     /// What the sim's sensors have shown so far, whatever is lifted (UI-46); `FogState` holds the lifted copy.
     memory: Option<FogGrid>,
     shown_reveal: Option<(bool, bool)>,
+    shown_cutscene: Option<bool>,
 }
 
 /// Recompute the grid when the view, the player or the map changes; spawn the layers
@@ -481,7 +537,8 @@ fn update_fog(
     (net, active): (Option<Res<crate::game::net_match::NetGame>>, Option<Res<crate::game::flow::ActiveMatch>>),
     mut memo: Local<Memo>,
 ) {
-    let Memo { seen, art_generation, memory, shown_reveal } = &mut *memo;
+    let Memo { seen, art_generation, memory, shown_reveal, shown_cutscene } = &mut *memo;
+    let cutscene = cine.as_deref().is_some_and(|c| c.on);
     let Some(patterns) = patterns else { return };
     let Some(player) = local.0 else {
         // No local player: the whole map is shown.
@@ -497,16 +554,19 @@ fn update_fog(
         let (fog, shroud) = active.as_deref().map_or((false, false), |active| active.fog.lifted());
         (fog || reveal.as_deref().is_some_and(|r| r.fog), shroud || reveal.as_deref().is_some_and(|r| r.shroud))
     };
-    let fresh = state.is_none() || *shown_reveal != Some(lifted) || *art_generation != Some(patterns.generation) || !seen.as_ref().is_some_and(|(v, p)| Arc::ptr_eq(v, curr) && *p == local.0);
+    let fresh = state.is_none() || *shown_reveal != Some(lifted) || *shown_cutscene != Some(cutscene) || *art_generation != Some(patterns.generation) || !seen.as_ref().is_some_and(|(v, p)| Arc::ptr_eq(v, curr) && *p == local.0);
     let map_changed = memory.as_ref().is_some_and(|m| m.min != [bounds.min.x, bounds.min.y]);
     if fresh || map_changed {
         *seen = Some((curr.clone(), local.0));
         *shown_reveal = Some(lifted);
+        *shown_cutscene = Some(cutscene);
         let (mut grid, updates) = match (state.as_deref(), memory.take()) {
             (Some(s), Some(m)) if !map_changed => (m, s.updates),
             _ => (FogGrid::new([bounds.min.x, bounds.min.y], [bounds.max.x, bounds.max.y]), 0),
         };
-        grid.observe(curr, player, content.as_deref().map(|c| &*c.0));
+        // During a cutscene the layers are hidden anyway and the memory does not take the sight in;
+        // see `FogGrid::observe_with`.
+        grid.observe_with(curr, player, content.as_deref().map(|c| &*c.0), !cutscene);
         let shown = grid.lifted(lifted.0, lifted.1);
         *memory = Some(grid);
         let art_changed = *art_generation != Some(patterns.generation);
@@ -545,7 +605,7 @@ fn update_fog(
             Layer::Shroud => settings.shroud,
         };
         // Not in a cineractive: the cinematic view draws no fog or shroud (Refit, static).
-        let on = on && !cine.as_deref().is_some_and(|c| c.on);
+        let on = on && !cutscene;
         let want = if on { Visibility::Inherited } else { Visibility::Hidden };
         if *v != want {
             *v = want;
@@ -609,6 +669,62 @@ mod tests {
         assert!(!g.visible_at(1.0e6, 0.0), "off the map is never seen");
     }
 
+    // The shader's four bilinear taps implement these separable cubic weights.
+    fn reconstructed_mask(g: &FogGrid, mask: &[u8], pos: Vec2) -> f32 {
+        fn weights(f: f32) -> [f32; 4] {
+            let f2 = f * f;
+            let f3 = f2 * f;
+            [
+                (1.0 - f).powi(3) / 6.0,
+                (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0,
+                (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0,
+                f3 / 6.0,
+            ]
+        }
+        let texel = (pos - Vec2::from_array(g.min)) / g.cell - Vec2::splat(0.5);
+        let base = texel.floor();
+        let [u, v] = (texel - base).to_array();
+        let mut value = 0.0;
+        for (row, wz) in weights(v).into_iter().enumerate() {
+            for (col, wx) in weights(u).into_iter().enumerate() {
+                let x = base.x as usize + col - 1;
+                let z = base.y as usize + row - 1;
+                value += f32::from(mask[z * g.w + x]) * wx * wz;
+            }
+        }
+        value
+    }
+
+    #[test]
+    fn fog_contour_follows_a_sensor_radius_between_grid_centres() {
+        let radius = DEFAULT_SENSOR as f32;
+        // Neither sensor position is aligned to the grid. Test both sides of
+        // a small step so motion smaller than a cell is represented too.
+        for (x, z) in [(37, -83), (54, -83)] {
+            let mut g = grid();
+            g.observe(&view(vec![unit(1, 1, x, z)]), PlayerId(1), None);
+            let shown = g.lifted(false, false);
+            let mask = shown.mask(Layer::Fog);
+            assert_eq!(mask, shown.mask(Layer::Shroud));
+            let centre = Vec2::new(x as f32, z as f32);
+            for i in 0..64 {
+                let direction = Vec2::from_angle(i as f32 * std::f32::consts::TAU / 64.0);
+                let inner = centre + direction * (radius - g.cell / 12.0);
+                let outer = centre + direction * (radius + g.cell / 12.0);
+                assert!(reconstructed_mask(&g, &mask, inner) < 127.5, "inside at angle {i}");
+                assert!(reconstructed_mask(&g, &mask, outer) > 127.5, "outside at angle {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_cell_centre_exactly_on_the_sensor_radius_stays_hidden() {
+        let mut g = grid();
+        g.reveal(64.0, 64.0, 128.0);
+        assert!(g.visible_at(64.0, 64.0));
+        assert!(!g.visible_at(192.0, 64.0));
+    }
+
     #[test]
     fn enemy_sensors_do_not_clear_my_fog() {
         let mut g = grid();
@@ -644,6 +760,8 @@ mod tests {
         let mut g = grid();
         g.observe(&view(vec![unit(1, 1, 0, 0)]), PlayerId(1), None);
         g.observe(&view(vec![unit(1, 1, 3000, 0)]), PlayerId(1), None);
+        // The picture is the shown copy: the memory takes the newest sight in one update later.
+        let g = g.lifted(false, false);
         assert!(!g.visible_at(0.0, 0.0) && g.explored_at(0.0, 0.0));
         assert!(g.visible_at(3000.0, 0.0) && g.explored_at(3000.0, 0.0));
         let m = g.mask(Layer::Fog);
@@ -653,6 +771,47 @@ mod tests {
         assert_eq!((m[at(0.0, 0.0)], s[at(0.0, 0.0)]), (255, 0), "fogged but not shrouded");
         assert_eq!((m[at(3000.0, 0.0)], s[at(3000.0, 0.0)]), (0, 0), "in sight");
         assert_eq!((m[at(-3000.0, 0.0)], s[at(-3000.0, 0.0)]), (255, 255), "never seen");
+    }
+
+    #[test]
+    fn sight_during_a_cutscene_is_not_remembered() {
+        let (home, away) = (view(vec![unit(1, 1, 0, 0)]), view(vec![unit(1, 1, 3000, 0)]));
+        let mut g = grid();
+        g.observe(&home, PlayerId(1), None);
+        g.observe(&home, PlayerId(1), None);
+        let before = g.counts().1;
+        g.observe_with(&away, PlayerId(1), None, false);
+        g.observe_with(&away, PlayerId(1), None, false);
+        assert!(g.visible_at(3000.0, 0.0), "what is in sight is still in sight");
+        assert!(!g.explored_at(3000.0, 0.0));
+        assert_eq!(g.counts().1, before, "the explored set is unchanged");
+        assert!(g.lifted(false, false).explored_at(3000.0, 0.0), "the shown copy has what is in sight");
+        g.observe(&home, PlayerId(1), None);
+        g.observe(&home, PlayerId(1), None);
+        assert!(!g.explored_at(3000.0, 0.0), "after the cutscene only what is seen from where the units are counts");
+    }
+
+    #[test]
+    fn the_update_that_still_reads_the_cutscene_as_off_is_not_remembered() {
+        // The view that moves the units arrives with the cutscene start; the first update still sees the state off.
+        let (home, away) = (view(vec![unit(1, 1, 0, 0)]), view(vec![unit(1, 1, 3000, 0)]));
+        let mut g = grid();
+        g.observe(&home, PlayerId(1), None);
+        g.observe(&away, PlayerId(1), None);
+        g.observe_with(&away, PlayerId(1), None, false);
+        g.observe_with(&away, PlayerId(1), None, false);
+        assert!(!g.explored_at(3000.0, 0.0));
+        assert!(g.explored_at(0.0, 0.0));
+    }
+
+    #[test]
+    fn ground_passed_in_one_update_outside_a_cutscene_is_explored_by_the_next() {
+        let (home, away) = (view(vec![unit(1, 1, 0, 0)]), view(vec![unit(1, 1, 3000, 0)]));
+        let mut g = grid();
+        g.observe(&home, PlayerId(1), None);
+        g.observe(&away, PlayerId(1), None);
+        g.observe(&home, PlayerId(1), None);
+        assert!(g.explored_at(3000.0, 0.0));
     }
 
     #[test]
@@ -726,5 +885,138 @@ mod tests {
     #[test]
     fn fog_shader_validates() {
         crate::render::fx::validate_wgsl(include_str!("fog.wesl"));
+    }
+
+    // The real systems in their real order: the view and the cutscene start arrive in one frame,
+    // `update_fog` (Render) runs before `presentation::consume` (Ui) turns the state on.
+    mod system {
+        use super::*;
+        use crate::sim_link::SimMsg;
+        use crate::ui::presentation::{CineractiveState, PresentationPlugin};
+        use sta_sim::command::LocalRouter;
+        use sta_sim::present::Presentation;
+        use sta_sim::source::WorldSource;
+        use sta_sim::{SimEvent, TickOutput};
+        use std::sync::Mutex;
+
+        type Next = Arc<Mutex<Option<TickOutput>>>;
+
+        struct Scripted(Next, Arc<WorldView>);
+
+        impl WorldSource for Scripted {
+            fn step(&mut self, _: &[sta_sim::command::Command]) -> TickOutput {
+                let out = self.0.lock().unwrap().take().expect("a tick is only taken when one is queued");
+                self.1 = out.view.clone();
+                out
+            }
+
+            fn view(&self) -> Arc<WorldView> {
+                self.1.clone()
+            }
+        }
+
+        #[derive(Resource)]
+        struct Feed(Next);
+
+        fn drive(mut link: ResMut<SimLink>, feed: Res<Feed>, mut out: MessageWriter<SimMsg>) {
+            if feed.0.lock().unwrap().is_some()
+                && let Some(events) = link.tick()
+            {
+                out.write_batch(events.into_iter().map(SimMsg));
+            }
+        }
+
+        struct Rig {
+            app: App,
+            next: Next,
+            tick: u64,
+        }
+
+        impl Rig {
+            fn new() -> Rig {
+                let next: Next = Arc::default();
+                let first = Arc::new(view(vec![]));
+                let mut app = App::new();
+                app.add_plugins(MinimalPlugins).init_resource::<ButtonInput<KeyCode>>().add_plugins(PresentationPlugin);
+                crate::app::configure_sets(&mut app);
+                app.init_resource::<Assets<Image>>()
+                    .init_resource::<Assets<Mesh>>()
+                    .init_resource::<Assets<FogMaterial>>()
+                    .init_resource::<FogSettings>()
+                    .insert_resource(FogPatterns { fog: (Handle::default(), Vec2::ONE), shroud: (Handle::default(), Vec2::ONE), generation: 0 })
+                    .insert_resource(FogBounds { min: Vec2::splat(-4096.0), max: Vec2::splat(4096.0) })
+                    .insert_resource(LocalPlayer(Some(PlayerId(1))))
+                    .insert_resource(Feed(next.clone()))
+                    .insert_resource(SimLink::new(Box::new(Scripted(next.clone(), first)), Box::new(LocalRouter::new()), PlayerId(1)))
+                    .add_systems(Update, (drive.in_set(GameSet::SimLink), update_fog.in_set(GameSet::Render)));
+                Rig { app, next, tick: 0 }
+            }
+
+            /// One frame; a new view and events arrive in it when given.
+            fn frame(&mut self, units: Option<Vec<UnitView>>, cine: Option<bool>) {
+                if units.is_some() || cine.is_some() {
+                    self.tick += 1;
+                    let mut v = match units {
+                        Some(u) => view(u),
+                        None => (*self.app.world().resource::<SimLink>().real_curr().clone()).clone(),
+                    };
+                    v.tick = self.tick;
+                    let events = cine.map(|on| SimEvent::Present(Presentation::Cineractive { on, skippable: false })).into_iter().collect();
+                    *self.next.lock().unwrap() = Some(TickOutput { view: Arc::new(v), events });
+                }
+                self.app.update();
+            }
+
+            fn explored(&self, x: f32) -> bool {
+                self.app.world().resource::<FogState>().grid.explored_at(x, 0.0)
+            }
+
+            fn seen(&self, x: f32) -> bool {
+                self.app.world().resource::<FogState>().grid.visible_at(x, 0.0)
+            }
+
+            fn updates(&self) -> u32 {
+                self.app.world().resource::<FogState>().updates
+            }
+
+            fn cutscene(&self) -> bool {
+                self.app.world().resource::<CineractiveState>().on
+            }
+        }
+
+        #[test]
+        fn a_cutscene_started_by_the_same_frame_as_the_units_moving_uncovers_nothing() {
+            let at = |x| Some(vec![unit(1, 1, x, 0)]);
+            let mut rig = Rig::new();
+            // Normal play at home.
+            rig.frame(at(0), None);
+            rig.frame(at(0), None);
+            assert!(rig.explored(0.0) && !rig.explored(3000.0));
+            // One frame: the units are placed far away and the cutscene starts.
+            rig.frame(at(3000), Some(true));
+            assert!(rig.cutscene(), "consume turned the state on after update_fog ran");
+                // The cutscene runs on: units move again.
+            rig.frame(at(-3000), None);
+            assert!(rig.seen(-3000.0) && rig.explored(-3000.0), "what is in sight is drawn as before");
+            assert!(!rig.explored(3000.0), "ground seen only in the frame the cutscene began is not explored");
+            // The end, no unit moved and no new view: the state flip recomputes.
+            let updates = rig.updates();
+            rig.frame(None, Some(false));
+            rig.frame(None, None);
+            assert!(!rig.cutscene());
+            assert!(rig.updates() > updates, "the end of the cutscene rebuilds the picture");
+            assert!(rig.explored(-3000.0), "the end positions count");
+            assert!(!rig.explored(3000.0) && !rig.seen(3000.0));
+            // A second cutscene straight after the first behaves the same.
+            rig.frame(at(1500), Some(true));
+            rig.frame(at(-1500), None);
+            assert!(!rig.explored(1500.0), "second cutscene: nothing uncovered");
+            assert!(rig.explored(-1500.0) && rig.seen(-1500.0));
+            rig.frame(None, Some(false));
+            rig.frame(None, None);
+            rig.frame(at(-1500), None);
+            assert!(rig.explored(-1500.0) && !rig.explored(1500.0) && !rig.explored(3000.0));
+            assert!(rig.explored(0.0), "what was explored before stays explored");
+        }
     }
 }

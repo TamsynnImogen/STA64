@@ -171,7 +171,8 @@ mod tests {
         g.observe(&view(), PlayerId(1), None);
         // Player 1's unit sees a disc around x = 0; the far unit is theirs to see only if lifted.
         let off = g.lifted(false, false);
-        assert_eq!(off, g);
+        assert_eq!(off.mask(Layer::Fog), g.mask(Layer::Fog), "no lifting leaves the sight as it is");
+        assert!(off.explored_at(0.0, 0.0) && !off.explored_at(3000.0, 0.0));
         let fog = g.lifted(true, false);
         assert!(fog.visible_at(0.0, 0.0));
         assert!(!fog.visible_at(3000.0, 0.0) && !fog.explored_at(3000.0, 0.0), "the fog alone leaves the unexplored ground black");
