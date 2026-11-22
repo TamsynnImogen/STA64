@@ -98,7 +98,7 @@ pub fn order(
         me,
         own: &own,
         queue_mod: bindings.pressed(Action::AddModifier, &keys),
-        warp: false,
+        warp: world_warp(&keys, &bindings, content.as_deref().map(|c| &*c.0)),
     };
     let mut acks = Vec::new();
     ground_order(&ground, GroundAt::Ray(ray), &mut OrderOut { queue: &mut queue, targets: &mut targets, issued: &mut acks });
@@ -195,9 +195,28 @@ pub(crate) fn ground_order(g: &Ground, at: GroundAt, out: &mut OrderOut) {
 /// a warp job by this click). The minimap cursor reads the same answer. Alt is the keyboard's Alt,
 /// not a rebindable action.
 pub(crate) fn minimap_plain(keys: &ButtonInput<KeyCode>, bindings: &KeyBindings, content: Option<&sta_content::ContentDb>) -> bool {
+    alt_held(keys) || warp_withheld(keys, bindings, content)
+}
+
+/// Alt, the keyboard's Alt (not a rebindable action): the warp modifier of the originals.
+fn alt_held(keys: &ButtonInput<KeyCode>) -> bool {
     keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight])
-        || bindings.pressed(Action::AddModifier, keys)
-        || content.is_some_and(|c| c.profile() == sta_content::Profile::Sta1Classic)
+}
+
+/// The two interim reasons the minimap gives no warp move (see [`minimap_plain`]): the queue
+/// modifier is held, or the content is Armada I's.
+fn warp_withheld(keys: &ButtonInput<KeyCode>, bindings: &KeyBindings, content: Option<&sta_content::ContentDb>) -> bool {
+    bindings.pressed(Action::AddModifier, keys) || content.is_some_and(|c| c.profile() == sta_content::Profile::Sta1Classic)
+}
+
+/// The main view's right-click on open ground (or on an own craft, which gives no order of its
+/// own) is a warp move while Alt is held: the same modifier and the same order as the minimap's
+/// (read from the executable, static: a move becomes a warp move when Alt is held; the minimap
+/// has it the other way round). INTERIM, as for the minimap: not with the queue modifier held and
+/// not on Armada I content. Which craft can warp is the sim's existing warp-move rule. The
+/// cursor reads the same answer.
+pub(crate) fn world_warp(keys: &ButtonInput<KeyCode>, bindings: &KeyBindings, content: Option<&sta_content::ContentDb>) -> bool {
+    alt_held(keys) && !warp_withheld(keys, bindings, content)
 }
 
 /// A right-click on the minimap (`RadarClick`, Secondary, inside the map's rectangle): the same
@@ -580,6 +599,23 @@ mod tests {
         assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: true })]);
         let (cmds, _) = radar_click(&mut app, Vec2::new(2000.0, 700.0), SEC, true, &[KeyCode::ShiftLeft, KeyCode::AltLeft]);
         assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: true })]);
+    }
+
+    /// The world's warp modifier is the minimap's Alt, inverted: Alt gives the warp move, not with
+    /// the queue modifier, not on Armada I content.
+    #[test]
+    fn world_warp_is_alt_without_the_queue_modifier_or_armada_one() {
+        let db = sta_content::fake::db();
+        let a1 = sta_content::ContentDb::builder().profile(sta_content::Profile::Sta1Classic).features(db.features().clone()).build().unwrap();
+        let bindings = KeyBindings::default();
+        let mut keys = ButtonInput::<KeyCode>::default();
+        assert!(!world_warp(&keys, &bindings, Some(&db)));
+        keys.press(KeyCode::AltRight);
+        assert!(world_warp(&keys, &bindings, Some(&db)));
+        assert!(world_warp(&keys, &bindings, None));
+        assert!(!world_warp(&keys, &bindings, Some(&a1)));
+        keys.press(KeyCode::ShiftLeft);
+        assert!(!world_warp(&keys, &bindings, Some(&db)));
     }
 
     /// Armada I content: no warp job from the minimap (INTERIM: its rule was not read).

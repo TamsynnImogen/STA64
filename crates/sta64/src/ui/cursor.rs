@@ -135,6 +135,26 @@ pub(crate) fn frames_of(sprite: &Sprite, anim: Option<&Animation>, size: UVec2) 
     Some((frames, origin, period))
 }
 
+/// The part of a frame that is drawn: the rectangle inset by half a texel on every side, so that
+/// linear sampling at the rim never reads a texel of the neighbouring frame. The drawn node is
+/// inset by the same amount (see [`inset_node`]), so the texel-to-pixel scale and the hotspot stay
+/// where they were. A pure artefact fix, not a rule of the original (the report grades its
+/// filtering as bilinear, one cursor, one scale, and says nothing about its edges). A frame of a
+/// texel or less is left whole.
+pub(crate) fn inset_rect(r: Rect) -> Rect {
+    if r.width() <= 1.0 || r.height() <= 1.0 {
+        return r;
+    }
+    Rect { min: r.min + Vec2::splat(0.5), max: r.max - Vec2::splat(0.5) }
+}
+
+/// The node of the inset frame: its top-left and size, from the full frame's (`pos`, `size` in UI
+/// units, the cell's texel scaled by the cursor size factor `k`).
+pub(crate) fn inset_node(frame: Rect, pos: Vec2, k: f32) -> (Vec2, Vec2) {
+    let inner = inset_rect(frame);
+    (pos + (inner.min - frame.min) * k, inner.size() * k)
+}
+
 /// The frame to show `t` seconds in.
 pub(crate) fn frame_at(frames: usize, period: f32, t: f32) -> usize {
     if frames <= 1 || period <= 0.0 || !t.is_finite() {
@@ -244,12 +264,15 @@ fn place(
     // The player's size factor (UI-45) scales the drawn cell and the hotspot alike.
     let size = settings.as_deref().map_or(1.0, |s| s.cursor_scale).clamp(0.5, 3.0);
     let pos = node_pos(pointer, art.origin * size, ui_scale.map_or(1.0, |s| s.0));
+    // The sampled rectangle and the node are inset together (see `inset_rect`).
+    let (pos, node_size) = inset_node(rect, pos, size);
+    let rect = inset_rect(rect);
     let image = ImageNode { image: art.image.clone(), rect: Some(rect), image_mode: bevy::ui::widget::NodeImageMode::Stretch, ..default() };
     if let Some((_, mut node, mut current, mut v)) = nodes.iter_mut().next() {
         node.left = Val::Px(pos.x);
         node.top = Val::Px(pos.y);
-        node.width = Val::Px(rect.width() * size);
-        node.height = Val::Px(rect.height() * size);
+        node.width = Val::Px(node_size.x);
+        node.height = Val::Px(node_size.y);
         if current.image != image.image || current.rect != image.rect {
             *current = image;
         }
@@ -259,7 +282,7 @@ fn place(
     } else {
         commands.spawn((
             CursorNode,
-            Node { position_type: PositionType::Absolute, left: Val::Px(pos.x), top: Val::Px(pos.y), width: Val::Px(rect.width() * size), height: Val::Px(rect.height() * size), ..default() },
+            Node { position_type: PositionType::Absolute, left: Val::Px(pos.x), top: Val::Px(pos.y), width: Val::Px(node_size.x), height: Val::Px(node_size.y), ..default() },
             image,
             GlobalZIndex(i32::MAX - 1),
             Pickable::IGNORE,
@@ -290,6 +313,28 @@ mod tests {
               still tex_a 0 32 32 32 @cursor @origin=(16,16)\n\
               @animation flip4\noffset 4 1.0 step\n@auto=row\n@keyframes\n",
         )
+    }
+
+    /// The drawn part of a frame leaves half a texel at every rim; the node shrinks and moves with it,
+    /// so a texel still covers `k` units and the hotspot stays on the same spot. Invented sheet size.
+    #[test]
+    fn the_frame_is_inset_by_half_a_texel_and_the_node_follows() {
+        let t = table();
+        let s = t.sprite("spin").unwrap();
+        let (frames, ..) = frames_of(s, s.anims.first().and_then(|i| t.animation(i)), UVec2::new(128, 64)).unwrap();
+        // No sampled texel lies outside its own frame, so none of a neighbour's is read.
+        for (i, f) in frames.iter().enumerate() {
+            let r = inset_rect(*f);
+            assert_eq!(r, Rect::new(f.min.x + 0.5, 0.5, f.max.x - 0.5, 31.5), "frame {i}");
+            let (pos, size) = inset_node(*f, Vec2::new(10.0, 20.0), 2.0);
+            assert_eq!((pos, size), (Vec2::new(11.0, 21.0), Vec2::new(62.0, 62.0)));
+        }
+        // The scale is unchanged: units per texel are the node's over the rectangle's.
+        let (_, size) = inset_node(frames[0], Vec2::ZERO, 2.0);
+        assert_eq!(size / inset_rect(frames[0]).size(), Vec2::splat(2.0));
+        // A frame of a texel or less is not inset.
+        let tiny = Rect::new(4.0, 4.0, 5.0, 9.0);
+        assert_eq!(inset_rect(tiny), tiny);
     }
 
     #[test]
