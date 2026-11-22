@@ -178,7 +178,8 @@ pub struct MapGrid {
     pub builds: u32,
 }
 
-/// Cycle the current view's mode on the grid-toggle chord (the reveal modifier and the grid key).
+/// Cycle the current view's mode on the grid-toggle chord (the reveal modifier and the grid key). Not run while a
+/// cutscene runs (the grid is hidden then; see `update`), so the key does not change the mode unseen.
 fn toggle(mut modes: ResMut<GridModes>, keys: Option<Res<ButtonInput<KeyCode>>>, bindings: Res<KeyBindings>) {
     let Some(keys) = keys else { return };
     if bindings.pressed(Action::RevealModifier, &keys) && bindings.just_pressed(Action::GridToggle, &keys) {
@@ -195,8 +196,12 @@ fn update(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<GridMaterial>>,
     mut grid: Query<(&mut MapGrid, &mut Mesh3d, &mut Visibility)>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
 ) {
-    let want = modes.rts.shown() && bounds.is_some();
+    // Interim (grade: stated by a player; not measured, not read from the original): no grid while a cutscene
+    // runs, in every look and whatever the mode. Whether the original does this by a general rule or by a mission
+    // call is not established; that call stays unwired. The mode value is not touched.
+    let want = modes.rts.shown() && bounds.is_some() && !crate::ui::presentation::cutscene_running(cine);
     let Some(bounds) = bounds else { return };
     let now = (bounds.min, bounds.max);
     if let Ok((mut g, mut mesh, mut vis)) = grid.single_mut() {
@@ -238,7 +243,7 @@ impl Plugin for MapGridPlugin {
         app.init_resource::<GridModes>().init_resource::<KeyBindings>().add_systems(
             Update,
             (
-                toggle.in_set(GameSet::Input).run_if(crate::game::flow::match_running).run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free),
+                toggle.in_set(GameSet::Input).run_if(crate::game::flow::match_running).run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free).run_if(not(crate::ui::presentation::cutscene_running)),
                 update.in_set(GameSet::Render).run_if(resource_exists::<Assets<Mesh>>).run_if(resource_exists::<Assets<GridMaterial>>).run_if(crate::game::flow::match_running).run_if(not(resource_exists::<crate::frontend::scene::MenuScene>)),
             ),
         );
@@ -404,6 +409,28 @@ mod tests {
                 app.world_mut().resource_mut::<GridModes>().rts = GridMode::GridAndBars;
             app.update();
             assert_eq!(grids(&mut app), vec![(1, Visibility::Inherited)], "{look:?}");
+        }
+    }
+
+    #[test]
+    fn a_running_cutscene_hides_the_grid_in_every_look_and_leaves_the_mode() {
+        use crate::render::profile::RenderProfile;
+        use crate::ui::presentation::CineractiveState;
+        for look in [RenderProfile::Stock, RenderProfile::Refit] {
+            for mode in [GridMode::Grid, GridMode::GridAndBars] {
+                let mut app = rig(GridModes { rts: mode, tactical: GridMode::None });
+                app.insert_resource(look);
+                app.update();
+                assert_eq!(grids(&mut app), vec![(1, Visibility::Inherited)], "{look:?}");
+                app.insert_resource(CineractiveState { on: true, skippable: false });
+                app.update();
+                assert_eq!(grids(&mut app), vec![(1, Visibility::Hidden)], "{look:?}");
+                assert_eq!(app.world().resource::<GridModes>().rts, mode);
+                app.insert_resource(CineractiveState::default());
+                app.update();
+                assert_eq!(grids(&mut app), vec![(1, Visibility::Inherited)], "{look:?}");
+                assert_eq!(app.world().resource::<GridModes>().rts, mode);
+            }
         }
     }
 
