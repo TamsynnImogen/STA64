@@ -102,6 +102,7 @@ pub(crate) fn recharge(units: &mut Entities, db: &ContentDb, switches: &crate::s
     for u in units.iter_mut() {
         let pools = if u.shields.directional { 4 } else { 1 };
         let mut held = [false; 4];
+        #[allow(clippy::needless_range_loop)] // `pool` addresses the parallel per-pool arrays
         for pool in 0..pools {
             let until = holds.until(u.id, pool);
             if until > tick && u.shields.now[pool] == Fixed::ZERO {
@@ -138,6 +139,7 @@ pub(crate) fn recharge(units: &mut Entities, db: &ContentDb, switches: &crate::s
                 u.hull[0] = if u.hull[1] - u.hull[0] <= rate { u.hull[1] } else { u.hull[0] + rate };
             }
         }
+        #[allow(clippy::needless_range_loop)] // `pool` addresses the parallel per-pool arrays
         for pool in 0..pools {
             let now = &mut u.shields.now[pool];
             if !held[pool] && *now < max {
@@ -198,6 +200,7 @@ pub(crate) fn apply(
                     damage - shield
                 }
             };
+            #[allow(clippy::collapsible_if)] // the inner `if let` stays separate
             if damage > Fixed::ZERO && t.kind == EntityKind::Craft && t.shields.max > Fixed::ZERO && t.shields.now[pool] == Fixed::ZERO {
                 if let Some(def) = db.unit(t.def).filter(|def| db.unit_features(def).shield_zero_hold) {
                     // The emptying hit and every later hit at zero restart the timer.
