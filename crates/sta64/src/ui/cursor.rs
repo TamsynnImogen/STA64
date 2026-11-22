@@ -187,10 +187,16 @@ fn resolve(name: &str, sprites: &mut CursorSprites, vfs: &sta_vfs::Vfs, images: 
 }
 
 /// The sprite names to try, in order: the wanted cursor's race variant, the wanted cursor, the
-/// default's race variant, the default.
+/// cursor the click would otherwise show (the move cursor for the warp cursor), the default's race
+/// variant, the default.
 pub(crate) fn candidates(wanted: &str, race: Option<&str>) -> Vec<String> {
     let mut out = Vec::new();
-    for name in [wanted, DEFAULT] {
+    let mut names = vec![wanted];
+    if wanted == "c_warp" {
+        names.push("c_move");
+    }
+    names.push(DEFAULT);
+    for name in names {
         if let Some(r) = race {
             out.push(format!("{name}_{r}"));
         }
@@ -317,6 +323,13 @@ mod tests {
 
     /// The drawn part of a frame leaves half a texel at every rim; the node shrinks and moves with it,
     /// so a texel still covers `k` units and the hotspot stays on the same spot. Invented sheet size.
+    /// An install whose table has no warp cursor shows the move cursor, not the pointer.
+    #[test]
+    fn a_missing_warp_cursor_falls_back_to_the_move_cursor() {
+        assert_eq!(candidates("c_warp", None), ["c_warp", "c_move", DEFAULT]);
+        assert_eq!(candidates("c_warp", Some("fx")), ["c_warp_fx", "c_warp", "c_move_fx", "c_move", "standard_cursor_fx", "standard_cursor"]);
+    }
+
     #[test]
     fn the_frame_is_inset_by_half_a_texel_and_the_node_follows() {
         let t = table();

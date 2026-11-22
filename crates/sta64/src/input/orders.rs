@@ -212,11 +212,15 @@ fn warp_withheld(keys: &ButtonInput<KeyCode>, bindings: &KeyBindings, content: O
 /// The main view's right-click on open ground (or on an own craft, which gives no order of its
 /// own) is a warp move while Alt is held: the same modifier and the same order as the minimap's
 /// (read from the executable, static: a move becomes a warp move when Alt is held; the minimap
-/// has it the other way round). INTERIM, as for the minimap: not with the queue modifier held and
-/// not on Armada I content. Which craft can warp is the sim's existing warp-move rule. The
+/// has it the other way round). Only on Armada II content: the rule was read from that game's
+/// executable only (INTERIM: not read for Fleet Operations, Roots, Armada I or STA64's own content,
+/// which keep the plain move and the move cursor). INTERIM, as for the minimap: not with the queue
+/// modifier held. This gate belongs to the main view; the minimap's rule is unchanged. Which craft can warp is the sim's existing warp-move rule. The
 /// cursor reads the same answer.
 pub(crate) fn world_warp(keys: &ButtonInput<KeyCode>, bindings: &KeyBindings, content: Option<&sta_content::ContentDb>) -> bool {
-    alt_held(keys) && !warp_withheld(keys, bindings, content)
+    alt_held(keys)
+        && !bindings.pressed(Action::AddModifier, keys)
+        && content.is_some_and(|c| c.profile() == sta_content::Profile::Sta2Classic)
 }
 
 /// A right-click on the minimap (`RadarClick`, Secondary, inside the map's rectangle): the same
@@ -601,21 +605,24 @@ mod tests {
         assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: true })]);
     }
 
-    /// The world's warp modifier is the minimap's Alt, inverted: Alt gives the warp move, not with
-    /// the queue modifier, not on Armada I content.
+    /// The world's warp modifier is the minimap's Alt, inverted, and only on Armada II content:
+    /// Fleet Operations, Roots, Armada I and STA64's own content keep the plain move.
     #[test]
-    fn world_warp_is_alt_without_the_queue_modifier_or_armada_one() {
+    fn world_warp_is_alt_on_armada_two_content_without_the_queue_modifier() {
         let db = sta_content::fake::db();
-        let a1 = sta_content::ContentDb::builder().profile(sta_content::Profile::Sta1Classic).features(db.features().clone()).build().unwrap();
+        let with = |p| sta_content::ContentDb::builder().profile(p).features(db.features().clone()).build().unwrap();
+        let a2 = with(sta_content::Profile::Sta2Classic);
         let bindings = KeyBindings::default();
         let mut keys = ButtonInput::<KeyCode>::default();
-        assert!(!world_warp(&keys, &bindings, Some(&db)));
+        assert!(!world_warp(&keys, &bindings, Some(&a2)));
         keys.press(KeyCode::AltRight);
-        assert!(world_warp(&keys, &bindings, Some(&db)));
-        assert!(world_warp(&keys, &bindings, None));
-        assert!(!world_warp(&keys, &bindings, Some(&a1)));
+        assert!(world_warp(&keys, &bindings, Some(&a2)));
+        for p in [sta_content::Profile::Fo3, sta_content::Profile::Fo4, sta_content::Profile::Sta1Classic, sta_content::Profile::Native] {
+            assert!(!world_warp(&keys, &bindings, Some(&with(p))), "{p:?}");
+        }
+        assert!(!world_warp(&keys, &bindings, None));
         keys.press(KeyCode::ShiftLeft);
-        assert!(!world_warp(&keys, &bindings, Some(&db)));
+        assert!(!world_warp(&keys, &bindings, Some(&a2)));
     }
 
     /// Armada I content: no warp job from the minimap (INTERIM: its rule was not read).

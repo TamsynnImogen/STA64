@@ -206,6 +206,8 @@ mod tests {
     use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
     use sta_sim::{PlayerId, Sim, TickOutput, Vec3 as SimVec3, WorldSource};
 
+    const A2: sta_content::Profile = sta_content::Profile::Sta2Classic;
+
     use super::super::keys::KeyBindings;
     use super::super::orders::{OrderTargets, order};
     use super::super::select::AimState;
@@ -229,8 +231,12 @@ mod tests {
     /// by seat 0 (the wrongly-owned case) and one owned by nobody. Returns
     /// ids `[miner, cruiser, enemy, moon_owned, moon_free, yard, rig, second_yard, ally, station]`.
     fn app(select: usize) -> (App, [EntityId; 10]) {
+        app_as(select, fake::db().profile())
+    }
+
+    fn app_as(select: usize, profile: sta_content::Profile) -> (App, [EntityId; 10]) {
         let fake = fake::db();
-        let mut builder = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        let mut builder = ContentDb::builder().profile(profile).features(fake.features().clone());
         for unit in fake.units() {
             builder = builder.unit(unit.clone());
         }
@@ -435,7 +441,7 @@ mod tests {
             (9, 19000.0, "c_warp"),   // a station that builds nothing (as the plain click)
         ];
         for (select, x, cursor_name) in cases {
-            let (mut app, _) = app(select);
+            let (mut app, _) = app_as(select, A2);
             app.init_resource::<crate::ui::cursor::WantedCursor>();
             app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::AltLeft);
             let cmds = right_click_at(&mut app, x);
@@ -444,7 +450,7 @@ mod tests {
             assert_eq!(kind_cursor(&cmds), Some(cursor_name), "select {select} at {x}: {cmds:?}");
         }
         // The queue modifier keeps the plain queued move and its cursor (INTERIM, as on the minimap).
-        let (mut app2, _) = app(1);
+        let (mut app2, _) = app_as(1, A2);
         app2.init_resource::<crate::ui::cursor::WantedCursor>();
         for k in [KeyCode::AltLeft, KeyCode::ShiftLeft] {
             app2.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(k);
@@ -454,13 +460,29 @@ mod tests {
         assert_eq!(app2.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_move");
         assert_eq!(kind_cursor(&cmds), Some("c_move"));
         // A pointer whose ray misses the map plane: nothing to warp to.
-        let (mut app3, _) = app(1);
+        let (mut app3, _) = app_as(1, A2);
         app3.init_resource::<crate::ui::cursor::WantedCursor>();
         app3.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::AltLeft);
         let ray = Ray3d::new(Vec3::new(0.0, 1000.0, 0.0), Dir3::X);
         app3.world_mut().resource_mut::<Aim>().0 = Some(AimState { cursor: Vec2::ZERO, ray, clip_from_world: Mat4::IDENTITY, size: Vec2::new(800.0, 600.0) });
         app3.world_mut().run_system_once(cursor).unwrap();
         assert_eq!(app3.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_select");
+    }
+
+    /// The rule was read from Armada II only: Fleet Operations, Roots, Armada I and STA64's own
+    /// content keep the plain move and the move cursor on Alt (INTERIM).
+    #[test]
+    fn alt_keeps_the_plain_move_and_cursor_on_other_profiles() {
+        use sta_content::Profile::*;
+        for profile in [Fo3, Fo4, Sta1Classic, Native] {
+            let (mut app, _) = app_as(1, profile);
+            app.init_resource::<crate::ui::cursor::WantedCursor>();
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::AltLeft);
+            let cmds = right_click_at(&mut app, 20000.0);
+            app.world_mut().run_system_once(cursor).unwrap();
+            assert_eq!(app.world().resource::<crate::ui::cursor::WantedCursor>().0, "c_move", "{profile:?}");
+            assert_eq!(kind_cursor(&cmds), Some("c_move"), "{profile:?}: {cmds:?}");
+        }
     }
 
     /// Where the click gives nothing the cursor is the select cursor: no own selection; a builder busy
