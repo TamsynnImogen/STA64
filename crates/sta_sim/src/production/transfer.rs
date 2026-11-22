@@ -12,6 +12,7 @@ use sta_core::{EntityId, Fixed, PlayerId};
 pub(crate) struct TransferPlan {
     builder: EntityId,
     refund: Option<(PlayerId, [Fixed; RESOURCES])>,
+    crew_refund: Option<(PlayerId, Fixed)>,
     children: Vec<EntityId>,
 }
 
@@ -30,6 +31,7 @@ impl Production {
         let mut plan = TransferPlan {
             builder: id,
             refund: None,
+            crew_refund: None,
             children: Vec::new(),
         };
         let stock = eco.stock_of(unit.owner);
@@ -108,6 +110,11 @@ impl Production {
                 true
             };
             plan.credit(&mut balance, unit.owner, &eco.scaled_cost(unit.owner, &def.build.cost), refundable)?;
+            let crew = super::officer_upgrades::crew_cost(def);
+            if refundable && crew > Fixed::ZERO {
+                let owed = plan.crew_refund.map_or(Fixed::ZERO, |(_, paid)| paid);
+                plan.crew_refund = Some((unit.owner, Fixed::from_bits(owed.to_bits().checked_add(crew.to_bits())?)));
+            }
         }
         Some(plan)
     }
@@ -120,6 +127,9 @@ impl Production {
         }
         if let Some((owner, stock)) = plan.refund {
             eco.set_stock(owner, stock);
+        }
+        if let Some((owner, crew)) = plan.crew_refund {
+            super::officer_upgrades::credit_crew(eco, owner, crew);
         }
         plan.children
     }

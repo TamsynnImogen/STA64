@@ -68,8 +68,9 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// Format 41 appends stock A2 empty-shield recharge holds (#1101).
 /// Format 42 appends research station pod attachments.
 /// Format 43 appends freighter drop-off queues.
+/// Format 44 appends completed Armada I starbase officer upgrades.
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 43;
+pub const FORMAT_VERSION: u16 = 44;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
@@ -524,6 +525,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&ZeroShieldHoldsRec { version: 1, rows: self.zero_shield_holds.to_rows() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.production.research_rows()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.economy.dock_rows()).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&self.production.officer_upgrade_rows()).expect("snapshot serialises"));
         out
     }
 
@@ -610,6 +612,7 @@ impl Sim {
         if zero_shield_holds_rec.version != 1 { return Err(SnapshotError::Corrupt("unknown shield zero hold record version".into())); }
         let (research, rest): (crate::production::research::ResearchRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         let (docks, rest): (crate::economy::dock::DockRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        let (officer_upgrades, rest): (crate::production::officer_upgrades::OfficerUpgradeRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -771,6 +774,7 @@ impl Sim {
             .ok_or_else(|| corrupt("shield zero holds"))?;
         let mut production = crate::production::Production::from_rec(&b.production).ok_or_else(|| corrupt("rallies"))?;
         production.restore_research(research, &units, content.as_deref()).ok_or_else(|| corrupt("research pods"))?;
+        production.restore_officer_upgrades(officer_upgrades, &units, content.as_deref()).ok_or_else(|| corrupt("officer upgrades"))?;
         let mut sim = Sim {
             tick: b.tick,
             rng: Rng(b.rng),

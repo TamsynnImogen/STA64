@@ -31,7 +31,7 @@ pub struct HudFeed {
     pub player: PlayerId,
     pub selected: Vec<EntityId>,
     pub content: Option<Arc<ContentDb>>,
-    /// Queue and research eligibility from the same tick as `view`.
+    /// Queues and production eligibility from the same tick as `view`.
     pub production: Vec<ProductionView>,
     /// The names the map gave its objects (host-only, see [`super::instance_names`]).
     pub names: super::instance_names::InstanceNames,
@@ -572,7 +572,7 @@ pub(super) fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
 }
 
 /// A build icon follows the resolved model basename before the ODF stem.
-fn build_sprite_names(model: &str, odf: &str) -> Vec<String> {
+pub(super) fn build_sprite_names(model: &str, odf: &str) -> Vec<String> {
     let mut names = Vec::new();
     for source in [model, odf] {
         let basename = source.rsplit(['/', '\\']).next().unwrap_or(source).trim();
@@ -875,6 +875,16 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
                     && feed
                         .def(u)
                         .is_some_and(|d| d.build.list.iter().any(|i| i.key == *what))
+                    && feed.content.as_deref().is_some_and(|db| {
+                        if !db.a1_officers() || db.unit(*what).is_none_or(|d| d.a1_officer_upgrade_gain.is_none()) {
+                            return true;
+                        }
+                        db.unit(u.def).and_then(|d| d.a1_base_officers.as_ref())
+                            .is_some_and(|policy| policy.upgrade == Some(*what))
+                            && feed.production.iter().find(|row| row.builder == *b)
+                                .and_then(|row| row.officer_upgrades.as_ref())
+                                .is_some_and(|state| state.remaining > 0)
+                    })
             }) =>
         {
             Some((
@@ -904,7 +914,7 @@ pub struct ResEntry {
 
 /// The strip: the player's stock in the order dilithium, metal, latinum,
 /// biomatter (the order Refit's HUD.md asks for), those the race has, then the
-/// officers as "in use/capacity" when it has any.
+/// officers as "in use/capacity", or A1's "available/capacity", when it has any.
 pub fn resources(feed: &HudFeed, no: [bool; 4]) -> Vec<ResEntry> {
     let Some(p) = feed.view.player(feed.player) else { return Vec::new() };
     let names = resource_model(feed);
@@ -913,11 +923,20 @@ pub fn resources(feed: &HudFeed, no: [bool; 4]) -> Vec<ResEntry> {
         .filter(|&i| !no[i])
         .map(|i| ResEntry { name: names.name(i).to_owned(), id: i, text: (p.resources.get(i).map_or(0.0, |f| f.to_f32()) as i64).to_string() })
         .collect();
-    let [used, cap] = p.officers;
-    if cap > Fixed::ZERO {
-        out.push(ResEntry { name: "officers".into(), id: 4, text: format!("{}/{}", used.to_f32() as i64, cap.to_f32() as i64) });
+    if p.officers[1] > Fixed::ZERO || feed.content.as_deref().is_some_and(ContentDb::a1_officers) {
+        out.push(ResEntry { name: "officers".into(), id: 4, text: officer_text(feed, p.officers) });
     }
     out
+}
+
+pub(super) fn officer_text(feed: &HudFeed, [used, cap]: [Fixed; 2]) -> String {
+    let shown = if feed.content.as_deref().is_some_and(ContentDb::a1_officers) {
+        Fixed::from_bits(cap.to_bits().saturating_sub(used.to_bits()).max(0))
+    } else {
+        used
+    };
+    let whole = |value: Fixed| value.to_bits() / Fixed::ONE.to_bits();
+    format!("{}/{}", whole(shown), whole(cap))
 }
 
 /// Everything the HUD draws, for change detection.
@@ -1551,6 +1570,7 @@ mod tests {
                 site: None,
                 portal: None,
                 research: Some(ResearchView { unavailable: vec![(cruiser, block)], pods: Vec::new(), active_axes: None }),
+                officer_upgrades: None,
             }];
             let buttons = grid(&f, Page::Build);
             assert_eq!(buttons[0].cell, 0);
@@ -1834,6 +1854,22 @@ mod tests {
         let mut f = f;
         f.player = PlayerId(9);
         assert!(resources(&f, [false; 4]).is_empty());
+    }
+
+    #[test]
+    fn a1_officer_strip_shows_available_capacity_without_changing_player_view() {
+        let db = ContentDb::builder().profile(sta_content::Profile::Sta1Classic).build().unwrap();
+        let f = feed(db, Vec::new(), &[]);
+        assert_eq!(f.view.players[0].officers, [Fixed::from_int(3), Fixed::from_int(10)]);
+        assert_eq!(resources(&f, [false; 4]).last().unwrap().text, "7/10");
+        let mut view = (*f.view).clone();
+        view.players[0].officers = [Fixed::from_int(12), Fixed::from_int(10)];
+        let f = HudFeed { view: Arc::new(view), ..f };
+        assert_eq!(resources(&f, [false; 4]).last().unwrap().text, "0/10");
+        let mut view = (*f.view).clone();
+        view.players[0].officers = [Fixed::ZERO, Fixed::ZERO];
+        let f = HudFeed { view: Arc::new(view), ..f };
+        assert_eq!(resources(&f, [false; 4]).last().unwrap().text, "0/0");
     }
 
     #[test]

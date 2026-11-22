@@ -77,7 +77,7 @@ impl Production {
         what: ContentKey,
     ) -> bool {
         let cost = cost_of(db, what);
-        let Some(limit) = eco.officer_limit(player) else { return true };
+        let Some(limit) = self.officer_limit(units, db, eco, player) else { return true };
         cost == Fixed::ZERO || add(add(self.officer_census(units, db, player), eco.officer_adjust(player)), cost) <= limit
     }
 }

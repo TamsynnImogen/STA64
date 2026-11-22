@@ -16,6 +16,14 @@ pub struct ProductionView {
     /// A yard's aperture during the interval between build and release.
     pub portal: Option<LaunchPortalView>,
     pub research: Option<ResearchView>,
+    pub officer_upgrades: Option<OfficerUpgradeView>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OfficerUpgradeView {
+    pub completed: u32,
+    /// How many more upgrades may enter the queue now.
+    pub remaining: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,7 +110,8 @@ impl Production {
                 .map(|def| self.research_view(db, units, unit, def));
             let site = jobs
                 .first()
-                .filter(|job| job.started && job.paid && launch.is_none())
+                .filter(|job| job.started && job.paid && launch.is_none()
+                    && db.unit(job.def).is_none_or(|d| d.a1_officer_upgrade_gain.is_none()))
                 .and_then(|job| {
                     let (pos, heading) =
                         db.unit(unit.def).map_or((unit.pos, unit.heading), |def| {
@@ -132,6 +141,7 @@ impl Production {
                     site,
                     portal,
                     research,
+                    officer_upgrades: db.unit(unit.def).and_then(|d| self.officer_upgrade_view(unit, d)),
                 },
             );
         }
@@ -165,6 +175,7 @@ impl Production {
                     }),
                     portal: None,
                     research: None,
+                    officer_upgrades: None,
                 },
             );
         }
@@ -190,16 +201,19 @@ impl Production {
                     }),
                     portal: None,
                     research: None,
+                    officer_upgrades: None,
                 },
             );
         }
         for unit in units.iter() {
             if rows.contains_key(&unit.id) { continue; }
-            let Some(def) = db.unit(unit.def).filter(|d| !d.research_slots.is_empty()) else { continue; };
-            let research = self.research_view(db, units, unit, def);
-            if !research.unavailable.is_empty() || !research.pods.is_empty() {
+            let Some(def) = db.unit(unit.def) else { continue; };
+            let officer_upgrades = self.officer_upgrade_view(unit, def);
+            let research = (!def.research_slots.is_empty()).then(|| self.research_view(db, units, unit, def))
+                .filter(|r| !r.unavailable.is_empty() || !r.pods.is_empty());
+            if research.is_some() || officer_upgrades.is_some() {
                 rows.insert(unit.id, ProductionView {
-                    builder: unit.id, jobs: Vec::new(), site: None, portal: None, research: Some(research),
+                    builder: unit.id, jobs: Vec::new(), site: None, portal: None, research, officer_upgrades,
                 });
             }
         }

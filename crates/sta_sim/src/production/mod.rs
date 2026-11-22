@@ -67,6 +67,7 @@ mod launch;
 pub(crate) mod officers;
 pub mod orbit;
 pub(crate) mod research;
+pub(crate) mod officer_upgrades;
 pub mod rally;
 pub mod site;
 pub mod view;
@@ -145,6 +146,7 @@ pub struct Production {
     /// By the station being welded.
     welds: Table<Weld>,
     research: Table<research::Attachment>,
+    officer_upgrades: Table<u32>,
 }
 
 #[derive(Default)]
@@ -206,7 +208,9 @@ fn ticks_of(db: &ContentDb, def: ContentKey) -> u64 {
 /// Take the whole cost of `def` from `p`, or nothing.
 fn can_pay(eco: &Economy, db: &ContentDb, p: PlayerId, def: ContentKey) -> bool {
     let Some(d) = db.unit(def) else { return false };
+    let crew = officer_upgrades::crew_cost(d);
     afford::first_short(&eco.stock_of(p), &eco.scaled_cost(p, &d.build.cost)).is_none()
+        && (crew == Fixed::ZERO || eco.crew_of(p).is_some_and(|pool| pool >= crew))
 }
 
 fn pay(eco: &mut Economy, db: &ContentDb, p: PlayerId, def: ContentKey) -> bool {
@@ -220,6 +224,11 @@ fn pay(eco: &mut Economy, db: &ContentDb, p: PlayerId, def: ContentKey) -> bool 
             debug_assert!(ok);
         }
     }
+    let crew = officer_upgrades::crew_cost(d);
+    if crew > Fixed::ZERO {
+        let paid = eco.withdraw_crew(p, crew);
+        debug_assert_eq!(paid, crew);
+    }
     true
 }
 
@@ -231,6 +240,7 @@ fn refund(eco: &mut Economy, db: &ContentDb, p: PlayerId, def: ContentKey) {
             eco.apply_edit(PlayerId::BENCH, &Edit::Cargo(p, i as u8, now + c));
         }
     }
+    officer_upgrades::credit_crew(eco, p, officer_upgrades::crew_cost(d));
 }
 
 impl Production {
@@ -246,10 +256,11 @@ impl Production {
     ) -> bool {
         let Some(y) = units.get(yard) else { return false };
         let Some(bd) = db.unit(y.def) else { return false };
-        if !finished(y) || !EntityKind::producer_def(bd) || db.unit(what).is_none() {
+        let Some(product) = db.unit(what) else { return false; };
+        if !finished(y) || !EntityKind::producer_def(bd) || !self.admits_officer_upgrade(y, bd, product) {
             return false;
         }
-        if db.unit(what).is_some_and(|product| self.research_block(db, units, yard, bd, product).is_some()) {
+        if self.research_block(db, units, yard, bd, product).is_some() {
             return false;
         }
         let limit = db.build_queue_limit(bd) as usize;
@@ -271,6 +282,7 @@ impl Production {
     pub fn is_empty(&self) -> bool {
         self.queues.is_empty() && self.deploys.is_empty() && self.welds.is_empty()
             && self.rallies.is_empty() && self.research.is_empty()
+            && self.officer_upgrades.is_empty()
     }
 
     pub(crate) fn order_rally(
@@ -376,7 +388,9 @@ impl Production {
         if !bd.build.list.is_empty() && !bd.build.list.iter().any(|r| r.key == what) {
             return false;
         }
-        if self.research_block(db, units, builder, bd, product).is_some() {
+        if !self.admits_officer_upgrade(b, bd, product)
+            || self.research_block(db, units, builder, bd, product).is_some()
+        {
             return false;
         }
         let evolves = bd.is_evolver();
@@ -622,7 +636,12 @@ impl Production {
                 let delay = portal.map_or(0, sta_content::UnitDef::wormhole_open_ticks);
                 if head.done >= ticks_of(db, head.def).saturating_add(delay) {
                     let Item { def, owner, .. } = q.remove(0);
-                    if let Some(d) = db.unit(def) {
+                    let product = db.unit(def);
+                    if let Some(upgrade) = product.filter(|d| d.a1_officer_upgrade_gain.is_some()) {
+                        if !builder.is_some_and(|base| self.finish_officer_upgrade(y, base, upgrade)) {
+                            refund(eco, db, owner, def);
+                        }
+                    } else if let Some(d) = product {
                         let mut attachment = None;
                         // External research pods finish directly in an attachment slot.
                         let out = match builder {
@@ -818,6 +837,7 @@ impl Production {
                 h.u64(link.slot as u64);
             }
         }
+        self.hash_officer_upgrades(h);
     }
 
     #[allow(dead_code)] // the snapshot calls it

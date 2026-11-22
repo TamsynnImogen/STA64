@@ -2,7 +2,7 @@
 //! unset): an Instant Action start on stock Armada I gives every seat the
 //! header's start. Armada I's race ODFs author no `normal*` stock, so the seat
 //! takes `cfgStartingDilithium` and `cfgStartingCrew` from `RTS_CFG.h`, and
-//! `cfgMaxOfficers` is the officer cap; latinum, metal and biomatter stay
+//! `cfgMaxOfficers` supplies the initial officer allowance; latinum, metal and biomatter stay
 //! empty. Keys read from the install; the amounts are not measured on a
 //! running Armada I.
 
@@ -26,8 +26,8 @@ fn every_armada_one_seat_starts_with_the_headers_dilithium_crew_and_officer_cap(
     let (races, _) = Races::load(&vfs, &index);
     let header = db.rules().legacy_start();
     let (dilithium, crew) = (header.dilithium.expect("cfgStartingDilithium"), header.crew.expect("cfgStartingCrew"));
-    let cap = db.rules().officer_limit(0).expect("cfgMaxOfficers");
-    assert!(dilithium > 0 && crew > 0 && cap > 0);
+    let cap = db.a1_starting_officers().expect("cfgMaxOfficers");
+    assert!(dilithium > 0 && crew > 0);
     let mut seen = 0;
     for race in sta_content::race::skirmish_races(&races, &db) {
         let def = races.get_playable(&race).or_else(|| races.get(&race)).unwrap();
@@ -50,7 +50,10 @@ fn every_armada_one_seat_starts_with_the_headers_dilithium_crew_and_officer_cap(
             let stock: Vec<i64> = p.resources.iter().map(|f| f.to_bits() / Fixed::ONE.to_bits()).collect();
             assert_eq!(stock, [dilithium, 0, 0, 0], "{race} seat {} stock", id.0);
             assert_eq!(p.crew, Some(Fixed::from_int(crew as i32)), "{race} seat {} crew", id.0);
-            assert_eq!(p.officers[1], Fixed::from_int(cap), "{race} seat {} officer cap", id.0);
+            let base_gain: i32 = view.units.iter().filter(|unit| unit.owner == id)
+                .filter_map(|unit| db.unit(unit.def)?.a1_base_officers)
+                .map(|base| base.gain).sum();
+            assert_eq!(p.officers[1], Fixed::from_int(cap + base_gain), "{race} seat {} officer cap", id.0);
         }
         seen += 1;
     }
@@ -96,7 +99,7 @@ fn a1_compat_instant_action_starts_with_compatibility_defaults_at_tick_zero() {
             let (sim, _) = Sim::from_setup_with_starts(&setup, &races);
             let view = sim.view();
             assert_eq!(view.tick, 0);
-            let officer_cap = db.rules().officer_limit(0);
+            let baseline = db.a1_starting_officers().unwrap_or(0);
             for id in [PlayerId(0), PlayerId(1)] {
                 let player = view.player(id).unwrap();
                 let stock: Vec<i64> = player.resources.iter().map(|f| f.to_bits() / Fixed::ONE.to_bits()).collect();
@@ -105,7 +108,10 @@ fn a1_compat_instant_action_starts_with_compatibility_defaults_at_tick_zero() {
                 let living = view.units.iter().filter(|unit| unit.owner == id)
                     .filter_map(|unit| db.unit(unit.def))
                     .fold(Fixed::ZERO, |sum, unit| sum + unit.build.officers.max(Fixed::ZERO));
-                let expected = officer_cap.map_or([Fixed::ZERO; 2], |cap| [living, Fixed::from_int(cap)]);
+                let base_gain: i32 = view.units.iter().filter(|unit| unit.owner == id)
+                    .filter_map(|unit| db.unit(unit.def)?.a1_base_officers)
+                    .map(|base| base.gain).sum();
+                let expected = [living, Fixed::from_int(baseline + base_gain)];
                 assert_eq!(player.officers, expected, "{race} {mode:?} seat {} officers", id.0);
             }
         }

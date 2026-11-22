@@ -6,7 +6,7 @@
 //! - The rail has seven positions, left to right, in the sheet's `speedSingleButtonArea` rectangle
 //!   moved right by the earlier positions: a button position advances by its width plus
 //!   `speedSingleButtonGap`, the separator position by the separator's width
-//!   (`speedSeparatorArea`) plus the gap. Positions 0 to 4 are special weapons (a later package),
+//!   (`speedSeparatorArea`) plus the gap. Positions 0 to 4 are production jobs or special weapons,
 //!   position 5 is the separator (`speedSeparator` sprite), position 6 is TRANSPORT.
 //! - The separator and the transport slot belong to every selected craft; a selection of several
 //!   units shows one transport button (the shared capability, as for every other command).
@@ -54,6 +54,11 @@ pub(in crate::ui::hud) fn rect(layout: &StockLayout, at: usize) -> Option<R> {
     let gap = layout.number("speedSingleButtonGap").filter(|g| g.is_finite() && *g >= 0.0).map_or(0, |g| g as i32);
     let before: i32 = (0..at).map(|k| if k == SEPARATOR { separator.w } else { button.w } + gap).sum();
     layout.at_shifted(origin, if at == SEPARATOR { "speedSeparatorArea" } else { "speedSingleButtonArea" }, before)
+}
+
+/// The first five rail positions are the producer's queue in Armada I and A1Compat.
+pub(in crate::ui::hud) fn queue_slots(layout: &StockLayout) -> Vec<(usize, R)> {
+    (0..SEPARATOR).filter_map(|index| rect(layout, index).map(|r| (index, r))).collect()
 }
 
 /// The rail's buttons for the selection: the transport button when the selection has a transporter

@@ -325,6 +325,7 @@ mod tests {
         let mut rows = vec![ProductionView {
             portal: None,
             research: None,
+            officer_upgrades: None,
             builder: EntityId(9),
             jobs: vec![ProductionJobView {
                 def: db.key("station").unwrap(),
