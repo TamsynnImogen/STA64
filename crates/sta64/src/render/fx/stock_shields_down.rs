@@ -30,9 +30,13 @@
 //! - **Colour and blend**: unlit, texel times [`GAIN`] times white, added exactly (texture alpha ignored), two-sided, depth
 //!   test on, depth write off. The white gain is an inference from the measured gain of the shield caps (INTERIM);
 //!   depth write is INTERIM.
-//! - **Visibility**: drawn only while its target is visible, as the shield caps. The original's "no bands while
-//!   cloaked" (read from the executable, static; not measured) is not drawn separately: a cloaked craft the viewer cannot see
-//!   has no bands because it is not visible.
+//! - **Visibility**: drawn only while its target is visible, as the shield caps.
+//! - **Cloak**: no bands while the craft is cloaked (read from the executable, static; not measured). Cloaked is the view's
+//!   `UnitView.flags` bit `UnitFlags::CLOAKED`, which the sim sets when the cloak is complete and clears when it starts
+//!   to disengage; the view has no finer state, so a craft engaging or disengaging counts as not cloaked (INTERIM). The
+//!   report does not say what happens to bands across a cloak: the narrowest reading is taken (INTERIM): the effect is
+//!   hidden, not ended, while the craft is cloaked, and shown again if the craft decloaks with a pool still at zero. It
+//!   ends only by the rules above.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
@@ -176,6 +180,11 @@ pub struct BandPart(pub usize);
 #[derive(Component)]
 pub struct BandsAttached;
 
+/// Whether the bands are hidden for a craft whose view says cloaked (the rule of the Stock look: none while cloaked).
+pub fn hidden_by_cloak(cloaked: bool) -> bool {
+    cloaked
+}
+
 /// Whether the effect is wanted for a craft under its definition's features: only with the zero-shield hold.
 pub fn wanted(hold: bool, pool_now: f32, pool_max: f32) -> bool {
     hold && pool_max > 0.0 && pool_now <= 0.0
@@ -244,7 +253,7 @@ pub(super) fn place(
             cmds.entity(e).try_despawn();
             continue;
         };
-        s.shown = ctx.object_visible(s.unit, &visibility);
+        s.shown = ctx.object_visible(s.unit, &visibility) && !hidden_by_cloak(link.curr().unit(s.unit).is_some_and(|u| u.flags.contains(sta_sim::view::UnitFlags::CLOAKED)));
         let want = if s.shown { Visibility::Inherited } else { Visibility::Hidden };
         if *vis != want {
             *vis = want;
