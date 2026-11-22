@@ -56,6 +56,7 @@ pub struct ContentDb {
     /// Armada I's play-physics block (CON-52): only under `Sta1Classic`, and
     /// only when the file is there and usable.
     a1_play: Option<crate::A1Dynamics>,
+    a1_officer_policy: bool,
     /// The mounted layers' names, top first: informational (D10), recorded
     /// in replays and snapshots, never compared.
     packs: Vec<String>,
@@ -64,6 +65,54 @@ pub struct ContentDb {
 
 impl ContentDb {
     pub fn rules(&self) -> &crate::Rules { &self.rules }
+
+    /// Whether the resolved content uses Armada I officer rules.
+    pub fn a1_officers(&self) -> bool {
+        self.profile == Profile::Sta1Classic || self.a1_officer_policy
+    }
+
+    /// The explicit Armada I `cfgMaxOfficers`, when valid and representable.
+    pub fn a1_starting_officers(&self) -> Option<i32> {
+        self.a1_officers().then(|| self.rules.a1_max_officers()).flatten()
+    }
+
+    /// Resolve each A1 starbase's race upgrade after all definition keys exist.
+    pub(crate) fn with_a1_officer_upgrades(mut self, enabled: bool, races: &std::collections::BTreeMap<String, String>, warnings: &mut Vec<Warning>) -> Self {
+        self.a1_officer_policy = enabled;
+        if !self.a1_officers() { return self; }
+        let upgrades: std::collections::BTreeMap<String, ContentKey> = self.units()
+            .filter(|u| u.a1_officer_upgrade_gain.is_some())
+            .map(|u| (u.odf.clone(), u.key)).collect();
+        let upgrade_keys: std::collections::BTreeSet<ContentKey> = upgrades.values().copied().collect();
+        let native = self.profile == Profile::Sta1Classic;
+        for (_, def) in &mut self.defs {
+            let Def::Unit(base) = def else { continue };
+            let Some(mut officers) = base.a1_base_officers else { continue };
+            let file = format!("{}.odf", base.odf);
+            let named = races.get(&base.race.to_ascii_lowercase()).and_then(|s| upgrades.get(s)).copied();
+            let fallback = if !native && !races.contains_key(&base.race.to_ascii_lowercase()) {
+                let candidates: std::collections::BTreeSet<_> = base.build.list.iter()
+                    .filter(|item| upgrade_keys.contains(&item.key))
+                    .map(|item| item.key).collect();
+                if candidates.len() == 1 { candidates.iter().next().copied() } else { None }
+            } else { None };
+            officers.upgrade = named.or(fallback);
+            if named.is_none() && fallback.is_some() {
+                warnings.push(Warning::new(&file, "officer upgrade inferred from the only eligible build item"));
+            }
+            if races.contains_key(&base.race.to_ascii_lowercase()) && named.is_none() {
+                warnings.push(Warning::new(&file, "race officerUpgradeODF does not name a defined upgrade"));
+            }
+            base.build.list.retain(|item| !upgrade_keys.contains(&item.key) || Some(item.key) == officers.upgrade);
+            if let Some(key) = officers.upgrade && !base.build.list.iter().any(|item| item.key == key) {
+                let name = upgrades.iter().find_map(|(name, value)| (*value == key).then_some(name.clone())).expect("upgrade key came from map");
+                base.build.list.push(DefRef { odf: name, key });
+            }
+            base.a1_base_officers = Some(officers);
+        }
+        self.digest = digest_of(&self);
+        self
+    }
 
     /// Armada I's play-physics block (CON-52): `Some` only under
     /// `Sta1Classic` with a usable file. The movement model asks for it.
@@ -172,8 +221,8 @@ impl ContentDb {
     /// [`with_launch_points`](ContentDb::with_launch_points) and warnings for
     /// unreadable collision geometry or authored repair nodes that cannot resolve.
     pub fn with_launch_points_warned(mut self, vfs: &sta_vfs::Vfs) -> (ContentDb, Vec<Warning>) {
-        crate::launch::attach(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }));
-        let mut warnings = crate::launch::attach_radii(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }));
+        let mut warnings = crate::launch::attach(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }));
+        warnings.extend(crate::launch::attach_radii(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None })));
         warnings.extend(crate::repair_geometry::attach(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None })));
         self.digest = digest_of(&self);
         (self, warnings)
@@ -255,6 +304,12 @@ impl ContentDb {
             Some((_, Def::Unit(u))) => Some(u),
             _ => None,
         }
+    }
+
+    /// The aperture ODF named by a yard, resolved through the mounted data.
+    pub fn launch_wormhole(&self, builder: &UnitDef) -> Option<&UnitDef> {
+        let name = crate::odf::stem(builder.raw.str("wormhole")?);
+        self.key(&name).and_then(|key| self.unit(key)).filter(|unit| unit.class.0 == "wormhole_obj")
     }
 
     pub fn weapon(&self, k: ContentKey) -> Option<&WeaponDef> {
@@ -478,7 +533,7 @@ impl ContentBuilder {
             defs, profile: self.profile, features: self.features, resources,
             tech: self.tech.map(Arc::new), map_confinement, construction_confinement, has_map_confinement,
             map_confinement_warnings, rules: crate::Rules::default(),
-            a1_play: self.a1_play.filter(|_| self.profile == Profile::Sta1Classic), packs: Vec::new(),
+            a1_play: self.a1_play.filter(|_| self.profile == Profile::Sta1Classic), a1_officer_policy: false, packs: Vec::new(),
             digest: ContentDigest::default(),
         };
         db.digest = digest_of(&db);
@@ -518,13 +573,14 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // set; `has_crew`, `assault`, `weldingAnimSpeed`, `eventTransport` are not read yet.
     let UnitDef {
         key: _, odf: _, class: _, is_starbase: _, planet_role: _, planet_crew_gain: _, planet_crew_modifier: _,
+        a1_base_officers: _, a1_officer_upgrade_gain: _,
         planet_colonizable: _, planet_civilian_population_modifier: _, planet_max_population: _, can_have_orbital_station: _, fleet_cap: _, orbit_time: _, a1_borg: _, station_mining: _, node_income: _, race: _,
         model: _, scale: _, movement: _, hull: _, shields: _, initial_hull: _, initial_shields: _,
         crew: _, maximum_crew: _, facility: _, has_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
         free_unit: _, dock: _, sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
-        max_dilithium: _, mining_rate: _, transfer_rate: _, resource: _, features: _,
+        max_dilithium: _, mining_rate: _, transfer_rate: _, freight_transfer: _, resource: _, features: _,
         confinement: _, nebula_pathing: _, nebula_effects: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
-        crew_gain: _, transport: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, repair_attachment: _, stats: _, raw: _,
+        crew_gain: _, transport: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, repair_attachment: _, research_slots: _, research_station_upgrade: _, stats: _, raw: _,
     } = u;
     // `stats` (CON-55): only the keys a sim rule reads are digested (the planet keys
     // under SIM-73's target-mask switch, below); the rest is typed only.
@@ -598,6 +654,36 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // Peers using the old constructor behavior would diverge on Evolution.
     if u.is_evolver() {
         c.flag("evolves_in_place", true);
+    }
+    if let Some(rates) = u.freight_transfer {
+        c.list("freight_transfer", rates.into_iter().map(fixed_text));
+        if let Some(berth) = u.dock.as_ref().filter(|p| p.node.is_some()) {
+            c.list("freight_berth", [berth.offset.0, berth.height, berth.offset.1, berth.dir.0, berth.dir.1]
+                .into_iter().map(fixed_text));
+        }
+    }
+    if u.research_station_upgrade {
+        c.flag("research_station_upgrade", true);
+    }
+    if !u.research_slots.is_empty() {
+        let scale = if u.scale > Fixed::ZERO { u.scale } else { Fixed::ONE };
+        c.fixed("research_scale", scale);
+        c.list("research_slots", u.research_slots.iter().map(|slot| {
+            let reservation = slot.reserved_for.as_deref().unwrap_or("");
+            slot.pose.map_or_else(|| format!("{reservation}:-"), |pose| {
+                let values = [pose.origin, pose.axes[0], pose.axes[1], pose.axes[2]]
+                    .into_iter().flat_map(|v| [v.x, v.y, v.z]).map(fixed_text).collect::<Vec<_>>();
+                format!("{reservation}:{}", values.join(","))
+            })
+        }));
+    }
+    if u.allows_station_motion() {
+        c.flag("ship_motion", true);
+    }
+    if let Some(gate) = db.launch_wormhole(u) {
+        c.text("launch_wormhole", &gate.odf)
+            .int("wormhole_open_ticks", gate.wormhole_open_ticks())
+            .fixed("launch_height", u.launch.as_ref().map_or(Fixed::ZERO, |point| point.height));
     }
     // SIM-70: absent authored flags keep the prior digest; explicit false is
     // distinct from absence because it excludes a station from recrewing.
@@ -786,6 +872,17 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // `canAttack = 0` keeps a class from taking up a fight by itself (read by `sta_sim::movement::approach`); only when set to 0.
     if u.stats.can_attack == Some(false) {
         c.raw("can_attack", "0");
+    }
+    if db.a1_officers() {
+        if let Some(base) = u.a1_base_officers {
+            let upgrade = base.upgrade.and_then(|key| db.name(key)).map_or_else(|| "-".to_owned(), quoted);
+            let mut rule = Canon::new();
+            rule.int("gain", base.gain).int("maximum_upgrades", base.maximum_upgrades).raw("upgrade", &upgrade);
+            c.raw("a1_base_officers", &group(&mut rule));
+        }
+        if let Some(gain) = u.a1_officer_upgrade_gain {
+            c.int("a1_officer_upgrade_gain", gain);
+        }
     }
     // SIM-73: the shooter's planet keys, only under the target-mask switch and only when set.
     if db.unit_features(u).weapon_target_masks && (u.stats.can_attack_planets.is_some() || u.stats.can_only_attack_planets.is_some()) {
@@ -984,6 +1081,12 @@ fn digest_entries(db: &ContentDb) -> Vec<DigestEntry> {
     let mut out = db.rules.digest_entries();
     out.push(DigestEntry::new("content:profile", db.lineage()));
     out.push(DigestEntry::new("content:features", features_text(&db.features)));
+    if db.a1_officers() {
+        out.push(DigestEntry::new("content:a1-officer-progression", "enabled"));
+    }
+    if let Some(maximum) = db.a1_starting_officers() {
+        out.push(DigestEntry::new("content:a1-max-officers", maximum.to_string()));
+    }
     // CON-52: only when the model has its block, so every other content keeps its digest.
     if let Some(p) = db.a1_play_physics() {
         out.push(DigestEntry::new("content:a1-play-physics", crate::a1_physics::dynamics_text(p)));

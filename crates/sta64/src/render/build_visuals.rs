@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use bevy::prelude::*;
-use sta_sim::production::view::{ConstructionSiteView, ProductionJobView, ProductionView};
+use sta_sim::production::view::{ConstructionSiteView, LaunchPortalView, ProductionJobView, ProductionView};
 use sta_sim::view::UnitFlags;
 use sta_sim::world::EntityKind;
 use sta_sim::{ContentKey, EntityId, PlayerId};
@@ -46,6 +46,15 @@ pub(super) struct CocoonMesh;
 #[derive(Component)]
 pub(super) struct EmbryoMesh;
 
+/// A visual aperture only. It has no map-wormhole partner or selection identity.
+#[derive(Component)]
+struct LaunchPortal {
+    yard: EntityId,
+    def: ContentKey,
+    last_open: u64,
+    open: f32,
+}
+
 fn active_head(row: &ProductionView) -> Option<(&ProductionJobView, &ConstructionSiteView)> {
     let (job, site) = (row.jobs.first()?, row.site.as_ref()?);
     (job.def == site.def).then_some((job, site))
@@ -65,6 +74,17 @@ struct Wanted {
     pos: Vec3,
     heading: Vec2,
     progress: f32,
+    research_axes: Option<[sta_sim::Vec3; 3]>,
+}
+
+impl Wanted {
+    fn transform(&self) -> Transform {
+        let mut transform = pose(self.pos, self.heading);
+        if let Some(axes) = self.research_axes {
+            transform.rotation = super::units::research_rotation(axes);
+        }
+        transform
+    }
 }
 
 /// Register after units' view systems; the caller also registers the module.
@@ -74,7 +94,7 @@ impl Plugin for BuildVisualsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            sync_build_visuals
+            (sync_build_visuals, sync_launch_portals)
                 .after(crate::render::units::sync_units)
                 .before(crate::render::units::attach_models)
                 .in_set(GameSet::Interpolate)
@@ -88,6 +108,91 @@ impl Plugin for BuildVisualsPlugin {
                 sync_embryo_meshes.before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
             ).run_if(resource_exists::<SimLink>),
         );
+    }
+}
+
+fn sync_launch_portals(
+    mut commands: Commands,
+    link: Res<SimLink>,
+    content: Res<ContentRes>,
+    local: Res<LocalPlayer>,
+    mut existing: Query<(Entity, &mut LaunchPortal, &mut Transform)>,
+) {
+    if existing.is_empty() && !link.production().iter().any(|row| row.portal.is_some()) {
+        return;
+    }
+    let curr = link.curr();
+    let visible: HashSet<_> = local.0.map_or_else(
+        || curr.units.iter().map(|u| u.id).collect(),
+        |player| curr.visible_to(player).into_iter().map(|u| u.id).collect(),
+    );
+    let shown = |yard| {
+        visible.contains(&yard) && curr.unit(yard).is_some_and(|unit| {
+            !unit.flags.contains(UnitFlags::CLOAKED) || local.0 == Some(unit.owner)
+        })
+    };
+    let mut wanted: BTreeMap<_, _> = link.production().iter()
+        .filter(|row| shown(row.builder))
+        .filter_map(|row| Some((row.builder, row.portal?)))
+        .collect();
+    let scale = |def: &sta_content::UnitDef, open: f32| {
+        let authored = |key, default| def.raw.f32(key).filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(default);
+        let closed = authored("ClosedScale", 10.0);
+        let fully_open = authored("OpenScale", 50.0);
+        Vec3::splat(closed + open.clamp(0.0, 1.0) * (fully_open - closed))
+    };
+    let transform = |aperture: LaunchPortalView, def| {
+        pose(to_bevy(aperture.pos.to_f32()), Vec2::new(aperture.heading.0.to_f32(), aperture.heading.1.to_f32()))
+            .with_scale(scale(def, aperture.open.to_f32()))
+    };
+    for (entity, mut portal, mut current) in &mut existing {
+        let Some(def) = content.0.unit(portal.def) else {
+            commands.entity(entity).despawn();
+            continue;
+        };
+        if !shown(portal.yard) || curr.tick < portal.last_open || content.is_changed() {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        if let Some(aperture) = wanted.get(&portal.yard).copied() {
+            if aperture.def != portal.def {
+                commands.entity(entity).despawn();
+                continue;
+            }
+            wanted.remove(&portal.yard);
+            portal.last_open = curr.tick;
+            portal.open = aperture.open.to_f32();
+            *current = transform(aperture, def);
+        } else {
+            // Keep the mouth open long enough for the ship's exit leg, then
+            // close using the same duration. Cancellation closes a partial mouth.
+            let duration = def.wormhole_open_ticks();
+            let since = curr.tick - portal.last_open;
+            let held = if portal.open >= 1.0 - 1.0 / duration as f32 {
+                portal.open = 1.0;
+                duration
+            } else {
+                0
+            };
+            let closing = since.saturating_sub(held);
+            if closing >= duration {
+                commands.entity(entity).despawn();
+            } else {
+                current.scale = scale(def, portal.open * (1.0 - closing as f32 / duration as f32));
+            }
+        }
+    }
+    for (yard, aperture) in wanted {
+        let Some(def) = content.0.unit(aperture.def) else { continue };
+        commands.spawn((
+            Name::new("shipyard launch wormhole"),
+            crate::map::MatchEntity,
+            LaunchPortal { yard, def: aperture.def, last_open: curr.tick, open: aperture.open.to_f32() },
+            NeedsModel(aperture.def),
+            TeamColour(Color::WHITE),
+            transform(aperture, def),
+            Visibility::Inherited,
+        ));
     }
 }
 
@@ -109,8 +214,11 @@ fn wanted(link: &SimLink, content: &ContentRes, local: &LocalPlayer) -> Vec<Want
         };
         let Some(builder) = curr.unit(row.builder) else { continue };
         let evolves = content.0.unit(builder.def).is_some_and(sta_content::UnitDef::is_evolver);
+        let research_axes = row.research.as_ref().and_then(|research| research.active_axes);
         let kind = if evolves && job.started && job.paid {
             Some(Kind::Cocoon)
+        } else if research_axes.is_some() {
+            Some(Kind::Ship)
         } else {
             classify(EntityKind::of_def(def), job.paid, job.started, site.entity.is_some())
         };
@@ -136,6 +244,7 @@ fn wanted(link: &SimLink, content: &ContentRes, local: &LocalPlayer) -> Vec<Want
             pos: to_bevy(site.pos.to_f32()),
             heading: Vec2::new(site.heading.0.to_f32(), site.heading.1.to_f32()),
             progress: job.progress.to_f32().clamp(0.0, 1.0),
+            research_axes,
         });
     }
     out
@@ -215,7 +324,7 @@ fn sync_build_visuals(
             continue;
         }
         let Some(next) = next else { continue };
-        *transform = pose(next.pos, next.heading);
+        *transform = next.transform();
         if let Some(mut preview) = preview {
             preview.0 = next.progress;
         }
@@ -238,7 +347,7 @@ fn sync_build_visuals(
             NeedsModel(next.key.def),
             TeamColour(colour),
             crate::render::units::MarkColour(mark),
-            pose(next.pos, next.heading),
+            next.transform(),
             Visibility::Inherited,
         ));
         match next.key.kind {
@@ -355,6 +464,9 @@ mod tests {
         let key = ContentKey(7);
         let other = ContentKey(8);
         let row = ProductionView {
+            portal: None,
+            research: None,
+            officer_upgrades: None,
             builder: EntityId(3),
             jobs: vec![
                 ProductionJobView {

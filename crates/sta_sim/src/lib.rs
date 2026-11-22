@@ -363,7 +363,10 @@ impl Sim {
                     self.weapons.stop_attack(&self.units, c.player, &unlocked);
                     self.economy.cancel(&self.units, c.player, &unlocked);
                     if let Some(db) = self.content.clone() {
-                        self.production.cancel(&db, &self.units, &mut self.economy, c.player, &unlocked);
+                        let cancel: Vec<_> = unlocked.iter().copied()
+                            .filter(|&id| !self.units.get(id).is_some_and(|u| u.mobile_station))
+                            .collect();
+                        self.production.cancel(&db, &self.units, &mut self.economy, c.player, &cancel);
                     }
                 }
                 let taken = self.apply_movement(c.player, &Order::Move { units: unlocked.clone(), to: *to, queue: *queue });
@@ -569,18 +572,22 @@ impl Sim {
         self.step_colonies();
         let colony_crew = self.content.as_deref().map(|db| self.colony_crew_income(db)).unwrap_or_default();
         if let Some(db) = &self.content {
-            self.economy.step(&mut self.units, db, &mut self.events);
+            self.economy.step(&mut self.units, db, self.tick, &self.confinement, &mut self.events);
             self.economy.step_passive(&self.units, db, &self.players, &self.ai_seats, self.tick);
             self.economy.step_crew(&self.units, db, &self.attrs, self.tick, &colony_crew);
             let from = self.events.len();
-            let evolved = self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement, self.bounds);
+            self.production.update_research_poses(db, &mut self.units);
+            let completed = self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement, self.bounds);
             self.inherit_builder_races(from);
             self.inherit_builder_alert(from);
             let built: Vec<EntityId> = self.events[from..].iter().filter_map(|e| match e { SimEvent::Spawned { id } => Some(*id), _ => None }).collect();
             for id in built {
                 self.default_autonomy(id);
             }
-            for (embryo, product) in evolved {
+            for (unit, rally) in completed.gate_rallies {
+                self.movement.set_waypoints(unit, vec![rally]);
+            }
+            for (embryo, product) in completed.evolved {
                 self.autonomy.copy_to(embryo, product);
                 if self.units.get(product).is_some_and(|unit| unit.kind == world::EntityKind::Craft) {
                     self.weapons.retarget_replacement_shots(embryo, product);
@@ -602,6 +609,13 @@ impl Sim {
         let Some(db) = self.content.as_deref() else { return Fixed::ZERO };
         let census = self.production.officer_census(&self.units, db, player);
         Fixed::from_bits(census.to_bits().saturating_add(self.economy.officer_adjust(player).to_bits()))
+    }
+
+    fn officer_limit(&self, player: PlayerId) -> Option<Fixed> {
+        match self.content.as_deref() {
+            Some(db) => self.production.officer_limit(&self.units, db, &self.economy, player),
+            None => self.economy.officer_limit(player),
+        }
     }
 
     /// Production presentation at the current tick, derived from saved state.
@@ -651,7 +665,7 @@ impl Sim {
                 id,
                 team,
                 resources: self.economy.stock_of(id),
-                officers: self.economy.officer_limit(id).map_or([Fixed::ZERO; 2], |limit| [self.officer_census(id), limit]),
+                officers: self.officer_limit(id).map_or([Fixed::ZERO; 2], |limit| [self.officer_census(id), limit]),
                 crew: self.economy.crew_of(id),
                 eliminated: self.victory.is_eliminated(id),
                 relations: self

@@ -11,6 +11,8 @@
 //!     when its def has none), then [`SimEvent::Built`] and `Spawned`; the
 //!     next item starts
 //!     in that same tick.
+//!     A yard with a resolved `wormhole` opens that aperture after the build
+//!     timer and releases the ship at its build hardpoint after opening.
 //!   - A **craft** (construction rig) needs `at: Some(site)`. It steers there;
 //!     within [`deploy_reach`] of the site (the rig's slow-turn orbit plus a margin, from its ODF movement stats) it deploys: the
 //!     station entity appears at the site (`progress` 0,
@@ -64,6 +66,8 @@ mod afford_tests;
 mod launch;
 pub(crate) mod officers;
 pub mod orbit;
+pub(crate) mod research;
+pub(crate) mod officer_upgrades;
 pub mod rally;
 pub mod site;
 pub mod view;
@@ -141,6 +145,14 @@ pub struct Production {
     deploys: Table<Deploy>,
     /// By the station being welded.
     welds: Table<Weld>,
+    research: Table<research::Attachment>,
+    officer_upgrades: Table<u32>,
+}
+
+#[derive(Default)]
+pub(crate) struct Completions {
+    pub evolved: Vec<(EntityId, EntityId)>,
+    pub gate_rallies: Vec<(EntityId, Vec3)>,
 }
 
 /// `(def, owner, done, started, paid)`.
@@ -196,7 +208,9 @@ fn ticks_of(db: &ContentDb, def: ContentKey) -> u64 {
 /// Take the whole cost of `def` from `p`, or nothing.
 fn can_pay(eco: &Economy, db: &ContentDb, p: PlayerId, def: ContentKey) -> bool {
     let Some(d) = db.unit(def) else { return false };
+    let crew = officer_upgrades::crew_cost(d);
     afford::first_short(&eco.stock_of(p), &eco.scaled_cost(p, &d.build.cost)).is_none()
+        && (crew == Fixed::ZERO || eco.crew_of(p).is_some_and(|pool| pool >= crew))
 }
 
 fn pay(eco: &mut Economy, db: &ContentDb, p: PlayerId, def: ContentKey) -> bool {
@@ -210,6 +224,11 @@ fn pay(eco: &mut Economy, db: &ContentDb, p: PlayerId, def: ContentKey) -> bool 
             debug_assert!(ok);
         }
     }
+    let crew = officer_upgrades::crew_cost(d);
+    if crew > Fixed::ZERO {
+        let paid = eco.withdraw_crew(p, crew);
+        debug_assert_eq!(paid, crew);
+    }
     true
 }
 
@@ -221,6 +240,7 @@ fn refund(eco: &mut Economy, db: &ContentDb, p: PlayerId, def: ContentKey) {
             eco.apply_edit(PlayerId::BENCH, &Edit::Cargo(p, i as u8, now + c));
         }
     }
+    officer_upgrades::credit_crew(eco, p, officer_upgrades::crew_cost(d));
 }
 
 impl Production {
@@ -236,7 +256,11 @@ impl Production {
     ) -> bool {
         let Some(y) = units.get(yard) else { return false };
         let Some(bd) = db.unit(y.def) else { return false };
-        if !finished(y) || !EntityKind::producer_def(bd) || db.unit(what).is_none() {
+        let Some(product) = db.unit(what) else { return false; };
+        if !finished(y) || !EntityKind::producer_def(bd) || !self.admits_officer_upgrade(y, bd, product) {
+            return false;
+        }
+        if self.research_block(db, units, yard, bd, product).is_some() {
             return false;
         }
         let limit = db.build_queue_limit(bd) as usize;
@@ -256,7 +280,9 @@ impl Production {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.queues.is_empty() && self.deploys.is_empty() && self.welds.is_empty() && self.rallies.is_empty()
+        self.queues.is_empty() && self.deploys.is_empty() && self.welds.is_empty()
+            && self.rallies.is_empty() && self.research.is_empty()
+            && self.officer_upgrades.is_empty()
     }
 
     pub(crate) fn order_rally(
@@ -360,6 +386,11 @@ impl Production {
             return false;
         };
         if !bd.build.list.is_empty() && !bd.build.list.iter().any(|r| r.key == what) {
+            return false;
+        }
+        if !self.admits_officer_upgrade(b, bd, product)
+            || self.research_block(db, units, builder, bd, product).is_some()
+        {
             return false;
         }
         let evolves = bd.is_evolver();
@@ -553,10 +584,10 @@ impl Production {
         events: &mut Vec<SimEvent>,
         confinement: &mut crate::boundary::state::Confinement,
         bounds: Option<(sta_core::Vec3, sta_core::Vec3)>,
-    ) -> Vec<(EntityId, EntityId)> {
-        let mut evolved = Vec::new();
+    ) -> Completions {
+        let mut completed = Completions::default();
         if self.is_empty() {
-            return evolved;
+            return completed;
         }
         self.rallies.prune(units);
         let mut newly_finished = Vec::new();
@@ -596,35 +627,71 @@ impl Production {
             let (pos, heading, yard_def) = (y.pos, y.heading, y.def);
             let builder = db.unit(yard_def);
             let evolves = builder.is_some_and(sta_content::UnitDef::is_evolver);
+            let portal = builder.and_then(|d| db.launch_wormhole(d));
             let q = self.queues.get_mut(yard).expect("listed");
             if let Some(head) = q.first_mut()
                 && head.started
             {
-                head.done += 1;
-                if head.done >= ticks_of(db, head.def) {
+                head.done = head.done.saturating_add(1);
+                let delay = portal.map_or(0, sta_content::UnitDef::wormhole_open_ticks);
+                if head.done >= ticks_of(db, head.def).saturating_add(delay) {
                     let Item { def, owner, .. } = q.remove(0);
-                    if let Some(d) = db.unit(def) {
-                        // SIM-16: out of the builder's launch hardpoint.
+                    let product = db.unit(def);
+                    if let Some(upgrade) = product.filter(|d| d.a1_officer_upgrade_gain.is_some()) {
+                        if !builder.is_some_and(|base| self.finish_officer_upgrade(y, base, upgrade)) {
+                            refund(eco, db, owner, def);
+                        }
+                    } else if let Some(d) = product {
+                        let mut attachment = None;
+                        // External research pods finish directly in an attachment slot.
                         let out = match builder {
+                            Some(b) if research::external_pod(b, d) => {
+                                let Some(slot) = self.completed_slot(units, yard, b, d) else {
+                                    refund(eco, db, owner, def);
+                                    if self.queues.get(yard).is_some_and(Vec::is_empty) {
+                                        self.queues.remove(yard);
+                                    }
+                                    continue;
+                                };
+                                let (pos, heading, _) = research::pose(y, b, slot).expect("usable slot");
+                                attachment = Some(research::Attachment { station: yard, slot });
+                                launch::Launch { pos, heading, exit: None }
+                            }
+                            Some(b) if portal.is_some() => launch::through_wormhole(b, pos, heading),
                             Some(b) if !evolves => launch::place(b, pos, heading),
                             _ => launch::Launch { pos, heading, exit: None },
                         };
                         let mut unit = Entity::from_def(d, db.features(), owner, out.pos, out.heading);
+                        let mut follow = None;
+                        if attachment.is_some() {
+                            unit.stats.max_speed = Fixed::ZERO;
+                        }
                         if unit.orderable() && !evolves {
-                            unit.target = self.rallies.destination(yard, owner, units).or_else(|| {
+                            let rally = self.rallies.destination(yard, owner, units).or_else(|| {
                                 let a2 = matches!(db.profile(), sta_content::Profile::Sta2Classic | sta_content::Profile::Fo3 | sta_content::Profile::Fo4);
                                 builder.filter(|_| a2)
                                     .and_then(|b| launch::default_rally(b, pos, out.heading, bounds))
-                                    .or(out.exit)
                             });
+                            if let Some(exit) = out.exit.filter(|_| portal.is_some()) {
+                                unit.target = Some(exit);
+                                follow = rally.filter(|&rally| rally != exit);
+                            } else {
+                                unit.target = rally.or(out.exit);
+                            }
                         }
                         let id = units.spawn(unit);
+                        if let Some(link) = attachment {
+                            self.research.insert(id, link);
+                        }
+                        if let Some(rally) = follow {
+                            completed.gate_rallies.push((id, rally));
+                        }
                         confinement.initialize(units.get_mut(id).expect("spawned"));
                         events.push(SimEvent::Built { builder: yard, id });
                         events.push(SimEvent::Spawned { id });
                         newly_finished.push(id);
                         if evolves {
-                            evolved.push((yard, id));
+                            completed.evolved.push((yard, id));
                         }
                     }
                 }
@@ -729,7 +796,7 @@ impl Production {
             });
             events.push(SimEvent::Spawned { id });
         }
-        evolved
+        completed
     }
 
     pub(crate) fn hash_into(&self, h: &mut Fnv) {
@@ -762,6 +829,15 @@ impl Production {
             h.u64(w.ticks);
         }
         self.rallies.hash_into(h);
+        if !self.research.is_empty() {
+            h.u64(self.research.iter().count() as u64);
+            for (id, link) in self.research.iter() {
+                h.u64(u64::from(id.0));
+                h.u64(u64::from(link.station.0));
+                h.u64(link.slot as u64);
+            }
+        }
+        self.hash_officer_upgrades(h);
     }
 
     #[allow(dead_code)] // the snapshot calls it

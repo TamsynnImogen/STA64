@@ -245,6 +245,7 @@ mod tests {
             player: PlayerId(1),
             selected,
             content: Some(Arc::new(ContentDb::builder().build().unwrap())),
+            production: Vec::new(),
             names: Default::default(),
         }
     }
@@ -254,6 +255,9 @@ mod tests {
         let feed = feed(vec![unit(1, 1, None)], vec![EntityId(1)]);
         let source = StatusFeed {
             production: vec![ProductionView {
+                portal: None,
+                research: None,
+                officer_upgrades: None,
                 builder: EntityId(1),
                 jobs: vec![
                     ProductionJobView {
@@ -313,6 +317,9 @@ mod tests {
     fn enemy_and_group_selection_hide_private_status() {
         let source = StatusFeed {
             production: vec![ProductionView {
+                portal: None,
+                research: None,
+                officer_upgrades: None,
                 builder: EntityId(1),
                 jobs: vec![ProductionJobView {
                     def: ContentKey(11),

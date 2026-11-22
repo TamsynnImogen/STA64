@@ -47,6 +47,34 @@ pub struct NodeAnim {
 pub enum AnimKeys {
     Matrix(Vec<Transform>),
     Scale(Vec<f32>),
+    /// Independent channels on one SOD node may have different periods and key counts.
+    MatrixScale { matrices: Vec<Transform>, matrix_period: f32, scales: Vec<f32>, scale_period: f32 },
+}
+
+impl NodeAnim {
+    pub fn pose_at(&self, phase: f32) -> Transform {
+        self.sample(phase * self.period, false)
+    }
+
+    pub fn loop_at(&self, elapsed: f32) -> Transform {
+        self.sample(elapsed, true)
+    }
+
+    fn sample(&self, elapsed: f32, repeat: bool) -> Transform {
+        let index = |n: usize, period: f32| {
+            let phase = if repeat { elapsed.rem_euclid(period) / period } else { elapsed / period };
+            ((phase * n as f32) as usize).min(n - 1)
+        };
+        match &self.keys {
+            AnimKeys::Matrix(keys) => keys[index(keys.len(), self.period)],
+            AnimKeys::Scale(keys) => self.base.with_scale(Vec3::splat(keys[index(keys.len(), self.period)])),
+            AnimKeys::MatrixScale { matrices, matrix_period, scales, scale_period } => {
+                let mut pose = matrices[index(matrices.len(), *matrix_period)];
+                pose.scale *= Vec3::splat(scales[index(scales.len(), *scale_period)]);
+                pose
+            }
+        }
+    }
 }
 
 /// Built meshes and materials shared by every copy of a model (maps place
@@ -226,8 +254,19 @@ fn spawn_impl(
         _ => 0,
     };
 
-    let anims: HashMap<String, &sta_assets::model::Channel> =
-        model.channels.iter().map(|c| (c.node.to_ascii_lowercase(), c)).collect();
+    let mut anims = HashMap::<String, (Option<_>, Option<_>)>::new();
+    for channel in &model.channels {
+        if !channel.period.is_finite() || channel.period <= 0.0 {
+            continue;
+        }
+        let (matrix, scale) = anims.entry(channel.node.to_ascii_lowercase()).or_default();
+        let kind = crate::render::anim::classify(&channel.keys);
+        match &channel.keys {
+            Keys::Matrix(keys) if !keys.is_empty() => *matrix = Some((channel.period, keys, kind)),
+            Keys::Scale(keys) if !keys.is_empty() => *scale = Some((channel.period, keys, kind)),
+            _ => {}
+        }
+    }
     // Texture flipbooks on a mesh's UV offset.
     let flipbooks: HashMap<String, (String, f32)> = model
         .flipbooks
@@ -257,38 +296,34 @@ fn spawn_impl(
         e.insert(crate::render::appearance::ModelNode { root, index: i });
         if !legacy { e.insert(NativeNode); }
 
-        let key_count = anims.get(&node.name.to_ascii_lowercase()).map_or(0, |c| match &c.keys {
-            Keys::Matrix(k) => k.len(),
-            Keys::Scale(k) => k.len(),
-        });
-        if let Some(ch) = anims.get(&node.name.to_ascii_lowercase())
-            && key_count > 1
-            && ch.period > 0.0
-        {
-            let keys = match &ch.keys {
-                Keys::Matrix(k) => AnimKeys::Matrix(
-                    k.iter()
-                        .map(|m| {
-                            let mut t = to_bevy(m);
-                            t.translation *= ctx.scale;
-                            t
-                        })
-                        .collect(),
-                ),
-                Keys::Scale(k) => AnimKeys::Scale(k.clone()),
+        if let Some(&(matrix, scale)) = anims.get(&node.name.to_ascii_lowercase()) {
+            let matrices = |keys: &[Matrix34]| -> Vec<Transform> {
+                keys.iter().map(|key| {
+                    let mut transform = to_bevy(key);
+                    transform.translation *= ctx.scale;
+                    transform
+                }).collect()
             };
-            let track = NodeAnim {
-                period: ch.period,
-                base,
-                keys,
+            let track = match (matrix, scale) {
+                (Some((mp, m, mk)), Some((sp, s, sk))) if m.len() > 1 || s.len() > 1 => Some((
+                    mp.max(sp),
+                    AnimKeys::MatrixScale { matrices: matrices(m), matrix_period: mp, scales: s.clone(), scale_period: sp },
+                    if m.len() > 1 { mk } else { sk },
+                )),
+                (Some((period, keys, kind)), None) if keys.len() > 1 => Some((period, AnimKeys::Matrix(matrices(keys)), kind)),
+                (None, Some((period, keys, kind))) if keys.len() > 1 => Some((period, AnimKeys::Scale(keys.clone()), kind)),
+                _ => None,
             };
-            // Open-ended tracks (bay doors, build arms) wait for their event.
-            if crate::render::anim::classify(&ch.keys) == crate::render::anim::TrackKind::Event {
-                e.insert(crate::render::anim::EventAnim::new(track, root));
-            } else {
-                e.insert(track);
+            if let Some((period, keys, kind)) = track {
+                let track = NodeAnim { period, base, keys };
+                // Open-ended tracks (bay doors, build arms) wait for their event.
+                if kind == crate::render::anim::TrackKind::Event {
+                    e.insert(crate::render::anim::EventAnim::new(track, root));
+                } else {
+                    e.insert(track);
+                }
+                stats.animated_nodes += 1;
             }
-            stats.animated_nodes += 1;
         }
         let id = e.id();
         entities[i] = Some(id);
@@ -783,16 +818,7 @@ fn spawn_part(ctx: &mut SpawnCtx, part: &CachedPart, parent: Entity, surface: (u
 pub fn animate(clock: Res<crate::clock::AnimClock>, mut q: Query<(&NodeAnim, &mut Transform), Without<crate::render::anim::AmbientGate>>) {
     let t = clock.wall() as f32;
     for (anim, mut tf) in &mut q {
-        let n = match &anim.keys {
-            AnimKeys::Matrix(k) => k.len(),
-            AnimKeys::Scale(k) => k.len(),
-        };
-        let phase = (t % anim.period) / anim.period;
-        let k = ((phase * n as f32) as usize).min(n - 1);
-        *tf = match &anim.keys {
-            AnimKeys::Matrix(keys) => keys[k],
-            AnimKeys::Scale(keys) => anim.base.with_scale(Vec3::splat(keys[k])),
-        };
+        *tf = anim.loop_at(t);
     }
 }
 
@@ -895,6 +921,50 @@ mod tests {
         let expect = Vec3::from(mirror(r.transform_point(p)));
         let got = to_bevy(&r).transform_point(Vec3::from(mirror(p)));
         assert!((expect - got).length() < 1e-5, "{expect} vs {got}");
+    }
+
+    #[test]
+    fn a_node_plays_matrix_and_scale_channels_together() {
+        use bevy::ecs::world::CommandQueue;
+        use bevy::image::CompressedImageFormats;
+
+        let matrix = |x| Matrix34 { m: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, x, 0.0, 0.0] };
+        let model = Model {
+            format: sta_assets::model::SourceFormat::Sod,
+            version: 1.93,
+            materials: vec![],
+            nodes: vec![sta_assets::model::Node { name: "pod".into(), parent: None, children: vec![], transform: Matrix34::IDENTITY, kind: NodeKind::Null }],
+            channels: vec![
+                sta_assets::model::Channel { node: "pod".into(), period: 0.5, keys: Keys::Scale(vec![1.0, 2.0, 3.0, 4.0]) },
+                sta_assets::model::Channel { node: "pod".into(), period: 1.0, keys: Keys::Matrix(vec![matrix(0.0), matrix(10.0), matrix(0.0)]) },
+            ],
+            flipbooks: vec![], warnings: vec![], pbr: None,
+        };
+        let vfs = sta_vfs::Vfs::default();
+        let sprites = SpriteTable::default();
+        let (mut meshes, mut materials, mut images) = (Assets::<Mesh>::default(), Assets::<StandardMaterial>::default(), Assets::<Image>::default());
+        let mut cache = crate::render::textures::TextureCache::default();
+        let mut world = World::new();
+        let root = world.spawn((Transform::IDENTITY, Visibility::default())).id();
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            let mut ctx = SpawnCtx {
+                commands: &mut commands, meshes: &mut meshes, materials: &mut materials,
+                textures: Loader { vfs: &vfs, cache: &mut cache, images: &mut images, formats: CompressedImageFormats::NONE },
+                team: Color::WHITE, borg: false, sprites: &sprites, damaged: false,
+                normal_maps: false, parts: None, model_key: "pod".into(), unlit: false,
+                scale: 1.0, diffuse_tint: false,
+            };
+            spawn(&mut ctx, &model, root);
+        }
+        queue.apply(&mut world);
+        let mut q = world.query::<&NodeAnim>();
+        let track = q.single(&world).expect("one combined node track");
+        let pose = track.pose_at(0.625);
+        assert_eq!(pose.translation.x, 10.0);
+        assert_eq!(pose.scale, Vec3::splat(4.0));
+        assert_eq!(track.loop_at(0.625).scale, Vec3::splat(2.0));
     }
 
     /// A planet's nimbus is the sprite node named by its model (synthetic table, no game data):

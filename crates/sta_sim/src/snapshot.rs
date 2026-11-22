@@ -66,8 +66,11 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// tell the file from a valid one by version.
 /// Format 34 appends the mission switches (LUA-41).
 /// Format 41 appends stock A2 empty-shield recharge holds (#1101).
+/// Format 42 appends research station pod attachments.
+/// Format 43 appends freighter drop-off queues.
+/// Format 44 appends completed Armada I starbase officer upgrades.
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 41;
+pub const FORMAT_VERSION: u16 = 44;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
@@ -394,6 +397,7 @@ impl EntityRec {
             .ok_or_else(|| SnapshotError::Corrupt(format!("entity kind {}", self.kind)))?;
         let s = self.stats;
         Ok(Entity {
+            mobile_station: false,
             id: self.id,
             kind,
             def: self.def,
@@ -519,6 +523,9 @@ impl Sim {
         out.extend(postcard::to_allocvec(&self.nebula_shields.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.replacements.record()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&ZeroShieldHoldsRec { version: 1, rows: self.zero_shield_holds.to_rows() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&self.production.research_rows()).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&self.economy.dock_rows()).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&self.production.officer_upgrade_rows()).expect("snapshot serialises"));
         out
     }
 
@@ -603,6 +610,9 @@ impl Sim {
         let (replacement_rec, rest): (crate::replacement::Record, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         let (zero_shield_holds_rec, rest): (ZeroShieldHoldsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if zero_shield_holds_rec.version != 1 { return Err(SnapshotError::Corrupt("unknown shield zero hold record version".into())); }
+        let (research, rest): (crate::production::research::ResearchRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        let (docks, rest): (crate::economy::dock::DockRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        let (officer_upgrades, rest): (crate::production::officer_upgrades::OfficerUpgradeRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -623,6 +633,7 @@ impl Sim {
             for id in ids {
                 let Some(unit) = units.get_mut(id) else { continue };
                 if let Some(def) = db.unit(unit.def) {
+                    unit.mobile_station = unit.kind == EntityKind::Station && def.allows_station_motion();
                     unit.stats.warp_speed = def.movement.warp_speed;
                     unit.stats.too_close_for_warp = def.movement.too_close_for_warp;
                     unit.stats.heading_close_for_warp = def.movement.heading_close_for_warp;
@@ -699,7 +710,7 @@ impl Sim {
             return Err(SnapshotError::Corrupt("order watch row from the future".into()));
         }
         let watchdog = crate::watchdog::Watchdog::from_rec(watch_rows).ok_or_else(|| corrupt("order watch rows"))?;
-        if watchdog.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft)) {
+        if watchdog.to_rec().iter().any(|(id, _)| units.get(*id).is_none_or(|u| u.kind != EntityKind::Craft && !u.mobile_station)) {
             return Err(SnapshotError::Corrupt("order watch entity is not a craft".into()));
         }
         let scripted = crate::orders::Scripted::from_rows(scripted_rows).ok_or_else(|| corrupt("scripted order rows"))?;
@@ -754,12 +765,16 @@ impl Sim {
         let recycles = crate::economy::recycle::Recycles::from_rec(recycles_rec, |id| units.contains(id)).ok_or_else(|| corrupt("decommissions"))?;
         let nebula_shields = crate::nebula::NebulaShields::from_rec(nebula_shields_rec, b.tick, |id| units.contains(id)).ok_or_else(|| corrupt("nebula shields"))?;
         let mut economy = crate::economy::Economy::from_rec(&b.economy);
+        economy.restore_docks(docks, &units, b.tick).ok_or_else(|| corrupt("freighter docks"))?;
         economy.restore_personnel(personnel_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         economy.restore_adjust(adjust_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         let replacements = crate::replacement::Replacements::restore(replacement_rec, &units)
             .ok_or_else(|| corrupt("replacement weapon state"))?;
         let zero_shield_holds = crate::combat::damage::ZeroShieldHolds::from_rows(zero_shield_holds_rec.rows, b.tick, &units, content.as_deref())
             .ok_or_else(|| corrupt("shield zero holds"))?;
+        let mut production = crate::production::Production::from_rec(&b.production).ok_or_else(|| corrupt("rallies"))?;
+        production.restore_research(research, &units, content.as_deref()).ok_or_else(|| corrupt("research pods"))?;
+        production.restore_officer_upgrades(officer_upgrades, &units, content.as_deref()).ok_or_else(|| corrupt("officer upgrades"))?;
         let mut sim = Sim {
             tick: b.tick,
             rng: Rng(b.rng),
@@ -777,7 +792,7 @@ impl Sim {
             movement,
             weapons,
             economy,
-            production: crate::production::Production::from_rec(&b.production).ok_or_else(|| corrupt("rallies"))?,
+            production,
             victory: crate::victory::Victory::from_rec(&b.victory),
             specials,
             autonomy,

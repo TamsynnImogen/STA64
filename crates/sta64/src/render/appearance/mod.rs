@@ -179,6 +179,9 @@ fn sync(
         }
     }
     let view = link.curr();
+    let officer_quarters: HashMap<_, _> = link.production().iter()
+        .filter_map(|row| row.officer_upgrades.map(|upgrades| (row.builder, upgrades.completed)))
+        .collect();
     for (root, sim, instance, share, team) in &roots {
         let Some(unit) = view.unit(sim.0) else {
             continue;
@@ -192,9 +195,11 @@ fn sync(
             .nodes
             .iter()
             .any(|n| catalogue.is_faction_node(&n.name));
+        let officer_quarters = officer_quarters.get(&sim.0).copied();
         if suffix.is_none()
             && !has_nodes
             && instance.policy.subsystem_nodes.is_empty()
+            && officer_quarters.is_none()
             && !state.contains_key(&root)
         {
             continue;
@@ -284,7 +289,11 @@ fn sync(
                     || super::units::damage_node_shown(name, share.0, off).unwrap_or(true));
             let faction = !catalogue.is_faction_node(name)
                 || faction_name.is_some_and(|f| f.eq_ignore_ascii_case(name));
-            let mut visible = ordinary && faction;
+            let quarters = officer_quarters.is_none_or(|completed| {
+                super::units::officer_quarter_number(&instance.model, node.index)
+                    .is_none_or(|number| number <= completed)
+            });
+            let mut visible = ordinary && faction && quarters;
             for (i, plan) in plans.iter().enumerate() {
                 if let Some((selected, _)) = plan.selected.and_then(|n| candidates[i].get(n))
                     && within(&instance.model, node.index, *selected)

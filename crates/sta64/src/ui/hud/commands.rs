@@ -65,8 +65,7 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
             ..Default::default()
         };
     }
-    let mobile = kind == EntityKind::Craft
-        && def.movement.max_speed > Fixed::ZERO
+    let mobile = EntityKind::orderable_def(def)
         && !u.flags.contains(UnitFlags::ENGINES_OFF)
         && !u.flags.contains(UnitFlags::BUILDING);
     // This is the resolved ODF's command-panel flag, not a raw sim rule.

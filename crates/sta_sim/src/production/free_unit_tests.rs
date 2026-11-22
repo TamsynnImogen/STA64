@@ -23,6 +23,7 @@ fn content_free(free: Option<&str>, dock: bool) -> Arc<ContentDb> {
             if dock {
                 u.dock = Some(LaunchPoint {
                     offset: (Fixed::ZERO, Fixed::from_int(30)),
+                    height: Fixed::ZERO,
                     dir: (Fixed::ONE, Fixed::ZERO),
                     clear: Fixed::from_int(60),
                     node: Some("dock".into()),

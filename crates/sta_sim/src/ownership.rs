@@ -72,6 +72,8 @@ impl Sim {
         let unit = self.units.get_mut(id).expect("validated live unit");
         unit.target = None;
         unit.owner = to;
+        self.economy.remove_docks(id);
+        self.production.transfer_research_pods(&mut self.units, id, to);
         // `Craft::SetTeam` clears the special-forces flag (SIM-58), and the
         // craft's scripted order goes with its old owner's.
         self.clear_scripted(PlayerId::SCRIPT, &[id]);
@@ -82,6 +84,7 @@ impl Sim {
         self.recycles.remove_entity(id);
         self.switches.edit(id, |s| s.special_forces = false);
         if previous_owner != to {
+            self.production.clear_officer_upgrades(id);
             self.reset_impulse(id);
             self.alerts.clear_hit(id);
         }

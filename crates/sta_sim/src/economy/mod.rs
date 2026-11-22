@@ -1,5 +1,5 @@
 //! Resources and mining (SIM-07): player stock, resource nodes and freighters
-//! that loop between a node and the nearest friendly station.
+//! that loop between a node and a compatible friendly transfer station.
 //!
 //! - Resource ids are the content ones: 0 dilithium, 1 latinum, 2 metal,
 //!   3 biomatter ([`RESOURCES`]). A player's stock is per id, in the view
@@ -8,9 +8,9 @@
 //!   ODF with `miner 1`, unless it says `miner 0`) to a [`EntityKind::Resource`] entity. A freighter
 //!   cycles `ToNode -> Mining -> ToDock -> Unloading`: it fills its hold at
 //!   `mining rate` per second (ODF `miningRate`, default 15), carries it to
-//!   the nearest finished station of its owner and unloads at the transfer
-//!   rate (ODF `dilithiumTransferRate`, default 15 per second), crediting the
-//!   stock as it goes. [`SimEvent::Delivered`] is emitted once per trip.
+//!   a finished transfer station that handles its cargo. It waits in that
+//!   station's arrival queue, then unloads at the station's per-resource rate.
+//!   [`SimEvent::Delivered`] marks the end of the unload.
 //!   Hold size: ODF `maxdilithium`, default 150.
 //! - A `Move` (not queued) or `Stop` ends mining, but a loaded freighter keeps
 //!   its cargo while idle. A later Mine order delivers that cargo first.
@@ -31,8 +31,7 @@
 //!   `capacity / rate + capacity / unload` ticks.
 //! - Passive income from `resourceweapon` hardpoints is in [`passive`] (SIM-24).
 //! - Not yet: mining stations (`mining` class) producing by themselves,
-//!   trade, `miningratemodifier`, `trickleMiningRateFraction`, per-resource
-//!   transfer rates (all resources use `dilithiumTransferRate`).
+//!   trade and resource conversion.
 //! - Persistent state (stock, nodes, miners) is [`Economy`]; the snapshot
 //!   (`to_rec`/`from_rec`) must include it. It is in the digest once any
 //!   exists.
@@ -48,6 +47,7 @@ use crate::world::{Entities, EntityKind, Fnv, Table};
 /// Resource ids: dilithium, latinum, metal, biomatter.
 pub const RESOURCES: usize = 4;
 
+pub(crate) mod dock;
 mod orbital;
 mod passive;
 mod crew;
@@ -274,6 +274,7 @@ pub struct Economy {
     /// What is left in each node that has been mined.
     nodes: Table<Fixed>,
     miners: Table<Miner>,
+    docks: Table<dock::Ticket>,
     /// Miners whose work was ended or redirected by an order since the last step: announced
     /// there. Empty between steps, not part of the state.
     announce: Vec<EntityId>,
@@ -405,6 +406,7 @@ impl Economy {
             if old.is_some_and(|m| m.phase != phase) {
                 self.announce.push(id);
             }
+            self.docks.remove(id);
             self.miners.insert(
                 id,
                 Miner {
@@ -462,6 +464,7 @@ impl Economy {
                 && let Some(mut m) = self.miners.get(id).copied()
             {
                 self.announce.push(id);
+                self.docks.remove(id);
                 if m.cargo > Fixed::ZERO {
                     m.phase = Phase::Idle;
                     m.unloaded = Fixed::ZERO;
@@ -473,29 +476,18 @@ impl Economy {
         }
     }
 
-    /// The stations a freighter is unloading at right now (RND-21): the station each
-    /// `Unloading` freighter hands its hold to, as [`Self::step`] chooses it (the nearest
-    /// finished station of its owner, recomputed from the freighter's position, which does not
-    /// change while it unloads).
-    /// Derived from the miner table, so it is the same after a load; not state of its own.
-    pub(crate) fn docked_stations(&self, units: &Entities) -> std::collections::BTreeSet<EntityId> {
-        self.miners
-            .iter()
-            .filter(|(_, m)| m.phase == Phase::Unloading)
-            .filter_map(|(id, _)| {
-                let u = units.get(id)?;
-                nearest_station_id(units, u.owner, u.pos)
-            })
-            .collect()
-    }
-
     /// One tick of every freighter, ascending id.
     pub(crate) fn step(
         &mut self,
         units: &mut Entities,
         db: &ContentDb,
+        tick: u64,
+        confinement: &crate::boundary::state::Confinement,
         events: &mut Vec<SimEvent>,
     ) {
+        // An occupied berth stays reserved for this tick, even if its freighter
+        // drains the last cargo before the next waiter is processed.
+        let mut occupied = self.docked_stations(units);
         // Orders that took a freighter off its work (a stop, a move, a new order) say so.
         for id in std::mem::take(&mut self.announce) {
             let (phase, node) = self.miners.get(id).map_or((Phase::Idle, id), |m| (m.phase, m.node));
@@ -510,10 +502,12 @@ impl Economy {
             let mut dock = None;
             let Some((def, owner)) = units.get(id).map(|u| (u.def, u.owner)) else {
                 self.miners.remove(id);
+                self.docks.remove(id);
                 continue;
             };
             let Some(cfg) = cfg_of(db, def) else {
                 self.miners.remove(id);
+                self.docks.remove(id);
                 continue;
             };
             let node_def = units.get(m.node).map_or(def, |n| n.def);
@@ -577,20 +571,24 @@ impl Economy {
                         break;
                     }
                     Phase::ToDock => {
-                        let Some(at) = nearest_station(units, owner, pos) else {
-                            // No station: the orbit point of a beam-armed freighter must not outlive the
-                            // work. A freighter without a beam keeps its target (as on main; no rule measured).
+                        let Some(mut ticket) = self.destination(db, units, id, m.res, cfg.unload) else {
+                            // Retain a beamless freighter's last leg. A beam miner
+                            // clears its old orbit point when there is no receiver.
                             if mining_range(db, def).is_some() {
                                 set_target(units, id, None);
                             }
                             break;
                         };
+                        let station = units.get(ticket.station).expect("selected transfer station");
+                        let at = station.pos;
+                        let berth = dock::Berth::of(db, station);
                         // Off a moon the freighter keeps circling until the station lies on its
                         // outer side, then peels off (read from the executable, static; the
                         // latinum nebula and planets leave at once).
                         // (Not when the station lies inside the orbit band, or the freighter sits on the
                         // node's centre: there is no outer side to wait for.)
-                        if let (Some(range), Some(np)) = (mining_range(db, def), node_pos)
+                        if ticket.joined.is_none()
+                            && let (Some(range), Some(np)) = (mining_range(db, def), node_pos)
                             && db.unit(node_def).is_none_or(|d| d.class.0 != "latinum")
                             && dist(pos, np) <= range * ORBIT_BAND
                             && dist(at, np) > range * ORBIT_BAND
@@ -600,28 +598,67 @@ impl Economy {
                             set_target(units, id, Some(p));
                             break;
                         }
-                        // Arrival must lie beyond the smooth model's own "too close to turn" stop.
-                        let arrive = if mining_range(db, def).is_some() {
-                            Fixed::from_int(DOCK_ARRIVE).max(db.unit(def).map_or(Fixed::ZERO, |d| d.movement.too_close_to_turn) + Fixed::from_int(10))
+                        let arrive = dock::arrival(db, def, berth.authored);
+                        let ahead = self.queue_ahead(id, ticket)
+                            .filter_map(|other| units.get(other))
+                            .map(|other| dock::span(db, other.def, berth.authored))
+                            .fold(Fixed::ZERO, |sum, width| sum + width);
+                        let can_dock = ahead == Fixed::ZERO && !occupied.contains(&ticket.station);
+                        let target = if can_dock {
+                            berth.pos
                         } else {
-                            reach()
+                            berth.waiting_point(ahead + dock::span(db, def, berth.authored))
                         };
-                        if dist(pos, at) <= arrive {
-                            set_target(units, id, None);
-                            dock = Some(at);
-                            m.phase = Phase::Unloading;
-                        } else {
-                            steer(units, id, at);
+                        let target = units.get(id).and_then(|ship| confinement.active_volume(ship))
+                            .map_or(target, |volume| volume.check(target, true).position);
+                        if dist(pos, target) > arrive {
+                            steer(units, id, target);
                             break;
                         }
+                        if ticket.joined.is_none() {
+                            ticket.joined = Some(tick);
+                            self.docks.insert(id, ticket);
+                        }
+                        if !can_dock {
+                            if let Some(ship) = units.get_mut(id) {
+                                ship.target = None;
+                                ship.speed = Fixed::ZERO;
+                            }
+                            break;
+                        }
+                        occupied.insert(ticket.station);
+                        dock = Some(berth.pos);
+                        m.phase = Phase::Unloading;
                     }
                     Phase::Unloading => {
-                        let give = cfg.unload.min(m.cargo);
+                        let transfer = self.docks.get(id).and_then(|ticket| units.get(ticket.station))
+                            .and_then(|station| {
+                                let rate = dock::rate(db, station, units.get(id)?, m.res, cfg.unload)?;
+                                Some((rate, dock::Berth::of(db, station)))
+                            });
+                        let Some((rate, berth)) = transfer else {
+                            self.docks.remove(id);
+                            m.unloaded = Fixed::ZERO;
+                            m.phase = Phase::ToDock;
+                            continue;
+                        };
+                        if let Some(ship) = units.get_mut(id) {
+                            ship.target = None;
+                            if berth.authored {
+                                ship.pos = berth.pos;
+                                ship.heading = berth.heading;
+                                ship.speed = Fixed::ZERO;
+                                ship.omega = Fixed::ZERO;
+                            }
+                        }
+                        let give = rate.min(m.cargo);
                         m.cargo = m.cargo - give;
                         m.unloaded = m.unloaded + give;
                         let s = &mut self.slot(owner)[m.res as usize];
                         *s = *s + give;
                         if m.cargo == Fixed::ZERO {
+                            self.docks.remove(id);
+                            dock = None;
                             events.push(SimEvent::Delivered {
                                 player: owner,
                                 resource: m.res,
@@ -640,7 +677,7 @@ impl Economy {
                     }
                 }
             }
-            if m.phase != was {
+            if m.phase != was || dock.is_some() {
                 events.push(SimEvent::MinerPhase { id, phase: m.phase.announced(), node: m.node, dock });
             }
             if m.phase == Phase::Idle && m.cargo == Fixed::ZERO {
@@ -682,6 +719,14 @@ impl Economy {
             h.fixed(m.cargo);
             h.fixed(m.unloaded);
             h.u64(m.phase.code() as u64);
+        }
+        if !self.docks.is_empty() {
+            h.u64(self.docks.len() as u64);
+            for (id, ticket) in self.docks.iter() {
+                h.u64(u64::from(id.0));
+                h.u64(u64::from(ticket.station.0));
+                h.u64(ticket.joined.map_or(0, |tick| tick.saturating_add(1)));
+            }
         }
         self.hash_personnel(h);
         self.hash_adjust(h);
@@ -751,25 +796,6 @@ fn set_target(units: &mut Entities, id: EntityId, to: Option<Vec3>) {
 /// Head for `to`.
 fn steer(units: &mut Entities, id: EntityId, to: Vec3) {
     set_target(units, id, Some(to));
-}
-
-/// The owner's nearest finished station by distance (ties: lowest id).
-fn nearest_station(units: &Entities, owner: PlayerId, from: Vec3) -> Option<Vec3> {
-    nearest_station_id(units, owner, from).and_then(|id| units.get(id)).map(|s| s.pos)
-}
-
-/// The finished station of `owner` nearest to `from` (ties: lowest id): where a freighter unloads.
-fn nearest_station_id(units: &Entities, owner: PlayerId, from: Vec3) -> Option<EntityId> {
-    units
-        .iter()
-        .filter(|s| {
-            s.kind == EntityKind::Station
-                && s.owner == owner
-                && s.progress.is_none_or(|p| p >= Fixed::ONE)
-        })
-        .map(|s| (dist(from, s.pos), s.id, s.pos))
-        .min_by_key(|&(d, id, _)| (d, id))
-        .map(|(_, id, _)| id)
 }
 
 #[cfg(test)]

@@ -169,7 +169,7 @@ pub fn launch_yard() -> UnitDef {
     y.build.cost = vec![n(900)];
     y.build.ticks = 1500;
     y.build.list = vec![DefRef::new("fx_frigate")];
-    y.launch = Some(LaunchPoint { offset: (Fixed::ZERO, n(40)), dir: (Fixed::ZERO, Fixed::ONE), clear: n(60), node: Some("hp99".into()) });
+    y.launch = Some(LaunchPoint { offset: (Fixed::ZERO, n(40)), height: Fixed::ZERO, dir: (Fixed::ZERO, Fixed::ONE), clear: n(60), node: Some("hp99".into()) });
     y
 }
 

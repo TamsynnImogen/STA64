@@ -53,7 +53,7 @@ pub struct CaptureDir(pub PathBuf);
 /// build script: that would rebuild this crate on every commit.
 const COMMIT: Option<&str> = option_env!("STA64_GIT_COMMIT");
 
-fn build_info() -> BuildInfo {
+pub(crate) fn build_info() -> BuildInfo {
     BuildInfo {
         version: env!("CARGO_PKG_VERSION").to_owned(),
         commit: COMMIT.filter(|c| !c.is_empty()).map(str::to_owned),

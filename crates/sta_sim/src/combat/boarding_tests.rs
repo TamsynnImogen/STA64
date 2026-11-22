@@ -774,7 +774,7 @@ fn an_armada_one_boarding_run_is_pinned() {
     assert_eq!(w.sim.digest(), A1_RUN_DIGEST, "{:#x}", w.sim.digest());
 }
 
-const A1_RUN_DIGEST: u64 = 0xadde_12fe_4e91_c9ec;
+const A1_RUN_DIGEST: u64 = 0x85ed_7753_b044_1716;
 
 // SIM-46 transport attack (Roots, `transport_attack_by_weld`).
 

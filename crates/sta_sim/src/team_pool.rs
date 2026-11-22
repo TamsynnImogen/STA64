@@ -96,7 +96,8 @@ impl Sim {
         }
         let capacity = Economy::derived_crew_capacity(&self.units, &db, &self.attrs, player);
         let census = self.production.officer_census(&self.units, &db, player);
-        self.economy.team_op(player, op, x, capacity, census)
+        let officers = self.officer_limit(player).map(|cap| (census, cap, db.a1_officers()));
+        self.economy.team_op(player, op, x, capacity, officers)
     }
 }
 

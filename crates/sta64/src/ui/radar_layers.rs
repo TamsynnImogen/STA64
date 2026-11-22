@@ -4,41 +4,17 @@
 //! map picture, the field picture, the map-icon sprites, the dots, fog and shroud, the camera
 //! outline, and black strips where the square is not map.
 //!
-//! - **Map picture** (one picture at the texel grid [`GRID`]): each object whose definition has the
-//!   `mapSprite` key adds that sprite's texture, stretched into a square centred on the object, as
-//!   wide as its bounding radius in texels (`radius / side * GRID`, truncated; the radius, not the
-//!   diameter, is the width). Read from the executable, static; the nebula and belt footprints
-//!   are INTERIM (below).
-//! - **Field picture**: each object with a warp-suppression radius
-//!   ([`sta_content::Rules::warp_suppression_radius`]: bounding radius times the class's
-//!   `RTS_CFG.h` multiplier, ADR 0004 D9/D10: render only, not digested) fills a circle in
-//!   [`FIELD_COLOUR`]; texels are written, not accumulated, so overlapping fields are a union.
-//!   Planets: read from the executable, static. Black holes: INTERIM, inferred from the key's
-//!   name, their rule was not read in the executable.
-//! - Both pictures are drawn additively with nearest sampling ([`AdditiveImage`]) and rebuilt only
-//!   when the set of objects, the radar's square or the sprite source changes (an object is created
-//!   or destroyed), never per frame.
-//! - **Icons** (stock look): an object whose definition has the `mapIcon` key is drawn as that
-//!   sprite, additively, and gets no dot; its width is the sprite's width in texels of [`GRID`], at
-//!   least the definition's `mapSize` key. Read from the executable, static.
+//! Both Armada games resolve these keys through the sprite table. A resolved `mapSprite`
+//! draws into the map picture and takes precedence over `mapIcon` and ordinary dots.
+//! A resolved `mapIcon` draws a centred sprite, with `mapSize` as a minimum size per axis.
+//! Neutral icons keep their authored colour. Owned icons use STA64's team mark colours.
 //!
-//! Which look gets what (decided for #1042): STA64's own (Remaster) HUD gains ONLY the two pictures,
-//! drawn under its existing dots; it keeps its dots for every object (also those with a `mapIcon`
-//! key), its draw order of dots against fog, its selection ring, and has no strips. Icons replacing
-//! dots, the original's draw order with fog over the dots, black strips and square dots without a
-//! ring are the STOCK look only.
-//!
-//! Constants without a data key (the texel grid, the field colour, the default dot sizes) are code
-//! constants, each graded where it is declared.
-//!
-//! INTERIM: the nebula and asteroid-belt footprint is STA64's existing drawn radius
-//! ([`nebula_radius`], [`field_radius`]), markedly smaller than the original's footprint for a
-//! nebula (measured once), because the class radius was not read exactly. The appearance with fog
-//! on was not measured. Fleet Operations and Roots may draw their minimap objects differently (not
-//! measured); here they get the same layers as the other games. Armada I has the same data keys;
-//! its executable was not read.
+//! The map and warp-suppression pictures use a 128-texel grid and additive blending. The
+//! warp-suppression circles use the configured class multipliers. The nebula footprint uses
+//! model geometry when available, with the existing effect radius as its fallback. Armada I uses
+//! its authored `mapSize` in radar texels for area sprites.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use bevy::asset::{AssetPath, RenderAssetUsages, embedded_asset};
@@ -51,11 +27,12 @@ use bevy::shader::ShaderRef;
 use bevy::ui_render::UiMaterialPlugin;
 use bevy::ui_render::ui_material::{UiMaterial, UiMaterialKey};
 use sta_assets::a2fmt::spr::SpriteTable;
-use sta_content::{ContentDb, UnitDef};
+use sta_content::{ContentDb, Profile, UnitDef};
 use sta_odf::Odf;
-use sta_sim::EntityId;
+use sta_sim::{EntityId, PlayerId};
 
-use super::radar::{RadarFeed, RadarMap, RadarSquare, RadarState, StockRadar};
+use super::radar::{Kind, RadarFeed, RadarMap, RadarSquare, RadarState, StockRadar, kind, passes_filters, standing};
+use super::radar_sampling::sample_rgb;
 use crate::render::sprites::SpriteTables;
 use crate::viewer::Mounted;
 
@@ -74,8 +51,10 @@ pub const OTHER_TEXELS: f32 = 1.0;
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayerObject {
     pub at: Vec2,
-    /// The bounding radius, world units.
+    /// Width of the map sprite in world units.
     pub radius: f32,
+    /// Fixed width in radar texels, when authored or required by the profile.
+    pub size_texels: Option<f32>,
     /// The `mapSprite` key.
     pub sprite: Option<String>,
     /// The warp-suppression radius, world units.
@@ -92,7 +71,7 @@ pub struct MapKeys {
 
 impl MapKeys {
     pub fn of(raw: &Odf) -> MapKeys {
-        let key = |k: &str| raw.str(k).map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
+        let key = |k: &str| raw.str(k).map(str::trim).filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("none")).map(str::to_owned);
         MapKeys {
             sprite: key("mapSprite"),
             icon: key("mapIcon"),
@@ -106,18 +85,17 @@ impl MapKeys {
     }
 }
 
-/// A nebula's and an asteroid field's radius: `sta_content`'s one reading of the keys (the
-/// sim's region conversion and the map view use it too). INTERIM as the minimap's footprint: the
-/// original's footprint for a nebula is markedly larger than this (measured once), because its
-/// class radius was not read exactly.
+/// The shared gameplay and map-view radius readers.
 pub use sta_content::{field_radius, nebula_radius};
 
 /// What the minimap reads of a definition, cached per definition so a frame reads no keys.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DefInfo {
     pub keys: MapKeys,
     /// The bounding radius, world units (zero: not read).
     pub radius: f32,
+    pub sprite_texels: Option<f32>,
+    icon_filter: Kind,
     /// The warp-suppression radius ([`sta_content::Rules::warp_suppression_radius`]).
     pub warp_radius: Option<f32>,
 }
@@ -151,41 +129,73 @@ impl DefCache {
         g.1.entry(def)
             .or_insert_with(|| {
                 db.unit(def).map(|d: &UnitDef| {
-                    Arc::new(DefInfo { keys: MapKeys::of(&d.raw), radius: d.radius.to_f32(), warp_radius: db.rules().warp_suppression_radius(d).map(|r| r.to_f32()) })
+                    let keys = MapKeys::of(&d.raw);
+                    let sprite_texels = keys.size.or_else(|| (db.profile() == Profile::Sta1Classic).then(|| match kind(Some(db), def) {
+                        Kind::Ship => SHIP_TEXELS,
+                        Kind::Station => STATION_TEXELS,
+                        Kind::Body => OTHER_TEXELS,
+                    }));
+                    let icon_filter = if !sta_content::odf::CRAFT_CLASSES.contains(&d.class.0.as_str()) {
+                        Kind::Body
+                    } else if d.is_starbase {
+                        Kind::Station
+                    } else {
+                        Kind::Ship
+                    };
+                    Arc::new(DefInfo { keys, sprite_texels, icon_filter, radius: d.radius.to_f32(), warp_radius: db.rules().warp_suppression_radius(d).map(|r| r.to_f32()) })
                 })
             })
             .clone()
     }
 }
 
-/// The objects of the map that are not units of the sim (nebulae, belts), set once when the map
-/// is built. Units of the sim (planets, black holes) come from the view.
+/// Map objects represented as regions or scenery instead of simulation units.
 #[derive(Resource, Debug, Clone, Default, PartialEq)]
-pub struct RadarStatics(pub Vec<LayerObject>);
+pub struct RadarStatics {
+    layers: Vec<LayerObject>,
+    icons: Vec<StaticIcon>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct StaticIcon {
+    at: Vec2,
+    keys: MapKeys,
+    radius: f32,
+    size_texels: Option<f32>,
+}
 
 impl RadarStatics {
-    /// The map's nebulae and belts that have a `mapSprite` (the map conversion makes them regions,
-    /// not sim units, though the content database defines them): a nebula at its
-    /// `effectRadius`, a belt at its `fieldRadius` (INTERIM footprints, see the module).
-    pub fn of_map(map: &sta_bzn::Map, db: &ContentDb) -> RadarStatics {
-        let mut out = Vec::new();
+    pub fn of_map<'a>(map: &sta_bzn::Map, armada1: bool, mut definition: impl FnMut(&str) -> Option<&'a UnitDef>) -> RadarStatics {
+        let mut out = RadarStatics::default();
         for o in &map.objects {
-            let Some(def) = db.key(&o.odf).and_then(|k| db.unit(k)) else { continue };
+            let Some(def) = definition(&o.odf) else { continue };
             let raw = &*def.raw;
             if raw.i64("hidden").unwrap_or(0) != 0 {
                 continue;
             }
-            let keys = MapKeys::of(raw);
-            let radius = match raw.class_label().map(str::to_ascii_lowercase).as_deref() {
-                Some("nebula_obj") => nebula_radius(raw),
-                Some("asteroidfield") => field_radius(raw),
+            let model_radius = def.radius.to_f32();
+            let radius = match def.class.0.as_str() {
+                "nebula_obj" if model_radius > 0.0 => model_radius,
+                "nebula_obj" => nebula_radius(raw),
+                "asteroidfield" => 2.0 * field_radius(raw),
+                "background_obj" => model_radius,
                 _ => continue,
             };
+            let at = Vec2::new(o.transform[9], o.transform[11]);
+            let keys = MapKeys::of(raw);
+            let size_texels = if armada1 || def.class.0 == "background_obj" {
+                Some(keys.size.unwrap_or(OTHER_TEXELS))
+            } else {
+                None
+            };
             if keys.sprite.is_some() {
-                out.push(LayerObject { at: Vec2::new(o.transform[9], o.transform[11]), radius, sprite: keys.sprite, warp_radius: None });
+                out.layers.push(LayerObject { at, radius, size_texels, sprite: keys.sprite.clone(), warp_radius: None });
+            }
+            if keys.icon.is_some() {
+                out.icons.push(StaticIcon { at, keys, radius, size_texels });
             }
         }
-        RadarStatics(out)
+        out
     }
 }
 
@@ -231,24 +241,19 @@ pub fn build(objects: &[LayerObject], map: &RadarMap, texture: &mut dyn FnMut(&s
         // Texel coordinates of the centre: x right, y down (the square's v runs against z).
         let c = map.to_square(o.at) * GRID as f32;
         if let Some(tex) = o.sprite.as_deref().and_then(&mut *texture) {
-            let side = (o.radius / map.size * GRID as f32) as i64;
+            let side = sprite_side(o.radius, o.size_texels, map);
             if side >= 1 && tex.width > 0 && tex.height > 0 {
-                let (x0, y0) = ((c.x - side as f32 / 2.0).round() as i64, (c.y - side as f32 / 2.0).round() as i64);
-                for j in 0..side {
-                    let y = y0 + j;
-                    if !(0..n).contains(&y) {
-                        continue;
-                    }
-                    for i in 0..side {
-                        let x = x0 + i;
-                        if !(0..n).contains(&x) {
-                            continue;
-                        }
-                        let (sx, sy) = ((i as usize * tex.width) / side as usize, (j as usize * tex.height) / side as usize);
-                        let p = &tex.rgba[(sy * tex.width + sx) * 4..][..3];
+                let x0 = (c.x - side as f32 / 2.0).round() as i64;
+                let y0 = (c.y - side as f32 / 2.0).round() as i64;
+                let x1 = x0.saturating_add(side).min(n);
+                let y1 = y0.saturating_add(side).min(n);
+                for y in y0.max(0)..y1 {
+                    for x in x0.max(0)..x1 {
+                        let uv = (Vec2::new(x as f32 - x0 as f32, y as f32 - y0 as f32) + Vec2::splat(0.5)) / side as f32;
+                        let rgb = sample_rgb(&tex.rgba, tex.width, tex.height, uv);
                         let s = &mut sum[y as usize * GRID + x as usize];
                         for k in 0..3 {
-                            s[k] += u32::from(p[k]);
+                            s[k] += u32::from(rgb[k]);
                         }
                     }
                 }
@@ -276,6 +281,10 @@ pub fn build(objects: &[LayerObject], map: &RadarMap, texture: &mut dyn FnMut(&s
         pictures.field[i * 4 + 3] = 255;
     }
     pictures
+}
+
+fn sprite_side(radius: f32, size_texels: Option<f32>, map: &RadarMap) -> i64 {
+    size_texels.unwrap_or(radius / map.size * GRID as f32) as i64
 }
 
 // ---- drawing: an additive UI material ---------------------------------------
@@ -343,21 +352,19 @@ impl RadarTextures {
         decoded
     }
 
-    fn handle(&mut self, vfs: Option<&sta_vfs::Vfs>, images: &mut Assets<Image>, name: &str) -> Option<Handle<Image>> {
+    fn sprite_pixels(&mut self, table: &SpriteTable, vfs: Option<&sta_vfs::Vfs>, name: &str) -> Option<Arc<Texture>> {
+        let (texture, _, _) = sprite_rect(table, name)?;
+        self.pixels(vfs, &texture)
+    }
+
+    fn icon_handle(&mut self, vfs: Option<&sta_vfs::Vfs>, images: &mut Assets<Image>, name: &str, info: &IconInfo) -> Option<Handle<Image>> {
         let key = name.to_ascii_lowercase();
         if let Some(h) = self.handles.get(&key) {
             return Some(h.clone());
         }
-        let tex = self.pixels(vfs, name)?;
-        let mut image = Image::new(
-            Extent3d { width: tex.width as u32, height: tex.height as u32, depth_or_array_layers: 1 },
-            TextureDimension::D2,
-            tex.rgba.clone(),
-            TextureFormat::Rgba8UnormSrgb,
-            RenderAssetUsages::default(),
-        );
-        image.sampler = ImageSampler::nearest();
-        let handle = images.add(image);
+        // Isolate the atlas rectangle before filtering so adjacent icons cannot bleed in.
+        let tex = self.pixels(vfs, &info.texture)?.cut(info.uv);
+        let handle = images.add(radar_image(tex.width, tex.height, tex.rgba));
         self.handles.insert(key, handle.clone());
         Some(handle)
     }
@@ -368,10 +375,24 @@ impl RadarTextures {
     }
 }
 
+fn radar_image(width: usize, height: usize, rgba: Vec<u8>) -> Image {
+    let mut image = Image::new(
+        Extent3d { width: width as u32, height: height as u32, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        rgba,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    );
+    image.sampler = ImageSampler::linear();
+    image
+}
+
 /// A sprite of the table: its texture's name and its rectangle in 0..1.
 fn sprite_rect(table: &SpriteTable, sprite: &str) -> Option<(String, [f32; 4], [f32; 2])> {
     let s = table.sprite(sprite)?;
-    Some((s.texture.clone(), sta_assets::spr_anim::sprite_uv(table, s, 0.0), [s.rect[2], s.rect[3]]))
+    let uv = sta_assets::spr_anim::sprite_uv(table, s, 0.0);
+    (uv.iter().all(|v| v.is_finite()) && uv[2] > 0.0 && uv[3] > 0.0)
+        .then(|| (s.texture.clone(), uv, [s.rect[2], s.rect[3]]))
 }
 
 // ---- systems ------------------------------------------------------------------
@@ -403,7 +424,7 @@ pub fn layer_signature(view: &sta_sim::WorldView, db: &Arc<ContentDb>, defs: &De
     view.units
         .iter()
         .filter(|u| !u.flags.contains(sta_sim::view::UnitFlags::DYING))
-        .filter(|u| defs.get(db, u.def).is_some_and(|d| d.radius > 0.0 && (d.keys.sprite.is_some() || d.warp_radius.is_some())))
+        .filter(|u| defs.get(db, u.def).is_some_and(|d| (d.keys.sprite.is_some() && (d.radius > 0.0 || d.sprite_texels.is_some())) || d.warp_radius.is_some()))
         .map(|u| (u.id, u.def, [u.pos.x.to_bits(), u.pos.z.to_bits()]))
         .collect()
 }
@@ -416,11 +437,11 @@ pub fn layer_objects(view: &sta_sim::WorldView, db: Option<&Arc<ContentDb>>, sta
             if u.flags.contains(sta_sim::view::UnitFlags::DYING) {
                 continue;
             }
-            let Some(d) = defs.get(db, u.def).filter(|d| d.radius > 0.0 && (d.keys.sprite.is_some() || d.warp_radius.is_some())) else { continue };
-            out.push(LayerObject { at: Vec2::new(u.pos.x.to_f32(), u.pos.z.to_f32()), radius: d.radius, sprite: d.keys.sprite.clone(), warp_radius: d.warp_radius });
+            let Some(d) = defs.get(db, u.def).filter(|d| (d.keys.sprite.is_some() && (d.radius > 0.0 || d.sprite_texels.is_some())) || d.warp_radius.is_some()) else { continue };
+            out.push(LayerObject { at: Vec2::new(u.pos.x.to_f32(), u.pos.z.to_f32()), radius: d.radius, size_texels: d.sprite_texels, sprite: d.keys.sprite.clone(), warp_radius: d.warp_radius });
         }
     }
-    out.extend(statics.0.iter().cloned());
+    out.extend(statics.layers.iter().cloned());
     out
 }
 
@@ -443,14 +464,11 @@ pub fn update_layers(
     pictures: Query<(&LayerPicture, &MaterialNode<AdditiveImage>)>,
 ) {
     let (Some(mut images), Some(mut materials), Some(map), Ok((sq, kids))) = (images, materials, state.map, square.single()) else { return };
-    if mounted.as_ref().is_some_and(|m| m.is_changed()) {
-        textures.clear();
-    }
     let sig = feed.content.as_ref().map(|db| layer_signature(&feed.view, db, &state.defs)).unwrap_or_default();
     let have = kids.is_some_and(|k| k.iter().any(|e| pictures.get(e).is_ok()));
     let sprites = tables.is_some();
     let statics_changed = statics.as_ref().is_some_and(|s| s.is_changed());
-    if have && !statics_changed && built.signature == sig && built.map == Some(map) && built.sprites == sprites && built.textures == textures.pixels.len() {
+    if have && !statics_changed && built.signature == sig && built.map == Some(map) && built.sprites == sprites && !tables.as_ref().is_some_and(|t| t.is_changed()) && !mounted.as_ref().is_some_and(|m| m.is_changed()) && built.textures == textures.pixels.len() {
         return;
     }
     let empty = RadarStatics::default();
@@ -466,18 +484,8 @@ pub fn update_layers(
     built.sprites = sprites;
     built.textures = textures.pixels.len();
     built.builds += 1;
-    let mut make = |bytes: Vec<u8>| {
-        let mut image = Image::new(
-            Extent3d { width: GRID as u32, height: GRID as u32, depth_or_array_layers: 1 },
-            TextureDimension::D2,
-            bytes,
-            TextureFormat::Rgba8UnormSrgb,
-            RenderAssetUsages::default(),
-        );
-        image.sampler = ImageSampler::nearest();
-        images.add(image)
-    };
-    let (map_image, field_image) = (make(made.map), make(made.field));
+    let map_image = images.add(radar_image(GRID, GRID, made.map));
+    let field_image = images.add(radar_image(GRID, GRID, made.field));
     for (which, image, z) in [(LayerPicture::Map, map_image, -4), (LayerPicture::Field, field_image, -3)] {
         let material = materials.add(AdditiveImage { rect: Vec4::new(0.0, 0.0, 1.0, 1.0), image, tint: UNTINTED });
         let existing = kids.and_then(|k| k.iter().find(|e| pictures.get(*e).is_ok_and(|(w, _)| *w == which)));
@@ -500,120 +508,145 @@ pub fn update_layers(
 }
 
 /// A map-icon sprite of the square.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RadarIcon(pub EntityId);
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RadarIcon {
+    Unit(EntityId),
+    Static(usize),
+}
 
-/// What an icon needs of its sprite: the texture's name, the rectangle drawn and the width in
-/// texels (the sprite's width, at least the definition's `mapSize`).
+/// A sprite's atlas rectangle and its width and height on the radar's texel grid.
 #[derive(Debug, Clone, PartialEq)]
-pub struct IconInfo {
-    pub texture: String,
-    pub uv: [f32; 4],
-    pub texels: f32,
+struct IconInfo {
+    texture: String,
+    uv: [f32; 4],
+    texels: Vec2,
 }
 
-/// The icon of a definition: its `mapIcon` sprite resolved through the sprite table.
-pub fn icon_info(info: &DefInfo, table: &SpriteTable) -> Option<IconInfo> {
-    let name = info.keys.icon.as_deref()?;
-    let (texture, uv, size) = sprite_rect(table, name)?;
-    Some(IconInfo { texture, uv, texels: size[0].max(info.keys.size.unwrap_or(0.0)) })
+fn icon_info(keys: &MapKeys, table: &SpriteTable) -> Option<IconInfo> {
+    let (texture, uv, size) = sprite_rect(table, keys.icon.as_deref()?)?;
+    let texels = Vec2::from(size).max(Vec2::splat(keys.size.unwrap_or(0.0)));
+    Some(IconInfo { texture, uv, texels })
 }
 
-/// The icons resolved per definition, for one content database and sprite table (by address).
-type ResolvedIcons = (usize, usize, BTreeMap<sta_sim::ContentKey, Option<IconInfo>>);
+fn uses_map_picture(keys: &MapKeys, radius: f32, size_texels: Option<f32>, map: &RadarMap, table: &SpriteTable, vfs: Option<&sta_vfs::Vfs>, textures: &mut RadarTextures) -> bool {
+    sprite_side(radius, size_texels, map) >= 1
+        && keys.sprite.as_deref().is_some_and(|name| textures.sprite_pixels(table, vfs, name).is_some())
+}
 
-/// Draw the `mapIcon` sprites of the units the player sees, additively, under the dots. The stock
-/// look only: the other look keeps its dots for these objects.
+fn clear_textures(
+    mounted: Option<Res<Mounted>>,
+    tables: Option<Res<SpriteTables>>,
+    mut textures: ResMut<RadarTextures>,
+) {
+    if mounted.is_some_and(|m| m.is_changed()) {
+        textures.clear();
+    } else if tables.is_some_and(|t| t.is_changed()) {
+        textures.handles.clear();
+    }
+}
+
+/// Resolve each visible unit's artwork before the dot pass. A missing sprite or texture leaves
+/// the fallback dot available. Region/scenery icons are neutral and follow the map's fog.
 #[allow(clippy::too_many_arguments)]
-pub fn update_icons(
+pub(super) fn update_icons(
     mut commands: Commands,
     feed: Res<RadarFeed>,
-    state: Res<RadarState>,
+    mut state: ResMut<RadarState>,
     teams: Option<Res<crate::viewer::TeamColours>>,
     map_teams: Option<Res<crate::viewer::MapTeamColours>>,
     tables: Option<Res<SpriteTables>>,
     mounted: Option<Res<Mounted>>,
+    statics: Option<Res<RadarStatics>>,
     images: Option<ResMut<Assets<Image>>>,
     materials: Option<ResMut<Assets<AdditiveImage>>>,
     mut textures: ResMut<RadarTextures>,
-    square: Query<(Entity, Has<StockRadar>), With<RadarSquare>>,
-    mut icons: Query<(Entity, &RadarIcon, &mut Node, &MaterialNode<AdditiveImage>)>,
-    mut found: Local<BTreeMap<EntityId, Entity>>,
-    mut resolved: Local<ResolvedIcons>,
+    square: Query<Entity, With<RadarSquare>>,
+    mut icons: Query<(Entity, &RadarIcon, &mut Node, &MaterialNode<AdditiveImage>, &ChildOf)>,
 ) {
-    let (Some(mut images), Some(mut materials), Some(map), Ok((sq, stock))) = (images, materials, state.map, square.single()) else { return };
-    let (Some(db), Some(tables), true) = (feed.content.as_ref(), tables, stock) else {
-        for (e, _, _, _) in &icons {
-            commands.entity(e).despawn();
-        }
-        found.clear();
-        return;
-    };
-    let ids = (Arc::as_ptr(db) as usize, Arc::as_ptr(&tables.0) as usize);
-    if (resolved.0, resolved.1) != ids {
-        *resolved = (ids.0, ids.1, BTreeMap::new());
-    }
-    let vfs = mounted.as_ref().map(|m| &m.0);
-    let mut want: BTreeMap<EntityId, (Vec2, sta_sim::ContentKey, sta_sim::PlayerId)> = BTreeMap::new();
-    for u in feed.view.visible_to(feed.player) {
-        if u.flags.contains(sta_sim::view::UnitFlags::DYING) {
-            continue;
-        }
-        let Some(def) = state.defs.get(db, u.def) else { continue };
-        if def.keys.icon.is_none() {
-            continue;
-        }
-        resolved.2.entry(u.def).or_insert_with(|| icon_info(&def, &tables.0));
-        if resolved.2.get(&u.def).is_some_and(Option::is_some) {
-            want.insert(u.id, (map.to_square(Vec2::new(u.pos.x.to_f32(), u.pos.z.to_f32())), u.def, u.owner));
-        }
-    }
-    found.retain(|id, e| {
-        let keep = want.contains_key(id) && icons.get(*e).is_ok();
-        if !keep {
-            commands.entity(*e).despawn();
-        }
-        keep
-    });
-    for (id, (at, def, owner)) in want {
-        let Some(Some(info)) = resolved.2.get(&def) else { continue };
-        let tint = if owner.is_player() {
-            crate::viewer::owner_mark_colour(teams.as_deref(), map_teams.as_deref(), owner)
+    let mut art = BTreeSet::new();
+    let mut want = BTreeMap::new();
+    if let (Some(mut images), Some(mut materials), Some(map), Some(tables), Ok(square)) = (images, materials, state.map, tables, square.single()) {
+        let table = &tables.0;
+        let vfs = mounted.as_ref().map(|m| &m.0);
+        let mut add_icon = |id, at: Vec2, keys: &MapKeys, owner: Option<PlayerId>, textures: &mut RadarTextures| -> bool {
+            let Some(name) = keys.icon.as_deref() else { return false };
+            let Some(info) = icon_info(keys, table) else { return false };
+            let Some(image) = textures.icon_handle(vfs, &mut images, name, &info) else { return false };
+            let tint = owner.filter(|o| o.is_player())
+                .and_then(|o| crate::viewer::owner_mark_colour(teams.as_deref(), map_teams.as_deref(), o))
                 .map(|colour| {
                     let c = colour.to_linear();
                     Vec4::new(c.red, c.green, c.blue, 1.0)
                 })
-                .unwrap_or(UNTINTED)
-        } else {
-            UNTINTED
+                .unwrap_or(UNTINTED);
+            let side = info.texels / GRID as f32 * 100.0;
+            let at = map.to_square(at) * 100.0 - side / 2.0;
+            let node = Node {
+                position_type: PositionType::Absolute,
+                left: Val::Percent(at.x),
+                top: Val::Percent(at.y),
+                width: Val::Percent(side.x),
+                height: Val::Percent(side.y),
+                ..default()
+            };
+            want.insert(id, (node, image, tint));
+            true
         };
-        let side = info.texels / GRID as f32 * 100.0;
-        let node = Node {
-            position_type: PositionType::Absolute,
-            left: Val::Percent(at.x * 100.0),
-            top: Val::Percent(at.y * 100.0),
-            margin: UiRect::all(Val::Percent(-side / 2.0)),
-            width: Val::Percent(side),
-            height: Val::Percent(side),
-            ..default()
-        };
-        if let Some(e) = found.get(&id) {
-            if let Ok((_, _, mut n, material)) = icons.get_mut(*e) {
-                if *n != node {
-                    *n = node;
+
+        if let Some(db) = feed.content.as_ref() {
+            for u in feed.view.visible_to(feed.player) {
+                if u.flags.contains(sta_sim::view::UnitFlags::DYING) {
+                    continue;
                 }
-                if materials.get(&material.0).is_some_and(|m| m.tint != tint)
-                    && let Some(mut material) = materials.get_mut(&material.0)
+                let Some(def) = state.defs.get(db, u.def) else { continue };
+                let at = Vec2::new(u.pos.x.to_f32(), u.pos.z.to_f32());
+                if uses_map_picture(&def.keys, def.radius, def.sprite_texels, &map, table, vfs, &mut textures)
+                    || (def.keys.icon.is_some()
+                        && passes_filters(&state, def.icon_filter, standing(&feed.view, feed.player, u.owner))
+                        && add_icon(RadarIcon::Unit(u.id), at, &def.keys, Some(u.owner), &mut textures))
                 {
-                    material.tint = tint;
+                    art.insert(u.id);
                 }
             }
-            continue;
         }
-        let Some(image) = textures.handle(vfs, &mut images, &info.texture) else { continue };
-        let material = materials.add(AdditiveImage { rect: Vec4::from(info.uv), image, tint });
-        let e = commands.spawn((RadarIcon(id), MaterialNode(material), node, ZIndex(-2), bevy::picking::Pickable::IGNORE, ChildOf(sq))).id();
-        found.insert(id, e);
+        if let Some(statics) = statics {
+            for (i, icon) in statics.icons.iter().enumerate() {
+                if !uses_map_picture(&icon.keys, icon.radius, icon.size_texels, &map, table, vfs, &mut textures) {
+                    add_icon(RadarIcon::Static(i), icon.at, &icon.keys, None, &mut textures);
+                }
+            }
+        }
+        for (entity, id, mut node, material, parent) in &mut icons {
+            if parent.parent() != square {
+                commands.entity(entity).despawn();
+                continue;
+            }
+            let Some((next, image, tint)) = want.remove(id) else {
+                commands.entity(entity).despawn();
+                continue;
+            };
+            if *node != next {
+                *node = next;
+            }
+            if let Some(m) = materials.get(&material.0)
+                && (m.tint != tint || m.image != image)
+                && let Some(mut m) = materials.get_mut(&material.0)
+            {
+                m.image = image;
+                m.tint = tint;
+            }
+        }
+        for (id, (node, image, tint)) in want {
+            let material = materials.add(AdditiveImage { rect: Vec4::new(0.0, 0.0, 1.0, 1.0), image, tint });
+            commands.spawn((id, MaterialNode(material), node, ZIndex(-2), bevy::picking::Pickable::IGNORE, ChildOf(square)));
+        }
+    } else {
+        for (entity, _, _, _, _) in &icons {
+            commands.entity(entity).despawn();
+        }
+    }
+    if state.art != art {
+        state.art = art;
     }
 }
 
@@ -669,7 +702,10 @@ impl Plugin for RadarLayersPlugin {
         }
         app.init_resource::<RadarTextures>().init_resource::<LayerState>().init_resource::<RadarStatics>().add_systems(
             Update,
-            (update_layers, update_icons, update_strips).after(super::radar::refresh).in_set(crate::app::GameSet::Ui),
+            (clear_textures, update_icons).chain().after(super::radar::fit_map).before(super::radar::refresh).in_set(crate::app::GameSet::Ui),
+        ).add_systems(
+            Update,
+            (update_layers, update_strips).after(super::radar::refresh).in_set(crate::app::GameSet::Ui),
         );
     }
 }
@@ -700,11 +736,11 @@ mod tests {
     }
 
     fn nebula(at: Vec2, radius: f32) -> LayerObject {
-        LayerObject { at, radius, sprite: Some("sprite_a".into()), warp_radius: None }
+        LayerObject { at, radius, size_texels: None, sprite: Some("sprite_a".into()), warp_radius: None }
     }
 
     fn planet(at: Vec2, radius: f32, multiplier: f32) -> LayerObject {
-        LayerObject { at, radius, sprite: None, warp_radius: Some(radius * multiplier) }
+        LayerObject { at, radius, size_texels: None, sprite: None, warp_radius: Some(radius * multiplier) }
     }
 
     fn textures(name: &str) -> Option<Arc<Texture>> {
@@ -783,6 +819,7 @@ mod tests {
         let k = MapKeys::of(&odf("classLabel = \"planet\"\nmapIcon = \"icon_a\"\nmapSprite = \"\"\nmapSize = 4\n"));
         assert_eq!((k.icon.as_deref(), k.sprite.as_deref(), k.size), (Some("icon_a"), None, Some(4.0)));
         assert!(MapKeys::of(&odf("classLabel = \"craft\"\n")).is_empty());
+        assert!(MapKeys::of(&odf("mapSprite = \"NONE\"\nmapIcon = \" none \"\n")).is_empty());
     }
 
     /// The units that carry the keys, a planet with a field and a nebula-like marker with a
@@ -897,9 +934,9 @@ mod tests {
     fn the_maps_statics_join_the_units() {
         let s = scene();
         let view = WorldSource::view(&s.sim);
-        let statics = RadarStatics(vec![nebula(Vec2::new(10.0, 20.0), 300.0)]);
+        let statics = RadarStatics { layers: vec![nebula(Vec2::new(10.0, 20.0), 300.0)], ..default() };
         let objects = layer_objects(&view, Some(&s.db), &statics, &DefCache::default());
-        assert_eq!(objects, statics.0);
+        assert_eq!(objects, statics.layers);
     }
 
     /// The map path that had the nebula bug: map objects of the nebula and belt classes with a
@@ -914,7 +951,7 @@ mod tests {
             d
         };
         let db = ContentDb::builder()
-            .unit(def("lt_nebula", "nebula_obj", "mapSprite = \"sprite_a\"\neffectRadius = 450\n"))
+            .unit(def("lt_nebula", "nebula_obj", "mapSprite = \"sprite_a\"\neffectRadius = 450\nmapSize = 5\n"))
             .unit(def("lt_default_nebula", "nebula_obj", "mapSprite = \"sprite_a\"\n"))
             .unit(def("lt_belt", "asteroidfield", "mapSprite = \"sprite_a\"\nfieldRadius = 125\n"))
             .unit(def("lt_hidden", "nebula_obj", "mapSprite = \"sprite_a\"\nhidden = 1\n"))
@@ -931,10 +968,13 @@ mod tests {
             objects: vec![at("lt_nebula", 100.0, 200.0), at("lt_default_nebula", 1.0, 2.0), at("lt_belt", 300.0, 400.0), at("lt_hidden", 5.0, 5.0), at("lt_bare_nebula", 6.0, 6.0), at("lt_planet_like", 7.0, 7.0), at("lt_unknown", 8.0, 8.0)],
             ..Default::default()
         };
-        let statics = RadarStatics::of_map(&map, &db);
+        let statics = RadarStatics::of_map(&map, false, |name| db.key(name).and_then(|key| db.unit(key)));
         let sprite = Some("sprite_a".to_owned());
-        let obj = |x, z, radius| LayerObject { at: Vec2::new(x, z), radius, sprite: sprite.clone(), warp_radius: None };
-        assert_eq!(statics.0, [obj(100.0, 200.0, 450.0), obj(1.0, 2.0, 300.0), obj(300.0, 400.0, 125.0)]);
+        let obj = |x, z, radius| LayerObject { at: Vec2::new(x, z), radius, size_texels: None, sprite: sprite.clone(), warp_radius: None };
+        assert_eq!(statics.layers, [obj(100.0, 200.0, 450.0), obj(1.0, 2.0, 300.0), obj(300.0, 400.0, 250.0)]);
+        let a1 = RadarStatics::of_map(&map, true, |name| db.key(name).and_then(|key| db.unit(key)));
+        assert_eq!(a1.layers.iter().map(|o| o.size_texels).collect::<Vec<_>>(), [Some(5.0), Some(1.0), Some(1.0)]);
+
     }
 
     /// A planet's keys: its sprite is in the picture, its field is its radius times the rule's
@@ -946,16 +986,16 @@ mod tests {
         let view = WorldSource::view(&s.sim);
         let defs = DefCache::default();
         let o = layer_objects(&view, Some(&s.db), &RadarStatics::default(), &defs);
-        assert_eq!(o, [LayerObject { at: Vec2::new(3200.0, 3200.0), radius: 250.0, sprite: Some("sprite_a".into()), warp_radius: Some(1000.0) }]);
+        assert_eq!(o, [LayerObject { at: Vec2::new(3200.0, 3200.0), radius: 250.0, size_texels: None, sprite: Some("sprite_a".into()), warp_radius: Some(1000.0) }]);
         let table = SpriteTable::parse(b"sprite_table\n@reference=8\nicon_a\ttex_i\t0\t0\t4\t4\n");
-        let icon = |db: &Arc<ContentDb>, def| icon_info(&defs.get(db, def).unwrap(), &table).map(|i| (i.texture, i.texels));
-        assert_eq!(icon(&s.db, s.planet), Some(("tex_i".into(), 4.0)));
+        let icon = |db: &Arc<ContentDb>, def| icon_info(&defs.get(db, def).unwrap().keys, &table).map(|i| (i.texture, i.texels));
+        assert_eq!(icon(&s.db, s.planet), Some(("tex_i".into(), Vec2::splat(4.0))));
         assert_eq!(icon(&s.db, s.ship), None);
         // `mapSize` makes the icon at least that wide.
         let mut big = UnitDef::new("lt_big", "planet");
         big.raw = Arc::new(odf("mapIcon = \"icon_a\"\nmapSize = 9\n"));
         let db = Arc::new(ContentDb::builder().unit(big).build().unwrap());
-        assert_eq!(icon(&db, db.key("lt_big").unwrap()), Some(("tex_i".into(), 9.0)));
+        assert_eq!(icon(&db, db.key("lt_big").unwrap()), Some(("tex_i".into(), Vec2::splat(9.0))));
     }
 
     /// The icons: one node per seen unit with a `mapIcon`, its size and place shares of the
@@ -964,9 +1004,12 @@ mod tests {
     fn icons_are_nodes_of_the_squares_own_shares() {
         let mut s = scene();
         s.app.add_systems(Update, update_icons);
-        s.app.world_mut().resource_mut::<RadarState>().map = Some(square(6400.0));
-        let sq = s.app.world_mut().query_filtered::<Entity, With<RadarSquare>>().single(s.app.world()).unwrap();
-        s.app.world_mut().entity_mut(sq).insert(StockRadar);
+        {
+            let mut state = s.app.world_mut().resource_mut::<RadarState>();
+            state.map = Some(square(6400.0));
+            state.stations = super::super::radar::Filter::Enemies;
+        }
+        s.app.world_mut().resource_mut::<RadarTextures>().pixels.remove("tex_a");
         s.app.world_mut().resource_mut::<RadarTextures>().insert("tex_i", Texture { width: 4, height: 4, rgba: flat(4, 4, [200, 100, 50]).rgba.clone() });
         s.spawn(s.planet, sta_sim::world::NEUTRAL.0, 1600.0, 4800.0);
         s.show();
@@ -975,8 +1018,44 @@ mod tests {
         assert_eq!(icons.len(), 1);
         let n = &icons[0];
         // 4 texels of 128 = 3.125% of the square, centred a quarter in and a quarter down.
-        assert_eq!((n.left, n.top, n.width, n.height), (Val::Percent(25.0), Val::Percent(25.0), Val::Percent(3.125), Val::Percent(3.125)));
-        assert_eq!(n.margin.left, Val::Percent(-1.5625));
+        assert_eq!((n.left, n.top, n.width, n.height), (Val::Percent(23.4375), Val::Percent(23.4375), Val::Percent(3.125), Val::Percent(3.125)));
+    }
+
+    #[test]
+    fn static_icons_crop_the_atlas_and_preserve_aspect() {
+        let mut s = scene();
+        s.app.add_systems(Update, update_icons);
+        s.app.world_mut().resource_mut::<RadarState>().map = Some(square(6400.0));
+        s.app.insert_resource(SpriteTables(Arc::new(SpriteTable::parse(
+            b"sprite_table\n@reference=4\nicon_a\ttex_i\t1\t1\t2\t1\n",
+        ))));
+        let mut pixels = vec![255; 4 * 4 * 4];
+        pixels[20..28].copy_from_slice(&[0, 100, 0, 255, 0, 200, 0, 255]);
+        s.app.world_mut().resource_mut::<RadarTextures>()
+            .insert("tex_i", Texture { width: 4, height: 4, rgba: pixels });
+        let mut region = UnitDef::new("lt_region", "nebula_obj");
+        region.raw = Arc::new(odf("classLabel = \"nebula_obj\"\nmapIcon = \"icon_a\"\n"));
+        let db = ContentDb::builder().unit(region).build().unwrap();
+        let mut object = sta_bzn::MapObject { odf: "lt_region".into(), ..default() };
+        object.transform[9] = 3200.0;
+        object.transform[11] = 3200.0;
+        s.app.insert_resource(RadarStatics::of_map(&sta_bzn::Map { objects: vec![object], ..default() }, false, |name| db.key(name).and_then(|key| db.unit(key))));
+        s.show();
+        let w = s.app.world_mut();
+        let mut icons = w.query::<(&RadarIcon, &Node, &MaterialNode<AdditiveImage>)>();
+        let (icon, node, material) = icons.single(w).unwrap();
+        assert_eq!(*icon, RadarIcon::Static(0));
+        assert_eq!(node.width, Val::Percent(2.0 / GRID as f32 * 100.0));
+        assert_eq!(node.height, Val::Percent(1.0 / GRID as f32 * 100.0));
+        let mat = w.resource::<Assets<AdditiveImage>>().get(&material.0).unwrap();
+        let image = w.resource::<Assets<Image>>().get(&mat.image).unwrap();
+        assert_eq!(image.data.as_deref(), Some([0, 100, 0, 255, 0, 200, 0, 255].as_slice()));
+        assert!(matches!(
+            &image.sampler,
+            ImageSampler::Descriptor(desc)
+                if desc.mag_filter == bevy::image::ImageFilterMode::Linear
+                    && desc.min_filter == bevy::image::ImageFilterMode::Linear
+        ));
     }
 
     #[test]
@@ -986,15 +1065,14 @@ mod tests {
         let mut s = scene();
         s.app.add_systems(Update, update_icons);
         s.app.world_mut().resource_mut::<RadarState>().map = Some(square(6400.0));
-        let sq = s.app.world_mut().query_filtered::<Entity, With<RadarSquare>>().single(s.app.world()).unwrap();
-        s.app.world_mut().entity_mut(sq).insert(StockRadar);
+        s.app.world_mut().resource_mut::<RadarTextures>().pixels.remove("tex_a");
         s.app.world_mut().resource_mut::<RadarTextures>().insert("tex_i", Texture { width: 4, height: 4, rgba: flat(4, 4, [200, 100, 50]).rgba.clone() });
         let owned = s.spawn(s.planet, 0, 1600.0, 4800.0);
         let neutral = s.spawn(s.planet, sta_sim::world::NEUTRAL.0, 4800.0, 1600.0);
         let tint_of = |app: &mut App, id| {
             let material = app.world_mut().query::<(&RadarIcon, &MaterialNode<AdditiveImage>)>()
                 .iter(app.world())
-                .find(|(icon, _)| icon.0 == id)
+                .find(|(icon, _)| **icon == RadarIcon::Unit(id))
                 .map(|(_, material)| material.0.clone())
                 .unwrap();
             app.world().resource::<Assets<AdditiveImage>>().get(&material).unwrap().tint
@@ -1027,42 +1105,42 @@ mod tests {
         assert_eq!(tint_of(&mut s.app, owned), UNTINTED);
     }
 
-    /// An object with a `mapIcon` gets no dot; the others do, with the stock sizes in texels, and a
-    /// definition's `mapSize` overrides them.
     #[test]
-    fn a_unit_with_a_map_icon_gets_no_dot_and_the_others_their_texels() {
+    fn usable_artwork_replaces_the_dot_in_layer_icon_order() {
         use super::super::radar::{Kind, blips};
         let mut s = scene();
+        s.app.add_systems(Update, update_icons);
+        let map = square(6400.0);
+        s.app.world_mut().resource_mut::<RadarState>().map = Some(map);
         let planet = s.spawn(s.planet, sta_sim::world::NEUTRAL.0, 3200.0, 3200.0);
         let ship = s.spawn(s.ship, 0, 100.0, 100.0);
-        let mut feed = RadarFeed::default();
-        let mut view = (*WorldSource::view(&s.sim)).clone();
-        view.visibility.clear();
-        feed.view = Arc::new(view);
-        feed.content = Some(s.db.clone());
-        feed.player = PlayerId(0);
-        let list = blips(&feed, &RadarState::default(), &square(6400.0), true);
-        let of = |list: &[super::super::radar::Blip], id| list.iter().find(|b| b.id == id).map(|b| (b.kind, b.texels));
-        assert_eq!(of(&list, ship), Some((Kind::Ship, SHIP_TEXELS)));
-        assert_eq!(of(&list, planet), None, "stock look: the planet has a map icon, so no dot");
-        // The other look keeps its dot for it.
-        let other = blips(&feed, &RadarState::default(), &square(6400.0), false);
-        assert_eq!(of(&other, planet).map(|b| b.0), Some(Kind::Body));
-        assert!(list.iter().any(|b| b.kind == Kind::Body && b.texels == OTHER_TEXELS), "a body without one keeps its dot");
-        // `mapSize` replaces the default.
-        let mut big = UnitDef::new("lt_big", "craft");
-        big.raw = Arc::new(odf("mapSize = 6\n"));
-        big.movement = s.db.unit(s.ship).unwrap().movement;
-        let db = ContentDb::builder().unit(big).build().unwrap();
-        let keys = MapKeys::of(&db.unit(db.key("lt_big").unwrap()).unwrap().raw);
-        assert_eq!(keys.size, Some(6.0));
+        let dot = |app: &App, id| {
+            let feed = app.world().resource::<RadarFeed>();
+            let state = app.world().resource::<RadarState>();
+            blips(feed, state, &map).into_iter().find(|b| b.id == id).map(|b| (b.kind, b.texels))
+        };
+        let icons = |app: &mut App| app.world_mut().query::<&RadarIcon>().iter(app.world()).count();
+        s.show();
+        assert_eq!(dot(&s.app, ship), Some((Kind::Ship, SHIP_TEXELS)));
+        assert_eq!(dot(&s.app, planet), None);
+        assert_eq!(icons(&mut s.app), 0, "mapSprite takes precedence");
+
+        let mut textures = s.app.world_mut().resource_mut::<RadarTextures>();
+        textures.pixels.remove("tex_a");
+        textures.insert("tex_i", (*flat(4, 4, [200, 100, 50])).clone());
+        s.show();
+        assert_eq!(dot(&s.app, planet), None);
+        assert_eq!(icons(&mut s.app), 1, "missing mapSprite falls back to mapIcon");
+
+        s.app.world_mut().resource_mut::<RadarTextures>().clear();
+        s.show();
+        assert_eq!(dot(&s.app, planet), Some((Kind::Body, OTHER_TEXELS)));
+        assert_eq!(icons(&mut s.app), 0, "missing mapIcon falls back to the dot");
     }
 
-    /// STA64's own (Remaster) HUD changes only by gaining the two pictures: its dot set (also for
-    /// objects with a `mapIcon` key), its fog under the dots, its ring and its lack of strips are
-    /// as on main. The stock look has the icons, strips, fog over the dots.
+    /// Both looks draw authored icons. The stock look still uses its own fog and strips.
     #[test]
-    fn the_other_look_gains_only_the_two_pictures_and_the_stock_look_the_rest() {
+    fn both_hud_looks_draw_authored_minimap_artwork() {
         use super::super::radar::{RadarBlip, RadarPlugin, blips};
         use crate::render::fog::{FogGrid, FogState};
         use crate::ui::hud::HudConfig;
@@ -1090,7 +1168,6 @@ mod tests {
                 st.map_fixed = true;
                 st.bounds = Some((Vec2::ZERO, Vec2::new(6400.0, 3200.0)));
             }
-            app.world_mut().resource_mut::<RadarTextures>().insert("tex_a", Texture { width: 8, height: 8, rgba: flat(8, 8, [100, 50, 0]).rgba.clone() });
             app.world_mut().resource_mut::<RadarTextures>().insert("tex_i", Texture { width: 4, height: 4, rgba: flat(4, 4, [200, 100, 50]).rgba.clone() });
             let mut view = (*WorldSource::view(&s.sim)).clone();
             view.visibility.clear();
@@ -1111,7 +1188,7 @@ mod tests {
             let pictures = count(w, &mut |w| w.query::<&LayerPicture>().iter(w).count());
             let expected = {
                 let feed = w.resource::<RadarFeed>().clone();
-                blips(&feed, w.resource::<RadarState>(), &map, stock).len()
+                blips(&feed, w.resource::<RadarState>(), &map).len()
             };
             assert_eq!(dots, expected);
             assert_eq!(pictures, 2, "both looks gain the two pictures");
@@ -1121,19 +1198,17 @@ mod tests {
             if stock {
                 assert!(!planet_dot && icons == 1 && strips == 4 && fog_z == Some(1), "{planet_dot} {icons} {strips} {fog_z:?}");
             } else {
-                // The dot set of main: a dot for every object, the planet's included; no icons, no
-                // strips, the fog a first child with the default stacking index (under the dots).
-                assert!(planet_dot && icons == 0 && strips == 0 && fog_z == Some(0), "{planet_dot} {icons} {strips} {fog_z:?}");
+                assert!(!planet_dot && icons == 1 && strips == 0 && fog_z == Some(0), "{planet_dot} {icons} {strips} {fog_z:?}");
                 assert_eq!(w.get::<Children>(square).unwrap()[0], fog);
             }
         }
     }
 
     /// A GPU frame of the additive material (`STA64_GPU_TESTS=1`; skips without a hardware
-    /// adapter): the picture is added to what is under it (not blended), sampled nearest, its
+    /// adapter): the picture is added to what is under it (not blended), sampled linearly, its
     /// alpha is ignored, and `rect` picks the part drawn.
     #[test]
-    fn the_additive_material_adds_samples_nearest_and_ignores_alpha_on_the_gpu() {
+    fn the_additive_material_filters_linearly_and_ignores_alpha_on_the_gpu() {
         use bevy::camera::RenderTarget;
         use bevy::ui::UiTargetCamera;
         use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
@@ -1162,14 +1237,7 @@ mod tests {
             .id();
         // 2 x 2 texels: a, b over c, d; alpha almost 0 everywhere.
         let texels: [[u8; 4]; 4] = [[200, 0, 0, 10], [0, 200, 0, 10], [0, 0, 200, 10], [100, 100, 0, 10]];
-        let mut picture = Image::new(
-            Extent3d { width: 2, height: 2, depth_or_array_layers: 1 },
-            TextureDimension::D2,
-            texels.concat(),
-            TextureFormat::Rgba8UnormSrgb,
-            RenderAssetUsages::default(),
-        );
-        picture.sampler = ImageSampler::nearest();
+        let picture = radar_image(2, 2, texels.concat());
         let picture = app.world_mut().resource_mut::<Assets<Image>>().add(picture);
         let (whole, right, tinted) = {
             let mut m = app.world_mut().resource_mut::<Assets<AdditiveImage>>();
@@ -1227,9 +1295,13 @@ mod tests {
             [p[0], p[1], p[2]]
         };
         let near = |got: [u8; 3], want: [u8; 3]| got.iter().zip(want).all(|(g, w)| (i16::from(*g) - i16::from(w)).abs() <= 3);
-        // Left half over black: the texel itself, hard-edged (nearest), whatever its alpha.
-        assert!(near(at(8, 8), [200, 0, 0]) && near(at(24, 8), [0, 200, 0]) && near(at(8, 48), [0, 0, 200]), "{:?} {:?} {:?}", at(8, 8), at(24, 8), at(8, 48));
-        assert!(near(at(15, 8), [200, 0, 0]) && near(at(16, 8), [0, 200, 0]), "nearest: a hard edge at the texel border: {:?} {:?}", at(15, 8), at(16, 8));
+        // Away from the transition each texel keeps its colour even with nearly zero alpha.
+        assert!(near(at(6, 8), [200, 0, 0]) && near(at(26, 8), [0, 200, 0]) && near(at(6, 56), [0, 0, 200]), "{:?} {:?} {:?}", at(6, 8), at(26, 8), at(6, 56));
+        // Magnification blends neighbouring colours across the boundary.
+        for x in [15, 16] {
+            let [r, g, b] = at(x, 8);
+            assert!(r > 100 && g > 100 && b < 5, "linear edge: {:?}", at(x, 8));
+        }
         // Right half over the grey: the sum in linear light, encoded again; `rect` drew the right
         // texel column (b over d) across the 32 columns.
         let lin = |v: u8| LinearRgba::from(Srgba::rgb_u8(v, v, v)).red;

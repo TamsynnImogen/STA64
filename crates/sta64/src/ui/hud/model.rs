@@ -11,6 +11,7 @@ use sta_content::{Availability, ContentDb, Owned, ResourceModel, Unmet, UnitDef}
 use sta_sim::command::{CommandKind, Order};
 use sta_sim::world::EntityKind;
 use sta_sim::movement::{FORM_COLUMN, FORM_LINE, FORM_WEDGE};
+use sta_sim::production::view::{ProductionView, ResearchBlock};
 use sta_sim::{ContentKey, EntityId, Fixed, PlayerId, UnitView, WorldView};
 
 use crate::ui::i18n::{tr, trf, tooltip_key};
@@ -30,13 +31,15 @@ pub struct HudFeed {
     pub player: PlayerId,
     pub selected: Vec<EntityId>,
     pub content: Option<Arc<ContentDb>>,
+    /// Queues and production eligibility from the same tick as `view`.
+    pub production: Vec<ProductionView>,
     /// The names the map gave its objects (host-only, see [`super::instance_names`]).
     pub names: super::instance_names::InstanceNames,
 }
 
 impl Default for HudFeed {
     fn default() -> Self {
-        HudFeed { view: Arc::default(), player: PlayerId(0), selected: Vec::new(), content: None, names: Default::default() }
+        HudFeed { view: Arc::default(), player: PlayerId(0), selected: Vec::new(), content: None, production: Vec::new(), names: Default::default() }
     }
 }
 
@@ -409,16 +412,26 @@ fn build_layout(feed: &HudFeed, builder: &UnitView) -> (Vec<BuildItem>, usize) {
     let Some(def) = db.unit(builder.def) else { return (Vec::new(), 0) };
     let stock: Vec<f32> = feed.view.player(feed.player).map(|p| p.resources.iter().map(|f| f.to_f32()).collect()).unwrap_or_default();
     let poor = |cost: &[f32]| cost.iter().enumerate().any(|(i, c)| *c > stock.get(i).copied().unwrap_or(0.0));
+    let research = feed.production.iter().find(|row| row.builder == builder.id).and_then(|row| row.research.as_ref());
     let item = |odf: &str, key: ContentKey, avail: Option<&Availability>, slot: usize| -> Option<BuildItem> {
         let u = db.unit(key)?;
         let cost: Vec<f32> = u.build.cost.iter().map(|c| c.to_f32()).collect();
-        let (look, why) = match avail {
+        let (mut look, mut why) = match avail {
             None | Some(Availability::Available) => (if poor(&cost) { Look::Poor } else { Look::Ready }, None),
             Some(Availability::Locked { hidden: true, .. }) => return None,
             Some(Availability::Locked { unmet: m, .. }) => (Look::Locked, Some(m.iter().map(unmet).collect::<Vec<_>>().join(", "))),
             Some(Availability::Withheld) => (Look::Locked, Some("cannot be built".into())),
             Some(Availability::NotListed) => (Look::Locked, Some("not in the tech tree".into())),
         };
+        if let Some(block) = research.and_then(|r| r.unavailable.iter().find(|(what, _)| *what == key).map(|(_, block)| block)) {
+            let reason = match block {
+                ResearchBlock::AlreadyResearched => "already researched",
+                ResearchBlock::Queued => "research already queued",
+                ResearchBlock::NoSlot => "no research slot available",
+            };
+            look = Look::Locked;
+            why = Some(why.map_or_else(|| reason.to_owned(), |existing| format!("{existing}, {reason}")));
+        }
         Some(BuildItem { odf: odf.to_owned(), key, look, cost, why, slot })
     };
     match db.tech_tree() {
@@ -559,7 +572,7 @@ pub(super) fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
 }
 
 /// A build icon follows the resolved model basename before the ODF stem.
-fn build_sprite_names(model: &str, odf: &str) -> Vec<String> {
+pub(super) fn build_sprite_names(model: &str, odf: &str) -> Vec<String> {
     let mut names = Vec::new();
     for source in [model, odf] {
         let basename = source.rsplit(['/', '\\']).next().unwrap_or(source).trim();
@@ -862,6 +875,16 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
                     && feed
                         .def(u)
                         .is_some_and(|d| d.build.list.iter().any(|i| i.key == *what))
+                    && feed.content.as_deref().is_some_and(|db| {
+                        if !db.a1_officers() || db.unit(*what).is_none_or(|d| d.a1_officer_upgrade_gain.is_none()) {
+                            return true;
+                        }
+                        db.unit(u.def).and_then(|d| d.a1_base_officers.as_ref())
+                            .is_some_and(|policy| policy.upgrade == Some(*what))
+                            && feed.production.iter().find(|row| row.builder == *b)
+                                .and_then(|row| row.officer_upgrades.as_ref())
+                                .is_some_and(|state| state.remaining > 0)
+                    })
             }) =>
         {
             Some((
@@ -891,7 +914,7 @@ pub struct ResEntry {
 
 /// The strip: the player's stock in the order dilithium, metal, latinum,
 /// biomatter (the order Refit's HUD.md asks for), those the race has, then the
-/// officers as "in use/capacity" when it has any.
+/// officers as "in use/capacity", or A1's "available/capacity", when it has any.
 pub fn resources(feed: &HudFeed, no: [bool; 4]) -> Vec<ResEntry> {
     let Some(p) = feed.view.player(feed.player) else { return Vec::new() };
     let names = resource_model(feed);
@@ -900,11 +923,20 @@ pub fn resources(feed: &HudFeed, no: [bool; 4]) -> Vec<ResEntry> {
         .filter(|&i| !no[i])
         .map(|i| ResEntry { name: names.name(i).to_owned(), id: i, text: (p.resources.get(i).map_or(0.0, |f| f.to_f32()) as i64).to_string() })
         .collect();
-    let [used, cap] = p.officers;
-    if cap > Fixed::ZERO {
-        out.push(ResEntry { name: "officers".into(), id: 4, text: format!("{}/{}", used.to_f32() as i64, cap.to_f32() as i64) });
+    if p.officers[1] > Fixed::ZERO || feed.content.as_deref().is_some_and(ContentDb::a1_officers) {
+        out.push(ResEntry { name: "officers".into(), id: 4, text: officer_text(feed, p.officers) });
     }
     out
+}
+
+pub(super) fn officer_text(feed: &HudFeed, [used, cap]: [Fixed; 2]) -> String {
+    let shown = if feed.content.as_deref().is_some_and(ContentDb::a1_officers) {
+        Fixed::from_bits(cap.to_bits().saturating_sub(used.to_bits()).max(0))
+    } else {
+        used
+    };
+    let whole = |value: Fixed| value.to_bits() / Fixed::ONE.to_bits();
+    format!("{}/{}", whole(shown), whole(cap))
 }
 
 /// Everything the HUD draws, for change detection.
@@ -1520,6 +1552,35 @@ mod tests {
         assert_eq!(owned_counts(&f).get("fx_station"), Some(&1));
     }
 
+    #[test]
+    fn research_refusals_lock_visible_build_items_without_moving_their_cells() {
+        use sta_sim::production::view::ResearchView;
+
+        let db = db_with(None);
+        let mut f = feed(db.clone(), vec![unit(&db, 2, "fx_yard", 1, 100.0, None)], &[2]);
+        let cruiser = db.units().find(|u| u.odf == "fx_cruiser").unwrap().key;
+        for (block, reason) in [
+            (ResearchBlock::AlreadyResearched, "already researched"),
+            (ResearchBlock::Queued, "research already queued"),
+            (ResearchBlock::NoSlot, "no research slot available"),
+        ] {
+            f.production = vec![ProductionView {
+                builder: EntityId(2),
+                jobs: Vec::new(),
+                site: None,
+                portal: None,
+                research: Some(ResearchView { unavailable: vec![(cruiser, block)], pods: Vec::new(), active_axes: None }),
+                officer_upgrades: None,
+            }];
+            let buttons = grid(&f, Page::Build);
+            assert_eq!(buttons[0].cell, 0);
+            assert_eq!(buttons[0].look, Look::Locked);
+            assert!(buttons[0].verbose.as_deref().unwrap().contains(reason));
+            assert_eq!(buttons[1].cell, 1);
+            assert_eq!(buttons[1].look, Look::Ready);
+        }
+    }
+
     /// A text tree that leaves an item out empties that item's cell; the other cells keep their
     /// positions (see `BuildItem::slot`).
     #[test]
@@ -1793,6 +1854,22 @@ mod tests {
         let mut f = f;
         f.player = PlayerId(9);
         assert!(resources(&f, [false; 4]).is_empty());
+    }
+
+    #[test]
+    fn a1_officer_strip_shows_available_capacity_without_changing_player_view() {
+        let db = ContentDb::builder().profile(sta_content::Profile::Sta1Classic).build().unwrap();
+        let f = feed(db, Vec::new(), &[]);
+        assert_eq!(f.view.players[0].officers, [Fixed::from_int(3), Fixed::from_int(10)]);
+        assert_eq!(resources(&f, [false; 4]).last().unwrap().text, "7/10");
+        let mut view = (*f.view).clone();
+        view.players[0].officers = [Fixed::from_int(12), Fixed::from_int(10)];
+        let f = HudFeed { view: Arc::new(view), ..f };
+        assert_eq!(resources(&f, [false; 4]).last().unwrap().text, "0/10");
+        let mut view = (*f.view).clone();
+        view.players[0].officers = [Fixed::ZERO, Fixed::ZERO];
+        let f = HudFeed { view: Arc::new(view), ..f };
+        assert_eq!(resources(&f, [false; 4]).last().unwrap().text, "0/0");
     }
 
     #[test]

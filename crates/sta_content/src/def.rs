@@ -245,6 +245,8 @@ pub struct Hardpoint {
 pub struct LaunchPoint {
     /// Where the new unit appears, `(x, z)`.
     pub offset: (Fixed, Fixed),
+    /// Height of a gate aperture, relative to the builder's origin.
+    pub height: Fixed,
     /// Unit vector the new unit faces and leaves along, `(x, z)`.
     pub dir: (Fixed, Fixed),
     /// Radius of a circle round the builder's centre that the unit must leave.
@@ -332,6 +334,22 @@ pub struct FxRefs {
 }
 
 /// A thing that can exist in the world: craft, station, yard, resource, moon.
+/// One ordered `podHardpoints` slot of an Armada II research station.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResearchSlot {
+    pub node: String,
+    pub reserved_for: Option<String>,
+    pub pose: Option<crate::RepairAttachment>,
+}
+
+/// Resolved Armada I starbase officer rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct A1BaseOfficers {
+    pub gain: i32,
+    pub maximum_upgrades: u32,
+    pub upgrade: Option<ContentKey>,
+}
+
 #[derive(Debug, Clone)]
 pub struct UnitDef {
     /// Set by [`ContentDb`](crate::ContentDb) when it is built.
@@ -342,6 +360,10 @@ pub struct UnitDef {
     /// Resolved legacy `is_starbase` ODF flag, default false. This is
     /// independent of the simulation's actor kind or producer behavior.
     pub is_starbase: bool,
+    /// Armada I officer capacity supplied by a starbase.
+    pub a1_base_officers: Option<A1BaseOfficers>,
+    /// Armada I officer capacity supplied by an upgrade product.
+    pub a1_officer_upgrade_gain: Option<i32>,
     /// Resolved planet rule family, independent of actor kind and colony state.
     /// `None` retains the existing non-planet-metadata path; Native content
     /// opts in explicitly. Filled by the profile-aware ODF loader, or by an author.
@@ -426,6 +448,9 @@ pub struct UnitDef {
     pub repair: RepairDef,
     /// Raw composed SOD transform of the authored repair node, when readable.
     pub repair_attachment: Option<crate::repair_geometry::RepairAttachment>,
+    pub research_slots: Vec<ResearchSlot>,
+    /// Station upgrade pods use the station origin instead of an external slot.
+    pub research_station_upgrade: bool,
     /// Sensor range, units.
     pub sensor: Fixed,
     pub hardpoints: Vec<Hardpoint>,
@@ -463,6 +488,9 @@ pub struct UnitDef {
     pub mining_rate: Fixed,
     /// Units unloaded per second (`dilithiumTransferRate`); zero: not set.
     pub transfer_rate: Fixed,
+    /// The transfer interface's per-resource rates. Loaded receiver ODFs
+    /// use zero for an absent rate; hand-built definitions can omit the array.
+    pub freight_transfer: Option<[Fixed; crate::resources::SLOTS]>,
     /// Resource id a node gives (`resource`, text: latinum 1, metal or
     /// tritanium 2, biomatter 3, anything else 0); `None` when not set.
     pub resource: Option<u8>,
@@ -628,6 +656,26 @@ pub struct NebulaEffects {
 }
 
 impl UnitDef {
+    /// Armada II creates a freighter transfer interface for these classes.
+    pub fn receives_freight(&self) -> bool {
+        matches!(self.class.0.as_str(), "starbase" | "mining" | "trading_station")
+    }
+
+    /// Armada II mobile producers such as Mother are authored as ships
+    /// with movement physics and no fixed-facility flag (read from ODFs).
+    pub fn allows_station_motion(&self) -> bool {
+        matches!(self.class.0.as_str(), "starbase" | "shipyard" | "buildyard" | "research" | "mining" | "sensor" | "trading_station")
+            && self.movement.max_speed > Fixed::ZERO
+            && !self.is_starbase
+            && self.raw.bool("ship") == Some(true)
+    }
+
+    /// Wormhole opening duration. Armada II reads AnimationTime in seconds.
+    pub fn wormhole_open_ticks(&self) -> u64 {
+        let seconds = self.raw.f32("AnimationTime").filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(2.0);
+        ((f64::from(seconds) * f64::from(sta_core::TICK_HZ)).round() as u64).max(1)
+    }
+
     /// Armada II's embryo producer, consumed when its product finishes.
     pub fn is_evolver(&self) -> bool {
         self.class.0 == "evolver"
@@ -654,6 +702,8 @@ impl UnitDef {
             odf: odf.to_owned(),
             class: ClassLabel::new(class),
             is_starbase: false,
+            a1_base_officers: None,
+            a1_officer_upgrade_gain: None,
             planet_role: None,
             planet_crew_gain: 0,
             planet_crew_modifier: None,
@@ -685,6 +735,8 @@ impl UnitDef {
             casualty: CasualtyDef::default(),
             repair: RepairDef::default(),
             repair_attachment: None,
+            research_slots: Vec::new(),
+            research_station_upgrade: false,
             sensor: Fixed::ZERO,
             hardpoints: Vec::new(),
             build: BuildDef::default(),
@@ -701,6 +753,7 @@ impl UnitDef {
             max_dilithium: Fixed::ZERO,
             mining_rate: Fixed::ZERO,
             transfer_rate: Fixed::ZERO,
+            freight_transfer: None,
             resource: None,
             features: None,
             confinement: crate::ConfinementOverrides::default(),
