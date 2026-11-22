@@ -72,6 +72,7 @@ pub struct ReplaceOptions {
     pub maintain_orders: bool,
     pub ignore_same_class: bool,
     pub ignore_tech_tree: bool,
+    pub ignore_fleet_cap: bool,
     pub find_open_spot: bool,
     pub warp_in: bool,
     pub transfer_stats: bool,
@@ -143,6 +144,7 @@ pub fn replace_def(odf: &sta_odf::Odf) -> Option<ReplaceDef> {
     options.maintain_orders = flag(odf, "replacementMaintainOrders");
     options.ignore_same_class = flag(odf, "ignoreSameClass");
     options.ignore_tech_tree = flag(odf, "ignoreTechTree");
+    options.ignore_fleet_cap = flag(odf, "replacementIgnoreFleetCap");
     options.find_open_spot = flag(odf, "replacementFindOpenSpot");
     options.warp_in = flag(odf, "warpIn");
     options.transfer_stats = odf.bool("transferStats").unwrap_or(true);
@@ -220,14 +222,14 @@ mod tests {
 
     #[test]
     fn replacement_options_and_signed_reuse_class_are_read() {
-        let r = replace_def(&odf("classLabel = \"replaceweapon\"\nreplacement0class0 = \"\"\nreplacement0class0RandomWeight = -2\nreplacement0Class0Position = 1, 2 3\nreplacement0class1 = \"b\"\nreplacement0class1RandomWeight = 3\nreplacement0class3 = \"skipped\"\nreplacement2class0 = \"skipped\"\nreplacementKeepName = 1\nreplacementKeepOwner = 1\nreplacementResetCrew = 1\nreplacementResetSpecialEnergy = 1\nreplacementMaintainOrders = 1\nignoreSameClass = 1\nignoreTechTree = 1\nreplacementFindOpenSpot = 1\nwarpIn = 1\ntransferStats = 0\nselectMode = 2\nconcurrentChilds = 3\nreplacementInstantCycle = 0.5\nDilithiumCost = 10\nLatinumCost = 20\nMetalCost = 30\nBiomatterCost = 40\nCrewCost = 5\nreplacementEvent = \"swap\"\nwarpInSpeed = 500\n")).unwrap();
+        let r = replace_def(&odf("classLabel = \"replaceweapon\"\nreplacement0class0 = \"\"\nreplacement0class0RandomWeight = -2\nreplacement0Class0Position = 1, 2 3\nreplacement0class1 = \"b\"\nreplacement0class1RandomWeight = 3\nreplacement0class3 = \"skipped\"\nreplacement2class0 = \"skipped\"\nreplacementKeepName = 1\nreplacementKeepOwner = 1\nreplacementResetCrew = 1\nreplacementResetSpecialEnergy = 1\nreplacementMaintainOrders = 1\nignoreSameClass = 1\nignoreTechTree = 1\nreplacementIgnoreFleetCap = 1\nreplacementFindOpenSpot = 1\nwarpIn = 1\ntransferStats = 0\nselectMode = 2\nconcurrentChilds = 3\nreplacementInstantCycle = 0.5\nDilithiumCost = 10\nLatinumCost = 20\nMetalCost = 30\nBiomatterCost = 40\nCrewCost = 5\nreplacementEvent = \"swap\"\nwarpInSpeed = 500\n")).unwrap();
         assert_eq!(r.entries.len(), 1);
         assert_eq!(r.entries[0].classes.len(), 2);
         assert_eq!((r.entries[0].classes[0].odf.as_str(), r.entries[0].classes[0].weight), ("", -2));
         assert_eq!(r.entries[0].classes[0].offset, [Fixed::ONE, Fixed::from_int(2), Fixed::from_int(3)]);
         assert_eq!(r.options, ReplaceOptions {
             keep_name: true, keep_owner: true, reset_crew: true, reset_energy: true,
-            maintain_orders: true, ignore_same_class: true, ignore_tech_tree: true,
+            maintain_orders: true, ignore_same_class: true, ignore_tech_tree: true, ignore_fleet_cap: true,
             find_open_spot: true, warp_in: true, transfer_stats: false,
             select_mode: 2, concurrent_children: 3, cycle: 15,
             cost: [10, 20, 30, 40].map(Fixed::from_int), crew_cost: Fixed::from_int(5),

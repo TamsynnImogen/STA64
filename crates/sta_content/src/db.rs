@@ -595,6 +595,10 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
             None => "-".to_owned(),
             Some(r) => format!("{{map={};construction={}}}", confinement_text(Some(r)), confinement_text(db.construction_confinement(u.key))),
         });
+    // Peers using the old constructor behavior would diverge on Evolution.
+    if u.is_evolver() {
+        c.flag("evolves_in_place", true);
+    }
     // SIM-70: absent authored flags keep the prior digest; explicit false is
     // distinct from absence because it excludes a station from recrewing.
     if let Some(facility) = u.facility {
@@ -808,6 +812,9 @@ fn replace_text(r: &crate::lifecycle::ReplaceDef) -> String {
             .raw("required_officers", &required_officers.map_or_else(|| "-".into(), |n| n.to_string()))
             .list("entries", entries);
     if options != &crate::lifecycle::ReplaceOptions::default() {
+        if options.ignore_fleet_cap {
+            c.flag("ignore_fleet_cap", true);
+        }
         c.flag("keep_name", options.keep_name)
             .flag("keep_owner", options.keep_owner)
             .flag("reset_crew", options.reset_crew)

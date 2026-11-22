@@ -65,8 +65,9 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// a build without it would refuse such a row as a corrupt record, but could not
 /// tell the file from a valid one by version.
 /// Format 34 appends the mission switches (LUA-41).
+/// Format 41 appends stock A2 empty-shield recharge holds (#1101).
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 40;
+pub const FORMAT_VERSION: u16 = 41;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
@@ -327,6 +328,13 @@ struct SubsystemsRec {
     rows: Vec<(EntityId, crate::combat::damage::SubsystemRow)>,
 }
 
+/// Mandatory v41 suffix: absolute held-until ticks for empty shield pools.
+#[derive(Serialize, Deserialize)]
+struct ZeroShieldHoldsRec {
+    version: u8,
+    rows: Vec<(EntityId, [crate::Tick; 4])>,
+}
+
 /// Format 21: scripted orders (SIM-56).
 #[derive(Serialize, Deserialize)]
 struct ScriptedRec {
@@ -510,6 +518,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&self.recycles.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.nebula_shields.to_rec()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.replacements.record()).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&ZeroShieldHoldsRec { version: 1, rows: self.zero_shield_holds.to_rows() }).expect("snapshot serialises"));
         out
     }
 
@@ -592,6 +601,8 @@ impl Sim {
         let (recycles_rec, rest): (crate::economy::recycle::RecyclesRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         let (nebula_shields_rec, rest): (crate::nebula::NebulaShieldsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         let (replacement_rec, rest): (crate::replacement::Record, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        let (zero_shield_holds_rec, rest): (ZeroShieldHoldsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        if zero_shield_holds_rec.version != 1 { return Err(SnapshotError::Corrupt("unknown shield zero hold record version".into())); }
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -747,6 +758,8 @@ impl Sim {
         economy.restore_adjust(adjust_rows, &b.players).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         let replacements = crate::replacement::Replacements::restore(replacement_rec, &units)
             .ok_or_else(|| corrupt("replacement weapon state"))?;
+        let zero_shield_holds = crate::combat::damage::ZeroShieldHolds::from_rows(zero_shield_holds_rec.rows, b.tick, &units, content.as_deref())
+            .ok_or_else(|| corrupt("shield zero holds"))?;
         let mut sim = Sim {
             tick: b.tick,
             rng: Rng(b.rng),
@@ -776,6 +789,7 @@ impl Sim {
             replacements,
             nav: Default::default(),
             subsystems,
+            zero_shield_holds,
             scripted,
             switches,
             relations,

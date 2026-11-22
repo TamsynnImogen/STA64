@@ -2012,7 +2012,7 @@ mod tests {
                     wanted += 1;
                     // A resource marker is placed as its moon (`MapDef::convert_bzn`).
                     let moons = sta_content::map::moon_variants(&db, db.unit(k).unwrap(), &mut |n| {
-                        sta_odf::resolve_layered(n, &mut |n, v| index.load(&vfs, n, v)).ok().map(Arc::new)
+                        sta_content::odf::resolve_exact_for_profile(n, db.profile(), &mut |n, v| index.load(&vfs, n, v)).ok().map(Arc::new)
                     });
                     let k = moons.get(o.entity_id as u64 as usize % moons.len().max(1)).copied().unwrap_or(k);
                     found += usize::from(placed.take(k, o).is_some());

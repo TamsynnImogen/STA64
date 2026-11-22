@@ -40,8 +40,9 @@ pub const MAGIC: [u8; 4] = *b"S64N";
 /// (SIM-46); 12 appends `Order::Recrew`, tag 19 (SIM-70); 13 appends `Order::Guard`, tag 20 (LUA-39);
 /// 14 appends `Edit::MissionSwitch`, tag 48 (LUA-41); 15 appends
 /// `TeamOp::ResourceAdd`, tag 7 (repeated resource grants); 16 appends
-/// `Order::Alert`, tag 22; 17 adds replacement state to the transferred snapshot.
-pub const PROTOCOL_VERSION: u16 = 17;
+/// `Order::Alert`, tag 22; 17 adds replacement state to the transferred snapshot;
+/// 18 adds empty-shield recharge holds to that snapshot (#1101).
+pub const PROTOCOL_VERSION: u16 = 18;
 /// Magic, version and body length.
 pub const HEADER_LEN: usize = 10;
 /// Largest frame, header included.
@@ -2137,7 +2138,7 @@ mod tests {
     #[test]
     fn golden_encoding_is_pinned() {
         let all: Vec<u8> = samples().iter().flat_map(|m| encode(m).unwrap()).collect();
-        assert_eq!(PROTOCOL_VERSION, 17);
+        assert_eq!(PROTOCOL_VERSION, 18);
         assert_eq!(
             fnv1a64(&all),
             GOLDEN,
@@ -2145,7 +2146,7 @@ mod tests {
         );
     }
 
-    const GOLDEN: u64 = 2753535386503289034;
+    const GOLDEN: u64 = 2858376289149585645;
 
     /// Tags are positional and never move: NET-04 appended 22 to 28 after
     /// `Sections` (21), the last tag of protocol 2.
@@ -2250,8 +2251,8 @@ mod tests {
     fn header_is_little_endian_and_frozen() {
         let bytes = encode(&Message::Ping { nonce: 0 }).unwrap();
         // Ping is tag 12, nonce 0: two body bytes.
-        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 17, 0, 2, 0, 0, 0, 12, 0]);
-        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 17, 0, 0, 0, 0, 0]);
+        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 18, 0, 2, 0, 0, 0, 12, 0]);
+        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 18, 0, 0, 0, 0, 0]);
     }
 
     #[test]

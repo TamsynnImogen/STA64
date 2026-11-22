@@ -60,12 +60,16 @@ pub fn ghost_site_with_context(
         .iter()
         .filter(|row| row.builder != builder)
         .filter_map(|row| {
+            let evolves = view.unit(row.builder).and_then(|u| db.unit(u.def)).is_some_and(sta_content::UnitDef::is_evolver);
             row.site.as_ref().filter(|site| {
                 site.entity.is_none()
-                    && row.jobs.first().is_some_and(|job| !job.started)
                     && db.unit(site.def).is_some_and(|def| {
-                        sta_sim::world::EntityKind::of_def(def)
-                            == sta_sim::world::EntityKind::Station
+                        if evolves {
+                            def.is_starbase
+                        } else {
+                            row.jobs.first().is_some_and(|job| !job.started)
+                                && sta_sim::world::EntityKind::of_def(def) == sta_sim::world::EntityKind::Station
+                        }
                     })
             })
         })

@@ -132,7 +132,7 @@ pub struct Tile {
 }
 
 /// A unit's shields as one share over all facings, `None` without shields.
-fn shield_frac(u: &UnitView) -> Option<f32> {
+pub(super) fn shield_frac(u: &UnitView) -> Option<f32> {
     let (now, max) = u.shields.iter().fold((0.0, 0.0), |(n, m), s| (n + s[0].to_f32(), m + s[1].to_f32()));
     (max > 0.0).then(|| (now / max).clamp(0.0, 1.0))
 }
@@ -458,11 +458,12 @@ fn build_layout(feed: &HudFeed, builder: &UnitView) -> (Vec<BuildItem>, usize) {
 pub(super) fn build_item_buttons(feed: &HudFeed, b: &UnitView) -> Vec<(usize, Button)> {
     let items = build_items(feed, b);
     let names = resource_model(feed);
-    let site = feed.def(b).is_some_and(deploys_at_site);
+    let builder = feed.def(b);
     items
         .iter()
         .map(|it| {
             let definition = feed.content.as_deref().and_then(|db| db.unit(it.key));
+            let site = builder.zip(definition).is_some_and(|(b, product)| EntityKind::build_requires_site(b, product));
             let verbose = match &it.why {
                 Some(w) => format!("{}. Cost: {}", w, cost_text(&it.cost, &names)),
                 None => format!("Cost: {}", cost_text(&it.cost, &names)),
@@ -581,15 +582,6 @@ pub fn builder(feed: &HudFeed) -> Option<&UnitView> {
     feed.selected_units().into_iter().find(|u| u.owner == feed.player && finished(u) && feed.def(u).is_some_and(|d| !d.build.list.is_empty()))
 }
 
-/// Whether a builder of this def places what it builds on the map (a construction rig's ghost and
-/// site) instead of queueing it in place (a yard or starbase, with its rally point). The sim's own
-/// split: a producer station ([`EntityKind::producer_def`], by class label) queues, any other
-/// builder that is a craft deploys. Not a speed test: a station's definition may carry a positive
-/// speed (for example through a `physicsFile`), and that does not make it a craft.
-pub fn deploys_at_site(def: &UnitDef) -> bool {
-    !EntityKind::producer_def(def) && EntityKind::of_def(def) == EntityKind::Craft
-}
-
 /// The build buttons of the selected builder with the build cell each sits in (`BuildItem::slot`),
 /// the buttons' own `cell` unset: the stock HUDs place them themselves.
 pub(super) fn build_buttons_by_slot(feed: &HudFeed) -> Vec<(usize, Button)> {
@@ -665,7 +657,8 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
         // A class with the research key gets the Research menu button, while its
         // contents still use the build page.
         let key = |k: &str| feed.def(builder).is_some_and(|def| def.raw.bool(k) == Some(true));
-        let research = key("research");
+        let embryo = feed.def(builder).is_some_and(UnitDef::is_evolver);
+        let research = !embryo && key("research");
         // The evolve key gives an Evolve button by the same mechanism (own sprite name and
         // tooltip keys; it opens the same item page). Read from data: the keys; that they choose
         // the button is read from the executable, static; no frame of the original yet.
@@ -674,8 +667,8 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
         // menu button is STA64's choice, not determined for the original.
         // INTERIM: a class with the research key and the evolve key shows Research only; the
         // static reading says both would show, so this is STA64's choice.
-        let evolve = key("evolve") && !research;
-        let builds = key("builder_ship") || key("builder_facility");
+        let evolve = embryo || (key("evolve") && !research);
+        let builds = !embryo && (key("builder_ship") || key("builder_facility"));
         evolve_extra = evolve && builds;
         let caption = if research { "Research" } else if evolve && !builds { "Evolve" } else { "Build" };
         let mut opener = button(0, &tr(caption), Act::OpenBuild, &tooltip_key(if research { "Research menu" } else if caption == "Evolve" { "Evolve menu" } else { "Build" }));
@@ -1433,15 +1426,15 @@ mod tests {
         let (index, _) = sta_content::OdfIndex::build(&vfs);
         let Ok((db, _)) = ContentDb::load(&vfs, &index) else { return };
         let (mut queues, mut places) = (0, 0);
-        for u in db.units().filter(|u| !u.build.list.is_empty()) {
+        for u in db.units().filter(|u| !u.build.list.is_empty() && !u.is_evolver()) {
             let kinds: Vec<EntityKind> = u.build.list.iter().filter_map(|r| db.unit(r.key)).map(EntityKind::of_def).collect();
             let crafts = kinds.iter().any(|k| *k == EntityKind::Craft);
             let stations = kinds.iter().any(|k| *k == EntityKind::Station);
             if crafts && !stations {
-                assert!(!deploys_at_site(u), "{}: builds only craft, must queue in place", u.odf);
+                assert!(u.build.list.iter().filter_map(|item| db.unit(item.key)).all(|product| !EntityKind::build_requires_site(u, product)), "{}: builds only craft, must queue in place", u.odf);
                 queues += 1;
             } else if stations && !crafts && EntityKind::of_def(u) == EntityKind::Craft {
-                assert!(deploys_at_site(u), "{}: a craft that builds only stations places them", u.odf);
+                assert!(u.build.list.iter().filter_map(|item| db.unit(item.key)).all(|product| EntityKind::build_requires_site(u, product)), "{}: a craft that builds only stations places them", u.odf);
                 places += 1;
             }
         }

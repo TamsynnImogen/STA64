@@ -483,7 +483,7 @@ fn layer_tint(status: Option<&crate::ui::hud::status::StatusFeed>, w: WireLayer)
 }
 
 /// [`wireframe_layers`] for a unit whose layers follow its systems' state (`None`: plain art).
-fn wireframe_layers_of(commands: &mut Commands, root: Entity, r: R, model: &str, unit: Option<EntityId>, backdrop: Option<Entity>) {
+pub(super) fn wireframe_layers_of(commands: &mut Commands, root: Entity, r: R, model: &str, unit: Option<EntityId>, backdrop: Option<Entity>) {
     let stem = model_stem(model);
     if stem.is_empty() {
         return;
@@ -531,7 +531,9 @@ fn spawn_separate_resources(commands: &mut Commands, root: Entity, layout: &Stoc
             continue;
         };
         let value = resource_text(feed, id).unwrap_or_default();
-        readout(commands, root, r, value, theme.text, theme.small_size, Some(StockText::Resource(id)));
+        // Armada.exe's DilithiumDisplay, CrewDisplay and OfficerDisplay all
+        // pass the same 0.5 RGB grey to the font draw (read from the binary).
+        readout(commands, root, r, value, Color::srgb(0.5, 0.5, 0.5), theme.small_size, Some(StockText::Resource(id)));
     }
 }
 

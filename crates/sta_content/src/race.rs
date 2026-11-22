@@ -4,6 +4,8 @@
 //! ODF (read from the installs, Armada II and Fleet Operations alike) holds:
 //!
 //! - `name`: the race key unit definitions carry (`unitedfederation`);
+//! - `displaykey` (or Armada I's `displayname`): the localized key or literal
+//!   caption shown in the race picker, separate from that race key;
 //! - `instantactionslot`: its nonnegative place in the skirmish setup, including
 //!   zero; absent or invalid slots do not make a modern race playable;
 //! - `interfaceconfiguration`: its GUI cfg (`gui_federation.cfg`), and its music:
@@ -240,12 +242,36 @@ fn nonnegative_integer(odf: &sta_odf::Odf, key: &str) -> Option<i64> {
     }).filter(|&slot| slot >= 0)
 }
 
+/// A2FOExtensions A1Compat supplies missing crew, dilithium and metal starts
+/// from the cheat grants in active headers, with 10,000 built-in per resource.
+/// Read from the module source. Lots is 1.5 times normal, rounded half up.
+fn compat_start(vfs: &sta_vfs::Vfs) -> [i64; 3] {
+    let keys = ["SHOWMETHEMONEY_CREW", "SHOWMETHEMONEY_DILITHIUM", "SHOWMETHEMONEY_METAL"];
+    let mut amounts = [10_000; 3];
+    for (layer, source) in vfs.resolve_all("RTS_CFG.h").into_iter().rev() {
+        let Some(index) = vfs.layer_index(layer) else { continue };
+        let Ok(bytes) = vfs.read_from(index, source) else { continue };
+        let header = sta_assets::cfg_h::CfgH::parse(&String::from_utf8_lossy(&bytes));
+        for (key, amount) in keys.into_iter().zip(&mut amounts) {
+            let value = header.i64(key).or_else(|| header.f32(key)
+                .filter(|n| n.is_finite() && *n >= 0.0)
+                .map(|n| n.round() as i64));
+            if let Some(value) = value.filter(|&n| n >= 0) {
+                *amount = value.min(1_000_000_000);
+            }
+        }
+    }
+    amounts
+}
+
 impl Races {
     /// The races of a mounted install.
     pub fn load(vfs: &sta_vfs::Vfs, index: &crate::OdfIndex) -> (Races, Vec<Warning>) {
         let profile = Profile::detect(vfs);
-        let a1_menu = profile == Profile::Sta1Classic || crate::profile::a1_compat(vfs);
-        let (mut races, warnings) = Races::load_with_policy(profile, a1_menu, &mut |n, v| index.load(vfs, n, v));
+        let compat = profile != Profile::Sta1Classic && crate::profile::a1_compat(vfs);
+        let a1_menu = profile == Profile::Sta1Classic || compat;
+        let defaults = compat.then(|| compat_start(vfs));
+        let (mut races, warnings) = Races::load_internal(profile, a1_menu, defaults, &mut |n, v| index.load(vfs, n, v));
         // An indexed but unreadable catalogue is not an intentionally bare DB.
         races.authoritative |= index.get("races").is_some();
         (races, warnings)
@@ -264,6 +290,10 @@ impl Races {
     /// [`load_with_profile`](Races::load_with_profile), with the Armada I race-menu policy
     /// chosen apart from the profile: an A1 compatibility mod keeps its engine's profile.
     pub fn load_with_policy(profile: Profile, a1_menu: bool, loader: &mut Loader<'_>) -> (Races, Vec<Warning>) {
+        Self::load_internal(profile, a1_menu, None, loader)
+    }
+
+    fn load_internal(profile: Profile, a1_menu: bool, compat: Option<[i64; 3]>, loader: &mut Loader<'_>) -> (Races, Vec<Warning>) {
         let mut warnings = Vec::new();
         let root = loader("races.odf", 0);
         let authoritative = root.is_some() || profile != Profile::Native;
@@ -327,14 +357,24 @@ impl Races {
                             .filter(|v| !v.is_empty())
                             .map(str::to_owned)
                     };
-                    let stock = |mode: &str, k: &str| o.i64(&format!("{mode}{k}")).unwrap_or(0).max(0);
+                    let grant = |mode: &str, key: &str, index: usize| {
+                        if o.raw(key).is_some() {
+                            return None;
+                        }
+                        let amount = compat?[index];
+                        Some(if mode == "lots" { (3 * amount + 1) / 2 } else { amount })
+                    };
+                    let stock = |mode: &str, k: &str, fallback: Option<usize>| {
+                        let key = format!("{mode}{k}");
+                        o.i64(&key).or_else(|| grant(mode, &key, fallback?)).unwrap_or(0).max(0)
+                    };
                     let mut crew = |mode: &str| {
                         let key = format!("{mode}crew");
                         let value = nonnegative_integer(&o, &key);
                         if o.raw(&key).is_some() && value.is_none() {
                             warnings.push(Warning::new(format!("{s}.odf"), format!("{key} must be a nonnegative integer")));
                         }
-                        value
+                        value.or_else(|| grant(mode, &key, 0))
                     };
                     let normal_crew = crew("normal");
                     let lots_crew = crew("lots");
@@ -422,7 +462,7 @@ impl Races {
                     races.push(RaceDef {
                         stem: s,
                         name,
-                        display_key: text("displaykey"),
+                        display_key: text("displaykey").or_else(|| if a1_menu { text("displayname") } else { None }),
                         slot,
                         interface: text("interfaceconfiguration"),
                         interface_sprites: text("interfacesprites"),
@@ -437,16 +477,16 @@ impl Races {
                         standard_units: numbered(&o, "standardunits"),
                         minimal_units: numbered(&o, "minimalunits"),
                         stock: [
-                            stock("normal", "dilithium"),
-                            stock("normal", "latinum"),
-                            stock("normal", "metal"),
-                            stock("normal", "biomatter"),
+                            stock("normal", "dilithium", Some(1)),
+                            stock("normal", "latinum", None),
+                            stock("normal", "metal", Some(2)),
+                            stock("normal", "biomatter", None),
                         ],
                         lots_stock: [
-                            stock("lots", "dilithium"),
-                            stock("lots", "latinum"),
-                            stock("lots", "metal"),
-                            stock("lots", "biomatter"),
+                            stock("lots", "dilithium", Some(1)),
+                            stock("lots", "latinum", None),
+                            stock("lots", "metal", Some(2)),
+                            stock("lots", "biomatter", None),
                         ],
                         normal_crew,
                         lots_crew,
@@ -764,6 +804,20 @@ mod tests {
         assert!(w.is_empty(), "{w:?}");
         r
     }
+
+    #[test]
+    fn compat_start_defaults_are_per_field_and_keep_authored_zero() {
+        let (races, warnings) = Races::load_internal(Profile::Fo4, true, Some([21, 31, 41]), &mut loader(&[
+            ("races", "race0=child"),
+            ("base", "name=fx\ninterfaceConfiguration=layout.cfg\nnormalCrew=0\nnormalLatinum=9"),
+            ("child", "#include \"base.odf\"\nlotsDilithium=7\nlotsBiomatter=3"),
+        ]));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let race = races.get("child").unwrap();
+        assert_eq!(race.stock, [31, 9, 41, 0]);
+        assert_eq!(race.lots_stock, [7, 0, 62, 3]);
+        assert_eq!([race.normal_crew, race.lots_crew], [Some(0), Some(32)]);
+    }
     #[test]
     fn interface_sprite_table_is_authored_and_inherited_independently() {
         let (races, warnings) = Races::load_with(&mut loader(&[
@@ -797,6 +851,26 @@ mod tests {
         assert_eq!(races.get("blank").unwrap().display_key, None);
         assert_eq!(races.get("absent").unwrap().display_key, None);
         assert_eq!(races.playable().iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["internal_fed", "internal_borg"]);
+    }
+
+    #[test]
+    fn a1_display_name_is_a_caption_fallback_without_changing_race_ids() {
+        let (races, warnings) = Races::load_with_policy(Profile::Fo4, true, &mut loader(&[
+            ("races", "race0=fed\nrace1=borg\nrace2=blank"),
+            ("fed", "name=federation\ndisplayName=\"Federation\"\ninterfaceConfiguration=gui_fed.cfg"),
+            ("borg", "name=borg\ndisplayName=\"Borg Collective\"\ndisplayKey=GUI_RD_BORG\ninterfaceConfiguration=gui_bor.cfg"),
+            ("blank", "name=blank\ndisplayName=\" \"\ninterfaceConfiguration=gui_blank.cfg"),
+        ]));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(races.playable().iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["federation", "borg", "blank"]);
+        assert_eq!(races.get_playable("federation").unwrap().display_key.as_deref(), Some("Federation"));
+        assert_eq!(races.get_playable("borg").unwrap().display_key.as_deref(), Some("GUI_RD_BORG"));
+        assert_eq!(races.get_playable("blank").unwrap().display_key, None);
+        let (modern, _) = Races::load_with_profile(Profile::Fo4, &mut loader(&[
+            ("races", "race0=fed"),
+            ("fed", "name=federation\ndisplayName=\"Federation\"\ninstantActionSlot=0"),
+        ]));
+        assert_eq!(modern.get_playable("federation").unwrap().display_key, None);
     }
 
     #[test]

@@ -197,6 +197,8 @@ pub struct Sim {
     /// Subsystem switches and damage set by missions (SIM-55); in the digest
     /// once any exists.
     subsystems: combat::damage::Subsystems,
+    /// Stock A2 shield pools held at zero after damage; saved and hashed while active.
+    zero_shield_holds: combat::damage::ZeroShieldHolds,
     /// Mission-set unit names and races and seat races (SIM-54); in the digest once any exists.
     attrs: attrs::Attrs,
     /// Scripted orders (SIM-56); in the digest once any exists.
@@ -260,6 +262,7 @@ impl Sim {
             watchdog: Default::default(),
             nav: Default::default(),
             subsystems: Default::default(),
+            zero_shield_holds: Default::default(),
             attrs: Default::default(),
             scripted: Default::default(),
             switches: Default::default(),
@@ -514,7 +517,7 @@ impl Sim {
             let returned = self.transports.expire(self.tick);
             self.restore_carrier_shields(&returned);
             let shields_off = if nebulae.is_empty() { Vec::new() } else { self.nebula_shields_enter(&db, &nebulae) };
-            combat::damage::recharge(&mut self.units, &db, &self.switches, &self.subsystems, &self.transports);
+            combat::damage::recharge(&mut self.units, &db, &self.switches, &self.subsystems, &self.transports, &mut self.zero_shield_holds, self.tick);
             let nebula_holds = if nebulae.is_empty() { nebula::Holds::default() } else { self.nebula_systems(&db, &nebulae) };
             self.nebula_shields_tail(&shields_off);
             self.activate_team_change_weapons(&db);
@@ -543,7 +546,7 @@ impl Sim {
             // casualty hits whose final hull-damage event may become zero.
             self.recrew.note_hits(&self.units, &db, &self.events[from..], self.tick);
             let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
-            let mut killed = combat::damage::apply(&mut self.units, &db, &mut self.events, from, &mut casualties);
+            let mut killed = combat::damage::apply(&mut self.units, &db, &mut self.events, from, &mut casualties, &mut self.zero_shield_holds, self.tick);
             if !nebulae.is_empty() {
                 killed.extend(self.nebula_damage(&db, &nebulae));
             }
@@ -570,12 +573,20 @@ impl Sim {
             self.economy.step_passive(&self.units, db, &self.players, &self.ai_seats, self.tick);
             self.economy.step_crew(&self.units, db, &self.attrs, self.tick, &colony_crew);
             let from = self.events.len();
-            self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement, self.bounds);
+            let evolved = self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement, self.bounds);
             self.inherit_builder_races(from);
             self.inherit_builder_alert(from);
             let built: Vec<EntityId> = self.events[from..].iter().filter_map(|e| match e { SimEvent::Spawned { id } => Some(*id), _ => None }).collect();
             for id in built {
                 self.default_autonomy(id);
+            }
+            for (embryo, product) in evolved {
+                self.autonomy.copy_to(embryo, product);
+                if self.units.get(product).is_some_and(|unit| unit.kind == world::EntityKind::Craft) {
+                    self.weapons.retarget_replacement_shots(embryo, product);
+                }
+                self.retire(embryo);
+                self.events.push(SimEvent::Replaced { old: embryo, new: product, select: true });
             }
         }
         self.hold_welding_builders();
@@ -738,6 +749,9 @@ impl Sim {
         }
         if !self.subsystems.is_empty() {
             self.subsystems.hash_into(&mut h);
+        }
+        if !self.zero_shield_holds.is_empty() {
+            self.zero_shield_holds.hash_into(&mut h);
         }
         if !self.scripted.is_empty() {
             self.scripted.hash_into(&mut h);

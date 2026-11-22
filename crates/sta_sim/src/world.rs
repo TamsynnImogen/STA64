@@ -60,6 +60,16 @@ impl EntityKind {
             || def.planet_role == Some(sta_content::PlanetRole::Producer)
     }
 
+    /// Construction rigs place a site. An Evolver does so for the products
+    /// whose `is_starbase` flag reserves a footprint in Armada II (static).
+    pub fn build_requires_site(builder: &UnitDef, product: &UnitDef) -> bool {
+        if builder.is_evolver() {
+            product.is_starbase
+        } else {
+            !Self::producer_def(builder) && Self::of_def(builder) == Self::Craft
+        }
+    }
+
     /// The kind of a definition: by [`EntityKind::of`], except that a fixture of an unlisted
     /// class that carries a `resource` is a resource node (Fleet Ops' moons are class
     /// `scrap`, which also covers plain wrecks). A craft or station with a `resource` stays

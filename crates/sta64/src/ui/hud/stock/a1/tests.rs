@@ -201,6 +201,17 @@ fn a_header_without_keys_gives_an_empty_grid() {
 }
 
 #[test]
+fn a1_compat_stock_slots_show_selected_unit_commands() {
+    let slots = ButtonSlots::a1_compat_from_header("").0;
+    let b = control::buttons(&selection_feed(), Page::Top, &slots, None);
+    let at = |slot: usize| b.iter().find(|b| b.cell == slot - 1).map(|b| b.act.clone());
+    assert_eq!(at(1), Some(Act::Target(TargetMode::Move)));
+    assert_eq!(at(2), Some(Act::Target(TargetMode::Attack)));
+    assert_eq!(at(3), Some(Act::Stop));
+    assert_eq!(at(5), Some(Act::OpenOrders));
+}
+
+#[test]
 fn clicking_slots_issues_orders_through_the_shared_path_and_pages() {
     let mut app = app(4.0 / 3.0);
     let stop = cell(&mut app, |a| *a == Act::Stop);
@@ -290,11 +301,12 @@ fn changing_energy_and_crew_patches_in_place_and_keeps_the_buttons() {
     assert_eq!(crew_text(&mut app), ["89"], "the crew readout is patched in place");
 }
 
-/// UI-48: the crew label from the cfg (a string-table key; "CREW" when no table has it),
-/// and the cfg's crew text colour on the label and the readout.
+/// The authored crew label colour and the compatibility renderer's green amount.
 #[test]
-fn the_crew_label_and_colour_come_from_the_cfg() {
+fn the_crew_label_uses_its_cfg_colour_and_the_amount_is_green() {
     let mut app = app(4.0 / 3.0);
+    let (cfg, _) = GuiCfg::parse("crew.cfg", &CFG.replace("infoSingleCrewTextColor = 0 1 0", "infoSingleCrewTextColor = 1 1 1"));
+    app.world_mut().resource_mut::<HudConfig>().gui = Some(cfg.layout_auto());
     {
         let mut feed = app.world_mut().resource_mut::<HudFeed>();
         let unit = &mut Arc::make_mut(&mut feed.view).units[0];
@@ -304,8 +316,78 @@ fn the_crew_label_and_colour_come_from_the_cfg() {
     app.update();
     let texts: Vec<(String, Color)> = app.world_mut().query::<&crate::ui::sprite_font::SpriteText>().iter(app.world()).map(|t| (t.text.clone(), t.color)).collect();
     let green = Color::srgba(0.0, 1.0, 0.0, 1.0);
-    assert!(texts.iter().any(|(t, c)| t == "CREW" && *c == green), "{texts:?}");
+    let white = Color::srgb(1.0, 1.0, 1.0);
+    assert!(texts.iter().any(|(t, c)| t == "CREW" && *c == white), "{texts:?}");
     assert!(texts.iter().any(|(t, c)| t == "90" && *c == green), "{texts:?}");
+}
+
+#[test]
+fn absent_identity_colours_use_black_and_the_class_has_its_panel_piece() {
+    let mut app = app(4.0 / 3.0);
+    let cfg = CFG.replace("infoSingleCrewTextColor = 0 1 0", "");
+    let sheet = format!("{cfg}\ninfoSingleBackground=\"single_background\"\ninfoSingleBackgroundSize=1\ninfoSingleBackground_0=90 12 112 11\n");
+    let (cfg, warnings) = GuiCfg::parse("a1_text.cfg", &sheet);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    app.world_mut().resource_mut::<HudConfig>().gui = Some(cfg.layout_auto());
+    Arc::make_mut(&mut app.world_mut().resource_mut::<HudFeed>().view).units[0].crew =
+        Some([Fixed::from_int(90), Fixed::from_int(100)]);
+    app.update();
+    app.update();
+
+    let world = app.world_mut();
+    let mut texts = world.query::<&crate::ui::sprite_font::SpriteText>();
+    assert!(texts.iter(world).any(|t| t.text == "CREW" && t.color == Color::BLACK));
+    assert!(world.query::<&GuiImage>().iter(world).any(|i| i.names == ["single_background"]));
+}
+
+#[test]
+fn status_uses_authored_tracks_and_live_shield_and_team_tints() {
+    use super::info::LiveTint;
+    use crate::viewer::TeamColours;
+
+    let mut app = app(4.0 / 3.0);
+    let extras = "infoSingleRaceIconArea=34 13 60 13\ninfoSingleRaceIconDisplayArea=55 13 19 13\ninfoSingleShieldBarDisableColor=0.2 0.3 0.4\n";
+    let (cfg, warnings) = GuiCfg::parse("tints.cfg", &format!("{CFG}{extras}"));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    app.world_mut().resource_mut::<HudConfig>().gui = Some(cfg.layout_auto());
+    let owner = PlayerId(1);
+    let team = Color::srgb(0.25, 0.5, 1.0);
+    app.insert_resource(TeamColours::default().with_local_colour(owner, team, &[owner]));
+    let set_shields = |app: &mut App, shields: i32| {
+        let mut feed = app.world_mut().resource_mut::<HudFeed>();
+        Arc::make_mut(&mut feed.view).units[0].shields[0] = [Fixed::from_int(shields), Fixed::from_int(100)];
+    };
+    set_shields(&mut app, 25);
+    app.update();
+    app.update();
+
+    let mut query = app.world_mut().query::<(Entity, &GuiImage, Option<&LiveTint>)>();
+    let mut shield = None;
+    let mut race_layers = 0;
+    let mut track = false;
+    for (entity, image, tint) in query.iter(app.world()) {
+        match tint {
+            Some(LiveTint::Shield(_)) => {
+                assert_eq!(image.color, Color::srgb(0.75, 0.25, 0.0));
+                shield = Some(entity);
+            }
+            Some(LiveTint::Race(_)) => {
+                assert_eq!(image.color, team);
+                race_layers += 1;
+            }
+            None if image.names.iter().any(|name| name == "large_shield_bar") => {
+                assert_eq!(image.color, Color::srgb(0.2, 0.3, 0.4));
+                track = true;
+            }
+            _ => {}
+        }
+    }
+    assert!(track);
+    assert_eq!(race_layers, 2);
+    let shield = shield.expect("shield fill");
+    set_shields(&mut app, 75);
+    app.update();
+    assert_eq!(app.world().get::<GuiImage>(shield).unwrap().color, Color::srgb(0.25, 0.75, 0.0));
 }
 
 fn find<C: Component>(app: &mut App, f: impl Fn(&C) -> bool) -> Vec<Entity> {

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use bevy::{picking::Pickable, prelude::*};
 use sta_assets::a2fmt::odf::Odf;
-use sta_content::{OdfIndex, Races};
+use sta_content::{OdfIndex, Profile, Races};
 use sta_sim::{Fixed, UnitView, view::UnitFlags};
 use sta_vfs::Vfs;
 
@@ -59,12 +59,12 @@ impl InfoStyle {
     pub fn load(vfs: &Vfs) -> Self {
         let (index, _) = OdfIndex::build(vfs);
         let (races, _) = Races::load(vfs, &index);
+        let a2_first = Profile::detect(vfs) == Profile::Sta2Classic;
         let mut thresholds = BTreeMap::new();
         for race in races.iter() {
             let name = format!("{}.odf", race.stem);
-            let odf = Odf::load_layered(&name, |n, version| {
-                index.load(vfs, n, version).map(String::into_bytes)
-            });
+            let fetch = |n: &str, version| index.load(vfs, n, version).map(String::into_bytes);
+            let odf = if a2_first { Odf::load_layered_first(&name, fetch) } else { Odf::load_layered(&name, fetch) };
             let (yellow, red) = odf.map_or((0.5, 0.25), |odf| {
                 (
                     odf.get_f32("crewYellowStatus")
@@ -355,6 +355,25 @@ pub(in crate::ui::hud) fn update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a2_info_threshold_duplicates_keep_first_while_fo_keeps_last() {
+        for (profile, expected) in [(Profile::Sta2Classic, 0.6), (Profile::Fo4, 0.3)] {
+            let name = profile.name();
+            let root = std::env::temp_dir().join(format!("sta64_infobar_duplicate_{name}_{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            let data = root.join("Data");
+            std::fs::create_dir_all(data.join("odf/other")).unwrap();
+            std::fs::write(data.join("info.ini"), format!("[Mod]\nProfile={name}\n")).unwrap();
+            std::fs::write(data.join("odf/other/races.odf"), "numberOfRaces=1\nrace0=demo\n").unwrap();
+            std::fs::write(data.join("odf/other/demo.odf"), "name=Demo\ncrewYellowStatus=0.6\nCREWYELLOWSTATUS=0.3\n").unwrap();
+            let vfs = Vfs::mount_install(&root, None).unwrap();
+            assert_eq!(Profile::detect(&vfs), profile);
+            let style = InfoStyle::load(&vfs);
+            assert_eq!(style.thresholds.get("demo").unwrap().0, expected);
+            std::fs::remove_dir_all(&root).unwrap();
+        }
+    }
 
     fn unit() -> UnitView {
         sta_sim::world::Entity::new(
