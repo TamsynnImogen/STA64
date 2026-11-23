@@ -126,6 +126,8 @@ pub(crate) struct CargoStatus {
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct SelectedStatus {
+    /// The stock construction rig exposes its site progress on the medium card.
+    pub construction_rig: bool,
     /// The selected object's own construction progress, including welded
     /// stations. `UnitView` is authoritative even after its builder dies.
     pub construction: Option<f32>,
@@ -155,6 +157,7 @@ pub(crate) fn selected(feed: &HudFeed, source: &StatusFeed) -> SelectedStatus {
         return SelectedStatus::default();
     }
     let mut out = SelectedStatus {
+        construction_rig: feed.def(unit).is_some_and(|def| def.class.0 == "constructionrig"),
         construction: unit.progress.filter(|p| *p < Fixed::ONE).map(fraction),
         ..Default::default()
     };

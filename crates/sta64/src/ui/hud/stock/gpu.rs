@@ -681,7 +681,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             let world = app.world_mut();
             assert!(world.query_filtered::<&SpriteText, With<super::info::SystemHealth>>()
                 .iter(world)
-                .any(|text| text.text == "0%" && text.color == Color::srgb(0.2, 0.2, 0.2)),
+                .any(|text| text.text == "0" && text.color == Color::srgb(0.2, 0.2, 0.2)),
                 "{label}: missing dim zero-capacity system");
         }
         let area = stock.info_area(variant).expect("Classic selection panel");
@@ -714,6 +714,34 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
                         && (node.left, node.top) == icon_position
                 });
             assert!(icon_resolved, "{label}: {icon_key} art at the authored position");
+        }
+        if profile == UiProfile::Armada2 && odf == "fconst" {
+            let world = app.world_mut();
+            let crew_style = world
+                .query_filtered::<(&SpriteText, &crate::ui::sprite_font::SpriteTextStyle, &Visibility), With<SelectionReadout>>()
+                .iter(world)
+                .find(|(text, _, shown)| text.text == "150" && **shown == Visibility::Inherited)
+                .map(|(text, style, _)| (text.size, style.stock))
+                .expect("visible fconst crew readout and style");
+            let system_matches_crew = world
+                .query_filtered::<(&SpriteText, &crate::ui::sprite_font::SpriteTextStyle), With<super::info::SystemHealth>>()
+                .iter(world)
+                .any(|(text, style)| text.text == "100"
+                    && (text.size, style.stock) == crew_style);
+            assert!(system_matches_crew,
+                "{label}: native fconst system health should be bare 100 and use the Crew 150 font size/role");
+
+            let origin = stock.info_origin(variant);
+            let area = stock.at(origin, "infoSingleConstructionArea")
+                .expect("native medium construction area");
+            let construction_art = world
+                .query_filtered::<(&GuiImage, &Node, &Visibility), With<ImageNode>>()
+                .iter(world)
+                .any(|(image, node, shown)| *shown == Visibility::Inherited
+                    && image.names.iter().any(|name| name == "large_construction_bar")
+                    && (node.left, node.top) == (Val::Px(area.x), Val::Px(area.y)));
+            assert!(construction_art,
+                "{label}: idle construction bar art should resolve at infoSingleConstructionArea");
         }
     }
     // The persistent menu and objectives buttons are outside the command palette.

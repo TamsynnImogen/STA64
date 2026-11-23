@@ -61,7 +61,7 @@ pub(super) enum LiveValue {
 struct Shape {
     selected: EntityId,
     stock: bool,
-    native_builder_meter: bool,
+    native_construction_meter: bool,
     queue: Vec<QueueShape>,
     cargo: bool,
     cargo_resource: Option<u8>,
@@ -196,10 +196,9 @@ fn clipped_bar(
     }
 }
 
-/// Armada II's tall single-builder card retains the construction meter at
-/// `infoProgressBar` while the queue is empty. The same SPR is drawn in the
-/// configured disabled colour beneath the clipped working fill.
-fn native_builder_progress_bar(
+/// Armada II keeps the meter's disabled sprite visible while there is no
+/// active work. The working fill clips the same sprite over that track.
+fn native_construction_bar(
     commands: &mut Commands,
     parent: Entity,
     r: R,
@@ -281,21 +280,25 @@ fn stock_shape(
     let compact = !armada_one && variant == 1;
     let panel = layout.info_area(variant);
     // Classic can author a queue for the tall builder card only. A medium
-    // research station or constructor uses the adjacent card if it would
-    // otherwise lose queue entries below the viewport.
+    // research station uses the adjacent card if its entries would spill.
     let queue_rect = |key: &str| {
         layout.at(origin, key).filter(|r| {
             !compact || panel.is_some_and(|p| r.x >= p.x && r.y >= p.y && r.right() <= p.right() && r.bottom() <= p.bottom())
         })
     };
-    let mut slots: Vec<_> = (0..10)
-        .filter_map(|i| queue_rect(&format!("infoBuildQueue_{i}")).map(|r| (i, r)))
-        .collect();
+    let rig_meter = (layout.has_a2_info() && status.construction_rig)
+        .then(|| layout.at(origin, "infoSingleConstructionArea"))
+        .flatten();
+    let mut slots: Vec<_> = if rig_meter.is_some() {
+        Vec::new()
+    } else {
+        (0..10).filter_map(|i| queue_rect(&format!("infoBuildQueue_{i}")).map(|r| (i, r))).collect()
+    };
     if compact && slots.len() < status.queue.len().min(10) {
         slots.clear();
     }
     let mut speed_queue = false;
-    let mut progress = queue_rect("infoProgressBar");
+    let mut progress = rig_meter.or_else(|| queue_rect("infoProgressBar"));
     if armada_one && slots.is_empty() && !status.queue.is_empty() {
         slots = stock::a1::speed::queue_slots(layout);
         if let Some((_, head)) = slots.first() {
@@ -305,7 +308,7 @@ fn stock_shape(
         }
     }
     let cargo_bar = layout.at(origin, "infoSingleDilithiumBarArea");
-    let fallback_queue = slots.is_empty() && !status.queue.is_empty();
+    let fallback_queue = rig_meter.is_none() && slots.is_empty() && !status.queue.is_empty();
     let fallback_progress = !slots.is_empty()
         && progress.is_none()
         && status.queue.first().and_then(|job| job.progress).is_some();
@@ -338,7 +341,8 @@ fn stock_shape(
     Shape {
         selected,
         stock: true,
-        native_builder_meter: layout.has_a2_info() && variant == 2 && progress.is_some(),
+        native_construction_meter: rig_meter.is_some()
+            || (layout.has_a2_info() && variant == 2 && progress.is_some()),
         queue: status
             .queue
             .iter()
@@ -384,7 +388,7 @@ fn lcars_shape(
     Shape {
         selected,
         stock: false,
-        native_builder_meter: false,
+        native_construction_meter: false,
         queue: status
             .queue
             .iter()
@@ -466,7 +470,9 @@ fn draw_stock(
     if shape.lcars_card.is_some() {
         let origin = layout.info_origin(layout.info_variant(info));
         let fallback = SelectedStatus {
-            queue: if shape.slots.is_empty() {
+            queue: if status.construction_rig && shape.native_construction_meter {
+                Vec::new()
+            } else if shape.slots.is_empty() {
                 status.queue.clone()
             } else if shape.progress.is_none() {
                 status
@@ -484,6 +490,7 @@ fn draw_stock(
                     && layout.at(origin, "infoSingleConstructionArea").is_none()
             }),
             cargo: status.cargo.filter(|_| shape.cargo_bar.is_none()),
+            ..Default::default()
         };
         draw_lcars(commands, root, feed, &fallback, shape, theme);
     }
@@ -519,9 +526,9 @@ fn draw_stock(
             true,
         );
     }
-    if shape.native_builder_meter && let Some(r) = shape.progress
+    if shape.native_construction_meter && let Some(r) = shape.progress
     {
-        native_builder_progress_bar(
+        native_construction_bar(
             commands,
             root,
             r,
@@ -790,7 +797,7 @@ pub(super) fn refresh(
             &theme,
         )
     };
-    if !shape.native_builder_meter && status.queue.is_empty() && status.cargo.is_none() && status.construction.is_none() {
+    if !shape.native_construction_meter && status.queue.is_empty() && status.cargo.is_none() && status.construction.is_none() {
         for entity in &existing {
             commands.entity(entity).despawn();
         }
@@ -1523,7 +1530,7 @@ mod tests {
     }
 
     #[test]
-    fn native_builder_meter_keeps_disabled_sprite_when_idle_and_clips_working_fill() {
+    fn native_construction_meter_keeps_disabled_sprite_when_idle_and_clips_working_fill() {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut cfg = GuiLayout::default();
@@ -1539,7 +1546,7 @@ mod tests {
             let theme = Theme::default();
             world
                 .run_system_once(move |mut commands: Commands| {
-                    native_builder_progress_bar(&mut commands, root, r, progress, &layout, &theme);
+                    native_construction_bar(&mut commands, root, r, progress, &layout, &theme);
                 })
                 .unwrap();
 
@@ -1562,6 +1569,48 @@ mod tests {
     }
 
     #[test]
+    fn construction_rig_renders_the_medium_meter_when_idle_and_welding() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut cfg = GuiLayout::default();
+        cfg.rects.insert("infoSingleConstructionArea".into(), Rect {
+            x: 386, y: 158, w: 340, h: 20,
+        });
+        cfg.rects.insert("infoSingleConstructionBarArea".into(), Rect {
+            x: 115, y: 243, w: 120, h: 13,
+        });
+        let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0))
+            .with_info_profile(UiProfile::Armada2);
+        let selected = info(false);
+        let expected = layout.at(layout.info_origin(1), "infoSingleConstructionArea").unwrap();
+        let mut welding = queued().queue.remove(0);
+        welding.queue_id = None;
+        for queue in [Vec::new(), vec![welding]] {
+            let working = !queue.is_empty();
+            let status = SelectedStatus { construction_rig: true, queue, ..Default::default() };
+            let shape = stock_shape(EntityId(7), &status, &layout, &selected, false);
+            assert_eq!(shape.progress, Some(expected));
+            assert!(shape.native_construction_meter);
+            assert!(shape.slots.is_empty() && shape.lcars_card.is_none());
+
+            let mut world = World::new();
+            let root = world.spawn_empty().id();
+            let layout = layout.clone();
+            let selected = selected.clone();
+            world.run_system_once(move |mut commands: Commands| {
+                draw_stock(&mut commands, root, &HudFeed::default(), &status,
+                    &shape, &layout, &Theme::default(), &selected);
+            }).unwrap();
+            assert!(world.query::<(&GuiImage, &Node)>().iter(&world).any(|(image, node)|
+                image.names == ["large_construction_bar"] && node.left == Val::Px(expected.x)
+                    && node.top == Val::Px(expected.y) && image.color == Color::srgb(0.3, 0.3, 0.3)));
+            assert_eq!(world.query::<(&LiveValue, &Node)>().iter(&world).any(|(value, node)|
+                matches!(value, LiveValue::QueueProgress(0, _))
+                    && node.width == Val::Px(expected.w * 0.5)), working);
+        }
+    }
+
+    #[test]
     fn fallback_queue_uses_bounded_grid_with_live_cell_progress() {
         use bevy::ecs::system::RunSystemOnce;
 
@@ -1575,7 +1624,7 @@ mod tests {
         let shape = Shape {
             selected: EntityId(7),
             stock: false,
-            native_builder_meter: false,
+            native_construction_meter: false,
             queue: Vec::new(),
             cargo: false,
             cargo_resource: None,

@@ -136,9 +136,9 @@ fn slot_status(status: Option<&crate::ui::hud::status::StatusFeed>, id: EntityId
         .map_or((Fixed::ONE, true), |v| (v.health[n], v.on[n]))
 }
 
-fn health_label(health: Fixed, native: bool) -> String {
+fn health_label(health: Fixed) -> String {
     let percent = (health.to_f32().clamp(0.0, 1.0) * 100.0).round() as u32;
-    if native { format!("{percent}%") } else { percent.to_string() }
+    percent.to_string()
 }
 
 fn system_readout_rect(layout: &StockLayout, origin: Vec2, builder: bool, slot: usize, icon: Option<R>) -> Option<R> {
@@ -807,10 +807,14 @@ fn spawn_single(
             if (native_systems || def.system_hit_points[system] > Fixed::ZERO)
                 && let Some(r) = system_readout_rect(layout, origin, builder, slot, icon)
             {
-                let label = text_styled(
-                    commands, root, r, String::new(), theme.text, r.h * 0.8, None,
-                    SpriteTextStyle { tint_all: true, ..default() }.centered_in_box(),
-                );
+                let label = if native_systems {
+                    text(commands, root, r, String::new(), theme.text, theme.small_size, None)
+                } else {
+                    text_styled(
+                        commands, root, r, String::new(), theme.text, r.h * 0.8, None,
+                        SpriteTextStyle { tint_all: true, ..default() }.centered_in_box(),
+                    )
+                };
                 commands.entity(label).insert(SystemHealth(slot));
                 clip_to_rect(commands, label, false);
                 readouts::at(commands, root, r, single.id, Readout::System(system));
@@ -997,7 +1001,7 @@ pub(in crate::ui::hud) fn update(
         for (slot, mut text) in &mut health_labels {
             let (health, on) = slot_status(status.as_deref(), s.id, slot.0);
             let missing = absent(slot.0);
-            let label = health_label(if missing { Fixed::ZERO } else { health }, native);
+            let label = health_label(if missing { Fixed::ZERO } else { health });
             // Stock Armada II draws functioning system percentages in green
             // and permanently disabled ones in dim grey. The feed has no
             // native timed-repair overlay, so a failed damaged system is red.
@@ -1846,9 +1850,9 @@ mod tests {
         assert_eq!(slot_tint(None, EntityId(5), 0), Color::srgb(0.2, 0.2, 0.2));
         assert_eq!(slot_tint(None, EntityId(5), 2), Color::srgb(0.0, 1.0, 0.0));
         assert_eq!(slot_tint(None, EntityId(9), 3), Color::srgb(0.0, 1.0, 0.0), "an unlisted unit is whole");
-        assert_eq!(health_label(slot_status(Some(&feed), EntityId(5), 1).0, true), "50%");
-        assert_eq!(health_label(slot_status(Some(&feed), EntityId(5), 4).0, true), "0%");
-        assert_eq!(health_label(slot_status(Some(&feed), EntityId(9), 0).0, false), "100");
+        assert_eq!(health_label(slot_status(Some(&feed), EntityId(5), 1).0), "50");
+        assert_eq!(health_label(slot_status(Some(&feed), EntityId(5), 4).0), "0");
+        assert_eq!(health_label(slot_status(Some(&feed), EntityId(9), 0).0), "100");
         // With the palette (as Roots' STL mod sets it).
         let mut cfg = GuiLayout { canvas: (1600, 1200), ..Default::default() };
         let c = |r, g, b| Colour { r, g, b, a: 1.0 };
