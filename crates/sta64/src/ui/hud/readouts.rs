@@ -231,8 +231,11 @@ mod tests {
     #[test]
     fn each_meter_and_system_uses_its_own_live_value_and_label() {
         let db = sta_content::fake::db();
-        let mut source =
-            ScriptedSource::from_json5("{units:[{id:1,def:'fx_cruiser',owner:0}]}", &db).unwrap();
+        let mut source = ScriptedSource::from_json5(
+            "{units:[{id:1,def:'fx_cruiser',owner:0,rails:[{at:0,pos:{x:0,y:0,z:0}}]}]}",
+            &db,
+        )
+        .unwrap();
         let mut view = source.step(&[]).view;
         let unit = &mut Arc::make_mut(&mut view).units[0];
         unit.hull = [Fixed::from_int(80), Fixed::from_int(100)];
