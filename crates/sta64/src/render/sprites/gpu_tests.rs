@@ -133,11 +133,22 @@ fn adopt(app: &mut App, node: Entity, own: &StandardMaterial) {
         .insert((tag, MeshMaterial3d(look), Shown { colour: own.base_color, uv: own.uv_transform }));
 }
 
+/// The sprite material's form on the adapter of the last series ([`super::material::mode_name`]).
+static MODE: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// Parity mode (S5), on unless `STA64_SPRITE_NO_PARITY=1`.
+fn parity() -> bool {
+    std::env::var("STA64_SPRITE_NO_PARITY").as_deref() != Ok("1")
+}
+
 /// The stand-in for step 2's `animate` on adopted nodes, after the unchanged [`animate`] has written
 /// each node's colour and uv into its own material: while the node is shown and its values changed
 /// (main's rule), the new linear colour goes into its slot, the uv into its look's material if that
 /// differs, and the node's material component is marked changed (parity mode, S5), so the nodes
 /// re-queued are main's. All slot writes touch the buffer once.
+///
+/// `STA64_SPRITE_NO_PARITY=1` turns parity mode off, to see what dropping it would change (ADR 0009,
+/// open question 1); the byte-equality test is then expected to fail.
 fn write_slots(
     slots: Res<SpriteSlots>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
@@ -163,7 +174,9 @@ fn write_slots(
             l.base.uv_transform = m.uv_transform;
         }
         *last = Shown { colour: m.base_color, uv: m.uv_transform };
-        look.set_changed();
+        if parity() {
+            look.set_changed();
+        }
     }
     slots.write(&mut buffers, writes.iter().map(|(t, c)| (t, *c)));
 }
@@ -307,6 +320,14 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
         return None;
     }
     eprintln!("adapter: {}", adapter.name);
+    // Which form of the sprite material this adapter gets (ADR 0009 S2: bindless where supported).
+    let mode = app
+        .get_sub_app(bevy::render::RenderApp)
+        .and_then(|r| r.world().get_resource::<bevy::render::renderer::RenderDevice>().map(super::material::mode_name))
+        .or_else(|| app.world().get_resource::<bevy::render::renderer::RenderDevice>().map(super::material::mode_name))
+        .expect("a render device to tell the sprite material's form by");
+    eprintln!("sprite material: {mode}");
+    let _ = MODE.set(mode);
     let places = [Vec3::new(0.0, 0.0, 60.0), Vec3::new(70.0, 10.0, 40.0), Vec3::new(-90.0, 30.0, 30.0), Vec3::new(10.0, 80.0, 20.0)];
     let mut frames = Vec::new();
     for step in 0..12usize {
@@ -386,7 +407,9 @@ fn nodes_are_drawn_byte_equal_to_the_reference_path_on_gpu_from_three_cameras() 
         // The frames differ from one another (time and camera move), so equality is not an empty scene's.
         assert!(old[0] != old[5]);
     }
-    assert!(differing.is_empty(), "{}", differing.join("\n"));
+    let mode = MODE.get().copied().unwrap_or("unknown");
+    assert!(differing.is_empty(), "sprite material ran {mode}{}:\n{}", if parity() { "" } else { ", parity mode off" }, differing.join("\n"));
+    eprintln!("sprite material ran {mode}: every frame of the three cameras byte-equal to the reference");
 }
 
 /// Where two frames of [`series`] differ: how many pixels, their box, the largest channel difference
