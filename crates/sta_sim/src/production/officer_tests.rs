@@ -312,3 +312,17 @@ fn losing_the_builder_releases_reservations_and_a_deploy_keeps_the_census_throug
     assert!(!sim.production.is_deploying(rig));
     assert_eq!(officers(&sim)[0], n(5), "reservation became the welding station, not both");
 }
+
+#[test]
+fn removing_a_prepaid_waiting_job_releases_only_its_officer_reservation() {
+    let mut sim = game(true, Some(12));
+    let yard = spawn(&mut sim, "off_yard", 0);
+    for _ in 0..3 {
+        assert!(order(&mut sim, yard, "off_ship4", None));
+    }
+    assert_eq!(officers(&sim), [n(12), n(12)]);
+    let job = sim.production_view()[0].jobs[1].queue_id.unwrap();
+    sim.step(&[cmd(CommandKind::Order(Order::CancelBuild { builder: yard, slot: 1, job }))]);
+    assert_eq!(sim.production.queue(yard).len(), 2);
+    assert_eq!(officers(&sim), [n(8), n(12)]);
+}

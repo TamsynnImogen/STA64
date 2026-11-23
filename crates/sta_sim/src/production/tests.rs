@@ -573,15 +573,20 @@ fn two_yards_build_in_parallel_and_the_digest_is_pinned() {
     assert_eq!(got.iter().filter(|g| g.0 == t0 + 1800).count(), 1);
     assert_eq!(dilithium(&sim), Fixed::from_int(5000 - 600 - 250 - 1200));
     assert_eq!(sim.digest(), parallel().0.digest());
-    assert_eq!(crate::unit_status_tests::digest_before_crew(&sim), 0x0ca3_fc4c_85de_ff04);
+    // The legacy digest predates both the crew pool and the queue id counter.
+    assert_eq!(sim.production.last_job_id, 2);
+    assert!(sim.production.is_empty());
+    let mut legacy = sim.clone();
+    legacy.production.last_job_id = 0;
+    assert_eq!(crate::unit_status_tests::digest_before_crew(&legacy), 0x0ca3_fc4c_85de_ff04);
     assert_eq!(sim.digest(), PINNED_DIGEST, "digest {:#x}", sim.digest());
 }
 
 /// Re-pinned by SIM-21: the rig now parks beside its site (the footprint's
 /// edge plus a gap) instead of deploying where it happens to be, so its
 /// final position, and the digest, moved. It was `0x1f6ba950228b3166`.
-// Initialized unit crew is now part of the canonical state.
-const PINNED_DIGEST: u64 = 0xaafe_a94f_e241_436b;
+/// The canonical state now includes crew and the last allocated queue job id.
+const PINNED_DIGEST: u64 = 0xe09b_2ac8_b1e5_67b9;
 
 /// A yard 600 ticks into a cruiser (frigate queued behind) and a rig 600
 /// ticks into welding a station; for the snapshot test.
@@ -838,4 +843,72 @@ fn a_model_less_resource_blocks_its_displayed_field_footprint() {
     assert!(!build(&mut sim, rig, "fx_station", Some(v(1120, 1120))));
     assert_eq!(dilithium(&sim), Fixed::from_int(5000));
     assert!(!sim.production.is_deploying(rig));
+}
+
+#[test]
+fn cancel_waiting_and_active_jobs_preserves_order_and_refunds_only_payments() {
+    for prepaid in [false, true] {
+        let mut sim = game(prepaid);
+        let yard = spawn(&mut sim, "fx_yard", v(0, 0));
+        fund(&mut sim, 1500);
+        assert!(build(&mut sim, yard, "fx_frigate", None));
+        assert!(build(&mut sim, yard, "fx_cruiser", None));
+        assert!(build(&mut sim, yard, "fx_frigate", None));
+        let jobs = sim.production_view().remove(0).jobs;
+        assert_eq!(dilithium(&sim), Fixed::from_int(if prepaid { 400 } else { 1250 }));
+
+        let cancel = |slot: u32| cmd(P0, slot, CommandKind::Order(Order::CancelBuild {
+            builder: yard,
+            slot,
+            job: jobs[slot as usize].queue_id.unwrap(),
+        }));
+        assert!(!sim.step(&[cancel(1)]).events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
+        let remaining = sim.production_view().remove(0).jobs;
+        assert_eq!([remaining[0].queue_id, remaining[1].queue_id], [jobs[0].queue_id, jobs[2].queue_id]);
+        assert_eq!(dilithium(&sim), Fixed::from_int(if prepaid { 1000 } else { 1250 }));
+
+        let out = sim.step(&[cancel(0)]);
+        assert!(out.events.contains(&SimEvent::BuildStarted { builder: yard, what: jobs[2].def }));
+        let remaining = sim.production_view().remove(0).jobs;
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].queue_id, jobs[2].queue_id);
+        assert!(remaining[0].started && remaining[0].paid);
+        assert_eq!(remaining[0].progress, Fixed::ZERO);
+        assert_eq!(dilithium(&sim), Fixed::from_int(1250));
+    }
+}
+
+#[test]
+fn cancel_rejects_stale_slots_foreign_builders_and_same_class_replacements() {
+    let mut sim = game(true);
+    let yard = spawn(&mut sim, "fx_yard", v(0, 0));
+    fund(&mut sim, 1000);
+    assert!(build(&mut sim, yard, "fx_frigate", None));
+    assert!(build(&mut sim, yard, "fx_frigate", None));
+    let jobs = sim.production_view().remove(0).jobs;
+    let cancel = |slot: u32, player: PlayerId| cmd(player, slot, CommandKind::Order(Order::CancelBuild {
+        builder: yard,
+        slot,
+        job: jobs[slot as usize].queue_id.unwrap(),
+    }));
+    let assert_no_effect = |sim: &mut Sim, command: Command| {
+        let mut baseline = sim.clone();
+        baseline.step(&[]);
+        let event = SimEvent::Rejected { player: command.player, seq: command.seq };
+        assert!(sim.step(&[command]).events.contains(&event));
+        assert_eq!(sim.digest(), baseline.digest());
+    };
+    assert_no_effect(&mut sim, cancel(1, PlayerId(1)));
+    assert!(!sim.step(&[cancel(0, P0)]).events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })));
+    assert_no_effect(&mut sim, cancel(1, P0));
+    assert!(build(&mut sim, yard, "fx_frigate", None));
+    assert_no_effect(&mut sim, cancel(0, P0));
+    assert_no_effect(&mut sim, cancel(1, P0));
+
+    sim.step(&[cmd(P0, 2, CommandKind::Order(Order::Stop { units: vec![yard] }))]);
+    assert_no_effect(&mut sim, cancel(0, P0));
+    let content = Arc::clone(sim.content().unwrap());
+    let mut resumed = Sim::from_snapshot(&sim.snapshot(), Some(content)).unwrap();
+    assert!(build(&mut resumed, yard, "fx_frigate", None));
+    assert_no_effect(&mut resumed, cancel(0, P0));
 }

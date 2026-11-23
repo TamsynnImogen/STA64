@@ -44,9 +44,10 @@ pub const MAGIC: [u8; 4] = *b"STAR";
 /// Bumped when the layout of [`Replay`] changes. Format 4 (CON-35) adds the
 /// lineage and pack names and carries the keyed content digest's hash;
 /// format 5 adds `ControlRec::RemoteAi` and digests the AI seats, so the
-/// digests of a replay with a computer player differ from format 4's;
-/// formats 1 to 4 are refused ([`ReplayError::FormatVersion`]).
-pub const FORMAT_VERSION: u16 = 5;
+/// digests of a replay with a computer player differ from format 4's.
+/// Format 6 adds single-job cancellation and digests production job identities.
+/// Older formats are refused ([`ReplayError::FormatVersion`]).
+pub const FORMAT_VERSION: u16 = 6;
 /// Digest every this many ticks unless the recorder is told otherwise.
 pub const DEFAULT_DIGEST_EVERY: Tick = 30;
 
@@ -550,6 +551,34 @@ mod tests {
         let sim = decoded.play(Arc::new(sta_content::fake::db())).unwrap();
         assert_eq!(sim.digest(), digest);
         assert_eq!(sim.view().tick, 200);
+    }
+
+    #[test]
+    fn cancellation_replays_the_same_queue_and_stock() {
+        let setup = setup();
+        let owner = PlayerId(0);
+        let mut rec = Recorder::with_interval(&setup, 1);
+        rec.step(&[
+            Command { player: PlayerId::BENCH, seq: 0, kind: CommandKind::Edit(Edit::Spawn {
+                odf: setup.content.key("fx_yard").unwrap(),
+                player: owner,
+                pos: Vec3::from_f32([0.0, 0.0, 0.0]),
+                heading: (Fixed::ZERO, Fixed::ONE),
+            }) },
+            Command { player: PlayerId::BENCH, seq: 1, kind: CommandKind::Edit(Edit::Cargo(owner, 0, Fixed::from_int(1000))) },
+        ]);
+        let builder = rec.sim().view().units.iter().find(|u| u.owner == owner).unwrap().id;
+        let what = setup.content.key("fx_frigate").unwrap();
+        rec.step(&[0, 1, 2].map(|seq| Command { player: owner, seq, kind: CommandKind::Order(Order::Build { builder, what, at: None }) }));
+        let job = rec.sim().production_view()[0].jobs[1].queue_id.unwrap();
+        rec.step(&[Command { player: owner, seq: 3, kind: CommandKind::Order(Order::CancelBuild { builder, slot: 1, job }) }]);
+        let queue = rec.sim().production_view();
+        assert_eq!(queue[0].jobs.len(), 2);
+        let digest = rec.sim().digest();
+        let replay = Replay::decode(&rec.finish().encode()).unwrap();
+        let playback = replay.play(setup.content).unwrap();
+        assert_eq!(playback.digest(), digest);
+        assert_eq!(playback.production_view(), queue);
     }
 
     #[test]

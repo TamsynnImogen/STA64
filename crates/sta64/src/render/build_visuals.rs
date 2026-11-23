@@ -470,12 +470,14 @@ mod tests {
             builder: EntityId(3),
             jobs: vec![
                 ProductionJobView {
+                    queue_id: None,
                     def: key,
                     progress: Fixed::ZERO,
                     paid: true,
                     started: true,
                 },
                 ProductionJobView {
+                    queue_id: None,
                     def: other,
                     progress: Fixed::ZERO,
                     paid: true,

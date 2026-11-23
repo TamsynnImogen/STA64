@@ -266,6 +266,10 @@ fn same_owner_and_repeated_transfers_refund_once() {
 
 fn inject(sim: &mut Sim, yard: EntityId, items: Vec<(u32, u8, u64, bool, bool)>) {
     let mut rec: ProductionRec = sim.production.to_rec();
+    let items = items.into_iter().map(|(def, owner, done, started, paid)| {
+        rec.last_job_id += 1;
+        (def, owner, done, started, paid, rec.last_job_id)
+    }).collect();
     rec.queues.push((yard.0, items));
     sim.production = Production::from_rec(&rec).unwrap();
 }

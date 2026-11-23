@@ -2,7 +2,7 @@
 //! This optional `WorldSource` view leaves serialized `WorldView` unchanged.
 
 use super::{Production, launch, orbit, research, ticks_of};
-use crate::world::Entities;
+use crate::{command::BuildQueueId, world::Entities};
 use sta_content::ContentDb;
 use sta_core::{ContentKey, EntityId, Fixed, Vec3};
 use std::collections::BTreeMap;
@@ -58,6 +58,8 @@ pub struct LaunchPortalView {
 /// Only a paid, started head is an actual in-yard hull.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductionJobView {
+    /// Real queue entries have an id; construction site previews do not.
+    pub queue_id: Option<BuildQueueId>,
     pub def: ContentKey,
     pub progress: Fixed,
     pub paid: bool,
@@ -90,6 +92,7 @@ impl Production {
             let jobs: Vec<_> = queue
                 .iter()
                 .map(|job| ProductionJobView {
+                    queue_id: Some(job.id),
                     def: job.def,
                     progress: progress(job.done, ticks_of(db, job.def)),
                     paid: job.paid,
@@ -162,6 +165,7 @@ impl Production {
                 ProductionView {
                     builder,
                     jobs: vec![ProductionJobView {
+                        queue_id: None,
                         def: deploy.def,
                         progress: Fixed::ZERO,
                         paid: deploy.paid,
@@ -188,6 +192,7 @@ impl Production {
                 ProductionView {
                     builder: weld.builder,
                     jobs: vec![ProductionJobView {
+                        queue_id: None,
                         def: unit.def,
                         progress: progress(weld.done, weld.ticks),
                         paid: true,

@@ -70,8 +70,9 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// Format 43 appends freighter drop-off queues.
 /// Format 44 appends completed Armada I starbase officer upgrades.
 /// Format 45 appends cargo routes and holds.
+/// Format 46 stores build queue job identities and the last allocated id.
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 45;
+pub const FORMAT_VERSION: u16 = 46;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
@@ -776,7 +777,7 @@ impl Sim {
             .ok_or_else(|| corrupt("replacement weapon state"))?;
         let zero_shield_holds = crate::combat::damage::ZeroShieldHolds::from_rows(zero_shield_holds_rec.rows, b.tick, &units, content.as_deref())
             .ok_or_else(|| corrupt("shield zero holds"))?;
-        let mut production = crate::production::Production::from_rec(&b.production).ok_or_else(|| corrupt("rallies"))?;
+        let mut production = crate::production::Production::from_rec(&b.production).ok_or_else(|| corrupt("production"))?;
         production.restore_research(research, &units, content.as_deref()).ok_or_else(|| corrupt("research pods"))?;
         production.restore_officer_upgrades(officer_upgrades, &units, content.as_deref()).ok_or_else(|| corrupt("officer upgrades"))?;
         let mut sim = Sim {

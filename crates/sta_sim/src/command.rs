@@ -127,7 +127,14 @@ pub enum Order {
     /// Set a cargo ship's route, load a transfer, or exchange resources at
     /// a trading station. Appended tag 23 preserves the existing orders.
     Trade { units: Vec<EntityId>, action: TradeAction },
+    /// Cancel the job currently at this zero-based queue slot, including the head.
+    /// The job identity must still match when applied. Appended Order tag 24.
+    CancelBuild { builder: EntityId, slot: u32, job: BuildQueueId },
 }
+
+/// A production job's identity, stable until it is removed or completed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildQueueId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TradeAction {
@@ -708,6 +715,7 @@ mod tests {
             (21, Order::Decommission { units: u.clone(), yard: Some(id) }),
             (22, Order::Alert { units: u.clone(), level: AlertState::Green }),
             (23, Order::Trade { units: u, action: TradeAction::Source(id) }),
+            (24, Order::CancelBuild { builder: id, slot: 1, job: BuildQueueId(9) }),
         ];
         for (tag, o) in orders {
             let bytes = postcard::to_allocvec(&o).unwrap();

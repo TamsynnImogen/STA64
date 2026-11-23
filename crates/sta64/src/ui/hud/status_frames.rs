@@ -197,6 +197,7 @@ fn installed_status_queue_and_cargo_render_and_clear() {
             ]
             .into_iter()
             .map(|(name, progress, paid, started)| ProductionJobView {
+                queue_id: None,
                 def: db.key(name).unwrap(),
                 progress: Fixed::from_f64(progress),
                 paid,

@@ -59,6 +59,7 @@ fn row(
         officer_upgrades: None,
         builder: EntityId(builder),
         jobs: vec![ProductionJobView {
+            queue_id: None,
             def,
             progress: Fixed::from_f64(progress as f64),
             paid,

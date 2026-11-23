@@ -170,6 +170,8 @@ impl Plugin for HudPlugin {
             .init_resource::<OrderTargets>()
             .init_resource::<CommandQueue>()
             .add_message::<OrderIssued>()
+            .add_message::<status_gpu::QueueClick>()
+            .add_observer(status_gpu::on_queue_click)
             .add_message::<SelectionChanged>()
             .init_resource::<Selection>()
             .add_systems(OnEnter(crate::app::AppState::Loading), stock::buttons::reset_more)
@@ -198,7 +200,10 @@ impl Plugin for HudPlugin {
                     pointer,
                     crate::input::hover::track.run_if(not(resource_exists::<ExternalFeed>)),
                     stock::infobar::update,
-                    press.run_if(not(crate::ui::presentation::cutscene_running)),
+                    (
+                        press.run_if(not(crate::ui::presentation::cutscene_running)),
+                        status_gpu::press_queue,
+                    ).chain(),
                     place_on_click.run_if(resource_exists::<Aim>).run_if(not(crate::ui::presentation::cutscene_running)).run_if(crate::cheats::input::game_input_free),
                     armed_cursor.run_if(resource_exists::<Aim>)
                         .run_if(not(crate::ui::presentation::cutscene_running))

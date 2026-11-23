@@ -263,7 +263,7 @@ impl Sim {
         if !self.economy.is_empty() {
             self.economy.hash_into(&mut h);
         }
-        if !self.production.is_empty() {
+        if self.production.has_digest_state() {
             self.production.hash_into(&mut h);
         }
         // SIM-30: population and crew income feed the economy.
@@ -430,7 +430,7 @@ impl Sim {
                 if !self.economy.is_empty() {
                     row(None, "stock, nodes, freighters, personnel (hash)", block("economy", &|h| self.economy.hash_into(h)));
                 }
-                if !self.production.is_empty() {
+                if self.production.has_digest_state() {
                     row(None, "yards, rigs, rallies (hash)", block("production", &|h| self.production.hash_into(h)));
                 }
                 if !self.colonies.is_empty() {
