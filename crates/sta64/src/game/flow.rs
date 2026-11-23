@@ -455,7 +455,7 @@ pub(crate) fn front_end_data(vfs: &sta_vfs::Vfs, catalogue: &mut Catalogue, inst
     }
     info!("front end: {} multiplayer maps of {}, {} mods, in {:.1?}", maps.len(), names.len(), mods.len(), t0.elapsed());
     let menu_music = races.playable().into_iter().find_map(|r| r.single_player_music.clone()).into_iter().collect();
-    let scene = MenuSceneConfig::new(db.clone(), MenuMap::from_vfs(vfs), MapDef::empty());
+    let scene = MenuSceneConfig::new(db.clone(), MenuMap::from_vfs(vfs, &db), MapDef::empty());
     let colours = TeamColours::load(vfs);
     Ok(FrontEndData { screens: ScreenData { content: db, races, colours, maps, mods, base_name: install_root.and_then(|r| r.file_name()).map(|n| n.to_string_lossy().into_owned()) }, scene, menu_music })
 }
