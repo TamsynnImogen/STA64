@@ -290,6 +290,8 @@ impl Plugin for ViewerPlugin {
                 brightness: 60.0,
                 ..default()
             })
+            // ADR 0009: the sprite nodes' material and colour slots (no node uses them yet).
+            .add_plugins(sprites::material::SpriteMaterialPlugin)
             .add_systems(Startup, setup)
             .add_systems(
                 Update,

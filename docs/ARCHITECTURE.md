@@ -22,6 +22,17 @@ deterministic lockstep. Two rules keep that from becoming a problem:
 
 If Bevy ever stops fitting, only the `sta64` crate has to change.
 
+### Bevy upgrade checklist
+
+Work to do whenever the Bevy version in the workspace `Cargo.toml` changes:
+
+- Re-diff `crates/sta64/src/render/sprites/sprite.wesl` against the new
+  `bevy_pbr` `src/render/pbr.wesl` and carry the upstream changes into it,
+  keeping only the additions its header lists (ADR 0009, S3). Update the
+  version and line range in its header and in `sprite.NOTICE.md`, then run the
+  sprite GPU test with `STA64_GPU_TESTS=1` on a hardware adapter: drift shows
+  only there.
+
 ## Layers
 
 ```
