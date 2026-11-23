@@ -371,11 +371,10 @@ pub fn fill_grid(commands: &mut Commands, theme: &Theme, panel: Entity, buttons:
                 if let Some(v) = &b.verbose {
                     tip = tip.verbose(v.clone());
                 }
-                // An authored verbose string replaces the generated cost line
-                // in the button model. Compose that string with its costs here.
+                // Keep the class text and costs together at both hover delays,
+                // including classes without an authored verbose description.
                 if let Act::Build { builder, what, .. } = &b.act
                     && let Some(parts) = model::build_tip_parts(feed, *builder, *what)
-                    && parts.verbose.is_some()
                 {
                     tip = tip.stock_build(parts);
                 }
