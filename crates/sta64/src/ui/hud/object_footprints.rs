@@ -328,6 +328,7 @@ mod tests {
             officer_upgrades: None,
             builder: EntityId(9),
             jobs: vec![ProductionJobView {
+                queue_id: None,
                 def: db.key("station").unwrap(),
                 progress: Fixed::ZERO,
                 paid: true,

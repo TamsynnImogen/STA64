@@ -481,6 +481,13 @@ impl Sim {
             Order::Recrew { units, on } => self.order_recrew(c.player, units, *on),
             Order::Alert { units, level } => self.order_alert(c.player, units, *level),
             Order::Trade { units, action } => self.order_trade(c.player, units, *action),
+            Order::CancelBuild { builder, slot, job } => {
+                let Some(db) = self.content.as_deref() else { return false; };
+                let Some(builder) = self.units.get(*builder).filter(|unit|
+                    c.player.is_player() && unit.owner == c.player && !unit.flags.contains(view::UnitFlags::DYING)
+                ) else { return false; };
+                self.production.cancel_build(db, &mut self.economy, builder, *slot, *job)
+            }
         }
     }
 
@@ -736,7 +743,7 @@ impl Sim {
         if !self.economy.is_empty() {
             self.economy.hash_into(&mut h);
         }
-        if !self.production.is_empty() {
+        if self.production.has_digest_state() {
             self.production.hash_into(&mut h);
         }
         if !self.victory.is_empty() {

@@ -32,6 +32,8 @@
 //!   its item or deploy completes refunds the same way. A weld in progress is
 //!   not refundable. Stop cancels an active weld and removes its unfinished
 //!   station; Move is refused while welding, including queued movement.
+//!   `CancelBuild` removes one station queue job and refunds its payment,
+//!   leaving the builder and the other jobs alone.
 //! - Accepted: any def the content db has, if the builder's `build.list` is
 //!   empty or names it. Tech prerequisites
 //!   are checked before this, in `Sim::apply` ([`crate::tech`], SIM-09).
@@ -54,7 +56,7 @@ use serde::{Deserialize, Serialize};
 use sta_content::ContentDb;
 use sta_core::{ContentKey, EntityId, Fixed, PlayerId, Vec3};
 
-use crate::command::Edit;
+use crate::command::{BuildQueueId, Edit};
 use crate::economy::Economy;
 use crate::event::SimEvent;
 use crate::world::{Entities, Entity, EntityKind, Fnv, Table};
@@ -111,6 +113,7 @@ pub fn stand_ring(db: &ContentDb, units: &Entities, what: ContentKey, rig: Entit
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Item {
+    id: BuildQueueId,
     def: ContentKey,
     owner: PlayerId,
     /// Ticks built so far; only counts once `started`.
@@ -141,6 +144,8 @@ pub struct Production {
     rallies: rally::Rallies,
     /// By yard.
     queues: Table<Vec<Item>>,
+    /// A job id is never reused, even after the queue becomes empty.
+    last_job_id: u64,
     /// By rig.
     deploys: Table<Deploy>,
     /// By the station being welded.
@@ -155,20 +160,22 @@ pub(crate) struct Completions {
     pub gate_rallies: Vec<(EntityId, Vec3)>,
 }
 
-/// `(def, owner, done, started, paid)`.
-pub type ItemRec = (u32, u8, u64, bool, bool);
+/// `(def, owner, done, started, paid, job id)`.
+pub type ItemRec = (u32, u8, u64, bool, bool, u64);
 
 /// Plain form of [`Production`] for snapshots.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProductionRec {
     /// `(builder, original owner, point or entity destination)` in id order.
     pub rallies: rally::RallyRec,
-    /// `(yard, [(def, owner, done, started, paid)])`.
+    /// `(yard, [(def, owner, done, started, paid, job id)])`.
     pub queues: Vec<(u32, Vec<ItemRec>)>,
     /// `(rig, def, owner, [x, y, z] bits, paid)`.
     pub deploys: Vec<(u32, u32, u8, [i64; 3], bool)>,
     /// `(station, builder, done, ticks)`.
     pub welds: Vec<(u32, u32, u64, u64)>,
+    /// Last assigned queue job id. Zero before the first admission.
+    pub last_job_id: u64,
 }
 
 fn finished(e: &Entity) -> bool {
@@ -263,20 +270,40 @@ impl Production {
         if self.research_block(db, units, yard, bd, product).is_some() {
             return false;
         }
-        let limit = db.build_queue_limit(bd) as usize;
-        if self.queues.get(yard).is_some_and(|q| q.len() >= limit) || limit == 0 {
+        self.queue_build(db, units, eco, y, bd, what)
+    }
+
+    fn queue_build(
+        &mut self,
+        db: &ContentDb,
+        units: &Entities,
+        eco: &mut Economy,
+        builder: &Entity,
+        builder_def: &sta_content::UnitDef,
+        what: ContentKey,
+    ) -> bool {
+        let limit = db.build_queue_limit(builder_def) as usize;
+        let queued = self.queues.get(builder.id).map_or(0, Vec::len);
+        let Some(id) = self.last_job_id.checked_add(1) else { return false; };
+        if queued >= limit {
             return false;
         }
-        let paid = db.unit_features(bd).pay_on_queue;
-        if paid && !(self.officers_admit(units, db, eco, y.owner, what) && pay(eco, db, y.owner, what)) {
+        let owner = builder.owner;
+        let paid = db.unit_features(builder_def).pay_on_queue;
+        if paid && !(self.officers_admit(units, db, eco, owner, what) && pay(eco, db, owner, what)) {
             return false;
         }
-        let item = Item { def: what, owner: y.owner, done: 0, started: false, paid };
-        match self.queues.get_mut(yard) {
+        self.last_job_id = id;
+        let item = Item { id: BuildQueueId(id), def: what, owner, done: 0, started: false, paid };
+        match self.queues.get_mut(builder.id) {
             Some(q) => q.push(item),
-            None => { self.queues.insert(yard, vec![item]); }
+            None => { self.queues.insert(builder.id, vec![item]); }
         }
         true
+    }
+
+    pub(crate) fn has_digest_state(&self) -> bool {
+        self.last_job_id != 0 || !self.is_empty()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -404,30 +431,7 @@ impl Production {
         };
         let pay_now = db.unit_features(bd).pay_on_queue;
         match kind {
-            EntityKind::Station => {
-                let limit = u64::from(db.build_queue_limit(bd));
-                let queued = self.queues.get(builder).map_or(0, |q| q.len() as u64);
-                if queued >= limit {
-                    return false;
-                }
-                if pay_now && !(self.officers_admit(units, db, eco, owner, what) && pay(eco, db, owner, what)) {
-                    return false;
-                }
-                let item = Item {
-                    def: what,
-                    owner,
-                    done: 0,
-                    started: false,
-                    paid: pay_now,
-                };
-                match self.queues.get_mut(builder) {
-                    Some(q) => q.push(item),
-                    None => {
-                        self.queues.insert(builder, vec![item]);
-                    }
-                }
-                true
-            }
+            EntityKind::Station => self.queue_build(db, units, eco, b, bd, what),
             EntityKind::Craft => {
                 let Some(at) = at else { return false };
                 // The same rule the placement ghost shows (see [`site`], [`orbit`]).
@@ -550,6 +554,35 @@ impl Production {
                 refund(eco, db, i.owner, i.def);
             }
         }
+    }
+
+    /// Remove just the selected job. Armada II's producer removes either
+    /// the active build or a waiting list entry (static executable evidence).
+    /// Its paid active build credits the class costs and discharges officers.
+    /// For preload and other profiles, refunding exactly the paid jobs is
+    /// STA64's interim rule and matches its existing queue-wide cancellation.
+    /// The normal production step admits and starts the next job in this tick.
+    pub(crate) fn cancel_build(
+        &mut self,
+        db: &ContentDb,
+        eco: &mut Economy,
+        builder: &Entity,
+        slot: u32,
+        job: BuildQueueId,
+    ) -> bool {
+        let Some(queue) = self.queues.get_mut(builder.id) else { return false; };
+        let slot = slot as usize;
+        if !queue.get(slot).is_some_and(|item| item.id == job && item.owner == builder.owner) {
+            return false;
+        }
+        let item = queue.remove(slot);
+        if queue.is_empty() {
+            self.queues.remove(builder.id);
+        }
+        if item.paid {
+            refund(eco, db, item.owner, item.def);
+        }
+        true
     }
 
     /// `Stop` or a non-queued `Move`: drop the queues and deploys of the
@@ -752,6 +785,11 @@ impl Production {
             if (dx * dx + dz * dz).sqrt() > reach {
                 continue;
             }
+            let next_job = self.last_job_id.checked_add(1).map(BuildQueueId);
+            if evolves && next_job.is_none() {
+                self.drop_deploy(db, eco, rig);
+                continue;
+            }
             self.deploys.remove(rig);
             if !d.paid && !(self.officers_admit(units, db, eco, d.owner, d.def) && pay(eco, db, d.owner, d.def)) {
                 continue;
@@ -764,10 +802,11 @@ impl Production {
                     r.speed = Fixed::ZERO;
                 }
             }
-            if evolves {
+            if let Some(id) = next_job.filter(|_| evolves) {
                 // Evolver::StartBuild turns the embryo at the site into a
                 // cocoon. The product is constructed only at FinishBuild.
-                self.queues.insert(rig, vec![Item { def: d.def, owner: d.owner, done: 0, started: true, paid: true }]);
+                self.last_job_id = id.0;
+                self.queues.insert(rig, vec![Item { id, def: d.def, owner: d.owner, done: 0, started: true, paid: true }]);
                 events.push(SimEvent::BuildStarted { builder: rig, what: d.def });
                 continue;
             }
@@ -809,6 +848,7 @@ impl Production {
                 h.u64(i.owner.0 as u64);
                 h.u64(i.done);
                 h.u64(i.started as u64 | (i.paid as u64) << 1);
+                h.u64(i.id.0);
             }
         }
         h.u64(self.deploys.len() as u64);
@@ -838,12 +878,16 @@ impl Production {
             }
         }
         self.hash_officer_upgrades(h);
+        if self.last_job_id != 0 {
+            h.u64(self.last_job_id);
+        }
     }
 
     #[allow(dead_code)] // the snapshot calls it
     pub(crate) fn to_rec(&self) -> ProductionRec {
         ProductionRec {
             rallies: self.rallies.to_rec(),
+            last_job_id: self.last_job_id,
             queues: self
                 .queues
                 .iter()
@@ -851,7 +895,7 @@ impl Production {
                     (
                         id.0,
                         q.iter()
-                            .map(|i| (i.def.0, i.owner.0, i.done, i.started, i.paid))
+                            .map(|i| (i.def.0, i.owner.0, i.done, i.started, i.paid, i.id.0))
                             .collect(),
                     )
                 })
@@ -881,19 +925,25 @@ impl Production {
     pub(crate) fn from_rec(r: &ProductionRec) -> Option<Production> {
         let mut p = Production {
             rallies: rally::Rallies::from_rec(&r.rallies)?,
+            last_job_id: r.last_job_id,
             ..Production::default()
         };
+        let mut job_ids = std::collections::BTreeSet::new();
         for (id, q) in &r.queues {
-            let items = q
-                .iter()
-                .map(|&(def, owner, done, started, paid)| Item {
+            let mut items = Vec::with_capacity(q.len());
+            for &(def, owner, done, started, paid, job) in q {
+                if job == 0 || job > r.last_job_id || !job_ids.insert(job) {
+                    return None;
+                }
+                items.push(Item {
+                    id: BuildQueueId(job),
                     def: ContentKey(def),
                     owner: PlayerId(owner),
                     done,
                     started,
                     paid,
-                })
-                .collect();
+                });
+            }
             p.queues.insert(EntityId(*id), items);
         }
         for &(id, def, owner, at, paid) in &r.deploys {

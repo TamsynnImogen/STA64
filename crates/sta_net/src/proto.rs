@@ -43,7 +43,8 @@ pub const MAGIC: [u8; 4] = *b"S64N";
 /// `Order::Alert`, tag 22; 17 adds replacement state to the transferred snapshot;
 /// 18 adds empty-shield recharge holds to that snapshot (#1101).
 /// 19 appends `Order::Trade` (tag 23) and cargo routes to the snapshot.
-pub const PROTOCOL_VERSION: u16 = 19;
+/// 20 appends `Order::CancelBuild` (tag 24) and build job identities to the snapshot.
+pub const PROTOCOL_VERSION: u16 = 20;
 /// Magic, version and body length.
 pub const HEADER_LEN: usize = 10;
 /// Largest frame, header included.
@@ -1944,6 +1945,12 @@ mod tests {
                         units: vec![EntityId(4)],
                         action: sta_sim::command::TradeAction::Destination(EntityId(9)),
                     }),
+                }, Command {
+                    player: PlayerId(0),
+                    seq: 2,
+                    kind: CommandKind::Order(Order::CancelBuild {
+                        builder: EntityId(5), slot: 1, job: sta_sim::command::BuildQueueId(11),
+                    }),
                 }],
                 schedule: vec![],
                 digest: None,
@@ -2153,7 +2160,7 @@ mod tests {
     #[test]
     fn golden_encoding_is_pinned() {
         let all: Vec<u8> = samples().iter().flat_map(|m| encode(m).unwrap()).collect();
-        assert_eq!(PROTOCOL_VERSION, 19);
+        assert_eq!(PROTOCOL_VERSION, 20);
         assert_eq!(
             fnv1a64(&all),
             GOLDEN,
@@ -2161,7 +2168,7 @@ mod tests {
         );
     }
 
-    const GOLDEN: u64 = 4150156036698647349;
+    const GOLDEN: u64 = 17650980094352331510;
 
     /// Tags are positional and never move: NET-04 appended 22 to 28 after
     /// `Sections` (21), the last tag of protocol 2.
@@ -2190,6 +2197,7 @@ mod tests {
             (21, Order::Decommission { units: vec![EntityId(4)], yard: None }),
             (22, Order::Alert { units: vec![EntityId(4)], level: sta_sim::command::AlertState::Green }),
             (23, Order::Trade { units: vec![EntityId(4)], action: sta_sim::command::TradeAction::Destination(EntityId(9)) }),
+            (24, Order::CancelBuild { builder: EntityId(5), slot: 1, job: sta_sim::command::BuildQueueId(11) }),
         ] {
             let bytes = postcard::to_allocvec(&order).unwrap();
             assert_eq!(bytes[0], expected);
@@ -2267,8 +2275,8 @@ mod tests {
     fn header_is_little_endian_and_frozen() {
         let bytes = encode(&Message::Ping { nonce: 0 }).unwrap();
         // Ping is tag 12, nonce 0: two body bytes.
-        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 19, 0, 2, 0, 0, 0, 12, 0]);
-        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 19, 0, 0, 0, 0, 0]);
+        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 20, 0, 2, 0, 0, 0, 12, 0]);
+        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 20, 0, 0, 0, 0, 0]);
     }
 
     #[test]

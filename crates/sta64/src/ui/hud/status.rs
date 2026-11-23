@@ -4,6 +4,7 @@
 //! runs can continue to supply their existing world-only feed.
 
 use bevy::prelude::Resource;
+use sta_sim::command::BuildQueueId;
 use sta_sim::economy::view::CargoView;
 use sta_sim::production::view::ProductionView;
 use sta_sim::{ContentKey, Fixed};
@@ -105,6 +106,7 @@ pub(crate) enum JobState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct QueueItem {
+    pub queue_id: Option<BuildQueueId>,
     pub def: ContentKey,
     pub odf: Option<String>,
     pub model: Option<String>,
@@ -168,6 +170,7 @@ pub(crate) fn selected(feed: &HudFeed, source: &StatusFeed) -> SelectedStatus {
                 let def = feed.content.as_deref().and_then(|db| db.unit(job.def));
                 let active = index == 0 && job.paid && job.started;
                 QueueItem {
+                    queue_id: job.queue_id,
                     def: job.def,
                     odf: def.map(|d| d.odf.clone()),
                     model: def.map(|d| d.model.clone()),
@@ -261,12 +264,14 @@ mod tests {
                 builder: EntityId(1),
                 jobs: vec![
                     ProductionJobView {
+                        queue_id: Some(BuildQueueId(1)),
                         def: ContentKey(11),
                         progress: Fixed::from_f64(0.4),
                         paid: true,
                         started: true,
                     },
                     ProductionJobView {
+                        queue_id: Some(BuildQueueId(2)),
                         def: ContentKey(12),
                         progress: Fixed::ZERO,
                         paid: false,
@@ -322,6 +327,7 @@ mod tests {
                 officer_upgrades: None,
                 builder: EntityId(1),
                 jobs: vec![ProductionJobView {
+                    queue_id: Some(BuildQueueId(1)),
                     def: ContentKey(11),
                     progress: Fixed::ZERO,
                     paid: false,
