@@ -27,6 +27,10 @@ pub struct ScreenRoot(pub Screen);
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Act {
     Goto(Screen),
+    /// Open the map editor's installed-map picker.
+    PickEditorMap,
+    /// Open the selected editor map through `EditorPlugin`.
+    OpenEditorMap,
     /// Open map select with the draft's map picked.
     PickMap,
     /// Open mod select with the chosen mod picked.
@@ -89,6 +93,10 @@ pub struct MapList;
 #[derive(Component, Debug, Clone, Copy)]
 pub struct ModList;
 
+/// The map editor picker's list.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct EditorMapList;
+
 /// The scrolling box a long list sits in: it is as tall as the list up to a
 /// share of the window, and the rest scrolls. Carries what the list shows so
 /// the scroll systems can keep the picked row in view.
@@ -133,6 +141,8 @@ pub struct Ctx<'a> {
     pub graphics: Option<&'a super::stock::GraphicsInfo>,
     /// The installed campaigns (UI-25), for Single Player's cards.
     pub campaigns: Option<&'a crate::frontend::campaign::Campaigns>,
+    pub editor_maps: &'a [String],
+    pub editor_map_selected: usize,
 }
 
 /// Spawn `screen`; `camera` is the UI camera when the host has one of its own.
@@ -146,6 +156,7 @@ pub fn spawn(commands: &mut Commands, screen: Screen, ctx: &Ctx, camera: Option<
         Screen::Setup => frame(commands, ctx, screen, camera, &tr("Instant action"), 960.0, setup(ctx)),
         Screen::Advanced => frame(commands, ctx, screen, camera, &tr("Advanced"), 760.0, advanced(ctx)),
         Screen::MapSelect => frame(commands, ctx, screen, camera, &tr("Select map"), 760.0, map_select(ctx)),
+        Screen::MapEditorPicker => frame(commands, ctx, screen, camera, &tr("Map editor"), 760.0, editor_map_select(ctx)),
         Screen::Settings => frame(commands, ctx, screen, camera, &tr("Options"), 760.0, settings(ctx)),
         Screen::ModSelect => super::mod_manager::spawn(commands, ctx, camera),
         // Drawn by `frontend::campaign` (UI-25) and `frontend::lobby` (UI-11), which have their own systems.
@@ -191,6 +202,7 @@ fn main_menu(ctx: &Ctx) -> impl Bundle {
         p.spawn((button(&t, &tr("Single player"), w), Act::Goto(Screen::SinglePlayer)));
         p.spawn((button(&t, &tr("Instant action"), w), Act::Goto(Screen::Setup)));
         p.spawn((button(&t, &tr("Multiplayer"), w), Act::Goto(Screen::Multiplayer)));
+        p.spawn((button(&t, &tr("Map editor"), w), Act::PickEditorMap));
         p.spawn((button(&t, &tr("Mods"), w), Act::PickMod));
         p.spawn((button(&t, &tr("Options"), w), Act::Goto(Screen::Settings)));
         p.spawn((button(&t, &tr("Exit"), w), Act::Exit));
@@ -364,6 +376,35 @@ fn map_select(ctx: &Ctx) -> impl Bundle {
                 r.spawn(disabled_button(&t, &tr("Select map"), 220.0));
             }
             r.spawn((button(&t, &tr("Cancel"), 220.0), Act::Goto(Screen::Setup)));
+        });
+    })
+}
+
+fn editor_map_select(ctx: &Ctx) -> impl Bundle {
+    let t = ctx.theme.clone();
+    let names: Vec<String> = ctx.editor_maps.iter().map(|path| {
+        if let Some(name) = path.strip_prefix("saved:") {
+            return format!("{name} (saved)");
+        }
+        let Some(stem) = crate::editor::map_stem(path) else { return path.clone() };
+        let key = format!("{}_MAP_NAME", stem.to_ascii_uppercase());
+        let localized = ctx.strings.map(|strings| strings.game_text(&key)).filter(|title| *title != key);
+        let map_title = ctx.data.maps.iter().find(|map| map.def.name == stem).map(|map| map.title());
+        localized.or(map_title).filter(|title| !title.is_empty() && *title != stem)
+            .map_or_else(|| path.clone(), |title| format!("{title} ({path})"))
+    }).collect();
+    let selected = (!names.is_empty()).then_some(ctx.editor_map_selected.min(names.len().saturating_sub(1)));
+    let scroll = ctx.scroll.offset;
+    content(ctx.theme, move |p| {
+        let rows: Vec<&str> = names.iter().map(String::as_str).collect();
+        p.spawn(scroll_list(&t, &rows, selected, scroll, EditorMapList));
+        p.spawn(row(t.gap)).with_children(|r| {
+            if selected.is_some() {
+                r.spawn((button(&t, &tr("Open map"), 220.0), Act::OpenEditorMap));
+            } else {
+                r.spawn(disabled_button(&t, &tr("Open map"), 220.0));
+            }
+            r.spawn((button(&t, &tr("Previous menu"), 220.0), Act::Goto(Screen::Main)));
         });
     })
 }

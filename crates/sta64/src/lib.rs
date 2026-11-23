@@ -8,6 +8,7 @@
 //! time. With no mode flag the front end opens (menus, then Instant Action and the match); `--view`, `--map`, `--skirmish` and the bench flags go straight to their mode.
 
 pub mod app;
+mod editor;
 pub mod bench;
 pub mod clock;
 mod cheats;
@@ -59,7 +60,7 @@ fn mount(cfg: &LaunchConfig) -> (sta_vfs::Vfs, String) {
 fn mission_report(vfs: &sta_vfs::Vfs) {
     use sta_mission::Resolution;
     let labels = sta_mission::Labels::load(vfs);
-    let mut maps: Vec<String> = vfs.list("bzn").into_iter().filter(|p| p.ends_with(".bzn") || p.ends_with(".sol")).collect();
+    let mut maps: Vec<String> = map::match_map_paths(vfs).collect();
     maps.sort();
     let (mut lua, mut legacy, mut none) = (0, 0, 0);
     for p in &maps {

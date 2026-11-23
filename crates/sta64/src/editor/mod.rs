@@ -1,0 +1,464 @@
+//! Local map authoring. The live view, camera and simulation stay in place
+//! when switching between editing and normal play.
+
+mod document;
+mod palette;
+mod panel;
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use bevy::prelude::*;
+use sta_sim::source::PlacementEdit;
+use sta_sim::{EntityId, Vec3 as SimVec3};
+
+#[cfg(test)]
+mod tests;
+
+pub(crate) use document::Document;
+use palette::{EntryKind, Palette};
+
+use crate::app::{AppState, GameSet};
+use crate::frontend::loading::{LoadInfo, LoadProgress, LoadReport, LoadStage};
+use crate::input::orders::{Aim, GroundAt};
+use crate::input::select::{Drag, Targetable, unit_under_where};
+use crate::map::{MapBrowser, MapSeat};
+use crate::sim_link::{CommandQueue, ContentRes, Selection, SelectionChanged, SimLink};
+use crate::ui::hud::HudState;
+use crate::ui::notices::{Notice, Severity};
+use crate::ui::theme::ButtonClicked;
+use crate::viewer::Mounted;
+
+#[derive(Message)]
+pub(crate) struct OpenMap(pub String);
+
+#[derive(Resource)]
+pub(crate) struct EditorLoad {
+    pub path: String,
+    frames: u32,
+    requested: bool,
+}
+
+impl EditorLoad {
+    pub(crate) fn requested(&self) -> bool {
+        self.requested
+    }
+}
+
+#[derive(Resource)]
+pub(crate) struct AuthoredIds(pub BTreeMap<EntityId, usize>);
+
+/// The map picker opens authored placements for sandbox test play.
+#[derive(Resource)]
+pub(crate) struct AuthoringRun;
+
+#[derive(Default, Resource)]
+pub(crate) struct Editing {
+    previous_fog: bool,
+    palette: Palette,
+    directory: Vec<usize>,
+    page: usize,
+    placing: Option<(String, bool)>,
+    drag_origin: Option<Vec2>,
+    status: String,
+}
+
+pub(crate) fn play_mode(editing: Option<Res<Editing>>) -> bool {
+    editing.is_none()
+}
+
+// Copies are editable from this picker regardless of the current mount. Keep
+// them out of the playable map catalogues and the installed mod directories.
+fn save_folder() -> Option<PathBuf> {
+    crate::platform::data_dir().map(|p| p.join("bzn"))
+}
+
+pub(crate) fn saved_map_paths() -> Vec<String> {
+    let Some(folder) = save_folder() else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(folder) else { return Vec::new() };
+    let mut paths: Vec<_> = entries.flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|name| supported_name(name))
+        .map(|name| format!("saved:{name}"))
+        .collect();
+    paths.sort();
+    paths
+}
+
+fn supported_name(name: &str) -> bool {
+    name.ends_with(".bzn") || name.ends_with(".sol")
+}
+
+pub(crate) fn map_stem(path: &str) -> Option<&str> {
+    let file = Path::new(path.strip_prefix("saved:").unwrap_or(path));
+    file.file_stem()?.to_str()
+}
+
+pub(crate) fn read_map(vfs: &sta_vfs::Vfs, path: &str) -> Result<Vec<u8>, String> {
+    if let Some(name) = path.strip_prefix("saved:") {
+        if Path::new(name).file_name().and_then(|file| file.to_str()) != Some(name) || name.contains(['/', '\\', ':']) || !supported_name(name) {
+            return Err("Invalid saved map name".into());
+        }
+        let folder = save_folder().ok_or("The user data directory is unavailable")?;
+        let file = folder.join(name);
+        if !file.symlink_metadata().is_ok_and(|meta| meta.file_type().is_file()) {
+            return Err(format!("{name} is not a saved map"));
+        }
+        return std::fs::read(file).map_err(|e| e.to_string());
+    }
+    if !path.starts_with("bzn/") || !supported_name(path) {
+        return Err("Choose a BZN or SOL map from the map list".into());
+    }
+    vfs.read(path).ok_or_else(|| format!("{path} not found"))?.map_err(|e| e.to_string())
+}
+
+pub(crate) struct EditorPlugin;
+
+impl Plugin for EditorPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_message::<OpenMap>()
+            .add_systems(OnEnter(AppState::FrontEnd), clear)
+            .add_systems(Update, open_map.in_set(GameSet::Ui).after(crate::frontend::screens::on_buttons).run_if(in_state(AppState::FrontEnd)))
+            .add_systems(Update, load_map.in_set(GameSet::Ui).after(crate::map::MapRebuild).run_if(in_state(AppState::Loading)))
+            .add_systems(Update, toggle_key.in_set(GameSet::Input).before(crate::input::select::select).run_if(in_state(AppState::InGame))
+                .run_if(crate::ui::ingame_menu::menu_closed)
+                .run_if(crate::cheats::input::game_input_free)
+                .run_if(not(crate::ui::presentation::cutscene_running)))
+            .add_systems(Update, tools.in_set(GameSet::Input).after(toggle_key).after(crate::input::orders::aim)
+                .run_if(resource_exists::<Editing>).run_if(in_state(AppState::InGame))
+                .run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free))
+            .add_systems(Update, panel::draw.in_set(GameSet::Ui));
+    }
+}
+
+fn clear(mut commands: Commands) {
+    commands.remove_resource::<EditorLoad>();
+    commands.remove_resource::<Editing>();
+    commands.remove_resource::<Document>();
+    commands.remove_resource::<AuthoredIds>();
+    commands.remove_resource::<AuthoringRun>();
+}
+
+fn open_map(
+    mut requests: MessageReader<OpenMap>,
+    mut commands: Commands,
+    mut next: ResMut<NextState<AppState>>,
+    info: Option<ResMut<LoadInfo>>,
+    progress: Option<ResMut<LoadProgress>>,
+) {
+    let Some(OpenMap(path)) = requests.read().last() else { return };
+    if let Some(mut info) = info {
+        *info = LoadInfo { kicker: "Map editor".into(), title: map_stem(path).unwrap_or(path).into(), ..default() };
+    }
+    if let Some(mut progress) = progress {
+        progress.begin();
+    }
+    commands.insert_resource(MapSeat(Some(0)));
+    commands.insert_resource(AuthoringRun);
+    commands.insert_resource(EditorLoad { path: path.clone(), frames: 0, requested: false });
+    next.set(AppState::Loading);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn load_map(
+    editing: Option<ResMut<EditorLoad>>,
+    browser: Option<ResMut<MapBrowser>>,
+    progress: Option<ResMut<LoadProgress>>,
+    mut next: ResMut<NextState<AppState>>,
+    link: Option<ResMut<SimLink>>,
+    document: Option<Res<Document>>,
+    mount: Option<Res<Mounted>>,
+    mut commands: Commands,
+    mut notices: MessageWriter<Notice>,
+) {
+    let Some(mut request) = editing else { return };
+    let Some(mut browser) = browser else {
+        next.set(AppState::FrontEnd);
+        return;
+    };
+    request.frames += 1;
+    if !request.requested {
+        if request.frames >= crate::game::flow::LEAD_FRAMES {
+            request.requested = true;
+            request.frames = 0;
+            browser.dirty = true;
+            // Hold tick zero before the map builder publishes the link.
+            commands.init_resource::<Editing>();
+        }
+        return;
+    }
+    if browser.dirty {
+        return;
+    }
+    let Some(mut link) = link.filter(|_| document.is_some_and(|doc| doc.path == request.path)) else {
+        notices.write(Notice::new(Severity::Bad, format!("Cannot edit {}: {}", request.path, browser.info.replace('\n', " "))));
+        next.set(AppState::FrontEnd);
+        return;
+    };
+    if let Some(mut p) = progress {
+        if !p.is_complete() {
+            for stage in LoadStage::ALL {
+                p.report(&LoadReport::finished(stage));
+            }
+        }
+        if p.is_active() {
+            return;
+        }
+    }
+    commands.insert_resource(begin_editing(&mut link, mount.as_deref()));
+    commands.remove_resource::<EditorLoad>();
+    next.set(AppState::InGame);
+}
+
+fn begin_editing(link: &mut SimLink, mount: Option<&Mounted>) -> Editing {
+    let previous_fog = link.fog_lifted();
+    link.set_fog_lifted(true);
+    Editing { previous_fog, palette: mount.map_or_else(Palette::default, |v| Palette::load(&v.0)), ..default() }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn toggle_key(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut clicked: MessageReader<ButtonClicked>,
+    actions: Query<&panel::Act>,
+    editing: Option<Res<Editing>>,
+    net: Option<Res<crate::game::net_match::NetGame>>,
+    mount: Option<Res<Mounted>>,
+    link: Option<ResMut<SimLink>>,
+    mut selection: ResMut<Selection>,
+    mut changed: MessageWriter<SelectionChanged>,
+    mut queue: ResMut<CommandQueue>,
+    drag: Option<ResMut<Drag>>,
+    hud: Option<ResMut<HudState>>,
+    mut commands: Commands,
+) {
+    let play = clicked.read().any(|ButtonClicked(e)| actions.get(*e).is_ok_and(|a| matches!(a, panel::Act::Play)));
+    let toggle = editor_chord(&keys, KeyCode::KeyE);
+    if !(toggle || play) || net.is_some() {
+        return;
+    }
+    let Some(mut link) = link else { return };
+    if !link.can_edit_placements() {
+        return;
+    }
+    if let Some(playing) = editing {
+        link.set_fog_lifted(playing.previous_fog);
+        commands.remove_resource::<Editing>();
+    } else {
+        commands.insert_resource(begin_editing(&mut link, mount.as_deref()));
+    }
+    selection.0.clear();
+    changed.write(SelectionChanged);
+    queue.0.clear();
+    if let Some(mut drag) = drag {
+        *drag = default();
+    }
+    if let Some(mut hud) = hud {
+        hud.placing = None;
+        hud.targeting = None;
+    }
+}
+
+fn editor_chord(keys: &ButtonInput<KeyCode>, key: KeyCode) -> bool {
+    keys.just_pressed(key)
+        && keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight])
+        && !keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight, KeyCode::ShiftLeft, KeyCode::ShiftRight])
+}
+
+fn editable(content: &sta_content::ContentDb, key: sta_sim::ContentKey) -> bool {
+    use sta_sim::world::EntityKind;
+    content.unit(key).is_some_and(|def| {
+        matches!(EntityKind::of_def(def), EntityKind::Craft | EntityKind::Station)
+            && def.a1_officer_upgrade_gain.is_none()
+            && def.resource.is_none()
+            && def.raw.i64("hidden").unwrap_or(0) == 0
+    })
+}
+
+fn ground(aim: crate::input::select::AimState, y: f32, bounds: Option<&crate::ui::hud::ghost::PlacementBounds>) -> Option<SimVec3> {
+    let p = GroundAt::Ray(aim.ray).on_plane(y)?;
+    let pos = SimVec3::from_f32(p.to_array());
+    if let Some((lo, hi)) = bounds.and_then(|b| b.0)
+        && (pos.x < lo.x || pos.x > hi.x || pos.z < lo.z || pos.z > hi.z)
+    {
+        return None;
+    }
+    Some(pos)
+}
+
+impl Editing {
+    fn entries(&self) -> &[palette::Entry] {
+        let mut entries = self.palette.root.as_slice();
+        for &index in &self.directory {
+            let Some(palette::Entry { kind: EntryKind::Branch(children), .. }) = entries.get(index) else { break };
+            entries = children;
+        }
+        entries
+    }
+
+    fn select_entry(&mut self, index: usize) {
+        match self.entries().get(index).map(|e| &e.kind) {
+            Some(EntryKind::Branch(_)) => {
+                self.directory.push(index);
+                self.page = 0;
+                self.placing = None;
+            }
+            Some(EntryKind::Leaf { odf, neutral }) => {
+                self.placing = Some((odf.clone(), *neutral));
+                self.status.clear();
+            }
+            None => {}
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn tools(
+    keys: Res<ButtonInput<KeyCode>>,
+    buttons: Res<ButtonInput<MouseButton>>,
+    aim: Res<Aim>,
+    targets: Targetable,
+    content: Option<Res<ContentRes>>,
+    bounds: Option<Res<crate::ui::hud::ghost::PlacementBounds>>,
+    panel: Query<&bevy::ui::RelativeCursorPosition, With<panel::Root>>,
+    (document, ids): (Option<ResMut<Document>>, Option<ResMut<AuthoredIds>>),
+    link: Option<ResMut<SimLink>>,
+    mut editing: ResMut<Editing>,
+    mut clicked: MessageReader<ButtonClicked>,
+    actions: Query<&panel::Act>,
+    mut selection: ResMut<Selection>,
+    mut changed: MessageWriter<SelectionChanged>,
+    mut leave: MessageWriter<crate::game::flow::LeaveMatch>,
+) {
+    let (Some(mut link), Some(content)) = (link, content) else { return };
+    let mut document = document;
+    let mut ids = ids;
+    let mut rotate = 0;
+    let mut delete = false;
+    let mut save = editor_chord(&keys, KeyCode::KeyS);
+    let allow_topology = document.as_ref().is_none_or(|d| d.can_change_objects());
+    for action in clicked.read().filter_map(|ButtonClicked(e)| actions.get(*e).ok()) {
+        match *action {
+            panel::Act::Entry(i) => editing.select_entry(i),
+            panel::Act::Back => {
+                editing.directory.pop();
+                editing.page = 0;
+                editing.placing = None;
+            }
+            panel::Act::Page(page) => editing.page = page,
+            panel::Act::Rotate => rotate = 1,
+            panel::Act::Delete => delete = true,
+            panel::Act::Save => save = true,
+            panel::Act::Exit => { leave.write(crate::game::flow::LeaveMatch); }
+            panel::Act::Play => {}
+        }
+    }
+    if save && let Some(doc) = &document {
+        let saved = save_folder().ok_or_else(|| "The user data directory is unavailable".to_owned())
+            .and_then(|folder| doc.save_copy(&folder));
+        editing.status = match saved {
+            Ok(p) => format!("Saved {}", p.display()),
+            Err(e) => format!("Could not save: {e}"),
+        };
+    }
+    if keys.just_pressed(KeyCode::BracketRight) {
+        rotate = 1;
+    } else if keys.just_pressed(KeyCode::BracketLeft) {
+        rotate = -1;
+    }
+    delete |= keys.just_pressed(KeyCode::Delete);
+    let over_panel = panel.iter().any(|pointer| pointer.cursor_over());
+    let right = !over_panel && buttons.just_pressed(MouseButton::Right);
+    if right && editing.placing.is_some() {
+        editing.placing = None;
+        return;
+    }
+
+    let index_for = |id| ids.as_ref().and_then(|ids| ids.0.get(&id).copied())
+        .filter(|&index| document.as_ref().is_some_and(|doc| doc.object(index).is_some()));
+    if let Some(aim) = aim.0.filter(|_| !over_panel) && buttons.just_pressed(MouseButton::Left) {
+        if let Some((odf, neutral)) = editing.placing.clone() {
+            if allow_topology {
+                let owner = if neutral { sta_sim::world::NEUTRAL } else { link.player() };
+                let team = if neutral { 0 } else { i32::from(owner.0) + 1 };
+                let placed = content.0.key(&odf).filter(|&key| editable(&content.0, key))
+                    .zip(ground(aim, 0.0, bounds.as_deref()))
+                    .and_then(|(def, at)| link.edit_placement(PlacementEdit::Place { def, owner, at }).map(|id| (id, at)));
+                if let Some((id, at)) = placed {
+                    if let (Some(doc), Some(ids)) = (&mut document, &mut ids)
+                        && let Some(index) = doc.push(&odf, team, at.to_f32(), [0.0, 1.0])
+                    {
+                        ids.0.insert(id, index);
+                    }
+                    selection.0 = vec![id];
+                    changed.write(SelectionChanged);
+                    editing.status = format!("Placed {odf}");
+                } else {
+                    editing.status = format!("Could not place {odf} here");
+                }
+            }
+            return;
+        }
+        let target = unit_under_where(aim.cursor, aim.ray, &targets, |id| {
+            (allow_topology || index_for(id).is_some()) && link.real_curr().unit(id).is_some_and(|unit| editable(&content.0, unit.def))
+        });
+        selection.0 = target.into_iter().collect();
+        changed.write(SelectionChanged);
+        editing.drag_origin = target.map(|_| aim.cursor);
+        editing.status.clear();
+    }
+
+    let drag = if buttons.just_released(MouseButton::Left) { editing.drag_origin.take() } else { None };
+    let Some(id) = selection.0.first().copied() else { return };
+    let Some(unit) = link.real_curr().unit(id).cloned() else {
+        selection.0.clear();
+        changed.write(SelectionChanged);
+        return;
+    };
+    let index = index_for(id);
+    if !allow_topology && index.is_none() {
+        return;
+    }
+
+    if delete && allow_topology {
+        if link.edit_placement(PlacementEdit::Remove(id)).is_some() {
+            if let (Some(doc), Some(index), Some(ids)) = (&mut document, index, &mut ids) {
+                doc.remove(index);
+                ids.0.remove(&id);
+            }
+            selection.0.clear();
+            changed.write(SelectionChanged);
+            editing.status = "Object deleted".into();
+        }
+        return;
+    }
+
+    let moved = aim.0.filter(|a| !over_panel && (right || drag.is_some_and(|start| start.distance(a.cursor) > 6.0)))
+        .and_then(|a| ground(a, unit.pos.y.to_f32(), bounds.as_deref()));
+    if moved.is_none() && rotate == 0 {
+        return;
+    }
+    if link.edit_placement(PlacementEdit::Transform { id, at: moved.unwrap_or(unit.pos), quarter_turns: rotate }).is_some() {
+        if let (Some(doc), Some(ids)) = (&mut document, &mut ids) {
+            if let Some(index) = index {
+                if let Some(at) = moved {
+                    doc.move_to(index, at.to_f32());
+                }
+                if rotate != 0 {
+                    doc.rotate(index, rotate);
+                }
+            } else if let Some(unit) = link.real_curr().unit(id)
+                && let Some(name) = content.0.name(unit.def)
+            {
+                // Editing a unit built during play promotes it to a map placement.
+                let team = if unit.owner == sta_sim::world::NEUTRAL { 0 } else { i32::from(unit.owner.0) + 1 };
+                let heading = [unit.heading.0.to_f32(), unit.heading.1.to_f32()];
+                if let Some(index) = doc.push(name, team, unit.pos.to_f32(), heading) {
+                    ids.0.insert(id, index);
+                }
+            }
+        }
+        editing.status = if moved.is_some() { "Object moved" } else { "Object rotated" }.into();
+    }
+}
