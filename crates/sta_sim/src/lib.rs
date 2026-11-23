@@ -819,6 +819,66 @@ impl Sim {
 }
 
 impl WorldSource for Sim {
+    fn supports_placement_edits(&self) -> bool {
+        self.content.is_some()
+    }
+
+    fn edit_placement(&mut self, edit: source::PlacementEdit) -> Option<EntityId> {
+        use source::PlacementEdit;
+
+        let id = match edit {
+            PlacementEdit::Place { def, owner, at } => {
+                let defn = self.content.as_ref()?.unit(def)?;
+                if !matches!(world::EntityKind::of_def(defn), world::EntityKind::Craft | world::EntityKind::Station)
+                    || defn.raw.i64("hidden").unwrap_or(0) != 0
+                    || defn.resource.is_some()
+                {
+                    return None;
+                }
+                let id = self.spawn_unqueued_def(def, owner, at, (Fixed::ZERO, Fixed::ONE))?;
+                // Map placements enter at rest with no construction callback or spawn effect.
+                self.events.retain(|event| !matches!(event, SimEvent::Spawned { id: spawned } if *spawned == id));
+                id
+            }
+            PlacementEdit::Transform { id, at, quarter_turns } => {
+                let unit = self.units.get_mut(id)?;
+                if !matches!(unit.kind, world::EntityKind::Craft | world::EntityKind::Station)
+                    || unit.progress.is_some()
+                    || unit.flags.contains(view::UnitFlags::DYING)
+                    || unit.flags.contains(view::UnitFlags::DOCKED)
+                {
+                    return None;
+                }
+                unit.pos = at;
+                let (x, z) = unit.heading;
+                unit.heading = match quarter_turns.rem_euclid(4) {
+                    1 => (z, -x),
+                    2 => (-x, -z),
+                    3 => (-z, x),
+                    _ => (x, z),
+                };
+                unit.target = None;
+                unit.speed = Fixed::ZERO;
+                unit.omega = Fixed::ZERO;
+                self.movement.clear(id);
+                id
+            }
+            PlacementEdit::Remove(id) => {
+                let unit = self.units.get(id)?;
+                if !matches!(unit.kind, world::EntityKind::Craft | world::EntityKind::Station)
+                    || unit.progress.is_some()
+                    || unit.flags.contains(view::UnitFlags::DYING)
+                    || unit.flags.contains(view::UnitFlags::DOCKED)
+                    || !self.retire(id)
+                {
+                    return None;
+                }
+                id
+            }
+        };
+        Some(id)
+    }
+
     /// Applies `commands` sorted by `(player, seq)` (sorted again here, so a
     /// caller's order cannot matter), then advances. Rejected commands come
     /// out as [`SimEvent::Rejected`], in batch order.

@@ -303,15 +303,16 @@ pub struct EndBanner;
 
 /// Shows the result once: a notice, a log line and a banner. A new match
 /// (a new view that is undecided again) clears it.
-pub fn outcome(
+pub(crate) fn outcome(
     mut commands: Commands,
     link: Option<Res<SimLink>>,
     mut shown: Local<Option<Verdict>>,
     mut notices: MessageWriter<Notice>,
     banner: Query<Entity, With<EndBanner>>,
     mission: Option<Res<mission_host::MissionRun>>,
+    (editor, document): (Option<Res<crate::editor::Editing>>, Option<Res<crate::editor::AuthoringRun>>),
 ) {
-    let link = link.filter(|_| mission.is_none());
+    let link = link.filter(|_| mission.is_none() && editor.is_none() && document.is_none());
     let Some(link) = link else {
         for e in &banner {
             commands.entity(e).despawn();

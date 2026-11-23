@@ -15,6 +15,7 @@ fn key(screen: Screen) -> &'static str {
         Screen::Setup => "setup",
         Screen::Advanced => "advanced",
         Screen::MapSelect => "map_select",
+        Screen::MapEditorPicker => "map_editor",
         Screen::Settings => "settings",
         Screen::ModSelect => "mods",
         Screen::Missions => "missions",

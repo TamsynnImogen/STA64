@@ -245,7 +245,11 @@ fn drive_load(
     progress: Option<ResMut<LoadProgress>>,
     mut next: ResMut<NextState<AppState>>,
     mut notices: MessageWriter<Notice>,
+    editor_load: Option<Res<crate::editor::EditorLoad>>,
 ) {
+    if editor_load.is_some() {
+        return;
+    }
     let Some(mut m) = active else {
         next.set(AppState::FrontEnd);
         return;
@@ -298,10 +302,13 @@ fn drive_load(
 }
 
 /// F10 leaves the match at any time; Enter or Esc once it is decided.
-fn leave_keys(keys: Option<Res<ButtonInput<KeyCode>>>, link: Option<Res<SimLink>>, mission: Option<Res<super::mission_host::MissionRun>>, mut leave: MessageWriter<LeaveMatch>) {
+fn leave_keys(keys: Option<Res<ButtonInput<KeyCode>>>, link: Option<Res<SimLink>>, mission: Option<Res<super::mission_host::MissionRun>>,
+    (editor, document): (Option<Res<crate::editor::Editing>>, Option<Res<crate::editor::AuthoringRun>>),
+    mut leave: MessageWriter<LeaveMatch>,
+) {
     let (Some(keys), Some(link)) = (keys, link) else { return };
     // A mission ends by its script, not by elimination.
-    let decided = mission.is_none() && verdict(link.curr(), link.player()).is_some();
+    let decided = mission.is_none() && editor.is_none() && document.is_none() && verdict(link.curr(), link.player()).is_some();
     if keys.just_pressed(KeyCode::F10) || (decided && keys.any_just_pressed([KeyCode::Enter, KeyCode::Escape])) {
         leave.write(LeaveMatch);
     }
@@ -398,10 +405,11 @@ type MatchUi = Or<(With<crate::ui::hud::HudRoot>, With<crate::ui::radar::RadarRo
 fn show_match_ui(
     state: Option<Res<State<AppState>>>,
     cine: Option<Res<crate::ui::presentation::CineractiveState>>,
+    editor: Option<Res<crate::editor::Editing>>,
     mut ui: Query<&mut Visibility, MatchUi>,
 ) {
     // Not over a script's cineractive either: the cinematic view has no HUD panel (Refit, static).
-    let want = if state.is_some_and(|s| *s.get() == AppState::InGame) && !cine.is_some_and(|c| c.on) { Visibility::Inherited } else { Visibility::Hidden };
+    let want = if state.is_some_and(|s| *s.get() == AppState::InGame) && !cine.is_some_and(|c| c.on) && editor.is_none() { Visibility::Inherited } else { Visibility::Hidden };
     for mut v in &mut ui {
         v.set_if_neq(want);
     }

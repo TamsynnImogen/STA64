@@ -516,6 +516,12 @@ struct Memo {
     shown_cutscene: Option<bool>,
 }
 
+type MatchFog<'w> = (
+    Option<Res<'w, crate::game::net_match::NetGame>>,
+    Option<Res<'w, crate::game::flow::ActiveMatch>>,
+    Option<Res<'w, crate::editor::Editing>>,
+);
+
 /// Recompute the grid when the view, the player or the map changes; spawn the layers
 /// once, then rewrite their masks.
 #[allow(clippy::too_many_arguments)]
@@ -534,7 +540,7 @@ fn update_fog(
     mut materials: ResMut<Assets<FogMaterial>>,
     mut layers: Query<(Entity, &FogLayer, &mut Visibility)>,
     reveal: Option<Res<crate::render::reveal::Reveal>>,
-    (net, active): (Option<Res<crate::game::net_match::NetGame>>, Option<Res<crate::game::flow::ActiveMatch>>),
+    (net, active, editor): MatchFog<'_>,
     mut memo: Local<Memo>,
 ) {
     let Memo { seen, art_generation, memory, shown_reveal, shown_cutscene } = &mut *memo;
@@ -550,6 +556,8 @@ fn update_fog(
     let curr = link.real_curr();
     let lifted = if net.is_some() {
         (false, false)
+    } else if editor.is_some() {
+        (true, true)
     } else {
         let (fog, shroud) = active.as_deref().map_or((false, false), |active| active.fog.lifted());
         (fog || reveal.as_deref().is_some_and(|r| r.fog), shroud || reveal.as_deref().is_some_and(|r| r.shroud))
@@ -566,7 +574,7 @@ fn update_fog(
         };
         // During a cutscene the layers are hidden anyway and the memory does not take the sight in;
         // see `FogGrid::observe_with`.
-        grid.observe_with(curr, player, content.as_deref().map(|c| &*c.0), !cutscene);
+        grid.observe_with(curr, player, content.as_deref().map(|c| &*c.0), !cutscene && editor.is_none());
         let shown = grid.lifted(lifted.0, lifted.1);
         *memory = Some(grid);
         let art_changed = *art_generation != Some(patterns.generation);

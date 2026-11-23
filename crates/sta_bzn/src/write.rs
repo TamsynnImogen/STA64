@@ -241,6 +241,9 @@ fn binary(map: &Map) -> Result<Vec<u8>, WriteError> {
         );
         r.i32(o.team);
         r.buffer("label", &o.label, LABEL.max(o.label.len() + 1))?;
+        if !o.instance_name.is_empty() {
+            r.buffer("instance name", &o.instance_name, 128)?;
+        }
         r.rec(8, &0u32.to_le_bytes());
         let t: Vec<u8> = o.transform.iter().flat_map(|f| f.to_le_bytes()).collect();
         r.rec(11, &t);
@@ -440,6 +443,7 @@ mod tests {
         let map = with(&buffer);
         assert_eq!(map.objects[0].instance_name, "Tester Prime");
         assert_eq!(map.objects[1].instance_name, "", "the second object has none");
+        assert_eq!(crate::parse(&write(&map).unwrap()).unwrap().objects, map.objects);
         assert_eq!(map.objects[0].label, "Baku", "the script label is not replaced");
         // Blank (spaces) and a buffer of another length are no name.
         assert_eq!(with(&[b' '; 128]).objects[0].instance_name, "");

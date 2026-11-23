@@ -75,6 +75,25 @@ impl SimLink {
         SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, cargo, nodes, systems, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None, lifted: None, fog_lifted: false, match_fog_lifted: false, observer: false }
     }
 
+    pub(crate) fn can_edit_placements(&mut self) -> bool {
+        !self.observer && self.source.get().supports_placement_edits()
+    }
+
+    pub(crate) fn edit_placement(&mut self, edit: sta_sim::source::PlacementEdit) -> Option<EntityId> {
+        let source = self.source.get();
+        let id = source.edit_placement(edit)?;
+        self.curr = source.view();
+        self.prev = self.curr.clone();
+        self.production = source.production_view();
+        self.cargo = source.cargo_view();
+        self.nodes = source.node_view();
+        self.systems = source.system_view();
+        // A command replay cannot represent a placement edit between ticks.
+        self.log = None;
+        self.refresh_lifted();
+        Some(id)
+    }
+
     /// Log every tick into `replay` (a [`Replay::new`] header of the game's
     /// setup; the link adds tick 0's digest and the rest as it steps).
     pub fn with_replay(mut self, mut replay: Replay) -> SimLink {
@@ -460,7 +479,7 @@ impl Plugin for SimLinkPlugin {
             .init_resource::<SimEntities>()
             .add_systems(OnEnter(crate::app::AppState::Loading), forget_removals)
             .add_systems(OnExit(crate::app::AppState::InGame), forget_removals)
-            .add_systems(Update, step_sim.in_set(GameSet::SimLink).run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<BenchDriven>)).run_if(not(resource_exists::<SimHeld>)));
+            .add_systems(Update, step_sim.in_set(GameSet::SimLink).run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<BenchDriven>)).run_if(not(resource_exists::<SimHeld>)).run_if(crate::editor::play_mode));
     }
 }
 

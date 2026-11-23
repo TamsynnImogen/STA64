@@ -105,7 +105,7 @@ pub(super) fn spawn(p: &mut Box_<'_>, ctx: &Ctx, b: Vec2) {
     button(p, b, Slot::MainSinglePlayer, cap(ctx, "single_player", "Single player").to_uppercase(), Some(Act::Goto(Screen::SinglePlayer)));
     button(p, b, Slot::MainInstantAction, cap(ctx, "instant_action", "Instant action").to_uppercase(), Some(Act::Goto(Screen::Setup)));
     button(p, b, Slot::MainMultiplayer, cap(ctx, "multiplayer", "Multiplayer").to_uppercase(), Some(Act::Goto(Screen::Multiplayer)));
-    button(p, b, Slot::MainMapEditor, cap(ctx, "map_editor", "Map editor").to_uppercase(), None);
+    button(p, b, Slot::MainMapEditor, cap(ctx, "map_editor", "Map editor").to_uppercase(), Some(Act::PickEditorMap));
     button(p, b, Slot::MainMods, cap(ctx, "mod_manager", "Mod manager").to_uppercase(), Some(Act::PickMod));
     button(p, b, Slot::MainOptions, cap(ctx, "options", "Options").to_uppercase(), Some(Act::Goto(Screen::Settings)));
     button(p, b, Slot::MainReplayIntro, cap(ctx, "replay_intro", "Replay intro").to_uppercase(), None);

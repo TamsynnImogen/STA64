@@ -11,8 +11,25 @@ use std::sync::Arc;
 use crate::command::Command;
 use crate::view::{TickOutput, WorldView};
 
+/// Placement tools for a local authoring or test-play session. These take
+/// effect without advancing the game clock.
+pub enum PlacementEdit {
+    Place { def: crate::ContentKey, owner: crate::PlayerId, at: crate::Vec3 },
+    Transform { id: crate::EntityId, at: crate::Vec3, quarter_turns: i32 },
+    Remove(crate::EntityId),
+}
+
 /// Steps a world, one tick per call.
 pub trait WorldSource: Send {
+    fn supports_placement_edits(&self) -> bool {
+        false
+    }
+
+    /// The affected entity, or None if this source or placement is unsupported.
+    fn edit_placement(&mut self, _edit: PlacementEdit) -> Option<crate::EntityId> {
+        None
+    }
+
     /// Advance one tick, applying `commands` (sorted by `(player, seq)`).
     fn step(&mut self, commands: &[Command]) -> TickOutput;
     /// The world now: after the last step, or at tick 0 before any.

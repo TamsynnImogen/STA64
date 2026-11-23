@@ -8,6 +8,7 @@
 //! time. With no mode flag the front end opens (menus, then Instant Action and the match); `--view`, `--map`, `--skirmish` and the bench flags go straight to their mode.
 
 pub mod app;
+mod editor;
 pub mod bench;
 pub mod clock;
 mod cheats;
