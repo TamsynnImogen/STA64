@@ -158,6 +158,7 @@ pub struct Production {
 pub(crate) struct Completions {
     pub evolved: Vec<(EntityId, EntityId)>,
     pub gate_rallies: Vec<(EntityId, Vec3)>,
+    pub replaced_pods: Vec<EntityId>,
 }
 
 /// `(def, owner, done, started, paid, job id)`.
@@ -267,7 +268,7 @@ impl Production {
         if !finished(y) || !EntityKind::producer_def(bd) || !self.admits_officer_upgrade(y, bd, product) {
             return false;
         }
-        if self.research_block(db, units, yard, bd, product).is_some() {
+        if self.research_block(db, units, yard, bd, product, false).is_some() {
             return false;
         }
         self.queue_build(db, units, eco, y, bd, what)
@@ -412,11 +413,11 @@ impl Production {
         let (Some(bd), Some(product)) = (db.unit(bdef), db.unit(what)) else {
             return false;
         };
-        if !bd.build.list.is_empty() && !bd.build.list.iter().any(|r| r.key == what) {
+        if bd.research_build.is_empty() && !bd.build.list.is_empty() && !bd.build.list.iter().any(|r| r.key == what) {
             return false;
         }
         if !self.admits_officer_upgrade(b, bd, product)
-            || self.research_block(db, units, builder, bd, product).is_some()
+            || self.research_block(db, units, builder, bd, product, true).is_some()
         {
             return false;
         }
@@ -679,15 +680,19 @@ impl Production {
                         // External research pods finish directly in an attachment slot.
                         let out = match builder {
                             Some(b) if research::external_pod(b, d) => {
-                                let Some(slot) = self.completed_slot(units, yard, b, d) else {
+                                let Some(pod) = self.completed_slot(db, units, yard, b, d) else {
                                     refund(eco, db, owner, def);
                                     if self.queues.get(yard).is_some_and(Vec::is_empty) {
                                         self.queues.remove(yard);
                                     }
                                     continue;
                                 };
-                                let (pos, heading, _) = research::pose(y, b, slot).expect("usable slot");
-                                attachment = Some(research::Attachment { station: yard, slot });
+                                let (pos, heading, _) = research::pose(y, b, pod.slot).expect("usable slot");
+                                if let Some(old) = pod.replacing {
+                                    self.research.remove(old);
+                                    completed.replaced_pods.push(old);
+                                }
+                                attachment = Some(research::Attachment { station: yard, slot: pod.slot });
                                 launch::Launch { pos, heading, exit: None }
                             }
                             Some(b) if portal.is_some() => launch::through_wormhole(b, pos, heading),

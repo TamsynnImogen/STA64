@@ -545,7 +545,9 @@ fn load_with_a1(profile: Profile, mod_overrides: &Overrides, stems: &[String], l
     }
 
     // Names are unique by stem; `build` can only fail on a bug here.
-    let db = builder.build()?.with_a1_officer_upgrades(a1_officers, &race_upgrades, &mut warnings);
+    let (db, research_warnings) = builder.build()?.with_research_builds_warned();
+    warnings.extend(research_warnings);
+    let db = db.with_a1_officer_upgrades(a1_officers, &race_upgrades, &mut warnings);
     Ok((db, warnings))
 }
 

@@ -234,6 +234,162 @@ impl ContentDb {
         (self, warnings)
     }
 
+    /// Resolve indexed native and extended research lists once every pod is known.
+    pub(crate) fn with_research_builds_warned(mut self) -> (ContentDb, Vec<Warning>) {
+        use std::collections::{BTreeMap, BTreeSet};
+        let mut warnings = Vec::new();
+        let pods: BTreeMap<String, (ContentKey, Option<crate::SystemUpgrade>)> = self
+            .units()
+            .map(|u| (u.odf.to_ascii_lowercase(), (u.key, u.system_upgrade)))
+            .collect();
+        for (_, def) in &mut self.defs {
+            let Def::Unit(station) = def else { continue };
+            if station.class.0 != "research" {
+                continue;
+            }
+            let odf = &station.raw;
+            let primary: BTreeMap<usize, &str> = crate::odf::numbered(odf, "builditem")
+                .into_iter()
+                .map(|(i, raw)| (i as usize, raw))
+                .collect();
+            let secondary: BTreeMap<usize, &str> = crate::odf::numbered(odf, "secondarybuilditem")
+                .into_iter()
+                .map(|(i, raw)| (i as usize, raw))
+                .collect();
+            let mut extended = BTreeMap::<(u32, usize), &str>::new();
+            for key in odf.keys() {
+                let lower = key.to_ascii_lowercase();
+                let Some(rest) = lower.strip_prefix("tier") else {
+                    continue;
+                };
+                let Some((tier, index)) = rest.split_once("builditem") else {
+                    continue;
+                };
+                if let (Ok(tier), Ok(index), Some(raw)) =
+                    (tier.parse::<u32>(), index.parse::<usize>(), odf.raw(key))
+                {
+                    let slots = if tier == 0 { 57 } else { 58 };
+                    if tier <= 14 && index < slots {
+                        extended.insert((tier, index), raw);
+                    } else {
+                        warnings.push(Warning::new(
+                            format!("{}.odf", station.odf),
+                            format!("{key} exceeds the upgrade station tier or slot limit; ignored"),
+                        ));
+                    }
+                }
+            }
+            if secondary.is_empty() && extended.is_empty() {
+                continue;
+            }
+            let mut indices: BTreeSet<usize> = primary
+                .keys()
+                .copied()
+                .chain(secondary.keys().copied())
+                .collect();
+            indices.extend(extended.keys().map(|(_, index)| *index));
+            let file = format!("{}.odf", station.odf);
+            let value = |raw: &str| {
+                let stem = crate::odf::stem(raw);
+                if stem.is_empty() || stem == "null" {
+                    None
+                } else {
+                    pods.get(&stem).copied()
+                }
+            };
+            let valid_override = |raw: &str,
+                                  tier: u32,
+                                  previous: Option<crate::SystemUpgrade>,
+                                  warnings: &mut Vec<Warning>| {
+                let stem = crate::odf::stem(raw);
+                if stem.is_empty() || stem == "null" {
+                    return Some(None);
+                }
+                match value(raw) {
+                    Some((key, Some(upgrade)))
+                        if upgrade.tier == tier + 2
+                            && previous.is_none_or(|p| p.system == upgrade.system) =>
+                    {
+                        Some(Some((key, Some(upgrade))))
+                    }
+                    _ => {
+                        warnings.push(Warning::new(&file, format!("tier{tier}BuildItem references invalid or mismatched pod {stem}; ignored")));
+                        None
+                    }
+                }
+            };
+            for index in indices {
+                let base = primary.get(&index).and_then(|raw| value(raw));
+                let mut current = base;
+                if let Some(raw) = extended.get(&(0, index))
+                    && let Some(replacement) = valid_override(raw, 0, None, &mut warnings)
+                {
+                    current = replacement;
+                }
+                let primary_key = current.map(|(key, _)| key);
+                let mut successors = Vec::new();
+                let mut previous = current.and_then(|(_, upgrade)| upgrade);
+                let mut next = secondary.get(&index).and_then(|raw| value(raw));
+                if let Some(raw) = secondary.get(&index) {
+                    let name = crate::odf::stem(raw);
+                    if !name.is_empty() && name != "null" && next.is_none() {
+                        warnings.push(Warning::new(&file, format!("secondaryBuildItem{index} references undefined unit {name}; ignored")));
+                    }
+                }
+                if let Some((_, upgrade)) = next {
+                    let wrong_tier = upgrade.is_some_and(|u| u.tier != 3);
+                    let wrong_chain = previous.is_some_and(|p| upgrade.is_none_or(|u| u.system != p.system));
+                    if wrong_tier || wrong_chain {
+                        warnings.push(Warning::new(&file, format!("secondaryBuildItem{index} is not a matching tier-3 pod; ignored")));
+                        next = None;
+                    }
+                }
+                if let Some(raw) = extended.get(&(1, index))
+                    && let Some(replacement) = valid_override(raw, 1, previous, &mut warnings)
+                {
+                    next = replacement;
+                }
+                if let Some((key, upgrade)) = next {
+                    successors.push(key);
+                    previous = upgrade;
+                } else {
+                    previous = None;
+                }
+                for tier in 2..=14 {
+                    let Some(raw) = extended.get(&(tier, index)) else {
+                        continue;
+                    };
+                    if successors.len() != (tier - 1) as usize || previous.is_none() {
+                        warnings.push(Warning::new(
+                            &file,
+                            format!(
+                                "tier{tier}BuildItem{index} has no preceding pod tier; ignored"
+                            ),
+                        ));
+                        continue;
+                    }
+                    match valid_override(raw, tier, previous, &mut warnings) {
+                        Some(Some((key, upgrade))) => {
+                            successors.push(key);
+                            previous = upgrade;
+                        }
+                        Some(None) => {
+                            previous = None;
+                        }
+                        None => {}
+                    }
+                }
+                station.research_build.push(crate::ResearchBuildSlot {
+                    index,
+                    primary: primary_key,
+                    successors,
+                });
+            }
+        }
+        self.digest = digest_of(&self);
+        (self, warnings)
+    }
+
     /// This database gated by `tree` (replacing any), with the digest
     /// recomputed.
     pub fn with_tech_tree(mut self, tree: TechTree) -> ContentDb {
@@ -310,6 +466,37 @@ impl ContentDb {
             Some((_, Def::Unit(u))) => Some(u),
             _ => None,
         }
+    }
+
+    /// Whether an effective research chain's held pod satisfies an earlier
+    /// prerequisite at the same indexed station slot.
+    pub fn research_satisfies(&self, held: ContentKey, required: ContentKey) -> bool {
+        if held == required { return true; }
+        let (Some(held_upgrade), Some(required_upgrade)) = (
+            self.unit(held).and_then(|unit| unit.system_upgrade),
+            self.unit(required).and_then(|unit| unit.system_upgrade),
+        ) else { return false; };
+        if held_upgrade.system != required_upgrade.system || held_upgrade.tier <= required_upgrade.tier { return false; }
+        self.units().filter(|unit| unit.class.0 == "research").any(|station| {
+            station.research_build.iter().any(|slot| {
+                let mut chain = slot.primary.into_iter().chain(slot.successors.iter().copied());
+                let required_index = chain.clone().position(|key| key == required);
+                let held_index = chain.position(|key| key == held);
+                matches!((required_index, held_index), (Some(required), Some(held)) if held > required)
+            })
+        })
+    }
+
+    /// Tier-2 pod whose independent stat survives replacement by this pod.
+    /// A shared successor with conflicting primaries has no inferred value.
+    pub fn research_primary(&self, successor: ContentKey) -> Option<crate::SystemUpgrade> {
+        let system = self.unit(successor)?.system_upgrade?.system;
+        let mut primaries = self.units().flat_map(|u| &u.research_build)
+            .filter(|slot| slot.successors.contains(&successor))
+            .filter_map(|slot| self.unit(slot.primary?)?.system_upgrade)
+            .filter(|pod| pod.system == system && pod.tier == 2);
+        let first = primaries.next()?;
+        primaries.all(|pod| pod == first).then_some(first)
     }
 
     /// The aperture ODF named by a yard, resolved through the mounted data.
@@ -586,7 +773,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         free_unit: _, dock: _, sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
         max_dilithium: _, mining_rate: _, transfer_rate: _, freight_transfer: _, resource: _, features: _,
         confinement: _, nebula_pathing: _, nebula_effects: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
-        crew_gain: _, transport: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, repair_attachment: _, research_slots: _, research_station_upgrade: _, stats: _, raw: _,
+        crew_gain: _, transport: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, repair_attachment: _, research_slots: _, research_build: _, research_station_upgrade: _, system_upgrade: _, stats: _, raw: _,
     } = u;
     // `stats` (CON-55): only the keys a sim rule reads are digested (the planet keys
     // under SIM-73's target-mask switch, below); the rest is typed only.
@@ -670,6 +857,35 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     }
     if u.research_station_upgrade {
         c.flag("research_station_upgrade", true);
+    }
+    if let Some(upgrade) = u.system_upgrade {
+        c.raw(
+            "system_upgrade",
+            &format!(
+                "{:?}:{}:{}",
+                upgrade.system,
+                upgrade.tier,
+                fixed_text(upgrade.multiplier)
+            ),
+        );
+    }
+    if !u.research_build.is_empty() {
+        c.list(
+            "research_build",
+            u.research_build.iter().map(|slot| {
+                format!(
+                    "{}:{}:[{}]",
+                    slot.index,
+                    slot.primary
+                        .map_or_else(|| "-".to_owned(), |key| key.0.to_string()),
+                    slot.successors
+                        .iter()
+                        .map(|key| key.0.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            }),
+        );
     }
     if !u.research_slots.is_empty() {
         let scale = if u.scale > Fixed::ZERO { u.scale } else { Fixed::ONE };

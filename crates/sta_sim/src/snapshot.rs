@@ -795,6 +795,7 @@ impl Sim {
             perception,
             events: b.events,
             movement,
+            ship_upgrades: Default::default(),
             weapons,
             economy,
             production,
@@ -825,6 +826,7 @@ impl Sim {
             mission_switches,
         };
         sim.refresh_seat_rules();
+        sim.restore_ship_upgrade_memo();
         Ok(sim)
     }
 }

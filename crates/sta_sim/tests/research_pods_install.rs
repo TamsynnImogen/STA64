@@ -146,3 +146,62 @@ fn federation_research_uses_the_installed_socket_and_tech_tree() {
             .any(|e| matches!(e, SimEvent::BuildStarted { what, .. } if *what == pod))
     );
 }
+
+#[test]
+fn federation_ship_upgrade_advances_the_authored_button_and_socket() {
+    let Ok(root) = std::env::var("STA64_TEST_RESEARCH_INSTALL") else { return };
+    let active = std::env::var("STA64_TEST_RESEARCH_MOD").ok();
+    let vfs = sta_vfs::Vfs::mount_install(Path::new(&root), active.as_deref()).unwrap();
+    let (index, _) = OdfIndex::build(&vfs);
+    let (db, _) = ContentDb::load(&vfs, &index).unwrap();
+    let upgrade_station = db.key("fupgrade").expect("Federation upgrade station");
+    let level2 = db.key("fedpod14").expect("Federation level-2 engine pod");
+    let level3 = db.key("fedpod24").expect("Federation level-3 engine pod");
+    let levels = db.unit(upgrade_station).unwrap().research_build.iter()
+        .find(|row| row.primary == Some(level2)).expect("indexed engine upgrade").clone();
+    assert!(levels.successors.contains(&level3));
+    let station_odf = db.name(upgrade_station).unwrap().to_owned();
+    let content = Arc::new(db);
+    let mut sim = Sim::from_setup(&GameSetup {
+        seed: 9,
+        map: Arc::new(MapDef {
+            objects: vec![MapObject {
+                odf: station_odf, owner: Some(0), pos: Vec3::ZERO,
+                heading: (Fixed::ZERO, Fixed::ONE), label: None,
+            }],
+            ..MapDef::empty()
+        }),
+        content: content.clone(),
+        players: vec![PlayerSetup { id: PlayerId(0), team: TeamId(0), race: "federation".into(), control: Control::Human }],
+        options: GameOptions::default(),
+    });
+    let station = sim.view().units.iter().find(|u| u.def == upgrade_station).unwrap().id;
+    let funding: Vec<_> = (0..5).map(|slot| Command {
+        player: PlayerId::BENCH, seq: slot,
+        kind: CommandKind::Edit(Edit::Cargo(PlayerId(0), slot as u8, Fixed::from_int(100_000))),
+    }).collect();
+    sim.step(&funding);
+    let build = |sim: &mut Sim, seq, what| {
+        let result = sim.step(&[Command {
+            player: PlayerId(0), seq,
+            kind: CommandKind::Order(Order::Build { builder: station, what, at: None }),
+        }]);
+        assert!(result.events.iter().any(|e| matches!(e, SimEvent::BuildStarted { what: key, .. } if *key == what)), "{:?}", result.events);
+        for _ in 0..=content.unit(what).unwrap().build.ticks {
+            sim.step(&[]);
+        }
+        sim.production_view().into_iter().find(|row| row.builder == station).unwrap().research.unwrap()
+    };
+
+    let first = build(&mut sim, 1, level2);
+    let first_pod = first.pods[0];
+    assert!(first.build_slots.unwrap().contains(&(levels.index, level3)));
+    let position = sim.unit(first_pod.entity).unwrap().pos;
+    let second = build(&mut sim, 2, level3);
+    assert_eq!(second.pods.len(), 1);
+    assert_eq!(second.pods[0].slot, first_pod.slot);
+    assert!(sim.unit(first_pod.entity).is_none());
+    let upgraded = sim.unit(second.pods[0].entity).unwrap();
+    assert_eq!((upgraded.pos, upgraded.def), (position, level3));
+    assert!(second.unavailable.contains(&(level3, ResearchBlock::AlreadyResearched)));
+}

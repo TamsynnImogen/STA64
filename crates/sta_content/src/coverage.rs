@@ -87,10 +87,12 @@ pub const READ_ODF_KEYS: &[&str] = &[
     "weldinganimspeed", "shielddelay", "eventtransport", "boardingstrength", "cancommandeer",
     "canbecommandeered", "transportsprite", "crewretreatratio", "transporttoenemyonhard",
     "transporttofriendsonnoteasy",
+    // Ship-system upgrade pods and resolved station chains.
+    "isshipupgrade", "upgradelevel", "upgradesystem", "upgrademultiplier",
 ];
 
 /// Prefixes of numbered ODF keys (`weapon1`, `buildItem3`, ...) that are read.
-pub const READ_ODF_PREFIXES: &[&str] = &["weapon", "builditem", "feature_", "sta64_"];
+pub const READ_ODF_PREFIXES: &[&str] = &["weapon", "builditem", "secondarybuilditem", "feature_", "sta64_"];
 
 /// `RTS_CFG.h` / `ART_CFG.h` names some STA64 code reads besides the typed
 /// rules ([`crate::TYPED_CFG_KEYS`], which count as read too).
@@ -117,9 +119,15 @@ pub const CFG_FILES: &[&str] = &["RTS_CFG.h", "ART_CFG.h"];
 
 fn odf_key_read(key: &str) -> bool {
     let k = key.to_ascii_lowercase();
+    if let Some(rest) = k.strip_prefix("tier")
+        && let Some((tier, index)) = rest.split_once("builditem")
+        && tier.parse::<u32>().is_ok_and(|tier| tier <= 14) && index.parse::<usize>().is_ok()
+    {
+        return true;
+    }
     READ_ODF_KEYS.contains(&k.as_str())
         || READ_ODF_PREFIXES.iter().any(|p| {
-            let numbered = *p == "weapon" || *p == "builditem";
+            let numbered = *p == "weapon" || *p == "builditem" || *p == "secondarybuilditem";
             k.strip_prefix(p).is_some_and(|rest| !numbered || (!rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())))
         })
 }

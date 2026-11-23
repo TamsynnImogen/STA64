@@ -215,3 +215,114 @@ fn only_a_finished_pod_satisfies_a_tech_prerequisite() {
     assert!(sim.despawn(pod, None));
     assert!(!build(&mut sim, yard, "reward", 4));
 }
+
+#[test]
+fn upgrade_research_replaces_the_matching_system_and_retains_its_prerequisites() {
+    use sta_content::{DefRef, ResearchBuildSlot, SystemUpgrade, UpgradeSystem};
+    use sta_core::ContentKey;
+
+    // Content keys follow sorted definition names. Two distinct hardpoints
+    // make it observable that the first built system need not be button zero.
+    let mut station = UnitDef::new("station", "research");
+    station.hull = n(100);
+    station.build.list = vec![DefRef::new("engines2"), DefRef::new("shield2")];
+    station.research_build = vec![
+        ResearchBuildSlot { index: 0, primary: Some(ContentKey(0)), successors: vec![ContentKey(1), ContentKey(2)] },
+        ResearchBuildSlot { index: 4, primary: Some(ContentKey(3)), successors: vec![ContentKey(4)] },
+    ];
+    station.research_slots = [10, 20].into_iter().map(|x| ResearchSlot {
+        node: format!("slot_{x}"),
+        reserved_for: None,
+        pose: Some(RepairAttachment {
+            origin: at(x, 2, 0),
+            axes: [at(1, 0, 0), at(0, 1, 0), at(0, 0, 1)],
+        }),
+    }).collect();
+    let upgrade = |name, system, tier, multiplier| {
+        let mut pod = UnitDef::new(name, "pod");
+        pod.hull = n(40);
+        pod.build.ticks = 2;
+        pod.system_upgrade = Some(SystemUpgrade { system, tier, multiplier });
+        pod
+    };
+    let mut ship = UnitDef::new("ship", "craft");
+    ship.hull = n(100);
+    ship.shields.max = n(80);
+    ship.movement.max_speed = n(100);
+    let (tree, warnings) = sta_content::TechTree::parse("tech1.tt",
+        "engines2.odf 1 station.odf\nengines3.odf 1 engines2.odf\nengines4.odf 2 engines2.odf engines3.odf\nshield2.odf 1 station.odf\nshield3.odf 1 shield2.odf\n");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let content = Arc::new(ContentDb::builder().profile(Profile::Sta2Classic)
+        .unit(station)
+        .unit(ship)
+        .unit(upgrade("engines2", UpgradeSystem::Engines, 2, Fixed::from_f64(1.25)))
+        .unit(upgrade("engines3", UpgradeSystem::Engines, 3, Fixed::from_f64(1.5)))
+        .unit(upgrade("engines4", UpgradeSystem::Engines, 4, n(2)))
+        .unit(upgrade("shield2", UpgradeSystem::Shields, 2, Fixed::from_f64(1.5)))
+        .unit(upgrade("shield3", UpgradeSystem::Shields, 3, n(2)))
+        .tech_tree(tree).build().unwrap());
+    let mut sim = Sim::from_setup(&GameSetup {
+        seed: 21,
+        map: Arc::new(MapDef::empty()),
+        content: content.clone(),
+        players: vec![PlayerSetup { id: PlayerId(0), team: TeamId(0), race: "test".into(), control: Control::Human }],
+        options: GameOptions::default(),
+    });
+    let spawn = |sim: &mut Sim, name, pos| sim.spawn_def(key(sim, name), PlayerId(0), pos, (Fixed::ZERO, Fixed::ONE)).unwrap();
+    let station = spawn(&mut sim, "station", Vec3::ZERO);
+    let ship = spawn(&mut sim, "ship", at(200, 0, 0));
+
+    assert!(!build(&mut sim, station, "engines4", 1));
+    let finish = |sim: &mut Sim, what, seq| {
+        assert!(build(sim, station, what, seq), "could not queue {what}");
+        for _ in 0..3 { sim.step(&[]); }
+    };
+    finish(&mut sim, "shield2", 2);
+    finish(&mut sim, "engines2", 3);
+    let old = research(&sim, station).pods[1];
+    assert_eq!(sim.unit(ship).unwrap().stats.max_speed, n(125));
+    assert_eq!(research(&sim, station).build_slots, Some(vec![(0, key(&sim, "engines3")), (4, key(&sim, "shield3"))]));
+
+    // The old pod keeps granting its benefits during construction and
+    // reappears on cancellation without taking a different hardpoint.
+    assert!(build(&mut sim, station, "engines3", 4));
+    assert_eq!(research(&sim, station).replacing, Some(old.entity));
+    assert_eq!(sim.unit(ship).unwrap().stats.max_speed, n(125));
+    let row = sim.production_view().into_iter().find(|r| r.builder == station).unwrap();
+    sim.step(&[Command {
+        player: PlayerId(0), seq: 5,
+        kind: CommandKind::Order(Order::CancelBuild { builder: station, slot: 0, job: row.jobs[0].queue_id.unwrap() }),
+    }]);
+    assert_eq!(research(&sim, station).replacing, None);
+    assert_eq!(research(&sim, station).pods[1], old);
+    finish(&mut sim, "engines3", 6);
+    assert!(sim.unit(old.entity).is_none());
+    assert_eq!(research(&sim, station).pods[1].slot, old.slot);
+    assert_eq!(research(&sim, station).build_slots.unwrap()[0], (0, key(&sim, "engines4")));
+    finish(&mut sim, "engines4", 7);
+    finish(&mut sim, "shield3", 8);
+    assert_eq!(sim.unit(ship).unwrap().stats.max_speed, n(200));
+    assert_eq!(sim.unit(ship).unwrap().shields.max, n(160));
+    assert_eq!(research(&sim, station).unavailable,
+        [(key(&sim, "engines4"), ResearchBlock::AlreadyResearched),
+         (key(&sim, "shield3"), ResearchBlock::AlreadyResearched)]);
+
+    // An independent live pod for the same team is the fallback.
+    let lower = spawn(&mut sim, "engines2", at(270, 0, 0));
+    let restored = Sim::from_snapshot(&sim.snapshot(), Some(content)).unwrap();
+    assert_eq!(sim.digest(), restored.digest());
+    let mut sim = restored;
+    let upgraded = research(&sim, station).pods[1].entity;
+    sim.despawn(upgraded, None);
+    assert_eq!(sim.unit(ship).unwrap().stats.max_speed, n(125));
+    sim.despawn(lower, None);
+    assert_eq!(sim.unit(ship).unwrap().stats.max_speed, n(100));
+
+    // Map/script placements are visible and reflected in a snapshot before
+    // the next tick, just like pods produced by the research queue.
+    spawn(&mut sim, "engines2", at(270, 0, 0));
+    assert_eq!(sim.unit(ship).unwrap().stats.max_speed, n(125));
+    let restored = Sim::from_snapshot(&sim.snapshot(), sim.content().cloned()).unwrap();
+    assert_eq!(restored.unit(ship).unwrap().stats.max_speed, n(125));
+    assert_eq!(restored.digest(), sim.digest());
+}
