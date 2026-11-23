@@ -419,7 +419,7 @@ pub(crate) struct NoticeRoot;
 #[derive(Component)]
 struct NoticeLine(usize);
 #[derive(Component)]
-struct ChatRoot;
+pub(crate) struct ChatRoot;
 #[derive(Component)]
 pub(crate) struct TipBox;
 #[derive(Component)]
