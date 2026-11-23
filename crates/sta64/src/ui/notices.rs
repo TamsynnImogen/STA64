@@ -183,7 +183,7 @@ impl ChatLog {
 pub struct Tooltip {
     pub short: String,
     pub verbose: Option<String>,
-    /// What the Armada II stock look adds from the string table; every other look ignores it.
+    /// Build text and costs are also used by the plain box when the item has a price.
     pub stock: Option<super::hud::stock::tooltip_text::StockTip>,
     /// The action whose bound key the stock look puts into the text's hotkey slot (interim: only the
     /// actions STA64 has a binding for).
@@ -195,7 +195,7 @@ impl Tooltip {
         Tooltip { short: short.into(), verbose: None, stock: None, bound: None }
     }
 
-    /// Under the stock look: a build item's composition.
+    /// A build item's class text and cost composition.
     pub fn stock_build(mut self, parts: super::hud::stock::tooltip_text::BuildTipParts) -> Tooltip {
         self.stock = Some(super::hud::stock::tooltip_text::StockTip::Build(parts));
         self

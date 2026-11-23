@@ -500,9 +500,11 @@ pub(super) fn build_item_buttons(feed: &HudFeed, b: &UnitView) -> Vec<(usize, Bu
         .map(|it| {
             let definition = feed.content.as_deref().and_then(|db| db.unit(it.key));
             let site = builder.zip(definition).is_some_and(|(b, product)| EntityKind::build_requires_site(b, product));
+            let (crew, officers) = definition.map_or((0.0, 0.0), |d| (d.crew.to_f32(), d.build.officers.to_f32()));
+            let cost = build_cost_text(&it.cost, &names, crew, officers);
             let verbose = match &it.why {
-                Some(w) => format!("{}. Cost: {}", w, cost_text(&it.cost, &names)),
-                None => format!("Cost: {}", cost_text(&it.cost, &names)),
+                Some(w) => format!("{}. Cost: {cost}", w),
+                None => format!("Cost: {cost}"),
             };
             let btn = Button {
                 cell: 0,
@@ -561,6 +563,21 @@ pub(super) fn build_tip_parts(feed: &HudFeed, builder: EntityId, what: ContentKe
 
 fn cost_text(cost: &[f32], names: &ResourceModel) -> String {
     let parts: Vec<String> = cost.iter().enumerate().filter(|(_, c)| **c > 0.0).map(|(i, c)| format!("{} {}", *c as i64, names.name(i))).collect();
+    if parts.is_empty() { "free".into() } else { parts.join(", ") }
+}
+
+fn build_cost_text(cost: &[f32], names: &ResourceModel, crew: f32, officers: f32) -> String {
+    let resources = cost_text(cost, names);
+    let mut parts = Vec::new();
+    if resources != "free" {
+        parts.push(resources);
+    }
+    if crew > 0.0 {
+        parts.push(format!("{} crew", crew as i64));
+    }
+    if officers > 0.0 {
+        parts.push(format!("{} officers", officers as i64));
+    }
     if parts.is_empty() { "free".into() } else { parts.join(", ") }
 }
 
@@ -1866,6 +1883,8 @@ mod tests {
         assert_eq!(cost_text(&by("fx_cruiser").cost, &ResourceModel::default()), "600 Dilithium, 50 Latinum");
         assert_eq!(cost_text(&by("fx_frigate").cost, &ResourceModel::default()), "250 Dilithium");
         assert_eq!(cost_text(&[0.0, 0.0], &ResourceModel::default()), "free");
+        assert_eq!(build_cost_text(&[0.0, 0.0], &ResourceModel::default(), 37.0, 4.0), "37 crew, 4 officers");
+        assert_eq!(build_cost_text(&[0.0, 0.0], &ResourceModel::default(), 0.0, 0.0), "free");
     }
 
     #[test]

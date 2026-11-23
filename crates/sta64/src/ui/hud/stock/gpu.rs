@@ -17,6 +17,7 @@ use super::layout::StockLayout;
 use crate::app::{GameSet, configure_sets};
 use crate::sim_link::Selection;
 use crate::ui::gui_sprites::{GuiButton, GuiImage, GuiSkin};
+use crate::ui::notices::TipBox;
 use crate::ui::profile::UiProfile;
 use crate::ui::radar::{RadarFeed, RadarRoot, RadarSquare};
 use crate::viewer::Mounted;
@@ -28,7 +29,7 @@ struct CaptureCamera(Entity);
 fn aim_roots(
     mut commands: Commands,
     camera: Res<CaptureCamera>,
-    roots: Query<Entity, (Or<(With<HudRoot>, With<RadarRoot>)>, Without<UiTargetCamera>)>,
+    roots: Query<Entity, (Or<(With<HudRoot>, With<RadarRoot>, With<TipBox>)>, Without<UiTargetCamera>)>,
 ) {
     for root in &roots {
         commands.entity(root).insert(UiTargetCamera(camera.0));
@@ -103,7 +104,7 @@ fn sizes(default: &[UVec2]) -> Vec<UVec2> {
 }
 
 #[derive(Clone, Copy)]
-enum HoverCapture { Selected, SelectedHover, Low, Other, BuildPage, ColonyShip, Group(usize), Avatar, WeaponIcons }
+enum HoverCapture { Selected, SelectedHover, Low, Other, BuildPage, BuildTooltip, ColonyShip, Group(usize), Avatar, WeaponIcons }
 
 /// Independent installed-data expectation: current crew is compared with its
 /// actual live capacity, not crewCost. Resolve authored palette/thresholds.
@@ -143,11 +144,19 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         !resource.is_empty() || !minimap.is_empty() || !info.is_empty(),
         "{label}: CFG has no authored background pieces to check"
     );
-    let group_count = if let HoverCapture::Group(count) = hover_mode { count } else { 0 };
+    let group_count = match hover_mode { HoverCapture::Group(count) => count, HoverCapture::BuildTooltip => 1, _ => 0 };
     let mut hud_feed = feed(&vfs, options, group_count);
     let original = hud_feed.selected[0];
     let hover = match hover_mode {
         HoverCapture::Selected | HoverCapture::BuildPage => None,
+        HoverCapture::BuildTooltip => {
+            let db = hud_feed.content.as_ref().unwrap();
+            let builder = hud_feed.view.units.iter().find(|u| u.owner == hud_feed.player
+                && db.unit(u.def).is_some_and(|d| d.class.0 == "constructionrig" && !d.build.list.is_empty()))
+                .expect("installed construction ship with build options");
+            hud_feed.selected = vec![builder.id];
+            None
+        }
         HoverCapture::SelectedHover => Some(original),
         HoverCapture::Group(count) => {
             hud_feed.selected = hud_feed.view.units.iter().rev().filter(|u| u.owner == hud_feed.player
@@ -299,10 +308,17 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         ))
         .id();
     app.insert_resource(CaptureCamera(camera));
+    if matches!(hover_mode, HoverCapture::BuildTooltip) {
+        // ECS-only cursor state gives the stock tooltip its placement in this windowless frame.
+        let mut window = Window::default();
+        window.resolution.set(size.x as f32, size.y as f32);
+        window.set_cursor_position(Some(Vec2::new(600.0, 400.0)));
+        app.world_mut().spawn((window, bevy::window::PrimaryWindow));
+    }
     if matches!(hover_mode, HoverCapture::Avatar) {
         app.insert_resource(crate::render::units::LocalPlayer(Some(PlayerId(0))));
     }
-    if matches!(hover_mode, HoverCapture::BuildPage) {
+    if matches!(hover_mode, HoverCapture::BuildPage | HoverCapture::BuildTooltip) {
         // The builder's build page: command-button labels and PREV/NEXT when it has pages.
         app.world_mut().resource_mut::<super::super::HudState>().page = super::super::Page::Build;
     }
@@ -569,6 +585,29 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         }
     }
 
+    if matches!(hover_mode, HoverCapture::BuildTooltip) {
+        let db = app.world().resource::<HudFeed>().content.as_ref().unwrap().clone();
+        let (item, cost) = app.world_mut().query::<(Entity, &super::super::panels::GridCell)>()
+            .iter(app.world())
+            .find_map(|(entity, cell)| match cell.0 {
+                super::super::Act::Build { what, site: true, .. } => {
+                    let cost = db.unit(what).unwrap().build.cost.iter().find(|value| **value > Fixed::ZERO)?;
+                    Some((entity, cost.to_f32() as i64))
+                }
+                _ => None,
+            })
+            .expect("priced station build button");
+        let tip = app.world().get::<crate::ui::notices::Tooltip>(item).unwrap();
+        let delays = *app.world().resource::<crate::ui::stock_tooltip::TipDelays>();
+        let rest = delays.short + 0.1;
+        let text = tip.stock_text_at(rest, &delays, &|key| key.into()).unwrap();
+        assert!(text.contains(&cost.to_string()), "{label}: {text:?} lacks {cost}");
+        *app.world_mut().resource_mut::<crate::ui::notices::TipHover>() =
+            crate::ui::notices::TipHover { target: Some(item), rest };
+        app.update();
+        assert!(app.world_mut().query::<&crate::ui::sprite_font::SpriteText>().iter(app.world())
+            .any(|words| words.text.contains(&cost.to_string())), "{label}: price text reached the rendered tooltip");
+    }
     let frames = Arc::new(Mutex::new(Vec::<Image>::new()));
     let output = Arc::clone(&frames);
     app.world_mut()
@@ -751,6 +790,20 @@ fn installed_stock_hud_renders_on_gpu() {
             }
         }
     }
+}
+
+/// Windowless Armada II construction-ship build page with a priced station tooltip open.
+/// `STA64_HUD_CAPTURE_DIR` keeps the local frame; installed game art must never be committed.
+#[test]
+fn installed_construction_ship_station_tooltip_renders_on_gpu() {
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_TEST_INSTALL=<Armada II root>");
+        return;
+    }
+    let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), None).expect("installed Armada II VFS");
+    capture_one(vfs, UiProfile::Armada2, UVec2::new(1280, 720), "gui_fed.cfg",
+        "a2-construction-ship-station-tooltip-1280x720", GameOptions::default(), HoverCapture::BuildTooltip);
 }
 
 /// Armada I: the three separate resource panels (dilithium, crew, officers), from the

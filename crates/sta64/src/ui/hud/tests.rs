@@ -252,6 +252,31 @@ fn open_again(app: &mut App) -> Entity {
 }
 
 #[test]
+fn plain_hud_build_buttons_show_station_and_ship_costs_without_authored_verbose_text() {
+    for (builder, product, cost, crew, officers) in [(1, "fx_station", "1200", "1000", None), (2, "fx_cruiser", "600", "300", Some("4"))] {
+        let mut app = app(content(None), &[builder]);
+        let open = cell(&mut app, |a| *a == Act::OpenBuild);
+        press(&mut app, open);
+        let item = cell(&mut app, |a| matches!(a, Act::Build { odf, .. } if odf == product));
+        let tip = app.world().get::<crate::ui::notices::Tooltip>(item).unwrap().clone();
+        let delays = crate::ui::stock_tooltip::TipDelays::default();
+        for rest in [delays.short, delays.verbose] {
+            let text = tip.stock_text_at(rest, &delays, &|key| key.into()).unwrap();
+            assert!(text.contains(cost), "{product} at {rest}: {text:?}");
+            *app.world_mut().resource_mut::<crate::ui::notices::TipHover>() =
+                crate::ui::notices::TipHover { target: Some(item), rest };
+            app.update();
+            let shown = &app.world_mut().query_filtered::<&crate::ui::sprite_font::SpriteText,
+                With<crate::ui::notices::TipText>>().single(app.world()).unwrap().text;
+            assert!(shown.contains(cost) && shown.contains(crew), "{product} at {rest}: {shown:?}");
+            if let Some(officers) = officers {
+                assert!(shown.contains(officers), "{product} at {rest}: {shown:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn a_tech_tree_disables_what_is_not_yet_available() {
     // The frigate wants a station; the player has none.
     let mut app = app(content(Some("fx_cruiser 0\nfx_frigate 1 fx_station\nfx_yard 0\nfx_station 0\n")), &[2]);

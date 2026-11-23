@@ -993,6 +993,28 @@ fn stock_build_palette_pages_reach_every_build_option() {
 }
 
 #[test]
+fn stock_hud_build_buttons_show_station_and_ship_costs_without_authored_verbose_text() {
+    let mut app = app();
+    let delays = crate::ui::stock_tooltip::TipDelays::default();
+    for (builder, product, cost) in [("fx_cruiser", "fx_station", "1200"), ("fx_yard", "fx_cruiser", "600")] {
+        let mut feed = app.world().resource::<HudFeed>().clone();
+        let mut view = (*feed.view).clone();
+        view.units[0].def = feed.content.as_ref().unwrap().key(builder).unwrap();
+        feed.view = Arc::new(view);
+        *app.world_mut().resource_mut::<HudFeed>() = feed;
+        app.world_mut().resource_mut::<super::super::HudState>().page = super::super::Page::Build;
+        app.update();
+        let tip = app.world_mut().query::<(&GridCell, &crate::ui::notices::Tooltip)>().iter(app.world())
+            .find_map(|(cell, tip)| matches!(&cell.0, Act::Build { odf, .. } if odf == product).then_some(tip.clone()))
+            .unwrap_or_else(|| panic!("missing {product} build button"));
+        for rest in [delays.short, delays.verbose] {
+            let text = tip.stock_text_at(rest, &delays, &|key| key.into()).unwrap();
+            assert!(text.contains(cost), "{builder} -> {product} at {rest}: {text:?}");
+        }
+    }
+}
+
+#[test]
 fn stock_grid_clicks_still_queue_orders_and_arm_targets() {
     let mut app = app();
     let stop = cell(&mut app, Act::Stop);
