@@ -12,7 +12,7 @@
 //! # Layers
 //!
 //! - [`MenuMap`]: `map.ini` parsed (no Bevy). The built-in copy is `assets/menu/map.ini`;
-//!   a `Menu/map.ini` in the mounted install takes precedence, as in Refit.
+//!   the mounted install can supply `Menu/map.ini` or `RefitScene/Menu/map.ini`.
 //! - [`Director`]: the scene's clock and state (no Bevy): the camera with its sway and
 //!   the blend between views, each ship's pose, cloak and departure, and the marks of
 //!   what happened. Deterministic in the scene's time.
@@ -27,7 +27,7 @@
 //! # For INT-M4
 //!
 //! Add [`MenuScenePlugin`] once. Insert a [`MenuSceneConfig`] when the front end opens
-//! and remove it when a match starts (the scene tears itself down). Ask for views with
+//! or switches mods. Remove it when a match starts. Ask for views with
 //! the [`MenuRequest`] message. `--headless` with `STA64_MENU_SCENE=1` runs the scene on
 //! its own for the bench and the frame tests ([`run_headless`]).
 
@@ -55,7 +55,7 @@ use crate::render::model_scene::PartCache;
 use crate::render::sprites::SpriteTables;
 use crate::render::textures::{Loader, TextureCache};
 use crate::render::units::{FromView, LocalPlayer, NeedsModel, to_bevy};
-use crate::sim_link::{ContentRes, SimEntity, SimLink};
+use crate::sim_link::{ContentRes, SimEntities, SimEntity, SimLink};
 use crate::viewer::Mounted;
 
 /// The built-in map: Refit's `render3d/content/menu/map.ini`, unchanged.
@@ -237,14 +237,14 @@ impl MenuMap {
         MenuMap::parse(BUILTIN_MAP)
     }
 
-    /// The install's `Menu/map.ini` when it has one, else the built-in map.
+    /// Prefer the highest mount layer, then the direct path within that layer.
     pub fn from_vfs(vfs: &sta_vfs::Vfs) -> MenuMap {
-        for path in ["menu/map.ini", "Menu/map.ini", "Menu/Map.ini"] {
-            if let Some(Ok(bytes)) = vfs.read(path) {
-                return MenuMap::parse(&String::from_utf8_lossy(&bytes));
-            }
-        }
-        MenuMap::builtin()
+        ["menu/map.ini", "refitscene/menu/map.ini"]
+            .into_iter()
+            .filter_map(|path| vfs.resolve(path))
+            .min_by_key(|(layer, _)| *layer)
+            .and_then(|(layer, source)| vfs.read_from(layer, source).ok())
+            .map_or_else(MenuMap::builtin, |bytes| MenuMap::parse(&String::from_utf8_lossy(&bytes)))
     }
 
     pub fn parse(text: &str) -> MenuMap {
@@ -933,7 +933,7 @@ pub fn load_install_content(vfs: &sta_vfs::Vfs) -> Result<Arc<ContentDb>, String
 // The Bevy side
 // ---------------------------------------------------------------------------------
 
-/// What the scene is built from. Insert it to open the scene, remove it to close it.
+/// What the scene is built from. Insert or replace it to build the scene, remove it to close it.
 #[derive(Resource, Clone)]
 pub struct MenuSceneConfig {
     pub content: Arc<ContentDb>,
@@ -1021,7 +1021,7 @@ impl Plugin for MenuSceneCorePlugin {
         app.init_resource::<RenderMarks>()
             .init_resource::<MenuFrame>()
             .add_message::<MenuRequest>()
-            .add_systems(Update, open.in_set(GameSet::Input).run_if(resource_exists::<MenuSceneConfig>).run_if(not(resource_exists::<MenuScene>)))
+            .add_systems(Update, open.in_set(GameSet::Input).run_if(resource_exists_and_changed::<MenuSceneConfig>))
             .add_systems(Update, close.in_set(GameSet::Input).run_if(not(resource_exists::<MenuSceneConfig>)).run_if(resource_exists::<MenuScene>))
             .add_systems(Update, step.in_set(GameSet::Render).run_if(resource_exists::<MenuScene>));
     }
@@ -1051,15 +1051,17 @@ impl Plugin for MenuScenePlugin {
         }
         app.init_resource::<TextureCache>()
             .init_resource::<PartCache>()
-            .add_systems(Update, spawn_visuals.in_set(GameSet::Input).after(open).run_if(resource_added::<MenuScene>))
-            .add_systems(Update, despawn_visuals.in_set(GameSet::Input).run_if(resource_removed::<MenuScene>))
+            .add_systems(Update, (despawn_visuals, spawn_visuals).chain().in_set(GameSet::Input).after(open)
+                .run_if(resource_exists_and_changed::<MenuSceneConfig>))
+            .add_systems(Update, despawn_visuals.in_set(GameSet::Input).after(close).run_if(resource_removed::<MenuScene>))
             .add_systems(Update, stand_ins.in_set(GameSet::Interpolate).run_if(resource_exists::<MenuScene>))
             .add_systems(Update, pose.in_set(GameSet::Render).after(step).run_if(resource_exists::<MenuScene>));
     }
 }
 
 /// Build the sim of the map's ships and link it, and start the director.
-fn open(mut commands: Commands, config: Res<MenuSceneConfig>, clock: Res<AnimClock>) {
+fn open(mut commands: Commands, config: Res<MenuSceneConfig>, clock: Res<AnimClock>, mut entities: ResMut<SimEntities>) {
+    clear_ships(&mut commands, &mut entities);
     let built = build(&config.map, &config.content, &config.base);
     if !built.substituted.is_empty() {
         info!("menu scene: {} ships drawn by stand-ins (the content has no {:?}...)", built.substituted.len(), built.substituted[0].0);
@@ -1071,11 +1073,19 @@ fn open(mut commands: Commands, config: Res<MenuSceneConfig>, clock: Res<AnimClo
     commands.insert_resource(MenuScene { director, slots: built.slots, substituted: built.substituted, t0: clock.now() });
 }
 
-fn close(mut commands: Commands, mut frame: ResMut<MenuFrame>) {
+fn close(mut commands: Commands, mut frame: ResMut<MenuFrame>, mut entities: ResMut<SimEntities>) {
+    clear_ships(&mut commands, &mut entities);
     commands.remove_resource::<MenuScene>();
     commands.remove_resource::<SimLink>();
     commands.remove_resource::<ContentRes>();
     frame.0 = None;
+}
+
+fn clear_ships(commands: &mut Commands, entities: &mut SimEntities) {
+    // The next scene can reuse the sim IDs. Drop the entities and their models first.
+    for (_, entity) in std::mem::take(&mut entities.0) {
+        commands.entity(entity).try_despawn();
+    }
 }
 
 /// Per frame: the requests, the director's frame, and its marks.
@@ -1270,12 +1280,8 @@ fn planet_rotation(p: &PlanetDef, turn: f32) -> Quat {
     Quat::from_rotation_arc(Vec3::Y, pole) * Quat::from_rotation_y(turn)
 }
 
-fn despawn_visuals(mut commands: Commands, scene: Query<Entity, With<SceneEntity>>, mut seen: ResMut<crate::sim_link::SimEntities>) {
+fn despawn_visuals(mut commands: Commands, scene: Query<Entity, With<SceneEntity>>) {
     for e in &scene {
-        commands.entity(e).despawn();
-    }
-    // The ships are the link's: they go with it.
-    for (_, e) in std::mem::take(&mut seen.0) {
         commands.entity(e).try_despawn();
     }
 }

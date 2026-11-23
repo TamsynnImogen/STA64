@@ -466,8 +466,7 @@ type RemountIntro<'w> = (
     Option<ResMut<'w, Messages<crate::media::PlayMovie>>>,
 );
 
-/// Use mod: remount the install with it and refill the lists. The scene shows
-/// the new content from the next time the front end opens it.
+/// Use mod: remount the install and refresh the front-end lists and live scene.
 #[allow(clippy::too_many_arguments)]
 fn remount(
     mut chosen: MessageReader<ModChosen>,
@@ -502,6 +501,7 @@ fn remount(
             commands.insert_resource(SetupDraft::new(&d.screens));
             commands.insert_resource(d.screens.colours.clone());
             commands.insert_resource(d.screens);
+            commands.insert_resource(d.scene.clone());
             commands.insert_resource(MenuSceneSource(d.scene));
             commands.insert_resource(MenuMusic(d.menu_music));
             // The campaigns follow the mount (UI-25 / INT-M6).
