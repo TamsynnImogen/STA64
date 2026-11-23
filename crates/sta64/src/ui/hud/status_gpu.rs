@@ -216,17 +216,26 @@ fn stock_shape(
     info: &Info,
     armada_one: bool,
 ) -> Shape {
-    let variant = stock::layout::info_variant(info);
+    let variant = layout.info_variant(info);
     let origin = layout.info_origin(variant);
-    let mut slots: Vec<_> = (0..10)
-        .filter_map(|i| {
-            layout
-                .at(origin, &format!("infoBuildQueue_{i}"))
-                .map(|r| (i, r))
+    let compact = layout.has_a2_info() && variant == 1;
+    let panel = layout.info_area(variant);
+    // Classic can author a queue for the tall builder card only. A medium
+    // research station or constructor uses the adjacent card if it would
+    // otherwise lose queue entries below the viewport.
+    let queue_rect = |key: &str| {
+        layout.at(origin, key).filter(|r| {
+            !compact || panel.is_some_and(|p| r.x >= p.x && r.y >= p.y && r.right() <= p.right() && r.bottom() <= p.bottom())
         })
+    };
+    let mut slots: Vec<_> = (0..10)
+        .filter_map(|i| queue_rect(&format!("infoBuildQueue_{i}")).map(|r| (i, r)))
         .collect();
+    if compact && slots.len() < status.queue.len().min(10) {
+        slots.clear();
+    }
     let mut speed_queue = false;
-    let mut progress = layout.at(origin, "infoProgressBar");
+    let mut progress = queue_rect("infoProgressBar");
     if armada_one && slots.is_empty() && !status.queue.is_empty() {
         slots = stock::a1::speed::queue_slots(layout);
         if let Some((_, head)) = slots.first() {
@@ -393,7 +402,7 @@ fn draw_stock(
     info: &Info,
 ) {
     if shape.lcars_card.is_some() {
-        let origin = layout.info_origin(stock::layout::info_variant(info));
+        let origin = layout.info_origin(layout.info_variant(info));
         let fallback = SelectedStatus {
             queue: if shape.slots.is_empty() {
                 status.queue.clone()
@@ -467,7 +476,7 @@ fn draw_stock(
             LiveValue::QueueProgress(0, r.w),
         );
     }
-    let origin = layout.info_origin(stock::layout::info_variant(info));
+    let origin = layout.info_origin(layout.info_variant(info));
     if let Some(value) = status.construction
         && layout.at(origin, "infoSingleConstructionBarArea").is_none()
         && let Some(r) = layout.at(origin, "infoSingleConstructionArea")
@@ -884,6 +893,7 @@ mod tests {
             shield: None,
             progress: None,
             builder,
+            a2_yard: builder,
         })
     }
 

@@ -8,7 +8,7 @@ use super::super::layout::R;
 use super::super::model::{self, HudFeed, Info};
 use super::super::panels::GroupTile;
 use super::super::status::node_fraction;
-use super::layout::{StockLayout, info_variant};
+use super::layout::StockLayout;
 use crate::ui::gui_sprites::{GuiImage, GuiImageSampling};
 use crate::ui::notices::Tooltip;
 use crate::ui::hud::{portrait, readouts::{self, Readout}};
@@ -472,8 +472,7 @@ fn model_stem(model: &str) -> String {
 /// Fleet Ops names the single-selection systems backdrop after the equipped
 /// model. The GUI sprite painter leaves it transparent when the SPR entry or
 /// its texture is absent, preserving the stock icon/value layout.
-fn system_background(commands: &mut Commands, root: Entity, layout: &StockLayout, origin: Vec2, model: &str) -> Option<Entity> {
-    let r = layout.at(origin, "infoSingleSystemsDisplay")?;
+fn system_background(commands: &mut Commands, root: Entity, r: R, model: &str) -> Option<Entity> {
     let stem = model_stem(model);
     if stem.is_empty() { return None; }
     Some(commands.spawn((node(r), Pickable::IGNORE, GuiImage::new(format!("{stem}_si")), ChildOf(root))).id())
@@ -654,21 +653,26 @@ fn spawn_single(
     origin: Vec2,
     single: &model::Single,
 ) {
+    let builder = layout.info_uses_builder(single);
     let unit = feed.view.unit(single.id);
     let def = unit.and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def)));
     let is_node = def.is_some_and(|d| super::super::status::node_slot(d).is_some());
     let details = def.and_then(|d| d.raw.str("verboseTooltip"));
-    let backdrop = def.and_then(|d| system_background(commands, root, layout, origin, &d.model));
+    let display = chosen_rect(layout, origin, builder, "infoBuildSystemsDisplay", "infoSingleSystemsDisplay");
+    let backdrop = display.zip(def).and_then(|(rect, def)| system_background(commands, root, rect, &def.model));
     if let Some(backdrop) = backdrop {
         commands.entity(backdrop).insert(portrait::bind(single.id, &single.name, details));
     }
-    if let (Some(backdrop), Some(unit), Some(db)) = (backdrop, unit, feed.content.as_deref()) {
-        super::weapon_icons::spawn(commands, root, layout, origin, backdrop, unit, db);
+    let icon_size = chosen_rect(layout, origin, builder, "infoBuildSystemsIcon", "infoSingleSystemsIcon");
+    if let (Some(backdrop), Some(display), Some(icon_size), Some(unit), Some(db)) =
+        (backdrop, display, icon_size, unit, feed.content.as_deref())
+    {
+        super::weapon_icons::spawn(commands, root, (display, icon_size), backdrop, unit, db);
     }
     if let Some(r) = chosen_rect(
         layout,
         origin,
-        single.builder,
+        builder,
         "infoBuildName",
         "infoSingleNameTextArea",
     ) {
@@ -690,7 +694,7 @@ fn spawn_single(
     if let Some(r) = chosen_rect(
         layout,
         origin,
-        single.builder,
+        builder,
         "infoBuildClass",
         "infoSingleClassTextArea",
     ) {
@@ -709,7 +713,7 @@ fn spawn_single(
         );
     }
     identity::spawn(commands, root, layout, theme, origin, single);
-    if let Some(r) = wireframe_rect(layout, origin, single.builder)
+    if let Some(r) = wireframe_rect(layout, origin, builder)
         && let Some(def) = def
     {
         wireframe_layers_of(commands, root, r, &def.model, Some(single.id), backdrop, Some((&single.name, details)));
@@ -717,12 +721,12 @@ fn spawn_single(
     let hull_rect = chosen_rect(
         layout,
         origin,
-        single.builder,
+        builder,
         "infoBuildHullBar",
         "infoSingleHullBarArea",
     );
     if !is_node && let Some(r) = hull_rect {
-        let fills: &[&str] = if single.builder { &["infoBuildHullBarColor", "infoSingleHullBarColor"] } else { &["infoSingleHullBarColor"] };
+        let fills: &[&str] = if builder { &["infoBuildHullBarColor", "infoSingleHullBarColor"] } else { &["infoSingleHullBarColor"] };
         cfg_bar(commands, root, layout, r, single.hull, (&["infoSingleHullBarDisableColor", "infoSingleShieldBarDisableColor"], fills, native_hull_tint(single.hull)), StockBar::Hull(r.w), "infoSingleHullBar");
         readouts::at(commands, root, r, single.id, Readout::Hull);
     }
@@ -730,12 +734,12 @@ fn spawn_single(
         && let Some(r) = chosen_rect(
             layout,
             origin,
-            single.builder,
+            builder,
             "infoBuildShieldBar",
             "infoSingleShieldBarArea",
         )
     {
-        let fills: &[&str] = if single.builder { &["infoBuildShieldBarColor", "infoSingleShieldBarColor"] } else { &["infoSingleShieldBarColor"] };
+        let fills: &[&str] = if builder { &["infoBuildShieldBarColor", "infoSingleShieldBarColor"] } else { &["infoSingleShieldBarColor"] };
         cfg_bar(commands, root, layout, r, shield, (&["infoSingleShieldBarDisableColor"], fills, STOCK_SHIELD_TINT), StockBar::Shield(r.w), "infoSingleShieldBar");
         readouts::at(commands, root, r, single.id, Readout::Shields);
     }
@@ -766,12 +770,12 @@ fn spawn_single(
             if !system_slot_visible(def, slot) {
                 continue;
             }
-            let icon = chosen_rect(layout, origin, single.builder, &format!("infoBuildSystemIcon_{slot}"), &format!("infoSystemIcon_{slot}"));
+            let icon = chosen_rect(layout, origin, builder, &format!("infoBuildSystemIcon_{slot}"), &format!("infoSystemIcon_{slot}"));
             if let Some(r) = icon {
                 commands.entity(root).with_child((node(r), readouts::bind(single.id, Readout::System(system)), SystemIcon(slot), GuiImage::new("infosystem").with_frame(slot)));
             }
             if def.system_hit_points[system] > Fixed::ZERO
-                && let Some(r) = system_readout_rect(layout, origin, single.builder, slot, icon)
+                && let Some(r) = system_readout_rect(layout, origin, builder, slot, icon)
             {
                 let label = text_styled(
                     commands, root, r, String::new(), theme.text, r.h * 0.8, None,
@@ -797,8 +801,8 @@ fn spawn_group(
     variant: usize,
     tiles: &[model::Tile],
 ) {
-    let small = variant == 2;
-    for (i, tile) in tiles.iter().enumerate() {
+    let (small, limit) = layout.info_group_slots(variant);
+    for (i, tile) in tiles.iter().take(limit).enumerate() {
         let key = if small {
             format!("infoMultiShipIconSm_{i}")
         } else {
@@ -878,18 +882,36 @@ fn group_label_style(layout: &StockLayout, width: f32) -> SpriteTextStyle {
     SpriteTextStyle { scaled: true, tint_all: true, stock: Some(crate::ui::stock_font::StockRole::Default), ..SpriteTextStyle::role(role).wrapped(width) }
 }
 
-pub(super) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme) {
+pub(super) fn spawn(
+    commands: &mut Commands,
+    root: Entity,
+    layout: &StockLayout,
+    feed: &HudFeed,
+    theme: &Theme,
+    info: &Info,
+    variant: usize,
+) {
     spawn_resource(commands, root, layout, feed, theme);
-    let info = model::info(feed);
-    let variant = info_variant(&info);
     let Some(area) = layout.info_area(variant) else {
         return;
     };
     let origin = Vec2::new(area.x, area.y);
-    for piece in layout.pieces_from(info_background(variant), layout.info_canvas_origin(variant)) {
-        picture(commands, root, place(origin, piece.rect), &piece.name, piece.frame);
+    let background = info_background(variant);
+    if layout.has_a2_info() {
+        // The native ShipDisplay draws a half-opacity black backing in the active
+        // variant's own infoBlackArea before drawing the frame and contents.
+        if let Some(rect) = layout.info_at(variant, &format!("infoBlackArea_{variant}")) {
+            commands.spawn((node(rect), BackgroundColor(Color::BLACK.with_alpha(0.5)), Pickable::IGNORE, ChildOf(root)));
+        }
+        for (frame, name, rect) in layout.info_frame(variant, background) {
+            picture(commands, root, rect, &name, frame);
+        }
+    } else {
+        for piece in layout.pieces_from(background, layout.info_canvas_origin(variant)) {
+            picture(commands, root, place(origin, piece.rect), &piece.name, piece.frame);
+        }
     }
-    match &info {
+    match info {
         Info::None => {}
         Info::Single(single) => spawn_single(commands, root, layout, feed, theme, origin, single),
         Info::Group(tiles) => spawn_group(commands, root, layout, feed, theme, origin, variant, tiles),
@@ -1146,6 +1168,7 @@ mod tests {
             shield: None,
             progress: None,
             builder: false,
+            a2_yard: false,
         };
         let tile = model::Tile { id: EntityId(1), name: long, hull: 1.0, shield: None };
         let short = model::Tile { id: EntityId(2), name: "Short".into(), hull: 1.0, shield: None };
@@ -1232,7 +1255,7 @@ mod tests {
         {
             let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
             let mut commands = Commands::new(&mut queue, &world);
-            assert!(system_background(&mut commands, root, &layout, Vec2::new(30.0, 40.0), "models/Fed_ConSt.SOD").is_some());
+            assert!(layout.at(Vec2::new(30.0, 40.0), "infoSingleSystemsDisplay").and_then(|rect| system_background(&mut commands, root, rect, "models/Fed_ConSt.SOD")).is_some());
         }
         queue.apply(&mut world);
         let child = world.get::<Children>(root).unwrap()[0];
@@ -1245,13 +1268,9 @@ mod tests {
         cfg.rects.insert("infoSingleSystemsDisplay".into(), Rect { x: 10, y: 18, w: 0, h: 128 });
         let disabled = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
         let absent = StockLayout::new(&GuiLayout::default(), Vec2::new(1600.0, 1200.0));
-        let mut queue = CommandQueue::default();
-        {
-            let mut commands = Commands::new(&mut queue, &world);
-            assert!(system_background(&mut commands, root, &disabled, Vec2::ZERO, "Fed_ConSt.SOD").is_none());
-            assert!(system_background(&mut commands, root, &absent, Vec2::ZERO, "Fed_ConSt.SOD").is_none());
-        }
-        queue.apply(&mut world);
+        let origin = Vec2::ZERO;
+        assert!(chosen_rect(&disabled, origin, false, "infoBuildSystemsDisplay", "infoSingleSystemsDisplay").is_none());
+        assert!(chosen_rect(&absent, origin, true, "infoBuildSystemsDisplay", "infoSingleSystemsDisplay").is_none());
         assert_eq!(world.get::<Children>(root).unwrap().len(), 1);
     }
 

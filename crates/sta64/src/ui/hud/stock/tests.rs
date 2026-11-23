@@ -151,7 +151,7 @@ fn stock_colour_at(app: &mut App, key: &str, top_strip: bool) -> Color {
     let expected = {
         let layout = app.world().resource::<StockState>().layout.as_ref().unwrap();
         let info = model::info(app.world().resource::<HudFeed>());
-        let variant = layout::info_variant(&info);
+        let variant = layout.info_variant(&info);
         let mut origin = layout.info_origin(variant);
         if top_strip {
             origin += layout.point(&format!("infoBarOffset_{variant}")).unwrap_or(Vec2::ZERO);
@@ -481,6 +481,13 @@ fn inherited_a2_info_colour_tints_single_and_builder_text() {
     let cfg = inherited_config("", "infoTextColor = 1 0 1 1\nshipNameColor = 0 1 0 1\nresource_2_color = 1 0 0 1\n");
     for build_count in [0, 1] {
         let mut app = app_with_content_and_config(content_with_build_count(build_count), cfg.clone(), UiProfile::Armada2);
+        if build_count == 1 {
+            let mut feed = app.world().resource::<HudFeed>().clone();
+            let yard = feed.content.as_ref().unwrap().key("fx_yard").unwrap();
+            Arc::make_mut(&mut feed.view).units[0].def = yard;
+            *app.world_mut().resource_mut::<HudFeed>() = feed;
+            app.update();
+        }
         // The info bar follows the pointer: hover the selected ship to read its values there.
         app.world_mut().resource_mut::<crate::input::hover::HoveredUnit>().0 = Some(EntityId(1));
         app.update();
@@ -530,6 +537,11 @@ fn fo_separate_colours_and_legacy_overrides_take_precedence() {
 #[test]
 fn missing_authored_colours_keep_theme_defaults() {
     let mut app = app_with_content_and_config(content(), inherited_config("", ""), UiProfile::Armada2);
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    let yard = feed.content.as_ref().unwrap().key("fx_yard").unwrap();
+    Arc::make_mut(&mut feed.view).units[0].def = yard;
+    *app.world_mut().resource_mut::<HudFeed>() = feed;
+    app.update();
     let theme = app.world().resource::<Theme>().clone();
     assert_eq!(stock_colour_at(&mut app, "infoBuildName", false), theme.text);
     assert_eq!(stock_colour_at(&mut app, "infoBuildClass", false), theme.text_dim);
@@ -648,6 +660,9 @@ fn populated_info_bar(builder: bool, extra: &str) -> App {
     other.shields = [[Fixed::from_int(25), Fixed::from_int(100)]; 4];
     other.crew = Some([Fixed::from_int(73), Fixed::from_int(150)]);
     other.energy = Some([Fixed::from_int(17), Fixed::from_int(600)]);
+    if builder {
+        view.units[0].def = feed.content.as_ref().unwrap().key("fx_yard").unwrap();
+    }
     view.units.push(other);
     feed.view = Arc::new(view);
     *app.world_mut().resource_mut::<HudFeed>() = feed;
@@ -768,6 +783,162 @@ fn no_selection_hover_uses_low_offset_and_missing_or_hidden_targets_clear_stats(
     *app.world_mut().resource_mut::<HudFeed>() = feed;
     app.update();
     assert_eq!(info_bar_label(&mut app, Crew).unwrap().3, Visibility::Hidden);
+}
+
+fn tiered_info_config() -> HudConfig {
+    let mut raw = CFG.replace("infoPanelArea_1 = 400 900 500 300", "infoPanelArea_1 = 400 1000 500 200");
+    raw.push_str("\
+infoPanelArea_0 = 400 1100 500 100
+infoLowBackgroundPanel = \"low_frame\"
+infoLowBackgroundPanelArea = 3 4 490 96
+infoLowBackgroundPanelSize = 1
+infoLowBackgroundPanel_0 = 0 0 490 96
+infoMiddleBackgroundPanel = \"middle_frame\"
+infoMiddleBackgroundPanelArea = 5 6 480 194
+infoMiddleBackgroundPanelSize = 1
+infoMiddleBackgroundPanel_0 = 0 0 480 194
+infoBackgroundPanel = \"high_frame\"
+infoBackgroundPanelArea = 7 8 475 292
+infoBackgroundPanelSize = 1
+infoBackgroundPanel_0 = 0 0 475 292
+infoBlackArea_0 = 12 13 440 70
+infoBlackArea_1 = 12 13 440 160
+infoBlackArea_2 = 12 13 440 260
+infoBarOffset_0 = 10 5 0 0
+infoBarOffset_1 = 20 6 0 0
+infoBarOffset_2 = 30 7 0 0
+shipName = 0 0 180 20
+infoMultiShipIconSm_0 = 350 10 30 30
+");
+    for index in 0..16 {
+        raw.push_str(&format!(
+            "infoMultiShipIcon_{index} = {} {} 40 40\n",
+            10 + (index % 8) * 55,
+            70 + (index / 8) * 65,
+        ));
+    }
+    single_file_config(&raw)
+}
+
+#[test]
+fn armada2_info_frame_bar_and_hit_area_follow_selection_tier() {
+    use crate::ui::gui_sprites::GuiImage;
+    use crate::ui::hud::panels::GroupTile;
+    use infobar::InfoBarField::Name;
+
+    let mut app = app_with_content_and_config(content_with_build_count(1), tiered_info_config(), UiProfile::Armada2);
+    let keys = {
+        let feed = app.world().resource::<HudFeed>();
+        let db = feed.content.as_ref().unwrap();
+        ["fx_frigate", "fx_cruiser", "fx_yard", "fx_station"]
+            .map(|name| db.key(name).unwrap())
+    };
+    {
+        let mut feed = app.world().resource::<HudFeed>().clone();
+        let view = Arc::make_mut(&mut feed.view);
+        for id in 2..=17 {
+            let mut unit = view.units[0].clone();
+            unit.id = EntityId(id);
+            view.units.push(unit);
+        }
+        view.units[0].def = keys[0];
+        feed.selected.clear();
+        *app.world_mut().resource_mut::<HudFeed>() = feed;
+    }
+    app.world_mut().resource_mut::<crate::input::hover::HoveredUnit>().0 = Some(EntityId(1));
+    app.update();
+
+    let assert_tier = |app: &mut App, tier: usize, frame_name: &str, tiles: usize| {
+        let (frame_area, black_area, bar, hit) = {
+            let state = app.world().resource::<StockState>();
+            let layout = state.layout.as_ref().unwrap();
+            let info = model::info(app.world().resource::<HudFeed>());
+            assert_eq!(layout.info_variant(&info), tier);
+            let area = layout.info_area(tier).unwrap();
+            let frame_key = match tier {
+                0 => "infoLowBackgroundPanelArea",
+                1 => "infoMiddleBackgroundPanelArea",
+                _ => "infoBackgroundPanelArea",
+            };
+            let frame_area = layout.info_at(tier, frame_key).unwrap();
+            let black_area = layout.info_at(tier, &format!("infoBlackArea_{tier}")).unwrap();
+            let bar = layout.info_bar_at(tier, "shipName").unwrap();
+            let hit = state.solid.iter().any(|rect| rect.contains(Vec2::new(area.x + 20.0, area.y + 20.0)));
+            (frame_area, black_area, bar, hit)
+        };
+        assert!(hit, "the drawn {frame_name} owns its pointer area");
+        let parent = one::<StockInfo>(app);
+        let frame = app.world_mut()
+            .query::<(&GuiImage, &Node, &ChildOf)>()
+            .iter(app.world())
+            .find(|(image, _, child)| child.parent() == parent && image.names.iter().any(|name| name == frame_name))
+            .map(|(_, node, _)| node.clone())
+            .unwrap_or_else(|| panic!("missing {frame_name}"));
+        assert_eq!((frame.left, frame.top, frame.width, frame.height),
+            (Val::Px(frame_area.x), Val::Px(frame_area.y), Val::Px(frame_area.w), Val::Px(frame_area.h)));
+        let black = app.world_mut()
+            .query::<(&BackgroundColor, &Node, &ChildOf)>()
+            .iter(app.world())
+            .find(|(color, _, child)| child.parent() == parent && color.0 == Color::BLACK.with_alpha(0.5))
+            .map(|(_, node, _)| node.clone())
+            .unwrap_or_else(|| panic!("missing {frame_name} backing"));
+        assert_eq!((black.left, black.top, black.width, black.height),
+            (Val::Px(black_area.x), Val::Px(black_area.y), Val::Px(black_area.w), Val::Px(black_area.h)));
+        let name = info_bar_label(app, Name).unwrap().4;
+        assert_eq!((name.left, name.top), (Val::Px(bar.x), Val::Px(bar.y)));
+        let rendered = app.world_mut().query::<&GroupTile>().iter(app.world()).count();
+        assert_eq!(rendered, tiles, "{frame_name} group tiles");
+    };
+
+    assert_tier(&mut app, 0, "low_frame", 0);
+    let high_only = {
+        let layout = app.world().resource::<StockState>().layout.as_ref().unwrap();
+        let area = layout.info_area(2).unwrap();
+        Vec2::new(area.x + 20.0, area.y + 20.0)
+    };
+    assert!(!app.world().resource::<StockState>().solid.iter().any(|r| r.contains(high_only)),
+        "the collapsed HUD leaves the space above the low frame open to the map");
+
+    let select = |app: &mut App, ids: Vec<EntityId>, def: Option<sta_sim::ContentKey>| {
+        let mut feed = app.world().resource::<HudFeed>().clone();
+        if let Some(def) = def {
+            Arc::make_mut(&mut feed.view).units[0].def = def;
+        }
+        feed.selected = ids;
+        *app.world_mut().resource_mut::<HudFeed>() = feed;
+        app.update();
+    };
+    select(&mut app, vec![EntityId(1)], None);
+    assert_tier(&mut app, 1, "middle_frame", 0);
+    // A craft with a build list remains in the middle tier in Armada II.
+    select(&mut app, vec![EntityId(1)], Some(keys[1]));
+    assert_tier(&mut app, 1, "middle_frame", 0);
+    for (count, tier, frame) in [(8, 1, "middle_frame"), (9, 2, "high_frame"), (17, 2, "high_frame")] {
+        select(&mut app, (1..=count).map(EntityId).collect(), None);
+        assert_tier(&mut app, tier, frame, count.min(16) as usize);
+        let expected = {
+            let layout = app.world().resource::<StockState>().layout.as_ref().unwrap();
+            layout.info_at(tier, "infoMultiShipIcon_0").unwrap()
+        };
+        let first = app.world_mut()
+            .query::<(&GroupTile, &Node)>()
+            .iter(app.world())
+            .find(|(tile, _)| tile.0 == EntityId(1))
+            .map(|(_, node)| node.clone())
+            .unwrap();
+        assert_eq!((first.left, first.top, first.width, first.height),
+            (Val::Px(expected.x), Val::Px(expected.y), Val::Px(expected.w), Val::Px(expected.h)),
+            "{count} selected units use the normal group geometry");
+    }
+    // An idle yard and a starbase keep the tall builder layout.
+    assert!(app.world().resource::<HudFeed>().production.is_empty());
+    for def in [keys[2], keys[3]] {
+        select(&mut app, vec![EntityId(1)], Some(def));
+        assert_tier(&mut app, 2, "high_frame", 0);
+    }
+    select(&mut app, Vec::new(), None);
+    assert_tier(&mut app, 0, "low_frame", 0);
+    assert!(!app.world().resource::<StockState>().solid.iter().any(|r| r.contains(high_only)));
 }
 
 #[test]

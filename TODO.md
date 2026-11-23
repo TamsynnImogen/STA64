@@ -292,6 +292,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Sensor edges and HUD tooltips. Move a scout slowly with fog and shroud on and compare the rounded edge in the world view and on the minimap. Select a ship or builder whose resolved ODF sets one system maximum to zero and damage a different system to zero. The authored-zero system should disappear. The damaged system should still show its icon and 0. Hover the resource readouts, system icons and command buttons until short and verbose text appear. Check a building with an authored verbose tooltip for its cost line.
 
+- [?] Armada II selection panel heights. Clear the selection, select a ship or constructor, select eight and then nine ships, and select an idle shipyard or starbase. Check the low, medium, and tall frames and hover strip. Confirm that clearing selection restores map clicks above the low frame. Resize in Centred and Stretched modes and check that the portrait, meters, and queue controls stay aligned. The tier rules come from the Armada II executable (static). The panel and widget positions come from the mounted CFG.
+
 ## Checked earlier (morning list)
 
 - [x] Construction live-feedback fixes accepted (2026-11-11, `construction-a1666d0`): the user confirmed visible beams, later chunk reveal and the constructor staying fixed under normal/queued movement. Automated Stop/cancellation and snapshot checks pass. FPS was not reported; this does not complete broader native/Android checks above.

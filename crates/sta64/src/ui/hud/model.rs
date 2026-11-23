@@ -139,8 +139,10 @@ pub struct Single {
     pub shield: Option<f32>,
     /// Building or being built, 0..1.
     pub progress: Option<f32>,
-    /// Has a build list: its panel is the middle height.
+    /// A completed unit with a build list, used by the alternate HUDs.
     pub builder: bool,
+    /// Shipyards and starbases use Armada II's tall builder display.
+    pub a2_yard: bool,
 }
 
 /// One tile of a group.
@@ -205,6 +207,7 @@ pub fn info(feed: &HudFeed) -> Info {
                 shield: shield_frac(u),
                 progress: u.progress.map(|p| p.to_f32().clamp(0.0, 1.0)),
                 builder: def.is_some_and(|d| !d.build.list.is_empty()) && finished(u),
+                a2_yard: def.is_some_and(|d| matches!(d.class.0.as_str(), "shipyard" | "starbase" | "buildyard")),
             })
         }
         many => Info::Group(many.iter().map(|u| Tile { id: u.id, name: feed.name(u), hull: frac(u.hull), shield: shield_frac(u) }).collect()),

@@ -123,15 +123,8 @@ pub(super) fn spawn(
     theme: &Theme,
     variant: usize,
 ) {
-    if layout.info_area(variant).is_none() {
-        return;
-    }
-    let origin = layout.info_origin(variant)
-        + layout
-            .point(&format!("infoBarOffset_{variant}"))
-            .unwrap_or(Vec2::ZERO);
     for field in InfoBarField::all() {
-        if let Some(rect) = layout.at(origin, field.key()) {
+        if let Some(rect) = layout.info_bar_at(variant, field.key()) {
             let wrapper = commands
                 .spawn((
                     Node {
@@ -161,8 +154,7 @@ pub(super) fn spawn(
         if field == InfoBarField::Name {
             continue;
         }
-        let key = format!("icon_{}", field.key());
-        if let Some(rect) = layout.at(origin, &key) {
+        if let Some(rect) = icon_at(layout, variant, field) {
             commands.spawn((
                 InfoBarIcon(field),
                 node(rect),
@@ -173,6 +165,18 @@ pub(super) fn spawn(
             ));
         }
     }
+}
+
+fn icon_at(layout: &StockLayout, variant: usize, field: InfoBarField) -> Option<super::super::layout::R> {
+    (field != InfoBarField::Name)
+        .then(|| layout.info_bar_at(variant, &format!("icon_{}", field.key())))
+        .flatten()
+}
+
+pub(super) fn solid(layout: &StockLayout, variant: usize) -> impl Iterator<Item = super::super::layout::R> + '_ {
+    InfoBarField::all().into_iter().flat_map(move |field| {
+        [layout.info_bar_at(variant, field.key()), icon_at(layout, variant, field)].into_iter().flatten()
+    })
 }
 
 const SCALE: i128 = Fixed::ONE.to_bits() as i128;
