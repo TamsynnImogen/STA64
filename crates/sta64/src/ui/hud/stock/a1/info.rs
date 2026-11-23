@@ -18,6 +18,7 @@ use super::super::{
     infobar::InfoStyle,
     layout::StockLayout,
 };
+use crate::ui::hud::readouts::{self, Readout};
 use super::super::info::{StockBar, bar_colours, node, picture, place, text, wireframe_layers_of};
 use crate::ui::{
     gui_sprites::{GuiImage, GuiImageSampling},
@@ -229,14 +230,14 @@ fn single_card(
         && let Some(unit) = feed.view.unit(single.id)
         && let Some(def) = feed.content.as_deref().and_then(|db| db.unit(unit.def))
     {
-        wireframe_layers_of(commands, root, r, &def.model, Some(unit.id), None);
+        wireframe_layers_of(commands, root, r, &def.model, Some(unit.id), None, Some((&single.name, def.raw.str("verboseTooltip"))));
     }
     // Bars. The shield bar shows the hull fraction when the unit has no shields.
     let def = feed.view.unit(single.id).and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def)));
     let node_def = def.filter(|d| crate::ui::hud::status::node_slot(d).is_some());
     let shield_rect = layout.at(origin, "infoSingleShieldBarArea");
     if let Some(def) = node_def {
-        super::super::info::spawn_node_bar(commands, root, layout, origin, def, shield_rect, theme);
+        super::super::info::spawn_node_bar(commands, root, layout, origin, def, shield_rect, theme, single.id);
     } else if let Some(r) = shield_rect {
         let name = layout.name("infoSingleShieldBar").unwrap_or("large_shield_bar");
         let (value, kind) = match single.shield {
@@ -245,6 +246,8 @@ fn single_card(
         };
         let colours = bar_colours(layout, &["infoSingleShieldBarDisableColor"], &["infoSingleShieldBarColor"], shield_tint(value));
         let bar = sprite_bar(commands, root, r, name, value, colours, kind);
+        let readout = if single.shield.is_some() { Readout::Shields } else { Readout::Hull };
+        readouts::at(commands, root, r, single.id, readout);
         if layout.colour("infoSingleShieldBarColor").is_none() {
             commands.entity(bar).insert(LiveTint::Shield(single.id));
         }
@@ -254,11 +257,13 @@ fn single_card(
             let name = layout.name("infoSingleConstructionBar").unwrap_or_default();
             let colours = bar_colours(layout, &["infoSingleConstructionBarDisableColor"], &["infoSingleConstructionBarColor"], Color::WHITE);
             sprite_bar(commands, root, r, name, progress, colours, StockBar::Progress(r.w));
+            readouts::at(commands, root, r, single.id, Readout::Construction);
         }
     } else if let (Some(energy), Some(r)) = (extra.energy, layout.at(origin, "infoSingleEnergyBarArea")) {
         let name = layout.name("infoSingleEnergyBar").unwrap_or("large_energy_bar");
         let colours = bar_colours(layout, &["infoSingleEnergyBarDisableColor"], &["infoSingleEnergyBarColor"], Color::WHITE);
         sprite_bar(commands, root, r, name, energy, colours, StockBar::Energy(r.w));
+        readouts::at(commands, root, r, single.id, Readout::Energy);
     }
     // Crew: label bar, label, value and the dot.
     if let Some((now, ratio)) = extra.crew {
@@ -268,15 +273,17 @@ fn single_card(
         if let (Some(key), Some(r)) = (layout.name("infoSingleCrewTextLabel"), layout.at(origin, "infoSingleCrewTextLabelArea")) {
             let label = strings.map(|s| s.game_text(key)).filter(|t| *t != key).unwrap_or("CREW").to_owned();
             text(commands, root, r, label, crew_colour, theme.micro_size, None);
+            readouts::at(commands, root, r, single.id, Readout::Crew);
         }
         if let Some(r) = layout.at(origin, "infoSingleCrewTextInformationArea") {
             // The compatibility renderer keeps the live crew amount green.
             let entity = text(commands, root, r, now.to_string(), Color::srgb(0.0, 1.0, 0.0), theme.micro_size, None);
             commands.entity(entity).insert(CrewText);
+            readouts::at(commands, root, r, single.id, Readout::Crew);
         }
         if let (Some(name), Some(r)) = (layout.name("infoSingleCrewDot"), layout.at(origin, "infoSingleCrewDotArea")) {
             let colour = style.color(&extra.race, Some(ratio));
-            commands.entity(root).with_child((node(r), Pickable::IGNORE, GuiImage::new(name).with_color(colour)));
+            commands.entity(root).with_child((node(r), readouts::bind(single.id, Readout::Crew), GuiImage::new(name).with_color(colour)));
         }
     }
 }

@@ -8,6 +8,7 @@ use sta_sim::EntityId;
 
 use super::layout::{CELL, CELL_GAP, GRID_COLS, GRID_PAD, GRID_ROWS, HudLayout, InfoHeight};
 use super::model::{self, Act, Button, HudFeed, Info, Look, ResEntry, Single, Tile};
+use super::readouts::{self, Readout, ReadoutTarget};
 use crate::ui::gui_sprites::{GuiButton, GuiButtonLabel};
 use crate::ui::i18n::{tr, trf};
 use crate::ui::notices::Tooltip;
@@ -59,7 +60,7 @@ pub(super) fn update_values(
     mut texts: Query<(&ValueText, &mut crate::ui::sprite_font::SpriteText)>,
     mut bars: Query<(&ValueBar, Option<&mut crate::ui::theme::ProgressBar>, Option<&mut Node>, Option<&mut BackgroundColor>)>,
 ) {
-    let resources = super::model::resources(&feed, layout.0.no_resource);
+    let resources = super::model::resources(&feed, layout.0.no_resource, layout.0.no_personnel);
     let info = super::model::info(&feed);
     for (kind, mut text) in &mut texts {
         let value = match (kind, &info) {
@@ -228,7 +229,7 @@ pub fn fill_resources(commands: &mut Commands, theme: &Theme, strip: Entity, ent
         let colour = resource_colour(theme, e.id);
         row.with_child((
             Node { align_items: AlignItems::Center, column_gap: Val::Px(theme.gap * 0.75), ..default() },
-            Pickable::IGNORE,
+            Tooltip::new(e.name.clone()),
             children![
                 (Node { width: Val::Px(12.0), height: Val::Px(12.0), border_radius: BorderRadius::MAX, ..default() }, BackgroundColor(colour), Pickable::IGNORE),
                 text(e.name.to_uppercase(), theme.micro_size, theme.text_dim),
@@ -249,13 +250,14 @@ pub fn resource_colour(theme: &Theme, id: usize) -> Color {
     }
 }
 
-fn bar_row(theme: &Theme, label: &str, value: f32, shown: String, w: f32, kind: ValueBar, number: ValueText) -> impl Bundle {
+#[allow(clippy::too_many_arguments)]
+fn bar_row(theme: &Theme, label: &str, value: f32, shown: String, w: f32, kind: ValueBar, number: ValueText, ReadoutTarget(id, readout): ReadoutTarget) -> impl Bundle {
     (
         Node { align_items: AlignItems::Center, column_gap: Val::Px(theme.gap), ..default() },
         Pickable::IGNORE,
         children![
             (Node { width: Val::Px(54.0), ..default() }, children![text(label.to_uppercase(), theme.micro_size, theme.text_dim)]),
-            (kind, progress_bar(theme, w, value)),
+            (kind, progress_bar(theme, w, value), readouts::bind(id, readout)),
             (number, text(shown, theme.small_size, theme.text)),
         ],
     )
@@ -285,18 +287,18 @@ fn fill_single(p: &mut EntityCommands, theme: &Theme, s: &Single, size: Vec2, fe
     let def = feed.view.unit(s.id).and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def)));
     if let Some(slot) = def.and_then(super::status::node_slot) {
         let names = super::model::resource_model(feed);
-        p.with_child(bar_row(theme, names.name(slot), 1.0, String::new(), bar, ValueBar::Node(s.id), ValueText::Node(s.id)));
+        p.with_child(bar_row(theme, names.name(slot), 1.0, String::new(), bar, ValueBar::Node(s.id), ValueText::Node(s.id), ReadoutTarget(s.id, Readout::Deposit)));
     } else {
-        p.with_child(bar_row(theme, &tr("Hull"), s.hull, format!("{}/{}", s.hull_now, s.hull_max), bar, ValueBar::Hull, ValueText::Hull));
+        p.with_child(bar_row(theme, &tr("Hull"), s.hull, format!("{}/{}", s.hull_now, s.hull_max), bar, ValueBar::Hull, ValueText::Hull, ReadoutTarget(s.id, Readout::Hull)));
     }
     if let Some(population) = super::status::population_text(feed, s.id) {
         p.with_child((ValueText::Population(s.id), text(population, theme.small_size, theme.text)));
     }
     if let Some(sh) = s.shield {
-        p.with_child(bar_row(theme, &tr("Shield"), sh, format!("{}%", (sh * 100.0).round() as i32), bar, ValueBar::Shield, ValueText::Shield));
+        p.with_child(bar_row(theme, &tr("Shield"), sh, format!("{}%", (sh * 100.0).round() as i32), bar, ValueBar::Shield, ValueText::Shield, ReadoutTarget(s.id, Readout::Shields)));
     }
     if let Some(pr) = s.progress {
-        p.with_child(bar_row(theme, &tr("Built"), pr, format!("{}%", (pr * 100.0).round() as i32), bar, ValueBar::Built, ValueText::Built));
+        p.with_child(bar_row(theme, &tr("Built"), pr, format!("{}%", (pr * 100.0).round() as i32), bar, ValueBar::Built, ValueText::Built, ReadoutTarget(s.id, Readout::Construction)));
     }
     if s.builder && def.is_none_or(|d| d.planet_role != Some(sta_content::PlanetRole::Producer)) {
         p.with_child(text(tr("Select Build in the grid to queue ships"), theme.small_size, theme.text_dim));

@@ -529,6 +529,7 @@ pub fn select(
     units: Targetable,
     content: Option<Res<ContentRes>>,
     ui_scale: Option<Res<UiScale>>,
+    (hud_pointer, hud_state): (Option<Res<crate::ui::hud::HudPointer>>, Option<Res<crate::ui::hud::HudState>>),
     local: Option<Res<crate::render::units::LocalPlayer>>,
     mut selection: ResMut<Selection>,
     mut changed: MessageWriter<SelectionChanged>,
@@ -538,7 +539,9 @@ pub fn select(
     let Some(aim) = aim.0 else { return };
     let cursor = aim.cursor;
     if buttons.just_pressed(MouseButton::Left) {
-        drag.start = Some(cursor);
+        // HUD controls and the minimap own presses that start there. Once the map
+        // owns a press, crossing a HUD region must not strand its drag/release.
+        drag.start = crate::ui::hud::map_input_free(hud_pointer, hud_state).then_some(cursor);
     }
     let Some(start) = drag.start else { return };
     let dragging = start.distance(cursor) > DRAG_PX;
@@ -1070,6 +1073,33 @@ mod tests {
         // A box with only an enemy in it selects nothing.
         drag(&mut app, (60.0, 260.0), (150.0, 350.0));
         assert!(sel(&app).is_empty());
+    }
+
+    #[test]
+    fn world_drag_finishes_over_hud_but_hud_press_never_starts_selection() {
+        let mut app = real_app();
+        app.insert_resource(crate::ui::hud::HudPointer(false));
+
+        aim_at(&mut app, 50.0, 50.0);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        step(&mut app);
+        app.world_mut().resource_mut::<crate::ui::hud::HudPointer>().0 = true;
+        aim_at(&mut app, 350.0, 350.0);
+        step(&mut app);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        step(&mut app);
+        assert_eq!(sel(&app), [A, B], "a world-origin box completes even when released over HUD");
+        assert!(app.world().resource::<Drag>().start.is_none());
+
+        aim_at(&mut app, 100.0, 100.0);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        step(&mut app);
+        assert!(app.world().resource::<Drag>().start.is_none(), "HUD press is not a map drag");
+        app.world_mut().resource_mut::<crate::ui::hud::HudPointer>().0 = false;
+        aim_at(&mut app, 500.0, 100.0);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().release(MouseButton::Left);
+        step(&mut app);
+        assert_eq!(sel(&app), [A, B], "releasing a HUD-origin press over the map does not select");
     }
 
     #[test]

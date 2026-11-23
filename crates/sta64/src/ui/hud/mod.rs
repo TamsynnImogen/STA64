@@ -40,6 +40,8 @@ pub mod layout;
 pub mod model;
 pub mod commands;
 mod panels;
+mod portrait;
+pub(in crate::ui) mod readouts;
 pub mod stock;
 mod status;
 mod status_gpu;
@@ -172,10 +174,12 @@ impl Plugin for HudPlugin {
             .add_message::<OrderIssued>()
             .add_message::<status_gpu::QueueClick>()
             .add_observer(status_gpu::on_queue_click)
+            .add_observer(portrait::on_click)
             .add_message::<SelectionChanged>()
             .init_resource::<Selection>()
             .add_systems(OnEnter(crate::app::AppState::Loading), stock::buttons::reset_more)
             .add_systems(Startup, panels::spawn_root.after(crate::ui::radar::spawn_radar))
+            .add_systems(Update, pointer.before(GameSet::Input))
             .add_systems(
                 Update,
                 (
@@ -188,6 +192,7 @@ impl Plugin for HudPlugin {
                         status::sync,
                         stock::refresh,
                         stock::update_values,
+                        readouts::update,
                         stock::update_hull_tints,
                         stock::update_a1_tints,
                         status_gpu::refresh,
@@ -197,7 +202,6 @@ impl Plugin for HudPlugin {
                     (stock::navigate, stock::buttons::press, stock::buttons::apply_more).chain().run_if(avatar::closed),
                     panels::update_values.before(super::theme::WidgetPaint),
                     (avatar::press, host).chain(),
-                    pointer,
                     crate::input::hover::track.run_if(not(resource_exists::<ExternalFeed>)),
                     stock::infobar::update,
                     (
@@ -213,7 +217,7 @@ impl Plugin for HudPlugin {
                     ghost::update_ghost,
                     ghost::tint_ghost,
                     (ghost::sync_footprints, object_footprints::sync_object_footprints).chain(),
-                    (stock::update_weapon_icon_tint, super::gui_sprites::paint.after(super::theme::WidgetPaint), stock::update_backdrop_fallback, stock::update_weapon_icon_visibility).chain(),
+                    (stock::update_weapon_icon_tint, super::gui_sprites::paint.after(super::theme::WidgetPaint), stock::update_backdrop_fallback, portrait::sync_pickable, stock::update_weapon_icon_visibility).chain(),
                 )
                     .chain()
                     .in_set(GameSet::Ui)
@@ -294,7 +298,7 @@ fn refresh(
         state.drawn = None; state.height = None;
         return;
     }
-    let now = models(&feed, state.page, layout.0.no_resource);
+    let now = models(&feed, state.page, layout.0.no_resource, layout.0.no_personnel);
     let height = now.info.height();
     let layout_changed = layout.is_changed() || theme.is_changed() || state.height != height || state.drawn.is_none();
     let drawn = state.drawn.take();

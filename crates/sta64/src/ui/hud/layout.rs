@@ -109,6 +109,8 @@ pub struct HudLayout {
     /// Resources the race has no use for (`noDilithium`, `noLatinum`,
     /// `noMetal`, `noBiomatter`).
     pub no_resource: [bool; 4],
+    /// Authored `noCrew` and `noOfficers` switches for the personnel readouts.
+    pub no_personnel: [bool; 2],
 }
 
 /// Where the grid and the info panel are for one selection.
@@ -158,6 +160,7 @@ impl HudLayout {
             info,
             grid_size,
             no_resource: [no("Dilithium"), no("Latinum"), no("Metal"), no("Biomatter")],
+            no_personnel: [no("Crew"), no("Officers")],
         }
     }
 
@@ -265,6 +268,7 @@ mod tests {
         assert_eq!(l.info[1], Vec2::new(540.0, 180.0));
         assert_eq!(l.info[2], Vec2::new(540.0, 270.0));
         assert_eq!(l.no_resource, [false, true, false, false]);
+        assert_eq!(l.no_personnel, [false; 2]);
     }
 
     #[test]
@@ -273,9 +277,17 @@ mod tests {
         assert_eq!(l.screen, Vec2::new(1920.0, 1080.0));
         assert!((l.info[1].y - 173.7).abs() < 0.01 && l.info[1].x == 792.0);
         assert_eq!(l.no_resource, [false; 4]);
+        assert_eq!(l.no_personnel, [false; 2]);
         // One area alone is not three heights: stock's three.
         let (cfg, _) = GuiCfg::parse("a.cfg", "infoPanelArea = 146 364 247 116\n");
         assert_eq!(HudLayout::new(Some(&cfg.layout_auto()), 4.0 / 3.0).info[0].x, 880.0 * 0.9);
+    }
+
+    #[test]
+    fn authored_personnel_flags_hide_only_the_named_readout() {
+        let (cfg, warnings) = GuiCfg::parse("gui_species.cfg", "noCrew = 1\nnoOfficers = 0\n");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(HudLayout::new(Some(&cfg.layout_auto()), 16.0 / 9.0).no_personnel, [true, false]);
     }
 
     #[test]
