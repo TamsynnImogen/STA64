@@ -130,7 +130,7 @@ pub(super) fn spawn(
         }
     }
 
-    if !layout.has_a2_info() || (!builder && def.class.0 != "constructionrig") {
+    if !(def.class.0 == "constructionrig" || builder && layout.has_a2_info()) {
         return;
     }
     // Both the team tint and the emblem's sprite name come from the selected object.

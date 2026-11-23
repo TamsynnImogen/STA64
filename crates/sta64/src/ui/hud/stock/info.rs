@@ -732,7 +732,7 @@ fn spawn_single(
             None,
         );
     }
-    let construction_rig = layout.has_a2_info() && def.is_some_and(|def| def.class.0 == "constructionrig");
+    let construction_rig = def.is_some_and(|def| def.class.0 == "constructionrig");
     identity::spawn(commands, root, layout, theme, origin, single, construction_rig);
     if let Some(r) = wireframe_rect(layout, origin, builder)
         && let Some(def) = def
@@ -969,7 +969,7 @@ fn rig_job_title<'a>(
     strings: Option<&'a crate::ui::i18n::Strings>,
 ) -> Option<&'a str> {
     let producer = feed.production.iter().find(|row| row.builder == id)?;
-    let job = producer.jobs.first().filter(|head| head.paid && head.started)?;
+    let job = producer.jobs.first().filter(|head| head.queue_id.is_none() && head.paid && head.started)?;
     let item = feed.content.as_deref()?.unit(job.def)?;
     let title = model::craft_names::unit_name(item).unwrap_or(&item.odf);
     Some(strings.map_or(title, |strings| strings.game_text(title)))
