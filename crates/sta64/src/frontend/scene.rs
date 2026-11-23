@@ -33,6 +33,7 @@
 
 #![allow(dead_code)] // the screens (INT-M4) are the plugin's users; until they land only `run_headless` is
 
+mod screen;
 mod sol;
 
 use std::sync::Arc;
@@ -240,6 +241,7 @@ pub struct MenuMap {
     pub ships: Vec<ShipDef>,
     pub nebulae: Vec<NebulaDef>,
     pub views: Vec<ViewDef>,
+    routing: sol::Routing,
 }
 
 impl MenuMap {
@@ -403,6 +405,7 @@ impl MenuMap {
             ships,
             nebulae,
             views,
+            routing: sol::Routing::default(),
         }
     }
 
@@ -984,7 +987,9 @@ pub struct MenuSceneConfig {
 
 impl MenuSceneConfig {
     pub fn new(content: Arc<ContentDb>, map: MenuMap, base: MapDef) -> MenuSceneConfig {
-        let view = if map.view_index("main").is_some() { "main".to_owned() } else { map.view_names().first().map_or_else(String::new, |v| (*v).to_owned()) };
+        let view = map.routing.screens.get("main").cloned().unwrap_or_else(|| {
+            if map.view_index("main").is_some() { "main".to_owned() } else { map.view_names().first().map_or_else(String::new, |v| (*v).to_owned()) }
+        });
         MenuSceneConfig { content, map: Arc::new(map), base, view }
     }
 }
@@ -1061,6 +1066,7 @@ impl Plugin for MenuSceneCorePlugin {
             .add_message::<MenuRequest>()
             .add_systems(Update, open.in_set(GameSet::Input).run_if(resource_exists_and_changed::<MenuSceneConfig>))
             .add_systems(Update, close.in_set(GameSet::Input).run_if(not(resource_exists::<MenuSceneConfig>)).run_if(resource_exists::<MenuScene>))
+            .add_systems(Update, screen::follow.in_set(GameSet::Render).before(step).run_if(resource_exists::<MenuScene>))
             .add_systems(Update, step.in_set(GameSet::Render).run_if(resource_exists::<MenuScene>));
     }
 }
