@@ -192,6 +192,7 @@ impl Plugin for HudPlugin {
                         status::sync,
                         stock::refresh,
                         stock::update_values,
+                        stock::update_builder_readouts,
                         readouts::update,
                         stock::update_hull_tints,
                         stock::update_a1_tints,

@@ -32,6 +32,7 @@ pub(in crate::ui::hud) enum StockText {
 pub(in crate::ui::hud) enum StockBar {
     Hull(f32),
     Shield(f32),
+    YardShield(f32),
     Progress(f32),
     /// Armada I's energy bar (UI-19).
     Energy(f32),
@@ -304,7 +305,7 @@ pub(super) fn cfg_bar(commands: &mut Commands, root: Entity, layout: &StockLayou
         Some(sprite) => sprite_bar(commands, root, r, value, (track, fill), kind, sprite),
         None => bar(commands, root, r, value, (track, fill), kind),
     };
-    if matches!(kind, StockBar::Hull(_) | StockBar::Group(..))
+    if matches!(kind, StockBar::Hull(_) | StockBar::YardShield(_) | StockBar::Group(..))
         && fills.iter().all(|key| layout.colour(key).is_none())
     {
         commands.entity(fill_entity).insert(FallbackHullTint(kind));
@@ -334,6 +335,7 @@ pub(super) fn sprite_bar(commands: &mut Commands, root: Entity, r: R, value: f32
 
 pub(in crate::ui::hud) fn update_hull_tints(
     feed: Res<HudFeed>,
+    status: Option<Res<crate::ui::hud::status::StatusFeed>>,
     mut fills: Query<(&FallbackHullTint, Option<&mut BackgroundColor>, Option<&mut GuiImage>)>,
 ) {
     if fills.is_empty() {
@@ -342,12 +344,17 @@ pub(in crate::ui::hud) fn update_hull_tints(
     let selected = feed.selected_units();
     for (kind, bg, image) in &mut fills {
         let unit = match kind.0 {
-            StockBar::Hull(_) => selected.first().copied(),
+            StockBar::Hull(_) | StockBar::YardShield(_) => selected.first().copied(),
             StockBar::Group(id, _) => feed.view.unit(id),
             _ => None,
         };
         let Some(unit) = unit else { continue };
-        let tint = native_hull_tint(model::frac(unit.hull));
+        let tint = if matches!(kind.0, StockBar::YardShield(_)) {
+            let (_, online) = slot_status(status.as_deref(), unit.id, 1);
+            if online { native_hull_tint(model::shield_frac(unit).unwrap_or(0.0)) } else { STOCK_SHIELD_TINT }
+        } else {
+            native_hull_tint(model::frac(unit.hull))
+        };
         if let Some(mut image) = image {
             if image.color != tint {
                 image.color = tint;
@@ -656,6 +663,9 @@ fn spawn_single(
     let builder = layout.info_uses_builder(single);
     let unit = feed.view.unit(single.id);
     let def = unit.and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def)));
+    if builder && layout.has_a2_info() && let Some(def) = def {
+        super::builder::spawn(commands, root, layout, origin, theme, single.id, &def.race);
+    }
     let is_node = def.is_some_and(|d| super::super::status::node_slot(d).is_some());
     let details = def.and_then(|d| d.raw.str("verboseTooltip"));
     let display = chosen_rect(layout, origin, builder, "infoBuildSystemsDisplay", "infoSingleSystemsDisplay");
@@ -740,7 +750,12 @@ fn spawn_single(
         )
     {
         let fills: &[&str] = if builder { &["infoBuildShieldBarColor", "infoSingleShieldBarColor"] } else { &["infoSingleShieldBarColor"] };
-        cfg_bar(commands, root, layout, r, shield, (&["infoSingleShieldBarDisableColor"], fills, STOCK_SHIELD_TINT), StockBar::Shield(r.w), "infoSingleShieldBar");
+        let (kind, fallback) = if builder && layout.has_a2_info() {
+            (StockBar::YardShield(r.w), native_hull_tint(shield))
+        } else {
+            (StockBar::Shield(r.w), STOCK_SHIELD_TINT)
+        };
+        cfg_bar(commands, root, layout, r, shield, (&["infoSingleShieldBarDisableColor"], fills, fallback), kind, "infoSingleShieldBar");
         readouts::at(commands, root, r, single.id, Readout::Shields);
     }
     if let Some(progress) = single.progress
@@ -996,7 +1011,7 @@ pub(in crate::ui::hud) fn update(
     for (kind, mut node) in &mut bars {
         let (value, width) = match (kind, &info) {
             (StockBar::Hull(w), Info::Single(s)) => (s.hull, *w),
-            (StockBar::Shield(w), Info::Single(s)) => (s.shield.unwrap_or(0.0), *w),
+            (StockBar::Shield(w) | StockBar::YardShield(w), Info::Single(s)) => (s.shield.unwrap_or(0.0), *w),
             (StockBar::Progress(w), Info::Single(s)) => (s.progress.unwrap_or(0.0), *w),
             (StockBar::Energy(w), Info::Single(_)) => (extra.as_ref().and_then(|e| e.energy).unwrap_or(0.0), *w),
             (StockBar::Node(w), Info::Single(s)) => (node_fraction(status.as_deref(), s.id), *w),

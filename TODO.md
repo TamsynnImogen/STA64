@@ -294,6 +294,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Armada II selection panel heights. Clear the selection, select a ship or constructor, select eight and then nine ships, and select an idle shipyard or starbase. Check the low, medium, and tall frames and hover strip. Confirm that clearing selection restores map clicks above the low frame. Resize in Centred and Stretched modes and check that the portrait, meters, and queue controls stay aligned. The tier rules come from the Armada II executable (static). The panel and widget positions come from the mounted CFG.
 
+- [?] Armada II tall selection panel. Select an idle Federation starbase or shipyard under Stock. Check the low-left name and class, the shield gauge beneath the wireframe, crew and officer readouts, the faction emblem on the right, and the striped construction meter at the bottom. Start an item, watch the meter fill, then cancel it. Repeat at 4:3 and in a wide HUD. The native display fields come from the executable (static) and the coordinates come from the mounted CFG.
+
 ## Checked earlier (morning list)
 
 - [x] Construction live-feedback fixes accepted (2026-11-11, `construction-a1666d0`): the user confirmed visible beams, later chunk reveal and the constructor staying fixed under normal/queued movement. Automated Stop/cancellation and snapshot checks pass. FPS was not reported; this does not complete broader native/Android checks above.
