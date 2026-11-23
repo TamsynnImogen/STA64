@@ -80,6 +80,58 @@ fn feed_and_sim(vfs: &sta_vfs::Vfs, options: GameOptions, group: usize) -> (HudF
     (feed, sim)
 }
 
+fn classic_start_feed(vfs: &sta_vfs::Vfs, selected_odf: &str) -> HudFeed {
+    let (index, _) = sta_content::OdfIndex::build(vfs);
+    let (db, _) = ContentDb::load(vfs, &index).expect("installed content");
+    let (races, _) = sta_content::Races::load(vfs, &index);
+    let race = races.get_playable("federation").expect("Classic Federation race");
+    let bytes = vfs.read("bzn/3peace.bzn").expect("War and Peace read").expect("installed War and Peace");
+    let bzn = sta_bzn::parse(&bytes).expect("installed BZN");
+    let map = sta_content::MapDef::convert_bzn_named_in(&bzn, "3peace", &db, vfs, &index).map;
+    let db = Arc::new(db);
+    let setup = GameSetup {
+        seed: 71,
+        map: Arc::new(map),
+        content: db.clone(),
+        options: GameOptions::default(),
+        players: vec![PlayerSetup {
+            id: PlayerId(0),
+            team: TeamId(0),
+            race: race.name.clone(),
+            control: Control::Human,
+        }],
+    };
+    let (mut sim, _) = sta_sim::Sim::from_setup_with_starts(&setup, &races);
+    if selected_odf == "fspecial" {
+        let odf = db.key(selected_odf).expect("installed Nebula Class");
+        sim.step(&[sta_sim::command::Command {
+            player: PlayerId::SCRIPT,
+            seq: 0,
+            kind: sta_sim::command::CommandKind::Edit(sta_sim::command::Edit::Spawn {
+                odf,
+                player: PlayerId(0),
+                pos: sta_sim::Vec3::from_f32([0.0, 0.0, 0.0]),
+                heading: (Fixed::ONE, Fixed::ZERO),
+            }),
+        }]);
+    }
+    sim.step(&[]);
+    let view = sim.view();
+    let selected = view.units.iter().find(|unit| {
+        unit.owner == PlayerId(0)
+            && unit.flags.contains(sta_sim::view::UnitFlags::SELECTABLE)
+            && db.unit(unit.def).is_some_and(|def| def.odf.eq_ignore_ascii_case(selected_odf))
+    }).unwrap_or_else(|| panic!("War and Peace Federation side has no {selected_odf}"));
+    HudFeed {
+        selected: vec![selected.id],
+        view,
+        player: PlayerId(0),
+        content: Some(db),
+        production: sim.production_view(),
+        ..Default::default()
+    }
+}
+
 fn resolved_pieces(app: &mut App, pieces: &[super::layout::Piece]) -> usize {
     app.world_mut()
         .query::<(&GuiImage, &ImageNode)>()
@@ -104,7 +156,7 @@ fn sizes(default: &[UVec2]) -> Vec<UVec2> {
 }
 
 #[derive(Clone, Copy)]
-enum HoverCapture { Selected, SelectedHover, Low, Other, BuildPage, BuildTooltip, ColonyShip, Yard, CrewShip, Group(usize), Avatar, WeaponIcons }
+enum HoverCapture { Selected, SelectedHover, Low, Other, BuildPage, BuildTooltip, ColonyShip, Yard, CrewShip, ClassicStart(&'static str), Group(usize), Avatar, WeaponIcons }
 
 /// Independent installed-data expectation: current crew is compared with its
 /// actual live capacity, not crewCost. Resolve authored palette/thresholds.
@@ -146,10 +198,13 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         "{label}: CFG has no authored background pieces to check"
     );
     let group_count = match hover_mode { HoverCapture::Group(count) => count, HoverCapture::BuildTooltip => 1, _ => 0 };
-    let mut hud_feed = feed(&vfs, options, group_count);
+    let mut hud_feed = match hover_mode {
+        HoverCapture::ClassicStart(odf) => classic_start_feed(&vfs, odf),
+        _ => feed(&vfs, options, group_count),
+    };
     let original = hud_feed.selected[0];
     let hover = match hover_mode {
-        HoverCapture::Selected | HoverCapture::BuildPage => None,
+        HoverCapture::Selected | HoverCapture::BuildPage | HoverCapture::ClassicStart(_) => None,
         HoverCapture::BuildTooltip => {
             let db = hud_feed.content.as_ref().unwrap();
             let builder = hud_feed.view.units.iter().find(|u| u.owner == hud_feed.player
@@ -577,6 +632,57 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
                 "{label}: {icon_key} resolves");
         }
     }
+    if let HoverCapture::ClassicStart(odf) = hover_mode {
+        use super::selection_readouts::SelectionReadout;
+        use crate::ui::sprite_font::SpriteText;
+
+        let (variant, wiring) = match odf {
+            "fbase" => (
+                2,
+                &[("infoBuildCrew", "infoBuildCrewIcon", "crew_amt", "150"),
+                  ("infoBuildOfficers", "infoBuildOfficersIcon", "officers", "10")][..],
+            ),
+            "fscout" => (
+                1,
+                &[("infoCrewNum", "infoCrewNumIcon", "crew_amt", "10"),
+                  ("infoOfficers", "infoOfficersIcon", "officers", "2")][..],
+            ),
+            "fspecial" => (1, &[("infoEnergy", "infoEnergyIcon", "energy_amt", "100%")][..]),
+            _ => panic!("unexpected Classic capture {odf}"),
+        };
+        assert_eq!(bar_variant, variant, "{label}: {odf} selection card");
+        let area = stock.info_area(variant).expect("Classic selection panel");
+        let origin = stock.info_origin(variant);
+        for &(value_key, icon_key, sprite, expected_value) in wiring {
+            let placed = |key| {
+                let r = stock.at(origin, key).unwrap_or_else(|| panic!("{label}: missing {key}"));
+                assert!(r.x >= area.x && r.y >= area.y && r.right() <= area.right() && r.bottom() <= area.bottom(),
+                    "{label}: {key} spills outside the card");
+                (Val::Px(r.x), Val::Px(r.y))
+            };
+            let value_position = placed(value_key);
+            let icon_position = placed(icon_key);
+            let world = app.world_mut();
+            let text_visible = world
+                .query_filtered::<(&SpriteText, &ChildOf, &Visibility), With<SelectionReadout>>()
+                .iter(world)
+                .any(|(text, parent, shown)| {
+                    *shown == Visibility::Inherited && text.text == expected_value
+                        && world.get::<Node>(parent.parent())
+                            .is_some_and(|node| (node.left, node.top) == value_position)
+                });
+            assert!(text_visible, "{label}: visible {value_key} value {expected_value}");
+            let icon_resolved = world
+                .query_filtered::<(&GuiImage, &Node, &Visibility), (With<SelectionReadout>, With<ImageNode>)>()
+                .iter(world)
+                .any(|(image, node, shown)| {
+                    *shown == Visibility::Inherited
+                        && image.names.iter().any(|name| name == sprite)
+                        && (node.left, node.top) == icon_position
+                });
+            assert!(icon_resolved, "{label}: {icon_key} art at the authored position");
+        }
+    }
     // The persistent menu and objectives buttons are outside the command palette.
     let commands = app
         .world_mut()
@@ -912,6 +1018,30 @@ fn installed_armada2_medium_personnel_hud_renders_on_gpu() {
         .expect("installed Armada II VFS");
     capture_one(vfs, UiProfile::Armada2, UVec2::new(1024, 768), "gui_fed.cfg",
         "a2-fconst-personnel-4x3", GameOptions::default(), HoverCapture::CrewShip);
+}
+
+/// Reproduce the live Classic mount and select the starting units on War and Peace.
+#[test]
+fn installed_classic_selection_readouts_render_on_gpu() {
+    use crate::ui::profile::{UiPreference, UiProfiles, resolve_profile};
+
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1")
+        || std::env::var("STA64_TEST_MOD").as_deref() != Ok("STA2 Classic")
+    {
+        return;
+    }
+    let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
+    for odf in ["fbase", "fscout", "fspecial"] {
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), Some("STA2 Classic"))
+            .expect("installed Classic VFS");
+        let profile = resolve_profile(Some(&vfs), UiPreference::default(), &UiProfiles::default());
+        eprintln!("Classic War and Peace, {odf}, resolved UI profile {profile:?}");
+        capture_one(
+            vfs, profile, UVec2::new(1443, 1080), "gui_fed.cfg",
+            &format!("classic-3peace-{odf}-1443x1080"), GameOptions::default(),
+            HoverCapture::ClassicStart(odf),
+        );
+    }
 }
 
 /// Armada I: the three separate resource panels (dilithium, crew, officers), from the

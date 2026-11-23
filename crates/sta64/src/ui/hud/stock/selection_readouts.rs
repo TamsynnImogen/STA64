@@ -1,4 +1,4 @@
-//! Live readouts on Armada II's medium and tall single-selection cards.
+//! Live readouts for the stock medium and tall single-selection cards.
 
 use bevy::{picking::Pickable, prelude::*};
 use sta_sim::{EntityId, Fixed, UnitView};
@@ -50,12 +50,14 @@ impl Field {
                 };
                 (value, icon, "officers", Readout::Officers)
             }
-            Self::Energy => (
-                "infoBuildEnergy",
-                "infoBuildEnergyIcon",
-                "energy_amt",
-                Readout::Energy,
-            ),
+            Self::Energy => {
+                let (value, icon) = if builder {
+                    ("infoBuildEnergy", "infoBuildEnergyIcon")
+                } else {
+                    ("infoEnergy", "infoEnergyIcon")
+                };
+                (value, icon, "energy_amt", Readout::Energy)
+            }
         }
     }
 
@@ -93,12 +95,8 @@ pub(super) fn spawn(
 ) {
     let id = single.id;
     let builder = layout.info_uses_builder(single);
-    let fields: &[Field] = if builder {
-        &[Field::Crew, Field::Officers, Field::Energy]
-    } else {
-        &[Field::Crew, Field::Officers]
-    };
-    for &field in fields {
+    // Roots-hosted mods can use these ShipDisplay fields even with FleetOps presentation.
+    for field in [Field::Crew, Field::Officers, Field::Energy] {
         let (value_key, icon_key, sprite, tip) = field.keys(builder);
         let marker = SelectionReadout(id, field);
         if let Some(rect) = layout.at(origin, value_key) {
@@ -132,7 +130,7 @@ pub(super) fn spawn(
         }
     }
 
-    if !builder {
+    if !builder || !layout.has_a2_info() {
         return;
     }
     // Both the team tint and the emblem's sprite name come from the selected object.
@@ -195,7 +193,11 @@ pub(in crate::ui::hud) fn update(
             continue;
         };
         if let Some(mut label) = label {
-            let value = value.to_string();
+            let value = match field {
+                // Armada II's EnergyText prints a rounded percentage.
+                Field::Energy => format!("{value}%"),
+                _ => value.to_string(),
+            };
             if label.text != value {
                 label.text = value;
             }

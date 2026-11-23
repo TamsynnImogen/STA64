@@ -2117,7 +2117,7 @@ infoSingleRaceIconDisplayArea = 405 20 80 80
             .map(|(entity, _, parent, _, _)| (entity, app.world().get::<Node>(parent.parent()).unwrap().clone()))
             .unwrap()
     };
-    for (key, count) in [("infoBuildCrew", "150"), ("infoBuildOfficers", "10"), ("infoBuildEnergy", "70")] {
+    for (key, count) in [("infoBuildCrew", "150"), ("infoBuildOfficers", "10"), ("infoBuildEnergy", "70%")] {
         let (_, placement) = person_label(&mut app, count);
         let layout = app.world().resource::<StockState>().layout.as_ref().unwrap();
         let rect = layout.at(layout.info_origin(2), key).unwrap();
@@ -2143,11 +2143,11 @@ infoSingleRaceIconDisplayArea = 405 20 80 80
     assert_eq!(person_label(&mut app, "73").0, crew);
     assert_eq!(person_label(&mut app, "10").0, officer);
     assert!(app.world_mut().query::<(&SpriteText, &Visibility, &selection_readouts::SelectionReadout)>()
-        .iter(app.world()).any(|(text, vis, _)| text.text == "70" && *vis == Visibility::Hidden));
+        .iter(app.world()).any(|(text, vis, _)| text.text == "70%" && *vis == Visibility::Hidden));
 }
 
 #[test]
-fn armada2_ship_personnel_uses_medium_card_rectangles_and_live_values() {
+fn roots_hosted_classic_uses_medium_card_readouts_and_live_values() {
     use crate::ui::gui_sprites::GuiImage;
     use crate::ui::hud::readouts::{Readout, ReadoutTarget};
 
@@ -2160,6 +2160,7 @@ fn armada2_ship_personnel_uses_medium_card_rectangles_and_live_values() {
         let mut def = def.clone();
         if def.odf == "fx_cruiser" {
             def.build.officers = Fixed::from_int(4);
+            def.build.list.clear();
             let mut no_officers = def.clone();
             no_officers.odf = "fx_cruiser_no_officers".into();
             no_officers.build.officers = Fixed::ZERO;
@@ -2173,10 +2174,14 @@ infoCrewNum = 37 35 57 24
 infoCrewNumIcon = 8 35 24 24
 infoOfficers = 37 65 57 24
 infoOfficersIcon = 8 65 24 24
+infoEnergy = 37 95 57 24
+infoEnergyIcon = 8 95 24 24
 ");
-    let mut app = app_with_content_and_config(db.clone(), cfg, UiProfile::Armada2);
+    let mut app = app_with_content_and_config(db.clone(), cfg, UiProfile::FleetOps);
     let mut feed = app.world().resource::<HudFeed>().clone();
-    Arc::make_mut(&mut feed.view).units[0].crew = Some([Fixed::from_int(150); 2]);
+    let unit = &mut Arc::make_mut(&mut feed.view).units[0];
+    unit.crew = Some([Fixed::from_int(150); 2]);
+    unit.energy = Some([Fixed::from_int(2), Fixed::from_int(3)]);
     *app.world_mut().resource_mut::<HudFeed>() = feed;
     app.update();
 
@@ -2194,7 +2199,7 @@ infoOfficersIcon = 8 65 24 24
                 (node.left == Val::Px(r.x) && node.top == Val::Px(r.y))
                     .then(|| (entity, text.text.clone(), *vis))
             })
-            .unwrap()
+            .unwrap_or_else(|| panic!("missing selection label for {key}"))
     };
     let icon = |app: &mut App, key| {
         let r = rect(app, key);
@@ -2205,33 +2210,43 @@ infoOfficersIcon = 8 65 24 24
                 (node.left == Val::Px(r.x) && node.top == Val::Px(r.y))
                     .then(|| (image.names.clone(), *vis))
             })
-            .unwrap()
+            .unwrap_or_else(|| panic!("missing selection icon for {key}"))
     };
 
     let (crew_id, crew, crew_vis) = label(&mut app, "infoCrewNum");
     assert_eq!((crew, crew_vis), ("150".into(), Visibility::Inherited));
     assert_eq!(label(&mut app, "infoOfficers").1, "4");
+    let (energy_id, energy, energy_vis) = label(&mut app, "infoEnergy");
+    assert_eq!((energy, energy_vis), ("67%".into(), Visibility::Inherited));
     assert_eq!(icon(&mut app, "infoCrewNumIcon"), (vec!["crew_amt".into()], Visibility::Inherited));
     assert_eq!(icon(&mut app, "infoOfficersIcon"), (vec!["officers".into()], Visibility::Inherited));
-    for is_crew in [true, false] {
+    assert_eq!(icon(&mut app, "infoEnergyIcon"), (vec!["energy_amt".into()], Visibility::Inherited));
+    for readout in [Readout::Crew, Readout::Officers, Readout::Energy] {
         assert_eq!(app.world_mut().query::<&ReadoutTarget>().iter(app.world())
             .filter(|ReadoutTarget(id, found)| *id == EntityId(1) &&
-                if is_crew { matches!(found, Readout::Crew) } else { matches!(found, Readout::Officers) })
+                std::mem::discriminant(found) == std::mem::discriminant(&readout))
             .count(), 2);
     }
 
     let mut feed = app.world().resource::<HudFeed>().clone();
-    Arc::make_mut(&mut feed.view).units[0].crew.as_mut().unwrap()[0] = Fixed::from_int(73);
+    let unit = &mut Arc::make_mut(&mut feed.view).units[0];
+    unit.crew.as_mut().unwrap()[0] = Fixed::from_int(73);
+    unit.energy.as_mut().unwrap()[0] = Fixed::ZERO;
     *app.world_mut().resource_mut::<HudFeed>() = feed;
     app.update();
     assert_eq!(label(&mut app, "infoCrewNum"), (crew_id, "73".into(), Visibility::Inherited));
+    assert_eq!(label(&mut app, "infoEnergy"), (energy_id, "0%".into(), Visibility::Inherited));
 
     let mut feed = app.world().resource::<HudFeed>().clone();
-    Arc::make_mut(&mut feed.view).units[0].crew = None;
+    let unit = &mut Arc::make_mut(&mut feed.view).units[0];
+    unit.crew = None;
+    unit.energy = None;
     *app.world_mut().resource_mut::<HudFeed>() = feed;
     app.update();
     assert_eq!(label(&mut app, "infoCrewNum").2, Visibility::Hidden);
     assert_eq!(icon(&mut app, "infoCrewNumIcon").1, Visibility::Hidden);
+    assert_eq!(label(&mut app, "infoEnergy").2, Visibility::Hidden);
+    assert_eq!(icon(&mut app, "infoEnergyIcon").1, Visibility::Hidden);
     assert_eq!(label(&mut app, "infoOfficers").2, Visibility::Inherited);
 
     let mut feed = app.world().resource::<HudFeed>().clone();

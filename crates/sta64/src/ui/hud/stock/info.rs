@@ -663,7 +663,7 @@ fn spawn_single(
     let builder = layout.info_uses_builder(single);
     let unit = feed.view.unit(single.id);
     let def = unit.and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def)));
-    if layout.has_a2_info() && let Some(def) = def {
+    if let Some(def) = def {
         super::selection_readouts::spawn(commands, root, layout, origin, theme, single, &def.race);
     }
     let is_node = def.is_some_and(|d| super::super::status::node_slot(d).is_some());
