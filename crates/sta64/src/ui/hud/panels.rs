@@ -41,7 +41,8 @@ pub(super) fn same_info(a: &Info, b: &Info) -> bool {
     match (a,b) {
         (Info::None, Info::None) => true,
         (Info::Single(a), Info::Single(b)) => a.id == b.id && a.name == b.name
-            && a.class == b.class && a.own == b.own && a.builder == b.builder && a.has_build_queue == b.has_build_queue
+            && a.class == b.class && a.own == b.own && a.builder == b.builder
+            && a.has_build_queue == b.has_build_queue && a.a2_yard == b.a2_yard
             && a.shield.is_some() == b.shield.is_some() && a.progress.is_some() == b.progress.is_some(),
         (Info::Group(a), Info::Group(b)) => a.len() == b.len()
             && a.iter().zip(b).all(|(a,b)| a.id == b.id && a.name == b.name),

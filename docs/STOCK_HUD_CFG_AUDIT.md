@@ -19,36 +19,36 @@ Games: the stock data of Armada I (A1), Armada II (A2) and Fleet Operations (FO)
 | panel | keys | drawn | typed | built | missing |
 |---|---:|---:|---:|---:|---:|
 | avatar box | 6 | 0 | 0 | 6 | 0 |
-| bridge | 32 | 0 | 0 | 5 | 27 |
+| bridge | 32 | 1 | 0 | 14 | 17 |
 | build box | 6 | 0 | 0 | 4 | 2 |
 | button panel | 18 | 12 | 1 | 5 | 0 |
-| cinematic | 19 | 7 | 0 | 7 | 5 |
-| comm panel | 183 | 0 | 0 | 28 | 155 |
+| cinematic | 19 | 8 | 0 | 7 | 4 |
+| comm panel | 183 | 3 | 0 | 78 | 102 |
 | command palette | 12 | 6 | 0 | 0 | 6 |
 | control panel | 8 | 1 | 0 | 7 | 0 |
-| drop-player box | 18 | 0 | 0 | 8 | 10 |
-| info panel, build and research | 15 | 8 | 0 | 3 | 4 |
-| info panel, multi selection | 20 | 12 | 0 | 1 | 7 |
-| info panel, other | 36 | 13 | 0 | 15 | 8 |
-| info panel, single selection | 62 | 43 | 0 | 5 | 14 |
-| loading box | 9 | 0 | 0 | 7 | 2 |
+| drop-player box | 18 | 0 | 0 | 11 | 7 |
+| info panel, build and research | 15 | 15 | 0 | 0 | 0 |
+| info panel, multi selection | 20 | 12 | 0 | 4 | 4 |
+| info panel, other | 36 | 24 | 0 | 8 | 4 |
+| info panel, single selection | 62 | 48 | 0 | 7 | 7 |
+| loading box | 9 | 0 | 0 | 8 | 1 |
 | minimap | 12 | 6 | 0 | 4 | 2 |
-| objectives | 24 | 12 | 0 | 8 | 4 |
-| other | 21 | 8 | 2 | 1 | 10 |
-| pause box | 17 | 7 | 0 | 8 | 2 |
-| resource bar | 44 | 16 | 0 | 28 | 0 |
+| objectives | 24 | 14 | 0 | 9 | 1 |
+| other | 21 | 7 | 2 | 5 | 7 |
+| pause box | 17 | 7 | 0 | 9 | 1 |
+| resource bar | 44 | 15 | 0 | 28 | 1 |
 | screen | 2 | 0 | 2 | 0 | 0 |
-| speed rail | 10 | 0 | 0 | 6 | 4 |
+| speed rail | 10 | 4 | 0 | 6 | 0 |
 | tooltip and cursor | 7 | 2 | 0 | 0 | 5 |
-| **all** | **581** | **153** | **5** | **156** | **267** |
+| **all** | **581** | **185** | **5** | **220** | **171** |
 
 By game (a key set by several games counts in each):
 
 | game | keys | drawn | typed | built | missing |
 |---|---:|---:|---:|---:|---:|
-| A1 | 351 | 65 | 1 | 109 | 176 |
-| A2 | 443 | 117 | 4 | 89 | 233 |
-| FO | 474 | 132 | 5 | 101 | 236 |
+| A1 | 351 | 77 | 1 | 158 | 115 |
+| A2 | 443 | 137 | 4 | 149 | 153 |
+| FO | 474 | 157 | 5 | 159 | 153 |
 
 ## avatar box
 
@@ -65,34 +65,34 @@ By game (a key set by several games counts in each):
 
 | key | games | state |
 |---|---|---|
-| `b_bridgeBackground` | A1 A2 FO | missing |
-| `b_bridgeBackground_#` | A1 A2 FO | missing |
+| `b_bridgeBackground` | A1 A2 FO | built |
+| `b_bridgeBackground_#` | A1 A2 FO | built |
 | `b_bridgeBackgroundRect` | A1 A2 FO | missing |
 | `b_bridgeBackgroundSize` | A1 A2 FO | built |
 | `b_bridgeLayer#Rect` | A1 A2 FO | missing |
 | `b_bridgeLayer#Sprite` | A1 A2 FO | missing |
 | `bridgeBlackRect` | A1 A2 FO | missing |
 | `bridgePanelRect` | A1 A2 FO | missing |
-| `d_bridgeBackground` | A1 A2 FO | missing |
-| `d_bridgeBackground_#` | A1 A2 FO | missing |
+| `d_bridgeBackground` | A1 A2 FO | built |
+| `d_bridgeBackground_#` | A1 A2 FO | built |
 | `d_bridgeBackgroundRect` | A1 A2 FO | missing |
 | `d_bridgeBackgroundSize` | A1 A2 FO | built |
 | `d_bridgeLayer#Rect` | A1 A2 FO | missing |
 | `d_bridgeLayer#Sprite` | A1 A2 FO | missing |
-| `f_bridgeBackground` | A1 A2 FO | missing |
-| `f_bridgeBackground_#` | A1 A2 FO | missing |
+| `f_bridgeBackground` | A1 A2 FO | drawn |
+| `f_bridgeBackground_#` | A1 A2 FO | built |
 | `f_bridgeBackgroundRect` | A1 A2 FO | missing |
 | `f_bridgeBackgroundSize` | A1 A2 FO | built |
 | `f_bridgeLayer#Rect` | A1 A2 FO | missing |
 | `f_bridgeLayer#Sprite` | A1 A2 FO | missing |
-| `k_bridgeBackground` | A1 A2 FO | missing |
-| `k_bridgeBackground_#` | A1 A2 FO | missing |
+| `k_bridgeBackground` | A1 A2 FO | built |
+| `k_bridgeBackground_#` | A1 A2 FO | built |
 | `k_bridgeBackgroundRect` | A1 A2 FO | missing |
 | `k_bridgeBackgroundSize` | A1 A2 FO | built |
 | `k_bridgeLayer#Rect` | A1 A2 FO | missing |
 | `k_bridgeLayer#Sprite` | A1 A2 FO | missing |
-| `r_bridgeBackground` | A1 A2 FO | missing |
-| `r_bridgeBackground_#` | A1 A2 FO | missing |
+| `r_bridgeBackground` | A1 A2 FO | built |
+| `r_bridgeBackground_#` | A1 A2 FO | built |
 | `r_bridgeBackgroundRect` | A1 A2 FO | missing |
 | `r_bridgeBackgroundSize` | A1 A2 FO | built |
 | `r_bridgeLayer#Rect` | A1 A2 FO | missing |
@@ -144,7 +144,7 @@ By game (a key set by several games counts in each):
 | `cinematicCommBorder` | A1 | missing (Placement still needs an original-game reference.) |
 | `cinematicCommButton` | A1 | drawn |
 | `cinematicCommButtonArea` | A1 | drawn |
-| `cinematicDefaultBackground` | A1 A2 FO | missing |
+| `cinematicDefaultBackground` | A1 A2 FO | drawn |
 | `cinematicDefaultCursor` | A1 A2 FO | built |
 | `cinematicDisplayArea` | A1 A2 FO | drawn |
 | `cinematicMenuBorder` | A1 | missing (Placement still needs an original-game reference.) |
@@ -162,116 +162,116 @@ By game (a key set by several games counts in each):
 |---|---|---|
 | `commAllianceHeadingTextArea` | A1 A2 FO | built |
 | `commAllianceHeadingTextLabel` | A1 A2 FO | missing |
-| `commAllianceHeadingTextLabelArea` | A1 A2 FO | missing |
-| `commAlliedVictoryButtonArea` | A1 A2 FO | missing |
+| `commAllianceHeadingTextLabelArea` | A1 A2 FO | built |
+| `commAlliedVictoryButtonArea` | A1 A2 FO | built |
 | `commAlliedVictoryButtonImage` | A1 A2 FO | missing |
 | `commAlliedVictoryButtonToggle` | A1 A2 FO | missing |
 | `commAlliedVictoryButtonTooltip` | A1 A2 FO | missing |
 | `commAlliedVictoryTextArea` | A1 A2 FO | built |
 | `commAlliedVictoryTextColor` | A1 A2 FO | missing |
 | `commAlliedVictoryTextLabel` | A1 A2 FO | missing |
-| `commAlliedVictoryTextLabelArea` | A1 A2 FO | missing |
-| `CommandInfoBarBackgroundPanel` | FO | built |
+| `commAlliedVictoryTextLabelArea` | A1 A2 FO | built |
+| `CommandInfoBarBackgroundPanel` | FO | drawn |
 | `CommandInfoBarBackgroundPanelArea` | FO | built |
 | `CommandInfoBarBackgroundPanelSize` | FO | built |
-| `CommandInfoBarButtonDistance` | FO | missing |
-| `CommandInfoBarButtonRect` | FO | missing |
+| `CommandInfoBarButtonDistance` | FO | drawn |
+| `CommandInfoBarButtonRect` | FO | drawn |
 | `CommandInfoBarDefaultCursor` | FO | built |
 | `CommandInfoBarPanelArea` | FO | built |
 | `commBackgroundPanel` | A1 A2 FO | built |
 | `commBackgroundPanel_#` | A1 A2 FO | built |
 | `commBackgroundPanelArea` | A1 A2 FO | built |
 | `commBackgroundPanelSize` | A1 A2 FO | built |
-| `commBarAllyButtonArea` | A1 A2 FO | missing |
+| `commBarAllyButtonArea` | A1 A2 FO | built |
 | `commBarAllyButtonImage` | A1 A2 FO | missing |
 | `commBarAllyButtonMarker` | A1 A2 FO | missing |
 | `commBarAllyButtonToggle` | A1 A2 FO | missing |
 | `commBarAllyButtonTooltip` | A1 A2 FO | missing |
-| `commBarChatButtonArea` | A1 A2 FO | missing |
+| `commBarChatButtonArea` | A1 A2 FO | built |
 | `commBarChatButtonImage` | A1 A2 FO | missing |
 | `commBarChatButtonToggle` | A1 A2 FO | missing |
 | `commBarChatButtonTooltip` | A1 A2 FO | missing |
-| `commBarEnemyButtonArea` | A1 A2 FO | missing |
+| `commBarEnemyButtonArea` | A1 A2 FO | built |
 | `commBarEnemyButtonImage` | A1 A2 FO | missing |
 | `commBarEnemyButtonMarker` | A1 A2 FO | missing |
 | `commBarEnemyButtonTooltip` | A1 A2 FO | missing |
-| `commBarNameButtonArea` | A1 A2 FO | missing |
+| `commBarNameButtonArea` | A1 A2 FO | built |
 | `commBarNameButtonImage` | A1 A2 FO | missing |
 | `commBarNameButtonTooltip` | A1 A2 FO | missing |
 | `commBarNameTextArea` | A1 A2 FO | built |
 | `commBarNameTextColor` | A1 A2 FO | missing |
-| `commBarNameTextInformationArea` | A1 A2 FO | missing |
-| `commBarNeutralButtonArea` | A1 A2 FO | missing |
+| `commBarNameTextInformationArea` | A1 A2 FO | built |
+| `commBarNeutralButtonArea` | A1 A2 FO | built |
 | `commBarNeutralButtonImage` | A1 A2 FO | missing |
 | `commBarNeutralButtonMarker` | A1 A2 FO | missing |
 | `commBarNeutralButtonTooltip` | A1 A2 FO | missing |
 | `commBarNumberOfPlayers` | A1 A2 FO | missing |
 | `commBarPlayer_#` | A1 A2 FO | missing |
-| `commBarSelectButtonArea` | A1 A2 FO | missing |
+| `commBarSelectButtonArea` | A1 A2 FO | built |
 | `commBarSelectButtonImage` | A1 A2 FO | missing |
 | `commBarSelectButtonToggle` | A1 A2 FO | missing |
 | `commBarSelectButtonTooltip` | A1 A2 FO | missing |
 | `commBarTeamTextArea` | A1 A2 FO | built |
 | `commBarTeamTextBackground` | A1 A2 FO | missing |
-| `commBarTeamTextBackgroundArea` | A1 A2 FO | missing |
+| `commBarTeamTextBackgroundArea` | A1 A2 FO | built |
 | `commBarTeamTextColor` | A1 A2 FO | missing |
-| `commBarTeamTextInformationArea` | A1 A2 FO | missing |
+| `commBarTeamTextInformationArea` | A1 A2 FO | built |
 | `commBiomatterAmountTextArea` | A2 FO | built |
 | `commBiomatterAmountTextBackground` | A2 FO | missing |
-| `commBiomatterAmountTextBackgroundArea` | A2 FO | missing |
-| `commBiomatterAmountTextInformationArea` | A2 FO | missing |
-| `commBiomatterDownButtonArea` | A2 FO | missing |
+| `commBiomatterAmountTextBackgroundArea` | A2 FO | built |
+| `commBiomatterAmountTextInformationArea` | A2 FO | built |
+| `commBiomatterDownButtonArea` | A2 FO | built |
 | `commBiomatterDownButtonImage` | A2 FO | missing |
 | `commBiomatterDownButtonTooltip` | A2 FO | missing |
-| `commBiomatterUpButtonArea` | A2 FO | missing |
+| `commBiomatterUpButtonArea` | A2 FO | built |
 | `commBiomatterUpButtonImage` | A2 FO | missing |
 | `commBiomatterUpButtonTooltip` | A2 FO | missing |
 | `commBlackArea_#` | A1 | built |
 | `commCrewAmountTextArea` | A1 A2 FO | built |
 | `commCrewAmountTextBackground` | A2 FO | missing |
-| `commCrewAmountTextBackgroundArea` | A2 FO | missing |
-| `commCrewAmountTextInformationArea` | A1 A2 FO | missing |
-| `commCrewDownButtonArea` | A1 A2 FO | missing |
+| `commCrewAmountTextBackgroundArea` | A2 FO | built |
+| `commCrewAmountTextInformationArea` | A1 A2 FO | built |
+| `commCrewDownButtonArea` | A1 A2 FO | built |
 | `commCrewDownButtonImage` | A1 A2 FO | missing |
 | `commCrewDownButtonTooltip` | A1 A2 FO | missing |
-| `commCrewUpButtonArea` | A1 A2 FO | missing |
+| `commCrewUpButtonArea` | A1 A2 FO | built |
 | `commCrewUpButtonImage` | A1 A2 FO | missing |
 | `commCrewUpButtonTooltip` | A1 A2 FO | missing |
 | `commDefaultCursor` | A1 A2 FO | built |
 | `commDilithiumAmountTextArea` | A1 A2 FO | built |
 | `commDilithiumAmountTextBackground` | A2 FO | missing |
-| `commDilithiumAmountTextBackgroundArea` | A2 FO | missing |
-| `commDilithiumAmountTextInformationArea` | A1 A2 FO | missing |
-| `commDilithiumDownButtonArea` | A1 A2 FO | missing |
+| `commDilithiumAmountTextBackgroundArea` | A2 FO | built |
+| `commDilithiumAmountTextInformationArea` | A1 A2 FO | built |
+| `commDilithiumDownButtonArea` | A1 A2 FO | built |
 | `commDilithiumDownButtonImage` | A1 A2 FO | missing |
 | `commDilithiumDownButtonTooltip` | A1 A2 FO | missing |
-| `commDilithiumUpButtonArea` | A1 A2 FO | missing |
+| `commDilithiumUpButtonArea` | A1 A2 FO | built |
 | `commDilithiumUpButtonImage` | A1 A2 FO | missing |
 | `commDilithiumUpButtonTooltip` | A1 A2 FO | missing |
-| `commGiveBiomatterButtonArea` | A2 FO | missing |
+| `commGiveBiomatterButtonArea` | A2 FO | built |
 | `commGiveBiomatterButtonImage` | A2 FO | missing |
 | `commGiveBiomatterButtonText` | A2 FO | missing |
 | `commGiveBiomatterButtonTooltip` | A2 FO | missing |
-| `commGiveCrewButtonArea` | A1 A2 FO | missing |
+| `commGiveCrewButtonArea` | A1 A2 FO | built |
 | `commGiveCrewButtonImage` | A1 A2 FO | missing |
 | `commGiveCrewButtonText` | A1 A2 FO | missing |
 | `commGiveCrewButtonTooltip` | A1 A2 FO | missing |
-| `commGiveDilithiumButtonArea` | A1 A2 FO | missing |
+| `commGiveDilithiumButtonArea` | A1 A2 FO | built |
 | `commGiveDilithiumButtonImage` | A1 A2 FO | missing |
 | `commGiveDilithiumButtonText` | A1 A2 FO | missing |
 | `commGiveDilithiumButtonTooltip` | A1 A2 FO | missing |
 | `commGiveGroupTextArea` | A1 A2 FO | built |
 | `commGiveGroupTextLabel` | A1 A2 FO | missing |
-| `commGiveGroupTextLabelArea` | A1 A2 FO | missing |
-| `commGiveLatinumButtonArea` | A2 FO | missing |
+| `commGiveGroupTextLabelArea` | A1 A2 FO | built |
+| `commGiveLatinumButtonArea` | A2 FO | built |
 | `commGiveLatinumButtonImage` | A2 FO | missing |
 | `commGiveLatinumButtonText` | A2 FO | missing |
 | `commGiveLatinumButtonTooltip` | A2 FO | missing |
-| `commGiveMetalButtonArea` | A2 FO | missing |
+| `commGiveMetalButtonArea` | A2 FO | built |
 | `commGiveMetalButtonImage` | A2 FO | missing |
 | `commGiveMetalButtonText` | A2 FO | missing |
 | `commGiveMetalButtonTooltip` | A2 FO | missing |
-| `commGiveUnitsButtonArea` | A1 A2 FO | missing |
+| `commGiveUnitsButtonArea` | A1 A2 FO | built |
 | `commGiveUnitsButtonImage` | A1 A2 FO | missing |
 | `commGiveUnitsButtonText` | A1 A2 FO | missing |
 | `commGiveUnitsButtonTooltip` | A1 A2 FO | missing |
@@ -279,70 +279,70 @@ By game (a key set by several games counts in each):
 | `commIndicatorColor` | A1 A2 FO | missing |
 | `commIndicatorSprite` | A1 A2 FO | missing |
 | `commIndicatorWidth` | A1 A2 FO | missing |
-| `commLatencyButtonArea` | A1 A2 FO | missing |
+| `commLatencyButtonArea` | A1 A2 FO | built |
 | `commLatencyButtonImage` | A1 A2 FO | missing |
 | `commLatencyButtonToggle` | A1 A2 FO | missing |
 | `commLatencyButtonTooltip` | A1 A2 FO | missing |
 | `commLatencyTextArea` | A1 A2 FO | built |
 | `commLatencyTextColor` | A1 A2 FO | missing |
 | `commLatencyTextLabel` | A1 A2 FO | missing |
-| `commLatencyTextLabelArea` | A1 A2 FO | missing |
+| `commLatencyTextLabelArea` | A1 A2 FO | built |
 | `commLatinumAmountTextArea` | A2 FO | built |
 | `commLatinumAmountTextBackground` | A2 FO | missing |
-| `commLatinumAmountTextBackgroundArea` | A2 FO | missing |
-| `commLatinumAmountTextInformationArea` | A2 FO | missing |
-| `commLatinumDownButtonArea` | A2 FO | missing |
+| `commLatinumAmountTextBackgroundArea` | A2 FO | built |
+| `commLatinumAmountTextInformationArea` | A2 FO | built |
+| `commLatinumDownButtonArea` | A2 FO | built |
 | `commLatinumDownButtonImage` | A2 FO | missing |
 | `commLatinumDownButtonTooltip` | A2 FO | missing |
-| `commLatinumUpButtonArea` | A2 FO | missing |
+| `commLatinumUpButtonArea` | A2 FO | built |
 | `commLatinumUpButtonImage` | A2 FO | missing |
 | `commLatinumUpButtonTooltip` | A2 FO | missing |
-| `commMessageAllButtonArea` | A1 A2 FO | missing |
+| `commMessageAllButtonArea` | A1 A2 FO | built |
 | `commMessageAllButtonImage` | A1 A2 FO | missing |
 | `commMessageAllButtonText` | A1 A2 FO | missing |
 | `commMessageAllButtonTooltip` | A1 A2 FO | missing |
-| `commMessageAlliesButtonArea` | A1 A2 FO | missing |
+| `commMessageAlliesButtonArea` | A1 A2 FO | built |
 | `commMessageAlliesButtonImage` | A1 A2 FO | missing |
 | `commMessageAlliesButtonText` | A1 A2 FO | missing |
 | `commMessageAlliesButtonTooltip` | A1 A2 FO | missing |
-| `commMessageEnemiesButtonArea` | A1 A2 FO | missing |
+| `commMessageEnemiesButtonArea` | A1 A2 FO | built |
 | `commMessageEnemiesButtonImage` | A1 A2 FO | missing |
 | `commMessageEnemiesButtonText` | A1 A2 FO | missing |
 | `commMessageEnemiesButtonTooltip` | A1 A2 FO | missing |
 | `commMessageGroupTextArea` | A1 A2 FO | built |
 | `commMessageGroupTextLabel` | A1 A2 FO | missing |
-| `commMessageGroupTextLabelArea` | A1 A2 FO | missing |
+| `commMessageGroupTextLabelArea` | A1 A2 FO | built |
 | `commMessageHeadingTextArea` | A1 A2 FO | built |
 | `commMessageHeadingTextLabel` | A1 A2 FO | missing |
-| `commMessageHeadingTextLabelArea` | A1 A2 FO | missing |
-| `commMessagePrivateButtonArea` | A1 A2 FO | missing |
+| `commMessageHeadingTextLabelArea` | A1 A2 FO | built |
+| `commMessagePrivateButtonArea` | A1 A2 FO | built |
 | `commMessagePrivateButtonImage` | A1 A2 FO | missing |
 | `commMessagePrivateButtonText` | A1 A2 FO | missing |
 | `commMessagePrivateButtonTooltip` | A1 A2 FO | missing |
 | `commMetalAmountTextArea` | A2 FO | built |
 | `commMetalAmountTextBackground` | A2 FO | missing |
-| `commMetalAmountTextBackgroundArea` | A2 FO | missing |
-| `commMetalAmountTextInformationArea` | A2 FO | missing |
-| `commMetalDownButtonArea` | A2 FO | missing |
+| `commMetalAmountTextBackgroundArea` | A2 FO | built |
+| `commMetalAmountTextInformationArea` | A2 FO | built |
+| `commMetalDownButtonArea` | A2 FO | built |
 | `commMetalDownButtonImage` | A2 FO | missing |
 | `commMetalDownButtonTooltip` | A2 FO | missing |
-| `commMetalUpButtonArea` | A2 FO | missing |
+| `commMetalUpButtonArea` | A2 FO | built |
 | `commMetalUpButtonImage` | A2 FO | missing |
 | `commMetalUpButtonTooltip` | A2 FO | missing |
-| `commOkayButtonArea` | A1 A2 FO | missing |
+| `commOkayButtonArea` | A1 A2 FO | built |
 | `commOkayButtonImage` | A1 A2 FO | missing |
 | `commOkayButtonText` | A1 A2 FO | missing |
 | `commPanelArea` | A1 A2 FO | built |
 | `commPlayerHeadingTextArea` | A1 A2 FO | built |
 | `commPlayerHeadingTextLabel` | A1 A2 FO | missing |
-| `commPlayerHeadingTextLabelArea` | A1 A2 FO | missing |
+| `commPlayerHeadingTextLabelArea` | A1 A2 FO | built |
 | `commTeamHeadingTextArea` | A1 A2 FO | built |
 | `commTeamHeadingTextLabel` | A1 A2 FO | missing |
-| `commTeamHeadingTextLabelArea` | A1 A2 FO | missing |
+| `commTeamHeadingTextLabelArea` | A1 A2 FO | built |
 | `commTitleTextArea` | A1 A2 FO | built |
 | `commTitleTextColor` | A1 A2 FO | missing |
 | `commTitleTextLabel` | A1 A2 FO | missing |
-| `commTitleTextLabelArea` | A1 A2 FO | missing |
+| `commTitleTextLabelArea` | A1 A2 FO | built |
 
 ## command palette
 
@@ -378,7 +378,7 @@ By game (a key set by several games counts in each):
 
 | key | games | state |
 |---|---|---|
-| `dropPlayerAiTakeoverButtonArea` | A2 FO | missing |
+| `dropPlayerAiTakeoverButtonArea` | A2 FO | built |
 | `dropPlayerAiTakeoverButtonImage` | A2 FO | missing |
 | `dropPlayerAiTakeoverButtonText` | A2 FO | missing |
 | `dropPlayerAiTakeoverButtonTooltip` | A2 FO | missing |
@@ -388,32 +388,32 @@ By game (a key set by several games counts in each):
 | `dropPlayerBackgroundPanelSize` | A1 A2 FO | built |
 | `dropPlayerBlackArea` | A1 | built |
 | `dropPlayerDefaultCursor` | A1 A2 FO | built |
-| `dropPlayerDropButtonArea` | A1 A2 FO | missing |
+| `dropPlayerDropButtonArea` | A1 A2 FO | built |
 | `dropPlayerDropButtonImage` | A1 A2 FO | missing |
 | `dropPlayerDropButtonText` | A1 A2 FO | missing |
 | `dropPlayerDropButtonTooltip` | A1 A2 FO | missing |
 | `dropPlayerPanelArea` | A1 A2 FO | built |
 | `dropPlayerTextArea` | A1 A2 FO | built |
 | `dropPlayerTextColor` | A1 A2 FO | missing |
-| `dropPlayerTextInformationArea` | A1 A2 FO | missing |
+| `dropPlayerTextInformationArea` | A1 A2 FO | built |
 
 ## info panel, build and research
 
 | key | games | state |
 |---|---|---|
 | `infoBuildClass` | A2 FO | drawn |
-| `infoBuildCrew` | A2 FO | missing |
-| `infoBuildCrewIcon` | A2 FO | built |
-| `infoBuildEnergy` | A2 FO | missing |
-| `infoBuildEnergyIcon` | A2 FO | built |
+| `infoBuildCrew` | A2 FO | drawn |
+| `infoBuildCrewIcon` | A2 FO | drawn |
+| `infoBuildEnergy` | A2 FO | drawn |
+| `infoBuildEnergyIcon` | A2 FO | drawn |
 | `infoBuildHullBar` | FO | drawn |
 | `infoBuildName` | A2 FO | drawn |
-| `infoBuildOfficers` | A2 FO | missing |
-| `infoBuildOfficersIcon` | A2 FO | built |
+| `infoBuildOfficers` | A2 FO | drawn |
+| `infoBuildOfficersIcon` | A2 FO | drawn |
 | `infoBuildQueue_#` | A2 FO | drawn |
 | `infoBuildQueueSlot_#` | FO | drawn |
 | `infoBuildShieldBar` | A2 FO | drawn |
-| `infoBuildSystem_#` | A2 FO | missing |
+| `infoBuildSystem_#` | A2 FO | drawn |
 | `infoBuildSystemIcon_#` | A2 FO | drawn |
 | `infoBuildWireframe` | A2 FO | drawn |
 
@@ -422,14 +422,14 @@ By game (a key set by several games counts in each):
 | key | games | state |
 |---|---|---|
 | `infoMultiCrewDot` | A1 | missing |
-| `infoMultiCrewDotArea` | A1 | missing |
+| `infoMultiCrewDotArea` | A1 | built |
 | `infoMultiEnergyBar` | A1 | missing |
-| `infoMultiEnergyBarArea` | A1 | missing |
+| `infoMultiEnergyBarArea` | A1 | built |
 | `infoMultiEnergyBarColor` | A1 | missing |
 | `infoMultiEnergyBarDisableColor` | A1 | missing |
 | `infoMultiHullBar` | FO | drawn |
 | `infoMultiShieldBar` | A1 A2 FO | drawn |
-| `infoMultiShieldBarArea` | A1 | missing |
+| `infoMultiShieldBarArea` | A1 | built |
 | `infoMultiShieldBarDisableColor` | A1 A2 FO | drawn |
 | `infoMultiShipHull_#` | FO | drawn |
 | `infoMultiShipHullSm_#` | FO | drawn |
@@ -448,34 +448,34 @@ By game (a key set by several games counts in each):
 |---|---|---|
 | `infoBackgroundPanel` | A1 A2 FO | drawn |
 | `infoBackgroundPanel_#` | A1 A2 FO | built |
-| `infoBackgroundPanelArea` | A1 A2 FO | built |
+| `infoBackgroundPanelArea` | A1 A2 FO | drawn |
 | `infoBackgroundPanelSize` | A1 A2 FO | drawn |
 | `infoBarLow` | A2 | missing |
 | `infoBarMiddle` | A2 | missing |
 | `infoBarOffset_#` | A2 FO | drawn |
 | `infoBarTall` | A2 | missing |
 | `infoBlackArea` | A1 | built |
-| `infoBlackArea_#` | A2 FO | built |
-| `infoCrewNum` | A2 FO | missing |
-| `infoCrewNumIcon` | A2 FO | built |
+| `infoBlackArea_#` | A2 FO | drawn |
+| `infoCrewNum` | A2 FO | drawn |
+| `infoCrewNumIcon` | A2 FO | drawn |
 | `infoDefaultCursor` | A1 A2 FO | built |
-| `infoEnergy` | A2 FO | missing |
-| `infoEnergyIcon` | A2 FO | built |
+| `infoEnergy` | A2 FO | drawn |
+| `infoEnergyIcon` | A2 FO | drawn |
 | `infoLowBackgroundPanel` | A2 FO | drawn |
 | `infoLowBackgroundPanel_#` | A2 | built |
-| `infoLowBackgroundPanelArea` | A2 FO | built |
+| `infoLowBackgroundPanelArea` | A2 FO | drawn |
 | `infoLowBackgroundPanelSize` | A2 FO | built |
 | `infoMiddleBackgroundPanel` | A2 FO | drawn |
 | `infoMiddleBackgroundPanel_#` | A2 FO | built |
-| `infoMiddleBackgroundPanelArea` | A2 FO | built |
+| `infoMiddleBackgroundPanelArea` | A2 FO | drawn |
 | `infoMiddleBackgroundPanelSize` | A2 FO | built |
-| `infoOfficers` | A2 FO | missing |
-| `infoOfficersIcon` | A2 FO | built |
+| `infoOfficers` | A2 FO | drawn |
+| `infoOfficersIcon` | A2 FO | drawn |
 | `infoPanelArea` | A1 A2 | built |
 | `infoPanelArea_#` | A2 FO | drawn |
 | `infoProgressBar` | A2 FO | drawn |
 | `infoSystem` | A1 | drawn |
-| `infoSystem_#` | A1 A2 FO | missing |
+| `infoSystem_#` | A1 A2 FO | drawn |
 | `infoSystemIcon_#` | A2 FO | drawn |
 | `infoTeam` | A2 FO | missing |
 | `infoTextColor` | A2 FO | drawn |
@@ -487,9 +487,9 @@ By game (a key set by several games counts in each):
 
 | key | games | state |
 |---|---|---|
-| `infoSingleBackground` | A1 | missing |
+| `infoSingleBackground` | A1 | drawn |
 | `infoSingleBackground_#` | A1 | missing |
-| `infoSingleBackgroundArea` | A1 | missing |
+| `infoSingleBackgroundArea` | A1 | built |
 | `infoSingleBackgroundSize` | A1 | built |
 | `infoSingleCaptainTextArea` | A2 FO | drawn |
 | `infoSingleClassTextArea` | A1 A2 FO | drawn |
@@ -517,7 +517,7 @@ By game (a key set by several games counts in each):
 | `infoSingleEnergyBar` | A1 | drawn |
 | `infoSingleEnergyBarArea` | A1 | drawn |
 | `infoSingleEnergyBarColor` | A1 | drawn |
-| `infoSingleEnergyBarDisableColor` | A1 | missing |
+| `infoSingleEnergyBarDisableColor` | A1 | drawn |
 | `infoSingleHullBar` | FO | drawn |
 | `infoSingleHullBarArea` | FO | drawn |
 | `infoSingleLatinumBarColor` | A2 FO | drawn |
@@ -530,24 +530,24 @@ By game (a key set by several games counts in each):
 | `infoSingleNameTextInformationArea` | A1 A2 FO | drawn |
 | `infoSingleOfficerTextArea` | A1 | built |
 | `infoSingleOfficerTextBackground` | A1 | missing |
-| `infoSingleOfficerTextBackgroundArea` | A1 | missing |
+| `infoSingleOfficerTextBackgroundArea` | A1 | built |
 | `infoSingleOfficerTextColor` | A1 | missing |
-| `infoSingleOfficerTextInformationArea` | A1 | missing |
+| `infoSingleOfficerTextInformationArea` | A1 | built |
 | `infoSingleOfficerTextLabel` | A1 | missing |
-| `infoSingleOfficerTextLabelArea` | A1 | missing |
+| `infoSingleOfficerTextLabelArea` | A1 | built |
 | `infoSinglePlanetMetalBar` | A2 FO | missing |
 | `infoSinglePlanetMetalBarArea` | A2 FO | drawn |
 | `infoSinglePlanetMetalBarColor` | A2 FO | drawn |
 | `infoSinglePlanetMetalBarDisableColor` | A2 FO | drawn |
-| `infoSinglePlanetTeamTextArea` | A2 FO | built |
+| `infoSinglePlanetTeamTextArea` | A2 FO | drawn |
 | `infoSingleRaceIcon` | A1 A2 FO | drawn |
 | `infoSingleRaceIconArea` | A1 A2 FO | drawn |
 | `infoSingleRaceIconDisplayArea` | A1 A2 FO | drawn |
 | `infoSingleShieldBar` | A1 A2 FO | drawn |
 | `infoSingleShieldBarArea` | A1 A2 FO | drawn |
 | `infoSingleShieldBarDisableColor` | A1 A2 FO | drawn |
-| `infoSingleSystemsDisplay` | FO | missing |
-| `infoSingleSystemsIcon` | FO | built |
+| `infoSingleSystemsDisplay` | FO | drawn |
+| `infoSingleSystemsIcon` | FO | drawn |
 | `infoSingleWireframeIconArea` | A1 A2 FO | drawn |
 
 ## loading box
@@ -562,7 +562,7 @@ By game (a key set by several games counts in each):
 | `loadingPlayerPanelArea` | A2 FO | built |
 | `loadingPlayerTextArea` | A2 FO | built |
 | `loadingPlayerTextColor` | A2 FO | missing |
-| `loadingPlayerTextInformationArea` | A2 FO | missing |
+| `loadingPlayerTextInformationArea` | A2 FO | built |
 
 ## minimap
 
@@ -585,13 +585,13 @@ By game (a key set by several games counts in each):
 
 | key | games | state |
 |---|---|---|
-| `objectivesBackgroundPanel` | A1 A2 FO | built |
+| `objectivesBackgroundPanel` | A1 A2 FO | drawn |
 | `objectivesBackgroundPanel_#` | A1 A2 FO | built |
 | `objectivesBackgroundPanelArea` | A1 A2 FO | built |
 | `objectivesBackgroundPanelSize` | A1 A2 FO | built |
-| `objectivesBlackArea` | A1 | built |
+| `objectivesBlackArea` | A1 | drawn |
 | `objectivesDefaultCursor` | A1 A2 FO | built |
-| `objectivesHeaderArea` | A2 FO | missing |
+| `objectivesHeaderArea` | A2 FO | built |
 | `objectivesHeaderColor` | A2 FO | drawn |
 | `objectivesHeaderInformationArea` | A2 FO | drawn |
 | `objectivesOkayBorderImage` | A2 FO | missing |
@@ -601,12 +601,12 @@ By game (a key set by several games counts in each):
 | `objectivesOkayButtonTooltip` | A1 A2 FO | drawn |
 | `objectivesPanelArea` | A1 A2 FO | built |
 | `objectivesSummaryColor` | A2 FO | drawn |
-| `objectivesSummaryHeaderArea` | A2 FO | missing |
+| `objectivesSummaryHeaderArea` | A2 FO | built |
 | `objectivesSummaryInformationArea` | A2 FO | drawn |
 | `objectivesTextArea` | A1 A2 FO | built |
 | `objectivesTextColor` | A1 A2 FO | drawn |
 | `objectivesTextInformationArea` | A1 A2 FO | drawn |
-| `objectivesTitleArea` | A2 FO | missing |
+| `objectivesTitleArea` | A2 FO | built |
 | `objectivesTitleColor` | A2 FO | drawn |
 | `objectivesTitleInformationArea` | A2 FO | drawn |
 
@@ -616,21 +616,21 @@ By game (a key set by several games counts in each):
 |---|---|---|
 | `captainNameColor` | A2 FO | drawn |
 | `classTextColor` | FO | drawn |
-| `fastButtonArea` | A2 FO | missing |
+| `fastButtonArea` | A2 FO | built |
 | `groupTextColor` | FO | missing |
 | `hull` | A2 FO | drawn |
 | `icon_hull` | A2 FO | drawn |
-| `icon_shields` | A2 FO | drawn |
-| `normalButtonArea` | A2 FO | missing |
+| `icon_shields` | A2 FO | missing |
+| `normalButtonArea` | A2 FO | built |
 | `officerTooltip` | A1 | missing |
 | `officerVerboseTooltip` | A1 | missing |
 | `replayPanelArea` | A2 FO | built |
-| `restartButtonArea` | A2 FO | missing |
+| `restartButtonArea` | A2 FO | built |
 | `SelectionRectangleColor` | FO | typed |
 | `selectSystem` | A1 A2 FO | missing |
 | `selectSystem_#` | A1 A2 FO | typed |
 | `shields` | A2 FO | drawn |
-| `slowButtonArea` | A2 FO | missing |
+| `slowButtonArea` | A2 FO | built |
 | `toggleButton` | A2 FO | drawn |
 | `toggleButtonArea` | A2 FO | drawn |
 | `xTooltip` | A2 FO | missing |
@@ -640,7 +640,7 @@ By game (a key set by several games counts in each):
 
 | key | games | state |
 |---|---|---|
-| `pauseButtonArea` | A2 FO | missing |
+| `pauseButtonArea` | A2 FO | built |
 | `pauseGameBackgroundPanel` | A1 A2 FO | built |
 | `pauseGameBackgroundPanel_#` | A1 A2 | built |
 | `pauseGameBackgroundPanelArea` | A1 A2 FO | built |
@@ -683,7 +683,7 @@ By game (a key set by several games counts in each):
 | `dilithiumTextArea` | A1 | built |
 | `energy_amt` | A2 FO | drawn |
 | `icon_crew_amt` | A2 FO | drawn |
-| `icon_energy_amt` | A2 FO | drawn |
+| `icon_energy_amt` | A2 FO | missing |
 | `noBiomatter` | A2 FO | drawn |
 | `noCrew` | A2 FO | drawn |
 | `noDilithium` | A2 FO | drawn |
@@ -724,10 +724,10 @@ By game (a key set by several games counts in each):
 | `speedBackgroundPanelSize` | A1 | built |
 | `speedDefaultCursor` | A1 | built |
 | `speedPanelArea` | A1 | built |
-| `speedSeparator` | A1 | missing |
-| `speedSeparatorArea` | A1 | missing |
-| `speedSingleButtonArea` | A1 | missing |
-| `speedSingleButtonGap` | A1 | missing |
+| `speedSeparator` | A1 | drawn |
+| `speedSeparatorArea` | A1 | drawn |
+| `speedSingleButtonArea` | A1 | drawn |
+| `speedSingleButtonGap` | A1 | drawn |
 
 ## tooltip and cursor
 

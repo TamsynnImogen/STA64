@@ -80,14 +80,16 @@ fn feed_and_sim(vfs: &sta_vfs::Vfs, options: GameOptions, group: usize) -> (HudF
     (feed, sim)
 }
 
-fn classic_start_feed(vfs: &sta_vfs::Vfs, selected_odf: &str) -> HudFeed {
+fn classic_start_feed(vfs: &sta_vfs::Vfs, map_name: &str, selected_odf: &str) -> HudFeed {
     let (index, _) = sta_content::OdfIndex::build(vfs);
     let (db, _) = ContentDb::load(vfs, &index).expect("installed content");
     let (races, _) = sta_content::Races::load(vfs, &index);
     let race = races.get_playable("federation").expect("Classic Federation race");
-    let bytes = vfs.read("bzn/3peace.bzn").expect("War and Peace read").expect("installed War and Peace");
+    let bytes = vfs.read(&format!("bzn/{map_name}.bzn"))
+        .unwrap_or_else(|| panic!("missing installed map {map_name}"))
+        .expect("installed map read");
     let bzn = sta_bzn::parse(&bytes).expect("installed BZN");
-    let map = sta_content::MapDef::convert_bzn_named_in(&bzn, "3peace", &db, vfs, &index).map;
+    let map = sta_content::MapDef::convert_bzn_named_in(&bzn, map_name, &db, vfs, &index).map;
     let db = Arc::new(db);
     let setup = GameSetup {
         seed: 71,
@@ -102,7 +104,7 @@ fn classic_start_feed(vfs: &sta_vfs::Vfs, selected_odf: &str) -> HudFeed {
         }],
     };
     let (mut sim, _) = sta_sim::Sim::from_setup_with_starts(&setup, &races);
-    if matches!(selected_odf, "fspecial" | "fyard") {
+    if matches!(selected_odf, "fspecial" | "fyard" | "fresear") {
         let odf = db.key(selected_odf).unwrap_or_else(|| panic!("installed {selected_odf} ODF"));
         sim.step(&[sta_sim::command::Command {
             player: PlayerId::SCRIPT,
@@ -121,7 +123,7 @@ fn classic_start_feed(vfs: &sta_vfs::Vfs, selected_odf: &str) -> HudFeed {
         unit.owner == PlayerId(0)
             && unit.flags.contains(sta_sim::view::UnitFlags::SELECTABLE)
             && db.unit(unit.def).is_some_and(|def| def.odf.eq_ignore_ascii_case(selected_odf))
-    }).unwrap_or_else(|| panic!("War and Peace Federation side has no {selected_odf}"));
+    }).unwrap_or_else(|| panic!("{map_name}: Federation side has no {selected_odf}"));
     HudFeed {
         selected: vec![selected.id],
         view,
@@ -156,7 +158,7 @@ fn sizes(default: &[UVec2]) -> Vec<UVec2> {
 }
 
 #[derive(Clone, Copy)]
-enum HoverCapture { Selected, SelectedHover, Low, Other, BuildPage, BuildTooltip, ColonyShip, Yard, CrewShip, ClassicStart(&'static str), Group(usize), Avatar, WeaponIcons }
+enum HoverCapture { Selected, SelectedHover, Low, Other, BuildPage, BuildTooltip, ColonyShip, Yard, CrewShip, ClassicStart(&'static str, &'static str), Group(usize), Avatar, WeaponIcons }
 
 /// Independent installed-data expectation: current crew is compared with its
 /// actual live capacity, not crewCost. Resolve authored palette/thresholds.
@@ -199,12 +201,12 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     );
     let group_count = match hover_mode { HoverCapture::Group(count) => count, HoverCapture::BuildTooltip => 1, _ => 0 };
     let mut hud_feed = match hover_mode {
-        HoverCapture::ClassicStart(odf) => classic_start_feed(&vfs, odf),
+        HoverCapture::ClassicStart(map, odf) => classic_start_feed(&vfs, map, odf),
         _ => feed(&vfs, options, group_count),
     };
     let original = hud_feed.selected[0];
     let hover = match hover_mode {
-        HoverCapture::Selected | HoverCapture::BuildPage | HoverCapture::ClassicStart(_) => None,
+        HoverCapture::Selected | HoverCapture::BuildPage | HoverCapture::ClassicStart(..) => None,
         HoverCapture::BuildTooltip => {
             let db = hud_feed.content.as_ref().unwrap();
             let builder = hud_feed.view.units.iter().find(|u| u.owner == hud_feed.player
@@ -267,7 +269,10 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         assert_eq!(unit.crew, Some([Fixed::from_int(150), Fixed::from_int(1500)]));
         assert_eq!(crew_tint, Some(Color::srgb(1.0, 0.0, 0.0)), "Classic starbase at10percent must be red");
     }
-    let percent = |now: i128, max: i128| (max > 0).then(|| (now * 200 + max).div_euclid(max * 2).to_string());
+    let percent = |now: i128, max: i128| (max > 0).then(|| {
+        let rounded = (now * 200 + max).div_euclid(max * 2);
+        if profile == UiProfile::Armada2 { format!("{rounded}%") } else { rounded.to_string() }
+    });
     let whole = |value: Fixed| { let bits=value.to_bits(); if bits>0 { (bits/Fixed::ONE.to_bits()).max(1) } else { bits/Fixed::ONE.to_bits() } };
     let expected_bar = {
         use super::infobar::InfoBarField::{Name,Hull,Shields,Crew,Energy};
@@ -377,7 +382,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         ))
         .id();
     app.insert_resource(CaptureCamera(camera));
-    if matches!(hover_mode, HoverCapture::BuildTooltip) {
+    if hover.is_some() || matches!(hover_mode, HoverCapture::BuildTooltip) {
         // ECS-only cursor state gives the stock tooltip its placement in this windowless frame.
         let mut window = Window::default();
         window.resolution.set(size.x as f32, size.y as f32);
@@ -470,13 +475,20 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         let (compact, slot_limit) = stock.info_group_slots(bar_variant);
         let visible_count = count.min(slot_limit);
         assert_eq!(rendered.len(), visible_count, "{label}: active sheet's group slots render");
+        if profile == UiProfile::Armada2 {
+            let bars = app.world_mut().query::<&super::info::StockBar>().iter(app.world())
+                .filter(|bar| matches!(bar, super::info::StockBar::GroupNativeHealth(..))).count();
+            assert_eq!(bars, visible_count, "{label}: tiles use the stock health gauge");
+        }
+        let origin = stock.info_origin(bar_variant);
         for (index, id) in ids.iter().take(visible_count).enumerate() {
             let entity = rendered.iter().find(|(_, tile_id)| tile_id == id).unwrap().0;
             let name = app.world().resource::<HudFeed>().name(app.world().resource::<HudFeed>().view.unit(*id).unwrap());
             let mut texts = app.world_mut().query::<(&crate::ui::sprite_font::SpriteText, &Node, &crate::ui::sprite_font::SpriteTextStyle, &ChildOf)>();
             let labels: Vec<_> = texts.iter(app.world()).filter(|(_,_,_,parent)|
                 app.world().get::<ChildOf>(parent.parent()).is_some_and(|p| p.parent() == entity)).collect();
-            if compact {
+            let rect = stock.at(origin, &format!("infoMultiShipName_{index}"));
+            if compact || (profile == UiProfile::Armada2 && rect.is_none()) {
                 assert!(labels.is_empty(), "{label}: compact tile {index} must not show its ship name");
                 assert_eq!(app.world().get::<crate::ui::notices::Tooltip>(entity).unwrap().short, name);
                 continue;
@@ -484,8 +496,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             assert_eq!(labels.len(), 1, "{label}: one normal caption in slot {index}");
             let (text,node,style,_) = labels[0];
             assert_eq!(text.text,name);
-            let origin = stock.info_origin(bar_variant);
-            let rect = stock.at(origin, &format!("infoMultiShipName_{index}")).expect("installed group name area");
+            let rect = rect.expect("installed group name area");
             let hull = stock.at(origin, &format!("infoMultiShipHull_{index}")).expect("installed hull bar");
             let (Val::Px(width), Val::Px(height)) = (node.width, node.height) else { panic!("unresolved group caption") };
             assert!(!style.native && !style.min_size && style.scaled, "name must use compact sprite-font sizing");
@@ -590,7 +601,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         for bar in app.world_mut().query::<&super::info::StockBar>().iter(app.world()) {
             match bar {
                 super::info::StockBar::Hull(_) => hull += 1,
-                super::info::StockBar::Shield(_) | super::info::StockBar::YardShield(_) => shield += 1,
+                super::info::StockBar::Shield(_) | super::info::StockBar::NativeHealth(_) => shield += 1,
                 _ => {}
             }
         }
@@ -632,7 +643,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
                 "{label}: {icon_key} resolves");
         }
     }
-    if let HoverCapture::ClassicStart(odf) = hover_mode {
+    if let HoverCapture::ClassicStart(_, odf) = hover_mode {
         use super::selection_readouts::SelectionReadout;
         use crate::ui::sprite_font::SpriteText;
 
@@ -657,10 +668,22 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
                 &[("infoCrewNum", "infoCrewNumIcon", "crew_amt", "10"),
                   ("infoOfficers", "infoOfficersIcon", "officers", "2")][..],
             ),
+            "fresear" => (
+                1,
+                &[("infoCrewNum", "infoCrewNumIcon", "crew_amt", "300"),
+                  ("infoOfficers", "infoOfficersIcon", "officers", "10")][..],
+            ),
             "fspecial" => (1, &[("infoEnergy", "infoEnergyIcon", "energy_amt", "100%")][..]),
             _ => panic!("unexpected Classic capture {odf}"),
         };
         assert_eq!(bar_variant, variant, "{label}: {odf} selection card");
+        if odf == "fbase" && profile == UiProfile::Armada2 {
+            let world = app.world_mut();
+            assert!(world.query_filtered::<&SpriteText, With<super::info::SystemHealth>>()
+                .iter(world)
+                .any(|text| text.text == "0%" && text.color == Color::srgb(0.2, 0.2, 0.2)),
+                "{label}: missing dim zero-capacity system");
+        }
         let area = stock.info_area(variant).expect("Classic selection panel");
         let origin = stock.info_origin(variant);
         for &(value_key, icon_key, sprite, expected_value) in wiring {
@@ -1030,26 +1053,29 @@ fn installed_armada2_medium_personnel_hud_renders_on_gpu() {
         "a2-fconst-personnel-4x3", GameOptions::default(), HoverCapture::CrewShip);
 }
 
-/// Reproduce the live Classic mount and select the starting units on War and Peace.
+/// Reproduce the live mount and select the Federation starting units.
 #[test]
 fn installed_classic_selection_readouts_render_on_gpu() {
     use crate::ui::profile::{UiPreference, UiProfiles, resolve_profile};
 
+    let native = std::env::var("STA64_HUD_A2_NATIVE_MAP").as_deref() == Ok("1");
+    let active_mod = if native { None } else { Some("STA2 Classic") };
     if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1")
-        || std::env::var("STA64_TEST_MOD").as_deref() != Ok("STA2 Classic")
-    {
+        || (!native && std::env::var("STA64_TEST_MOD").as_deref() != Ok("STA2 Classic")) {
         return;
     }
     let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
-    for odf in ["fbase", "fyard", "fconst", "fscout", "fspecial"] {
-        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), Some("STA2 Classic"))
-            .expect("installed Classic VFS");
+    let map = if native { "mp02ring" } else { "3peace" };
+    for odf in ["fbase", "fyard", "fconst", "fscout", "fspecial"].into_iter().chain(native.then_some("fresear")) {
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod)
+            .expect("installed Armada II VFS");
         let profile = resolve_profile(Some(&vfs), UiPreference::default(), &UiProfiles::default());
-        eprintln!("Classic War and Peace, {odf}, resolved UI profile {profile:?}");
+        if native { assert_eq!(profile, UiProfile::Armada2); }
+        eprintln!("Armada II {map}, {odf}, resolved UI profile {profile:?}");
         capture_one(
             vfs, profile, UVec2::new(1443, 1080), "gui_fed.cfg",
-            &format!("classic-3peace-{odf}-1443x1080"), GameOptions::default(),
-            HoverCapture::ClassicStart(odf),
+            &format!("classic-{map}-{odf}-1443x1080"), GameOptions::default(),
+            HoverCapture::ClassicStart(map, odf),
         );
     }
 }
@@ -1231,11 +1257,13 @@ fn aim_roots_hud(
 fn installed_group_names_render_on_gpu() {
     if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") { return; }
     let root = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
-    let mod_name = std::env::var("STA64_TEST_MOD").expect("STA64_TEST_MOD");
-    let (profile, cfg, prefix) = match mod_name.as_str() {
-        "STA2 Classic" | "STA2 Classic Mod" => (UiProfile::Armada2, "gui_fed.cfg", "classic-group"),
-        "FO4" | "Fleet Ops 4.0" => (UiProfile::FleetOps, "gui_federation16x9.cfg", "fo4-group"),
-        _ => panic!("use STA2 Classic or FO4 for the installed name regression"),
+    let mod_name = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
+    let (profile, cfg, prefix) = match mod_name.as_deref() {
+        Some("STA2 Classic" | "STA2 Classic Mod") => (UiProfile::Armada2, "gui_fed.cfg", "classic-group"),
+        Some("FO4" | "Fleet Ops 4.0") => (UiProfile::FleetOps, "gui_federation16x9.cfg", "fo4-group"),
+        None if std::env::var("STA64_HUD_A2_NATIVE_MAP").as_deref() == Ok("1") =>
+            (UiProfile::Armada2, "gui_fed.cfg", "a2-group"),
+        _ => panic!("use standalone Armada II (STA64_HUD_A2_NATIVE_MAP=1), STA2 Classic or FO4"),
     };
     let mut cases = vec![
         (UVec2::new(1920, 1080), 2, format!("{prefix}-1080")),
@@ -1248,7 +1276,7 @@ fn installed_group_names_render_on_gpu() {
         cases.extend([8, 9].map(|count| (UVec2::new(1920, 1080), count, format!("{prefix}-{count}-1080"))));
     }
     for (size, count, label) in cases {
-        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(&mod_name)).unwrap();
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), mod_name.as_deref()).unwrap();
         capture_one(vfs, profile, size, cfg, &label, GameOptions::default(), HoverCapture::Group(count));
     }
 }

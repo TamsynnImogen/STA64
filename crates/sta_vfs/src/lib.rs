@@ -133,6 +133,7 @@ pub struct Vfs {
     layers: Vec<Layer>,
     /// Per layer: normalised virtual path -> source. Built at mount time.
     index: Vec<HashMap<String, Source>>,
+    flat_install: bool,
 }
 
 impl Vfs {
@@ -140,7 +141,8 @@ impl Vfs {
     ///
     /// `active_mod` is a folder name under `Data/Mods`; `None` mounts only `Data`.
     /// Without a Data child, `None` also permits a flat root containing ZFS files.
-    /// A loose-file A2 root requires an Armada2.exe file and odf/bzn directories.
+    /// A loose-file A2 root requires odf/bzn directories and either Armada2.exe
+    /// or the original game's game_cfg.h and misc/gui_glob16x12.cfg files.
     /// A requested mod is never silently ignored by falling back to a flat root.
     pub fn mount_install(install_root: &Path, active_mod: Option<&str>) -> Result<Self, VfsError> {
         let Some(data) = find_child_ci(install_root, "Data") else {
@@ -152,13 +154,18 @@ impl Vfs {
                     })
                 });
             let flat_a2 = active_mod.is_none()
-                && find_child_ci(install_root, "Armada2.exe").is_some_and(|p| p.is_file())
                 && find_child_ci(install_root, "odf").is_some_and(|p| p.is_dir())
-                && find_child_ci(install_root, "bzn").is_some_and(|p| p.is_dir());
+                && find_child_ci(install_root, "bzn").is_some_and(|p| p.is_dir())
+                && (find_child_ci(install_root, "Armada2.exe").is_some_and(|p| p.is_file())
+                    || (find_child_ci(install_root, "game_cfg.h").is_some_and(|p| p.is_file())
+                        && find_child_ci(install_root, "misc")
+                            .filter(|p| p.is_dir())
+                            .and_then(|p| find_child_ci(&p, "gui_glob16x12.cfg"))
+                            .is_some_and(|p| p.is_file())));
             if !flat_a1 && !flat_a2 {
                 return Err(VfsError::NoDataDir(install_root.to_path_buf()));
             }
-            let mut vfs = Vfs::default();
+            let mut vfs = Vfs { flat_install: true, ..Vfs::default() };
             vfs.push_dir("root".into(), install_root.to_path_buf())?;
             return Ok(vfs);
         };
@@ -288,6 +295,12 @@ impl Vfs {
 
     pub fn layers(&self) -> &[Layer] {
         &self.layers
+    }
+
+    /// An original game's data folder was mounted directly, independently of
+    /// any host mod chain its directory happens to be stored inside.
+    pub fn is_flat_install(&self) -> bool {
+        self.flat_install
     }
 
     /// The highest-priority source for `path`, with its layer index; `None`

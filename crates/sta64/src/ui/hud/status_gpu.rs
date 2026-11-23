@@ -966,6 +966,7 @@ mod tests {
             progress: None,
             builder,
             has_build_queue: builder,
+            a2_yard: builder,
         })
     }
 
