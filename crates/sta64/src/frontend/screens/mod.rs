@@ -39,7 +39,7 @@ pub use view::{Act, ScreenRoot};
 
 use crate::app::{AppState, GameSet};
 use crate::ui::theme::{ButtonClicked, CheckboxChanged, DropdownChanged, ListSelected, SliderChanged, ThemePlugin, ToggleChanged};
-use view::{MapList, ModList, ScrollBox, SettingSlider, SettingToggle};
+use view::{EditorMapList, MapList, ModList, ScrollBox, SettingSlider, SettingToggle};
 
 /// The screen shown in `AppState::FrontEnd`.
 #[derive(States, Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -52,6 +52,8 @@ pub enum Screen {
     /// Instant Action match options.
     Advanced,
     MapSelect,
+    /// Pick an installed BZN/SOL to open in the map editor.
+    MapEditorPicker,
     Settings,
     ModSelect,
     /// A campaign's mission list (UI-25, `frontend::campaign`).
@@ -90,6 +92,13 @@ pub struct ListScroll {
     pub view_h: f32,
     /// Bring the picked row into view once the box has a size.
     pub pending: bool,
+}
+
+/// VFS paths for the editor picker, separate from playable `ScreenData::maps`.
+#[derive(Resource, Debug, Clone, Default)]
+pub(crate) struct EditorMapPicker {
+    pub maps: Vec<String>,
+    pub selected: usize,
 }
 
 /// The scroll offset that shows row `index` (of `count`, `row_h` tall each) in
@@ -195,6 +204,7 @@ impl Plugin for ScreensPlugin {
             .init_resource::<ModLaunchOptions>()
             .init_resource::<MapReturn>()
             .init_resource::<ListScroll>()
+            .init_resource::<EditorMapPicker>()
             .init_resource::<stock::StockBox>()
             .init_resource::<stock::OptionsTab>()
             .init_resource::<stock::Refocus>()
@@ -208,6 +218,8 @@ impl Plugin for ScreensPlugin {
             .add_systems(OnEnter(AppState::FrontEnd), enter_front_end)
             .add_systems(OnEnter(Screen::MapSelect), open_list)
             .add_systems(OnEnter(Screen::ModSelect), open_list)
+            .add_message::<crate::editor::OpenMap>()
+            .add_systems(OnEnter(Screen::MapEditorPicker), (open_list, load_editor_maps).chain())
             .add_systems(
                 Update,
                 (fit_scale, stock::track_box, follow_data, on_keys, on_wheel, track_scroll, on_buttons, on_lists, crate::frontend::campaign::on_buttons, stock::on_dropdowns, stock::track_tab, rebuild, crate::frontend::campaign::rebuild, stock::restore_focus, (crate::frontend::lobby::drive, crate::frontend::lobby::on_buttons, crate::frontend::lobby::on_dropdowns, crate::frontend::lobby::on_text, crate::frontend::lobby::sync_map, crate::frontend::lobby::rebuild, crate::frontend::lobby::restore_focus).chain())
@@ -270,6 +282,19 @@ fn open_list(mut scroll: ResMut<ListScroll>) {
     scroll.pending = true;
 }
 
+fn load_editor_maps(mounted: Option<Res<crate::viewer::Mounted>>, mut picker: ResMut<EditorMapPicker>) {
+    let mut maps = mounted.map_or_else(Vec::new, |mounted| {
+        mounted.0.list("bzn").into_iter()
+            .filter(|path| path.ends_with(".bzn") || path.ends_with(".sol"))
+            .collect()
+    });
+    maps.extend(crate::editor::saved_map_paths());
+    maps.sort();
+    maps.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    picker.maps = maps;
+    picker.selected = picker.selected.min(picker.maps.len().saturating_sub(1));
+}
+
 /// Keys in the lists: Up, Down, PageUp, PageDown, Home and End move the pick
 /// and keep it in view; Enter takes it; Esc leaves without taking it. They
 /// press the screen's own buttons, so a key does what the click does.
@@ -280,6 +305,7 @@ fn on_keys(
     boxes: Query<&ScrollBox>,
     acts: Query<(Entity, &Act)>,
     mut browse: ResMut<Browse>,
+    mut editor_picker: ResMut<EditorMapPicker>,
     mut scroll: ResMut<ListScroll>,
     mut clicks: MessageWriter<ButtonClicked>,
 ) {
@@ -293,6 +319,7 @@ fn on_keys(
     }
     let (take, back) = match screen.get() {
         Screen::MapSelect => (Act::TakeMap, Act::Goto(Screen::Setup)),
+        Screen::MapEditorPicker => (Act::OpenEditorMap, Act::Goto(Screen::Main)),
         Screen::ModSelect => (Act::UseMod, Act::Goto(Screen::Main)),
         _ => return,
     };
@@ -333,6 +360,7 @@ fn on_keys(
     };
     let row = match screen.get() {
         Screen::MapSelect => &mut browse.map,
+        Screen::MapEditorPicker => &mut editor_picker.selected,
         _ => &mut browse.mod_row,
     };
     if *row != want || b.selected.is_none() {
@@ -403,6 +431,7 @@ pub(crate) fn on_buttons(
     mut notices: Option<ResMut<Messages<crate::ui::notices::Notice>>>,
     launch_options: Res<ModLaunchOptions>,
     flow: Option<Res<crate::game::flow::FlowConfig>>,
+    (mut open_editor, picker): (MessageWriter<crate::editor::OpenMap>, Res<EditorMapPicker>),
 ) {
     use crate::ui::notices::{Notice, Severity};
     let Some(mut draft) = draft else { return };
@@ -425,6 +454,12 @@ pub(crate) fn on_buttons(
                 browse.map = draft.map;
                 *map_return = MapReturn::default();
                 next.set(Screen::MapSelect);
+            }
+            Act::PickEditorMap => next.set(Screen::MapEditorPicker),
+            Act::OpenEditorMap => {
+                if let Some(path) = picker.maps.get(picker.selected) {
+                    open_editor.write(crate::editor::OpenMap(path.clone()));
+                }
             }
             Act::PickMod => {
                 browse.mod_row = selected.0.as_ref().and_then(|f| data.mods.iter().position(|m| m.folder.eq_ignore_ascii_case(f))).map_or(0, |i| i + 1);
@@ -529,12 +564,14 @@ pub(crate) fn on_buttons(
     }
 }
 
-fn on_lists(mut picks: MessageReader<ListSelected>, maps: Query<(), With<MapList>>, mods: Query<(), With<ModList>>, mut browse: ResMut<Browse>) {
+fn on_lists(mut picks: MessageReader<ListSelected>, maps: Query<(), With<MapList>>, mods: Query<(), With<ModList>>, editor_maps: Query<(), With<EditorMapList>>, mut browse: ResMut<Browse>, mut picker: ResMut<EditorMapPicker>) {
     for p in picks.read() {
         if maps.contains(p.list) {
             browse.map = p.index;
         } else if mods.contains(p.list) {
             browse.mod_row = p.index;
+        } else if editor_maps.contains(p.list) {
+            picker.selected = p.index;
         }
     }
 }
@@ -609,7 +646,7 @@ fn rebuild(
     presentation: (Res<Settings>, Option<Res<stock::GraphicsInfo>>),
     mod_state: (Res<SelectedMod>, Res<ActiveMod>),
     camera: Option<Res<ScreensCamera>>,
-    scroll: Res<ListScroll>,
+    (scroll, editor_picker): (Res<ListScroll>, Res<EditorMapPicker>),
     config: Res<ScreensConfig>,
     stock_box: Res<stock::StockBox>,
     options: (Res<stock::OptionsTab>, Res<stock::controls::ControlsDraft>, Res<stock::controls::ControlsRender>),
@@ -620,12 +657,12 @@ fn rebuild(
     let (options_tab, controls, controls_render) = options;
     let (selected, active_mod) = mod_state;
     let Some(draft) = draft else { return };
-    if !(screen.is_changed() || graphics.as_ref().is_some_and(|g| g.is_changed()) || campaigns.as_ref().is_some_and(|c| c.is_changed()) || draft.is_changed() || browse.is_changed() || selected.is_changed() || active_mod.is_changed() || data.is_changed() || theme.is_changed() || stock_box.is_changed() || config.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed()) || controls_render.is_changed()) {
+    if !(screen.is_changed() || graphics.as_ref().is_some_and(|g| g.is_changed()) || campaigns.as_ref().is_some_and(|c| c.is_changed()) || draft.is_changed() || browse.is_changed() || editor_picker.is_changed() || selected.is_changed() || active_mod.is_changed() || data.is_changed() || theme.is_changed() || stock_box.is_changed() || config.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed()) || controls_render.is_changed()) {
         return;
     }
     for e in &roots {
         commands.entity(e).despawn();
     }
-    let ctx = view::Ctx { theme: &theme, data: &data, strings: strings.as_deref(), draft: &draft, browse: &browse, settings: &settings, controls: &controls, selected: &selected, active_mod: &active_mod, scroll: &scroll, layout: config.layout, stock_box: stock_box.0, options_tab: options_tab.0, graphics: graphics.as_deref(), campaigns: campaigns.as_deref() };
+    let ctx = view::Ctx { theme: &theme, data: &data, strings: strings.as_deref(), draft: &draft, browse: &browse, settings: &settings, controls: &controls, selected: &selected, active_mod: &active_mod, scroll: &scroll, layout: config.layout, stock_box: stock_box.0, options_tab: options_tab.0, graphics: graphics.as_deref(), campaigns: campaigns.as_deref(), editor_maps: &editor_picker.maps, editor_map_selected: editor_picker.selected };
     view::spawn(&mut commands, *screen.get(), &ctx, camera.map(|c| c.0));
 }

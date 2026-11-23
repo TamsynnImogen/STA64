@@ -545,6 +545,9 @@ type Lighting<'w, 's> = (
     Query<'w, 's, (&'static MapLight, &'static mut MapLightSource, &'static mut Transform, &'static mut DirectionalLight), Without<Orbit>>,
 );
 
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct MapRebuild;
+
 pub struct MapPlugin;
 
 impl Plugin for MapPlugin {
@@ -589,7 +592,7 @@ impl Plugin for MapPlugin {
                 (
                     crate::clock::advance_idle_clock.run_if(not(resource_exists::<crate::sim_link::SimLink>).or_else(resource_exists::<crate::sim_link::SimHeld>)),
                     input,
-                    rebuild,
+                    rebuild.in_set(MapRebuild),
                     crate::render::stock::nebula::switch,
                     radar_click.run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free),
                     // Under the in-game menu (UI-34) the camera stands still.
@@ -734,13 +737,13 @@ fn setup(mut commands: Commands) {
 /// Camera distance a skirmish opens at, over the player's start.
 const START_DIST: f32 = 2500.0;
 
-fn input(keys: Res<ButtonInput<KeyCode>>, mut browser: ResMut<MapBrowser>, mut orbit: Query<&mut Orbit>, skirmish: Option<Res<crate::game::SkirmishCfg>>, instant: Option<Res<ActiveMatch>>) {
+fn input(keys: Res<ButtonInput<KeyCode>>, mut browser: ResMut<MapBrowser>, mut orbit: Query<&mut Orbit>, skirmish: Option<Res<crate::game::SkirmishCfg>>, instant: Option<Res<ActiveMatch>>, editor_map: Option<Res<crate::editor::AuthoringRun>>) {
     let n = browser.maps.len() as isize;
     if n == 0 {
         return;
     }
     // A match stays on its map: the browser's keys are the map viewer's.
-    let browsing = skirmish.is_none() && instant.is_none();
+    let browsing = skirmish.is_none() && instant.is_none() && editor_map.is_none();
     let step = [
         (KeyCode::ArrowRight, 1),
         (KeyCode::ArrowLeft, -1),
@@ -897,7 +900,7 @@ fn rebuild(
     tables: Res<SpriteTables>,
     teams: Res<TeamColours>,
     mut orbit: Query<&mut Orbit>,
-    state: MapState,
+    (state, editing_map): (MapState, Option<Res<crate::editor::EditorLoad>>),
     lighting: Lighting,
 ) {
     let (mut silhouettes, mut ambient, mut lights) = lighting;
@@ -916,19 +919,29 @@ fn rebuild(
     for e in &roots {
         commands.entity(e).despawn();
     }
-    let Some(name) = browser.maps.get(browser.index).cloned() else {
+    let editor_path = editing_map.as_ref().and_then(|request| request.requested().then(|| request.path.clone()));
+    let Some(name) = editor_path.as_deref().and_then(crate::editor::map_stem).map(str::to_owned)
+        .or_else(|| browser.maps.get(browser.index).cloned()) else {
         browser.info = "No maps under bzn/".into();
         return;
     };
     let header = format!("{name}  ({}/{})", browser.index + 1, browser.maps.len());
-    let map = match vfs.0.read(&format!("bzn/{name}.bzn")).or_else(|| vfs.0.read(&format!("bzn/{name}.sol"))).map(|r| r.map_err(|e| e.to_string()).and_then(|d| sta_bzn::parse(&d).map_err(|e| e.to_string()))) {
-        Some(Ok(m)) => m,
-        Some(Err(e)) => {
+    let authoring = editor_path.is_some();
+    let path = editor_path.unwrap_or_else(|| {
+        let bzn = format!("bzn/{name}.bzn");
+        if vfs.0.resolve(&bzn).is_some() { bzn } else { format!("bzn/{name}.sol") }
+    });
+    let bytes = match crate::editor::read_map(&vfs.0, &path) {
+        Ok(bytes) => bytes,
+        Err(e) => {
             browser.info = format!("{header}\n{e}");
             return;
         }
-        None => {
-            browser.info = format!("{header}\nnot found");
+    };
+    let map = match sta_bzn::parse(&bytes) {
+        Ok(map) => map,
+        Err(e) => {
+            browser.info = format!("{header}\n{e}");
             return;
         }
     };
@@ -1019,10 +1032,37 @@ fn rebuild(
     // HUD reads them). A map without names gives an empty table.
     commands.insert_resource(crate::ui::hud::instance_names::InstanceNames::of(&map, sim.labels.iter().map(|(id, l)| (id, l.as_str()))));
     let mut placed = Placed::of(&sim);
+    if authoring || (net_match.is_none() && (instant.is_some() || is_mission || is_match)) {
+        let mut source_placements = Placed::of(&sim);
+        let ids = map.objects.iter().enumerate().filter_map(|(index, object)| {
+            let key = content.key(&object.odf)?;
+            let id = source_placements.take(key, object)?;
+            Some((id, index))
+        }).collect();
+        match crate::editor::Document::new(path, bytes, map.clone()) {
+            Ok(document) => {
+                commands.insert_resource(document);
+                commands.insert_resource(crate::editor::AuthoredIds(ids));
+            }
+            Err(e) if authoring => {
+                browser.info = format!("{header}\n{e}");
+                return;
+            }
+            Err(e) => warn!("map editor: {e}"),
+        }
+    }
     commands.insert_resource(ContentRes(content.clone()));
     // The races' city textures, for the colonies' lights (RND-12).
     commands.insert_resource(crate::render::planet::CityRaces::load(&vfs.0, &index, &races));
     let seat_player = seat.0.map(PlayerId);
+    if authoring {
+        let view = sta_sim::WorldSource::view(&sim);
+        let race = view.units.iter().filter(|unit| Some(unit.owner) == seat_player)
+            .filter_map(|unit| content.unit(unit.def).map(|def| def.race.as_str()))
+            .find(|race| !race.is_empty())
+            .unwrap_or(&map.race);
+        commands.insert_resource(crate::game::local_race(&races, race));
+    }
     commands.insert_resource(crate::render::units::LocalPlayer(seat_player));
     {
         let (lo, hi) = map_def.bounds;
@@ -1532,7 +1572,11 @@ fn rebuild(
             let link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), seat_player.unwrap_or(PlayerId::BENCH)).with_controllers(controllers)
                 .with_match_fog_lifted(instant.as_ref().is_some_and(|active| active.fog.lifted().0));
             let link = if instant.as_ref().is_some_and(|active| active.local.is_none()) { link.with_observer() } else { link };
-            crate::capture::arm(&mut commands, link, &setup, is_match, &vfs.0);
+            if authoring {
+                commands.insert_resource(link);
+            } else {
+                crate::capture::arm(&mut commands, link, &setup, is_match, &vfs.0);
+            }
         }
     }
 
@@ -1647,6 +1691,7 @@ fn hud_toggle(
     keys: Res<ButtonInput<KeyCode>>,
     skirmish: Option<Res<crate::game::SkirmishCfg>>,
     instant: Option<Res<ActiveMatch>>,
+    editor: Option<Res<crate::editor::AuthoringRun>>,
     mut shown: Local<Option<bool>>,
     mut q: Query<&mut Visibility, With<MapHud>>,
 ) {
@@ -1654,7 +1699,7 @@ fn hud_toggle(
     if keys.just_pressed(KeyCode::F11) {
         *shown = !*shown;
     }
-    let want = if *shown { Visibility::Inherited } else { Visibility::Hidden };
+    let want = if *shown && editor.is_none() { Visibility::Inherited } else { Visibility::Hidden };
     for mut v in &mut q {
         if *v != want {
             *v = want;

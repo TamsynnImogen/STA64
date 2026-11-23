@@ -51,7 +51,10 @@ impl Plugin for InputPlugin {
             .init_resource::<orders::OrderTargets>()
             .init_resource::<orders::Aim>()
             .add_systems(Startup, select::spawn_select_box)
-            .add_systems(Update, select::follow_focus.in_set(crate::app::GameSet::Input))
+            .add_systems(Update, (
+                select::follow_focus,
+                orders::aim,
+            ).in_set(crate::app::GameSet::Input))
             .add_systems(Update, select::inherit_built_ship_group.in_set(crate::app::GameSet::Input)
                 .run_if(resource_exists::<crate::sim_link::SimLink>)
                 .before(select::select_keys))
@@ -60,7 +63,6 @@ impl Plugin for InputPlugin {
             .add_systems(
                 Update,
                 (
-                    orders::aim,
                     // Not while a cutscene runs: nothing is selected, ordered or acknowledged
                     // (an existing selection is kept, inert, and works again afterwards).
                     select::select_keys.run_if(not(crate::ui::presentation::cutscene_running)),
@@ -80,7 +82,10 @@ impl Plugin for InputPlugin {
                     // The in-game menu (UI-34) is over the match: nothing under it takes a click or a key.
                     .distributive_run_if(crate::ui::ingame_menu::menu_closed)
                     .distributive_run_if(crate::ui::hud::avatar_choice_closed)
-                    .distributive_run_if(crate::cheats::input::game_input_free),
+                    .distributive_run_if(crate::cheats::input::game_input_free)
+                    .distributive_run_if(crate::editor::play_mode)
+                    .after(orders::aim)
+                    .after(crate::editor::toggle_key),
             );
     }
 }

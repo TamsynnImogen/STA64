@@ -200,16 +200,16 @@ impl Plugin for HudPlugin {
                         status_gpu::update_values,
                     ).chain(),
                     (avatar::refresh, stock::active).chain(),
-                    (stock::navigate, stock::buttons::press, stock::buttons::apply_more).chain().run_if(avatar::closed),
+                    (stock::navigate, stock::buttons::press, stock::buttons::apply_more).chain().run_if(avatar::closed).run_if(crate::editor::play_mode),
                     panels::update_values.before(super::theme::WidgetPaint),
-                    (avatar::press, host).chain(),
+                    (avatar::press, host).chain().run_if(crate::editor::play_mode),
                     crate::input::hover::track.run_if(not(resource_exists::<ExternalFeed>)),
                     stock::infobar::update,
                     (
                         press.run_if(not(crate::ui::presentation::cutscene_running)),
                         status_gpu::press_queue,
-                    ).chain(),
-                    place_on_click.run_if(resource_exists::<Aim>).run_if(not(crate::ui::presentation::cutscene_running)).run_if(crate::cheats::input::game_input_free),
+                    ).chain().run_if(crate::editor::play_mode),
+                    place_on_click.run_if(crate::editor::play_mode).run_if(resource_exists::<Aim>).run_if(not(crate::ui::presentation::cutscene_running)).run_if(crate::cheats::input::game_input_free),
                     armed_cursor.run_if(resource_exists::<Aim>)
                         .run_if(not(crate::ui::presentation::cutscene_running))
                         .run_if(not(resource_exists::<crate::frontend::scene::MenuScene>))

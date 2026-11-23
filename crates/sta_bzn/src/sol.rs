@@ -66,6 +66,10 @@ pub enum SolError {
         "SOL declared {declared} map objects but only {found} common object records were decoded"
     )]
     ObjectCount { declared: u32, found: u32 },
+    #[error("SOL editor placement no longer matches the original object table")]
+    PlacementMismatch,
+    #[error("SOL editor placement contains a non-finite transform")]
+    PlacementNotFinite,
 }
 
 /// A player start location.
@@ -325,6 +329,83 @@ pub fn parse(bytes: &[u8]) -> Result<SolMap, SolError> {
     Ok(map)
 }
 
+/// Patch only the position and matrix payloads of existing objects. Every other
+/// tagged record, including records this reader does not understand, stays byte
+/// for byte intact. A SOL's object count and record layout are not changed.
+pub fn patch_placements(bytes: &[u8], placements: &[MapObject]) -> Result<Vec<u8>, SolError> {
+    let source = parse(bytes)?;
+    if source.objects.len() != placements.len() {
+        return Err(SolError::PlacementMismatch);
+    }
+    let (_, start) = header(bytes).ok_or(SolError::NotSol)?;
+    let records = tokenize(bytes, start)?;
+    let table = records
+        .iter()
+        .position(|record| record.offset == source.object_count_offset)
+        .ok_or(SolError::PlacementMismatch)?;
+    let mut indices = Vec::with_capacity(placements.len());
+    let mut index = table + 1;
+    while index < records.len() && indices.len() < placements.len() {
+        if object(&records, index, true).is_some() {
+            indices.push(index);
+            index += 8;
+        } else {
+            index += 1;
+        }
+    }
+    if indices.len() != placements.len() {
+        return Err(SolError::PlacementMismatch);
+    }
+    for (old, new) in source.objects.iter().zip(placements) {
+        if old.odf != new.odf
+            || old.id as i32 != new.entity_id
+            || old.team != new.team
+            || old.instance_name != new.label
+        {
+            return Err(SolError::PlacementMismatch);
+        }
+        if !new
+            .transform
+            .iter()
+            .chain(new.initial_position.iter().flatten())
+            .all(|value| value.is_finite())
+        {
+            return Err(SolError::PlacementNotFinite);
+        }
+    }
+    let mut output = bytes.to_vec();
+    for (&index, new) in indices.iter().zip(placements) {
+        let position = new.initial_position.unwrap_or([
+            new.transform[9],
+            new.transform[10],
+            new.transform[11],
+        ]);
+        let position_at = records[index + 3].offset + 8;
+        let matrix_at = records[index + 7].offset + 8;
+        for (slot, value) in position.iter().enumerate() {
+            output[position_at + slot * 4..position_at + (slot + 1) * 4]
+                .copy_from_slice(&value.to_le_bytes());
+        }
+        for (slot, value) in new.transform.iter().enumerate() {
+            output[matrix_at + slot * 4..matrix_at + (slot + 1) * 4]
+                .copy_from_slice(&value.to_le_bytes());
+        }
+    }
+    let written = parse(&output)?;
+    if written.objects.iter().zip(placements).any(|(old, new)| {
+        old.pos
+            != new.initial_position.unwrap_or([
+                new.transform[9],
+                new.transform[10],
+                new.transform[11],
+            ])
+            || old.transform != new.transform
+    }) {
+        return Err(SolError::PlacementMismatch);
+    }
+    Ok(output)
+}
+
 impl SolMap {
     /// The shared [`Map`]. Start locations become entries 1.. (entry 0 is the
     /// neutral slot at the map's centre, as in BZNs), the game type is the
@@ -582,6 +663,48 @@ pub(crate) mod tests {
                 m.objects[0].label.as_str()
             ),
             (7, 1, "flagship")
+        );
+    }
+
+    #[test]
+    fn placement_patch_preserves_unknown_records_and_rejects_topology_changes() {
+        let source = fixture();
+        let mut map = parse(&source).unwrap().to_map();
+        map.objects[0].initial_position = Some([17.0, 3.0, -22.0]);
+        map.objects[0].transform[9..12].copy_from_slice(&[17.0, 3.0, -22.0]);
+        let edited = patch_placements(&source, &map.objects).unwrap();
+        assert_eq!(edited.len(), source.len());
+        let reparsed = parse(&edited).unwrap();
+        assert_eq!(reparsed.objects[0].pos, [17.0, 3.0, -22.0]);
+        assert_eq!(&reparsed.objects[0].transform[9..12], &[17.0, 3.0, -22.0]);
+        assert_eq!(reparsed.objects[0].opaque_id, 1007);
+        assert_eq!(reparsed.objects[1], parse(&source).unwrap().objects[1]);
+        // Only the first object's two coordinate records are allowed to change.
+        let changes: Vec<usize> = source
+            .iter()
+            .zip(&edited)
+            .enumerate()
+            .filter_map(|(index, (before, after))| (before != after).then_some(index))
+            .collect();
+        assert!(!changes.is_empty());
+        let (_, start) = header(&source).unwrap();
+        let records = tokenize(&source, start).unwrap();
+        let at = records
+            .iter()
+            .position(|record| record.offset == parse(&source).unwrap().object_count_offset)
+            .unwrap()
+            + 1;
+        let pos = records[at + 3].offset + 8..records[at + 3].offset + 20;
+        let matrix = records[at + 7].offset + 8..records[at + 7].offset + 56;
+        assert!(
+            changes
+                .iter()
+                .all(|&index| { pos.contains(&index) || matrix.contains(&index) })
+        );
+        map.objects.pop();
+        assert_eq!(
+            patch_placements(&source, &map.objects),
+            Err(SolError::PlacementMismatch)
         );
     }
 

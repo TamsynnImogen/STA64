@@ -115,7 +115,7 @@ pub(crate) enum GroundAt {
 
 impl GroundAt {
     /// The sim-space point on the plane at height `y` (the selection's mean height).
-    fn on_plane(self, y: f32) -> Option<Vec3> {
+    pub(crate) fn on_plane(self, y: f32) -> Option<Vec3> {
         match self {
             GroundAt::Ray(ray) => {
                 let dir = *ray.direction;
