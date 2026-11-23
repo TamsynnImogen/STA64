@@ -2,9 +2,9 @@
 pub(in crate::ui::hud) mod a1;
 pub(in crate::ui) mod buttons;
 pub(in crate::ui::hud) mod commands;
-mod builder;
-pub(super) use builder::update as update_builder_readouts;
 mod info;
+mod selection_readouts;
+pub(super) use selection_readouts::update as update_selection_readouts;
 pub(super) use info::update_backdrop_fallback;
 mod weapon_icons;
 pub(super) use weapon_icons::update_visibility as update_weapon_icon_visibility;

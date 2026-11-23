@@ -296,6 +296,8 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Armada II tall selection panel. Select an idle Federation starbase or shipyard under Stock. Check the low-left name and class, the shield gauge beneath the wireframe, crew and officer readouts, the faction emblem on the right, and the striped construction meter at the bottom. Start an item, watch the meter fill, then cancel it. Repeat at 4:3 and in a wide HUD. The native display fields come from the executable (static) and the coordinates come from the mounted CFG.
 
+- [?] Armada II medium selection card. Select a Federation constructor and check the crew and officers icons and numbers beside the system indicators. Hover both icons and numbers, then check the same fields on a damaged ship and a unit without officers. Medium and tall positions come from the mounted CFG and the value rules come from the Armada II executable (static).
+
 ## Checked earlier (morning list)
 
 - [x] Construction live-feedback fixes accepted (2026-11-11, `construction-a1666d0`): the user confirmed visible beams, later chunk reveal and the constructor staying fixed under normal/queued movement. Automated Stop/cancellation and snapshot checks pass. FPS was not reported; this does not complete broader native/Android checks above.

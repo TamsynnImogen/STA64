@@ -1,4 +1,4 @@
-//! The live readouts on Armada II's tall yard and starbase card.
+//! Live readouts on Armada II's medium and tall single-selection cards.
 
 use bevy::{picking::Pickable, prelude::*};
 use sta_sim::{EntityId, Fixed, UnitView};
@@ -12,7 +12,7 @@ use super::{
 use crate::ui::{
     gui_sprites::{GuiImage, GuiImageSampling},
     hud::{
-        model::{self, HudFeed},
+        model::{self, HudFeed, Single},
         readouts::{self, Readout},
     },
     sprite_font::SpriteText,
@@ -20,7 +20,7 @@ use crate::ui::{
 };
 
 #[derive(Component, Clone, Copy)]
-pub(in crate::ui::hud) struct BuilderReadout(EntityId, Field);
+pub(in crate::ui::hud) struct SelectionReadout(EntityId, Field);
 
 #[derive(Clone, Copy)]
 enum Field {
@@ -30,20 +30,26 @@ enum Field {
 }
 
 impl Field {
-    fn keys(self) -> (&'static str, &'static str, &'static str, Readout) {
+    fn keys(self, builder: bool) -> (&'static str, &'static str, &'static str, Readout) {
+        // ShipDisplay uses a different set of rectangles for the yard card.
+        // Both modes use the same sprite identifiers and value sources (Armada II, static).
         match self {
-            Self::Crew => (
-                "infoBuildCrew",
-                "infoBuildCrewIcon",
-                "crew_amt",
-                Readout::Crew,
-            ),
-            Self::Officers => (
-                "infoBuildOfficers",
-                "infoBuildOfficersIcon",
-                "officers",
-                Readout::Officers,
-            ),
+            Self::Crew => {
+                let (value, icon) = if builder {
+                    ("infoBuildCrew", "infoBuildCrewIcon")
+                } else {
+                    ("infoCrewNum", "infoCrewNumIcon")
+                };
+                (value, icon, "crew_amt", Readout::Crew)
+            }
+            Self::Officers => {
+                let (value, icon) = if builder {
+                    ("infoBuildOfficers", "infoBuildOfficersIcon")
+                } else {
+                    ("infoOfficers", "infoOfficersIcon")
+                };
+                (value, icon, "officers", Readout::Officers)
+            }
             Self::Energy => (
                 "infoBuildEnergy",
                 "infoBuildEnergyIcon",
@@ -82,12 +88,19 @@ pub(super) fn spawn(
     layout: &StockLayout,
     origin: Vec2,
     theme: &Theme,
-    id: EntityId,
+    single: &Single,
     race: &str,
 ) {
-    for field in [Field::Crew, Field::Officers, Field::Energy] {
-        let (value_key, icon_key, sprite, tip) = field.keys();
-        let marker = BuilderReadout(id, field);
+    let id = single.id;
+    let builder = layout.info_uses_builder(single);
+    let fields: &[Field] = if builder {
+        &[Field::Crew, Field::Officers, Field::Energy]
+    } else {
+        &[Field::Crew, Field::Officers]
+    };
+    for &field in fields {
+        let (value_key, icon_key, sprite, tip) = field.keys(builder);
+        let marker = SelectionReadout(id, field);
         if let Some(rect) = layout.at(origin, value_key) {
             let label = text(
                 commands,
@@ -119,6 +132,9 @@ pub(super) fn spawn(
         }
     }
 
+    if !builder {
+        return;
+    }
     // Both the team tint and the emblem's sprite name come from the selected object.
     // The original only draws a backing when the mounted CFG names one.
     if let Some(sprite) = layout.name("infoSingleRaceIconBackground")
@@ -145,13 +161,13 @@ pub(in crate::ui::hud) fn update(
     feed: Res<HudFeed>,
     state: Res<StockState>,
     mut parts: Query<(
-        &BuilderReadout,
+        &SelectionReadout,
         &mut Visibility,
         Option<&mut SpriteText>,
         Option<&mut GuiImage>,
     )>,
 ) {
-    for (&BuilderReadout(id, field), mut visibility, label, image) in &mut parts {
+    for (&SelectionReadout(id, field), mut visibility, label, image) in &mut parts {
         let value = feed
             .view
             .unit(id)
