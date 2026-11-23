@@ -562,6 +562,8 @@ impl Plugin for MapPlugin {
             .add_plugins(crate::render::quality::QualityPlugin)
             .add_plugins(crate::render::rock::RockPlugin)
             .add_plugins(crate::render::nebula::NebulaPlugin)
+            // ADR 0009: the sprite nodes' material and colour slots (no node uses them yet).
+            .add_plugins(crate::render::sprites::material::SpriteMaterialPlugin)
             .add_plugins(crate::render::stock::StockBackgroundsPlugin)
             .add_plugins(crate::render::strategic::StrategicPlugin)
             .init_resource::<crate::render::strategic::Silhouettes>()

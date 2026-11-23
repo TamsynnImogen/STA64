@@ -149,6 +149,8 @@ pub fn face_camera(
     }
 }
 
+pub mod material;
+
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

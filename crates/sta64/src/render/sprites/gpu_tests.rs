@@ -1,8 +1,15 @@
 //! Real-GPU identity check of how sprite nodes reach the screen: the same invented scene drawn through
 //! the reference path ([`super::tests::animate_reference`], `main`'s per-node `animate`) and through
-//! [`animate`], at a new time, camera place and fade every frame, from a Stock-like and a Refit-like
-//! camera. The two sets of frames must be byte-equal; a control run (reference against reference)
+//! the sprite material path of ADR 0009 ([`super::material`]: shared look materials, the colour in the
+//! node's slot, the forked `sprite.wesl`), at a new time, camera place and fade every frame, from three
+//! cameras. The two sets of frames must be byte-equal; a control run (reference against reference)
 //! must be byte-equal too, which proves the harness itself is deterministic.
+//!
+//! Until step 2 of the ADR adopts the game's nodes, the material path is driven by a stand-in for its
+//! `animate` ([`write_slots`]): the unchanged [`animate`] computes every node's colour and uv into its
+//! own (no longer drawn) material, and the stand-in copies them into the node's slot and its look's
+//! material with main's rule (only while shown, only on change) and parity mode (S5). The cloaking
+//! unit's and the ghost's nodes stay on their own materials, as the ADR keeps them (S4).
 //!
 //! The scene has: nebula-like puffs whose fades change every step while their look's colour cycles;
 //! a blinking glow, flat sprites, a moon nimbus; a co-located pair each of blended and of additive
@@ -13,6 +20,10 @@
 use super::tests::{BLENDS, NODES, TABLE, animate_reference, fade_of, material_of, table};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use super::*;
+use super::material::{SpriteMaterial, SpriteMaterialPlugin, SpriteSlots, linear, look_material};
+use bevy::mesh::MeshTag;
+use bevy::render::storage::ShaderBuffer;
+use std::collections::HashMap;
 use crate::render::fx::specials::{UnitFade, apply_fade};
 use crate::ui::hud::ghost::{Ghost, tint_ghost};
 use sta_sim::ContentKey;
@@ -64,7 +75,8 @@ fn texture() -> Image {
 enum Path {
     /// `main`'s per-node system.
     Reference,
-    /// The system under test (today the same one `main` has).
+    /// The sprite material path under test: nodes on their look's shared [`SpriteMaterial`], the
+    /// colour in their slot ([`write_slots`] after [`animate`]).
     New,
     /// A deliberately broken path, a negative control: the reference system run in `Last`, after the
     /// assets' events of the frame, so its writes reach the screen one frame late. Must NOT be byte-equal.
@@ -81,6 +93,84 @@ enum Camera {
     /// HDR, bloom, default tonemapping, 4x MSAA (the cinematic post chain's parts).
     HdrBloom,
 }
+
+/// The colour and uv an adopted node's own material held when it was last shown: what main's
+/// per-node material would hold now (the ADR's `SpriteState`).
+#[derive(Component)]
+struct Shown {
+    colour: Color,
+    uv: Affine2,
+}
+
+/// The shared material of each look, by sprite name (the scene has one texture).
+#[derive(Resource, Default)]
+struct Looks(HashMap<String, Handle<SpriteMaterial>>);
+
+/// Put a freshly spawned node on the sprite material path in the same frame, before any update:
+/// a slot holding the colour its own material starts with, its look's shared material, and the
+/// state it starts from. `own` is the material the node was spawned with.
+fn adopt(app: &mut App, node: Entity, own: &StandardMaterial) {
+    let world = app.world_mut();
+    let sprite = world.get::<SpriteFx>(node).unwrap().sprite.clone();
+    let tag = world.resource_scope(|w, mut slots: Mut<SpriteSlots>| {
+        let mut buffers = w.resource_mut::<Assets<ShaderBuffer>>();
+        let tag = slots.allocate(&mut buffers);
+        slots.write(&mut buffers, [(&tag, linear(own.base_color))]);
+        tag
+    });
+    let look = match world.resource::<Looks>().0.get(&sprite) {
+        Some(h) => h.clone(),
+        None => {
+            let m = look_material(own, world.resource::<SpriteSlots>());
+            let h = world.resource_mut::<Assets<SpriteMaterial>>().add(m);
+            world.resource_mut::<Looks>().0.insert(sprite, h.clone());
+            h
+        }
+    };
+    world
+        .entity_mut(node)
+        .remove::<MeshMaterial3d<StandardMaterial>>()
+        .insert((tag, MeshMaterial3d(look), Shown { colour: own.base_color, uv: own.uv_transform }));
+}
+
+/// The stand-in for step 2's `animate` on adopted nodes, after the unchanged [`animate`] has written
+/// each node's colour and uv into its own material: while the node is shown and its values changed
+/// (main's rule), the new linear colour goes into its slot, the uv into its look's material if that
+/// differs, and the node's material component is marked changed (parity mode, S5), so the nodes
+/// re-queued are main's. All slot writes touch the buffer once.
+fn write_slots(
+    slots: Res<SpriteSlots>,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
+    own: Res<Assets<StandardMaterial>>,
+    mut looks: ResMut<Assets<SpriteMaterial>>,
+    mut nodes: Query<(&SpriteFx, &MeshTag, &Visibility, &mut Shown, &mut MeshMaterial3d<SpriteMaterial>)>,
+) {
+    let mut writes = Vec::new();
+    for (f, tag, vis, mut last, mut look) in &mut nodes {
+        if *vis == Visibility::Hidden {
+            continue;
+        }
+        let Some(m) = own.get(&f.material) else { continue };
+        if m.base_color == last.colour && m.uv_transform == last.uv {
+            continue;
+        }
+        if m.base_color != last.colour {
+            writes.push((tag.clone(), linear(m.base_color)));
+        }
+        if looks.get(&look.0).is_some_and(|l| l.base.uv_transform != m.uv_transform)
+            && let Some(mut l) = looks.get_mut(&look.0)
+        {
+            l.base.uv_transform = m.uv_transform;
+        }
+        *last = Shown { colour: m.base_color, uv: m.uv_transform };
+        look.set_changed();
+    }
+    slots.write(&mut buffers, writes.iter().map(|(t, c)| (t, *c)));
+}
+
+/// Slots of the nodes adopted before the series starts: the buffer is full when the series begins,
+/// so the node spawned mid-series grows it (S1, growth by doubling) between two captured frames.
+const SLOTS_AT_START: u32 = 48 + 6 + 6 + 1;
 
 /// Frames of the scene at 12 times and camera places.
 fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
@@ -99,8 +189,20 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
         clock.advance_idle(0.0);
     }
     app.add_systems(Update, tick.before(animate_reference).before(animate));
+    // The material path's plugin, slots and observer are in every path's app, idle where no node is
+    // adopted, so the apps differ only in what the path adopts (an observer is an entity: leaving it
+    // out of one app would also shift the scene's entity ids).
+    app.add_plugins(SpriteMaterialPlugin).init_resource::<Looks>();
+    let slots = SpriteSlots::with_capacity(&mut app.world_mut().resource_mut::<Assets<ShaderBuffer>>(), SLOTS_AT_START);
+    app.insert_resource(slots);
+    // A despawned node's slot goes back, as step 2's adoption will do.
+    app.add_observer(|remove: On<Remove<MeshTag>>, tags: Query<&MeshTag>, mut slots: ResMut<SpriteSlots>| {
+        if let Ok(tag) = tags.get(remove.entity) {
+            slots.release(tag);
+        }
+    });
     match path {
-        Path::New => app.add_systems(Update, (animate, apply_fade, tint_ghost, face_camera).chain()),
+        Path::New => app.add_systems(Update, (animate, write_slots, apply_fade, tint_ghost, face_camera).chain()),
         Path::Reference => app.add_systems(Update, (animate_reference, apply_fade, tint_ghost, face_camera).chain()),
         Path::Late => app.add_systems(Update, (apply_fade, tint_ghost, face_camera).chain()).add_systems(Last, animate_reference),
     };
@@ -124,7 +226,7 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
         let node = NODES[i % NODES.len()];
         let (mut m, mut fx, _) = material_of(&t, node);
         m.base_color_texture = Some(tex.clone());
-        let h = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(m);
+        let h = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(m.clone());
         fx.material = h.clone();
         let (x, y, z) = (((i * 7) % 11) as f32 * 9.0 - 45.0, ((i * 5) % 9) as f32 * 8.0 - 32.0, ((i * 3) % 7) as f32 * 4.0 - 12.0);
         let mut e = app.world_mut().spawn((Mesh3d(quad.clone()), MeshMaterial3d(h), Transform::from_xyz(x, y, z).with_scale(Vec3::new(14.0, 14.0, 1.0)), Visibility::default(), fx));
@@ -135,7 +237,11 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
         if i == 5 {
             e.insert(crate::render::rock::MoonNimbus { on: true });
         }
-        puffs.push(e.id());
+        let e = e.id();
+        if path == Path::New {
+            adopt(&mut app, e, &m);
+        }
+        puffs.push(e);
     }
     // A cloaking unit and a placement ghost: their nodes are given material copies by the game's own
     // systems. Same look as the puffs above (so, shared when sharing is on).
@@ -161,7 +267,7 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
     let spawn = |app: &mut App, node: &str, at: Vec3, size: f32, billboard: bool, parent: Option<Entity>| {
         let (mut m, mut fx, _) = material_of(&t, node);
         m.base_color_texture = Some(tex.clone());
-        let h = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(m);
+        let h = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(m.clone());
         fx.material = h.clone();
         let mut e = app.world_mut().spawn((Mesh3d(quad.clone()), MeshMaterial3d(h), Transform::from_translation(at).with_scale(Vec3::new(size, size, 1.0)), Visibility::default(), fx));
         if billboard {
@@ -170,7 +276,11 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
         if let Some(p) = parent {
             e.insert(ChildOf(p));
         }
-        e.id()
+        let e = e.id();
+        if path == Path::New {
+            adopt(app, e, &m);
+        }
+        e
     };
     spawn(&mut app, BLENDS[0], Vec3::new(-30.0, -28.0, -6.0), 16.0, true, None);
     spawn(&mut app, BLENDS[1], Vec3::new(-30.0, -28.0, -6.0), 16.0, true, None);
@@ -236,6 +346,16 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
         }
         frames.push(shoot(&mut app, &target));
     }
+    if path == Path::New {
+        // The material path really drew the adopted nodes: the buffer grew mid-series, one node came
+        // and one went, and the nodes are on the shared look materials.
+        let slots = app.world().resource::<SpriteSlots>();
+        assert_eq!((slots.live(), slots.capacity()), (SLOTS_AT_START, 2 * SLOTS_AT_START), "slots after the series");
+        let looks = app.world().resource::<Looks>().0.len();
+        let on_looks = app.world_mut().query::<&MeshMaterial3d<SpriteMaterial>>().iter(app.world()).count();
+        // Looks: the puffs' two sprites (the four node ids draw two sprites) and the six blend nodes'.
+        assert_eq!((looks, on_looks), (2 + BLENDS.len(), SLOTS_AT_START as usize), "looks and adopted nodes");
+    }
     Some(frames)
 }
 
@@ -248,6 +368,8 @@ fn nodes_are_drawn_byte_equal_to_the_reference_path_on_gpu_from_three_cameras() 
     let _serial = crate::bench::frames::gpu_serial();
     let _ = TABLE;
     let lit = |f: &Vec<u8>| f.chunks(4).filter(|p| p[0] > 8 || p[1] > 8 || p[2] > 8).count();
+    // Every frame of every camera is compared before the test fails, so a failure names them all.
+    let mut differing = Vec::new();
     for camera in [Camera::Stock, Camera::Tonemapped4x, Camera::HdrBloom] {
         let Some(old) = series(Path::Reference, camera) else { return };
         // Control: the reference against itself, so a difference below is the path's, not the harness'.
@@ -255,14 +377,35 @@ fn nodes_are_drawn_byte_equal_to_the_reference_path_on_gpu_from_three_cameras() 
         let Some(new) = series(Path::New, camera) else { return };
         assert_eq!(old.len(), new.len());
         for (n, ((a, b), c)) in old.iter().zip(&again).zip(&new).enumerate() {
-            let diff = |x: &Vec<u8>, y: &Vec<u8>| x.iter().zip(y).filter(|(p, q)| p != q).count();
             assert!(lit(a) > 300, "{camera:?} frame {n} shows the scene ({} lit pixels)", lit(a));
-            assert!(a == b, "{camera:?} control frame {n} differs: {} bytes of {}", diff(a, b), a.len());
-            assert!(a == c, "{camera:?} frame {n} differs from the reference: {} bytes of {}", diff(a, c), a.len());
+            assert!(a == b, "{camera:?} control frame {n} differs: {}", describe(a, b));
+            if a != c {
+                differing.push(format!("{camera:?} frame {n} differs from the reference: {}", describe(a, c)));
+            }
         }
         // The frames differ from one another (time and camera move), so equality is not an empty scene's.
         assert!(old[0] != old[5]);
     }
+    assert!(differing.is_empty(), "{}", differing.join("\n"));
+}
+
+/// Where two frames of [`series`] differ: how many pixels, their box, the largest channel difference
+/// and a few of them.
+fn describe(a: &[u8], b: &[u8]) -> String {
+    const W: usize = 160;
+    let px: Vec<(usize, &[u8], &[u8])> = a.chunks(4).zip(b.chunks(4)).enumerate().filter(|(_, (p, q))| p != q).map(|(i, (p, q))| (i, p, q)).collect();
+    if px.is_empty() {
+        return "equal".into();
+    }
+    let (mut x0, mut x1, mut y0, mut y1) = (W, 0, usize::MAX, 0);
+    let mut most = 0;
+    for &(i, p, q) in &px {
+        let (x, y) = (i % W, i / W);
+        (x0, x1, y0, y1) = (x0.min(x), x1.max(x), y0.min(y), y1.max(y));
+        most = most.max(p.iter().zip(q).map(|(u, v)| u.abs_diff(*v)).max().unwrap_or(0));
+    }
+    let samples: Vec<String> = px.iter().step_by((px.len() / 4).max(1)).take(4).map(|(i, p, q)| format!("({}, {}) {p:?} against {q:?}", i % W, i / W)).collect();
+    format!("{} pixels in x {x0}..={x1}, y {y0}..={y1}, largest channel difference {most}; {}", px.len(), samples.join(", "))
 }
 
 /// Negative control: the harness fails when the picture differs. The reference system run one frame
