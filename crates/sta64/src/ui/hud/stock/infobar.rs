@@ -244,17 +244,6 @@ fn value(unit: &UnitView, field: InfoBarField) -> Option<(String, Option<f32>)> 
     Some((count(pair[0]).to_string(), status))
 }
 
-fn display_value(label: String, field: InfoBarField, native_a2: bool) -> String {
-    if native_a2
-        && !label.is_empty()
-        && matches!(field, InfoBarField::Hull | InfoBarField::Shields | InfoBarField::Energy)
-    {
-        format!("{label}%")
-    } else {
-        label
-    }
-}
-
 // A2FOCraftIdentity's existing palette applies to percentage-based hull,
 // shields and crew; special energy has its own optional fixed colour.
 fn value_color(
@@ -323,7 +312,6 @@ pub(in crate::ui::hud) fn update(
             value(unit, *field)
         });
         let (label, status) = shown.unwrap_or_default();
-        let label = display_value(label, *field, native);
         let color = if *field == InfoBarField::Name {
             layout
                 .and_then(|layout| layout.colour("shipNameColor"))
@@ -431,24 +419,6 @@ mod tests {
         );
         actor.crew = None;
         assert_eq!(value(&actor, InfoBarField::Crew), None);
-    }
-
-    #[test]
-    fn native_a2_percent_suffix_preserves_crew_and_fo_values() {
-        for field in [
-            InfoBarField::Hull,
-            InfoBarField::Shields,
-            InfoBarField::Energy,
-        ] {
-            assert_eq!(display_value("50".into(), field, true), "50%");
-            assert_eq!(display_value("50".into(), field, false), "50");
-            assert_eq!(display_value(String::new(), field, true), "");
-        }
-        assert_eq!(display_value("73".into(), InfoBarField::Crew, true), "73");
-        assert_eq!(
-            display_value("Starbase".into(), InfoBarField::Name, true),
-            "Starbase"
-        );
     }
 
     #[test]

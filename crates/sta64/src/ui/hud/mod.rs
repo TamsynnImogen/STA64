@@ -513,10 +513,6 @@ fn press(
                     what: *what,
                     odf: odf.clone(),
                 });
-                notices.write(Notice::new(
-                    Severity::Info,
-                    trf("Place {0}: click the map (Esc cancels)", &[odf]),
-                ));
             }
             Act::NativeOrder(odf) => {
                 if let Some(order) = stock.as_deref().and_then(|stock| stock.command(&feed, odf)) {

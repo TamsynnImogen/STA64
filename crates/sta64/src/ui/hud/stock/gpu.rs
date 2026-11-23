@@ -270,8 +270,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         assert_eq!(crew_tint, Some(Color::srgb(1.0, 0.0, 0.0)), "Classic starbase at10percent must be red");
     }
     let percent = |now: i128, max: i128| (max > 0).then(|| {
-        let rounded = (now * 200 + max).div_euclid(max * 2);
-        if profile == UiProfile::Armada2 { format!("{rounded}%") } else { rounded.to_string() }
+        (now * 200 + max).div_euclid(max * 2).to_string()
     });
     let whole = |value: Fixed| { let bits=value.to_bits(); if bits>0 { (bits/Fixed::ONE.to_bits()).max(1) } else { bits/Fixed::ONE.to_bits() } };
     let expected_bar = {

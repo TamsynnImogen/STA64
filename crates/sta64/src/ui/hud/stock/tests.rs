@@ -682,13 +682,13 @@ fn populated_info_bar(builder: bool, extra: &str) -> App {
 }
 
 #[test]
-fn native_hover_percentages_and_crew_change_colour_with_live_pools() {
+fn native_hover_readouts_update_values_and_colours() {
     use infobar::InfoBarField::{Hull, Shields, Crew};
     let mut app = populated_info_bar(false, "systemIconHealthyColor=0 1 0\nsystemIconLowColor=1 1 0\nsystemIconCriticalColor=1 0 0\n");
     // The info bar follows the pointer: hover the selected ship to read its values there.
     app.world_mut().resource_mut::<crate::input::hover::HoveredUnit>().0 = Some(EntityId(1));
     app.update();
-    assert_eq!(info_bar_label(&mut app, Hull).unwrap().1, "100%");
+    assert_eq!(info_bar_label(&mut app, Hull).unwrap().1, "100");
     let crew_node = info_bar_label(&mut app, Crew).unwrap().0;
     let mut feed = app.world().resource::<HudFeed>().clone();
     let mut view = (*feed.view).clone();
@@ -699,8 +699,8 @@ fn native_hover_percentages_and_crew_change_colour_with_live_pools() {
     *app.world_mut().resource_mut::<HudFeed>() = feed;
     app.update();
     for (field, text, colour) in [
-        (Hull, "50%", Color::srgb(1.0, 1.0, 0.0)),
-        (Shields, "25%", Color::srgb(1.0, 0.0, 0.0)),
+        (Hull, "50", Color::srgb(1.0, 1.0, 0.0)),
+        (Shields, "25", Color::srgb(1.0, 0.0, 0.0)),
         (Crew, "37", Color::srgb(1.0, 0.0, 0.0)),
     ] {
         let label = info_bar_label(&mut app, field).unwrap();
@@ -730,7 +730,7 @@ fn info_bar_follows_only_the_pointer_and_updates_real_pools_in_place() {
     assert_eq!(info_bar_label(&mut app, Name).unwrap().1, "", "the selection alone shows nothing: the bar follows the pointer");
     app.world_mut().resource_mut::<crate::input::hover::HoveredUnit>().0 = Some(EntityId(2));
     app.update();
-    for (field, expected) in [(Name,"Construction Ship"), (Hull,"50%"), (Shields,"25%"), (Crew,"73"), (Energy,"3%")] {
+    for (field, expected) in [(Name,"Construction Ship"), (Hull,"50"), (Shields,"25"), (Crew,"73"), (Energy,"3")] {
         let label = info_bar_label(&mut app, field).unwrap();
         assert_eq!(label.1, expected);
         assert_eq!(label.3, Visibility::Inherited, "bar must follow HUD root visibility");
@@ -1127,7 +1127,7 @@ fn numeric_values_patch_existing_stock_entities() {
     assert!(new.iter().any(|(_, id, text)| *id == 2 && text == "1234"));
     let updated = app.world().get::<SpriteText>(hull.0).unwrap();
     assert_ne!(updated.text, hull.1);
-    assert_eq!(updated.text, "60%");
+    assert_eq!(updated.text, "60");
 }
 
 #[test]
