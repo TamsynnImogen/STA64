@@ -431,6 +431,7 @@ pub(crate) fn front_end_data(vfs: &sta_vfs::Vfs, catalogue: &mut Catalogue, inst
     let t0 = std::time::Instant::now();
     let content = catalogue.content(vfs)?;
     let (db, index, races) = (content.db.clone(), content.index.clone(), content.races.clone());
+    let strings = sta_content::StringTable::load(vfs);
     // Star Trek: Legacy `.sol` maps (CON-20) sit beside the `.bzn` files and parse to the same `Map`.
     let mut names: Vec<String> = vfs.list("bzn").into_iter().filter(|p| p.ends_with(".bzn") || p.ends_with(".sol")).map(|p| p.trim_start_matches("bzn/").trim_end_matches(".bzn").trim_end_matches(".sol").to_owned()).collect();
     names.sort();
@@ -443,7 +444,7 @@ pub(crate) fn front_end_data(vfs: &sta_vfs::Vfs, catalogue: &mut Catalogue, inst
         for warning in converted.warnings.iter().filter(|w| w.file.ends_with(".mdf")) {
             debug!("{warning}");
         }
-        let map = MapEntry::new(converted.map);
+        let map = MapEntry::localized(converted.map, &strings);
         if map.slots() >= 2 {
             maps.push(map);
         }

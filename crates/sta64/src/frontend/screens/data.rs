@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use bevy::prelude::*;
-use sta_content::{ContentDb, Fixed, MapDef, StartPos, StartingResources, Vec3 as SimVec3};
+use sta_content::{ContentDb, Fixed, MapDef, StartPos, StartingResources, StringTable, Vec3 as SimVec3};
 use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::{PlayerId, TeamId};
 use crate::clock::{MatchSpeed, splitmix64};
@@ -29,6 +29,18 @@ pub struct MapEntry {
 impl MapEntry {
     pub fn new(def: MapDef) -> MapEntry {
         MapEntry { def: Arc::new(def) }
+    }
+
+    /// A map's description can name a string key. The file stem can also have a
+    /// `<STEM>_MAP_NAME` entry in the mount's game string table.
+    pub(crate) fn localized(mut def: MapDef, strings: &StringTable) -> MapEntry {
+        let lookup = |key: &str| strings.get(key).map(str::trim).filter(|text| !text.is_empty());
+        let title = def.label.as_deref().and_then(lookup).or_else(|| {
+            let stem = def.name.rsplit('/').next().unwrap_or(&def.name);
+            lookup(&format!("{}_MAP_NAME", stem.to_ascii_uppercase()))
+        });
+        def.label = title.map(str::to_owned).or(def.label);
+        Self::new(def)
     }
 
     /// The map's display name, or its file stem.
