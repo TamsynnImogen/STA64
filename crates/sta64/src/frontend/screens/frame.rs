@@ -70,7 +70,8 @@ fn use_installed_preview_fixture(mut commands: Commands, mounted: Option<Res<cra
     let Ok(source) = sta_bzn::parse(&bytes) else { return };
     let (mut map, _) = sta_content::MapDef::from_bzn(&source, &data.content);
     map.name = stem;
-    data.maps = vec![MapEntry::new(map)];
+    let strings = sta_content::StringTable::load(&mounted.0);
+    data.maps = vec![MapEntry::localized(map, &strings)];
     data.colours = crate::viewer::TeamColours::load(&mounted.0);
     let profile = crate::ui::profile::resolve_profile(Some(&mounted.0), Default::default(), &Default::default());
     commands.insert_resource(profile.theme());

@@ -505,7 +505,7 @@ fn the_preview_shows_the_start_positions_of_the_picked_map() {
     let scroll = *app.world().resource::<crate::frontend::screens::ListScroll>();
     let ctx = crate::frontend::screens::view::Ctx {
         theme: &theme, data: &data, strings: None, draft: &draft, browse: &browse, settings: &settings, controls: &controls, selected: &selected, active_mod: &active_mod, scroll: &scroll,
-        layout: ScreenLayout::Stock, stock_box: Vec2::new(1440.0, 1080.0), options_tab: 0, graphics: None, campaigns: None,
+        layout: ScreenLayout::Stock, stock_box: Vec2::new(1440.0, 1080.0), options_tab: 0, graphics: None, campaigns: None, editor_maps: &[], editor_map_selected: 0,
     };
     let dots = preview_dots(&ctx);
     assert_eq!(dots.len(), data.maps[0].slots());
@@ -540,7 +540,7 @@ fn main_menu_has_nine_text_rows_with_existing_routes() {
         assert_eq!(app.world().get::<BackgroundColor>(entity).unwrap().0, Color::NONE);
         let text = app.world().get::<Children>(entity).unwrap().iter().find_map(|e| app.world().get::<SpriteText>(e)).unwrap();
         assert_eq!(text.text, want, "{slot:?}");
-        let disabled = matches!(slot, Slot::MainMapEditor | Slot::MainReplayIntro | Slot::MainCredits);
+        let disabled = matches!(slot, Slot::MainReplayIntro | Slot::MainCredits);
         assert_eq!(*app.world().get::<WidgetState>(entity).unwrap() == WidgetState::Disabled, disabled, "{slot:?}");
         assert_eq!(app.world().get::<Act>(entity).is_some(), !disabled, "{slot:?}");
     }
@@ -592,7 +592,7 @@ fn main_menu_focus_skips_unavailable_rows_and_keeps_buttons_transparent() {
     let mut app = app();
     let order = focus_order(app.world_mut());
     let slots: Vec<_> = order.iter().map(|e| app.world().get::<Placed>(*e).unwrap().0).collect();
-    assert_eq!(slots, [Slot::MainSinglePlayer, Slot::MainInstantAction, Slot::MainMultiplayer, Slot::MainMods, Slot::MainOptions, Slot::MainExit]);
+    assert_eq!(slots, [Slot::MainSinglePlayer, Slot::MainInstantAction, Slot::MainMultiplayer, Slot::MainMapEditor, Slot::MainMods, Slot::MainOptions, Slot::MainExit]);
     let first = order[0];
     let label = app.world().get::<Children>(first).unwrap()[0];
     let normal = app.world().get::<SpriteText>(label).unwrap().color;
@@ -605,10 +605,10 @@ fn main_menu_focus_skips_unavailable_rows_and_keeps_buttons_transparent() {
         move_focus(app.world_mut(), false);
     }
     assert_eq!(app.world().resource::<KitFocus>().0, Some(first));
-    let disabled = placed(&mut app).into_iter().find(|(s, _)| *s == Slot::MainMapEditor).unwrap().1;
-    crate::ui::theme::click(app.world_mut(), disabled);
+    let editor = placed(&mut app).into_iter().find(|(s, _)| *s == Slot::MainMapEditor).unwrap().1;
+    crate::ui::theme::click(app.world_mut(), editor);
     settle(&mut app);
-    assert_eq!(*app.world().resource::<State<Screen>>().get(), Screen::Main);
+    assert_eq!(*app.world().resource::<State<Screen>>().get(), Screen::MapEditorPicker);
 }
 
 #[cfg(not(target_os = "android"))]

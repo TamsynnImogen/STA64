@@ -89,6 +89,9 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
 
         // ui —
         app.add_plugins(crate::ui::theme::ThemePlugin);
+        if map_view {
+            app.add_plugins(crate::editor::EditorPlugin);
+        }
         app.insert_resource(crate::ui::profile::UiPreference { lcars: cfg.lcars_ui })
             .add_plugins(crate::ui::profile::UiProfilePlugin);
         app.add_plugins(crate::ui::notices::NoticePlugin);

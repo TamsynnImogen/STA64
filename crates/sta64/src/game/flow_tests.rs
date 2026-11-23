@@ -494,6 +494,65 @@ fn a_successful_mod_switch_rebuilds_the_menu_scene_and_switches_back() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn front_end_map_names_resolve_localized_keys_and_keep_name_fallbacks() {
+    use sta_bzn::{Map, StartLoc};
+
+    fn map(description: &str, file_name: &str) -> Map {
+        Map {
+            version: 3013,
+            binary: true,
+            mission_type: "mp".into(),
+            description: description.into(),
+            file_name: file_name.into(),
+            start_count: 2,
+            start_locs: vec![
+                StartLoc { kind: "empty".into(), team: -1, ..default() },
+                StartLoc { pos: [10.0, 0.0, 0.0], kind: "player".into(), team: 1, ..default() },
+                StartLoc { pos: [-10.0, 0.0, 0.0], kind: "player".into(), team: 2, ..default() },
+            ],
+            ..default()
+        }
+    }
+
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("sta64_localized_map_names_{}_{nonce}", std::process::id()));
+    let data = root.join("Data");
+    let child = data.join("Mods/Child");
+    std::fs::create_dir_all(data.join("bzn")).unwrap();
+    std::fs::create_dir_all(&child).unwrap();
+    std::fs::write(data.join("Dynamic_Localized_Strings.h"),
+        "\"EXPLICIT_MAP_KEY\", \"Base explicit title\", \"CHILD_OVERRIDE_MAP_NAME\", \"Base derived title\", \"EMPTY_LOCALIZED_MAP_NAME\", \"\"").unwrap();
+    std::fs::write(child.join("info.ini"), "[Mod]\nName=Child\n").unwrap();
+    std::fs::write(child.join("Dynamic_Localized_Strings.h"),
+        "\"EXPLICIT_MAP_KEY\", \"Child explicit title\"").unwrap();
+
+    for (stem, description, file_name) in [
+        ("explicit", "EXPLICIT_MAP_KEY", "explicit.bzn"),
+        ("child_override", "A literal description", "child_override.bzn"),
+        ("literal", "A custom literal title", "literal.bzn"),
+        ("empty_localized", "Fallback literal title", "empty_localized.bzn"),
+        ("bare", "", "bare.bzn"),
+    ] {
+        let bytes = sta_bzn::write::write(&map(description, file_name)).unwrap();
+        std::fs::write(data.join(format!("bzn/{stem}.bzn")), bytes).unwrap();
+    }
+
+    let vfs = sta_vfs::Vfs::mount_install(&root, Some("Child")).expect("synthetic child install mounts");
+    let mut catalogue = crate::map::Catalogue::default();
+    let front_end = front_end_data(&vfs, &mut catalogue, Some(&root)).unwrap();
+    let titles: Vec<_> = front_end.screens.maps.iter().map(|entry| (entry.def.name.as_str(), entry.title())).collect();
+    assert_eq!(titles, [
+        ("bare", "bare"),
+        ("child_override", "Base derived title"),
+        ("empty_localized", "Fallback literal title"),
+        ("explicit", "Child explicit title"),
+        ("literal", "A custom literal title"),
+    ]);
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// A remount drops what was cached by name from the previous mount: the texture cache keeps misses
 /// (`None`), so a texture only the new mod has (`PA_ECFR0` of STA2 Classic) stayed "not found".
 #[test]

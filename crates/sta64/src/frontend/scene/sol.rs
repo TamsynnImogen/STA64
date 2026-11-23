@@ -60,7 +60,7 @@ impl Path {
 pub(super) fn load(
     vfs: &Vfs,
     layer: usize,
-    stem: &str,
+    sidecar: &str,
     bytes: &[u8],
     content: &ContentDb,
 ) -> Result<MenuMap, String> {
@@ -71,9 +71,8 @@ pub(super) fn load(
     if sol.objects.len() > MAX_OBJECTS {
         return Err("menu SOL has more than 512 objects".into());
     }
-    let sidecar = format!("{stem}.lua");
     let script = match vfs
-        .resolve_all(&sidecar)
+        .resolve_all(sidecar)
         .into_iter()
         .find(|(name, _)| *name == vfs.layers()[layer].name())
     {
@@ -321,6 +320,13 @@ mod tests {
     fn authored_sol_and_lua_place_a_ship_and_move_the_camera_and_ship() {
         let mut vfs = Vfs::default();
         vfs.push_dir("fixture".into(), FIXTURE.into()).unwrap();
+        let browser = crate::map::browser(&vfs, Some("menu.sol"), String::new());
+        assert_eq!(
+            browser.maps.get(browser.index).map(String::as_str),
+            Some("menu")
+        );
+        assert!(!crate::map::match_map_paths(&vfs).any(|path| path == super::super::MENU_SOL_PATH));
+
         let content = Arc::new(content());
         let map = Arc::new(MenuMap::from_vfs(&vfs, &content));
         assert_eq!(
@@ -359,19 +365,26 @@ mod tests {
         let dir = root.join("Menu");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::copy(
-            std::path::Path::new(FIXTURE).join("Menu/menu.sol"),
+            std::path::Path::new(FIXTURE).join("bzn/menu.sol"),
             dir.join("menu.sol"),
         )
         .unwrap();
         std::fs::write(
             dir.join("menu.lua"),
-            "return { views = {{ name='bad', camera={'missing'} }} }",
+            "return { views = {{ name='legacy', camera={'menu_camera_main'} }} }",
         )
         .unwrap();
         std::fs::write(dir.join("map.ini"), "[View.ini_fallback]\nEye=0,50,300\n").unwrap();
         let mut vfs = Vfs::default();
         vfs.push_dir("mod".into(), root.clone()).unwrap();
         vfs.push_dir("fixture".into(), FIXTURE.into()).unwrap();
+        let map = MenuMap::from_vfs(&vfs, &content());
+        assert_eq!(map.view_names(), ["legacy"]);
+        std::fs::write(
+            dir.join("menu.lua"),
+            "return { views = {{ name='bad', camera={'missing'} }} }",
+        )
+        .unwrap();
         let map = MenuMap::from_vfs(&vfs, &content());
         assert_eq!(map.view_names(), ["ini_fallback"]);
         std::fs::write(

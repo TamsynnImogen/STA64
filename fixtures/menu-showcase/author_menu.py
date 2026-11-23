@@ -6,7 +6,7 @@ import math
 import struct
 
 
-OUT = Path(__file__).parent / "Menu" / "menu.sol"
+OUT = Path(__file__).parent / "bzn" / "menu.sol"
 
 
 class Sol:
@@ -53,7 +53,7 @@ class Sol:
 
     def write(self):
         self.filler(4)
-        for value in ("mp", "{menu-showcase}", "Original Menu Showcase", "Menu/menu.sol", "menu.sol"):
+        for value in ("mp", "{menu-showcase}", "Original Menu Showcase", "bzn/menu.sol", "menu.sol"):
             self.pair(value)
         self.filler(1)
         self.vec3((-1200, -600, -1400))
@@ -70,7 +70,7 @@ class Sol:
         ]
         marker_rows = [
             # Name, position, yaw. These named, synthetic waypoints are the
-            # route controls referenced by Menu/menu.lua.
+            # route controls referenced by missions/menu.lua.
             ("menu_camera_main", (-300, 190, -340), 0.55),
             ("menu_camera_main_arc", (-170, 150, -430), 0.20),
             ("menu_camera_main_return", (-420, 180, -410), 0.85),
