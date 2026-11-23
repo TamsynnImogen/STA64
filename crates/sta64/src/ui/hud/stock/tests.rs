@@ -682,7 +682,7 @@ fn populated_info_bar(builder: bool, extra: &str) -> App {
 }
 
 #[test]
-fn bare_status_values_and_crew_change_colour_with_live_pools() {
+fn native_hover_readouts_update_values_and_colours() {
     use infobar::InfoBarField::{Hull, Shields, Crew};
     let mut app = populated_info_bar(false, "systemIconHealthyColor=0 1 0\nsystemIconLowColor=1 1 0\nsystemIconCriticalColor=1 0 0\n");
     // The info bar follows the pointer: hover the selected ship to read its values there.
@@ -2110,6 +2110,7 @@ infoBuildOfficers = 30 55 60 24
 infoBuildOfficersIcon = 5 55 24 24
 infoBuildEnergy = 30 80 60 24
 infoBuildEnergyIcon = 5 80 24 24
+infoBuildShieldBar = 5 105 80 8
 infoProgressBar = 210 280 210 10
 infoSingleRaceIconDisplayArea = 405 20 80 80
 ");
@@ -2119,6 +2120,8 @@ infoSingleRaceIconDisplayArea = 405 20 80 80
     unit.def = db.key("fx_yard").unwrap();
     unit.crew = Some([Fixed::from_int(150); 2]);
     unit.energy = Some([Fixed::from_int(7), Fixed::from_int(10)]);
+    unit.hull = [Fixed::from_int(50), Fixed::from_int(100)];
+    unit.shields = [[Fixed::from_int(100); 2]; 4];
     *app.world_mut().resource_mut::<HudFeed>() = feed;
     app.update();
     let person_label = |app: &mut App, value: &str| {
@@ -2139,6 +2142,12 @@ infoSingleRaceIconDisplayArea = 405 20 80 80
     assert!(app.world().resource::<HudFeed>().production.is_empty());
     assert!(app.world_mut().query::<&GuiImage>().iter(app.world())
         .any(|image| image.names.iter().any(|name| name == "large_construction_bar")));
+    assert!(app.world_mut()
+        .query::<(&info::StockBar, &Node, &BackgroundColor)>()
+        .iter(app.world())
+        .any(|(bar, node, color)| matches!(bar, info::StockBar::NativeHealth(w) if node.width == Val::Px(*w * 0.5))
+            && color.0 == Color::srgb(0.0, 1.0, 0.0)),
+        "stock health gauge shows half hull with a full-shield tint");
 
     assert_eq!(app.world_mut().query::<&ReadoutTarget>().iter(app.world())
         .filter(|ReadoutTarget(_, kind)| matches!(kind, Readout::Officers)).count(), 2);

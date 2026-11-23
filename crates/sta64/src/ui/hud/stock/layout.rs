@@ -4,7 +4,7 @@ use bevy::prelude::{Color, Vec2};
 use sta_content::gui_cfg::{GuiLayout, Rect};
 
 use super::super::layout::R;
-use super::super::model::Info;
+use super::super::model::{Info, Single};
 use crate::ui::profile::UiProfile;
 
 /// A configured background piece, with its native SPR frame index.
@@ -140,19 +140,23 @@ impl StockLayout {
         self
     }
 
-    /// Stock ShipDisplay selects low when empty. A single selection uses the
-    /// tall card when it has a build queue; group thresholds depend on the profile.
+    /// ShipDisplay uses the yard flag to select the stock Armada II builder
+    /// card. The group thresholds are separate from single-object mode.
     pub(in crate::ui::hud) fn info_variant(&self, info: &Info) -> usize {
         match info {
             Info::None => 0,
-            Info::Single(single) => 1 + usize::from(single.has_build_queue),
+            Info::Single(single) => 1 + usize::from(self.info_uses_builder(single)),
             Info::Group(group) => 1 + usize::from(group.len() > if self.a2_info { 8 } else { 16 }),
         }
     }
 
+    pub(super) fn info_uses_builder(&self, single: &Single) -> bool {
+        if self.a2_info { single.a2_yard } else { single.has_build_queue }
+    }
+
     /// The two Armada II group heights share the same sixteen authored slots.
     pub(super) fn info_group_slots(&self, variant: usize) -> (bool, usize) {
-        if self.a2_info { (false, 16) } else { (variant == 2, usize::MAX) }
+        if self.a2_info { (false, if variant == 1 { 8 } else { 16 }) } else { (variant == 2, usize::MAX) }
     }
 
     /// Whether a screen point (theme units) is inside the HUD sheet's rectangle.
@@ -852,6 +856,7 @@ mod tests {
             progress: None,
             builder: false,
             has_build_queue: false,
+            a2_yard: false,
         };
         assert_eq!(layout.info_variant(&Info::Single(single.clone())), 1);
         assert_eq!(

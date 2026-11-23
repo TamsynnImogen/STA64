@@ -302,6 +302,7 @@ fn a_craft_builder_waits_for_a_site() {
     let station = cell(&mut app, |a| matches!(a, Act::Build { site: true, .. }));
     press(&mut app, station);
     assert!(queued(&mut app).is_empty(), "nothing is sent until the click");
+    assert!(app.world().resource::<crate::ui::notices::Notices>().active.is_empty());
     assert_eq!(app.world().resource::<HudState>().placing.as_ref().map(|a| a.odf.as_str()), Some("fx_station"));
 
     // The click, with the pointer over the map.

@@ -3,6 +3,7 @@
 use bevy::picking::Pickable;
 use bevy::prelude::*;
 use sta_sim::{EntityId, Fixed};
+use sta_sim::world::EntityKind;
 
 use super::super::layout::R;
 use super::super::model::{self, HudFeed, Info};
@@ -32,7 +33,8 @@ pub(in crate::ui::hud) enum StockText {
 pub(in crate::ui::hud) enum StockBar {
     Hull(f32),
     Shield(f32),
-    YardShield(f32),
+    NativeHealth(f32),
+    GroupNativeHealth(EntityId, f32),
     Progress(f32),
     /// Armada I's energy bar (UI-19).
     Energy(f32),
@@ -305,7 +307,7 @@ pub(super) fn cfg_bar(commands: &mut Commands, root: Entity, layout: &StockLayou
         Some(sprite) => sprite_bar(commands, root, r, value, (track, fill), kind, sprite),
         None => bar(commands, root, r, value, (track, fill), kind),
     };
-    if matches!(kind, StockBar::Hull(_) | StockBar::YardShield(_) | StockBar::Group(..))
+    if matches!(kind, StockBar::Hull(_) | StockBar::NativeHealth(_) | StockBar::Group(..) | StockBar::GroupNativeHealth(..))
         && fills.iter().all(|key| layout.colour(key).is_none())
     {
         commands.entity(fill_entity).insert(FallbackHullTint(kind));
@@ -344,14 +346,21 @@ pub(in crate::ui::hud) fn update_hull_tints(
     let selected = feed.selected_units();
     for (kind, bg, image) in &mut fills {
         let unit = match kind.0 {
-            StockBar::Hull(_) | StockBar::YardShield(_) => selected.first().copied(),
-            StockBar::Group(id, _) => feed.view.unit(id),
+            StockBar::Hull(_) | StockBar::NativeHealth(_) => selected.first().copied(),
+            StockBar::Group(id, _) | StockBar::GroupNativeHealth(id, _) => feed.view.unit(id),
             _ => None,
         };
         let Some(unit) = unit else { continue };
-        let tint = if matches!(kind.0, StockBar::YardShield(_)) {
+        let tint = if matches!(kind.0, StockBar::NativeHealth(_) | StockBar::GroupNativeHealth(..))
+            && feed.def(unit).is_some_and(|d| matches!(EntityKind::of_def(d), EntityKind::Craft | EntityKind::Station))
+        {
             let (_, online) = slot_status(status.as_deref(), unit.id, 1);
-            if online { native_hull_tint(model::shield_frac(unit).unwrap_or(0.0)) } else { STOCK_SHIELD_TINT }
+            let shield = unit.shields.iter().map(|pair| i128::from(pair[0].to_bits())).sum::<i128>();
+            if online && shield >= i128::from(Fixed::ONE.to_bits()) {
+                native_hull_tint(model::shield_frac(unit).unwrap_or(0.0))
+            } else {
+                STOCK_SHIELD_TINT
+            }
         } else {
             native_hull_tint(model::frac(unit.hull))
         };
@@ -660,7 +669,7 @@ fn spawn_single(
     origin: Vec2,
     single: &model::Single,
 ) {
-    let builder = single.has_build_queue;
+    let builder = layout.info_uses_builder(single);
     let unit = feed.view.unit(single.id);
     let def = unit.and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def)));
     if let Some(def) = def {
@@ -740,7 +749,9 @@ fn spawn_single(
         cfg_bar(commands, root, layout, r, single.hull, (&["infoSingleHullBarDisableColor", "infoSingleShieldBarDisableColor"], fills, native_hull_tint(single.hull)), StockBar::Hull(r.w), "infoSingleHullBar");
         readouts::at(commands, root, r, single.id, Readout::Hull);
     }
-    if let Some(shield) = single.shield
+    let native_health = layout.has_a2_info() && !is_node;
+    let health = if native_health { Some(single.hull) } else { single.shield };
+    if let Some(value) = health
         && let Some(r) = chosen_rect(
             layout,
             origin,
@@ -750,13 +761,14 @@ fn spawn_single(
         )
     {
         let fills: &[&str] = if builder { &["infoBuildShieldBarColor", "infoSingleShieldBarColor"] } else { &["infoSingleShieldBarColor"] };
-        let (kind, fallback) = if builder && layout.has_a2_info() {
-            (StockBar::YardShield(r.w), native_hull_tint(shield))
+        // The stock HealthBar uses hull for width and shields for tint.
+        let (kind, tip) = if native_health {
+            (StockBar::NativeHealth(r.w), Readout::Hull)
         } else {
-            (StockBar::Shield(r.w), STOCK_SHIELD_TINT)
+            (StockBar::Shield(r.w), Readout::Shields)
         };
-        cfg_bar(commands, root, layout, r, shield, (&["infoSingleShieldBarDisableColor"], fills, fallback), kind, "infoSingleShieldBar");
-        readouts::at(commands, root, r, single.id, Readout::Shields);
+        cfg_bar(commands, root, layout, r, value, (&["infoSingleShieldBarDisableColor"], fills, STOCK_SHIELD_TINT), kind, "infoSingleShieldBar");
+        readouts::at(commands, root, r, single.id, tip);
     }
     if let Some(progress) = single.progress
         && let Some(r) = layout.at(origin, "infoSingleConstructionBarArea")
@@ -780,22 +792,29 @@ fn spawn_single(
     }
     // The stock engine gives the system picture and health percentage their
     // own rectangles. Read both from the mounted CFG.
-    if let Some(def) = def.filter(|d| d.system_hit_points.iter().any(|hp| *hp > Fixed::ZERO)) {
+    let native_systems = layout.has_a2_info() && def.is_some_and(|d| {
+        matches!(EntityKind::of_def(d), EntityKind::Craft | EntityKind::Station)
+    });
+    if let Some(def) = def.filter(|d| native_systems || d.system_hit_points.iter().any(|hp| *hp > Fixed::ZERO)) {
         for (slot, system) in SLOT_SYSTEM.into_iter().enumerate() {
-            if !system_slot_visible(def, slot) {
+            if !native_systems && !system_slot_visible(def, slot) {
                 continue;
             }
             let icon = chosen_rect(layout, origin, builder, &format!("infoBuildSystemIcon_{slot}"), &format!("infoSystemIcon_{slot}"));
             if let Some(r) = icon {
                 commands.entity(root).with_child((node(r), readouts::bind(single.id, Readout::System(system)), SystemIcon(slot), GuiImage::new("infosystem").with_frame(slot)));
             }
-            if def.system_hit_points[system] > Fixed::ZERO
+            if (native_systems || def.system_hit_points[system] > Fixed::ZERO)
                 && let Some(r) = system_readout_rect(layout, origin, builder, slot, icon)
             {
-                let label = text_styled(
-                    commands, root, r, String::new(), theme.text, r.h * 0.8, None,
-                    SpriteTextStyle { tint_all: true, ..default() }.centered_in_box(),
-                );
+                let label = if native_systems {
+                    text(commands, root, r, String::new(), theme.text, theme.small_size, None)
+                } else {
+                    text_styled(
+                        commands, root, r, String::new(), theme.text, r.h * 0.8, None,
+                        SpriteTextStyle { tint_all: true, ..default() }.centered_in_box(),
+                    )
+                };
                 commands.entity(label).insert(SystemHealth(slot));
                 clip_to_rect(commands, label, false);
                 readouts::at(commands, root, r, single.id, Readout::System(system));
@@ -856,11 +875,10 @@ fn spawn_group(
         {
             wireframe_layers_of(commands, entity, wireframe, &def.model, Some(tile.id), None, None);
         }
-        if !small {
-            // Existing incomplete CFGs retain the icon inset when no name key exists.
-            let fallback = R::new(2.0, 2.0, (r.w - 4.0).max(0.0), (r.h - 4.0).max(0.0));
-            let name_rect = layout.at(origin, &format!("infoMultiShipName_{i}"))
-                .map_or(fallback, |name| R::new(name.x - r.x, name.y - r.y, name.w, name.h));
+        let name_rect = layout.at(origin, &format!("infoMultiShipName_{i}"))
+            .map(|name| R::new(name.x - r.x, name.y - r.y, name.w, name.h))
+            .or_else(|| (!layout.has_a2_info()).then(|| R::new(2.0, 2.0, (r.w - 4.0).max(0.0), (r.h - 4.0).max(0.0))));
+        if !small && let Some(name_rect) = name_rect {
             let name = text_styled(
                 commands,
                 entity,
@@ -881,10 +899,18 @@ fn spawn_group(
         if let Some(hull) = layout.at(origin, &hull_key) {
             cfg_bar(commands, root, layout, hull, tile.hull, (&["infoMultiHullBarDisableColor", "infoMultiShieldBarDisableColor"], &["infoMultiHullBarColor"], native_hull_tint(tile.hull)), StockBar::Group(tile.id, hull.w), "infoMultiHullBar");
         }
-        // UI-48: the tile's shield bar (A2 and FO author one per tile; FO's compact layout `Sm`).
         let shield_key = if small { format!("infoMultiShipShieldSm_{i}") } else { format!("infoMultiShipShield_{i}") };
-        if let (Some(shield), Some(r)) = (tile.shield, layout.at(origin, &shield_key)) {
-            cfg_bar(commands, root, layout, r, shield, (&["infoMultiShieldBarDisableColor"], &["infoMultiShieldBarColor"], STOCK_SHIELD_TINT), StockBar::GroupShield(tile.id, r.w), "infoMultiShieldBar");
+        if let Some(r) = layout.at(origin, &shield_key) {
+            let native_craft = layout.has_a2_info() && feed.view.unit(tile.id).and_then(|unit| feed.def(unit))
+                .is_some_and(|def| matches!(EntityKind::of_def(def), EntityKind::Craft | EntityKind::Station));
+            let display = if native_craft {
+                Some((tile.hull, StockBar::GroupNativeHealth(tile.id, r.w)))
+            } else {
+                tile.shield.map(|shield| (shield, StockBar::GroupShield(tile.id, r.w)))
+            };
+            if let Some((value, kind)) = display {
+                cfg_bar(commands, root, layout, r, value, (&["infoMultiShieldBarDisableColor"], &["infoMultiShieldBarColor"], STOCK_SHIELD_TINT), kind, "infoMultiShieldBar");
+            }
         }
     }
 }
@@ -956,8 +982,17 @@ pub(in crate::ui::hud) fn update(
     let info = model::info(&feed);
     if let Info::Single(s) = &info {
         let layout = state.as_deref().and_then(|st| st.layout.as_ref());
+        let native = layout.is_some_and(StockLayout::has_a2_info);
+        let def = feed.view.unit(s.id).and_then(|unit| feed.def(unit));
+        let absent = |slot: usize| {
+            native && def.is_some_and(|d| d.system_hit_points[SLOT_SYSTEM[slot]] <= Fixed::ZERO)
+        };
         for (icon, mut image) in &mut icons {
-            let (health, on) = slot_status(status.as_deref(), s.id, icon.0);
+            let (health, on) = if absent(icon.0) {
+                (Fixed::ZERO, false)
+            } else {
+                slot_status(status.as_deref(), s.id, icon.0)
+            };
             let tint = system_tint(layout, health, on);
             if image.color != tint {
                 image.color = tint;
@@ -965,11 +1000,14 @@ pub(in crate::ui::hud) fn update(
         }
         for (slot, mut text) in &mut health_labels {
             let (health, on) = slot_status(status.as_deref(), s.id, slot.0);
-            let label = health_label(health);
+            let missing = absent(slot.0);
+            let label = health_label(if missing { Fixed::ZERO } else { health });
             // Stock Armada II draws functioning system percentages in green
             // and permanently disabled ones in dim grey. The feed has no
             // native timed-repair overlay, so a failed damaged system is red.
-            let tint = if on {
+            let tint = if missing {
+                Color::srgb(0.2, 0.2, 0.2)
+            } else if on {
                 Color::srgb(0.0, 1.0, 0.0)
             } else if health < Fixed::ONE {
                 Color::srgb(1.0, 0.0, 0.0)
@@ -1010,12 +1048,12 @@ pub(in crate::ui::hud) fn update(
     }
     for (kind, mut node) in &mut bars {
         let (value, width) = match (kind, &info) {
-            (StockBar::Hull(w), Info::Single(s)) => (s.hull, *w),
-            (StockBar::Shield(w) | StockBar::YardShield(w), Info::Single(s)) => (s.shield.unwrap_or(0.0), *w),
+            (StockBar::Hull(w) | StockBar::NativeHealth(w), Info::Single(s)) => (s.hull, *w),
+            (StockBar::Shield(w), Info::Single(s)) => (s.shield.unwrap_or(0.0), *w),
             (StockBar::Progress(w), Info::Single(s)) => (s.progress.unwrap_or(0.0), *w),
             (StockBar::Energy(w), Info::Single(_)) => (extra.as_ref().and_then(|e| e.energy).unwrap_or(0.0), *w),
             (StockBar::Node(w), Info::Single(s)) => (node_fraction(status.as_deref(), s.id), *w),
-            (StockBar::Group(id, w), Info::Group(tiles)) => (
+            (StockBar::Group(id, w) | StockBar::GroupNativeHealth(id, w), Info::Group(tiles)) => (
                 tiles.iter().find(|tile| tile.id == *id).map_or(0.0, |tile| tile.hull),
                 *w,
             ),
@@ -1184,6 +1222,7 @@ mod tests {
             progress: None,
             builder: false,
             has_build_queue: false,
+            a2_yard: false,
         };
         let tile = model::Tile { id: EntityId(1), name: long, hull: 1.0, shield: None };
         let short = model::Tile { id: EntityId(2), name: "Short".into(), hull: 1.0, shield: None };
