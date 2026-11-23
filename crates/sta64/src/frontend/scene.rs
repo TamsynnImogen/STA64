@@ -63,6 +63,8 @@ use crate::viewer::Mounted;
 
 /// The built-in map: Refit's `render3d/content/menu/map.ini`, unchanged.
 pub const BUILTIN_MAP: &str = include_str!("../../../../assets/menu/map.ini");
+/// The reserved menu scene placement file under the normal map directory.
+pub(crate) const MENU_SOL_PATH: &str = "bzn/menu.sol";
 
 const DEG: f32 = std::f32::consts::PI / 180.0;
 
@@ -252,18 +254,25 @@ impl MenuMap {
 
     /// Prefer the highest mount layer, with SOL before INI within that layer.
     pub fn from_vfs(vfs: &sta_vfs::Vfs, content: &ContentDb) -> MenuMap {
-        let paths = ["menu/menu.sol", "refitscene/menu/menu.sol", "menu.sol", "menu/map.ini", "refitscene/menu/map.ini"];
+        let paths = [
+            (MENU_SOL_PATH, Some("missions/menu.lua")),
+            ("menu/menu.sol", Some("menu/menu.lua")),
+            ("refitscene/menu/menu.sol", Some("refitscene/menu/menu.lua")),
+            ("menu.sol", Some("menu.lua")),
+            ("menu/map.ini", None),
+            ("refitscene/menu/map.ini", None),
+        ];
         let mut sources = Vec::new();
-        for path in paths {
+        for (path, script) in paths {
             sources.extend(vfs.resolve_all(path).into_iter().filter_map(|(layer, source)| {
-                Some((vfs.layer_index(layer)?, path, source))
+                Some((vfs.layer_index(layer)?, path, script, source))
             }));
         }
-        sources.sort_by_key(|(layer, _, _)| *layer);
-        for (layer, path, source) in sources {
+        sources.sort_by_key(|(layer, _, _, _)| *layer);
+        for (layer, path, script, source) in sources {
             let scene = vfs.read_from(layer, source).map_err(|error| error.to_string()).and_then(|bytes| {
-                if let Some(stem) = path.strip_suffix(".sol") {
-                    sol::load(vfs, layer, stem, &bytes, content)
+                if let Some(script) = script {
+                    sol::load(vfs, layer, script, &bytes, content)
                 } else {
                     Ok(MenuMap::parse(&String::from_utf8_lossy(&bytes)))
                 }

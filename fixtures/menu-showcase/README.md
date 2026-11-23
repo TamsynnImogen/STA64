@@ -7,11 +7,13 @@ a few hundred map units of the group. The campaign view starts farther out.
 
 ## Mounting
 
-Mount `Menu/menu.sol` and `Menu/menu.lua` together in the active mod's `Menu/`
-directory. They must resolve from the same mount layer. The fixture uses a
-BinaryMode version-3021 SOL. Route marker placements are named SOL objects and
-are hidden by the menu-scene loader; the three non-marker ODF placements are
-the actors.
+Mount `bzn/menu.sol` and `missions/menu.lua` together in the active mod. The map
+appears in the map browser and stays out of Instant Action and multiplayer
+selection. STA64 also reads older scenes at `Menu/menu.sol` and `Menu/menu.lua`.
+The pair must resolve from the same mount layer. The fixture
+uses a BinaryMode version-3021 SOL. Route marker placements are named SOL
+objects and are hidden by the menu-scene loader. The three other ODF placements
+are the actors.
 
 The `screens` table maps stable menu keys to authored view names. The sample
 opens on `opening`, uses `planning` for Instant Action, and shows `dock` in the
@@ -32,10 +34,9 @@ and `marker_rows` lists. The escort and flagship routes begin at their SOL
 positions, then visit their `menu_point_*` markers. The bastion is static.
 Each camera has a three-point orbit and a parallel three-point look-at route.
 Change the corresponding name lists, `seconds`, `loop`, or `easing` in
-`Menu/menu.lua` to alter choreography. Use `easing = 'smooth'` to ease in and
+`missions/menu.lua` to alter choreography. Use `easing = 'smooth'` to ease in and
 out of each leg. The default `easing = 'linear'` keeps the speed constant
 along each leg.
 
 Run `python3 fixtures/menu-showcase/author_menu.py` from the repository root,
-or run `python3 author_menu.py` from this directory. It writes only
-`Menu/menu.sol` beside the Lua file.
+or run `python3 author_menu.py` from this directory. It writes `bzn/menu.sol`.

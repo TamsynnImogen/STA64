@@ -433,7 +433,7 @@ pub(crate) fn front_end_data(vfs: &sta_vfs::Vfs, catalogue: &mut Catalogue, inst
     let (db, index, races) = (content.db.clone(), content.index.clone(), content.races.clone());
     let strings = sta_content::StringTable::load(vfs);
     // Star Trek: Legacy `.sol` maps (CON-20) sit beside the `.bzn` files and parse to the same `Map`.
-    let mut names: Vec<String> = vfs.list("bzn").into_iter().filter(|p| p.ends_with(".bzn") || p.ends_with(".sol")).map(|p| p.trim_start_matches("bzn/").trim_end_matches(".bzn").trim_end_matches(".sol").to_owned()).collect();
+    let mut names: Vec<String> = crate::map::match_map_paths(vfs).map(|p| p.trim_start_matches("bzn/").trim_end_matches(".bzn").trim_end_matches(".sol").to_owned()).collect();
     names.sort();
     names.dedup();
     let mut maps = Vec::new();

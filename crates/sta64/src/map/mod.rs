@@ -40,6 +40,13 @@ pub struct MapBrowser {
     pub info: String,
 }
 
+/// Match and campaign candidates. The scene SOL remains available to the map browser.
+pub(crate) fn match_map_paths(vfs: &sta_vfs::Vfs) -> impl Iterator<Item = String> {
+    vfs.list("bzn").into_iter().filter(|path| {
+        path != crate::frontend::scene::MENU_SOL_PATH && (path.ends_with(".bzn") || path.ends_with(".sol"))
+    })
+}
+
 pub fn browser(vfs: &sta_vfs::Vfs, initial: Option<&str>, mount_summary: String) -> MapBrowser {
     let mut maps: Vec<String> = vfs
         .list("bzn")
