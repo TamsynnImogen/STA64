@@ -286,10 +286,11 @@ fn stock_shape(
             !compact || panel.is_some_and(|p| r.x >= p.x && r.y >= p.y && r.right() <= p.right() && r.bottom() <= p.bottom())
         })
     };
-    let rig_meter = (layout.has_a2_info() && status.construction_rig)
-        .then(|| layout.at(origin, "infoSingleConstructionArea"))
-        .flatten();
-    let mut slots: Vec<_> = if rig_meter.is_some() {
+    // ShipDisplay puts a rig's site build on the compact card. A deployment
+    // or weld has no queue ID, even when the active skin is Fleet Operations.
+    let inline_rig = !armada_one && status.construction_rig
+        && status.queue.first().is_none_or(|head| head.queue_id.is_none());
+    let mut slots: Vec<_> = if inline_rig {
         Vec::new()
     } else {
         (0..10).filter_map(|i| queue_rect(&format!("infoBuildQueue_{i}")).map(|r| (i, r))).collect()
@@ -298,7 +299,21 @@ fn stock_shape(
         slots.clear();
     }
     let mut speed_queue = false;
-    let mut progress = rig_meter.or_else(|| queue_rect("infoProgressBar"));
+    let mut progress = if inline_rig {
+        if layout.raw_rect("infoSingleConstructionArea").is_some() {
+            layout.at(origin, "infoSingleConstructionArea")
+        } else {
+            queue_rect("infoSingleConstructionBarArea").or_else(|| {
+                let card = panel?;
+                let caption = layout.at(origin, "infoSingleCaptainTextArea")?;
+                let w = caption.w.min(card.right() - caption.x);
+                let h = caption.h.min(card.bottom() - caption.bottom());
+                (w > 0.0 && h > 0.0).then(|| R::new(caption.x, caption.bottom(), w, h))
+            })
+        }
+    } else {
+        queue_rect("infoProgressBar")
+    };
     if armada_one && slots.is_empty() && !status.queue.is_empty() {
         slots = stock::a1::speed::queue_slots(layout);
         if let Some((_, head)) = slots.first() {
@@ -308,7 +323,7 @@ fn stock_shape(
         }
     }
     let cargo_bar = layout.at(origin, "infoSingleDilithiumBarArea");
-    let fallback_queue = rig_meter.is_none() && slots.is_empty() && !status.queue.is_empty();
+    let fallback_queue = !inline_rig && slots.is_empty() && !status.queue.is_empty();
     let fallback_progress = !slots.is_empty()
         && progress.is_none()
         && status.queue.first().and_then(|job| job.progress).is_some();
@@ -341,7 +356,7 @@ fn stock_shape(
     Shape {
         selected,
         stock: true,
-        native_construction_meter: rig_meter.is_some()
+        native_construction_meter: inline_rig
             || (layout.has_a2_info() && variant == 2 && progress.is_some()),
         queue: status
             .queue
@@ -1608,6 +1623,37 @@ mod tests {
                 matches!(value, LiveValue::QueueProgress(0, _))
                     && node.width == Val::Px(expected.w * 0.5)), working);
         }
+    }
+
+    #[test]
+    fn a_compact_rig_keeps_site_progress_inline_when_the_meter_area_is_omitted() {
+        let mut cfg = GuiLayout::default();
+        cfg.panels.insert("info".into(), Panel {
+            area: Some(Rect { x: 400, y: 1000, w: 800, h: 200 }),
+            ..Default::default()
+        });
+        cfg.rects.insert("infoSingleCaptainTextArea".into(), Rect {
+            x: 386, y: 130, w: 340, h: 20,
+        });
+        cfg.rects.insert("infoBuildQueue_0".into(), Rect {
+            x: 342, y: 76, w: 96, h: 96,
+        });
+        let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0))
+            .with_info_profile(UiProfile::FleetOps);
+        let mut status = queued();
+        status.queue.truncate(1);
+        status.construction_rig = true;
+        status.queue[0].queue_id = None;
+        let shape = stock_shape(EntityId(7), &status, &layout, &info(false), false);
+        assert_eq!(shape.progress, Some(R::new(786.0, 1150.0, 340.0, 20.0)));
+        assert!(shape.native_construction_meter);
+        assert!(shape.slots.is_empty() && shape.lcars_card.is_none());
+
+        // A rig capable of producing a real queued unit keeps its queue slot.
+        status.queue[0].queue_id = Some(BuildQueueId(1));
+        let shape = stock_shape(EntityId(7), &status, &layout, &info(false), false);
+        assert!(!shape.native_construction_meter);
+        assert_eq!(shape.slots.len(), 1);
     }
 
     #[test]
