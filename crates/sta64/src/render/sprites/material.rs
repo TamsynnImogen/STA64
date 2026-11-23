@@ -1,9 +1,10 @@
 //! The sprite nodes' material and colour slots (ADR 0009, S1 and S2).
 //!
 //! - [`SpriteMaterial`]: one shared material per look (texture, blend mode, uv), Bevy's
-//!   `StandardMaterial` extended with [`SpriteTint`], which binds the colour buffer as a plain,
-//!   non-bindless storage buffer at binding 100. Its fragment shader is `sprite.wesl`, Bevy's forward
-//!   fragment shader with one added multiply (S3); the prepass keeps Bevy's own.
+//!   `StandardMaterial` extended with [`SpriteTint`], which binds the colour buffer in Bevy's bindless
+//!   mode where the device supports it and as a plain storage buffer where not (S2 as amended
+//!   2026-11-23). Its fragment shader is `sprite.wesl`, Bevy's forward fragment shader with one added
+//!   multiply (S3); the prepass keeps Bevy's own.
 //! - [`SpriteSlots`]: one `[f32; 4]` linear colour per sprite node in one `ShaderBuffer`, at the slot
 //!   its `MeshTag` names. Slots come from a free list and never move, so a live node's tag never
 //!   changes; the buffer grows by doubling.
@@ -28,12 +29,19 @@ pub type SpriteMaterial = ExtendedMaterial<StandardMaterial, SpriteTint>;
 /// file can shadow it by path, ADR 0004 D12).
 pub const SHADER: &str = "embedded://sta64/render/sprites/sprite.wesl";
 
-/// The extension: the colour buffer every look's material binds. Not bindless (S2), so the combined
-/// material is not either: one bind group per look and a plain storage binding in the shader.
+/// The extension: the colour buffer every look's material binds.
+///
+/// Bindless where the device supports it (S2 as amended): the extension's own index table at binding
+/// 100 holds one entry (bindless index 50) and the buffer is a storage binding array at binding 101,
+/// so every look sits in one material slab with one bind group, as main's per-node standard
+/// materials do. Bevy's bindless mode for a buffer binding array needs buffer binding arrays as well
+/// as texture binding arrays; without them Bevy falls back to the non-bindless form, the buffer bound
+/// plainly at binding 50 ([`bindless`] says which form a device gets).
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
+#[bindless(index_table(range(50..51), binding(100)))]
 pub struct SpriteTint {
     /// [`SpriteSlots::buffer`]; `sprite_colours` in `sprite.wesl`.
-    #[storage(100, read_only)]
+    #[storage(50, read_only, binding_array(101))]
     pub colours: Handle<ShaderBuffer>,
 }
 
@@ -41,6 +49,17 @@ impl MaterialExtension for SpriteTint {
     fn fragment_shader() -> ShaderRef {
         ShaderRef::Path(AssetPath::parse(SHADER).into_owned())
     }
+}
+
+/// Whether the sprite material runs in its bindless form on this device (`false`: the non-bindless
+/// fallback), by Bevy's own rule for a material.
+pub fn bindless(device: &bevy::render::renderer::RenderDevice) -> bool {
+    bevy::render::material_bind_groups::material_uses_bindless_resources::<SpriteMaterial>(device)
+}
+
+/// The form [`bindless`] gives, as a GPU test's output names it.
+pub fn mode_name(device: &bevy::render::renderer::RenderDevice) -> &'static str {
+    if bindless(device) { "bindless" } else { "fallback (non-bindless)" }
 }
 
 /// A look's shared material from the material a node would have on its own: the same texture,

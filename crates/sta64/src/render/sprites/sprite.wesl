@@ -8,10 +8,14 @@
 //
 // Changes against the source:
 // - `package::` in the imports reads `bevy_pbr::` (this file is outside that crate);
-// - two declarations, each marked `// STA64`: the `get_tag` import and the colour buffer's
-//   binding (`SpriteTint`, `render/sprites/material.rs`);
+// - declarations marked `// STA64`: the `get_tag` import, and the colour buffer in two branches
+//   (`SpriteTint`, `render/sprites/material.rs`; ADR 0009 S2 and S3 as amended 2026-11-23):
+//   `BINDLESS`: an index table at binding 100 (one entry) and the buffer as a storage binding
+//   array at binding 101, read through the material slot Bevy keeps per instance;
+//   otherwise (the fallback): the buffer as a plain storage binding at binding 50;
+//   `sprite_colour(instance_index)` reads the node's slot, by its mesh tag, in either form;
 // - the one added line, after `pbr_input_from_standard_material`, also marked `// STA64`:
-//     pbr_input.material.base_color = pbr_input.material.base_color * sprite_colours[get_tag(in.instance_index)];
+//     pbr_input.material.base_color = pbr_input.material.base_color * sprite_colour(in.instance_index);
 //   The look's material colour is exactly 1, so this multiplies the same two values as Bevy's
 //   per-node material path does, in the other order (S3).
 //
@@ -54,8 +58,30 @@ import bevy_core_pipeline::oit::draw::oit_draw;
 @if(FORWARD_DECAL)
 import bevy_pbr::decal::forward::get_forward_decal_info;
 
-// STA64: one linear colour per sprite node, indexed by its mesh tag (`SpriteSlots`).
-@group(constants::MATERIAL_BIND_GROUP) @binding(100) var<storage, read> sprite_colours: array<vec4<f32>>;
+// STA64: one linear colour per sprite node, indexed by its mesh tag (`SpriteSlots`); bindless where
+// the device supports it, else the plain fallback binding.
+@if(BINDLESS) {
+struct SpriteTintIndices {
+    colours: u32,   // 50
+}
+struct SpriteColours {
+    c: array<vec4<f32>>,
+}
+@group(constants::MATERIAL_BIND_GROUP) @binding(100) var<storage> sprite_tint_indices: array<SpriteTintIndices>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(101) var<storage, read> sprite_colours: binding_array<SpriteColours>;
+}
+@if(!BINDLESS)
+@group(constants::MATERIAL_BIND_GROUP) @binding(50) var<storage, read> sprite_colours: array<vec4<f32>>;
+
+@if(BINDLESS)
+fn sprite_colour(instance_index: u32) -> vec4<f32> {
+    let slot = bevy_pbr::render::mesh_bindings::mesh[instance_index].material_and_lightmap_bind_group_slot & 0xffffu;
+    return sprite_colours[sprite_tint_indices[slot].colours].c[get_tag(instance_index)];
+}
+@if(!BINDLESS)
+fn sprite_colour(instance_index: u32) -> vec4<f32> {
+    return sprite_colours[get_tag(instance_index)];
+}
 
 @fragment
 fn fragment(
@@ -88,7 +114,7 @@ fn fragment(
     // generate a PbrInput struct from the StandardMaterial bindings
     var pbr_input = pbr_input_from_standard_material(in, is_front);
     // STA64: the node's colour (ADR 0009, S3).
-    pbr_input.material.base_color = pbr_input.material.base_color * sprite_colours[get_tag(in.instance_index)];
+    pbr_input.material.base_color = pbr_input.material.base_color * sprite_colour(in.instance_index);
 
     // alpha discard
     pbr_input.material.base_color = alpha_discard(
