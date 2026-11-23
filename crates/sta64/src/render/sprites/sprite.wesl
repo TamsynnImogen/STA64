@@ -19,6 +19,12 @@
 //   The look's material colour is exactly 1, so this multiplies the same two values as Bevy's
 //   per-node material path does, in the other order (S3).
 //
+// Byte equality with the per-node path also rests on what sprite looks never use (see
+// `look_material` in `material.rs`): no vertex colours (Bevy multiplies them into the base colour
+// before the added line), unlit looks (lighting would round the product differently), no
+// alpha-to-coverage, and cut-out looks whose slots hold alpha exactly 1 (Bevy's own prepass,
+// which cut-out looks keep, discards on the look's alpha without the slot).
+//
 // Re-diff against Bevy's `pbr.wesl` on every Bevy upgrade (docs/ARCHITECTURE.md, "Bevy upgrade
 // checklist"); the GPU byte-equality test in `render/sprites/gpu_tests.rs` is the proof on an
 // adapter. The binding and the buffer layout are internal, not a mod interface (ADR 0009).

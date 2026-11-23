@@ -29,6 +29,8 @@ pub struct SpriteFx {
     pub node_anim: Option<String>,
     pub sprite: String,
     pub colour: [f32; 3],
+    /// The node's own material, as spawned. Adoption (ADR 0009, [`material`]) builds the node's look
+    /// from it and then drops it (`Handle::default()`); a node that is not adopted keeps it.
     pub material: Handle<StandardMaterial>,
 }
 
@@ -77,16 +79,36 @@ fn colour(c: [f32; 3]) -> Color {
 }
 
 /// Advance sprite-node animations and sprite flipbooks.
+///
+/// An adopted node (ADR 0009) keeps `main`'s rule, only while shown and only on change, with its
+/// colour going to its slot and its uv to its look's shared material (written at most once per look
+/// and frame, as every shown node of a look has the same uv); with parity mode (S5) its material
+/// component is marked changed whenever its own material would have been written on `main`. A node
+/// that is not adopted (an app without rendering) has its own material written, as on `main`.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn animate(
     clock: Res<crate::clock::AnimClock>,
     tables: Res<SpriteTables>,
-    mut fx: Query<(&SpriteFx, Option<&SpriteFade>, Option<&crate::render::rock::MoonNimbus>, &mut Visibility)>,
+    mut fx: Query<(
+        &SpriteFx,
+        Option<&SpriteFade>,
+        Option<&crate::render::rock::MoonNimbus>,
+        &mut Visibility,
+        Option<&mut material::SpriteState>,
+        Option<&mut MeshMaterial3d<material::SpriteMaterial>>,
+    )>,
     flip: Query<&UvFlipbook>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut looks: Option<ResMut<Assets<material::SpriteMaterial>>>,
+    slots: Option<Res<material::SpriteSlots>>,
+    buffers: Option<ResMut<Assets<bevy::render::storage::ShaderBuffer>>>,
+    mut writes: Local<Vec<(bevy::mesh::MeshTag, [f32; 4])>>,
 ) {
     let t = clock.wall() as f32;
     let table = &tables.0;
-    for (f, fade, nimbus, mut vis) in &mut fx {
+    let parity = material::parity();
+    writes.clear();
+    for (f, fade, nimbus, mut vis, state, mut drawn) in &mut fx {
         let mut col = f.colour;
         // A moon's nimbus is drawn under the Stock look only.
         let mut shown = nimbus.is_none_or(|n| n.on);
@@ -107,17 +129,46 @@ pub fn animate(
         if !shown {
             continue;
         }
-        // Write only on change: a write re-uploads the material, and a map has
-        // thousands of these, most of them static.
-        if let Some(sprite) = table.sprite(&f.sprite) {
-            let (c, uv) = (colour(col), uv_affine(spr_anim::sprite_uv(table, sprite, t)));
+        // Write only on change: a write re-uploads the material or the slot buffer, and a
+        // map has thousands of these, most of them static.
+        let Some(sprite) = table.sprite(&f.sprite) else { continue };
+        let (c, uv) = (colour(col), uv_affine(spr_anim::sprite_uv(table, sprite, t)));
+        let Some(mut st) = state else {
             if materials.get(&f.material).is_some_and(|m| m.base_color != c || m.uv_transform != uv)
                 && let Some(mut m) = materials.get_mut(&f.material)
             {
                 m.base_color = c;
                 m.uv_transform = uv;
             }
+            continue;
+        };
+        let Some(looks) = looks.as_deref_mut() else { continue };
+        // The look shows the uv of its shown nodes; the first of them this frame writes it.
+        if looks.get(&st.look).is_some_and(|l| l.base.uv_transform != uv)
+            && let Some(mut l) = looks.get_mut(&st.look)
+        {
+            l.base.uv_transform = uv;
         }
+        if c != st.colour || uv != st.uv {
+            if c != st.colour {
+                writes.push((st.tag.clone(), material::linear(c)));
+            }
+            st.colour = c;
+            st.uv = uv;
+            if parity && let Some(d) = drawn.as_mut() {
+                d.set_changed();
+            }
+        }
+        // A node spawned on a private copy (another uv than its look's) joins the look once shown.
+        if let Some(d) = drawn.as_mut()
+            && d.0 != st.look
+            && looks.get(&st.look).is_some_and(|l| l.base.uv_transform == st.uv)
+        {
+            d.0 = st.look.clone();
+        }
+    }
+    if let (Some(slots), Some(mut buffers)) = (slots, buffers) {
+        slots.write(&mut buffers, writes.iter().map(|(tag, c)| (tag, *c)));
     }
     for f in &flip {
         if let Some(a) = table.animation(&f.animation) {
