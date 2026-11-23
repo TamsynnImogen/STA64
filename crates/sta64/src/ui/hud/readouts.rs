@@ -11,6 +11,7 @@ pub(super) enum Readout {
     Hull,
     Shields,
     Crew,
+    Officers,
     Energy,
     Construction,
     Deposit,
@@ -33,6 +34,7 @@ enum Value {
         current: i128,
         capacity: i128,
     },
+    RequiredOfficers(i128),
     Progress(i128),
     Infinite,
     System {
@@ -78,6 +80,10 @@ impl ReadoutText {
                     format!("{label} {details}")
                 }
             }
+            Value::RequiredOfficers(count) => format!(
+                "{label} {count} {}",
+                localize(look, ("GUI_SD_TEXT_OFF_OP", "officers to operate"))
+            ),
             Value::Progress(share) => format!("{label} {}", percent(share)),
             Value::Infinite => format!("{label}: {}", localize(look, ("Unlimited", "Unlimited"))),
             Value::System { health, enabled } if verbose => {
@@ -145,6 +151,10 @@ fn readout(
             pool(bits(unit.energy?), true)?,
         ),
         Readout::Crew => (("GUI_SD_TEXT_CREW", "Crew"), pool(bits(unit.crew?), false)?),
+        Readout::Officers => (
+            ("GUI_SD_TEXT_OFF_REQ", "This vessel requires"),
+            Value::RequiredOfficers(i128::from(feed.def(unit)?.build.officers.to_bits()) / SCALE),
+        ),
         Readout::Construction => (
             ("GUI_SD_BAR_CONST", "Construction"),
             Value::Progress(percent(i128::from(unit.progress?.to_bits()), SCALE)),

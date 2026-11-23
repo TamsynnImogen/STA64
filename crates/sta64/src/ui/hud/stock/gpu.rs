@@ -104,7 +104,7 @@ fn sizes(default: &[UVec2]) -> Vec<UVec2> {
 }
 
 #[derive(Clone, Copy)]
-enum HoverCapture { Selected, SelectedHover, Low, Other, BuildPage, BuildTooltip, ColonyShip, Group(usize), Avatar, WeaponIcons }
+enum HoverCapture { Selected, SelectedHover, Low, Other, BuildPage, BuildTooltip, ColonyShip, Yard, Group(usize), Avatar, WeaponIcons }
 
 /// Independent installed-data expectation: current crew is compared with its
 /// actual live capacity, not crewCost. Resolve authored palette/thresholds.
@@ -186,6 +186,15 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             hud_feed.view = Arc::new(view);
             None
         }
+        HoverCapture::Yard => {
+            let db = hud_feed.content.as_ref().unwrap();
+            let base = hud_feed.view.units.iter().find(|unit| {
+                unit.owner == hud_feed.player
+                    && db.unit(unit.def).is_some_and(|def| def.odf.eq_ignore_ascii_case("fbase"))
+            }).expect("installed Federation fbase start unit");
+            hud_feed.selected = vec![base.id];
+            None
+        }
         HoverCapture::Other => Some(hud_feed.view.units.iter().find(|unit| {
             unit.id != original && unit.def != hud_feed.view.unit(original).unwrap().def
                 && unit.flags.contains(sta_sim::view::UnitFlags::SELECTABLE)
@@ -227,6 +236,9 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             .collect::<Vec<_>>()
     };
     let bar_variant = stock.info_variant(&super::super::model::info(&hud_feed));
+    if matches!(hover_mode, HoverCapture::Yard) {
+        assert_eq!(bar_variant, 2, "{label}: Federation fbase uses tall builder card");
+    }
     let has_info_bar = stock.info_area(bar_variant).is_some();
     let info = stock.pieces(match bar_variant {
         0 => "infoLowBackgroundPanel",
@@ -499,6 +511,48 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
                 "{label}: no {name} atlas art resolved"
             );
         }
+    }
+    if matches!(hover_mode, HoverCapture::Yard) {
+        let single = match super::super::model::info(app.world().resource::<HudFeed>()) {
+            super::super::model::Info::Single(single) => single,
+            _ => panic!("{label}: selected fbase lost its single-unit HUD"),
+        };
+        let labels: Vec<String> = app.world_mut().query::<&crate::ui::sprite_font::SpriteText>()
+            .iter(app.world()).map(|text| text.text.clone()).collect();
+        assert!(labels.contains(&single.name), "{label}: fbase name did not render");
+        assert!(labels.contains(&single.class), "{label}: fbase class did not render");
+        let origin = stock.info_origin(bar_variant);
+        assert!(stock.at(origin, "infoProgressBar").is_some(), "{label}: missing authored builder meter area");
+        let progress_sprite = stock.name("infoSingleConstructionBar").unwrap_or("large_construction_bar");
+        let progress_art: Vec<_> = app.world_mut().query::<(&GuiImage, Option<&ImageNode>)>()
+            .iter(app.world())
+            .filter(|(image, _)| image.names.iter().any(|name| name == progress_sprite))
+            .map(|(image, resolved)| (image.names.clone(), resolved.is_some())).collect();
+        assert!(progress_art.iter().any(|(_, resolved)| *resolved),
+            "{label}: idle builder meter {progress_sprite:?} did not resolve: {progress_art:?}");
+        let (mut hull, mut shield) = (0, 0);
+        for bar in app.world_mut().query::<&super::info::StockBar>().iter(app.world()) {
+            match bar {
+                super::info::StockBar::Hull(_) => hull += 1,
+                super::info::StockBar::Shield(_) | super::info::StockBar::YardShield(_) => shield += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(shield, 1, "{label}: fbase shield gauge");
+        let expects_hull = stock.raw_rect("infoBuildHullBar")
+            .or_else(|| stock.raw_rect("infoSingleHullBarArea"))
+            .is_some_and(|r| r.w > 0 && r.h > 0);
+        assert_eq!(hull, usize::from(expects_hull), "{label}: optional hull gauge");
+        let personnel: Vec<_> = app.world_mut()
+            .query_filtered::<(&crate::ui::sprite_font::SpriteText, &Visibility), With<super::builder::BuilderReadout>>()
+            .iter(app.world()).filter(|(_, shown)| **shown == Visibility::Inherited)
+            .map(|(text, _)| text.text.clone()).collect();
+        for expected in ["150", "10"] {
+            assert!(personnel.iter().any(|text| text == expected), "{label}: missing live yard readout {expected}");
+        }
+        let emblem = app.world_mut().query::<(&GuiImage, &ImageNode, &super::a1::info::LiveTint)>()
+            .iter(app.world()).filter(|(_, _, tint)| matches!(tint, super::a1::info::LiveTint::Race(_))).count();
+        assert!(emblem > 0, "{label}: Federation emblem did not resolve");
     }
     // The persistent menu and objectives buttons are outside the command palette.
     let commands = app
@@ -805,6 +859,22 @@ fn installed_construction_ship_station_tooltip_renders_on_gpu() {
     let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), None).expect("installed Armada II VFS");
     capture_one(vfs, UiProfile::Armada2, UVec2::new(1280, 720), "gui_fed.cfg",
         "a2-construction-ship-station-tooltip-1280x720", GameOptions::default(), HoverCapture::BuildTooltip);
+}
+
+/// Windowless 4:3 capture of the installed Federation starbase's tall builder card.
+/// Set `STA64_HUD_CAPTURE_DIR` to keep the frame for comparison with Armada II.
+#[test]
+fn installed_armada2_builder_hud_renders_on_gpu() {
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_TEST_INSTALL=<Armada II root> and optional STA64_TEST_MOD");
+        return;
+    }
+    let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
+    let active_mod = std::env::var("STA64_TEST_MOD").ok().filter(|name| !name.is_empty());
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref())
+        .expect("installed Armada II VFS");
+    capture_one(vfs, UiProfile::Armada2, UVec2::new(1024, 768), "gui_fed.cfg",
+        "a2-fbase-builder-4x3", GameOptions::default(), HoverCapture::Yard);
 }
 
 /// Armada I: the three separate resource panels (dilithium, crew, officers), from the

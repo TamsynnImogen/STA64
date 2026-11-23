@@ -2072,3 +2072,76 @@ fn installed_layouts_give_a_window_exactly_where_they_declare_one_and_its_art_re
         eprintln!("SKIP (or no layout declares the window): set STA64_TEST_A2_STOCK_INSTALL, STA64_TEST_ROOTS_INSTALL or STA64_TEST_INSTALL");
     }
 }
+
+#[test]
+fn armada2_yard_personnel_and_emblem_use_builder_rectangles() {
+    use crate::ui::gui_sprites::GuiImage;
+    use crate::ui::hud::readouts::{Readout, ReadoutTarget};
+
+    let base = content();
+    let mut db = ContentDb::builder().profile(base.profile()).features(base.features().clone());
+    for weapon in base.weapons() {
+        db = db.weapon(weapon.clone());
+    }
+    for def in base.units() {
+        let mut def = def.clone();
+        if def.odf == "fx_yard" {
+            def.build.officers = Fixed::from_int(10);
+            def.race = "federation".into();
+        }
+        db = db.unit(def);
+    }
+    let db = Arc::new(db.build().unwrap());
+    let cfg = inherited_config("", "\
+infoBuildCrew = 30 30 60 24
+infoBuildCrewIcon = 5 30 24 24
+infoBuildOfficers = 30 55 60 24
+infoBuildOfficersIcon = 5 55 24 24
+infoBuildEnergy = 30 80 60 24
+infoBuildEnergyIcon = 5 80 24 24
+infoProgressBar = 210 280 210 10
+infoSingleRaceIconDisplayArea = 405 20 80 80
+");
+    let mut app = app_with_content_and_config(db.clone(), cfg, UiProfile::Armada2);
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    let unit = &mut Arc::make_mut(&mut feed.view).units[0];
+    unit.def = db.key("fx_yard").unwrap();
+    unit.crew = Some([Fixed::from_int(150); 2]);
+    unit.energy = Some([Fixed::from_int(7), Fixed::from_int(10)]);
+    *app.world_mut().resource_mut::<HudFeed>() = feed;
+    app.update();
+    let person_label = |app: &mut App, value: &str| {
+        app.world_mut().query::<(Entity, &SpriteText, &ChildOf, &Visibility, &builder::BuilderReadout)>()
+            .iter(app.world())
+            .find(|(_, text, _, vis, _)| text.text == value && **vis == Visibility::Inherited)
+            .map(|(entity, _, parent, _, _)| (entity, app.world().get::<Node>(parent.parent()).unwrap().clone()))
+            .unwrap()
+    };
+    for (key, count) in [("infoBuildCrew", "150"), ("infoBuildOfficers", "10"), ("infoBuildEnergy", "70")] {
+        let (_, placement) = person_label(&mut app, count);
+        let layout = app.world().resource::<StockState>().layout.as_ref().unwrap();
+        let rect = layout.at(layout.info_origin(2), key).unwrap();
+        assert_eq!((placement.left, placement.top), (Val::Px(rect.x), Val::Px(rect.y)));
+    }
+    assert!(app.world_mut().query::<&GuiImage>().iter(app.world())
+        .any(|image| image.names.iter().any(|name| name == "federation_icon")));
+    assert!(app.world().resource::<HudFeed>().production.is_empty());
+    assert!(app.world_mut().query::<&GuiImage>().iter(app.world())
+        .any(|image| image.names.iter().any(|name| name == "large_construction_bar")));
+
+    assert_eq!(app.world_mut().query::<&ReadoutTarget>().iter(app.world())
+        .filter(|ReadoutTarget(_, kind)| matches!(kind, Readout::Officers)).count(), 2);
+
+    let (officer, _) = person_label(&mut app, "10");
+    let (crew, _) = person_label(&mut app, "150");
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    let unit = &mut Arc::make_mut(&mut feed.view).units[0];
+    unit.crew.as_mut().unwrap()[0] = Fixed::from_int(73);
+    unit.energy = None;
+    *app.world_mut().resource_mut::<HudFeed>() = feed;
+    app.update();
+    assert_eq!(person_label(&mut app, "73").0, crew);
+    assert_eq!(person_label(&mut app, "10").0, officer);
+    assert!(app.world_mut().query::<(&SpriteText, &Visibility, &builder::BuilderReadout)>()
+        .iter(app.world()).any(|(text, vis, _)| text.text == "70" && *vis == Visibility::Hidden));
+}

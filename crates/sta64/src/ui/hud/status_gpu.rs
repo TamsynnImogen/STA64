@@ -61,6 +61,7 @@ pub(super) enum LiveValue {
 struct Shape {
     selected: EntityId,
     stock: bool,
+    native_builder_meter: bool,
     queue: Vec<QueueShape>,
     cargo: bool,
     cargo_resource: Option<u8>,
@@ -195,6 +196,65 @@ fn clipped_bar(
     }
 }
 
+/// Armada II's tall single-builder card retains the construction meter at
+/// `infoProgressBar` while the queue is empty. The same SPR is drawn in the
+/// configured disabled colour beneath the clipped working fill.
+fn native_builder_progress_bar(
+    commands: &mut Commands,
+    parent: Entity,
+    r: R,
+    progress: Option<f32>,
+    layout: &StockLayout,
+    theme: &Theme,
+) {
+    let sprite = layout
+        .name("infoSingleConstructionBar")
+        .unwrap_or("large_construction_bar");
+    let track_colour = layout
+        .colour("infoSingleConstructionBarDisableColor")
+        .unwrap_or(Color::srgb(0.3, 0.3, 0.3));
+    let track = commands
+        .spawn((
+            rect(r),
+            GuiImage::new(sprite)
+                .with_color(track_colour)
+                .with_sampling(GuiImageSampling::Linear),
+            Pickable::IGNORE,
+            ChildOf(parent),
+        ))
+        .id();
+    let Some(progress) = progress else { return };
+    let fill_colour = layout
+        .colour("infoSingleConstructionBarColor")
+        .unwrap_or(theme.warn);
+    let clip = commands
+        .spawn((
+            LiveValue::QueueProgress(0, r.w),
+            Node {
+                width: Val::Px(r.w * progress.clamp(0.0, 1.0)),
+                height: Val::Percent(100.0),
+                overflow: Overflow::clip(),
+                ..default()
+            },
+            Pickable::IGNORE,
+            ChildOf(track),
+        ))
+        .id();
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            width: Val::Px(r.w),
+            height: Val::Px(r.h),
+            ..default()
+        },
+        GuiImage::new(sprite)
+            .with_color(fill_colour)
+            .with_sampling(GuiImageSampling::Linear),
+        Pickable::IGNORE,
+        ChildOf(clip),
+    ));
+}
+
 /// Number of columns and square size for the compact wireframe card.
 fn queue_grid(width: f32, count: usize) -> (usize, f32, usize) {
     let inner = (width - 16.0).max(0.0);
@@ -278,6 +338,7 @@ fn stock_shape(
     Shape {
         selected,
         stock: true,
+        native_builder_meter: layout.has_a2_info() && variant == 2 && progress.is_some(),
         queue: status
             .queue
             .iter()
@@ -323,6 +384,7 @@ fn lcars_shape(
     Shape {
         selected,
         stock: false,
+        native_builder_meter: false,
         queue: status
             .queue
             .iter()
@@ -457,7 +519,17 @@ fn draw_stock(
             true,
         );
     }
-    if let Some(head) = status.queue.first()
+    if shape.native_builder_meter && let Some(r) = shape.progress
+    {
+        native_builder_progress_bar(
+            commands,
+            root,
+            r,
+            status.queue.first().and_then(|head| head.progress),
+            layout,
+            theme,
+        );
+    } else if let Some(head) = status.queue.first()
         && let Some(value) = head.progress
         && let Some(r) = shape.progress
     {
@@ -718,7 +790,7 @@ pub(super) fn refresh(
             &theme,
         )
     };
-    if status.queue.is_empty() && status.cargo.is_none() && status.construction.is_none() {
+    if !shape.native_builder_meter && status.queue.is_empty() && status.cargo.is_none() && status.construction.is_none() {
         for entity in &existing {
             commands.entity(entity).despawn();
         }
@@ -1450,6 +1522,45 @@ mod tests {
     }
 
     #[test]
+    fn native_builder_meter_keeps_disabled_sprite_when_idle_and_clips_working_fill() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut cfg = GuiLayout::default();
+        cfg.names.insert(
+            "infoSingleConstructionBar".into(),
+            "custom_build_bar".into(),
+        );
+        let r = R::new(442.0, 280.0, 396.0, 12.0);
+        for progress in [None, Some(0.5)] {
+            let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+            let mut world = World::new();
+            let root = world.spawn_empty().id();
+            let theme = Theme::default();
+            world
+                .run_system_once(move |mut commands: Commands| {
+                    native_builder_progress_bar(&mut commands, root, r, progress, &layout, &theme);
+                })
+                .unwrap();
+
+            let mut images = world.query::<(&GuiImage, &Node)>();
+            let images: Vec<_> = images.iter(&world).collect();
+            assert_eq!(images.len(), if progress.is_some() { 2 } else { 1 });
+            assert!(
+                images
+                    .iter()
+                    .all(|(image, _)| image.names == ["custom_build_bar"])
+            );
+            let mut live = world.query::<(&LiveValue, &Node)>();
+            let clips: Vec<_> = live.iter(&world).collect();
+            assert_eq!(clips.len(), usize::from(progress.is_some()));
+            if let Some((value, node)) = clips.first() {
+                assert!(matches!(value, LiveValue::QueueProgress(0, width) if *width == r.w));
+                assert_eq!(node.width, Val::Px(r.w * 0.5));
+            }
+        }
+    }
+
+    #[test]
     fn fallback_queue_uses_bounded_grid_with_live_cell_progress() {
         use bevy::ecs::system::RunSystemOnce;
 
@@ -1463,6 +1574,7 @@ mod tests {
         let shape = Shape {
             selected: EntityId(7),
             stock: false,
+            native_builder_meter: false,
             queue: Vec::new(),
             cargo: false,
             cargo_resource: None,
