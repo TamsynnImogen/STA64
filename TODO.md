@@ -296,7 +296,7 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 - [?] Armada II tall selection panel. Select an idle Federation starbase or shipyard under Stock. Check the low-left name and class, the shield gauge beneath the wireframe, crew and officer readouts, the faction emblem on the right, and the striped construction meter at the bottom. Start an item, watch the meter fill, then cancel it. Repeat at 4:3 and in a wide HUD. The native display fields come from the executable (static) and the coordinates come from the mounted CFG.
 
-- [?] Armada II selection readouts. Start War and Peace as Federation in STA2 Classic. The Venture shows 10 crew and 2 officers on the medium card. The starting starbase shows 150 crew and 10 officers on the tall card. Select a ship with special energy and check that its energy percentage updates. Hover the icons and numbers to check the individual tooltips.
+- [?] Armada II selection readouts. Start War and Peace as Federation in STA2 Classic. The Venture and construction ship use the medium card, including while the constructor is building at a site. The starbase and shipyard use the tall card even when their queues are empty. Select a ship with special energy and check that its percentage updates. Hover the icons and numbers to check the individual tooltips.
 
 ## Checked earlier (morning list)
 

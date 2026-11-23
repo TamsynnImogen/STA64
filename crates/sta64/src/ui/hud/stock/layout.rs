@@ -4,7 +4,7 @@ use bevy::prelude::{Color, Vec2};
 use sta_content::gui_cfg::{GuiLayout, Rect};
 
 use super::super::layout::R;
-use super::super::model::{Info, Single};
+use super::super::model::Info;
 use crate::ui::profile::UiProfile;
 
 /// A configured background piece, with its native SPR frame index.
@@ -140,20 +140,14 @@ impl StockLayout {
         self
     }
 
-    /// Armada II ShipDisplay selects low when empty, medium for single
-    /// objects and groups through eight, and tall for yards and larger groups.
-    /// The yard flag comes from the native class, independent of its build list.
-    /// Evidence: Armada II executable, static.
+    /// Stock ShipDisplay selects low when empty. A single selection uses the
+    /// tall card when it has a build queue; group thresholds depend on the profile.
     pub(in crate::ui::hud) fn info_variant(&self, info: &Info) -> usize {
         match info {
             Info::None => 0,
-            Info::Single(single) => 1 + usize::from(self.info_uses_builder(single)),
+            Info::Single(single) => 1 + usize::from(single.has_build_queue),
             Info::Group(group) => 1 + usize::from(group.len() > if self.a2_info { 8 } else { 16 }),
         }
-    }
-
-    pub(super) fn info_uses_builder(&self, single: &Single) -> bool {
-        if self.a2_info { single.a2_yard } else { single.builder }
     }
 
     /// The two Armada II group heights share the same sixteen authored slots.
@@ -857,12 +851,19 @@ mod tests {
             shield: None,
             progress: None,
             builder: false,
-            a2_yard: false,
+            has_build_queue: false,
         };
         assert_eq!(layout.info_variant(&Info::Single(single.clone())), 1);
         assert_eq!(
             layout.info_variant(&Info::Single(Single {
                 builder: true,
+                ..single.clone()
+            })),
+            1
+        );
+        assert_eq!(
+            layout.info_variant(&Info::Single(Single {
+                has_build_queue: true,
                 ..single
             })),
             2

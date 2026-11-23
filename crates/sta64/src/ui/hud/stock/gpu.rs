@@ -102,8 +102,8 @@ fn classic_start_feed(vfs: &sta_vfs::Vfs, selected_odf: &str) -> HudFeed {
         }],
     };
     let (mut sim, _) = sta_sim::Sim::from_setup_with_starts(&setup, &races);
-    if selected_odf == "fspecial" {
-        let odf = db.key(selected_odf).expect("installed Nebula Class");
+    if matches!(selected_odf, "fspecial" | "fyard") {
+        let odf = db.key(selected_odf).unwrap_or_else(|| panic!("installed {selected_odf} ODF"));
         sim.step(&[sta_sim::command::Command {
             player: PlayerId::SCRIPT,
             seq: 0,
@@ -642,6 +642,16 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
                 &[("infoBuildCrew", "infoBuildCrewIcon", "crew_amt", "150"),
                   ("infoBuildOfficers", "infoBuildOfficersIcon", "officers", "10")][..],
             ),
+            "fyard" => (
+                2,
+                &[("infoBuildCrew", "infoBuildCrewIcon", "crew_amt", "500"),
+                  ("infoBuildOfficers", "infoBuildOfficersIcon", "officers", "5")][..],
+            ),
+            "fconst" => (
+                1,
+                &[("infoCrewNum", "infoCrewNumIcon", "crew_amt", "150"),
+                  ("infoOfficers", "infoOfficersIcon", "officers", "2")][..],
+            ),
             "fscout" => (
                 1,
                 &[("infoCrewNum", "infoCrewNumIcon", "crew_amt", "10"),
@@ -1031,7 +1041,7 @@ fn installed_classic_selection_readouts_render_on_gpu() {
         return;
     }
     let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
-    for odf in ["fbase", "fscout", "fspecial"] {
+    for odf in ["fbase", "fyard", "fconst", "fscout", "fspecial"] {
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), Some("STA2 Classic"))
             .expect("installed Classic VFS");
         let profile = resolve_profile(Some(&vfs), UiPreference::default(), &UiProfiles::default());

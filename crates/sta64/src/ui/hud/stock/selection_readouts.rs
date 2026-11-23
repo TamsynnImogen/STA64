@@ -94,7 +94,7 @@ pub(super) fn spawn(
     race: &str,
 ) {
     let id = single.id;
-    let builder = layout.info_uses_builder(single);
+    let builder = single.has_build_queue;
     // Roots-hosted mods can use these ShipDisplay fields even with FleetOps presentation.
     for field in [Field::Crew, Field::Officers, Field::Energy] {
         let (value_key, icon_key, sprite, tip) = field.keys(builder);

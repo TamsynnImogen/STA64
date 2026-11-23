@@ -506,13 +506,24 @@ fn inherited_a2_info_colour_tints_single_and_builder_text() {
 
 #[test]
 fn fo_separate_colours_and_legacy_overrides_take_precedence() {
+    let selected = |cfg, yard| {
+        let mut app = app_with_content_and_config(content(), cfg, UiProfile::FleetOps);
+        if yard {
+            let mut feed = app.world().resource::<HudFeed>().clone();
+            let def = feed.content.as_ref().unwrap().key("fx_yard").unwrap();
+            Arc::make_mut(&mut feed.view).units[0].def = def;
+            *app.world_mut().resource_mut::<HudFeed>() = feed;
+            app.update();
+        }
+        app
+    };
     let cfg = inherited_config(
         "infoSingleNameTextColor = 0 1 1 1\ninfoSingleClassTextColor = 1 1 0 1\n",
         "nameTextColor = 1 0 0 1\nclassTextColor = 0 0 1 1\ninfoTextColor = 1 0 1 1\n",
     );
-    for build_count in [0, 1] {
-        let mut app = app_with_content_and_config(content_with_build_count(build_count), cfg.clone(), UiProfile::FleetOps);
-        let (name_key, class_key) = if build_count == 0 {
+    for yard in [false, true] {
+        let mut app = selected(cfg.clone(), yard);
+        let (name_key, class_key) = if !yard {
             ("infoSingleNameTextArea", "infoSingleClassTextArea")
         } else {
             ("infoBuildName", "infoBuildClass")
@@ -522,9 +533,9 @@ fn fo_separate_colours_and_legacy_overrides_take_precedence() {
     }
 
     let cfg = inherited_config("", "nameTextColor = 1 0 0 1\nclassTextColor = 0 0 1 1\ninfoTextColor = 1 0 1 1\n");
-    for build_count in [0, 1] {
-        let mut app = app_with_content_and_config(content_with_build_count(build_count), cfg.clone(), UiProfile::FleetOps);
-        let (name_key, class_key) = if build_count == 0 {
+    for yard in [false, true] {
+        let mut app = selected(cfg.clone(), yard);
+        let (name_key, class_key) = if !yard {
             ("infoSingleNameTextArea", "infoSingleClassTextArea")
         } else {
             ("infoBuildName", "infoBuildClass")
