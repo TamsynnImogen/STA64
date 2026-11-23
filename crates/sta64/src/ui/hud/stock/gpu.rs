@@ -136,7 +136,8 @@ fn env_fit() -> super::layout::HudFit {
 
 fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, label: &str, options: GameOptions, hover_mode: HoverCapture) {
     let layout = crate::game::gui_layout(&vfs, cfg).unwrap_or_else(|| panic!("installed {cfg} missing"));
-    let stock = StockLayout::for_aspect_fit(&layout, size.x as f32 / size.y as f32, env_fit());
+    let stock = StockLayout::for_aspect_fit(&layout, size.x as f32 / size.y as f32, env_fit())
+        .with_info_profile(profile);
     let resource = stock.pieces("resourcePanel");
     let minimap = stock.pieces("minimapBackgroundPanel");
     let info = stock.pieces("infoMiddleBackgroundPanel");
@@ -225,7 +226,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             .map(|((field, key), value)| (field, key, value))
             .collect::<Vec<_>>()
     };
-    let bar_variant = super::layout::info_variant(&super::super::model::info(&hud_feed));
+    let bar_variant = stock.info_variant(&super::super::model::info(&hud_feed));
     let has_info_bar = stock.info_area(bar_variant).is_some();
     let info = stock.pieces(match bar_variant {
         0 => "infoLowBackgroundPanel",
@@ -398,14 +399,16 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         let ids = app.world().resource::<HudFeed>().selected.clone();
         let rendered: Vec<_> = app.world_mut().query::<(Entity, &super::super::panels::GroupTile)>()
             .iter(app.world()).map(|(entity,tile)| (entity,tile.0)).collect();
-        assert_eq!(rendered.len(), count, "{label}: all requested cfg slots render");
-        for (index, id) in ids.iter().enumerate() {
+        let (compact, slot_limit) = stock.info_group_slots(bar_variant);
+        let visible_count = count.min(slot_limit);
+        assert_eq!(rendered.len(), visible_count, "{label}: active sheet's group slots render");
+        for (index, id) in ids.iter().take(visible_count).enumerate() {
             let entity = rendered.iter().find(|(_, tile_id)| tile_id == id).unwrap().0;
             let name = app.world().resource::<HudFeed>().name(app.world().resource::<HudFeed>().view.unit(*id).unwrap());
             let mut texts = app.world_mut().query::<(&crate::ui::sprite_font::SpriteText, &Node, &crate::ui::sprite_font::SpriteTextStyle, &ChildOf)>();
             let labels: Vec<_> = texts.iter(app.world()).filter(|(_,_,_,parent)|
                 app.world().get::<ChildOf>(parent.parent()).is_some_and(|p| p.parent() == entity)).collect();
-            if count >= 17 {
+            if compact {
                 assert!(labels.is_empty(), "{label}: compact tile {index} must not show its ship name");
                 assert_eq!(app.world().get::<crate::ui::notices::Tooltip>(entity).unwrap().short, name);
                 continue;
@@ -413,7 +416,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             assert_eq!(labels.len(), 1, "{label}: one normal caption in slot {index}");
             let (text,node,style,_) = labels[0];
             assert_eq!(text.text,name);
-            let origin = stock.info_origin(1);
+            let origin = stock.info_origin(bar_variant);
             let rect = stock.at(origin, &format!("infoMultiShipName_{index}")).expect("installed group name area");
             let hull = stock.at(origin, &format!("infoMultiShipHull_{index}")).expect("installed hull bar");
             let (Val::Px(width), Val::Px(height)) = (node.width, node.height) else { panic!("unresolved group caption") };
@@ -630,10 +633,9 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     let dynamic = shot.try_into_dynamic().expect("GPU image conversion");
     let rgba = dynamic.to_rgba8();
     if has_info_bar && hover.is_some() && crew_tint == Some(Color::srgb(1.0, 0.0, 0.0)) {
-        let origin=stock.info_origin(bar_variant)+stock.point(&format!("infoBarOffset_{bar_variant}")).unwrap_or(Vec2::ZERO);
         let scale=size.y as f32/1080.0;
         for key in ["crew_amt", "icon_crew_amt"] {
-            if let Some(rect)=stock.at(origin,key) {
+            if let Some(rect)=stock.info_bar_at(bar_variant, key) {
                 let mut red=0;
                 for y in (rect.y*scale).max(0.0) as u32..((rect.y+rect.h)*scale).min(size.y as f32) as u32 {
                     for x in (rect.x*scale).max(0.0) as u32..((rect.x+rect.w)*scale).min(size.x as f32) as u32 {
@@ -682,8 +684,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         *field == super::infobar::InfoBarField::Hull && value.is_some()
     });
     if has_info_bar && shows_hull && stock.colour("hull_color").is_none() && stock.colour("systemIconHealthyColor").is_none() {
-        let origin=stock.info_origin(bar_variant)+stock.point(&format!("infoBarOffset_{bar_variant}")).unwrap_or(Vec2::ZERO);
-        if let Some(rect)=stock.at(origin,"icon_hull") {
+        if let Some(rect)=stock.info_bar_at(bar_variant, "icon_hull") {
             let scale=size.y as f32/1080.0;
             let mut green=0;
             for y in (rect.y*scale).max(0.0) as u32..((rect.y+rect.h)*scale).min(size.y as f32) as u32 {
@@ -989,11 +990,17 @@ fn installed_group_names_render_on_gpu() {
         "FO4" | "Fleet Ops 4.0" => (UiProfile::FleetOps, "gui_federation16x9.cfg", "fo4-group"),
         _ => panic!("use STA2 Classic or FO4 for the installed name regression"),
     };
-    for (size, count, label) in [(UVec2::new(1920,1080), 2, format!("{prefix}-1080")),
-        (UVec2::new(1280,720), 2, format!("{prefix}-720")),
-        (UVec2::new(1920,1080), 16, format!("{prefix}-16-1080")),
-        (UVec2::new(1920,1080), 17, format!("{prefix}-17-1080")),
-        (UVec2::new(1920,1080), 30, format!("{prefix}-30-1080"))] {
+    let mut cases = vec![
+        (UVec2::new(1920, 1080), 2, format!("{prefix}-1080")),
+        (UVec2::new(1280, 720), 2, format!("{prefix}-720")),
+        (UVec2::new(1920, 1080), 16, format!("{prefix}-16-1080")),
+        (UVec2::new(1920, 1080), 17, format!("{prefix}-17-1080")),
+        (UVec2::new(1920, 1080), 30, format!("{prefix}-30-1080")),
+    ];
+    if profile == UiProfile::Armada2 {
+        cases.extend([8, 9].map(|count| (UVec2::new(1920, 1080), count, format!("{prefix}-{count}-1080"))));
+    }
+    for (size, count, label) in cases {
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(&mod_name)).unwrap();
         capture_one(vfs, profile, size, cfg, &label, GameOptions::default(), HoverCapture::Group(count));
     }

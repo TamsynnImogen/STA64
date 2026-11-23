@@ -13,6 +13,9 @@ fn identity_content(builder: bool, odf: &str) -> Arc<ContentDb> {
     for unit in base.units() {
         let mut unit = unit.clone();
         if unit.odf == "fx_cruiser" {
+            if builder {
+                unit.class = sta_content::ClassLabel("shipyard".into());
+            }
             unit.raw =
                 Arc::new(sta_odf::resolve("fx_cruiser", &mut |_| Some(odf.to_owned())).unwrap());
         }
@@ -60,7 +63,7 @@ fn assert_rect(app: &App, node: &Node, x: f32, y: f32, w: f32, h: f32) {
         .layout
         .as_ref()
         .unwrap();
-    let origin = layout.info_origin(layout::info_variant(&model::info(
+    let origin = layout.info_origin(layout.info_variant(&model::info(
         app.world().resource::<HudFeed>(),
     )));
     let scale = layout.scale;

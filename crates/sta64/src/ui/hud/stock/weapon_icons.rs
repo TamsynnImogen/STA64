@@ -5,7 +5,7 @@ use sta_content::{Availability, ContentDb};
 use sta_sim::{ContentKey, EntityId, Fixed, UnitView};
 
 use super::super::{HudFeed, model::tech_state};
-use super::{layout::StockLayout, node};
+use super::node;
 use crate::ui::{gui_sprites::GuiImage, notices::Tooltip};
 
 /// The native consecutive weapon reader at RVA 0x10c790 stops at the first
@@ -86,19 +86,12 @@ fn weapon_stem(name: &str) -> &str {
 pub(super) fn spawn(
     commands: &mut Commands,
     root: Entity,
-    layout: &StockLayout,
-    origin: Vec2,
+    (display, size): (super::super::layout::R, super::super::layout::R),
     backdrop: Entity,
     unit: &UnitView,
     db: &ContentDb,
 ) {
     let Some(def) = db.unit(unit.def) else { return };
-    let (Some(display), Some(size)) = (
-        layout.at(origin, "infoSingleSystemsDisplay"),
-        layout.at(origin, "infoSingleSystemsIcon"),
-    ) else {
-        return;
-    };
 
     for slot in 1..=WEAPON_SLOTS {
         let key = format!("weapon{slot}");

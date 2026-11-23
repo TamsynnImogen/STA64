@@ -544,7 +544,8 @@ pub(super) fn refresh(
         state.layout = config
             .gui
             .as_ref()
-            .map(|cfg| StockLayout::for_aspect_fit(cfg, config.aspect, config.fit));
+            .map(|cfg| StockLayout::for_aspect_fit(cfg, config.aspect, config.fit)
+                .with_info_profile(profile.as_deref().copied().unwrap_or_default()));
         commands.insert_resource(StockTextCanvas(state.layout.as_ref().map(|l| StockCanvas {
             hud: Vec2::new(l.hud.w, l.hud.h),
             window: l.screen,
@@ -583,6 +584,7 @@ pub(super) fn refresh(
         window::spawn_a2(&mut commands, body, &layout, action.as_deref());
     }
     let now = model::info(&feed);
+    let variant = layout.info_variant(&now);
     let a1_shape = a1.then(|| a1::info::extra(&feed).map(|e| e.shape(&state.info_style))).flatten();
     let structural = state
         .info
@@ -605,8 +607,8 @@ pub(super) fn refresh(
         if a1 {
             a1::info::spawn(&mut commands, parent, &layout, &feed, &theme, &state.info_style, strings.as_deref());
         } else {
-            info::spawn(&mut commands, parent, &layout, &feed, &theme);
-            infobar::spawn(&mut commands, bar, &layout, &theme, layout::info_variant(&now));
+            info::spawn(&mut commands, parent, &layout, &feed, &theme, &now, variant);
+            infobar::spawn(&mut commands, bar, &layout, &theme, variant);
         }
     }
     state.info = Some(now.clone());
@@ -636,18 +638,10 @@ pub(super) fn refresh(
     // Active-state changes patch the existing GuiActive components below.
     let rebuild = changed || structural || state.page != hud.page || state.grid != next || grids.is_empty();
     state.solid = resource_panels(&layout);
-    state.solid.extend([layout.panel("minimap"), layout.info_area(layout::info_variant(&now))].into_iter().flatten());
-    if layout.info_area(layout::info_variant(&now)).is_some() {
-        let variant = layout::info_variant(&now);
-        let origin =
-            layout.info_origin(variant) + layout.point(&format!("infoBarOffset_{variant}")).unwrap_or(Vec2::ZERO);
-        state.solid.extend(
-            ["shipName", "hull", "shields", "crew_amt", "energy_amt", "icon_hull", "icon_shields", "icon_crew_amt", "icon_energy_amt"]
-                .into_iter()
-                .filter_map(|key| layout.at(origin, key)),
-        );
-    }
+    state.solid.extend(layout.panel("minimap"));
     if !a1 {
+        state.solid.extend(layout.info_area(variant));
+        state.solid.extend(infobar::solid(&layout, variant));
         // The window's art takes the pointer like the other panels (none when the layout declares it off).
         state.solid.extend(layout.panel("cinematic"));
         // The button group is placed like every other panel; its solid rectangles come from the same rect.
