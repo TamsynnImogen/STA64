@@ -660,10 +660,10 @@ fn spawn_single(
     origin: Vec2,
     single: &model::Single,
 ) {
-    let builder = layout.info_uses_builder(single);
+    let builder = single.has_build_queue;
     let unit = feed.view.unit(single.id);
     let def = unit.and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def)));
-    if layout.has_a2_info() && let Some(def) = def {
+    if let Some(def) = def {
         super::selection_readouts::spawn(commands, root, layout, origin, theme, single, &def.race);
     }
     let is_node = def.is_some_and(|d| super::super::status::node_slot(d).is_some());
@@ -1183,7 +1183,7 @@ mod tests {
             shield: None,
             progress: None,
             builder: false,
-            a2_yard: false,
+            has_build_queue: false,
         };
         let tile = model::Tile { id: EntityId(1), name: long, hull: 1.0, shield: None };
         let short = model::Tile { id: EntityId(2), name: "Short".into(), hull: 1.0, shield: None };

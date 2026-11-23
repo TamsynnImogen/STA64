@@ -278,7 +278,7 @@ fn stock_shape(
 ) -> Shape {
     let variant = layout.info_variant(info);
     let origin = layout.info_origin(variant);
-    let compact = layout.has_a2_info() && variant == 1;
+    let compact = !armada_one && variant == 1;
     let panel = layout.info_area(variant);
     // Classic can author a queue for the tall builder card only. A medium
     // research station or constructor uses the adjacent card if it would
@@ -965,7 +965,7 @@ mod tests {
             shield: None,
             progress: None,
             builder,
-            a2_yard: builder,
+            has_build_queue: builder,
         })
     }
 

@@ -53,6 +53,21 @@ impl HudFeed {
         self.content.as_deref().and_then(|c| c.unit(u.def))
     }
 
+    fn has_build_queue(&self, unit: &UnitView, def: &UnitDef) -> bool {
+        let Some(db) = self.content.as_deref() else { return false };
+        if !finished(unit) {
+            return false;
+        }
+        // Site deployment and welding have no queue ID. A real queue can
+        // also be populated by script or push-build without a build menu.
+        self.production.iter().any(|row| {
+            row.builder == unit.id && row.jobs.iter().any(|job| job.queue_id.is_some())
+        }) || (db.build_queue_limit(def) > 0
+            && (EntityKind::producer_def(def) || def.is_evolver())
+            && def.build.list.iter().filter_map(|item| db.unit(item.key))
+                .any(|product| !EntityKind::build_requires_site(def, product)))
+    }
+
     pub(super) fn can_trade(&self, unit: &UnitView) -> bool {
         self.content.as_deref().is_some_and(|db| {
             let Some(def) = db.unit(unit.def) else { return false };
@@ -141,8 +156,8 @@ pub struct Single {
     pub progress: Option<f32>,
     /// A completed unit with a build list, used by the alternate HUDs.
     pub builder: bool,
-    /// Shipyards and starbases use Armada II's tall builder display.
-    pub a2_yard: bool,
+    /// A finished unit with in-place production, even while its queue is empty.
+    pub has_build_queue: bool,
 }
 
 /// One tile of a group.
@@ -207,7 +222,7 @@ pub fn info(feed: &HudFeed) -> Info {
                 shield: shield_frac(u),
                 progress: u.progress.map(|p| p.to_f32().clamp(0.0, 1.0)),
                 builder: def.is_some_and(|d| !d.build.list.is_empty()) && finished(u),
-                a2_yard: def.is_some_and(|d| matches!(d.class.0.as_str(), "shipyard" | "starbase" | "buildyard")),
+                has_build_queue: def.is_some_and(|d| feed.has_build_queue(u, d)),
             })
         }
         many => Info::Group(many.iter().map(|u| Tile { id: u.id, name: feed.name(u), hull: frac(u.hull), shield: shield_frac(u) }).collect()),
@@ -1191,6 +1206,56 @@ mod tests {
         let Info::Group(t) = f(&[2, 1, 99]) else { panic!() };
         assert_eq!(t.iter().map(|t| t.id.0).collect::<Vec<_>>(), [2, 1]);
         assert_eq!(f(&[1, 2]).height(), Some(InfoHeight::High));
+    }
+
+    #[test]
+    fn stock_builder_card_tracks_in_place_production() {
+        use sta_sim::command::BuildQueueId;
+        use sta_sim::production::view::ProductionJobView;
+
+        let product = UnitDef::new("ship", "craft");
+        let mut rig = UnitDef::new("rig", "constructionrig");
+        rig.build.list = vec![sta_content::DefRef::new("yard")];
+        let mut yard = UnitDef::new("yard", "shipyard");
+        yard.build.list = vec![sta_content::DefRef::new("ship")];
+        let empty_yard = UnitDef::new("empty_yard", "shipyard");
+        let db = ContentDb::builder().unit(product).unit(rig).unit(yard).unit(empty_yard).build().unwrap();
+        let units = vec![
+            unit(&db, 1, "rig", 1, 100.0, None),
+            unit(&db, 2, "yard", 1, 100.0, None),
+            unit(&db, 3, "empty_yard", 1, 100.0, None),
+            unit(&db, 4, "yard", 1, 50.0, Some(0.5)),
+        ];
+        let ship = db.key("ship").unwrap();
+        let mut feed = feed(db, units, &[1]);
+        let queued = |feed: &mut HudFeed, id| {
+            feed.selected = vec![EntityId(id)];
+            let Info::Single(card) = info(feed) else { panic!("single selection") };
+            card.has_build_queue
+        };
+        assert!(!queued(&mut feed, 1), "a construction menu places a site");
+        assert!(queued(&mut feed, 2), "an idle producer has a build queue");
+        assert!(!queued(&mut feed, 3), "a yard class alone does not offer a queue");
+        assert!(!queued(&mut feed, 4), "an unfinished producer cannot queue");
+
+        feed.production.push(ProductionView {
+            builder: EntityId(1),
+            jobs: vec![ProductionJobView {
+                queue_id: None,
+                def: ship,
+                progress: Fixed::ZERO,
+                paid: true,
+                started: true,
+            }],
+            site: None,
+            portal: None,
+            research: None,
+            officer_upgrades: None,
+        });
+        assert!(!queued(&mut feed, 1), "a construction preview is not a queue entry");
+        feed.production[0].builder = EntityId(3);
+        feed.production[0].jobs[0].queue_id = Some(BuildQueueId(1));
+        assert!(queued(&mut feed, 3), "a real job can come from outside the build menu");
     }
 
     #[test]
