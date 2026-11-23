@@ -74,7 +74,7 @@ impl TechState for Owned<'_> {
         let Some(key) = self.db.key(odf) else { return 0 };
         self.units
             .iter()
-            .filter(|e| e.owner == self.player && e.def == key && finished(e))
+            .filter(|e| e.owner == self.player && self.db.research_satisfies(e.def, key) && finished(e))
             .count() as u32
     }
 

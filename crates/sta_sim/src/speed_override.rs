@@ -55,7 +55,7 @@ impl Sim {
 
     fn class_impulse(&self, id: EntityId) -> Option<Fixed> {
         let u = self.units.get(id)?;
-        self.content.as_deref()?.unit(u.def).map(|d| d.movement.max_speed)
+        self.content.as_deref()?.unit(u.def).map(|d| d.movement.max_speed * self.engine_upgrade(u.owner))
     }
 
     /// Back to the definition's impulse (team change, cineractive end); a unit
@@ -77,10 +77,14 @@ impl Sim {
     /// Craft whose current impulse differs from the definition's, ascending id.
     pub(crate) fn impulse_overrides(&self) -> Vec<(EntityId, Fixed)> {
         let Some(db) = self.content.as_deref() else { return Vec::new() };
+        let upgrades = crate::ship_upgrades::ShipUpgrades::collect(db, &self.units);
         self.units
             .iter()
             .filter(|u| u.kind == EntityKind::Craft)
-            .filter(|u| db.unit(u.def).is_some_and(|d| d.movement.max_speed != u.stats.max_speed))
+            .filter(|u| db.unit(u.def).is_some_and(|d| {
+                let factor = upgrades.multiplier(u.owner, crate::ship_upgrades::Effect::Engines);
+                d.movement.max_speed * factor != u.stats.max_speed
+            }))
             .map(|u| (u.id, u.stats.max_speed))
             .collect()
     }

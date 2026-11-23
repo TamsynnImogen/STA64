@@ -73,6 +73,7 @@ mod recrew_tests;
 pub mod setup;
 pub mod snapshot;
 pub mod sensors;
+pub mod ship_upgrades;
 pub mod source;
 pub mod specials;
 pub mod spatial;
@@ -171,6 +172,7 @@ pub struct Sim {
     weapons: combat::weapons::Weapons,
     /// Queued waypoints and formations (SIM-02).
     movement: movement::Movement,
+    ship_upgrades: ship_upgrades::Applied,
     /// Stock, nodes and freighters (SIM-07); in the digest once any exists.
     economy: economy::Economy,
     /// Yard queues and rig deploys (SIM-08); in the digest once any exists.
@@ -249,6 +251,7 @@ impl Sim {
             events: Vec::new(),
             weapons: Default::default(),
             movement: movement::Movement::default(),
+            ship_upgrades: Default::default(),
             economy: Default::default(),
             production: Default::default(),
             victory: Default::default(),
@@ -497,6 +500,7 @@ impl Sim {
             self.team_changes.clear();
         }
         self.step_start_effects();
+        self.refresh_ship_upgrades();
         self.hold_welding_builders();
         self.constrain_targets();
         self.watch_orders();
@@ -556,7 +560,8 @@ impl Sim {
             // Pause station recovery for incoming positive hits, including
             // casualty hits whose final hull-damage event may become zero.
             self.recrew.note_hits(&self.units, &db, &self.events[from..], self.tick);
-            let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
+            let upgrades = ship_upgrades::ShipUpgrades::collect(&db, &self.units);
+            let mut casualties = combat::casualty::Ctx { upgrades: &upgrades, subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
             let mut killed = combat::damage::apply(&mut self.units, &db, &mut self.events, from, &mut casualties, &mut self.zero_shield_holds, self.tick);
             if !nebulae.is_empty() {
                 killed.extend(self.nebula_damage(&db, &nebulae));
@@ -567,7 +572,7 @@ impl Sim {
             self.auto_repair();
             self.step_repairs();
             self.step_recycles();
-            let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
+            let mut casualties = combat::casualty::Ctx { upgrades: &upgrades, subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
             combat::casualty::step(&mut self.units, &db, &mut casualties);
             combat::casualty::nebula_life_support(&mut self.units, &db, &mut casualties, &nebula_holds.life_support_off);
             for (id, by) in killed {
@@ -587,6 +592,9 @@ impl Sim {
             let from = self.events.len();
             self.production.update_research_poses(db, &mut self.units);
             let completed = self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement, self.bounds);
+            for old in completed.replaced_pods {
+                self.retire(old);
+            }
             self.inherit_builder_races(from);
             self.inherit_builder_alert(from);
             let built: Vec<EntityId> = self.events[from..].iter().filter_map(|e| match e { SimEvent::Spawned { id } => Some(*id), _ => None }).collect();
@@ -608,6 +616,7 @@ impl Sim {
         self.hold_welding_builders();
         self.advance_courses();
         self.constrain_targets();
+        self.refresh_ship_upgrades();
         self.tick += 1;
         TickOutput { view: Arc::new(self.build_view()), events: std::mem::take(&mut self.events) }
     }
@@ -830,12 +839,13 @@ impl WorldSource for Sim {
             PlacementEdit::Place { def, owner, at } => {
                 let defn = self.content.as_ref()?.unit(def)?;
                 if !matches!(world::EntityKind::of_def(defn), world::EntityKind::Craft | world::EntityKind::Station)
-                    || defn.raw.i64("hidden").unwrap_or(0) != 0
+                    || world::EntityKind::hidden(defn)
                     || defn.resource.is_some()
                 {
                     return None;
                 }
                 let id = self.spawn_unqueued_def(def, owner, at, (Fixed::ZERO, Fixed::ONE))?;
+                self.refresh_ship_upgrades();
                 // Map placements enter at rest with no construction callback or spawn effect.
                 self.events.retain(|event| !matches!(event, SimEvent::Spawned { id: spawned } if *spawned == id));
                 id
@@ -876,6 +886,7 @@ impl WorldSource for Sim {
                 id
             }
         };
+        self.refresh_ship_upgrades();
         Some(id)
     }
 

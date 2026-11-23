@@ -55,8 +55,7 @@ fn hit(sim: &mut Sim, id: EntityId, damage: i32) {
         hull: Fixed::from_int(damage),
         at: Vec3::ZERO,
     }];
-    let mut ctx = super::casualty::Ctx {
-        subsystems: &mut sim.subsystems,
+    let mut ctx = super::casualty::Ctx { upgrades: &Default::default(), subsystems: &mut sim.subsystems,
         rng: &mut sim.rng,
         switches: &sim.switches,
         colonies: &mut sim.colonies,

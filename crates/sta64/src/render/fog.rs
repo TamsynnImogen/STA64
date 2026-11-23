@@ -301,6 +301,12 @@ pub fn sensor_discs(view: &WorldView, player: PlayerId, content: Option<&Content
                 None => view.player(to).is_some_and(|t| t.team == from.team),
             }
     };
+    let upgrades = content.map(|db| sta_sim::ship_upgrades::ShipUpgrades::from_defs(db,
+        view.units.iter()
+            .filter(|u| u.hull[0] > sta_sim::Fixed::ZERO && !u.flags.contains(UnitFlags::DYING)
+                && u.progress.is_none_or(|p| p >= sta_sim::Fixed::ONE))
+            .map(|u| (u.owner, u.def))
+    ));
     view.units
         .iter()
         .filter(|u| view.player(u.owner).is_some_and(|o| ally(me, o.id) && ally(o, player)))
@@ -310,6 +316,7 @@ pub fn sensor_discs(view: &WorldView, player: PlayerId, content: Option<&Content
                 None if u.flags.contains(UnitFlags::SELECTABLE) => DEFAULT_SENSOR as f32,
                 None => 0.0,
             };
+            let r = r * upgrades.as_ref().map_or(1.0, |upgrades| upgrades.sensor_multiplier(u.owner).to_f32());
             (r > 0.0).then(|| (u.pos.x.to_f32(), u.pos.z.to_f32(), r))
         })
         .collect()

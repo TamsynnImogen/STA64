@@ -396,6 +396,8 @@ impl Weapons {
         alerts: &crate::alert::Alerts,
         events: &mut Vec<SimEvent>,
     ) {
+        use crate::ship_upgrades::{Effect, ShipUpgrades};
+        let upgrades = ShipUpgrades::collect(db, units);
         let alive = |id: EntityId| units.get(id).filter(|u| u.hull[1] > Fixed::ZERO);
         let gone: Vec<EntityId> = self
             .attack
@@ -520,6 +522,10 @@ impl Weapons {
                     {
                         reload = scaled(reload, self.crew_delay[i].1).max(1);
                     }
+                    let upgrade = upgrades.multiplier(u.owner, Effect::WeaponReload);
+                    if upgrade != Fixed::ONE {
+                        reload = scaled(reload, upgrade).max(1);
+                    }
                     m[i].ready = tick + reload;
                 }
                 events.push(SimEvent::Fired {
@@ -536,6 +542,7 @@ impl Weapons {
                     continue;
                 }
                 let damage = if features.weapon_target_damage { super::hit_roll::damage_for(db, w, t) } else { w.damage };
+                let damage = damage * upgrades.multiplier(u.owner, Effect::WeaponDamage);
                 if w.kind == WeaponKind::Projectile {
                     self.next_shot += 1;
                     let step = w.shot_speed / Fixed::from_int(TICK_HZ as i32);

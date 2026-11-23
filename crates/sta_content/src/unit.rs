@@ -305,6 +305,22 @@ pub(crate) fn unit_def_for_profile(name: &str, odf: &Odf, phys: Option<&Odf>, pr
         }).collect();
     }
     d.research_station_upgrade = d.class.0 == "pod" && odf.bool("isUpgrade").unwrap_or(false);
+    if d.class.0 == "pod" && r.flag("isShipUpgrade") == Some(true) {
+        let system = match r.text("upgradeSystem").as_deref().map(str::to_ascii_lowercase).as_deref() {
+            Some("shield_generator") => Some(crate::UpgradeSystem::Shields),
+            Some("engines") => Some(crate::UpgradeSystem::Engines),
+            Some("weapon_control") => Some(crate::UpgradeSystem::Weapons),
+            Some("life_support") => Some(crate::UpgradeSystem::LifeSupport),
+            Some("sensors") => Some(crate::UpgradeSystem::Sensors),
+            _ => None,
+        };
+        let tier = r.text("upgradeLevel").and_then(|v| v.parse::<u32>().ok()).filter(|v| (2..=16).contains(v));
+        let multiplier = r.num("upgradeMultiplier").filter(|v| *v >= 0.0);
+        match (system, tier, multiplier) {
+            (Some(system), Some(tier), Some(multiplier)) => d.system_upgrade = Some(crate::SystemUpgrade { system, tier, multiplier: Fixed::from_f64(multiplier) }),
+            _ => r.warnings.push(Warning::new(&file, "isShipUpgrade pod has invalid upgradeSystem, upgradeLevel, or upgradeMultiplier; ignored")),
+        }
+    }
     d.avoid_me = odf.bool("avoidMe").unwrap_or(false);
 
     d.sounds.select = r.text("eventSelect").into_iter().collect();

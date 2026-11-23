@@ -20,8 +20,8 @@
 //! 1. `D = damageBase +- damageVariance` (uniform; one draw from the sim's
 //!    stream when the ordnance has a variance).
 //! 2. `abs = shieldProtection` (unit key, else `SHIELD_DAMAGE_PROTECTION`,
-//!    else 1); the team shield upgrade (`abs = 1 - (1 - p) / upgrade`) is not
-//!    modelled (no upgrade state), so it reads 1. `S = D x abs` is the shield
+//!    else 1), adjusted by the team shield absorption upgrade
+//!    (`abs = 1 - (1 - p) / upgrade`). `S = D x abs` is the shield
 //!    part, `H = D - S` bleeds through to the location roll (M: 20 percent).
 //! 3. Shield crew law, only while the struck pool holds shields, the ordnance
 //!    has `damageThreshold > 0` and `abs < 1`, with `e = S - threshold > 0`:
@@ -77,6 +77,7 @@ use crate::Rng;
 
 /// What a hit may change besides the entities.
 pub(crate) struct Ctx<'a> {
+    pub upgrades: &'a crate::ship_upgrades::ShipUpgrades,
     pub subsystems: &'a mut Subsystems,
     pub rng: &'a mut Rng,
     pub switches: &'a SwitchTable,
@@ -242,6 +243,12 @@ pub(crate) fn hit(t: &mut Entity, def: &UnitDef, w: &WeaponDef, db: &ContentDb, 
 pub(crate) fn after_variance(t: &mut Entity, def: &UnitDef, db: &ContentDb, ctx: &mut Ctx, pool: usize, d: Fixed, lc: sta_content::OrdnanceCrewLoss) -> (Fixed, Fixed, bool) {
     let k = &def.casualty;
     let protection = k.shield_protection.or(db.rules().cfg.shield_damage_protection).unwrap_or(Fixed::ONE).max(Fixed::ZERO).min(Fixed::ONE);
+    let absorption = ctx.upgrades.multiplier(t.owner, crate::ship_upgrades::Effect::ShieldAbsorption);
+    let protection = if absorption == Fixed::ZERO && protection < Fixed::ONE {
+        Fixed::ZERO
+    } else {
+        (Fixed::ONE - (Fixed::ONE - protection) / absorption).max(Fixed::ZERO)
+    };
     let s_part = mul(d, protection);
     let mut h = d - s_part;
     let held = t.shields.now[pool];
@@ -298,7 +305,7 @@ pub(crate) fn step(units: &mut Entities, db: &ContentDb, ctx: &mut Ctx) {
                 clear_derelict(t, def, ctx);
             }
         } else if system_off(t, &row, LIFE_SUPPORT) || system_dead(def, &row, LIFE_SUPPORT) {
-            let loss = percent_of(mul(def.casualty.life_support_loss, dt), now) + dt;
+            let loss = percent_of(mul(def.casualty.life_support_loss * ctx.upgrades.multiplier(t.owner, crate::ship_upgrades::Effect::LifeSupport), dt), now) + dt;
             kill_crew(t, ctx, loss);
         }
     }
@@ -316,7 +323,7 @@ pub(crate) fn nebula_life_support(units: &mut Entities, db: &ContentDb, ctx: &mu
         if row.derelict || system_off(t, &row, LIFE_SUPPORT) || system_dead(def, &row, LIFE_SUPPORT) {
             continue;
         }
-        let loss = percent_of(mul(def.casualty.life_support_loss, dt), now) + dt;
+        let loss = percent_of(mul(def.casualty.life_support_loss * ctx.upgrades.multiplier(t.owner, crate::ship_upgrades::Effect::LifeSupport), dt), now) + dt;
         kill_crew(t, ctx, loss);
     }
 }

@@ -21,6 +21,7 @@ pub struct OfficerLimit {
 /// [`TYPED_CFG_KEYS`] lists them for the coverage report.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Rules {
+    upgrade_pod_maximum_tier: Option<u32>,
     pub officer_limits: Vec<OfficerLimit>,
     starts: Vec<StartRule>,
     /// `RTS_CFG.h`'s path-planner block, when the header has any of its keys.
@@ -61,43 +62,44 @@ pub struct Rules {
     a1_max_officers: Option<i32>,
 }
 
-const TYPED_LEN: usize = 4 + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + ApproachRules::KEYS.len() + CfgRules::KEYS.len() + LegacyStart::KEYS.len() + PopulationRules::KEYS.len();
+const TYPED_LEN: usize = 5 + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + ApproachRules::KEYS.len() + CfgRules::KEYS.len() + LegacyStart::KEYS.len() + PopulationRules::KEYS.len();
 
 /// Every `RTS_CFG.h` key [`Rules`] reads.
 pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
     let mut out = [""; TYPED_LEN];
-    out[0] = "MP_OFFICER_LIMIT";
-    out[1] = "MP_OFFICER_LIST_SIZE";
-    out[2] = "SINGLE_PLAYER_OFFICER_LIMIT";
-    out[3] = "STARTING_CREW_CAPACITY";
+    out[0] = "upgradePodMaximumTier";
+    out[1] = "MP_OFFICER_LIMIT";
+    out[2] = "MP_OFFICER_LIST_SIZE";
+    out[3] = "SINGLE_PLAYER_OFFICER_LIMIT";
+    out[4] = "STARTING_CREW_CAPACITY";
     let mut i = 0;
     while i < PathingRules::KEYS.len() {
-        out[4 + i] = PathingRules::KEYS[i];
+        out[5 + i] = PathingRules::KEYS[i];
         i += 1;
     }
     let mut a = 0;
     while a < AutonomyRules::KEYS.len() {
-        out[4 + i + a] = AutonomyRules::KEYS[a];
+        out[5 + i + a] = AutonomyRules::KEYS[a];
         a += 1;
     }
     let mut w = 0;
     while w < ApproachRules::KEYS.len() {
-        out[4 + i + a + w] = ApproachRules::KEYS[w];
+        out[5 + i + a + w] = ApproachRules::KEYS[w];
         w += 1;
     }
     let mut j = 0;
     while j < CfgRules::KEYS.len() {
-        out[4 + i + a + w + j] = CfgRules::KEYS[j];
+        out[5 + i + a + w + j] = CfgRules::KEYS[j];
         j += 1;
     }
     let mut l = 0;
     while l < LegacyStart::KEYS.len() {
-        out[4 + i + a + w + j + l] = LegacyStart::KEYS[l];
+        out[5 + i + a + w + j + l] = LegacyStart::KEYS[l];
         l += 1;
     }
     let mut p = 0;
     while p < PopulationRules::KEYS.len() {
-        out[4 + i + a + w + j + l + p] = PopulationRules::KEYS[p];
+        out[5 + i + a + w + j + l + p] = PopulationRules::KEYS[p];
         p += 1;
     }
     out
@@ -667,10 +669,25 @@ struct StartRule {
 }
 
 impl Rules {
+    /// Maximum effective ship-system pod tier (A2FO extension, default 6).
+    pub fn upgrade_pod_maximum_tier(&self) -> u32 {
+        self.upgrade_pod_maximum_tier.unwrap_or(6)
+    }
+
+    fn read_upgrade_pod_maximum_tier(&mut self, cfg: &CfgH, warnings: &mut Vec<Warning>) {
+        let key = "upgradePodMaximumTier";
+        if cfg.raw(key).is_none() { return; }
+        match cfg.i64(key).filter(|v| (3..=16).contains(v)) {
+            Some(value) => self.upgrade_pod_maximum_tier = Some(value as u32),
+            None => warnings.push(Warning::new("RTS_CFG.h", format!("{key} is not a whole number from 3 to 16; last valid value retained"))),
+        }
+    }
+
     pub fn from_header(text: &str) -> (Self, Vec<Warning>) {
         let cfg = CfgH::parse(text);
         let mut warnings = Vec::new();
         let mut rules = Self::default();
+        rules.read_upgrade_pod_maximum_tier(&cfg, &mut warnings);
         if cfg.raw("MP_OFFICER_LIMIT").is_some() {
             match (cfg.i64("MP_OFFICER_LIST_SIZE"), cfg.integer_pairs("MP_OFFICER_LIMIT")) {
                 (Some(size), Some(rows)) if size >= 0 && usize::try_from(size).ok() == Some(rows.len())
@@ -885,6 +902,17 @@ impl Rules {
         let mut warnings = resolved.warnings;
         let (mut rules, parsed) = Self::from_header(&resolved.text);
         warnings.extend(parsed);
+        // Parse each mounted copy, parent to child. Invalid child values do
+        // not erase the last valid inherited extension value.
+        let mut inherited = Self::default();
+        for version in (1..vfs.resolve_all("RTS_CFG.h").len()).rev() {
+            match crate::layered::resolve(vfs, "RTS_CFG.h", version) {
+                Ok(Some(layer)) => inherited.read_upgrade_pod_maximum_tier(&CfgH::parse(&layer.text), &mut warnings),
+                Ok(None) => {}
+                Err(e) => warnings.push(Warning::new("RTS_CFG.h", format!("could not read inherited upgradePodMaximumTier: {e}"))),
+            }
+        }
+        rules.upgrade_pod_maximum_tier = rules.upgrade_pod_maximum_tier.or(inherited.upgrade_pod_maximum_tier);
         rules.starts = races
             .iter()
             .map(|race| StartRule {
@@ -961,6 +989,9 @@ impl Rules {
             "RTS_CFG.h:MP_OFFICER_LIMIT",
             format!("[{}]", self.officer_limits.iter().map(|l| l.value.to_string()).collect::<Vec<_>>().join(",")),
         )];
+        if self.upgrade_pod_maximum_tier() != 6 {
+            out.push(DigestEntry::new("RTS_CFG.h:upgradePodMaximumTier", self.upgrade_pod_maximum_tier().to_string()));
+        }
         for (key, value) in PathingRules::KEYS.iter().zip(self.pathing().texts()) {
             out.push(DigestEntry::new(format!("RTS_CFG.h:{key}"), value));
         }
@@ -1379,6 +1410,7 @@ mod cfg_tests {
         // which is digested only when it differs from the engine default.
         // The two facing keys are digested only when set (SIM-39).
         let mut rules = Rules::default().with_approach(ApproachRules { min_move_warp_distance: Fixed::from_int(1100) });
+        rules.upgrade_pod_maximum_tier = Some(9);
         rules.legacy_start = LegacyStart { dilithium: Some(1), crew: Some(2), officers: None };
         rules.cfg.facing_weight = Some(Fixed::ONE);
         rules.cfg.facing_constant = Some(3);

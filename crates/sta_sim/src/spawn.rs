@@ -73,6 +73,7 @@ impl Sim {
             }
         }
         sim.refresh_seat_rules();
+        sim.refresh_ship_upgrades();
         (sim, warnings)
     }
 
@@ -87,6 +88,7 @@ impl Sim {
     ) -> Option<EntityId> {
         let id = self.spawn_unqueued_def(key, owner, pos, heading)?;
         self.push_build_items(id);
+        self.refresh_ship_upgrades();
         Some(id)
     }
 
@@ -127,7 +129,14 @@ impl Sim {
     ///
     /// Packages that keep a `Table` of their own drop its row here.
     pub fn despawn(&mut self, id: EntityId, by: Option<EntityId>) -> bool {
-        self.remove_entity(id, Some(by))
+        let researched = self.units.get(id).and_then(|u| self.content.as_deref()?.unit(u.def))
+            .is_some_and(|def| def.system_upgrade.is_some())
+            || self.production.has_upgrade_pods(id, &self.units, self.content.as_deref());
+        let removed = self.remove_entity(id, Some(by));
+        if removed && researched {
+            self.refresh_ship_upgrades();
+        }
+        removed
     }
 
     /// [`Sim::despawn`] without the [`SimEvent::Destroyed`]: a start helper
@@ -341,7 +350,7 @@ impl Sim {
                 // (`crew_loss_on_hit`): `casualty::step` is what clears the latch.
                 let casualty = self.content.as_deref().is_some_and(|db| db.unit(u.def).is_some_and(|d| db.unit_features(d).crew_loss_on_hit));
                 if casualty {
-                    let mut ctx = crate::combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
+                    let mut ctx = crate::combat::casualty::Ctx { upgrades: &Default::default(), subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
                     crate::combat::casualty::check_derelict(u, &mut ctx);
                 }
                 true

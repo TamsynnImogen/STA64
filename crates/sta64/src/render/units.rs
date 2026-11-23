@@ -255,6 +255,12 @@ pub fn sync_units(
         }
     }
 
+    // Armada II hides an old upgrade pod during its replacement animation.
+    // It still owns the technology and socket until the new pod completes.
+    for id in link.production().iter().filter_map(|row| row.research.as_ref()?.replacing) {
+        want.remove(&id);
+    }
+
     // Gone: not in the view, or neither visible to the local player nor neutral scenery.
     let gone: Vec<EntityId> = map.0.keys().filter(|id| !want.contains_key(id)).copied().collect();
     for id in gone {

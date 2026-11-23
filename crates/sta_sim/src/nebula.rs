@@ -281,6 +281,7 @@ impl Sim {
     /// With the tick's hits: the damage of damaging nebulae. Returns the units
     /// it killed, in id order (no killer).
     pub(crate) fn nebula_damage(&mut self, db: &ContentDb, inside: &Inside) -> Vec<(EntityId, Option<EntityId>)> {
+        let upgrades = crate::ship_upgrades::ShipUpgrades::collect(db, &self.units);
         let mut killed = Vec::new();
         for (id, keys) in &inside.rows {
             for e in keys.iter().filter_map(|k| effects(db, *k)) {
@@ -291,7 +292,7 @@ impl Sim {
                 let Some(def) = db.unit(t.def) else { break };
                 let d = e.damage * dt();
                 let wanted = if db.unit_features(def).crew_loss_on_hit {
-                    let mut ctx = crate::combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
+                    let mut ctx = crate::combat::casualty::Ctx { upgrades: &upgrades, subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
                     crate::combat::casualty::after_variance(t, def, db, &mut ctx, 0, d, e.crew_loss).1
                 } else {
                     let taken = d.min(t.shields.now[0]);

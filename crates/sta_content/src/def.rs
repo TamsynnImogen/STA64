@@ -342,6 +342,27 @@ pub struct ResearchSlot {
     pub pose: Option<crate::RepairAttachment>,
 }
 
+/// Armada II ship system named by an upgrade pod.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpgradeSystem { Shields, Engines, Weapons, LifeSupport, Sensors }
+
+/// The declared tier and multiplier of a ship-system upgrade pod.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SystemUpgrade {
+    pub system: UpgradeSystem,
+    pub tier: u32,
+    pub multiplier: Fixed,
+}
+
+/// One indexed research station chain. The first successor is the tier-3
+/// replacement; later successors advance by one tier each.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResearchBuildSlot {
+    pub index: usize,
+    pub primary: Option<ContentKey>,
+    pub successors: Vec<ContentKey>,
+}
+
 /// Resolved Armada I starbase officer rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct A1BaseOfficers {
@@ -470,8 +491,10 @@ pub struct UnitDef {
     /// Raw composed SOD transform of the authored repair node, when readable.
     pub repair_attachment: Option<crate::repair_geometry::RepairAttachment>,
     pub research_slots: Vec<ResearchSlot>,
+    pub research_build: Vec<ResearchBuildSlot>,
     /// Station upgrade pods use the station origin instead of an external slot.
     pub research_station_upgrade: bool,
+    pub system_upgrade: Option<SystemUpgrade>,
     /// Sensor range, units.
     pub sensor: Fixed,
     pub hardpoints: Vec<Hardpoint>,
@@ -759,7 +782,9 @@ impl UnitDef {
             repair: RepairDef::default(),
             repair_attachment: None,
             research_slots: Vec::new(),
+            research_build: Vec::new(),
             research_station_upgrade: false,
+            system_upgrade: None,
             sensor: Fixed::ZERO,
             hardpoints: Vec::new(),
             build: BuildDef::default(),
