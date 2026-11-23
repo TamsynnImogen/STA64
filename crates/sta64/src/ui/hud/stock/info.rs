@@ -27,6 +27,7 @@ pub(in crate::ui::hud) use identity::{IdentityField, IdentityText};
 pub(in crate::ui::hud) enum StockText {
     Resource(usize),
     Population(EntityId),
+    RigJob(EntityId),
 }
 
 #[derive(Component, Clone, Copy)]
@@ -673,7 +674,7 @@ fn spawn_single(
     let unit = feed.view.unit(single.id);
     let def = unit.and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def)));
     if let Some(def) = def {
-        super::selection_readouts::spawn(commands, root, layout, origin, theme, single, &def.race);
+        super::selection_readouts::spawn(commands, root, layout, origin, theme, single, def);
     }
     let is_node = def.is_some_and(|d| super::super::status::node_slot(d).is_some());
     let details = def.and_then(|d| d.raw.str("verboseTooltip"));
@@ -731,7 +732,8 @@ fn spawn_single(
             None,
         );
     }
-    identity::spawn(commands, root, layout, theme, origin, single);
+    let construction_rig = layout.has_a2_info() && def.is_some_and(|def| def.class.0 == "constructionrig");
+    identity::spawn(commands, root, layout, theme, origin, single, construction_rig);
     if let Some(r) = wireframe_rect(layout, origin, builder)
         && let Some(def) = def
     {
@@ -959,6 +961,20 @@ pub(super) fn spawn(
     }
 }
 
+/// Stock ShipDisplay uses the captain row for the producer's active item
+/// name (read statically from Armada II). Read the same job as the build meter.
+fn rig_job_title<'a>(
+    feed: &'a HudFeed,
+    id: EntityId,
+    strings: Option<&'a crate::ui::i18n::Strings>,
+) -> Option<&'a str> {
+    let producer = feed.production.iter().find(|row| row.builder == id)?;
+    let job = producer.jobs.first().filter(|head| head.paid && head.started)?;
+    let item = feed.content.as_deref()?.unit(job.def)?;
+    let title = model::craft_names::unit_name(item).unwrap_or(&item.odf);
+    Some(strings.map_or(title, |strings| strings.game_text(title)))
+}
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)] // Bevy injects these system parameters.
 pub(in crate::ui::hud) fn update(
     feed: Res<HudFeed>,
@@ -972,6 +988,7 @@ pub(in crate::ui::hud) fn update(
     mut icons: Query<(&SystemIcon, &mut GuiImage), Without<WireLayer>>,
     mut layers: Query<(&WireLayer, &mut GuiImage), Without<SystemIcon>>,
     state: Option<Res<super::StockState>>,
+    strings: Option<Res<crate::ui::i18n::Strings>>,
 ) {
     for (w, mut image) in &mut layers {
         let tint = layer_tint(status.as_deref(), *w);
@@ -1041,6 +1058,14 @@ pub(in crate::ui::hud) fn update(
         let value = match *kind {
             StockText::Resource(id) => resource_text(&feed, id),
             StockText::Population(id) => super::super::status::population_text(&feed, id),
+            StockText::RigJob(id) => match &info {
+                Info::Single(selected) if selected.id == id => selected.own
+                    .then(|| rig_job_title(&feed, id, strings.as_deref()))
+                    .flatten()
+                    .or(selected.captain.as_deref())
+                    .map(str::to_owned),
+                _ => None,
+            },
         }.unwrap_or_default();
         if text.text != value {
             text.text = value;

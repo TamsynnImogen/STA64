@@ -36,6 +36,15 @@ fn aim_roots(
     }
 }
 
+// ExternalFeed clears optional status each frame. Keep this capture's real Sim
+// production snapshot aligned with the HudFeed view before the status widgets draw.
+fn restore_active_construction_status(
+    feed: Res<HudFeed>,
+    mut status: ResMut<super::super::status::StatusFeed>,
+) {
+    status.production.clone_from(&feed.production);
+}
+
 fn feed(vfs: &sta_vfs::Vfs, options: GameOptions, group: usize) -> HudFeed {
     feed_and_sim(vfs, options, group).0
 }
@@ -134,6 +143,49 @@ fn classic_start_feed(vfs: &sta_vfs::Vfs, map_name: &str, selected_odf: &str) ->
     }
 }
 
+fn active_fconst_feed(vfs: &sta_vfs::Vfs) -> HudFeed {
+    use sta_sim::command::{Command, CommandKind, Edit, Order};
+
+    let (mut feed, mut sim) = feed_and_sim(vfs, GameOptions::default(), 0);
+    let db = feed.content.as_ref().expect("installed content");
+    let rig = feed.view.units.iter().find(|unit| {
+        unit.owner == feed.player
+            && db.unit(unit.def).is_some_and(|def| def.odf.eq_ignore_ascii_case("fconst"))
+    }).expect("installed Federation fconst start unit");
+    let rig_id = rig.id;
+    let site = sta_sim::Vec3 {
+        x: rig.pos.x + Fixed::from_int(400),
+        y: rig.pos.y,
+        z: rig.pos.z + Fixed::from_int(400),
+    };
+    let yard = db.key("fyard").expect("installed Federation fyard");
+    assert!(db.unit(rig.def).is_some_and(|def| def.build.list.iter().any(|item| item.key == yard)),
+        "installed fconst cannot build fyard");
+    sim.step(&[Command {
+        player: PlayerId::SCRIPT, seq: 0,
+        kind: CommandKind::Edit(Edit::Cargo(feed.player, 0, Fixed::from_int(99999))),
+    }]);
+    let outcome = sim.step(&[Command {
+        player: feed.player, seq: 0,
+        kind: CommandKind::Order(Order::Build { builder: rig_id, what: yard, at: Some(site) }),
+    }]);
+    assert!(!outcome.events.iter().any(|event| matches!(event, sta_sim::SimEvent::Rejected { .. })),
+        "installed fconst -> fyard build order was rejected: {:?}", outcome.events);
+    for _ in 0..3000 {
+        let active = sim.production_view().iter().any(|row| row.builder == rig_id
+            && row.jobs.first().is_some_and(|job| job.def == yard && job.started && job.paid
+                && (0.15..0.85).contains(&job.progress.to_f32())));
+        if active {
+            feed.view = sim.view();
+            feed.selected = vec![rig_id];
+            feed.production = sim.production_view();
+            return feed;
+        }
+        sim.step(&[]);
+    }
+    panic!("installed fconst never reached active fyard welding");
+}
+
 fn resolved_pieces(app: &mut App, pieces: &[super::layout::Piece]) -> usize {
     app.world_mut()
         .query::<(&GuiImage, &ImageNode)>()
@@ -158,7 +210,7 @@ fn sizes(default: &[UVec2]) -> Vec<UVec2> {
 }
 
 #[derive(Clone, Copy)]
-enum HoverCapture { Selected, SelectedHover, Low, Other, BuildPage, BuildTooltip, ColonyShip, Yard, CrewShip, ClassicStart(&'static str, &'static str), Group(usize), Avatar, WeaponIcons }
+enum HoverCapture { Selected, SelectedHover, Low, Other, BuildPage, BuildTooltip, ColonyShip, Yard, CrewShip, ActiveConstruction, ClassicStart(&'static str, &'static str), Group(usize), Avatar, WeaponIcons }
 
 /// Independent installed-data expectation: current crew is compared with its
 /// actual live capacity, not crewCost. Resolve authored palette/thresholds.
@@ -202,11 +254,12 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     let group_count = match hover_mode { HoverCapture::Group(count) => count, HoverCapture::BuildTooltip => 1, _ => 0 };
     let mut hud_feed = match hover_mode {
         HoverCapture::ClassicStart(map, odf) => classic_start_feed(&vfs, map, odf),
+        HoverCapture::ActiveConstruction => active_fconst_feed(&vfs),
         _ => feed(&vfs, options, group_count),
     };
     let original = hud_feed.selected[0];
     let hover = match hover_mode {
-        HoverCapture::Selected | HoverCapture::BuildPage | HoverCapture::ClassicStart(..) => None,
+        HoverCapture::Selected | HoverCapture::BuildPage | HoverCapture::ActiveConstruction | HoverCapture::ClassicStart(..) => None,
         HoverCapture::BuildTooltip => {
             let db = hud_feed.content.as_ref().unwrap();
             let builder = hud_feed.view.units.iter().find(|u| u.owner == hud_feed.player
@@ -358,6 +411,12 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         .init_resource::<ButtonInput<KeyCode>>()
         .add_plugins(HudPlugin)
         .add_systems(Update, aim_roots.before(GameSet::Ui));
+    if matches!(hover_mode, HoverCapture::ActiveConstruction) {
+        app.add_systems(Update, restore_active_construction_status
+            .in_set(GameSet::Ui)
+            .after(super::super::status::sync)
+            .before(super::super::status_gpu::refresh));
+    }
 
     let mut image = Image::new_target_texture(
         size.x,
@@ -465,6 +524,45 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         }).collect();
         slots.sort_unstable();
         assert_eq!(slots, [1, 2, 3, 4], "all mounted Intrepid weapon icons resolve");
+    }
+
+    if matches!(hover_mode, HoverCapture::ActiveConstruction) {
+        use crate::ui::sprite_font::SpriteText;
+
+        assert_eq!(bar_variant, 1, "{label}: active fconst uses the medium card");
+        let origin = stock.info_origin(bar_variant);
+        let title = stock.at(origin, "infoSingleCaptainTextArea").expect("native job title area");
+        let meter = stock.at(origin, "infoSingleConstructionArea").expect("native construction meter area");
+        let race = stock.at(origin, "infoSingleRaceIconDisplayArea").expect("native faction emblem area");
+        let world = app.world_mut();
+        let title_visible = world.query_filtered::<(&SpriteText, &ChildOf, &Visibility), With<super::info::IdentityText>>()
+            .iter(world).any(|(text, parent, shown)| {
+                *shown == Visibility::Inherited && text.text == "Shipyard"
+                    && world.get::<Node>(parent.parent())
+                        .is_some_and(|node| (node.left, node.top) == (Val::Px(title.x), Val::Px(title.y)))
+            });
+        assert!(title_visible, "{label}: active Shipyard title at infoSingleCaptainTextArea");
+        let emblem_visible = world.query_filtered::<(&GuiImage, &Node, &Visibility, &super::a1::info::LiveTint), With<ImageNode>>()
+            .iter(world).any(|(image, node, shown, tint)| {
+                *shown == Visibility::Inherited
+                    && matches!(tint, super::a1::info::LiveTint::Race(_))
+                    && image.names.iter().any(|name| name == "federation_icon")
+                    && (node.left, node.top) == (Val::Px(race.x), Val::Px(race.y))
+            });
+        assert!(emblem_visible, "{label}: resolved Federation emblem at infoSingleRaceIconDisplayArea");
+        let progressing = world.query::<(Entity, &super::super::status_gpu::LiveValue, &Node, &ChildOf)>()
+            .iter(world).any(|(clip, kind, node, parent)| {
+                let super::super::status_gpu::LiveValue::QueueProgress(0, width) = kind else { return false };
+                let Val::Px(fill) = node.width else { return false };
+                *width == meter.w && fill > 0.0 && fill < *width
+                    && world.get::<Node>(parent.parent())
+                        .is_some_and(|track| (track.left, track.top) == (Val::Px(meter.x), Val::Px(meter.y)))
+                    && world.get::<Children>(clip).is_some_and(|children| children.iter().any(|child| {
+                        world.get::<GuiImage>(child).is_some_and(|image| image.names.iter().any(|name| name == "large_construction_bar"))
+                            && world.get::<ImageNode>(child).is_some()
+                    }))
+            });
+        assert!(progressing, "{label}: visible partially filled meter at infoSingleConstructionArea");
     }
 
     if let HoverCapture::Group(count) = hover_mode {
@@ -1078,6 +1176,23 @@ fn installed_armada2_medium_personnel_hud_renders_on_gpu() {
         .expect("installed Armada II VFS");
     capture_one(vfs, UiProfile::Armada2, UVec2::new(1024, 768), "gui_fed.cfg",
         "a2-fconst-personnel-4x3", GameOptions::default(), HoverCapture::CrewShip);
+}
+
+/// Native Armada II reference: a selected fconst welding fyard shows Shipyard,
+/// the Federation emblem and a filling striped meter on its medium card.
+/// Set `STA64_HUD_CAPTURE_DIR` to retain the windowless comparison frame.
+#[test]
+fn installed_armada2_active_construction_hud_renders_on_gpu() {
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_TEST_INSTALL=<Armada II root>");
+        return;
+    }
+    let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
+    let active_mod = std::env::var("STA64_TEST_MOD").ok().filter(|name| !name.is_empty());
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref())
+        .expect("installed Armada II VFS");
+    capture_one(vfs, UiProfile::Armada2, UVec2::new(1024, 768), "gui_fed.cfg",
+        "a2-fconst-active-fyard-4x3", GameOptions::default(), HoverCapture::ActiveConstruction);
 }
 
 /// Reproduce the live mount and select the Federation starting units.

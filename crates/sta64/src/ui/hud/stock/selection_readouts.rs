@@ -91,7 +91,7 @@ pub(super) fn spawn(
     origin: Vec2,
     theme: &Theme,
     single: &Single,
-    race: &str,
+    def: &sta_content::UnitDef,
 ) {
     let id = single.id;
     let builder = layout.info_uses_builder(single);
@@ -130,7 +130,7 @@ pub(super) fn spawn(
         }
     }
 
-    if !builder || !layout.has_a2_info() {
+    if !layout.has_a2_info() || (!builder && def.class.0 != "constructionrig") {
         return;
     }
     // Both the team tint and the emblem's sprite name come from the selected object.
@@ -147,7 +147,7 @@ pub(super) fn spawn(
     }
     if let Some(rect) = layout.at(origin, "infoSingleRaceIconDisplayArea") {
         let mut image = GuiImage::new("").with_sampling(GuiImageSampling::Linear);
-        image.names = emblem_names(race);
+        image.names = emblem_names(&def.race);
         commands
             .entity(root)
             .with_child((node(rect), image, LiveTint::Race(id), Pickable::IGNORE));
