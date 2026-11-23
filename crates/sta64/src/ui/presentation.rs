@@ -763,6 +763,8 @@ fn end_messages_on_skip(
     }
 }
 
+type NotificationFeed = Or<(With<NoticeRoot>, With<ChatRoot>)>;
+
 /// Reserve the notification overlays for menus and viewers. A direct map launch
 /// has a simulation link and bypasses the front-end state transitions.
 fn sync_notification_visibility(
@@ -770,7 +772,7 @@ fn sync_notification_visibility(
     state: Option<Res<State<AppState>>>,
     flow: Option<Res<Flow>>,
     link: Option<Res<SimLink>>,
-    mut roots: Query<&mut Visibility, Or<(With<NoticeRoot>, With<ChatRoot>)>>,
+    mut roots: Query<&mut Visibility, NotificationFeed>,
 ) {
     let in_game = state.is_some_and(|state| *state.get() == AppState::InGame) || (flow.is_none() && link.is_some());
     let want = if in_game || cine.on { Visibility::Hidden } else { Visibility::Inherited };
