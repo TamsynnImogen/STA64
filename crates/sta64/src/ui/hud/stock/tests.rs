@@ -433,6 +433,31 @@ fn personnel_flags_and_zero_rectangles_suppress_only_authored_labels() {
     }
 }
 
+/// Install-gated: the mounted STA2 Classic race CFGs determine which personnel
+/// readouts exist; a live PlayerView supplies their values without rebuilding them.
+#[test]
+fn installed_sta2_classic_personnel_respects_race_cfg() {
+    let (Some(root), Ok(mode)) = (std::env::var_os("STA64_TEST_INSTALL"), std::env::var("STA64_TEST_MOD")) else {
+        eprintln!("SKIP: set STA64_TEST_INSTALL and STA64_TEST_MOD=STA2 Classic");
+        return;
+    };
+    if mode != "STA2 Classic" { return; }
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(&mode)).unwrap();
+    for (cfg_name, crew_visible) in [
+        ("gui_fed.cfg", true), ("gui_kli.cfg", true), ("gui_rom.cfg", true),
+        ("gui_bor.cfg", true), ("gui_species8472.cfg", false),
+    ] {
+        let cfg = crate::game::gui_layout(&vfs, cfg_name).unwrap_or_else(|| panic!("{cfg_name} missing"));
+        let layout = StockLayout::new(&cfg, Vec2::new(1920.0, 1080.0));
+        assert_eq!(layout.number("noCrew").is_some_and(|n| n != 0.0), !crew_visible, "{cfg_name}");
+        assert_eq!(layout.number("noOfficers").is_some_and(|n| n != 0.0), false, "{cfg_name}");
+        let mut app = app_with_content_and_config(content(), HudConfig { gui: Some(cfg), ..default() }, UiProfile::Armada2);
+        set_personnel(&mut app, Some(Fixed::from_int(1200)), [Fixed::from_int(16), Fixed::from_int(600)]);
+        assert_eq!(resource_label(&mut app, 0).map(|r| r.1), crew_visible.then(|| "1200".to_owned()), "{cfg_name}");
+        assert_eq!(resource_label(&mut app, 1).map(|r| r.1), Some("16/600".to_owned()), "{cfg_name}");
+    }
+}
+
 #[test]
 fn stock_resources_and_officers_format_large_fixed_values_exactly() {
     let cfg = inherited_config("resource_0 = 4 5 30 10\nresource_3 = 30 10 80 30\nresource_5 = 320 10 80 30\n", "");

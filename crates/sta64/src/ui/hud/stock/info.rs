@@ -11,7 +11,7 @@ use super::super::status::node_fraction;
 use super::layout::{StockLayout, info_variant};
 use crate::ui::gui_sprites::{GuiImage, GuiImageSampling};
 use crate::ui::notices::Tooltip;
-use crate::ui::profile::UiProfile;
+use crate::ui::hud::{portrait, readouts::{self, Readout}};
 use crate::ui::sprite_font::{FontRole, SpriteText, SpriteTextStyle, sprite_text_styled};
 use crate::ui::stock_font::{HAlign, StockTextCanvas, VAlign};
 use crate::ui::theme::{Theme, UiButton, WidgetState};
@@ -56,7 +56,7 @@ fn node_bar(def: &sta_content::UnitDef) -> Option<(&'static str, &'static str, &
 #[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_node_bar(
     commands: &mut Commands, root: Entity, layout: &StockLayout, origin: Vec2,
-    def: &sta_content::UnitDef, fallback: Option<R>, theme: &Theme,
+    def: &sta_content::UnitDef, fallback: Option<R>, theme: &Theme, unit: EntityId,
 ) {
     let Some((area, track, fill)) = node_bar(def) else { return };
     let Some(r) = layout.at(origin, area).or_else(|| layout.raw_rect(area).is_none().then_some(fallback).flatten()) else { return };
@@ -66,6 +66,7 @@ pub(super) fn spawn_node_bar(
     let fill_keys: &[&str] = if slot == 0 || area == "infoSinglePlanetMetalBarArea" { &[fill] } else { &[] };
     let fallback_tint = resource_colour(layout, slot + 2, theme.accent);
     cfg_bar(commands, root, layout, r, 1.0, (&[track], fill_keys, fallback_tint), StockBar::Node(r.w), area.trim_end_matches("Area"));
+    readouts::at(commands, root, r, unit, Readout::Deposit);
 }
 
 /// UI-48: a system icon of the single-selection card, by cfg slot (`infoSystemIcon_<n>`: 0
@@ -96,20 +97,6 @@ fn system_slot_visible(def: &sta_content::UnitDef, slot: usize) -> bool {
     let system = SLOT_SYSTEM[slot];
     def.raw.f32(SYSTEM_HP_KEYS[system]).is_none()
         || def.system_hit_points[system] > Fixed::ZERO
-}
-
-/// SystemText::GetTooltip uses its selected object's authored class tooltip, while its verbose
-/// branch localizes the system name. `SLOT_SYSTEM` maps each CFG icon to STA64's system order.
-fn system_tip(def: &sta_content::UnitDef, slot: usize, profile: Option<UiProfile>) -> Tooltip {
-    if profile == Some(UiProfile::FleetOps) {
-        let mut tip = Tooltip::new(def.raw.str("tooltip").unwrap_or_default());
-        if let Some(verbose) = def.raw.str("verboseTooltip") {
-            tip = tip.verbose(verbose);
-        }
-        return tip.stock_class_details();
-    }
-    let key = ["ENG", "WPN", "SHLD", "LS", "SENS"][SLOT_SYSTEM[slot]];
-    Tooltip::new(def.raw.str("tooltip").unwrap_or_default()).verbose(format!("GUI_SD_REPAIR_SYS_{key}"))
 }
 
 /// CFG keys use the A2FOExtensions thresholds. Stock Armada II uses a green
@@ -521,7 +508,7 @@ fn wireframe_names(model: &str, layer: usize) -> Vec<String> {
 
 /// Native Wireframe::Render draws five independent GUI SPR layers in one square.
 pub(super) fn wireframe_layers(commands: &mut Commands, root: Entity, r: R, model: &str) {
-    wireframe_layers_of(commands, root, r, model, None, None);
+    wireframe_layers_of(commands, root, r, model, None, None, None);
 }
 
 /// UI-28: a wireframe layer of a unit on the panel, tinted by its system's state each frame.
@@ -554,7 +541,10 @@ fn layer_tint(status: Option<&crate::ui::hud::status::StatusFeed>, w: WireLayer)
 }
 
 /// [`wireframe_layers`] for a unit whose layers follow its systems' state (`None`: plain art).
-pub(super) fn wireframe_layers_of(commands: &mut Commands, root: Entity, r: R, model: &str, unit: Option<EntityId>, backdrop: Option<Entity>) {
+pub(super) fn wireframe_layers_of(
+    commands: &mut Commands, root: Entity, r: R, model: &str, unit: Option<EntityId>,
+    backdrop: Option<Entity>, focus: Option<(&str, Option<&str>)>,
+) {
     let stem = model_stem(model);
     if stem.is_empty() {
         return;
@@ -565,6 +555,9 @@ pub(super) fn wireframe_layers_of(commands: &mut Commands, root: Entity, r: R, m
         let mut e = commands.spawn((node(r), Pickable::IGNORE, image, ChildOf(root)));
         if let Some(unit) = unit {
             e.insert(WireLayer { unit, layer });
+            if let Some((name, details)) = focus {
+                e.insert(portrait::bind(unit, name, details));
+            }
         }
         if let Some(backdrop) = backdrop {
             e.insert(BackdropFallback(backdrop));
@@ -658,14 +651,17 @@ fn spawn_single(
     layout: &StockLayout,
     feed: &HudFeed,
     theme: &Theme,
-    profile: Option<UiProfile>,
     origin: Vec2,
     single: &model::Single,
 ) {
     let unit = feed.view.unit(single.id);
     let def = unit.and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def)));
     let is_node = def.is_some_and(|d| super::super::status::node_slot(d).is_some());
+    let details = def.and_then(|d| d.raw.str("verboseTooltip"));
     let backdrop = def.and_then(|d| system_background(commands, root, layout, origin, &d.model));
+    if let Some(backdrop) = backdrop {
+        commands.entity(backdrop).insert(portrait::bind(single.id, &single.name, details));
+    }
     if let (Some(backdrop), Some(unit), Some(db)) = (backdrop, unit, feed.content.as_deref()) {
         super::weapon_icons::spawn(commands, root, layout, origin, backdrop, unit, db);
     }
@@ -716,7 +712,7 @@ fn spawn_single(
     if let Some(r) = wireframe_rect(layout, origin, single.builder)
         && let Some(def) = def
     {
-        wireframe_layers_of(commands, root, r, &def.model, Some(single.id), backdrop);
+        wireframe_layers_of(commands, root, r, &def.model, Some(single.id), backdrop, Some((&single.name, details)));
     }
     let hull_rect = chosen_rect(
         layout,
@@ -728,6 +724,7 @@ fn spawn_single(
     if !is_node && let Some(r) = hull_rect {
         let fills: &[&str] = if single.builder { &["infoBuildHullBarColor", "infoSingleHullBarColor"] } else { &["infoSingleHullBarColor"] };
         cfg_bar(commands, root, layout, r, single.hull, (&["infoSingleHullBarDisableColor", "infoSingleShieldBarDisableColor"], fills, native_hull_tint(single.hull)), StockBar::Hull(r.w), "infoSingleHullBar");
+        readouts::at(commands, root, r, single.id, Readout::Hull);
     }
     if let Some(shield) = single.shield
         && let Some(r) = chosen_rect(
@@ -740,14 +737,16 @@ fn spawn_single(
     {
         let fills: &[&str] = if single.builder { &["infoBuildShieldBarColor", "infoSingleShieldBarColor"] } else { &["infoSingleShieldBarColor"] };
         cfg_bar(commands, root, layout, r, shield, (&["infoSingleShieldBarDisableColor"], fills, STOCK_SHIELD_TINT), StockBar::Shield(r.w), "infoSingleShieldBar");
+        readouts::at(commands, root, r, single.id, Readout::Shields);
     }
     if let Some(progress) = single.progress
         && let Some(r) = layout.at(origin, "infoSingleConstructionBarArea")
     {
         bar(commands, root, r, progress, bar_colours(layout, &["infoSingleConstructionBarDisableColor"], &["infoSingleConstructionBarColor"], theme.warn), StockBar::Progress(r.w));
+        readouts::at(commands, root, r, single.id, Readout::Construction);
     }
     if let Some(def) = def {
-        spawn_node_bar(commands, root, layout, origin, def, hull_rect, theme);
+        spawn_node_bar(commands, root, layout, origin, def, hull_rect, theme, single.id);
     }
     if let Some(population) = super::super::status::population_text(feed, single.id) {
         // Reuse alignment from the planet owner row when present. A separate
@@ -769,17 +768,18 @@ fn spawn_single(
             }
             let icon = chosen_rect(layout, origin, single.builder, &format!("infoBuildSystemIcon_{slot}"), &format!("infoSystemIcon_{slot}"));
             if let Some(r) = icon {
-                commands.entity(root).with_child((node(r), system_tip(def, slot, profile), SystemIcon(slot), GuiImage::new("infosystem").with_frame(slot)));
+                commands.entity(root).with_child((node(r), readouts::bind(single.id, Readout::System(system)), SystemIcon(slot), GuiImage::new("infosystem").with_frame(slot)));
             }
             if def.system_hit_points[system] > Fixed::ZERO
                 && let Some(r) = system_readout_rect(layout, origin, single.builder, slot, icon)
             {
-                let label = text_styled_with_tip(
+                let label = text_styled(
                     commands, root, r, String::new(), theme.text, r.h * 0.8, None,
-                    SpriteTextStyle { tint_all: true, ..default() }.centered_in_box(), Some(system_tip(def, slot, profile)),
+                    SpriteTextStyle { tint_all: true, ..default() }.centered_in_box(),
                 );
                 commands.entity(label).insert(SystemHealth(slot));
                 clip_to_rect(commands, label, false);
+                readouts::at(commands, root, r, single.id, Readout::System(system));
             }
         }
     }
@@ -835,7 +835,7 @@ fn spawn_group(
             && let Some(unit) = feed.view.unit(tile.id)
             && let Some(def) = feed.content.as_deref().and_then(|db| db.unit(unit.def))
         {
-            wireframe_layers_of(commands, entity, wireframe, &def.model, Some(tile.id), None);
+            wireframe_layers_of(commands, entity, wireframe, &def.model, Some(tile.id), None, None);
         }
         if !small {
             // Existing incomplete CFGs retain the icon inset when no name key exists.
@@ -878,7 +878,7 @@ fn group_label_style(layout: &StockLayout, width: f32) -> SpriteTextStyle {
     SpriteTextStyle { scaled: true, tint_all: true, stock: Some(crate::ui::stock_font::StockRole::Default), ..SpriteTextStyle::role(role).wrapped(width) }
 }
 
-pub(super) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme, profile: Option<UiProfile>) {
+pub(super) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme) {
     spawn_resource(commands, root, layout, feed, theme);
     let info = model::info(feed);
     let variant = info_variant(&info);
@@ -891,7 +891,7 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout,
     }
     match &info {
         Info::None => {}
-        Info::Single(single) => spawn_single(commands, root, layout, feed, theme, profile, origin, single),
+        Info::Single(single) => spawn_single(commands, root, layout, feed, theme, origin, single),
         Info::Group(tiles) => spawn_group(commands, root, layout, feed, theme, origin, variant, tiles),
     }
 }
@@ -1068,32 +1068,6 @@ mod tests {
     }
 
     #[test]
-    fn system_text_uses_authored_short_and_native_verbose_keys() {
-        let odf = sta_odf::resolve("ship", &mut |_| Some("tooltip = \"SHIP_TIP\"\nverboseTooltip = \"SHIP_VERBOSE\"\n".to_owned())).unwrap();
-        let mut warnings = Vec::new();
-        let def = sta_content::unit::unit_def("ship", &odf, None, &mut warnings);
-        assert!(warnings.is_empty(), "{warnings:?}");
-        let a2 = |slot| system_tip(&def, slot, Some(UiProfile::Armada2));
-        assert_eq!(a2(0).short, "SHIP_TIP");
-        assert_eq!(a2(0).verbose.as_deref(), Some("GUI_SD_REPAIR_SYS_SENS"));
-        assert_eq!(a2(1).verbose.as_deref(), Some("GUI_SD_REPAIR_SYS_SHLD"));
-        assert_eq!(a2(2).verbose.as_deref(), Some("GUI_SD_REPAIR_SYS_WPN"));
-        assert_eq!(a2(3).verbose.as_deref(), Some("GUI_SD_REPAIR_SYS_ENG"));
-        assert_eq!(a2(4).verbose.as_deref(), Some("GUI_SD_REPAIR_SYS_LS"));
-        let fo = system_tip(&def, 0, Some(UiProfile::FleetOps));
-        assert_eq!(fo.verbose.as_deref(), Some("SHIP_VERBOSE"));
-        let delays = crate::ui::stock_tooltip::TipDelays::STOCK;
-        let look = |key: &str| match key {
-            "SHIP_TIP" => "Class tip".into(),
-            "SHIP_VERBOSE" => "Class details".into(),
-            "GUI_CP_TOOLTIP_SEPARATE" => ":".into(),
-            other => other.into(),
-        };
-        assert_eq!(fo.stock_text_at(delays.short, &delays, &look).as_deref(), Some("Class tip"));
-        assert_eq!(fo.stock_text_at(delays.verbose, &delays, &look).as_deref(), Some("Class tip:\nClass details"));
-    }
-
-    #[test]
     fn system_visibility_uses_resolved_maximum_not_current_damage() {
         let odf = sta_odf::resolve("child", &mut |name| {
             Some(if name.eq_ignore_ascii_case("base.odf") {
@@ -1180,7 +1154,7 @@ mod tests {
         let mut queue = CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, &world);
-            spawn_single(&mut commands, root, &layout, &feed, &theme, Some(UiProfile::Armada2), Vec2::ZERO, &single);
+            spawn_single(&mut commands, root, &layout, &feed, &theme, Vec2::ZERO, &single);
             spawn_group(&mut commands, root, &layout, &feed, &theme, Vec2::ZERO, 1, &[tile.clone(), short]);
         }
         queue.apply(&mut world);

@@ -64,8 +64,8 @@ impl Plugin for InputPlugin {
                     // Not while a cutscene runs: nothing is selected, ordered or acknowledged
                     // (an existing selection is kept, inert, and works again afterwards).
                     select::select_keys.run_if(not(crate::ui::presentation::cutscene_running)),
-                    // A click on the HUD, or the one that places a build, is not the map's.
-                    select::select.run_if(crate::ui::hud::map_input_free).run_if(not(crate::ui::presentation::cutscene_running)),
+                    // Selection decides ownership on press so a map-origin drag can finish over the HUD.
+                    select::select.run_if(not(crate::ui::presentation::cutscene_running)),
                     orders::order.run_if(crate::ui::hud::map_input_free).run_if(not(crate::ui::presentation::cutscene_running)),
                     orders::radar_order,
                     orders::prune_targets,

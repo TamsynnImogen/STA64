@@ -956,8 +956,9 @@ pub struct ResEntry {
 
 /// The strip: the player's stock in the order dilithium, metal, latinum,
 /// biomatter (the order Refit's HUD.md asks for), those the race has, then the
-/// officers as "in use/capacity", or A1's "available/capacity", when it has any.
-pub fn resources(feed: &HudFeed, no: [bool; 4]) -> Vec<ResEntry> {
+/// crew when initialized, then officers as "in use/capacity", or A1's
+/// "available/capacity", subject to the race's authored hide flags.
+pub fn resources(feed: &HudFeed, no: [bool; 4], no_personnel: [bool; 2]) -> Vec<ResEntry> {
     let Some(p) = feed.view.player(feed.player) else { return Vec::new() };
     let names = resource_model(feed);
     let mut out: Vec<ResEntry> = [0usize, 2, 1, 3]
@@ -965,7 +966,10 @@ pub fn resources(feed: &HudFeed, no: [bool; 4]) -> Vec<ResEntry> {
         .filter(|&i| !no[i])
         .map(|i| ResEntry { name: names.name(i).to_owned(), id: i, text: (p.resources.get(i).map_or(0.0, |f| f.to_f32()) as i64).to_string() })
         .collect();
-    if p.officers[1] > Fixed::ZERO || feed.content.as_deref().is_some_and(ContentDb::a1_officers) {
+    if !no_personnel[0] && let Some(crew) = p.crew {
+        out.push(ResEntry { name: "crew".into(), id: 5, text: (crew.to_bits() / Fixed::ONE.to_bits()).to_string() });
+    }
+    if !no_personnel[1] && (p.officers[1] > Fixed::ZERO || feed.content.as_deref().is_some_and(ContentDb::a1_officers)) {
         out.push(ResEntry { name: "officers".into(), id: 4, text: officer_text(feed, p.officers) });
     }
     out
@@ -989,8 +993,8 @@ pub struct Models {
     pub resources: Vec<ResEntry>,
 }
 
-pub fn models(feed: &HudFeed, page: Page, no: [bool; 4]) -> Models {
-    Models { info: info(feed), grid: grid(feed, page), resources: resources(feed, no) }
+pub fn models(feed: &HudFeed, page: Page, no: [bool; 4], no_personnel: [bool; 2]) -> Models {
+    Models { info: info(feed), grid: grid(feed, page), resources: resources(feed, no, no_personnel) }
 }
 
 /// Counts by def name of a player's finished units, for the tests and the
@@ -1890,14 +1894,33 @@ mod tests {
     #[test]
     fn the_strip_orders_the_stock_and_skips_what_the_race_lacks() {
         let f = feed(sta_content::fake::db(), Vec::new(), &[]);
-        let r = resources(&f, [false; 4]);
+        let r = resources(&f, [false; 4], [false; 2]);
         assert_eq!(r.iter().map(|e| (e.name.as_str(), e.text.as_str())).collect::<Vec<_>>(), [("Dilithium", "3000"), ("Metal", "700"), ("Latinum", "20"), ("Biomatter", "0"), ("officers", "3/10")]);
-        let r = resources(&f, [false, true, false, true]);
+        let r = resources(&f, [false, true, false, true], [false; 2]);
         assert_eq!(r.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["Dilithium", "Metal", "officers"]);
         // Unknown player: nothing.
         let mut f = f;
         f.player = PlayerId(9);
-        assert!(resources(&f, [false; 4]).is_empty());
+        assert!(resources(&f, [false; 4], [false; 2]).is_empty());
+    }
+
+    #[test]
+    fn the_strip_shows_live_personnel_and_honours_authored_hide_flags() {
+        let f = feed(sta_content::fake::db(), Vec::new(), &[]);
+        let mut view = (*f.view).clone();
+        view.players[0].crew = Some(Fixed::from_int(16_777_217));
+        view.players[0].officers = [Fixed::from_int(3), Fixed::from_int(10)];
+        let f = HudFeed { view: Arc::new(view), ..f };
+        let personnel = |hide| resources(&f, [false; 4], hide).into_iter()
+            .filter(|e| e.id >= 4).map(|e| (e.id, e.name, e.text)).collect::<Vec<_>>();
+        assert_eq!(personnel([false; 2]), [(5, "crew".into(), "16777217".into()), (4, "officers".into(), "3/10".into())]);
+        assert_eq!(personnel([true, false]), [(4, "officers".into(), "3/10".into())]);
+        assert_eq!(personnel([false, true]), [(5, "crew".into(), "16777217".into())]);
+        assert!(personnel([true; 2]).is_empty());
+        let mut view = (*f.view).clone();
+        view.players[0].crew = None;
+        let f = HudFeed { view: Arc::new(view), ..f };
+        assert!(resources(&f, [false; 4], [false; 2]).iter().all(|e| e.id != 5));
     }
 
     #[test]
@@ -1905,15 +1928,15 @@ mod tests {
         let db = ContentDb::builder().profile(sta_content::Profile::Sta1Classic).build().unwrap();
         let f = feed(db, Vec::new(), &[]);
         assert_eq!(f.view.players[0].officers, [Fixed::from_int(3), Fixed::from_int(10)]);
-        assert_eq!(resources(&f, [false; 4]).last().unwrap().text, "7/10");
+        assert_eq!(resources(&f, [false; 4], [false; 2]).last().unwrap().text, "7/10");
         let mut view = (*f.view).clone();
         view.players[0].officers = [Fixed::from_int(12), Fixed::from_int(10)];
         let f = HudFeed { view: Arc::new(view), ..f };
-        assert_eq!(resources(&f, [false; 4]).last().unwrap().text, "0/10");
+        assert_eq!(resources(&f, [false; 4], [false; 2]).last().unwrap().text, "0/10");
         let mut view = (*f.view).clone();
         view.players[0].officers = [Fixed::ZERO, Fixed::ZERO];
         let f = HudFeed { view: Arc::new(view), ..f };
-        assert_eq!(resources(&f, [false; 4]).last().unwrap().text, "0/0");
+        assert_eq!(resources(&f, [false; 4], [false; 2]).last().unwrap().text, "0/0");
     }
 
     #[test]
@@ -1922,7 +1945,7 @@ mod tests {
         // and the metal slot (Collective Connections) is the Borg's, hidden for the rest.
         let db = sta_content::fake::db().with_resources(ResourceModel::for_profile(sta_content::Profile::Fo4));
         let f = feed(db, Vec::new(), &[]);
-        let r = resources(&f, [false, false, true, false]);
+        let r = resources(&f, [false, false, true, false], [false; 2]);
         assert_eq!(r.iter().map(|e| (e.name.as_str(), e.id, e.text.as_str())).collect::<Vec<_>>(), [("Dilithium", 0, "3000"), ("Tritanium", 1, "20"), ("Supply", 3, "0"), ("officers", 4, "3/10")]);
         let names = resource_model(&f);
         assert_eq!(cost_text(&[261.0, 181.0, 0.0, 10.0], &names), "261 Dilithium, 181 Tritanium, 10 Supply");

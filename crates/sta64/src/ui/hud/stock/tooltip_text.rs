@@ -194,6 +194,8 @@ pub enum StockTip {
     TwoNumbers(i64, i64),
     /// Fleet Operations system detail: class tooltip followed by its authored verbose text.
     ClassDetails,
+    /// An individual meter or subsystem, with live values.
+    Readout(crate::ui::hud::readouts::ReadoutText),
 }
 
 pub fn class_details(short: &str, verbose: Option<&str>, look: Lookup) -> String {

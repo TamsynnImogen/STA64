@@ -237,6 +237,7 @@ impl Tooltip {
             } else {
                 look(&self.short)
             }),
+            Some(StockTip::Readout(readout)) if shown => Some(readout.text(verbose, look)),
             // No structured composition: today's text.
             _ => self.text_at_with(rest, delays).map(look),
         }
@@ -750,7 +751,7 @@ fn draw_tip(
     let look = |key: &str| strings.as_ref().map_or_else(|| key.to_owned(), |s| s.tooltip_text(key).to_owned());
     // An interface element under the pointer owns the tooltip; the unit behind it has none.
     let mut underline = Vec::new();
-    let shown = match hover.target {
+    let shown = match hover.target.filter(|target| tips.contains(*target)) {
         Some(e) => tips
             .get(e)
             .ok()
