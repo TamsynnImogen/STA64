@@ -163,6 +163,72 @@ fn front_end_to_match_and_back() {
 }
 
 #[test]
+fn menu_screens_follow_authored_views_and_setup_subscreens_inherit_setup() {
+    use crate::frontend::campaign::{CampaignAct, tests::fixture};
+
+    fn campaign_press(app: &mut App, action: CampaignAct) {
+        let world = app.world_mut();
+        let entity = world.query::<(Entity, &CampaignAct)>().iter(world)
+            .find(|(_, act)| **act == action).unwrap().0;
+        click(world, entity);
+        settle(app, 3);
+    }
+
+    let mut content = sta_content::ContentDb::builder();
+    for odf in ["fscout", "fgalaxy", "fbase"] {
+        let mut unit = sta_content::UnitDef::new(odf, "craft");
+        unit.hull = sta_sim::Fixed::from_int(100);
+        content = content.unit(unit);
+    }
+    let content = std::sync::Arc::new(content.build().unwrap());
+    let mut vfs = sta_vfs::Vfs::default();
+    vfs.push_dir("showcase".into(), concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/menu-showcase").into()).unwrap();
+    let (mut app, _) = app();
+    let map = MenuMap::from_vfs(&vfs, &content);
+    app.insert_resource(MenuSceneSource(MenuSceneConfig::new(content, map, sta_content::MapDef::empty())))
+        .insert_resource(fixture(false, None));
+
+    settle(&mut app, 4);
+    assert_eq!(screen(&app), Screen::Main);
+    assert_eq!(app.world().resource::<MenuScene>().view(), "opening");
+
+    press(&mut app, Act::Goto(Screen::SinglePlayer));
+    assert_eq!(app.world().resource::<MenuScene>().view(), "fleet");
+    campaign_press(&mut app, CampaignAct::Card(1));
+    assert_eq!(screen(&app), Screen::Missions);
+    assert_eq!(app.world().resource::<MenuScene>().view(), "campaign", "the Federation binding overrides the mission list's fleet view");
+    campaign_press(&mut app, CampaignAct::ToBriefing);
+    assert_eq!(screen(&app), Screen::Briefing);
+    assert_eq!(app.world().resource::<MenuScene>().view(), "campaign");
+    campaign_press(&mut app, CampaignAct::ToMissions);
+    campaign_press(&mut app, CampaignAct::ToSinglePlayer);
+    press(&mut app, Act::Goto(Screen::Main));
+    assert_eq!(app.world().resource::<MenuScene>().view(), "opening");
+
+    press(&mut app, Act::Goto(Screen::Setup)); // Instant action
+    assert_eq!(app.world().resource::<MenuScene>().view(), "planning");
+    press(&mut app, Act::Goto(Screen::Advanced));
+    assert_eq!(screen(&app), Screen::Advanced);
+    assert_eq!(app.world().resource::<MenuScene>().view(), "planning");
+    press(&mut app, Act::CloseAdvanced(false));
+    press(&mut app, Act::PickMap);
+    assert_eq!(screen(&app), Screen::MapSelect);
+    assert_eq!(app.world().resource::<MenuScene>().view(), "planning");
+    let marks = app.world().resource::<crate::bench::marks::RenderMarks>().lines();
+    assert_eq!(marks.iter().filter(|mark| mark.starts_with("render.menu.view view=planning ")).count(), 1);
+    press(&mut app, Act::Goto(Screen::Setup));
+
+    press(&mut app, Act::Goto(Screen::Main));
+    assert_eq!(app.world().resource::<MenuScene>().view(), "opening");
+    press(&mut app, Act::PickMod);
+    assert_eq!(screen(&app), Screen::ModSelect);
+    assert_eq!(app.world().resource::<MenuScene>().view(), "dock");
+    press(&mut app, Act::Goto(Screen::Main));
+    assert_eq!(screen(&app), Screen::Main);
+    assert_eq!(app.world().resource::<MenuScene>().view(), "opening");
+}
+
+#[test]
 fn instant_action_applies_the_chosen_palette_and_restores_the_mount() {
     use crate::viewer::{TeamColours, owner_hull_colour, owner_mark_colour};
     use sta_sim::PlayerId;

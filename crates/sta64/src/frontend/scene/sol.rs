@@ -19,12 +19,20 @@ const MAX_OBJECTS: usize = 512;
 const MAX_SOL_BYTES: usize = 8 * 1024 * 1024;
 const DEFAULT_SECONDS: f32 = 10.0;
 
+/// Screen and campaign names resolved to menu view names at load time.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub(super) struct Routing {
+    pub(super) screens: BTreeMap<String, String>,
+    pub(super) campaigns: BTreeMap<String, String>,
+}
+
 /// A route resolved at load time. Each leg gets an equal share of the duration.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Path {
     points: Vec<Vec3>,
     seconds: f32,
     looped: bool,
+    easing: lua::Easing,
 }
 
 impl Path {
@@ -40,7 +48,12 @@ impl Path {
         };
         let at = fraction * legs as f32;
         let leg = (at as usize).min(legs - 1);
-        self.points[leg].lerp(self.points[leg + 1], at - leg as f32)
+        let leg_fraction = at - leg as f32;
+        let leg_fraction = match self.easing {
+            lua::Easing::Linear => leg_fraction,
+            lua::Easing::Smooth => super::smooth(leg_fraction),
+        };
+        self.points[leg].lerp(self.points[leg + 1], leg_fraction)
     }
 }
 
@@ -138,7 +151,11 @@ pub(super) fn load(
         });
     }
 
-    let path = |names: &[String], seconds: Option<f32>, looped: bool| -> Result<Path, String> {
+    let path = |names: &[String],
+                seconds: Option<f32>,
+                looped: bool,
+                easing: lua::Easing|
+     -> Result<Path, String> {
         let mut points = names
             .iter()
             .map(|name| {
@@ -156,6 +173,7 @@ pub(super) fn load(
             points,
             seconds: seconds.unwrap_or(DEFAULT_SECONDS),
             looped,
+            easing,
         })
     };
 
@@ -167,7 +185,7 @@ pub(super) fn load(
         if actor.path.is_some() {
             return Err(format!("duplicate path for ship {:?}", ship.name));
         }
-        actor.path = Some(path(&ship.path, ship.seconds, ship.looped)?);
+        actor.path = Some(path(&ship.path, ship.seconds, ship.looped, ship.easing)?);
     }
 
     if let Some(views) = script.views {
@@ -177,11 +195,11 @@ pub(super) fn load(
             if !names.insert(name.clone()) {
                 return Err(format!("duplicate view {name:?}"));
             }
-            let eye = path(&view.camera, view.seconds, view.looped)?;
+            let eye = path(&view.camera, view.seconds, view.looped, view.easing)?;
             let target = view
                 .target
                 .as_ref()
-                .map(|points| path(points, view.seconds, view.looped))
+                .map(|points| path(points, view.seconds, view.looped, view.easing))
                 .transpose()?;
             let look = eye.points[0] + forward(objects[&label(&view.camera[0])]) * 100.0;
             let mut def = view_def(
@@ -209,6 +227,25 @@ pub(super) fn load(
     if map.views.is_empty() {
         return Err("no menu camera views".into());
     }
+    let views = map
+        .views
+        .iter()
+        .map(|view| view.name.as_str())
+        .collect::<BTreeSet<_>>();
+    for (kind, routes) in [
+        ("screens", &script.screens),
+        ("campaigns", &script.campaigns),
+    ] {
+        for (route, view) in routes {
+            if !views.contains(view.as_str()) {
+                return Err(format!("{kind}.{route}: unknown view {view:?}"));
+            }
+        }
+    }
+    map.routing = Routing {
+        screens: script.screens,
+        campaigns: script.campaigns,
+    };
     Ok(map)
 }
 
@@ -254,6 +291,30 @@ mod tests {
         scout.hull = Fixed::from_int(100);
         scout.movement.max_speed = Fixed::from_int(100);
         ContentDb::builder().unit(scout).build().unwrap()
+    }
+
+    #[test]
+    fn smooth_easing_applies_to_each_path_leg() {
+        let points = vec![
+            Vec3::ZERO,
+            Vec3::new(10.0, 0.0, 0.0),
+            Vec3::new(20.0, 0.0, 0.0),
+        ];
+        let linear = Path {
+            points: points.clone(),
+            seconds: 10.0,
+            looped: false,
+            easing: lua::Easing::Linear,
+        };
+        let smooth = Path {
+            points,
+            seconds: 10.0,
+            looped: false,
+            easing: lua::Easing::Smooth,
+        };
+        assert_eq!(linear.position(1.25).x, 2.5);
+        assert_eq!(smooth.position(1.25).x, 1.5625);
+        assert_eq!(smooth.position(6.25).x, 11.5625);
     }
 
     #[test]
@@ -311,6 +372,13 @@ mod tests {
         let mut vfs = Vfs::default();
         vfs.push_dir("mod".into(), root.clone()).unwrap();
         vfs.push_dir("fixture".into(), FIXTURE.into()).unwrap();
+        let map = MenuMap::from_vfs(&vfs, &content());
+        assert_eq!(map.view_names(), ["ini_fallback"]);
+        std::fs::write(
+            dir.join("menu.lua"),
+            "return { screens = { main = 'missing' } }",
+        )
+        .unwrap();
         let map = MenuMap::from_vfs(&vfs, &content());
         assert_eq!(map.view_names(), ["ini_fallback"]);
         std::fs::remove_dir_all(root).unwrap();

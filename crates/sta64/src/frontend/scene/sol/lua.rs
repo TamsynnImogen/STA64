@@ -1,6 +1,7 @@
 //! Load a menu scene's declarative Lua table once, without exposing mission APIs.
 
 use mlua::{Table, Value, chunk::ChunkMode};
+use std::collections::BTreeMap;
 
 const SOURCE_MAX: usize = 64 * 1024;
 const MEMORY_MAX: usize = 8 * 1024 * 1024;
@@ -14,6 +15,8 @@ pub(super) struct Script {
     pub(super) sky: Option<String>,
     pub(super) stars: Option<u32>,
     pub(super) blend: Option<f32>,
+    pub(super) screens: BTreeMap<String, String>,
+    pub(super) campaigns: BTreeMap<String, String>,
 }
 
 #[derive(Debug)]
@@ -24,6 +27,7 @@ pub(super) struct View {
     pub(super) seconds: Option<f32>,
     pub(super) looped: bool,
     pub(super) fov: Option<f32>,
+    pub(super) easing: Easing,
 }
 
 #[derive(Debug)]
@@ -32,6 +36,14 @@ pub(super) struct Ship {
     pub(super) path: Vec<String>,
     pub(super) seconds: Option<f32>,
     pub(super) looped: bool,
+    pub(super) easing: Easing,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub(super) enum Easing {
+    #[default]
+    Linear,
+    Smooth,
 }
 
 pub(super) fn parse(source: &[u8]) -> Result<Script, String> {
@@ -54,6 +66,8 @@ pub(super) fn parse(source: &[u8]) -> Result<Script, String> {
         sky: optional_name(&root, "sky")?,
         stars: optional_stars(&root)?,
         blend: optional_number(&root, "blend", 0.0, 60.0)?,
+        screens: optional_mapping(&root, "screens")?,
+        campaigns: optional_mapping(&root, "campaigns")?,
     })
 }
 
@@ -136,6 +150,42 @@ fn optional_list<T>(
     }
 }
 
+fn optional_mapping(table: &Table, key: &str) -> Result<BTreeMap<String, String>, String> {
+    let rows = match field(table, key)? {
+        Value::Nil => return Ok(BTreeMap::new()),
+        Value::Table(rows) => rows,
+        _ => return Err(format!("{key} must be a table")),
+    };
+    let mut result = BTreeMap::new();
+    for entry in rows.pairs::<Value, Value>() {
+        let (raw_key, raw_value) = entry.map_err(|e| format!("{key}: {e}"))?;
+        if result.len() >= LIST_MAX {
+            return Err(format!("{key} must contain at most {LIST_MAX} entries"));
+        }
+        let route = name(raw_key, key)?.trim().to_ascii_lowercase();
+        let view = name(raw_value, key)?.trim().to_ascii_lowercase();
+        if route.is_empty() || view.is_empty() {
+            return Err(format!("{key} keys and values must not be empty"));
+        }
+        if result.insert(route.clone(), view).is_some() {
+            return Err(format!("{key} has duplicate normalized key {route:?}"));
+        }
+    }
+    Ok(result)
+}
+
+fn easing(table: &Table) -> Result<Easing, String> {
+    match field(table, "easing")? {
+        Value::Nil => Ok(Easing::Linear),
+        Value::String(value) => match name(Value::String(value), "easing")?.as_str() {
+            "linear" => Ok(Easing::Linear),
+            "smooth" => Ok(Easing::Smooth),
+            _ => Err("easing must be 'linear' or 'smooth'".into()),
+        },
+        _ => Err("easing must be 'linear' or 'smooth'".into()),
+    }
+}
+
 fn points(table: &Table, key: &str) -> Result<Vec<String>, String> {
     let Value::Table(rows) = field(table, key)? else {
         return Err(format!("{key} must be a table"));
@@ -211,6 +261,7 @@ fn view(value: Value, what: &str) -> Result<View, String> {
         seconds: optional_number(&row, "seconds", 0.001, f32::MAX)?,
         looped: looped(&row)?,
         fov: optional_number(&row, "fov", 1.0, 150.0)?,
+        easing: easing(&row)?,
     })
 }
 
@@ -221,5 +272,34 @@ fn ship(value: Value, what: &str) -> Result<Ship, String> {
         path: points(&row, "path")?,
         seconds: optional_number(&row, "seconds", 0.001, f32::MAX)?,
         looped: looped(&row)?,
+        easing: easing(&row)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn routing_normalizes_names_and_rejects_invalid_entries() {
+        let script = parse(b"return { screens = { [' Main '] = ' BRIDGE ' }, campaigns = { Federation = ' FLEET ' } }").unwrap();
+        assert_eq!(script.screens.get("main"), Some(&"bridge".to_owned()));
+        assert_eq!(
+            script.campaigns.get("federation"),
+            Some(&"fleet".to_owned())
+        );
+        assert!(parse(b"return { screens = { main = '  ' } }").is_err());
+        assert!(parse(b"return { screens = { Main = 'one', main = 'two' } }").is_err());
+        assert!(parse(b"return { screens = { [1] = 'one' } }").is_err());
+    }
+
+    #[test]
+    fn easing_defaults_to_linear_and_accepts_smooth() {
+        let script = parse(b"return { views = {{ name='a', camera={'point'}, easing='smooth' }}, ships = {{ name='ship', path={'point'} }} }").unwrap();
+        assert_eq!(script.views.unwrap()[0].easing, Easing::Smooth);
+        assert_eq!(script.ships[0].easing, Easing::Linear);
+        assert!(
+            parse(b"return { ships = {{ name='ship', path={'point'}, easing='slow' }} }").is_err()
+        );
+    }
 }
