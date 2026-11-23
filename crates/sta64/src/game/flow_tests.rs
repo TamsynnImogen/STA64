@@ -339,6 +339,95 @@ fn a_failed_remount_keeps_the_active_mod_identity() {
     assert_eq!(app.world().resource::<SelectedMod>().0.as_deref(), Some("missing"));
 }
 
+#[test]
+fn a_successful_mod_switch_rebuilds_the_menu_scene_and_switches_back() {
+    use crate::frontend::scene::{MenuCamera, MenuScenePlugin};
+    use crate::frontend::screens::{ActiveMod, ModChosen, SelectedMod};
+    use crate::sim_link::SimEntities;
+    use crate::viewer::Mounted;
+
+    fn camera(app: &mut App) -> Entity {
+        let world = app.world_mut();
+        world.query_filtered::<Entity, With<MenuCamera>>().single(world).unwrap()
+    }
+
+    fn ship(app: &App) -> (Entity, sta_sim::Fixed) {
+        let world = app.world();
+        let link = world.resource::<SimLink>();
+        let [unit] = link.curr().units.as_slice() else { panic!("expected one scene ship") };
+        (world.resource::<SimEntities>().0[&unit.id], unit.pos.x)
+    }
+
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("sta64_menu_mod_switch_{}_{nonce}", std::process::id()));
+    let data = root.join("Data");
+    let mod_dir = data.join("Mods/Scene Mod");
+    std::fs::create_dir_all(data.join("odf/ships")).unwrap();
+    std::fs::create_dir_all(data.join("Menu")).unwrap();
+    std::fs::create_dir_all(mod_dir.join("RefitScene/Menu")).unwrap();
+    std::fs::write(
+        data.join("odf/ships/fcruiser.odf"),
+        "[GameObjectClass]\nclassLabel = \"craft\"\nunitName = \"Regression Cruiser\"\nrace = \"unitedfederation\"\nmaxHealth = 4000\nmaxSpeed = 140\n",
+    )
+    .unwrap();
+    std::fs::write(data.join("Menu/map.ini"), "[View.base_view]\nEye=0,0,400\n[Ship.base_ship]\nOdf=fcruiser\nAt=10,0,0\n").unwrap();
+    std::fs::write(mod_dir.join("info.ini"), "[Mod]\nName=Scene Mod\n").unwrap();
+    std::fs::write(
+        mod_dir.join("RefitScene/Menu/map.ini"),
+        "[View.mod_view]\nEye=0,0,800\n[Ship.mod_ship]\nOdf=fcruiser\nAt=900,0,0\n",
+    )
+    .unwrap();
+
+    let (mut app, _) = app();
+    let vfs = sta_vfs::Vfs::mount_install(&root, None).expect("synthetic base install mounts");
+    let mut catalogue = crate::map::Catalogue::default();
+    let base = front_end_data(&vfs, &mut catalogue, Some(&root)).unwrap();
+    let browser = crate::map::browser(&vfs, None, String::new());
+    app.insert_resource(Mounted(vfs))
+        .insert_resource(catalogue)
+        .insert_resource(base.screens)
+        .insert_resource(MenuSceneSource(base.scene))
+        .insert_resource(browser)
+        .insert_resource(FlowConfig { install_root: Some(root.clone()) })
+        .add_plugins(AssetPlugin::default())
+        .init_asset::<Mesh>()
+        .init_asset::<Image>()
+        .init_asset::<StandardMaterial>()
+        .init_resource::<GlobalAmbientLight>()
+        .add_plugins(MenuScenePlugin);
+    settle(&mut app, 4);
+    assert_eq!(state(&app), AppState::FrontEnd);
+    assert_eq!(app.world().resource::<MenuScene>().view(), "base_view");
+    let base_camera = camera(&mut app);
+    let (base_ship, base_x) = ship(&app);
+    assert_eq!(base_x, sta_sim::Fixed::from_int(10));
+
+    app.world_mut().write_message(ModChosen(Some("Scene Mod".into())));
+    settle(&mut app, 4);
+    assert_eq!(state(&app), AppState::FrontEnd, "switching mods does not leave the front end");
+    assert_eq!(app.world().resource::<ActiveMod>().0.as_deref(), Some("Scene Mod"));
+    assert_eq!(app.world().resource::<SelectedMod>().0.as_deref(), Some("Scene Mod"));
+    assert_eq!(app.world().resource::<MenuScene>().view(), "mod_view", "the mod's RefitScene menu map opens");
+    let mod_camera = camera(&mut app);
+    let (mod_ship, mod_x) = ship(&app);
+    assert_eq!(mod_x, sta_sim::Fixed::from_int(900));
+    assert!(app.world().get_entity(base_camera).is_err());
+    assert!(app.world().get_entity(base_ship).is_err());
+
+    app.world_mut().write_message(ModChosen(None));
+    settle(&mut app, 4);
+    assert_eq!(state(&app), AppState::FrontEnd, "switching back also stays in the front end");
+    assert_eq!(app.world().resource::<ActiveMod>().0, None);
+    assert_eq!(app.world().resource::<SelectedMod>().0, None);
+    assert_eq!(app.world().resource::<MenuScene>().view(), "base_view", "the base install's direct menu map is restored");
+    camera(&mut app);
+    assert_eq!(ship(&app).1, base_x);
+    assert!(app.world().get_entity(mod_camera).is_err());
+    assert!(app.world().get_entity(mod_ship).is_err());
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// A remount drops what was cached by name from the previous mount: the texture cache keeps misses
 /// (`None`), so a texture only the new mod has (`PA_ECFR0` of STA2 Classic) stayed "not found".
 #[test]

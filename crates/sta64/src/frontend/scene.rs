@@ -11,8 +11,8 @@
 //!
 //! # Layers
 //!
-//! - [`MenuMap`]: `map.ini` parsed (no Bevy). The built-in copy is `assets/menu/map.ini`;
-//!   a `Menu/map.ini` in the mounted install takes precedence, as in Refit.
+//! - [`MenuMap`]: SOL placements with optional Lua paths, or the INI scene recipe.
+//!   The built-in INI is `assets/menu/map.ini`.
 //! - [`Director`]: the scene's clock and state (no Bevy): the camera with its sway and
 //!   the blend between views, each ship's pose, cloak and departure, and the marks of
 //!   what happened. Deterministic in the scene's time.
@@ -27,11 +27,13 @@
 //! # For INT-M4
 //!
 //! Add [`MenuScenePlugin`] once. Insert a [`MenuSceneConfig`] when the front end opens
-//! and remove it when a match starts (the scene tears itself down). Ask for views with
+//! or switches mods. Remove it when a match starts. Ask for views with
 //! the [`MenuRequest`] message. `--headless` with `STA64_MENU_SCENE=1` runs the scene on
 //! its own for the bench and the frame tests ([`run_headless`]).
 
 #![allow(dead_code)] // the screens (INT-M4) are the plugin's users; until they land only `run_headless` is
+
+mod sol;
 
 use std::sync::Arc;
 
@@ -55,7 +57,7 @@ use crate::render::model_scene::PartCache;
 use crate::render::sprites::SpriteTables;
 use crate::render::textures::{Loader, TextureCache};
 use crate::render::units::{FromView, LocalPlayer, NeedsModel, to_bevy};
-use crate::sim_link::{ContentRes, SimEntity, SimLink};
+use crate::sim_link::{ContentRes, SimEntities, SimEntity, SimLink};
 use crate::viewer::Mounted;
 
 /// The built-in map: Refit's `render3d/content/menu/map.ini`, unchanged.
@@ -178,6 +180,13 @@ pub struct ShipDef {
     pub warp: bool,
     pub locked_at: Option<Vec3>,
     pub locked_yaw: Option<f32>,
+    path: Option<sol::Path>,
+}
+
+impl ShipDef {
+    fn position(&self, time: f32) -> Vec3 {
+        self.path.as_ref().map_or(self.at, |path| path.position(time))
+    }
 }
 
 /// `[Nebula.*]`: kept for the gas renderer (RND-05); the scene does not draw it yet.
@@ -204,6 +213,8 @@ pub struct ViewDef {
     pub orbit: f32,
     pub warp_eye: Option<Vec3>,
     pub warp_target: Option<Vec3>,
+    eye_path: Option<sol::Path>,
+    target_path: Option<sol::Path>,
 }
 
 /// The menu's map.
@@ -237,11 +248,27 @@ impl MenuMap {
         MenuMap::parse(BUILTIN_MAP)
     }
 
-    /// The install's `Menu/map.ini` when it has one, else the built-in map.
-    pub fn from_vfs(vfs: &sta_vfs::Vfs) -> MenuMap {
-        for path in ["menu/map.ini", "Menu/map.ini", "Menu/Map.ini"] {
-            if let Some(Ok(bytes)) = vfs.read(path) {
-                return MenuMap::parse(&String::from_utf8_lossy(&bytes));
+    /// Prefer the highest mount layer, with SOL before INI within that layer.
+    pub fn from_vfs(vfs: &sta_vfs::Vfs, content: &ContentDb) -> MenuMap {
+        let paths = ["menu/menu.sol", "refitscene/menu/menu.sol", "menu.sol", "menu/map.ini", "refitscene/menu/map.ini"];
+        let mut sources = Vec::new();
+        for path in paths {
+            sources.extend(vfs.resolve_all(path).into_iter().filter_map(|(layer, source)| {
+                Some((vfs.layer_index(layer)?, path, source))
+            }));
+        }
+        sources.sort_by_key(|(layer, _, _)| *layer);
+        for (layer, path, source) in sources {
+            let scene = vfs.read_from(layer, source).map_err(|error| error.to_string()).and_then(|bytes| {
+                if let Some(stem) = path.strip_suffix(".sol") {
+                    sol::load(vfs, layer, stem, &bytes, content)
+                } else {
+                    Ok(MenuMap::parse(&String::from_utf8_lossy(&bytes)))
+                }
+            });
+            match scene {
+                Ok(scene) => return scene,
+                Err(error) => warn!("menu scene: {path} in {}: {error}", vfs.layers()[layer].name()),
             }
         }
         MenuMap::builtin()
@@ -305,6 +332,7 @@ impl MenuMap {
                     warp: num(kv, "warp", 1.0) != 0.0,
                     locked_at: vec3(kv, "lockedat"),
                     locked_yaw: get(kv, "lockedyaw").and_then(|v| v.parse::<f32>().ok()).map(|d| d * DEG),
+                    path: None,
                 });
             } else if let Some(name) = named(sec, "nebula") {
                 let Some(odf) = get(kv, "odf") else { continue };
@@ -330,6 +358,8 @@ impl MenuMap {
                     orbit: num(kv, "orbit", 0.0) * DEG,
                     warp_eye: placed("warpeye"),
                     warp_target: placed("warptarget"),
+                    eye_path: None,
+                    target_path: None,
                 });
             }
         }
@@ -598,11 +628,13 @@ impl Director {
     }
 
     /// The camera of a view at `t`, with its sway: Refit's `Map::camera`.
-    fn camera(v: &ViewDef, t: f32) -> Cam {
+    fn camera(v: &ViewDef, t: f32, elapsed: f32) -> Cam {
         let w = std::f32::consts::TAU / v.sway_period;
         let s = v.sway;
         let d = Vec3::new(s.x * (w * t).sin(), s.y * (w * t * 0.73 + 1.1).sin(), s.z * (w * t * 0.51 + 2.3).sin());
-        let (mut eye, target) = (v.eye + d, v.target + d * 0.3);
+        let eye = v.eye_path.as_ref().map_or(v.eye, |path| path.position(elapsed));
+        let target = v.target_path.as_ref().map_or(v.target + (eye - v.eye), |path| path.position(elapsed));
+        let (mut eye, target) = (eye + d, target + d * 0.3);
         if v.orbit != 0.0 {
             let (sn, cs) = (v.orbit * t).sin_cos();
             let r = eye - target;
@@ -630,12 +662,12 @@ impl Director {
 
     /// The departure `tw` seconds in: each leaving ship's clock, the way out, the camera
     /// behind them and the tunnel. Refit's `Map::departure`.
-    fn departure(&self, vd: &ViewDef, tw: f32) -> Departure {
+    fn departure(&self, vd: &ViewDef, t0: f32, tw: f32) -> Departure {
         let m = &self.map;
         let g = &m.groups[vd.group];
         let wd = &m.warp;
         let going: Vec<usize> = (0..m.ships.len()).filter(|&i| m.ships[i].group == vd.group && m.ships[i].warp).collect();
-        let place = |i: usize| g.place(m.ships[i].at);
+        let place = |i: usize| g.place(m.ships[i].position(t0));
         let nose = |i: usize| {
             let yw = m.ships[i].yaw + g.yaw;
             Vec3::new(yw.sin(), 0.0, yw.cos())
@@ -685,7 +717,7 @@ impl Director {
             let cam = Cam { eye: Vec3::new(0.0, 50.0, 400.0), target: Vec3::ZERO, fov: 40.0 };
             return Frame { cam, ships: Vec::new(), tunnel: None, planet_turn: 0.0, sky_turn: 0.0 };
         };
-        let mut cam = Self::camera(vd, t);
+        let mut cam = Self::camera(vd, t, t - self.since);
         if let Some(from) = self.from {
             let k = if map.blend > 0.0 { smooth((t - self.since) / map.blend) } else { 1.0 };
             cam = from.lerp(cam, k);
@@ -695,7 +727,7 @@ impl Director {
         }
         let dep = self.warp.as_ref().map(|w| {
             let tw = t - w.t0;
-            let d = self.departure(vd, tw);
+            let d = self.departure(vd, w.t0, tw);
             let from = w.from.unwrap_or(cam);
             // Over the top as it swings, so the camera does not pass through the ships.
             let lift = Vec3::new(0.0, (d.swing * std::f32::consts::PI).sin() * 320.0, 0.0);
@@ -725,7 +757,13 @@ impl Director {
             let roll = (ph * 0.8 + 0.5).sin() * 0.02 * s.bob;
             let pitch = (ph * 0.6 + 1.3).sin() * 0.012 * s.bob;
             let own = if lk { s.locked_yaw.unwrap_or(s.yaw + g.locked_yaw) } else { s.yaw };
-            let mut pos = g.place(if lk { s.locked_at.unwrap_or(s.at) } else { s.at }) + bob;
+            let at = if lk {
+                s.locked_at.unwrap_or(s.at)
+            } else {
+                let route_time = self.warp.as_ref().filter(|_| s.warp && s.group == vd.group).map_or(t, |warp| warp.t0);
+                s.position(route_time)
+            };
+            let mut pos = g.place(at) + bob;
             let (mut stretch, mut gone) = (1.0, false);
             if let Some((d, _)) = &dep
                 && let Some(tau) = d.tau[si]
@@ -933,7 +971,7 @@ pub fn load_install_content(vfs: &sta_vfs::Vfs) -> Result<Arc<ContentDb>, String
 // The Bevy side
 // ---------------------------------------------------------------------------------
 
-/// What the scene is built from. Insert it to open the scene, remove it to close it.
+/// What the scene is built from. Insert or replace it to build the scene, remove it to close it.
 #[derive(Resource, Clone)]
 pub struct MenuSceneConfig {
     pub content: Arc<ContentDb>,
@@ -1021,7 +1059,7 @@ impl Plugin for MenuSceneCorePlugin {
         app.init_resource::<RenderMarks>()
             .init_resource::<MenuFrame>()
             .add_message::<MenuRequest>()
-            .add_systems(Update, open.in_set(GameSet::Input).run_if(resource_exists::<MenuSceneConfig>).run_if(not(resource_exists::<MenuScene>)))
+            .add_systems(Update, open.in_set(GameSet::Input).run_if(resource_exists_and_changed::<MenuSceneConfig>))
             .add_systems(Update, close.in_set(GameSet::Input).run_if(not(resource_exists::<MenuSceneConfig>)).run_if(resource_exists::<MenuScene>))
             .add_systems(Update, step.in_set(GameSet::Render).run_if(resource_exists::<MenuScene>));
     }
@@ -1051,15 +1089,17 @@ impl Plugin for MenuScenePlugin {
         }
         app.init_resource::<TextureCache>()
             .init_resource::<PartCache>()
-            .add_systems(Update, spawn_visuals.in_set(GameSet::Input).after(open).run_if(resource_added::<MenuScene>))
-            .add_systems(Update, despawn_visuals.in_set(GameSet::Input).run_if(resource_removed::<MenuScene>))
+            .add_systems(Update, (despawn_visuals, spawn_visuals).chain().in_set(GameSet::Input).after(open)
+                .run_if(resource_exists_and_changed::<MenuSceneConfig>))
+            .add_systems(Update, despawn_visuals.in_set(GameSet::Input).after(close).run_if(resource_removed::<MenuScene>))
             .add_systems(Update, stand_ins.in_set(GameSet::Interpolate).run_if(resource_exists::<MenuScene>))
             .add_systems(Update, pose.in_set(GameSet::Render).after(step).run_if(resource_exists::<MenuScene>));
     }
 }
 
 /// Build the sim of the map's ships and link it, and start the director.
-fn open(mut commands: Commands, config: Res<MenuSceneConfig>, clock: Res<AnimClock>) {
+fn open(mut commands: Commands, config: Res<MenuSceneConfig>, clock: Res<AnimClock>, mut entities: ResMut<SimEntities>) {
+    clear_ships(&mut commands, &mut entities);
     let built = build(&config.map, &config.content, &config.base);
     if !built.substituted.is_empty() {
         info!("menu scene: {} ships drawn by stand-ins (the content has no {:?}...)", built.substituted.len(), built.substituted[0].0);
@@ -1071,11 +1111,19 @@ fn open(mut commands: Commands, config: Res<MenuSceneConfig>, clock: Res<AnimClo
     commands.insert_resource(MenuScene { director, slots: built.slots, substituted: built.substituted, t0: clock.now() });
 }
 
-fn close(mut commands: Commands, mut frame: ResMut<MenuFrame>) {
+fn close(mut commands: Commands, mut frame: ResMut<MenuFrame>, mut entities: ResMut<SimEntities>) {
+    clear_ships(&mut commands, &mut entities);
     commands.remove_resource::<MenuScene>();
     commands.remove_resource::<SimLink>();
     commands.remove_resource::<ContentRes>();
     frame.0 = None;
+}
+
+fn clear_ships(commands: &mut Commands, entities: &mut SimEntities) {
+    // The next scene can reuse the sim IDs. Drop the entities and their models first.
+    for (_, entity) in std::mem::take(&mut entities.0) {
+        commands.entity(entity).try_despawn();
+    }
 }
 
 /// Per frame: the requests, the director's frame, and its marks.
@@ -1270,12 +1318,8 @@ fn planet_rotation(p: &PlanetDef, turn: f32) -> Quat {
     Quat::from_rotation_arc(Vec3::Y, pole) * Quat::from_rotation_y(turn)
 }
 
-fn despawn_visuals(mut commands: Commands, scene: Query<Entity, With<SceneEntity>>, mut seen: ResMut<crate::sim_link::SimEntities>) {
+fn despawn_visuals(mut commands: Commands, scene: Query<Entity, With<SceneEntity>>) {
     for e in &scene {
-        commands.entity(e).despawn();
-    }
-    // The ships are the link's: they go with it.
-    for (_, e) in std::mem::take(&mut seen.0) {
         commands.entity(e).try_despawn();
     }
 }
@@ -1465,7 +1509,10 @@ fn run_inner(cfg: &crate::app::LaunchConfig) -> i32 {
     });
     let (content, map, base, mounted) = match vfs {
         Some(vfs) => match load_install_content(&vfs) {
-            Ok(db) => (db, MenuMap::from_vfs(&vfs), MapDef::empty(), Some(vfs)),
+            Ok(db) => {
+                let map = MenuMap::from_vfs(&vfs, &db);
+                (db, map, MapDef::empty(), Some(vfs))
+            }
             Err(e) => {
                 eprintln!("content: {e}");
                 return 2;
@@ -1844,7 +1891,7 @@ mod tests {
         let m = std::env::var("STA64_TEST_MOD").unwrap_or_default();
         let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(m.as_str()).filter(|m| !m.is_empty())).unwrap();
         let content = load_install_content(&vfs).unwrap();
-        let menu = MenuMap::from_vfs(&vfs);
+        let menu = MenuMap::from_vfs(&vfs, &content);
         assert!(menu.view_index("main").is_some());
         let built = build(&menu, &content, &MapDef::empty());
         println!("{} ships, {} slots, stand-ins: {:?}", menu.ships.len(), built.slots.len(), built.substituted);

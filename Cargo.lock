@@ -5712,6 +5712,7 @@ dependencies = [
  "bevy",
  "image",
  "kira",
+ "mlua",
  "naga",
  "png",
  "serde_json",
