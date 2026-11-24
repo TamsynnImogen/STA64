@@ -1,0 +1,81 @@
+# Release builds (TOOL-09): a tag `v*` (or a manual run) builds sta64 in release
+# mode for four targets and packages each with packaging/package.sh. On a tag
+# the artefacts are attached to a GitHub release (draft, so a person publishes
+# it); a manual run or a PR touching the release path only uploads them as
+# workflow artefacts.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  # A PR that changes the release path builds all four (artefacts only, no release).
+  pull_request:
+    paths: [".github/workflows/release.yml", "packaging/**"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version label for the artefacts (default: short commit)"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.os }}-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest,    os: linux,   arch: x86_64,  bin: target/release/sta64 }
+          - { runner: ubuntu-24.04-arm, os: linux,   arch: aarch64, bin: target/release/sta64 }
+          - { runner: windows-latest,   os: windows, arch: x86_64,  bin: target/release/sta64.exe }
+          - { runner: macos-latest,     os: macos,   arch: aarch64, bin: target/release/sta64 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup show active-toolchain
+      - name: Linux deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: false
+      - name: Version
+        id: v
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then v="${GITHUB_REF_NAME#v}";
+          elif [[ -n "${{ github.event.inputs.version }}" ]]; then v="${{ github.event.inputs.version }}";
+          else v="$(git rev-parse --short HEAD)"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "STA64_GIT_COMMIT=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+      - name: Build
+        run: cargo build --locked --release -p sta64
+      - name: Package
+        id: pkg
+        shell: bash
+        run: echo "path=$(packaging/package.sh ${{ matrix.os }} ${{ matrix.arch }} ${{ matrix.bin }} ${{ steps.v.outputs.version }} dist)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sta64-${{ steps.v.outputs.version }}-${{ matrix.os }}-${{ matrix.arch }}
+          path: ${{ steps.pkg.outputs.path }}
+          if-no-files-found: error
+
+  release:
+    name: draft release
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Draft release with the four artefacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la dist
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --draft --title "STA64 $GITHUB_REF_NAME" --notes "Built by the release workflow from $GITHUB_SHA."
