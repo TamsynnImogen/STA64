@@ -99,14 +99,34 @@ pub(crate) struct Catalogue {
     models: HashMap<String, Option<(String, Arc<Model>)>>,
     /// The moon each resource marker is swapped for (RND-16), read from its ODFs.
     moons: crate::render::moons::MoonVariants,
+    report: Option<crate::diagnostics::Report>,
 }
 
 impl Catalogue {
+    pub(crate) fn with_report(report: crate::diagnostics::Report) -> Self {
+        Self { report: Some(report), ..Self::default() }
+    }
+
+    /// New caches for a mod switch, sharing the same local session log.
+    pub(crate) fn next_mount(&self) -> Self {
+        Self { report: self.report.clone(), ..Self::default() }
+    }
+
+    pub(crate) fn report(&self, category: &str, detail: &str) {
+        if let Some(report) = &self.report {
+            report.record(category, detail);
+        }
+    }
+
     /// The mount's content database, built on first use.
     pub(crate) fn content(&mut self, vfs: &sta_vfs::Vfs) -> Result<&SimContent, String> {
         if self.content.is_none() {
             let (index, dupes) = OdfIndex::build(vfs);
-            let (db, warnings) = ContentDb::load(vfs, &index).map_err(|e| e.to_string())?;
+            let (db, warnings) = ContentDb::load(vfs, &index).map_err(|e| {
+                let detail = e.to_string();
+                self.report("Content load failed", &detail);
+                detail
+            })?;
             info!(
                 "content: {} definitions, profile {:?}, {} warnings ({} duplicate ODFs)",
                 db.len(),
@@ -116,6 +136,11 @@ impl Catalogue {
             );
             let (races, race_warnings) = sta_content::Races::load(vfs, &index);
             info!("races: {} ({} warnings)", races.iter().map(|r| r.stem.as_str()).collect::<Vec<_>>().join(", "), race_warnings.len());
+            if let Some(report) = &self.report {
+                let mounted = vfs.layers().iter().map(|layer| layer.name()).collect::<Vec<_>>().join(" -> ");
+                let category = if mounted.is_empty() { "Content".to_owned() } else { format!("Content ({mounted})") };
+                report.record_all(&category, warnings.iter().chain(&race_warnings).map(ToString::to_string));
+            }
             self.content = Some(SimContent { db: Arc::new(db), index: Arc::new(index), races: Arc::new(races) });
         }
         Ok(self.content.as_ref().expect("just set"))
@@ -245,7 +270,7 @@ pub(crate) struct SimSide {
     pub(crate) setup: GameSetup,
     pub(crate) sim: Sim,
     /// Conversion and spawn warnings together.
-    pub(crate) warnings: usize,
+    pub(crate) warnings: Vec<sta_content::Warning>,
     /// A skirmish's computer players, for the link to think after each tick.
     pub(crate) controllers: Vec<Box<dyn sta_sim::setup::Controller>>,
     /// A skirmish's local race, or why the skirmish could not be set up.
@@ -298,7 +323,8 @@ pub(crate) fn build_mission_sim(
     let (sim, spawn_warnings) = Sim::from_setup_with_warnings(&setup);
     let mission = launch.attach(&setup, &sim).map(|handle| MissionSide { local: launch.local_race(&setup, races), handle });
     let controllers = mission.as_ref().map(|m| vec![m.handle.controller()]).unwrap_or_default();
-    SimSide { warnings: converted.warnings.len() + spawn_warnings.len(), setup, sim, controllers, skirmish: None, mission: Some(mission) }
+    let warnings = converted.warnings.into_iter().chain(spawn_warnings).collect();
+    SimSide { warnings, setup, sim, controllers, skirmish: None, mission: Some(mission) }
 }
 
 /// The sim of a map: the map view's (`skirmish: None`: one idle seat per owner or
@@ -341,7 +367,8 @@ pub(crate) fn build_sim(
     for w in converted.warnings.iter().chain(&spawn_warnings).take(20) {
         debug!("{}: {}", w.file, w.message);
     }
-    SimSide { warnings: converted.warnings.len() + spawn_warnings.len(), setup, sim, controllers, skirmish: plan, mission: None }
+    let warnings = converted.warnings.into_iter().chain(spawn_warnings).collect();
+    SimSide { warnings, setup, sim, controllers, skirmish: plan, mission: None }
 }
 
 /// The setup screen already resolved every participant, team and option.
@@ -357,7 +384,7 @@ fn build_instant_action(map: MapDef, content: Arc<ContentDb>, races: &sta_conten
         local: crate::game::local_race(races, race),
         summary: format!("instant action: {} map seats, {}", setup.players.len(), selected.local.map_or_else(|| "observing".into(), |id| format!("playing seat {}", id.0))),
     }));
-    SimSide { setup, sim, warnings: warnings.len(), controllers, skirmish, mission: None }
+    SimSide { setup, sim, warnings, controllers, skirmish, mission: None }
 }
 
 /// The seats of a map: every owner and start slot, and the one the client plays.
@@ -938,6 +965,7 @@ fn rebuild(
     let bytes = match crate::editor::read_map(&vfs.0, &path) {
         Ok(bytes) => bytes,
         Err(e) => {
+            catalogue.report("Cannot open map", &format!("{path}: {e}"));
             browser.info = format!("{header}\n{e}");
             return;
         }
@@ -945,6 +973,7 @@ fn rebuild(
     let map = match sta_bzn::parse(&bytes) {
         Ok(map) => map,
         Err(e) => {
+            catalogue.report("Cannot read map", &format!("{path}: {e}"));
             browser.info = format!("{header}\n{e}");
             return;
         }
@@ -970,11 +999,11 @@ fn rebuild(
     let content = with_map_tech_tree(content, &vfs.0, &map.tech_tree_file, &name, net_match.is_some());
     let side = match net_match.take() {
         Some(nm) => {
-            let own = MapDef::convert_bzn_named_in(&map, &name, &content, &vfs.0, &index).map;
-            match crate::game::net_match::build_side(&nm, own, &races) {
+            let converted = MapDef::convert_bzn_named_in(&map, &name, &content, &vfs.0, &index);
+            match crate::game::net_match::build_side(&nm, converted.map, &races) {
                 Ok(n) => {
                     net_match = Some(nm);
-                    Some(SimSide { warnings: 0, setup: n.setup, sim: n.sim, controllers: n.controllers, skirmish: Some(Ok(n.seats)), mission: None })
+                    Some(SimSide { warnings: converted.warnings, setup: n.setup, sim: n.sim, controllers: n.controllers, skirmish: Some(Ok(n.seats)), mission: None })
                 }
                 Err(why) => {
                     warn!("net match refused: {why}");
@@ -992,11 +1021,14 @@ fn rebuild(
         (None, None, Some(active)) => {
             let converted = MapDef::convert_bzn_named_in(&map, &name, &content, &vfs.0, &index);
             let mut side = build_instant_action(converted.map, content.clone(), &races, active);
-            side.warnings += converted.warnings.len();
+            side.warnings.extend(converted.warnings);
             side
         }
         (None, None, None) => build_sim(&map, &name, &content, &index, &vfs.0, seat.0, skirmish_cfg.as_deref().map(|c| (c, &*races))),
     };
+    if let Some(report) = &catalogue.report {
+        report.record_all(&format!("Map {name}"), sim_warnings.iter().map(ToString::to_string));
+    }
     let mut skirmish_note = None;
     let mut played_race = None;
     let is_match = matches!(skirmish, Some(Ok(_)));
@@ -1626,7 +1658,7 @@ fn rebuild(
         ghosts,
         content.len(),
         content.profile(),
-        sim_warnings
+        sim_warnings.len()
     ));
     if let Some(n) = skirmish_note {
         info.push_str(&format!("\n{n}"));
@@ -2086,7 +2118,7 @@ mod tests {
                 }
             }
             let units = sim.view().units.len();
-            println!("{path}: {units} sim units, {found}/{wanted} objects linked, {} unlinked, {} seats, {warnings} warnings", placed.rest().len(), setup.players.len());
+            println!("{path}: {units} sim units, {found}/{wanted} objects linked, {} unlinked, {} seats, {} warnings", placed.rest().len(), setup.players.len(), warnings.len());
             assert_eq!(found, setup.map.objects.len(), "{path}: every placed object finds its entity ({wanted} had a unit definition, the rest became regions or scenery)");
             maps += 1;
 

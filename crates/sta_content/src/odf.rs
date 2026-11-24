@@ -348,7 +348,12 @@ fn load_with_a1(profile: Profile, mod_overrides: &Overrides, stems: &[String], l
         let odf = match resolve_for_profile(&key, profile, loader) {
             Ok(o) => Some(Arc::new(o)),
             Err(e) => {
-                warn.push(Warning::new(format!("{key}.odf"), e.to_string()));
+                let detail = match e {
+                    sta_odf::OdfError::IncludeNotFound(ref missing) if stem(missing) != key =>
+                        format!("#include {missing:?} not found. This definition was skipped."),
+                    _ => e.to_string(),
+                };
+                warn.push(Warning::new(format!("{key}.odf"), detail));
                 None
             }
         };
@@ -393,12 +398,24 @@ fn load_with_a1(profile: Profile, mod_overrides: &Overrides, stems: &[String], l
     for (s, odf) in &weapons {
         let ord = odf.str("ordName").map(str::trim).filter(|o| !o.is_empty()).and_then(|o| {
             let found = get(o, &mut warnings, loader);
-            if found.is_none() {
-                warnings.push(Warning::new(format!("{s}.odf"), format!("ordName {o} has no ODF")));
+            if found.is_none() && !o.eq_ignore_ascii_case("null") {
+                warnings.push(Warning::new(format!("{s}.odf"), format!("Ordnance ODF unavailable: {}.odf (ordName)", stem(o))));
             }
             found
         });
         let (mut def, arc) = crate::weapon::weapon_def(s, odf, ord.as_deref(), &mut warnings);
+        if let Some(replace) = &def.replace {
+            for (i, entry) in replace.entries.iter().enumerate() {
+                for (j, class) in entry.classes.iter().enumerate() {
+                    if class.odf.is_empty() || class.odf == "null" { continue; }
+                    if let Err(e) = resolve_for_profile(&class.odf, profile, loader) {
+                        warnings.push(Warning::new(format!("{s}.odf"), format!(
+                            "Replacement ODF unavailable: {}.odf (replacement{i}class{j}). {e}", class.odf,
+                        )));
+                    }
+                }
+            }
+        }
         def.features = Some(features_of(&format!("{s}.odf"), odf, &Overrides::default(), &mut warnings));
         lookups.share(&mut def.base);
         weapon_arcs.insert(stem(s), arc);
@@ -425,10 +442,17 @@ fn load_with_a1(profile: Profile, mod_overrides: &Overrides, stems: &[String], l
         // The explosion ODF a unit names (`fireball`) carries the sound of its death
         // (`explSound`, as stock `fireballexplode` / `rumbleexplode` ODFs set it).
         // Presentation only: sounds are not part of the content digest.
-        if let Some(f) = def.fx.explosion.clone().filter(|f| !f.trim().is_empty())
-            && let Ok(e) = resolve_for_profile(&stem(f.trim()), profile, loader)
-        {
-            def.sounds.explode = e.str("explSound").map(|v| v.trim().to_owned()).filter(|v| !v.is_empty());
+        if let Some(f) = def.fx.explosion.as_deref().map(str::trim).filter(|f| !f.is_empty()) {
+            let target = stem(f);
+            match resolve_for_profile(&target, profile, loader) {
+                Ok(e) => def.sounds.explode = e.str("explSound").map(|v| v.trim().to_owned()).filter(|v| !v.is_empty()),
+                // Native content can name an explosion effect directly.
+                Err(e) if !f.eq_ignore_ascii_case("null") && (profile != Profile::Native
+                    || f.rsplit_once('.').is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("odf"))) => warnings.push(Warning::new(format!("{s}.odf"), format!(
+                    "Explosion ODF unavailable: {target}.odf (fireball). {e}",
+                ))),
+                Err(_) => {}
+            }
         }
         // CON-52: Armada I's Borg spin keys, from the craft's own physics file.
         if profile == Profile::Sta1Classic
@@ -684,13 +708,36 @@ mod tests {
             ("silent.odf", "classLabel = \"fireballexplode\"\n"),
         ];
         let stems: Vec<String> = ["ship", "quiet", "lost"].map(String::from).to_vec();
-        let (db, _) = load_with(Profile::Fo4, &Overrides::default(), &stems, &mut |name, _| {
+        let (db, warnings) = load_with(Profile::Fo4, &Overrides::default(), &stems, &mut |name, _| {
             files.iter().find(|(file, _)| file.eq_ignore_ascii_case(name)).map(|(_, text)| (*text).to_owned())
         }).unwrap();
         let explode = |n: &str| db.unit(db.key(n).unwrap()).unwrap().sounds.explode.clone();
         assert_eq!(explode("ship").as_deref(), Some("big_bang.wav"));
         assert_eq!(explode("quiet"), None);
         assert_eq!(explode("lost"), None);
+        assert!(warnings.iter().any(|w| w.file == "lost.odf" && w.message.contains("fireball") && w.message.contains("nowhere.odf")), "{warnings:?}");
+    }
+
+    #[test]
+    fn missing_resolved_references_name_owner_command_and_target() {
+        let files = [
+            ("ship.odf", "classLabel = craft\n#include \"lost_base.odf\"\n"),
+            ("gun.odf", "classLabel = cannon\nordName = \"lost_ord.odf\"\n"),
+            ("swap.odf", "classLabel = replaceweapon\nreplacement0class0 = \"lost_unit.odf\"\nreplacement0class1 = \"\"\n"),
+        ];
+        let stems = ["ship", "gun", "swap"].map(str::to_owned);
+        let (db, warnings) = load_with(Profile::Fo4, &Overrides::default(), &stems, &mut |name, version| {
+            (version == 0).then(|| files.iter().find(|(file, _)| file.eq_ignore_ascii_case(name)).map(|(_, text)| (*text).to_owned())).flatten()
+        }).unwrap();
+        let has = |file: &str, command: &str, target: &str| warnings.iter().any(|w| {
+            w.file == file && w.message.contains(command) && w.message.contains(target)
+        });
+        assert!(has("ship.odf", "#include", "lost_base.odf"), "{warnings:?}");
+        assert!(has("gun.odf", "ordName", "lost_ord.odf"), "{warnings:?}");
+        assert!(has("swap.odf", "replacement0class0", "lost_unit.odf"), "{warnings:?}");
+        assert!(!warnings.iter().any(|w| w.message.contains("replacement0class1")), "{warnings:?}");
+        assert!(db.key("ship").is_none());
+        assert!(db.key("gun").is_some() && db.key("swap").is_some());
     }
 
     #[test]
