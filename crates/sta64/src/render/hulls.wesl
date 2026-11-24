@@ -34,7 +34,7 @@ struct HullParams {
     map: vec4<f32>,   // x: 1 with a specular map; y: 1 with an emissive map
     mhl: vec4<f32>,   // the highlight of a part with a specular map: colour and exponent (zero: none)
     emission_a: vec4<f32>,
-    emission_b: vec4<f32>,
+    emission_b: vec4<f32>, // xy: sensors and weapons; zw: warp and impulse bloom boost
 };
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> k: HullParams;
@@ -233,16 +233,23 @@ fn shade(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>, sm: vec3<f32>, em: vec3<f32>
 }
 
 // A2FO's channels use the brightest component, with intensity applied to display bytes.
-fn mapped_emission(uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec3<f32> {
+fn mapped_emission(uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, bloom: bool) -> vec3<f32> {
     let gains = array<f32,6>(k.emission_a.x, k.emission_a.y, k.emission_a.z, k.emission_a.w, k.emission_b.x, k.emission_b.y);
     var emission = vec3<f32>(0.0);
+    var engine_halo = vec3<f32>(0.0);
     for (var layer = 0; layer < 6; layer++) {
         if gains[layer] > 0.0 {
             let texel = textureSampleGrad(emit_map, emit_sampler, uv, layer, dx, dy).rgb;
-            emission = max(emission, to_srgb(texel) * gains[layer]);
+            let display = to_srgb(texel) * gains[layer];
+            emission = max(emission, display);
+            if bloom && layer < 2 && k.emission_b[layer + 2] > 0.0 {
+                // Keep the extra energy after display clipping, even for a saturated texel.
+                let engine = from_srgb(min(display, vec3<f32>(1.0)));
+                engine_halo = max(engine_halo, engine * (1.0 + k.emission_b[layer + 2]));
+            }
         }
     }
-    return from_srgb(min(emission, vec3<f32>(1.0)));
+    return max(from_srgb(min(emission, vec3<f32>(1.0))), engine_halo);
 }
 
 // The camera's private bloom source. Share UVs, alpha coverage and live
@@ -257,7 +264,8 @@ fn emissive_mask(i: FragIn) -> @location(0) vec4<f32> {
     if k.cut.x > 0.5 && alpha < 0.5 {
         discard;
     }
-    return vec4<f32>(mapped_emission(uv, dx, dy), 1.0);
+    // Encode 0..3 linear light for the 10-bit mask. The downsample pass decodes it.
+    return vec4<f32>(mapped_emission(uv, dx, dy, true) / 3.0, 1.0);
 }
 
 @fragment
@@ -278,7 +286,7 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     let du2 = dpdy(uv);
     var em = vec3<f32>(0.0);
     if k.map.y > 0.5 {
-        em = mapped_emission(uv, du1, du2);
+        em = mapped_emission(uv, du1, du2, false);
     }
     if k.cut.x > 0.5 && t.a < 0.5 {
         discard;

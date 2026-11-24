@@ -109,7 +109,7 @@ fn extract(
             .extend(materials.iter().filter_map(|(id, material)| {
                 (material.emissive_map.is_some()
                     && (material.params.emission_a.max_element() > 0.0
-                        || material.params.emission_b.max_element() > 0.0))
+                        || material.params.emission_b.x.max(material.params.emission_b.y) > 0.0))
                     .then_some((id.untyped(), material.double_sided))
             }));
     }
