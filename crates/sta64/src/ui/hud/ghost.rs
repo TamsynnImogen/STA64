@@ -431,6 +431,7 @@ pub fn update_ghost(
 
 /// Give the ghost's model translucent materials of its own (the model's parts
 /// share theirs with real units) and keep them tinted by the site's status.
+#[allow(clippy::too_many_arguments)]
 pub fn tint_ghost(
     mut commands: Commands,
     mut ghosts: Query<(Entity, &mut Ghost, Option<&PinnedBlueprint>)>,
@@ -439,6 +440,7 @@ pub fn tint_ghost(
     hull_sources: Query<&HullSource>,
     footprints: Query<(), With<FootprintGrid>>,
     assets: Option<ResMut<Assets<StandardMaterial>>>,
+    sprites: crate::render::sprites::material::SpriteDemotion,
 ) {
     let Some(mut assets) = assets else { return };
     for (root, mut g, pinned) in &mut ghosts {
@@ -456,6 +458,13 @@ pub fn tint_ghost(
                         .remove::<MeshMaterial3d<HullMaterial>>()
                         .insert(MeshMaterial3d(own.clone()));
                 }
+                continue;
+            }
+            // A sprite node on its shared look (ADR 0009 S4): its copy is the private material its
+            // own would be now, painted below with the rest.
+            if let Some(own) = sprites.demote(&mut commands, &mut assets, d) {
+                g.own.push((d, own));
+                new_parts = true;
                 continue;
             }
             let source = hull_sources.get(d).ok().map(|h| h.source.clone());

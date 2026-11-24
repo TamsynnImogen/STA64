@@ -165,10 +165,11 @@ impl UnitFade {
 #[derive(Component, Debug, Clone, Copy)]
 pub struct ManualFade;
 
-/// Original handle of a material this module replaced with a per-unit clone.
+/// Original handle of a material this module replaced with a per-unit clone; `None` for a sprite
+/// node demoted from its shared look (ADR 0009 S4), which goes back to that look.
 #[derive(Component)]
 pub(crate) struct FadeMat {
-    pub(crate) orig: Handle<StandardMaterial>,
+    pub(crate) orig: Option<Handle<StandardMaterial>>,
 }
 
 #[derive(Resource, Default)]
@@ -1147,15 +1148,36 @@ pub(crate) fn apply_fade(
     roots: Query<(Entity, &UnitFade), Changed<UnitFade>>,
     children: Query<&Children>,
     mut meshes: Query<(&mut MeshMaterial3d<StandardMaterial>, Option<&FadeMat>)>,
+    mut sprites: crate::render::sprites::material::SpriteDemotion,
 ) {
     let Some(mut mats) = mats else { return };
+    let edit = |mat: &mut StandardMaterial, a: f32| {
+        mat.base_color = mat.base_color.with_alpha(a);
+        mat.alpha_mode = AlphaMode::Blend;
+    };
     for (root, fade) in &roots {
         let a = fade.alpha();
         for d in children.iter_descendants(root) {
+            // A sprite node on its shared look (ADR 0009 S4) first gets the private material its
+            // own would be now; the edit then runs on that copy, as on any other part's.
+            if a < 1.0
+                && let Some(copy) = sprites.demote(&mut cmds, &mut mats, d)
+            {
+                if let Some(mut mat) = mats.get_mut(&copy) {
+                    edit(&mut mat, a);
+                }
+                cmds.entity(d).try_insert(FadeMat { orig: None });
+                continue;
+            }
             let Ok((mut m, saved)) = meshes.get_mut(d) else { continue };
             if a >= 1.0 {
                 if let Some(s) = saved {
-                    m.0 = s.orig.clone();
+                    match &s.orig {
+                        Some(orig) => m.0 = orig.clone(),
+                        None => {
+                            sprites.restore(&mut cmds, d);
+                        }
+                    }
                     cmds.entity(d).try_remove::<FadeMat>();
                 }
                 continue;
@@ -1163,11 +1185,10 @@ pub(crate) fn apply_fade(
             if saved.is_none() {
                 let Some(copy) = mats.get(&m.0).cloned() else { continue };
                 let orig = std::mem::replace(&mut m.0, mats.add(copy));
-                cmds.entity(d).try_insert(FadeMat { orig });
+                cmds.entity(d).try_insert(FadeMat { orig: Some(orig) });
             }
             if let Some(mut mat) = mats.get_mut(&m.0) {
-                mat.base_color = mat.base_color.with_alpha(a);
-                mat.alpha_mode = AlphaMode::Blend;
+                edit(&mut mat, a);
             }
         }
     }

@@ -1,7 +1,14 @@
 //! The sprite nodes' animation: [`super::animate`] against [`animate_reference`], a verbatim copy of
-//! it kept for the tests, which any later change of how a node's colour reaches the screen is held to.
+//! `main`'s, which any later change of how a node's colour reaches the screen is held to; and the
+//! adopted nodes of ADR 0009 (slots, looks, demotion for the cloak and build fade and the ghost)
+//! against the same reference, without rendering.
+use super::material::{self, SpriteMaterial, SpriteSlots, SpriteState};
 use super::*;
 use crate::clock::{AnimClock, ClockMode};
+use crate::render::fx::specials::{UnitFade, apply_fade};
+use crate::ui::hud::ghost::{Ghost, tint_ghost};
+use bevy::mesh::MeshTag;
+use bevy::render::storage::ShaderBuffer;
 use sta_assets::a2fmt::spr::SpriteTable;
 
 /// An invented table: flipbook and colour-cycling sprites, a blinking node, a still one.
@@ -27,6 +34,8 @@ cut_b tex_b 0 32 32 32\n\
 @sprite_node adB ad_b const (2,2) (1,0.8,0.2) billboard\n\
 @sprite_node cutA cut_a const (3,3) (0.9,0.9,0.9)\n\
 @sprite_node cutB cut_b pulse (3,3) (0.5,1,1)\n\
+@sprite_node blinkGlow glow strobe (1,1) (1,1,1) billboard\n\
+@sprite_node stillGlow glow const (2,2) (0.5,0.5,0.5) billboard\n\
 @animation pulse\ncolour 2 1.0 linear\n@keyframes\n0.0 (1,0.25,0.5)\n0.5 (0.25,0.5,1)\n\
 @animation strobe\ndraw 2 2.0 step\n@keyframes\n0.0 1\n0.3 0\n\
 @animation flip4\noffset 4 1.0 step\n@auto=row\n@keyframes\n";
@@ -240,4 +249,379 @@ fn the_map_specials_and_hud_plugins_build_one_update_schedule_without_an_orderin
 fn the_schedule_check_sees_an_ordering_cycle_against_each_explicit_order() {
     assert!(build_game_update_schedule(Some("apply_fade")).is_err());
     assert!(build_game_update_schedule(Some("tint_ghost")).is_err());
+}
+
+/// An app with the game's animation, cloak and build fade and ghost tint, without rendering. With
+/// `adopting`, sprite nodes are adopted as in the game (the assets, the slots, the observers) and
+/// animated by [`animate`]; without, they keep their own materials, animated by [`animate_reference`].
+fn game_app(adopting: bool) -> App {
+    let mut app = App::new();
+    app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()))
+        .init_asset::<StandardMaterial>()
+        .init_asset::<SpriteMaterial>()
+        .init_asset::<ShaderBuffer>()
+        .insert_resource(table())
+        .insert_resource(AnimClock::new(ClockMode::Bench { step: 0.173 }, 0));
+    if adopting {
+        // Small, so the nodes below grow it.
+        let slots = SpriteSlots::with_capacity(&mut app.world_mut().resource_mut::<Assets<ShaderBuffer>>(), 4);
+        app.insert_resource(slots);
+        material::adoption(&mut app);
+        app.add_systems(Update, (animate, apply_fade, tint_ghost).chain());
+    } else {
+        app.add_systems(Update, (animate_reference, apply_fade, tint_ghost).chain());
+    }
+    app
+}
+
+/// A sprite node as `model_scene::spawn_sprite_node` makes it (no texture), under `parent`.
+fn spawn_node(app: &mut App, node: &str, parent: Option<Entity>) -> Entity {
+    let (m, mut fx, _) = material_of(&table(), node);
+    let h = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(m);
+    fx.material = h.clone();
+    let mut e = app.world_mut().spawn((fx, MeshMaterial3d(h), Visibility::default()));
+    if let Some(p) = parent {
+        e.insert(ChildOf(p));
+    }
+    e.id()
+}
+
+/// A material field by field. `Debug` prints every field, floats in their shortest exact form, so two
+/// equal strings are bit-equal materials (no texture handles here: the nodes have none).
+fn fields(m: &StandardMaterial) -> String {
+    format!("{m:?}")
+}
+
+/// The reference node's own material.
+fn own_material(app: &App, e: Entity) -> StandardMaterial {
+    let h = &app.world().get::<MeshMaterial3d<StandardMaterial>>(e).expect("the reference node's material").0;
+    app.world().resource::<Assets<StandardMaterial>>().get(h).unwrap().clone()
+}
+
+fn slot_of(app: &App, e: Entity) -> [u32; 4] {
+    let tag = app.world().get::<MeshTag>(e).expect("an adopted node's tag");
+    let colour = app.world().resource::<SpriteSlots>().read(app.world().resource::<Assets<ShaderBuffer>>(), tag).unwrap();
+    colour.map(f32::to_bits)
+}
+
+fn linear_bits(c: Color) -> [u32; 4] {
+    material::linear(c).map(f32::to_bits)
+}
+
+/// What node `en` of the adopting app draws equals what node `eo` of the reference app draws: through
+/// a private material, the same material field by field; through a look, the reference's colour in
+/// its slot (bit-equal to Bevy's conversion of it) and the look equal to the reference's material in
+/// everything else.
+fn assert_drawn_equal(old: &App, eo: Entity, new: &App, en: Entity, what: &str) {
+    let mo = own_material(old, eo);
+    if let Some(private) = new.world().get::<MeshMaterial3d<StandardMaterial>>(en) {
+        let mn = new.world().resource::<Assets<StandardMaterial>>().get(&private.0).unwrap();
+        assert_eq!(fields(mn), fields(&mo), "{what}: private material");
+        return;
+    }
+    let look = &new.world().get::<MeshMaterial3d<SpriteMaterial>>(en).expect("on a look or demoted").0;
+    let look = new.world().resource::<Assets<SpriteMaterial>>().get(look).unwrap();
+    assert_eq!(slot_of(new, en), linear_bits(mo.base_color), "{what}: slot");
+    assert_eq!(fields(&StandardMaterial { base_color: mo.base_color, ..look.base.clone() }), fields(&mo), "{what}: look");
+}
+
+/// ADR 0009 step 2 gate (CPU parity): at every frame, an adopted node's slot is bit-equal to Bevy's
+/// conversion of the colour the reference writes into the node's own material, a shown node draws
+/// through its look whose uv is the reference's, and the material a demotion would build equals the
+/// reference's own material field by field, shown or not.
+#[test]
+fn an_adopted_nodes_slot_look_and_demoted_material_equal_the_reference_at_every_frame() {
+    let (mut old, mut new) = (game_app(false), game_app(true));
+    let (po, pn) = (spawn_puffs(&mut old), spawn_puffs(&mut new));
+    assert_eq!(new.world().resource::<SpriteSlots>().live(), PUFFS as u32, "every node holds a slot from its spawn on");
+    let mut shown = 0;
+    for n in 0..60 {
+        set_frame(&mut old, &po, n);
+        set_frame(&mut new, &pn, n);
+        old.update();
+        new.update();
+        for i in 0..PUFFS {
+            let what = format!("node {i} at frame {n}");
+            let vis = old.world().get::<Visibility>(po[i]);
+            assert_eq!(vis, new.world().get::<Visibility>(pn[i]), "{what}: visibility");
+            let mo = own_material(&old, po[i]);
+            let st = new.world().get::<SpriteState>(pn[i]).expect("adopted");
+            assert_eq!(slot_of(&new, pn[i]), linear_bits(mo.base_color), "{what}: slot");
+            let demoted = material::demoted(st, new.world().resource::<Assets<SpriteMaterial>>()).unwrap();
+            assert_eq!(fields(&demoted), fields(&mo), "{what}: demoted material");
+            if vis != Some(&Visibility::Hidden) {
+                assert_eq!(new.world().get::<MeshMaterial3d<SpriteMaterial>>(pn[i]).map(|m| m.0.id()), Some(st.look.id()), "{what}: drawn through its look");
+                assert_drawn_equal(&old, po[i], &new, pn[i], &what);
+                shown += 1;
+            }
+        }
+    }
+    assert!(shown > 500, "{shown} comparisons");
+    // The nodes share their sprites' looks: two sprites, two materials.
+    assert_eq!(new.world().resource::<Assets<SpriteMaterial>>().len(), 2);
+}
+
+/// Modified events per frame, by asset type.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+struct Modified {
+    standard: usize,
+    sprite: usize,
+    buffer: usize,
+}
+
+fn count_modified(
+    mut counts: ResMut<Modified>,
+    mut standard: MessageReader<AssetEvent<StandardMaterial>>,
+    mut sprite: MessageReader<AssetEvent<SpriteMaterial>>,
+    mut buffer: MessageReader<AssetEvent<ShaderBuffer>>,
+) {
+    *counts = Modified {
+        standard: standard.read().filter(|e| matches!(e, AssetEvent::Modified { .. })).count(),
+        sprite: sprite.read().filter(|e| matches!(e, AssetEvent::Modified { .. })).count(),
+        buffer: buffer.read().filter(|e| matches!(e, AssetEvent::Modified { .. })).count(),
+    };
+}
+
+/// ADR 0009 step 2 gate (CPU guard): once adopted, cycling colours, fades and a flipbook modify no
+/// `StandardMaterial`, and `SpriteMaterial`s at most once per look per frame; the colours go into the
+/// slot buffer. A write that went through to a material shows here as a `StandardMaterial` event or
+/// one `SpriteMaterial` event too many.
+#[test]
+fn in_steady_state_sprite_nodes_modify_no_standard_material_and_each_look_at_most_once_a_frame() {
+    let mut app = game_app(true);
+    app.init_resource::<Modified>().add_systems(Last, count_modified);
+    let puffs = spawn_puffs(&mut app);
+    for n in 0..3 {
+        set_frame(&mut app, &puffs, n);
+        app.update();
+    }
+    let looks = app.world().resource::<Assets<SpriteMaterial>>().len();
+    let mut total = Modified::default();
+    for n in 3..63 {
+        set_frame(&mut app, &puffs, n);
+        app.update();
+        let m = *app.world().resource::<Modified>();
+        assert_eq!(m.standard, 0, "frame {n}: StandardMaterial modified");
+        assert!(m.sprite <= looks, "frame {n}: {} SpriteMaterial events for {looks} looks", m.sprite);
+        total.standard += m.standard;
+        total.sprite += m.sprite;
+        total.buffer += m.buffer;
+    }
+    // The guard watched something: the flipbook's look moved and the colours went into the slots.
+    assert!(total.sprite > 0 && total.buffer > 0, "{total:?}");
+}
+
+/// ADR 0009 step 2 gate: the cloak and build fade and the placement ghost give adopted nodes copies
+/// equal to `main`'s field by field, frame by frame: also for a node blinking off (so holding its
+/// last shown colour) when the cloak begins, and after the fade ends, when the nodes are back on
+/// their looks with their slots rewritten. A node's tag is the same through demotion and restore.
+#[test]
+fn fade_and_ghost_copies_of_adopted_nodes_equal_mains_field_by_field() {
+    let (mut old, mut new) = (game_app(false), game_app(true));
+    let family = |app: &mut App| {
+        let unit = app.world_mut().spawn((UnitFade { cloak: 1.0, build: 1.0 }, Visibility::default())).id();
+        let unit_nodes: Vec<Entity> = NODES.iter().map(|n| spawn_node(app, n, Some(unit))).collect();
+        let ghost = app.world_mut().spawn((Ghost::pinned(sta_sim::ContentKey::NONE), Visibility::default())).id();
+        let ghost_nodes: Vec<Entity> = NODES.iter().map(|n| spawn_node(app, n, Some(ghost))).collect();
+        (unit, unit_nodes, ghost_nodes)
+    };
+    let (uo, uno, gno) = family(&mut old);
+    let (un, unn, gnn) = family(&mut new);
+    let blink = NODES.iter().position(|&n| n == "blink").unwrap();
+    let tags: Vec<MeshTag> = unn.iter().map(|&e| new.world().get::<MeshTag>(e).unwrap().clone()).collect();
+    // Cloak from the frame after the blinking node is first seen off (it stays off for several
+    // frames), fade on, decloak, then cloak once more.
+    let after_start = [0.5, 0.4, 0.3, 0.3, 0.2, 1.0, 1.0, 1.0, 0.6, 0.7, 1.0];
+    let mut began = None;
+    let mut seen_off = false;
+    let mut demoted_frames = 0;
+    for n in 0..80 {
+        let cloak = match began {
+            None if seen_off => {
+                began = Some(n);
+                after_start[0]
+            }
+            None => 1.0,
+            Some(b) => after_start.get(n - b).copied().unwrap_or(1.0),
+        };
+        if old.world().get::<UnitFade>(uo).unwrap().cloak != cloak {
+            old.world_mut().get_mut::<UnitFade>(uo).unwrap().cloak = cloak;
+            new.world_mut().get_mut::<UnitFade>(un).unwrap().cloak = cloak;
+        }
+        old.world_mut().resource_mut::<AnimClock>().advance_idle(0.0);
+        new.world_mut().resource_mut::<AnimClock>().advance_idle(0.0);
+        old.update();
+        new.update();
+        if began == Some(n) {
+            assert_eq!(old.world().get::<Visibility>(uno[blink]), Some(&Visibility::Hidden), "the blinking node is off when the cloak begins");
+        }
+        seen_off |= old.world().get::<Visibility>(uno[blink]) == Some(&Visibility::Hidden);
+        for (i, (&eo, &en)) in uno.iter().zip(&unn).enumerate() {
+            let what = format!("unit node {i} at frame {n}");
+            assert_eq!(old.world().get::<Visibility>(eo), new.world().get::<Visibility>(en), "{what}: visibility");
+            assert_eq!(new.world().get::<MeshTag>(en), Some(&tags[i]), "{what}: tag");
+            if cloak < 1.0 {
+                assert!(new.world().get::<MeshMaterial3d<StandardMaterial>>(en).is_some(), "{what}: demoted");
+                assert_drawn_equal(&old, eo, &new, en, &what);
+                demoted_frames += 1;
+            } else {
+                assert!(new.world().get::<MeshMaterial3d<SpriteMaterial>>(en).is_some(), "{what}: on its look");
+                if old.world().get::<Visibility>(eo) != Some(&Visibility::Hidden) {
+                    assert_drawn_equal(&old, eo, &new, en, &what);
+                }
+            }
+        }
+        for (i, (&eo, &en)) in gno.iter().zip(&gnn).enumerate() {
+            assert!(new.world().get::<MeshMaterial3d<StandardMaterial>>(en).is_some(), "ghost node {i} at frame {n}: demoted");
+            assert_drawn_equal(&old, eo, &new, en, &format!("ghost node {i} at frame {n}"));
+        }
+    }
+    assert!(began.is_some() && demoted_frames >= 7 * NODES.len(), "the cloak ran ({began:?}, {demoted_frames})");
+    // The ghost's and the unit's nodes hold their slots; nothing leaked.
+    assert_eq!(new.world().resource::<SpriteSlots>().live(), 2 * NODES.len() as u32);
+}
+
+/// Marks the node [`spawn_late`] spawned.
+#[derive(Component)]
+struct Late;
+
+/// At which update [`spawn_late`] spawns.
+#[derive(Resource)]
+struct LateAt(usize);
+
+/// Spawn a flipbook node after the animation, as a unit's model can be spawned after `animate` has
+/// run in the game.
+fn spawn_late(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>, at: Res<LateAt>, mut frame: Local<usize>) {
+    *frame += 1;
+    if *frame == at.0 {
+        let (m, mut fx, _) = material_of(&table(), "puffA");
+        let h = materials.add(m);
+        fx.material = h.clone();
+        commands.spawn((fx, MeshMaterial3d(h), Visibility::default(), Late));
+    }
+}
+
+/// A node spawned after `animate` is drawn that frame with the uv it was spawned with, as its own
+/// material is on `main`; on the adopted path that is a private copy of its look while the look's
+/// flipbook has moved on, and the node joins the look at its next shown frame.
+#[test]
+fn a_node_spawned_after_the_animation_draws_its_spawn_uv_then_joins_its_look() {
+    let (mut old, mut new) = (game_app(false), game_app(true));
+    let (po, pn) = (spawn_puffs(&mut old), spawn_puffs(&mut new));
+    // An update at which the glow's flipbook is away from its first cell.
+    let at = 3;
+    for app in [&mut old, &mut new] {
+        app.insert_resource(LateAt(at)).add_systems(Update, spawn_late.after(tint_ghost));
+    }
+    let late = |app: &mut App| app.world_mut().query_filtered::<Entity, With<Late>>().iter(app.world()).next();
+    for n in 0..8 {
+        set_frame(&mut old, &po, n);
+        set_frame(&mut new, &pn, n);
+        old.update();
+        new.update();
+        let (Some(eo), Some(en)) = (late(&mut old), late(&mut new)) else { continue };
+        let st = new.world().get::<SpriteState>(en).unwrap();
+        let drawn = new.world().get::<MeshMaterial3d<SpriteMaterial>>(en).unwrap().0.id();
+        let shown = old.world().get::<Visibility>(eo) != Some(&Visibility::Hidden);
+        if n + 1 == at {
+            assert_ne!(drawn, st.look.id(), "spawned after the animation, on a private copy");
+        } else if shown {
+            assert_eq!(drawn, st.look.id(), "frame {n}: on its look");
+        }
+        if shown {
+            assert_drawn_equal(&old, eo, &new, en, &format!("late node at frame {n}"));
+        }
+    }
+    assert!(late(&mut new).is_some());
+    // The private copy is gone once the node joined its look.
+    assert_eq!(new.world().resource::<Assets<SpriteMaterial>>().len(), 2);
+}
+
+/// The sprite nodes whose material Bevy re-specialises and re-queues this frame: those whose material
+/// component changed, or whose material asset was modified (Bevy's `AssetChanged` on
+/// `MeshMaterial3d`).
+#[derive(Resource, Default)]
+struct Requeued(std::collections::HashSet<Entity>);
+
+fn collect_requeued(
+    mut out: ResMut<Requeued>,
+    mut standard: MessageReader<AssetEvent<StandardMaterial>>,
+    mut sprite: MessageReader<AssetEvent<SpriteMaterial>>,
+    own: Query<(Entity, Ref<MeshMaterial3d<StandardMaterial>>), With<SpriteFx>>,
+    looks: Query<(Entity, Ref<MeshMaterial3d<SpriteMaterial>>), With<SpriteFx>>,
+) {
+    let standard: std::collections::HashSet<_> = standard.read().filter_map(|e| if let AssetEvent::Modified { id } = e { Some(*id) } else { None }).collect();
+    let sprite: std::collections::HashSet<_> = sprite.read().filter_map(|e| if let AssetEvent::Modified { id } = e { Some(*id) } else { None }).collect();
+    out.0 = own
+        .iter()
+        .filter(|(_, m)| m.is_changed() || standard.contains(&m.0.id()))
+        .map(|(e, _)| e)
+        .chain(looks.iter().filter(|(_, m)| m.is_changed() || sprite.contains(&m.0.id())).map(|(e, _)| e))
+        .collect();
+}
+
+/// Orders the nodes [`spawn_late_each`] spawned.
+#[derive(Component)]
+struct LateIdx(usize);
+
+/// Spawn a still node on the flipbook sprite after the animation at each of the first updates, so
+/// some are spawned while the look shows another cell than the spawn uv, and some of those see the
+/// spawn uv again at their next frame.
+fn spawn_late_each(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>, mut frame: Local<usize>) {
+    *frame += 1;
+    if *frame <= 16 {
+        let (m, mut fx, _) = material_of(&table(), "stillGlow");
+        let h = materials.add(m);
+        fx.material = h.clone();
+        commands.spawn((fx, MeshMaterial3d(h), Visibility::default(), LateIdx(*frame)));
+    }
+}
+
+/// ADR 0009 S5 (parity mode): an adopted node is re-queued in exactly the frames its own material
+/// would be modified on `main`, for every node that was drawn in the frame before and is still drawn:
+/// blinking and still nodes on a flipbook sprite, colour-cycling ones, and nodes spawned after the
+/// animation (on a private copy while their look shows another cell).
+///
+/// A node coming back from hidden is left out of the comparison: Bevy queues newly visible entities
+/// ahead of changed ones and yields each entity once (`iter_to_queue`, read from the Bevy 0.20.1
+/// source), so such a node takes the same place in the queue whether or not its material also changed.
+/// That is where the shared look's uv write can touch a node whose own material `main` would leave
+/// alone (it was hidden while the look moved on).
+#[test]
+fn adopted_nodes_are_re_queued_in_the_frames_mains_own_materials_change() {
+    let (mut old, mut new) = (game_app(false), game_app(true));
+    const FIXED: [&str; 6] = ["blinkGlow", "blinkGlow", "stillGlow", "puffA", "still", "blink"];
+    let fo: Vec<Entity> = FIXED.iter().map(|n| spawn_node(&mut old, n, None)).collect();
+    let fnew: Vec<Entity> = FIXED.iter().map(|n| spawn_node(&mut new, n, None)).collect();
+    for app in [&mut old, &mut new] {
+        app.init_resource::<Requeued>().add_systems(Update, spawn_late_each.after(tint_ghost)).add_systems(Last, collect_requeued);
+    }
+    let late = |app: &mut App| {
+        let mut l: Vec<(usize, Entity)> = app.world_mut().query::<(Entity, &LateIdx)>().iter(app.world()).map(|(e, i)| (i.0, e)).collect();
+        l.sort_unstable();
+        l.into_iter().map(|(_, e)| e).collect::<Vec<_>>()
+    };
+    let mut drawn_before = std::collections::HashMap::new();
+    let (mut compared, mut requeued) = (0, 0);
+    for n in 0..48 {
+        old.world_mut().resource_mut::<AnimClock>().advance_idle(0.0);
+        new.world_mut().resource_mut::<AnimClock>().advance_idle(0.0);
+        old.update();
+        new.update();
+        let (oall, nall): (Vec<Entity>, Vec<Entity>) = (fo.iter().copied().chain(late(&mut old)).collect(), fnew.iter().copied().chain(late(&mut new)).collect());
+        assert_eq!(oall.len(), nall.len());
+        for (i, (&eo, &en)) in oall.iter().zip(&nall).enumerate() {
+            let vis = old.world().get::<Visibility>(eo);
+            assert_eq!(vis, new.world().get::<Visibility>(en), "node {i} at frame {n}: visibility");
+            let drawn = vis != Some(&Visibility::Hidden);
+            if drawn && drawn_before.get(&i) == Some(&true) {
+                let (ro, rn) = (old.world().resource::<Requeued>().0.contains(&eo), new.world().resource::<Requeued>().0.contains(&en));
+                assert_eq!(rn, ro, "node {i} at frame {n}: re-queued on the adopted path, against main");
+                compared += 1;
+                requeued += usize::from(ro);
+            }
+            drawn_before.insert(i, drawn);
+        }
+    }
+    assert!(compared > 400 && requeued > 50 && requeued < compared, "{requeued} re-queued of {compared} compared");
 }

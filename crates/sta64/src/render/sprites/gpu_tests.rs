@@ -1,15 +1,14 @@
 //! Real-GPU identity check of how sprite nodes reach the screen: the same invented scene drawn through
 //! the reference path ([`super::tests::animate_reference`], `main`'s per-node `animate`) and through
 //! the sprite material path of ADR 0009 ([`super::material`]: shared look materials, the colour in the
-//! node's slot, the forked `sprite.wesl`), at a new time, camera place and fade every frame, from three
+//! node's slot, the forked `sprite.wesl`), at a new time, camera place and fade every frame, from four
 //! cameras. The two sets of frames must be byte-equal; a control run (reference against reference)
 //! must be byte-equal too, which proves the harness itself is deterministic.
 //!
-//! Until step 2 of the ADR adopts the game's nodes, the material path is driven by a stand-in for its
-//! `animate` ([`write_slots`]): the unchanged [`animate`] computes every node's colour and uv into its
-//! own (no longer drawn) material, and the stand-in copies them into the node's slot and its look's
-//! material with main's rule (only while shown, only on change) and parity mode (S5). The cloaking
-//! unit's and the ghost's nodes stay on their own materials, as the ADR keeps them (S4).
+//! The material path is the game's own: every node is adopted by [`SpriteMaterialPlugin`]'s observer
+//! as it is spawned, [`animate`] writes slots and looks, and the game's `apply_fade` and `tint_ghost`
+//! demote the cloaking unit's and the ghost's nodes to private materials (S4) and give the unit's back.
+//! The reference path is the same app with adoption off, driven by `main`'s `animate`.
 //!
 //! The scene has: nebula-like puffs whose fades change every step while their look's colour cycles;
 //! a blinking glow, flat sprites, a moon nimbus; a co-located pair each of blended and of additive
@@ -20,10 +19,9 @@
 use super::tests::{BLENDS, NODES, TABLE, animate_reference, fade_of, material_of, table};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use super::*;
-use super::material::{SpriteMaterial, SpriteMaterialPlugin, SpriteSlots, linear, look_material};
-use bevy::mesh::MeshTag;
+use super::material::{SpriteLooks, SpriteMaterial, SpriteMaterialPlugin, SpriteSlots, parity};
+use bevy::core_pipeline::prepass::DepthPrepass;
 use bevy::render::storage::ShaderBuffer;
-use std::collections::HashMap;
 use crate::render::fx::specials::{UnitFade, apply_fade};
 use crate::ui::hud::ghost::{Ghost, tint_ghost};
 use sta_sim::ContentKey;
@@ -75,8 +73,8 @@ fn texture() -> Image {
 enum Path {
     /// `main`'s per-node system.
     Reference,
-    /// The sprite material path under test: nodes on their look's shared [`SpriteMaterial`], the
-    /// colour in their slot ([`write_slots`] after [`animate`]).
+    /// The sprite material path under test: nodes adopted onto their look's shared
+    /// [`SpriteMaterial`], the colour in their slot, written by [`animate`].
     New,
     /// A deliberately broken path, a negative control: the reference system run in `Last`, after the
     /// assets' events of the frame, so its writes reach the screen one frame late. Must NOT be byte-equal.
@@ -92,98 +90,28 @@ enum Camera {
     Tonemapped4x,
     /// HDR, bloom, default tonemapping, 4x MSAA (the cinematic post chain's parts).
     HdrBloom,
-}
-
-/// The colour and uv an adopted node's own material held when it was last shown: what main's
-/// per-node material would hold now (the ADR's `SpriteState`).
-#[derive(Component)]
-struct Shown {
-    colour: Color,
-    uv: Affine2,
-}
-
-/// The shared material of each look, by sprite name (the scene has one texture).
-#[derive(Resource, Default)]
-struct Looks(HashMap<String, Handle<SpriteMaterial>>);
-
-/// Put a freshly spawned node on the sprite material path in the same frame, before any update:
-/// a slot holding the colour its own material starts with, its look's shared material, and the
-/// state it starts from. `own` is the material the node was spawned with.
-fn adopt(app: &mut App, node: Entity, own: &StandardMaterial) {
-    let world = app.world_mut();
-    let sprite = world.get::<SpriteFx>(node).unwrap().sprite.clone();
-    let tag = world.resource_scope(|w, mut slots: Mut<SpriteSlots>| {
-        let mut buffers = w.resource_mut::<Assets<ShaderBuffer>>();
-        let tag = slots.allocate(&mut buffers);
-        slots.write(&mut buffers, [(&tag, linear(own.base_color))]);
-        tag
-    });
-    let look = match world.resource::<Looks>().0.get(&sprite) {
-        Some(h) => h.clone(),
-        None => {
-            let m = look_material(own, world.resource::<SpriteSlots>());
-            let h = world.resource_mut::<Assets<SpriteMaterial>>().add(m);
-            world.resource_mut::<Looks>().0.insert(sprite, h.clone());
-            h
-        }
-    };
-    world
-        .entity_mut(node)
-        .remove::<MeshMaterial3d<StandardMaterial>>()
-        .insert((tag, MeshMaterial3d(look), Shown { colour: own.base_color, uv: own.uv_transform }));
+    /// The game's scene camera: a depth prepass (cut-out looks are drawn in it too, through Bevy's
+    /// own prepass shader), default tonemapping, 4x MSAA.
+    DepthPrepass4x,
 }
 
 /// The sprite material's form on the adapter of the last series ([`super::material::mode_name`]).
 static MODE: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
 
-/// Parity mode (S5), on unless `STA64_SPRITE_NO_PARITY=1`.
-fn parity() -> bool {
-    std::env::var("STA64_SPRITE_NO_PARITY").as_deref() != Ok("1")
-}
+/// Slots of the nodes adopted before the series starts (48 puffs, the unit's and the ghost's four
+/// each, six blend nodes, six board puffs, the doomed one): the buffer is full when the series
+/// begins, so the node spawned mid-series grows it (S1, growth by doubling) between two captured
+/// frames.
+const SLOTS_AT_START: u32 = 48 + 4 + 4 + 6 + 6 + 1;
 
-/// The stand-in for step 2's `animate` on adopted nodes, after the unchanged [`animate`] has written
-/// each node's colour and uv into its own material: while the node is shown and its values changed
-/// (main's rule), the new linear colour goes into its slot, the uv into its look's material if that
-/// differs, and the node's material component is marked changed (parity mode, S5), so the nodes
-/// re-queued are main's. All slot writes touch the buffer once.
-///
-/// `STA64_SPRITE_NO_PARITY=1` turns parity mode off, to see what dropping it would change (ADR 0009,
-/// open question 1); the byte-equality test is then expected to fail.
-fn write_slots(
-    slots: Res<SpriteSlots>,
-    mut buffers: ResMut<Assets<ShaderBuffer>>,
-    own: Res<Assets<StandardMaterial>>,
-    mut looks: ResMut<Assets<SpriteMaterial>>,
-    mut nodes: Query<(&SpriteFx, &MeshTag, &Visibility, &mut Shown, &mut MeshMaterial3d<SpriteMaterial>)>,
-) {
-    let mut writes = Vec::new();
-    for (f, tag, vis, mut last, mut look) in &mut nodes {
-        if *vis == Visibility::Hidden {
-            continue;
-        }
-        let Some(m) = own.get(&f.material) else { continue };
-        if m.base_color == last.colour && m.uv_transform == last.uv {
-            continue;
-        }
-        if m.base_color != last.colour {
-            writes.push((tag.clone(), linear(m.base_color)));
-        }
-        if looks.get(&look.0).is_some_and(|l| l.base.uv_transform != m.uv_transform)
-            && let Some(mut l) = looks.get_mut(&look.0)
-        {
-            l.base.uv_transform = m.uv_transform;
-        }
-        *last = Shown { colour: m.base_color, uv: m.uv_transform };
-        if parity() {
-            look.set_changed();
-        }
-    }
-    slots.write(&mut buffers, writes.iter().map(|(t, c)| (t, *c)));
-}
+/// The cloaking unit's fade at each step: it cloaks and decloaks, then builds up (even steps set the
+/// cloak, odd ones the build), so its fade changes at every step and ends at 1.
+const UNIT_FADE: [f32; 12] = [1.0, 0.8, 0.5, 0.3, 0.3, 0.6, 1.0, 1.0, 0.7, 0.2, 0.5, 1.0];
 
-/// Slots of the nodes adopted before the series starts: the buffer is full when the series begins,
-/// so the node spawned mid-series grows it (S1, growth by doubling) between two captured frames.
-const SLOTS_AT_START: u32 = 48 + 6 + 6 + 1;
+/// How many of `nodes` draw through a private `StandardMaterial` (demoted, S4).
+fn demoted(app: &App, nodes: &[Entity]) -> usize {
+    nodes.iter().filter(|&&e| app.world().get::<MeshMaterial3d<StandardMaterial>>(e).is_some()).count()
+}
 
 /// Frames of the scene at 12 times and camera places.
 fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
@@ -202,20 +130,15 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
         clock.advance_idle(0.0);
     }
     app.add_systems(Update, tick.before(animate_reference).before(animate));
-    // The material path's plugin, slots and observer are in every path's app, idle where no node is
-    // adopted, so the apps differ only in what the path adopts (an observer is an entity: leaving it
-    // out of one app would also shift the scene's entity ids).
-    app.add_plugins(SpriteMaterialPlugin).init_resource::<Looks>();
+    // The material path's plugin, slots and observers are in every path's app, adoption turned off
+    // where the path is `main`'s, so the apps differ only in what the path adopts (an observer is an
+    // entity: leaving it out of one app would also shift the scene's entity ids).
+    app.add_plugins(SpriteMaterialPlugin);
     let slots = SpriteSlots::with_capacity(&mut app.world_mut().resource_mut::<Assets<ShaderBuffer>>(), SLOTS_AT_START);
     app.insert_resource(slots);
-    // A despawned node's slot goes back, as step 2's adoption will do.
-    app.add_observer(|remove: On<Remove<MeshTag>>, tags: Query<&MeshTag>, mut slots: ResMut<SpriteSlots>| {
-        if let Ok(tag) = tags.get(remove.entity) {
-            slots.release(tag);
-        }
-    });
+    app.world_mut().resource_mut::<SpriteLooks>().adopt = path == Path::New;
     match path {
-        Path::New => app.add_systems(Update, (animate, write_slots, apply_fade, tint_ghost, face_camera).chain()),
+        Path::New => app.add_systems(Update, (animate, apply_fade, tint_ghost, face_camera).chain()),
         Path::Reference => app.add_systems(Update, (animate_reference, apply_fade, tint_ghost, face_camera).chain()),
         Path::Late => app.add_systems(Update, (apply_fade, tint_ghost, face_camera).chain()).add_systems(Last, animate_reference),
     };
@@ -231,6 +154,7 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
         Camera::Stock => app.world_mut().entity_mut(cam).insert((Tonemapping::None, Msaa::Off)),
         Camera::Tonemapped4x => app.world_mut().entity_mut(cam).insert(Msaa::Sample4),
         Camera::HdrBloom => app.world_mut().entity_mut(cam).insert((bevy::camera::Hdr, bevy::post_process::bloom::Bloom::NATURAL, Msaa::Sample4)),
+        Camera::DepthPrepass4x => app.world_mut().entity_mut(cam).insert((DepthPrepass, Msaa::Sample4)),
     };
     let quad = app.world_mut().resource_mut::<Assets<Mesh>>().add(unit_quad());
     let t = table();
@@ -239,7 +163,7 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
         let node = NODES[i % NODES.len()];
         let (mut m, mut fx, _) = material_of(&t, node);
         m.base_color_texture = Some(tex.clone());
-        let h = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(m.clone());
+        let h = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(m);
         fx.material = h.clone();
         let (x, y, z) = (((i * 7) % 11) as f32 * 9.0 - 45.0, ((i * 5) % 9) as f32 * 8.0 - 32.0, ((i * 3) % 7) as f32 * 4.0 - 12.0);
         let mut e = app.world_mut().spawn((Mesh3d(quad.clone()), MeshMaterial3d(h), Transform::from_xyz(x, y, z).with_scale(Vec3::new(14.0, 14.0, 1.0)), Visibility::default(), fx));
@@ -250,37 +174,37 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
         if i == 5 {
             e.insert(crate::render::rock::MoonNimbus { on: true });
         }
-        let e = e.id();
-        if path == Path::New {
-            adopt(&mut app, e, &m);
-        }
-        puffs.push(e);
+        puffs.push(e.id());
     }
-    // A cloaking unit and a placement ghost: their nodes are given material copies by the game's own
-    // systems. Same look as the puffs above (so, shared when sharing is on).
-    let family = |app: &mut App, root: Entity, nodes: &[usize]| {
-        for &i in nodes {
-            let (mut m, mut fx, _) = material_of(&t, NODES[i % NODES.len()]);
-            m.base_color_texture = Some(tex.clone());
-            let h = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(m);
-            fx.material = h.clone();
-            let child = app
-                .world_mut()
-                .spawn((Mesh3d(quad.clone()), MeshMaterial3d(h), Transform::from_xyz(i as f32 * 5.0 - 8.0, 0.0, 0.0).with_scale(Vec3::new(12.0, 12.0, 1.0)), Visibility::default(), fx, Billboard))
-                .id();
-            app.world_mut().entity_mut(root).add_child(child);
-        }
+    // A cloaking unit and a placement ghost: the game's own systems give their nodes material copies
+    // (on the material path, by demoting them from their looks). Same looks as the puffs above.
+    let family = |app: &mut App, root: Entity, nodes: &[usize]| -> Vec<Entity> {
+        nodes
+            .iter()
+            .map(|&i| {
+                let (mut m, mut fx, _) = material_of(&t, NODES[i % NODES.len()]);
+                m.base_color_texture = Some(tex.clone());
+                let h = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(m);
+                fx.material = h.clone();
+                let child = app
+                    .world_mut()
+                    .spawn((Mesh3d(quad.clone()), MeshMaterial3d(h), Transform::from_xyz(i as f32 * 5.0 - 8.0, 0.0, 0.0).with_scale(Vec3::new(12.0, 12.0, 1.0)), Visibility::default(), fx, Billboard))
+                    .id();
+                app.world_mut().entity_mut(root).add_child(child);
+                child
+            })
+            .collect()
     };
     let unit = app.world_mut().spawn((UnitFade { cloak: 1.0, build: 1.0 }, Transform::from_xyz(-20.0, 20.0, 5.0), Visibility::default())).id();
-    family(&mut app, unit, &[0, 1, 2, 3]);
+    let unit_nodes = family(&mut app, unit, &[0, 1, 2, 3]);
     let ghost = app.world_mut().spawn((Ghost::pinned(ContentKey::NONE), Transform::from_xyz(18.0, -18.0, 5.0), Visibility::default())).id();
-    family(&mut app, ghost, &[0, 1, 2, 3]);
+    let ghost_nodes = family(&mut app, ghost, &[0, 1, 2, 3]);
     // One node of each blend look placed on top of another of a different look (same distance from
     // the eye: a sort tie), and two cut-out sprites in one plane.
     let spawn = |app: &mut App, node: &str, at: Vec3, size: f32, billboard: bool, parent: Option<Entity>| {
         let (mut m, mut fx, _) = material_of(&t, node);
         m.base_color_texture = Some(tex.clone());
-        let h = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(m.clone());
+        let h = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(m);
         fx.material = h.clone();
         let mut e = app.world_mut().spawn((Mesh3d(quad.clone()), MeshMaterial3d(h), Transform::from_translation(at).with_scale(Vec3::new(size, size, 1.0)), Visibility::default(), fx));
         if billboard {
@@ -289,11 +213,7 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
         if let Some(p) = parent {
             e.insert(ChildOf(p));
         }
-        let e = e.id();
-        if path == Path::New {
-            adopt(app, e, &m);
-        }
-        e
+        e.id()
     };
     spawn(&mut app, BLENDS[0], Vec3::new(-30.0, -28.0, -6.0), 16.0, true, None);
     spawn(&mut app, BLENDS[1], Vec3::new(-30.0, -28.0, -6.0), 16.0, true, None);
@@ -330,9 +250,11 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
     let _ = MODE.set(mode);
     let places = [Vec3::new(0.0, 0.0, 60.0), Vec3::new(70.0, 10.0, 40.0), Vec3::new(-90.0, 30.0, 30.0), Vec3::new(10.0, 80.0, 20.0)];
     let mut frames = Vec::new();
+    // Per step, how many of the unit's nodes drew through a private material.
+    let mut unit_demoted = Vec::new();
     for step in 0..12usize {
         // The unit cloaks and decloaks, then builds up: its fade changes at every step.
-        let k = [1.0, 0.8, 0.5, 0.3, 0.3, 0.6, 1.0, 1.0, 0.7, 0.2, 0.5, 1.0][step];
+        let k = UNIT_FADE[step];
         *app.world_mut().get_mut::<UnitFade>(unit).unwrap() = if step % 2 == 0 { UnitFade { cloak: k, build: 1.0 } } else { UnitFade { cloak: 1.0, build: k } };
         if step == 4 {
             spawn(&mut app, NODES[1], Vec3::new(36.0, -4.0, 2.0), 14.0, true, None);
@@ -366,22 +288,29 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
             }
         }
         frames.push(shoot(&mut app, &target));
+        unit_demoted.push(demoted(&app, &unit_nodes));
     }
     if path == Path::New {
         // The material path really drew the adopted nodes: the buffer grew mid-series, one node came
         // and one went, and the nodes are on the shared look materials.
         let slots = app.world().resource::<SpriteSlots>();
         assert_eq!((slots.live(), slots.capacity()), (SLOTS_AT_START, 2 * SLOTS_AT_START), "slots after the series");
-        let looks = app.world().resource::<Looks>().0.len();
+        // Looks: the puffs' two sprites (the four node ids draw two sprites) and the six blend nodes';
+        // no private copy is left.
+        let looks = app.world().resource::<Assets<SpriteMaterial>>().len();
+        // The ghost's nodes stay demoted; the unit's are back on their looks (its fade ends at 1).
         let on_looks = app.world_mut().query::<&MeshMaterial3d<SpriteMaterial>>().iter(app.world()).count();
-        // Looks: the puffs' two sprites (the four node ids draw two sprites) and the six blend nodes'.
-        assert_eq!((looks, on_looks), (2 + BLENDS.len(), SLOTS_AT_START as usize), "looks and adopted nodes");
+        assert_eq!((looks, on_looks), (2 + BLENDS.len(), SLOTS_AT_START as usize - ghost_nodes.len()), "looks and nodes drawn through them");
+        assert_eq!(demoted(&app, &ghost_nodes), ghost_nodes.len(), "the ghost's nodes are on private materials");
+        // The unit's nodes went to private materials while it faded and came back when it did not.
+        let expected: Vec<usize> = UNIT_FADE.iter().map(|&k| if k < 1.0 { unit_nodes.len() } else { 0 }).collect();
+        assert_eq!(unit_demoted, expected, "the unit's demoted nodes per step");
     }
     Some(frames)
 }
 
 #[test]
-fn nodes_are_drawn_byte_equal_to_the_reference_path_on_gpu_from_three_cameras() {
+fn nodes_are_drawn_byte_equal_to_the_reference_path_on_gpu_from_four_cameras() {
     if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
         eprintln!("SKIP: set STA64_GPU_TESTS=1");
         return;
@@ -391,25 +320,28 @@ fn nodes_are_drawn_byte_equal_to_the_reference_path_on_gpu_from_three_cameras() 
     let lit = |f: &Vec<u8>| f.chunks(4).filter(|p| p[0] > 8 || p[1] > 8 || p[2] > 8).count();
     // Every frame of every camera is compared before the test fails, so a failure names them all.
     let mut differing = Vec::new();
-    for camera in [Camera::Stock, Camera::Tonemapped4x, Camera::HdrBloom] {
+    for camera in [Camera::Stock, Camera::Tonemapped4x, Camera::HdrBloom, Camera::DepthPrepass4x] {
         let Some(old) = series(Path::Reference, camera) else { return };
         // Control: the reference against itself, so a difference below is the path's, not the harness'.
         let Some(again) = series(Path::Reference, camera) else { return };
         let Some(new) = series(Path::New, camera) else { return };
         assert_eq!(old.len(), new.len());
+        let mut differ = 0;
         for (n, ((a, b), c)) in old.iter().zip(&again).zip(&new).enumerate() {
             assert!(lit(a) > 300, "{camera:?} frame {n} shows the scene ({} lit pixels)", lit(a));
             assert!(a == b, "{camera:?} control frame {n} differs: {}", describe(a, b));
             if a != c {
+                differ += 1;
                 differing.push(format!("{camera:?} frame {n} differs from the reference: {}", describe(a, c)));
             }
         }
+        eprintln!("{camera:?}: control equal, {differ} of {} frames of the material path differ", old.len());
         // The frames differ from one another (time and camera move), so equality is not an empty scene's.
         assert!(old[0] != old[5]);
     }
     let mode = MODE.get().copied().unwrap_or("unknown");
     assert!(differing.is_empty(), "sprite material ran {mode}{}:\n{}", if parity() { "" } else { ", parity mode off" }, differing.join("\n"));
-    eprintln!("sprite material ran {mode}: every frame of the three cameras byte-equal to the reference");
+    eprintln!("sprite material ran {mode}: every frame of the four cameras byte-equal to the reference");
 }
 
 /// Where two frames of [`series`] differ: how many pixels, their box, the largest channel difference
