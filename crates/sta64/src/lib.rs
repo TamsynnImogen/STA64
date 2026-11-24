@@ -21,6 +21,8 @@ mod platform;
 
 mod audio;
 mod capture;
+mod crash_report;
+mod diagnostics;
 mod footage;
 mod frontend;
 mod input;
@@ -40,7 +42,7 @@ pub(crate) fn mount_summary(root: &std::path::Path, vfs: &sta_vfs::Vfs) -> Strin
     format!("Install: {}\nMounted: {}  ({} FPQ archives)", root.display(), chain.join(" -> "), archives)
 }
 
-fn mount(cfg: &LaunchConfig) -> (sta_vfs::Vfs, String) {
+fn mount(cfg: &LaunchConfig, report: &diagnostics::Report) -> (sta_vfs::Vfs, String) {
     let Some(root) = &cfg.install_root else {
         return (sta_vfs::Vfs::default(), "No install root".into());
     };
@@ -49,10 +51,10 @@ fn mount(cfg: &LaunchConfig) -> (sta_vfs::Vfs, String) {
             let summary = mount_summary(root, &vfs);
             (vfs, summary)
         }
-        Err(e) => (
-            sta_vfs::Vfs::default(),
-            format!("Install: {}\nNot mounted: {e}", root.display()),
-        ),
+        Err(e) => {
+            report.record("Install", &format!("Could not mount the game data: {e}"));
+            (sta_vfs::Vfs::default(), format!("Install: {}\nNot mounted: {e}", root.display()))
+        }
     }
 }
 
@@ -97,6 +99,7 @@ pub fn run(cfg: LaunchConfig) {
         print!("{}", app::USAGE);
         return;
     }
+    crash_report::install();
     for a in &cfg.unknown {
         eprintln!("ignoring unknown argument {a:?}");
     }
@@ -114,7 +117,8 @@ pub fn run(cfg: LaunchConfig) {
     if cfg.headless && cfg.scene.is_some() {
         std::process::exit(bench::run_headless(&cfg));
     }
-    let (vfs, summary) = mount(&cfg);
+    let report = diagnostics::Report::open();
+    let (vfs, summary) = mount(&cfg, &report);
     println!("{summary}");
     if cfg.mission_report {
         mission_report(&vfs);
@@ -134,8 +138,13 @@ pub fn run(cfg: LaunchConfig) {
     );
 
     let mut app = App::new();
-    app.add_plugins(
+    let mut catalogue = map::Catalogue::with_report(report.clone());
+    app.insert_resource(report)
+        .init_resource::<diagnostics::Diagnostics>()
+        .add_systems(PreUpdate, diagnostics::refresh)
+        .add_plugins(
             DefaultPlugins
+                .set(bevy::log::LogPlugin { custom_layer: diagnostics::layer, ..default() })
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "STA64".into(),
@@ -158,7 +167,6 @@ pub fn run(cfg: LaunchConfig) {
         app.insert_resource(frontend::screens::ActiveMod(cfg.active_mod.clone()));
         app.insert_resource(frontend::screens::ModLaunchOptions { no_intro: cfg.nointro, no_ai: cfg.noai });
         let rts = sta_content::layered::cfg_h(&vfs, "RTS_CFG.h");
-        let mut catalogue = map::Catalogue::default();
         let mut screens = frontend::screens::ScreensConfig::default();
         let maps = match game::flow::front_end_data(&vfs, &mut catalogue, cfg.install_root.as_deref()) {
             Ok(d) => {
@@ -199,6 +207,7 @@ pub fn run(cfg: LaunchConfig) {
             app.insert_resource(game::SkirmishCfg::from_launch(&cfg));
         }
         app.insert_resource(map::MapSeat(seat))
+            .insert_resource(catalogue)
             .insert_resource(map::CameraLimits::from_cfg(rts.as_ref()))
             .insert_resource(viewer::Mounted(vfs))
             .insert_resource(maps);
@@ -209,7 +218,11 @@ pub fn run(cfg: LaunchConfig) {
     plugins::add_plugins(&mut app, &cfg);
     #[cfg(target_os = "android")]
     app.add_plugins(platform::lifecycle::AndroidLifecyclePlugin);
-    app.run();
+    if let bevy::app::AppExit::Error(code) = app.run() {
+        crash_report::fatal_exit(code.get());
+        #[cfg(not(target_os = "android"))]
+        std::process::exit(i32::from(code.get()));
+    }
 }
 
 #[cfg(target_os = "android")]

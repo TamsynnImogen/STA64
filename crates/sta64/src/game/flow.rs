@@ -497,11 +497,12 @@ fn remount(
     let vfs = match sta_vfs::Vfs::mount_install(root, folder.as_deref()) {
         Ok(v) => v,
         Err(e) => {
+            catalogue.report("Cannot load mod", &format!("{}: {e}", folder.as_deref().unwrap_or("Base game")));
             notices.write(Notice::new(Severity::Bad, format!("Cannot mount {}: {e}", folder.as_deref().unwrap_or("the base game"))));
             return;
         }
     };
-    let mut next_catalogue = Catalogue::default();
+    let mut next_catalogue = catalogue.next_mount();
     match front_end_data(&vfs, &mut next_catalogue, Some(root)) {
         Ok(d) => {
             info!("mounted {}", vfs.layers().iter().map(|l| l.name()).collect::<Vec<_>>().join(" -> "));

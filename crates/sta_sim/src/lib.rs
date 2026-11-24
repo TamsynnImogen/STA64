@@ -507,7 +507,8 @@ impl Sim {
         self.watch_orders();
         self.assist_idle();
         self.step_scripted();
-        let mut plans = self.steer_attackers();
+        let gravity_wells = self.gravity_wells();
+        let mut plans = self.steer_attackers(&gravity_wells);
         // SIM-75: who is in which nebula, from the positions at the tick's start.
         let nebulae = self.nebula_contents();
         let speed_caps = if nebulae.is_empty() { Vec::new() } else { self.nebula_speed_caps(&nebulae) };
@@ -518,7 +519,7 @@ impl Sim {
         self.brake_for_attack_detours(&mut plans);
         // Warp eligibility follows the aim this tick will actually use, including
         // temporary navigation and avoidance targets.
-        let warps = self.steer_warp_moves();
+        let warps = self.steer_warp_moves(&gravity_wells);
         if !warps.is_empty() {
             plans.extend(warps);
             plans.sort_by_key(|p| p.0);

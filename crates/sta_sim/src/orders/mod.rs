@@ -497,7 +497,7 @@ impl Sim {
     }
 
     /// Plans for the warp moves of this tick (ascending id).
-    pub(crate) fn steer_warp_moves(&mut self) -> Vec<(EntityId, Plan)> {
+    pub(crate) fn steer_warp_moves(&mut self, gravity: &crate::movement::gravity::GravityWells) -> Vec<(EntityId, Plan)> {
         let mut plans = Vec::new();
         if self.scripted.is_empty() {
             return plans;
@@ -525,7 +525,9 @@ impl Sim {
             // `headingCloseEnoughForWarp` band; STA64's warp flies straight, so the
             // tight gate stays for keyed units too (the band is read, not used).
             let too_close = if keyed { u.stats.too_close_for_warp } else { too_close_to_warp() };
-            let can = self.warp_allowed() && vw > vi && vi > crate::speed_override::HELD_SPEED && aligned && to_goal >= approach::warp_lead(vw, vi, db_radius(self, u));
+            let radius = db_radius(self, u);
+            let can = self.warp_allowed() && vw > vi && vi > crate::speed_override::HELD_SPEED && aligned
+                && to_goal >= approach::warp_lead(vw, vi, radius) && !gravity.suppresses(u.pos, radius);
             // Armada II gates the start on 0.9 of impulse speed; Armada I's
             // throttle factor applies at once.
             let up_to_speed = keyed || u.speed > Fixed::from_f64(0.9) * vi;
