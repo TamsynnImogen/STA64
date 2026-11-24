@@ -50,10 +50,14 @@ fn app() -> (App, EntityId) {
 
 /// Write Bevy's input resource in-process. No OS keyboard events are involved.
 fn hotkey(app: &mut App) {
+    chord(app, KeyCode::KeyE);
+}
+
+fn chord(app: &mut App, key: KeyCode) {
     {
         let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
         keys.press(KeyCode::ControlLeft);
-        keys.press(KeyCode::KeyE);
+        keys.press(key);
     }
     app.update();
     app.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
@@ -224,6 +228,8 @@ fn two_completed_clicks_on_one_object_open_its_stats() {
     press(&mut app, KeyCode::Delete);
     assert!(app.world().resource::<SimLink>().curr().unit(id).is_some(), "stats holds editor tools");
     press(&mut app, KeyCode::Tab);
+    assert_eq!(app.world().resource::<Editing>().inspected, Some(id), "Tab stays inside the form");
+    press(&mut app, KeyCode::Escape);
     assert!(app.world().resource::<Editing>().inspected.is_none());
 
     // A move starting from the object is never the second click of a double-click.
@@ -235,4 +241,91 @@ fn two_completed_clicks_on_one_object_open_its_stats() {
     assert!(app.world().resource::<Editing>().inspected.is_none());
     assert_eq!(app.world().resource::<SimLink>().curr().unit(id).unwrap().pos.to_f32(),
         [62.0, 0.0, -43.0]);
+}
+
+#[test]
+fn inspector_apply_is_atomic_and_undo_restores_both_world_and_map() {
+    let (mut app, id) = app();
+    let object = sta_bzn::MapObject {
+        odf: "fx_cruiser".into(),
+        entity_id: 12,
+        team: 1,
+        transform: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        initial_position: Some([0.0; 3]),
+        ..default()
+    };
+    let map = sta_bzn::Map {
+        version: 3013, size: [1000.0, 100.0, 1000.0], objects: vec![object], ..default()
+    };
+    let bytes = sta_bzn::write::write(&map).unwrap();
+    app.insert_resource(Document::new("bzn/test.bzn".into(), bytes, map).unwrap());
+    app.insert_resource(AuthoredIds(BTreeMap::from([(id, 0)])));
+    app.init_resource::<crate::ui::hud::instance_names::InstanceNames>();
+    hotkey(&mut app);
+    app.world_mut().resource_mut::<Editing>().inspected = Some(id);
+    app.update();
+    let initial = app.world().resource::<SimLink>().real_curr().unit(id).unwrap().clone();
+    let draft = |app: &mut App, key, value: &str| {
+        let mut fields = app.world_mut().query::<(&panel::InspectorField, &mut TextField)>();
+        let (_, mut field) = fields.iter_mut(app.world_mut()).find(|(field, _)| field.0 == key).expect(key);
+        field.text = value.into();
+    };
+    let apply = |app: &mut App| {
+        let mut buttons = app.world_mut().query::<(Entity, &panel::Act)>();
+        let (entity, _) = buttons.iter(app.world()).find(|(_, act)| matches!(act, panel::Act::ApplyStats)).unwrap();
+        app.world_mut().write_message(ButtonClicked(entity));
+        app.update();
+    };
+
+    draft(&mut app, "x", "45");
+    draft(&mut app, "hull", "999999");
+    apply(&mut app);
+    assert_eq!(app.world().resource::<Editing>().inspected, Some(id));
+    assert!(!app.world().resource::<Editing>().inspector_error.is_empty());
+    assert_eq!(app.world().resource::<SimLink>().real_curr().unit(id).unwrap(), &initial);
+    assert!(app.world().resource::<Document>().properties(12).is_none());
+
+    draft(&mut app, "hull", "25");
+    draft(&mut app, "name", "Endeavour");
+    draft(&mut app, "captain", "Imani");
+    apply(&mut app);
+    assert!(app.world().resource::<Editing>().inspected.is_none());
+    let link = app.world().resource::<SimLink>();
+    assert_eq!(link.real_curr().unit(id).unwrap().pos.x, Fixed::from_int(45));
+    assert_eq!(link.real_curr().unit(id).unwrap().hull[0], Fixed::from_int(25));
+    let doc = app.world().resource::<Document>();
+    assert_eq!(doc.object(0).unwrap().instance_name, "Endeavour");
+    assert_eq!(doc.properties(12).unwrap().captain.as_deref(), Some("Imani"));
+
+    chord(&mut app, KeyCode::KeyZ);
+    assert_eq!(app.world().resource::<SimLink>().real_curr().unit(id).unwrap(), &initial);
+    assert!(app.world().resource::<Document>().properties(12).is_none());
+    chord(&mut app, KeyCode::KeyY);
+    assert_eq!(app.world().resource::<SimLink>().real_curr().unit(id).unwrap().pos.x, Fixed::from_int(45));
+    assert_eq!(app.world().resource::<Document>().object(0).unwrap().instance_name, "Endeavour");
+}
+
+#[test]
+fn a_resource_object_can_be_copied_pasted_and_undone() {
+    let (mut app, _) = app();
+    hotkey(&mut app);
+    app.world_mut().resource_mut::<Editing>().palette.root = vec![palette::Entry {
+        slot: 0,
+        label: "Moon".into(),
+        kind: EntryKind::Leaf { odf: "fx_moon".into(), neutral: true },
+    }];
+    let pointer = Vec2::new(500.0, 400.0);
+    point(&mut app, pointer, Vec3::new(16.0, 0.0, 23.0));
+    press(&mut app, KeyCode::F1);
+    let source = app.world().resource::<Selection>().0[0];
+    chord(&mut app, KeyCode::KeyC);
+    point(&mut app, pointer, Vec3::new(86.0, 0.0, 94.0));
+    chord(&mut app, KeyCode::KeyV);
+    let copy = app.world().resource::<Selection>().0[0];
+    let view = app.world().resource::<SimLink>().real_curr();
+    assert_ne!(source, copy);
+    assert_eq!(view.unit(copy).unwrap().owner, sta_sim::world::NEUTRAL);
+    assert_eq!(view.unit(copy).unwrap().pos.to_f32(), [86.0, 0.0, -94.0]);
+    chord(&mut app, KeyCode::KeyZ);
+    assert!(app.world().resource::<SimLink>().real_curr().unit(copy).is_none());
 }

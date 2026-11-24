@@ -211,6 +211,12 @@ pub fn info(feed: &HudFeed) -> Info {
                     (identity.name, identity.captain, identity.registry)
                 },
             );
+            let captain = feed.names.captain_override(u.id)
+                .map(|value| (!value.is_empty()).then(|| value.to_owned()))
+                .unwrap_or(captain);
+            let registry = feed.names.registry_override(u.id)
+                .map(|value| (!value.is_empty()).then(|| value.to_owned()))
+                .unwrap_or(registry);
             Info::Single(Single {
                 id: u.id,
                 name: feed.given_name(u).map_or(name, str::to_owned),
@@ -1223,6 +1229,14 @@ mod tests {
         };
         let u = |f: &HudFeed, id: u32| f.view.unit(EntityId(id)).unwrap().clone();
         assert_eq!(one(&f), "Aurelia Test-7");
+        f.names.set_overrides(EntityId(1), None, Some("Captain Ada"), Some("NX-1"));
+        let Info::Single(with_companions) = info(&f) else { panic!("selection with companions") };
+        assert_eq!(with_companions.captain.as_deref(), Some("Captain Ada"));
+        assert_eq!(with_companions.registry.as_deref(), Some("NX-1"));
+        f.names.set_overrides(EntityId(1), None, Some(""), Some(""));
+        let Info::Single(blank_companions) = info(&f) else { panic!("selection with blank companions") };
+        assert_eq!(blank_companions.captain, None);
+        assert_eq!(blank_companions.registry, None);
         assert_eq!(f.unit_label(&u(&f, 1)), "Aurelia Test-7");
         assert_eq!(f.name(&u(&f, 2)), "Ångström Ω-2 \u{1F680}");
         // A blank map name leaves the ODF caption.

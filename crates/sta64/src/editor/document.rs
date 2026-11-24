@@ -1,20 +1,24 @@
 //! An editable map document. Indices stay stable while objects are removed so
 //! selection and undo records can refer to the same placement.
 
-use std::fs::OpenOptions;
-use std::io::Write;
+use std::collections::BTreeMap;
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use bevy::prelude::Resource;
 use sta_bzn::{Map, MapObject};
+use sta_sim::{Fixed, source::ObjectProperties};
 
 #[derive(Resource, Clone)]
 pub struct Document {
     pub path: String,
     pub map: Map,
     pub objects: Vec<Option<MapObject>>,
-    source: Vec<u8>,
+    source: Arc<[u8]>,
     next_entity_id: Option<i32>,
+    properties: BTreeMap<i32, ObjectProperties>,
 }
 
 impl Document {
@@ -25,7 +29,27 @@ impl Document {
                 return Err("SOL map does not match its source bytes".into());
             }
         }
-        let objects = map.objects.iter().cloned().map(Some).collect();
+        let mut properties: BTreeMap<_, _> = sta_bzn::object_editor_ext::read(&bytes)
+            .into_iter()
+            .map(|(id, values)| (id, ObjectProperties {
+                captain: values.captain,
+                registry: values.registry,
+                shields: values.shields.map(|faces| faces.map(|pair| pair.map(|value| Fixed::from_f64(f64::from(value))))),
+                ..Default::default()
+            }))
+            .collect();
+        if path.starts_with("saved:") {
+            let file = super::saved_map_file(&path)?;
+            if let Some(saved) = read_properties(&file, &bytes)? {
+                properties = saved;
+            }
+        }
+        let objects = map.objects.iter().cloned().map(|mut object| {
+            if let Some(name) = properties.get(&object.entity_id).and_then(|p| p.instance_name.as_ref()) {
+                object.instance_name = name.clone();
+            }
+            Some(object)
+        }).collect();
         let next_entity_id = map
             .objects
             .iter()
@@ -37,13 +61,66 @@ impl Document {
             path,
             map,
             objects,
-            source: bytes,
+            source: bytes.into(),
             next_entity_id,
+            properties,
         })
     }
 
     pub fn object(&self, index: usize) -> Option<&MapObject> {
         self.objects.get(index)?.as_ref()
+    }
+
+    pub(super) fn properties(&self, id: i32) -> Option<&ObjectProperties> {
+        self.properties.get(&id)
+    }
+
+    pub(super) fn update_object(&mut self, index: usize, object: MapObject, properties: ObjectProperties) {
+        if properties == ObjectProperties::default() {
+            self.properties.remove(&object.entity_id);
+        } else {
+            self.properties.insert(object.entity_id, properties);
+        }
+        self.objects[index] = Some(object);
+    }
+
+    pub(crate) fn restore_properties(
+        &self,
+        sim: &mut sta_sim::Sim,
+        ids: &BTreeMap<sta_sim::EntityId, usize>,
+        names: &mut crate::ui::hud::instance_names::InstanceNames,
+        directional: bool,
+    ) -> Result<(), String> {
+        use sta_sim::{WorldSource, source::PlacementEdit};
+
+        let view = sim.view();
+        for (&id, &index) in ids {
+            let (Some(object), Some(unit)) = (self.object(index), view.unit(id)) else { continue };
+            let authored = self.properties(object.entity_id);
+            names.set_overrides(id, Some(&object.instance_name), authored.and_then(|p| p.captain.as_deref()),
+                authored.and_then(|p| p.registry.as_deref()));
+            let Some(mut properties) = authored.cloned() else { continue };
+            // The raw A2FO record survives in the document. The simulation
+            // can currently restore only a common maximum across facings.
+            if properties.shields.is_some_and(|faces| faces.iter().any(|face| {
+                face[1] != faces[0][1] || (!directional && *face != faces[0])
+            })) {
+                properties.shields = None;
+            }
+            let edit = PlacementEdit::Inspect {
+                id,
+                owner: unit.owner,
+                at: unit.pos,
+                heading: unit.heading,
+                label: None,
+                name: properties.instance_name.clone(),
+                properties,
+            };
+            if sim.edit_placement(edit).is_none() {
+                return Err(format!("Cannot restore inspector values for object {} ({})", object.entity_id, object.odf));
+            }
+        }
+        Ok(())
     }
 
     pub fn can_change_objects(&self) -> bool {
@@ -119,7 +196,7 @@ impl Document {
     }
 
     pub fn bytes(&self) -> Result<Vec<u8>, String> {
-        let placements: Vec<MapObject> = self.objects.iter().flatten().cloned().collect();
+        let mut placements: Vec<MapObject> = self.objects.iter().flatten().cloned().collect();
         if self.path.to_ascii_lowercase().ends_with(".sol") {
             let original = sta_bzn::sol::parse(&self.source).map_err(|error| error.to_string())?;
             if original.to_map() != self.map {
@@ -127,6 +204,13 @@ impl Document {
             }
             return sta_bzn::sol::patch_placements(&self.source, &placements)
                 .map_err(|error| error.to_string());
+        }
+        // A2 text maps have no native instance-name buffer. Its override is
+        // kept in the STA64 editor data for this copy.
+        if !self.map.binary && self.map.a1.is_none() {
+            for object in &mut placements {
+                object.instance_name.clear();
+            }
         }
         let mut map = self.map.clone();
         map.objects = placements;
@@ -142,6 +226,19 @@ impl Document {
     /// file or an earlier saved copy.
     pub fn save_copy(&self, folder: &Path) -> Result<PathBuf, String> {
         let bytes = self.bytes()?;
+        let properties: BTreeMap<_, _> = self.objects.iter().flatten().filter_map(|object| {
+            self.properties.get(&object.entity_id).map(|value| (object.entity_id, value))
+        }).collect();
+        let metadata = if properties.is_empty() {
+            None
+        } else {
+            let data = serde_json::json!({
+                "version": 1,
+                "map_checksum": checksum(&bytes),
+                "objects": properties,
+            });
+            Some(serde_json::to_vec_pretty(&data).map_err(|error| error.to_string())?)
+        };
         std::fs::create_dir_all(folder).map_err(|error| error.to_string())?;
         let source = Path::new(self.path.strip_prefix("saved:").unwrap_or(&self.path));
         let stem = source
@@ -172,12 +269,23 @@ impl Document {
                 format!("-{number}")
             };
             let path = folder.join(format!("{stem}-edit{suffix}.{extension}"));
+            let companion = properties_file(&path);
+            if companion.try_exists().map_err(|error| error.to_string())? {
+                continue;
+            }
             match OpenOptions::new().write(true).create_new(true).open(&path) {
                 Ok(mut file) => {
                     if let Err(error) = file.write_all(&bytes).and_then(|_| file.sync_all()) {
                         drop(file);
                         let _ = std::fs::remove_file(&path);
                         return Err(error.to_string());
+                    }
+                    if let Some(bytes) = &metadata
+                        && let Err(error) = write_properties(&companion, bytes)
+                    {
+                        drop(file);
+                        let _ = fs::remove_file(&path);
+                        return Err(error);
                     }
                     return Ok(path);
                 }
@@ -189,9 +297,86 @@ impl Document {
     }
 }
 
+fn properties_file(map: &Path) -> PathBuf {
+    let mut name = map.as_os_str().to_os_string();
+    name.push(".sta64.json");
+    PathBuf::from(name)
+}
+
+fn checksum(bytes: &[u8]) -> String {
+    let hash = bytes.iter().fold(0xcbf29ce484222325u64, |hash, &byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+    });
+    format!("{hash:016x}")
+}
+
+fn read_properties(map: &Path, bytes: &[u8]) -> Result<Option<BTreeMap<i32, ObjectProperties>>, String> {
+    let companion = properties_file(map);
+    match companion.symlink_metadata() {
+        Ok(meta) if meta.file_type().is_file() => {}
+        Ok(_) => return Err("The editor data for this map is not a regular file".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    }
+    const LIMIT: u64 = 8 * 1024 * 1024;
+    let mut data = Vec::new();
+    fs::File::open(companion).and_then(|file| file.take(LIMIT + 1).read_to_end(&mut data))
+        .map_err(|error| error.to_string())?;
+    if data.len() as u64 > LIMIT {
+        return Err("The editor data for this map exceeds 8 MiB".into());
+    }
+    let mut parsed: serde_json::Value = serde_json::from_slice(&data).map_err(|error| error.to_string())?;
+    let expected = checksum(bytes);
+    if parsed["version"].as_u64() != Some(1) || parsed["map_checksum"].as_str() != Some(expected.as_str()) {
+        return Err("The editor data does not match this map copy".into());
+    }
+    serde_json::from_value(parsed["objects"].take()).map(Some).map_err(|error| error.to_string())
+}
+
+fn write_properties(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path).map_err(|error| error.to_string())?;
+    if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+        drop(file);
+        let _ = fs::remove_file(path);
+        return Err(error.to_string());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editor_properties_round_trip_with_their_map_copy() {
+        let map = Map {
+            version: 3013,
+            size: [1_000.0, 100.0, 1_000.0],
+            ..Default::default()
+        };
+        let source = sta_bzn::write::write(&map).unwrap();
+        let mut doc = Document::new("bzn/test.bzn".into(), source, map).unwrap();
+        let index = doc.push("fx_cruiser", 1, [12.0, 0.0, 35.0], [0.0, 1.0]).unwrap();
+        let mut object = doc.object(index).unwrap().clone();
+        object.instance_name = "Endeavour".into();
+        let state = ObjectProperties {
+            instance_name: Some("Endeavour".into()),
+            captain: Some("Imani".into()),
+            registry: Some(String::new()),
+            hull: Some([Fixed::from_int(40), Fixed::from_int(80)]),
+            ..Default::default()
+        };
+        doc.update_object(index, object, state.clone());
+        let token = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let folder = std::env::temp_dir().join(format!("sta64-map-editor-{}-{token}", std::process::id()));
+        let path = doc.save_copy(&folder).unwrap();
+        let bytes = fs::read(&path).unwrap();
+        let parsed = sta_bzn::parse(&bytes).unwrap();
+        assert_eq!(parsed.objects[0].transform[9..12], [12.0, 0.0, 35.0]);
+        assert_eq!(read_properties(&path, &bytes).unwrap().unwrap().get(&parsed.objects[0].entity_id), Some(&state));
+        assert!(read_properties(&path, b"different BZN").is_err());
+        fs::remove_dir_all(&folder).unwrap();
+    }
 
     #[test]
     fn bzn_edits_keep_indices_and_round_trip_through_the_map_reader() {
