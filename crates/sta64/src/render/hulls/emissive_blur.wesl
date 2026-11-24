@@ -16,14 +16,18 @@ fn load_clamped(pixel: vec2<i32>) -> vec3<f32> {
 
 @fragment
 fn downsample(input: ScreenIn) -> @location(0) vec4<f32> {
-    let p = vec2<i32>(input.position.xy) * 2;
-    let rgb = (load_clamped(p) + load_clamped(p + vec2<i32>(1, 0))
-        + load_clamped(p + vec2<i32>(0, 1)) + load_clamped(p + vec2<i32>(1, 1))) * 0.25;
-    return vec4<f32>(rgb, 1.0);
+    let p = vec2<i32>(input.position.xy) * 4;
+    var rgb = vec3<f32>(0.0);
+    for (var y = 0; y < 4; y++) {
+        for (var x = 0; x < 4; x++) {
+            rgb += load_clamped(p + vec2<i32>(x, y));
+        }
+    }
+    return vec4<f32>(rgb / 16.0, 1.0);
 }
 
-// Gaussian, sigma 3.5 half-resolution texels (about 7 screen pixels).
-// The outer samples reach 8 half-resolution texels, or 16 screen pixels.
+// Gaussian, sigma 3.5 reduced texels (14 screen pixels).
+// The outer samples reach 8 reduced texels, or 32 screen pixels.
 fn blur(pixel: vec2<i32>, axis: vec2<i32>) -> vec4<f32> {
     var rgb = load_clamped(pixel) * 0.1143;
     rgb += (load_clamped(pixel + axis) + load_clamped(pixel - axis)) * 0.1097;
@@ -49,9 +53,9 @@ fn blur_vertical(input: ScreenIn) -> @location(0) vec4<f32> {
 
 @fragment
 fn composite(input: ScreenIn) -> @location(0) vec4<f32> {
-    let half = vec2<f32>(input.position.xy) * 0.5 - vec2<f32>(0.5);
-    let base = vec2<i32>(floor(half));
-    let f = fract(half);
+    let reduced = input.position.xy * 0.25 - vec2<f32>(0.5);
+    let base = vec2<i32>(floor(reduced));
+    let f = fract(reduced);
     let a = mix(load_clamped(base), load_clamped(base + vec2<i32>(1, 0)), f.x);
     let b = mix(load_clamped(base + vec2<i32>(0, 1)), load_clamped(base + vec2<i32>(1, 1)), f.x);
     return vec4<f32>(mix(a, b, f.y) * params.strength.x, 0.0);

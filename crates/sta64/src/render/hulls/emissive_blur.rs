@@ -229,9 +229,11 @@ fn prepare_targets(
             commands.entity(entity).remove::<EmissiveBloomTargets>();
             continue;
         }
-        let half = Extent3d {
-            width: width.div_ceil(2),
-            height: height.div_ceil(2),
+        // A wider screen footprint at lower resolution keeps the halo legible
+        // against a lit sky and reduces the cost of both blur passes.
+        let reduced = Extent3d {
+            width: width.div_ceil(4),
+            height: height.div_ceil(4),
             depth_or_array_layers: 1,
         };
         let full = Extent3d {
@@ -263,9 +265,9 @@ fn prepare_targets(
         let mask = make("emissive full-size mask", full, 1, true);
         let mask_msaa =
             (samples > 1).then(|| make("emissive multisample mask", full, samples, false));
-        let small = make("emissive half-size source", half, 1, true);
-        let horizontal = make("emissive horizontal blur", half, 1, true);
-        let vertical = make("emissive vertical blur", half, 1, true);
+        let small = make("emissive quarter-size source", reduced, 1, true);
+        let horizontal = make("emissive horizontal blur", reduced, 1, true);
+        let vertical = make("emissive vertical blur", reduced, 1, true);
         let mut params = UniformBuffer::from(BlurParams {
             strength: Vec4::new(strength.unwrap().0.clamp(0.0, 1.0), 0.0, 0.0, 0.0),
         });
@@ -300,7 +302,7 @@ fn prepare_targets(
             });
         commands.entity(entity).insert(EmissiveBloomTargets {
             down_group: group("emissive mask input", &mask),
-            horizontal_group: group("emissive half input", &small),
+            horizontal_group: group("emissive quarter-size input", &small),
             vertical_group: group("emissive horizontal input", &horizontal),
             composite_group: group("emissive blurred input", &vertical),
             down: specialized.specialize(&cache, pipelines, Stage::Down),
