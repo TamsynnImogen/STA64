@@ -14,7 +14,6 @@ use crate::ui::theme::{
 use super::super::inspector::{Control, Row};
 
 const ROW_H: f32 = 32.0;
-const MAX_ROWS: usize = 14;
 const LABEL_W: f32 = 146.0;
 const TEAM_OPTIONS: [&str; 9] = [
     "Neutral", "Team 1", "Team 2", "Team 3", "Team 4", "Team 5", "Team 6", "Team 7", "Team 8",
@@ -128,7 +127,6 @@ pub(super) fn draw(
         })
         .count();
     let count = (visible_fields + section_count + group_count).max(1);
-    let shown = count.min(MAX_ROWS);
     ui.spawn((
         Grid {
             advanced: true,
@@ -137,15 +135,16 @@ pub(super) fn draw(
         },
         ScrollArea {
             row_h: ROW_H,
-            rows: shown,
+            rows: 1,
             count,
         },
         ScrollPosition::default(),
         Node {
             width: Val::Px(width),
-            height: Val::Px(ROW_H * shown as f32),
+            height: Val::Px(ROW_H),
             min_height: Val::Px(ROW_H),
             flex_direction: FlexDirection::Column,
+            flex_grow: 1.0,
             flex_shrink: 1.0,
             overflow: Overflow::scroll_y(),
             ..default()
@@ -353,11 +352,16 @@ pub(in crate::editor) fn inspector_grid_update(
     sections: Query<(&SectionToggle, &Children)>,
     groups: Query<(&GroupToggle, &Children)>,
     views: Query<(), With<ViewChoice>>,
-    mut grid: Query<(&mut Grid, &mut ScrollArea, &mut Node, &mut ScrollPosition)>,
+    mut grid: Query<(
+        &mut Grid,
+        &mut ScrollArea,
+        &ComputedNode,
+        &mut ScrollPosition,
+    )>,
     mut lines: Query<(&Line, &mut Node), Without<Grid>>,
     mut captions: Query<&mut SpriteText>,
 ) {
-    let Ok((mut state, mut area, mut scroll_node, mut scroll)) = grid.single_mut() else {
+    let Ok((mut state, mut area, viewport, mut scroll)) = grid.single_mut() else {
         return;
     };
     let mut changed = false;
@@ -381,7 +385,14 @@ pub(in crate::editor) fn inspector_grid_update(
             changed = true;
         }
     }
+    // The panel stretches with the window; use the laid-out grid height in UI units.
+    // ScrollArea counts whole rows, so floor keeps the final row fully reachable.
+    let height = viewport.size().y * viewport.inverse_scale_factor;
+    if height > 0.0 {
+        area.rows = (height / ROW_H).floor().max(1.0) as usize;
+    }
     if !changed {
+        scroll.0.y = scroll.0.y.clamp(0.0, area.max_offset());
         return;
     }
     for (toggle, children) in &sections {
@@ -429,7 +440,5 @@ pub(in crate::editor) fn inspector_grid_update(
         count += usize::from(visible);
     }
     area.count = count.max(1);
-    area.rows = area.count.min(MAX_ROWS);
-    scroll_node.height = Val::Px(ROW_H * area.rows as f32);
     scroll.0.y = scroll.0.y.clamp(0.0, area.max_offset());
 }
