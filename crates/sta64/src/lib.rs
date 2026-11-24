@@ -150,7 +150,8 @@ pub fn run(cfg: LaunchConfig) {
         )
         .insert_resource(render::sprites::SpriteTables(std::sync::Arc::new(table)))
         .insert_resource(teams)
-        .insert_resource(render::reveal::Reveal { fog: cfg.reveal.0, shroud: cfg.reveal.1 });
+        .insert_resource(render::reveal::Reveal { fog: cfg.reveal.0, shroud: cfg.reveal.1 })
+        .insert_resource(render::profile::RenderProfile::for_content(sta_content::Profile::detect(&vfs)));
     if cfg.mode() == app::Mode::FrontEnd {
         // INT-M4: no mode flag, so the front end; a match is built from its setup screen.
         app.insert_resource(frontend::screens::SelectedMod(cfg.active_mod.clone()));

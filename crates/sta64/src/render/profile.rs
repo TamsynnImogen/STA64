@@ -9,7 +9,8 @@
 //!
 //! The profile is a resource, so changing it switches a running scene with no restart:
 //! [`RenderProfile::toggled`] (F7, developer key) or a setting writing it. The first
-//! value comes from `STA64_RENDER_PROFILE=refit|stock`, else Stock. A game's own
+//! value comes from `STA64_RENDER_PROFILE=refit|stock`, else Refit for Native content
+//! ([`RenderProfile::for_content`]), else Stock. A game's own
 //! default (INT-M7 sets it per game) is whatever the front end writes at start.
 //!
 //! # For RND-23..26
@@ -53,6 +54,21 @@ impl RenderProfile {
     /// `STA64_RENDER_PROFILE`, else the default.
     pub fn from_env() -> RenderProfile {
         std::env::var("STA64_RENDER_PROFILE").ok().and_then(|v| RenderProfile::parse(&v)).unwrap_or_default()
+    }
+
+    /// The first look for mounted content: `STA64_RENDER_PROFILE` when it names one,
+    /// else Refit for Native content (it ships no stock sprites, skies or effect data
+    /// for the Stock look to draw from; the alpha testbed is Native), else Stock.
+    pub fn for_content(content: sta_content::Profile) -> RenderProfile {
+        Self::choose(content, std::env::var("STA64_RENDER_PROFILE").ok().as_deref())
+    }
+
+    fn choose(content: sta_content::Profile, env: Option<&str>) -> RenderProfile {
+        match env.and_then(RenderProfile::parse) {
+            Some(p) => p,
+            None if content == sta_content::Profile::Native => RenderProfile::Refit,
+            None => RenderProfile::default(),
+        }
     }
 }
 
@@ -199,6 +215,16 @@ mod tests {
         app.add_systems(Update, (|mut d: ResMut<Drawn>| d.stock += 1).run_if(stock_active(Effect::Weapons)).after(announce));
         app.add_systems(Update, (|mut d: ResMut<Drawn>, mut m: MessageReader<ProfileChanged>| d.changes += m.read().count() as u32).after(announce));
         app
+    }
+
+    #[test]
+    fn native_content_starts_in_the_refit_look() {
+        use sta_content::Profile;
+        assert_eq!(RenderProfile::choose(Profile::Native, None), RenderProfile::Refit);
+        assert_eq!(RenderProfile::choose(Profile::Fo4, None), RenderProfile::Stock);
+        assert_eq!(RenderProfile::choose(Profile::Native, Some("stock")), RenderProfile::Stock);
+        assert_eq!(RenderProfile::choose(Profile::Sta2Classic, Some("refit")), RenderProfile::Refit);
+        assert_eq!(RenderProfile::choose(Profile::Native, Some("nonsense")), RenderProfile::Refit);
     }
 
     #[test]
