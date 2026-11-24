@@ -40,7 +40,7 @@ fn list(o: &Opts) -> Outcome {
 }
 
 /// A folder named on the command line: a path, or a name (or `latest`) under the capture dir.
-fn folder(o: &Opts, arg: &str) -> Result<PathBuf, Fail> {
+pub(super) fn folder(o: &Opts, arg: &str) -> Result<PathBuf, Fail> {
     let p = Path::new(arg);
     if p.join(capture::INDEX_FILE).is_file() {
         return Ok(p.to_owned());
