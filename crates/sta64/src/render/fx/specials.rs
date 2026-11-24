@@ -1,4 +1,4 @@
-//! Special FX (RND-11): construction, cloak, and the gaps for repair and warp.
+//! Special FX (RND-11): construction, cloak, and Armada II warp entry.
 //!
 //! Aligned with Armada II Refit: the construction welding is its `effects` module's
 //! (`effects_construction.hlsl`, the worker bees' beam, arc flare, hot spot and
@@ -20,8 +20,8 @@
 //!   the view's flag) changes, and `CloakChanged` adds the bands and green front,
 //!   strongest mid-transition (`vis (1 - vis)`). Enemy cloaked units never reach here:
 //!   RND-02 drops them from the view.
-//! - **Repair, warp**: the sim has no repair or warp event or view state
-//!   (SIM-14 only has cloak), so there is nothing to draw. Gap, see the PR.
+//! - **Warp**: the live warp-entry phase starts the mounted Armada II flash.
+//!   See [`super::warp_flash`].
 //!
 //! [`UnitFade`] is applied to the unit's materials (cloned per mesh on first
 //! use so shared model materials are untouched). All time is [`AnimClock`].
@@ -206,6 +206,7 @@ pub struct SpecialsFxPlugin;
 
 impl Plugin for SpecialsFxPlugin {
     fn build(&self, app: &mut App) {
+        super::warp_flash::register(app);
         app.init_resource::<Construction>()
             .init_resource::<ConstructionBays>()
             .init_resource::<crate::render::construction::ConstructionWork>()
