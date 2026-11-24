@@ -361,7 +361,9 @@ pub fn draw(
     }
     // Batches in a fixed order (texture, then blend), not the map's, which changes from run to run:
     // a new batch's entity is spawned in this order, and as every batch sits at the origin their
-    // draw order at equal distance follows it, so frames repeat run to run (the bench clock).
+    // draw order at equal distance follows it, so frames repeat run to run (the bench clock). The
+    // order is STA64's own and arbitrary, not a rule of the original (not measured). Only batches
+    // first seen in the same frame are ordered by key; older ones keep their spawn order.
     let mut geo: Vec<((String, Blend), Geo)> = geo.into_iter().collect();
     geo.sort_by(|a, b| a.0.cmp(&b.0));
     for (key, g) in geo {

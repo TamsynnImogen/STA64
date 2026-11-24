@@ -231,8 +231,10 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
     let boards = app.world_mut().spawn((Transform::from_xyz(0.0, 30.0, -4.0), Visibility::default())).id();
     let board_nodes: Vec<Entity> = (0..6).map(|i| spawn(&mut app, NODES[i % 2], Vec3::new(i as f32 * 6.0 - 15.0, (i % 3) as f32 * 4.0, 0.0), 14.0, true, Some(boards))).collect();
     // Blinking nodes on the flipbook sprite, drawn through the puffs' look.
+    let mut blink_nodes = Vec::new();
     for (at, fade) in BLINK_GLOWS {
         let e = spawn(&mut app, "blinkGlow", at, 12.0, true, None);
+        blink_nodes.push(e);
         if let Some(k) = fade {
             app.world_mut().entity_mut(e).insert(SpriteFade(k));
         }
@@ -265,6 +267,8 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
     let mut frames = Vec::new();
     // Per step, how many of the unit's nodes drew through a private material.
     let mut unit_demoted = Vec::new();
+    // Per step, whether each blinking node on the flipbook sprite was hidden when the frame was taken.
+    let mut blink_hidden: Vec<Vec<bool>> = Vec::new();
     for step in 0..12usize {
         // The unit cloaks and decloaks, then builds up: its fade changes at every step.
         let k = UNIT_FADE[step];
@@ -302,6 +306,7 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
         }
         frames.push(shoot(&mut app, &target));
         unit_demoted.push(demoted(&app, &unit_nodes));
+        blink_hidden.push(blink_nodes.iter().map(|&e| app.world().get::<Visibility>(e) == Some(&Visibility::Hidden)).collect());
     }
     if path == Path::New {
         // The material path really drew the adopted nodes: the buffer grew mid-series, one node came
@@ -318,6 +323,12 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
         // The unit's nodes went to private materials while it faded and came back when it did not.
         let expected: Vec<usize> = UNIT_FADE.iter().map(|&k| if k < 1.0 { unit_nodes.len() } else { 0 }).collect();
         assert_eq!(unit_demoted, expected, "the unit's demoted nodes per step");
+    }
+    // The case the blinking flipbook nodes are there for: each is hidden in some step and shown again
+    // in a later one, so a change of the clock step or the strobe's timing cannot drop it unnoticed.
+    for (k, &e) in blink_nodes.iter().enumerate() {
+        let hidden: Vec<bool> = blink_hidden.iter().map(|s| s[k]).collect();
+        assert!(hidden.windows(2).any(|w| w[0] && !w[1]), "{path:?}: blinking flipbook node {k} ({e}) is never shown after being hidden: {hidden:?}");
     }
     Some(frames)
 }

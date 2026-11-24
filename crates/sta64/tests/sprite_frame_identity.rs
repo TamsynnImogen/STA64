@@ -11,7 +11,10 @@
 //! interleaved, and a shared-material frame passes when it is byte-equal to the frame of the same
 //! tick from one of the reference runs. It prints, per tick, how many different frames the
 //! reference gave and where they differ. A tick whose reference frame never repeats proves nothing
-//! and fails.
+//! and fails: an inconclusive scene is a failure of the test, not a pass. The passing runs reported
+//! with ADR 0009 step 3 used a scene folder without the views whose reference does not repeat (the
+//! Refit volumetric nebula's noisy views, planets in view), so a failure on such a view is the
+//! harness' noise first, not a regression of the sprite path, until that noise is fixed.
 //!
 //! The scenes are the player's: `STA64_TEST_SPRITE_SCENES` names a directory outside the repository
 //! with bench scene files (`<name>.ini`, read against the install), each with optional
