@@ -65,8 +65,7 @@ fn end_warm_up(mut commands: Commands, mut q: Query<(Entity, &mut WarmUp)>) {
 /// Parse and validate a shader of this directory as Bevy would load it.
 #[cfg(test)]
 pub(crate) fn validate_wgsl(src: &str) {
-    let src = src.replace("constants::MATERIAL_BIND_GROUP", "3")
-        .replace("constants::STA64_HDR_EMISSION", "1");
+    let src = src.replace("constants::MATERIAL_BIND_GROUP", "3");
     let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
     naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
         .validate(&module)

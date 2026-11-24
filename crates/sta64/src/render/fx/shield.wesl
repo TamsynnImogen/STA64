@@ -140,6 +140,5 @@ fn fragment(in: FragIn) -> @location(0) vec4<f32> {
     let hot = clamp(spot * spot * k.core.x, 0.0, 1.0); // the core of a hit goes white
     c = mix(c, vec3<f32>(1.0) * e, hot);
     let emission = c * k.col.w;
-    let gain = select(1.0, 2.0, constants::STA64_HDR_EMISSION != 0);
-    return vec4<f32>(emission * gain, 0.0);
+    return vec4<f32>(emission, 0.0);
 }

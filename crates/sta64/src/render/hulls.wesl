@@ -31,7 +31,7 @@ struct HullParams {
     mdif: vec4<f32>,  // diffuse colour
     mspc: vec4<f32>,  // specular colour; a: its exponent
     // Specular and emissive maps (RND-38, mapped.rs; ported from the A2FOExtensions project).
-    map: vec4<f32>,   // x: 1 with a specular map; y: 1 with an emissive map
+    map: vec4<f32>,   // x: 1 with a specular map; y: 1 with an emissive map; z: emissive halo strength
     mhl: vec4<f32>,   // the highlight of a part with a specular map: colour and exponent (zero: none)
 };
 
@@ -153,12 +153,7 @@ fn add_emissive(c: vec3<f32>, em: vec3<f32>) -> vec3<f32> {
     if k.map.y < 0.5 {
         return c;
     }
-    let base = from_srgb(clamp(to_srgb(c) + to_srgb(em), vec3<f32>(0.0), vec3<f32>(1.0)));
-    // Feed the glow map itself into the HDR bloom energy, after the legacy colour combine.
-    if constants::STA64_HDR_EMISSION != 0 {
-        return base + em * 1.5;
-    }
-    return base;
+    return from_srgb(clamp(to_srgb(c) + to_srgb(em), vec3<f32>(0.0), vec3<f32>(1.0)));
 }
 
 // Stock: the original engine's fixed-function lighting from the SOD material, per light
@@ -248,6 +243,13 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     let m0 = textureSample(nmap, nmap_sampler, uv).rgb * 2.0 - vec3<f32>(1.0);
     let sm = textureSample(spec_map, map_sampler, uv).rgb;
     let em = textureSample(emit_map, emit_sampler, uv).rgb;
+    var halo = vec3<f32>(0.0);
+    if k.map.y > 0.5 && k.map.z > 0.0 {
+        // The emissive mip chain has two box-filter reductions at this bias.
+        // Keep only energy spread to neighbours. Bright cores keep their own colour.
+        let blurred = textureSampleBias(emit_map, emit_sampler, uv, 2.0).rgb;
+        halo = max(blurred - em, vec3<f32>(0.0)) * k.map.z;
+    }
     let dp1 = dpdx(wp);
     let dp2 = dpdy(wp);
     let du1 = dpdx(uv);
@@ -273,5 +275,6 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
             n = nb / l;
         }
     }
-    return shade(n, wp, t, sm, em);
+    let color = shade(n, wp, t, sm, em);
+    return vec4<f32>(color.rgb + halo, color.a);
 }

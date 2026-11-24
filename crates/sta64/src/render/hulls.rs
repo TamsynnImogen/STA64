@@ -99,7 +99,7 @@ pub struct HullParams {
     pub mdif: Vec4,
     pub mspc: Vec4,
     /// Specular and emissive maps (RND-38, `mapped.rs`): x 1 with a specular map, y 1 with an
-    /// emissive map.
+    /// emissive map, z the strength of the halo around bright texels.
     pub map: Vec4,
     /// The highlight of a part with a specular map: colour and exponent (`mapped::highlight_params`).
     pub mhl: Vec4,
@@ -136,7 +136,8 @@ impl HullMaterial {
     pub fn set_maps(&mut self, maps: Option<&crate::render::mapped::HullMaps>, switches: crate::render::mapped::MapSwitches) {
         self.spec_map = maps.and_then(|m| m.specular.clone()).filter(|_| switches.specular);
         self.emissive_map = maps.and_then(|m| m.emissive.clone()).filter(|_| switches.emissive);
-        self.params.map = Vec4::new(self.spec_map.is_some() as u8 as f32, self.emissive_map.is_some() as u8 as f32, 0.0, 0.0);
+        self.params.map.x = u8::from(self.spec_map.is_some()) as f32;
+        self.params.map.y = u8::from(self.emissive_map.is_some()) as f32;
     }
 }
 
@@ -185,7 +186,6 @@ impl Material for HullMaterial {
         // Match both passes: reflected hulls otherwise write occluding depth
         // for faces that their color pass culls.
         descriptor.primitive.cull_mode = if key.bind_group_data.double_sided { None } else { Some(Face::Back) };
-        super::post::emissive_hdr_shader_def(descriptor);
         Ok(())
     }
 }
@@ -211,6 +211,7 @@ pub struct HullView {
     /// SOD lighting material (its values are read and kept). Armada II and Fleet Operations
     /// are not changed by this.
     pub(crate) armada_one: bool,
+    emissive_bloom: f32,
 }
 
 impl HullView {
@@ -236,6 +237,7 @@ impl HullView {
         p.dcol = if stock { self.sdcol } else { self.dcol };
         p.sh = self.sh;
         p.shp = self.shp;
+        p.map.z = self.emissive_bloom;
     }
 
     /// The Key's shadow map as `shadows.rs` fitted it this frame (RND-15).
@@ -337,6 +339,7 @@ fn update_view(
     made: Res<HullMaterials>,
     mut materials: ResMut<Assets<HullMaterial>>,
     switches: Option<Res<crate::render::quality::PerfSwitches>>,
+    post: Option<Res<super::post::PostFx>>,
 ) {
     if switches.is_some_and(|s| s.freeze_hull_materials) {
         return;
@@ -364,9 +367,10 @@ fn update_view(
         let c = a.color.to_srgba();
         Vec3::new(c.red, c.green, c.blue)
     });
-    let now = HullView { eye: cam.translation().extend(1.0), dvec, dcol, sdvec, sdcol, stock, ambient: amb, armada_one, ..view.clone() };
+    let emissive_bloom = post.filter(|fx| fx.bloom).map_or(0.0, |fx| fx.bloom_intensity.clamp(0.0, 1.0));
+    let now = HullView { eye: cam.translation().extend(1.0), dvec, dcol, sdvec, sdcol, stock, ambient: amb, armada_one, emissive_bloom, ..view.clone() };
     let moved = (now.eye - view.eye).length_squared() > 1e-4;
-    if !moved && now.dvec == view.dvec && now.dcol == view.dcol && now.sdvec == view.sdvec && now.sdcol == view.sdcol && now.stock == view.stock && now.armada_one == view.armada_one && now.ambient == view.ambient {
+    if !moved && now.dvec == view.dvec && now.dcol == view.dcol && now.sdvec == view.sdvec && now.sdcol == view.sdcol && now.stock == view.stock && now.armada_one == view.armada_one && now.ambient == view.ambient && now.emissive_bloom == view.emissive_bloom {
         return;
     }
     let switched = now.stock != view.stock || now.armada_one != view.armada_one;
@@ -381,7 +385,8 @@ fn update_view(
                 let (s, e) = (spec.is_some(), emissive.is_some());
                 m.spec_map = spec;
                 m.emissive_map = emissive;
-                m.params.map = Vec4::new(s as u8 as f32, e as u8 as f32, 0.0, 0.0);
+                m.params.map.x = u8::from(s) as f32;
+                m.params.map.y = u8::from(e) as f32;
             }
         }
     }
@@ -673,8 +678,7 @@ mod tests {
     /// material bind group filled in.
     #[test]
     fn hull_shader_validates() {
-        let src = include_str!("hulls.wesl").replace("constants::MATERIAL_BIND_GROUP", "3")
-            .replace("constants::STA64_HDR_EMISSION", "1");
+        let src = include_str!("hulls.wesl").replace("constants::MATERIAL_BIND_GROUP", "3");
         let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)
@@ -1052,7 +1056,7 @@ mod gpu {
             let lit = take(&mut app, "mapped-white");
             set(&mut app, Some(black.clone()), None);
             let masked = take(&mut app, "mapped-black");
-            set(&mut app, None, Some(red.clone()));
+            set(&mut app, None, Some(red));
             let glow = take(&mut app, "mapped-emissive");
             eprintln!("RND-38 sums (G): none {} white {} black {}; (R): none {} emissive {}; (G): emissive {}", sum(&base, 1), sum(&lit, 1), sum(&masked, 1), sum(&base, 0), sum(&glow, 0), sum(&glow, 1));
             assert!(sum(&lit, 1) > sum(&base, 1), "a white specular map adds the default highlight");
@@ -1104,41 +1108,59 @@ mod gpu {
             assert!(d1 > 10_000, "the strip glows on UVs inside 0..1");
             assert!(d4 * 10 > d1 * 6, "and on UVs outside 0..1 as much (repeat), not smeared from the edge ({d4} vs {d1})");
 
-            // Run the real HDR bloom pass. Count coloured light in pixels that were
-            // background before bloom, outside the hull or the small diagnostic flare.
-            use bevy::camera::Hdr;
-            use bevy::core_pipeline::tonemapping::Tonemapping;
-            use bevy::post_process::bloom::Bloom;
+            // Use the normal settings resource and the texture loader's box-filtered
+            // mips. Compare the same scene for both values of the Bloom toggle.
             use crate::render::fx::quad::{self, Look};
-            let halo = |without: &[u8], with: &[u8], channel: usize| {
-                without.chunks_exact(4).zip(with.chunks_exact(4)).filter(|(a, b)| {
-                    a[0] < 6 && a[1] < 6 && a[2] < 12
-                        && b[channel].saturating_sub(a[channel]) > 2
-                }).count()
+            use crate::render::post::PostFx;
+            use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
+            app.world_mut().entity_mut(camera).insert((Tonemapping::None, DebandDither::Disabled));
+            app.insert_resource(PostFx::default());
+            let texels = sta_assets::Rgba {
+                width: 64, height: 64, has_alpha: false,
+                pixels: (0..4096).flat_map(|n| {
+                    if n % 16 < 4 { [255, 0, 0, 255] } else { [0, 0, 0, 255] }
+                }).collect(),
             };
-            app.world_mut().entity_mut(camera).insert((Hdr, Tonemapping::None));
-            app.world_mut().entity_mut(camera).remove::<bevy::core_pipeline::tonemapping::DebandDither>();
-            set(&mut app, None, Some(red));
+            let image = crate::render::textures::upload(&sta_assets::pixels::generate_mips(&texels), true);
+            let image = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+            set(&mut app, None, Some(image));
             let bare = take(&mut app, "emissive-bloom-off");
-            app.world_mut().entity_mut(camera).insert(crate::render::post::emissive_bloom(0.12));
+            app.world_mut().resource_mut::<PostFx>().bloom = true;
             let bloomed = take(&mut app, "emissive-bloom-on");
-            let red_halo = halo(&bare, &bloomed, 0);
-            eprintln!("HDR hull red halo: {red_halo} pixels");
-            assert!(red_halo > 30, "emissive map bloomed outside the hull");
+            let mut affected = 0;
+            let mut peak_gain = 0;
+            for (index, (before, after)) in bare.chunks_exact(4).zip(bloomed.chunks_exact(4)).enumerate() {
+                let gain = after[0].saturating_sub(before[0]);
+                assert_eq!(before[1..], after[1..], "the red map should only add red");
+                let (x, y) = (index % SIZE as usize, index / SIZE as usize);
+                if !(16..80).contains(&x) || !(16..80).contains(&y) {
+                    assert_eq!(before, after, "the glow should stay on the hull");
+                }
+                affected += usize::from(gain > 2);
+                peak_gain = peak_gain.max(gain);
+            }
+            eprintln!("Emissive halo: {affected} lit neighbours, peak gain {peak_gain}/255");
+            assert!(affected > 20 && peak_gain < 70, "a small halo around the lit texels");
 
+            // Even a white hull and a bright additive shot contribute nothing to the halo.
             app.world_mut().entity_mut(subject).insert(Visibility::Hidden);
-            app.world_mut().entity_mut(camera).remove::<Bloom>();
+            let white = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial {
+                base_color: Color::WHITE, unlit: true, ..default()
+            });
+            let ball = app.world_mut().resource_mut::<Assets<Mesh>>().add(Sphere::new(0.35));
+            app.world_mut().spawn((Mesh3d(ball), MeshMaterial3d(white), Transform::from_xyz(-0.7, 0.0, 0.0)));
             let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(quad::rectangle());
             let look = Look::new(quad::K_HOT, Vec3::new(0.0, 1.0, 0.0));
             let material = app.world_mut().resource_mut::<Assets<quad::FxQuadMaterial>>()
-                .add(quad::FxQuadMaterial { params: look.params(1.0, 0.0) });
-            app.world_mut().spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::from_scale(Vec3::splat(0.55))));
-            let bare = take(&mut app, "effect-bloom-off");
-            app.world_mut().entity_mut(camera).insert(crate::render::post::emissive_bloom(0.12));
-            let bloomed = take(&mut app, "effect-bloom-on");
-            let green_halo = halo(&bare, &bloomed, 1);
-            eprintln!("HDR effect green halo: {green_halo} pixels");
-            assert!(green_halo > 20, "the luminous effect bloomed outside its core");
+                .add(quad::FxQuadMaterial { params: look.params(4.0, 0.0) });
+            app.world_mut().spawn((Mesh3d(mesh), MeshMaterial3d(material),
+                Transform::from_xyz(0.7, 0.0, 0.0).with_scale(Vec3::splat(0.55))));
+            app.world_mut().resource_mut::<PostFx>().bloom = false;
+            let bright = take(&mut app, "non-emissive-bloom-off");
+            assert!(bright.chunks_exact(4).any(|p| p[0] == 255 && p[1] == 255 && p[2] == 255));
+            assert!(bright.chunks_exact(4).any(|p| p[0] < 10 && p[1] == 255 && p[2] < 10));
+            app.world_mut().resource_mut::<PostFx>().bloom = true;
+            assert_eq!(take(&mut app, "non-emissive-bloom-on"), bright, "only mapped emissions can bloom");
         }
         let errors = ERRORS.lock().unwrap().clone();
         assert!(errors.is_empty(), "shader/pipeline ERROR events:\n{}", errors.join("\n"));
