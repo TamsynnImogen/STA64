@@ -24,7 +24,7 @@
 //!   `NORMAL_WEAPON_TEAM_COLOR` is set, then the owner's team colour for phasers, pulses and
 //!   photon, poleron and shield-removing torpedoes (read from the executable, static). The
 //!   engine's own brightness factor is taken as 1 (INTERIM, not determined). Stock post FX
-//!   draws no bloom unless a preset asks for one (`PostFx::default`); the shots add no emphasis.
+//!   draws at the stock brightness; the shots add no emphasis.
 //! - **Geometry.** A ribbon's side vector is normalize((a - eye) x (b - eye)) and `Radius` is its
 //!   FULL width (measured); the texture is stretched once from a to b, a tiled sprite repeats
 //!   along the beam once per rectangle width (read from data and the executable, static). A
@@ -812,7 +812,6 @@ impl Material for StockShotMaterial {
         _key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         additive_state(descriptor);
-        super::super::post::emissive_hdr_shader_def(descriptor);
         Ok(())
     }
 }

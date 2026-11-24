@@ -340,6 +340,14 @@ impl WorldSource for PeerSource {
     fn node_view(&self) -> Vec<sta_sim::economy::view::NodeView> {
         self.0.lock().peer.sim().node_view()
     }
+
+    fn warp_phases(&self) -> Vec<(sta_sim::EntityId, bool)> {
+        self.0.lock().peer.sim().warp_phases()
+    }
+
+    fn impulse_caps(&self) -> Vec<(sta_sim::EntityId, sta_sim::Fixed)> {
+        self.0.lock().peer.sim().impulse_caps()
+    }
 }
 
 // ---------------------------------------------------------------------------

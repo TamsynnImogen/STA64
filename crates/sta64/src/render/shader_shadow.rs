@@ -38,6 +38,7 @@ pub const VFS_DIR: &str = "shaders";
 pub const EMBEDDED: &[&str] = &[
     "render/fog.wesl",
     "render/hulls.wesl",
+    "render/hulls/emissive_blur.wesl",
     "render/hulls_prepass.wesl",
     "render/map_grid.wesl",
     "render/nebula.wesl",
@@ -79,6 +80,7 @@ fn embedded_source(path: &str) -> Option<&'static [u8]> {
     Some(match path {
         "render/fog.wesl" => include_bytes!("fog.wesl"),
         "render/hulls.wesl" => include_bytes!("hulls.wesl"),
+        "render/hulls/emissive_blur.wesl" => include_bytes!("hulls/emissive_blur.wesl"),
         "render/hulls_prepass.wesl" => include_bytes!("hulls_prepass.wesl"),
         "render/map_grid.wesl" => include_bytes!("map_grid.wesl"),
         "render/nebula.wesl" => include_bytes!("nebula.wesl"),

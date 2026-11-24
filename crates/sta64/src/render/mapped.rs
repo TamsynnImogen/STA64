@@ -4,7 +4,7 @@
 //! conventions are adapted, none of its code runs), with D1, D3 and D11.
 //!
 //! Evidence grade: the declaration, the file names, the faction fallback, the file formats and
-//! the emissive combine are ported from the extension's source and documentation. The highlight
+//! the emissive map selection follow the extension's source and documentation. The highlight
 //! equation is read from the comments of her renderer interface header and from her scene code;
 //! the renderer's own shader is in neither repository, so the arithmetic is this port's. None of
 //! it was measured on a running extension.
@@ -18,7 +18,9 @@
 //! (The extension instead merges each setting over every copy; see the PR body.) In the effective
 //! file an empty value turns the convention off, and a value that is not 1 to 64 ASCII letters,
 //! digits, `_` or `-` also leaves it off, because under that reading the invalid assignment is the
-//! last one and nothing is inherited past it. Content that declares neither is never searched.
+//! last one and nothing is inherited past it. A class can also name emissive textures with
+//! its ODF. `textureX` selects the material for `emissiveXWarp`, `emissiveXImpulse` and the
+//! other channel keys. Without indexed materials, the unnumbered keys are used.
 //!
 //! # Files (`.dds`, `.tga`, `.png`, `.bmp`; the search order is the extension's: each mounted layer
 //! in precedence order (active mod first, then its parents, then the base data), within it textures,
@@ -38,10 +40,10 @@
 //!   after texturing, times the mask. The default strength and power match A2FOExtensions' Refit
 //!   path. `STA64_SPECULAR_MATERIAL_COLOURS=1` opts into a Phong material's own colour and power.
 //!   With that option, a zero colour or power means no highlight.
-//! - Emissive: the maps of a material are combined, the brightest value per RGB channel at each
-//!   texel (the first sets the size, the rest are scaled to it, alpha ignored), and added to the
-//!   lit colour in display (gamma) values, clipped at 1. Self-lit: lights, shadows and the team
-//!   colour do not touch it. A lone map is used as authored (its mips kept).
+//! - Emissive: the six subsystems are retained as separate array layers. The first present map
+//!   sets their common size, other maps are scaled to it, and each layer gets its own mips.
+//!   Runtime state chooses which layers emit. Alpha is ignored; lights, shadows and team colour
+//!   do not touch self-lit pixels.
 //!
 //! The extension's default for specular is a legacy flat overlay on bumped materials only; the
 //! per-pixel rule ported here is the one of its Refit renderer path, which a mod author on the
@@ -54,7 +56,7 @@ use sta_assets::dds::DdsKind;
 use sta_assets::{pixels, Rgba, TextureFormat as Fmt};
 
 use crate::render::stock::hulls::StockLight;
-use crate::render::textures::{repeat_sampler, upload, Loader};
+use crate::render::textures::{repeat_sampler, upload, upload_emissive, Loader};
 
 /// The default highlight colour on each channel (the extension's `SpecularMapStrength`).
 pub const DEFAULT_STRENGTH: f32 = 0.5;
@@ -223,9 +225,15 @@ impl Loader<'_> {
     /// The maps the mod's declarations give a group whose diffuse is `diffuse` (`faction`: the
     /// faction suffix of the variant drawn, `known`: the faction suffixes a diffuse may end in).
     /// `None` when nothing is declared or no file exists; nothing is searched when undeclared.
-    pub fn hull_maps(&mut self, diffuse: &str, faction: Option<&str>, known: &[&str]) -> Option<HullMaps> {
+    #[cfg(test)]
+    fn hull_maps(&mut self, diffuse: &str, faction: Option<&str>, known: &[&str]) -> Option<HullMaps> {
+        self.hull_maps_for_part(diffuse, faction, known, None)
+    }
+
+    /// Resolve one material's maps, with inherited class ODF entries when available.
+    pub fn hull_maps_for_part(&mut self, diffuse: &str, faction: Option<&str>, known: &[&str], raw: Option<&sta_odf::Odf>) -> Option<HullMaps> {
         let suffixes = self.map_suffixes();
-        if !suffixes.any() {
+        if !suffixes.any() && raw.is_none() {
             return None;
         }
         // The spawn path has no faction catalogue at hand: the races' declared suffixes are read
@@ -233,7 +241,7 @@ impl Loader<'_> {
         let races = self.race_suffixes();
         let mut all: Vec<&str> = known.to_vec();
         all.extend(races.iter().map(String::as_str).filter(|r| !known.contains(r)));
-        self.hull_maps_with(&suffixes, diffuse, faction, &all, MapSwitches::startup(), MAX_SPECULAR_BYTES)
+        self.hull_maps_with_raw(&suffixes, diffuse, faction, &all, (MapSwitches::startup(), MAX_SPECULAR_BYTES), raw)
     }
 
     /// The faction suffixes the mount's races declare, read once per mount.
@@ -249,7 +257,12 @@ impl Loader<'_> {
         v
     }
 
-    pub fn hull_maps_with(&mut self, suffixes: &MapSuffixes, diffuse: &str, faction: Option<&str>, known: &[&str], switches: MapSwitches, cap: usize) -> Option<HullMaps> {
+    #[cfg(test)]
+    fn hull_maps_with(&mut self, suffixes: &MapSuffixes, diffuse: &str, faction: Option<&str>, known: &[&str], switches: MapSwitches, cap: usize) -> Option<HullMaps> {
+        self.hull_maps_with_raw(suffixes, diffuse, faction, known, (switches, cap), None)
+    }
+
+    fn hull_maps_with_raw(&mut self, suffixes: &MapSuffixes, diffuse: &str, faction: Option<&str>, known: &[&str], (switches, cap): (MapSwitches, usize), raw: Option<&sta_odf::Odf>) -> Option<HullMaps> {
         let mut all = vec![BORG_SUFFIX];
         all.extend_from_slice(known);
         let (base, own) = split_faction(stem(diffuse), &all);
@@ -259,8 +272,8 @@ impl Loader<'_> {
         if let (Some(s), true) = (&suffixes.specular, switches.specular) {
             maps.specular = self.mask_map(base, s, faction, cap);
         }
-        if let (Some(s), true) = (&suffixes.emissive, switches.emissive) {
-            maps.emissive = self.emissive_map(base, s, faction);
+        if switches.emissive && (suffixes.emissive.is_some() || raw.is_some()) {
+            maps.emissive = self.emissive_map(base, suffixes.emissive.as_deref(), faction, raw, diffuse);
         }
         (!maps.is_empty()).then_some(maps)
     }
@@ -316,24 +329,62 @@ impl Loader<'_> {
         handle
     }
 
-    fn emissive_map(&mut self, base: &str, suffix: &str, faction: Option<&str>) -> Option<Handle<Image>> {
-        let key = format!("m:e:{base}:{suffix}:{}", faction.unwrap_or("")).to_ascii_lowercase();
+    fn emissive_map(&mut self, base: &str, suffix: Option<&str>, faction: Option<&str>, raw: Option<&sta_odf::Odf>, diffuse: &str) -> Option<Handle<Image>> {
+        const ODF_WORDS: [&str; 6] = ["Warp", "Impulse", "Shields", "LifeSupport", "Sensors", "Weapons"];
+        let indexed = raw.is_some_and(|odf| (0..64).any(|index| odf.str(&format!("texture{index}")).is_some()));
+        let selected = raw.and_then(|odf| {
+            (0..64).find(|index| odf.str(&format!("texture{index}")).is_some_and(|name| stem(name).eq_ignore_ascii_case(stem(diffuse))))
+        });
+        let files: [Option<(String, &'static str)>; 6] = std::array::from_fn(|index| {
+            let explicit = raw.and_then(|odf| {
+                let key = if indexed { format!("emissive{}{word}", selected?, word = ODF_WORDS[index]) }
+                          else { format!("emissive{}", ODF_WORDS[index]) };
+                odf.str(&key)
+            });
+            if let Some(name) = explicit {
+                // An explicit declaration is authoritative even when its file is missing.
+                return find_explicit_map_file(self.vfs, name);
+            }
+            if indexed && selected.is_none() { return None; }
+            let suffix = suffix?;
+            self.first_file(&names(base, suffix, EMISSIVE_WORDS[index], faction))
+                .or_else(|| {
+                    // Some installed maps use the ODF word “Sensors” as their suffix.
+                    (EMISSIVE_WORDS[index] == "sensor").then(|| {
+                        self.first_file(&names(base, suffix, "sensors", faction))
+                    }).flatten()
+                })
+        });
+        let key = format!("m:e:{}", files.iter().map(|file| file.as_ref().map_or("-".to_owned(), |(path, _)| {
+            let origin = self.vfs.resolve(path).and_then(|(layer, _)| self.vfs.layers().get(layer)).map_or("unknown", |layer| layer.name());
+            format!("{origin}:{path}")
+        })).collect::<Vec<_>>().join("|"));
         if let Some(h) = self.cache.map.get(&key) {
             return h.clone();
         }
-        let files: Vec<(String, &'static str)> = EMISSIVE_WORDS.iter().filter_map(|w| self.first_file(&names(base, suffix, w, faction))).collect();
-        let image = match files.as_slice() {
-            [] => None,
-            [(p, e)] => self.image_of(p, e, true, None),
-            many => {
-                let px: Vec<Rgba> = many.iter().filter_map(|(p, e)| self.pixels_of(p, e)).collect();
-                combine_emissive(&px).map(|c| upload(&pixels::generate_mips(&c), true))
-            }
-        };
+        let channels = files.map(|file| file.and_then(|(path, ext)| self.pixels_of(&path, ext)));
+        let image = upload_emissive(&channels);
         let handle = image.map(|i| self.images.add(i));
         self.cache.map.insert(key, handle.clone());
         handle
     }
+}
+
+fn find_explicit_map_file(vfs: &sta_vfs::Vfs, name: &str) -> Option<(String, &'static str)> {
+    let normalized = name.replace('\\', "/").to_ascii_lowercase();
+    let basename = normalized.rsplit('/').next().unwrap_or(&normalized);
+    if basename.contains('.') {
+        let ext = EXTENSIONS.iter().copied().find(|ext| normalized.ends_with(&format!(".{ext}")))?;
+        if vfs.resolve(&normalized).is_some() { return Some((normalized, ext)); }
+        return find_map_file(vfs, stem(&normalized));
+    }
+    if normalized.contains('/') {
+        return EXTENSIONS.iter().copied().find_map(|ext| {
+            let path = format!("{normalized}.{ext}");
+            vfs.resolve(&path).map(|_| (path, ext))
+        });
+    }
+    find_map_file(vfs, &normalized)
 }
 
 /// `name` as a map file, in the extension's order: the layer that wins by the mount's precedence
@@ -353,34 +404,6 @@ fn find_map_file(vfs: &sta_vfs::Vfs, name: &str) -> Option<(String, &'static str
         }
     }
     best.map(|(_, p, e)| (p, e))
-}
-
-/// The emissive maps of a material as one: the first sets the size, the others are scaled to it
-/// (nearest texel), the brightest value per RGB channel is kept, alpha is ignored (opaque).
-pub fn combine_emissive(maps: &[Rgba]) -> Option<Rgba> {
-    let first = maps.first()?;
-    let (w, h) = (first.width.max(1), first.height.max(1));
-    let mut out = vec![0u8; (w * h * 4) as usize];
-    for map in maps {
-        if map.width == 0 || map.height == 0 || map.pixels.len() < (map.width * map.height * 4) as usize {
-            continue;
-        }
-        for y in 0..h {
-            let sy = (y as u64 * map.height as u64 / h as u64) as u32;
-            for x in 0..w {
-                let sx = (x as u64 * map.width as u64 / w as u64) as u32;
-                let s = ((sy * map.width + sx) * 4) as usize;
-                let d = ((y * w + x) * 4) as usize;
-                for c in 0..3 {
-                    out[d + c] = out[d + c].max(map.pixels[s + c]);
-                }
-            }
-        }
-    }
-    for px in out.chunks_exact_mut(4) {
-        px[3] = 255;
-    }
-    Some(Rgba { width: w, height: h, has_alpha: false, pixels: out })
 }
 
 #[cfg(test)]
@@ -579,20 +602,61 @@ mod tests {
     }
 
     #[test]
-    fn declared_emissive_maps_are_combined_and_a_lone_one_is_kept() {
+    fn declared_emissive_maps_keep_independent_subsystem_layers() {
         let cfg = "#define A2FO_EMISSIVE_SUFFIX \"_emissive_\"\n";
         let install = Install::new("emit", Some(cfg), &[("ship_emissive_warp.tga", tga(200, 0, 0)), ("ship_emissive_weapons.tga", tga(0, 150, 9)), ("lone_emissive_life.tga", tga(7, 8, 9))]);
         let (t, _) = install.run(false, |l| {
             let m = l.hull_maps("ship", None, &[]).unwrap();
             assert!(m.specular.is_none());
-            first_texel(l, &m.emissive)
+            let image = l.images.get(m.emissive.as_ref().unwrap()).unwrap();
+            assert_eq!(image.texture_descriptor.size.depth_or_array_layers, 6);
+            image.data.as_ref().unwrap().clone()
         });
-        assert_eq!(t.unwrap(), [200, 150, 9, 255], "brightest per channel, opaque");
+        assert_eq!(&t[0..3], &[200, 0, 0]);
+        assert_eq!(&t[5 * 4..5 * 4 + 3], &[0, 150, 9]);
         let (t, _) = install.run(false, |l| {
             let m = l.hull_maps("lone", None, &[]).unwrap();
-            first_texel(l, &m.emissive)
+            l.images.get(m.emissive.as_ref().unwrap()).unwrap().data.as_ref().unwrap().clone()
         });
-        assert_eq!(&t.unwrap()[..3], &[7, 8, 9]);
+        assert_eq!(&t[3 * 4..3 * 4 + 3], &[7, 8, 9]);
+    }
+
+    #[test]
+    fn explicit_indexed_emissive_works_without_cfg_and_does_not_bleed() {
+        let install = Install::new("indexed", None, &[("fconst_emissive_warp.tga", tga(31, 0, 0)), ("fconst_emissive_impulse.tga", tga(0, 42, 0))]);
+        let raw = sta_odf::resolve("test.odf", &mut |_| Some("texture0 = \"fconst\"\nemissive0Warp = \"fconst_emissive_warp\"\nemissive0Impulse = \"fconst_emissive_impulse.tga\"\n".into())).unwrap();
+        let (found, _) = install.run(false, |l| {
+            let mapped = l.hull_maps_for_part("fconst", None, &[], Some(&raw)).unwrap();
+            let data = l.images.get(mapped.emissive.as_ref().unwrap()).unwrap().data.as_ref().unwrap();
+            (data[0], data[4 + 1], l.hull_maps_for_part("unrelated", None, &[], Some(&raw)).is_none())
+        });
+        assert_eq!(found, (31, 42, true));
+    }
+
+    #[test]
+    fn installed_test_mod_fakula_emissive_channels() {
+        let Ok(mod_path) = std::env::var("STA64_EMISSIVE_INSTALL") else { return };
+        let mod_path = std::path::Path::new(&mod_path);
+        assert_eq!(mod_path.file_name().and_then(|name| name.to_str()), Some("test"));
+        let root = mod_path.ancestors().nth(3).expect("Data/Mods/test install path");
+        let vfs = sta_vfs::Vfs::mount_install(root, Some("test")).unwrap();
+        let (model_path, format) = sta_assets::find_model(&vfs, "fakula").expect("installed test model");
+        let model = sta_assets::load_model(&vfs, &model_path, format).unwrap();
+        let diffuse = model.nodes.iter().filter_map(|node| node.mesh())
+            .flat_map(|mesh| &mesh.groups).filter_map(|group| group.maps.diffuse.as_deref())
+            .find(|name| stem(name).eq_ignore_ascii_case("fakula")).expect("Akula diffuse material");
+        let mut cache = crate::render::textures::TextureCache::default();
+        let mut images = Assets::<Image>::default();
+        let mut loader = Loader { vfs: &vfs, cache: &mut cache, images: &mut images, formats: bevy::image::CompressedImageFormats::NONE };
+        let maps = loader.hull_maps_for_part(diffuse, None, &[], None).expect("authored FAkula emissive maps");
+        let image = loader.images.get(maps.emissive.as_ref().unwrap()).unwrap();
+        assert_eq!(image.texture_descriptor.size.depth_or_array_layers, 6);
+        let data = image.data.as_ref().unwrap();
+        let per_layer = data.len() / 6;
+        for (index, expected) in [true, true, false, true, true, false].into_iter().enumerate() {
+            let active = data[index * per_layer..(index + 1) * per_layer].chunks_exact(4).any(|pixel| pixel[..3] != [0, 0, 0]);
+            assert_eq!(active, expected, "FAkula channel {}", EMISSIVE_WORDS[index]);
+        }
     }
 
     #[test]
@@ -752,15 +816,6 @@ mod tests {
     fn emissive_adds_and_clips() {
         assert_eq!(add_emissive(Vec3::splat(0.25), Vec3::new(0.5, 0.0, 1.0)), Vec3::new(0.75, 0.25, 1.0));
         assert_eq!(add_emissive(Vec3::splat(0.25), Vec3::ZERO), Vec3::splat(0.25));
-    }
-
-    #[test]
-    fn emissive_maps_combine_by_the_brightest_channel_and_ignore_alpha() {
-        let solid = |w: u32, h: u32, c: [u8; 4]| Rgba { width: w, height: h, has_alpha: true, pixels: c.repeat((w * h) as usize) };
-        let c = combine_emissive(&[solid(2, 2, [200, 10, 0, 7]), solid(4, 4, [10, 150, 30, 255])]).unwrap();
-        assert_eq!((c.width, c.height), (2, 2), "the first map sets the size");
-        assert_eq!(&c.pixels[..4], &[200, 150, 30, 255]);
-        assert!(combine_emissive(&[]).is_none());
     }
 
     #[test]

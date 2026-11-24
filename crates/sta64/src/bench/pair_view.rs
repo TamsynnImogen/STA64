@@ -90,10 +90,28 @@ pub(super) fn add(app: &mut App, cfg: &LaunchConfig, scene_camera: Option<BenchC
         .add_plugins(crate::render::post::PostFxPlugin::from_cfg(cfg))
         .add_plugins((crate::render::cull::CullPlugin, crate::render::profile::ProfilePlugin, crate::render::shader_shadow::ShaderShadowPlugin));
 
+    if sprite_reference() {
+        // ADR 0009 S6: the frame-identity run draws sprite nodes through `main`'s per-node
+        // materials (adoption off, the switch the GPU test's reference path uses), to be compared
+        // byte for byte with the default run, which draws them through the shared look materials.
+        app.world_mut().resource_mut::<crate::render::sprites::material::SpriteLooks>().adopt = false;
+        eprintln!("sprite nodes: per-node materials (reference path, {SPRITE_REFERENCE}=1)");
+    }
+
     app.add_systems(Update, (adopt_views, aim_orbit).chain().in_set(GameSet::Bench).after(bench_frame))
         .add_systems(Update, (retarget, hide_text))
         .add_systems(PostUpdate, place_camera.before(TransformSystems::Propagate));
     Ok(())
+}
+
+/// The variable that turns the reference path on in a headless install-content run (frames or a
+/// performance run): `1` draws sprite nodes through their own `StandardMaterial`s, as before ADR
+/// 0009, instead of the shared look materials. A bench switch for the frame-identity test
+/// (`tests/sprite_frame_identity.rs`); the game never reads it.
+pub const SPRITE_REFERENCE: &str = "STA64_SPRITE_REFERENCE";
+
+fn sprite_reference() -> bool {
+    std::env::var(SPRITE_REFERENCE).as_deref() == Ok("1")
 }
 
 /// The frame's offscreen image.

@@ -100,8 +100,6 @@ struct CachedPart {
     rock: Option<crate::render::rock::RockPart>,
     /// Set on a hull's parts (not skies), for the hull look (`render/hulls.rs`).
     hull: Option<crate::render::hulls::HullPart>,
-    /// The mod's specular and emissive maps for the group's diffuse (RND-38), when it declares any.
-    maps: Option<crate::render::mapped::HullMaps>,
     /// The part belongs to a dilithium moon (its rock or its `glowdmoon` shell): `rock::MoonPart`.
     moon: Option<crate::render::rock::MoonKind>,
 }
@@ -180,7 +178,11 @@ pub struct SpawnCtx<'a, 'w, 's> {
 
 /// Spawn `model` under `root`. Only the finest LOD level of each LOD switch is shown.
 pub fn spawn(ctx: &mut SpawnCtx, model: &Model, root: Entity) -> SpawnStats {
-    spawn_impl(ctx, model, root, None)
+    spawn_impl(ctx, model, root, None, None)
+}
+
+pub fn spawn_with_odf(ctx: &mut SpawnCtx, model: &Model, root: Entity, odf: &sta_odf::Odf) -> SpawnStats {
+    spawn_impl(ctx, model, root, None, Some(odf))
 }
 
 /// Spawn an unfinished instance with deterministic spatial geometry reveal.
@@ -192,12 +194,13 @@ pub fn spawn_construction(
     root: Entity,
     chunks: u16,
     progress: f32,
+    odf: Option<&sta_odf::Odf>,
 ) -> SpawnStats {
     let progress = progress.clamp(0.0, 1.0);
     if progress >= 1.0 {
-        spawn(ctx, model, root)
+        spawn_impl(ctx, model, root, None, odf)
     } else {
-        spawn_impl(ctx, model, root, Some((chunks.clamp(1, 256), progress)))
+        spawn_impl(ctx, model, root, Some((chunks.clamp(1, 256), progress)), odf)
     }
 }
 
@@ -206,6 +209,7 @@ fn spawn_impl(
     model: &Model,
     root: Entity,
     construction: Option<(u16, f32)>,
+    odf: Option<&sta_odf::Odf>,
 ) -> SpawnStats {
     let mut stats = SpawnStats::default();
 
@@ -336,7 +340,7 @@ fn spawn_impl(
                 max = max.max(w);
             }
             let flip = flipbooks.get(&node.name.to_ascii_lowercase());
-            spawn_mesh(ctx, model, i, mesh, id, flip,
+            spawn_mesh(ctx, model, i, mesh, id, flip, odf,
                 plan.as_ref().map(|plan| (plan, root, completed)),
                 &mut stats,
             );
@@ -483,6 +487,7 @@ fn spawn_mesh(
     mesh: &ModelMesh,
     parent: Entity,
     flipbook: Option<&(String, f32)>,
+    odf: Option<&sta_odf::Odf>,
     construction: Option<(
         &crate::render::construction::ConstructionPlan,
         Entity,
@@ -514,10 +519,19 @@ fn spawn_mesh(
             ctx.scale.to_bits(),
             construction.is_some(),
         );
+        // A shared mesh may be used by several ODFs with different emissive overrides.
+        let mapped = |ctx: &mut SpawnCtx, part: &CachedPart| {
+            part.hull.as_ref().and(group.maps.diffuse.as_deref()).and_then(|diffuse| {
+                ctx.textures.hull_maps_for_part(
+                    diffuse, ctx.borg.then_some(crate::render::mapped::BORG_SUFFIX), &[], odf,
+                )
+            })
+        };
         let reveal = construction
             .map(|(plan, _, _)| plan.part_source(model, node_index, group_index, mesh, ctx.scale));
         if let Some(part) = ctx.parts.as_ref().and_then(|c| c.map.get(&cache_key)).cloned() {
-            spawn_part(ctx, &part, parent, (node_index, group_index), flipbook,
+            let maps = mapped(ctx, &part);
+            spawn_part(ctx, &part, parent, (node_index, group_index), flipbook, maps,
                 construction.map(|(_, root, stage)| (root, reveal.clone().unwrap(), stage)),
                 stats,
             );
@@ -715,9 +729,6 @@ fn spawn_mesh(
             team_face: team && !crate::render::stock::hulls::is_borg_glow(&group.material),
         },
         );
-        // Specular and emissive maps the mod declares for this diffuse (RND-38); nothing is looked
-        // up when `ART_CFG.h` declares neither suffix.
-        let mapped = hull.as_ref().and(maps.diffuse.as_deref()).and_then(|d| ctx.textures.hull_maps(d, ctx.borg.then_some(crate::render::mapped::BORG_SUFFIX), &[]));
         let part = CachedPart {
             mesh: ctx.meshes.add(bevy_mesh),
             material: ctx.materials.add(material),
@@ -726,13 +737,13 @@ fn spawn_mesh(
             triangles,
             rock,
             hull,
-            maps: mapped,
             moon,
         };
         if let Some(cache) = ctx.parts.as_mut() {
             cache.map.insert(cache_key, part.clone());
         }
-        spawn_part(ctx, &part, parent, (node_index, group_index), flipbook,
+        let maps = mapped(ctx, &part);
+        spawn_part(ctx, &part, parent, (node_index, group_index), flipbook, maps,
             construction.map(|(_, root, stage)| (root, reveal.unwrap(), stage)),
             stats,
         );
@@ -742,7 +753,9 @@ fn spawn_mesh(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_part(ctx: &mut SpawnCtx, part: &CachedPart, parent: Entity, surface: (usize, usize), flipbook: Option<&(String, f32)>,
+    maps: Option<crate::render::mapped::HullMaps>,
     construction: Option<(
         Entity,
         std::sync::Arc<crate::render::construction::ConstructionSource>,
@@ -798,8 +811,8 @@ fn spawn_part(ctx: &mut SpawnCtx, part: &CachedPart, parent: Entity, surface: (u
     if let Some(h) = part.hull {
         e.insert(h);
     }
-    if let Some(m) = &part.maps {
-        e.insert(m.clone());
+    if let Some(maps) = maps {
+        e.insert(maps);
     }
     if let Some(kind) = part.moon {
         e.insert(crate::render::rock::MoonPart { source: part.material.clone(), kind });

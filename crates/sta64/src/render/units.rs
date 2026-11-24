@@ -510,7 +510,7 @@ pub(crate) fn attach_models(
             .map(|progress| progress.to_f32().clamp(0.0, 1.0)));
         let stats = if progress.is_some_and(|progress| progress < 1.0) {
             let chunks = construction_chunk_count(def);
-            model_scene::spawn_construction(&mut ctx, &model, e, chunks, 0.0)
+            model_scene::spawn_construction(&mut ctx, &model, e, chunks, 0.0, Some(&def.raw))
         } else {
             // A resource rock's model turns on a pivot below the unit, which `place` leaves alone.
             let under = if sim.is_some() && def.is_evolver() {
@@ -520,7 +520,7 @@ pub(crate) fn attach_models(
             } else {
                 crate::render::spin::rock_pivot(ctx.commands, e, &def.class.0, def.raw.f32("rotationSpeed"), sim.map_or(0, |s| s.0.0 as u64))
             };
-            model_scene::spawn(&mut ctx, &model, under)
+            model_scene::spawn_with_odf(&mut ctx, &model, under, &def.raw)
         };
         if override_model.is_some() {
             commands.entity(e).insert(crate::render::build_visuals::CocoonMesh);
@@ -616,7 +616,7 @@ pub(super) fn research_rotation(axes: [sta_sim::Vec3; 3]) -> Quat {
 }
 
 /// Place each unit between its last two ticks.
-pub(crate) fn place(link: Res<SimLink>, clock: Res<AnimClock>, mut q: Query<(&SimEntity, &mut Transform)>) {
+pub(crate) fn place(link: Res<SimLink>, clock: Res<AnimClock>, editing: Option<Res<crate::editor::Editing>>, mut q: Query<(&SimEntity, &mut Transform)>) {
     let alpha = clock.alpha().clamp(0.0, 1.0);
     let pod_axes: std::collections::BTreeMap<_, _> = link.production().iter()
         .filter_map(|row| row.research.as_ref())
@@ -625,7 +625,8 @@ pub(crate) fn place(link: Res<SimLink>, clock: Res<AnimClock>, mut q: Query<(&Si
         .collect();
     for (u, mut tf) in &mut q {
         let Some((pos, h)) = link.interpolate(u.0, alpha) else { continue };
-        tf.translation = to_bevy(pos);
+        tf.translation = to_bevy(editing.as_ref().and_then(|editing| editing.preview_position(u.0))
+            .map_or(pos, |at| at.to_f32()));
         // The model's front (+Z in the files) is Bevy's -Z after the mirror, which
         // is what `looking_to` points along the heading.
         tf.rotation = pod_axes.get(&u.0).copied().map_or_else(

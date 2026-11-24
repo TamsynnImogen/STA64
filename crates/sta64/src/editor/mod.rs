@@ -17,6 +17,8 @@ use sta_sim::{EntityId, Vec3 as SimVec3};
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod gesture_tests;
 
 pub(crate) use document::Document;
 use palette::{EntryKind, Palette};
@@ -61,7 +63,7 @@ pub(crate) struct Editing {
     palette: Palette,
     directory: Vec<usize>,
     shortcut: Option<Shortcut>,
-    drag_origin: Option<(EntityId, Vec2)>,
+    gesture: Option<MoveGesture>,
     last_click: Option<(EntityId, Vec2, f64)>,
     inspected: Option<EntityId>,
     inspector_error: String,
@@ -79,6 +81,37 @@ const PALETTE_KEYS: [KeyCode; palette::ENTRY_COUNT] = [
 const CLICK_RADIUS: f32 = 6.0;
 const DOUBLE_CLICK_SECONDS: f64 = 0.4;
 
+struct MoveGesture {
+    id: EntityId,
+    start: Vec2,
+    offset: Option<SimVec3>,
+    dragging: bool,
+    preview: Option<SimVec3>,
+}
+
+impl MoveGesture {
+    fn update(&mut self, aim: Option<crate::input::select::AimState>, bounds: Option<&crate::ui::hud::ghost::PlacementBounds>) {
+        self.preview = None;
+        let Some(aim) = aim else { return };
+        self.dragging |= aim.cursor.distance(self.start) > CLICK_RADIUS;
+        if !self.dragging { return }
+        let Some(offset) = self.offset else { return };
+        let Some(pointer) = GroundAt::Ray(aim.ray).on_plane(offset.y.to_f32()) else { return };
+        let pointer = SimVec3::from_f32(pointer.to_array());
+        let position = SimVec3::from_f32([
+            pointer.x.to_f32() + offset.x.to_f32(),
+            pointer.y.to_f32(),
+            pointer.z.to_f32() + offset.z.to_f32(),
+        ]);
+        if let Some((lo, hi)) = bounds.and_then(|bounds| bounds.0)
+            && (position.x < lo.x || position.x > hi.x || position.z < lo.z || position.z > hi.z)
+        {
+            return;
+        }
+        self.preview = Some(position);
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Shortcut {
     Entry(usize),
@@ -92,6 +125,12 @@ pub(crate) fn play_mode(editing: Option<Res<Editing>>) -> bool {
 
 pub(crate) fn canvas_input_free(editing: Option<Res<Editing>>) -> bool {
     editing.is_none_or(|editing| editing.inspected.is_none() && !editing.map_settings)
+}
+
+impl Editing {
+    pub(crate) fn preview_position(&self, id: EntityId) -> Option<SimVec3> {
+        self.gesture.as_ref().filter(|gesture| gesture.id == id).and_then(|gesture| gesture.preview)
+    }
 }
 
 // Copies are editable from this picker regardless of the current mount. Keep
@@ -309,7 +348,7 @@ fn palette_shortcut(mut keys: ResMut<ButtonInput<KeyCode>>, mut editing: ResMut<
     if plain_keys {
         // Reserve bare editor keys before the game's handlers see them
         // (including F10 to leave the match and Tab to toggle strategic icons).
-        let dialog = editing.inspected.is_some() || editing.map_settings;
+        let dialog = editing.inspected.is_some() || editing.map_settings || editing.gesture.is_some();
         if keys.clear_just_pressed(KeyCode::Tab) && !dialog {
             shortcut = Some(Shortcut::Back);
         }
@@ -398,7 +437,7 @@ fn tools(
     targets: Targetable,
     content: Option<Res<ContentRes>>,
     bounds: Option<Res<crate::ui::hud::ghost::PlacementBounds>>,
-    panel: Query<&bevy::ui::RelativeCursorPosition, With<panel::Root>>,
+    (hud_pointer, panel): (Option<Res<crate::ui::hud::HudPointer>>, Query<&bevy::ui::RelativeCursorPosition, With<panel::Root>>),
     (document, ids): (Option<ResMut<Document>>, Option<ResMut<AuthoredIds>>),
     link: Option<ResMut<SimLink>>,
     mut editing: ResMut<Editing>,
@@ -486,7 +525,7 @@ fn tools(
         editing.status = match result {
             Ok(true) => {
                 editing.last_click = None;
-                editing.drag_origin = None;
+                editing.gesture = None;
                 changed.write(SelectionChanged);
                 if redo { "Edit redone".into() } else { "Edit undone".into() }
             }
@@ -495,7 +534,11 @@ fn tools(
         };
         return;
     }
-    let over_panel = panel.iter().any(|pointer| pointer.cursor_over());
+    if editing.shortcut == Some(Shortcut::Cancel) && editing.gesture.take().is_some() {
+        editing.last_click = None;
+        return;
+    }
+    let over_panel = panel.iter().any(|pointer| pointer.cursor_over()) || hud_pointer.is_some_and(|pointer| pointer.0);
     let world_aim = aim.0.filter(|_| !over_panel);
     let mut back = back_key;
     let mut clicked_entry = None;
@@ -531,7 +574,7 @@ fn tools(
             editing.shortcut == Some(Shortcut::Entry(entry.slot))
         });
         if let Some(index) = keyed_entry.or(clicked_entry) {
-            editing.drag_origin = None;
+            editing.gesture = None;
             editing.last_click = None;
             if let Some((odf, neutral)) = editing.select_entry(index) {
                 if keyed_entry.is_none() {
@@ -545,7 +588,7 @@ fn tools(
         }
     }
     if let Some((odf, owner)) = product {
-        editing.drag_origin = None;
+        editing.gesture = None;
         editing.last_click = None;
         let team = if owner == sta_sim::world::NEUTRAL { 0 } else { i32::from(owner.0) + 1 };
         let before = history::Checkpoint::take(&mut link, document.as_deref(), ids.as_deref(), names.as_deref(), &selection);
@@ -589,37 +632,51 @@ fn tools(
     delete |= keys.just_pressed(KeyCode::Delete);
     let index_for = |id| ids.as_ref().and_then(|ids| ids.0.get(&id).copied())
         .filter(|&index| document.as_ref().is_some_and(|doc| doc.object(index).is_some()));
-    let right = buttons.just_pressed(MouseButton::Right);
-    if right {
-        editing.last_click = None;
-    }
     if buttons.just_pressed(MouseButton::Left) {
-        editing.drag_origin = None;
+        editing.gesture = None;
         if let Some(aim) = world_aim {
             let target = unit_under_where(aim.cursor, aim.ray, &targets, |id| {
-                link.real_curr().unit(id).is_some_and(|unit| {
-                    index_for(id).is_some() || (allow_topology && editable(&content.0, unit.def))
-                })
+                link.real_curr().unit(id).is_some_and(|unit| index_for(id).is_some() || editable(&content.0, unit.def))
             });
             selection.0 = target.into_iter().collect();
             changed.write(SelectionChanged);
-            editing.drag_origin = target.map(|id| (id, aim.cursor));
+            editing.gesture = target.and_then(|id| {
+                let unit = link.real_curr().unit(id)?;
+                let offset = (index_for(id).is_some() || allow_topology) && editable(&content.0, unit.def);
+                let pointer = GroundAt::Ray(aim.ray).on_plane(unit.pos.y.to_f32()).map(|point| SimVec3::from_f32(point.to_array()));
+                Some(MoveGesture {
+                    id, start: aim.cursor,
+                    offset: pointer.filter(|_| offset).map(|pointer| SimVec3::from_f32([
+                        unit.pos.x.to_f32() - pointer.x.to_f32(), unit.pos.y.to_f32(), unit.pos.z.to_f32() - pointer.z.to_f32(),
+                    ])),
+                    dragging: false, preview: None,
+                })
+            });
             editing.status.clear();
         }
-        if editing.drag_origin.is_none() {
+        if editing.gesture.is_none() {
             editing.last_click = None;
         }
     }
 
-    let mut dragged = false;
-    if buttons.just_released(MouseButton::Left) && let Some((id, start)) = editing.drag_origin.take() {
-        if let Some(aim) = world_aim.filter(|_| selection.0.first() == Some(&id)) {
-            dragged = start.distance(aim.cursor) > CLICK_RADIUS;
-            if !dragged && editing.finish_click(id, aim.cursor, time.elapsed_secs_f64()) {
+    let mut move_commit = None;
+    // Updating the preview does not change the editor panel.
+    if (buttons.pressed(MouseButton::Left) || buttons.just_released(MouseButton::Left))
+        && let Some(gesture) = editing.bypass_change_detection().gesture.as_mut()
+    {
+        gesture.update(world_aim, bounds.as_deref());
+    }
+    if buttons.just_released(MouseButton::Left) && let Some(gesture) = editing.gesture.take() {
+        if gesture.dragging {
+            editing.last_click = None;
+            if selection.0.first() == Some(&gesture.id) {
+                move_commit = gesture.preview.map(|at| (gesture.id, at));
+            }
+        } else if let Some(aim) = world_aim.filter(|_| selection.0.first() == Some(&gesture.id)) {
+            if editing.finish_click(gesture.id, aim.cursor, time.elapsed_secs_f64()) {
                 return;
             }
-        }
-        if dragged || world_aim.is_none() {
+        } else {
             editing.last_click = None;
         }
     }
@@ -657,11 +714,27 @@ fn tools(
         return;
     }
 
-    let moved = world_aim.filter(|_| right || dragged)
-        .and_then(|a| ground(a, unit.pos.y.to_f32(), bounds.as_deref()));
+    let moved = move_commit.filter(|(moved_id, _)| *moved_id == id).map(|(_, at)| at);
     if moved.is_none() && rotate == 0 {
         return;
     }
+    let prepared = if index.is_none() && let Some(doc) = document.as_ref() {
+        let Some(name) = content.0.name(unit.def) else {
+            editing.status = "Could not save this object's placement".into();
+            return;
+        };
+        if ids.is_none() {
+            editing.status = "Could not save this object's placement".into();
+            return;
+        }
+        let team = if unit.owner == sta_sim::world::NEUTRAL { 0 } else { i32::from(unit.owner.0) + 1 };
+        let heading = [unit.heading.0.to_f32(), unit.heading.1.to_f32()];
+        let Some(object) = doc.prepare_placement(name, team, moved.unwrap_or(unit.pos).to_f32(), heading) else {
+            editing.status = "Could not save this object's placement".into();
+            return;
+        };
+        Some(object)
+    } else { None };
     let before = history::Checkpoint::take(&mut link, document.as_deref(), ids.as_deref(), names.as_deref(), &selection);
     if link.edit_placement(PlacementEdit::Transform { id, at: moved.unwrap_or(unit.pos), quarter_turns: rotate }).is_some() {
         if let (Some(doc), Some(ids)) = (&mut document, &mut ids) {
@@ -672,15 +745,17 @@ fn tools(
                 if rotate != 0 {
                     doc.rotate(index, rotate);
                 }
-            } else if let Some(unit) = link.real_curr().unit(id)
-                && let Some(name) = content.0.name(unit.def)
-            {
+            } else if let (Some(mut object), Some(unit)) = (prepared, link.real_curr().unit(id)) {
                 // Editing a unit built during play promotes it to a map placement.
-                let team = if unit.owner == sta_sim::world::NEUTRAL { 0 } else { i32::from(unit.owner.0) + 1 };
-                let heading = [unit.heading.0.to_f32(), unit.heading.1.to_f32()];
-                if let Some(index) = doc.push(name, team, unit.pos.to_f32(), heading) {
-                    ids.0.insert(id, index);
-                }
+                let [x, z] = [unit.heading.0.to_f32(), unit.heading.1.to_f32()];
+                object.transform[0] = z;
+                object.transform[2] = -x;
+                object.transform[6] = x;
+                object.transform[8] = z;
+                object.transform[9..12].copy_from_slice(&unit.pos.to_f32());
+                object.initial_position = Some(unit.pos.to_f32());
+                let index = doc.append_placement(object, Default::default());
+                ids.0.insert(id, index);
             }
         }
         editing.history.record(before);
@@ -700,16 +775,25 @@ fn apply_inspector(
     inputs: &BTreeMap<&str, &str>,
     restore: bool,
 ) -> Result<bool, String> {
-    let index = ids.as_ref().and_then(|ids| ids.0.get(&id).copied());
+    let index = ids.as_ref().and_then(|ids| ids.0.get(&id).copied())
+        .filter(|&index| document.as_ref().is_some_and(|doc| doc.object(index).is_some()));
     let object = index.and_then(|index| document.as_ref()?.object(index));
-    if document.is_some() && object.is_none() {
-        return Err("Move the object on the map first to add it to this document".into());
-    }
     let prior = object.and_then(|object| document.as_ref()?.properties(object.entity_id));
     let can_change_identity = document.as_ref().is_none_or(|doc| doc.can_change_objects());
-    let plan = inspector::plan(id, link, content, object, prior, can_change_identity, inputs, restore)?;
+    let promoting = object.is_none() && document.as_ref().is_some_and(|doc| doc.can_change_objects());
+    let new_placement = document.as_ref().filter(|_| promoting).and_then(|doc| {
+        let unit = link.real_curr().unit(id)?;
+        let odf = content.0.name(unit.def)?;
+        let team = if unit.owner.is_player() { i32::from(unit.owner.0) + 1 } else { 0 };
+        let heading = [unit.heading.0.to_f32(), unit.heading.1.to_f32()];
+        doc.prepare_placement(odf, team, unit.pos.to_f32(), heading)
+    });
+    let plan = inspector::plan(id, link, content, object, new_placement, prior, can_change_identity, inputs, restore)?;
     if !plan.changed {
         return Ok(false);
+    }
+    if promoting && (plan.object.is_none() || ids.is_none()) {
+        return Err("A map placement could not be created for this object".into());
     }
     let at = plan.edit.at;
     if let Some((lo, hi)) = bounds.and_then(|bounds| bounds.0)
@@ -723,8 +807,13 @@ fn apply_inspector(
     if let Some(names) = names {
         names.set_overrides(id, name.as_deref(), plan.saved.captain.as_deref(), plan.saved.registry.as_deref());
     }
-    if let (Some(doc), Some(index), Some(object)) = (document, index, plan.object) {
-        doc.update_object(index, object, plan.saved);
+    if let (Some(doc), Some(object)) = (document, plan.object) {
+        if let Some(index) = index {
+            doc.update_object(index, object, plan.saved);
+        } else if let Some(ids) = ids {
+            let index = doc.append_placement(object, plan.saved);
+            ids.0.insert(id, index);
+        }
     }
     Ok(true)
 }

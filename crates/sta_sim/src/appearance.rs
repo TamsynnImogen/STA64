@@ -80,10 +80,10 @@ mod tests {
     use super::*;
     use crate::{
         WorldSource,
-        command::Edit,
+        command::{Command, CommandKind, Edit, Order},
         setup::{Control, GameSetup, PlayerSetup},
     };
-    use sta_content::{ContentDb, MapDef, UnitDef};
+    use sta_content::{ContentDb, MapDef, MoveStats, UnitDef};
     use sta_core::{TeamId, Vec3};
     use std::sync::Arc;
 
@@ -159,5 +159,44 @@ mod tests {
         assert_eq!(sim.view().appearance.faction(PlayerId(1)), None);
         sim.despawn(id, None);
         assert!(sim.view().appearance.systems(id).is_none());
+    }
+
+    #[test]
+    fn scripted_warp_exposes_live_entry_and_exit_phases() {
+        let mut setup = setup("federation");
+        let mut def = UnitDef::new("motion_test", "craft");
+        def.hull = Fixed::from_int(100);
+        def.movement = MoveStats::from_f32(20.0, 1.0, 1.0, 1.0, 1.0);
+        def.movement.warp_speed = Fixed::from_int(100);
+        setup.content = Arc::new(ContentDb::builder().unit(def).build().unwrap());
+        let mut sim = Sim::from_setup(&setup);
+        let id = sim.spawn_def(
+            setup.content.key("motion_test").unwrap(), PlayerId(0), Vec3::ZERO,
+            (Fixed::ZERO, Fixed::ONE),
+        ).unwrap();
+        assert_eq!(sim.impulse_caps(), vec![(id, Fixed::from_int(20))]);
+        let goal = Vec3 { x: Fixed::ZERO, y: Fixed::ZERO, z: Fixed::from_int(1200) };
+        sim.step(&[Command { player: PlayerId(0), seq: 0,
+            kind: CommandKind::Order(Order::Move { units: vec![id], to: goal, queue: false }),
+        }]);
+        for _ in 0..10 { sim.step(&[]); }
+        assert!(sim.unit(id).unwrap().speed > Fixed::ZERO, "plain move is at impulse");
+        assert!(sim.warp_phases().is_empty(), "plain move has no warp phase");
+        sim.step(&[Command { player: PlayerId(0), seq: 1,
+            kind: CommandKind::Order(Order::MoveWarp { units: vec![id], to: goal, queue: false }),
+        }]);
+        assert!(sim.warp_phases().is_empty(), "accelerating at impulse before warp entry");
+        let mut entered = false;
+        let mut exited = false;
+        for _ in 0..1500 {
+            sim.step(&[]);
+            match sim.warp_phases().as_slice() {
+                [(_, true)] => entered = true,
+                [(_, false)] if entered => { exited = true; break; }
+                _ => {}
+            }
+        }
+        assert!(entered, "scripted move entered live warp");
+        assert!(exited, "scripted move exposed warp-out while slowing");
     }
 }
