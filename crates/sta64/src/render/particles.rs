@@ -50,7 +50,7 @@ impl Rng {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Blend {
     Additive,
     Translucent,
@@ -359,6 +359,11 @@ pub fn draw(
     for k in keys {
         geo.entry(k).or_default();
     }
+    // Batches in a fixed order (texture, then blend), not the map's, which changes from run to run:
+    // a new batch's entity is spawned in this order, and as every batch sits at the origin their
+    // draw order at equal distance follows it, so frames repeat run to run (the bench clock).
+    let mut geo: Vec<((String, Blend), Geo)> = geo.into_iter().collect();
+    geo.sort_by(|a, b| a.0.cmp(&b.0));
     for (key, g) in geo {
         let handle = match sys.batches.get(&key) {
             Some((h, _)) => h.clone(),

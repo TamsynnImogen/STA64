@@ -11,8 +11,8 @@
 //! The reference path is the same app with adoption off, driven by `main`'s `animate`.
 //!
 //! The scene has: nebula-like puffs whose fades change every step while their look's colour cycles;
-//! a blinking glow, flat sprites, a moon nimbus; a co-located pair each of blended and of additive
-//! sprites and a coplanar overlap of cut-out ones; a cloaking unit and a placement ghost run through
+//! a blinking glow, blinking nodes on the flipbook sprite (one faded), flat sprites, a moon nimbus;
+//! a co-located pair each of blended and of additive sprites and a coplanar overlap of cut-out ones; a cloaking unit and a placement ghost run through
 //! the game's own `apply_fade` and `tint_ghost`; a sprite node spawned and one despawned mid-series;
 //! and a group of puffs whose parent toggles between hidden and inherited (the Stock/Refit switch).
 //! Needs `STA64_GPU_TESTS=1` and a hardware adapter; skips otherwise.
@@ -99,10 +99,16 @@ enum Camera {
 static MODE: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
 
 /// Slots of the nodes adopted before the series starts (48 puffs, the unit's and the ghost's four
-/// each, six blend nodes, six board puffs, the doomed one): the buffer is full when the series
-/// begins, so the node spawned mid-series grows it (S1, growth by doubling) between two captured
-/// frames.
-const SLOTS_AT_START: u32 = 48 + 4 + 4 + 6 + 6 + 1;
+/// each, six blend nodes, six board puffs, the flipbook look's two blinking nodes, the doomed one):
+/// the buffer is full when the series begins, so the node spawned mid-series grows it (S1, growth
+/// by doubling) between two captured frames.
+const SLOTS_AT_START: u32 = 48 + 4 + 4 + 6 + 6 + BLINK_GLOWS.len() as u32 + 1;
+
+/// Nodes that blink on the flipbook sprite (the puffs' look), with the fade each carries. While
+/// they are hidden the look's uv moves on with its shown nodes, and a look's uv write marks its
+/// hidden nodes changed as well, which `main`'s per-node path does not: the frames show whether
+/// that reaches the picture when they come back.
+const BLINK_GLOWS: [(Vec3, Option<f32>); 2] = [(Vec3::new(-8.0, 12.0, 6.0), None), (Vec3::new(14.0, -6.0, 8.0), Some(0.6))];
 
 /// The cloaking unit's fade at each step: it cloaks and decloaks, then builds up (even steps set the
 /// cloak, odd ones the build), so its fade changes at every step and ends at 1.
@@ -224,6 +230,13 @@ fn series(path: Path, camera: Camera) -> Option<Vec<Vec<u8>>> {
     // A group of puffs under one parent that toggles hidden and inherited, as the nebula boards do.
     let boards = app.world_mut().spawn((Transform::from_xyz(0.0, 30.0, -4.0), Visibility::default())).id();
     let board_nodes: Vec<Entity> = (0..6).map(|i| spawn(&mut app, NODES[i % 2], Vec3::new(i as f32 * 6.0 - 15.0, (i % 3) as f32 * 4.0, 0.0), 14.0, true, Some(boards))).collect();
+    // Blinking nodes on the flipbook sprite, drawn through the puffs' look.
+    for (at, fade) in BLINK_GLOWS {
+        let e = spawn(&mut app, "blinkGlow", at, 12.0, true, None);
+        if let Some(k) = fade {
+            app.world_mut().entity_mut(e).insert(SpriteFade(k));
+        }
+    }
     // A node spawned half way and one despawned half way.
     let doomed = spawn(&mut app, NODES[0], Vec3::new(-38.0, 10.0, 0.0), 14.0, true, None);
     app.finish();
