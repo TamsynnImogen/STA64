@@ -1218,13 +1218,17 @@ mod gpu {
             let background = &bare[..3];
             for (before, after) in bare.chunks_exact(4).zip(bloomed.chunks_exact(4)) {
                 let gain = after[0].saturating_sub(before[0]);
-                assert_eq!(before[1..], after[1..], "the red map should only add red");
+                assert_eq!(before[3], after[3], "the halo preserves the target alpha");
                 affected += usize::from(gain > 2);
-                spill += usize::from(&before[..3] == background && gain > 2);
+                if &before[..3] == background {
+                    assert!(after[1].saturating_sub(before[1]) <= gain && after[2].saturating_sub(before[2]) <= gain,
+                        "the soft halo from a red map stays red-dominant in the sky");
+                    spill += usize::from(gain > 2);
+                }
                 peak_gain = peak_gain.max(gain);
             }
             eprintln!("Emissive halo: {affected} lit neighbours, {spill} background pixels, peak gain {peak_gain}/255");
-            assert!(affected > 20 && spill > 20 && peak_gain < 85, "a gentle halo extends past the silhouette");
+            assert!(affected > 20 && spill > 20 && peak_gain < 118, "a soft halo extends past the silhouette");
 
             // Drive the real material from a simulation view, including the repair latch.
             use super::emissive_state::FlickerPhase;

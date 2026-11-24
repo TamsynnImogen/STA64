@@ -47,7 +47,7 @@ impl Default for PostFx {
     fn default() -> Self {
         PostFx {
             bloom: false,
-            bloom_intensity: 0.20,
+            bloom_intensity: 0.36,
             tonemapping: None,
             aa: Aa::Off,
             auto_exposure: false,
