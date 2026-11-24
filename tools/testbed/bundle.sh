@@ -27,6 +27,10 @@ cp -r "$check/Data" "$dir/"
 cp "$bin" "$dir/"
 cp "$here/tools/testbed/README-TESTERS.md" "$dir/README.md"
 cp "$src/CREDITS.md" "$dir/"
+# The public half of the signing key, for players who want to trust it.
+if [[ -n "${STA64_TESTBED_PUBKEY:-}" ]]; then
+    printf '%s STA64 Testbed\n' "$STA64_TESTBED_PUBKEY" > "$dir/STA64-Testbed-signing-key.txt"
+fi
 if [[ $os == linux ]]; then
     chmod +x "$dir/$(basename "$bin")"
     strip "$dir/$(basename "$bin")" 2>/dev/null || true
