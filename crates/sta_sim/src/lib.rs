@@ -508,11 +508,6 @@ impl Sim {
         self.assist_idle();
         self.step_scripted();
         let mut plans = self.steer_attackers();
-        let warps = self.steer_warp_moves();
-        if !warps.is_empty() {
-            plans.extend(warps);
-            plans.sort_by_key(|p| p.0);
-        }
         // SIM-75: who is in which nebula, from the positions at the tick's start.
         let nebulae = self.nebula_contents();
         let speed_caps = if nebulae.is_empty() { Vec::new() } else { self.nebula_speed_caps(&nebulae) };
@@ -520,6 +515,14 @@ impl Sim {
         let gate_goers = self.wormhole_goers();
         let routed = self.route_orders();
         let held = self.steer_around();
+        self.brake_for_attack_detours(&mut plans);
+        // Warp eligibility follows the aim this tick will actually use, including
+        // temporary navigation and avoidance targets.
+        let warps = self.steer_warp_moves();
+        if !warps.is_empty() {
+            plans.extend(warps);
+            plans.sort_by_key(|p| p.0);
+        }
         self.step_kinematics(&plans, &speed_caps);
         self.restore_targets(held);
         self.restore_targets(routed);

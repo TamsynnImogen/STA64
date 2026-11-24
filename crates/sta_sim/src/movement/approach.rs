@@ -39,7 +39,7 @@ use sta_content::{ContentDb, UnitDef, WeaponKind};
 use sta_core::{EntityId, Fixed, Vec3};
 
 use crate::kinematics::Plan;
-use crate::world::{EntityKind, Fnv, Table};
+use crate::world::{Entity, EntityKind, Fnv, Table};
 use crate::Sim;
 
 /// Phase of a craft in [`Warp`].
@@ -47,8 +47,7 @@ pub(crate) const IN_WARP: u8 = 1;
 /// Dropping out: speed falls straight to the approach's limit.
 pub(crate) const WARP_OUT: u8 = 2;
 
-/// Which crafts are in warp, or dropping out of it, on an attack approach,
-/// ascending id.
+/// Which crafts are in warp, or dropping out of it, ascending id.
 #[derive(Debug, Clone, Default)]
 pub struct Warp {
     on: Table<u8>,
@@ -76,9 +75,11 @@ impl Warp {
         self.on.remove(id);
     }
 
-    /// The attack ended: out of warp the usual way (the warp-out runs on).
+    /// A finished or replaced order can still be coasting out of warp.
     pub(crate) fn end(&mut self, id: EntityId) {
-        self.on.remove(id);
+        if self.contains(id) {
+            self.set_phase(id, WARP_OUT);
+        }
     }
 
     pub(crate) fn hash_into(&self, h: &mut Fnv) {
@@ -148,6 +149,15 @@ pub(crate) fn warp_lead(vw: Fixed, vi: Fixed, r: Fixed) -> Fixed {
     (vw + vi) / Fixed::from_int(2) + Fixed::from_int(2) * (k - Fixed::ONE) * vi / (vw - vi) * r
 }
 
+/// Distance and alignment of the current steering aim, in the map plane.
+pub(crate) fn warp_leg(unit: &Entity, goal: Vec3) -> (Fixed, bool) {
+    let (gx, gz) = (goal.x - unit.pos.x, goal.z - unit.pos.z);
+    let distance = (gx * gx + gz * gz).sqrt();
+    let aligned = distance > Fixed::ZERO
+        && (unit.heading.0 * gx + unit.heading.1 * gz) / distance > Fixed::from_f64(0.99);
+    (distance, aligned)
+}
+
 impl Sim {
     /// Set the course of every craft with an attack target and say how it
     /// steps this tick (ascending id). Runs before the movement step.
@@ -175,7 +185,11 @@ impl Sim {
             if cloaked || !visible {
                 let last = u.target.unwrap_or(t.pos);
                 let craft = u.kind == EntityKind::Craft && u.mobile();
-                self.approach_warp.end(id);
+                if craft && u.speed > u.stats.max_speed {
+                    self.approach_warp.end(id);
+                } else {
+                    self.approach_warp.remove(id);
+                }
                 if craft {
                     if let Some(u) = self.units.get_mut(id) {
                         u.target = Some(last);
@@ -216,14 +230,13 @@ impl Sim {
             let phase = self.approach_warp.phase(id);
             let mut warp = phase == Some(IN_WARP);
             if let Some(g) = goal {
-                let (gx, gz) = (g.x - u.pos.x, g.z - u.pos.z);
-                let to_goal = (gx * gx + gz * gz).sqrt();
-                let aligned = to_goal > Fixed::ZERO && (u.heading.0 * gx + u.heading.1 * gz) / to_goal > Fixed::from_f64(0.99);
+                let (to_goal, aligned) = warp_leg(u, g);
                 if !far && t.speed < combat && (f.attack_combat_speed || d < w) {
                     plan.cap = Some(combat);
                 }
                 let can = self.warp_allowed() && vw > vi && vi > crate::speed_override::HELD_SPEED && plan.cap.is_none() && aligned && to_goal >= warp_lead(vw, vi, r_own);
-                warp = if warp { can } else { can && far && u.speed > Fixed::from_f64(0.9) * vi };
+                let still_braking = phase == Some(WARP_OUT) && u.speed > vi;
+                warp = if warp { can } else { can && far && u.speed > Fixed::from_f64(0.9) * vi && !still_braking };
                 // LUA-31: a keyed craft's warp speed below impulse caps the aligned far leg.
                 if plan.cap.is_none() && far && aligned && u.stats.too_close_for_warp > Fixed::ZERO && to_goal > u.stats.too_close_for_warp {
                     plan.cap = crate::warp_override::slow_leg(vw, vi);
@@ -250,8 +263,30 @@ impl Sim {
         // Crafts whose attack ended leave warp.
         let stale: Vec<EntityId> = self.approach_warp.on.iter().map(|(id, _)| id).filter(|id| plans.binary_search_by_key(id, |p| p.0).is_err() && !self.scripted.is_warp(*id)).collect();
         for id in stale {
-            self.approach_warp.remove(id);
+            if self.units.get(id).is_some_and(|unit| unit.mobile() && unit.speed > unit.stats.max_speed) {
+                self.approach_warp.end(id);
+            } else {
+                self.approach_warp.remove(id);
+            }
         }
         plans
+    }
+
+    /// Navigation may supply a different aim after attack planning. Brake
+    /// straight before following a detour that requires a turn.
+    pub(crate) fn brake_for_attack_detours(&mut self, plans: &mut [(EntityId, Plan)]) {
+        for (id, plan) in plans.iter_mut().filter(|(_, plan)| plan.warp) {
+            let Some(unit) = self.units.get(*id) else { continue };
+            if unit.target.is_some_and(|goal| warp_leg(unit, goal).1) {
+                continue;
+            }
+            plan.warp = false;
+            if unit.speed > unit.stats.max_speed {
+                plan.warp_out = true;
+                self.approach_warp.end(*id);
+            } else {
+                self.approach_warp.remove(*id);
+            }
+        }
     }
 }
