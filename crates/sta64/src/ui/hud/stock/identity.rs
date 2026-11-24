@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use super::super::super::layout::R;
 use super::super::super::model::Single;
 use super::super::layout::StockLayout;
+use super::StockText;
 use crate::ui::theme::Theme;
 
 /// Diagnostic identity of an actual `SpriteText` row, useful to inspect the HUD.
@@ -60,6 +61,7 @@ fn row(
     builder: bool,
     value: Option<&str>,
     field: IdentityField,
+    live: Option<StockText>,
     medium_area: &str,
     tall_area: &str,
     legacy_area: &str,
@@ -67,9 +69,10 @@ fn row(
     tall_colour: &str,
     global_colour: &str,
 ) {
-    let Some(value) = value.filter(|value| !value.trim().is_empty()) else {
+    let value = value.filter(|value| !value.trim().is_empty());
+    if value.is_none() && live.is_none() {
         return;
-    };
+    }
     let Some(rect) = area(layout, origin, builder, medium_area, tall_area, legacy_area) else {
         return;
     };
@@ -85,12 +88,16 @@ fn row(
         commands,
         root,
         rect,
-        value.to_owned(),
+        value.unwrap_or_default().to_owned(),
         colour,
         theme.small_size,
         None,
     );
-    commands.entity(entity).insert(IdentityText(field));
+    let mut entity = commands.entity(entity);
+    entity.insert(IdentityText(field));
+    if let Some(live) = live {
+        entity.insert(live);
+    }
 }
 
 pub(super) fn spawn(
@@ -100,6 +107,7 @@ pub(super) fn spawn(
     theme: &Theme,
     origin: Vec2,
     single: &Single,
+    construction_rig: bool,
 ) {
     row(
         commands,
@@ -110,6 +118,7 @@ pub(super) fn spawn(
         layout.info_uses_builder(single),
         single.captain.as_deref(),
         IdentityField::Captain,
+        construction_rig.then_some(StockText::RigJob(single.id)),
         "infoSingleCaptainTextArea",
         "infoBuildCaptainTextArea",
         "captainName",
@@ -126,6 +135,7 @@ pub(super) fn spawn(
         layout.info_uses_builder(single),
         single.registry.as_deref(),
         IdentityField::Registry,
+        None,
         "infoSingleRegistryTextArea",
         "infoBuildRegistryTextArea",
         "shipRegistry",

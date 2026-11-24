@@ -1098,7 +1098,7 @@ fn numeric_values_patch_existing_stock_entities() {
             .iter(app.world())
             .filter_map(|(e, kind, text)| match kind {
                 info::StockText::Resource(id) => Some((e, *id, text.text.clone())),
-                info::StockText::Population(_) => None,
+                info::StockText::Population(_) | info::StockText::RigJob(_) => None,
             })
             .collect()
     };
