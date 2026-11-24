@@ -25,6 +25,8 @@ use bevy::shader::Shader;
 use super::emissive_bloom::{Emissive3d, EmissiveBloomStrength};
 
 pub(super) const MASK_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
+// Keep the faint tail of the bloom filter smooth after lifting small lights.
+const BLUR_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 
 #[derive(Clone, Copy, ShaderType)]
 struct BlurParams {
@@ -64,18 +66,18 @@ impl SpecializedRenderPipeline for BlurPipelines {
 
     fn specialize(&self, stage: Stage) -> RenderPipelineDescriptor {
         let (label, entry, format, blend, samples) = match stage {
-            Stage::Down => ("emissive downsample", "downsample", MASK_FORMAT, None, 1),
+            Stage::Down => ("emissive downsample", "downsample", BLUR_FORMAT, None, 1),
             Stage::Horizontal => (
                 "emissive blur horizontal",
                 "blur_horizontal",
-                MASK_FORMAT,
+                BLUR_FORMAT,
                 None,
                 1,
             ),
             Stage::Vertical => (
                 "emissive blur vertical",
                 "blur_vertical",
-                MASK_FORMAT,
+                BLUR_FORMAT,
                 None,
                 1,
             ),
@@ -242,7 +244,7 @@ fn prepare_targets(
             depth_or_array_layers: 1,
         };
         let samples = msaa.samples();
-        let mut make = |label: &'static str, size: Extent3d, count: u32, sampled: bool| {
+        let mut make = |label: &'static str, size: Extent3d, format, count: u32, sampled: bool| {
             textures.get(
                 &device,
                 TextureDescriptor {
@@ -251,7 +253,7 @@ fn prepare_targets(
                     mip_level_count: 1,
                     sample_count: count,
                     dimension: TextureDimension::D2,
-                    format: MASK_FORMAT,
+                    format,
                     usage: TextureUsages::RENDER_ATTACHMENT
                         | if sampled {
                             TextureUsages::TEXTURE_BINDING
@@ -262,12 +264,25 @@ fn prepare_targets(
                 },
             )
         };
-        let mask = make("emissive full-size mask", full, 1, true);
-        let mask_msaa =
-            (samples > 1).then(|| make("emissive multisample mask", full, samples, false));
-        let small = make("emissive quarter-size source", reduced, 1, true);
-        let horizontal = make("emissive horizontal blur", reduced, 1, true);
-        let vertical = make("emissive vertical blur", reduced, 1, true);
+        let mask = make("emissive full-size mask", full, MASK_FORMAT, 1, true);
+        let mask_msaa = (samples > 1).then(|| {
+            make(
+                "emissive multisample mask",
+                full,
+                MASK_FORMAT,
+                samples,
+                false,
+            )
+        });
+        let small = make(
+            "emissive quarter-size source",
+            reduced,
+            BLUR_FORMAT,
+            1,
+            true,
+        );
+        let horizontal = make("emissive horizontal blur", reduced, BLUR_FORMAT, 1, true);
+        let vertical = make("emissive vertical blur", reduced, BLUR_FORMAT, 1, true);
         let mut params = UniformBuffer::from(BlurParams {
             strength: Vec4::new(strength.unwrap().0.clamp(0.0, 1.0), 0.0, 0.0, 0.0),
         });
