@@ -15,6 +15,14 @@ stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 mkdir -p "$out"
 out=$(cd "$out" && pwd)
+
+copy_mcp() {
+    local d="$1"
+    mkdir -p "$d/tools" "$d/docs"
+    cp "$root/tools/sta64_mcp.py" "$d/tools/"
+    cp "$root/docs/MCP.md" "$d/docs/"
+}
+
 case "$os" in
 linux)
     d="$stage/$name"; mkdir -p "$d"
@@ -22,12 +30,14 @@ linux)
     cp "$root/packaging/linux/sta64.desktop" "$d/"
     cp "$root/assets/icons/STA64.png" "$d/sta64.png"
     cp "$root/README.md" "$d/"
+    copy_mcp "$d"
     tar -C "$stage" -czf "$out/$name.tar.gz" "$name"
     echo "$out/$name.tar.gz" ;;
 windows)
     d="$stage/$name"; mkdir -p "$d"
     cp "$bin" "$d/sta64.exe"
     cp "$root/README.md" "$d/"
+    copy_mcp "$d"
     (cd "$stage" && 7z a -tzip -bso0 "$out/$name.zip" "$name")
     echo "$out/$name.zip" ;;
 macos)
@@ -40,6 +50,7 @@ macos)
         sips -z $((s * 2)) $((s * 2)) "$root/assets/icons/STA64.png" --out "$iconset/icon_${s}x${s}@2x.png" >/dev/null
     done
     iconutil -c icns "$iconset" -o "$app/Contents/Resources/STA64.icns"
+    copy_mcp "$app/Contents/Resources"
     cp "$root/README.md" "$stage/"
     (cd "$stage" && ditto -c -k --keepParent STA64.app "$out/$name.zip")
     echo "$out/$name.zip" ;;

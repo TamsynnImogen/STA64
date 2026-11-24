@@ -20,6 +20,7 @@ sta_core.workspace = true
 sta_ai.workspace = true
 sta_bench.workspace = true
 serde_json.workspace = true
+getrandom.workspace = true
 sta_media.workspace = true
 image.workspace = true
 kira = { version = "=0.12.6", default-features = false, features = ["cpal"] }

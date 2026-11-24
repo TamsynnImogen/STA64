@@ -27,6 +27,7 @@ mod footage;
 mod frontend;
 mod input;
 mod map;
+mod mcp;
 mod media;
 mod render;
 mod ui;
@@ -216,6 +217,7 @@ pub fn run(cfg: LaunchConfig) {
     }
     // Sets, the sim link and the lanes' plugins for the mode.
     plugins::add_plugins(&mut app, &cfg);
+    mcp::enable(&mut app, &cfg);
     #[cfg(target_os = "android")]
     app.add_plugins(platform::lifecycle::AndroidLifecyclePlugin);
     if let bevy::app::AppExit::Error(code) = app.run() {

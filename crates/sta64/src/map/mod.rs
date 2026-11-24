@@ -563,6 +563,7 @@ type MapState<'w> = (
     Option<Res<'w, crate::render::profile::RenderProfile>>,
     Option<Res<'w, crate::render::profile::ProfileEffects>>,
     crate::game::net_match::NetBuild<'w>,
+    Option<Res<'w, crate::mcp::AuthorizedSeat>>,
 );
 
 /// The ambient light and the two map lights, as one system parameter.
@@ -935,7 +936,7 @@ fn rebuild(
     lighting: Lighting,
 ) {
     let (mut silhouettes, mut ambient, mut lights) = lighting;
-    let (mut particles, mut selection, mut queue, mut clock, mut limits, mut planet_materials, seat, skirmish_cfg, instant, mission_launch, profile, profile_effects, mut net) = state;
+    let (mut particles, mut selection, mut queue, mut clock, mut limits, mut planet_materials, seat, skirmish_cfg, instant, mission_launch, profile, profile_effects, mut net, mcp_seat) = state;
     let gas_volumes = crate::render::stock::nebula::volumetric(profile.as_deref(), profile_effects.as_deref());
     if !browser.dirty {
         return;
@@ -1613,6 +1614,10 @@ fn rebuild(
             let link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), seat_player.unwrap_or(PlayerId::BENCH)).with_controllers(controllers)
                 .with_match_fog_lifted(instant.as_ref().is_some_and(|active| active.fog.lifted().0));
             let link = if instant.as_ref().is_some_and(|active| active.local.is_none()) { link.with_observer() } else { link };
+            let authorized = mcp_seat.filter(|seat| is_match && !authoring && !is_mission &&
+                setup.players.iter().any(|player| player.id == seat.0 &&
+                    matches!(player.control, sta_sim::setup::Control::Human | sta_sim::setup::Control::Ai(_) | sta_sim::setup::Control::Idle)));
+            let link = if let Some(seat) = authorized { link.with_mcp_seat(seat.0, map_def.bounds) } else { link };
             if authoring {
                 commands.insert_resource(link);
             } else {
