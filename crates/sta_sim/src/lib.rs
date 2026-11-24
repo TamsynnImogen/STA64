@@ -871,8 +871,8 @@ impl WorldSource for Sim {
                 self.movement.clear(id);
                 id
             }
-            PlacementEdit::Inspect { id, owner, at, heading, label, name, properties } => {
-                return self.inspect_placement(id, owner, at, heading, label, name, properties).map(|()| id);
+            PlacementEdit::Inspect(inspection) => {
+                return self.inspect_placement(*inspection);
             }
             PlacementEdit::Remove(id) => {
                 let unit = self.units.get(id)?;

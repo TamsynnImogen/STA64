@@ -30,6 +30,16 @@ pub struct ObjectProperties {
     pub instance_name: Option<String>,
 }
 
+pub struct Inspection {
+    pub id: crate::EntityId,
+    pub owner: crate::PlayerId,
+    pub at: crate::Vec3,
+    pub heading: (crate::Fixed, crate::Fixed),
+    pub label: Option<String>,
+    pub name: Option<String>,
+    pub properties: ObjectProperties,
+}
+
 /// Placement tools for a local authoring or test-play session. These take
 /// effect without advancing the game clock.
 pub enum PlacementEdit {
@@ -43,15 +53,7 @@ pub enum PlacementEdit {
         at: crate::Vec3,
         quarter_turns: i32,
     },
-    Inspect {
-        id: crate::EntityId,
-        owner: crate::PlayerId,
-        at: crate::Vec3,
-        heading: (crate::Fixed, crate::Fixed),
-        label: Option<String>,
-        name: Option<String>,
-        properties: ObjectProperties,
-    },
+    Inspect(Box<Inspection>),
     Remove(crate::EntityId),
 }
 

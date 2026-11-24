@@ -157,7 +157,7 @@ pub(super) fn draw(
                 .filter(|(i, row)| *i == 0 || rows[*i - 1].section != row.section)
                 .count();
             let item_count = rows.len() + sections;
-            let visible = item_count.max(1).min(INSPECTOR_VISIBLE_ROWS);
+            let visible = item_count.clamp(1, INSPECTOR_VISIBLE_ROWS);
             ui.spawn((
                 ScrollArea {
                     row_h: INSPECTOR_ROW_H,

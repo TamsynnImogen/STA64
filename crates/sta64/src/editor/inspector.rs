@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 use sta_bzn::MapObject;
-use sta_sim::source::{ObjectProperties, PlacementEdit};
+use sta_sim::source::{Inspection, ObjectProperties};
 use sta_sim::world::{EntityKind, NEUTRAL};
 use sta_sim::{EntityId, Fixed, PlayerId, Vec3 as SimVec3};
 
@@ -138,7 +138,7 @@ pub(super) fn rows(
 }
 
 pub(super) struct Plan {
-    pub edit: PlacementEdit,
+    pub edit: Inspection,
     pub object: Option<MapObject>,
     pub saved: ObjectProperties,
     pub changed: bool,
@@ -336,7 +336,7 @@ pub(super) fn plan(
         || label.is_some() || name.is_some() || live != ObjectProperties::default()
         || extras.map_or(saved != ObjectProperties::default(), |before| *before != saved);
     Ok(Plan {
-        edit: PlacementEdit::Inspect { id, owner, at, heading, label, name, properties: live },
+        edit: Inspection { id, owner, at, heading, label, name, properties: live },
         object,
         saved,
         changed,

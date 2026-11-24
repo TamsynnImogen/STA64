@@ -378,9 +378,19 @@ impl Editing {
     }
 }
 
+type EditorInputs<'w> = (
+    Res<'w, ButtonInput<KeyCode>>,
+    Res<'w, ButtonInput<MouseButton>>,
+    Res<'w, Time<Real>>,
+);
+type EditorFields<'w, 's> = (
+    Query<'w, 's, (&'static panel::InspectorField, &'static TextField)>,
+    Query<'w, 's, (&'static map_settings::Field, &'static TextField)>,
+);
+
 #[allow(clippy::too_many_arguments)]
 fn tools(
-    (keys, buttons, time): (Res<ButtonInput<KeyCode>>, Res<ButtonInput<MouseButton>>, Res<Time<Real>>),
+    (keys, buttons, time): EditorInputs<'_>,
     aim: Res<Aim>,
     targets: Targetable,
     content: Option<Res<ContentRes>>,
@@ -391,7 +401,7 @@ fn tools(
     mut editing: ResMut<Editing>,
     mut clicked: MessageReader<ButtonClicked>,
     actions: Query<&panel::Act>,
-    (fields, map_fields): (Query<(&panel::InspectorField, &TextField)>, Query<(&map_settings::Field, &TextField)>),
+    (fields, map_fields): EditorFields<'_, '_>,
     mut names: Option<ResMut<crate::ui::hud::instance_names::InstanceNames>>,
     mut selection: ResMut<Selection>,
     mut changed: MessageWriter<SelectionChanged>,
@@ -685,15 +695,15 @@ fn apply_inspector(
     if !plan.changed {
         return Ok(false);
     }
-    let PlacementEdit::Inspect { at, name, .. } = &plan.edit else { unreachable!("inspector edit") };
+    let at = plan.edit.at;
     if let Some((lo, hi)) = bounds.and_then(|bounds| bounds.0)
-        && link.real_curr().unit(id).is_some_and(|unit| unit.pos != *at)
+        && link.real_curr().unit(id).is_some_and(|unit| unit.pos != at)
         && (at.x < lo.x || at.x > hi.x || at.z < lo.z || at.z > hi.z)
     {
         return Err("The position is outside the map".into());
     }
-    let name = name.clone();
-    link.edit_placement(plan.edit).ok_or("The object cannot use one or more of these values")?;
+    let name = plan.edit.name.clone();
+    link.edit_placement(PlacementEdit::Inspect(Box::new(plan.edit))).ok_or("The object cannot use one or more of these values")?;
     if let Some(names) = names {
         names.set_overrides(id, name.as_deref(), plan.saved.captain.as_deref(), plan.saved.registry.as_deref());
     }

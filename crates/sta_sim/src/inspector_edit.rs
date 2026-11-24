@@ -1,27 +1,19 @@
 //! Paused map-inspector edits. Validate the whole request before replacing the
 //! simulation so a rejected field cannot leave a partly edited object.
 
-use sta_core::{EntityId, Fixed, PlayerId, Vec3};
+use sta_core::{EntityId, Fixed};
 
 use crate::Sim;
 use crate::command::Subsystem;
-use crate::source::ObjectProperties;
+use crate::source::Inspection;
 use crate::view::UnitFlags;
 use crate::world::{EntityKind, NEUTRAL};
 
 const MAX_VALUE: Fixed = Fixed::from_int(1_000_000_000);
 
 impl Sim {
-    pub(crate) fn inspect_placement(
-        &mut self,
-        id: EntityId,
-        owner: PlayerId,
-        at: Vec3,
-        heading: (Fixed, Fixed),
-        label: Option<String>,
-        name: Option<String>,
-        properties: ObjectProperties,
-    ) -> Option<()> {
+    pub(crate) fn inspect_placement(&mut self, inspection: Inspection) -> Option<EntityId> {
+        let Inspection { id, owner, at, heading, label, name, properties } = inspection;
         let db = self.content.as_deref()?;
         let unit = self.units.get(id)?;
         let def = db.unit(unit.def)?;
@@ -68,17 +60,16 @@ impl Sim {
                 return None;
             }
         }
-        if let Some(health) = properties.systems {
-            if !matches!(unit.kind, EntityKind::Craft | EntityKind::Station)
+        if let Some(health) = properties.systems
+            && (!matches!(unit.kind, EntityKind::Craft | EntityKind::Station)
                 || properties.hull.unwrap_or(unit.hull)[0] <= Fixed::ZERO
                 || health.iter().enumerate().any(|(n, &f)| {
                     f < Fixed::ZERO
                         || f > Fixed::ONE
                         || (def.system_hit_points[n] <= Fixed::ZERO && f != Fixed::ONE)
-                })
-            {
-                return None;
-            }
+                }))
+        {
+            return None;
         }
         if let Some(amount) = properties.resource {
             let node = self.node_view().into_iter().find(|row| row.entity == id)?;
@@ -89,14 +80,13 @@ impl Sim {
                 return None;
             }
         }
-        if let Some(population) = properties.population {
-            if def.planet_role != Some(sta_content::PlanetRole::Producer)
+        if let Some(population) = properties.population
+            && (def.planet_role != Some(sta_content::PlanetRole::Producer)
                 || properties.hull.unwrap_or(unit.hull)[0] <= Fixed::ZERO
                 || population < Fixed::ZERO
-                || population > MAX_VALUE
-            {
-                return None;
-            }
+                || population > MAX_VALUE)
+        {
+            return None;
         }
 
         // Editor-only ownership deliberately admits inactive authored seats.
@@ -175,13 +165,13 @@ impl Sim {
         if let Some(amount) = properties.resource {
             next.economy.edit_node_amount(id, amount);
         }
-        if let Some(population) = properties.population {
-            if !next.edit_planet_population(id, population) {
-                return None;
-            }
+        if let Some(population) = properties.population
+            && !next.edit_planet_population(id, population)
+        {
+            return None;
         }
         *self = next;
-        Some(())
+        Some(id)
     }
 }
 
@@ -193,7 +183,8 @@ mod tests {
 
     use crate::WorldSource;
     use crate::setup::{GameOptions, GameSetup};
-    use crate::source::PlacementEdit;
+    use crate::source::{ObjectProperties, PlacementEdit};
+    use sta_core::{PlayerId, Vec3};
 
     use super::*;
 
@@ -227,7 +218,7 @@ mod tests {
             [Fixed::from_int(10), Fixed::from_int(20)],
         ]);
         assert_eq!(
-            sim.edit_placement(PlacementEdit::Inspect {
+            sim.edit_placement(PlacementEdit::Inspect(Box::new(Inspection {
                 id,
                 owner: PlayerId(7),
                 at: Vec3::from_f32([10.0, 0.0, 0.0]),
@@ -235,7 +226,7 @@ mod tests {
                 label: Some("new label".into()),
                 name: Some("New name".into()),
                 properties,
-            }),
+            }))),
             None
         );
         assert_eq!(sim.digest(), before);
@@ -245,7 +236,7 @@ mod tests {
 
         sim.labels.insert(id, "existing label".into());
         assert_eq!(
-            sim.edit_placement(PlacementEdit::Inspect {
+            sim.edit_placement(PlacementEdit::Inspect(Box::new(Inspection {
                 id,
                 owner: PlayerId(7),
                 at: Vec3::from_f32([10.0, 0.0, 0.0]),
@@ -253,7 +244,7 @@ mod tests {
                 label: None,
                 name: None,
                 properties: ObjectProperties::default(),
-            }),
+            }))),
             Some(id)
         );
         assert_eq!(sim.tick, 0);

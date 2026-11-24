@@ -91,7 +91,7 @@ impl Document {
         names: &mut crate::ui::hud::instance_names::InstanceNames,
         directional: bool,
     ) -> Result<(), String> {
-        use sta_sim::{WorldSource, source::PlacementEdit};
+        use sta_sim::{WorldSource, source::{Inspection, PlacementEdit}};
 
         let view = sim.view();
         for (&id, &index) in ids {
@@ -107,7 +107,7 @@ impl Document {
             })) {
                 properties.shields = None;
             }
-            let edit = PlacementEdit::Inspect {
+            let edit = PlacementEdit::Inspect(Box::new(Inspection {
                 id,
                 owner: unit.owner,
                 at: unit.pos,
@@ -115,7 +115,7 @@ impl Document {
                 label: None,
                 name: properties.instance_name.clone(),
                 properties,
-            };
+            }));
             if sim.edit_placement(edit).is_none() {
                 return Err(format!("Cannot restore inspector values for object {} ({})", object.entity_id, object.odf));
             }
