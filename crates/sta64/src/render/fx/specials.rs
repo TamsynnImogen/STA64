@@ -1,4 +1,4 @@
-//! Special FX (RND-11): construction, cloak, and Armada II warp entry.
+//! Special FX (RND-11): construction, cloak, and Armada II warp effects.
 //!
 //! Aligned with Armada II Refit: the construction welding is its `effects` module's
 //! (`effects_construction.hlsl`, the worker bees' beam, arc flare, hot spot and
@@ -20,7 +20,7 @@
 //!   the view's flag) changes, and `CloakChanged` adds the bands and green front,
 //!   strongest mid-transition (`vis (1 - vis)`). Enemy cloaked units never reach here:
 //!   RND-02 drops them from the view.
-//! - **Warp**: the live warp-entry phase starts the mounted Armada II flash.
+//! - **Warp**: the mounted Armada II sprite flashes once at each warp boundary.
 //!   See [`super::warp_flash`].
 //!
 //! [`UnitFade`] is applied to the unit's materials (cloned per mesh on first

@@ -1,4 +1,4 @@
-//! Armada II's additive warp-entry sprite and cruise hull stretch. Timing and projection follow
+//! Armada II's additive warp sprite and cruise hull stretch. Entry timing and projection follow
 //! Armada2.exe's mWarpCheck (0x004b3ce0, 0x004ad4a0), CreateWarpSpriteEffect
 //! (0x0059c380), and WarpSpriteEffect::Render (0x0059ca40).
 
@@ -22,6 +22,7 @@ use crate::viewer::Mounted;
 
 const SPRITE: &str = "warp_sprite";
 const FLASH_RADII: f32 = 2.5;
+const EXIT_PULSE_SECONDS: f64 = 0.45;
 
 #[derive(Component)]
 struct WarpFlash {
@@ -29,6 +30,7 @@ struct WarpFlash {
     anchor: Vec3,
     reach: f32,
     radius: f32,
+    exit_started: Option<Tick>,
 }
 
 #[derive(Default)]
@@ -186,6 +188,44 @@ fn track(
                     anchor,
                     reach,
                     radius,
+                    exit_started: None,
+                },
+                Transform::from_translation(anchor),
+                Visibility::Hidden,
+            ));
+        }
+        // A warp-out may retain a live unit while its phase becomes false, or the
+        // source may clear the phase entirely. Only a still-present unit can own
+        // an exit pulse; removed ships must not leave a ghost behind.
+        for &id in history.in_warp.difference(&in_warp) {
+            let Some(unit) = view
+                .unit(id)
+                .filter(|unit| !unit.flags.contains(UnitFlags::DYING))
+            else {
+                continue;
+            };
+            let Some(def) = content.0.unit(unit.def) else {
+                continue;
+            };
+            let Some((position, _)) = link.interpolate(id, 0.0) else {
+                continue;
+            };
+            let radius = def.radius.to_f32();
+            if radius <= 0.0 {
+                continue;
+            }
+            let forward = direction(&link, unit);
+            let anchor = to_bevy(position) + forward * radius;
+            for (entity, _) in flashes.iter().filter(|(_, flash)| flash.ship == id) {
+                commands.entity(entity).try_despawn();
+            }
+            commands.spawn((
+                WarpFlash {
+                    ship: id,
+                    anchor,
+                    reach: 0.0,
+                    radius,
+                    exit_started: Some(view.tick),
                 },
                 Transform::from_translation(anchor),
                 Visibility::Hidden,
@@ -223,25 +263,43 @@ fn place(
             .real_curr()
             .unit(id)
             .filter(|unit| !unit.flags.contains(UnitFlags::DYING))
-            .filter(|_| link.warp_phase(id).is_some())
         else {
             commands.entity(entity).try_despawn();
             continue;
         };
-        let (position, _) = link
-            .interpolate(id, clock.alpha())
-            .expect("the ship has a current view");
-        let position = to_bevy(position);
-        let forward = direction(&link, unit);
-        let distance = (flash.anchor - position).dot(forward);
         let half_size = FLASH_RADII * flash.radius;
-        if distance <= -half_size || distance > flash.reach + 0.01 {
-            commands.entity(entity).try_despawn();
-            continue;
-        }
-        // The native effect reprojects onto the ship's direction each frame.
-        flash.anchor = position + forward * distance;
-        let scale = (1.0 - distance.abs() / flash.reach).max(0.0) * (2.0 * half_size);
+        let scale = if let Some(started) = flash.exit_started {
+            // One pulse at the exit point. It expires on the sim clock even
+            // if deceleration takes longer or the source skipped warp-out.
+            let ticks =
+                link.real_curr().tick.saturating_sub(started) as f64 + f64::from(clock.alpha());
+            let elapsed = ticks / f64::from(sta_sim::TICK_HZ);
+            if elapsed >= EXIT_PULSE_SECONDS {
+                commands.entity(entity).try_despawn();
+                continue;
+            }
+            let t = (elapsed / EXIT_PULSE_SECONDS) as f32;
+            let pulse = if t < 0.35 { t / 0.35 } else { (1.0 - t) / 0.65 };
+            (2.0 * half_size) * pulse
+        } else {
+            if link.warp_phase(id).is_none() {
+                commands.entity(entity).try_despawn();
+                continue;
+            }
+            let (position, _) = link
+                .interpolate(id, clock.alpha())
+                .expect("the ship has a current view");
+            let position = to_bevy(position);
+            let forward = direction(&link, unit);
+            let distance = (flash.anchor - position).dot(forward);
+            if distance <= -half_size || distance > flash.reach + 0.01 {
+                commands.entity(entity).try_despawn();
+                continue;
+            }
+            // The native entry sprite reprojects onto the ship's direction.
+            flash.anchor = position + forward * distance;
+            (1.0 - distance.abs() / flash.reach).max(0.0) * (2.0 * half_size)
+        };
         *transform = Transform::from_translation(flash.anchor)
             .with_rotation(camera_rotation)
             .with_scale(Vec3::splat(scale));

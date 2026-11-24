@@ -2,7 +2,7 @@
 //! Run with `STA64_GPU_TESTS=1 STA64_EMISSIVE_INSTALL=/path/to/ArmadaII-or-mod`;
 //! `STA64_GPU_OUT` optionally keeps the active and cleared frames.
 
-use super::{SPRITE, register};
+use super::{EXIT_PULSE_SECONDS, SPRITE, register};
 use crate::clock::{AnimClock, ClockMode};
 use crate::render::sprites::SpriteTables;
 use crate::render::textures::TextureCache;
@@ -302,10 +302,58 @@ fn mounted_warp_sprite_contributes_pixels_then_disappears() {
         .resource_mut::<SimLink>()
         .tick()
         .expect("scripted warp-out tick");
-    app.world_mut()
-        .resource_mut::<SimLink>()
-        .tick()
-        .expect("scripted phase-clear tick");
+    assert_eq!(
+        app.world().resource::<SimLink>().warp_phase(ID),
+        Some(false)
+    );
+    app.update();
+    let exit_anchor = {
+        let world = app.world_mut();
+        let mut query = world.query::<&super::WarpFlash>();
+        query
+            .iter(world)
+            .find(|flash| flash.exit_started.is_some())
+            .expect("warp-out created an exit pulse")
+            .anchor
+    };
+    // The exit pulse is anchored at the ship's exit point. Center the camera
+    // there and hide the hull so its silhouette cannot contribute pixels.
+    *app.world_mut().get_mut::<Visibility>(root).unwrap() = Visibility::Hidden;
+    *app.world_mut().get_mut::<Transform>(camera).unwrap() =
+        Transform::from_xyz(exit_anchor.x + 100.0, exit_anchor.y, exit_anchor.z)
+            .looking_at(exit_anchor, Vec3::Y);
+    let lifetime_ticks = (EXIT_PULSE_SECONDS * f64::from(sta_sim::TICK_HZ)).ceil() as u32;
+    let pulse_capture_ticks = (lifetime_ticks / 4).max(1);
+    for _ in 0..pulse_capture_ticks {
+        app.world_mut()
+            .resource_mut::<SimLink>()
+            .tick()
+            .expect("advance exit pulse");
+        app.update();
+    }
+    let exit = frame(&mut app, &target);
+    eprintln!("Exit warp flash lit {} pixels", lit_pixels(&exit));
+    assert!(lit_pixels(&exit) > 20, "exit pulse contributed no pixels");
+
+    // Keep the pulse visible only for its fixed duration, then pass at least
+    // 15 world ticks before the normal hull silhouette capture.
+    let normal_capture_ticks = 15_u32.max(lifetime_ticks + 1);
+    for _ in pulse_capture_ticks..normal_capture_ticks {
+        app.world_mut()
+            .resource_mut::<SimLink>()
+            .tick()
+            .expect("expire exit pulse");
+        app.update();
+    }
+    let exit_gone = frame(&mut app, &target);
+    assert_eq!(
+        lit_pixels(&exit_gone),
+        0,
+        "exit pulse outlived its fixed lifetime"
+    );
+    *app.world_mut().get_mut::<Visibility>(root).unwrap() = Visibility::Inherited;
+    *app.world_mut().get_mut::<Transform>(camera).unwrap() =
+        Transform::from_xyz(100.0, 0.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y);
     for _ in 0..3 {
         app.update();
     }
@@ -336,6 +384,8 @@ fn mounted_warp_sprite_contributes_pixels_then_disappears() {
             .save(std::path::Path::new(&dir).join("warp-flash-active.png"))
             .unwrap();
         gone.save(std::path::Path::new(&dir).join("warp-flash-gone.png"))
+            .unwrap();
+        exit.save(std::path::Path::new(&dir).join("warp-flash-exit.png"))
             .unwrap();
         cruise
             .save(std::path::Path::new(&dir).join("warp-flash-cruise.png"))

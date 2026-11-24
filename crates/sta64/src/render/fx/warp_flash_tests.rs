@@ -1,4 +1,4 @@
-use super::{WarpFlash, register, warp_reach};
+use super::{EXIT_PULSE_SECONDS, WarpFlash, register, warp_reach};
 
 use crate::app::configure_sets;
 use crate::clock::AnimClock;
@@ -84,6 +84,14 @@ fn flash_count(app: &mut App) -> usize {
     query.iter(app.world()).count()
 }
 
+fn flash_exit_started(app: &mut App) -> Option<sta_sim::Tick> {
+    let mut query = app.world_mut().query::<&WarpFlash>();
+    query
+        .iter(app.world())
+        .next()
+        .and_then(|flash| flash.exit_started)
+}
+
 fn step(app: &mut App) {
     app.world_mut()
         .resource_mut::<SimLink>()
@@ -118,7 +126,7 @@ fn order(app: &mut App, id: EntityId, warp: bool) {
 }
 
 #[test]
-fn a_live_move_warp_creates_one_flash_and_warp_out_does_not_retrigger_it() {
+fn a_live_move_warp_creates_entry_and_exit_pulses_once_each() {
     let (mut app, id) = live_app();
     app.update(); // Seed the tracker's first observed tick.
     order(&mut app, id, false);
@@ -135,16 +143,38 @@ fn a_live_move_warp_creates_one_flash_and_warp_out_does_not_retrigger_it() {
 
     let mut entered = false;
     let mut exited = false;
+    let mut entry_pulses = 0;
+    let mut exit_pulses = 0;
+    let mut exit_started_tick = None;
     let mut max_flashes = 0;
     for _ in 0..1500 {
         step(&mut app);
         let phase = app.world().resource::<SimLink>().warp_phase(id);
         if !entered && phase == Some(true) {
             assert_eq!(flash_count(&mut app), 1, "the entry edge creates the flash");
+            assert_eq!(
+                flash_exit_started(&mut app),
+                None,
+                "entry pulse is immediate"
+            );
+            entry_pulses += 1;
             entered = true;
         }
-        if phase == Some(false) {
-            assert_eq!(flash_count(&mut app), 0, "warp-out does not create a flash");
+        if phase == Some(false) && !exited {
+            assert_eq!(flash_count(&mut app), 1, "warp-out creates one exit pulse");
+            let started = flash_exit_started(&mut app).expect("exit pulse has a start tick");
+            exit_started_tick = Some(started);
+            let elapsed = app
+                .world()
+                .resource::<SimLink>()
+                .real_curr()
+                .tick
+                .saturating_sub(started);
+            assert!(
+                elapsed as f64 / f64::from(sta_sim::TICK_HZ) < EXIT_PULSE_SECONDS,
+                "exit pulse is active only inside its fixed lifetime"
+            );
+            exit_pulses += 1;
         }
         exited |= entered && phase == Some(false);
         max_flashes = max_flashes.max(flash_count(&mut app));
@@ -155,7 +185,20 @@ fn a_live_move_warp_creates_one_flash_and_warp_out_does_not_retrigger_it() {
     }
     assert!(entered, "the real MoveWarp order entered warp");
     assert!(exited, "the real MoveWarp order exposed warp-out");
-    assert_eq!(max_flashes, 1, "entry produced exactly one logical flash");
+    assert_eq!(entry_pulses, 1, "one entry transition produced one pulse");
+    assert_eq!(exit_pulses, 1, "one exit transition produced one pulse");
+    assert_eq!(max_flashes, 1, "each transition owns at most one flash");
+    let elapsed = app
+        .world()
+        .resource::<SimLink>()
+        .real_curr()
+        .tick
+        .saturating_sub(exit_started_tick.expect("the exit pulse started"));
+    let lifetime_ticks = (EXIT_PULSE_SECONDS * f64::from(sta_sim::TICK_HZ)).ceil() as sta_sim::Tick;
+    assert!(
+        elapsed >= lifetime_ticks && elapsed <= lifetime_ticks + 1,
+        "exit pulse expires on its fixed sim-tick lifetime"
+    );
     assert_eq!(
         flash_count(&mut app),
         0,
