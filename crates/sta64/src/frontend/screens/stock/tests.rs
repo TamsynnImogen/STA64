@@ -316,8 +316,9 @@ fn observer_is_selected_in_remembered_team_row_and_advanced_options_reset() {
     assert!(app.world().resource::<SetupDraft>().observing);
     assert!(app.world().resource::<SetupDraft>().seats.iter().all(|seat| seat.control != SeatControl::Human));
     let field = dropdown_of(&mut app, 0, Col::Control);
-    assert_eq!(app.world().get::<Dropdown>(field).unwrap().options.len(), 2);
-    pick(&mut app, field, 1);
+    assert_eq!(app.world().get::<Dropdown>(field).unwrap().options.len(), SeatControl::choices(true).len());
+    let idle = SeatControl::choices(true).iter().position(|control| *control == SeatControl::Idle).unwrap();
+    pick(&mut app, field, idle);
     assert_eq!(app.world().resource::<SetupDraft>().seats[0].control, SeatControl::Idle);
     let team = dropdown_of(&mut app, 0, Col::Team);
     pick(&mut app, team, 0);
@@ -442,7 +443,8 @@ fn setup_dropdowns_edit_the_draft_and_launch_round_trips() {
     let f = dropdown_of(&mut app, 1, Col::Team);
     pick(&mut app, f, 0);
     let f = dropdown_of(&mut app, 1, Col::Control);
-    pick(&mut app, f, 2);
+    let idle = SeatControl::choices(false).iter().position(|control| *control == SeatControl::Idle).unwrap();
+    pick(&mut app, f, idle);
     let d = app.world().resource::<SetupDraft>().clone();
     assert_eq!((d.seats[0].race.as_str(), d.seats[1].race.as_str()), ("kli", "rom"));
     assert_eq!((d.seats[0].team, d.seats[1].team), (0, 0));
@@ -464,6 +466,35 @@ fn setup_dropdowns_edit_the_draft_and_launch_round_trips() {
     assert_eq!(SetupDraft::from_setup(&setup, &data), Some(d));
     let sim = sta_sim::Sim::from_setup(&setup);
     assert_eq!(sta_sim::WorldSource::view(&sim).players.len(), 2);
+}
+
+#[test]
+fn both_setup_layouts_offer_mcp_and_use_installed_control_labels() {
+    let header = "\"GUI_PLAYER\", \"Local Captain\", \"Computer Easy\", \"Cadet\", \"Computer Medium\", \"Officer\", \"Computer Hard\", \"Admiral\"";
+    for layout in [ScreenLayout::Stock, ScreenLayout::Plain] {
+        let mut app = app_with(four_races(), None, 1.0);
+        app.insert_resource(crate::ui::i18n::Strings::from_game("english", header));
+        app.world_mut().resource_mut::<ScreensConfig>().layout = layout;
+        go(&mut app, Screen::Setup);
+
+        let field = dropdown_of(&mut app, 1, Col::Control);
+        let options = &app.world().get::<Dropdown>(field).unwrap().options;
+        assert_eq!(options, &vec!["Local Captain", "Cadet", "Officer", "Admiral", "MCP", "Idle"], "{layout:?}");
+        let mcp = SeatControl::choices(false).iter().position(|control| *control == SeatControl::Mcp).unwrap();
+        pick(&mut app, field, mcp);
+        assert_eq!(app.world().resource::<SetupDraft>().seats[1].control, SeatControl::Mcp, "{layout:?}");
+
+        let field = dropdown_of(&mut app, 1, Col::Control);
+        assert_eq!(app.world().get::<Dropdown>(field).unwrap().value(), Some("MCP"), "{layout:?}");
+
+        let observer = app.world().resource::<SetupDraft>().seats.len();
+        app.world_mut().resource_mut::<SetupDraft>().choose_team(0, observer);
+        settle(&mut app);
+        let field = dropdown_of(&mut app, 1, Col::Control);
+        let options = &app.world().get::<Dropdown>(field).unwrap().options;
+        assert_eq!(options.len(), SeatControl::choices(true).len(), "{layout:?}");
+        assert!(!options.iter().any(|label| label == "Local Captain"), "{layout:?}");
+    }
 }
 
 #[test]

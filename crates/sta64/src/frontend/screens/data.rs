@@ -9,6 +9,7 @@ use sta_content::{ContentDb, Fixed, MapDef, StartPos, StartingResources, StringT
 use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::{PlayerId, TeamId};
 use crate::clock::{MatchSpeed, splitmix64};
+use crate::ui::i18n::{Strings, tr};
 use crate::viewer::TeamColours;
 
 /// The registry name of the computer opponent (`sta_ai::Registry::builtin`).
@@ -191,34 +192,42 @@ impl ScreenData {
 pub enum SeatControl {
     /// This machine's player; one seat only.
     Human,
-    /// The `skirmish` computer player (AI-02).
+    Easy,
+    /// The existing skirmish controller is the medium preset.
     Computer,
+    Hard,
+    /// An occupied seat reserved for the local MCP client.
+    Mcp,
     /// Nobody: the seat exists and never sends a command.
     Idle,
 }
 
 impl SeatControl {
-    pub fn label(self) -> &'static str {
-        match self {
-            SeatControl::Human => "Player",
-            SeatControl::Computer => "Computer",
-            SeatControl::Idle => "Idle",
-        }
+    pub fn choices(observing: bool) -> &'static [Self] {
+        const ALL: &[SeatControl] = &[SeatControl::Human, SeatControl::Easy, SeatControl::Computer, SeatControl::Hard, SeatControl::Mcp, SeatControl::Idle];
+        if observing { &ALL[1..] } else { ALL }
     }
 
-    fn next(self) -> SeatControl {
-        match self {
-            SeatControl::Human => SeatControl::Computer,
-            SeatControl::Computer => SeatControl::Idle,
-            SeatControl::Idle => SeatControl::Human,
-        }
+    pub fn label(self, strings: Option<&Strings>) -> String {
+        let (key, fallback) = match self {
+            SeatControl::Human => ("GUI_PLAYER", "Player"),
+            SeatControl::Easy => ("Computer Easy", "AI Easy"),
+            SeatControl::Computer => ("Computer Medium", "AI Medium"),
+            SeatControl::Hard => ("Computer Hard", "AI Hard"),
+            SeatControl::Mcp => return tr("MCP"),
+            SeatControl::Idle => return tr("Idle"),
+        };
+        strings.and_then(|strings| strings.native_text(key)).filter(|text| !text.trim().is_empty())
+            .map_or_else(|| tr(fallback), str::to_owned)
     }
 
     pub fn control(self) -> Control {
         match self {
             SeatControl::Human => Control::Human,
+            SeatControl::Easy => Control::Ai(sta_ai::SKIRMISH_EASY.into()),
             SeatControl::Computer => Control::Ai(SKIRMISH_AI.into()),
-            SeatControl::Idle => Control::Idle,
+            SeatControl::Hard => Control::Ai(sta_ai::SKIRMISH_HARD.into()),
+            SeatControl::Mcp | SeatControl::Idle => Control::Idle,
         }
     }
 
@@ -226,6 +235,8 @@ impl SeatControl {
         match c {
             Control::Human => SeatControl::Human,
             Control::Idle => SeatControl::Idle,
+            Control::Ai(name) if name == sta_ai::SKIRMISH_EASY => SeatControl::Easy,
+            Control::Ai(name) if name == sta_ai::SKIRMISH_HARD => SeatControl::Hard,
             // A remote seat is a lobby's; Instant Action has none.
             _ => SeatControl::Computer,
         }
@@ -508,7 +519,9 @@ impl SetupDraft {
             return;
         }
         if old == SeatControl::Human {
-            let other = (row + 1) % self.seats.len();
+            let other = (1..self.seats.len()).map(|offset| (row + offset) % self.seats.len())
+                .find(|&index| self.seats[index].control != SeatControl::Mcp)
+                .unwrap_or((row + 1) % self.seats.len());
             if other == row {
                 return;
             }
@@ -522,13 +535,27 @@ impl SetupDraft {
             }
             self.return_row = row;
         }
+        if control == SeatControl::Mcp {
+            for seat in &mut self.seats {
+                if seat.control == SeatControl::Mcp {
+                    seat.control = SeatControl::Computer;
+                }
+            }
+        }
         self.seats[row].control = control;
     }
 
     pub fn cycle_control(&mut self, row: usize) {
         let Some(seat) = self.seats.get(row) else { return };
-        let next = seat.control.next();
-        self.select_control(row, if self.observing && next == SeatControl::Human { SeatControl::Computer } else { next });
+        let choices = SeatControl::choices(self.observing);
+        let next = choices.iter().position(|&choice| choice == seat.control).map_or(0, |i| (i + 1) % choices.len());
+        self.select_control(row, choices[next]);
+    }
+
+    /// The same start assignment used by `to_setup`, including random placement.
+    pub(crate) fn mcp_player(&self, data: &ScreenData) -> Option<PlayerId> {
+        let row = self.seats.iter().position(|s| s.control == SeatControl::Mcp)?;
+        self.row_slots(data.maps.get(self.map)?, self.random_placement).get(row).copied()
     }
 
     pub fn cycle_race(&mut self, data: &ScreenData, row: usize) {

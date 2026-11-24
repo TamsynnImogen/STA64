@@ -54,6 +54,8 @@ pub struct ActiveMatch {
     pub local: Option<PlayerId>,
     pub speed: crate::clock::MatchSpeed,
     pub fog: crate::frontend::screens::SetupFog,
+    /// The Instant Action row designated for MCP, resolved to its assigned start.
+    pub mcp_seat: Option<PlayerId>,
     /// The build was asked for (the builder's cue); false while the loading screen comes up.
     pub requested: bool,
     /// Frames in the current phase.
@@ -198,6 +200,13 @@ fn close_scene(mut commands: Commands) {
     commands.remove_resource::<MenuSceneConfig>();
 }
 
+type StartServices<'w> = (
+    Option<ResMut<'w, LoadInfo>>,
+    Option<ResMut<'w, LoadProgress>>,
+    Option<Res<'w, crate::mcp::Bridge>>,
+    Option<Res<'w, crate::mcp::MenuEndpoint>>,
+);
+
 /// StartGame: remember the setup, tell the match what it is, show the loading screen.
 fn on_start(
     mut starts: MessageReader<StartGame>,
@@ -206,10 +215,11 @@ fn on_start(
     mut notices: MessageWriter<Notice>,
     net: Option<Res<super::net_match::NetStart>>,
     mounted_palette: Option<Res<TeamColours>>,
-    (info, progress): (Option<ResMut<LoadInfo>>, Option<ResMut<LoadProgress>>),
+    (info, progress, bridge, endpoint): StartServices,
 ) {
-    let Some(StartGame(setup, speed, palette, fog)) = starts.read().last().cloned() else { return };
-    let local = match net.as_ref().and_then(|start| start.0.as_ref()) {
+    let Some(StartGame(setup, speed, palette, fog, mcp_seat)) = starts.read().last().cloned() else { return };
+    let network = net.as_ref().and_then(|start| start.0.as_ref());
+    let local = match network {
         Some(match_) => Ok(Some(match_.me)),
         None => local_seat(&setup),
     };
@@ -221,6 +231,17 @@ fn on_start(
             return;
         }
     };
+    let mcp_seat = mcp_seat.filter(|_| network.is_none());
+    if let Some(seat) = mcp_seat && bridge.is_none() {
+        match crate::mcp::open_menu_bridge(endpoint.as_deref(), seat) {
+            Ok(bridge) => commands.insert_resource(bridge),
+            Err(e) => {
+                warn!("start: {e}");
+                notices.write(Notice::new(Severity::Bad, format!("Cannot start: {e}")));
+                return;
+            }
+        };
+    }
     info!("start: {} map seats on {}, local seat {:?}", setup.players.len(), setup.map.name, local.map(|p| p.0));
     if let Some(mut info) = info {
         *info = LoadInfo::from_map(&setup.map);
@@ -233,7 +254,7 @@ fn on_start(
         commands.insert_resource(palette);
     }
     commands.insert_resource(MapSeat(local.map(|p| p.0)));
-    commands.insert_resource(ActiveMatch { setup, local, speed, fog, requested: false, frames: 0 });
+    commands.insert_resource(ActiveMatch { setup, local, speed, fog, mcp_seat, requested: false, frames: 0 });
     next.set(AppState::Loading);
 }
 

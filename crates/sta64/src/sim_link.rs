@@ -65,6 +65,7 @@ pub struct SimLink {
     match_fog_lifted: bool,
     /// A read-only client with no player seat. Only presentation views are unrestricted.
     observer: bool,
+    pub(crate) mcp: Option<crate::mcp::SeatControl>,
 }
 
 impl SimLink {
@@ -76,7 +77,16 @@ impl SimLink {
         let systems = source.system_view();
         let warp_phases = source.warp_phases();
         let impulse_caps = source.impulse_caps();
-        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, cargo, nodes, systems, warp_phases, impulse_caps, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None, lifted: None, fog_lifted: false, match_fog_lifted: false, observer: false }
+        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, cargo, nodes, systems, warp_phases, impulse_caps, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None, lifted: None, fog_lifted: false, match_fog_lifted: false, observer: false, mcp: None }
+    }
+
+    pub(crate) fn with_mcp_seat(mut self, player: PlayerId, bounds: (sta_sim::Vec3, sta_sim::Vec3)) -> Self {
+        self.mcp = Some(crate::mcp::SeatControl::new(player, bounds));
+        self
+    }
+
+    fn mcp_controls(&self, player: PlayerId) -> bool {
+        self.mcp.as_ref().is_some_and(|seat| seat.player == player && seat.claimed())
     }
 
     pub(crate) fn can_edit_placements(&mut self) -> bool {
@@ -244,7 +254,7 @@ impl SimLink {
 
     /// Stamp a command as this client's next and hand it to the router.
     pub fn submit(&mut self, kind: CommandKind) {
-        if self.observer {
+        if self.observer || self.mcp_controls(self.player) {
             return;
         }
         let cmd = Command { player: self.player, seq: self.seq, kind };
@@ -302,9 +312,13 @@ impl SimLink {
 
     /// Run one tick if the router has its commands; `None` on a stall.
     pub(crate) fn tick(&mut self) -> Option<Vec<SimEvent>> {
-        let batch = self.router.get().take_ready(self.curr.tick + 1)?;
+        let mut batch = self.router.get().take_ready(self.curr.tick + 1)?;
+        let submitted = self.mcp.as_mut().map(|seat| seat.merge_orders(&mut batch)).unwrap_or_default();
         let before = self.curr.tick;
         let out = self.source.get().step(&batch);
+        if let Some(seat) = &mut self.mcp {
+            seat.record_results(out.view.tick, submitted, &out.events);
+        }
         self.production = self.source.get().production_view();
         self.cargo = self.source.get().cargo_view();
         self.nodes = self.source.get().node_view();
@@ -323,6 +337,9 @@ impl SimLink {
             c.think(&self.curr, &out.events, &mut cmds);
         }
         for cmd in cmds {
+            if self.mcp_controls(cmd.player) {
+                continue;
+            }
             self.controller_commands += 1;
             if self.controller_commands == 1 || self.controller_commands.is_multiple_of(50) {
                 info!("ai: command {} at tick {}: seat {} {:?}", self.controller_commands, self.curr.tick, cmd.player.0, cmd.kind);

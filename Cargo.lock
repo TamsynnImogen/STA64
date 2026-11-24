@@ -5710,6 +5710,7 @@ name = "sta64"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "getrandom 0.4.3",
  "image",
  "kira",
  "mlua",

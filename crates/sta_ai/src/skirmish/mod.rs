@@ -20,7 +20,7 @@
 //! - Its own build queues. The view does not show them, so the controller
 //!   keeps its own account from the orders it sent, `Built` and `Rejected`.
 //!
-//! # What it does, every [`PERIOD`] ticks
+//! # What it does, every [`PERIOD`] ticks for the default preset
 //!
 //! 1. **Economy.** Keeps [`Params::miners`] freighters mining the node that
 //!    suits its stock, building them first.
@@ -61,6 +61,10 @@
 //! [`Registry::create_for_seat`](crate::Registry::create_for_seat). A game
 //! mode that wants an AIP calls [`SkirmishController::new`] with
 //! [`SkirmishConfig::with_aip`] instead.
+//! [`SKIRMISH_EASY`] plans every 30 ticks, keeps two miners and one defender,
+//! and waits for six ships before its first attack (wave cap eight).
+//! [`SKIRMISH_HARD`] plans every five ticks, keeps four miners and attacks
+//! with three ships initially. Its defence and wave cap keep the defaults.
 
 mod params;
 mod pd;
@@ -80,6 +84,10 @@ pub use params::Params;
 
 /// Registry name of the skirmish AI.
 pub const SKIRMISH: &str = "skirmish";
+/// Easier built-in skirmish preset.
+pub const SKIRMISH_EASY: &str = "skirmish_easy";
+/// Harder built-in skirmish preset.
+pub const SKIRMISH_HARD: &str = "skirmish_hard";
 
 /// Ticks between plans (half a second). Events are read every call.
 pub const PERIOD: Tick = 15;
@@ -318,6 +326,7 @@ struct Foe {
 #[derive(Debug)]
 pub struct SkirmishController {
     cfg: SkirmishConfig,
+    period: Tick,
     rng: u64,
     seq: u32,
     /// Orders sent, by seq, until a rejection could no longer come.
@@ -346,6 +355,10 @@ pub struct SkirmishController {
 
 impl SkirmishController {
     pub fn new(cfg: SkirmishConfig) -> SkirmishController {
+        Self::with_period(cfg, PERIOD)
+    }
+
+    fn with_period(cfg: SkirmishConfig, period: Tick) -> SkirmishController {
         // splitmix64 wants a nonzero-ish start; mix the seat in.
         // Both are mixed first: XORing the raw values would make one seat's
         // stream another seed's stream shifted by a draw.
@@ -353,6 +366,7 @@ impl SkirmishController {
         let wave_size = cfg.params.min_attack.max(1);
         SkirmishController {
             cfg,
+            period,
             rng,
             seq: 0,
             sent: BTreeMap::new(),
@@ -396,6 +410,31 @@ impl SkirmishController {
         match SkirmishConfig::from_setup(setup, player) {
             Some(cfg) => Box::new(SkirmishController::new(cfg)),
             // A seat that is not in the setup has nothing to play.
+            None => Box::new(crate::IdleController),
+        }
+    }
+
+    /// Presets change only planner timing and the existing economy and fleet targets.
+    pub(crate) fn easy_for_seat(setup: &GameSetup, player: PlayerId) -> Box<dyn Controller> {
+        match SkirmishConfig::from_setup(setup, player) {
+            Some(mut cfg) => {
+                cfg.params.miners = 2;
+                cfg.params.defence = 1;
+                cfg.params.min_attack = 6;
+                cfg.params.max_attack = 8;
+                Box::new(Self::with_period(cfg, 30))
+            }
+            None => Box::new(crate::IdleController),
+        }
+    }
+
+    pub(crate) fn hard_for_seat(setup: &GameSetup, player: PlayerId) -> Box<dyn Controller> {
+        match SkirmishConfig::from_setup(setup, player) {
+            Some(mut cfg) => {
+                cfg.params.miners = 4;
+                cfg.params.min_attack = 3;
+                Box::new(Self::with_period(cfg, 5))
+            }
             None => Box::new(crate::IdleController),
         }
     }
@@ -973,7 +1012,7 @@ impl Controller for SkirmishController {
 /// strategic AI off and ask for a prompt replan).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Think {
-    /// Plan and defend on every [`PERIOD`]th tick (what [`Controller::think`] does).
+    /// Plan and defend on the controller's preset period (what [`Controller::think`] does).
     Full,
     /// As [`Think::Full`], and plan this tick even if it is not a period tick.
     FullNow,
@@ -987,7 +1026,7 @@ impl SkirmishController {
     pub fn think_as(&mut self, view: &WorldView, events: &[SimEvent], out: &mut Vec<Command>, mode: Think) {
         self.absorb(view.tick, events);
         let Some(me) = view.player(self.cfg.player) else { return };
-        let due = view.tick.is_multiple_of(PERIOD);
+        let due = view.tick.is_multiple_of(self.period);
         if me.eliminated || !(due || mode == Think::FullNow) {
             return;
         }

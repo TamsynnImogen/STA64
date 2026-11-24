@@ -198,8 +198,8 @@ fn setup(p: &mut Box_, ctx: &Ctx, b: Vec2) {
     let races = race_ids(ctx);
     let race_labels: Vec<String> = std::iter::once(tr("Random")).chain(races.iter().map(|r| ctx.data.race_label(r, ctx.strings))).collect();
     let race_refs: Vec<&str> = race_labels.iter().map(String::as_str).collect();
-    let control_choices: &[SeatControl] = if draft.observing { &[SeatControl::Computer, SeatControl::Idle] } else { &[SeatControl::Human, SeatControl::Computer, SeatControl::Idle] };
-    let controls: Vec<String> = control_choices.iter().map(|c| tr(c.label())).collect();
+    let control_choices = SeatControl::choices(draft.observing);
+    let controls: Vec<String> = control_choices.iter().map(|c| c.label(ctx.strings)).collect();
     let control_refs: Vec<&str> = controls.iter().map(String::as_str).collect();
     let teams: Vec<String> = (0..draft.seats.len().max(1)).map(|i| cap(ctx, &format!("team_{}", i + 1), &trf("Team {0}", &[&(i + 1)]))).collect();
     let team_refs: Vec<&str> = teams.iter().map(String::as_str).collect();

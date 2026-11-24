@@ -105,8 +105,7 @@ pub(super) fn on_dropdowns(mut changes: MessageReader<DropdownChanged>, seats: Q
         refocus.0 = Some((row, col));
         match col {
             Col::Control => {
-                let choices: &[SeatControl] = if draft.observing { &[SeatControl::Computer, SeatControl::Idle] } else { &[SeatControl::Human, SeatControl::Computer, SeatControl::Idle] };
-                if let Some(&control) = choices.get(c.index) {
+                if let Some(&control) = SeatControl::choices(draft.observing).get(c.index) {
                     set_control(&mut draft, row, control);
                 }
             }

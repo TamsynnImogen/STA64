@@ -31,6 +31,7 @@ fn build_match(mut commands: Commands, active: Res<ActiveMatch>, link: Option<Re
     }
     let (sim, _) = Sim::from_setup_with_warnings(&active.setup);
     let link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), active.local.unwrap_or(sta_sim::PlayerId::BENCH));
+    let link = if let Some(seat) = active.mcp_seat { link.with_mcp_seat(seat, active.setup.map.bounds) } else { link };
     commands.insert_resource(if active.local.is_none() { link.with_observer() } else { link });
     commands.insert_resource(LocalRace { name: "built".into(), interface: None, interface_sprites: None, music: Vec::new() });
 }
@@ -257,6 +258,35 @@ fn instant_action_applies_the_chosen_palette_and_restores_the_mount() {
 }
 
 #[test]
+fn instant_action_mcp_choice_starts_a_bridge_without_a_cli_seat() {
+    use crate::frontend::screens::{SeatControl, SetupDraft};
+    use sta_sim::PlayerId;
+    let (mut app, _) = app();
+    let mut id = [0; 8];
+    getrandom::fill(&mut id).unwrap();
+    let endpoint = std::env::temp_dir().join(format!("sta64-mcp-menu-{:016x}.json", u64::from_le_bytes(id)));
+    crate::mcp::enable(&mut app, &crate::app::LaunchConfig { mcp_endpoint: Some(endpoint.clone()), ..default() });
+    settle(&mut app, 4);
+    press(&mut app, Act::Goto(Screen::Setup));
+    assert!(!endpoint.exists());
+    app.world_mut().resource_mut::<SetupDraft>().select_control(1, SeatControl::Mcp);
+    press(&mut app, Act::Launch);
+    settle(&mut app, 50);
+    assert_eq!(state(&app), AppState::InGame);
+    let active = app.world().resource::<ActiveMatch>();
+    assert_eq!((active.local, active.mcp_seat), (Some(PlayerId(0)), Some(PlayerId(1))));
+    assert_eq!(active.setup.players[1].control, sta_sim::setup::Control::Idle);
+    let link = app.world().resource::<SimLink>();
+    assert_eq!(link.mcp.as_ref().unwrap().player, PlayerId(1));
+    assert!(endpoint.exists());
+    app.world_mut().write_message(LeaveMatch);
+    settle(&mut app, 4);
+    assert!(app.world().get_resource::<SimLink>().is_none_or(|link| link.mcp.is_none()));
+    drop(app);
+    assert!(!endpoint.exists());
+}
+
+#[test]
 fn observer_starts_without_taking_any_of_the_four_map_seats() {
     let (mut app, _) = app();
     settle(&mut app, 4);
@@ -267,7 +297,7 @@ fn observer_starts_without_taking_any_of_the_four_map_seats() {
     let setup = draft.to_setup(&data).expect("observer setup");
     assert_eq!(setup.players.len(), 4);
     assert!(setup.players.iter().all(|p| matches!(p.control, sta_sim::setup::Control::Ai(_))));
-    app.world_mut().write_message(crate::frontend::screens::StartGame(setup, crate::clock::MatchSpeed::Normal, None, Default::default()));
+    app.world_mut().write_message(crate::frontend::screens::StartGame(setup, crate::clock::MatchSpeed::Normal, None, Default::default(), None));
     for _ in 0..200 {
         app.update();
         if state(&app) == AppState::InGame {
