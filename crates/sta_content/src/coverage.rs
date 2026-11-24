@@ -35,6 +35,8 @@ use crate::layered;
 pub const READ_ODF_KEYS: &[&str] = &[
     // Race ODFs (`name`, race.rs) and miners (`miner`, unit.rs).
     "name", "miner",
+    // Unit voice and ambient sounds (unit.rs `sounds`).
+    "eventattack", "ambientsound",
     "addon", "adddilithium", "addlatinum", "addmetal", "addbiomatter", "addcrew", "alwaysactiveplayer", "alwaysactiveai", "onetimemode", "atmospheretexturename", "avoidme", "buildhardpoint", "canattack", "classlabel",
     "constructionchunks", "curhealth", "dont_load_sod", "effectradius", "effecttimer",
     "energydrainrate", "fieldradius", "firearc", "fire_arcs", "forwardaccel", "groundtexturename",
@@ -580,7 +582,7 @@ mod tests {
     fn numbered_and_resource_families_are_read() {
         for k in ["weaponHardPoints12", "standardUnits3", "minimalUnits1", "race0", "track2", "dilithiumCost",
                   "latinumCost", "metalCost", "biomatterCost", "normalDilithium", "lotsLatinum", "lotsCrew",
-                  "miner", "name", "weapon3", "buildItem0"] {
+                  "miner", "name", "weapon3", "buildItem0", "eventAttack", "ambientSound"] {
             assert!(odf_key_read(k), "{k}");
         }
         for k in ["weaponHardPoints", "standardUnitsX", "raceHorse", "dilithiumRate", "normalSpeed", "lots",
