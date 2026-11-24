@@ -110,7 +110,7 @@ pub const REFIT_EFFECTS: &[(Effect, &str, &[&str])] = &[
 /// follows the UI profile (the Armada II look, `overlays::armada2_look`), not this render profile.
 /// `sprites/sprite.wesl` (Bevy's forward fragment shader with one added multiply, ADR 0009) draws the
 /// sprite nodes under both looks.
-pub const SHARED_SHADERS: &[&str] = &["fx/persistent_shields.wesl", "fx/stock_shots.wesl", "overlays/bubble.wesl", "sprites/sprite.wesl"];
+pub const SHARED_SHADERS: &[&str] = &["fx/persistent_shields.wesl", "fx/stock_shots.wesl", "hulls/emissive_blur.wesl", "overlays/bubble.wesl", "sprites/sprite.wesl"];
 
 /// Which effects have a stock implementation registered.
 #[derive(Resource, Default, Debug)]

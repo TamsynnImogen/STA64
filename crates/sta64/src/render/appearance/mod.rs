@@ -129,6 +129,7 @@ fn sync(
     mut commands: Commands,
     link: Res<SimLink>,
     mounted: Res<Mounted>,
+    content: Option<Res<crate::sim_link::ContentRes>>,
     roots: Query<(Entity, &SimEntity, &ModelInstance, &HullShare, &TeamColour)>,
     mut nodes: Query<(Entity, &ModelNode, &Name, &mut Visibility, Has<NativeNode>)>,
     mut parts: Query<
@@ -384,7 +385,9 @@ fn sync(
             if let Some(group) = group {
                 let known = catalogue.suffixes();
                 let mut loader = textures.loader();
-                match name_maps(&mut loader, group, suffix, &known) {
+                let raw = content.as_ref().and_then(|content| content.0.unit(instance.def))
+                    .map(|def| def.raw.as_ref());
+                match loader.hull_maps_for_part(group.maps.diffuse.as_deref().unwrap_or_default(), suffix, &known, raw) {
                     Some(maps) => {
                         commands.entity(entity).insert(maps);
                     }
@@ -426,10 +429,6 @@ fn sync(
             }
         }
     }
-}
-
-fn name_maps(loader: &mut super::textures::Loader, group: &sta_assets::model::Group, suffix: Option<&str>, known: &[&str]) -> Option<super::mapped::HullMaps> {
-    loader.hull_maps(group.maps.diffuse.as_deref()?, suffix, known)
 }
 
 #[cfg(test)]

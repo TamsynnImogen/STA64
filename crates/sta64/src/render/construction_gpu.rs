@@ -185,7 +185,7 @@ fn installed_reveal(preview: bool) {
                     diffuse_tint: false,
                 };
                 let stats = crate::render::model_scene::spawn_construction(
-                    &mut ctx, &model, root, 24, progress,
+                    &mut ctx, &model, root, 24, progress, None,
                 );
                 assert!(stats.meshes > 0 && stats.triangles > 0);
                 assert!(

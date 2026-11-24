@@ -269,6 +269,5 @@ fn fragment(in: FragIn) -> @location(0) vec4<f32> {
         c = cloak_front(q, k.col.rgb, k.p3);
     }
     let emission = c * k.a.y;
-    let gain = select(1.0, 2.0, constants::STA64_HDR_EMISSION != 0);
-    return vec4<f32>(emission * gain, 0.0);
+    return vec4<f32>(emission, 0.0);
 }

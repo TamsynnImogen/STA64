@@ -33,6 +33,8 @@ struct HullParams {
     // Specular and emissive maps (RND-38, mapped.rs; ported from the A2FOExtensions project).
     map: vec4<f32>,   // x: 1 with a specular map; y: 1 with an emissive map
     mhl: vec4<f32>,   // the highlight of a part with a specular map: colour and exponent (zero: none)
+    emission_a: vec4<f32>,
+    emission_b: vec4<f32>,
 };
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(0) var<uniform> k: HullParams;
@@ -45,7 +47,7 @@ struct HullParams {
 // The specular map (RGB masks the highlight) and the emissive map (added after lighting); both at the diffuse UVs.
 @group(constants::MATERIAL_BIND_GROUP) @binding(6) var spec_map: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(7) var map_sampler: sampler;
-@group(constants::MATERIAL_BIND_GROUP) @binding(8) var emit_map: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(8) var emit_map: texture_2d_array<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(9) var emit_sampler: sampler;
 
 struct FragIn {
@@ -150,15 +152,10 @@ fn mapped_highlight(n: vec3<f32>, wp: vec3<f32>, mask: vec3<f32>) -> vec3<f32> {
 
 // The emissive map added to a finished colour, in display values, clipped at 1 (self-lit).
 fn add_emissive(c: vec3<f32>, em: vec3<f32>) -> vec3<f32> {
-    if k.map.y < 0.5 {
+    if k.map.y < 0.5 || all(em == vec3<f32>(0.0)) {
         return c;
     }
-    let base = from_srgb(clamp(to_srgb(c) + to_srgb(em), vec3<f32>(0.0), vec3<f32>(1.0)));
-    // Feed the glow map itself into the HDR bloom energy, after the legacy colour combine.
-    if constants::STA64_HDR_EMISSION != 0 {
-        return base + em * 1.5;
-    }
-    return base;
+    return from_srgb(clamp(to_srgb(c) + to_srgb(em), vec3<f32>(0.0), vec3<f32>(1.0)));
 }
 
 // Stock: the original engine's fixed-function lighting from the SOD material, per light
@@ -235,6 +232,34 @@ fn shade(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>, sm: vec3<f32>, em: vec3<f32>
     return vec4<f32>(add_emissive(c, em), k.misc.x);
 }
 
+// A2FO's channels use the brightest component, with intensity applied to display bytes.
+fn mapped_emission(uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec3<f32> {
+    let gains = array<f32,6>(k.emission_a.x, k.emission_a.y, k.emission_a.z, k.emission_a.w, k.emission_b.x, k.emission_b.y);
+    var emission = vec3<f32>(0.0);
+    for (var layer = 0; layer < 6; layer++) {
+        if gains[layer] > 0.0 {
+            let texel = textureSampleGrad(emit_map, emit_sampler, uv, layer, dx, dy).rgb;
+            emission = max(emission, to_srgb(texel) * gains[layer]);
+        }
+    }
+    return from_srgb(min(emission, vec3<f32>(1.0)));
+}
+
+// The camera's private bloom source. Share UVs, alpha coverage and live
+// subsystem weights with the visible hull so both passes agree.
+@if(EMISSIVE_MASK)
+@fragment
+fn emissive_mask(i: FragIn) -> @location(0) vec4<f32> {
+    let uv = i.uv + k.uv.xy;
+    let alpha = textureSample(tex, tex_sampler, uv).a;
+    let dx = dpdx(uv);
+    let dy = dpdy(uv);
+    if k.cut.x > 0.5 && alpha < 0.5 {
+        discard;
+    }
+    return vec4<f32>(mapped_emission(uv, dx, dy), 1.0);
+}
+
 @fragment
 fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     let uv = i.uv + k.uv.xy;
@@ -247,11 +272,14 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     let t = textureSample(tex, tex_sampler, uv);
     let m0 = textureSample(nmap, nmap_sampler, uv).rgb * 2.0 - vec3<f32>(1.0);
     let sm = textureSample(spec_map, map_sampler, uv).rgb;
-    let em = textureSample(emit_map, emit_sampler, uv).rgb;
     let dp1 = dpdx(wp);
     let dp2 = dpdy(wp);
     let du1 = dpdx(uv);
     let du2 = dpdy(uv);
+    var em = vec3<f32>(0.0);
+    if k.map.y > 0.5 {
+        em = mapped_emission(uv, du1, du2);
+    }
     if k.cut.x > 0.5 && t.a < 0.5 {
         discard;
     }

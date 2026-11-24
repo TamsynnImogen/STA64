@@ -1,13 +1,8 @@
 //! Scene post-processing (Refit's `postfx`).
 //!
-//! Refit's effects are not ported as shaders: this uses Bevy 0.20's built-in
-//! ones, which cover the same ground: bloom, tonemapping choice, FXAA/SMAA,
-//! auto-exposure, vignette and chromatic aberration. Film grain is not in
-//! Bevy 0.20 and is left out.
-//!
-//! The game starts with bloom. The Graphics setting and `--postfx off` can
-//! turn it off. Other effects are opt-in. The map background and the action
-//! window are left out of the bloom pass.
+//! The game starts with a small screen-space halo seeded by authored emissive
+//! maps. The Graphics setting and `--postfx off` can turn it off. Other
+//! effects are opt-in and use Bevy's post-processing passes.
 //!
 //! Use `--postfx bloom,smaa` to choose effects (names: `bloom`, `smaa`, `fxaa`,
 //! `vignette`, `chromatic`, `exposure`, `aces`, `reinhard`, or `cinematic` for
@@ -18,11 +13,8 @@ use bevy::anti_alias::smaa::Smaa;
 use bevy::camera::Hdr;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::post_process::auto_exposure::{AutoExposure, AutoExposurePlugin};
-use bevy::post_process::bloom::{Bloom, BloomCompositeMode, BloomPrefilter};
 use bevy::post_process::effect_stack::{ChromaticAberration, Vignette};
 use bevy::prelude::*;
-use bevy::render::render_resource::{RenderPipelineDescriptor, TextureFormat};
-use bevy::shader::ShaderDefVal;
 
 use crate::map::BackgroundCamera;
 
@@ -39,6 +31,7 @@ pub enum Aa {
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct PostFx {
     pub bloom: bool,
+    /// Linear gain of the blurred emissive mask.
     pub bloom_intensity: f32,
     /// `Some`: this tonemapper instead of Bevy's default.
     pub tonemapping: Option<Tonemapping>,
@@ -54,7 +47,7 @@ impl Default for PostFx {
     fn default() -> Self {
         PostFx {
             bloom: false,
-            bloom_intensity: 0.12,
+            bloom_intensity: 0.20,
             tonemapping: None,
             aa: Aa::Off,
             auto_exposure: false,
@@ -103,25 +96,6 @@ impl PostFx {
         } else {
             PostFx::default()
         }
-    }
-}
-
-/// Refit's thresholded additive HDR pass (A2FOExtensions renderer, read from source).
-pub(super) fn emissive_bloom(intensity: f32) -> Bloom {
-    Bloom {
-        intensity,
-        prefilter: BloomPrefilter { threshold: 1.0, threshold_softness: 0.5 },
-        composite_mode: BloomCompositeMode::Additive,
-        ..Bloom::NATURAL
-    }
-}
-
-/// Preserve the emission above white on HDR scene targets, including with
-/// auto-exposure alone. LDR views use the regular material colour.
-pub(super) fn emissive_hdr_shader_def(descriptor: &mut RenderPipelineDescriptor) {
-    if let Some(fragment) = descriptor.fragment.as_mut() {
-        let hdr = fragment.targets.iter().flatten().any(|target| target.format == TextureFormat::Rgba16Float);
-        fragment.shader_defs.push(ShaderDefVal::UInt("STA64_HDR_EMISSION".into(), u32::from(hdr)));
     }
 }
 
@@ -198,19 +172,10 @@ pub fn apply(
             cam.try_insert(fx.tonemapping.unwrap_or(if stock { Tonemapping::None } else { Tonemapping::default() }));
             continue;
         }
-        if fx.bloom {
-            cam.try_insert(emissive_bloom(fx.bloom_intensity));
-        } else {
-            cam.try_remove::<Bloom>();
-        }
         if fx.auto_exposure {
             cam.try_insert(AutoExposure::default());
         } else {
-            cam.try_remove::<AutoExposure>();
-        }
-        // Bloom and auto-exposure bring `Hdr` along; take it back with them.
-        if !fx.bloom && !fx.auto_exposure {
-            cam.try_remove::<Hdr>();
+            cam.try_remove::<(AutoExposure, Hdr)>();
         }
         cam.try_insert(fx.tonemapping.unwrap_or(if stock { Tonemapping::None } else { Tonemapping::default() }));
         if fx.vignette {
@@ -254,6 +219,7 @@ pub fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::post_process::bloom::Bloom;
 
     fn app(fx: PostFx) -> (App, Entity, Entity) {
         let mut app = App::new();
@@ -334,12 +300,7 @@ mod tests {
         let (mut app, main, bg) = app(PostFx::default());
         *app.world_mut().resource_mut::<PostFx>() = PostFx { bloom: true, aa: Aa::Smaa, vignette: true, tonemapping: Some(Tonemapping::AcesFitted), ..default() };
         app.update();
-        assert!(has::<Bloom>(&app, main) && has::<Hdr>(&app, main));
-        let bloom = app.world().get::<Bloom>(main).unwrap();
-        assert_eq!(bloom.intensity, 0.12);
-        assert_eq!(bloom.prefilter.threshold, 1.0);
-        assert_eq!(bloom.prefilter.threshold_softness, 0.5);
-        assert_eq!(bloom.composite_mode, BloomCompositeMode::Additive);
+        assert!(!has::<Bloom>(&app, main) && !has::<Hdr>(&app, main), "the emissive mask uses its own pass without changing the camera's HDR mode");
         assert!(has::<Smaa>(&app, main) && !has::<Fxaa>(&app, main));
         assert!(has::<Vignette>(&app, main) && !has::<ChromaticAberration>(&app, main));
         assert_eq!(app.world().get::<Msaa>(main), Some(&Msaa::Off));
@@ -369,10 +330,11 @@ mod tests {
 
     #[test]
     fn cameras_spawned_later_get_the_settings() {
-        let (mut app, _, _) = app(PostFx { bloom: true, ..default() });
+        let (mut app, _, _) = app(PostFx { auto_exposure: true, ..default() });
         let late = app.world_mut().spawn(Camera3d::default()).id();
         app.update();
-        assert!(has::<Bloom>(&app, late));
+        assert!(has::<AutoExposure>(&app, late) && has::<Hdr>(&app, late));
+        assert!(!has::<Bloom>(&app, late));
     }
 
     #[test]

@@ -23,6 +23,10 @@
 
 use std::collections::HashMap;
 
+mod emissive_bloom;
+mod emissive_blur;
+mod emissive_state;
+
 use bevy::asset::{embedded_asset, AssetPath};
 use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
@@ -103,6 +107,9 @@ pub struct HullParams {
     pub map: Vec4,
     /// The highlight of a part with a specular map: colour and exponent (`mapped::highlight_params`).
     pub mhl: Vec4,
+    /// Live weights for warp, impulse, shields, life support, sensors and weapons.
+    pub emission_a: Vec4,
+    pub emission_b: Vec4,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
@@ -125,7 +132,7 @@ pub struct HullMaterial {
     pub spec_map: Option<Handle<Image>>,
     /// The emissive map (RND-38), added after lighting when `params.map.y` says there is one. Its own
     /// sampler: the map's repeat sampler, whatever the specular binding holds.
-    #[texture(8)]
+    #[texture(8, dimension = "2d_array")]
     #[sampler(9)]
     pub emissive_map: Option<Handle<Image>>,
     pub double_sided: bool,
@@ -136,7 +143,12 @@ impl HullMaterial {
     pub fn set_maps(&mut self, maps: Option<&crate::render::mapped::HullMaps>, switches: crate::render::mapped::MapSwitches) {
         self.spec_map = maps.and_then(|m| m.specular.clone()).filter(|_| switches.specular);
         self.emissive_map = maps.and_then(|m| m.emissive.clone()).filter(|_| switches.emissive);
-        self.params.map = Vec4::new(self.spec_map.is_some() as u8 as f32, self.emissive_map.is_some() as u8 as f32, 0.0, 0.0);
+        self.params.map.x = u8::from(self.spec_map.is_some()) as f32;
+        self.params.map.y = u8::from(self.emissive_map.is_some()) as f32;
+    }
+
+    fn emission_weights([warp, impulse, shields, life, sensors, weapons]: [f32; 6]) -> (Vec4, Vec4) {
+        (Vec4::new(warp, impulse, shields, life), Vec4::new(sensors, weapons, 0.0, 0.0))
     }
 }
 
@@ -185,7 +197,6 @@ impl Material for HullMaterial {
         // Match both passes: reflected hulls otherwise write occluding depth
         // for faces that their color pass culls.
         descriptor.primitive.cull_mode = if key.bind_group_data.double_sided { None } else { Some(Face::Back) };
-        super::post::emissive_hdr_shader_def(descriptor);
         Ok(())
     }
 }
@@ -282,7 +293,12 @@ impl Plugin for HullPlugin {
             .init_resource::<HullMaterials>()
             .insert_resource(crate::render::mapped::MapSwitches::startup())
             .add_plugins(crate::render::stock::hulls::StockHullsPlugin)
-            .add_systems(Update, (toggle, update_view, apply.in_set(HullApply), follow_source).chain());
+            .add_systems(Update, (
+                toggle, update_view, apply.in_set(HullApply),
+                update_emissive.after(crate::app::GameSet::SimLink).after(crate::clock::advance_idle_clock),
+                follow_source,
+            ).chain());
+        emissive_bloom::register(app);
     }
 }
 
@@ -334,7 +350,7 @@ fn update_view(
     content: Option<Res<crate::sim_link::ContentRes>>,
     standard: Res<Assets<StandardMaterial>>,
     mut view: ResMut<HullView>,
-    made: Res<HullMaterials>,
+    sources: Query<(&HullSource, &HullPart)>,
     mut materials: ResMut<Assets<HullMaterial>>,
     switches: Option<Res<crate::render::quality::PerfSwitches>>,
 ) {
@@ -373,15 +389,22 @@ fn update_view(
     *view = now;
     if switched {
         // The profile changed: every hull material is made again in the other look.
-        for (id, (h, part)) in &made.0 {
-            if let (Some(std), Some(mut m)) = (standard.get(*id), materials.get_mut(h)) {
+        let mut updated = std::collections::HashSet::new();
+        for (source, part) in &sources {
+            if !updated.insert(source.hull.id()) {
+                continue;
+            }
+            if let (Some(std), Some(mut m)) = (standard.get(&source.source), materials.get_mut(&source.hull)) {
                 let (shadow, spec, emissive) = (m.shadow.clone(), m.spec_map.clone(), m.emissive_map.clone());
+                let (emission_a, emission_b) = (m.params.emission_a, m.params.emission_b);
                 *m = hull_material(std, part, &view);
                 m.shadow = shadow;
-                let (s, e) = (spec.is_some(), emissive.is_some());
+                m.params.map.x = u8::from(spec.is_some()) as f32;
+                m.params.map.y = u8::from(emissive.is_some()) as f32;
                 m.spec_map = spec;
                 m.emissive_map = emissive;
-                m.params.map = Vec4::new(s as u8 as f32, e as u8 as f32, 0.0, 0.0);
+                m.params.emission_a = emission_a;
+                m.params.emission_b = emission_b;
             }
         }
     }
@@ -413,6 +436,8 @@ pub fn hull_material(m: &StandardMaterial, part: &HullPart, view: &HullView) -> 
         misc: Vec4::new(1.0, spec, pow, sun),
         rim: Vec3::from(rim).extend(RIM_POW),
         cut: Vec4::new(if cut { 1.0 } else { 0.0 }, if bump { BUMP } else { 0.0 }, KNEE, 0.0),
+        emission_a: Vec4::ONE,
+        emission_b: Vec4::new(1.0, 1.0, 0.0, 0.0),
         ..default()
     };
     if view.stock {
@@ -430,6 +455,62 @@ pub fn hull_material(m: &StandardMaterial, part: &HullPart, view: &HullView) -> 
         spec_map: None,
         emissive_map: None,
         double_sided: m.double_sided || m.cull_mode.is_none(),
+    }
+}
+
+/// Each live hull gets its own channel weights; no image is rebuilt on a damage or movement update.
+#[allow(clippy::too_many_arguments)]
+fn update_emissive(
+    link: Option<Res<crate::sim_link::SimLink>>,
+    content: Option<Res<crate::sim_link::ContentRes>>,
+    clock: Option<Res<crate::clock::AnimClock>>,
+    parts: Query<(&ChildOf, &HullSource), With<crate::render::mapped::HullMaps>>,
+    nodes: Query<&crate::render::appearance::ModelNode>,
+    hierarchy: Query<&ChildOf>,
+    units: Query<&crate::sim_link::SimEntity>,
+    mut materials: ResMut<Assets<HullMaterial>>,
+    mut states: Local<HashMap<sta_sim::EntityId, emissive_state::EmissiveState>>,
+) {
+    let Some(link) = link else {
+        states.clear();
+        return;
+    };
+    if link.is_added() {
+        states.clear();
+    }
+    let view = link.real_curr();
+    let elapsed = std::time::Duration::from_secs_f64(clock.as_deref().map_or(0.0, crate::clock::AnimClock::wall));
+    states.retain(|id, _| view.unit(*id).is_some());
+    let mut gains_this_frame = HashMap::new();
+    for (parent, source) in &parts {
+        if materials.get(&source.hull).is_none_or(|m| m.emissive_map.is_none()) {
+            continue;
+        }
+        let Ok(node) = nodes.get(parent.parent()) else { continue };
+        let mut root = node.root;
+        let sim = loop {
+            if let Ok(sim) = units.get(root) {
+                break Some(sim.0);
+            }
+            let Ok(parent) = hierarchy.get(root) else { break None };
+            root = parent.parent();
+        };
+        let Some(id) = sim else { continue };
+        let Some(unit) = view.unit(id) else { continue };
+        let gains = *gains_this_frame.entry(id).or_insert_with(|| {
+            let cap = view.attrs.impulse.iter().find(|(owner, _)| *owner == id).map(|(_, speed)| *speed)
+                .or_else(|| content.as_ref()?.0.unit(unit.def).map(|def| def.movement.max_speed))
+                .unwrap_or_default();
+            let phase = emissive_state::FlickerPhase::new(elapsed, id);
+            states.entry(id).or_default().gains(view.appearance.systems(id), unit.speed, cap, phase)
+        });
+        let (a, b) = HullMaterial::emission_weights(gains);
+        if materials.get(&source.hull).is_some_and(|m| m.params.emission_a != a || m.params.emission_b != b)
+            && let Some(mut material) = materials.get_mut(&source.hull)
+        {
+            material.params.emission_a = a;
+            material.params.emission_b = b;
+        }
     }
 }
 
@@ -463,7 +544,12 @@ fn apply(
         if !takes_hull_look(std, part) {
             continue;
         }
-        let hull = if let Some((handle, cached_part)) = made.0.get_mut(&mat.0.id()) {
+        let hull = if switches.emissive && maps.is_some_and(|maps| maps.emissive.is_some()) {
+            // The images are shared, but two ships can have different damage and motion.
+            let mut material = hull_material(std, part, &view);
+            material.set_maps(maps, switches);
+            hulls.add(material)
+        } else if let Some((handle, cached_part)) = made.0.get_mut(&mat.0.id()) {
             // Appearance can rebind the same private source after capture.
             // Refresh its cached conversion before showing it again.
             if let Some(mut material) = hulls.get_mut(&*handle) {
@@ -673,8 +759,9 @@ mod tests {
     /// material bind group filled in.
     #[test]
     fn hull_shader_validates() {
-        let src = include_str!("hulls.wesl").replace("constants::MATERIAL_BIND_GROUP", "3")
-            .replace("constants::STA64_HDR_EMISSION", "1");
+        let src = include_str!("hulls.wesl")
+            .replace("constants::MATERIAL_BIND_GROUP", "3")
+            .replace("@if(EMISSIVE_MASK)", "");
         let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)
@@ -830,7 +917,7 @@ mod gpu {
         Some(Box::new(ErrorLog))
     }
 
-    const SIZE: u32 = 96;
+    const SIZE: u32 = 256;
 
     /// A checker texture with a varying alpha channel, so the textured hull has detail.
     fn checker() -> Image {
@@ -1020,9 +1107,14 @@ mod gpu {
                 let format = if srgb { TextureFormat::Rgba8UnormSrgb } else { TextureFormat::Rgba8Unorm };
                 Image::new(Extent3d { width: 2, height: 2, depth_or_array_layers: 1 }, TextureDimension::D2, [rgb[0], rgb[1], rgb[2], 255].repeat(4), format, RenderAssetUsages::RENDER_WORLD)
             };
+            let emit = |texture: sta_assets::Rgba| {
+                let mut channels: [Option<sta_assets::Rgba>; 6] = Default::default();
+                channels[1] = Some(texture);
+                crate::render::textures::upload_emissive(&channels).unwrap()
+            };
             let (white, black, red) = {
                 let mut images = app.world_mut().resource_mut::<Assets<Image>>();
-                (images.add(flat([255, 255, 255], false)), images.add(flat([0, 0, 0], false)), images.add(flat([255, 0, 0], true)))
+                (images.add(flat([255, 255, 255], false)), images.add(flat([0, 0, 0], false)), images.add(emit(sta_assets::Rgba { width: 2, height: 2, has_alpha: false, pixels: [255, 0, 0, 255].repeat(4) })))
             };
             let set = |app: &mut App, spec: Option<Handle<Image>>, emissive: Option<Handle<Image>>| {
                 let maps = HullMaps { specular: spec, emissive };
@@ -1052,7 +1144,7 @@ mod gpu {
             let lit = take(&mut app, "mapped-white");
             set(&mut app, Some(black.clone()), None);
             let masked = take(&mut app, "mapped-black");
-            set(&mut app, None, Some(red.clone()));
+            set(&mut app, None, Some(red));
             let glow = take(&mut app, "mapped-emissive");
             eprintln!("RND-38 sums (G): none {} white {} black {}; (R): none {} emissive {}; (G): emissive {}", sum(&base, 1), sum(&lit, 1), sum(&masked, 1), sum(&base, 0), sum(&glow, 0), sum(&glow, 1));
             assert!(sum(&lit, 1) > sum(&base, 1), "a white specular map adds the default highlight");
@@ -1078,11 +1170,9 @@ mod gpu {
 
             // An emissive map alone, on UVs well outside 0..1: its own repeat sampler tiles it, so the
             // glow keeps its pattern (a clamped sampler would smear the edge texel over the sphere).
-            let strip = {
-                let mut i = Image::new(Extent3d { width: 2, height: 1, depth_or_array_layers: 1 }, TextureDimension::D2, vec![255, 0, 0, 255, 0, 0, 0, 255], TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
-                i.sampler = crate::render::textures::repeat_sampler();
-                app.world_mut().resource_mut::<Assets<Image>>().add(i)
-            };
+            let strip = app.world_mut().resource_mut::<Assets<Image>>().add(emit(sta_assets::Rgba {
+                width: 2, height: 1, has_alpha: false, pixels: vec![255, 0, 0, 255, 0, 0, 0, 255],
+            }));
             set(&mut app, None, None);
             let plain1 = take(&mut app, "mapped-uv1-none");
             set(&mut app, None, Some(strip.clone()));
@@ -1104,41 +1194,195 @@ mod gpu {
             assert!(d1 > 10_000, "the strip glows on UVs inside 0..1");
             assert!(d4 * 10 > d1 * 6, "and on UVs outside 0..1 as much (repeat), not smeared from the edge ({d4} vs {d1})");
 
-            // Run the real HDR bloom pass. Count coloured light in pixels that were
-            // background before bloom, outside the hull or the small diagnostic flare.
-            use bevy::camera::Hdr;
-            use bevy::core_pipeline::tonemapping::Tonemapping;
-            use bevy::post_process::bloom::Bloom;
+            // Compare the same scene with and without screen-space bloom.
             use crate::render::fx::quad::{self, Look};
-            let halo = |without: &[u8], with: &[u8], channel: usize| {
-                without.chunks_exact(4).zip(with.chunks_exact(4)).filter(|(a, b)| {
-                    a[0] < 6 && a[1] < 6 && a[2] < 12
-                        && b[channel].saturating_sub(a[channel]) > 2
-                }).count()
+            use crate::render::post::PostFx;
+            use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
+            app.world_mut().entity_mut(camera).insert((Tonemapping::None, DebandDither::Disabled));
+            app.insert_resource(PostFx::default());
+            let texels = sta_assets::Rgba {
+                width: 64, height: 64, has_alpha: false,
+                pixels: (0..4096).flat_map(|n| {
+                    if n % 16 < 4 { [255, 0, 0, 255] } else { [0, 0, 0, 255] }
+                }).collect(),
             };
-            app.world_mut().entity_mut(camera).insert((Hdr, Tonemapping::None));
-            app.world_mut().entity_mut(camera).remove::<bevy::core_pipeline::tonemapping::DebandDither>();
-            set(&mut app, None, Some(red));
+            let image = emit(texels);
+            let image = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+            set(&mut app, None, Some(image.clone()));
             let bare = take(&mut app, "emissive-bloom-off");
-            app.world_mut().entity_mut(camera).insert(crate::render::post::emissive_bloom(0.12));
+            app.world_mut().resource_mut::<PostFx>().bloom = true;
             let bloomed = take(&mut app, "emissive-bloom-on");
-            let red_halo = halo(&bare, &bloomed, 0);
-            eprintln!("HDR hull red halo: {red_halo} pixels");
-            assert!(red_halo > 30, "emissive map bloomed outside the hull");
+            let mut affected = 0;
+            let mut spill = 0;
+            let mut peak_gain = 0;
+            let background = &bare[..3];
+            for (before, after) in bare.chunks_exact(4).zip(bloomed.chunks_exact(4)) {
+                let gain = after[0].saturating_sub(before[0]);
+                assert_eq!(before[1..], after[1..], "the red map should only add red");
+                affected += usize::from(gain > 2);
+                spill += usize::from(&before[..3] == background && gain > 2);
+                peak_gain = peak_gain.max(gain);
+            }
+            eprintln!("Emissive halo: {affected} lit neighbours, {spill} background pixels, peak gain {peak_gain}/255");
+            assert!(affected > 20 && spill > 20 && peak_gain < 85, "a gentle halo extends past the silhouette");
 
+            // Drive the real material from a simulation view, including the repair latch.
+            use super::emissive_state::FlickerPhase;
+            use crate::clock::AnimClock;
+            use crate::render::appearance::ModelNode;
+            use crate::sim_link::{SimEntity, SimLink};
+            use sta_sim::appearance::SystemAppearance;
+            use sta_sim::command::LocalRouter;
+            use sta_sim::setup::{GameOptions, GameSetup};
+            use sta_sim::{Fixed, PlayerId};
+            use std::time::Duration;
+            app.init_resource::<AnimClock>();
+            let db = std::sync::Arc::new(sta_content::fake::db());
+            let mut sim = sta_sim::Sim::from_setup(&GameSetup {
+                seed: 1, players: Vec::new(), map: std::sync::Arc::new(sta_content::MapDef::empty()),
+                content: db.clone(), options: GameOptions::default(),
+            });
+            let id = sim.spawn_def(db.key("fx_cruiser").unwrap(), PlayerId(0), sta_sim::Vec3::ZERO,
+                (Fixed::ZERO, Fixed::ONE)).unwrap();
+            let link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), PlayerId(0));
+            let mut view = (**link.real_curr()).clone();
+            app.insert_resource(link);
+            let root = app.world_mut().spawn((SimEntity(id), Transform::IDENTITY, Visibility::Inherited)).id();
+            let node = app.world_mut().spawn((ModelNode { root, index: 0 }, Transform::IDENTITY,
+                Visibility::Inherited, ChildOf(root))).id();
+            app.world_mut().entity_mut(subject).insert((ChildOf(node), HullMaps { specular: None, emissive: Some(image) }));
+            let feed = |app: &mut App, view: &mut sta_sim::WorldView, enabled, hp| {
+                view.appearance.systems = vec![(id, [Some(SystemAppearance {
+                    enabled, health: [Fixed::from_int(hp), Fixed::from_int(40)],
+                }), None, None, None, None])];
+                app.world_mut().resource_mut::<SimLink>().feed(std::sync::Arc::new(view.clone()));
+            };
+            // Advance only between captures so the chosen phase survives GPU readback.
+            let advance_phase = |app: &mut App, visible| {
+                let mut clock = app.world_mut().resource_mut::<AnimClock>();
+                let elapsed = Duration::from_secs_f64(clock.wall());
+                let offset = (1..=64)
+                    .map(|steps| Duration::from_millis(90 * steps))
+                    .find(|offset| FlickerPhase::new(elapsed + *offset, id).visible(0) == visible)
+                    .expect("both engine flicker phases occur");
+                clock.advance_idle(offset.as_secs_f64());
+            };
+            feed(&mut app, &mut view, false, 40);
+            advance_phase(&mut app, false);
+            let dark = take(&mut app, "emissive-engines-disabled-off");
+            assert!(sum(&dark, 0) + 10_000 < sum(&bloomed, 0));
+            advance_phase(&mut app, true);
+            assert!(take(&mut app, "emissive-engines-disabled-on") == bloomed, "disabled lights and glow return in the on phase");
+            feed(&mut app, &mut view, true, 0);
+            assert!(take(&mut app, "emissive-engines-destroyed") == dark, "destroyed engines remain dark in the on phase");
+            feed(&mut app, &mut view, true, 10);
+            advance_phase(&mut app, false);
+            assert!(take(&mut app, "emissive-engines-partial-repair-off") == dark);
+            advance_phase(&mut app, true);
+            assert!(take(&mut app, "emissive-engines-partial-repair-on") == dark);
+            feed(&mut app, &mut view, true, 40);
+            assert!(take(&mut app, "emissive-engines-repaired") == bloomed, "full repair restores the original light");
+
+            // A dark, opaque occluder exposes any leaked light from the hidden emitter.
+            let occluder_mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(Sphere::new(1.4));
+            let occluder_material = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial {
+                base_color: Color::srgb(0.16, 0.18, 0.2), unlit: true, ..default()
+            });
+            let occluder = app.world_mut().spawn((Mesh3d(occluder_mesh), MeshMaterial3d(occluder_material), Transform::from_xyz(0.0, 0.0, 1.5))).id();
+            app.world_mut().resource_mut::<PostFx>().bloom = false;
+            let hidden = take(&mut app, "emissive-occluded-off");
+            app.world_mut().resource_mut::<PostFx>().bloom = true;
+            assert!(take(&mut app, "emissive-occluded-on") == hidden, "occluded maps add no bloom");
+            app.world_mut().despawn(occluder);
+
+            // Even a white hull and a bright additive shot contribute nothing to the halo.
             app.world_mut().entity_mut(subject).insert(Visibility::Hidden);
-            app.world_mut().entity_mut(camera).remove::<Bloom>();
+            let white = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial {
+                base_color: Color::WHITE, unlit: true, ..default()
+            });
+            let ball = app.world_mut().resource_mut::<Assets<Mesh>>().add(Sphere::new(0.35));
+            let white = app.world_mut().spawn((Mesh3d(ball), MeshMaterial3d(white), Transform::from_xyz(-0.7, 0.0, 0.0))).id();
             let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(quad::rectangle());
             let look = Look::new(quad::K_HOT, Vec3::new(0.0, 1.0, 0.0));
             let material = app.world_mut().resource_mut::<Assets<quad::FxQuadMaterial>>()
-                .add(quad::FxQuadMaterial { params: look.params(1.0, 0.0) });
-            app.world_mut().spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::from_scale(Vec3::splat(0.55))));
-            let bare = take(&mut app, "effect-bloom-off");
-            app.world_mut().entity_mut(camera).insert(crate::render::post::emissive_bloom(0.12));
-            let bloomed = take(&mut app, "effect-bloom-on");
-            let green_halo = halo(&bare, &bloomed, 1);
-            eprintln!("HDR effect green halo: {green_halo} pixels");
-            assert!(green_halo > 20, "the luminous effect bloomed outside its core");
+                .add(quad::FxQuadMaterial { params: look.params(4.0, 0.0) });
+            let flare = app.world_mut().spawn((Mesh3d(mesh), MeshMaterial3d(material),
+                Transform::from_xyz(0.7, 0.0, 0.0).with_scale(Vec3::splat(0.55)))).id();
+            app.world_mut().resource_mut::<PostFx>().bloom = false;
+            let bright = take(&mut app, "non-emissive-bloom-off");
+            assert!(bright.chunks_exact(4).any(|p| p[0] == 255 && p[1] == 255 && p[2] == 255));
+            assert!(bright.chunks_exact(4).any(|p| p[0] < 10 && p[1] == 255 && p[2] < 10));
+            app.world_mut().resource_mut::<PostFx>().bloom = true;
+            assert_eq!(take(&mut app, "non-emissive-bloom-on"), bright, "only mapped emissions can bloom");
+
+            // The installed test mod adds emissive channels to the Classic FBattle model.
+            if let Ok(mod_dir) = std::env::var("STA64_EMISSIVE_INSTALL") {
+                use bevy::ecs::system::RunSystemOnce;
+                use crate::render::model_scene::{self, SpawnCtx};
+                use crate::render::textures::{Loader, TextureCache};
+                let mod_dir = std::path::Path::new(&mod_dir);
+                let install = mod_dir.ancestors().nth(3).expect("install/Data/Mods/mod");
+                let active = mod_dir.file_name().and_then(|name| name.to_str()).expect("mod folder");
+                let vfs = sta_vfs::Vfs::mount_install(install, Some(active)).unwrap();
+                let (path, format) = sta_assets::find_model(&vfs, "fbattle").expect("installed FBattle model");
+                let model = sta_assets::load_model(&vfs, &path, format).unwrap();
+                let (lo, hi) = model.bounds().unwrap();
+                let radius = Vec3::from_array(hi).distance(Vec3::from_array(lo)) * 0.5;
+                let scale = 1.0 / radius;
+                let center = (Vec3::from_array(lo) + Vec3::from_array(hi)) * (0.5 * scale) * Vec3::new(1.0, 1.0, -1.0);
+                app.insert_resource(ClearColor(Color::srgb(0.045, 0.04, 0.19)));
+                app.world_mut().entity_mut(camera).insert(
+                    Transform::from_translation(center + Vec3::new(0.66, 1.4, 1.48))
+                        .looking_at(center, Vec3::Y),
+                );
+                for entity in [white, flare] {
+                    app.world_mut().entity_mut(entity).insert(Visibility::Hidden);
+                }
+                let stats = app.world_mut().run_system_once(
+                    move |mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>,
+                          mut materials: ResMut<Assets<StandardMaterial>>, mut images: ResMut<Assets<Image>>| {
+                        let mut cache = TextureCache::default();
+                        let sprites = sta_assets::a2fmt::spr::SpriteTable::default();
+                        let root = commands.spawn((SimEntity(id), Transform::IDENTITY, Visibility::Inherited)).id();
+                        model_scene::spawn(&mut SpawnCtx {
+                            commands: &mut commands, meshes: &mut meshes, materials: &mut materials,
+                            textures: Loader { vfs: &vfs, cache: &mut cache, images: &mut images,
+                                formats: bevy::image::CompressedImageFormats::NONE },
+                            team: Color::WHITE, borg: false, sprites: &sprites, damaged: false,
+                            normal_maps: true, parts: None, model_key: path.clone(), unlit: false,
+                            scale, diffuse_tint: false,
+                        }, &model, root)
+                    },
+                ).unwrap();
+                assert!(stats.meshes > 0, "the installed SOD should produce meshes");
+                for _ in 0..20 { app.update(); }
+                app.world_mut().resource_mut::<PostFx>().bloom = false;
+                let bare = take(&mut app, "fbattle-bloom-off");
+                app.world_mut().resource_mut::<PostFx>().bloom = true;
+                let lit = take(&mut app, "fbattle-bloom-on");
+                let changed_pixels = bare.chunks_exact(4).zip(lit.chunks_exact(4)).filter(|(a, b)| a != b).count();
+                let outside = |before: &[u8], after: &[u8]| {
+                    before.chunks_exact(4).zip(after.chunks_exact(4))
+                        .filter(|(a, b)| a[..3] == before[..3] && (0..3).any(|i| b[i].saturating_sub(a[i]) > 3)).count()
+                };
+                let spill = outside(&bare, &lit);
+                eprintln!("Installed FBattle: {} meshes, {changed_pixels} changed pixels, {spill} coloured background pixels", stats.meshes);
+                assert!(spill > 20, "installed FBattle glow should extend into space");
+                feed(&mut app, &mut view, false, 40);
+                advance_phase(&mut app, false);
+                let dark = take(&mut app, "fbattle-engines-disabled-off");
+                assert!(dark != lit, "FBattle engine textures go dark during the off phase");
+                advance_phase(&mut app, true);
+                assert!(take(&mut app, "fbattle-engines-disabled-on") == lit, "FBattle engine textures light up during the on phase");
+                feed(&mut app, &mut view, false, 0);
+                assert!(take(&mut app, "fbattle-engines-destroyed") == dark, "destroyed FBattle engines remain dark");
+                feed(&mut app, &mut view, true, 40);
+                app.world_mut().entity_mut(camera).insert(Msaa::Sample4);
+                app.world_mut().resource_mut::<PostFx>().bloom = false;
+                let msaa_off = take(&mut app, "fbattle-msaa-bloom-off");
+                app.world_mut().resource_mut::<PostFx>().bloom = true;
+                assert!(outside(&msaa_off, &take(&mut app, "fbattle-msaa-bloom-on")) > 20, "multisample mask resolves the halo");
+            }
         }
         let errors = ERRORS.lock().unwrap().clone();
         assert!(errors.is_empty(), "shader/pipeline ERROR events:\n{}", errors.join("\n"));
