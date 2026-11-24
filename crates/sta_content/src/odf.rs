@@ -403,7 +403,9 @@ fn load_with_a1(profile: Profile, mod_overrides: &Overrides, stems: &[String], l
             }
             found
         });
-        let (mut def, arc) = crate::weapon::weapon_def(s, odf, ord.as_deref(), &mut warnings);
+        let (mut def, arc) = crate::weapon::weapon_def_with_a1(
+            s, odf, ord.as_deref(), profile == Profile::Sta1Classic || a1_module, &mut warnings,
+        );
         if let Some(replace) = &def.replace {
             for (i, entry) in replace.entries.iter().enumerate() {
                 for (j, class) in entry.classes.iter().enumerate() {

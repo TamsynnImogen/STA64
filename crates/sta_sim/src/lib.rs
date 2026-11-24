@@ -420,7 +420,7 @@ impl Sim {
             }
             Order::Build { builder, what, at } => {
                 let Some(db) = self.content.clone() else { return false };
-                if !tech::build_allowed(&db, &self.units, &self.players, &self.ai_seats, *builder, *what) {
+                if self.specials.is_gemini(*builder) || !tech::build_allowed(&db, &self.units, &self.players, &self.ai_seats, *builder, *what) {
                     return false;
                 }
                 self.clear_scripted(c.player, &[*builder]);
@@ -461,8 +461,19 @@ impl Sim {
             }
             Order::Special { units, slot, target } => {
                 let Some(db) = self.content.clone() else { return false };
-                let toggled = self.weapons.order_special(self.tick, &db, &self.units, &mut self.specials, &mut self.rng, &mut self.events, c.player, units, *slot);
-                self.order_replacements(&db, c.player, units, *slot, *target) || toggled
+                let mut legacy = Vec::new();
+                let mut accepted = false;
+                for &id in units {
+                    match self.order_a1_special(&db, c.player, id, *slot, *target) {
+                        Some(took) => accepted |= took,
+                        None => legacy.push(id),
+                    }
+                }
+                if legacy.is_empty() {
+                    return accepted;
+                }
+                let toggled = self.weapons.order_special(self.tick, &db, &self.units, &mut self.specials, &mut self.rng, &mut self.events, c.player, &legacy, *slot);
+                self.order_replacements(&db, c.player, &legacy, *slot, *target) || toggled || accepted
             }
             Order::Autonomy { units, kind, level } => {
                 self.autonomy.order(&self.units, c.player, units, *kind, *level)
@@ -499,6 +510,9 @@ impl Sim {
     fn advance(&mut self) -> TickOutput {
         if self.content.is_none() {
             self.team_changes.clear();
+        }
+        if let Some(db) = self.content.clone() {
+            self.step_a1_timers(&db);
         }
         self.step_start_effects();
         self.refresh_ship_upgrades();
@@ -537,7 +551,7 @@ impl Sim {
             let returned = self.transports.expire(self.tick);
             self.restore_carrier_shields(&returned);
             let shields_off = if nebulae.is_empty() { Vec::new() } else { self.nebula_shields_enter(&db, &nebulae) };
-            combat::damage::recharge(&mut self.units, &db, &self.switches, &self.subsystems, &self.transports, &mut self.zero_shield_holds, self.tick);
+            combat::damage::recharge(&mut self.units, &db, &self.switches, &self.subsystems, &self.transports, &mut self.zero_shield_holds, self.tick, &self.specials);
             let nebula_holds = if nebulae.is_empty() { nebula::Holds::default() } else { self.nebula_systems(&db, &nebulae) };
             self.nebula_shields_tail(&shields_off);
             self.activate_team_change_weapons(&db);
@@ -545,6 +559,7 @@ impl Sim {
             self.specials.step(&mut self.units, &db, &mut self.events);
             self.forget_hits_of_cloakers(cloak_from);
             let from = self.events.len();
+            self.step_a1_ordnance(&db);
             let mut held = if db.features().builder_hold_fire { self.production.builders_at_work() } else { Vec::new() };
             held.extend(self.scripted.holding_fire());
             held.extend(nebula_holds.held.iter().copied());
@@ -552,6 +567,7 @@ impl Sim {
             let crew_delay = self.crew_weapon_delays(&db);
             self.weapons.set_crew_delay(crew_delay);
             self.weapons.step_with_perception(self.tick, &self.units, &db, relations::Diplomacy::new(&self.players, &self.relations), &self.perception, &mut self.specials, &mut self.rng, &self.switches, &self.alerts, &mut self.events);
+            self.reflect_a1_hits(&db, from);
             self.record_engagement(from);
             self.record_enemy_hits(from);
             // An attack whose target is gone leaves no course behind (SIM-36).
@@ -567,7 +583,7 @@ impl Sim {
             self.recrew.note_hits(&self.units, &db, &self.events[from..], self.tick);
             let upgrades = ship_upgrades::ShipUpgrades::collect(&db, &self.units);
             let mut casualties = combat::casualty::Ctx { upgrades: &upgrades, subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
-            let mut killed = combat::damage::apply(&mut self.units, &db, &mut self.events, from, &mut casualties, &mut self.zero_shield_holds, self.tick);
+            let mut killed = combat::damage::apply(&mut self.units, &db, &mut self.events, from, &mut casualties, &mut self.zero_shield_holds, self.tick, &self.specials);
             if !nebulae.is_empty() {
                 killed.extend(self.nebula_damage(&db, &nebulae));
             }
@@ -596,7 +612,7 @@ impl Sim {
             self.economy.step_crew(&self.units, db, &self.attrs, self.tick, &colony_crew);
             let from = self.events.len();
             self.production.update_research_poses(db, &mut self.units);
-            let completed = self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement, self.bounds);
+            let completed = self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement, self.bounds, |id| self.specials.stasis(id, self.tick));
             for old in completed.replaced_pods {
                 self.retire(old);
             }
@@ -670,6 +686,12 @@ impl Sim {
             }
             view.flags = view.flags.with(view::UnitFlags::BUILDING, self.production.is_welding(entity.id));
             view.flags = view.flags.with(view::UnitFlags::DOCKED, docked.contains(&entity.id));
+            if self.specials.shields_held(entity.id, self.tick) {
+                for pool in &mut view.shields { pool[0] = Fixed::ZERO; }
+            }
+            if self.specials.engines_held(entity.id, self.tick) {
+                view.flags = view.flags | view::UnitFlags::ENGINES_OFF;
+            }
             if matches!(entity.kind, EntityKind::Craft | EntityKind::Station) {
                 view.autonomy = Some(self.autonomy.levels(entity.id));
             }
@@ -708,7 +730,7 @@ impl Sim {
         }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
         let active_point_defence = self.content.as_deref().map_or_else(Vec::new, |db| self.weapons.active_point_defence(db, &self.units));
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), alerts: self.alerts.levels(), enemy_hit: self.alerts.hits(), ally_attacks: self.alerts.ally_rows().to_vec(), special_forces: self.switches.special_forces(), mission_switches: self.mission_switches, ..self.attrs.view() }, active_point_defence }
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), alerts: self.alerts.levels(), enemy_hit: self.alerts.hits(), ally_attacks: self.alerts.ally_rows().to_vec(), special_forces: self.switches.special_forces(), mission_switches: self.mission_switches, ..self.attrs.view() }, active_point_defence, a1_specials: self.specials.a1.view(self.tick, &self.units, self.content.as_deref()) }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content

@@ -39,7 +39,7 @@ use crate::view::UnitFlags;
 use crate::world::{Entities, Entity, Fnv, Table};
 
 /// The XZ-plane direction from `from` to `to`, normalised, and the distance.
-pub(super) fn flat(from: Vec3, to: Vec3) -> ((Fixed, Fixed), Fixed) {
+pub(crate) fn flat(from: Vec3, to: Vec3) -> ((Fixed, Fixed), Fixed) {
     let (dx, dz) = (to.x - from.x, to.z - from.z);
     let d = (dx * dx + dz * dz).sqrt();
     if d == Fixed::ZERO {
@@ -472,7 +472,7 @@ impl Weapons {
             self.init_mounts(tick, db, u.id, def, rng);
             // LUA-32: green never, yellow only after a recent enemy hit fires at a target other than the ordered one.
             let opportunity = alerts.opportunity_allowed(u.id, tick);
-            if u.flags.contains(UnitFlags::WEAPONS_OFF) || self.held.binary_search(&u.id).is_ok() {
+            if u.flags.contains(UnitFlags::WEAPONS_OFF) || self.held.binary_search(&u.id).is_ok() || specials.stasis(u.id, tick) {
                 continue;
             }
             for (i, hp) in def.hardpoints.iter().enumerate() {
@@ -701,7 +701,7 @@ impl Weapons {
         masked: Option<&sta_content::WeaponDef>,
     ) -> Option<&'a Entity> {
         // A cloaked unit is only a target for mutual allies (SIM-63).
-        let unseen = |t: &Entity| t.flags.contains(UnitFlags::CLOAKED) && !teams.confirmed_ally(t.owner, u.owner);
+        let unseen = |t: &Entity| seen.is_none() && t.flags.contains(UnitFlags::CLOAKED) && !teams.confirmed_ally(t.owner, u.owner);
         // SIM-73 `weapon_target_masks` (off by default): what this weapon may be fired at.
         let allowed = |t: &Entity| {
             masked.is_none_or(|w| {

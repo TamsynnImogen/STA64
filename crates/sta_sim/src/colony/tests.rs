@@ -497,7 +497,7 @@ fn weapon_damage_costs_people_and_spares_the_hull_of_a_planet_with_a_row() {
 fn apply_hits(sim: &mut Sim, from: usize) -> Vec<(EntityId, Option<EntityId>)> {
     let db = sim.content().cloned().unwrap();
     let mut ctx = crate::combat::casualty::Ctx { upgrades: &Default::default(), subsystems: &mut sim.subsystems, rng: &mut sim.rng, switches: &sim.switches, colonies: &mut sim.colonies };
-    crate::combat::damage::apply(&mut sim.units, &db, &mut sim.events, from, &mut ctx, &mut sim.zero_shield_holds, sim.tick)
+    crate::combat::damage::apply(&mut sim.units, &db, &mut sim.events, from, &mut ctx, &mut sim.zero_shield_holds, sim.tick, &sim.specials)
 }
 
 /// The review finding of this package: several hits in one tick each cost people

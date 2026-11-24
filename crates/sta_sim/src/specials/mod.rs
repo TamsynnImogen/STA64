@@ -46,6 +46,11 @@ use crate::event::SimEvent;
 use crate::view::UnitFlags;
 use crate::world::{Entities, Fnv, Table};
 
+pub(crate) mod a1;
+mod a1_support;
+pub use a1::{EffectView, SpecialView, a1_special_active, a1_special_ready, a1_special_researched, a1_special_target_ok};
+pub(crate) use a1::pd_enabled;
+
 /// The special abilities the sim knows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -55,6 +60,7 @@ pub enum SpecialKind {
     /// `Features::pd_energy` is on (SIM-34; `combat/pd.rs` runs it).
     PointDefence,
     Replace,
+    A1(sta_content::A1SpecialKind),
 }
 
 impl SpecialKind {
@@ -64,7 +70,7 @@ impl SpecialKind {
             "cloakingdevice" | "cloakingdeviceimp" => Some(SpecialKind::Cloak),
             _ if w.replace.is_some() => Some(SpecialKind::Replace),
             _ if w.kind == sta_content::WeaponKind::PointDefence => Some(SpecialKind::PointDefence),
-            _ => None,
+            _ => w.a1_special.map(|s| SpecialKind::A1(s.kind)),
         }
     }
 }
@@ -121,10 +127,7 @@ pub fn specials_indexed<'a>(
     let supported = || u.hardpoints.iter().enumerate().filter_map(|(i, h)| {
         let w = db.weapon(h.weapon.key)?;
         let kind = SpecialKind::of(w)?;
-        let enabled = kind != SpecialKind::PointDefence || {
-            let f = db.weapon_features(w);
-            f.pd_energy && f.point_defense_cycles
-        };
+        let enabled = kind != SpecialKind::PointDefence || pd_enabled(db, w);
         enabled.then_some((i, kind, w))
     });
     // Existing cloak and point-defence slot numbers are used by scripts and AI.
@@ -178,6 +181,7 @@ pub struct Specials {
     cloak: Table<CloakState>,
     /// Units whose `WEAPONS_OFF` this module set.
     muted: Table<()>,
+    pub(crate) a1: a1::State,
 }
 
 /// [`Specials`] as the snapshot stores it.
@@ -186,11 +190,12 @@ pub struct SpecialsRec {
     pub energy: Vec<(EntityId, Fixed)>,
     pub cloak: Vec<(EntityId, CloakState)>,
     pub muted: Vec<EntityId>,
+    a1: a1::Record,
 }
 
 impl Specials {
     pub fn is_empty(&self) -> bool {
-        self.energy.is_empty() && self.cloak.is_empty() && self.muted.is_empty()
+        self.energy.is_empty() && self.cloak.is_empty() && self.muted.is_empty() && self.a1.is_empty()
     }
 
     pub fn energy_of(&self, id: EntityId) -> Option<Fixed> {
@@ -250,6 +255,7 @@ impl Specials {
         for (id, _) in self.muted.iter() {
             h.u64(id.0 as u64);
         }
+        self.a1.hash_into(h);
     }
 
     pub(crate) fn to_rec(&self) -> SpecialsRec {
@@ -257,6 +263,7 @@ impl Specials {
             energy: self.energy.iter().map(|(i, e)| (i, *e)).collect(),
             cloak: self.cloak.iter().map(|(i, c)| (i, *c)).collect(),
             muted: self.muted.iter().map(|(i, _)| i).collect(),
+            a1: self.a1.to_rec(),
         }
     }
 
@@ -266,6 +273,7 @@ impl Specials {
             energy: Table::from_rows(r.energy)?,
             cloak: Table::from_rows(r.cloak)?,
             muted: Table::from_rows(r.muted.into_iter().map(|i| (i, ())).collect())?,
+            a1: a1::State::from_rec(r.a1)?,
         })
     }
 
@@ -305,7 +313,7 @@ impl Specials {
             any |= match kind {
                 Some(SpecialKind::Cloak) => self.cloak_one(db, units, player, id, None),
                 // Toggled by `Weapons::order_special`, which routes it.
-                Some(SpecialKind::PointDefence | SpecialKind::Replace) | None => false,
+                Some(SpecialKind::PointDefence | SpecialKind::Replace | SpecialKind::A1(_)) | None => false,
             };
         }
         any
@@ -551,3 +559,6 @@ fn set_flag(units: &mut Entities, id: EntityId, f: UnitFlags, on: bool) {
 pub mod fixture;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod a1_tests;

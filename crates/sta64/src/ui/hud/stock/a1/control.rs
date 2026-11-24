@@ -236,12 +236,14 @@ pub(in crate::ui::hud) fn spawn_grid(
 ) -> Vec<R> {
     let rects = cells(layout);
     let mut solid = Vec::new();
+    let mut separator_drawn = false;
     for b in buttons {
         let rect = if b.cell >= speed::RAIL_BASE {
             // A speed rail position: the stock sheet places it, and its separator goes with it.
             let Some(rect) = speed::rect(layout, b.cell - speed::RAIL_BASE) else { continue };
-            if let Some((r, name)) = speed::separator(layout) {
+            if !separator_drawn && let Some((r, name)) = speed::separator(layout) {
                 commands.spawn((super::node(r), bevy::picking::Pickable::IGNORE, GuiImage::new(name), ChildOf(parent)));
+                separator_drawn = true;
             }
             Some(rect)
         } else {

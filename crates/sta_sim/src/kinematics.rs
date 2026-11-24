@@ -339,6 +339,11 @@ impl Sim {
         self.step_drifting_spin();
         let db = self.content.as_deref();
         for u in self.units.iter_mut().filter(|u| u.mobile()) {
+            if self.specials.engines_held(u.id, self.tick) {
+                u.speed = Fixed::ZERO;
+                u.omega = Fixed::ZERO;
+                continue;
+            }
             let queued = match self.movement.course(u.id) {
                 Some(c) if flows => c.waypoints.as_slice(),
                 _ => &[],
