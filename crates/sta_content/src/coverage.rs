@@ -72,7 +72,7 @@ pub const READ_ODF_KEYS: &[&str] = &[
     // literals of the loaders (`check_pack <root> --keys` lists the rest).
     "tooltip", "basename", "race", "fireball", "officercost", "curshields", "maxshields",
     "shieldrate", "eventacknowledge", "eventselect", "buildtime", "rangescan", "crewcost", "range",
-    "lifespan", "shotspeed", "damagebase", "sprite", "firesound", "invincible", "shotgeometry",
+    "lifespan", "shotspeed", "damagebase", "sprite", "firesound", "explsound", "invincible", "shotgeometry",
     "restrictfirearc", "coloractive", "colordisabled", "colormouseover", "colornormal",
     "colorpressed", "buttonname", "commandname", "combatspeed", "forwardcontroldistance",
     "pathleaddistance", "tooclosetoturn", "turnalphafractionatrest", "turncontrolangle",

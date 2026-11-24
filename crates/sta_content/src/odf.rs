@@ -422,6 +422,14 @@ fn load_with_a1(profile: Profile, mod_overrides: &Overrides, stems: &[String], l
             None => None,
         };
         let mut def = crate::unit::unit_def_for_profile(s, odf, phys.as_deref(), profile, &mut warnings);
+        // The explosion ODF a unit names (`fireball`) carries the sound of its death
+        // (`explSound`, as stock `fireballexplode` / `rumbleexplode` ODFs set it).
+        // Presentation only: sounds are not part of the content digest.
+        if let Some(f) = def.fx.explosion.clone().filter(|f| !f.trim().is_empty())
+            && let Ok(e) = resolve_for_profile(&stem(f.trim()), profile, loader)
+        {
+            def.sounds.explode = e.str("explSound").map(|v| v.trim().to_owned()).filter(|v| !v.is_empty());
+        }
         // CON-52: Armada I's Borg spin keys, from the craft's own physics file.
         if profile == Profile::Sta1Classic
             && let Some(p) = phys.as_deref()
@@ -664,6 +672,25 @@ mod tests {
         assert_eq!(station.free_unit.as_deref(), Some("freighter"));
         assert_eq!(station.station_mining.unwrap().multiplier, None);
         assert_eq!(station.station_mining.unwrap().can_handle, Some([false, false, true, false]));
+    }
+
+    #[test]
+    fn explosion_sound_comes_from_the_fireball_odf() {
+        let files = [
+            ("ship.odf", "classLabel = \"craft\"\nunitName = \"Ship\"\nfireball = \"boom\"\n"),
+            ("quiet.odf", "classLabel = \"craft\"\nunitName = \"Quiet\"\nfireball = \"silent\"\n"),
+            ("lost.odf", "classLabel = \"craft\"\nunitName = \"Lost\"\nfireball = \"nowhere\"\n"),
+            ("boom.odf", "classLabel = \"fireballexplode\"\nexplSound = \"big_bang.wav\"\n"),
+            ("silent.odf", "classLabel = \"fireballexplode\"\n"),
+        ];
+        let stems: Vec<String> = ["ship", "quiet", "lost"].map(String::from).to_vec();
+        let (db, _) = load_with(Profile::Fo4, &Overrides::default(), &stems, &mut |name, _| {
+            files.iter().find(|(file, _)| file.eq_ignore_ascii_case(name)).map(|(_, text)| (*text).to_owned())
+        }).unwrap();
+        let explode = |n: &str| db.unit(db.key(n).unwrap()).unwrap().sounds.explode.clone();
+        assert_eq!(explode("ship").as_deref(), Some("big_bang.wav"));
+        assert_eq!(explode("quiet"), None);
+        assert_eq!(explode("lost"), None);
     }
 
     #[test]
