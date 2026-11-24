@@ -23,7 +23,8 @@ fn downsample(input: ScreenIn) -> @location(0) vec4<f32> {
             rgb += load_clamped(p + vec2<i32>(x, y));
         }
     }
-    return vec4<f32>(rgb / 16.0, 1.0);
+    // Average the source and decode the 0..3 range written by emissive_mask.
+    return vec4<f32>(rgb * (3.0 / 16.0), 1.0);
 }
 
 // A coloured core and a short outer falloff. The far taps reach 48 screen pixels.

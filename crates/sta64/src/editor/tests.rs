@@ -10,7 +10,7 @@ use super::*;
 use crate::clock::{AnimClock, ClockMode};
 use crate::sim_link::SimLinkPlugin;
 
-fn app() -> (App, EntityId) {
+pub(super) fn app() -> (App, EntityId) {
     app_with_content(sta_content::fake::db())
 }
 
@@ -54,11 +54,11 @@ fn app_with_content(content: sta_content::ContentDb) -> (App, EntityId) {
 }
 
 /// Write Bevy's input resource in-process. No OS keyboard events are involved.
-fn hotkey(app: &mut App) {
+pub(super) fn hotkey(app: &mut App) {
     chord(app, KeyCode::KeyE);
 }
 
-fn chord(app: &mut App, key: KeyCode) {
+pub(super) fn chord(app: &mut App, key: KeyCode) {
     {
         let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
         keys.press(KeyCode::ControlLeft);
@@ -68,13 +68,13 @@ fn chord(app: &mut App, key: KeyCode) {
     app.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
 }
 
-fn press(app: &mut App, key: KeyCode) {
+pub(super) fn press(app: &mut App, key: KeyCode) {
     app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
     app.update();
     app.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
 }
 
-fn point(app: &mut App, cursor: Vec2, at: Vec3) {
+pub(super) fn point(app: &mut App, cursor: Vec2, at: Vec3) {
     app.world_mut().resource_mut::<Aim>().0 = Some(crate::input::select::AimState {
         cursor,
         ray: Ray3d::new(at + Vec3::Y * 45.0, Dir3::NEG_Y),
@@ -83,7 +83,7 @@ fn point(app: &mut App, cursor: Vec2, at: Vec3) {
     });
 }
 
-fn mouse(app: &mut App, pressed: bool) {
+pub(super) fn mouse(app: &mut App, pressed: bool) {
     let mut buttons = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
     buttons.clear();
     if pressed {
@@ -513,4 +513,72 @@ fn inspector_shield_switch_preserves_authored_pools_on_reopen() {
     let mut names = crate::ui::hud::instance_names::InstanceNames::default();
     doc.restore_properties(&mut reopened, &BTreeMap::from([(reopened_id, index)]), &mut names, false).unwrap();
     assert_eq!(reopened.view().unit(reopened_id).unwrap().shields, shields);
+}
+
+#[test]
+fn first_inspector_edit_adds_an_unmoved_live_object_to_the_map() {
+    let (mut app, id) = app();
+    let map = sta_bzn::Map { version: 3013, size: [1000.0, 100.0, 1000.0], ..default() };
+    let bytes = sta_bzn::write::write(&map).unwrap();
+    app.insert_resource(Document::new("bzn/test.bzn".into(), bytes, map).unwrap())
+        .insert_resource(AuthoredIds(BTreeMap::new()));
+    hotkey(&mut app);
+    let initial = app.world().resource::<SimLink>().real_curr().unit(id).unwrap().clone();
+    app.world_mut().spawn((
+        crate::sim_link::SimEntity(id),
+        crate::render::units::SelectRadius(20.0),
+        GlobalTransform::IDENTITY,
+    ));
+    point(&mut app, Vec2::new(540.0, 370.0), Vec3::ZERO);
+    for _ in 0..2 {
+        mouse(&mut app, true);
+        mouse(&mut app, false);
+    }
+    assert_eq!(app.world().resource::<Editing>().inspected, Some(id));
+    assert!(app.world().resource::<Document>().objects.is_empty());
+
+    let set_field = |app: &mut App, key, value: &str| {
+        let world = app.world_mut();
+        let mut fields = world.query::<(&panel::InspectorField, &mut TextField)>();
+        let (_, mut field) = fields.iter_mut(world).find(|(field, _)| field.0 == key).expect(key);
+        field.text = value.into();
+    };
+    let apply = |app: &mut App| {
+        let world = app.world_mut();
+        let mut buttons = world.query::<(Entity, &panel::Act)>();
+        let (button, _) = buttons.iter(world).find(|(_, act)| matches!(act, panel::Act::ApplyStats)).unwrap();
+        world.write_message(ButtonClicked(button));
+        app.update();
+    };
+    set_field(&mut app, "hull", "invalid");
+    apply(&mut app);
+    assert_eq!(app.world().resource::<Editing>().inspected, Some(id));
+    assert_eq!(app.world().resource::<SimLink>().real_curr().unit(id), Some(&initial));
+    assert!(app.world().resource::<AuthoredIds>().0.is_empty());
+    assert!(app.world().resource::<Document>().objects.is_empty());
+
+    set_field(&mut app, "hull", "25");
+    set_field(&mut app, "name", "Endeavour");
+    set_field(&mut app, "label", "patrol_start");
+    apply(&mut app);
+    let edited = app.world().resource::<SimLink>().real_curr().unit(id).unwrap();
+    assert_eq!(edited.pos, initial.pos);
+    assert_eq!(edited.hull[0], Fixed::from_int(25));
+    let index = app.world().resource::<AuthoredIds>().0[&id];
+    let doc = app.world().resource::<Document>();
+    let object = doc.object(index).unwrap();
+    assert_eq!(object.entity_id, 0);
+    assert_eq!(object.instance_name, "Endeavour");
+    assert_eq!(object.label, "patrol_start");
+    assert_eq!(doc.properties(object.entity_id).unwrap().hull.unwrap()[0], Fixed::from_int(25));
+    let saved = sta_bzn::parse(&doc.bytes().unwrap()).unwrap();
+    assert_eq!(saved.objects[0].transform[9..12], initial.pos.to_f32());
+
+    chord(&mut app, KeyCode::KeyZ);
+    assert!(app.world().resource::<AuthoredIds>().0.is_empty());
+    assert!(app.world().resource::<Document>().objects.is_empty());
+    assert_eq!(app.world().resource::<SimLink>().real_curr().unit(id), Some(&initial));
+    chord(&mut app, KeyCode::KeyY);
+    assert_eq!(app.world().resource::<AuthoredIds>().0[&id], index);
+    assert_eq!(app.world().resource::<Document>().object(index).unwrap().instance_name, "Endeavour");
 }

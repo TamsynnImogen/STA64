@@ -109,6 +109,7 @@ pub struct HullParams {
     pub mhl: Vec4,
     /// Live weights for warp, impulse, shields, life support, sensors and weapons.
     pub emission_a: Vec4,
+    /// Sensors/weapons in xy, additional warp/impulse bloom gain in zw.
     pub emission_b: Vec4,
 }
 
@@ -147,8 +148,10 @@ impl HullMaterial {
         self.params.map.y = u8::from(self.emissive_map.is_some()) as f32;
     }
 
-    fn emission_weights([warp, impulse, shields, life, sensors, weapons]: [f32; 6]) -> (Vec4, Vec4) {
-        (Vec4::new(warp, impulse, shields, life), Vec4::new(sensors, weapons, 0.0, 0.0))
+    fn emission_weights(gains: emissive_state::EmissiveGains) -> (Vec4, Vec4) {
+        let [warp, impulse, shields, life, sensors, weapons] = gains.surface;
+        let [warp_bloom, impulse_bloom] = gains.halo_boost;
+        (Vec4::new(warp, impulse, shields, life), Vec4::new(sensors, weapons, warp_bloom, impulse_bloom))
     }
 }
 
@@ -498,11 +501,12 @@ fn update_emissive(
         let Some(id) = sim else { continue };
         let Some(unit) = view.unit(id) else { continue };
         let gains = *gains_this_frame.entry(id).or_insert_with(|| {
-            let cap = view.attrs.impulse.iter().find(|(owner, _)| *owner == id).map(|(_, speed)| *speed)
+            let cap = link.impulse_cap(id)
+                .or_else(|| view.attrs.impulse.iter().find(|(owner, _)| *owner == id).map(|(_, speed)| *speed))
                 .or_else(|| content.as_ref()?.0.unit(unit.def).map(|def| def.movement.max_speed))
                 .unwrap_or_default();
             let phase = emissive_state::FlickerPhase::new(elapsed, id);
-            states.entry(id).or_default().gains(view.appearance.systems(id), unit.speed, cap, phase)
+            states.entry(id).or_default().gains(view.appearance.systems(id), unit.speed, cap, link.warp_phase(id), phase)
         });
         let (a, b) = HullMaterial::emission_weights(gains);
         if materials.get(&source.hull).is_some_and(|m| m.params.emission_a != a || m.params.emission_b != b)
@@ -1372,6 +1376,29 @@ mod gpu {
                 let spill = outside(&bare, &lit);
                 eprintln!("Installed FBattle: {} meshes, {changed_pixels} changed pixels, {spill} coloured background pixels", stats.meshes);
                 assert!(spill > 20, "installed FBattle glow should extend into space");
+
+                // Count the extra light outside the ship, where a surface-only gain
+                // cannot change the picture. The installed model has both engine maps.
+                let sky_gain = |frame: &[u8]| {
+                    bare.chunks_exact(4).zip(frame.chunks_exact(4))
+                        .filter(|(before, _)| before[..3] == bare[..3])
+                        .map(|(before, after)| (0..3).map(|i| u64::from(after[i].saturating_sub(before[i]))).sum::<u64>())
+                        .sum::<u64>()
+                };
+                let idle_gain = sky_gain(&lit);
+                view.attrs.impulse = vec![(id, Fixed::from_int(100))];
+                for (name, speed) in [("fbattle-impulse-halo", 100), ("fbattle-warp-halo", 150)] {
+                    view.units.iter_mut().find(|unit| unit.id == id).unwrap().speed = Fixed::from_int(speed);
+                    feed(&mut app, &mut view, true, 40);
+                    let moving = take(&mut app, name);
+                    let gain = sky_gain(&moving);
+                    eprintln!("{name}: total sky RGB gain {gain} vs idle {idle_gain}");
+                    assert!(gain > idle_gain + idle_gain / 20, "{name} should visibly strengthen the halo");
+                }
+                view.units.iter_mut().find(|unit| unit.id == id).unwrap().speed = Fixed::ZERO;
+                feed(&mut app, &mut view, true, 40);
+                assert_eq!(take(&mut app, "fbattle-halo-stopped"), lit, "idle halo returns when the ship stops");
+
                 feed(&mut app, &mut view, false, 40);
                 advance_phase(&mut app, false);
                 let dark = take(&mut app, "fbattle-engines-disabled-off");

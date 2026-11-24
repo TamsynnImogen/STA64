@@ -33,7 +33,14 @@ impl FlickerPhase {
     }
 }
 
-/// Channel order: warp, impulse, shields, life support, sensors, weapons.
+#[derive(Clone, Copy)]
+pub(super) struct EmissiveGains {
+    /// Warp, impulse, shields, life support, sensors and weapons.
+    pub(super) surface: [f32; 6],
+    /// Additional linear bloom gain for warp and impulse respectively.
+    pub(super) halo_boost: [f32; 2],
+}
+
 #[derive(Default)]
 pub(super) struct EmissiveState {
     destroyed: [bool; 5],
@@ -45,23 +52,27 @@ impl EmissiveState {
         systems: Option<&[Option<SystemAppearance>; 5]>,
         speed: Fixed,
         impulse_cap: Fixed,
+        warp_phase: Option<bool>,
         phase: FlickerPhase,
-    ) -> [f32; 6] {
+    ) -> EmissiveGains {
         let mut gains = [1.0; 6];
+        let mut halo_boost = [0.0; 2];
 
-        // The native motion fallback has no explicit warp state here. Its
-        // velocity test uses squared speed > 0.01, then warp above 105% of
-        // the positive impulse cap. The idle/impulse/warp gains follow the
-        // native fallback. The view does not expose gravity-well transitions.
+        // Live A2/FO warp phases take precedence during warp and warp-out.
+        // Other movement (including A1 and recorded views) uses the native
+        // speed fallback: squared speed > 0.01, warp above 105% of impulse.
         let velocity = speed.to_f32();
         if velocity * velocity > 0.01 {
             let cap = impulse_cap.to_f32();
             let threshold = cap * 1.05;
-            if cap > 0.0 && threshold.is_finite() && velocity * velocity > threshold * threshold {
+            let inferred_warp = cap > 0.0 && threshold.is_finite() && velocity * velocity > threshold * threshold;
+            if warp_phase.unwrap_or(inferred_warp) {
                 gains[0] = 2.0;
+                halo_boost[0] = 1.75;
             } else {
                 gains[0] = 1.25;
                 gains[1] = 1.5;
+                halo_boost[1] = 1.25;
             }
         }
 
@@ -84,6 +95,7 @@ impl EmissiveState {
             if dark(0) {
                 gains[0] = 0.0;
                 gains[1] = 0.0;
+                halo_boost = [0.0; 2];
             }
             for (system, channel) in [(2, 2), (3, 3), (4, 4), (1, 5)] {
                 if dark(system) {
@@ -91,7 +103,7 @@ impl EmissiveState {
                 }
             }
         }
-        gains
+        EmissiveGains { surface: gains, halo_boost }
     }
 }
 
@@ -111,7 +123,7 @@ mod tests {
     }
 
     fn gains(systems: Option<&[Option<SystemAppearance>; 5]>, speed: i32, cap: i32) -> [f32; 6] {
-        EmissiveState::default().gains(systems, Fixed::from_int(speed), Fixed::from_int(cap), phase(90))
+        EmissiveState::default().gains(systems, Fixed::from_int(speed), Fixed::from_int(cap), None, phase(90)).surface
     }
 
     #[test]
@@ -123,32 +135,58 @@ mod tests {
     }
 
     #[test]
+    fn live_warp_and_warp_out_override_the_speed_threshold() {
+        let mut state = EmissiveState::default();
+        let live = |state: &mut EmissiveState, speed, warp| {
+            state.gains(None, Fixed::from_int(speed), Fixed::from_int(100), Some(warp), phase(90))
+        };
+        let warp = live(&mut state, 20, true);
+        assert_eq!(warp.surface[..2], [2.0, 1.0]);
+        assert_eq!(warp.halo_boost, [1.75, 0.0]);
+        let impulse = live(&mut state, 106, false);
+        assert_eq!(impulse.surface[..2], [1.25, 1.5]);
+        assert_eq!(impulse.halo_boost, [0.0, 1.25]);
+        let idle = live(&mut state, 0, true);
+        assert_eq!(idle.surface[..2], [1.0, 1.0]);
+        assert_eq!(idle.halo_boost, [0.0, 0.0]);
+        let mut disabled = [None; 5];
+        disabled[0] = system(false, 20, 20);
+        let dark = (0..100).find_map(|bucket| {
+            let phase = phase(bucket * 90);
+            (!phase.visible(0)).then_some(phase)
+        }).unwrap();
+        let flicker = state.gains(Some(&disabled), Fixed::from_int(20), Fixed::from_int(100), Some(true), dark);
+        assert_eq!(flicker.surface[..2], [0.0, 0.0]);
+        assert_eq!(flicker.halo_boost, [0.0, 0.0]);
+    }
+
+    #[test]
     fn destroyed_engine_is_dark_even_if_enabled_and_during_partial_repair() {
         let mut systems = [None; 5];
         let mut state = EmissiveState::default();
         systems[0] = system(true, 5, 20);
         assert_eq!(
-            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), phase(90))[..2],
+            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), None, phase(90)).surface[..2],
             [2.0, 1.0]
         );
         systems[0] = system(true, 0, 20);
         assert_eq!(
-            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), phase(90))[..2],
+            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), None, phase(90)).surface[..2],
             [0.0, 0.0]
         );
         systems[0] = system(true, 5, 20);
         assert_eq!(
-            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), phase(90))[..2],
+            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), None, phase(90)).surface[..2],
             [0.0, 0.0]
         );
         systems[0] = system(true, 20, 20);
         assert_eq!(
-            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), phase(90))[..2],
+            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), None, phase(90)).surface[..2],
             [2.0, 1.0]
         );
         systems[0] = system(true, 5, 20);
         assert_eq!(
-            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), phase(90))[..2],
+            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), None, phase(90)).surface[..2],
             [2.0, 1.0]
         );
     }
@@ -159,7 +197,7 @@ mod tests {
         systems[0] = system(false, 20, 20);
         systems[2] = system(false, 20, 20);
         let mut state = EmissiveState::default();
-        let mut gains = |ms| state.gains(Some(&systems), Fixed::ZERO, Fixed::ZERO, phase(ms));
+        let mut gains = |ms| state.gains(Some(&systems), Fixed::ZERO, Fixed::ZERO, None, phase(ms)).surface;
         assert_eq!(gains(89), [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
         assert_eq!(gains(90), [1.0, 1.0, 0.0, 1.0, 1.0, 1.0]);
         assert_eq!(gains(179), gains(90));
