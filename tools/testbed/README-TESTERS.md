@@ -50,6 +50,14 @@ Press **Enter**, type the code, **Enter** again: `showmethemoney` (resources),
    expected and what happened. A screenshot helps, too.
 3. Crashes: send the terminal output (Linux) or the console window text.
 
+## Signed files
+
+The `.sta` archives are signed with the testbed's key; its public half is in
+`STA64-Testbed-signing-key.txt`. Every file inside an archive also carries a
+SHA-256 checksum, and STA64 refuses a file whose checksum does not match.
+(STA64 does not show signatures in game yet; the developers check them with
+the `sta-archive` tool.)
+
 ## Credits
 
 See `CREDITS.md`. Star Ruler 2 art © Blind Mind Studios, CC-BY-NC 2.0
