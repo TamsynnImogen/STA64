@@ -57,7 +57,7 @@ impl WorldSource for WarpSource {
 
     fn warp_phases(&self) -> Vec<(EntityId, bool)> {
         match self.stage {
-            1 | 2 | 3 => vec![(ID, true)],
+            1..=3 => vec![(ID, true)],
             4 => vec![(ID, false)],
             _ => Vec::new(),
         }
