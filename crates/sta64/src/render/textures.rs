@@ -11,7 +11,7 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageAddressMode, ImageSampler, ImageSamplerDescriptor, ImageType};
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureViewDescriptor, TextureViewDimension};
 use sta_assets::dds::DdsKind;
 use sta_assets::{Rgba, TextureFormat as Fmt};
 use std::collections::HashMap;
@@ -230,6 +230,48 @@ pub fn upload(levels: &[Rgba], srgb: bool) -> Image {
     img
 }
 
+/// Six independent subsystem planes, in `mapped::EMISSIVE_WORDS` order.
+pub(super) fn upload_emissive(channels: &[Option<Rgba>; 6]) -> Option<Image> {
+    let first = channels.iter().flatten().next()?;
+    if first.width == 0 || first.height == 0 { return None; }
+    let (width, height) = (first.width, first.height);
+    let mut data = Vec::new();
+    let mut levels = 0;
+    for channel in channels {
+        let pixels = channel.as_ref().map(|source| {
+            let mut out = vec![0; (width * height * 4) as usize];
+            if source.width > 0 && source.height > 0 && source.pixels.len() >= (source.width * source.height * 4) as usize {
+                for y in 0..height {
+                    for x in 0..width {
+                        let sx = x as u64 * source.width as u64 / width as u64;
+                        let sy = y as u64 * source.height as u64 / height as u64;
+                        let src = ((sy * source.width as u64 + sx) * 4) as usize;
+                        let dst = ((y * width + x) * 4) as usize;
+                        out[dst..dst + 3].copy_from_slice(&source.pixels[src..src + 3]);
+                    }
+                }
+            }
+            out
+        }).unwrap_or_else(|| vec![0; (width * height * 4) as usize]);
+        let base = Rgba { width, height, pixels, has_alpha: false };
+        let mips = sta_assets::pixels::generate_mips(&base);
+        levels = mips.len() as u32;
+        for mip in mips { data.extend_from_slice(&mip.pixels); }
+    }
+    let mut img = Image::new(
+        Extent3d { width, height, depth_or_array_layers: 6 },
+        TextureDimension::D2,
+        vec![0; (width * height * 4 * 6) as usize],
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    img.data = Some(data);
+    img.texture_descriptor.mip_level_count = levels;
+    img.texture_view_descriptor = Some(TextureViewDescriptor { dimension: Some(TextureViewDimension::D2Array), ..default() });
+    img.sampler = repeat_sampler();
+    Some(img)
+}
+
 /// System parameter bundle for loading textures from any system.
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct LoaderParams<'w> {
@@ -252,5 +294,29 @@ impl LoaderParams<'_> {
             images: &mut self.images,
             formats,
         }
+    }
+}
+
+#[cfg(test)]
+mod emissive_tests {
+    use super::*;
+
+    #[test]
+    fn six_layers_have_independent_mips_and_black_absent_planes() {
+        let channels = [
+            Some(Rgba { width: 2, height: 2, pixels: vec![100, 0, 0, 255].repeat(4), has_alpha: true }),
+            Some(Rgba { width: 1, height: 1, pixels: vec![0, 80, 0, 255], has_alpha: true }),
+            None, None, None, None,
+        ];
+        let image = upload_emissive(&channels).unwrap();
+        assert_eq!(image.texture_descriptor.size.depth_or_array_layers, 6);
+        assert_eq!(image.texture_descriptor.mip_level_count, 2);
+        assert_eq!(image.texture_view_descriptor.as_ref().unwrap().dimension, Some(TextureViewDimension::D2Array));
+        let data = image.data.as_ref().unwrap();
+        assert_eq!(data.len(), 6 * (2 * 2 * 4 + 4));
+        assert_eq!(&data[0..4], &[100, 0, 0, 0]);
+        assert_eq!(&data[16..20], &[100, 0, 0, 0]);
+        assert_eq!(&data[20..24], &[0, 80, 0, 0]);
+        assert_eq!(&data[40..44], &[0, 0, 0, 0]);
     }
 }

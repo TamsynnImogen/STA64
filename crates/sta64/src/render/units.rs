@@ -510,7 +510,7 @@ pub(crate) fn attach_models(
             .map(|progress| progress.to_f32().clamp(0.0, 1.0)));
         let stats = if progress.is_some_and(|progress| progress < 1.0) {
             let chunks = construction_chunk_count(def);
-            model_scene::spawn_construction(&mut ctx, &model, e, chunks, 0.0)
+            model_scene::spawn_construction(&mut ctx, &model, e, chunks, 0.0, Some(&def.raw))
         } else {
             // A resource rock's model turns on a pivot below the unit, which `place` leaves alone.
             let under = if sim.is_some() && def.is_evolver() {
@@ -520,7 +520,7 @@ pub(crate) fn attach_models(
             } else {
                 crate::render::spin::rock_pivot(ctx.commands, e, &def.class.0, def.raw.f32("rotationSpeed"), sim.map_or(0, |s| s.0.0 as u64))
             };
-            model_scene::spawn(&mut ctx, &model, under)
+            model_scene::spawn_with_odf(&mut ctx, &model, under, &def.raw)
         };
         if override_model.is_some() {
             commands.entity(e).insert(crate::render::build_visuals::CocoonMesh);
