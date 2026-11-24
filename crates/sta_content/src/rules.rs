@@ -54,7 +54,7 @@ pub struct Rules {
     pub cfg: CfgRules,
     /// The render-only shot keys (not digested).
     pub shots: ShotCfg,
-    /// The render-only warp-suppression multipliers (not digested).
+    /// Warp-suppression multipliers shared by the minimap and simulation.
     pub fields: FieldCfg,
     /// Armada I's header-level start (`cfgStarting*`), see [`LegacyStart`].
     legacy_start: LegacyStart,
@@ -62,7 +62,7 @@ pub struct Rules {
     a1_max_officers: Option<i32>,
 }
 
-const TYPED_LEN: usize = 5 + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + ApproachRules::KEYS.len() + CfgRules::KEYS.len() + LegacyStart::KEYS.len() + PopulationRules::KEYS.len();
+const TYPED_LEN: usize = 5 + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + ApproachRules::KEYS.len() + CfgRules::KEYS.len() + LegacyStart::KEYS.len() + PopulationRules::KEYS.len() + FieldCfg::KEYS.len();
 
 /// Every `RTS_CFG.h` key [`Rules`] reads.
 pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
@@ -101,6 +101,11 @@ pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
     while p < PopulationRules::KEYS.len() {
         out[5 + i + a + w + j + l + p] = PopulationRules::KEYS[p];
         p += 1;
+    }
+    let mut f = 0;
+    while f < FieldCfg::KEYS.len() {
+        out[5 + i + a + w + j + l + p + f] = FieldCfg::KEYS[f];
+        f += 1;
     }
     out
 };
@@ -163,15 +168,13 @@ impl ShotCfg {
 
 /// The two `RTS_CFG.h` keys that size the warp-suppression fields the minimap draws: a planet's
 /// bounding radius and a black hole's, each times its multiplier (read from the executable,
-/// static; the values are read from data). Render only: not digested and not in
-/// [`TYPED_CFG_KEYS`] (D9, D10: peers that differ only in how the minimap looks play together).
+/// static; the values are read from data). Both keys are digested when authored and listed in
+/// [`TYPED_CFG_KEYS`] because the simulation reads the field radius.
 /// `None`: the header does not set the key, and no field is drawn for that class (the engine's
 /// own default for an absent key was not read; INTERIM).
 ///
 /// The whole rule (which classes have a field, and its radius) lives in one place,
-/// [`Rules::warp_suppression_radius`]. The first sim reader of it (the "no warp inside the field"
-/// rule, issue #1012) moves both keys into [`TYPED_CFG_KEYS`] and the digest (D10), so the minimap
-/// and the sim read one definition.
+/// [`Rules::warp_suppression_radius`], shared by the minimap and the no-warp rule (issue #1012).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FieldCfg {
     /// `cfgPLANET_DEWARP_RADIUS_MULTIPLIER`.
@@ -943,7 +946,7 @@ impl Rules {
         Ok((rules, warnings))
     }
 
-    /// The minimap's warp-suppression multipliers, as the header sets them (render only).
+    /// The warp-suppression multipliers, as the header sets them.
     pub fn fields(&self) -> FieldCfg {
         self.fields
     }
@@ -952,10 +955,9 @@ impl Rules {
     /// bounding radius (`UnitDef::radius`) times the class's multiplier; `None` for a class with no
     /// field, an unset multiplier or an unread radius.
     ///
-    /// Grades. Planets (`classLabel` `planet`): read from the executable, static; the multiplier
-    /// key is read from data. Black holes (`blackhole_obj`): INTERIM, inferred from the key's name,
-    /// the rule itself was not read in the executable. Armada I has the same data keys; its
-    /// executable was not read.
+    /// Read from Armada II's `PlanetClass::GetWarpSuppressionRadius` (0x004a9920)
+    /// and `BlackHoleClass::GetWarpSuppressionRadius` (0x0049d470). The multipliers
+    /// come from the active header. Armada I's executable rule was not checked.
     pub fn warp_suppression_radius(&self, def: &UnitDef) -> Option<Fixed> {
         let multiplier = match def.raw.class_label()?.to_ascii_lowercase().as_str() {
             "planet" => self.fields.planet_dewarp_radius_multiplier,
@@ -1025,6 +1027,12 @@ impl Rules {
         // SIM-30: only when set, so content without the keys keeps its hash.
         if let Some(p) = &self.population {
             for (key, value) in PopulationRules::KEYS.iter().zip(p.levels.into_iter().chain([p.civilian_rate_modifier])) {
+                out.push(DigestEntry::new(format!("RTS_CFG.h:{key}"), crate::digest::fixed_text(value)));
+            }
+        }
+        // Only authored multipliers contribute, preserving the digest of content without them.
+        for (key, value) in FieldCfg::KEYS.iter().zip([self.fields.planet_dewarp_radius_multiplier, self.fields.black_hole_dewarp_radius_multiplier]) {
+            if let Some(value) = value {
                 out.push(DigestEntry::new(format!("RTS_CFG.h:{key}"), crate::digest::fixed_text(value)));
             }
         }
@@ -1195,11 +1203,24 @@ mod field_cfg_tests {
     }
 
     #[test]
-    fn the_keys_stay_out_of_the_digest() {
-        let (set, _) = parse("int cfgPLANET_DEWARP_RADIUS_MULTIPLIER = 3;\n");
-        assert_ne!(set, FieldCfg::default());
-        assert_eq!(Rules::default().digest_entries(), Rules { fields: set, ..Rules::default() }.digest_entries());
-        assert!(FieldCfg::KEYS.iter().all(|k| !TYPED_CFG_KEYS.contains(k)));
+    fn authored_multipliers_change_the_digest_but_absent_keys_keep_it() {
+        use crate::digest::ContentDigest;
+
+        let baseline = ContentDigest::from_entries(Rules::default().digest_entries());
+        let (absent, _) = Rules::from_header("int SOMETHING_ELSE = 3;\n");
+        let absent_digest = ContentDigest::from_entries(absent.digest_entries());
+        assert_eq!(absent_digest, baseline);
+        for key in FieldCfg::KEYS {
+            assert!(TYPED_CFG_KEYS.contains(&key));
+            assert!(baseline.get(&format!("RTS_CFG.h:{key}")).is_none());
+        }
+
+        let (set, warnings) = Rules::from_header("int cfgPLANET_DEWARP_RADIUS_MULTIPLIER = 3;\nint cfgBLACKHOLE_DEWARP_RADIUS_MULTIPLIER = 100;\n");
+        assert!(warnings.is_empty());
+        let digest = ContentDigest::from_entries(set.digest_entries());
+        assert_ne!(digest, baseline);
+        assert_eq!(digest.get("RTS_CFG.h:cfgPLANET_DEWARP_RADIUS_MULTIPLIER"), Some("3"));
+        assert_eq!(digest.get("RTS_CFG.h:cfgBLACKHOLE_DEWARP_RADIUS_MULTIPLIER"), Some("100"));
     }
 }
 
@@ -1416,6 +1437,8 @@ mod cfg_tests {
         rules.cfg.facing_constant = Some(3);
         rules.cfg.deconstruct_percent_time = Some(Fixed::ONE);
         rules.cfg.biomatter_recycle_fraction = Some(Fixed::ONE);
+        rules.fields.planet_dewarp_radius_multiplier = Some(Fixed::ONE);
+        rules.fields.black_hole_dewarp_radius_multiplier = Some(Fixed::ONE);
         let pop = PopulationRules { levels: [Fixed::from_int(1000); 4], civilian_rate_modifier: Fixed::ONE };
         let d = ContentDigest::from_entries(rules.with_population(pop).digest_entries());
         // The dilithium maximum contributes through the effective starting amounts.
