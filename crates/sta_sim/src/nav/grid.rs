@@ -517,11 +517,64 @@ impl Grid {
         best.map(|(_, m)| m)
     }
 
+    /// Follow every grid boundary crossed by a leg. The starting cell may
+    /// be blocked so a ship can fly out of it.
+    fn clear_leg(&self, a: Vec3, b: Vec3) -> bool {
+        // Soft terrain alone has a single component covering the grid.
+        if self.sizes.as_slice() == [self.len() as u32] {
+            return true;
+        }
+        let (ax, az) = (a.x.to_bits(), a.z.to_bits());
+        let (bx, bz) = (b.x.to_bits(), b.z.to_bits());
+        let mut cell = self.spec.cell_of_bits(ax, az);
+        let finish = self.spec.cell_of_bits(bx, bz);
+        let (dx, dz) = (bx as i128 - ax as i128, bz as i128 - az as i128);
+        let (step_x, step_z) = (dx.signum() as i64, dz.signum() as i64);
+        let cell_width = (self.spec.cell as i128) << FRAC;
+        let edge = |origin: i64, i: i64, step: i64| {
+            ((origin as i128) << FRAC) + (i + i64::from(step > 0)) as i128 * cell_width
+        };
+        // Compare crossing times with a common denominator. Moving one cell
+        // forward increments the numerator by a constant.
+        let mut x_at = (edge(self.spec.origin.0, cell.0, step_x) - ax as i128).abs() * dz.abs();
+        let mut z_at = (edge(self.spec.origin.1, cell.1, step_z) - az as i128).abs() * dx.abs();
+        let (advance_x, advance_z) = (cell_width * dz.abs(), cell_width * dx.abs());
+        while cell != finish {
+            let x_crossing = if cell.0 == finish.0 { i128::MAX } else { x_at };
+            let z_crossing = if cell.1 == finish.1 { i128::MAX } else { z_at };
+            let cross_x = x_crossing <= z_crossing;
+            let cross_z = z_crossing <= x_crossing;
+            let next = (
+                cell.0 + if cross_x { step_x } else { 0 },
+                cell.1 + if cross_z { step_z } else { 0 },
+            );
+            if !self.passable(self.index(next))
+                || (cross_x
+                    && cross_z
+                    && !(self.passable(self.index((next.0, cell.1)))
+                        && self.passable(self.index((cell.0, next.1)))))
+            {
+                return false;
+            }
+            if cross_x {
+                x_at += advance_x;
+            }
+            if cross_z {
+                z_at += advance_z;
+            }
+            cell = next;
+        }
+        true
+    }
+
     /// The cost of flying the straight leg `a` -> `b`, in a field's units
     /// (`10 * cell cost` per cell width), or `None` when it crosses a
-    /// blocked cell other than the one it starts in. Sampled at a quarter
-    /// cell along the longer axis; integer throughout.
+    /// blocked cell other than the one it starts in. Terrain costs are
+    /// sampled at a quarter cell along the longer axis.
     pub(crate) fn line_cost(&self, a: Vec3, b: Vec3) -> Option<u64> {
+        if !self.clear_leg(a, b) {
+            return None;
+        }
         let (ax, az, bx, bz) = (
             a.x.to_bits() as i128,
             a.z.to_bits() as i128,

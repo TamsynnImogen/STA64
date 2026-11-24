@@ -17,6 +17,44 @@ fn v(x: i32, z: i32) -> Vec3 {
     }
 }
 
+#[test]
+fn straightening_respects_blocked_corners_between_samples() {
+    use super::grid::{Grid, Spec};
+    use crate::spatial::Solid;
+
+    let grid = Grid::build(Spec {
+        origin: (0, 0),
+        cell: 50,
+        width: 4,
+        height: 4,
+        default_cost: 100,
+        body: Fixed::ONE,
+        solids: vec![Solid::Box {
+            min: v(60, 10),
+            max: v(90, 40),
+        }],
+        hazards: Vec::new(),
+        area: None,
+    });
+    assert!(!grid.passable(grid.cell_of(v(75, 25))));
+
+    // The cells at both ends and at every quarter-cell sample are open.
+    // The line briefly crosses the blocked cell just below (50, 50).
+    let from = v(25, 41);
+    let to = v(125, 75);
+    assert_eq!(grid.line_cost(from, to), None);
+    assert_eq!(grid.line_cost(to, from), None);
+
+    // The slightly higher line crosses the other face first and stays open.
+    assert!(grid.line_cost(v(25, 43), to).is_some());
+    assert!(grid.line_cost(to, v(25, 43)).is_some());
+
+    // The diagonal at the exact vertex uses the same no-corner-cut rule as the field.
+    assert_eq!(grid.line_cost(v(25, 25), v(75, 75)), None);
+    assert_eq!(grid.line_cost(v(65, 85), v(135, 15)), None);
+    assert_eq!(grid.line_cost(v(135, 15), v(65, 85)), None);
+}
+
 /// A `nebula_obj` definition from ODF text, as the content loader makes one.
 fn nebula(odf: &str, text: &str) -> UnitDef {
     let text = format!("classLabel = \"nebula_obj\"\nunitName = \"{odf}\"\n{text}");
