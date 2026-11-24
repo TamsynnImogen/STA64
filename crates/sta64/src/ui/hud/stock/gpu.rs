@@ -825,6 +825,26 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
                 });
             assert!(icon_resolved, "{label}: {icon_key} art at the authored position");
         }
+        if odf == "fbase" {
+            use crate::ui::sprite_font::SpriteTextStyle;
+
+            let world = app.world_mut();
+            let font = |text: &SpriteText, style: &SpriteTextStyle| {
+                (text.size, style.stock, style.place.map(|p| (p.h, p.v)))
+            };
+            let crew_font = world
+                .query_filtered::<(&SpriteText, &SpriteTextStyle, &Visibility), With<SelectionReadout>>()
+                .iter(world)
+                .find(|(text, _, shown)| text.text == "150" && **shown == Visibility::Inherited)
+                .map(|(text, style, _)| font(text, style))
+                .expect("visible starbase crew readout");
+            let mut systems = world
+                .query_filtered::<(&SpriteText, &SpriteTextStyle), With<super::info::SystemHealth>>();
+            let mut healthy = systems.iter(world).filter(|(text, _)| text.text == "100").peekable();
+            assert!(healthy.peek().is_some(), "{label}: missing healthy system readouts");
+            assert!(healthy.all(|(text, style)| font(text, style) == crew_font),
+                "{label}: starbase systems and crew should share the stock font size and alignment");
+        }
         if profile == UiProfile::Armada2 && odf == "fconst" {
             let world = app.world_mut();
             let crew_style = world
@@ -1175,6 +1195,24 @@ fn installed_armada2_builder_hud_renders_on_gpu() {
         .expect("installed Armada II VFS");
     capture_one(vfs, UiProfile::Armada2, UVec2::new(1024, 768), "gui_fed.cfg",
         "a2-fbase-builder-4x3", GameOptions::default(), HoverCapture::Yard);
+}
+
+/// A Classic starbase card uses the same numeric readouts with either UI profile.
+#[test]
+fn installed_armada2_starbase_readout_sizes_match_on_gpu() {
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        return;
+    }
+    let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
+    for (profile, label) in [
+        (UiProfile::Armada2, "a2-fbase-readout-sizes"),
+        (UiProfile::FleetOps, "fo-profile-fbase-readout-sizes"),
+    ] {
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), None)
+            .expect("installed Armada II VFS");
+        capture_one(vfs, profile, UVec2::new(1443, 1080), "gui_fed.cfg", label,
+            GameOptions::default(), HoverCapture::ClassicStart("mp02ring", "fbase"));
+    }
 }
 
 /// Uses mounted Armada II data to check the medium personnel layout and sprite resolution.

@@ -58,6 +58,7 @@ struct Source {
 struct Cache {
     sources: HashMap<Entity, Vec<Source>>,
     geometry: HashMap<(Entity, Entity, usize), Geometry>,
+    registry_overrides: HashMap<Entity, Option<String>>,
 }
 struct Geometry {
     matrix: [u32; 16],
@@ -113,10 +114,11 @@ fn tint(raw: Option<&str>) -> Option<[u8; 4]> {
     }
 }
 
-fn sources(
+fn sources_with_registry(
     instance: &ModelInstance,
     id: sta_core::EntityId,
     def: &sta_content::UnitDef,
+    registry_override: Option<&str>,
     loader: &mut super::textures::Loader,
     materials: &mut Assets<StandardMaterial>,
 ) -> Vec<Source> {
@@ -132,7 +134,10 @@ fn sources(
                 warn!("{}: {stem}Text must be registry", def.odf);
                 continue;
             }
-            let Some(text) = &identity.registry else {
+            let Some(text) = registry_override
+                .or(identity.registry.as_deref())
+                .filter(|text| !text.is_empty())
+            else {
                 continue;
             };
             let font = def.raw.str(&format!("{stem}Font")).unwrap_or("FontSmall");
@@ -195,6 +200,17 @@ fn sources(
         }
     }
     result
+}
+
+#[cfg(test)]
+fn sources(
+    instance: &ModelInstance,
+    id: sta_core::EntityId,
+    def: &sta_content::UnitDef,
+    loader: &mut super::textures::Loader,
+    materials: &mut Assets<StandardMaterial>,
+) -> Vec<Source> {
+    sources_with_registry(instance, id, def, None, loader, materials)
 }
 
 fn decal_material(texture: Handle<Image>) -> StandardMaterial {
@@ -343,6 +359,7 @@ fn update(
     >,
     content: Res<ContentRes>,
     link: Res<SimLink>,
+    names: Option<Res<crate::ui::hud::instance_names::InstanceNames>>,
     vfs: Res<Mounted>,
     mut textures: LoaderParams,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -369,6 +386,7 @@ fn update(
                 materials.remove(source.material.id());
             }
         }
+        cache.registry_overrides.remove(&root);
     }
     for (entity, projection) in &projections {
         if !live.contains(&projection.root) || !parts.contains(projection.receiver) {
@@ -393,17 +411,46 @@ fn update(
         }
     });
     for (root, sim, instance) in &roots {
+        let registry_override = names
+            .as_ref()
+            .and_then(|names| names.registry_override(sim.0));
+        let current = registry_override.map(str::to_owned);
+        if cache
+            .registry_overrides
+            .get(&root)
+            .is_some_and(|previous| *previous != current)
+        {
+            if let Some(sources) = cache.sources.remove(&root) {
+                for source in sources {
+                    materials.remove(source.material.id());
+                }
+            }
+            cache.geometry.retain(|(owner, _, _), geometry| {
+                if *owner != root {
+                    return true;
+                }
+                if let Some(entity) = geometry.entity {
+                    commands.entity(entity).try_despawn();
+                }
+                if let Some(mesh) = &geometry.mesh {
+                    meshes.remove(mesh.id());
+                }
+                false
+            });
+        }
         if let std::collections::hash_map::Entry::Vacant(entry) = cache.sources.entry(root) {
             let Some(def) = content.0.unit(instance.def) else {
                 continue;
             };
-            entry.insert(sources(
+            entry.insert(sources_with_registry(
                 instance,
                 sim.0,
                 def,
+                registry_override,
                 &mut textures.loader(),
                 &mut materials,
             ));
+            cache.registry_overrides.insert(root, current);
         }
     }
     if cache.sources.values().all(Vec::is_empty) {

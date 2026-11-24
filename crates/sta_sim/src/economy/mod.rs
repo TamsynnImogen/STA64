@@ -37,6 +37,7 @@
 //!   exists.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use sta_content::ContentDb;
 use sta_core::{ContentKey, EntityId, Fixed, PlayerId, Vec3, TICK_HZ};
 
@@ -191,6 +192,8 @@ const K_MOON: Fixed = Fixed::from_bits(3_579_139_413);
 const K_NEBULA: Fixed = Fixed::from_bits(2_147_483_648);
 /// How far inside the weapon range a freighter starts working (the original's `approachRange - 15`).
 const APPROACH_SLACK: i32 = 15;
+/// A queued freighter orbits 30 units outside the working circle (Armada II, static).
+const MINER_WAIT_GAP: i32 = 30;
 /// Distance from a station's origin at which a beam-armed freighter starts to unload: the last
 /// short stretch is the dock approach. The dock node itself (`dockingHardpoint`) is not read yet;
 /// a fallback, not measured.
@@ -292,6 +295,11 @@ pub struct EconomyRec {
 }
 
 impl Economy {
+    /// Store a validated paused-editor resource amount.
+    pub(crate) fn edit_node_amount(&mut self, id: EntityId, amount: Fixed) {
+        self.nodes.insert(id, amount);
+    }
+
     /// Live cargo rows for mining craft, including eligible idle craft with an
     /// empty hold. This reads the same miner records and capacity rule as mining.
     /// Every resource node's amount left (UI-48), ascending id.
@@ -497,6 +505,16 @@ impl Economy {
             events.push(SimEvent::MinerPhase { id, phase: phase.announced(), node, dock: None });
         }
         let ids: Vec<EntityId> = self.miners.iter().map(|(id, _)| id).collect();
+        // Mining is persisted, so it is the admission record across snapshots. Resolve old
+        // snapshots with multiple miners on one node to the first incumbent deterministically.
+        let mut working: BTreeMap<EntityId, EntityId> = BTreeMap::new();
+        for &id in &ids {
+            if let Some(m) = self.miners.get(id).filter(|m| m.phase == Phase::Mining) {
+                working.entry(m.node).or_insert(id);
+            }
+        }
+        // Keep claims for the whole tick, including when an incumbent fills its hold.
+        // A later arrival can then never extract from the same node in this tick.
         for id in ids {
             let Some(mut m) = self.miners.get(id).copied() else {
                 continue;
@@ -533,15 +551,34 @@ impl Economy {
                 match m.phase {
                     Phase::Idle => break,
                     Phase::ToNode => {
-                        if dist(pos, node_pos.unwrap()) <= work_distance(db, def, node_def) {
+                        let np = node_pos.unwrap();
+                        let work = work_distance(db, def, node_def);
+                        if working.contains_key(&m.node) {
+                            let range = mining_range(db, def);
+                            let gap = Fixed::from_int(MINER_WAIT_GAP);
+                            let wait_range = range.map(|r| r + gap);
+                            if dist(pos, np) <= wait_range.map_or(work, |r| work.max(r) + gap) {
+                                let target = wait_range.and_then(|r| orbit_point(db, id, def, pos, node_def, np, r));
+                                set_target(units, id, target);
+                            } else {
+                                steer(units, id, np);
+                            }
+                            break;
+                        }
+                        if dist(pos, np) <= work {
+                            working.insert(m.node, id);
                             set_target(units, id, None);
                             m.phase = Phase::Mining;
                         } else {
-                            steer(units, id, node_pos.unwrap());
+                            steer(units, id, np);
                             break;
                         }
                     }
                     Phase::Mining => {
+                        if working.get(&m.node) != Some(&id) {
+                            m.phase = Phase::ToNode;
+                            continue;
+                        }
                         let left = self
                             .nodes
                             .get(m.node)

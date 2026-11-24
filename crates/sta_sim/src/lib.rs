@@ -75,6 +75,7 @@ pub mod snapshot;
 pub mod sensors;
 pub mod ship_upgrades;
 pub mod source;
+mod inspector_edit;
 pub mod specials;
 pub mod spatial;
 pub mod spawn;
@@ -838,10 +839,7 @@ impl WorldSource for Sim {
         let id = match edit {
             PlacementEdit::Place { def, owner, at } => {
                 let defn = self.content.as_ref()?.unit(def)?;
-                if !matches!(world::EntityKind::of_def(defn), world::EntityKind::Craft | world::EntityKind::Station)
-                    || world::EntityKind::hidden(defn)
-                    || defn.resource.is_some()
-                {
+                if !source::editable_placement(defn) {
                     return None;
                 }
                 let id = self.spawn_unqueued_def(def, owner, at, (Fixed::ZERO, Fixed::ONE))?;
@@ -852,7 +850,7 @@ impl WorldSource for Sim {
             }
             PlacementEdit::Transform { id, at, quarter_turns } => {
                 let unit = self.units.get_mut(id)?;
-                if !matches!(unit.kind, world::EntityKind::Craft | world::EntityKind::Station)
+                if !self.content.as_ref()?.unit(unit.def).is_some_and(source::editable_placement)
                     || unit.progress.is_some()
                     || unit.flags.contains(view::UnitFlags::DYING)
                     || unit.flags.contains(view::UnitFlags::DOCKED)
@@ -873,9 +871,12 @@ impl WorldSource for Sim {
                 self.movement.clear(id);
                 id
             }
+            PlacementEdit::Inspect(inspection) => {
+                return self.inspect_placement(*inspection);
+            }
             PlacementEdit::Remove(id) => {
                 let unit = self.units.get(id)?;
-                if !matches!(unit.kind, world::EntityKind::Craft | world::EntityKind::Station)
+                if !self.content.as_ref()?.unit(unit.def).is_some_and(source::editable_placement)
                     || unit.progress.is_some()
                     || unit.flags.contains(view::UnitFlags::DYING)
                     || unit.flags.contains(view::UnitFlags::DOCKED)

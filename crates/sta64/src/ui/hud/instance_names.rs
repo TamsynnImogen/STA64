@@ -1,4 +1,4 @@
-//! The display names a map gives its objects (host-only, never in the sim).
+//! The display identity a map gives its objects (host-only, never in the sim).
 //!
 //! Armada II binary maps carry a name buffer per object beside the script label
 //! (`sta_bzn::MapObject::instance_name`, read from data). The sim does not keep it: a
@@ -17,15 +17,23 @@ use std::sync::Arc;
 use bevy::prelude::Resource;
 use sta_sim::EntityId;
 
-/// Entity id to the map's display name, for the objects that have one.
+/// Entity id to authored display identity. Companion maps distinguish an absent
+/// override (inherit the ODF) from a present empty string (show nothing).
 #[derive(Resource, Debug, Clone, Default, PartialEq)]
-pub struct InstanceNames(Arc<HashMap<EntityId, String>>);
+pub struct InstanceNames {
+    names: Arc<HashMap<EntityId, String>>,
+    captains: Arc<HashMap<EntityId, String>>,
+    registries: Arc<HashMap<EntityId, String>>,
+}
 
 impl InstanceNames {
     /// The names of `map`'s objects joined to the sim's `labels` (entity id, label). A label
     /// is matched trimmed; a label shared by objects that disagree (a different name, or one
     /// of them unnamed) gives nothing; no name, no row.
-    pub fn of<'a>(map: &sta_bzn::Map, labels: impl IntoIterator<Item = (EntityId, &'a str)>) -> InstanceNames {
+    pub fn of<'a>(
+        map: &sta_bzn::Map,
+        labels: impl IntoIterator<Item = (EntityId, &'a str)>,
+    ) -> InstanceNames {
         // A label several objects share names an entity only when every sharer gives the same
         // name; otherwise the label is dropped (the map is ambiguous, no name is guessed).
         let mut by_label: HashMap<&str, Option<&str>> = HashMap::new();
@@ -35,22 +43,78 @@ impl InstanceNames {
                 continue;
             }
             let name = Some(name).filter(|n| !n.is_empty());
-            by_label.entry(label).and_modify(|seen| if *seen != name { *seen = None }).or_insert(name);
+            by_label
+                .entry(label)
+                .and_modify(|seen| {
+                    if *seen != name {
+                        *seen = None
+                    }
+                })
+                .or_insert(name);
         }
         by_label.retain(|_, name| name.is_some());
         if by_label.is_empty() {
             return InstanceNames::default();
         }
-        let rows = labels.into_iter().filter_map(|(id, label)| by_label.get(label.trim()).and_then(|n| *n).map(|n| (id, n.to_owned())));
-        InstanceNames(Arc::new(rows.collect()))
+        let rows = labels.into_iter().filter_map(|(id, label)| {
+            by_label
+                .get(label.trim())
+                .and_then(|n| *n)
+                .map(|n| (id, n.to_owned()))
+        });
+        InstanceNames {
+            names: Arc::new(rows.collect()),
+            ..Default::default()
+        }
     }
 
     pub fn get(&self, id: EntityId) -> Option<&str> {
-        self.0.get(&id).map(String::as_str)
+        self.names.get(&id).map(String::as_str)
+    }
+
+    /// Replace authored identity fields for one live object. `None` for the name
+    /// preserves its map-provided value; `None` for companions restores the ODF.
+    pub fn set_overrides(
+        &mut self,
+        id: EntityId,
+        name: Option<&str>,
+        captain: Option<&str>,
+        registry: Option<&str>,
+    ) {
+        if let Some(name) = name {
+            let names = Arc::make_mut(&mut self.names);
+            if name.trim().is_empty() {
+                names.remove(&id);
+            } else {
+                names.insert(id, name.trim().to_owned());
+            }
+        }
+        set_companion(&mut self.captains, id, captain);
+        set_companion(&mut self.registries, id, registry);
+    }
+
+    pub fn captain_override(&self, id: EntityId) -> Option<&str> {
+        self.captains.get(&id).map(String::as_str)
+    }
+
+    pub fn registry_override(&self, id: EntityId) -> Option<&str> {
+        self.registries.get(&id).map(String::as_str)
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.names.is_empty() && self.captains.is_empty() && self.registries.is_empty()
+    }
+}
+
+fn set_companion(map: &mut Arc<HashMap<EntityId, String>>, id: EntityId, value: Option<&str>) {
+    let map = Arc::make_mut(map);
+    match value {
+        Some(value) => {
+            map.insert(id, value.to_owned());
+        }
+        None => {
+            map.remove(&id);
+        }
     }
 }
 
@@ -59,16 +123,34 @@ mod tests {
     use super::*;
 
     fn object(label: &str, name: &str) -> sta_bzn::MapObject {
-        sta_bzn::MapObject { odf: "fx_cruiser".into(), label: label.into(), instance_name: name.into(), ..Default::default() }
+        sta_bzn::MapObject {
+            odf: "fx_cruiser".into(),
+            label: label.into(),
+            instance_name: name.into(),
+            ..Default::default()
+        }
     }
 
     #[test]
     fn names_join_by_trimmed_label_and_blank_names_give_no_row() {
         let map = sta_bzn::Map {
-            objects: vec![object("gate_a", "Aurelia Test"), object("gate_b", "  "), object("gate_c", ""), object(" gate_d ", "Orsino Station-B"), object("", "Nameless Label")],
+            objects: vec![
+                object("gate_a", "Aurelia Test"),
+                object("gate_b", "  "),
+                object("gate_c", ""),
+                object(" gate_d ", "Orsino Station-B"),
+                object("", "Nameless Label"),
+            ],
             ..Default::default()
         };
-        let labels = [(EntityId(3), "gate_a"), (EntityId(4), "gate_b"), (EntityId(5), "gate_c"), (EntityId(6), "gate_d"), (EntityId(7), ""), (EntityId(8), "unknown")];
+        let labels = [
+            (EntityId(3), "gate_a"),
+            (EntityId(4), "gate_b"),
+            (EntityId(5), "gate_c"),
+            (EntityId(6), "gate_d"),
+            (EntityId(7), ""),
+            (EntityId(8), "unknown"),
+        ];
         let names = InstanceNames::of(&map, labels);
         assert_eq!(names.get(EntityId(3)), Some("Aurelia Test"));
         assert_eq!(names.get(EntityId(6)), Some("Orsino Station-B"));
@@ -81,12 +163,47 @@ mod tests {
     #[test]
     fn a_label_shared_by_objects_that_disagree_gives_no_name() {
         let map = sta_bzn::Map {
-            objects: vec![object("dup", "Same Name"), object("dup", "Same Name"), object("mixed", "Named"), object("mixed", ""), object("clash", "One"), object("clash", "Two")],
+            objects: vec![
+                object("dup", "Same Name"),
+                object("dup", "Same Name"),
+                object("mixed", "Named"),
+                object("mixed", ""),
+                object("clash", "One"),
+                object("clash", "Two"),
+            ],
             ..Default::default()
         };
-        let labels = [(EntityId(1), "dup"), (EntityId(2), "dup"), (EntityId(3), "mixed"), (EntityId(4), "clash")];
+        let labels = [
+            (EntityId(1), "dup"),
+            (EntityId(2), "dup"),
+            (EntityId(3), "mixed"),
+            (EntityId(4), "clash"),
+        ];
         let names = InstanceNames::of(&map, labels);
-        assert_eq!((names.get(EntityId(1)), names.get(EntityId(2))), (Some("Same Name"), Some("Same Name")));
-        assert_eq!((names.get(EntityId(3)), names.get(EntityId(4))), (None, None));
+        assert_eq!(
+            (names.get(EntityId(1)), names.get(EntityId(2))),
+            (Some("Same Name"), Some("Same Name"))
+        );
+        assert_eq!(
+            (names.get(EntityId(3)), names.get(EntityId(4))),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn companion_overrides_distinguish_inherit_from_intentionally_blank() {
+        let mut names = InstanceNames::default();
+        let id = EntityId(7);
+        names.set_overrides(id, Some("Venture"), Some(""), Some("NCC-42"));
+        assert_eq!(names.get(id), Some("Venture"));
+        assert_eq!(names.captain_override(id), Some(""));
+        assert_eq!(names.registry_override(id), Some("NCC-42"));
+        names.set_overrides(id, None, None, None);
+        assert_eq!(names.get(id), Some("Venture"));
+        assert_eq!(names.captain_override(id), None);
+        assert_eq!(names.registry_override(id), None);
+        names.set_overrides(id, Some(""), None, None);
+        assert_eq!(names.get(id), None);
+        assert!(names.is_empty());
     }
 }

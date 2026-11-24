@@ -11,12 +11,66 @@ use std::sync::Arc;
 use crate::command::Command;
 use crate::view::{TickOutput, WorldView};
 
+/// Optional authored values for a paused map object. Missing values retain the
+/// definition's current simulation defaults.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ObjectProperties {
+    pub hull: Option<[crate::Fixed; 2]>,
+    pub shields: Option<[[crate::Fixed; 2]; 4]>,
+    pub crew: Option<[crate::Fixed; 2]>,
+    pub energy: Option<crate::Fixed>,
+    /// Fraction of health remaining, in `SystemView` order.
+    pub systems: Option<[crate::Fixed; 5]>,
+    pub resource: Option<crate::Fixed>,
+    pub population: Option<crate::Fixed>,
+    pub captain: Option<String>,
+    pub registry: Option<String>,
+    /// The original instance display name, when separate from the map label.
+    pub instance_name: Option<String>,
+    /// Use the definition's race when the change is an empty string.
+    pub race: Option<String>,
+    pub perceived_owner: Option<crate::PlayerId>,
+    pub immortal: Option<bool>,
+    /// Switches in SystemView order. Missing switches retain their state.
+    pub systems_enabled: [Option<bool>; 5],
+}
+
+pub struct Inspection {
+    pub id: crate::EntityId,
+    pub owner: crate::PlayerId,
+    pub at: crate::Vec3,
+    pub heading: (crate::Fixed, crate::Fixed),
+    pub label: Option<String>,
+    pub name: Option<String>,
+    pub properties: ObjectProperties,
+}
+
 /// Placement tools for a local authoring or test-play session. These take
 /// effect without advancing the game clock.
 pub enum PlacementEdit {
-    Place { def: crate::ContentKey, owner: crate::PlayerId, at: crate::Vec3 },
-    Transform { id: crate::EntityId, at: crate::Vec3, quarter_turns: i32 },
+    Place {
+        def: crate::ContentKey,
+        owner: crate::PlayerId,
+        at: crate::Vec3,
+    },
+    Transform {
+        id: crate::EntityId,
+        at: crate::Vec3,
+        quarter_turns: i32,
+    },
+    Inspect(Box<Inspection>),
     Remove(crate::EntityId),
+}
+
+/// Definitions the editor can place as simulated objects. Map regions and
+/// background scenery have their own representation in the map loader.
+pub fn editable_placement(def: &sta_content::UnitDef) -> bool {
+    use crate::world::EntityKind;
+    !EntityKind::hidden(def)
+        && def.a1_officer_upgrade_gain.is_none()
+        && EntityKind::of_def(def) != EntityKind::Projectile
+        && !matches!(def.class.0.as_str(), "asteroidfield" | "nebula_obj" | "background_obj")
 }
 
 /// Steps a world, one tick per call.

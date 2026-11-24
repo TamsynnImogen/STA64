@@ -81,7 +81,7 @@ fn toggle(reveal: &mut Reveal, keys: &ButtonInput<KeyCode>, bindings: &KeyBindin
 
 /// Read the chords and hand the fog to the link. Runs while a match runs only (not in the front end's
 /// menus, where the modifier may be held while typing); a network game is refused even before its link exists.
-fn update_reveal(keys: Option<Res<ButtonInput<KeyCode>>>, bindings: Res<KeyBindings>, net: Option<Res<NetGame>>, mut reveal: ResMut<Reveal>, link: Option<ResMut<SimLink>>, mut notices: MessageWriter<Notice>) {
+fn update_reveal(keys: Option<Res<ButtonInput<KeyCode>>>, bindings: Res<KeyBindings>, net: Option<Res<NetGame>>, editor: Option<Res<crate::editor::Editing>>, mut reveal: ResMut<Reveal>, link: Option<ResMut<SimLink>>, mut notices: MessageWriter<Notice>) {
     let said = match keys {
         Some(k) => toggle(&mut reveal, &k, &bindings, net.is_some()),
         None => toggle(&mut reveal, &ButtonInput::default(), &bindings, net.is_some()),
@@ -89,10 +89,11 @@ fn update_reveal(keys: Option<Res<ButtonInput<KeyCode>>>, bindings: Res<KeyBindi
     for t in said {
         notices.write(Notice::new(Severity::Info, t));
     }
+    let lifted = reveal.fog || (editor.is_some() && net.is_none());
     if let Some(mut link) = link
-        && link.fog_lifted() != reveal.fog
+        && link.fog_lifted() != lifted
     {
-        link.set_fog_lifted(reveal.fog);
+        link.set_fog_lifted(lifted);
     }
 }
 

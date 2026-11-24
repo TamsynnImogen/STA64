@@ -39,5 +39,7 @@ fn fragment(in: FragIn) -> @location(0) vec4<f32> {
     }
     let uv = k.rect.xy + local * k.rect.zw;
     let texel = textureSampleGrad(shot_texture, shot_sampler, uv, dx, dy);
-    return vec4<f32>(texel.rgb * in.color.rgb * k.tint.rgb, 0.0);
+    let emission = texel.rgb * in.color.rgb * k.tint.rgb;
+    let gain = select(1.0, 2.0, constants::STA64_HDR_EMISSION != 0);
+    return vec4<f32>(emission * gain, 0.0);
 }
