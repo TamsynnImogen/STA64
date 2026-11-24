@@ -24,7 +24,8 @@ use bevy::shader::Shader;
 
 use super::emissive_bloom::{Emissive3d, EmissiveBloomStrength};
 
-pub(super) const MASK_FORMAT: TextureFormat = TextureFormat::Rgba8Unorm;
+// Pack the mask's 0..3 linear range into 10-bit RGB at four bytes per pixel.
+pub(super) const MASK_FORMAT: TextureFormat = TextureFormat::Rgb10a2Unorm;
 // Keep the faint tail of the bloom filter smooth after lifting small lights.
 const BLUR_FORMAT: TextureFormat = TextureFormat::Rgba16Float;
 

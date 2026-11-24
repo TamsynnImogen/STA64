@@ -941,6 +941,17 @@ impl WorldSource for Sim {
     fn system_view(&self) -> Vec<combat::damage::SystemView> {
         Sim::system_view(self)
     }
+
+    fn warp_phases(&self) -> Vec<(EntityId, bool)> {
+        self.approach_warp.to_rec().into_iter()
+            .map(|(id, phase)| (id, phase == movement::approach::IN_WARP))
+            .collect()
+    }
+
+    fn impulse_caps(&self) -> Vec<(EntityId, Fixed)> {
+        self.units.iter().filter(|unit| unit.kind == world::EntityKind::Craft)
+            .map(|unit| (unit.id, unit.stats.max_speed)).collect()
+    }
 }
 
 #[cfg(test)]

@@ -45,6 +45,8 @@ pub struct SimLink {
     /// Resource-node amounts at the same tick as `curr` (UI-48).
     nodes: Vec<sta_sim::economy::view::NodeView>,
     systems: Vec<sta_sim::combat::damage::SystemView>,
+    warp_phases: Vec<(EntityId, bool)>,
+    impulse_caps: Vec<(EntityId, sta_sim::Fixed)>,
     /// Who this client's [`CommandQueue`] speaks for.
     player: PlayerId,
     /// Next sequence number for this client's commands.
@@ -72,7 +74,9 @@ impl SimLink {
         let cargo = source.cargo_view();
         let nodes = source.node_view();
         let systems = source.system_view();
-        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, cargo, nodes, systems, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None, lifted: None, fog_lifted: false, match_fog_lifted: false, observer: false }
+        let warp_phases = source.warp_phases();
+        let impulse_caps = source.impulse_caps();
+        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, cargo, nodes, systems, warp_phases, impulse_caps, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None, lifted: None, fog_lifted: false, match_fog_lifted: false, observer: false }
     }
 
     pub(crate) fn can_edit_placements(&mut self) -> bool {
@@ -101,6 +105,8 @@ impl SimLink {
         self.cargo = source.cargo_view();
         self.nodes = source.node_view();
         self.systems = source.system_view();
+        self.warp_phases = source.warp_phases();
+        self.impulse_caps = source.impulse_caps();
         // A command replay cannot represent a placement edit between ticks.
         self.log = None;
         self.refresh_lifted();
@@ -164,6 +170,16 @@ impl SimLink {
     /// anything that must not depend on a cheat read.
     pub fn real_curr(&self) -> &Arc<WorldView> {
         &self.curr
+    }
+
+    /// A live movement phase at the same tick as `real_curr`, when the source supplies one.
+    pub(crate) fn warp_phase(&self, id: EntityId) -> Option<bool> {
+        self.warp_phases.binary_search_by_key(&id, |row| row.0).ok().map(|i| self.warp_phases[i].1)
+    }
+
+    /// The source's live impulse cap, including ship upgrades and overrides.
+    pub(crate) fn impulse_cap(&self, id: EntityId) -> Option<sta_sim::Fixed> {
+        self.impulse_caps.binary_search_by_key(&id, |row| row.0).ok().map(|i| self.impulse_caps[i].1)
     }
 
     /// Queue/site metadata at the same simulation tick as `curr`.
@@ -279,6 +295,8 @@ impl SimLink {
         self.prev = std::mem::replace(&mut self.curr, view);
         self.production = production;
         self.cargo = cargo;
+        self.warp_phases.clear();
+        self.impulse_caps.clear();
         self.refresh_lifted();
     }
 
@@ -291,6 +309,8 @@ impl SimLink {
         self.cargo = self.source.get().cargo_view();
         self.nodes = self.source.get().node_view();
         self.systems = self.source.get().system_view();
+        self.warp_phases = self.source.get().warp_phases();
+        self.impulse_caps = self.source.get().impulse_caps();
         if let Some(log) = &mut self.log {
             log.log_step(before, &batch, out.view.tick, out.view.digest, DEFAULT_DIGEST_EVERY);
         }
@@ -592,6 +612,26 @@ mod tests {
     use sta_sim::command::LocalRouter;
     use sta_sim::{Fixed, MoveStats, Sim};
     use std::time::Duration;
+
+    #[test]
+    fn externally_fed_view_drops_cached_live_warp_phase() {
+        struct Phased(Arc<WorldView>);
+        impl WorldSource for Phased {
+            fn step(&mut self, _: &[Command]) -> sta_sim::view::TickOutput {
+                sta_sim::view::TickOutput { view: self.0.clone(), events: Vec::new() }
+            }
+            fn view(&self) -> Arc<WorldView> { self.0.clone() }
+            fn warp_phases(&self) -> Vec<(EntityId, bool)> { vec![(EntityId(7), true)] }
+            fn impulse_caps(&self) -> Vec<(EntityId, sta_sim::Fixed)> { vec![(EntityId(7), sta_sim::Fixed::from_int(80))] }
+        }
+        let view = Arc::new(WorldView::default());
+        let mut link = SimLink::new(Box::new(Phased(view.clone())), Box::new(LocalRouter::new()), PlayerId(0));
+        assert_eq!(link.warp_phase(EntityId(7)), Some(true));
+        assert_eq!(link.impulse_cap(EntityId(7)), Some(sta_sim::Fixed::from_int(80)));
+        link.feed(view);
+        assert_eq!(link.warp_phase(EntityId(7)), None);
+        assert_eq!(link.impulse_cap(EntityId(7)), None);
+    }
 
     #[test]
     fn observer_presents_every_unit_and_cannot_submit_commands() {

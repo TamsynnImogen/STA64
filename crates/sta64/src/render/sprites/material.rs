@@ -242,7 +242,9 @@ pub struct SpriteLooks {
     by_key: HashMap<LookKey, (Handle<SpriteMaterial>, u32)>,
     /// Whether new sprite nodes are adopted. Test-only switch: the game never sets it to `false`.
     /// The GPU test turns it off for its reference path (`main`'s per-node materials), so both of its
-    /// apps hold the same observers and resources and so the same entity ids.
+    /// apps hold the same observers and resources and so the same entity ids; the headless
+    /// install-content bench turns it off under `STA64_SPRITE_REFERENCE=1` for the frame-identity
+    /// test on real content (S6, `bench::pair_view`).
     #[doc(hidden)]
     pub(crate) adopt: bool,
 }

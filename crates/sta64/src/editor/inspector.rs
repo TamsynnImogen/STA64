@@ -333,6 +333,7 @@ pub(super) fn plan(
     link: &SimLink,
     content: &ContentRes,
     object: Option<&MapObject>,
+    new_placement: Option<MapObject>,
     extras: Option<&ObjectProperties>,
     can_change_identity: bool,
     inputs: &BTreeMap<&str, &str>,
@@ -351,7 +352,7 @@ pub(super) fn plan(
     let read_team = |input: &str| {
         input.trim().parse::<u8>().ok().filter(|team| *team <= 8).ok_or("Team must be 0 through 8")
     };
-    let mut object = object.cloned();
+    let mut object = object.cloned().or(new_placement);
     let changed_check = |key| changed(key).map(|input| match input {
         "0" => Ok(false),
         "1" => Ok(true),
