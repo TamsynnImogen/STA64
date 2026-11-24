@@ -293,7 +293,11 @@ impl Plugin for HullPlugin {
             .init_resource::<HullMaterials>()
             .insert_resource(crate::render::mapped::MapSwitches::startup())
             .add_plugins(crate::render::stock::hulls::StockHullsPlugin)
-            .add_systems(Update, (toggle, update_view, apply.in_set(HullApply), update_emissive, follow_source).chain());
+            .add_systems(Update, (
+                toggle, update_view, apply.in_set(HullApply),
+                update_emissive.after(crate::app::GameSet::SimLink).after(crate::clock::advance_idle_clock),
+                follow_source,
+            ).chain());
     }
 }
 
@@ -460,6 +464,7 @@ pub fn hull_material(m: &StandardMaterial, part: &HullPart, view: &HullView) -> 
 fn update_emissive(
     link: Option<Res<crate::sim_link::SimLink>>,
     content: Option<Res<crate::sim_link::ContentRes>>,
+    clock: Option<Res<crate::clock::AnimClock>>,
     parts: Query<(&ChildOf, &HullSource), With<crate::render::mapped::HullMaps>>,
     nodes: Query<&crate::render::appearance::ModelNode>,
     hierarchy: Query<&ChildOf>,
@@ -475,6 +480,7 @@ fn update_emissive(
         states.clear();
     }
     let view = link.real_curr();
+    let elapsed = std::time::Duration::from_secs_f64(clock.as_deref().map_or(0.0, crate::clock::AnimClock::wall));
     states.retain(|id, _| view.unit(*id).is_some());
     let mut gains_this_frame = HashMap::new();
     for (parent, source) in &parts {
@@ -496,7 +502,8 @@ fn update_emissive(
             let cap = view.attrs.impulse.iter().find(|(owner, _)| *owner == id).map(|(_, speed)| *speed)
                 .or_else(|| content.as_ref()?.0.unit(unit.def).map(|def| def.movement.max_speed))
                 .unwrap_or_default();
-            states.entry(id).or_default().gains(view.appearance.systems(id), unit.speed, cap)
+            let phase = emissive_state::FlickerPhase::new(elapsed, id);
+            states.entry(id).or_default().gains(view.appearance.systems(id), unit.speed, cap, phase)
         });
         let (a, b) = HullMaterial::emission_weights(gains);
         if materials.get(&source.hull).is_some_and(|m| m.params.emission_a != a || m.params.emission_b != b)
@@ -1221,12 +1228,16 @@ mod gpu {
             assert!(affected > 20 && peak_gain < 70, "a small halo around the lit texels");
 
             // Drive the real material from a simulation view, including the repair latch.
+            use super::emissive_state::FlickerPhase;
+            use crate::clock::AnimClock;
             use crate::render::appearance::ModelNode;
             use crate::sim_link::{SimEntity, SimLink};
             use sta_sim::appearance::SystemAppearance;
             use sta_sim::command::LocalRouter;
             use sta_sim::setup::{GameOptions, GameSetup};
             use sta_sim::{Fixed, PlayerId};
+            use std::time::Duration;
+            app.init_resource::<AnimClock>();
             let db = std::sync::Arc::new(sta_content::fake::db());
             let mut sim = sta_sim::Sim::from_setup(&GameSetup {
                 seed: 1, players: Vec::new(), map: std::sync::Arc::new(sta_content::MapDef::empty()),
@@ -1247,15 +1258,31 @@ mod gpu {
                 }), None, None, None, None])];
                 app.world_mut().resource_mut::<SimLink>().feed(std::sync::Arc::new(view.clone()));
             };
+            // Advance only between captures so the chosen phase survives GPU readback.
+            let advance_phase = |app: &mut App, visible| {
+                let mut clock = app.world_mut().resource_mut::<AnimClock>();
+                let elapsed = Duration::from_secs_f64(clock.wall());
+                let offset = (1..=64)
+                    .map(|steps| Duration::from_millis(90 * steps))
+                    .find(|offset| FlickerPhase::new(elapsed + *offset, id).visible(0) == visible)
+                    .expect("both engine flicker phases occur");
+                clock.advance_idle(offset.as_secs_f64());
+            };
             feed(&mut app, &mut view, false, 40);
-            let disabled = take(&mut app, "emissive-engines-disabled");
-            assert!(sum(&disabled, 0) + 10_000 < sum(&bloomed, 0));
+            advance_phase(&mut app, false);
+            let dark = take(&mut app, "emissive-engines-disabled-off");
+            assert!(sum(&dark, 0) + 10_000 < sum(&bloomed, 0));
+            advance_phase(&mut app, true);
+            assert!(take(&mut app, "emissive-engines-disabled-on") == bloomed, "disabled lights and glow return in the on phase");
             feed(&mut app, &mut view, true, 0);
-            assert_eq!(take(&mut app, "emissive-engines-destroyed"), disabled);
+            assert!(take(&mut app, "emissive-engines-destroyed") == dark, "destroyed engines remain dark in the on phase");
             feed(&mut app, &mut view, true, 10);
-            assert_eq!(take(&mut app, "emissive-engines-partial-repair"), disabled);
+            advance_phase(&mut app, false);
+            assert!(take(&mut app, "emissive-engines-partial-repair-off") == dark);
+            advance_phase(&mut app, true);
+            assert!(take(&mut app, "emissive-engines-partial-repair-on") == dark);
             feed(&mut app, &mut view, true, 40);
-            assert_eq!(take(&mut app, "emissive-engines-repaired"), bloomed);
+            assert!(take(&mut app, "emissive-engines-repaired") == bloomed, "full repair restores the original light");
 
             // Even a white hull and a bright additive shot contribute nothing to the halo.
             app.world_mut().entity_mut(subject).insert(Visibility::Hidden);
@@ -1325,7 +1352,13 @@ mod gpu {
                 eprintln!("Installed FBattle: {} meshes, {changed_pixels} pixels changed by bloom", stats.meshes);
                 assert!(changed_pixels > 0, "installed FBattle material should bloom");
                 feed(&mut app, &mut view, false, 40);
-                assert!(take(&mut app, "fbattle-engines-disabled") != lit, "FBattle engine texture responds to live state");
+                advance_phase(&mut app, false);
+                let dark = take(&mut app, "fbattle-engines-disabled-off");
+                assert!(dark != lit, "FBattle engine textures go dark during the off phase");
+                advance_phase(&mut app, true);
+                assert!(take(&mut app, "fbattle-engines-disabled-on") == lit, "FBattle engine textures light up during the on phase");
+                feed(&mut app, &mut view, false, 0);
+                assert!(take(&mut app, "fbattle-engines-destroyed") == dark, "destroyed FBattle engines remain dark");
             }
         }
         let errors = ERRORS.lock().unwrap().clone();

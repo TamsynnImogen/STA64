@@ -1,6 +1,37 @@
 //! Client-only gains for the six subsystem emissive channels.
 
-use sta_sim::{appearance::SystemAppearance, Fixed};
+use std::time::Duration;
+
+use sta_sim::{EntityId, Fixed, appearance::SystemAppearance};
+
+/// A2FOExtensions holds each flicker decision for 90 ms and salts it by craft
+/// and native subsystem record. Use the stable entity ID in place of its pointer.
+#[derive(Clone, Copy)]
+pub(super) struct FlickerPhase {
+    bucket: u32,
+    craft: EntityId,
+}
+
+impl FlickerPhase {
+    pub(super) fn new(elapsed: Duration, craft: EntityId) -> Self {
+        Self {
+            bucket: (elapsed.as_millis() / 90) as u32,
+            craft,
+        }
+    }
+
+    pub(super) fn visible(self, system: usize) -> bool {
+        // Translate AppearanceView slots to A2FO's subsystem record indices.
+        let record = [1_u32, 2, 4, 3, 0][system];
+        let mut value = self.bucket ^ self.craft.0 ^ record.wrapping_mul(0x9e3779b9);
+        value ^= value >> 16;
+        value = value.wrapping_mul(0x7feb352d);
+        value ^= value >> 15;
+        value = value.wrapping_mul(0x846ca68b);
+        value ^= value >> 16;
+        (value & 7) < 5
+    }
+}
 
 /// Channel order: warp, impulse, shields, life support, sensors, weapons.
 #[derive(Default)]
@@ -14,6 +45,7 @@ impl EmissiveState {
         systems: Option<&[Option<SystemAppearance>; 5]>,
         speed: Fixed,
         impulse_cap: Fixed,
+        phase: FlickerPhase,
     ) -> [f32; 6] {
         let mut gains = [1.0; 6];
 
@@ -47,7 +79,7 @@ impl EmissiveState {
                 } else if s.health[0] >= s.health[1] {
                     self.destroyed[index] = false;
                 }
-                !s.enabled || self.destroyed[index]
+                self.destroyed[index] || (!s.enabled && !phase.visible(index))
             };
             if dark(0) {
                 gains[0] = 0.0;
@@ -74,8 +106,12 @@ mod tests {
         })
     }
 
+    fn phase(ms: u64) -> FlickerPhase {
+        FlickerPhase::new(Duration::from_millis(ms), EntityId(7))
+    }
+
     fn gains(systems: Option<&[Option<SystemAppearance>; 5]>, speed: i32, cap: i32) -> [f32; 6] {
-        EmissiveState::default().gains(systems, Fixed::from_int(speed), Fixed::from_int(cap))
+        EmissiveState::default().gains(systems, Fixed::from_int(speed), Fixed::from_int(cap), phase(90))
     }
 
     #[test]
@@ -92,38 +128,43 @@ mod tests {
         let mut state = EmissiveState::default();
         systems[0] = system(true, 5, 20);
         assert_eq!(
-            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100))[..2],
+            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), phase(90))[..2],
             [2.0, 1.0]
         );
         systems[0] = system(true, 0, 20);
         assert_eq!(
-            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100))[..2],
+            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), phase(90))[..2],
             [0.0, 0.0]
         );
         systems[0] = system(true, 5, 20);
         assert_eq!(
-            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100))[..2],
+            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), phase(90))[..2],
             [0.0, 0.0]
         );
         systems[0] = system(true, 20, 20);
         assert_eq!(
-            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100))[..2],
+            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), phase(90))[..2],
             [2.0, 1.0]
         );
         systems[0] = system(true, 5, 20);
         assert_eq!(
-            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100))[..2],
+            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), phase(90))[..2],
             [2.0, 1.0]
         );
     }
 
     #[test]
-    fn switched_off_system_restores_at_full_health() {
+    fn disabled_engines_and_shields_flicker_independently() {
         let mut systems = [None; 5];
+        systems[0] = system(false, 20, 20);
         systems[2] = system(false, 20, 20);
-        assert_eq!(gains(Some(&systems), 0, 100)[2], 0.0);
-        systems[2] = system(true, 20, 20);
-        assert_eq!(gains(Some(&systems), 0, 100)[2], 1.0);
+        let mut state = EmissiveState::default();
+        let mut gains = |ms| state.gains(Some(&systems), Fixed::ZERO, Fixed::ZERO, phase(ms));
+        assert_eq!(gains(89), [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
+        assert_eq!(gains(90), [1.0, 1.0, 0.0, 1.0, 1.0, 1.0]);
+        assert_eq!(gains(179), gains(90));
+        assert_eq!(gains(180), [0.0, 0.0, 1.0, 1.0, 1.0, 1.0]);
+        assert!(FlickerPhase::new(Duration::from_millis(180), EntityId(8)).visible(0));
     }
 
     #[test]

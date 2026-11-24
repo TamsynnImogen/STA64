@@ -590,7 +590,11 @@ impl Plugin for MapPlugin {
         app.add_systems(
                 Update,
                 (
-                    crate::clock::advance_idle_clock.run_if(not(resource_exists::<crate::sim_link::SimLink>).or_else(resource_exists::<crate::sim_link::SimHeld>)),
+                    crate::clock::advance_idle_clock.run_if(
+                        not(resource_exists::<crate::sim_link::SimLink>)
+                            .or_else(resource_exists::<crate::sim_link::SimHeld>)
+                            .or_else(not(crate::editor::play_mode)),
+                    ),
                     input,
                     rebuild.in_set(MapRebuild),
                     crate::render::stock::nebula::switch,
