@@ -31,7 +31,7 @@ struct HullParams {
     mdif: vec4<f32>,  // diffuse colour
     mspc: vec4<f32>,  // specular colour; a: its exponent
     // Specular and emissive maps (RND-38, mapped.rs; ported from the A2FOExtensions project).
-    map: vec4<f32>,   // x: 1 with a specular map; y: 1 with an emissive map; z: emissive halo strength
+    map: vec4<f32>,   // x: 1 with a specular map; y: 1 with an emissive map
     mhl: vec4<f32>,   // the highlight of a part with a specular map: colour and exponent (zero: none)
     emission_a: vec4<f32>,
     emission_b: vec4<f32>,
@@ -245,6 +245,21 @@ fn mapped_emission(uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec3<f32> {
     return from_srgb(min(emission, vec3<f32>(1.0)));
 }
 
+// The camera's private bloom source. Share UVs, alpha coverage and live
+// subsystem weights with the visible hull so both passes agree.
+@if(EMISSIVE_MASK)
+@fragment
+fn emissive_mask(i: FragIn) -> @location(0) vec4<f32> {
+    let uv = i.uv + k.uv.xy;
+    let alpha = textureSample(tex, tex_sampler, uv).a;
+    let dx = dpdx(uv);
+    let dy = dpdy(uv);
+    if k.cut.x > 0.5 && alpha < 0.5 {
+        discard;
+    }
+    return vec4<f32>(mapped_emission(uv, dx, dy), 1.0);
+}
+
 @fragment
 fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     let uv = i.uv + k.uv.xy;
@@ -262,14 +277,8 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     let du1 = dpdx(uv);
     let du2 = dpdy(uv);
     var em = vec3<f32>(0.0);
-    var halo = vec3<f32>(0.0);
     if k.map.y > 0.5 {
         em = mapped_emission(uv, du1, du2);
-        if k.map.z > 0.0 {
-            // Both samples use the same live channels, so an extinguished light leaves no halo.
-            let blurred = mapped_emission(uv, du1 * 6.0, du2 * 6.0);
-            halo = max(blurred - em, vec3<f32>(0.0)) * k.map.z;
-        }
     }
     if k.cut.x > 0.5 && t.a < 0.5 {
         discard;
@@ -292,6 +301,5 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
             n = nb / l;
         }
     }
-    let color = shade(n, wp, t, sm, em);
-    return vec4<f32>(color.rgb + halo, color.a);
+    return shade(n, wp, t, sm, em);
 }

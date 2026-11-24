@@ -1,9 +1,8 @@
 //! Scene post-processing (Refit's `postfx`).
 //!
-//! The game starts with a small emissive-map halo. The Graphics setting and
-//! `--postfx off` can turn it off. Hull materials read this setting directly
-//! so only authored emissive textures contribute. Other effects are opt-in
-//! and run on the main scene cameras using Bevy's post-processing passes.
+//! The game starts with a small screen-space halo seeded by authored emissive
+//! maps. The Graphics setting and `--postfx off` can turn it off. Other
+//! effects are opt-in and use Bevy's post-processing passes.
 //!
 //! Use `--postfx bloom,smaa` to choose effects (names: `bloom`, `smaa`, `fxaa`,
 //! `vignette`, `chromatic`, `exposure`, `aces`, `reinhard`, or `cinematic` for
@@ -32,7 +31,7 @@ pub enum Aa {
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct PostFx {
     pub bloom: bool,
-    /// Linear colour added by the blurred emissive texture.
+    /// Linear gain of the blurred emissive mask.
     pub bloom_intensity: f32,
     /// `Some`: this tonemapper instead of Bevy's default.
     pub tonemapping: Option<Tonemapping>,
@@ -48,7 +47,7 @@ impl Default for PostFx {
     fn default() -> Self {
         PostFx {
             bloom: false,
-            bloom_intensity: 0.12,
+            bloom_intensity: 0.08,
             tonemapping: None,
             aa: Aa::Off,
             auto_exposure: false,
@@ -301,7 +300,7 @@ mod tests {
         let (mut app, main, bg) = app(PostFx::default());
         *app.world_mut().resource_mut::<PostFx>() = PostFx { bloom: true, aa: Aa::Smaa, vignette: true, tonemapping: Some(Tonemapping::AcesFitted), ..default() };
         app.update();
-        assert!(!has::<Bloom>(&app, main) && !has::<Hdr>(&app, main), "emissive bloom is local to the material");
+        assert!(!has::<Bloom>(&app, main) && !has::<Hdr>(&app, main), "the emissive mask uses its own pass without changing the camera's HDR mode");
         assert!(has::<Smaa>(&app, main) && !has::<Fxaa>(&app, main));
         assert!(has::<Vignette>(&app, main) && !has::<ChromaticAberration>(&app, main));
         assert_eq!(app.world().get::<Msaa>(main), Some(&Msaa::Off));

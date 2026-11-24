@@ -23,6 +23,8 @@
 
 use std::collections::HashMap;
 
+mod emissive_bloom;
+mod emissive_blur;
 mod emissive_state;
 
 use bevy::asset::{embedded_asset, AssetPath};
@@ -101,7 +103,7 @@ pub struct HullParams {
     pub mdif: Vec4,
     pub mspc: Vec4,
     /// Specular and emissive maps (RND-38, `mapped.rs`): x 1 with a specular map, y 1 with an
-    /// emissive map, z the strength of the halo around bright texels.
+    /// emissive map.
     pub map: Vec4,
     /// The highlight of a part with a specular map: colour and exponent (`mapped::highlight_params`).
     pub mhl: Vec4,
@@ -220,7 +222,6 @@ pub struct HullView {
     /// SOD lighting material (its values are read and kept). Armada II and Fleet Operations
     /// are not changed by this.
     pub(crate) armada_one: bool,
-    emissive_bloom: f32,
 }
 
 impl HullView {
@@ -246,7 +247,6 @@ impl HullView {
         p.dcol = if stock { self.sdcol } else { self.dcol };
         p.sh = self.sh;
         p.shp = self.shp;
-        p.map.z = self.emissive_bloom;
     }
 
     /// The Key's shadow map as `shadows.rs` fitted it this frame (RND-15).
@@ -298,6 +298,7 @@ impl Plugin for HullPlugin {
                 update_emissive.after(crate::app::GameSet::SimLink).after(crate::clock::advance_idle_clock),
                 follow_source,
             ).chain());
+        emissive_bloom::register(app);
     }
 }
 
@@ -352,7 +353,6 @@ fn update_view(
     sources: Query<(&HullSource, &HullPart)>,
     mut materials: ResMut<Assets<HullMaterial>>,
     switches: Option<Res<crate::render::quality::PerfSwitches>>,
-    post: Option<Res<super::post::PostFx>>,
 ) {
     if switches.is_some_and(|s| s.freeze_hull_materials) {
         return;
@@ -380,10 +380,9 @@ fn update_view(
         let c = a.color.to_srgba();
         Vec3::new(c.red, c.green, c.blue)
     });
-    let emissive_bloom = post.filter(|fx| fx.bloom).map_or(0.0, |fx| fx.bloom_intensity.clamp(0.0, 1.0));
-    let now = HullView { eye: cam.translation().extend(1.0), dvec, dcol, sdvec, sdcol, stock, ambient: amb, armada_one, emissive_bloom, ..view.clone() };
+    let now = HullView { eye: cam.translation().extend(1.0), dvec, dcol, sdvec, sdcol, stock, ambient: amb, armada_one, ..view.clone() };
     let moved = (now.eye - view.eye).length_squared() > 1e-4;
-    if !moved && now.dvec == view.dvec && now.dcol == view.dcol && now.sdvec == view.sdvec && now.sdcol == view.sdcol && now.stock == view.stock && now.armada_one == view.armada_one && now.ambient == view.ambient && now.emissive_bloom == view.emissive_bloom {
+    if !moved && now.dvec == view.dvec && now.dcol == view.dcol && now.sdvec == view.sdvec && now.sdcol == view.sdcol && now.stock == view.stock && now.armada_one == view.armada_one && now.ambient == view.ambient {
         return;
     }
     let switched = now.stock != view.stock || now.armada_one != view.armada_one;
@@ -760,7 +759,9 @@ mod tests {
     /// material bind group filled in.
     #[test]
     fn hull_shader_validates() {
-        let src = include_str!("hulls.wesl").replace("constants::MATERIAL_BIND_GROUP", "3");
+        let src = include_str!("hulls.wesl")
+            .replace("constants::MATERIAL_BIND_GROUP", "3")
+            .replace("@if(EMISSIVE_MASK)", "");
         let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)
@@ -916,7 +917,7 @@ mod gpu {
         Some(Box::new(ErrorLog))
     }
 
-    const SIZE: u32 = 96;
+    const SIZE: u32 = 256;
 
     /// A checker texture with a varying alpha channel, so the textured hull has detail.
     fn checker() -> Image {
@@ -1193,8 +1194,7 @@ mod gpu {
             assert!(d1 > 10_000, "the strip glows on UVs inside 0..1");
             assert!(d4 * 10 > d1 * 6, "and on UVs outside 0..1 as much (repeat), not smeared from the edge ({d4} vs {d1})");
 
-            // Use the normal settings resource and the texture loader's box-filtered
-            // mips. Compare the same scene for both values of the Bloom toggle.
+            // Compare the same scene with and without screen-space bloom.
             use crate::render::fx::quad::{self, Look};
             use crate::render::post::PostFx;
             use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
@@ -1213,19 +1213,18 @@ mod gpu {
             app.world_mut().resource_mut::<PostFx>().bloom = true;
             let bloomed = take(&mut app, "emissive-bloom-on");
             let mut affected = 0;
+            let mut spill = 0;
             let mut peak_gain = 0;
-            for (index, (before, after)) in bare.chunks_exact(4).zip(bloomed.chunks_exact(4)).enumerate() {
+            let background = &bare[..3];
+            for (before, after) in bare.chunks_exact(4).zip(bloomed.chunks_exact(4)) {
                 let gain = after[0].saturating_sub(before[0]);
                 assert_eq!(before[1..], after[1..], "the red map should only add red");
-                let (x, y) = (index % SIZE as usize, index / SIZE as usize);
-                if !(16..80).contains(&x) || !(16..80).contains(&y) {
-                    assert_eq!(before, after, "the glow should stay on the hull");
-                }
                 affected += usize::from(gain > 2);
+                spill += usize::from(&before[..3] == background && gain > 2);
                 peak_gain = peak_gain.max(gain);
             }
-            eprintln!("Emissive halo: {affected} lit neighbours, peak gain {peak_gain}/255");
-            assert!(affected > 20 && peak_gain < 70, "a small halo around the lit texels");
+            eprintln!("Emissive halo: {affected} lit neighbours, {spill} background pixels, peak gain {peak_gain}/255");
+            assert!(affected > 20 && spill > 20 && peak_gain < 85, "a gentle halo extends past the silhouette");
 
             // Drive the real material from a simulation view, including the repair latch.
             use super::emissive_state::FlickerPhase;
@@ -1284,6 +1283,18 @@ mod gpu {
             feed(&mut app, &mut view, true, 40);
             assert!(take(&mut app, "emissive-engines-repaired") == bloomed, "full repair restores the original light");
 
+            // A dark, opaque occluder exposes any leaked light from the hidden emitter.
+            let occluder_mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(Sphere::new(1.4));
+            let occluder_material = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial {
+                base_color: Color::srgb(0.16, 0.18, 0.2), unlit: true, ..default()
+            });
+            let occluder = app.world_mut().spawn((Mesh3d(occluder_mesh), MeshMaterial3d(occluder_material), Transform::from_xyz(0.0, 0.0, 1.5))).id();
+            app.world_mut().resource_mut::<PostFx>().bloom = false;
+            let hidden = take(&mut app, "emissive-occluded-off");
+            app.world_mut().resource_mut::<PostFx>().bloom = true;
+            assert!(take(&mut app, "emissive-occluded-on") == hidden, "occluded maps add no bloom");
+            app.world_mut().despawn(occluder);
+
             // Even a white hull and a bright additive shot contribute nothing to the halo.
             app.world_mut().entity_mut(subject).insert(Visibility::Hidden);
             let white = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial {
@@ -1319,8 +1330,9 @@ mod gpu {
                 let radius = Vec3::from_array(hi).distance(Vec3::from_array(lo)) * 0.5;
                 let scale = 1.0 / radius;
                 let center = (Vec3::from_array(lo) + Vec3::from_array(hi)) * (0.5 * scale) * Vec3::new(1.0, 1.0, -1.0);
+                app.insert_resource(ClearColor(Color::srgb(0.045, 0.04, 0.19)));
                 app.world_mut().entity_mut(camera).insert(
-                    Transform::from_translation(center + Vec3::new(0.8, 1.7, 1.8))
+                    Transform::from_translation(center + Vec3::new(0.66, 1.4, 1.48))
                         .looking_at(center, Vec3::Y),
                 );
                 for entity in [white, flare] {
@@ -1349,8 +1361,13 @@ mod gpu {
                 app.world_mut().resource_mut::<PostFx>().bloom = true;
                 let lit = take(&mut app, "fbattle-bloom-on");
                 let changed_pixels = bare.chunks_exact(4).zip(lit.chunks_exact(4)).filter(|(a, b)| a != b).count();
-                eprintln!("Installed FBattle: {} meshes, {changed_pixels} pixels changed by bloom", stats.meshes);
-                assert!(changed_pixels > 0, "installed FBattle material should bloom");
+                let outside = |before: &[u8], after: &[u8]| {
+                    before.chunks_exact(4).zip(after.chunks_exact(4))
+                        .filter(|(a, b)| a[..3] == before[..3] && (0..3).any(|i| b[i].saturating_sub(a[i]) > 3)).count()
+                };
+                let spill = outside(&bare, &lit);
+                eprintln!("Installed FBattle: {} meshes, {changed_pixels} changed pixels, {spill} coloured background pixels", stats.meshes);
+                assert!(spill > 20, "installed FBattle glow should extend into space");
                 feed(&mut app, &mut view, false, 40);
                 advance_phase(&mut app, false);
                 let dark = take(&mut app, "fbattle-engines-disabled-off");
@@ -1359,6 +1376,12 @@ mod gpu {
                 assert!(take(&mut app, "fbattle-engines-disabled-on") == lit, "FBattle engine textures light up during the on phase");
                 feed(&mut app, &mut view, false, 0);
                 assert!(take(&mut app, "fbattle-engines-destroyed") == dark, "destroyed FBattle engines remain dark");
+                feed(&mut app, &mut view, true, 40);
+                app.world_mut().entity_mut(camera).insert(Msaa::Sample4);
+                app.world_mut().resource_mut::<PostFx>().bloom = false;
+                let msaa_off = take(&mut app, "fbattle-msaa-bloom-off");
+                app.world_mut().resource_mut::<PostFx>().bloom = true;
+                assert!(outside(&msaa_off, &take(&mut app, "fbattle-msaa-bloom-on")) > 20, "multisample mask resolves the halo");
             }
         }
         let errors = ERRORS.lock().unwrap().clone();
