@@ -84,6 +84,7 @@ fn action_label(action: Action) -> String {
         Action::PauseGame => tr("Pause game"),
         Action::SelectNextShip => tr("Select damaged ships (Roots) / next ship"),
         Action::GridToggle => tr("Cycle map grid (with reveal modifier)"),
+        Action::ToggleTactical => tr("Toggle cinematic view"),
     }
 }
 

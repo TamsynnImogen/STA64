@@ -495,7 +495,10 @@ fn update(
     switch: Res<SwitchParams>,
     mut stats: ResMut<CullStats>,
     menu: Option<Res<crate::frontend::scene::MenuScene>>,
-    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
+    (cine, tactical): (
+        Option<Res<crate::ui::presentation::CineractiveState>>,
+        Option<Res<crate::input::camera_tactical::TacticalView>>,
+    ),
 ) {
     *stats = CullStats::default();
     // A cineractive is a model view, like the menu scene: no symbol, marker, number or line is
@@ -504,7 +507,8 @@ fn update(
     // that cull by distance the object culling distance), nothing past them. The player's Tab
     // choice comes back with the cutscene's end.
     let cutscene = crate::ui::presentation::cutscene_running(cine);
-    let mode = if cutscene { Mode::Off } else { *mode };
+    let models = cutscene || !crate::input::camera_tactical::overview_active(tactical);
+    let mode = if models { Mode::Off } else { *mode };
     let mode = &mode;
     // The script's distances replace the file's; the map symbols take over from the model a
     // little later than the originals stop drawing it (STA64's own, `SYMBOL_DISTANCE_FACTOR`).

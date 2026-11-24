@@ -57,10 +57,12 @@ pub enum Action {
     /// Held with the reveal modifier: cycle the map grid's mode (grid, grid with height bars, none). STA64's own
     /// binding (interim); Alt+G by default.
     GridToggle,
+    /// Toggle the cinematic view (stock `Input.map` binds it to CapsLock).
+    ToggleTactical,
 }
 
 impl Action {
-    pub const ALL: [Action; 26] = [
+    pub const ALL: [Action; 27] = [
         Action::AddModifier,
         Action::GroupModifier,
         Action::CentreModifier,
@@ -87,6 +89,7 @@ impl Action {
         Action::SelectNextShip,
         Action::PointDefence,
         Action::GridToggle,
+        Action::ToggleTactical,
     ];
 
     pub fn name(self) -> String {
@@ -109,6 +112,7 @@ impl Action {
             Action::PauseGame => "pause_game".into(),
             Action::SelectNextShip => "select_next_ship".into(),
             Action::GridToggle => "grid_toggle".into(),
+            Action::ToggleTactical => "toggle_tactical".into(),
         }
     }
 
@@ -153,6 +157,7 @@ impl Default for KeyBindings {
         m.insert(Action::PauseGame, vec![KeyCode::Pause]);
         m.insert(Action::SelectNextShip, vec![KeyCode::BracketLeft]);
         m.insert(Action::GridToggle, vec![KeyCode::KeyG]);
+        m.insert(Action::ToggleTactical, vec![KeyCode::CapsLock]);
         for (n, k) in DIGITS.into_iter().enumerate() {
             m.insert(Action::Group(n as u8), vec![k]);
         }
@@ -235,7 +240,8 @@ fn parse_key(s: &str) -> Option<KeyCode> {
         KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN, KeyO, KeyP, KeyQ, KeyR,
         KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ, Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6,
         Digit7, Digit8, Digit9, F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12, ShiftLeft, ShiftRight,
-        ControlLeft, ControlRight, AltLeft, AltRight, Space, Tab, Backquote, Home, End, Numpad0, Numpad1, Numpad2,
+        ControlLeft, ControlRight, AltLeft, AltRight, Space, Tab, Backquote, CapsLock, Home, End, Numpad0, Numpad1,
+        Numpad2,
         Numpad3, Numpad4, Numpad5, Numpad6, Numpad7, Numpad8, Numpad9, Escape, Pause, BracketLeft, BracketRight,
     ];
     CANDIDATES.iter().copied().find(|k| format!("{k:?}") == s)
@@ -290,5 +296,23 @@ mod tests {
         assert_eq!(KeyBindings::from_text("stop = KeyS\n").keys(Action::PointDefence), [KeyCode::KeyP]);
         b.rebind(Action::PointDefence, KeyCode::KeyO);
         assert_eq!(KeyBindings::from_text(&b.to_text()).keys(Action::PointDefence), [KeyCode::KeyO]);
+    }
+
+    #[test]
+    fn toggle_tactical_defaults_and_rebinding_survive_settings_text() {
+        let mut b = KeyBindings::default();
+        assert_eq!(b.keys(Action::ToggleTactical), [KeyCode::CapsLock]);
+        assert_eq!(Action::from_name("toggle_tactical"), Some(Action::ToggleTactical));
+        assert_eq!(
+            KeyBindings::from_text("stop = KeyS\n").keys(Action::ToggleTactical),
+            [KeyCode::CapsLock]
+        );
+        assert_eq!(
+            KeyBindings::from_text("toggle_tactical = CapsLock\n")
+                .keys(Action::ToggleTactical),
+            [KeyCode::CapsLock]
+        );
+        b.rebind(Action::ToggleTactical, KeyCode::KeyZ);
+        assert_eq!(KeyBindings::from_text(&b.to_text()), b);
     }
 }
