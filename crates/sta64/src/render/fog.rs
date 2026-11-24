@@ -579,9 +579,14 @@ fn update_fog(
             (Some(s), Some(m)) if !map_changed => (m, s.updates),
             _ => (FogGrid::new([bounds.min.x, bounds.min.y], [bounds.max.x, bounds.max.y]), 0),
         };
-        // During a cutscene the layers are hidden anyway and the memory does not take the sight in;
-        // see `FogGrid::observe_with`.
-        grid.observe_with(curr, player, content.as_deref().map(|c| &*c.0), !cutscene && editor.is_none());
+        // Editing is presentation-only: leave both explored and pending sight intact.
+        // In particular, observe_with(..., false) would discard the last play frame's
+        // pending sight when entering the editor.
+        if editor.is_none() {
+            // During a cutscene the layers are hidden anyway and the memory does not take
+            // the sight in; see `FogGrid::observe_with`.
+            grid.observe_with(curr, player, content.as_deref().map(|c| &*c.0), !cutscene);
+        }
         let shown = grid.lifted(lifted.0, lifted.1);
         *memory = Some(grid);
         let art_changed = *art_generation != Some(patterns.generation);
@@ -997,6 +1002,37 @@ mod tests {
             fn cutscene(&self) -> bool {
                 self.app.world().resource::<CineractiveState>().on
             }
+        }
+
+        #[test]
+        fn editor_shows_whole_map_without_changing_play_exploration() {
+            let at = |x| Some(vec![unit(1, 1, x, 0)]);
+            let mut rig = Rig::new();
+            rig.frame(at(0), None); // The last play sight is still pending.
+            rig.app.world_mut().insert_resource(crate::editor::Editing::default());
+            rig.frame(at(3000), None);
+            let shown = &rig.app.world().resource::<FogState>().grid;
+            assert_eq!(shown.counts(), (shown.w * shown.h, shown.w * shown.h), "3D and radar share the clear grid");
+            assert!(shown.mask(Layer::Fog).iter().all(|&v| v == 0));
+            assert!(shown.mask(Layer::Shroud).iter().all(|&v| v == 0));
+            rig.app.world_mut().remove_resource::<crate::editor::Editing>();
+            rig.frame(at(-3000), None);
+            assert!(rig.explored(0.0), "sight pending when play was paused survives editing");
+            assert!(!rig.explored(3000.0) && !rig.seen(3000.0), "editor-only sight is forgotten");
+            assert!(rig.seen(-3000.0), "normal sensor rules resume");
+        }
+
+        #[test]
+        fn starting_in_editor_does_not_seed_play_exploration() {
+            let mut rig = Rig::new();
+            rig.app.world_mut().insert_resource(crate::editor::Editing::default());
+            rig.frame(Some(vec![unit(1, 1, 3000, 0)]), None);
+            assert_eq!(rig.app.world().resource::<FogState>().grid.counts().0,
+                rig.app.world().resource::<FogState>().grid.w * rig.app.world().resource::<FogState>().grid.h);
+            rig.app.world_mut().remove_resource::<crate::editor::Editing>();
+            rig.frame(Some(vec![unit(1, 1, 0, 0)]), None);
+            assert!(!rig.explored(3000.0) && !rig.seen(3000.0));
+            assert!(rig.seen(0.0));
         }
 
         #[test]

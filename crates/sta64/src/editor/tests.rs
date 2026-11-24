@@ -124,6 +124,26 @@ fn ctrl_e_pauses_and_resumes_the_same_local_world() {
 }
 
 #[test]
+fn editor_unit_visibility_survives_reveal_updates_and_restores_play_setting() {
+    let (mut app, _) = app();
+    app.add_plugins(crate::render::reveal::RevealPlugin);
+    hotkey(&mut app);
+    app.update();
+    assert!(app.world().resource::<SimLink>().fog_lifted(), "reveal update must keep editor units visible");
+    hotkey(&mut app);
+    app.update();
+    assert!(!app.world().resource::<SimLink>().fog_lifted(), "normal hidden-unit rules return");
+
+    app.world_mut().resource_mut::<crate::render::reveal::Reveal>().fog = true;
+    app.update();
+    hotkey(&mut app);
+    app.update();
+    hotkey(&mut app);
+    app.update();
+    assert!(app.world().resource::<SimLink>().fog_lifted(), "a preexisting play reveal is restored");
+}
+
+#[test]
 fn editor_shortcuts_do_not_reach_play_shortcuts() {
     #[derive(Default, Resource)]
     struct Seen(Vec<KeyCode>);

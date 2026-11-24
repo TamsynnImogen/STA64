@@ -32,6 +32,13 @@ Work to do whenever the Bevy version in the workspace `Cargo.toml` changes:
   version and line range in its header and in `sprite.NOTICE.md`, then run the
   sprite GPU test with `STA64_GPU_TESTS=1` on a hardware adapter: drift shows
   only there.
+- Re-check the bindless path of the sprite material (ADR 0009, S2 as amended):
+  `SpriteTint` binds a storage buffer as a bindless binding array, which Bevy's
+  own documentation does not yet describe as supported. Check that the
+  `#[bindless]` and `binding_array` attributes still mean the same, that
+  `material_uses_bindless_resources` still decides the form, and that the
+  sprite GPU test still prints `sprite material: bindless` on a desktop
+  adapter and passes.
 
 ## Layers
 

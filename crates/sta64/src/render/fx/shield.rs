@@ -197,6 +197,7 @@ impl Material for ShieldMaterial {
         _key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         descriptor.primitive.cull_mode = None::<Face>;
+        super::super::post::emissive_hdr_shader_def(descriptor);
         Ok(())
     }
 }

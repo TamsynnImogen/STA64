@@ -153,7 +153,12 @@ fn add_emissive(c: vec3<f32>, em: vec3<f32>) -> vec3<f32> {
     if k.map.y < 0.5 {
         return c;
     }
-    return from_srgb(clamp(to_srgb(c) + to_srgb(em), vec3<f32>(0.0), vec3<f32>(1.0)));
+    let base = from_srgb(clamp(to_srgb(c) + to_srgb(em), vec3<f32>(0.0), vec3<f32>(1.0)));
+    // Feed the glow map itself into the HDR bloom energy, after the legacy colour combine.
+    if constants::STA64_HDR_EMISSION != 0 {
+        return base + em * 1.5;
+    }
+    return base;
 }
 
 // Stock: the original engine's fixed-function lighting from the SOD material, per light

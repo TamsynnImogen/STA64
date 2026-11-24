@@ -185,6 +185,7 @@ impl Material for HullMaterial {
         // Match both passes: reflected hulls otherwise write occluding depth
         // for faces that their color pass culls.
         descriptor.primitive.cull_mode = if key.bind_group_data.double_sided { None } else { Some(Face::Back) };
+        super::post::emissive_hdr_shader_def(descriptor);
         Ok(())
     }
 }
@@ -672,7 +673,8 @@ mod tests {
     /// material bind group filled in.
     #[test]
     fn hull_shader_validates() {
-        let src = include_str!("hulls.wesl").replace("constants::MATERIAL_BIND_GROUP", "3");
+        let src = include_str!("hulls.wesl").replace("constants::MATERIAL_BIND_GROUP", "3")
+            .replace("constants::STA64_HDR_EMISSION", "1");
         let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)
@@ -904,7 +906,7 @@ mod gpu {
                 .set(LogPlugin { level: bevy::log::Level::WARN, custom_layer: error_layer, ..default() })
                 .disable::<bevy::winit::WinitPlugin>(),
         );
-        app.add_plugins(HullPlugin);
+        app.add_plugins((HullPlugin, crate::render::fx::quad::FxQuadPlugin));
         app.insert_resource(ClearColor(Color::srgb(0.01, 0.01, 0.025)));
         app.insert_resource(GlobalAmbientLight { color: Color::WHITE, brightness: 60.0, ..default() });
 
@@ -1050,7 +1052,7 @@ mod gpu {
             let lit = take(&mut app, "mapped-white");
             set(&mut app, Some(black.clone()), None);
             let masked = take(&mut app, "mapped-black");
-            set(&mut app, None, Some(red));
+            set(&mut app, None, Some(red.clone()));
             let glow = take(&mut app, "mapped-emissive");
             eprintln!("RND-38 sums (G): none {} white {} black {}; (R): none {} emissive {}; (G): emissive {}", sum(&base, 1), sum(&lit, 1), sum(&masked, 1), sum(&base, 0), sum(&glow, 0), sum(&glow, 1));
             assert!(sum(&lit, 1) > sum(&base, 1), "a white specular map adds the default highlight");
@@ -1101,6 +1103,42 @@ mod gpu {
             eprintln!("RND-38 emissive-only red gain: UV 0..1 {d1}, UV 0..4 {d4}");
             assert!(d1 > 10_000, "the strip glows on UVs inside 0..1");
             assert!(d4 * 10 > d1 * 6, "and on UVs outside 0..1 as much (repeat), not smeared from the edge ({d4} vs {d1})");
+
+            // Run the real HDR bloom pass. Count coloured light in pixels that were
+            // background before bloom, outside the hull or the small diagnostic flare.
+            use bevy::camera::Hdr;
+            use bevy::core_pipeline::tonemapping::Tonemapping;
+            use bevy::post_process::bloom::Bloom;
+            use crate::render::fx::quad::{self, Look};
+            let halo = |without: &[u8], with: &[u8], channel: usize| {
+                without.chunks_exact(4).zip(with.chunks_exact(4)).filter(|(a, b)| {
+                    a[0] < 6 && a[1] < 6 && a[2] < 12
+                        && b[channel].saturating_sub(a[channel]) > 2
+                }).count()
+            };
+            app.world_mut().entity_mut(camera).insert((Hdr, Tonemapping::None));
+            app.world_mut().entity_mut(camera).remove::<bevy::core_pipeline::tonemapping::DebandDither>();
+            set(&mut app, None, Some(red));
+            let bare = take(&mut app, "emissive-bloom-off");
+            app.world_mut().entity_mut(camera).insert(crate::render::post::emissive_bloom(0.12));
+            let bloomed = take(&mut app, "emissive-bloom-on");
+            let red_halo = halo(&bare, &bloomed, 0);
+            eprintln!("HDR hull red halo: {red_halo} pixels");
+            assert!(red_halo > 30, "emissive map bloomed outside the hull");
+
+            app.world_mut().entity_mut(subject).insert(Visibility::Hidden);
+            app.world_mut().entity_mut(camera).remove::<Bloom>();
+            let mesh = app.world_mut().resource_mut::<Assets<Mesh>>().add(quad::rectangle());
+            let look = Look::new(quad::K_HOT, Vec3::new(0.0, 1.0, 0.0));
+            let material = app.world_mut().resource_mut::<Assets<quad::FxQuadMaterial>>()
+                .add(quad::FxQuadMaterial { params: look.params(1.0, 0.0) });
+            app.world_mut().spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::from_scale(Vec3::splat(0.55))));
+            let bare = take(&mut app, "effect-bloom-off");
+            app.world_mut().entity_mut(camera).insert(crate::render::post::emissive_bloom(0.12));
+            let bloomed = take(&mut app, "effect-bloom-on");
+            let green_halo = halo(&bare, &bloomed, 1);
+            eprintln!("HDR effect green halo: {green_halo} pixels");
+            assert!(green_halo > 20, "the luminous effect bloomed outside its core");
         }
         let errors = ERRORS.lock().unwrap().clone();
         assert!(errors.is_empty(), "shader/pipeline ERROR events:\n{}", errors.join("\n"));
