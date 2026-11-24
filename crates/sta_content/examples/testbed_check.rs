@@ -87,7 +87,8 @@ fn main() {
         }
     }
 
-    // Every sound an ODF names (weapon fire, unit select/acknowledge/attack/ambient)
+    // Every sound an ODF names (weapon fire, unit select/acknowledge/attack/ambient,
+    // explosion: its `fireball` ODF's `explSound`, read since #1224)
     // must resolve to a file or an event, as the client's sound bank finds them.
     let bank = sta_assets::audio::SoundBank::load(&vfs);
     let mut sounds: Vec<(String, String, Option<String>)> = Vec::new();
@@ -98,7 +99,7 @@ fn main() {
     }
     for u in db.units() {
         let race = (!u.race.is_empty()).then(|| u.race.clone());
-        for s in u.sounds.select.iter().chain(&u.sounds.ack_move).chain(&u.sounds.ack_attack).chain(&u.sounds.ambient) {
+        for s in u.sounds.select.iter().chain(&u.sounds.ack_move).chain(&u.sounds.ack_attack).chain(&u.sounds.ambient).chain(&u.sounds.explode) {
             sounds.push((u.odf.clone(), s.clone(), race.clone()));
         }
     }
