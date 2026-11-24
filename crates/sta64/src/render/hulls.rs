@@ -498,11 +498,12 @@ fn update_emissive(
         let Some(id) = sim else { continue };
         let Some(unit) = view.unit(id) else { continue };
         let gains = *gains_this_frame.entry(id).or_insert_with(|| {
-            let cap = view.attrs.impulse.iter().find(|(owner, _)| *owner == id).map(|(_, speed)| *speed)
+            let cap = link.impulse_cap(id)
+                .or_else(|| view.attrs.impulse.iter().find(|(owner, _)| *owner == id).map(|(_, speed)| *speed))
                 .or_else(|| content.as_ref()?.0.unit(unit.def).map(|def| def.movement.max_speed))
                 .unwrap_or_default();
             let phase = emissive_state::FlickerPhase::new(elapsed, id);
-            states.entry(id).or_default().gains(view.appearance.systems(id), unit.speed, cap, phase)
+            states.entry(id).or_default().gains(view.appearance.systems(id), unit.speed, cap, link.warp_phase(id), phase)
         });
         let (a, b) = HullMaterial::emission_weights(gains);
         if materials.get(&source.hull).is_some_and(|m| m.params.emission_a != a || m.params.emission_b != b)

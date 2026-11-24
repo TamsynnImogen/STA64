@@ -158,6 +158,12 @@ impl Document {
     }
 
     pub fn push(&mut self, odf: &str, team: i32, position: [f32; 3], heading: [f32; 2]) -> Option<usize> {
+        let object = self.prepare_placement(odf, team, position, heading)?;
+        Some(self.append_placement(object, ObjectProperties::default()))
+    }
+
+    /// Prepare a map record without allocating its slot or consuming its ID.
+    pub(super) fn prepare_placement(&self, odf: &str, team: i32, position: [f32; 3], heading: [f32; 2]) -> Option<MapObject> {
         let [x, z] = heading;
         if !self.can_change_objects()
             || odf.is_empty()
@@ -166,11 +172,9 @@ impl Document {
         {
             return None;
         }
-        let id = self.next_entity_id?;
-        self.next_entity_id = id.checked_add(1);
-        let object = MapObject {
+        Some(MapObject {
             odf: odf.to_owned(),
-            entity_id: id,
+            entity_id: self.next_entity_id?,
             team,
             initial_position: Some(position),
             transform: [
@@ -182,9 +186,17 @@ impl Document {
                 position[2],
             ],
             ..Default::default()
-        };
-        self.objects.push(Some(object));
-        Some(self.objects.len() - 1)
+        })
+    }
+
+    /// Commit the next record after the simulation has accepted the edit.
+    pub(super) fn append_placement(&mut self, object: MapObject, properties: ObjectProperties) -> usize {
+        debug_assert_eq!(Some(object.entity_id), self.next_entity_id);
+        self.next_entity_id = object.entity_id.checked_add(1);
+        let index = self.objects.len();
+        self.objects.push(None);
+        self.update_object(index, object, properties);
+        index
     }
 
     pub fn remove(&mut self, index: usize) -> bool {

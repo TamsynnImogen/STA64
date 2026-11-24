@@ -45,19 +45,20 @@ impl EmissiveState {
         systems: Option<&[Option<SystemAppearance>; 5]>,
         speed: Fixed,
         impulse_cap: Fixed,
+        warp_phase: Option<bool>,
         phase: FlickerPhase,
     ) -> [f32; 6] {
         let mut gains = [1.0; 6];
 
-        // The native motion fallback has no explicit warp state here. Its
-        // velocity test uses squared speed > 0.01, then warp above 105% of
-        // the positive impulse cap. The idle/impulse/warp gains follow the
-        // native fallback. The view does not expose gravity-well transitions.
+        // Live A2/FO warp phases take precedence during warp and warp-out.
+        // Other movement (including A1 and recorded views) uses the native
+        // speed fallback: squared speed > 0.01, warp above 105% of impulse.
         let velocity = speed.to_f32();
         if velocity * velocity > 0.01 {
             let cap = impulse_cap.to_f32();
             let threshold = cap * 1.05;
-            if cap > 0.0 && threshold.is_finite() && velocity * velocity > threshold * threshold {
+            let inferred_warp = cap > 0.0 && threshold.is_finite() && velocity * velocity > threshold * threshold;
+            if warp_phase.unwrap_or(inferred_warp) {
                 gains[0] = 2.0;
             } else {
                 gains[0] = 1.25;
@@ -111,7 +112,7 @@ mod tests {
     }
 
     fn gains(systems: Option<&[Option<SystemAppearance>; 5]>, speed: i32, cap: i32) -> [f32; 6] {
-        EmissiveState::default().gains(systems, Fixed::from_int(speed), Fixed::from_int(cap), phase(90))
+        EmissiveState::default().gains(systems, Fixed::from_int(speed), Fixed::from_int(cap), None, phase(90))
     }
 
     #[test]
@@ -123,32 +124,50 @@ mod tests {
     }
 
     #[test]
+    fn live_warp_and_warp_out_override_the_speed_threshold() {
+        let mut state = EmissiveState::default();
+        let live = |state: &mut EmissiveState, speed, warp| {
+            state.gains(None, Fixed::from_int(speed), Fixed::from_int(100), Some(warp), phase(90))
+        };
+        assert_eq!(live(&mut state, 20, true)[..2], [2.0, 1.0]);
+        assert_eq!(live(&mut state, 106, false)[..2], [1.25, 1.5]);
+        assert_eq!(live(&mut state, 0, true)[..2], [1.0, 1.0]);
+        let mut disabled = [None; 5];
+        disabled[0] = system(false, 20, 20);
+        let dark = (0..100).find_map(|bucket| {
+            let phase = phase(bucket * 90);
+            (!phase.visible(0)).then_some(phase)
+        }).unwrap();
+        assert_eq!(state.gains(Some(&disabled), Fixed::from_int(20), Fixed::from_int(100), Some(true), dark)[..2], [0.0, 0.0]);
+    }
+
+    #[test]
     fn destroyed_engine_is_dark_even_if_enabled_and_during_partial_repair() {
         let mut systems = [None; 5];
         let mut state = EmissiveState::default();
         systems[0] = system(true, 5, 20);
         assert_eq!(
-            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), phase(90))[..2],
+            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), None, phase(90))[..2],
             [2.0, 1.0]
         );
         systems[0] = system(true, 0, 20);
         assert_eq!(
-            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), phase(90))[..2],
+            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), None, phase(90))[..2],
             [0.0, 0.0]
         );
         systems[0] = system(true, 5, 20);
         assert_eq!(
-            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), phase(90))[..2],
+            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), None, phase(90))[..2],
             [0.0, 0.0]
         );
         systems[0] = system(true, 20, 20);
         assert_eq!(
-            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), phase(90))[..2],
+            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), None, phase(90))[..2],
             [2.0, 1.0]
         );
         systems[0] = system(true, 5, 20);
         assert_eq!(
-            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), phase(90))[..2],
+            state.gains(Some(&systems), Fixed::from_int(106), Fixed::from_int(100), None, phase(90))[..2],
             [2.0, 1.0]
         );
     }
@@ -159,7 +178,7 @@ mod tests {
         systems[0] = system(false, 20, 20);
         systems[2] = system(false, 20, 20);
         let mut state = EmissiveState::default();
-        let mut gains = |ms| state.gains(Some(&systems), Fixed::ZERO, Fixed::ZERO, phase(ms));
+        let mut gains = |ms| state.gains(Some(&systems), Fixed::ZERO, Fixed::ZERO, None, phase(ms));
         assert_eq!(gains(89), [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
         assert_eq!(gains(90), [1.0, 1.0, 0.0, 1.0, 1.0, 1.0]);
         assert_eq!(gains(179), gains(90));
