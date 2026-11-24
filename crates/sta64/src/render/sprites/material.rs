@@ -25,7 +25,15 @@
 //! - a cut-out look's slot holds alpha exactly 1: the prepass discards on the look's own alpha,
 //!   which knows nothing of the slot, so a cut-out node that fades (alpha below 1) is demoted to a
 //!   private material instead of fading through its slot. Sprite colours carry no alpha of their
-//!   own (`Color::srgb`), so only the fade lowers it.
+//!   own (`Color::srgb`), so only the fade lowers it;
+//! - sprite nodes are spawned, and slots written, before `PostUpdate`'s asset events
+//!   (`AssetEventSystems`): only then is the write extracted in the same frame. Every spawner of
+//!   sprite nodes runs in `Update` today (unit, construction and map models, the viewer) and
+//!   `animate`, `apply_fade` and `tint_ghost` run there too. A node spawned later in the frame would
+//!   be drawn once with whatever its slot held before (a released node's colour, or zero), where on
+//!   `main` it is not drawn at all until its new material is prepared. There is no cheap assertion
+//!   for this (an observer cannot tell which schedule applied its commands), so a new spawner keeps
+//!   to `Update`.
 //!
 //! [`SpriteFx`]: super::SpriteFx
 
@@ -226,13 +234,16 @@ impl LookKey {
     }
 }
 
-/// The looks' shared materials by key. Each node's [`SpriteState`] holds its look's handle, so a look
-/// lives as long as a node uses it; a key whose look is gone gets a new one.
+/// The looks' shared materials by key, each with the number of adopted nodes of that key. The table
+/// holds a strong handle per look and hands out clones of it; the entry goes when the key's last node
+/// is released, so a look (and its texture) lives exactly as long as a node uses it.
 #[derive(Resource, Debug)]
 pub struct SpriteLooks {
-    by_key: HashMap<LookKey, AssetId<SpriteMaterial>>,
-    /// Whether new sprite nodes are adopted. Always on in the game; the GPU test turns it off for its
-    /// reference path, which is `main`'s per-node materials.
+    by_key: HashMap<LookKey, (Handle<SpriteMaterial>, u32)>,
+    /// Whether new sprite nodes are adopted. Test-only switch: the game never sets it to `false`.
+    /// The GPU test turns it off for its reference path (`main`'s per-node materials), so both of its
+    /// apps hold the same observers and resources and so the same entity ids.
+    #[doc(hidden)]
     pub(crate) adopt: bool,
 }
 
@@ -252,8 +263,11 @@ pub struct SpriteState {
     /// The node's slot, as on its `MeshTag`. Unchanged across demotion and restore.
     pub tag: MeshTag,
     /// The look's shared material. The node draws through it unless it is demoted, or it was spawned
-    /// showing another uv than its look's (then through a private copy until `animate` aligns it).
+    /// showing another uv than its look's (then through a private copy until `animate` changes its
+    /// state, the frame its own material would next change on `main`).
     pub look: Handle<SpriteMaterial>,
+    /// The look's key, to count the node off its look when it is released.
+    key: LookKey,
 }
 
 /// Parity mode (S5): when a node's state changes under `main`'s rule, its material component is
@@ -299,28 +313,33 @@ fn adopt(
     let tag = slots.allocate(&mut buffers);
     slots.write(&mut buffers, [(&tag, linear(node.base_color))]);
     let key = LookKey::of(&node, &fx.sprite);
-    let look = match looks.by_key.get(&key).and_then(|id| materials.get_strong_handle(*id)) {
-        Some(h) => h,
-        None => {
-            let h = materials.add(look_material(&node, &slots));
-            looks.by_key.insert(key, h.id());
-            h
-        }
-    };
+    let entry = looks.by_key.entry(key.clone()).or_insert_with(|| (materials.add(look_material(&node, &slots)), 0));
+    entry.1 += 1;
+    let look = entry.0.clone();
     // A node spawned after this frame's `animate` is drawn this frame with the uv it was spawned
     // with, as its own material would be. If its look has moved on (a flipbook), it draws through a
     // private copy of the look until `animate` shows it at the look's uv.
     let drawn = if materials.get(&look).is_some_and(|l| l.base.uv_transform == node.uv_transform) { look.clone() } else { materials.add(look_material(&node, &slots)) };
     // The node's own material is no longer drawn or written; dropping the handle frees it.
     fx.material = Handle::default();
-    let state = SpriteState { colour: node.base_color, uv: node.uv_transform, tag: tag.clone(), look };
+    let state = SpriteState { colour: node.base_color, uv: node.uv_transform, tag: tag.clone(), look, key };
     commands.entity(add.entity).remove::<MeshMaterial3d<StandardMaterial>>().insert((tag, MeshMaterial3d(drawn), state));
 }
 
-/// Give a removed node's slot back (a despawn removes its [`SpriteState`]).
-fn release(remove: On<Remove<SpriteState>>, nodes: Query<&SpriteState>, slots: Option<ResMut<SpriteSlots>>) {
-    if let (Ok(state), Some(mut slots)) = (nodes.get(remove.entity), slots) {
+/// Give a removed node's slot back (a despawn removes its [`SpriteState`]), and its look's entry when
+/// it was the look's last node.
+fn release(remove: On<Remove<SpriteState>>, nodes: Query<&SpriteState>, slots: Option<ResMut<SpriteSlots>>, looks: Option<ResMut<SpriteLooks>>) {
+    let Ok(state) = nodes.get(remove.entity) else { return };
+    if let Some(mut slots) = slots {
         slots.release(&state.tag);
+    }
+    if let Some(mut looks) = looks
+        && let Some((_, count)) = looks.by_key.get_mut(&state.key)
+    {
+        *count -= 1;
+        if *count == 0 {
+            looks.by_key.remove(&state.key);
+        }
     }
 }
 

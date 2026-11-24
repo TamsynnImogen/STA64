@@ -34,6 +34,8 @@ cut_b tex_b 0 32 32 32\n\
 @sprite_node adB ad_b const (2,2) (1,0.8,0.2) billboard\n\
 @sprite_node cutA cut_a const (3,3) (0.9,0.9,0.9)\n\
 @sprite_node cutB cut_b pulse (3,3) (0.5,1,1)\n\
+@sprite_node blinkGlow glow strobe (1,1) (1,1,1) billboard\n\
+@sprite_node stillGlow glow const (2,2) (0.5,0.5,0.5) billboard\n\
 @animation pulse\ncolour 2 1.0 linear\n@keyframes\n0.0 (1,0.25,0.5)\n0.5 (0.25,0.5,1)\n\
 @animation strobe\ndraw 2 2.0 step\n@keyframes\n0.0 1\n0.3 0\n\
 @animation flip4\noffset 4 1.0 step\n@auto=row\n@keyframes\n";
@@ -256,10 +258,11 @@ fn game_app(adopting: bool) -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()))
         .init_asset::<StandardMaterial>()
+        .init_asset::<SpriteMaterial>()
+        .init_asset::<ShaderBuffer>()
         .insert_resource(table())
         .insert_resource(AnimClock::new(ClockMode::Bench { step: 0.173 }, 0));
     if adopting {
-        app.init_asset::<SpriteMaterial>().init_asset::<ShaderBuffer>();
         // Small, so the nodes below grow it.
         let slots = SpriteSlots::with_capacity(&mut app.world_mut().resource_mut::<Assets<ShaderBuffer>>(), 4);
         app.insert_resource(slots);
@@ -532,4 +535,93 @@ fn a_node_spawned_after_the_animation_draws_its_spawn_uv_then_joins_its_look() {
     assert!(late(&mut new).is_some());
     // The private copy is gone once the node joined its look.
     assert_eq!(new.world().resource::<Assets<SpriteMaterial>>().len(), 2);
+}
+
+/// The sprite nodes whose material Bevy re-specialises and re-queues this frame: those whose material
+/// component changed, or whose material asset was modified (Bevy's `AssetChanged` on
+/// `MeshMaterial3d`).
+#[derive(Resource, Default)]
+struct Requeued(std::collections::HashSet<Entity>);
+
+fn collect_requeued(
+    mut out: ResMut<Requeued>,
+    mut standard: MessageReader<AssetEvent<StandardMaterial>>,
+    mut sprite: MessageReader<AssetEvent<SpriteMaterial>>,
+    own: Query<(Entity, Ref<MeshMaterial3d<StandardMaterial>>), With<SpriteFx>>,
+    looks: Query<(Entity, Ref<MeshMaterial3d<SpriteMaterial>>), With<SpriteFx>>,
+) {
+    let standard: std::collections::HashSet<_> = standard.read().filter_map(|e| if let AssetEvent::Modified { id } = e { Some(*id) } else { None }).collect();
+    let sprite: std::collections::HashSet<_> = sprite.read().filter_map(|e| if let AssetEvent::Modified { id } = e { Some(*id) } else { None }).collect();
+    out.0 = own
+        .iter()
+        .filter(|(_, m)| m.is_changed() || standard.contains(&m.0.id()))
+        .map(|(e, _)| e)
+        .chain(looks.iter().filter(|(_, m)| m.is_changed() || sprite.contains(&m.0.id())).map(|(e, _)| e))
+        .collect();
+}
+
+/// Orders the nodes [`spawn_late_each`] spawned.
+#[derive(Component)]
+struct LateIdx(usize);
+
+/// Spawn a still node on the flipbook sprite after the animation at each of the first updates, so
+/// some are spawned while the look shows another cell than the spawn uv, and some of those see the
+/// spawn uv again at their next frame.
+fn spawn_late_each(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>, mut frame: Local<usize>) {
+    *frame += 1;
+    if *frame <= 16 {
+        let (m, mut fx, _) = material_of(&table(), "stillGlow");
+        let h = materials.add(m);
+        fx.material = h.clone();
+        commands.spawn((fx, MeshMaterial3d(h), Visibility::default(), LateIdx(*frame)));
+    }
+}
+
+/// ADR 0009 S5 (parity mode): an adopted node is re-queued in exactly the frames its own material
+/// would be modified on `main`, for every node that was drawn in the frame before and is still drawn:
+/// blinking and still nodes on a flipbook sprite, colour-cycling ones, and nodes spawned after the
+/// animation (on a private copy while their look shows another cell).
+///
+/// A node coming back from hidden is left out of the comparison: Bevy queues newly visible entities
+/// ahead of changed ones and yields each entity once (`iter_to_queue`, read from the Bevy 0.20.1
+/// source), so such a node takes the same place in the queue whether or not its material also changed.
+/// That is where the shared look's uv write can touch a node whose own material `main` would leave
+/// alone (it was hidden while the look moved on).
+#[test]
+fn adopted_nodes_are_re_queued_in_the_frames_mains_own_materials_change() {
+    let (mut old, mut new) = (game_app(false), game_app(true));
+    const FIXED: [&str; 6] = ["blinkGlow", "blinkGlow", "stillGlow", "puffA", "still", "blink"];
+    let fo: Vec<Entity> = FIXED.iter().map(|n| spawn_node(&mut old, n, None)).collect();
+    let fnew: Vec<Entity> = FIXED.iter().map(|n| spawn_node(&mut new, n, None)).collect();
+    for app in [&mut old, &mut new] {
+        app.init_resource::<Requeued>().add_systems(Update, spawn_late_each.after(tint_ghost)).add_systems(Last, collect_requeued);
+    }
+    let late = |app: &mut App| {
+        let mut l: Vec<(usize, Entity)> = app.world_mut().query::<(Entity, &LateIdx)>().iter(app.world()).map(|(e, i)| (i.0, e)).collect();
+        l.sort_unstable();
+        l.into_iter().map(|(_, e)| e).collect::<Vec<_>>()
+    };
+    let mut drawn_before = std::collections::HashMap::new();
+    let (mut compared, mut requeued) = (0, 0);
+    for n in 0..48 {
+        old.world_mut().resource_mut::<AnimClock>().advance_idle(0.0);
+        new.world_mut().resource_mut::<AnimClock>().advance_idle(0.0);
+        old.update();
+        new.update();
+        let (oall, nall): (Vec<Entity>, Vec<Entity>) = (fo.iter().copied().chain(late(&mut old)).collect(), fnew.iter().copied().chain(late(&mut new)).collect());
+        assert_eq!(oall.len(), nall.len());
+        for (i, (&eo, &en)) in oall.iter().zip(&nall).enumerate() {
+            let vis = old.world().get::<Visibility>(eo);
+            assert_eq!(vis, new.world().get::<Visibility>(en), "node {i} at frame {n}: visibility");
+            let drawn = vis != Some(&Visibility::Hidden);
+            if drawn && drawn_before.get(&i) == Some(&true) {
+                let (ro, rn) = (old.world().resource::<Requeued>().0.contains(&eo), new.world().resource::<Requeued>().0.contains(&en));
+                assert_eq!(rn, ro, "node {i} at frame {n}: re-queued on the adopted path, against main");
+                compared += 1;
+                requeued += usize::from(ro);
+            }
+            drawn_before.insert(i, drawn);
+        }
+    }
+    assert!(compared > 400 && requeued > 50 && requeued < compared, "{requeued} re-queued of {compared} compared");
 }

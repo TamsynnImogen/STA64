@@ -85,6 +85,13 @@ fn colour(c: [f32; 3]) -> Color {
 /// and frame, as every shown node of a look has the same uv); with parity mode (S5) its material
 /// component is marked changed whenever its own material would have been written on `main`. A node
 /// that is not adopted (an app without rendering) has its own material written, as on `main`.
+///
+/// A look's uv write re-queues every node drawn through it. For a node drawn in the frame before,
+/// that is exactly when its own uv changes on `main` (it kept the look current itself). A node coming
+/// back from hidden can find its look moved on while its own last uv equals the current one, so it is
+/// re-queued where `main` would not re-queue it; Bevy queues newly visible entities first and once
+/// (`iter_to_queue`, read from the Bevy 0.20.1 source), so its place in the queue is the same either
+/// way. `tests::adopted_nodes_are_re_queued_in_the_frames_mains_own_materials_change` holds this.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn animate(
     clock: Res<crate::clock::AnimClock>,
@@ -155,16 +162,17 @@ pub fn animate(
             }
             st.colour = c;
             st.uv = uv;
-            if parity && let Some(d) = drawn.as_mut() {
-                d.set_changed();
+            if let Some(d) = drawn.as_mut() {
+                if d.0 != st.look {
+                    // A node spawned on a private copy (another uv than its look's) joins its look
+                    // only in a frame where its own material would change on `main`, so the swap
+                    // re-queues it when `main` does. Until then the copy keeps showing the node's
+                    // uv, which has not changed; from now on the look shows it (written above).
+                    d.0 = st.look.clone();
+                } else if parity {
+                    d.set_changed();
+                }
             }
-        }
-        // A node spawned on a private copy (another uv than its look's) joins the look once shown.
-        if let Some(d) = drawn.as_mut()
-            && d.0 != st.look
-            && looks.get(&st.look).is_some_and(|l| l.base.uv_transform == st.uv)
-        {
-            d.0 = st.look.clone();
         }
     }
     if let (Some(slots), Some(mut buffers)) = (slots, buffers) {
