@@ -6,7 +6,8 @@
 //! `<root>` holds `Data/Mods/<mod>` (a folder or a `.sta`); no game install
 //! is needed for a standalone mod. Prints the detected profile, the resolved
 //! switches, the content load warnings, the playable races and their start
-//! loadouts, and every unit whose model is not found. `--profile` fails when
+//! loadouts, every unit whose model is not found and every ODF sound name
+//! (fire, select, acknowledge, attack, ambient) that resolves to nothing. `--profile` fails when
 //! another profile is detected; `--strict` also fails on any warning or
 //! missing model.
 
@@ -86,11 +87,63 @@ fn main() {
         }
     }
 
+    // Every sound an ODF names (weapon fire, unit select/acknowledge/attack/ambient)
+    // must resolve to a file or an event, as the client's sound bank finds them.
+    let bank = sta_assets::audio::SoundBank::load(&vfs);
+    let mut sounds: Vec<(String, String, Option<String>)> = Vec::new();
+    for w in db.weapons() {
+        if let Some(s) = &w.fire_sound {
+            sounds.push((w.odf.clone(), s.clone(), None));
+        }
+    }
+    for u in db.units() {
+        let race = (!u.race.is_empty()).then(|| u.race.clone());
+        for s in u.sounds.select.iter().chain(&u.sounds.ack_move).chain(&u.sounds.ack_attack).chain(&u.sounds.ambient) {
+            sounds.push((u.odf.clone(), s.clone(), race.clone()));
+        }
+    }
+    let mut silent = 0;
+    for (odf, name, race) in &sounds {
+        if bank.resolve(&vfs, name, race.as_deref(), 0).is_none() {
+            println!("missing sound: {name} ({odf})");
+            silent += 1;
+        }
+    }
+    println!("sounds: {} references, {silent} missing", sounds.len());
+    missing += silent;
+
+    // Every map's sky: a prefix needs its six faces (`<prefix>0..5`), a `.sod` its model.
+    let mut maps: Vec<String> = vfs.list("bzn").into_iter().filter(|p| p.to_ascii_lowercase().ends_with(".bzn")).collect();
+    maps.sort();
+    for p in &maps {
+        let Some(Ok(bytes)) = vfs.read(p) else { continue };
+        let Ok(map) = sta_bzn::parse(&bytes) else {
+            println!("unreadable map: {p}");
+            missing += 1;
+            continue;
+        };
+        let sky = map.background.trim();
+        if sky.is_empty() {
+            continue;
+        }
+        let ok = if sky.to_ascii_lowercase().ends_with(".sod") {
+            sta_assets::find_model(&vfs, sky).is_some()
+        } else {
+            (0..6).all(|i| sta_assets::find_texture(&vfs, &format!("{sky}{i}")).is_some())
+                || (1..=6).all(|i| sta_assets::find_texture(&vfs, &format!("{sky}.{i}")).is_some())
+        };
+        if !ok {
+            println!("missing sky: {sky} ({p})");
+            missing += 1;
+        }
+    }
+    println!("maps: {} checked for sky", maps.len());
+
     let all: Vec<_> = idx_warn.iter().chain(&warnings).chain(&race_warn).collect();
     for w in &all {
         println!("warning: {}: {}", w.file, w.message);
     }
-    println!("{} warnings, {missing} missing models", all.len());
+    println!("{} warnings, {missing} missing models or sounds", all.len());
     if strict && (!all.is_empty() || missing > 0) {
         problems += 1;
     }
