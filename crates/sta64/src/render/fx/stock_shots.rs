@@ -812,6 +812,7 @@ impl Material for StockShotMaterial {
         _key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         additive_state(descriptor);
+        super::super::post::emissive_hdr_shader_def(descriptor);
         Ok(())
     }
 }

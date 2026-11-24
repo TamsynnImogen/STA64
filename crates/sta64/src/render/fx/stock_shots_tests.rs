@@ -308,15 +308,13 @@ fn the_material_adds_exactly_and_writes_no_depth() {
 }
 
 #[test]
-fn the_shader_validates_and_adds_no_alpha_or_brightness() {
+fn the_shader_preserves_stock_colour_in_ldr_and_adds_hdr_energy_without_alpha() {
     let src = include_str!("stock_shots.wesl");
     super::super::validate_wgsl(src);
-    assert!(src.contains("vec4<f32>(texel.rgb * in.color.rgb * k.tint.rgb, 0.0)"), "the output is texture times vertex colour times the tint, alpha 0");
-}
-
-#[test]
-fn stock_post_fx_draws_no_bloom_by_default() {
-    assert!(!crate::render::post::PostFx::default().bloom, "the shots would be bloomed with it");
+    super::super::validate_wgsl(&src.replace("constants::STA64_HDR_EMISSION", "0"));
+    assert!(src.contains("let emission = texel.rgb * in.color.rgb * k.tint.rgb;"));
+    assert!(src.contains("select(1.0, 2.0, constants::STA64_HDR_EMISSION != 0)"));
+    assert!(src.contains("vec4<f32>(emission * gain, 0.0)"));
 }
 
 // ---------------------------------------------------------------------------------------------
