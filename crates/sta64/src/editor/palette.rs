@@ -3,11 +3,12 @@
 use sta_content::{OdfIndex, Profile};
 use sta_vfs::Vfs;
 
-const ENTRY_COUNT: usize = 12;
+pub(super) const ENTRY_COUNT: usize = 12;
 const MAX_DEPTH: usize = 32;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
+    pub slot: usize,
     pub label: String,
     pub kind: EntryKind,
 }
@@ -42,15 +43,15 @@ impl Palette {
         };
         let mut root = Vec::new();
         let mut active = Vec::new();
-        for slot in 1..=ENTRY_COUNT {
-            let Some(name) = menu.get_str(&format!("menuName{slot}")) else {
+        for slot in 0..ENTRY_COUNT {
+            let Some(name) = menu.get_str(&format!("menuName{}", slot + 1)) else {
                 continue;
             };
             let Some(file) = odf_file(name) else { continue };
             let Some((label, entries)) = load_page(&file, 0, &mut active, &load) else {
                 continue;
             };
-            root.push(Entry { label, kind: EntryKind::Branch(entries) });
+            root.push(Entry { slot, label, kind: EntryKind::Branch(entries) });
         }
         Self { root }
     }
@@ -72,25 +73,28 @@ fn load_page(
         let stem = file.strip_suffix(".odf").unwrap_or(file);
         let title = page.get_str("menuTitle").map(str::trim).filter(|s| !s.is_empty())
             .unwrap_or(stem).to_owned();
-        let build_items: Vec<String> = (1..=ENTRY_COUNT)
-            .filter_map(|slot| page.get_str(&format!("buildItem{slot}")))
-            .filter_map(odf_file)
+        let build_items: Vec<_> = (0..ENTRY_COUNT)
+            .filter_map(|slot| {
+                let file = odf_file(page.get_str(&format!("buildItem{}", slot + 1))?)?;
+                Some((slot, file))
+            })
             .collect();
         if !build_items.is_empty() {
             let mut entries = Vec::new();
-            for child_file in build_items {
+            for (slot, child_file) in build_items {
                 if let Some((label, children)) = load_page(&child_file, depth + 1, active, load) {
-                    entries.push(Entry { label, kind: EntryKind::Branch(children) });
+                    entries.push(Entry { slot, label, kind: EntryKind::Branch(children) });
                 }
             }
             return Some((title, entries));
         }
 
         let neutral = page.get_bool("forceToNeutral").unwrap_or(false);
-        let entries = (1..=ENTRY_COUNT)
-            .filter_map(|slot| page.get_str(&format!("item{slot}")))
-            .filter_map(odf_stem)
-            .map(|odf| Entry { label: odf.clone(), kind: EntryKind::Leaf { odf, neutral } })
+        let entries = (0..ENTRY_COUNT)
+            .filter_map(|slot| {
+                let odf = odf_stem(page.get_str(&format!("item{}", slot + 1))?)?;
+                Some(Entry { slot, label: odf.clone(), kind: EntryKind::Leaf { odf, neutral } })
+            })
             .collect();
         Some((title, entries))
     })();
@@ -144,23 +148,27 @@ mod tests {
     #[test]
     fn loads_nested_menu_and_stops_cycles() {
         let install = Install::new();
-        install.file("editmenu.odf", "menuName1 = e_root.odf\n");
-        install.file("e_root.odf", "menuTitle = Root\nbuildItem1 = e_group.odf\n");
+        install.file("editmenu.odf", "menuName3 = e_root.odf\n");
+        install.file("e_root.odf", "menuTitle = Root\nbuildItem2 = e_group.odf\n");
         install.file("e_group.odf", "menuTitle = Group\nbuildItem1 = e_leaf.odf\nbuildItem2 = e_root.odf\n");
-        install.file("e_leaf.odf", "menuTitle = Objects\nforceToNeutral = 1\nitem1 = Ships/Scout.ODF\nitem2 = cruiser\n");
+        install.file("e_leaf.odf", "menuTitle = Objects\nforceToNeutral = 1\nitem5 = Ships/Scout.ODF\nitem12 = cruiser\n");
         let mut vfs = Vfs::default();
         vfs.push_dir("test".into(), install.0.clone()).unwrap();
 
         let palette = Palette::load(&vfs);
         assert_eq!(palette.root.len(), 1);
+        assert_eq!(palette.root[0].slot, 2);
         assert_eq!(palette.root[0].label, "Root");
         let EntryKind::Branch(group) = &palette.root[0].kind else { panic!("root is a branch") };
         assert_eq!(group.len(), 1, "the cycle back to e_root is skipped");
+        assert_eq!(group[0].slot, 1);
         assert_eq!(group[0].label, "Group");
         let EntryKind::Branch(objects) = &group[0].kind else { panic!("group is a branch") };
         assert_eq!(objects[0].label, "Objects");
         let EntryKind::Branch(leaves) = &objects[0].kind else { panic!("object page is a branch") };
         assert_eq!(leaves[0].kind, EntryKind::Leaf { odf: "Scout".into(), neutral: true });
+        assert_eq!(leaves[0].slot, 4);
         assert_eq!(leaves[1].kind, EntryKind::Leaf { odf: "cruiser".into(), neutral: true });
+        assert_eq!(leaves[1].slot, 11);
     }
 }

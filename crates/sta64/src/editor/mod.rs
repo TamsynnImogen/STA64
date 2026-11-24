@@ -8,7 +8,7 @@ mod panel;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use bevy::prelude::*;
+use bevy::{input::InputSystems, prelude::*};
 use sta_sim::source::PlacementEdit;
 use sta_sim::{EntityId, Vec3 as SimVec3};
 
@@ -57,10 +57,25 @@ pub(crate) struct Editing {
     previous_fog: bool,
     palette: Palette,
     directory: Vec<usize>,
-    page: usize,
-    placing: Option<(String, bool)>,
-    drag_origin: Option<Vec2>,
+    shortcut: Option<Shortcut>,
+    drag_origin: Option<(EntityId, Vec2)>,
+    last_click: Option<(EntityId, Vec2, f64)>,
+    inspected: Option<EntityId>,
     status: String,
+}
+
+// Armada II and Fleet Ops use the authored menu slot at every level (static).
+const PALETTE_KEYS: [KeyCode; palette::ENTRY_COUNT] = [
+    KeyCode::F1, KeyCode::F2, KeyCode::F3, KeyCode::F4, KeyCode::F5, KeyCode::F6,
+    KeyCode::F7, KeyCode::F8, KeyCode::F9, KeyCode::F10, KeyCode::F11, KeyCode::F12,
+];
+const CLICK_RADIUS: f32 = 6.0;
+const DOUBLE_CLICK_SECONDS: f64 = 0.4;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shortcut {
+    Entry(usize),
+    Back,
 }
 
 pub(crate) fn play_mode(editing: Option<Res<Editing>>) -> bool {
@@ -119,6 +134,8 @@ impl Plugin for EditorPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<OpenMap>()
             .add_systems(OnEnter(AppState::FrontEnd), clear)
+            .add_systems(PreUpdate, palette_shortcut.after(InputSystems)
+                .run_if(resource_exists::<Editing>).run_if(in_state(AppState::InGame)))
             .add_systems(Update, open_map.in_set(GameSet::Ui).after(crate::frontend::screens::on_buttons).run_if(in_state(AppState::FrontEnd)))
             .add_systems(Update, load_map.in_set(GameSet::Ui).after(crate::map::MapRebuild).run_if(in_state(AppState::Loading)))
             .add_systems(Update, toggle_key.in_set(GameSet::Input).before(crate::input::select::select).run_if(in_state(AppState::InGame))
@@ -266,6 +283,29 @@ fn editor_chord(keys: &ButtonInput<KeyCode>, key: KeyCode) -> bool {
         && !keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight, KeyCode::ShiftLeft, KeyCode::ShiftRight])
 }
 
+fn palette_shortcut(mut keys: ResMut<ButtonInput<KeyCode>>, mut editing: ResMut<Editing>) {
+    let plain_keys = !keys.any_pressed([
+        KeyCode::ControlLeft, KeyCode::ControlRight, KeyCode::AltLeft, KeyCode::AltRight,
+        KeyCode::SuperLeft, KeyCode::SuperRight, KeyCode::ShiftLeft, KeyCode::ShiftRight,
+    ]);
+    let mut shortcut = None;
+    if plain_keys {
+        // Reserve bare editor keys before the game's handlers see them
+        // (including F10 to leave the match and Tab to toggle strategic icons).
+        if keys.clear_just_pressed(KeyCode::Tab) {
+            shortcut = Some(Shortcut::Back);
+        }
+        for (slot, key) in PALETTE_KEYS.into_iter().enumerate() {
+            if keys.clear_just_pressed(key) && shortcut.is_none() {
+                shortcut = Some(Shortcut::Entry(slot));
+            }
+        }
+    }
+    if editing.shortcut != shortcut {
+        editing.shortcut = shortcut;
+    }
+}
+
 fn editable(content: &sta_content::ContentDb, key: sta_sim::ContentKey) -> bool {
     use sta_sim::world::EntityKind;
     content.unit(key).is_some_and(|def| {
@@ -297,19 +337,28 @@ impl Editing {
         entries
     }
 
-    fn select_entry(&mut self, index: usize) {
+    fn select_entry(&mut self, index: usize) -> Option<(String, bool)> {
         match self.entries().get(index).map(|e| &e.kind) {
             Some(EntryKind::Branch(_)) => {
                 self.directory.push(index);
-                self.page = 0;
-                self.placing = None;
-            }
-            Some(EntryKind::Leaf { odf, neutral }) => {
-                self.placing = Some((odf.clone(), *neutral));
                 self.status.clear();
+                None
             }
-            None => {}
+            Some(EntryKind::Leaf { odf, neutral }) => Some((odf.clone(), *neutral)),
+            None => None,
         }
+    }
+
+    fn finish_click(&mut self, id: EntityId, cursor: Vec2, now: f64) -> bool {
+        if self.last_click.is_some_and(|(previous, at, time)| {
+            id == previous && cursor.distance(at) <= CLICK_RADIUS && now - time <= DOUBLE_CLICK_SECONDS
+        }) {
+            self.last_click = None;
+            self.inspected = Some(id);
+            return true;
+        }
+        self.last_click = Some((id, cursor, now));
+        false
     }
 }
 
@@ -317,6 +366,7 @@ impl Editing {
 fn tools(
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
+    time: Res<Time<Real>>,
     aim: Res<Aim>,
     targets: Targetable,
     content: Option<Res<ContentRes>>,
@@ -337,21 +387,74 @@ fn tools(
     let mut rotate = 0;
     let mut delete = false;
     let mut save = editor_chord(&keys, KeyCode::KeyS);
+    let back_key = editing.shortcut == Some(Shortcut::Back);
+    let mut actions = clicked.read().filter_map(|ButtonClicked(e)| actions.get(*e).ok());
+    if let Some(id) = editing.inspected {
+        if back_key || actions.any(|act| matches!(act, panel::Act::CloseStats))
+            || link.real_curr().unit(id).is_none()
+        {
+            editing.inspected = None;
+        }
+        return;
+    }
+
     let allow_topology = document.as_ref().is_none_or(|d| d.can_change_objects());
-    for action in clicked.read().filter_map(|ButtonClicked(e)| actions.get(*e).ok()) {
+    let over_panel = panel.iter().any(|pointer| pointer.cursor_over());
+    let world_aim = aim.0.filter(|_| !over_panel);
+    let mut back = back_key;
+    let mut clicked_entry = None;
+    for action in actions {
         match *action {
-            panel::Act::Entry(i) => editing.select_entry(i),
-            panel::Act::Back => {
-                editing.directory.pop();
-                editing.page = 0;
-                editing.placing = None;
-            }
-            panel::Act::Page(page) => editing.page = page,
+            panel::Act::Entry(i) => clicked_entry = Some(i),
+            panel::Act::Back => back = true,
             panel::Act::Rotate => rotate = 1,
             panel::Act::Delete => delete = true,
             panel::Act::Save => save = true,
             panel::Act::Exit => { leave.write(crate::game::flow::LeaveMatch); }
-            panel::Act::Play => {}
+            panel::Act::Play | panel::Act::CloseStats => {}
+        }
+    }
+    if back {
+        editing.directory.pop();
+        editing.status.clear();
+    } else if allow_topology {
+        let keyed_entry = editing.entries().iter().position(|entry| {
+            editing.shortcut == Some(Shortcut::Entry(entry.slot))
+        });
+        if let Some(index) = keyed_entry.or(clicked_entry) {
+            editing.drag_origin = None;
+            editing.last_click = None;
+            if let Some((odf, neutral)) = editing.select_entry(index) {
+                if keyed_entry.is_none() {
+                    let slot = editing.entries()[index].slot + 1;
+                    editing.status = format!("Point at the map and press F{slot}");
+                    return;
+                }
+                let owner = if neutral { sta_sim::world::NEUTRAL } else { link.player() };
+                let team = if neutral { 0 } else { i32::from(owner.0) + 1 };
+                let placed = content.0.key(&odf).filter(|&key| editable(&content.0, key))
+                    .zip(world_aim.and_then(|aim| ground(aim, 0.0, bounds.as_deref())))
+                    .and_then(|(def, at)| {
+                        let edit = PlacementEdit::Place { def, owner, at };
+                        let Some(doc) = &mut document else { return link.edit_placement(edit) };
+                        let ids = ids.as_mut()?;
+                        let index = doc.push(&odf, team, at.to_f32(), [0.0, 1.0])?;
+                        let Some(id) = link.edit_placement(edit) else {
+                            doc.remove(index);
+                            return None;
+                        };
+                        ids.0.insert(id, index);
+                        Some(id)
+                    });
+                if let Some(id) = placed {
+                    selection.0 = vec![id];
+                    changed.write(SelectionChanged);
+                    editing.status = format!("Placed {odf}");
+                } else {
+                    editing.status = format!("Could not place {odf} here");
+                }
+                return;
+            }
         }
     }
     if save && let Some(doc) = &document {
@@ -368,48 +471,42 @@ fn tools(
         rotate = -1;
     }
     delete |= keys.just_pressed(KeyCode::Delete);
-    let over_panel = panel.iter().any(|pointer| pointer.cursor_over());
-    let right = !over_panel && buttons.just_pressed(MouseButton::Right);
-    if right && editing.placing.is_some() {
-        editing.placing = None;
-        return;
-    }
-
     let index_for = |id| ids.as_ref().and_then(|ids| ids.0.get(&id).copied())
         .filter(|&index| document.as_ref().is_some_and(|doc| doc.object(index).is_some()));
-    if let Some(aim) = aim.0.filter(|_| !over_panel) && buttons.just_pressed(MouseButton::Left) {
-        if let Some((odf, neutral)) = editing.placing.clone() {
-            if allow_topology {
-                let owner = if neutral { sta_sim::world::NEUTRAL } else { link.player() };
-                let team = if neutral { 0 } else { i32::from(owner.0) + 1 };
-                let placed = content.0.key(&odf).filter(|&key| editable(&content.0, key))
-                    .zip(ground(aim, 0.0, bounds.as_deref()))
-                    .and_then(|(def, at)| link.edit_placement(PlacementEdit::Place { def, owner, at }).map(|id| (id, at)));
-                if let Some((id, at)) = placed {
-                    if let (Some(doc), Some(ids)) = (&mut document, &mut ids)
-                        && let Some(index) = doc.push(&odf, team, at.to_f32(), [0.0, 1.0])
-                    {
-                        ids.0.insert(id, index);
-                    }
-                    selection.0 = vec![id];
-                    changed.write(SelectionChanged);
-                    editing.status = format!("Placed {odf}");
-                } else {
-                    editing.status = format!("Could not place {odf} here");
-                }
-            }
-            return;
+    let right = buttons.just_pressed(MouseButton::Right);
+    if right {
+        editing.last_click = None;
+    }
+    if buttons.just_pressed(MouseButton::Left) {
+        editing.drag_origin = None;
+        if let Some(aim) = world_aim {
+            let target = unit_under_where(aim.cursor, aim.ray, &targets, |id| {
+                link.real_curr().unit(id).is_some_and(|unit| {
+                    index_for(id).is_some() || (allow_topology && editable(&content.0, unit.def))
+                })
+            });
+            selection.0 = target.into_iter().collect();
+            changed.write(SelectionChanged);
+            editing.drag_origin = target.map(|id| (id, aim.cursor));
+            editing.status.clear();
         }
-        let target = unit_under_where(aim.cursor, aim.ray, &targets, |id| {
-            (allow_topology || index_for(id).is_some()) && link.real_curr().unit(id).is_some_and(|unit| editable(&content.0, unit.def))
-        });
-        selection.0 = target.into_iter().collect();
-        changed.write(SelectionChanged);
-        editing.drag_origin = target.map(|_| aim.cursor);
-        editing.status.clear();
+        if editing.drag_origin.is_none() {
+            editing.last_click = None;
+        }
     }
 
-    let drag = if buttons.just_released(MouseButton::Left) { editing.drag_origin.take() } else { None };
+    let mut dragged = false;
+    if buttons.just_released(MouseButton::Left) && let Some((id, start)) = editing.drag_origin.take() {
+        if let Some(aim) = world_aim.filter(|_| selection.0.first() == Some(&id)) {
+            dragged = start.distance(aim.cursor) > CLICK_RADIUS;
+            if !dragged && editing.finish_click(id, aim.cursor, time.elapsed_secs_f64()) {
+                return;
+            }
+        }
+        if dragged || world_aim.is_none() {
+            editing.last_click = None;
+        }
+    }
     let Some(id) = selection.0.first().copied() else { return };
     let Some(unit) = link.real_curr().unit(id).cloned() else {
         selection.0.clear();
@@ -417,7 +514,7 @@ fn tools(
         return;
     };
     let index = index_for(id);
-    if !allow_topology && index.is_none() {
+    if !editable(&content.0, unit.def) || (!allow_topology && index.is_none()) {
         return;
     }
 
@@ -434,7 +531,7 @@ fn tools(
         return;
     }
 
-    let moved = aim.0.filter(|a| !over_panel && (right || drag.is_some_and(|start| start.distance(a.cursor) > 6.0)))
+    let moved = world_aim.filter(|_| right || dragged)
         .and_then(|a| ground(a, unit.pos.y.to_f32(), bounds.as_deref()));
     if moved.is_none() && rotate == 0 {
         return;
