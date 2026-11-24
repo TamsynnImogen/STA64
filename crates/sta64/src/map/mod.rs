@@ -596,8 +596,8 @@ impl Plugin for MapPlugin {
                     crate::render::stock::nebula::switch,
                     radar_click.run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free),
                     // Under the in-game menu (UI-34) the camera stands still.
-                    pan_keys.run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free),
-                    crate::viewer::orbit_camera.run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free),
+                    pan_keys.run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free).run_if(crate::editor::canvas_input_free),
+                    crate::viewer::orbit_camera.run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free).run_if(crate::editor::canvas_input_free),
                     radar_camera,
                     spin,
                     crate::render::spin::turn,
@@ -982,7 +982,7 @@ fn rebuild(
         }
         None => None,
     };
-    let SimSide { setup, sim, warnings: sim_warnings, controllers, skirmish, mission } = match (side, mission_launch.as_deref(), instant.as_deref()) {
+    let SimSide { setup, mut sim, warnings: sim_warnings, controllers, skirmish, mission } = match (side, mission_launch.as_deref(), instant.as_deref()) {
         (Some(side), _, _) => side,
         (None, Some(launch), _) => build_mission_sim(&map, &name, &content, &index, &vfs.0, &races, launch),
         (None, None, Some(active)) => {
@@ -1030,7 +1030,7 @@ fn rebuild(
     let map_def = setup.map.clone();
     // The names this map gives its objects, joined to the sim's ids by label (host-only; the
     // HUD reads them). A map without names gives an empty table.
-    commands.insert_resource(crate::ui::hud::instance_names::InstanceNames::of(&map, sim.labels.iter().map(|(id, l)| (id, l.as_str()))));
+    let mut instance_names = crate::ui::hud::instance_names::InstanceNames::of(&map, sim.labels.iter().map(|(id, l)| (id, l.as_str())));
     let mut placed = Placed::of(&sim);
     if authoring || (net_match.is_none() && (instant.is_some() || is_mission || is_match)) {
         let mut source_placements = Placed::of(&sim);
@@ -1041,6 +1041,10 @@ fn rebuild(
         }).collect();
         match crate::editor::Document::new(path, bytes, map.clone()) {
             Ok(document) => {
+                if authoring && let Err(e) = document.restore_properties(&mut sim, &ids, &mut instance_names, content.features().directional_shields) {
+                    browser.info = format!("{header}\n{e}");
+                    return;
+                }
                 commands.insert_resource(document);
                 commands.insert_resource(crate::editor::AuthoredIds(ids));
             }
@@ -1051,6 +1055,7 @@ fn rebuild(
             Err(e) => warn!("map editor: {e}"),
         }
     }
+    commands.insert_resource(instance_names);
     commands.insert_resource(ContentRes(content.clone()));
     // The races' city textures, for the colonies' lights (RND-12).
     commands.insert_resource(crate::render::planet::CityRaces::load(&vfs.0, &index, &races));

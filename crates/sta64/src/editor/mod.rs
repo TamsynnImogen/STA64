@@ -2,6 +2,9 @@
 //! when switching between editing and normal play.
 
 mod document;
+mod history;
+mod inspector;
+mod map_settings;
 mod palette;
 mod panel;
 
@@ -26,7 +29,7 @@ use crate::map::{MapBrowser, MapSeat};
 use crate::sim_link::{CommandQueue, ContentRes, Selection, SelectionChanged, SimLink};
 use crate::ui::hud::HudState;
 use crate::ui::notices::{Notice, Severity};
-use crate::ui::theme::ButtonClicked;
+use crate::ui::theme::{ButtonClicked, TextField};
 use crate::viewer::Mounted;
 
 #[derive(Message)]
@@ -45,7 +48,7 @@ impl EditorLoad {
     }
 }
 
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub(crate) struct AuthoredIds(pub BTreeMap<EntityId, usize>);
 
 /// The map picker opens authored placements for sandbox test play.
@@ -61,6 +64,10 @@ pub(crate) struct Editing {
     drag_origin: Option<(EntityId, Vec2)>,
     last_click: Option<(EntityId, Vec2, f64)>,
     inspected: Option<EntityId>,
+    inspector_error: String,
+    map_settings: bool,
+    history: history::History,
+    clipboard: Option<(String, sta_sim::PlayerId)>,
     status: String,
 }
 
@@ -76,10 +83,15 @@ const DOUBLE_CLICK_SECONDS: f64 = 0.4;
 enum Shortcut {
     Entry(usize),
     Back,
+    Cancel,
 }
 
 pub(crate) fn play_mode(editing: Option<Res<Editing>>) -> bool {
     editing.is_none()
+}
+
+pub(crate) fn canvas_input_free(editing: Option<Res<Editing>>) -> bool {
+    editing.is_none_or(|editing| editing.inspected.is_none() && !editing.map_settings)
 }
 
 // Copies are editable from this picker regardless of the current mount. Keep
@@ -110,15 +122,20 @@ pub(crate) fn map_stem(path: &str) -> Option<&str> {
     file.file_stem()?.to_str()
 }
 
+fn saved_map_file(path: &str) -> Result<PathBuf, String> {
+    let name = path.strip_prefix("saved:").ok_or("Invalid saved map name")?;
+    if Path::new(name).file_name().and_then(|file| file.to_str()) != Some(name) || name.contains(['/', '\\', ':']) || !supported_name(name) {
+        return Err("Invalid saved map name".into());
+    }
+    let folder = save_folder().ok_or("The user data directory is unavailable")?;
+    Ok(folder.join(name))
+}
+
 pub(crate) fn read_map(vfs: &sta_vfs::Vfs, path: &str) -> Result<Vec<u8>, String> {
-    if let Some(name) = path.strip_prefix("saved:") {
-        if Path::new(name).file_name().and_then(|file| file.to_str()) != Some(name) || name.contains(['/', '\\', ':']) || !supported_name(name) {
-            return Err("Invalid saved map name".into());
-        }
-        let folder = save_folder().ok_or("The user data directory is unavailable")?;
-        let file = folder.join(name);
+    if path.starts_with("saved:") {
+        let file = saved_map_file(path)?;
         if !file.symlink_metadata().is_ok_and(|meta| meta.file_type().is_file()) {
-            return Err(format!("{name} is not a saved map"));
+            return Err(format!("{path} is not a saved map"));
         }
         return std::fs::read(file).map_err(|e| e.to_string());
     }
@@ -145,7 +162,7 @@ impl Plugin for EditorPlugin {
             .add_systems(Update, tools.in_set(GameSet::Input).after(toggle_key).after(crate::input::orders::aim)
                 .run_if(resource_exists::<Editing>).run_if(in_state(AppState::InGame))
                 .run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free))
-            .add_systems(Update, panel::draw.in_set(GameSet::Ui));
+            .add_systems(Update, (panel::draw, panel::inspector_error).chain().in_set(GameSet::Ui));
     }
 }
 
@@ -292,8 +309,12 @@ fn palette_shortcut(mut keys: ResMut<ButtonInput<KeyCode>>, mut editing: ResMut<
     if plain_keys {
         // Reserve bare editor keys before the game's handlers see them
         // (including F10 to leave the match and Tab to toggle strategic icons).
-        if keys.clear_just_pressed(KeyCode::Tab) {
+        let dialog = editing.inspected.is_some() || editing.map_settings;
+        if keys.clear_just_pressed(KeyCode::Tab) && !dialog {
             shortcut = Some(Shortcut::Back);
+        }
+        if dialog && keys.clear_just_pressed(KeyCode::Escape) {
+            shortcut = Some(Shortcut::Cancel);
         }
         for (slot, key) in PALETTE_KEYS.into_iter().enumerate() {
             if keys.clear_just_pressed(key) && shortcut.is_none() {
@@ -307,13 +328,7 @@ fn palette_shortcut(mut keys: ResMut<ButtonInput<KeyCode>>, mut editing: ResMut<
 }
 
 fn editable(content: &sta_content::ContentDb, key: sta_sim::ContentKey) -> bool {
-    use sta_sim::world::EntityKind;
-    content.unit(key).is_some_and(|def| {
-        matches!(EntityKind::of_def(def), EntityKind::Craft | EntityKind::Station)
-            && def.a1_officer_upgrade_gain.is_none()
-            && def.resource.is_none()
-            && def.raw.i64("hidden").unwrap_or(0) == 0
-    })
+    content.unit(key).is_some_and(sta_sim::source::editable_placement)
 }
 
 fn ground(aim: crate::input::select::AimState, y: f32, bounds: Option<&crate::ui::hud::ghost::PlacementBounds>) -> Option<SimVec3> {
@@ -355,6 +370,7 @@ impl Editing {
         }) {
             self.last_click = None;
             self.inspected = Some(id);
+            self.inspector_error.clear();
             return true;
         }
         self.last_click = Some((id, cursor, now));
@@ -362,11 +378,19 @@ impl Editing {
     }
 }
 
+type EditorInputs<'w> = (
+    Res<'w, ButtonInput<KeyCode>>,
+    Res<'w, ButtonInput<MouseButton>>,
+    Res<'w, Time<Real>>,
+);
+type EditorFields<'w, 's> = (
+    Query<'w, 's, (&'static panel::InspectorField, &'static TextField)>,
+    Query<'w, 's, (&'static map_settings::Field, &'static TextField)>,
+);
+
 #[allow(clippy::too_many_arguments)]
 fn tools(
-    keys: Res<ButtonInput<KeyCode>>,
-    buttons: Res<ButtonInput<MouseButton>>,
-    time: Res<Time<Real>>,
+    (keys, buttons, time): EditorInputs<'_>,
     aim: Res<Aim>,
     targets: Targetable,
     content: Option<Res<ContentRes>>,
@@ -377,6 +401,8 @@ fn tools(
     mut editing: ResMut<Editing>,
     mut clicked: MessageReader<ButtonClicked>,
     actions: Query<&panel::Act>,
+    (fields, map_fields): EditorFields<'_, '_>,
+    mut names: Option<ResMut<crate::ui::hud::instance_names::InstanceNames>>,
     mut selection: ResMut<Selection>,
     mut changed: MessageWriter<SelectionChanged>,
     mut leave: MessageWriter<crate::game::flow::LeaveMatch>,
@@ -389,16 +415,70 @@ fn tools(
     let mut save = editor_chord(&keys, KeyCode::KeyS);
     let back_key = editing.shortcut == Some(Shortcut::Back);
     let mut actions = clicked.read().filter_map(|ButtonClicked(e)| actions.get(*e).ok());
+    if editing.map_settings {
+        let action = actions.find(|act| matches!(act, panel::Act::CloseStats | panel::Act::ApplyMap));
+        if editing.shortcut == Some(Shortcut::Cancel) || matches!(action, Some(panel::Act::CloseStats)) {
+            editing.map_settings = false;
+        } else if matches!(action, Some(panel::Act::ApplyMap)) && let Some(doc) = document.as_deref_mut() {
+            let before = history::Checkpoint::take(&mut link, Some(doc), ids.as_deref(), names.as_deref(), &selection);
+            match map_settings::apply(doc, &map_fields) {
+                Ok(()) => {
+                    editing.history.record(before);
+                    editing.map_settings = false;
+                    editing.status = "Map updated. Save and reopen to preview.".into();
+                }
+                Err(error) => editing.inspector_error = error,
+            }
+        }
+        return;
+    }
     if let Some(id) = editing.inspected {
-        if back_key || actions.any(|act| matches!(act, panel::Act::CloseStats))
-            || link.real_curr().unit(id).is_none()
-        {
+        let action = actions.find(|act| matches!(act,
+            panel::Act::CloseStats | panel::Act::ApplyStats | panel::Act::RestoreStats));
+        if editing.shortcut == Some(Shortcut::Cancel) || matches!(action, Some(panel::Act::CloseStats))
+            || link.real_curr().unit(id).is_none() {
             editing.inspected = None;
+        } else if let Some(action) = action {
+            let restore = matches!(action, panel::Act::RestoreStats);
+            let inputs = if restore { BTreeMap::new() } else {
+                fields.iter().map(|(field, text)| (field.0, text.text.as_str())).collect()
+            };
+            let before = history::Checkpoint::take(&mut link, document.as_deref(), ids.as_deref(), names.as_deref(), &selection);
+            let result = apply_inspector(id, &mut link, &content, bounds.as_deref(), document.as_deref_mut(),
+                ids.as_deref_mut(), names.as_deref_mut(), &inputs, restore);
+            match result {
+                Ok(updated) => {
+                    if updated {
+                        editing.history.record(before);
+                        editing.status = if restore { "Class values restored".into() } else { "Object updated".into() };
+                        changed.write(SelectionChanged);
+                    }
+                    editing.inspected = None;
+                }
+                Err(error) => editing.inspector_error = error,
+            }
         }
         return;
     }
 
     let allow_topology = document.as_ref().is_none_or(|d| d.can_change_objects());
+    let undo = editor_chord(&keys, KeyCode::KeyZ);
+    let redo = editor_chord(&keys, KeyCode::KeyY);
+    if undo || redo {
+        let result = editing.history.restore(redo, &mut link, &content, document.as_deref_mut(),
+            ids.as_deref_mut(), names.as_deref_mut(), &mut selection);
+        editing.status = match result {
+            Ok(true) => {
+                editing.last_click = None;
+                editing.drag_origin = None;
+                changed.write(SelectionChanged);
+                if redo { "Edit redone".into() } else { "Edit undone".into() }
+            }
+            Ok(false) => if redo { "Nothing to redo".into() } else { "Nothing to undo".into() },
+            Err(error) => error,
+        };
+        return;
+    }
     let over_panel = panel.iter().any(|pointer| pointer.cursor_over());
     let world_aim = aim.0.filter(|_| !over_panel);
     let mut back = back_key;
@@ -411,12 +491,25 @@ fn tools(
             panel::Act::Delete => delete = true,
             panel::Act::Save => save = true,
             panel::Act::Exit => { leave.write(crate::game::flow::LeaveMatch); }
-            panel::Act::Play | panel::Act::CloseStats => {}
+            panel::Act::MapSettings if document.as_ref().is_some_and(|d| d.can_change_objects()) => {
+                editing.map_settings = true;
+                editing.inspector_error.clear();
+                return;
+            }
+            panel::Act::Play | panel::Act::CloseStats | panel::Act::ApplyStats
+                | panel::Act::RestoreStats | panel::Act::MapSettings | panel::Act::ApplyMap => {}
         }
     }
+    let mut product = None;
     if back {
         editing.directory.pop();
         editing.status.clear();
+    } else if allow_topology && editor_chord(&keys, KeyCode::KeyV) {
+        product = editing.clipboard.clone();
+        if product.is_none() {
+            editing.status = "Copy an object before pasting".into();
+            return;
+        }
     } else if allow_topology {
         let keyed_entry = editing.entries().iter().position(|entry| {
             editing.shortcut == Some(Shortcut::Entry(entry.slot))
@@ -431,31 +524,38 @@ fn tools(
                     return;
                 }
                 let owner = if neutral { sta_sim::world::NEUTRAL } else { link.player() };
-                let team = if neutral { 0 } else { i32::from(owner.0) + 1 };
-                let placed = content.0.key(&odf).filter(|&key| editable(&content.0, key))
-                    .zip(world_aim.and_then(|aim| ground(aim, 0.0, bounds.as_deref())))
-                    .and_then(|(def, at)| {
-                        let edit = PlacementEdit::Place { def, owner, at };
-                        let Some(doc) = &mut document else { return link.edit_placement(edit) };
-                        let ids = ids.as_mut()?;
-                        let index = doc.push(&odf, team, at.to_f32(), [0.0, 1.0])?;
-                        let Some(id) = link.edit_placement(edit) else {
-                            doc.remove(index);
-                            return None;
-                        };
-                        ids.0.insert(id, index);
-                        Some(id)
-                    });
-                if let Some(id) = placed {
-                    selection.0 = vec![id];
-                    changed.write(SelectionChanged);
-                    editing.status = format!("Placed {odf}");
-                } else {
-                    editing.status = format!("Could not place {odf} here");
-                }
-                return;
+                product = Some((odf, owner));
             }
         }
+    }
+    if let Some((odf, owner)) = product {
+        editing.drag_origin = None;
+        editing.last_click = None;
+        let team = if owner == sta_sim::world::NEUTRAL { 0 } else { i32::from(owner.0) + 1 };
+        let before = history::Checkpoint::take(&mut link, document.as_deref(), ids.as_deref(), names.as_deref(), &selection);
+        let placed = content.0.key(&odf).filter(|&key| editable(&content.0, key))
+            .zip(world_aim.and_then(|aim| ground(aim, 0.0, bounds.as_deref())))
+            .and_then(|(def, at)| {
+                let edit = PlacementEdit::Place { def, owner, at };
+                let Some(doc) = &mut document else { return link.edit_placement(edit) };
+                let ids = ids.as_mut()?;
+                let index = doc.push(&odf, team, at.to_f32(), [0.0, 1.0])?;
+                let Some(id) = link.edit_placement(edit) else {
+                    doc.remove(index);
+                    return None;
+                };
+                ids.0.insert(id, index);
+                Some(id)
+            });
+        if let Some(id) = placed {
+            editing.history.record(before);
+            selection.0 = vec![id];
+            changed.write(SelectionChanged);
+            editing.status = format!("Placed {odf}");
+        } else {
+            editing.status = format!("Could not place {odf} here");
+        }
+        return;
     }
     if save && let Some(doc) = &document {
         let saved = save_folder().ok_or_else(|| "The user data directory is unavailable".to_owned())
@@ -518,15 +618,25 @@ fn tools(
         return;
     }
 
-    if delete && allow_topology {
+    let cut = allow_topology && editor_chord(&keys, KeyCode::KeyX);
+    if (cut || editor_chord(&keys, KeyCode::KeyC)) && let Some(odf) = content.0.name(unit.def) {
+        editing.clipboard = Some((odf.to_owned(), unit.owner));
+        editing.status = format!("Copied {odf}");
+        if !cut {
+            return;
+        }
+    }
+    if (delete || cut) && allow_topology {
+        let before = history::Checkpoint::take(&mut link, document.as_deref(), ids.as_deref(), names.as_deref(), &selection);
         if link.edit_placement(PlacementEdit::Remove(id)).is_some() {
             if let (Some(doc), Some(index), Some(ids)) = (&mut document, index, &mut ids) {
                 doc.remove(index);
                 ids.0.remove(&id);
             }
+            editing.history.record(before);
             selection.0.clear();
             changed.write(SelectionChanged);
-            editing.status = "Object deleted".into();
+            editing.status = if cut { "Object cut".into() } else { "Object deleted".into() };
         }
         return;
     }
@@ -536,6 +646,7 @@ fn tools(
     if moved.is_none() && rotate == 0 {
         return;
     }
+    let before = history::Checkpoint::take(&mut link, document.as_deref(), ids.as_deref(), names.as_deref(), &selection);
     if link.edit_placement(PlacementEdit::Transform { id, at: moved.unwrap_or(unit.pos), quarter_turns: rotate }).is_some() {
         if let (Some(doc), Some(ids)) = (&mut document, &mut ids) {
             if let Some(index) = index {
@@ -556,6 +667,48 @@ fn tools(
                 }
             }
         }
+        editing.history.record(before);
         editing.status = if moved.is_some() { "Object moved" } else { "Object rotated" }.into();
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_inspector(
+    id: EntityId,
+    link: &mut SimLink,
+    content: &ContentRes,
+    bounds: Option<&crate::ui::hud::ghost::PlacementBounds>,
+    document: Option<&mut Document>,
+    ids: Option<&mut AuthoredIds>,
+    names: Option<&mut crate::ui::hud::instance_names::InstanceNames>,
+    inputs: &BTreeMap<&str, &str>,
+    restore: bool,
+) -> Result<bool, String> {
+    let index = ids.as_ref().and_then(|ids| ids.0.get(&id).copied());
+    let object = index.and_then(|index| document.as_ref()?.object(index));
+    if document.is_some() && object.is_none() {
+        return Err("Move the object on the map first to add it to this document".into());
+    }
+    let prior = object.and_then(|object| document.as_ref()?.properties(object.entity_id));
+    let can_change_identity = document.as_ref().is_none_or(|doc| doc.can_change_objects());
+    let plan = inspector::plan(id, link, content, object, prior, can_change_identity, inputs, restore)?;
+    if !plan.changed {
+        return Ok(false);
+    }
+    let at = plan.edit.at;
+    if let Some((lo, hi)) = bounds.and_then(|bounds| bounds.0)
+        && link.real_curr().unit(id).is_some_and(|unit| unit.pos != at)
+        && (at.x < lo.x || at.x > hi.x || at.z < lo.z || at.z > hi.z)
+    {
+        return Err("The position is outside the map".into());
+    }
+    let name = plan.edit.name.clone();
+    link.edit_placement(PlacementEdit::Inspect(Box::new(plan.edit))).ok_or("The object cannot use one or more of these values")?;
+    if let Some(names) = names {
+        names.set_overrides(id, name.as_deref(), plan.saved.captain.as_deref(), plan.saved.registry.as_deref());
+    }
+    if let (Some(doc), Some(index), Some(object)) = (document, index, plan.object) {
+        doc.update_object(index, object, plan.saved);
+    }
+    Ok(true)
 }

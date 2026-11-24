@@ -295,6 +295,11 @@ pub struct EconomyRec {
 }
 
 impl Economy {
+    /// Store a validated paused-editor resource amount.
+    pub(crate) fn edit_node_amount(&mut self, id: EntityId, amount: Fixed) {
+        self.nodes.insert(id, amount);
+    }
+
     /// Live cargo rows for mining craft, including eligible idle craft with an
     /// empty hold. This reads the same miner records and capacity rule as mining.
     /// Every resource node's amount left (UI-48), ascending id.
