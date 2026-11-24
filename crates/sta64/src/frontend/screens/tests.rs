@@ -151,7 +151,7 @@ fn every_screen_is_reached_by_state_and_replaces_the_last() {
     let mut app = app();
     let want: [(Screen, &str, usize); 6] = [
         (Screen::SinglePlayer, "Single player", 6),
-        (Screen::Setup, "Instant action", 2 * 3 + 8 + 11),
+        (Screen::Setup, "Instant action", 2 * 2 + 8 + 11),
         (Screen::MapSelect, "Select map", 2),
         (Screen::MapEditorPicker, "Map editor", 2),
         (Screen::Settings, "Options", 1),
@@ -234,7 +234,9 @@ fn setup_round_trips_through_a_game_setup() {
     let data = ScreenData::fake();
     let mut d = SetupDraft::new(&data);
     d.set_map(&data, 1);
-    d.cycle_control(2); // Computer -> Idle
+    d.select_control(1, SeatControl::Easy);
+    d.select_control(2, SeatControl::Idle);
+    d.select_control(3, SeatControl::Hard);
     d.cycle_team(3);
     d.cycle_race(&data, 1);
     d.seed = 42;
@@ -244,7 +246,7 @@ fn setup_round_trips_through_a_game_setup() {
     let ids: Vec<_> = setup.players.iter().map(|p| p.id).collect();
     assert_eq!(ids, [PlayerId(0), PlayerId(1), PlayerId(2), PlayerId(3)]);
     let control: Vec<_> = setup.players.iter().map(|p| p.control.clone()).collect();
-    assert_eq!(control, [Control::Human, Control::Ai("skirmish".into()), Control::Idle, Control::Ai("skirmish".into())]);
+    assert_eq!(control, [Control::Human, Control::Ai(sta_ai::SKIRMISH_EASY.into()), Control::Idle, Control::Ai(sta_ai::SKIRMISH_HARD.into())]);
     assert_eq!(setup.players[3].team, TeamId(0));
     assert_eq!(setup.players[2].team, TeamId(2));
     assert!(setup.players.iter().all(|p| p.race == "fx"));
@@ -564,11 +566,10 @@ fn the_player_is_on_one_seat() {
     let humans = |d: &SetupDraft| d.seats.iter().filter(|s| s.control == SeatControl::Human).count();
     assert_eq!(d.seats[0].control, SeatControl::Human);
     // Stepping off the player hands the role on.
-    d.cycle_control(0);
+    d.select_control(0, SeatControl::Computer);
     assert_eq!((humans(&d), d.seats[0].control, d.seats[1].control), (1, SeatControl::Computer, SeatControl::Human));
     // Stepping another seat round to Player takes it from the first.
-    d.cycle_control(0);
-    d.cycle_control(0);
+    d.select_control(0, SeatControl::Human);
     assert_eq!((humans(&d), d.seats[0].control), (1, SeatControl::Human));
     // A smaller map keeps the choices and the player.
     let mut big = SetupDraft::new(&ScreenData::fake());
@@ -576,8 +577,7 @@ fn the_player_is_on_one_seat() {
     data4.maps.reverse();
     big.set_map(&data4, 0);
     assert_eq!(big.seats.len(), 4);
-    big.cycle_control(3);
-    big.cycle_control(3);
+    big.select_control(3, SeatControl::Human);
     assert_eq!(big.seats[3].control, SeatControl::Human);
     big.set_map(&data4, 1);
     assert_eq!(big.seats.len(), 2);
@@ -589,14 +589,20 @@ fn game_setup_screen_edits_the_draft_and_launch_starts_the_game() {
     let mut app = app();
     go(&mut app, Screen::Setup);
     assert_eq!(draft(&app).seats.len(), 2);
-    // Player 2: Computer -> Idle -> Player (player 1 becomes a computer).
-    press(&mut app, Act::Cycle(1, Col::Control));
+    let choose = |app: &mut App, choice: SeatControl| {
+        let field = app.world_mut().query::<(Entity, &stock::SeatDrop)>().iter(app.world())
+            .find(|(_, field)| field.row == 1 && field.col == Col::Control).unwrap().0;
+        let index = SeatControl::choices(false).iter().position(|&control| control == choice).unwrap();
+        app.world_mut().write_message(crate::ui::theme::DropdownChanged { entity: field, index });
+        settle(app);
+    };
+    choose(&mut app, SeatControl::Idle);
     assert_eq!(draft(&app).seats[1].control, SeatControl::Idle);
     assert!(has_text(&mut app, "idle"));
-    press(&mut app, Act::Cycle(1, Col::Control));
+    choose(&mut app, SeatControl::Human);
     assert_eq!((draft(&app).seats[0].control, draft(&app).seats[1].control), (SeatControl::Computer, SeatControl::Human));
     // Stepping off the player hands the role back to player 1.
-    press(&mut app, Act::Cycle(1, Col::Control));
+    choose(&mut app, SeatControl::Computer);
     assert_eq!((draft(&app).seats[0].control, draft(&app).seats[1].control), (SeatControl::Human, SeatControl::Computer));
     press(&mut app, Act::Cycle(1, Col::Team));
     assert_eq!(draft(&app).seats[1].team, 0);

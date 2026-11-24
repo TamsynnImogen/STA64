@@ -7,6 +7,7 @@ mod game;
 mod tests;
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -15,7 +16,8 @@ use serde_json::{Value, json};
 use sta_sim::command::{Command, CommandKind, Order};
 use sta_sim::{PlayerId, SimEvent, Tick};
 
-use self::bridge::{Bridge, Request};
+pub(crate) use self::bridge::Bridge;
+use self::bridge::Request;
 use crate::app::{GameSet, LaunchConfig, Mode};
 use crate::sim_link::{ContentRes, SimLink};
 use crate::ui::notices::{Notice, Severity};
@@ -25,6 +27,9 @@ const QUEUE_LIMIT: usize = 32;
 
 #[derive(Resource)]
 pub(crate) struct AuthorizedSeat(pub(crate) PlayerId);
+
+#[derive(Resource)]
+pub(crate) struct MenuEndpoint(PathBuf);
 
 struct Lease {
     id: String,
@@ -145,45 +150,66 @@ impl SeatControl {
 }
 
 pub(crate) fn enable(app: &mut App, cfg: &LaunchConfig) {
-    let Some(seat) = cfg.mcp_seat else {
-        if cfg.mcp_endpoint.is_some() {
-            warn!("--mcp-endpoint needs --mcp-seat");
+    if !matches!(cfg.mode(), Mode::FrontEnd | Mode::Game) {
+        if cfg.mcp_seat.is_some() || cfg.mcp_endpoint.is_some() {
+            warn!("MCP requires a local Instant Action or skirmish match");
         }
         return;
-    };
-    if !matches!(cfg.mode(), Mode::FrontEnd | Mode::Game) {
-        warn!("MCP requires a local Instant Action or skirmish match");
-        return;
     }
-    let path = cfg.mcp_endpoint.clone().or_else(|| {
-        crate::platform::data_dir().map(|dir| dir.join("mcp").join(format!("seat-{seat}.json")))
-    });
-    let Some(path) = path else {
-        warn!("No STA64 data directory. Use --mcp-endpoint to choose a private descriptor path.");
+    app.add_systems(Update, serve.in_set(GameSet::Bench));
+    if cfg.mode() == Mode::FrontEnd
+        && let Some(path) = endpoint_path(cfg, "instant-action.json")
+    {
+        app.insert_resource(MenuEndpoint(path));
+    }
+    let Some(seat) = cfg.mcp_seat else {
         return;
     };
-    match Bridge::start(path.clone()) {
+    let path = endpoint_path(cfg, &format!("seat-{seat}.json"));
+    match open_bridge(path.as_deref(), PlayerId(seat)) {
         Ok(bridge) => {
-            info!(
-                "MCP available for seat {seat}. Descriptor: {}",
-                path.display()
-            );
             app.insert_resource(AuthorizedSeat(PlayerId(seat)))
-                .insert_resource(bridge)
-                .add_systems(Update, serve.in_set(GameSet::Bench));
+                .insert_resource(bridge);
         }
         Err(error) => warn!("Could not start the local MCP bridge: {error}"),
     }
 }
 
+fn endpoint_path(cfg: &LaunchConfig, default_name: &str) -> Option<PathBuf> {
+    cfg.mcp_endpoint
+        .clone()
+        .or_else(|| crate::platform::data_dir().map(|dir| dir.join("mcp").join(default_name)))
+}
+
+pub(crate) fn open_menu_bridge(
+    endpoint: Option<&MenuEndpoint>,
+    seat: PlayerId,
+) -> Result<Bridge, String> {
+    open_bridge(endpoint.map(|endpoint| endpoint.0.as_path()), seat)
+}
+
+fn open_bridge(path: Option<&std::path::Path>, seat: PlayerId) -> Result<Bridge, String> {
+    let path = path.ok_or(
+        "No STA64 data directory. Use --mcp-endpoint to choose a private descriptor path.",
+    )?;
+    let bridge = Bridge::start(path.to_owned())?;
+    info!(
+        "MCP available for seat {}. Descriptor: {}",
+        seat.0,
+        path.display()
+    );
+    Ok(bridge)
+}
+
 fn serve(
-    bridge: Res<Bridge>,
-    configured: Res<AuthorizedSeat>,
+    bridge: Option<Res<Bridge>>,
+    cli: Option<Res<AuthorizedSeat>>,
     mut link: Option<ResMut<SimLink>>,
     content: Option<Res<ContentRes>>,
     editing: Option<Res<crate::editor::Editing>>,
     mut notices: Option<ResMut<Messages<Notice>>>,
 ) {
+    let Some(bridge) = bridge else { return };
     let blocked = editing.is_some();
     let now = Instant::now();
     if let Some(control) = link.as_deref_mut().and_then(|link| link.mcp.as_mut()) {
@@ -204,21 +230,37 @@ fn serve(
         if pending.deadline <= Instant::now() {
             continue;
         }
-        let result = respond(
-            &pending.request,
-            configured.0,
-            link.as_deref_mut().filter(|_| !blocked),
-            content.as_deref().map(|db| &db.0),
-            now,
-        );
-        if result.is_ok() && matches!(pending.request.op.as_str(), "claim" | "release") {
-            let verb = if pending.request.op == "claim" {
-                "took control of"
-            } else {
-                "released"
-            };
-            notice(&mut notices, format!("MCP {verb} seat {}", configured.0.0));
-        }
+        let link = link.as_deref_mut().filter(|_| !blocked);
+        let configured = link
+            .as_ref()
+            .and_then(|link| link.mcp.as_ref())
+            .map(|control| control.player)
+            .or_else(|| cli.as_ref().map(|cli| cli.0));
+        let result = if let Some(seat) = configured {
+            let result = respond(
+                &pending.request,
+                seat,
+                link,
+                content.as_deref().map(|db| &db.0),
+                now,
+            );
+            if result.is_ok() && matches!(pending.request.op.as_str(), "claim" | "release") {
+                let verb = if pending.request.op == "claim" {
+                    "took control of"
+                } else {
+                    "released"
+                };
+                notice(&mut notices, format!("MCP {verb} seat {}", seat.0));
+            }
+            result
+        } else if pending.request.op == "status" {
+            Ok(
+                json!({ "seat": null, "tick": null, "available": false, "controlled": false,
+                "message": "Start an Instant Action match with an MCP slot." }),
+            )
+        } else {
+            Err("Start an eligible local match with the authorized seat present.".into())
+        };
         let _ = pending.reply.try_send(result);
     }
 }

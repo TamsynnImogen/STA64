@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 pub use idle::IdleController;
 pub use mission::{AiRequest, AipLibrary, MissionAiHub, ScriptedAi};
 use sta_core::PlayerId;
-pub use skirmish::{SKIRMISH, SkirmishConfig, SkirmishController};
+pub use skirmish::{SKIRMISH, SKIRMISH_EASY, SKIRMISH_HARD, SkirmishConfig, SkirmishController};
 use sta_sim::setup::{Controller, GameSetup};
 
 /// Name of [`IdleController`] in the registry.
@@ -45,12 +45,14 @@ impl Registry {
         Registry { map: BTreeMap::new(), seated: BTreeMap::new() }
     }
 
-    /// The built-in controllers (`"idle"`, `"skirmish"`); later packages add
+    /// The built-in controllers (`"idle"` and three skirmish presets); later packages add
     /// theirs here.
     pub fn builtin() -> Registry {
         let mut r = Registry::empty();
         r.register(IDLE, || Box::new(IdleController));
         r.register_seat(SKIRMISH, SkirmishController::for_seat);
+        r.register_seat(SKIRMISH_EASY, SkirmishController::easy_for_seat);
+        r.register_seat(SKIRMISH_HARD, SkirmishController::hard_for_seat);
         r
     }
 
@@ -114,7 +116,7 @@ mod tests {
 
     #[test]
     fn builtin_lists_idle() {
-        assert_eq!(Registry::builtin().names(), ["idle", "skirmish"]);
+        assert_eq!(Registry::builtin().names(), ["idle", "skirmish", "skirmish_easy", "skirmish_hard"]);
         assert!(create("idle").is_ok());
     }
 
@@ -131,7 +133,7 @@ mod tests {
         let mut r = Registry::builtin();
         r.register("alpha", || Box::new(IdleController));
         r.register("idle", || Box::new(IdleController));
-        assert_eq!(r.names(), ["alpha", "idle", "skirmish"]);
+        assert_eq!(r.names(), ["alpha", "idle", "skirmish", "skirmish_easy", "skirmish_hard"]);
     }
 
     #[test]

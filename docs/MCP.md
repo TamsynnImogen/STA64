@@ -1,13 +1,12 @@
 # Playing STA64 through MCP
 
-STA64 can let a local MCP client take over one player slot in Instant Action or skirmish. Start the game with `--mcp-seat N`, where `N` is a zero-based player slot. For example, use `--mcp-seat 1` for the first computer opponent in a default two-player setup. That slot must be occupied when the match starts. The game's usual controller handles the seat until an MCP client claims it.
+In Instant Action, open the player dropdown and choose **MCP** for the slot you want the client to play. Keep your own slot set to **Player**, or choose **Observer** in the team menu to watch. Launch the match normally. The MCP slot waits for a client to claim it and goes idle again when released. One slot per match can be reserved for MCP.
 
-```sh
-./sta64 --install-root /path/to/install --mcp-seat 1 \
-  --mcp-endpoint "$HOME/.local/share/sta64/mcp/playtest.json"
-```
+The three AI options use the mounted mod's `Dynamic_Localized_Strings.h` captions when available. The English fallbacks are **AI Easy**, **AI Medium**, and **AI Hard**.
 
-If you omit `--mcp-endpoint`, the game writes `mcp/seat-N.json` in its user data directory. The descriptor contains a per-launch credential and the local port. Keep it private. STA64 removes it on clean exit. After a crash, choose a fresh path for the next launch or remove the old descriptor once that process has exited.
+The menu creates `mcp/instant-action.json` in STA64's user data directory. Use `--mcp-endpoint` to specify a different path. The descriptor contains a per-launch credential and the local port. Keep it private. STA64 removes it on clean exit. After a crash, choose a fresh path for the next launch or remove the old descriptor once that process has exited.
+
+For command-line skirmish, use `--mcp-seat N` to allow takeover of an already occupied, zero-based seat. The default descriptor in that mode is `mcp/seat-N.json`. A computer seat authorized this way uses its original AI whenever MCP control is released.
 
 Configure your MCP client to launch the Python 3 server with the same descriptor path. Use absolute paths in the client configuration.
 
@@ -19,7 +18,7 @@ Configure your MCP client to launch the Python 3 server with the same descriptor
       "args": [
         "/path/to/STA64/tools/sta64_mcp.py",
         "--endpoint",
-        "/home/example/.local/share/sta64/mcp/playtest.json"
+        "/home/example/.local/share/sta64/mcp/instant-action.json"
       ]
     }
   }
@@ -47,4 +46,4 @@ For example, a move order takes `{"action":"move","units":[12],"position":[1500,
 | `special` | `units`, `slot`, optional `target` or `position` |
 | `repair` | `units`, optional repair-yard `target` |
 
-The game validates ownership, target visibility, and its normal order rules. Claiming a partner or opponent slot leaves your own controls available. Releasing restores that slot's prior controller and clears orders that are still waiting to enter the simulation. Orders already issued in the match can continue. MCP play is available in local matches. Entering the map editor ends the lease.
+The game validates ownership, target visibility, and its normal order rules. Claiming a partner or opponent slot leaves your own controls available. Releasing clears orders that are still waiting to enter the simulation. Orders already issued in the match can continue. MCP play is available in local matches. Entering the map editor ends the lease.

@@ -49,7 +49,10 @@ fn save_at(path: &Path, draft: &SetupDraft, data: &ScreenData) -> Result<(), Str
     for (i, seat) in draft.seats.iter().enumerate() {
         let control = match seat.control {
             SeatControl::Human => "human",
+            SeatControl::Easy => "easy",
             SeatControl::Computer => "computer",
+            SeatControl::Hard => "hard",
+            SeatControl::Mcp => "mcp",
             SeatControl::Idle => "idle",
         };
         text.push_str(&format!(
@@ -127,7 +130,10 @@ fn load_at(path: &Path, data: &ScreenData) -> Result<SetupDraft, String> {
     for i in 0..count {
         let control = match get(&format!("seat.{i}.control"))? {
             "human" => SeatControl::Human,
+            "easy" => SeatControl::Easy,
             "computer" => SeatControl::Computer,
+            "hard" => SeatControl::Hard,
+            "mcp" => SeatControl::Mcp,
             "idle" => SeatControl::Idle,
             _ => return Err(format!("Invalid control for seat {}", i + 1)),
         };
@@ -192,6 +198,9 @@ fn validate(draft: &SetupDraft, data: &ScreenData) -> Result<(), String> {
     }
     if draft.return_row >= slots {
         return Err("Saved player return row is outside the map".into());
+    }
+    if draft.seats.iter().filter(|seat| seat.control == SeatControl::Mcp).count() > 1 {
+        return Err("Instant Action settings can reserve one MCP slot".into());
     }
     let humans = draft
         .seats
@@ -323,7 +332,9 @@ mod tests {
         draft.set_map(&data, 1);
         draft.seed = 42;
         draft.set_observing(true);
-        draft.seats[1].control = SeatControl::Idle;
+        draft.seats[0].control = SeatControl::Mcp;
+        draft.seats[1].control = SeatControl::Easy;
+        draft.seats[2].control = SeatControl::Hard;
         draft.seats[3].race = RANDOM_SIDE.into();
         draft.seats[2].team = 0;
         draft.speed = MatchSpeed::Fast;

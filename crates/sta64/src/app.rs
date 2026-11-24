@@ -174,7 +174,7 @@ Usage: sta64 [options]
   --nointro                skip the logo and title movies at start
   --noai                   leave local skirmish AI slots idle
   --mcp-seat <n>          allow MCP takeover of zero-based seat n in local Instant Action or skirmish
-  --mcp-endpoint <path>   private connection descriptor (default: STA64 user data/mcp/seat-N.json)
+  --mcp-endpoint <path>   override the private descriptor path for an MCP slot or --mcp-seat
   --reveal <what>          start a single-player game with the fog and/or shroud lifted (fog, shroud, all; comma
                            separated; testing aid, drawing only; Alt+F and Alt+V toggle them in the game)
 
