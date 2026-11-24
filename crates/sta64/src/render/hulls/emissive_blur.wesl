@@ -26,18 +26,19 @@ fn downsample(input: ScreenIn) -> @location(0) vec4<f32> {
     return vec4<f32>(rgb / 16.0, 1.0);
 }
 
-// Gaussian, sigma 3.5 reduced texels (14 screen pixels).
-// The outer samples reach 8 reduced texels, or 32 screen pixels.
+// A coloured core and a short outer falloff. The far taps reach 48 screen pixels.
+const HALO_WEIGHTS = array<f32, 13>(
+    0.112105, 0.106895, 0.092859, 0.073960, 0.054662, 0.038203,
+    0.025904, 0.017518, 0.012059, 0.008491, 0.006057, 0.004313,
+    0.003028,
+);
+
 fn blur(pixel: vec2<i32>, axis: vec2<i32>) -> vec4<f32> {
-    var rgb = load_clamped(pixel) * 0.1143;
-    rgb += (load_clamped(pixel + axis) + load_clamped(pixel - axis)) * 0.1097;
-    rgb += (load_clamped(pixel + axis * 2) + load_clamped(pixel - axis * 2)) * 0.0970;
-    rgb += (load_clamped(pixel + axis * 3) + load_clamped(pixel - axis * 3)) * 0.0797;
-    rgb += (load_clamped(pixel + axis * 4) + load_clamped(pixel - axis * 4)) * 0.0609;
-    rgb += (load_clamped(pixel + axis * 5) + load_clamped(pixel - axis * 5)) * 0.0433;
-    rgb += (load_clamped(pixel + axis * 6) + load_clamped(pixel - axis * 6)) * 0.0287;
-    rgb += (load_clamped(pixel + axis * 7) + load_clamped(pixel - axis * 7)) * 0.0177;
-    rgb += (load_clamped(pixel + axis * 8) + load_clamped(pixel - axis * 8)) * 0.0102;
+    var rgb = load_clamped(pixel) * HALO_WEIGHTS[0];
+    for (var i = 1; i < 13; i++) {
+        let offset = axis * i;
+        rgb += (load_clamped(pixel + offset) + load_clamped(pixel - offset)) * HALO_WEIGHTS[i];
+    }
     return vec4<f32>(rgb, 1.0);
 }
 
@@ -58,5 +59,12 @@ fn composite(input: ScreenIn) -> @location(0) vec4<f32> {
     let f = fract(reduced);
     let a = mix(load_clamped(base), load_clamped(base + vec2<i32>(1, 0)), f.x);
     let b = mix(load_clamped(base + vec2<i32>(0, 1)), load_clamped(base + vec2<i32>(1, 1)), f.x);
-    return vec4<f32>(mix(a, b, f.y) * params.strength.x, 0.0);
+    let light = mix(a, b, f.y);
+    // A small neutral lift keeps saturated colours legible against coloured skies.
+    let peak = max(max(light.r, light.g), light.b);
+    let halo = mix(light, vec3<f32>(peak), 0.045);
+    // Thin bands and other small lights cover only a fraction of the blur footprint.
+    let lift = 1.0 + 1.4 * (1.0 - smoothstep(0.0, 0.35, peak));
+    let falloff = smoothstep(0.0, 0.006, peak);
+    return vec4<f32>(halo * params.strength.x * lift * falloff, 0.0);
 }
