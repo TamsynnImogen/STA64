@@ -74,6 +74,20 @@ The toolchain is pinned in `rust-toolchain.toml`. Linux builds need the usual
 Bevy system packages (`alsa-lib-devel`, `systemd-devel`/`libudev`, Wayland/X11
 headers).
 
+## Reporting an error
+
+Open **Esc → Diagnostics** during a match to see recent warnings and the path
+to the full session log. Missing ODF references identify the originating
+definition, the command, and the file the game could not load. You can
+continue playing when the game has a safe fallback.
+
+STA64 writes `session-*.txt`, `panic-*.txt`, and `fatal-exit-*.txt` locally in
+its user data folder's `logs` subdirectory. On Linux that is normally
+`~/.local/share/sta64/logs`. On Windows look under `%LOCALAPPDATA%\sta64\logs`
+and on macOS under `~/Library/Application Support/sta64/logs`. A
+`STA64_DATA_DIR` override puts the logs in that folder's `logs` subdirectory.
+For a crash, review and share the matching crash report and session log.
+
 ## Docs
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — engine structure and rules

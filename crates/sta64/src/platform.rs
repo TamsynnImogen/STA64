@@ -122,6 +122,30 @@ pub fn data_dir() -> Option<PathBuf> {
     data_dir_in(ConfigOs::HOST, |k| std::env::var_os(k).map(PathBuf::from))
 }
 
+/// Local session logs and crash reports. Keep diagnostics outside mod content.
+pub(crate) fn diagnostics_dir() -> PathBuf {
+    #[cfg(target_os = "android")]
+    let base = private_data_dir();
+    #[cfg(not(target_os = "android"))]
+    let base = data_dir();
+    base.unwrap_or_else(|| std::env::temp_dir().join("sta64")).join("logs")
+}
+
+pub(crate) fn diagnostic_build() -> String {
+    let revision = option_env!("STA64_GIT_COMMIT").map(str::to_owned).or_else(|| {
+        let executable = std::env::current_exe().ok()?;
+        let marker = executable.parent()?.join("BUILD-COMMIT");
+        let revision = std::fs::read_to_string(marker).ok()?;
+        let revision = revision.trim();
+        (revision.len() <= 64 && !revision.is_empty() && revision.bytes().all(|b| b.is_ascii_hexdigit()))
+            .then(|| revision.to_owned())
+    });
+    match revision {
+        Some(revision) => format!("{} ({revision})", env!("CARGO_PKG_VERSION")),
+        None => env!("CARGO_PKG_VERSION").to_owned(),
+    }
+}
+
 /// The folder the user's converted missions for this install and mod live in
 /// (`sta_mission::converted`), whether or not it exists yet.
 pub fn converted_missions_dir(install_root: &std::path::Path, active_mod: Option<&str>) -> Option<PathBuf> {
