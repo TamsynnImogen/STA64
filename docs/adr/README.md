@@ -13,7 +13,7 @@ accepted ADR is binding on agent and human work in the area it covers.
 | [0006](0006-fo-profile-detection-order.md) | Profile detection order for Fleet Operations installs | accepted | 2026-11-12 |
 | [0007](0007-ui-text-and-icons.md) | UI text, markup and icon formats, T1 to T8 | proposed | 2026-11-13 |
 | [0008](0008-stock-hud-aspect.md) | Stock HUD on windows wider or narrower than its layout sheet, H1 to H7 | proposed | 2026-11-14 |
-| [0009](0009-sprite-colours-in-a-storage-buffer.md) | Sprite colour and fade in a storage buffer instead of per-node materials, S1 to S6 | proposed | 2026-11-20 |
+| [0009](0009-sprite-colours-in-a-storage-buffer.md) | Sprite colour and fade in a storage buffer instead of per-node materials, S1 to S6 | proposed | 2026-11-20, S2 and S3 amended 2026-11-23 |
 
 ADR 0007 was merged as `0001-ui-text-and-icons.md` by mistake (PR #663) and
 renumbered on 2026-11-14; its text is unchanged.

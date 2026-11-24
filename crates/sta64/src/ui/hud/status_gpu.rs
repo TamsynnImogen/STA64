@@ -1,8 +1,9 @@
 //! Status widgets over the existing stock or LCARS information panel.
 //! This owns its descendants and never alters the stock info/resource trees.
 
-use bevy::picking::Pickable;
+use bevy::picking::{Pickable, events::PointerClick, pointer::PointerButton};
 use bevy::prelude::*;
+use sta_sim::command::{BuildQueueId, CommandKind, Order};
 use sta_sim::{EntityId, Fixed};
 
 use super::layout::R;
@@ -10,13 +11,42 @@ use super::model::{self, HudFeed, Info};
 use super::status::{self, JobState, QueueItem, SelectedStatus, StatusFeed};
 use super::stock::{self, layout::StockLayout};
 use super::{HudConfig, HudLayoutRes, HudRoot};
+use crate::sim_link::CommandQueue;
 use crate::ui::gui_sprites::{GuiImage, GuiImageSampling};
+use crate::ui::notices::Tooltip;
 use crate::ui::profile::UiProfile;
 use crate::ui::sprite_font::{SpriteText, SpriteTextStyle, sprite_text_styled};
 use crate::ui::theme::Theme;
 
 #[derive(Component)]
 pub(super) struct StatusRoot;
+
+#[derive(Component, Clone, Copy)]
+pub(super) struct QueueCancel {
+    builder: EntityId,
+    slot: u32,
+    job: BuildQueueId,
+}
+
+#[derive(Message)]
+pub(super) struct QueueClick(Entity);
+
+pub(super) fn on_queue_click(
+    mut click: On<PointerClick>,
+    cells: Query<(), With<QueueCancel>>,
+    lifecycle: Option<Res<crate::platform::LifecycleGate>>,
+    mut clicks: MessageWriter<QueueClick>,
+) {
+    if cells.contains(click.entity) {
+        click.propagate(false);
+        // Armada II's build wireframe uses the left_click binding (static executable and Input.map).
+        if click.button == PointerButton::Primary
+            && lifecycle.is_none_or(|gate| gate.is_foreground())
+        {
+            clicks.write(QueueClick(click.entity));
+        }
+    }
+}
 
 #[derive(Component, Clone, Copy)]
 pub(super) enum LiveValue {
@@ -31,6 +61,7 @@ pub(super) enum LiveValue {
 struct Shape {
     selected: EntityId,
     stock: bool,
+    native_construction_meter: bool,
     queue: Vec<QueueShape>,
     cargo: bool,
     cargo_resource: Option<u8>,
@@ -44,6 +75,7 @@ struct Shape {
 
 #[derive(Clone, Debug, PartialEq)]
 struct QueueShape {
+    queue_id: Option<BuildQueueId>,
     def: sta_sim::ContentKey,
     state: JobState,
     name: String,
@@ -164,6 +196,64 @@ fn clipped_bar(
     }
 }
 
+/// Armada II keeps the meter's disabled sprite visible while there is no
+/// active work. The working fill clips the same sprite over that track.
+fn native_construction_bar(
+    commands: &mut Commands,
+    parent: Entity,
+    r: R,
+    progress: Option<f32>,
+    layout: &StockLayout,
+    theme: &Theme,
+) {
+    let sprite = layout
+        .name("infoSingleConstructionBar")
+        .unwrap_or("large_construction_bar");
+    let track_colour = layout
+        .colour("infoSingleConstructionBarDisableColor")
+        .unwrap_or(Color::srgb(0.3, 0.3, 0.3));
+    let track = commands
+        .spawn((
+            rect(r),
+            GuiImage::new(sprite)
+                .with_color(track_colour)
+                .with_sampling(GuiImageSampling::Linear),
+            Pickable::IGNORE,
+            ChildOf(parent),
+        ))
+        .id();
+    let Some(progress) = progress else { return };
+    let fill_colour = layout
+        .colour("infoSingleConstructionBarColor")
+        .unwrap_or(theme.warn);
+    let clip = commands
+        .spawn((
+            LiveValue::QueueProgress(0, r.w),
+            Node {
+                width: Val::Px(r.w * progress.clamp(0.0, 1.0)),
+                height: Val::Percent(100.0),
+                overflow: Overflow::clip(),
+                ..default()
+            },
+            Pickable::IGNORE,
+            ChildOf(track),
+        ))
+        .id();
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            width: Val::Px(r.w),
+            height: Val::Px(r.h),
+            ..default()
+        },
+        GuiImage::new(sprite)
+            .with_color(fill_colour)
+            .with_sampling(GuiImageSampling::Linear),
+        Pickable::IGNORE,
+        ChildOf(clip),
+    ));
+}
+
 /// Number of columns and square size for the compact wireframe card.
 fn queue_grid(width: f32, count: usize) -> (usize, f32, usize) {
     let inner = (width - 16.0).max(0.0);
@@ -185,17 +275,45 @@ fn stock_shape(
     info: &Info,
     armada_one: bool,
 ) -> Shape {
-    let variant = stock::layout::info_variant(info);
+    let variant = layout.info_variant(info);
     let origin = layout.info_origin(variant);
-    let mut slots: Vec<_> = (0..10)
-        .filter_map(|i| {
-            layout
-                .at(origin, &format!("infoBuildQueue_{i}"))
-                .map(|r| (i, r))
+    let compact = !armada_one && variant == 1;
+    let panel = layout.info_area(variant);
+    // Classic can author a queue for the tall builder card only. A medium
+    // research station uses the adjacent card if its entries would spill.
+    let queue_rect = |key: &str| {
+        layout.at(origin, key).filter(|r| {
+            !compact || panel.is_some_and(|p| r.x >= p.x && r.y >= p.y && r.right() <= p.right() && r.bottom() <= p.bottom())
         })
-        .collect();
+    };
+    // ShipDisplay puts a rig's site build on the compact card. A deployment
+    // or weld has no queue ID, even when the active skin is Fleet Operations.
+    let inline_rig = !armada_one && status.construction_rig
+        && status.queue.first().is_none_or(|head| head.queue_id.is_none());
+    let mut slots: Vec<_> = if inline_rig {
+        Vec::new()
+    } else {
+        (0..10).filter_map(|i| queue_rect(&format!("infoBuildQueue_{i}")).map(|r| (i, r))).collect()
+    };
+    if compact && slots.len() < status.queue.len().min(10) {
+        slots.clear();
+    }
     let mut speed_queue = false;
-    let mut progress = layout.at(origin, "infoProgressBar");
+    let mut progress = if inline_rig {
+        if layout.raw_rect("infoSingleConstructionArea").is_some() {
+            layout.at(origin, "infoSingleConstructionArea")
+        } else {
+            queue_rect("infoSingleConstructionBarArea").or_else(|| {
+                let card = panel?;
+                let caption = layout.at(origin, "infoSingleCaptainTextArea")?;
+                let w = caption.w.min(card.right() - caption.x);
+                let h = caption.h.min(card.bottom() - caption.bottom());
+                (w > 0.0 && h > 0.0).then(|| R::new(caption.x, caption.bottom(), w, h))
+            })
+        }
+    } else {
+        queue_rect("infoProgressBar")
+    };
     if armada_one && slots.is_empty() && !status.queue.is_empty() {
         slots = stock::a1::speed::queue_slots(layout);
         if let Some((_, head)) = slots.first() {
@@ -205,7 +323,7 @@ fn stock_shape(
         }
     }
     let cargo_bar = layout.at(origin, "infoSingleDilithiumBarArea");
-    let fallback_queue = slots.is_empty() && !status.queue.is_empty();
+    let fallback_queue = !inline_rig && slots.is_empty() && !status.queue.is_empty();
     let fallback_progress = !slots.is_empty()
         && progress.is_none()
         && status.queue.first().and_then(|job| job.progress).is_some();
@@ -238,10 +356,13 @@ fn stock_shape(
     Shape {
         selected,
         stock: true,
+        native_construction_meter: inline_rig
+            || (layout.has_a2_info() && variant == 2 && progress.is_some()),
         queue: status
             .queue
             .iter()
             .map(|q| QueueShape {
+                queue_id: q.queue_id,
                 def: q.def,
                 state: q.state,
                 name: q.name.clone(),
@@ -282,10 +403,12 @@ fn lcars_shape(
     Shape {
         selected,
         stock: false,
+        native_construction_meter: false,
         queue: status
             .queue
             .iter()
             .map(|q| QueueShape {
+                queue_id: q.queue_id,
                 def: q.def,
                 state: q.state,
                 name: q.name.clone(),
@@ -304,16 +427,48 @@ fn lcars_shape(
     }
 }
 
-fn queue_art(commands: &mut Commands, root: Entity, r: R, feed: &HudFeed, item: &QueueItem, build_icon: bool) {
-    let officer_upgrade = feed.content.as_deref().and_then(|db| db.unit(item.def))
+fn queue_art(
+    commands: &mut Commands,
+    root: Entity,
+    r: R,
+    feed: &HudFeed,
+    item: &QueueItem,
+    build_icon: bool,
+) {
+    let officer_upgrade = feed
+        .content
+        .as_deref()
+        .and_then(|db| db.unit(item.def))
         .is_some_and(|def| def.a1_officer_upgrade_gain.is_some());
-    if (build_icon || officer_upgrade) && let Some(odf) = item.odf.as_deref() {
+    if (build_icon || officer_upgrade)
+        && let Some(odf) = item.odf.as_deref()
+    {
         let mut art = GuiImage::new("");
         art.names = model::build_sprite_names(item.model.as_deref().unwrap_or_default(), odf);
         commands.spawn((rect(r), art, Pickable::IGNORE, ChildOf(root)));
     } else if let Some(model) = item.model.as_deref() {
         stock::queue_wireframe(commands, root, r, model);
     }
+}
+
+fn queue_button(
+    commands: &mut Commands,
+    root: Entity,
+    r: R,
+    builder: EntityId,
+    slot: usize,
+    item: &QueueItem,
+) {
+    let (Some(job), Ok(slot)) = (item.queue_id, u32::try_from(slot)) else {
+        return;
+    };
+    commands.spawn((
+        rect(r),
+        Pickable::default(),
+        QueueCancel { builder, slot, job },
+        Tooltip::new(crate::ui::i18n::trf("Cancel {0} from queue", &[&item.name])),
+        ChildOf(root),
+    ));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -328,9 +483,11 @@ fn draw_stock(
     info: &Info,
 ) {
     if shape.lcars_card.is_some() {
-        let origin = layout.info_origin(stock::layout::info_variant(info));
+        let origin = layout.info_origin(layout.info_variant(info));
         let fallback = SelectedStatus {
-            queue: if shape.slots.is_empty() {
+            queue: if status.construction_rig && shape.native_construction_meter {
+                Vec::new()
+            } else if shape.slots.is_empty() {
                 status.queue.clone()
             } else if shape.progress.is_none() {
                 status
@@ -348,10 +505,11 @@ fn draw_stock(
                     && layout.at(origin, "infoSingleConstructionArea").is_none()
             }),
             cargo: status.cargo.filter(|_| shape.cargo_bar.is_none()),
+            ..Default::default()
         };
         draw_lcars(commands, root, feed, &fallback, shape, theme);
     }
-    for (item, (slot_index, r)) in status.queue.iter().zip(&shape.slots) {
+    for (index, (item, (slot_index, r))) in status.queue.iter().zip(&shape.slots).enumerate() {
         let slot = commands
             .spawn((rect(*r), Pickable::IGNORE, ChildOf(root)))
             .id();
@@ -368,6 +526,7 @@ fn draw_stock(
             ));
         }
         queue_art(commands, root, *r, feed, item, shape.speed_queue);
+        queue_button(commands, root, *r, shape.selected, index, item);
     }
     if status.queue.len() > shape.slots.len()
         && let Some((_, last)) = shape.slots.last()
@@ -382,7 +541,17 @@ fn draw_stock(
             true,
         );
     }
-    if let Some(head) = status.queue.first()
+    if shape.native_construction_meter && let Some(r) = shape.progress
+    {
+        native_construction_bar(
+            commands,
+            root,
+            r,
+            status.queue.first().and_then(|head| head.progress),
+            layout,
+            theme,
+        );
+    } else if let Some(head) = status.queue.first()
         && let Some(value) = head.progress
         && let Some(r) = shape.progress
     {
@@ -401,7 +570,7 @@ fn draw_stock(
             LiveValue::QueueProgress(0, r.w),
         );
     }
-    let origin = layout.info_origin(stock::layout::info_variant(info));
+    let origin = layout.info_origin(layout.info_variant(info));
     if let Some(value) = status.construction
         && layout.at(origin, "infoSingleConstructionBarArea").is_none()
         && let Some(r) = layout.at(origin, "infoSingleConstructionArea")
@@ -501,7 +670,22 @@ fn draw_lcars(
     for (i, item) in status.queue.iter().take(10).enumerate() {
         let x = card.x + 8.0 + (i % columns) as f32 * (cell + 4.0);
         let top = y + (i / columns) as f32 * (cell + 12.0);
-        queue_art(commands, root, R::new(x, top, cell, cell), feed, item, false);
+        queue_art(
+            commands,
+            root,
+            R::new(x, top, cell, cell),
+            feed,
+            item,
+            false,
+        );
+        queue_button(
+            commands,
+            root,
+            R::new(x, top, cell, cell),
+            shape.selected,
+            i,
+            item,
+        );
         if let Some(value) = item.progress {
             let bar = R::new(x, top + cell + 2.0, cell, 3.0);
             clipped_bar(
@@ -612,7 +796,13 @@ pub(super) fn refresh(
             return;
         };
         let armada_one = profile.as_deref() == Some(&UiProfile::Armada1);
-        stock_shape(info.id, &status, stock_layout, &Info::Single(info.clone()), armada_one)
+        stock_shape(
+            info.id,
+            &status,
+            stock_layout,
+            &Info::Single(info.clone()),
+            armada_one,
+        )
     } else {
         lcars_shape(
             info.id,
@@ -622,7 +812,7 @@ pub(super) fn refresh(
             &theme,
         )
     };
-    if status.queue.is_empty() && status.cargo.is_none() && status.construction.is_none() {
+    if !shape.native_construction_meter && status.queue.is_empty() && status.cargo.is_none() && status.construction.is_none() {
         for entity in &existing {
             commands.entity(entity).despawn();
         }
@@ -716,10 +906,69 @@ pub(super) fn update_values(
     }
 }
 
+/// A queue cell is bound to the job shown when it was drawn. Recheck the
+/// current selection and job id so a stale cell cannot cancel a shifted slot.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn press_queue(
+    mut clicks: MessageReader<QueueClick>,
+    cells: Query<&QueueCancel>,
+    feed: Res<HudFeed>,
+    source: Res<StatusFeed>,
+    avatar: Option<Res<super::avatar::ChoiceState>>,
+    cheat: Option<Res<crate::cheats::input::CheatInput>>,
+    menu: Option<Res<crate::ui::ingame_menu::InGameMenu>>,
+    scene: Option<Res<crate::frontend::scene::MenuScene>>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
+    local: Option<Res<crate::render::units::LocalPlayer>>,
+    mut commands: ResMut<CommandQueue>,
+) {
+    if scene.is_some()
+        || menu.is_some_and(|m| m.open)
+        || cine.is_some_and(|c| c.on)
+        || avatar.is_some_and(|a| a.is_open())
+        || cheat.is_some_and(|c| c.open || c.blocked_this_frame)
+        || local.is_some_and(|p| p.0 != Some(feed.player))
+    {
+        clicks.read().for_each(drop);
+        return;
+    }
+    let mut clicked = clicks.read().filter_map(|QueueClick(entity)| cells.get(*entity).ok()).peekable();
+    if clicked.peek().is_none() {
+        return;
+    }
+    let [builder] = feed.selected.as_slice() else {
+        return;
+    };
+    let selected = status::selected(&feed, &source);
+    let mut sent = Vec::new();
+    for cell in clicked {
+        if cell.builder != *builder || sent.contains(&cell.job) {
+            continue;
+        }
+        let Some(item) = selected.queue.get(cell.slot as usize) else {
+            continue;
+        };
+        if item.queue_id != Some(cell.job) {
+            continue;
+        }
+        sent.push(cell.job);
+        commands.0.push(CommandKind::Order(Order::CancelBuild {
+            builder: cell.builder,
+            slot: cell.slot,
+            job: cell.job,
+        }));
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use sta_content::gui_cfg::{GuiLayout, Panel, Rect};
     use sta_sim::ContentKey;
+    use sta_sim::production::view::{ProductionJobView, ProductionView};
+    use sta_sim::view::UnitFlags;
+    use sta_sim::{PlayerId, UnitView, Vec3, WorldView};
 
     use super::*;
     use crate::ui::hud::model::Single;
@@ -738,6 +987,8 @@ mod tests {
             shield: None,
             progress: None,
             builder,
+            has_build_queue: builder,
+            a2_yard: builder,
         })
     }
 
@@ -745,6 +996,7 @@ mod tests {
         SelectedStatus {
             queue: vec![
                 QueueItem {
+                    queue_id: Some(BuildQueueId(1)),
                     def: ContentKey(1),
                     odf: Some("ship.odf".into()),
                     model: Some("models/ship.sod".into()),
@@ -753,6 +1005,7 @@ mod tests {
                     progress: Some(0.5),
                 },
                 QueueItem {
+                    queue_id: Some(BuildQueueId(2)),
                     def: ContentKey(2),
                     odf: Some("frigate".into()),
                     model: None,
@@ -762,6 +1015,186 @@ mod tests {
                 },
             ],
             ..Default::default()
+        }
+    }
+
+    fn click_app(stock: bool) -> (App, Entity) {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<QueueClick>()
+            .add_observer(on_queue_click)
+            .add_systems(Update, press_queue)
+            .insert_resource(CommandQueue::default());
+        let mut view = WorldView::default();
+        view.units.push(UnitView {
+            id: EntityId(7),
+            def: ContentKey::NONE,
+            owner: PlayerId(1),
+            pos: Vec3::ZERO,
+            heading: (Fixed::ZERO, Fixed::ONE),
+            speed: Fixed::ZERO,
+            hull: [Fixed::ONE; 2],
+            shields: [[Fixed::ZERO; 2]; 4],
+            flags: UnitFlags::SELECTABLE,
+            progress: None,
+            crew: None,
+            energy: None,
+            autonomy: None,
+        });
+        view.visibility.push((PlayerId(1), vec![EntityId(7)]));
+        app.insert_resource(HudFeed {
+            view: Arc::new(view),
+            player: PlayerId(1),
+            selected: vec![EntityId(7)],
+            ..Default::default()
+        });
+        app.insert_resource(StatusFeed {
+            production: vec![ProductionView {
+                builder: EntityId(7),
+                portal: None,
+                research: None,
+                officer_upgrades: None,
+                jobs: vec![
+                    ProductionJobView {
+                        queue_id: Some(BuildQueueId(1)),
+                        def: ContentKey(1),
+                        progress: Fixed::ZERO,
+                        paid: true,
+                        started: true,
+                    },
+                    ProductionJobView {
+                        queue_id: Some(BuildQueueId(2)),
+                        def: ContentKey(2),
+                        progress: Fixed::ZERO,
+                        paid: false,
+                        started: false,
+                    },
+                ],
+                site: None,
+            }],
+            ..Default::default()
+        });
+        let root = app.world_mut().spawn_empty().id();
+        let status = queued();
+        let selected = info(true);
+        let theme = Theme::default();
+        if stock {
+            let mut cfg = GuiLayout {
+                canvas: (1600, 1200),
+                ..Default::default()
+            };
+            cfg.rects.insert(
+                "infoBuildQueue_0".into(),
+                Rect {
+                    x: 10,
+                    y: 10,
+                    w: 96,
+                    h: 96,
+                },
+            );
+            cfg.rects.insert(
+                "infoBuildQueue_1".into(),
+                Rect {
+                    x: 110,
+                    y: 10,
+                    w: 96,
+                    h: 96,
+                },
+            );
+            let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+            let shape = stock_shape(EntityId(7), &status, &layout, &selected, false);
+            app.world_mut()
+                .run_system_once(move |mut commands: Commands, feed: Res<HudFeed>| {
+                    draw_stock(
+                        &mut commands,
+                        root,
+                        &feed,
+                        &status,
+                        &shape,
+                        &layout,
+                        &theme,
+                        &selected,
+                    );
+                })
+                .unwrap();
+        } else {
+            let layout = HudLayoutRes(super::super::layout::HudLayout::new(None, 16.0 / 9.0));
+            let shape = lcars_shape(EntityId(7), &status, &layout, &selected, &theme);
+            app.world_mut()
+                .run_system_once(move |mut commands: Commands, feed: Res<HudFeed>| {
+                    draw_lcars(&mut commands, root, &feed, &status, &shape, &theme);
+                })
+                .unwrap();
+        }
+        let mut q = app.world_mut().query::<(Entity, &QueueCancel)>();
+        let buttons: Vec<_> = q
+            .iter(app.world())
+            .map(|(entity, cell)| (entity, cell.slot))
+            .collect();
+        assert_eq!(buttons.len(), 2);
+        let clicked = buttons.into_iter().find(|(_, slot)| *slot == 1).unwrap().0;
+        (app, clicked)
+    }
+
+    fn click(app: &mut App, entity: Entity, button: PointerButton) {
+        use bevy::picking::{backend::HitData, events::Pointer, pointer::{Location, PointerId}};
+        let camera = app.world_mut().spawn_empty().id();
+        app.world_mut().trigger(PointerClick {
+            entity,
+            pointer: Pointer::new(PointerId::Mouse, Location {
+                target: bevy::camera::NormalizedRenderTarget::None { width: 1, height: 1 },
+                position: Vec2::ZERO,
+            }),
+            button,
+            hit: HitData::new(camera, 0.0, None, None),
+            duration: std::time::Duration::ZERO,
+            count: 1,
+        });
+    }
+
+    #[test]
+    fn stock_and_lcars_cells_cancel_one_matching_job() {
+        for stock in [true, false] {
+            let (mut app, clicked) = click_app(stock);
+            click(&mut app, clicked, PointerButton::Secondary);
+            app.update();
+            assert!(app.world().resource::<CommandQueue>().0.is_empty());
+            click(&mut app, clicked, PointerButton::Primary);
+            click(&mut app, clicked, PointerButton::Primary);
+            app.update();
+            let queue = &app.world().resource::<CommandQueue>().0;
+            assert_eq!(queue.len(), 1);
+            assert!(matches!(
+                queue[0],
+                CommandKind::Order(Order::CancelBuild {
+                    builder: EntityId(7),
+                    slot: 1,
+                    job: BuildQueueId(2)
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn stock_and_lcars_reject_foreign_or_stale_queue_cells() {
+        for stock in [true, false] {
+            let (mut app, clicked) = click_app(stock);
+            Arc::make_mut(&mut app.world_mut().resource_mut::<HudFeed>().view).units[0].owner =
+                PlayerId(2);
+            click(&mut app, clicked, PointerButton::Primary);
+            app.update();
+            assert!(app.world().resource::<CommandQueue>().0.is_empty());
+
+            Arc::make_mut(&mut app.world_mut().resource_mut::<HudFeed>().view).units[0].owner =
+                PlayerId(1);
+            app.world_mut().resource_mut::<StatusFeed>().production[0]
+                .jobs
+                .swap(0, 1);
+            click(&mut app, clicked, PointerButton::Primary);
+            app.update();
+            assert!(app.world().resource::<CommandQueue>().0.is_empty());
         }
     }
 
@@ -1112,6 +1545,118 @@ mod tests {
     }
 
     #[test]
+    fn native_construction_meter_keeps_disabled_sprite_when_idle_and_clips_working_fill() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut cfg = GuiLayout::default();
+        cfg.names.insert(
+            "infoSingleConstructionBar".into(),
+            "custom_build_bar".into(),
+        );
+        let r = R::new(442.0, 280.0, 396.0, 12.0);
+        for progress in [None, Some(0.5)] {
+            let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
+            let mut world = World::new();
+            let root = world.spawn_empty().id();
+            let theme = Theme::default();
+            world
+                .run_system_once(move |mut commands: Commands| {
+                    native_construction_bar(&mut commands, root, r, progress, &layout, &theme);
+                })
+                .unwrap();
+
+            let mut images = world.query::<(&GuiImage, &Node)>();
+            let images: Vec<_> = images.iter(&world).collect();
+            assert_eq!(images.len(), if progress.is_some() { 2 } else { 1 });
+            assert!(
+                images
+                    .iter()
+                    .all(|(image, _)| image.names == ["custom_build_bar"])
+            );
+            let mut live = world.query::<(&LiveValue, &Node)>();
+            let clips: Vec<_> = live.iter(&world).collect();
+            assert_eq!(clips.len(), usize::from(progress.is_some()));
+            if let Some((value, node)) = clips.first() {
+                assert!(matches!(value, LiveValue::QueueProgress(0, width) if *width == r.w));
+                assert_eq!(node.width, Val::Px(r.w * 0.5));
+            }
+        }
+    }
+
+    #[test]
+    fn construction_rig_renders_the_medium_meter_when_idle_and_welding() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut cfg = GuiLayout::default();
+        cfg.rects.insert("infoSingleConstructionArea".into(), Rect {
+            x: 386, y: 158, w: 340, h: 20,
+        });
+        cfg.rects.insert("infoSingleConstructionBarArea".into(), Rect {
+            x: 115, y: 243, w: 120, h: 13,
+        });
+        let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0))
+            .with_info_profile(UiProfile::Armada2);
+        let selected = info(false);
+        let expected = layout.at(layout.info_origin(1), "infoSingleConstructionArea").unwrap();
+        let mut welding = queued().queue.remove(0);
+        welding.queue_id = None;
+        for queue in [Vec::new(), vec![welding]] {
+            let working = !queue.is_empty();
+            let status = SelectedStatus { construction_rig: true, queue, ..Default::default() };
+            let shape = stock_shape(EntityId(7), &status, &layout, &selected, false);
+            assert_eq!(shape.progress, Some(expected));
+            assert!(shape.native_construction_meter);
+            assert!(shape.slots.is_empty() && shape.lcars_card.is_none());
+
+            let mut world = World::new();
+            let root = world.spawn_empty().id();
+            let layout = layout.clone();
+            let selected = selected.clone();
+            world.run_system_once(move |mut commands: Commands| {
+                draw_stock(&mut commands, root, &HudFeed::default(), &status,
+                    &shape, &layout, &Theme::default(), &selected);
+            }).unwrap();
+            assert!(world.query::<(&GuiImage, &Node)>().iter(&world).any(|(image, node)|
+                image.names == ["large_construction_bar"] && node.left == Val::Px(expected.x)
+                    && node.top == Val::Px(expected.y) && image.color == Color::srgb(0.3, 0.3, 0.3)));
+            assert_eq!(world.query::<(&LiveValue, &Node)>().iter(&world).any(|(value, node)|
+                matches!(value, LiveValue::QueueProgress(0, _))
+                    && node.width == Val::Px(expected.w * 0.5)), working);
+        }
+    }
+
+    #[test]
+    fn a_compact_rig_keeps_site_progress_inline_when_the_meter_area_is_omitted() {
+        let mut cfg = GuiLayout::default();
+        cfg.panels.insert("info".into(), Panel {
+            area: Some(Rect { x: 400, y: 1000, w: 800, h: 200 }),
+            ..Default::default()
+        });
+        cfg.rects.insert("infoSingleCaptainTextArea".into(), Rect {
+            x: 386, y: 130, w: 340, h: 20,
+        });
+        cfg.rects.insert("infoBuildQueue_0".into(), Rect {
+            x: 342, y: 76, w: 96, h: 96,
+        });
+        let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0))
+            .with_info_profile(UiProfile::FleetOps);
+        let mut status = queued();
+        status.queue.truncate(1);
+        status.construction_rig = true;
+        status.queue[0].queue_id = None;
+        let shape = stock_shape(EntityId(7), &status, &layout, &info(false), false);
+        assert_eq!(shape.progress, Some(R::new(786.0, 1150.0, 340.0, 20.0)));
+        assert!(shape.native_construction_meter);
+        assert!(shape.slots.is_empty() && shape.lcars_card.is_none());
+
+        // A rig capable of producing a real queued unit keeps its queue slot.
+        status.queue[0].queue_id = Some(BuildQueueId(1));
+        let shape = stock_shape(EntityId(7), &status, &layout, &info(false), false);
+        assert!(!shape.native_construction_meter);
+        assert_eq!(shape.slots.len(), 1);
+    }
+
+    #[test]
     fn fallback_queue_uses_bounded_grid_with_live_cell_progress() {
         use bevy::ecs::system::RunSystemOnce;
 
@@ -1125,6 +1670,7 @@ mod tests {
         let shape = Shape {
             selected: EntityId(7),
             stock: false,
+            native_construction_meter: false,
             queue: Vec::new(),
             cargo: false,
             cargo_resource: None,

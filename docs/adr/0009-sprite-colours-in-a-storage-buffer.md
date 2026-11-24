@@ -1,13 +1,15 @@
 # ADR 0009: Sprite colours in a storage buffer
 
 - **Status:** proposed
-- **Date:** 2026-11-20
+- **Date:** 2026-11-20 (S2 and S3 amended 2026-11-23)
 - **Deciders:** Tammy and Cedric (accepted when both approve the PR that
-  merges this file; not binding before). Agents do not merge it.
+  merges this file; not binding before). Agents do not merge it. The
+  amendment of S2 and S3 needs the same two approvals.
 - **Relates to:** [ADR 0004](0004-modding-v1.md) D12; [ADR 0003](0003-clean-room-content-policy.md);
   WORKPLAN RND-22; issue #1020; PR #1000 (open draft, the earlier
   shared-materials attempt, closed when this ADR is accepted; see "Alternatives
-  considered"); PR #1048 (merged test harness)
+  considered"); PR #1048 (merged test harness); issue #1138 and PR #1183
+  (step 1, whose findings led to the amendment)
 
 ## Context
 
@@ -91,15 +93,38 @@ inside `animate`, so it is extracted in the same frame (Bevy's own
 and could upload a frame late). Slots come from a free list and are never
 moved, so live tags do not change; the buffer grows by doubling.
 
-**S2. One shared extended material per look.** `SpriteMaterial` is
-`ExtendedMaterial<StandardMaterial, SpriteTint>`, where `SpriteTint` binds the
-buffer with `#[storage(100, read_only)]` and is not bindless (so the combined
-material is non-bindless: one bind group per look, a plain storage binding).
-The material asset keeps only what is per look: texture, alpha mode, `unlit`,
-`double_sided`, `cull_mode` and `uv_transform`, with `base_color` white. The
-look key is texture, alpha key and sprite name; colour is no longer part of
-it. Only looks with animated UVs change their asset, at most once per look per
-frame. Colour and fade never touch an asset.
+**S2. One shared extended material per look, bindless where the device
+supports it.** `SpriteMaterial` is `ExtendedMaterial<StandardMaterial,
+SpriteTint>`. `SpriteTint` binds the colour buffer in Bevy's bindless mode:
+the buffer is a storage binding array with its own small index table, so the
+combined material is bindless like the standard material and all looks share
+one material slab, one bind group and, for cut-out looks, one batch set, as the
+per-node standard materials do on main. Where the device lacks what Bevy's
+bindless mode needs for a buffer binding array (see "Back ends"), Bevy falls
+back to the non-bindless form of the same material: one bind group per look and
+a plain storage binding. The material asset keeps only what is per look:
+texture, alpha mode, `unlit`, `double_sided`, `cull_mode` and `uv_transform`,
+with `base_color` white. The look key is texture, alpha key and sprite name;
+colour is no longer part of it. Only looks with animated UVs change their
+asset, at most once per look per frame. Colour and fade never touch an asset.
+
+*Amended 2026-11-23, from the step 1 findings (issue #1138, PR #1183). S2 read:
+"`SpriteTint` binds the buffer with `#[storage(100, read_only)]` and is not
+bindless (so the combined material is non-bindless: one bind group per look, a
+plain storage binding)". That form was built (PR #1183's first head) and failed
+the GPU byte-equality gate in all three camera settings: the coplanar cut-out
+overlap drew in the other order, because each look's own bind group put the
+cut-out looks in separate batch sets of the binned alpha-mask phase, ordered by
+bind-group index (parity mode does not reach the binned phase); and one frame
+per camera differed by one level in a region of additive sprites, with the same
+set of re-queued nodes, the same walk order and the same sorted transparent
+order as the reference (cause not established). With the bindless form all
+three camera settings were byte-equal to the reference, the control run and the
+negative control behaving as before; the cut-out looks then shared one batch
+set, and the one-level difference was gone although the grouping of items into
+draw calls still differed from the reference. Evidence grade: measured on
+STA64, one machine and adapter (an AMD RX 5700 XT under RADV), on the invented
+scene of the GPU test.*
 
 **S3. A forked copy of Bevy's forward PBR fragment shader with one added
 multiply.** `crates/sta64/src/render/sprites/sprite.wesl` is a verbatim copy of
@@ -109,12 +134,20 @@ node's slot in the colour buffer, indexed by its mesh tag. Main multiplies the
 texture sample by the node colour held in the material; the fork multiplies
 the same two values with the material colour set to exactly 1, which gives the
 same IEEE result, so each channel is bit-equal before alpha discard, decals,
-fog, tonemapping and premultiply, which stay the same code. The two shaders
-still compile differently (storage operand instead of the material uniform,
-non-bindless instead of bindless layout, a separate pipeline), so the GPU
-byte-equality test, not this argument, is the proof on each adapter. The file's
-header names the source file, Bevy version, line range and the added line. The
-prepass for cut-out (`Mask`) looks keeps Bevy's own prepass shader.
+fog, tonemapping and premultiply, which stay the same code. Besides the added
+line, the fork declares the colour buffer in two branches, one for the bindless
+form (the binding array and its index table, read through the material slot
+Bevy already keeps per instance) and one for the non-bindless fallback (the
+plain storage binding); there is still exactly one added multiply. The two
+shaders still compile differently (a storage operand instead of the material
+uniform, a separate pipeline), so the GPU byte-equality test, not this
+argument, is the proof on each adapter, and it proves only the form that adapter
+runs. The file's header names the source file, Bevy version, line range, the
+added line and the two-branch declaration. The prepass for cut-out (`Mask`)
+looks keeps Bevy's own prepass shader.
+
+*Amended 2026-11-23 with S2: the two-branch declaration of the colour buffer
+was added; the multiply is unchanged.*
 
 **S4. Cases that stay on ordinary private `StandardMaterial` copies:**
 
@@ -186,6 +219,12 @@ accepted change, unless open question 1 is decided otherwise.
   the batching gain is lost, and it would reimplement the unlit path of
   `StandardMaterial` (fog, tonemapping, premultiplied add, MSAA, prepass for
   cut-out). Largest work and largest risk to identity.
+- **A non-bindless sprite material everywhere (S2 as first written).** Simpler
+  shader binding and the same behaviour on every device. Built in step 1 and
+  rejected on its gate (amendment note under S2): it changes the draw order of
+  coplanar cut-out sprites of different looks, which parity mode cannot reach,
+  and it showed a one-level difference in one frame per camera whose cause was
+  not found. It remains the fallback where bindless is not supported.
 
 ## Consequences
 
@@ -199,6 +238,14 @@ main-world CPU (about 9 ms) would then be close to the bound. Nothing
 here has been built or run; the implementation PR must measure it (outline,
 step 6) and may find less. With parity mode on, specialise, re-queue and mesh re-extraction cost (about
 1 ms together) stays.
+
+The amendment of S2 does not change this: with the bindless form a slot write
+still touches no material asset (only the colour buffer, rewritten in place
+while its size stays), so no material is prepared and no bind group is rebuilt
+for it. A look whose UV animates re-prepares that one look's entry in the
+shared slab, as a standard material does on main. Growing the colour buffer
+rebuilds the slab's bind group once. The forecast stays a forecast, and step 6
+still measures it.
 
 **Forked shader.** `sprite.wesl` must be re-synced with Bevy's `pbr.wesl` on
 every Bevy upgrade, and drift shows only when the GPU test runs
@@ -220,6 +267,18 @@ exactly equal depth. Parity mode removes the first risk in practice (the same se
 see S5) at about 1 ms; the second is covered by a coplanar cut-out overlap in the GPU
 test and is not removed by parity mode.
 
+Since the amendment of S2, the bindless form removes the second risk where it
+runs: all looks share one slab and bind group, so cut-out looks of different
+looks fall into one batch set and keep the order of their queue history, as the
+per-node materials do on main (measured on the test adapter, see the note under
+S2). The non-bindless fallback keeps the risk: on a device without bindless
+support, coplanar cut-out sprites of different looks may draw in another order
+than on main, and the one-level difference seen in step 1 may appear; neither
+has been tested on such a device. Looks beyond one slab's capacity land in a
+second slab and so in another batch set, so equal-depth order between looks in
+different slabs may differ from main; the per-node path on main is
+slab-dependent in the same way.
+
 **Back ends.** The sprite shader needs one more fragment-stage storage buffer
 than Bevy's standard material. Desktop Vulkan, Metal and DX12 limits are far
 above this. On Android it depends on the device's
@@ -229,6 +288,20 @@ sprite pipeline. That limit is among those `docs/ANDROID_SUPPORT.md` asks to
 record per test device. If such a device, GLES or WebGL2 ever became a target,
 a fallback to the per-node material path would be needed, kept as production
 code and used as the test reference.
+
+The bindless form (S2, amended) needs more than the standard material does:
+Bevy enables bindless for a material with a buffer binding array only where
+the device offers buffer binding arrays as well as texture binding arrays,
+while the standard material needs only texture binding arrays. A device with
+texture but not buffer binding arrays (Bevy's source names Metal as one such
+case; Android devices are to be recorded per device) therefore draws sprites
+through the non-bindless fallback while the standard material stays bindless,
+with the tie-order risk above. The bindless form also binds an array of storage
+buffers sized by the slab's capacity, plus a small index table; on devices
+without partially bound binding arrays Bevy pads the array to that size, which
+counts against the storage-buffer and binding-array limits of the fragment
+stage. These limits join those `docs/ANDROID_SUPPORT.md` asks to record per
+test device.
 
 **Mods and the Stock look.** Colour, fade, blend modes and UV animation are
 unchanged for content, so mods and Stock see the same frames (S6). Mods may
@@ -263,7 +336,8 @@ settings and a group toggled hidden and shown.
    additive sprites the order does not change the picture (up to rounding), so
    the question matters for the alpha-blended looks. Cut-out looks are drawn in
    Bevy's binned alpha-mask phase, whose order is not affected by parity mode
-   (see "Tie order").
+   (see "Tie order"); with the bindless form (S2, amended) it was unchanged on
+   the test adapter.
 2. Is carrying a forked copy of a Bevy shader (`sprite.wesl`, re-synced on
    every Bevy upgrade) acceptable? If not, the choice is between the
    unchanged per-node cost, the narrower options above (which do not remove
@@ -280,6 +354,12 @@ settings and a group toggled hidden and shown.
    the frame-time gain is within the run-to-run spread (about 1 ms on the
    measured scene), the implementation is not merged and this ADR is amended
    with the measurement before anyone builds on it.
+6. Are the differences the non-bindless fallback may show on a device without
+   bindless support for buffer binding arrays accepted (coplanar cut-out
+   sprites of different looks in another order than on main; possibly the
+   one-level difference seen in step 1, whose cause is not established)?
+   Nobody has run the GPU byte-equality test on such a device. Without a
+   decision, the fallback stays as it is and the question stays open.
 
 ## Implementation outline
 
@@ -296,7 +376,8 @@ Each step is a PR or part of one; the gate is what must pass before merge.
    reference against new path, over the scene merged in #1048 (co-located
    blended and additive pairs, coplanar cut-out overlap, fading puffs over
    cycling colours, spawn and despawn mid-series, a parent toggled hidden and
-   shown).
+   shown). Since the amendment of S2, the test output also states whether the
+   material ran in the bindless form or the fallback on the test adapter.
 4. **Adoption** by an observer on adding the sprite component, so no frame has
    an unadopted node; slot freed on removal. Gate: CPU parity test (the
    demoted material equals what the reference writes; the slot value is

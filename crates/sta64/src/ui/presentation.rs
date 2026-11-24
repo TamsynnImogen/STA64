@@ -36,10 +36,12 @@ use sta_mission::api::{Objective, ObjectiveBriefing, ObjectiveState};
 use sta_sim::SimEvent;
 use sta_sim::present::{Arg, Presentation};
 
-use crate::app::GameSet;
+use crate::app::{AppState, GameSet};
+use crate::game::flow::Flow;
 use crate::media::{MovieFinished, MovieId, mission::Requested};
-use crate::sim_link::{PlayScriptSound, SimMsg, StopScriptSound};
+use crate::sim_link::{PlayScriptSound, SimLink, SimMsg, StopScriptSound};
 use crate::ui::i18n::Strings;
+use crate::ui::notices::{ChatRoot, NoticeRoot};
 use crate::ui::sprite_font::{SpriteTextStyle, StockRoleMark, sprite_text_styled};
 use crate::ui::stock_font::{HAlign, StockRole, VAlign};
 use crate::ui::theme::{ButtonClicked, Theme, UiButton, button, font_role};
@@ -272,9 +274,9 @@ pub struct CineractiveState {
 /// The one "a cutscene is running" predicate: the announcement and acknowledgement voices
 /// (`audio::voices`), the "construction complete" advisor lines (`audio::sfx`), the event
 /// log's notices (`ui::notices::events_to_notices`) and the player's selection and orders
-/// (`input`, the HUD's buttons) all ask it, so those cannot disagree. (The notice and HUD
-/// roots' visibility follow `CineractiveState.on` directly, in `hide_notices_in_cineractive`
-/// and `game::flow::show_match_ui`.) True while a script's cineractive is on.
+/// (`input`, the HUD's buttons) all ask it, so those cannot disagree. The notification
+/// feeds and HUD also respect it in `sync_notification_visibility` and
+/// `game::flow::show_match_ui`. True while a script's cineractive is on.
 /// Fleet Operations Roots' intros declare theirs the same way (`Cineractive.active`), so no
 /// separate input-lock call exists to honour; whether the original also locks selection is
 /// not measured (Cedric's playtest reports ships selectable and speaking in that intro).
@@ -761,10 +763,19 @@ fn end_messages_on_skip(
     }
 }
 
-/// The notices are hidden over a cutscene (the HUD and radar roots follow the same state in
-/// `game::flow::show_match_ui`, their single owner).
-fn hide_notices_in_cineractive(cine: Res<CineractiveState>, mut roots: Query<&mut Visibility, With<crate::ui::notices::NoticeRoot>>) {
-    let want = if cine.on { Visibility::Hidden } else { Visibility::Inherited };
+type NotificationFeed = Or<(With<NoticeRoot>, With<ChatRoot>)>;
+
+/// Reserve the notification overlays for menus and viewers. A direct map launch
+/// has a simulation link and bypasses the front-end state transitions.
+fn sync_notification_visibility(
+    cine: Res<CineractiveState>,
+    state: Option<Res<State<AppState>>>,
+    flow: Option<Res<Flow>>,
+    link: Option<Res<SimLink>>,
+    mut roots: Query<&mut Visibility, NotificationFeed>,
+) {
+    let in_game = state.is_some_and(|state| *state.get() == AppState::InGame) || (flow.is_none() && link.is_some());
+    let want = if in_game || cine.on { Visibility::Hidden } else { Visibility::Inherited };
     for mut v in &mut roots {
         v.set_if_neq(want);
     }
@@ -1324,7 +1335,7 @@ impl Plugin for PresentationPlugin {
             .init_resource::<ObjectivesView>()
             .init_resource::<crate::ui::objectives_panel::ObjectivesArt>()
             .init_resource::<MessageQueue>()
-            .add_systems(OnEnter(crate::app::AppState::FrontEnd), (reset_presentation, reset_bridge))
+            .add_systems(OnEnter(AppState::FrontEnd), (reset_presentation, reset_bridge))
             .add_message::<ScriptReply>()
             .add_message::<MessageBox>()
             .add_message::<crate::media::mission::Requested>()
@@ -1336,7 +1347,7 @@ impl Plugin for PresentationPlugin {
             .add_systems(Startup, spawn_layers.run_if(resource_exists::<Theme>))
             .add_systems(
                 Update,
-                (clear_sounds_on_restart, consume, bridge_state, sound_replies, hide_notices_in_cineractive, run_clock, movie_replies, skip_cineractive, apply_replies, end_messages_on_skip, toggle_objectives, queue_messages, ok_pressed, draw_titles.run_if(resource_exists::<Theme>), draw_fade, draw_panel.run_if(resource_exists::<Theme>)).chain().in_set(GameSet::Ui),
+                (clear_sounds_on_restart, consume, bridge_state, sound_replies, sync_notification_visibility, run_clock, movie_replies, skip_cineractive, apply_replies, end_messages_on_skip, toggle_objectives, queue_messages, ok_pressed, draw_titles.run_if(resource_exists::<Theme>), draw_fade, draw_panel.run_if(resource_exists::<Theme>)).chain().in_set(GameSet::Ui),
             );
     }
 }
@@ -1765,6 +1776,35 @@ mod tests {
         assert_eq!(*app.world().get::<Visibility>(root).unwrap(), Visibility::Hidden);
         send(&mut app, Presentation::Cineractive { on: false, skippable: true });
         assert_eq!(*app.world().get::<Visibility>(root).unwrap(), Visibility::Inherited);
+    }
+
+    #[test]
+    fn notification_overlays_are_hidden_during_play() {
+        let mut app = app();
+        app.add_plugins(bevy::state::app::StatesPlugin).init_state::<AppState>().insert_resource(Flow);
+        let notices = app.world_mut().spawn((NoticeRoot, Visibility::Inherited)).id();
+        let chat = app.world_mut().spawn((ChatRoot, Visibility::Inherited)).id();
+        let tooltip = app.world_mut().spawn((crate::ui::notices::TipBox, Visibility::Inherited)).id();
+        for (state, expected) in [
+            (AppState::FrontEnd, Visibility::Inherited),
+            (AppState::Loading, Visibility::Inherited),
+            (AppState::InGame, Visibility::Hidden),
+            (AppState::FrontEnd, Visibility::Inherited),
+        ] {
+            app.world_mut().resource_mut::<NextState<AppState>>().set(state);
+            app.update();
+            for root in [notices, chat] {
+                assert_eq!(app.world().get::<Visibility>(root), Some(&expected), "{state:?}");
+            }
+            assert_eq!(app.world().get::<Visibility>(tooltip), Some(&Visibility::Inherited));
+        }
+
+        app.world_mut().remove_resource::<Flow>();
+        app.insert_resource(SimLink::new(Box::new(sta_sim::Sim::new(1)), Box::new(sta_sim::command::LocalRouter::new()), sta_core::PlayerId(0)));
+        app.update();
+        for root in [notices, chat] {
+            assert_eq!(app.world().get::<Visibility>(root), Some(&Visibility::Hidden), "direct map launch");
+        }
     }
 
     #[test]

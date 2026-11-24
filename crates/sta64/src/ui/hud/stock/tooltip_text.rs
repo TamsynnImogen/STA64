@@ -190,6 +190,26 @@ pub struct BuildTipParts {
 pub enum StockTip {
     /// A build item: class text, hotkey label and cost line.
     Build(BuildTipParts),
+    /// A resource template with two native `%d` number slots (crew stock and capacity).
+    TwoNumbers(i64, i64),
+    /// Fleet Operations system detail: class tooltip followed by its authored verbose text.
+    ClassDetails,
+    /// An individual meter or subsystem, with live values.
+    Readout(crate::ui::hud::readouts::ReadoutText),
+}
+
+pub fn class_details(short: &str, verbose: Option<&str>, look: Lookup) -> String {
+    let short = look(short);
+    let Some(verbose) = verbose else { return short };
+    let verbose = look(verbose);
+    if short.is_empty() || verbose.is_empty() { return String::new() }
+    format!("{short}{}\n{verbose}", separator(look, TOOLTIP_SEPARATE_KEY, TOOLTIP_SEPARATOR_FALLBACK))
+}
+
+/// Localize first, then substitute the two numeric slots in a native resource template.
+pub fn two_numbers(key: &str, first: i64, second: i64, look: Lookup) -> String {
+    let text = look(key);
+    text.replacen("%d", &first.to_string(), 1).replacen("%d", &second.to_string(), 1)
 }
 
 fn first_line(p: &BuildTipParts, look: Lookup) -> String {
@@ -273,6 +293,31 @@ mod tests {
             "GUI_CP_TOOLTIP_SEPARATE" => "!".into(),
             other => other.into(),
         }
+    }
+
+    #[test]
+    fn native_two_number_template_localizes_before_substitution_and_preserves_empty_text() {
+        let look = |key: &str| match key {
+            "CREW" => "Crew: %d/%d".to_owned(),
+            "EMPTY" => String::new(),
+            other => other.to_owned(),
+        };
+        assert_eq!(two_numbers("CREW", 7, 12, &look), "Crew: 7/12");
+        assert_eq!(two_numbers("EMPTY", 7, 12, &look), "");
+    }
+
+    #[test]
+    fn fleet_ops_class_details_resolve_each_authored_key_at_display_time() {
+        let look = |key: &str| match key {
+            "SHORT" => "Class".to_owned(),
+            "VERBOSE" => "Long description".to_owned(),
+            "GUI_CP_TOOLTIP_SEPARATE" => "!".to_owned(),
+            other => other.to_owned(),
+        };
+        assert_eq!(class_details("SHORT", Some("VERBOSE"), &look), "Class!\nLong description");
+        assert_eq!(class_details("SHORT", None, &look), "Class");
+        let blank = |key: &str| if key == "VERBOSE" { String::new() } else { look(key) };
+        assert_eq!(class_details("SHORT", Some("VERBOSE"), &blank), "");
     }
 
     fn parts() -> WorldTipParts {

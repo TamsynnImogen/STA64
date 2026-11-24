@@ -3,6 +3,8 @@ pub(in crate::ui::hud) mod a1;
 pub(in crate::ui) mod buttons;
 pub(in crate::ui::hud) mod commands;
 mod info;
+mod selection_readouts;
+pub(super) use selection_readouts::update as update_selection_readouts;
 pub(super) use info::update_backdrop_fallback;
 mod weapon_icons;
 pub(super) use weapon_icons::update_visibility as update_weapon_icon_visibility;
@@ -116,6 +118,8 @@ fn metadata<'a>(native: &'a NativeCommands, act: &Act) -> Option<&'a NativeComma
         Act::Target(TargetMode::TransportAttack) => "capture",
         Act::Target(TargetMode::Repair) => "repair",
         Act::Target(TargetMode::Decommission) => "decom",
+        Act::Target(TargetMode::TradeSource) => "START_TRADE",
+        Act::Target(TargetMode::TradeDestination) => "END_TRADE",
         Act::Stop => "stop",
         Act::Recrew => "recrew",
         Act::Cancel(_) => "cancelbuild",
@@ -172,6 +176,14 @@ pub(in crate::ui::hud) fn buttons(feed: &HudFeed, page: Page, native: &NativeCom
     }
     if matches!(page, Page::Top | Page::Native(_)) {
         let selected = feed.selected_units();
+        if selected.iter().any(|unit| feed.cargo_ship(unit)) {
+            for mode in [TargetMode::TradeSource, TargetMode::TradeDestination] {
+                let act = Act::Target(mode);
+                if let Some(meta) = metadata(native, &act).filter(|meta| meta.preferred.is_some()) {
+                    buttons.push(model::button(usize::MAX, &meta.button, act, &meta.button));
+                }
+            }
+        }
         for (odf, meta) in &native.commands {
             let Some(kind) = orders::Kind::read(meta) else { continue };
             if selected.iter().any(|u| kind.eligible(feed, meta, u)) {
@@ -534,7 +546,8 @@ pub(super) fn refresh(
         state.layout = config
             .gui
             .as_ref()
-            .map(|cfg| StockLayout::for_aspect_fit(cfg, config.aspect, config.fit));
+            .map(|cfg| StockLayout::for_aspect_fit(cfg, config.aspect, config.fit)
+                .with_info_profile(profile.as_deref().copied().unwrap_or_default()));
         commands.insert_resource(StockTextCanvas(state.layout.as_ref().map(|l| StockCanvas {
             hud: Vec2::new(l.hud.w, l.hud.h),
             window: l.screen,
@@ -573,6 +586,7 @@ pub(super) fn refresh(
         window::spawn_a2(&mut commands, body, &layout, action.as_deref());
     }
     let now = model::info(&feed);
+    let variant = layout.info_variant(&now);
     let a1_shape = a1.then(|| a1::info::extra(&feed).map(|e| e.shape(&state.info_style))).flatten();
     let structural = state
         .info
@@ -595,8 +609,8 @@ pub(super) fn refresh(
         if a1 {
             a1::info::spawn(&mut commands, parent, &layout, &feed, &theme, &state.info_style, strings.as_deref());
         } else {
-            info::spawn(&mut commands, parent, &layout, &feed, &theme);
-            infobar::spawn(&mut commands, bar, &layout, &theme, layout::info_variant(&now));
+            info::spawn(&mut commands, parent, &layout, &feed, &theme, &now, variant);
+            infobar::spawn(&mut commands, bar, &layout, &theme, variant);
         }
     }
     state.info = Some(now.clone());
@@ -626,18 +640,10 @@ pub(super) fn refresh(
     // Active-state changes patch the existing GuiActive components below.
     let rebuild = changed || structural || state.page != hud.page || state.grid != next || grids.is_empty();
     state.solid = resource_panels(&layout);
-    state.solid.extend([layout.panel("minimap"), layout.info_area(layout::info_variant(&now))].into_iter().flatten());
-    if layout.info_area(layout::info_variant(&now)).is_some() {
-        let variant = layout::info_variant(&now);
-        let origin =
-            layout.info_origin(variant) + layout.point(&format!("infoBarOffset_{variant}")).unwrap_or(Vec2::ZERO);
-        state.solid.extend(
-            ["shipName", "hull", "shields", "crew_amt", "energy_amt", "icon_hull", "icon_shields", "icon_crew_amt", "icon_energy_amt"]
-                .into_iter()
-                .filter_map(|key| layout.at(origin, key)),
-        );
-    }
+    state.solid.extend(layout.panel("minimap"));
     if !a1 {
+        state.solid.extend(layout.info_area(variant));
+        state.solid.extend(infobar::solid(&layout, variant));
         // The window's art takes the pointer like the other panels (none when the layout declares it off).
         state.solid.extend(layout.panel("cinematic"));
         // The button group is placed like every other panel; its solid rectangles come from the same rect.
@@ -802,7 +808,7 @@ mod recrew_tests {
         native.commands.insert("recrew".into(), NativeCommand {
             odf: "recrew.odf".into(), command: "RECREW".into(), button: "recrew".into(),
             preferred: Some([0, 1]), menu: Some("Orders".into()),
-            source: Vec::new(),
+            source: Vec::new(), param: None,
             tooltip: Some("GUI_CP_RECREW_TOOLTIP".into()),
             verbose: Some("GUI_CP_RECREW_VTOOLTIP".into()),
             normal: None, hovered: None, pressed: None, disabled: None, active: None,
@@ -852,7 +858,7 @@ mod capture_tests {
         native.commands.insert("capture".into(), NativeCommand {
             odf: "capture.odf".into(), command: "TRANSPORT_ATTACK".into(), button: "capture".into(),
             preferred: Some([0, 10]), menu: Some("trade".into()),
-            source: Vec::new(),
+            source: Vec::new(), param: None,
             tooltip: Some("GUI_CP_TRANSPORT_ATTACK_TOOLTIP".into()),
             verbose: Some("GUI_CP_TRANSPORT_ATTACK_VTOOLTIP".into()),
             normal: None, hovered: None, pressed: None, disabled: None, active: None,

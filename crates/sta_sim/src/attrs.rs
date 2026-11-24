@@ -246,7 +246,7 @@ impl crate::Sim {
 
     /// The content's spelling of a race some definition carries (matched case-insensitively
     /// like the tech tree and `IsRace`); empty names match nothing.
-    fn known_race(&self, race: &str) -> Option<String> {
+    pub(crate) fn known_race(&self, race: &str) -> Option<String> {
         if race.is_empty() {
             return None;
         }

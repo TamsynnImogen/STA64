@@ -6,8 +6,9 @@
 //! `fog.NOTICE.md`).
 //!
 //! - [`FogGrid`] is the data, with no renderer in it: one cell per [`CELL`] world
-//!   units over the map, `visible` where a sensor of the local player's team reaches
-//!   the cell's centre and `explored` where one ever has. It is built from a
+//!   units over the map, with samples of the distance to the local team's sensor coverage.
+//!   The sign classifies its cell centre as visible or explored. The distance also
+//!   lets the shader place the contour between cells. It is built from a
 //!   [`WorldView`] and the content's sensor ranges, the same rule as
 //!   `sta_sim::sensors` (the views carry per-unit visibility only, not areas), and
 //!   answers `visible_at` / `explored_at` for any map point. The minimap (UI-05) can
@@ -16,8 +17,8 @@
 //! - [`FogPlugin`] keeps [`FogState`] current while [`LocalPlayer`] is `Some`, a
 //!   [`FogBounds`] resource says where the map is and a `SimLink` exists, and draws
 //!   the two layers: a quad over the map each, textured with the grid's mask and
-//!   shaded by `fog.wesl` (a cubic B-spline of the mask with a smoothstep edge, so a
-//!   disc of cells reads as a circle).
+//!   shaded by `fog.wesl` (a cubic B-spline of the distance samples with a smoothstep
+//!   edge).
 //! - A view with no visibility data is omniscient (S3): nothing is fogged.
 //!
 //! The sim works in the map's left-handed space; the renderer mirrors Z, so the
@@ -108,7 +109,8 @@ impl Default for FogSettings {
     }
 }
 
-/// The visibility of every cell of the map for one player.
+/// Visibility samples for one player's map. Bytes below 128 are inside the
+/// sensor contour. The bytes fade from 0 to 255 over a narrow band around it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FogGrid {
     /// The map's lowest corner `(x, z)` in sim space: cell `(0, 0)`'s.
@@ -117,10 +119,10 @@ pub struct FogGrid {
     pub cell: f32,
     pub w: usize,
     pub h: usize,
-    visible: Vec<bool>,
-    explored: Vec<bool>,
+    visible: Vec<u8>,
+    explored: Vec<u8>,
     /// The last remembering update's sight, not yet in `explored`.
-    pending: Vec<bool>,
+    pending: Vec<u8>,
 }
 
 impl FogGrid {
@@ -130,7 +132,7 @@ impl FogGrid {
         let cell = CELL.max(size / MAX_CELLS as f32);
         let dim = |lo: f32, hi: f32| (((hi - lo) / cell).ceil() as usize).clamp(1, MAX_CELLS);
         let (w, h) = (dim(min[0], max[0]), dim(min[1], max[1]));
-        FogGrid { min, cell, w, h, visible: vec![false; w * h], explored: vec![false; w * h], pending: vec![false; w * h] }
+        FogGrid { min, cell, w, h, visible: vec![255; w * h], explored: vec![255; w * h], pending: vec![255; w * h] }
     }
 
     /// The cell of a sim-space point, if it is on the grid.
@@ -143,49 +145,76 @@ impl FogGrid {
     /// Is the point in sight now? Off the grid: no.
     #[allow(dead_code)] // read by the minimap (UI-05) and the tests
     pub fn visible_at(&self, x: f32, z: f32) -> bool {
-        self.cell_of(x, z).is_some_and(|i| self.visible[i])
+        self.cell_of(x, z).is_some_and(|i| self.visible[i] < 128)
     }
 
     /// Has the point ever been in sight? Off the grid: no.
     #[allow(dead_code)] // read by the minimap (UI-05) and the tests
     pub fn explored_at(&self, x: f32, z: f32) -> bool {
-        self.cell_of(x, z).is_some_and(|i| self.explored[i])
+        self.cell_of(x, z).is_some_and(|i| self.explored[i] < 128)
     }
 
     /// How many cells are in sight now / were ever.
     #[allow(dead_code)] // read by the minimap (UI-05) and the tests
     pub fn counts(&self) -> (usize, usize) {
-        (self.visible.iter().filter(|v| **v).count(), self.explored.iter().filter(|v| **v).count())
+        (self.visible.iter().filter(|&&v| v < 128).count(), self.explored.iter().filter(|&&v| v < 128).count())
     }
 
     /// Set one cell's state (tests of the minimap).
     #[cfg(test)]
     pub fn set_cell_for_test(&mut self, cx: usize, cz: usize, visible: bool, explored: bool) {
-        self.visible[cz * self.w + cx] = visible;
-        self.explored[cz * self.w + cx] = explored;
+        self.visible[cz * self.w + cx] = if visible { 0 } else { 255 };
+        self.explored[cz * self.w + cx] = if explored { 0 } else { 255 };
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_sensor_for_test(&mut self, centre: Vec2, radius: f32) {
+        self.reveal(centre.x, centre.y, radius);
+        self.explored.copy_from_slice(&self.visible);
     }
 
     /// Everything in sight (an omniscient view).
     fn reveal_all(&mut self) {
-        self.visible.fill(true);
-        self.explored.fill(true);
+        self.visible.fill(0);
+        self.explored.fill(0);
     }
 
-    /// The cells whose centre is within `r` of `(x, z)` are in sight (strictly, as
-    /// `sta_sim::sensors`' overlap test).
+    /// Stamp signed distances to the sensor's circle near its edge. Binary
+    /// texels encode only which side a centre fell on, so filtering those can
+    /// still put the contour as much as half a cell away from the radius.
     fn reveal(&mut self, x: f32, z: f32, r: f32) {
         let c = self.cell;
-        let lo = |p: f32, o: f32| (((p - r - o) / c).floor() as isize).max(0);
+        // Include all the samples the cubic filter uses along the contour.
+        let band = 2.0 * c;
+        let outer = r + band;
+        let outer2 = outer * outer;
+        let inner = (r - band).max(0.0);
+        let inner2 = inner * inner;
+        let r2 = r * r;
+        let lo = |p: f32, o: f32| (((p - outer - o) / c).floor() as isize).max(0);
+        let hi = |p: f32, o: f32, cells: usize| {
+            (((p + outer - o) / c).ceil() as isize).min(cells as isize - 1)
+        };
         let (x0, z0) = (lo(x, self.min[0]), lo(z, self.min[1]));
-        let x1 = ((((x + r - self.min[0]) / c).ceil()) as isize).min(self.w as isize - 1);
-        let z1 = ((((z + r - self.min[1]) / c).ceil()) as isize).min(self.h as isize - 1);
+        let (x1, z1) = (hi(x, self.min[0], self.w), hi(z, self.min[1], self.h));
         for cz in z0..=z1 {
             let dz = self.min[1] + (cz as f32 + 0.5) * c - z;
             for cx in x0..=x1 {
                 let dx = self.min[0] + (cx as f32 + 0.5) * c - x;
-                if dx * dx + dz * dz < r * r {
-                    self.visible[cz as usize * self.w + cx as usize] = true;
+                let d2 = dx * dx + dz * dz;
+                if d2 >= outer2 {
+                    continue;
                 }
+                let cell = &mut self.visible[cz as usize * self.w + cx as usize];
+                if *cell == 0 || d2 < inner2 {
+                    *cell = 0;
+                    continue;
+                }
+                let edge = ((d2.sqrt() - r) / band * 127.5 + 127.5).round() as u8;
+                // Keep the strict centre test, even when quantization rounds
+                // a centre just inside the radius to the other side.
+                let edge = if d2 < r2 { edge.min(127) } else { edge.max(128) };
+                *cell = (*cell).min(edge);
             }
         }
     }
@@ -207,10 +236,10 @@ impl FogGrid {
     /// still runs outside a cutscene; an update inside one drops it. An omniscient view stays fully
     /// explored.
     pub fn observe_with(&mut self, view: &WorldView, player: PlayerId, content: Option<&ContentDb>, remember: bool) {
-        self.visible.fill(false);
+        self.visible.fill(255);
         if view.visibility.is_empty() {
             self.reveal_all();
-            self.pending.fill(false);
+            self.pending.fill(255);
             return;
         }
         for (x, z, r) in sensor_discs(view, player, content) {
@@ -218,11 +247,11 @@ impl FogGrid {
         }
         if remember {
             for (e, p) in self.explored.iter_mut().zip(&self.pending) {
-                *e |= *p;
+                *e = (*e).min(*p);
             }
             self.pending.copy_from_slice(&self.visible);
         } else {
-            self.pending.fill(false);
+            self.pending.fill(255);
         }
     }
 
@@ -234,27 +263,26 @@ impl FogGrid {
     pub fn lifted(&self, fog: bool, shroud: bool) -> FogGrid {
         let mut g = self.clone();
         for (e, v) in g.explored.iter_mut().zip(&g.visible) {
-            *e |= *v;
+            *e = (*e).min(*v);
         }
         if shroud {
-            g.explored.fill(true);
+            g.explored.fill(0);
         }
         if fog {
             for (v, e) in g.visible.iter_mut().zip(&g.explored) {
-                *v |= *e;
+                *v = (*v).min(*e);
             }
         }
         g
     }
 
-    /// One byte per cell, row by row from the map's low Z: 255 where the layer hides
-    /// the cell, 0 where it shows it. This is the texture `fog.wesl` reads.
+    /// One distance byte per cell, row by row from the map's low Z. The shader
+    /// interpolates the contour at 127.5 between the clear and covered samples.
     pub fn mask(&self, layer: Layer) -> Vec<u8> {
-        let shown = match layer {
-            Layer::Fog => &self.visible,
-            Layer::Shroud => &self.explored,
-        };
-        shown.iter().map(|s| if *s { 0 } else { 255 }).collect()
+        match layer {
+            Layer::Fog => self.visible.clone(),
+            Layer::Shroud => self.explored.clone(),
+        }
     }
 }
 
@@ -273,6 +301,12 @@ pub fn sensor_discs(view: &WorldView, player: PlayerId, content: Option<&Content
                 None => view.player(to).is_some_and(|t| t.team == from.team),
             }
     };
+    let upgrades = content.map(|db| sta_sim::ship_upgrades::ShipUpgrades::from_defs(db,
+        view.units.iter()
+            .filter(|u| u.hull[0] > sta_sim::Fixed::ZERO && !u.flags.contains(UnitFlags::DYING)
+                && u.progress.is_none_or(|p| p >= sta_sim::Fixed::ONE))
+            .map(|u| (u.owner, u.def))
+    ));
     view.units
         .iter()
         .filter(|u| view.player(u.owner).is_some_and(|o| ally(me, o.id) && ally(o, player)))
@@ -282,6 +316,7 @@ pub fn sensor_discs(view: &WorldView, player: PlayerId, content: Option<&Content
                 None if u.flags.contains(UnitFlags::SELECTABLE) => DEFAULT_SENSOR as f32,
                 None => 0.0,
             };
+            let r = r * upgrades.as_ref().map_or(1.0, |upgrades| upgrades.sensor_multiplier(u.owner).to_f32());
             (r > 0.0).then(|| (u.pos.x.to_f32(), u.pos.z.to_f32(), r))
         })
         .collect()
@@ -488,6 +523,12 @@ struct Memo {
     shown_cutscene: Option<bool>,
 }
 
+type MatchFog<'w> = (
+    Option<Res<'w, crate::game::net_match::NetGame>>,
+    Option<Res<'w, crate::game::flow::ActiveMatch>>,
+    Option<Res<'w, crate::editor::Editing>>,
+);
+
 /// Recompute the grid when the view, the player or the map changes; spawn the layers
 /// once, then rewrite their masks.
 #[allow(clippy::too_many_arguments)]
@@ -506,7 +547,7 @@ fn update_fog(
     mut materials: ResMut<Assets<FogMaterial>>,
     mut layers: Query<(Entity, &FogLayer, &mut Visibility)>,
     reveal: Option<Res<crate::render::reveal::Reveal>>,
-    (net, active): (Option<Res<crate::game::net_match::NetGame>>, Option<Res<crate::game::flow::ActiveMatch>>),
+    (net, active, editor): MatchFog<'_>,
     mut memo: Local<Memo>,
 ) {
     let Memo { seen, art_generation, memory, shown_reveal, shown_cutscene } = &mut *memo;
@@ -522,6 +563,8 @@ fn update_fog(
     let curr = link.real_curr();
     let lifted = if net.is_some() {
         (false, false)
+    } else if editor.is_some() {
+        (true, true)
     } else {
         let (fog, shroud) = active.as_deref().map_or((false, false), |active| active.fog.lifted());
         (fog || reveal.as_deref().is_some_and(|r| r.fog), shroud || reveal.as_deref().is_some_and(|r| r.shroud))
@@ -538,7 +581,7 @@ fn update_fog(
         };
         // During a cutscene the layers are hidden anyway and the memory does not take the sight in;
         // see `FogGrid::observe_with`.
-        grid.observe_with(curr, player, content.as_deref().map(|c| &*c.0), !cutscene);
+        grid.observe_with(curr, player, content.as_deref().map(|c| &*c.0), !cutscene && editor.is_none());
         let shown = grid.lifted(lifted.0, lifted.1);
         *memory = Some(grid);
         let art_changed = *art_generation != Some(patterns.generation);
@@ -639,6 +682,62 @@ mod tests {
         assert!(!g.visible_at(900.0, 0.0) && !g.visible_at(0.0, 900.0));
         assert!(!g.visible_at(600.0, 600.0), "the corner of the square is outside the disc");
         assert!(!g.visible_at(1.0e6, 0.0), "off the map is never seen");
+    }
+
+    // The shader's four bilinear taps implement these separable cubic weights.
+    fn reconstructed_mask(g: &FogGrid, mask: &[u8], pos: Vec2) -> f32 {
+        fn weights(f: f32) -> [f32; 4] {
+            let f2 = f * f;
+            let f3 = f2 * f;
+            [
+                (1.0 - f).powi(3) / 6.0,
+                (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0,
+                (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0,
+                f3 / 6.0,
+            ]
+        }
+        let texel = (pos - Vec2::from_array(g.min)) / g.cell - Vec2::splat(0.5);
+        let base = texel.floor();
+        let [u, v] = (texel - base).to_array();
+        let mut value = 0.0;
+        for (row, wz) in weights(v).into_iter().enumerate() {
+            for (col, wx) in weights(u).into_iter().enumerate() {
+                let x = base.x as usize + col - 1;
+                let z = base.y as usize + row - 1;
+                value += f32::from(mask[z * g.w + x]) * wx * wz;
+            }
+        }
+        value
+    }
+
+    #[test]
+    fn fog_contour_follows_a_sensor_radius_between_grid_centres() {
+        let radius = DEFAULT_SENSOR as f32;
+        // Neither sensor position is aligned to the grid. Test both sides of
+        // a small step so motion smaller than a cell is represented too.
+        for (x, z) in [(37, -83), (54, -83)] {
+            let mut g = grid();
+            g.observe(&view(vec![unit(1, 1, x, z)]), PlayerId(1), None);
+            let shown = g.lifted(false, false);
+            let mask = shown.mask(Layer::Fog);
+            assert_eq!(mask, shown.mask(Layer::Shroud));
+            let centre = Vec2::new(x as f32, z as f32);
+            for i in 0..64 {
+                let direction = Vec2::from_angle(i as f32 * std::f32::consts::TAU / 64.0);
+                let inner = centre + direction * (radius - g.cell / 12.0);
+                let outer = centre + direction * (radius + g.cell / 12.0);
+                assert!(reconstructed_mask(&g, &mask, inner) < 127.5, "inside at angle {i}");
+                assert!(reconstructed_mask(&g, &mask, outer) > 127.5, "outside at angle {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_cell_centre_exactly_on_the_sensor_radius_stays_hidden() {
+        let mut g = grid();
+        g.reveal(64.0, 64.0, 128.0);
+        assert!(g.visible_at(64.0, 64.0));
+        assert!(!g.visible_at(192.0, 64.0));
     }
 
     #[test]

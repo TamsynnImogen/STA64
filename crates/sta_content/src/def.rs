@@ -342,12 +342,50 @@ pub struct ResearchSlot {
     pub pose: Option<crate::RepairAttachment>,
 }
 
+/// Armada II ship system named by an upgrade pod.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpgradeSystem { Shields, Engines, Weapons, LifeSupport, Sensors }
+
+/// The declared tier and multiplier of a ship-system upgrade pod.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SystemUpgrade {
+    pub system: UpgradeSystem,
+    pub tier: u32,
+    pub multiplier: Fixed,
+}
+
+/// One indexed research station chain. The first successor is the tier-3
+/// replacement; later successors advance by one tier each.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResearchBuildSlot {
+    pub index: usize,
+    pub primary: Option<ContentKey>,
+    pub successors: Vec<ContentKey>,
+}
+
 /// Resolved Armada I starbase officer rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct A1BaseOfficers {
     pub gain: i32,
     pub maximum_upgrades: u32,
     pub upgrade: Option<ContentKey>,
+}
+
+/// One good accepted by an Armada II trading station.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TradeGood {
+    pub key: String,
+    pub value: Fixed,
+}
+
+/// Armada II trading station rules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TradeStationDef {
+    /// Resource transfer rate in units per second.
+    pub transfer_rate: Fixed,
+    /// Profit share as a normalized fraction (15 percent is 0.15).
+    pub profit_share: Fixed,
+    pub goods: Vec<TradeGood>,
 }
 
 #[derive(Debug, Clone)]
@@ -404,6 +442,10 @@ pub struct UnitDef {
     /// `miningMultiplier` and `resourcesCanHandle` of a class `p_mining` station
     /// (CON-51). `None` for other classes and for a station with neither key.
     pub station_mining: Option<crate::StationMining>,
+    /// Trade rules for `trading_station` class units.
+    pub trade_station: Option<TradeStationDef>,
+    /// Cargo capacity for `cargo_ship` class units.
+    pub trade_cargo_capacity: Option<Fixed>,
     /// The income keys of the resource node a planet names (`resource =`): mining
     /// rate, trickle, `isInfinite` and `amt<slot>` (CON-51). `None` when the node
     /// has none. Typed content only: the sim's use of it is SIM-72's.
@@ -449,8 +491,10 @@ pub struct UnitDef {
     /// Raw composed SOD transform of the authored repair node, when readable.
     pub repair_attachment: Option<crate::repair_geometry::RepairAttachment>,
     pub research_slots: Vec<ResearchSlot>,
+    pub research_build: Vec<ResearchBuildSlot>,
     /// Station upgrade pods use the station origin instead of an external slot.
     pub research_station_upgrade: bool,
+    pub system_upgrade: Option<SystemUpgrade>,
     /// Sensor range, units.
     pub sensor: Fixed,
     pub hardpoints: Vec<Hardpoint>,
@@ -715,6 +759,8 @@ impl UnitDef {
             orbit_time: None,
             a1_borg: None,
             station_mining: None,
+            trade_station: None,
+            trade_cargo_capacity: None,
             node_income: None,
             race: String::new(),
             model: String::new(),
@@ -736,7 +782,9 @@ impl UnitDef {
             repair: RepairDef::default(),
             repair_attachment: None,
             research_slots: Vec::new(),
+            research_build: Vec::new(),
             research_station_upgrade: false,
+            system_upgrade: None,
             sensor: Fixed::ZERO,
             hardpoints: Vec::new(),
             build: BuildDef::default(),

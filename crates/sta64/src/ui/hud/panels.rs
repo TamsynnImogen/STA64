@@ -7,7 +7,8 @@ use bevy::prelude::*;
 use sta_sim::EntityId;
 
 use super::layout::{CELL, CELL_GAP, GRID_COLS, GRID_PAD, GRID_ROWS, HudLayout, InfoHeight};
-use super::model::{Act, Button, Info, Look, ResEntry, Single, Tile};
+use super::model::{self, Act, Button, HudFeed, Info, Look, ResEntry, Single, Tile};
+use super::readouts::{self, Readout, ReadoutTarget};
 use crate::ui::gui_sprites::{GuiButton, GuiButtonLabel};
 use crate::ui::i18n::{tr, trf};
 use crate::ui::notices::Tooltip;
@@ -41,6 +42,7 @@ pub(super) fn same_info(a: &Info, b: &Info) -> bool {
         (Info::None, Info::None) => true,
         (Info::Single(a), Info::Single(b)) => a.id == b.id && a.name == b.name
             && a.class == b.class && a.own == b.own && a.builder == b.builder
+            && a.has_build_queue == b.has_build_queue && a.a2_yard == b.a2_yard
             && a.shield.is_some() == b.shield.is_some() && a.progress.is_some() == b.progress.is_some(),
         (Info::Group(a), Info::Group(b)) => a.len() == b.len()
             && a.iter().zip(b).all(|(a,b)| a.id == b.id && a.name == b.name),
@@ -59,7 +61,7 @@ pub(super) fn update_values(
     mut texts: Query<(&ValueText, &mut crate::ui::sprite_font::SpriteText)>,
     mut bars: Query<(&ValueBar, Option<&mut crate::ui::theme::ProgressBar>, Option<&mut Node>, Option<&mut BackgroundColor>)>,
 ) {
-    let resources = super::model::resources(&feed, layout.0.no_resource);
+    let resources = super::model::resources(&feed, layout.0.no_resource, layout.0.no_personnel);
     let info = super::model::info(&feed);
     for (kind, mut text) in &mut texts {
         let value = match (kind, &info) {
@@ -228,7 +230,7 @@ pub fn fill_resources(commands: &mut Commands, theme: &Theme, strip: Entity, ent
         let colour = resource_colour(theme, e.id);
         row.with_child((
             Node { align_items: AlignItems::Center, column_gap: Val::Px(theme.gap * 0.75), ..default() },
-            Pickable::IGNORE,
+            Tooltip::new(e.name.clone()),
             children![
                 (Node { width: Val::Px(12.0), height: Val::Px(12.0), border_radius: BorderRadius::MAX, ..default() }, BackgroundColor(colour), Pickable::IGNORE),
                 text(e.name.to_uppercase(), theme.micro_size, theme.text_dim),
@@ -249,13 +251,14 @@ pub fn resource_colour(theme: &Theme, id: usize) -> Color {
     }
 }
 
-fn bar_row(theme: &Theme, label: &str, value: f32, shown: String, w: f32, kind: ValueBar, number: ValueText) -> impl Bundle {
+#[allow(clippy::too_many_arguments)]
+fn bar_row(theme: &Theme, label: &str, value: f32, shown: String, w: f32, kind: ValueBar, number: ValueText, ReadoutTarget(id, readout): ReadoutTarget) -> impl Bundle {
     (
         Node { align_items: AlignItems::Center, column_gap: Val::Px(theme.gap), ..default() },
         Pickable::IGNORE,
         children![
             (Node { width: Val::Px(54.0), ..default() }, children![text(label.to_uppercase(), theme.micro_size, theme.text_dim)]),
-            (kind, progress_bar(theme, w, value)),
+            (kind, progress_bar(theme, w, value), readouts::bind(id, readout)),
             (number, text(shown, theme.small_size, theme.text)),
         ],
     )
@@ -285,18 +288,18 @@ fn fill_single(p: &mut EntityCommands, theme: &Theme, s: &Single, size: Vec2, fe
     let def = feed.view.unit(s.id).and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def)));
     if let Some(slot) = def.and_then(super::status::node_slot) {
         let names = super::model::resource_model(feed);
-        p.with_child(bar_row(theme, names.name(slot), 1.0, String::new(), bar, ValueBar::Node(s.id), ValueText::Node(s.id)));
+        p.with_child(bar_row(theme, names.name(slot), 1.0, String::new(), bar, ValueBar::Node(s.id), ValueText::Node(s.id), ReadoutTarget(s.id, Readout::Deposit)));
     } else {
-        p.with_child(bar_row(theme, &tr("Hull"), s.hull, format!("{}/{}", s.hull_now, s.hull_max), bar, ValueBar::Hull, ValueText::Hull));
+        p.with_child(bar_row(theme, &tr("Hull"), s.hull, format!("{}/{}", s.hull_now, s.hull_max), bar, ValueBar::Hull, ValueText::Hull, ReadoutTarget(s.id, Readout::Hull)));
     }
     if let Some(population) = super::status::population_text(feed, s.id) {
         p.with_child((ValueText::Population(s.id), text(population, theme.small_size, theme.text)));
     }
     if let Some(sh) = s.shield {
-        p.with_child(bar_row(theme, &tr("Shield"), sh, format!("{}%", (sh * 100.0).round() as i32), bar, ValueBar::Shield, ValueText::Shield));
+        p.with_child(bar_row(theme, &tr("Shield"), sh, format!("{}%", (sh * 100.0).round() as i32), bar, ValueBar::Shield, ValueText::Shield, ReadoutTarget(s.id, Readout::Shields)));
     }
     if let Some(pr) = s.progress {
-        p.with_child(bar_row(theme, &tr("Built"), pr, format!("{}%", (pr * 100.0).round() as i32), bar, ValueBar::Built, ValueText::Built));
+        p.with_child(bar_row(theme, &tr("Built"), pr, format!("{}%", (pr * 100.0).round() as i32), bar, ValueBar::Built, ValueText::Built, ReadoutTarget(s.id, Readout::Construction)));
     }
     if s.builder && def.is_none_or(|d| d.planet_role != Some(sta_content::PlanetRole::Producer)) {
         p.with_child(text(tr("Select Build in the grid to queue ships"), theme.small_size, theme.text_dim));
@@ -355,7 +358,7 @@ fn tile(theme: &Theme, t: &Tile) -> impl Bundle {
 }
 
 /// The grid: [`GRID_COLS`] x [`GRID_ROWS`] cells, the empty ones as dim slots.
-pub fn fill_grid(commands: &mut Commands, theme: &Theme, panel: Entity, buttons: &[Button]) {
+pub fn fill_grid(commands: &mut Commands, theme: &Theme, panel: Entity, buttons: &[Button], feed: &HudFeed) {
     let mut p = commands.entity(panel);
     for cell in 0..GRID_COLS * GRID_ROWS {
         let (c, r) = (cell % GRID_COLS, cell / GRID_COLS);
@@ -370,6 +373,13 @@ pub fn fill_grid(commands: &mut Commands, theme: &Theme, panel: Entity, buttons:
                 let mut tip = Tooltip::new(b.tip.clone());
                 if let Some(v) = &b.verbose {
                     tip = tip.verbose(v.clone());
+                }
+                // Keep the class text and costs together at both hover delays,
+                // including classes without an authored verbose description.
+                if let Act::Build { builder, what, .. } = &b.act
+                    && let Some(parts) = model::build_tip_parts(feed, *builder, *what)
+                {
+                    tip = tip.stock_build(parts);
                 }
                 p.with_child((
                     GridCell(b.act.clone()),
@@ -408,4 +418,43 @@ pub fn fill_grid(commands: &mut Commands, theme: &Theme, panel: Entity, buttons:
 pub fn layout_nodes(l: &HudLayout, height: Option<InfoHeight>) -> (super::layout::R, super::layout::R, super::layout::R) {
     let row = l.bottom_row(height);
     (l.resources, row.info, row.grid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::world::CommandQueue;
+    use sta_sim::Fixed;
+    use std::sync::Arc;
+
+    #[test]
+    fn lcars_build_tooltip_keeps_costs_with_authored_verbose_text() {
+        let odf = sta_odf::resolve("yard", &mut |_| {
+            Some("tooltip = \"YARD_NAME\"\nverboseTooltip = \"YARD_DETAILS\"\n".into())
+        }).unwrap();
+        let mut yard = sta_content::UnitDef::new("yard", "shipyard");
+        yard.raw = Arc::new(odf);
+        yard.build.cost = vec![Fixed::from_int(125)];
+        let db = Arc::new(sta_content::ContentDb::builder().unit(yard).build().unwrap());
+        let what = db.key("yard").unwrap();
+        let feed = HudFeed { content: Some(db), ..default() };
+        let b = model::button(0, "Yard", Act::Build {
+            builder: EntityId(1), what, odf: "yard".into(), site: true,
+        }, "YARD_NAME");
+
+        let mut world = World::new();
+        let panel = world.spawn(Node::default()).id();
+        let mut queue = CommandQueue::default();
+        fill_grid(&mut Commands::new(&mut queue, &world), &Theme::default(), panel, &[b], &feed);
+        queue.apply(&mut world);
+
+        let tip = world.query::<&Tooltip>().single(&world).unwrap();
+        let delays = crate::ui::stock_tooltip::TipDelays::default();
+        let text = tip.stock_text_at(delays.verbose, &delays, &|key| match key {
+            "YARD_NAME" => "Shipyard".into(),
+            "YARD_DETAILS" => "Builds ships.".into(),
+            _ => key.into(),
+        }).unwrap();
+        assert!(text.contains("Shipyard") && text.contains("Builds ships.") && text.contains("125"));
+    }
 }

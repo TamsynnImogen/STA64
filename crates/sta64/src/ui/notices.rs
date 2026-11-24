@@ -22,7 +22,7 @@
 
 use std::collections::VecDeque;
 
-use bevy::picking::events::{PointerOut, PointerOver};
+use bevy::picking::events::{PointerEnter, PointerLeave};
 use bevy::prelude::*;
 use bevy::time::Real;
 use bevy::window::PrimaryWindow;
@@ -183,7 +183,7 @@ impl ChatLog {
 pub struct Tooltip {
     pub short: String,
     pub verbose: Option<String>,
-    /// What the Armada II stock look adds from the string table; every other look ignores it.
+    /// Build text and costs are also used by the plain box when the item has a price.
     pub stock: Option<super::hud::stock::tooltip_text::StockTip>,
     /// The action whose bound key the stock look puts into the text's hotkey slot (interim: only the
     /// actions STA64 has a binding for).
@@ -195,9 +195,20 @@ impl Tooltip {
         Tooltip { short: short.into(), verbose: None, stock: None, bound: None }
     }
 
-    /// Under the stock look: a build item's composition.
+    /// A build item's class text and cost composition.
     pub fn stock_build(mut self, parts: super::hud::stock::tooltip_text::BuildTipParts) -> Tooltip {
         self.stock = Some(super::hud::stock::tooltip_text::StockTip::Build(parts));
+        self
+    }
+
+    /// The stock resource text has two integer slots, resolved after localization.
+    pub fn stock_two_numbers(mut self, first: i64, second: i64) -> Tooltip {
+        self.stock = Some(super::hud::stock::tooltip_text::StockTip::TwoNumbers(first, second));
+        self
+    }
+
+    pub fn stock_class_details(mut self) -> Tooltip {
+        self.stock = Some(super::hud::stock::tooltip_text::StockTip::ClassDetails);
         self
     }
 
@@ -207,17 +218,27 @@ impl Tooltip {
         self
     }
 
-    /// The text of the stock look after `rest` seconds of the hover, composed from the string table
+    /// The text after `rest` seconds of the hover, composed from the string table
     /// (`look`) where the tooltip carries a [`StockTip`](super::hud::stock::tooltip_text::StockTip),
     /// else as [`text_at_with`](Self::text_at_with) resolved: nothing before the short delay, the
     /// short text from it, the verbose text from the verbose delay.
     pub fn stock_text_at(&self, rest: f32, delays: &TipDelays, look: super::hud::stock::tooltip_text::Lookup) -> Option<String> {
-        use super::hud::stock::tooltip_text::{StockTip, build_short, build_verbose};
+        use super::hud::stock::tooltip_text::{StockTip, build_short, build_verbose, class_details, two_numbers};
         let verbose = rest >= delays.verbose;
         let shown = rest >= delays.short;
         match &self.stock {
             Some(StockTip::Build(p)) if shown => Some(if verbose { build_verbose(p, look) } else { build_short(p, look) }),
-            // No stock composition: today's text.
+            Some(StockTip::TwoNumbers(first, second)) if shown => {
+                let key = if verbose { self.verbose.as_deref().unwrap_or(&self.short) } else { &self.short };
+                Some(two_numbers(key, *first, *second, look))
+            }
+            Some(StockTip::ClassDetails) if shown => Some(if verbose {
+                class_details(&self.short, self.verbose.as_deref(), look)
+            } else {
+                look(&self.short)
+            }),
+            Some(StockTip::Readout(readout)) if shown => Some(readout.text(verbose, look)),
+            // No structured composition: today's text.
             _ => self.text_at_with(rest, delays).map(look),
         }
     }
@@ -398,7 +419,7 @@ pub(crate) struct NoticeRoot;
 #[derive(Component)]
 struct NoticeLine(usize);
 #[derive(Component)]
-struct ChatRoot;
+pub(crate) struct ChatRoot;
 #[derive(Component)]
 pub(crate) struct TipBox;
 #[derive(Component)]
@@ -589,13 +610,13 @@ fn draw_chat(
     }
 }
 
-fn on_over(ev: On<PointerOver>, tips: Query<(), With<Tooltip>>, mut hover: ResMut<TipHover>) {
+fn on_over(ev: On<PointerEnter>, tips: Query<(), With<Tooltip>>, mut hover: ResMut<TipHover>) {
     if tips.contains(ev.entity) && hover.target != Some(ev.entity) {
         *hover = TipHover { target: Some(ev.entity), rest: 0.0 };
     }
 }
 
-fn on_out(ev: On<PointerOut>, mut hover: ResMut<TipHover>) {
+fn on_out(ev: On<PointerLeave>, mut hover: ResMut<TipHover>) {
     if hover.target == Some(ev.entity) {
         *hover = TipHover::default();
     }
@@ -730,13 +751,23 @@ fn draw_tip(
     let look = |key: &str| strings.as_ref().map_or_else(|| key.to_owned(), |s| s.tooltip_text(key).to_owned());
     // An interface element under the pointer owns the tooltip; the unit behind it has none.
     let mut underline = Vec::new();
-    let shown = match hover.target {
+    let shown = match hover.target.filter(|target| tips.contains(*target)) {
         Some(e) => tips
             .get(e)
             .ok()
             .and_then(|t| {
                 if !stock {
-                    return t.text_at_with(hover.rest, &delays).map(look);
+                    if let Some(super::hud::stock::tooltip_text::StockTip::Build(parts)) = &t.stock {
+                        // A free item has no cost line. The plain HUD's generated verbose
+                        // fallback can also carry a lock reason when the class has no key.
+                        let costs = parts.cost.iter().any(|cost| cost.amount > 0.0);
+                        let lock_details = hover.rest >= delays.verbose
+                            && parts.verbose.is_none() && t.verbose.is_some();
+                        if !costs || lock_details {
+                            return t.text_at_with(hover.rest, &delays).map(look);
+                        }
+                    }
+                    return t.stock_text_at(hover.rest, &delays, &look);
                 }
                 // The stock look: the string table's composition, the hotkey slot filled with the
                 // key the player bound where STA64 knows it, the markers consumed.

@@ -51,19 +51,27 @@ Which cfg keys the HUD code uses by name, panel by panel, is in the generated
   commands. Existing action capability gates and targeting/build rules stay
   authoritative. Do not expose enabled unsupported gameplay actions.
 
-## Bars (UI-48)
+## Stock Armada II executable audit
 
-A stock bar is drawn whole in `<stem>DisableColor`, then its filled part over
-that in the bar's own colour, which for bars with a fixed colour is
-`<stem>Color` (read from the stock Armada II executable, static; not compared
-by eye). The single-selection hull, shield and construction bars and the group
-tiles' hull bars take both from the mounted cfg (the hull bar borrows the
-shield bar's track colour, the group bar the multi shield bar's, where the cfg
-has none of their own); a key the cfg does not set
-keeps the theme colour (fill) or a translucent black (track). Not yet: the
-bar's own sprite (`infoSingleShieldBar` and the like name one), the
-health-dependent fill colour of the original's hull and shield bar, and the
-energy, dilithium, crew and planet-metal bars.
+The clean Armada II 1.1 executable and Heroic data supplied the reference.
+STA64 reads the panel positions and sprite names from the mounted CFG and SPR.
+The following rules apply to the Armada II presentation profile.
+
+| Element | Native evidence and STA64 behavior |
+| --- | --- |
+| Selection height | `DetermineSelectedDisplayType` at `0x4f2ee0` tests the Shipyard flag `0x200` on a single non-planet object. `Shipyard::Shipyard` sets that flag at `0x4bb200`, and `Starbase::Starbase` inherits it. A research station has a production queue and still uses the medium card. |
+| Group | `DisplayMultiObjectSmall` and `DisplayMultiObjectFull` at `0x4f3c80` and `0x4f3d30` share the same slots. The medium card draws eight slots and the tall card draws sixteen. `ShipIcon::Render` at `0x4f7550` draws each wireframe and its health gauge. A sheet can add captions through its own name rectangles. |
+| Health gauge | `PostLoad` places a `HealthBar` in both single cards. `GetBarValue` at `0x4f4350` uses hull for fill width. `GetBarColor` at `0x4f4280` shades a craft's operating shields from red to green by charge and uses blue when shields are offline or empty. STA64 preserves authored tint overrides and binds the gauge's tooltip to hull integrity. |
+| Subsystems | `SystemText::GetInformation` at `0x4ec960` supplies the rounded health value. STA64 shows the number without a percent sign and uses the same stock font sizing as crew and officers. An unavailable subsystem displays a dim zero. CFG rectangles can hide a row. |
+| Construction rig | The rig inherits the producer draw path in `DisplaySingleObject` at `0x4f3770`. Its medium card keeps a striped meter at `infoSingleConstructionArea`, with an active fill from its current construction job. |
+| Hover strip | `DisplayInfoBar` at `0x4f3320` accepts craft. `SDInfoBar::Render` draws hull, shield and energy percentages and a whole crew count. STA64 displays the same rounded values without percent signs in this strip. The exact native name-versus-class predicate is still unverified. |
+| Resource strip | `ResourcePanel::PostLoad` at `0x4ff450` loads six rectangle and tooltip definitions. Their visibility and positions come from the faction's resolved sheet. |
+| Persistent controls | `ButtonPanel::ButtonPanel` at `0x4fe5f0` starts collapsed. `Render` at `0x4fefe0` gates the menu, help and palette row on one flag. STA64 draws CFG controls and disables actions whose game systems are unavailable. |
+| Minimap and cinematic viewport | Both use the faction's authored frame and display region. Native event-location marks from `MapRadar::AddMessageMark` still need an event feed. Native footprint and live inset behavior need a runtime comparison. |
+
+The standalone data mount accepts a copied CD folder with `odf`, `bzn`,
+`game_cfg.h` and `misc/gui_glob16x12.cfg`. This lets tests use the CD assets
+without inheriting a separate host install's ODFs or UI files.
 
 ## Scope and proof boundaries
 

@@ -14,7 +14,7 @@ struct FogParams {
 @group(1) @binding(1) var mask: texture_2d<f32>;
 @group(1) @binding(2) var mask_s: sampler;
 
-// The red and green mask channels mark cells hidden by fog and shroud.
+// The red and green channels encode distance to the fog and shroud contours.
 fn tap(p: vec2<f32>, size: vec2<f32>) -> vec2<f32> {
     return textureSampleLevel(mask, mask_s, p / size, 0.0).rg;
 }

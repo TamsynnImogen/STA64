@@ -151,7 +151,7 @@ fn stock_colour_at(app: &mut App, key: &str, top_strip: bool) -> Color {
     let expected = {
         let layout = app.world().resource::<StockState>().layout.as_ref().unwrap();
         let info = model::info(app.world().resource::<HudFeed>());
-        let variant = layout::info_variant(&info);
+        let variant = layout.info_variant(&info);
         let mut origin = layout.info_origin(variant);
         if top_strip {
             origin += layout.point(&format!("infoBarOffset_{variant}")).unwrap_or(Vec2::ZERO);
@@ -433,6 +433,31 @@ fn personnel_flags_and_zero_rectangles_suppress_only_authored_labels() {
     }
 }
 
+/// Install-gated: the mounted STA2 Classic race CFGs determine which personnel
+/// readouts exist; a live PlayerView supplies their values without rebuilding them.
+#[test]
+fn installed_sta2_classic_personnel_respects_race_cfg() {
+    let (Some(root), Ok(mode)) = (std::env::var_os("STA64_TEST_INSTALL"), std::env::var("STA64_TEST_MOD")) else {
+        eprintln!("SKIP: set STA64_TEST_INSTALL and STA64_TEST_MOD=STA2 Classic");
+        return;
+    };
+    if mode != "STA2 Classic" { return; }
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(&mode)).unwrap();
+    for (cfg_name, crew_visible) in [
+        ("gui_fed.cfg", true), ("gui_kli.cfg", true), ("gui_rom.cfg", true),
+        ("gui_bor.cfg", true), ("gui_species8472.cfg", false),
+    ] {
+        let cfg = crate::game::gui_layout(&vfs, cfg_name).unwrap_or_else(|| panic!("{cfg_name} missing"));
+        let layout = StockLayout::new(&cfg, Vec2::new(1920.0, 1080.0));
+        assert_eq!(layout.number("noCrew").is_some_and(|n| n != 0.0), !crew_visible, "{cfg_name}");
+        assert_eq!(layout.number("noOfficers").is_some_and(|n| n != 0.0), false, "{cfg_name}");
+        let mut app = app_with_content_and_config(content(), HudConfig { gui: Some(cfg), ..default() }, UiProfile::Armada2);
+        set_personnel(&mut app, Some(Fixed::from_int(1200)), [Fixed::from_int(16), Fixed::from_int(600)]);
+        assert_eq!(resource_label(&mut app, 0).map(|r| r.1), crew_visible.then(|| "1200".to_owned()), "{cfg_name}");
+        assert_eq!(resource_label(&mut app, 1).map(|r| r.1), Some("16/600".to_owned()), "{cfg_name}");
+    }
+}
+
 #[test]
 fn stock_resources_and_officers_format_large_fixed_values_exactly() {
     let cfg = inherited_config("resource_0 = 4 5 30 10\nresource_3 = 30 10 80 30\nresource_5 = 320 10 80 30\n", "");
@@ -456,6 +481,13 @@ fn inherited_a2_info_colour_tints_single_and_builder_text() {
     let cfg = inherited_config("", "infoTextColor = 1 0 1 1\nshipNameColor = 0 1 0 1\nresource_2_color = 1 0 0 1\n");
     for build_count in [0, 1] {
         let mut app = app_with_content_and_config(content_with_build_count(build_count), cfg.clone(), UiProfile::Armada2);
+        if build_count == 1 {
+            let mut feed = app.world().resource::<HudFeed>().clone();
+            let yard = feed.content.as_ref().unwrap().key("fx_yard").unwrap();
+            Arc::make_mut(&mut feed.view).units[0].def = yard;
+            *app.world_mut().resource_mut::<HudFeed>() = feed;
+            app.update();
+        }
         // The info bar follows the pointer: hover the selected ship to read its values there.
         app.world_mut().resource_mut::<crate::input::hover::HoveredUnit>().0 = Some(EntityId(1));
         app.update();
@@ -474,13 +506,24 @@ fn inherited_a2_info_colour_tints_single_and_builder_text() {
 
 #[test]
 fn fo_separate_colours_and_legacy_overrides_take_precedence() {
+    let selected = |cfg, yard| {
+        let mut app = app_with_content_and_config(content(), cfg, UiProfile::FleetOps);
+        if yard {
+            let mut feed = app.world().resource::<HudFeed>().clone();
+            let def = feed.content.as_ref().unwrap().key("fx_yard").unwrap();
+            Arc::make_mut(&mut feed.view).units[0].def = def;
+            *app.world_mut().resource_mut::<HudFeed>() = feed;
+            app.update();
+        }
+        app
+    };
     let cfg = inherited_config(
         "infoSingleNameTextColor = 0 1 1 1\ninfoSingleClassTextColor = 1 1 0 1\n",
         "nameTextColor = 1 0 0 1\nclassTextColor = 0 0 1 1\ninfoTextColor = 1 0 1 1\n",
     );
-    for build_count in [0, 1] {
-        let mut app = app_with_content_and_config(content_with_build_count(build_count), cfg.clone(), UiProfile::FleetOps);
-        let (name_key, class_key) = if build_count == 0 {
+    for yard in [false, true] {
+        let mut app = selected(cfg.clone(), yard);
+        let (name_key, class_key) = if !yard {
             ("infoSingleNameTextArea", "infoSingleClassTextArea")
         } else {
             ("infoBuildName", "infoBuildClass")
@@ -490,9 +533,9 @@ fn fo_separate_colours_and_legacy_overrides_take_precedence() {
     }
 
     let cfg = inherited_config("", "nameTextColor = 1 0 0 1\nclassTextColor = 0 0 1 1\ninfoTextColor = 1 0 1 1\n");
-    for build_count in [0, 1] {
-        let mut app = app_with_content_and_config(content_with_build_count(build_count), cfg.clone(), UiProfile::FleetOps);
-        let (name_key, class_key) = if build_count == 0 {
+    for yard in [false, true] {
+        let mut app = selected(cfg.clone(), yard);
+        let (name_key, class_key) = if !yard {
             ("infoSingleNameTextArea", "infoSingleClassTextArea")
         } else {
             ("infoBuildName", "infoBuildClass")
@@ -505,6 +548,11 @@ fn fo_separate_colours_and_legacy_overrides_take_precedence() {
 #[test]
 fn missing_authored_colours_keep_theme_defaults() {
     let mut app = app_with_content_and_config(content(), inherited_config("", ""), UiProfile::Armada2);
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    let yard = feed.content.as_ref().unwrap().key("fx_yard").unwrap();
+    Arc::make_mut(&mut feed.view).units[0].def = yard;
+    *app.world_mut().resource_mut::<HudFeed>() = feed;
+    app.update();
     let theme = app.world().resource::<Theme>().clone();
     assert_eq!(stock_colour_at(&mut app, "infoBuildName", false), theme.text);
     assert_eq!(stock_colour_at(&mut app, "infoBuildClass", false), theme.text_dim);
@@ -623,6 +671,9 @@ fn populated_info_bar(builder: bool, extra: &str) -> App {
     other.shields = [[Fixed::from_int(25), Fixed::from_int(100)]; 4];
     other.crew = Some([Fixed::from_int(73), Fixed::from_int(150)]);
     other.energy = Some([Fixed::from_int(17), Fixed::from_int(600)]);
+    if builder {
+        view.units[0].def = feed.content.as_ref().unwrap().key("fx_yard").unwrap();
+    }
     view.units.push(other);
     feed.view = Arc::new(view);
     *app.world_mut().resource_mut::<HudFeed>() = feed;
@@ -631,7 +682,7 @@ fn populated_info_bar(builder: bool, extra: &str) -> App {
 }
 
 #[test]
-fn bare_status_values_and_crew_change_colour_with_live_pools() {
+fn native_hover_readouts_update_values_and_colours() {
     use infobar::InfoBarField::{Hull, Shields, Crew};
     let mut app = populated_info_bar(false, "systemIconHealthyColor=0 1 0\nsystemIconLowColor=1 1 0\nsystemIconCriticalColor=1 0 0\n");
     // The info bar follows the pointer: hover the selected ship to read its values there.
@@ -743,6 +794,162 @@ fn no_selection_hover_uses_low_offset_and_missing_or_hidden_targets_clear_stats(
     *app.world_mut().resource_mut::<HudFeed>() = feed;
     app.update();
     assert_eq!(info_bar_label(&mut app, Crew).unwrap().3, Visibility::Hidden);
+}
+
+fn tiered_info_config() -> HudConfig {
+    let mut raw = CFG.replace("infoPanelArea_1 = 400 900 500 300", "infoPanelArea_1 = 400 1000 500 200");
+    raw.push_str("\
+infoPanelArea_0 = 400 1100 500 100
+infoLowBackgroundPanel = \"low_frame\"
+infoLowBackgroundPanelArea = 3 4 490 96
+infoLowBackgroundPanelSize = 1
+infoLowBackgroundPanel_0 = 0 0 490 96
+infoMiddleBackgroundPanel = \"middle_frame\"
+infoMiddleBackgroundPanelArea = 5 6 480 194
+infoMiddleBackgroundPanelSize = 1
+infoMiddleBackgroundPanel_0 = 0 0 480 194
+infoBackgroundPanel = \"high_frame\"
+infoBackgroundPanelArea = 7 8 475 292
+infoBackgroundPanelSize = 1
+infoBackgroundPanel_0 = 0 0 475 292
+infoBlackArea_0 = 12 13 440 70
+infoBlackArea_1 = 12 13 440 160
+infoBlackArea_2 = 12 13 440 260
+infoBarOffset_0 = 10 5 0 0
+infoBarOffset_1 = 20 6 0 0
+infoBarOffset_2 = 30 7 0 0
+shipName = 0 0 180 20
+infoMultiShipIconSm_0 = 350 10 30 30
+");
+    for index in 0..16 {
+        raw.push_str(&format!(
+            "infoMultiShipIcon_{index} = {} {} 40 40\n",
+            10 + (index % 8) * 55,
+            70 + (index / 8) * 65,
+        ));
+    }
+    single_file_config(&raw)
+}
+
+#[test]
+fn armada2_info_frame_bar_and_hit_area_follow_selection_tier() {
+    use crate::ui::gui_sprites::GuiImage;
+    use crate::ui::hud::panels::GroupTile;
+    use infobar::InfoBarField::Name;
+
+    let mut app = app_with_content_and_config(content_with_build_count(1), tiered_info_config(), UiProfile::Armada2);
+    let keys = {
+        let feed = app.world().resource::<HudFeed>();
+        let db = feed.content.as_ref().unwrap();
+        ["fx_frigate", "fx_cruiser", "fx_yard", "fx_station"]
+            .map(|name| db.key(name).unwrap())
+    };
+    {
+        let mut feed = app.world().resource::<HudFeed>().clone();
+        let view = Arc::make_mut(&mut feed.view);
+        for id in 2..=17 {
+            let mut unit = view.units[0].clone();
+            unit.id = EntityId(id);
+            view.units.push(unit);
+        }
+        view.units[0].def = keys[0];
+        feed.selected.clear();
+        *app.world_mut().resource_mut::<HudFeed>() = feed;
+    }
+    app.world_mut().resource_mut::<crate::input::hover::HoveredUnit>().0 = Some(EntityId(1));
+    app.update();
+
+    let assert_tier = |app: &mut App, tier: usize, frame_name: &str, tiles: usize| {
+        let (frame_area, black_area, bar, hit) = {
+            let state = app.world().resource::<StockState>();
+            let layout = state.layout.as_ref().unwrap();
+            let info = model::info(app.world().resource::<HudFeed>());
+            assert_eq!(layout.info_variant(&info), tier);
+            let area = layout.info_area(tier).unwrap();
+            let frame_key = match tier {
+                0 => "infoLowBackgroundPanelArea",
+                1 => "infoMiddleBackgroundPanelArea",
+                _ => "infoBackgroundPanelArea",
+            };
+            let frame_area = layout.info_at(tier, frame_key).unwrap();
+            let black_area = layout.info_at(tier, &format!("infoBlackArea_{tier}")).unwrap();
+            let bar = layout.info_bar_at(tier, "shipName").unwrap();
+            let hit = state.solid.iter().any(|rect| rect.contains(Vec2::new(area.x + 20.0, area.y + 20.0)));
+            (frame_area, black_area, bar, hit)
+        };
+        assert!(hit, "the drawn {frame_name} owns its pointer area");
+        let parent = one::<StockInfo>(app);
+        let frame = app.world_mut()
+            .query::<(&GuiImage, &Node, &ChildOf)>()
+            .iter(app.world())
+            .find(|(image, _, child)| child.parent() == parent && image.names.iter().any(|name| name == frame_name))
+            .map(|(_, node, _)| node.clone())
+            .unwrap_or_else(|| panic!("missing {frame_name}"));
+        assert_eq!((frame.left, frame.top, frame.width, frame.height),
+            (Val::Px(frame_area.x), Val::Px(frame_area.y), Val::Px(frame_area.w), Val::Px(frame_area.h)));
+        let black = app.world_mut()
+            .query::<(&BackgroundColor, &Node, &ChildOf)>()
+            .iter(app.world())
+            .find(|(color, _, child)| child.parent() == parent && color.0 == Color::BLACK.with_alpha(0.5))
+            .map(|(_, node, _)| node.clone())
+            .unwrap_or_else(|| panic!("missing {frame_name} backing"));
+        assert_eq!((black.left, black.top, black.width, black.height),
+            (Val::Px(black_area.x), Val::Px(black_area.y), Val::Px(black_area.w), Val::Px(black_area.h)));
+        let name = info_bar_label(app, Name).unwrap().4;
+        assert_eq!((name.left, name.top), (Val::Px(bar.x), Val::Px(bar.y)));
+        let rendered = app.world_mut().query::<&GroupTile>().iter(app.world()).count();
+        assert_eq!(rendered, tiles, "{frame_name} group tiles");
+    };
+
+    assert_tier(&mut app, 0, "low_frame", 0);
+    let high_only = {
+        let layout = app.world().resource::<StockState>().layout.as_ref().unwrap();
+        let area = layout.info_area(2).unwrap();
+        Vec2::new(area.x + 20.0, area.y + 20.0)
+    };
+    assert!(!app.world().resource::<StockState>().solid.iter().any(|r| r.contains(high_only)),
+        "the collapsed HUD leaves the space above the low frame open to the map");
+
+    let select = |app: &mut App, ids: Vec<EntityId>, def: Option<sta_sim::ContentKey>| {
+        let mut feed = app.world().resource::<HudFeed>().clone();
+        if let Some(def) = def {
+            Arc::make_mut(&mut feed.view).units[0].def = def;
+        }
+        feed.selected = ids;
+        *app.world_mut().resource_mut::<HudFeed>() = feed;
+        app.update();
+    };
+    select(&mut app, vec![EntityId(1)], None);
+    assert_tier(&mut app, 1, "middle_frame", 0);
+    // A craft with a build list remains in the middle tier in Armada II.
+    select(&mut app, vec![EntityId(1)], Some(keys[1]));
+    assert_tier(&mut app, 1, "middle_frame", 0);
+    for (count, tier, frame) in [(8, 1, "middle_frame"), (9, 2, "high_frame"), (17, 2, "high_frame")] {
+        select(&mut app, (1..=count).map(EntityId).collect(), None);
+        assert_tier(&mut app, tier, frame, count.min(16) as usize);
+        let expected = {
+            let layout = app.world().resource::<StockState>().layout.as_ref().unwrap();
+            layout.info_at(tier, "infoMultiShipIcon_0").unwrap()
+        };
+        let first = app.world_mut()
+            .query::<(&GroupTile, &Node)>()
+            .iter(app.world())
+            .find(|(tile, _)| tile.0 == EntityId(1))
+            .map(|(_, node)| node.clone())
+            .unwrap();
+        assert_eq!((first.left, first.top, first.width, first.height),
+            (Val::Px(expected.x), Val::Px(expected.y), Val::Px(expected.w), Val::Px(expected.h)),
+            "{count} selected units use the normal group geometry");
+    }
+    // An idle yard and a starbase keep the tall builder layout.
+    assert!(app.world().resource::<HudFeed>().production.is_empty());
+    for def in [keys[2], keys[3]] {
+        select(&mut app, vec![EntityId(1)], Some(def));
+        assert_tier(&mut app, 2, "high_frame", 0);
+    }
+    select(&mut app, Vec::new(), None);
+    assert_tier(&mut app, 0, "low_frame", 0);
+    assert!(!app.world().resource::<StockState>().solid.iter().any(|r| r.contains(high_only)));
 }
 
 #[test]
@@ -891,7 +1098,7 @@ fn numeric_values_patch_existing_stock_entities() {
             .iter(app.world())
             .filter_map(|(e, kind, text)| match kind {
                 info::StockText::Resource(id) => Some((e, *id, text.text.clone())),
-                info::StockText::Population(_) => None,
+                info::StockText::Population(_) | info::StockText::RigJob(_) => None,
             })
             .collect()
     };
@@ -993,6 +1200,28 @@ fn stock_build_palette_pages_reach_every_build_option() {
 }
 
 #[test]
+fn stock_hud_build_buttons_show_station_and_ship_costs_without_authored_verbose_text() {
+    let mut app = app();
+    let delays = crate::ui::stock_tooltip::TipDelays::default();
+    for (builder, product, cost) in [("fx_cruiser", "fx_station", "1200"), ("fx_yard", "fx_cruiser", "600")] {
+        let mut feed = app.world().resource::<HudFeed>().clone();
+        let mut view = (*feed.view).clone();
+        view.units[0].def = feed.content.as_ref().unwrap().key(builder).unwrap();
+        feed.view = Arc::new(view);
+        *app.world_mut().resource_mut::<HudFeed>() = feed;
+        app.world_mut().resource_mut::<super::super::HudState>().page = super::super::Page::Build;
+        app.update();
+        let tip = app.world_mut().query::<(&GridCell, &crate::ui::notices::Tooltip)>().iter(app.world())
+            .find_map(|(cell, tip)| matches!(&cell.0, Act::Build { odf, .. } if odf == product).then_some(tip.clone()))
+            .unwrap_or_else(|| panic!("missing {product} build button"));
+        for rest in [delays.short, delays.verbose] {
+            let text = tip.stock_text_at(rest, &delays, &|key| key.into()).unwrap();
+            assert!(text.contains(cost), "{builder} -> {product} at {rest}: {text:?}");
+        }
+    }
+}
+
+#[test]
 fn stock_grid_clicks_still_queue_orders_and_arm_targets() {
     let mut app = app();
     let stop = cell(&mut app, Act::Stop);
@@ -1032,6 +1261,7 @@ fn metadata_groups_only_available_actions() {
                 preferred: None,
                 menu: Some(menu.into()),
                 source: Vec::new(),
+                param: None,
                 tooltip: Some("GUI_MOVE_TOOLTIP".into()),
                 verbose: Some("GUI_MOVE_VERBOSE".into()),
                 normal: None,
@@ -1071,7 +1301,7 @@ fn transport_shows_in_the_stock_palette_only_where_the_command_data_places_it() 
     assert!(transport(&NativeCommands::default()).is_none());
     let record = |preferred| NativeCommand {
         odf: "transport.odf".into(), command: "TRANSPORT".into(), button: "b_transport".into(), preferred, menu: None,
-        source: Vec::new(),
+        source: Vec::new(), param: None,
         tooltip: None, verbose: None, normal: None, hovered: None, pressed: None, disabled: None, active: None,
     };
     let mut native = NativeCommands::default();
@@ -1098,6 +1328,7 @@ fn native_formation_choices_keep_odf_identity_and_cannot_queue_orders() {
             preferred: Some(preferred),
             menu: None,
             source: Vec::new(),
+            param: None,
             tooltip: Some(tip.into()),
             verbose: Some(format!("{tip}_VERBOSE")),
             normal: None,
@@ -1851,4 +2082,201 @@ fn installed_layouts_give_a_window_exactly_where_they_declare_one_and_its_art_re
     if ran == 0 {
         eprintln!("SKIP (or no layout declares the window): set STA64_TEST_A2_STOCK_INSTALL, STA64_TEST_ROOTS_INSTALL or STA64_TEST_INSTALL");
     }
+}
+
+#[test]
+fn armada2_yard_personnel_and_emblem_use_builder_rectangles() {
+    use crate::ui::gui_sprites::GuiImage;
+    use crate::ui::hud::readouts::{Readout, ReadoutTarget};
+
+    let base = content();
+    let mut db = ContentDb::builder().profile(base.profile()).features(base.features().clone());
+    for weapon in base.weapons() {
+        db = db.weapon(weapon.clone());
+    }
+    for def in base.units() {
+        let mut def = def.clone();
+        if def.odf == "fx_yard" {
+            def.build.officers = Fixed::from_int(10);
+            def.race = "federation".into();
+        }
+        db = db.unit(def);
+    }
+    let db = Arc::new(db.build().unwrap());
+    let cfg = inherited_config("", "\
+infoBuildCrew = 30 30 60 24
+infoBuildCrewIcon = 5 30 24 24
+infoBuildOfficers = 30 55 60 24
+infoBuildOfficersIcon = 5 55 24 24
+infoBuildEnergy = 30 80 60 24
+infoBuildEnergyIcon = 5 80 24 24
+infoBuildShieldBar = 5 105 80 8
+infoProgressBar = 210 280 210 10
+infoSingleRaceIconDisplayArea = 405 20 80 80
+");
+    let mut app = app_with_content_and_config(db.clone(), cfg, UiProfile::Armada2);
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    let unit = &mut Arc::make_mut(&mut feed.view).units[0];
+    unit.def = db.key("fx_yard").unwrap();
+    unit.crew = Some([Fixed::from_int(150); 2]);
+    unit.energy = Some([Fixed::from_int(7), Fixed::from_int(10)]);
+    unit.hull = [Fixed::from_int(50), Fixed::from_int(100)];
+    unit.shields = [[Fixed::from_int(100); 2]; 4];
+    *app.world_mut().resource_mut::<HudFeed>() = feed;
+    app.update();
+    let person_label = |app: &mut App, value: &str| {
+        app.world_mut().query::<(Entity, &SpriteText, &ChildOf, &Visibility, &selection_readouts::SelectionReadout)>()
+            .iter(app.world())
+            .find(|(_, text, _, vis, _)| text.text == value && **vis == Visibility::Inherited)
+            .map(|(entity, _, parent, _, _)| (entity, app.world().get::<Node>(parent.parent()).unwrap().clone()))
+            .unwrap()
+    };
+    for (key, count) in [("infoBuildCrew", "150"), ("infoBuildOfficers", "10"), ("infoBuildEnergy", "70%")] {
+        let (_, placement) = person_label(&mut app, count);
+        let layout = app.world().resource::<StockState>().layout.as_ref().unwrap();
+        let rect = layout.at(layout.info_origin(2), key).unwrap();
+        assert_eq!((placement.left, placement.top), (Val::Px(rect.x), Val::Px(rect.y)));
+    }
+    assert!(app.world_mut().query::<&GuiImage>().iter(app.world())
+        .any(|image| image.names.iter().any(|name| name == "federation_icon")));
+    assert!(app.world().resource::<HudFeed>().production.is_empty());
+    assert!(app.world_mut().query::<&GuiImage>().iter(app.world())
+        .any(|image| image.names.iter().any(|name| name == "large_construction_bar")));
+    assert!(app.world_mut()
+        .query::<(&info::StockBar, &Node, &BackgroundColor)>()
+        .iter(app.world())
+        .any(|(bar, node, color)| matches!(bar, info::StockBar::NativeHealth(w) if node.width == Val::Px(*w * 0.5))
+            && color.0 == Color::srgb(0.0, 1.0, 0.0)),
+        "stock health gauge shows half hull with a full-shield tint");
+
+    assert_eq!(app.world_mut().query::<&ReadoutTarget>().iter(app.world())
+        .filter(|ReadoutTarget(_, kind)| matches!(kind, Readout::Officers)).count(), 2);
+
+    let (officer, _) = person_label(&mut app, "10");
+    let (crew, _) = person_label(&mut app, "150");
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    let unit = &mut Arc::make_mut(&mut feed.view).units[0];
+    unit.crew.as_mut().unwrap()[0] = Fixed::from_int(73);
+    unit.energy = None;
+    *app.world_mut().resource_mut::<HudFeed>() = feed;
+    app.update();
+    assert_eq!(person_label(&mut app, "73").0, crew);
+    assert_eq!(person_label(&mut app, "10").0, officer);
+    assert!(app.world_mut().query::<(&SpriteText, &Visibility, &selection_readouts::SelectionReadout)>()
+        .iter(app.world()).any(|(text, vis, _)| text.text == "70%" && *vis == Visibility::Hidden));
+}
+
+#[test]
+fn roots_hosted_classic_uses_medium_card_readouts_and_live_values() {
+    use crate::ui::gui_sprites::GuiImage;
+    use crate::ui::hud::readouts::{Readout, ReadoutTarget};
+
+    let base = content();
+    let mut db = ContentDb::builder().profile(base.profile()).features(base.features().clone());
+    for weapon in base.weapons() {
+        db = db.weapon(weapon.clone());
+    }
+    for def in base.units() {
+        let mut def = def.clone();
+        if def.odf == "fx_cruiser" {
+            def.build.officers = Fixed::from_int(4);
+            def.build.list.clear();
+            let mut no_officers = def.clone();
+            no_officers.odf = "fx_cruiser_no_officers".into();
+            no_officers.build.officers = Fixed::ZERO;
+            db = db.unit(no_officers);
+        }
+        db = db.unit(def);
+    }
+    let db = Arc::new(db.build().unwrap());
+    let cfg = inherited_config("", "\
+infoCrewNum = 37 35 57 24
+infoCrewNumIcon = 8 35 24 24
+infoOfficers = 37 65 57 24
+infoOfficersIcon = 8 65 24 24
+infoEnergy = 37 95 57 24
+infoEnergyIcon = 8 95 24 24
+");
+    let mut app = app_with_content_and_config(db.clone(), cfg, UiProfile::FleetOps);
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    let unit = &mut Arc::make_mut(&mut feed.view).units[0];
+    unit.crew = Some([Fixed::from_int(150); 2]);
+    unit.energy = Some([Fixed::from_int(2), Fixed::from_int(3)]);
+    *app.world_mut().resource_mut::<HudFeed>() = feed;
+    app.update();
+
+    let rect = |app: &App, key| {
+        let layout = app.world().resource::<StockState>().layout.as_ref().unwrap();
+        layout.at(layout.info_origin(1), key).unwrap()
+    };
+    let label = |app: &mut App, key| {
+        let r = rect(app, key);
+        app.world_mut()
+            .query::<(Entity, &SpriteText, &ChildOf, &Visibility, &selection_readouts::SelectionReadout)>()
+            .iter(app.world())
+            .find_map(|(entity, text, parent, vis, _)| {
+                let node = app.world().get::<Node>(parent.parent())?;
+                (node.left == Val::Px(r.x) && node.top == Val::Px(r.y))
+                    .then(|| (entity, text.text.clone(), *vis))
+            })
+            .unwrap_or_else(|| panic!("missing selection label for {key}"))
+    };
+    let icon = |app: &mut App, key| {
+        let r = rect(app, key);
+        app.world_mut()
+            .query::<(&GuiImage, &Node, &Visibility, &selection_readouts::SelectionReadout)>()
+            .iter(app.world())
+            .find_map(|(image, node, vis, _)| {
+                (node.left == Val::Px(r.x) && node.top == Val::Px(r.y))
+                    .then(|| (image.names.clone(), *vis))
+            })
+            .unwrap_or_else(|| panic!("missing selection icon for {key}"))
+    };
+
+    let (crew_id, crew, crew_vis) = label(&mut app, "infoCrewNum");
+    assert_eq!((crew, crew_vis), ("150".into(), Visibility::Inherited));
+    assert_eq!(label(&mut app, "infoOfficers").1, "4");
+    let (energy_id, energy, energy_vis) = label(&mut app, "infoEnergy");
+    assert_eq!((energy, energy_vis), ("67%".into(), Visibility::Inherited));
+    assert_eq!(icon(&mut app, "infoCrewNumIcon"), (vec!["crew_amt".into()], Visibility::Inherited));
+    assert_eq!(icon(&mut app, "infoOfficersIcon"), (vec!["officers".into()], Visibility::Inherited));
+    assert_eq!(icon(&mut app, "infoEnergyIcon"), (vec!["energy_amt".into()], Visibility::Inherited));
+    for readout in [Readout::Crew, Readout::Officers, Readout::Energy] {
+        assert_eq!(app.world_mut().query::<&ReadoutTarget>().iter(app.world())
+            .filter(|ReadoutTarget(id, found)| *id == EntityId(1) &&
+                std::mem::discriminant(found) == std::mem::discriminant(&readout))
+            .count(), 2);
+    }
+
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    let unit = &mut Arc::make_mut(&mut feed.view).units[0];
+    unit.crew.as_mut().unwrap()[0] = Fixed::from_int(73);
+    unit.energy.as_mut().unwrap()[0] = Fixed::ZERO;
+    *app.world_mut().resource_mut::<HudFeed>() = feed;
+    app.update();
+    assert_eq!(label(&mut app, "infoCrewNum"), (crew_id, "73".into(), Visibility::Inherited));
+    assert_eq!(label(&mut app, "infoEnergy"), (energy_id, "0%".into(), Visibility::Inherited));
+
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    let unit = &mut Arc::make_mut(&mut feed.view).units[0];
+    unit.crew = None;
+    unit.energy = None;
+    *app.world_mut().resource_mut::<HudFeed>() = feed;
+    app.update();
+    assert_eq!(label(&mut app, "infoCrewNum").2, Visibility::Hidden);
+    assert_eq!(icon(&mut app, "infoCrewNumIcon").1, Visibility::Hidden);
+    assert_eq!(label(&mut app, "infoEnergy").2, Visibility::Hidden);
+    assert_eq!(icon(&mut app, "infoEnergyIcon").1, Visibility::Hidden);
+    assert_eq!(label(&mut app, "infoOfficers").2, Visibility::Inherited);
+
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    let unit = &mut Arc::make_mut(&mut feed.view).units[0];
+    unit.crew = Some([Fixed::from_int(73), Fixed::from_int(150)]);
+    unit.def = db.key("fx_cruiser_no_officers").unwrap();
+    *app.world_mut().resource_mut::<HudFeed>() = feed;
+    app.update();
+    assert_eq!(label(&mut app, "infoCrewNum").2, Visibility::Inherited);
+    assert_eq!(icon(&mut app, "infoCrewNumIcon").1, Visibility::Inherited);
+    assert_eq!(label(&mut app, "infoOfficers").2, Visibility::Hidden);
+    assert_eq!(icon(&mut app, "infoOfficersIcon").1, Visibility::Hidden);
 }

@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use bevy::prelude::Resource;
-use sta_content::{Availability, ContentDb, Owned, ResourceModel, Unmet, UnitDef};
+use sta_content::{Availability, ContentDb, Owned, ResourceModel, TechState, Unmet, UnitDef};
 use sta_sim::command::{CommandKind, Order};
 use sta_sim::world::EntityKind;
 use sta_sim::movement::{FORM_COLUMN, FORM_LINE, FORM_WEDGE};
@@ -52,6 +52,40 @@ impl HudFeed {
     pub(super) fn def(&self, u: &UnitView) -> Option<&UnitDef> {
         self.content.as_deref().and_then(|c| c.unit(u.def))
     }
+
+    fn has_build_queue(&self, unit: &UnitView, def: &UnitDef) -> bool {
+        let Some(db) = self.content.as_deref() else { return false };
+        if !finished(unit) {
+            return false;
+        }
+        // Site deployment and welding have no queue ID. A real queue can
+        // also be populated by script or push-build without a build menu.
+        self.production.iter().any(|row| {
+            row.builder == unit.id && row.jobs.iter().any(|job| job.queue_id.is_some())
+        }) || (db.build_queue_limit(def) > 0
+            && (EntityKind::producer_def(def) || def.is_evolver())
+            && def.build.list.iter().filter_map(|item| db.unit(item.key))
+                .any(|product| !EntityKind::build_requires_site(def, product)))
+    }
+
+    pub(super) fn can_trade(&self, unit: &UnitView) -> bool {
+        self.content.as_deref().is_some_and(|db| {
+            let Some(def) = db.unit(unit.def) else { return false };
+            let race = self.view.attrs.races.binary_search_by_key(&unit.id, |row| row.0)
+                .ok().map_or(def.race.as_str(), |i| self.view.attrs.races[i].1.as_str());
+            db.can_trade(race)
+        })
+    }
+
+    pub(super) fn cargo_ship(&self, unit: &UnitView) -> bool {
+        unit.owner == self.player && unit.hull[0] > Fixed::ZERO && finished(unit)
+            && self.can_trade(unit)
+            && self.def(unit).is_some_and(|def| {
+                def.trade_cargo_capacity.is_some_and(|max| max > Fixed::ZERO)
+                    && def.raw.bool("cargo_ship") != Some(false)
+            })
+    }
+
 
     /// The name a script gave the unit (`WorldView::attrs::names`), else the one its map gave
     /// it, as written; the ODF caption and craft-name pool apply when neither exists.
@@ -120,8 +154,12 @@ pub struct Single {
     pub shield: Option<f32>,
     /// Building or being built, 0..1.
     pub progress: Option<f32>,
-    /// Has a build list: its panel is the middle height.
+    /// A completed unit with a build list, used by the alternate HUDs.
     pub builder: bool,
+    /// A finished unit with in-place production, even while its queue is empty.
+    pub has_build_queue: bool,
+    /// Stock Armada II selects its builder card by the Shipyard type flag.
+    pub a2_yard: bool,
 }
 
 /// One tile of a group.
@@ -173,6 +211,12 @@ pub fn info(feed: &HudFeed) -> Info {
                     (identity.name, identity.captain, identity.registry)
                 },
             );
+            let captain = feed.names.captain_override(u.id)
+                .map(|value| (!value.is_empty()).then(|| value.to_owned()))
+                .unwrap_or(captain);
+            let registry = feed.names.registry_override(u.id)
+                .map(|value| (!value.is_empty()).then(|| value.to_owned()))
+                .unwrap_or(registry);
             Info::Single(Single {
                 id: u.id,
                 name: feed.given_name(u).map_or(name, str::to_owned),
@@ -185,7 +229,11 @@ pub fn info(feed: &HudFeed) -> Info {
                 hull_max: u.hull[1].to_f32().round() as i32,
                 shield: shield_frac(u),
                 progress: u.progress.map(|p| p.to_f32().clamp(0.0, 1.0)),
-                builder: def.is_some_and(|d| !d.build.list.is_empty()) && finished(u),
+                builder: def.is_some_and(|d| !d.build.list.is_empty() || !d.research_build.is_empty()) && finished(u),
+                has_build_queue: def.is_some_and(|d| feed.has_build_queue(u, d)),
+                // Shipyard sets 0x200, and Starbase inherits it. ResearchStation
+                // inherits Producer directly and uses the ordinary card.
+                a2_yard: def.is_some_and(|d| matches!(d.class.0.as_str(), "shipyard" | "starbase")),
             })
         }
         many => Info::Group(many.iter().map(|u| Tile { id: u.id, name: feed.name(u), hull: frac(u.hull), shield: shield_frac(u) }).collect()),
@@ -269,6 +317,10 @@ pub enum TargetMode {
     Repair,
     /// The stock DECOMMISSION command: pick a yard, or anywhere for the best one or in place (SIM-45).
     Decommission,
+    /// Select a trading station as a cargo ship's trade source.
+    TradeSource,
+    /// Select a trading station as a cargo ship's trade destination.
+    TradeDestination,
     /// A replace weapon whose authored `needTarget` requires a map pick.
     Special(u8),
 }
@@ -345,20 +397,40 @@ pub fn resource_model(feed: &HudFeed) -> ResourceModel {
     feed.content.as_deref().map(|db| db.resources().clone()).unwrap_or_default()
 }
 
-/// A shipyard's or builder's tech state, from the view: what the player owns
-/// finished, its race, and the races of its allies.
-pub(super) fn tech_state(feed: &HudFeed, db: &ContentDb, race: &str, player: PlayerId) -> Owned {
+/// A shipyard's or builder's tech state, from the view: finished holdings,
+/// its race, and allied races. Later research tiers satisfy earlier tier
+/// prerequisites; capacity counts still use exact unit definitions.
+pub(super) struct HudTechState<'a> {
+    db: &'a ContentDb,
+    exact: Owned,
+    completed: Vec<ContentKey>,
+}
+
+impl TechState for HudTechState<'_> {
+    fn count(&self, odf: &str) -> u32 {
+        let Some(required) = self.db.key(odf) else { return 0 };
+        self.completed.iter().filter(|&&held| self.db.research_satisfies(held, required)).count() as u32
+    }
+
+    fn capacity_count(&self, odf: &str) -> u32 { self.exact.count(odf) }
+    fn race(&self) -> &str { self.exact.race() }
+    fn has_ally(&self, race: &str) -> bool { self.exact.has_ally(race) }
+}
+
+pub(super) fn tech_state<'a>(feed: &HudFeed, db: &'a ContentDb, race: &str, player: PlayerId) -> HudTechState<'a> {
     let mut state = Owned::new(&race.to_ascii_lowercase());
+    let mut completed = Vec::new();
     let me = feed.view.player(player);
     for u in feed.view.units.iter().filter(|u| finished(u)) {
         let Some(def) = db.unit(u.def) else { continue };
         if u.owner == player {
             state = state.with(&def.odf.to_ascii_lowercase(), 1);
+            completed.push(u.def);
         } else if me.is_some_and(|m| feed.view.player(u.owner).is_some_and(|o| o.team == m.team)) {
             state = state.with_ally(&def.race.to_ascii_lowercase());
         }
     }
-    state
+    HudTechState { db, exact: state, completed }
 }
 
 /// One slot of a builder's list.
@@ -399,14 +471,14 @@ pub fn build_items(feed: &HudFeed, builder: &UnitView) -> Vec<BuildItem> {
     build_layout(feed, builder).0
 }
 
-/// The build cells with no item in a text tree (the cells of unbuildable items), below the last
-/// cell the builder's list reaches. Empty without a text tree.
+/// The build cells with no item below the last listed cell. Text trees and
+/// research upgrade slots may leave cells empty without moving later buttons.
 pub(super) fn build_holes(feed: &HudFeed, builder: &UnitView) -> Vec<usize> {
     let (items, cells) = build_layout(feed, builder);
     (0..cells).filter(|c| !items.iter().any(|i| i.slot == *c)).collect()
 }
 
-/// The items and the number of cells the list reaches (items plus the empty cells of a text tree).
+/// The items and the number of cells the list reaches, including empty cells.
 fn build_layout(feed: &HudFeed, builder: &UnitView) -> (Vec<BuildItem>, usize) {
     let Some(db) = feed.content.as_deref() else { return (Vec::new(), 0) };
     let Some(def) = db.unit(builder.def) else { return (Vec::new(), 0) };
@@ -428,12 +500,36 @@ fn build_layout(feed: &HudFeed, builder: &UnitView) -> (Vec<BuildItem>, usize) {
                 ResearchBlock::AlreadyResearched => "already researched",
                 ResearchBlock::Queued => "research already queued",
                 ResearchBlock::NoSlot => "no research slot available",
+                ResearchBlock::Prerequisite => "research prerequisite unavailable",
             };
             look = Look::Locked;
             why = Some(why.map_or_else(|| reason.to_owned(), |existing| format!("{existing}, {reason}")));
         }
         Some(BuildItem { odf: odf.to_owned(), key, look, cost, why, slot })
     };
+    if let Some(slots) = research.and_then(|r| r.build_slots.as_ref()) {
+        let tree = db.tech_tree();
+        let state = tree.map(|_| tech_state(feed, db, &def.race, feed.player));
+        let mut out = Vec::new();
+        let mut cells = 0;
+        for &(slot, key) in slots {
+            cells = cells.max(slot.saturating_add(1));
+            let Some(product) = db.unit(key) else { continue };
+            let availability = tree.zip(state.as_ref()).map(|(tree, state)| {
+                tree.availability_for_builder(db, &product.odf, &def.odf, state, false)
+            });
+            if tree.is_some_and(|tree| tree.is_text())
+                && matches!(availability.as_ref(), Some(Availability::Withheld | Availability::NotListed))
+            {
+                continue;
+            }
+            if let Some(button) = item(&product.odf, key, availability.as_ref(), slot) {
+                out.push(button);
+            }
+        }
+        out.sort_by_key(|item| item.slot);
+        return (out, cells);
+    }
     match db.tech_tree() {
         Some(tree) => {
             let state = tech_state(feed, db, &def.race, feed.player);
@@ -477,9 +573,11 @@ pub(super) fn build_item_buttons(feed: &HudFeed, b: &UnitView) -> Vec<(usize, Bu
         .map(|it| {
             let definition = feed.content.as_deref().and_then(|db| db.unit(it.key));
             let site = builder.zip(definition).is_some_and(|(b, product)| EntityKind::build_requires_site(b, product));
+            let (crew, officers) = definition.map_or((0.0, 0.0), |d| (d.crew.to_f32(), d.build.officers.to_f32()));
+            let cost = build_cost_text(&it.cost, &names, crew, officers);
             let verbose = match &it.why {
-                Some(w) => format!("{}. Cost: {}", w, cost_text(&it.cost, &names)),
-                None => format!("Cost: {}", cost_text(&it.cost, &names)),
+                Some(w) => format!("{}. Cost: {cost}", w),
+                None => format!("Cost: {cost}"),
             };
             let btn = Button {
                 cell: 0,
@@ -541,6 +639,21 @@ fn cost_text(cost: &[f32], names: &ResourceModel) -> String {
     if parts.is_empty() { "free".into() } else { parts.join(", ") }
 }
 
+fn build_cost_text(cost: &[f32], names: &ResourceModel, crew: f32, officers: f32) -> String {
+    let resources = cost_text(cost, names);
+    let mut parts = Vec::new();
+    if resources != "free" {
+        parts.push(resources);
+    }
+    if crew > 0.0 {
+        parts.push(format!("{} crew", crew as i64));
+    }
+    if officers > 0.0 {
+        parts.push(format!("{} officers", officers as i64));
+    }
+    if parts.is_empty() { "free".into() } else { parts.join(", ") }
+}
+
 /// A label that fits a cell (it wraps over two lines): the name in capitals, cut short.
 pub fn short(name: &str) -> String {
     name.chars().take(12).collect::<String>().to_uppercase()
@@ -561,6 +674,8 @@ pub(super) fn button(cell: usize, label: &str, act: Act, tip: &str) -> Button {
         Act::Target(TargetMode::Transport) => (vec!["b_transport".into()], false),
         Act::Target(TargetMode::TransportAttack) => (vec!["b_capture".into()], false),
         Act::Target(TargetMode::Repair) => (vec!["b_repair".into()], false),
+        Act::Target(TargetMode::TradeSource) => (vec!["b_strade".into()], false),
+        Act::Target(TargetMode::TradeDestination) => (vec!["b_etrade".into()], false),
         Act::Target(TargetMode::Decommission) => (vec!["b_decom".into()], false),
         Act::Target(TargetMode::Special(_)) => (Vec::new(), false),
         Act::Cancel(_) => (vec!["b_cancel".into()], false),
@@ -592,7 +707,16 @@ pub(super) fn build_sprite_names(model: &str, odf: &str) -> Vec<String> {
 
 /// The first selected own unit that can build: the grid's builder.
 pub fn builder(feed: &HudFeed) -> Option<&UnitView> {
-    feed.selected_units().into_iter().find(|u| u.owner == feed.player && finished(u) && feed.def(u).is_some_and(|d| !d.build.list.is_empty()))
+    feed.selected_units().into_iter().find(|u| u.owner == feed.player && finished(u) && feed.def(u).is_some_and(|d| !d.build.list.is_empty() || !d.research_build.is_empty()))
+}
+
+fn build_enabled(feed: &HudFeed, caps: &commands::Capabilities) -> bool {
+    if caps.build { return true; }
+    let own: Vec<_> = feed.selected_units().into_iter().filter(|u| u.owner == feed.player).collect();
+    !own.is_empty() && own.iter().all(|u| {
+        finished(u) && !u.flags.contains(sta_sim::view::UnitFlags::BUILDING)
+            && feed.def(u).is_some_and(|d| !d.build.list.is_empty() || !d.research_build.is_empty())
+    })
 }
 
 /// The build buttons of the selected builder with the build cell each sits in (`BuildItem::slot`),
@@ -601,7 +725,7 @@ pub(super) fn build_buttons_by_slot(feed: &HudFeed) -> Vec<(usize, Button)> {
     if feed.own_selection().is_empty() {
         return Vec::new();
     }
-    let builder = commands::shared(feed).build.then(|| builder(feed)).flatten();
+    let builder = build_enabled(feed, &commands::shared(feed)).then(|| builder(feed)).flatten();
     builder.map(|b| build_item_buttons(feed, b)).unwrap_or_default()
 }
 
@@ -610,7 +734,7 @@ pub(super) fn build_holes_of(feed: &HudFeed) -> Vec<usize> {
     if feed.own_selection().is_empty() {
         return Vec::new();
     }
-    let builder = commands::shared(feed).build.then(|| builder(feed)).flatten();
+    let builder = build_enabled(feed, &commands::shared(feed)).then(|| builder(feed)).flatten();
     builder.map(|b| build_holes(feed, b)).unwrap_or_default()
 }
 
@@ -640,7 +764,7 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
         return Vec::new();
     }
     let caps = commands::shared(feed);
-    let builder = caps.build.then(|| builder(feed)).flatten();
+    let builder = build_enabled(feed, &caps).then(|| builder(feed)).flatten();
     if page == Page::Formations && caps.move_order {
         return vec![
             button(0, &tr("Line"), Act::Formation(FORM_LINE), &tooltip_key("Formation: line")),
@@ -833,7 +957,7 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
             Some((CommandKind::Order(Order::SearchAndDestroy { units: own.clone() }), own))
         }
         Act::Order(UnitOrder::Scout) if caps.move_order => Some((CommandKind::Order(Order::Scout { units: own.clone() }), own)),
-        Act::OpenBuild | Act::OpenFormations | Act::OpenNativeMenu(_) | Act::OpenOrders | Act::Order(_) | Act::Back | Act::Target(_) | Act::NativeFormation(_) => None,
+        Act::OpenBuild | Act::OpenFormations | Act::OpenNativeMenu(_) | Act::OpenOrders | Act::Order(_) | Act::Back | Act::Target(_) | Act::NativeFormation(_) | Act::NativeOrder(_) => None,
         Act::Recrew => {
             let units = commands::recrew_stations(feed, &own);
             (!units.is_empty()).then(|| (CommandKind::Order(Order::Recrew { units: units.clone(), on: None }), units))
@@ -860,7 +984,7 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
             }),
             own,
         )),
-        Act::Cancel(b) if caps.build && builder(feed).is_some_and(|u| u.id == *b) => Some((
+        Act::Cancel(b) if build_enabled(feed, &caps) && builder(feed).is_some_and(|u| u.id == *b) => Some((
             CommandKind::Order(Order::Stop { units: vec![*b] }),
             vec![*b],
         )),
@@ -869,12 +993,15 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
             what,
             site: false,
             ..
-        } if caps.build
+        } if build_enabled(feed, &caps)
             && builder(feed).is_some_and(|u| {
                 u.id == *b
-                    && feed
-                        .def(u)
-                        .is_some_and(|d| d.build.list.iter().any(|i| i.key == *what))
+                    && feed.def(u).is_some_and(|d| {
+                        feed.production.iter().find(|row| row.builder == *b)
+                            .and_then(|row| row.research.as_ref())
+                            .and_then(|research| research.build_slots.as_ref())
+                            .map_or_else(|| d.build.list.iter().any(|i| i.key == *what), |slots| slots.iter().any(|(_, key)| key == what))
+                    })
                     && feed.content.as_deref().is_some_and(|db| {
                         if !db.a1_officers() || db.unit(*what).is_none_or(|d| d.a1_officer_upgrade_gain.is_none()) {
                             return true;
@@ -914,8 +1041,9 @@ pub struct ResEntry {
 
 /// The strip: the player's stock in the order dilithium, metal, latinum,
 /// biomatter (the order Refit's HUD.md asks for), those the race has, then the
-/// officers as "in use/capacity", or A1's "available/capacity", when it has any.
-pub fn resources(feed: &HudFeed, no: [bool; 4]) -> Vec<ResEntry> {
+/// crew when initialized, then officers as "in use/capacity", or A1's
+/// "available/capacity", subject to the race's authored hide flags.
+pub fn resources(feed: &HudFeed, no: [bool; 4], no_personnel: [bool; 2]) -> Vec<ResEntry> {
     let Some(p) = feed.view.player(feed.player) else { return Vec::new() };
     let names = resource_model(feed);
     let mut out: Vec<ResEntry> = [0usize, 2, 1, 3]
@@ -923,7 +1051,10 @@ pub fn resources(feed: &HudFeed, no: [bool; 4]) -> Vec<ResEntry> {
         .filter(|&i| !no[i])
         .map(|i| ResEntry { name: names.name(i).to_owned(), id: i, text: (p.resources.get(i).map_or(0.0, |f| f.to_f32()) as i64).to_string() })
         .collect();
-    if p.officers[1] > Fixed::ZERO || feed.content.as_deref().is_some_and(ContentDb::a1_officers) {
+    if !no_personnel[0] && let Some(crew) = p.crew {
+        out.push(ResEntry { name: "crew".into(), id: 5, text: (crew.to_bits() / Fixed::ONE.to_bits()).to_string() });
+    }
+    if !no_personnel[1] && (p.officers[1] > Fixed::ZERO || feed.content.as_deref().is_some_and(ContentDb::a1_officers)) {
         out.push(ResEntry { name: "officers".into(), id: 4, text: officer_text(feed, p.officers) });
     }
     out
@@ -947,8 +1078,8 @@ pub struct Models {
     pub resources: Vec<ResEntry>,
 }
 
-pub fn models(feed: &HudFeed, page: Page, no: [bool; 4]) -> Models {
-    Models { info: info(feed), grid: grid(feed, page), resources: resources(feed, no) }
+pub fn models(feed: &HudFeed, page: Page, no: [bool; 4], no_personnel: [bool; 2]) -> Models {
+    Models { info: info(feed), grid: grid(feed, page), resources: resources(feed, no, no_personnel) }
 }
 
 /// Counts by def name of a player's finished units, for the tests and the
@@ -1098,6 +1229,14 @@ mod tests {
         };
         let u = |f: &HudFeed, id: u32| f.view.unit(EntityId(id)).unwrap().clone();
         assert_eq!(one(&f), "Aurelia Test-7");
+        f.names.set_overrides(EntityId(1), None, Some("Captain Ada"), Some("NX-1"));
+        let Info::Single(with_companions) = info(&f) else { panic!("selection with companions") };
+        assert_eq!(with_companions.captain.as_deref(), Some("Captain Ada"));
+        assert_eq!(with_companions.registry.as_deref(), Some("NX-1"));
+        f.names.set_overrides(EntityId(1), None, Some(""), Some(""));
+        let Info::Single(blank_companions) = info(&f) else { panic!("selection with blank companions") };
+        assert_eq!(blank_companions.captain, None);
+        assert_eq!(blank_companions.registry, None);
         assert_eq!(f.unit_label(&u(&f, 1)), "Aurelia Test-7");
         assert_eq!(f.name(&u(&f, 2)), "Ångström Ω-2 \u{1F680}");
         // A blank map name leaves the ODF caption.
@@ -1142,6 +1281,56 @@ mod tests {
         let Info::Group(t) = f(&[2, 1, 99]) else { panic!() };
         assert_eq!(t.iter().map(|t| t.id.0).collect::<Vec<_>>(), [2, 1]);
         assert_eq!(f(&[1, 2]).height(), Some(InfoHeight::High));
+    }
+
+    #[test]
+    fn stock_builder_card_tracks_in_place_production() {
+        use sta_sim::command::BuildQueueId;
+        use sta_sim::production::view::ProductionJobView;
+
+        let product = UnitDef::new("ship", "craft");
+        let mut rig = UnitDef::new("rig", "constructionrig");
+        rig.build.list = vec![sta_content::DefRef::new("yard")];
+        let mut yard = UnitDef::new("yard", "shipyard");
+        yard.build.list = vec![sta_content::DefRef::new("ship")];
+        let empty_yard = UnitDef::new("empty_yard", "shipyard");
+        let db = ContentDb::builder().unit(product).unit(rig).unit(yard).unit(empty_yard).build().unwrap();
+        let units = vec![
+            unit(&db, 1, "rig", 1, 100.0, None),
+            unit(&db, 2, "yard", 1, 100.0, None),
+            unit(&db, 3, "empty_yard", 1, 100.0, None),
+            unit(&db, 4, "yard", 1, 50.0, Some(0.5)),
+        ];
+        let ship = db.key("ship").unwrap();
+        let mut feed = feed(db, units, &[1]);
+        let queued = |feed: &mut HudFeed, id| {
+            feed.selected = vec![EntityId(id)];
+            let Info::Single(card) = info(feed) else { panic!("single selection") };
+            card.has_build_queue
+        };
+        assert!(!queued(&mut feed, 1), "a construction menu places a site");
+        assert!(queued(&mut feed, 2), "an idle producer has a build queue");
+        assert!(!queued(&mut feed, 3), "a yard class alone does not offer a queue");
+        assert!(!queued(&mut feed, 4), "an unfinished producer cannot queue");
+
+        feed.production.push(ProductionView {
+            builder: EntityId(1),
+            jobs: vec![ProductionJobView {
+                queue_id: None,
+                def: ship,
+                progress: Fixed::ZERO,
+                paid: true,
+                started: true,
+            }],
+            site: None,
+            portal: None,
+            research: None,
+            officer_upgrades: None,
+        });
+        assert!(!queued(&mut feed, 1), "a construction preview is not a queue entry");
+        feed.production[0].builder = EntityId(3);
+        feed.production[0].jobs[0].queue_id = Some(BuildQueueId(1));
+        assert!(queued(&mut feed, 3), "a real job can come from outside the build menu");
     }
 
     #[test]
@@ -1569,7 +1758,7 @@ mod tests {
                 jobs: Vec::new(),
                 site: None,
                 portal: None,
-                research: Some(ResearchView { unavailable: vec![(cruiser, block)], pods: Vec::new(), active_axes: None }),
+                research: Some(ResearchView { unavailable: vec![(cruiser, block)], pods: Vec::new(), active_axes: None, build_slots: None, replacing: None }),
                 officer_upgrades: None,
             }];
             let buttons = grid(&f, Page::Build);
@@ -1579,6 +1768,73 @@ mod tests {
             assert_eq!(buttons[1].cell, 1);
             assert_eq!(buttons[1].look, Look::Ready);
         }
+    }
+
+    #[test]
+    fn research_upgrade_slots_keep_the_authored_cell_and_build_presentation() {
+        use sta_sim::production::view::ResearchView;
+
+        let db = wide_db_of(WIDE_ALL, &["fx_cruiser", "fx_frigate"]);
+        let mut f = feed_of(db.clone());
+        let cruiser = db.key("fx_cruiser").unwrap();
+        let miner = db.key("fx_miner").unwrap();
+        f.production = vec![ProductionView {
+            builder: EntityId(2),
+            jobs: Vec::new(),
+            site: None,
+            portal: None,
+            research: Some(ResearchView {
+                unavailable: vec![(miner, ResearchBlock::Prerequisite)],
+                pods: Vec::new(),
+                active_axes: None,
+                build_slots: Some(vec![(0, cruiser), (2, miner)]),
+                replacing: None,
+            }),
+            officer_upgrades: None,
+        }];
+        let items = build_items(&f, builder(&f).unwrap());
+        assert_eq!(items.iter().map(|item| (item.key, item.slot)).collect::<Vec<_>>(), [(cruiser, 0), (miner, 2)]);
+        assert_eq!(build_holes(&f, builder(&f).unwrap()), [1]);
+        let buttons = grid(&f, Page::Build);
+        let upgrade = buttons.iter().find(|button| matches!(button.act, Act::Build { what, .. } if what == miner)).unwrap();
+        assert_eq!(upgrade.cell, 2);
+        assert_eq!(upgrade.label, "FX_MINER");
+        assert_eq!(upgrade.look, Look::Locked);
+        assert!(upgrade.verbose.as_deref().unwrap().contains("research prerequisite unavailable"));
+        assert_eq!(upgrade.sprite_names, build_sprite_names(&db.unit(miner).unwrap().model, "fx_miner"));
+
+        f.production[0].research.as_mut().unwrap().unavailable = vec![(miner, ResearchBlock::AlreadyResearched)];
+        let completed = grid(&f, Page::Build);
+        let upgrade = completed.iter().find(|button| matches!(button.act, Act::Build { what, .. } if what == miner)).unwrap();
+        assert_eq!((upgrade.cell, upgrade.look), (2, Look::Locked));
+        assert!(upgrade.verbose.as_deref().unwrap().contains("already researched"));
+
+        let fake = sta_content::fake::db();
+        let mut db = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for weapon in fake.weapons() { db = db.weapon(weapon.clone()); }
+        for unit in fake.units() {
+            let mut unit = unit.clone();
+            if unit.odf == "fx_yard" {
+                unit.build.list.clear();
+                unit.research_build = vec![sta_content::ResearchBuildSlot { index: 0, primary: fake.key("fx_miner"), successors: Vec::new() }];
+            }
+            db = db.unit(unit);
+        }
+        let db = db.build().unwrap();
+        let mut f = feed_of(db);
+        f.production = vec![ProductionView {
+            builder: EntityId(2), jobs: Vec::new(), site: None, portal: None,
+            research: Some(ResearchView {
+                unavailable: Vec::new(), pods: Vec::new(), active_axes: None,
+                build_slots: Some(vec![(0, f.content.as_ref().unwrap().key("fx_miner").unwrap())]),
+                replacing: None,
+            }),
+            officer_upgrades: None,
+        }];
+        assert!(!commands::shared(&f).build);
+        assert!(grid(&f, Page::Top).iter().any(|button| button.act == Act::OpenBuild));
+        let action = grid(&f, Page::Build).into_iter().find(|button| matches!(button.act, Act::Build { .. })).unwrap().act;
+        assert!(command(&f, &action).is_some());
     }
 
     /// A text tree that leaves an item out empties that item's cell; the other cells keep their
@@ -1731,7 +1987,7 @@ mod tests {
         let mut native = NativeCommands::default();
         native.commands.insert("cancelbuild".into(), NativeCommand {
             odf: "cancelbuild.odf".into(), command: "NONE".into(), button: "b_cancel".into(),
-            preferred: Some([0, 3]), menu: None, source: Vec::new(), tooltip: None, verbose: None,
+            preferred: Some([0, 3]), menu: None, source: Vec::new(), param: None, tooltip: None, verbose: None,
             normal: None, hovered: None, pressed: None, disabled: None, active: None,
         });
         native
@@ -1841,19 +2097,40 @@ mod tests {
         assert_eq!(cost_text(&by("fx_cruiser").cost, &ResourceModel::default()), "600 Dilithium, 50 Latinum");
         assert_eq!(cost_text(&by("fx_frigate").cost, &ResourceModel::default()), "250 Dilithium");
         assert_eq!(cost_text(&[0.0, 0.0], &ResourceModel::default()), "free");
+        assert_eq!(build_cost_text(&[0.0, 0.0], &ResourceModel::default(), 37.0, 4.0), "37 crew, 4 officers");
+        assert_eq!(build_cost_text(&[0.0, 0.0], &ResourceModel::default(), 0.0, 0.0), "free");
     }
 
     #[test]
     fn the_strip_orders_the_stock_and_skips_what_the_race_lacks() {
         let f = feed(sta_content::fake::db(), Vec::new(), &[]);
-        let r = resources(&f, [false; 4]);
+        let r = resources(&f, [false; 4], [false; 2]);
         assert_eq!(r.iter().map(|e| (e.name.as_str(), e.text.as_str())).collect::<Vec<_>>(), [("Dilithium", "3000"), ("Metal", "700"), ("Latinum", "20"), ("Biomatter", "0"), ("officers", "3/10")]);
-        let r = resources(&f, [false, true, false, true]);
+        let r = resources(&f, [false, true, false, true], [false; 2]);
         assert_eq!(r.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["Dilithium", "Metal", "officers"]);
         // Unknown player: nothing.
         let mut f = f;
         f.player = PlayerId(9);
-        assert!(resources(&f, [false; 4]).is_empty());
+        assert!(resources(&f, [false; 4], [false; 2]).is_empty());
+    }
+
+    #[test]
+    fn the_strip_shows_live_personnel_and_honours_authored_hide_flags() {
+        let f = feed(sta_content::fake::db(), Vec::new(), &[]);
+        let mut view = (*f.view).clone();
+        view.players[0].crew = Some(Fixed::from_int(16_777_217));
+        view.players[0].officers = [Fixed::from_int(3), Fixed::from_int(10)];
+        let f = HudFeed { view: Arc::new(view), ..f };
+        let personnel = |hide| resources(&f, [false; 4], hide).into_iter()
+            .filter(|e| e.id >= 4).map(|e| (e.id, e.name, e.text)).collect::<Vec<_>>();
+        assert_eq!(personnel([false; 2]), [(5, "crew".into(), "16777217".into()), (4, "officers".into(), "3/10".into())]);
+        assert_eq!(personnel([true, false]), [(4, "officers".into(), "3/10".into())]);
+        assert_eq!(personnel([false, true]), [(5, "crew".into(), "16777217".into())]);
+        assert!(personnel([true; 2]).is_empty());
+        let mut view = (*f.view).clone();
+        view.players[0].crew = None;
+        let f = HudFeed { view: Arc::new(view), ..f };
+        assert!(resources(&f, [false; 4], [false; 2]).iter().all(|e| e.id != 5));
     }
 
     #[test]
@@ -1861,15 +2138,15 @@ mod tests {
         let db = ContentDb::builder().profile(sta_content::Profile::Sta1Classic).build().unwrap();
         let f = feed(db, Vec::new(), &[]);
         assert_eq!(f.view.players[0].officers, [Fixed::from_int(3), Fixed::from_int(10)]);
-        assert_eq!(resources(&f, [false; 4]).last().unwrap().text, "7/10");
+        assert_eq!(resources(&f, [false; 4], [false; 2]).last().unwrap().text, "7/10");
         let mut view = (*f.view).clone();
         view.players[0].officers = [Fixed::from_int(12), Fixed::from_int(10)];
         let f = HudFeed { view: Arc::new(view), ..f };
-        assert_eq!(resources(&f, [false; 4]).last().unwrap().text, "0/10");
+        assert_eq!(resources(&f, [false; 4], [false; 2]).last().unwrap().text, "0/10");
         let mut view = (*f.view).clone();
         view.players[0].officers = [Fixed::ZERO, Fixed::ZERO];
         let f = HudFeed { view: Arc::new(view), ..f };
-        assert_eq!(resources(&f, [false; 4]).last().unwrap().text, "0/0");
+        assert_eq!(resources(&f, [false; 4], [false; 2]).last().unwrap().text, "0/0");
     }
 
     #[test]
@@ -1878,7 +2155,7 @@ mod tests {
         // and the metal slot (Collective Connections) is the Borg's, hidden for the rest.
         let db = sta_content::fake::db().with_resources(ResourceModel::for_profile(sta_content::Profile::Fo4));
         let f = feed(db, Vec::new(), &[]);
-        let r = resources(&f, [false, false, true, false]);
+        let r = resources(&f, [false, false, true, false], [false; 2]);
         assert_eq!(r.iter().map(|e| (e.name.as_str(), e.id, e.text.as_str())).collect::<Vec<_>>(), [("Dilithium", 0, "3000"), ("Tritanium", 1, "20"), ("Supply", 3, "0"), ("officers", 4, "3/10")]);
         let names = resource_model(&f);
         assert_eq!(cost_text(&[261.0, 181.0, 0.0, 10.0], &names), "261 Dilithium, 181 Tritanium, 10 Supply");

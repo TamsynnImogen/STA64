@@ -20,16 +20,18 @@ struct Seen {
     start: Vec<GameSetup>,
     fog: Vec<SetupFog>,
     chosen: Vec<ModChosen>,
+    editor: Vec<String>,
     exits: usize,
 }
 
-fn record(mut seen: ResMut<Seen>, mut a: MessageReader<StartGame>, mut b: MessageReader<ModChosen>, mut c: MessageReader<AppExit>) {
+fn record(mut seen: ResMut<Seen>, mut a: MessageReader<StartGame>, mut b: MessageReader<ModChosen>, mut c: MessageReader<AppExit>, mut editor: MessageReader<crate::editor::OpenMap>) {
     for start in a.read() {
         seen.start.push(start.0.clone());
         seen.fog.push(start.3);
     }
     seen.chosen.extend(b.read().cloned());
     seen.exits += c.read().count();
+    seen.editor.extend(editor.read().map(|m| m.0.clone()));
 }
 
 fn app() -> App {
@@ -138,8 +140,8 @@ fn entering_the_front_end_shows_the_main_screen() {
     for s in ["Star Trek Armada", "Single player", "Instant action", "Multiplayer", "Mods", "Options", "Exit"] {
         assert!(has_text(&mut app, s), "{s}");
     }
-    // Six entries, all working: Multiplayer opens the lobby's connection screen (UI-11).
-    assert_eq!(count::<UiButton>(&mut app), 6);
+    // The editor and network picker are reachable from the same main screen.
+    assert_eq!(count::<UiButton>(&mut app), 7);
     let off = app.world_mut().query::<&WidgetState>().iter(app.world()).filter(|s| **s == WidgetState::Disabled).count();
     assert_eq!(off, 0);
 }
@@ -147,10 +149,11 @@ fn entering_the_front_end_shows_the_main_screen() {
 #[test]
 fn every_screen_is_reached_by_state_and_replaces_the_last() {
     let mut app = app();
-    let want: [(Screen, &str, usize); 5] = [
+    let want: [(Screen, &str, usize); 6] = [
         (Screen::SinglePlayer, "Single player", 6),
         (Screen::Setup, "Instant action", 2 * 3 + 8 + 11),
         (Screen::MapSelect, "Select map", 2),
+        (Screen::MapEditorPicker, "Map editor", 2),
         (Screen::Settings, "Options", 1),
         (Screen::ModSelect, "Mods", 5 + usize::from(cfg!(target_os = "linux"))),
     ];
@@ -163,6 +166,26 @@ fn every_screen_is_reached_by_state_and_replaces_the_last() {
     }
     go(&mut app, Screen::Main);
     assert_eq!(roots(&mut app), [Screen::Main]);
+}
+
+#[test]
+fn editor_picker_lists_vfs_paths_and_emits_the_canonical_menu_sol_path() {
+    use crate::viewer::Mounted;
+
+    let root = a2_install();
+    let bzn = root.join("Data/bzn");
+    std::fs::create_dir_all(&bzn).unwrap();
+    std::fs::write(bzn.join("menu.sol"), b"picker fixture").unwrap();
+    std::fs::write(bzn.join("zeta.bzn"), b"picker fixture").unwrap();
+    let mut app = app();
+    app.insert_resource(Mounted(sta_vfs::Vfs::mount_install(&root, None).unwrap()));
+    go(&mut app, Screen::MapEditorPicker);
+    let maps = &app.world().resource::<EditorMapPicker>().maps;
+    assert!(maps.iter().any(|path| path == "bzn/menu.sol"));
+    assert!(maps.iter().any(|path| path == "bzn/zeta.bzn"));
+    press(&mut app, Act::OpenEditorMap);
+    assert_eq!(app.world().resource::<Seen>().editor, ["bzn/menu.sol"]);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

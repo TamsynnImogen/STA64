@@ -40,6 +40,8 @@ pub mod layout;
 pub mod model;
 pub mod commands;
 mod panels;
+mod portrait;
+pub(in crate::ui) mod readouts;
 pub mod stock;
 mod status;
 mod status_gpu;
@@ -170,10 +172,14 @@ impl Plugin for HudPlugin {
             .init_resource::<OrderTargets>()
             .init_resource::<CommandQueue>()
             .add_message::<OrderIssued>()
+            .add_message::<status_gpu::QueueClick>()
+            .add_observer(status_gpu::on_queue_click)
+            .add_observer(portrait::on_click)
             .add_message::<SelectionChanged>()
             .init_resource::<Selection>()
             .add_systems(OnEnter(crate::app::AppState::Loading), stock::buttons::reset_more)
             .add_systems(Startup, panels::spawn_root.after(crate::ui::radar::spawn_radar))
+            .add_systems(Update, pointer.before(GameSet::Input))
             .add_systems(
                 Update,
                 (
@@ -186,20 +192,24 @@ impl Plugin for HudPlugin {
                         status::sync,
                         stock::refresh,
                         stock::update_values,
+                        stock::update_selection_readouts,
+                        readouts::update,
                         stock::update_hull_tints,
                         stock::update_a1_tints,
                         status_gpu::refresh,
                         status_gpu::update_values,
                     ).chain(),
                     (avatar::refresh, stock::active).chain(),
-                    (stock::navigate, stock::buttons::press, stock::buttons::apply_more).chain().run_if(avatar::closed),
+                    (stock::navigate, stock::buttons::press, stock::buttons::apply_more).chain().run_if(avatar::closed).run_if(crate::editor::play_mode),
                     panels::update_values.before(super::theme::WidgetPaint),
-                    (avatar::press, host).chain(),
-                    pointer,
+                    (avatar::press, host).chain().run_if(crate::editor::play_mode),
                     crate::input::hover::track.run_if(not(resource_exists::<ExternalFeed>)),
                     stock::infobar::update,
-                    press.run_if(not(crate::ui::presentation::cutscene_running)),
-                    place_on_click.run_if(resource_exists::<Aim>).run_if(not(crate::ui::presentation::cutscene_running)).run_if(crate::cheats::input::game_input_free),
+                    (
+                        press.run_if(not(crate::ui::presentation::cutscene_running)),
+                        status_gpu::press_queue,
+                    ).chain().run_if(crate::editor::play_mode),
+                    place_on_click.run_if(crate::editor::play_mode).run_if(resource_exists::<Aim>).run_if(not(crate::ui::presentation::cutscene_running)).run_if(crate::cheats::input::game_input_free),
                     armed_cursor.run_if(resource_exists::<Aim>)
                         .run_if(not(crate::ui::presentation::cutscene_running))
                         .run_if(not(resource_exists::<crate::frontend::scene::MenuScene>))
@@ -208,7 +218,7 @@ impl Plugin for HudPlugin {
                     ghost::update_ghost,
                     ghost::tint_ghost,
                     (ghost::sync_footprints, object_footprints::sync_object_footprints).chain(),
-                    (stock::update_weapon_icon_tint, super::gui_sprites::paint.after(super::theme::WidgetPaint), stock::update_backdrop_fallback, stock::update_weapon_icon_visibility).chain(),
+                    (stock::update_weapon_icon_tint, super::gui_sprites::paint.after(super::theme::WidgetPaint), stock::update_backdrop_fallback, portrait::sync_pickable, stock::update_weapon_icon_visibility).chain(),
                 )
                     .chain()
                     .in_set(GameSet::Ui)
@@ -289,7 +299,7 @@ fn refresh(
         state.drawn = None; state.height = None;
         return;
     }
-    let now = models(&feed, state.page, layout.0.no_resource);
+    let now = models(&feed, state.page, layout.0.no_resource, layout.0.no_personnel);
     let height = now.info.height();
     let layout_changed = layout.is_changed() || theme.is_changed() || state.height != height || state.drawn.is_none();
     let drawn = state.drawn.take();
@@ -320,7 +330,7 @@ fn refresh(
         }
         if layout_changed || drawn.as_ref().is_none_or(|d| d.grid != now.grid) {
             clear(&mut commands, kids);
-            panels::fill_grid(&mut commands, &theme, e, &now.grid);
+            panels::fill_grid(&mut commands, &theme, e, &now.grid, &feed);
         }
     }
     if config.log {
@@ -503,10 +513,6 @@ fn press(
                     what: *what,
                     odf: odf.clone(),
                 });
-                notices.write(Notice::new(
-                    Severity::Info,
-                    trf("Place {0}: click the map (Esc cancels)", &[odf]),
-                ));
             }
             Act::NativeOrder(odf) => {
                 if let Some(order) = stock.as_deref().and_then(|stock| stock.command(&feed, odf)) {
@@ -685,6 +691,10 @@ pub(crate) fn armed_cursor_name(mode: TargetMode, valid: bool) -> &'static str {
         // The installs have c_decommission and no refusal art of its own.
         (TargetMode::Decommission, true) => "c_decommission",
         (TargetMode::Decommission, false) => "c_nomove",
+        (TargetMode::TradeSource, true) => "c_strade",
+        (TargetMode::TradeSource, false) => "c_nostrade",
+        (TargetMode::TradeDestination, true) => "c_etrade",
+        (TargetMode::TradeDestination, false) => "c_noetrade",
         // Installed tables have c_rally but no c_norally; use the move refusal art.
         (TargetMode::Rally, true) => "c_rally",
         (TargetMode::Rally, false) => "c_nomove",
@@ -734,6 +744,9 @@ fn target_mode_available(feed: &HudFeed, mode: TargetMode) -> bool {
         TargetMode::Decommission => c.decommission,
         TargetMode::Special(slot) => c.specials.contains(&(slot, sta_sim::specials::SpecialKind::Replace))
             && model::special_targeted(feed, slot) == Some(true),
+        TargetMode::TradeSource | TargetMode::TradeDestination => feed.own_selection().iter().any(|id| {
+            feed.view.unit(*id).is_some_and(|u| feed.cargo_ship(u))
+        }),
     }
 }
 
@@ -800,6 +813,27 @@ fn target_order(
             // The sim checks range, shields and the target's side for both commands.
             ids = carriers.clone();
             vec![Order::Transport { units: carriers, target: id, attack }]
+        }
+        TargetMode::TradeSource | TargetMode::TradeDestination => {
+            let id = target?;
+            let station = feed.view.unit(id)?;
+            let db = feed.content.as_deref()?;
+            let station_def = db.unit(station.def)?;
+            if !station.owner.is_player() || station.hull[0] <= sta_core::Fixed::ZERO
+                || station.flags.contains(UnitFlags::DYING) || !model::finished(station)
+                || !feed.can_trade(station) || station_def.trade_station.is_none()
+            {
+                return None;
+            }
+            let ships: Vec<EntityId> = ids.iter().copied().filter(|ship| feed.view.unit(*ship).is_some_and(|u| feed.cargo_ship(u))).collect();
+            if ships.is_empty() { return None; }
+            ids = ships.clone();
+            let action = if mode == TargetMode::TradeSource {
+                sta_sim::command::TradeAction::Source(id)
+            } else {
+                sta_sim::command::TradeAction::Destination(id)
+            };
+            vec![Order::Trade { units: ships, action }]
         }
         TargetMode::Repair => {
             // SIM-41: repair ships aimed at a ship that is not a yard repair it with their beam.
@@ -958,6 +992,69 @@ mod target_tests {
             view: Arc::new(WorldView { units: vec![make(1, "fx_cruiser", 1), make(2, "fx_miner", 1), make(3, "fx_yard", 1), make(4, "fx_cruiser", 2), make(5, "fx_moon", 255)], ..Default::default() }),
             player: PlayerId(1), selected: selected.iter().copied().map(EntityId).collect(), content: Some(Arc::new(db)), ..Default::default()
         }
+    }
+
+    fn trade_feed() -> HudFeed {
+        let fake = sta_content::fake::db();
+        let mut builder = sta_content::ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for weapon in fake.weapons() { builder = builder.weapon(weapon.clone()); }
+        for unit in fake.units() {
+            let mut unit = unit.clone();
+            if unit.odf == "fx_cruiser" {
+                unit.raw = Arc::new(sta_odf::resolve("fx_cruiser", &mut |_| Some("cargo_ship = 1".into())).unwrap());
+                unit.trade_cargo_capacity = Some(Fixed::from_int(150));
+            }
+            if unit.odf == "fx_yard" {
+                unit.trade_station = Some(sta_content::TradeStationDef {
+                    transfer_rate: Fixed::ONE, profit_share: Fixed::ZERO, goods: Vec::new(),
+                });
+            }
+            builder = builder.unit(unit);
+        }
+        let db = Arc::new(builder.build().unwrap());
+        let make = |id, odf| UnitView {
+            id: EntityId(id), def: db.key(odf).unwrap(), owner: PlayerId(if id == 1 { 1 } else { 2 }),
+            pos: SimVec3::ZERO, heading: (Fixed::ZERO, Fixed::ONE), speed: Fixed::ZERO,
+            hull: [Fixed::ONE; 2], shields: [[Fixed::ZERO; 2]; 4], crew: None, energy: None, autonomy: None,
+            flags: UnitFlags::SELECTABLE, progress: None,
+        };
+        HudFeed {
+            view: Arc::new(WorldView { units: vec![make(1, "fx_cruiser"), make(3, "fx_yard")], ..Default::default() }),
+            player: PlayerId(1), selected: vec![EntityId(1)], content: Some(db), ..Default::default()
+        }
+    }
+
+    #[test]
+    fn authored_start_trade_target_dispatches_in_ecs_to_a_finished_station() {
+        use crate::ui::hud::stock::commands::{NativeCommand, NativeCommands};
+
+        let feed = trade_feed();
+        let mut native = NativeCommands::default();
+        native.groups.push("trade".into());
+        native.commands.insert("strade".into(), NativeCommand {
+            odf: "strade.odf".into(), command: "START_TRADE".into(), button: "strade".into(),
+            preferred: Some([0, 0]), menu: Some("trade".into()), source: vec!["cargo_ship".into()], param: None,
+            ..Default::default()
+        });
+        let authored = stock::buttons(&feed, Page::Native(0), &native);
+        assert!(authored.iter().any(|button| button.act == Act::Target(TargetMode::TradeSource)));
+
+        let mut app = click_app(feed, HudState { targeting: Some(TargetMode::TradeSource), ..Default::default() }, 0.0);
+        app.world_mut().spawn((SimEntity(EntityId(3)), SelectRadius(10.0), GlobalTransform::default()));
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut().run_system_once(place_on_click).unwrap();
+        assert!(matches!(app.world().resource::<CommandQueue>().0.as_slice(),
+            [CommandKind::Order(Order::Trade { units, action: sta_sim::command::TradeAction::Source(EntityId(3)) })]
+                if units == &[EntityId(1)]));
+
+        app.world_mut().resource_mut::<HudState>().targeting = Some(TargetMode::TradeDestination);
+        app.world_mut().resource_mut::<CommandQueue>().0.clear();
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().reset(MouseButton::Left);
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut().run_system_once(place_on_click).unwrap();
+        assert!(matches!(app.world().resource::<CommandQueue>().0.as_slice(),
+            [CommandKind::Order(Order::Trade { units, action: sta_sim::command::TradeAction::Destination(EntityId(3)) })]
+                if units == &[EntityId(1)]));
     }
 
     fn player(id: u8, team: u8, relation: Option<Relation>) -> PlayerView {

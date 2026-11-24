@@ -4,7 +4,8 @@ use bevy::prelude::{Color, Vec2};
 use sta_content::gui_cfg::{GuiLayout, Rect};
 
 use super::super::layout::R;
-use super::super::model::Info;
+use super::super::model::{Info, Single};
+use crate::ui::profile::UiProfile;
 
 /// A configured background piece, with its native SPR frame index.
 #[derive(Clone, Debug, PartialEq)]
@@ -90,6 +91,7 @@ pub struct StockLayout {
     pub scale_x: f32,
     /// The scaled canvas (whole units): centred in the screen, or the whole screen.
     pub hud: R,
+    a2_info: bool,
 }
 
 /// The sheet canvas scaled by one factor (window height over sheet height, or window width
@@ -120,7 +122,7 @@ impl StockLayout {
             }
             HudFit::Stretched => (screen.y / canvas.y, screen.x / canvas.x, R::new(0.0, 0.0, screen.x, screen.y)),
         };
-        Self { cfg: cfg.clone(), screen, canvas, fit, scale, scale_x, hud }
+        Self { cfg: cfg.clone(), screen, canvas, fit, scale, scale_x, hud, a2_info: false }
     }
 
     /// The layout for a window of this aspect, in the HUD's 1080-line theme units.
@@ -131,6 +133,30 @@ impl StockLayout {
     pub fn for_aspect_fit(cfg: &GuiLayout, aspect: f32, fit: HudFit) -> Self {
         let aspect = if aspect.is_finite() && aspect > 0.0 { aspect } else { 16.0 / 9.0 };
         Self::with_fit(cfg, Vec2::new(super::super::layout::SCREEN_H * aspect, super::super::layout::SCREEN_H), fit)
+    }
+
+    pub(in crate::ui::hud) fn with_info_profile(mut self, profile: UiProfile) -> Self {
+        self.a2_info = profile == UiProfile::Armada2;
+        self
+    }
+
+    /// ShipDisplay uses the yard flag to select the stock Armada II builder
+    /// card. The group thresholds are separate from single-object mode.
+    pub(in crate::ui::hud) fn info_variant(&self, info: &Info) -> usize {
+        match info {
+            Info::None => 0,
+            Info::Single(single) => 1 + usize::from(self.info_uses_builder(single)),
+            Info::Group(group) => 1 + usize::from(group.len() > if self.a2_info { 8 } else { 16 }),
+        }
+    }
+
+    pub(super) fn info_uses_builder(&self, single: &Single) -> bool {
+        if self.a2_info { single.a2_yard } else { single.has_build_queue }
+    }
+
+    /// The two Armada II group heights share the same sixteen authored slots.
+    pub(super) fn info_group_slots(&self, variant: usize) -> (bool, usize) {
+        if self.a2_info { (false, if variant == 1 { 8 } else { 16 }) } else { (variant == 2, usize::MAX) }
     }
 
     /// Whether a screen point (theme units) is inside the HUD sheet's rectangle.
@@ -271,12 +297,55 @@ impl StockLayout {
             .map(|r| self.placed(r))
     }
 
+    pub(in crate::ui::hud) fn has_a2_info(&self) -> bool {
+        self.a2_info
+    }
+
     pub fn info_area(&self, variant: usize) -> Option<R> {
         self.info_raw(variant).map(|raw| self.placed(raw))
     }
 
     pub fn info_origin(&self, variant: usize) -> Vec2 {
         self.info_area(variant).map_or(Vec2::ZERO, |r| Vec2::new(r.x, r.y))
+    }
+
+    /// Place a panel-relative ShipDisplay rectangle from the active canvas origin.
+    pub(in crate::ui::hud) fn info_at(&self, variant: usize, key: &str) -> Option<R> {
+        let area = self.info_raw(variant)?;
+        let rect = self.raw_rect(key)?;
+        self.at_canvas(area, rect)
+    }
+
+    /// The mouseover strip follows the active height's configured XY offset.
+    pub(super) fn info_bar_at(&self, variant: usize, key: &str) -> Option<R> {
+        let mut area = self.info_raw(variant)?;
+        if let Some(offset) = self.raw_rect(&format!("infoBarOffset_{variant}")) {
+            area.x = area.x.saturating_add(offset.x);
+            area.y = area.y.saturating_add(offset.y);
+        }
+        self.at_canvas(area, self.raw_rect(key)?)
+    }
+
+    /// The frame has its own panel-relative origin; its SPR pieces are local to it.
+    pub(super) fn info_frame(&self, variant: usize, prefix: &str) -> Vec<(usize, String, R)> {
+        let Some(mut area) = self.info_raw(variant) else { return Vec::new() };
+        if let Some(background) = self.raw_rect(&format!("{prefix}Area")) {
+            if background.w <= 0 || background.h <= 0 {
+                return Vec::new();
+            }
+            area.x = area.x.saturating_add(background.x);
+            area.y = area.y.saturating_add(background.y);
+        }
+        self.canvas_pieces(prefix).into_iter().filter_map(|(frame, name, rect)| {
+            self.at_canvas(area, rect).map(|rect| (frame, name, rect))
+        }).collect()
+    }
+
+    fn at_canvas(&self, area: Rect, rect: Rect) -> Option<R> {
+        let mut placed = self.scaled_in((area.x, area.y), rect);
+        placed.x += self.edge(area.x as f32, true);
+        placed.y += self.edge(area.y as f32, false);
+        (placed.w > 0.0 && placed.h > 0.0).then_some(placed)
     }
 
     pub fn at(&self, origin: Vec2, key: &str) -> Option<R> {
@@ -407,26 +476,6 @@ impl StockLayout {
     }
 }
 
-/// Native stock panel variants, independent of LCARS' height categories.
-pub fn info_variant(info: &Info) -> usize {
-    match info {
-        Info::None => 0,
-        Info::Single(s) => {
-            if s.builder {
-                2
-            } else {
-                1
-            }
-        }
-        Info::Group(group) => {
-            if group.len() <= 16 {
-                1
-            } else {
-                2
-            }
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -792,7 +841,7 @@ mod tests {
 
     #[test]
     fn stock_info_variant_differs_from_lcars_height() {
-        assert_eq!(info_variant(&Info::None), 0);
+        let layout = StockLayout::new(&GuiLayout::default(), Vec2::new(1600.0, 1200.0));
         let single = Single {
             id: EntityId(1),
             name: String::new(),
@@ -806,11 +855,20 @@ mod tests {
             shield: None,
             progress: None,
             builder: false,
+            has_build_queue: false,
+            a2_yard: false,
         };
-        assert_eq!(info_variant(&Info::Single(single.clone())), 1);
+        assert_eq!(layout.info_variant(&Info::Single(single.clone())), 1);
         assert_eq!(
-            info_variant(&Info::Single(Single {
+            layout.info_variant(&Info::Single(Single {
                 builder: true,
+                ..single.clone()
+            })),
+            1
+        );
+        assert_eq!(
+            layout.info_variant(&Info::Single(Single {
+                has_build_queue: true,
                 ..single
             })),
             2
@@ -822,10 +880,10 @@ mod tests {
             shield: None,
         };
         for count in [2, 16] {
-            assert_eq!(info_variant(&Info::Group(vec![tile.clone(); count])), 1);
+            assert_eq!(layout.info_variant(&Info::Group(vec![tile.clone(); count])), 1);
         }
         for count in [17, 30] {
-            assert_eq!(info_variant(&Info::Group(vec![tile.clone(); count])), 2);
+            assert_eq!(layout.info_variant(&Info::Group(vec![tile.clone(); count])), 2);
         }
     }
 

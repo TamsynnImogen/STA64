@@ -16,28 +16,37 @@ pub(super) struct Attachment {
     pub slot: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PodSlot {
+    pub slot: usize,
+    pub replacing: Option<EntityId>,
+}
+
 pub(crate) type ResearchRec = Vec<(EntityId, EntityId, u32)>;
 
 pub(super) fn external_pod(station: &UnitDef, product: &UnitDef) -> bool {
-    !station.research_slots.is_empty()
+    (!station.research_slots.is_empty() || (station.class.0 == "research" && product.system_upgrade.is_some()))
         && product.class.0 == "pod"
         && !product.research_station_upgrade
 }
 
-fn slot_accepts(station: &UnitDef, slot: usize, product: &UnitDef) -> bool {
-    let slot = &station.research_slots[slot];
-    slot.pose.is_some()
-        && slot
-            .reserved_for
-            .as_deref()
-            .is_none_or(|name| name == product.odf)
+fn slot_accepts(db: &ContentDb, station: &UnitDef, slot: usize, product: &UnitDef) -> bool {
+    let index = slot;
+    let slot = &station.research_slots[index];
+    slot.pose.is_some() && slot.reserved_for.as_deref().is_none_or(|name| {
+        name == product.odf || station.research_build.iter().any(|line| {
+            let primary = line.primary.and_then(|key| db.unit(key));
+            (line.index == index || primary.is_some_and(|p| p.odf == name))
+                && (line.primary == Some(product.key) || line.successors.contains(&product.key))
+        })
+    })
 }
 
-fn free_slot(station: &UnitDef, slots: &[Option<ContentKey>], product: &UnitDef) -> Option<usize> {
+fn free_slot(db: &ContentDb, station: &UnitDef, slots: &[Option<ContentKey>], product: &UnitDef) -> Option<usize> {
     slots
         .iter()
         .enumerate()
-        .position(|(i, pod)| pod.is_none() && slot_accepts(station, i, product))
+        .position(|(i, pod)| pod.is_none() && slot_accepts(db, station, i, product))
 }
 
 impl Production {
@@ -60,18 +69,60 @@ impl Production {
         slots
     }
 
+    /// Advance each authored button using the pod attached to this station.
+    /// The chain index is a button index; the attachment itself owns the
+    /// physical slot. Construction order therefore cannot cross two systems.
+    fn upgrade_line(
+        &self,
+        db: &ContentDb,
+        units: &Entities,
+        station: EntityId,
+        line: &sta_content::ResearchBuildSlot,
+    ) -> Option<(ContentKey, Option<PodSlot>)> {
+        let first = line.primary?;
+        let Some(upgrade) = db.unit(first).and_then(|def| def.system_upgrade) else {
+            return Some((first, None));
+        };
+        let held = self.research.iter()
+            .filter(|(_, link)| link.station == station)
+            .filter_map(|(id, link)| {
+                let pod = units.get(id)?;
+                let info = db.unit(pod.def)?.system_upgrade?;
+                (info.system == upgrade.system && (pod.def == first || line.successors.contains(&pod.def)))
+                    .then_some((info.tier, pod.def, id, link.slot))
+            })
+            .max_by_key(|(tier, _, _, _)| *tier);
+        let Some((tier, key, id, slot)) = held else {
+            return Some((first, None));
+        };
+        let max = db.rules().upgrade_pod_maximum_tier();
+        let next = line.successors.iter().copied().find(|&key| db.unit(key)
+            .and_then(|pod| pod.system_upgrade)
+            .is_some_and(|next| next.tier == tier + 1 && next.tier <= max));
+        Some((next.unwrap_or(key), next.map(|_| PodSlot { slot, replacing: Some(id) })))
+    }
+
     pub(super) fn completed_slot(
         &self,
+        db: &ContentDb,
         units: &Entities,
         station: EntityId,
         def: &UnitDef,
         product: &UnitDef,
-    ) -> Option<usize> {
+    ) -> Option<PodSlot> {
         let slots = self.research_slots(units, station, def);
         if slots.contains(&Some(product.key)) {
             return None;
         }
-        free_slot(def, &slots, product)
+        if !def.research_build.is_empty() && product.system_upgrade.is_some() {
+            let (_, replacing) = def.research_build.iter()
+                .filter_map(|line| self.upgrade_line(db, units, station, line))
+                .find(|(key, _)| *key == product.key)?;
+            if replacing.is_some() {
+                return replacing;
+            }
+        }
+        free_slot(db, def, &slots, product).map(|slot| PodSlot { slot, replacing: None })
     }
 
     pub(super) fn research_block(
@@ -81,7 +132,16 @@ impl Production {
         station: EntityId,
         def: &UnitDef,
         product: &UnitDef,
+        check_list: bool,
     ) -> Option<ResearchBlock> {
+        let mut replacement = false;
+        if !def.research_build.is_empty() && (check_list || product.system_upgrade.is_some()) {
+            let row = def.research_build.iter()
+                .filter_map(|line| self.upgrade_line(db, units, station, line))
+                .find(|(key, _)| *key == product.key);
+            let Some((_, replacing)) = row else { return Some(ResearchBlock::Prerequisite) };
+            replacement = replacing.is_some();
+        }
         if !external_pod(def, product) {
             return None;
         }
@@ -94,14 +154,13 @@ impl Production {
                 return Some(ResearchBlock::Queued);
             }
             if let Some(queued) = db.unit(item.def).filter(|d| external_pod(def, d))
-                && let Some(slot) = free_slot(def, &slots, queued)
+                && self.completed_slot(db, units, station, def, queued).is_none_or(|slot| slot.replacing.is_none())
+                && let Some(slot) = free_slot(db, def, &slots, queued)
             {
                 slots[slot] = Some(queued.key);
             }
         }
-        free_slot(def, &slots, product)
-            .is_none()
-            .then_some(ResearchBlock::NoSlot)
+        (!replacement && free_slot(db, def, &slots, product).is_none()).then_some(ResearchBlock::NoSlot)
     }
 
     pub(super) fn research_view(
@@ -111,16 +170,15 @@ impl Production {
         unit: &Entity,
         def: &UnitDef,
     ) -> ResearchView {
-        let unavailable = def
-            .build
-            .list
-            .iter()
-            .filter_map(|item| {
-                Some((
-                    item.key,
-                    self.research_block(db, units, unit.id, def, db.unit(item.key)?)?,
-                ))
-            })
+        let build_slots = (!def.research_build.is_empty()).then(|| def.research_build.iter()
+            .filter_map(|line| Some((line.index, self.upgrade_line(db, units, unit.id, line)?.0)))
+            .collect::<Vec<_>>());
+        let build_items = match &build_slots {
+            Some(slots) => slots.iter().map(|(_, key)| *key).collect::<Vec<_>>(),
+            None => def.build.list.iter().map(|item| item.key).collect(),
+        };
+        let unavailable = build_items.into_iter()
+            .filter_map(|key| Some((key, self.research_block(db, units, unit.id, def, db.unit(key)?, true)?)))
             .collect();
         let mut pods: Vec<_> = self
             .research
@@ -138,10 +196,17 @@ impl Production {
             .collect();
         pods.sort_by_key(|pod| pod.slot);
         ResearchView {
+            build_slots,
             unavailable,
             pods,
             active_axes: None,
+            replacing: None,
         }
+    }
+
+    pub(crate) fn has_upgrade_pods(&self, station: EntityId, units: &Entities, db: Option<&ContentDb>) -> bool {
+        self.research.iter().filter(|(_, link)| link.station == station)
+            .any(|(id, _)| units.get(id).and_then(|pod| db?.unit(pod.def)).is_some_and(|def| def.system_upgrade.is_some()))
     }
 
     pub(crate) fn remove_research_entity(&mut self, id: EntityId) -> Vec<EntityId> {
@@ -217,7 +282,7 @@ impl Production {
                 (pod.owner == host.owner
                     && external_pod(def, product)
                     && slot < def.research_slots.len()
-                    && slot_accepts(def, slot, product)
+                    && slot_accepts(db, def, slot, product)
                     && occupied.insert((station, slot)))
                 .then_some((id, Attachment { station, slot }))
             })

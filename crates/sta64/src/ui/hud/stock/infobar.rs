@@ -6,6 +6,7 @@ use bevy::{picking::Pickable, prelude::*};
 use sta_assets::a2fmt::odf::Odf;
 use sta_content::{OdfIndex, Profile, Races};
 use sta_sim::{Fixed, UnitView, view::UnitFlags};
+use sta_sim::world::EntityKind;
 use sta_vfs::Vfs;
 
 use super::{StockState, layout::StockLayout};
@@ -123,15 +124,8 @@ pub(super) fn spawn(
     theme: &Theme,
     variant: usize,
 ) {
-    if layout.info_area(variant).is_none() {
-        return;
-    }
-    let origin = layout.info_origin(variant)
-        + layout
-            .point(&format!("infoBarOffset_{variant}"))
-            .unwrap_or(Vec2::ZERO);
     for field in InfoBarField::all() {
-        if let Some(rect) = layout.at(origin, field.key()) {
+        if let Some(rect) = layout.info_bar_at(variant, field.key()) {
             let wrapper = commands
                 .spawn((
                     Node {
@@ -161,8 +155,7 @@ pub(super) fn spawn(
         if field == InfoBarField::Name {
             continue;
         }
-        let key = format!("icon_{}", field.key());
-        if let Some(rect) = layout.at(origin, &key) {
+        if let Some(rect) = icon_at(layout, variant, field) {
             commands.spawn((
                 InfoBarIcon(field),
                 node(rect),
@@ -173,6 +166,18 @@ pub(super) fn spawn(
             ));
         }
     }
+}
+
+fn icon_at(layout: &StockLayout, variant: usize, field: InfoBarField) -> Option<super::super::layout::R> {
+    (field != InfoBarField::Name)
+        .then(|| layout.info_bar_at(variant, &format!("icon_{}", field.key())))
+        .flatten()
+}
+
+pub(super) fn solid(layout: &StockLayout, variant: usize) -> impl Iterator<Item = super::super::layout::R> + '_ {
+    InfoBarField::all().into_iter().flat_map(move |field| {
+        [layout.info_bar_at(variant, field.key()), icon_at(layout, variant, field)].into_iter().flatten()
+    })
 }
 
 const SCALE: i128 = Fixed::ONE.to_bits() as i128;
@@ -283,9 +288,14 @@ pub(in crate::ui::hud) fn update(
     mut texts: Query<(&InfoBarField, &mut SpriteText, &mut Visibility), Without<InfoBarIcon>>,
     mut icons: Query<(&InfoBarIcon, &mut GuiImage, &mut Visibility), Without<InfoBarField>>,
 ) {
+    let layout = state.layout.as_ref();
+    let native = layout.is_some_and(StockLayout::has_a2_info);
     let hovered = hover.0.and_then(|id| feed.view.unit(id)).filter(|unit| {
         unit.flags.contains(UnitFlags::SELECTABLE)
             && !unit.flags.contains(UnitFlags::DYING)
+            && (!native || feed.def(unit).is_some_and(|def| {
+                matches!(EntityKind::of_def(def), EntityKind::Craft | EntityKind::Station)
+            }))
             && feed
                 .view
                 .visible_to(feed.player)
@@ -294,7 +304,6 @@ pub(in crate::ui::hud) fn update(
     });
     // Only what is under the pointer: the selection has the info panel.
     let unit = hovered;
-    let layout = state.layout.as_ref();
     for (field, mut text, mut visibility) in &mut texts {
         let shown = unit.and_then(|unit| {
             if *field == InfoBarField::Name {

@@ -680,8 +680,8 @@ fn the_main_menu_opens_the_multiplayer_screen() {
     let off: Vec<_> = app.world_mut().query::<(&Placed, &crate::ui::theme::WidgetState)>()
         .iter(app.world()).filter(|(_, state)| **state == crate::ui::theme::WidgetState::Disabled)
         .map(|(placed, _)| placed.0).collect();
-    assert_eq!(off.len(), 3);
-    for slot in [Slot::MainMapEditor, Slot::MainReplayIntro, Slot::MainCredits] {
+    assert_eq!(off.len(), 2);
+    for slot in [Slot::MainReplayIntro, Slot::MainCredits] {
         assert!(off.contains(&slot), "{slot:?} is unavailable");
     }
     let multiplayer = app.world_mut().query::<(Entity, &Act)>().iter(app.world())

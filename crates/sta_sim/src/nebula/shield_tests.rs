@@ -113,7 +113,7 @@ fn a_switched_off_generator_or_a_derelict_gets_nothing_back() {
         teleport(&mut s, id, FAR);
         run(&mut s, RETURN_DELAY as u32 / 2);
         if derelict {
-            let mut ctx = crate::combat::casualty::Ctx { subsystems: &mut s.subsystems, rng: &mut s.rng, switches: &s.switches, colonies: &mut s.colonies };
+            let mut ctx = crate::combat::casualty::Ctx { upgrades: &Default::default(), subsystems: &mut s.subsystems, rng: &mut s.rng, switches: &s.switches, colonies: &mut s.colonies };
             crate::combat::casualty::kill_crew(s.units.get_mut(id).unwrap(), &mut ctx, Fixed::from_int(10_000));
             assert!(s.subsystems.get(id).unwrap().derelict, "the empty crew latches the derelict");
         } else {

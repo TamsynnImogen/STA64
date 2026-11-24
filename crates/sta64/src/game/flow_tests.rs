@@ -163,6 +163,72 @@ fn front_end_to_match_and_back() {
 }
 
 #[test]
+fn menu_screens_follow_authored_views_and_setup_subscreens_inherit_setup() {
+    use crate::frontend::campaign::{CampaignAct, tests::fixture};
+
+    fn campaign_press(app: &mut App, action: CampaignAct) {
+        let world = app.world_mut();
+        let entity = world.query::<(Entity, &CampaignAct)>().iter(world)
+            .find(|(_, act)| **act == action).unwrap().0;
+        click(world, entity);
+        settle(app, 3);
+    }
+
+    let mut content = sta_content::ContentDb::builder();
+    for odf in ["fscout", "fgalaxy", "fbase"] {
+        let mut unit = sta_content::UnitDef::new(odf, "craft");
+        unit.hull = sta_sim::Fixed::from_int(100);
+        content = content.unit(unit);
+    }
+    let content = std::sync::Arc::new(content.build().unwrap());
+    let mut vfs = sta_vfs::Vfs::default();
+    vfs.push_dir("showcase".into(), concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/menu-showcase").into()).unwrap();
+    let (mut app, _) = app();
+    let map = MenuMap::from_vfs(&vfs, &content);
+    app.insert_resource(MenuSceneSource(MenuSceneConfig::new(content, map, sta_content::MapDef::empty())))
+        .insert_resource(fixture(false, None));
+
+    settle(&mut app, 4);
+    assert_eq!(screen(&app), Screen::Main);
+    assert_eq!(app.world().resource::<MenuScene>().view(), "opening");
+
+    press(&mut app, Act::Goto(Screen::SinglePlayer));
+    assert_eq!(app.world().resource::<MenuScene>().view(), "fleet");
+    campaign_press(&mut app, CampaignAct::Card(1));
+    assert_eq!(screen(&app), Screen::Missions);
+    assert_eq!(app.world().resource::<MenuScene>().view(), "campaign", "the Federation binding overrides the mission list's fleet view");
+    campaign_press(&mut app, CampaignAct::ToBriefing);
+    assert_eq!(screen(&app), Screen::Briefing);
+    assert_eq!(app.world().resource::<MenuScene>().view(), "campaign");
+    campaign_press(&mut app, CampaignAct::ToMissions);
+    campaign_press(&mut app, CampaignAct::ToSinglePlayer);
+    press(&mut app, Act::Goto(Screen::Main));
+    assert_eq!(app.world().resource::<MenuScene>().view(), "opening");
+
+    press(&mut app, Act::Goto(Screen::Setup)); // Instant action
+    assert_eq!(app.world().resource::<MenuScene>().view(), "planning");
+    press(&mut app, Act::Goto(Screen::Advanced));
+    assert_eq!(screen(&app), Screen::Advanced);
+    assert_eq!(app.world().resource::<MenuScene>().view(), "planning");
+    press(&mut app, Act::CloseAdvanced(false));
+    press(&mut app, Act::PickMap);
+    assert_eq!(screen(&app), Screen::MapSelect);
+    assert_eq!(app.world().resource::<MenuScene>().view(), "planning");
+    let marks = app.world().resource::<crate::bench::marks::RenderMarks>().lines();
+    assert_eq!(marks.iter().filter(|mark| mark.starts_with("render.menu.view view=planning ")).count(), 1);
+    press(&mut app, Act::Goto(Screen::Setup));
+
+    press(&mut app, Act::Goto(Screen::Main));
+    assert_eq!(app.world().resource::<MenuScene>().view(), "opening");
+    press(&mut app, Act::PickMod);
+    assert_eq!(screen(&app), Screen::ModSelect);
+    assert_eq!(app.world().resource::<MenuScene>().view(), "dock");
+    press(&mut app, Act::Goto(Screen::Main));
+    assert_eq!(screen(&app), Screen::Main);
+    assert_eq!(app.world().resource::<MenuScene>().view(), "opening");
+}
+
+#[test]
 fn instant_action_applies_the_chosen_palette_and_restores_the_mount() {
     use crate::viewer::{TeamColours, owner_hull_colour, owner_mark_colour};
     use sta_sim::PlayerId;
@@ -337,6 +403,154 @@ fn a_failed_remount_keeps_the_active_mod_identity() {
     settle(&mut app, 3);
     assert_eq!(app.world().resource::<ActiveMod>().0.as_deref(), Some("fx_balance"));
     assert_eq!(app.world().resource::<SelectedMod>().0.as_deref(), Some("missing"));
+}
+
+#[test]
+fn a_successful_mod_switch_rebuilds_the_menu_scene_and_switches_back() {
+    use crate::frontend::scene::{MenuCamera, MenuScenePlugin};
+    use crate::frontend::screens::{ActiveMod, ModChosen, SelectedMod};
+    use crate::sim_link::SimEntities;
+    use crate::viewer::Mounted;
+
+    fn camera(app: &mut App) -> Entity {
+        let world = app.world_mut();
+        world.query_filtered::<Entity, With<MenuCamera>>().single(world).unwrap()
+    }
+
+    fn ship(app: &App) -> (Entity, sta_sim::Fixed) {
+        let world = app.world();
+        let link = world.resource::<SimLink>();
+        let [unit] = link.curr().units.as_slice() else { panic!("expected one scene ship") };
+        (world.resource::<SimEntities>().0[&unit.id], unit.pos.x)
+    }
+
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("sta64_menu_mod_switch_{}_{nonce}", std::process::id()));
+    let data = root.join("Data");
+    let mod_dir = data.join("Mods/Scene Mod");
+    std::fs::create_dir_all(data.join("odf/ships")).unwrap();
+    std::fs::create_dir_all(data.join("Menu")).unwrap();
+    std::fs::create_dir_all(mod_dir.join("RefitScene/Menu")).unwrap();
+    std::fs::write(
+        data.join("odf/ships/fcruiser.odf"),
+        "[GameObjectClass]\nclassLabel = \"craft\"\nunitName = \"Regression Cruiser\"\nrace = \"unitedfederation\"\nmaxHealth = 4000\nmaxSpeed = 140\n",
+    )
+    .unwrap();
+    std::fs::write(data.join("Menu/map.ini"), "[View.base_view]\nEye=0,0,400\n[Ship.base_ship]\nOdf=fcruiser\nAt=10,0,0\n").unwrap();
+    std::fs::write(mod_dir.join("info.ini"), "[Mod]\nName=Scene Mod\n").unwrap();
+    std::fs::write(
+        mod_dir.join("RefitScene/Menu/map.ini"),
+        "[View.mod_view]\nEye=0,0,800\n[Ship.mod_ship]\nOdf=fcruiser\nAt=900,0,0\n",
+    )
+    .unwrap();
+
+    let (mut app, _) = app();
+    let vfs = sta_vfs::Vfs::mount_install(&root, None).expect("synthetic base install mounts");
+    let mut catalogue = crate::map::Catalogue::default();
+    let base = front_end_data(&vfs, &mut catalogue, Some(&root)).unwrap();
+    let browser = crate::map::browser(&vfs, None, String::new());
+    app.insert_resource(Mounted(vfs))
+        .insert_resource(catalogue)
+        .insert_resource(base.screens)
+        .insert_resource(MenuSceneSource(base.scene))
+        .insert_resource(browser)
+        .insert_resource(FlowConfig { install_root: Some(root.clone()) })
+        .add_plugins(AssetPlugin::default())
+        .init_asset::<Mesh>()
+        .init_asset::<Image>()
+        .init_asset::<StandardMaterial>()
+        .init_resource::<GlobalAmbientLight>()
+        .add_plugins(MenuScenePlugin);
+    settle(&mut app, 4);
+    assert_eq!(state(&app), AppState::FrontEnd);
+    assert_eq!(app.world().resource::<MenuScene>().view(), "base_view");
+    let base_camera = camera(&mut app);
+    let (base_ship, base_x) = ship(&app);
+    assert_eq!(base_x, sta_sim::Fixed::from_int(10));
+
+    app.world_mut().write_message(ModChosen(Some("Scene Mod".into())));
+    settle(&mut app, 4);
+    assert_eq!(state(&app), AppState::FrontEnd, "switching mods does not leave the front end");
+    assert_eq!(app.world().resource::<ActiveMod>().0.as_deref(), Some("Scene Mod"));
+    assert_eq!(app.world().resource::<SelectedMod>().0.as_deref(), Some("Scene Mod"));
+    assert_eq!(app.world().resource::<MenuScene>().view(), "mod_view", "the mod's RefitScene menu map opens");
+    let mod_camera = camera(&mut app);
+    let (mod_ship, mod_x) = ship(&app);
+    assert_eq!(mod_x, sta_sim::Fixed::from_int(900));
+    assert!(app.world().get_entity(base_camera).is_err());
+    assert!(app.world().get_entity(base_ship).is_err());
+
+    app.world_mut().write_message(ModChosen(None));
+    settle(&mut app, 4);
+    assert_eq!(state(&app), AppState::FrontEnd, "switching back also stays in the front end");
+    assert_eq!(app.world().resource::<ActiveMod>().0, None);
+    assert_eq!(app.world().resource::<SelectedMod>().0, None);
+    assert_eq!(app.world().resource::<MenuScene>().view(), "base_view", "the base install's direct menu map is restored");
+    camera(&mut app);
+    assert_eq!(ship(&app).1, base_x);
+    assert!(app.world().get_entity(mod_camera).is_err());
+    assert!(app.world().get_entity(mod_ship).is_err());
+
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn front_end_map_names_resolve_localized_keys_and_keep_name_fallbacks() {
+    use sta_bzn::{Map, StartLoc};
+
+    fn map(description: &str, file_name: &str) -> Map {
+        Map {
+            version: 3013,
+            binary: true,
+            mission_type: "mp".into(),
+            description: description.into(),
+            file_name: file_name.into(),
+            start_count: 2,
+            start_locs: vec![
+                StartLoc { kind: "empty".into(), team: -1, ..default() },
+                StartLoc { pos: [10.0, 0.0, 0.0], kind: "player".into(), team: 1, ..default() },
+                StartLoc { pos: [-10.0, 0.0, 0.0], kind: "player".into(), team: 2, ..default() },
+            ],
+            ..default()
+        }
+    }
+
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("sta64_localized_map_names_{}_{nonce}", std::process::id()));
+    let data = root.join("Data");
+    let child = data.join("Mods/Child");
+    std::fs::create_dir_all(data.join("bzn")).unwrap();
+    std::fs::create_dir_all(&child).unwrap();
+    std::fs::write(data.join("Dynamic_Localized_Strings.h"),
+        "\"EXPLICIT_MAP_KEY\", \"Base explicit title\", \"CHILD_OVERRIDE_MAP_NAME\", \"Base derived title\", \"EMPTY_LOCALIZED_MAP_NAME\", \"\"").unwrap();
+    std::fs::write(child.join("info.ini"), "[Mod]\nName=Child\n").unwrap();
+    std::fs::write(child.join("Dynamic_Localized_Strings.h"),
+        "\"EXPLICIT_MAP_KEY\", \"Child explicit title\"").unwrap();
+
+    for (stem, description, file_name) in [
+        ("explicit", "EXPLICIT_MAP_KEY", "explicit.bzn"),
+        ("child_override", "A literal description", "child_override.bzn"),
+        ("literal", "A custom literal title", "literal.bzn"),
+        ("empty_localized", "Fallback literal title", "empty_localized.bzn"),
+        ("bare", "", "bare.bzn"),
+    ] {
+        let bytes = sta_bzn::write::write(&map(description, file_name)).unwrap();
+        std::fs::write(data.join(format!("bzn/{stem}.bzn")), bytes).unwrap();
+    }
+
+    let vfs = sta_vfs::Vfs::mount_install(&root, Some("Child")).expect("synthetic child install mounts");
+    let mut catalogue = crate::map::Catalogue::default();
+    let front_end = front_end_data(&vfs, &mut catalogue, Some(&root)).unwrap();
+    let titles: Vec<_> = front_end.screens.maps.iter().map(|entry| (entry.def.name.as_str(), entry.title())).collect();
+    assert_eq!(titles, [
+        ("bare", "bare"),
+        ("child_override", "Base derived title"),
+        ("empty_localized", "Fallback literal title"),
+        ("explicit", "Child explicit title"),
+        ("literal", "A custom literal title"),
+    ]);
+
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 /// A remount drops what was cached by name from the previous mount: the texture cache keeps misses

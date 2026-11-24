@@ -658,7 +658,7 @@ impl Sim {
             let Some(t) = self.units.get_mut(target).filter(|t| alive(t)) else { return };
             let (Some(def), Some([now, _])) = (db.unit(t.def), t.crew) else { return };
             if now >= Fixed::ONE && self.subsystems.get(target).is_some_and(|r| r.derelict) {
-                let mut ctx = Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
+                let mut ctx = Ctx { upgrades: &Default::default(), subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
                 super::casualty::clear_derelict(t, def, &mut ctx);
             }
         }
@@ -703,7 +703,7 @@ impl Sim {
         }
         let (kills, survivors) = outcome(p.size, p.strength, defence, now);
         let takes = kills > now;
-        let mut ctx = Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
+        let mut ctx = Ctx { upgrades: &Default::default(), subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
         let Some(t) = self.units.get_mut(p.target) else { return };
         kill_crew(t, &mut ctx, kills);
         let emptied = t.crew.is_some_and(|c| c[0] <= Fixed::ZERO);

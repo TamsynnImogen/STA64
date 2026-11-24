@@ -209,10 +209,13 @@ fn child_owned_production_and_weld_refund_overflow_reject_atomically() {
         let mut rec = sim.production.to_rec();
         let child = EntityId(rec.welds[0].0);
         match fault {
-            0 => rec.queues.push((
-                child.0,
-                vec![(sim.content().unwrap().key("fx_frigate").unwrap().0, 0, 0, false, false)],
-            )),
+            0 => {
+                rec.last_job_id += 1;
+                rec.queues.push((
+                    child.0,
+                    vec![(sim.content().unwrap().key("fx_frigate").unwrap().0, 0, 0, false, false, rec.last_job_id)],
+                ));
+            }
             1 => sim.economy.set_stock(
                 PlayerId(0),
                 [Fixed::from_bits(i64::MAX), Fixed::ZERO, Fixed::ZERO, Fixed::ZERO],

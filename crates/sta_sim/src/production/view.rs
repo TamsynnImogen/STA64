@@ -2,7 +2,7 @@
 //! This optional `WorldSource` view leaves serialized `WorldView` unchanged.
 
 use super::{Production, launch, orbit, research, ticks_of};
-use crate::world::Entities;
+use crate::{command::BuildQueueId, world::Entities};
 use sta_content::ContentDb;
 use sta_core::{ContentKey, EntityId, Fixed, Vec3};
 use std::collections::BTreeMap;
@@ -31,6 +31,7 @@ pub enum ResearchBlock {
     AlreadyResearched,
     Queued,
     NoSlot,
+    Prerequisite,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,9 +43,11 @@ pub struct ResearchPodView {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResearchView {
+    pub build_slots: Option<Vec<(usize, ContentKey)>>,
     pub unavailable: Vec<(ContentKey, ResearchBlock)>,
     pub pods: Vec<ResearchPodView>,
     pub active_axes: Option<[Vec3; 3]>,
+    pub replacing: Option<EntityId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +61,8 @@ pub struct LaunchPortalView {
 /// Only a paid, started head is an actual in-yard hull.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductionJobView {
+    /// Real queue entries have an id; construction site previews do not.
+    pub queue_id: Option<BuildQueueId>,
     pub def: ContentKey,
     pub progress: Fixed,
     pub paid: bool,
@@ -90,6 +95,7 @@ impl Production {
             let jobs: Vec<_> = queue
                 .iter()
                 .map(|job| ProductionJobView {
+                    queue_id: Some(job.id),
                     def: job.def,
                     progress: progress(job.done, ticks_of(db, job.def)),
                     paid: job.paid,
@@ -106,7 +112,7 @@ impl Production {
                 let out = launch::through_wormhole(builder, unit.pos, unit.heading);
                 Some(LaunchPortalView { def: gate.key, pos: out.pos, heading: out.heading, open: progress(elapsed, gate.wormhole_open_ticks()) })
             });
-            let mut research = db.unit(unit.def).filter(|d| !d.research_slots.is_empty())
+            let mut research = db.unit(unit.def).filter(|d| !d.research_slots.is_empty() || !d.research_build.is_empty())
                 .map(|def| self.research_view(db, units, unit, def));
             let site = jobs
                 .first()
@@ -124,9 +130,11 @@ impl Production {
                     let (pos, heading) = if let Some(builder_def) = db.unit(unit.def)
                         && let Some(product) = db.unit(job.def).filter(|d| research::external_pod(builder_def, d))
                     {
-                        let slot = self.completed_slot(units, builder, builder_def, product)?;
-                        let (pos, heading, axes) = research::pose(unit, builder_def, slot)?;
-                        research.as_mut().expect("research station").active_axes = Some(axes);
+                        let slot = self.completed_slot(db, units, builder, builder_def, product)?;
+                        let (pos, heading, axes) = research::pose(unit, builder_def, slot.slot)?;
+                        let research = research.as_mut().expect("research station");
+                        research.active_axes = Some(axes);
+                        research.replacing = slot.replacing;
                         (pos, heading)
                     } else {
                         (pos, heading)
@@ -162,6 +170,7 @@ impl Production {
                 ProductionView {
                     builder,
                     jobs: vec![ProductionJobView {
+                        queue_id: None,
                         def: deploy.def,
                         progress: Fixed::ZERO,
                         paid: deploy.paid,
@@ -188,6 +197,7 @@ impl Production {
                 ProductionView {
                     builder: weld.builder,
                     jobs: vec![ProductionJobView {
+                        queue_id: None,
                         def: unit.def,
                         progress: progress(weld.done, weld.ticks),
                         paid: true,
@@ -209,7 +219,7 @@ impl Production {
             if rows.contains_key(&unit.id) { continue; }
             let Some(def) = db.unit(unit.def) else { continue; };
             let officer_upgrades = self.officer_upgrade_view(unit, def);
-            let research = (!def.research_slots.is_empty()).then(|| self.research_view(db, units, unit, def))
+            let research = (!def.research_slots.is_empty() || !def.research_build.is_empty()).then(|| self.research_view(db, units, unit, def))
                 .filter(|r| !r.unavailable.is_empty() || !r.pods.is_empty());
             if research.is_some() || officer_upgrades.is_some() {
                 rows.insert(unit.id, ProductionView {

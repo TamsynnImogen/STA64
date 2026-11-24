@@ -66,7 +66,7 @@ fn _every_entity_field_has_a_section(e: &Entity) {
 fn _every_sim_field_is_decided(s: &Sim) {
     let Sim {
         tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, starts: _, regions: _,
-        bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, economy: _,
+        bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, ship_upgrades: _, economy: _,
         production: _, victory: _, specials: _, autonomy: _, start_effects: _, replacements: _, nav: _, subsystems: _, zero_shield_holds: _, attrs: _, scripted: _, switches: _, relations: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _, transports: _, recrew: _, repairs: _, recycles: _, nebula_shields: _, alerts: _, mission_switches: _,
     } = s;
 }
@@ -263,7 +263,7 @@ impl Sim {
         if !self.economy.is_empty() {
             self.economy.hash_into(&mut h);
         }
-        if !self.production.is_empty() {
+        if self.production.has_digest_state() {
             self.production.hash_into(&mut h);
         }
         // SIM-30: population and crew income feed the economy.
@@ -430,7 +430,7 @@ impl Sim {
                 if !self.economy.is_empty() {
                     row(None, "stock, nodes, freighters, personnel (hash)", block("economy", &|h| self.economy.hash_into(h)));
                 }
-                if !self.production.is_empty() {
+                if self.production.has_digest_state() {
                     row(None, "yards, rigs, rallies (hash)", block("production", &|h| self.production.hash_into(h)));
                 }
                 if !self.colonies.is_empty() {

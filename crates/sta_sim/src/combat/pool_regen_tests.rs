@@ -134,7 +134,7 @@ fn regeneration_comes_before_the_hit_in_one_step() {
             hull: fx(damage),
             at: Vec3 { x: Fixed::ZERO, y: Fixed::ZERO, z: Fixed::ZERO },
         }];
-        let mut ctx = super::casualty::Ctx { subsystems: &mut sim.subsystems, rng: &mut sim.rng, switches: &sim.switches, colonies: &mut sim.colonies };
+        let mut ctx = super::casualty::Ctx { upgrades: &Default::default(), subsystems: &mut sim.subsystems, rng: &mut sim.rng, switches: &sim.switches, colonies: &mut sim.colonies };
         let killed = super::damage::apply(&mut sim.units, &db, &mut events, 0, &mut ctx, &mut sim.zero_shield_holds, sim.tick);
         assert_eq!(killed.is_empty(), survives, "hit of {damage}");
     }

@@ -1,4 +1,4 @@
-//! Immutable miner cargo presentation derived from live economy records.
+//! Immutable cargo presentation derived from live economy records.
 
 use sta_content::ContentDb;
 use sta_core::{EntityId, Fixed};
@@ -7,7 +7,7 @@ use crate::world::{Entities, EntityKind};
 
 use super::{Economy, cfg_of};
 
-/// A live mining craft's carried amount and resolved hold capacity.
+/// A freighter's carried amount and resolved hold capacity.
 /// `resource` is known only while actual cargo is aboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CargoView {
@@ -51,6 +51,9 @@ pub(super) fn rows(economy: &Economy, db: &ContentDb, units: &Entities) -> Vec<C
         .iter()
         .filter(|unit| unit.kind == EntityKind::Craft)
         .filter_map(|unit| {
+            if let Some(cargo) = economy.trade_cargo(db, unit) {
+                return Some(cargo);
+            }
             let cfg = cfg_of(db, unit.def)?;
             let miner = economy.miners.get(unit.id);
             let amount = miner.map_or(Fixed::ZERO, |m| m.cargo);

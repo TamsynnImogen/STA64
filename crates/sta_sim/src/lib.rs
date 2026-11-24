@@ -73,7 +73,9 @@ mod recrew_tests;
 pub mod setup;
 pub mod snapshot;
 pub mod sensors;
+pub mod ship_upgrades;
 pub mod source;
+mod inspector_edit;
 pub mod specials;
 pub mod spatial;
 pub mod spawn;
@@ -171,6 +173,7 @@ pub struct Sim {
     weapons: combat::weapons::Weapons,
     /// Queued waypoints and formations (SIM-02).
     movement: movement::Movement,
+    ship_upgrades: ship_upgrades::Applied,
     /// Stock, nodes and freighters (SIM-07); in the digest once any exists.
     economy: economy::Economy,
     /// Yard queues and rig deploys (SIM-08); in the digest once any exists.
@@ -249,6 +252,7 @@ impl Sim {
             events: Vec::new(),
             weapons: Default::default(),
             movement: movement::Movement::default(),
+            ship_upgrades: Default::default(),
             economy: Default::default(),
             production: Default::default(),
             victory: Default::default(),
@@ -480,6 +484,14 @@ impl Sim {
             Order::Decommission { units, yard } => self.apply_decommission(c.player, units, *yard),
             Order::Recrew { units, on } => self.order_recrew(c.player, units, *on),
             Order::Alert { units, level } => self.order_alert(c.player, units, *level),
+            Order::Trade { units, action } => self.order_trade(c.player, units, *action),
+            Order::CancelBuild { builder, slot, job } => {
+                let Some(db) = self.content.as_deref() else { return false; };
+                let Some(builder) = self.units.get(*builder).filter(|unit|
+                    c.player.is_player() && unit.owner == c.player && !unit.flags.contains(view::UnitFlags::DYING)
+                ) else { return false; };
+                self.production.cancel_build(db, &mut self.economy, builder, *slot, *job)
+            }
         }
     }
 
@@ -489,6 +501,7 @@ impl Sim {
             self.team_changes.clear();
         }
         self.step_start_effects();
+        self.refresh_ship_upgrades();
         self.hold_welding_builders();
         self.constrain_targets();
         self.watch_orders();
@@ -548,7 +561,8 @@ impl Sim {
             // Pause station recovery for incoming positive hits, including
             // casualty hits whose final hull-damage event may become zero.
             self.recrew.note_hits(&self.units, &db, &self.events[from..], self.tick);
-            let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
+            let upgrades = ship_upgrades::ShipUpgrades::collect(&db, &self.units);
+            let mut casualties = combat::casualty::Ctx { upgrades: &upgrades, subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
             let mut killed = combat::damage::apply(&mut self.units, &db, &mut self.events, from, &mut casualties, &mut self.zero_shield_holds, self.tick);
             if !nebulae.is_empty() {
                 killed.extend(self.nebula_damage(&db, &nebulae));
@@ -559,7 +573,7 @@ impl Sim {
             self.auto_repair();
             self.step_repairs();
             self.step_recycles();
-            let mut casualties = combat::casualty::Ctx { subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
+            let mut casualties = combat::casualty::Ctx { upgrades: &upgrades, subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
             combat::casualty::step(&mut self.units, &db, &mut casualties);
             combat::casualty::nebula_life_support(&mut self.units, &db, &mut casualties, &nebula_holds.life_support_off);
             for (id, by) in killed {
@@ -573,11 +587,15 @@ impl Sim {
         let colony_crew = self.content.as_deref().map(|db| self.colony_crew_income(db)).unwrap_or_default();
         if let Some(db) = &self.content {
             self.economy.step(&mut self.units, db, self.tick, &self.confinement, &mut self.events);
+            self.economy.step_trade(&mut self.units, economy::trade::TradeRules(db, &self.attrs), self.tick, &mut self.rng);
             self.economy.step_passive(&self.units, db, &self.players, &self.ai_seats, self.tick);
             self.economy.step_crew(&self.units, db, &self.attrs, self.tick, &colony_crew);
             let from = self.events.len();
             self.production.update_research_poses(db, &mut self.units);
             let completed = self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement, self.bounds);
+            for old in completed.replaced_pods {
+                self.retire(old);
+            }
             self.inherit_builder_races(from);
             self.inherit_builder_alert(from);
             let built: Vec<EntityId> = self.events[from..].iter().filter_map(|e| match e { SimEvent::Spawned { id } => Some(*id), _ => None }).collect();
@@ -599,6 +617,7 @@ impl Sim {
         self.hold_welding_builders();
         self.advance_courses();
         self.constrain_targets();
+        self.refresh_ship_upgrades();
         self.tick += 1;
         TickOutput { view: Arc::new(self.build_view()), events: std::mem::take(&mut self.events) }
     }
@@ -734,7 +753,7 @@ impl Sim {
         if !self.economy.is_empty() {
             self.economy.hash_into(&mut h);
         }
-        if !self.production.is_empty() {
+        if self.production.has_digest_state() {
             self.production.hash_into(&mut h);
         }
         if !self.victory.is_empty() {
@@ -810,6 +829,68 @@ impl Sim {
 }
 
 impl WorldSource for Sim {
+    fn supports_placement_edits(&self) -> bool {
+        self.content.is_some()
+    }
+
+    fn edit_placement(&mut self, edit: source::PlacementEdit) -> Option<EntityId> {
+        use source::PlacementEdit;
+
+        let id = match edit {
+            PlacementEdit::Place { def, owner, at } => {
+                let defn = self.content.as_ref()?.unit(def)?;
+                if !source::editable_placement(defn) {
+                    return None;
+                }
+                let id = self.spawn_unqueued_def(def, owner, at, (Fixed::ZERO, Fixed::ONE))?;
+                self.refresh_ship_upgrades();
+                // Map placements enter at rest with no construction callback or spawn effect.
+                self.events.retain(|event| !matches!(event, SimEvent::Spawned { id: spawned } if *spawned == id));
+                id
+            }
+            PlacementEdit::Transform { id, at, quarter_turns } => {
+                let unit = self.units.get_mut(id)?;
+                if !self.content.as_ref()?.unit(unit.def).is_some_and(source::editable_placement)
+                    || unit.progress.is_some()
+                    || unit.flags.contains(view::UnitFlags::DYING)
+                    || unit.flags.contains(view::UnitFlags::DOCKED)
+                {
+                    return None;
+                }
+                unit.pos = at;
+                let (x, z) = unit.heading;
+                unit.heading = match quarter_turns.rem_euclid(4) {
+                    1 => (z, -x),
+                    2 => (-x, -z),
+                    3 => (-z, x),
+                    _ => (x, z),
+                };
+                unit.target = None;
+                unit.speed = Fixed::ZERO;
+                unit.omega = Fixed::ZERO;
+                self.movement.clear(id);
+                id
+            }
+            PlacementEdit::Inspect(inspection) => {
+                return self.inspect_placement(*inspection);
+            }
+            PlacementEdit::Remove(id) => {
+                let unit = self.units.get(id)?;
+                if !self.content.as_ref()?.unit(unit.def).is_some_and(source::editable_placement)
+                    || unit.progress.is_some()
+                    || unit.flags.contains(view::UnitFlags::DYING)
+                    || unit.flags.contains(view::UnitFlags::DOCKED)
+                    || !self.retire(id)
+                {
+                    return None;
+                }
+                id
+            }
+        };
+        self.refresh_ship_upgrades();
+        Some(id)
+    }
+
     /// Applies `commands` sorted by `(player, seq)` (sorted again here, so a
     /// caller's order cannot matter), then advances. Rejected commands come
     /// out as [`SimEvent::Rejected`], in batch order.

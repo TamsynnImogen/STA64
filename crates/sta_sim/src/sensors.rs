@@ -56,6 +56,7 @@ pub fn compute(
     dip: Diplomacy<'_>,
 ) -> Vec<(PlayerId, Vec<EntityId>)> {
     let players = dip.players;
+    let upgrades = content.map(|db| crate::ship_upgrades::ShipUpgrades::collect(db, units));
     let bodies: Vec<Body> = units
         .iter()
         .map(|e| Body {
@@ -74,7 +75,7 @@ pub fn compute(
             let mut ids: Vec<EntityId> = Vec::new();
             for e in units.iter().filter(|e| e.owner == owner) {
                 ids.push(e.id);
-                let r = range(e, content);
+                let r = range(e, content) * upgrades.as_ref().map_or(Fixed::ONE, |u| u.sensor_multiplier(owner));
                 if r > Fixed::ZERO {
                     ids.extend(
                         grid.query(

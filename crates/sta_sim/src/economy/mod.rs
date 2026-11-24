@@ -37,6 +37,7 @@
 //!   exists.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use sta_content::ContentDb;
 use sta_core::{ContentKey, EntityId, Fixed, PlayerId, Vec3, TICK_HZ};
 
@@ -56,6 +57,7 @@ pub mod recycle;
 #[cfg(test)]
 mod recycle_tests;
 mod seat;
+pub(crate) mod trade;
 pub mod view;
 
 /// What a fresh node holds.
@@ -190,6 +192,8 @@ const K_MOON: Fixed = Fixed::from_bits(3_579_139_413);
 const K_NEBULA: Fixed = Fixed::from_bits(2_147_483_648);
 /// How far inside the weapon range a freighter starts working (the original's `approachRange - 15`).
 const APPROACH_SLACK: i32 = 15;
+/// A queued freighter orbits 30 units outside the working circle (Armada II, static).
+const MINER_WAIT_GAP: i32 = 30;
 /// Distance from a station's origin at which a beam-armed freighter starts to unload: the last
 /// short stretch is the dock approach. The dock node itself (`dockingHardpoint`) is not read yet;
 /// a fallback, not measured.
@@ -275,6 +279,7 @@ pub struct Economy {
     nodes: Table<Fixed>,
     miners: Table<Miner>,
     docks: Table<dock::Ticket>,
+    traders: Table<trade::Merchant>,
     /// Miners whose work was ended or redirected by an order since the last step: announced
     /// there. Empty between steps, not part of the state.
     announce: Vec<EntityId>,
@@ -290,6 +295,11 @@ pub struct EconomyRec {
 }
 
 impl Economy {
+    /// Store a validated paused-editor resource amount.
+    pub(crate) fn edit_node_amount(&mut self, id: EntityId, amount: Fixed) {
+        self.nodes.insert(id, amount);
+    }
+
     /// Live cargo rows for mining craft, including eligible idle craft with an
     /// empty hold. This reads the same miner records and capacity rule as mining.
     /// Every resource node's amount left (UI-48), ascending id.
@@ -302,7 +312,7 @@ impl Economy {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.stock.is_empty() && self.nodes.is_empty() && self.miners.is_empty() && self.personnel.is_empty() && self.adjust.is_empty()
+        self.stock.is_empty() && self.nodes.is_empty() && self.miners.is_empty() && self.personnel.is_empty() && self.adjust.is_empty() && self.traders.is_empty()
     }
 
     /// A player's stock per resource id; empty until they have any.
@@ -455,14 +465,14 @@ impl Economy {
         }
     }
 
-    /// A move or stop suspends mining; carried cargo remains physical state.
+    /// A move or stop suspends freight work while preserving any cargo.
     pub(crate) fn cancel(&mut self, units: &Entities, player: PlayerId, ids: &[EntityId]) {
         for &id in ids {
-            if units
-                .get(id)
-                .is_some_and(|u| !player.is_player() || u.owner == player)
-                && let Some(mut m) = self.miners.get(id).copied()
-            {
+            if !units.get(id).is_some_and(|u| !player.is_player() || u.owner == player) {
+                continue;
+            }
+            self.suspend_trade(id);
+            if let Some(mut m) = self.miners.get(id).copied() {
                 self.announce.push(id);
                 self.docks.remove(id);
                 if m.cargo > Fixed::ZERO {
@@ -488,12 +498,23 @@ impl Economy {
         // An occupied berth stays reserved for this tick, even if its freighter
         // drains the last cargo before the next waiter is processed.
         let mut occupied = self.docked_stations(units);
+        occupied.extend(self.trade_berths());
         // Orders that took a freighter off its work (a stop, a move, a new order) say so.
         for id in std::mem::take(&mut self.announce) {
             let (phase, node) = self.miners.get(id).map_or((Phase::Idle, id), |m| (m.phase, m.node));
             events.push(SimEvent::MinerPhase { id, phase: phase.announced(), node, dock: None });
         }
         let ids: Vec<EntityId> = self.miners.iter().map(|(id, _)| id).collect();
+        // Mining is persisted, so it is the admission record across snapshots. Resolve old
+        // snapshots with multiple miners on one node to the first incumbent deterministically.
+        let mut working: BTreeMap<EntityId, EntityId> = BTreeMap::new();
+        for &id in &ids {
+            if let Some(m) = self.miners.get(id).filter(|m| m.phase == Phase::Mining) {
+                working.entry(m.node).or_insert(id);
+            }
+        }
+        // Keep claims for the whole tick, including when an incumbent fills its hold.
+        // A later arrival can then never extract from the same node in this tick.
         for id in ids {
             let Some(mut m) = self.miners.get(id).copied() else {
                 continue;
@@ -530,15 +551,34 @@ impl Economy {
                 match m.phase {
                     Phase::Idle => break,
                     Phase::ToNode => {
-                        if dist(pos, node_pos.unwrap()) <= work_distance(db, def, node_def) {
+                        let np = node_pos.unwrap();
+                        let work = work_distance(db, def, node_def);
+                        if working.contains_key(&m.node) {
+                            let range = mining_range(db, def);
+                            let gap = Fixed::from_int(MINER_WAIT_GAP);
+                            let wait_range = range.map(|r| r + gap);
+                            if dist(pos, np) <= wait_range.map_or(work, |r| work.max(r) + gap) {
+                                let target = wait_range.and_then(|r| orbit_point(db, id, def, pos, node_def, np, r));
+                                set_target(units, id, target);
+                            } else {
+                                steer(units, id, np);
+                            }
+                            break;
+                        }
+                        if dist(pos, np) <= work {
+                            working.insert(m.node, id);
                             set_target(units, id, None);
                             m.phase = Phase::Mining;
                         } else {
-                            steer(units, id, node_pos.unwrap());
+                            steer(units, id, np);
                             break;
                         }
                     }
                     Phase::Mining => {
+                        if working.get(&m.node) != Some(&id) {
+                            m.phase = Phase::ToNode;
+                            continue;
+                        }
                         let left = self
                             .nodes
                             .get(m.node)
@@ -600,6 +640,7 @@ impl Economy {
                         }
                         let arrive = dock::arrival(db, def, berth.authored);
                         let ahead = self.queue_ahead(id, ticket)
+                            .chain(self.trade_queue_ahead(id, ticket))
                             .filter_map(|other| units.get(other))
                             .map(|other| dock::span(db, other.def, berth.authored))
                             .fold(Fixed::ZERO, |sum, width| sum + width);
@@ -730,6 +771,7 @@ impl Economy {
         }
         self.hash_personnel(h);
         self.hash_adjust(h);
+        self.hash_trade(h);
     }
 
     /// The state in plain form, for the snapshot.

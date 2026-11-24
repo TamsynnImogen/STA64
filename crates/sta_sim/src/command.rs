@@ -124,6 +124,57 @@ pub enum Order {
     Decommission { units: Vec<EntityId>, yard: Option<EntityId> },
     /// Change the combat alert of owned ships and stations.
     Alert { units: Vec<EntityId>, level: AlertState },
+    /// Set a cargo ship's route, load a transfer, or exchange resources at
+    /// a trading station. Appended tag 23 preserves the existing orders.
+    Trade { units: Vec<EntityId>, action: TradeAction },
+    /// Cancel the job currently at this zero-based queue slot, including the head.
+    /// The job identity must still match when applied. Appended Order tag 24.
+    CancelBuild { builder: EntityId, slot: u32, job: BuildQueueId },
+}
+
+/// A production job's identity, stable until it is removed or completed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildQueueId(pub u64);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TradeAction {
+    Source(EntityId),
+    Destination(EntityId),
+    Load(TradeResource),
+    Buy(TradeResource),
+    Sell(TradeResource),
+    /// Set the appropriate endpoint from a right-click.
+    Auto(EntityId),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TradeResource {
+    Crew,
+    Dilithium,
+    Latinum,
+    Metal,
+}
+
+impl TradeResource {
+    /// The resource index in stock Armada II command ODFs.
+    pub fn from_native(value: i32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Crew),
+            2 => Some(Self::Dilithium),
+            3 => Some(Self::Latinum),
+            4 => Some(Self::Metal),
+            _ => None,
+        }
+    }
+
+    pub fn stock_slot(self) -> Option<u8> {
+        match self {
+            Self::Crew => None,
+            Self::Dilithium => Some(0),
+            Self::Latinum => Some(1),
+            Self::Metal => Some(2),
+        }
+    }
 }
 
 /// Which autonomy an [`Order::Autonomy`] sets.
@@ -662,7 +713,9 @@ mod tests {
             (19, Order::Recrew { units: u.clone(), on: None }),
             (20, Order::Guard { units: u.clone(), ward: id }),
             (21, Order::Decommission { units: u.clone(), yard: Some(id) }),
-            (22, Order::Alert { units: u, level: AlertState::Green }),
+            (22, Order::Alert { units: u.clone(), level: AlertState::Green }),
+            (23, Order::Trade { units: u, action: TradeAction::Source(id) }),
+            (24, Order::CancelBuild { builder: id, slot: 1, job: BuildQueueId(9) }),
         ];
         for (tag, o) in orders {
             let bytes = postcard::to_allocvec(&o).unwrap();

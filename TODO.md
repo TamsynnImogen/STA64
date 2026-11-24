@@ -6,6 +6,10 @@ this file is what's being worked on now and what needs checking by eye.
 Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your check in game/viewer
 
 ## Needs your check
+
+- [?] Hover the selected unit's subsystem icon, number and hull/shield bars. The tooltip should follow the specific readout. Click the portrait or wireframe to centre on the unit, then drag a selection box from the map and release over the HUD. Check crew and officers in Stock and STA64 HUDs with STA2 Classic and an authored hidden crew readout.
+
+- [?] #1170 left-clicks a waiting or active queue icon. Try both in a yard and a research station in Stock and STA64 HUDs. The list closes the gap and refunds paid entries. The next job starts when eligible. Original-game timing and cancellation/refunds outside stock Armada II still need observation.
 - [?] Armada I bridge movie (fix/a1-bridge-movie-frame): in an Armada I mission whose script plays a clip on the bridge (`PlayBridgeMovie`, inside a cineractive), the clip should play inside the race's bridge picture (`<p>bridge_panel` of the install's `gui_global.spr`), in the screen window of it, the whole picture centred at 4:3 with black beside it on a wide window, and not in the HUD's panel. Without the art (a mod without the sprites) it plays full screen on black and logs once. Interim and not measured against the original: (1) that the engine keys the window colour STA64 keys out (`WINDOW_KEY`; the clip rectangle and the draw order are read from the executable, static); (2) what is drawn in the bars beside the 4:3 scene; (3) the animated `<p>bridgeLayer<n>` lights (not drawn); (4) what `ShowBridgeOnScreen(false)` shows is not measured (nothing is drawn for it); (5) a clip whose aspect differs from the rectangle's is stretched; (6) whether the original shows a bridge clip at all in the RTS view (here it always shows); (7) skipping a clip (Space skips the cineractive; a clip has no key of its own); (8) a gui cfg key so a mod can place the clip (the rectangles are fixed in the executable). `PlayCinematicMovie` (HUD panel) is not exposed by the Armada I mission API yet.
 - [?] Background planets' colour (fix/atmosphere-shell, #989): look at a background planet with a blended (`atmosphere`) group, e.g. the reported Roots one (a player reports the original's as green and textured). It should show its own ground texture under thin clouds, not a solid yellow, orange or red disc. Hull meshes of background objects no longer cast Key shadows. Compare with the original by eye: the shell is drawn blended by its texture's alpha and lit (read from the executable, static); not compared against an original frame.
 - [?] Ship shadows with background objects in view (#989): under the profile that draws ship shadows (Refit), the shadow map's fit no longer includes background objects, so ship shadows can get visibly sharper in such scenes. Check that they look right.
@@ -285,6 +289,14 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 - [?] Moon fissures and cut-out parts (#1060): under Stock, the fissures of a dilithium moon glow on the lit side and on the dark side, and hull parts with cut-outs show what is behind them (no solid patches where holes should be).
 - [?] Nebula speed (#1055): under an Armada II family profile (stock Armada II, Fleet Operations, Roots, Native) ships are not slowed in a nebula whose definition declares `craft_speed_coefficient` but no `craft_max_speed_fraction`; one with the fraction slows them to that share of impulse speed. Under Armada I the coefficient still slows them (interim, not measured).
 - [?] Nebula shield return (#1063, Armada II family): after leaving a shield-disabling nebula the shields stay at zero for a few seconds, then return in one step to the value they had on entry and recharge from there.
+
+- [?] Sensor edges and HUD tooltips. Move a scout slowly with fog and shroud on and compare the rounded edge in the world view and on the minimap. Select a ship or builder whose resolved ODF sets one system maximum to zero and damage a different system to zero. The authored-zero system should disappear. The damaged system should still show its icon and 0. Hover the resource readouts, system icons and command buttons until short and verbose text appear. Check a building with an authored verbose tooltip for its cost line.
+
+- [?] Armada II selection panel heights. Clear the selection, select a ship or constructor, select eight and then nine ships, and select an idle shipyard or starbase. Check the low, medium, and tall frames and hover strip. Confirm that clearing selection restores map clicks above the low frame. Resize in Centred and Stretched modes and check that the portrait, meters, and queue controls stay aligned. The tier rules come from the Armada II executable (static). The panel and widget positions come from the mounted CFG.
+
+- [?] Armada II tall selection panel. Select an idle Federation starbase or shipyard under Stock. Check the low-left name and class, the shield gauge beneath the wireframe, crew and officer readouts, the faction emblem on the right, and the striped construction meter at the bottom. Start an item, watch the meter fill, then cancel it. Repeat at 4:3 and in a wide HUD. The native display fields come from the executable (static) and the coordinates come from the mounted CFG.
+
+- [?] Armada II selection readouts. Start War and Peace as Federation in STA2 Classic. The Venture and construction ship use the medium card, including while the constructor is building at a site. The starbase and shipyard use the tall card even when their queues are empty. Select a ship with special energy and check that its percentage updates. Hover the icons and numbers to check the individual tooltips.
 
 ## Checked earlier (morning list)
 
@@ -1075,7 +1087,8 @@ Grouped by the object class that reads the key, most-used first; within a line, 
 - [ ] [FO] uni ordnance (32): `affectedSystems`, `damageMode`, `disableWeaponsPercent`, `disableWeaponsTime`, `extraWeapon`, `extraWeaponPercent`, `extraWeaponTime`, `disableEnginesPercent`, `disableEnginesTime`, `disableSensorsPercent`, `disableSensorsTime`, `disableLifeSupportPercent`, `disableLifeSupportTime`, `boardingPercent`, `boardingRate`, `boardingTime`, `drainSpecialEnergyPercent`, `drainSpecialEnergyRate`, `drainSpecialEnergyTime`, `boardingCrewSubtract`, `disableShieldsPercent`, `disableShieldsTime`, `drainCrewPercent`, `drainCrewRate`, `drainCrewTime`, `drainHullPercent`, `drainHullRate`, `drainHullTime`, `drainShieldPercent`, `drainShieldRate`, `drainShieldTime`, `extraWeaponTimerReset`
 - [ ] [A1] race (4): `displayName`, `officerUpgradeODF`, `officerName`, `officerOperate`
 - [ ] [A1 A2] race (6): `weaponRed`, `weaponYellow`, `retreatStrength`, `officerRes`, `officerTooltip`, `officerVerboseTooltip`
-- [ ] [A2] race (11): `creationLabel`, `insufficientOfficersEvent`, `recycleDilithiumFraction`, `recycledLabel`, `recycleMetalFraction`, `atmosphereTint`, `canPlayCollectLatinum`, `affectedByPsionicInsanity`, `canPlayCaptureTheFlag`, `canPlayColonizePlanets`, `canTrade`
+- [ ] [A2] race (10): `creationLabel`, `insufficientOfficersEvent`, `recycleDilithiumFraction`, `recycledLabel`, `recycleMetalFraction`, `atmosphereTint`, `canPlayCollectLatinum`, `affectedByPsionicInsanity`, `canPlayCaptureTheFlag`, `canPlayColonizePlanets`
+- [x] [A2] race (1): `canTrade`
 - [ ] [FO] race (17): `allowGiveBiomatter`, `allowGiveCrew`, `allowGiveDilithium`, `allowGiveLatinum`, `allowGiveMetal`, `canGainXP`, `AIFreightersPerMoon`, `giveToOtherRaceBiomatterRatio`, `giveToOtherRaceCrewRatio`, `giveToOtherRaceDilithiumRatio`, `giveToOtherRaceLatinumRatio`, `giveToOtherRaceMetalRatio`, `usesBiomatter`, `usesCrew`, `usesDilithium`, `usesLatinum`, `usesMetal`
 - [ ] [A1 A2] holding beam (6): `lengthScale`, `radiusScale`, `boardingDelay`, `boardingInterval`, `boardingSize`, `targetRange`
 - [ ] [A1] mining station (1): `dockingBuffer`
@@ -1199,7 +1212,7 @@ Grouped by the object class that reads the key, most-used first; within a line, 
 - [ ] [A2 FO] separating weapon (1): `eventFire`
 - [ ] [A1] instant 4X mission (4): `hisPilots`, `hisScrap`, `myPilots`, `myScrap`
 - [ ] [A1 A2] repulsion field (1): `repulsionForce`
-- [ ] [A2] trading station (4): `cargoTransferRate`, `percentTradeProfit`, `cargoKey%d`, `cargoValue%d`
+- [x] [A2] trading station (4): `cargoTransferRate`, `percentTradeProfit`, `cargoKey%d`, `cargoValue%d`
 - [ ] [A2] bio pulse (8): `battleOrdnance`, `chargeDelay`, `damageRate`, `formationBehind`, `formationRadius`, `frigateOrdnance`, `mainDelay`, `specialEnergyLossRate`
 - [ ] [FO] detector weapon (4): `MarkColor`, `MarkRadius`, `MarkShrink`, `MarkTime`
 - [ ] [FO] cloaking device control (3): `disableShield`, `initialCloak`, `phaseCloak`
@@ -1222,7 +1235,7 @@ Grouped by the object class that reads the key, most-used first; within a line, 
 - [ ] [A1 A2] sensor array (1): `isTranswarpGate`
 - [ ] [FO] fighter (2): `supplyClasses`, `operationRange`
 - [ ] [A1 A2] fed repair team (1): `shieldsReturned`
-- [ ] [A2] cargo ship (1): `m_maxResource`
+- [x] [A2] cargo ship (1): `m_maxResource`
 - [ ] [A2] planet shield (2): `hitPercent`, `hitPoints`
 - [ ] [A2] popup palette (2): `commandHotkeys`, `controlDefaultCursor`
 - [ ] [A2] colonizing beam (2): `transferAmount`, `transferTime`
@@ -1365,6 +1378,7 @@ FO total: 396 of 474 key names in its `gui_*.cfg` files and hook reads are not m
 - [?] Species 8472 in STA2 Classic: watch an embryo's cocoon scale around its pivot, move the Mother while it builds an Active Embryo, and launch a Defender from the Fluidic Gate. The unfinished hull stays hidden. When construction finishes, the rift opens at the build hardpoint and the Defender clears it before turning toward its rally point. Cancel a second build during the opening and check that no ship emerges.
 - [?] Research pod slots: in STA2 Classic, research Tachyon Detection Grid at the Federation Research Facility. Check that the pod uses the first free authored hardpoint, grants its prerequisite only when finished, and disables its button until the pod is destroyed. Queue another pod to check the next socket, then save and reload. Native research slot selection and button disabling were read statically from the Armada II executable.
 - [?] Freighter drop-off: in STA2 Classic, send Federation freighters to a latinum nebula with a shipyard closer than the starbase. Check delivery at the starbase hp31 berth, one freighter unloading at a time, FIFO waiting positions and queue order after save/reload. The original transfer-interface and FIFO rules were read statically from Armada II.
+- [?] Armada II trade: in STA2 Classic, build a Trading Station and launch a Cargo Ship from the starbase. Check the Trade menu's resource exchanges, two-station latinum routes in both directions, and a full 500-unit shipment to an ally. Check that a second freighter waits while the berth is occupied, and that saving during loading preserves the route and hold. Rates and payouts follow the static Armada2.exe trace.
 
 - [ ] RND-33 hull customization: with an authored test ship, compare two faction owners and capture, missing texture fallback, faction subtree switching, destroyed/repaired subsystem parts and their effects; inspect projected scorch, existing registry images and optional registry text on curved/animated hulls under Stock and Refit. Check cloak/fog, save/load and second-match cleanup. Automated synthetic evidence is separate from this native/manual visual check.
 - [?] Stock resource readouts centred (fix/hud-resource-text): A1 and A2 stock HUD, at 4:3, 16:9 and 21:9: each resource number sits centred in its box (A2: in the bar slot; A1: in the black box, not touching its top or left edge), unchanged when the window is resized; also check STA2 Classic, FO 3.2.7, FO4 and Roots (they draw through the same helper; not measured); watch a counting value (999 to 1000): the number is re-centred per string.

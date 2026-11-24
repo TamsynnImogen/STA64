@@ -81,6 +81,44 @@ fn complete_mixed_case_flat_a2_markers_mount_root_and_index_loose_content() {
 }
 
 #[test]
+fn cd_data_without_executable_mounts_with_native_mixed_case_signature() {
+    let root = TempRoot::new();
+    root.write("GaMe_CfG.H", b"synthetic config");
+    root.write("MiSc/GuI_GlOb16X12.CfG", b"synthetic native UI config");
+    root.write("OdF/fbase.odf", b"synthetic station");
+    root.write("BzN/map.bzn", b"synthetic map");
+
+    let vfs = Vfs::mount_install(root.path(), None).unwrap();
+    assert_eq!(vfs.layers().len(), 1);
+    assert_eq!(vfs.layers()[0].name(), "root");
+    assert_eq!(read(&vfs, "odf/FBASE.odf"), b"synthetic station");
+    assert_eq!(read(&vfs, "bzn/MAP.BZN"), b"synthetic map");
+    assert_no_data(&root, Some("ExampleMod"));
+}
+
+#[test]
+fn incomplete_cd_data_signature_does_not_mount() {
+    for missing in ["game_cfg.h", "misc", "gui_glob16x12.cfg", "odf", "bzn"] {
+        let root = TempRoot::new();
+        if missing != "game_cfg.h" {
+            root.write("game_cfg.h", b"synthetic config");
+        }
+        if missing != "misc" && missing != "gui_glob16x12.cfg" {
+            root.write("misc/gui_glob16x12.cfg", b"synthetic native UI config");
+        } else if missing == "gui_glob16x12.cfg" {
+            root.mkdir("misc");
+        }
+        if missing != "odf" {
+            root.mkdir("odf");
+        }
+        if missing != "bzn" {
+            root.mkdir("bzn");
+        }
+        assert_no_data(&root, None);
+    }
+}
+
+#[test]
 fn incomplete_and_wrong_type_marker_sets_do_not_recognize_arbitrary_roots() {
     // Every proper subset of the three required markers, including ordinary,
     // executable-only and directory-only roots, must remain unrecognized.

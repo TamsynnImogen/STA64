@@ -17,6 +17,7 @@ use super::layout::StockLayout;
 use crate::app::{GameSet, configure_sets};
 use crate::sim_link::Selection;
 use crate::ui::gui_sprites::{GuiButton, GuiImage, GuiSkin};
+use crate::ui::notices::TipBox;
 use crate::ui::profile::UiProfile;
 use crate::ui::radar::{RadarFeed, RadarRoot, RadarSquare};
 use crate::viewer::Mounted;
@@ -28,11 +29,20 @@ struct CaptureCamera(Entity);
 fn aim_roots(
     mut commands: Commands,
     camera: Res<CaptureCamera>,
-    roots: Query<Entity, (Or<(With<HudRoot>, With<RadarRoot>)>, Without<UiTargetCamera>)>,
+    roots: Query<Entity, (Or<(With<HudRoot>, With<RadarRoot>, With<TipBox>)>, Without<UiTargetCamera>)>,
 ) {
     for root in &roots {
         commands.entity(root).insert(UiTargetCamera(camera.0));
     }
+}
+
+// ExternalFeed clears optional status each frame. Keep this capture's real Sim
+// production snapshot aligned with the HudFeed view before the status widgets draw.
+fn restore_active_construction_status(
+    feed: Res<HudFeed>,
+    mut status: ResMut<super::super::status::StatusFeed>,
+) {
+    status.production.clone_from(&feed.production);
 }
 
 fn feed(vfs: &sta_vfs::Vfs, options: GameOptions, group: usize) -> HudFeed {
@@ -79,6 +89,103 @@ fn feed_and_sim(vfs: &sta_vfs::Vfs, options: GameOptions, group: usize) -> (HudF
     (feed, sim)
 }
 
+fn classic_start_feed(vfs: &sta_vfs::Vfs, map_name: &str, selected_odf: &str) -> HudFeed {
+    let (index, _) = sta_content::OdfIndex::build(vfs);
+    let (db, _) = ContentDb::load(vfs, &index).expect("installed content");
+    let (races, _) = sta_content::Races::load(vfs, &index);
+    let race = races.get_playable("federation").expect("Classic Federation race");
+    let bytes = vfs.read(&format!("bzn/{map_name}.bzn"))
+        .unwrap_or_else(|| panic!("missing installed map {map_name}"))
+        .expect("installed map read");
+    let bzn = sta_bzn::parse(&bytes).expect("installed BZN");
+    let map = sta_content::MapDef::convert_bzn_named_in(&bzn, map_name, &db, vfs, &index).map;
+    let db = Arc::new(db);
+    let setup = GameSetup {
+        seed: 71,
+        map: Arc::new(map),
+        content: db.clone(),
+        options: GameOptions::default(),
+        players: vec![PlayerSetup {
+            id: PlayerId(0),
+            team: TeamId(0),
+            race: race.name.clone(),
+            control: Control::Human,
+        }],
+    };
+    let (mut sim, _) = sta_sim::Sim::from_setup_with_starts(&setup, &races);
+    if matches!(selected_odf, "fspecial" | "fyard" | "fresear") {
+        let odf = db.key(selected_odf).unwrap_or_else(|| panic!("installed {selected_odf} ODF"));
+        sim.step(&[sta_sim::command::Command {
+            player: PlayerId::SCRIPT,
+            seq: 0,
+            kind: sta_sim::command::CommandKind::Edit(sta_sim::command::Edit::Spawn {
+                odf,
+                player: PlayerId(0),
+                pos: sta_sim::Vec3::from_f32([0.0, 0.0, 0.0]),
+                heading: (Fixed::ONE, Fixed::ZERO),
+            }),
+        }]);
+    }
+    sim.step(&[]);
+    let view = sim.view();
+    let selected = view.units.iter().find(|unit| {
+        unit.owner == PlayerId(0)
+            && unit.flags.contains(sta_sim::view::UnitFlags::SELECTABLE)
+            && db.unit(unit.def).is_some_and(|def| def.odf.eq_ignore_ascii_case(selected_odf))
+    }).unwrap_or_else(|| panic!("{map_name}: Federation side has no {selected_odf}"));
+    HudFeed {
+        selected: vec![selected.id],
+        view,
+        player: PlayerId(0),
+        content: Some(db),
+        production: sim.production_view(),
+        ..Default::default()
+    }
+}
+
+fn active_fconst_feed(vfs: &sta_vfs::Vfs, product_odf: &str) -> HudFeed {
+    use sta_sim::command::{Command, CommandKind, Edit, Order};
+
+    let (mut feed, mut sim) = feed_and_sim(vfs, GameOptions::default(), 0);
+    let db = feed.content.as_ref().expect("installed content");
+    let rig = feed.view.units.iter().find(|unit| {
+        unit.owner == feed.player
+            && db.unit(unit.def).is_some_and(|def| def.odf.eq_ignore_ascii_case("fconst"))
+    }).expect("installed Federation fconst start unit");
+    let rig_id = rig.id;
+    let site = sta_sim::Vec3 {
+        x: rig.pos.x + Fixed::from_int(400),
+        y: rig.pos.y,
+        z: rig.pos.z + Fixed::from_int(400),
+    };
+    let product = db.key(product_odf).expect("installed Federation build product");
+    assert!(db.unit(rig.def).is_some_and(|def| def.build.list.iter().any(|item| item.key == product)),
+        "installed fconst cannot build {product_odf}");
+    sim.step(&[Command {
+        player: PlayerId::SCRIPT, seq: 0,
+        kind: CommandKind::Edit(Edit::Cargo(feed.player, 0, Fixed::from_int(99999))),
+    }]);
+    let outcome = sim.step(&[Command {
+        player: feed.player, seq: 0,
+        kind: CommandKind::Order(Order::Build { builder: rig_id, what: product, at: Some(site) }),
+    }]);
+    assert!(!outcome.events.iter().any(|event| matches!(event, sta_sim::SimEvent::Rejected { .. })),
+        "installed fconst -> {product_odf} build order was rejected: {:?}", outcome.events);
+    for _ in 0..3000 {
+        let active = sim.production_view().iter().any(|row| row.builder == rig_id
+            && row.jobs.first().is_some_and(|job| job.def == product && job.started && job.paid
+                && (0.15..0.85).contains(&job.progress.to_f32())));
+        if active {
+            feed.view = sim.view();
+            feed.selected = vec![rig_id];
+            feed.production = sim.production_view();
+            return feed;
+        }
+        sim.step(&[]);
+    }
+    panic!("installed fconst never reached active {product_odf} welding");
+}
+
 fn resolved_pieces(app: &mut App, pieces: &[super::layout::Piece]) -> usize {
     app.world_mut()
         .query::<(&GuiImage, &ImageNode)>()
@@ -103,7 +210,7 @@ fn sizes(default: &[UVec2]) -> Vec<UVec2> {
 }
 
 #[derive(Clone, Copy)]
-enum HoverCapture { Selected, SelectedHover, Low, Other, BuildPage, ColonyShip, Group(usize), Avatar, WeaponIcons }
+enum HoverCapture { Selected, SelectedHover, Low, Other, BuildPage, BuildTooltip, ColonyShip, Yard, CrewShip, ActiveConstruction(&'static str, &'static str), ClassicStart(&'static str, &'static str), Group(usize), Avatar, WeaponIcons }
 
 /// Independent installed-data expectation: current crew is compared with its
 /// actual live capacity, not crewCost. Resolve authored palette/thresholds.
@@ -135,7 +242,8 @@ fn env_fit() -> super::layout::HudFit {
 
 fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, label: &str, options: GameOptions, hover_mode: HoverCapture) {
     let layout = crate::game::gui_layout(&vfs, cfg).unwrap_or_else(|| panic!("installed {cfg} missing"));
-    let stock = StockLayout::for_aspect_fit(&layout, size.x as f32 / size.y as f32, env_fit());
+    let stock = StockLayout::for_aspect_fit(&layout, size.x as f32 / size.y as f32, env_fit())
+        .with_info_profile(profile);
     let resource = stock.pieces("resourcePanel");
     let minimap = stock.pieces("minimapBackgroundPanel");
     let info = stock.pieces("infoMiddleBackgroundPanel");
@@ -143,11 +251,23 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         !resource.is_empty() || !minimap.is_empty() || !info.is_empty(),
         "{label}: CFG has no authored background pieces to check"
     );
-    let group_count = if let HoverCapture::Group(count) = hover_mode { count } else { 0 };
-    let mut hud_feed = feed(&vfs, options, group_count);
+    let group_count = match hover_mode { HoverCapture::Group(count) => count, HoverCapture::BuildTooltip => 1, _ => 0 };
+    let mut hud_feed = match hover_mode {
+        HoverCapture::ClassicStart(map, odf) => classic_start_feed(&vfs, map, odf),
+        HoverCapture::ActiveConstruction(product, _) => active_fconst_feed(&vfs, product),
+        _ => feed(&vfs, options, group_count),
+    };
     let original = hud_feed.selected[0];
     let hover = match hover_mode {
-        HoverCapture::Selected | HoverCapture::BuildPage => None,
+        HoverCapture::Selected | HoverCapture::BuildPage | HoverCapture::ActiveConstruction(..) | HoverCapture::ClassicStart(..) => None,
+        HoverCapture::BuildTooltip => {
+            let db = hud_feed.content.as_ref().unwrap();
+            let builder = hud_feed.view.units.iter().find(|u| u.owner == hud_feed.player
+                && db.unit(u.def).is_some_and(|d| d.class.0 == "constructionrig" && !d.build.list.is_empty()))
+                .expect("installed construction ship with build options");
+            hud_feed.selected = vec![builder.id];
+            None
+        }
         HoverCapture::SelectedHover => Some(original),
         HoverCapture::Group(count) => {
             hud_feed.selected = hud_feed.view.units.iter().rev().filter(|u| u.owner == hud_feed.player
@@ -176,6 +296,16 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             hud_feed.view = Arc::new(view);
             None
         }
+        HoverCapture::Yard | HoverCapture::CrewShip => {
+            let odf = if matches!(hover_mode, HoverCapture::Yard) { "fbase" } else { "fconst" };
+            let db = hud_feed.content.as_ref().unwrap();
+            let unit = hud_feed.view.units.iter().find(|unit| {
+                unit.owner == hud_feed.player
+                    && db.unit(unit.def).is_some_and(|def| def.odf.eq_ignore_ascii_case(odf))
+            }).unwrap_or_else(|| panic!("missing installed Federation {odf} start unit"));
+            hud_feed.selected = vec![unit.id];
+            None
+        }
         HoverCapture::Other => Some(hud_feed.view.units.iter().find(|unit| {
             unit.id != original && unit.def != hud_feed.view.unit(original).unwrap().def
                 && unit.flags.contains(sta_sim::view::UnitFlags::SELECTABLE)
@@ -192,7 +322,9 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         assert_eq!(unit.crew, Some([Fixed::from_int(150), Fixed::from_int(1500)]));
         assert_eq!(crew_tint, Some(Color::srgb(1.0, 0.0, 0.0)), "Classic starbase at10percent must be red");
     }
-    let percent = |now: i128, max: i128| (max > 0).then(|| (now * 200 + max).div_euclid(max * 2).to_string());
+    let percent = |now: i128, max: i128| (max > 0).then(|| {
+        (now * 200 + max).div_euclid(max * 2).to_string()
+    });
     let whole = |value: Fixed| { let bits=value.to_bits(); if bits>0 { (bits/Fixed::ONE.to_bits()).max(1) } else { bits/Fixed::ONE.to_bits() } };
     let expected_bar = {
         use super::infobar::InfoBarField::{Name,Hull,Shields,Crew,Energy};
@@ -216,7 +348,10 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             .map(|((field, key), value)| (field, key, value))
             .collect::<Vec<_>>()
     };
-    let bar_variant = super::layout::info_variant(&super::super::model::info(&hud_feed));
+    let bar_variant = stock.info_variant(&super::super::model::info(&hud_feed));
+    if matches!(hover_mode, HoverCapture::Yard) {
+        assert_eq!(bar_variant, 2, "{label}: Federation fbase uses tall builder card");
+    }
     let has_info_bar = stock.info_area(bar_variant).is_some();
     let info = stock.pieces(match bar_variant {
         0 => "infoLowBackgroundPanel",
@@ -276,6 +411,12 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         .init_resource::<ButtonInput<KeyCode>>()
         .add_plugins(HudPlugin)
         .add_systems(Update, aim_roots.before(GameSet::Ui));
+    if matches!(hover_mode, HoverCapture::ActiveConstruction(..)) {
+        app.add_systems(Update, restore_active_construction_status
+            .in_set(GameSet::Ui)
+            .after(super::super::status::sync)
+            .before(super::super::status_gpu::refresh));
+    }
 
     let mut image = Image::new_target_texture(
         size.x,
@@ -299,10 +440,17 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         ))
         .id();
     app.insert_resource(CaptureCamera(camera));
+    if hover.is_some() || matches!(hover_mode, HoverCapture::BuildTooltip) {
+        // ECS-only cursor state gives the stock tooltip its placement in this windowless frame.
+        let mut window = Window::default();
+        window.resolution.set(size.x as f32, size.y as f32);
+        window.set_cursor_position(Some(Vec2::new(600.0, 400.0)));
+        app.world_mut().spawn((window, bevy::window::PrimaryWindow));
+    }
     if matches!(hover_mode, HoverCapture::Avatar) {
         app.insert_resource(crate::render::units::LocalPlayer(Some(PlayerId(0))));
     }
-    if matches!(hover_mode, HoverCapture::BuildPage) {
+    if matches!(hover_mode, HoverCapture::BuildPage | HoverCapture::BuildTooltip) {
         // The builder's build page: command-button labels and PREV/NEXT when it has pages.
         app.world_mut().resource_mut::<super::super::HudState>().page = super::super::Page::Build;
     }
@@ -378,18 +526,79 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         assert_eq!(slots, [1, 2, 3, 4], "all mounted Intrepid weapon icons resolve");
     }
 
+    if let HoverCapture::ActiveConstruction(_, class_name) = hover_mode {
+        use crate::ui::sprite_font::SpriteText;
+
+        assert_eq!(bar_variant, 1, "{label}: active fconst uses the medium card");
+        let origin = stock.info_origin(bar_variant);
+        let title = stock.at(origin, "infoSingleCaptainTextArea").expect("native job title area");
+        let meter = stock.at(origin, "infoSingleConstructionArea").expect("native construction meter area");
+        let race = stock.at(origin, "infoSingleRaceIconDisplayArea").expect("native faction emblem area");
+        let world = app.world_mut();
+        let title_visible = world.query_filtered::<(&SpriteText, &ChildOf, &Visibility), With<super::info::IdentityText>>()
+            .iter(world).any(|(text, parent, shown)| {
+                *shown == Visibility::Inherited && text.text == class_name
+                    && world.get::<Node>(parent.parent())
+                        .is_some_and(|node| (node.left, node.top) == (Val::Px(title.x), Val::Px(title.y)))
+            });
+        assert!(title_visible, "{label}: active {class_name} title at infoSingleCaptainTextArea");
+        let emblem_visible = world.query_filtered::<(&GuiImage, &Node, &Visibility, &super::a1::info::LiveTint), With<ImageNode>>()
+            .iter(world).any(|(image, node, shown, tint)| {
+                *shown == Visibility::Inherited
+                    && matches!(tint, super::a1::info::LiveTint::Race(_))
+                    && image.names.iter().any(|name| name == "federation_icon")
+                    && (node.left, node.top) == (Val::Px(race.x), Val::Px(race.y))
+            });
+        assert!(emblem_visible, "{label}: resolved Federation emblem at infoSingleRaceIconDisplayArea");
+        let progressing = world.query::<(Entity, &super::super::status_gpu::LiveValue, &Node, &ChildOf)>()
+            .iter(world).any(|(clip, kind, node, parent)| {
+                let super::super::status_gpu::LiveValue::QueueProgress(0, width) = kind else { return false };
+                let Val::Px(fill) = node.width else { return false };
+                *width == meter.w && fill > 0.0 && fill < *width
+                    && world.get::<Node>(parent.parent())
+                        .is_some_and(|track| (track.left, track.top) == (Val::Px(meter.x), Val::Px(meter.y)))
+                    && world.get::<Children>(clip).is_some_and(|children| children.iter().any(|child| {
+                        world.get::<GuiImage>(child).is_some_and(|image| image.names.iter().any(|name| name == "large_construction_bar"))
+                            && world.get::<ImageNode>(child).is_some()
+                    }))
+            });
+        assert!(progressing, "{label}: visible partially filled meter at infoSingleConstructionArea");
+        assert!(world.resource::<super::super::status_gpu::StatusUiState>().fallback_card().is_none(),
+            "{label}: active rig build must stay inline without a fallback card");
+        let selected_rig = world.resource::<HudFeed>().selected[0];
+        let mut resolved_rig_layers = 0;
+        for (image, resolved, layer) in world.query::<(&GuiImage, Option<&ImageNode>, Option<&super::info::WireLayer>)>().iter(world) {
+            if !image.names.iter().any(|name| (1..=5).any(|index| name.ends_with(&format!("w{index}")))) {
+                continue;
+            }
+            assert_eq!(layer.map(|layer| layer.unit), Some(selected_rig),
+                "{label}: build product gained a separate HUD wireframe: {:?}", image.names);
+            resolved_rig_layers += usize::from(resolved.is_some());
+        }
+        assert!(resolved_rig_layers > 0, "{label}: selected rig wireframe did not resolve");
+    }
+
     if let HoverCapture::Group(count) = hover_mode {
         let ids = app.world().resource::<HudFeed>().selected.clone();
         let rendered: Vec<_> = app.world_mut().query::<(Entity, &super::super::panels::GroupTile)>()
             .iter(app.world()).map(|(entity,tile)| (entity,tile.0)).collect();
-        assert_eq!(rendered.len(), count, "{label}: all requested cfg slots render");
-        for (index, id) in ids.iter().enumerate() {
+        let (compact, slot_limit) = stock.info_group_slots(bar_variant);
+        let visible_count = count.min(slot_limit);
+        assert_eq!(rendered.len(), visible_count, "{label}: active sheet's group slots render");
+        if profile == UiProfile::Armada2 {
+            let bars = app.world_mut().query::<&super::info::StockBar>().iter(app.world())
+                .filter(|bar| matches!(bar, super::info::StockBar::GroupNativeHealth(..))).count();
+            assert_eq!(bars, visible_count, "{label}: tiles use the stock health gauge");
+        }
+        let origin = stock.info_origin(bar_variant);
+        for (index, id) in ids.iter().take(visible_count).enumerate() {
             let entity = rendered.iter().find(|(_, tile_id)| tile_id == id).unwrap().0;
             let name = app.world().resource::<HudFeed>().name(app.world().resource::<HudFeed>().view.unit(*id).unwrap());
             let mut texts = app.world_mut().query::<(&crate::ui::sprite_font::SpriteText, &Node, &crate::ui::sprite_font::SpriteTextStyle, &ChildOf)>();
             let labels: Vec<_> = texts.iter(app.world()).filter(|(_,_,_,parent)|
                 app.world().get::<ChildOf>(parent.parent()).is_some_and(|p| p.parent() == entity)).collect();
-            if count >= 17 {
+            let rect = stock.at(origin, &format!("infoMultiShipName_{index}"));
+            if compact || (profile == UiProfile::Armada2 && rect.is_none()) {
                 assert!(labels.is_empty(), "{label}: compact tile {index} must not show its ship name");
                 assert_eq!(app.world().get::<crate::ui::notices::Tooltip>(entity).unwrap().short, name);
                 continue;
@@ -397,8 +606,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
             assert_eq!(labels.len(), 1, "{label}: one normal caption in slot {index}");
             let (text,node,style,_) = labels[0];
             assert_eq!(text.text,name);
-            let origin = stock.info_origin(1);
-            let rect = stock.at(origin, &format!("infoMultiShipName_{index}")).expect("installed group name area");
+            let rect = rect.expect("installed group name area");
             let hull = stock.at(origin, &format!("infoMultiShipHull_{index}")).expect("installed hull bar");
             let (Val::Px(width), Val::Px(height)) = (node.width, node.height) else { panic!("unresolved group caption") };
             assert!(!style.native && !style.min_size && style.scaled, "name must use compact sprite-font sizing");
@@ -479,6 +687,191 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
                 resolved_pieces(&mut app, pieces) > 0,
                 "{label}: no {name} atlas art resolved"
             );
+        }
+    }
+    if matches!(hover_mode, HoverCapture::Yard) {
+        let single = match super::super::model::info(app.world().resource::<HudFeed>()) {
+            super::super::model::Info::Single(single) => single,
+            _ => panic!("{label}: selected fbase lost its single-unit HUD"),
+        };
+        let labels: Vec<String> = app.world_mut().query::<&crate::ui::sprite_font::SpriteText>()
+            .iter(app.world()).map(|text| text.text.clone()).collect();
+        assert!(labels.contains(&single.name), "{label}: fbase name did not render");
+        assert!(labels.contains(&single.class), "{label}: fbase class did not render");
+        let origin = stock.info_origin(bar_variant);
+        assert!(stock.at(origin, "infoProgressBar").is_some(), "{label}: missing authored builder meter area");
+        let progress_sprite = stock.name("infoSingleConstructionBar").unwrap_or("large_construction_bar");
+        let progress_art: Vec<_> = app.world_mut().query::<(&GuiImage, Option<&ImageNode>)>()
+            .iter(app.world())
+            .filter(|(image, _)| image.names.iter().any(|name| name == progress_sprite))
+            .map(|(image, resolved)| (image.names.clone(), resolved.is_some())).collect();
+        assert!(progress_art.iter().any(|(_, resolved)| *resolved),
+            "{label}: idle builder meter {progress_sprite:?} did not resolve: {progress_art:?}");
+        let (mut hull, mut shield) = (0, 0);
+        for bar in app.world_mut().query::<&super::info::StockBar>().iter(app.world()) {
+            match bar {
+                super::info::StockBar::Hull(_) => hull += 1,
+                super::info::StockBar::Shield(_) | super::info::StockBar::NativeHealth(_) => shield += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(shield, 1, "{label}: fbase shield gauge");
+        let expects_hull = stock.raw_rect("infoBuildHullBar")
+            .or_else(|| stock.raw_rect("infoSingleHullBarArea"))
+            .is_some_and(|r| r.w > 0 && r.h > 0);
+        assert_eq!(hull, usize::from(expects_hull), "{label}: optional hull gauge");
+        let personnel: Vec<_> = app.world_mut()
+            .query_filtered::<(&crate::ui::sprite_font::SpriteText, &Visibility), With<super::selection_readouts::SelectionReadout>>()
+            .iter(app.world()).filter(|(_, shown)| **shown == Visibility::Inherited)
+            .map(|(text, _)| text.text.clone()).collect();
+        for expected in ["150", "10"] {
+            assert!(personnel.iter().any(|text| text == expected), "{label}: missing live yard readout {expected}");
+        }
+        let emblem = app.world_mut().query::<(&GuiImage, &ImageNode, &super::a1::info::LiveTint)>()
+            .iter(app.world()).filter(|(_, _, tint)| matches!(tint, super::a1::info::LiveTint::Race(_))).count();
+        assert!(emblem > 0, "{label}: Federation emblem did not resolve");
+    }
+    if matches!(hover_mode, HoverCapture::CrewShip) {
+        use super::selection_readouts::SelectionReadout;
+
+        assert_eq!(bar_variant, 1, "{label}: construction ship uses the medium card");
+        let area = stock.info_area(bar_variant).expect("medium panel");
+        let world = app.world_mut();
+        let wiring = [("infoCrewNum", "infoCrewNumIcon", "crew_amt", "150"),
+                      ("infoOfficers", "infoOfficersIcon", "officers", "2")];
+        for (number_key, icon_key, sprite, value) in wiring {
+            for key in [number_key, icon_key] {
+                let r = stock.info_at(bar_variant, key).unwrap_or_else(|| panic!("missing {key}"));
+                assert!(r.x >= area.x && r.y >= area.y && r.right() <= area.right() && r.bottom() <= area.bottom(),
+                    "{label}: {key} spills outside the medium card");
+            }
+            assert!(world.query_filtered::<(&crate::ui::sprite_font::SpriteText, &Visibility), With<SelectionReadout>>()
+                .iter(world).any(|(text, shown)| *shown == Visibility::Inherited && text.text == value),
+                "{label}: visible {number_key} value");
+            assert!(world.query_filtered::<(&GuiImage, &Visibility), (With<SelectionReadout>, With<ImageNode>)>()
+                .iter(world).any(|(image, shown)| *shown == Visibility::Inherited && image.names.iter().any(|name| name == sprite)),
+                "{label}: {icon_key} resolves");
+        }
+    }
+    if let HoverCapture::ClassicStart(_, odf) = hover_mode {
+        use super::selection_readouts::SelectionReadout;
+        use crate::ui::sprite_font::SpriteText;
+
+        let (variant, wiring) = match odf {
+            "fbase" => (
+                2,
+                &[("infoBuildCrew", "infoBuildCrewIcon", "crew_amt", "150"),
+                  ("infoBuildOfficers", "infoBuildOfficersIcon", "officers", "10")][..],
+            ),
+            "fyard" => (
+                2,
+                &[("infoBuildCrew", "infoBuildCrewIcon", "crew_amt", "500"),
+                  ("infoBuildOfficers", "infoBuildOfficersIcon", "officers", "5")][..],
+            ),
+            "fconst" => (
+                1,
+                &[("infoCrewNum", "infoCrewNumIcon", "crew_amt", "150"),
+                  ("infoOfficers", "infoOfficersIcon", "officers", "2")][..],
+            ),
+            "fscout" => (
+                1,
+                &[("infoCrewNum", "infoCrewNumIcon", "crew_amt", "10"),
+                  ("infoOfficers", "infoOfficersIcon", "officers", "2")][..],
+            ),
+            "fresear" => (
+                1,
+                &[("infoCrewNum", "infoCrewNumIcon", "crew_amt", "300"),
+                  ("infoOfficers", "infoOfficersIcon", "officers", "10")][..],
+            ),
+            "fspecial" => (1, &[("infoEnergy", "infoEnergyIcon", "energy_amt", "100%")][..]),
+            _ => panic!("unexpected Classic capture {odf}"),
+        };
+        assert_eq!(bar_variant, variant, "{label}: {odf} selection card");
+        if odf == "fbase" && profile == UiProfile::Armada2 {
+            let world = app.world_mut();
+            assert!(world.query_filtered::<&SpriteText, With<super::info::SystemHealth>>()
+                .iter(world)
+                .any(|text| text.text == "0" && text.color == Color::srgb(0.2, 0.2, 0.2)),
+                "{label}: missing dim zero-capacity system");
+        }
+        let area = stock.info_area(variant).expect("Classic selection panel");
+        let origin = stock.info_origin(variant);
+        for &(value_key, icon_key, sprite, expected_value) in wiring {
+            let placed = |key| {
+                let r = stock.at(origin, key).unwrap_or_else(|| panic!("{label}: missing {key}"));
+                assert!(r.x >= area.x && r.y >= area.y && r.right() <= area.right() && r.bottom() <= area.bottom(),
+                    "{label}: {key} spills outside the card");
+                (Val::Px(r.x), Val::Px(r.y))
+            };
+            let value_position = placed(value_key);
+            let icon_position = placed(icon_key);
+            let world = app.world_mut();
+            let text_visible = world
+                .query_filtered::<(&SpriteText, &ChildOf, &Visibility), With<SelectionReadout>>()
+                .iter(world)
+                .any(|(text, parent, shown)| {
+                    *shown == Visibility::Inherited && text.text == expected_value
+                        && world.get::<Node>(parent.parent())
+                            .is_some_and(|node| (node.left, node.top) == value_position)
+                });
+            assert!(text_visible, "{label}: visible {value_key} value {expected_value}");
+            let icon_resolved = world
+                .query_filtered::<(&GuiImage, &Node, &Visibility), (With<SelectionReadout>, With<ImageNode>)>()
+                .iter(world)
+                .any(|(image, node, shown)| {
+                    *shown == Visibility::Inherited
+                        && image.names.iter().any(|name| name == sprite)
+                        && (node.left, node.top) == icon_position
+                });
+            assert!(icon_resolved, "{label}: {icon_key} art at the authored position");
+        }
+        if odf == "fbase" {
+            use crate::ui::sprite_font::SpriteTextStyle;
+
+            let world = app.world_mut();
+            let font = |text: &SpriteText, style: &SpriteTextStyle| {
+                (text.size, style.stock, style.place.map(|p| (p.h, p.v)))
+            };
+            let crew_font = world
+                .query_filtered::<(&SpriteText, &SpriteTextStyle, &Visibility), With<SelectionReadout>>()
+                .iter(world)
+                .find(|(text, _, shown)| text.text == "150" && **shown == Visibility::Inherited)
+                .map(|(text, style, _)| font(text, style))
+                .expect("visible starbase crew readout");
+            let mut systems = world
+                .query_filtered::<(&SpriteText, &SpriteTextStyle), With<super::info::SystemHealth>>();
+            let mut healthy = systems.iter(world).filter(|(text, _)| text.text == "100").peekable();
+            assert!(healthy.peek().is_some(), "{label}: missing healthy system readouts");
+            assert!(healthy.all(|(text, style)| font(text, style) == crew_font),
+                "{label}: starbase systems and crew should share the stock font size and alignment");
+        }
+        if profile == UiProfile::Armada2 && odf == "fconst" {
+            let world = app.world_mut();
+            let crew_style = world
+                .query_filtered::<(&SpriteText, &crate::ui::sprite_font::SpriteTextStyle, &Visibility), With<SelectionReadout>>()
+                .iter(world)
+                .find(|(text, _, shown)| text.text == "150" && **shown == Visibility::Inherited)
+                .map(|(text, style, _)| (text.size, style.stock))
+                .expect("visible fconst crew readout and style");
+            let system_matches_crew = world
+                .query_filtered::<(&SpriteText, &crate::ui::sprite_font::SpriteTextStyle), With<super::info::SystemHealth>>()
+                .iter(world)
+                .any(|(text, style)| text.text == "100"
+                    && (text.size, style.stock) == crew_style);
+            assert!(system_matches_crew,
+                "{label}: native fconst system health should be bare 100 and use the Crew 150 font size/role");
+
+            let origin = stock.info_origin(variant);
+            let area = stock.at(origin, "infoSingleConstructionArea")
+                .expect("native medium construction area");
+            let construction_art = world
+                .query_filtered::<(&GuiImage, &Node, &Visibility), With<ImageNode>>()
+                .iter(world)
+                .any(|(image, node, shown)| *shown == Visibility::Inherited
+                    && image.names.iter().any(|name| name == "large_construction_bar")
+                    && (node.left, node.top) == (Val::Px(area.x), Val::Px(area.y)));
+            assert!(construction_art,
+                "{label}: idle construction bar art should resolve at infoSingleConstructionArea");
         }
     }
     // The persistent menu and objectives buttons are outside the command palette.
@@ -569,6 +962,29 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         }
     }
 
+    if matches!(hover_mode, HoverCapture::BuildTooltip) {
+        let db = app.world().resource::<HudFeed>().content.as_ref().unwrap().clone();
+        let (item, cost) = app.world_mut().query::<(Entity, &super::super::panels::GridCell)>()
+            .iter(app.world())
+            .find_map(|(entity, cell)| match cell.0 {
+                super::super::Act::Build { what, site: true, .. } => {
+                    let cost = db.unit(what).unwrap().build.cost.iter().find(|value| **value > Fixed::ZERO)?;
+                    Some((entity, cost.to_f32() as i64))
+                }
+                _ => None,
+            })
+            .expect("priced station build button");
+        let tip = app.world().get::<crate::ui::notices::Tooltip>(item).unwrap();
+        let delays = *app.world().resource::<crate::ui::stock_tooltip::TipDelays>();
+        let rest = delays.short + 0.1;
+        let text = tip.stock_text_at(rest, &delays, &|key| key.into()).unwrap();
+        assert!(text.contains(&cost.to_string()), "{label}: {text:?} lacks {cost}");
+        *app.world_mut().resource_mut::<crate::ui::notices::TipHover>() =
+            crate::ui::notices::TipHover { target: Some(item), rest };
+        app.update();
+        assert!(app.world_mut().query::<&crate::ui::sprite_font::SpriteText>().iter(app.world())
+            .any(|words| words.text.contains(&cost.to_string())), "{label}: price text reached the rendered tooltip");
+    }
     let frames = Arc::new(Mutex::new(Vec::<Image>::new()));
     let output = Arc::clone(&frames);
     app.world_mut()
@@ -591,10 +1007,9 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
     let dynamic = shot.try_into_dynamic().expect("GPU image conversion");
     let rgba = dynamic.to_rgba8();
     if has_info_bar && hover.is_some() && crew_tint == Some(Color::srgb(1.0, 0.0, 0.0)) {
-        let origin=stock.info_origin(bar_variant)+stock.point(&format!("infoBarOffset_{bar_variant}")).unwrap_or(Vec2::ZERO);
         let scale=size.y as f32/1080.0;
         for key in ["crew_amt", "icon_crew_amt"] {
-            if let Some(rect)=stock.at(origin,key) {
+            if let Some(rect)=stock.info_bar_at(bar_variant, key) {
                 let mut red=0;
                 for y in (rect.y*scale).max(0.0) as u32..((rect.y+rect.h)*scale).min(size.y as f32) as u32 {
                     for x in (rect.x*scale).max(0.0) as u32..((rect.x+rect.w)*scale).min(size.x as f32) as u32 {
@@ -643,8 +1058,7 @@ fn capture_one(vfs: sta_vfs::Vfs, profile: UiProfile, size: UVec2, cfg: &str, la
         *field == super::infobar::InfoBarField::Hull && value.is_some()
     });
     if has_info_bar && shows_hull && stock.colour("hull_color").is_none() && stock.colour("systemIconHealthyColor").is_none() {
-        let origin=stock.info_origin(bar_variant)+stock.point(&format!("infoBarOffset_{bar_variant}")).unwrap_or(Vec2::ZERO);
-        if let Some(rect)=stock.at(origin,"icon_hull") {
+        if let Some(rect)=stock.info_bar_at(bar_variant, "icon_hull") {
             let scale=size.y as f32/1080.0;
             let mut green=0;
             for y in (rect.y*scale).max(0.0) as u32..((rect.y+rect.h)*scale).min(size.y as f32) as u32 {
@@ -750,6 +1164,118 @@ fn installed_stock_hud_renders_on_gpu() {
                 capture_one(vfs, profile, UVec2::new(1920, 1080), "gui_federation16x9.cfg", label, GameOptions::default(), mode);
             }
         }
+    }
+}
+
+/// Windowless Armada II construction-ship build page with a priced station tooltip open.
+/// `STA64_HUD_CAPTURE_DIR` keeps the local frame; installed game art must never be committed.
+#[test]
+fn installed_construction_ship_station_tooltip_renders_on_gpu() {
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_TEST_INSTALL=<Armada II root>");
+        return;
+    }
+    let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), None).expect("installed Armada II VFS");
+    capture_one(vfs, UiProfile::Armada2, UVec2::new(1280, 720), "gui_fed.cfg",
+        "a2-construction-ship-station-tooltip-1280x720", GameOptions::default(), HoverCapture::BuildTooltip);
+}
+
+/// Windowless 4:3 capture of the installed Federation starbase's tall builder card.
+/// Set `STA64_HUD_CAPTURE_DIR` to keep the frame for comparison with Armada II.
+#[test]
+fn installed_armada2_builder_hud_renders_on_gpu() {
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_TEST_INSTALL=<Armada II root> and optional STA64_TEST_MOD");
+        return;
+    }
+    let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
+    let active_mod = std::env::var("STA64_TEST_MOD").ok().filter(|name| !name.is_empty());
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref())
+        .expect("installed Armada II VFS");
+    capture_one(vfs, UiProfile::Armada2, UVec2::new(1024, 768), "gui_fed.cfg",
+        "a2-fbase-builder-4x3", GameOptions::default(), HoverCapture::Yard);
+}
+
+/// A Classic starbase card uses the same numeric readouts with either UI profile.
+#[test]
+fn installed_armada2_starbase_readout_sizes_match_on_gpu() {
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        return;
+    }
+    let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
+    for (profile, label) in [
+        (UiProfile::Armada2, "a2-fbase-readout-sizes"),
+        (UiProfile::FleetOps, "fo-profile-fbase-readout-sizes"),
+    ] {
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), None)
+            .expect("installed Armada II VFS");
+        capture_one(vfs, profile, UVec2::new(1443, 1080), "gui_fed.cfg", label,
+            GameOptions::default(), HoverCapture::ClassicStart("mp02ring", "fbase"));
+    }
+}
+
+/// Uses mounted Armada II data to check the medium personnel layout and sprite resolution.
+#[test]
+fn installed_armada2_medium_personnel_hud_renders_on_gpu() {
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        return;
+    }
+    let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
+    let active_mod = std::env::var("STA64_TEST_MOD").ok().filter(|name| !name.is_empty());
+    let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref())
+        .expect("installed Armada II VFS");
+    capture_one(vfs, UiProfile::Armada2, UVec2::new(1024, 768), "gui_fed.cfg",
+        "a2-fconst-personnel-4x3", GameOptions::default(), HoverCapture::CrewShip);
+}
+
+/// Native Armada II reference: a selected fconst welding fyard shows Shipyard,
+/// the Federation emblem and a filling striped meter on its medium card.
+/// Set `STA64_HUD_CAPTURE_DIR` to retain the windowless comparison frame.
+#[test]
+fn installed_armada2_active_construction_hud_renders_on_gpu() {
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_GPU_TESTS=1 STA64_TEST_INSTALL=<Armada II root>");
+        return;
+    }
+    let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
+    let active_mod = std::env::var("STA64_TEST_MOD").ok().filter(|name| !name.is_empty());
+    for (profile, product, class_name, label) in [
+        (UiProfile::Armada2, "fyard", "Shipyard", "a2-fconst-active-fyard-4x3"),
+        (UiProfile::FleetOps, "fyard", "Shipyard", "fo-profile-fconst-active-fyard-4x3"),
+        (UiProfile::FleetOps, "fsensor", "Sensor Array", "fo-profile-fconst-active-fsensor-4x3"),
+    ] {
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod.as_deref())
+            .expect("installed Armada II VFS");
+        capture_one(vfs, profile, UVec2::new(1024, 768), "gui_fed.cfg", label,
+            GameOptions::default(), HoverCapture::ActiveConstruction(product, class_name));
+    }
+}
+
+/// Reproduce the live mount and select the Federation starting units.
+#[test]
+fn installed_classic_selection_readouts_render_on_gpu() {
+    use crate::ui::profile::{UiPreference, UiProfiles, resolve_profile};
+
+    let native = std::env::var("STA64_HUD_A2_NATIVE_MAP").as_deref() == Ok("1");
+    let active_mod = if native { None } else { Some("STA2 Classic") };
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1")
+        || (!native && std::env::var("STA64_TEST_MOD").as_deref() != Ok("STA2 Classic")) {
+        return;
+    }
+    let install = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
+    let map = if native { "mp02ring" } else { "3peace" };
+    for odf in ["fbase", "fyard", "fconst", "fscout", "fspecial"].into_iter().chain(native.then_some("fresear")) {
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&install), active_mod)
+            .expect("installed Armada II VFS");
+        let profile = resolve_profile(Some(&vfs), UiPreference::default(), &UiProfiles::default());
+        if native { assert_eq!(profile, UiProfile::Armada2); }
+        eprintln!("Armada II {map}, {odf}, resolved UI profile {profile:?}");
+        capture_one(
+            vfs, profile, UVec2::new(1443, 1080), "gui_fed.cfg",
+            &format!("classic-{map}-{odf}-1443x1080"), GameOptions::default(),
+            HoverCapture::ClassicStart(map, odf),
+        );
     }
 }
 
@@ -930,18 +1456,26 @@ fn aim_roots_hud(
 fn installed_group_names_render_on_gpu() {
     if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") { return; }
     let root = std::env::var("STA64_TEST_INSTALL").expect("STA64_TEST_INSTALL");
-    let mod_name = std::env::var("STA64_TEST_MOD").expect("STA64_TEST_MOD");
-    let (profile, cfg, prefix) = match mod_name.as_str() {
-        "STA2 Classic" | "STA2 Classic Mod" => (UiProfile::Armada2, "gui_fed.cfg", "classic-group"),
-        "FO4" | "Fleet Ops 4.0" => (UiProfile::FleetOps, "gui_federation16x9.cfg", "fo4-group"),
-        _ => panic!("use STA2 Classic or FO4 for the installed name regression"),
+    let mod_name = std::env::var("STA64_TEST_MOD").ok().filter(|m| !m.is_empty());
+    let (profile, cfg, prefix) = match mod_name.as_deref() {
+        Some("STA2 Classic" | "STA2 Classic Mod") => (UiProfile::Armada2, "gui_fed.cfg", "classic-group"),
+        Some("FO4" | "Fleet Ops 4.0") => (UiProfile::FleetOps, "gui_federation16x9.cfg", "fo4-group"),
+        None if std::env::var("STA64_HUD_A2_NATIVE_MAP").as_deref() == Ok("1") =>
+            (UiProfile::Armada2, "gui_fed.cfg", "a2-group"),
+        _ => panic!("use standalone Armada II (STA64_HUD_A2_NATIVE_MAP=1), STA2 Classic or FO4"),
     };
-    for (size, count, label) in [(UVec2::new(1920,1080), 2, format!("{prefix}-1080")),
-        (UVec2::new(1280,720), 2, format!("{prefix}-720")),
-        (UVec2::new(1920,1080), 16, format!("{prefix}-16-1080")),
-        (UVec2::new(1920,1080), 17, format!("{prefix}-17-1080")),
-        (UVec2::new(1920,1080), 30, format!("{prefix}-30-1080"))] {
-        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), Some(&mod_name)).unwrap();
+    let mut cases = vec![
+        (UVec2::new(1920, 1080), 2, format!("{prefix}-1080")),
+        (UVec2::new(1280, 720), 2, format!("{prefix}-720")),
+        (UVec2::new(1920, 1080), 16, format!("{prefix}-16-1080")),
+        (UVec2::new(1920, 1080), 17, format!("{prefix}-17-1080")),
+        (UVec2::new(1920, 1080), 30, format!("{prefix}-30-1080")),
+    ];
+    if profile == UiProfile::Armada2 {
+        cases.extend([8, 9].map(|count| (UVec2::new(1920, 1080), count, format!("{prefix}-{count}-1080"))));
+    }
+    for (size, count, label) in cases {
+        let vfs = sta_vfs::Vfs::mount_install(std::path::Path::new(&root), mod_name.as_deref()).unwrap();
         capture_one(vfs, profile, size, cfg, &label, GameOptions::default(), HoverCapture::Group(count));
     }
 }

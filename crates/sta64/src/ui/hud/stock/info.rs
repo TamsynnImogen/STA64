@@ -3,14 +3,16 @@
 use bevy::picking::Pickable;
 use bevy::prelude::*;
 use sta_sim::{EntityId, Fixed};
+use sta_sim::world::EntityKind;
 
 use super::super::layout::R;
 use super::super::model::{self, HudFeed, Info};
 use super::super::panels::GroupTile;
 use super::super::status::node_fraction;
-use super::layout::{StockLayout, info_variant};
+use super::layout::StockLayout;
 use crate::ui::gui_sprites::{GuiImage, GuiImageSampling};
 use crate::ui::notices::Tooltip;
+use crate::ui::hud::{portrait, readouts::{self, Readout}};
 use crate::ui::sprite_font::{FontRole, SpriteText, SpriteTextStyle, sprite_text_styled};
 use crate::ui::stock_font::{HAlign, StockTextCanvas, VAlign};
 use crate::ui::theme::{Theme, UiButton, WidgetState};
@@ -25,12 +27,15 @@ pub(in crate::ui::hud) use identity::{IdentityField, IdentityText};
 pub(in crate::ui::hud) enum StockText {
     Resource(usize),
     Population(EntityId),
+    RigJob(EntityId),
 }
 
 #[derive(Component, Clone, Copy)]
 pub(in crate::ui::hud) enum StockBar {
     Hull(f32),
     Shield(f32),
+    NativeHealth(f32),
+    GroupNativeHealth(EntityId, f32),
     Progress(f32),
     /// Armada I's energy bar (UI-19).
     Energy(f32),
@@ -55,7 +60,7 @@ fn node_bar(def: &sta_content::UnitDef) -> Option<(&'static str, &'static str, &
 #[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_node_bar(
     commands: &mut Commands, root: Entity, layout: &StockLayout, origin: Vec2,
-    def: &sta_content::UnitDef, fallback: Option<R>, theme: &Theme,
+    def: &sta_content::UnitDef, fallback: Option<R>, theme: &Theme, unit: EntityId,
 ) {
     let Some((area, track, fill)) = node_bar(def) else { return };
     let Some(r) = layout.at(origin, area).or_else(|| layout.raw_rect(area).is_none().then_some(fallback).flatten()) else { return };
@@ -65,6 +70,7 @@ pub(super) fn spawn_node_bar(
     let fill_keys: &[&str] = if slot == 0 || area == "infoSinglePlanetMetalBarArea" { &[fill] } else { &[] };
     let fallback_tint = resource_colour(layout, slot + 2, theme.accent);
     cfg_bar(commands, root, layout, r, 1.0, (&[track], fill_keys, fallback_tint), StockBar::Node(r.w), area.trim_end_matches("Area"));
+    readouts::at(commands, root, r, unit, Readout::Deposit);
 }
 
 /// UI-48: a system icon of the single-selection card, by cfg slot (`infoSystemIcon_<n>`: 0
@@ -83,6 +89,19 @@ pub(in crate::ui::hud) struct FallbackHullTint(StockBar);
 /// The sim's system index ([`sta_sim::combat::damage::SystemView`] order: engines, weapons,
 /// shield generator, life support, sensors) of cfg slot `n`.
 const SLOT_SYSTEM: [usize; 5] = [4, 2, 1, 0, 3];
+
+/// The resolved ODF retains inherited keys. An omitted key has no authored
+/// maximum in STA64's content model, so it keeps the stock icon default.
+const SYSTEM_HP_KEYS: [&str; 5] = [
+    "enginesHitPoints", "weaponsHitPoints", "shieldGeneratorHitPoints",
+    "lifeSupportHitPoints", "sensorsHitPoints",
+];
+
+fn system_slot_visible(def: &sta_content::UnitDef, slot: usize) -> bool {
+    let system = SLOT_SYSTEM[slot];
+    def.raw.f32(SYSTEM_HP_KEYS[system]).is_none()
+        || def.system_hit_points[system] > Fixed::ZERO
+}
 
 /// CFG keys use the A2FOExtensions thresholds. Stock Armada II uses a green
 /// icon, a quarter-green base plus a three-quarter-green wedge for damage,
@@ -123,14 +142,14 @@ fn health_label(health: Fixed) -> String {
     percent.to_string()
 }
 
-fn system_readout_rect(layout: &StockLayout, origin: Vec2, builder: bool, slot: usize, icon: Option<R>) -> Option<R> {
+fn system_readout_rect(layout: &StockLayout, origin: Vec2, builder: bool, slot: usize, icon: Option<R>) -> Option<(R, bool)> {
     let build = format!("infoBuildSystem_{slot}");
     let single = format!("infoSystem_{slot}");
     let key = if builder && layout.raw_rect(&build).is_some() { &build } else { &single };
     if layout.raw_rect(key).is_some() {
-        layout.at(origin, key)
+        layout.at(origin, key).map(|rect| (rect, true))
     } else {
-        icon.map(|r| R::new(r.x + r.w + 2.0, r.y, r.w * 2.0, r.h))
+        icon.map(|r| (R::new(r.x + r.w + 2.0, r.y, r.w * 2.0, r.h), false))
     }
 }
 
@@ -173,7 +192,18 @@ pub(super) fn readout(commands: &mut Commands, root: Entity, r: R, value: String
 }
 
 #[allow(clippy::too_many_arguments)]
-fn text_styled(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>, mut style: SpriteTextStyle) -> Entity {
+fn readout_tip(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>, tip: Option<Tooltip>) -> Entity {
+    let style = SpriteTextStyle::default().stock_label().centered_in_box().placed(HAlign::Centre, VAlign::Centre);
+    text_styled_with_tip(commands, root, r, value, color, size, kind, style, tip)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn text_styled(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>, style: SpriteTextStyle) -> Entity {
+    text_styled_with_tip(commands, root, r, value, color, size, kind, style, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn text_styled_with_tip(commands: &mut Commands, root: Entity, r: R, value: String, color: Color, size: f32, kind: Option<StockText>, mut style: SpriteTextStyle, tip: Option<Tooltip>) -> Entity {
     if let Some(place) = style.place.as_mut() {
         place.rect = Vec2::new(r.w, r.h);
     }
@@ -186,7 +216,11 @@ fn text_styled(commands: &mut Commands, root: Entity, r: R, value: String, color
         wrap_node.align_items = AlignItems::Center;
         wrap_node.justify_content = JustifyContent::Center;
     }
-    let wrapper = commands.spawn((wrap_node, Pickable::IGNORE)).id();
+    let wrapper = if let Some(tip) = tip {
+        commands.spawn((wrap_node, tip)).id()
+    } else {
+        commands.spawn((wrap_node, Pickable::IGNORE)).id()
+    };
     let size = if style.min_size { size.max(18.0) } else { size };
     let mut e = commands.spawn(sprite_text_styled(value, size, color, style));
     if let Some(kind) = kind {
@@ -274,7 +308,7 @@ pub(super) fn cfg_bar(commands: &mut Commands, root: Entity, layout: &StockLayou
         Some(sprite) => sprite_bar(commands, root, r, value, (track, fill), kind, sprite),
         None => bar(commands, root, r, value, (track, fill), kind),
     };
-    if matches!(kind, StockBar::Hull(_) | StockBar::Group(..))
+    if matches!(kind, StockBar::Hull(_) | StockBar::NativeHealth(_) | StockBar::Group(..) | StockBar::GroupNativeHealth(..))
         && fills.iter().all(|key| layout.colour(key).is_none())
     {
         commands.entity(fill_entity).insert(FallbackHullTint(kind));
@@ -304,6 +338,7 @@ pub(super) fn sprite_bar(commands: &mut Commands, root: Entity, r: R, value: f32
 
 pub(in crate::ui::hud) fn update_hull_tints(
     feed: Res<HudFeed>,
+    status: Option<Res<crate::ui::hud::status::StatusFeed>>,
     mut fills: Query<(&FallbackHullTint, Option<&mut BackgroundColor>, Option<&mut GuiImage>)>,
 ) {
     if fills.is_empty() {
@@ -312,12 +347,24 @@ pub(in crate::ui::hud) fn update_hull_tints(
     let selected = feed.selected_units();
     for (kind, bg, image) in &mut fills {
         let unit = match kind.0 {
-            StockBar::Hull(_) => selected.first().copied(),
-            StockBar::Group(id, _) => feed.view.unit(id),
+            StockBar::Hull(_) | StockBar::NativeHealth(_) => selected.first().copied(),
+            StockBar::Group(id, _) | StockBar::GroupNativeHealth(id, _) => feed.view.unit(id),
             _ => None,
         };
         let Some(unit) = unit else { continue };
-        let tint = native_hull_tint(model::frac(unit.hull));
+        let tint = if matches!(kind.0, StockBar::NativeHealth(_) | StockBar::GroupNativeHealth(..))
+            && feed.def(unit).is_some_and(|d| matches!(EntityKind::of_def(d), EntityKind::Craft | EntityKind::Station))
+        {
+            let (_, online) = slot_status(status.as_deref(), unit.id, 1);
+            let shield = unit.shields.iter().map(|pair| i128::from(pair[0].to_bits())).sum::<i128>();
+            if online && shield >= i128::from(Fixed::ONE.to_bits()) {
+                native_hull_tint(model::shield_frac(unit).unwrap_or(0.0))
+            } else {
+                STOCK_SHIELD_TINT
+            }
+        } else {
+            native_hull_tint(model::frac(unit.hull))
+        };
         if let Some(mut image) = image {
             if image.color != tint {
                 image.color = tint;
@@ -354,6 +401,35 @@ fn resource_text(feed: &HudFeed, id: usize) -> Option<String> {
     }
     let slot = resource_slot(id)?;
     player.resources.get(slot).map(|v| whole(*v).to_string())
+}
+
+/// Resource IDs and keys are the branches in Armada2.exe ResourceComponent::GetTooltip and
+/// GetVerboseTooltip. Keep keys until display so the mounted native header wins, including blanks.
+fn resource_tip(feed: &HudFeed, id: usize) -> Option<Tooltip> {
+    if id == 0 {
+        let available = feed.view.player(feed.player).and_then(|p| p.crew);
+        let capacity = feed.view.attrs.seats.iter().find(|s| s.player == feed.player).and_then(|s| s.crew_capacity);
+        return Some(match (available, capacity) {
+            (Some(available), Some(capacity)) => Tooltip::new("GUI_RD_CREW_TOOLTIP").verbose("GUI_RD_CREW_VTOOLTIP").stock_two_numbers(whole(available), whole(capacity)),
+            _ => Tooltip::new(""),
+        });
+    }
+    let officer_stem = feed.view.attrs.seats.iter().find(|s| s.player == feed.player)
+        .and_then(|s| s.race.as_deref()).map(str::to_ascii_lowercase).map_or("OFFICERS", |race| {
+            if race.contains("borg") { "BORG_OFF" }
+            else if race.contains("rom") { "ROM_OFF" }
+            else if race.contains("8472") { "8472_OFF" }
+            else { "OFFICERS" }
+        });
+    let stem = match id {
+        1 => officer_stem,
+        2 => "DILITHIUM",
+        3 => "LATINUM",
+        4 => "METAL",
+        5 => "BIOMATTER",
+        _ => return None,
+    };
+    Some(Tooltip::new(format!("GUI_RD_{stem}_TOOLTIP")).verbose(format!("GUI_RD_{stem}_VTOOLTIP")))
 }
 
 /// Stock A2's resource palette (read from the executable, static). Roots' authored
@@ -413,8 +489,7 @@ fn model_stem(model: &str) -> String {
 /// Fleet Ops names the single-selection systems backdrop after the equipped
 /// model. The GUI sprite painter leaves it transparent when the SPR entry or
 /// its texture is absent, preserving the stock icon/value layout.
-fn system_background(commands: &mut Commands, root: Entity, layout: &StockLayout, origin: Vec2, model: &str) -> Option<Entity> {
-    let r = layout.at(origin, "infoSingleSystemsDisplay")?;
+fn system_background(commands: &mut Commands, root: Entity, r: R, model: &str) -> Option<Entity> {
     let stem = model_stem(model);
     if stem.is_empty() { return None; }
     Some(commands.spawn((node(r), Pickable::IGNORE, GuiImage::new(format!("{stem}_si")), ChildOf(root))).id())
@@ -449,7 +524,7 @@ fn wireframe_names(model: &str, layer: usize) -> Vec<String> {
 
 /// Native Wireframe::Render draws five independent GUI SPR layers in one square.
 pub(super) fn wireframe_layers(commands: &mut Commands, root: Entity, r: R, model: &str) {
-    wireframe_layers_of(commands, root, r, model, None, None);
+    wireframe_layers_of(commands, root, r, model, None, None, None);
 }
 
 /// UI-28: a wireframe layer of a unit on the panel, tinted by its system's state each frame.
@@ -482,7 +557,10 @@ fn layer_tint(status: Option<&crate::ui::hud::status::StatusFeed>, w: WireLayer)
 }
 
 /// [`wireframe_layers`] for a unit whose layers follow its systems' state (`None`: plain art).
-pub(super) fn wireframe_layers_of(commands: &mut Commands, root: Entity, r: R, model: &str, unit: Option<EntityId>, backdrop: Option<Entity>) {
+pub(super) fn wireframe_layers_of(
+    commands: &mut Commands, root: Entity, r: R, model: &str, unit: Option<EntityId>,
+    backdrop: Option<Entity>, focus: Option<(&str, Option<&str>)>,
+) {
     let stem = model_stem(model);
     if stem.is_empty() {
         return;
@@ -493,6 +571,9 @@ pub(super) fn wireframe_layers_of(commands: &mut Commands, root: Entity, r: R, m
         let mut e = commands.spawn((node(r), Pickable::IGNORE, image, ChildOf(root)));
         if let Some(unit) = unit {
             e.insert(WireLayer { unit, layer });
+            if let Some((name, details)) = focus {
+                e.insert(portrait::bind(unit, name, details));
+            }
         }
         if let Some(backdrop) = backdrop {
             e.insert(BackdropFallback(backdrop));
@@ -532,7 +613,7 @@ fn spawn_separate_resources(commands: &mut Commands, root: Entity, layout: &Stoc
         let value = resource_text(feed, id).unwrap_or_default();
         // Armada.exe's DilithiumDisplay, CrewDisplay and OfficerDisplay all
         // pass the same 0.5 RGB grey to the font draw (read from the binary).
-        readout(commands, root, r, value, Color::srgb(0.5, 0.5, 0.5), theme.small_size, Some(StockText::Resource(id)));
+        readout_tip(commands, root, r, value, Color::srgb(0.5, 0.5, 0.5), theme.small_size, Some(StockText::Resource(id)), resource_tip(feed, id));
     }
 }
 
@@ -566,7 +647,7 @@ pub(super) fn spawn_resource(commands: &mut Commands, root: Entity, layout: &Sto
             continue;
         };
         let color = resource_colour(layout, id, theme.text);
-        readout(
+        readout_tip(
             commands,
             root,
             r,
@@ -574,6 +655,7 @@ pub(super) fn spawn_resource(commands: &mut Commands, root: Entity, layout: &Sto
             color,
             theme.small_size,
             Some(StockText::Resource(id)),
+            resource_tip(feed, id),
         );
     }
 }
@@ -588,17 +670,29 @@ fn spawn_single(
     origin: Vec2,
     single: &model::Single,
 ) {
+    let builder = layout.info_uses_builder(single);
     let unit = feed.view.unit(single.id);
     let def = unit.and_then(|u| feed.content.as_deref().and_then(|db| db.unit(u.def)));
+    if let Some(def) = def {
+        super::selection_readouts::spawn(commands, root, layout, origin, theme, single, def);
+    }
     let is_node = def.is_some_and(|d| super::super::status::node_slot(d).is_some());
-    let backdrop = def.and_then(|d| system_background(commands, root, layout, origin, &d.model));
-    if let (Some(backdrop), Some(unit), Some(db)) = (backdrop, unit, feed.content.as_deref()) {
-        super::weapon_icons::spawn(commands, root, layout, origin, backdrop, unit, db);
+    let details = def.and_then(|d| d.raw.str("verboseTooltip"));
+    let display = chosen_rect(layout, origin, builder, "infoBuildSystemsDisplay", "infoSingleSystemsDisplay");
+    let backdrop = display.zip(def).and_then(|(rect, def)| system_background(commands, root, rect, &def.model));
+    if let Some(backdrop) = backdrop {
+        commands.entity(backdrop).insert(portrait::bind(single.id, &single.name, details));
+    }
+    let icon_size = chosen_rect(layout, origin, builder, "infoBuildSystemsIcon", "infoSingleSystemsIcon");
+    if let (Some(backdrop), Some(display), Some(icon_size), Some(unit), Some(db)) =
+        (backdrop, display, icon_size, unit, feed.content.as_deref())
+    {
+        super::weapon_icons::spawn(commands, root, (display, icon_size), backdrop, unit, db);
     }
     if let Some(r) = chosen_rect(
         layout,
         origin,
-        single.builder,
+        builder,
         "infoBuildName",
         "infoSingleNameTextArea",
     ) {
@@ -620,7 +714,7 @@ fn spawn_single(
     if let Some(r) = chosen_rect(
         layout,
         origin,
-        single.builder,
+        builder,
         "infoBuildClass",
         "infoSingleClassTextArea",
     ) {
@@ -638,42 +732,54 @@ fn spawn_single(
             None,
         );
     }
-    identity::spawn(commands, root, layout, theme, origin, single);
-    if let Some(r) = wireframe_rect(layout, origin, single.builder)
+    let construction_rig = def.is_some_and(|def| def.class.0 == "constructionrig");
+    identity::spawn(commands, root, layout, theme, origin, single, construction_rig);
+    if let Some(r) = wireframe_rect(layout, origin, builder)
         && let Some(def) = def
     {
-        wireframe_layers_of(commands, root, r, &def.model, Some(single.id), backdrop);
+        wireframe_layers_of(commands, root, r, &def.model, Some(single.id), backdrop, Some((&single.name, details)));
     }
     let hull_rect = chosen_rect(
         layout,
         origin,
-        single.builder,
+        builder,
         "infoBuildHullBar",
         "infoSingleHullBarArea",
     );
     if !is_node && let Some(r) = hull_rect {
-        let fills: &[&str] = if single.builder { &["infoBuildHullBarColor", "infoSingleHullBarColor"] } else { &["infoSingleHullBarColor"] };
+        let fills: &[&str] = if builder { &["infoBuildHullBarColor", "infoSingleHullBarColor"] } else { &["infoSingleHullBarColor"] };
         cfg_bar(commands, root, layout, r, single.hull, (&["infoSingleHullBarDisableColor", "infoSingleShieldBarDisableColor"], fills, native_hull_tint(single.hull)), StockBar::Hull(r.w), "infoSingleHullBar");
+        readouts::at(commands, root, r, single.id, Readout::Hull);
     }
-    if let Some(shield) = single.shield
+    let native_health = layout.has_a2_info() && !is_node;
+    let health = if native_health { Some(single.hull) } else { single.shield };
+    if let Some(value) = health
         && let Some(r) = chosen_rect(
             layout,
             origin,
-            single.builder,
+            builder,
             "infoBuildShieldBar",
             "infoSingleShieldBarArea",
         )
     {
-        let fills: &[&str] = if single.builder { &["infoBuildShieldBarColor", "infoSingleShieldBarColor"] } else { &["infoSingleShieldBarColor"] };
-        cfg_bar(commands, root, layout, r, shield, (&["infoSingleShieldBarDisableColor"], fills, STOCK_SHIELD_TINT), StockBar::Shield(r.w), "infoSingleShieldBar");
+        let fills: &[&str] = if builder { &["infoBuildShieldBarColor", "infoSingleShieldBarColor"] } else { &["infoSingleShieldBarColor"] };
+        // The stock HealthBar uses hull for width and shields for tint.
+        let (kind, tip) = if native_health {
+            (StockBar::NativeHealth(r.w), Readout::Hull)
+        } else {
+            (StockBar::Shield(r.w), Readout::Shields)
+        };
+        cfg_bar(commands, root, layout, r, value, (&["infoSingleShieldBarDisableColor"], fills, STOCK_SHIELD_TINT), kind, "infoSingleShieldBar");
+        readouts::at(commands, root, r, single.id, tip);
     }
     if let Some(progress) = single.progress
         && let Some(r) = layout.at(origin, "infoSingleConstructionBarArea")
     {
         bar(commands, root, r, progress, bar_colours(layout, &["infoSingleConstructionBarDisableColor"], &["infoSingleConstructionBarColor"], theme.warn), StockBar::Progress(r.w));
+        readouts::at(commands, root, r, single.id, Readout::Construction);
     }
     if let Some(def) = def {
-        spawn_node_bar(commands, root, layout, origin, def, hull_rect, theme);
+        spawn_node_bar(commands, root, layout, origin, def, hull_rect, theme, single.id);
     }
     if let Some(population) = super::super::status::population_text(feed, single.id) {
         // Reuse alignment from the planet owner row when present. A separate
@@ -688,21 +794,34 @@ fn spawn_single(
     }
     // The stock engine gives the system picture and health percentage their
     // own rectangles. Read both from the mounted CFG.
-    if let Some(def) = def.filter(|d| d.system_hit_points.iter().any(|hp| *hp > Fixed::ZERO)) {
+    let native_systems = layout.has_a2_info() && def.is_some_and(|d| {
+        matches!(EntityKind::of_def(d), EntityKind::Craft | EntityKind::Station)
+    });
+    if let Some(def) = def.filter(|d| native_systems || d.system_hit_points.iter().any(|hp| *hp > Fixed::ZERO)) {
         for (slot, system) in SLOT_SYSTEM.into_iter().enumerate() {
-            let icon = chosen_rect(layout, origin, single.builder, &format!("infoBuildSystemIcon_{slot}"), &format!("infoSystemIcon_{slot}"));
-            if let Some(r) = icon {
-                commands.entity(root).with_child((node(r), Pickable::IGNORE, SystemIcon(slot), GuiImage::new("infosystem").with_frame(slot)));
+            if !native_systems && !system_slot_visible(def, slot) {
+                continue;
             }
-            if def.system_hit_points[system] > Fixed::ZERO
-                && let Some(r) = system_readout_rect(layout, origin, single.builder, slot, icon)
+            let icon = chosen_rect(layout, origin, builder, &format!("infoBuildSystemIcon_{slot}"), &format!("infoSystemIcon_{slot}"));
+            if let Some(r) = icon {
+                commands.entity(root).with_child((node(r), readouts::bind(single.id, Readout::System(system)), SystemIcon(slot), GuiImage::new("infosystem").with_frame(slot)));
+            }
+            if (native_systems || def.system_hit_points[system] > Fixed::ZERO)
+                && let Some((r, authored)) = system_readout_rect(layout, origin, builder, slot, icon)
             {
-                let label = text_styled(
-                    commands, root, r, String::new(), theme.text, r.h * 0.8, None,
-                    SpriteTextStyle { tint_all: true, ..default() }.centered_in_box(),
-                );
+                // Authored system values use the same label font and alignment as
+                // crew, officers and energy, including CFGs mounted with Fleet Ops chrome.
+                let label = if native_systems || authored {
+                    text(commands, root, r, String::new(), theme.text, theme.small_size, None)
+                } else {
+                    text_styled(
+                        commands, root, r, String::new(), theme.text, r.h * 0.8, None,
+                        SpriteTextStyle { tint_all: true, ..default() }.centered_in_box(),
+                    )
+                };
                 commands.entity(label).insert(SystemHealth(slot));
                 clip_to_rect(commands, label, false);
+                readouts::at(commands, root, r, single.id, Readout::System(system));
             }
         }
     }
@@ -720,8 +839,8 @@ fn spawn_group(
     variant: usize,
     tiles: &[model::Tile],
 ) {
-    let small = variant == 2;
-    for (i, tile) in tiles.iter().enumerate() {
+    let (small, limit) = layout.info_group_slots(variant);
+    for (i, tile) in tiles.iter().take(limit).enumerate() {
         let key = if small {
             format!("infoMultiShipIconSm_{i}")
         } else {
@@ -758,13 +877,12 @@ fn spawn_group(
             && let Some(unit) = feed.view.unit(tile.id)
             && let Some(def) = feed.content.as_deref().and_then(|db| db.unit(unit.def))
         {
-            wireframe_layers_of(commands, entity, wireframe, &def.model, Some(tile.id), None);
+            wireframe_layers_of(commands, entity, wireframe, &def.model, Some(tile.id), None, None);
         }
-        if !small {
-            // Existing incomplete CFGs retain the icon inset when no name key exists.
-            let fallback = R::new(2.0, 2.0, (r.w - 4.0).max(0.0), (r.h - 4.0).max(0.0));
-            let name_rect = layout.at(origin, &format!("infoMultiShipName_{i}"))
-                .map_or(fallback, |name| R::new(name.x - r.x, name.y - r.y, name.w, name.h));
+        let name_rect = layout.at(origin, &format!("infoMultiShipName_{i}"))
+            .map(|name| R::new(name.x - r.x, name.y - r.y, name.w, name.h))
+            .or_else(|| (!layout.has_a2_info()).then(|| R::new(2.0, 2.0, (r.w - 4.0).max(0.0), (r.h - 4.0).max(0.0))));
+        if !small && let Some(name_rect) = name_rect {
             let name = text_styled(
                 commands,
                 entity,
@@ -785,10 +903,18 @@ fn spawn_group(
         if let Some(hull) = layout.at(origin, &hull_key) {
             cfg_bar(commands, root, layout, hull, tile.hull, (&["infoMultiHullBarDisableColor", "infoMultiShieldBarDisableColor"], &["infoMultiHullBarColor"], native_hull_tint(tile.hull)), StockBar::Group(tile.id, hull.w), "infoMultiHullBar");
         }
-        // UI-48: the tile's shield bar (A2 and FO author one per tile; FO's compact layout `Sm`).
         let shield_key = if small { format!("infoMultiShipShieldSm_{i}") } else { format!("infoMultiShipShield_{i}") };
-        if let (Some(shield), Some(r)) = (tile.shield, layout.at(origin, &shield_key)) {
-            cfg_bar(commands, root, layout, r, shield, (&["infoMultiShieldBarDisableColor"], &["infoMultiShieldBarColor"], STOCK_SHIELD_TINT), StockBar::GroupShield(tile.id, r.w), "infoMultiShieldBar");
+        if let Some(r) = layout.at(origin, &shield_key) {
+            let native_craft = layout.has_a2_info() && feed.view.unit(tile.id).and_then(|unit| feed.def(unit))
+                .is_some_and(|def| matches!(EntityKind::of_def(def), EntityKind::Craft | EntityKind::Station));
+            let display = if native_craft {
+                Some((tile.hull, StockBar::GroupNativeHealth(tile.id, r.w)))
+            } else {
+                tile.shield.map(|shield| (shield, StockBar::GroupShield(tile.id, r.w)))
+            };
+            if let Some((value, kind)) = display {
+                cfg_bar(commands, root, layout, r, value, (&["infoMultiShieldBarDisableColor"], &["infoMultiShieldBarColor"], STOCK_SHIELD_TINT), kind, "infoMultiShieldBar");
+            }
         }
     }
 }
@@ -801,35 +927,70 @@ fn group_label_style(layout: &StockLayout, width: f32) -> SpriteTextStyle {
     SpriteTextStyle { scaled: true, tint_all: true, stock: Some(crate::ui::stock_font::StockRole::Default), ..SpriteTextStyle::role(role).wrapped(width) }
 }
 
-pub(super) fn spawn(commands: &mut Commands, root: Entity, layout: &StockLayout, feed: &HudFeed, theme: &Theme) {
+pub(super) fn spawn(
+    commands: &mut Commands,
+    root: Entity,
+    layout: &StockLayout,
+    feed: &HudFeed,
+    theme: &Theme,
+    info: &Info,
+    variant: usize,
+) {
     spawn_resource(commands, root, layout, feed, theme);
-    let info = model::info(feed);
-    let variant = info_variant(&info);
     let Some(area) = layout.info_area(variant) else {
         return;
     };
     let origin = Vec2::new(area.x, area.y);
-    for piece in layout.pieces_from(info_background(variant), layout.info_canvas_origin(variant)) {
-        picture(commands, root, place(origin, piece.rect), &piece.name, piece.frame);
+    let background = info_background(variant);
+    if layout.has_a2_info() {
+        // The native ShipDisplay draws a half-opacity black backing in the active
+        // variant's own infoBlackArea before drawing the frame and contents.
+        if let Some(rect) = layout.info_at(variant, &format!("infoBlackArea_{variant}")) {
+            commands.spawn((node(rect), BackgroundColor(Color::BLACK.with_alpha(0.5)), Pickable::IGNORE, ChildOf(root)));
+        }
+        for (frame, name, rect) in layout.info_frame(variant, background) {
+            picture(commands, root, rect, &name, frame);
+        }
+    } else {
+        for piece in layout.pieces_from(background, layout.info_canvas_origin(variant)) {
+            picture(commands, root, place(origin, piece.rect), &piece.name, piece.frame);
+        }
     }
-    match &info {
+    match info {
         Info::None => {}
         Info::Single(single) => spawn_single(commands, root, layout, feed, theme, origin, single),
         Info::Group(tiles) => spawn_group(commands, root, layout, feed, theme, origin, variant, tiles),
     }
 }
 
+/// Stock ShipDisplay uses the captain row for the producer's active item
+/// name (read statically from Armada II). Read the same job as the build meter.
+fn rig_job_title<'a>(
+    feed: &'a HudFeed,
+    id: EntityId,
+    strings: Option<&'a crate::ui::i18n::Strings>,
+) -> Option<&'a str> {
+    let producer = feed.production.iter().find(|row| row.builder == id)?;
+    let job = producer.jobs.first().filter(|head| head.queue_id.is_none() && head.paid && head.started)?;
+    let item = feed.content.as_deref()?.unit(job.def)?;
+    let title = model::craft_names::unit_name(item).unwrap_or(&item.odf);
+    Some(strings.map_or(title, |strings| strings.game_text(title)))
+}
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)] // Bevy injects these system parameters.
 pub(in crate::ui::hud) fn update(
     feed: Res<HudFeed>,
     status: Option<Res<crate::ui::hud::status::StatusFeed>>,
-    mut texts: Query<(&StockText, &mut SpriteText)>,
+    mut texts: Query<(Entity, &StockText, &mut SpriteText)>,
+    parents: Query<&ChildOf>,
+    mut tips: Query<&mut Tooltip>,
     mut bars: Query<(&StockBar, &mut Node)>,
     mut crew: Query<&mut SpriteText, (With<super::a1::info::CrewText>, Without<StockText>)>,
     mut health_labels: Query<(&SystemHealth, &mut SpriteText), (Without<StockText>, Without<super::a1::info::CrewText>)>,
     mut icons: Query<(&SystemIcon, &mut GuiImage), Without<WireLayer>>,
     mut layers: Query<(&WireLayer, &mut GuiImage), Without<SystemIcon>>,
     state: Option<Res<super::StockState>>,
+    strings: Option<Res<crate::ui::i18n::Strings>>,
 ) {
     for (w, mut image) in &mut layers {
         let tint = layer_tint(status.as_deref(), *w);
@@ -840,8 +1001,17 @@ pub(in crate::ui::hud) fn update(
     let info = model::info(&feed);
     if let Info::Single(s) = &info {
         let layout = state.as_deref().and_then(|st| st.layout.as_ref());
+        let native = layout.is_some_and(StockLayout::has_a2_info);
+        let def = feed.view.unit(s.id).and_then(|unit| feed.def(unit));
+        let absent = |slot: usize| {
+            native && def.is_some_and(|d| d.system_hit_points[SLOT_SYSTEM[slot]] <= Fixed::ZERO)
+        };
         for (icon, mut image) in &mut icons {
-            let (health, on) = slot_status(status.as_deref(), s.id, icon.0);
+            let (health, on) = if absent(icon.0) {
+                (Fixed::ZERO, false)
+            } else {
+                slot_status(status.as_deref(), s.id, icon.0)
+            };
             let tint = system_tint(layout, health, on);
             if image.color != tint {
                 image.color = tint;
@@ -849,11 +1019,14 @@ pub(in crate::ui::hud) fn update(
         }
         for (slot, mut text) in &mut health_labels {
             let (health, on) = slot_status(status.as_deref(), s.id, slot.0);
-            let label = health_label(health);
+            let missing = absent(slot.0);
+            let label = health_label(if missing { Fixed::ZERO } else { health });
             // Stock Armada II draws functioning system percentages in green
             // and permanently disabled ones in dim grey. The feed has no
             // native timed-repair overlay, so a failed damaged system is red.
-            let tint = if on {
+            let tint = if missing {
+                Color::srgb(0.2, 0.2, 0.2)
+            } else if on {
                 Color::srgb(0.0, 1.0, 0.0)
             } else if health < Fixed::ONE {
                 Color::srgb(1.0, 0.0, 0.0)
@@ -875,10 +1048,26 @@ pub(in crate::ui::hud) fn update(
             text.text = value;
         }
     }
-    for (kind, mut text) in &mut texts {
+    for (entity, kind, mut text) in &mut texts {
+        if let StockText::Resource(id) = *kind
+            && let Ok(parent) = parents.get(entity)
+            && let Ok(mut tip) = tips.get_mut(parent.parent())
+            && let Some(next) = resource_tip(&feed, id)
+            && *tip != next
+        {
+            *tip = next;
+        }
         let value = match *kind {
             StockText::Resource(id) => resource_text(&feed, id),
             StockText::Population(id) => super::super::status::population_text(&feed, id),
+            StockText::RigJob(id) => match &info {
+                Info::Single(selected) if selected.id == id => selected.own
+                    .then(|| rig_job_title(&feed, id, strings.as_deref()))
+                    .flatten()
+                    .or(selected.captain.as_deref())
+                    .map(str::to_owned),
+                _ => None,
+            },
         }.unwrap_or_default();
         if text.text != value {
             text.text = value;
@@ -886,12 +1075,12 @@ pub(in crate::ui::hud) fn update(
     }
     for (kind, mut node) in &mut bars {
         let (value, width) = match (kind, &info) {
-            (StockBar::Hull(w), Info::Single(s)) => (s.hull, *w),
+            (StockBar::Hull(w) | StockBar::NativeHealth(w), Info::Single(s)) => (s.hull, *w),
             (StockBar::Shield(w), Info::Single(s)) => (s.shield.unwrap_or(0.0), *w),
             (StockBar::Progress(w), Info::Single(s)) => (s.progress.unwrap_or(0.0), *w),
             (StockBar::Energy(w), Info::Single(_)) => (extra.as_ref().and_then(|e| e.energy).unwrap_or(0.0), *w),
             (StockBar::Node(w), Info::Single(s)) => (node_fraction(status.as_deref(), s.id), *w),
-            (StockBar::Group(id, w), Info::Group(tiles)) => (
+            (StockBar::Group(id, w) | StockBar::GroupNativeHealth(id, w), Info::Group(tiles)) => (
                 tiles.iter().find(|tile| tile.id == *id).map_or(0.0, |tile| tile.hull),
                 *w,
             ),
@@ -919,6 +1108,95 @@ mod tests {
         view::{PlayerView, WorldView},
     };
     use std::sync::Arc;
+
+    #[test]
+    fn native_resource_keys_and_pickable_readout_area() {
+        let mut feed = HudFeed { player: PlayerId(1), ..default() };
+        feed.view = Arc::new(WorldView {
+            players: vec![PlayerView {
+                id: PlayerId(1), team: TeamId(1), resources: vec![Fixed::ZERO; 4],
+                officers: [Fixed::ZERO; 2], eliminated: false, relations: Vec::new(), crew: Some(Fixed::from_int(7)),
+            }],
+            ..default()
+        });
+        Arc::make_mut(&mut feed.view).attrs.seats.push(sta_sim::attrs::SeatView {
+            player: PlayerId(1), race: Some("borg".into()), crew_capacity: Some(Fixed::from_int(12)), ..default()
+        });
+        let look = |key: &str| match key {
+            "GUI_RD_CREW_TOOLTIP" => "Crew: %d/%d".to_owned(),
+            "GUI_RD_CREW_VTOOLTIP" => "Crew: %d/%d available".to_owned(),
+            _ => key.to_owned(),
+        };
+        let delays = crate::ui::stock_tooltip::TipDelays::STOCK;
+        let crew = resource_tip(&feed, 0).unwrap();
+        assert_eq!(crew.stock_text_at(delays.short, &delays, &look).as_deref(), Some("Crew: 7/12"));
+        assert_eq!(crew.stock_text_at(delays.verbose, &delays, &look).as_deref(), Some("Crew: 7/12 available"));
+        assert_eq!(resource_tip(&feed, 1).unwrap().short, "GUI_RD_BORG_OFF_TOOLTIP");
+        assert_eq!(resource_tip(&feed, 2).unwrap().verbose.as_deref(), Some("GUI_RD_DILITHIUM_VTOOLTIP"));
+
+        let mut world = World::new();
+        let root = world.spawn(Node::default()).id();
+        let rect = R::new(20.0, 30.0, 90.0, 22.0);
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            readout_tip(&mut commands, root, rect, "7".into(), Color::WHITE, 12.0, Some(StockText::Resource(0)), Some(crew));
+        }
+        queue.apply(&mut world);
+        let (node, tip) = world.query::<(&Node, &Tooltip)>().single(&world).unwrap();
+        assert_eq!((node.left, node.top, node.width, node.height), (Val::Px(20.0), Val::Px(30.0), Val::Px(90.0), Val::Px(22.0)));
+        assert_eq!(tip.short, "GUI_RD_CREW_TOOLTIP");
+        assert!(world.query::<(&Tooltip, &Pickable)>().iter(&world).next().is_none(), "the tooltip wrapper remains pickable");
+    }
+
+    #[test]
+    fn resource_tooltip_is_present_before_the_player_feed_and_recomposes_when_crew_arrives() {
+        let mut feed = HudFeed { player: PlayerId(1), ..default() };
+        assert_eq!(resource_tip(&feed, 2).unwrap().short, "GUI_RD_DILITHIUM_TOOLTIP");
+        assert_eq!(resource_tip(&feed, 0).unwrap().short, "");
+        Arc::make_mut(&mut feed.view).players.push(PlayerView {
+            id: PlayerId(1), team: TeamId(1), resources: vec![Fixed::ZERO; 4],
+            officers: [Fixed::ZERO; 2], eliminated: false, relations: Vec::new(), crew: Some(Fixed::from_int(4)),
+        });
+        assert_eq!(resource_tip(&feed, 0).unwrap().short, "", "capacity is still absent");
+        Arc::make_mut(&mut feed.view).attrs.seats.push(sta_sim::attrs::SeatView {
+            player: PlayerId(1), crew_capacity: Some(Fixed::from_int(9)), ..default()
+        });
+        let tip = resource_tip(&feed, 0).unwrap();
+        assert_eq!(tip.short, "GUI_RD_CREW_TOOLTIP");
+        assert_eq!(tip.stock_text_at(3.0, &crate::ui::stock_tooltip::TipDelays::STOCK, &|key| {
+            if key == "GUI_RD_CREW_VTOOLTIP" { "Crew: %d/%d".into() } else { key.into() }
+        }).as_deref(), Some("Crew: 4/9"));
+    }
+
+    #[test]
+    fn system_visibility_uses_resolved_maximum_not_current_damage() {
+        let odf = sta_odf::resolve("child", &mut |name| {
+            Some(if name.eq_ignore_ascii_case("base.odf") {
+                "sensorsHitPoints = 0\nweaponsHitPoints = 40\n".to_owned()
+            } else {
+                "#include \"base.odf\"\nenginesHitPoints = 0\n".to_owned()
+            })
+        }).unwrap();
+        let mut warnings = Vec::new();
+        let def = sta_content::unit::unit_def("child", &odf, None, &mut warnings);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(def.raw.raw("sensorsHitPoints"), Some("0"), "inherited zero remains resolved");
+        assert!(!system_slot_visible(&def, 0), "inherited zero hides sensors");
+        assert!(!system_slot_visible(&def, 3), "local zero hides engines");
+        assert!(system_slot_visible(&def, 2), "positive weapons maximum remains visible");
+        assert!(system_slot_visible(&def, 1), "omitted shield maximum keeps its icon default");
+        assert!(system_slot_visible(&def, 4), "omitted life-support maximum keeps its icon default");
+
+        let view = sta_sim::combat::damage::SystemView {
+            entity: EntityId(5),
+            health: [Fixed::ONE, Fixed::ZERO, Fixed::ONE, Fixed::ONE, Fixed::ONE],
+            on: [true; 5],
+        };
+        let feed = crate::ui::hud::status::StatusFeed { systems: vec![view], ..Default::default() };
+        assert_eq!(slot_status(Some(&feed), EntityId(5), 2).0, Fixed::ZERO);
+        assert!(system_slot_visible(&def, 2), "destroyed weapons keep their icon and readout");
+    }
 
     /// UI-48: a stock bar's track and fill come from the cfg when it names them.
     #[test]
@@ -970,6 +1248,8 @@ mod tests {
             shield: None,
             progress: None,
             builder: false,
+            has_build_queue: false,
+            a2_yard: false,
         };
         let tile = model::Tile { id: EntityId(1), name: long, hull: 1.0, shield: None };
         let short = model::Tile { id: EntityId(2), name: "Short".into(), hull: 1.0, shield: None };
@@ -1056,7 +1336,7 @@ mod tests {
         {
             let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
             let mut commands = Commands::new(&mut queue, &world);
-            assert!(system_background(&mut commands, root, &layout, Vec2::new(30.0, 40.0), "models/Fed_ConSt.SOD").is_some());
+            assert!(layout.at(Vec2::new(30.0, 40.0), "infoSingleSystemsDisplay").and_then(|rect| system_background(&mut commands, root, rect, "models/Fed_ConSt.SOD")).is_some());
         }
         queue.apply(&mut world);
         let child = world.get::<Children>(root).unwrap()[0];
@@ -1069,13 +1349,9 @@ mod tests {
         cfg.rects.insert("infoSingleSystemsDisplay".into(), Rect { x: 10, y: 18, w: 0, h: 128 });
         let disabled = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
         let absent = StockLayout::new(&GuiLayout::default(), Vec2::new(1600.0, 1200.0));
-        let mut queue = CommandQueue::default();
-        {
-            let mut commands = Commands::new(&mut queue, &world);
-            assert!(system_background(&mut commands, root, &disabled, Vec2::ZERO, "Fed_ConSt.SOD").is_none());
-            assert!(system_background(&mut commands, root, &absent, Vec2::ZERO, "Fed_ConSt.SOD").is_none());
-        }
-        queue.apply(&mut world);
+        let origin = Vec2::ZERO;
+        assert!(chosen_rect(&disabled, origin, false, "infoBuildSystemsDisplay", "infoSingleSystemsDisplay").is_none());
+        assert!(chosen_rect(&absent, origin, true, "infoBuildSystemsDisplay", "infoSingleSystemsDisplay").is_none());
         assert_eq!(world.get::<Children>(root).unwrap().len(), 1);
     }
 
@@ -1628,10 +1904,10 @@ mod tests {
         let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
         let origin = Vec2::new(100.0, 120.0);
         let icon = Some(R::new(20.0, 30.0, 20.0, 20.0));
-        assert_eq!(system_readout_rect(&layout, origin, false, 0, icon), Some(R::new(180.0, 135.0, 55.0, 20.0)));
-        assert_eq!(system_readout_rect(&layout, origin, true, 0, icon), Some(R::new(144.0, 172.0, 50.0, 20.0)));
+        assert_eq!(system_readout_rect(&layout, origin, false, 0, icon), Some((R::new(180.0, 135.0, 55.0, 20.0), true)));
+        assert_eq!(system_readout_rect(&layout, origin, true, 0, icon), Some((R::new(144.0, 172.0, 50.0, 20.0), true)));
         assert_eq!(system_readout_rect(&layout, origin, false, 1, icon), None);
-        assert_eq!(system_readout_rect(&layout, origin, false, 2, icon), Some(R::new(42.0, 30.0, 40.0, 20.0)));
+        assert_eq!(system_readout_rect(&layout, origin, false, 2, icon), Some((R::new(42.0, 30.0, 40.0, 20.0), false)));
     }
 
     /// UI-28: each wireframe layer takes its system's state; a destroyed system's layer is pure

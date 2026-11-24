@@ -214,6 +214,8 @@ pub struct Races {
     mining: Vec<(String, Fixed)>,
     /// The races that set any boarding key (SIM-46 P0), by key, in race order.
     boarding: Vec<(String, RaceBoarding)>,
+    /// Race keys that explicitly disable trading (`canTrade = 0`).
+    trade_denied: Vec<String>,
     /// Legacy profiles and loaded catalogues are authoritative. Only a bare
     /// native/fake database may infer its choices from unit definitions.
     authoritative: bool,
@@ -307,13 +309,13 @@ impl Races {
             Ok(o) => o,
             Err(e) => {
                 warnings.push(Warning::new("races.odf", e.to_string()));
-                return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), repair_names: Vec::new(), boarding: Vec::new(), mining: Vec::new(), authoritative }, warnings);
+                return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), repair_names: Vec::new(), boarding: Vec::new(), trade_denied: Vec::new(), mining: Vec::new(), authoritative }, warnings);
             }
         };
         let declared = nonnegative_integer(&list, "numberofraces");
         if list.raw("numberofraces").is_some() && declared.is_none() {
             warnings.push(Warning::new("races.odf", "numberOfRaces must be a nonnegative integer"));
-            return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), repair_names: Vec::new(), boarding: Vec::new(), mining: Vec::new(), authoritative }, warnings);
+            return (Races { races: Vec::new(), crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), repair_names: Vec::new(), boarding: Vec::new(), trade_denied: Vec::new(), mining: Vec::new(), authoritative }, warnings);
         }
         // Walk authored keys rather than an arbitrary fixed cap or a potentially
         // enormous declared count. Inherited trailing keys are inactive when a
@@ -336,6 +338,7 @@ impl Races {
         let mut repair_names: Vec<(String, String)> = Vec::new();
         let mut mining_rates: Vec<(String, Fixed)> = Vec::new();
         let mut boarding_rules: Vec<(String, RaceBoarding)> = Vec::new();
+        let mut trade_denied: Vec<String> = Vec::new();
         for i in entries {
             let Some(file) = list.str(&format!("race{i}")) else {
                 continue;
@@ -404,6 +407,13 @@ impl Races {
                     };
                     if rule != SeatRaceRule::default() {
                         seat_rules.push((name.clone(), rule));
+                    }
+                    if o.raw("cantrade").is_some() {
+                        match o.bool("cantrade") {
+                            Some(false) => trade_denied.push(name.clone()),
+                            Some(true) => {}
+                            None => warnings.push(Warning::new(format!("{s}.odf"), "canTrade must be a flag; trading remains enabled")),
+                        }
                     }
                     // CON-51: the race's factor on mining income, only when authored (absent: not measured).
                     if let Some(v) = crate::orbital_income::read_nonneg(&format!("{s}.odf"), &o, "miningRateModifier", &mut warnings) {
@@ -515,11 +525,13 @@ impl Races {
         }
         repair_rules.sort_by(|a, b| a.0.cmp(&b.0));
         repair_rules.dedup_by(|a, b| a.0 == b.0);
-        (Races { races, crew: crew_rates, seat: seat_rules, repair: repair_rules, repair_names, boarding: boarding_rules, mining: mining_rates, authoritative }, warnings)
+        trade_denied.sort();
+        trade_denied.dedup();
+        (Races { races, crew: crew_rates, seat: seat_rules, repair: repair_rules, repair_names, boarding: boarding_rules, trade_denied, mining: mining_rates, authoritative }, warnings)
     }
 
     pub fn from_defs(races: Vec<RaceDef>) -> Races {
-        Races { races, crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), repair_names: Vec::new(), boarding: Vec::new(), mining: Vec::new(), authoritative: true }
+        Races { races, crew: Vec::new(), seat: Vec::new(), repair: Vec::new(), repair_names: Vec::new(), boarding: Vec::new(), trade_denied: Vec::new(), mining: Vec::new(), authoritative: true }
     }
 
     /// The crew keys of a race by its key (`unitedfederation`), any case.
@@ -554,6 +566,11 @@ impl Races {
     pub fn boarding(&self, name: &str) -> RaceBoarding {
         let n = name.trim().to_ascii_lowercase();
         self.boarding.iter().find(|(k, _)| *k == n).map(|(_, b)| b.clone()).unwrap_or_default()
+    }
+
+    /// Race keys whose ODF explicitly sets `canTrade = 0`; all other races trade.
+    pub fn trade_denied_races(&self) -> impl Iterator<Item = &str> {
+        self.trade_denied.iter().map(String::as_str)
     }
 
     /// The races that set any boarding key, by lower-case key, in race order.

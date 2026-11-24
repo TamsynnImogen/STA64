@@ -25,4 +25,4 @@ Scene: construction Seed=3
 16. Run until tick 1677
 17. Run 1 ticks
 18. Run until tick 3900
-19. Expect digest at tick 3900 is "b40d41ac8e9c73f0"
+19. Expect digest at tick 3900 is "eb320aa994768d0a"

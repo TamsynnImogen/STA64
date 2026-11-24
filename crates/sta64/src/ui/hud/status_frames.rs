@@ -197,6 +197,7 @@ fn installed_status_queue_and_cargo_render_and_clear() {
             ]
             .into_iter()
             .map(|(name, progress, paid, started)| ProductionJobView {
+                queue_id: None,
                 def: db.key(name).unwrap(),
                 progress: Fixed::from_f64(progress),
                 paid,
@@ -230,7 +231,7 @@ fn installed_status_queue_and_cargo_render_and_clear() {
         log: false,
     };
     let mut stock_state = stock::StockState::default();
-    stock_state.layout = Some(StockLayout::for_aspect(&gui, aspect));
+    stock_state.layout = Some(StockLayout::for_aspect(&gui, aspect).with_info_profile(profile));
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -382,7 +383,7 @@ fn installed_status_queue_and_cargo_render_and_clear() {
             let layout = layout.layout.as_ref().unwrap();
             let variant = if stage == 0 { 2 } else { 1 };
             assert_eq!(
-                stock::layout::info_variant(&model::info(app.world().resource::<HudFeed>())),
+                layout.info_variant(&model::info(app.world().resource::<HudFeed>())),
                 variant
             );
             assert_eq!(shape.selected, if stage == 0 { BUILDER } else { FREIGHTER });

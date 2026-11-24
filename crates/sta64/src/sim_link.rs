@@ -75,6 +75,37 @@ impl SimLink {
         SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, cargo, nodes, systems, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None, lifted: None, fog_lifted: false, match_fog_lifted: false, observer: false }
     }
 
+    pub(crate) fn can_edit_placements(&mut self) -> bool {
+        !self.observer && self.source.get().supports_placement_edits()
+    }
+
+    pub(crate) fn edit_placement(&mut self, edit: sta_sim::source::PlacementEdit) -> Option<EntityId> {
+        let id = self.source.get().edit_placement(edit)?;
+        self.refresh_editor_views();
+        Some(id)
+    }
+
+    /// An editor undo/redo checkpoint was taken from this paused local world.
+    pub(crate) fn restore_editor_snapshot(&mut self, bytes: &[u8], db: Arc<ContentDb>) -> Result<(), sta_sim::snapshot::SnapshotError> {
+        let sim = sta_sim::Sim::from_snapshot(bytes, Some(db))?;
+        *self.source.get() = Box::new(sim);
+        self.refresh_editor_views();
+        Ok(())
+    }
+
+    fn refresh_editor_views(&mut self) {
+        let source = self.source.get();
+        self.curr = source.view();
+        self.prev = self.curr.clone();
+        self.production = source.production_view();
+        self.cargo = source.cargo_view();
+        self.nodes = source.node_view();
+        self.systems = source.system_view();
+        // A command replay cannot represent a placement edit between ticks.
+        self.log = None;
+        self.refresh_lifted();
+    }
+
     /// Log every tick into `replay` (a [`Replay::new`] header of the game's
     /// setup; the link adds tick 0's digest and the rest as it steps).
     pub fn with_replay(mut self, mut replay: Replay) -> SimLink {
@@ -460,7 +491,7 @@ impl Plugin for SimLinkPlugin {
             .init_resource::<SimEntities>()
             .add_systems(OnEnter(crate::app::AppState::Loading), forget_removals)
             .add_systems(OnExit(crate::app::AppState::InGame), forget_removals)
-            .add_systems(Update, step_sim.in_set(GameSet::SimLink).run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<BenchDriven>)).run_if(not(resource_exists::<SimHeld>)));
+            .add_systems(Update, step_sim.in_set(GameSet::SimLink).run_if(resource_exists::<SimLink>).run_if(not(resource_exists::<BenchDriven>)).run_if(not(resource_exists::<SimHeld>)).run_if(crate::editor::play_mode));
     }
 }
 

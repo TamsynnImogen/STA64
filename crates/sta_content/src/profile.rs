@@ -291,7 +291,9 @@ impl Profile {
         // The host install's base Data folder, mounted or not (D6 decides
         // what is mounted; this only reads two files from it).
         let host_data = layers.iter().find_map(|l| {
-            if l.name.eq_ignore_ascii_case("data") {
+            if vfs.is_flat_install() {
+                None
+            } else if l.name.eq_ignore_ascii_case("data") {
                 Some(l.root.clone())
             } else {
                 let mods = l.root.parent().filter(|m| m.file_name().is_some_and(|n| n.eq_ignore_ascii_case("mods")))?;
@@ -962,6 +964,19 @@ mod tests {
         let mut vfs = Vfs::default();
         vfs.push_dir("root".into(), t.0.clone()).unwrap();
         assert_eq!(Profile::detect(&vfs), Profile::Sta2Classic);
+    }
+
+    #[test]
+    fn direct_cd_mount_uses_stock_profile_even_inside_roots_mods() {
+        let t = Tmp::new();
+        t.file("Data/info.ini", "[Mod]\nName=Fleet Operations Roots\nAssetVersion=50000\n")
+            .file("Data/Mods/CD/odf/ship.odf", "")
+            .file("Data/Mods/CD/bzn/test.bzn", "")
+            .file("Data/Mods/CD/game_cfg.h", "")
+            .file("Data/Mods/CD/misc/gui_glob16x12.cfg", "");
+        let flat = Vfs::mount_install(&t.0.join("Data/Mods/CD"), None).unwrap();
+        assert_eq!(Profile::detect(&flat), Profile::Sta2Classic);
+        assert_eq!(t.detect(Some("CD")), Profile::Fo4);
     }
 
     #[test]

@@ -13,6 +13,9 @@ fn identity_content(builder: bool, odf: &str) -> Arc<ContentDb> {
     for unit in base.units() {
         let mut unit = unit.clone();
         if unit.odf == "fx_cruiser" {
+            if builder {
+                unit.class = sta_content::ClassLabel("shipyard".into());
+            }
             unit.raw =
                 Arc::new(sta_odf::resolve("fx_cruiser", &mut |_| Some(odf.to_owned())).unwrap());
         }
@@ -60,7 +63,7 @@ fn assert_rect(app: &App, node: &Node, x: f32, y: f32, w: f32, h: f32) {
         .layout
         .as_ref()
         .unwrap();
-    let origin = layout.info_origin(layout::info_variant(&model::info(
+    let origin = layout.info_origin(layout.info_variant(&model::info(
         app.world().resource::<HudFeed>(),
     )));
     let scale = layout.scale;
@@ -213,4 +216,56 @@ fn blank_companions_and_group_or_no_selection_emit_no_rows() {
     app.world_mut().resource_mut::<HudFeed>().selected = vec![EntityId(1), EntityId(1)];
     app.update();
     assert_eq!(rows(&mut app), 0);
+}
+
+#[test]
+fn construction_rig_caption_follows_the_active_job() {
+    use sta_content::UnitDef;
+    use sta_sim::production::view::{ProductionJobView, ProductionView};
+
+    let mut rig = UnitDef::new("fx_cruiser", "constructionrig");
+    rig.raw = Arc::new(sta_odf::resolve("fx_cruiser", &mut |_| Some(ODF.to_owned())).unwrap());
+    let mut yard = UnitDef::new("test_yard", "shipyard");
+    yard.raw = Arc::new(sta_odf::resolve("test_yard", &mut |_| {
+        Some("unitName = \"TEST_YARD_NAME\"".to_owned())
+    }).unwrap());
+    let db = Arc::new(ContentDb::builder().unit(rig).unit(yard).build().unwrap());
+    let key = db.key("test_yard").unwrap();
+    let cfg = inherited_config("", "infoSingleCaptainTextArea = 10 20 300 20\n");
+    let mut app = app_with_content_and_config(db, cfg, UiProfile::Armada2);
+    app.insert_resource(crate::ui::i18n::Strings::from_game(
+        "english", r#""TEST_YARD_NAME", "Shipyard""#,
+    ));
+
+    let label = |app: &mut App| {
+        app.world_mut().query::<(Entity, &info::IdentityText, &SpriteText)>()
+            .iter(app.world())
+            .find(|(_, field, _)| field.0 == info::IdentityField::Captain)
+            .map(|(entity, _, text)| (entity, text.text.clone()))
+            .unwrap()
+    };
+    let (entity, captain) = label(&mut app);
+    assert!(captain.starts_with("Capt."));
+    for started in [false, true] {
+        app.world_mut().resource_mut::<HudFeed>().production = vec![ProductionView {
+            builder: EntityId(1),
+            jobs: vec![ProductionJobView {
+                queue_id: None,
+                def: key,
+                progress: Fixed::ZERO,
+                paid: true,
+                started,
+            }],
+            site: None,
+            portal: None,
+            research: None,
+            officer_upgrades: None,
+        }];
+        app.update();
+        let expected = if started { "Shipyard" } else { &captain };
+        assert_eq!(label(&mut app), (entity, expected.to_owned()));
+    }
+    app.world_mut().resource_mut::<HudFeed>().production.clear();
+    app.update();
+    assert_eq!(label(&mut app), (entity, captain));
 }
