@@ -127,22 +127,80 @@ fn the_trip_is_unchanged_and_repeats() {
 }
 
 #[test]
-fn several_miners_share_one_resource_and_a_digest_repeats() {
+fn one_freighter_at_a_time_mines_a_node_across_repeated_deliveries() {
     let digest = || {
         let mut sim = orbit_game();
         let moon = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, 0));
         spawn(&mut sim, "fx_station", PlayerId(0), v(1500, 0));
-        let ms: Vec<_> = (0..3).map(|i| spawn(&mut sim, "fx_orbiter", PlayerId(0), v(500 + i * 40, i * 60))).collect();
-        let o = Order::Mine { units: ms.clone(), node: moon };
-        sim.step(&[Command { player: PlayerId(0), seq: 1, kind: CommandKind::Order(o) }]);
+        let miners = [0, 1, 2].map(|i| spawn(&mut sim, "fx_orbiter", PlayerId(0), v(500 + i * 30, i * 50)));
+        let order = Order::Mine { units: miners.to_vec(), node: moon };
+        sim.step(&[Command { player: PlayerId(0), seq: 1, kind: CommandKind::Order(order) }]);
         let mut delivered = 0;
-        for _ in 0..4500 {
-            delivered += sim.step(&[]).events.iter().filter(|e| matches!(e, SimEvent::Delivered { .. })).count();
+        let mut took_a_turn = [false; 3];
+        for _ in 0..6000 {
+            let before = miners.map(|id| sim.economy.cargo(id).unwrap_or(Fixed::ZERO));
+            let out = sim.step(&[]);
+            let mut active = 0;
+            let mut extracting = 0;
+            for (index, id) in miners.into_iter().enumerate() {
+                let miner = sim.economy.miners.get(id).unwrap();
+                active += usize::from(miner.phase == Phase::Mining);
+                if miner.cargo > before[index] {
+                    extracting += 1;
+                    took_a_turn[index] = true;
+                }
+            }
+            assert!(active <= 1, "{active} active miners");
+            assert!(extracting <= 1, "{extracting} freighters extracted in one tick");
+            delivered += out.events.iter().filter(|e| matches!(e, SimEvent::Delivered { .. })).count();
         }
-        assert!(delivered >= 6, "{delivered}");
+        assert!(delivered >= 6, "{delivered} deliveries");
+        assert!(took_a_turn.into_iter().all(|mined| mined), "miners that extracted: {took_a_turn:?}");
         sim.digest()
     };
     assert_eq!(digest(), digest());
+}
+
+#[test]
+fn active_higher_id_keeps_the_node_until_cancelled_then_waiter_takes_over() {
+    let mut sim = orbit_game();
+    let moon = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, 0));
+    spawn(&mut sim, "fx_station", PlayerId(0), v(1500, 0));
+    let lower = spawn(&mut sim, "fx_orbiter", PlayerId(0), v(500, 0));
+    let incumbent = spawn(&mut sim, "fx_orbiter", PlayerId(0), v(500, 50));
+    assert!(mine(&mut sim, 0, incumbent, moon));
+    until(&mut sim, incumbent, MinerPhase::Mining, 3000);
+    assert!(mine(&mut sim, 0, lower, moon));
+    for _ in 0..60 {
+        sim.step(&[]);
+        assert_eq!(sim.economy.miners.get(incumbent).unwrap().phase, Phase::Mining);
+        assert_eq!(sim.economy.cargo(lower), Some(Fixed::ZERO));
+        assert_ne!(sim.economy.miners.get(lower).unwrap().phase, Phase::Mining);
+    }
+    let out = sim.step(&[Command { player: PlayerId(0), seq: 9, kind: CommandKind::Order(Order::Stop { units: vec![incumbent] }) }]);
+    assert!(out.events.iter().any(|e| matches!(e, SimEvent::MinerPhase { id, phase: MinerPhase::Idle, .. } if *id == incumbent)));
+    until(&mut sim, lower, MinerPhase::Mining, 3000);
+    assert!(sim.economy.cargo(lower).unwrap() > Fixed::ZERO);
+}
+
+#[test]
+fn duplicate_restored_mining_phases_resolve_before_extraction() {
+    let mut sim = orbit_game();
+    let moon = spawn(&mut sim, "fx_moon", NEUTRAL, v(0, 0));
+    let first = spawn(&mut sim, "fx_orbiter", PlayerId(0), v(500, 0));
+    let second = spawn(&mut sim, "fx_orbiter", PlayerId(0), v(500, 50));
+    assert!(mine(&mut sim, 0, first, moon));
+    assert!(mine(&mut sim, 0, second, moon));
+    until(&mut sim, first, MinerPhase::Mining, 3000);
+    let mut duplicate = *sim.economy.miners.get(second).unwrap();
+    duplicate.phase = Phase::Mining;
+    sim.economy.miners.insert(second, duplicate);
+    let mut sim = Sim::from_snapshot(&sim.snapshot(), sim.content.clone()).unwrap();
+    let before = sim.economy.cargo(first).unwrap();
+    sim.step(&[]);
+    assert!(sim.economy.cargo(first).unwrap() > before);
+    assert_eq!(sim.economy.cargo(second), Some(Fixed::ZERO));
+    assert_eq!(sim.economy.miners.get(second).unwrap().phase, Phase::ToNode);
 }
 
 #[test]

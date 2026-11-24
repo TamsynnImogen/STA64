@@ -142,14 +142,14 @@ fn health_label(health: Fixed) -> String {
     percent.to_string()
 }
 
-fn system_readout_rect(layout: &StockLayout, origin: Vec2, builder: bool, slot: usize, icon: Option<R>) -> Option<R> {
+fn system_readout_rect(layout: &StockLayout, origin: Vec2, builder: bool, slot: usize, icon: Option<R>) -> Option<(R, bool)> {
     let build = format!("infoBuildSystem_{slot}");
     let single = format!("infoSystem_{slot}");
     let key = if builder && layout.raw_rect(&build).is_some() { &build } else { &single };
     if layout.raw_rect(key).is_some() {
-        layout.at(origin, key)
+        layout.at(origin, key).map(|rect| (rect, true))
     } else {
-        icon.map(|r| R::new(r.x + r.w + 2.0, r.y, r.w * 2.0, r.h))
+        icon.map(|r| (R::new(r.x + r.w + 2.0, r.y, r.w * 2.0, r.h), false))
     }
 }
 
@@ -807,9 +807,11 @@ fn spawn_single(
                 commands.entity(root).with_child((node(r), readouts::bind(single.id, Readout::System(system)), SystemIcon(slot), GuiImage::new("infosystem").with_frame(slot)));
             }
             if (native_systems || def.system_hit_points[system] > Fixed::ZERO)
-                && let Some(r) = system_readout_rect(layout, origin, builder, slot, icon)
+                && let Some((r, authored)) = system_readout_rect(layout, origin, builder, slot, icon)
             {
-                let label = if native_systems {
+                // Authored system values use the same label font and alignment as
+                // crew, officers and energy, including CFGs mounted with Fleet Ops chrome.
+                let label = if native_systems || authored {
                     text(commands, root, r, String::new(), theme.text, theme.small_size, None)
                 } else {
                     text_styled(
@@ -1902,10 +1904,10 @@ mod tests {
         let layout = StockLayout::new(&cfg, Vec2::new(1600.0, 1200.0));
         let origin = Vec2::new(100.0, 120.0);
         let icon = Some(R::new(20.0, 30.0, 20.0, 20.0));
-        assert_eq!(system_readout_rect(&layout, origin, false, 0, icon), Some(R::new(180.0, 135.0, 55.0, 20.0)));
-        assert_eq!(system_readout_rect(&layout, origin, true, 0, icon), Some(R::new(144.0, 172.0, 50.0, 20.0)));
+        assert_eq!(system_readout_rect(&layout, origin, false, 0, icon), Some((R::new(180.0, 135.0, 55.0, 20.0), true)));
+        assert_eq!(system_readout_rect(&layout, origin, true, 0, icon), Some((R::new(144.0, 172.0, 50.0, 20.0), true)));
         assert_eq!(system_readout_rect(&layout, origin, false, 1, icon), None);
-        assert_eq!(system_readout_rect(&layout, origin, false, 2, icon), Some(R::new(42.0, 30.0, 40.0, 20.0)));
+        assert_eq!(system_readout_rect(&layout, origin, false, 2, icon), Some((R::new(42.0, 30.0, 40.0, 20.0), false)));
     }
 
     /// UI-28: each wireframe layer takes its system's state; a destroyed system's layer is pure
