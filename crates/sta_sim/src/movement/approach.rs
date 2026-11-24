@@ -33,12 +33,13 @@
 //!   lead rule read from the executable, static.
 //! - Not modelled: the engine's AI fleets (a fleet member at low or medium
 //!   movement autonomy may not close in or warp; STA64 has no AI fleets yet),
-//!   dewarp zones of planets and black holes, the engine's 10 Hz AI tick.
+//!   the engine's 10 Hz AI tick.
 
 use sta_content::{ContentDb, UnitDef, WeaponKind};
 use sta_core::{EntityId, Fixed, Vec3};
 
 use crate::kinematics::Plan;
+use crate::movement::gravity::GravityWells;
 use crate::world::{Entity, EntityKind, Fnv, Table};
 use crate::Sim;
 
@@ -161,7 +162,7 @@ pub(crate) fn warp_leg(unit: &Entity, goal: Vec3) -> (Fixed, bool) {
 impl Sim {
     /// Set the course of every craft with an attack target and say how it
     /// steps this tick (ascending id). Runs before the movement step.
-    pub(crate) fn steer_attackers(&mut self) -> Vec<(EntityId, Plan)> {
+    pub(crate) fn steer_attackers(&mut self, gravity: &GravityWells) -> Vec<(EntityId, Plan)> {
         let Some(db) = self.content.clone() else { return Vec::new() };
         let f = db.features();
         let min_warp = db.rules().approach().min_move_warp_distance;
@@ -234,7 +235,8 @@ impl Sim {
                 if !far && t.speed < combat && (f.attack_combat_speed || d < w) {
                     plan.cap = Some(combat);
                 }
-                let can = self.warp_allowed() && vw > vi && vi > crate::speed_override::HELD_SPEED && plan.cap.is_none() && aligned && to_goal >= warp_lead(vw, vi, r_own);
+                let can = self.warp_allowed() && vw > vi && vi > crate::speed_override::HELD_SPEED && plan.cap.is_none() && aligned
+                    && to_goal >= warp_lead(vw, vi, r_own) && !gravity.suppresses(u.pos, r_own);
                 let still_braking = phase == Some(WARP_OUT) && u.speed > vi;
                 warp = if warp { can } else { can && far && u.speed > Fixed::from_f64(0.9) * vi && !still_braking };
                 // LUA-31: a keyed craft's warp speed below impulse caps the aligned far leg.
