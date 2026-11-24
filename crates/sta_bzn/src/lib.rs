@@ -26,6 +26,7 @@ use std::collections::HashMap;
 pub use paths::MapPath;
 
 pub mod a1;
+pub mod object_editor_ext;
 pub mod paths;
 pub mod sol;
 pub mod write;

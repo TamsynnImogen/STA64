@@ -80,8 +80,21 @@ impl SimLink {
     }
 
     pub(crate) fn edit_placement(&mut self, edit: sta_sim::source::PlacementEdit) -> Option<EntityId> {
+        let id = self.source.get().edit_placement(edit)?;
+        self.refresh_editor_views();
+        Some(id)
+    }
+
+    /// An editor undo/redo checkpoint was taken from this paused local world.
+    pub(crate) fn restore_editor_snapshot(&mut self, bytes: &[u8], db: Arc<ContentDb>) -> Result<(), sta_sim::snapshot::SnapshotError> {
+        let sim = sta_sim::Sim::from_snapshot(bytes, Some(db))?;
+        *self.source.get() = Box::new(sim);
+        self.refresh_editor_views();
+        Ok(())
+    }
+
+    fn refresh_editor_views(&mut self) {
         let source = self.source.get();
-        let id = source.edit_placement(edit)?;
         self.curr = source.view();
         self.prev = self.curr.clone();
         self.production = source.production_view();
@@ -91,7 +104,6 @@ impl SimLink {
         // A command replay cannot represent a placement edit between ticks.
         self.log = None;
         self.refresh_lifted();
-        Some(id)
     }
 
     /// Log every tick into `replay` (a [`Replay::new`] header of the game's
