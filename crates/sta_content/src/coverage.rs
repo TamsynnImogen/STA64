@@ -33,6 +33,8 @@ use crate::layered;
 /// by rendering and audio helpers through wrappers may be missing, which
 /// shows as "not understood" rather than hiding a gap.
 pub const READ_ODF_KEYS: &[&str] = &[
+    // Race ODFs (`name`, race.rs) and miners (`miner`, unit.rs).
+    "name", "miner",
     "addon", "adddilithium", "addlatinum", "addmetal", "addbiomatter", "addcrew", "alwaysactiveplayer", "alwaysactiveai", "onetimemode", "atmospheretexturename", "avoidme", "buildhardpoint", "canattack", "classlabel",
     "constructionchunks", "curhealth", "dont_load_sod", "effectradius", "effecttimer",
     "energydrainrate", "fieldradius", "firearc", "fire_arcs", "forwardaccel", "groundtexturename",
@@ -92,7 +94,27 @@ pub const READ_ODF_KEYS: &[&str] = &[
 ];
 
 /// Prefixes of numbered ODF keys (`weapon1`, `buildItem3`, ...) that are read.
-pub const READ_ODF_PREFIXES: &[&str] = &["weapon", "builditem", "secondarybuilditem", "feature_", "sta64_"];
+pub const READ_ODF_PREFIXES: &[&str] = &[
+    "weapon", "builditem", "secondarybuilditem", "feature_", "sta64_",
+    // Numbered families read through `format!` (unit.rs, race.rs).
+    "weaponhardpoints", "standardunits", "minimalunits", "race", "track",
+    // Per-resource keys built from the resource names (resources.rs, race.rs).
+    "dilithium", "latinum", "metal", "biomatter", "normal", "lots",
+];
+
+/// Prefixes in [`READ_ODF_PREFIXES`] that only cover a run of digits after them.
+const NUMBERED_PREFIXES: &[&str] = &["weapon", "builditem", "secondarybuilditem", "weaponhardpoints", "standardunits", "minimalunits", "race", "track"];
+
+/// Prefixes in [`READ_ODF_PREFIXES`] that only cover a resource name after them
+/// (`dilithiumCost`, `normalLatinum`, `lotsCrew`).
+const RESOURCE_PREFIXES: &[(&str, &[&str])] = &[
+    ("dilithium", &["cost"]),
+    ("latinum", &["cost"]),
+    ("metal", &["cost"]),
+    ("biomatter", &["cost"]),
+    ("normal", &["dilithium", "latinum", "metal", "biomatter", "crew"]),
+    ("lots", &["dilithium", "latinum", "metal", "biomatter", "crew"]),
+];
 
 /// `RTS_CFG.h` / `ART_CFG.h` names some STA64 code reads besides the typed
 /// rules ([`crate::TYPED_CFG_KEYS`], which count as read too).
@@ -127,8 +149,14 @@ fn odf_key_read(key: &str) -> bool {
     }
     READ_ODF_KEYS.contains(&k.as_str())
         || READ_ODF_PREFIXES.iter().any(|p| {
-            let numbered = *p == "weapon" || *p == "builditem" || *p == "secondarybuilditem";
-            k.strip_prefix(p).is_some_and(|rest| !numbered || (!rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())))
+            let Some(rest) = k.strip_prefix(p) else { return false };
+            if NUMBERED_PREFIXES.contains(p) {
+                !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+            } else if let Some((_, tails)) = RESOURCE_PREFIXES.iter().find(|(q, _)| q == p) {
+                tails.contains(&rest)
+            } else {
+                true
+            }
         })
 }
 
@@ -547,6 +575,19 @@ fn odf_hits(vfs: &Vfs, name: &str) -> Vec<FileHit> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn numbered_and_resource_families_are_read() {
+        for k in ["weaponHardPoints12", "standardUnits3", "minimalUnits1", "race0", "track2", "dilithiumCost",
+                  "latinumCost", "metalCost", "biomatterCost", "normalDilithium", "lotsLatinum", "lotsCrew",
+                  "miner", "name", "weapon3", "buildItem0"] {
+            assert!(odf_key_read(k), "{k}");
+        }
+        for k in ["weaponHardPoints", "standardUnitsX", "raceHorse", "dilithiumRate", "normalSpeed", "lots",
+                  "weaponX", "metalCostly"] {
+            assert!(!odf_key_read(k), "{k}");
+        }
+    }
     use std::fs;
     use std::path::PathBuf;
 
