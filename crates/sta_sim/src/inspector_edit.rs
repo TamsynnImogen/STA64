@@ -9,11 +9,27 @@ use crate::source::Inspection;
 use crate::view::UnitFlags;
 use crate::world::{EntityKind, NEUTRAL};
 
+const SYSTEMS: [Subsystem; 5] = [
+    Subsystem::Engines,
+    Subsystem::Weapons,
+    Subsystem::Shields,
+    Subsystem::LifeSupport,
+    Subsystem::Sensors,
+];
+
 const MAX_VALUE: Fixed = Fixed::from_int(1_000_000_000);
 
 impl Sim {
     pub(crate) fn inspect_placement(&mut self, inspection: Inspection) -> Option<EntityId> {
-        let Inspection { id, owner, at, heading, label, name, properties } = inspection;
+        let Inspection {
+            id,
+            owner,
+            at,
+            heading,
+            label,
+            name,
+            properties,
+        } = inspection;
         let db = self.content.as_deref()?;
         let unit = self.units.get(id)?;
         let def = db.unit(unit.def)?;
@@ -71,6 +87,21 @@ impl Sim {
         {
             return None;
         }
+        if properties
+            .perceived_owner
+            .is_some_and(|owner| !crate::perception::representable(owner))
+            || properties
+                .systems_enabled
+                .iter()
+                .enumerate()
+                .any(|(n, value)| {
+                    value.is_some()
+                        && (def.system_hit_points[n] <= Fixed::ZERO
+                            || !matches!(unit.kind, EntityKind::Craft | EntityKind::Station))
+                })
+        {
+            return None;
+        }
         if let Some(amount) = properties.resource {
             let node = self.node_view().into_iter().find(|row| row.entity == id)?;
             if amount < Fixed::ZERO
@@ -105,7 +136,32 @@ impl Sim {
             next.movement.clear(id);
         }
         if transfer {
+            if next.perception.get(id) == Some(&owner) {
+                next.perception.remove(id);
+            }
             next.refresh_ship_upgrades();
+        }
+        if let Some(race) = properties.race.as_deref() {
+            if race.is_empty() {
+                next.attrs.remove(id);
+            } else {
+                let race = next
+                    .known_race(race)
+                    .filter(|race| race.len() <= crate::attrs::MAX_RACE_BYTES)?;
+                next.attrs.set_race(id, &race);
+            }
+        }
+        // Map authors can set an identity for an authored seat that is inactive in test play.
+        if let Some(perceived) = properties.perceived_owner {
+            if perceived == owner {
+                next.perception.remove(id);
+            } else {
+                next.perception.insert(id, perceived);
+            }
+        }
+        if let Some(on) = properties.immortal {
+            let actor = next.units.get_mut(id)?;
+            actor.flags = actor.flags.with(UnitFlags::IMMORTAL, on);
         }
         if let Some(label) = label {
             if label.is_empty() {
@@ -123,6 +179,15 @@ impl Sim {
         }
         if let Some(crew) = properties.crew {
             next.units.get_mut(id)?.crew = Some(crew);
+        }
+        // A shield switch may clear the pools. Set switches before applying
+        // explicit pool values so loading a map reproduces its authored state.
+        for (sub, enabled) in SYSTEMS.into_iter().zip(properties.systems_enabled) {
+            if let Some(enabled) = enabled
+                && !next.edit_subsystem_switch(id, sub, enabled)
+            {
+                return None;
+            }
         }
         if let Some(shields) = properties.shields {
             let actor = next.units.get_mut(id)?;
@@ -143,13 +208,6 @@ impl Sim {
             }
         }
         if let Some(health) = properties.systems {
-            const SYSTEMS: [Subsystem; 5] = [
-                Subsystem::Engines,
-                Subsystem::Weapons,
-                Subsystem::Shields,
-                Subsystem::LifeSupport,
-                Subsystem::Sensors,
-            ];
             for (n, sub) in SYSTEMS.into_iter().enumerate() {
                 let cap = def.system_hit_points[n];
                 if cap <= Fixed::ZERO {

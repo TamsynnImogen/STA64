@@ -29,7 +29,7 @@ use crate::map::{MapBrowser, MapSeat};
 use crate::sim_link::{CommandQueue, ContentRes, Selection, SelectionChanged, SimLink};
 use crate::ui::hud::HudState;
 use crate::ui::notices::{Notice, Severity};
-use crate::ui::theme::{ButtonClicked, TextField};
+use crate::ui::theme::{ButtonClicked, Checkbox, Dropdown, TextField};
 use crate::viewer::Mounted;
 
 #[derive(Message)]
@@ -162,7 +162,7 @@ impl Plugin for EditorPlugin {
             .add_systems(Update, tools.in_set(GameSet::Input).after(toggle_key).after(crate::input::orders::aim)
                 .run_if(resource_exists::<Editing>).run_if(in_state(AppState::InGame))
                 .run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free))
-            .add_systems(Update, (panel::draw, panel::inspector_error).chain().in_set(GameSet::Ui));
+            .add_systems(Update, (panel::draw, panel::inspector_grid_update, panel::inspector_error).chain().in_set(GameSet::Ui));
     }
 }
 
@@ -384,7 +384,10 @@ type EditorInputs<'w> = (
     Res<'w, Time<Real>>,
 );
 type EditorFields<'w, 's> = (
-    Query<'w, 's, (&'static panel::InspectorField, &'static TextField)>,
+    Query<'w, 's, (
+        &'static panel::InspectorField, Option<&'static TextField>,
+        Option<&'static Checkbox>, Option<&'static Dropdown>,
+    )>,
     Query<'w, 's, (&'static map_settings::Field, &'static TextField)>,
 );
 
@@ -440,9 +443,22 @@ fn tools(
             editing.inspected = None;
         } else if let Some(action) = action {
             let restore = matches!(action, panel::Act::RestoreStats);
-            let inputs = if restore { BTreeMap::new() } else {
-                fields.iter().map(|(field, text)| (field.0, text.text.as_str())).collect()
+            let drafts: BTreeMap<_, _> = if restore { BTreeMap::new() } else {
+                fields.iter().filter_map(|(field, text, check, dropdown)| {
+                    let value = text.map(|text| text.text.clone())
+                        .or_else(|| check.map(|check| u8::from(check.on).to_string()))
+                        .or_else(|| dropdown.and_then(|dropdown| {
+                            if field.0 == "race" {
+                                if dropdown.selected == 0 { Some(String::new()) }
+                                else { dropdown.value().map(str::to_owned) }
+                            } else {
+                                Some(dropdown.selected.to_string())
+                            }
+                        }))?;
+                    Some((field.0, value))
+                }).collect()
             };
+            let inputs = drafts.iter().map(|(&key, value)| (key, value.as_str())).collect();
             let before = history::Checkpoint::take(&mut link, document.as_deref(), ids.as_deref(), names.as_deref(), &selection);
             let result = apply_inspector(id, &mut link, &content, bounds.as_deref(), document.as_deref_mut(),
                 ids.as_deref_mut(), names.as_deref_mut(), &inputs, restore);

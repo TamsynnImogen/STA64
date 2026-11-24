@@ -28,6 +28,12 @@ pub struct ObjectProperties {
     pub registry: Option<String>,
     /// The original instance display name, when separate from the map label.
     pub instance_name: Option<String>,
+    /// Use the definition's race when the change is an empty string.
+    pub race: Option<String>,
+    pub perceived_owner: Option<crate::PlayerId>,
+    pub immortal: Option<bool>,
+    /// Switches in SystemView order. Missing switches retain their state.
+    pub systems_enabled: [Option<bool>; 5],
 }
 
 pub struct Inspection {

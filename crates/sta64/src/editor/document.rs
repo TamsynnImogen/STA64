@@ -364,6 +364,10 @@ mod tests {
             captain: Some("Imani".into()),
             registry: Some(String::new()),
             hull: Some([Fixed::from_int(40), Fixed::from_int(80)]),
+            race: Some("blue".into()),
+            perceived_owner: Some(sta_sim::PlayerId(3)),
+            immortal: Some(true),
+            systems_enabled: [Some(false), None, None, None, None],
             ..Default::default()
         };
         doc.update_object(index, object, state.clone());

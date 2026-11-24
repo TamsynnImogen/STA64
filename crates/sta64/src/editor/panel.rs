@@ -4,9 +4,10 @@ use bevy::ui::RelativeCursorPosition;
 use super::{AuthoredIds, Document, Editing};
 use crate::sim_link::{ContentRes, Selection, SimLink};
 use crate::ui::sprite_font::SpriteText;
-use crate::ui::theme::{
-    FocusScope, ScrollArea, TextFilter, Theme, kit_button, kit_text, text_field,
-};
+use crate::ui::theme::{FocusScope, Theme, kit_button, kit_text};
+
+mod inspector_grid;
+pub(super) use inspector_grid::inspector_grid_update;
 
 #[derive(Component)]
 pub(super) struct Root(Option<sta_sim::EntityId>, bool);
@@ -35,8 +36,6 @@ pub(crate) enum Act {
 
 const WIDTH: f32 = 262.0;
 const INSPECTOR_WIDTH: f32 = 446.0;
-const INSPECTOR_ROW_H: f32 = 40.0;
-const INSPECTOR_VISIBLE_ROWS: usize = 12;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw(
@@ -58,9 +57,10 @@ pub(super) fn draw(
         return;
     };
     let modal = editing.inspected.is_some() || editing.map_settings;
-    let same_inspector = modal && roots.iter().any(|(_, root)| {
-        root.0 == editing.inspected && root.1 == editing.map_settings
-    });
+    let same_inspector = modal
+        && roots
+            .iter()
+            .any(|(_, root)| root.0 == editing.inspected && root.1 == editing.map_settings);
     if (same_inspector
         || (!editing.is_changed()
             && !selection.is_changed()
@@ -94,11 +94,7 @@ pub(super) fn draw(
             position_type: PositionType::Absolute,
             top: Val::Px(14.0),
             left: Val::Px(14.0),
-            width: Val::Px(if modal {
-                INSPECTOR_WIDTH
-            } else {
-                WIDTH
-            }),
+            width: Val::Px(if modal { INSPECTOR_WIDTH } else { WIDTH }),
             max_height: Val::Percent(96.0),
             overflow: Overflow::clip(),
             flex_direction: FlexDirection::Column,
@@ -111,28 +107,31 @@ pub(super) fn draw(
         root.insert(FocusScope);
     }
     root.with_children(|ui| {
-        let width = if modal {
-            INSPECTOR_WIDTH
-        } else {
-            WIDTH
-        } - 20.0;
+        let width = if modal { INSPECTOR_WIDTH } else { WIDTH } - 20.0;
         if editing.map_settings {
             if let Some(doc) = &document {
-                ui.spawn(kit_text(&theme, "Map properties", theme.title_size, theme.text));
+                ui.spawn(kit_text(
+                    &theme,
+                    "Map properties",
+                    theme.title_size,
+                    theme.text,
+                ));
                 super::map_settings::draw(ui, &theme, doc, width);
-                ui.spawn((InspectorError, kit_text(&theme, &editing.inspector_error, theme.small_size, theme.text)));
+                ui.spawn((
+                    InspectorError,
+                    kit_text(
+                        &theme,
+                        &editing.inspector_error,
+                        theme.small_size,
+                        theme.text,
+                    ),
+                ));
                 ui.spawn((kit_button(&button_theme, "Apply", width), Act::ApplyMap));
                 ui.spawn((kit_button(&button_theme, "Cancel", width), Act::CloseStats));
             }
             return;
         }
         if let Some(id) = editing.inspected {
-            ui.spawn(kit_text(
-                &theme,
-                "Object inspector",
-                theme.title_size,
-                theme.text,
-            ));
             let object = authored
                 .as_ref()
                 .and_then(|ids| ids.0.get(&id))
@@ -151,88 +150,10 @@ pub(super) fn draw(
                     )
                 })
                 .unwrap_or_default();
-            let sections = rows
-                .iter()
-                .enumerate()
-                .filter(|(i, row)| *i == 0 || rows[*i - 1].section != row.section)
-                .count();
-            let item_count = rows.len() + sections;
-            let visible = item_count.clamp(1, INSPECTOR_VISIBLE_ROWS);
-            ui.spawn((
-                ScrollArea {
-                    row_h: INSPECTOR_ROW_H,
-                    rows: visible,
-                    count: item_count,
-                },
-                ScrollPosition::default(),
-                Node {
-                    width: Val::Px(width),
-                    height: Val::Px(INSPECTOR_ROW_H * visible as f32),
-                    flex_direction: FlexDirection::Column,
-                    flex_shrink: 0.0,
-                    overflow: Overflow::scroll_y(),
-                    ..default()
-                },
-                BackgroundColor(theme.track),
-            ))
-            .with_children(|list| {
-                if rows.is_empty() {
-                    list.spawn(kit_text(
-                        &theme,
-                        "Object no longer available",
-                        theme.small_size,
-                        theme.text,
-                    ));
-                }
-                let mut section = None;
-                for row in rows {
-                    if section != Some(row.section) {
-                        section = Some(row.section);
-                        list.spawn(Node {
-                                height: Val::Px(INSPECTOR_ROW_H),
-                                flex_shrink: 0.0,
-                                padding: UiRect::horizontal(Val::Px(theme.pad)),
-                                align_items: AlignItems::Center,
-                                ..default()
-                            }).with_child(kit_text(&theme, row.section, theme.text_size, theme.title));
-                    }
-                    list.spawn((Node {
-                        height: Val::Px(INSPECTOR_ROW_H),
-                        flex_shrink: 0.0,
-                        padding: UiRect::horizontal(Val::Px(theme.pad)),
-                        align_items: AlignItems::Center,
-                        column_gap: Val::Px(4.0),
-                        ..default()
-                    },))
-                        .with_children(|line| {
-                            line.spawn(Node {
-                                    width: Val::Px(136.0),
-                                    flex_shrink: 0.0,
-                                    overflow: Overflow::clip(),
-                                    ..default()
-                                }).with_child(kit_text(&theme, row.label, theme.small_size, theme.text_dim));
-                            if let Some(key) = row.key {
-                                line.spawn((
-                                    text_field(
-                                        &button_theme,
-                                        &row.value,
-                                        "",
-                                        width - 160.0,
-                                        if matches!(key, "captain" | "registry") { 511 } else { 128 },
-                                        TextFilter::Any,
-                                    ),
-                                    InspectorField(key),
-                                ));
-                            } else {
-                                line.spawn(Node {
-                                        flex_grow: 1.0,
-                                        overflow: Overflow::clip(),
-                                        ..default()
-                                    }).with_child(kit_text(&theme, row.value, theme.small_size, theme.text));
-                            }
-                        });
-                }
+            let breadcrumb = link.as_ref().map_or_else(String::new, |link| {
+                super::inspector::class_chain(id, link, content.as_deref())
             });
+            inspector_grid::draw(ui, &theme, &button_theme, width, &breadcrumb, &rows);
             ui.spawn((
                 InspectorError,
                 kit_text(
@@ -242,12 +163,21 @@ pub(super) fn draw(
                     theme.text,
                 ),
             ));
-            ui.spawn((kit_button(&button_theme, "Apply", width), Act::ApplyStats));
-            ui.spawn((
-                kit_button(&button_theme, "Restore", width),
-                Act::RestoreStats,
-            ));
-            ui.spawn((kit_button(&button_theme, "Cancel", width), Act::CloseStats));
+            ui.spawn(Node {
+                width: Val::Px(width),
+                column_gap: Val::Px(8.0),
+                ..default()
+            })
+            .with_children(|footer| {
+                footer.spawn((
+                    kit_button(&button_theme, "OK", (width - 8.0) / 2.0),
+                    Act::ApplyStats,
+                ));
+                footer.spawn((
+                    kit_button(&button_theme, "Cancel", (width - 8.0) / 2.0),
+                    Act::CloseStats,
+                ));
+            });
             return;
         }
         ui.spawn(kit_text(&theme, "Map editor", theme.title_size, theme.text));
@@ -265,8 +195,14 @@ pub(super) fn draw(
                 Act::Save,
             ));
         }
-        if document.as_ref().is_some_and(|doc| doc.can_change_objects()) {
-            ui.spawn((kit_button(&button_theme, "Map properties", width), Act::MapSettings));
+        if document
+            .as_ref()
+            .is_some_and(|doc| doc.can_change_objects())
+        {
+            ui.spawn((
+                kit_button(&button_theme, "Map properties", width),
+                Act::MapSettings,
+            ));
         }
         ui.spawn((
             kit_button(&button_theme, "Return to main menu", width),
