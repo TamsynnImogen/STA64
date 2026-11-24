@@ -1,17 +1,15 @@
-//! Opt-in post-processing (Refit's `postfx`).
+//! Scene post-processing (Refit's `postfx`).
 //!
 //! Refit's effects are not ported as shaders: this uses Bevy 0.20's built-in
 //! ones, which cover the same ground: bloom, tonemapping choice, FXAA/SMAA,
 //! auto-exposure, vignette and chromatic aberration. Film grain is not in
 //! Bevy 0.20 and is left out.
 //!
-//! Everything is off by default, so the stock look is unchanged: with the
-//! default [`PostFx`] no effect component is added to any camera. [`apply`]
-//! adds and removes exactly the components of each switched effect on every
-//! 3D camera except the map's background camera. Nothing here reads or writes
-//! the `AnimClock` or the sim.
+//! The game starts with bloom. The Graphics setting and `--postfx off` can
+//! turn it off. Other effects are opt-in. The map background and the action
+//! window are left out of the bloom pass.
 //!
-//! Enable with `--postfx bloom,smaa` (names: `bloom`, `smaa`, `fxaa`,
+//! Use `--postfx bloom,smaa` to choose effects (names: `bloom`, `smaa`, `fxaa`,
 //! `vignette`, `chromatic`, `exposure`, `aces`, `reinhard`, or `cinematic` for
 //! a preset), or cycle the presets with F8.
 
@@ -20,9 +18,11 @@ use bevy::anti_alias::smaa::Smaa;
 use bevy::camera::Hdr;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::post_process::auto_exposure::{AutoExposure, AutoExposurePlugin};
-use bevy::post_process::bloom::Bloom;
+use bevy::post_process::bloom::{Bloom, BloomCompositeMode, BloomPrefilter};
 use bevy::post_process::effect_stack::{ChromaticAberration, Vignette};
 use bevy::prelude::*;
+use bevy::render::render_resource::{RenderPipelineDescriptor, TextureFormat};
+use bevy::shader::ShaderDefVal;
 
 use crate::map::BackgroundCamera;
 
@@ -54,7 +54,7 @@ impl Default for PostFx {
     fn default() -> Self {
         PostFx {
             bloom: false,
-            bloom_intensity: 0.15,
+            bloom_intensity: 0.12,
             tonemapping: None,
             aa: Aa::Off,
             auto_exposure: false,
@@ -106,6 +106,25 @@ impl PostFx {
     }
 }
 
+/// Refit's thresholded additive HDR pass (A2FOExtensions renderer, read from source).
+pub(super) fn emissive_bloom(intensity: f32) -> Bloom {
+    Bloom {
+        intensity,
+        prefilter: BloomPrefilter { threshold: 1.0, threshold_softness: 0.5 },
+        composite_mode: BloomCompositeMode::Additive,
+        ..Bloom::NATURAL
+    }
+}
+
+/// Preserve the emission above white on HDR scene targets, including with
+/// auto-exposure alone. LDR views use the regular material colour.
+pub(super) fn emissive_hdr_shader_def(descriptor: &mut RenderPipelineDescriptor) {
+    if let Some(fragment) = descriptor.fragment.as_mut() {
+        let hdr = fragment.targets.iter().flatten().any(|target| target.format == TextureFormat::Rgba16Float);
+        fragment.shader_defs.push(ShaderDefVal::UInt("STA64_HDR_EMISSION".into(), u32::from(hdr)));
+    }
+}
+
 /// Marks a camera whose MSAA this module turned off for FXAA/SMAA.
 #[derive(Component)]
 pub struct PostFxMsaa;
@@ -117,7 +136,11 @@ pub struct PostFxPlugin {
 impl PostFxPlugin {
     /// From the `--postfx` argument(s).
     pub fn from_cfg(cfg: &crate::app::LaunchConfig) -> PostFxPlugin {
-        let (initial, unknown) = PostFx::parse(&cfg.postfx.join(","));
+        let (initial, unknown) = if cfg.postfx.is_empty() {
+            PostFx::parse("bloom")
+        } else {
+            PostFx::parse(&cfg.postfx.join(","))
+        };
         for u in unknown {
             warn!("--postfx: unknown effect `{u}`");
         }
@@ -176,7 +199,7 @@ pub fn apply(
             continue;
         }
         if fx.bloom {
-            cam.try_insert(Bloom { intensity: fx.bloom_intensity, ..Bloom::NATURAL });
+            cam.try_insert(emissive_bloom(fx.bloom_intensity));
         } else {
             cam.try_remove::<Bloom>();
         }
@@ -288,6 +311,14 @@ mod tests {
     }
 
     #[test]
+    fn game_starts_with_bloom_and_explicit_off_is_respected() {
+        let mut config = crate::app::LaunchConfig::default();
+        assert!(PostFxPlugin::from_cfg(&config).initial.bloom);
+        config.postfx.push("off".into());
+        assert!(!PostFxPlugin::from_cfg(&config).initial.bloom);
+    }
+
+    #[test]
     fn default_adds_nothing() {
         let (app, main, _) = app(PostFx::default());
         assert!(!has::<Bloom>(&app, main));
@@ -304,6 +335,11 @@ mod tests {
         *app.world_mut().resource_mut::<PostFx>() = PostFx { bloom: true, aa: Aa::Smaa, vignette: true, tonemapping: Some(Tonemapping::AcesFitted), ..default() };
         app.update();
         assert!(has::<Bloom>(&app, main) && has::<Hdr>(&app, main));
+        let bloom = app.world().get::<Bloom>(main).unwrap();
+        assert_eq!(bloom.intensity, 0.12);
+        assert_eq!(bloom.prefilter.threshold, 1.0);
+        assert_eq!(bloom.prefilter.threshold_softness, 0.5);
+        assert_eq!(bloom.composite_mode, BloomCompositeMode::Additive);
         assert!(has::<Smaa>(&app, main) && !has::<Fxaa>(&app, main));
         assert!(has::<Vignette>(&app, main) && !has::<ChromaticAberration>(&app, main));
         assert_eq!(app.world().get::<Msaa>(main), Some(&Msaa::Off));

@@ -57,6 +57,7 @@ pub(super) fn draw(
         return;
     };
     let modal = editing.inspected.is_some() || editing.map_settings;
+    let inspector = editing.inspected.is_some() && !editing.map_settings;
     let same_inspector = modal
         && roots
             .iter()
@@ -93,9 +94,14 @@ pub(super) fn draw(
         Node {
             position_type: PositionType::Absolute,
             top: Val::Px(14.0),
+            bottom: if inspector { Val::Px(14.0) } else { Val::Auto },
             left: Val::Px(14.0),
             width: Val::Px(if modal { INSPECTOR_WIDTH } else { WIDTH }),
-            max_height: Val::Percent(96.0),
+            max_height: if inspector {
+                Val::Auto
+            } else {
+                Val::Percent(96.0)
+            },
             overflow: Overflow::clip(),
             flex_direction: FlexDirection::Column,
             row_gap: Val::Px(3.0),
@@ -165,6 +171,7 @@ pub(super) fn draw(
             ));
             ui.spawn(Node {
                 width: Val::Px(width),
+                flex_shrink: 0.0,
                 column_gap: Val::Px(8.0),
                 ..default()
             })
