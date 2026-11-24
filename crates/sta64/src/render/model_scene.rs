@@ -178,11 +178,11 @@ pub struct SpawnCtx<'a, 'w, 's> {
 
 /// Spawn `model` under `root`. Only the finest LOD level of each LOD switch is shown.
 pub fn spawn(ctx: &mut SpawnCtx, model: &Model, root: Entity) -> SpawnStats {
-    spawn_impl(ctx, model, root, None, None)
+    spawn_impl(ctx, model, root, root, None, None)
 }
 
 pub fn spawn_with_odf(ctx: &mut SpawnCtx, model: &Model, root: Entity, odf: &sta_odf::Odf) -> SpawnStats {
-    spawn_impl(ctx, model, root, None, Some(odf))
+    spawn_impl(ctx, model, root, root, None, Some(odf))
 }
 
 /// Spawn an unfinished instance with deterministic spatial geometry reveal.
@@ -198,16 +198,30 @@ pub fn spawn_construction(
 ) -> SpawnStats {
     let progress = progress.clamp(0.0, 1.0);
     if progress >= 1.0 {
-        spawn_impl(ctx, model, root, None, odf)
+        spawn_impl(ctx, model, root, root, None, odf)
     } else {
-        spawn_impl(ctx, model, root, Some((chunks.clamp(1, 256), progress)), odf)
+        spawn_impl(ctx, model, root, root, Some((chunks.clamp(1, 256), progress)), odf)
     }
+}
+
+/// Put the model under a visual pivot while keeping the original unit as
+/// the owner of its appearance, construction, hardpoints, and animation.
+pub(super) fn spawn_attached(
+    ctx: &mut SpawnCtx,
+    model: &Model,
+    root: Entity,
+    visual_parent: Entity,
+    construction: Option<(u16, f32)>,
+    odf: &sta_odf::Odf,
+) -> SpawnStats {
+    spawn_impl(ctx, model, root, visual_parent, construction, Some(odf))
 }
 
 fn spawn_impl(
     ctx: &mut SpawnCtx,
     model: &Model,
     root: Entity,
+    visual_parent: Entity,
     construction: Option<(u16, f32)>,
     odf: Option<&sta_odf::Odf>,
 ) -> SpawnStats {
@@ -291,7 +305,7 @@ fn spawn_impl(
         if hidden.contains(&i) {
             continue;
         }
-        let parent = node.parent.and_then(|p| entities[p]).unwrap_or(root);
+        let parent = node.parent.and_then(|p| entities[p]).unwrap_or(visual_parent);
         let mut base = to_bevy(&node.transform);
         base.translation *= ctx.scale;
         let node_visibility = if start_hidden.contains(&i) { Visibility::Hidden } else { Visibility::default() };

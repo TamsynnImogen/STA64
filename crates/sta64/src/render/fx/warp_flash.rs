@@ -1,4 +1,4 @@
-//! Armada II's additive warp-entry sprite. Timing and projection follow
+//! Armada II's additive warp-entry sprite and cruise hull stretch. Timing and projection follow
 //! Armada2.exe's mWarpCheck (0x004b3ce0, 0x004ad4a0), CreateWarpSpriteEffect
 //! (0x0059c380), and WarpSpriteEffect::Render (0x0059ca40).
 
@@ -16,7 +16,7 @@ use crate::map::MainCamera;
 use crate::render::sprites::{self, SpriteTables};
 use crate::render::textures::{Loader, TextureCache};
 use crate::render::units::{LocalPlayer, cinematic_reveal, drawn_units, to_bevy};
-use crate::sim_link::{ContentRes, SimLink};
+use crate::sim_link::{ContentRes, SimEntity, SimLink};
 use crate::ui::presentation::CineractiveState;
 use crate::viewer::Mounted;
 
@@ -37,11 +37,73 @@ struct WarpHistory {
     in_warp: BTreeSet<EntityId>,
 }
 
+/// Keeps the stretch on the ship model, off the selection and simulation root.
+#[derive(Component)]
+pub(crate) struct WarpHull {
+    pub pivot_z: f32,
+}
+
 pub(super) fn register(app: &mut App) {
     app.add_systems(
         Update,
         (track, place, attach).chain().in_set(GameSet::Interpolate),
-    );
+    )
+    .add_systems(Update, stretch_hulls.in_set(GameSet::Render));
+}
+
+fn warp_speeds(link: &SimLink, unit: &UnitView, def: &sta_content::UnitDef) -> (f32, f32) {
+    let impulse = link.impulse_cap(unit.id).unwrap_or(def.movement.max_speed);
+    let rows = &link.real_curr().attrs.warp;
+    let warp = rows
+        .binary_search_by_key(&unit.id, |(id, _)| *id)
+        .ok()
+        .map_or(def.movement.warp_speed, |index| rows[index].1);
+    (impulse.to_f32(), warp.to_f32())
+}
+
+/// mWarpCheck's stock longitudinal stretch at full warp speed.
+fn cruise_stretch(impulse: f32, warp: f32) -> f32 {
+    (0.6 * warp / (impulse + 0.1)).clamp(1.5, 6.0)
+}
+
+fn stretch_hulls(
+    link: Option<Res<SimLink>>,
+    content: Option<Res<ContentRes>>,
+    clock: Res<AnimClock>,
+    ships: Query<&SimEntity>,
+    mut models: Query<(&WarpHull, &ChildOf, &mut Transform)>,
+) {
+    let source = link.as_deref().zip(content.as_deref());
+    for (model, parent, mut transform) in &mut models {
+        let stretch = source
+            .and_then(|(link, content)| {
+                let id = ships.get(parent.parent()).ok()?.0;
+                link.warp_phase(id)?;
+                let unit = link.real_curr().unit(id)?;
+                let def = content.0.unit(unit.def)?;
+                let (impulse, warp) = warp_speeds(link, unit, def);
+                if warp <= impulse || impulse < 0.0 {
+                    return None;
+                }
+                let now = unit.speed.to_f32();
+                let then = link
+                    .prev()
+                    .unit(id)
+                    .map_or(now, |previous| previous.speed.to_f32());
+                let speed = then + (now - then) * clock.alpha();
+                // The original sweeps a deformation plane through the mesh. Use
+                // the live speed ramp for the visual transform during the transition.
+                let progress = ((speed - impulse) / (warp - impulse)).clamp(0.0, 1.0);
+                Some(1.0 + (cruise_stretch(impulse, warp) - 1.0) * progress)
+            })
+            .unwrap_or(1.0);
+        let scale = Vec3::new(1.0, 1.0, stretch);
+        let translation = Vec3::Z * (model.pivot_z * (1.0 - stretch));
+        if transform.scale != scale || transform.translation != translation {
+            transform.scale = scale;
+            transform.translation = translation;
+        }
+    }
 }
 
 /// mWarpCheck multiplies its clamped transition time by the warp speed.
@@ -50,7 +112,7 @@ fn warp_reach(radius: f32, impulse: f32, warp: f32, speed: f32) -> Option<f32> {
     if radius <= 0.0 || impulse < 0.0 || warp <= impulse {
         return None;
     }
-    let stretch = (0.6 * warp / (impulse + 0.1)).clamp(1.5, 6.0);
+    let stretch = cruise_stretch(impulse, warp);
     let acceleration_span = warp - speed.clamp(0.0, impulse);
     let duration = ((stretch - 1.0) * (2.0 * radius) / acceleration_span).clamp(0.1, 3.0);
     Some(duration * warp)
@@ -105,17 +167,7 @@ fn track(
                 continue;
             };
             let radius = def.radius.to_f32();
-            let impulse = link
-                .impulse_cap(id)
-                .unwrap_or(def.movement.max_speed)
-                .to_f32();
-            let warp = view
-                .attrs
-                .warp
-                .binary_search_by_key(&id, |(id, _)| *id)
-                .ok()
-                .map_or(def.movement.warp_speed, |index| view.attrs.warp[index].1)
-                .to_f32();
+            let (impulse, warp) = warp_speeds(&link, unit, def);
             let speed = link.prev().unit(id).unwrap_or(unit).speed.to_f32();
             let Some(reach) = warp_reach(radius, impulse, warp, speed) else {
                 continue;

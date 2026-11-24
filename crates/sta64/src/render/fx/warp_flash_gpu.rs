@@ -40,7 +40,14 @@ impl WorldSource for WarpSource {
         self.stage = self.stage.saturating_add(1);
         let mut next = (*self.view).clone();
         next.tick += 1;
-        next.units[0].pos.z = Fixed::from_int(-80 * i32::from(self.stage));
+        // Clear the entry effect by moving well beyond its reach, then hold the
+        // same pose for the cruise/normal comparison below.
+        next.units[0].pos.z = Fixed::from_int(-80 * i32::from(self.stage.min(3)));
+        next.units[0].speed = Fixed::from_int(if (2..=3).contains(&self.stage) {
+            100
+        } else {
+            0
+        });
         self.view = Arc::new(next);
         TickOutput {
             view: self.view.clone(),
@@ -50,8 +57,8 @@ impl WorldSource for WarpSource {
 
     fn warp_phases(&self) -> Vec<(EntityId, bool)> {
         match self.stage {
-            1 | 2 => vec![(ID, true)],
-            3 => vec![(ID, false)],
+            1 | 2 | 3 => vec![(ID, true)],
+            4 => vec![(ID, false)],
             _ => Vec::new(),
         }
     }
@@ -194,13 +201,16 @@ fn mounted_warp_sprite_contributes_pixels_then_disappears() {
         .world_mut()
         .resource_mut::<Assets<Image>>()
         .add(target_image);
-    app.world_mut().spawn((
-        Camera3d::default(),
-        RenderTarget::from(target.clone()),
-        Msaa::Off,
-        Tonemapping::None,
-        Transform::from_xyz(0.0, 0.0, 180.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
+    let camera = app
+        .world_mut()
+        .spawn((
+            Camera3d::default(),
+            RenderTarget::from(target.clone()),
+            Msaa::Off,
+            Tonemapping::None,
+            Transform::from_xyz(0.0, 0.0, 180.0).looking_at(Vec3::ZERO, Vec3::Y),
+        ))
+        .id();
     app.finish();
     app.cleanup();
 
@@ -250,12 +260,88 @@ fn mounted_warp_sprite_contributes_pixels_then_disappears() {
         0,
         "warp flash remained after leaving its reach"
     );
+    assert_eq!(app.world().resource::<SimLink>().warp_phase(ID), Some(true));
+
+    // The stage-3 pose remains fixed as the scripted phase drops out. A simple
+    // unlit hull makes the real WarpHull transform visible without a mounted model.
+    let root = app
+        .world_mut()
+        .spawn((
+            crate::sim_link::SimEntity(ID),
+            Transform::IDENTITY,
+            Visibility::default(),
+        ))
+        .id();
+    let mesh = app
+        .world_mut()
+        .resource_mut::<Assets<Mesh>>()
+        .add(Cuboid::new(6.0, 4.0, 16.0));
+    let material = app
+        .world_mut()
+        .resource_mut::<Assets<StandardMaterial>>()
+        .add(StandardMaterial {
+            base_color: Color::srgb(0.2, 0.8, 1.0),
+            unlit: true,
+            ..default()
+        });
+    app.world_mut().spawn((
+        super::WarpHull { pivot_z: 0.0 },
+        Transform::IDENTITY,
+        Visibility::Inherited,
+        ChildOf(root),
+        Mesh3d(mesh),
+        MeshMaterial3d(material),
+    ));
+    *app.world_mut().get_mut::<Transform>(camera).unwrap() =
+        Transform::from_xyz(100.0, 0.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y);
+    for _ in 0..3 {
+        app.update();
+    }
+    let cruise = frame(&mut app, &target);
+    app.world_mut()
+        .resource_mut::<SimLink>()
+        .tick()
+        .expect("scripted warp-out tick");
+    app.world_mut()
+        .resource_mut::<SimLink>()
+        .tick()
+        .expect("scripted phase-clear tick");
+    for _ in 0..3 {
+        app.update();
+    }
+    let normal = frame(&mut app, &target);
+    assert_eq!(app.world().resource::<SimLink>().warp_phase(ID), None);
+    let width = |image: &image::RgbaImage| {
+        let xs = image
+            .pixels()
+            .enumerate()
+            .filter_map(|(i, p)| (p[0] > 5 || p[1] > 5 || p[2] > 5).then_some((i as u32) % SIZE));
+        let (min, max) = xs.fold((SIZE, 0), |(min, max), x| (min.min(x), max.max(x)));
+        max.saturating_sub(min)
+    };
+    let cruise_width = width(&cruise);
+    let normal_width = width(&normal);
+    eprintln!("WarpHull side-view widths: cruise={cruise_width}px normal={normal_width}px");
+    assert!(
+        cruise_width > 0 && normal_width > 0,
+        "WarpHull comparison was not visible"
+    );
+    assert!(
+        cruise_width > 2 * normal_width,
+        "cruise hull was not visibly elongated"
+    );
     if let Ok(dir) = std::env::var("STA64_GPU_OUT") {
         std::fs::create_dir_all(&dir).unwrap();
         active
             .save(std::path::Path::new(&dir).join("warp-flash-active.png"))
             .unwrap();
         gone.save(std::path::Path::new(&dir).join("warp-flash-gone.png"))
+            .unwrap();
+        cruise
+            .save(std::path::Path::new(&dir).join("warp-flash-cruise.png"))
+            .unwrap();
+        normal
+            .save(std::path::Path::new(&dir).join("warp-flash-normal.png"))
             .unwrap();
     }
 }

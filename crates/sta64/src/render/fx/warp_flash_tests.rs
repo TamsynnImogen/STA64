@@ -2,7 +2,7 @@ use super::{WarpFlash, register, warp_reach};
 
 use crate::app::configure_sets;
 use crate::clock::AnimClock;
-use crate::sim_link::{ContentRes, SimLink};
+use crate::sim_link::{ContentRes, SimEntity, SimLink};
 use bevy::prelude::*;
 use sta_content::{ContentDb, MapDef, MoveStats, UnitDef};
 use sta_sim::command::{CommandKind, LocalRouter, Order};
@@ -161,6 +161,67 @@ fn a_live_move_warp_creates_one_flash_and_warp_out_does_not_retrigger_it() {
         0,
         "the effect expired after the ship cleared it"
     );
+}
+
+#[test]
+fn long_warp_flash_expires_while_hull_stays_stretched_until_dropout() {
+    let (mut app, id) = live_app();
+    let root_transform = Transform::from_xyz(7.0, 11.0, 13.0)
+        .with_rotation(Quat::from_rotation_y(0.37))
+        .with_scale(Vec3::new(2.0, 3.0, 4.0));
+    let root = app.world_mut().spawn((SimEntity(id), root_transform)).id();
+    let centre = Vec3::Z * 7.0;
+    let hull = app
+        .world_mut()
+        .spawn((
+            super::WarpHull { pivot_z: centre.z },
+            Transform::IDENTITY,
+            ChildOf(root),
+        ))
+        .id();
+
+    app.update();
+    order(&mut app, id, true);
+    let mut flashed = false;
+    let mut cruised_after_flash = false;
+    let mut dropping_out = false;
+    let mut restored = false;
+    let mut previous_stretch = 1.0;
+    for _ in 0..1500 {
+        step(&mut app);
+        let phase = app.world().resource::<SimLink>().warp_phase(id);
+        let transform = *app.world().get::<Transform>(hull).unwrap();
+        let stretch = transform.scale.z;
+        let flash_active = flash_count(&mut app) > 0;
+        flashed |= flash_active;
+        assert!((transform.transform_point(centre) - centre).length() < 0.001);
+        match phase {
+            Some(true) if flashed && !flash_active => {
+                assert!(
+                    stretch > 2.9,
+                    "the hull holds its full warp stretch after the flash"
+                );
+                cruised_after_flash = true;
+            }
+            Some(false) => {
+                assert!(
+                    stretch <= previous_stretch,
+                    "warp-out winds down the stretch"
+                );
+                dropping_out = true;
+            }
+            None if dropping_out => {
+                assert_eq!(transform, Transform::IDENTITY);
+                restored = true;
+                break;
+            }
+            _ => {}
+        }
+        previous_stretch = stretch;
+    }
+
+    assert!(flashed && cruised_after_flash && dropping_out && restored);
+    assert_eq!(*app.world().get::<Transform>(root).unwrap(), root_transform);
 }
 
 #[test]

@@ -508,7 +508,20 @@ pub(crate) fn attach_models(
             .and_then(|unit| link.curr().unit(unit.0))
             .and_then(|unit| unit.progress)
             .map(|progress| progress.to_f32().clamp(0.0, 1.0)));
-        let stats = if progress.is_some_and(|progress| progress < 1.0) {
+        let partial = progress.is_some_and(|progress| progress < 1.0);
+        let warp_craft = sim.is_some()
+            && override_model.is_none()
+            && content.0.profile() == sta_content::Profile::Sta2Classic
+            && sta_sim::world::EntityKind::of_def(def) == sta_sim::world::EntityKind::Craft
+            && !def.is_evolver();
+        let stats = if warp_craft {
+            let visual = ctx.commands.spawn((
+                crate::render::fx::warp_flash::WarpHull { pivot_z: centre.z },
+                Transform::IDENTITY, Visibility::Inherited, ChildOf(e),
+            )).id();
+            let construction = partial.then(|| (construction_chunk_count(def), 0.0));
+            model_scene::spawn_attached(&mut ctx, &model, e, visual, construction, &def.raw)
+        } else if partial {
             let chunks = construction_chunk_count(def);
             model_scene::spawn_construction(&mut ctx, &model, e, chunks, 0.0, Some(&def.raw))
         } else {
