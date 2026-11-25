@@ -168,6 +168,7 @@ impl Sim {
         self.start_effects.remove(id);
         self.replacements.remove(id);
         self.specials.a1.remove_entity(id);
+        self.specials.a2.remove_entity(id);
         self.subsystems.remove(id);
         self.zero_shield_holds.remove(id);
         self.attrs.remove(id);

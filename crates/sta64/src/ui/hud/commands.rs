@@ -80,11 +80,14 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
     let specials = specials_of(db, def)
         .enumerate()
         .filter_map(|(slot, (kind, weapon))| {
-            // Point defence is listed only where its energy toggle is supported.
+            // A1's speed rail has five authored places. A2's palette includes
+            // higher button slots, including the stock self-destruct command.
             (slot <= u8::MAX as usize
-                && matches!(kind, SpecialKind::Cloak | SpecialKind::PointDefence | SpecialKind::Replace | SpecialKind::A1(_))
                 && (kind != SpecialKind::A1(sta_content::A1SpecialKind::DetectCloak))
+                && weapon.raw.i64("buttonSlot") != Some(-1)
                 && (!matches!(kind, SpecialKind::A1(_))
+                    || db.profile() != sta_content::Profile::Sta1Classic
+                        && !db.weapon_features(weapon).a1_compat
                     || weapon.raw.i64("buttonSlot").is_some_and(|n| (1..=5).contains(&n)))
                 && !super::avatar::choice_weapon(def, kind, weapon)).then_some((slot as u8, kind))
         })

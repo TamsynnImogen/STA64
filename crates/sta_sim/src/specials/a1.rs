@@ -89,7 +89,7 @@ fn special<'a>(
     Some((mount, w, w.a1_special?))
 }
 
-fn in_range(from: Vec3, to: Vec3, radius: Fixed) -> bool {
+pub(super) fn in_range(from: Vec3, to: Vec3, radius: Fixed) -> bool {
     // Widen before squaring. Stock Temporal weapons have a 99,999 unit
     // cast range, and a point received over the wire can be much farther.
     if radius < Fixed::ZERO {
@@ -211,16 +211,13 @@ pub fn a1_special_researched(view: &WorldView, db: &ContentDb, unit: EntityId, s
     let Some((_, w, _)) = special(db, def, slot) else {
         return false;
     };
-    researched(
-        db,
-        w,
-        &ViewTech {
-            db,
-            view,
-            player: u.owner,
-            race: &def.race,
-        },
-    )
+    researched_in_view(view, db, unit, w)
+}
+
+pub(super) fn researched_in_view(view: &WorldView, db: &ContentDb, unit: EntityId, w: &WeaponDef) -> bool {
+    let Some(u) = view.unit(unit) else { return false };
+    let Some(def) = db.unit(u.def) else { return false };
+    researched(db, w, &ViewTech { db, view, player: u.owner, race: &def.race })
 }
 
 pub fn a1_special_active(view: &WorldView, unit: EntityId, slot: u8) -> bool {
@@ -526,10 +523,12 @@ impl Specials {
             .holds
             .get(id)
             .is_some_and(|h| h.engines > now || h.stasis > now)
+            || self.a2_held(id, crate::command::Subsystem::Engines, now)
     }
 
     pub(crate) fn shields_held(&self, id: EntityId, now: Tick) -> bool {
         self.a1.holds.get(id).is_some_and(|h| h.shields > now)
+            || self.a2_held(id, crate::command::Subsystem::Shields, now)
     }
 
     pub(crate) fn is_gemini(&self, id: EntityId) -> bool {
@@ -590,6 +589,7 @@ impl Sim {
         if !pd_on
             && (caster.flags.contains(UnitFlags::WEAPONS_OFF)
                 || self.specials.stasis(id, self.tick)
+                || self.specials.a2_held(id, crate::command::Subsystem::Weapons, self.tick)
                 || self.specials.is_gemini(id)
                 || self.specials.a1.cooling(id, slot, self.tick)
                 || !researched_in_world(
@@ -946,7 +946,7 @@ impl Sim {
         }
     }
 
-    pub(crate) fn reflect_a1_hits(&mut self, db: &ContentDb, from: usize) {
+    pub(crate) fn reflect_special_hits(&mut self, db: &ContentDb, from: usize) {
         if self.specials.a1.holds.is_empty() {
             return;
         }
@@ -998,6 +998,20 @@ impl Sim {
             };
             if !dip.is_enemy(defender.owner, source.owner) {
                 continue;
+            }
+            if let Some((reflect, return_to_source)) = rule.reflect_chance {
+                let roll = |rng: &mut crate::Rng| Fixed::from_bits((rng.next_u64() >> 32) as i64);
+                if roll(&mut self.rng) >= reflect {
+                    continue;
+                }
+                let return_it = roll(&mut self.rng) < return_to_source;
+                // Missiles can be thrown off course; beams are aimed back at
+                // the source after a successful reflection.
+                if incoming.kind == WeaponKind::Projectile && !return_it {
+                    *weapon = key;
+                    *hull = Fixed::ZERO;
+                    continue;
+                }
             }
             (*target, *by) = (*by, *target);
             *face = facing(source.heading, source.pos, defender.pos);

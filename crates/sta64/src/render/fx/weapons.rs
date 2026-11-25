@@ -91,6 +91,7 @@ pub struct WeaponFx {
     seed: f32,
     /// The target (a unit) has gone: the beam is falling off from there.
     target_lost: bool,
+    sustained_slot: Option<u8>,
 }
 
 impl WeaponFx {
@@ -248,6 +249,13 @@ pub(crate) fn spawn_fx(
                     .unwrap_or(from);
                 let recipe = recipe_for(def, &recipes);
                 let seed = shot_seed(*shooter, *weapon, clock.tick());
+                let sustained_slot = def.a2_special.filter(|s| s.effect.sustained_beam()).and_then(|_| {
+                    let unit = link.curr().unit(*shooter)?;
+                    let craft = content.0.unit(unit.def)?;
+                    sta_sim::specials::specials_indexed(&content.0, craft)
+                        .position(|(index, _, _)| index == usize::from(*hardpoint))
+                        .and_then(|slot| u8::try_from(slot).ok())
+                });
                 let mk = |kind, life: f32, look: Look| WeaponFx {
                     kind,
                     shooter: *shooter,
@@ -262,6 +270,7 @@ pub(crate) fn spawn_fx(
                     look,
                     seed,
                     target_lost: false,
+                    sustained_slot,
                 };
                 // Refit's emitter flare: `Fx::flare` at the start, `Emitter` half widths.
                 let flare = Look::flare(recipe.col, FLARE_CORE, 3.5, recipe.star, FLARE_STAR_SHARP, 0.0, 20.0, seed);
@@ -323,7 +332,9 @@ pub(super) fn update_fx(
     let eye = camera.single().ok().map(|c| c.translation());
     for (e, mut fx, mut tf, mut a, model_beam) in &mut q {
         let age = (now_ticks - fx.fired as f64) as f32;
-        if age >= fx.life {
+        if age >= fx.life || fx.sustained_slot.is_some_and(|slot| {
+            !sta_sim::specials::a1_special_active(link.curr(), fx.shooter, slot)
+        }) {
             cmds.entity(e).try_despawn();
             continue;
         }

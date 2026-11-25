@@ -193,7 +193,7 @@ impl Sim {
             return;
         }
         let dip = crate::relations::Diplomacy::new(&self.players, &self.relations);
-        let visibility = crate::sensors::compute(&self.units, Some(&db), dip);
+        let visibility = crate::sensors::compute(&self.units, Some(&db), dip, &self.specials, self.tick);
         let mut orders: Vec<(EntityId, EntityId)> = Vec::new();
         for u in self.units.iter() {
             let Some(def) = db.unit(u.def) else { continue };

@@ -457,16 +457,23 @@ impl Sim {
             }
             Order::Cloak { units, on } => {
                 let Some(db) = self.content.clone() else { return false };
-                self.specials.order_cloak(&db, &self.units, c.player, units, *on)
+                let eligible: Vec<_> = units.iter().copied().filter(|&id| {
+                    !*on || self.phase_cloak_researched(&db, c.player, id, None)
+                }).collect();
+                self.specials.order_cloak(&db, &self.units, c.player, &eligible, *on)
             }
             Order::Special { units, slot, target } => {
                 let Some(db) = self.content.clone() else { return false };
                 let mut legacy = Vec::new();
                 let mut accepted = false;
-                for &id in units {
-                    match self.order_a1_special(&db, c.player, id, *slot, *target) {
+                let mut seen = std::collections::BTreeSet::new();
+                for &id in units.iter().filter(|&&id| seen.insert(id)) {
+                    match self.order_a2_special(&db, c.player, id, *slot, *target)
+                        .or_else(|| self.order_a1_special(&db, c.player, id, *slot, *target))
+                    {
                         Some(took) => accepted |= took,
-                        None => legacy.push(id),
+                        None if self.phase_cloak_researched(&db, c.player, id, Some(*slot)) => legacy.push(id),
+                        None => {}
                     }
                 }
                 if legacy.is_empty() {
@@ -559,6 +566,7 @@ impl Sim {
             self.specials.step(&mut self.units, &db, &mut self.events);
             self.forget_hits_of_cloakers(cloak_from);
             let from = self.events.len();
+            let mut lost = self.step_a2_specials(&db);
             self.step_a1_ordnance(&db);
             let mut held = if db.features().builder_hold_fire { self.production.builders_at_work() } else { Vec::new() };
             held.extend(self.scripted.holding_fire());
@@ -567,7 +575,7 @@ impl Sim {
             let crew_delay = self.crew_weapon_delays(&db);
             self.weapons.set_crew_delay(crew_delay);
             self.weapons.step_with_perception(self.tick, &self.units, &db, relations::Diplomacy::new(&self.players, &self.relations), &self.perception, &mut self.specials, &mut self.rng, &self.switches, &self.alerts, &mut self.events);
-            self.reflect_a1_hits(&db, from);
+            self.reflect_special_hits(&db, from);
             self.record_engagement(from);
             self.record_enemy_hits(from);
             // An attack whose target is gone leaves no course behind (SIM-36).
@@ -577,7 +585,6 @@ impl Sim {
                 }
                 self.approach_warp.end(id);
             }
-            let mut lost = Vec::new();
             // Pause station recovery for incoming positive hits, including
             // casualty hits whose final hull-damage event may become zero.
             self.recrew.note_hits(&self.units, &db, &self.events[from..], self.tick);
@@ -595,7 +602,13 @@ impl Sim {
             self.step_recycles();
             let mut casualties = combat::casualty::Ctx { upgrades: &upgrades, subsystems: &mut self.subsystems, rng: &mut self.rng, switches: &self.switches, colonies: &mut self.colonies };
             combat::casualty::step(&mut self.units, &db, &mut casualties);
-            combat::casualty::nebula_life_support(&mut self.units, &db, &mut casualties, &nebula_holds.life_support_off);
+            let mut life_support_off = nebula_holds.life_support_off;
+            life_support_off.extend(self.specials.a2_disabled_units().filter(|&id| {
+                self.specials.a2_held(id, command::Subsystem::LifeSupport, self.tick)
+            }));
+            life_support_off.sort_unstable();
+            life_support_off.dedup();
+            combat::casualty::nebula_life_support(&mut self.units, &db, &mut casualties, &life_support_off);
             for (id, by) in killed {
                 lost.extend(self.units.get(id).map(|u| u.owner));
                 self.despawn(id, by);
@@ -692,6 +705,9 @@ impl Sim {
             if self.specials.engines_held(entity.id, self.tick) {
                 view.flags = view.flags | view::UnitFlags::ENGINES_OFF;
             }
+            if self.specials.a2_held(entity.id, command::Subsystem::Weapons, self.tick) {
+                view.flags = view.flags | view::UnitFlags::WEAPONS_OFF;
+            }
             if matches!(entity.kind, EntityKind::Craft | EntityKind::Station) {
                 view.autonomy = Some(self.autonomy.levels(entity.id));
             }
@@ -721,7 +737,7 @@ impl Sim {
                     .collect(),
             })
             .collect();
-        let mut visibility = sensors::compute(&self.units, self.content.as_deref(), relations::Diplomacy::new(&self.players, &self.relations));
+        let mut visibility = sensors::compute(&self.units, self.content.as_deref(), relations::Diplomacy::new(&self.players, &self.relations), &self.specials, self.tick);
         if !hidden.is_empty() {
             // Both lists ascend by id.
             for (_, seen) in &mut visibility {
@@ -730,7 +746,7 @@ impl Sim {
         }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
         let active_point_defence = self.content.as_deref().map_or_else(Vec::new, |db| self.weapons.active_point_defence(db, &self.units));
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), alerts: self.alerts.levels(), enemy_hit: self.alerts.hits(), ally_attacks: self.alerts.ally_rows().to_vec(), special_forces: self.switches.special_forces(), mission_switches: self.mission_switches, ..self.attrs.view() }, active_point_defence, a1_specials: self.specials.a1.view(self.tick, &self.units, self.content.as_deref()) }
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), alerts: self.alerts.levels(), enemy_hit: self.alerts.hits(), ally_attacks: self.alerts.ally_rows().to_vec(), special_forces: self.switches.special_forces(), mission_switches: self.mission_switches, ..self.attrs.view() }, active_point_defence, a1_specials: self.specials.effect_view(self.tick, &self.units, self.content.as_deref()) }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content
