@@ -8,8 +8,9 @@
 //! - **idle** moves the camera to an idle ship. Which ships the original counts
 //!   as idle is its overview's own list (not read); here it is an own craft that
 //!   can move and stands still, not building or docked (ours), taken in turn;
-//! - **comm**, **help** (cycles three tooltip states), **palette** (the popup
-//!   palette) and **toggle** (swaps cameras) drive systems STA64 does not have yet: drawn, disabled.
+//! - **toggle** swaps the strategic and tactical cameras;
+//! - **comm**, **help** (cycles three tooltip states) and **palette** (the popup
+//!   palette) drive systems STA64 does not have yet: drawn, disabled.
 //! - **more** shows and hides the second row (menu, help, palette). Grades: the install's tooltip text
 //!   for it says it shows more buttons and names help, palette and the options menu (read from data); a
 //!   static reading of the executable agrees. An older reading took it as moving the panel between two
@@ -46,6 +47,8 @@ pub(in crate::ui::hud) enum PanelButton {
     Menu,
     Objectives,
     Idle,
+    /// Swap the strategic and tactical cameras.
+    ToggleView,
     /// The Armada I action camera's picture (UI-53): a click goes to what it shows.
     ActionView,
     /// Shows or hides the second row (menu, help, palette).
@@ -98,7 +101,7 @@ pub(in crate::ui::hud) const BUTTONS: [PanelKeys; 8] = [
     keys("menuButtonArea", "menuButton", "menu_button", PanelButton::Menu, "Menu", None),
     keys("commButtonArea", "commButton", "comm_button", PanelButton::Unavailable, "Communications", None),
     keys("idleButtonArea", "idleButton", "idle_button", PanelButton::Idle, "Next idle ship", Some("Focus the next ship with no orders.")),
-    keys("toggleButtonArea", "toggleButton", "toggle_button", PanelButton::Unavailable, "Toggle view", Some("Switch between strategic and tactical views.")),
+    keys("toggleButtonArea", "toggleButton", "toggle_button", PanelButton::ToggleView, "Toggle view", Some("Switch between strategic and tactical views.")),
     keys("objectivesButtonArea", "objectivesButton", "objectives_button", PanelButton::Objectives, "Objectives", Some("Show current mission objectives.")),
     keys("helpButtonArea", "helpButton", "help_button", PanelButton::Unavailable, "Help", Some("Turn tooltip help on or off.")),
     keys("paletteButtonArea", "paletteButton", "palette_button", PanelButton::Unavailable, "Command palette", Some("Switch the command palette between persistent and popup modes.")),
@@ -222,14 +225,21 @@ pub(in crate::ui::hud) fn press(
     (subject, entities): (Option<Res<crate::render::action_camera::ActionSubject>>, Option<Res<crate::sim_link::SimEntities>>),
     mut last: Local<Option<sta_sim::EntityId>>,
     mut more: ResMut<ShowMore>,
+    tactical: Option<ResMut<crate::input::camera_tactical::TacticalView>>,
 ) {
     let mut objectives = objectives;
+    let mut tactical = tactical;
     for ButtonClicked(entity) in clicks.read() {
         match buttons.get(*entity) {
             Ok(PanelButton::Menu) => {
                 menu.write(OpenInGameMenu);
             }
             Ok(PanelButton::More) => more.0 = !more.0,
+            Ok(PanelButton::ToggleView) => {
+                if let Some(view) = tactical.as_mut() {
+                    view.request_toggle();
+                }
+            }
             Ok(PanelButton::Objectives) => {
                 if let Some(o) = objectives.as_mut() {
                     o.visible = true;

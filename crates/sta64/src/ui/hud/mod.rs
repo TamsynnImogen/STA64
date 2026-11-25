@@ -422,15 +422,14 @@ fn pointer(
 }
 
 /// Presses: grid cells and group tiles.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)] // group related resources within Bevy's parameter limit
 fn press(
     mut clicks: MessageReader<ButtonClicked>,
     cells: Query<&GridCell>,
     tiles: Query<&GroupTile>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
     bindings: Option<Res<crate::input::keys::KeyBindings>>,
-    menu: Option<Res<crate::ui::ingame_menu::InGameMenu>>,
-    scene: Option<Res<crate::frontend::scene::MenuScene>>,
+    (menu, scene, profile): (Option<Res<crate::ui::ingame_menu::InGameMenu>>, Option<Res<crate::frontend::scene::MenuScene>>, Option<Res<crate::ui::profile::UiProfile>>),
     (feed, stock, avatar): (Res<HudFeed>, Option<Res<stock::StockState>>, Option<Res<avatar::ChoiceState>>),
     mut state: ResMut<HudState>,
     mut queue: ResMut<CommandQueue>,
@@ -454,6 +453,7 @@ fn press(
             .map(|(slot, _)| slot))
         .flatten();
     let mut clicked_pd_slot = None;
+    let mut clicked_special_slot = None;
     for ButtonClicked(e) in clicks.read() {
         if let Ok(GroupTile(id)) = tiles.get(*e) {
             let shift = keys
@@ -470,6 +470,9 @@ fn press(
         let Ok(GridCell(act)) = cells.get(*e) else {
             continue;
         };
+        if let Act::Special(slot) | Act::Target(TargetMode::Special(slot)) = act {
+            clicked_special_slot = Some(*slot);
+        }
         match act {
             Act::OpenBuild => state.page = Page::Build,
             Act::OpenNativeMenu(id) => state.page = Page::Native(*id),
@@ -536,6 +539,31 @@ fn press(
         && let Some(order) = command(&feed, &Act::Special(slot))
     {
         issue_command(order, &mut queue, &mut issued, &mut targets);
+    }
+    if profile.as_deref() == Some(&crate::ui::profile::UiProfile::Armada1)
+        && scene.is_none() && menu.as_deref().is_none_or(|menu| !menu.open)
+        && let Some(keys) = keys.as_deref()
+    {
+        let hotkeys = [KeyCode::F1, KeyCode::F2, KeyCode::F3, KeyCode::F4, KeyCode::F5];
+        for (index, key) in hotkeys.into_iter().enumerate() {
+            if !keys.just_pressed(key) { continue; }
+            let Some(button) = stock::a1::speed::buttons(&feed, None).into_iter()
+                .find(|b| b.cell == stock::a1::speed::RAIL_BASE + index && b.look == model::Look::Ready) else { continue };
+            let slot = match button.act {
+                Act::Special(slot) | Act::Target(TargetMode::Special(slot)) => slot,
+                _ => continue,
+            };
+            if clicked_special_slot == Some(slot) { continue; }
+            match button.act {
+                Act::Target(mode) => {
+                    state.placing = None;
+                    state.targeting = Some(mode);
+                }
+                act => if let Some(order) = command(&feed, &act) {
+                    issue_command(order, &mut queue, &mut issued, &mut targets);
+                },
+            }
+        }
     }
 }
 
@@ -742,8 +770,11 @@ fn target_mode_available(feed: &HudFeed, mode: TargetMode) -> bool {
         TargetMode::TransportAttack => c.transport_attack_ready,
         TargetMode::Repair => c.repair,
         TargetMode::Decommission => c.decommission,
-        TargetMode::Special(slot) => c.specials.contains(&(slot, sta_sim::specials::SpecialKind::Replace))
-            && model::special_targeted(feed, slot) == Some(true),
+        TargetMode::Special(slot) => c.specials.iter().any(|(s, kind)| *s == slot
+            && (matches!(*kind, sta_sim::specials::SpecialKind::A1(sta_content::A1SpecialKind::Gemini | sta_content::A1SpecialKind::EngineeringTeam | sta_content::A1SpecialKind::Stasis))
+                && feed.content.as_deref().is_some_and(|db| feed.own_selection().into_iter().any(|id|
+                    sta_sim::specials::a1_special_ready(&feed.view, db, id, slot)))
+                || (*kind == sta_sim::specials::SpecialKind::Replace && model::special_targeted(feed, slot) == Some(true)))),
         TargetMode::TradeSource | TargetMode::TradeDestination => feed.own_selection().iter().any(|id| {
             feed.view.unit(*id).is_some_and(|u| feed.cargo_ship(u))
         }),
@@ -872,10 +903,25 @@ fn target_order(
             vec![Order::Rally { builders: ids.clone(), at }]
         }
         TargetMode::Special(slot) => {
-            let at = match target.and_then(|id| feed.view.unit(id).filter(|u| !u.flags.contains(UnitFlags::DYING)).map(|_| id)) {
-                Some(id) => Target::Entity(id),
-                None => Target::Point(point?),
+            let kind = commands::shared(feed).specials.into_iter().find(|(s, _)| *s == slot)?.1;
+            let at = match kind {
+                sta_sim::specials::SpecialKind::A1(sta_content::A1SpecialKind::Stasis) => Target::Point(point?),
+                sta_sim::specials::SpecialKind::A1(sta_content::A1SpecialKind::Gemini | sta_content::A1SpecialKind::EngineeringTeam) => {
+                    let id = target?;
+                    let u = feed.view.unit(id)?;
+                    if u.flags.contains(UnitFlags::DYING) { return None; }
+                    Target::Entity(id)
+                }
+                _ => match target.and_then(|id| feed.view.unit(id).filter(|u| !u.flags.contains(UnitFlags::DYING)).map(|_| id)) {
+                    Some(id) => Target::Entity(id),
+                    None => Target::Point(point?),
+                },
             };
+            if matches!(kind, sta_sim::specials::SpecialKind::A1(_))
+                && !ids.iter().any(|id| feed.content.as_deref().is_some_and(|db|
+                    sta_sim::specials::a1_special_target_ok(&feed.view, db, *id, slot, at))) {
+                return None;
+            }
             vec![Order::Special { units: ids.clone(), slot, target: at }]
         }
     };

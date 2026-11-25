@@ -117,7 +117,7 @@ fn release(cam: &mut CinematicCamera, orbit: &mut Query<&mut Orbit>) {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn consume(
+pub(crate) fn consume(
     mut events: MessageReader<SimMsg>,
     link: Option<Res<SimLink>>,
     paths: Res<ScenePaths>,

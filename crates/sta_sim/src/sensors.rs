@@ -11,8 +11,7 @@
 //! - A player also sees every other entity that is within the sensor range of
 //!   any non-projectile entity of its team, measured in the XZ plane. Exactly
 //!   at the range is not seen (the grid's overlap test is strict).
-//! - Cloaked entities are seen only by their own team. There is no detection
-//!   model yet, so a sensor never reveals a cloaked entity.
+//! - Cloaked entities require a researched Armada I tachyon detector or shared allied sight.
 //! - Neutral entities (owner not seated) see nothing and are seen like any
 //!   other non-allied entity.
 //!
@@ -77,6 +76,7 @@ pub fn compute(
                 ids.push(e.id);
                 let r = range(e, content) * upgrades.as_ref().map_or(Fixed::ONE, |u| u.sensor_multiplier(owner));
                 if r > Fixed::ZERO {
+                    let detector = content.is_some_and(|db| crate::specials::Specials::a1_detector(db, units, dip, e));
                     ids.extend(
                         grid.query(
                             Vec3 {
@@ -90,7 +90,7 @@ pub fn compute(
                         .filter(|&id| {
                             units
                                 .get(id)
-                                .is_some_and(|t| !t.flags.contains(UnitFlags::CLOAKED))
+                                .is_some_and(|t| detector || !t.flags.contains(UnitFlags::CLOAKED))
                         }),
                     );
                 }

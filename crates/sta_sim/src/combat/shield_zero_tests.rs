@@ -68,6 +68,7 @@ fn hit(sim: &mut Sim, id: EntityId, damage: i32) {
         &mut ctx,
         &mut sim.zero_shield_holds,
         sim.tick,
+        &sim.specials,
     );
 }
 
@@ -82,6 +83,7 @@ fn pass(sim: &mut Sim, tick: u64) {
         &sim.transports,
         &mut sim.zero_shield_holds,
         tick,
+        &sim.specials,
     );
 }
 

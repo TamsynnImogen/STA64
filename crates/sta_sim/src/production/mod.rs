@@ -610,6 +610,7 @@ impl Production {
 
     /// One tick: finish welds and queue heads, then start queue heads and
     /// deploy rigs that have arrived. Ascending ids throughout.
+    #[allow(clippy::too_many_arguments)] // the production inputs are separate tick seams
     pub(crate) fn step(
         &mut self,
         units: &mut Entities,
@@ -618,6 +619,7 @@ impl Production {
         events: &mut Vec<SimEvent>,
         confinement: &mut crate::boundary::state::Confinement,
         bounds: Option<(sta_core::Vec3, sta_core::Vec3)>,
+        paused: impl Fn(EntityId) -> bool,
     ) -> Completions {
         let mut completed = Completions::default();
         if self.is_empty() {
@@ -632,6 +634,7 @@ impl Production {
                 continue;
             }
             let w = self.welds.get_mut(id).expect("listed");
+            if paused(w.builder) { continue; }
             w.done += 1;
             let (done, ticks, builder) = (w.done, w.ticks, w.builder);
             let Some(s) = units.get_mut(id) else { continue };
@@ -654,6 +657,7 @@ impl Production {
 
         let yards: Vec<EntityId> = self.queues.iter().map(|(id, _)| id).collect();
         for yard in yards {
+            if paused(yard) { continue; }
             let Some(y) = units.get(yard) else {
                 self.drop_queue(db, eco, yard);
                 continue;

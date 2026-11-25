@@ -1,6 +1,4 @@
-//! The Armada I speed rail's TRANSPORT button (UI-40 follow-up). STA64's rule: no control-grid slot
-//! where the install's command data gives the command none; on the Armada I HUD the transport command
-//! sits on the speed rail above the ship display.
+//! The Armada I speed rail: authored special slots 1..5, then the separator and TRANSPORT.
 //!
 //! Rules and their grade (read from the executable, static, and from the install's cfg and manual):
 //! - The rail has seven positions, left to right, in the sheet's `speedSingleButtonArea` rectangle
@@ -17,8 +15,7 @@
 //! - Interim (marked, TODO line): the stock button is enabled whenever the carrier has crew; here it
 //!   is shown disabled when the sim would refuse every selected carrier (UI-40's rule), so the
 //!   press never ends in a silent refusal.
-//! - Not built: the T hotkey (the client's own `select_type` default is T), the special weapon
-//!   slots, the pressed look while a transport runs.
+//! - The T hotkey remains the client's own `select_type` default.
 
 use bevy::prelude::*;
 
@@ -61,18 +58,62 @@ pub(in crate::ui::hud) fn queue_slots(layout: &StockLayout) -> Vec<(usize, R)> {
     (0..SEPARATOR).filter_map(|index| rect(layout, index).map(|r| (index, r))).collect()
 }
 
-/// The rail's buttons for the selection: the transport button when the selection has a transporter
-/// (the separator before it is drawn with the button, by `control::spawn_grid`).
+/// The rail's authored special positions and transport button.
 pub(in crate::ui::hud) fn buttons(feed: &HudFeed, strings: Option<&Strings>) -> Vec<Button> {
     let caps = commands::shared(feed);
-    if !caps.transport {
-        return Vec::new();
-    }
     let word = |key: &str, fallback: &str| {
-        strings.map(|s| s.tooltip_text(key)).filter(|t| *t != key).map_or_else(|| fallback.to_owned(), |t| t.replace('^', ""))
+        strings.map(|s| s.tooltip_text(key)).filter(|t| *t != key).map_or_else(|| fallback.replace('^', ""), |t| t.replace('^', ""))
     };
+    let mut rail: [Option<(bool, i64, Button)>; SEPARATOR] = Default::default();
+    if let Some(db) = feed.content.as_deref() {
+        for (slot, kind) in caps.specials {
+            let mut units = feed.selected_units().into_iter().filter(|u| u.owner == feed.player);
+            let Some(first) = units.next() else { continue };
+            let Some((_, _, weapon)) = db.unit(first.def)
+                .and_then(|def| sta_sim::specials::specials_indexed(db, def).nth(slot as usize)) else { continue };
+            if db.tech_tree().is_some_and(|t| t.entry(&weapon.odf).is_none_or(|e| e.withheld)) {
+                continue;
+            }
+            let Some(position) = weapon.raw.i64("buttonSlot").filter(|n| (1..=5).contains(n)) else { continue };
+            if !units.all(|u| db.unit(u.def)
+                .and_then(|def| sta_sim::specials::specials_indexed(db, def).nth(slot as usize))
+                .is_some_and(|(_, other_kind, other)| other_kind == kind && other.raw.i64("buttonSlot") == Some(position))) {
+                continue;
+            }
+            let targeted = match kind {
+                sta_sim::specials::SpecialKind::A1(sta_content::A1SpecialKind::Gemini | sta_content::A1SpecialKind::EngineeringTeam | sta_content::A1SpecialKind::Stasis) => true,
+                sta_sim::specials::SpecialKind::PointDefence if weapon.a1_special.is_some() => false,
+                sta_sim::specials::SpecialKind::A1(_) => false,
+                _ => continue,
+            };
+            let ready = feed.own_selection().into_iter().any(|id|
+                sta_sim::specials::a1_special_ready(&feed.view, db, id, slot));
+            let researched = feed.own_selection().into_iter().all(|id|
+                sta_sim::specials::a1_special_researched(&feed.view, db, id, slot));
+            let stem = weapon.odf.rsplit(['/', '\\']).next().unwrap_or(&weapon.odf).trim_end_matches(".odf");
+            let label = weapon.raw.str("wpnName").unwrap_or(stem);
+            let index = position as usize - 1;
+            let priority = weapon.raw.i64("buttonPriority").unwrap_or(0);
+            let rail_slot = &mut rail[index];
+            if rail_slot.as_ref().is_some_and(|(r, p, _)| (*r, *p) >= (researched, priority)) {
+                continue;
+            }
+            *rail_slot = Some((researched, priority, Button {
+                cell: RAIL_BASE + index,
+                label: tr(label).to_uppercase(),
+                act: if targeted { Act::Target(TargetMode::Special(slot)) } else { Act::Special(slot) },
+                look: if ready { Look::Ready } else { Look::Locked },
+                tip: weapon.raw.str("tooltip").map_or_else(|| tr(label), |tip| word(tip, tip)),
+                verbose: weapon.raw.str("verboseTooltip").map(|tip| word(tip, tip)),
+                sprite_names: vec![format!("b_{stem}")],
+                keep_label: false,
+            }));
+        }
+    }
+    let mut out: Vec<_> = rail.into_iter().flatten().map(|(_, _, b)| b).collect();
+    if !caps.transport { return out; }
     let label = tr("Transport");
-    vec![
+    out.push(
         Button {
             cell: RAIL_BASE + TRANSPORT,
             label: label.to_uppercase(),
@@ -83,7 +124,8 @@ pub(in crate::ui::hud) fn buttons(feed: &HudFeed, strings: Option<&Strings>) -> 
             sprite_names: vec!["b_transport".into()],
             keep_label: false,
         },
-    ]
+    );
+    out
 }
 
 /// The separator's rectangle and sprite (`speedSeparatorArea`, `speedSeparator`).

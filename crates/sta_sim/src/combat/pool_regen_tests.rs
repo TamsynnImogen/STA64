@@ -51,7 +51,7 @@ fn damaged(profile: Profile) -> (Sim, EntityId) {
 /// One recharge pass on its own (no other system moves the hull).
 fn pass(sim: &mut Sim) {
     let db = sim.content.clone().unwrap();
-    super::damage::recharge(&mut sim.units, &db, &sim.switches, &sim.subsystems, &sim.transports, &mut sim.zero_shield_holds, sim.tick);
+    super::damage::recharge(&mut sim.units, &db, &sim.switches, &sim.subsystems, &sim.transports, &mut sim.zero_shield_holds, sim.tick, &sim.specials);
 }
 
 #[test]
@@ -135,7 +135,7 @@ fn regeneration_comes_before_the_hit_in_one_step() {
             at: Vec3 { x: Fixed::ZERO, y: Fixed::ZERO, z: Fixed::ZERO },
         }];
         let mut ctx = super::casualty::Ctx { upgrades: &Default::default(), subsystems: &mut sim.subsystems, rng: &mut sim.rng, switches: &sim.switches, colonies: &mut sim.colonies };
-        let killed = super::damage::apply(&mut sim.units, &db, &mut events, 0, &mut ctx, &mut sim.zero_shield_holds, sim.tick);
+        let killed = super::damage::apply(&mut sim.units, &db, &mut events, 0, &mut ctx, &mut sim.zero_shield_holds, sim.tick, &sim.specials);
         assert_eq!(killed.is_empty(), survives, "hit of {damage}");
     }
 }

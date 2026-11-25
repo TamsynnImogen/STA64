@@ -199,8 +199,8 @@ mod tests {
         assert_ne!(old_hash, setup.content.hash());
 
         let mut old_save = sim.snapshot();
-        old_save.pop(); // The only record appended in format 47.
-        old_save[4..6].copy_from_slice(&46u16.to_le_bytes());
+        old_save.pop(); // The only record appended in this format.
+        old_save[4..6].copy_from_slice(&(crate::snapshot::FORMAT_VERSION - 1).to_le_bytes());
         old_save[10..18].copy_from_slice(&old_hash.to_le_bytes());
         let restored = Sim::from_snapshot(&old_save, Some(setup.content.clone())).unwrap();
         assert_eq!(restored.digest(), sim.digest());

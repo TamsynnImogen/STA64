@@ -55,6 +55,9 @@ pub const READ_ODF_KEYS: &[&str] = &[
     "switchtoattack", "cloakenable", "warpenable", "crewaffectsweapondelay", "ignorevalidastarget",
     "special", "regularweapondelay", "ignoreshield", "forceinvalidatetarget", "canattackstations", "specialvalue",
     "shieldduration", "omegaturn", "seektime", "shotaccel", "detectradius", "traveltimefraction",
+    // A1 Federation special payloads (read by the A1-provenance loader).
+    "chainradius", "maxhits", "chaindamagemodifier", "maxtargets", "hitcondition",
+    "reflectmissile", "reflectbeam", "detectclass", "detecttimer", "shieldsreturned",
     // CON-55: unit stat keys (typed; applied by SIM-74).
     "intrinsicvalue", "criticalhitpercent", "hulltargethardpoints", "criticaltargethardpoints",
     "enginestargethardpoints", "weaponstargethardpoints", "shieldgeneratortargethardpoints",

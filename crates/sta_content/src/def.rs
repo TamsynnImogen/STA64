@@ -835,6 +835,38 @@ pub enum WeaponKind {
     PointDefence,
 }
 
+/// Armada I special payload decoded from the launch and ordnance ODFs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum A1SpecialKind {
+    Mines, ChainPulsar, EngineOverload, Reflector, DetectCloak,
+    Gemini, ShieldDisruptor, EngineeringTeam, PointDefense, Stasis,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct A1SpecialDef {
+    pub kind: A1SpecialKind,
+    pub duration_ticks: u32,
+    pub flight_ticks: u32,
+    pub radius: Fixed,
+    pub limit: u32,
+    pub bonus_damage: Fixed,
+    pub reflect_missile: bool,
+    pub reflect_beam: bool,
+    pub hit_condition: u32,
+    pub shields_returned: Fixed,
+    pub detect_class: u32,
+}
+
+impl A1SpecialDef {
+    pub fn new(kind: A1SpecialKind) -> Self {
+        Self {
+            kind, duration_ticks: 0, flight_ticks: 0, radius: Fixed::ZERO, limit: 0,
+            bonus_damage: Fixed::ZERO, reflect_missile: false, reflect_beam: false,
+            hit_condition: 0, shields_returned: Fixed::ZERO, detect_class: 0,
+        }
+    }
+}
+
 /// A weapon.
 #[derive(Debug, Clone)]
 pub struct WeaponDef {
@@ -868,6 +900,8 @@ pub struct WeaponDef {
     pub energy_drain: Fixed,
     /// Special energy to trigger the weapon (`specialEnergyCost`).
     pub energy_cost: Fixed,
+    /// Armada I special class parameters; absent for other content.
+    pub a1_special: Option<A1SpecialDef>,
     /// Cloak: weapons are off while cloaked (`disableWeapons`, default on).
     pub disable_weapons: bool,
     /// Cloak: a hit decloaks (`decloakOnHit`, default off).
@@ -1244,6 +1278,7 @@ impl WeaponDef {
             effect_ticks: 0,
             energy_drain: Fixed::ZERO,
             energy_cost: Fixed::ZERO,
+            a1_special: None,
             disable_weapons: true,
             decloak_on_hit: false,
             initial_shot_delay_modifier: None,

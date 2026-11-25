@@ -28,7 +28,6 @@ use sta_sim::command::{Command, Order, Target};
 use sta_sim::specials::point_defence_slot;
 use sta_sim::view::WorldView;
 use sta_sim::SimEvent;
-use sta_content::WeaponKind;
 
 use super::SkirmishController;
 
@@ -69,12 +68,11 @@ impl SkirmishController {
             }
             let Some(def) = db.unit(u.def) else { continue };
             let Some(slot) = point_defence_slot(&db, def) else { continue };
-            let cost = def
-                .hardpoints
-                .iter()
-                .filter_map(|h| db.weapon(h.weapon.key))
-                .find(|w| w.kind == WeaponKind::PointDefence)
-                .map_or(Fixed::ZERO, |w| w.energy_cost);
+            let Some((_, w)) = sta_sim::specials::specials_of(&db, def).nth(usize::from(slot)) else { continue };
+            if w.a1_special.is_some() && !sta_sim::specials::a1_special_ready(view, &db, u.id, slot) {
+                continue;
+            }
+            let cost = w.energy_cost;
             // An attack counts when its shooter is an enemy of this seat.
             let enemy = |shooter: EntityId| {
                 view.units
