@@ -183,7 +183,12 @@ pub(crate) fn apply(
             continue;
         };
         let (mut shield, mut hull, mut down) = (Fixed::ZERO, Fixed::ZERO, false);
-        if let Some(t) = units.get_mut(target).filter(|t| t.hull[0] > Fixed::ZERO && !specials.stasis(target, tick) && (damage > Fixed::ZERO || db.weapon(weapon).is_none_or(|w| w.a1_special.is_none()))) {
+        if let Some(t) = units.get_mut(target).filter(|t| {
+            t.hull[0] > Fixed::ZERO
+                && (damage > Fixed::ZERO || db.weapon(weapon).is_none_or(|w| !crate::specials::is_special(w)))
+                && !specials.stasis(target, tick)
+                && !specials.a2_invulnerable(target, tick) && !specials.phased(db, t)
+        }) {
             let pool = if t.shields.directional {
                 usize::from(facing).min(3)
             } else {
@@ -466,7 +471,7 @@ impl Sim {
         let held = match sub {
             Subsystem::Engines => self.specials.engines_held(id, self.tick),
             Subsystem::Shields => self.specials.shields_held(id, self.tick),
-            _ => false,
+            _ => self.specials.a2_held(id, sub, self.tick),
         };
         Some((on && !held && !self.specials.stasis(id, self.tick), Fixed::from_bits(row.damage[n])))
     }
@@ -478,6 +483,7 @@ impl Sim {
         let mut ids: Vec<EntityId> = self.subsystems.to_rows().into_iter().map(|(id, _)| id).collect();
         ids.extend(self.units.iter().filter(|u| u.flags.contains(UnitFlags::ENGINES_OFF) || u.flags.contains(UnitFlags::WEAPONS_OFF)).map(|u| u.id));
         ids.extend(self.specials.a1.disabled_units());
+        ids.extend(self.specials.a2_disabled_units());
         ids.sort();
         ids.dedup();
         ids.into_iter()

@@ -11,7 +11,7 @@ use crate::world::EntityKind;
 impl Sim {
     /// Repair all damaged systems and restore at least the authored fraction of
     /// maximum health. A1's shield strength is its `maxHealth` hull pool.
-    pub(super) fn a1_engineering(
+    pub(in crate::specials) fn a1_engineering(
         &mut self,
         db: &ContentDb,
         target: EntityId,

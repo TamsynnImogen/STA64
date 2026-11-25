@@ -219,7 +219,12 @@ impl Pd {
             self.ready.remove(id);
         }
         for u in units.iter() {
-            if u.hull[1] <= Fixed::ZERO || u.flags.contains(crate::view::UnitFlags::WEAPONS_OFF) || u.is_unfinished() || specials.stasis(u.id, tick) {
+            if u.hull[1] <= Fixed::ZERO
+                || u.flags.contains(crate::view::UnitFlags::WEAPONS_OFF)
+                || u.is_unfinished()
+                || specials.stasis(u.id, tick)
+                || specials.a2_held(u.id, crate::command::Subsystem::Weapons, tick)
+            {
                 continue;
             }
             let Some(def) = db.unit(u.def) else { continue };

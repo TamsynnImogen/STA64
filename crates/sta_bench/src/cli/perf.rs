@@ -19,7 +19,7 @@ use serde::Deserialize;
 
 use super::tier2::sta64_path;
 use super::{Fail, Opts, Outcome};
-use crate::pair;
+use crate::{capture, pair};
 
 /// `sta64`'s exit code for "no GPU adapter".
 const NO_ADAPTER: i32 = 77;
@@ -41,6 +41,10 @@ pub struct Stat {
 #[serde(default)]
 pub struct Counts {
     pub entities: u64,
+    /// Units in the sim's view, units that have a drawn root entity, and units with a mesh in view.
+    pub units: u64,
+    pub units_spawned: u64,
+    pub units_drawn: u64,
     pub visible_meshes: u64,
     pub rocks_visible: u64,
     pub shadow_pass_active: bool,
@@ -113,10 +117,41 @@ fn scene_text(map: &str, camera: Option<&str>) -> String {
     s
 }
 
+/// A capture folder read for a run: the scene it makes, its mount, and what the check found.
+struct FromCapture {
+    name: String,
+    launch: capture::PerfLaunch,
+    units: usize,
+    tick: u64,
+}
+
+/// Reads the capture `arg` (a folder, a name under the capture directory or `latest`) and
+/// restores its snapshot on the content the game loaded, before any process starts: a hash,
+/// profile or digest mismatch ends the run here with the reason.
+fn read_capture(o: &Opts, arg: &str) -> Result<FromCapture, Fail> {
+    let dir = super::capture::folder(o, arg)?;
+    let index = capture::CaptureIndex::load(&dir).map_err(|e| Fail::Error(e.to_string()))?;
+    let launch = capture::perf_launch(&dir, &index, o.install.as_deref(), o.mod_name.as_deref()).map_err(|e| Fail::Error(e.to_string()))?;
+    let bytes = fs::read(&launch.snapshot).map_err(|e| Fail::Error(format!("{}: {e}", launch.snapshot.display())))?;
+    let found = capture::check_snapshot(&index, &launch.install_root, launch.active_mod.as_deref(), &bytes).map_err(|e| Fail::Error(format!("{}: {e}", dir.display())))?;
+    let name = dir.file_name().map_or_else(|| "capture".into(), |n| n.to_string_lossy().into_owned());
+    println!("capture {name}: map {}, tick {}, {} units; the snapshot restores on the install's content (hash and digest match)", index.map, found.tick, found.units);
+    Ok(FromCapture { name, launch, units: found.units, tick: found.tick })
+}
+
 pub(crate) fn perf(o: &Opts) -> Outcome {
-    let usage = "perf <map|scene.ini> --install ROOT [--mod NAME] [--camera \"orbit x y z yaw pitch dist\"] [--profile refit,stock] [--sizes 1920x1080,3440x1440] [--measure N] [--warmup N] [--reps N] [--variants a,b+c] [--perf-camera still|sweep] [--systems] [--label NAME] [--out DIR]";
-    let [what] = o.rest.as_slice() else { return Err(Fail::Usage(usage.into())) };
-    let install = o.install.clone().ok_or_else(|| Fail::Usage(format!("--install ({usage})")))?;
+    let usage = "perf <map|scene.ini> --install ROOT [--mod NAME] [--camera \"orbit x y z yaw pitch dist\"] [--profile refit,stock] [--sizes 1920x1080,3440x1440] [--measure N] [--warmup N] [--reps N] [--variants a,b+c] [--perf-camera still|sweep] [--systems] [--label NAME] [--out DIR]\n   or: perf --capture <folder|latest> [--install ROOT [--mod NAME]] [same options]";
+    let captured = o.capture.as_deref().map(|arg| read_capture(o, arg)).transpose()?;
+    let what: String = match (&captured, o.rest.as_slice()) {
+        (Some(c), []) => c.name.clone(),
+        (None, [what]) => what.clone(),
+        _ => return Err(Fail::Usage(usage.into())),
+    };
+    let what = what.as_str();
+    let (install, mod_name) = match &captured {
+        Some(c) => (c.launch.install_root.clone(), c.launch.active_mod.clone()),
+        None => (o.install.clone().ok_or_else(|| Fail::Usage(format!("--install ({usage})")))?, o.mod_name.clone()),
+    };
     let label = o.label.clone().unwrap_or_else(|| {
         let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
         format!("{}-{stamp}", Path::new(what).file_stem().map_or_else(|| "run".into(), |s| s.to_string_lossy().into_owned()))
@@ -126,7 +161,11 @@ pub(crate) fn perf(o: &Opts) -> Outcome {
         return Err(Fail::Usage(format!("{}: inside a checkout; performance results stay outside it (default: $XDG_DATA_HOME/sta64/bench/perf/)", out.display())));
     }
     fs::create_dir_all(&out).map_err(|e| Fail::Error(format!("{}: {e}", out.display())))?;
-    let scene = if what.ends_with(".ini") {
+    let scene = if let Some(c) = &captured {
+        let p = out.join("Scene.ini");
+        fs::write(&p, &c.launch.scene).map_err(|e| Fail::Error(e.to_string()))?;
+        p
+    } else if what.ends_with(".ini") {
         PathBuf::from(what)
     } else {
         let p = out.join("Scene.ini");
@@ -135,12 +174,17 @@ pub(crate) fn perf(o: &Opts) -> Outcome {
     };
     let bin = sta64_path(o);
     let profiles: Vec<String> = o.profile.as_deref().unwrap_or("refit,stock").split(',').map(|s| s.trim().to_owned()).collect();
-    let sizes: Vec<String> = o.sizes.as_deref().unwrap_or("1920x1080,3440x1440").split(',').map(|s| s.trim().to_owned()).collect();
+    let default_sizes = match captured.as_ref().and_then(|c| c.launch.size) {
+        Some((w, h)) => format!("{w}x{h}"),
+        None => "1920x1080,3440x1440".to_owned(),
+    };
+    let sizes: Vec<String> = o.sizes.as_deref().unwrap_or(&default_sizes).split(',').map(|s| s.trim().to_owned()).collect();
     for s in &sizes {
         if s.split_once('x').is_none_or(|(w, h)| w.parse::<u32>().is_err() || h.parse::<u32>().is_err()) {
             return Err(Fail::Usage(format!("--sizes: WxH, not `{s}`")));
         }
     }
+    let default_variants = if captured.is_some() { "base" } else { DEFAULT_VARIANTS };
     let mut runs = Vec::new();
     for profile in &profiles {
         for size in &sizes {
@@ -148,12 +192,12 @@ pub(crate) fn perf(o: &Opts) -> Outcome {
             let _ = fs::remove_file(&json);
             let mut args: Vec<String> = vec!["--headless".into(), "--clock".into(), "bench".into(), "--scene".into(), scene.display().to_string()];
             args.extend(["--install-root".into(), install.display().to_string()]);
-            if let Some(m) = &o.mod_name {
+            if let Some(m) = &mod_name {
                 args.extend(["--mod".into(), m.clone()]);
             }
             args.extend(["--install-content".into(), "--frame-size".into(), size.clone(), "--perf".into(), json.display().to_string()]);
             args.extend(["--perf-frames".into(), o.measure.unwrap_or(300).to_string(), "--perf-warmup".into(), o.warmup.unwrap_or(90).to_string()]);
-            args.extend(["--perf-reps".into(), o.reps.unwrap_or(3).to_string(), "--perf-variants".into(), o.variants.clone().unwrap_or_else(|| DEFAULT_VARIANTS.into())]);
+            args.extend(["--perf-reps".into(), o.reps.unwrap_or(3).to_string(), "--perf-variants".into(), o.variants.clone().unwrap_or_else(|| default_variants.into())]);
             args.extend(["--perf-camera".into(), o.perf_camera.clone().unwrap_or_else(|| "still".into())]);
             if o.systems {
                 args.push("--perf-systems".into());
@@ -181,7 +225,10 @@ pub(crate) fn perf(o: &Opts) -> Outcome {
             runs.push(Run { profile: profile.clone(), size: size.clone(), report });
         }
     }
-    let md = markdown(what, &install, o.mod_name.as_deref(), &runs);
+    let mut md = markdown(what, &install, mod_name.as_deref(), &runs);
+    if let Some(c) = &captured {
+        md.push_str(&format!("Capture: tick {}, {} units in the snapshot; hash check on, passed before the run.\n", c.tick, c.units));
+    }
     let _ = fs::write(out.join("results.md"), &md);
     print!("{md}");
     println!("perf: results in {}", out.display());
@@ -290,7 +337,17 @@ pub fn markdown(what: &str, install: &Path, mod_name: Option<&str>, runs: &[Run]
                     let _ = writeln!(s, "- `{k}`: {:.3} ms, {:.1} calls", v.ms_per_frame, v.calls_per_frame);
                 }
             }
-            let _ = writeln!(s, "\nCounts (base): {} entities, {} visible meshes ({} rocks), shadow pass {}.\n", b.counts.entities, b.counts.visible_meshes, b.counts.rocks_visible, if b.counts.shadow_pass_active { "on" } else { "off" });
+            let _ = writeln!(
+                s,
+                "\nCounts (base): {} units in the sim, {} with a root entity, {} with a mesh in view; {} entities, {} visible meshes ({} rocks), shadow pass {}.\n",
+                b.counts.units,
+                b.counts.units_spawned,
+                b.counts.units_drawn,
+                b.counts.entities,
+                b.counts.visible_meshes,
+                b.counts.rocks_visible,
+                if b.counts.shadow_pass_active { "on" } else { "off" }
+            );
         }
     }
     s

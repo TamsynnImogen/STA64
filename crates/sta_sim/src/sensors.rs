@@ -20,10 +20,11 @@
 //! [`DEFAULT_SENSOR`].
 
 use sta_content::ContentDb;
-use sta_core::{EntityId, Fixed, PlayerId, Vec3};
+use sta_core::{EntityId, Fixed, PlayerId, Tick, Vec3};
 
+use crate::command::Subsystem;
 use crate::relations::Diplomacy;
-
+use crate::specials::Specials;
 use crate::spatial::{Body, Grid};
 use crate::view::UnitFlags;
 use crate::world::{Entities, Entity, EntityKind};
@@ -53,6 +54,8 @@ pub fn compute(
     units: &Entities,
     content: Option<&ContentDb>,
     dip: Diplomacy<'_>,
+    specials: &Specials,
+    tick: Tick,
 ) -> Vec<(PlayerId, Vec<EntityId>)> {
     let players = dip.players;
     let upgrades = content.map(|db| crate::ship_upgrades::ShipUpgrades::collect(db, units));
@@ -74,7 +77,11 @@ pub fn compute(
             let mut ids: Vec<EntityId> = Vec::new();
             for e in units.iter().filter(|e| e.owner == owner) {
                 ids.push(e.id);
-                let r = range(e, content) * upgrades.as_ref().map_or(Fixed::ONE, |u| u.sensor_multiplier(owner));
+                let r = if specials.a2_held(e.id, Subsystem::Sensors, tick) {
+                    Fixed::ZERO
+                } else {
+                    range(e, content) * upgrades.as_ref().map_or(Fixed::ONE, |u| u.sensor_multiplier(owner))
+                };
                 if r > Fixed::ZERO {
                     let detector = content.is_some_and(|db| crate::specials::Specials::a1_detector(db, units, dip, e));
                     ids.extend(

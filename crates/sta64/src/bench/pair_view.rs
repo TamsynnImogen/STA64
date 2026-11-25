@@ -18,7 +18,10 @@
 //! - The cameras the map view makes draw into the frame's offscreen image
 //!   ([`retarget`]); the scene's `Camera=`/`orbit`/`camera` places the main one
 //!   ([`place_camera`]), the same pose the stand-in frames use. The map view's
-//!   text (frame rate, map info) is removed.
+//!   text (frame rate, map info) is removed. `--frame-camera fly` moves that pose
+//!   along a fixed path on the anim clock ([`fly_pose`]), so frames of a moving
+//!   camera are the same on every run; `--frame-camera still|fly` also prints, at each
+//!   frame's tick, how many billboard nebulae hold the eye ([`report_nebulae`]).
 //!
 //! No window, no display server and no audio device: the app is `sta64`'s
 //! windowless headless app (an offscreen render target; `DefaultPlugins` without
@@ -35,7 +38,8 @@ use sta_bench::run::RunConfig;
 
 use super::frames::{Capture, View};
 use super::{BenchRes, bench_frame};
-use crate::app::{GameSet, LaunchConfig};
+use crate::app::{FrameCamera, GameSet, LaunchConfig};
+use crate::clock::AnimClock;
 use crate::map::MatchEntity;
 use crate::sim_link::{BenchDriven, SimLink};
 use crate::viewer::{Mounted, TeamColours};
@@ -101,7 +105,67 @@ pub(super) fn add(app: &mut App, cfg: &LaunchConfig, scene_camera: Option<BenchC
     app.add_systems(Update, (adopt_views, aim_orbit).chain().in_set(GameSet::Bench).after(bench_frame))
         .add_systems(Update, (retarget, hide_text))
         .add_systems(PostUpdate, place_camera.before(TransformSystems::Propagate));
+    if let Some(camera) = cfg.frame_camera {
+        app.insert_resource(FrameCameraRun { fly: camera == FrameCamera::Fly, ticks: cfg.frames.clone(), reported: None })
+            .add_systems(PostUpdate, report_nebulae.after(TransformSystems::Propagate));
+    }
     Ok(())
+}
+
+/// `--frame-camera`: whether the pose flies, and the frames' ticks for the nebula report.
+#[derive(Resource)]
+pub(super) struct FrameCameraRun {
+    fly: bool,
+    ticks: Vec<u64>,
+    reported: Option<u64>,
+}
+
+/// The scene's pose `(eye, look)` moved along `--frame-camera fly`'s path at anim time `t`
+/// (seconds): the eye swings about the look point (up to 0.6 rad either way) while its distance
+/// to it shrinks to a tenth and grows back, so the camera turns and moves on every frame the
+/// clock advances and passes near the look point. At `t = 0` it is the scene's pose. Anim time
+/// stands while the bench holds a frame, and in bench mode it is the same on every run, so the
+/// frames are too.
+pub fn fly_pose(eye: Vec3, look: Vec3, t: f32) -> (Vec3, Vec3) {
+    let turn = Quat::from_rotation_y(0.6 * (0.9 * t).sin());
+    let s = 0.55 + 0.45 * (0.7 * t).cos();
+    (look + turn * ((eye - look) * s), look)
+}
+
+/// The scene's pose for this frame, flown when `--frame-camera fly` asks for it.
+fn frame_pose(view: &View, bench: &sta_bench::run::Bench, run: Option<&FrameCameraRun>, clock: &AnimClock) -> Option<(Vec3, Vec3)> {
+    let (eye, look) = view.pose(bench)?;
+    Some(if run.is_some_and(|r| r.fly) { fly_pose(eye, look, clock.now() as f32) } else { (eye, look) })
+}
+
+/// At the first frame of each requested tick: the eye, and how many billboard nebulae
+/// (`NebulaBoards`) hold it, with the nearest one's edge, on stderr. Tells a frame run whether
+/// its camera is inside a nebula.
+fn report_nebulae(
+    bench: ResMut<BenchRes>,
+    mut run: ResMut<FrameCameraRun>,
+    main: Query<(&GlobalTransform, &Camera), With<Retargeted>>,
+    nebulae: Query<(&GlobalTransform, &crate::render::nebula::NebulaBoards)>,
+) {
+    let mut bench = bench;
+    let tick = bench.0.get().tick();
+    if run.reported == Some(tick) || !run.ticks.contains(&tick) {
+        return;
+    }
+    let Some((cam, _)) = main.iter().max_by_key(|(_, c)| c.order) else { return };
+    run.reported = Some(tick);
+    let eye = cam.translation();
+    let mut inside = 0;
+    let mut nearest: Option<(f32, Vec3, f32)> = None;
+    for (g, b) in &nebulae {
+        let (c, edge) = (g.translation(), g.translation().distance(eye) - b.radius);
+        inside += usize::from(edge < 0.0);
+        if nearest.is_none_or(|(e, _, _)| edge < e) {
+            nearest = Some((edge, c, b.radius));
+        }
+    }
+    let near = nearest.map_or_else(String::new, |(e, c, r)| format!("; nearest edge {e:.1} (centre {c}, radius {r})"));
+    eprintln!("frame camera: tick {tick} eye {eye} inside {inside} of {} billboard nebulae{near}", nebulae.iter().count());
 }
 
 /// The variable that turns the reference path on in a headless install-content run (frames or a
@@ -160,9 +224,9 @@ fn adopt_views(bench: ResMut<BenchRes>, link: Option<ResMut<SimLink>>) {
 
 /// The scene's camera as the map view's own orbit (focus, yaw, pitch, distance in render
 /// space), so its camera system and the sky that follows the camera both use it.
-fn aim_orbit(bench: ResMut<BenchRes>, view: Res<View>, mut orbit: Query<&mut crate::viewer::Orbit>) {
+fn aim_orbit(bench: ResMut<BenchRes>, view: Res<View>, run: Option<Res<FrameCameraRun>>, clock: Res<AnimClock>, mut orbit: Query<&mut crate::viewer::Orbit>) {
     let mut bench = bench;
-    let Some((eye, look)) = view.pose(bench.0.get()) else { return };
+    let Some((eye, look)) = frame_pose(&view, bench.0.get(), run.as_deref(), &clock) else { return };
     let d = eye - look;
     let dist = d.length();
     if dist < 1e-3 {
@@ -179,10 +243,16 @@ fn aim_orbit(bench: ResMut<BenchRes>, view: Res<View>, mut orbit: Query<&mut cra
 /// The scene's camera, on the map view's main camera, after its own orbit
 /// controls have run (they stay on the map's default view when the scene sets
 /// none).
-pub(super) fn place_camera(bench: ResMut<BenchRes>, view: Res<View>, mut main: Query<(&mut Transform, &Camera), With<Retargeted>>) {
+pub(super) fn place_camera(
+    bench: ResMut<BenchRes>,
+    view: Res<View>,
+    run: Option<Res<FrameCameraRun>>,
+    clock: Res<AnimClock>,
+    mut main: Query<(&mut Transform, &Camera), With<Retargeted>>,
+) {
     let mut bench = bench;
     let bench = bench.0.get();
-    let Some((eye, look)) = view.pose(bench) else { return };
+    let Some((eye, look)) = frame_pose(&view, bench, run.as_deref(), &clock) else { return };
     // The main camera is the one with the highest order (the background camera, a child
     // of it, draws first and follows it through the transform hierarchy).
     let Some(mut best) = main.iter_mut().max_by_key(|(_, c)| c.order) else { return };
@@ -193,6 +263,27 @@ pub(super) fn place_camera(bench: ResMut<BenchRes>, view: Res<View>, mut main: Q
 mod tests {
     use super::*;
     use sta_sim::WorldSource;
+
+    /// The fly path starts at the scene's pose, moves and turns on every bench frame step, keeps
+    /// looking at the same point, comes within a tenth of the distance of it and never closer, and
+    /// gives the same pose for the same time.
+    #[test]
+    fn the_fly_path_moves_every_frame_from_the_scenes_pose() {
+        let (eye, look) = (Vec3::new(300.0, 1500.0, -700.0), Vec3::new(100.0, 0.0, 200.0));
+        assert_eq!(fly_pose(eye, look, 0.0), (eye, look));
+        let dist = eye.distance(look);
+        let (mut prev, mut closest) = (eye, dist);
+        for frame in 1..1200 {
+            let t = frame as f32 / 60.0;
+            let (e, l) = fly_pose(eye, look, t);
+            assert_eq!(l, look);
+            assert_ne!(e, prev, "frame {frame}");
+            assert_eq!(fly_pose(eye, look, t).0.to_array().map(f32::to_bits), e.to_array().map(f32::to_bits));
+            closest = closest.min(e.distance(look));
+            prev = e;
+        }
+        assert!(closest < dist * 0.11 && closest > dist * 0.099, "{closest} of {dist}");
+    }
 
     /// With `STA64_TEST_INSTALL` (+ `STA64_TEST_MOD`, `STA64_TEST_MAP`, default the install's
     /// first map): the map view draws the BZN's objects against the ids of *its own* sim of

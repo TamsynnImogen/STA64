@@ -324,6 +324,35 @@ pub fn load_with(profile: Profile, mod_overrides: &Overrides, stems: &[String], 
     load_with_a1(profile, mod_overrides, stems, loader, false)
 }
 
+fn self_destruct_blast(name: &str, profile: Profile, loader: &mut Loader<'_>, warnings: &mut Vec<Warning>) -> Option<crate::SelfDestructBlast> {
+    let fireball = match resolve_for_profile(name, profile, loader) {
+        Ok(odf) => odf,
+        Err(error) => {
+            warnings.push(Warning::new(format!("{}.odf", stem(name)), format!("Self-destruct explosion unavailable: {error}")));
+            return None;
+        }
+    };
+    let shockwave_name = fireball.str("shockwave")?.trim();
+    if shockwave_name.is_empty() || shockwave_name.eq_ignore_ascii_case("null") {
+        return None;
+    }
+    let shockwave = match resolve_for_profile(shockwave_name, profile, loader) {
+        Ok(odf) => odf,
+        Err(error) => {
+            warnings.push(Warning::new(format!("{}.odf", stem(name)), format!("Self-destruct shockwave {shockwave_name} unavailable: {error}")));
+            return None;
+        }
+    };
+    let file = format!("{}.odf", stem(shockwave_name));
+    let mut reader = Reader { odf: &shockwave, file: &file, warnings };
+    let blast = crate::SelfDestructBlast {
+        damage: reader.fixed("damageBase"),
+        radius_factor: reader.fixed("radiusFactor"),
+        rate: reader.fixed("rate"),
+    };
+    (blast.damage > Fixed::ZERO && blast.radius_factor > Fixed::ZERO && blast.rate > Fixed::ZERO).then_some(blast)
+}
+
 fn load_with_a1(profile: Profile, mod_overrides: &Overrides, stems: &[String], loader: &mut Loader<'_>, a1_module: bool) -> Result<(ContentDb, Vec<Warning>)> {
     let mut warnings = Vec::new();
     for name in &mod_overrides.unknown {
@@ -392,6 +421,10 @@ fn load_with_a1(profile: Profile, mod_overrides: &Overrides, stems: &[String], l
     }
 
     let mut builder = ContentDb::builder().profile(profile).features(features);
+    let self_destruct_weapons: BTreeSet<String> = weapons.iter()
+        .filter(|(_, odf)| odf.class_label().is_some_and(|class| class.eq_ignore_ascii_case("selfdestruct")))
+        .map(|(name, _)| stem(name))
+        .collect();
     let mut weapon_arcs = BTreeMap::new();
     let mut weapon_names = BTreeSet::new();
     let mut lookups = crate::weapon::LookupPool::default();
@@ -403,8 +436,10 @@ fn load_with_a1(profile: Profile, mod_overrides: &Overrides, stems: &[String], l
             }
             found
         });
-        let (mut def, arc) = crate::weapon::weapon_def_with_a1(
-            s, odf, ord.as_deref(), profile == Profile::Sta1Classic || a1_module, &mut warnings,
+        let (mut def, arc) = crate::weapon::weapon_def_for_profile(
+            s, odf, ord.as_deref(), profile == Profile::Sta1Classic || a1_module,
+            matches!(profile, Profile::Sta2Classic | Profile::Fo4 | Profile::Fo3) && !a1_module,
+            &mut warnings,
         );
         if let Some(replace) = &def.replace {
             for (i, entry) in replace.entries.iter().enumerate() {
@@ -428,6 +463,7 @@ fn load_with_a1(profile: Profile, mod_overrides: &Overrides, stems: &[String], l
     let model = crate::ResourceModel::for_profile(profile);
     // SIM-44: cap files by stem, read once.
     let mut caps: BTreeMap<String, Option<Arc<crate::CapacityList>>> = BTreeMap::new();
+    let mut self_destruct_blasts: BTreeMap<String, Option<crate::SelfDestructBlast>> = BTreeMap::new();
     let unit_names: BTreeSet<String> = units.iter().map(|(s, _)| stem(s)).collect();
     for (s, odf) in &units {
         let phys = match odf.str("physicsFile").map(str::trim).filter(|p| !p.is_empty()) {
@@ -543,6 +579,23 @@ fn load_with_a1(profile: Profile, mod_overrides: &Overrides, stems: &[String], l
             h.arc = h.arc.or_else(|| weapon_arcs.get(&w).copied().flatten());
             true
         });
+        if matches!(profile, Profile::Sta2Classic | Profile::Fo4 | Profile::Fo3) && !a1_module {
+            let blast_name = if odf.raw("selfDestruct").is_some() {
+                def.stats.self_destruct.clone()
+            } else if def.hardpoints.iter().any(|h| self_destruct_weapons.contains(&stem(&h.weapon.odf))) {
+                Some("xselfbal".to_owned())
+            } else {
+                None
+            };
+            if let Some(name) = blast_name {
+                let key = stem(&name);
+                if !self_destruct_blasts.contains_key(&key) {
+                    let blast = self_destruct_blast(&key, profile, loader, &mut warnings);
+                    self_destruct_blasts.insert(key.clone(), blast);
+                }
+                def.self_destruct_blast = self_destruct_blasts[&key];
+            }
+        }
         def.build.list.retain_mut(|b| {
             let n = stem(&b.odf);
             if !unit_names.contains(&n) {
@@ -643,6 +696,29 @@ mod tests {
     use super::*;
     use crate::def::WeaponKind;
     use std::collections::HashMap;
+
+    #[test]
+    fn self_destruct_blast_resolves_default_override_and_explicit_null() {
+        let files = [
+            ("ship", "classLabel = \"craft\"\nweapon1 = \"gselfdes\"\n"),
+            ("override", "classLabel = \"craft\"\nselfDestruct = \"custom\"\n"),
+            ("disabled", "classLabel = \"craft\"\nweapon1 = \"gselfdes\"\nselfDestruct = \"null\"\n"),
+            ("gselfdes", "classLabel = \"selfdestruct\"\nwpnName = \"Self Destruct\"\nspecial = 1\n"),
+            ("xselfbal", "classLabel = \"fireballexplode\"\nshockwave = \"xselfd\"\n"),
+            ("xselfd", "classLabel = \"shockwavexplode\"\ndamageBase = 380\nradiusFactor = 1\nrate = 60\n"),
+            ("custom", "classLabel = \"fireballexplode\"\nshockwave = \"customwave\"\n"),
+            ("customwave", "classLabel = \"shockwavexplode\"\ndamageBase = 50\nradiusFactor = 0.5\nrate = 10\n"),
+        ];
+        let stems: Vec<_> = files.iter().map(|(name, _)| (*name).to_owned()).collect();
+        let map: HashMap<_, _> = files.iter().map(|(name, body)| (format!("{name}.odf"), (*body).to_owned())).collect();
+        let (db, warnings) = load_with(Profile::Sta2Classic, &Overrides::default(), &stems, &mut |name, _| map.get(&name.to_ascii_lowercase()).cloned()).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let blast = db.unit(db.key("ship").unwrap()).unwrap().self_destruct_blast.unwrap();
+        assert_eq!((blast.damage, blast.radius_factor, blast.rate), (Fixed::from_int(380), Fixed::ONE, Fixed::from_int(60)));
+        let override_blast = db.unit(db.key("override").unwrap()).unwrap().self_destruct_blast.unwrap();
+        assert_eq!((override_blast.damage, override_blast.radius_factor, override_blast.rate), (Fixed::from_int(50), Fixed::from_f64(0.5), Fixed::from_int(10)));
+        assert_eq!(db.unit(db.key("disabled").unwrap()).unwrap().self_destruct_blast, None);
+    }
 
     const FIXTURES: &[(&str, &str)] = &[
         (

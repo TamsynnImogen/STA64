@@ -777,8 +777,8 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     let UnitDef {
         key: _, odf: _, class: _, is_starbase: _, planet_role: _, planet_crew_gain: _, planet_crew_modifier: _,
         a1_base_officers: _, a1_officer_upgrade_gain: _, trade_station: _, trade_cargo_capacity: _,
-        planet_colonizable: _, planet_civilian_population_modifier: _, planet_max_population: _, can_have_orbital_station: _, fleet_cap: _, orbit_time: _, a1_borg: _, a1_combat_dynamics: _, station_mining: _, node_income: _, race: _,
-        model: _, scale: _, movement: _, hull: _, shields: _, initial_hull: _, initial_shields: _,
+        planet_colonizable: _, planet_civilian_population_modifier: _, planet_max_population: _, can_have_orbital_station: _, fleet_cap: _, orbit_time: _, a1_borg: _, station_mining: _, node_income: _, race: _,
+        model: _, scale: _, movement: _, hull: _, self_destruct_blast: _, shields: _, initial_hull: _, initial_shields: _,
         crew: _, maximum_crew: _, facility: _, has_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
         free_unit: _, dock: _, sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
         max_dilithium: _, mining_rate: _, transfer_rate: _, freight_transfer: _, resource: _, features: _,
@@ -857,6 +857,12 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     // Peers using the old constructor behavior would diverge on Evolution.
     if u.is_evolver() {
         c.flag("evolves_in_place", true);
+    }
+    if let Some(blast) = u.self_destruct_blast {
+        c.raw("self_destruct_blast", &group(Canon::new()
+            .fixed("damage", blast.damage)
+            .fixed("radius_factor", blast.radius_factor)
+            .fixed("rate", blast.rate)));
     }
     if let Some(rates) = u.freight_transfer {
         c.list("freight_transfer", rates.into_iter().map(fixed_text));
@@ -1181,7 +1187,7 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
     // Every field, as in `unit_text`.
     let WeaponDef {
         key: _, odf: _, class: _, kind: _, range: _, damage: _, refire: _, shot_speed: _,
-        duration: _, fire_sound: _, fx: _, shot_scale: _, look: _, effect_ticks: _, energy_drain: _, energy_cost: _, a1_special: _,
+        duration: _, fire_sound: _, fx: _, shot_scale: _, look: _, effect_ticks: _, energy_drain: _, energy_cost: _, a1_special: _, a2_special: _,
         disable_weapons: _, decloak_on_hit: _, initial_shot_delay_modifier: _,
         ignore_shot_delay_effects: _, ordnance_defence: _, activate_on_team_change: _, crew_loss: _, damage_variance: _, resource: _, replace: _, colonize: _, base: _, features: _, raw: _,
     } = w;
@@ -1257,6 +1263,64 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
             .int("hit_condition", s.hit_condition)
             .fixed("shields_returned", s.shields_returned)
             .int("detect_class", s.detect_class)));
+        if let Some((reflect, return_to_source)) = s.reflect_chance {
+            c.raw("reflection", &group(Canon::new().fixed("reflect", reflect).fixed("return", return_to_source)));
+        }
+    }
+    if let Some(s) = w.a2_special {
+        let mut special = Canon::new();
+        special.raw("target", match s.target {
+            crate::A2Target::Immediate => "immediate",
+            crate::A2Target::Entity => "entity",
+            crate::A2Target::Point => "point",
+        });
+        special.raw("effect", match s.effect {
+            crate::A2Effect::Myotron => "myotron",
+            crate::A2Effect::SensorJammer => "sensor_jammer",
+            crate::A2Effect::Polaron => "polaron",
+            crate::A2Effect::RestoreShields(_) => "restore_shields",
+            crate::A2Effect::RestoreEnergy(_) => "restore_energy",
+            crate::A2Effect::Remodulate => "remodulate",
+            crate::A2Effect::PsychonicBlast(_) => "psychonic_blast",
+            crate::A2Effect::MicroDrain { .. } => "micro_drain",
+            crate::A2Effect::SelfDestruct(_) => "self_destruct",
+            crate::A2Effect::Commando(_) => "commando",
+            crate::A2Effect::Regeneration(_) => "regeneration",
+            crate::A2Effect::Plasma => "plasma",
+            crate::A2Effect::HoldingBeam { .. } => "holding_beam",
+            crate::A2Effect::AutoAssimilator(_) => "auto_assimilator",
+            crate::A2Effect::ShieldProjector(_) => "shield_projector",
+            crate::A2Effect::ShieldInversion(_) => "shield_inversion",
+            crate::A2Effect::DeathChant { .. } => "death_chant",
+        });
+        match s.effect {
+            crate::A2Effect::RestoreShields(value)
+            | crate::A2Effect::RestoreEnergy(value)
+            | crate::A2Effect::PsychonicBlast(value)
+            | crate::A2Effect::SelfDestruct(value)
+            | crate::A2Effect::Commando(value)
+            | crate::A2Effect::Regeneration(value)
+            | crate::A2Effect::AutoAssimilator(value)
+            | crate::A2Effect::ShieldProjector(value)
+            | crate::A2Effect::ShieldInversion(value) => { special.fixed("value", value); }
+            crate::A2Effect::HoldingBeam { delay, interval, party } => {
+                special.int("delay", delay).int("interval", interval).fixed("party", party);
+            }
+            crate::A2Effect::DeathChant { fire, repair, turn, damage, speed, hit } => {
+                special.fixed("fire", fire).fixed("repair", repair).fixed("turn", turn)
+                    .fixed("damage", damage).fixed("speed", speed).fixed("hit", hit);
+            }
+            crate::A2Effect::MicroDrain { system, per_second } => {
+                special.int("system", system).fixed("per_second", per_second);
+            }
+            _ => {}
+        }
+        special.int("duration", s.duration)
+            .int("flight", s.flight)
+            .int("max_targets", s.max_targets)
+            .int("hit_condition", s.hit_condition)
+            .flag("projectile", s.projectile);
+        c.raw("a2_special", &group(&mut special));
     }
     // SIM-73: the keys of the hit roll and of per-target damage, only under their
     // switches and only when set, so every other weapon keeps its text.

@@ -35,7 +35,7 @@
 //!   movement autonomy may not close in or warp; STA64 has no AI fleets yet),
 //!   the engine's 10 Hz AI tick.
 
-use sta_content::{ContentDb, UnitDef, WeaponKind};
+use sta_content::{ContentDb, UnitDef};
 use sta_core::{EntityId, Fixed, Vec3};
 
 use crate::kinematics::Plan;
@@ -110,7 +110,7 @@ pub(crate) fn attack_range(db: &ContentDb, def: &UnitDef) -> Option<Fixed> {
     def.hardpoints
         .iter()
         .filter_map(|hp| db.weapon(hp.weapon.key))
-        .filter(|w| w.kind != WeaponKind::PointDefence && crate::combat::weapons::attacks_units(w) && w.resource.is_none())
+        .filter(|w| crate::combat::weapons::attacks_units(w) && w.resource.is_none())
         .map(|w| w.range)
         .max()
 }
@@ -123,16 +123,12 @@ pub(crate) fn class_may_attack(def: &UnitDef) -> bool {
 /// May `def` take up a fight by itself (assist, answering an attacker)? Automatic
 /// pursuit and assist require the class key `canAttack` (default 1) and a weapon
 /// that attacks units and is not marked by its `special` key as a special weapon
-/// (read from the executable, static; also in Roots). Where a weapon carries no
-/// `special` key the tool-class test of `attacks_units` stands in (interim; STA64 does not model special-weapon autonomy). A craft
+/// (read from the executable, static; also in Roots). A craft
 /// that fails stays where it is; whether it flees is not measured, not modelled.
 pub(crate) fn engages_alone(db: &ContentDb, def: &UnitDef) -> bool {
     class_may_attack(def)
         && def.hardpoints.iter().filter_map(|hp| db.weapon(hp.weapon.key)).any(|w| {
-            w.kind != WeaponKind::PointDefence
-                && crate::combat::weapons::attacks_units(w)
-                && w.resource.is_none()
-                && w.base.special != Some(true)
+            crate::combat::weapons::attacks_units(w) && w.resource.is_none()
         })
 }
 
@@ -177,7 +173,7 @@ impl Sim {
         // is not established.) Seatless sims (bench, legacy) are omniscient, as
         // their views are.
         let seats = !self.players.is_empty();
-        let seen = if attacks.is_empty() || !seats { Vec::new() } else { crate::sensors::compute(&self.units, Some(&db), crate::relations::Diplomacy::new(&self.players, &self.relations)) };
+        let seen = if attacks.is_empty() || !seats { Vec::new() } else { crate::sensors::compute(&self.units, Some(&db), crate::relations::Diplomacy::new(&self.players, &self.relations), &self.specials, self.tick) };
         let dip = crate::relations::Diplomacy::new(&self.players, &self.relations);
         for (id, tid) in attacks {
             let (Some(u), Some(t)) = (self.units.get(id), self.units.get(tid)) else { continue };

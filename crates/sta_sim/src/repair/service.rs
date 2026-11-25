@@ -455,6 +455,12 @@ impl Sim {
         let Some(def) = db.unit(u.def) else { return };
         let shield_rate = def.shields.recharge * Fixed::from_int(TICK_HZ as i32);
         let health_rate = def.stats.health_rate.unwrap_or_else(|| mul(shield_rate, Fixed::from_bits(858_993_459)));
+        let scale = match self.specials.a2_chant(db, id, self.tick) {
+            Some(sta_content::A2Effect::DeathChant { repair, .. }) if repair > Fixed::ZERO => {
+                mul(scale, Fixed::ONE / repair)
+            }
+            _ => scale,
+        };
         // Systems, by their modified repair time.
         let race = self.unit_race(id).unwrap_or("").to_owned();
         let r = db.rules().race_repair_of(&race).unwrap_or_default();

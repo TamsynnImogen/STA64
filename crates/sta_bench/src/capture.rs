@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use sta_content::{ContentDb, OdfIndex, Races};
 use sta_sim::replay::{Replay, ReplayError};
 use sta_sim::snapshot::SnapshotError;
-use sta_sim::{Sim, Tick};
+use sta_sim::{Sim, Tick, WorldSource};
 
 /// Bumped when [`CaptureIndex`] changes incompatibly.
 pub const FORMAT: u32 = 1;
@@ -205,6 +205,18 @@ pub struct CaptureIndex {
 }
 
 impl CaptureIndex {
+    /// Reads `capture.json` of a capture folder and nothing else: the replay and the snapshot
+    /// are not opened (a perf run needs the index and the snapshot's bytes only).
+    pub fn load(dir: &Path) -> Result<CaptureIndex, CaptureError> {
+        let path = dir.join(INDEX_FILE);
+        let text = std::fs::read(&path).map_err(|e| CaptureError::Index(format!("{}: {e}", path.display())))?;
+        let index: CaptureIndex = json5::from_str(&String::from_utf8_lossy(&text)).map_err(|e| CaptureError::Index(e.to_string()))?;
+        if index.format != FORMAT {
+            return Err(CaptureError::Index(format!("format {}, expected {FORMAT}", index.format)));
+        }
+        Ok(index)
+    }
+
     /// An index for `replay` as it stands at `tick` with `digest`: the game's
     /// own facts filled in from the replay's header and `content`, the
     /// player's view (selection, cursor, camera) empty for the caller to set.
@@ -399,11 +411,7 @@ impl Capture {
     /// Reads a capture folder.
     pub fn load(dir: &Path) -> Result<Capture, CaptureError> {
         let read = |name: &str| std::fs::read(dir.join(name)).map_err(|e| CaptureError::Io(format!("{}: {e}", dir.join(name).display())));
-        let text = read(INDEX_FILE).map_err(|e| CaptureError::Index(e.to_string()))?;
-        let index: CaptureIndex = json5::from_str(&String::from_utf8_lossy(&text)).map_err(|e| CaptureError::Index(e.to_string()))?;
-        if index.format != FORMAT {
-            return Err(CaptureError::Index(format!("format {}, expected {FORMAT}", index.format)));
-        }
+        let index = CaptureIndex::load(dir)?;
         let replay = Replay::decode(&read(REPLAY_FILE)?)?;
         let snapshot = index.has_snapshot.then(|| read(SNAPSHOT_FILE)).transpose()?;
         let note = std::fs::read_to_string(dir.join(NOTE_FILE)).unwrap_or_default();
@@ -492,6 +500,122 @@ pub fn load_install_for_map(root: &Path, active_mod: Option<&str>, map: &str) ->
         eprintln!("map {map}: tech tree {}: {}", w.file, w.message);
     }
     Ok((Arc::new(swapped.unwrap_or(db)), races))
+}
+
+/// A capture, read for a performance run (`sta-bench perf --capture`): the scene
+/// that reproduces it in `sta64 --perf`, and where its content comes from.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PerfLaunch {
+    /// The install root the capture recorded.
+    pub install_root: PathBuf,
+    /// The mod the capture recorded (`None` for stock).
+    pub active_mod: Option<String>,
+    /// The window's size when the capture noted it, rounded to whole pixels.
+    pub size: Option<(u32, u32)>,
+    /// The scene file's text (`Start=snapshot:` with the folder's own `snapshot.sta`).
+    pub scene: String,
+    /// The snapshot file of the capture.
+    pub snapshot: PathBuf,
+}
+
+/// The scene `Camera=` line that puts the bench's camera where the player's was.
+///
+/// The pose is in the renderer's space (Z mirrored from the sim's), the scene's
+/// `camera` command in the sim's. The point looked at is the capture's orbit focus;
+/// a capture without one looks along the camera's forward axis to the ground plane.
+pub fn camera_command(c: &CameraPose) -> String {
+    let [x, y, z, w] = c.rotation;
+    // forward = rotation * (0, 0, -1)
+    let fwd = [-2.0 * (x * z + w * y), -2.0 * (y * z - w * x), -(1.0 - 2.0 * (x * x + y * y))];
+    let look = c.focus.unwrap_or_else(|| {
+        let t = if fwd[1] < -1e-3 { -c.translation[1] / fwd[1] } else { 1000.0 };
+        [c.translation[0] + t * fwd[0], c.translation[1] + t * fwd[1], c.translation[2] + t * fwd[2]]
+    });
+    let e = c.translation;
+    format!("camera {} {} {} {} {} {}", e[0], e[1], -e[2], look[0], look[1], -look[2])
+}
+
+/// Everything `sta64 --perf` needs to reproduce `index`'s capture in `dir`: map, mount,
+/// camera, window size and the snapshot. `install` and `active_mod` replace the recorded
+/// mount when given. A capture without a snapshot, or whose install is not on this machine,
+/// is refused with what is missing.
+pub fn perf_launch(dir: &Path, index: &CaptureIndex, install: Option<&Path>, active_mod: Option<&str>) -> Result<PerfLaunch, CaptureError> {
+    if !index.has_snapshot {
+        return Err(CaptureError::Index(format!("{}: the capture has no snapshot ({SNAPSHOT_FILE}); a perf run starts from one", dir.display())));
+    }
+    let snapshot = std::path::absolute(dir.join(SNAPSHOT_FILE)).unwrap_or_else(|_| dir.join(SNAPSHOT_FILE));
+    if !snapshot.is_file() {
+        return Err(CaptureError::Io(format!("{}: missing", snapshot.display())));
+    }
+    let install_root = match install {
+        Some(p) => p.to_owned(),
+        None => index
+            .mount
+            .install_root
+            .as_ref()
+            .map(PathBuf::from)
+            .ok_or_else(|| CaptureError::Content("the capture records no install: pass --install <root> [--mod <name>]".into()))?,
+    };
+    if !install_root.is_dir() {
+        return Err(CaptureError::Content(format!("install {} is not on this machine: pass --install <root> [--mod <name>]", install_root.display())));
+    }
+    let active_mod = active_mod.map(str::to_owned).or_else(|| if install.is_some() { None } else { index.mount.active_mod.clone() });
+    let size = index.window.and_then(|[w, h]| (w >= 1.0 && h >= 1.0).then(|| (w.round() as u32, h.round() as u32)));
+    let mut scene = format!(
+        "; the perf scene of a capture: map, snapshot and camera of capture.json\n[Scene]\nMap={}\nStart=snapshot:{}\nFog=1\nHud=0\nGrid=0\nCursor=0\n",
+        index.map,
+        snapshot.display()
+    );
+    if let Some(c) = &index.camera {
+        let _ = writeln!(scene, "Camera={}", camera_command(c));
+    }
+    Ok(PerfLaunch { install_root, active_mod, size, scene, snapshot })
+}
+
+/// What [`check_snapshot`] found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotCheck {
+    pub tick: Tick,
+    pub units: usize,
+    pub digest: u64,
+}
+
+/// Restores the capture's snapshot on the content of `install` the way the game loaded it
+/// (profile detected, the map's own tech tree applied) and checks it: the profile is the
+/// recorded one, the snapshot's content hash is the loaded content's, and the restored sim's
+/// digest is the index's. Nothing is skipped; each failure names what differs.
+pub fn check_snapshot(index: &CaptureIndex, install: &Path, active_mod: Option<&str>, snapshot: &[u8]) -> Result<SnapshotCheck, CaptureError> {
+    let (content, _) = load_install_for_map(install, active_mod, &index.map)?;
+    let profile = format!("{:?}", content.profile());
+    if profile != index.profile {
+        return Err(CaptureError::Content(format!(
+            "content profile {profile} on {} (mod {}), the capture was made with {}: mount the install and mod the capture recorded",
+            install.display(),
+            active_mod.unwrap_or("(stock)"),
+            index.profile
+        )));
+    }
+    let sim = match Sim::from_snapshot(snapshot, Some(content)) {
+        Ok(sim) => sim,
+        Err(SnapshotError::ContentMismatch { saved, given }) => {
+            return Err(CaptureError::Content(format!(
+                "content hash mismatch: the capture's snapshot was taken with content {saved:#018x}, but {} (mod {}, profile {profile}, the tech tree of map {}) loads as {given:#018x} here. \
+                 The check is not skipped. The capture comes from other content: another install or mod, or a build whose content digest differs from this one \
+                 (a rule or definition key added to the digest since). Take the capture again with this build, or run the build that wrote it.",
+                install.display(),
+                active_mod.unwrap_or("(stock)"),
+                index.map
+            )));
+        }
+        Err(e) => return Err(CaptureError::Snapshot(e)),
+    };
+    let expected = parse_hex(&index.digest).ok_or_else(|| CaptureError::Index(format!("digest `{}`", index.digest)))?;
+    let found = sim.digest();
+    if found != expected {
+        return Err(CaptureError::SnapshotDigest { expected, found });
+    }
+    let view = sim.view();
+    Ok(SnapshotCheck { tick: view.tick, units: view.units.len(), digest: found })
 }
 
 /// `capture.md`.

@@ -26,7 +26,7 @@
 use sta_core::Fixed;
 use sta_odf::Odf;
 
-use crate::def::{A1SpecialDef, A1SpecialKind, ShotFlare, ShotLight, ShotLook, ClassLabel, FireArc, Lookup, ResourceWeaponDef, TargetMaskDef, ToHitDef, WeaponBaseDef, WeaponDef, WeaponKind};
+use crate::def::{A1SpecialDef, A1SpecialKind, A2Effect, A2SpecialDef, A2Target, ShotFlare, ShotLight, ShotLook, ClassLabel, FireArc, Lookup, ResourceWeaponDef, TargetMaskDef, ToHitDef, WeaponBaseDef, WeaponDef, WeaponKind};
 use crate::odf::{numbered, stem, Reader};
 use crate::Warning;
 
@@ -221,6 +221,10 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
 /// Decode only for an A1-provenance load. Generic A2 launch classes are not
 /// enough to identify these specials; the ordnance class is authoritative.
 pub(crate) fn weapon_def_with_a1(name: &str, odf: &Odf, ordnance: Option<&Odf>, a1: bool, warnings: &mut Vec<Warning>) -> (WeaponDef, Option<FireArc>) {
+    weapon_def_for_profile(name, odf, ordnance, a1, false, warnings)
+}
+
+pub(crate) fn weapon_def_for_profile(name: &str, odf: &Odf, ordnance: Option<&Odf>, a1: bool, a2: bool, warnings: &mut Vec<Warning>) -> (WeaponDef, Option<FireArc>) {
     let file = format!("{}.odf", stem(name));
     let own = odf.class_label().unwrap_or("").trim().to_ascii_lowercase();
     let ord_class = ordnance.and_then(|o| o.class_label()).map(|c| c.trim().to_ascii_lowercase());
@@ -328,9 +332,26 @@ pub(crate) fn weapon_def_with_a1(name: &str, odf: &Odf, ordnance: Option<&Odf>, 
     if let Some(ticks) = own_duration {
         d.duration = ticks;
     }
-    if a1 {
-        d.a1_special = a1_special(odf, ordnance, &own, ord_class.as_deref(), &file, warnings);
-        if d.a1_special.is_some() && odf.raw("specialEnergyCost").is_none()
+    if a1 || a2 {
+        if a1 || d.base.special == Some(true) || own == "detectcloak" {
+            d.a1_special = a1_special(odf, ordnance, &own, ord_class.as_deref(), &file, warnings);
+            if a2 && let Some(data) = d.a1_special.as_mut().filter(|s| s.kind == A1SpecialKind::Reflector) {
+                let mut l = Reader { odf, file: &file, warnings };
+                let chance = |r: &mut Reader<'_>, key| {
+                    Fixed::from_f64(r.num(key).unwrap_or(1.0).clamp(0.0, 1.0))
+                };
+                data.reflect_chance = Some((chance(&mut l, "reflectionRatio"), chance(&mut l, "reflectHitOwnerRatio")));
+            }
+        }
+        if a2 {
+            d.a2_special = a2_special(odf, ordnance, &own, ord_class.as_deref(), &file, warnings);
+            if let Some(special) = d.a2_special.filter(|s| s.effect.sustained_beam()) {
+                d.kind = WeaponKind::Beam;
+                d.duration = special.flight;
+            }
+        }
+        if (d.a1_special.is_some() || d.a2_special.is_some())
+            && odf.raw("specialEnergyCost").is_none()
             && let Some(ord) = ordnance
         {
             let mut o = Reader { odf: ord, file: &file, warnings };
@@ -338,6 +359,99 @@ pub(crate) fn weapon_def_with_a1(name: &str, odf: &Odf, ordnance: Option<&Odf>, 
         }
     }
     (d, arc)
+}
+
+fn a2_special(launch: &Odf, ordnance: Option<&Odf>, own: &str, ord_class: Option<&str>, file: &str, warnings: &mut Vec<Warning>) -> Option<A2SpecialDef> {
+    let mut l = Reader { odf: launch, file, warnings };
+    if l.flag("special") != Some(true) {
+        return None;
+    }
+    let effect = match (own, ord_class) {
+        ("selfdestruct", _) => A2Effect::SelfDestruct(l.fixed("radius").max(Fixed::ZERO)),
+        ("regeneration", _) => A2Effect::Regeneration(Fixed::from_f64(
+            l.num("regenModifier").unwrap_or(10.0).max(0.0),
+        )),
+        (_, Some("klingoncommandoteam")) => A2Effect::Commando(Fixed::ZERO),
+        (_, Some("plasmacannon")) => A2Effect::Plasma,
+        ("toggleweapon", Some("holding_bm")) => A2Effect::HoldingBeam { delay: 0, interval: 0, party: Fixed::ZERO },
+        ("toggleweapon", Some("borgbore")) => A2Effect::AutoAssimilator(Fixed::ZERO),
+        ("toggleweapon", Some("esconverter")) => A2Effect::ShieldProjector(Fixed::ZERO),
+        ("toggleweapon", Some("shieldinv")) => A2Effect::ShieldInversion(Fixed::ZERO),
+        (_, Some("deathchant")) => {
+            let o = ordnance?;
+            let mut o = Reader { odf: o, file, warnings: l.warnings };
+            let factor = |r: &mut Reader<'_>, key| Fixed::from_f64(r.num(key).unwrap_or(1.0).clamp(0.0, 100.0));
+            A2Effect::DeathChant {
+                fire: factor(&mut o, "FireModifier"), repair: factor(&mut o, "RepairModifier"),
+                turn: factor(&mut o, "TurnModifier"), damage: factor(&mut o, "DamageModifier"),
+                speed: factor(&mut o, "SpeedModifier"), hit: factor(&mut o, "HitModifier"),
+            }
+        }
+        (_, Some("myotron")) => A2Effect::Myotron,
+        (_, Some("posijammer")) => A2Effect::SensorJammer,
+        (_, Some("polerontorpedo")) => A2Effect::Polaron,
+        (_, Some("fedshieldemitter")) => A2Effect::RestoreShields(Fixed::from_int(100)),
+        (_, Some("borgenergyemitter")) => A2Effect::RestoreEnergy(Fixed::ZERO),
+        (_, Some("remodulation")) => A2Effect::Remodulate,
+        (_, Some("psychonicblast")) => A2Effect::PsychonicBlast(Fixed::ZERO),
+        (_, Some("micro")) => A2Effect::MicroDrain { system: 0, per_second: Fixed::ZERO },
+        _ => return None,
+    };
+    let target = if l.flag("targetLocation") == Some(true) {
+        A2Target::Point
+    } else if l.flag("needTarget") == Some(true) {
+        A2Target::Entity
+    } else {
+        A2Target::Immediate
+    };
+    let max_targets = l.num("maxTargets").filter(|n| *n >= 0.0).map_or(u32::MAX, |n| n.min(u32::MAX as f64) as u32);
+    let hit_condition = l.num("hitCondition").filter(|n| *n >= 0.0).map_or(0, |n| n.min(u32::MAX as f64) as u32);
+    let projectile = matches!(own, "launcher" | "areamissile");
+    let mut data = A2SpecialDef { target, effect, duration: 0, flight: 0, max_targets, hit_condition, projectile };
+    if matches!(effect, A2Effect::SelfDestruct(_)) {
+        data.duration = l.ticks("timer");
+    }
+    if let Some(ord) = ordnance {
+        let mut o = Reader { odf: ord, file, warnings };
+        data.flight = o.ticks("lifeSpan");
+        match effect {
+            A2Effect::Myotron | A2Effect::SensorJammer | A2Effect::Polaron | A2Effect::Remodulate |
+            A2Effect::DeathChant { .. } => {
+                data.duration = o.ticks("specialValue");
+            }
+            A2Effect::RestoreEnergy(_) => data.effect = A2Effect::RestoreEnergy(o.fixed("specialValue")),
+            A2Effect::PsychonicBlast(_) => data.effect = A2Effect::PsychonicBlast(
+                o.fixed("percentage").max(Fixed::ZERO).min(Fixed::ONE),
+            ),
+            A2Effect::Commando(_) => data.effect = A2Effect::Commando(o.fixed("partySize").max(Fixed::ZERO)),
+            A2Effect::HoldingBeam { .. } => {
+                data.effect = A2Effect::HoldingBeam {
+                    delay: o.ticks("boardingDelay"), interval: o.ticks("boardingInterval").max(1),
+                    party: o.fixed("boardingSize").max(Fixed::ZERO),
+                };
+            }
+            A2Effect::AutoAssimilator(_) => {
+                data.effect = A2Effect::AutoAssimilator(o.fixed("specialValue").max(Fixed::ZERO));
+                if data.flight == 0 {
+                    data.flight = o.ticks("duration");
+                }
+            }
+            A2Effect::ShieldProjector(_) => data.effect = A2Effect::ShieldProjector(o.fixed("specialValue").max(Fixed::ZERO)),
+            A2Effect::ShieldInversion(_) => data.effect = A2Effect::ShieldInversion(o.fixed("drainRate").max(Fixed::ZERO)),
+            A2Effect::MicroDrain { .. } => {
+                let seconds = o.num("DrainTime").filter(|s| *s > 0.0).unwrap_or(0.0);
+                data.duration = sta_core::seconds_to_ticks(seconds);
+                let total = o.num("DrainRate").unwrap_or(0.0).max(0.0);
+                data.effect = A2Effect::MicroDrain {
+                    system: o.num("affectedSystem").filter(|n| *n >= 0.0).map_or(0, |n| n.min(u32::MAX as f64) as u32),
+                    // TimedDrain divides the authored total by its duration.
+                    per_second: Fixed::from_f64(if seconds > 0.0 { total / seconds } else { 0.0 }),
+                };
+            }
+            A2Effect::SelfDestruct(_) | A2Effect::RestoreShields(_) | A2Effect::Regeneration(_) | A2Effect::Plasma => {}
+        }
+    }
+    Some(data)
 }
 
 /// The ten A1 Federation special forms, including campaign launch aliases.
@@ -580,5 +694,44 @@ mod look_tests {
     fn negative_and_malformed_values_read_as_absent() {
         let l = look("phaser", "Radius = -3\nlifeSpan = soon\nLength = inf\nspriteDuration = -inf\n");
         assert_eq!((l.radius, l.life_span, l.length, l.sprite_duration), (None, None, None, None));
+    }
+
+    #[test]
+    fn a2_area_special_reads_ordnance_cost_and_effect_without_changing_a1() {
+        let launcher = sta_odf::resolve("gmyotron", &mut |_| Some(
+            "classLabel = \"areamissile\"\nspecial = 1\nordName = \"myotron\"\nmaxTargets = 4\nhitCondition = 2\nrange = 400\n".to_owned()
+        )).unwrap();
+        let ordnance = sta_odf::resolve("myotron", &mut |_| Some(
+            "classLabel = \"myotron\"\nspecialEnergyCost = 1000\nspecialValue = 15\nlifeSpan = 10\n".to_owned()
+        )).unwrap();
+        let mut warnings = Vec::new();
+        let a2 = weapon_def_for_profile("gmyotron", &launcher, Some(&ordnance), false, true, &mut warnings).0;
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(a2.energy_cost, Fixed::from_int(1000));
+        assert_eq!(a2.a1_special, None);
+        assert_eq!(a2.a2_special, Some(A2SpecialDef {
+            target: A2Target::Immediate,
+            effect: A2Effect::Myotron,
+            duration: sta_core::seconds_to_ticks(15.0),
+            flight: sta_core::seconds_to_ticks(10.0),
+            max_targets: 4,
+            hit_condition: 2,
+            projectile: true,
+        }));
+        let a1 = weapon_def_for_profile("gmyotron", &launcher, Some(&ordnance), true, false, &mut Vec::new()).0;
+        assert_eq!(a1.a2_special, None);
+    }
+
+    #[test]
+    fn stock_a2_federation_class_pairs_use_shared_special_payload() {
+        let launcher = sta_odf::resolve("gwcover", &mut |_| Some(
+            "classLabel = \"areacannon\"\nspecial = 1\nordName = \"wcover\"\nmaxTargets = 4\nhitCondition = 2\n".to_owned()
+        )).unwrap();
+        let ordnance = sta_odf::resolve("wcover", &mut |_| Some(
+            "classLabel = \"warpcoreoverload\"\nspecialEnergyCost = 600\nspecialValue = 25\n".to_owned()
+        )).unwrap();
+        let weapon = weapon_def_for_profile("gwcover", &launcher, Some(&ordnance), false, true, &mut Vec::new()).0;
+        assert_eq!(weapon.a1_special.map(|s| s.kind), Some(A1SpecialKind::EngineOverload));
+        assert_eq!(weapon.energy_cost, Fixed::from_int(600));
     }
 }
