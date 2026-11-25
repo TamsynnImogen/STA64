@@ -216,9 +216,9 @@ struct LogFile {
     ticks: Vec<TickOutput>,
 }
 
-// View logs include the derived PD slots. The player save and replay schemas
-// do not store views, so their shared seam revision stays unchanged.
-const VIEW_LOG_REV: u32 = SEAM_REV + 1;
+// View logs include the derived PD slots and projected model appearance.
+// Player saves and command replays do not store views.
+const VIEW_LOG_REV: u32 = SEAM_REV + 2;
 
 /// A recorded run, replayed as a [`WorldSource`] that ignores commands.
 /// Past the end it repeats the last view with no events.

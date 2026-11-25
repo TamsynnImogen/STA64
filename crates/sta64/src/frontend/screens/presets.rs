@@ -334,6 +334,7 @@ mod tests {
         draft.set_observing(true);
         draft.seats[0].control = SeatControl::Mcp;
         draft.seats[1].control = SeatControl::Easy;
+        draft.seats[1].race = "fx".into();
         draft.seats[2].control = SeatControl::Hard;
         draft.seats[3].race = RANDOM_SIDE.into();
         draft.seats[2].team = 0;

@@ -29,7 +29,8 @@
 //! Format 39 (SIM-75) appends the shields a nebula took from craft and gives back.
 //! Format 40 adds ReplaceWeapon lineage, reload and child tracking after the nebula shields.
 //! Format 47 adds Armada I special ordnance, timed effects and cooldowns to the specials record.
-//! Format 49 adds Armada II specials to that record.
+//! Format 49 adds Armada II specials to that record. Format 50 saves generated
+//! transwarp pairs, Galaxy rendezvous, and holographic projections.
 //!
 //! The state types of other crates (`MoveStats`) have no serde, so the body
 //! uses small mirror records here instead of touching those crates.
@@ -74,7 +75,7 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// Format 45 appends cargo routes and holds.
 /// Format 46 stores build queue job identities and the last allocated id.
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 49;
+pub const FORMAT_VERSION: u16 = 50;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]

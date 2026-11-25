@@ -543,7 +543,8 @@ pub(crate) fn on_buttons(
             }
             Act::Launch => {
                 let mut launch = draft.clone();
-                if launch.random_placement || launch.seats.iter().any(|seat| seat.race == data::RANDOM_SIDE) {
+                let random_side = data.races().len() > 1 && launch.seats.iter().any(|seat| seat.race == data::RANDOM_SIDE);
+                if launch.random_placement || random_side {
                     launch.seed = menu_random();
                 }
                 if let Some(mut setup) = launch.to_setup(&data) {

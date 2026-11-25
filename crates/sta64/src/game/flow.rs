@@ -454,6 +454,17 @@ pub(crate) struct FrontEndData {
     pub menu_music: Vec<String>,
 }
 
+/// Whether a BZN belongs in the Instant Action map catalogue.
+fn instant_action_map(map: &sta_bzn::Map) -> bool {
+    let kind = map.mission_type.trim();
+    // A2 labels playable maps with an `mp` type. A1 uses EmptyMission for
+    // both skirmish and campaign maps, so its authored script references
+    // distinguish the latter. Keep scripted A2 multiplayer maps available.
+    kind.to_ascii_lowercase().starts_with("mp")
+        || ((kind.eq_ignore_ascii_case("EmptyMission") || kind.eq_ignore_ascii_case("Inst4XMission"))
+            && map.scripts.is_empty())
+}
+
 /// The content, the multiplayer maps (two start slots or more, each as a
 /// converted `MapDef` named by its file), the mods and the menu scene of a mount.
 pub(crate) fn front_end_data(vfs: &sta_vfs::Vfs, catalogue: &mut Catalogue, install_root: Option<&Path>) -> Result<FrontEndData, String> {
@@ -469,6 +480,7 @@ pub(crate) fn front_end_data(vfs: &sta_vfs::Vfs, catalogue: &mut Catalogue, inst
     for name in &names {
         let Some(Ok(bytes)) = vfs.read(&format!("bzn/{name}.bzn")).or_else(|| vfs.read(&format!("bzn/{name}.sol"))) else { continue };
         let Ok(map) = sta_bzn::parse(&bytes) else { continue };
+        if !instant_action_map(&map) { continue; }
         let converted = MapDef::convert_bzn_named_in(&map, name, &db, vfs, &index);
         for warning in converted.warnings.iter().filter(|w| w.file.ends_with(".mdf")) {
             debug!("{warning}");

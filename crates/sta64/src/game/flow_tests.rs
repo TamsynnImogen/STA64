@@ -583,6 +583,48 @@ fn front_end_map_names_resolve_localized_keys_and_keep_name_fallbacks() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn instant_action_map_catalogue_uses_authored_map_kind_and_a1_scripts() {
+    use sta_bzn::{Map, StartLoc};
+
+    let base = Map {
+        version: 3013,
+        binary: true,
+        mission_type: "mp-regular".into(),
+        start_count: 2,
+        start_locs: vec![
+            StartLoc { kind: "empty".into(), team: -1, ..default() },
+            StartLoc { pos: [10.0, 0.0, 0.0], kind: "player".into(), team: 1, ..default() },
+            StartLoc { pos: [-10.0, 0.0, 0.0], kind: "player".into(), team: 2, ..default() },
+        ],
+        ..default()
+    };
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("sta64-instant-map-types-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(root.join("Data/bzn")).unwrap();
+    for (name, kind, scripts) in [
+        ("a2_skirmish", "mp-regular", vec![]),
+        ("a2_scripted_mp", "mp-regular", vec!["custom.lua"]),
+        ("a2_campaign", "mission", vec!["campaign.lua"]),
+        ("a1_skirmish", "EmptyMission", vec![]),
+        ("a1_campaign", "EmptyMission", vec!["Federation1S.dsl"]),
+        ("a1_instant", "Inst4XMission", vec![]),
+    ] {
+        let mut map = base.clone();
+        map.mission_type = kind.into();
+        map.scripts = scripts.into_iter().map(str::to_owned).collect();
+        map.file_name = format!("{name}.bzn");
+        std::fs::write(root.join(format!("Data/bzn/{name}.bzn")), sta_bzn::write::write(&map).unwrap()).unwrap();
+    }
+    let vfs = sta_vfs::Vfs::mount_install(&root, None).unwrap();
+    let mut catalogue = crate::map::Catalogue::default();
+    let listed: Vec<_> = front_end_data(&vfs, &mut catalogue, Some(&root)).unwrap().screens.maps
+        .iter().map(|map| map.def.name.clone()).collect();
+    assert_eq!(listed, ["a1_instant", "a1_skirmish", "a2_scripted_mp", "a2_skirmish"]);
+    assert!(vfs.read("bzn/a1_campaign.bzn").is_some(), "campaign map remains mounted for campaign/editor paths");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// A remount drops what was cached by name from the previous mount: the texture cache keeps misses
 /// (`None`), so a texture only the new mod has (`PA_ECFR0` of STA2 Classic) stayed "not found".
 #[test]

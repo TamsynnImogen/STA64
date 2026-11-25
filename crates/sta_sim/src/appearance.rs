@@ -2,7 +2,7 @@
 //! digests. Subsystem health is derived from the existing saved damage state.
 
 use serde::{Deserialize, Serialize};
-use sta_core::{EntityId, Fixed, PlayerId};
+use sta_core::{ContentKey, EntityId, Fixed, PlayerId};
 
 use crate::{Sim, command::Subsystem, world::EntityKind};
 
@@ -19,6 +19,9 @@ pub struct AppearanceView {
     pub factions: Vec<(PlayerId, String)>,
     /// Only definition-backed live craft/stations. A zero-HP system is unknown.
     pub systems: Vec<(EntityId, [Option<SystemAppearance>; 5])>,
+    /// Active Holo-Generator models and team colours, sorted by caster.
+    #[serde(default)]
+    pub projections: Vec<(EntityId, ContentKey, PlayerId)>,
 }
 
 impl AppearanceView {
@@ -27,6 +30,14 @@ impl AppearanceView {
             .binary_search_by_key(&owner, |r| r.0)
             .ok()
             .map(|i| self.factions[i].1.as_str())
+    }
+
+    pub fn projected_model(&self, id: EntityId) -> Option<ContentKey> {
+        self.projections.binary_search_by_key(&id, |r| r.0).ok().map(|i| self.projections[i].1)
+    }
+
+    pub fn projected_owner(&self, id: EntityId) -> Option<PlayerId> {
+        self.projections.binary_search_by_key(&id, |r| r.0).ok().map(|i| self.projections[i].2)
     }
 
     pub fn systems(&self, id: EntityId) -> Option<&[Option<SystemAppearance>; 5]> {
@@ -71,6 +82,7 @@ impl Sim {
         AppearanceView {
             factions: self.appearance_factions.clone(),
             systems,
+            projections: self.specials.a2.federation.projections(),
         }
     }
 }

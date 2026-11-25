@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use bevy::prelude::*;
-use sta_content::{A1BaseOfficers, A1SpecialDef, A1SpecialKind, ButtonSlots, ContentDb, DefRef, GuiCfg, Hardpoint, SlotCommand, UnitDef, WeaponDef, WeaponKind};
+use sta_content::{A1BaseOfficers, A1SpecialDef, A1SpecialKind, A2Effect, A2SpecialDef, A2Target, ButtonSlots, ContentDb, DefRef, GuiCfg, Hardpoint, SlotCommand, UnitDef, WeaponDef, WeaponKind};
 use sta_sim::command::{CommandKind, Order};
 use sta_sim::fake::ScriptedSource;
 use sta_sim::view::PlayerView;
@@ -608,6 +608,58 @@ fn special_rail_feed(kind: A1SpecialKind, button_slot: u8) -> HudFeed {
         ..Default::default()
     };
     HudFeed { view: Arc::new(view), player: PlayerId(1), selected: vec![EntityId(1)], content: Some(db), ..Default::default() }
+}
+
+fn a2_special_feed(effect: A2Effect, target: A2Target, button_slot: Option<u8>) -> HudFeed {
+    let fake = sta_content::fake::db();
+    let mut weapon = WeaponDef::new("a2_test", "special", WeaponKind::Beam);
+    weapon.a2_special = Some(A2SpecialDef {
+        target, effect, duration: 1, flight: 0, max_targets: 1,
+        hit_condition: 0, projectile: false,
+    });
+    weapon.raw = sta_odf::resolve("a2_test.odf", &mut |_| Some(
+        button_slot.map_or(String::new(), |slot| format!("buttonSlot = {slot}\n"))
+    )).unwrap().into();
+    let mut builder = ContentDb::builder().profile(Profile::Sta1Classic)
+        .features(Profile::Sta1Classic.features()).weapon(weapon);
+    for original in fake.weapons() { builder = builder.weapon(original.clone()); }
+    for original in fake.units() {
+        let mut unit = original.clone();
+        if unit.odf == "fx_cruiser" {
+            unit.hardpoints.push(Hardpoint { weapon: DefRef::new("a2_test"), node: String::new(), arc: None });
+        }
+        builder = builder.unit(unit);
+    }
+    let db = Arc::new(builder.build().unwrap());
+    feed(&db)
+}
+
+#[test]
+fn self_destruct_control_uses_its_immediate_special_slot() {
+    let feed = a2_special_feed(A2Effect::SelfDestruct(Fixed::from_int(60)), A2Target::Immediate, None);
+    let slots = ButtonSlots::from_header("int BUTTON_LOCATION_ORDER_SELF_DESTRUCT = 2;").0;
+    let button = control::buttons(&feed, Page::Orders, &slots, None).into_iter()
+        .find(|b| b.cell == 1).expect("self destruct control");
+    assert_eq!(button.act, Act::Special(0));
+    assert_eq!(button.look, Look::Ready);
+    assert_eq!(button.sprite_names, ["b_gselfdes"]);
+    assert!(matches!(crate::ui::hud::model::command(&feed, &button.act),
+        Some((CommandKind::Order(Order::Special { slot: 0, target: sta_sim::command::Target::None, .. }), _))));
+}
+
+#[test]
+fn a2_gate_and_tractor_use_authored_rail_slots_and_target_rules() {
+    let gate = a2_special_feed(A2Effect::TranswarpGate, A2Target::Point, Some(3));
+    let button = speed::buttons(&gate, None).into_iter().find(|b| b.cell == speed::RAIL_BASE + 2)
+        .expect("gate rail button");
+    assert_eq!(button.act, Act::Target(TargetMode::Special(0)));
+    assert_eq!(button.look, Look::Ready);
+
+    let tractor = a2_special_feed(A2Effect::TractorBeam(Fixed::from_int(80)), A2Target::Entity, Some(4));
+    let button = speed::buttons(&tractor, None).into_iter().find(|b| b.cell == speed::RAIL_BASE + 3)
+        .expect("tractor rail button");
+    assert_eq!(button.act, Act::Target(TargetMode::Special(0)));
+    assert_eq!(button.look, Look::Ready);
 }
 
 #[test]

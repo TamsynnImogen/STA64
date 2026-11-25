@@ -139,7 +139,10 @@ fn active_enough(w: &WeaponDef, data: A1SpecialDef, energy: Fixed) -> bool {
 fn researched(db: &ContentDb, w: &WeaponDef, state: &dyn sta_content::TechState) -> bool {
     // No Specials and Science Ships Only omit unavailable weapons from
     // their trees. Ships can carry the unlisted and listed versions together.
-    db.tech_tree().is_none_or(|t| t.availability(&w.odf, state).is_available())
+    db.tech_tree().is_none_or(|t| {
+        t.availability(&w.odf, state).is_available()
+            || w.campaign_transwarp() && t.entry(&w.odf).is_none()
+    })
 }
 
 pub(crate) fn researched_in_world(
