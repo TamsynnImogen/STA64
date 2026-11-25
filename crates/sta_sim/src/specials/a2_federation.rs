@@ -6,7 +6,7 @@ use sta_core::{ContentKey, EntityId, Fixed, PlayerId, TICK_HZ, Tick, Vec3};
 
 use super::weapon_at;
 use crate::Sim;
-use crate::command::{Order, Target};
+use crate::command::{Command, CommandKind, Order, Target};
 use crate::event::SimEvent;
 use crate::view::UnitFlags;
 use crate::world::{Entities, Entity, EntityKind, NEUTRAL};
@@ -456,7 +456,13 @@ impl Sim {
                 .iter()
                 .any(|f| f.ships.contains(&id))
         };
-        if part_a == part_b || !free(source.id) {
+        let can_move = |ship: &Entity| {
+            ship.orderable()
+                && ship.mobile()
+                && !self.production.is_welding(ship.id)
+                && !self.specials.engines_held(ship.id, self.tick)
+        };
+        if part_a == part_b || !free(source.id) || !can_move(source) {
             return false;
         }
         let Some(other) = self
@@ -467,8 +473,7 @@ impl Sim {
                     && u.owner == source.owner
                     && alive(u)
                     && free(u.id)
-                    && !u.flags.contains(UnitFlags::ENGINES_OFF)
-                    && !self.specials.engines_held(u.id, self.tick)
+                    && can_move(u)
             })
             .min_by_key(|u| (crate::combat::weapons::flat(source.pos, u.pos).1, u.id))
             .cloned()
@@ -493,14 +498,15 @@ impl Sim {
             self.bound_federation_point(offset(mid, axis, -half)),
         ];
         for (ship, to) in [&first, &second].into_iter().zip(goals) {
-            self.apply_scripted(
-                source.owner,
-                &Order::Move {
+            self.apply(&Command {
+                player: source.owner,
+                seq: 0,
+                kind: CommandKind::Order(Order::Move {
                     units: vec![ship.id],
                     to,
                     queue: false,
-                },
-            );
+                }),
+            });
         }
         self.specials.a2.federation.fusions.push(Fusion {
             ships: [first.id, second.id],

@@ -236,6 +236,12 @@ fn restore_shields_caps_an_allied_target() {
 
 #[test]
 fn galaxy_halves_rejoin_after_real_rendezvous() {
+    for separation in [40, 180] {
+        galaxy_rendezvous_from(separation);
+    }
+}
+
+fn galaxy_rendezvous_from(separation: i32) {
     let mut sim = world(Profile::Sta2Classic);
     let galaxy = spawn(&mut sim, "fgalaxy", 0, 0);
     let split = sim.step(&[cast(0, galaxy, 0, Target::None)]);
@@ -256,10 +262,11 @@ fn galaxy_halves_rejoin_after_real_rendezvous() {
         .id;
     // Both stock halves brake 50 units from an ordinary move target.
     // The final docking leg still has to reach the authored 10-unit clearance.
-    for id in [saucer, bridge] {
-        sim.units.get_mut(id).unwrap().stats.too_close_to_turn = fixed(50);
+    for (id, x) in [(saucer, -separation), (bridge, separation)] {
+        let unit = sim.units.get_mut(id).unwrap();
+        unit.stats.too_close_to_turn = fixed(50);
+        unit.pos = at(x);
     }
-    sim.units.get_mut(bridge).unwrap().pos.x = fixed(250);
     let started = sim.step(&[cast(0, saucer, 0, Target::None)]);
     assert!(
         started
@@ -267,10 +274,9 @@ fn galaxy_halves_rejoin_after_real_rendezvous() {
             .iter()
             .any(|e| matches!(e, SimEvent::Fired { shooter, .. } if *shooter == saucer))
     );
-    assert!(sim.units.get(saucer).unwrap().target.is_some());
-    assert!(sim.units.get(bridge).unwrap().target.is_some());
+    assert!(super::a1::a1_special_active(&started.view, saucer, 0));
     let mut joined = false;
-    for _ in 0..300 {
+    for _ in 0..600 {
         let out = sim.step(&[]);
         if out
             .events
