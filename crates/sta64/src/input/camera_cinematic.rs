@@ -19,6 +19,8 @@
 //!   `ui::presentation`, a script fault, the mission's end) gives it back too. A player's
 //!   skip ([`ScriptReply::CineractiveSkipped`]) does not: it sets `isCineractiveCancel`
 //!   and the script ends the cineractive (fed1 plays its zoom-out first).
+//! - A unit a shot follows that is replaced (`SimEvent::Replaced`: a refit, an evolution) is
+//!   followed on its replacement, as the selection is.
 //! - A `Presentation::Shot` outside a cineractive moves the camera once (at most once a
 //!   second) and holds nothing; `A2.CenterCamera(entity)` moves the focus there.
 //!
@@ -85,6 +87,10 @@ pub struct CinematicCamera {
     loose_at: Option<f32>,
     /// The shot model, fed the same requests as the mission's.
     pub model: Cineractive,
+    /// Units replaced (old, new) in the view these requests come with, and that view's tick: a
+    /// script names a unit it found in the view before, so a shot raised in the same tick as the
+    /// unit's replacement still names the old one.
+    replaced: (u64, Vec<(sta_sim::EntityId, sta_sim::EntityId)>),
 }
 
 /// A shot outside a cineractive moves the camera at most this often (real seconds): a script that
@@ -116,6 +122,22 @@ fn release(cam: &mut CinematicCamera, orbit: &mut Query<&mut Orbit>) {
     }
 }
 
+/// Units the shot follows that were replaced by others (a refit, an evolution: `SimEvent::Replaced`):
+/// the shot follows the replacements, as the selection does. Without this the followed object is
+/// gone from the view, the shot has no pose and the camera holds where it was, the play view
+/// (#1252: the original's shot stays on the ship, stated by a player).
+fn follow_replacements(model: &mut Cineractive, replaced: &[(sta_sim::EntityId, sta_sim::EntityId)]) {
+    use sta_mission::cineractive::Track;
+    let Some(shot) = model.shot.as_mut() else { return };
+    for track in std::iter::once(&mut shot.eye).chain(shot.target.as_mut()) {
+        for &(old, new) in replaced {
+            if track.what == Track::Object(old) {
+                track.what = Track::Object(new);
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn consume(
     mut events: MessageReader<SimMsg>,
@@ -134,10 +156,21 @@ pub(crate) fn consume(
     }
     // The script raised these on the tick before the view that carries them.
     let tick = link.as_deref().map_or(0, |l| l.curr().tick.saturating_sub(1));
+    if cam.replaced.0 != tick {
+        cam.replaced = (tick, Vec::new());
+    }
     for SimMsg(e) in events.read() {
+        if let SimEvent::Replaced { old, new, .. } = e {
+            cam.replaced.1.push((*old, *new));
+            let CinematicCamera { model, replaced, .. } = &mut *cam;
+            follow_replacements(model, &replaced.1);
+            continue;
+        }
         let SimEvent::Present(p) = e else { continue };
         let placed = cam.model.shot_placed.then(|| cam.model.shot.clone());
         cam.model.observe(p, tick, &paths.0);
+        let CinematicCamera { model, replaced, .. } = &mut *cam;
+        follow_replacements(model, &replaced.1);
         if cam.model.shot_placed && placed != Some(cam.model.shot.clone()) {
             cam.shots += 1;
         }
@@ -388,6 +421,60 @@ mod tests {
         let ahead = tf.forward().as_vec3();
         let want = (Vec3::new(100.0, 0.0, -500.0) - tf.translation).normalize();
         assert!(ahead.dot(want) > 0.999, "{ahead:?} {want:?}");
+    }
+
+    /// #1252: a cutscene's first update places a shot on a unit that a refit replaces in the same
+    /// update (the replacement's event before or after the shot's request). The first frame drawn
+    /// is that shot, on the replacement, not the play camera.
+    #[test]
+    fn the_first_shot_follows_a_unit_replaced_in_the_same_update() {
+        use sta_sim::command::LocalRouter;
+        use sta_sim::view::UnitFlags;
+        use sta_sim::{EntityId, PlayerId, Sim, UnitView, WorldView};
+        let (old, new) = (EntityId(7), EntityId(9));
+        let from = sv(100, 50, 40);
+        let on = SimEvent::Present(Presentation::Cineractive { on: true, skippable: true });
+        let shot = SimEvent::Present(Presentation::Shot { from: Spot::Position(from), at: Spot::Entity(old), seconds: Fixed::ZERO });
+        let refit = SimEvent::Replaced { old, new, select: true };
+        for order in [[on.clone(), shot.clone(), refit.clone()], [refit.clone(), on.clone(), shot.clone()]] {
+            let mut app = app();
+            let before = orbit(&mut app);
+            let def = sta_content::fake::db().key("fx_cruiser").unwrap();
+            // The view after the refit: only the replacement is there.
+            let view = WorldView {
+                tick: 4,
+                units: vec![UnitView {
+                    id: new,
+                    def,
+                    owner: PlayerId(0),
+                    pos: sv(300, 0, 200),
+                    heading: (Fixed::ZERO, Fixed::ONE),
+                    speed: Fixed::ZERO,
+                    hull: [Fixed::ONE; 2],
+                    shields: [[Fixed::ZERO; 2]; 4],
+                    crew: None,
+                    energy: None,
+                    autonomy: None,
+                    flags: UnitFlags::SELECTABLE,
+                    progress: None,
+                }],
+                ..default()
+            };
+            let mut link = SimLink::new(Box::new(Sim::new(1)), Box::new(LocalRouter::new()), PlayerId(0));
+            link.feed(std::sync::Arc::new(view));
+            app.insert_resource(link);
+            // One update: the cutscene starts, its shot looks at `old`, and the sim replaces `old`.
+            for e in order {
+                app.world_mut().write_message(SimMsg(e));
+            }
+            app.update();
+            assert!(app.world().resource::<CinematicCamera>().locked);
+            assert_ne!(orbit(&mut app), before, "the first frame is the shot, not the play camera");
+            let tf = *app.world_mut().query::<&Transform>().single(app.world()).unwrap();
+            assert!(tf.translation.distance(Vec3::new(100.0, 50.0, -40.0)) < 1e-2, "{:?}", tf.translation);
+            let want = (Vec3::new(300.0, 0.0, -200.0) - tf.translation).normalize();
+            assert!(tf.forward().as_vec3().dot(want) > 0.999, "looks at the replacement");
+        }
     }
 
     #[test]
