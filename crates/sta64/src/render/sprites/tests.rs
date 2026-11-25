@@ -729,6 +729,51 @@ fn animate_before_1236(
     }
 }
 
+/// [`TABLE`] with what the #1236 scene adds: a flipbook sprite drawn only by blinking nodes (so its
+/// look goes stale while they are all off), a sprite whose uv animation holds an overflowing key
+/// (its uv is NaN or infinite), and a node whose colour overflows (NaN once a fade of 0 multiplies
+/// it). Malformed data, but a mod can ship it.
+fn table_1236_text() -> String {
+    TABLE
+        .replace(
+            "cut_b tex_b 0 32 32 32\n",
+            "cut_b tex_b 0 32 32 32\n@tmaterial=additive\nflipdot tex_b 0 0 32 32 @anim=flip4\nnanspr tex_a 0 0 32 32 @anim=nanoff\n",
+        )
+        .replace(
+            "@animation pulse\n",
+            "@sprite_node blinkFlip flipdot strobe (1,1) (1,1,1) billboard\n\
+             @sprite_node nanNode nanspr const (1,1) (1,1,1) billboard\n\
+             @sprite_node hotNode dot const (1,1) (1e39,0.5,0.5) billboard\n\
+             @animation nanoff\nu_offset 2 1.0 linear\n@keyframes\n0.0 1e39\n0.5 0\n@animation pulse\n",
+        )
+}
+
+fn table_1236() -> SpriteTables {
+    SpriteTables(Arc::new(SpriteTable::parse(table_1236_text().as_bytes())))
+}
+
+/// The table the #1236 scene swaps in mid-run: the flipbook sprite's rectangle and a colour key moved,
+/// and one sprite gone (its nodes then find none).
+fn table_1236_swapped() -> SpriteTables {
+    let text = table_1236_text()
+        .replace("glow tex_a 0 0 32 32 @anim=flip4", "glow tex_a 0 32 32 32 @anim=flip4")
+        .replace("0.5 (0.25,0.5,1)", "0.5 (0.75,0.5,0.125)")
+        .replace("ad_b tex_b 0 32 32 32\n", "");
+    SpriteTables(Arc::new(SpriteTable::parse(text.as_bytes())))
+}
+
+/// A sprite node of [`table_1236`] as `model_scene::spawn_sprite_node` makes it, under `parent`.
+fn spawn_node_1236(app: &mut App, node: &str, parent: Option<Entity>) -> Entity {
+    let (m, mut fx, _) = material_of(&table_1236(), node);
+    let h = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(m);
+    fx.material = h.clone();
+    let mut e = app.world_mut().spawn((fx, MeshMaterial3d(h), Visibility::default()));
+    if let Some(p) = parent {
+        e.insert(ChildOf(p));
+    }
+    e.id()
+}
+
 /// An app with the game's adoption, cloak and build fade and ghost tint, animated by the `animate`
 /// before #1236 (`before`) or by today's.
 fn adopted_app(before: bool) -> App {
@@ -737,7 +782,7 @@ fn adopted_app(before: bool) -> App {
         .init_asset::<StandardMaterial>()
         .init_asset::<SpriteMaterial>()
         .init_asset::<ShaderBuffer>()
-        .insert_resource(table())
+        .insert_resource(table_1236())
         .insert_resource(AnimClock::new(ClockMode::Bench { step: 0.173 }, 0));
     let slots = SpriteSlots::with_capacity(&mut app.world_mut().resource_mut::<Assets<ShaderBuffer>>(), 4);
     app.insert_resource(slots);
@@ -763,10 +808,10 @@ struct LateParent(Entity);
 /// After the animation, at each of the first updates, a node of another kind (every third under
 /// the parent that is hidden and shown again).
 fn spawn_late_mixed(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>, parent: Res<LateParent>, mut frame: Local<usize>) {
-    const KINDS: [&str; 6] = ["stillGlow", "puffA", "blink", "blinkGlow", "still", "blA"];
+    const KINDS: [&str; 7] = ["stillGlow", "puffA", "blink", "blinkGlow", "still", "blA", "blinkFlip"];
     *frame += 1;
     if *frame <= 18 {
-        let (m, mut fx, _) = material_of(&table(), KINDS[*frame % KINDS.len()]);
+        let (m, mut fx, _) = material_of(&table_1236(), KINDS[*frame % KINDS.len()]);
         let h = materials.add(m);
         fx.material = h.clone();
         let mut e = commands.spawn((fx, MeshMaterial3d(h), Visibility::default(), LateMixed(*frame)));
@@ -787,6 +832,8 @@ struct Scene1236 {
     nimbus: usize,
     /// A still node whose visibility another system writes, as the construction reveal does.
     poked: usize,
+    /// A still node whose `SpriteFx` is edited mid-run (it starts to blink, in another colour).
+    edited: usize,
     fixed: Vec<Entity>,
 }
 
@@ -804,25 +851,36 @@ fn scene_1236(app: &mut App) -> Scene1236 {
                 1 => Some(parent),
                 _ => Some(unit),
             };
-            fixed.push(spawn_node(app, k, p));
+            fixed.push(spawn_node_1236(app, k, p));
         }
     }
     for k in ["puffA", "blink", "still", "stillGlow"] {
-        fixed.push(spawn_node(app, k, Some(ghost)));
+        fixed.push(spawn_node_1236(app, k, Some(ghost)));
     }
+    // The flipbook look drawn only by blinking nodes, one of them under the parent.
+    fixed.push(spawn_node_1236(app, "blinkFlip", None));
+    fixed.push(spawn_node_1236(app, "blinkFlip", None));
+    fixed.push(spawn_node_1236(app, "blinkFlip", Some(parent)));
+    // Non-finite values: a NaN or infinite uv, and an overflowing colour with and without a fade of 0.
+    fixed.push(spawn_node_1236(app, "nanNode", None));
+    fixed.push(spawn_node_1236(app, "hotNode", None));
+    let hot = spawn_node_1236(app, "hotNode", None);
+    app.world_mut().entity_mut(hot).insert(SpriteFade(0.0));
+    fixed.push(hot);
     let nimbus = fixed.len();
-    let e = spawn_node(app, "blinkGlow", None);
+    let e = spawn_node_1236(app, "blinkGlow", None);
     app.world_mut().entity_mut(e).insert(crate::render::rock::MoonNimbus { on: true });
     fixed.push(e);
     let poked = 0;
     // Puffs of the first two rounds (free and under the parent) get fades.
     let faded = (0..2 * KINDS.len()).filter(|i| i % 2 == 1).collect();
-    Scene1236 { parent, unit, faded, nimbus, poked, fixed }
+    Scene1236 { parent, unit, faded, nimbus, poked, edited: 2 * KINDS.len(), fixed }
 }
 
 /// The scene's inputs at frame `n`, the same in both apps: whether the clock moves, the parent's
 /// and nimbus's visibility, the fades (changed only every few frames, sometimes removed), the cloak,
-/// and an outside write of a node's visibility.
+/// an outside write of a node's visibility, an edit of a node's `SpriteFx`, and a table swapped in
+/// and back.
 fn drive_1236(app: &mut App, s: &Scene1236, n: usize) {
     // Held frames (the clock does not move), so unchanged frames come up.
     if !matches!(n % 9, 4 | 5 | 6) {
@@ -864,6 +922,17 @@ fn drive_1236(app: &mut App, s: &Scene1236, n: usize) {
     }
     if n == 21 || n == 66 {
         *app.world_mut().get_mut::<Visibility>(s.fixed[s.poked]).unwrap() = Visibility::Hidden;
+    }
+    if n == 40 {
+        let mut fx = app.world_mut().get_mut::<SpriteFx>(s.fixed[s.edited]).unwrap();
+        fx.node_anim = Some("strobe".into());
+        fx.colour = [0.9, 0.1, 0.2];
+    }
+    if n == 50 {
+        app.insert_resource(table_1236_swapped());
+    }
+    if n == 75 {
+        app.insert_resource(table_1236());
     }
 }
 
@@ -957,6 +1026,10 @@ fn run_1236(frames: usize, mut meddle: impl FnMut(&mut App, &Scene1236, usize)) 
 fn animate_decides_what_the_animate_before_1236_decided_for_every_node_at_every_frame() {
     let (compared, mut new, s) = run_1236(90, |_, _, _| {}).unwrap_or_else(|e| panic!("{e}"));
     let nodes = nodes_1236(&mut new, &s);
+    // The non-finite cases were reached: a NaN uv and an overflowing colour times a fade of 0.
+    let state = |i: usize| format!("{:?}", new.world().get::<SpriteState>(nodes[i]).unwrap());
+    let (nan_uv, hot_faded) = (s.nimbus - 3, s.nimbus - 1);
+    assert!(state(nan_uv).contains("NaN") && state(hot_faded).contains("NaN"), "{} / {}", state(nan_uv), state(hot_faded));
     assert!(compared > 90 * 50, "{compared} node frames compared");
     // Not vacuous: nodes were passed over (and others were not).
     let passes: Vec<u32> = nodes.iter().map(|&e| new.world().get::<SpriteKeys>(e).unwrap().passes).collect();

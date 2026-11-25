@@ -86,6 +86,8 @@ fn colour(c: [f32; 3]) -> Color {
 pub struct SpriteKeys {
     /// `(animation, sprite)` indices into [`Played`], once resolved from the node's names.
     keys: Option<(Option<u32>, u32)>,
+    /// The [`Played::generation`] the indices belong to.
+    generation: u32,
     /// `(fade, nimbus)` present at the node's last pass.
     had: (bool, bool),
     /// Full passes so far, so tests can see that nodes were passed over.
@@ -113,6 +115,9 @@ pub struct Played {
     sprite_ix: std::collections::HashMap<String, u32>,
     /// `None` when the table has no such sprite.
     sprites: Vec<Entry<Option<Affine2>>>,
+    /// Counts the tables seen: a new one clears the names, and indices of an older one are resolved
+    /// again.
+    generation: u32,
 }
 
 /// The bits of a value as an [`Entry`] keeps them, with a tag for the variant.
@@ -147,8 +152,14 @@ impl Played {
         table.sprite(name).map(|s| uv_affine(spr_anim::sprite_uv(table, s, t)))
     }
 
-    /// This frame's values of every known name; `all` marks every one moved (a new table).
+    /// This frame's values of every known name. A new table (`all`) drops every name instead: every
+    /// node runs in that frame anyway and resolves its names again, so names only an earlier table
+    /// had are not played on.
     fn refresh(&mut self, table: &SpriteTable, t: f32, all: bool) {
+        if all {
+            *self = Self { generation: self.generation.wrapping_add(1), ..Self::default() };
+            return;
+        }
         for e in &mut self.anims {
             e.now = Self::anim_now(table, &e.name, t);
             let bits = value_bits(e.now);
@@ -189,6 +200,14 @@ impl Played {
     }
 }
 
+/// Whether a node's state equals itself. A colour or uv with a NaN does not, so `main`'s comparison
+/// finds it changed in every frame where the node is shown (slot written, look rewritten for a NaN
+/// uv, change mark): such a node must run every frame, as on `main`.
+#[allow(clippy::eq_op)]
+fn settled(s: &material::SpriteState) -> bool {
+    s.colour == s.colour && s.uv == s.uv
+}
+
 /// Advance sprite-node animations and sprite flipbooks.
 ///
 /// An adopted node (ADR 0009) keeps `main`'s rule, only while shown and only on change, with its
@@ -218,7 +237,9 @@ impl Played {
 ///   same value: a shown node passed over found it current at its last pass, and only a pass with
 ///   another uv for the sprite could have moved it since, which would have made the node's uv move.
 ///   So every write, slot, look and change mark of a frame is `main`'s. A node that is not adopted
-///   runs every frame, as its own material may be edited by others.
+///   runs every frame, as its own material may be edited by others; so does a node whose stored
+///   colour or uv holds a NaN ([`settled`]), which `main` finds changed in every frame. A new table
+///   runs every node and drops the names of the old one from [`Played`].
 /// - Not skipped: nodes whose ancestors are hidden. Whether they are drawn this frame is known only
 ///   after `PostUpdate`'s visibility propagation, after this system, and a node that comes into view
 ///   must already hold this frame's slot, state and change mark; their blink must also be current for
@@ -251,12 +272,13 @@ pub fn animate(
     played.refresh(table, t, all);
     writes.clear();
     for (f, fade, nimbus, mut vis, state, mut drawn, mut keys) in &mut fx {
-        let resolved = keys.keys.filter(|_| !f.is_changed());
+        let resolved = keys.keys.filter(|_| !f.is_changed() && keys.generation == played.generation);
         let (anim, sprite) = match resolved {
             Some(k) => k,
             None => {
                 let k = played.resolve(table, t, &f);
                 keys.keys = Some(k);
+                keys.generation = played.generation;
                 k
             }
         };
@@ -271,7 +293,8 @@ pub fn animate(
             && !state.as_ref().is_some_and(|s| s.is_changed())
             && !drawn.as_ref().is_some_and(|d| d.is_changed())
             && !anim.is_some_and(|i| played.anims[i as usize].moved)
-            && !played.sprites[sprite as usize].moved;
+            && !played.sprites[sprite as usize].moved
+            && state.as_deref().is_some_and(settled);
         if quiet {
             continue;
         }
