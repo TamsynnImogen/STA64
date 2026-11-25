@@ -94,6 +94,10 @@ pub(super) fn add(app: &mut App, cfg: &LaunchConfig, scene_camera: Option<BenchC
         .add_plugins(crate::render::post::PostFxPlugin::from_cfg(cfg))
         .add_plugins((crate::render::cull::CullPlugin, crate::render::profile::ProfilePlugin, crate::render::shader_shadow::ShaderShadowPlugin));
 
+    if let Some(view) = crate::render::wireframe::WireframeView::from_cfg(cfg) {
+        app.add_plugins(crate::render::wireframe::WireframeViewPlugin(view));
+    }
+
     if sprite_reference() {
         // ADR 0009 S6: the frame-identity run draws sprite nodes through `main`'s per-node
         // materials (adoption off, the switch the GPU test's reference path uses), to be compared

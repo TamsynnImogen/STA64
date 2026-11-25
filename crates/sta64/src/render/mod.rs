@@ -39,6 +39,7 @@ pub mod strategic;
 pub mod surfaces;
 pub mod textures;
 pub mod units;
+pub mod wireframe;
 
 #[cfg(test)]
 mod clock_guard;
