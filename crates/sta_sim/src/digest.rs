@@ -65,7 +65,7 @@ fn _every_entity_field_has_a_section(e: &Entity) {
 /// not in the digest) here and in `Sim::digest`.
 fn _every_sim_field_is_decided(s: &Sim) {
     let Sim {
-        tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, starts: _, regions: _,
+        tick: _, rng: _, units: _, labels: _, players: _, ai_seats: _, content: _, directors_cut: _, starts: _, regions: _,
         bounds: _, confinement: _, perception: _, events: _, weapons: _, movement: _, ship_upgrades: _, economy: _,
         production: _, victory: _, specials: _, autonomy: _, start_effects: _, replacements: _, nav: _, subsystems: _, zero_shield_holds: _, attrs: _, scripted: _, switches: _, relations: _, team_changes: _, appearance_factions: _, approach_warp: _, engagement: _, watchdog: _, colonies: _, transports: _, recrew: _, repairs: _, recycles: _, nebula_shields: _, alerts: _, mission_switches: _,
     } = s;
@@ -145,6 +145,7 @@ impl Sim {
 
     fn movement_digest(&self) -> u64 {
         let mut h = start("movement");
+        self.hash_directors_cut(&mut h);
         for e in self.units.iter() {
             h.u64(e.id.0 as u64);
             for f in [e.pos.x, e.pos.y, e.pos.z, e.heading.0, e.heading.1, e.speed, e.omega] {

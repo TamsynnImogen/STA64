@@ -44,7 +44,8 @@ pub const MAGIC: [u8; 4] = *b"S64N";
 /// 18 adds empty-shield recharge holds to that snapshot (#1101).
 /// 19 appends `Order::Trade` (tag 23) and cargo routes to the snapshot.
 /// 20 appends `Order::CancelBuild` (tag 24) and build job identities to the snapshot.
-pub const PROTOCOL_VERSION: u16 = 20;
+/// 21 adds the match's Armada I Director's Cut option and snapshot flag.
+pub const PROTOCOL_VERSION: u16 = 21;
 /// Magic, version and body length.
 pub const HEADER_LEN: usize = 10;
 /// Largest frame, header included.
@@ -1804,7 +1805,11 @@ mod tests {
                 name: "a2_borg01".into(),
                 digest: 42,
             },
-            options: GameOptions::default(),
+            options: {
+                let mut options = GameOptions::default();
+                options.directors_cut = true;
+                options
+            },
             seats: vec![
                 seat(0, Occupant::Peer),
                 seat(1, Occupant::Peer),
@@ -2160,7 +2165,7 @@ mod tests {
     #[test]
     fn golden_encoding_is_pinned() {
         let all: Vec<u8> = samples().iter().flat_map(|m| encode(m).unwrap()).collect();
-        assert_eq!(PROTOCOL_VERSION, 20);
+        assert_eq!(PROTOCOL_VERSION, 21);
         assert_eq!(
             fnv1a64(&all),
             GOLDEN,
@@ -2168,7 +2173,7 @@ mod tests {
         );
     }
 
-    const GOLDEN: u64 = 17650980094352331510;
+    const GOLDEN: u64 = 12969742152349942279;
 
     /// Tags are positional and never move: NET-04 appended 22 to 28 after
     /// `Sections` (21), the last tag of protocol 2.
@@ -2275,8 +2280,8 @@ mod tests {
     fn header_is_little_endian_and_frozen() {
         let bytes = encode(&Message::Ping { nonce: 0 }).unwrap();
         // Ping is tag 12, nonce 0: two body bytes.
-        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 20, 0, 2, 0, 0, 0, 12, 0]);
-        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 20, 0, 0, 0, 0, 0]);
+        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 21, 0, 2, 0, 0, 0, 12, 0]);
+        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 21, 0, 0, 0, 0, 0]);
     }
 
     #[test]

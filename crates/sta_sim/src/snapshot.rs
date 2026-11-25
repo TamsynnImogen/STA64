@@ -11,13 +11,14 @@
 //!
 //! The [`ContentDb`] is not stored (it is not serialisable, and the files
 //! are the player's own): the snapshot keeps its hash and [`Sim::from_snapshot`]
-//! takes the database from the caller and refuses one that hashes differently.
+//! checks the database supplied by the caller. Format 46 can match the same
+//! content with the Director's Cut rules omitted.
 //! Lineage and packs are informational and never checked.
 //!
 //! Adding a subsystem's state (weapons from SIM-04, say) is one field on
 //! [`Body`], filled in [`Sim::snapshot`] and read back in
-//! [`Sim::from_snapshot`], plus a [`FORMAT_VERSION`] bump. Old layouts are
-//! refused, not migrated. Format 14 (SIM-28) appended the pending start-helper
+//! [`Sim::from_snapshot`], plus a [`FORMAT_VERSION`] bump. Format 46 loads
+//! with Director's Cut off. Earlier layouts are refused. Format 14 (SIM-28) appended the pending start-helper
 //! lifecycle rows; format 15 (CON-35) is the first with provenance and with
 //! the keyed content digest's hash. Formats 8 to 14, which earlier builds
 //! read with narrow compatibility paths, carry a content hash of the old
@@ -72,7 +73,9 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// Format 45 appends cargo routes and holds.
 /// Format 46 stores build queue job identities and the last allocated id.
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 46;
+/// Format 47 records the Armada I Director's Cut match option.
+pub const FORMAT_VERSION: u16 = 47;
+const PRE_DIRECTORS_CUT_FORMAT: u16 = 46;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
@@ -110,26 +113,26 @@ pub struct SnapshotInfo {
 /// Reads a snapshot's header and [`Provenance`] only, refusing a wrong file,
 /// format or seam revision as [`Sim::from_snapshot`] does.
 pub fn snapshot_info(bytes: &[u8]) -> Result<SnapshotInfo, SnapshotError> {
-    let content_hash = check_header(bytes)?;
+    let (_, content_hash) = check_header(bytes)?;
     let (provenance, _): (Provenance, _) =
         postcard::take_from_bytes(&bytes[HEADER..]).map_err(|e| SnapshotError::Corrupt(e.to_string()))?;
     Ok(SnapshotInfo { content_hash, provenance })
 }
 
 /// Magic, format and seam revision; the saved content hash.
-fn check_header(bytes: &[u8]) -> Result<u64, SnapshotError> {
+fn check_header(bytes: &[u8]) -> Result<(u16, u64), SnapshotError> {
     if bytes.len() < HEADER || bytes[..4] != MAGIC {
         return Err(SnapshotError::BadMagic);
     }
     let found = u16::from_le_bytes([bytes[4], bytes[5]]);
-    if found != FORMAT_VERSION {
+    if !matches!(found, PRE_DIRECTORS_CUT_FORMAT | FORMAT_VERSION) {
         return Err(SnapshotError::FormatVersion { found });
     }
     let seam = u32::from_le_bytes(bytes[6..10].try_into().unwrap());
     if seam != SEAM_REV {
         return Err(SnapshotError::SeamRev { found: seam });
     }
-    Ok(u64::from_le_bytes(bytes[10..18].try_into().unwrap()))
+    Ok((found, u64::from_le_bytes(bytes[10..18].try_into().unwrap())))
 }
 
 /// Why a snapshot could not be loaded.
@@ -153,7 +156,7 @@ impl std::fmt::Display for SnapshotError {
         match self {
             SnapshotError::BadMagic => write!(f, "not a snapshot"),
             SnapshotError::FormatVersion { found } if *found < FORMAT_VERSION => {
-                write!(f, "snapshot format {found} is from an older STA64 and cannot be read (this build reads format {FORMAT_VERSION} only)")
+                write!(f, "snapshot format {found} is from an older STA64 and cannot be read (this build reads formats {PRE_DIRECTORS_CUT_FORMAT} and {FORMAT_VERSION})")
             }
             SnapshotError::FormatVersion { found } => {
                 write!(f, "snapshot format {found}, expected {FORMAT_VERSION}")
@@ -529,6 +532,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&self.economy.dock_rows()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.production.officer_upgrade_rows()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.economy.trade_rows()).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&self.directors_cut).expect("snapshot serialises"));
         out
     }
 
@@ -539,9 +543,11 @@ impl Sim {
         bytes: &[u8],
         content: Option<Arc<ContentDb>>,
     ) -> Result<Sim, SnapshotError> {
-        let saved = check_header(bytes)?;
+        let (format, saved) = check_header(bytes)?;
         let given = content.as_ref().map_or(0, |c| c.hash());
-        if saved != given {
+        if saved != given && !(format == PRE_DIRECTORS_CUT_FORMAT
+            && content.as_ref().is_some_and(|db| db.matches_pre_directors_cut_hash(saved)))
+        {
             return Err(SnapshotError::ContentMismatch { saved, given });
         }
         let corrupt_postcard = |e: postcard::Error| SnapshotError::Corrupt(e.to_string());
@@ -617,6 +623,14 @@ impl Sim {
         let (docks, rest): (crate::economy::dock::DockRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         let (officer_upgrades, rest): (crate::production::officer_upgrades::OfficerUpgradeRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
         let (trade, rest): (crate::economy::trade::TradeRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+        let (directors_cut, rest): (bool, _) = if format == PRE_DIRECTORS_CUT_FORMAT {
+            (false, rest)
+        } else {
+            postcard::take_from_bytes(rest).map_err(corrupt_postcard)?
+        };
+        if directors_cut && !content.as_ref().is_some_and(|db| db.profile() == sta_content::Profile::Sta1Classic) {
+            return Err(SnapshotError::Corrupt("Director's Cut requires Armada I content".into()));
+        }
         if !rest.is_empty() { return Err(SnapshotError::Corrupt("trailing bytes".into())); }
         if let Some(row) = b.economy.miners.iter().find(|row| row.5 > 4) {
             return Err(SnapshotError::Corrupt(format!("mining phase {} is not supported", row.5)));
@@ -788,6 +802,7 @@ impl Sim {
             players: b.players,
             ai_seats: b.ai_seats,
             content,
+            directors_cut,
             starts: b.starts,
             regions: b.regions,
             bounds,

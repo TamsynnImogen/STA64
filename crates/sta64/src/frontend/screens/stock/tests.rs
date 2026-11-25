@@ -354,6 +354,30 @@ fn advanced_officer_choice_uses_authored_rule_and_default_resets_it() {
 }
 
 #[test]
+fn directors_cut_advanced_is_profile_gated_and_cancel_restores_the_choice() {
+    for layout in [ScreenLayout::Stock, ScreenLayout::Plain] {
+        let mut data = four_races();
+        data.content = Arc::new(sta_content::ContentDb::builder()
+            .profile(sta_content::Profile::Sta1Classic).build().unwrap());
+        let mut app = app_with(data, None, 1.0);
+        app.world_mut().resource_mut::<ScreensConfig>().layout = layout;
+        go(&mut app, Screen::Setup);
+        press(&mut app, Act::Goto(Screen::Advanced));
+        press(&mut app, Act::ToggleDirectorsCut);
+        assert!(app.world().resource::<SetupDraft>().options.directors_cut);
+        press(&mut app, Act::CloseAdvanced(false));
+        assert!(!app.world().resource::<SetupDraft>().options.directors_cut);
+        press(&mut app, Act::Goto(Screen::Advanced));
+        press(&mut app, Act::ToggleDirectorsCut);
+        press(&mut app, Act::CloseAdvanced(true));
+        assert!(app.world().resource::<SetupDraft>().options.directors_cut);
+    }
+    let mut app = app();
+    go(&mut app, Screen::Advanced);
+    assert!(!app.world_mut().query::<&Act>().iter(app.world()).any(|a| *a == Act::ToggleDirectorsCut));
+}
+
+#[test]
 fn plain_advanced_speed_cycles_and_resets() {
     let mut app = app();
     app.world_mut().resource_mut::<ScreensConfig>().layout = ScreenLayout::Plain;

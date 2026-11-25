@@ -29,7 +29,7 @@ fn save_at(path: &Path, draft: &SetupDraft, data: &ScreenData) -> Result<(), Str
     validate(draft, data)?;
     let map = &data.maps[draft.map].def.name;
     let mut text = format!(
-        "version={VERSION}\nmap={}\nseed={}\nseat_count={}\nobserving={}\nreturn_row={}\nspeed={}\nresources={}\nofficer_limit={}\ncolour={}\nfog={}\nrandom_placement={}\npreview_visible={}\nstart_markers={}\n",
+        "version={VERSION}\nmap={}\nseed={}\nseat_count={}\nobserving={}\nreturn_row={}\nspeed={}\nresources={}\nofficer_limit={}\ndirectors_cut={}\ncolour={}\nfog={}\nrandom_placement={}\npreview_visible={}\nstart_markers={}\n",
         encode(map),
         draft.seed,
         draft.seats.len(),
@@ -38,6 +38,7 @@ fn save_at(path: &Path, draft: &SetupDraft, data: &ScreenData) -> Result<(), Str
         speed_key(draft.speed),
         resources_key(draft.options.starting_resources),
         draft.options.officer_limit,
+        draft.options.directors_cut,
         draft
             .colour
             .map_or_else(|| "default".to_owned(), |n| n.to_string()),
@@ -174,6 +175,8 @@ fn load_at(path: &Path, data: &ScreenData) -> Result<SetupDraft, String> {
         _ => return Err("Invalid Instant Action starting resources".into()),
     };
     draft.options.officer_limit = number(get("officer_limit")?, "officer_limit")?;
+    let directors_cut = fields.get("directors_cut").map_or(Ok(false), |value| boolean(value, "directors_cut"))?;
+    draft.options.directors_cut = directors_cut && data.content.profile() == sta_content::Profile::Sta1Classic;
     draft.colour = match get("colour")? {
         "default" => None,
         value => Some(number(value, "colour")?),
@@ -359,6 +362,43 @@ mod tests {
         assert!(loaded.random_placement);
         assert!(!loaded.preview_visible);
         assert_eq!(loaded.start_markers, SetupStartMarkers::None);
+        std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn old_preset_defaults_directors_cut_off_and_invalid_value_is_rejected() {
+        let mut data = ScreenData::fake();
+        data.races = std::sync::Arc::new(sta_content::Races::from_defs(vec![sta_content::RaceDef {
+            stem: "fx".into(),
+            name: "fx".into(),
+            display_key: None,
+            slot: Some(0),
+            interface: None,
+            interface_sprites: None,
+            single_player_music: None,
+            multiplayer_music: None,
+            music_tracks: Vec::new(),
+            standard_units: Vec::new(),
+            minimal_units: Vec::new(),
+            stock: [0; 4],
+            lots_stock: [0; 4],
+            normal_crew: None,
+            lots_crew: None,
+        }]));
+        let other_profile = data.clone();
+        data.content = std::sync::Arc::new(sta_content::ContentDb::builder()
+            .profile(sta_content::Profile::Sta1Classic).build().unwrap());
+        let file = path("directors-legacy");
+        let mut draft = SetupDraft::new(&data);
+        draft.options.directors_cut = true;
+        save_at(&file, &draft, &data).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(load_at(&file, &data).unwrap().options.directors_cut);
+        assert!(!load_at(&file, &other_profile).unwrap().options.directors_cut);
+        std::fs::write(&file, text.replace("directors_cut=true\n", "")).unwrap();
+        assert!(!load_at(&file, &data).unwrap().options.directors_cut);
+        std::fs::write(&file, text.replace("directors_cut=true", "directors_cut=maybe")).unwrap();
+        assert!(load_at(&file, &data).unwrap_err().contains("directors_cut"));
         std::fs::remove_file(file).unwrap();
     }
 

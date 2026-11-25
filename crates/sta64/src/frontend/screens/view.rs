@@ -49,6 +49,7 @@ pub enum Act {
     SaveSetup,
     LoadSetup,
     CycleOfficerLimit,
+    ToggleDirectorsCut,
     CycleMatchSpeed,
     PickTeamColour(usize),
     RandomTeamColour,
@@ -345,6 +346,7 @@ fn advanced(ctx: &Ctx) -> impl Bundle {
     let resources = ctx.strings.and_then(|s| s.native_label(resources.0))
         .filter(|s| !s.trim().is_empty()).map(str::to_owned).unwrap_or_else(|| tr(resources.1));
     let officer = officer_caption(ctx);
+    let directors = directors_caption(ctx);
     content(ctx.theme, move |p| {
         p.spawn((button(&t, &resources, 360.0), Act::CycleResources));
         if let Some(caption) = &officer {
@@ -353,11 +355,28 @@ fn advanced(ctx: &Ctx) -> impl Bundle {
             p.spawn(disabled_button(&t, &tr("Officer limit unavailable"), 360.0));
         }
         p.spawn((button(&t, &speed, 360.0), Act::CycleMatchSpeed));
+        if let Some(caption) = &directors {
+            p.spawn((button(&t, caption, 360.0), Act::ToggleDirectorsCut));
+        }
         p.spawn(row(t.gap)).with_children(|r| {
             r.spawn((button(&t, &tr("OK"), 140.0), Act::CloseAdvanced(true)));
             r.spawn((button(&t, &tr("Cancel"), 140.0), Act::CloseAdvanced(false)));
             r.spawn((button(&t, &tr("Default"), 170.0), Act::DefaultOptions));
         });
+    })
+}
+
+/// Armada I label.map reverses the state key names: directors_on reads Off.
+pub(crate) fn directors_caption(ctx: &Ctx) -> Option<String> {
+    (ctx.data.content.profile() == sta_content::Profile::Sta1Classic).then(|| {
+        let (key, fallback) = if ctx.draft.options.directors_cut {
+            ("directors_off", "Director's Cut: On")
+        } else {
+            ("directors_on", "Director's Cut: Off")
+        };
+        ctx.strings.and_then(|s| s.native_label(key))
+            .filter(|s| !s.trim().is_empty())
+            .map_or_else(|| tr(fallback), str::to_owned)
     })
 }
 

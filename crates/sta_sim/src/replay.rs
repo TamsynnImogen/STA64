@@ -46,8 +46,10 @@ pub const MAGIC: [u8; 4] = *b"STAR";
 /// format 5 adds `ControlRec::RemoteAi` and digests the AI seats, so the
 /// digests of a replay with a computer player differ from format 4's.
 /// Format 6 adds single-job cancellation and digests production job identities.
-/// Older formats are refused ([`ReplayError::FormatVersion`]).
-pub const FORMAT_VERSION: u16 = 6;
+/// Format 7 records the Armada I Director's Cut match option. Format 6
+/// decodes with Director's Cut disabled.
+pub const FORMAT_VERSION: u16 = 7;
+const PRE_DIRECTORS_CUT_FORMAT: u16 = 6;
 /// Digest every this many ticks unless the recorder is told otherwise.
 pub const DEFAULT_DIGEST_EVERY: Tick = 30;
 
@@ -84,7 +86,7 @@ impl std::fmt::Display for ReplayError {
         match self {
             ReplayError::BadMagic => write!(f, "not a replay file"),
             ReplayError::FormatVersion { found } if *found < FORMAT_VERSION => {
-                write!(f, "replay format {found} is from an older STA64 and cannot be read (this build reads format {FORMAT_VERSION} only)")
+                write!(f, "replay format {found} is from an older STA64 and cannot be read (this build reads formats {PRE_DIRECTORS_CUT_FORMAT} and {FORMAT_VERSION})")
             }
             ReplayError::FormatVersion { found } => {
                 write!(f, "replay format {found}, expected {FORMAT_VERSION}")
@@ -202,6 +204,49 @@ pub struct Replay {
     pub end_tick: Tick,
 }
 
+// Keep the old postcard layout for replay files recorded before this option.
+#[derive(Deserialize)]
+struct ReplayV6 {
+    seam_rev: u32,
+    content_hash: u64,
+    lineage: String,
+    packs: Vec<String>,
+    peers: Vec<PeerRec>,
+    seed: u64,
+    map: MapDef,
+    players: Vec<SeatRec>,
+    starting_resources: sta_content::StartingResources,
+    officer_limit: u32,
+    starts: StartRec,
+    commands: Vec<Logged>,
+    digests: Vec<(Tick, u64)>,
+    end_tick: Tick,
+}
+
+impl From<ReplayV6> for Replay {
+    fn from(old: ReplayV6) -> Self {
+        Self {
+            seam_rev: old.seam_rev,
+            content_hash: old.content_hash,
+            lineage: old.lineage,
+            packs: old.packs,
+            peers: old.peers,
+            seed: old.seed,
+            map: old.map,
+            players: old.players,
+            options: GameOptions {
+                starting_resources: old.starting_resources,
+                officer_limit: old.officer_limit,
+                directors_cut: false,
+            },
+            starts: old.starts,
+            commands: old.commands,
+            digests: old.digests,
+            end_tick: old.end_tick,
+        }
+    }
+}
+
 impl Replay {
     /// The header of a game started from `setup`: no commands yet, no digests
     /// and `end_tick` 0. A recorder fills in the rest ([`Recorder`], or a
@@ -272,7 +317,7 @@ impl Replay {
             return Err(ReplayError::BadMagic);
         }
         let found = u16::from_le_bytes([bytes[4], bytes[5]]);
-        if found != FORMAT_VERSION {
+        if !matches!(found, PRE_DIRECTORS_CUT_FORMAT | FORMAT_VERSION) {
             return Err(ReplayError::FormatVersion { found });
         }
         // Revision is the first postcard field. Reject it before decoding a
@@ -282,8 +327,11 @@ impl Replay {
         if seam != SEAM_REV {
             return Err(ReplayError::SeamRev { found: seam });
         }
-        let (r, remaining) = postcard::take_from_bytes::<Replay>(&bytes[6..])
-            .map_err(|e| ReplayError::Corrupt(e.to_string()))?;
+        let (r, remaining) = if found == PRE_DIRECTORS_CUT_FORMAT {
+            postcard::take_from_bytes::<ReplayV6>(&bytes[6..]).map(|(record, rest)| (record.into(), rest))
+        } else {
+            postcard::take_from_bytes::<Replay>(&bytes[6..])
+        }.map_err(|e| ReplayError::Corrupt(e.to_string()))?;
         if !remaining.is_empty() {
             return Err(ReplayError::Corrupt("trailing bytes".into()));
         }
@@ -296,10 +344,14 @@ impl Replay {
         Ok(r)
     }
 
+    fn matches_pre_directors_cut_content(&self, content: &ContentDb) -> bool {
+        !self.options.directors_cut && content.matches_pre_directors_cut_hash(self.content_hash)
+    }
+
     /// The setup the game started from, on `content`, which must be the
     /// content it was recorded with.
     pub fn setup(&self, content: Arc<ContentDb>) -> Result<GameSetup, ReplayError> {
-        if content.hash() != self.content_hash {
+        if content.hash() != self.content_hash && !self.matches_pre_directors_cut_content(&content) {
             return Err(ReplayError::ContentMismatch {
                 expected: self.content_hash,
                 found: content.hash(),
@@ -364,6 +416,9 @@ impl Replay {
     /// tick `until` (a capture stops before the log ends). Recorded digests
     /// at or before `until` are checked, tick 0's included.
     pub fn play_from(&self, mut sim: Sim, until: Tick) -> Result<Sim, ReplayError> {
+        let legacy_hash = sim.content.as_deref().filter(|db| {
+            !sim.directors_cut && db.hash() != self.content_hash && self.matches_pre_directors_cut_content(db)
+        }).map(|_| self.content_hash);
         let mut next_digest = 0;
         let mut next_cmd = 0;
         loop {
@@ -373,7 +428,7 @@ impl Replay {
                     break;
                 }
                 next_digest += 1;
-                let found = sim.digest();
+                let found = legacy_hash.map_or_else(|| sim.digest(), |hash| sim.digest_with_content_hash(hash));
                 if t == tick && found != expected {
                     return Err(ReplayError::Desync {
                         tick,
@@ -680,6 +735,22 @@ mod tests {
         assert_eq!(restored.view(), expected);
         assert_eq!(restored.unit(unit).unwrap().owner, PlayerId(0));
         assert_eq!(restored.perceived_owner(unit), Some(PlayerId(1)));
+    }
+
+    #[test]
+    fn pre_directors_cut_replays_decode_with_the_option_off() {
+        let setup = setup();
+        let replay = Recorder::with_interval(&setup, 1).finish();
+        let mut legacy = MAGIC.to_vec();
+        legacy.extend_from_slice(&PRE_DIRECTORS_CUT_FORMAT.to_le_bytes());
+        legacy.extend(postcard::to_allocvec(&(
+            replay.seam_rev, replay.content_hash, &replay.lineage, &replay.packs, &replay.peers,
+            replay.seed, &replay.map, &replay.players, replay.options.starting_resources,
+            replay.options.officer_limit, &replay.starts, &replay.commands, &replay.digests, replay.end_tick,
+        )).unwrap());
+        let old = Replay::decode(&legacy).unwrap();
+        assert_eq!(old, replay);
+        assert_eq!(old.play(setup.content.clone()).unwrap().digest(), Sim::from_setup(&setup).digest());
     }
 
     #[test]

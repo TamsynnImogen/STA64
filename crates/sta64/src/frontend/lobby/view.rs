@@ -40,6 +40,7 @@ pub enum MpAct {
     PickMap,
     CycleResources,
     CycleOfficers,
+    ToggleDirectorsCut,
     /// Leave the room.
     Leave,
 }
@@ -439,6 +440,15 @@ fn map_window(p: &mut Box_, ctx: &Ctx, s: &Session, view: &LobbyView) {
     match officer {
         Some(c) => act_button(p, ctx, MSlot::Officers, &c, MpAct::CycleOfficers, host && open),
         None => act_button(p, ctx, MSlot::Officers, &tr("Officer limit unavailable"), MpAct::CycleOfficers, false),
+    }
+    if ctx.data.content.profile() == sta_content::Profile::Sta1Classic {
+        // Armada I label.map reverses the state key names: directors_on reads Off.
+        let caption = if view.options.directors_cut {
+            cap(ctx, "directors_off", "Director's Cut: On")
+        } else {
+            cap(ctx, "directors_on", "Director's Cut: Off")
+        };
+        act_button(p, ctx, MSlot::DirectorsCut, &caption, MpAct::ToggleDirectorsCut, host && open);
     }
 }
 

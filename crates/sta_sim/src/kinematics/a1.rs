@@ -95,6 +95,15 @@ pub fn params(db: &ContentDb, def: ContentKey) -> Option<A1Params> {
     Some(A1Params { play, borg: unit.a1_borg })
 }
 
+/// Dogfighting switches from shared play physics to the attacking craft's
+/// own physics file (read from Armada.exe, static). Mods with no usable
+/// class integrator can keep dogfighting with the shared physics.
+pub(crate) fn combat_params(db: &ContentDb, def: ContentKey) -> Option<A1Params> {
+    let unit = db.unit(def)?;
+    let play = unit.a1_combat_dynamics.or_else(|| db.a1_play_physics().copied())?;
+    Some(A1Params { play, borg: unit.a1_borg })
+}
+
 /// `e^-x` for `x >= 0`: the series on a halved argument, squared back.
 ///
 /// Valid range: any `x`. Below zero gives one; from 23 up gives zero (e^-23 is
@@ -239,6 +248,13 @@ fn decide(u: &mut Unit, p: &A1Params, queued: &[Vec3], plan: Option<Plan>) -> Cm
         steer: None,
         aim: None,
     };
+    if let Some(aim) = plan.and_then(|p| p.dogfight) {
+        return Cmd {
+            throttle: Fixed::ONE,
+            steer: Some(bearing_error(u, aim)),
+            aim: Some(aim),
+        };
+    }
     let Some(target) = u.target else {
         // No target: no throttle, and an attacker in range turns to face.
         let steer = plan.and_then(|pl| pl.face).map(|f| bearing_error(u, f));

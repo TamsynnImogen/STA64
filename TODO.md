@@ -7,6 +7,9 @@ Legend: `[ ]` to do · `[~]` in progress · `[x]` done · `[?]` done, needs your
 
 ## Needs your check
 
+- [?] Armada I Director's Cut: enable it in Instant Action Advanced or as a multiplayer host. Attacking ships use their own `physicsFile` during continuous combat pursuit and settle into firing position with the mode off. The physics switch and angular anchor steering are read from Armada.exe (static). STA64 uses planar pursuit with turn clearance. Compare pass spacing with the original and try saving and loading the Instant Action settings.
+- [ ] Armada I Director's Cut: investigate the full 3D `attack_path<N>` maneuver sequence, attack chains, and the original Game Settings behavior in campaign.
+
 - [?] Hover the selected unit's subsystem icon, number and hull/shield bars. The tooltip should follow the specific readout. Click the portrait or wireframe to centre on the unit, then drag a selection box from the map and release over the HUD. Check crew and officers in Stock and STA64 HUDs with STA2 Classic and an authored hidden crew readout.
 
 - [?] #1170 left-clicks a waiting or active queue icon. Try both in a yard and a research station in Stock and STA64 HUDs. The list closes the gap and refunds paid entries. The next job starts when eligible. Original-game timing and cancellation/refunds outside stock Armada II still need observation.

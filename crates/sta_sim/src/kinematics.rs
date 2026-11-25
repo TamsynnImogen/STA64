@@ -242,6 +242,8 @@ pub(crate) struct Plan {
     pub warp_out: bool,
     /// With no target: turn to face this point while braking.
     pub face: Option<Vec3>,
+    /// Local pursuit point for Armada I Director’s Cut.
+    pub dogfight: Option<Vec3>,
 }
 
 /// Speed change per second in and out of warp, as a multiple of `warpSpeed`:
@@ -344,8 +346,17 @@ impl Sim {
                 _ => &[],
             };
             let previous = u.pos;
-            let a1 = if model == Model::A1 { db.and_then(|db| a1::params(db, u.def)) } else { None };
             let plan = plans.binary_search_by_key(&u.id, |p| p.0).ok().map(|i| plans[i].1);
+            let dogfight = plan.is_some_and(|p| p.dogfight.is_some());
+            let a1 = db.and_then(|db| {
+                if dogfight {
+                    a1::combat_params(db, u.def)
+                } else if model == Model::A1 {
+                    a1::params(db, u.def)
+                } else {
+                    None
+                }
+            });
             let cap = caps.binary_search_by_key(&u.id, |c| c.0).ok().map(|i| caps[i].1);
             let own = (u.stats.max_speed, u.stats.warp_speed);
             if let Some((impulse, warp)) = cap {
@@ -870,4 +881,4 @@ mod smooth {
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-mod a1_tests;
+pub(crate) mod a1_tests;

@@ -492,6 +492,10 @@ pub(crate) fn on_buttons(
             Act::Cycle(row, Col::Team) => draft.cycle_team(row),
             Act::CycleResources => draft.cycle_resources(),
             Act::CycleOfficerLimit => draft.cycle_officer_limit(&data),
+            Act::ToggleDirectorsCut if data.content.profile() == sta_content::Profile::Sta1Classic => {
+                draft.options.directors_cut = !draft.options.directors_cut;
+            }
+            Act::ToggleDirectorsCut => {}
             Act::CycleMatchSpeed => draft.speed = draft.speed.next(),
             Act::CycleFog => draft.fog = draft.fog.next(),
             Act::ToggleRandomPlacement => draft.toggle_placement(),

@@ -156,6 +156,8 @@ pub struct Sim {
     ai_seats: Vec<PlayerId>,
     /// What spawns resolve against; `None` for a sim made with [`Sim::new`].
     content: Option<Arc<ContentDb>>,
+    /// A1 match rule for using dogfight movement in combat.
+    directors_cut: bool,
     /// The map's start positions and regions, kept for the systems that use
     /// them. Fixed by the setup, so not in the digest.
     starts: Vec<StartPos>,
@@ -244,6 +246,7 @@ impl Sim {
             players: Vec::new(),
             ai_seats: Vec::new(),
             content: None,
+            directors_cut: false,
             starts: Vec::new(),
             regions: Vec::new(),
             bounds: None,
@@ -740,6 +743,7 @@ impl Sim {
         }
         self.units.hash_into(&mut h);
         self.movement.hash_into(&mut h);
+        self.hash_directors_cut(&mut h);
         if !self.approach_warp.is_empty() {
             self.approach_warp.hash_into(&mut h);
         }

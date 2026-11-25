@@ -127,7 +127,7 @@ impl ContentDb {
     }
 
     pub fn with_rules(mut self, rules: crate::Rules) -> Self {
-        self.rules = rules;
+        self.rules = if self.profile == Profile::Sta1Classic { rules } else { rules.without_a1_dogfight() };
         self.digest = digest_of(&self);
         self
     }
@@ -544,6 +544,16 @@ impl ContentDb {
         self.digest.hash64()
     }
 
+    /// For legacy saves and replays whose match options predate dogfighting.
+    /// Match against exactly the same rules with the newly used A1 fields removed.
+    pub fn matches_pre_directors_cut_hash(&self, hash: u64) -> bool {
+        self.profile == Profile::Sta1Classic
+            && ContentDigest::from_entries(self.digest.entries().iter().filter(|entry| {
+                !entry.key.starts_with("a1-dogfight:")
+                    && !matches!(entry.key.as_str(), "RTS_CFG.h:ANCHOR_RADIUS" | "RTS_CFG.h:ANCHOR_PURSUIT_POINT_ANGLE")
+            }).cloned().collect()).hash64() == hash
+    }
+
     /// The keyed digest of every resolved sim-visible rule (D10): what
     /// peers compare, and what names the first differing key when they
     /// disagree. See [`crate::digest`].
@@ -767,7 +777,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
     let UnitDef {
         key: _, odf: _, class: _, is_starbase: _, planet_role: _, planet_crew_gain: _, planet_crew_modifier: _,
         a1_base_officers: _, a1_officer_upgrade_gain: _, trade_station: _, trade_cargo_capacity: _,
-        planet_colonizable: _, planet_civilian_population_modifier: _, planet_max_population: _, can_have_orbital_station: _, fleet_cap: _, orbit_time: _, a1_borg: _, station_mining: _, node_income: _, race: _,
+        planet_colonizable: _, planet_civilian_population_modifier: _, planet_max_population: _, can_have_orbital_station: _, fleet_cap: _, orbit_time: _, a1_borg: _, a1_combat_dynamics: _, station_mining: _, node_income: _, race: _,
         model: _, scale: _, movement: _, hull: _, shields: _, initial_hull: _, initial_shields: _,
         crew: _, maximum_crew: _, facility: _, has_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
         free_unit: _, dock: _, sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
@@ -1343,6 +1353,15 @@ fn digest_entries(db: &ContentDb) -> Vec<DigestEntry> {
                 let value = format!("{};tech={}", unit_text(db, u), tech(name));
                 out.push(DigestEntry::new(digest::key("unit:", name), value));
                 out.push(DigestEntry::new(digest::key("geometry:", name), geometry_text(u)));
+                if db.profile == Profile::Sta1Classic
+                    && let Some(p) = &u.a1_combat_dynamics
+                    && Some(p) != db.a1_play_physics()
+                {
+                    out.push(DigestEntry::new(
+                        digest::key("a1-dogfight:", name),
+                        crate::a1_physics::dynamics_text(p),
+                    ));
+                }
                 if let Some(attachment) = u.repair_attachment {
                     let vector = |v: sta_core::Vec3| format!("[{},{},{}]", fixed_text(v.x), fixed_text(v.y), fixed_text(v.z));
                     let value = Canon::new()

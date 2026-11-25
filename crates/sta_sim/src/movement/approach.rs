@@ -184,7 +184,7 @@ impl Sim {
             let cloaked = t.flags.contains(crate::view::UnitFlags::CLOAKED) && !dip.confirmed_ally(t.owner, u.owner);
             let visible = !seats || seen.iter().find(|(p, _)| *p == u.owner).is_some_and(|(_, ids)| ids.binary_search(&tid).is_ok());
             if cloaked || !visible {
-                let last = u.target.unwrap_or(t.pos);
+                let last = u.target.or_else(|| (!self.directors_cut).then_some(t.pos));
                 let craft = u.kind == EntityKind::Craft && u.mobile();
                 if craft && u.speed > u.stats.max_speed {
                     self.approach_warp.end(id);
@@ -193,7 +193,7 @@ impl Sim {
                 }
                 if craft {
                     if let Some(u) = self.units.get_mut(id) {
-                        u.target = Some(last);
+                        u.target = last;
                     }
                     plans.push((id, Plan::default()));
                 }
@@ -208,6 +208,17 @@ impl Sim {
             let r_t = db.unit(t.def).map_or(Fixed::ZERO, |d| d.radius);
             let (dx, dz) = (u.pos.x - t.pos.x, u.pos.z - t.pos.z);
             let centre = (dx * dx + dz * dz).sqrt();
+            if self.directors_cut && centre <= range
+                && let Some(p) = crate::kinematics::a1::combat_params(&db, u.def)
+            {
+                let aim = super::directors_cut::pursuit_point(
+                    u, t, centre, r_own + r_t, p.play.turn_radius, db.rules().a1_dogfight(),
+                );
+                self.approach_warp.remove(id);
+                self.units.get_mut(id).expect("attacker exists").target = None;
+                plans.push((id, Plan { dogfight: Some(aim), ..Plan::default() }));
+                continue;
+            }
             let d = (centre - r_own - r_t).max(Fixed::ZERO);
             let w = range + if t.kind == EntityKind::Craft { r_t } else { Fixed::ZERO };
             let base = w / Fixed::from_int(5) + Fixed::from_int(5);
