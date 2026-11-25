@@ -126,8 +126,14 @@ impl Bench {
                 label = format!("snapshot:{file}");
                 let bytes = std::fs::read(cfg.data_path(file))
                     .map_err(|e| format!("Start=snapshot:{file}: {e}"))?;
-                Sim::from_snapshot(&bytes, Some(content.clone()))
-                    .map_err(|e| format!("Start=snapshot:{file}: {e:?}"))?
+                Sim::from_snapshot(&bytes, Some(content.clone())).map_err(|e| match e {
+                    // Never skipped: a snapshot of other content is not the scene asked for.
+                    sta_sim::snapshot::SnapshotError::ContentMismatch { saved, given } => format!(
+                        "Start=snapshot:{file}: content hash mismatch: the snapshot was taken with content {saved:#018x}, the content loaded here is {given:#018x}. \
+                         The check is not skipped: the snapshot comes from other content (another install, mod or map tech tree, or a build with a different content digest)"
+                    ),
+                    e => format!("Start=snapshot:{file}: {e:?}"),
+                })?
             }
             Some(Start::Replay(file)) => {
                 let bytes = std::fs::read(cfg.data_path(file))

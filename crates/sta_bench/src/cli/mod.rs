@@ -9,6 +9,7 @@
 //! sta-bench diff <report-a> <report-b>
 //! sta-bench parity <refit-out> <ours-out> [--tol time=0.1,pos=1,hull=1] | --names
 //! sta-bench perf <map|scene.ini> --install <root> [--mod <name>] [--profile refit,stock] [--sizes WxH,..]
+//! sta-bench perf --capture <folder|latest> [--install <root> [--mod <name>]] [--profile ..] [--sizes WxH,..]
 //! sta-bench pair <pair> --game a2|roots [--refit-out DIR] [--install DIR] [--fake] [--out DIR]
 //! sta-bench capture list | check <folder|latest> [--install <root> [--mod <name>]] [--fake]
 //! sta-bench golden --install <root> [--mod <name>] [map...] [--ticks N] [--seed S] [--json <file|->] [--record <file>] [--against <file>]
@@ -79,6 +80,9 @@ Usage: sta-bench <command> [options]
       --variants base,no-rocks,a+b  what to compare (default the attribution set; names in docs/TESTBENCH.md)
       --perf-camera still|sweep    a fixed camera, or one swinging about its target; --systems per-system CPU times
       --label NAME                 results in $XDG_DATA_HOME/sta64/bench/perf/<label>/ (or --out DIR)
+  perf --capture <folder|latest>   the same, from a playtest capture instead of a map: its map, mount, camera, window size and
+                                   snapshot, with the content hash check on (a mismatch fails; nothing is skipped). The capture
+                                   gives --install/--mod/--sizes unless you pass them; variants default to base
   golden --install <root> [map...]  an install's content identity and sim digests per skirmish start, as JSON (D5):
                                    each map stepped twice; exit 1 on a panic, a non-repeatable digest or --against differences
       --mod <name>                 the mod to mount over the install's Data
@@ -150,6 +154,7 @@ pub(crate) struct Opts {
     pub perf_camera: Option<String>,
     pub systems: bool,
     pub label: Option<String>,
+    pub capture: Option<String>,
     pub ticks: Option<u64>,
     pub seed: Option<u64>,
     pub record: Option<PathBuf>,
@@ -207,6 +212,7 @@ fn parse(args: Vec<String>) -> Result<Opts, String> {
             "--perf-camera" => o.perf_camera = Some(val(&a)?),
             "--systems" => o.systems = true,
             "--label" => o.label = Some(val(&a)?),
+            "--capture" => o.capture = Some(val(&a)?),
             "--ticks" => o.ticks = Some(val(&a)?.parse().map_err(|_| "--ticks: a number")?),
             "--seed" => o.seed = Some(val(&a)?.parse().map_err(|_| "--seed: a number")?),
             "--record" => o.record = Some(val(&a)?.into()),
