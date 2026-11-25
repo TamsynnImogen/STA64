@@ -118,12 +118,11 @@ impl Sim {
                     .crew
                     .map_or(Fixed::ZERO, |c| (c[1] - c[0]).max(Fixed::ZERO));
                 let aboard = taken.min(room);
-                if aboard > Fixed::ZERO {
-                    if let Some(u) = self.units.get_mut(channel.source) {
-                        if let Some([now, max]) = u.crew {
-                            u.crew = Some([add_capped(now, aboard, max), max]);
-                        }
-                    }
+                if aboard > Fixed::ZERO
+                    && let Some(u) = self.units.get_mut(channel.source)
+                    && let Some([now, max]) = u.crew
+                {
+                    u.crew = Some([add_capped(now, aboard, max), max]);
                 }
                 let excess = taken - aboard;
                 if excess > Fixed::ZERO {
