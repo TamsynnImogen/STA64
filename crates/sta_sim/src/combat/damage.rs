@@ -98,7 +98,8 @@ impl ZeroShieldHolds {
 }
 
 /// Recharge every unit's shields by its definition's rate.
-pub(crate) fn recharge(units: &mut Entities, db: &ContentDb, switches: &crate::switches::SwitchTable, subsystems: &Subsystems, transports: &super::boarding::Transports, holds: &mut ZeroShieldHolds, tick: Tick) {
+#[allow(clippy::too_many_arguments)] // separate system state borrowed by the tick
+pub(crate) fn recharge(units: &mut Entities, db: &ContentDb, switches: &crate::switches::SwitchTable, subsystems: &Subsystems, transports: &super::boarding::Transports, holds: &mut ZeroShieldHolds, tick: Tick, specials: &crate::specials::Specials) {
     for u in units.iter_mut() {
         let pools = if u.shields.directional { 4 } else { 1 };
         let mut held = [false; 4];
@@ -110,6 +111,9 @@ pub(crate) fn recharge(units: &mut Entities, db: &ContentDb, switches: &crate::s
             } else if until != 0 {
                 holds.clear_pool(u.id, pool);
             }
+        }
+        if specials.stasis(u.id, tick) || specials.shields_held(u.id, tick) {
+            continue;
         }
         // Hold disabled shields at zero even after loading an older snapshot which stored the
         // off bit alongside charged pools, or a script tried to refill a disabled generator.
@@ -151,6 +155,7 @@ pub(crate) fn recharge(units: &mut Entities, db: &ContentDb, switches: &crate::s
 
 /// Apply the `Hit`s in `events[from..]`; returns `(killed, killer)` in the
 /// order the lethal hits came.
+#[allow(clippy::too_many_arguments)] // separate system state borrowed by the tick
 pub(crate) fn apply(
     units: &mut Entities,
     db: &ContentDb,
@@ -159,6 +164,7 @@ pub(crate) fn apply(
     ctx: &mut super::casualty::Ctx,
     holds: &mut ZeroShieldHolds,
     tick: Tick,
+    specials: &crate::specials::Specials,
 ) -> Vec<(EntityId, Option<EntityId>)> {
     let mut killed = Vec::new();
     let tail = events.split_off(from);
@@ -177,7 +183,7 @@ pub(crate) fn apply(
             continue;
         };
         let (mut shield, mut hull, mut down) = (Fixed::ZERO, Fixed::ZERO, false);
-        if let Some(t) = units.get_mut(target).filter(|t| t.hull[0] > Fixed::ZERO) {
+        if let Some(t) = units.get_mut(target).filter(|t| t.hull[0] > Fixed::ZERO && !specials.stasis(target, tick) && (damage > Fixed::ZERO || db.weapon(weapon).is_none_or(|w| w.a1_special.is_none()))) {
             let pool = if t.shields.directional {
                 usize::from(facing).min(3)
             } else {
@@ -188,15 +194,21 @@ pub(crate) fn apply(
             let floor = if t.flags.contains(UnitFlags::IMMORTAL) { Fixed::ONE } else { Fixed::ZERO };
             let wanted = match model {
                 Some((def, w)) => {
+                    let bypass = specials.shields_held(target, tick);
+                    let saved = t.shields.now[pool];
+                    if bypass { t.shields.now[pool] = Fixed::ZERO; }
                     let (s, h, d) = super::casualty::hit(t, def, w, db, ctx, pool, damage);
+                    if bypass { t.shields.now[pool] = saved; }
                     (shield, down) = (s, d);
                     h
                 }
                 None => {
-                    let held = t.shields.now[pool];
-                    shield = damage.min(held);
-                    t.shields.now[pool] = held - shield;
-                    down = shield > Fixed::ZERO && t.shields.now[pool] == Fixed::ZERO;
+                    if !specials.shields_held(target, tick) {
+                        let held = t.shields.now[pool];
+                        shield = damage.min(held);
+                        t.shields.now[pool] = held - shield;
+                        down = shield > Fixed::ZERO && t.shields.now[pool] == Fixed::ZERO;
+                    }
                     damage - shield
                 }
             };
@@ -451,7 +463,12 @@ impl Sim {
             Subsystem::Weapons => !u.flags.contains(UnitFlags::WEAPONS_OFF),
             _ => row.off & (1 << n) == 0,
         };
-        Some((on, Fixed::from_bits(row.damage[n])))
+        let held = match sub {
+            Subsystem::Engines => self.specials.engines_held(id, self.tick),
+            Subsystem::Shields => self.specials.shields_held(id, self.tick),
+            _ => false,
+        };
+        Some((on && !held && !self.specials.stasis(id, self.tick), Fixed::from_bits(row.damage[n])))
     }
 
     /// Read-only state of the five systems of every unit with damaged or switched-off systems
@@ -460,6 +477,7 @@ impl Sim {
         let Some(db) = self.content.as_deref() else { return Vec::new() };
         let mut ids: Vec<EntityId> = self.subsystems.to_rows().into_iter().map(|(id, _)| id).collect();
         ids.extend(self.units.iter().filter(|u| u.flags.contains(UnitFlags::ENGINES_OFF) || u.flags.contains(UnitFlags::WEAPONS_OFF)).map(|u| u.id));
+        ids.extend(self.specials.a1.disabled_units());
         ids.sort();
         ids.dedup();
         ids.into_iter()

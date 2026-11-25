@@ -1171,7 +1171,7 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
     // Every field, as in `unit_text`.
     let WeaponDef {
         key: _, odf: _, class: _, kind: _, range: _, damage: _, refire: _, shot_speed: _,
-        duration: _, fire_sound: _, fx: _, shot_scale: _, look: _, effect_ticks: _, energy_drain: _, energy_cost: _,
+        duration: _, fire_sound: _, fx: _, shot_scale: _, look: _, effect_ticks: _, energy_drain: _, energy_cost: _, a1_special: _,
         disable_weapons: _, decloak_on_hit: _, initial_shot_delay_modifier: _,
         ignore_shot_delay_effects: _, ordnance_defence: _, activate_on_team_change: _, crew_loss: _, damage_variance: _, resource: _, replace: _, colonize: _, base: _, features: _, raw: _,
     } = w;
@@ -1222,6 +1222,31 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
     // SIM-30: a colonizer pod's payload and range, only when the ordnance is one.
     if let Some(p) = w.colonize {
         c.raw("colonize", &group(Canon::new().fixed("party_size", p.party_size).fixed("orbit_range", p.orbit_range)));
+    }
+    if let Some(s) = w.a1_special {
+        c.raw("a1_special", &group(Canon::new()
+            .raw("kind", match s.kind {
+                crate::A1SpecialKind::Mines => "mines",
+                crate::A1SpecialKind::ChainPulsar => "chain_pulsar",
+                crate::A1SpecialKind::EngineOverload => "engine_overload",
+                crate::A1SpecialKind::Reflector => "reflector",
+                crate::A1SpecialKind::DetectCloak => "detect_cloak",
+                crate::A1SpecialKind::Gemini => "gemini",
+                crate::A1SpecialKind::ShieldDisruptor => "shield_disruptor",
+                crate::A1SpecialKind::EngineeringTeam => "engineering_team",
+                crate::A1SpecialKind::PointDefense => "point_defense",
+                crate::A1SpecialKind::Stasis => "stasis",
+            })
+            .int("duration_ticks", s.duration_ticks)
+            .int("flight_ticks", s.flight_ticks)
+            .fixed("radius", s.radius)
+            .int("limit", s.limit)
+            .fixed("bonus_damage", s.bonus_damage)
+            .flag("reflect_missile", s.reflect_missile)
+            .flag("reflect_beam", s.reflect_beam)
+            .int("hit_condition", s.hit_condition)
+            .fixed("shields_returned", s.shields_returned)
+            .int("detect_class", s.detect_class)));
     }
     // SIM-73: the keys of the hit roll and of per-target damage, only under their
     // switches and only when set, so every other weapon keeps its text.

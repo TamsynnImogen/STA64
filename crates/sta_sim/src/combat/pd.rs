@@ -162,8 +162,7 @@ impl Pd {
         i: usize,
     ) -> bool {
         let Some(w) = db.weapon(def.hardpoints[i].weapon.key) else { return false };
-        let feats = db.weapon_features(w);
-        if !(feats.pd_energy && feats.point_defense_cycles) {
+        if !crate::specials::pd_enabled(db, w) {
             return false;
         }
         if self.ready.get(id).is_none() {
@@ -220,7 +219,7 @@ impl Pd {
             self.ready.remove(id);
         }
         for u in units.iter() {
-            if u.hull[1] <= Fixed::ZERO || u.flags.contains(crate::view::UnitFlags::WEAPONS_OFF) || u.is_unfinished() {
+            if u.hull[1] <= Fixed::ZERO || u.flags.contains(crate::view::UnitFlags::WEAPONS_OFF) || u.is_unfinished() || specials.stasis(u.id, tick) {
                 continue;
             }
             let Some(def) = db.unit(u.def) else { continue };
@@ -232,11 +231,12 @@ impl Pd {
                     continue;
                 }
                 let feats = db.weapon_features(w);
-                if !feats.point_defense_cycles {
+                let a1 = w.a1_special.is_some_and(|s| s.kind == sta_content::A1SpecialKind::PointDefense);
+                if !feats.point_defense_cycles && !a1 {
                     continue;
                 }
-                if feats.pd_energy {
-                    self.energy_cycle(tick, u.id, def, i, w, feats.pd_debt_timer, u, units, teams, shots, specials, rng, events);
+                if feats.pd_energy || a1 {
+                    self.energy_cycle(tick, u.id, def, i, w, feats.pd_debt_timer || a1, u, units, teams, shots, specials, rng, events);
                     continue;
                 }
                 if self.ready.get(u.id).is_some_and(|r| r[i].ready > tick) {
@@ -285,9 +285,10 @@ impl Pd {
         teams: crate::relations::Diplomacy<'_>,
         shots: &[Shot],
     ) -> Option<usize> {
+        let a1 = w.a1_special.is_some_and(|s| s.kind == sta_content::A1SpecialKind::PointDefense);
         let mut best: Option<(Fixed, usize)> = None;
         for (k, s) in shots.iter().enumerate() {
-            if s.target != u.id {
+            if !a1 && s.target != u.id {
                 continue;
             }
             let friendly = units
@@ -341,13 +342,14 @@ impl Pd {
         if debt {
             m.timer = m.timer - Fixed::ONE;
         }
-        let fo = debt && w.ordnance_defence;
+        let a1 = w.a1_special.is_some_and(|s| s.kind == sta_content::A1SpecialKind::PointDefense);
+        let fixed_reload = debt && (w.ordnance_defence || a1);
         let shot_delay = Fixed::from_int(w.refire.min(i32::MAX as u64) as i32);
-        while !debt || m.timer <= Fixed::ZERO {
+        while (!a1 || !empty) && (!debt || m.timer <= Fixed::ZERO) {
             let Some(k) = Self::nearest(u, w, units, teams, shots) else { break };
             let s = shots.remove(k);
             if debt {
-                m.timer = if fo {
+                m.timer = if fixed_reload {
                     shot_delay
                 } else {
                     // + 0 to 5 % jitter from the sim's RNG.

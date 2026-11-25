@@ -181,7 +181,7 @@ impl Sim {
         let dip = crate::relations::Diplomacy::new(&self.players, &self.relations);
         for (id, tid) in attacks {
             let (Some(u), Some(t)) = (self.units.get(id), self.units.get(tid)) else { continue };
-            let cloaked = t.flags.contains(crate::view::UnitFlags::CLOAKED) && !dip.confirmed_ally(t.owner, u.owner);
+            let cloaked = !seats && t.flags.contains(crate::view::UnitFlags::CLOAKED) && !dip.confirmed_ally(t.owner, u.owner);
             let visible = !seats || seen.iter().find(|(p, _)| *p == u.owner).is_some_and(|(_, ids)| ids.binary_search(&tid).is_ok());
             if cloaked || !visible {
                 let last = u.target.unwrap_or(t.pos);

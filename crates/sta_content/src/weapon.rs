@@ -21,11 +21,12 @@
 //! | `base` (CON-54) | weapon: `hitChance` (+ rows), `stopToHitModifier`, `toHitStopModifier`, `impulseToHitModifier`, `toHitImpulseModifier`, `warpToHitModifier`, `toHitWarpModifier`, `slowToHitModifier`, `toHitSlowModifier`, `targetEnemyCraft`, `targetEnemyBuildings`, `targetAlliedCraft`, `targetAlliedBuildings`, `targetEnemyPlanets`, `targetEnemyPlanetsOnly`, `targetLocation`, `AItargetLocation`, `needTarget`, `beneficial`, `switchToAttack`, `cloakEnable`, `warpEnable`, `crewAffectsWeaponDelay`, `ignoreValidAsTarget`, `regularWeaponDelay`; ordnance: rows of `damageBase`, `damageVariance`, `damageThreshold`, `shieldCrewModifier`, `hullCrewModifier`, and `ignoreShield`, `forceInvalidateTarget`, `canAttackStations`, `specialValue`, `shieldDuration`, `omegaTurn`, `seekTime`, `shotAccel`, `detectRadius`, `travelTimeFraction` |
 //! | `look` | render only, not digested ([`ShotLook`]): ordnance `Sprite`, `spriteDuration`, `Radius`, `Length`, `lifeSpan` (every class), `travelTimeFraction` (beam classes, default 0.1), `flareSprite` / `flareRadiusMultiplier` (class `phaser`, defaults `pflare` / 1.4), `lightColor` with `lightFalloffStart` / `lightFalloffRange` (defaults 100 / 5) |
 //! | hardpoint arc | `restrictFireArc = 1` with `fireArc` as the half-width in radians (our reading) |
+//! | A1 specials | A1-provenance launch/ordnance classes and their class-specific keys, decoded in [`a1_special`]; launch `specialEnergyCost` precedes ordnance |
 
 use sta_core::Fixed;
 use sta_odf::Odf;
 
-use crate::def::{ShotFlare, ShotLight, ShotLook, ClassLabel, FireArc, Lookup, ResourceWeaponDef, TargetMaskDef, ToHitDef, WeaponBaseDef, WeaponDef, WeaponKind};
+use crate::def::{A1SpecialDef, A1SpecialKind, ShotFlare, ShotLight, ShotLook, ClassLabel, FireArc, Lookup, ResourceWeaponDef, TargetMaskDef, ToHitDef, WeaponBaseDef, WeaponDef, WeaponKind};
 use crate::odf::{numbered, stem, Reader};
 use crate::Warning;
 
@@ -214,6 +215,12 @@ fn shot_look(o: &mut Reader, class: &str) -> ShotLook {
 
 /// The definition of weapon `name`, and the arc its hardpoints are limited to.
 pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut Vec<Warning>) -> (WeaponDef, Option<FireArc>) {
+    weapon_def_with_a1(name, odf, ordnance, false, warnings)
+}
+
+/// Decode only for an A1-provenance load. Generic A2 launch classes are not
+/// enough to identify these specials; the ordnance class is authoritative.
+pub(crate) fn weapon_def_with_a1(name: &str, odf: &Odf, ordnance: Option<&Odf>, a1: bool, warnings: &mut Vec<Warning>) -> (WeaponDef, Option<FireArc>) {
     let file = format!("{}.odf", stem(name));
     let own = odf.class_label().unwrap_or("").trim().to_ascii_lowercase();
     let ord_class = ordnance.and_then(|o| o.class_label()).map(|c| c.trim().to_ascii_lowercase());
@@ -321,7 +328,65 @@ pub fn weapon_def(name: &str, odf: &Odf, ordnance: Option<&Odf>, warnings: &mut 
     if let Some(ticks) = own_duration {
         d.duration = ticks;
     }
+    if a1 {
+        d.a1_special = a1_special(odf, ordnance, &own, ord_class.as_deref(), &file, warnings);
+        if d.a1_special.is_some() && odf.raw("specialEnergyCost").is_none()
+            && let Some(ord) = ordnance
+        {
+            let mut o = Reader { odf: ord, file: &file, warnings };
+            d.energy_cost = o.fixed("specialEnergyCost");
+        }
+    }
     (d, arc)
+}
+
+/// The ten A1 Federation special forms, including campaign launch aliases.
+/// Key locations are read from the A1 ODF data; zero means a key is absent.
+fn a1_special(launch: &Odf, ordnance: Option<&Odf>, own: &str, ord_class: Option<&str>, file: &str, warnings: &mut Vec<Warning>) -> Option<A1SpecialDef> {
+    fn ticks(r: &mut Reader<'_>, key: &str) -> u32 {
+        r.ticks(key).min(u32::MAX as u64) as u32
+    }
+    let kind = match (own, ord_class) {
+        (_, Some("antimine")) => A1SpecialKind::Mines,
+        (_, Some("chainpulsar")) => A1SpecialKind::ChainPulsar,
+        (_, Some("warpcoreoverload")) => A1SpecialKind::EngineOverload,
+        ("reflectweapon", _) => A1SpecialKind::Reflector,
+        ("detectcloak", _) => A1SpecialKind::DetectCloak,
+        (_, Some("manheimeffect")) => A1SpecialKind::Gemini,
+        (_, Some("shieldh")) => A1SpecialKind::ShieldDisruptor,
+        (_, Some("fedrepairteam")) => A1SpecialKind::EngineeringTeam,
+        ("pointdefenselaser", _) => A1SpecialKind::PointDefense,
+        (_, Some("temporal")) => A1SpecialKind::Stasis,
+        _ => return None,
+    };
+    let mut s = A1SpecialDef::new(kind);
+    let mut l = Reader { odf: launch, file, warnings };
+    s.limit = l.num("maxTargets").filter(|n| *n >= 0.0).map_or(0, |n| n.min(u32::MAX as f64) as u32);
+    s.hit_condition = l.num("hitCondition").filter(|n| *n >= 0.0).map_or(0, |n| n.min(u32::MAX as f64) as u32);
+    s.reflect_missile = l.flag("reflectMissile").unwrap_or(false);
+    s.reflect_beam = l.flag("reflectBeam").unwrap_or(false);
+    s.detect_class = l.num("detectClass").filter(|n| *n >= 0.0).map_or(0, |n| n.min(u32::MAX as f64) as u32);
+    if kind == A1SpecialKind::DetectCloak {
+        s.duration_ticks = ticks(&mut l, "detectTimer");
+    }
+    if let Some(ord) = ordnance {
+        let mut o = Reader { odf: ord, file, warnings };
+        s.flight_ticks = ticks(&mut o, "lifeSpan");
+        match kind {
+            A1SpecialKind::Mines => s.radius = o.fixed("detectRadius"),
+            A1SpecialKind::ChainPulsar => {
+                s.radius = o.fixed("chainRadius");
+                s.limit = o.num("maxHits").filter(|n| *n >= 0.0).map_or(0, |n| n.min(u32::MAX as f64) as u32);
+                s.bonus_damage = o.fixed("chainDamageModifier");
+            }
+            A1SpecialKind::EngineOverload | A1SpecialKind::ShieldDisruptor => s.duration_ticks = ticks(&mut o, "specialValue"),
+            A1SpecialKind::Gemini => s.duration_ticks = ticks(&mut o, "effectTimer"),
+            A1SpecialKind::EngineeringTeam => s.shields_returned = o.fixed("shieldsReturned"),
+            A1SpecialKind::Stasis => { s.duration_ticks = ticks(&mut o, "lifeSpan"); s.radius = o.fixed("Radius"); }
+            A1SpecialKind::Reflector | A1SpecialKind::DetectCloak | A1SpecialKind::PointDefense => {}
+        }
+    }
+    Some(s)
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use bevy::prelude::*;
-use sta_content::{A1BaseOfficers, ButtonSlots, ContentDb, DefRef, GuiCfg, SlotCommand};
+use sta_content::{A1BaseOfficers, A1SpecialDef, A1SpecialKind, ButtonSlots, ContentDb, DefRef, GuiCfg, Hardpoint, SlotCommand, UnitDef, WeaponDef, WeaponKind};
 use sta_sim::command::{CommandKind, Order};
 use sta_sim::fake::ScriptedSource;
 use sta_sim::view::PlayerView;
@@ -585,6 +585,57 @@ fn rail_feed(crew: Option<i32>) -> HudFeed {
         ..Default::default()
     };
     HudFeed { view: Arc::new(view), player: PlayerId(1), selected: vec![EntityId(1)], content: Some(db), ..Default::default() }
+}
+
+fn special_rail_feed(kind: A1SpecialKind, button_slot: u8) -> HudFeed {
+    let mut weapon = WeaponDef::new("gtest", "special", WeaponKind::Beam);
+    weapon.a1_special = Some(A1SpecialDef::new(kind));
+    weapon.raw = sta_odf::resolve("gtest.odf", &mut |_| Some(format!(
+        "buttonSlot = {button_slot}\nwpnName = \"Test ability\"\ntooltip = \"Test tip (^F^2)\"\nverboseTooltip = \"Test detail\"\n"
+    ))).unwrap().into();
+    let mut craft = UnitDef::new("test_craft", "craft");
+    craft.hardpoints.push(Hardpoint { weapon: DefRef::new("gtest"), node: String::new(), arc: None });
+    let db = Arc::new(ContentDb::builder().profile(Profile::Sta1Classic)
+        .features(Profile::Sta1Classic.features()).weapon(weapon).unit(craft).build().unwrap());
+    let view = sta_sim::WorldView {
+        units: vec![UnitView {
+            id: EntityId(1), def: db.key("test_craft").unwrap(), owner: PlayerId(1), pos: sta_sim::Vec3::ZERO,
+            heading: (Fixed::ZERO, Fixed::ONE), speed: Fixed::ZERO, hull: [Fixed::ONE; 2],
+            shields: [[Fixed::ZERO; 2]; 4], crew: None, energy: None, autonomy: None,
+            flags: UnitFlags::SELECTABLE, progress: None,
+        }],
+        players: vec![PlayerView { crew: None, id: PlayerId(1), team: TeamId(1), resources: Vec::new(), officers: [Fixed::ZERO; 2], eliminated: false, relations: Vec::new() }],
+        ..Default::default()
+    };
+    HudFeed { view: Arc::new(view), player: PlayerId(1), selected: vec![EntityId(1)], content: Some(db), ..Default::default() }
+}
+
+#[test]
+fn special_rail_uses_authored_slot_and_f2_issues_its_sim_slot() {
+    let feed = special_rail_feed(A1SpecialKind::Mines, 2);
+    let b = speed::buttons(&feed, None);
+    assert_eq!(b.len(), 1);
+    assert_eq!(b[0].cell, speed::RAIL_BASE + 1);
+    assert_eq!(b[0].sprite_names, ["b_gtest"]);
+    assert_eq!(b[0].tip, "Test tip (F2)");
+    assert_eq!(b[0].act, Act::Special(0));
+    let mut app = rail_app(feed);
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::F2);
+    app.update();
+    assert!(matches!(app.world().resource::<CommandQueue>().0.as_slice(),
+        [CommandKind::Order(Order::Special { slot: 0, target: sta_sim::command::Target::None, .. })]));
+}
+
+#[test]
+fn passive_detector_has_no_button_and_f5_arms_stasis_point() {
+    assert!(speed::buttons(&special_rail_feed(A1SpecialKind::DetectCloak, 0), None).is_empty());
+    let mut app = rail_app(special_rail_feed(A1SpecialKind::Stasis, 5));
+    let ability = speed::buttons(app.world().resource::<HudFeed>(), None);
+    assert_eq!(ability[0].act, Act::Target(TargetMode::Special(0)));
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::F5);
+    app.update();
+    assert_eq!(app.world().resource::<HudState>().targeting, Some(TargetMode::Special(0)));
+    assert!(app.world().resource::<CommandQueue>().0.is_empty());
 }
 
 fn rail_app(f: HudFeed) -> App {
