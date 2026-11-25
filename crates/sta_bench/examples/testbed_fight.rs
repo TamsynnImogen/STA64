@@ -5,7 +5,8 @@
 //!
 //! For every playable race (seat 0) against the next one (seat 1), on `map`
 //! (default `tb_empty`):
-//! - **fight**: each armed mobile unit is spawned alone 500 units from an
+//! - **fight**: each armed mobile unit (a weapon that attacks units: not only a
+//!   mining beam) is spawned alone 500 units from an
 //!   enemy mining freighter, ordered to attack it, and stepped 30 s. It passes when the
 //!   target's shields or hull went down.
 //! - **build**: each builder (a unit with build items) is spawned with every
@@ -152,7 +153,9 @@ fn main() {
         println!("== {race} vs {enemy}");
         for (key, name) in ctx.units_of(race) {
             let Some(u) = db.unit(key) else { continue };
-            if !u.hardpoints.is_empty() && u.movement.max_speed != Fixed::ZERO {
+            // Armed: a weapon that takes attack orders (not a mining or tractor beam, point defence or special).
+            let armed = u.hardpoints.iter().any(|h| db.weapon(h.weapon.key).is_some_and(sta_sim::combat::weapons::attacks_units));
+            if armed && u.movement.max_speed != Fixed::ZERO {
                 let r = fight(&ctx, pair, key);
                 failed += usize::from(r.is_err());
                 println!("fight {name:22} {}", r.unwrap_or_else(|e| format!("FAIL {e}")));
