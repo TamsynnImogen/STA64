@@ -575,6 +575,11 @@ sta-bench pair move --game a2 --refit-out <earlier>/refit --install ...   # reus
   textures and team colour, weapon, impact and special effects from the bench's events,
   the hull damage state. The camera is the scene's `Camera=`/`orbit`/`camera` pose (the
   same one the stand-in frames use; commands in the `At=` timeline that move it apply).
+  `--frame-camera fly` moves that pose on every frame along a fixed path on the anim
+  clock (it swings about the look point and closes in to a tenth of its distance and
+  back), so frames of a moving camera are the same on every run and can be compared
+  between builds; `--frame-camera still|fly` also prints to stderr, at each frame's tick,
+  the eye and how many billboard nebulae hold it.
   **Headless means headless**: a windowless Bevy app with an offscreen render target
   (wgpu on the GPU, no display server: `WAYLAND_DISPLAY` and `DISPLAY` are removed
   from the child's environment), Bevy's audio plugin disabled and no sound system
