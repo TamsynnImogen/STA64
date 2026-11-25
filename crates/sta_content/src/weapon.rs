@@ -325,7 +325,9 @@ pub(crate) fn weapon_def_for_profile(name: &str, odf: &Odf, ordnance: Option<&Od
                 }
             }
         }
-    } else if kind != WeaponKind::Beam || d.range > Fixed::ZERO && d.effect_ticks == 0 && d.energy_cost == Fixed::ZERO {
+    } else if !matches!(own.as_str(), "wormholegen" | "separatingweapon" | "fusingweapon" | "selfdestruct")
+        && (kind != WeaponKind::Beam || d.range > Fixed::ZERO && d.effect_ticks == 0 && d.energy_cost == Fixed::ZERO)
+    {
         // A weapon that shoots but has no ordnance to read damage from.
         warnings.push(Warning::new(&file, "no ordName (or its ODF is missing): damage 0"));
     }
@@ -343,13 +345,28 @@ pub(crate) fn weapon_def_for_profile(name: &str, odf: &Odf, ordnance: Option<&Od
                 data.reflect_chance = Some((chance(&mut l, "reflectionRatio"), chance(&mut l, "reflectHitOwnerRatio")));
             }
         }
-        if a2 {
+        if a2 || a1 && matches!((own.as_str(), ord_class.as_deref()),
+            ("selfdestruct" | "wormholegen", _) | ("toggleweapon", Some("tractor_bm")))
+        {
             d.a2_special = a2_special(odf, ordnance, &own, ord_class.as_deref(), &file, warnings);
             if let Some(special) = d.a2_special.filter(|s| s.effect.sustained_beam()) {
                 d.kind = WeaponKind::Beam;
                 d.duration = special.flight;
             }
         }
+        d.federation = match d.a2_special.map(|s| s.effect) {
+            Some(A2Effect::TranswarpGate) => Some(crate::def::FederationWeaponDef::Gate {
+                portal: stem(odf.str("wormholeID").unwrap_or_default()),
+            }),
+            Some(A2Effect::TractorBeam(_)) if ordnance.and_then(|o| o.i64("omegaType")) == Some(1) => {
+                Some(crate::def::FederationWeaponDef::OmegaTractor)
+            }
+            Some(A2Effect::GalaxyIntegrate { .. }) => Some(crate::def::FederationWeaponDef::Integrate {
+                combined: stem(odf.str("fusedClass").unwrap_or_default()),
+                parts: ["multiReqClass0", "multiReqClass1"].map(|key| stem(odf.str(key).unwrap_or_default())),
+            }),
+            _ => None,
+        };
         if (d.a1_special.is_some() || d.a2_special.is_some())
             && odf.raw("specialEnergyCost").is_none()
             && let Some(ord) = ordnance
@@ -367,6 +384,20 @@ fn a2_special(launch: &Odf, ordnance: Option<&Odf>, own: &str, ord_class: Option
         return None;
     }
     let effect = match (own, ord_class) {
+        ("wormholegen", _) if launch.str("wormholeID").is_some() => A2Effect::TranswarpGate,
+        ("separatingweapon", _) => A2Effect::GalaxySeparate,
+        ("fusingweapon", _) if l.flag("saucerFormation") == Some(true)
+            && launch.str("fusedClass").is_some()
+            && launch.str("multiReqClass0").is_some()
+            && launch.str("multiReqClass1").is_some()
+            && launch.i64("multiReqMin0") == Some(1)
+            && launch.i64("multiReqMin1") == Some(1)
+            && launch.raw("multiReqClass2").is_none() => A2Effect::GalaxyIntegrate {
+                initial: l.fixed("initialDistance").max(Fixed::ONE),
+                final_distance: l.fixed("finalDistance").max(Fixed::ONE),
+            },
+        ("hologen_weapon", Some("hologenerator")) => A2Effect::HoloGenerator,
+        ("toggleweapon", Some("tractor_bm")) => A2Effect::TractorBeam(Fixed::ZERO),
         ("selfdestruct", _) => A2Effect::SelfDestruct(l.fixed("radius").max(Fixed::ZERO)),
         ("regeneration", _) => A2Effect::Regeneration(Fixed::from_f64(
             l.num("regenModifier").unwrap_or(10.0).max(0.0),
@@ -411,6 +442,9 @@ fn a2_special(launch: &Odf, ordnance: Option<&Odf>, own: &str, ord_class: Option
     if matches!(effect, A2Effect::SelfDestruct(_)) {
         data.duration = l.ticks("timer");
     }
+    if effect == A2Effect::TranswarpGate {
+        data.duration = l.ticks("lifetime");
+    }
     if let Some(ord) = ordnance {
         let mut o = Reader { odf: ord, file, warnings };
         data.flight = o.ticks("lifeSpan");
@@ -448,7 +482,10 @@ fn a2_special(launch: &Odf, ordnance: Option<&Odf>, own: &str, ord_class: Option
                     per_second: Fixed::from_f64(if seconds > 0.0 { total / seconds } else { 0.0 }),
                 };
             }
-            A2Effect::SelfDestruct(_) | A2Effect::RestoreShields(_) | A2Effect::Regeneration(_) | A2Effect::Plasma => {}
+            A2Effect::TractorBeam(_) => data.effect = A2Effect::TractorBeam(o.fixed("targetRange").max(Fixed::ONE)),
+            A2Effect::SelfDestruct(_) | A2Effect::RestoreShields(_) | A2Effect::Regeneration(_) | A2Effect::Plasma
+            | A2Effect::TranswarpGate | A2Effect::GalaxySeparate | A2Effect::GalaxyIntegrate { .. }
+            | A2Effect::HoloGenerator => {}
         }
     }
     Some(data)

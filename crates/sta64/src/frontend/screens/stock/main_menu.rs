@@ -1,5 +1,5 @@
-//! The front page's own typography and transparent, left-aligned navigation.
-//! Its arrangement is authored for STA64; the installed game's art is not copied.
+//! The front page's own typography and left-aligned navigation.
+//! Its arrangement is authored for STA64; button art comes from the mounted game.
 
 use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::math::Vec2;
@@ -9,12 +9,15 @@ use super::layout::{Slot, region};
 use super::screens::{Placed, cap};
 use crate::frontend::screens::view::Ctx;
 use crate::frontend::screens::{Act, Screen};
+use crate::ui::gui_sprites::{GuiButton, GuiButtonColors, GuiButtonLabel};
 use crate::ui::sprite_font::{FontRole, ScalableText, SpriteText, SpriteTextStyle, sprite_text_styled};
 use crate::ui::theme::{Focusable, KitFocus, UiButton, WidgetState};
 
 const WHITE: Color = Color::srgb(231.0 / 255.0, 236.0 / 255.0, 242.0 / 255.0);
 const GOLD: Color = Color::srgb(244.0 / 255.0, 185.0 / 255.0, 67.0 / 255.0);
 const DIM: Color = Color::srgb(0.47, 0.47, 0.46);
+pub(super) const BUTTON_BACK: Color = Color::srgba(0.02, 0.03, 0.05, 0.84);
+const ART_SHADE: Color = Color::srgba(0.01, 0.02, 0.04, 0.60);
 
 #[derive(Component, Debug, Clone, Copy)]
 pub(crate) struct MainMenuButton;
@@ -66,7 +69,17 @@ fn button(p: &mut Box_<'_>, b: Vec2, slot: Slot, text: String, act: Option<Act>)
     let state = if act.is_some() { WidgetState::Normal } else { WidgetState::Disabled };
     let ink = if act.is_some() { WHITE } else { DIM };
     let mut entity = p.spawn((
-        Placed(slot), MainMenuButton, UiButton, state, BackgroundColor(Color::NONE),
+        Placed(slot), MainMenuButton, UiButton, state, BackgroundColor(BUTTON_BACK),
+        // Both the original A2 and Fleet Ops global sprite tables provide this
+        // button. The GUI painter resolves it from the mounted install and tints
+        // it for hover, press and disabled states.
+        GuiButton { names: vec!["comm_generic_button".into()], keep_label: true },
+        GuiButtonColors {
+            hovered: Color::srgb(1.0, 0.91, 0.70),
+            pressed: Color::srgb(0.76, 0.72, 0.62),
+            disabled: Color::srgb(0.48, 0.48, 0.48),
+            ..default()
+        },
         Node {
             position_type: PositionType::Absolute,
             left: Val::Px(r.min.x),
@@ -76,7 +89,10 @@ fn button(p: &mut Box_<'_>, b: Vec2, slot: Slot, text: String, act: Option<Act>)
             align_items: AlignItems::Center,
             ..default()
         },
-        children![(MainMenuLabel, caption(text, size, ink, FontRole::Medium))],
+        children![
+            (Pickable::IGNORE, Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() }, BackgroundColor(ART_SHADE)),
+            (MainMenuLabel, GuiButtonLabel, caption(text, size, ink, FontRole::Medium)),
+        ],
     ));
     if let Some(act) = act {
         entity.insert((act, Focusable));
@@ -113,15 +129,18 @@ pub(super) fn spawn(p: &mut Box_<'_>, ctx: &Ctx, b: Vec2) {
     button(p, b, Slot::MainExit, cap(ctx, "exit", "Exit").to_uppercase(), Some(Act::Exit));
 }
 
-/// Keep the menu text-only after the kit's general button painter runs.
+type PaintedButton = (Entity, &'static WidgetState, &'static Children, &'static mut BackgroundColor, Has<ImageNode>);
+
+/// Restore the dark fallback if the mounted install has no usable button art.
 pub(crate) fn paint(
     focus: Res<KitFocus>,
-    mut buttons: Query<(Entity, &WidgetState, &Children, &mut BackgroundColor), With<MainMenuButton>>,
+    mut buttons: Query<PaintedButton, With<MainMenuButton>>,
     mut labels: Query<&mut SpriteText, With<MainMenuLabel>>,
 ) {
-    for (entity, state, children, mut background) in &mut buttons {
-        if background.0 != Color::NONE {
-            background.0 = Color::NONE;
+    for (entity, state, children, mut background, has_art) in &mut buttons {
+        let wanted = if has_art { Color::NONE } else { BUTTON_BACK };
+        if background.0 != wanted {
+            background.0 = wanted;
         }
         let ink = match state {
             WidgetState::Disabled => DIM,

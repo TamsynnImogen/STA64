@@ -112,6 +112,8 @@ pub struct HudState {
     /// A build waiting for a site.
     pub placing: Option<Armed>,
     pub targeting: Option<TargetMode>,
+    /// Last selection drawn by either HUD layout. View updates alone do not close a menu.
+    selected: Vec<EntityId>,
     drawn: Option<Models>,
     height: Option<InfoHeight>,
     logged: String,
@@ -288,6 +290,13 @@ fn refresh(
     mut info_panel: Query<(Entity, &mut Node, Option<&Children>), (With<InfoPanel>, Without<ResourceStrip>, Without<GridPanel>)>,
     mut grid_panel: Query<(Entity, &mut Node, Option<&Children>), (With<GridPanel>, Without<ResourceStrip>, Without<InfoPanel>)>,
 ) {
+    // A newly selected unit or group always starts at the command menu's top.
+    // Both LCARS and stock layouts use this page; stock also resets its palette
+    // index when the page changes below.
+    if state.selected != feed.selected {
+        state.selected.clone_from(&feed.selected);
+        state.page = Page::Top;
+    }
     // The build page needs a builder; without one it is the top page.
     if state.page == Page::Build && (!commands::shared(&feed).build || model::builder(&feed).is_none()) {
         state.page = Page::Top;

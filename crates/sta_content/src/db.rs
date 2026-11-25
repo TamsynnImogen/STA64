@@ -227,7 +227,16 @@ impl ContentDb {
     /// [`with_launch_points`](ContentDb::with_launch_points) and warnings for
     /// unreadable collision geometry or authored repair nodes that cannot resolve.
     pub fn with_launch_points_warned(mut self, vfs: &sta_vfs::Vfs) -> (ContentDb, Vec<Warning>) {
-        let mut warnings = crate::launch::attach(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }));
+        let gate_weapons: std::collections::BTreeSet<_> = self.defs.iter().filter_map(|(name, d)| {
+            if let Def::Weapon(w) = d
+                && w.a2_special.is_some_and(|s| s.effect == crate::A2Effect::TranswarpGate)
+            {
+                Some(name.clone())
+            } else {
+                None
+            }
+        }).collect();
+        let mut warnings = crate::launch::attach(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None }), &gate_weapons);
         warnings.extend(crate::launch::attach_radii(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None })));
         warnings.extend(crate::repair_geometry::attach(vfs, self.defs.iter_mut().filter_map(|(_, d)| if let Def::Unit(u) = d { Some(u) } else { None })));
         self.digest = digest_of(&self);
@@ -770,7 +779,7 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         planet_colonizable: _, planet_civilian_population_modifier: _, planet_max_population: _, can_have_orbital_station: _, fleet_cap: _, orbit_time: _, a1_borg: _, station_mining: _, node_income: _, race: _,
         model: _, scale: _, movement: _, hull: _, self_destruct_blast: _, shields: _, initial_hull: _, initial_shields: _,
         crew: _, maximum_crew: _, facility: _, has_crew: _, sensor: _, hardpoints: _, build: _, launch: _, radius: _,
-        free_unit: _, dock: _, sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
+        free_unit: _, dock: _, transwarp_gate: _, sounds: _, fx: _, special_energy_max: _, special_energy_rate: _, miner: _, miner_off: _,
         max_dilithium: _, mining_rate: _, transfer_rate: _, freight_transfer: _, resource: _, features: _,
         confinement: _, nebula_pathing: _, nebula_effects: _, avoid_me: _, hidden: _, invalid_as_target: _, attack_power: _, life: _,
         crew_gain: _, transport: _, sane_crew_loss: _, system_hit_points: _, casualty: _, repair: _, repair_attachment: _, research_slots: _, research_build: _, research_station_upgrade: _, system_upgrade: _, stats: _, raw: _,
@@ -912,6 +921,12 @@ fn unit_text(db: &ContentDb, u: &UnitDef) -> String {
         c.text("launch_wormhole", &gate.odf)
             .int("wormhole_open_ticks", gate.wormhole_open_ticks())
             .fixed("launch_height", u.launch.as_ref().map_or(Fixed::ZERO, |point| point.height));
+    }
+    if let Some(gate) = &u.transwarp_gate {
+        c.list("transwarp_gate", [gate.offset.0, gate.height, gate.offset.1].into_iter().map(fixed_text));
+    }
+    if u.class.0 == "wormhole_obj" && let Some(depth) = u.stats.distance_below_grid {
+        c.fixed("transwarp_exit_depth", depth);
     }
     // SIM-70: absent authored flags keep the prior digest; explicit false is
     // distinct from absence because it excludes a station from recrewing.
@@ -1177,7 +1192,7 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
     // Every field, as in `unit_text`.
     let WeaponDef {
         key: _, odf: _, class: _, kind: _, range: _, damage: _, refire: _, shot_speed: _,
-        duration: _, fire_sound: _, fx: _, shot_scale: _, look: _, effect_ticks: _, energy_drain: _, energy_cost: _, a1_special: _, a2_special: _,
+        duration: _, fire_sound: _, fx: _, shot_scale: _, look: _, effect_ticks: _, energy_drain: _, energy_cost: _, a1_special: _, a2_special: _, federation: _,
         disable_weapons: _, decloak_on_hit: _, initial_shot_delay_modifier: _,
         ignore_shot_delay_effects: _, ordnance_defence: _, activate_on_team_change: _, crew_loss: _, damage_variance: _, resource: _, replace: _, colonize: _, base: _, features: _, raw: _,
     } = w;
@@ -1282,6 +1297,11 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
             crate::A2Effect::ShieldProjector(_) => "shield_projector",
             crate::A2Effect::ShieldInversion(_) => "shield_inversion",
             crate::A2Effect::DeathChant { .. } => "death_chant",
+            crate::A2Effect::TranswarpGate => "transwarp_gate",
+            crate::A2Effect::GalaxySeparate => "galaxy_separate",
+            crate::A2Effect::GalaxyIntegrate { .. } => "galaxy_integrate",
+            crate::A2Effect::HoloGenerator => "holo_generator",
+            crate::A2Effect::TractorBeam(_) => "tractor_beam",
         });
         match s.effect {
             crate::A2Effect::RestoreShields(value)
@@ -1292,7 +1312,11 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
             | crate::A2Effect::Regeneration(value)
             | crate::A2Effect::AutoAssimilator(value)
             | crate::A2Effect::ShieldProjector(value)
-            | crate::A2Effect::ShieldInversion(value) => { special.fixed("value", value); }
+            | crate::A2Effect::ShieldInversion(value)
+            | crate::A2Effect::TractorBeam(value) => { special.fixed("value", value); }
+            crate::A2Effect::GalaxyIntegrate { initial, final_distance } => {
+                special.fixed("initial", initial).fixed("final", final_distance);
+            }
             crate::A2Effect::HoldingBeam { delay, interval, party } => {
                 special.int("delay", delay).int("interval", interval).fixed("party", party);
             }
@@ -1304,6 +1328,16 @@ fn weapon_text(db: &ContentDb, w: &WeaponDef) -> String {
                 special.int("system", system).fixed("per_second", per_second);
             }
             _ => {}
+        }
+        match &w.federation {
+            Some(crate::def::FederationWeaponDef::Gate { portal }) => {
+                special.text("wormhole", portal);
+            }
+            Some(crate::def::FederationWeaponDef::Integrate { combined, parts }) => {
+                special.text("combined", combined).text("first", &parts[0]).text("second", &parts[1]);
+            }
+            Some(crate::def::FederationWeaponDef::OmegaTractor) => { special.flag("omega", true); }
+            None => {}
         }
         special.int("duration", s.duration)
             .int("flight", s.flight)

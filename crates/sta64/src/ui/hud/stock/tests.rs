@@ -1200,6 +1200,37 @@ fn stock_build_palette_pages_reach_every_build_option() {
 }
 
 #[test]
+fn changing_stock_selection_closes_build_page_and_resets_palette_index() {
+    let mut app = app_with_content(content_with_build_count(24));
+    let mut feed = app.world().resource::<HudFeed>().clone();
+    let mut view = (*feed.view).clone();
+    let mut other = view.units[0].clone();
+    other.id = EntityId(2);
+    view.units.push(other);
+    feed.view = Arc::new(view);
+    *app.world_mut().resource_mut::<HudFeed>() = feed;
+
+    app.world_mut().resource_mut::<HudState>().page = Page::Build;
+    app.update();
+    {
+        let mut stock = app.world_mut().resource_mut::<StockState>();
+        stock.build_page = 1;
+        stock.grid.clear();
+    }
+    app.update();
+    assert_eq!(app.world().resource::<StockState>().build_page, 1);
+
+    app.world_mut().resource_mut::<HudFeed>().selected = vec![EntityId(2)];
+    app.update();
+    assert_eq!(app.world().resource::<HudState>().page, Page::Top);
+    assert_eq!(app.world().resource::<StockState>().build_page, 0);
+
+    app.world_mut().resource_mut::<HudState>().page = Page::Build;
+    app.update();
+    assert_eq!(app.world().resource::<StockState>().build_page, 0);
+}
+
+#[test]
 fn stock_hud_build_buttons_show_station_and_ship_costs_without_authored_verbose_text() {
     let mut app = app();
     let delays = crate::ui::stock_tooltip::TipDelays::default();

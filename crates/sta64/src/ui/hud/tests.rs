@@ -501,6 +501,32 @@ fn mobile_constructor_cannot_arm_a_rally_target() {
 }
 
 #[test]
+fn changed_selection_returns_to_top_even_when_both_units_can_build() {
+    let mut app = app(content(None), &[1]);
+    let builder = cell(&mut app, |a| *a == Act::OpenBuild);
+    press(&mut app, builder);
+    assert_eq!(app.world().resource::<HudState>().page, Page::Build);
+
+    // Sim/view updates and a repeated selection leave the open page alone.
+    app.update();
+    app.world_mut().resource_mut::<Selection>().0 = vec![EntityId(1)];
+    app.update();
+    assert_eq!(app.world().resource::<HudState>().page, Page::Build);
+
+    // The yard can also build, so the old capability check alone cannot close
+    // this page. A different selection must still start at the top.
+    app.world_mut().resource_mut::<Selection>().0 = vec![EntityId(2)];
+    app.update();
+    assert_eq!(app.world().resource::<HudState>().page, Page::Top);
+
+    let builder = cell(&mut app, |a| *a == Act::OpenBuild);
+    press(&mut app, builder);
+    app.world_mut().resource_mut::<Selection>().0 = vec![EntityId(1), EntityId(3)];
+    app.update();
+    assert_eq!(app.world().resource::<HudState>().page, Page::Top);
+}
+
+#[test]
 fn theme_switch_rebuilds_hud_chrome_but_preserves_selection_and_command_page() {
     let mut app = app(content(None), &[1]);
     let builder = cell(&mut app, |a| *a == Act::OpenBuild);

@@ -51,7 +51,7 @@ mod a2;
 mod a1_support;
 pub use a1::{EffectView, SpecialView, a1_special_active, a1_special_ready, a1_special_researched, a1_special_target_ok};
 pub(crate) use a1::pd_enabled;
-pub use a2::{a2_special_ready, a2_special_target_ok};
+pub use a2::{a2_special_ready, a2_special_researched, a2_special_target_ok};
 
 /// The special abilities the sim knows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -100,6 +100,11 @@ pub const WEAPON_CLASSES: &[&str] = &[
     "cloakingdevice",
     "cloakingdeviceimp",
     "ordnancedefenseweapon",
+    "selfdestruct",
+    "wormholegen",
+    "separatingweapon",
+    "fusingweapon",
+    "hologen_weapon",
     "pointdefenselaser",
 ];
 
@@ -565,7 +570,7 @@ fn load_with_a1(profile: Profile, mod_overrides: &Overrides, stems: &[String], l
             h.arc = h.arc.or_else(|| weapon_arcs.get(&w).copied().flatten());
             true
         });
-        if matches!(profile, Profile::Sta2Classic | Profile::Fo4 | Profile::Fo3) && !a1_module {
+        if matches!(profile, Profile::Sta1Classic | Profile::Sta2Classic | Profile::Fo4 | Profile::Fo3) || a1_module {
             let blast_name = if odf.raw("selfDestruct").is_some() {
                 def.stats.self_destruct.clone()
             } else if def.hardpoints.iter().any(|h| self_destruct_weapons.contains(&stem(&h.weapon.odf))) {

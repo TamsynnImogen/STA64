@@ -558,8 +558,9 @@ fn main_menu_buttons_go_where_they_say() {
 }
 
 #[test]
-fn main_menu_has_nine_text_rows_with_existing_routes() {
+fn main_menu_has_nine_art_buttons_with_labels_and_existing_routes() {
     use crate::ui::sprite_font::SpriteText;
+    use crate::ui::gui_sprites::{GuiButton, GuiButtonLabel};
     use crate::ui::theme::UiButton;
 
     let mut app = app();
@@ -568,8 +569,12 @@ fn main_menu_has_nine_text_rows_with_existing_routes() {
     for (slot, want) in order.into_iter().zip(labels) {
         let entity = placed(&mut app).into_iter().find(|(s, _)| *s == slot).unwrap().1;
         assert!(app.world().get::<UiButton>(entity).is_some(), "{slot:?}");
-        assert_eq!(app.world().get::<BackgroundColor>(entity).unwrap().0, Color::NONE);
-        let text = app.world().get::<Children>(entity).unwrap().iter().find_map(|e| app.world().get::<SpriteText>(e)).unwrap();
+        assert_eq!(app.world().get::<BackgroundColor>(entity).unwrap().0, super::main_menu::BUTTON_BACK);
+        let art = app.world().get::<GuiButton>(entity).unwrap();
+        assert_eq!(art.names.iter().map(String::as_str).collect::<Vec<_>>(), ["comm_generic_button"]);
+        assert!(art.keep_label);
+        let label = app.world().get::<Children>(entity).unwrap().iter().find(|e| app.world().get::<GuiButtonLabel>(*e).is_some()).unwrap();
+        let text = app.world().get::<SpriteText>(label).unwrap();
         assert_eq!(text.text, want, "{slot:?}");
         let disabled = matches!(slot, Slot::MainReplayIntro | Slot::MainCredits);
         assert_eq!(*app.world().get::<WidgetState>(entity).unwrap() == WidgetState::Disabled, disabled, "{slot:?}");
@@ -616,7 +621,7 @@ fn main_menu_uses_active_mod_display_name_and_wraps_long_names() {
 }
 
 #[test]
-fn main_menu_focus_skips_unavailable_rows_and_keeps_buttons_transparent() {
+fn main_menu_focus_skips_unavailable_rows_and_keeps_dark_fallback() {
     use crate::ui::sprite_font::SpriteText;
     use crate::ui::theme::{KitFocus, focus_order, move_focus};
 
@@ -625,13 +630,13 @@ fn main_menu_focus_skips_unavailable_rows_and_keeps_buttons_transparent() {
     let slots: Vec<_> = order.iter().map(|e| app.world().get::<Placed>(*e).unwrap().0).collect();
     assert_eq!(slots, [Slot::MainSinglePlayer, Slot::MainInstantAction, Slot::MainMultiplayer, Slot::MainMapEditor, Slot::MainMods, Slot::MainOptions, Slot::MainExit]);
     let first = order[0];
-    let label = app.world().get::<Children>(first).unwrap()[0];
+    let label = app.world().get::<Children>(first).unwrap().iter().find(|e| app.world().get::<main_menu::MainMenuLabel>(*e).is_some()).unwrap();
     let normal = app.world().get::<SpriteText>(label).unwrap().color;
     move_focus(app.world_mut(), false);
     settle(&mut app);
     assert_eq!(app.world().resource::<KitFocus>().0, Some(first));
     assert_ne!(app.world().get::<SpriteText>(label).unwrap().color, normal);
-    assert_eq!(app.world().get::<BackgroundColor>(first).unwrap().0, Color::NONE);
+    assert_eq!(app.world().get::<BackgroundColor>(first).unwrap().0, super::main_menu::BUTTON_BACK);
     for _ in 0..order.len() {
         move_focus(app.world_mut(), false);
     }

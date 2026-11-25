@@ -520,6 +520,8 @@ pub struct UnitDef {
     /// default `dock`), read from its model like [`launch`](UnitDef::launch).
     /// Only set when `free_unit` is.
     pub dock: Option<LaunchPoint>,
+    /// Model node named `gate` on a station with a wormhole-generator weapon.
+    pub transwarp_gate: Option<LaunchPoint>,
     /// Bounding radius of the model times `ScaleSOD`, units (SIM-21); zero:
     /// not read, the unit takes no room.
     pub radius: Fixed,
@@ -801,6 +803,7 @@ impl UnitDef {
             launch: None,
             free_unit: None,
             dock: None,
+            transwarp_gate: None,
             radius: Fixed::ZERO,
             sounds: SoundRefs::default(),
             fx: FxRefs::default(),
@@ -892,12 +895,17 @@ pub enum A2Effect {
     AutoAssimilator(Fixed),
     ShieldProjector(Fixed),
     ShieldInversion(Fixed),
+    TranswarpGate,
+    GalaxySeparate,
+    GalaxyIntegrate { initial: Fixed, final_distance: Fixed },
+    HoloGenerator,
+    TractorBeam(Fixed),
     DeathChant { fire: Fixed, repair: Fixed, turn: Fixed, damage: Fixed, speed: Fixed, hit: Fixed },
 }
 
 impl A2Effect {
     pub fn sustained_beam(self) -> bool {
-        matches!(self, Self::HoldingBeam { .. } | Self::AutoAssimilator(_) | Self::ShieldProjector(_) | Self::ShieldInversion(_))
+        matches!(self, Self::HoldingBeam { .. } | Self::AutoAssimilator(_) | Self::ShieldProjector(_) | Self::ShieldInversion(_) | Self::TractorBeam(_))
     }
 }
 
@@ -920,6 +928,14 @@ impl A1SpecialDef {
             hit_condition: 0, shields_returned: Fixed::ZERO, detect_class: 0,
         }
     }
+}
+
+/// ODF references used by the legacy gate and Galaxy conversion weapons.
+#[derive(Debug, Clone)]
+pub enum FederationWeaponDef {
+    Gate { portal: String },
+    OmegaTractor,
+    Integrate { combined: String, parts: [String; 2] },
 }
 
 /// A weapon.
@@ -959,6 +975,7 @@ pub struct WeaponDef {
     pub a1_special: Option<A1SpecialDef>,
     /// Typed Armada II special class parameters.
     pub a2_special: Option<A2SpecialDef>,
+    pub federation: Option<FederationWeaponDef>,
     /// Cloak: weapons are off while cloaked (`disableWeapons`, default on).
     pub disable_weapons: bool,
     /// Cloak: a hit decloaks (`decloakOnHit`, default off).
@@ -1314,6 +1331,13 @@ pub struct ResourceWeaponDef {
 }
 
 impl WeaponDef {
+    /// The Federation campaign station mounts this ability directly. The
+    /// stock tech trees omit it, including the mission's own tree.
+    pub fn campaign_transwarp(&self) -> bool {
+        self.odf.eq_ignore_ascii_case("gf6trans")
+            && self.a2_special.is_some_and(|s| s.effect == A2Effect::TranswarpGate)
+    }
+
     /// A definition with everything zero or empty, to fill field by field.
     pub fn new(odf: &str, class: &str, kind: WeaponKind) -> WeaponDef {
         let mut raw = sta_odf::Odf::default();
@@ -1337,6 +1361,7 @@ impl WeaponDef {
             energy_cost: Fixed::ZERO,
             a1_special: None,
             a2_special: None,
+            federation: None,
             disable_weapons: true,
             decloak_on_hit: false,
             initial_shot_delay_modifier: None,

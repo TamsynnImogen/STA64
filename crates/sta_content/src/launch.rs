@@ -195,11 +195,16 @@ fn point_at(def: &UnitDef, sod: Option<&Sod>, name: Option<&str>) -> LaunchPoint
 }
 
 /// Fill `launch` of every unit that builds something.
-pub fn attach<'a>(vfs: &sta_vfs::Vfs, units: impl Iterator<Item = &'a mut UnitDef>) -> Vec<Warning> {
+pub fn attach<'a>(
+    vfs: &sta_vfs::Vfs,
+    units: impl Iterator<Item = &'a mut UnitDef>,
+    gate_weapons: &std::collections::BTreeSet<String>,
+) -> Vec<Warning> {
     let mut warnings = Vec::new();
     let mut sods: BTreeMap<String, Option<Sod>> = BTreeMap::new();
     for u in units {
-        if u.build.list.is_empty() && u.free_unit.is_none() && u.research_slots.is_empty() && !u.receives_freight() {
+        let has_generator = u.hardpoints.iter().any(|hp| gate_weapons.contains(&hp.weapon.odf));
+        if u.build.list.is_empty() && u.free_unit.is_none() && u.research_slots.is_empty() && !u.receives_freight() && !has_generator {
             continue;
         }
         let key = u
@@ -216,6 +221,10 @@ pub fn attach<'a>(vfs: &sta_vfs::Vfs, units: impl Iterator<Item = &'a mut UnitDe
         }
         if u.free_unit.is_some() || u.receives_freight() {
             u.dock = Some(dock_point(u, sod.as_ref()));
+        }
+        if has_generator {
+            let point = point_at(u, sod.as_ref(), Some("gate"));
+            u.transwarp_gate = point.node.is_some().then_some(point);
         }
         for slot in &mut u.research_slots {
             slot.pose = sod.as_ref().and_then(|sod| {

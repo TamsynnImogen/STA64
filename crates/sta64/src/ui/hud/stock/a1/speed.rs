@@ -18,6 +18,8 @@
 //! - The T hotkey remains the client's own `select_type` default.
 
 use bevy::prelude::*;
+use sta_content::{A2Effect, A2Target};
+use sta_sim::specials::SpecialKind;
 
 use super::{super::layout::StockLayout, panel_origin};
 use crate::ui::{
@@ -71,7 +73,7 @@ pub(in crate::ui::hud) fn buttons(feed: &HudFeed, strings: Option<&Strings>) -> 
             let Some(first) = units.next() else { continue };
             let Some((_, _, weapon)) = db.unit(first.def)
                 .and_then(|def| sta_sim::specials::specials_indexed(db, def).nth(slot as usize)) else { continue };
-            if db.tech_tree().is_some_and(|t| t.entry(&weapon.odf).is_none_or(|e| e.withheld)) {
+            if db.tech_tree().is_some_and(|t| t.entry(&weapon.odf).map_or(!weapon.campaign_transwarp(), |e| e.withheld)) {
                 continue;
             }
             let Some(position) = weapon.raw.i64("buttonSlot").filter(|n| (1..=5).contains(n)) else { continue };
@@ -80,16 +82,26 @@ pub(in crate::ui::hud) fn buttons(feed: &HudFeed, strings: Option<&Strings>) -> 
                 .is_some_and(|(_, other_kind, other)| other_kind == kind && other.raw.i64("buttonSlot") == Some(position))) {
                 continue;
             }
+            let channel_on = feed.own_selection().into_iter().any(|id|
+                sta_sim::specials::a1_special_active(&feed.view, id, slot));
             let targeted = match kind {
-                sta_sim::specials::SpecialKind::A1(sta_content::A1SpecialKind::Gemini | sta_content::A1SpecialKind::EngineeringTeam | sta_content::A1SpecialKind::Stasis) => true,
-                sta_sim::specials::SpecialKind::PointDefence if weapon.a1_special.is_some() => false,
-                sta_sim::specials::SpecialKind::A1(_) => false,
+                SpecialKind::A1(sta_content::A1SpecialKind::Gemini | sta_content::A1SpecialKind::EngineeringTeam | sta_content::A1SpecialKind::Stasis) => true,
+                SpecialKind::PointDefence if weapon.a1_special.is_some() => false,
+                SpecialKind::A1(_) => false,
+                SpecialKind::A2(target) if weapon.a2_special.is_some_and(|rule|
+                    matches!(rule.effect, A2Effect::TranswarpGate | A2Effect::TractorBeam(_))) => {
+                    !channel_on && matches!(target, A2Target::Entity | A2Target::Point)
+                }
                 _ => continue,
             };
-            let ready = feed.own_selection().into_iter().any(|id|
-                sta_sim::specials::a1_special_ready(&feed.view, db, id, slot));
-            let researched = feed.own_selection().into_iter().all(|id|
-                sta_sim::specials::a1_special_researched(&feed.view, db, id, slot));
+            let ready = feed.own_selection().into_iter().any(|id| match kind {
+                SpecialKind::A2(_) => sta_sim::specials::a2_special_ready(&feed.view, db, id, slot),
+                _ => sta_sim::specials::a1_special_ready(&feed.view, db, id, slot),
+            });
+            let researched = feed.own_selection().into_iter().all(|id| match kind {
+                SpecialKind::A2(_) => sta_sim::specials::a2_special_researched(&feed.view, db, id, slot),
+                _ => sta_sim::specials::a1_special_researched(&feed.view, db, id, slot),
+            });
             let stem = weapon.odf.rsplit(['/', '\\']).next().unwrap_or(&weapon.odf).trim_end_matches(".odf");
             let label = weapon.raw.str("wpnName").unwrap_or(stem);
             let index = position as usize - 1;

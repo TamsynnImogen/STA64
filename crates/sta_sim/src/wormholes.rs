@@ -37,8 +37,8 @@
 //!   Gate opening and closing (`AnimationTime`, `ClosedScale`, `OpenScale`, sounds) is
 //!   presentation and not modelled; `DisableTimer` is never armed in either game.
 //!
-//! Nothing here is kept between ticks: the pairing and the gate goers are derived from
-//! the entities and courses, so snapshots and the digest are unchanged.
+//! Generated transwarp endpoints carry an explicit temporary pair. Ordinary
+//! map gates and gate goers are still derived from entities and courses.
 
 use sta_content::Profile;
 use sta_core::{EntityId, Fixed, Vec3};
@@ -81,6 +81,8 @@ impl Sim {
         let is_gate = |e: &crate::world::Entity| {
             db.unit(e.def).is_some_and(|d| if a1 { d.class.0 == WORMHOLE_CLASS } else { d.class.0.eq_ignore_ascii_case(WORMHOLE_CLASS) })
         };
+        let temporary = &self.specials.a2.federation;
+        let mut pairs: Vec<_> = temporary.gate_pairs(self.tick).collect();
         let gates: Vec<EntityId> = self
             .units
             .iter()
@@ -88,15 +90,17 @@ impl Sim {
             // The Armada II family pairs only the gates the map made, which are the labelled
             // entities (a script's gate has no sim label); a map gate with no label is not
             // counted (none of the stock, Roots and mod maps has one).
-            .filter(|e| a1 || self.labels.get(e.id).is_some())
+            .filter(|e| (a1 || self.labels.get(e.id).is_some()) && !temporary.gate_ends().any(|id| id == e.id))
             .map(|e| e.id)
             .collect();
         // Armada II family: exactly two map gates are a pair; any other number is not paired
         // until LUA-33 carries the partner pointers.
         if !a1 && gates.len() != 2 {
-            return Vec::new();
+            return pairs;
         }
-        gates.chunks_exact(2).flat_map(|p| [(p[0], p[1]), (p[1], p[0])]).collect()
+        pairs.extend(gates.chunks_exact(2).flat_map(|p| [(p[0], p[1]), (p[1], p[0])]));
+        pairs.sort_unstable();
+        pairs
     }
 
     /// Craft flying their last leg onto a paired gate: `(craft, gate, partner)`. Asked before

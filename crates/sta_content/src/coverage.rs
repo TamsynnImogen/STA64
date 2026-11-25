@@ -60,6 +60,8 @@ pub const READ_ODF_KEYS: &[&str] = &[
     "reflectmissile", "reflectbeam", "detectclass", "detecttimer", "shieldsreturned",
     "reflectionratio", "reflecthitownerratio", "affectedsystem", "draintime", "drainrate",
     "percentage", "timer", "radiusfactor", "shockwave", "regenmodifier", "partysize",
+    "wormholeid", "lifetime", "saucerformation", "fusedclass", "multireqclass0", "multireqclass1",
+    "multireqmin0", "multireqmin1", "initialdistance", "finaldistance", "targetrange", "omegatype",
     "boardingdelay", "boardinginterval", "boardingsize", "firemodifier", "repairmodifier",
     "turnmodifier", "damagemodifier", "speedmodifier", "hitmodifier",
     // CON-55: unit stat keys (typed; applied by SIM-74).
