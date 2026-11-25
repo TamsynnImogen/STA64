@@ -78,6 +78,15 @@ pub enum Control {
     Socket,
 }
 
+/// The frame camera of an install-content frame run (`--frame-camera`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameCamera {
+    /// The scene's pose, with the nebula report.
+    Still,
+    /// The scene's pose moved along a fixed path on the anim clock, with the nebula report.
+    Fly,
+}
+
 /// Who runs the opponent's seat in a skirmish (`--opponent`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Opponent {
@@ -138,6 +147,10 @@ pub struct LaunchConfig {
     pub frame_dir: Option<PathBuf>,
     /// `--frame-size WxH`.
     pub frame_size: Option<(u32, u32)>,
+    /// `--frame-camera still|fly`: with `--install-content` frames, report the billboard nebulae
+    /// around the eye at each frame's tick and, for `fly`, move the camera along a fixed path
+    /// (`bench::pair_view::fly_pose`).
+    pub frame_camera: Option<FrameCamera>,
     /// `--postfx bloom,smaa`: opt-in post effects (render/post.rs).
     pub postfx: Vec<String>,
     /// `--install-content`: with `--headless --frames`, build the scene on the install's
@@ -188,6 +201,8 @@ Test bench (docs/TESTBENCH.md):
   --frames <t,t,..>        save a PNG frame at each of these ticks (headless, needs a GPU adapter)
   --frame-dir <dir>        where frames go (default: frames)
   --frame-size <WxH>       frame size (default: 640x360)
+  --frame-camera still|fly with --install-content frames: print the billboard nebulae around the eye at each
+                           frame's tick; fly also moves the camera along a fixed path on the anim clock
   --install-content        with --headless --frames: the install's own content (--install-root, --mod): the
                            scene's Map=, its units' models, sky, nebulae, planets and effects (no window, no audio)
   --perf <out.json>        with --headless --install-content: a performance run of the scene's map (docs/TESTBENCH.md,
@@ -299,6 +314,11 @@ impl LaunchConfig {
                     }
                 }
                 "--frame-dir" => cfg.frame_dir = value(&mut args).map(PathBuf::from),
+                "--frame-camera" => match value(&mut args).as_deref() {
+                    Some("still") => cfg.frame_camera = Some(FrameCamera::Still),
+                    Some("fly") => cfg.frame_camera = Some(FrameCamera::Fly),
+                    _ => cfg.unknown.push("--frame-camera (still or fly)".into()),
+                },
                 "--frame-size" => match value(&mut args).and_then(|v| v.split_once('x').and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)))) {
                     Some(wh) => cfg.frame_size = Some(wh),
                     None => cfg.unknown.push("--frame-size (needs WxH)".into()),
@@ -384,6 +404,16 @@ mod tests {
         assert_eq!(parse("").mode(), Mode::FrontEnd);
         assert_eq!(parse("--install-root /g --mod FO").mode(), Mode::FrontEnd);
         assert_eq!(parse("").clock_mode(), ClockMode::Wall);
+    }
+
+    #[test]
+    fn frame_camera_takes_still_or_fly() {
+        assert_eq!(parse("").frame_camera, None);
+        assert_eq!(parse("--frame-camera still").frame_camera, Some(FrameCamera::Still));
+        let c = parse("--headless --frame-camera fly --frames 10");
+        assert_eq!((c.frame_camera, c.frames.as_slice(), c.unknown.is_empty()), (Some(FrameCamera::Fly), &[10][..], true));
+        assert_eq!(parse("--frame-camera spin").unknown.len(), 1);
+        assert!(USAGE.contains("--frame-camera"));
     }
 
     #[test]
