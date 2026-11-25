@@ -127,7 +127,7 @@ impl ContentDb {
     }
 
     pub fn with_rules(mut self, rules: crate::Rules) -> Self {
-        self.rules = rules;
+        self.rules = if self.profile == Profile::Sta1Classic { rules } else { rules.without_a1_dogfight() };
         self.digest = digest_of(&self);
         self
     }
@@ -551,6 +551,16 @@ impl ContentDb {
     /// (SIM-01), so tick 0 already tells different content apart.
     pub fn hash(&self) -> u64 {
         self.digest.hash64()
+    }
+
+    /// For legacy saves and replays whose match options predate dogfighting.
+    /// Match against exactly the same rules with the newly used A1 fields removed.
+    pub fn matches_pre_directors_cut_hash(&self, hash: u64) -> bool {
+        self.profile == Profile::Sta1Classic
+            && ContentDigest::from_entries(self.digest.entries().iter().filter(|entry| {
+                !entry.key.starts_with("a1-dogfight:")
+                    && !matches!(entry.key.as_str(), "RTS_CFG.h:ANCHOR_RADIUS" | "RTS_CFG.h:ANCHOR_PURSUIT_POINT_ANGLE")
+            }).cloned().collect()).hash64() == hash
     }
 
     /// The keyed digest of every resolved sim-visible rule (D10): what
@@ -1466,6 +1476,15 @@ fn digest_entries(db: &ContentDb) -> Vec<DigestEntry> {
                 let value = format!("{};tech={}", unit_text(db, u), tech(name));
                 out.push(DigestEntry::new(digest::key("unit:", name), value));
                 out.push(DigestEntry::new(digest::key("geometry:", name), geometry_text(u)));
+                if db.profile == Profile::Sta1Classic
+                    && let Some(p) = &u.a1_combat_dynamics
+                    && Some(p) != db.a1_play_physics()
+                {
+                    out.push(DigestEntry::new(
+                        digest::key("a1-dogfight:", name),
+                        crate::a1_physics::dynamics_text(p),
+                    ));
+                }
                 if let Some(attachment) = u.repair_attachment {
                     let vector = |v: sta_core::Vec3| format!("[{},{},{}]", fixed_text(v.x), fixed_text(v.y), fixed_text(v.z));
                     let value = Canon::new()

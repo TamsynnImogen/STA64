@@ -16,6 +16,41 @@ pub struct OfficerLimit {
     pub value: i32,
 }
 
+/// Armada I dogfight steering values read by the native stationary-target
+/// pursuit path. An unsupported angle expression uses the executable fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct A1DogfightRules {
+    pub pursuit_angle: Fixed,
+    pub anchor_radius: Fixed,
+}
+
+impl A1DogfightRules {
+    const KEYS: [&'static str; 2] = ["ANCHOR_PURSUIT_POINT_ANGLE", "ANCHOR_RADIUS"];
+
+    fn pursuit_angle(cfg: &CfgH) -> Option<f32> {
+        let raw = cfg.raw(Self::KEYS[0])?.trim();
+        if let Some(value) = cfg.f32(Self::KEYS[0]) {
+            return Some(value);
+        }
+        // The stock header spells this as `(3.14159/6)`. CfgH's float reader
+        // deliberately accepts literals only, so support this local form
+        // without broadening the shared header expression parser.
+        let expression = raw.strip_prefix('(').and_then(|s| s.strip_suffix(')')).unwrap_or(raw);
+        let (numerator, denominator) = expression.split_once('/')?;
+        let value = numerator.trim().parse::<f32>().ok()? / denominator.trim().parse::<f32>().ok()?;
+        (value.is_finite()).then_some(value)
+    }
+}
+
+impl Default for A1DogfightRules {
+    fn default() -> Self {
+        A1DogfightRules {
+            pursuit_angle: Fixed::from_f64(std::f64::consts::FRAC_PI_6),
+            anchor_radius: Fixed::from_int(4),
+        }
+    }
+}
+
 /// The typed rules. Which `RTS_CFG.h` keys are typed is data-driven: the ones
 /// the sim reads and the ones the installed mods change (see [`CfgRules`]);
 /// [`TYPED_CFG_KEYS`] lists them for the coverage report.
@@ -60,9 +95,10 @@ pub struct Rules {
     legacy_start: LegacyStart,
     /// Explicit `cfgMaxOfficers`, independently of the A2 officer limit keys.
     a1_max_officers: Option<i32>,
+    a1_dogfight: A1DogfightRules,
 }
 
-const TYPED_LEN: usize = 5 + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + ApproachRules::KEYS.len() + CfgRules::KEYS.len() + LegacyStart::KEYS.len() + PopulationRules::KEYS.len() + FieldCfg::KEYS.len();
+const TYPED_LEN: usize = 5 + A1DogfightRules::KEYS.len() + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + ApproachRules::KEYS.len() + CfgRules::KEYS.len() + LegacyStart::KEYS.len() + PopulationRules::KEYS.len() + FieldCfg::KEYS.len();
 
 /// Every `RTS_CFG.h` key [`Rules`] reads.
 pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
@@ -107,6 +143,8 @@ pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
         out[5 + i + a + w + j + l + p + f] = FieldCfg::KEYS[f];
         f += 1;
     }
+    out[TYPED_LEN - 2] = A1DogfightRules::KEYS[0];
+    out[TYPED_LEN - 1] = A1DogfightRules::KEYS[1];
     out
 };
 
@@ -713,6 +751,20 @@ impl Rules {
             }
         }
         rules.legacy_start = LegacyStart::from_cfg(&cfg, &mut warnings);
+        let mut dogfight = A1DogfightRules::default();
+        if cfg.raw(A1DogfightRules::KEYS[0]).is_some() {
+            match A1DogfightRules::pursuit_angle(&cfg).filter(|v| *v >= 0.0) {
+                Some(v) => dogfight.pursuit_angle = Fixed::from_f64(f64::from(v).min(1.0e9)),
+                None => warnings.push(Warning::new("RTS_CFG.h", format!("{} is not a non-negative numeric angle; using the executable default", A1DogfightRules::KEYS[0]))),
+            }
+        }
+        if cfg.raw(A1DogfightRules::KEYS[1]).is_some() {
+            match cfg.f32(A1DogfightRules::KEYS[1]).filter(|v| v.is_finite() && *v >= 0.0) {
+                Some(v) => dogfight.anchor_radius = Fixed::from_f64(f64::from(v).min(1.0e9)),
+                None => warnings.push(Warning::new("RTS_CFG.h", format!("{} is not a non-negative numeric literal; using the executable default", A1DogfightRules::KEYS[1]))),
+            }
+        }
+        rules.a1_dogfight = dogfight;
         rules.a1_max_officers = cfg.raw("cfgMaxOfficers")
             .and_then(|_| cfg.i64("cfgMaxOfficers"))
             .and_then(|n| i32::try_from(n).ok())
@@ -977,6 +1029,16 @@ impl Rules {
         self.a1_max_officers
     }
 
+    /// Armada I dogfight pursuit steering configuration, with executable defaults.
+    pub fn a1_dogfight(&self) -> A1DogfightRules {
+        self.a1_dogfight
+    }
+
+    pub(crate) fn without_a1_dogfight(mut self) -> Self {
+        self.a1_dogfight = A1DogfightRules::default();
+        self
+    }
+
     pub fn officer_limit(&self, choice: usize) -> Option<i32> {
         self.officer_limits.get(choice).map(|limit| limit.value)
     }
@@ -1008,6 +1070,18 @@ impl Rules {
             out.push(DigestEntry::new(
                 format!("RTS_CFG.h:{}", ApproachRules::KEYS[0]),
                 crate::digest::fixed_text(self.approach().min_move_warp_distance),
+            ));
+        }
+        if self.a1_dogfight.pursuit_angle != A1DogfightRules::default().pursuit_angle {
+            out.push(DigestEntry::new(
+                format!("RTS_CFG.h:{}", A1DogfightRules::KEYS[0]),
+                crate::digest::fixed_text(self.a1_dogfight.pursuit_angle),
+            ));
+        }
+        if self.a1_dogfight.anchor_radius != A1DogfightRules::default().anchor_radius {
+            out.push(DigestEntry::new(
+                format!("RTS_CFG.h:{}", A1DogfightRules::KEYS[1]),
+                crate::digest::fixed_text(self.a1_dogfight.anchor_radius),
             ));
         }
         // The facing keys (SIM-39) and the recycle keys (SIM-45) only when set, so content
@@ -1439,6 +1513,7 @@ mod cfg_tests {
         rules.cfg.biomatter_recycle_fraction = Some(Fixed::ONE);
         rules.fields.planet_dewarp_radius_multiplier = Some(Fixed::ONE);
         rules.fields.black_hole_dewarp_radius_multiplier = Some(Fixed::ONE);
+        rules.a1_dogfight = A1DogfightRules { pursuit_angle: Fixed::ONE, anchor_radius: Fixed::from_int(5) };
         let pop = PopulationRules { levels: [Fixed::from_int(1000); 4], civilian_rate_modifier: Fixed::ONE };
         let d = ContentDigest::from_entries(rules.with_population(pop).digest_entries());
         // The dilithium maximum contributes through the effective starting amounts.
@@ -1493,6 +1568,28 @@ mod legacy_start_tests {
         assert_eq!(r.legacy_start(), LegacyStart::default());
         assert_eq!(r.officer_limit(0), None);
         assert_eq!(w.len(), 3);
+    }
+
+    #[test]
+    fn a1_dogfight_defaults_and_nondefaults_are_typed_and_digested() {
+        let (defaults, warnings) = Rules::from_header("");
+        assert!(warnings.is_empty());
+        assert_eq!(defaults.a1_dogfight(), A1DogfightRules::default());
+        assert!(defaults.digest_entries().iter().all(|e| !e.key.contains("ANCHOR_")));
+
+        // The stock parenthesized division remains supported locally even
+        // though CfgH::f32 itself only accepts numeric literals.
+        let (rules, warnings) = Rules::from_header(
+            "float ANCHOR_PURSUIT_POINT_ANGLE = (3.14159/6);\nfloat ANCHOR_RADIUS = 5.0;\n",
+        );
+        assert_eq!(rules.a1_dogfight().pursuit_angle, Fixed::from_f64(f64::from(3.14159f32 / 6.0f32)));
+        assert_eq!(rules.a1_dogfight().anchor_radius, Fixed::from_int(5));
+        assert!(warnings.is_empty());
+        let entries = rules.digest_entries();
+        assert!(entries.iter().any(|e| e.key == "RTS_CFG.h:ANCHOR_RADIUS"));
+        assert!(entries.iter().any(|e| e.key == "RTS_CFG.h:ANCHOR_PURSUIT_POINT_ANGLE"));
+        assert!(TYPED_CFG_KEYS.contains(&"ANCHOR_PURSUIT_POINT_ANGLE"));
+        assert!(TYPED_CFG_KEYS.contains(&"ANCHOR_RADIUS"));
     }
 }
 

@@ -1805,7 +1805,11 @@ mod tests {
                 name: "a2_borg01".into(),
                 digest: 42,
             },
-            options: GameOptions::default(),
+            options: {
+                let mut options = GameOptions::default();
+                options.directors_cut = true;
+                options
+            },
             seats: vec![
                 seat(0, Occupant::Peer),
                 seat(1, Occupant::Peer),

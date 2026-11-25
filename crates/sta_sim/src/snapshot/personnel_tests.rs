@@ -16,7 +16,7 @@ fn setup(mode: StartingResources, choice: u32) -> (GameSetup, Races) {
     }
     });
     assert!(warnings.is_empty(), "{warnings:?}");
-    let options = GameOptions { starting_resources: mode, officer_limit: choice };
+    let options = GameOptions { starting_resources: mode, officer_limit: choice, ..GameOptions::default() };
     (
         GameSetup {
             seed: 55,

@@ -29,7 +29,7 @@ fn the_guard_rows_are_in_a_format_from_33_and_the_previous_formats_are_refused()
     let sim = guarded();
     let bytes = sim.snapshot();
     assert_eq!(u16::from_le_bytes([bytes[4], bytes[5]]), FORMAT_VERSION);
-    for old in 31u16..FORMAT_VERSION {
+    for old in 31u16..PRE_DIRECTORS_CUT_FORMAT {
         let mut stale = bytes.clone();
         stale[4..6].copy_from_slice(&old.to_le_bytes());
         assert!(matches!(Sim::from_snapshot(&stale, sim.content.clone()), Err(SnapshotError::FormatVersion { found }) if found == old));
@@ -42,6 +42,12 @@ fn a_guard_row_survives_and_an_unknown_tag_or_a_cut_file_is_a_load_error() {
     let bytes = sim.snapshot();
     let back = Sim::from_snapshot(&bytes, sim.content.clone()).unwrap();
     assert_eq!(back.snapshot(), bytes, "save, load, save");
+    // Format 47 is the same record chain before the final Director's Cut field.
+    let mut old = bytes[..bytes.len() - 1].to_vec();
+    old[4..6].copy_from_slice(&PRE_DIRECTORS_CUT_FORMAT.to_le_bytes());
+    let previous = Sim::from_snapshot(&old, sim.content.clone()).unwrap();
+    assert!(!previous.directors_cut);
+    assert_eq!(previous.snapshot(), bytes);
     // The guard's job tag is the second byte from the end of the scripted record; an unknown tag
     // is what a build without guards would meet.
     let rows = sim.scripted.to_rows();

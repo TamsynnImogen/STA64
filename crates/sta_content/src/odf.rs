@@ -482,6 +482,20 @@ fn load_with_a1(profile: Profile, mod_overrides: &Overrides, stems: &[String], l
             None => None,
         };
         let mut def = crate::unit::unit_def_for_profile(s, odf, phys.as_deref(), profile, &mut warnings);
+        // Director's Cut's Armada I dogfight path integrates with the craft's
+        // ordinary physicsFile. Reuse the shared parser and validity rules,
+        // but keep its fallback/validation diagnostics local to avoid one
+        // warning per craft for absent optional integrator keys.
+        if profile == Profile::Sta1Classic && def.movement.max_speed > Fixed::ZERO
+            && let Some(p) = phys.as_deref()
+        {
+            let mut ignored = Vec::new();
+            def.a1_combat_dynamics = crate::a1_physics::play_dynamics(
+                p,
+                &format!("{}.odf", stem(odf.str("physicsFile").unwrap_or_default())),
+                &mut ignored,
+            );
+        }
         // The explosion ODF a unit names (`fireball`) carries the sound of its death
         // (`explSound`, as stock `fireballexplode` / `rumbleexplode` ODFs set it).
         // Presentation only: sounds are not part of the content digest.

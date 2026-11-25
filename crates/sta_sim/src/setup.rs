@@ -66,6 +66,9 @@ pub struct GameOptions {
     pub starting_resources: sta_content::StartingResources,
     /// Authored MP_OFFICER_LIMIT row; zero selects its first/default entry.
     pub officer_limit: u32,
+    /// Armada I's dogfighting mode, agreed at match start.
+    #[serde(default)]
+    pub directors_cut: bool,
 }
 
 /// A computer player or a mission: reads views and events, writes commands.

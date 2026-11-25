@@ -343,6 +343,9 @@ fn advanced(p: &mut Box_, ctx: &Ctx, b: Vec2) {
         None => off_button(p, ctx, b, Slot::AdvancedOfficers, &tr("Officer limit unavailable")),
     }
     act_button(p, ctx, b, Slot::AdvancedSpeed, &trf("Game speed: {0}", &[&ctx.draft.speed.label()]), Act::CycleMatchSpeed);
+    if let Some(caption) = super::super::view::directors_caption(ctx) {
+        act_button(p, ctx, b, Slot::AdvancedDirectorsCut, &caption, Act::ToggleDirectorsCut);
+    }
     act_button(p, ctx, b, Slot::AdvancedDefault, &tr("Default"), Act::DefaultOptions);
     act_button(p, ctx, b, Slot::AdvancedClose, &tr("OK"), Act::CloseAdvanced(true));
     act_button(p, ctx, b, Slot::AdvancedCancel, &tr("Cancel"), Act::CloseAdvanced(false));

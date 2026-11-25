@@ -25,6 +25,7 @@
 use sta_core::{EntityId, Fixed, PlayerId, Vec3};
 
 pub mod approach;
+mod directors_cut;
 pub(crate) mod gravity;
 #[cfg(test)]
 #[path = "movement/approach_tests.rs"]
