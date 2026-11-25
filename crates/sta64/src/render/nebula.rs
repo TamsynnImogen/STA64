@@ -231,6 +231,17 @@ pub fn occlusion(eye: Vec3, nebulae: &[(Vec3, f32)]) -> Vec<f32> {
             (d / dist, dist, (r / dist).min(1.0).asin())
         })
         .collect();
+    // For the pair test below, per disc (in f64): half its angular radius plus a margin, with its
+    // sine and cosine, so that two discs' bound on their directions' chord costs no sine per pair.
+    // A disc whose distance was clamped has no unit direction and is never skipped.
+    let half: Vec<(f64, f64, f64)> = nebulae
+        .iter()
+        .zip(&discs)
+        .map(|(&(c, _), &(_, _, a))| {
+            let h = if (c - eye).length() >= 1e-3 { a as f64 * 0.5 + PAIR_MARGIN } else { std::f64::consts::PI };
+            (h, h.sin(), h.cos())
+        })
+        .collect();
     discs
         .iter()
         .enumerate()
@@ -239,6 +250,19 @@ pub fn occlusion(eye: Vec3, nebulae: &[(Vec3, f32)]) -> Vec<f32> {
             for (j, &(dj, dist_j, aj)) in discs.iter().enumerate() {
                 if j == i || dist_j >= dist_i || dist_j < nebulae[j].1 {
                     continue;
+                }
+                // Discs whose directions are further apart than their angular radii plus twice the
+                // margin cover nothing of each other: their factor below is exactly 1 (the cover
+                // clamps to 0), so it is skipped without the arccosine. Their chord is then longer
+                // than 2 sin((ai + aj) / 2 + margin); the margin (1e-3 rad) is far wider than the
+                // rounding of the directions and of the arccosine.
+                let ((hi, si, ci), (hj, sj, cj)) = (half[i], half[j]);
+                if hi + hj < std::f64::consts::FRAC_PI_2 {
+                    let bound = 2.0 * (si * cj + ci * sj);
+                    let (dx, dy, dz) = ((di.x - dj.x) as f64, (di.y - dj.y) as f64, (di.z - dj.z) as f64);
+                    if dx * dx + dy * dy + dz * dz > bound * bound {
+                        continue;
+                    }
                 }
                 let theta = di.dot(dj).clamp(-1.0, 1.0).acos();
                 let cover = ((aj + ai - theta) / (2.0 * ai).max(1e-4)).clamp(0.0, 1.0);
@@ -249,35 +273,197 @@ pub fn occlusion(eye: Vec3, nebulae: &[(Vec3, f32)]) -> Vec<f32> {
         .collect()
 }
 
-/// Dim each billboard nebula's puffs.
+/// Half the angular margin (radians) by which [`occlusion`]'s pair test keeps discs that may touch.
+const PAIR_MARGIN: f64 = 5e-4;
+
+/// One puff's fade step: the value its eye distance, half size and nebula's occlusion give,
+/// written when it is more than a thousandth off the stored one (or inserted when there is none).
+/// Returns whether a fade was inserted.
+fn fade_puff(
+    commands: &mut Commands,
+    e: Entity,
+    g: &GlobalTransform,
+    t: &Transform,
+    fade: Option<Mut<crate::render::sprites::SpriteFade>>,
+    eye: Vec3,
+    occ: f32,
+) -> bool {
+    // A billboard quad's scale is twice its half size.
+    let v = near_fade(g.translation().distance(eye), t.scale.x * 0.5) * occ;
+    match fade {
+        Some(mut f) => {
+            if (f.0 - v).abs() > 1e-3 {
+                f.0 = v;
+            }
+            false
+        }
+        None => {
+            commands.entity(e).insert(crate::render::sprites::SpriteFade(v));
+            true
+        }
+    }
+}
+
+/// What [`fade_boards`] keeps between frames: each billboard nebula's puffs, and the inputs of
+/// the last pass that wrote the fades.
+///
+/// A pass is a pure function of the eye, the visible nebulae (centre and radius, in order), and
+/// each puff's world position, local scale and stored fade; the occlusion, a function of the first
+/// two, is kept with them and computed again only when they change. After a pass every stored fade is
+/// within a thousandth of the value its inputs give (or was just set to it), so a second pass over
+/// unchanged inputs writes nothing: it is skipped. A change to any of these inputs runs the whole
+/// pass, exactly as before. The one exception is a puff under two billboard nebulae at once (one
+/// nested in the other): its two writes per pass are not at rest, so with such a puff every frame
+/// runs the pass.
+#[derive(Default)]
+struct BoardCache {
+    /// Each nebula's puffs (descendants with a sprite node), in the order a hierarchy walk
+    /// from the nebula meets them.
+    puffs: bevy::ecs::entity::EntityHashMap<Vec<Entity>>,
+    /// The nebulae and all their descendants, puff or not, to tell which changes concern them.
+    members: bevy::ecs::entity::EntityHashSet,
+    /// A puff is under two nebulae.
+    shared: bool,
+    /// The lists must be walked again (first frame, a change to a nebula's hierarchy).
+    stale: bool,
+    /// The last pass's eye and visible nebulae (centre and radius), by bits, and the occlusion
+    /// they gave.
+    eye: Option<[u32; 3]>,
+    visible: Vec<(Entity, [u32; 3], u32)>,
+    occ: Vec<f32>,
+    /// The last pass queued a fade insert: the next one runs whatever changed.
+    inserted: bool,
+}
+
+impl BoardCache {
+    fn rebuild(&mut self, roots: impl Iterator<Item = Entity>, children: &Query<&Children>, is_puff: impl Fn(Entity) -> bool) {
+        self.puffs.clear();
+        self.members.clear();
+        self.shared = false;
+        let mut seen = bevy::ecs::entity::EntityHashSet::default();
+        for root in roots {
+            self.members.insert(root);
+            let mut list = Vec::new();
+            for e in children.iter_descendants(root) {
+                self.members.insert(e);
+                if is_puff(e) {
+                    if !seen.insert(e) {
+                        self.shared = true;
+                    }
+                    list.push(e);
+                }
+            }
+            self.puffs.insert(root, list);
+        }
+        self.stale = false;
+    }
+}
+
+/// An entity that became a sprite node or got a transform.
+type Gained = Or<(Added<crate::render::sprites::SpriteFx>, Added<GlobalTransform>, Added<Transform>)>;
+
+/// Changes since the last run that may move the puff lists. Read every run, as change ticks and
+/// removal events do not wait.
+#[derive(bevy::ecs::system::SystemParam)]
+struct BoardChanges<'w, 's> {
+    /// A hierarchy change under a nebula.
+    children: Query<'w, 's, Entity, Changed<Children>>,
+    gained: Query<'w, 's, Entity, Gained>,
+    lost_children: RemovedComponents<'w, 's, Children>,
+    lost_fx: RemovedComponents<'w, 's, crate::render::sprites::SpriteFx>,
+    lost_global: RemovedComponents<'w, 's, GlobalTransform>,
+    lost_local: RemovedComponents<'w, 's, Transform>,
+    lost_boards: RemovedComponents<'w, 's, NebulaBoards>,
+    lost_fade: RemovedComponents<'w, 's, crate::render::sprites::SpriteFade>,
+}
+
+impl BoardChanges<'_, '_> {
+    /// Whether a nebula's hierarchy changed (`.0`) and whether a puff lost its stored fade (`.1`).
+    fn read(&mut self, members: &bevy::ecs::entity::EntityHashSet) -> (bool, bool) {
+        let m = |e: Entity| members.contains(&e);
+        // Every removal reader is read in full, so none carries old events into the next run.
+        let mut structure = self.lost_children.read().fold(false, |a, e| a | m(e));
+        structure |= self.lost_fx.read().fold(false, |a, e| a | m(e));
+        structure |= self.lost_global.read().fold(false, |a, e| a | m(e));
+        structure |= self.lost_local.read().fold(false, |a, e| a | m(e));
+        structure |= self.lost_boards.read().count() > 0;
+        structure |= self.children.iter().any(m) || self.gained.iter().any(m);
+        let fade = self.lost_fade.read().fold(false, |a, e| a | m(e));
+        (structure, fade)
+    }
+}
+
+type Puffs<'w, 's> =
+    Query<'w, 's, (&'static GlobalTransform, &'static Transform, Option<&'static mut crate::render::sprites::SpriteFade>), With<crate::render::sprites::SpriteFx>>;
+/// A sprite node whose position, scale or stored fade changed since the last run (by anyone but
+/// the fade itself, whose own writes a system does not see).
+type MovedPuffs<'w, 's> = Query<
+    'w,
+    's,
+    Entity,
+    (
+        With<crate::render::sprites::SpriteFx>,
+        Or<(Changed<GlobalTransform>, Changed<Transform>, Changed<crate::render::sprites::SpriteFade>)>,
+    ),
+>;
+
+/// Dim each billboard nebula's puffs. The values and writes are exactly those of walking every
+/// visible nebula's hierarchy each frame; the walk and the occlusion are kept in [`BoardCache`] and
+/// a frame whose inputs did not change, which would write nothing, is skipped (#1235). Nebulae out
+/// of the view are not skipped: a stored fade only follows its value by steps of more than a
+/// thousandth, so what a skipped puff would hold on coming back depends on every frame it missed.
 fn fade_boards(
     mut commands: Commands,
     camera: Query<&GlobalTransform, crate::map::MainCamera>,
     nebulae: Query<(Entity, &GlobalTransform, &NebulaBoards, &InheritedVisibility)>,
     children: Query<&Children>,
-    mut puffs: Query<(&GlobalTransform, &Transform, Option<&mut crate::render::sprites::SpriteFade>), With<crate::render::sprites::SpriteFx>>,
+    mut puffs: ParamSet<(MovedPuffs, Puffs)>,
+    mut changes: BoardChanges,
+    mut cache: Local<BoardCache>,
 ) {
-    let Ok(cam) = camera.single() else { return };
+    let cache = &mut *cache;
+    let (structure, lost_fade) = changes.read(&cache.members);
+    let moved = lost_fade || puffs.p0().iter().any(|e| cache.members.contains(&e));
+    // A nebula the lists do not know yet (spawned, or given its marker).
+    if structure || nebulae.iter().any(|(e, ..)| !cache.puffs.contains_key(&e)) {
+        cache.stale = true;
+    }
+    let Ok(cam) = camera.single() else {
+        // Nothing is written; the next pass runs whatever changes meanwhile.
+        cache.eye = None;
+        return;
+    };
+    let mut puffs = puffs.p1();
+    if cache.stale {
+        cache.rebuild(nebulae.iter().map(|(e, ..)| e), &children, |e| puffs.contains(e));
+        cache.eye = None;
+    }
     let eye = cam.translation();
     let list: Vec<_> = nebulae.iter().filter(|(_, _, _, v)| v.get()).map(|(e, g, b, _)| (e, g.translation(), b.radius)).collect();
-    let occ = occlusion(eye, &list.iter().map(|&(_, c, r)| (c, r)).collect::<Vec<_>>());
-    for (&(root, _, _), occ) in list.iter().zip(occ) {
-        for e in children.iter_descendants(root) {
+    // The occlusion is a pure function of the eye and the visible nebulae (in order): kept while
+    // they do not change.
+    let visible: Vec<(Entity, [u32; 3], u32)> = list.iter().map(|&(e, c, r)| (e, c.to_array().map(f32::to_bits), r.to_bits())).collect();
+    let eye_bits = eye.to_array().map(f32::to_bits);
+    let same = cache.eye == Some(eye_bits) && cache.visible == visible;
+    if same && !moved && !cache.shared && !cache.inserted {
+        return;
+    }
+    if !same {
+        cache.occ = occlusion(eye, &list.iter().map(|&(_, c, r)| (c, r)).collect::<Vec<_>>());
+    }
+    let occ = std::mem::take(&mut cache.occ);
+    let mut inserted = false;
+    for (&(root, _, _), &occ) in list.iter().zip(&occ) {
+        let Some(list) = cache.puffs.get(&root) else { continue };
+        for &e in list {
             let Ok((g, t, fade)) = puffs.get_mut(e) else { continue };
-            // A billboard quad's scale is twice its half size.
-            let v = near_fade(g.translation().distance(eye), t.scale.x * 0.5) * occ;
-            match fade {
-                Some(mut f) => {
-                    if (f.0 - v).abs() > 1e-3 {
-                        f.0 = v;
-                    }
-                }
-                None => {
-                    commands.entity(e).insert(crate::render::sprites::SpriteFade(v));
-                }
-            }
+            inserted |= fade_puff(&mut commands, e, g, t, fade, eye, occ);
         }
     }
+    cache.occ = occ;
+    cache.eye = Some(eye_bits);
+    cache.visible = visible;
+    cache.inserted = inserted;
 }
 
 fn poll_noise(mut nv: ResMut<NoiseVolume>, mut images: ResMut<Assets<Image>>, mut fields: Query<&NebulaField>, mut mats: ResMut<Assets<NebulaMaterial>>) {
@@ -577,6 +763,34 @@ mod tests {
             let (new, old) = (occlusion(eye, &crowd), occlusion_reference(eye, &crowd));
             assert_eq!(new.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), old.iter().map(|v| v.to_bits()).collect::<Vec<_>>());
         }
+        // A dense crowd of small and large nebulae (many discs touching, some just), seen from
+        // eyes above, level with and among them, near and far: the pairs skipped without the
+        // arccosine change no bit.
+        let crowd: Vec<(Vec3, f32)> =
+            (0..700).map(|_| (Vec3::new(next() * 20000.0, next() * 400.0 - 200.0, next() * 20000.0), 20.0 + next() * next() * 900.0)).collect();
+        let mut dimmed = 0;
+        for n in 0..40 {
+            let eye = match n % 4 {
+                0 => Vec3::new(next() * 20000.0, 200.0 + next() * 4000.0, next() * 20000.0),
+                1 => Vec3::new(next() * 20000.0, next() * 10.0, next() * 20000.0),
+                2 => crowd[n * 13].0 + Vec3::new(next() * 50.0, next() * 50.0, next() * 50.0),
+                _ => Vec3::new(-30000.0 + next() * 80000.0, next() * 30000.0, -30000.0 + next() * 80000.0),
+            };
+            let (new, old) = (occlusion(eye, &crowd), occlusion_reference(eye, &crowd));
+            assert_eq!(new.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), old.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), "eye {eye}");
+            dimmed += old.iter().filter(|&&k| k < 1.0).count();
+        }
+        assert!(dimmed > 1000, "{dimmed}");
+        // Discs placed at their touching angle and a little either side of it, in steps finer and
+        // coarser than the pair test's margin.
+        for s in -400..=400 {
+            let (ra, rb) = (120.0f32, 45.0f32);
+            let touch = (ra / 1000.0).asin() + (rb / 500.0).asin();
+            let theta = touch + s as f32 * 1e-5;
+            let pair = [(Vec3::new(1000.0, 0.0, 0.0), ra), (Vec3::new(theta.cos(), 0.0, theta.sin()) * 500.0, rb)];
+            let (new, old) = (occlusion(Vec3::ZERO, &pair), occlusion_reference(Vec3::ZERO, &pair));
+            assert_eq!(new.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), old.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), "offset {s}");
+        }
     }
 
     #[test]
@@ -601,6 +815,221 @@ mod tests {
         // The eye inside one does not dim what lies beyond.
         let o = occlusion(eye, &[(Vec3::new(0.0, 0.0, -50.0), 100.0), (Vec3::new(0.0, 0.0, -1000.0), 100.0)]);
         assert_eq!(o[1], 1.0);
+    }
+
+    /// The board fade as it was before #1235: every visible nebula's hierarchy walked each frame.
+    fn fade_boards_reference(
+        mut commands: Commands,
+        camera: Query<&GlobalTransform, crate::map::MainCamera>,
+        nebulae: Query<(Entity, &GlobalTransform, &NebulaBoards, &InheritedVisibility)>,
+        children: Query<&Children>,
+        mut puffs: Puffs,
+    ) {
+        let Ok(cam) = camera.single() else { return };
+        let eye = cam.translation();
+        let list: Vec<_> = nebulae.iter().filter(|(_, _, _, v)| v.get()).map(|(e, g, b, _)| (e, g.translation(), b.radius)).collect();
+        let occ = occlusion(eye, &list.iter().map(|&(_, c, r)| (c, r)).collect::<Vec<_>>());
+        for (&(root, _, _), occ) in list.iter().zip(occ) {
+            for e in children.iter_descendants(root) {
+                let Ok((g, t, fade)) = puffs.get_mut(e) else { continue };
+                let v = near_fade(g.translation().distance(eye), t.scale.x * 0.5) * occ;
+                match fade {
+                    Some(mut f) => {
+                        if (f.0 - v).abs() > 1e-3 {
+                            f.0 = v;
+                        }
+                    }
+                    None => {
+                        commands.entity(e).insert(crate::render::sprites::SpriteFade(v));
+                    }
+                }
+            }
+        }
+    }
+
+    /// `sprites::face_camera` as it was before #1235: the rotation written every frame.
+    fn face_camera_reference(
+        camera: Query<&GlobalTransform, crate::map::MainCamera>,
+        parents: Query<&GlobalTransform, Without<crate::render::sprites::Billboard>>,
+        mut boards: Query<(&mut Transform, &ChildOf), With<crate::render::sprites::Billboard>>,
+    ) {
+        let Ok(cam) = camera.single() else { return };
+        let cam_rot = cam.compute_transform().rotation;
+        for (mut tf, child_of) in &mut boards {
+            let parent_rot = parents.get(child_of.parent()).map(|g| g.compute_transform().rotation).unwrap_or(Quat::IDENTITY);
+            tf.rotation = parent_rot.inverse() * cam_rot;
+        }
+    }
+
+    fn puff(w: &mut World, parent: Entity, at: Vec3, half: f32) -> Entity {
+        w.spawn((
+            Transform::from_translation(at).with_scale(Vec3::new(half * 2.0, half * 2.0, 1.0)),
+            crate::render::sprites::SpriteFx { node_anim: None, sprite: String::new(), colour: [1.0; 3], material: Handle::default() },
+            crate::render::sprites::Billboard,
+            ChildOf(parent),
+        ))
+        .id()
+    }
+
+    /// A nebula at `at` of `radius`: two nodes (one turned), each with a few puffs of varied size.
+    fn nebula(w: &mut World, at: Vec3, radius: f32, seed: u32) -> Entity {
+        let root = w.spawn((Transform::from_translation(at), NebulaBoards { radius }, InheritedVisibility::VISIBLE)).id();
+        for n in 0..2u32 {
+            let node = w
+                .spawn((Transform::from_xyz(n as f32 * 70.0 - 35.0, 10.0, 0.0).with_rotation(Quat::from_rotation_y(n as f32 * 0.7)), ChildOf(root)))
+                .id();
+            for k in 0..5u32 {
+                let s = (seed * 7 + n * 5 + k) as f32;
+                puff(w, node, Vec3::new((s * 37.0) % 90.0 - 45.0, (s * 13.0) % 30.0 - 15.0, (s * 53.0) % 90.0 - 45.0), 20.0 + (s * 11.0) % 70.0);
+            }
+        }
+        root
+    }
+
+    fn fade_app(reference: bool) -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, TransformPlugin));
+        if reference {
+            app.add_systems(Update, face_camera_reference)
+                .add_systems(PostUpdate, fade_boards_reference.after(TransformSystems::Propagate));
+        } else {
+            app.add_systems(Update, crate::render::sprites::face_camera)
+                .add_systems(PostUpdate, fade_boards.after(TransformSystems::Propagate));
+        }
+        let w = app.world_mut();
+        w.spawn((Camera3d::default(), Transform::from_xyz(0.0, 900.0, 1400.0).looking_at(Vec3::ZERO, Vec3::Y)));
+        nebula(w, Vec3::new(0.0, 0.0, 0.0), 160.0, 1);
+        nebula(w, Vec3::new(0.0, 0.0, -600.0), 200.0, 2);
+        nebula(w, Vec3::new(500.0, 0.0, 100.0), 150.0, 3);
+        nebula(w, Vec3::new(-450.0, 40.0, -250.0), 180.0, 4);
+        app
+    }
+
+    /// The same scripted change, frame by frame, to either app (entities are spawned in the same
+    /// order in both, so their ids agree).
+    fn script(w: &mut World, frame: u32) {
+        let cam = w.query_filtered::<Entity, With<Camera>>().single(w).ok();
+        let roots: Vec<Entity> = {
+            let mut q = w.query_filtered::<Entity, (With<NebulaBoards>, Without<ChildOf>)>();
+            let mut r: Vec<_> = q.iter(w).collect();
+            r.sort();
+            r
+        };
+        let puffs: Vec<Entity> = {
+            let mut q = w.query_filtered::<Entity, With<crate::render::sprites::SpriteFx>>();
+            let mut p: Vec<_> = q.iter(w).collect();
+            p.sort();
+            p
+        };
+        let set_cam = |w: &mut World, t: Transform| {
+            if let Some(c) = cam {
+                *w.get_mut::<Transform>(c).unwrap() = t;
+            }
+        };
+        let start = Transform::from_xyz(0.0, 900.0, 1400.0).looking_at(Vec3::ZERO, Vec3::Y);
+        match frame {
+            // Still, then panned without turning, into the first nebula.
+            0..20 => {}
+            20..40 => set_cam(w, start.with_translation(start.translation.lerp(Vec3::new(0.0, 20.0, 60.0), (frame - 19) as f32 / 20.0))),
+            // Turning while it moves through the nebula.
+            40..60 => {
+                let p = Vec3::new(0.0, 20.0, 60.0).lerp(Vec3::new(-20.0, 10.0, -500.0), (frame - 39) as f32 / 20.0);
+                set_cam(w, Transform::from_translation(p).looking_at(Vec3::new(300.0, 0.0, -900.0), Vec3::Y));
+            }
+            // Drifting by less than the write threshold a frame.
+            80..100 => {
+                let t = *w.get::<Transform>(cam.unwrap()).unwrap();
+                set_cam(w, t.with_translation(t.translation + Vec3::new(0.02, 0.0, 0.03)));
+            }
+            // Out again, turning.
+            130..145 => {
+                let p = Vec3::new(-20.0, 10.0, -500.0).lerp(Vec3::new(800.0, 600.0, 900.0), (frame - 129) as f32 / 15.0);
+                set_cam(w, Transform::from_translation(p).looking_at(Vec3::ZERO, Vec3::Y));
+            }
+            _ => {}
+        }
+        match frame {
+            // A nebula leaves the view while the camera moves, and comes back.
+            30 => {
+                w.entity_mut(roots[1]).insert(InheritedVisibility::HIDDEN);
+            }
+            50 => {
+                w.entity_mut(roots[1]).insert(InheritedVisibility::VISIBLE);
+            }
+            65 => {
+                w.entity_mut(roots[3]).insert(InheritedVisibility::HIDDEN);
+            }
+            // A nebula moves, a puff grows, others' fades are written, dropped, spawned, despawned.
+            70 => w.get_mut::<Transform>(roots[2]).unwrap().translation.x -= 300.0,
+            75 => {
+                w.entity_mut(roots[3]).insert(InheritedVisibility::VISIBLE);
+            }
+            // (In still frames, so only these changes can start a pass.)
+            103 => w.get_mut::<Transform>(puffs[3]).unwrap().scale *= 3.0,
+            107 => w.get_mut::<crate::render::sprites::SpriteFade>(puffs[4]).unwrap().0 = 0.123,
+            113 => {
+                w.entity_mut(puffs[5]).remove::<crate::render::sprites::SpriteFade>();
+            }
+            100 => {
+                let node = w.get::<ChildOf>(puffs[0]).unwrap().parent();
+                puff(w, node, Vec3::new(5.0, 5.0, 5.0), 33.0);
+            }
+            105 => w.entity_mut(puffs[6]).despawn(),
+            110 => {
+                nebula(w, Vec3::new(-100.0, 0.0, -450.0), 120.0, 5);
+            }
+            // A nebula nested in another (its puffs under both), then not.
+            115 => {
+                let node = w.get::<ChildOf>(puffs[0]).unwrap().parent();
+                w.entity_mut(node).insert((NebulaBoards { radius: 90.0 }, InheritedVisibility::VISIBLE));
+            }
+            125 => {
+                let node = w.get::<ChildOf>(puffs[0]).unwrap().parent();
+                w.entity_mut(node).remove::<NebulaBoards>();
+            }
+            // No main camera for two frames, with a change in between.
+            145 => {
+                w.entity_mut(cam.unwrap()).insert(crate::render::action_camera::ActionCamera);
+            }
+            146 => w.get_mut::<Transform>(puffs[7]).unwrap().scale *= 0.5,
+            147 => {
+                w.entity_mut(cam.unwrap()).remove::<crate::render::action_camera::ActionCamera>();
+            }
+            _ => {}
+        }
+    }
+
+    type Seen = Vec<(Entity, Option<u32>, [u32; 4], [u32; 3])>;
+
+    fn seen(w: &mut World) -> Seen {
+        let mut q = w.query_filtered::<(Entity, Option<&crate::render::sprites::SpriteFade>, &Transform, &GlobalTransform), With<crate::render::sprites::SpriteFx>>();
+        let mut v: Seen = q
+            .iter(w)
+            .map(|(e, f, t, g)| (e, f.map(|f| f.0.to_bits()), t.rotation.to_array().map(f32::to_bits), g.translation().to_array().map(f32::to_bits)))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// The kept lists and the skipped frames give, every frame and for every puff, the same
+    /// stored fade (by bits) and the same transforms as the walk of every board each frame: still,
+    /// panned, turning and drifting cameras, nebulae leaving and entering the view, and puffs and
+    /// nebulae that change, appear, vanish or nest.
+    #[test]
+    fn kept_board_lists_give_the_walks_fades_every_frame() {
+        let (mut old, mut new) = (fade_app(true), fade_app(false));
+        let mut faded = 0;
+        for frame in 0..160 {
+            script(old.world_mut(), frame);
+            script(new.world_mut(), frame);
+            old.update();
+            new.update();
+            let (a, b) = (seen(old.world_mut()), seen(new.world_mut()));
+            assert_eq!(a, b, "frame {frame}");
+            faded += a.iter().filter(|s| s.1.is_some_and(|f| f != 1.0f32.to_bits())).count();
+        }
+        // The script does dim puffs (near fade and occlusion), so the comparison is not vacuous.
+        assert!(faded > 500, "{faded}");
     }
     /// Evaluates a conditional-translation attribute's condition (`A && !B`).
     fn holds(cond: &str, defs: &[&str]) -> bool {

@@ -204,7 +204,13 @@ pub fn face_camera(
             .get(child_of.parent())
             .map(|g| g.compute_transform().rotation)
             .unwrap_or(Quat::IDENTITY);
-        tf.rotation = parent_rot.inverse() * cam_rot;
+        // Written only when its bits change, so a still camera leaves the boards' transforms
+        // unchanged and systems that watch them (the nebula board fade) can rest. The stored value
+        // is the same either way.
+        let rot = parent_rot.inverse() * cam_rot;
+        if tf.rotation.to_array().map(f32::to_bits) != rot.to_array().map(f32::to_bits) {
+            tf.rotation = rot;
+        }
     }
 }
 
