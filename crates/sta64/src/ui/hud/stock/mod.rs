@@ -741,7 +741,7 @@ pub(super) fn active(
                 .and_then(|record| orders::Kind::read(record).map(|kind| kind.active(&feed, record)))
                 .unwrap_or(false),
             Act::Target(mode) => hud.targeting == Some(*mode),
-            Act::Special(slot) if state.profile == Some(UiProfile::Armada1) => feed.own_selection().into_iter().any(|id|
+            Act::Special(slot) if state.profile.is_some() => feed.own_selection().into_iter().any(|id|
                 sta_sim::specials::a1_special_active(&feed.view, id, *slot)
                     || feed.view.point_defence_on(id, *slot)),
             _ => false,

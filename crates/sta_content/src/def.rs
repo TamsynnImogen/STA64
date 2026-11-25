@@ -388,6 +388,13 @@ pub struct TradeStationDef {
     pub goods: Vec<TradeGood>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelfDestructBlast {
+    pub damage: Fixed,
+    pub radius_factor: Fixed,
+    pub rate: Fixed,
+}
+
 #[derive(Debug, Clone)]
 pub struct UnitDef {
     /// Set by [`ContentDb`](crate::ContentDb) when it is built.
@@ -456,6 +463,8 @@ pub struct UnitDef {
     pub movement: MoveStats,
     /// Maximum hull strength (`maxHealth`).
     pub hull: Fixed,
+    /// Resolved shockwave of this unit's Armada II self-destruct explosion.
+    pub self_destruct_blast: Option<SelfDestructBlast>,
     pub shields: ShieldDef,
     /// Authored starting hull; `None` starts at the hull maximum.
     pub initial_hull: Option<Fixed>,
@@ -596,7 +605,7 @@ pub struct UnitStatsDef {
     pub ship_type: Option<String>,
     /// `isHero`.
     pub is_hero: Option<bool>,
-    /// `selfDestruct`: the ODF of the self-destruct weapon, lower case.
+    /// `selfDestruct`: the fireball ODF used on destruction, lower case.
     pub self_destruct: Option<String>,
     /// `missileDetonator` (Armada II): an ODF name, lower case.
     pub missile_detonator: Option<String>,
@@ -767,6 +776,7 @@ impl UnitDef {
             scale: Fixed::ONE,
             movement: MoveStats::STATIC,
             hull: Fixed::ZERO,
+            self_destruct_blast: None,
             shields: ShieldDef::default(),
             initial_hull: None,
             initial_shields: None,
@@ -848,16 +858,65 @@ pub struct A1SpecialDef {
     pub bonus_damage: Fixed,
     pub reflect_missile: bool,
     pub reflect_beam: bool,
+    /// Armada II reflection probability and return-to-shooter probability.
+    pub reflect_chance: Option<(Fixed, Fixed)>,
     pub hit_condition: u32,
     pub shields_returned: Fixed,
     pub detect_class: u32,
+}
+
+/// Armada II special targeting as selected by the launcher ODF.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum A2Target {
+    Immediate,
+    Entity,
+    Point,
+}
+
+/// Special effects with confirmed stock Armada II class behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum A2Effect {
+    Myotron,
+    SensorJammer,
+    Polaron,
+    RestoreShields(Fixed),
+    RestoreEnergy(Fixed),
+    Remodulate,
+    PsychonicBlast(Fixed),
+    MicroDrain { system: u32, per_second: Fixed },
+    SelfDestruct(Fixed),
+    Commando(Fixed),
+    Regeneration(Fixed),
+    Plasma,
+    HoldingBeam { delay: sta_core::Tick, interval: sta_core::Tick, party: Fixed },
+    AutoAssimilator(Fixed),
+    ShieldProjector(Fixed),
+    ShieldInversion(Fixed),
+    DeathChant { fire: Fixed, repair: Fixed, turn: Fixed, damage: Fixed, speed: Fixed, hit: Fixed },
+}
+
+impl A2Effect {
+    pub fn sustained_beam(self) -> bool {
+        matches!(self, Self::HoldingBeam { .. } | Self::AutoAssimilator(_) | Self::ShieldProjector(_) | Self::ShieldInversion(_))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct A2SpecialDef {
+    pub target: A2Target,
+    pub effect: A2Effect,
+    pub duration: sta_core::Tick,
+    pub flight: sta_core::Tick,
+    pub max_targets: u32,
+    pub hit_condition: u32,
+    pub projectile: bool,
 }
 
 impl A1SpecialDef {
     pub fn new(kind: A1SpecialKind) -> Self {
         Self {
             kind, duration_ticks: 0, flight_ticks: 0, radius: Fixed::ZERO, limit: 0,
-            bonus_damage: Fixed::ZERO, reflect_missile: false, reflect_beam: false,
+            bonus_damage: Fixed::ZERO, reflect_missile: false, reflect_beam: false, reflect_chance: None,
             hit_condition: 0, shields_returned: Fixed::ZERO, detect_class: 0,
         }
     }
@@ -896,8 +955,10 @@ pub struct WeaponDef {
     pub energy_drain: Fixed,
     /// Special energy to trigger the weapon (`specialEnergyCost`).
     pub energy_cost: Fixed,
-    /// Armada I special class parameters; absent for other content.
+    /// Armada I class parameters, also used by matching stock Armada II weapons.
     pub a1_special: Option<A1SpecialDef>,
+    /// Typed Armada II special class parameters.
+    pub a2_special: Option<A2SpecialDef>,
     /// Cloak: weapons are off while cloaked (`disableWeapons`, default on).
     pub disable_weapons: bool,
     /// Cloak: a hit decloaks (`decloakOnHit`, default off).
@@ -1275,6 +1336,7 @@ impl WeaponDef {
             energy_drain: Fixed::ZERO,
             energy_cost: Fixed::ZERO,
             a1_special: None,
+            a2_special: None,
             disable_weapons: true,
             decloak_on_hit: false,
             initial_shot_delay_modifier: None,

@@ -47,9 +47,11 @@ use crate::view::UnitFlags;
 use crate::world::{Entities, Fnv, Table};
 
 pub(crate) mod a1;
+mod a2;
 mod a1_support;
 pub use a1::{EffectView, SpecialView, a1_special_active, a1_special_ready, a1_special_researched, a1_special_target_ok};
 pub(crate) use a1::pd_enabled;
+pub use a2::{a2_special_ready, a2_special_target_ok};
 
 /// The special abilities the sim knows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,15 +63,17 @@ pub enum SpecialKind {
     PointDefence,
     Replace,
     A1(sta_content::A1SpecialKind),
+    A2(sta_content::A2Target),
 }
 
 impl SpecialKind {
     /// The ability a weapon definition stands for, if any.
     pub fn of(w: &WeaponDef) -> Option<SpecialKind> {
         match w.class.0.as_str() {
-            "cloakingdevice" | "cloakingdeviceimp" => Some(SpecialKind::Cloak),
+            "cloakingdevice" | "cloakingdeviceimp" | "phasecloakdevice" => Some(SpecialKind::Cloak),
             _ if w.replace.is_some() => Some(SpecialKind::Replace),
             _ if w.kind == sta_content::WeaponKind::PointDefence => Some(SpecialKind::PointDefence),
+            _ if w.a2_special.is_some() => w.a2_special.map(|s| SpecialKind::A2(s.target)),
             _ => w.a1_special.map(|s| SpecialKind::A1(s.kind)),
         }
     }
@@ -109,6 +113,7 @@ pub struct CloakDef {
     pub cost: Fixed,
     pub disable_weapons: bool,
     pub decloak_on_hit: bool,
+    pub phased: bool,
 }
 
 /// The unit's specials in hardpoint order.
@@ -160,6 +165,7 @@ pub fn cloak_def(db: &ContentDb, u: &UnitDef) -> Option<CloakDef> {
         cost: w.energy_cost,
         disable_weapons: w.disable_weapons,
         decloak_on_hit: w.decloak_on_hit,
+        phased: w.class.0 == "phasecloakdevice",
     })
 }
 
@@ -182,6 +188,7 @@ pub struct Specials {
     /// Units whose `WEAPONS_OFF` this module set.
     muted: Table<()>,
     pub(crate) a1: a1::State,
+    pub(crate) a2: a2::State,
 }
 
 /// [`Specials`] as the snapshot stores it.
@@ -191,11 +198,12 @@ pub struct SpecialsRec {
     pub cloak: Vec<(EntityId, CloakState)>,
     pub muted: Vec<EntityId>,
     a1: a1::Record,
+    a2: a2::State,
 }
 
 impl Specials {
     pub fn is_empty(&self) -> bool {
-        self.energy.is_empty() && self.cloak.is_empty() && self.muted.is_empty() && self.a1.is_empty()
+        self.energy.is_empty() && self.cloak.is_empty() && self.muted.is_empty() && self.a1.is_empty() && self.a2.is_empty()
     }
 
     pub fn energy_of(&self, id: EntityId) -> Option<Fixed> {
@@ -234,6 +242,11 @@ impl Specials {
         self.cloak.get(id).copied()
     }
 
+    pub(crate) fn phased(&self, db: &ContentDb, unit: &crate::world::Entity) -> bool {
+        self.cloak_state(unit.id) == Some(CloakState::Cloaked)
+            && db.unit(unit.def).and_then(|d| cloak_def(db, d)).is_some_and(|c| c.phased)
+    }
+
     pub(crate) fn hash_into(&self, h: &mut Fnv) {
         h.u64(self.energy.len() as u64);
         for (id, e) in self.energy.iter() {
@@ -256,6 +269,7 @@ impl Specials {
             h.u64(id.0 as u64);
         }
         self.a1.hash_into(h);
+        self.a2.hash_into(h);
     }
 
     pub(crate) fn to_rec(&self) -> SpecialsRec {
@@ -264,6 +278,7 @@ impl Specials {
             cloak: self.cloak.iter().map(|(i, c)| (i, *c)).collect(),
             muted: self.muted.iter().map(|(i, _)| i).collect(),
             a1: self.a1.to_rec(),
+            a2: self.a2.clone(),
         }
     }
 
@@ -274,6 +289,7 @@ impl Specials {
             cloak: Table::from_rows(r.cloak)?,
             muted: Table::from_rows(r.muted.into_iter().map(|i| (i, ())).collect())?,
             a1: a1::State::from_rec(r.a1)?,
+            a2: r.a2,
         })
     }
 
@@ -313,7 +329,7 @@ impl Specials {
             any |= match kind {
                 Some(SpecialKind::Cloak) => self.cloak_one(db, units, player, id, None),
                 // Toggled by `Weapons::order_special`, which routes it.
-                Some(SpecialKind::PointDefence | SpecialKind::Replace | SpecialKind::A1(_)) | None => false,
+                Some(SpecialKind::PointDefence | SpecialKind::Replace | SpecialKind::A1(_) | SpecialKind::A2(_)) | None => false,
             };
         }
         any
@@ -433,7 +449,8 @@ impl Specials {
                 self.cloak.remove(id);
                 continue;
             };
-            let draining = matches!(state, CloakState::Engaging(_) | CloakState::Cloaked)
+            let draining = (state == CloakState::Cloaked
+                || !def.phased && matches!(state, CloakState::Engaging(_)))
                 && def.drain > Fixed::ZERO;
             if draining && let Some(e) = self.energy.get_mut(id) {
                 *e = *e - def.drain;
@@ -550,6 +567,25 @@ impl Specials {
     }
 }
 
+impl crate::Sim {
+    pub(crate) fn phase_cloak_researched(&self, db: &ContentDb, player: PlayerId, id: EntityId, slot: Option<u8>) -> bool {
+        if !player.is_player() || self.specials.cloak_state(id).is_some() {
+            return true;
+        }
+        let Some(unit) = self.units.get(id) else { return true };
+        let Some(def) = db.unit(unit.def) else { return true };
+        let mut specials = specials_of(db, def);
+        let weapon = match slot {
+            Some(slot) => specials.nth(usize::from(slot)),
+            None => specials.find(|(kind, _)| *kind == SpecialKind::Cloak),
+        };
+        weapon.is_none_or(|(_, w)| {
+            w.class.0 != "phasecloakdevice"
+                || a1::researched_in_world(db, &self.units, crate::relations::Diplomacy::new(&self.players, &self.relations), unit, w)
+        })
+    }
+}
+
 fn set_flag(units: &mut Entities, id: EntityId, f: UnitFlags, on: bool) {
     if let Some(u) = units.get_mut(id) {
         u.flags = u.flags.with(f, on);
@@ -562,3 +598,6 @@ mod tests;
 
 #[cfg(test)]
 mod a1_tests;
+
+#[cfg(test)]
+mod a2_tests;

@@ -385,7 +385,7 @@ impl Sim {
         let (players, rel) = (self.players.clone(), self.relations.clone());
         let dip = crate::relations::Diplomacy::new(&players, &rel);
         let seats = !self.players.is_empty();
-        let visibility = if seats { crate::sensors::compute(&self.units, Some(&db), dip) } else { Vec::new() };
+        let visibility = if seats { crate::sensors::compute(&self.units, Some(&db), dip, &self.specials, self.tick) } else { Vec::new() };
         let ids: Vec<EntityId> = self.scripted.rows.iter().map(|(id, _)| id).collect();
         for id in ids {
             let Some(u) = self.units.get(id) else {

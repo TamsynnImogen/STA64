@@ -774,6 +774,9 @@ fn target_mode_available(feed: &HudFeed, mode: TargetMode) -> bool {
             && (matches!(*kind, sta_sim::specials::SpecialKind::A1(sta_content::A1SpecialKind::Gemini | sta_content::A1SpecialKind::EngineeringTeam | sta_content::A1SpecialKind::Stasis))
                 && feed.content.as_deref().is_some_and(|db| feed.own_selection().into_iter().any(|id|
                     sta_sim::specials::a1_special_ready(&feed.view, db, id, slot)))
+                || matches!(*kind, sta_sim::specials::SpecialKind::A2(sta_content::A2Target::Entity | sta_content::A2Target::Point))
+                    && feed.content.as_deref().is_some_and(|db| feed.own_selection().into_iter().any(|id|
+                        sta_sim::specials::a2_special_ready(&feed.view, db, id, slot)))
                 || (*kind == sta_sim::specials::SpecialKind::Replace && model::special_targeted(feed, slot) == Some(true)))),
         TargetMode::TradeSource | TargetMode::TradeDestination => feed.own_selection().iter().any(|id| {
             feed.view.unit(*id).is_some_and(|u| feed.cargo_ship(u))
@@ -906,7 +909,14 @@ fn target_order(
             let kind = commands::shared(feed).specials.into_iter().find(|(s, _)| *s == slot)?.1;
             let at = match kind {
                 sta_sim::specials::SpecialKind::A1(sta_content::A1SpecialKind::Stasis) => Target::Point(point?),
+                sta_sim::specials::SpecialKind::A2(sta_content::A2Target::Point) => Target::Point(point?),
                 sta_sim::specials::SpecialKind::A1(sta_content::A1SpecialKind::Gemini | sta_content::A1SpecialKind::EngineeringTeam) => {
+                    let id = target?;
+                    let u = feed.view.unit(id)?;
+                    if u.flags.contains(UnitFlags::DYING) { return None; }
+                    Target::Entity(id)
+                }
+                sta_sim::specials::SpecialKind::A2(sta_content::A2Target::Entity) => {
                     let id = target?;
                     let u = feed.view.unit(id)?;
                     if u.flags.contains(UnitFlags::DYING) { return None; }
@@ -920,6 +930,11 @@ fn target_order(
             if matches!(kind, sta_sim::specials::SpecialKind::A1(_))
                 && !ids.iter().any(|id| feed.content.as_deref().is_some_and(|db|
                     sta_sim::specials::a1_special_target_ok(&feed.view, db, *id, slot, at))) {
+                return None;
+            }
+            if matches!(kind, sta_sim::specials::SpecialKind::A2(_))
+                && !ids.iter().any(|id| feed.content.as_deref().is_some_and(|db|
+                    sta_sim::specials::a2_special_target_ok(&feed.view, db, *id, slot, at))) {
                 return None;
             }
             vec![Order::Special { units: ids.clone(), slot, target: at }]

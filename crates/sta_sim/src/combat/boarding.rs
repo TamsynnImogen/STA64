@@ -171,7 +171,7 @@ fn boarding_multiplier(def: &UnitDef) -> Fixed {
 }
 
 /// The race's `boardingStrength` (1.0 when absent).
-fn race_strength(db: &ContentDb, race: &str) -> Fixed {
+pub(crate) fn race_strength(db: &ContentDb, race: &str) -> Fixed {
     db.rules().race_boarding(race).boarding_strength
 }
 

@@ -55,9 +55,13 @@ pub const READ_ODF_KEYS: &[&str] = &[
     "switchtoattack", "cloakenable", "warpenable", "crewaffectsweapondelay", "ignorevalidastarget",
     "special", "regularweapondelay", "ignoreshield", "forceinvalidatetarget", "canattackstations", "specialvalue",
     "shieldduration", "omegaturn", "seektime", "shotaccel", "detectradius", "traveltimefraction",
-    // A1 Federation special payloads (read by the A1-provenance loader).
+    // Shared Federation payloads and Armada II abilities.
     "chainradius", "maxhits", "chaindamagemodifier", "maxtargets", "hitcondition",
     "reflectmissile", "reflectbeam", "detectclass", "detecttimer", "shieldsreturned",
+    "reflectionratio", "reflecthitownerratio", "affectedsystem", "draintime", "drainrate",
+    "percentage", "timer", "radiusfactor", "shockwave", "regenmodifier", "partysize",
+    "boardingdelay", "boardinginterval", "boardingsize", "firemodifier", "repairmodifier",
+    "turnmodifier", "damagemodifier", "speedmodifier", "hitmodifier",
     // CON-55: unit stat keys (typed; applied by SIM-74).
     "intrinsicvalue", "criticalhitpercent", "hulltargethardpoints", "criticaltargethardpoints",
     "enginestargethardpoints", "weaponstargethardpoints", "shieldgeneratortargethardpoints",
