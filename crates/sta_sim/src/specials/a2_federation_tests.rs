@@ -254,6 +254,12 @@ fn galaxy_halves_rejoin_after_real_rendezvous() {
         .find(|u| sim.content.as_ref().unwrap().unit(u.def).unwrap().odf == "fbbridge")
         .unwrap()
         .id;
+    // Both stock halves brake 50 units from an ordinary move target.
+    // The final docking leg still has to reach the authored 10-unit clearance.
+    for id in [saucer, bridge] {
+        sim.units.get_mut(id).unwrap().stats.too_close_to_turn = fixed(50);
+    }
+    sim.units.get_mut(bridge).unwrap().pos.x = fixed(250);
     let started = sim.step(&[cast(0, saucer, 0, Target::None)]);
     assert!(
         started

@@ -625,6 +625,21 @@ impl Sim {
         // when both have reached the point at which the hulls join.
         let contact = self.body_radius(first.def) + self.body_radius(second.def) + final_distance;
         if !super::a1::in_range(first.pos, second.pos, contact) {
+            // The ordinary move controller stops at tooCloseToTurn (50 units
+            // for the stock halves). Complete the short docking leg after it
+            // stops, retaining the model clearance at the fusion point.
+            let (direction, distance) = crate::combat::weapons::flat(first.pos, second.pos);
+            let step = (distance - contact).max(Fixed::ZERO) / Fixed::from_int(2);
+            for (ship, direction) in [(&first, direction), (&second, (-direction.0, -direction.1))]
+            {
+                if ship.target.is_none()
+                    && let Some(unit) = self.units.get_mut(ship.id)
+                {
+                    let limit = ship.stats.max_speed / Fixed::from_int(TICK_HZ as i32);
+                    let advance = (step + Fixed::ONE).min(limit);
+                    unit.pos = offset(ship.pos, direction, advance);
+                }
+            }
             return true;
         }
         let id = self.replace_galaxy_part(

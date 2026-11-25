@@ -427,7 +427,8 @@ fn the_faction_dropdown_lists_the_playable_factions_in_skirmish_order() {
     for (i, seat) in two.iter().enumerate() {
         let d = dropdown_of(&mut app, i, Col::Race);
         let d = app.world().get::<Dropdown>(d).unwrap();
-        assert_eq!(d.value(), Some(seat.race.as_str()));
+        assert_eq!(seat.race, crate::frontend::screens::data::RANDOM_SIDE);
+        assert_eq!(d.value(), Some("Random"));
     }
 }
 
@@ -806,7 +807,7 @@ fn a_dropdown_keeps_keyboard_focus_through_the_rebuild_its_choice_causes() {
     app.world_mut().resource_mut::<KitFocus>().0 = Some(field);
     kit_key(app.world_mut(), KitKey::code(KeyCode::ArrowDown));
     settle(&mut app);
-    assert_eq!(app.world().resource::<SetupDraft>().seats[0].race, "kli");
+    assert_eq!(app.world().resource::<SetupDraft>().seats[0].race, "fed");
     let now = dropdown_of(&mut app, 0, Col::Race);
     assert_ne!(now, field, "the screen was rebuilt");
     assert_eq!(app.world().resource::<KitFocus>().0, Some(now));

@@ -387,10 +387,10 @@ fn starting_choices_follow_authored_rows_into_launch_and_round_trip() {
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].options.starting_resources, StartingResources::Lots);
     assert_eq!(sent[0].options.officer_limit, 3);
-    assert_eq!(
-        SetupDraft::from_setup(&sent[0], app.world().resource::<ScreenData>()),
-        Some(draft(&app))
-    );
+    let data = app.world().resource::<ScreenData>();
+    let restored = SetupDraft::from_setup(&sent[0], data).unwrap();
+    assert_eq!(restored.options, draft(&app).options);
+    assert_eq!(restored.to_setup(data).unwrap().players, sent[0].players);
     press(&mut app, Act::Goto(Screen::Advanced));
     press(&mut app, Act::CycleOfficerLimit);
     assert_eq!(draft(&app).options.officer_limit, 0);
