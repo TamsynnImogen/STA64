@@ -29,6 +29,7 @@
 //! Format 39 (SIM-75) appends the shields a nebula took from craft and gives back.
 //! Format 40 adds ReplaceWeapon lineage, reload and child tracking after the nebula shields.
 //! Format 47 adds Armada I special ordnance, timed effects and cooldowns to the specials record.
+//! Format 49 adds Armada II specials to that record.
 //!
 //! The state types of other crates (`MoveStats`) have no serde, so the body
 //! uses small mirror records here instead of touching those crates.
@@ -73,7 +74,7 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// Format 45 appends cargo routes and holds.
 /// Format 46 stores build queue job identities and the last allocated id.
 /// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 47;
+pub const FORMAT_VERSION: u16 = 49;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
@@ -744,7 +745,7 @@ impl Sim {
             |p| b.players.iter().any(|(q, _)| q.0 == p),
         ).map_err(|why| SnapshotError::Corrupt(why.into()))?;
         let specials = crate::specials::Specials::from_rec(b.specials)
-            .filter(|s| s.a1.valid(b.tick, &units, content.as_deref()))
+            .filter(|s| s.a1.valid(b.tick, &units, content.as_deref()) && s.a2.valid(b.tick, &units, content.as_deref()))
             .ok_or_else(|| corrupt("specials"))?;
         let start_effects = crate::start_effects::StartEffects::from_rec(effect_rows, |id| units.contains(id))
             .ok_or_else(|| corrupt("start effect rows"))?;

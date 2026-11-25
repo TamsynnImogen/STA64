@@ -352,9 +352,15 @@ impl Sim {
             let a1 = if model == Model::A1 { db.and_then(|db| a1::params(db, u.def)) } else { None };
             let plan = plans.binary_search_by_key(&u.id, |p| p.0).ok().map(|i| plans[i].1);
             let cap = caps.binary_search_by_key(&u.id, |c| c.0).ok().map(|i| caps[i].1);
-            let own = (u.stats.max_speed, u.stats.warp_speed);
+            let own = (u.stats.max_speed, u.stats.warp_speed, u.stats.turn_omega);
             if let Some((impulse, warp)) = cap {
                 (u.stats.max_speed, u.stats.warp_speed) = (impulse, warp);
+            }
+            if let Some(sta_content::A2Effect::DeathChant { turn, speed, .. }) =
+                db.and_then(|db| self.specials.a2_chant(db, u.id, self.tick))
+            {
+                u.stats.max_speed = (own.0 * speed).min(cap.map_or(Fixed::from_bits(i64::MAX), |v| v.0));
+                u.stats.turn_omega = own.2 * turn;
             }
             match (&a1, plan) {
                 // Armada I (SIM-66): its own step; no warp phase, no drop-out.
@@ -364,7 +370,7 @@ impl Sim {
                 (None, None) if u.speed > u.stats.max_speed => step_planned(model, u, Leg { queued, a1: None }, Plan::default()),
                 (None, None) => step(model, u, Leg { queued, a1: None }),
             }
-            (u.stats.max_speed, u.stats.warp_speed) = own;
+            (u.stats.max_speed, u.stats.warp_speed, u.stats.turn_omega) = own;
             if self.confinement.is_active() && u.pos != previous {
                 let radius = db.and_then(|db| db.unit(u.def)).map_or(Fixed::ZERO, |d| d.radius * Fixed::from_int(3) / Fixed::from_int(4));
                 crate::avoid::constrain_position(&mut self.confinement, u, previous, radius, &obstacles, self.economy.trade_dock_of(u.id));

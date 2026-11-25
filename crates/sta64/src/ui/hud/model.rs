@@ -362,7 +362,11 @@ fn point_defence_state(feed: &HudFeed, slot: u8) -> Option<(PointDefenceState, b
         total += 1;
         let energy = unit.energy.map(|pool| pool[0])
             .or_else(|| sta_sim::specials::energy_def(def).map(|pool| pool.max));
-        ready |= active || sta_sim::specials::point_defence_has_energy(db, weapon, energy);
+        ready |= active || if weapon.a1_special.is_some() {
+            sta_sim::specials::a1_special_ready(&feed.view, db, unit.id, slot)
+        } else {
+            sta_sim::specials::point_defence_has_energy(db, weapon, energy)
+        };
     }
     if total == 0 { return None; }
     let state = if on == 0 { PointDefenceState::Off }
@@ -865,42 +869,66 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
         out.push(b);
     }
     for (i, (slot, kind)) in caps.specials.iter().enumerate() {
-        if let Some(cell) = [5, 10, 11, 12, 13, 14].get(i) {
-            let weapon = selected_special_weapon(feed, *slot);
-            let targeted = *kind == sta_sim::specials::SpecialKind::Replace
-                && special_targeted(feed, *slot) == Some(true);
-            if *kind == sta_sim::specials::SpecialKind::Replace && special_targeted(feed, *slot).is_none() { continue; }
-            let act = if targeted { Act::Target(TargetMode::Special(*slot)) } else { Act::Special(*slot) };
-            let mut b = if *kind == sta_sim::specials::SpecialKind::PointDefence {
-                let Some((state, ready)) = point_defence_state(feed, *slot) else { continue };
-                let status = match state {
-                    PointDefenceState::Off => tr("Off"),
-                    PointDefenceState::On => tr("On"),
-                    PointDefenceState::Mixed => tr("Mixed"),
-                };
-                let label = trf("PD: {0}", &[&status]);
-                let tip = trf("Point defence: {0}", &[&status]);
-                let mut b = button(*cell, &label, act, &tip);
-                if !ready { b.look = Look::Locked; }
-                b
-            } else if *kind == sta_sim::specials::SpecialKind::Cloak {
-                button(*cell, &tr("Cloak"), act, &tooltip_key("Toggle cloak"))
-            } else {
-                let label = weapon.map_or("Replace", |w| w.odf.as_str());
-                button(*cell, &tr(label), act, &tooltip_key(label))
+        let cell = if let Some(cell) = [5, 10, 11, 12, 13, 14].get(i) {
+            *cell
+        } else if capacity == usize::MAX {
+            9 + i
+        } else {
+            continue;
+        };
+        let weapon = selected_special_weapon(feed, *slot);
+        let channel_on = matches!(kind, sta_sim::specials::SpecialKind::A2(_))
+            && own.iter().any(|&id| sta_sim::specials::a1_special_active(&feed.view, id, *slot));
+        let targeted = (*kind == sta_sim::specials::SpecialKind::Replace
+            && special_targeted(feed, *slot) == Some(true))
+            || !channel_on && matches!(
+                kind,
+                sta_sim::specials::SpecialKind::A2(sta_content::A2Target::Entity | sta_content::A2Target::Point)
+                | sta_sim::specials::SpecialKind::A1(sta_content::A1SpecialKind::Gemini | sta_content::A1SpecialKind::EngineeringTeam | sta_content::A1SpecialKind::Stasis)
+            );
+        if *kind == sta_sim::specials::SpecialKind::Replace && special_targeted(feed, *slot).is_none() { continue; }
+        let act = if targeted { Act::Target(TargetMode::Special(*slot)) } else { Act::Special(*slot) };
+        let mut b = if *kind == sta_sim::specials::SpecialKind::PointDefence {
+            let Some((state, ready)) = point_defence_state(feed, *slot) else { continue };
+            let status = match state {
+                PointDefenceState::Off => tr("Off"),
+                PointDefenceState::On => tr("On"),
+                PointDefenceState::Mixed => tr("Mixed"),
             };
-            if let Some(weapon) = weapon {
-                if *kind == sta_sim::specials::SpecialKind::Replace {
-                    let stem = weapon.odf.rsplit(['/', '\\']).next().unwrap_or(&weapon.odf).trim_end_matches(".odf");
-                    b.sprite_names = vec![format!("b_{stem}"), stem.to_owned()];
-                }
-                if let Some(tip) = weapon.raw.str("tooltip") {
-                    b.tip = tip.to_owned();
-                }
-                b.verbose = weapon.raw.str("verboseTooltip").or_else(|| weapon.raw.str("verbose")).map(str::to_owned);
+            let label = trf("PD: {0}", &[&status]);
+            let tip = trf("Point defence: {0}", &[&status]);
+            let mut b = button(cell, &label, act, &tip);
+            if !ready { b.look = Look::Locked; }
+            b
+        } else if *kind == sta_sim::specials::SpecialKind::Cloak {
+            let name = weapon.filter(|w| w.class.0 == "phasecloakdevice")
+                .map_or("Cloak", |w| w.raw.str("wpnName").unwrap_or("Phase Cloak"));
+            button(cell, &tr(name), act, &tooltip_key("Toggle cloak"))
+        } else {
+            let label = weapon.map_or("Replace", |w| w.raw.str("wpnName").unwrap_or(&w.odf));
+            let mut b = button(cell, &tr(label), act, &tooltip_key(label));
+            if matches!(kind, sta_sim::specials::SpecialKind::A1(_) | sta_sim::specials::SpecialKind::A2(_)) {
+                b.look = if feed.content.as_deref().is_some_and(|db| own.iter().any(|id| match kind {
+                    sta_sim::specials::SpecialKind::A1(_) => sta_sim::specials::a1_special_ready(&feed.view, db, *id, *slot),
+                    sta_sim::specials::SpecialKind::A2(_) => sta_sim::specials::a2_special_ready(&feed.view, db, *id, *slot),
+                    _ => false,
+                })) { Look::Ready } else { Look::Locked };
             }
-            out.push(b);
+            b
+        };
+        if let Some(weapon) = weapon {
+            if matches!(kind, sta_sim::specials::SpecialKind::Replace | sta_sim::specials::SpecialKind::A1(_) | sta_sim::specials::SpecialKind::A2(_))
+                || weapon.class.0 == "phasecloakdevice"
+            {
+                let stem = weapon.odf.rsplit(['/', '\\']).next().unwrap_or(&weapon.odf).trim_end_matches(".odf");
+                b.sprite_names = vec![format!("b_{stem}"), stem.to_owned()];
+            }
+            if let Some(tip) = weapon.raw.str("tooltip") {
+                b.tip = tip.to_owned();
+            }
+            b.verbose = weapon.raw.str("verboseTooltip").or_else(|| weapon.raw.str("verbose")).map(str::to_owned);
         }
+        out.push(b);
     }
     if evolve_extra {
         let cell = (0..).find(|c| !out.iter().any(|b| b.cell == *c)).unwrap_or(0);
@@ -984,7 +1012,12 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
                 || feed.content.as_deref().is_some_and(|db| own.iter().any(|id|
                     sta_sim::specials::a1_special_ready(&feed.view, db, *id, *slot)
                         && sta_sim::specials::a1_special_researched(&feed.view, db, *id, *slot))))
+            && (!matches!(s.1, sta_sim::specials::SpecialKind::A2(_))
+                || feed.content.as_deref().is_some_and(|db| own.iter().any(|id|
+                    sta_sim::specials::a2_special_ready(&feed.view, db, *id, *slot))))
             && !matches!(s.1, sta_sim::specials::SpecialKind::A1(sta_content::A1SpecialKind::Gemini | sta_content::A1SpecialKind::EngineeringTeam | sta_content::A1SpecialKind::Stasis))
+            && (!matches!(s.1, sta_sim::specials::SpecialKind::A2(sta_content::A2Target::Entity | sta_content::A2Target::Point))
+                || own.iter().any(|&id| sta_sim::specials::a1_special_active(&feed.view, id, *slot)))
             && (s.1 != sta_sim::specials::SpecialKind::Replace
                 || special_targeted(feed, *slot) == Some(false))) => Some((
             CommandKind::Order(Order::Special {
@@ -1109,7 +1142,7 @@ pub fn owned_counts(feed: &HudFeed) -> BTreeMap<String, u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sta_content::{DefRef, TechTree};
+    use sta_content::{A2Effect, A2SpecialDef, A2Target, DefRef, Hardpoint, TechTree, WeaponDef, WeaponKind};
     use sta_sim::view::{PlayerView, UnitFlags};
     use sta_sim::{TeamId, Vec3};
 
@@ -1168,6 +1201,54 @@ mod tests {
             b = b.tech_tree(TechTree::parse("t.tt", t).0);
         }
         b.build().unwrap()
+    }
+
+    #[test]
+    fn a2_specials_offer_their_authored_buttons_and_page_the_stock_palette() {
+        let mut build = ContentDb::builder().profile(sta_content::Profile::Sta2Classic);
+        let mut ship = UnitDef::new("special_ship", "craft");
+        ship.special_energy_max = Fixed::from_int(10);
+        for index in 0..8 {
+            let name = format!("special_{index}");
+            let target = if index == 1 { A2Target::Entity } else { A2Target::Immediate };
+            let mut weapon = WeaponDef::new(&name, "myotron", WeaponKind::Projectile);
+            weapon.a2_special = Some(A2SpecialDef {
+                target,
+                effect: if index == 1 { A2Effect::Polaron } else { A2Effect::RestoreShields(Fixed::ONE) },
+                duration: 0,
+                flight: 0,
+                max_targets: 1,
+                hit_condition: 0,
+                projectile: false,
+            });
+            weapon.range = Fixed::from_int(100);
+            weapon.base.targets.enemy_craft = Some(true);
+            weapon.raw = Arc::new(sta_odf::resolve(&name, &mut |_| Some(format!(
+                "buttonSlot = {}\nwpnName = \"Special {index}\"\ntooltip = \"Ability tip\"\nverboseTooltip = \"Ability detail\"\n",
+                if index == 7 { -1 } else { index as i64 + 1 },
+            ))).unwrap());
+            ship.hardpoints.push(Hardpoint { weapon: DefRef::new(&name), node: String::new(), arc: None });
+            build = build.weapon(weapon);
+        }
+        let db = build.unit(ship).build().unwrap();
+        let mut f = feed(db.clone(), vec![
+            unit(&db, 1, "special_ship", 1, 100.0, None),
+            unit(&db, 2, "special_ship", 2, 100.0, None),
+        ], &[1]);
+        Arc::make_mut(&mut f.view).players[0].relations.push((PlayerId(2), sta_sim::view::Relation::Enemy));
+        assert_eq!(commands::shared(&f).specials.len(), 7);
+
+        let stock = grid_with_capacity(&f, Page::Top, usize::MAX);
+        assert_eq!(stock.iter().filter(|button| matches!(button.act, Act::Special(_) | Act::Target(TargetMode::Special(_)))).count(), 7);
+        assert_eq!(grid(&f, Page::Top).iter().filter(|button| matches!(button.act, Act::Special(_) | Act::Target(TargetMode::Special(_)))).count(), 6);
+        let target = stock.iter().find(|button| button.act == Act::Target(TargetMode::Special(1))).unwrap();
+        assert_eq!(target.label, "SPECIAL 1");
+        assert_eq!((target.tip.as_str(), target.verbose.as_deref()), ("Ability tip", Some("Ability detail")));
+        assert_eq!(target.sprite_names[0], "b_special_1");
+        assert_eq!(command(&f, &target.act), None);
+        assert!(matches!(command(&f, &Act::Special(0)), Some((CommandKind::Order(Order::Special { slot: 0, target: sta_sim::command::Target::None, .. }), _))));
+        let targeted = super::super::target_order(&f, TargetMode::Special(1), Some(EntityId(2)), None);
+        assert!(matches!(targeted, Some((orders, _)) if matches!(&orders[0], Order::Special { slot: 1, target: sta_sim::command::Target::Entity(EntityId(2)), .. })));
     }
 
     #[test]

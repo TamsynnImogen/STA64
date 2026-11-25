@@ -80,16 +80,17 @@ pub fn facing(heading: (Fixed, Fixed), at: Vec3, from: Vec3) -> u8 {
     }
 }
 
-/// Does this weapon attack units? Not point defence or a special, and not a
-/// tool: a mining beam or a tractor beam (ordnance classes `minebm`,
-/// `tractor_bm`), nor a colonising weapon (ordnance class `colonizerpod`, the
-/// definition's `colonize`), which only the colonise order uses (stated by a
-/// player: interim). Measured on stock A2 and Roots + STA2 Classic: a
-/// freighter and a construction ship neither vote nor take part in an attack
-/// order (the engine's own "can attack" test was not read).
+/// Whether this weapon attacks units in regular combat. Point defence, special
+/// abilities, mining and tractor beams, and colonizer pods use their own paths.
+/// Measured on stock A2 and Roots + STA2 Classic: a freighter and a
+/// construction ship do not take part in an attack order.
 pub fn attacks_units(w: &sta_content::WeaponDef) -> bool {
     let tool = matches!(w.class.0.as_str(), "minebm" | "tractor_bm");
-    w.kind != WeaponKind::PointDefence && !crate::specials::is_special(w) && !tool && w.colonize.is_none()
+    w.kind != WeaponKind::PointDefence
+        && w.base.special != Some(true)
+        && !crate::specials::is_special(w)
+        && !tool
+        && w.colonize.is_none()
 }
 
 /// Does `id` take an `Attack` order on `target` from `player` (any unit, for
@@ -452,7 +453,7 @@ impl Weapons {
         // as WorldView (which then also leaves out `hidden = 1` units).
         // `invalidAsTarget = 1` units are never picked automatically (SIM-28); an explicit order is not refused (unmeasured).
         // Do not use last tick's view or explored fog.
-        let visibility = crate::sensors::compute(units, Some(db), teams);
+        let visibility = crate::sensors::compute(units, Some(db), teams, specials, tick);
         for u in units.iter() {
             let Some(def) = db.unit(u.def) else { continue };
             // Effect objects (`u_ball_obj`) carry effect spawners, not guns (SIM-28).
@@ -472,7 +473,11 @@ impl Weapons {
             self.init_mounts(tick, db, u.id, def, rng);
             // LUA-32: green never, yellow only after a recent enemy hit fires at a target other than the ordered one.
             let opportunity = alerts.opportunity_allowed(u.id, tick);
-            if u.flags.contains(UnitFlags::WEAPONS_OFF) || self.held.binary_search(&u.id).is_ok() || specials.stasis(u.id, tick) {
+            if u.flags.contains(UnitFlags::WEAPONS_OFF)
+                || self.held.binary_search(&u.id).is_ok()
+                || specials.stasis(u.id, tick)
+                || specials.a2_held(u.id, crate::command::Subsystem::Weapons, tick)
+            {
                 continue;
             }
             for (i, hp) in def.hardpoints.iter().enumerate() {
@@ -482,10 +487,7 @@ impl Weapons {
                 let Some(w) = db.weapon(hp.weapon.key) else {
                     continue;
                 };
-                // A tool (tractor, mining or repair beam) does no regular fire (stated by a
-                // player; measured earlier for orders). A weapon definition may carry
-                // `special` and still attack; STA64 does not model special-weapon
-                // autonomy, so the tool class stands in (interim).
+                // Tools and specials do not fire as regular weapons.
                 if !attacks_units(w) || w.resource.is_some() {
                     continue;
                 }
@@ -514,6 +516,7 @@ impl Weapons {
                     self.mounts
                         .insert(u.id, vec![Mount { ready: 0 }; def.hardpoints.len()]);
                 }
+                let chant = specials.a2_chant(db, u.id, tick);
                 if let Some(m) = self.mounts.get_mut(u.id) {
                     let mut reload = shot_reload(db.weapon_features(w).weapon_shot_timing, w, rng);
                     if db.weapon_features(w).crew_weapon_delay
@@ -526,7 +529,12 @@ impl Weapons {
                     if upgrade != Fixed::ONE {
                         reload = scaled(reload, upgrade).max(1);
                     }
-                    m[i].ready = tick + reload;
+                    if let Some(sta_content::A2Effect::DeathChant { fire, .. }) = chant
+                        && fire > Fixed::ZERO && fire != Fixed::ONE
+                    {
+                        reload = scaled(reload, Fixed::ONE / fire).max(1);
+                    }
+                    m[i].ready = tick.saturating_add(reload);
                 }
                 events.push(SimEvent::Fired {
                     shooter: u.id,
@@ -537,12 +545,20 @@ impl Weapons {
                 // SIM-73, both off by default: the hit roll (one draw, only for a
                 // target that can be missed) and the target's own damage row.
                 let features = db.weapon_features(w);
-                if features.weapon_hit_roll && !super::hit_roll::will_hit(db, w, u, t, || draw(rng)) {
+                let hit = match chant {
+                    Some(sta_content::A2Effect::DeathChant { hit, .. }) if hit > Fixed::ZERO => hit,
+                    _ => Fixed::ONE,
+                };
+                if features.weapon_hit_roll && !super::hit_roll::will_hit(db, w, u, t, || draw(rng) / hit) {
                     // A miss fires and does no damage: no shot is flown and no `Hit` is sent.
                     continue;
                 }
                 let damage = if features.weapon_target_damage { super::hit_roll::damage_for(db, w, t) } else { w.damage };
                 let damage = damage * upgrades.multiplier(u.owner, Effect::WeaponDamage);
+                let damage = match chant {
+                    Some(sta_content::A2Effect::DeathChant { damage: factor, .. }) => damage * factor,
+                    _ => damage,
+                };
                 if w.kind == WeaponKind::Projectile {
                     self.next_shot += 1;
                     let step = w.shot_speed / Fixed::from_int(TICK_HZ as i32);
