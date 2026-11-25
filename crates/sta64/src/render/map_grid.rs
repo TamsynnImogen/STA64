@@ -22,8 +22,7 @@
 //! The line is drawn by the hardware as one device pixel; under multisampling it can resolve wider and
 //! dimmer (measured by the GPU frame test, not tuned).
 //!
-//! Interim (marked, see the PR): STA64 has one orbit camera, mapped to the original's normal view; the
-//! tactical view has no camera here, its key is read and kept. The height bars of mode 1 are STA64's own
+//! The height bars of mode 1 are STA64's own
 //! strategic-view bars (drawn by `render::strategic` whenever that view is active), so mode 1 draws
 //! the grid as mode 0 does. The key binding is STA64's own, interim (Alt+G); STA64 does not read an input map
 //! for it. The mission call that sets grid visibility stays unwired (STA64's choice, interim; stated in a
@@ -95,9 +94,9 @@ impl GridMode {
 /// established for that case).
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct GridModes {
-    /// The normal RTS view: STA64's orbit camera (interim mapping).
+    /// The normal RTS view: STA64's orbit camera.
     pub rts: GridMode,
-    /// The tactical view: no camera of STA64's maps to it; kept so the key is read.
+    /// The tactical camera's grid mode.
     pub tactical: GridMode,
 }
 
@@ -180,10 +179,16 @@ pub struct MapGrid {
 
 /// Cycle the current view's mode on the grid-toggle chord (the reveal modifier and the grid key). Not run while a
 /// cutscene runs (the grid is hidden then; see `update`), so the key does not change the mode unseen.
-fn toggle(mut modes: ResMut<GridModes>, keys: Option<Res<ButtonInput<KeyCode>>>, bindings: Res<KeyBindings>) {
+fn toggle(
+    mut modes: ResMut<GridModes>,
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    bindings: Res<KeyBindings>,
+    tactical: Option<Res<crate::input::camera_tactical::TacticalView>>,
+) {
     let Some(keys) = keys else { return };
     if bindings.pressed(Action::RevealModifier, &keys) && bindings.just_pressed(Action::GridToggle, &keys) {
-        modes.rts = modes.rts.next();
+        let mode = if tactical.as_ref().is_some_and(|view| view.is_active()) { &mut modes.tactical } else { &mut modes.rts };
+        *mode = mode.next();
     }
 }
 
@@ -197,11 +202,13 @@ fn update(
     mut materials: ResMut<Assets<GridMaterial>>,
     mut grid: Query<(&mut MapGrid, &mut Mesh3d, &mut Visibility)>,
     cine: Option<Res<crate::ui::presentation::CineractiveState>>,
+    tactical: Option<Res<crate::input::camera_tactical::TacticalView>>,
 ) {
     // Interim (grade: stated by a player; not measured, not read from the original): no grid while a cutscene
     // runs, in every look and whatever the mode. Whether the original does this by a general rule or by a mission
     // call is not established; that call stays unwired. The mode value is not touched.
-    let want = modes.rts.shown() && bounds.is_some() && !crate::ui::presentation::cutscene_running(cine);
+    let mode = if tactical.as_ref().is_some_and(|view| view.is_active()) { modes.tactical } else { modes.rts };
+    let want = mode.shown() && bounds.is_some() && !crate::ui::presentation::cutscene_running(cine);
     let Some(bounds) = bounds else { return };
     let now = (bounds.min, bounds.max);
     if let Ok((mut g, mut mesh, mut vis)) = grid.single_mut() {

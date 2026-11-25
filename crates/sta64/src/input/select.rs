@@ -110,8 +110,13 @@ pub struct CameraFocus(pub Vec3);
 
 /// The strategy camera centres on the last requested point (a double-tapped
 /// group, the HUD's idle button); its height, angle and distance stay.
-pub fn follow_focus(mut requests: MessageReader<CameraFocus>, mut cams: Query<&mut crate::viewer::Orbit>) {
+pub(crate) fn follow_focus(
+    mut requests: MessageReader<CameraFocus>,
+    mut cams: Query<&mut crate::viewer::Orbit>,
+    mode: Option<Res<super::camera_tactical::TacticalView>>,
+) {
     let Some(CameraFocus(p)) = requests.read().last().copied() else { return };
+    if !super::camera_tactical::overview_active(mode) { return; }
     for mut o in &mut cams {
         o.focus = Vec3::new(p.x, o.focus.y, p.z);
     }

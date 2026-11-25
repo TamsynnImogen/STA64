@@ -539,7 +539,10 @@ fn update_fog(
     bounds: Res<FogBounds>,
     content: Option<Res<ContentRes>>,
     settings: Res<FogSettings>,
-    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
+    (cine, tactical): (
+        Option<Res<crate::ui::presentation::CineractiveState>>,
+        Option<Res<crate::input::camera_tactical::TacticalView>>,
+    ),
     patterns: Option<Res<FogPatterns>>,
     state: Option<ResMut<FogState>>,
     mut images: ResMut<Assets<Image>>,
@@ -552,6 +555,16 @@ fn update_fog(
 ) {
     let Memo { seen, art_generation, memory, shown_reveal, shown_cutscene } = &mut *memo;
     let cutscene = cine.as_deref().is_some_and(|c| c.on);
+    // The tactical camera skips the terrain fog pass (Armada2.exe 0x00593200).
+    // Continue computing sight and explored cells for the map and radar.
+    let draw_fog = settings.fog && crate::input::camera_tactical::overview_active(tactical);
+    let visibility = |layer| {
+        let on = !cutscene && match layer {
+            Layer::Fog => draw_fog,
+            Layer::Shroud => settings.shroud,
+        };
+        if on { Visibility::Inherited } else { Visibility::Hidden }
+    };
     let Some(patterns) = patterns else { return };
     let Some(player) = local.0 else {
         // No local player: the whole map is shown.
@@ -607,7 +620,7 @@ fn update_fog(
                     Mesh3d(meshes.add(layer_mesh(&new.grid))),
                     MeshMaterial3d(mat),
                     Transform::default(),
-                    Visibility::Inherited,
+                    visibility(layer),
                 ));
             }
         } else {
@@ -620,13 +633,7 @@ fn update_fog(
         commands.insert_resource(new);
     }
     for (_, l, mut v) in &mut layers {
-        let on = match l.layer {
-            Layer::Fog => settings.fog,
-            Layer::Shroud => settings.shroud,
-        };
-        // Not in a cineractive: the cinematic view draws no fog or shroud (Refit, static).
-        let on = on && !cutscene;
-        let want = if on { Visibility::Inherited } else { Visibility::Hidden };
+        let want = visibility(l.layer);
         if *v != want {
             *v = want;
         }
