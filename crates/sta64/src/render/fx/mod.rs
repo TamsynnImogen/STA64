@@ -2,6 +2,7 @@
 //! weapon set, RND-10 impacts, RND-11 specials. The shaders and recipes are ported
 //! from Refit (`NOTICE.md`).
 
+pub mod a1;
 pub mod bees;
 pub mod fire;
 pub mod impacts;
@@ -16,6 +17,7 @@ pub mod stock_shield_hits;
 pub mod stock_shields_down;
 pub mod stock_shots;
 pub mod weapons;
+pub(super) mod warp_flash;
 
 use bevy::prelude::*;
 

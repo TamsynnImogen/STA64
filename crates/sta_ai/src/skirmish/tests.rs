@@ -198,6 +198,25 @@ fn registry_builds_it_for_a_seat_and_lists_it() {
 }
 
 #[test]
+fn skirmish_presets_plan_on_distinct_ticks() {
+    let s = setup(1, sta_content::fake::db());
+    let reg = Registry::builtin();
+    for (name, first_tick) in [(SKIRMISH_HARD, 5), (SKIRMISH, PERIOD), (SKIRMISH_EASY, 30)] {
+        let mut sim = Sim::from_setup(&s);
+        start(&mut sim, &s);
+        let mut ai = reg.create_for_seat(name, &s, P0).unwrap();
+        let mut out = Vec::new();
+        while sim.view().tick < first_tick {
+            ai.think(&sim.view(), &[], &mut out);
+            assert!(out.is_empty(), "{name} planned before tick {first_tick}");
+            sim.step(&[]);
+        }
+        ai.think(&sim.view(), &[], &mut out);
+        assert!(!out.is_empty(), "{name} did not plan on tick {first_tick}");
+    }
+}
+
+#[test]
 fn config_reads_the_map() {
     let s = setup(1, sta_content::fake::db());
     let c = SkirmishConfig::from_setup(&s, P0).unwrap();

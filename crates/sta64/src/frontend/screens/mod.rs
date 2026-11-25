@@ -125,7 +125,7 @@ pub enum Col {
 /// Launch was pressed: start a match from this setup. INT-M4 connects it to
 /// INT-M3's match start (loading screen, then `AppState::InGame`).
 #[derive(Message, Debug, Clone)]
-pub struct StartGame(pub GameSetup, pub crate::clock::MatchSpeed, pub Option<crate::viewer::TeamColours>, pub SetupFog);
+pub struct StartGame(pub GameSetup, pub crate::clock::MatchSpeed, pub Option<crate::viewer::TeamColours>, pub SetupFog, pub Option<sta_sim::PlayerId>);
 
 /// Use mod was pressed: `Some(folder)` for a mod, `None` for the base game.
 /// The host remounts the install with it (`Vfs::mount_install`'s `active_mod`).
@@ -554,7 +554,7 @@ pub(crate) fn on_buttons(
                             }
                         }
                     }
-                    start.write(StartGame(setup, launch.speed, launch.launch_colours(&data), launch.fog));
+                    start.write(StartGame(setup, launch.speed, launch.launch_colours(&data), launch.fog, launch.mcp_player(&data)));
                 }
             }
             Act::Exit => {

@@ -197,7 +197,7 @@ impl Sim {
                 continue;
             }
             if matches!(self.scripted.rows.remove(id), Some(Job::Warp)) {
-                self.approach_warp.remove(id);
+                self.approach_warp.end(id);
             }
         }
     }
@@ -243,7 +243,11 @@ impl Sim {
         if let Some(db) = self.content.clone() {
             self.production.cancel(&db, &self.units, &mut self.economy, player, &ids);
         }
-        self.clear_scripted(player, &ids);
+        // A warp course replacement is evaluated against the ship's current
+        // phase. An aligned extension keeps cruising; a turn starts warp-out.
+        if !matches!(order, Order::MoveWarp { .. }) {
+            self.clear_scripted(player, &ids);
+        }
         for &id in &ids {
             self.watchdog.remove(id);
             self.movement.clear_waypoints(id);
@@ -292,6 +296,17 @@ impl Sim {
             }
             Order::MoveWarp { to, queue, .. } => {
                 for &id in &ids {
+                    if self.approach_warp.contains(id)
+                        && let Some(unit) = self.units.get(id)
+                    {
+                        let (dx, dz) = (to.x - unit.pos.x, to.z - unit.pos.z);
+                        let (hx, hz) = unit.heading;
+                        // Small angles can still put a distant destination far
+                        // off the current warp line. Brake at the course change.
+                        if (hx * dz - hz * dx).abs() > crate::kinematics::arrive_distance() {
+                            self.approach_warp.end(id);
+                        }
+                    }
                     self.set_target(id, Some(*to));
                     let _ = queue; // a queued warp move replaces the course, as the plain one does
                     self.scripted.rows.insert(id, Job::Warp);
@@ -399,7 +414,7 @@ impl Sim {
                     // Over when no leg is left (queued legs keep the warp move going).
                     if !has_target && idle_course {
                         self.scripted.remove(id);
-                        self.approach_warp.remove(id);
+                        self.approach_warp.end(id);
                     }
                 }
                 Job::AttackPoint { at } => {
@@ -482,7 +497,7 @@ impl Sim {
     }
 
     /// Plans for the warp moves of this tick (ascending id).
-    pub(crate) fn steer_warp_moves(&mut self) -> Vec<(EntityId, Plan)> {
+    pub(crate) fn steer_warp_moves(&mut self, gravity: &crate::movement::gravity::GravityWells) -> Vec<(EntityId, Plan)> {
         let mut plans = Vec::new();
         if self.scripted.is_empty() {
             return plans;
@@ -490,10 +505,17 @@ impl Sim {
         let ids: Vec<EntityId> = self.scripted.rows.iter().filter(|(_, j)| matches!(j, Job::Warp)).map(|(id, _)| id).collect();
         for id in ids {
             let Some(u) = self.units.get(id) else { continue };
-            let Some(goal) = u.target.filter(|_| u.kind == EntityKind::Craft && u.mobile()) else { continue };
+            let Some(goal) = u.target.filter(|_| u.kind == EntityKind::Craft && u.mobile()) else {
+                // A temporary navigation hold must still complete warp-out.
+                if u.mobile() && u.speed > u.stats.max_speed {
+                    self.approach_warp.end(id);
+                } else {
+                    self.approach_warp.remove(id);
+                }
+                continue;
+            };
             let (vi, vw) = (u.stats.max_speed, u.stats.warp_speed);
-            let (gx, gz) = (goal.x - u.pos.x, goal.z - u.pos.z);
-            let to_goal = (gx * gx + gz * gz).sqrt();
+            let (to_goal, aligned) = approach::warp_leg(u, goal);
             let phase = self.approach_warp.phase(id);
             let was = phase == Some(approach::IN_WARP);
             // Armada I's physics ODFs set the distance and the heading band
@@ -502,13 +524,15 @@ impl Sim {
             // The engine steers while it warps and so may start inside the
             // `headingCloseEnoughForWarp` band; STA64's warp flies straight, so the
             // tight gate stays for keyed units too (the band is read, not used).
-            let aligned = to_goal > Fixed::ZERO && (u.heading.0 * gx + u.heading.1 * gz) / to_goal > Fixed::from_f64(0.99);
             let too_close = if keyed { u.stats.too_close_for_warp } else { too_close_to_warp() };
-            let can = self.warp_allowed() && vw > vi && vi > crate::speed_override::HELD_SPEED && aligned && to_goal >= approach::warp_lead(vw, vi, db_radius(self, u));
+            let radius = db_radius(self, u);
+            let can = self.warp_allowed() && vw > vi && vi > crate::speed_override::HELD_SPEED && aligned
+                && to_goal >= approach::warp_lead(vw, vi, radius) && !gravity.suppresses(u.pos, radius);
             // Armada II gates the start on 0.9 of impulse speed; Armada I's
             // throttle factor applies at once.
             let up_to_speed = keyed || u.speed > Fixed::from_f64(0.9) * vi;
-            let warp = if was { can } else { can && to_goal > too_close && up_to_speed };
+            let still_braking = phase == Some(approach::WARP_OUT) && u.speed > vi;
+            let warp = if was { can } else { can && to_goal > too_close && up_to_speed && !still_braking };
             let mut plan = Plan { warp, ..Plan::default() };
             // LUA-31: a warp speed below impulse still sets the speed of the aligned
             // far leg (the throttle factor is the multiplier), no warp-in effect.

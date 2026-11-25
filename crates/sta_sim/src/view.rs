@@ -47,6 +47,8 @@ pub struct WorldView {
     /// Switched-on point defence, sorted by entity id and `Order::Special` slot.
     #[serde(default)]
     pub active_point_defence: Vec<(EntityId, u8)>,
+    #[serde(default)]
+    pub a1_specials: crate::specials::SpecialView,
 }
 
 impl WorldView {

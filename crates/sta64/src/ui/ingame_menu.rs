@@ -1,16 +1,17 @@
 //! The in-game menu (UI-34, the minimum of UI-20): a modal over the running match with
-//! **Resume**, **Options**, **Exit to main menu** and **Quit to desktop**.
+//! **Resume**, **Options**, **Diagnostics**, **Exit to main menu** and **Quit to desktop**.
 //!
 //! # What the player does
 //!
 //! Esc (the rebindable action [`Action::GameMenu`]; the stock games bind `mainMenu` to Esc in
 //! their `Input.map`, read from the Armada II, Fleet Operations and Roots installs, and Armada I
-//! has no such line) opens it. Esc again closes it (on the Options page and on a question it goes
+//! has no such line) opens it. Esc again closes it (on a subpage and on a question it goes
 //! back one step). The top-right icon row of UI-20 opens it by writing [`OpenInGameMenu`].
 //!
 //! - **Resume** closes it. **Options** shows the front end's options panel
 //!   ([`options_body`](crate::frontend::screens::stock::options_body)): the same sliders and
 //!   toggles, written to the same [`Settings`] resource that UI-29 saves, so a change persists.
+//!   **Diagnostics** previews warnings and gives the disk report path.
 //!   **Exit to main menu** asks, then writes [`LeaveMatch`]; **Quit to desktop** asks, then
 //!   writes `AppExit`.
 //! - Single player pauses the sim while the menu is open (the stock game does; the evidence is
@@ -58,6 +59,7 @@ pub const MENU_Z: i32 = 960;
 
 use crate::app::{AppState, GameSet};
 use crate::clock::AnimClock;
+use crate::diagnostics::Diagnostics;
 use crate::frontend::screens::Settings;
 use crate::frontend::screens::stock::{self, Grade, OptionsTab, Region, StockBox};
 use crate::game::flow::LeaveMatch;
@@ -85,6 +87,7 @@ pub enum MenuPage {
     #[default]
     Main,
     Options,
+    Diagnostics,
     /// "Leave this match?"
     ConfirmExit,
     /// "Quit to the desktop?"
@@ -116,7 +119,8 @@ pub fn leave_current_match(leave: &mut MessageWriter<LeaveMatch>) {
 pub enum MenuAct {
     Resume,
     Options,
-    /// Back from Options, or "No" on a question.
+    Diagnostics,
+    /// Back from a subpage, or "No" on a question.
     Back,
     AskExit,
     AskQuit,
@@ -131,12 +135,22 @@ pub enum MenuSlot {
     Title,
     Resume,
     Options,
+    Diagnostics,
     Exit,
     Quit,
     OptionsPanel,
     OptionsTitle,
     OptionsBody,
     OptionsBack,
+    DiagnosticsPanel,
+    DiagnosticsTitle,
+    DiagnosticsSummary,
+    DiagnosticsWarning1,
+    DiagnosticsWarning2,
+    DiagnosticsWarning3,
+    DiagnosticsWarning4,
+    DiagnosticsReport,
+    DiagnosticsBack,
     ConfirmPanel,
     ConfirmTitle,
     ConfirmLine1,
@@ -152,16 +166,26 @@ const fn a(x: f32, y: f32, w: f32, h: f32) -> Region {
 /// The region of `slot` on the 800x600 design screen. All arranged (see the module docs).
 pub const fn region(slot: MenuSlot) -> Region {
     match slot {
-        MenuSlot::Panel => a(260.0, 160.0, 280.0, 290.0),
-        MenuSlot::Title => a(280.0, 174.0, 240.0, 34.0),
-        MenuSlot::Resume => a(280.0, 226.0, 240.0, 36.0),
-        MenuSlot::Options => a(280.0, 274.0, 240.0, 36.0),
-        MenuSlot::Exit => a(280.0, 322.0, 240.0, 36.0),
-        MenuSlot::Quit => a(280.0, 370.0, 240.0, 36.0),
+        MenuSlot::Panel => a(260.0, 128.0, 280.0, 365.0),
+        MenuSlot::Title => a(280.0, 143.0, 240.0, 34.0),
+        MenuSlot::Resume => a(280.0, 199.0, 240.0, 36.0),
+        MenuSlot::Options => a(280.0, 247.0, 240.0, 36.0),
+        MenuSlot::Diagnostics => a(280.0, 295.0, 240.0, 36.0),
+        MenuSlot::Exit => a(280.0, 343.0, 240.0, 36.0),
+        MenuSlot::Quit => a(280.0, 391.0, 240.0, 36.0),
         MenuSlot::OptionsPanel => a(80.0, 20.0, 640.0, 560.0),
         MenuSlot::OptionsTitle => a(100.0, 30.0, 600.0, 34.0),
         MenuSlot::OptionsBody => a(100.0, 84.0, 600.0, 430.0),
         MenuSlot::OptionsBack => a(300.0, 532.0, 200.0, 36.0),
+        MenuSlot::DiagnosticsPanel => a(80.0, 20.0, 640.0, 560.0),
+        MenuSlot::DiagnosticsTitle => a(100.0, 30.0, 600.0, 34.0),
+        MenuSlot::DiagnosticsSummary => a(100.0, 84.0, 600.0, 30.0),
+        MenuSlot::DiagnosticsWarning1 => a(100.0, 124.0, 600.0, 52.0),
+        MenuSlot::DiagnosticsWarning2 => a(100.0, 180.0, 600.0, 52.0),
+        MenuSlot::DiagnosticsWarning3 => a(100.0, 236.0, 600.0, 52.0),
+        MenuSlot::DiagnosticsWarning4 => a(100.0, 292.0, 600.0, 52.0),
+        MenuSlot::DiagnosticsReport => a(100.0, 360.0, 600.0, 150.0),
+        MenuSlot::DiagnosticsBack => a(300.0, 532.0, 200.0, 36.0),
         MenuSlot::ConfirmPanel => a(220.0, 210.0, 360.0, 190.0),
         MenuSlot::ConfirmTitle => a(240.0, 222.0, 320.0, 34.0),
         MenuSlot::ConfirmLine1 => a(240.0, 262.0, 320.0, 26.0),
@@ -175,8 +199,9 @@ pub const fn region(slot: MenuSlot) -> Region {
 #[cfg(test)]
 pub fn slots_of(page: MenuPage) -> &'static [MenuSlot] {
     match page {
-        MenuPage::Main => &[MenuSlot::Panel, MenuSlot::Title, MenuSlot::Resume, MenuSlot::Options, MenuSlot::Exit, MenuSlot::Quit],
+        MenuPage::Main => &[MenuSlot::Panel, MenuSlot::Title, MenuSlot::Resume, MenuSlot::Options, MenuSlot::Diagnostics, MenuSlot::Exit, MenuSlot::Quit],
         MenuPage::Options => &[MenuSlot::OptionsPanel, MenuSlot::OptionsTitle, MenuSlot::OptionsBody, MenuSlot::OptionsBack],
+        MenuPage::Diagnostics => &[MenuSlot::DiagnosticsPanel, MenuSlot::DiagnosticsTitle, MenuSlot::DiagnosticsSummary, MenuSlot::DiagnosticsWarning1, MenuSlot::DiagnosticsWarning2, MenuSlot::DiagnosticsWarning3, MenuSlot::DiagnosticsWarning4, MenuSlot::DiagnosticsReport, MenuSlot::DiagnosticsBack],
         MenuPage::ConfirmExit | MenuPage::ConfirmQuit => &[MenuSlot::ConfirmPanel, MenuSlot::ConfirmTitle, MenuSlot::ConfirmLine1, MenuSlot::ConfirmLine2, MenuSlot::Yes, MenuSlot::No],
     }
 }
@@ -230,6 +255,18 @@ fn line(p: &mut Box_, theme: &Theme, slot: MenuSlot, b: Vec2, text: &str) {
     put(p, slot, b, kit_text(theme, text, theme.text_size, theme.text));
 }
 
+fn wrapped_line(p: &mut Box_, theme: &Theme, slot: MenuSlot, b: Vec2, text: &str) {
+    use crate::ui::sprite_font::{SpriteTextStyle, sprite_text_styled};
+    use crate::ui::theme::font_role;
+
+    let size = theme.small_size;
+    put(p, slot, b, sprite_text_styled(text, size, theme.text, SpriteTextStyle {
+        role: Some(font_role(theme, size)),
+        wrap: Some(rect(slot, b).width()),
+        ..default()
+    }));
+}
+
 /// The panel behind a page, drawn under its parts.
 fn panel(p: &mut Box_, theme: &Theme, slot: MenuSlot, b: Vec2) {
     let r = rect(slot, b);
@@ -258,6 +295,7 @@ struct Parts<'a> {
     strings: Option<&'a Strings>,
     tab: usize,
     mission: bool,
+    diagnostics: Option<&'a Diagnostics>,
 }
 
 fn spawn_menu(commands: &mut Commands, page: MenuPage, parts: &Parts, b: Vec2) {
@@ -279,6 +317,7 @@ fn spawn_menu(commands: &mut Commands, page: MenuPage, parts: &Parts, b: Vec2) {
                     title(p, t, MenuSlot::Title, b, &tr("Game menu"));
                     button(p, t, MenuSlot::Resume, b, &caption(parts.strings, "return", "Return to game"), MenuAct::Resume);
                     button(p, t, MenuSlot::Options, b, &caption(parts.strings, "options", "Options"), MenuAct::Options);
+                    button(p, t, MenuSlot::Diagnostics, b, &tr("Diagnostics"), MenuAct::Diagnostics);
                     button(p, t, MenuSlot::Exit, b, &tr("Exit to main menu"), MenuAct::AskExit);
                     button(p, t, MenuSlot::Quit, b, &tr("Quit to desktop"), MenuAct::AskQuit);
                 }
@@ -287,6 +326,33 @@ fn spawn_menu(commands: &mut Commands, page: MenuPage, parts: &Parts, b: Vec2) {
                     title(p, t, MenuSlot::OptionsTitle, b, &caption(parts.strings, "options", "Options"));
                     stock::options_body(p, t, parts.settings, parts.controls, parts.tab, parts.graphics, rect(MenuSlot::OptionsBody, b), MenuPlaced(MenuSlot::OptionsBody));
                     button(p, t, MenuSlot::OptionsBack, b, &tr("Back"), MenuAct::Back);
+                }
+                MenuPage::Diagnostics => {
+                    panel(p, t, MenuSlot::DiagnosticsPanel, b);
+                    title(p, t, MenuSlot::DiagnosticsTitle, b, &tr("Diagnostics"));
+                    let warnings = parts.diagnostics.map(Diagnostics::lines).unwrap_or_default();
+                    let total = parts.diagnostics.map_or(0, Diagnostics::total);
+                    let summary = if parts.diagnostics.is_none() {
+                        tr("Diagnostics are unavailable in this session.")
+                    } else if warnings.is_empty() {
+                        tr("No warnings collected yet.")
+                    } else {
+                        format!("{} ({} of {total})", tr("Warning preview"), warnings.len())
+                    };
+                    line(p, t, MenuSlot::DiagnosticsSummary, b, &summary);
+                    for (slot, warning) in [MenuSlot::DiagnosticsWarning1, MenuSlot::DiagnosticsWarning2, MenuSlot::DiagnosticsWarning3, MenuSlot::DiagnosticsWarning4]
+                        .into_iter().zip(warnings.iter().rev().take(4))
+                    {
+                        // Keep the preview within the four rows; the full text is in the disk report.
+                        let compact = warning.split_whitespace().collect::<Vec<_>>().join(" ");
+                        let preview: String = compact.chars().take(110).collect();
+                        let clipped = if compact.chars().count() > 110 { format!("{preview}…") } else { preview };
+                        wrapped_line(p, t, slot, b, &clipped);
+                    }
+                    let report = parts.diagnostics.and_then(Diagnostics::report_path)
+                        .map_or_else(|| tr("Disk report path: unavailable"), |path| format!("{}: {}", tr("Disk report path"), path.display()));
+                    wrapped_line(p, t, MenuSlot::DiagnosticsReport, b, &report);
+                    button(p, t, MenuSlot::DiagnosticsBack, b, &tr("Back"), MenuAct::Back);
                 }
                 MenuPage::ConfirmExit | MenuPage::ConfirmQuit => {
                     let quit = page == MenuPage::ConfirmQuit;
@@ -321,8 +387,10 @@ fn rebuild(
     controls_render: Res<stock::controls::ControlsRender>,
     strings: Option<Res<Strings>>,
     mission: Option<Res<crate::game::mission_host::MissionRun>>,
+    diagnostics: Option<Res<Diagnostics>>,
 ) {
-    if !(menu.is_changed() || graphics.as_ref().is_some_and(|g| g.is_changed()) || theme.is_changed() || stock_box.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed()) || controls_render.is_changed()) {
+    let report_changed = menu.open && menu.page == MenuPage::Diagnostics && diagnostics.as_ref().is_some_and(|d| d.is_changed());
+    if !(menu.is_changed() || graphics.as_ref().is_some_and(|g| g.is_changed()) || theme.is_changed() || stock_box.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed()) || controls_render.is_changed() || report_changed) {
         return;
     }
     for e in &roots {
@@ -331,7 +399,7 @@ fn rebuild(
     if !menu.open {
         return;
     }
-    let parts = Parts { theme: &theme, settings: &settings, controls: &controls, graphics: graphics.as_deref(), strings: strings.as_deref(), tab: tab.0, mission: mission.is_some() };
+    let parts = Parts { theme: &theme, settings: &settings, controls: &controls, graphics: graphics.as_deref(), strings: strings.as_deref(), tab: tab.0, mission: mission.is_some(), diagnostics: diagnostics.as_deref() };
     spawn_menu(&mut commands, menu.page, &parts, stock_box.0);
 }
 
@@ -354,7 +422,7 @@ fn keys_and_requests(
     });
     if menu.open {
         if pressed {
-            // One step back: a question or Options to the menu, the menu to the match.
+            // One step back: a question or subpage to the menu, the menu to the match.
             if menu.page == MenuPage::Main {
                 menu.open = false;
             } else {
@@ -396,6 +464,7 @@ fn buttons(
         match act {
             MenuAct::Resume => menu.open = false,
             MenuAct::Options => menu.page = MenuPage::Options,
+            MenuAct::Diagnostics => menu.page = MenuPage::Diagnostics,
             MenuAct::Back => menu.page = MenuPage::Main,
             MenuAct::AskExit => menu.page = MenuPage::ConfirmExit,
             MenuAct::AskQuit => menu.page = MenuPage::ConfirmQuit,
@@ -509,3 +578,6 @@ impl Plugin for InGameMenuPlugin {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod diagnostics_tests;

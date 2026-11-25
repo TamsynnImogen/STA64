@@ -25,9 +25,12 @@
 use sta_core::{EntityId, Fixed, PlayerId, Vec3};
 
 pub mod approach;
+pub(crate) mod gravity;
 #[cfg(test)]
 #[path = "movement/approach_tests.rs"]
 pub(crate) mod approach_tests;
+#[cfg(test)]
+mod gravity_tests;
 #[cfg(test)]
 #[path = "movement/formation_leader_tests.rs"]
 mod formation_leader_tests;

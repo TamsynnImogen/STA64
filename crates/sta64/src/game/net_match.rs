@@ -506,7 +506,7 @@ pub fn on_ready(
         return;
     }
     let Some(nm) = launch.0.take() else { return };
-    starts.write(StartGame(nm.setup.clone(), crate::clock::MatchSpeed::Normal, None, Default::default()));
+    starts.write(StartGame(nm.setup.clone(), crate::clock::MatchSpeed::Normal, None, Default::default(), None));
     start.0 = Some(nm);
     // The room is the match now; whatever the lobby session still holds is spent.
     mp.leave();

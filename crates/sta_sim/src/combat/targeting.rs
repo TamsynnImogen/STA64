@@ -177,7 +177,7 @@ pub(crate) fn candidate(
     t.id != u.id
         && dip.is_enemy(u.owner, perceived)
         && t.hull[1] > Fixed::ZERO
-        && !(t.flags.contains(UnitFlags::CLOAKED) && !dip.confirmed_ally(t.owner, u.owner))
+        && !(seen.is_none() && t.flags.contains(UnitFlags::CLOAKED) && !dip.confirmed_ally(t.owner, u.owner))
         && seen.is_none_or(|ids| ids.binary_search(&t.id).is_ok())
         && !db.unit(t.def).is_some_and(|d| d.invalid_as_target)
         && !switches.is_some_and(|s| s.blocked_for(t.id, u.owner))

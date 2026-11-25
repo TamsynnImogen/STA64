@@ -8,16 +8,13 @@ use bevy::prelude::*;
 use bevy::ui::UiTargetCamera;
 use sta_content::StartingResources;
 
-use super::data::{ActiveMod, Browse, ScreenData, SelectedMod, SettingKey, SetupDraft, Settings};
+use super::data::{ActiveMod, Browse, ScreenData, SeatControl, SelectedMod, SettingKey, SetupDraft, Settings};
 #[cfg(not(target_os = "android"))]
 use super::data::WindowSize;
 use super::{Col, ListScroll, Screen};
 use crate::app::AppState;
 use crate::ui::i18n::{tr, trf};
-use crate::ui::theme::{Theme, UiButton, WidgetState, button, disabled_button, kit_panel, label, list, slider, toggle};
-
-#[cfg(not(target_os = "android"))]
-use crate::ui::theme::dropdown;
+use crate::ui::theme::{Theme, UiButton, WidgetState, button, disabled_button, dropdown, kit_panel, label, list, slider, toggle};
 
 /// A screen's root node: everything of the screen hangs under it.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -240,6 +237,8 @@ fn setup(ctx: &Ctx) -> impl Bundle {
     let map = ctx.data.maps.get(draft.map).map(|m| (m.title().to_owned(), m.slots()));
     let can_launch = draft.to_setup(ctx.data).is_some();
     let race_labels: Vec<_> = draft.seats.iter().map(|seat| if seat.race == super::data::RANDOM_SIDE { tr("Random") } else { ctx.data.race_label(&seat.race, ctx.strings) }).collect();
+    let control_choices = SeatControl::choices(draft.observing);
+    let control_labels: Vec<String> = control_choices.iter().map(|control| control.label(ctx.strings)).collect();
     let palette = draft.effective_colours(ctx.data);
     let row_colours: Vec<_> = ctx.data.maps.get(draft.map).into_iter().flat_map(|map| map.playable_starts())
         .map(|start| palette.owner_colour(sta_sim::PlayerId(start.slot)).unwrap_or(t.text_off)).collect();
@@ -254,6 +253,7 @@ fn setup(ctx: &Ctx) -> impl Bundle {
         .map(str::to_owned)
         .unwrap_or_else(|| tr(resource_fallback));
     content(ctx.theme, move |p| {
+        let control_refs: Vec<&str> = control_labels.iter().map(String::as_str).collect();
         p.spawn((
             row(t.gap),
             children![cell(&t, 130.0, &tr("Seat")), cell(&t, 200.0, &tr("Control")), cell(&t, 260.0, &tr("Side")), cell(&t, 160.0, &tr("Team"))],
@@ -267,7 +267,7 @@ fn setup(ctx: &Ctx) -> impl Bundle {
                             (Node { width: Val::Px(15.0), height: Val::Px(15.0), ..default() }, BackgroundColor(row_colours.get(i).copied().unwrap_or(t.text_off))),
                             label(&t, &trf("Player {0}", &[&(i + 1)])),
                         ]),
-                    (button(&t, seat.control.label(), 200.0 - t.gap), Act::Cycle(i, Col::Control)),
+                    (dropdown(&t, &control_refs, control_choices.iter().position(|control| *control == seat.control).unwrap_or(0), 200.0 - t.gap), super::stock::SeatDrop { row: i, col: Col::Control }),
                     (button(&t, &race_labels[i], 260.0 - t.gap), Act::Cycle(i, Col::Race)),
                     (button(&t, &if draft.observer_row() == Some(i) { tr("Observer") } else { trf("Team {0}", &[&(seat.team + 1)]) }, 160.0 - t.gap), Act::Cycle(i, Col::Team)),
                 ],

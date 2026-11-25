@@ -258,6 +258,15 @@ pub(crate) fn step_planned(model: Model, u: &mut Unit, leg: Leg, plan: Plan) {
     let dt = dt();
     let warp = u.stats.warp_speed;
     if plan.warp && warp > u.stats.max_speed {
+        // The planner allows entry within a heading tolerance. Set the exact
+        // course at impulse before accelerating so the straight warp leg does
+        // not drift away from its aim and repeatedly drop out to correct it.
+        if model == Model::Smooth
+            && u.speed <= u.stats.max_speed
+            && let Some(target) = u.target
+        {
+            u.heading = crate::world::unit_heading((target.x - u.pos.x, target.z - u.pos.z));
+        }
         u.speed = approach(u.speed, warp, warp * warp_rate() * dt);
         u.omega = Fixed::ZERO;
         let flat = u.target.map(|t| flat_distance(u.pos, t));
@@ -330,6 +339,11 @@ impl Sim {
         self.step_drifting_spin();
         let db = self.content.as_deref();
         for u in self.units.iter_mut().filter(|u| u.mobile()) {
+            if self.specials.engines_held(u.id, self.tick) {
+                u.speed = Fixed::ZERO;
+                u.omega = Fixed::ZERO;
+                continue;
+            }
             let queued = match self.movement.course(u.id) {
                 Some(c) if flows => c.waypoints.as_slice(),
                 _ => &[],

@@ -115,6 +115,7 @@ impl Plugin for WeaponFxPlugin {
         app.add_plugins(super::super::mining::MiningPlugin).add_plugins(super::super::orbital_beam::OrbitalBeamPlugin);
         // The Stock look's shots (#1041): registers `Effect::Shots` as having a stock version.
         app.add_plugins(super::stock_shots::StockShotsPlugin);
+        app.add_plugins(super::a1::A1FxPlugin);
         // The Stock look's shield hit (#1041): registers `Effect::ShieldHits`, hooked into the stock beams and shots.
         app.add_plugins(super::stock_shield_hits::StockShieldHitsPlugin);
         // The Stock look's shields-down effect (#1041), under the same gate.
@@ -227,6 +228,9 @@ pub(crate) fn spawn_fx(
         match ev {
             SimEvent::Fired { shooter, weapon, hardpoint, target } => {
                 let Some(def) = content.0.weapon(*weapon) else { continue };
+                // Tracked A1 ordnance is drawn from its persistent world-view pose.
+                // Fired remains available to the audio and gameplay readers.
+                if def.a1_special.is_some_and(|s| super::a1::tracked(s.kind)) { continue; }
                 // A shooter drawn off its sim place (an orbiting miner) shoots from where it is drawn.
                 let Some(from) = point(&link, *shooter, alpha).map(|p| p + shifted(&offsets, *shooter)) else { continue };
                 // The Stock look draws the classes it has a drawing for as the original does (`stock_shots`);

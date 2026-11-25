@@ -45,6 +45,7 @@ pub fn order(
     selection: Res<Selection>,
     link: Res<SimLink>,
     content: Option<Res<ContentRes>>,
+    profile: Option<Res<crate::ui::profile::UiProfile>>,
     local: Option<Res<crate::render::units::LocalPlayer>>,
     mut queue: ResMut<CommandQueue>,
     mut targets: ResMut<OrderTargets>,
@@ -65,7 +66,7 @@ pub fn order(
     let form = Action::ALL.into_iter().find_map(|a| match a {
         Action::Formation(kind) if bindings.just_pressed(a, &keys) => Some(kind),
         _ => None,
-    });
+    }).filter(|_| profile.as_deref() != Some(&crate::ui::profile::UiProfile::Armada1));
     if let Some(kind) = form {
         queue.0.push(CommandKind::Order(Order::Formation { units: own.clone(), kind }));
         issued.write(OrderIssued { units: own.clone(), kind: OrderKind::Formation });

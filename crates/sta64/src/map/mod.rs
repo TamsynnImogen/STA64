@@ -99,14 +99,34 @@ pub(crate) struct Catalogue {
     models: HashMap<String, Option<(String, Arc<Model>)>>,
     /// The moon each resource marker is swapped for (RND-16), read from its ODFs.
     moons: crate::render::moons::MoonVariants,
+    report: Option<crate::diagnostics::Report>,
 }
 
 impl Catalogue {
+    pub(crate) fn with_report(report: crate::diagnostics::Report) -> Self {
+        Self { report: Some(report), ..Self::default() }
+    }
+
+    /// New caches for a mod switch, sharing the same local session log.
+    pub(crate) fn next_mount(&self) -> Self {
+        Self { report: self.report.clone(), ..Self::default() }
+    }
+
+    pub(crate) fn report(&self, category: &str, detail: &str) {
+        if let Some(report) = &self.report {
+            report.record(category, detail);
+        }
+    }
+
     /// The mount's content database, built on first use.
     pub(crate) fn content(&mut self, vfs: &sta_vfs::Vfs) -> Result<&SimContent, String> {
         if self.content.is_none() {
             let (index, dupes) = OdfIndex::build(vfs);
-            let (db, warnings) = ContentDb::load(vfs, &index).map_err(|e| e.to_string())?;
+            let (db, warnings) = ContentDb::load(vfs, &index).map_err(|e| {
+                let detail = e.to_string();
+                self.report("Content load failed", &detail);
+                detail
+            })?;
             info!(
                 "content: {} definitions, profile {:?}, {} warnings ({} duplicate ODFs)",
                 db.len(),
@@ -116,6 +136,11 @@ impl Catalogue {
             );
             let (races, race_warnings) = sta_content::Races::load(vfs, &index);
             info!("races: {} ({} warnings)", races.iter().map(|r| r.stem.as_str()).collect::<Vec<_>>().join(", "), race_warnings.len());
+            if let Some(report) = &self.report {
+                let mounted = vfs.layers().iter().map(|layer| layer.name()).collect::<Vec<_>>().join(" -> ");
+                let category = if mounted.is_empty() { "Content".to_owned() } else { format!("Content ({mounted})") };
+                report.record_all(&category, warnings.iter().chain(&race_warnings).map(ToString::to_string));
+            }
             self.content = Some(SimContent { db: Arc::new(db), index: Arc::new(index), races: Arc::new(races) });
         }
         Ok(self.content.as_ref().expect("just set"))
@@ -245,7 +270,7 @@ pub(crate) struct SimSide {
     pub(crate) setup: GameSetup,
     pub(crate) sim: Sim,
     /// Conversion and spawn warnings together.
-    pub(crate) warnings: usize,
+    pub(crate) warnings: Vec<sta_content::Warning>,
     /// A skirmish's computer players, for the link to think after each tick.
     pub(crate) controllers: Vec<Box<dyn sta_sim::setup::Controller>>,
     /// A skirmish's local race, or why the skirmish could not be set up.
@@ -298,7 +323,8 @@ pub(crate) fn build_mission_sim(
     let (sim, spawn_warnings) = Sim::from_setup_with_warnings(&setup);
     let mission = launch.attach(&setup, &sim).map(|handle| MissionSide { local: launch.local_race(&setup, races), handle });
     let controllers = mission.as_ref().map(|m| vec![m.handle.controller()]).unwrap_or_default();
-    SimSide { warnings: converted.warnings.len() + spawn_warnings.len(), setup, sim, controllers, skirmish: None, mission: Some(mission) }
+    let warnings = converted.warnings.into_iter().chain(spawn_warnings).collect();
+    SimSide { warnings, setup, sim, controllers, skirmish: None, mission: Some(mission) }
 }
 
 /// The sim of a map: the map view's (`skirmish: None`: one idle seat per owner or
@@ -341,7 +367,8 @@ pub(crate) fn build_sim(
     for w in converted.warnings.iter().chain(&spawn_warnings).take(20) {
         debug!("{}: {}", w.file, w.message);
     }
-    SimSide { warnings: converted.warnings.len() + spawn_warnings.len(), setup, sim, controllers, skirmish: plan, mission: None }
+    let warnings = converted.warnings.into_iter().chain(spawn_warnings).collect();
+    SimSide { warnings, setup, sim, controllers, skirmish: plan, mission: None }
 }
 
 /// The setup screen already resolved every participant, team and option.
@@ -357,7 +384,7 @@ fn build_instant_action(map: MapDef, content: Arc<ContentDb>, races: &sta_conten
         local: crate::game::local_race(races, race),
         summary: format!("instant action: {} map seats, {}", setup.players.len(), selected.local.map_or_else(|| "observing".into(), |id| format!("playing seat {}", id.0))),
     }));
-    SimSide { setup, sim, warnings: warnings.len(), controllers, skirmish, mission: None }
+    SimSide { setup, sim, warnings, controllers, skirmish, mission: None }
 }
 
 /// The seats of a map: every owner and start slot, and the one the client plays.
@@ -392,6 +419,7 @@ pub struct CameraLimits {
     /// `OVERVIEW_INIT_ROTATION` and the look point's height, the middle of
     /// `SHIP_COMBAT_FLOOR` / `SHIP_COMBAT_CEILING`.
     pub start: StartCamera,
+    pub(crate) tactical: crate::input::camera_tactical::TacticalConfig,
 }
 
 /// The original's strategy camera at a mission's start (A1 `Armada.exe` and A2 `Armada2.exe`,
@@ -451,6 +479,7 @@ impl CameraLimits {
             min_height: cfg.and_then(|c| c.f32("OVERVIEW_MIN_HEIGHT")).filter(|v| v.is_finite()),
             max_height: cfg.and_then(|c| c.f32("OVERVIEW_MAX_HEIGHT")).filter(|v| v.is_finite() && *v > 0.0),
             start: StartCamera::from_cfg(cfg),
+            tactical: crate::input::camera_tactical::TacticalConfig::from_cfg(cfg),
         }
     }
 }
@@ -536,6 +565,7 @@ type MapState<'w> = (
     Option<Res<'w, crate::render::profile::RenderProfile>>,
     Option<Res<'w, crate::render::profile::ProfileEffects>>,
     crate::game::net_match::NetBuild<'w>,
+    Option<Res<'w, crate::mcp::AuthorizedSeat>>,
 );
 
 /// The ambient light and the two map lights, as one system parameter.
@@ -577,6 +607,8 @@ impl Plugin for MapPlugin {
             .add_plugins(crate::render::stock::StockBackgroundsPlugin)
             .add_plugins(crate::render::strategic::StrategicPlugin)
             .init_resource::<crate::render::strategic::Silhouettes>()
+            .init_resource::<crate::input::camera_tactical::TacticalView>()
+            .add_message::<crate::input::select::CameraFocus>()
             .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
             .add_plugins(HierarchyPropagatePlugin::<RenderLayers>::new(PostUpdate))
             .add_systems(OnEnter(crate::app::AppState::FrontEnd), clear_match);
@@ -600,8 +632,19 @@ impl Plugin for MapPlugin {
                     crate::render::stock::nebula::switch,
                     radar_click.run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free),
                     // Under the in-game menu (UI-34) the camera stands still.
-                    pan_keys.run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free).run_if(crate::editor::canvas_input_free),
-                    crate::viewer::orbit_camera.run_if(crate::ui::ingame_menu::menu_closed).run_if(crate::cheats::input::game_input_free).run_if(crate::editor::canvas_input_free),
+                    crate::input::camera_tactical::update
+                        .after(crate::input::camera_cinematic::consume)
+                        .before(crate::app::GameSet::Render)
+                        .run_if(crate::ui::ingame_menu::menu_closed)
+                        .run_if(crate::cheats::input::game_input_free),
+                    (
+                        pan_keys,
+                        crate::viewer::orbit_camera,
+                    ).chain()
+                        .run_if(crate::ui::ingame_menu::menu_closed)
+                        .run_if(crate::cheats::input::game_input_free)
+                        .run_if(crate::editor::canvas_input_free)
+                        .run_if(crate::input::camera_tactical::overview_active),
                     radar_camera,
                     spin,
                     crate::render::spin::turn,
@@ -643,6 +686,7 @@ pub(crate) fn clear_match(
     // The sim ids the match's entities answered to; the menu scene's units are made again from its view.
     entities.0.clear();
     commands.remove_resource::<crate::render::fog::FogState>();
+    commands.insert_resource(crate::input::camera_tactical::TacticalView::default());
     commands.remove_resource::<crate::ui::hud::instance_names::InstanceNames>();
     // The playtest capture's record of how the match began (a networked match does not write one).
     commands.remove_resource::<crate::capture::MatchMeta>();
@@ -775,8 +819,10 @@ fn radar_click(
     mut clicks: MessageReader<crate::ui::radar::RadarClick>,
     limits: Res<CameraLimits>,
     mut q: Query<&mut Orbit>,
+    mode: Option<Res<crate::input::camera_tactical::TacticalView>>,
 ) {
     let Some(at) = clicks.read().filter_map(crate::ui::radar::camera_point).last() else { return };
+    if !crate::input::camera_tactical::overview_active(mode) { return; }
     for mut o in &mut q {
         let at = Vec3::new(at.x, 0.0, -at.y);
         o.focus = at.clamp(limits.lo, limits.hi);
@@ -845,6 +891,10 @@ fn pan_keys(
 }
 
 impl CameraLimits {
+    pub(crate) fn clamp_focus(&self, focus: Vec3) -> Vec3 {
+        focus.clamp(self.lo, self.hi)
+    }
+
     /// The orbit distance kept within the map's size and, where the cfg sets them, within
     /// `OVERVIEW_MIN_HEIGHT` .. `OVERVIEW_MAX_HEIGHT` of eye height over the look point's plane
     /// (the original's overview camera, the keys read from data; the parabola it zooms along is
@@ -908,7 +958,7 @@ fn rebuild(
     lighting: Lighting,
 ) {
     let (mut silhouettes, mut ambient, mut lights) = lighting;
-    let (mut particles, mut selection, mut queue, mut clock, mut limits, mut planet_materials, seat, skirmish_cfg, instant, mission_launch, profile, profile_effects, mut net) = state;
+    let (mut particles, mut selection, mut queue, mut clock, mut limits, mut planet_materials, seat, skirmish_cfg, instant, mission_launch, profile, profile_effects, mut net, mcp_seat) = state;
     let gas_volumes = crate::render::stock::nebula::volumetric(profile.as_deref(), profile_effects.as_deref());
     if !browser.dirty {
         return;
@@ -917,6 +967,7 @@ fn rebuild(
     particles.clear();
     // The old map's sim goes; the new one is linked once its ships are placed.
     commands.remove_resource::<SimLink>();
+    commands.insert_resource(crate::input::camera_tactical::TacticalView::default());
     selection.0.clear();
     queue.0.clear();
     *clock = AnimClock::new(clock.mode(), clock.seed());
@@ -938,6 +989,7 @@ fn rebuild(
     let bytes = match crate::editor::read_map(&vfs.0, &path) {
         Ok(bytes) => bytes,
         Err(e) => {
+            catalogue.report("Cannot open map", &format!("{path}: {e}"));
             browser.info = format!("{header}\n{e}");
             return;
         }
@@ -945,6 +997,7 @@ fn rebuild(
     let map = match sta_bzn::parse(&bytes) {
         Ok(map) => map,
         Err(e) => {
+            catalogue.report("Cannot read map", &format!("{path}: {e}"));
             browser.info = format!("{header}\n{e}");
             return;
         }
@@ -970,11 +1023,11 @@ fn rebuild(
     let content = with_map_tech_tree(content, &vfs.0, &map.tech_tree_file, &name, net_match.is_some());
     let side = match net_match.take() {
         Some(nm) => {
-            let own = MapDef::convert_bzn_named_in(&map, &name, &content, &vfs.0, &index).map;
-            match crate::game::net_match::build_side(&nm, own, &races) {
+            let converted = MapDef::convert_bzn_named_in(&map, &name, &content, &vfs.0, &index);
+            match crate::game::net_match::build_side(&nm, converted.map, &races) {
                 Ok(n) => {
                     net_match = Some(nm);
-                    Some(SimSide { warnings: 0, setup: n.setup, sim: n.sim, controllers: n.controllers, skirmish: Some(Ok(n.seats)), mission: None })
+                    Some(SimSide { warnings: converted.warnings, setup: n.setup, sim: n.sim, controllers: n.controllers, skirmish: Some(Ok(n.seats)), mission: None })
                 }
                 Err(why) => {
                     warn!("net match refused: {why}");
@@ -992,11 +1045,14 @@ fn rebuild(
         (None, None, Some(active)) => {
             let converted = MapDef::convert_bzn_named_in(&map, &name, &content, &vfs.0, &index);
             let mut side = build_instant_action(converted.map, content.clone(), &races, active);
-            side.warnings += converted.warnings.len();
+            side.warnings.extend(converted.warnings);
             side
         }
         (None, None, None) => build_sim(&map, &name, &content, &index, &vfs.0, seat.0, skirmish_cfg.as_deref().map(|c| (c, &*races))),
     };
+    if let Some(report) = &catalogue.report {
+        report.record_all(&format!("Map {name}"), sim_warnings.iter().map(ToString::to_string));
+    }
     let mut skirmish_note = None;
     let mut played_race = None;
     let is_match = matches!(skirmish, Some(Ok(_)));
@@ -1086,7 +1142,9 @@ fn rebuild(
         });
         commands.insert_resource(crate::ui::hud::ghost::PlacementBounds(Some((lo, hi))));
         // The map grid's first mode per view, from the mounted `RTS_CFG.h` (a new match starts from it again).
-        commands.insert_resource(crate::render::map_grid::GridModes::from_cfg(sta_content::layered::cfg_h(&vfs.0, "RTS_CFG.h").as_ref()));
+        let rts = sta_content::layered::cfg_h(&vfs.0, "RTS_CFG.h");
+        commands.insert_resource(crate::render::map_grid::GridModes::from_cfg(rts.as_ref()));
+        limits.tactical = crate::input::camera_tactical::TacticalConfig::from_cfg(rts.as_ref());
         commands.insert_resource(crate::render::fog::FogBounds {
             min: Vec2::new(lo.x.to_f32(), lo.z.to_f32()),
             max: Vec2::new(hi.x.to_f32(), hi.z.to_f32()),
@@ -1581,6 +1639,11 @@ fn rebuild(
             let link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), seat_player.unwrap_or(PlayerId::BENCH)).with_controllers(controllers)
                 .with_match_fog_lifted(instant.as_ref().is_some_and(|active| active.fog.lifted().0));
             let link = if instant.as_ref().is_some_and(|active| active.local.is_none()) { link.with_observer() } else { link };
+            let authorized = instant.as_ref().and_then(|active| active.mcp_seat).or(mcp_seat.map(|cli| cli.0))
+                .filter(|&seat| is_match && !authoring && !is_mission &&
+                setup.players.iter().any(|player| player.id == seat &&
+                    matches!(player.control, sta_sim::setup::Control::Human | sta_sim::setup::Control::Ai(_) | sta_sim::setup::Control::Idle)));
+            let link = if let Some(seat) = authorized { link.with_mcp_seat(seat, map_def.bounds) } else { link };
             if authoring {
                 commands.insert_resource(link);
             } else {
@@ -1626,7 +1689,7 @@ fn rebuild(
         ghosts,
         content.len(),
         content.profile(),
-        sim_warnings
+        sim_warnings.len()
     ));
     if let Some(n) = skirmish_note {
         info.push_str(&format!("\n{n}"));
@@ -1744,7 +1807,7 @@ mod tests {
             draft.options.officer_limit = 1;
             let setup = draft.to_setup(&data).unwrap();
             let local = (!observing).then_some(PlayerId(2));
-            let active = ActiveMatch { setup, local, speed: Default::default(), fog: Default::default(), requested: true, frames: 0 };
+            let active = ActiveMatch { setup, local, speed: Default::default(), fog: Default::default(), mcp_seat: None, requested: true, frames: 0 };
             let side = build_instant_action((*active.setup.map).clone(), data.content.clone(), &data.races, &active);
             assert_eq!(side.setup.players, active.setup.players);
             assert_eq!(side.setup.options, active.setup.options);
@@ -2086,7 +2149,7 @@ mod tests {
                 }
             }
             let units = sim.view().units.len();
-            println!("{path}: {units} sim units, {found}/{wanted} objects linked, {} unlinked, {} seats, {warnings} warnings", placed.rest().len(), setup.players.len());
+            println!("{path}: {units} sim units, {found}/{wanted} objects linked, {} unlinked, {} seats, {} warnings", placed.rest().len(), setup.players.len(), warnings.len());
             assert_eq!(found, setup.map.objects.len(), "{path}: every placed object finds its entity ({wanted} had a unit definition, the rest became regions or scenery)");
             maps += 1;
 

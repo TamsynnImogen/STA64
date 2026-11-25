@@ -1465,13 +1465,21 @@ pub fn read_meta(dir: &Path, file: &str) -> Result<Jv, String> {
 /// the install's maps `maps` (stems under `bzn/`) for `Map=`. The maps are
 /// converted as the map view converts them (`MapDef::convert_bzn_named_in`),
 /// so the same scene builds the same sim in the bench and in the client.
+///
+/// The content is the one the game plays the map with: when exactly one map is
+/// asked for, the tech tree that map names (`techTreeFilename`) replaces the
+/// mount's default tree (`ContentDb::with_map_tech_tree`, #1019), and the tree is
+/// part of the content hash, so a snapshot taken in the game loads only with it.
+/// With no map or several maps the default tree stays: one run config holds one
+/// content database.
 pub fn install_config(root: &Path, mod_name: Option<&str>, maps: &[String]) -> Result<RunConfig, String> {
     let vfs = sta_vfs::Vfs::mount_install(root, mod_name).map_err(|e| format!("{}: {e:?}", root.display()))?;
     let (index, _) = sta_content::OdfIndex::build(&vfs);
-    let (db, _) = sta_content::ContentDb::load(&vfs, &index).map_err(|e| format!("content: {e:?}"))?;
+    let (mut db, _) = sta_content::ContentDb::load(&vfs, &index).map_err(|e| format!("content: {e:?}"))?;
     let mut cfg = RunConfig::fake();
     cfg.aliases.clear();
     cfg.maps.clear();
+    let mut parsed = Vec::new();
     for name in maps {
         let stem = map_stem(name);
         let data = [format!("bzn/{stem}.bzn"), format!("bzn/{stem}.sol")]
@@ -1480,6 +1488,19 @@ pub fn install_config(root: &Path, mod_name: Option<&str>, maps: &[String]) -> R
             .ok_or_else(|| format!("Map={stem}: no bzn/{stem}.bzn in the install"))?
             .map_err(|e| format!("Map={stem}: {e}"))?;
         let bzn = sta_bzn::parse(&data).map_err(|e| format!("Map={stem}: {e}"))?;
+        parsed.push((stem, bzn));
+    }
+    if let [(stem, bzn)] = parsed.as_slice() {
+        // As the game does it: a tree the mount lacks leaves the default one, with a log line.
+        let (swapped, warnings) = db.with_map_tech_tree(&vfs, &bzn.tech_tree_file);
+        for w in &warnings {
+            eprintln!("map {stem}: tech tree {}: {}", w.file, w.message);
+        }
+        if let Some(swapped) = swapped {
+            db = swapped;
+        }
+    }
+    for (stem, bzn) in parsed {
         let conv = sta_content::MapDef::convert_bzn_named_in(&bzn, &stem, &db, &vfs, &index);
         cfg.maps.insert(stem, conv.map);
     }

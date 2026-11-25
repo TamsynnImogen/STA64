@@ -974,7 +974,17 @@ pub fn command(feed: &HudFeed, act: &Act) -> Option<(CommandKind, Vec<EntityId>)
         )),
         Act::Special(slot) if caps.specials.iter().any(|s| s.0 == *slot
             && (s.1 != sta_sim::specials::SpecialKind::PointDefence
-                || point_defence_state(feed, *slot).is_some_and(|(_, ready)| ready))
+                || if selected_special_weapon(feed, *slot).is_some_and(|weapon| weapon.a1_special.is_some()) {
+                    feed.content.as_deref().is_some_and(|db| own.iter().any(|id|
+                        sta_sim::specials::a1_special_ready(&feed.view, db, *id, *slot)))
+                } else {
+                    point_defence_state(feed, *slot).is_some_and(|(_, ready)| ready)
+                })
+            && (!matches!(s.1, sta_sim::specials::SpecialKind::A1(_))
+                || feed.content.as_deref().is_some_and(|db| own.iter().any(|id|
+                    sta_sim::specials::a1_special_ready(&feed.view, db, *id, *slot)
+                        && sta_sim::specials::a1_special_researched(&feed.view, db, *id, *slot))))
+            && !matches!(s.1, sta_sim::specials::SpecialKind::A1(sta_content::A1SpecialKind::Gemini | sta_content::A1SpecialKind::EngineeringTeam | sta_content::A1SpecialKind::Stasis))
             && (s.1 != sta_sim::specials::SpecialKind::Replace
                 || special_targeted(feed, *slot) == Some(false))) => Some((
             CommandKind::Order(Order::Special {

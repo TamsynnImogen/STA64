@@ -74,6 +74,20 @@ The toolchain is pinned in `rust-toolchain.toml`. Linux builds need the usual
 Bevy system packages (`alsa-lib-devel`, `systemd-devel`/`libudev`, Wayland/X11
 headers).
 
+## Reporting an error
+
+Open **Esc → Diagnostics** during a match to see recent warnings and the path
+to the full session log. Missing ODF references identify the originating
+definition, the command, and the file the game could not load. You can
+continue playing when the game has a safe fallback.
+
+STA64 writes `session-*.txt`, `panic-*.txt`, and `fatal-exit-*.txt` locally in
+its user data folder's `logs` subdirectory. On Linux that is normally
+`~/.local/share/sta64/logs`. On Windows look under `%LOCALAPPDATA%\sta64\logs`
+and on macOS under `~/Library/Application Support/sta64/logs`. A
+`STA64_DATA_DIR` override puts the logs in that folder's `logs` subdirectory.
+For a crash, review and share the matching crash report and session log.
+
 ## Docs
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — engine structure and rules
@@ -81,6 +95,7 @@ headers).
 - [docs/MISSIONS.md](docs/MISSIONS.md) — mission scripts without DLLs (integrated MMM Lua)
 - [docs/MISSION_DLL_API.md](docs/MISSION_DLL_API.md) — every engine call the stock A1/A2 mission DLLs make, and what STA64's Lua lacks
 - [docs/TESTBENCH.md](docs/TESTBENCH.md) — test bench plan: scenes, scenarios, determinism, parity with stock
+- [docs/MCP.md](docs/MCP.md) — let an MCP client play an authorized seat in a local match
 - [docs/ROADMAP.md](docs/ROADMAP.md) — milestones
 - [docs/WORKPLAN.md](docs/WORKPLAN.md) — seams and parallel work packages for M2–M5
 - [docs/STA_ARCHIVE.md](docs/STA_ARCHIVE.md) — the open `.sta` mod archive format (draft)

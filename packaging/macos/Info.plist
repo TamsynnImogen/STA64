@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>STA64</string>
+  <key>CFBundleDisplayName</key><string>STA64</string>
+  <key>CFBundleIdentifier</key><string>io.github.tamsynnimogen.sta64</string>
+  <key>CFBundleExecutable</key><string>sta64</string>
+  <key>CFBundleIconFile</key><string>STA64</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleVersion</key><string>@VERSION@</string>
+  <key>CFBundleShortVersionString</key><string>@VERSION@</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>LSApplicationCategoryType</key><string>public.app-category.strategy-games</string>
+</dict>
+</plist>

@@ -229,6 +229,10 @@ struct Round {
 #[derive(Default, Clone, Copy)]
 struct Counts {
     entities: usize,
+    /// Units in the sim's view; units with a render root; units with a mesh in view.
+    units: usize,
+    units_spawned: usize,
+    units_drawn: usize,
     visible_meshes: usize,
     rocks_visible: usize,
     shadow_active: bool,
@@ -489,6 +493,10 @@ fn drive(
     diagnostics: Res<DiagnosticsStore>,
     visible: Query<(&ViewVisibility, Option<&crate::render::rock::RockPart>), With<Mesh3d>>,
     all: Query<Entity>,
+    link: Option<Res<crate::sim_link::SimLink>>,
+    roots: Option<Res<crate::sim_link::SimEntities>>,
+    kids: Query<&Children>,
+    mesh_vis: Query<&ViewVisibility, With<Mesh3d>>,
     shadow_cam: Query<&Camera, With<crate::render::shadows::ShadowCamera>>,
     scenery: Query<(&GlobalTransform, Option<&crate::map::AsteroidField>, Option<&crate::render::nebula::NebulaField>, Option<&crate::render::nebula::NebulaBoards>, Option<&crate::render::planet::PlanetBody>)>,
     mut exit: MessageWriter<AppExit>,
@@ -548,6 +556,19 @@ fn drive(
     }
     // The round is done: counts, systems.
     let mut counts = Counts { entities: all.iter().count(), shadow_active: shadow_cam.iter().any(|c| c.is_active), ..default() };
+    // Units: what the sim view lists, which of them have a root entity, and which of those
+    // have a mesh the cameras see (a unit's model is its root's descendants).
+    counts.units = link.as_ref().map_or(0, |l| l.curr().units.len());
+    if let Some(roots) = &roots {
+        counts.units_spawned = roots.0.len();
+        counts.units_drawn = roots
+            .0
+            .values()
+            .filter(|&&root| {
+                mesh_vis.get(root).is_ok_and(|v| v.get()) || kids.iter_descendants(root).any(|d| mesh_vis.get(d).is_ok_and(|v| v.get()))
+            })
+            .count();
+    }
     for (vis, rock) in &visible {
         if vis.get() {
             counts.visible_meshes += 1;
@@ -597,6 +618,13 @@ fn drive(
         let ts = device.is_some_and(|d| d.features().contains(bevy::render::settings::WgpuFeatures::TIMESTAMP_QUERY));
         match write_report(&run, &name, ts) {
             Ok(p) => {
+                if let Some((_, r)) = run.done.last() {
+                    let c = &r.counts;
+                    println!(
+                        "perf counts: {} units in the sim, {} with a root entity, {} with a mesh in view; {} entities, {} visible meshes",
+                        c.units, c.units_spawned, c.units_drawn, c.entities, c.visible_meshes
+                    );
+                }
                 println!("perf report {}", p.display());
                 exit.write(AppExit::Success);
             }
@@ -646,6 +674,9 @@ fn write_report(run: &PerfRun, adapter: &str, timestamps: bool) -> Result<PathBu
                         "counts",
                         Obj::new()
                             .int("entities", r.counts.entities as u64)
+                            .int("units", r.counts.units as u64)
+                            .int("units_spawned", r.counts.units_spawned as u64)
+                            .int("units_drawn", r.counts.units_drawn as u64)
                             .int("visible_meshes", r.counts.visible_meshes as u64)
                                             .int("rocks_visible", r.counts.rocks_visible as u64)
                             .boolean("shadow_pass_active", r.counts.shadow_active)

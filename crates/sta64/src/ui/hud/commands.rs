@@ -82,7 +82,10 @@ fn one(db: &ContentDb, u: &UnitView) -> Capabilities {
         .filter_map(|(slot, (kind, weapon))| {
             // Point defence is listed only where its energy toggle is supported.
             (slot <= u8::MAX as usize
-                && matches!(kind, SpecialKind::Cloak | SpecialKind::PointDefence | SpecialKind::Replace)
+                && matches!(kind, SpecialKind::Cloak | SpecialKind::PointDefence | SpecialKind::Replace | SpecialKind::A1(_))
+                && (kind != SpecialKind::A1(sta_content::A1SpecialKind::DetectCloak))
+                && (!matches!(kind, SpecialKind::A1(_))
+                    || weapon.raw.i64("buttonSlot").is_some_and(|n| (1..=5).contains(&n)))
                 && !super::avatar::choice_weapon(def, kind, weapon)).then_some((slot as u8, kind))
         })
         .collect();

@@ -117,3 +117,40 @@ fn a1_compat_instant_action_starts_with_compatibility_defaults_at_tick_zero() {
         }
     }
 }
+
+/// Exercises the normal content loader for the Federation special slots in a
+/// real Armada I archive. The test ships and weapons come from that install.
+#[test]
+fn federation_specials_load_from_the_armada_one_install() {
+    use sta_content::A1SpecialKind as K;
+    use sta_sim::specials::{SpecialKind, specials_indexed};
+
+    let Ok(root) = std::env::var("STA64_TEST_A1_INSTALL") else { return };
+    let vfs = Vfs::mount_install(Path::new(&root), None).unwrap();
+    let (index, _) = OdfIndex::build(&vfs);
+    let (db, _) = ContentDb::load(&vfs, &index).unwrap();
+    assert_eq!(db.profile(), Profile::Sta1Classic);
+    for (ship, weapon, kind, rail) in [
+        ("fdestroy", "gamine", K::Mines, 1),
+        ("fcruise1", "gchainp", K::ChainPulsar, 2),
+        ("fcruise2", "gwcover", K::EngineOverload, 3),
+        ("fbattle", "gcorbom", K::Reflector, 4),
+        ("fscout", "gdetectf", K::DetectCloak, 0),
+        ("fsensor", "gdetectf", K::DetectCloak, 0),
+        ("fspecial", "gmanheim", K::Gemini, 4),
+        ("fspecial", "gshieldh", K::ShieldDisruptor, 2),
+        ("fspecial", "gfedrep", K::EngineeringTeam, 3),
+        ("fspecial", "gpdlaser", K::PointDefense, 1),
+        ("fsuperbl", "gtempor", K::Stasis, 5),
+    ] {
+        let def = db.unit(db.key(ship).unwrap()).unwrap();
+        let key = db.key(weapon).unwrap();
+        let (_, special, w) = specials_indexed(&db, def)
+            .find(|(_, _, w)| w.key == key)
+            .unwrap_or_else(|| panic!("{ship} lacks {weapon}"));
+        assert_eq!(w.a1_special.unwrap().kind, kind);
+        assert_eq!(w.raw.i64("buttonSlot"), Some(rail));
+        assert!(w.energy_cost > Fixed::ZERO, "{weapon}");
+        assert_eq!(special, if kind == K::PointDefense { SpecialKind::PointDefence } else { SpecialKind::A1(kind) });
+    }
+}

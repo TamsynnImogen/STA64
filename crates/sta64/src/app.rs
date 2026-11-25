@@ -114,6 +114,10 @@ pub struct LaunchConfig {
     pub opponent_race: Option<String>,
     /// `--seat <n>`: play seat `n` in the map view (the link speaks for it, its fog is drawn).
     pub seat: Option<u8>,
+    /// An explicitly authorized player seat for the local MCP bridge.
+    pub mcp_seat: Option<u8>,
+    /// Where to write the private MCP connection descriptor.
+    pub mcp_endpoint: Option<PathBuf>,
     pub help: bool,
     /// Bench scene file (`--scene <ini>`).
     pub scene: Option<PathBuf>,
@@ -169,6 +173,8 @@ Usage: sta64 [options]
   --mission-report         print which mission script every map would run, then exit
   --nointro                skip the logo and title movies at start
   --noai                   leave local skirmish AI slots idle
+  --mcp-seat <n>          allow MCP takeover of zero-based seat n in local Instant Action or skirmish
+  --mcp-endpoint <path>   override the private descriptor path for an MCP slot or --mcp-seat
   --reveal <what>          start a single-player game with the fog and/or shroud lifted (fog, shroud, all; comma
                            separated; testing aid, drawing only; Alt+F and Alt+V toggle them in the game)
 
@@ -242,6 +248,14 @@ impl LaunchConfig {
                 "--seat" => match value(&mut args).and_then(|v| v.parse().ok()) {
                     Some(n) => cfg.seat = Some(n),
                     None => cfg.unknown.push("--seat (needs a seat number)".into()),
+                },
+                "--mcp-seat" => match value(&mut args).and_then(|v| v.parse::<u8>().ok()) {
+                    Some(n) if sta_sim::PlayerId(n).is_player() => cfg.mcp_seat = Some(n),
+                    _ => cfg.unknown.push("--mcp-seat (needs a player seat from 0 to 7)".into()),
+                },
+                "--mcp-endpoint" => match value(&mut args) {
+                    Some(path) => cfg.mcp_endpoint = Some(PathBuf::from(path)),
+                    None => cfg.unknown.push("--mcp-endpoint (needs a path)".into()),
                 },
                 "--ui-gallery" => cfg.ui_gallery = true,
                 "--lcars-ui" => cfg.lcars_ui = true,

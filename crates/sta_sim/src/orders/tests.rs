@@ -240,6 +240,85 @@ fn a_warp_move_warps_on_a_long_leg_a_plain_move_does_not() {
     assert!(wd < n(100) && pd > n(2000), "{wd:?} {pd:?}");
 }
 
+#[test]
+fn a_warp_move_drops_out_before_turning_and_reenters_once_when_aligned() {
+    use crate::movement::approach::{IN_WARP, WARP_OUT, warp_leg};
+
+    let (mut sim, db) = game(Profile::Sta2Classic);
+    let ship = sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
+    let move_warp = |seq, to| order(1, seq, Order::MoveWarp { units: vec![ship], to, queue: false });
+    run(&mut sim, vec![move_warp(0, v(0, 5000))], 4 * HZ);
+    assert_eq!(sim.approach_warp.phase(ship), Some(IN_WARP));
+    let impulse = sim.unit(ship).unwrap().stats.max_speed;
+    assert!(sim.unit(ship).unwrap().speed > impulse);
+
+    sim.step(&[move_warp(1, v(0, 7000))]);
+    assert_eq!(sim.approach_warp.phase(ship), Some(IN_WARP), "aligned extension keeps its warp phase");
+
+    let to = Vec3 { x: n(4000), y: Fixed::ZERO, z: sim.unit(ship).unwrap().pos.z };
+    let new_course = [move_warp(2, to)];
+    let mut previous_phase = Some(IN_WARP);
+    let mut transitions = Vec::new();
+    let mut turned = false;
+    let mut cruise_ticks = 0;
+    for tick in 0..60 * HZ {
+        let unit = sim.unit(ship).unwrap();
+        let previous_heading = unit.heading;
+        let previous_speed = unit.speed;
+        let previously_aligned = warp_leg(unit, to).1;
+        sim.step(if tick == 0 { &new_course } else { &[] });
+        let phase = sim.approach_warp.phase(ship);
+        let unit = sim.unit(ship).unwrap();
+        if unit.heading != previous_heading {
+            assert!(previous_speed <= impulse, "turned above impulse at tick {tick}");
+            turned = true;
+        }
+        if phase != previous_phase {
+            if phase == Some(IN_WARP) {
+                assert!(turned && previously_aligned && previous_speed <= impulse);
+            }
+            transitions.push(phase);
+            previous_phase = phase;
+        }
+        if phase == Some(IN_WARP) {
+            cruise_ticks += 1;
+        }
+        if unit.target.is_none() && unit.speed == Fixed::ZERO {
+            break;
+        }
+    }
+    let unit = sim.unit(ship).unwrap();
+    assert!(unit.target.is_none() && unit.speed == Fixed::ZERO, "the redirected order finishes");
+    assert_eq!(transitions, [Some(WARP_OUT), None, Some(IN_WARP), Some(WARP_OUT), None]);
+    assert!(cruise_ticks >= 2 * HZ);
+}
+
+#[test]
+fn a_warp_move_brakes_when_avoidance_plans_a_turn() {
+    use crate::movement::approach::{IN_WARP, WARP_OUT};
+    use sta_content::{Region, RegionKind, RegionShape};
+
+    let (mut sim, db) = game(Profile::Sta2Classic);
+    let ship = sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
+    let goal = v(0, 6000);
+    let start = order(1, 0, Order::MoveWarp { units: vec![ship], to: goal, queue: false });
+    run(&mut sim, vec![start], 4 * HZ);
+    assert_eq!(sim.approach_warp.phase(ship), Some(IN_WARP));
+
+    let before = sim.unit(ship).unwrap().clone();
+    sim.regions.push(Region {
+        kind: RegionKind::AsteroidField,
+        odf: "turn_fixture".into(),
+        shape: RegionShape::Sphere { centre: Vec3 { z: before.pos.z + n(600), ..before.pos }, radius: n(280) },
+    });
+    sim.step(&[]);
+    let after = sim.unit(ship).unwrap();
+    assert_eq!(sim.approach_warp.phase(ship), Some(WARP_OUT));
+    assert_eq!(after.heading, before.heading, "braking holds the warp heading");
+    assert!(after.speed < before.speed);
+    assert_eq!(after.target, Some(goal), "the detour keeps the original order");
+}
+
 fn shooter_vs_target(profile: Profile) -> (Sim, EntityId, EntityId) {
     let (mut sim, db) = game(profile);
     let s = sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
