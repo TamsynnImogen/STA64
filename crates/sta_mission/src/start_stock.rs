@@ -90,11 +90,10 @@ pub fn read_start_stock(vfs: &Vfs, bzn: &str) -> StartStock {
 /// colour table's team order and the converted-mission numbering: not measured.
 ///
 /// Interim decision, officer limit: the record is written as the limit's base, and the sim then adds the
-/// officer gain of every finished starbase on top, as it does for any Armada I seat. The data points both
-/// ways: on the skirmish maps the record of an occupied team equals the header base plus the gain of the
-/// starbases that team has placed (so there the record already includes them), while the campaign maps'
-/// records do not follow the placed starbase count. Which one the original uses for a mission is not
-/// measured; a seat that starts with a finished starbase may therefore show one gain too many.
+/// officer gain of every finished starbase on top, as it does for any Armada I seat. On the maps read, the
+/// record's relation to the starting stations is not uniform; whether the original shows the record itself
+/// at the start is not measured, so a seat that starts with finished starbases may show one gain per
+/// starting station more than the original.
 // TODO: settle whether a mission's officer limit includes the starting starbases' gain (measure the original).
 // TODO: the table's maximum dilithium and maximum crew records are not read (what they bound is not established).
 pub fn from_a1_table(table: &[sta_bzn::a1::A1TeamStart]) -> Vec<SeatStart> {

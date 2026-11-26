@@ -187,7 +187,7 @@ fn a1_first_mission_seat_starts_with_the_maps_crew_and_officer_limit() {
         let p = view.player(seat).unwrap();
         let written = view.attrs.seats.iter().find(|a| a.player == seat).and_then(|a| a.officer_base);
         if t.crew > 0.0 {
-            assert_eq!(p.crew, Some(Fixed::from_int(t.crew.round() as i32)), "seat {s} crew");
+            assert_eq!(p.crew, Some(Fixed::from_int(t.crew as i32)), "seat {s} crew");
         }
         if t.officers > 0 {
             assert_eq!(written, Some(Fixed::from_int(t.officers)), "seat {s} officer base");

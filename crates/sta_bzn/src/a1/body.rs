@@ -242,13 +242,11 @@ pub struct A1TeamStart {
 ///
 /// Per block the seven records are start dilithium (f32), maximum dilithium (f32, not read), officer limit
 /// (i32), start crew (f32), maximum crew (f32, not read), then the two colour entries. Evidence: read from
-/// data. The meaning of the three read records is inferred (not read from the executable). Dilithium and
-/// crew: value agreement with the header keys `cfgStartingDilithium` and `cfgStartingCrew` on nearly every
-/// occupied team of the skirmish maps, differing per team on a few. Officer limit: on every occupied skirmish
-/// team it equals `cfgMaxOfficers` plus the default officer gain of the starbases that team has placed; the
-/// campaign maps' records do not follow the placed starbase count, so whether the limit includes the starting
-/// starbases' gain is not settled. Interim for all three, and for the officer limit not measured against the
-/// original.
+/// data. The meaning of the three read records is inferred (not read from the executable), from agreement
+/// with the header keys `cfgStartingDilithium`, `cfgStartingCrew` and `cfgMaxOfficers` on the maps read and
+/// from one player report. Interim for all three. For the officer limit the record's relation to the
+/// starting stations is not uniform on the maps read, and whether the original shows the record itself at
+/// the start is not measured.
 pub fn team_starts(data: &[u8]) -> Vec<A1TeamStart> {
     match team_table(data) {
         A1StartTable::Found(t) => t,
