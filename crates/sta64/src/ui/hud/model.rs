@@ -1097,14 +1097,14 @@ pub fn resources(feed: &HudFeed, no: [bool; 4], no_personnel: [bool; 2]) -> Vec<
         out.push(ResEntry { name: "crew".into(), id: 5, text: (crew.to_bits() / Fixed::ONE.to_bits()).to_string() });
     }
     if !no_personnel[1] && (p.officers[1] > Fixed::ZERO || feed.content.as_deref().is_some_and(ContentDb::a1_officers)) {
-        out.push(ResEntry { name: "officers".into(), id: 4, text: officer_text(feed, p.officers) });
+        out.push(ResEntry { name: "officers".into(), id: 4, text: officer_text(p.officers) });
     }
     out
 }
 
 /// The officers readout, "in use/capacity", for every profile. Armada I follows the same form.
 /// Evidence: stated by a player (original at mission start); not measured. Interim.
-pub(super) fn officer_text(_feed: &HudFeed, [used, cap]: [Fixed; 2]) -> String {
+pub(super) fn officer_text([used, cap]: [Fixed; 2]) -> String {
     let whole = |value: Fixed| value.to_bits() / Fixed::ONE.to_bits();
     format!("{}/{}", whole(used), whole(cap))
 }
@@ -2226,7 +2226,7 @@ mod tests {
         let f = feed(db, Vec::new(), &[]);
         assert_eq!(f.view.players[0].officers, [Fixed::from_int(3), Fixed::from_int(10)]);
         assert_eq!(resources(&f, [false; 4], [false; 2]).last().unwrap().text, "3/10");
-        assert_eq!(officer_text(&f, f.view.players[0].officers), "3/10");
+        assert_eq!(officer_text(f.view.players[0].officers), "3/10");
         let mut view = (*f.view).clone();
         view.players[0].officers = [Fixed::from_int(12), Fixed::from_int(10)];
         let f = HudFeed { view: Arc::new(view), ..f };
@@ -2242,10 +2242,10 @@ mod tests {
         for profile in [sta_content::Profile::Fo4, sta_content::Profile::Sta1Classic] {
             let db = ContentDb::builder().profile(profile).build().unwrap();
             let f = feed(db, Vec::new(), &[]);
-            assert_eq!(officer_text(&f, [Fixed::from_int(4), Fixed::from_int(9)]), "4/9");
+            assert_eq!(officer_text([Fixed::from_int(4), Fixed::from_int(9)]), "4/9");
+            assert_eq!(resources(&f, [false; 4], [false; 2]).last().unwrap().text, "3/10");
         }
         let f = feed(sta_content::fake::db(), Vec::new(), &[]);
-        assert_eq!(officer_text(&f, [Fixed::from_int(4), Fixed::from_int(9)]), "4/9");
         assert_eq!(resources(&f, [false; 4], [false; 2]).last().unwrap().text, "3/10");
     }
 
