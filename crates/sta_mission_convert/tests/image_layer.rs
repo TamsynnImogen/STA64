@@ -4,7 +4,7 @@ use sta_mission_convert::fixture::{CODE, DATA, Import, PeBuilder};
 use sta_mission_convert::map::{
     ExpectedSlot, MapFile, Vtables, check_engine, engine_vtables, engine_vtables_from,
 };
-use sta_mission_convert::{DecodeError, FlatImage, Image, Pe};
+use sta_mission_convert::{DecodeError, ErrorKind, FlatImage, Image, Pe};
 
 const BASE: u32 = 0x1000_0000;
 
@@ -75,11 +75,11 @@ fn strings_and_numbers() {
     let outside = pe.cstr(BASE + 0x3000).unwrap_err();
     assert!(outside.message.contains("outside the file"), "{outside}");
     // A fault the Python tools raise as `DecodeError`, which their callers catch.
-    assert!(!outside.raw);
+    assert_eq!(outside.kind, ErrorKind::Decode);
     let f = pe.f32(BASE + 0x3000).unwrap_err();
-    assert!(f.message.contains("outside") && !f.raw);
+    assert!(f.message.contains("outside") && !f.is_raw());
     let d = pe.f64(BASE + 0x3000).unwrap_err();
-    assert!(d.message.contains("outside") && !d.raw);
+    assert!(d.message.contains("outside") && !d.is_raw());
 }
 
 #[test]
@@ -442,4 +442,60 @@ fn engine_directory_lookup_is_case_insensitive() {
         .unwrap();
     assert_eq!(vt["Foo"], ["?a@Foo@@", "?unnamed_1@@", "?unnamed_2@@"]);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_engine_lookup_goes_on_past_io_and_decode_faults_but_not_raw_ones() {
+    let base = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("engine_next_root");
+    let _ = std::fs::remove_dir_all(&base);
+    let map_text = " 0001:00000000 ?a@Foo@@ 00401010 f\n 0002:00000000 ??_7Foo@@6B@ 00402000 \n";
+    let dir = |name: &str| {
+        let d = base.join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    };
+    // 1: missing directory (Io). 2: executable that is not a PE (Decode). 3: a PE with no
+    // code section (Raw, aborts). 4: a good pair.
+    let missing = base.join("missing");
+    let not_pe = dir("not_pe");
+    std::fs::write(not_pe.join("engine.exe"), b"not a pe").unwrap();
+    std::fs::write(not_pe.join("engine.map"), map_text).unwrap();
+    let no_text = dir("no_text");
+    let rdata_only = PeBuilder::new(0x40_0000)
+        .section(".rdata", 0x2000, &[0; 8], DATA)
+        .build()
+        .bytes;
+    std::fs::write(no_text.join("engine.exe"), rdata_only).unwrap();
+    std::fs::write(no_text.join("engine.map"), map_text).unwrap();
+    let good = dir("good");
+    std::fs::write(good.join("engine.exe"), &engine_exe().data).unwrap();
+    std::fs::write(good.join("engine.map"), map_text).unwrap();
+
+    let kind = |d: &std::path::Path| {
+        engine_vtables(d, "engine.exe", "engine.map", &["Foo"])
+            .unwrap_err()
+            .kind
+    };
+    assert_eq!(kind(&missing), ErrorKind::Io);
+    assert_eq!(kind(&not_pe), ErrorKind::Decode);
+    assert_eq!(kind(&no_text), ErrorKind::Raw);
+
+    // The Python loop: `except (OSError, DecodeError)` tries the next root.
+    let lookup = |roots: &[&std::path::Path]| {
+        for r in roots {
+            match engine_vtables(r, "engine.exe", "engine.map", &["Foo"]) {
+                Ok(found) => return Ok(found),
+                Err(e) if e.kind != ErrorKind::Raw => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(None)
+    };
+    let found = lookup(&[&missing, &not_pe, &good]).unwrap().unwrap();
+    assert_eq!(found["Foo"].len(), 3);
+    assert_eq!(
+        lookup(&[&missing, &no_text, &good]).unwrap_err().kind,
+        ErrorKind::Raw
+    );
+    let _ = std::fs::remove_dir_all(&base);
 }

@@ -67,8 +67,8 @@ fn name_budget(len: usize) -> usize {
 
 impl Pe {
     pub fn open(path: &std::path::Path) -> Result<Self> {
-        let data = std::fs::read(path)
-            .map_err(|e| DecodeError::raw(format!("{}: {e}", path.display())))?;
+        let data =
+            std::fs::read(path).map_err(|e| DecodeError::io(format!("{}: {e}", path.display())))?;
         Self::from_bytes(data)
     }
 

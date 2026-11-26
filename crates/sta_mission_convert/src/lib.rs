@@ -19,6 +19,7 @@ pub mod map;
 pub mod pe;
 
 pub use image::{FlatImage, Image, Section};
+
 pub use pe::Pe;
 
 /// A DLL (or a function in it) the converter could not decode; the message says why.
@@ -26,16 +27,30 @@ pub use pe::Pe;
 /// The Python tools raise `DecodeError` for faults about the file's content, which their callers
 /// catch (a function is written as not decoded, the run goes on), and a raw `ValueError`,
 /// `struct.error`, `TypeError` or `StopIteration` for a truncated or malformed structure, which
-/// aborts the run (A2) or fails the mission (A1). Both are a `DecodeError` here; `raw` tells them
-/// apart, so a caller ports the Python `except DecodeError` as "catch it unless `raw`".
+/// aborts the run (A2) or fails the mission (A1); and an `OSError` for a file that cannot be read.
+/// All are a `DecodeError` here, told apart by [`ErrorKind`]:
+/// - a caller ports `except DecodeError` as "catch [`ErrorKind::Decode`]";
+/// - the engine lookup's `except (OSError, DecodeError)` is "catch `Decode` or `Io`" and goes on
+///   to the next root (it must not catch `Raw`, which aborts);
+/// - for a mission DLL the `OSError` of the open is not caught in Python: treat `Io` as fatal there.
 ///
-/// STA64's own limits on crafted tables (see [`pe`]) are raw faults too.
+/// STA64's own limits on crafted tables (see [`pe`]) are `Raw` faults too.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
 pub struct DecodeError {
     pub message: String,
-    /// The Python tool raises something other than `DecodeError` here.
-    pub raw: bool,
+    pub kind: ErrorKind,
+}
+
+/// Which Python exception a fault stands for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorKind {
+    /// Python's `DecodeError`.
+    Decode,
+    /// Python's `OSError`: a file or directory that cannot be opened or listed.
+    Io,
+    /// Python's `ValueError`, `struct.error`, `TypeError` or `StopIteration`.
+    Raw,
 }
 
 impl DecodeError {
@@ -43,7 +58,7 @@ impl DecodeError {
     pub fn new(s: impl Into<String>) -> Self {
         Self {
             message: s.into(),
-            raw: false,
+            kind: ErrorKind::Decode,
         }
     }
 
@@ -51,8 +66,20 @@ impl DecodeError {
     pub fn raw(s: impl Into<String>) -> Self {
         Self {
             message: s.into(),
-            raw: true,
+            kind: ErrorKind::Raw,
         }
+    }
+
+    /// A file or directory that cannot be read (Python `OSError`).
+    pub fn io(s: impl Into<String>) -> Self {
+        Self {
+            message: s.into(),
+            kind: ErrorKind::Io,
+        }
+    }
+
+    pub fn is_raw(&self) -> bool {
+        self.kind == ErrorKind::Raw
     }
 }
 

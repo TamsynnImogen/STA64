@@ -142,7 +142,7 @@ fn a_crafted_import_directory_is_refused() {
     }
     let err = Pe::from_bytes(bytes).unwrap_err();
     assert_eq!(err.message, "import table too large");
-    assert!(err.raw);
+    assert!(err.is_raw());
 }
 
 #[test]
@@ -166,7 +166,7 @@ fn crafted_export_names_that_overlap_are_refused() {
     }
     let err = Pe::from_bytes(bytes).unwrap().exports().unwrap_err();
     assert_eq!(err.message, "export table too large");
-    assert!(err.raw);
+    assert!(err.is_raw());
 }
 
 #[test]
@@ -203,5 +203,5 @@ fn a_vtable_walk_over_aliased_sections_is_bounded_by_the_file() {
     let map = MapFile::parse(" 0002:00000000 ??_7V@@6B@ 00402000 \n");
     let err = engine_vtables_from(&exe, &map, &["V"]).unwrap_err();
     assert_eq!(err.message, "vtable too large");
-    assert!(err.raw);
+    assert!(err.is_raw());
 }

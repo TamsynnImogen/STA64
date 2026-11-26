@@ -82,8 +82,8 @@ impl MapFile {
 
     /// Reads a map file, its bytes as Latin-1 (like the Python tool).
     pub fn open(path: &Path) -> Result<Self> {
-        let bytes = std::fs::read(path)
-            .map_err(|e| DecodeError::raw(format!("{}: {e}", path.display())))?;
+        let bytes =
+            std::fs::read(path).map_err(|e| DecodeError::io(format!("{}: {e}", path.display())))?;
         let text: String = bytes.iter().map(|&c| c as char).collect();
         Ok(Self::parse(&text))
     }
@@ -149,6 +149,10 @@ pub fn engine_vtables_from(exe: &Pe, map: &MapFile, classes: &[&str]) -> Result<
 /// [`engine_vtables_from`] for an Armada II root directory: its executable and `.map` are found
 /// by lower-cased file name (`exe_name`, `map_name`, lower case; a later directory entry that
 /// lowers to the same name replaces an earlier one). `None` when either is missing.
+///
+/// Callers port the Python `except (OSError, DecodeError)` (try the next root, or go on with no
+/// engine names) as "continue on `ErrorKind::Io` and `ErrorKind::Decode`"; `ErrorKind::Raw`
+/// aborts, as the Python's uncaught exceptions do.
 pub fn engine_vtables(
     root: &Path,
     exe_name: &str,
@@ -156,10 +160,10 @@ pub fn engine_vtables(
     classes: &[&str],
 ) -> Result<Option<Vtables>> {
     let mut files = IndexMap::new();
-    let rd = std::fs::read_dir(root)
-        .map_err(|e| DecodeError::raw(format!("{}: {e}", root.display())))?;
+    let rd =
+        std::fs::read_dir(root).map_err(|e| DecodeError::io(format!("{}: {e}", root.display())))?;
     for entry in rd {
-        let entry = entry.map_err(|e| DecodeError::raw(e.to_string()))?;
+        let entry = entry.map_err(|e| DecodeError::io(e.to_string()))?;
         files.insert(
             entry.file_name().to_string_lossy().to_lowercase(),
             entry.path(),
