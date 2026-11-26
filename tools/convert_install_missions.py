@@ -67,9 +67,9 @@ def data_dir(env=None, system=None):
 
 
 def child(d, name):
-    """`d/name` for a folder spelled in any case, or None."""
+    """`d/name` for a folder spelled in any case, or None (of several spellings, the first in code-point order)."""
     try:
-        return next((os.path.join(d, n) for n in os.listdir(d) if n.lower() == name.lower() and os.path.isdir(os.path.join(d, n))), None)
+        return next((os.path.join(d, n) for n in sorted(os.listdir(d)) if n.lower() == name.lower() and os.path.isdir(os.path.join(d, n))), None)
     except OSError:
         return None
 

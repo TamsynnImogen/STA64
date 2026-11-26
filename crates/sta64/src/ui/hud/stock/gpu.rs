@@ -1317,11 +1317,11 @@ fn installed_armada1_resource_readouts_render_on_gpu() {
             .filter_map(|unit| db.unit(unit.def)?.a1_base_officers)
             .map(|base| base.gain).sum();
         let cap = db.a1_starting_officers().expect("officer cap") + base_gain;
-        let available = whole((Fixed::from_int(cap) - player.officers[0]).max(Fixed::ZERO));
+        let in_use = whole(player.officers[0]);
         let expected = [
             (2_usize, start.dilithium.expect("legacy start dilithium").to_string()),
             (0, start.crew.expect("legacy start crew").to_string()),
-            (1, format!("{available}/{cap}")),
+            (1, format!("{in_use}/{cap}")),
         ];
         assert!(expected.iter().all(|(_, v)| !v.is_empty()));
         eprintln!("{label}: expected readouts {expected:?}");

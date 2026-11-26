@@ -403,7 +403,7 @@ pub struct TeamStart {
 /// Values are taken as written: real maps carry very large values and negative crew on some seats, which
 /// a consumer clamps. Not read: text maps, Armada I maps, Star Trek: Legacy maps, and any map where a run
 /// of exactly eight blocks (no block-shaped record right before or after it) is not found exactly once,
-/// for which the answer is empty.
+/// for which the answer is empty. Armada I maps have their own table, read by [`a1::team_starts`].
 pub fn team_starts(data: &[u8]) -> Vec<TeamStart> {
     match team_table(data) {
         TeamTable::Found(t) => t,

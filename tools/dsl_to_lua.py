@@ -2801,6 +2801,7 @@ def map_stems(roots):
     out = {}
     for root in roots:
         for d, dirs, files in os.walk(root):
+            dirs.sort()  # walk order must not depend on the directory listing order
             if os.path.basename(d).lower() != "bzn":
                 continue
             dirs[:] = []

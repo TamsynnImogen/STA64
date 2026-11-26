@@ -23,6 +23,11 @@
 //! pre-load defaults, for newer file versions); the header's `STARTING_BIOMATTER` is not read by that
 //! executable; for Armada II maps the same slot is applied by inference (its executable was not read).
 //!
+//! An Armada I map's own team table gives dilithium, crew and officer limit ([`from_a1_table`]); the install
+//! header's `cfgStartingDilithium`, `cfgStartingCrew` and `cfgMaxOfficers` apply only to a map without a
+//! table ([`StartStock::or_header`]). "A host placed a loadout" asks for a written crew pool or a written
+//! officer limit, never the derived limit: Armada I content derives one for every seat.
+//!
 //! Order: the map's values first, then the script's own writes (it runs after them, so its `Set*`
 //! wins and its `Add*` adds). Grade: that a map's values are in place before the script's init is not
 //! measured in the original and not read from its executable; it is STA64's rule, chosen because the
@@ -53,6 +58,9 @@ pub struct SeatStart {
     pub crew: Option<i32>,
     /// `None` when the table gives 0.
     pub officers: Option<i32>,
+    /// `officers` is the cap shown at the start, including the officer gain of the stations the seat owns
+    /// finished at the start (an Armada I map record): [`queue`] writes it minus those gains as the base.
+    pub officers_include_stations: bool,
 }
 
 const LIMIT: f32 = 1_000_000_000.0;
@@ -68,8 +76,47 @@ pub fn read_start_stock(vfs: &Vfs, bzn: &str) -> StartStock {
     match sta_bzn::team_table(&bytes) {
         sta_bzn::TeamTable::Found(t) => StartStock { seats: from_table(&t), refused: None },
         sta_bzn::TeamTable::Refused(runs) => StartStock { seats: Vec::new(), refused: Some(format!("map team table refused (block runs {runs:?}): no start values")) },
-        sta_bzn::TeamTable::Absent => StartStock::default(),
+        sta_bzn::TeamTable::Absent => match sta_bzn::a1::team_table(&bytes) {
+            sta_bzn::a1::A1StartTable::Found(t) => StartStock { seats: from_a1_table(&t), refused: None },
+            sta_bzn::a1::A1StartTable::Refused => StartStock { seats: Vec::new(), refused: Some("map team table refused (Armada I team block is not the expected shape): no start values".into()) },
+            sta_bzn::a1::A1StartTable::Absent => StartStock::default(),
+        },
     }
+}
+
+/// [`SeatStart`]s of an Armada I map's team table ([`sta_bzn::a1::team_starts`]): team `n + 1` for seat `n`,
+/// dilithium, crew and officer limit only (the other stocks are not in that table). Crew and officer limit
+/// of 0 are not written, as for the other table.
+///
+/// Evidence: read from data. Field meaning (dilithium, crew, officer limit): inferred from data agreement
+/// and one player report (see [`sta_bzn::a1::team_starts`]), interim. Seat `n` = team `n + 1` rests on the
+/// colour table's team order and the converted-mission numbering: not measured.
+///
+/// Interim rule, officer limit: the record is the cap shown at the start. [`queue`] writes the base as the
+/// record minus the officer gains of the gain-giving stations the seat owns finished at the start (the sim's
+/// own derived gains, read from the view), so the cap at the start equals the record; a station finished
+/// later adds its gain on top and a lost station takes it away, as the sim derives for any Armada I seat. A
+/// base that would be negative (the stations' gains exceed the record) is clamped at 0, so the cap is then
+/// the gains alone. The subtraction assumes a race officer multiplier of 1. Grade: read from data, the
+/// reading inferred; not measured in the running original; a player's observation at the start is the only
+/// run-time evidence. Interim.
+// TODO: measure in the original whether a mission's cap at the start is the record or the record plus the starting stations' gains.
+// TODO: the table's maximum dilithium and maximum crew records are not read (what they bound is not established).
+pub fn from_a1_table(table: &[sta_bzn::a1::A1TeamStart]) -> Vec<SeatStart> {
+    table
+        .iter()
+        .enumerate()
+        .map(|(n, t)| SeatStart {
+            seat: PlayerId(n as u8),
+            dilithium: Some(whole(t.dilithium)),
+            latinum: None,
+            metal: None,
+            biomatter: None,
+            crew: Some(whole(t.crew)).filter(|&c| c > 0),
+            officers: Some(t.officers.clamp(0, LIMIT as i32)).filter(|&o| o > 0),
+            officers_include_stations: true,
+        })
+        .collect()
 }
 
 /// What a host read from a mission's map: the seats' start values, or why none were taken.
@@ -94,6 +141,7 @@ pub fn from_table(table: &[sta_bzn::TeamStart]) -> Vec<SeatStart> {
             biomatter: Some(whole(t.biomatter)),
             crew: Some(whole(t.crew)).filter(|&c| c > 0),
             officers: Some(t.officers.clamp(0, LIMIT as i32)).filter(|&o| o > 0),
+            officers_include_stations: false,
         })
         .collect()
 }
@@ -109,7 +157,7 @@ pub fn header_start(rules: &sta_content::Rules, seats: impl IntoIterator<Item = 
     if dilithium.is_none() && crew.is_none() && officers.is_none() {
         return Vec::new();
     }
-    seats.into_iter().map(|seat| SeatStart { seat, dilithium, latinum: None, metal: None, biomatter: None, crew, officers }).collect()
+    seats.into_iter().map(|seat| SeatStart { seat, dilithium, latinum: None, metal: None, biomatter: None, crew, officers, officers_include_stations: false }).collect()
 }
 
 impl StartStock {
@@ -155,15 +203,35 @@ pub(crate) fn queue(ctx: &mut Ctx, start: StartStock) {
         ctx.unsupported(why);
     }
     let mut shown = Vec::new();
-    for seat in start.seats {
+    for mut seat in start.seats {
         let Some(p) = ctx.view.players.iter().find(|p| p.id == seat.seat) else { continue };
-        shown.extend(seat.edits(p.crew.is_some() || p.officers[1] > Fixed::ZERO));
+        let placed = placed_loadout(&ctx.view, p);
+        if seat.officers_include_stations && !placed {
+            seat.officers = seat.officers.map(|record| record.saturating_sub(starting_gains(ctx.content.as_deref(), p)).max(0));
+        }
+        shown.extend(seat.edits(placed));
     }
     show(&mut ctx.view, &shown);
     for e in &shown {
         let _ = ctx.try_push(PlayerId::SCRIPT, CommandKind::Edit(e.clone()));
     }
     ctx.start_view = shown;
+}
+
+/// Whether a host placed a loadout for `p`: a written crew pool or a written officer limit. The derived
+/// limit (`PlayerView::officers`, `SeatView::officer_limit`) is not asked: Armada I content derives one for
+/// every seat, written or not, so it cannot tell a placed loadout from a bare mission seat.
+fn placed_loadout(view: &WorldView, p: &sta_sim::view::PlayerView) -> bool {
+    p.crew.is_some() || view.attrs.seats.iter().any(|s| s.player == p.id && s.officer_base.is_some())
+}
+
+/// The officer gains in `p`'s derived cap while no base is written: the derived cap (Armada I content) less
+/// the header base the sim starts from. 0 for content without the Armada I officer rules.
+fn starting_gains(content: Option<&sta_content::ContentDb>, p: &sta_sim::view::PlayerView) -> i32 {
+    let Some(db) = content.filter(|db| db.a1_officers()) else { return 0 };
+    let baseline = db.a1_starting_officers().unwrap_or(0);
+    let derived = p.officers[1].to_bits() >> 32;
+    i32::try_from(derived).unwrap_or(i32::MAX).saturating_sub(baseline).max(0)
 }
 
 /// What the sim will hold once `edits` are applied, in `view`: the script's first step reads it.
