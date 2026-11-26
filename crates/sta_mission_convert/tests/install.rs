@@ -58,7 +58,6 @@ fn check_install(var: &str) -> Option<PathBuf> {
     }
     assert!(with_imports > 0, "no DLL with imports");
     assert!(with_exports > 0, "no DLL with exports");
-    eprintln!("{var}: {} DLLs parse", dlls.len());
     Some(root)
 }
 

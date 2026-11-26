@@ -73,9 +73,13 @@ fn strings_and_numbers() {
     assert_eq!(pe.dword(BASE + 0x2010), Some(0xDEAD_BEEF));
     assert_eq!(pe.dword(BASE + 0x3000), None);
     let outside = pe.cstr(BASE + 0x3000).unwrap_err();
-    assert!(outside.0.contains("outside the file"), "{outside}");
-    assert!(pe.f32(BASE + 0x3000).unwrap_err().0.contains("outside"));
-    assert!(pe.f64(BASE + 0x3000).unwrap_err().0.contains("outside"));
+    assert!(outside.message.contains("outside the file"), "{outside}");
+    // A fault the Python tools raise as `DecodeError`, which their callers catch.
+    assert!(!outside.raw);
+    let f = pe.f32(BASE + 0x3000).unwrap_err();
+    assert!(f.message.contains("outside") && !f.raw);
+    let d = pe.f64(BASE + 0x3000).unwrap_err();
+    assert!(d.message.contains("outside") && !d.raw);
 }
 
 #[test]
@@ -90,17 +94,17 @@ fn unterminated_and_truncated_reads() {
     .unwrap();
     assert_eq!(
         pe.cstr(BASE + 0x1000).unwrap_err(),
-        DecodeError::new("unterminated string")
+        DecodeError::raw("unterminated string")
     );
     let last = BASE + 0x1000 + 0x1FE;
     assert_eq!(pe.dword(last), None);
     assert_eq!(
         pe.f32(last).unwrap_err(),
-        DecodeError::new("truncated image")
+        DecodeError::raw("truncated image")
     );
     assert_eq!(
         pe.f64(last).unwrap_err(),
-        DecodeError::new("truncated image")
+        DecodeError::raw("truncated image")
     );
     assert_eq!(pe.dword(last - 2), Some(0x7878_7878));
 }
@@ -222,8 +226,16 @@ fn malformed_files() {
     // The header ends inside the section table.
     assert_eq!(
         Pe::from_bytes(good[..0x150].to_vec()).unwrap_err(),
-        DecodeError::new("truncated PE file")
+        DecodeError::raw("truncated PE file")
     );
+    // A file that ends inside the last 16 bytes of the last section header still parses (the
+    // Python tool reads 24 bytes of each header); the flags it does not read are 0.
+    let cut = Pe::from_bytes(good[..0x188 + 40].to_vec()).unwrap();
+    assert_eq!(cut.sections.len(), 3);
+    assert_eq!(cut.sections[2].characteristics, DATA);
+    let cut = Pe::from_bytes(good[..0x188 + 24].to_vec()).unwrap();
+    assert_eq!(cut.sections[2].characteristics, 0);
+    assert!(Pe::from_bytes(good[..0x188 + 23].to_vec()).is_err());
     // The PE offset points past the file.
     let mut bad = good[..0x80].to_vec();
     bad[0x3C..0x40].copy_from_slice(&0x7000u32.to_le_bytes());
@@ -352,7 +364,7 @@ fn vtable_needs_a_text_section() {
     .unwrap();
     assert_eq!(
         engine_vtables_from(&pe, &MapFile::default(), &[]).unwrap_err(),
-        DecodeError::new("no .text section")
+        DecodeError::raw("no .text section")
     );
 }
 

@@ -12,6 +12,7 @@
 //! engine vtable names. Decoding and lifting follow in later steps.
 
 pub mod disasm;
+#[doc(hidden)]
 pub mod fixture;
 pub mod image;
 pub mod map;
@@ -22,16 +23,36 @@ pub use pe::Pe;
 
 /// A DLL (or a function in it) the converter could not decode; the message says why.
 ///
-/// The Python tools raise `DecodeError` for the cases that are about the file's content and
-/// a raw `ValueError`, `struct.error` or `TypeError` for a truncated or malformed structure.
-/// Here every one of them is a `DecodeError` (only malformed files reach them).
+/// The Python tools raise `DecodeError` for faults about the file's content, which their callers
+/// catch (a function is written as not decoded, the run goes on), and a raw `ValueError`,
+/// `struct.error`, `TypeError` or `StopIteration` for a truncated or malformed structure, which
+/// aborts the run (A2) or fails the mission (A1). Both are a `DecodeError` here; `raw` tells them
+/// apart, so a caller ports the Python `except DecodeError` as "catch it unless `raw`".
+///
+/// STA64's own limits on crafted tables (see [`pe`]) are raw faults too.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{0}")]
-pub struct DecodeError(pub String);
+#[error("{message}")]
+pub struct DecodeError {
+    pub message: String,
+    /// The Python tool raises something other than `DecodeError` here.
+    pub raw: bool,
+}
 
 impl DecodeError {
+    /// A fault the Python tools raise as `DecodeError`.
     pub fn new(s: impl Into<String>) -> Self {
-        Self(s.into())
+        Self {
+            message: s.into(),
+            raw: false,
+        }
+    }
+
+    /// A fault the Python tools raise as a raw exception.
+    pub fn raw(s: impl Into<String>) -> Self {
+        Self {
+            message: s.into(),
+            raw: true,
+        }
     }
 }
 

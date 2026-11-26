@@ -25,12 +25,10 @@ fn map_line(line: &str) -> Option<(&str, u32)> {
     let s = line.trim_start_matches(py_space);
     let b = s.as_bytes();
     // `seg:offset`: four hex digits, a colon, eight hex digits (all ASCII).
-    if b.len() < 13 || !s.is_char_boundary(13) {
-        return None;
-    }
-    let head = &s[..13];
-    if !(head[..4].chars().all(lower_hex) && &head[4..5] == ":" && head[5..].chars().all(lower_hex))
-    {
+    // Matched on bytes: a non-ASCII character in the first 13 bytes is simply no match, and when
+    // all 13 are ASCII, `s[13..]` is on a character boundary.
+    let hex = |c: &u8| c.is_ascii_digit() || (b'a'..=b'f').contains(c);
+    if b.len() < 13 || !(b[..4].iter().all(hex) && b[4] == b':' && b[5..13].iter().all(hex)) {
         return None;
     }
     let rest = &s[13..];
@@ -85,7 +83,7 @@ impl MapFile {
     /// Reads a map file, its bytes as Latin-1 (like the Python tool).
     pub fn open(path: &Path) -> Result<Self> {
         let bytes = std::fs::read(path)
-            .map_err(|e| DecodeError::new(format!("{}: {e}", path.display())))?;
+            .map_err(|e| DecodeError::raw(format!("{}: {e}", path.display())))?;
         let text: String = bytes.iter().map(|&c| c as char).collect();
         Ok(Self::parse(&text))
     }
@@ -112,7 +110,10 @@ pub fn engine_vtables_from(exe: &Pe, map: &MapFile, classes: &[&str]) -> Result<
         .iter()
         .find(|s| s.name.starts_with(".text"))
         .map(|s| (exe.base as u64 + s.va as u64, s.vsize as u64))
-        .ok_or_else(|| DecodeError::new("no .text section"))?;
+        .ok_or_else(|| DecodeError::raw("no .text section"))?;
+    // STA64's own limit (the Python tool has none): a vtable has at most one slot per word of
+    // the executable. Crafted sections that alias the same bytes cannot make the walk longer.
+    let max_slots = exe.data.len() / 4;
     let mut out = Vtables::new();
     for cls in classes {
         let Some(vt) = map.address_of(&format!("??_7{cls}@@6B@")) else {
@@ -120,12 +121,15 @@ pub fn engine_vtables_from(exe: &Pe, map: &MapFile, classes: &[&str]) -> Result<
         };
         let mut slots: Vec<String> = Vec::new();
         loop {
-            let at = vt.wrapping_add(4 * slots.len() as u32);
+            if slots.len() >= max_slots {
+                return Err(DecodeError::raw("vtable too large"));
+            }
+            let at = vt.wrapping_add((slots.len() as u32).wrapping_mul(4));
             if !slots.is_empty() && map.names.contains_key(&at) {
                 break; // the next symbol starts
             }
             let word = exe.dword(at).ok_or_else(|| {
-                DecodeError::new(format!("vtable word at {at:#x} outside the file"))
+                DecodeError::raw(format!("vtable word at {at:#x} outside the file"))
             })?;
             if !(text.0 <= word as u64 && (word as u64) < text.0 + text.1) {
                 break;
@@ -153,9 +157,9 @@ pub fn engine_vtables(
 ) -> Result<Option<Vtables>> {
     let mut files = IndexMap::new();
     let rd = std::fs::read_dir(root)
-        .map_err(|e| DecodeError::new(format!("{}: {e}", root.display())))?;
+        .map_err(|e| DecodeError::raw(format!("{}: {e}", root.display())))?;
     for entry in rd {
-        let entry = entry.map_err(|e| DecodeError::new(e.to_string()))?;
+        let entry = entry.map_err(|e| DecodeError::raw(e.to_string()))?;
         files.insert(
             entry.file_name().to_string_lossy().to_lowercase(),
             entry.path(),

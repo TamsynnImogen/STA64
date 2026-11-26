@@ -5,6 +5,7 @@
 //! [`crate::Pe`] is the real one, [`FlatImage`] the fake.
 
 use crate::{DecodeError, Result};
+use indexmap::IndexMap;
 
 /// `IMAGE_SCN_CNT_CODE`: the section holds code.
 pub const SCN_CNT_CODE: u32 = 0x20;
@@ -39,6 +40,10 @@ pub trait Image {
     /// The whole file (or fake image) as bytes.
     fn data(&self) -> &[u8];
     fn sections(&self) -> &[Section];
+    /// Import address table slot (virtual address) to (dll, symbol); ordinals are `#n`.
+    fn imports(&self) -> &IndexMap<u32, (String, String)>;
+    /// Size field of the export data directory (0 when there is none).
+    fn export_size(&self) -> u32;
 
     /// File offset of an RVA, or `None` outside every section's raw data (the first section
     /// that contains it wins).
@@ -78,7 +83,7 @@ pub trait Image {
         let end = rest
             .iter()
             .position(|&c| c == 0)
-            .ok_or_else(|| DecodeError::new("unterminated string"))?;
+            .ok_or_else(|| DecodeError::raw("unterminated string"))?;
         Ok(rest[..end].iter().map(|&c| c as char).collect())
     }
 
@@ -89,7 +94,7 @@ pub trait Image {
         let b = self
             .data()
             .get(o..o + 4)
-            .ok_or_else(|| DecodeError::new("truncated image"))?;
+            .ok_or_else(|| DecodeError::raw("truncated image"))?;
         Ok(f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
 
@@ -100,7 +105,7 @@ pub trait Image {
         let b = self
             .data()
             .get(o..o + 8)
-            .ok_or_else(|| DecodeError::new("truncated image"))?;
+            .ok_or_else(|| DecodeError::raw("truncated image"))?;
         Ok(f64::from_le_bytes(b.try_into().expect("eight bytes")))
     }
 
@@ -119,6 +124,8 @@ pub struct FlatImage {
     pub base: u32,
     pub data: Vec<u8>,
     pub sections: Vec<Section>,
+    pub imports: IndexMap<u32, (String, String)>,
+    pub export_size: u32,
 }
 
 impl FlatImage {
@@ -126,8 +133,19 @@ impl FlatImage {
         Self {
             base,
             data: vec![0; size],
-            sections: Vec::new(),
+            ..Self::default()
         }
+    }
+
+    /// Declares an import: the IAT slot's virtual address, the dll and the symbol.
+    pub fn with_import(mut self, slot: u32, dll: &str, symbol: &str) -> Self {
+        self.imports.insert(slot, (dll.into(), symbol.into()));
+        self
+    }
+
+    pub fn with_export_size(mut self, size: u32) -> Self {
+        self.export_size = size;
+        self
     }
 
     /// Names the range `[va, va + size)` (offsets from the base).
@@ -158,6 +176,12 @@ impl Image for FlatImage {
     }
     fn sections(&self) -> &[Section] {
         &self.sections
+    }
+    fn imports(&self) -> &IndexMap<u32, (String, String)> {
+        &self.imports
+    }
+    fn export_size(&self) -> u32 {
+        self.export_size
     }
     fn off(&self, rva: u32) -> Option<usize> {
         ((rva as usize) < self.data.len()).then_some(rva as usize)
