@@ -11,13 +11,13 @@
 //!
 //! The [`ContentDb`] is not stored (it is not serialisable, and the files
 //! are the player's own): the snapshot keeps its hash and [`Sim::from_snapshot`]
-//! checks the database supplied by the caller. Format 47 can match the same
+//! checks the database supplied by the caller. Format 50 can match the same
 //! content with the Director's Cut rules omitted.
 //! Lineage and packs are informational and never checked.
 //!
 //! Adding a subsystem's state (weapons from SIM-04, say) is one field on
 //! [`Body`], filled in [`Sim::snapshot`] and read back in
-//! [`Sim::from_snapshot`], plus a [`FORMAT_VERSION`] bump. Format 47 loads
+//! [`Sim::from_snapshot`], plus a [`FORMAT_VERSION`] bump. Format 50 loads
 //! with Director's Cut off. Earlier layouts are refused. Format 14 (SIM-28) appended the pending start-helper
 //! lifecycle rows; format 15 (CON-35) is the first with provenance and with
 //! the keyed content digest's hash. Formats 8 to 14, which earlier builds
@@ -75,8 +75,10 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// Format 44 appends completed Armada I starbase officer upgrades.
 /// Format 45 appends cargo routes and holds.
 /// Format 46 stores build queue job identities and the last allocated id.
-/// Only the current format is read.
-pub const FORMAT_VERSION: u16 = 50;
+/// Format 50 is the last without the Director's Cut match option; format 51 appends it
+/// and 50 still loads with it off. Earlier formats are refused.
+pub const FORMAT_VERSION: u16 = 51;
+const PRE_DIRECTORS_CUT_FORMAT: u16 = 50;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
