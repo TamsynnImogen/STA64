@@ -523,7 +523,7 @@ mod tests {
         app.add_plugins((MinimalPlugins, AssetPlugin::default()));
         app.init_asset::<RockMaterial>().init_asset::<Image>().init_resource::<RockMaterials>().init_resource::<ModifiedCount>();
         app.add_systems(PostUpdate, (update.after(TransformSystems::Propagate), count_modified).chain());
-        let camera = app.world_mut().spawn((Camera3d::default(), Transform::default())).id();
+        let camera = app.world_mut().spawn((Camera3d::default(), GlobalTransform::default())).id();
         let light = app.world_mut().spawn((DirectionalLight::default(), GlobalTransform::default())).id();
         let handle = app.world_mut().resource_mut::<Assets<RockMaterial>>().add(RockMaterial { params: RockParams::default(), albedo: None, relief: None });
         app.world_mut().resource_mut::<RockMaterials>().0.insert(("rock".into(), [0; 3], [0; 3]), handle);
@@ -532,7 +532,7 @@ mod tests {
         }
         app.world_mut().resource_mut::<ModifiedCount>().0 = 0;
         for step in 1..=5 {
-            app.world_mut().entity_mut(camera).insert(Transform::from_xyz(40.0 * step as f32, 7.0, -3.0));
+            app.world_mut().entity_mut(camera).insert(GlobalTransform::from(Transform::from_xyz(40.0 * step as f32, 7.0, -3.0)));
             app.update();
         }
         app.update();
