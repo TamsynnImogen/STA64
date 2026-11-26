@@ -64,10 +64,31 @@ class ReferenceScript(unittest.TestCase):
         self.assertIn("repository", r.refuse(os.path.join(repo, "target", "scratch", "ref"), []))
         with tempfile.TemporaryDirectory() as t:
             self.assertIn("install", r.refuse(os.path.join(t, "out"), [t]))
-            self.assertIsNone(r.refuse(os.path.join(t, "out"), []))
             with self.assertRaises(SystemExit) as e:
                 r.main(["--install", t, "--out", os.path.join(repo, "target", "x")])
             self.assertIn("inside the repository", str(e.exception))
+
+    def test_refuses_the_folder_derived_from_the_install_name(self):
+        # `--out` is the parent of an install named like its own slug: the per-install
+        # folder would be the install itself. Nothing may be written into it.
+        import convert_reference as r
+        with tempfile.TemporaryDirectory() as t:
+            inst = os.path.join(t, "armada")
+            os.makedirs(inst)
+            open(os.path.join(inst, "Armada.exe"), "w").close()
+            with self.assertRaises(SystemExit):
+                r.main(["--install", inst, "--out", t])
+            self.assertEqual(os.listdir(inst), ["Armada.exe"])
+
+    def test_missing_install_creates_nothing_and_equal_slugs_stay_apart(self):
+        import convert_reference as r
+        with tempfile.TemporaryDirectory() as t:
+            out = os.path.join(t, "out")
+            with self.assertRaises(SystemExit) as e:
+                r.main(["--install", os.path.join(t, "nope"), "--out", out])
+            self.assertIn("not a folder", str(e.exception))
+            self.assertFalse(os.path.exists(out))
+        self.assertEqual(r.subfolders(["/x/a/Armada", "/x/b/armada", "/x/c/other"]), ["armada", "armada-2", "other"])
 
 
 if __name__ == "__main__":

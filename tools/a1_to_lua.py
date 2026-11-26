@@ -1600,14 +1600,16 @@ def find_missions(root, include_unmapped=False):
     `.bzn` names follow, keyed by their lower-case DLL stem (`federation4`):
     the engine reaches a mission only through the DLL names inside its map
     and the campaign list (`mshell.set`), so these are not campaign missions."""
+    # Names that differ only in case: listing order must not decide, so the lookups
+    # go in code-point order (the last `missions` folder, the first `bzn`, the last file win).
     mdir = None
-    for d in os.listdir(root):
+    for d in sorted(os.listdir(root)):
         if d.lower() == "missions" and os.path.isdir(os.path.join(root, d)):
             mdir = os.path.join(root, d)
-    bdir = next((os.path.join(root, d) for d in os.listdir(root) if d.lower() == "bzn"), None)
+    bdir = next((os.path.join(root, d) for d in sorted(os.listdir(root)) if d.lower() == "bzn"), None)
     if not mdir:
         return []
-    files = {f.lower(): f for f in os.listdir(mdir)}
+    files = {f.lower(): f for f in sorted(os.listdir(mdir))}
     out = []
     pairs = {}
     for f in files:

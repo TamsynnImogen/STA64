@@ -235,11 +235,14 @@ class JoinOrderTests(unittest.TestCase):
         def state(regs, local):
             return {"r": dict(regs), "local": dict(local), "args": [], "fpu": [], "flags": None}
 
-        one = state([("eax", ("const", 1)), ("zzz", ("const", 1)), ("mmm", ("const", 1))], [(8, ("const", 1))])
-        two = state([("aaa", ("const", 1)), ("eax", ("const", 1)), ("zzz", ("const", 1))], [(4, ("const", 1))])
+        # 40 names: a set of them iterates in first-seen order with negligible chance
+        first = [f"r{n:02d}x" for n in range(40, 0, -1)]
+        second = ["extra_a", "extra_b"] + first[::-1][:20]
+        one = state([(k, ("const", 1)) for k in first], [(8 * n, ("const", 1)) for n in range(20, 0, -1)])
+        two = state([(k, ("const", 1)) for k in second], [(4, ("const", 1)), (8, ("const", 1))])
         _, out = drl.merge([([], one), ([], two)])
-        self.assertEqual(list(out["r"]), ["eax", "zzz", "mmm", "aaa"])
-        self.assertEqual(list(out["local"]), [8, 4])
+        self.assertEqual(list(out["r"]), first + ["extra_a", "extra_b"])
+        self.assertEqual(list(out["local"]), [8 * n for n in range(20, 0, -1)] + [4])
 
 
 def synthetic_mission():

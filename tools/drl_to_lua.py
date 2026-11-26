@@ -230,7 +230,8 @@ ENGINE_CLASSES = ("ScriptInterfaceImp", "character", "IIIE", "hot_int", "hot_flo
 
 def engine_vtables(root, classes=ENGINE_CLASSES):
     """{class: [mangled method per vtable slot]} from Armada2.exe + armada2.map."""
-    files = {f.lower(): os.path.join(root, f) for f in os.listdir(root)}
+    # sorted: of names differing only in case the last in code-point order wins
+    files = {f.lower(): os.path.join(root, f) for f in sorted(os.listdir(root))}
     exe, mapf = files.get("armada2.exe"), files.get("armada2.map")
     if not exe or not mapf:
         return None
