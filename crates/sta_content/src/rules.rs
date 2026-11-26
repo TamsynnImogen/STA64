@@ -1570,6 +1570,8 @@ mod legacy_start_tests {
         assert_eq!(w.len(), 3);
     }
 
+    // The literal mirrors the typed-in header text below and its expected parse; it is not meant as pi.
+    #[allow(clippy::approx_constant)]
     #[test]
     fn a1_dogfight_defaults_and_nondefaults_are_typed_and_digested() {
         let (defaults, warnings) = Rules::from_header("");
