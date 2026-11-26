@@ -56,5 +56,19 @@ class KeyAndDir(unittest.TestCase):
             self.assertFalse(c.is_armada1(t))
 
 
+class ReferenceScript(unittest.TestCase):
+    def test_refuses_the_repository_its_build_folders_and_an_install(self):
+        import convert_reference as r
+        repo = str(pathlib.Path(__file__).resolve().parents[1])
+        self.assertIn("repository", r.refuse(os.path.join(repo, "out"), []))
+        self.assertIn("repository", r.refuse(os.path.join(repo, "target", "scratch", "ref"), []))
+        with tempfile.TemporaryDirectory() as t:
+            self.assertIn("install", r.refuse(os.path.join(t, "out"), [t]))
+            self.assertIsNone(r.refuse(os.path.join(t, "out"), []))
+            with self.assertRaises(SystemExit) as e:
+                r.main(["--install", t, "--out", os.path.join(repo, "target", "x")])
+            self.assertIn("inside the repository", str(e.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

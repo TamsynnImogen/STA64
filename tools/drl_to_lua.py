@@ -809,7 +809,8 @@ def merge(incoming):
         return ("conflict",)
 
     for slot in ("r", "local"):
-        keys = set().union(*(s[slot].keys() for s in states))
+        # first-seen order (a set of register names iterates by string hash)
+        keys = dict.fromkeys(k for s in states for k in s[slot])
         out[slot] = {k: pick([s[slot].get(k) for s in states]) for k in keys}
     for slot in ("flags", "fsw", "fcmp", "fret"):
         vals = [s.get(slot) for s in states]

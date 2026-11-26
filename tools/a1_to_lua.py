@@ -387,7 +387,7 @@ class A1Lifter(dsl.Lifter):
         leaders &= seen
         # successors, by walking each block to its end
         succs = {}
-        for b in leaders:
+        for b in sorted(leaders):  # address order: `succs`, then `preds`, keep it
             i = d.at[b]
             first = True
             while True:
@@ -552,7 +552,9 @@ class A1Lifter(dsl.Lifter):
         """Internal calls and tail jumps pass no arguments the lifter could miss:
         the callee must read none (the missions' helpers take none)."""
         d = self.d
-        for x in seen:
+        # address order: the first offending call site is named in the error text
+        # that reaches the output (a set's own order is an interpreter detail)
+        for x in sorted(seen):
             m = re.fullmatch(r"(?:call|jmp)\s+0x([0-9a-f]+)", d.ins[d.at[x]][1])
             if not m:
                 continue
