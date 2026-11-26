@@ -97,9 +97,9 @@ pub fn read_start_stock(vfs: &Vfs, bzn: &str) -> StartStock {
 /// own derived gains, read from the view), so the cap at the start equals the record; a station finished
 /// later adds its gain on top and a lost station takes it away, as the sim derives for any Armada I seat. A
 /// base that would be negative (the stations' gains exceed the record) is clamped at 0, so the cap is then
-/// the gains alone. Grade: the table relation is read from data on the skirmish maps (there the record
-/// equals the header base plus the gains of the placed stations); not measured in the running original; a
-/// player's observation at the start is the only run-time evidence. Interim.
+/// the gains alone. The subtraction assumes a race officer multiplier of 1. Grade: read from data, the
+/// reading inferred; not measured in the running original; a player's observation at the start is the only
+/// run-time evidence. Interim.
 // TODO: measure in the original whether a mission's cap at the start is the record or the record plus the starting stations' gains.
 // TODO: the table's maximum dilithium and maximum crew records are not read (what they bound is not established).
 pub fn from_a1_table(table: &[sta_bzn::a1::A1TeamStart]) -> Vec<SeatStart> {
