@@ -157,7 +157,7 @@ fn a1_first_mission_seat_starts_with_the_maps_crew_and_officer_limit() {
         eprintln!("skipped: set STA64_TEST_A1_INSTALL to an Armada I root");
         return;
     };
-    let (out, _) = convert(&install, Some("fed1"), "fed1_start", false);
+    let (out, _) = convert(&install, None, "first_start", false);
     let mut vfs = Vfs::mount_install(Path::new(&install), None).expect("mount install");
     vfs.push_dir("converted".into(), out).expect("mount the converted missions");
     let book = CampaignBook::load_vfs(&vfs);
@@ -173,13 +173,27 @@ fn a1_first_mission_seat_starts_with_the_maps_crew_and_officer_limit() {
         mission.tick();
     }
     let view = sta_sim::WorldSource::view(mission.sim());
-    let seat = sta_core::PlayerId(0);
-    let (want_crew, want_officers) = (table[0].crew.round() as i32, table[0].officers);
-    assert!(want_crew > 0 && want_officers > 0, "the map gives its first team a crew and an officer limit");
-    assert_eq!(view.player(seat).unwrap().crew, Some(sta_core::Fixed::from_int(want_crew)));
-    let written = view.attrs.seats.iter().find(|s| s.player == seat).and_then(|s| s.officer_base);
-    assert_eq!(written, Some(sta_core::Fixed::from_int(want_officers)), "the written limit is the map's");
-    assert!(view.player(seat).unwrap().officers[1] >= sta_core::Fixed::from_int(want_officers));
+    use sta_core::{Fixed, PlayerId};
+    let first = &table[0];
+    assert!(first.crew > 0.0 && first.officers > 0, "else the test cannot prove anything for the human seat");
+    // Every seat that owns a unit at the start, with a non-zero table value, holds exactly that value
+    // (the table's value is the written base; the shown limit adds the starting starbases' gain on top).
+    let mut occupied: Vec<u8> = view.units.iter().map(|u| u.owner.0).filter(|&o| usize::from(o) < table.len()).collect();
+    occupied.sort_unstable();
+    occupied.dedup();
+    assert!(occupied.contains(&0), "the human seat owns units");
+    for s in occupied {
+        let (t, seat) = (&table[usize::from(s)], PlayerId(s));
+        let p = view.player(seat).unwrap();
+        let written = view.attrs.seats.iter().find(|a| a.player == seat).and_then(|a| a.officer_base);
+        if t.crew > 0.0 {
+            assert_eq!(p.crew, Some(Fixed::from_int(t.crew.round() as i32)), "seat {s} crew");
+        }
+        if t.officers > 0 {
+            assert_eq!(written, Some(Fixed::from_int(t.officers)), "seat {s} officer base");
+            assert!(p.officers[1] >= Fixed::from_int(t.officers), "seat {s} shown limit");
+        }
+    }
 }
 
 /// Mission 1 (`fed1`) on its own map in the campaign runner, headless, with
