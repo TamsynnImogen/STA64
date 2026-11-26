@@ -148,6 +148,54 @@ fn every_converted_a1_mission_loads_and_runs() {
     }
 }
 
+/// The first mission of the first campaign, launched through the campaign host path with Armada I content:
+/// its human seat has a crew pool and an officer limit equal to what the map's team table gives team 1
+/// (read from the install at run time; no value is in this source).
+#[test]
+fn a1_first_mission_seat_starts_with_the_maps_crew_and_officer_limit() {
+    let Ok(install) = std::env::var("STA64_TEST_A1_INSTALL") else {
+        eprintln!("skipped: set STA64_TEST_A1_INSTALL to an Armada I root");
+        return;
+    };
+    let (out, _) = convert(&install, None, "first_start", false);
+    let mut vfs = Vfs::mount_install(Path::new(&install), None).expect("mount install");
+    vfs.push_dir("converted".into(), out).expect("mount the converted missions");
+    let book = CampaignBook::load_vfs(&vfs);
+    let campaign = book.campaigns.iter().find(|c| !c.missions.is_empty()).expect("a campaign");
+    let (id, bzn) = (campaign.id.clone(), campaign.missions[0].bzn.clone());
+    let bytes = vfs.read(&format!("bzn/{bzn}")).expect("the first mission's map").expect("readable");
+    let table = sta_bzn::a1::team_starts(&bytes);
+    assert_eq!(table.len(), 8, "the map's team table is read");
+    let host = VfsHost::load(Arc::new(vfs)).expect("installed content loads");
+    let mut runner = CampaignRunner::new(book);
+    let mission = runner.start(&host, &id, 0, 7).expect("the first mission starts");
+    for _ in 0..3 {
+        mission.tick();
+    }
+    let view = sta_sim::WorldSource::view(mission.sim());
+    use sta_core::{Fixed, PlayerId};
+    let first = &table[0];
+    assert!(first.crew > 0.0 && first.officers > 0, "else the test cannot prove anything for the human seat");
+    // Every seat that owns a unit at the start, with a non-zero table value, holds exactly that value
+    // (the table's value is the written base; the shown limit adds the starting starbases' gain on top).
+    let mut occupied: Vec<u8> = view.units.iter().map(|u| u.owner.0).filter(|&o| usize::from(o) < table.len()).collect();
+    occupied.sort_unstable();
+    occupied.dedup();
+    assert!(occupied.contains(&0), "the human seat owns units");
+    for s in occupied {
+        let (t, seat) = (&table[usize::from(s)], PlayerId(s));
+        let p = view.player(seat).unwrap();
+        let written = view.attrs.seats.iter().find(|a| a.player == seat).and_then(|a| a.officer_base);
+        if t.crew > 0.0 {
+            assert_eq!(p.crew, Some(Fixed::from_int(t.crew as i32)), "seat {s} crew");
+        }
+        if t.officers > 0 {
+            assert_eq!(written, Some(Fixed::from_int(t.officers)), "seat {s} officer base");
+            assert!(p.officers[1] >= Fixed::from_int(t.officers), "seat {s} shown limit");
+        }
+    }
+}
+
 /// Mission 1 (`fed1`) on its own map in the campaign runner, headless, with
 /// the stand-in host reporting sounds and movies after their file lengths.
 #[test]
