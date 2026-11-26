@@ -148,6 +148,40 @@ fn every_converted_a1_mission_loads_and_runs() {
     }
 }
 
+/// The first mission of the first campaign, launched through the campaign host path with Armada I content:
+/// its human seat has a crew pool and an officer limit equal to what the map's team table gives team 1
+/// (read from the install at run time; no value is in this source).
+#[test]
+fn a1_first_mission_seat_starts_with_the_maps_crew_and_officer_limit() {
+    let Ok(install) = std::env::var("STA64_TEST_A1_INSTALL") else {
+        eprintln!("skipped: set STA64_TEST_A1_INSTALL to an Armada I root");
+        return;
+    };
+    let (out, _) = convert(&install, Some("fed1"), "fed1_start", false);
+    let mut vfs = Vfs::mount_install(Path::new(&install), None).expect("mount install");
+    vfs.push_dir("converted".into(), out).expect("mount the converted missions");
+    let book = CampaignBook::load_vfs(&vfs);
+    let campaign = book.campaigns.iter().find(|c| !c.missions.is_empty()).expect("a campaign");
+    let (id, bzn) = (campaign.id.clone(), campaign.missions[0].bzn.clone());
+    let bytes = vfs.read(&format!("bzn/{bzn}")).expect("the first mission's map").expect("readable");
+    let table = sta_bzn::a1::team_starts(&bytes);
+    assert_eq!(table.len(), 8, "the map's team table is read");
+    let host = VfsHost::load(Arc::new(vfs)).expect("installed content loads");
+    let mut runner = CampaignRunner::new(book);
+    let mission = runner.start(&host, &id, 0, 7).expect("the first mission starts");
+    for _ in 0..3 {
+        mission.tick();
+    }
+    let view = sta_sim::WorldSource::view(mission.sim());
+    let seat = sta_core::PlayerId(0);
+    let (want_crew, want_officers) = (table[0].crew.round() as i32, table[0].officers);
+    assert!(want_crew > 0 && want_officers > 0, "the map gives its first team a crew and an officer limit");
+    assert_eq!(view.player(seat).unwrap().crew, Some(sta_core::Fixed::from_int(want_crew)));
+    let written = view.attrs.seats.iter().find(|s| s.player == seat).and_then(|s| s.officer_base);
+    assert_eq!(written, Some(sta_core::Fixed::from_int(want_officers)), "the written limit is the map's");
+    assert!(view.player(seat).unwrap().officers[1] >= sta_core::Fixed::from_int(want_officers));
+}
+
 /// Mission 1 (`fed1`) on its own map in the campaign runner, headless, with
 /// the stand-in host reporting sounds and movies after their file lengths.
 #[test]

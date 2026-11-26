@@ -226,6 +226,50 @@ fn team_colour_block(recs: &[Rec<'_>], mission_at: usize) -> Vec<[u32; 2]> {
     block.chunks_exact(SHAPE.len()).map(|b| [word(&b[5]), word(&b[6])]).collect()
 }
 
+/// What one team of an Armada I map starts with, read from the map's team table.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct A1TeamStart {
+    pub dilithium: f32,
+    /// The team's crew stock.
+    pub crew: f32,
+    /// The team's officer limit.
+    pub officers: i32,
+}
+
+/// The start values of an Armada I map's team table: one entry per team 1 to 8 (index `n` is team `n + 1`;
+/// block 0, the neutral team, is not returned). Empty when the map is not an Armada I binary map or its team
+/// block does not have the nine-block shape of [`team_colour_block`].
+///
+/// Per block the seven records are start dilithium (f32), maximum dilithium (f32, not read), officer limit
+/// (i32), start crew (f32), maximum crew (f32, not read), then the two colour entries. Evidence: read from
+/// data. The meaning of the three read records is inferred (not read from the executable) from value
+/// agreement with the install header keys `cfgStartingDilithium`, `cfgMaxOfficers` and `cfgStartingCrew`
+/// across several maps, from the records varying per team the way start values do, and from one player
+/// report of a mission start. Interim for the officer limit and the crew.
+pub fn team_starts(data: &[u8]) -> Vec<A1TeamStart> {
+    let Ok(header) = super::inspect_header(data) else { return Vec::new() };
+    if !header.binary_save {
+        return Vec::new();
+    }
+    let Ok(recs) = records(data, header.metadata_offset) else { return Vec::new() };
+    let mut markers = recs.windows(5).enumerate().filter(|(_, w)| mission(w));
+    let (Some((mission_at, _)), None) = (markers.next(), markers.next()) else { return Vec::new() };
+    start_block(&recs, mission_at)
+}
+
+/// [`team_starts`] of the records before the mission descriptor at `mission_at`.
+fn start_block(recs: &[Rec<'_>], mission_at: usize) -> Vec<A1TeamStart> {
+    const SHAPE: [u32; 7] = [5, 5, 4, 5, 5, 4, 4];
+    let Some(start) = mission_at.checked_sub(9 * SHAPE.len()) else { return Vec::new() };
+    let block = &recs[start..mission_at];
+    if !block.iter().enumerate().all(|(i, r)| is(r, SHAPE[i % SHAPE.len()], 4)) {
+        return Vec::new();
+    }
+    let f = |r: &Rec<'_>| f32::from_le_bytes(r.data.try_into().unwrap());
+    let i = |r: &Rec<'_>| i32::from_le_bytes(r.data.try_into().unwrap());
+    block.chunks_exact(SHAPE.len()).skip(1).map(|b| A1TeamStart { dilithium: f(&b[0]), officers: i(&b[2]), crew: f(&b[3]) }).collect()
+}
+
 fn mission(recs: &[Rec<'_>]) -> bool {
     is(&recs[0], 2, 40) && is(&recs[1], 8, 4) && is(&recs[2], 2, 64) && is(&recs[3], 2, 64) && is(&recs[4], 0, 64)
 }
@@ -460,6 +504,24 @@ mod team_colour_tests {
     fn nine_blocks_before_the_mission_are_read() {
         let colours: Vec<[u32; 2]> = (0..9).map(|n| [n + 10, n]).collect();
         assert_eq!(read(&block(&colours)), colours);
+    }
+
+    #[test]
+    fn start_values_come_from_records_one_three_and_four_of_teams_one_to_eight() {
+        // Own-authored numbers; block 0 (neutral) is skipped, so index n is team n + 1.
+        let owned: Vec<(u32, Vec<u8>)> = (0..9u32)
+            .flat_map(|n| {
+                let f = |v: f32| (5, v.to_le_bytes().to_vec());
+                [f(n as f32 * 10.0 + 1.0), f(2.0), rec(4, n * 100 + 7), f(n as f32 * 1000.0 + 3.0), f(5.0), rec(4, 0), rec(4, 0)]
+            })
+            .collect();
+        let recs: Vec<Rec<'_>> = owned.iter().map(|(k, d)| Rec { kind: *k, data: d }).collect();
+        let got = start_block(&recs, recs.len());
+        assert_eq!(got.len(), 8);
+        assert_eq!(got[0], A1TeamStart { dilithium: 11.0, crew: 1003.0, officers: 107 });
+        assert_eq!(got[7], A1TeamStart { dilithium: 81.0, crew: 8003.0, officers: 807 });
+        assert!(start_block(&recs[..recs.len() - 1], recs.len() - 1).is_empty(), "a short table");
+        assert!(team_starts(b"not a map").is_empty());
     }
 
     #[test]

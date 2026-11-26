@@ -23,6 +23,11 @@
 //! pre-load defaults, for newer file versions); the header's `STARTING_BIOMATTER` is not read by that
 //! executable; for Armada II maps the same slot is applied by inference (its executable was not read).
 //!
+//! An Armada I map's own team table gives dilithium, crew and officer limit ([`from_a1_table`]); the install
+//! header's `cfgStartingDilithium`, `cfgStartingCrew` and `cfgMaxOfficers` apply only to a map without a
+//! table ([`StartStock::or_header`]). "A host placed a loadout" asks for a written crew pool or a written
+//! officer limit, never the derived limit: Armada I content derives one for every seat.
+//!
 //! Order: the map's values first, then the script's own writes (it runs after them, so its `Set*`
 //! wins and its `Add*` adds). Grade: that a map's values are in place before the script's init is not
 //! measured in the original and not read from its executable; it is STA64's rule, chosen because the
@@ -68,8 +73,33 @@ pub fn read_start_stock(vfs: &Vfs, bzn: &str) -> StartStock {
     match sta_bzn::team_table(&bytes) {
         sta_bzn::TeamTable::Found(t) => StartStock { seats: from_table(&t), refused: None },
         sta_bzn::TeamTable::Refused(runs) => StartStock { seats: Vec::new(), refused: Some(format!("map team table refused (block runs {runs:?}): no start values")) },
-        sta_bzn::TeamTable::Absent => StartStock::default(),
+        sta_bzn::TeamTable::Absent => StartStock { seats: from_a1_table(&sta_bzn::a1::team_starts(&bytes)), refused: None },
     }
+}
+
+/// [`SeatStart`]s of an Armada I map's team table ([`sta_bzn::a1::team_starts`]): team `n + 1` for seat `n`,
+/// dilithium, crew and officer limit only (the other stocks are not in that table). Crew and officer limit
+/// of 0 are not written, as for the other table.
+///
+/// Evidence: read from data. Field meaning for the officer limit and the crew: inferred from data
+/// agreement and one player report (see [`sta_bzn::a1::team_starts`]), interim. Seat `n` = team `n + 1` rests on the colour table's team
+/// order and the converted-mission numbering: not measured. Whether the original adds a starbase's officer
+/// gain to the written limit at the start: not measured, STA64 does (the sim derives it on top).
+// TODO: the table's maximum dilithium and maximum crew records are not read (what they bound is not established).
+pub fn from_a1_table(table: &[sta_bzn::a1::A1TeamStart]) -> Vec<SeatStart> {
+    table
+        .iter()
+        .enumerate()
+        .map(|(n, t)| SeatStart {
+            seat: PlayerId(n as u8),
+            dilithium: Some(whole(t.dilithium)),
+            latinum: None,
+            metal: None,
+            biomatter: None,
+            crew: Some(whole(t.crew)).filter(|&c| c > 0),
+            officers: Some(t.officers.clamp(0, LIMIT as i32)).filter(|&o| o > 0),
+        })
+        .collect()
 }
 
 /// What a host read from a mission's map: the seats' start values, or why none were taken.
@@ -157,13 +187,20 @@ pub(crate) fn queue(ctx: &mut Ctx, start: StartStock) {
     let mut shown = Vec::new();
     for seat in start.seats {
         let Some(p) = ctx.view.players.iter().find(|p| p.id == seat.seat) else { continue };
-        shown.extend(seat.edits(p.crew.is_some() || p.officers[1] > Fixed::ZERO));
+        shown.extend(seat.edits(placed_loadout(&ctx.view, p)));
     }
     show(&mut ctx.view, &shown);
     for e in &shown {
         let _ = ctx.try_push(PlayerId::SCRIPT, CommandKind::Edit(e.clone()));
     }
     ctx.start_view = shown;
+}
+
+/// Whether a host placed a loadout for `p`: a written crew pool or a written officer limit. The derived
+/// limit (`PlayerView::officers`, `SeatView::officer_limit`) is not asked: Armada I content derives one for
+/// every seat, written or not, so it cannot tell a placed loadout from a bare mission seat.
+fn placed_loadout(view: &WorldView, p: &sta_sim::view::PlayerView) -> bool {
+    p.crew.is_some() || view.attrs.seats.iter().any(|s| s.player == p.id && s.officer_base.is_some())
 }
 
 /// What the sim will hold once `edits` are applied, in `view`: the script's first step reads it.
