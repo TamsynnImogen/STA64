@@ -286,10 +286,64 @@ pub(crate) fn parity() -> bool {
     }
 }
 
-/// The adoption and release observers and the looks' table (in [`SpriteMaterialPlugin`]; tests
-/// without rendering add them on their own).
+/// Nodes whose parity mark (S5) waits for visibility: `animate` lists a node in `Update` in each frame
+/// its state changed under `main`'s rule, and [`mark_seen_changes`] in `PostUpdate` marks the ones some
+/// view sees and empties the list.
+#[derive(Resource, Default, Debug)]
+pub(crate) struct ParityMarks(Vec<Entity>);
+
+impl ParityMarks {
+    pub(crate) fn push(&mut self, node: Entity) {
+        self.0.push(node);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+/// Parity mode (S5, as amended: the mark is for nodes a view sees). Marks the material component of
+/// each listed node that is visible in at least one view this frame, as `main` marks every node whose
+/// state changed. A node that no view sees is in no phase, so whether it is marked changes no view's
+/// phase; a node that comes into view is queued as newly visible (Bevy's `iter_to_queue`, bevy_render
+/// 0.20.1 `camera.rs`), first and once, with or without the mark.
+///
+/// Order (bevy_camera, bevy_light, bevy_mesh and bevy_pbr 0.20.1): after
+/// `MarkNewlyHiddenEntitiesInvisible`, which follows every writer of [`ViewVisibility`] (the cameras'
+/// `CheckVisibility` and the lights' shadow-view checks), so a node seen by any view has its final
+/// flag; and before `mark_3d_meshes_as_changed_if_their_assets_changed`, which both
+/// `check_entities_needing_specialization` and Bevy's private system that turns a changed material
+/// into a changed `Mesh3d` run after. The mark then reaches specialisation, queueing and mesh
+/// re-extraction in the frame `animate` wrote the state, as it does on `main`, not a frame later.
+pub(crate) fn mark_seen_changes(
+    mut marks: ResMut<ParityMarks>,
+    seen: Query<&ViewVisibility>,
+    mut looks: Query<&mut MeshMaterial3d<SpriteMaterial>>,
+) {
+    for node in marks.0.drain(..) {
+        if seen.get(node).is_ok_and(|v| v.get())
+            && let Ok(mut m) = looks.get_mut(node)
+        {
+            m.set_changed();
+        }
+    }
+}
+
+/// The adoption and release observers, the looks' table and the parity mark (in
+/// [`SpriteMaterialPlugin`]; tests without rendering add them on their own).
 pub(crate) fn adoption(app: &mut App) {
-    app.init_resource::<SpriteLooks>().add_observer(adopt).add_observer(release);
+    use bevy::camera::visibility::VisibilitySystems;
+    app.init_resource::<SpriteLooks>()
+        .init_resource::<ParityMarks>()
+        .add_observer(adopt)
+        .add_observer(release)
+        .add_systems(
+            PostUpdate,
+            mark_seen_changes
+                .after(VisibilitySystems::MarkNewlyHiddenEntitiesInvisible)
+                .before(bevy::mesh::mark_3d_meshes_as_changed_if_their_assets_changed),
+        );
 }
 
 /// Put a new sprite node on the material path: a slot written with the colour its own material was

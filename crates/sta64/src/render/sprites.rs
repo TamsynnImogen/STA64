@@ -213,7 +213,9 @@ fn settled(s: &material::SpriteState) -> bool {
 /// An adopted node (ADR 0009) keeps `main`'s rule, only while shown and only on change, with its
 /// colour going to its slot and its uv to its look's shared material (written at most once per look
 /// and frame, as every shown node of a look has the same uv); with parity mode (S5) its material
-/// component is marked changed whenever its own material would have been written on `main`. A node
+/// component is marked changed whenever its own material would have been written on `main`, in
+/// `PostUpdate` after visibility and only if some view sees the node ([`material::mark_seen_changes`]).
+/// A node
 /// that is not adopted (an app without rendering) has its own material written, as on `main`.
 ///
 /// A look's uv write re-queues every node drawn through it. For a node drawn in the frame before,
@@ -256,8 +258,10 @@ pub fn animate(
         Option<&mut material::SpriteState>,
         Option<&mut MeshMaterial3d<material::SpriteMaterial>>,
         &mut SpriteKeys,
+        Entity,
     )>,
     flip: Query<&UvFlipbook>,
+    mut marks: Option<ResMut<material::ParityMarks>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut looks: Option<ResMut<Assets<material::SpriteMaterial>>>,
     slots: Option<Res<material::SpriteSlots>>,
@@ -271,7 +275,7 @@ pub fn animate(
     let all = tables.is_changed();
     played.refresh(table, t, all);
     writes.clear();
-    for (f, fade, nimbus, mut vis, state, mut drawn, mut keys) in &mut fx {
+    for (f, fade, nimbus, mut vis, state, mut drawn, mut keys, node) in &mut fx {
         let resolved = keys.keys.filter(|_| !f.is_changed() && keys.generation == played.generation);
         let (anim, sprite) = match resolved {
             Some(k) => k,
@@ -357,7 +361,11 @@ pub fn animate(
                     // uv, which has not changed; from now on the look shows it (written above).
                     d.0 = st.look.clone();
                 } else if parity {
-                    d.set_changed();
+                    match marks.as_mut() {
+                        // Marked after visibility, for nodes a view sees (S5 as amended).
+                        Some(marks) => marks.push(node),
+                        None => d.set_changed(),
+                    }
                 }
             }
         }
