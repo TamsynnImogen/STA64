@@ -528,3 +528,45 @@ fn a_scene_without_a_map_takes_no_ambient_under_the_armada_one_rule() {
         assert!((params_of(&app, part).amb.truncate() - want).abs().max_element() < 1e-5, "{profile:?} map view {map_view}");
     }
 }
+
+/// Counts the changed-material events of one asset type (#1251).
+#[derive(Resource, Default)]
+struct ModifiedCount(usize);
+
+fn count_modified(mut events: MessageReader<AssetEvent<HullMaterial>>, mut count: ResMut<ModifiedCount>) {
+    count.0 += events.read().filter(|e| matches!(e, AssetEvent::Modified { .. })).count();
+}
+
+/// Moving the camera rewrites no hull material: the shader reads the eye from the view being drawn (#1251),
+/// so a camera move no longer marks every hull material changed and re-prepared on the render thread.
+/// The control is a light change, which still rewrites them (so the counter does count).
+#[test]
+fn moving_the_camera_changes_no_hull_material() {
+    let mut app = App::new();
+    app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+    app.init_asset::<StandardMaterial>().init_asset::<HullMaterial>().init_asset::<Image>();
+    app.init_resource::<HullMaterials>().init_resource::<HullView>().init_resource::<HullLighting>().init_resource::<ModifiedCount>();
+    app.add_systems(Update, (update_view, apply.in_set(HullApply), follow_source).chain());
+    app.add_systems(PostUpdate, count_modified);
+    let camera = app.world_mut().spawn((Camera3d::default(), GlobalTransform::default())).id();
+    let light = app.world_mut().spawn((DirectionalLight::default(), GlobalTransform::default())).id();
+    let base = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial::default());
+    for _ in 0..3 {
+        app.world_mut().spawn((HullPart::default(), MeshMaterial3d(base.clone())));
+    }
+    for _ in 0..4 {
+        app.update();
+    }
+    assert_eq!(app.world().resource::<Assets<HullMaterial>>().len(), 1, "the parts share one material");
+    app.world_mut().resource_mut::<ModifiedCount>().0 = 0;
+    for step in 1..=5 {
+        app.world_mut().entity_mut(camera).insert(GlobalTransform::from(Transform::from_xyz(40.0 * step as f32, 7.0, -3.0)));
+        app.update();
+    }
+    app.update();
+    assert_eq!(app.world().resource::<ModifiedCount>().0, 0, "a camera move marked a hull material changed");
+    app.world_mut().entity_mut(light).insert(GlobalTransform::from(Transform::from_xyz(1.0, 2.0, 3.0).looking_at(Vec3::ZERO, Vec3::Y)));
+    app.update();
+    app.update();
+    assert!(app.world().resource::<ModifiedCount>().0 > 0, "a light change should still rewrite the materials");
+}

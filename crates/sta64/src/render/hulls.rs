@@ -18,8 +18,10 @@
 //! bump-mapped.
 //!
 //! The lights are the scene's directional lights, brightest first (the Key at full
-//! colour, the others scaled by their illuminance over the Key's, as `rock.rs` does), the
-//! eye the main camera; both are written into the hull materials only when they change.
+//! colour, the others scaled by their illuminance over the Key's, as `rock.rs` does), written
+//! into the hull materials only when they change. The eye is not a material value: the shader reads
+//! the world position of the view being drawn from Bevy's view uniform, so a camera move rewrites
+//! no material (#1251).
 
 use std::collections::HashMap;
 
@@ -87,7 +89,6 @@ pub struct HullParams {
     pub tint: Vec4,
     pub misc: Vec4,
     pub rim: Vec4,
-    pub eye: Vec4,
     pub cut: Vec4,
     pub uv: Vec4,
     pub dvec: [Vec4; DIRS],
@@ -204,10 +205,9 @@ impl Material for HullMaterial {
     }
 }
 
-/// The scene's lights and eye, as the shader takes them.
+/// The scene's lights, as the shader takes them.
 #[derive(Resource, Clone, Debug, Default, PartialEq)]
 pub struct HullView {
-    eye: Vec4,
     dvec: [Vec4; DIRS],
     dcol: [Vec4; DIRS],
     /// The Stock look's lights: towards each, and the colour as the light's own
@@ -244,7 +244,6 @@ impl HullView {
         if p.mamb.w > 0.5 {
             p.amb = self.ambient.extend(p.amb.w);
         }
-        p.eye = self.eye;
         let stock = p.mamb.w > 0.5;
         p.dvec = if stock { self.sdvec } else { self.dvec };
         p.dcol = if stock { self.sdcol } else { self.dcol };
@@ -342,10 +341,9 @@ pub fn stock_light_set<'a>(lights: impl Iterator<Item = (&'a GlobalTransform, &'
     lights.filter(|(_, _, s)| !own || s.is_some_and(|s| s.0)).map(|(t, l, _)| (t.back().as_vec3(), l)).collect()
 }
 
-/// Each frame: the eye and the lights, written into the materials when they changed.
+/// Each frame: the lights, written into the materials when they changed.
 #[allow(clippy::too_many_arguments)]
 fn update_view(
-    camera: Query<&GlobalTransform, crate::map::MainCamera>,
     sun: Query<(&GlobalTransform, &DirectionalLight, Option<&crate::map::MapLightSource>)>,
     ambient: Option<Res<GlobalAmbientLight>>,
     profile: Option<Res<crate::render::profile::RenderProfile>>,
@@ -360,7 +358,6 @@ fn update_view(
     if switches.is_some_and(|s| s.freeze_hull_materials) {
         return;
     }
-    let Ok(cam) = camera.single() else { return };
     let (dvec, dcol, _) = lights(sun.iter().map(|(t, l, _)| {
         let c = l.color.to_linear();
         (t.back().as_vec3(), Vec3::new(c.red, c.green, c.blue), l.illuminance, Vec3::ZERO)
@@ -383,9 +380,8 @@ fn update_view(
         let c = a.color.to_srgba();
         Vec3::new(c.red, c.green, c.blue)
     });
-    let now = HullView { eye: cam.translation().extend(1.0), dvec, dcol, sdvec, sdcol, stock, ambient: amb, armada_one, ..view.clone() };
-    let moved = (now.eye - view.eye).length_squared() > 1e-4;
-    if !moved && now.dvec == view.dvec && now.dcol == view.dcol && now.sdvec == view.sdvec && now.sdcol == view.sdcol && now.stock == view.stock && now.armada_one == view.armada_one && now.ambient == view.ambient {
+    let now = HullView { dvec, dcol, sdvec, sdcol, stock, ambient: amb, armada_one, ..view.clone() };
+    if now.dvec == view.dvec && now.dcol == view.dcol && now.sdvec == view.sdvec && now.sdcol == view.sdcol && now.stock == view.stock && now.armada_one == view.armada_one && now.ambient == view.ambient {
         return;
     }
     let switched = now.stock != view.stock || now.armada_one != view.armada_one;
@@ -765,7 +761,9 @@ mod tests {
     fn hull_shader_validates() {
         let src = include_str!("hulls.wesl")
             .replace("constants::MATERIAL_BIND_GROUP", "3")
-            .replace("@if(EMISSIVE_MASK)", "");
+            .replace("@if(EMISSIVE_MASK)", "")
+            // The view comes from Bevy's own shader library: a stub stands in for it.
+            .replace("import bevy_pbr::render::mesh_view_bindings::view;", "struct ViewStub { world_position: vec3<f32> }\nvar<private> view: ViewStub;");
         let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)
@@ -1059,7 +1057,8 @@ mod gpu {
         capture(&mut app, &target, "hull");
 
         let frames = FRAMES.lock().unwrap().clone();
-        let (pbr, hull) = (&frames[0].1, &frames[1].1);
+        let named = |n: &str| &frames.iter().find(|f| f.0 == n).unwrap_or_else(|| panic!("no frame {n}")).1;
+        let (pbr, hull) = (named("pbr"), named("hull"));
         save("pbr", pbr);
         save("hull", hull);
         let (diff, la, lb, na, nb, mism) = compare(pbr, hull);
@@ -1419,6 +1418,103 @@ mod gpu {
         assert!(errors.is_empty(), "shader/pipeline ERROR events:\n{}", errors.join("\n"));
     }
 
+    /// #1251: a lit hull's eye-dependent terms (highlight, rim) follow the camera of the view being drawn,
+    /// not the map's main camera. Two cameras draw one hull into two targets; the second one is an
+    /// action-view style camera (not the main camera). Its frame must equal the frame the main camera draws
+    /// from the same pose, and differ from the main camera's frame from its own place.
+    #[test]
+    fn a_lit_hull_follows_the_camera_of_the_view_being_drawn() {
+        if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+            eprintln!("SKIP: set STA64_GPU_TESTS=1 to run the GPU shader test");
+            return;
+        }
+        let _serial = crate::bench::frames::gpu_serial();
+        let mut app = App::new();
+        app.add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin { primary_window: None, exit_condition: ExitCondition::DontExit, ..default() })
+                .set(RenderPlugin { synchronous_pipeline_compilation: true, ..default() })
+                .disable::<LogPlugin>()
+                .disable::<bevy::winit::WinitPlugin>(),
+        );
+        app.add_plugins((HullPlugin, crate::render::fx::quad::FxQuadPlugin));
+        app.insert_resource(ClearColor(Color::srgb(0.01, 0.01, 0.025)));
+        app.insert_resource(GlobalAmbientLight { color: Color::WHITE, brightness: 60.0, ..default() });
+        let target = |app: &mut App| {
+            let mut img = Image::new_target_texture(SIZE, SIZE, TextureFormat::Rgba8UnormSrgb, None);
+            img.asset_usage = RenderAssetUsages::RENDER_WORLD;
+            app.world_mut().resource_mut::<Assets<Image>>().add(img)
+        };
+        let (main_target, view_target) = (target(&mut app), target(&mut app));
+        let texture = app.world_mut().resource_mut::<Assets<Image>>().add(checker());
+        let sphere = app.world_mut().resource_mut::<Assets<Mesh>>().add(Sphere::new(1.0).mesh().uv(32, 18));
+        app.world_mut().spawn((DirectionalLight { illuminance: 6000.0, ..default() }, Transform::from_xyz(3.0, 5.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y)));
+        app.world_mut().spawn((DirectionalLight { illuminance: 1500.0, ..default() }, Transform::from_xyz(-4.0, -2.0, -3.0).looking_at(Vec3::ZERO, Vec3::Y)));
+        let main_pose = Transform::from_xyz(0.0, 0.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y);
+        let view_pose = Transform::from_xyz(3.0, 2.0, -3.0).looking_at(Vec3::ZERO, Vec3::Y);
+        let main_cam = app.world_mut().spawn((Camera3d::default(), RenderTarget::from(main_target.clone()), Msaa::Off, main_pose)).id();
+        let view_cam = app
+            .world_mut()
+            .spawn((
+                Camera3d::default(),
+                crate::render::action_camera::ActionCamera,
+                Camera { order: -9, ..default() },
+                RenderTarget::from(view_target.clone()),
+                Msaa::Off,
+                view_pose,
+            ))
+            .id();
+        let std = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(StandardMaterial {
+            base_color: Color::WHITE,
+            base_color_texture: Some(texture),
+            cull_mode: None,
+            double_sided: true,
+            ..default()
+        });
+        app.world_mut().spawn((Mesh3d(sphere), MeshMaterial3d(std), HullPart::default()));
+        app.finish();
+        app.cleanup();
+        for _ in 0..10 {
+            app.update();
+        }
+        let adapter = app.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>().cloned().or_else(|| {
+            app.get_sub_app(bevy::render::RenderApp).and_then(|r| r.world().get_resource::<bevy::render::renderer::RenderAdapterInfo>().cloned())
+        });
+        match adapter {
+            Some(info) => {
+                eprintln!("GPU adapter: {} ({:?}, {:?})", info.name, info.device_type, info.backend);
+                if crate::bench::frames::is_software_adapter(info.device_type, &info.name) {
+                    eprintln!("SKIP: only a software adapter is available ({})", info.name);
+                    return;
+                }
+            }
+            None => {
+                eprintln!("SKIP: no render adapter");
+                return;
+            }
+        }
+        for _ in 0..4 {
+            app.update();
+        }
+        capture(&mut app, &main_target, "eye-main-own");
+        capture(&mut app, &view_target, "eye-view-own");
+        // The main camera takes the other view's pose, and that view stops drawing.
+        app.world_mut().entity_mut(view_cam).insert(Camera { is_active: false, order: -9, ..default() });
+        app.world_mut().entity_mut(main_cam).insert(view_pose);
+        for _ in 0..4 {
+            app.update();
+        }
+        capture(&mut app, &main_target, "eye-main-at-view-pose");
+        let frames = FRAMES.lock().unwrap().clone();
+        let named = |n: &str| &frames.iter().rev().find(|f| f.0 == n).unwrap_or_else(|| panic!("no frame {n}")).1;
+        let (own, view, moved) = (named("eye-main-own"), named("eye-view-own"), named("eye-main-at-view-pose"));
+        let (diff_views, _, _, lit, _, _) = compare(own, view);
+        let (diff_same_pose, _, _, _, _, _) = compare(view, moved);
+        eprintln!("hull seen from two poses: mean abs {diff_views:.2}/255, lit pixels {lit}; same pose, other camera: mean abs {diff_same_pose:.4}/255");
+        assert!(lit > 500, "the hull drew {lit} pixels");
+        assert!(diff_views > 0.5, "the two poses show the same frame (diff {diff_views})");
+        assert_eq!(view, moved, "the second view's frame is not the frame its own pose gives the main camera");
+    }
 }
 
 #[cfg(test)]
