@@ -75,6 +75,11 @@ pub struct SeatView {
     /// The officer limit before the race multiplier (what Roots `Player.maxOfficers` reads);
     /// the cap is `PlayerView::officers[1]`.
     pub officer_limit: Option<Fixed>,
+    /// The officer limit as a setup or a script wrote it (the economy's own base), `None` when nothing was
+    /// written. Unlike `officer_limit` this is never derived (Armada I content derives a limit for every
+    /// seat), so a host can tell a placed loadout from a bare seat. Derived from state each tick; not saved.
+    #[serde(default)]
+    pub officer_base: Option<Fixed>,
 }
 
 /// The wire form of [`Attrs`] (snapshot suffix, format 22).
@@ -187,6 +192,7 @@ impl crate::Sim {
                 } else {
                     self.economy.officer_base(player)
                 },
+                officer_base: self.economy.officer_base(player),
             })
             .collect()
     }
