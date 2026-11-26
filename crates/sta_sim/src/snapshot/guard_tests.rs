@@ -42,7 +42,7 @@ fn a_guard_row_survives_and_an_unknown_tag_or_a_cut_file_is_a_load_error() {
     let bytes = sim.snapshot();
     let back = Sim::from_snapshot(&bytes, sim.content.clone()).unwrap();
     assert_eq!(back.snapshot(), bytes, "save, load, save");
-    // Format 47 is the same record chain before the final Director's Cut field.
+    // Format 50 is the same record chain before the final Director's Cut field.
     let mut old = bytes[..bytes.len() - 1].to_vec();
     old[4..6].copy_from_slice(&PRE_DIRECTORS_CUT_FORMAT.to_le_bytes());
     let previous = Sim::from_snapshot(&old, sim.content.clone()).unwrap();
