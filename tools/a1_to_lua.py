@@ -387,7 +387,7 @@ class A1Lifter(dsl.Lifter):
         leaders &= seen
         # successors, by walking each block to its end
         succs = {}
-        for b in leaders:
+        for b in sorted(leaders):  # address order: `succs`, then `preds`, keep it
             i = d.at[b]
             first = True
             while True:
@@ -552,7 +552,9 @@ class A1Lifter(dsl.Lifter):
         """Internal calls and tail jumps pass no arguments the lifter could miss:
         the callee must read none (the missions' helpers take none)."""
         d = self.d
-        for x in seen:
+        # address order: the first offending call site is named in the error text
+        # that reaches the output (a set's own order is an interpreter detail)
+        for x in sorted(seen):
             m = re.fullmatch(r"(?:call|jmp)\s+0x([0-9a-f]+)", d.ins[d.at[x]][1])
             if not m:
                 continue
@@ -1598,14 +1600,16 @@ def find_missions(root, include_unmapped=False):
     `.bzn` names follow, keyed by their lower-case DLL stem (`federation4`):
     the engine reaches a mission only through the DLL names inside its map
     and the campaign list (`mshell.set`), so these are not campaign missions."""
+    # Names that differ only in case: listing order must not decide, so the lookups
+    # go in code-point order (the last `missions` folder, the first `bzn`, the last file win).
     mdir = None
-    for d in os.listdir(root):
+    for d in sorted(os.listdir(root)):
         if d.lower() == "missions" and os.path.isdir(os.path.join(root, d)):
             mdir = os.path.join(root, d)
-    bdir = next((os.path.join(root, d) for d in os.listdir(root) if d.lower() == "bzn"), None)
+    bdir = next((os.path.join(root, d) for d in sorted(os.listdir(root)) if d.lower() == "bzn"), None)
     if not mdir:
         return []
-    files = {f.lower(): f for f in os.listdir(mdir)}
+    files = {f.lower(): f for f in sorted(os.listdir(mdir))}
     out = []
     pairs = {}
     for f in files:
