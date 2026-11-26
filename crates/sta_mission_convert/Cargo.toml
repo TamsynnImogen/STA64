@@ -1,0 +1,14 @@
+[package]
+name = "sta_mission_convert"
+description = "Converts the player's own legacy mission DLLs (Armada I and II) to Lua on their machine (LUA-15; reads bytes only, D2)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# x86 decoder only (MIT, pure Rust, no C); the text printer is our own, so no formatter features.
+# The DLLs are only ever read as bytes.
+iced-x86 = { version = "1.21.0", default-features = false, features = ["std", "decoder"] }
+# Python dicts keep insertion order and the converter's output depends on it.
+indexmap = "2"
+thiserror.workspace = true
