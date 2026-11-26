@@ -15,7 +15,7 @@
 //!
 //! The sim works in the map's left-handed space; the renderer mirrors Z.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
 use bevy::image::CompressedImageFormats;
@@ -103,6 +103,15 @@ pub struct NeedsModel(pub ContentKey);
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UnitOwner(pub PlayerId);
 
+/// A Holo-Generator's temporary visual. The real unit and its selectable root
+/// keep their identity, owner and model while this child is displayed.
+#[derive(Component, Debug, Clone, Copy)]
+struct ProjectionVisual {
+    child: Entity,
+    model: ContentKey,
+    owner: PlayerId,
+}
+
 /// Marks roots made by [`sync_units`], so they are not adopted again.
 #[derive(Component)]
 pub struct FromView;
@@ -179,13 +188,14 @@ pub(crate) fn add_view_systems(app: &mut App) {
         .init_resource::<crate::render::moons::MoonVariants>()
         .add_systems(
             Update,
-            (sync_units, attach_models.run_if(resource_exists::<Mounted>).run_if(resource_exists::<ContentRes>), pick_bodies.run_if(resource_exists::<ContentRes>), show_damage)
+            (sync_units, sync_projections.run_if(resource_exists::<ContentRes>), attach_models.run_if(resource_exists::<Mounted>).run_if(resource_exists::<ContentRes>), pick_bodies.run_if(resource_exists::<ContentRes>), show_damage)
                 .chain()
                 .before(place)
                 .in_set(GameSet::Interpolate)
                 .run_if(resource_exists::<SimLink>),
         )
-        .add_systems(Update, place.in_set(GameSet::Interpolate).run_if(resource_exists::<SimLink>));
+        .add_systems(Update, place.in_set(GameSet::Interpolate).run_if(resource_exists::<SimLink>))
+        .add_systems(Update, hide_projected_sources.after(crate::render::appearance::AppearanceSet).run_if(resource_exists::<SimLink>));
     crate::render::anim::add_systems(app);
 }
 
@@ -371,6 +381,87 @@ pub fn sync_units(
             map.0.remove(&id);
         }
         *seen = None;
+    }
+}
+
+/// Holo-Generator only changes the picture of a craft. Put that picture under
+/// the existing root, so orders, picking, selection and the real owner's HUD
+/// still refer to the same sim entity. This also works for initial map ships:
+/// their model was attached by the map loader rather than `attach_models`.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn sync_projections(
+    mut commands: Commands,
+    link: Res<SimLink>,
+    map: Res<SimEntities>,
+    content: Res<ContentRes>,
+    teams: Option<Res<TeamColours>>,
+    map_teams: Option<Res<crate::viewer::MapTeamColours>>,
+    shown: Query<(Entity, &SimEntity, &ProjectionVisual, Option<&HullShare>, Option<&SystemsOff>)>,
+    mut nodes: Query<(&crate::render::appearance::ModelNode, &Name, &mut Visibility)>,
+) {
+    let curr = link.curr();
+    for (root, id, old, hull, systems) in &shown {
+        if curr.appearance.projected_model(id.0) == Some(old.model)
+            && curr.appearance.projected_owner(id.0) == Some(old.owner)
+        {
+            continue;
+        }
+        commands.entity(old.child).try_despawn();
+        commands.entity(root).remove::<ProjectionVisual>();
+        let share = hull.map_or(1.0, |h| h.0);
+        let off = systems.map_or(0, |s| s.0);
+        for (node, name, mut visibility) in &mut nodes {
+            if node.root == root {
+                *visibility = if damage_node_shown(name.as_str(), share, off) == Some(false) {
+                    Visibility::Hidden
+                } else {
+                    Visibility::Inherited
+                };
+            }
+        }
+    }
+
+    for &(id, model, owner) in &curr.appearance.projections {
+        let Some(&root) = map.0.get(&id) else { continue };
+        if content.0.unit(model).is_none()
+            || shown.get(root).is_ok_and(|(_, _, old, _, _)| old.model == model && old.owner == owner)
+        {
+            continue;
+        }
+        let colour = if owner == sta_sim::world::NEUTRAL {
+            Color::WHITE
+        } else {
+            crate::viewer::owner_hull_colour(teams.as_deref(), map_teams.as_deref(), owner).unwrap_or(Color::WHITE)
+        };
+        let child = commands.spawn((
+            Name::new(format!("projection {}", id.0)),
+            NeedsModel(model), TeamColour(colour),
+            Transform::IDENTITY, Visibility::Inherited, ChildOf(root),
+        )).id();
+        commands.entity(root).insert(ProjectionVisual { child, model, owner });
+    }
+}
+
+/// Appearance and damage systems own the source nodes' ordinary visibility.
+/// Apply the projection mask after them, leaving the projected child's nodes
+/// (whose `ModelNode.root` is the child) visible.
+fn hide_projected_sources(
+    projected: Query<(Entity, &ProjectionVisual)>,
+    mut nodes: Query<(&crate::render::appearance::ModelNode, &mut Visibility)>,
+) {
+    if projected.is_empty() { return; }
+    // A missing or invalid projection model must leave the genuine ship on
+    // screen. `attach_models` removes `NeedsModel` even when loading fails.
+    let model_roots: HashSet<Entity> = nodes.iter().map(|(node, _)| node.root).collect();
+    let roots: HashSet<Entity> = projected.iter()
+        .filter(|(_, visual)| model_roots.contains(&visual.child))
+        .map(|(root, _)| root)
+        .collect();
+    if roots.is_empty() { return; }
+    for (node, mut visibility) in &mut nodes {
+        if roots.contains(&node.root) && *visibility != Visibility::Hidden {
+            *visibility = Visibility::Hidden;
+        }
     }
 }
 
@@ -1330,5 +1421,58 @@ mod view_tests {
         app.world_mut().flush();
         assert!(app.world().get::<crate::render::strategic::NoIcon>(planet).is_some());
         assert!(app.world().get::<crate::render::strategic::Strategic>(planet).is_none());
+    }
+
+    #[test]
+    fn projection_swaps_only_the_visual_for_map_and_view_owned_craft() {
+        use bevy::ecs::system::RunSystemOnce;
+        let db = sta_content::ContentDb::builder()
+            .unit(sta_content::UnitDef::new("real", "craft"))
+            .unit(sta_content::UnitDef::new("hologram", "craft"))
+            .build().unwrap();
+        let real = db.key("real").unwrap();
+        let hologram = db.key("hologram").unwrap();
+        let units = || (1..=2).map(|id| UnitView { def: real, ..unit(id, 0, 100, UnitFlags::default()) }).collect();
+        let before = view(0, units(), Vec::new());
+        let mut active = view(1, units(), Vec::new());
+        active.appearance.projections = vec![(EntityId(1), hologram, PlayerId(1)), (EntityId(2), hologram, PlayerId(1))];
+        let after = view(2, units(), Vec::new());
+        let mut app = app_with(Box::new(Views(vec![before, active, after], 0)), None);
+        app.insert_resource(ContentRes(Arc::new(db)));
+        // One ship exists in the map scene already. The other is created from
+        // the view, so both render paths take part in this same transition.
+        let map_root = app.world_mut().spawn((SimEntity(EntityId(1)), Transform::IDENTITY, Visibility::Inherited)).id();
+        let source = app.world_mut().spawn((
+            crate::render::appearance::ModelNode { root: map_root, index: 0 },
+            Name::new("hull"), Visibility::Inherited, Transform::IDENTITY, ChildOf(map_root),
+        )).id();
+        run_to(&mut app, 1);
+        let roots = app.world().resource::<SimEntities>().0.clone();
+        assert_eq!(roots[&EntityId(1)], map_root, "map-owned entity keeps its identity");
+        for id in [EntityId(1), EntityId(2)] {
+            let root = roots[&id];
+            let projected = app.world().get::<ProjectionVisual>(root).expect("projected visual");
+            assert_eq!(projected.model, hologram);
+            assert_eq!(projected.owner, PlayerId(1));
+            assert_eq!(app.world().get::<NeedsModel>(projected.child).unwrap().0, hologram);
+            assert_eq!(app.world().get::<TeamColour>(projected.child).unwrap().0, Color::srgb(1.0, 0.0, 0.0));
+            assert_eq!(app.world().get::<UnitOwner>(root).map(|o| o.0), if id == EntityId(1) { None } else { Some(PlayerId(0)) });
+        }
+        // The real ship remains visible until the projected model is loaded.
+        assert_eq!(*app.world().get::<Visibility>(source).unwrap(), Visibility::Inherited);
+        let visual = app.world().get::<ProjectionVisual>(map_root).unwrap().child;
+        app.world_mut().spawn((
+            crate::render::appearance::ModelNode { root: visual, index: 0 },
+            Name::new("projected hull"), Visibility::Inherited, Transform::IDENTITY, ChildOf(visual),
+        ));
+        app.world_mut().run_system_once(hide_projected_sources).unwrap();
+        assert_eq!(*app.world().get::<Visibility>(source).unwrap(), Visibility::Hidden);
+        run_to(&mut app, 2);
+        let roots = app.world().resource::<SimEntities>().0.clone();
+        assert_eq!(roots[&EntityId(1)], map_root);
+        for id in [EntityId(1), EntityId(2)] {
+            assert!(app.world().get::<ProjectionVisual>(roots[&id]).is_none());
+        }
+        assert_eq!(*app.world().get::<Visibility>(source).unwrap(), Visibility::Inherited);
     }
 }

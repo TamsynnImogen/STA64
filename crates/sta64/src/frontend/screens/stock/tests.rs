@@ -354,6 +354,30 @@ fn advanced_officer_choice_uses_authored_rule_and_default_resets_it() {
 }
 
 #[test]
+fn directors_cut_advanced_is_profile_gated_and_cancel_restores_the_choice() {
+    for layout in [ScreenLayout::Stock, ScreenLayout::Plain] {
+        let mut data = four_races();
+        data.content = Arc::new(sta_content::ContentDb::builder()
+            .profile(sta_content::Profile::Sta1Classic).build().unwrap());
+        let mut app = app_with(data, None, 1.0);
+        app.world_mut().resource_mut::<ScreensConfig>().layout = layout;
+        go(&mut app, Screen::Setup);
+        press(&mut app, Act::Goto(Screen::Advanced));
+        press(&mut app, Act::ToggleDirectorsCut);
+        assert!(app.world().resource::<SetupDraft>().options.directors_cut);
+        press(&mut app, Act::CloseAdvanced(false));
+        assert!(!app.world().resource::<SetupDraft>().options.directors_cut);
+        press(&mut app, Act::Goto(Screen::Advanced));
+        press(&mut app, Act::ToggleDirectorsCut);
+        press(&mut app, Act::CloseAdvanced(true));
+        assert!(app.world().resource::<SetupDraft>().options.directors_cut);
+    }
+    let mut app = app();
+    go(&mut app, Screen::Advanced);
+    assert!(!app.world_mut().query::<&Act>().iter(app.world()).any(|a| *a == Act::ToggleDirectorsCut));
+}
+
+#[test]
 fn plain_advanced_speed_cycles_and_resets() {
     let mut app = app();
     app.world_mut().resource_mut::<ScreensConfig>().layout = ScreenLayout::Plain;
@@ -427,7 +451,8 @@ fn the_faction_dropdown_lists_the_playable_factions_in_skirmish_order() {
     for (i, seat) in two.iter().enumerate() {
         let d = dropdown_of(&mut app, i, Col::Race);
         let d = app.world().get::<Dropdown>(d).unwrap();
-        assert_eq!(d.value(), Some(seat.race.as_str()));
+        assert_eq!(seat.race, crate::frontend::screens::data::RANDOM_SIDE);
+        assert_eq!(d.value(), Some("Random"));
     }
 }
 
@@ -558,8 +583,9 @@ fn main_menu_buttons_go_where_they_say() {
 }
 
 #[test]
-fn main_menu_has_nine_text_rows_with_existing_routes() {
+fn main_menu_has_nine_art_buttons_with_labels_and_existing_routes() {
     use crate::ui::sprite_font::SpriteText;
+    use crate::ui::gui_sprites::{GuiButton, GuiButtonLabel};
     use crate::ui::theme::UiButton;
 
     let mut app = app();
@@ -568,8 +594,12 @@ fn main_menu_has_nine_text_rows_with_existing_routes() {
     for (slot, want) in order.into_iter().zip(labels) {
         let entity = placed(&mut app).into_iter().find(|(s, _)| *s == slot).unwrap().1;
         assert!(app.world().get::<UiButton>(entity).is_some(), "{slot:?}");
-        assert_eq!(app.world().get::<BackgroundColor>(entity).unwrap().0, Color::NONE);
-        let text = app.world().get::<Children>(entity).unwrap().iter().find_map(|e| app.world().get::<SpriteText>(e)).unwrap();
+        assert_eq!(app.world().get::<BackgroundColor>(entity).unwrap().0, super::main_menu::BUTTON_BACK);
+        let art = app.world().get::<GuiButton>(entity).unwrap();
+        assert_eq!(art.names.iter().map(String::as_str).collect::<Vec<_>>(), ["comm_generic_button"]);
+        assert!(art.keep_label);
+        let label = app.world().get::<Children>(entity).unwrap().iter().find(|e| app.world().get::<GuiButtonLabel>(*e).is_some()).unwrap();
+        let text = app.world().get::<SpriteText>(label).unwrap();
         assert_eq!(text.text, want, "{slot:?}");
         let disabled = matches!(slot, Slot::MainReplayIntro | Slot::MainCredits);
         assert_eq!(*app.world().get::<WidgetState>(entity).unwrap() == WidgetState::Disabled, disabled, "{slot:?}");
@@ -616,7 +646,7 @@ fn main_menu_uses_active_mod_display_name_and_wraps_long_names() {
 }
 
 #[test]
-fn main_menu_focus_skips_unavailable_rows_and_keeps_buttons_transparent() {
+fn main_menu_focus_skips_unavailable_rows_and_keeps_dark_fallback() {
     use crate::ui::sprite_font::SpriteText;
     use crate::ui::theme::{KitFocus, focus_order, move_focus};
 
@@ -625,13 +655,13 @@ fn main_menu_focus_skips_unavailable_rows_and_keeps_buttons_transparent() {
     let slots: Vec<_> = order.iter().map(|e| app.world().get::<Placed>(*e).unwrap().0).collect();
     assert_eq!(slots, [Slot::MainSinglePlayer, Slot::MainInstantAction, Slot::MainMultiplayer, Slot::MainMapEditor, Slot::MainMods, Slot::MainOptions, Slot::MainExit]);
     let first = order[0];
-    let label = app.world().get::<Children>(first).unwrap()[0];
+    let label = app.world().get::<Children>(first).unwrap().iter().find(|e| app.world().get::<main_menu::MainMenuLabel>(*e).is_some()).unwrap();
     let normal = app.world().get::<SpriteText>(label).unwrap().color;
     move_focus(app.world_mut(), false);
     settle(&mut app);
     assert_eq!(app.world().resource::<KitFocus>().0, Some(first));
     assert_ne!(app.world().get::<SpriteText>(label).unwrap().color, normal);
-    assert_eq!(app.world().get::<BackgroundColor>(first).unwrap().0, Color::NONE);
+    assert_eq!(app.world().get::<BackgroundColor>(first).unwrap().0, super::main_menu::BUTTON_BACK);
     for _ in 0..order.len() {
         move_focus(app.world_mut(), false);
     }
@@ -801,7 +831,7 @@ fn a_dropdown_keeps_keyboard_focus_through_the_rebuild_its_choice_causes() {
     app.world_mut().resource_mut::<KitFocus>().0 = Some(field);
     kit_key(app.world_mut(), KitKey::code(KeyCode::ArrowDown));
     settle(&mut app);
-    assert_eq!(app.world().resource::<SetupDraft>().seats[0].race, "kli");
+    assert_eq!(app.world().resource::<SetupDraft>().seats[0].race, "fed");
     let now = dropdown_of(&mut app, 0, Col::Race);
     assert_ne!(now, field, "the screen was rebuilt");
     assert_eq!(app.world().resource::<KitFocus>().0, Some(now));

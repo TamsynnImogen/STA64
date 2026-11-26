@@ -166,6 +166,23 @@ impl Sim {
                     give_shields(&mut u.shields, gain);
                 }
             }
+            A2Effect::TractorBeam(tow_distance) => {
+                if !self.tractor_target_disabled(w, channel.target) {
+                    return false;
+                }
+                let (ahead, distance) = crate::combat::weapons::flat(target.pos, source.pos);
+                let clearance = self.body_radius(source.def) + self.body_radius(target.def);
+                let desired = tow_distance.max(clearance);
+                let pull = (distance - desired).max(Fixed::ZERO);
+                self.set_target(target.id, None);
+                self.movement.clear(target.id);
+                if let Some(u) = self.units.get_mut(target.id) {
+                    u.pos.x = u.pos.x + ahead.0 * pull;
+                    u.pos.z = u.pos.z + ahead.1 * pull;
+                    u.speed = Fixed::ZERO;
+                    u.omega = Fixed::ZERO;
+                }
+            }
             _ => return false,
         }
         true

@@ -237,16 +237,26 @@ fn two_clients_host_join_choose_launch_and_play_in_step() {
     // The host's settings reach the guest, and take a ready mark back.
     let mut o = host.view().options;
     o.starting_resources = sta_content::StartingResources::Lots;
+    o.directors_cut = true;
     host.set_options(o);
     guest.set_ready(true);
     pump(&mut [&mut host, &mut guest], "options arrive and the ready mark lands", |s| {
-        s[1].view().options.starting_resources == sta_content::StartingResources::Lots && find(s[0], 1).ready
+        s[1].view().options.starting_resources == sta_content::StartingResources::Lots
+            && s[1].view().options.directors_cut
+            && find(s[0], 1).ready
     });
     assert_eq!(host.launch_block(), None);
     assert_eq!(find(&host, 1).race, "kli", "the refused side did not change the seat");
 
+    let mut guest_change = guest.view().options;
+    guest_change.directors_cut = false;
+    guest.set_options(guest_change);
+    assert!(guest.view().options.directors_cut, "the host owns this setting");
+
     // A change of the host's settings takes the ready marks back (the guest must agree to the new ones).
-    host.set_options(GameOptions::default());
+    let mut launch_options = GameOptions::default();
+    launch_options.directors_cut = true;
+    host.set_options(launch_options);
     assert!(!find(&host, 1).ready);
     assert!(host.launch_block().unwrap().contains("Riker"));
     pump(&mut [&mut host, &mut guest], "options change reaches the guest", |s| !find(s[1], 1).ready);
@@ -260,6 +270,7 @@ fn two_clients_host_join_choose_launch_and_play_in_step() {
     assert_same_game(&[&mh, &mg]);
     assert_eq!((mh.me, mg.me), (PlayerId(0), PlayerId(1)));
     assert_eq!(mh.start.options.starting_resources, sta_content::StartingResources::Normal);
+    assert!(mh.start.options.directors_cut && mg.start.options.directors_cut);
     assert_eq!(mh.start.seats.iter().map(|x| (x.slot.0, x.race.as_str(), x.team.0)).collect::<Vec<_>>(), [(0, "rom", 0), (1, "kli", 1)]);
 
     // The match runs through the lockstep router: equal digests tick for tick.

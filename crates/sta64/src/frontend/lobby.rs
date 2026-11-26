@@ -850,7 +850,7 @@ impl Session {
         Ok(())
     }
 
-    /// Host: the starting resources and the officer limit.
+    /// Host: the choices that affect the match simulation.
     pub fn set_options(&mut self, options: GameOptions) {
         if self.host && options != self.options {
             self.options = options;
@@ -1743,6 +1743,14 @@ pub fn on_buttons(
                     s.set_options(o);
                 }
             }
+            MpAct::ToggleDirectorsCut if data.content.profile() == sta_content::Profile::Sta1Classic => {
+                if let Some(s) = mp.session.as_mut() && s.is_host() && matches!(s.phase, Phase::Open) {
+                    let mut o = s.view().options;
+                    o.directors_cut = !o.directors_cut;
+                    s.set_options(o);
+                }
+            }
+            MpAct::ToggleDirectorsCut => {}
         }
     }
 }

@@ -234,10 +234,12 @@ fn setup_round_trips_through_a_game_setup() {
     let data = ScreenData::fake();
     let mut d = SetupDraft::new(&data);
     d.set_map(&data, 1);
+    assert!(d.seats.iter().all(|seat| seat.race == data::RANDOM_SIDE));
     d.select_control(1, SeatControl::Easy);
     d.select_control(2, SeatControl::Idle);
     d.select_control(3, SeatControl::Hard);
     d.cycle_team(3);
+    d.cycle_race(&data, 1);
     d.cycle_race(&data, 1);
     d.seed = 42;
     let setup = d.to_setup(&data).unwrap();
@@ -252,7 +254,9 @@ fn setup_round_trips_through_a_game_setup() {
     assert!(setup.players.iter().all(|p| p.race == "fx"));
     // The finished setup records the resolved faction for a replay.
     assert_eq!(d.seats[1].race, data::RANDOM_SIDE);
-    d.seats[1].race.clone_from(&setup.players[1].race);
+    for (seat, player) in d.seats.iter_mut().zip(&setup.players) {
+        seat.race.clone_from(&player.race);
+    }
     assert_eq!(SetupDraft::from_setup(&setup, &data), Some(d));
     // The sim takes it as it is.
     let sim = sta_sim::Sim::from_setup(&setup);
@@ -276,7 +280,9 @@ fn map_rows_count_only_distinct_playable_starts_and_keep_their_ids() {
     assert_eq!(draft.seats.len(), 2);
     let setup = draft.to_setup(&data).unwrap();
     assert_eq!(setup.players.iter().map(|p| p.id).collect::<Vec<_>>(), [PlayerId(1), PlayerId(4)]);
-    assert_eq!(SetupDraft::from_setup(&setup, &data), Some(draft));
+    let restored = SetupDraft::from_setup(&setup, &data).unwrap();
+    assert!(restored.seats.iter().all(|seat| seat.race == "fx"));
+    assert_eq!(restored.to_setup(&data).unwrap().players, setup.players);
 }
 
 #[test]
@@ -381,10 +387,10 @@ fn starting_choices_follow_authored_rows_into_launch_and_round_trip() {
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].options.starting_resources, StartingResources::Lots);
     assert_eq!(sent[0].options.officer_limit, 3);
-    assert_eq!(
-        SetupDraft::from_setup(&sent[0], app.world().resource::<ScreenData>()),
-        Some(draft(&app))
-    );
+    let data = app.world().resource::<ScreenData>();
+    let restored = SetupDraft::from_setup(&sent[0], data).unwrap();
+    assert_eq!(restored.options, draft(&app).options);
+    assert_eq!(restored.to_setup(data).unwrap().players, sent[0].players);
     press(&mut app, Act::Goto(Screen::Advanced));
     press(&mut app, Act::CycleOfficerLimit);
     assert_eq!(draft(&app).options.officer_limit, 0);
@@ -443,7 +449,9 @@ fn race_picker_uses_catalogue_slots_even_without_start_units() {
     ]));
     assert_eq!(data.races(), ["zero", "middle", "later"]);
     let mut draft = SetupDraft::new(&data);
-    assert_eq!((draft.seats[0].race.as_str(), draft.seats[1].race.as_str()), ("zero", "middle"));
+    assert!(draft.seats.iter().all(|seat| seat.race == data::RANDOM_SIDE));
+    draft.cycle_race(&data, 0);
+    assert_eq!(draft.seats[0].race, "zero");
     draft.cycle_race(&data, 0);
     assert_eq!(draft.seats[0].race, "middle");
     draft.cycle_race(&data, 0);
@@ -548,6 +556,7 @@ fn explicit_empty_or_nonplayable_catalogue_cannot_launch_inferred_unit_race() {
 fn stale_seat_races_cannot_launch_after_catalogue_change() {
     let mut data = ScreenData::fake();
     let mut draft = SetupDraft::new(&data);
+    draft.seats[0].race = "fx".into();
     assert_eq!(draft.seats[0].race, "fx");
     data.races = Arc::new(Races::from_defs(vec![race("new", Some(0))]));
     assert_eq!(data.races(), ["new"]);
@@ -1002,6 +1011,10 @@ fn setup_renders_race_captions_and_refreshes_strings_without_replacing_ids() {
     app.insert_resource(data);
     app.insert_resource(race_strings("\"GUI_FACTION\", \"The Federation\""));
     go(&mut app, Screen::Setup);
+    assert!(app.world().resource::<SetupDraft>().seats.iter().all(|seat| seat.race == data::RANDOM_SIDE));
+    app.world_mut().resource_mut::<SetupDraft>().seats[0].race = "fx".into();
+    app.world_mut().resource_mut::<SetupDraft>().seats[1].race = "fx".into();
+    settle(&mut app);
     assert!(has_text(&mut app, "The Federation"));
     assert!(!has_text(&mut app, "GUI_FACTION"));
     assert!(app.world().resource::<SetupDraft>().seats.iter().all(|seat| seat.race == "fx"));

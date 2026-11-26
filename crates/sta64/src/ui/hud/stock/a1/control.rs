@@ -10,17 +10,20 @@
 //! in the free slots, with cancel and back where the header puts them).
 //!
 //! The commands the sim cannot take are drawn locked (disabled) on mobile craft, so the grid keeps
-//! the stock slot positions: Repair, Stand Down, the alert states, Patrol, Guard, Decommission and
-//! Self-Destruct (their sim orders or the HUD's target pick are later work; TODO lines in the
+//! the stock slot positions: Repair, Stand Down, the alert states, Patrol and Guard
+//! (their sim orders or the HUD's target pick are later work; TODO lines in the
 //! PR). A station shows none of the Orders-page commands, locked or not: which of them the stock
-//! HUD shows for a station is not measured (TODO line). Not drawn: Transport Special, Upgrade and
+//! HUD shows for a station is not measured (TODO line). Self-Destruct uses a shared A2 immediate
+//! special when the selected craft carry one; otherwise its old locked control remains.
+//! Not drawn: Transport Special, Upgrade and
 //! Research Upgrade (later). Transport has no control-grid slot where the install's command data gives it none; it
 //! sits on the speed rail ([`super::speed`]), whose buttons the same grid carries (cells from
 //! `speed::RAIL_BASE`).
 
 use bevy::prelude::*;
-use sta_content::{ButtonSlots, SlotCommand, button_slots::SLOTS};
+use sta_content::{A2Effect, A2Target, ButtonSlots, SlotCommand, button_slots::SLOTS};
 use sta_sim::ContentKey;
+use sta_sim::specials::{SpecialKind, specials_indexed};
 
 use super::super::{StockState, layout::StockLayout};
 use super::{costs, speed};
@@ -59,6 +62,20 @@ fn put(out: &mut Vec<Button>, button: Button) {
     if !out.iter().any(|existing| existing.cell == button.cell) { out.push(button); }
 }
 
+/// The common immediate self-destruct weapon, if every selected craft has it
+/// at the same sim slot. Other immediate A2 weapons cannot own this control.
+fn self_destruct_slot(feed: &HudFeed) -> Option<u8> {
+    let db = feed.content.as_deref()?;
+    commands::shared(feed).specials.into_iter().find_map(|(slot, kind)| {
+        if kind != SpecialKind::A2(A2Target::Immediate) { return None; }
+        feed.selected_units().into_iter().filter(|u| u.owner == feed.player).all(|u| {
+            db.unit(u.def)
+                .and_then(|def| specials_indexed(db, def).nth(slot as usize))
+                .is_some_and(|(_, _, weapon)| weapon.a2_special.is_some_and(|rule| matches!(rule.effect, A2Effect::SelfDestruct(_))))
+        }).then_some(slot)
+    })
+}
+
 /// The command a slot key stands for on the top and Orders pages: label, icon names, and the
 /// act, `None` when the selection cannot have it. Icons are `gui_global.spr` names.
 fn command(c: SlotCommand, feed: &HudFeed) -> Option<(&'static str, &'static [&'static str], Act, Look)> {
@@ -86,7 +103,16 @@ fn command(c: SlotCommand, feed: &HudFeed) -> Option<(&'static str, &'static [&'
         SlotCommand::Patrol if mobile => ("Patrol", &["b_patrol"], Act::Order(UnitOrder::Unavailable), Look::Locked),
         SlotCommand::Guard if mobile => ("Guard", &["b_guard"], Act::Order(UnitOrder::Unavailable), Look::Locked),
         SlotCommand::Decommission if mobile => ("Decommission", &["b_decom"], Act::Target(TargetMode::Decommission), Look::Ready),
-        SlotCommand::SelfDestruct if mobile => ("Self destruct", &["b_gselfdes"], Act::Order(UnitOrder::Unavailable), Look::Locked),
+        SlotCommand::SelfDestruct if mobile => {
+            let (act, look) = if let (Some(slot), Some(db)) = (self_destruct_slot(feed), feed.content.as_deref()) {
+                let ready = feed.own_selection().into_iter().any(|id|
+                    sta_sim::specials::a2_special_ready(&feed.view, db, id, slot));
+                (Act::Special(slot), if ready { Look::Ready } else { Look::Locked })
+            } else {
+                (Act::Order(UnitOrder::Unavailable), Look::Locked)
+            };
+            ("Self destruct", &["b_gselfdes"], act, look)
+        }
         SlotCommand::Scout if mobile => ("Scout", &["b_scout"], Act::Order(UnitOrder::Scout), ready),
         SlotCommand::SearchAndDestroy if caps.attack && mobile => {
             ("Search and destroy", &["b_sandd"], Act::Order(UnitOrder::SearchAndDestroy), ready)

@@ -174,11 +174,14 @@ fn true_outside_flag_is_preserved_without_reinitializing_or_projecting() {
 fn header_downgrades_and_forged_old_content_hashes_cannot_hide_state() {
     for sim in [Sim::new(22), simulation().0] {
         let bytes = sim.snapshot();
-        for version in 8_u16..FORMAT_VERSION {
+        for version in 8_u16..PRE_DIRECTORS_CUT_FORMAT {
             let mut bad = bytes.clone();
             bad[4..6].copy_from_slice(&version.to_le_bytes());
             assert_eq!(Sim::from_snapshot(&bad, sim.content.clone()).err(), Some(SnapshotError::FormatVersion { found: version }));
         }
+        let mut relabelled = bytes;
+        relabelled[4..6].copy_from_slice(&PRE_DIRECTORS_CUT_FORMAT.to_le_bytes());
+        assert!(chain::corrupt(&relabelled, sim.content.clone()).contains("trailing"));
     }
     // Genuine old writer outputs, one with a deliberately forged current
     // content hash: refused by format before anything else is read.

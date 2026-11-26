@@ -44,6 +44,7 @@ impl Sim {
             .collect();
         sim.ai_seats.sort();
         sim.ai_seats.dedup();
+        sim.directors_cut = s.options.directors_cut && s.content.profile() == sta_content::Profile::Sta1Classic;
         sim.content = Some(Arc::clone(&s.content));
         sim.starts = s.map.starts.clone();
         sim.regions = s.map.regions.clone();
@@ -169,6 +170,7 @@ impl Sim {
         self.replacements.remove(id);
         self.specials.a1.remove_entity(id);
         self.specials.a2.remove_entity(id);
+        self.remove_federation_entity(id);
         self.subsystems.remove(id);
         self.zero_shield_holds.remove(id);
         self.attrs.remove(id);

@@ -49,7 +49,7 @@ fn save_load_save_is_byte_identical_and_the_old_format_and_damage_are_refused() 
     assert!(loaded.switches(b).unwrap().no_decommission);
     let mut cut = chain::before(&bytes, chain::ALERTS);
     assert!(Sim::from_snapshot(&cut, content.clone()).is_err(), "the record is missing");
-    let previous = FORMAT_VERSION - 1;
+    let previous = PRE_DIRECTORS_CUT_FORMAT - 1;
     cut[4..6].copy_from_slice(&previous.to_le_bytes());
     assert_eq!(Sim::from_snapshot(&cut, content.clone()).err(), Some(SnapshotError::FormatVersion { found: previous }));
     let mut short = bytes.clone();

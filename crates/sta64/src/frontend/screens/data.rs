@@ -357,7 +357,7 @@ pub struct SetupDraft {
 
 impl SetupDraft {
     /// The first map, seat 0 the player, the others computers, every seat its
-    /// own team, the races in turn.
+    /// own team, with Random side until each match resolves it.
     pub fn new(data: &ScreenData) -> SetupDraft {
         let mut d = SetupDraft { map: 0, seed: 1, seats: Vec::new(), options: GameOptions::default(), speed: MatchSpeed::Normal, observing: false, fog: SetupFog::default(), random_placement: false, preview_visible: true, start_markers: SetupStartMarkers::All, colour: None, return_row: 0, advanced_backup: None };
         d.set_map(data, 0);
@@ -375,14 +375,13 @@ impl SetupDraft {
         if self.colour.is_some_and(|choice| choice >= data.colours.swatches().len()) {
             self.colour = None;
         }
-        let races = data.races();
         self.seats.truncate(slots);
         self.return_row = self.return_row.min(slots.saturating_sub(1));
         while self.seats.len() < slots {
             let i = self.seats.len();
             self.seats.push(Seat {
                 control: SeatControl::Computer,
-                race: races.get(i % races.len().max(1)).cloned().unwrap_or_default(),
+                race: RANDOM_SIDE.to_owned(),
                 team: i as u8,
             });
         }

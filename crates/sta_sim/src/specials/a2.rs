@@ -16,6 +16,8 @@ use crate::world::{Entities, Entity, EntityKind, Fnv};
 
 #[path = "a2_channel.rs"]
 mod channel;
+#[path = "a2_federation.rs"]
+mod federation;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub(crate) struct State {
@@ -24,6 +26,7 @@ pub(crate) struct State {
     effects: Vec<Effect>,
     blasts: Vec<Blast>,
     channels: Vec<channel::Channel>,
+    pub(crate) federation: federation::Federation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -84,6 +87,21 @@ fn weapon_at<'a>(
 }
 
 fn allowed(w: &WeaponDef, rule: A2SpecialDef, def: &UnitDef, relation: Relation) -> bool {
+    if rule.effect == A2Effect::HoloGenerator {
+        return relation == Relation::Enemy && EntityKind::of_def(def) == EntityKind::Craft;
+    }
+    if matches!(rule.effect, A2Effect::TractorBeam(_)) {
+        return if matches!(w.federation, Some(sta_content::FederationWeaponDef::OmegaTractor)) {
+            def.odf.eq_ignore_ascii_case("momega")
+        } else {
+            !def.odf.eq_ignore_ascii_case("momega") && EntityKind::of_def(def) == EntityKind::Craft
+                && match relation {
+                    Relation::Enemy => w.base.targets.enemy_craft.unwrap_or(true),
+                    Relation::Ally => w.base.targets.allied_craft.unwrap_or(true),
+                    Relation::Neutral => false,
+                }
+        };
+    }
     let mask = &w.base.targets;
     let defaults_ally = matches!(
         rule.effect,
@@ -116,7 +134,8 @@ fn allowed(w: &WeaponDef, rule: A2SpecialDef, def: &UnitDef, relation: Relation)
 }
 
 fn valid_def(w: &WeaponDef, def: &UnitDef) -> bool {
-    !def.hidden && (!def.invalid_as_target || w.base.ignore_valid_as_target == Some(true))
+    !def.hidden && (!def.invalid_as_target || w.base.ignore_valid_as_target == Some(true)
+        || matches!(w.federation, Some(sta_content::FederationWeaponDef::OmegaTractor)))
 }
 
 fn target_ok(
@@ -134,6 +153,12 @@ fn target_ok(
         })
         && (target.owner == caster.owner || !target.flags.contains(UnitFlags::CLOAKED))
         && a1::in_range(caster.pos, target.pos, w.range)
+}
+
+/// Whether the mounted Armada II special meets its current tech requirement.
+pub fn a2_special_researched(view: &WorldView, db: &ContentDb, unit: EntityId, slot: u8) -> bool {
+    view.unit(unit).and_then(|u| db.unit(u.def)).and_then(|def| weapon_at(db, def, slot))
+        .is_some_and(|(_, weapon, _)| a1::researched_in_view(view, db, unit, weapon))
 }
 
 /// Whether the selected ship can arm or activate this special now.
@@ -190,6 +215,10 @@ pub fn a2_special_target_ok(
             };
             t.hull[0] > Fixed::ZERO
                 && t.progress.is_none_or(|p| p >= Fixed::ONE)
+                && (!matches!(rule.effect, A2Effect::TractorBeam(_)) || (u.id != id
+                    && (matches!(w.federation, Some(sta_content::FederationWeaponDef::OmegaTractor))
+                        || t.flags.contains(UnitFlags::ENGINES_OFF)
+                        || view.appearance.systems(id).and_then(|systems| systems[0]).is_some_and(|engines| !engines.enabled))))
                 && (t.owner == u.owner || !t.flags.contains(UnitFlags::CLOAKED))
                 && (view.visibility.is_empty()
                     || view
@@ -212,13 +241,14 @@ impl State {
             && self.effects.is_empty()
             && self.blasts.is_empty()
             && self.channels.is_empty()
+            && self.federation.is_empty()
     }
 
     pub(super) fn hash_into(&self, h: &mut Fnv) {
         if self.is_empty() {
             return;
         }
-        h.str("a2-specials-v1");
+        h.str("a2-specials-v2");
         let bytes = postcard::to_allocvec(self).expect("special state serializes");
         h.u64(bytes.len() as u64);
         for chunk in bytes.chunks(8) {
@@ -234,7 +264,7 @@ impl State {
             weapon_at(db, db.unit(units.get(id)?.def)?, slot)
         };
         let by_key = |weapon| db?.weapon(weapon)?.a2_special;
-        self.cooling
+        self.federation.valid(tick, units, db) && self.cooling
             .windows(2)
             .all(|p| (p[0].0, p[0].1) < (p[1].0, p[1].1))
             && self
@@ -333,6 +363,7 @@ impl State {
                 .filter(|c| c.until > tick)
                 .map(|c| (c.source, c.slot)),
         );
+        view.active.extend(self.federation.active(tick));
         view.active.sort_unstable();
     }
 }
@@ -411,6 +442,9 @@ impl Sim {
             || caster.is_unfinished()
         {
             return Some(false);
+        }
+        if let Some(result) = self.cancel_federation(id, slot, target) {
+            return Some(result);
         }
         let toggle = match rule.effect {
             A2Effect::SelfDestruct(_) => Some(Status::Destruct(slot)),
@@ -493,6 +527,24 @@ impl Sim {
         if rule.effect.sustained_beam() && !matches!(target, Target::Entity(t) if t != id) {
             return Some(false);
         }
+        if matches!(rule.effect, A2Effect::TractorBeam(_))
+            && let Target::Entity(target) = target
+            && (!self.tractor_target_disabled(w, target)
+                || self.specials.a2.channels.iter().any(|c| c.target == target
+                    && db.weapon(c.weapon).and_then(|w| w.a2_special).is_some_and(|s| matches!(s.effect, A2Effect::TractorBeam(_)))))
+        {
+            return Some(false);
+        }
+        if let Some(accepted) = self.activate_federation(db, &caster, w, rule, slot, target) {
+            if accepted {
+                if self.units.contains(id) {
+                    self.charge_a2_special(id, def, w, slot, cooldown);
+                }
+                self.events.push(SimEvent::Fired { shooter: id, weapon: w.key, hardpoint: mount as u8, target });
+            }
+            return Some(accepted);
+        }
+        let dip = Diplomacy::new(&self.players, &self.relations);
         let targets = match target {
             Target::Entity(t) => vec![t],
             _ if toggle.is_some() => Vec::new(),
@@ -515,19 +567,7 @@ impl Sim {
             return Some(false);
         }
 
-        self.specials.ensure_pool(id, def);
-        if !matches!(rule.effect, A2Effect::Regeneration(_))
-            && let Some(energy) = self.specials.energy_mut(id)
-        {
-            *energy = *energy - w.energy_cost;
-        }
-        if w.refire > 0 {
-            let row = (id, slot, self.tick.saturating_add(w.refire));
-            match cooldown {
-                Ok(i) => self.specials.a2.cooling[i] = row,
-                Err(i) => self.specials.a2.cooling.insert(i, row),
-            }
-        }
+        self.charge_a2_special(id, def, w, slot, cooldown);
         if let Some(status) = toggle {
             self.specials.a2.record_effect(Effect {
                 target: id,
@@ -585,12 +625,34 @@ impl Sim {
         Some(true)
     }
 
+    fn tractor_target_disabled(&self, w: &WeaponDef, target: EntityId) -> bool {
+        matches!(w.federation, Some(sta_content::FederationWeaponDef::OmegaTractor))
+            || self.subsystem_state(target, Subsystem::Engines).is_some_and(|(online, _)| !online)
+    }
+
+    fn charge_a2_special(&mut self, id: EntityId, def: &UnitDef, w: &WeaponDef, slot: u8, cooldown: Result<usize, usize>) {
+        self.specials.ensure_pool(id, def);
+        if !matches!(w.a2_special.expect("A2 special").effect, A2Effect::Regeneration(_))
+            && let Some(energy) = self.specials.energy_mut(id)
+        {
+            *energy = *energy - w.energy_cost;
+        }
+        if w.refire > 0 {
+            let row = (id, slot, self.tick.saturating_add(w.refire));
+            match cooldown {
+                Ok(i) => self.specials.a2.cooling[i] = row,
+                Err(i) => self.specials.a2.cooling.insert(i, row),
+            }
+        }
+    }
+
     pub(crate) fn step_a2_specials(&mut self, db: &ContentDb) -> Vec<PlayerId> {
         let mut lost = Vec::new();
         if self.specials.a2.is_empty() {
             return lost;
         }
         self.specials.a2.cooling.retain(|r| r.2 > self.tick);
+        self.step_federation(db);
         let effects = self.specials.a2.effects.clone();
         self.specials.a2.effects.retain(|e| e.until > self.tick);
         for effect in effects {
@@ -706,7 +768,12 @@ impl Sim {
             | A2Effect::AutoAssimilator(_)
             | A2Effect::HoldingBeam { .. }
             | A2Effect::ShieldProjector(_)
-            | A2Effect::ShieldInversion(_) => return,
+            | A2Effect::ShieldInversion(_)
+            | A2Effect::TranswarpGate
+            | A2Effect::GalaxySeparate
+            | A2Effect::GalaxyIntegrate { .. }
+            | A2Effect::HoloGenerator
+            | A2Effect::TractorBeam(_) => return,
         };
         if let Some(status) = status {
             self.specials.a2.record_effect(Effect {
@@ -912,3 +979,7 @@ fn add_capped(value: Fixed, amount: Fixed, max: Fixed) -> Fixed {
             .clamp(0, max.to_bits().max(0)),
     )
 }
+
+#[cfg(test)]
+#[path = "a2_federation_tests.rs"]
+mod federation_tests;
