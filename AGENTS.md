@@ -148,7 +148,9 @@ deterministic simulation rules, the modding rules.
 A decision that is easy to reverse needs no ADR. Try it, measure it, and back
 it out if it is wrong: a small PR that can be reverted on its own, the
 evidence in the PR body, open points as `TODO.md` lines. Fail fast; do not
-wait for a decision record.
+wait for a decision record. An experiment is still ordinary work: claims,
+freezes, review, evidence grades, the content rules and every accepted ADR
+apply to it. It skips only the record, not the process.
 
 Is it easy to reverse? Ask: can one revert undo it; does any save, replay,
 protocol, content or mod format change; has other work been built on it. If
