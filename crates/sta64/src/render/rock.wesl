@@ -8,11 +8,12 @@
 // ray is marched down into it (parallax), so its walls hide the light at an angle.
 
 import bevy_pbr::render::mesh_functions::get_world_from_local;
+// The camera of the view being drawn (Bevy's view uniform), not a material value: its world position is the eye.
+import bevy_pbr::render::mesh_view_bindings::view;
 
 struct RockParams {
     amb: vec4<f32>,       // ambient rgb
     shine: vec4<f32>,     // x specular strength, y its exponent, z rim exponent, w the key's strength
-    eye: vec4<f32>,       // the camera, world
     rim: vec4<f32>,       // the rim light's colour
     ddir0: vec4<f32>,     // the key: the way its light travels
     dcol0: vec4<f32>,
@@ -68,7 +69,7 @@ fn glint(n: vec3<f32>, l: vec3<f32>, v: vec3<f32>) -> f32 {
 }
 
 fn shade(n: vec3<f32>, wp: vec3<f32>, t: vec4<f32>, gk: f32) -> vec3<f32> {
-    let v = normalize(k.eye.xyz - wp);
+    let v = normalize(view.world_position - wp);
     var sum = k.amb.rgb;
     var spec = vec3<f32>(0.0);
     let l0 = -k.ddir0.xyz;
@@ -104,7 +105,7 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     // The ravine's view direction and the gradients its taps need, in uniform control
     // flow. A tap at q - vq * t has the gradient ddx(q) - ddx(vq) * t.
     let far_k = saturate((k.spill.z / max(length(fwidth(q)), 1e-6) - 2.0) / 3.0);
-    var vq = mirror(to_obj(k.eye.xyz - wp)) * k.ext.xyz;
+    var vq = mirror(to_obj(view.world_position - wp)) * k.ext.xyz;
     vq /= max(length(vq), 1e-12);
     let qx = dpdx(q);
     let qy = dpdy(q);

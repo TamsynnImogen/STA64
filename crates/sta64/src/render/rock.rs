@@ -138,7 +138,6 @@ fn moon_shell_look(
 pub struct RockParams {
     pub amb: Vec4,
     pub shine: Vec4,
-    pub eye: Vec4,
     pub rim: Vec4,
     pub ddir0: Vec4,
     pub dcol0: Vec4,
@@ -307,13 +306,13 @@ fn revert_to_stock(
     }
 }
 
-/// What the shared materials were last written with: the eye, the lights, how many materials.
-type LastWrite = Option<(Vec3, Vec<[f32; 7]>, usize)>;
+/// What the shared materials were last written with: the lights, how many materials.
+type LastWrite = Option<(Vec<[f32; 7]>, usize)>;
 
-/// Each frame: the camera and the lights, into the shared materials, when they changed (a
-/// write re-uploads a material: there are a few dozen, not one per rock).
+/// Each frame: the lights, into the shared materials, when they changed (a write re-uploads a
+/// material: there are a few dozen, not one per rock). The eye is not written: the shader reads
+/// the world position of the view being drawn (#1251), so a camera move touches no material.
 fn update(
-    camera: Query<&GlobalTransform, crate::map::MainCamera>,
     lights: Query<(&GlobalTransform, &DirectionalLight)>,
     shared: Res<RockMaterials>,
     mut materials: ResMut<Assets<RockMaterial>>,
@@ -323,7 +322,6 @@ fn update(
     if switches.is_some_and(|s| s.freeze_rock_materials) {
         return;
     }
-    let Ok(cam) = camera.single() else { return };
     let mut ls: Vec<(Vec3, Vec3, f32)> = lights
         .iter()
         .map(|(t, l)| {
@@ -333,21 +331,19 @@ fn update(
         .collect();
     ls.sort_by(|a, b| b.2.total_cmp(&a.2));
     let sig: Vec<[f32; 7]> = ls.iter().map(|l| [l.0.x, l.0.y, l.0.z, l.1.x, l.1.y, l.1.z, l.2]).collect();
-    let eye = cam.translation();
     let moved = match &*last {
-        Some((e, s, n)) => e.distance(eye) > 0.01 || *s != sig || *n != shared.0.len(),
+        Some((s, n)) => *s != sig || *n != shared.0.len(),
         None => true,
     };
     if !moved {
         return;
     }
-    *last = Some((eye, sig, shared.0.len()));
+    *last = Some((sig, shared.0.len()));
     let key = ls.first().copied().unwrap_or((Vec3::NEG_Y, Vec3::ONE, 1.0));
     let fill = ls.get(1).map(|f| (f.0, f.1 * (f.2 / key.2.max(1e-3)))).unwrap_or((Vec3::Y, Vec3::ZERO));
     for h in shared.0.values() {
         let Some(mut m) = materials.get_mut(h) else { continue };
         let p = &mut m.params;
-        p.eye = eye.extend(1.0);
         p.ddir0 = key.0.extend(1.0);
         p.dcol0 = key.1.extend(0.0);
         p.ddir1 = fill.0.extend(0.0);
@@ -512,12 +508,48 @@ mod tests {
         assert!(app.world().get::<MoonDark>(shell).is_none());
     }
 
+    #[derive(Resource, Default)]
+    struct ModifiedCount(usize);
+
+    fn count_modified(mut events: MessageReader<AssetEvent<RockMaterial>>, mut count: ResMut<ModifiedCount>) {
+        count.0 += events.read().filter(|e| matches!(e, AssetEvent::Modified { .. })).count();
+    }
+
+    /// Moving the camera rewrites no rock material: the shader reads the eye from the view being drawn
+    /// (#1251). The control is a light change, which still rewrites them.
+    #[test]
+    fn moving_the_camera_changes_no_rock_material() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()));
+        app.init_asset::<RockMaterial>().init_asset::<Image>().init_resource::<RockMaterials>().init_resource::<ModifiedCount>();
+        app.add_systems(PostUpdate, (update.after(TransformSystems::Propagate), count_modified).chain());
+        let camera = app.world_mut().spawn((Camera3d::default(), GlobalTransform::default())).id();
+        let light = app.world_mut().spawn((DirectionalLight::default(), GlobalTransform::default())).id();
+        let handle = app.world_mut().resource_mut::<Assets<RockMaterial>>().add(RockMaterial { params: RockParams::default(), albedo: None, relief: None });
+        app.world_mut().resource_mut::<RockMaterials>().0.insert(("rock".into(), [0; 3], [0; 3]), handle);
+        for _ in 0..4 {
+            app.update();
+        }
+        app.world_mut().resource_mut::<ModifiedCount>().0 = 0;
+        for step in 1..=5 {
+            app.world_mut().entity_mut(camera).insert(GlobalTransform::from(Transform::from_xyz(40.0 * step as f32, 7.0, -3.0)));
+            app.update();
+        }
+        app.update();
+        assert_eq!(app.world().resource::<ModifiedCount>().0, 0, "a camera move marked a rock material changed");
+        app.world_mut().entity_mut(light).insert(GlobalTransform::from(Transform::from_xyz(1.0, 2.0, 3.0).looking_at(Vec3::ZERO, Vec3::Y)));
+        app.update();
+        app.update();
+        assert!(app.world().resource::<ModifiedCount>().0 > 0, "a light change should still rewrite the materials");
+    }
+
     #[test]
     fn rock_shader_validates() {
-        // The mesh transform comes from Bevy's own shader library: a stub stands in for it.
+        // The mesh transform and the view come from Bevy's own shader library: stubs stand in for them.
         let src = include_str!("rock.wesl")
             .replace("constants::MATERIAL_BIND_GROUP", "3")
-            .replace("import bevy_pbr::render::mesh_functions::get_world_from_local;", "fn get_world_from_local(i: u32) -> mat4x4<f32> { return mat4x4<f32>(); }");
+            .replace("import bevy_pbr::render::mesh_functions::get_world_from_local;", "fn get_world_from_local(i: u32) -> mat4x4<f32> { return mat4x4<f32>(); }")
+            .replace("import bevy_pbr::render::mesh_view_bindings::view;", "struct ViewStub { world_position: vec3<f32> }\nvar<private> view: ViewStub;");
         let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)
