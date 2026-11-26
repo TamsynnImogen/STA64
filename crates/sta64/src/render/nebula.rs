@@ -220,9 +220,10 @@ pub fn near_fade(dist: f32, half_size: f32) -> f32 {
 
 /// Each nebula's occlusion intensity, 1 when nothing stands before it: the nebulae
 /// nearer the eye whose discs (by angle) cover its centre's direction thin it, each by
-/// `OCCLUDE` times how much of its disc they cover. Stock's `sCullOccludedNebula` thins
-/// "where one hides another"; its exact rule is not known to us. `(centre, radius)` per
-/// nebula; an eye inside a nebula is not occluded by it.
+/// `OCCLUDE` times how much of its disc they cover. The rule STA64 follows is that stock thins a
+/// nebula where another nebula hides it (evidence grade: read from the executable, static); the
+/// exact falloff is not known to us. `(centre, radius)` per nebula; an eye inside a nebula is
+/// not occluded by it.
 /// (The board fade keeps an [`Occlusion`] between frames; this is the one-off form the tests use.)
 #[cfg(test)]
 pub fn occlusion(eye: Vec3, nebulae: &[(Vec3, f32)]) -> Vec<f32> {
@@ -251,6 +252,22 @@ const GRID_REACH: f32 = 1.25;
 /// of that bound, of the cell index and of the directions' f32 differences.
 const GRID_PAD: f64 = 1e-5;
 
+/// The eyes one candidate list serves lie within this distance of the eye it was made at.
+const LIST_REACH: f64 = 30.0;
+/// Calls of `Occlusion::run` (the board fade calls it only when the eye or the visible nebulae
+/// changed, so not every frame) since the last list was made before another is made for an eye
+/// outside its ball; until then the grids are queried.
+const LIST_MIN_AGE: u32 = 4;
+/// Half of the margin (radians) that a list's half-angle carries beyond the largest angular radius
+/// of its disc and the drift of its direction. This is a correctness margin, not a speed setting:
+/// the pair test keeps pairs up to `PAIR_MARGIN` beyond the discs' angular radii (half-angle sum),
+/// and a list must hold every pair the pair test keeps, so it has to exceed `PAIR_MARGIN` by the
+/// rounding of the f32 directions, of the arcsines and of the chord (`LIST_ROUNDING`).
+const LIST_SLACK: f64 = 1.5e-3;
+/// An allowance, in radians of half-angle, for that rounding (about 1e-6 in all).
+const LIST_ROUNDING: f64 = 1e-4;
+const _: () = assert!(LIST_SLACK >= PAIR_MARGIN + LIST_ROUNDING);
+
 /// A size class's bound on the half-angle.
 fn class_bound(l: usize) -> f64 {
     (GRID_MIN_HALF * (1u32 << l) as f64).min(GRID_MAX_HALF)
@@ -267,6 +284,24 @@ struct Grid {
     start: Vec<u32>,
     items: Vec<u32>,
     used: bool,
+}
+
+/// The candidate lists of [`Occlusion`] and what they were made for.
+#[derive(Default)]
+struct Lists {
+    ready: bool,
+    eye: Vec3,
+    /// The nebulae (centre, radius) the lists were made for, by bits.
+    key: Vec<[u32; 4]>,
+    age: u32,
+    /// Per disc: has a list (else it runs the pair loop over every disc).
+    listed: Vec<bool>,
+    /// `items[start[i]..start[i + 1]]` are disc i's partners, ascending.
+    start: Vec<u32>,
+    items: Vec<u32>,
+    /// Calls the lists served.
+    #[cfg(test)]
+    served: u32,
 }
 
 /// `occlusion` with its working memory, which the board fade keeps between frames.
@@ -287,8 +322,24 @@ struct Grid {
 /// not a finite vector near the unit sphere (an eye at a centre, inside a nebula or next to it, a
 /// radius that is not a number, a centre at infinity) are on no grid: they are proposed to every
 /// disc, and a disc on no grid runs the pair loop over every disc.
+///
+/// Candidate lists. While the eye moves within `LIST_REACH` of where it was, and the nebulae are
+/// the same (by bits), the grids are not queried again. At the eye `e0` a list is made for each
+/// disc that is regular there (a finite radius of at least 0, its centre between `4 LIST_REACH`
+/// and 1e6 away): every partner whose directions, seen from `e0`, are closer than the discs'
+/// largest angular radii for any eye in the ball, plus how far a direction turns in the ball (`asin
+/// (LIST_REACH / distance)`), plus `4 LIST_SLACK` (6e-3 rad), which is wider than the pair test's 2e-3 rad by far more than any
+/// rounding (`LIST_SLACK` is a correctness margin; a compile-time assertion keeps it above
+/// `PAIR_MARGIN` plus `LIST_ROUNDING`). For an eye `e` in the ball, two directions from `e` are at least that angle
+/// less the two drifts apart, so a pair not in the list is one the pair test leaves out at `e`
+/// (the same argument as for the grids). The pair loop's own conditions are applied to the list at
+/// `e`, in ascending index order, so the result is the pair loop's, bit for bit. A disc not regular
+/// at `e0` is in every list and runs the pair loop over every disc. Outside the ball, a list is made
+/// anew if `LIST_MIN_AGE` calls of `run` have passed since the last, else the grids are queried as before.
 #[derive(Default)]
 pub struct Occlusion {
+    lists: Lists,
+    spare: Vec<(f64, f64, f64)>,
     /// Per disc: direction, distance, angular radius (as the pair loop has them).
     discs: Vec<(Vec3, f32, f32)>,
     /// Per disc: half the angular radius plus the margin, its sine and its cosine (in f64).
@@ -302,7 +353,8 @@ pub struct Occlusion {
     /// One disc's partners.
     found: Vec<u32>,
     /// Deliberate faults, for the tests to show they would see them: 1 queries the grids without
-    /// the class bound (too small a range), 2 multiplies in descending order.
+    /// the class bound (too small a range), 2 multiplies in descending order, 3, 4 and 5 make the candidate
+    /// lists without the drift of directions and the slack, without the slack, without the drift.
     #[cfg(test)]
     fault: u8,
 }
@@ -311,6 +363,60 @@ impl Occlusion {
     /// Each nebula's intensity into `out` (see `occlusion`).
     pub fn run(&mut self, eye: Vec3, nebulae: &[(Vec3, f32)], out: &mut Vec<f32>) {
         let n = nebulae.len();
+        self.load(eye, nebulae);
+        let key_same = self.lists.ready && self.lists.key.len() == n && self.lists.key.iter().zip(nebulae).all(|(k, &(c, r))| *k == [c.x.to_bits(), c.y.to_bits(), c.z.to_bits(), r.to_bits()]);
+        let reach = {
+            let (e0, e) = (self.lists.eye, eye);
+            let (x, y, z) = (e.x as f64 - e0.x as f64, e.y as f64 - e0.y as f64, e.z as f64 - e0.z as f64);
+            (x * x + y * y + z * z).sqrt()
+        };
+        let mut serve = key_same && reach <= LIST_REACH;
+        self.lists.age = self.lists.age.saturating_add(1);
+        if !serve && (!key_same || self.lists.age >= LIST_MIN_AGE) && eye.to_array().iter().all(|c| c.is_finite()) {
+            self.make_lists(eye, nebulae);
+            serve = true;
+        }
+        out.clear();
+        if serve {
+            #[cfg(test)]
+            {
+                self.lists.served += 1;
+            }
+            for i in 0..n {
+                if !self.lists.listed[i] {
+                    out.push(self.product(i, 0..n, nebulae));
+                    continue;
+                }
+                let js = &self.lists.items[self.lists.start[i] as usize..self.lists.start[i + 1] as usize];
+                #[cfg(test)]
+                if self.fault == 2 {
+                    out.push(self.product(i, js.iter().rev().map(|&j| j as usize), nebulae));
+                    continue;
+                }
+                out.push(self.product(i, js.iter().map(|&j| j as usize), nebulae));
+            }
+            return;
+        }
+        self.grids();
+        let mut found = std::mem::take(&mut self.found);
+        for i in 0..n {
+            if self.level[i] as usize == GRID_LEVELS {
+                out.push(self.product(i, 0..n, nebulae));
+                continue;
+            }
+            self.partners::<false>(i, nebulae, &mut found);
+            found.sort_unstable();
+            #[cfg(test)]
+            if self.fault == 2 {
+                found.reverse();
+            }
+            out.push(self.product(i, found.iter().map(|&j| j as usize), nebulae));
+        }
+        self.found = found;
+    }
+
+    /// The discs and half-angles of the nebulae seen from `eye`.
+    fn load(&mut self, eye: Vec3, nebulae: &[(Vec3, f32)]) {
         // Each nebula's disc once (direction, distance, angular radius), not once per pair: the
         // disc costs a square root and an arcsine.
         self.discs.clear();
@@ -327,30 +433,78 @@ impl Occlusion {
             let h = if (c - eye).length() >= 1e-3 { a as f64 * 0.5 + PAIR_MARGIN } else { std::f64::consts::PI };
             (h, h.sin(), h.cos())
         }));
+    }
+
+    /// The half-angle a list gives a regular disc of radius `r` whose centre is `d0` from the eye the
+    /// list is made at: half the largest angular radius for any eye in the ball plus half the drift
+    /// of its direction, plus `LIST_SLACK`.
+    fn list_half(&self, r: f32, d0: f64) -> f64 {
+        let a_max = (r as f64 / (d0 - LIST_REACH)).min(1.0).asin();
+        let drift = (LIST_REACH / d0).asin();
+        let slack = LIST_SLACK;
+        // Deliberate faults: 3 leaves out the drift and the slack, 4 the slack, 5 the drift.
+        #[cfg(test)]
+        let (drift, slack) = match self.fault {
+            3 => (0.0, 0.0),
+            4 => (drift, 0.0),
+            5 => (0.0, slack),
+            _ => (drift, slack),
+        };
+        (a_max + drift) * 0.5 + slack
+    }
+
+    /// The candidate lists for the eyes within `LIST_REACH` of `eye` (see [`Occlusion`]), made with
+    /// the discs of `eye` in `self.discs`.
+    fn make_lists(&mut self, eye: Vec3, nebulae: &[(Vec3, f32)]) {
+        let n = nebulae.len();
+        let rho = LIST_REACH;
+        let mut inflated = std::mem::take(&mut self.spare);
+        inflated.clear();
+        let mut listed = std::mem::take(&mut self.lists.listed);
+        listed.clear();
+        for &(c, r) in nebulae {
+            let (x, y, z) = (c.x as f64 - eye.x as f64, c.y as f64 - eye.y as f64, c.z as f64 - eye.z as f64);
+            let d0 = (x * x + y * y + z * z).sqrt();
+            let safe = r.is_finite() && r >= 0.0 && d0 >= 4.0 * rho && d0 <= 1.0e6;
+            listed.push(safe);
+            let h = if safe { self.list_half(r, d0) } else { std::f64::consts::PI };
+            inflated.push((h, h.sin(), h.cos()));
+        }
+        self.lists.listed = listed;
+        std::mem::swap(&mut self.half, &mut inflated);
         self.grids();
-        out.clear();
         let mut found = std::mem::take(&mut self.found);
+        let mut start = std::mem::take(&mut self.lists.start);
+        let mut items = std::mem::take(&mut self.lists.items);
+        start.clear();
+        items.clear();
+        start.push(0);
         for i in 0..n {
-            if self.level[i] as usize == GRID_LEVELS {
-                out.push(self.product(i, 0..n, nebulae));
-                continue;
+            if self.lists.listed[i] {
+                self.partners::<true>(i, nebulae, &mut found);
+                found.sort_unstable();
+                items.extend_from_slice(&found);
             }
-            self.partners(i, nebulae, &mut found);
-            found.sort_unstable();
-            #[cfg(test)]
-            if self.fault == 2 {
-                found.reverse();
-            }
-            out.push(self.product(i, found.iter().map(|&j| j as usize), nebulae));
+            start.push(items.len() as u32);
         }
         self.found = found;
+        std::mem::swap(&mut self.half, &mut inflated);
+        self.spare = inflated;
+        let lists = &mut self.lists;
+        lists.start = start;
+        lists.items = items;
+        lists.key.clear();
+        lists.key.extend(nebulae.iter().map(|&(c, r)| [c.x.to_bits(), c.y.to_bits(), c.z.to_bits(), r.to_bits()]));
+        lists.eye = eye;
+        lists.ready = true;
+        lists.age = 0;
     }
 
     /// Whether the pair loop passes over partner j of disc i without a factor: j is i, is not
     /// nearer the eye, holds the eye, or the pair test leaves it out.
-    fn skips(&self, i: usize, j: usize, nebulae: &[(Vec3, f32)]) -> bool {
+    fn skips<const GEOM: bool>(&self, i: usize, j: usize, nebulae: &[(Vec3, f32)]) -> bool {
         let ((di, dist_i, _), (dj, dist_j, _)) = (self.discs[i], self.discs[j]);
-        if j == i || dist_j >= dist_i || dist_j < nebulae[j].1 {
+        if j == i || (!GEOM && (dist_j >= dist_i || dist_j < nebulae[j].1)) {
             return true;
         }
         // Discs whose directions are further apart than their angular radii plus 2e-3 rad cover
@@ -376,7 +530,7 @@ impl Occlusion {
         let (di, _, ai) = self.discs[i];
         let mut k = 1.0f32;
         for j in js {
-            if self.skips(i, j, nebulae) {
+            if self.skips::<false>(i, j, nebulae) {
                 continue;
             }
             let (dj, _, aj) = self.discs[j];
@@ -449,9 +603,9 @@ impl Occlusion {
     /// is subtracted from or added to disc i's component before its cell is taken. Its f32
     /// difference along that axis is then longer than the bound by most of the pad, and so is the
     /// root of the test's sum of squares: the test leaves the pair out.
-    fn partners(&self, i: usize, nebulae: &[(Vec3, f32)], found: &mut Vec<u32>) {
+    fn partners<const GEOM: bool>(&self, i: usize, nebulae: &[(Vec3, f32)], found: &mut Vec<u32>) {
         found.clear();
-        found.extend(self.wide.iter().copied().filter(|&j| !self.skips(i, j as usize, nebulae)));
+        found.extend(self.wide.iter().copied().filter(|&j| !self.skips::<GEOM>(i, j as usize, nebulae)));
         let (d, hi) = (self.discs[i].0, self.half[i].0);
         for (l, g) in self.grids.iter().enumerate() {
             if !g.used {
@@ -469,7 +623,7 @@ impl Occlusion {
             for cx in range(d.x) {
                 let row = cx * g.cells;
                 let items = &g.items[g.start[row + zs.start()] as usize..g.start[row + zs.end() + 1] as usize];
-                found.extend(items.iter().copied().filter(|&j| !self.skips(i, j as usize, nebulae)));
+                found.extend(items.iter().copied().filter(|&j| !self.skips::<GEOM>(i, j as usize, nebulae)));
             }
         }
     }
@@ -1055,6 +1209,330 @@ mod tests {
             });
             assert!(differ.count() > 10, "fault {fault} goes unseen");
         }
+    }
+
+    /// A small xorshift generator for the stress scenes.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> f64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            (self.0 >> 11) as f64 / (1u64 << 53) as f64
+        }
+
+        fn range(&mut self, lo: f64, hi: f64) -> f64 {
+            lo + (hi - lo) * self.next()
+        }
+
+        fn unit(&mut self) -> [f64; 3] {
+            let z = self.range(-1.0, 1.0);
+            let a = self.range(0.0, std::f64::consts::TAU);
+            let s = (1.0 - z * z).sqrt();
+            [s * a.cos(), z, s * a.sin()]
+        }
+    }
+
+    fn normalised(v: [f64; 3]) -> [f64; 3] {
+        let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        [v[0] / l, v[1] / l, v[2] / l]
+    }
+
+    /// Nebulae seen from `eye` that stress the index: directions spread over the sphere, in tight
+    /// clusters, at the poles, and with x on the boundaries of a size class's cells; half-angles
+    /// at a class bound and a hair either side; distances over four decades; and a few degenerate
+    /// ones (a radius of 0, below 0, infinite, not a number or denormal, a centre at the eye).
+    fn stress_scene(seed: u64, eye: Vec3) -> Vec<(Vec3, f32)> {
+        let mut r = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
+        for _ in 0..4 {
+            r.next();
+        }
+        let n = 60 + (r.next() * 200.0) as usize;
+        let axis = r.unit();
+        let spread = 10f64.powf(r.range(-6.0, -0.3));
+        let mut out = Vec::new();
+        for _ in 0..n {
+            let mode = (seed + (r.next() * 3.0) as u64) % 4;
+            let d = match mode {
+                0 => r.unit(),
+                1 => {
+                    let o = r.unit();
+                    normalised([axis[0] + spread * o[0], axis[1] + spread * o[1], axis[2] + spread * o[2]])
+                }
+                2 => {
+                    let sign = if r.next() < 0.5 { 1.0 } else { -1.0 };
+                    normalised([r.range(-1e-3, 1e-3), sign, r.range(-1e-3, 1e-3)])
+                }
+                _ => {
+                    let l = 1 + (r.next() * 7.0) as usize;
+                    let bound = class_bound(l);
+                    let cells = ((2.0 * GRID_OFFSET / (2.0 * (2.0 * bound).sin() + GRID_PAD)).floor() as usize).clamp(1, GRID_CELLS);
+                    let size = 2.0 * GRID_OFFSET / cells as f64;
+                    let k = (cells as f64 * r.range(0.2, 0.8)).floor();
+                    let x = -GRID_OFFSET + k * size;
+                    let z = r.range(-0.5, 0.5);
+                    let y = (1.0 - x * x - z * z).max(0.0).sqrt() * if r.next() < 0.5 { 1.0 } else { -1.0 };
+                    [x, y, z]
+                }
+            };
+            let h = if r.next() < 0.4 {
+                let l = (r.next() * GRID_LEVELS as f64) as usize;
+                class_bound(l) + [0.0, 1e-12, -1e-12, 1e-7, -1e-7][(r.next() * 5.0) as usize]
+            } else {
+                10f64.powf(r.range(-3.0, -0.15))
+            };
+            let dist = 10f64.powf(r.range(0.5, 4.0));
+            let radius = (dist * (2.0 * (h - PAIR_MARGIN)).max(0.0).sin()) as f32;
+            let c = eye + Vec3::new(d[0] as f32, d[1] as f32, d[2] as f32) * dist as f32;
+            out.push((c, radius));
+        }
+        out.extend([
+            (eye, 10.0),
+            (eye + Vec3::new(1e-4, 0.0, 0.0), 10.0),
+            (eye + Vec3::new(300.0, 20.0, 0.0), 0.0),
+            (eye + Vec3::new(-300.0, 20.0, 40.0), -5.0),
+            (eye + Vec3::new(0.0, -200.0, 500.0), f32::INFINITY),
+            (eye + Vec3::new(50.0, 0.0, 500.0), f32::NAN),
+            (eye + Vec3::new(80.0, 10.0, 900.0), 1e-40),
+            (Vec3::new(3.0e38, 0.0, -3.0e38), 100.0),
+        ]);
+        out
+    }
+
+    /// The index offers, for every disc on a grid, every partner the pair loop keeps, and none
+    /// twice (the bit comparisons would pass if a partner it missed happened to give a factor of 1).
+    /// Scenes with clustered and polar directions, directions on cell boundaries and half-angles at
+    /// the class bounds.
+    #[test]
+    fn the_grids_offer_every_partner_the_pair_loop_keeps_once() {
+        let (mut kept, mut at_bound, mut polar, mut on_grid) = (0, 0, 0, 0);
+        let mut found = Vec::new();
+        for seed in 0..300u64 {
+            let eye = Vec3::new((seed % 7) as f32 * 3.0, (seed % 5) as f32, 0.0);
+            let scene = stress_scene(seed, eye);
+            let n = scene.len();
+            let mut ix = Occlusion::default();
+            ix.load(eye, &scene);
+            ix.grids();
+            let mut mark = vec![false; n];
+            for i in 0..n {
+                if ix.level[i] as usize == GRID_LEVELS {
+                    continue;
+                }
+                on_grid += 1;
+                let h = ix.half[i].0;
+                at_bound += (0..GRID_LEVELS).any(|l| (h - class_bound(l)).abs() < 1e-6) as u32;
+                polar += (ix.discs[i].0.y.abs() > 0.999) as u32;
+                ix.partners::<false>(i, &scene, &mut found);
+                mark.fill(false);
+                for &j in &found {
+                    assert!(!mark[j as usize], "seed {seed}: disc {i} is offered {j} twice");
+                    mark[j as usize] = true;
+                }
+                for j in 0..n {
+                    if !ix.skips::<false>(i, j, &scene) {
+                        assert!(mark[j], "seed {seed}: the pair loop keeps {j} for disc {i}, the index does not offer it");
+                        kept += 1;
+                    }
+                }
+            }
+        }
+        assert!(kept > 5_000 && at_bound > 1_000 && polar > 500 && on_grid > 10_000, "{kept} {at_bound} {polar} {on_grid}");
+    }
+
+    /// With the eye moving by a few units a frame (and now and then jumping), the candidate lists
+    /// give the pair loop's result by bits, and every partner the pair loop keeps is in the list of
+    /// a disc that has one. A list too narrow by its drift and margin is seen.
+    #[test]
+    fn candidate_lists_give_the_pair_loops_result_for_a_slowly_moving_eye() {
+        let bits = |v: &[f32]| v.iter().map(|k| k.to_bits()).collect::<Vec<_>>();
+        let (mut served, mut kept, mut dimmed, mut narrow_seen) = (0, 0, 0, 0);
+        let mut out = Vec::new();
+        for seed in 0..24u64 {
+            let scene = stress_scene(seed, Vec3::ZERO);
+            let n = scene.len();
+            let mut r = Rng(seed + 77);
+            let mut eye = Vec3::new(r.range(-20.0, 20.0) as f32, r.range(-20.0, 20.0) as f32, r.range(-20.0, 20.0) as f32);
+            let mut ix = Occlusion::default();
+            let mut bad = Occlusion { fault: 3, ..Default::default() };
+            for step in 0..70 {
+                eye += Vec3::new(r.range(-4.0, 4.0) as f32, r.range(-2.0, 2.0) as f32, r.range(-4.0, 4.0) as f32);
+                if step == 41 {
+                    eye += Vec3::new(90.0, 5.0, -60.0);
+                }
+                let old = occlusion_reference(eye, &scene);
+                let before = ix.lists.served;
+                ix.run(eye, &scene, &mut out);
+                assert_eq!(bits(&out), bits(&old), "seed {seed} step {step} eye {eye}");
+                dimmed += old.iter().filter(|&&k| k < 1.0).count();
+                if ix.lists.served > before {
+                    served += 1;
+                    for i in (0..n).filter(|&i| ix.lists.listed[i]) {
+                        let js = &ix.lists.items[ix.lists.start[i] as usize..ix.lists.start[i + 1] as usize];
+                        assert!(js.windows(2).all(|w| w[0] < w[1]), "list of {i} is not ascending");
+                        for j in (0..n).filter(|&j| !ix.skips::<false>(i, j, &scene)) {
+                            assert!(js.contains(&(j as u32)), "seed {seed} step {step}: the pair loop keeps {j} for disc {i}, its list lacks it");
+                            kept += 1;
+                        }
+                    }
+                }
+                bad.run(eye, &scene, &mut out);
+                narrow_seen += (bits(&out) != bits(&old)) as u32;
+            }
+        }
+        assert!(served > 24 * 40 && kept > 5_000 && dimmed > 5_000, "{served} {kept} {dimmed}");
+        assert!(narrow_seen > 5, "a list without its drift and margin goes unseen");
+    }
+
+    /// A direction at angle `theta` from `u` (unit vectors in f64), turned about a random axis.
+    fn turned(r: &mut Rng, u: [f64; 3], theta: f64) -> [f64; 3] {
+        let w = r.unit();
+        let dot = w[0] * u[0] + w[1] * u[1] + w[2] * u[2];
+        let w = normalised([w[0] - dot * u[0], w[1] - dot * u[1], w[2] - dot * u[2]]);
+        [0, 1, 2].map(|k| u[k] * theta.cos() + w[k] * theta.sin())
+    }
+
+    fn at(e: Vec3, d: [f64; 3], dist: f64) -> Vec3 {
+        e + Vec3::new(d[0] as f32, d[1] as f32, d[2] as f32) * dist as f32
+    }
+
+    /// Whether `ix`, after serving an eye from lists, has every partner the pair loop keeps in the
+    /// list of each disc that has one; and the result by bits equal to the pair loop's.
+    struct Served {
+        contained: bool,
+        bits_equal: bool,
+    }
+
+    /// Lists made at `e0` for `scene`, then the eye `e` (within the ball) served from them.
+    fn serve_at(fault: u8, e0: Vec3, e: Vec3, scene: &[(Vec3, f32)]) -> Served {
+        let mut ix = Occlusion { fault, ..Default::default() };
+        let mut out = Vec::new();
+        ix.run(e0, scene, &mut out);
+        let before = ix.lists.served;
+        ix.run(e, scene, &mut out);
+        assert!(ix.lists.served > before, "the eye {e} is not served from the lists made at {e0}");
+        let mut contained = true;
+        for i in (0..scene.len()).filter(|&i| ix.lists.listed[i]) {
+            let js = &ix.lists.items[ix.lists.start[i] as usize..ix.lists.start[i + 1] as usize];
+            contained &= (0..scene.len()).filter(|&j| !ix.skips::<false>(i, j, scene)).all(|j| js.contains(&(j as u32)));
+        }
+        let bits_equal = out.iter().map(|k| k.to_bits()).eq(occlusion_reference(e, scene).iter().map(|k| k.to_bits()));
+        Served { contained, bits_equal }
+    }
+
+    /// Pairs the pair test keeps only by its margin (their discs do not overlap, so their factor
+    /// is exactly 1), far away so that the lists' drift is small: a list made without the slack
+    /// misses them, a list with it never does. The result by bits cannot show a missing slack,
+    /// as those pairs give a factor of 1: the containment is what shows it.
+    #[test]
+    fn a_list_needs_its_slack_for_pairs_the_pair_test_keeps_by_its_margin() {
+        let mut r = Rng(0x51ac);
+        let (mut missed_without, mut trials) = (0, 0);
+        for _ in 0..600 {
+            let e0 = Vec3::new(r.range(-40.0, 40.0) as f32, r.range(-40.0, 40.0) as f32, r.range(-40.0, 40.0) as f32);
+            let (di, dj) = (r.range(1e5, 4e5), r.range(1e5, 4e5));
+            let (ai, aj) = (r.range(0.005, 0.1), r.range(0.005, 0.1));
+            let (ri, rj) = ((di * ai.sin()) as f32, (dj * aj.sin()) as f32);
+            let u = r.unit();
+            // Between the discs' touching angle and the pair test's margin beyond it.
+            let theta = ai + aj + r.range(0.2e-3, 1.8e-3);
+            let v = turned(&mut r, u, theta);
+            let scene = [(at(e0, u, di), ri), (at(e0, v, dj), rj)];
+            let edge = |r: &mut Rng| {
+                let n = r.unit();
+                e0 + Vec3::new(n[0] as f32, n[1] as f32, n[2] as f32) * (LIST_REACH * 0.9999) as f32
+            };
+            for e in [e0, edge(&mut r)] {
+                let ok = serve_at(0, e0, e, &scene);
+                assert!(ok.contained && ok.bits_equal);
+                missed_without += !serve_at(4, e0, e, &scene).contained as u32;
+                trials += 1;
+            }
+        }
+        assert!(missed_without > trials / 10, "a list without its slack goes unseen: {missed_without} of {trials}");
+    }
+
+    /// An eye at the edge of the ball (0.9999 of the reach) reached by a sideways move, perpendicular
+    /// to both directions or along their plane, with a near and a far disc whose directions turn by
+    /// very different angles: the result is the pair loop's, every kept partner is in the list, and
+    /// a list made without the drift term loses pairs whose discs overlap (seen in the bits as well).
+    #[test]
+    fn a_list_needs_its_drift_for_an_eye_at_the_edge_of_the_ball() {
+        let mut r = Rng(0xd41f7);
+        let (mut missed_without, mut differs_without, mut dimmed) = (0, 0, 0);
+        for _ in 0..600 {
+            let e0 = Vec3::new(r.range(-40.0, 40.0) as f32, r.range(-40.0, 40.0) as f32, r.range(-40.0, 40.0) as f32);
+            // One disc near and wide, the other far: moving the eye in their plane turns them by
+            // very different angles.
+            let (di, dj) = (r.range(150.0, 250.0), r.range(800.0, 3000.0));
+            let (ai, aj) = (r.range(0.1, 0.5), r.range(0.02, 0.1));
+            let (ri, rj) = ((di * ai.sin()) as f32, (dj * aj.sin()) as f32);
+            let u = r.unit();
+            let theta = r.range(0.0, ai + aj + 0.3);
+            let v = turned(&mut r, u, theta);
+            let scene = [(at(e0, u, di), ri), (at(e0, v, dj), rj)];
+            let cross = normalised([u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]);
+            // In the plane of the two directions, along the way from the first to the second.
+            let dot = u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+            let tangent = normalised([v[0] - dot * u[0], v[1] - dot * u[1], v[2] - dot * u[2]]);
+            for (n, sign) in [(cross, 1.0), (cross, -1.0), (tangent, 1.0), (tangent, -1.0)] {
+                let e = e0 + Vec3::new(n[0] as f32, n[1] as f32, n[2] as f32) * (sign * LIST_REACH * 0.9999) as f32;
+                let ok = serve_at(0, e0, e, &scene);
+                assert!(ok.contained && ok.bits_equal, "{e0} {e} {scene:?}");
+                dimmed += occlusion_reference(e, &scene).iter().filter(|&&k| k < 1.0).count();
+                let bad = serve_at(5, e0, e, &scene);
+                missed_without += !bad.contained as u32;
+                differs_without += !bad.bits_equal as u32;
+            }
+        }
+        assert!(dimmed > 100 && missed_without > 20 && differs_without > 5, "{dimmed} {missed_without} {differs_without}");
+    }
+
+    /// Pairs placed just inside, exactly on and just outside the angle a list reaches: a pair inside
+    /// is in the list, one outside is not (the list is no wider than its bound), the one on it gives
+    /// the pair loop's result.
+    #[test]
+    fn a_list_holds_a_pair_just_inside_its_bound_and_not_one_just_outside() {
+        let mut r = Rng(0xb0u64);
+        let probe = Occlusion::default();
+        let (mut inside, mut outside) = (0, 0);
+        for _ in 0..400 {
+            let e0 = Vec3::new(r.range(-40.0, 40.0) as f32, r.range(-40.0, 40.0) as f32, r.range(-40.0, 40.0) as f32);
+            let (di, dj) = (r.range(150.0, 5000.0), r.range(150.0, 5000.0));
+            let (ai, aj) = (r.range(0.01, 0.4), r.range(0.01, 0.4));
+            let (ri, rj) = ((di * ai.sin()) as f32, (dj * aj.sin()) as f32);
+            let u = r.unit();
+            // The bound: twice the sum of the two lists' half-angles, from the discs as stored.
+            let place = |v: [f64; 3]| [(at(e0, u, di), ri), (at(e0, v, dj), rj)];
+            let probe_scene = place(u);
+            let d0 = |c: Vec3| {
+                let (x, y, z) = (c.x as f64 - e0.x as f64, c.y as f64 - e0.y as f64, c.z as f64 - e0.z as f64);
+                (x * x + y * y + z * z).sqrt()
+            };
+            let bound = 2.0 * (probe.list_half(ri, d0(probe_scene[0].0)) + probe.list_half(rj, d0(probe_scene[1].0)));
+            for (scale, want) in [(1.0 - 1e-4, Some(true)), (1.0, None), (1.0 + 1e-4, Some(false))] {
+                let v = turned(&mut r, u, bound * scale);
+                let scene = place(v);
+                let mut ix = Occlusion::default();
+                let mut out = Vec::new();
+                ix.run(e0, &scene, &mut out);
+                let listed = ix.lists.items[ix.lists.start[0] as usize..ix.lists.start[1] as usize].contains(&1);
+                match want {
+                    Some(true) => {
+                        assert!(listed, "a pair just inside the bound is not listed");
+                        inside += 1;
+                    }
+                    Some(false) => {
+                        assert!(!listed, "a pair just outside the bound is listed");
+                        outside += 1;
+                    }
+                    None => {}
+                }
+                assert_eq!(out.iter().map(|k| k.to_bits()).collect::<Vec<_>>(), occlusion_reference(e0, &scene).iter().map(|k| k.to_bits()).collect::<Vec<_>>());
+            }
+        }
+        assert!(inside == 400 && outside == 400);
     }
 
     #[test]
