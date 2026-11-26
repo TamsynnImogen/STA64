@@ -58,6 +58,9 @@ pub struct SeatStart {
     pub crew: Option<i32>,
     /// `None` when the table gives 0.
     pub officers: Option<i32>,
+    /// `officers` is the cap shown at the start, including the officer gain of the stations the seat owns
+    /// finished at the start (an Armada I map record): [`queue`] writes it minus those gains as the base.
+    pub officers_include_stations: bool,
 }
 
 const LIMIT: f32 = 1_000_000_000.0;
@@ -89,12 +92,15 @@ pub fn read_start_stock(vfs: &Vfs, bzn: &str) -> StartStock {
 /// and one player report (see [`sta_bzn::a1::team_starts`]), interim. Seat `n` = team `n + 1` rests on the
 /// colour table's team order and the converted-mission numbering: not measured.
 ///
-/// Interim decision, officer limit: the record is written as the limit's base, and the sim then adds the
-/// officer gain of every finished starbase on top, as it does for any Armada I seat. On the maps read, the
-/// record's relation to the starting stations is not uniform; whether the original shows the record itself
-/// at the start is not measured, so a seat that starts with finished starbases may show one gain per
-/// starting station more than the original.
-// TODO: settle whether a mission's officer limit includes the starting starbases' gain (measure the original).
+/// Interim rule, officer limit: the record is the cap shown at the start. [`queue`] writes the base as the
+/// record minus the officer gains of the gain-giving stations the seat owns finished at the start (the sim's
+/// own derived gains, read from the view), so the cap at the start equals the record; a station finished
+/// later adds its gain on top and a lost station takes it away, as the sim derives for any Armada I seat. A
+/// base that would be negative (the stations' gains exceed the record) is clamped at 0, so the cap is then
+/// the gains alone. The subtraction assumes a race officer multiplier of 1. Grade: read from data, the
+/// reading inferred; not measured in the running original; a player's observation at the start is the only
+/// run-time evidence. Interim.
+// TODO: measure in the original whether a mission's cap at the start is the record or the record plus the starting stations' gains.
 // TODO: the table's maximum dilithium and maximum crew records are not read (what they bound is not established).
 pub fn from_a1_table(table: &[sta_bzn::a1::A1TeamStart]) -> Vec<SeatStart> {
     table
@@ -108,6 +114,7 @@ pub fn from_a1_table(table: &[sta_bzn::a1::A1TeamStart]) -> Vec<SeatStart> {
             biomatter: None,
             crew: Some(whole(t.crew)).filter(|&c| c > 0),
             officers: Some(t.officers.clamp(0, LIMIT as i32)).filter(|&o| o > 0),
+            officers_include_stations: true,
         })
         .collect()
 }
@@ -134,6 +141,7 @@ pub fn from_table(table: &[sta_bzn::TeamStart]) -> Vec<SeatStart> {
             biomatter: Some(whole(t.biomatter)),
             crew: Some(whole(t.crew)).filter(|&c| c > 0),
             officers: Some(t.officers.clamp(0, LIMIT as i32)).filter(|&o| o > 0),
+            officers_include_stations: false,
         })
         .collect()
 }
@@ -149,7 +157,7 @@ pub fn header_start(rules: &sta_content::Rules, seats: impl IntoIterator<Item = 
     if dilithium.is_none() && crew.is_none() && officers.is_none() {
         return Vec::new();
     }
-    seats.into_iter().map(|seat| SeatStart { seat, dilithium, latinum: None, metal: None, biomatter: None, crew, officers }).collect()
+    seats.into_iter().map(|seat| SeatStart { seat, dilithium, latinum: None, metal: None, biomatter: None, crew, officers, officers_include_stations: false }).collect()
 }
 
 impl StartStock {
@@ -195,9 +203,13 @@ pub(crate) fn queue(ctx: &mut Ctx, start: StartStock) {
         ctx.unsupported(why);
     }
     let mut shown = Vec::new();
-    for seat in start.seats {
+    for mut seat in start.seats {
         let Some(p) = ctx.view.players.iter().find(|p| p.id == seat.seat) else { continue };
-        shown.extend(seat.edits(placed_loadout(&ctx.view, p)));
+        let placed = placed_loadout(&ctx.view, p);
+        if seat.officers_include_stations && !placed {
+            seat.officers = seat.officers.map(|record| record.saturating_sub(starting_gains(ctx.content.as_deref(), p)).max(0));
+        }
+        shown.extend(seat.edits(placed));
     }
     show(&mut ctx.view, &shown);
     for e in &shown {
@@ -211,6 +223,15 @@ pub(crate) fn queue(ctx: &mut Ctx, start: StartStock) {
 /// every seat, written or not, so it cannot tell a placed loadout from a bare mission seat.
 fn placed_loadout(view: &WorldView, p: &sta_sim::view::PlayerView) -> bool {
     p.crew.is_some() || view.attrs.seats.iter().any(|s| s.player == p.id && s.officer_base.is_some())
+}
+
+/// The officer gains in `p`'s derived cap while no base is written: the derived cap (Armada I content) less
+/// the header base the sim starts from. 0 for content without the Armada I officer rules.
+fn starting_gains(content: Option<&sta_content::ContentDb>, p: &sta_sim::view::PlayerView) -> i32 {
+    let Some(db) = content.filter(|db| db.a1_officers()) else { return 0 };
+    let baseline = db.a1_starting_officers().unwrap_or(0);
+    let derived = p.officers[1].to_bits() >> 32;
+    i32::try_from(derived).unwrap_or(i32::MAX).saturating_sub(baseline).max(0)
 }
 
 /// What the sim will hold once `edits` are applied, in `view`: the script's first step reads it.

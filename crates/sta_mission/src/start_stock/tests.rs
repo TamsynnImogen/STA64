@@ -264,3 +264,79 @@ fn a_table_that_gives_a_seat_values_is_never_topped_up_from_the_header() {
     assert_eq!(with_table.clone().or_header(db.rules(), [PlayerId(0), PlayerId(1)]), with_table);
     assert_eq!(with_table.seats[1].crew, None, "0 stays unwritten even though the header has a crew value");
 }
+
+// A seat that starts with finished gain-giving stations (own-authored: gain 20 per station).
+fn a1_world(stations: usize) -> (Sim, WorldView, Arc<ContentDb>, Vec<sta_core::EntityId>) {
+    let profile = sta_content::Profile::Sta1Classic;
+    let mut sb = sta_content::UnitDef::new("sb", "starbase");
+    sb.race = "fx".into();
+    sb.hull = Fixed::from_int(100);
+    sb.a1_base_officers = Some(sta_content::A1BaseOfficers { gain: 20, maximum_upgrades: 0, upgrade: None });
+    let db = ContentDb::builder().profile(profile).features(profile.features()).unit(sb).build().unwrap();
+    let db = Arc::new(db.with_rules(sta_content::Rules::from_header(HEADER).0));
+    let seat = |n: u8| PlayerSetup { id: PlayerId(n), team: TeamId(n), race: "fx".into(), control: if n == 0 { Control::Human } else { Control::Idle } };
+    let setup = GameSetup { seed: 3, map: Arc::new(MapDef::empty()), content: db.clone(), players: vec![seat(0), seat(1)], options: GameOptions::default() };
+    let mut sim = Sim::from_setup(&setup);
+    let ids = (0..stations).map(|i| spawn_station(&mut sim, &db, i as i32)).collect();
+    let view = (*sim.step(&[]).view).clone();
+    (sim, view, db, ids)
+}
+
+fn spawn_station(sim: &mut Sim, db: &ContentDb, x: i32) -> sta_core::EntityId {
+    let at = sta_core::Vec3 { x: Fixed::from_int(x * 50), y: Fixed::ZERO, z: Fixed::ZERO };
+    sim.spawn_def(db.key("sb").unwrap(), PlayerId(0), at, (Fixed::ZERO, Fixed::ONE)).unwrap()
+}
+
+fn cap(view: &WorldView, seat: u8) -> Fixed {
+    view.player(PlayerId(seat)).unwrap().officers[1]
+}
+
+fn base_of(view: &WorldView, seat: u8) -> Option<Fixed> {
+    view.attrs.seats.iter().find(|s| s.player == PlayerId(seat)).and_then(|s| s.officer_base)
+}
+
+#[test]
+fn the_map_record_is_the_cap_at_the_start_of_a_seat_with_a_finished_station() {
+    let (mut sim, mut view, db, ids) = a1_world(1);
+    assert_eq!(cap(&view, 0), Fixed::from_int(41 + 20), "the derived cap before the grant: header base plus the station's gain");
+    let mut rt = runtime("", &view, &db, from_a1_table(&a1_table()));
+    play(&mut rt, &mut sim, &mut view, 2);
+    assert_eq!(cap(&view, 0), Fixed::from_int(262), "the cap at the start equals the record");
+    assert_eq!(base_of(&view, 0), Some(Fixed::from_int(242)), "the base is the record less the station's gain");
+    // A further station finishing adds its gain; losing one takes it away again.
+    spawn_station(&mut sim, &db, 5);
+    view = (*sim.step(&[]).view).clone();
+    assert_eq!(cap(&view, 0), Fixed::from_int(282));
+    let kill = Command { player: PlayerId::SCRIPT, seq: 9, kind: CommandKind::Edit(Edit::Kill(ids[0])) };
+    sim.step(&[kill]);
+    view = (*sim.step(&[]).view).clone();
+    assert_eq!(cap(&view, 0), Fixed::from_int(262), "one station lost: one gain less");
+}
+
+#[test]
+fn a_seat_without_a_station_gets_the_record_as_its_base() {
+    let (mut sim, mut view, db, _) = a1_world(0);
+    let mut rt = runtime("", &view, &db, from_a1_table(&a1_table()));
+    play(&mut rt, &mut sim, &mut view, 2);
+    assert_eq!(cap(&view, 0), Fixed::from_int(262));
+    assert_eq!(base_of(&view, 0), Some(Fixed::from_int(262)));
+}
+
+#[test]
+fn a_base_that_would_be_negative_is_clamped_at_zero() {
+    let (mut sim, mut view, db, _) = a1_world(3);
+    let table = vec![sta_bzn::a1::A1TeamStart { dilithium: 1.0, crew: 5.0, officers: 30 }];
+    let mut rt = runtime("", &view, &db, from_a1_table(&table));
+    play(&mut rt, &mut sim, &mut view, 2);
+    assert_eq!(base_of(&view, 0), Some(Fixed::ZERO), "three gains of 20 exceed the record of 30");
+    assert_eq!(cap(&view, 0), Fixed::from_int(60), "the cap is then the gains alone");
+}
+
+#[test]
+fn the_header_fallback_still_writes_its_value_as_the_base() {
+    let (mut sim, mut view, db, _) = a1_world(1);
+    let start = StartStock::default().or_header(db.rules(), [PlayerId(0)]);
+    let mut rt = runtime("", &view, &db, start.seats);
+    play(&mut rt, &mut sim, &mut view, 2);
+    assert_eq!(base_of(&view, 0), Some(Fixed::from_int(41)), "the header value is unchanged by the station rule");
+}

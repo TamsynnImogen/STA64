@@ -177,7 +177,7 @@ fn a1_first_mission_seat_starts_with_the_maps_crew_and_officer_limit() {
     let first = &table[0];
     assert!(first.crew > 0.0 && first.officers > 0, "else the test cannot prove anything for the human seat");
     // Every seat that owns a unit at the start, with a non-zero table value, holds exactly that value
-    // (the table's value is the written base; the shown limit adds the starting starbases' gain on top).
+    // (the record is the cap shown at the start; the written base is the record less the starting stations' gain).
     let mut occupied: Vec<u8> = view.units.iter().map(|u| u.owner.0).filter(|&o| usize::from(o) < table.len()).collect();
     occupied.sort_unstable();
     occupied.dedup();
@@ -190,10 +190,57 @@ fn a1_first_mission_seat_starts_with_the_maps_crew_and_officer_limit() {
             assert_eq!(p.crew, Some(Fixed::from_int(t.crew as i32)), "seat {s} crew");
         }
         if t.officers > 0 {
-            assert_eq!(written, Some(Fixed::from_int(t.officers)), "seat {s} officer base");
-            assert!(p.officers[1] >= Fixed::from_int(t.officers), "seat {s} shown limit");
+            assert!(written.is_some(), "seat {s} officer base is written");
+            assert_eq!(p.officers[1], Fixed::from_int(t.officers), "seat {s} shown cap equals the record");
         }
     }
+}
+
+/// For every Armada I map of the install, launched with the mission start path and an empty script: the cap
+/// shown at the start of every seat that owns a unit equals the map's record (read at run time).
+#[test]
+fn a1_every_maps_start_cap_is_its_record() {
+    let Ok(install) = std::env::var("STA64_TEST_A1_INSTALL") else {
+        eprintln!("skipped: set STA64_TEST_A1_INSTALL to an Armada I root");
+        return;
+    };
+    use sta_core::{Fixed, PlayerId};
+    use sta_sim::WorldSource;
+    let vfs = Vfs::mount_install(Path::new(&install), None).expect("mount install");
+    let host = VfsHost::load(Arc::new(vfs)).expect("installed content loads");
+    let mut checked = 0;
+    for name in host.vfs.list("bzn") {
+        let Some(bzn) = name.strip_prefix("bzn/").filter(|n| n.to_ascii_lowercase().ends_with(".bzn")) else { continue };
+        let Some(Ok(bytes)) = host.vfs.read(&name) else { continue };
+        let table = sta_bzn::a1::team_starts(&bytes);
+        if table.len() != 8 {
+            continue;
+        }
+        let map = sta_bzn::parse(&bytes).expect("map parses");
+        let (map, _) = sta_content::MapDef::from_bzn_in(&map, &host.content, &host.vfs, &host.index);
+        let setup = map_setup(map, host.content.clone(), 1);
+        let mut sim = sta_sim::Sim::from_setup(&setup);
+        let reader: ScriptReader = Arc::new(|p| (p == "m.lua").then(Vec::new));
+        let start = sta_mission::start_stock::read_start_stock(&host.vfs, bzn);
+        let mut rt = launch_runtime_with_start("m.lua", reader, 1, (PlayerId(0), sta_mission::api::PlayerNumbering::ArmadaTeams), &setup, &sim, Vec::new(), Vec::new(), start).expect("launch");
+        let mut view = (*sim.view()).clone();
+        for _ in 0..2 {
+            let mut out = Vec::new();
+            sta_sim::setup::Controller::think(&mut rt, &view, &[], &mut out);
+            view = (*sim.step(&out).view).clone();
+        }
+        let mut owners: Vec<u8> = view.units.iter().map(|u| u.owner.0).filter(|&o| usize::from(o) < table.len()).collect();
+        owners.sort_unstable();
+        owners.dedup();
+        for s in owners {
+            let record = table[usize::from(s)].officers;
+            if record > 0 {
+                assert_eq!(view.player(PlayerId(s)).unwrap().officers[1], Fixed::from_int(record), "{bzn} seat {s}");
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 0, "at least one seat was compared");
 }
 
 /// Mission 1 (`fed1`) on its own map in the campaign runner, headless, with
