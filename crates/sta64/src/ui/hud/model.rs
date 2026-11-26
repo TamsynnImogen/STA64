@@ -1084,7 +1084,8 @@ pub struct ResEntry {
 
 /// The strip: the player's stock in the order dilithium, metal, latinum,
 /// biomatter (the order Refit's HUD.md asks for), those the race has, then the
-/// crew when initialized, then officers as "in use/capacity", subject to the race's authored hide flags.
+/// crew when initialized, then officers as "in use/capacity", subject to the
+/// race's authored hide flags.
 pub fn resources(feed: &HudFeed, no: [bool; 4], no_personnel: [bool; 2]) -> Vec<ResEntry> {
     let Some(p) = feed.view.player(feed.player) else { return Vec::new() };
     let names = resource_model(feed);
@@ -2238,15 +2239,15 @@ mod tests {
     }
 
     #[test]
-    fn other_profiles_officer_readout_is_unchanged_in_use_against_cap() {
-        for profile in [sta_content::Profile::Fo4, sta_content::Profile::Sta1Classic] {
+    fn non_armada1_profiles_officer_readout_is_unchanged_in_use_against_cap() {
+        use sta_content::Profile;
+        for profile in [Profile::Native, Profile::Fo4, Profile::Fo3, Profile::Sta2Classic] {
             let db = ContentDb::builder().profile(profile).build().unwrap();
+            assert!(!db.a1_officers(), "{profile:?} is not Armada I");
             let f = feed(db, Vec::new(), &[]);
-            assert_eq!(officer_text([Fixed::from_int(4), Fixed::from_int(9)]), "4/9");
-            assert_eq!(resources(&f, [false; 4], [false; 2]).last().unwrap().text, "3/10");
+            assert_eq!(resources(&f, [false; 4], [false; 2]).last().unwrap().text, "3/10", "{profile:?}");
         }
-        let f = feed(sta_content::fake::db(), Vec::new(), &[]);
-        assert_eq!(resources(&f, [false; 4], [false; 2]).last().unwrap().text, "3/10");
+        assert_eq!(officer_text([Fixed::from_int(4), Fixed::from_int(9)]), "4/9");
     }
 
     #[test]
