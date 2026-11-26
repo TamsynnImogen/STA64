@@ -230,7 +230,8 @@ ENGINE_CLASSES = ("ScriptInterfaceImp", "character", "IIIE", "hot_int", "hot_flo
 
 def engine_vtables(root, classes=ENGINE_CLASSES):
     """{class: [mangled method per vtable slot]} from Armada2.exe + armada2.map."""
-    files = {f.lower(): os.path.join(root, f) for f in os.listdir(root)}
+    # sorted: of names differing only in case the last in code-point order wins
+    files = {f.lower(): os.path.join(root, f) for f in sorted(os.listdir(root))}
     exe, mapf = files.get("armada2.exe"), files.get("armada2.map")
     if not exe or not mapf:
         return None
@@ -809,7 +810,8 @@ def merge(incoming):
         return ("conflict",)
 
     for slot in ("r", "local"):
-        keys = set().union(*(s[slot].keys() for s in states))
+        # first-seen order (a set of register names iterates by string hash)
+        keys = dict.fromkeys(k for s in states for k in s[slot])
         out[slot] = {k: pick([s[slot].get(k) for s in states]) for k in keys}
     for slot in ("flags", "fsw", "fcmp", "fret"):
         vals = [s.get(slot) for s in states]

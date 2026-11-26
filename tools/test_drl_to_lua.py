@@ -228,6 +228,23 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(drl.import_kind("?Mission_Win@@YAXXZ"), "action")
 
 
+class JoinOrderTests(unittest.TestCase):
+    def test_merged_state_keeps_first_seen_register_order(self):
+        # the merged `r` and `local` dicts were built from a set of names, whose order
+        # follows the string hash (PYTHONHASHSEED); first-seen order is fixed
+        def state(regs, local):
+            return {"r": dict(regs), "local": dict(local), "args": [], "fpu": [], "flags": None}
+
+        # 40 names: a set of them iterates in first-seen order with negligible chance
+        first = [f"r{n:02d}x" for n in range(40, 0, -1)]
+        second = ["extra_a", "extra_b"] + first[::-1][:20]
+        one = state([(k, ("const", 1)) for k in first], [(8 * n, ("const", 1)) for n in range(20, 0, -1)])
+        two = state([(k, ("const", 1)) for k in second], [(4, ("const", 1)), (8, ("const", 1))])
+        _, out = drl.merge([([], one), ([], two)])
+        self.assertEqual(list(out["r"]), first + ["extra_a", "extra_b"])
+        self.assertEqual(list(out["local"]), [8 * n for n in range(20, 0, -1)] + [4])
+
+
 def synthetic_mission():
     """The synthetic mission whose scaffold tests/drl.rs runs."""
     alpha = ("and", [("truth", ("var", "p_ALWAYS_EVALUATE", "dirty_int")), ("truth", ("var", "p_ALPHA", "hot_int")),
