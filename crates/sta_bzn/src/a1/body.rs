@@ -226,6 +226,70 @@ fn team_colour_block(recs: &[Rec<'_>], mission_at: usize) -> Vec<[u32; 2]> {
     block.chunks_exact(SHAPE.len()).map(|b| [word(&b[5]), word(&b[6])]).collect()
 }
 
+/// What one team of an Armada I map starts with, read from the map's team table.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct A1TeamStart {
+    pub dilithium: f32,
+    /// The team's crew stock.
+    pub crew: f32,
+    /// The team's officer limit.
+    pub officers: i32,
+}
+
+/// The start values of an Armada I map's team table: one entry per team 1 to 8 (index `n` is team `n + 1`;
+/// block 0, the neutral team, is not returned). Empty when the map is not an Armada I binary map or its team
+/// block does not have the nine-block shape of [`team_colour_block`].
+///
+/// Per block the seven records are start dilithium (f32), maximum dilithium (f32, not read), officer limit
+/// (i32), start crew (f32), maximum crew (f32, not read), then the two colour entries. Evidence: read from
+/// data. The meaning of the three read records is inferred (not read from the executable), from agreement
+/// with the header keys `cfgStartingDilithium`, `cfgStartingCrew` and `cfgMaxOfficers` on the maps read and
+/// from one player report. Interim for all three. For the officer limit the record's relation to the
+/// starting stations is not uniform on the maps read, and whether the original shows the record itself at
+/// the start is not measured.
+pub fn team_starts(data: &[u8]) -> Vec<A1TeamStart> {
+    match team_table(data) {
+        A1StartTable::Found(t) => t,
+        _ => Vec::new(),
+    }
+}
+
+/// What [`team_table`] found.
+#[derive(Debug, Clone, PartialEq)]
+pub enum A1StartTable {
+    /// Not a binary Armada I map, or no room for a team block before the mission descriptor.
+    Absent,
+    /// The records before the mission descriptor are not the team block's shape: nothing is read.
+    Refused,
+    /// Teams 1 to 8.
+    Found(Vec<A1TeamStart>),
+}
+
+/// [`team_starts`] saying why it read nothing.
+pub fn team_table(data: &[u8]) -> A1StartTable {
+    let Ok(header) = super::inspect_header(data) else { return A1StartTable::Absent };
+    if !header.binary_save {
+        return A1StartTable::Absent;
+    }
+    let Ok(recs) = records(data, header.metadata_offset) else { return A1StartTable::Absent };
+    let mut markers = recs.windows(5).enumerate().filter(|(_, w)| mission(w));
+    let (Some((mission_at, _)), None) = (markers.next(), markers.next()) else { return A1StartTable::Absent };
+    start_block(&recs, mission_at)
+}
+
+/// [`team_table`] of the records before the mission descriptor at `mission_at`.
+fn start_block(recs: &[Rec<'_>], mission_at: usize) -> A1StartTable {
+    const SHAPE: [u32; 7] = [5, 5, 4, 5, 5, 4, 4];
+    let Some(start) = mission_at.checked_sub(9 * SHAPE.len()) else { return A1StartTable::Absent };
+    let block = &recs[start..mission_at];
+    if !block.iter().enumerate().all(|(i, r)| is(r, SHAPE[i % SHAPE.len()], 4)) {
+        return A1StartTable::Refused;
+    }
+    let f = |r: &Rec<'_>| f32::from_le_bytes(r.data.try_into().unwrap());
+    let i = |r: &Rec<'_>| i32::from_le_bytes(r.data.try_into().unwrap());
+    A1StartTable::Found(block.chunks_exact(SHAPE.len()).skip(1).map(|b| A1TeamStart { dilithium: f(&b[0]), officers: i(&b[2]), crew: f(&b[3]) }).collect())
+}
+
 fn mission(recs: &[Rec<'_>]) -> bool {
     is(&recs[0], 2, 40) && is(&recs[1], 8, 4) && is(&recs[2], 2, 64) && is(&recs[3], 2, 64) && is(&recs[4], 0, 64)
 }
@@ -460,6 +524,28 @@ mod team_colour_tests {
     fn nine_blocks_before_the_mission_are_read() {
         let colours: Vec<[u32; 2]> = (0..9).map(|n| [n + 10, n]).collect();
         assert_eq!(read(&block(&colours)), colours);
+    }
+
+    #[test]
+    fn start_values_come_from_records_one_three_and_four_of_teams_one_to_eight() {
+        // Own-authored numbers; block 0 (neutral) is skipped, so index n is team n + 1.
+        let owned: Vec<(u32, Vec<u8>)> = (0..9u32)
+            .flat_map(|n| {
+                let f = |v: f32| (5, v.to_le_bytes().to_vec());
+                [f(n as f32 * 10.0 + 1.0), f(2.0), rec(4, n * 100 + 7), f(n as f32 * 1000.0 + 3.0), f(5.0), rec(4, 0), rec(4, 0)]
+            })
+            .collect();
+        let recs: Vec<Rec<'_>> = owned.iter().map(|(k, d)| Rec { kind: *k, data: d }).collect();
+        let A1StartTable::Found(got) = start_block(&recs, recs.len()) else { panic!("a table") };
+        assert_eq!(got.len(), 8);
+        assert_eq!(got[0], A1TeamStart { dilithium: 11.0, crew: 1003.0, officers: 107 });
+        assert_eq!(got[7], A1TeamStart { dilithium: 81.0, crew: 8003.0, officers: 807 });
+        assert_eq!(start_block(&recs[..recs.len() - 1], recs.len() - 1), A1StartTable::Absent, "a short table");
+        let mut skew = owned.clone();
+        skew[2].0 = 5;
+        let skew: Vec<Rec<'_>> = skew.iter().map(|(k, d)| Rec { kind: *k, data: d }).collect();
+        assert_eq!(start_block(&skew, skew.len()), A1StartTable::Refused, "a misshapen table is refused, not absent");
+        assert_eq!(team_table(b"not a map"), A1StartTable::Absent);
     }
 
     #[test]

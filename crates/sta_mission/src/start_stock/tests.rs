@@ -176,3 +176,91 @@ fn a_header_without_the_keys_and_a_table_or_refused_map_are_unchanged() {
     let refused = StartStock { seats: Vec::new(), refused: Some("x".into()) };
     assert_eq!(refused.clone().or_header(db.rules(), [PlayerId(0)]), refused, "a refused table grants nothing");
 }
+
+// An Armada I style profile (own-authored header and table values): a limit is derived for every seat.
+fn a1_db() -> Arc<ContentDb> {
+    let profile = sta_content::Profile::Sta1Classic;
+    let db = ContentDb::builder().profile(profile).features(profile.features()).build().unwrap();
+    Arc::new(db.with_rules(sta_content::Rules::from_header(HEADER).0))
+}
+
+fn a1_bare() -> (Sim, WorldView, Arc<ContentDb>) {
+    let db = a1_db();
+    let seat = |n: u8| PlayerSetup { id: PlayerId(n), team: TeamId(n), race: "fx".into(), control: if n == 0 { Control::Human } else { Control::Idle } };
+    let setup = GameSetup { seed: 3, map: Arc::new(MapDef::empty()), content: db.clone(), players: vec![seat(0), seat(1)], options: GameOptions::default() };
+    let sim = Sim::from_setup(&setup);
+    let view = (*sim.view()).clone();
+    (sim, view, db)
+}
+
+fn a1_table() -> Vec<sta_bzn::a1::A1TeamStart> {
+    vec![
+        sta_bzn::a1::A1TeamStart { dilithium: 2468.0, crew: 3131.0, officers: 262 },
+        sta_bzn::a1::A1TeamStart { dilithium: 1357.0, crew: 0.0, officers: 0 },
+    ]
+}
+
+#[test]
+fn an_armada_i_seat_derives_a_limit_but_has_no_written_loadout() {
+    let (mut sim, view, _) = a1_bare();
+    let p = view.player(PlayerId(0)).unwrap();
+    assert!(p.officers[1] > Fixed::ZERO, "the precondition: a derived limit exists for a bare seat");
+    assert_eq!(p.crew, None);
+    assert!(view.attrs.seats.iter().all(|s| s.officer_base.is_none()), "nothing is written");
+    assert!(!placed_loadout(&view, p));
+    // A written limit or crew is a placed loadout.
+    let write = |kind| Command { player: PlayerId::SCRIPT, seq: 0, kind: CommandKind::Edit(kind) };
+    let after = (*sim.step(&[write(Edit::MaxOfficers(PlayerId(0), Fixed::from_int(5)))]).view).clone();
+    assert!(placed_loadout(&after, after.player(PlayerId(0)).unwrap()));
+    assert!(!placed_loadout(&after, after.player(PlayerId(1)).unwrap()));
+    let after = (*sim.step(&[write(Edit::TeamCrew(PlayerId(1), Fixed::from_int(9)))]).view).clone();
+    assert!(placed_loadout(&after, after.player(PlayerId(1)).unwrap()));
+}
+
+#[test]
+fn an_armada_i_mission_seat_gets_the_maps_crew_officer_limit_and_dilithium() {
+    let (mut sim, mut view, db) = a1_bare();
+    let mut rt = runtime("", &view, &db, from_a1_table(&a1_table()));
+    play(&mut rt, &mut sim, &mut view, 2);
+    let p = view.player(PlayerId(0)).unwrap();
+    assert_eq!(p.crew, Some(Fixed::from_int(3131)));
+    assert_eq!(p.officers[1], Fixed::from_int(262), "the map's limit, not the header's");
+    assert_eq!(stock(&view, 0)[0], 2468);
+    let q = view.player(PlayerId(1)).unwrap();
+    assert_eq!(q.crew, None, "a table crew of 0 is not written");
+    assert_eq!(stock(&view, 1)[0], 1357);
+    assert_eq!(stock(&view, 0).get(1).copied().unwrap_or(0), 0, "the table has no latinum");
+}
+
+#[test]
+fn an_armada_i_seat_with_a_placed_loadout_is_left_alone() {
+    let (mut sim, _, db) = a1_bare();
+    let write = |seq, kind| Command { player: PlayerId::SCRIPT, seq, kind: CommandKind::Edit(kind) };
+    let mut view = (*sim.step(&[write(0, Edit::MaxOfficers(PlayerId(0), Fixed::from_int(55))), write(1, Edit::TeamCrew(PlayerId(0), Fixed::from_int(66)))]).view).clone();
+    let mut rt = runtime("", &view, &db, from_a1_table(&a1_table()));
+    play(&mut rt, &mut sim, &mut view, 2);
+    let p = view.player(PlayerId(0)).unwrap();
+    assert_eq!((p.crew, p.officers[1]), (Some(Fixed::from_int(66)), Fixed::from_int(55)));
+    assert_eq!(view.player(PlayerId(1)).unwrap().crew, None, "the bare seat still gets its own start");
+    assert_eq!(stock(&view, 1)[0], 1357);
+}
+
+#[test]
+fn an_armada_i_map_without_a_table_falls_back_to_the_header_and_the_script_runs_after() {
+    let (mut sim, mut view, db) = a1_bare();
+    let start = StartStock::default().or_header(db.rules(), [PlayerId(0), PlayerId(1)]);
+    let mut rt = runtime("A2.SetDilithium(1, 555)", &view, &db, start.seats);
+    play(&mut rt, &mut sim, &mut view, 3);
+    assert_eq!(stock(&view, 0)[0], 555);
+    let q = view.player(PlayerId(1)).unwrap();
+    assert_eq!((q.crew, q.officers[1]), (Some(Fixed::from_int(777)), Fixed::from_int(41)));
+    assert_eq!(stock(&view, 1)[0], 1313);
+}
+
+#[test]
+fn a_table_that_gives_a_seat_values_is_never_topped_up_from_the_header() {
+    let (_, _, db) = a1_bare();
+    let with_table = StartStock { seats: from_a1_table(&a1_table()), refused: None };
+    assert_eq!(with_table.clone().or_header(db.rules(), [PlayerId(0), PlayerId(1)]), with_table);
+    assert_eq!(with_table.seats[1].crew, None, "0 stays unwritten even though the header has a crew value");
+}
