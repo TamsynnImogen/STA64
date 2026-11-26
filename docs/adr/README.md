@@ -2,6 +2,8 @@
 
 One file per decision (or per set of decisions signed off together). An
 accepted ADR is binding on agent and human work in the area it covers.
+When an ADR is needed at all, and when a quick experiment is enough, is
+stated in AGENTS.md, "Decisions: ADRs and experiments".
 
 | ADR | Decides | Status | Date |
 |---|---|---|---|

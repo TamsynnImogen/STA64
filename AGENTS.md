@@ -137,6 +137,36 @@ table, with *owns*, *needs* and *done when*. That PR may be the package's own
 first commit, but the issue body says `Not in WORKPLAN yet: added by #NN.`
 until it merges.
 
+## Decisions: ADRs and experiments
+
+An ADR (`docs/adr/`) records a technical decision that is hard to reverse:
+one that other work, stored data, a file or wire format, mod-facing behaviour
+or a stated promise will come to depend on, so that undoing it later costs far
+more than making it now. Examples by topic: the engine choice, the
+deterministic simulation rules, the modding rules.
+
+A decision that is easy to reverse needs no ADR. Try it, measure it, and back
+it out if it is wrong: a small PR that can be reverted on its own, the
+evidence in the PR body, open points as `TODO.md` lines. Fail fast; do not
+wait for a decision record.
+
+Is it easy to reverse? Ask: can one revert undo it; does any save, replay,
+protocol, content or mod format change; has other work been built on it. If
+unsure, say so in the PR and ask.
+
+Keep ADRs true. When a change alters what an existing ADR says, amend the ADR
+in the same PR or a companion docs PR, even when the change itself is easy to
+revert. An out-of-date ADR is worse than none.
+
+Quick experiments do not lower the bar for code that stays. What is merged is
+meant to be maintained for years: tests that fail without the change, no
+leftover switches, dead paths or measurement code from the experiment, names
+and comments that explain the rule. An experiment that did not work out is
+removed, not left behind.
+
+Who approves is unchanged (see "Modding decisions" below and
+[docs/adr/README.md](docs/adr/README.md)).
+
 ## Modding decisions
 
 [ADR 0004](docs/adr/0004-modding-v1.md) (modding v1, D1 to D13; formerly
