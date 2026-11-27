@@ -186,6 +186,19 @@ allowed" state (read from data: a menu caption key).
    **Decided 2026-11-27 (the project lead; the repository owner's decision is
    pending):** acceptable for v2 with a progress display; a bound is revisited
    once the load time has been measured end to end.
+3. V5 and V4 on the mission AI hub: V5 serialises the hub (per-seat flags,
+   loaded plans by file name, the pending replan) into the controller
+   section, while V4's re-run from tick 0 rebuilds it with the script. Is the
+   hub's record kept (and checked against the re-run state at the hand-over),
+   or is V5's hub clause amended to "rebuilt by the re-run"? Until decided,
+   the WORKPLAN rows hold to V5 as written. Raised by the review of the save
+   packages' WORKPLAN rows (#1315).
+4. Matches whose map has no file (a generated random map, an unsaved map
+   started from the editor) have no map path and file hash for V1 and V2, and
+   V3 keeps their map data out of a save. Until decided, saving them is
+   refused with that reason. One option that fits V3: record the generator's
+   inputs as game state in the header and regenerate the map at load.
+   Raised with question 3.
 
 ## Evidence since the first draft
 
