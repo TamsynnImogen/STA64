@@ -1,3 +1,4 @@
+# generated with CPython 3.14
 == variables_handles_and_deferred_cleanup
 -- lift {STEP}
 func 0x10003000
