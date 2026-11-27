@@ -325,7 +325,7 @@ pub fn tag_ghost_meshes(
     // A model's parts appear (and change material) after its entity gets the marker, so the walk repeats a few
     // times a second; a new marker walks at once. Few entities carry one.
     *frame = frame.wrapping_add(1);
-    let sweep = *frame % 15 == 0;
+    let sweep = frame.is_multiple_of(15);
     for (gate, g, fresh) in &ghosts {
         if !(sweep || fresh.is_added()) {
             continue;
