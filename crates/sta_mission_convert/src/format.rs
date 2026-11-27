@@ -137,7 +137,10 @@ pub fn lua_str(s: &str) -> String {
 pub fn lua_str_py(v: &Py) -> Result<String> {
     match v {
         Py::Str(s) => Ok(lua_str(s)),
-        other => Err(DecodeError::raw(format!("'{}' object has no attribute 'replace'", other.type_name()))),
+        other => Err(DecodeError::python(
+            "AttributeError",
+            format!("'{}' object has no attribute 'replace'", other.type_name()),
+        )),
     }
 }
 
@@ -319,12 +322,17 @@ fn py_add_one(v: &Py) -> Result<String> {
             .checked_add(1)
             .map(|m| m.to_string())
             .ok_or_else(|| DecodeError::raw("integer overflow")),
-        Py::Bool(b) => Ok((*b as i64 + 1).to_string()),
+        Py::Bool(b) => Ok((i64::from(*b) + 1).to_string()),
         Py::Float(x) => Ok(py_float_repr(x + 1.0)),
-        other => Err(DecodeError::raw(format!(
-            "unsupported operand type(s) for +: '{}' and 'int'",
-            other.type_name()
-        ))),
+        // a str, tuple or list says it can only concatenate
+        Py::Str(_) | Py::Tuple(_) | Py::List(_) => Err(DecodeError::python(
+            "TypeError",
+            format!("can only concatenate {0} (not \"int\") to {0}", v.type_name()),
+        )),
+        other => Err(DecodeError::python(
+            "TypeError",
+            format!("unsupported operand type(s) for +: '{}' and 'int'", other.type_name()),
+        )),
     }
 }
 
