@@ -644,7 +644,9 @@ and, on the next run, replays a mission whose inputs and converter build are
 unchanged instead of converting it again. The key of an entry covers the bytes
 of the mission's DLLs, the engine files that name the engine calls and the
 identity of the converter build, so a changed converter never reuses an old
-entry. Failures are not cached. A full run removes the entries it did not use.
+entry. Failures are not cached. A full run that completed removes the entries
+that have not been used for 30 days, by age only, so a folder two installs
+share loses nothing the other still uses.
 Entries hold converted game text: the cache folder is as private as the
 output.
 
@@ -654,14 +656,18 @@ inside an install or anything that looks like a game folder, nor lie inside
 the checkout the converter was built in (its build folders excepted), nor
 contain one another. Symbolic links at the
 folder, at `missions/` or at a file to replace are refused. A full run (no
-`--only`) deletes only files its manifest lists. Files are written under a
+`--only`) deletes only files its manifest lists. A `.lua` file that carries
+the Python tool's header line (an earlier conversion by it) is renamed to
+`<name>.old`, never deleted, and listed in the output. Files are written under a
 temporary name and renamed into place, so an interrupted run leaves no half
 script. Converted scripts are game content (ADR 0003): they stay on the
 player's machine and are never committed or shared.
 
-**Exit code.** 0 when every mission converted; 1 when any mission failed or
-was skipped, even if other scripts were written. A mission that does not
-convert prints a `FAIL` line and the run goes on.
+**Exit code.** 0 when every mission converted. 1 when any mission failed or
+was skipped, even if other scripts were written; also when the install, the
+output folder or the cache folder is refused, and when a run is aborted. 2 for
+a command line it cannot read. A mission that does not convert prints a `FAIL`
+line and the run goes on.
 
 ### The Python tools: reference only, superseded
 
