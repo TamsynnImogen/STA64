@@ -470,6 +470,7 @@ fn load_with_a1(profile: Profile, mod_overrides: &Overrides, stems: &[String], l
     let mut caps: BTreeMap<String, Option<Arc<crate::CapacityList>>> = BTreeMap::new();
     let mut self_destruct_blasts: BTreeMap<String, Option<crate::SelfDestructBlast>> = BTreeMap::new();
     let unit_names: BTreeSet<String> = units.iter().map(|(s, _)| stem(s)).collect();
+    let mut explosion_names: Vec<String> = Vec::new();
     for (s, odf) in &units {
         let phys = match odf.str("physicsFile").map(str::trim).filter(|p| !p.is_empty()) {
             Some(p) => {
@@ -511,6 +512,9 @@ fn load_with_a1(profile: Profile, mod_overrides: &Overrides, stems: &[String], l
                 Err(_) => {}
             }
         }
+        // #1153: the explosion definitions the unit names are typed on the database.
+        explosion_names.extend(def.fx.explosion.clone());
+        explosion_names.extend(def.stats.self_destruct.clone());
         // CON-52: Armada I's Borg spin keys, from the craft's own physics file.
         if profile == Profile::Sta1Classic
             && let Some(p) = phys.as_deref()
@@ -654,13 +658,21 @@ fn load_with_a1(profile: Profile, mod_overrides: &Overrides, stems: &[String], l
     let (db, research_warnings) = builder.build()?.with_research_builds_warned();
     warnings.extend(research_warnings);
     let db = db.with_a1_officer_upgrades(a1_officers, &race_upgrades, &mut warnings);
+    let explosions = crate::ExplosionTable::read(explosion_names.iter().map(String::as_str), profile, loader, &mut warnings);
+    let db = db.with_explosions(explosions);
     Ok((db, warnings))
 }
 
 /// Build the database from every ODF of a mounted install.
 pub fn load(vfs: &sta_vfs::Vfs, profile: Profile, index: &OdfIndex) -> Result<(ContentDb, Vec<Warning>)> {
     let stems: Vec<String> = index.iter().map(|(s, _)| s.to_owned()).collect();
-    load_with_a1(profile, &Overrides::from_vfs(vfs), &stems, &mut |n, v| index.load(vfs, n, v), crate::profile::a1_compat(vfs))
+    let (db, mut warnings) = load_with_a1(profile, &Overrides::from_vfs(vfs), &stems, &mut |n, v| index.load(vfs, n, v), crate::profile::a1_compat(vfs))?;
+    // #1153: the chunk settings of the effective `ART_CFG.h` (self-includes expanded, ADR 0004 D11).
+    let mut table = db.explosions().clone();
+    if let Some(cfg) = crate::layered::cfg_h(vfs, "ART_CFG.h") {
+        table.set_chunks(crate::ChunkCfg::from_cfg("ART_CFG.h", &cfg, &mut warnings));
+    }
+    Ok((db.with_explosions(table), warnings))
 }
 
 /// A `fleetCapFile` ODF (SIM-44) as a [`CapacityList`](crate::CapacityList): `fleetCapClass<n>`
