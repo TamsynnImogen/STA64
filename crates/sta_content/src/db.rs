@@ -57,6 +57,9 @@ pub struct ContentDb {
     /// only when the file is there and usable.
     a1_play: Option<crate::A1Dynamics>,
     a1_officer_policy: bool,
+    /// Explosion definitions the units name and the `ART_CFG.h` chunk settings (#1153).
+    /// Presentation only: never in the digest.
+    explosions: Arc<crate::ExplosionTable>,
     /// The mounted layers' names, top first: informational (D10), recorded
     /// in replays and snapshots, never compared.
     packs: Vec<String>,
@@ -587,6 +590,28 @@ impl ContentDb {
         self
     }
 
+    /// The explosion and shockwave definitions the units name, and the chunk settings
+    /// (#1153). Empty for content built in code. Not in the digest.
+    pub fn explosions(&self) -> &crate::ExplosionTable {
+        &self.explosions
+    }
+
+    /// The explosion a unit's `fireball` names, when it resolved.
+    pub fn explosion_of(&self, u: &UnitDef) -> Option<&crate::ExplosionDef> {
+        self.explosions.explosion(u.fx.explosion.as_deref()?)
+    }
+
+    /// The explosion a unit's `selfDestruct` names, when it resolved.
+    pub fn self_destruct_explosion_of(&self, u: &UnitDef) -> Option<&crate::ExplosionDef> {
+        self.explosions.explosion(u.stats.self_destruct.as_deref()?)
+    }
+
+    /// This database with these explosion definitions. The digest does not change.
+    pub(crate) fn with_explosions(mut self, table: crate::ExplosionTable) -> ContentDb {
+        self.explosions = Arc::new(table);
+        self
+    }
+
     /// The database-wide switches: the profile's defaults and the mod
     /// chain's overrides.
     pub fn features(&self) -> &Features {
@@ -745,7 +770,7 @@ impl ContentBuilder {
             defs, profile: self.profile, features: self.features, resources,
             tech: self.tech.map(Arc::new), map_confinement, construction_confinement, has_map_confinement,
             map_confinement_warnings, rules: crate::Rules::default(),
-            a1_play: self.a1_play.filter(|_| self.profile == Profile::Sta1Classic), a1_officer_policy: false, packs: Vec::new(),
+            a1_play: self.a1_play.filter(|_| self.profile == Profile::Sta1Classic), a1_officer_policy: false, explosions: Arc::default(), packs: Vec::new(),
             digest: ContentDigest::default(),
         };
         db.digest = digest_of(&db);

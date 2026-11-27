@@ -102,6 +102,8 @@ pub const READ_ODF_KEYS: &[&str] = &[
     "transporttofriendsonnoteasy",
     // Ship-system upgrade pods and resolved station chains.
     "isshipupgrade", "upgradelevel", "upgradesystem", "upgrademultiplier",
+    // #1153: explosion and shockwave definitions (`ExplosionTable`, typed, not drawn yet).
+    "dbname", "length", "shockwavedelay", "shockwaveminimum", "rays", "color", "texture", "fadefactor", "rate",
 ];
 
 /// Prefixes of numbered ODF keys (`weapon1`, `buildItem3`, ...) that are read.
@@ -145,6 +147,15 @@ pub const READ_CFG_KEYS: &[&str] = &[
     // The Stock look's weapon shots (`ShotCfg`, render only): the beam miss lifetime and the team colour flag.
     "BEAM_MISS_LIFETIME",
     "NORMAL_WEAPON_TEAM_COLOR",
+    // #1153: the chunk settings (`ChunkCfg`, typed, not applied yet).
+    "ST3D_CHUNK_MANAGER_MAX_CHUNKS",
+    "ST3D_CHUNK_SIZE_FACTOR",
+    "ST3D_CHUNK_LIFETIME_AVG",
+    "ST3D_CHUNK_LIFETIME_DEVIATION",
+    "ST3D_CHUNK_MAX_ANGULAR_VELOCITY",
+    "ST3D_CHUNK_MAX_VELOCITY",
+    "ST3D_CHUNK_DENSITY",
+    "ST3D_CHUNK_MAX_LIFETIME",
 ];
 
 /// The cfg files checked for changed keys.
