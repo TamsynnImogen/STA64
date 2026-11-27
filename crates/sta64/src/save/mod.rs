@@ -125,19 +125,13 @@ pub struct MapFiles(pub Arc<MapLookup>);
 /// A map name to the map file's path and bytes.
 pub type MapLookup = dyn Fn(&str) -> Option<(String, Vec<u8>)> + Send + Sync;
 
-/// Stand-in only (until SIM-81's `Controller::save_state` and `restore_state` are on main): how to read
-/// a computer seat's record and how to build its controller from one. Tests register it; nothing in the
-/// game does, so computer seats stay refused. Deleted by the wiring commit.
+/// Controllers a load can build besides `sta_ai`'s registry (tests register theirs): a registry name and
+/// a seat to a new controller, which then takes the saved record back through `restore_state`.
 #[derive(Resource, Clone)]
-pub struct StandInControllers {
-    pub record: Arc<RecordFn>,
-    pub restore: Arc<RestoreFn>,
-}
+pub struct ExtraControllers(pub Arc<MakeController>);
 
-/// A seat to its controller's record `(version, bytes)`.
-pub type RecordFn = dyn Fn(PlayerId) -> Option<(u32, Vec<u8>)> + Send + Sync;
-/// A seat, the registry name and a record to the controller they describe.
-pub type RestoreFn = dyn Fn(PlayerId, &str, u32, &[u8]) -> Result<Box<dyn sta_sim::setup::Controller>, String> + Send + Sync;
+/// A registry name and a seat to a new controller, or `None` for a name this does not know.
+pub type MakeController = dyn Fn(&str, PlayerId) -> Option<Box<dyn sta_sim::setup::Controller>> + Send + Sync;
 
 /// 64-bit FNV-1a of the map file's bytes: the hash the save header names the map by.
 pub fn file_hash(bytes: &[u8]) -> u64 {
@@ -172,7 +166,6 @@ struct Env<'w> {
     map_files: Option<Res<'w, MapFiles>>,
     meta: Option<Res<'w, crate::capture::MatchMeta>>,
     dir: Option<Res<'w, SaveDir>>,
-    stand_in: Option<Res<'w, StandInControllers>>,
 }
 
 impl Env<'_> {
@@ -213,8 +206,7 @@ impl Env<'_> {
         let ai: Vec<PlayerId> = seats.iter().filter(|s| matches!(s.control, ControlRec::Ai(_))).map(|s| s.id).collect();
         let refs = link.controller_refs();
         for (i, seat) in ai.iter().enumerate() {
-            let recorded = self.stand_in.as_deref().is_some_and(|s| (s.record)(*seat).is_some());
-            if !refs.get(i).is_some_and(|c| recorded || container::controller_can_save(c.as_ref())) {
+            if !refs.get(i).is_some_and(|c| c.save_state().is_some()) {
                 return Some(SaveBlock::Controller(*seat));
             }
         }
@@ -289,6 +281,7 @@ fn save_match(
         play_time_secs: tick / sta_sim::TICK_HZ as u64,
         made_at: sta_bench::capture::now_unix(),
         description: req.description.clone(),
+        ..SaveInfo::default()
     };
     let record = ClientRecord {
         camera: camera.iter().next().map(|o| CameraRec { focus: o.focus.to_array(), yaw: o.yaw, pitch: o.pitch, dist: o.dist }),
@@ -299,16 +292,10 @@ fn save_match(
     // Between ticks, after the controllers thought about the last step: what they and the player
     // submitted for the next one is part of the game and goes into the container, with the counter.
     let in_flight = InFlight { next_seq: link.next_seq(), commands: link.in_flight().to_vec() };
-    // Stand-in only: the registered records. The wiring commit passes the controllers to `container::save`.
-    let records: Vec<container::SeatController> = replay
-        .players
-        .iter()
-        .filter_map(|s| match (&s.control, env.stand_in.as_deref()) {
-            (ControlRec::Ai(name), Some(si)) => (si.record)(s.id).map(|(version, data)| container::SeatController { seat: s.id, name: name.clone(), version, data }),
-            _ => None,
-        })
-        .collect();
-    let bytes = match container::save_with_records(&sim, &replay, &info, &records, &in_flight, &client) {
+    let ai: Vec<PlayerId> = replay.players.iter().filter(|s| matches!(s.control, ControlRec::Ai(_))).map(|s| s.id).collect();
+    let refs = link.controller_refs();
+    let seated: Vec<(PlayerId, &dyn sta_sim::setup::Controller)> = ai.iter().copied().zip(refs.iter().map(|c| c.as_ref())).collect();
+    let bytes = match container::save(&sim, &replay, &info, &seated, &in_flight, &client) {
         Ok(b) => b,
         Err(e) => {
             out.write(SaveOutcome::Refused(e));
@@ -425,7 +412,7 @@ struct Resume<'w, 's> {
     clock: Option<ResMut<'w, crate::clock::AnimClock>>,
     active: Option<ResMut<'w, ActiveMatch>>,
     content: Option<Res<'w, ContentRes>>,
-    stand_in: Option<Res<'w, StandInControllers>>,
+    extra: Option<Res<'w, ExtraControllers>>,
     scene: Option<Res<'w, crate::frontend::scene::MenuScene>>,
 }
 
@@ -475,10 +462,17 @@ fn finish_pending_load(
         Ok(l) => l,
         Err(e) => return fail(e.to_string()),
     };
-    let stand_in = r.stand_in.as_deref();
-    let boxes = match loaded.restore_controllers(|seat, name, version, data| match stand_in {
-        Some(s) => (s.restore)(seat, name, version, data),
-        None => Err(format!("seat {} cannot be restored by this build", seat.0)),
+    // A computer player is built by name as at a match start, then takes its record back.
+    let extra = r.extra.as_deref();
+    let registry = sta_ai::Registry::builtin();
+    let setup = &active.setup;
+    let boxes = match loaded.restore_controllers(|seat, name, state| {
+        let mut ctl = match extra.and_then(|e| (e.0)(name, seat)) {
+            Some(c) => c,
+            None => registry.create_for_seat(name, setup, seat).map_err(|e| e.to_string())?,
+        };
+        ctl.restore_state(state)?;
+        Ok(ctl)
     }) {
         Ok(b) => b,
         Err(e) => return fail(e.to_string()),

@@ -75,6 +75,20 @@ impl sta_sim::setup::Controller for Counter {
             s.sent += 1;
         }
     }
+
+    fn save_state(&self) -> Option<sta_sim::setup::ControllerState> {
+        Some(sta_sim::setup::ControllerState { version: 1, data: self.state.lock().unwrap().bytes() })
+    }
+
+    fn restore_state(&mut self, state: &sta_sim::setup::ControllerState) -> Result<(), String> {
+        match (state.version, CounterState::of(&state.data)) {
+            (1, Some(s)) => {
+                *self.state.lock().unwrap() = s;
+                Ok(())
+            }
+            _ => Err("unreadable counter record".into()),
+        }
+    }
 }
 
 type Handles = Arc<std::sync::Mutex<std::collections::BTreeMap<u8, Arc<std::sync::Mutex<CounterState>>>>>;
@@ -93,18 +107,10 @@ impl CounterHandles {
         self.0.lock().unwrap().get(&seat).map(|s| s.lock().unwrap().clone())
     }
 
-    /// The stand-in's hooks for the container: read a record, build a controller from one.
-    fn hooks(&self) -> StandInControllers {
-        let (a, b) = (self.clone(), self.clone());
-        StandInControllers {
-            record: Arc::new(move |seat| a.state(seat.0).map(|s| (1, s.bytes()))),
-            restore: Arc::new(move |seat, name, version, data| {
-                match (name, version, CounterState::of(data)) {
-                    ("counter", 1, Some(s)) => Ok(b.make(seat, s)),
-                    _ => Err(format!("unreadable record of {name}")),
-                }
-            }),
-        }
+    /// The test's own registry name, for a load to build a computer player by.
+    fn extra(&self) -> ExtraControllers {
+        let me = self.clone();
+        ExtraControllers(Arc::new(move |name, seat| (name == "counter").then(|| me.make(seat, CounterState::default()))))
     }
 }
 
@@ -124,8 +130,11 @@ fn build_match(
         .setup
         .players
         .iter()
-        .filter(|p| p.control == Control::Ai("counter".into()))
-        .map(|p| handles.make(p.id, CounterState::default()))
+        .filter_map(|p| match &p.control {
+            Control::Ai(name) if name == "counter" => Some(handles.make(p.id, CounterState::default())),
+            Control::Ai(name) => sta_ai::Registry::builtin().create_for_seat(name, &active.setup, p.id).ok(),
+            _ => None,
+        })
         .collect();
     let link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), active.local.unwrap_or(PlayerId::BENCH)).with_controllers(controllers);
     let link = if active.local.is_none() { link.with_observer() } else { link };
@@ -181,7 +190,7 @@ fn app(dir: &PathBuf, map_file: bool) -> App {
         // The test steps the link itself, tick by tick.
         .insert_resource(BenchDriven)
         .insert_resource(SaveDir(Some(dir.clone())))
-        .insert_resource(handles.hooks())
+        .insert_resource(handles.extra())
         .insert_resource(handles)
         .init_resource::<FogMemory>()
         .insert_resource(MapFiles(Arc::new(move |name| map_file.then(|| (format!("bzn/{name}.bzn"), format!("authored map {name}").into_bytes())))));
@@ -588,10 +597,68 @@ fn save_is_not_allowed_where_it_cannot_be_restored_and_says_why() {
     start(&mut a, setup(&data, [ai.clone(), ai]), MatchSpeed::Normal);
     assert_eq!(blocked(&mut a), Some(SaveBlock::Observer));
 
-    // A computer player that has not opted in to saving: the seat is named.
+    // The skirmish AI has not opted in to saving yet (AI-07): the seat is named, with a clear reason.
+    let mut a = app(&dir, true);
+    start(&mut a, setup(&data, [Control::Human, Control::Ai(sta_ai::SKIRMISH.into())]), MatchSpeed::Normal);
+    let why = blocked(&mut a);
+    assert_eq!(why, Some(SaveBlock::Controller(PlayerId(1))));
+    assert!(why.unwrap().to_string().contains("seat 1 cannot be saved yet"));
+    assert!(container::store::list(&dir, None).unwrap().is_empty(), "nothing was written");
+
+    // The idle computer player opts in (stateless): such a game saves.
     let mut a = app(&dir, true);
     start(&mut a, setup(&data, [Control::Human, Control::Ai("idle".into())]), MatchSpeed::Normal);
-    assert_eq!(blocked(&mut a), Some(SaveBlock::Controller(PlayerId(1))));
+    assert_eq!(blocked(&mut a), None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_file_of_another_version_or_a_damaged_one_is_refused_with_found_and_expected_and_listed() {
+    let dir = temp_dir("versions");
+    let data = armed();
+    let mut a = app(&dir, true);
+    start(&mut a, setup(&data, [Control::Human, Control::Idle]), MatchSpeed::Normal);
+    run(&mut a, 3);
+    a.world_mut().write_message(SaveMatch { description: "v".into(), overwrite: None });
+    a.update();
+    let saved = drain::<SaveOutcome>(&mut a);
+    let [SaveOutcome::Saved { path, .. }] = saved.as_slice() else { panic!("not saved: {saved:?}") };
+    let good = container::store::read_file(path).unwrap();
+
+    let mut other = good.clone();
+    other[4..6].copy_from_slice(&9u16.to_le_bytes());
+    let mut damaged = good.clone();
+    let last = damaged.len() - 1;
+    damaged[last] ^= 0xff;
+    std::fs::write(dir.join("other.stasave"), &other).unwrap();
+    std::fs::write(dir.join("damaged.stasave"), &damaged).unwrap();
+    std::fs::write(dir.join("empty.stasave"), b"").unwrap();
+
+    let listed = container::store::list(&dir, None).unwrap();
+    assert_eq!(listed.len(), 4, "refused files are listed, not hidden");
+    let reason = |name: &str| listed.iter().find(|l| l.file_name == name).unwrap().outcome.as_ref().err().map(ToString::to_string);
+    assert_eq!(reason("other.stasave").as_deref().map(|r| r.contains("version 9") && r.contains("reads version 1")), Some(true), "{:?}", reason("other.stasave"));
+    assert!(reason("empty.stasave").is_some());
+    assert!(listed.iter().any(|l| l.path == *path && l.outcome.is_ok()));
+
+    // The header says the version: refused before the running match is left.
+    a.world_mut().write_message(LoadMatch { path: dir.join("other.stasave") });
+    a.update();
+    let out = drain::<LoadOutcome>(&mut a);
+    assert!(matches!(out.as_slice(), [LoadOutcome::Refused { reason, .. }] if reason.contains("version 9") && reason.contains("reads version 1")), "{out:?}");
+    assert_eq!(state(&a), AppState::InGame);
+    // Damage past the header shows when the whole file is read, after the build: back at the front end.
+    a.world_mut().write_message(LoadMatch { path: dir.join("damaged.stasave") });
+    let mut out = Vec::new();
+    for _ in 0..300 {
+        a.update();
+        out.extend(drain::<LoadOutcome>(&mut a));
+        if !out.is_empty() && state(&a) == AppState::FrontEnd {
+            break;
+        }
+    }
+    assert!(matches!(out.as_slice(), [LoadOutcome::Refused { reason, .. }] if reason.contains("damaged")), "{out:?}");
+    assert_eq!(state(&a), AppState::FrontEnd);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
