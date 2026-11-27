@@ -101,6 +101,11 @@ pub enum Effect {
     /// [`Effect::Impacts`], which also covers hull sparks, explosions and smoke and is never registered as
     /// stock: under Stock the Refit shield shell is not drawn, everything else `Impacts` draws still is.
     ShieldHits,
+    /// The explosion of a destroyed unit or building (#1153): the sprite-cluster fireball and the shockwave ring
+    /// (`fx/stock_explosions.rs`). Finer than [`Effect::Impacts`], which is never registered as stock: under Stock the
+    /// Refit fireball, ring, blast sparks, debris and hull-hit sparks are not drawn for a unit whose definition
+    /// resolves; the smoke and the shield shell keep their own rules.
+    Explosions,
 }
 
 /// What stays in the repository under Refit: each effect, its package, and the
@@ -119,6 +124,8 @@ pub const REFIT_EFFECTS: &[(Effect, &str, &[&str])] = &[
     (Effect::Shots, "RND-09", &[]),
     // The Refit look of a shield hit is `Effect::Impacts`' shell (`fx/shield.wesl`); `ShieldHits` adds the stock one.
     (Effect::ShieldHits, "RND-10", &[]),
+    // The Refit look of an explosion is `Effect::Impacts`' fireball and ring (`fx/fire.wesl`); `Explosions` adds the stock one.
+    (Effect::Explosions, "RND-10", &[]),
 ];
 
 /// Original, profile-independent presentation shaders. These are available

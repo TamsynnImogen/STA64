@@ -136,6 +136,15 @@ pub struct ExplosionTable {
 }
 
 impl ExplosionTable {
+    /// A table of authored definitions (content built in code, tests).
+    pub fn from_parts(explosions: impl IntoIterator<Item = ExplosionDef>, shockwaves: impl IntoIterator<Item = ShockwaveDef>, chunks: ChunkCfg) -> ExplosionTable {
+        ExplosionTable {
+            explosions: explosions.into_iter().map(|e| (stem(&e.name), e)).collect(),
+            shockwaves: shockwaves.into_iter().map(|s| (stem(&s.name), s)).collect(),
+            chunks,
+        }
+    }
+
     /// The explosion definition of an ODF name (any case, with or without `.odf`).
     pub fn explosion(&self, name: &str) -> Option<&ExplosionDef> {
         self.explosions.get(&stem(name))
