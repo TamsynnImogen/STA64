@@ -437,7 +437,10 @@ fn gaps_now(rt: &crate::runtime::MissionRuntime) -> Gaps {
     let mut g = Gaps::default();
     for field in ["missing", "failed"] {
         let list: Vec<String> = rt
-            .eval(&format!("local t = {{}} for k, n in pairs(Mission_.{field}) do t[#t + 1] = k .. '\\t' .. tostring(n) end return t"))
+            .eval(&format!(
+                "{}local t = {{}} for k, n in pairs(Mission_.{field}) do t[#t + 1] = txt(k) .. '\\t' .. txt(n) end return t",
+                crate::sandbox::HOST_TEXT
+            ))
             .unwrap_or_default();
         for s in list {
             if let Some((k, n)) = s.rsplit_once('\t') {
@@ -446,7 +449,12 @@ fn gaps_now(rt: &crate::runtime::MissionRuntime) -> Gaps {
         }
     }
     for (field, what) in [("conditionErrors", "condition error"), ("notDecoded", "not decoded")] {
-        let keys: Vec<String> = rt.eval(&format!("local t = {{}} for k in pairs(Mission_.{field} or {{}}) do t[#t + 1] = tostring(k) end return t")).unwrap_or_default();
+        let keys: Vec<String> = rt
+            .eval(&format!(
+                "{}local t = {{}} for k in pairs(Mission_.{field} or {{}}) do t[#t + 1] = txt(k) end return t",
+                crate::sandbox::HOST_TEXT
+            ))
+            .unwrap_or_default();
         for k in keys {
             g.calls.insert(format!("{k} ({what})"), 1);
         }
