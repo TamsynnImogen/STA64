@@ -25,9 +25,11 @@ Guidelines (Cedric, 2026-11-27):
   get destroyed, groups do the destroying.
 - Formations fly as in each original base game, not as in one of them.
 
-The defect, seen in play: a STA64 group ordered past an obstacle splits, ships
-taking different sides, and a group of mixed ships strings out by speed.
-Armada II does neither.
+The defect, seen in play (Cedric): a STA64 group ordered past an obstacle
+splits, its ships taking different sides; he has not seen Armada II do this.
+Read from the code, not yet seen in play: nothing gives a STA64 group a common
+speed, so a group of mixed ships strings out, where the originals hold the
+leader to a pace (G7; static, not measured).
 
 What STA64 does today:
 
