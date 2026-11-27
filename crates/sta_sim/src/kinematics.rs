@@ -752,7 +752,11 @@ mod smooth {
     pub(super) fn face(u: &mut Unit, err: Fixed, dt: Fixed) {
         let lim = limits(u);
         let (ds, v) = vc(u.speed, Fixed::ZERO, lim.accel, dt);
-        let (dyaw, w) = pc(err, u.omega, lim.alpha, lim.omega, dt);
+        let (dyaw, mut w) = steer_turn(u, &lim, err, dt);
+        // The controller stops within its tolerance of a zero limit; that is at rest.
+        if lim.alpha > Fixed::ZERO && lim.omega <= tol() && w.abs() < tol() {
+            w = Fixed::ZERO;
+        }
         u.speed = v.max(Fixed::ZERO);
         u.omega = w;
         apply(u, dyaw, ds);
@@ -764,6 +768,19 @@ mod smooth {
     /// then takes the full-speed rate. INTERIM: the original's spin-down is not measured.
     fn spin_down_alpha(u: &Unit, lim: &Limits) -> Fixed {
         if lim.alpha > Fixed::ZERO { lim.alpha } else { u.stats.turn_alpha * lim.omega_full }
+    }
+
+    /// The turn toward `err` radians: the time-optimal controller while the craft has turn
+    /// acceleration at its speed; with none (`turnAlphaFractionAtRest` 0 at rest, or a craft
+    /// held at the speed floor) it cannot start a turn, and a rate it still has is braked
+    /// like [`halt`] brakes it, so it is not kept for ever. With turn acceleration this is
+    /// exactly the controller as before.
+    fn steer_turn(u: &Unit, lim: &Limits, err: Fixed, dt: Fixed) -> (Fixed, Fixed) {
+        if lim.alpha > Fixed::ZERO {
+            pc(err, u.omega, lim.alpha, lim.omega, dt)
+        } else {
+            vc(u.omega, Fixed::ZERO, spin_down_alpha(u, lim), dt)
+        }
     }
 
     /// No target: brake to rest and stop turning.
@@ -879,7 +896,7 @@ mod smooth {
                     aim_err = aim_err * share;
                 }
             }
-            pc(aim_err, u.omega, lim.alpha, lim.omega, dt)
+            steer_turn(u, &lim, aim_err, dt)
         };
 
         u.speed = v.max(Fixed::ZERO);

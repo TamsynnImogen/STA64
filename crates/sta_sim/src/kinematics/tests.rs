@@ -185,6 +185,90 @@ fn leftover_turn_settles_for_a_craft_that_cannot_turn_at_rest() {
     assert_eq!(w.omega, Fixed::ZERO, "still spinning with a target at hand");
 }
 
+/// Invented stats for the #1039 tests: `combatSpeed` 30, so a full-speed turn limit of
+/// 0.5 * 30 * 0.08 = 1.2 rad/s and a turn acceleration of 0.9 of it per second (1.08 rad/s^2),
+/// speed acceleration 1.3 * 30 * 2 = 78 u/s^2.
+fn invented(turn_at_rest: f64, turn_alpha_at_rest: f64) -> MoveStats {
+    MoveStats {
+        combat_speed: f(30.0),
+        turn_at_rest: f(turn_at_rest),
+        turn_alpha_at_rest: f(turn_alpha_at_rest),
+        ..MoveStats::from_f32(60.0, 2.0, 0.08, 0.9, 0.0)
+    }
+}
+
+const ACCEL: f64 = 78.0;
+const SPIN_ALPHA: f64 = 1.08;
+
+/// Ticks to bring `speed` and then a turn rate of at most `omega` to zero: the time to rest,
+/// then the turn's braking at the full-speed turn acceleration (the interim spin-down), one
+/// tick of slack each.
+fn bound(speed: f64, omega: f64) -> usize {
+    ((speed / ACCEL * 30.0).ceil() + 1.0 + (omega / SPIN_ALPHA * 30.0).ceil() + 1.0) as usize
+}
+
+/// Runs `tick` for `bound` ticks, then checks the turn rate is exactly zero, and stays zero.
+fn settles_within(mut u: Unit, bound: usize, what: &str, mut tick: impl FnMut(&mut Unit)) {
+    for _ in 0..bound {
+        tick(&mut u);
+    }
+    assert_eq!(u.omega, Fixed::ZERO, "{what}: still turning at {} rad/s after {bound} ticks", u.omega.to_f32());
+    for _ in 0..30 {
+        tick(&mut u);
+        assert_eq!(u.omega, Fixed::ZERO, "{what}: the turn started again");
+    }
+}
+
+/// #1039, the facing step: a craft in range of its attack target brakes while turning to face
+/// it (`Plan::face`). A craft with no turn acceleration at rest (`turnAlphaFractionAtRest` 0)
+/// keeps a turn left over when it stops, for ever, whether it can turn at rest or not. The
+/// spin-down rate is interim (STA64's own; the original's is not measured).
+#[test]
+fn leftover_turn_settles_while_facing_an_attack_target() {
+    for side in [-1.0, 1.0] {
+        let plan = Plan { face: Some(v((2000.0 * side) as i32, 0, 0)), ..Plan::default() };
+        for omega in [-1.0, 1.0] {
+            // Cannot turn or accelerate its turn at rest, under way at half cruise: braked to
+            // rest first (omega up to the full-speed limit 1.2 while moving).
+            let mut u = craft(invented(0.0, 0.0), NORTH);
+            u.speed = f(30.0);
+            u.omega = f(omega);
+            settles_within(u, bound(30.0, 1.2), "car-like, moving", |u| step_planned(Model::Smooth, u, Leg::default(), plan));
+        }
+    }
+}
+
+/// The same for a craft that can turn at rest (limit 0.6 rad/s there) but has no turn
+/// acceleration at rest: a turn within the limit kept its rate for ever while "facing".
+#[test]
+fn leftover_turn_settles_while_facing_with_no_turn_acceleration_at_rest() {
+    for side in [-1.0, 1.0] {
+        let plan = Plan { face: Some(v((2000.0 * side) as i32, 0, 0)), ..Plan::default() };
+        for omega in [-0.4, 0.4] {
+            let mut u = craft(invented(0.5, 0.0), NORTH);
+            u.omega = f(omega);
+            settles_within(u, bound(0.0, 0.4), "turns at rest, no acceleration, at rest", |u| step_planned(Model::Smooth, u, Leg::default(), plan));
+        }
+    }
+}
+
+/// #1039, the steering step of a held craft (a script's speed 0, or a nebula's floor: its top
+/// speed is the held floor, so the turn limit sees speed 0): with a far target and no turn
+/// acceleration at that speed it kept its turn rate for ever.
+#[test]
+fn a_held_craft_does_not_keep_a_turn_it_cannot_steer() {
+    for side in [-1.0, 1.0] {
+        for omega in [-0.5, 0.5] {
+            let mut stats = invented(0.0, 0.0);
+            stats.max_speed = crate::speed_override::HELD_SPEED;
+            let mut u = craft(stats, NORTH);
+            u.omega = f(omega);
+            u.target = Some(v((5000.0 * side) as i32, 0, 0));
+            settles_within(u, bound(0.0, 0.5), "held craft with a far target", |u| step(Model::Smooth, u, Leg::default()));
+        }
+    }
+}
+
 /// No slowing to turn: facing away, a unit asks for full speed.
 #[test]
 fn no_slowing_to_turn() {
