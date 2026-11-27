@@ -164,7 +164,7 @@ impl MapReads {
 
 /// The front end's fake data, with ships on the two-bases map: a cruiser for seat 0 and a frigate
 /// for seat 1, near each other, so a match has something to order and to fight over.
-fn armed() -> ScreenData {
+pub(crate) fn armed() -> ScreenData {
     let mut data = ScreenData::fake();
     let mut map = sta_content::fake::two_bases();
     let ship = |odf: &str, owner: u8, x: f32, z: f32, h: f32| sta_content::MapObject {
@@ -180,13 +180,13 @@ fn armed() -> ScreenData {
     data
 }
 
-fn temp_dir(tag: &str) -> PathBuf {
+pub(crate) fn temp_dir(tag: &str) -> PathBuf {
     let mut id = [0; 8];
     getrandom::fill(&mut id).unwrap();
     std::env::temp_dir().join(format!("sta64-ui55-{tag}-{:016x}", u64::from_le_bytes(id)))
 }
 
-fn app(dir: &PathBuf, map_file: bool) -> App {
+pub(crate) fn app(dir: &PathBuf, map_file: bool) -> App {
     let (null, _) = NullAudio::new();
     let handles = CounterHandles::default();
     let counted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -223,24 +223,24 @@ fn app(dir: &PathBuf, map_file: bool) -> App {
     app
 }
 
-fn setup(data: &ScreenData, seats: [Control; 2]) -> GameSetup {
+pub(crate) fn setup(data: &ScreenData, seats: [Control; 2]) -> GameSetup {
     let map = data.maps.iter().find(|m| m.def.name == sta_content::fake::two_bases().name).expect("the fake map").def.clone();
     let seat = |i: u8, control| PlayerSetup { id: PlayerId(i), team: TeamId(i), race: "fx".into(), control };
     let [a, b] = seats;
     GameSetup { seed: 5, map, content: data.content.clone(), players: vec![seat(0, a), seat(1, b)], options: GameOptions::default() }
 }
 
-fn settle(app: &mut App, frames: usize) {
+pub(crate) fn settle(app: &mut App, frames: usize) {
     for _ in 0..frames {
         app.update();
     }
 }
 
-fn state(app: &App) -> AppState {
+pub(crate) fn state(app: &App) -> AppState {
     *app.world().resource::<State<AppState>>().get()
 }
 
-fn start(app: &mut App, setup: GameSetup, speed: MatchSpeed) {
+pub(crate) fn start(app: &mut App, setup: GameSetup, speed: MatchSpeed) {
     settle(app, 4);
     app.world_mut().write_message(StartGame(setup, speed, None, Default::default(), None));
     for _ in 0..200 {
@@ -279,7 +279,7 @@ fn script(link: &mut SimLink, tick: u64) {
 }
 
 /// Runs `n` ticks of the match through the link with the script and returns each tick's digest.
-fn run(app: &mut App, n: u64) -> Vec<u64> {
+pub(crate) fn run(app: &mut App, n: u64) -> Vec<u64> {
     let mut digests = Vec::new();
     for _ in 0..n {
         let mut link = app.world_mut().resource_mut::<SimLink>();
@@ -293,7 +293,7 @@ fn run(app: &mut App, n: u64) -> Vec<u64> {
     digests
 }
 
-fn drain<T: Message + Clone>(app: &mut App) -> Vec<T> {
+pub(crate) fn drain<T: Message + Clone>(app: &mut App) -> Vec<T> {
     app.world_mut().resource_mut::<Messages<T>>().drain().collect()
 }
 

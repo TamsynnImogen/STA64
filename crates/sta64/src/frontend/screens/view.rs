@@ -227,7 +227,7 @@ fn single_player(ctx: &Ctx) -> impl Bundle {
                 }
             }
         }
-        p.spawn(disabled_button(&t, &tr("Load game"), w));
+        p.spawn((button(&t, &tr("Load game"), w), crate::ui::save_menu::OpenSaveButton(crate::ui::save_menu::SaveMode::Load)));
         p.spawn((button(&t, &tr("Previous menu"), w), Act::Goto(Screen::Main)));
     })
 }

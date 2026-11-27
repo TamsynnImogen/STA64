@@ -118,6 +118,10 @@ pub fn leave_current_match(leave: &mut MessageWriter<LeaveMatch>) {
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAct {
     Resume,
+    /// Opens the Save screen (UI-56).
+    Save,
+    /// Opens the Load screen (UI-56).
+    Load,
     Options,
     Diagnostics,
     /// Back from a subpage, or "No" on a question.
@@ -134,6 +138,8 @@ pub enum MenuSlot {
     Panel,
     Title,
     Resume,
+    Save,
+    Load,
     Options,
     Diagnostics,
     Exit,
@@ -166,13 +172,15 @@ const fn a(x: f32, y: f32, w: f32, h: f32) -> Region {
 /// The region of `slot` on the 800x600 design screen. All arranged (see the module docs).
 pub const fn region(slot: MenuSlot) -> Region {
     match slot {
-        MenuSlot::Panel => a(260.0, 128.0, 280.0, 365.0),
-        MenuSlot::Title => a(280.0, 143.0, 240.0, 34.0),
-        MenuSlot::Resume => a(280.0, 199.0, 240.0, 36.0),
-        MenuSlot::Options => a(280.0, 247.0, 240.0, 36.0),
-        MenuSlot::Diagnostics => a(280.0, 295.0, 240.0, 36.0),
-        MenuSlot::Exit => a(280.0, 343.0, 240.0, 36.0),
-        MenuSlot::Quit => a(280.0, 391.0, 240.0, 36.0),
+        MenuSlot::Panel => a(260.0, 108.0, 280.0, 425.0),
+        MenuSlot::Title => a(280.0, 123.0, 240.0, 34.0),
+        MenuSlot::Resume => a(280.0, 175.0, 240.0, 36.0),
+        MenuSlot::Save => a(280.0, 223.0, 240.0, 36.0),
+        MenuSlot::Load => a(280.0, 271.0, 240.0, 36.0),
+        MenuSlot::Options => a(280.0, 319.0, 240.0, 36.0),
+        MenuSlot::Diagnostics => a(280.0, 367.0, 240.0, 36.0),
+        MenuSlot::Exit => a(280.0, 415.0, 240.0, 36.0),
+        MenuSlot::Quit => a(280.0, 463.0, 240.0, 36.0),
         MenuSlot::OptionsPanel => a(80.0, 20.0, 640.0, 560.0),
         MenuSlot::OptionsTitle => a(100.0, 30.0, 600.0, 34.0),
         MenuSlot::OptionsBody => a(100.0, 84.0, 600.0, 430.0),
@@ -199,7 +207,7 @@ pub const fn region(slot: MenuSlot) -> Region {
 #[cfg(test)]
 pub fn slots_of(page: MenuPage) -> &'static [MenuSlot] {
     match page {
-        MenuPage::Main => &[MenuSlot::Panel, MenuSlot::Title, MenuSlot::Resume, MenuSlot::Options, MenuSlot::Diagnostics, MenuSlot::Exit, MenuSlot::Quit],
+        MenuPage::Main => &[MenuSlot::Panel, MenuSlot::Title, MenuSlot::Resume, MenuSlot::Save, MenuSlot::Load, MenuSlot::Options, MenuSlot::Diagnostics, MenuSlot::Exit, MenuSlot::Quit],
         MenuPage::Options => &[MenuSlot::OptionsPanel, MenuSlot::OptionsTitle, MenuSlot::OptionsBody, MenuSlot::OptionsBack],
         MenuPage::Diagnostics => &[MenuSlot::DiagnosticsPanel, MenuSlot::DiagnosticsTitle, MenuSlot::DiagnosticsSummary, MenuSlot::DiagnosticsWarning1, MenuSlot::DiagnosticsWarning2, MenuSlot::DiagnosticsWarning3, MenuSlot::DiagnosticsWarning4, MenuSlot::DiagnosticsReport, MenuSlot::DiagnosticsBack],
         MenuPage::ConfirmExit | MenuPage::ConfirmQuit => &[MenuSlot::ConfirmPanel, MenuSlot::ConfirmTitle, MenuSlot::ConfirmLine1, MenuSlot::ConfirmLine2, MenuSlot::Yes, MenuSlot::No],
@@ -296,6 +304,10 @@ struct Parts<'a> {
     tab: usize,
     mission: bool,
     diagnostics: Option<&'a Diagnostics>,
+    /// Save is not allowed now (V7): its entry carries the "not allowed" caption (the screen says why).
+    save_blocked: bool,
+    /// A networked match: Load is off (it would leave the session).
+    networked: bool,
 }
 
 fn spawn_menu(commands: &mut Commands, page: MenuPage, parts: &Parts, b: Vec2) {
@@ -316,6 +328,16 @@ fn spawn_menu(commands: &mut Commands, page: MenuPage, parts: &Parts, b: Vec2) {
                     panel(p, t, MenuSlot::Panel, b);
                     title(p, t, MenuSlot::Title, b, &tr("Game menu"));
                     button(p, t, MenuSlot::Resume, b, &caption(parts.strings, "return", "Return to game"), MenuAct::Resume);
+                    // UI-56: the stock order puts Save and Load first; where V7 forbids a save the entry
+                    // says so (the key `no_save_game`) and its screen gives the reason.
+                    let save = if parts.save_blocked { caption(parts.strings, "no_save_game", "Save not allowed") } else { caption(parts.strings, "save_game", "Save game") };
+                    button(p, t, MenuSlot::Save, b, &save, MenuAct::Save);
+                    let load = caption(parts.strings, "load_game", "Load game");
+                    if parts.networked {
+                        put(p, MenuSlot::Load, b, crate::ui::theme::disabled_button(t, &load, rect(MenuSlot::Load, b).width()));
+                    } else {
+                        button(p, t, MenuSlot::Load, b, &load, MenuAct::Load);
+                    }
                     button(p, t, MenuSlot::Options, b, &caption(parts.strings, "options", "Options"), MenuAct::Options);
                     button(p, t, MenuSlot::Diagnostics, b, &tr("Diagnostics"), MenuAct::Diagnostics);
                     button(p, t, MenuSlot::Exit, b, &tr("Exit to main menu"), MenuAct::AskExit);
@@ -388,9 +410,11 @@ fn rebuild(
     strings: Option<Res<Strings>>,
     mission: Option<Res<crate::game::mission_host::MissionRun>>,
     diagnostics: Option<Res<Diagnostics>>,
+    availability: Option<Res<crate::save::SaveAvailability>>,
+    net: Option<Res<NetworkedMatch>>,
 ) {
     let report_changed = menu.open && menu.page == MenuPage::Diagnostics && diagnostics.as_ref().is_some_and(|d| d.is_changed());
-    if !(menu.is_changed() || graphics.as_ref().is_some_and(|g| g.is_changed()) || theme.is_changed() || stock_box.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed()) || controls_render.is_changed() || report_changed) {
+    if !(menu.is_changed() || availability.as_ref().is_some_and(|a| a.is_changed()) || graphics.as_ref().is_some_and(|g| g.is_changed()) || theme.is_changed() || stock_box.is_changed() || strings.as_ref().is_some_and(|s| s.is_changed()) || controls_render.is_changed() || report_changed) {
         return;
     }
     for e in &roots {
@@ -399,7 +423,7 @@ fn rebuild(
     if !menu.open {
         return;
     }
-    let parts = Parts { theme: &theme, settings: &settings, controls: &controls, graphics: graphics.as_deref(), strings: strings.as_deref(), tab: tab.0, mission: mission.is_some(), diagnostics: diagnostics.as_deref() };
+    let parts = Parts { theme: &theme, settings: &settings, controls: &controls, graphics: graphics.as_deref(), strings: strings.as_deref(), tab: tab.0, mission: mission.is_some(), diagnostics: diagnostics.as_deref(), save_blocked: availability.as_deref().is_some_and(|a| a.0.is_some()), networked: net.is_some() };
     spawn_menu(&mut commands, menu.page, &parts, stock_box.0);
 }
 
@@ -414,8 +438,13 @@ fn keys_and_requests(
     mission: Option<Res<crate::game::mission_host::MissionRun>>,
     hud: Option<ResMut<crate::ui::hud::HudState>>,
     drag: Option<ResMut<crate::input::select::Drag>>,
+    screen: Option<Res<crate::ui::save_menu::SaveScreen>>,
 ) {
     let asked = requests.read().count() > 0;
+    // Esc belongs to the Save or Load screen while it is over the menu (UI-56).
+    if screen.is_some_and(|s| s.open) {
+        return;
+    }
     let pressed = keys.as_deref().is_some_and(|k| match bindings.as_deref() {
         Some(b) => b.just_pressed(Action::GameMenu, k),
         None => k.just_pressed(KeyCode::Escape),
@@ -455,6 +484,7 @@ fn buttons(
     mut menu: ResMut<InGameMenu>,
     mut leave: MessageWriter<LeaveMatch>,
     mut exit: MessageWriter<AppExit>,
+    mut open: MessageWriter<crate::ui::save_menu::OpenSaveScreen>,
 ) {
     for ButtonClicked(e) in clicks.read() {
         let Ok(act) = acts.get(*e) else { continue };
@@ -463,6 +493,12 @@ fn buttons(
         }
         match act {
             MenuAct::Resume => menu.open = false,
+            MenuAct::Save => {
+                open.write(crate::ui::save_menu::OpenSaveScreen(crate::ui::save_menu::SaveMode::Save));
+            }
+            MenuAct::Load => {
+                open.write(crate::ui::save_menu::OpenSaveScreen(crate::ui::save_menu::SaveMode::Load));
+            }
             MenuAct::Options => menu.page = MenuPage::Options,
             MenuAct::Diagnostics => menu.page = MenuPage::Diagnostics,
             MenuAct::Back => menu.page = MenuPage::Main,
@@ -559,6 +595,7 @@ impl Plugin for InGameMenuPlugin {
             .init_resource::<StockBox>()
             .init_resource::<ButtonInput<KeyCode>>()
             .add_message::<OpenInGameMenu>()
+            .add_message::<crate::ui::save_menu::OpenSaveScreen>()
             .add_message::<LeaveMatch>()
             .add_systems(OnExit(AppState::InGame), reset)
             // The menu's own logic runs before the sim link: a menu opened this frame holds the next tick.

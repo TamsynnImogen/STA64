@@ -25,7 +25,7 @@ pub mod container;
 pub mod record;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -187,7 +187,7 @@ fn pair_controllers(seats: &[SeatRec], controllers: usize) -> Vec<(PlayerId, Opt
 
 /// What the gate and the save need to know about the world.
 #[derive(SystemParam)]
-struct Env<'w> {
+pub(crate) struct Env<'w> {
     active: Option<Res<'w, ActiveMatch>>,
     net: Option<Res<'w, crate::game::net_match::NetGame>>,
     mission: Option<Res<'w, crate::game::mission_host::MissionRun>>,
@@ -203,7 +203,28 @@ struct Env<'w> {
 }
 
 impl Env<'_> {
-    fn dir(&self) -> Option<PathBuf> {
+    /// Why this install cannot load a save with this header, judged as a load would, without
+    /// reading the rest of the file: the formats and game kind, the map file by the header's exact
+    /// path and hash, and the content with the map's tech tree (UI-56's list greys these out).
+    pub(crate) fn header_refusal(&self, screen: &ScreenData, header: &container::Header) -> Option<String> {
+        if let Some(e) = header.refusal(None) {
+            return Some(e.to_string());
+        }
+        let name = header.map.path.rsplit(['/', '\\']).next().unwrap_or(&header.map.path).rsplit_once('.').map_or("", |(stem, _)| stem);
+        let missing = || Some(SaveError::MapMissing { path: header.map.path.clone() }.to_string());
+        if !screen.maps.iter().any(|m| m.def.name == name) {
+            return missing();
+        }
+        let Some(bytes) = self.read_map(&header.map.path) else { return missing() };
+        let hash = file_hash(&bytes);
+        if hash != header.map.hash {
+            return Some(SaveError::MapChanged { path: header.map.path.clone(), saved: header.map.hash, given: hash }.to_string());
+        }
+        let content = match_content(self, screen, &bytes, name);
+        header.refusal(Some(&content)).map(|e| e.to_string())
+    }
+
+    pub(crate) fn dir(&self) -> Option<PathBuf> {
         match self.dir.as_deref().and_then(|d| d.0.clone()) {
             Some(d) => Some(d),
             None => crate::platform::data_dir().map(|d| d.join("saves")),
@@ -396,7 +417,7 @@ struct Prepared {
 
 /// A load waiting for its match to be built; tied to the one start it wrote.
 #[derive(Resource)]
-struct PendingLoad {
+pub(crate) struct PendingLoad {
     path: PathBuf,
     /// The start this load wrote: the match that may receive the prepared game is this one only.
     start: StartGame,
