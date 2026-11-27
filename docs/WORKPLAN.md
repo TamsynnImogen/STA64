@@ -1035,8 +1035,9 @@ hold to the ADR as written until then.
 - **One package per PR.** Title `[SIM-04] Weapons and fire arcs`. Body: the
   done-when evidence, files touched outside *owns* (should be none besides
   `plugins.rs` and appended deps), new `TODO.md` check lines.
-- **Seam changes** go in their own small PR touching only seam files, with
-  the reason, the callers affected, and updated fakes. Within a milestone
+- **Seam changes** go in their own small PR touching only seam files (plus
+  the mechanical caller fixes of AGENTS.md "Idle claims and mechanical
+  edits"), with the reason, the callers affected, and updated fakes. Within a milestone
   seams change additively only (new variants, new fields with defaults, new
   methods). A breaking change waits for the milestone boundary, bumps
   `SEAM_REV`, and the seam PR fixes every caller on main.
