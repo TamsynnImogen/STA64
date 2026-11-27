@@ -119,6 +119,11 @@ pub struct NebulaMaterial {
     /// The Key's shadow map, read when `params.shp.x` says there is one.
     #[texture(5)]
     pub shadow: Option<Handle<Image>>,
+    /// The light weight of each place of the envelope (R8, the envelope's own rectangle and size; 1 is 255): the
+    /// factor on the light the gas emits there. A nebula out of sight keeps its shape and is dimmed through this
+    /// (#1146, `gate_fields`). `None` (the fallback image is white) is 1 everywhere.
+    #[texture(6)]
+    pub light: Option<Handle<Image>>,
 }
 
 impl Material for NebulaMaterial {
@@ -892,8 +897,9 @@ fn poll_noise(mut nv: ResMut<NoiseVolume>, mut images: ResMut<Assets<Image>>, mu
 /// A nebula of a class's field that the local player's side has never had in sight is not drawn
 /// (#1146; rule and grade: `render::fog_objects`). The field is one box for the whole class, so the
 /// nebula is cleared from the envelope the gas is marched through, and the lightning strikes among
-/// the nebulae drawn only. A nebula in sight, or remembered (out-of-sight looks are a later step),
-/// is as before. A centre that is no region of the map is always drawn, as is every nebula when there is
+/// the nebulae in sight only. A nebula in sight is as before; one seen before and out of sight keeps its shape
+/// (cover and reach as in sight) and its emitted light is scaled through the light weights texture (inferred
+/// half of the displayed brightness, interim; `fog_objects::ghost`). A centre that is no region of the map is always drawn, as is every nebula when there is
 /// no fog grid (the states then read as in sight). Runs only when the states changed or a field is new,
 /// and finds each centre's region once.
 fn gate_fields(
@@ -913,8 +919,8 @@ fn gate_fields(
             let found = f.centres.iter().map(|c| regions.find(sta_content::RegionKind::Nebula, c[0], -c[2], REGION_MATCH).map(|r| r.id)).collect();
             f.region = Some(found);
         }
-        // 1 in sight, the out-of-sight factor for a nebula seen before (a still, thinner copy; interim, see
-        // `fog_objects::ghost::NEBULA`), 0 never seen.
+        // 1 in sight, the out-of-sight factor (displayed, interim, see `fog_objects::ghost::NEBULA`) for a nebula
+        // seen before, 0 never seen.
         let shown: Vec<f32> = f
             .region
             .iter()
@@ -928,8 +934,17 @@ fn gate_fields(
         if shown == f.shown {
             continue;
         }
-        let Some(handle) = materials.get(&f.material).and_then(|m| m.envelope.clone()) else { continue };
-        let env = sta_surface::nebula::envelope_weighted(&f.recipe, f.radius, &f.centres, &shown);
+        let Some((handle, light)) = materials.get(&f.material).and_then(|m| Some((m.envelope.clone()?, m.light.clone()?))) else { continue };
+        // The shape: every nebula seen at all is in the envelope whole (cover and reach as in sight); only the
+        // never seen are left out. The light: a nebula out of sight is dimmed by the weight texture, which holds
+        // the linear factor of the displayed `shown` (see `fog_objects::ghost::nebula_gas_linear`).
+        let mask: Vec<bool> = shown.iter().map(|s| *s > 0.0).collect();
+        let weights: Vec<f32> = shown.iter().map(|s| if *s >= 1.0 { 1.0 } else { crate::render::fog_objects::ghost::nebula_gas_linear() }).collect();
+        let env = sta_surface::nebula::envelope_masked(&f.recipe, f.radius, &f.centres, &mask);
+        let bytes = sta_surface::nebula::light_weights(&f.recipe, f.radius, &f.centres, &mask, &weights);
+        if let Some(mut img) = images.get_mut(&light) {
+            img.data = Some(bytes);
+        }
         let Some(mut img) = images.get_mut(&handle) else { continue };
         img.data = Some(env.pixels);
         // The lightning strikes among the nebulae in sight only: a copy out of sight does not animate.
@@ -1024,11 +1039,25 @@ pub fn spawn_field(
         sh2: Vec4::ZERO,
         shp: Vec4::ZERO,
     };
+    // The light weights: 1 everywhere until `gate_fields` finds a nebula out of sight; kept in the main world too.
+    let mut light_img = Image::new(
+        Extent3d { width: env.w, height: env.h, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        vec![255; (env.w * env.h) as usize],
+        TextureFormat::R8Unorm,
+        RenderAssetUsages::default(),
+    );
+    light_img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::ClampToEdge,
+        address_mode_v: ImageAddressMode::ClampToEdge,
+        ..ImageSamplerDescriptor::linear()
+    });
     let material = materials.add(NebulaMaterial {
         params,
         noise: noise.image.clone(),
         envelope: Some(images.add(env_img)),
         shadow: None,
+        light: Some(images.add(light_img)),
     });
     let centre = (lo + hi) * 0.5;
     let size = hi - lo;
@@ -1151,6 +1180,10 @@ fn update(
 }
 
 #[cfg(test)]
+#[path = "nebula_ghost_gpu.rs"]
+mod ghost_gpu;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1172,7 +1205,9 @@ mod tests {
         app.add_plugins(MinimalPlugins).init_resource::<Assets<NebulaMaterial>>().init_resource::<Assets<Image>>();
         let image = Image::new(Extent3d { width: env.w, height: env.h, depth_or_array_layers: 1 }, TextureDimension::D2, env.pixels.clone(), TextureFormat::Rgba8Unorm, RenderAssetUsages::default());
         let handle = app.world_mut().resource_mut::<Assets<Image>>().add(image);
-        let material = app.world_mut().resource_mut::<Assets<NebulaMaterial>>().add(NebulaMaterial { params: NebulaParams::default(), noise: None, envelope: Some(handle.clone()), shadow: None });
+        let light_image = Image::new(Extent3d { width: env.w, height: env.h, depth_or_array_layers: 1 }, TextureDimension::D2, vec![255; (env.w * env.h) as usize], TextureFormat::R8Unorm, RenderAssetUsages::default());
+        let light = app.world_mut().resource_mut::<Assets<Image>>().add(light_image);
+        let material = app.world_mut().resource_mut::<Assets<NebulaMaterial>>().add(NebulaMaterial { params: NebulaParams::default(), noise: None, envelope: Some(handle.clone()), shadow: None, light: Some(light.clone()) });
         let field = app
             .world_mut()
             .spawn(NebulaField {
@@ -1224,14 +1259,23 @@ mod tests {
         let ghost = crate::render::fog_objects::ghost::NEBULA;
         assert_eq!(app.world().get::<NebulaField>(field).unwrap().shown, vec![0.0, ghost]);
         assert!(app.world().get::<NebulaField>(field).unwrap().lit.is_empty(), "no lightning in a copy out of sight");
-        let want = sta_surface::nebula::envelope_weighted(&app.world().get::<NebulaField>(field).unwrap().recipe, 300.0, &centres, &[0.0, ghost]);
+        // The shape is the whole envelope of the nebulae seen (the same bytes as in sight for the second one's
+        // places: cover and reach unchanged, the first is still left out); the dimming is in the light weights.
+        let want = sta_surface::nebula::envelope_masked(&app.world().get::<NebulaField>(field).unwrap().recipe, 300.0, &centres, &[false, true]);
         assert_eq!(app.world().resource::<Assets<Image>>().get(&handle).unwrap().data.clone().unwrap(), want.pixels);
-        // Everything in sight again: the envelope is the full one.
+        let factor = crate::render::fog_objects::ghost::nebula_gas_linear();
+        let weights = sta_surface::nebula::light_weights(&app.world().get::<NebulaField>(field).unwrap().recipe, 300.0, &centres, &[false, true], &[1.0, factor]);
+        let bytes = app.world().resource::<Assets<Image>>().get(&light).unwrap().data.clone().unwrap();
+        assert_eq!(bytes, weights);
+        assert!(bytes.iter().any(|b| *b < 255) && bytes.contains(&255), "the copy is dimmed where it is and nowhere else");
+        assert!((factor - 0.2176).abs() < 1e-3, "half of the displayed value is about 0.218 of the linear light: {factor}");
+        // Everything in sight again: the envelope is the full one and the weights are white.
         let all = crate::render::fog::FogGrid::new([-4096.0, -4096.0], [4096.0, 4096.0]).lifted(true, true);
         app.insert_resource(crate::render::fog::FogState { grid: all, updates: 3 });
         app.update();
         assert_eq!(app.world().get::<NebulaField>(field).unwrap().shown, vec![1.0, 1.0]);
         assert_eq!(app.world().resource::<Assets<Image>>().get(&handle).unwrap().data.clone().unwrap(), env.pixels);
+        assert!(app.world().resource::<Assets<Image>>().get(&light).unwrap().data.clone().unwrap().iter().all(|b| *b == 255));
     }
 
     /// The per-pair form the occlusion had before the discs were computed once.
