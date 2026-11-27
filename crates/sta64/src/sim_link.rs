@@ -72,7 +72,9 @@ pub struct SimLink {
     in_flight: Vec<Command>,
 }
 
-/// What a load gives a link in place of the game it was built with (UI-55, ADR 0010).
+/// What a load gives a link in place of the game it was built with (UI-55, ADR 0010). Used by the
+/// save module; the allows keep this seam change building alone.
+#[allow(dead_code)]
 pub struct Restored {
     /// The saved sim, at the saved tick.
     pub sim: sta_sim::Sim,
@@ -99,16 +101,19 @@ impl SimLink {
     }
 
     /// Commands submitted and not yet taken by a tick, in submission order (UI-55: a save keeps them).
+    #[allow(dead_code)]
     pub fn in_flight(&self) -> &[Command] {
         &self.in_flight
     }
 
     /// The computer players, for a save to ask each for its record.
+    #[allow(dead_code)]
     pub fn controller_refs(&mut self) -> &[Box<dyn Controller>] {
         self.controllers.get().as_slice()
     }
 
     /// The next command number: one counter for the player's and the sandbox's commands (a save stores it).
+    #[allow(dead_code)]
     pub fn next_seq(&self) -> u32 {
         self.seq
     }
@@ -117,6 +122,7 @@ impl SimLink {
     /// the views are made again, the journal continues the saved one, the command counter is the saved
     /// one and the in-flight commands go to a new router in their order. The controllers do not think:
     /// a save is taken after they thought about the last step, and their commands are in flight.
+    #[allow(dead_code)]
     pub(crate) fn restore(&mut self, r: Restored) {
         let Restored { sim, replay, controllers, in_flight, next_seq } = r;
         *self.source.get() = Box::new(sim);
