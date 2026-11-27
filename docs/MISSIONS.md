@@ -586,7 +586,7 @@ cargo run --release -- --install-root "<Armada II root>"
 
 The tool runs `tools/dsl_to_lua.py` and writes `missions/<map>.lua` into
 `<user data dir>/sta64/converted/<key>/` (`~/.local/share/sta64/...` on Linux;
-`$STA64_DATA_DIR` overrides; `<key>` is the install folder's name, so each install keeps its own; two installs with the same folder name share one, `sta_mission::converted`). The output is
+`$STA64_DATA_DIR` overrides; `<key>` is the install folder's name and a short hash of its resolved path, so each install keeps its own even when two folders share a name, `sta_core::install_key`; the Python tool still writes the name alone, a folder the game does not find, so pass `--out` the key the game expects or use the Rust converter). The output is
 derived from game files and is refused inside the repository or an install. Only the base install's own `missions` folder is converted and only for a game started without `--mod` (a mod's chain is not converted). When
 that folder holds `missions/`, the game mounts it *below* the install (D6: a script at the same path in the install wins; a differently named script the resolver tries later loses to the converted one, a known limit),
 and the campaign menu marks those missions "(experimental)". When it is absent

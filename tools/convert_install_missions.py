@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Convert an install's own compiled missions into the user's data directory.
 
+Superseded by the Rust converter (`sta_mission_convert`), which uses a different folder key (the slug plus a hash of the install path, `sta_core::install_key`): this tool keeps the old key (the slug alone), so the game does not find its output.
+
 Stock Armada II campaign missions are mission DLLs (`*R.drl`, `*S.dsl`) that STA64
 never loads (docs/MODDING_DECISIONS.md D2). `tools/dsl_to_lua.py` converts them to
 Lua; this wrapper runs it for one install and puts the output where the game
