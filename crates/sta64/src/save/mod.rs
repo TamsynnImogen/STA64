@@ -120,7 +120,10 @@ pub struct SaveDir(pub Option<PathBuf>);
 /// A lookup of a map file by name, for tests; in the game the mount is read. Returns the file's path
 /// and bytes.
 #[derive(Resource, Clone)]
-pub struct MapFiles(pub Arc<dyn Fn(&str) -> Option<(String, Vec<u8>)> + Send + Sync>);
+pub struct MapFiles(pub Arc<MapLookup>);
+
+/// A map name to the map file's path and bytes.
+pub type MapLookup = dyn Fn(&str) -> Option<(String, Vec<u8>)> + Send + Sync;
 
 /// 64-bit FNV-1a of the map file's bytes: the hash the save header names the map by.
 pub fn file_hash(bytes: &[u8]) -> u64 {

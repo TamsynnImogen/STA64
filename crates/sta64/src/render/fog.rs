@@ -684,6 +684,12 @@ pub(crate) struct Memo {
     shown_cutscene: Option<bool>,
 }
 
+type CameraFog<'w> = (
+    Option<Res<'w, crate::ui::presentation::CineractiveState>>,
+    Option<Res<'w, crate::input::camera_tactical::TacticalView>>,
+    Option<ResMut<'w, FogMemory>>,
+);
+
 type MatchFog<'w> = (
     Option<Res<'w, crate::game::net_match::NetGame>>,
     Option<Res<'w, crate::game::flow::ActiveMatch>>,
@@ -700,11 +706,7 @@ pub(crate) fn update_fog(
     bounds: Res<FogBounds>,
     content: Option<Res<ContentRes>>,
     settings: Res<FogSettings>,
-    (cine, tactical, mut io): (
-        Option<Res<crate::ui::presentation::CineractiveState>>,
-        Option<Res<crate::input::camera_tactical::TacticalView>>,
-        Option<ResMut<FogMemory>>,
-    ),
+    (cine, tactical, mut io): CameraFog<'_>,
     patterns: Option<Res<FogPatterns>>,
     state: Option<ResMut<FogState>>,
     mut images: ResMut<Assets<Image>>,
