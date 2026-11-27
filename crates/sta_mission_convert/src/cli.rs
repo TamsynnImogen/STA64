@@ -230,7 +230,9 @@ options:\n\
 A full run (no --only) deletes only the files this tool wrote before (its manifest lists them), not\n\
 every .lua file in the folder as the Python tool does; a .lua file whose first line is the Python\n\
 tool's header (an earlier conversion by it, maybe edited since) is renamed to <name>.old, never\n\
-deleted, and listed in the output. The output folder may not be, contain or lie inside a game folder, and symbolic links in it are refused.";
+deleted, and listed in the output. The output folder may not be, contain or lie inside a game folder, and symbolic links in it are refused.\n\n\
+Exit code: 0 when every mission converted; 1 when any mission failed or was skipped, even if other\n\
+scripts were written (the Python wrapper exits 0 then, after its warning).";
 
 const OPTIONS: [&str; 8] =
     ["--help", "--install", "--out", "--only", "--include-unmapped", "--keep-foreign", "--cache", "--cache-dir"];
