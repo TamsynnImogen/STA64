@@ -120,6 +120,18 @@ pub fn new_lua() -> Lua {
     lua
 }
 
+/// A Lua `txt(v)` for host chunks that read a mission's state (reports, probes, traces): the
+/// text of a string, number, boolean or nil, or of a value with a `__tostring` metamethod
+/// (error objects), and only the type name (`<table>`) for any other reference. Prepend it to
+/// such a chunk and use `txt` instead of `tostring`: `tostring` of a plain reference hands out
+/// the state's next reference id, so a host read on a UI or log path would shift every id the
+/// script prints later (#1300).
+pub const HOST_TEXT: &str = "local function txt(v) local ty = type(v) \
+    if ty == 'string' or ty == 'number' or ty == 'boolean' or ty == 'nil' then return tostring(v) end \
+    local mt = getmetatable(v) \
+    if type(mt) == 'table' and rawget(mt, '__tostring') ~= nil then return tostring(v) end \
+    return '<' .. ty .. '>' end ";
+
 /// Give `lua` a full instruction budget; call at every entry from the host.
 pub fn refill(lua: &Lua) {
     if let Some(b) = lua.app_data_ref::<Budget>() {
@@ -305,6 +317,28 @@ mod tests {
         assert_eq!(lua.load("return string.find('hello world', 'o w')").eval::<i64>().unwrap(), 5);
         assert_eq!(lua.load("return (string.gsub('  hi  ', '^%s*(.-)%s*$', '%1'))").eval::<String>().unwrap(), "hi");
         assert_eq!(lua.load("return string.find(string.rep('a', 5000), 'aab', 1, true)").eval::<Option<i64>>().unwrap(), None);
+    }
+
+    /// Host reads of a mission's state on UI, report or log paths cannot shift the reference
+    /// ids the script prints (#1300).
+    #[test]
+    fn host_text_hands_out_no_reference_ids() {
+        let script = "Mission_ = { missing = { [{}] = 1 }, failed = {}, blocked = { r = {} }, problemOrder = { { {}, 'k', 1, {} } } } \
+                      function show() return tostring({}) end";
+        let quiet = crate::runtime::MissionRuntime::from_source("missions/T.lua", script, 1);
+        let busy = crate::runtime::MissionRuntime::from_source("missions/T.lua", script, 1);
+        let read = format!(
+            "{HOST_TEXT}local o = {{}} for k, n in pairs(Mission_.missing) do o[#o+1] = txt(k) .. txt(n) end \
+             for r, c in pairs(Mission_.blocked) do o[#o+1] = txt(r) .. txt(c) end \
+             local q = Mission_.problemOrder[1] o[#o+1] = txt(q[1]) .. txt(q[4]) .. txt(print) .. txt(coroutine.create(print)) \
+             return table.concat(o, ' ')"
+        );
+        assert_eq!(busy.eval::<String>(&read).unwrap(), "<table>1 r<table> <table><table><function><thread>");
+        assert_eq!(quiet.eval::<String>("return show()").unwrap(), busy.eval::<String>("return show()").unwrap());
+        // The probes that read mission state use `txt`, never `tostring`.
+        for (file, src) in [("progress.rs", include_str!("progress.rs")), ("ending.rs", include_str!("ending.rs"))] {
+            assert!(!src.contains("tostring("), "{file} turns mission values into text with tostring");
+        }
     }
 
     fn step_all(rt: &mut crate::runtime::MissionRuntime, ticks: u64) {

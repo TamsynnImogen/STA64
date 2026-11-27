@@ -670,8 +670,8 @@ process. What a mission author can rely on:
 - `pairs` and `next`: first the list part, keys 1, 2, ..., n in ascending
   order, for a list whose integer keys are only ever written by list
   operations (`t[#t + 1] = v`, filling 1, 2, 3, ... in order, `table.insert`,
-  `table.remove`, `t[#t] = nil`, assigning existing items, a list
-  constructor), whatever other keys the table holds. Then every key that is
+  `table.remove`, `t[#t] = nil`, assigning to items that hold non-nil
+  values, a list constructor), whatever other keys the table holds. Then every key that is
   not a positive integer (strings, booleans, floats, zero and negative
   integers, tables, functions, coroutines, entity handles) in the order it was
   added. A key set to nil and added again moves to the end; overwriting a
@@ -704,10 +704,9 @@ process. What a mission author can rely on:
 - `tostring` of a table, function, coroutine or userdata (and so `print`,
   `string.format('%s')` and error messages built from them) gives the type
   and a per-state id, `table: #12`, never an address. Ids count 1, 2, 3, ...
-  in the order values are first turned into text in that state, by the script
-  or by host code running in it (STA64's own host code turns only numbers and
-  strings into text there), so they are the same in every run; a value keeps
-  its id for its lifetime. (`string.format('%p')` does not exist in Lua 5.3.)
+  in the order the script first turns values into text (STA64's own reports
+  and traces read mission state without handing out ids), so they are the
+  same in every run; a value keeps its id for its lifetime. (`string.format('%p')` does not exist in Lua 5.3.)
 - Weak tables are not available. A script meets this as an error from
   `setmetatable` when the metatable has `__mode` (as for `__gc`). Behind that,
   the bundled Lua ignores `__mode` altogether, so a mode added to a metatable

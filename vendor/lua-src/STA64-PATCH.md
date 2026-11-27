@@ -87,14 +87,26 @@ Every change is marked `STA64` in the source.
   precision); `^` calls the power function the host sets with
   `lua_sta64_setpow` (STA64's sandbox sets `libm::pow`).
 
+## Internal checks
+
+`sta64_check` (in `ltable.c`) guards the patch's own invariants: no resize
+inside a resize, no new key during a resize, always a free node when a resize
+re-inserts. A failing check calls `abort()` and ends the process at once, on
+purpose: going on would corrupt memory. It can only mean a bug in this patch,
+never something a script did; no script, however hostile, may be able to
+reach it. If it fires, report it as an issue with the label `lane:lua`, the
+script or a reduced snippet that triggers it, and the STA64 version, and do
+not work around it in Lua.
+
 ## Constraints for STA64 code
 
 - Never give a thread its own hook (`Thread::set_hook`): mlua keeps per-thread
   hooks in a weak-keyed table, and with `__mode` ignored those threads would
   never be collected. STA64 uses only global hooks.
-- Host code running in a mission state should not turn references into text
+- Host code running in a mission state must not turn references into text
   (`tostring` of tables, `Value::to_string` on them): that hands out the next
-  reference id and shifts the script's later ids.
+  reference id and shifts the script's later ids. Host chunks that read
+  mission state use `txt` from `sta_mission::sandbox::HOST_TEXT` instead.
 
 ## Updating Lua or lua-src
 

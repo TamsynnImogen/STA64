@@ -37,6 +37,10 @@ const WORKLOADS: &[(&str, &str)] = &[
          for i = 1, 200000 do local k = keys[i % 2000 + 1] x[k] = i x[keys[(i + 1000) % 2000 + 1]] = nil end",
     ),
     (
+        "tiny churn: 1,000,000 insert/delete of distinct keys on a one-key table",
+        "local x = { a = 1 } for i = 1, 1000000 do x[-i] = i x[-i] = nil end",
+    ),
+    (
         "sort: 20,000 numbers, default comparator",
         "local a = {} local v = 12345 for i = 1, 20000 do v = (v * 1103515245 + 12345) % 2147483648 a[i] = v end \
          table.sort(a)",
@@ -119,6 +123,26 @@ fn main() {
         // The KEEP array itself: 10000 slots of 16 bytes (array part grown by doubling, at most 2x).
         println!("{:>9.1} B   per table, {name} (incl. KEEP slot)", (after - before) as f64 / 10000.0);
     }
+
+    // An emptied big list: its array part is kept until enough new keys arrive.
+    let lua = sandbox::new_lua();
+    lua.load("BIG = {} for i = 1, 1000000 do BIG[i] = i end").exec().expect("fill");
+    sandbox::refill(&lua);
+    lua.load("for i = 1, 1000000 do BIG[i] = nil end").exec().expect("empty");
+    lua.gc_collect().ok();
+    let emptied = lua.used_memory();
+    for _ in 0..10 {
+        sandbox::refill(&lua);
+        lua.load("for i = 1, 100000 do BIG['n' .. (N or 0) + i] = true BIG['n' .. (N or 0) + i] = nil end N = (N or 0) + 100000")
+            .exec()
+            .expect("new keys");
+    }
+    lua.gc_collect().ok();
+    println!(
+        "{:>9.1} MB  an emptied 1,000,000-item list; {:.1} MB after 1,000,000 new keys",
+        emptied as f64 / 1e6,
+        lua.used_memory() as f64 / 1e6
+    );
 
     let units: Vec<UnitView> = [7u32, 3, 9, 1, 5, 12, 2, 8].iter().map(|i| unit(*i)).collect();
     let times: Vec<f64> = (0..REPEAT)

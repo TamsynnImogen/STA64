@@ -128,16 +128,20 @@ impl Model {
 }
 
 /// Random sequences of table operations against the model: every lookup, the length, and the
-/// traversal order (with clears during the traversal) must agree. Fixed seeds.
+/// traversal order (with clears and additions during the traversal) must agree. Fixed seeds.
 #[test]
 fn random_operation_sequences_match_the_documented_semantics() {
     let lua = new_lua();
-    // Keys that are not positive integers: strings, zero, negatives, non-integral floats,
-    // booleans, tables, functions.
+    // Keys besides the list: short and long strings, zero, negatives, non-integral floats,
+    // booleans, tables, functions, and sparse positive integers far from the list (the docs
+    // leave the place of sparse positive integers unspecified; far from a list the patched
+    // Lua keeps them in insertion order, which this test pins).
     let pool: Table = lua
         .load(
             "local p = {} for i = 1, 24 do p[#p+1] = 'k' .. i end \
+             for i = 1, 4 do p[#p+1] = string.rep('long key ', 8) .. i end \
              for _, v in ipairs({ 0, -1, -7, -1000000, 2.5, -0.5, 1e300 }) do p[#p+1] = v end \
+             for i = 1, 5 do p[#p+1] = 1000000 + 7919 * i end \
              p[#p+1] = true p[#p+1] = false \
              for i = 1, 6 do p[#p+1] = {} end for i = 1, 4 do p[#p+1] = function() return i end end return p",
         )
@@ -194,24 +198,34 @@ fn random_operation_sequences_match_the_documented_semantics() {
                     m.list.pop();
                 }
                 _ => {
-                    // traverse, clearing about a third of the visited non-list keys
+                    // Traverse; at a visited key not in the list, clear it (a third of the
+                    // time) or add a key that is absent (a sixth): documented, an added key
+                    // goes to the end and is visited (never both at one key, so the current
+                    // key is never one a rebuild drops).
+                    let mut want: Vec<String> = (1..=m.list.len() as i64).map(|i| format!("{:?}", Value::Integer(i))).collect();
+                    want.extend(m.other.iter().map(|(k, _)| format!("{:?}", keys[*k])));
                     let mut seen: Vec<String> = Vec::new();
-                    let mut cleared = Vec::new();
                     for pair in t.pairs::<Value, Value>() {
                         let (k, _) = pair.unwrap();
                         seen.push(format!("{k:?}"));
-                        if !matches!(k, Value::Integer(i) if i >= 1) && rng.below(3) == 0 {
-                            cleared.push(k.clone());
-                            t.set(k, Value::Nil).unwrap();
+                        let Some(at) = keys.iter().position(|p| p == &k) else { continue };
+                        match rng.below(6) {
+                            0 | 1 => {
+                                t.set(k, Value::Nil).unwrap();
+                                m.set_other(at, None);
+                            }
+                            2 => {
+                                let add = rng.below(keys.len() as u64) as usize;
+                                if !m.other.iter().any(|(o, _)| *o == add) {
+                                    t.set(keys[add].clone(), -v).unwrap();
+                                    m.set_other(add, Some(-v));
+                                    want.push(format!("{:?}", keys[add]));
+                                }
+                            }
+                            _ => {}
                         }
                     }
-                    let mut want: Vec<String> = (1..=m.list.len() as i64).map(|i| format!("{:?}", Value::Integer(i))).collect();
-                    want.extend(m.other.iter().map(|(k, _)| format!("{:?}", keys[*k])));
                     assert_eq!(seen, want, "seed {seed}: traversal order");
-                    for k in cleared {
-                        let at = keys.iter().position(|p| p == &k).unwrap();
-                        m.set_other(at, None);
-                    }
                 }
             }
             assert_eq!(t.raw_len(), m.list.len(), "seed {seed}: length");
