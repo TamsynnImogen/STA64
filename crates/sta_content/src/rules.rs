@@ -96,9 +96,11 @@ pub struct Rules {
     /// Explicit `cfgMaxOfficers`, independently of the A2 officer limit keys.
     a1_max_officers: Option<i32>,
     a1_dogfight: A1DogfightRules,
+    /// The group-movement keys (CON-59), as the header authors them.
+    group: GroupCfg,
 }
 
-const TYPED_LEN: usize = 5 + A1DogfightRules::KEYS.len() + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + ApproachRules::KEYS.len() + CfgRules::KEYS.len() + LegacyStart::KEYS.len() + PopulationRules::KEYS.len() + FieldCfg::KEYS.len();
+const TYPED_LEN: usize = 5 + A1DogfightRules::KEYS.len() + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + ApproachRules::KEYS.len() + CfgRules::KEYS.len() + LegacyStart::KEYS.len() + PopulationRules::KEYS.len() + FieldCfg::KEYS.len() + GroupCfg::KEYS.len();
 
 /// Every `RTS_CFG.h` key [`Rules`] reads.
 pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
@@ -142,6 +144,11 @@ pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
     while f < FieldCfg::KEYS.len() {
         out[5 + i + a + w + j + l + p + f] = FieldCfg::KEYS[f];
         f += 1;
+    }
+    let mut g = 0;
+    while g < GroupCfg::KEYS.len() {
+        out[5 + i + a + w + j + l + p + f + g] = GroupCfg::KEYS[g];
+        g += 1;
     }
     out[TYPED_LEN - 2] = A1DogfightRules::KEYS[0];
     out[TYPED_LEN - 1] = A1DogfightRules::KEYS[1];
@@ -693,6 +700,149 @@ impl PathingRules {
     }
 }
 
+/// The group-movement keys of `RTS_CFG.h` (CON-59, ADR 0011 G12) as the header
+/// authors them: `None` where it sets none (the profile's default then applies,
+/// see [`GroupRules`]). Read from data; the keys are digested when they differ
+/// from the profile's default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GroupCfg {
+    /// `FORMATION_SPACING`: the unit formation files are written in, world units.
+    pub formation_spacing: Option<Fixed>,
+    /// `FORMATION_LEADER_SLOWDOWN`: the factor the group leader's speed is held
+    /// to (G7).
+    pub leader_slowdown: Option<Fixed>,
+    /// `cfgDEFAULT_TO_FORMATION_MOVE`: the default move mode of the Armada II
+    /// family, true for the formation move (G4). Read by every profile but
+    /// Armada I.
+    pub default_to_formation_move: Option<bool>,
+    /// `DEFAULT_TO_FORMATION_MOVE`: the same rule under Armada I's spelling
+    /// (G4); read by Armada I only, the other spelling is ignored there.
+    pub a1_default_to_formation_move: Option<bool>,
+    /// `FORMATIONS_RELATIVE_TO_SHIP`: Armada I's rule (ADR 0011 G8, a profile
+    /// rule under ADR 0004 D2); read and digested under Armada I only. INTERIM:
+    /// whether another profile has the rule is not established.
+    pub formations_relative_to_ship: Option<bool>,
+}
+
+impl GroupCfg {
+    pub const KEYS: [&'static str; 5] = [
+        "FORMATION_SPACING",
+        "FORMATION_LEADER_SLOWDOWN",
+        "cfgDEFAULT_TO_FORMATION_MOVE",
+        "DEFAULT_TO_FORMATION_MOVE",
+        "FORMATIONS_RELATIVE_TO_SHIP",
+    ];
+
+    fn from_cfg(cfg: &CfgH, warnings: &mut Vec<Warning>) -> GroupCfg {
+        let mut real = |key: &str, max: f32| -> Option<Fixed> {
+            cfg.raw(key)?;
+            match cfg.f32(key).filter(|v| v.is_finite() && *v > 0.0 && *v <= max) {
+                Some(v) => Some(Fixed::from_f64(f64::from(v))),
+                None => {
+                    warnings.push(Warning::new("RTS_CFG.h", format!("{key} is not a positive number; the profile default is used")));
+                    None
+                }
+            }
+        };
+        let formation_spacing = real(Self::KEYS[0], 1.0e4);
+        let leader_slowdown = real(Self::KEYS[1], 100.0);
+        let mut flag = |key: &str| -> Option<bool> {
+            cfg.raw(key)?;
+            match cfg.f32(key).filter(|v| v.is_finite()) {
+                Some(v) => Some(v != 0.0),
+                None => {
+                    warnings.push(Warning::new("RTS_CFG.h", format!("{key} is not a number; the profile default is used")));
+                    None
+                }
+            }
+        };
+        let default_to_formation_move = flag(Self::KEYS[2]);
+        let a1_default_to_formation_move = flag(Self::KEYS[3]);
+        let formations_relative_to_ship = flag(Self::KEYS[4]);
+        GroupCfg { formation_spacing, leader_slowdown, default_to_formation_move, a1_default_to_formation_move, formations_relative_to_ship }
+    }
+}
+
+/// The group-movement rules the simulation reads (ADR 0011 G12), resolved for a
+/// profile: the header's keys ([`GroupCfg`]) over the profile's defaults, and
+/// the constants the executables carry, which no header sets.
+///
+/// Evidence of the defaults: the leader slowdown and default move mode per
+/// profile are the values ADR 0011 G4 and G7 name (read from data). The spacing
+/// default is needed so that formation files can be scaled when a header sets
+/// no spacing; its number was read from data while building CON-59, not from
+/// the ADR. What the engine does for an absent key was not read, so all key
+/// defaults are INTERIM. The constants are the ones ADR 0011 names (read from
+/// the executable, static; not measured) and are the same for every profile
+/// until TOOL-26 and TOOL-27 say otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GroupRules {
+    /// `FORMATION_SPACING`, world units.
+    pub formation_spacing: Fixed,
+    /// `FORMATION_LEADER_SLOWDOWN`.
+    pub leader_slowdown: Fixed,
+    /// The default move mode: true is the formation move (G4).
+    pub default_to_formation_move: bool,
+    /// Armada I's `FORMATIONS_RELATIVE_TO_SHIP` (G8); false under every other
+    /// profile whatever the header says (interim, see [`GroupCfg`]).
+    pub formations_relative_to_ship: bool,
+    /// A craft joins a cluster whose centre is this near (G1).
+    pub cluster_radius: Fixed,
+    /// A follower farther than this from its slot point (G6)...
+    pub stuck_far_distance: Fixed,
+    /// ...that gained less than this...
+    pub stuck_far_progress: Fixed,
+    /// ...in this many seconds plans for itself.
+    pub stuck_far_seconds: u32,
+    /// Or farther than this with no progress...
+    pub stuck_near_distance: Fixed,
+    /// ...in this many seconds.
+    pub stuck_near_seconds: u32,
+    /// A follower plans again when its slot point has moved more than this.
+    pub replan_distance: Fixed,
+    /// The group is dissolved when this share, in percent, of its members...
+    pub dissolve_share_percent: u32,
+    /// ...is within this distance of the destination (G10).
+    pub dissolve_distance: Fixed,
+}
+
+impl GroupRules {
+    /// The defaults of `profile`: the key defaults (INTERIM, see the type) and
+    /// the executables' constants. Native takes the Armada II family's, as
+    /// STA64's own rules start from them.
+    pub fn defaults(profile: crate::Profile) -> GroupRules {
+        use crate::Profile::{Fo3, Sta1Classic};
+        GroupRules {
+            // INTERIM, read from data (see the type); not a measured rule.
+            formation_spacing: Fixed::from_int(100),
+            leader_slowdown: if profile == Sta1Classic { Fixed::from_f64(0.9f32 as f64) } else { Fixed::ONE },
+            default_to_formation_move: !matches!(profile, Fo3 | Sta1Classic),
+            formations_relative_to_ship: false,
+            cluster_radius: Fixed::from_int(1200),
+            stuck_far_distance: Fixed::from_int(1000),
+            stuck_far_progress: Fixed::from_int(100),
+            stuck_far_seconds: 8,
+            stuck_near_distance: Fixed::from_int(500),
+            stuck_near_seconds: 16,
+            replan_distance: Fixed::from_int(1500),
+            dissolve_share_percent: 75,
+            dissolve_distance: Fixed::from_int(700),
+        }
+    }
+
+    fn resolved(cfg: &GroupCfg, profile: crate::Profile) -> GroupRules {
+        let d = GroupRules::defaults(profile);
+        GroupRules {
+            formation_spacing: cfg.formation_spacing.unwrap_or(d.formation_spacing),
+            leader_slowdown: cfg.leader_slowdown.unwrap_or(d.leader_slowdown),
+            default_to_formation_move: if profile == crate::Profile::Sta1Classic { cfg.a1_default_to_formation_move } else { cfg.default_to_formation_move }
+                .unwrap_or(d.default_to_formation_move),
+            formations_relative_to_ship: profile == crate::Profile::Sta1Classic && cfg.formations_relative_to_ship.unwrap_or(d.formations_relative_to_ship),
+            ..d
+        }
+    }
+}
+
 /// A race's starting forces, as the sim gives them (`Races::loadout_with_mode`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StartRule {
@@ -788,8 +938,47 @@ impl Rules {
         rules.cfg = CfgRules::from_cfg(&cfg, &mut warnings);
         rules.shots = ShotCfg::from_cfg(&cfg, &mut warnings);
         rules.fields = FieldCfg::from_cfg(&cfg, &mut warnings);
+        rules.group = GroupCfg::from_cfg(&cfg, &mut warnings);
         rules.transporter = TransporterRules::from_cfg(&cfg, &mut warnings);
         (rules, warnings)
+    }
+
+    /// The group-movement rules for `profile`: the header's keys over the
+    /// profile's defaults (CON-59, ADR 0011 G12).
+    pub fn group_rules(&self, profile: crate::Profile) -> GroupRules {
+        GroupRules::resolved(&self.group, profile)
+    }
+
+    /// The group-movement keys as the header authors them.
+    pub fn group_cfg(&self) -> GroupCfg {
+        self.group
+    }
+
+    /// Set the authored group-movement keys (tests and content built in code).
+    pub fn with_group_cfg(mut self, group: GroupCfg) -> Self {
+        self.group = group;
+        self
+    }
+
+    /// The group-movement rules as digest entries (D10), for `profile`: one
+    /// `RTS_CFG.h:<KEY>` entry per rule whose value is not the profile's
+    /// default, so an absent key and the default digest alike and content that
+    /// leaves them out keeps its hash. The default-move key is named
+    /// `cfgDEFAULT_TO_FORMATION_MOVE` whichever spelling the profile reads;
+    /// the relative-to-ship key digests under Armada I only.
+    pub fn group_digest_entries(&self, profile: crate::Profile) -> Vec<DigestEntry> {
+        let (d, r) = (GroupRules::defaults(profile), self.group_rules(profile));
+        let mut out = Vec::new();
+        let mut put = |key: &str, changed: bool, value: String| {
+            if changed {
+                out.push(DigestEntry::new(format!("RTS_CFG.h:{key}"), value));
+            }
+        };
+        put(GroupCfg::KEYS[0], r.formation_spacing != d.formation_spacing, crate::digest::fixed_text(r.formation_spacing));
+        put(GroupCfg::KEYS[1], r.leader_slowdown != d.leader_slowdown, crate::digest::fixed_text(r.leader_slowdown));
+        put(GroupCfg::KEYS[2], r.default_to_formation_move != d.default_to_formation_move, u8::from(r.default_to_formation_move).to_string());
+        put(GroupCfg::KEYS[4], r.formations_relative_to_ship != d.formations_relative_to_ship, u8::from(r.formations_relative_to_ship).to_string());
+        out
     }
 
     /// The path planner's rules: the header's, else the stock values.
@@ -1299,6 +1488,115 @@ mod field_cfg_tests {
 }
 
 #[cfg(test)]
+mod group_tests {
+    use super::*;
+    use crate::digest::ContentDigest;
+    use crate::Profile;
+
+    fn digest(rules: &Rules, profile: Profile) -> ContentDigest {
+        ContentDigest::from_entries(rules.group_digest_entries(profile))
+    }
+
+    #[test]
+    fn absent_keys_give_the_profiles_defaults() {
+        let (rules, warnings) = Rules::from_header("int UNRELATED = 3;\n");
+        assert!(warnings.is_empty());
+        for profile in [Profile::Native, Profile::Sta2Classic, Profile::Fo4, Profile::Fo3, Profile::Sta1Classic] {
+            assert_eq!(rules.group_rules(profile), GroupRules::defaults(profile), "{profile:?}");
+            assert!(rules.group_digest_entries(profile).is_empty(), "{profile:?}");
+        }
+        let (a2, a1, fo3) = (GroupRules::defaults(Profile::Sta2Classic), GroupRules::defaults(Profile::Sta1Classic), GroupRules::defaults(Profile::Fo3));
+        assert_eq!((a2.default_to_formation_move, fo3.default_to_formation_move, a1.default_to_formation_move), (true, false, false));
+        assert_eq!((a2.leader_slowdown, a1.leader_slowdown), (Fixed::ONE, Fixed::from_f64(0.9f32 as f64)));
+        assert!(!a1.formations_relative_to_ship);
+    }
+
+    #[test]
+    fn the_constants_of_adr_0011_are_the_defaults_of_every_profile() {
+        for profile in [Profile::Native, Profile::Sta2Classic, Profile::Fo4, Profile::Fo3, Profile::Sta1Classic] {
+            let g = GroupRules::defaults(profile);
+            assert_eq!(
+                (g.cluster_radius, g.stuck_far_distance, g.stuck_far_progress, g.stuck_far_seconds, g.stuck_near_distance, g.stuck_near_seconds),
+                (Fixed::from_int(1200), Fixed::from_int(1000), Fixed::from_int(100), 8, Fixed::from_int(500), 16),
+            );
+            assert_eq!((g.replan_distance, g.dissolve_share_percent, g.dissolve_distance), (Fixed::from_int(1500), 75, Fixed::from_int(700)));
+        }
+    }
+
+    #[test]
+    fn the_header_overrides_what_it_sets_and_keeps_the_rest() {
+        let (rules, warnings) = Rules::from_header("float FORMATION_SPACING = 120.0;\nfloat FORMATION_LEADER_SLOWDOWN = 0.75;\nint cfgDEFAULT_TO_FORMATION_MOVE = 0;\n");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let g = rules.group_rules(Profile::Sta2Classic);
+        assert_eq!((g.formation_spacing, g.leader_slowdown, g.default_to_formation_move), (Fixed::from_int(120), Fixed::from_f64(0.75), false));
+        assert_eq!(g.cluster_radius, Fixed::from_int(1200));
+        assert!(!g.formations_relative_to_ship);
+    }
+
+    #[test]
+    fn each_profile_reads_its_own_spelling_of_the_default_move_key() {
+        let (a1, _) = Rules::from_header("int DEFAULT_TO_FORMATION_MOVE = 1;\nint FORMATIONS_RELATIVE_TO_SHIP = 1;\n");
+        let g = a1.group_rules(Profile::Sta1Classic);
+        assert!(g.default_to_formation_move && g.formations_relative_to_ship);
+        // The other spelling is ignored: Armada II family profiles keep their default.
+        assert_eq!(a1.group_rules(Profile::Sta2Classic).default_to_formation_move, GroupRules::defaults(Profile::Sta2Classic).default_to_formation_move);
+        assert!(!a1.group_rules(Profile::Fo3).default_to_formation_move);
+        let (both, _) = Rules::from_header("int cfgDEFAULT_TO_FORMATION_MOVE = 0;\nint DEFAULT_TO_FORMATION_MOVE = 1;\n");
+        assert!(!both.group_rules(Profile::Sta2Classic).default_to_formation_move);
+        assert!(both.group_rules(Profile::Sta1Classic).default_to_formation_move);
+        for key in GroupCfg::KEYS {
+            assert!(TYPED_CFG_KEYS.contains(&key), "{key}");
+        }
+    }
+
+    #[test]
+    fn a_bad_value_warns_and_keeps_the_default() {
+        let (rules, warnings) = Rules::from_header("float FORMATION_SPACING = wide;\nfloat FORMATION_LEADER_SLOWDOWN = -1.0;\nint cfgDEFAULT_TO_FORMATION_MOVE = yes;\n");
+        assert_eq!(warnings.len(), 3, "{warnings:?}");
+        assert_eq!(rules.group_cfg(), GroupCfg::default());
+        assert_eq!(rules.group_rules(Profile::Fo3), GroupRules::defaults(Profile::Fo3));
+    }
+
+    #[test]
+    fn the_digest_holds_a_value_that_is_not_the_profiles_default_under_one_key_each() {
+        let (rules, _) = Rules::from_header("float FORMATION_SPACING = 120.0;\nint cfgDEFAULT_TO_FORMATION_MOVE = 0;\nfloat FORMATION_LEADER_SLOWDOWN = 1.0;\n");
+        let d = digest(&rules, Profile::Sta2Classic);
+        assert_eq!(d.get("RTS_CFG.h:FORMATION_SPACING"), Some("120"));
+        assert_eq!(d.get("RTS_CFG.h:cfgDEFAULT_TO_FORMATION_MOVE"), Some("0"));
+        assert_eq!(d.get("RTS_CFG.h:FORMATION_LEADER_SLOWDOWN"), None, "the profile's own value digests like an absent key");
+        // The same header under Fleet Operations 3.2.7 differs in other keys: values, not presence.
+        let fo3 = digest(&rules, Profile::Fo3);
+        assert_eq!(fo3.get("RTS_CFG.h:cfgDEFAULT_TO_FORMATION_MOVE"), None);
+        assert_eq!(rules.group_digest_entries(Profile::Sta1Classic).len(), 2, "spacing and slowdown differ from the profile defaults; the mode equals its default");
+    }
+
+    #[test]
+    fn each_key_changes_the_resolved_rules_and_so_the_digest() {
+        let base = digest(&Rules::default(), Profile::Sta2Classic);
+        for header in [
+            "float FORMATION_SPACING = 90.0;\n",
+            "float FORMATION_LEADER_SLOWDOWN = 0.9;\n",
+            "int cfgDEFAULT_TO_FORMATION_MOVE = 0;\n",
+        ] {
+            let (rules, w) = Rules::from_header(header);
+            assert!(w.is_empty(), "{w:?}");
+            assert_ne!(digest(&rules, Profile::Sta2Classic), base, "{header}");
+        }
+    }
+
+    #[test]
+    fn the_relative_to_ship_key_counts_under_armada_i_only() {
+        let (rules, w) = Rules::from_header("int FORMATIONS_RELATIVE_TO_SHIP = 1;\n");
+        assert!(w.is_empty(), "{w:?}");
+        assert_ne!(digest(&rules, Profile::Sta1Classic), digest(&Rules::default(), Profile::Sta1Classic));
+        for profile in [Profile::Native, Profile::Sta2Classic, Profile::Fo4, Profile::Fo3] {
+            assert!(!rules.group_rules(profile).formations_relative_to_ship, "{profile:?}");
+            assert_eq!(digest(&rules, profile), digest(&Rules::default(), profile), "{profile:?}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod approach_tests {
     use super::*;
 
@@ -1517,7 +1815,9 @@ mod cfg_tests {
         let pop = PopulationRules { levels: [Fixed::from_int(1000); 4], civilian_rate_modifier: Fixed::ONE };
         let d = ContentDigest::from_entries(rules.with_population(pop).digest_entries());
         // The dilithium maximum contributes through the effective starting amounts.
-        for k in TYPED_CFG_KEYS.iter().filter(|k| !matches!(**k, "MP_OFFICER_LIST_SIZE" | "SINGLE_PLAYER_OFFICER_LIMIT" | "cfgMaxOfficers" | "cfgMaxDilithium")) {
+        // The group keys (CON-59) resolve against the profile, so they digest through
+        // `group_digest_entries` (see `group_tests`).
+        for k in TYPED_CFG_KEYS.iter().filter(|k| !matches!(**k, "MP_OFFICER_LIST_SIZE" | "SINGLE_PLAYER_OFFICER_LIMIT" | "cfgMaxOfficers" | "cfgMaxDilithium") && !GroupCfg::KEYS.contains(k)) {
             assert!(d.get(&format!("RTS_CFG.h:{k}")).is_some(), "{k}");
         }
     }

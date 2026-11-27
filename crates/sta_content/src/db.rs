@@ -53,6 +53,8 @@ pub struct ContentDb {
     has_map_confinement: bool,
     map_confinement_warnings: Vec<Warning>,
     rules: crate::Rules,
+    /// The formation files of the mount (CON-59); empty for content built in code.
+    formations: Arc<crate::Formations>,
     /// Armada I's play-physics block (CON-52): only under `Sta1Classic`, and
     /// only when the file is there and usable.
     a1_play: Option<crate::A1Dynamics>,
@@ -68,6 +70,25 @@ pub struct ContentDb {
 
 impl ContentDb {
     pub fn rules(&self) -> &crate::Rules { &self.rules }
+
+    /// The group-movement rules of this content's profile (CON-59, ADR 0011 G12).
+    pub fn group_rules(&self) -> crate::GroupRules {
+        self.rules.group_rules(self.profile)
+    }
+
+    /// The formations the content ships (CON-59, ADR 0011 G3): the Armada II
+    /// family's `AI/formations/*.frm`. Empty for Armada I, for a mod that ships
+    /// none and for content built in code; the sim then keeps SIM-02's kinds.
+    pub fn formations(&self) -> &crate::Formations {
+        &self.formations
+    }
+
+    /// This database with these formations, digested (D10).
+    pub fn with_formations(mut self, formations: crate::Formations) -> Self {
+        self.formations = Arc::new(formations);
+        self.digest = digest_of(&self);
+        self
+    }
 
     /// Whether a race can trade. Unknown races and races without an authored
     /// `canTrade = 0` default to true.
@@ -193,6 +214,14 @@ impl ContentDb {
         warnings.extend(rule_warnings);
         let (db, radius_warnings) = db.with_rules(rules).with_launch_points_warned(vfs);
         warnings.extend(radius_warnings);
+        // Armada I has no formation files (its grid is built in code, ADR 0011 G3).
+        let db = if profile == Profile::Sta1Classic {
+            db
+        } else {
+            let (formations, formation_warnings) = crate::Formations::load(vfs);
+            warnings.extend(formation_warnings);
+            db.with_formations(formations)
+        };
         let db = db
             .with_resources(ResourceModel::from_strings(profile, &crate::StringTable::load(vfs)))
             .with_packs(vfs.layers().iter().map(|l| l.name().to_owned()).collect());
@@ -769,7 +798,7 @@ impl ContentBuilder {
         let mut db = ContentDb {
             defs, profile: self.profile, features: self.features, resources,
             tech: self.tech.map(Arc::new), map_confinement, construction_confinement, has_map_confinement,
-            map_confinement_warnings, rules: crate::Rules::default(),
+            map_confinement_warnings, rules: crate::Rules::default(), formations: Arc::default(),
             a1_play: self.a1_play.filter(|_| self.profile == Profile::Sta1Classic), a1_officer_policy: false, explosions: Arc::default(), packs: Vec::new(),
             digest: ContentDigest::default(),
         };
@@ -1473,6 +1502,9 @@ fn tech_text(e: &crate::TechEntry) -> String {
 /// Every resolved sim-visible rule of `db` (see [`crate::digest`]).
 fn digest_entries(db: &ContentDb) -> Vec<DigestEntry> {
     let mut out = db.rules.digest_entries();
+    // CON-59: only what is set or shipped, so content without formation data keeps its digest.
+    out.extend(db.rules.group_digest_entries(db.profile));
+    out.extend(db.formations.digest_entries());
     out.push(DigestEntry::new("content:profile", db.lineage()));
     out.push(DigestEntry::new("content:features", features_text(&db.features)));
     if db.a1_officers() {
