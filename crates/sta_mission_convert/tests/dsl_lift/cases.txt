@@ -1728,6 +1728,63 @@ run lift 0x10001d00
 run lift 0x10001f00
 end
 
+case neg_add_esp
+std
+code 0x10001000
+  push   ebp
+  mov    ebp,esp
+  push   0x1
+  push   0x2
+  add    esp,-0x4
+  ret
+code 0x10001100
+  push   ebp
+  mov    ebp,esp
+  push   0x1
+  push   0x2
+  push   0x3
+  add    esp,-0x10
+  ret
+code 0x10001200
+  push   ebp
+  mov    ebp,esp
+  push   0x1
+  add    esp,0x8
+  ret
+run lift 0x10001000
+run lift 0x10001100
+run lift 0x10001200
+run take -1 3
+run take -2 0
+run take 0 0
+run take 0 2
+run take 2 3
+run take 3 3
+run take 4 3
+end
+
+case raw_jcc_last
+std
+code 0x10001000
+  push   ebp
+  cmp    eax,0x1
+  jne    0x10001000
+run blocks 0x10001000
+end
+
+case raw_struct_error
+std
+code 0x10001000
+  !p
+  mov    eax,DWORD PTR [ebp+0x8]
+  cmp    eax,0x2
+  ja     @d
+  jmp    DWORD PTR [eax*4+0x10003ffe]
+  @d:
+  ret
+run blocks 0x10001000
+end
+
 case errors_raw_ops
 std
 stdexports

@@ -25,7 +25,8 @@ cases.txt format (one directive per line, `#` starts a comment line):
                                                  label here, `@name` in a text is its address
     run <what> [arg]                             lift <addr> | blocks <addr> | facts <addr> |
                                                  dsl | static <addr> | statics | dimm <value> |
-                                                 global_at <addr> | entry <addr> | dword <addr>
+                                                 global_at <addr> | entry <addr> | dword <addr> |
+                                                 take <n> <pushed words> (Lifter.take on a state)
 """
 
 import os
@@ -227,12 +228,19 @@ def run_case(dsl, case):
                 out.append(repr(d.entry(num(arg))))
             elif what == "dword":
                 out.append(repr(d.dword(num(arg))))
+            elif what == "take":
+                n, k = arg.split(" ")
+                st = dsl.State()
+                st.args = [("const", i) for i in range(int(k))]
+                st.sub_esp = True
+                res = lf.take(st, int(n), 0x1000)
+                out.append(repr((res, st.args, st.sub_esp)))
             else:
                 raise SystemExit(f"cases.txt: unknown run {what!r}")
         except DecodeError as e:
             out.append(f"error {str(e)!r}")
-        except Exception:  # a raw Python exception aborts the real tool's run
-            out.append("raw")
+        except Exception as e:  # a raw Python exception aborts the real tool's run
+            out.append(f"raw {type(e).__name__} {str(e)!r}")
             break
     out.append(lc.static_refs_line(d))
     return "\n".join(out) + "\n"

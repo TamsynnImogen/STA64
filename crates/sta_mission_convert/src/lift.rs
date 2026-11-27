@@ -40,7 +40,16 @@
 //!
 //! A fault the Python raises as `DecodeError` stops the function: it is caught in
 //! [`Lifter::lift`] and stored in [`Lifted::error`]. A malformed text (`IndexError`, `ValueError`
-//! ...) is a raw [`DecodeError`] that propagates out of `lift`, as the Python's run aborts.
+//! ...) is a raw [`DecodeError`] (built with [`DecodeError::python`]: the Python exception's
+//! class and CPython's text) that propagates out of `lift`, as the Python's run aborts.
+//!
+//! # Known differences from CPython (documented, not emulated)
+//!
+//! - The hand-written matchers in `dsl::pat` use ASCII classes for `\d` and `char::is_alphanumeric`
+//!   for `\w`; Python's differ on some non-ASCII digits and marks. Listing text is ASCII.
+//! - Python raises `RecursionError` on a very deep expression tree (`contains`, `repr`, hashing);
+//!   the Rust recursion has no such limit (and a thread's stack is its only bound). Only a
+//!   pathological chain of register-only arithmetic could reach it.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -57,15 +66,26 @@ fn dec<T>(msg: String) -> Result<T> {
     Err(DecodeError::new(msg))
 }
 
-fn raw_err<T>(msg: &str) -> Result<T> {
-    Err(DecodeError::raw(msg))
+/// A fault of one of Python's own exceptions (class and CPython's text).
+fn py_err<T>(class: &'static str, msg: impl Into<String>) -> Result<T> {
+    Err(DecodeError::python(class, msg))
+}
+
+/// `IndexError: list index out of range`.
+pub(crate) fn index_err<T>() -> Result<T> {
+    py_err("IndexError", "list index out of range")
+}
+
+/// `KeyError` for a dict miss: the text is the key's `repr`.
+fn key_err<T>(key: &Py) -> Result<T> {
+    py_err("KeyError", key.repr())
 }
 
 /// Python's `seq[i]` with a possibly negative index on a list of length `len`.
 fn pyidx(len: usize, i: i64) -> Result<usize> {
     let j = if i < 0 { i + len as i64 } else { i };
     if j < 0 || j as usize >= len {
-        return raw_err("list index out of range");
+        return index_err();
     }
     Ok(j as usize)
 }
@@ -81,7 +101,7 @@ fn split2(ops: &str) -> Result<(String, String)> {
     let a = it.next().unwrap_or("");
     match it.next() {
         Some(b) => Ok((py_strip(a).to_owned(), py_strip(b).to_owned())),
-        None => raw_err("not enough values to unpack (expected 2, got 1)"),
+        None => py_err("ValueError", "not enough values to unpack (expected 2, got 1)"),
     }
 }
 
@@ -91,21 +111,26 @@ pub fn float_of_bits(n: &Py) -> Result<f64> {
     match n {
         Py::Int(n) => Ok(f64::from(f32::from_bits((*n & 0xFFFF_FFFF) as u32))),
         Py::Bool(b) => Ok(f64::from(f32::from_bits(u32::from(*b)))),
-        other => Err(DecodeError::raw(format!(
-            "unsupported operand type(s) for &: '{}' and 'int'",
-            other.type_name()
-        ))),
+        other => py_err(
+            "TypeError",
+            format!("unsupported operand type(s) for &: '{}' and 'int'", other.type_name()),
+        ),
     }
 }
 
-fn int_of(v: &Py) -> Result<i64> {
-    v.as_int().ok_or_else(|| DecodeError::raw(format!("expected an int, got '{}'", v.type_name())))
+/// The integer `v` is, for a site where Python does arithmetic on it with an int (`op`):
+/// `TypeError` with CPython's text for anything else.
+fn int_of(v: &Py, op: &str) -> Result<i64> {
+    match v.as_int() {
+        Some(n) => Ok(n),
+        None => py_err("TypeError", format!("unsupported operand type(s) for {op}: '{}' and 'int'", v.type_name())),
+    }
 }
 
 /// Python hashes a tuple that holds a list by raising `TypeError`.
 fn hashable(v: &Py) -> Result<()> {
     match v {
-        Py::List(_) => raw_err("unhashable type: 'list'"),
+        Py::List(_) => py_err("TypeError", "unhashable type: 'list'"),
         Py::Tuple(x) => x.iter().try_for_each(hashable),
         _ => Ok(()),
     }
@@ -367,7 +392,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
         let d = self.d;
         match d.ins.get(i) {
             Some((a, t)) => Ok((i64::from(*a), t.as_str())),
-            None => raw_err("list index out of range"),
+            None => index_err(),
         }
     }
 
@@ -401,7 +426,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
             };
             match d.pe.data().get(o..o + 4) {
                 Some(b) => Ok(i64::from(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))),
-                None => raw_err("unpack_from requires a buffer of at least 4 bytes"),
+                None => Err(crate::image::short_buffer(o, 4, d.pe.data().len())),
             }
         };
         // Two-level table (`xor r,r; mov rl,BYTE PTR [idx+bytes]; jmp [r*4+targets]`): the bytes
@@ -448,7 +473,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
                         // `t.split()[0]`: the first whitespace-separated word
                         *w
                     }
-                    None => return raw_err("list index out of range"),
+                    None => return index_err(),
                 };
                 if let Some((_, h)) = pat::jcc_abs(t) {
                     let tgt = py_int(h, 16)?;
@@ -521,7 +546,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
         self.cur.instructions = seen.len();
         // stack slots the function uses as floats (x87 DWORD operands)
         for x in &seen {
-            let i = d.index_of(*x).ok_or_else(|| DecodeError::raw("KeyError"))?;
+            let Some(i) = d.index_of(*x) else { return key_err(&Py::Int(*x)) };
             if let Some(o) = pat::float_slot(d.text_at(i)) {
                 self.cur.floatlocs.insert(py_int(o, 16)?);
             }
@@ -538,7 +563,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
                 st.r.insert("ecx".to_owned(), tup!["this"]);
             }
             let mut stmts: Vec<Py> = Vec::new();
-            let mut i = d.index_of(b).ok_or_else(|| DecodeError::raw("KeyError"))?;
+            let Some(mut i) = d.index_of(b) else { return key_err(&Py::Int(b)) };
             let mut first = true;
             let mut last_a;
             loop {
@@ -551,7 +576,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
                 first = false;
                 let parts = py_split_ws_once(t);
                 let Some(&mn) = parts.first() else {
-                    return raw_err("list index out of range");
+                    return index_err();
                 };
                 let ops = parts.get(1).copied().unwrap_or("");
                 match self.step(&mut st, &mut stmts, a, mn, ops, i, start == b)? {
@@ -723,12 +748,14 @@ impl<'d, 'a> Lifter<'d, 'a> {
         if (mn == "sub" || mn == "add") && ops.starts_with("esp,") {
             let n = match ops.split(',').nth(1) {
                 Some(s) => py_int(s, 16)?,
-                None => return raw_err("list index out of range"),
+                None => return index_err(),
             };
             if mn == "add" {
                 let k = py_floordiv(n, 4)?;
-                if k != 0 && k as usize <= st.args.len() {
-                    let keep = st.args.len() - k as usize;
+                // `st.args[:-k] if k and k <= len(st.args) else ([] if k else st.args)`
+                if k != 0 && k <= st.args.len() as i64 {
+                    // a negative k keeps `args[:-k]`, the first |k| words (all of them when fewer)
+                    let keep = if k > 0 { st.args.len() - k as usize } else { st.args.len().min((-k) as usize) };
                     st.args.truncate(keep);
                 } else if k != 0 {
                     st.args = Vec::new();
@@ -841,7 +868,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
                     return Ok(Flow::Switch(idx, self.switches[&a].clone()));
                 }
                 let Some(reg) = reg else {
-                    return raw_err("'NoneType' object has no attribute 'group'");
+                    return py_err("AttributeError", "'NoneType' object has no attribute 'group'");
                 };
                 let idx = self.read(st, reg, a)?;
                 return Ok(Flow::Switch(idx, self.switches[&a].clone()));
@@ -995,7 +1022,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
         d.data
             .values()
             .find(|v| Py::Str(v.name.clone()) == *name)
-            .ok_or_else(|| DecodeError::raw("StopIteration"))
+            .ok_or_else(|| DecodeError::python("StopIteration", ""))
     }
 
     /// `Lifter.load`: the value read from a location.
@@ -1027,7 +1054,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
                 return Ok(st.mem[lv].clone());
             }
             if k == "gvar" {
-                return self.static_value(int_of(lv.item(1)?)?);
+                return self.static_value(int_of(lv.item(1)?, "-")?);
             }
             return Ok(lv.clone());
         }
@@ -1041,7 +1068,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
             return Ok(lv.clone());
         }
         if k == "deref" {
-            let (base, off) = (lv.item(1)?.clone(), int_of(lv.item(2)?)?);
+            let (base, off) = (lv.item(1)?.clone(), int_of(lv.item(2)?, "//")?);
             if base.is_none() {
                 return dec(format!("load through an unknown pointer at {}", py_hex(a)));
             }
@@ -1058,7 +1085,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
                     return self.load(st, &inner, a);
                 }
                 if tg(&inner)? == "loc" {
-                    let l = tup!["loc", int_of(inner.item(1)?)? + off];
+                    let l = tup!["loc", int_of(inner.item(1)?, "+")? + off];
                     return self.load(st, &l, a);
                 }
                 if tg(&inner)? == "obj" {
@@ -1120,7 +1147,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
             .iter()
             .find(|(_, v)| Py::Str(v.name.clone()) == name)
             .map(|(x, _)| *x)
-            .ok_or_else(|| DecodeError::raw("StopIteration"))?;
+            .ok_or_else(|| DecodeError::python("StopIteration", ""))?;
         self.glob(addr + off, a)
     }
 
@@ -1141,7 +1168,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
         }
         let mut lv = self.lvalue(st, dst, a)?;
         if tg(&lv)? == "deref" {
-            let (base, off) = (lv.item(1)?.clone(), int_of(lv.item(2)?)?);
+            let (base, off) = (lv.item(1)?.clone(), int_of(lv.item(2)?, "//")?);
             if base.truthy() && tg(&base)? == "stacktop" {
                 // a by-value struct argument built in place
                 let idx = st.args.len() as i64 - 1 - py_floordiv(off, 4)?;
@@ -1153,7 +1180,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
             if base.truthy() && tg(&base)? == "addr" {
                 let inner = base.item(1)?.clone();
                 lv = if tg(&inner)? == "loc" {
-                    tup!["loc", int_of(inner.item(1)?)? + off]
+                    tup!["loc", int_of(inner.item(1)?, "+")? + off]
                 } else if tg(&inner)? == "obj" && off != 0 {
                     self.glob_off(&inner, off, a)?
                 } else {
@@ -1282,7 +1309,8 @@ impl<'d, 'a> Lifter<'d, 'a> {
             return Ok(true);
         }
         if k == "loc" {
-            return Ok(self.cur.floatlocs.contains(&int_of(lv.item(1)?)?));
+            // `lv[1] in f.floatlocs`: a non-integer is simply not in the set
+            return Ok(lv.item(1)?.as_int().is_some_and(|o| self.cur.floatlocs.contains(&o)));
         }
         if k == "obj" || k == "elem" {
             let name = lv.item(1)?;
@@ -1381,7 +1409,10 @@ impl<'d, 'a> Lifter<'d, 'a> {
             if x.is_none() || y.is_none() {
                 return dec(format!("compare of an unknown value at {}", py_hex(a)));
             }
-            let op = jcc(mn).ok_or_else(|| DecodeError::raw(Py::from(mn).repr()))?;
+            let op = match jcc(mn) {
+                Some(op) => op,
+                None => return key_err(&Py::from(mn)),
+            };
             if matches!(mn, "jb" | "jae" | "jbe" | "ja") {
                 return Ok(tup!["cmp", op, tup!["u", x], tup!["u", y]]);
             }
@@ -1402,7 +1433,14 @@ impl<'d, 'a> Lifter<'d, 'a> {
     /// first.
     pub fn take(&mut self, st: &mut State, n: i64, a: i64) -> Result<Vec<Py>> {
         let len = st.args.len();
-        if n < 0 || n as usize > len {
+        if n < 0 {
+            // `st.args[len - n:]` is empty and `st.args[:len - n]` is everything
+            if st.args.is_empty() {
+                st.sub_esp = false;
+            }
+            return Ok(Vec::new());
+        }
+        if n as usize > len {
             return dec(format!("call takes {n} arguments, {len} pushed at {}", py_hex(a)));
         }
         let n = n as usize;
@@ -1555,7 +1593,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
                 "fdiv" => "/",
                 "fsubr" => "r-",
                 "fdivr" => "r/",
-                _ => return raw_err(&Py::from(base.as_str()).repr()),
+                _ => return key_err(&Py::from(base.as_str())),
             };
             let m = pat::st_n_st(ops);
             if mn.ends_with('p') || ops.is_empty() {

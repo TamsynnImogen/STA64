@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 use sta_mission_convert::disasm::Ins;
 use sta_mission_convert::dsl::Dsl;
-use sta_mission_convert::lift::{d_immediate, Lifter};
+use sta_mission_convert::lift::{d_immediate, Lifter, State};
 use sta_mission_convert::map::Vtables;
 use sta_mission_convert::pyval::Py;
 use sta_mission_convert::{tup, ErrorKind, FlatImage};
@@ -272,6 +272,14 @@ fn run_case(case: &Case) -> String {
                 },
                 "entry" => d.entry(num(arg))?.to_string(),
                 "dword" => d.dword(num(arg)).map_or("None".to_owned(), |v| v.to_string()),
+                "take" => {
+                    let (n, k) = arg.split_once(' ').expect("take <n> <count>");
+                    let mut st = State::new();
+                    st.args = (0..num(k)).map(|i| tup!["const", i]).collect();
+                    st.sub_esp = true;
+                    let res = lf.take(&mut st, num(n), 0x1000)?;
+                    tup![Py::List(res), Py::List(st.args.clone()), st.sub_esp].repr()
+                }
                 other => panic!("cases.txt: unknown run {other:?}"),
             })
         })();
@@ -286,7 +294,7 @@ fn run_case(case: &Case) -> String {
                 out.push('\n');
             }
             Err(e) if e.kind == ErrorKind::Raw => {
-                out.push_str("raw\n");
+                out.push_str(&format!("raw {} {}\n", e.class.unwrap_or("?"), Py::from(e.message).repr()));
                 break;
             }
             Err(e) => out.push_str(&format!("error {}\n", Py::from(e.message).repr())),

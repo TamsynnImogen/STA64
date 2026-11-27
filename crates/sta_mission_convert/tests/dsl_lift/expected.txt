@@ -1233,7 +1233,7 @@ static_refs [(268443648, 'rodata'), (268443652, 'rodata'), (268443656, 'rodata')
 static_refs []
 == unterminated
 -- lift 0x10000010
-raw
+raw ValueError 'subsection not found'
 static_refs []
 == calls_model
 -- lift 0x10001000
@@ -1755,7 +1755,7 @@ func 0x10001d00
  vectors []
  litype []
 -- lift 0x10001e00
-raw
+raw error 'unpack_from requires a buffer of at least 16390 bytes for unpacking 8 bytes at offset 16382 (actual buffer size is 16384)'
 static_refs []
 == x87_return
 -- lift 0x10001000
@@ -2063,9 +2063,77 @@ func 0x10001f00
  vectors []
  litype []
 static_refs []
+== neg_add_esp
+-- lift 0x10001000
+func 0x10001000
+ error 'arguments pushed across a block end at 0x1000100a'
+ instructions 6
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001100
+func 0x10001100
+ error 'arguments pushed across a block end at 0x1000110c'
+ instructions 7
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001200
+func 0x10001200
+ error None
+ instructions 5
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001200
+  ('return', ('reg', 'eax'))
+-- take -1 3
+([], [('const', 0), ('const', 1), ('const', 2)], True)
+-- take -2 0
+([], [], False)
+-- take 0 0
+([], [], False)
+-- take 0 2
+([], [('const', 0), ('const', 1)], True)
+-- take 2 3
+([('const', 2), ('const', 1)], [('const', 0)], True)
+-- take 3 3
+([('const', 2), ('const', 1), ('const', 0)], [], False)
+-- take 4 3
+error 'call takes 4 arguments, 3 pushed at 0x1000'
+static_refs []
+== raw_jcc_last
+-- blocks 0x10001000
+raw IndexError 'list index out of range'
+static_refs []
+== raw_struct_error
+-- blocks 0x10001000
+raw error 'unpack_from requires a buffer of at least 16386 bytes for unpacking 4 bytes at offset 16382 (actual buffer size is 16384)'
+static_refs []
 == errors_raw_ops
 -- lift 0x10001b00
-raw
+raw ValueError 'not enough values to unpack (expected 2, got 1)'
 static_refs []
 == errors_raw_unknown_op
 -- lift 0x10001c00

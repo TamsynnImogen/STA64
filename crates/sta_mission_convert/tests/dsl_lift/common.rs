@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 
 use sta_mission_convert::dsl::Dsl;
-use sta_mission_convert::pyval::{py_int, py_isspace, Py};
+use sta_mission_convert::pyval::{py_int, py_isspace, py_split_ws_once, py_strip, Py};
 use sta_mission_convert::{tup, Result};
 
 pub fn repr_opt_str(s: Option<&str>) -> String {
@@ -95,6 +95,29 @@ pub fn function_list(d: &Dsl<'_>) -> Result<Vec<i64>> {
             let tgt = d.thunks.get(&tgt).copied().unwrap_or(tgt);
             if d.at.contains_key(&tgt) && seen.insert(tgt) {
                 out.push(tgt);
+            }
+        }
+    }
+    // Code addresses handed over as values (the script steps): operand immediates of
+    // non-branch instructions that point to an instruction in `.text`, thunks followed.
+    for (_, t) in &d.ins {
+        let parts = py_split_ws_once(t);
+        let [mn, ops] = parts[..] else { continue };
+        if mn == "call" || mn.starts_with('j') {
+            continue;
+        }
+        for o in ops.split(',') {
+            let o = py_strip(o);
+            let Some(h) = o.strip_prefix("0x") else { continue };
+            if h.is_empty() || !h.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+                continue;
+            }
+            let Ok(n) = py_int(h, 16) else { continue };
+            if d.section_of(n).as_deref() == Some(".text") {
+                let n = d.thunks.get(&n).copied().unwrap_or(n);
+                if d.at.contains_key(&n) && seen.insert(n) {
+                    out.push(n);
+                }
             }
         }
     }

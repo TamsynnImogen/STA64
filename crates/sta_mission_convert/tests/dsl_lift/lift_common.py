@@ -127,7 +127,7 @@ def static_refs_line(d):
 def function_list(d):
     """The functions of a DLL this test lifts: every exported code entry (thunks followed) in
     export order, then every direct call target of the listing not yet listed, in listing
-    order (targets with no instruction are skipped)."""
+    order (targets with no instruction are skipped), then the code addresses used as immediates."""
     out = []
     seen = set()
     for n, a in d.exports.items():
@@ -144,4 +144,23 @@ def function_list(d):
             if tgt in d.at and tgt not in seen:
                 seen.add(tgt)
                 out.append(tgt)
+    # Functions reached through a code address handed over as a value (the script steps the
+    # real tool finds through `add_step`): every operand immediate of a non-branch instruction
+    # that `d_immediate` classes as code and that has an instruction, thunks followed.
+    for _, t in d.ins:
+        parts = t.split(None, 1)
+        if len(parts) < 2:
+            continue
+        mn, ops = parts
+        if mn == "call" or mn.startswith("j"):
+            continue
+        for o in ops.split(","):
+            o = o.strip()
+            if re.fullmatch(r"0x[0-9a-f]+", o):
+                n = int(o, 16)
+                if d.pe.section_of(n) == ".text":
+                    n = d.thunks.get(n, n)
+                    if n in d.at and n not in seen:
+                        seen.add(n)
+                        out.append(n)
     return out

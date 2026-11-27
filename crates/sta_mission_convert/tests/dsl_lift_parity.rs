@@ -43,6 +43,13 @@ mod common;
 
 const VAR: &str = "STA64_TEST_A2_STOCK_INSTALL";
 
+/// Upper bound, in percent, of the compared functions that may stop with an error (equal on both
+/// sides). The stand-in call model makes many engine-heavy functions stop early (about 55 percent
+/// in the run the bound was set from), so the bound sits above that with room for a few percent
+/// of drift; a change that makes most functions stop, which would leave most of the lifter
+/// untested, trips it.
+const ERROR_SHARE_BOUND_PERCENT: usize = 70;
+
 fn walk(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
@@ -153,12 +160,44 @@ struct Outcome {
     /// The first differing pieces, both texts (game-derived: scratch file only).
     detail: String,
     failed: Option<String>,
+    // What the equal functions really covered (printed at run time only):
+    /// Equal functions that end in an error on both sides (the error texts are equal).
+    both_error: usize,
+    /// Blocks and statements of the equal functions.
+    blocks: usize,
+    statements: usize,
+    /// A side printed `new error` (the `Dsl` could not be built): nothing was lifted.
+    new_error: bool,
+    /// Pieces that are `raw` on both sides (a hard Python exception: the later functions are skipped).
+    raw_pieces: usize,
+    /// Functions in the function list.
+    listed: usize,
+    /// Of those, the ones neither side lifted (after a `raw`) and the ones only one side lifted.
+    skipped: usize,
+    skipped_one_side: usize,
+}
+
+/// The number of items of the `functions [..]` line.
+fn listed_functions(text: &str) -> usize {
+    let Some(l) = text.lines().find(|l| l.starts_with("functions ")) else { return 0 };
+    if l == "functions []" {
+        0
+    } else {
+        l.matches(", ").count() + 1
+    }
 }
 
 fn compare(py: &str, rs: &str) -> Outcome {
     let (a, b) = (chunks(py), chunks(rs));
     let mut o = Outcome::default();
     let n = a.len().max(b.len());
+    o.new_error = py.starts_with("new error") || rs.starts_with("new error");
+    o.listed = listed_functions(py).max(listed_functions(rs));
+    let lifted = |c: &[String]| c.iter().filter(|t| t.starts_with("facts ")).count();
+    let (lp, lr) = (lifted(&a), lifted(&b));
+    o.skipped_one_side = lp.abs_diff(lr);
+    o.skipped = o.listed.saturating_sub(lp.max(lr));
+    o.raw_pieces = a.iter().zip(&b).filter(|(x, y)| x.as_str() == "raw\n" && y.as_str() == "raw\n").count();
     let mut fi = 0usize; // function index
     for k in 0..n {
         let (x, y) = (a.get(k), b.get(k));
@@ -166,6 +205,14 @@ fn compare(py: &str, rs: &str) -> Outcome {
         let same = x == y;
         if is_fn {
             o.functions += 1;
+            if same {
+                let t = x.map_or("", String::as_str);
+                if !t.contains("\n error None\n") {
+                    o.both_error += 1;
+                }
+                o.blocks += t.lines().filter(|l| l.starts_with(" block ")).count();
+                o.statements += t.lines().filter(|l| l.starts_with("  (")).count();
+            }
             if !same {
                 o.differing += 1;
                 o.first.get_or_insert(fi);
@@ -288,6 +335,28 @@ fn a2_mission_lifter_intermediate_equals_the_originals() {
         "lifter parity: {} DLLs, {functions} functions compared, {differing} differing, {other} other pieces differing, {} DLLs not run",
         dlls.len(),
         failed.len()
+    );
+    // What the equal functions really covered. Printed only, never committed.
+    let sum = |f: fn(&Outcome) -> usize| -> usize { results.iter().map(f).sum() };
+    let both_error = sum(|o| o.both_error);
+    eprintln!(
+        "  coverage: {both_error} functions end in an error on both sides (equal texts); {} blocks and {} statements compared; \
+         {} DLLs where a side could not build the Dsl; {} raw pieces on both sides; {} functions listed, {} skipped on both sides, {} on one side only",
+        sum(|o| o.blocks),
+        sum(|o| o.statements),
+        results.iter().filter(|o| o.new_error).count(),
+        sum(|o| o.raw_pieces),
+        sum(|o| o.listed),
+        sum(|o| o.skipped),
+        sum(|o| o.skipped_one_side),
+    );
+    assert_eq!(sum(|o| o.skipped_one_side), 0, "a function was lifted on one side only");
+    // The call model makes engine-heavy functions stop early, so some share of both-error functions
+    // is expected; if most of the compared functions stop with an error, the comparison covers too
+    // little of the lifter. The bound is a plausibility check, not a measured value.
+    assert!(
+        both_error * 100 <= functions * ERROR_SHARE_BOUND_PERCENT,
+        "implausibly many functions end in an error on both sides ({both_error} of {functions})"
     );
     if differing > 0 || other > 0 || !failed.is_empty() {
         let scratch = here.join("../../target/scratch");

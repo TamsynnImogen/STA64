@@ -900,7 +900,7 @@ impl<'a> Dsl<'a> {
         let shape: Vec<&str> = shape.iter().map(String::as_str).collect();
         let this = "mov eax,DWORD PTR [ebp-0x4]";
         let callee0 = || -> Result<Option<&'static str>> {
-            callees.first().copied().ok_or_else(|| DecodeError::raw("list index out of range"))
+            callees.first().copied().ok_or_else(|| DecodeError::python("IndexError", "list index out of range"))
         };
         let mut kind: Option<&'static str> = None;
         if shape == [this, "mov eax,DWORD PTR [eax+0x4]"] && ret == "ret" {
@@ -1139,7 +1139,7 @@ impl<'a> Dsl<'a> {
             let mut seen: Vec<&str> = Vec::new();
             for (_, t) in self.ins.iter().skip(i).take(24) {
                 let w = py_split_ws_once(t);
-                seen.push(w.first().copied().ok_or_else(|| DecodeError::raw("list index out of range"))?);
+                seen.push(w.first().copied().ok_or_else(|| DecodeError::python("IndexError", "list index out of range"))?);
                 if t.starts_with("ret") {
                     break;
                 }
