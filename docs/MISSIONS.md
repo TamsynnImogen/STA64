@@ -662,27 +662,31 @@ policies. Native RNG and mission save/resume parity are not claimed.
 
 ### Reproducible tables, sorting and references
 
-STA64's bundled Lua is patched (`vendor/lua-src/VENDORED.md`, #1300) so a
+STA64's bundled Lua is patched (`vendor/lua-src/STA64-PATCH.md`, #1300) so a
 script given the same inputs does the same thing in every Lua state, every
 process and on every machine. What a mission author can rely on:
 
-- `pairs` and `next` visit keys in the order they were added, for every key
-  type (strings, numbers, booleans, tables, functions, coroutines, entity
-  handles). Integer keys the table keeps in its array part come first,
-  ascending: a list built by appending (`t[#t + 1] = v`, `table.insert`) or by
-  a constructor is always there; other integer keys may be in either part,
-  depending on how the table grew, the same way in every run. A key set to
-  nil and added again moves to the end; overwriting a present key keeps its
-  place. Clearing fields during a traversal is fine; adding keys during one is
-  undefined in Lua (but still the same in every run). `ipairs`, `#`, `__pairs`
-  and the `table` functions are unchanged. Host functions that walk a script's
-  table use the same order.
+- `pairs` and `next`: first the list part, keys 1, 2, ..., n in ascending
+  order, for a list kept without holes (filled in order, by `t[#t + 1] = v`,
+  `table.insert`, `table.remove` or a list constructor), whatever other keys
+  the table holds. Then every key that is not a positive integer (strings,
+  booleans, floats, zero and negative integers, tables, functions,
+  coroutines, entity handles) in the order it was added. A key set to nil and
+  added again moves to the end; overwriting a present key keeps its place.
+  Other positive integer keys (sparse, or filled out of order) come in an
+  unspecified place among these, but the same place for the same sequence of
+  operations, in every run. Clearing fields during a traversal is fine;
+  adding keys during one is undefined in Lua (but the same in every run).
+  `ipairs`, `#`, `__pairs` and the `table` functions are unchanged. Host
+  functions that walk a script's table use the same order.
 - `table.sort` is stable: elements that compare equal keep their order. A
   comparator that is not a strict weak order gives some fixed permutation, not
   an error; if the comparator raises, the table is left unchanged. Strings
   compare by bytes (`<` too), whatever the locale.
-- Weak tables are not available: `setmetatable` refuses a metatable with
-  `__mode` (and `__gc`), and a `__mode` added later is ignored.
+- Weak tables are not available. A script meets this as an error from
+  `setmetatable` when the metatable has `__mode` (as for `__gc`). Behind that,
+  the bundled Lua ignores `__mode` altogether, so a mode added to a metatable
+  later, or set by host code, leaves the table strong.
 
 ## To do
 

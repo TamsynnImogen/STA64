@@ -550,6 +550,15 @@ TValue *luaH_newkey (lua_State *L, Table *t, const TValue *key) {
     else if (luai_numisnan(fltvalue(key)))
       luaG_runerror(L, "table index is NaN");
   }
+  /* STA64: the key just past the array part grows the array part, so a
+     list kept without holes always lives there (and 'next' visits it first,
+     ascending), whatever other keys the table holds */
+  if (ttisinteger(key) &&
+      l_castS2U(ivalue(key)) == cast(lua_Unsigned, t->sizearray) + 1 &&
+      t->sizearray < MAXASIZE / 2) {
+    luaH_resize(L, t, t->sizearray ? 2 * t->sizearray : 1, allocsizenode(t));
+    return luaH_set(L, t, key);
+  }
   /* STA64: rebuild after as many insertions as there are nodes (never
      later than the free-position search would fail) */
   if (!isdummy(t) && t->sta64_inserts >= cast(unsigned int, sizenode(t))) {

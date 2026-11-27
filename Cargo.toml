@@ -82,7 +82,7 @@ base64 = "=0.23.1"
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"] }
 
 # Mission Lua is reproducible from one Lua state to the next (#1300): the Lua 5.3 that mlua
-# builds ("vendored" feature) comes from this patched copy. See vendor/lua-src/VENDORED.md.
+# builds ("vendored" feature) comes from this patched copy. See vendor/lua-src/STA64-PATCH.md.
 [patch.crates-io]
 lua-src = { path = "vendor/lua-src" }
 

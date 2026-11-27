@@ -13,7 +13,7 @@
 //! `eval`. A script that exhausts it gets an error from that entry only.
 //!
 //! Reproducibility (#1300) lives mostly in the bundled Lua itself
-//! (`vendor/lua-src/VENDORED.md`): `pairs`/`next` in insertion order, a stable
+//! (`vendor/lua-src/STA64-PATCH.md`): `pairs`/`next` in insertion order, a stable
 //! `table.sort`, byte-order string comparison, no weak tables. Here only the
 //! `setmetatable` guard adds a clear error for `__mode`. Host code that walks a
 //! script's table (`Table::pairs`) gets the same insertion order.
@@ -130,7 +130,7 @@ fn restricted(name: &str, why: String) -> mlua::Error {
 /// hooks disabled, so a looping finalizer could never be stopped) and a weak
 /// mode (`__mode`: what a weak table holds depends on when the collector ran,
 /// so a script reading one would not be reproducible, #1300). The bundled Lua
-/// ignores `__mode` anyway (vendor/lua-src/VENDORED.md), also when it is set
+/// ignores `__mode` anyway (vendor/lua-src/STA64-PATCH.md), also when it is set
 /// on a metatable after this call; the error says so up front.
 fn guard_setmetatable(lua: &Lua, globals: &Table) -> mlua::Result<()> {
     let original: Function = globals.raw_get("setmetatable")?;

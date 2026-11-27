@@ -1,4 +1,4 @@
-# Vendored from crates.io `lua-src` 551.0.2 (MIT, see LICENSE and VENDORED.md), with
+# Vendored from crates.io `lua-src` 551.0.2 (MIT, see LICENSE and STA64-PATCH.md), with
 # only the Lua 5.3.6 sources and STA64's reproducibility patch. The workspace uses it through
 # `[patch.crates-io]`; it is not a workspace member.
 [package]
@@ -10,6 +10,7 @@ description = "Sources of Lua 5.3 and logic to build them (STA64 patched copy)."
 license = "MIT"
 repository = "https://github.com/mlua-rs/lua-src-rs"
 publish = false
+build = "build.rs"
 autotests = false
 autoexamples = false
 autobenches = false
