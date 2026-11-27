@@ -152,6 +152,21 @@ pub struct RockParams {
     pub ext: Vec4,
     pub core: Vec4,
     pub spill: Vec4,
+    /// The game's out-of-sight lighting material (#1146, `light.odf`'s `ghost*` keys; read from data): rgb ambient,
+    /// w 1 when all three colours are given (else the mesh tag's factor scales the light).
+    pub ghost_a: Vec4,
+    pub ghost_d: Vec4,
+    pub ghost_s: Vec4,
+}
+
+/// `params` with the out-of-sight lighting keys put in (a no-op for incomplete keys).
+pub fn with_ghost_keys(mut p: RockParams, keys: Option<&sta_content::GhostLighting>) -> RockParams {
+    if let Some(sta_content::GhostLighting { ambient: Some(a), diffuse: Some(d), specular: Some(s), .. }) = keys {
+        p.ghost_a = Vec3::from(*a).extend(1.0);
+        p.ghost_d = Vec3::from(*d).extend(0.0);
+        p.ghost_s = Vec3::from(*s).extend(0.0);
+    }
+    p
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
@@ -237,6 +252,7 @@ fn apply(
     mut shared: ResMut<RockMaterials>,
     profile: Option<Res<RenderProfile>>,
     effects: Option<Res<ProfileEffects>>,
+    mut ghost_keys: Local<Option<Option<sta_content::GhostLighting>>>,
 ) {
     let stock = nimbus_drawn(profile.as_deref(), effects.as_deref());
     if stock {
@@ -266,6 +282,9 @@ fn apply(
             spill: Vec4::new(1.0, CRACK_CORE, if cut { CRACK_DEPTH } else { 0.0 }, CRACK_FALLOFF),
             ..default()
         };
+        // The game's out-of-sight lighting, read once from the mounted layers (#1146).
+        let keys = ghost_keys.get_or_insert_with(|| sta_content::GhostLighting::load(&vfs.0, &sta_content::OdfIndex::build(&vfs.0).0).0);
+        let params = with_ghost_keys(params, keys.as_ref());
         let m = materials.add(RockMaterial {
             params,
             albedo: Some(b.albedo.clone()),
@@ -541,6 +560,21 @@ mod tests {
         app.update();
         app.update();
         assert!(app.world().resource::<ModifiedCount>().0 > 0, "a light change should still rewrite the materials");
+    }
+
+    /// #1146: the out-of-sight lighting keys go into the rock material only when all three colours are given;
+    /// without them the shader falls back on the mesh tag's factor.
+    #[test]
+    fn the_ghost_keys_go_into_the_material_only_when_all_three_colours_are_given() {
+        use sta_content::GhostLighting;
+        let full = GhostLighting { ambient: Some([0.25, 0.5, 0.75]), diffuse: Some([1.0, 2.0, 3.0]), specular: Some([4.0, 5.0, 6.0]), team_factor: Some(0.5) };
+        let p = with_ghost_keys(RockParams::default(), Some(&full));
+        assert_eq!((p.ghost_a, p.ghost_d.truncate(), p.ghost_s.truncate()), (Vec4::new(0.25, 0.5, 0.75, 1.0), Vec3::new(1.0, 2.0, 3.0), Vec3::new(4.0, 5.0, 6.0)));
+        let partial = GhostLighting { specular: None, ..full };
+        for keys in [Some(&partial), None] {
+            let p = with_ghost_keys(RockParams::default(), keys);
+            assert_eq!((p.ghost_a, p.ghost_d, p.ghost_s), (Vec4::ZERO, Vec4::ZERO, Vec4::ZERO), "{keys:?}: the factor of the tag applies");
+        }
     }
 
     #[test]

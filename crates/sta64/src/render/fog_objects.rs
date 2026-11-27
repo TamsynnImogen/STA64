@@ -385,6 +385,10 @@ pub fn still_sprites(
     }
 }
 
+#[cfg(test)]
+#[path = "ghost_meshes_gpu.rs"]
+mod ghost_meshes_gpu;
+
 pub struct FogObjectsPlugin;
 
 impl Plugin for FogObjectsPlugin {

@@ -43,6 +43,7 @@ pub mod techtree;
 pub mod map;
 pub mod odf;
 pub mod orbital_income;
+pub mod ghost_light;
 pub mod strings;
 pub mod unit;
 pub mod weapon;
@@ -56,6 +57,7 @@ pub use def::{A1BaseOfficers, A1SpecialDef, A1SpecialKind, A2Effect, A2SpecialDe
 pub use explosion::{ChunkCfg, ExplosionDef, ExplosionTable, ShockwaveDef};
 pub use features::{Features, Profile};
 pub use orbital_income::{NodeIncome, StationMining};
+pub use ghost_light::GhostLighting;
 pub use planet::PlanetRole;
 pub use gui_cfg::{Colour, GuiCfg, GuiLayout, GuiValue, Panel, Rect};
 pub use index::{OdfEntry, OdfIndex};
