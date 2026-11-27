@@ -180,17 +180,8 @@ impl Sim {
         // Players order their own units; scripts and the bench any unit.
         // Units that are gone, not the player's or unable to move are
         // skipped; the order is rejected only when none is left.
-        let mut ids: Vec<EntityId> = units
-            .iter()
-            .copied()
-            .filter(|&id| {
-                (matches!(order, Order::Stop { .. }) || !self.production.is_welding(id))
-                    && self.unit(id)
-                    .is_some_and(|u| u.orderable() && (!player.is_player() || u.owner == player))
-            })
-            .collect();
-        ids.sort();
-        ids.dedup();
+        // (`movers` in `move_mode.rs` is this filter, shared with the move-mode record.)
+        let ids = self.movers(player, units, matches!(order, Order::Stop { .. }));
         if ids.is_empty() {
             return false;
         }

@@ -9,6 +9,13 @@
 //! SIM-77 and SIM-79 read it. Evidence for the two modes: read from the
 //! executable, static, not measured (TOOL-26).
 //!
+//! INTERIM store. ADR 0011 G1 keeps the move mode in the group record; this per-unit
+//! table exists only so that the mode a move order carries survives a snapshot until
+//! the group record (the behaviour part of SIM-76) takes it over. That PR replaces
+//! this table and its snapshot record (another snapshot format step); nothing may read
+//! it for movement before then. Its semantics differ from G1's (here `Stop` clears a
+//! row, other orders leave it).
+//!
 //! - A move order sets the mode of the units that took it (`None` removes the
 //!   row: the content's default); `Stop` removes it. A queued move replaces
 //!   the unit's row too: it is the mode of the last move order, not of each leg.
@@ -85,13 +92,28 @@ impl Sim {
         }
     }
 
-    /// Record the mode of a move order for the units that took it. They are the
-    /// ones `apply_movement` accepts: orderable, and the player's own.
-    pub(crate) fn record_move_mode(&mut self, player: PlayerId, ids: &[EntityId], mode: Option<MoveMode>) {
-        for &id in ids {
-            if self.unit(id).is_some_and(|u| u.orderable() && (!player.is_player() || u.owner == player)) {
-                self.move_modes.set(id, mode);
-            }
+    /// The units a move, stop or formation order of `player` takes, ascending: not
+    /// welding (a stop ignores that), alive, able to move, and the player's own (scripts
+    /// and the bench may order any). `apply_movement` takes exactly this set, and the
+    /// move-mode record below uses the same function, so they cannot differ.
+    pub(crate) fn movers(&self, player: PlayerId, units: &[EntityId], stop: bool) -> Vec<EntityId> {
+        let mut ids: Vec<EntityId> = units
+            .iter()
+            .copied()
+            .filter(|&id| {
+                (stop || !self.production.is_welding(id))
+                    && self.unit(id).is_some_and(|u| u.orderable() && (!player.is_player() || u.owner == player))
+            })
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
+    /// Record the mode of a move order for the units `apply_movement` took (see [`Sim::movers`]).
+    pub(crate) fn record_move_mode(&mut self, player: PlayerId, units: &[EntityId], mode: Option<MoveMode>) {
+        for id in self.movers(player, units, false) {
+            self.move_modes.set(id, mode);
         }
     }
 

@@ -47,7 +47,8 @@ pub const MAGIC: [u8; 4] = *b"S64N";
 /// 22 adds Armada II special-weapon state, and 23 adds Federation ability state.
 /// 24 adds the Armada I Director's Cut match option to `GameOptions`.
 /// 25 adds the move mode to `Order::Move` (SIM-76, ADR 0011 G4) and to the transferred
-/// snapshot (sim snapshot format 52). PROVISIONAL number: the merge steward assigns the real one.
+/// snapshot (its move-mode record). PROVISIONAL number: the merge steward assigns the real one
+/// (here, in `golden_encoding_is_pinned` with `GOLDEN`; the header test derives it).
 pub const PROTOCOL_VERSION: u16 = 25;
 /// Magic, version and body length.
 pub const HEADER_LEN: usize = 10;
@@ -2286,8 +2287,9 @@ mod tests {
     fn header_is_little_endian_and_frozen() {
         let bytes = encode(&Message::Ping { nonce: 0 }).unwrap();
         // Ping is tag 12, nonce 0: two body bytes.
-        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 25, 0, 2, 0, 0, 0, 12, 0]);
-        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 25, 0, 0, 0, 0, 0]);
+        let [v0, v1] = PROTOCOL_VERSION.to_le_bytes();
+        assert_eq!(bytes, [b'S', b'6', b'4', b'N', v0, v1, 2, 0, 0, 0, 12, 0]);
+        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', v0, v1, 0, 0, 0, 0]);
     }
 
     #[test]

@@ -76,12 +76,17 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// Format 45 appends cargo routes and holds.
 /// Format 46 stores build queue job identities and the last allocated id.
 /// Format 50 is the last without the Director's Cut match option; format 51 appends it
-/// and 50 still loads with it off. Format 52 (SIM-76) appends the move modes of move
-/// orders; 50 and 51 still load, every order then taking the content's default.
-/// Earlier formats are refused. PROVISIONAL number: the merge steward assigns the real one.
+/// and 50 still loads with it off. The format of SIM-76 (the current one) appends the move modes
+/// of move orders; 50 and 51 still load, every order then taking the content's default.
+/// Earlier formats are refused. PROVISIONAL number: the merge steward assigns the real one
+/// (the number changes here and in `snapshot/guard_tests.rs` only).
 pub const FORMAT_VERSION: u16 = 52;
-const PRE_DIRECTORS_CUT_FORMAT: u16 = 50;
-const PRE_MOVE_MODE_FORMAT: u16 = 51;
+/// The last format without the Director's Cut flag (still loads). Fixed history, not renumbered.
+#[doc(hidden)]
+pub const PRE_DIRECTORS_CUT_FORMAT: u16 = 50;
+/// The last format without the move-mode record (still loads): main's number before SIM-76.
+#[doc(hidden)]
+pub const PRE_MOVE_MODE_FORMAT: u16 = 51;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
@@ -162,7 +167,7 @@ impl std::fmt::Display for SnapshotError {
         match self {
             SnapshotError::BadMagic => write!(f, "not a snapshot"),
             SnapshotError::FormatVersion { found } if *found < FORMAT_VERSION => {
-                write!(f, "snapshot format {found} is from an older STA64 and cannot be read (this build reads formats {PRE_DIRECTORS_CUT_FORMAT} to {FORMAT_VERSION})")
+                write!(f, "snapshot format {found} is from an older STA64 and cannot be read (this build reads formats {PRE_DIRECTORS_CUT_FORMAT}, {PRE_MOVE_MODE_FORMAT} and {FORMAT_VERSION})")
             }
             SnapshotError::FormatVersion { found } => {
                 write!(f, "snapshot format {found}, expected {FORMAT_VERSION}")
@@ -266,7 +271,8 @@ struct WatchRec {
     rows: Vec<(EntityId, crate::watchdog::Row)>,
 }
 
-/// Format 52 (SIM-76): the move mode each unit's last move order named, by unit id.
+/// The current format (SIM-76): the move mode each unit's last move order named, by unit id.
+/// INTERIM: the group record replaces this record (see `move_mode.rs`).
 #[derive(Serialize, Deserialize)]
 struct MoveModeRec {
     version: u8,

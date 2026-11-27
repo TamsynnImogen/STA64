@@ -202,7 +202,7 @@ mod tests {
         // The Director's Cut flag (one byte) and the move-mode record (two bytes: no rows) are
         // the records appended after format 50 (SIM-76 appended the second).
         old_save.truncate(old_save.len() - 3);
-        old_save[4..6].copy_from_slice(&(crate::snapshot::FORMAT_VERSION - 2).to_le_bytes());
+        old_save[4..6].copy_from_slice(&crate::snapshot::PRE_DIRECTORS_CUT_FORMAT.to_le_bytes());
         old_save[10..18].copy_from_slice(&old_hash.to_le_bytes());
         let restored = Sim::from_snapshot(&old_save, Some(setup.content.clone())).unwrap();
         assert_eq!(restored.digest(), sim.digest());

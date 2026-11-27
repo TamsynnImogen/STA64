@@ -146,7 +146,7 @@ fn older_snapshots_load_with_every_order_on_the_content_default() {
     let bytes = sim.snapshot();
     // Format 51 is the same chain without the final move-mode record (two bytes when it has no rows).
     let mut old = bytes[..bytes.len() - 2].to_vec();
-    old[4..6].copy_from_slice(&(sta_sim::snapshot::FORMAT_VERSION - 1).to_le_bytes());
+    old[4..6].copy_from_slice(&sta_sim::snapshot::PRE_MOVE_MODE_FORMAT.to_le_bytes());
     let back = Sim::from_snapshot(&old, sim.content().cloned()).expect("the previous format loads");
     assert!(modes(&back).is_empty());
     assert_eq!(back.digest(), sim.digest());
@@ -197,6 +197,42 @@ fn the_wire_encoding_carries_the_mode_and_none_is_one_zero_byte() {
     assert_eq!(formation.len(), none.len() + 1);
     // The older tags keep their values: Move is still variant 0.
     assert_eq!(postcard::to_allocvec(&Order::move_to(vec![EntityId(1)], v(0, 0), false)).unwrap()[0], 0);
+}
+
+/// The offset of `needle` in `hay`, which must contain it once.
+fn find(hay: &[u8], needle: &[u8]) -> usize {
+    let at: Vec<usize> = hay.windows(needle.len()).enumerate().filter(|(_, w)| *w == needle).map(|(i, _)| i).collect();
+    assert_eq!(at.len(), 1, "the command's bytes appear once");
+    at[0]
+}
+
+#[test]
+fn an_unknown_mode_value_is_refused_by_the_decoders() {
+    // A command: the mode is the last two bytes, `Some` tag then the variant index.
+    let c = go(7, &[EntityId(4)], v(1, 2), true, Some(MoveMode::Group));
+    let bytes = postcard::to_allocvec(&c).unwrap();
+    for (from_end, bad) in [(1, 2u8), (2, 2u8)] {
+        let mut forged = bytes.clone();
+        let at = forged.len() - from_end;
+        forged[at] = bad;
+        assert!(postcard::from_bytes::<Command>(&forged).is_err(), "byte {from_end} from the end set to {bad}");
+    }
+    // A snapshot record naming a mode that does not exist.
+    let (sim, _) = fleet();
+    let snap = sim.snapshot();
+    let mut forged = snap[..snap.len() - 2].to_vec();
+    forged.extend_from_slice(&[1, 1, 1, 2]);
+    assert!(matches!(Sim::from_snapshot(&forged, sim.content().cloned()), Err(SnapshotError::Corrupt(_))));
+    // A replay whose logged move order carries one.
+    let mut rec = Recorder::with_interval(&setup(MapDef::empty()), 10);
+    rec.step(&[go(0, &[EntityId(1)], v(5, 5), false, Some(MoveMode::Group))]);
+    let replay = rec.finish();
+    let command = postcard::to_allocvec(&replay.commands[0].command).unwrap();
+    let mut file = replay.encode();
+    assert!(Replay::decode(&file).is_ok());
+    let end = find(&file, &command) + command.len() - 1;
+    file[end] = 2;
+    assert!(Replay::decode(&file).is_err());
 }
 
 #[test]
