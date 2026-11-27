@@ -31,6 +31,9 @@ pub struct Pe {
     pub sections: Vec<Section>,
     /// Size field of the export data directory.
     pub export_size: u32,
+    /// Number of entries of the COFF symbol table (0 when the file has none: a zero table
+    /// pointer or a zero count).
+    pub symbol_count: u32,
     /// `AddressOfEntryPoint`, an offset from the base.
     pub entry_rva: u32,
     /// IAT slot virtual address -> (dll, symbol); ordinals are `#n`. In table order.
@@ -52,6 +55,9 @@ impl Image for Pe {
     }
     fn export_size(&self) -> u32 {
         self.export_size
+    }
+    fn has_symbol_table(&self) -> bool {
+        self.symbol_count != 0
     }
 }
 
@@ -117,12 +123,15 @@ impl Pe {
         }
         let dd = pe + DIRS;
         let export_size = u32at(&data, dd + 4)?;
+        let (symtab, nsyms) = (u32at(&data, pe + 12)?, u32at(&data, pe + 16)?);
+        let symbol_count = if symtab != 0 { nsyms } else { 0 };
         let import_rva = u32at(&data, dd + 8)?;
         let mut me = Self {
             data,
             base,
             sections,
             export_size,
+            symbol_count,
             entry_rva,
             imports: IndexMap::new(),
         };
