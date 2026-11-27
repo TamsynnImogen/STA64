@@ -21,6 +21,7 @@ use sta_mission_convert::{tup, ErrorKind, FlatImage};
 
 #[path = "dsl_lift/common.rs"]
 mod common;
+mod staleness;
 
 const RAW_CASES: &str = include_str!("dsl_lift/cases.txt");
 const RAW_EXPECTED: &str = include_str!("dsl_lift/expected.txt");
@@ -360,6 +361,10 @@ fn the_cases_exercise_a_lifted_function_per_form() {
 
 #[test]
 fn expected_pairs_are_current() {
+    // some expected lines carry CPython exception texts: compared under the pinned CPython only
+    if !staleness::pinned_python_available("expected_pairs_are_current") {
+        return;
+    }
     use std::process::Command;
     let dir = std::env::temp_dir().join(format!("sta_lift_pairs_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");

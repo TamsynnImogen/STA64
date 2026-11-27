@@ -10,6 +10,7 @@
 
 #[path = "parity/harness.rs"]
 mod harness;
+mod staleness;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -218,16 +219,12 @@ fn the_case_file_covers_every_kind_of_result() {
 }
 
 /// The committed `cases.txt` is what the generator writes now, from the current
-/// `tools/drl_to_lua.py` (so a change of the Python tool shows here). Skipped without `python3`,
-/// or when it is not CPython 3.14, which the file was made with (some exception texts differ).
+/// `tools/drl_to_lua.py` (so a change of the Python tool shows here). Skipped visibly without
+/// `python3`, or when it is not the pinned CPython, which the file was made with (some exception
+/// texts differ; see `staleness/mod.rs`).
 #[test]
 fn cases_file_is_current() {
-    let Ok(version) = std::process::Command::new("python3").arg("--version").output() else {
-        eprintln!("skipped: python3 not found");
-        return;
-    };
-    if !String::from_utf8_lossy(&version.stdout).starts_with("Python 3.14.") {
-        eprintln!("skipped: the cases were made with CPython 3.14, found {}", String::from_utf8_lossy(&version.stdout).trim());
+    if !staleness::pinned_python_available("cases_file_is_current") {
         return;
     }
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/drl_cases");

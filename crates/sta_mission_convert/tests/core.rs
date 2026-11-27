@@ -24,6 +24,8 @@ use sta_mission_convert::{list, tup, DecodeError, ErrorKind, Result};
 #[path = "core_data/tables.rs"]
 mod tables;
 
+mod staleness;
+
 // ------------------------------------------------------------------ literal parser
 
 /// Parses the Python `repr` of a value made of tuples, lists, strings, numbers, `None`, `True`,
@@ -786,20 +788,15 @@ fn exception_classes_and_texts_match_python() {
     });
 }
 
-/// Runs the committed generator and compares its output with the committed table (skipped where
-/// `python3` is missing or is not CPython 3.14, which the table was made with: the texts of some
-/// Python exceptions differ between versions).
+/// Runs the committed generator and compares its output with the committed table (skipped
+/// visibly where `python3` is missing or is not the pinned CPython, which the table was made
+/// with: the texts of some Python exceptions differ between versions; see `staleness/mod.rs`).
 #[test]
 fn committed_tables_are_what_the_generator_writes() {
-    let Some(py) = python3() else {
-        eprintln!("skipped: python3 not found");
-        return;
-    };
-    let version = std::process::Command::new(&py).arg("--version").output().unwrap();
-    if !String::from_utf8_lossy(&version.stdout).starts_with("Python 3.14.") {
-        eprintln!("skipped: the table was made with CPython 3.14, found {}", String::from_utf8_lossy(&version.stdout).trim());
+    if !staleness::pinned_python_available("committed_tables_are_what_the_generator_writes") {
         return;
     }
+    let py = std::path::PathBuf::from("python3");
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let gen_py = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/core_data/gen_tables.py");
     let out = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("tables_regenerated.rs");
