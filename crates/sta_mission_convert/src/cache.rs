@@ -79,6 +79,23 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
+/// SHA-256 of a file's bytes as 64 lower-case hex digits, the hash the cache keys are made of,
+/// read in 64 KiB blocks (memory stays bounded whatever the file's size). The game's stamp uses it
+/// to tell whether the inputs of a run are the ones of the last run.
+pub fn file_digest(path: &Path) -> io::Result<String> {
+    use io::Read;
+    let mut f = fs::File::open(path)?;
+    let mut h = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            return Ok(hex(&h.finalize()));
+        }
+        h.update(&buf[..n]);
+    }
+}
+
 fn valid_key(key: &str) -> bool {
     key.len() == 64 && key.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }

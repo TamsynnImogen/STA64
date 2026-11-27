@@ -290,7 +290,7 @@ fn the_cache_option_uses_the_data_directory() {
     let mut listing = no_listing;
     let env = Env { data_dir: Some(data.clone()), ..Env::default() };
     // an entry in the default folder is used
-    let dir = data.join("convert-cache").join("star-trek-armada-test");
+    let dir = data.join("convert-cache").join(cli::key(&root, None));
     Cache::new(&dir)
         .put(&mission_key(&root), &Entry::Converted { source: b"-- x\n".to_vec(), console: vec!["  replayed".to_owned()] })
         .unwrap();
@@ -302,6 +302,26 @@ fn the_cache_option_uses_the_data_directory() {
     let code = cli::run(&args, &Env::default(), &mut Io { out: &mut so, err: &mut se }, &mut listing);
     assert_eq!(code, 1);
     assert!(String::from_utf8_lossy(&se).contains("--cache-dir"));
+}
+
+#[test]
+fn file_digest_is_sha256_of_the_bytes_whatever_the_size() {
+    let t = TempDir::new("digest");
+    let p = t.path().join("abc");
+    fs::write(&p, b"abc").unwrap();
+    assert_eq!(
+        sta_mission_convert::cache::file_digest(&p).unwrap(),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+    // bigger than one read block, and equal to the one-shot hash of the same bytes
+    let big: Vec<u8> = (0..200_000u32).map(|i| (i % 251) as u8).collect();
+    fs::write(&p, &big).unwrap();
+    let one_shot = {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(&big).iter().map(|x| format!("{x:02x}")).collect::<String>()
+    };
+    assert_eq!(sta_mission_convert::cache::file_digest(&p).unwrap(), one_shot);
+    assert!(sta_mission_convert::cache::file_digest(&t.path().join("none")).is_err());
 }
 
 // ------------------------------------------------------------------ gated

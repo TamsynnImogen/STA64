@@ -55,38 +55,13 @@ impl Env {
     }
 }
 
-/// `slug`: lower-case, every run of other characters one `-`, trimmed; `install` when nothing is
-/// left (`sta_mission::converted::key` uses the same rule).
-pub fn slug(s: &str) -> String {
-    let mut out = String::new();
-    let mut gap = false;
-    for c in s.to_lowercase().chars() {
-        if c.is_ascii_lowercase() || c.is_ascii_digit() {
-            if gap && !out.is_empty() {
-                out.push('-');
-            }
-            out.push(c);
-            gap = false;
-        } else {
-            gap = true;
-        }
-    }
-    if out.is_empty() {
-        "install".to_owned()
-    } else {
-        out
-    }
-}
+pub use sta_core::install_key::slug;
 
-/// `key(install, mod)`: `slug(install folder name)`, plus `+` and `slug(mod)` for a mod.
+/// `key(install, mod)`: the folder key of an install, `<slug of the folder name>-<hash of the
+/// resolved path>`, plus `+` and `slug(mod)` for a mod. One rule for the game and the converter,
+/// [`sta_core::install_key`] (LUA-15j); the Python tool's rule (the slug alone) is superseded.
 pub fn key(install: &Path, modname: Option<&str>) -> String {
-    let real = realpath(install);
-    let base = real.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let k = slug(&base);
-    match modname.filter(|m| !m.is_empty()) {
-        Some(m) => format!("{k}+{}", slug(m)),
-        None => k,
-    }
+    sta_core::install_key::key(install, modname)
 }
 
 /// `data_dir(env, system)`: `platform::data_dir`, the user data folder of STA64. `get` reads an
