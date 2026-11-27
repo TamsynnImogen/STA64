@@ -12,9 +12,26 @@
 //! names) and the shared core (LUA-15c: [`pyval`], [`format`], [`msvc`], [`algebra`],
 //! [`prelude`]). Decoding and lifting follow in later steps.
 
+/// The converter's version. It is part of the tool token every emitter writes into the first
+/// line of its output, and the conversion cache will key on it: raise it when the output of any
+/// converter changes.
+pub const CONVERTER_VERSION: u32 = 1;
+
+/// The tool token of the header line of every emitted file: `sta_mission_convert (converter 1)`
+/// (a token without whitespace, then the bracket text; the Python tools write their own script
+/// name and a package id there, which the parity comparison ignores).
+pub fn tool_token() -> String {
+    format!("sta_mission_convert (converter {CONVERTER_VERSION})")
+}
+
+pub mod a1;
 pub mod algebra;
+pub mod call;
+pub mod convert;
 pub mod disasm;
+pub mod drl;
 pub mod dsl;
+pub mod emit;
 #[doc(hidden)]
 pub mod fixture;
 pub mod format;
