@@ -5,6 +5,11 @@ invented listing and an invented flat image written in cases.txt.
 
     python3 -I gen_pairs.py <repo>/tools cases.txt expected.txt
 
+The committed expected.txt is the reference: it was made with CPython 3.14, the version the
+converter's Python reference uses (its first line says so). The texts of raw exceptions differ
+between CPython versions, so the staleness test in tests/dsl_lift.rs compares only under that
+version and says so when it skips.
+
 The Rust test (tests/dsl_lift.rs) parses the same cases.txt and compares its own output with
 expected.txt. The calls the lifter meets are run through the call model of lift_common.py (the
 same model lift::call_model has in lift.rs), because the real `Lifter.call` is the next step's.
@@ -252,7 +257,10 @@ def main(argv):
     lc.install_call_model(dsl)
     with open(cases_path, encoding="utf-8", newline="") as fh:
         cases = parse(fh.read())
-    text = "".join(run_case(dsl, c) for c in cases)
+    # The first line names the CPython that printed the exception texts below (they differ between
+    # versions); the staleness test compares only under the pinned major.minor version.
+    head = f"# generated with CPython {sys.version_info[0]}.{sys.version_info[1]}\n"
+    text = head + "".join(run_case(dsl, c) for c in cases)
     with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(text)
 
