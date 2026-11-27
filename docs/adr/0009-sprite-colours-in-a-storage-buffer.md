@@ -1,10 +1,13 @@
 # ADR 0009: Sprite colours in a storage buffer
 
 - **Status:** proposed
-- **Date:** 2026-11-20 (S2 and S3 amended 2026-11-23)
+- **Date:** 2026-11-20 (S2 and S3 amended 2026-11-23, S5 amended 2026-11-26)
 - **Deciders:** Tammy and Cedric (accepted when both approve the PR that
   merges this file; not binding before). Agents do not merge it. The
-  amendment of S2 and S3 needs the same two approvals.
+  amendment of S2 and S3 needs the same two approvals. The amendment of S5
+  (2026-11-26) was decided by the project lead on that day because the step is
+  revertible on its own, and is merged by the merge steward on his instruction;
+  the repo owner was informed, not asked.
 - **Relates to:** [ADR 0004](0004-modding-v1.md) D12; [ADR 0003](0003-clean-room-content-policy.md);
   WORKPLAN RND-22; issue #1020; PR #1000 (open draft, the earlier
   shared-materials attempt, closed when this ADR is accepted; see "Alternatives
@@ -168,16 +171,60 @@ Bevy supports an entity changing material type over time (a swap within one
 frame is handled); hulls and rocks in the repo already do so.
 
 **S5. Parity mode, on by default.** When a node's state changed under main's
-rule, `animate` calls `set_changed()` on its `MeshMaterial3d<SpriteMaterial>`.
-In Bevy 0.20.1 `Changed<MeshMaterial3d<M>>` feeds the same specialise,
-re-queue and mesh re-extraction systems as `AssetChanged`, in the same frame,
-so the set of re-queued nodes is main's. The re-queue order is the iteration
-order of Bevy's set of changed entities, which is the same for the same set in
-practice but not guaranteed by construction; the GPU control run and the
-co-located test cases are what show the tie order unchanged. Parity mode keeps
-main's specialise, queue and mesh re-extraction cost (measured on main: about
-0.6 ms and about 0.5 ms on that scene; forecast: they stay) and removes the
-material prepare. Turning it off is a separate, later change (open question 1).
+rule, `animate` lists the node. In `PostUpdate`, after Bevy has decided which
+views see which nodes and before the specialisation checks, the node's
+`MeshMaterial3d<SpriteMaterial>` is marked changed if at least one view sees
+the node (a camera, or a light's shadow view). In Bevy 0.20.1
+`Changed<MeshMaterial3d<M>>` feeds the same specialise, re-queue and mesh
+re-extraction systems as `AssetChanged`, in the same frame. So in every view
+the nodes re-queued are main's: a node no view sees is in no view's phase, so
+marking it changes nothing any view draws, and a node that comes into a view is
+queued as newly visible, first and once, with or without the mark. The slot,
+the state and the look's uv are still written in `Update` for every node, as
+before. The mark stays in the frame the state changed (it is ordered before the
+system that turns a changed material into a changed mesh), so it is not a frame
+late. Parity mode keeps main's specialise, queue and mesh re-extraction cost
+for the nodes a view sees only, and removes the material prepare. Turning it
+off is a separate, later change (open question 1).
+
+*Amended 2026-11-26 (issue #1237). The mark was applied in `Update` to every
+node whose state changed, seen or not. On a map with many nodes no view sees,
+that re-extracted and re-specialised those nodes in every frame without
+changing any picture; the cost is now only for nodes a view sees. Grade of the
+identity argument: read from the Bevy 0.20.1 source (which nodes are re-queued
+in a view, and that the mark lands in the same frame), checked by an experiment
+that compared the sorted transparent draw lists of this rule against marking
+every node, in several scenes (measured on STA64, one machine and adapter; the
+cut-out phase was not measured). The GPU byte-equality tests include a scene
+that fails without the mark, and a positive control that shows it.*
+
+*Tie order. At exactly equal distance, draw order follows the order in which
+Bevy's set of changed entities is iterated: by entity index under the set's
+bucket count, with collisions displacing entries. That set now holds only the
+nodes a view sees, so it can have fewer buckets than the set main iterates, and
+an unseen node marked on main can displace a seen one. Two nodes in one view at
+exactly equal distance (or such a node and one that is not re-queued in that
+frame) may therefore be drawn in another order than on main; for blended looks
+this changes the picture, for additive ones at rounding level, and coplanar
+cut-out looks in the binned phase follow the same order. Where main's set is
+filled by several threads its own order is not repeatable, and where its
+bucket count came from capacity history it is an accident of that history: no
+rule defines the order in either case. It is open question 1, narrowed to
+nodes, and nothing makes it absent by construction. In the experiment the
+draw lists were identical in every scene where main's own marking was stable
+against itself. In the scenes with exact ties (one pair of additive effect
+quads at one place and size) main's order varied from frame to frame, about
+two thirds one way, and this rule's was fixed, always the other: it differed
+from the previous marking's usual order in more frames than the previous
+marking's own order varied, ties only. The effect on the picture was measured
+at one or two levels of 255, inside the pair's rectangle only (additive
+blends commute in exact arithmetic and differ here only by rounding to the
+8-bit target); alpha-blended or cut-out ties were not met in the experiment.*
+
+*S6 and this amendment: S6 asks for frames byte-equal to main. With this rule
+that holds except where the tie order above differs from main's; S6 is not
+changed, and a difference that is only a tie order is a case of open question 1,
+not a failure of the mark.*
 
 **S6. Stock output stays pixel-identical.** The acceptance criterion is
 byte equality of frames, main against branch, in Stock and in Refit camera
