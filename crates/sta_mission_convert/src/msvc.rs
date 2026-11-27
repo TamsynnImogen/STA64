@@ -348,11 +348,11 @@ pub fn msvc_ret(symbol: &str) -> Result<Option<String>> {
         }));
     }
     if matches!(head2.as_str(), "PA" | "PB" | "AB" | "AA") {
-        let third = *s.get(2).ok_or_else(|| DecodeError::raw("string index out of range"))?;
+        let third = *s.get(2).ok_or_else(|| DecodeError::python("IndexError", "string index out of range"))?;
         if matches!(third, 'V' | 'U') {
             let j = (0..s.len().saturating_sub(1))
                 .find(|&j| s[j] == '@' && s[j + 1] == '@')
-                .ok_or_else(|| DecodeError::raw("substring not found"))?;
+                .ok_or_else(|| DecodeError::python("ValueError", "substring not found"))?;
             return Ok(Some(py_slice(s, 0, j + 2)));
         }
         return Ok(Some(py_slice(s, 0, 3)));
