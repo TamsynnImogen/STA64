@@ -371,7 +371,7 @@ impl Plan {
                     out.push(Event { tick, kind: "plan", what: o.get("text").unwrap_or_default() });
                     continue;
                 }
-                "move" => at(&o).map(|to| Order::Move { units: idl(&o), to, queue: false }),
+                "move" => at(&o).map(|to| Order::Move { units: idl(&o), to, queue: false, mode: None }),
                 "stop" => Some(Order::Stop { units: idl(&o) }),
                 "attack" => o.get::<u32>("target").ok().map(|t| Order::Attack { units: idl(&o), target: EntityId(t) }),
                 "colonize" => o.get::<u32>("planet").ok().map(|p| Order::Colonize { units: idl(&o), planet: EntityId(p) }),

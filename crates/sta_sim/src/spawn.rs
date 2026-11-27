@@ -471,6 +471,7 @@ mod tests {
                 units,
                 to,
                 queue: false,
+                mode: None,
             }),
         )
     }

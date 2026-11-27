@@ -36,7 +36,7 @@ fn fly_with(regions: Vec<Region>, centre: Vec3, db: sta_content::ContentDb) -> (
     let go = Command {
         player: PlayerId(1),
         seq: 0,
-        kind: CommandKind::Order(Order::Move { units: vec![id], to: v(3000, 0), queue: false }),
+        kind: CommandKind::Order(Order::Move { units: vec![id], to: v(3000, 0), queue: false, mode: None }),
     };
     sim.step(&[go]);
     let mut closest = Fixed::from_int(1_000_000);

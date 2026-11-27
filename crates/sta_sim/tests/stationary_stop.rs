@@ -281,6 +281,7 @@ fn mixed_stop_filters_foreign_actor_script_can_stop_and_move_stays_invalid() {
             units: vec![station],
             to: at(500, 0),
             queue: false,
+            mode: None,
         },
         Order::Formation {
             units: vec![station],

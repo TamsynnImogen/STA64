@@ -229,6 +229,7 @@ impl Game {
                             ((k * 91) % 500) as f32 - 250.0,
                         ]),
                         queue: k.is_multiple_of(3),
+                        mode: None,
                     }),
                 });
             }

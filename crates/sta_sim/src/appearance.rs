@@ -189,7 +189,7 @@ mod tests {
         assert_eq!(sim.impulse_caps(), vec![(id, Fixed::from_int(20))]);
         let goal = Vec3 { x: Fixed::ZERO, y: Fixed::ZERO, z: Fixed::from_int(1200) };
         sim.step(&[Command { player: PlayerId(0), seq: 0,
-            kind: CommandKind::Order(Order::Move { units: vec![id], to: goal, queue: false }),
+            kind: CommandKind::Order(Order::Move { units: vec![id], to: goal, queue: false, mode: None }),
         }]);
         for _ in 0..10 { sim.step(&[]); }
         assert!(sim.unit(id).unwrap().speed > Fixed::ZERO, "plain move is at impulse");

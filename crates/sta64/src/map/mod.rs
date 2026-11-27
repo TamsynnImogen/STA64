@@ -2243,7 +2243,7 @@ mod tests {
             let ship = view.units.iter().find(|u| db.unit(u.def).is_some_and(|d| d.movement.max_speed > Fixed::ZERO));
             if let Some(ship) = ship {
                 let to = SimVec3 { x: ship.pos.x + Fixed::from_int(2000), y: ship.pos.y, z: ship.pos.z };
-                let cmd = Command { player: PlayerId::BENCH, seq: 0, kind: CommandKind::Order(Order::Move { units: vec![ship.id], to, queue: false }) };
+                let cmd = Command { player: PlayerId::BENCH, seq: 0, kind: CommandKind::Order(Order::Move { units: vec![ship.id], to, queue: false, mode: None }) };
                 let start = ship.pos;
                 let mut v = sim.step(&[cmd]).view;
                 for _ in 0..300 {

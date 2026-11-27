@@ -97,6 +97,7 @@ fn move_alias_matches_go_for_vectors_and_latest_entity_target_position() {
             units: vec![target],
             to: point(3000, 0),
             queue: false,
+            mode: None,
         }),
     };
     let mut out = sim.step(&[travel]);
@@ -132,6 +133,7 @@ fn move_alias_matches_go_for_vectors_and_latest_entity_target_position() {
             units: vec![actor],
             to: point(100, 200),
             queue: false,
+            mode: None,
         })
     );
     assert_eq!(
@@ -140,6 +142,7 @@ fn move_alias_matches_go_for_vectors_and_latest_entity_target_position() {
             units: vec![actor],
             to: point(300, 400),
             queue: false,
+            mode: None,
         })
     );
     assert_eq!(
@@ -148,6 +151,7 @@ fn move_alias_matches_go_for_vectors_and_latest_entity_target_position() {
             units: vec![actor],
             to: expected_target_pos,
             queue: false,
+            mode: None,
         })
     );
     let result = sim.step(&commands);
@@ -220,6 +224,7 @@ fn pending_move_alias_waits_for_the_spawn_receipt_and_uses_its_actual_id() {
             units: vec![actual_id],
             to: point(1300, 100),
             queue: false,
+            mode: None,
         })
     );
     assert_eq!(deferred[0].player, PlayerId(0));

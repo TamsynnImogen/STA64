@@ -228,6 +228,7 @@ fn holds_affect_only_enemies_pause_movement_and_survive_saving() {
                 units: vec![enemy],
                 to: pos(500),
                 queue: false,
+                mode: None,
             },
         ),
     ]);

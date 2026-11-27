@@ -622,6 +622,7 @@ impl Bench {
                         units: ids.clone(),
                         to,
                         queue: *queue,
+                        mode: None,
                     },
                     format!("goto {}", who.join(",")),
                 );
@@ -671,7 +672,7 @@ impl Bench {
                         for &id in &own {
                             let p = self.sim.unit(id).expect("living").pos;
                             let at = Vec3 { x: to.x + p.x - cx, y: to.y, z: to.z + p.z - cz };
-                            self.order(&[id], Order::Move { units: vec![id], to: at, queue: false }, format!("rclick {n}"));
+                            self.order(&[id], Order::Move { units: vec![id], to: at, queue: false, mode: None }, format!("rclick {n}"));
                         }
                         "Move".into()
                     }

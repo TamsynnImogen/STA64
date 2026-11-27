@@ -183,7 +183,7 @@ pub(crate) fn ground_order(g: &Ground, at: GroundAt, out: &mut OrderOut) {
         if !shift {
             out.targets.0.insert(id, to);
         }
-        let order = if warp { Order::MoveWarp { units: vec![id], to, queue: shift } } else { Order::Move { units: vec![id], to, queue: shift } };
+        let order = if warp { Order::MoveWarp { units: vec![id], to, queue: shift } } else { Order::Move { units: vec![id], to, queue: shift, mode: None } };
         out.queue.0.push(CommandKind::Order(order));
     }
     out.issued.push(OrderIssued { units: picked.iter().map(|p| p.0).collect(), kind: OrderKind::Move });
@@ -375,7 +375,7 @@ mod tests {
         aim_at(&mut app, 200.0, -300.0);
         let (cmds, msgs) = click(&mut app, false);
         let to = SimVec3::from_f32([200.0, 0.0, 300.0]);
-        assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: false })]);
+        assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: false, mode: None })]);
         assert_eq!((msgs.len(), msgs[0].kind, &msgs[0].units), (1, OrderKind::Move, &vec![a]));
     }
 
@@ -385,7 +385,7 @@ mod tests {
         aim_at(&mut app, 200.0, -300.0);
         let (cmds, msgs) = click(&mut app, true);
         let to = SimVec3::from_f32([200.0, 0.0, 300.0]);
-        assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: true })]);
+        assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: true, mode: None })]);
         assert_eq!(msgs[0].kind, OrderKind::Move);
     }
 
@@ -504,7 +504,7 @@ mod tests {
         aim_at(&mut app, 500.0, 0.0);
         let (cmds, msgs) = click(&mut app, false);
         let to = SimVec3::from_f32([500.0, 0.0, 0.0]);
-        assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: false })]);
+        assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: false, mode: None })]);
         assert_eq!(msgs[0].kind, OrderKind::Move);
     }
 
@@ -598,13 +598,13 @@ mod tests {
         let (mut app, [a, ..]) = radar_app();
         let to = SimVec3::from_f32([2000.0, 0.0, 700.0]);
         let (cmds, _) = radar_click(&mut app, Vec2::new(2000.0, 700.0), SEC, true, &[KeyCode::AltRight]);
-        assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: false })]);
+        assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: false, mode: None })]);
         // INTERIM: the queue modifier gives the plain queued move (a warp move would wipe the
         // queue in today's sim).
         let (cmds, _) = radar_click(&mut app, Vec2::new(2000.0, 700.0), SEC, true, &[KeyCode::ShiftLeft]);
-        assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: true })]);
+        assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: true, mode: None })]);
         let (cmds, _) = radar_click(&mut app, Vec2::new(2000.0, 700.0), SEC, true, &[KeyCode::ShiftLeft, KeyCode::AltLeft]);
-        assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: true })]);
+        assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: true, mode: None })]);
     }
 
     /// The world's warp modifier is the minimap's Alt, inverted, and only on Armada II content:
@@ -805,7 +805,7 @@ mod tests {
             orders.push(queue.0);
         }
         assert_eq!(orders[0], orders[1]);
-        assert_eq!(orders[0], [CommandKind::Order(Order::Move { units: vec![a], to: SimVec3::from_f32([200.0, 0.0, 300.0]), queue: false })]);
+        assert_eq!(orders[0], [CommandKind::Order(Order::Move { units: vec![a], to: SimVec3::from_f32([200.0, 0.0, 300.0]), queue: false, mode: None })]);
     }
 
     /// The click's map point comes from the pointer in the square's own coordinates, so it does

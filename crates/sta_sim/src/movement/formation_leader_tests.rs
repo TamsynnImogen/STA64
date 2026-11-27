@@ -40,7 +40,7 @@ fn formation() -> (Sim, Vec<EntityId>) {
     let ids: Vec<EntityId> = (0..3).map(|i| sim.spawn_def(d.key("fx_cruiser").unwrap(), PlayerId(1), v(0, i * 200), (Fixed::ONE, Fixed::ZERO)).unwrap()).collect();
     let order = |seq, o| Command { player: PlayerId(1), seq, kind: CommandKind::Order(o) };
     sim.step(&[order(0, Order::Formation { units: ids.clone(), kind: 1 })]);
-    sim.step(&[order(1, Order::Move { units: ids.clone(), to: v(3000, 200), queue: false })]);
+    sim.step(&[order(1, Order::Move { units: ids.clone(), to: v(3000, 200), queue: false, mode: None })]);
     (sim, ids)
 }
 
@@ -81,7 +81,7 @@ fn the_followers_reach_their_slots_when_the_leader_is_sent_elsewhere() {
     let want = control();
     let (mut sim, ids) = formation();
     run(&mut sim, 150);
-    let away = Command { player: PlayerId(1), seq: 2, kind: CommandKind::Order(Order::Move { units: vec![ids[0]], to: v(0, -2000), queue: false }) };
+    let away = Command { player: PlayerId(1), seq: 2, kind: CommandKind::Order(Order::Move { units: vec![ids[0]], to: v(0, -2000), queue: false, mode: None }) };
     sim.step(&[away]);
     run(&mut sim, 1650);
     for (id, at) in ids[1..].iter().zip(&want) {
