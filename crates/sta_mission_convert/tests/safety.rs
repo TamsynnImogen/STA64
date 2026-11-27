@@ -247,7 +247,7 @@ fn the_manifest_is_read_strictly() {
         format!("sta_mission_convert-manifest 1\n{hash} a.lua\n"),
         format!("sta_mission_convert-manifest 1\n{hash}  ../x.lua\n"),
         format!("sta_mission_convert-manifest 1\n{hash}  a/b.lua\n"),
-        format!("sta_mission_convert-manifest 1\nzz  a.lua\n"),
+        "sta_mission_convert-manifest 1\nzz  a.lua\n".to_owned(),
     ] {
         touch(&out.join(MANIFEST), bad.as_bytes());
         let e = OutDir::inspect(&out, out.clone(), true).unwrap_err();
