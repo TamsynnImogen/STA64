@@ -17,9 +17,23 @@
 //! Assumption shared by the string helpers: the strings come from `latin1` decoding, so every
 //! char is at most U+00FF. Behaviour beyond that is documented per function and not relied on.
 //!
+//! NaN: Python tells two NaN objects apart (a NaN equals itself only as the same object), so a
+//! tree holding two NaN constants from separate reads keeps both where this port, which cannot
+//! see object identity, merges a NaN with any NaN of the same bits (`Eq` is what `simplify`'s
+//! `y not in items` and the state merge need). The gated parity test of the converters is the
+//! guard for NaN float constants. Python 3.14 also keeps a signalling NaN's payload through
+//! `struct.unpack('<f')` where Rust's `f64::from(f32)` quiets it; only equality sees the bits,
+//! the text of a NaN is `nan` / `(0/0)` either way.
+//!
 //! Errors: where Python raises a raw exception (`TypeError`, `IndexError`, `KeyError`,
-//! `ValueError`, `ZeroDivisionError`) these functions return a [`DecodeError::raw`] with the
-//! text Python gives, so a caller that ports "this aborts the run" propagates it with `?`.
+//! `ValueError`, `ZeroDivisionError`) these functions return a [`DecodeError::python`] with the
+//! exception's class name and the text CPython 3.14 gives (`ZeroDivisionError: division by zero`;
+//! older Pythons say `integer division or modulo by zero`). The Armada I converter writes
+//! `{class}: {text}` into the Lua of a function whose rendering raised, so those texts are
+//! compared with the real Python in `tests/core.rs` (table `RAW_TEXT`). Left approximate, because
+//! no path of the tools can put them into output: the `i64` overflow cases (Python has big ints,
+//! here STA64 errors with class `None`), indexing a `str`, and the unpacking of a string. A
+//! caller that ports "this aborts the run" propagates the error with `?`.
 
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
@@ -116,8 +130,19 @@ enum Num {
     F(f64),
 }
 
+/// A fault of STA64's own with no Python counterpart text (see the module docs).
 fn raw(msg: impl Into<String>) -> DecodeError {
     DecodeError::raw(msg)
+}
+
+/// A Python exception: class name and the text `str(e)` gives (CPython 3.14).
+fn py(class: &'static str, msg: impl Into<String>) -> DecodeError {
+    DecodeError::python(class, msg)
+}
+
+/// `TypeError: 'X' object is not subscriptable`.
+fn not_subscriptable(v: &Py) -> DecodeError {
+    py("TypeError", format!("'{}' object is not subscriptable", v.type_name()))
 }
 
 impl Py {
@@ -189,10 +214,10 @@ impl Py {
     /// Indexing a string is not supported (the tools never do it on a tree).
     pub fn item(&self, i: usize) -> Result<&Py> {
         match self {
-            Py::Tuple(v) | Py::List(v) => v.get(i).ok_or_else(|| {
-                raw(format!("{} index out of range", self.type_name()))
-            }),
-            other => Err(raw(format!("'{}' object is not subscriptable", other.type_name()))),
+            Py::Tuple(v) | Py::List(v) => v
+                .get(i)
+                .ok_or_else(|| py("IndexError", format!("{} index out of range", self.type_name()))),
+            other => Err(not_subscriptable(other)),
         }
     }
 
@@ -203,17 +228,17 @@ impl Py {
                 if i >= 1 && i <= v.len() {
                     Ok(&v[v.len() - i])
                 } else {
-                    Err(raw(format!("{} index out of range", self.type_name())))
+                    Err(py("IndexError", format!("{} index out of range", self.type_name())))
                 }
             }
-            other => Err(raw(format!("'{}' object is not subscriptable", other.type_name()))),
+            other => Err(not_subscriptable(other)),
         }
     }
 
     /// The elements for iteration (`for y in x`): a tuple or list, else a `TypeError`.
     pub fn items(&self) -> Result<&[Py]> {
         self.as_seq()
-            .ok_or_else(|| raw(format!("'{}' object is not iterable", self.type_name())))
+            .ok_or_else(|| py("TypeError", format!("'{}' object is not iterable", self.type_name())))
     }
 
     /// `x[1:]` of a tuple (as a list of references): the generic walkers' "every element but the
@@ -224,7 +249,7 @@ impl Py {
 
     /// `len(x)` of a tuple or list; a `TypeError` otherwise.
     pub fn py_len(&self) -> Result<usize> {
-        Ok(self.items().map_err(|_| raw(format!("object of type '{}' has no len()", self.type_name())))?.len())
+        Ok(self.items().map_err(|_| py("TypeError", format!("object of type '{}' has no len()", self.type_name())))?.len())
     }
 
     /// `x[0]` as the tag string: `Ok(Some(tag))` when it is a `str`, `Ok(None)` when it is
@@ -295,7 +320,7 @@ impl Py {
                 }
                 Ok(a.len() < b.len())
             }
-            _ => Err(raw(format!(
+            _ => Err(py("TypeError", format!(
                 "'<' not supported between instances of '{}' and '{}'",
                 self.type_name(),
                 other.type_name()
@@ -337,12 +362,14 @@ fn num_cmp(a: Num, b: Num) -> Option<Ordering> {
     }
 }
 
+/// 2^63 as an f64 (exact): the floats in `[-TWO63, TWO63)` that are whole numbers are the ones
+/// equal to some `i64`; equality, ordering and hashing all use this bound.
+const TWO63: f64 = 9_223_372_036_854_775_808.0;
+
 fn int_float_cmp(i: i64, f: f64) -> Option<Ordering> {
     if f.is_nan() {
         return None;
     }
-    // 2^63 as f64 is exact.
-    const TWO63: f64 = 9_223_372_036_854_775_808.0;
     if f >= TWO63 {
         return Some(Ordering::Less);
     }
@@ -393,7 +420,7 @@ impl Hash for Py {
                 match self.num() {
                     Some(Num::I(n)) => n.hash(h),
                     Some(Num::F(x)) => {
-                        if x == x.trunc() && x.abs() < 9.2e18 {
+                        if x == x.trunc() && (-TWO63..TWO63).contains(&x) {
                             (x as i64).hash(h); // 1.0 hashes like 1, -0.0 like 0
                         } else if x.is_nan() {
                             f64::NAN.to_bits().hash(h);
@@ -495,7 +522,7 @@ pub fn first_max_key<'a, K: 'a, V: PartialOrd + 'a>(items: impl IntoIterator<Ite
 /// (`i64::MIN // -1`, which Python would answer with a bigger int) are raw errors.
 pub fn py_floordiv(a: i64, b: i64) -> Result<i64> {
     if b == 0 {
-        return Err(raw("integer division or modulo by zero"));
+        return Err(py("ZeroDivisionError", "division by zero"));
     }
     let q = a.checked_div(b).ok_or_else(|| raw("integer overflow in floor division"))?;
     let r = a % b; // cannot overflow: b != -1 here or a != MIN
@@ -505,7 +532,7 @@ pub fn py_floordiv(a: i64, b: i64) -> Result<i64> {
 /// Python's `a % b` for ints: the result has the sign of `b` (`-5 % 4 == 3`).
 pub fn py_mod(a: i64, b: i64) -> Result<i64> {
     if b == 0 {
-        return Err(raw("integer division or modulo by zero"));
+        return Err(py("ZeroDivisionError", "division by zero"));
     }
     let r = a.checked_rem(b).unwrap_or(0); // MIN % -1 is 0
     Ok(if r != 0 && ((r < 0) != (b < 0)) { r + b } else { r })
@@ -517,7 +544,11 @@ pub fn py_mod(a: i64, b: i64) -> Result<i64> {
 /// inputs, matched by `[0-9a-f]` regexes, never contain). Failure is a `ValueError` as a raw
 /// error with Python's text; a value beyond `i64` is a raw error too.
 pub fn py_int(s: &str, base: u32) -> Result<i64> {
-    let bad = || raw(format!("invalid literal for int() with base {base}: {}", py_str_repr(s)));
+    // Python's message cuts the `repr` of the text to 200 chars (`%.200R`)
+    let bad = || {
+        let r: String = py_str_repr(s).chars().take(200).collect();
+        py("ValueError", format!("invalid literal for int() with base {base}: {r}"))
+    };
     // int() strips whitespace, but not U+001C to U+001F (`str.strip()` does)
     let t = s.trim_matches(|c| py_isspace(c) && !(28..=31).contains(&(c as u32)));
     let (neg, rest) = match t.strip_prefix('-') {
@@ -626,6 +657,31 @@ pub fn py_slice(s: &[char], start: usize, end: usize) -> String {
 
 // ------------------------------------------------------------------ dicts
 
+/// A dict key that can print its Python `repr` (the text of a `KeyError`).
+pub trait PyKey {
+    fn py_repr(&self) -> String;
+}
+impl PyKey for Py {
+    fn py_repr(&self) -> String {
+        self.repr()
+    }
+}
+impl PyKey for String {
+    fn py_repr(&self) -> String {
+        py_str_repr(self)
+    }
+}
+impl PyKey for &str {
+    fn py_repr(&self) -> String {
+        py_str_repr(self)
+    }
+}
+impl PyKey for i64 {
+    fn py_repr(&self) -> String {
+        self.to_string()
+    }
+}
+
 /// The dict operations whose Python meaning differs from `IndexMap`'s defaults. A Python dict
 /// keeps insertion order; assigning to an existing key keeps its place (`IndexMap::insert` does
 /// the same); `del` followed by a new insert moves the key to the end, so deletion must be
@@ -634,7 +690,7 @@ pub trait PyDict<K, V> {
     /// `del d[k]`: `KeyError` as a raw error when absent.
     fn py_del(&mut self, k: &K) -> Result<V>
     where
-        K: std::fmt::Debug;
+        K: PyKey;
     /// `d.setdefault(k, v)`: the stored value, inserting `v` at the end when absent.
     fn py_setdefault(&mut self, k: K, v: V) -> &mut V;
     /// `d.pop(k, None)`.
@@ -644,9 +700,9 @@ pub trait PyDict<K, V> {
 impl<K: Hash + Eq, V> PyDict<K, V> for IndexMap<K, V> {
     fn py_del(&mut self, k: &K) -> Result<V>
     where
-        K: std::fmt::Debug,
+        K: PyKey,
     {
-        self.shift_remove(k).ok_or_else(|| raw(format!("{k:?}")))
+        self.shift_remove(k).ok_or_else(|| py("KeyError", k.py_repr()))
     }
     fn py_setdefault(&mut self, k: K, v: V) -> &mut V {
         self.entry(k).or_insert(v)
