@@ -715,7 +715,7 @@ pub struct GroupCfg {
     /// `DEFAULT_TO_FORMATION_MOVE` (Armada I): the default move mode, true for
     /// the formation move (G4). The first spelling wins when a header has both.
     pub default_to_formation_move: Option<bool>,
-    /// `FORMATIONS_RELATIVE_TO_SHIP`: only Armada I's header has it (G8).
+    /// `FORMATIONS_RELATIVE_TO_SHIP`: read by the Armada I rules only (G8).
     pub formations_relative_to_ship: Option<bool>,
 }
 
@@ -761,11 +761,14 @@ impl GroupCfg {
 /// profile: the header's keys ([`GroupCfg`]) over the profile's defaults, and
 /// the constants the executables carry, which no header sets.
 ///
-/// Evidence of the defaults: the key defaults are the values each game's own
-/// header carries (read from data); what the engine does for an absent key
-/// was not read, so they are INTERIM. The constants are the ones ADR 0011
-/// names (read from the executable, static; not measured) and are the same
-/// for every profile until TOOL-26 and TOOL-27 say otherwise.
+/// Evidence of the defaults: the leader slowdown and default move mode per
+/// profile are the values ADR 0011 G4 and G7 name (read from data). The spacing
+/// default is needed so that formation files can be scaled when a header sets
+/// no spacing; its number was read from data while building CON-59, not from
+/// the ADR. What the engine does for an absent key was not read, so all key
+/// defaults are INTERIM. The constants are the ones ADR 0011 names (read from
+/// the executable, static; not measured) and are the same for every profile
+/// until TOOL-26 and TOOL-27 say otherwise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GroupRules {
     /// `FORMATION_SPACING`, world units.
@@ -797,12 +800,13 @@ pub struct GroupRules {
 }
 
 impl GroupRules {
-    /// The defaults of `profile`: the keys' stock values (INTERIM, see the
-    /// type) and the executables' constants. Native takes the Armada II
-    /// family's, as STA64's own rules start from them.
+    /// The defaults of `profile`: the key defaults (INTERIM, see the type) and
+    /// the executables' constants. Native takes the Armada II family's, as
+    /// STA64's own rules start from them.
     pub fn defaults(profile: crate::Profile) -> GroupRules {
         use crate::Profile::{Fo3, Sta1Classic};
         GroupRules {
+            // INTERIM, read from data (see the type); not a measured rule.
             formation_spacing: Fixed::from_int(100),
             leader_slowdown: if profile == Sta1Classic { Fixed::from_f64(0.9f32 as f64) } else { Fixed::ONE },
             default_to_formation_move: !matches!(profile, Fo3 | Sta1Classic),
@@ -1550,7 +1554,7 @@ mod group_tests {
         // The same header under Fleet Operations 3.2.7 differs in other keys: values, not presence.
         let fo3 = digest(&rules, Profile::Fo3);
         assert_eq!(fo3.get("RTS_CFG.h:cfgDEFAULT_TO_FORMATION_MOVE"), None);
-        assert_eq!(rules.group_digest_entries(Profile::Sta1Classic).len(), 2, "spacing and slowdown (0.9 is Armada I's, 1.0 is not); the mode equals its default");
+        assert_eq!(rules.group_digest_entries(Profile::Sta1Classic).len(), 2, "spacing and slowdown differ from the profile defaults; the mode equals its default");
     }
 
     #[test]

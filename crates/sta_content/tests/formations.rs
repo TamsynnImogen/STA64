@@ -61,6 +61,24 @@ fn the_mounted_formation_files_load_with_no_warning_and_enter_the_digest() {
     assert_ne!(none.hash(), db.hash());
 }
 
+/// The steward's ledger question: content without formations and with no group
+/// key off its profile default keeps the digest it had before CON-59.
+#[test]
+fn content_without_formations_keeps_its_digest() {
+    // The value every earlier package pins for the plain fake.
+    assert_eq!(sta_content::fake::db().hash(), 0x9ef5_3881_3050_10f8);
+    for profile in [Profile::Native, Profile::Sta2Classic, Profile::Fo4, Profile::Fo3, Profile::Sta1Classic] {
+        let tree = Tree::new("nodigest");
+        tree.write("RTS_CFG.h", "int UNRELATED = 1;\n");
+        let (db, _) = tree.load(profile);
+        assert!(db.formations().is_empty());
+        assert!(
+            db.digest().entries().iter().all(|e| !e.key.starts_with("formation:") && !e.key.contains("FORMATION")),
+            "{profile:?}: no formation or group entry"
+        );
+    }
+}
+
 #[test]
 fn armada_i_reads_no_formation_files() {
     let tree = Tree::new("a1");
