@@ -45,7 +45,7 @@ pub fn reg8(x: &str) -> Option<&'static str> {
 }
 
 /// `JCC` of `dsl_to_lua.py`: the comparison a conditional jump of the mission lifter tests
-/// (the larger table; the rule decoder's is [`crate::algebra::jcc_op`]).
+/// (the larger table; the rule decoder's small one lives in `algebra`).
 pub fn jcc(mn: &str) -> Option<&'static str> {
     Some(match mn {
         "je" => "==",

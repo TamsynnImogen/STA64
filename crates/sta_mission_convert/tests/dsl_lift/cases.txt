@@ -1,0 +1,1917 @@
+# Authored cases for the LUA-15d lifter-core tests. Everything here is invented: no game
+# bytes, names or values. Format: see the header of gen_pairs.py. `!p` / `!e` inside a code
+# block stand for a debug-build prologue / epilogue (the macros of both parsers), `stdexports`
+# for the standard exported data of the cases (a handle block in .bss).
+#
+# Standard exports (stdexports): 0x10002800 ScriptInterface handle, +4 character handle, +8 a hot_int
+# variable, +c a hot_float variable, +10 int, +14 float, +18 int array (16 bytes), +28 float array
+# (16 bytes), +38 Vector3, +44 bool (int).
+
+case construct
+std
+stdexports
+export ?ScriptInit@@YAXXZ 0x10001000
+export ?DoAction@@YAXXZ 0x10001100
+code 0x10001000
+  jmp    @f1
+  jmp    @f2
+  int3
+  int3
+  @f1:
+  push   ebp
+  mov    ebp,esp
+  mov    eax,0x1
+  pop    ebp
+  ret
+  int3
+  @f2:
+  push   ebp
+  mov    ebp,esp
+  pop    ebp
+  ret
+code 0x10001100
+  push   ebp
+  mov    ebp,esp
+  pop    ebp
+  ret
+run dsl
+run entry 0x10001000
+run entry 0x10001002
+run entry 0x10001ff0
+run global_at 0x10002800
+run global_at 0x10002818
+run global_at 0x1000281c
+run global_at 0x10002838
+run global_at 0x1000283c
+run global_at 0x10002840
+run global_at 0x10002844
+run global_at 0x10002848
+run global_at 0x10002819
+run dword 0x10002800
+run dword 0x10003ffe
+run dword 0x20000000
+run dword 0x0
+end
+
+case construct_chkesp
+std
+code 0x10001000
+  push   ebp
+  mov    ebp,esp
+  cmp    esi,esp
+  call   0x10001200
+  cmp    esi,esp
+  call   0x10001300
+  cmp    edi,esp
+  call   0x10001300
+  cmp    ebp,esp
+  call   0x10001300
+  cmp    eax,esp
+  call   0x10001400
+  ret
+code 0x10001200
+  ret
+code 0x10001300
+  ret
+code 0x10001400
+  ret
+run dsl
+end
+
+case construct_chkesp_tie
+std
+code 0x10001000
+  cmp    esi,esp
+  call   0x10001200
+  cmp    esi,esp
+  call   0x10001300
+  ret
+code 0x10001200
+  ret
+code 0x10001300
+  ret
+run dsl
+end
+
+case construct_error_export
+std
+export ?Missing@@YAXXZ 0x10001ff0
+code 0x10001000
+  ret
+run dsl
+end
+
+case return_values
+std
+stdexports
+code 0x10001000
+  !p
+  mov    eax,0x5
+  !e
+code 0x10001100
+  push   ebp
+  mov    ebp,esp
+  mov    eax,DWORD PTR [ebp+0x8]
+  pop    ebp
+  ret    0x4
+code 0x10001200
+  push   ebp
+  mov    ebp,esp
+  pop    ebp
+  ret
+code 0x10001300
+  push   ebp
+  mov    ebp,esp
+  pop    eax
+  ret
+run lift 0x10001000
+run blocks 0x10001000
+run lift 0x10001100
+run lift 0x10001200
+run lift 0x10001300
+end
+
+case push_pop
+std
+stdexports
+code 0x10001000
+  !p
+  mov    eax,DWORD PTR [ebp+0x8]
+  push   eax
+  push   0x7
+  push   ebx
+  pop    edx
+  pop    ecx
+  add    esp,0x4
+  push   ecx
+  add    esp,0x10
+  push   0x1
+  sub    esp,0xc
+  mov    ecx,esp
+  mov    DWORD PTR [ecx],0x3f800000
+  mov    DWORD PTR [esp],0x2
+  mov    DWORD PTR [esp+0x4],0x3
+  add    esp,0xc
+  add    esp,0x4
+  !e
+code 0x10001200
+  !p
+  push   0x1
+  push   0x2
+  add    esp,0x4
+  pop    ecx
+  pop    ebx
+  push   ecx
+  add    esp,0x0
+  add    esp,0x4
+  !e
+code 0x10001300
+  push   ebp
+  mov    ebp,esp
+  sub    esp,0x8
+  push   ebx
+  push   esi
+  push   edi
+  mov    eax,0x1
+  push   esi
+  pop    esi
+  pop    edi
+  pop    esi
+  pop    ebx
+  mov    esp,ebp
+  pop    ebp
+  ret
+run lift 0x10001000
+run lift 0x10001200
+run lift 0x10001300
+end
+
+case sub_esp_errors
+std
+code 0x10001000
+  !p
+  sub    esp,0x6
+  ret
+code 0x10001100
+  !p
+  sub    esp,0x0
+  add    esp,0x0
+  !e
+code 0x10001200
+  !p
+  rep movs DWORD PTR es:[edi],DWORD PTR ds:[esi]
+  ret
+run lift 0x10001000
+run lift 0x10001100
+run lift 0x10001200
+end
+
+case moves
+std
+stdexports
+code 0x10001000
+  !p
+  mov    eax,DWORD PTR [ebp-0x8]
+  mov    DWORD PTR [ebp-0xc],eax
+  mov    ecx,DWORD PTR [ebp+0x10]
+  mov    DWORD PTR [ebp+0xc],ecx
+  mov    al,BYTE PTR [ebp-0x1]
+  mov    BYTE PTR [ebp-0x2],cl
+  mov    dl,0x5
+  mov    bl,al
+  mov    ebp,esp
+  mov    esp,ebp
+  mov    esi,esp
+  mov    edi,esp
+  mov    ebx,esp
+  movzx  eax,BYTE PTR [ebp-0x1]
+  movsx  ecx,WORD PTR [ebp-0x4]
+  movsx  edx,al
+  mov    eax,ds:0x10002810
+  mov    DWORD PTR ds:0x10002810,0x9
+  mov    eax,DWORD PTR ds:0x10002814
+  mov    eax,0xffffffff
+  mov    ecx,-0x5
+  mov    edx,12
+  mov    eax,eax
+  !e
+code 0x10001200
+  !p
+  mov    eax,fs:0x0
+  push   ebp
+  push   eax
+  mov    DWORD PTR fs:0x0,esp
+  mov    ecx,DWORD PTR [ebp-0xc]
+  mov    DWORD PTR fs:0x0,ecx
+  !e
+run lift 0x10001000
+run lift 0x10001200
+end
+
+case locals_snap
+std
+stdexports
+code 0x10001000
+  !p
+  mov    eax,DWORD PTR [ebp-0x4]
+  mov    ecx,DWORD PTR [ebp-0x8]
+  mov    DWORD PTR [ebp-0x4],ecx
+  mov    DWORD PTR [ebp-0x8],eax
+  mov    edx,DWORD PTR [ebp-0x4]
+  add    edx,0x1
+  mov    DWORD PTR [ebp-0x4],edx
+  mov    eax,DWORD PTR [ebp-0x4]
+  mov    DWORD PTR [ebp-0xc],0x5
+  mov    DWORD PTR [ebp-0x10],0x7
+  mov    eax,DWORD PTR [ebp-0xc]
+  add    eax,DWORD PTR [ebp-0x10]
+  mov    DWORD PTR [ebp-0xc],eax
+  mov    ecx,DWORD PTR [ebp+0x8]
+  mov    DWORD PTR [ebp+0x8],0x2
+  mov    edx,DWORD PTR [ebp+0x8]
+  !e
+code 0x10001200
+  !p
+  lea    eax,[ebp-0x14]
+  mov    DWORD PTR [ebp-0x14],0x1
+  mov    ecx,DWORD PTR [ebp-0x14]
+  mov    DWORD PTR [ebp-0x14],0x2
+  mov    edx,DWORD PTR [eax]
+  mov    DWORD PTR [eax+0x4],0x3
+  mov    DWORD PTR [ebp-0x10],0x4
+  mov    esi,DWORD PTR [eax+0x4]
+  !e
+code 0x10001300
+  !p
+  mov    eax,DWORD PTR [ebp-0x4]
+  mov    ecx,DWORD PTR [ebp-0x8]
+  mov    DWORD PTR [ebp-0x8],ecx
+  mov    edx,DWORD PTR [ebp+eax*4-0x20]
+  mov    DWORD PTR [ebp+ecx*4-0x20],edx
+  mov    eax,DWORD PTR [ebp-0x4]
+  !e
+run lift 0x10001000
+run lift 0x10001200
+run lift 0x10001300
+end
+
+case branches_all
+std
+code 0x10001000
+  !p
+  mov    eax,DWORD PTR [ebp-0x4]
+  cmp    eax,0x1
+  je     @b1
+  cmp    eax,0x2
+  jne    @b1
+  cmp    eax,0x3
+  jl     @b1
+  cmp    eax,0x4
+  jge    @b1
+  cmp    eax,0x5
+  jle    @b1
+  cmp    eax,0x6
+  jg     @b1
+  cmp    eax,0x7
+  jb     @b1
+  cmp    eax,0x8
+  jae    @b1
+  cmp    eax,0x9
+  jbe    @b1
+  cmp    eax,0xa
+  ja     @b1
+  cmp    eax,0xb
+  js     @b1
+  cmp    eax,0xc
+  jns    @b1
+  @b1:
+  !e
+code 0x10001400
+  !p
+  mov    eax,DWORD PTR [ebp-0x4]
+  test   eax,eax
+  je     @t1
+  test   eax,eax
+  jne    @t1
+  test   eax,eax
+  js     @t1
+  test   eax,eax
+  jns    @t1
+  test   eax,eax
+  jl     @t1
+  test   eax,eax
+  jge    @t1
+  test   eax,eax
+  jle    @t1
+  test   eax,eax
+  jg     @t1
+  test   eax,eax
+  ja     @t1
+  test   eax,eax
+  jbe    @t1
+  test   eax,eax
+  jb     @t1
+  test   eax,eax
+  jae    @t1
+  @t1:
+  !e
+run lift 0x10001000
+run lift 0x10001400
+end
+
+case if_else_loop
+std
+stdexports
+code 0x10001000
+  !p
+  mov    DWORD PTR [ebp-0x4],0x0
+  jmp    @cond
+  @body:
+  mov    eax,DWORD PTR [ebp-0x4]
+  add    eax,0x1
+  mov    DWORD PTR [ebp-0x4],eax
+  @cond:
+  cmp    DWORD PTR [ebp-0x4],0xa
+  jl     @body
+  cmp    DWORD PTR [ebp-0x4],0x5
+  jne    @else
+  mov    DWORD PTR [ebp-0x8],0x1
+  jmp    @join
+  @else:
+  mov    DWORD PTR [ebp-0x8],0x2
+  @join:
+  mov    eax,DWORD PTR [ebp-0x8]
+  !e
+code 0x10001300
+  !p
+  mov    eax,DWORD PTR [ebp+0x8]
+  cmp    eax,0x0
+  jne    @a
+  xor    eax,eax
+  jmp    @out
+  @a:
+  mov    eax,0x1
+  @out:
+  !e
+run lift 0x10001000
+run blocks 0x10001000
+run lift 0x10001300
+end
+
+case cross_block_regs
+std
+stdexports
+code 0x10001000
+  !p
+  mov    esi,DWORD PTR [ebp+0x8]
+  mov    edi,DWORD PTR [ebp+0xc]
+  cmp    esi,0x0
+  je     @skip
+  mov    eax,edi
+  mov    edi,esi
+  mov    esi,eax
+  @skip:
+  cmp    esi,edi
+  jne    @end
+  add    esi,0x1
+  @end:
+  mov    eax,esi
+  !e
+code 0x10001300
+  !p
+  mov    ebx,DWORD PTR [ebp+0x8]
+  cmp    ebx,0x1
+  jne    @x
+  mov    ebx,0x7
+  jmp    @y
+  @x:
+  mov    ebx,0x9
+  @y:
+  mov    ecx,ebx
+  cmp    ecx,0x2
+  je     @z
+  @z:
+  mov    eax,ecx
+  !e
+code 0x10001400
+  !p
+  mov    esi,DWORD PTR [ebp+0x8]
+  mov    edi,DWORD PTR [ebp+0xc]
+  mov    ebx,esi
+  mov    esi,edi
+  mov    edi,ebx
+  cmp    esi,edi
+  jl     @q
+  @q:
+  mov    eax,esi
+  add    eax,edi
+  !e
+run lift 0x10001000
+run lift 0x10001300
+run lift 0x10001400
+end
+
+case setcc_forms
+std
+code 0x10001000
+  !p
+  mov    eax,DWORD PTR [ebp-0x4]
+  cmp    eax,DWORD PTR [ebp-0x8]
+  sete   al
+  mov    DWORD PTR [ebp-0xc],eax
+  cmp    eax,0x3
+  setne  cl
+  cmp    eax,0x3
+  setl   dl
+  cmp    eax,0x3
+  setge  al
+  cmp    eax,0x3
+  setle  al
+  cmp    eax,0x3
+  setg   al
+  cmp    eax,0x3
+  setb   al
+  cmp    eax,0x3
+  setae  al
+  cmp    eax,0x3
+  setbe  al
+  cmp    eax,0x3
+  seta   al
+  test   eax,eax
+  sete   al
+  !e
+code 0x10001200
+  !p
+  sete   al
+  ret
+code 0x10001300
+  !p
+  cmp    eax,0x1
+  sete   bl
+  ret
+code 0x10001400
+  !p
+  cmp    eax,0x1
+  sete   ah
+  mov    eax,eax
+  !e
+run lift 0x10001000
+run lift 0x10001200
+run lift 0x10001300
+run lift 0x10001400
+end
+
+case test_forms
+std
+code 0x10001000
+  !p
+  mov    eax,DWORD PTR [ebp-0x4]
+  test   al,al
+  test   eax,al
+  test   eax,0x10
+  test   al,0x1
+  test   DWORD PTR [ebp-0x4],0x10
+  !e
+code 0x10001200
+  !p
+  test   ecx,edx
+  ret
+code 0x10001300
+  !p
+  test   ah,0x41
+  ret
+code 0x10001400
+  !p
+  test   eax,0xzz
+  ret
+code 0x10001500
+  !p
+  test   eax,0x5
+  jne    @q
+  test   eax,eax
+  jbe    @q
+  jb     @q
+  @q:
+  !e
+run lift 0x10001000
+run lift 0x10001200
+run lift 0x10001300
+run lift 0x10001400
+run lift 0x10001500
+end
+
+case arith_forms
+std
+stdexports
+code 0x10001000
+  !p
+  mov    eax,DWORD PTR [ebp-0x4]
+  xor    ecx,ecx
+  and    eax,0xff
+  and    eax,0xf0
+  or     eax,0x1
+  xor    eax,DWORD PTR [ebp-0x8]
+  add    eax,0x4
+  sub    eax,0x8
+  imul   eax,DWORD PTR [ebp-0xc]
+  imul   edx,eax,0x6
+  shl    eax,0x2
+  sar    eax,1
+  sar    eax,0x3
+  shr    eax,0x4
+  inc    eax
+  dec    ecx
+  neg    edx
+  not    eax
+  inc    DWORD PTR [ebp-0x10]
+  dec    DWORD PTR [ebp-0x10]
+  neg    DWORD PTR [ebp-0x10]
+  not    DWORD PTR [ebp-0x10]
+  add    DWORD PTR [ebp-0x14],0x2
+  sub    DWORD PTR [ebp-0x14],eax
+  xor    DWORD PTR [ebp-0x18],0x5
+  sub    eax,eax
+  sbb    eax,eax
+  neg    ecx
+  sbb    ecx,ecx
+  cmp    eax,0x0
+  sbb    edx,edx
+  sbb    edx,0x0
+  !e
+code 0x10001300
+  !p
+  adc    eax,0x1
+  ret
+code 0x10001400
+  !p
+  mov    eax,DWORD PTR [ebp-0x4]
+  cdq
+  idiv   DWORD PTR [ebp-0x8]
+  mov    ecx,0x3
+  cdq
+  idiv   ecx
+  div    ecx
+  imul   eax,ecx
+  !e
+code 0x10001500
+  !p
+  cdq
+  mov    eax,0x0
+  !e
+code 0x10001600
+  !p
+  mov    eax,DWORD PTR [ebp-0x4]
+  or     DWORD PTR ds:0x10002810,eax
+  add    DWORD PTR ds:0x10002814,eax
+  and    DWORD PTR [ebp-0x1c],eax
+  !e
+code 0x10001700
+  !p
+  and    esp,0xfffffff8
+  ret
+code 0x10001800
+  !p
+  and    DWORD PTR [esp],eax
+  ret
+run lift 0x10001000
+run lift 0x10001300
+run lift 0x10001400
+run lift 0x10001500
+run lift 0x10001600
+run lift 0x10001700
+run lift 0x10001800
+end
+
+case switch_plain
+std
+dwords 0x10002010 @c0 @c1 @c2 @c3
+code 0x10001000
+  !p
+  mov    eax,DWORD PTR [ebp+0x8]
+  mov    DWORD PTR [ebp-0x4],eax
+  cmp    DWORD PTR [ebp-0x4],0x3
+  ja     @dflt
+  mov    ecx,DWORD PTR [ebp-0x4]
+  jmp    DWORD PTR [ecx*4+0x10002010]
+  @c0:
+  mov    eax,0x10
+  jmp    @end
+  @c1:
+  mov    eax,0x11
+  jmp    @end
+  @c2:
+  mov    eax,0x12
+  jmp    @end
+  @c3:
+  mov    eax,0x13
+  jmp    @end
+  @dflt:
+  mov    eax,0x0
+  @end:
+  !e
+run blocks 0x10001000
+run lift 0x10001000
+end
+
+case switch_two_level
+std
+dwords 0x10002020 @c0 @c1
+put 0x10002100 00 01 01 00 01
+code 0x10001000
+  !p
+  mov    eax,DWORD PTR [ebp+0x8]
+  cmp    eax,0x4
+  ja     @dflt
+  xor    ecx,ecx
+  mov    cl,BYTE PTR [eax+0x10002100]
+  jmp    DWORD PTR [ecx*4+0x10002020]
+  @c0:
+  mov    eax,0x20
+  jmp    @end
+  @c1:
+  mov    eax,0x21
+  jmp    @end
+  @dflt:
+  mov    eax,0x0
+  @end:
+  !e
+run blocks 0x10001000
+run lift 0x10001000
+end
+
+case switch_errors
+std
+dwords 0x10002010 0x10001000 0x10001000
+code 0x10001000
+  !p
+  mov    eax,DWORD PTR [ebp+0x8]
+  jmp    DWORD PTR [eax*4+0x10002010]
+code 0x10001200
+  !p
+  mov    eax,DWORD PTR [ebp+0x8]
+  cmp    eax,0x101
+  ja     @d
+  jmp    DWORD PTR [eax*4+0x10002010]
+  @d:
+  ret
+code 0x10001300
+  !p
+  mov    eax,DWORD PTR [ebp+0x8]
+  cmp    eax,0x2
+  ja     @d
+  jmp    DWORD PTR [eax*4+0x30000000]
+  @d:
+  ret
+code 0x10001400
+  !p
+  jmp    eax
+code 0x10001500
+  !p
+  jmp    0x10009000
+code 0x10001600
+  !p
+  mov    eax,0x1
+code 0x10001700
+  !p
+  cmp    eax,0x2
+  ja     @d
+  xor    ecx,ecx
+  mov    cl,BYTE PTR [eax+0x30000000]
+  jmp    DWORD PTR [ecx*4+0x10002010]
+  @d:
+  ret
+code 0x10001800
+  !p
+  cmp    eax,0x1
+  jne    @d
+  @d:
+run blocks 0x10001000
+run blocks 0x10001200
+run blocks 0x10001300
+run blocks 0x10001400
+run blocks 0x10001500
+run blocks 0x10001600
+run blocks 0x10001700
+run lift 0x10001000
+run lift 0x10001400
+run lift 0x10001500
+run lift 0x10001600
+end
+
+case globals
+std
+stdexports
+code 0x10001000
+  !p
+  mov    eax,DWORD PTR ds:0x10002810
+  mov    ecx,DWORD PTR ds:0x10002814
+  mov    edx,DWORD PTR ds:0x10002818
+  mov    ebx,DWORD PTR ds:0x1000281c
+  mov    esi,DWORD PTR ds:0x10002828
+  mov    edi,DWORD PTR ds:0x10002830
+  mov    eax,DWORD PTR ds:0x10002838
+  mov    eax,DWORD PTR ds:0x1000283c
+  mov    eax,DWORD PTR ds:0x10002844
+  mov    eax,DWORD PTR [ecx*4+0x10002818]
+  mov    eax,DWORD PTR [edx*4+0x1000281c]
+  mov    DWORD PTR [ecx*4+0x10002818],eax
+  mov    DWORD PTR ds:0x10002810,eax
+  mov    DWORD PTR ds:0x10002814,0x3f800000
+  mov    DWORD PTR ds:0x10002838,0x3f800000
+  mov    DWORD PTR ds:0x10002830,0x40000000
+  mov    DWORD PTR ds:0x10002828,0x40000000
+  mov    eax,DWORD PTR ds:0x10002810
+  !e
+code 0x10001200
+  !p
+  mov    eax,DWORD PTR ds:0x10002800
+  mov    ecx,DWORD PTR [eax]
+  mov    edx,DWORD PTR [ecx+0x18]
+  mov    DWORD PTR ds:0x10002800,eax
+  mov    DWORD PTR ds:0x10002804,eax
+  mov    DWORD PTR ds:0x10002808,eax
+  mov    DWORD PTR ds:0x1000280c,eax
+  !e
+code 0x10001300
+  !p
+  mov    eax,DWORD PTR ds:0x10002808
+  mov    ecx,DWORD PTR [eax]
+  mov    edx,DWORD PTR [ecx+0x20]
+  mov    esi,DWORD PTR ds:0x10002804
+  mov    edi,DWORD PTR [esi]
+  mov    eax,DWORD PTR [edi+0x4]
+  !e
+code 0x10001b00
+  !p
+  mov    esi,DWORD PTR ds:0x10002804
+  mov    eax,DWORD PTR [esi+0x4]
+  !e
+code 0x10001400
+  !p
+  mov    eax,DWORD PTR ds:0x10001000
+  ret
+code 0x10001500
+  !p
+  mov    eax,DWORD PTR ds:0x40000000
+  mov    eax,DWORD PTR ds:0x10001000
+  ret
+code 0x10001600
+  !p
+  mov    eax,DWORD PTR [ebp+ecx*4-0x20]
+  mov    ebx,DWORD PTR [ebp+ecx*4+0x4]
+  mov    DWORD PTR [ebp+ecx*4-0x20],0x1
+  mov    eax,DWORD PTR [ebp-0x20]
+  !e
+code 0x10001700
+  !p
+  mov    eax,DWORD PTR [ecx+edx*4]
+  ret
+code 0x10001800
+  !p
+  mov    eax,WORD PTR [esi+edi*2]
+  ret
+code 0x10001900
+  !p
+  mov    eax,DWORD PTR [esi*4+0x10002810]
+  ret
+code 0x10001a00
+  !p
+  mov    eax,DWORD PTR [esi*4+0x1000280c]
+  ret
+run lift 0x10001000
+run lift 0x10001200
+run lift 0x10001300
+run lift 0x10001400
+run lift 0x10001500
+run lift 0x10001600
+run lift 0x10001700
+run lift 0x10001800
+run lift 0x10001900
+run lift 0x10001a00
+run lift 0x10001b00
+end
+
+case statics
+std
+stdexports
+dwords 0x10002000 0x10002100 0x7 0xfffffffe 0x10001000 0x10002800 0x10002410
+cstr 0x10002100 a_label
+cstr 0x10002120 line1\nline2
+cstr 0x10002140 has,comma
+dwords 0x10002400 0x5 0x6 0x7 0x8
+dwords 0x10002900 0x1 0x2 0x3
+put 0x10002160 e9 74 00
+code 0x10001000
+  !p
+  mov    eax,DWORD PTR ds:0x10002000
+  mov    ecx,DWORD PTR ds:0x10002004
+  mov    edx,DWORD PTR ds:0x10002008
+  mov    ebx,DWORD PTR ds:0x1000200c
+  mov    esi,DWORD PTR ds:0x10002010
+  mov    edi,DWORD PTR ds:0x10002014
+  mov    eax,DWORD PTR ds:0x10002400
+  mov    ecx,DWORD PTR ds:0x10002404
+  mov    DWORD PTR ds:0x10002404,eax
+  mov    edx,DWORD PTR ds:0x10002404
+  mov    eax,DWORD PTR ds:0x10002408
+  lea    ecx,ds:0x1000240c
+  mov    eax,DWORD PTR ds:0x1000240c
+  push   0x10002100
+  push   0x10002120
+  push   0x10002140
+  push   0x10002160
+  push   0x10002020
+  push   0x10002400
+  push   0x10002900
+  push   0x10001000
+  push   0x10002818
+  push   0x1000281c
+  push   0x10002800
+  push   0x1000283c
+  push   0x1000
+  push   0x80000000
+  push   0xffffffff
+  add    esp,0x3c
+  mov    eax,DWORD PTR ds:0x10002900
+  mov    DWORD PTR ds:0x10002900,eax
+  !e
+run lift 0x10001000
+run static 0x10002000
+run static 0x10002400
+run static 0x10002404
+run static 0x10002408
+run static 0x1000240c
+run static 0x10002900
+run statics
+end
+
+case dimm
+std
+stdexports
+cstr 0x10002100 a_label
+cstr 0x10002120 line1\nline2
+put 0x10002140 61 80 62 00
+put 0x10002150 00
+cstr 0x10002160
+code 0x10001000
+  ret
+run dimm 0x10002100
+run dimm 0x10002120
+run dimm 0x10002140
+run dimm 0x10002150
+run dimm 0x10002160
+run dimm 0x10002800
+run dimm 0x10002818
+run dimm 0x1000281c
+run dimm 0x10002810
+run dimm 0x10002000
+run dimm 0x10001000
+run dimm 0x5
+run dimm 0x7fffffff
+run dimm 0x80000000
+run dimm 0xffffffff
+run dimm 0x20000000
+run dimm 0x10003f00
+run dimm 0x100000000
+end
+
+case unterminated
+base 0x10000000
+size 0x90
+section .text 0x0 0x80
+section .rdata 0x80 0x10
+put 0x10000080 41 42 43 44 45 46 47 48 41 42 43 44 45 46 47 48
+code 0x10000010
+  push   0x10000080
+  ret
+run lift 0x10000010
+end
+
+case calls_model
+std
+stdexports
+code 0x10001000
+  !p
+  mov    esi,esp
+  push   0x1
+  push   0x2
+  call   0x10001100
+  add    esp,0x8
+  cmp    esi,esp
+  call   0x10001900
+  mov    ecx,eax
+  mov    DWORD PTR [ebp-0x4],eax
+  mov    esi,esp
+  call   0x10001100
+  mov    edx,eax
+  !e
+code 0x10001100
+  ret
+code 0x10001200
+  !p
+  mov    eax,DWORD PTR ds:0x10002800
+  mov    ecx,DWORD PTR [eax]
+  push   0x5
+  mov    edx,DWORD PTR [ecx+0x10]
+  call   edx
+  mov    esi,esp
+  mov    DWORD PTR [ebp-0x8],eax
+  mov    eax,DWORD PTR [ebp-0x8]
+  !e
+code 0x10001300
+  !p
+  mov    eax,DWORD PTR [ebp-0x4]
+  lea    ecx,[ebp-0x10]
+  push   ecx
+  call   0x10001100
+  add    esp,0x4
+  mov    edx,DWORD PTR [ebp-0x10]
+  mov    DWORD PTR ds:0x10002810,eax
+  call   0x10001100
+  add    esp,0x0
+  mov    eax,DWORD PTR ds:0x10002810
+  !e
+code 0x10001400
+  !p
+  mov    eax,0x2000
+  call   0x10001500
+  push   0x1
+  call   0x10001100
+  add    esp,0x4
+  !e
+code 0x10001500
+  cmp    eax,0x1000
+  jb     @a
+  sub    ecx,0x1000
+  @a:
+  mov    esp,ecx
+  ret
+code 0x10001600
+  !p
+  fld    DWORD PTR [ebp-0x4]
+  call   0x10001700
+  mov    DWORD PTR [ebp-0x8],eax
+  fld    DWORD PTR [ebp-0xc]
+  call   0x10001700
+  !e
+code 0x10001700
+  fnstcw WORD PTR [ebp-0x2]
+  fldcw  WORD PTR [ebp-0x4]
+  fistp  QWORD PTR [ebp-0x8]
+  fldcw  WORD PTR [ebp-0x2]
+  ret
+code 0x10001800
+  !p
+  call   0x10001100
+  fstp   DWORD PTR [ebp-0x4]
+  call   0x10001100
+  fld    st(0)
+  fstp   DWORD PTR [ebp-0x8]
+  fstp   DWORD PTR [ebp-0xc]
+  !e
+code 0x10001900
+  ret
+code 0x10001a00
+  !p
+  call   0x10009000
+  !e
+code 0x10001b00
+  !p
+  call   eax
+  !e
+code 0x10001c00
+  !p
+  push   0x1
+  call   0x10001100
+  add    esp,0x8
+  !e
+run lift 0x10001000
+run lift 0x10001200
+run lift 0x10001300
+run lift 0x10001400
+run lift 0x10001600
+run lift 0x10001800
+run lift 0x10001a00
+run lift 0x10001b00
+run lift 0x10001c00
+run facts 0x10001500
+run facts 0x10001700
+run facts 0x10001100
+end
+
+case x87_basic
+std
+stdexports
+dwords 0x10002008 0x3f800000 0x0 0x3ff80000 0x40200000
+code 0x10001000
+  !p
+  fld    DWORD PTR ds:0x10002008
+  fld    QWORD PTR ds:0x1000200c
+  fld1
+  fldz
+  fild   DWORD PTR [ebp-0x4]
+  fadd   st(1),st
+  faddp  st(1),st
+  fsubp  st(1),st
+  fmulp  st(1),st
+  fdivp  st(1),st
+  fld1
+  fld1
+  fsubrp st(1),st
+  fdivrp st(1),st
+  fadd   st(0),st
+  fld1
+  fld1
+  fld1
+  fmul   st(2),st
+  fsubr  st(0),st(0)
+  fchs
+  fabs
+  fsqrt
+  fxch   st(1)
+  fstp   DWORD PTR [ebp-0x8]
+  fstp   QWORD PTR [ebp-0x10]
+  fst    DWORD PTR [ebp-0x14]
+  fstp   st(1)
+  fstp   DWORD PTR [ebp-0x18]
+  fld1
+  fstp   st(0)
+  !e
+code 0x10001a00
+  !p
+  fld1
+  fld1
+  fdivr  st(0),st(0)
+  fsub   st(1),st
+  fsubr  st(1),st
+  fdiv   st(1),st
+  fdivr  st(1),st
+  fstp   st(0)
+  fstp   st(0)
+  !e
+code 0x10001300
+  !p
+  fld    DWORD PTR [ebp-0x4]
+  fadd   DWORD PTR [ebp-0x8]
+  fmul   DWORD PTR ds:0x10002008
+  fsub   QWORD PTR ds:0x1000200c
+  fdiv   DWORD PTR ds:0x10002810
+  fiadd  DWORD PTR [ebp-0xc]
+  fisub  DWORD PTR [ebp-0x10]
+  fimul  DWORD PTR [ebp-0x14]
+  fidiv  DWORD PTR [ebp-0x18]
+  fstp   DWORD PTR [ebp-0x4]
+  mov    DWORD PTR [ebp-0x4],0x3f800000
+  mov    DWORD PTR [ebp-0x24],0x3f800000
+  fld    DWORD PTR [ebp-0x4]
+  fistp  DWORD PTR [ebp-0x28]
+  fld    DWORD PTR [ebp-0x4]
+  fist   DWORD PTR [ebp-0x2c]
+  fstp   st(0)
+  fld    QWORD PTR ds:0x10002810
+  fstp   DWORD PTR ds:0x10002814
+  !e
+code 0x10001600
+  !p
+  fld    DWORD PTR [ebp-0x4]
+  fld    DWORD PTR [ebp-0x8]
+  fcompp
+  fnstsw ax
+  test   ah,0x41
+  jne    @a
+  fld    DWORD PTR [ebp-0x4]
+  fcomp  DWORD PTR [ebp-0xc]
+  fnstsw ax
+  test   ah,0x1
+  je     @a
+  @a:
+  !e
+code 0x10001700
+  !p
+  fld    DWORD PTR [ebp-0x4]
+  fld    DWORD PTR [ebp-0x8]
+  fcom   st(1)
+  fnstsw ax
+  test   ah,0x40
+  fstp   st(0)
+  fstp   st(0)
+  jne    @a
+  @a:
+  !e
+code 0x10001800
+  !p
+  fld    DWORD PTR [ebp-0x4]
+  fld    DWORD PTR [ebp-0x8]
+  fucomp st(1)
+  fnstsw ax
+  test   ah,0x41
+  fstp   st(0)
+  je     @a
+  @a:
+  !e
+code 0x10001900
+  !p
+  fld    DWORD PTR [ebp-0x4]
+  fld    DWORD PTR [ebp-0x8]
+  fucompp
+  fnstsw ax
+  test   ah,0x5
+  jne    @a
+  fld    DWORD PTR [ebp-0x4]
+  ficomp DWORD PTR [ebp-0x8]
+  fnstsw ax
+  test   ah,0x41
+  jne    @a
+  @a:
+  !e
+code 0x10001b00
+  !p
+  fld1
+  fadd   st,st(1)
+  ret
+run lift 0x10001000
+run lift 0x10001a00
+run lift 0x10001300
+run lift 0x10001600
+run lift 0x10001700
+run lift 0x10001800
+run lift 0x10001900
+run lift 0x10001b00
+end
+
+case x87_errors
+std
+stdexports
+code 0x10001000
+  !p
+  fstp   DWORD PTR [ebp-0x4]
+  ret
+code 0x10001100
+  !p
+  fld1
+  fxch   st(1)
+  ret
+code 0x10001200
+  !p
+  fld1
+  faddp  st(1),st
+  ret
+code 0x10001300
+  !p
+  fld1
+  fstp   st(3)
+  ret
+code 0x10001400
+  !p
+  fld1
+  fadd   st(2),st
+  ret
+code 0x10001500
+  !p
+  fnstsw ax
+  ret
+code 0x10001600
+  !p
+  fld1
+  jmp    @a
+  @a:
+  ret
+code 0x10001700
+  !p
+  fld    st(2)
+  ret
+code 0x10001800
+  !p
+  fild   QWORD PTR ds:0x10002008
+  ret
+code 0x10001900
+  !p
+  fld    TBYTE PTR [ebp-0x10]
+  ret
+code 0x10001a00
+  !p
+  fld1
+  fcompp
+  ret
+code 0x10001b00
+  !p
+  fld1
+  push   eax
+  jmp    @a
+  @a:
+  ret
+code 0x10001c00
+  !p
+  fld    DWORD PTR ds:0x40000000
+  ret
+code 0x10001d00
+  !p
+  fld    QWORD PTR ds:0x40000000
+  ret
+code 0x10001e00
+  !p
+  fld    QWORD PTR ds:0x10003ffe
+  ret
+code 0x10001f00
+  !p
+  fcom
+  ret
+run lift 0x10001000
+run lift 0x10001100
+run lift 0x10001200
+run lift 0x10001300
+run lift 0x10001400
+run lift 0x10001500
+run lift 0x10001600
+run lift 0x10001700
+run lift 0x10001800
+run lift 0x10001900
+run lift 0x10001a00
+run lift 0x10001b00
+run lift 0x10001c00
+run lift 0x10001d00
+run lift 0x10001e00
+run lift 0x10001f00
+end
+
+case x87_return
+std
+stdexports
+code 0x10001000
+  !p
+  call   0x10001100
+  fadd   DWORD PTR [ebp-0x4]
+  fstp   DWORD PTR [ebp-0x8]
+  call   0x10001100
+  fld    st(0)
+  fstp   DWORD PTR [ebp-0x10]
+  fstp   DWORD PTR [ebp-0x14]
+  call   0x10001100
+  fst    DWORD PTR [ebp-0x18]
+  call   0x10001100
+  fcomp  DWORD PTR [ebp-0x1c]
+  fnstsw ax
+  test   ah,0x5
+  jne    @a
+  @a:
+  !e
+code 0x10001200
+  !p
+  call   0x10001100
+  fxch   st(1)
+  ret
+code 0x10001300
+  !p
+  fld    DWORD PTR [ebp-0x4]
+  call   0x10001100
+  fsubp  st(1),st
+  fstp   DWORD PTR [ebp-0xc]
+  !e
+code 0x10001100
+  ret
+run lift 0x10001000
+run lift 0x10001200
+run lift 0x10001300
+end
+
+case recognisers_sprintf_strcmp
+std
+export ?x@@YAXXZ 0x10001000
+code 0x10001000
+  push   ebp
+  mov    ebp,esp
+  mov    DWORD PTR [eax+0xc],0x42
+  mov    DWORD PTR [ecx+0x4],0x7fffffff
+  ret
+code 0x10001100
+  push   ebp
+  mov    ebp,esp
+  mov    DWORD PTR [eax+0xc],0x42
+  ret
+code 0x10001200
+  mov    edx,DWORD PTR [esp+0x4]
+  mov    ecx,DWORD PTR [esp+0x8]
+  cmp    al,BYTE PTR [ecx]
+  ret
+code 0x10001300
+  mov    edx,DWORD PTR [esp+0x4]
+  mov    ecx,DWORD PTR [esp+0x8]
+  ret
+code 0x10001400
+  mov    edx,DWORD PTR [esp+0x4]
+  mov    ecx,DWORD PTR [esp+0x8]
+  nop
+  cmp    al,BYTE PTR [ecx]
+  ret
+run facts 0x10001000
+run facts 0x10001100
+run facts 0x10001200
+run facts 0x10001300
+run facts 0x10001400
+run facts 0x10009000
+end
+
+case recognisers_vec3
+std
+code 0x10001000
+  push   ebp
+  mov    ebp,esp
+  mov    eax,DWORD PTR [ebp+0x8]
+  mov    DWORD PTR [ecx],eax
+  mov    edx,DWORD PTR [ebp+0xc]
+  mov    DWORD PTR [ecx+0x4],edx
+  mov    eax,DWORD PTR [ebp+0x10]
+  mov    DWORD PTR [ecx+0x8],eax
+  mov    eax,ecx
+  pop    ebp
+  ret    0xc
+code 0x10001100
+  push   ebp
+  mov    ebp,esp
+  mov    eax,DWORD PTR [ebp+0x8]
+  mov    DWORD PTR [ecx],eax
+  mov    edx,DWORD PTR [ebp+0xc]
+  mov    DWORD PTR [ecx+0x4],edx
+  mov    eax,DWORD PTR [ebp+0x10]
+  mov    DWORD PTR [ebp+0x8],eax
+  pop    ebp
+  ret    0xc
+code 0x10001200
+  push   ebp
+  mov    ebp,esp
+  mov    eax,DWORD PTR [ebp+0x8]
+  mov    DWORD PTR [ecx],eax
+  mov    edx,DWORD PTR [ebp+0xc]
+  mov    DWORD PTR [ecx+0x4],edx
+  mov    eax,DWORD PTR [ebp+0x10]
+  mov    DWORD PTR [ecx+0x8],eax
+  fld    DWORD PTR [ebp+0x8]
+  pop    ebp
+  ret    0xc
+code 0x10001300
+  push   ebp
+  mov    ebp,esp
+  mov    eax,DWORD PTR [ebp+0x8]
+  mov    DWORD PTR [ecx],eax
+  mov    edx,DWORD PTR [ebp+0xc]
+  mov    DWORD PTR [ecx+0x4],edx
+  mov    eax,DWORD PTR [ebp+0x10]
+  mov    DWORD PTR [ecx+0x8],eax
+  call   0x10001000
+  pop    ebp
+  ret    0xc
+run facts 0x10001000
+run facts 0x10001100
+run facts 0x10001200
+run facts 0x10001300
+end
+
+case recognisers_atexit
+std
+code 0x10001000
+  push   ebp
+  mov    ebp,esp
+  mov    eax,DWORD PTR [ebp+0x8]
+  push   eax
+  call   0x10001100
+  add    esp,0x4
+  neg    eax
+  sbb    eax,eax
+  neg    eax
+  dec    eax
+  pop    ebp
+  ret
+code 0x10001100
+  ret
+code 0x10001200
+  push   ebp
+  mov    ebp,esp
+  mov    eax,DWORD PTR [ebp+0x8]
+  push   eax
+  call   eax
+  add    esp,0x4
+  neg    eax
+  sbb    eax,eax
+  neg    eax
+  dec    eax
+  pop    ebp
+  ret
+run facts 0x10001000
+run facts 0x10001200
+end
+
+case recognisers_report
+std
+code 0x10001000
+  push   ebp
+  mov    ebp,esp
+  stos   WORD PTR es:[edi],ax
+  ret
+code 0x10001100
+  push   0x0
+  push   0x1
+  call   0x10001000
+  add    esp,0x8
+  push   0x1
+  push   0x2
+  call   0x10001000
+  add    esp,0x8
+  push   0x2
+  push   0x3
+  call   0x10001000
+  add    esp,0x8
+  push   0x0
+  push   0x1
+  call   0x10001000
+  add    esp,0x8
+  push   0x1
+  push   0x2
+  call   0x10001000
+  add    esp,0x8
+  push   0x2
+  push   0x3
+  call   0x10001000
+  add    esp,0x8
+  push   0x0
+  push   0x1
+  call   0x10001000
+  add    esp,0x8
+  push   0x1
+  push   0x2
+  call   0x10001000
+  add    esp,0x8
+  push   0x2
+  push   0x3
+  call   0x10001000
+  add    esp,0x8
+  push   0x0
+  push   0x1
+  call   0x10001000
+  add    esp,0xc
+  ret
+code 0x10001200
+  push   ebp
+  mov    ebp,esp
+  stos   WORD PTR es:[edi],ax
+  ret
+code 0x10001300
+  push   0x0
+  call   0x10001200
+  add    esp,0x4
+  ret
+run facts 0x10001000
+run facts 0x10001200
+end
+
+case recognisers_vector
+std
+code 0x10001000
+  push   ebp
+  mov    ebp,esp
+  sub    esp,0x44
+  push   ebx
+  push   esi
+  push   edi
+  push   ecx
+  mov    DWORD PTR [ebp-0x4],ecx
+  mov    eax,DWORD PTR [ebp-0x4]
+  mov    eax,DWORD PTR [eax+0x4]
+  pop    edi
+  pop    esi
+  pop    ebx
+  mov    esp,ebp
+  pop    ebp
+  ret
+code 0x10001100
+  push   ebp
+  mov    ebp,esp
+  sub    esp,0x44
+  push   ebx
+  push   esi
+  push   edi
+  push   ecx
+  mov    DWORD PTR [ebp-0x4],ecx
+  mov    eax,DWORD PTR [ebp-0x4]
+  mov    eax,DWORD PTR [eax+0x8]
+  pop    edi
+  pop    esi
+  pop    ebx
+  mov    esp,ebp
+  pop    ebp
+  ret
+code 0x10001200
+  push   ebp
+  mov    ebp,esp
+  sub    esp,0x44
+  push   ebx
+  push   esi
+  push   edi
+  push   ecx
+  mov    DWORD PTR [ebp-0x4],ecx
+  mov    eax,DWORD PTR [ebp-0x4]
+  cmp    DWORD PTR [eax+0x4],0x0
+  jne    0x10001230
+  mov    DWORD PTR [ebp-0x8],0x0
+  jmp    0x10001240
+  mov    ecx,DWORD PTR [ebp-0x4]
+  mov    edx,DWORD PTR [ebp-0x4]
+  mov    eax,DWORD PTR [ecx+0x8]
+  sub    eax,DWORD PTR [edx+0x4]
+  sar    eax,0x2
+  mov    DWORD PTR [ebp-0x8],eax
+  mov    eax,DWORD PTR [ebp-0x8]
+  pop    edi
+  pop    esi
+  pop    ebx
+  mov    esp,ebp
+  pop    ebp
+  ret
+code 0x10001300
+  push   ebp
+  mov    ebp,esp
+  push   ecx
+  mov    DWORD PTR [ebp-0x4],ecx
+  mov    ecx,DWORD PTR [ebp-0x4]
+  call   0x10001000
+  mov    ecx,DWORD PTR [ebp+0x8]
+  lea    eax,[eax+ecx*4]
+  pop    edi
+  ret    0x4
+code 0x10001400
+  push   ebp
+  mov    ebp,esp
+  push   ecx
+  mov    DWORD PTR [ebp-0x4],ecx
+  mov    eax,DWORD PTR [ebp+0x8]
+  mov    cl,BYTE PTR [eax]
+  mov    edx,DWORD PTR [ebp-0x4]
+  mov    BYTE PTR [edx],cl
+  mov    eax,DWORD PTR [ebp-0x4]
+  mov    DWORD PTR [eax+0x4],0x0
+  mov    ecx,DWORD PTR [ebp-0x4]
+  mov    DWORD PTR [ecx+0x8],0x0
+  mov    edx,DWORD PTR [ebp-0x4]
+  mov    DWORD PTR [edx+0xc],0x0
+  mov    eax,DWORD PTR [ebp-0x4]
+  pop    edi
+  ret    0x4
+code 0x10001500
+  push   ebp
+  mov    ebp,esp
+  push   ecx
+  mov    DWORD PTR [ebp-0x4],ecx
+  mov    eax,DWORD PTR [ebp+0x8]
+  push   eax
+  mov    ecx,DWORD PTR [ebp-0x4]
+  call   0x10001100
+  push   eax
+  mov    ecx,DWORD PTR [ebp-0x4]
+  call   0x10001900
+  pop    edi
+  ret    0x4
+code 0x10001600
+  push   ebp
+  mov    ebp,esp
+  push   ecx
+  mov    DWORD PTR [ebp-0x4],ecx
+  mov    ecx,DWORD PTR [ebp-0x4]
+  call   0x10001100
+  push   eax
+  mov    ecx,DWORD PTR [ebp-0x4]
+  call   0x10001000
+  push   eax
+  mov    ecx,DWORD PTR [ebp-0x4]
+  call   0x10001900
+  pop    edi
+  ret
+code 0x10001900
+  ret
+run facts 0x10001000
+run facts 0x10001100
+run facts 0x10001200
+run facts 0x10001300
+run facts 0x10001400
+run facts 0x10001500
+run facts 0x10001600
+run facts 0x10001900
+end
+
+case errors_misc
+std
+stdexports
+code 0x10001000
+  !p
+  bt     eax,0x1
+  ret
+code 0x10001100
+  !p
+  lea    DWORD PTR [ebp-0x4],eax
+  ret
+code 0x10001200
+  !p
+  movsx  DWORD PTR [ebp-0x4],al
+  ret
+code 0x10001300
+  !p
+  jne    @a
+  @a:
+  ret
+code 0x10001400
+  !p
+  mov    eax,DWORD PTR [ecx]
+  mov    ecx,DWORD PTR [eax]
+  mov    DWORD PTR [ecx],eax
+  ret
+code 0x10001500
+  !p
+  pop    eax
+  pop    ecx
+  mov    edx,DWORD PTR [ecx]
+  ret
+code 0x10001600
+  !p
+  mov    DWORD PTR [eax],0x1
+  ret
+code 0x10001700
+  !p
+  mov    DWORD PTR ds:0x10002800,0x1
+  mov    DWORD PTR ds:0x10002804,0x1
+  ret
+code 0x10001800
+  !p
+  mov    DWORD PTR ds:0x10002838,eax
+  mov    DWORD PTR ds:0x10002818,eax
+  ret
+code 0x10001900
+  !p
+  push   eax
+  jmp    @a
+  @a:
+  ret
+code 0x10001a00
+  !p
+  mov    DWORD PTR [esp+0x8],eax
+  ret
+code 0x10001b00
+  !p
+  mov    eax,DWORD PTR [ebp+0x8]
+  cmp    eax
+  ret
+code 0x10001c00
+  !p
+  mov    eax,xyz
+  ret
+code 0x10001d00
+  !p
+  mov    eax,DWORD PTR [ebp-0xg]
+  ret
+code 0x10001e00
+  !p
+  mov    eax
+  ret
+code 0x10001f00
+  !p
+  sub    esp,0x7
+  ret
+run lift 0x10001000
+run lift 0x10001100
+run lift 0x10001200
+run lift 0x10001300
+run lift 0x10001400
+run lift 0x10001500
+run lift 0x10001600
+run lift 0x10001700
+run lift 0x10001800
+run lift 0x10001900
+run lift 0x10001a00
+run lift 0x10001d00
+run lift 0x10001f00
+end
+
+case errors_raw_ops
+std
+stdexports
+code 0x10001b00
+  !p
+  mov    eax,DWORD PTR [ebp+0x8]
+  cmp    eax
+  ret
+run lift 0x10001b00
+end
+
+case errors_raw_unknown_op
+std
+code 0x10001c00
+  !p
+  mov    eax,xyz
+  ret
+run lift 0x10001c00
+end
+
+case deref_loads
+std
+stdexports
+code 0x10001000
+  !p
+  mov    eax,DWORD PTR [ebp+0x8]
+  mov    ecx,DWORD PTR ds:0x10002804
+  mov    edx,DWORD PTR [ecx]
+  push   0x1
+  call   DWORD PTR [edx+0x4]
+  mov    esi,DWORD PTR [eax+0x4]
+  mov    edi,DWORD PTR [eax+0x8]
+  mov    ebx,DWORD PTR [eax]
+  mov    DWORD PTR [ebp-0x4],eax
+  mov    ecx,DWORD PTR [ebp-0x4]
+  mov    edx,DWORD PTR [ecx+0x4]
+  !e
+code 0x10001200
+  !p
+  mov    eax,DWORD PTR [ebp+0x8]
+  mov    ecx,DWORD PTR [eax+0xc]
+  ret
+code 0x10001300
+  !p
+  mov    eax,DWORD PTR [ebp+0x8]
+  mov    DWORD PTR [ebp-0x4],eax
+  mov    ecx,DWORD PTR [ebp-0x4]
+  mov    edx,DWORD PTR [ecx+0xc]
+  ret
+code 0x10001400
+  !p
+  lea    eax,[ebp-0x10]
+  mov    ecx,DWORD PTR [eax+0x4]
+  mov    DWORD PTR [eax+0x8],0x4
+  mov    edx,DWORD PTR [eax]
+  mov    DWORD PTR [eax],ecx
+  !e
+code 0x10001600
+  !p
+  lea    ebx,DWORD PTR ds:0x10002838
+  mov    edx,DWORD PTR [ebx+0x4]
+  mov    DWORD PTR [ebx+0x8],ecx
+  mov    DWORD PTR [ebx],ecx
+  !e
+code 0x10001700
+  !p
+  lea    ebx,DWORD PTR ds:0x10002838
+  mov    DWORD PTR [ebx+0x8],ecx
+  mov    DWORD PTR [ebx],ecx
+  !e
+code 0x10001800
+  !p
+  lea    ebx,DWORD PTR ds:0x10002810
+  mov    DWORD PTR [ebx],ecx
+  lea    ebx,DWORD PTR ds:0x10002818
+  mov    edx,DWORD PTR [ebx]
+  mov    DWORD PTR [ebx+0x4],ecx
+  mov    edx,DWORD PTR [ebx+0x4]
+  !e
+code 0x10001500
+  !p
+  lea    eax,ds:0x10002818
+  mov    ecx,DWORD PTR [eax+0x4]
+  mov    DWORD PTR [eax+0x4],ecx
+  !e
+run lift 0x10001000
+run lift 0x10001200
+run lift 0x10001300
+run lift 0x10001400
+run lift 0x10001500
+run lift 0x10001600
+run lift 0x10001700
+run lift 0x10001800
+end
+
+case float_stores
+std
+stdexports
+code 0x10001000
+  !p
+  fld    DWORD PTR [ebp-0x4]
+  fstp   DWORD PTR [ebp-0x8]
+  mov    DWORD PTR [ebp-0x8],0x40000000
+  mov    DWORD PTR [ebp-0x4],0x40400000
+  mov    DWORD PTR [ebp-0xc],0x40400000
+  mov    DWORD PTR ds:0x10002814,0x3f800000
+  mov    DWORD PTR ds:0x10002828,0x3f800000
+  mov    DWORD PTR ds:0x10002838,0x3f800000
+  mov    DWORD PTR ds:0x10002810,0x3f800000
+  mov    DWORD PTR ds:0x10002900,0x3f800000
+  !e
+run lift 0x10001000
+end
+
+case frames_and_misc
+std
+stdexports
+code 0x10001000
+  push   ebp
+  mov    ebp,esp
+  sub    esp,0x44
+  push   ebx
+  push   esi
+  push   edi
+  push   ecx
+  lea    edi,[ebp-0x44]
+  mov    ecx,0x11
+  mov    eax,0xcccccccc
+  rep stos DWORD PTR es:[edi],eax
+  pop    ecx
+  mov    DWORD PTR [ebp-0x4],ecx
+  mov    eax,DWORD PTR [ebp-0x4]
+  leave
+  nop
+  wait
+  fwait
+  fnclex
+  cld
+  int3
+  mov    eax,DWORD PTR [ebp-0x4]
+  pop    edi
+  pop    esi
+  pop    ebx
+  mov    esp,ebp
+  pop    ebp
+  ret
+code 0x10001200
+  push   ebp
+  mov    ebp,esp
+  push   ecx
+  push   ebx
+  mov    DWORD PTR [ebp-0x4],ecx
+  mov    eax,DWORD PTR [ebp-0x4]
+  pop    ebx
+  pop    ecx
+  ret
+code 0x10001400
+  push   ebp
+  mov    ebp,esp
+  mov    eax,DWORD PTR [ebp+0x8]
+  mov    ecx,DWORD PTR [ebp+0xc]
+  add    eax,ecx
+  ret
+code 0x10001500
+  !p
+  mov    eax,DWORD PTR [ebp-0x4]
+  cmp    eax,DWORD PTR [ebp+0x8]
+  jne    @e
+  push   ecx
+  push   edx
+  @e:
+  ret
+code 0x10001600
+  !p
+  mov    eax,DWORD PTR [ebp-0x4]
+  cmp    eax,esp
+  cmp    esi,esp
+  mov    ecx,eax
+  jne    @o
+  @o:
+  ret
+run lift 0x10001000
+run lift 0x10001200
+run lift 0x10001400
+run lift 0x10001500
+run lift 0x10001600
+end
