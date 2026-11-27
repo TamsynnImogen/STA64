@@ -49,6 +49,9 @@ use crate::viewer::Mounted;
 
 /// World units per grid cell, unless the map is big enough to need [`MAX_CELLS`].
 pub const CELL: f32 = 128.0;
+/// Cells along the map's longer side in the original's scan grid (read from the executable, static;
+/// not measured). STA64's own grid ([`CELL`]) is finer, and only the footprint threshold uses this.
+pub const ORIGINAL_CELLS: f32 = 128.0;
 /// Most cells along one side of the grid.
 pub const MAX_CELLS: usize = 512;
 
@@ -119,6 +122,8 @@ pub struct FogGrid {
     pub cell: f32,
     pub w: usize,
     pub h: usize,
+    /// The map's longer side, world units: the original's scan grid has [`ORIGINAL_CELLS`] cells along it.
+    extent: f32,
     visible: Vec<u8>,
     explored: Vec<u8>,
     /// The last remembering update's sight, not yet in `explored`.
@@ -132,7 +137,7 @@ impl FogGrid {
         let cell = CELL.max(size / MAX_CELLS as f32);
         let dim = |lo: f32, hi: f32| (((hi - lo) / cell).ceil() as usize).clamp(1, MAX_CELLS);
         let (w, h) = (dim(min[0], max[0]), dim(min[1], max[1]));
-        FogGrid { min, cell, w, h, visible: vec![255; w * h], explored: vec![255; w * h], pending: vec![255; w * h] }
+        FogGrid { min, cell, w, h, extent: size, visible: vec![255; w * h], explored: vec![255; w * h], pending: vec![255; w * h] }
     }
 
     /// The cell of a sim-space point, if it is on the grid.
@@ -154,23 +159,32 @@ impl FogGrid {
         self.cell_of(x, z).is_some_and(|i| self.explored[i] < 128)
     }
 
+    /// The radius above which an object counts by its footprint: two cells of the original's scan grid
+    /// (the map's longer side over [`ORIGINAL_CELLS`]); grade: read from the executable, static, not
+    /// measured. The cells sampled are STA64's own, so the contour is interim.
+    pub fn footprint_threshold(&self) -> f32 {
+        2.0 * self.extent / ORIGINAL_CELLS
+    }
+
     /// Is an object of `radius` at `(x, z)` in sight now? Rule (read from the executable, static;
-    /// not measured; the grid's own cell size and contour are STA64's, so interim): the cell at the
-    /// object's centre decides, except for an object whose radius is more than two cells, which is
-    /// in sight when any cell whose centre lies within its radius is. Off the grid: no.
+    /// not measured; the sampled cells and contour are STA64's, so interim): the cell at the
+    /// object's centre decides, except for an object whose radius is more than
+    /// [`footprint_threshold`](Self::footprint_threshold), which is in sight when any cell whose
+    /// centre lies within its radius is. Off the grid: no.
     pub fn in_sight_within(&self, x: f32, z: f32, radius: f32) -> bool {
         self.any_within(&self.visible, x, z, radius)
     }
 
     /// Has any cell of the object's footprint (same rule as [`in_sight_within`](Self::in_sight_within))
-    /// ever been in sight? For an object that does not move, that is: has the object been in sight.
+    /// ever been in sight? For an object that exists from the start and does not move this is "has the
+    /// object been in sight" (inferred, not the research's per-object record).
     pub fn explored_within(&self, x: f32, z: f32, radius: f32) -> bool {
         self.any_within(&self.explored, x, z, radius)
     }
 
     fn any_within(&self, mask: &[u8], x: f32, z: f32, radius: f32) -> bool {
         let inside = |i: usize| mask[i] < 128;
-        if radius.partial_cmp(&(2.0 * self.cell)) != Some(std::cmp::Ordering::Greater) {
+        if radius.partial_cmp(&self.footprint_threshold()) != Some(std::cmp::Ordering::Greater) {
             return self.cell_of(x, z).is_some_and(inside);
         }
         let c = self.cell;

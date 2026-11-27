@@ -9,13 +9,20 @@
 //!   ([`FogGrid::in_sight_within`]). A large object is therefore in sight as a whole as soon as one
 //!   cell of its footprint is, also where the rest of it lies over unexplored ground.
 //! - [`Sight::Remembered`]: not in sight now, but its footprint has been in sight at some earlier
-//!   update ([`FogGrid::explored_within`]). For an object that does not move, this is the same as
-//!   "the object has been in sight".
+//!   update ([`FogGrid::explored_within`]). For an object that exists from the start and does not
+//!   move this is the same as "the object has been in sight"; that equivalence is STA64's inference
+//!   (grade: inferred), not the research's per-object record. It does not hold for an object that is
+//!   created, destroyed or moved later (a station, a ship): those need a per-entity record next to this
+//!   API (the station-copy and minimap steps add it; deferred, not dropped).
 //! - Never (`Sight::Never`): neither.
 //!
 //! With the fog lifted (match setting, cheat) the grid [`FogState`] carries is already the lifted
 //! copy: explored ground counts as in sight, and with the shroud lifted too every cell does. That
 //! is the original's rule for fog off and shroud on, and STA64's own stated rule for the cheats.
+//! Two limits of `Remembered`, both not established for the original and open: with the fog on and the
+//! shroud lifted, `lifted` counts every cell as explored, so an object never seen reads `Remembered`,
+//! not `Never`; and a script that clears the shroud resets the explored memory, which turns
+//! remembered objects back into never-seen ones.
 //! In a cutscene (the cinematic view) every object counts as in sight, no layer being drawn.
 //!
 //! The regions a map declares (nebulae, asteroid fields) are not sim entities, so the client keeps
@@ -30,6 +37,7 @@ use sta_content::MapDef;
 use crate::app::GameSet;
 use crate::render::fog::{FogGrid, FogState, update_fog};
 use crate::render::units::LocalPlayer;
+use sta_sim::PlayerId;
 
 /// What the local player's side has had in sight of one object.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -64,8 +72,11 @@ pub struct FogRegion {
     /// The ODF that defines the region.
     pub odf: String,
     pub centre: Vec2,
-    /// Footprint radius: a sphere's own; for a box, the circle through its corners in XZ.
+    /// Footprint radius: a sphere's own; for a box, the circle through its corners in XZ (interim,
+    /// STA64's own, not established: it over-covers a long thin box).
     pub radius: f32,
+    /// False for a shape this build does not know: such a region is never hidden.
+    pub shape_known: bool,
 }
 
 /// The map's nebulae and asteroid fields, as the client keeps them (set at map build, removed when
@@ -80,16 +91,16 @@ impl FogRegions {
                 .iter()
                 .enumerate()
                 .map(|(id, r)| {
-                    let (centre, radius) = match r.shape {
-                        RegionShape::Sphere { centre, radius } => (Vec2::new(centre.x.to_f32(), centre.z.to_f32()), radius.to_f32()),
+                    let (centre, radius, shape_known) = match r.shape {
+                        RegionShape::Sphere { centre, radius } => (Vec2::new(centre.x.to_f32(), centre.z.to_f32()), radius.to_f32(), true),
                         RegionShape::Box { min, max } => {
                             let (lo, hi) = (Vec2::new(min.x.to_f32(), min.z.to_f32()), Vec2::new(max.x.to_f32(), max.z.to_f32()));
-                            ((lo + hi) * 0.5, (hi - lo).length() * 0.5)
+                            ((lo + hi) * 0.5, (hi - lo).length() * 0.5, true)
                         }
-                        // A shape this build does not know: no footprint, so the centre cell decides.
-                        _ => (Vec2::ZERO, 0.0),
+                        // A shape this build does not know is never hidden by accident.
+                        _ => (Vec2::ZERO, 0.0, false),
                     };
-                    FogRegion { id, kind: r.kind, odf: r.odf.clone(), centre, radius }
+                    FogRegion { id, kind: r.kind, odf: r.odf.clone(), centre, radius, shape_known }
                 })
                 .collect(),
         )
@@ -105,35 +116,70 @@ impl FogRegions {
 
 /// One [`Sight`] per entry of [`FogRegions`], kept current by [`update_region_sights`].
 #[derive(Resource, Debug, Clone, PartialEq, Default)]
-pub struct RegionSights(Vec<Sight>);
+pub struct RegionSights {
+    sights: Vec<Sight>,
+    /// How many times the states were recomputed (for tests and marks).
+    pub updates: u32,
+}
 
 impl RegionSights {
     /// The state of region `id`; a region the client does not know counts as in sight.
     #[allow(dead_code)] // read by the step that draws by state (#1146)
     pub fn get(&self, id: usize) -> Sight {
-        self.0.get(id).copied().unwrap_or_default()
+        self.sights.get(id).copied().unwrap_or_default()
     }
 }
 
-/// Recompute the regions' states from the fog grid. With no grid (no local player, no match yet) or
-/// in a cutscene every region counts as in sight.
+/// What [`update_region_sights`] last computed from.
+#[derive(Default)]
+pub struct SightMemo {
+    cutscene: bool,
+    had_fog: bool,
+}
+
+/// Recompute the regions' states from the fog grid, only when the grid, the regions, the local player
+/// or the cutscene flag changed (the grid changes once per sim tick, not per frame). With no local
+/// player or in a cutscene every region counts as in sight; with a local player and no grid yet
+/// none has been seen. A region of an unknown shape is always in sight.
 pub fn update_region_sights(
     regions: Res<FogRegions>,
     fog: Option<Res<FogState>>,
     local: Res<LocalPlayer>,
     cine: Option<Res<crate::ui::presentation::CineractiveState>>,
     mut sights: ResMut<RegionSights>,
+    mut memo: Local<SightMemo>,
 ) {
     let cutscene = cine.is_some_and(|c| c.on);
-    let grid = fog.as_deref().map(|f| &f.grid).filter(|_| local.0.is_some() && !cutscene);
-    let next: Vec<Sight> = regions
-        .0
-        .iter()
-        .map(|r| grid.map_or(Sight::Visible, |g| Sight::of(g, r.centre.x, r.centre.y, r.radius)))
-        .collect();
-    if sights.0 != next {
-        sights.0 = next;
+    let had_fog = fog.is_some();
+    let changed = regions.is_changed() || local.is_changed() || fog.as_ref().is_some_and(|f| f.is_changed()) || memo.cutscene != cutscene || memo.had_fog != had_fog;
+    if !changed {
+        return;
     }
+    *memo = SightMemo { cutscene, had_fog };
+    let sights = &mut *sights;
+    sights.updates += 1;
+    sights.sights.resize(regions.0.len(), Sight::Visible);
+    for (slot, r) in sights.sights.iter_mut().zip(&regions.0) {
+        let next = if r.shape_known { sight_now(fog.as_deref(), local.0, cutscene, r.centre.x, r.centre.y, r.radius) } else { Sight::Visible };
+        if *slot != next {
+            *slot = next;
+        }
+    }
+}
+
+/// The states of a map that is gone.
+fn clear_region_sights(mut sights: ResMut<RegionSights>) {
+    *sights = RegionSights::default();
+}
+
+/// The state of an object of `radius` at `(x, z)` (sim space) for the local player.
+/// With no local player or in a cutscene every object counts as in sight; with a local player and
+/// no grid yet (the match is still starting) none has been seen.
+pub fn sight_now(fog: Option<&FogState>, local: Option<PlayerId>, cutscene: bool, x: f32, z: f32, radius: f32) -> Sight {
+    if local.is_none() || cutscene {
+        return Sight::Visible;
+    }
+    fog.map_or(Sight::Never, |f| Sight::of(&f.grid, x, z, radius))
 }
 
 pub struct FogObjectsPlugin;
@@ -142,7 +188,10 @@ impl Plugin for FogObjectsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RegionSights>().add_systems(
             Update,
-            update_region_sights.in_set(GameSet::Render).after(update_fog).run_if(resource_exists::<FogRegions>).run_if(resource_exists::<LocalPlayer>),
+            (
+                update_region_sights.in_set(GameSet::Render).after(update_fog).run_if(resource_exists::<FogRegions>).run_if(resource_exists::<LocalPlayer>),
+                clear_region_sights.run_if(resource_removed::<FogRegions>),
+            ),
         );
     }
 }
@@ -186,9 +235,9 @@ mod tests {
         assert_eq!(Sight::of(&g, x, z, 50.0), Sight::Remembered, "seen before, not now");
         g.set_cell_for_test(cx, cz, false, false);
         assert_eq!(Sight::of(&g, x, z, 50.0), Sight::Never);
-        // A neighbouring cell does not count for an object of two cells' radius or less.
+        // A neighbouring cell does not count for an object at or under the footprint threshold.
         g.set_cell_for_test(cx + 1, cz, true, true);
-        assert_eq!(Sight::of(&g, x, z, 2.0 * CELL), Sight::Never);
+        assert_eq!(Sight::of(&g, x, z, g.footprint_threshold()), Sight::Never);
     }
 
     #[test]
@@ -208,15 +257,19 @@ mod tests {
     }
 
     #[test]
-    fn the_footprint_rule_starts_above_two_cells() {
+    fn the_footprint_rule_starts_above_two_cells_of_the_originals_grid() {
         let mut g = grid();
-        let (cx, cz) = (((0.0 - -4096.0) / CELL) as usize + 1, ((0.0 - -4096.0) / CELL) as usize);
+        // The map's longer side is 8192: two cells of 128 along it are 128 units.
+        assert_eq!(g.footprint_threshold(), 128.0);
+        // An object at (100, 64) stands in the cell with centre (64, 64); the cell with centre
+        // (192, 64) is 92 units from it.
+        let (cx, cz) = (((100.0 - -4096.0) / CELL) as usize + 1, ((64.0 - -4096.0) / CELL) as usize);
         g.set_cell_for_test(cx, cz, true, true);
-        // The cell's centre is 192 units from the origin: a radius over two cells (256) reaches it,
-        // one of exactly two cells does not use the footprint at all.
-        assert_eq!(Sight::of(&g, 0.0, 0.0, 2.0 * CELL), Sight::Never);
-        assert_eq!(Sight::of(&g, 0.0, 0.0, 2.0 * CELL + 1.0), Sight::Visible);
-        assert_eq!(Sight::of(&g, 0.0, 0.0, 150.0), Sight::Never, "the cell's centre lies outside the radius");
+        assert_eq!(Sight::of(&g, 100.0, 64.0, 128.0), Sight::Never, "at the threshold only the centre cell counts");
+        assert_eq!(Sight::of(&g, 100.0, 64.0, 129.0), Sight::Visible, "over it the footprint counts");
+        assert_eq!(Sight::of(&g, 100.0, 64.0, 80.0), Sight::Never, "under it the centre cell decides");
+        // A bigger map has a bigger threshold.
+        assert_eq!(FogGrid::new([0.0, 0.0], [32768.0, 100.0]).footprint_threshold(), 512.0);
     }
 
     #[test]
@@ -259,7 +312,7 @@ mod tests {
             .init_resource::<RegionSights>()
             .insert_resource(FogRegions::of_map(map))
             .insert_resource(LocalPlayer(Some(sta_sim::PlayerId(1))))
-            .add_systems(Update, update_region_sights);
+            .add_systems(Update, update_region_sights.run_if(resource_exists::<FogRegions>));
         app
     }
 
@@ -278,7 +331,7 @@ mod tests {
         let map = region_map();
         let mut app = app(&map);
         app.update();
-        assert_eq!(sights(&app), [Sight::Visible; 2], "without a grid nothing is hidden");
+        assert_eq!(sights(&app), [Sight::Never; 2], "with a local player and no grid yet nothing has been seen");
         set_fog(&mut app, grid());
         assert_eq!(sights(&app), [Sight::Never; 2]);
         // A cell inside the nebula (centre 1000,-2000; radius 450) is in sight.
@@ -318,5 +371,46 @@ mod tests {
         app.insert_resource(LocalPlayer(None));
         app.update();
         assert_eq!(sights(&app), [Sight::Visible; 2]);
+    }
+
+    #[test]
+    fn a_frame_without_a_change_does_not_recompute_and_a_new_grid_does() {
+        let map = region_map();
+        let mut app = app(&map);
+        set_fog(&mut app, grid());
+        let n = app.world().resource::<RegionSights>().updates;
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(app.world().resource::<RegionSights>().updates, n, "nothing changed: nothing recomputed");
+        set_fog(&mut app, grid());
+        assert_eq!(app.world().resource::<RegionSights>().updates, n + 1, "a new grid recomputes once");
+        app.update();
+        assert_eq!(app.world().resource::<RegionSights>().updates, n + 1);
+    }
+
+    #[test]
+    fn the_states_are_reset_when_the_map_goes() {
+        let map = region_map();
+        let mut app = app(&map);
+        app.add_systems(Update, clear_region_sights.run_if(resource_removed::<FogRegions>));
+        set_fog(&mut app, grid());
+        assert_eq!(sights(&app), [Sight::Never; 2]);
+        app.world_mut().remove_resource::<FogRegions>();
+        app.update();
+        assert_eq!(sights(&app), [Sight::Visible; 2], "no state left: the default is in sight");
+        assert_eq!(app.world().resource::<RegionSights>().updates, 0);
+    }
+
+    #[test]
+    fn a_region_of_an_unknown_shape_is_never_hidden() {
+        let map = region_map();
+        let mut regions = FogRegions::of_map(&map);
+        assert!(regions.0.iter().all(|r| r.shape_known));
+        regions.0[1].shape_known = false;
+        let mut app = app(&map);
+        app.insert_resource(regions);
+        set_fog(&mut app, grid());
+        assert_eq!(sights(&app), [Sight::Never, Sight::Visible], "the unknown one is drawn, the known one never seen");
     }
 }
