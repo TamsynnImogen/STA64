@@ -38,6 +38,7 @@ pub mod emit;
 pub mod fixture;
 pub mod format;
 pub mod image;
+pub mod install;
 pub mod lift;
 pub mod map;
 pub mod msvc;

@@ -54,6 +54,21 @@ fn is_own_temp(n: &str) -> bool {
     safe_name(name) && digits(nums.next()) && digits(nums.next()) && nums.next().is_none()
 }
 
+/// Removes the temporary files of this tool's own naming ([`is_own_temp`]) in `dir` that are over
+/// an hour old (a run that is still writing has a younger one): regular files only.
+fn remove_old_temps(dir: &Path) {
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        if is_own_temp(&n)
+            && e.file_type().is_ok_and(|t| t.is_file())
+            && e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|d| d.as_secs() > 3600)
+        {
+            let _ = fs::remove_file(e.path());
+        }
+    }
+}
+
 /// Whether `bytes` start with the header line the Python converters write:
 /// `-- <mission>: converted by tools/<x>_to_lua.py (LUA-nn) from <file>...`.
 fn python_header(bytes: &[u8]) -> bool {
@@ -322,18 +337,10 @@ impl OutDir {
     pub fn wipe(&mut self) -> Result<(), String> {
         self.check()?;
         let mdir = self.missions();
+        // the manifest's own temporary files (a killed save) are in the output folder itself
+        remove_old_temps(&self.root);
         if mdir.is_dir() {
-            if let Ok(rd) = fs::read_dir(&mdir) {
-                for e in rd.flatten() {
-                    let n = e.file_name().to_string_lossy().into_owned();
-                    if is_own_temp(&n)
-                        && e.file_type().is_ok_and(|t| t.is_file())
-                        && e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|d| d.as_secs() > 3600)
-                    {
-                        let _ = fs::remove_file(e.path());
-                    }
-                }
-            }
+            remove_old_temps(&mdir);
             // the manifest's files go; the `.lua` files of the Python tool's earlier conversion, which
             // may have been edited since, are moved aside
             let mut names: BTreeSet<String> = self.manifest.iter().map(|(_, n)| n.clone()).collect();
