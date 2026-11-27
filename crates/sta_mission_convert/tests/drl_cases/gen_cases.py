@@ -8,7 +8,11 @@ running its own `Drl.condition`, `Drl.rules` and `decode` on those listings (the
 and `objdump` of the original are replaced by the invented data). The Rust test
 `tests/drl.rs` runs the same cases through `sta_mission_convert::drl` and compares.
 
-    python3 -I crates/sta_mission_convert/tests/drl_cases/gen_cases.py
+    python3 -I crates/sta_mission_convert/tests/drl_cases/gen_cases.py [output file]
+
+Without an argument it writes `cases.txt` next to itself; the test `cases_file_is_current`
+regenerates into a temporary file and compares (CPython 3.14 only: some exception texts differ
+between versions).
 
 File format (`cases.txt`, one `tag|payload` per line):
     case|<name>                       starts a case
@@ -283,7 +287,8 @@ def decode_case(name, ins, engine=None, **kw):
         c.lines.append("errors|" + "\\n".join(m["errors"]))
         text = drl.scaffold(m)
         first, rest = text.split("\n", 1)
-        first = first.replace("tools/drl_to_lua.py (LUA-07)", "sta_mission_convert (LUA-15g)")
+        # the port names itself in the header (`sta_mission_convert::tool_token()`)
+        first = first.replace("tools/drl_to_lua.py (LUA-07)", "<TOOL>")
         for line in (first + "\n" + rest).split("\n")[:-1]:
             c.lines.append("out|" + line)
     except drl.Unsupported as ex:
@@ -787,5 +792,20 @@ decode_case("decode_mission_name_from_file", full_dll(RULES2, CONDS2, ACTS2), ia
 decode_case("decode_no_dsl_import", full_dll(RULES2, CONDS2, ACTS2), iat=[
     (a, d.replace("synthS.dsl", "x.dll"), s) for a, d, s in IAT])
 
-(HERE / "cases.txt").write_text("\n".join(OUT) + "\n", encoding="utf-8", newline="\n")
+
+def subdirs_case(name, roots):
+    """`install_subdirs` of the original on invented paths (`normpath` of this system: POSIX)."""
+    OUT.append(f"case|{name}")
+    OUT.append("op|subdirs|" + "|".join(roots))
+    for sub in drl.install_subdirs(roots).values():  # a dict by root; the roots here are distinct
+        OUT.append(f"out|{sub}")
+
+
+subdirs_case("subdirs_dotdot", ["/a/b/..", "/a/b/c/..", "x/..", "a/b/../c", "../..", "/a/b/./", "a//b", "/", ".", "", "/..",
+                                "/../x", "../x", "a/../..", "/a/b/../../.."])
+subdirs_case("subdirs_names", ["/a/Star Trek: A2", "/b/Star Trek: A2/", "/c/star trek: a2", "/d/ok-1.2_x", "/e/a  b",
+                               "/f/--x--", "/g/aéb"])
+
+(pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else HERE / "cases.txt").write_text(
+    "\n".join(OUT) + "\n", encoding="utf-8", newline="\n")
 print(f"{sum(1 for x in OUT if x.startswith('case|'))} cases")

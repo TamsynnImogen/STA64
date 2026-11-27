@@ -22,7 +22,7 @@ use sta_mission_convert::fixture::{Import, PeBuilder, CODE, DATA};
 use sta_mission_convert::format::{render, Ctx};
 use sta_mission_convert::map::Vtables;
 use sta_mission_convert::pyval::{py_isspace, py_strip, Py};
-use sta_mission_convert::{tup, ErrorKind, FlatImage};
+use sta_mission_convert::{tool_token, tup, ErrorKind, FlatImage};
 
 // ------------------------------------------------------------------ the case file
 
@@ -164,7 +164,7 @@ fn run_case(c: &Case) -> Vec<String> {
                 out.push(format!("sigs|{}", m.call_signatures.join(",")));
                 out.push(format!("unused|{}", m.unused_variables.join(",")));
                 out.push(format!("errors|{}", m.errors.join("\\n")));
-                let text = scaffold(&m);
+                let text = scaffold(&m).replacen(&tool_token(), "<TOOL>", 1);
                 for l in text.split('\n').take(text.matches('\n').count()) {
                     out.push(format!("out|{l}"));
                 }
@@ -172,6 +172,12 @@ fn run_case(c: &Case) -> Vec<String> {
             Err(Failure::Unsupported(s)) => out.push(format!("unsupported|{s}")),
             Err(Failure::Error(e)) => out.push(failure_line(&e)),
         },
+        "subdirs" => {
+            let roots: Vec<PathBuf> = c.op[1..].iter().map(PathBuf::from).collect();
+            for s in install_subdirs(&roots) {
+                out.push(format!("out|{s}"));
+            }
+        }
         other => panic!("unknown op {other}"),
     }
     out
@@ -209,6 +215,36 @@ fn the_case_file_covers_every_kind_of_result() {
     for kind in ["ok|", "err|", "raw|", "unsupported|", "rule|", "dep|", "out|"] {
         assert!(cases.iter().any(|c| c.expect.iter().any(|l| l.starts_with(kind))), "no case with {kind}");
     }
+}
+
+/// The committed `cases.txt` is what the generator writes now, from the current
+/// `tools/drl_to_lua.py` (so a change of the Python tool shows here). Skipped without `python3`,
+/// or when it is not CPython 3.14, which the file was made with (some exception texts differ).
+#[test]
+fn cases_file_is_current() {
+    let Ok(version) = std::process::Command::new("python3").arg("--version").output() else {
+        eprintln!("skipped: python3 not found");
+        return;
+    };
+    if !String::from_utf8_lossy(&version.stdout).starts_with("Python 3.14.") {
+        eprintln!("skipped: the cases were made with CPython 3.14, found {}", String::from_utf8_lossy(&version.stdout).trim());
+        return;
+    }
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/drl_cases");
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("drl_cases_regenerated.txt");
+    let status = std::process::Command::new("python3")
+        .arg("-I")
+        .arg(dir.join("gen_cases.py"))
+        .arg(&out)
+        .stdout(std::process::Stdio::null())
+        .status()
+        .expect("run python3");
+    assert!(status.success(), "the generator failed");
+    // a checkout may have CRLF line endings: compare without carriage returns
+    let strip = |v: Vec<u8>| v.into_iter().filter(|b| *b != b'\r').collect::<Vec<u8>>();
+    let committed = strip(std::fs::read(dir.join("cases.txt")).unwrap());
+    let regenerated = strip(std::fs::read(&out).unwrap());
+    assert!(committed == regenerated, "tests/drl_cases/cases.txt differs from the generator's output ({})", out.display());
 }
 
 // ------------------------------------------------------------------ state helpers
@@ -308,7 +344,8 @@ fn the_scaffold_is_the_runtime_fixture() {
     let src = include_str!("../../sta_mission/tests/drl.rs");
     let start = src.find("const SYNTHETIC_SCAFFOLD: &str = r#\"").expect("fixture") + "const SYNTHETIC_SCAFFOLD: &str = r#\"".len();
     let end = start + src[start..].find("\"#;").expect("end of the fixture");
-    let fixture = &src[start..end];
+    // a checkout may have CRLF line endings
+    let fixture = src[start..end].replace("\r\n", "\n");
 
     let alpha = tup![
         "and",
@@ -352,7 +389,7 @@ fn the_scaffold_is_the_runtime_fixture() {
     let (ffirst, frest) = fixture.split_once('\n').unwrap();
     assert_eq!(grest, frest);
     assert_eq!(
-        gfirst.replace("sta_mission_convert (LUA-15g)", "tools/drl_to_lua.py (LUA-07)"),
+        gfirst.replace(&tool_token(), "tools/drl_to_lua.py (LUA-07)"),
         ffirst
     );
 }
@@ -425,7 +462,15 @@ fn find_drls_matches_the_end_of_the_lower_cased_name_and_sorts_the_paths() {
     }
     let found: Vec<String> = find_drls(&root)
         .iter()
-        .map(|p| p.strip_prefix(&root).unwrap().to_string_lossy().into_owned())
+        .map(|p| {
+            // components, not the separator of the system
+            p.strip_prefix(&root)
+                .unwrap()
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/")
+        })
         .collect();
     assert_eq!(found, ["AR.DRL", "a/yr.DRL", "a/zR.drl", "b/xR.drl", "d/e/deepR.drl"]);
 }
@@ -567,7 +612,8 @@ fn decode_install_runs_main_over_a_folder() {
     assert_eq!((run.failed, run.skipped), (1, 1), "{run:?}");
     assert_eq!(run.files.keys().map(String::as_str).collect::<Vec<_>>(), ["other.lua", "synth.lua"]);
     let text = String::from_utf8(run.files["synth.lua"].clone()).unwrap();
-    assert!(text.starts_with("-- synth: rule scaffold generated by sta_mission_convert (LUA-15g).\n"));
+    assert!(text.starts_with(&format!("-- synth: rule scaffold generated by {}.\n", tool_token())));
+    assert!(tool_token().starts_with("sta_mission_convert (converter "));
     assert!(text.contains("name = 'RuleOne',") && text.contains("action = 'Do_Alpha',"));
     assert!(text.contains("deps = { 'p_ALPHA' },") && text.contains("return T(S.p_ALPHA) end,"));
     assert!(text.contains("-- Rules decoded from synthR.drl;") && text.contains("-- live in synthS.dsl and"));
@@ -778,4 +824,12 @@ fn gated_scaffolds_equal_the_python_output() {
     );
     assert!(report.equal > 0, "nothing was compared");
     report.assert_ok("a2-rule-scaffolds");
+    // Every rule DLL has a reference file (none missing, none extra above), so the Python wrote a
+    // scaffold for each: none failed or was skipped there. The harness does not expose the
+    // reference's log (todo for LUA-15f), so the counts are asserted against that fact.
+    assert_eq!(
+        (run.failed, run.skipped, run.read, run.files.len()),
+        (0, 0, report.equal, report.equal),
+        "failed, skipped, read, written"
+    );
 }
