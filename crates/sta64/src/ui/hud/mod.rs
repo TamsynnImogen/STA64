@@ -816,7 +816,7 @@ fn target_order(
             if picked.is_empty() { return None; }
             let centre = picked.iter().fold(Vec3::ZERO, |a, (_, pos)| a + *pos) / picked.len() as f32;
             let dest = Vec3::from(point?.to_f32());
-            formation_moves(&picked, centre, dest).into_iter().map(|(id, to)| Order::Move { units: vec![id], to: SimVec3::from_f32(to.to_array()), queue: false }).collect()
+            formation_moves(&picked, centre, dest).into_iter().map(|(id, to)| Order::Move { units: vec![id], to: SimVec3::from_f32(to.to_array()), queue: false, mode: None }).collect()
         }
         TargetMode::Attack => {
             let id = target?;
@@ -1269,8 +1269,8 @@ mod target_tests {
         let (orders, ids) = target_order(&f, TargetMode::Move, None, Some(SimVec3::from_f32([1000.0, 0.0, 0.0]))).unwrap();
         assert_eq!(ids, [EntityId(1), EntityId(2)]);
         assert_eq!(orders, [
-            Order::Move { units: vec![EntityId(1)], to: SimVec3::from_f32([950.0, 0.0, 0.0]), queue: false },
-            Order::Move { units: vec![EntityId(2)], to: SimVec3::from_f32([1050.0, 0.0, 0.0]), queue: false },
+            Order::Move { units: vec![EntityId(1)], to: SimVec3::from_f32([950.0, 0.0, 0.0]), queue: false, mode: None },
+            Order::Move { units: vec![EntityId(2)], to: SimVec3::from_f32([1050.0, 0.0, 0.0]), queue: false, mode: None },
         ]);
         let mut cache = OrderTargets::default();
         for order in &orders { record_move_target(&mut cache, order); }

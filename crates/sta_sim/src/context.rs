@@ -165,7 +165,7 @@ pub fn context_order(db: Option<&ContentDb>, view: &WorldView, me: PlayerId, own
             .copied()
             .filter(|&id| view.unit(id).and_then(|u| db.unit(u.def)).is_some_and(|d| d.movement.max_speed > Fixed::ZERO))
             .collect();
-        return (!movers.is_empty()).then_some(Order::Move { units: movers, to: t.pos, queue: false });
+        return (!movers.is_empty()).then_some(Order::Move { units: movers, to: t.pos, queue: false, mode: None });
     }
     let enemy = is_enemy(view, me, t.owner);
     let Some(db) = db else {

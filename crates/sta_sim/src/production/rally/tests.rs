@@ -208,6 +208,7 @@ fn entity_rally_samples_the_current_position_at_each_completion() {
                 units: vec![LEADER],
                 to: p(0, 2400),
                 queue: false,
+                mode: None,
             },
         )],
     );

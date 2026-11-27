@@ -328,7 +328,7 @@ mod tests {
         assert_eq!(decide(&situation(None)), "c_move");
         assert_eq!(decide(&Situation { moves: false, ..warp(None) }), "c_select");
         assert_eq!(decide(&Situation { own_selected: false, ..warp(None) }), "c_select");
-        let wormhole = Order::Move { units: vec![EntityId(1)], to: SimVec3::from_f32([0.0; 3]), queue: false };
+        let wormhole = Order::Move { units: vec![EntityId(1)], to: SimVec3::from_f32([0.0; 3]), queue: false, mode: None };
         assert_eq!(decide(&warp(Some(&wormhole))), "c_wormin");
         assert_eq!(decide(&Situation { over_hud: true, ..warp(None) }), crate::ui::cursor::DEFAULT);
         assert_eq!(decide(&Situation { armed: Some((TargetMode::Attack, true)), ..warp(None) }), "c_attack");
@@ -340,7 +340,7 @@ mod tests {
         let attack = Order::Attack { units: u.clone(), target: EntityId(2) };
         let mine = Order::Mine { units: u.clone(), node: EntityId(2) };
         let repair = Order::Repair { units: u.clone(), yard: Some(EntityId(2)) };
-        let wormhole = Order::Move { units: u, to: SimVec3::from_f32([0.0; 3]), queue: false };
+        let wormhole = Order::Move { units: u, to: SimVec3::from_f32([0.0; 3]), queue: false, mode: None };
         assert_eq!(decide(&situation(Some(&attack))), "c_attack");
         assert_eq!(decide(&situation(Some(&mine))), "c_mining");
         assert_eq!(decide(&situation(Some(&repair))), "c_repair");

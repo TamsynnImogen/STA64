@@ -223,7 +223,7 @@ fn a_warp_move_warps_on_a_long_leg_a_plain_move_does_not() {
         let o = if warp {
             Order::MoveWarp { units: vec![s], to: v(0, 6000), queue: false }
         } else {
-            Order::Move { units: vec![s], to: v(0, 6000), queue: false }
+            Order::Move { units: vec![s], to: v(0, 6000), queue: false, mode: None }
         };
         let mut best = Fixed::ZERO;
         for i in 0..(20 * HZ) {
@@ -403,11 +403,11 @@ fn another_players_order_cannot_cancel_a_scripted_order_and_assist_skips_scripte
     let s = sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
     run(&mut sim, vec![order(1, 0, Order::Scout { units: vec![s] })], 2);
     // Seat 2 orders seat 1's craft: refused, the scout keeps its order.
-    run(&mut sim, vec![order(2, 0, Order::Stop { units: vec![s] }), order(2, 1, Order::Move { units: vec![s], to: v(5, 5), queue: false })], 2);
+    run(&mut sim, vec![order(2, 0, Order::Stop { units: vec![s] }), order(2, 1, Order::Move { units: vec![s], to: v(5, 5), queue: false, mode: None })], 2);
     assert!(matches!(sim.scripted.job(s), Some(crate::orders::Job::Scout { .. })));
     // A queued move replaces a patrol.
     run(&mut sim, vec![order(1, 1, Order::Patrol { units: vec![s], points: vec![v(0, 300), v(300, 0)] })], 2);
-    run(&mut sim, vec![order(1, 2, Order::Move { units: vec![s], to: v(5, 5), queue: true })], 1);
+    run(&mut sim, vec![order(1, 2, Order::Move { units: vec![s], to: v(5, 5), queue: true, mode: None })], 1);
     assert!(sim.scripted.job(s).is_none());
     // An empty path changes nothing.
     run(&mut sim, vec![order(1, 3, Order::Scout { units: vec![s] })], 1);
@@ -451,7 +451,7 @@ mod auto_warp {
         let to = v(0, dist);
         let (mut top, mut arrived) = (Fixed::ZERO, None);
         for i in 0..secs * HZ {
-            WorldSource::step(&mut sim, &if i == 0 { vec![order(1, 0, Order::Move { units: vec![s], to, queue: false })] } else { vec![] });
+            WorldSource::step(&mut sim, &if i == 0 { vec![order(1, 0, Order::Move { units: vec![s], to, queue: false, mode: None })] } else { vec![] });
             top = top.max(sim.unit(s).unwrap().speed);
             if arrived.is_none() && flat(pos(&sim, s), to) < n(60) {
                 arrived = Some(i);
@@ -483,7 +483,7 @@ mod auto_warp {
         let (mut sim, s) = scout_game(true);
         let to = v(1500, 3000); // about 27 degrees off the bow
         for i in 0..80 * HZ {
-            WorldSource::step(&mut sim, &if i == 0 { vec![order(1, 0, Order::Move { units: vec![s], to, queue: false })] } else { vec![] });
+            WorldSource::step(&mut sim, &if i == 0 { vec![order(1, 0, Order::Move { units: vec![s], to, queue: false, mode: None })] } else { vec![] });
         }
         assert!(flat(pos(&sim, s), to) < n(80), "{:?}", flat(pos(&sim, s), to));
         assert!(sim.scripted.job(s).is_none(), "warp job outlives the move");
@@ -492,7 +492,7 @@ mod auto_warp {
     #[test]
     fn a_new_order_ends_the_warp_and_a_snapshot_keeps_it() {
         let (mut sim, s) = scout_game(true);
-        let cmd = order(1, 0, Order::Move { units: vec![s], to: v(0, 3000), queue: false });
+        let cmd = order(1, 0, Order::Move { units: vec![s], to: v(0, 3000), queue: false, mode: None });
         for i in 0..10 * HZ {
             WorldSource::step(&mut sim, &if i == 0 { vec![cmd.clone()] } else { vec![] });
         }

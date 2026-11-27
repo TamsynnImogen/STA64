@@ -811,7 +811,7 @@ mod tests {
             .init_resource::<Seen>()
             .add_systems(Update, collect.after(GameSet::SimLink));
         let to = SimVec3::from_f32([0.0, 0.0, 1000.0]);
-        app.world_mut().resource_mut::<CommandQueue>().0.push(CommandKind::Order(Order::Move { units: vec![id], to, queue: false }));
+        app.world_mut().resource_mut::<CommandQueue>().0.push(CommandKind::Order(Order::Move { units: vec![id], to, queue: false, mode: None }));
         for _ in 0..121 {
             app.update();
         }

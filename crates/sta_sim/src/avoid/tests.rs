@@ -67,6 +67,7 @@ fn go(sim: &mut Sim, owner: u8, ids: &[EntityId], to: Vec3) {
         units: ids.to_vec(),
         to,
         queue: false,
+        mode: None,
     });
     sim.step(&[Command {
         player: PlayerId(owner),

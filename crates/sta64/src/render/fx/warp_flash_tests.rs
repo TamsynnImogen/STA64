@@ -121,6 +121,7 @@ fn order(app: &mut App, id: EntityId, warp: bool) {
                 z: Fixed::from_int(1200),
             },
             queue: false,
+            mode: None,
         }
     }));
 }

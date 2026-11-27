@@ -837,6 +837,7 @@ mod tests {
             units: vec![id],
             to: SimVec3::from_f32(to),
             queue: false,
+            mode: None,
         }));
         let e = app.world_mut().spawn((SimEntity(id), Transform::IDENTITY)).id();
         (app, id, e)

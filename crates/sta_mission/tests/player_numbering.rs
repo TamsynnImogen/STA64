@@ -145,7 +145,8 @@ fn armada_team_numbers_round_trip_find_players_neutral_and_spawn_owner() {
         CommandKind::Order(Order::Move {
             units: vec![born],
             to: Vec3::from_f32([950.0, 0.0, 0.0]),
-            queue: false
+            queue: false,
+            mode: None
         })
     );
     let resolved: (u32, u8, u8) = rt.eval("return h.id, h.player.number, A2.GetRealTeam(h.id)").unwrap();

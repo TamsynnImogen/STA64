@@ -125,6 +125,7 @@ fn queued_targets_are_projected_before_the_first_leg_is_completed() {
                 units: vec![id],
                 to: v(250, 0, 0),
                 queue: false,
+                mode: None,
             },
         ),
         order(
@@ -133,6 +134,7 @@ fn queued_targets_are_projected_before_the_first_leg_is_completed() {
                 units: vec![id],
                 to: v(467, 100, 0),
                 queue: true,
+                mode: None,
             },
         ),
     ]);
@@ -207,6 +209,7 @@ fn actual_force_commands_replay_with_star1_and_current_seam() {
                         units: vec![id],
                         to: v(467, 100, 0),
                         queue: false,
+                        mode: None,
                     },
                 ),
                 edit(0, Edit::ForceOntoMap { id, enabled: true }),
@@ -218,6 +221,7 @@ fn actual_force_commands_replay_with_star1_and_current_seam() {
                     units: vec![id],
                     to: v(467, 100, 0),
                     queue: false,
+                    mode: None,
                 },
             )],
             90 => vec![edit(2, Edit::ForceOntoMap { id, enabled: true })],

@@ -79,6 +79,8 @@ with its own claim; an agent does not hold claims it is not working on.
 - Push early and often. A pushed branch shows the claim is alive.
 - Blocked, need a seam change, or found the plan wrong: comment on the issue
   first, then open the seam PR or ask. Don't work around a seam locally.
+  Touching paths another claim owns follows "Idle claims and mechanical
+  edits" below.
 - Don't start from another package's unmerged branch; use the fakes.
 
 ## Freezes
@@ -105,12 +107,20 @@ paths fall under an open freeze wait; ones elsewhere carry on.
 - CI on a PR runs `core crates` on `ubuntu-latest` always, and `sta64` on
   `ubuntu-latest` only when the PR touches `crates/sta64/`, `assets/`,
   `bench/`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml` or the CI
-  workflow. The full 4-OS matrix (Linux x86-64 and ARM, macOS, Windows) runs on
-  every non-docs-only push to `main`, one run at a time (later pushes collapse into one
-  pending run). Add the `full-ci` label to a PR that touches file paths or
-  line endings, platform code, determinism (digests, RNG, float or hash
-  ordering, goldens) or file formats (saves, snapshots, network protocol,
-  content formats), so all four OSes run (including `sta64`) before the merge.
+  workflow. `core crates` runs the tests, clippy and the `sta-bench` report;
+  `sta64` runs `cargo check --all-targets`, clippy, the sim-only bench smoke
+  and the release tests (a PR that only touches `docs/` runs no CI). Linux
+  only is the default for a pull request, and is enough to merge. The full
+  4-OS matrix (Linux x86-64 and ARM, macOS, Windows) runs on every
+  non-docs-only push to `main`, one run at a time (later pushes collapse into
+  one pending run), and is where platform differences are caught. The `full-ci`
+  label is optional: it runs all four OSes, including `sta64`, on the PR
+  (each such run takes 30 to 60 minutes, by STA64's own observation). Add it
+  only when the risk of the change is the platform itself: path handling, line
+  endings, platform-specific code, linking or vendored native code, build
+  scripts, the CI workflow. Not for determinism or file formats as such.
+- Whoever merged a PR that turns `main` red on another OS fixes it or reverts
+  it first, before other work. This binds agents and people alike.
 - Because a PR that does not touch `sta64` no longer builds it, run
   `cargo check --workspace --all-targets` and the tests of every crate you
   changed locally before pushing (see "Builds"), whatever CI will run.
@@ -128,6 +138,43 @@ paths fall under an open freeze wait; ones elsewhere carry on.
 - **Stale:** a claim with no push and no issue comment for 48 hours may be
   questioned with a comment on the issue. If nobody answers within 24 hours,
   a new session may take it over: comment, reassign, replace the claim line.
+
+## Idle claims and mechanical edits
+
+The "Stale" rule above is about taking a package over. This section is about
+touching the paths of a claim without taking it over. It does not weaken the
+"Stale" rule, and the 48-hour question and 24-hour takeover stay as they are.
+
+A claim is **idle** when it is open and has had no push to its branch or
+branches, no PR and no comment on its issue for seven days. A claim that is
+not idle keeps the rule in "While working": comment on its issue first, then
+open the seam PR or ask.
+
+**Mechanical edits.** Any PR may make mechanical, behaviour-free edits in the
+paths an idle claim owns: a field added with its default at call sites, a
+rename a seam change forces, an import. Nothing that changes what that
+package's code does. The PR:
+
+- lists every such file under "files touched outside owns" and says the edits
+  are mechanical,
+- links the claim issue and leaves a comment there when the PR opens,
+- requests the claim holder as reviewer.
+
+The claim holder may ask on the PR for a different shape. Until they do, the
+claim does not block the PR.
+
+**Work an accepted ADR assigns elsewhere.** When an accepted ADR moves state
+or code that an idle claim owns into another package, that package may
+proceed after a notice on the claim issue and 24 hours without objection.
+Tests that the claim's merged PRs added stay unchanged and count as the
+contract; a test that would have to change is raised on the claim issue first.
+The claim's still-open parts stay with it. The issue is not reassigned or
+edited.
+
+**Seam PRs.** A seam PR that adds a field or variant fixes every caller on
+`main` in the same PR, including callers under open claims. Those fixes are
+mechanical edits under the conditions above. For a claim that is not idle, the
+holder agrees first, on the issue or on the PR.
 
 ## Packages not in the plan
 

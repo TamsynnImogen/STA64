@@ -60,7 +60,7 @@ pub(crate) fn put(sim: &mut Sim, at: Vec3, heading: (i32, i32)) -> EntityId {
 }
 
 pub(crate) fn go(sim: &mut Sim, ids: &[EntityId], to: Vec3) {
-    let kind = CommandKind::Order(Order::Move { units: ids.to_vec(), to, queue: false });
+    let kind = CommandKind::Order(Order::Move { units: ids.to_vec(), to, queue: false, mode: None });
     sim.step(&[Command { player: PlayerId(1), seq: 0, kind }]);
 }
 
@@ -415,7 +415,7 @@ fn a_group_move_of_large_craft_ends_close_to_its_slots_and_the_plane() {
     let ids: Vec<_> = (0..3).map(|i| put(&mut sim, p3(0, 0, i * 200), (1, 0))).collect();
     let kind = CommandKind::Order(Order::Formation { units: ids.clone(), kind: 1 });
     sim.step(&[Command { player: PlayerId(1), seq: 0, kind }]);
-    let kind = CommandKind::Order(Order::Move { units: ids.clone(), to: p3(1000, 0, 200), queue: false });
+    let kind = CommandKind::Order(Order::Move { units: ids.clone(), to: p3(1000, 0, 200), queue: false, mode: None });
     sim.step(&[Command { player: PlayerId(1), seq: 1, kind }]);
     for _ in 0..900 {
         sim.step(&[]);

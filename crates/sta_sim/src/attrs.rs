@@ -62,6 +62,11 @@ pub struct AttrsView {
     /// The mission-wide switches (LUA-41); the default when none was sent.
     #[serde(default)]
     pub mission_switches: crate::mission_switches::MissionSwitches,
+    /// The move mode each live unit's last move order named (SIM-76, ADR 0011 G4),
+    /// ascending id; absence means the order took the content's default
+    /// ([`crate::Sim::move_mode`] resolves it). Not a rule yet: nothing steers by it.
+    #[serde(default)]
+    pub move_modes: Vec<(EntityId, crate::command::MoveMode)>,
 }
 
 /// One seat's derived team numbers.
@@ -132,6 +137,7 @@ impl Attrs {
             enemy_hit: Vec::new(),
             ally_attacks: Vec::new(),
             mission_switches: Default::default(),
+            move_modes: Vec::new(),
         }
     }
 
