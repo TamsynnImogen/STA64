@@ -171,13 +171,15 @@ fn clear_region_sights(mut sights: ResMut<RegionSights>) {
 }
 
 /// The state of an object of `radius` at `(x, z)` (sim space) for the local player.
-/// With no local player or in a cutscene every object counts as in sight; with a local player and
-/// no grid yet (the match is still starting) none has been seen.
+/// With no local player or in a cutscene every object counts as in sight, and so does every object
+/// while there is no fog grid (the match is still starting, or nothing builds one): fail-safe, one
+/// rule for the gates, the gas and `sync_units`. (PR #1281's state default for a missing grid was
+/// "never"; this overrides it for what is drawn, see the todo batch.)
 pub fn sight_now(fog: Option<&FogState>, local: Option<PlayerId>, cutscene: bool, x: f32, z: f32, radius: f32) -> Sight {
     if local.is_none() || cutscene {
         return Sight::Visible;
     }
-    fog.map_or(Sight::Never, |f| Sight::of(&f.grid, x, z, radius))
+    fog.map_or(Sight::Visible, |f| Sight::of(&f.grid, x, z, radius))
 }
 
 /// An intermediate entity between the map root and an object (nebula billboards, an asteroid field, a
@@ -192,15 +194,24 @@ pub struct SightGate {
     pub region: Option<usize>,
 }
 
-/// Show or hide each [`SightGate`].
+/// Show or hide each [`SightGate`], when the states, the grid, the local player or the cutscene flag changed
+/// or a gate is new.
 pub fn apply_gates(
     fog: Option<Res<FogState>>,
     local: Res<LocalPlayer>,
     cine: Option<Res<crate::ui::presentation::CineractiveState>>,
     sights: Res<RegionSights>,
+    new: Query<(), Added<SightGate>>,
     mut gates: Query<(&SightGate, &mut Visibility)>,
+    mut memo: Local<SightMemo>,
 ) {
     let cutscene = cine.is_some_and(|c| c.on);
+    let had_fog = fog.is_some();
+    let changed = sights.is_changed() || local.is_changed() || fog.as_ref().is_some_and(|f| f.is_changed()) || memo.cutscene != cutscene || memo.had_fog != had_fog || !new.is_empty();
+    if !changed {
+        return;
+    }
+    *memo = SightMemo { cutscene, had_fog };
     for (g, mut v) in &mut gates {
         let sight = match g.region {
             Some(id) if local.0.is_some() && !cutscene => sights.get(id),
@@ -363,7 +374,7 @@ mod tests {
         let map = region_map();
         let mut app = app(&map);
         app.update();
-        assert_eq!(sights(&app), [Sight::Never; 2], "with a local player and no grid yet nothing has been seen");
+        assert_eq!(sights(&app), [Sight::Visible; 2], "no grid yet: everything is drawn");
         set_fog(&mut app, grid());
         assert_eq!(sights(&app), [Sight::Never; 2]);
         // A cell inside the nebula (centre 1000,-2000; radius 450) is in sight.
@@ -464,8 +475,17 @@ mod tests {
         // and a small object whose centre cell alone decides.
         let nebula = app.world_mut().spawn((SightGate { pos: Vec2::new(1000.0, -2000.0), radius: 450.0, region: Some(0) }, Visibility::Inherited)).id();
         let planet = app.world_mut().spawn((SightGate { pos: Vec2::new(3000.0, 3000.0), radius: 300.0, region: None }, Visibility::Inherited)).id();
+        // The asteroid field (region 1, a box centred at 0,300): a region gate too.
+        let field = app.world_mut().spawn((SightGate { pos: Vec2::new(0.0, 300.0), radius: 360.0, region: Some(1) }, Visibility::Inherited)).id();
+        // No grid yet: every gate shows (fail-safe).
+        app.update();
+        assert_eq!((vis(&app, nebula), vis(&app, planet), vis(&app, field)), (Visibility::Inherited, Visibility::Inherited, Visibility::Inherited));
         set_fog(&mut app, grid());
-        assert_eq!((vis(&app, nebula), vis(&app, planet)), (Visibility::Hidden, Visibility::Hidden));
+        assert_eq!((vis(&app, nebula), vis(&app, planet), vis(&app, field)), (Visibility::Hidden, Visibility::Hidden, Visibility::Hidden));
+        // A cell inside the field's footprint in sight: the field is drawn whole.
+        set_fog(&mut app, grid_with(&[(0.0, 600.0, 10.0, true)]));
+        assert_eq!(vis(&app, field), Visibility::Inherited);
+        set_fog(&mut app, grid());
         // One cell at the edge of the planet's footprint in sight: drawn whole.
         set_fog(&mut app, grid_with(&[(3250.0, 3000.0, 10.0, true)]));
         assert_eq!((vis(&app, nebula), vis(&app, planet)), (Visibility::Hidden, Visibility::Inherited));

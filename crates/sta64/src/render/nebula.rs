@@ -175,6 +175,10 @@ pub struct NebulaField {
     radius: f32,
     /// Which of `centres` are drawn (#1146: a nebula never seen is not); all, until the states say otherwise.
     shown: Vec<bool>,
+    /// Each centre's region of the map, found once (`gate_fields`); `None` until then.
+    region: Option<Vec<Option<usize>>>,
+    /// The centres drawn (`shown`), for the lightning to strike among.
+    lit: Vec<[f32; 3]>,
     lightning: Lightning,
     /// The wall clock at the last update, for the lightning's step.
     last: f32,
@@ -879,25 +883,27 @@ fn poll_noise(mut nv: ResMut<NoiseVolume>, mut images: ResMut<Assets<Image>>, mu
 /// (#1146; rule and grade: `render::fog_objects`). The field is one box for the whole class, so the
 /// nebula is cleared from the envelope the gas is marched through, and the lightning strikes among
 /// the nebulae drawn only. A nebula in sight, or remembered (out-of-sight looks are a later step),
-/// is as before. A centre that is no region of the map (a latinum nebula) is always drawn.
+/// is as before. A centre that is no region of the map is always drawn, as is every nebula when there is
+/// no fog grid (the states then read as in sight). Runs only when the states changed or a field is new,
+/// and finds each centre's region once.
 fn gate_fields(
     regions: Res<crate::render::fog_objects::FogRegions>,
     sights: Res<crate::render::fog_objects::RegionSights>,
     mut fields: Query<&mut NebulaField>,
-    materials: ResMut<Assets<NebulaMaterial>>,
+    materials: Res<Assets<NebulaMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
     use crate::render::fog_objects::Sight;
+    // A field that has not found its regions yet is a new one.
+    if !sights.is_changed() && !regions.is_changed() && !fields.iter().any(|f| f.region.is_none()) {
+        return;
+    }
     for mut f in &mut fields {
-        let shown: Vec<bool> = f
-            .centres
-            .iter()
-            .map(|c| {
-                regions
-                    .find(sta_content::RegionKind::Nebula, c[0], -c[2], REGION_MATCH)
-                    .is_none_or(|r| sights.get(r.id) != Sight::Never)
-            })
-            .collect();
+        if f.region.is_none() {
+            let found = f.centres.iter().map(|c| regions.find(sta_content::RegionKind::Nebula, c[0], -c[2], REGION_MATCH).map(|r| r.id)).collect();
+            f.region = Some(found);
+        }
+        let shown: Vec<bool> = f.region.iter().flatten().map(|r| r.is_none_or(|id| sights.get(id) != Sight::Never)).collect();
         if shown == f.shown {
             continue;
         }
@@ -905,6 +911,7 @@ fn gate_fields(
         let env = sta_surface::nebula::envelope_masked(&f.recipe, f.radius, &f.centres, &shown);
         let Some(mut img) = images.get_mut(&handle) else { continue };
         img.data = Some(env.pixels);
+        f.lit = f.centres.iter().zip(&shown).filter(|(_, s)| **s).map(|(c, _)| *c).collect();
         f.shown = shown;
     }
 }
@@ -1018,6 +1025,8 @@ pub fn spawn_field(
             centres: pos.to_vec(),
             radius,
             shown: vec![true; pos.len()],
+            region: None,
+            lit: pos.to_vec(),
             lightning: Lightning::new(seed),
             last: -1.0,
         },
@@ -1108,8 +1117,9 @@ fn update(
         if r.lightning > 0.0 {
             let dt = if f.last >= 0.0 && t > f.last { t - f.last } else { 0.0 };
             f.last = t;
-            let lit: Vec<[f32; 3]> = f.centres.iter().zip(&f.shown).filter(|(_, s)| **s).map(|(c, _)| *c).collect();
+            let lit = std::mem::take(&mut f.lit);
             let fl = f.lightning.step(r, &lit, f.reach, f.dome, t, dt);
+            f.lit = lit;
             p.flash0 = Vec4::from(fl[0]);
             p.flash1 = Vec4::from(fl[1]);
             p.flash2 = Vec4::from(fl[2]);
@@ -1152,6 +1162,8 @@ mod tests {
                 centres: centres.clone(),
                 radius: 300.0,
                 shown: vec![true; 2],
+                region: None,
+                lit: centres.clone(),
                 lightning: Lightning::new(1),
                 last: -1.0,
             })
@@ -1160,6 +1172,10 @@ mod tests {
             .init_resource::<RegionSights>()
             .insert_resource(crate::render::units::LocalPlayer(Some(sta_sim::PlayerId(1))));
         app.add_systems(Update, (update_region_sights, gate_fields).chain());
+        // No grid yet: every nebula is drawn (the same rule as the gates and `sync_units`).
+        app.update();
+        assert_eq!(app.world().get::<NebulaField>(field).unwrap().shown, vec![true, true]);
+        assert_eq!(app.world().get::<NebulaField>(field).unwrap().region, Some(vec![Some(0), Some(1)]), "each centre's region found once");
         // A grid that has seen only the second nebula.
         let mut grid = crate::render::fog::FogGrid::new([-4096.0, -4096.0], [4096.0, 4096.0]);
         let c = grid.cell_of(2000.0, 100.0).unwrap();
@@ -1172,6 +1188,12 @@ mod tests {
         let got = app.world().resource::<Assets<Image>>().get(&handle).unwrap().data.clone().unwrap();
         assert_eq!(got, want.pixels);
         assert_ne!(got, env.pixels);
+        assert_eq!(app.world().get::<NebulaField>(field).unwrap().lit, vec![centres[1]], "the lightning strikes among the nebulae drawn");
+        // A frame with nothing changed does no work: a marker written into the image stays.
+        app.world_mut().resource_mut::<Assets<Image>>().get_mut(&handle).unwrap().data = Some(vec![7; got.len()]);
+        app.update();
+        app.update();
+        assert_eq!(app.world().resource::<Assets<Image>>().get(&handle).unwrap().data.clone().unwrap(), vec![7; got.len()], "no recompute without a change");
         // Everything in sight again: the envelope is the full one.
         let all = crate::render::fog::FogGrid::new([-4096.0, -4096.0], [4096.0, 4096.0]).lifted(true, true);
         app.insert_resource(crate::render::fog::FogState { grid: all, updates: 2 });
