@@ -1,0 +1,636 @@
+== si_calls
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 58
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('DoVoid', 1), ('GetInt', 1), ('IsOk', 1), ('GetF', 1), ('AddToLoad', 1), ('ScriptCreate_foo', 1), ('ScriptGet_bar', 1), ('ScriptDestroy_foo', 1)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('eval', ('call', 'DoVoid', [('const', 5), ('float', 1.0)]))
+  ('set', ('tmp', 1), ('call', 'GetInt', [('str', 'hello')]))
+  ('set', ('obj', 'cnt'), ('tmp', 1))
+  ('set', ('tmp', 2), ('call', 'IsOk', [('boolarg', ('const', 1))]))
+  ('if', ('not', ('truth', ('tmp', 2))), 268439622)
+ block 0x1000103c
+  ('set', ('tmp', 3), ('call', 'GetF', []))
+  ('set', ('obj', 'flt'), ('tmp', 3))
+ block 0x10001046
+  ('comment', 'AddToLoad: native save/load callback, not used')
+  ('set', ('tmp', 4), ('newvar', 'foo', ('str', 'hello')))
+  ('set', ('tmp', 5), ('enginevar', 'bar', 'hot_int'))
+  ('comment', 'ScriptDestroy_foo: native cleanup, not used')
+  ('return', None)
+-- lift 0x10001400
+func 0x10001400
+ error 'ScriptInterface slot 16 unknown at 0x1000141a'
+ instructions 20
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- render 0x10001000
+function M.ScriptInit(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    A('DoVoid', 5, 1.0)
+    O.cnt = A('GetInt', 'hello')
+    if not (T(A('IsOk', true))) then goto b1046 end
+    O.flt = A('GetF')
+    ::b1046::
+    -- AddToLoad: native save/load callback, not used
+    t[4] = NewVar('foo', 'hello')
+    t[5] = EngineVar('bar', 'hot_int')
+    -- ScriptDestroy_foo: native cleanup, not used
+    do return end
+end
+-- convert
+
+O.cnt = 0
+O.flt = 0.0
+O.arr = {}
+O.farr = {}
+O.vec = {}
+O.flag = 0
+
+-- ---------------------------------------------------------------- functions
+-- ScriptInit: ScriptInit
+function M.ScriptInit(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    A('DoVoid', 5, 1.0)
+    O.cnt = A('GetInt', 'hello')
+    if not (T(A('IsOk', true))) then goto b1046 end
+    O.flt = A('GetF')
+    ::b1046::
+    -- AddToLoad: native save/load callback, not used
+    t[4] = NewVar('foo', 'hello')
+    t[5] = EngineVar('bar', 'hot_int')
+    -- ScriptDestroy_foo: native cleanup, not used
+    do return end
+end
+
+-- action: ActOne  (not decoded: ScriptInterface slot 16 unknown at 0x1000141a)
+function M.ActOne(...)
+    M.notDecoded('ActOne', 'ScriptInterface slot 16 unknown at 0x1000141a')
+    return 0
+end
+
+-- Engine calls the converted code makes (bodies and rule conditions).
+Mission.engineNames = { 'DoVoid', 'GetF', 'GetInt', 'IsOk' }
+Mission.undecoded = { ['ActOne'] = 'ScriptInterface slot 16 unknown at 0x1000141a' }
+static_refs []
+== var_and_world_calls
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 48
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('var', 'p_ALPHA', 'set', [('const', 7)])
+  ('set', ('obj', 'cnt'), ('var', 'p_ALPHA', 'hot_int'))
+  ('var', 'p_BETA', 'set', [('float', 2.0)])
+  ('var', 'p_ALPHA', 'start', [('float', 1.0)])
+  ('var', 'p_ALPHA', 'stop', [])
+  ('set', ('tmp', 1), ('varq', 'p_ALPHA', 'time'))
+  ('return', ('tmp', 1))
+-- lift 0x10001200
+func 0x10001200
+ error None
+ instructions 35
+ params 0
+ loops 0
+ calls []
+ steps [268440320]
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001200
+  ('set', ('tmp', 1), ('newscript', ('str', 'name')))
+  ('set', ('loc', -4), ('script', ('tmp', 1)))
+  ('addstep', ('tmp', 1), 268440320)
+  ('trashrule', ('str', 'name'))
+  ('return', None)
+-- convert
+
+O.cnt = 0
+O.flt = 0.0
+O.arr = {}
+O.farr = {}
+O.vec = {}
+O.flag = 0
+
+-- ---------------------------------------------------------------- functions
+-- ScriptInit: ScriptInit
+function M.ScriptInit(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    VarOp('p_ALPHA', 'set', 7)
+    O.cnt = S.p_ALPHA
+    VarOp('p_BETA', 'set', 2.0)
+    VarOp('p_ALPHA', 'start', 1.0)
+    VarOp('p_ALPHA', 'stop')
+    do return VarQuery('p_ALPHA', 'time') end
+end
+
+-- action: Act
+function M.Act(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    t[1] = NewScript('name')
+    L[-4] = N(t[1])
+    AddStep(t[1], M.Act_step, 'Act_step')
+    TrashRule('name')
+    do return end
+end
+
+-- step: Act_step
+function M.Act_step(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    do return V.p_ALPHA end
+end
+
+-- Engine calls the converted code makes (bodies and rule conditions).
+Mission.engineNames = {  }
+Mission.undecoded = {  }
+static_refs []
+== vec3_and_pointer_args
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 45
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('MoveTo', 1), ('PtrVec', 1), ('PtrInt', 1), ('PtrStr', 1)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('eval', ('call', 'MoveTo', [('str', 'abc'), ('vec', [('const', 1065353216), ('const', 1073741824), ('const', 1077936128)])]))
+  ('set', ('loc', -16), ('const', 1065353216))
+  ('set', ('loc', -12), ('const', 1073741824))
+  ('set', ('loc', -8), ('const', 1077936128))
+  ('eval', ('call', 'PtrVec', [('vec', [('float', 1.0), ('float', 2.0), ('float', 3.0)])]))
+  ('set', ('loc', -20), ('const', 9))
+  ('eval', ('call', 'PtrInt', [('const', 9)]))
+  ('eval', ('call', 'PtrStr', [('str', 'abc')]))
+  ('return', None)
+-- lift 0x10001300
+func 0x10001300
+ error None
+ instructions 25
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('GetPos', 1)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001300
+  ('set', ('tmp', 1), ('call', 'GetPos', [('str', 'abc')]))
+  ('multiset', [(('loc', -32), ('field', ('tmp', 1), 0)), (('loc', -28), ('field', ('tmp', 1), 1)), (('loc', -24), ('field', ('tmp', 1), 2))])
+  ('set', ('obj', 'cnt'), ('loc', -32))
+  ('return', ('loc', -32))
+-- lift 0x10001400
+func 0x10001400
+ error 'Recruit: parameter type N at 0x1000141e'
+ instructions 22
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001500
+func 0x10001500
+ error None
+ instructions 22
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('PtrVec', 1)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001500
+  ('eval', ('call', 'PtrVec', [('vec', [('fbits', ('loc', -32)), ('fbits', ('loc', -28)), ('fbits', ('loc', -24))])]))
+  ('return', None)
+-- convert
+
+O.cnt = 0
+O.flt = 0.0
+O.arr = {}
+O.farr = {}
+O.vec = {}
+O.flag = 0
+
+-- ---------------------------------------------------------------- functions
+-- ScriptInit: ScriptInit
+function M.ScriptInit(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    A('MoveTo', 'abc', Vector(1065353216, 1073741824, 1077936128))
+    L[-16] = 1065353216
+    L[-12] = 1073741824
+    L[-8] = 1077936128
+    A('PtrVec', Vector(1.0, 2.0, 3.0))
+    L[-20] = 9
+    A('PtrInt', 9)
+    A('PtrStr', 'abc')
+    do return end
+end
+
+-- Engine calls the converted code makes (bodies and rule conditions).
+Mission.engineNames = { 'MoveTo', 'PtrInt', 'PtrStr', 'PtrVec' }
+Mission.undecoded = {  }
+static_refs []
+== helper_calls
+-- lift 0x10001100
+func 0x10001100
+ error None
+ instructions 39
+ params 0
+ loops 0
+ calls [268440064]
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001100
+  ('set', ('loc', -16), ('float', 1.0))
+  ('set', ('loc', -12), ('float', 2.0))
+  ('set', ('loc', -8), ('float', 3.0))
+  ('set', ('tmp', 1), ('strcmp', ('str', 'a'), ('str', 'a')))
+  ('set', ('obj', 'cnt'), ('tmp', 1))
+  ('set', ('tmp', 2), ('sprintf', ('str', 'value %d'), [('const', 7)]))
+  ('set', ('loc', -64), ('tmp', 2))
+  ('set', ('tmp', 3), ('slen', ('tmp', 2)))
+  ('set', ('tmp', 4), ('fcall', 268440064, [('const', 5)]))
+  ('set', ('tmp', 5), ('fcall', 268440064, []))
+  ('return', ('tmp', 5))
+-- lift 0x10001300
+func 0x10001300
+ error 'sprintf with a floating point conversion at 0x1000131c'
+ instructions 22
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001340
+func 0x10001340
+ error 'sprintf into str at 0x1000135a'
+ instructions 21
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001380
+func 0x10001380
+ error 'strcmp with 1 arguments at 0x10001396'
+ instructions 19
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x100013c0
+func 0x100013c0
+ error None
+ instructions 18
+ params 0
+ loops 0
+ calls [268440320]
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x100013c0
+  ('set', ('tmp', 1), ('fcall', 268440320, []))
+  ('return', ('tmp', 1))
+-- convert
+
+O.cnt = 0
+O.flt = 0.0
+O.arr = {}
+O.farr = {}
+O.vec = {}
+O.flag = 0
+
+-- ---------------------------------------------------------------- functions
+-- ScriptInit: ScriptInit
+function M.ScriptInit(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    L[-16] = 1.0
+    L[-12] = 2.0
+    L[-8] = 3.0
+    O.cnt = STRCMP('a', 'a')
+    t[2] = SPRINTF('value %d', 7)
+    L[-64] = t[2]
+    t[3] = #(t[2])
+    t[4] = M.helper_1200(5)
+    do return M.helper_1200() end
+end
+
+-- helper: helper_1200
+function M.helper_1200(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    do return R.eax end
+end
+
+-- Engine calls the converted code makes (bodies and rule conditions).
+Mission.engineNames = {  }
+Mission.undecoded = {  }
+static_refs []
+== objref_out_and_vectors
+-- lift 0x10001800
+func 0x10001800
+ error None
+ instructions 32
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype [(('tmp', 2), ('loc', -16))]
+ vectors [('loc', -16)]
+ litype [(-24, ('loc', -16))]
+ block 0x10001800
+  ('eval', ('vop', 'ctor', ('loc', -16), []))
+  ('set', ('loc', -20), ('const', 5))
+  ('eval', ('vop', 'push_back', ('loc', -16), [('const', 5)]))
+  ('set', ('tmp', 1), ('vop', 'size', ('loc', -16), []))
+  ('set', ('obj', 'cnt'), ('tmp', 1))
+  ('set', ('tmp', 2), ('vop', 'begin', ('loc', -16), []))
+  ('set', ('loc', -24), ('tmp', 2))
+  ('eval', ('vop', 'clear', ('loc', -16), []))
+  ('return', None)
+-- lift 0x10001900
+func 0x10001900
+ error None
+ instructions 41
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('GetFleet', 1), ('SiegeFleet.SetSpeed', 1), ('SiegeFleet.GetHealth', 1), ('SiegeFleet.Count', 1), ('SiegeFleet.Halt', 1)]
+ loctypes [(-4, 'SiegeFleet')]
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001900
+  ('set', ('tmp', 1), ('call', 'GetFleet', [('str', 'fleet')]))
+  ('set', ('loc', -4), ('objref', ('tmp', 1), 'SiegeFleet'))
+  ('eval', ('mcall', ('tmp', 1), 'SiegeFleet', 'SetSpeed', [('float', 1.0)]))
+  ('set', ('tmp', 2), ('mcall', ('tmp', 1), 'SiegeFleet', 'GetHealth', []))
+  ('set', ('obj', 'flt'), ('tmp', 2))
+  ('set', ('tmp', 3), ('mcall', ('tmp', 1), 'SiegeFleet', 'Count', []))
+  ('set', ('obj', 'cnt'), ('tmp', 3))
+  ('eval', ('mcall', ('tmp', 1), 'SiegeFleet', 'Halt', []))
+  ('return', None)
+-- lift 0x10001b00
+func 0x10001b00
+ error None
+ instructions 25
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('RecruitSpecialForces', 1)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001b00
+  ('set', ('tmp', 1), ('callout', 'RecruitSpecialForces', [('str', 'fleet'), ('loc', -4)]))
+  ('set', ('loc', -4), ('outval', ('loc', -4)))
+  ('set', ('obj', 'cnt'), ('loc', -4))
+  ('return', ('loc', -4))
+-- lift 0x10001c00
+func 0x10001c00
+ error 'ScriptInterface slot 8 unknown at 0x10001c18'
+ instructions 19
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001d00
+func 0x10001d00
+ error 'SiegeFleet::Bad: parameter type N at 0x10001d26'
+ instructions 26
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('GetFleet', 1)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- convert
+
+O.cnt = 0
+O.flt = 0.0
+O.arr = {}
+O.farr = {}
+O.vec = {}
+O.flag = 0
+
+-- ---------------------------------------------------------------- functions
+-- ScriptInit: ScriptInit
+function M.ScriptInit(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    VCTOR(VL(L, -16))
+    L[-20] = 5
+    VPUSH_BACK(VL(L, -16), 5)
+    O.cnt = VSIZE(VL(L, -16))
+    L[-24] = VBEGIN(VL(L, -16))
+    VCLEAR(VL(L, -16))
+    do return end
+end
+
+-- action: Act2
+function M.Act2(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    t[1] = A('GetFleet', 'fleet')
+    L[-4] = t[1]
+    FM(t[1], 'SiegeFleet', 'SetSpeed', 1.0)
+    O.flt = FM(t[1], 'SiegeFleet', 'GetHealth')
+    O.cnt = FM(t[1], 'SiegeFleet', 'Count')
+    FM(t[1], 'SiegeFleet', 'Halt')
+    do return end
+end
+
+-- Engine calls the converted code makes (bodies and rule conditions).
+Mission.engineNames = { 'GetFleet', 'SiegeFleet.Count', 'SiegeFleet.GetHealth', 'SiegeFleet.Halt', 'SiegeFleet.SetSpeed' }
+Mission.undecoded = {  }
+static_refs []
+== call_errors
+-- lift 0x10001000
+func 0x10001000
+ error 'indirect call `eax` (const) at 0x10001014'
+ instructions 17
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001100
+func 0x10001100
+ error 'hot_int slot 3 at 0x1000111a'
+ instructions 20
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001200
+func 0x10001200
+ error 'call on world slot 5 at 0x1000121a'
+ instructions 20
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001300
+func 0x10001300
+ error "add_step with ('const', 5) at 0x10001324"
+ instructions 25
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001400
+func 0x10001400
+ error 'std::vector member begin on an object never constructed here at 0x10001416'
+ instructions 18
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001600
+func 0x10001600
+ error 'ScriptInterface slot 1 unknown at 0x1000161a'
+ instructions 20
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001700
+func 0x10001700
+ error 'call takes 2 arguments, 1 pushed at 0x1000171c'
+ instructions 21
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- statics
+static_refs []
+static_refs []
