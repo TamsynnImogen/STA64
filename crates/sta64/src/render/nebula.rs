@@ -775,6 +775,7 @@ type MovedPuffs<'w, 's> = Query<
 /// a frame whose inputs did not change, which would write nothing, is skipped (#1235). Nebulae out
 /// of the view are not skipped: a stored fade only follows its value by steps of more than a
 /// thousandth, so what a skipped puff would hold on coming back depends on every frame it missed.
+#[allow(clippy::too_many_arguments)]
 fn fade_boards(
     mut commands: Commands,
     camera: Query<&GlobalTransform, crate::map::MainCamera>,

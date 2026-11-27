@@ -175,8 +175,15 @@ pub struct OutOfSight;
 /// A copy does not animate. Its light is reduced: grades per class.
 pub mod ghost {
     /// A planet's brightness out of sight, relative to in sight. Grade: measured at one window size (1280x720) by a
-    /// first-party bench of the original, as the copy's brightness against the seen planet's.
+    /// first-party bench of the original, as the copy's brightness against the seen planet's. That is a ratio of
+    /// framebuffer values; STA64 draws in linear light into an sRGB target, so the shader's factor is
+    /// [`planet_linear`] (display value ratio 0.20; interim: the original's blend is not read).
     pub const PLANET: f32 = 0.20;
+
+    /// The factor on a planet's linear output that gives [`PLANET`] in the displayed values.
+    pub fn planet_linear() -> f32 {
+        PLANET.powf(2.2)
+    }
     /// A nebula's light out of sight (billboard puffs and gas). Grade: inferred (half: the global intensity of the
     /// copy pass in the executable, read static, not measured on a nebula); interim until measured.
     pub const NEBULA: f32 = 0.5;

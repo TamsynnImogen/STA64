@@ -951,6 +951,7 @@ fn spin(clock: Res<AnimClock>, mut q: Query<(&Spin, &mut Transform), Without<cra
 /// A planet or asteroid field the local player's side has seen before and does not have in sight stands still
 /// (rule: read from the executable, static; #1146): everything under its gate that spins or turns gets
 /// [`SpinPaused`](crate::render::spin::SpinPaused) while the gate carries [`OutOfSight`](crate::render::fog_objects::OutOfSight).
+#[allow(clippy::type_complexity)]
 fn pause_spin(
     mut commands: Commands,
     added: Query<Entity, Added<crate::render::fog_objects::OutOfSight>>,

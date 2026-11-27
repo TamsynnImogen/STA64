@@ -92,6 +92,10 @@ pub fn surface_direction(axes: &[Vec4; 3], v: Vec3) -> Vec3 {
     Vec3::new(local.x, local.y, -local.z).normalize_or_zero()
 }
 
+#[cfg(test)]
+#[path = "planet_ghost_gpu.rs"]
+mod ghost_gpu;
+
 /// A world vector in the body's frame (the transpose of the rotation applied).
 #[cfg(test)]
 pub fn body_frame(axes: &[Vec4; 3], v: Vec3) -> Vec3 {
@@ -441,6 +445,7 @@ fn place_glows(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update(
     camera: Query<&GlobalTransform, crate::map::MainCamera>,
     lights: Query<(&GlobalTransform, &DirectionalLight, Option<&crate::map::MapLightSource>)>,
@@ -482,7 +487,7 @@ fn update(
         let centre = gt.translation();
         // A planet out of sight is a still copy at a fraction of its brightness (#1146; the amount and its grade:
         // `fog_objects::ghost::PLANET`). `shine.w` multiplies everything the planet's passes draw.
-        let brightness = if parent.is_some_and(|p| out_of_sight.contains(p.parent())) { crate::render::fog_objects::ghost::PLANET } else { 1.0 };
+        let brightness = if parent.is_some_and(|p| out_of_sight.contains(p.parent())) { crate::render::fog_objects::ghost::planet_linear() } else { 1.0 };
         for h in &body.materials {
             let Some(mut m) = materials.get_mut(h) else { continue };
             let p = &mut m.params;
@@ -1008,7 +1013,7 @@ mod tests {
             app.world_mut().spawn((GlobalTransform::IDENTITY, body(&c)));
             app.update();
             let w = |app: &App, h: &Handle<PlanetMaterial>| app.world().resource::<Assets<PlanetMaterial>>().get(h).unwrap().params.shine.w;
-            assert_eq!(w(&app, &a), crate::render::fog_objects::ghost::PLANET, "{profile:?}: out of sight");
+            assert_eq!(w(&app, &a), crate::render::fog_objects::ghost::planet_linear(), "{profile:?}: out of sight");
             assert_eq!((w(&app, &b), w(&app, &c)), (1.0, 1.0), "{profile:?}: in sight and with no gate");
             app.world_mut().entity_mut(gate).remove::<crate::render::fog_objects::OutOfSight>();
             app.update();
