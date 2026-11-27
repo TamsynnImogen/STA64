@@ -11,8 +11,9 @@
 //!   (`Sim::snapshot` bytes, unchanged), the journal (the replay's commands
 //!   and digests from tick 0, without the map), the controllers' state (one
 //!   opaque record per computer seat, written and read by the controller,
-//!   ADR 0010 V5), the events of the saved tick (what the controllers are
-//!   given at their first `think`) and the client's state (one opaque
+//!   ADR 0010 V5), the commands in flight (what was submitted for the next
+//!   tick and is in neither the snapshot nor the journal yet, with the
+//!   link's next sequence number) and the client's state (one opaque
 //!   record). The byte layout, and the rule for when [`CONTAINER_VERSION`]
 //!   must rise, are in `container`.
 //! - No map data and no assets are in a save (V3): the header names the map
@@ -53,7 +54,8 @@ pub use store::{Listing, list, read_file, write_atomic, write_new};
 use crate::replay::{self, ControlRec, Logged, Replay, SeatRec};
 use crate::setup::{Controller, ControllerState, GameOptions};
 use crate::snapshot::{self, SnapshotError};
-use crate::{Sim, SimEvent};
+use crate::Sim;
+use crate::command::Command;
 
 /// The largest file `load` and `read_file` accept (64 MiB), checked before
 /// anything else is done with the bytes. A save is a snapshot (a few MiB for
@@ -67,13 +69,13 @@ pub const MAX_FILE: usize = 64 << 20;
 /// Most seats a game has (`PlayerId::MAX_PLAYERS`); also the most controller
 /// records a save may hold.
 const MAX_SEATS: usize = PlayerId::MAX_PLAYERS as usize;
-/// Bounds on the counts of the journal and the events, checked from the
-/// count's own bytes before the list is decoded: 2 million commands, a
-/// million digests (a digest every 30 ticks is 33 million ticks), 100 000
-/// events in one tick.
+/// Bounds on the counts of the journal and of the commands in flight,
+/// checked from the count's own bytes before the list is decoded: 2 million
+/// journal commands, a million digests (a digest every 30 ticks is 33
+/// million ticks), 100 000 commands submitted for one tick.
 const MAX_COMMANDS: u64 = 2_000_000;
 const MAX_DIGESTS: u64 = 1_000_000;
-const MAX_EVENTS: u64 = 100_000;
+const MAX_IN_FLIGHT: u64 = 100_000;
 
 /// Why a save was refused, at save or at load: one variant and one message
 /// per reason (ADR 0010 V1). The message names the first mismatch. The four
@@ -209,6 +211,27 @@ struct JournalRec<'a> {
     commands: &'a [Logged],
 }
 
+/// The commands in flight at a save, and the link's sequence counter.
+///
+/// A save is taken **between ticks, after the controllers have thought about
+/// the last step and submitted**: what has been submitted for the next tick
+/// (the controllers' commands of that think, and the local player's and the
+/// sandbox's since) is in neither the snapshot nor the journal, which take a
+/// command when it is stepped. These commands change the game, so they are
+/// part of the save: `commands` in submission order, and `next_seq`, the
+/// next sequence number the link hands out (stored, not derived: the link
+/// shares one counter between the player's and the sandbox's commands).
+///
+/// After a load the caller submits `commands` to its router for the next
+/// tick, restores `next_seq`, does **not** call the controllers' `think`
+/// (they already thought about the saved tick; their records are their state
+/// after that think) and steps on as usual.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct InFlight {
+    pub next_seq: u32,
+    pub commands: Vec<Command>,
+}
+
 type Digests = Vec<(Tick, u64)>;
 
 /// A restored controller and the seat it plays.
@@ -229,13 +252,10 @@ pub struct Loaded {
     /// One record per computer seat, ascending seat. Restore them with
     /// [`Loaded::restore_controllers`] or by hand.
     pub controllers: Vec<SeatController>,
-    /// The events of the tick the save was made at (what the last `step`
-    /// returned). **Give them to every restored controller's first `think`**
-    /// as the `events` argument, exactly as the previous step's events are
-    /// given between two ticks of an uninterrupted game; without them a
-    /// controller that reads events does not continue as the uninterrupted
-    /// one would (ADR 0010 V5).
-    pub events: Vec<SimEvent>,
+    /// The commands in flight and the link's next sequence number. **Submit
+    /// them for the next tick and do not call the restored controllers'
+    /// `think` before stepping**: see [`InFlight`].
+    pub in_flight: InFlight,
     pub client: ClientState,
 }
 
@@ -252,8 +272,9 @@ impl Loaded {
     /// name, record)`, which belongs to the controller's crate (it builds the
     /// controller and takes the record back) and refuses with a reason an
     /// unknown name or a record version it does not read: that refuses the
-    /// load, naming the seat. Then give [`Loaded::events`] to each
-    /// controller's first `think`.
+    /// load, naming the seat. The restored controllers are in their state
+    /// after the think of the saved tick: submit [`Loaded::in_flight`] and
+    /// step; do not think first.
     pub fn restore_controllers(
         &self,
         mut restore: impl FnMut(PlayerId, &str, &ControllerState) -> Result<Box<dyn Controller>, String>,
@@ -335,6 +356,18 @@ fn cross_check(sim: &Sim, seats: &[SeatRec], options: &GameOptions) -> Result<()
     Ok(())
 }
 
+/// Every command in flight comes from a seat of the game or the sandbox
+/// player, and there are not more of them than a tick can hold.
+fn check_in_flight(seats: &[SeatRec], in_flight: &InFlight) -> Result<(), SaveError> {
+    if in_flight.commands.len() as u64 > MAX_IN_FLIGHT {
+        return Err(SaveError::Invalid(format!("too many commands in flight: {}, at most {MAX_IN_FLIGHT}", in_flight.commands.len())));
+    }
+    match in_flight.commands.iter().find(|c| c.player != PlayerId::BENCH && !seats.iter().any(|s| s.id == c.player)) {
+        Some(c) => Err(SaveError::Invalid(format!("a command in flight is from player {}, who is not a seat of the game", c.player.0))),
+        None => Ok(()),
+    }
+}
+
 /// Writes a save of `sim` at its current tick.
 ///
 /// `replay` is the game's replay so far (its journal is kept, its map is
@@ -342,16 +375,19 @@ fn cross_check(sim: &Sim, seats: &[SeatRec], options: &GameOptions) -> Result<()
 /// content and describe the same setup as the sim. `controllers` holds the
 /// controller of every computer seat; one that has not opted in to saving
 /// ([`Controller::save_state`]) refuses the save with its seat named.
-/// `events` are the events the last `step` returned (what the controllers are
-/// given at their next `think`): they are kept and handed back by [`load`].
-/// `info` carries what only the caller knows; `info.local_seat` must be a
-/// seat of the game (a save without one is an observer's: refused).
+/// Take the save **between ticks, after the controllers have thought about
+/// the last step and submitted**: `in_flight` is what is waiting for the next
+/// tick ([`InFlight`]), every command's player a seat of the game or the
+/// sandbox player (`PlayerId::BENCH`), and `controllers` hold their state
+/// after that think. `info` carries what only the caller knows;
+/// `info.local_seat` must be a seat of the game (a save without one is an
+/// observer's: refused).
 pub fn save(
     sim: &Sim,
     replay: &Replay,
     info: &SaveInfo,
     controllers: &[(PlayerId, &dyn Controller)],
-    events: &[SimEvent],
+    in_flight: &InFlight,
     client: &ClientState,
 ) -> Result<Vec<u8>, SaveError> {
     if info.kind == GameKind::Mission {
@@ -374,6 +410,7 @@ pub fn save(
         return Err(SaveError::Invalid(format!("the journal ends at tick {}, the sim is at tick {}", replay.end_tick, sim.tick)));
     }
     cross_check(sim, &replay.players, &replay.options)?;
+    check_in_flight(&replay.players, in_flight)?;
     let mut records = Vec::new();
     for seat in &replay.players {
         let ControlRec::Ai(name) = &seat.control else { continue };
@@ -424,7 +461,7 @@ pub fn save(
             snapshot: snapshot_bytes,
             journal: postcard::to_allocvec(&journal).map_err(invalid)?,
             controllers: postcard::to_allocvec(&records).map_err(invalid)?,
-            events: postcard::to_allocvec(events).map_err(invalid)?,
+            in_flight: postcard::to_allocvec(in_flight).map_err(invalid)?,
             client_version: client.version,
             client: client.data.clone(),
         },
@@ -512,8 +549,7 @@ pub fn load(bytes: &[u8], content: Arc<ContentDb>, map: Option<MapSource>) -> Re
     }
     cross_check(&sim, &header.seats, &header.options)?;
     let (commands, digests) = decode_journal(sections.journal, header.tick)?;
-    let (events, rest) = take_vec::<SimEvent>(sections.events, MAX_EVENTS, "events")?;
-    ended(rest, "events")?;
+    let in_flight = decode_in_flight(sections.in_flight, &header.seats)?;
     let (controllers, rest) = take_vec::<SeatController>(sections.controllers, MAX_SEATS as u64, "controller records")?;
     ended(rest, "controller records")?;
     check_controllers(&header, &controllers)?;
@@ -545,7 +581,19 @@ pub fn load(bytes: &[u8], content: Arc<ContentDb>, map: Option<MapSource>) -> Re
         description: header.description.clone(),
     };
     let client = ClientState { version: sections.client_version, data: sections.client.to_vec() };
-    Ok(Loaded { sim, replay, header, info, controllers, events, client })
+    Ok(Loaded { sim, replay, header, info, controllers, in_flight, client })
+}
+
+/// The commands in flight: next sequence number, then the commands (count
+/// bounded before decoding), each from a seat or the sandbox player.
+fn decode_in_flight(bytes: &[u8], seats: &[SeatRec]) -> Result<InFlight, SaveError> {
+    let (next_seq, rest) =
+        postcard::take_from_bytes::<u32>(bytes).map_err(|e| SaveError::Damaged(format!("the commands in flight do not parse: {e}")))?;
+    let (commands, rest) = take_vec::<Command>(rest, MAX_IN_FLIGHT, "commands in flight")?;
+    ended(rest, "commands in flight")?;
+    let in_flight = InFlight { next_seq, commands };
+    check_in_flight(seats, &in_flight)?;
+    Ok(in_flight)
 }
 
 fn ended(rest: &[u8], what: &str) -> Result<(), SaveError> {

@@ -3,7 +3,13 @@
 //! context (content rebuilt, nothing carried over in memory) and continued;
 //! it must give the same digest and events on every tick, the same final
 //! snapshot bytes, the same final journal and the same controller state as
-//! the uninterrupted run. The scenarios are built only from the setup and
+//! the uninterrupted run. The harness runs in the client's order
+//! (`SimLink::tick`): take what is pending, step, log, then every controller
+//! thinks about that step's events and submits for the next tick; a save is
+//! taken between ticks, so the commands in flight (the controllers' of that
+//! think, the player's and the sandbox's, with the link's one sequence
+//! counter) are part of it, and after a load they are submitted and the
+//! controllers do not think before the next step. The scenarios are built only from the setup and
 //! commands (spawns by `Edit::Spawn`), so the journal alone rebuilds the
 //! match and the rebuilt replay can be played back.
 //!
@@ -26,7 +32,7 @@ use sta_core::{EntityId, Fixed, PlayerId, TeamId, Vec3};
 use sta_sim::command::{Command, CommandKind, Edit, Order};
 use sta_sim::replay::Replay;
 use sta_sim::save::{
-    self, ClientState, GameKind, MapId, MapSource, SaveError, SaveInfo, load, read_header, store,
+    self, ClientState, GameKind, InFlight, MapId, MapSource, SaveError, SaveInfo, load, read_header, store,
 };
 use sta_sim::setup::{Control, Controller, ControllerState, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::view::WorldView;
@@ -67,15 +73,17 @@ fn v(x: i32, z: i32) -> Vec3 {
 struct Counter {
     n: u32,
     /// Shots it has been told about: its decisions depend on the events it
-    /// is given, so a controller that misses the events of the tick a save
-    /// was made on sends other commands afterwards.
+    /// is given, and it answers shots at once with a command, so a controller
+    /// that thinks twice about one step (or never about it) ends in another
+    /// state and sends other commands afterwards.
     fired: u32,
 }
 
 impl Controller for Counter {
     fn think(&mut self, view: &WorldView, events: &[SimEvent], out: &mut Vec<Command>) {
-        self.fired += events.iter().filter(|e| matches!(e, SimEvent::Fired { .. })).count() as u32;
-        if view.tick % 25 != 3 {
+        let shots = events.iter().filter(|e| matches!(e, SimEvent::Fired { .. })).count() as u32;
+        self.fired += shots;
+        if shots == 0 && view.tick % 25 != 3 {
             return;
         }
         let units: Vec<EntityId> = view.units.iter().filter(|u| u.owner == P1).map(|u| u.id).collect();
@@ -121,22 +129,24 @@ fn restore_counter(_seat: PlayerId, name: &str, state: &ControllerState) -> Resu
 
 // ---------------------------------------------------------------- scenarios
 
+/// What the local player and the sandbox submit before a tick; each gets its
+/// sequence number from the link's one counter when it is submitted.
 #[derive(Default)]
 struct Script {
-    at: BTreeMap<u64, Vec<Command>>,
-    seq: u32,
+    at: BTreeMap<u64, Vec<(PlayerId, CommandKind)>>,
 }
 
 impl Script {
     fn push(&mut self, tick: u64, player: PlayerId, kind: CommandKind) {
-        self.seq += 1;
-        // Scripted sequence numbers stay clear of the controller's.
-        self.at.entry(tick).or_default().push(Command { player, seq: 100_000 + self.seq, kind });
+        self.at.entry(tick).or_default().push((player, kind));
     }
     fn order(&mut self, tick: u64, player: PlayerId, o: Order) {
         self.push(tick, player, CommandKind::Order(o));
     }
-    fn commands(&self, tick: u64) -> &[Command] {
+    fn edit(&mut self, tick: u64, e: Edit) {
+        self.push(tick, PlayerId::BENCH, CommandKind::Edit(e));
+    }
+    fn at(&self, tick: u64) -> &[(PlayerId, CommandKind)] {
         self.at.get(&tick).map_or(&[][..], Vec::as_slice)
     }
 }
@@ -181,7 +191,9 @@ fn make(
     // Which ids the spawns get: run tick 0 on a throwaway sim.
     let mut probe = Sim::from_setup(&setup_of(&sc));
     let before: Vec<EntityId> = probe.view().units.iter().map(|u| u.id).collect();
-    probe.step(sc.script.commands(0));
+    let spawns: Vec<Command> =
+        sc.script.at(0).iter().enumerate().map(|(i, (player, kind))| Command { player: *player, seq: i as u32 + 1, kind: kind.clone() }).collect();
+    probe.step(&spawns);
     let ids: Vec<EntityId> = probe.view().units.iter().map(|u| u.id).filter(|id| !before.contains(id)).collect();
     assert_eq!(ids.len(), spawns.len(), "{name}: every spawn is accepted");
     plan(&ids, &mut sc.script);
@@ -236,6 +248,12 @@ fn with_a_computer_player() -> Scenario {
         |ids, s| {
             s.order(1, P0, Order::Move { units: vec![ids[0], ids[1]], to: v(2000, 0), queue: false });
             s.order(600, P0, Order::Attack { units: vec![ids[0]], target: ids[2] });
+            // Player and sandbox input submitted for the same tick (one sequence
+            // counter between them), and more player input a few ticks later.
+            s.order(700, P0, Order::Move { units: vec![ids[1]], to: v(500, 500), queue: false });
+            s.edit(700, Edit::Cargo(P0, 0, Fixed::from_int(50)));
+            s.order(705, P0, Order::Move { units: vec![ids[1]], to: v(-500, -500), queue: false });
+            s.edit(710, Edit::Cargo(P0, 0, Fixed::from_int(60)));
         },
     )
 }
@@ -270,8 +288,12 @@ struct Run {
     sim: Sim,
     replay: Replay,
     ctl: Vec<(PlayerId, Box<dyn Controller>)>,
-    /// The events of the last step: what the controllers are given next.
-    events: Vec<SimEvent>,
+    /// Submitted for the next tick and not yet stepped: the player's, the
+    /// sandbox's and the controllers' commands (the link's pending list).
+    pending: Vec<Command>,
+    /// The link's one sequence counter, shared by the player's and the
+    /// sandbox's commands.
+    next_seq: u32,
 }
 
 impl Run {
@@ -286,26 +308,47 @@ impl Run {
             .filter(|p| matches!(p.control, Control::Ai(_)))
             .map(|p| (p.id, Box::new(Counter::default()) as Box<dyn Controller>))
             .collect();
-        Run { sim, replay, ctl, events: Vec::new() }
+        Run { sim, replay, ctl, pending: Vec::new(), next_seq: 1 }
     }
 
-    /// One tick: the script's commands and the controllers', logged.
-    fn step(&mut self, script: &Script) -> TickOutput {
+    /// The player's and the sandbox's input for the tick the sim is at,
+    /// submitted with the link's one counter (`SimLink::submit`).
+    fn submit_script(&mut self, script: &Script) {
+        for (player, kind) in script.at(self.sim.tick) {
+            self.pending.push(Command { player: *player, seq: self.next_seq, kind: kind.clone() });
+            self.next_seq += 1;
+        }
+    }
+
+    /// One client tick, in the order of `SimLink::tick`: take what is
+    /// pending, step, log the batch, then every controller thinks about THIS
+    /// step's events and submits at once (for the next tick).
+    fn tick(&mut self) -> TickOutput {
+        let batch = std::mem::take(&mut self.pending);
         let t = self.sim.tick;
-        let mut cmds = script.commands(t).to_vec();
+        let out = self.sim.step(&batch);
+        self.replay.log_step(t, &batch, out.view.tick, out.view.digest, EVERY);
         let view = self.sim.view();
         for (_, c) in &mut self.ctl {
-            c.think(&view, &self.events, &mut cmds);
+            c.think(&view, &out.events, &mut self.pending);
         }
-        let out = self.sim.step(&cmds);
-        self.events = out.events.clone();
-        self.replay.log_step(t, &cmds, out.view.tick, out.view.digest, EVERY);
         out
     }
 
+    /// A frame: input, then a tick.
+    fn step(&mut self, script: &Script) -> TickOutput {
+        self.submit_script(script);
+        self.tick()
+    }
+
+    fn in_flight(&self) -> InFlight {
+        InFlight { next_seq: self.next_seq, commands: self.pending.clone() }
+    }
+
+    /// A save between ticks (after the input was submitted, before the tick).
     fn save(&self, info: &SaveInfo) -> Result<Vec<u8>, SaveError> {
         let refs: Vec<(PlayerId, &dyn Controller)> = self.ctl.iter().map(|(p, c)| (*p, c.as_ref())).collect();
-        save::save(&self.sim, &self.replay, info, &refs, &self.events, &client())
+        save::save(&self.sim, &self.replay, info, &refs, &self.in_flight(), &client())
     }
 
     fn controller_states(&self) -> Vec<(PlayerId, Option<ControllerState>)> {
@@ -315,7 +358,11 @@ impl Run {
 
 struct Reference {
     outs: Vec<TickOutput>,
+    /// The save made at the tick (between ticks: after the controllers'
+    /// think about the step before it and the input for the tick), and the
+    /// commands in flight it holds.
     saves: BTreeMap<u64, Vec<u8>>,
+    in_flight: BTreeMap<u64, InFlight>,
     last_snapshot: Vec<u8>,
     last_replay: Vec<u8>,
     last_controllers: Vec<(PlayerId, Option<ControllerState>)>,
@@ -325,18 +372,19 @@ fn run_reference(sc: &Scenario, saves: &[u64]) -> Reference {
     let mut run = Run::start(sc);
     let mut outs = Vec::new();
     let mut files = BTreeMap::new();
-    if saves.contains(&0) {
-        files.insert(0, run.save(&info()).expect("saves at tick 0"));
-    }
+    let mut flights = BTreeMap::new();
     for t in 0..sc.ticks {
-        outs.push(run.step(&sc.script));
-        if saves.contains(&(t + 1)) {
-            files.insert(t + 1, run.save(&info()).unwrap_or_else(|e| panic!("{}: save at {}: {e}", sc.name, t + 1)));
+        run.submit_script(&sc.script);
+        if saves.contains(&t) {
+            files.insert(t, run.save(&info()).unwrap_or_else(|e| panic!("{}: save at {t}: {e}", sc.name)));
+            flights.insert(t, run.in_flight());
         }
+        outs.push(run.tick());
     }
     Reference {
         outs,
         saves: files,
+        in_flight: flights,
         last_snapshot: run.sim.snapshot(),
         last_replay: run.replay.encode(),
         last_controllers: run.controller_states(),
@@ -364,8 +412,26 @@ fn through_file(label: &str, bytes: &[u8], db: &ContentDb) -> Vec<u8> {
     back
 }
 
+/// A deliberate fault for the controls: the harness must fail on each.
+#[derive(Clone, Copy, PartialEq)]
+enum Tamper {
+    Nothing,
+    /// The commands in flight are not submitted after the load.
+    DropInFlight,
+    /// The restored controllers think once about the saved tick's step
+    /// before it goes on (a double think).
+    DoubleThink,
+    /// The sequence counter is derived from the local player's commands in
+    /// flight instead of restored.
+    DerivedSeq,
+}
+
 /// Loads the save made at tick `n` in a fresh context and continues.
 fn resume(sc: &Scenario, r: &Reference, n: u64) {
+    resume_tampered(sc, r, n, Tamper::Nothing);
+}
+
+fn resume_tampered(sc: &Scenario, r: &Reference, n: u64, tamper: Tamper) {
     let name = sc.name;
     let saved = &r.saves[&n];
     let bytes = through_file(&format!("{name}-{n}"), saved, &(sc.content)());
@@ -389,15 +455,36 @@ fn resume(sc: &Scenario, r: &Reference, n: u64) {
     // Load then save gives the same bytes.
     {
         let refs: Vec<(PlayerId, &dyn Controller)> = ctl.iter().map(|(p, c)| (*p, c.as_ref())).collect();
-        let again = save::save(&loaded.sim, &loaded.replay, &loaded.info, &refs, &loaded.events, &loaded.client).expect("saves again");
+        let again = save::save(&loaded.sim, &loaded.replay, &loaded.info, &refs, &loaded.in_flight, &loaded.client).expect("saves again");
         assert!(again == bytes, "{name}: load then save at {n} gives other bytes");
     }
 
-    // The first think is given the events of the saved tick, as in an uninterrupted game.
-    assert_eq!(loaded.events, if n == 0 { Vec::new() } else { r.outs[n as usize - 1].events.clone() }, "{name}: the saved tick's events at {n}");
-    let mut run = Run { sim: loaded.sim, replay: loaded.replay, ctl, events: loaded.events };
+    // What was in flight comes back as it was, the counter included.
+    assert_eq!(loaded.in_flight, r.in_flight[&n], "{name}: the commands in flight at {n}");
+    // Continue as the client does: submit them for the next tick, do NOT
+    // think (the controllers already thought about this step), step on.
+    let mut in_flight = loaded.in_flight;
+    match tamper {
+        Tamper::DropInFlight => in_flight.commands.clear(),
+        Tamper::DerivedSeq => {
+            in_flight.next_seq = in_flight.commands.iter().filter(|c| c.player == P0).map(|c| c.seq + 1).max().unwrap_or(1);
+        }
+        Tamper::Nothing | Tamper::DoubleThink => {}
+    }
+    let mut run = Run { sim: loaded.sim, replay: loaded.replay, ctl, pending: in_flight.commands, next_seq: in_flight.next_seq };
+    if tamper == Tamper::DoubleThink {
+        let events = if n == 0 { Vec::new() } else { r.outs[n as usize - 1].events.clone() };
+        let view = run.sim.view();
+        for (_, c) in &mut run.ctl {
+            c.think(&view, &events, &mut run.pending);
+        }
+    }
     for t in n..sc.ticks {
-        let out = run.step(&sc.script);
+        // The input for the saved tick was submitted before the save.
+        if t > n {
+            run.submit_script(&sc.script);
+        }
+        let out = run.tick();
         let want = &r.outs[t as usize];
         assert_eq!(out.view.digest, want.view.digest, "{name}: save at {n}, digest of tick {t}");
         assert_eq!(out.events, want.events, "{name}: save at {n}, events of tick {t}");
@@ -418,39 +505,55 @@ fn check(sc: Scenario, saves: &[u64]) -> Reference {
 
 #[test]
 fn a_fight_saved_loaded_and_continued_equals_the_uninterrupted_run() {
-    let r = check(fleet_combat(), &[0, 1, 60, 250, 400, 700]);
+    let r = check(fleet_combat(), &[0, 1, 2, 60, 250, 400, 700]);
     let fired = r.outs.iter().flat_map(|o| &o.events).filter(|e| matches!(e, SimEvent::Fired { .. })).count();
     assert!(fired > 0, "the scenario fights");
 }
 
 #[test]
 fn a_formation_group_round_a_moon_saved_and_loaded_mid_route() {
-    let r = check(formation_round_a_moon(), &[1, 90, 300, 501, 800, 1100]);
+    let r = check(formation_round_a_moon(), &[0, 1, 2, 90, 300, 500, 501, 800, 1100]);
     let flying = |n: usize| r.outs[n - 1].view.units.iter().any(|u| u.speed > Fixed::ZERO);
     assert!(flying(90) && flying(300) && flying(501), "the saves catch the group under way");
+    // The saves at 1 and 500 have the player's orders in flight.
+    assert!(r.in_flight[&1].commands.iter().any(|c| c.player == P0) && r.in_flight[&500].commands.iter().any(|c| c.player == P0));
 }
 
 #[test]
 fn a_computer_player_with_its_own_state_continues_as_if_never_interrupted() {
-    // Saves right after ticks that emitted shots: the controller counts shots,
-    // so it must be given the events of the saved tick after a load.
-    let probe = run_reference(&with_a_computer_player(), &[]);
+    let saves = computer_player_save_points();
+    let r = check(with_a_computer_player(), &saves);
+    // The controller really acts and keeps state: its record differs from a fresh one.
+    let (_, state) = &r.last_controllers[0];
+    assert!(state.as_ref().unwrap().data != [0u8; 8], "the controller never acted");
+    // The save points are the interesting ones: the controller's own command
+    // is in flight right after its think, and at 700 the player's and the
+    // sandbox's commands are in flight together with the controller's.
+    assert!(saves.iter().any(|n| r.in_flight[n].commands.iter().any(|c| c.player == P1)), "no save has the controller's command in flight");
+    let both = &r.in_flight[&700];
+    assert!(both.commands.iter().any(|c| c.player == P0) && both.commands.iter().any(|c| c.player == PlayerId::BENCH));
+}
+
+/// Where the computer-player match is saved: before the first tick, just
+/// after ticks whose shots the controller answered, and between two inputs
+/// of the player and the sandbox (which share one sequence counter).
+fn computer_player_save_points() -> Vec<u64> {
+    let sc = with_a_computer_player();
+    let probe = run_reference(&sc, &[]);
     let fired: Vec<u64> = probe
         .outs
         .iter()
         .enumerate()
         .filter(|(_, o)| o.events.iter().any(|e| matches!(e, SimEvent::Fired { .. })))
         .map(|(i, _)| i as u64 + 1)
+        .filter(|&n| n < sc.ticks)
         .collect();
     assert!(fired.len() >= 4, "the scenario fires shots ({})", fired.len());
-    let mut saves = vec![4, 29, 300, 601, 900];
+    let mut saves = vec![0, 1, 4, 29, 300, 601, 700, 706, 900];
     saves.extend([fired[0], fired[fired.len() / 3], fired[fired.len() / 2], fired[fired.len() - 1]]);
     saves.sort_unstable();
     saves.dedup();
-    let r = check(with_a_computer_player(), &saves);
-    // The controller really acts and keeps state: its record differs from a fresh one.
-    let (_, state) = &r.last_controllers[0];
-    assert!(state.as_ref().unwrap().data != 0u32.to_le_bytes(), "the controller never acted");
+    saves
 }
 
 /// A controller restored from a wrong record sends other commands: the
@@ -461,31 +564,56 @@ fn control_a_controller_restored_without_its_state_is_noticed() {
     let sc = with_a_computer_player();
     let r = run_reference(&sc, &[300]);
     let loaded = load(&r.saves[&300], content(), map_source()).unwrap();
-    let mut run = Run { sim: loaded.sim, replay: loaded.replay, ctl: vec![(P1, Box::new(Counter::default()))], events: loaded.events };
+    let mut run = Run {
+        sim: loaded.sim,
+        replay: loaded.replay,
+        ctl: vec![(P1, Box::new(Counter::default()))],
+        pending: loaded.in_flight.commands,
+        next_seq: loaded.in_flight.next_seq,
+    };
     for _ in 300..sc.ticks {
-        run.step(&sc.script);
+        run.tick();
+        run.submit_script(&sc.script);
     }
     assert_eq!(run.controller_states(), r.last_controllers, "controller state at the end differs");
 }
 
-/// The events of the saved tick matter: a loaded run that is not given them
-/// (the shape of the gap before the events section) diverges. Control for
-/// the harness.
-#[test]
-#[should_panic(expected = "controller state at the end differs")]
-fn control_a_loaded_run_without_the_saved_events_is_noticed() {
+/// A save point with the controller's command, the player's and the
+/// sandbox's in flight, and right after shots.
+fn control_points() -> (Scenario, Reference, u64, u64) {
     let sc = with_a_computer_player();
     let probe = run_reference(&sc, &[]);
-    let at = probe.outs.iter().position(|o| o.events.iter().any(|e| matches!(e, SimEvent::Fired { .. }))).expect("shots") as u64 + 1;
-    let r = run_reference(&sc, &[at]);
-    let loaded = load(&r.saves[&at], content(), map_source()).unwrap();
-    assert!(!loaded.events.is_empty(), "the saved tick has events");
-    let ctl = loaded.restore_controllers(restore_counter).unwrap();
-    let mut run = Run { sim: loaded.sim, replay: loaded.replay, ctl, events: Vec::new() };
-    for _ in at..sc.ticks {
-        run.step(&sc.script);
-    }
-    assert_eq!(run.controller_states(), r.last_controllers, "controller state at the end differs");
+    let shots = probe.outs.iter().position(|o| o.events.iter().any(|e| matches!(e, SimEvent::Fired { .. }))).expect("shots") as u64 + 1;
+    let r = run_reference(&sc, &[shots, 700]);
+    (sc, r, shots, 700)
+}
+
+/// The commands in flight matter: dropped after a load, the game goes
+/// another way. Control for the harness (it must fail the comparison).
+#[test]
+#[should_panic(expected = "save at 700")]
+fn control_commands_in_flight_dropped_are_noticed() {
+    let (sc, r, _, both) = control_points();
+    resume_tampered(&sc, &r, both, Tamper::DropInFlight);
+}
+
+/// A controller that thinks again about the saved tick's step (what
+/// delivering the saved events after a load would do) is noticed.
+#[test]
+#[should_panic(expected = "save at")]
+fn control_a_double_think_is_noticed() {
+    let (sc, r, shots, _) = control_points();
+    resume_tampered(&sc, &r, shots, Tamper::DoubleThink);
+}
+
+/// The sequence counter is shared between the player and the sandbox, so
+/// deriving it from the player's own commands after a sandbox command gives
+/// other numbers to what is submitted next. Control for the harness.
+#[test]
+#[should_panic(expected = "save at 700")]
+fn control_a_derived_sequence_number_is_noticed() {
+    let (sc, r, _, both) = control_points();
+    resume_tampered(&sc, &r, both, Tamper::DerivedSeq);
 }
 
 // --------------------------------------------------------- bytes and header
@@ -624,14 +752,14 @@ fn a_controller_that_cannot_be_restored_refuses_the_load_naming_the_seat() {
 fn a_controller_that_has_not_opted_in_refuses_the_save_naming_the_seat() {
     let sc = with_a_computer_player();
     let run = Run::start(&sc);
-    let e = save::save(&run.sim, &run.replay, &info(), &[(P1, &Silent)], &[], &client()).expect_err("refused");
+    let e = save::save(&run.sim, &run.replay, &info(), &[(P1, &Silent)], &InFlight::default(), &client()).expect_err("refused");
     assert_eq!(e, SaveError::ControllerCannotSave { seat: P1 });
     assert!(e.to_string().contains("seat 1"));
     // No controller at all for a computer seat, and one for a seat that has none.
-    assert!(matches!(save::save(&run.sim, &run.replay, &info(), &[], &[], &client()), Err(SaveError::Invalid(_))));
+    assert!(matches!(save::save(&run.sim, &run.replay, &info(), &[], &InFlight::default(), &client()), Err(SaveError::Invalid(_))));
     let idle = fleet_combat();
     let run = Run::start(&idle);
-    assert!(matches!(save::save(&run.sim, &run.replay, &info(), &[(P1, &Counter::default())], &[], &client()), Err(SaveError::Invalid(_))));
+    assert!(matches!(save::save(&run.sim, &run.replay, &info(), &[(P1, &Counter::default())], &InFlight::default(), &client()), Err(SaveError::Invalid(_))));
 }
 
 #[test]

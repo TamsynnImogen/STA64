@@ -12,7 +12,7 @@
 //! | 14 | 4 | header length `h` (at most [`MAX_HEADER`]) |
 //! | 18 | h | the [`Header`] (postcard) |
 //! | 18+h | 8 | checksum of bytes `0..18+h`: a load list reads this much only |
-//! | 26+h | | five sections, each `id u8, version u32, length u32, bytes`, ids 1 to 5 in order: snapshot, journal, controllers, events, client |
+//! | 26+h | | five sections, each `id u8, version u32, length u32, bytes`, ids 1 to 5 in order: snapshot, journal, controllers, commands in flight, client |
 //! | end-8 | 8 | checksum of every byte before it |
 //!
 //! **What decides loadability sits at fixed offsets, as plain integers, and
@@ -31,7 +31,8 @@
 //! `replay::ControlRec`, `replay::StartRec`, `setup::GameOptions` with
 //! `sta_content::StartingResources`, `PlayerId`, `TeamId`), the section
 //! records (`SeatController`, the journal's field order and `Logged`
-//! digests, the events' `SimEvent` list) and the section framing above.
+//! digests, the commands-in-flight record: next sequence number then the
+//! `Command` list) and the section framing above.
 //! `Command` and `SimEvent` themselves move with the seam revision, the
 //! snapshot with its format and the journal's layout with the replay format;
 //! those numbers are in the prefix. The golden tests in `save/tests.rs`
@@ -57,7 +58,7 @@ const SECTION_HEAD: usize = 1 + 4 + 4;
 pub(super) const SNAPSHOT_SECTION: u32 = 1;
 pub(super) const JOURNAL_SECTION: u32 = 1;
 pub(super) const CONTROLLERS_SECTION: u32 = 1;
-pub(super) const EVENTS_SECTION: u32 = 1;
+pub(super) const IN_FLIGHT_SECTION: u32 = 1;
 
 /// 64-bit FNV-1a.
 pub(super) fn checksum(bytes: &[u8]) -> u64 {
@@ -120,7 +121,7 @@ pub(super) struct Parts {
     pub snapshot: Vec<u8>,
     pub journal: Vec<u8>,
     pub controllers: Vec<u8>,
-    pub events: Vec<u8>,
+    pub in_flight: Vec<u8>,
     pub client_version: u32,
     pub client: Vec<u8>,
 }
@@ -130,7 +131,7 @@ pub(super) struct Sections<'a> {
     pub snapshot: &'a [u8],
     pub journal: &'a [u8],
     pub controllers: &'a [u8],
-    pub events: &'a [u8],
+    pub in_flight: &'a [u8],
     pub client_version: u32,
     pub client: &'a [u8],
 }
@@ -165,7 +166,7 @@ pub(super) fn seal(header: &Header, parts: &Parts) -> Result<Vec<u8>, SaveError>
     put_section(&mut out, 1, SNAPSHOT_SECTION, &parts.snapshot)?;
     put_section(&mut out, 2, JOURNAL_SECTION, &parts.journal)?;
     put_section(&mut out, 3, CONTROLLERS_SECTION, &parts.controllers)?;
-    put_section(&mut out, 4, EVENTS_SECTION, &parts.events)?;
+    put_section(&mut out, 4, IN_FLIGHT_SECTION, &parts.in_flight)?;
     put_section(&mut out, 5, parts.client_version, &parts.client)?;
     let sum = checksum(&out);
     out.extend_from_slice(&sum.to_le_bytes());
@@ -248,15 +249,15 @@ pub(super) fn parse_sections(body: &[u8]) -> Result<Sections<'_>, SaveError> {
     let (sv, snapshot) = take_section(&mut rest, 1)?;
     let (jv, journal) = take_section(&mut rest, 2)?;
     let (cv, controllers) = take_section(&mut rest, 3)?;
-    let (ev, events) = take_section(&mut rest, 4)?;
+    let (ev, in_flight) = take_section(&mut rest, 4)?;
     let (client_version, client) = take_section(&mut rest, 5)?;
     if !rest.is_empty() {
         return Err(damaged("bytes follow the last section"));
     }
-    if sv != SNAPSHOT_SECTION || jv != JOURNAL_SECTION || cv != CONTROLLERS_SECTION || ev != EVENTS_SECTION {
+    if sv != SNAPSHOT_SECTION || jv != JOURNAL_SECTION || cv != CONTROLLERS_SECTION || ev != IN_FLIGHT_SECTION {
         return Err(damaged("a section has a record version this build does not read"));
     }
-    Ok(Sections { snapshot, journal, controllers, events, client_version, client })
+    Ok(Sections { snapshot, journal, controllers, in_flight, client_version, client })
 }
 
 #[cfg(test)]
@@ -329,7 +330,7 @@ mod tests {
         put_section(&mut body, 5, 9, b"client").unwrap();
         let s = parse_sections(&body).unwrap();
         assert_eq!(
-            (s.snapshot, s.journal, s.controllers, s.events, s.client_version, s.client),
+            (s.snapshot, s.journal, s.controllers, s.in_flight, s.client_version, s.client),
             (&b"snap"[..], &b"jr"[..], &b""[..], &b"ev"[..], 9, &b"client"[..])
         );
         // A length that points past the end is refused without allocating.

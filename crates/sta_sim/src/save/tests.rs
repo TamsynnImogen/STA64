@@ -5,7 +5,7 @@
 
 use super::container::{self, PREFIX, Parts};
 use super::*;
-use crate::WorldSource;
+use crate::{SimEvent, WorldSource};
 use crate::command::{Command, CommandKind, Edit, Order};
 use crate::replay::StartRec;
 use crate::setup::{Control, GameOptions, GameSetup, PlayerSetup};
@@ -48,13 +48,12 @@ fn v(x: i32, z: i32) -> Vec3 {
 }
 
 /// A game with units, orders and (when `ai`) a computer seat, run `ticks`.
-fn a_game(ai: bool, ticks: u64) -> (Sim, Replay, Vec<SimEvent>) {
+fn a_game(ai: bool, ticks: u64) -> (Sim, Replay, InFlight) {
     let setup = setup_with(if ai { Control::Ai("stateless".into()) } else { Control::Idle });
     let mut sim = Sim::from_setup(&setup);
     let mut replay = Replay::new(&setup);
     replay.digests.push((0, sim.digest()));
     let db = &setup.content;
-    let mut events = Vec::new();
     for t in 0..ticks {
         let mut cmds = Vec::new();
         if t == 0 {
@@ -72,12 +71,17 @@ fn a_game(ai: bool, ticks: u64) -> (Sim, Replay, Vec<SimEvent>) {
         }
         let out = sim.step(&cmds);
         replay.log_step(t, &cmds, out.view.tick, out.view.digest, 5);
-        events = out.events;
+        let _ = out.events;
     }
-    (sim, replay, events)
+    // Waiting for the next tick: the local player's order and a sandbox edit.
+    let waiting = vec![
+        Command { player: PlayerId(0), seq: 76, kind: CommandKind::Order(Order::Stop { units: vec![EntityId(3)] }) },
+        Command { player: PlayerId::BENCH, seq: 77, kind: CommandKind::Edit(Edit::Cargo(PlayerId(0), 0, Fixed::from_int(5))) },
+    ];
+    (sim, replay, InFlight { next_seq: 78, commands: waiting })
 }
 
-fn save_of(sim: &Sim, replay: &Replay, events: &[SimEvent], ai: bool) -> Vec<u8> {
+fn save_of(sim: &Sim, replay: &Replay, events: &InFlight, ai: bool) -> Vec<u8> {
     let ctl: Vec<(PlayerId, &dyn Controller)> = if ai { vec![(PlayerId(1), &Stateless)] } else { vec![] };
     save(sim, replay, &info(), &ctl, events, &ClientState { version: 2, data: vec![1, 2, 3] }).expect("saves")
 }
@@ -129,7 +133,7 @@ fn forge(bytes: &[u8], edit: impl FnOnce(&mut Header, &mut Parts)) -> Vec<u8> {
         snapshot: s.snapshot.to_vec(),
         journal: s.journal.to_vec(),
         controllers: s.controllers.to_vec(),
-        events: s.events.to_vec(),
+        in_flight: s.in_flight.to_vec(),
         client_version: s.client_version,
         client: s.client.to_vec(),
     };
@@ -261,7 +265,7 @@ fn sample_header() -> Header {
 const GOLDEN_HEADER: &str = "056275696c64ef9bafcdf8acd19101066e617469766502087061636b206f6e65087061636b2074776f066e617469766507696e7374616c6c046d6f6473066d6170732f782a0001016d017302030500000161000101016202026169020101630303020164010402016504017200050101094d0100d209ae2c80e2cfaa060464657363";
 const GOLDEN_SEAT_CONTROLLER: &str = "010102616903020908";
 const GOLDEN_JOURNAL: &str = "ac020200011e0200";
-const GOLDEN_EVENTS: &str = "00";
+const GOLDEN_IN_FLIGHT: &str = "0501000400010107";
 
 #[test]
 fn golden_header_encoding_has_not_changed() {
@@ -278,8 +282,12 @@ fn golden_section_records_have_not_changed() {
     assert_eq!(hex(&seat), GOLDEN_SEAT_CONTROLLER, "SeatController layout changed: bump CONTAINER_VERSION and regenerate the golden");
     let journal = postcard::to_allocvec(&JournalRec { end_tick: 300, digests: &[(0, 1), (30, 2)], commands: &[] }).unwrap();
     assert_eq!(hex(&journal), GOLDEN_JOURNAL, "journal layout changed: bump CONTAINER_VERSION and regenerate the golden");
-    let events = postcard::to_allocvec(&Vec::<SimEvent>::new()).unwrap();
-    assert_eq!(hex(&events), GOLDEN_EVENTS, "events section layout changed: bump CONTAINER_VERSION and regenerate the golden");
+    let waiting = InFlight {
+        next_seq: 5,
+        commands: vec![Command { player: PlayerId(0), seq: 4, kind: CommandKind::Order(Order::Stop { units: vec![EntityId(7)] }) }],
+    };
+    let in_flight = postcard::to_allocvec(&waiting).unwrap();
+    assert_eq!(hex(&in_flight), GOLDEN_IN_FLIGHT, "commands-in-flight layout changed: bump CONTAINER_VERSION and regenerate the golden");
 }
 
 // ------------------------------------------------------ other refusals
@@ -324,6 +332,32 @@ fn an_observers_save_is_refused_at_save_and_at_load() {
     assert!(SaveError::Observer.to_string().contains("observer"));
     i.local_seat = Some(PlayerId(5));
     assert!(matches!(save(&sim, &replay, &i, &[], &events, &ClientState::default()), Err(SaveError::Invalid(_))));
+}
+
+// ------------------------------------------------ commands in flight
+
+#[test]
+fn the_commands_in_flight_and_the_sequence_number_come_back_as_saved() {
+    let (sim, replay, in_flight) = a_game(false, 40);
+    let loaded = loads(&save_of(&sim, &replay, &in_flight, false)).unwrap();
+    assert_eq!(loaded.in_flight, in_flight);
+    assert_eq!(loaded.in_flight.next_seq, 78, "the counter is stored, not derived from the commands");
+    // The journal is not touched by them: they enter it when they are stepped.
+    assert!(loaded.replay.commands == replay.commands);
+}
+
+#[test]
+fn a_command_in_flight_from_a_stranger_is_refused_at_save_and_at_load() {
+    let (sim, replay, mut in_flight) = a_game(false, 40);
+    in_flight.commands.push(Command { player: PlayerId(5), seq: 80, kind: CommandKind::Order(Order::Stop { units: vec![] }) });
+    let e = save(&sim, &replay, &info(), &[], &in_flight, &ClientState::default()).unwrap_err();
+    assert!(matches!(&e, SaveError::Invalid(why) if why.contains("player 5")), "{e:?}");
+    let forged = forged(|_, p| p.in_flight = postcard::to_allocvec(&in_flight).unwrap());
+    assert!(matches!(loads(&forged), Err(SaveError::Invalid(why)) if why.contains("player 5")));
+    // The sandbox player and every seat are fine; the script player is not a seat.
+    in_flight.commands.pop();
+    in_flight.commands.push(Command { player: PlayerId::SCRIPT, seq: 81, kind: CommandKind::Order(Order::Stop { units: vec![] }) });
+    assert!(matches!(save(&sim, &replay, &info(), &[], &in_flight, &ClientState::default()), Err(SaveError::Invalid(_))));
 }
 
 // -------------------------------------- M2: the header against the snapshot
@@ -395,8 +429,8 @@ fn journal_and_controller_sections_that_disagree_with_the_header_are_refused() {
     assert!(matches!(loads(&twice), Err(SaveError::Damaged(_))));
     let journal = forged(|_, p| p.journal.push(0));
     assert!(matches!(loads(&journal), Err(SaveError::Damaged(_))));
-    let events = forged(|_, p| p.events.push(0));
-    assert!(matches!(loads(&events), Err(SaveError::Damaged(_))));
+    let in_flight = forged(|_, p| p.in_flight.push(0));
+    assert!(matches!(loads(&in_flight), Err(SaveError::Damaged(_))));
 }
 
 // ----------------------------------------------------- M1: bounds on input
@@ -410,8 +444,10 @@ fn counts_are_refused_before_anything_is_allocated_from_them() {
     let controllers = forged(|_, p| p.controllers = huge.clone());
     let e = loads(&controllers).err().unwrap();
     assert!(e.to_string().contains("too many controller records"), "{e}");
-    let events = forged(|_, p| p.events = huge.clone());
-    assert!(loads(&events).err().unwrap().to_string().contains("too many events"));
+    let mut hostile = postcard::to_allocvec(&1u32).unwrap();
+    hostile.extend_from_slice(&huge);
+    let in_flight = forged(|_, p| p.in_flight = hostile.clone());
+    assert!(loads(&in_flight).err().unwrap().to_string().contains("too many commands in flight"));
     let tick = 40u64;
     let mut digests = postcard::to_allocvec(&tick).unwrap();
     digests.extend_from_slice(&huge);
@@ -429,7 +465,7 @@ fn counts_are_refused_before_anything_is_allocated_from_them() {
     });
     assert!(loads(&nine).err().unwrap().to_string().contains("too many controller records"));
     // The same bytes, undamaged and just within the bound, are not refused for their count.
-    assert!(!matches!(loads(&forged(|_, p| p.events = postcard::to_allocvec(&Vec::<SimEvent>::new()).unwrap())), Err(SaveError::Damaged(_))));
+    assert!(!matches!(loads(&forged(|_, p| p.in_flight = postcard::to_allocvec(&InFlight::default()).unwrap())), Err(SaveError::Damaged(_))));
 }
 
 #[test]
@@ -504,9 +540,8 @@ impl Rng {
 /// twice. Fixed seed, bounded count: any panic here is a finding.
 #[test]
 fn mutated_valid_saves_do_not_panic_in_the_decoders() {
-    let (sim, replay, events) = a_game(true, 60);
-    assert!(!events.is_empty() || sim.tick == 60);
-    let bytes = save_of(&sim, &replay, &events, true);
+    let (sim, replay, in_flight) = a_game(true, 60);
+    let bytes = save_of(&sim, &replay, &in_flight, true);
     let (_, body_at) = container::parse_header(&bytes).unwrap();
     // Section boundaries (offsets of each section's head).
     let mut bounds = vec![body_at];
