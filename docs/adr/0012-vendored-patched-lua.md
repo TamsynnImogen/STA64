@@ -33,7 +33,8 @@ in `STA64-PATCH.md`.
 
 **L2. The patch gives these semantics, which mod authors may rely on:**
 traversal in insertion order (a list kept by list operations first,
-ascending), a stable `table.sort`, no weak tables, reference ids instead of
+ascending; other positive integer keys, sparse or filled out of order, in an
+unspecified but deterministic place), a stable `table.sort`, no weak tables, reference ids instead of
 addresses in `tostring`, byte-order string comparison and C-locale string
 functions, and the same number text and `^` result on every supported
 platform. The exact wording for mission authors is in `docs/MISSIONS.md`.
@@ -67,8 +68,10 @@ the patch, runs these tests and one AddressSanitizer run, and carries the
   `STA64-PATCH.md`); upstream fixes do not arrive by a version bump alone.
 - About 770 kB of upstream C live in the repository.
 - Cost, measured on STA64's own workloads: table inserts and sorting about
-  1.3 times slower, traversal and lookups unchanged, a mission tick within a
-  few percent, 8 more bytes per hash entry and 24 per table.
+  1.2 to 1.3 times slower, traversal, lookups and a mission tick about
+  unchanged, churn of distinct keys about ten times faster, 8 more bytes per
+  hash entry and 24 per table, and keys set to nil kept until the table is
+  rebuilt.
 - STA64 code must not give threads their own hooks (mlua keeps those in a
   weak table) and should not turn references into text inside a mission state.
 
