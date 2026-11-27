@@ -780,6 +780,37 @@ mod tests {
         assert_eq!((vis(&app, nebula), vis(&app, planet)), (Visibility::Inherited, Visibility::Inherited));
     }
 
+    /// Measurement, not a pass/fail check: the cost of one sweep of `still_sprites` over many sprite nodes under
+    /// gates out of sight (review C1). Run with `--ignored --nocapture`; the number goes to the PR body.
+    #[test]
+    #[ignore = "a measurement"]
+    fn the_cost_of_a_sweep_over_sprite_nodes_under_gates_out_of_sight() {
+        use crate::render::sprites::{SpriteFx, SpriteStill};
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_systems(Update, still_sprites).init_resource::<crate::clock::AnimClock>();
+        let mut nodes = 0usize;
+        for _ in 0..40 {
+            let gate = app.world_mut().spawn((OutOfSight, StillSince(1.0))).id();
+            for _ in 0..250 {
+                app.world_mut().spawn((SpriteFx { node_anim: None, sprite: String::new(), colour: [1.0; 3], material: Handle::default() }, ChildOf(gate)));
+                nodes += 1;
+            }
+        }
+        app.update();
+        assert_eq!(app.world_mut().query::<&SpriteStill>().iter(app.world()).count(), nodes);
+        // Frames up to the next sweep run nothing; the sweep frame walks every node (none lacks the component).
+        let mut worst = std::time::Duration::ZERO;
+        let mut total = std::time::Duration::ZERO;
+        for _ in 0..150 {
+            let t = std::time::Instant::now();
+            app.update();
+            let d = t.elapsed();
+            worst = worst.max(d);
+            total += d;
+        }
+        eprintln!("{nodes} sprite nodes under 40 gates out of sight: worst frame {worst:?} (a sweep), mean {:?} per frame over 150 frames", total / 150);
+    }
+
     /// #1146: the sprite nodes under a gate out of sight stand at the clock's time of the frame it went out of sight
     /// (also a node that appears later), and take the clock's time again when it is in sight.
     #[test]

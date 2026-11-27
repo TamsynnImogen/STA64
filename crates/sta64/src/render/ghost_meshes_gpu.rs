@@ -1,5 +1,5 @@
 //! Optional real-GPU frame tests of the objects out of sight that are not planets (#1146): a hull mesh and a rock
-//! mesh under a gate that is out of sight, and a nebula's gas. `STA64_GPU_TESTS=1` and a hardware adapter;
+//! mesh under a gate that is out of sight (the nebula's gas has its own frame test, `nebula_ghost_gpu.rs`). `STA64_GPU_TESTS=1` and a hardware adapter;
 //! `STA64_GPU_OUT` keeps the PNGs outside the repository. Everything is authored: an ico sphere, one light, no
 //! textures, invented lighting keys. In sight each is as without a gate (every pixel); out of sight it is dimmer,
 //! by the mesh tag's factor or, for a rock given the game's lighting keys, by those keys.
@@ -208,72 +208,3 @@ fn a_rock_mesh_out_of_sight_is_dimmed_by_its_tag_or_lit_by_the_keys_and_in_sight
     assert!(a < l, "a copy is dimmer than the rock in sight");
 }
 
-/// One nebula's gas, the real plugin and `update`, seen from afar; `weight`: the envelope as `gate_fields` writes it for
-/// a nebula seen before and not in sight (`None`: as spawned, in sight).
-fn gas_frame(weight: Option<f32>) -> Option<image::RgbaImage> {
-    use crate::render::nebula::{NebulaField, NebulaPlugin, NoiseVolume, spawn_field};
-    use sta_surface::nebula::NebulaRecipe;
-    let (mut app, target) = scene();
-    // The march reads the depth prepass; the camera sees the whole nebula from afar.
-    let cam = app.world_mut().query_filtered::<Entity, With<Camera3d>>().single(app.world()).unwrap();
-    app.world_mut().entity_mut(cam).insert((bevy::core_pipeline::prepass::DepthPrepass, Transform::from_xyz(0.0, 600.0, 1400.0).looking_at(Vec3::ZERO, Vec3::Y)));
-    app.add_plugins(NebulaPlugin);
-    app.insert_resource(crate::clock::AnimClock::new(crate::clock::ClockMode::Bench { step: 0.0 }, 1));
-    // One ray per pixel: the gas is drawn by its own material, without the low-resolution stand-in.
-    app.insert_resource(crate::render::quality::RenderQuality { shadows: false, msaa: 1, depth_prepass: true, nebula_steps: 0, nebula_scale: 1 });
-    let recipe = NebulaRecipe::parse("[Nebula]\nExtent=1.3\nHeight=3\nGasA=0.8 0.4 0.2\nGasB=0.2 0.4 0.8\nGlow=0.5 0.5 0.5\nBrightness=2\nCoverage=0.5\n");
-    let centres = vec![[0.0f32, 0.0, 0.0]];
-    let (r, c) = (recipe.clone(), centres.clone());
-    app.add_systems(
-        Startup,
-        move |mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<crate::render::nebula::NebulaMaterial>>, mut images: ResMut<Assets<Image>>, noise: Res<NoiseVolume>| {
-            let parent = commands.spawn((Transform::IDENTITY, Visibility::Inherited)).id();
-            spawn_field(&mut commands, &mut meshes, &mut materials, &mut images, &noise, r.clone(), 300.0, &c, parent);
-        },
-    );
-    app.finish();
-    app.cleanup();
-    // The noise volume is made on a thread; wait for it and for the field to hold it.
-    for _ in 0..1500 {
-        app.update();
-        let ready = app.world().resource::<NoiseVolume>().image.is_some();
-        if ready {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    assert!(app.world().resource::<NoiseVolume>().image.is_some(), "the noise volume was made");
-    if let Some(w) = weight {
-        let handle = {
-            let mut q = app.world_mut().query::<&NebulaField>();
-            let field = q.single(app.world()).unwrap();
-            app.world().resource::<Assets<crate::render::nebula::NebulaMaterial>>().get(&field.material).unwrap().envelope.clone().unwrap()
-        };
-        let env = sta_surface::nebula::envelope_weighted(&recipe, 300.0, &centres, &[w]);
-        app.world_mut().resource_mut::<Assets<Image>>().get_mut(&handle).unwrap().data = Some(env.pixels);
-    }
-    for _ in 0..12 {
-        app.update();
-    }
-    snap(&mut app, &target, &format!("gas-{weight:?}"))
-}
-
-#[test]
-fn a_nebulas_gas_out_of_sight_is_thinner_and_in_sight_is_as_before_on_gpu() {
-    if !enabled() {
-        return;
-    }
-    let _serial = crate::bench::frames::gpu_serial();
-    let Some(live) = gas_frame(None) else { return };
-    let Some(again) = gas_frame(None) else { return };
-    let ghost = crate::render::fog_objects::ghost::NEBULA;
-    let Some(dim) = gas_frame(Some(ghost)) else { return };
-    let Some(none) = gas_frame(Some(0.0)) else { return };
-    // The whole frame: the gas is spread over it.
-    let all = |img: &image::RgbaImage| img.pixels().map(|p| f32::from(p.0[0]) + f32::from(p.0[1]) + f32::from(p.0[2])).sum::<f32>() / (3.0 * (SIZE * SIZE) as f32);
-    let (l, d, n) = (all(&live), all(&dim), all(&none));
-    eprintln!("gas: in sight {l:.3}, out of sight (weight {ghost}) {d:.3}, never seen {n:.3}");
-    assert!(l > n + 0.5, "the gas shows in sight: {l} against none {n}");
-    assert_eq!(live.as_raw(), again.as_raw(), "the frame repeats");
-    assert!(d < l && d > n, "out of sight the gas is thinner but still there: {n} < {d} < {l}");
-}

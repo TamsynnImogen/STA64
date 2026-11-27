@@ -2,8 +2,9 @@
 //!
 //! Rule (Armada II; read from the executable, static): a last-seen copy of an object is drawn with a lighting
 //! material of its own in place of the scene's, built from the keys `ghostAmbient`, `ghostDiffuse` and
-//! `ghostSpecular` of `light.odf`; the copy's team colour is scaled by `ghostTeamColorFactor`. Armada I has the
-//! first three by the same strings and no team factor (strings only). Grade for the keys: read from data.
+//! `ghostSpecular` of `light.odf`; the copy's team colour is scaled by `ghostTeamColorFactor`. Armada I: not
+//! established beyond the same key names. Grade for the keys: read from data (a file's own values are the content's,
+//! not a rule of this crate).
 //!
 //! This module only reads the keys. A key that is absent or malformed is `None`, with a warning when malformed;
 //! no default is invented (the executable's own defaults were not read). A mod's `light.odf` wins over the base

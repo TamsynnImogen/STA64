@@ -1330,7 +1330,7 @@ mod tests {
         let recipe = NebulaRecipe::parse("[Nebula]\nFlowSpeed=0.5\nPulseSpeed=0.5\nRingCycle=3\nSwirlPeriod=20\n");
         let mut app = App::new();
         app.add_plugins(MinimalPlugins).init_resource::<Assets<NebulaMaterial>>().init_resource::<crate::clock::AnimClock>();
-        let material = app.world_mut().resource_mut::<Assets<NebulaMaterial>>().add(NebulaMaterial { params: NebulaParams::default(), noise: None, envelope: None, shadow: None });
+        let material = app.world_mut().resource_mut::<Assets<NebulaMaterial>>().add(NebulaMaterial { params: NebulaParams::default(), noise: None, envelope: None, shadow: None, light: None });
         app.world_mut().spawn((Camera3d::default(), Camera::default(), Projection::Perspective(PerspectiveProjection::default()), GlobalTransform::default()));
         let centres = vec![[0.0, 0.0, 0.0]];
         let field = app
