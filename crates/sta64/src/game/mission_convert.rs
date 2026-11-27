@@ -18,9 +18,10 @@
 //! * A run ends with a [`ConversionFinished`] message carrying its [`Outcome`]: what the front end
 //!   (LUA-15k) listens for to run the campaign load again ([`Outcome::changed`]). A worker thread that
 //!   dies (a panic in the lifter on hostile bytes) is reported as an aborted run.
-//! * A *stamp* file beside the output skips a run whose inputs (the build, the names and sizes of the
+//! * A *stamp* file beside the output skips a run whose inputs (the build, the names and content digests of the
 //!   mission DLLs, the engine files and the map files) are the ones of the last complete run and
-//!   whose output still has its manifest. The stamp only skips: the cache stays the authority for
+//!   whose output is whole (every script the run wrote is there with the content the manifest
+//!   lists). The check runs on the worker thread, never in a frame. The stamp only skips: the cache stays the authority for
 //!   what a run converts, and it is removed when a run starts and written only when one completes, so a
 //!   cancelled run never leaves a stamp that matches.
 //! * A *lock* file beside the output (an advisory lock held by the run, released by the system if the
@@ -41,7 +42,7 @@ use std::thread::JoinHandle;
 use bevy::prelude::*;
 use sta_mission_convert::cache::{BUILD_ID, Cache};
 use sta_mission_convert::install::{self, Env, Event as ConvEvent, Install, InstallError, Options, Summary};
-use sta_mission_convert::output::{MANIFEST, OutDir};
+use sta_mission_convert::output::OutDir;
 
 /// How many worker messages one frame takes at most; the rest wait for the next frame.
 pub const MAX_EVENTS_PER_FRAME: usize = 64;
@@ -153,35 +154,41 @@ pub fn decide_with(install_root: &Path, active_mod: Option<&str>, data_dir: Opti
 
 // ------------------------------------------------------------------ the stamp
 
-fn sorted_files(dir: &Path, keep: &dyn Fn(&str) -> bool) -> Vec<(String, u64)> {
-    let mut v: Vec<(String, u64)> = std::fs::read_dir(dir)
+/// The regular files of `dir` that `keep` (called with the lower-cased name) accepts, sorted by name.
+fn sorted_files(dir: &Path, keep: &dyn Fn(&str) -> bool) -> Vec<(String, PathBuf)> {
+    let mut v: Vec<(String, PathBuf)> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().to_ascii_lowercase();
-            let meta = e.metadata().ok()?;
-            (meta.is_file() && keep(&name)).then_some((name, meta.len()))
+            (e.metadata().ok()?.is_file() && keep(&name)).then(|| (name, e.path()))
         })
         .collect();
     v.sort();
     v
 }
 
-/// What a run's result depends on, as far as a listing tells: the build, then the names (relative
-/// to the missions folder) and sizes of the mission DLLs, the engine files and the map files.
+/// The content digest of an input (the converter's own hash, streamed block by block, so memory
+/// stays bounded); a file that cannot be read has a digest of its own that no content has.
+fn digest(p: &Path) -> String {
+    sta_mission_convert::cache::file_digest(p).unwrap_or_else(|_| "unreadable".to_owned())
+}
+
+/// What a run's result depends on: the build, then the names (relative to the missions folder) and
+/// the content digests of the mission DLLs, the engine files and the map files. Every input is read
+/// once; this runs on the worker thread, never in a frame.
 fn stamp_text(plan: &Plan) -> String {
-    let mut s = format!("sta64-convert-stamp 1\nbuild {BUILD_ID}\nkey {}\n", plan.key);
+    let mut s = format!("sta64-convert-stamp 2\nbuild {BUILD_ID}\nkey {}\n", plan.key);
     let missions = &plan.install.missions_dir;
     for (dsl, drl) in sta_mission_convert::convert::find_missions(missions) {
         for p in std::iter::once(dsl).chain(drl) {
             let rel = p.strip_prefix(missions).unwrap_or(&p).to_string_lossy().replace('\\', "/").to_ascii_lowercase();
-            let len = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
-            s.push_str(&format!("dll {rel} {len}\n"));
+            s.push_str(&format!("dll {rel} {}\n", digest(&p)));
         }
     }
-    for (n, len) in sorted_files(&plan.install.root, &|n| n == "armada2.exe" || n == "armada2.map") {
-        s.push_str(&format!("engine {n} {len}\n"));
+    for (n, p) in sorted_files(&plan.install.root, &|n| n == "armada2.exe" || n == "armada2.map") {
+        s.push_str(&format!("engine {n} {}\n", digest(&p)));
     }
     let mut dirs: Vec<PathBuf> = Vec::new();
     for base in [missions.parent(), Some(plan.install.root.as_path())].into_iter().flatten() {
@@ -192,29 +199,44 @@ fn stamp_text(plan: &Plan) -> String {
         }
     }
     for d in dirs {
-        for (n, len) in sorted_files(&d, &|n| n.ends_with(".bzn")) {
-            s.push_str(&format!("map {n} {len}\n"));
+        for (n, p) in sorted_files(&d, &|n| n.ends_with(".bzn")) {
+            s.push_str(&format!("map {n} {}\n", digest(&p)));
         }
     }
     s
 }
 
-/// The stamp file of a complete run that wrote `written` scripts: the inputs, then the count.
-fn stamp_file(plan: &Plan, written: usize) -> String {
-    format!("{}written {written}\n", stamp_text(plan))
-}
-
-/// Whether the last complete run's inputs are today's and its output is still there: a run that
-/// wrote scripts needs its manifest (the player may have deleted the folder), a run that wrote
-/// none (every mission failed) has nothing to lose.
-fn stamp_matches(plan: &Plan) -> bool {
+/// Whether the last complete run's inputs (`inputs`, [`stamp_text`] as of now) are the stamp's and
+/// its output is whole: every script the run wrote is there and is the content the manifest lists
+/// (the player may have deleted or edited some, or the folder). A run that wrote none (every
+/// mission failed) has nothing to lose.
+fn stamp_matches(plan: &Plan, inputs: &str) -> bool {
     let Ok(text) = std::fs::read_to_string(&plan.stamp_path) else { return false };
-    let Some(rest) = text.strip_prefix(&stamp_text(plan)) else { return false };
+    let Some(rest) = text.strip_prefix(inputs) else { return false };
     match rest.strip_prefix("written ").and_then(|n| n.trim().parse::<usize>().ok()) {
         Some(0) => true,
-        Some(_) => plan.out_res.join(MANIFEST).is_file(),
+        Some(n) => OutDir::inspect(&plan.out_dir, plan.out_res.clone(), false).is_ok_and(|o| o.count_ours() >= n),
         None => false,
     }
+}
+
+/// Writes the stamp through a temporary file in its folder and a rename, so a half-written stamp
+/// is never read and a link at the stamp's name is replaced, not written through.
+fn write_stamp(path: &Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(".tmp-{}", std::process::id()));
+    let tmp = PathBuf::from(tmp);
+    let _ = std::fs::remove_file(&tmp);
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+    let r = f.write_all(text.as_bytes()).and_then(|()| f.flush()).and_then(|()| {
+        drop(f);
+        std::fs::rename(&tmp, path)
+    });
+    if r.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    r
 }
 
 // ------------------------------------------------------------------ the lock
@@ -284,7 +306,9 @@ fn run(plan: &Plan, forced: bool, cancel: &AtomicBool, tx: &Sender<Msg>, convert
         Lock::Busy => return Done::Busy,
         other => other,
     };
-    if !forced && stamp_matches(plan) {
+    // The inputs as they are before the run: a file changed during it is another stamp next time.
+    let inputs = stamp_text(plan);
+    if !forced && stamp_matches(plan, &inputs) {
         return Done::Skipped;
     }
     // From here the folder changes: no stamp stays that could skip after a stop.
@@ -305,8 +329,8 @@ fn run(plan: &Plan, forced: bool, cancel: &AtomicBool, tx: &Sender<Msg>, convert
     };
     let summary = converter(&plan.install, &opts, &mut out, cache.as_ref(), &stop, &mut sink);
     if summary.completed() {
-        let written = summary.missions.iter().map(|m| m.written.len()).sum();
-        let _ = std::fs::write(&plan.stamp_path, stamp_file(plan, written));
+        let written: std::collections::BTreeSet<&String> = summary.missions.iter().flat_map(|m| &m.written).collect();
+        let _ = write_stamp(&plan.stamp_path, &format!("{inputs}written {}\n", written.len()));
     }
     Done::Summary(Box::new(summary))
 }
@@ -315,7 +339,7 @@ fn run(plan: &Plan, forced: bool, cancel: &AtomicBool, tx: &Sender<Msg>, convert
 
 /// Start a run for the install, for the base game (`active_mod` is passed so that a mod is refused
 /// here, D6, whatever the sender knows). `forced`: ignore the cache and the stamp (convert again).
-/// Ignored while a run is going.
+/// Answered with [`Outcome::AlreadyRunning`] while a run is going.
 #[derive(Message, Debug, Clone, PartialEq, Eq)]
 pub struct StartConversion {
     pub install_root: PathBuf,
@@ -342,6 +366,10 @@ pub enum Outcome {
     Busy,
     /// [`decide`] said no: nothing was done.
     Refused(Refusal),
+    /// A [`StartConversion`] arrived while this game's own run was going: it is answered with this
+    /// and dropped; the run goes on and ends with its own message. [`ConversionState`] is not
+    /// touched by it.
+    AlreadyRunning,
 }
 
 impl Outcome {
@@ -447,6 +475,7 @@ fn start(
 ) {
     for req in requests.read() {
         if active.is_running() {
+            fin.write(ConversionFinished { outcome: Outcome::AlreadyRunning });
             continue;
         }
         let plan = match decide_with(&req.install_root, req.active_mod.as_deref(), ctx.data_dir.as_deref(), &ctx.env) {
@@ -940,6 +969,31 @@ mod tests {
         request(&mut app, &root, false);
         finish_run(&mut app);
         assert_eq!(calls.load(Ordering::SeqCst), 5);
+        // a DLL patched to the same size is another input: the content is compared, not the size
+        let dll = root.join("missions/x1S.dsl");
+        let before = std::fs::read(&dll).unwrap();
+        let mut patched = before.clone();
+        patched[0] ^= 1;
+        assert_eq!(patched.len(), before.len());
+        put(&dll, &patched);
+        request(&mut app, &root, false);
+        finish_run(&mut app);
+        assert_eq!(calls.load(Ordering::SeqCst), 6);
+        // the same bytes written again are the same input
+        put(&dll, &patched);
+        request(&mut app, &root, false);
+        finish_run(&mut app);
+        assert_eq!(calls.load(Ordering::SeqCst), 6);
+        assert_eq!(seen(&app).last(), Some(&Outcome::Skipped));
+        // so is a map patched to the same size
+        let map = root.join("bzn/fed1.bzn");
+        let mut m = std::fs::read(&map).unwrap();
+        m[0] ^= 1;
+        put(&map, &m);
+        request(&mut app, &root, false);
+        finish_run(&mut app);
+        assert_eq!(calls.load(Ordering::SeqCst), 7);
+        assert_eq!(calls.load(Ordering::SeqCst), 7);
         // an incomplete run (cancelled) leaves no stamp that could skip the repair
         let cancelled = fake(|_i, _o, out, _c, _cancel, _sink| {
             let _ = out.finish();
@@ -950,6 +1004,110 @@ mod tests {
         finish_run(&mut app);
         assert!(!plan.stamp_path.exists());
         assert_eq!(seen(&app).last(), Some(&Outcome::Cancelled { converted: 0 }));
+    }
+
+    #[test]
+    fn a_script_that_is_gone_or_changed_is_not_skipped_over() {
+        let t = Tmp::new("damage");
+        let (root, data) = (t.0.join("Armada"), t.0.join("data"));
+        install(&root, b"junk");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut app = app(&data, counting(calls.clone()));
+        let plan = decide_with(&root, None, Some(&data), &env()).unwrap();
+        let lua = plan.out_res.join("missions/fed1.lua");
+        request(&mut app, &root, false);
+        finish_run(&mut app);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        // a script the player deleted: the stamp does not skip, the run writes it again
+        std::fs::remove_file(&lua).unwrap();
+        request(&mut app, &root, false);
+        finish_run(&mut app);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(std::fs::read(&lua).unwrap(), b"-- authored\n");
+        // a script cut short or edited is not the content the manifest lists: not skipped either; it
+        // is the player's now, so the run refuses the folder and overwrites nothing
+        for bytes in [&b""[..], &b"-- edited\n"[..]] {
+            std::fs::write(&lua, bytes).unwrap();
+            request(&mut app, &root, false);
+            finish_run(&mut app);
+            assert!(matches!(seen(&app).last(), Some(Outcome::Aborted(m)) if m.contains("did not write")), "{:?}", seen(&app).last());
+            assert_eq!(std::fs::read(&lua).unwrap(), bytes);
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_start_while_a_run_is_going_is_answered_and_the_run_goes_on() {
+        let t = Tmp::new("twice");
+        let (root, data) = (t.0.join("Armada"), t.0.join("data"));
+        install(&root, b"junk");
+        let (gate_tx, gate_rx) = sync_channel::<()>(0);
+        let gate = Mutex::new(gate_rx);
+        let conv = fake(move |_i, _o, out, _c, _cancel, sink| {
+            sink(&ConvEvent::Planned { total: 1 });
+            gate.lock().unwrap().recv().unwrap();
+            let _ = out.finish();
+            Summary { total: 1, ..Summary::default() }
+        });
+        let mut app = app(&data, conv);
+        request(&mut app, &root, false);
+        app.update();
+        assert!(state(&app).running);
+        request(&mut app, &root, true);
+        app.update();
+        assert_eq!(seen(&app), vec![Outcome::AlreadyRunning], "the second request is answered");
+        assert!(!seen(&app)[0].changed());
+        assert!(state(&app).running, "the run in flight is untouched");
+        gate_tx.send(()).unwrap();
+        finish_run(&mut app);
+        assert_eq!(seen(&app).len(), 2);
+        assert!(matches!(seen(&app)[1], Outcome::Completed { total: 1, .. }));
+        assert_eq!(state(&app).runs, 1, "no second run was started");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_stamp_is_written_through_a_temporary_file_and_replaces_a_link() {
+        let t = Tmp::new("stamplink");
+        let (victim, stamp) = (t.0.join("victim.txt"), t.0.join("k.stamp"));
+        put(&victim, b"precious");
+        std::os::unix::fs::symlink(&victim, &stamp).unwrap();
+        write_stamp(&stamp, "stamp text\n").unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), b"precious", "nothing is written through the link");
+        assert!(!std::fs::symlink_metadata(&stamp).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read(&stamp).unwrap(), b"stamp text\n");
+        // no temporary file stays, and a second write replaces the first
+        write_stamp(&stamp, "again\n").unwrap();
+        assert_eq!(std::fs::read(&stamp).unwrap(), b"again\n");
+        let names: Vec<_> = std::fs::read_dir(&t.0).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+    }
+
+    /// Measures what the stamp's content check costs on an authored folder (not part of the normal
+    /// run: it writes about 115 MB). `cargo test -p sta64 --lib stamp_cost -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "measurement, writes about 115 MB"]
+    fn stamp_cost_on_a_folder_of_realistic_size() {
+        let t = Tmp::new("cost");
+        let (root, data) = (t.0.join("Armada"), t.0.join("data"));
+        put(&root.join("Armada2.exe"), &vec![7u8; 5 << 20]);
+        put(&root.join("Armada2.map"), &vec![9u8; 2 << 20]);
+        put(&root.join("Armada.exe"), b"");
+        for i in 0..40 {
+            put(&root.join(format!("missions/m{i}S.dsl")), &vec![(i % 251) as u8; 100 << 10]);
+            put(&root.join(format!("missions/m{i}R.drl")), &vec![(i % 241) as u8; 100 << 10]);
+        }
+        for i in 0..100 {
+            put(&root.join(format!("bzn/map{i}.bzn")), &vec![(i % 239) as u8; 1 << 20]);
+        }
+        let plan = decide_with(&root, None, Some(&data), &env()).unwrap();
+        let t0 = std::time::Instant::now();
+        let text = stamp_text(&plan);
+        eprintln!("stamp_text over about 115 MB in 241 files: {:?} ({} lines)", t0.elapsed(), text.lines().count());
+        let t1 = std::time::Instant::now();
+        let again = stamp_text(&plan);
+        eprintln!("second time (file cache warm): {:?}", t1.elapsed());
+        assert_eq!(text, again);
     }
 
     #[test]

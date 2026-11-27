@@ -115,15 +115,35 @@ pub fn path_hash(install_root: &Path) -> String {
     hash_of(&normal_form(&resolve(install_root).to_string_lossy(), cfg!(windows)))
 }
 
-/// The folder key of an install (and mod): `<slug>-<hash>` and `+<slug of the mod>` for a mod.
+/// The longest slug a key carries (the folder name part and the mod part each): a longer name is
+/// cut (the slug is ASCII, so on a character boundary), a `-` left at the cut is trimmed. The
+/// hash keeps two cut names apart. A key is at most `2 * MAX_SLUG + 1 + HASH_LEN + 1` bytes.
+pub const MAX_SLUG: usize = 48;
+
+/// [`slug`] cut to [`MAX_SLUG`] characters.
+pub fn capped_slug(s: &str) -> String {
+    let mut k = slug(s);
+    k.truncate(MAX_SLUG);
+    while k.ends_with('-') && k.len() > 1 {
+        k.pop();
+    }
+    k
+}
+
+/// The folder key of an install (and mod): `<slug>-<hash>` and `+<slug of the mod>` for a mod,
+/// always one safe path component.
+///
+/// One install normally has one key. If the path cannot be canonicalised on one run (an
+/// unreadable parent folder) the lexical fallback may give it a second key: a duplicate
+/// conversion, never two installs sharing a key.
 pub fn key(install_root: &Path, active_mod: Option<&str>) -> String {
     let real = resolve(install_root);
     let name = real.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let hash = hash_of(&normal_form(&real.to_string_lossy(), cfg!(windows)));
-    let mut k = format!("{}-{hash}", slug(&name));
+    let mut k = format!("{}-{hash}", capped_slug(&name));
     if let Some(m) = active_mod.filter(|m| !m.is_empty()) {
         k.push('+');
-        k.push_str(&slug(m));
+        k.push_str(&capped_slug(m));
     }
     k
 }
@@ -197,6 +217,29 @@ mod tests {
         assert_eq!(key(&a.join("..").join("Armada II"), None), ka);
         let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    #[test]
+    fn an_over_long_name_is_cut_and_the_key_stays_one_short_component() {
+        let long = "Star Trek Armada II ".repeat(20);
+        let cut = capped_slug(&long);
+        assert_eq!(cut, "star-trek-armada-ii-star-trek-armada-ii-star-tre");
+        assert!(cut.len() <= MAX_SLUG);
+        // a cut that lands on a separator loses it
+        assert_eq!(capped_slug(&format!("{}-x", "a".repeat(MAX_SLUG - 1))), "a".repeat(MAX_SLUG - 1));
+        let p = format!("/nonexistent/sta64-key/{long}");
+        let k = key(Path::new(&p), Some(&long));
+        assert!(k.len() <= 2 * MAX_SLUG + 1 + HASH_LEN + 1, "{k}");
+        assert!(k.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'+'), "{k}");
+        // two long names that share their first characters stay apart by the hash
+        let q = format!("/nonexistent/sta64-key/{long}x");
+        assert_ne!(key(Path::new(&q), None), key(Path::new(&p), None));
+        // the golden of the over-long case, through the normal form (the key itself would differ
+        // on Windows, where the path is made absolute first)
+        assert_eq!(format!("{cut}-{}", hash_of(&normal_form(&p, false))), format!("{cut}-{GOLDEN_LONG}"));
+        assert!(key(Path::new(&p), None).starts_with(&format!("{cut}-")));
+    }
+
+    const GOLDEN_LONG: &str = "d97451f7";
 
     #[test]
     fn a_path_that_does_not_exist_still_has_a_key() {
