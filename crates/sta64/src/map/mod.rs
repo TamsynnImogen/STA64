@@ -748,7 +748,14 @@ fn setup(mut commands: Commands) {
                 home: (Vec3::ZERO, 8000.0),
             },
         ))
-        .with_child((BackgroundCamera, Camera3d::default(), Camera { order: 0, ..default() }, projection, RenderLayers::layer(BACKGROUND_LAYER)));
+        // The background camera also draws the map grid, the fog and the shroud (under the scene, #1145).
+        .with_child((
+            BackgroundCamera,
+            Camera3d::default(),
+            Camera { order: 0, ..default() },
+            projection,
+            RenderLayers::from_layers(&[BACKGROUND_LAYER, crate::render::action_camera::GROUND_LAYER, crate::render::action_camera::GRID_LAYER]),
+        ));
     commands.spawn((
         MatchEntity,
         MapLight(0),

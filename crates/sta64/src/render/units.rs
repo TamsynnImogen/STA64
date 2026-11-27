@@ -253,6 +253,21 @@ pub fn sync_units(
     *seen = Some((curr.clone(), local.0, reveal, fog_updates));
 
     let mut want: BTreeMap<EntityId, &sta_sim::UnitView> = drawn_units(curr, local.0, reveal).into_iter().map(|u| (u.id, u)).collect();
+    // The fog lifted (match setting, cheat) shows the client every unit (`SimLink::curr`), and the shroud layer no
+    // longer hides those on never-explored ground (#1145: the layers are drawn under the scene). Rule (read from
+    // the executable, static; not measured; the original's fog off and shroud on): of the units the sim does not
+    // show the local player, only those whose footprint touches explored ground are drawn. The grid the client
+    // keeps is already the lifted copy, so with the fog lifted explored counts as in sight, and with the shroud
+    // lifted too everything does.
+    if let (Some(p), Some(fog), false) = (local.0, fog.as_deref(), reveal)
+        && !Arc::ptr_eq(curr, link.real_curr())
+    {
+        let sim_visible: BTreeSet<EntityId> = link.real_curr().visible_to(p).into_iter().map(|u| u.id).collect();
+        want.retain(|id, u| {
+            let radius = content.as_ref().and_then(|c| c.0.unit(u.def)).map_or(0.0, |d| d.radius.to_f32());
+            sim_visible.contains(id) || fog.grid.in_sight_within(u.pos.x.to_f32(), u.pos.z.to_f32(), radius)
+        });
+    }
     // A neutral planet or backdrop is scenery and stays drawn outside the sensors. Grade: that the original
     // draws planets regardless of sensors is not measured, inferred from the stock look. Clicks, hover, right-click orders, the order
     // cursor and HUD targeting follow `visible_to` (`input::select::target_seen`), so a kept planet cannot be
@@ -1356,6 +1371,34 @@ mod view_tests {
 
     /// #1146: with a fog grid, a planet never seen is not drawn, one in sight or seen before is, and a
     /// backdrop object (not decided) stays whatever the grid says.
+    /// #1145: with the fog lifted and the shroud not, a unit on never-explored ground is not drawn (the shroud layer
+    /// no longer hides it); one on explored ground is; with fog on the sim's own visibility decides; with both
+    /// lifted everything is drawn.
+    #[test]
+    fn a_unit_on_unexplored_ground_is_not_drawn_with_the_fog_on_or_lifted() {
+        use crate::render::fog::{FogGrid, FogState};
+        let at = |id: u32, x: i32| UnitView { pos: sta_sim::Vec3 { x: Fixed::from_int(x), y: Fixed::ZERO, z: Fixed::ZERO }, ..unit(id, 2, 100, UnitFlags::default()) };
+        let own = UnitView { pos: sta_sim::Vec3 { x: Fixed::ZERO, y: Fixed::ZERO, z: Fixed::ZERO }, ..unit(1, 1, 100, UnitFlags::default()) };
+        // Unit 2 stands on explored ground out of sensor range, 3 on ground never explored; the player sees only unit 1.
+        let v = view(0, vec![own, at(2, 1000), at(3, -3000)], vec![(PlayerId(1), vec![EntityId(1)])]);
+        let mut grid = FogGrid::new([-4096.0, -4096.0], [4096.0, 4096.0]);
+        let c = grid.cell_of(1000.0, 0.0).unwrap();
+        grid.set_cell_for_test(c % grid.w, c / grid.w, false, true);
+        let ids = |app: &mut App| roots(app).into_iter().map(|r| r.0.0).collect::<BTreeSet<_>>();
+        let run = |lifted: bool, shown: FogGrid| {
+            let mut app = app_with(Box::new(Views(vec![v.clone()], 0)), Some(PlayerId(1)));
+            app.world_mut().resource_mut::<SimLink>().set_fog_lifted(lifted);
+            app.insert_resource(FogState { grid: shown, updates: 1 });
+            for _ in 0..3 {
+                app.update();
+            }
+            ids(&mut app)
+        };
+        assert_eq!(run(false, grid.lifted(false, false)), BTreeSet::from([1]), "fog on: only what the sensors show");
+        assert_eq!(run(true, grid.lifted(true, false)), BTreeSet::from([1, 2]), "fog lifted, shroud on: explored ground only");
+        assert_eq!(run(true, grid.lifted(true, true)), BTreeSet::from([1, 2, 3]), "both lifted: everything");
+    }
+
     #[test]
     fn a_planet_never_seen_is_not_drawn_and_a_backdrop_is() {
         use crate::render::fog::{FogGrid, FogState};

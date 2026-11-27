@@ -13,9 +13,11 @@
 //! - Refused in a network game (a [`NetGame`] exists): the toggles do nothing there (a notice says so)
 //!   and anything lifted is put back. The chords act only while a match runs (not in the menus), and the
 //!   lifted state carries from one single-player match to the next until toggled.
-//! - Limit: with the fog lifted and the shroud not, units on never-explored ground are shown to the
-//!   unit lists and the minimap blips, but the shroud still blacks the ground under them in the 3D
-//!   view and on the minimap picture; lift both to see everything.
+//! - With the fog lifted and the shroud not, the 3D view draws only the units whose footprint touches
+//!   explored ground (rule: the original's fog off and shroud on, read from the executable, static; not
+//!   measured; the cheat follows it as STA64's own stated rule): the shroud layer is drawn under the scene and
+//!   hides nothing. Units on never-explored ground are still in the unit lists and the minimap blips (open);
+//!   lift both to see everything.
 //!
 //! Keys: the original input maps carry two fog and shroud toggles on Alt+F and Alt+V (read from data);
 //! which of them toggles which layer there is not established, so the split here is STA64's own.

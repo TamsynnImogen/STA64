@@ -218,6 +218,8 @@ pub(crate) fn spawn_fx(
     content: Res<ContentRes>,
     live: Query<(Entity, &WeaponFx)>,
     stock: super::stock_shots::StockShots,
+    drawn: Option<Res<crate::sim_link::SimEntities>>,
+    fog: Option<Res<crate::render::fog::FogState>>,
 ) {
     let alpha = clock.alpha();
     // A freighter's mining beam is drawn as a shot but is not one for anyone else.
@@ -229,6 +231,9 @@ pub(crate) fn spawn_fx(
         match ev {
             SimEvent::Fired { shooter, weapon, hardpoint, target } => {
                 let Some(def) = content.0.weapon(*weapon) else { continue };
+                // #1145: the fog and shroud layers no longer cover a shot over ground the player has not seen, so a
+                // shot is drawn only for a shooter the client draws (the sim's sight, or the lifted fog's rule).
+                if fog.is_some() && drawn.as_ref().is_some_and(|d| !d.0.contains_key(shooter)) { continue; }
                 // Tracked A1 ordnance is drawn from its persistent world-view pose.
                 // Fired remains available to the audio and gameplay readers.
                 if def.a1_special.is_some_and(|s| super::a1::tracked(s.kind)) { continue; }

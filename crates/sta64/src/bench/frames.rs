@@ -29,7 +29,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bevy::asset::RenderAssetUsages;
-use bevy::camera::RenderTarget;
+use bevy::camera::visibility::RenderLayers;
+use bevy::camera::{ClearColorConfig, RenderTarget};
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_disk};
@@ -333,7 +334,26 @@ pub fn add(app: &mut App, cfg: &LaunchConfig, scene_camera: Option<BenchCommand>
         .init_resource::<Proxies>()
         .insert_resource(GlobalAmbientLight { brightness: 300.0, ..default() })
         .add_systems(Startup, move |mut commands: Commands| {
-            commands.spawn((Camera3d::default(), RenderTarget::from(target.clone()), Msaa::Off, FrameCamera, Transform::default()));
+            // The stand-in scene is drawn by the frame camera over a ground camera (a child, so it follows the frame
+            // camera's pose) that draws the fog and shroud layers under it, as the map view does (#1145). The
+            // ground camera clears the target; the frame camera draws over its picture.
+            commands
+                .spawn((
+                    Camera3d::default(),
+                    Camera { order: 0, clear_color: ClearColorConfig::None, ..default() },
+                    RenderTarget::from(target.clone()),
+                    Msaa::Off,
+                    FrameCamera,
+                    Transform::default(),
+                ))
+                .with_child((
+                    Camera3d::default(),
+                    crate::map::BackgroundCamera,
+                    Camera { order: -1, ..default() },
+                    RenderTarget::from(target.clone()),
+                    Msaa::Off,
+                    RenderLayers::layer(crate::render::action_camera::GROUND_LAYER),
+                ));
             commands.spawn((
                 DirectionalLight { illuminance: 8000.0, shadow_maps_enabled: false, ..default() },
                 Transform::from_xyz(1.0, 2.0, 1.5).looking_at(Vec3::ZERO, Vec3::Y),

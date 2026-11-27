@@ -161,6 +161,21 @@ fn max_diff(a: &[u8], b: &[u8]) -> u8 {
     a.2.iter().zip(&b.2).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0)
 }
 
+/// How many pixels of two PNGs of one size differ by more than `by` in some channel; every pixel if the sizes differ.
+fn pixels_differing(a: &[u8], b: &[u8], by: u8) -> usize {
+    let decode = |p: &[u8]| {
+        let mut r = png::Decoder::new(std::io::Cursor::new(p)).read_info().unwrap();
+        let mut buf = vec![0; r.output_buffer_size().unwrap()];
+        let info = r.next_frame(&mut buf).unwrap();
+        (info.width, info.height, info.color_type.samples(), buf)
+    };
+    let (a, b) = (decode(a), decode(b));
+    if (a.0, a.1) != (b.0, b.1) {
+        return usize::MAX;
+    }
+    a.3.chunks(a.2).zip(b.3.chunks(b.2)).filter(|(x, y)| x.iter().zip(*y).any(|(p, q)| p.abs_diff(*q) > by)).count()
+}
+
 /// The effects draw on a real GPU: `sta64` exits 0 with no ERROR logged (a shader or
 /// pipeline error is only logged), the frames repeat byte for byte, and each frame in
 /// `live` differs from the first, which is before any effect. The first `exact` frames
@@ -264,7 +279,10 @@ fn fog_of_war_draws_changes_the_frame_and_follows_the_sensors() {
     assert_ne!(a[0], off[0], "the fog must change the first frame");
     assert_ne!(a[1], off[1], "the fog must change the later frame");
     assert_ne!(a[0], a[1], "the fog must move with the scout");
-    assert!(max_diff(&a[0], &off[0]) > 40, "fog is a visible dimming, not a speck");
+    // The layers are drawn under the scene (#1145), so the stand-in boxes (drawn wherever they stand) are no longer
+    // covered by the shroud and the largest channel difference is the layers' own dimming; it is still an area
+    // (the discs and the shroud around them), not a speck.
+    assert!(pixels_differing(&a[0], &off[0], 8) > 5000, "fog is a visible dimming, not a speck");
 }
 
 /// A session with a renderer (`--control stdio --frame-dir D`, no `--frames`): runs to

@@ -239,8 +239,13 @@ fn forget_units(mut seen: ResMut<Seen>) {
     seen.0.clear();
 }
 
-fn track(link: Res<SimLink>, content: Option<Res<ContentRes>>, ents: Option<Res<SimEntities>>, radii: Query<&SelectRadius>, mut seen: ResMut<Seen>) {
+fn track(link: Res<SimLink>, content: Option<Res<ContentRes>>, ents: Option<Res<SimEntities>>, radii: Query<&SelectRadius>, mut seen: ResMut<Seen>, fog: Option<Res<crate::render::fog::FogState>>) {
     for u in &link.curr().units {
+        // #1145: hits and explosions are drawn only for units the client draws; the layers no longer cover them
+        // over unseen ground.
+        if fog.is_some() && ents.as_ref().is_some_and(|m| !m.0.contains_key(&u.id)) {
+            continue;
+        }
         let radius = ents.as_ref().and_then(|m| m.0.get(&u.id)).and_then(|e| radii.get(*e).ok()).map_or(DEFAULT_RADIUS, |r| r.0);
         let heading = Vec3::new(u.heading.0.to_f32(), 0.0, -u.heading.1.to_f32()).normalize_or(Vec3::NEG_Z);
         let faction = content.as_ref().and_then(|c| c.0.unit(u.def)).map_or(Faction::of_odf(""), |d| Faction::of_odf(&d.odf));
