@@ -604,13 +604,21 @@ pub fn plan(root: &Path, include_unmapped: bool, only: &[String]) -> Result<Vec<
 /// Converts one planned mission: the Lua source and the report. Any fault fails that mission only
 /// (the Python's `except Exception`); `listing` gives the instruction listing of a DLL.
 pub fn convert_one(job: &Job, listing: &mut dyn FnMut(&Path) -> Result<Vec<Ins>>) -> Result<(String, Report)> {
-    let spe = Pe::open(&job.dsl)?;
-    let sins = listing(&job.dsl)?;
+    convert_one_with(job, &mut |p| {
+        let pe = Pe::open(p)?;
+        let ins = listing(p)?;
+        Ok((pe, ins))
+    })
+}
+
+/// [`convert_one`] with the loading of a DLL in the caller's hands: `load` gives the image and the
+/// listing of the file at the path (the mission DLL first, then the rule DLL).
+pub fn convert_one_with(job: &Job, load: &mut crate::convert::LoadFn<'_>) -> Result<(String, Report)> {
+    let (spe, sins) = load(&job.dsl)?;
     let sex = spe.exports()?;
     let sname = job.dsl.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let s = A1Dll::new(&sname, &spe, sins, sex, None)?;
-    let rpe = Pe::open(&job.drl)?;
-    let rins = listing(&job.drl)?;
+    let (rpe, rins) = load(&job.drl)?;
     let rex = rpe.exports()?;
     let rname = job.drl.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let r = A1Dll::new(&rname, &rpe, rins, rex, None)?;
