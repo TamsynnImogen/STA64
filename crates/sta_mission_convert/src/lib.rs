@@ -8,8 +8,9 @@
 //! nothing is loaded or executed. Nothing converted is committed or shipped (the output goes
 //! to the user data directory).
 //!
-//! This is the image layer (step LUA-15a): the PE reader, the engine `.map` reader and the
-//! engine vtable names. Decoding and lifting follow in later steps.
+//! So far: the image layer (LUA-15a: the PE reader, the engine `.map` reader, the engine vtable
+//! names) and the shared core (LUA-15c: [`pyval`], [`format`], [`msvc`], [`algebra`],
+//! [`prelude`]). Decoding and lifting follow in later steps.
 
 pub mod algebra;
 pub mod disasm;
@@ -46,6 +47,12 @@ pub use pe::Pe;
 pub struct DecodeError {
     pub message: String,
     pub kind: ErrorKind,
+    /// The Python exception class name (`KeyError`, `TypeError`, ...) of a `Raw` fault that
+    /// stands for one of Python's own exceptions, `None` for a `Decode` or `Io` fault and for
+    /// STA64's own limits. The Armada I converter writes `{class}: {message}` into the Lua it
+    /// emits for a function whose rendering raised, so ports of the render path use
+    /// [`DecodeError::python`] with Python's exact text.
+    pub class: Option<&'static str>,
 }
 
 /// Which Python exception a fault stands for.
@@ -65,6 +72,7 @@ impl DecodeError {
         Self {
             message: s.into(),
             kind: ErrorKind::Decode,
+            class: None,
         }
     }
 
@@ -73,6 +81,17 @@ impl DecodeError {
         Self {
             message: s.into(),
             kind: ErrorKind::Raw,
+            class: None,
+        }
+    }
+
+    /// A fault of one of Python's own exceptions (`class` is its name, `message` the text
+    /// `str(e)` gives); kind `Raw`.
+    pub fn python(class: &'static str, s: impl Into<String>) -> Self {
+        Self {
+            message: s.into(),
+            kind: ErrorKind::Raw,
+            class: Some(class),
         }
     }
 
@@ -81,6 +100,7 @@ impl DecodeError {
         Self {
             message: s.into(),
             kind: ErrorKind::Io,
+            class: None,
         }
     }
 

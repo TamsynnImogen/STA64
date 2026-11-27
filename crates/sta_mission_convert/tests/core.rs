@@ -150,6 +150,15 @@ fn show(r: Result<Py>) -> String {
     }
 }
 
+/// Like [`show`], but a Python exception carries its class and text (`!raw:<class>:<text>`).
+fn show_text(r: Result<Py>) -> String {
+    match r {
+        Ok(p) => p.repr(),
+        Err(e) if e.kind == ErrorKind::Decode => format!("!DecodeError:{}", e.message),
+        Err(e) => format!("!raw:{}:{}", e.class.unwrap_or("?"), e.message),
+    }
+}
+
 fn s(x: &str) -> Py {
     Py::Str(x.to_owned())
 }
@@ -670,6 +679,13 @@ fn float_text_matches_python_live() {
         vals.push(n.to_bits());
         vals.push(f64::from(f32::from_bits(splitmix(&mut st) as u32)).to_bits());
     }
+    // every exact power of two of the double range (2098) and its negative: the rounding interval
+    // is asymmetric there, so the shortest digits can differ from the nearest decimal
+    for k in -1074i32..=1023 {
+        let bits = if k >= -1022 { ((k + 1023) as u64) << 52 } else { 1u64 << (k + 1074) };
+        vals.push(bits);
+        vals.push(bits | (1 << 63));
+    }
     let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
     std::fs::create_dir_all(&dir).unwrap();
     let input = dir.join("float_bits.txt");
@@ -717,4 +733,85 @@ sys.stdout.buffer.write('\\0'.join([dsl.PRELUDE, dsl.ENGINE, a1.A1_PRELUDE, a1.a
     assert_eq!(parts[1], ENGINE);
     assert_eq!(parts[2], A1_PRELUDE);
     assert_eq!(parts[3], a1_prelude().unwrap());
+}
+
+// ------------------------------------------------------------------ review follow-up
+
+#[test]
+fn whole_number_floats_near_two_to_the_63_hash_like_their_int() {
+    for (x, n) in [(9.2e18, 9_200_000_000_000_000_000i64), (4_611_686_018_427_387_904.0, 1 << 62), (-9_223_372_036_854_775_808.0, i64::MIN)] {
+        assert_eq!(Py::Float(x), Py::Int(n));
+        assert_eq!(h(&Py::Float(x)), h(&Py::Int(n)), "{x}");
+    }
+    // 2**63 is no i64: unequal to i64::MAX, and still equal to itself
+    assert_ne!(Py::Float(9_223_372_036_854_775_808.0), Py::Int(i64::MAX));
+}
+
+/// The Armada I converter writes `{class}: {text}` of an exception into its output, so the
+/// class and text of what the shared helpers raise are Python's own.
+#[test]
+fn exception_classes_and_texts_match_python() {
+    use std::collections::HashMap;
+    check("RAW_TEXT", tables::RAW_TEXT, |a| {
+        let name = a[0].as_str().unwrap();
+        let args = a[1].items().unwrap();
+        let v = &args[0];
+        match name {
+            "item" => show_text(v.item(args[1].as_int().unwrap() as usize).cloned()),
+            "items" => show_text(v.items().map(|x| Py::List(x.to_vec()))),
+            "len" => show_text(v.py_len().map(|n| Py::Int(n as i64))),
+            "lt" => show_text(v.py_lt(&args[1]).map(Py::Bool)),
+            "floordiv" => show_text(py_floordiv(v.as_int().unwrap(), args[1].as_int().unwrap()).map(Py::Int)),
+            "mod" => show_text(py_mod(v.as_int().unwrap(), args[1].as_int().unwrap()).map(Py::Int)),
+            "int" => show_text(py_int(v.as_str().unwrap(), args[1].as_int().unwrap() as u32).map(Py::Int)),
+            "del" => {
+                let mut d: IndexMap<Py, Py> = IndexMap::new();
+                for p in v.items().unwrap() {
+                    d.insert(p.item(0).unwrap().clone(), p.item(1).unwrap().clone());
+                }
+                show_text(d.py_del(&args[1]).map(|_| Py::None))
+            }
+            "lua_str" => show_text(lua_str_py(v).map(Py::Str)),
+            "render_elem" => show_text(render(v, ctx_of(&args[1])).map(Py::Str)),
+            "typed_and" => show_text(typed_args(std::slice::from_ref(v), Some(&["M".to_string()])).map(Py::List)),
+            "unpack" => show_text(branch_pred("je", &tup!["ftest", v, &args[1]], 0x1000A)),
+            "neg" => show_text(negate(v)),
+            "jcc" => show_text(branch_pred(v.as_str().unwrap(), &tup!["cmp", tup!["const", 1], tup!["const", 2]], 0x1000A)),
+            "evaluate" => show_text(evaluate(v, &HashMap::new()).map(Py::Bool)),
+            "msvc_ret" => show_text(msvc_ret(v.as_str().unwrap()).map(|o| o.map_or(Py::None, Py::Str))),
+            "expr_arg" => show_text(expr_arg(v, 0x1000)),
+            "tag" => show_text(v.item(0).cloned()),
+            other => panic!("{other}"),
+        }
+    });
+}
+
+/// Runs the committed generator and compares its output with the committed table (skipped where
+/// `python3` is missing or is not CPython 3.14, which the table was made with: the texts of some
+/// Python exceptions differ between versions).
+#[test]
+fn committed_tables_are_what_the_generator_writes() {
+    let Some(py) = python3() else {
+        eprintln!("skipped: python3 not found");
+        return;
+    };
+    let version = std::process::Command::new(&py).arg("--version").output().unwrap();
+    if !String::from_utf8_lossy(&version.stdout).starts_with("Python 3.14.") {
+        eprintln!("skipped: the table was made with CPython 3.14, found {}", String::from_utf8_lossy(&version.stdout).trim());
+        return;
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let gen_py = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/core_data/gen_tables.py");
+    let out = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("tables_regenerated.rs");
+    let status = std::process::Command::new(py)
+        .arg("-I")
+        .arg(&gen_py)
+        .arg(&root)
+        .arg(&out)
+        .stdout(std::process::Stdio::null())
+        .status()
+        .expect("run python3");
+    assert!(status.success(), "the generator failed");
+    let committed = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/core_data/tables.rs")).unwrap();
+    assert!(committed == std::fs::read(&out).unwrap(), "tests/core_data/tables.rs differs from the generator's output ({})", out.display());
 }
