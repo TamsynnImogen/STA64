@@ -383,3 +383,30 @@ fn gated_reference_structure_and_roundtrip() {
         assert!(!i.compare_all(&one_off).is_ok());
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn self_private_directory_modes_symlinks_and_owner() {
+    use harness::{dir_state, make_private_dir, DirState};
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let t = TempDir::new("mode");
+    let d = t.path().join("private");
+    make_private_dir(&d).unwrap();
+    let md = fs::metadata(&d).unwrap();
+    assert_eq!(md.mode() & 0o777, 0o700);
+    let me = md.uid();
+    assert_eq!(dir_state(&d, Some(me)).unwrap(), DirState::Usable);
+    assert_eq!(dir_state(&t.path().join("none"), Some(me)).unwrap(), DirState::Missing);
+    // Group or other access: ours, to be replaced.
+    fs::set_permissions(&d, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(dir_state(&d, Some(me)).unwrap(), DirState::WrongMode);
+    // Another owner: refused. A symlink (even to a private directory) and a file: refused.
+    fs::set_permissions(&d, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(dir_state(&d, Some(me.wrapping_add(1))).is_err());
+    let link = t.path().join("link");
+    std::os::unix::fs::symlink(&d, &link).unwrap();
+    assert!(dir_state(&link, Some(me)).is_err());
+    let file = t.path().join("file");
+    fs::write(&file, b"x").unwrap();
+    assert!(dir_state(&file, Some(me)).is_err());
+}

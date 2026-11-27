@@ -650,8 +650,45 @@ fn env_dir(name: &str) -> Result<Option<PathBuf>, Refusal> {
     }
 }
 
+/// A cheap fingerprint of an install for the reference key: the relative path, size and
+/// modification time (seconds) of every `.dsl`, `.drl`, `.exe`, `.map` and `.bzn` file down to
+/// three levels. A heuristic: it detects a changed, replaced or patched install, not a rewrite
+/// that keeps size and time.
+fn install_fingerprint(h: &mut Sha256, root: &Path) {
+    fn walk(dir: &Path, rel: &str, depth: u32, h: &mut Sha256) {
+        let Ok(rd) = fs::read_dir(dir) else {
+            return;
+        };
+        let mut entries: Vec<_> = rd.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        for e in entries {
+            let name = e.file_name().to_string_lossy().to_lowercase();
+            let Ok(md) = e.metadata() else {
+                continue;
+            };
+            if md.is_dir() {
+                if depth > 0 {
+                    walk(&e.path(), &format!("{rel}/{name}"), depth - 1, h);
+                }
+            } else if [".dsl", ".drl", ".exe", ".map", ".bzn"]
+                .iter()
+                .any(|x| name.ends_with(x))
+            {
+                let secs = md
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map_or(0, |d| d.as_secs());
+                h.update(format!("{rel}/{name} {} {secs}\n", md.len()));
+            }
+        }
+    }
+    walk(root, "", 3, h);
+}
+
 /// The deterministic directory a self-generated reference lives in: under the system temp dir,
-/// keyed by the four tool hashes, the install paths, the objdump version and the harness layout.
+/// keyed by the four tool hashes, the install paths and a fingerprint of their files, the
+/// objdump version and the harness layout.
 fn generated_dir(tools: &Path, installs: &[PathBuf]) -> Result<PathBuf, Refusal> {
     let mut h = Sha256::new();
     for t in TOOL_FILES {
@@ -662,19 +699,100 @@ fn generated_dir(tools: &Path, installs: &[PathBuf]) -> Result<PathBuf, Refusal>
     for i in installs {
         h.update(i.canonicalize().unwrap_or_else(|_| i.clone()).to_string_lossy().as_bytes());
         h.update([0]);
+        install_fingerprint(&mut h, i);
     }
     h.update(OBJDUMP_VERSION);
-    h.update("layout-1");
+    h.update("layout-2");
     let key: String = h.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect();
     Ok(std::env::temp_dir().join(format!("sta64-parity-ref-{key}")))
 }
 
-/// Run `convert_reference.py` for `installs` into a sibling of `dir`, then rename it to `dir`
-/// (so `dir` only ever exists complete, and two processes cannot corrupt each other).
-fn generate(tools: &Path, installs: &[PathBuf], dir: &Path) -> Result<(), Refusal> {
-    let work = dir.with_extension(format!("tmp{}", std::process::id()));
-    let _ = fs::remove_dir_all(&work);
-    fs::create_dir_all(&work)
+/// Create one directory (its parent exists) readable by the owner only: mode 0700 on Unix. On
+/// Windows the directory inherits the access of the user's temp folder (the user profile).
+pub fn make_private_dir(p: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new().mode(0o700).create(p)
+    }
+    #[cfg(not(unix))]
+    {
+        fs::create_dir(p)
+    }
+}
+
+/// A path next to `dir` that no other process or call uses.
+fn unique_sibling(dir: &Path, what: &str) -> PathBuf {
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.subsec_nanos());
+    let name = dir.file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned());
+    dir.with_file_name(format!(
+        "{name}.{what}-{}-{}-{nanos}",
+        std::process::id(),
+        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ))
+}
+
+/// What a generated-reference directory is.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DirState {
+    Missing,
+    /// Ours and private: may be reused if its content validates.
+    Usable,
+    /// Ours but reachable by group or others (Unix): to be replaced.
+    WrongMode,
+}
+
+/// Classify `dir`. A symlink, a non-directory or (Unix, `my_uid` known) a directory of another
+/// user is a refusal: nothing is reused, replaced or deleted there.
+pub fn dir_state(dir: &Path, my_uid: Option<u32>) -> Result<DirState, Refusal> {
+    let md = match fs::symlink_metadata(dir) {
+        Ok(md) => md,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(DirState::Missing),
+        Err(e) => return refuse(format!("cannot inspect the generated reference directory: {e}")),
+    };
+    if md.file_type().is_symlink() || !md.is_dir() {
+        return refuse("the generated reference path is a symlink or not a directory: refused");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if my_uid.is_some_and(|u| u != md.uid()) {
+            return refuse("the generated reference directory belongs to another user: refused");
+        }
+        if md.mode() & 0o077 != 0 {
+            return Ok(DirState::WrongMode);
+        }
+    }
+    let _ = my_uid;
+    Ok(DirState::Usable)
+}
+
+/// The current user's id (Unix): the owner of a private directory just made under `parent`.
+fn current_uid(parent: &Path) -> Option<u32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let probe = unique_sibling(&parent.join("sta64-parity-probe"), "uid");
+        make_private_dir(&probe).ok()?;
+        let uid = fs::symlink_metadata(&probe).ok().map(|m| m.uid());
+        let _ = fs::remove_dir(&probe);
+        uid
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = parent;
+        None
+    }
+}
+
+/// Run `convert_reference.py` for `installs` into a new private directory next to `dir` and
+/// return it.
+fn generate(tools: &Path, installs: &[PathBuf], dir: &Path) -> Result<PathBuf, Refusal> {
+    let work = unique_sibling(dir, "work");
+    make_private_dir(&work)
         .map_err(|e| Refusal(format!("cannot create the reference directory: {e}")))?;
     let mut cmd = Command::new("python3");
     // `-I` (isolated): no PYTHONPATH, no user site, no cwd on the path; the script puts its own
@@ -693,25 +811,56 @@ fn generate(tools: &Path, installs: &[PathBuf], dir: &Path) -> Result<(), Refusa
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
-    let status = match status {
-        Ok(s) => s,
+    match status {
+        Ok(s) if s.success() => Ok(work),
+        Ok(s) => {
+            let _ = fs::remove_dir_all(&work);
+            refuse(format!("convert_reference.py failed: {s}"))
+        }
         Err(e) => {
             let _ = fs::remove_dir_all(&work);
-            return refuse(format!("could not run convert_reference.py: {e}"));
-        }
-    };
-    if !status.success() {
-        let _ = fs::remove_dir_all(&work);
-        return refuse(format!("convert_reference.py failed: {status}"));
-    }
-    if fs::rename(&work, dir).is_err() {
-        // Another process finished first: use its directory.
-        let _ = fs::remove_dir_all(&work);
-        if !dir.is_dir() {
-            return refuse("cannot move the generated reference into place");
+            refuse(format!("could not run convert_reference.py: {e}"))
         }
     }
-    Ok(())
+}
+
+/// Whether `dir` is ours, private and a valid current reference.
+fn is_current(dir: &Path, tools: &Path, uid: Option<u32>) -> bool {
+    matches!(dir_state(dir, uid), Ok(DirState::Usable))
+        && Reference::load(dir, tools, OBJDUMP_VERSION).is_ok()
+}
+
+/// Put the finished `work` directory at `dir` without ever deleting a directory that validates as
+/// current (the race of two test binaries replacing the same stale one): the generated directory
+/// is built under its own unique name and renamed into place (atomic; it fails while a non-empty
+/// directory is there); a stale occupant is renamed aside, and if what was moved aside turns out
+/// to be current (another process replaced the stale one meanwhile) it is put back and `work` is
+/// dropped. A symlink or a directory of another user at `dir` is a hard failure.
+fn place(work: &Path, dir: &Path, tools: &Path, uid: Option<u32>) -> Result<(), Refusal> {
+    for _ in 0..3 {
+        if fs::rename(work, dir).is_ok() {
+            return Ok(());
+        }
+        if is_current(dir, tools, uid) {
+            let _ = fs::remove_dir_all(work);
+            return Ok(());
+        }
+        dir_state(dir, uid)?;
+        let aside = unique_sibling(dir, "old");
+        if fs::rename(dir, &aside).is_err() {
+            continue;
+        }
+        if is_current(&aside, tools, uid) {
+            if fs::rename(&aside, dir).is_err() {
+                let _ = fs::remove_dir_all(&aside);
+            }
+            let _ = fs::remove_dir_all(work);
+            return Ok(());
+        }
+        let _ = fs::remove_dir_all(&aside);
+    }
+    let _ = fs::remove_dir_all(work);
+    refuse("cannot move the generated reference into place")
 }
 
 fn obtain_uncached() -> Result<Option<Arc<Reference>>, Refusal> {
@@ -748,15 +897,14 @@ fn obtain_uncached() -> Result<Option<Arc<Reference>>, Refusal> {
     if installs.iter().any(|i| inside(&tmp, i)) || inside(&tmp, &tools) {
         return refuse("the system temp directory lies inside an install or the repository: refused");
     }
+    let uid = current_uid(&tmp);
     let dir = generated_dir(&tools, &installs)?;
-    if dir.is_dir() {
-        match Reference::load(&dir, &tools, OBJDUMP_VERSION) {
-            Ok(r) => return Ok(Some(Arc::new(r))),
-            Err(_) => fs::remove_dir_all(&dir)
-                .map_err(|e| Refusal(format!("cannot replace a stale generated reference: {e}")))?,
-        }
+    if !is_current(&dir, &tools, uid) {
+        // Refuses a symlink or another user's directory before anything is generated.
+        dir_state(&dir, uid)?;
+        let work = generate(&tools, &installs, &dir)?;
+        place(&work, &dir, &tools, uid)?;
     }
-    generate(&tools, &installs, &dir)?;
     Ok(Some(Arc::new(Reference::load(&dir, &tools, OBJDUMP_VERSION)?)))
 }
 
@@ -766,11 +914,19 @@ fn obtain_uncached() -> Result<Option<Arc<Reference>>, Refusal> {
 ///    malformed is `Err`);
 /// 2. else, when `python3` and objdump [`OBJDUMP_VERSION`] run and [`A2_VAR`] / [`A1_VAR`] name
 ///    installs, `tools/convert_reference.py` is run (about 40 s) into
-///    `<system temp>/sta64-parity-ref-<key>`, `<key>` being a hash of the tool hashes, the install
-///    paths and the objdump version. The directory is reused while it loads as valid, replaced
-///    when it does not, and **never removed** (a static cannot clean up at process exit): delete
-///    it by hand when done. It holds install-derived text; a killed run leaves at most a
-///    `.tmp<pid>` sibling, which is the same;
+///    `<system temp>/sta64-parity-ref-<key>`. The workspace has no user cache helper outside the
+///    `sta64` crate, so the temp directory is used, with these safeguards: the directory and its
+///    build sibling are created mode 0700 (Unix; on Windows the user's temp folder in the user
+///    profile protects them), a directory of another user, a symlink, or one not owned by us is
+///    refused, one of ours with group or other access is replaced. `<key>` hashes the tool
+///    hashes, the install paths, a fingerprint of the installs' `.dsl`, `.drl`, `.exe`, `.map`
+///    and `.bzn` files (path, size, modification time: a heuristic that detects a changed or
+///    patched install) and the objdump version. The directory is reused while it loads as valid
+///    and **never removed** (a static cannot clean up at process exit): delete it by hand when
+///    done. It holds install-derived text, as do the `.work-*` and `.old-*` leftovers of a killed
+///    run. Two processes finding the same stale directory cannot delete each other's fresh one
+///    (see `place`: unique build names, atomic rename, a moved-aside directory that validates is
+///    put back);
 /// 3. else `Ok(None)` and the reason goes to stderr (skip): nothing set, no python3, or another
 ///    objdump version (a reference written by the harness itself with another objdump would be
 ///    refused anyway).
