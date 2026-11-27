@@ -686,6 +686,7 @@ pub(crate) fn clear_match(
     // The sim ids the match's entities answered to; the menu scene's units are made again from its view.
     entities.0.clear();
     commands.remove_resource::<crate::render::fog::FogState>();
+    commands.remove_resource::<crate::render::fog_objects::FogRegions>();
     commands.insert_resource(crate::input::camera_tactical::TacticalView::default());
     commands.remove_resource::<crate::ui::hud::instance_names::InstanceNames>();
     // The playtest capture's record of how the match began (a networked match does not write one).
@@ -1145,6 +1146,8 @@ fn rebuild(
         let rts = sta_content::layered::cfg_h(&vfs.0, "RTS_CFG.h");
         commands.insert_resource(crate::render::map_grid::GridModes::from_cfg(rts.as_ref()));
         limits.tactical = crate::input::camera_tactical::TacticalConfig::from_cfg(rts.as_ref());
+        // The map's nebulae and asteroid fields, for the per-object visibility states (#1144).
+        commands.insert_resource(crate::render::fog_objects::FogRegions::of_map(&map_def));
         commands.insert_resource(crate::render::fog::FogBounds {
             min: Vec2::new(lo.x.to_f32(), lo.z.to_f32()),
             max: Vec2::new(hi.x.to_f32(), hi.z.to_f32()),
