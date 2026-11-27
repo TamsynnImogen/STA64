@@ -3,8 +3,8 @@
 use super::*;
 use crate::digest::ContentDigest;
 
-const LINE: &str = "// made up\n#include \"formdef.h\"\nchar formationName[16] = \"Line\";\nint m_formationID = 4;\nfloat m_shipRadius = .5;\n\
-    FormationSpecElement formationSpec[MAX_FORMATION_SIZE] =\n{\n\
+const LINE: &str = "// made up\n#include \"made_up.h\"\nchar formationName[16] = \"Line\";\nint m_formationID = 4;\nfloat m_shipRadius = .5;\n\
+    Row formationSpec[64] =\n{\n\
     2,  0.0, 0.0,  0.0, 'S', 'F', '?', 'X', 'X', 'X', 'X',\n\
     0,  1.5, 0.0, -1.0, 'F', 'S', '?', 'X', 'X', 'X', 'X',\n\
     1, -1.5, 0.0, -1.0, 'F', 'S', '?', 'X', 'X', 'X', 'X',\n\
@@ -33,13 +33,34 @@ fn rows_keep_file_order_offsets_and_the_priority_list() {
 }
 
 #[test]
-fn the_leader_is_the_lowest_rank_and_the_first_on_a_tie() {
-    assert_eq!(line().leader_slot(), Some(1));
+fn the_leader_is_the_lowest_rank_among_the_slots_taken_and_the_first_on_a_tie() {
+    let f = line(); // ranks 2, 0, 1 in file order
+    assert_eq!(f.leader_slot(3), Some(1));
+    assert_eq!(f.leader_slot(99), Some(1), "more craft than slots");
+    assert_eq!(f.leader_slot(2), Some(1));
+    assert_eq!(f.leader_slot(1), Some(0), "the rank-0 row is not taken: never an empty slot");
+    assert_eq!(f.leader_slot(0), None);
     let mut f = line();
     f.slots[2].rank = 0;
-    assert_eq!(f.leader_slot(), Some(1));
+    assert_eq!(f.leader_slot(3), Some(1), "first in file order on a tie");
     f.slots.clear();
-    assert_eq!(f.leader_slot(), None);
+    assert_eq!(f.leader_slot(3), None);
+}
+
+#[test]
+fn values_beyond_the_bound_are_refused_and_the_bound_cannot_overflow() {
+    let row = |x: &str| format!("0, {x}, 0, 0, 'A','B','C','D','E','F','G',\n");
+    let file = |x: &str, radius: &str| format!("char formationName[4] = \"B\";\nint m_formationID = 1;\nfloat m_shipRadius = {radius};\nRow formationSpec[2] = {{\n{}{}}};\n", row("0"), row(x));
+    let (f, w) = Formation::parse("b.frm", &file("1000", "1000"));
+    assert!(w.is_empty(), "{w:?}");
+    let f = f.unwrap();
+    let max_spacing = Fixed::from_int(10_000);
+    assert_eq!(f.offset(1, max_spacing).unwrap().x, Fixed::from_int(10_000_000));
+    assert_eq!(f.ship_radius(max_spacing), Fixed::from_int(10_000_000));
+    let (f, w) = Formation::parse("b.frm", &file("1000.5", "1"));
+    assert_eq!((f.unwrap().slots.len(), w.len()), (1, 1), "the row is skipped");
+    let (f, w) = Formation::parse("b.frm", &file("0", "1001"));
+    assert!(f.is_none() && !w.is_empty());
 }
 
 #[test]
@@ -135,7 +156,7 @@ fn repeated_ids_keep_the_first_file_and_the_list_is_sorted_by_id() {
 }
 
 #[test]
-fn the_digest_sees_slots_and_radius_but_not_the_file_name() {
+fn the_digest_sees_slots_and_radius_but_not_the_file_name_or_the_display_name() {
     let digest = |text: &str, file: &str| {
         let (set, w) = Formations::from_texts([(file, text)]);
         assert!(w.is_empty(), "{w:?}");
@@ -144,6 +165,7 @@ fn the_digest_sees_slots_and_radius_but_not_the_file_name() {
     let base = digest(LINE, "ai/formations/line.frm");
     assert_eq!(base.entries().len(), 1);
     assert_eq!(base, digest(LINE, "ai/formations/renamed.frm"));
+    assert_eq!(base, digest(&LINE.replace("\"Line\"", "\"Renamed\""), "x.frm"), "display text, ADR 0004 D10");
     assert_ne!(base, digest(&LINE.replace("1.5, 0.0, -1.0", "1.5, 0.0, -1.1"), "x.frm"), "an offset");
     assert_ne!(base, digest(&LINE.replace("'S', 'F', '?'", "'F', 'S', '?'"), "x.frm"), "a priority list");
     assert_ne!(base, digest(&LINE.replace("= .5", "= .6"), "x.frm"), "the radius");
@@ -166,6 +188,13 @@ fn the_built_in_x_and_cross_go_outward_in_rings_of_four() {
     assert_eq!(c.slots[3].ship_types, ['B', '?', '-', '-', '-', '-', '-']);
     assert_eq!((c.slots[3].rank, c.id, c.radius, &c.origin), (3, None, fx(0.45), &Origin::BuiltIn(BuiltIn::Cross)));
     assert_eq!(Formation::built_in(BuiltIn::X, 0).slots.len(), 1, "at least the centre");
+    let one = Formation::built_in(BuiltIn::Cross, 1);
+    assert_eq!((one.slots.len(), one.leader_slot(1)), (1, Some(0)));
+    let big = Formation::built_in(BuiltIn::Cross, 26);
+    assert_eq!(big.slots.len(), 26);
+    assert_eq!(big.slots[25].offset.x.to_f32().abs() + big.slots[25].offset.y.to_f32().abs(), 7.0, "ring 7");
+    assert_eq!(big.leader_slot(26), Some(0));
+    assert_eq!(Formation::built_in(BuiltIn::X, 26).slots[25].offset.y, -(d * Fixed::from_int(7)), "ring 7 of the X");
 }
 
 #[test]

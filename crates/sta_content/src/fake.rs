@@ -161,8 +161,8 @@ pub fn db() -> ContentDb {
 pub const FORMATION_FILES: [(&str, &str); 2] = [
     (
         "ai/formations/fx_line.frm",
-        "// made up for tests\n#include \"formdef.h\"\nchar formationName[16] = \"FxLine\";\nint m_formationID = 0;\nfloat m_shipRadius = .5;\n\
-         FormationSpecElement formationSpec[MAX_FORMATION_SIZE] =\n{\n\
+        "// made up for tests\n#include \"made_up.h\"\nchar formationName[16] = \"FxLine\";\nint m_formationID = 0;\nfloat m_shipRadius = .5;\n\
+         Row formationSpec[64] =\n{\n\
          0,  0.0, 0.0,  0.0, 'A', 'B', '?', '-', '-', '-', '-',\n\
          1,  1.0, 0.0, -1.0, 'B', 'A', '?', '-', '-', '-', '-',\n\
          2, -1.0, 0.0, -1.0, 'B', 'A', '?', '-', '-', '-', '-',\n\
@@ -172,7 +172,7 @@ pub const FORMATION_FILES: [(&str, &str); 2] = [
     (
         "ai/formations/fx_box.frm",
         "char formationName[16] = \"FxBox\";\nint m_formationID = 1;\nfloat m_shipRadius = 0.25;\n\
-         FormationSpecElement formationSpec[MAX_FORMATION_SIZE] =\n{\n\
+         Row formationSpec[64] =\n{\n\
          0,  0.5, 0.0,  0.5, 'B', 'A', '?', '-', '-', '-', '-',\n\
          1, -0.5, 0.0,  0.5, 'A', 'B', '?', '-', '-', '-', '-',\n\
          2,  0.5, 0.0, -0.5, 'A', 'B', '?', '-', '-', '-', '-',\n\

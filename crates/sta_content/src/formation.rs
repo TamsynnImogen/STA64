@@ -8,13 +8,13 @@
 //!   source (the same dialect as the AI player files): `formationName`,
 //!   `m_formationID`, `m_shipRadius` and the `formationSpec` rows, each row
 //!   `rank, x, y, z` and seven `shipType` letters, the priority list of the
-//!   slot. The row layout is the one the header the files include declares.
-//!   Evidence: read from data (names, row layout); the 200-slot limit and the
-//!   unit of the numbers (multiples of `FORMATION_SPACING`) read from the
-//!   executable, static.
+//!   slot. Only direct children of the folder are read, each at most
+//!   [`MAX_FILE_BYTES`] long (STA64's rules). Evidence: read from data (names,
+//!   row layout); the 200-slot limit and the unit of the numbers (multiples of
+//!   `FORMATION_SPACING`) read from the executable, static.
 //! - **Code.** Three formations those games build from `FORMATION_SPACING`
 //!   and a member count ([`BuiltIn`]). Evidence: read from the executable,
-//!   static; not measured.
+//!   static; INTERIM, not measured.
 //!
 //! Numbers stay as the file writes them, in multiples of `FORMATION_SPACING`
 //! (offsets and `m_shipRadius` alike); [`Formation::offset`] and
@@ -23,14 +23,28 @@
 //! slot assignment, scale and facing are SIM-76's.
 //!
 //! A file STA64 cannot read in full is reported as a [`Warning`] with its
-//! file and line and what is unusable is skipped. INTERIM: the original
-//! engine refuses the whole file on a bad value; STA64 keeps the other rows
-//! (the package row's rule).
+//! file and line and what is unusable is skipped. DECLARED DIFFERENCE: the
+//! original engine refuses the whole file on a bad value (read from the
+//! executable, static); STA64 keeps the other rows (the package row's rule),
+//! so a malformed mod file can give STA64 a formation with fewer slots where
+//! the original has none. A question for the deciders (PR body).
+//!
+//! Rows are grouped by line, STA64's own rule: a line holds one or more whole
+//! rows of eleven values; a row split over lines is reported and skipped. Not
+//! tested against the engine's reader.
 
 use sta_core::{Fixed, Vec3};
 
 use crate::digest::{self, Canon, DigestEntry, fixed_text, quoted};
 use crate::Warning;
+
+/// A formation file longer than this is not read (STA64's rule, bounds memory).
+pub const MAX_FILE_BYTES: usize = 1 << 20;
+
+/// Offsets and the ship radius are accepted up to this many spacings, so that
+/// `offset()` stays far inside the fixed-point range (with a spacing of at most
+/// 1e4 the product is at most 1e7).
+const MAX_UNITS: f32 = 1.0e3;
 
 /// The most slots a formation has (read from the executable, static); later
 /// rows of a file are dropped with a warning.
@@ -45,8 +59,7 @@ pub const DIR: &str = "AI/formations";
 /// One slot of a formation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Slot {
-    /// `m_leaderRank`: the order slots are filled in for leadership; the
-    /// lowest rank leads (G2).
+    /// The rank: of the slots taken, the lowest rank leads (G2).
     pub rank: i32,
     /// The offset from the formation's centre, multiples of the spacing.
     pub offset: Vec3,
@@ -110,20 +123,25 @@ impl Formation {
         self.radius * spacing
     }
 
-    /// The slot that leads: the lowest rank, the first in file order on a tie.
-    pub fn leader_slot(&self) -> Option<usize> {
-        self.slots.iter().enumerate().min_by_key(|(i, s)| (s.rank, *i)).map(|(i, _)| i)
+    /// The slot that leads a group of `filled` craft: the lowest rank among the
+    /// slots actually taken (slots are taken in file order, so the first
+    /// `filled`, G3), never an empty one. On a tie the first in file order:
+    /// STA64's own tie-break, the ADR states none.
+    pub fn leader_slot(&self, filled: usize) -> Option<usize> {
+        let n = filled.min(self.slots.len());
+        self.slots[..n].iter().enumerate().min_by_key(|(i, s)| (s.rank, *i)).map(|(i, _)| i)
     }
 
     /// A formation STA64 builds in code, `slots` slots (at least one). Slot 0
     /// is the centre; the others go outward in rings of four (X and cross) or
-    /// in a square spiral (sheet). Read from the executable, static; not
-    /// measured.
+    /// in a square spiral (sheet). Read from the executable, static; INTERIM,
+    /// not measured.
     pub fn built_in(kind: BuiltIn, slots: usize) -> Formation {
         let slots = slots.max(1);
         let diag = Fixed::from_f64(f64::from(std::f32::consts::FRAC_1_SQRT_2));
         let (one, zero) = (Fixed::ONE, Fixed::ZERO);
         let at = |x: Fixed, y: Fixed, z: Fixed| Vec3 { x, y, z };
+        // INTERIM priority lists (read from the executable, static; not measured).
         let types: [char; PRIORITIES] = match kind {
             BuiltIn::Cross => ['B', '?', '-', '-', '-', '-', '-'],
             BuiltIn::X | BuiltIn::Sheet => ['B', 'C', 'D', 'F', 'S', 'X', '?'],
@@ -143,51 +161,28 @@ impl Formation {
                 }
             }
             BuiltIn::Sheet => {
-                // Heading east, then north, then west, then south, each leg one
-                // step longer than the leg two before it: a square spiral.
+                // INTERIM: a square spiral, legs of length 1, 1, 2, 2, 3, 3, ...
+                // heading +x, +z, -x, -z in turn.
                 let steps = [at(one, zero, zero), at(zero, zero, one), at(-one, zero, zero), at(zero, zero, -one)];
-                let (mut x, mut z) = (0i32, 0i32);
-                let (mut dir, mut bound, mut lower) = (0usize, 1i32, -1i32);
                 let mut pos = at(zero, zero, zero);
+                let (mut leg, mut left) = (0usize, 1usize);
                 for i in 1..slots {
-                    let s = steps[dir];
+                    let s = steps[leg % 4];
                     pos = at(pos.x + s.x, pos.y + s.y, pos.z + s.z);
-                    match dir {
-                        0 => {
-                            x += 1;
-                            if x >= bound {
-                                dir = 1;
-                            }
-                        }
-                        1 => {
-                            z += 1;
-                            if z >= bound {
-                                dir = 2;
-                            }
-                        }
-                        2 => {
-                            x -= 1;
-                            if x <= lower {
-                                dir = 3;
-                            }
-                        }
-                        _ => {
-                            z -= 1;
-                            if z <= lower {
-                                dir = 0;
-                                bound += 1;
-                                lower -= 1;
-                            }
-                        }
-                    }
                     out.push(Slot { rank: i as i32, offset: pos, ship_types: types });
+                    left -= 1;
+                    if left == 0 {
+                        leg += 1;
+                        left = leg / 2 + 1;
+                    }
                 }
             }
         }
         Formation {
             name: kind.label().to_owned(),
             id: None,
-            // 0.45 of the spacing (read from the executable, static).
+            // INTERIM: 0.45 of the spacing, a double constant (read from the
+            // executable, static; not measured).
             radius: Fixed::from_f64(0.45),
             slots: out,
             origin: Origin::BuiltIn(kind),
@@ -239,7 +234,7 @@ impl Formation {
                     },
                     _ => warn(line, "m_formationID is not a whole number".to_owned()),
                 },
-                "m_shipradius" => match toks.get(j).and_then(|(t, _)| number(t)).filter(|v| *v > 0.0 && *v <= 1.0e6) {
+                "m_shipradius" => match toks.get(j).and_then(|(t, _)| number(t)).filter(|v| *v > 0.0 && *v <= MAX_UNITS) {
                     Some(v) => radius = Some(Fixed::from_f64(f64::from(v))),
                     None => warn(line, "m_shipRadius is not a positive number".to_owned()),
                 },
@@ -273,7 +268,8 @@ impl Formation {
             let types: String = s.ship_types.iter().collect();
             format!("{}:{}:{}:{}:{}", s.rank, fixed_text(s.offset.x), fixed_text(s.offset.y), fixed_text(s.offset.z), quoted(&types))
         });
-        Canon::new().text("name", &self.name).fixed("radius", self.radius).list("slots", slots).finish()
+        // The name is display text (ADR 0004 D10) and not digested; ids key the entries.
+        Canon::new().fixed("radius", self.radius).list("slots", slots).finish()
     }
 }
 
@@ -290,11 +286,18 @@ impl Formations {
     pub fn load(vfs: &sta_vfs::Vfs) -> (Formations, Vec<Warning>) {
         let mut warnings = Vec::new();
         let mut found = Vec::new();
+        let prefix = format!("{}/", DIR.to_ascii_lowercase());
         for path in vfs.list(DIR) {
-            if !path.to_ascii_lowercase().ends_with(".frm") {
+            // Direct children only (the listing is recursive).
+            let direct = path.to_ascii_lowercase().strip_prefix(&prefix).is_some_and(|rest| !rest.contains('/'));
+            if !direct || !path.to_ascii_lowercase().ends_with(".frm") {
                 continue;
             }
             let text = match vfs.read(&path) {
+                Some(Ok(bytes)) if bytes.len() > MAX_FILE_BYTES => {
+                    warnings.push(Warning::new(&path, format!("longer than {MAX_FILE_BYTES} bytes; file skipped")));
+                    continue;
+                }
                 Some(Ok(bytes)) => String::from_utf8_lossy(&bytes).into_owned(),
                 Some(Err(e)) => {
                     warnings.push(Warning::new(&path, format!("unreadable: {e}")));
@@ -475,9 +478,10 @@ fn number(t: &Tok) -> Option<f32> {
 }
 
 /// The slot rows from `toks[start]` to the closing brace. Rows are read one
-/// line at a time, as the installed files write them: a line holds one row
-/// (or several), eleven values each. Returns the slots and the index after
-/// the list.
+/// line at a time (STA64's rule): a line holds one or more whole rows of
+/// eleven values; a row split over lines is reported and skipped, the
+/// formation keeps its other rows. Returns the slots and the index after the
+/// list.
 fn read_rows(toks: &[(Tok, usize)], start: usize, warn: &mut impl FnMut(usize, String)) -> (Vec<Slot>, usize) {
     let mut end = start;
     let mut depth = 1;
@@ -511,7 +515,7 @@ fn read_rows(toks: &[(Tok, usize)], start: usize, warn: &mut impl FnMut(usize, S
             continue;
         }
         if !vals.len().is_multiple_of(4 + PRIORITIES) {
-            warn(line, format!("slot row has {} values, expected {}; skipped", vals.len(), 4 + PRIORITIES));
+            warn(line, format!("slot row has {} values, expected {}; row skipped, the formation keeps its other rows", vals.len(), 4 + PRIORITIES));
             continue;
         }
         for row in vals.chunks(4 + PRIORITIES) {
@@ -523,7 +527,7 @@ fn read_rows(toks: &[(Tok, usize)], start: usize, warn: &mut impl FnMut(usize, S
                         dropped = true;
                     }
                 }
-                Err(why) => warn(line, format!("slot row {why}; skipped")),
+                Err(why) => warn(line, format!("slot row {why}; row skipped, the formation keeps its other rows")),
             }
         }
     }
@@ -537,7 +541,7 @@ fn slot_of(row: &[&Tok]) -> Result<Slot, &'static str> {
     };
     let mut xyz = [Fixed::ZERO; 3];
     for (k, t) in row[1..4].iter().enumerate() {
-        let v = number(t).filter(|v| v.abs() <= 1.0e6).ok_or("has an offset that is not a number")?;
+        let v = number(t).filter(|v| v.abs() <= MAX_UNITS).ok_or("has an offset that is not a number within the bound")?;
         xyz[k] = Fixed::from_f64(f64::from(v));
     }
     let mut ship_types = ['?'; PRIORITIES];

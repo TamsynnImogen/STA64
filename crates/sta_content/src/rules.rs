@@ -711,11 +711,16 @@ pub struct GroupCfg {
     /// `FORMATION_LEADER_SLOWDOWN`: the factor the group leader's speed is held
     /// to (G7).
     pub leader_slowdown: Option<Fixed>,
-    /// `cfgDEFAULT_TO_FORMATION_MOVE` (Armada II family) or
-    /// `DEFAULT_TO_FORMATION_MOVE` (Armada I): the default move mode, true for
-    /// the formation move (G4). The first spelling wins when a header has both.
+    /// `cfgDEFAULT_TO_FORMATION_MOVE`: the default move mode of the Armada II
+    /// family, true for the formation move (G4). Read by every profile but
+    /// Armada I.
     pub default_to_formation_move: Option<bool>,
-    /// `FORMATIONS_RELATIVE_TO_SHIP`: read by the Armada I rules only (G8).
+    /// `DEFAULT_TO_FORMATION_MOVE`: the same rule under Armada I's spelling
+    /// (G4); read by Armada I only, the other spelling is ignored there.
+    pub a1_default_to_formation_move: Option<bool>,
+    /// `FORMATIONS_RELATIVE_TO_SHIP`: Armada I's rule (ADR 0011 G8, a profile
+    /// rule under ADR 0004 D2); read and digested under Armada I only. INTERIM:
+    /// whether another profile has the rule is not established.
     pub formations_relative_to_ship: Option<bool>,
 }
 
@@ -751,9 +756,10 @@ impl GroupCfg {
                 }
             }
         };
-        let default_to_formation_move = flag(Self::KEYS[2]).or_else(|| flag(Self::KEYS[3]));
+        let default_to_formation_move = flag(Self::KEYS[2]);
+        let a1_default_to_formation_move = flag(Self::KEYS[3]);
         let formations_relative_to_ship = flag(Self::KEYS[4]);
-        GroupCfg { formation_spacing, leader_slowdown, default_to_formation_move, formations_relative_to_ship }
+        GroupCfg { formation_spacing, leader_slowdown, default_to_formation_move, a1_default_to_formation_move, formations_relative_to_ship }
     }
 }
 
@@ -777,7 +783,8 @@ pub struct GroupRules {
     pub leader_slowdown: Fixed,
     /// The default move mode: true is the formation move (G4).
     pub default_to_formation_move: bool,
-    /// Armada I's `FORMATIONS_RELATIVE_TO_SHIP` (G8); false everywhere else.
+    /// Armada I's `FORMATIONS_RELATIVE_TO_SHIP` (G8); false under every other
+    /// profile whatever the header says (interim, see [`GroupCfg`]).
     pub formations_relative_to_ship: bool,
     /// A craft joins a cluster whose centre is this near (G1).
     pub cluster_radius: Fixed,
@@ -828,8 +835,9 @@ impl GroupRules {
         GroupRules {
             formation_spacing: cfg.formation_spacing.unwrap_or(d.formation_spacing),
             leader_slowdown: cfg.leader_slowdown.unwrap_or(d.leader_slowdown),
-            default_to_formation_move: cfg.default_to_formation_move.unwrap_or(d.default_to_formation_move),
-            formations_relative_to_ship: cfg.formations_relative_to_ship.unwrap_or(d.formations_relative_to_ship),
+            default_to_formation_move: if profile == crate::Profile::Sta1Classic { cfg.a1_default_to_formation_move } else { cfg.default_to_formation_move }
+                .unwrap_or(d.default_to_formation_move),
+            formations_relative_to_ship: profile == crate::Profile::Sta1Classic && cfg.formations_relative_to_ship.unwrap_or(d.formations_relative_to_ship),
             ..d
         }
     }
@@ -956,7 +964,8 @@ impl Rules {
     /// `RTS_CFG.h:<KEY>` entry per rule whose value is not the profile's
     /// default, so an absent key and the default digest alike and content that
     /// leaves them out keeps its hash. The default-move key is named
-    /// `cfgDEFAULT_TO_FORMATION_MOVE` whichever spelling the header used.
+    /// `cfgDEFAULT_TO_FORMATION_MOVE` whichever spelling the profile reads;
+    /// the relative-to-ship key digests under Armada I only.
     pub fn group_digest_entries(&self, profile: crate::Profile) -> Vec<DigestEntry> {
         let (d, r) = (GroupRules::defaults(profile), self.group_rules(profile));
         let mut out = Vec::new();
@@ -1525,12 +1534,16 @@ mod group_tests {
     }
 
     #[test]
-    fn armada_i_spelling_of_the_default_move_key_is_read_and_the_prefixed_one_wins() {
+    fn each_profile_reads_its_own_spelling_of_the_default_move_key() {
         let (a1, _) = Rules::from_header("int DEFAULT_TO_FORMATION_MOVE = 1;\nint FORMATIONS_RELATIVE_TO_SHIP = 1;\n");
         let g = a1.group_rules(Profile::Sta1Classic);
         assert!(g.default_to_formation_move && g.formations_relative_to_ship);
+        // The other spelling is ignored: Armada II family profiles keep their default.
+        assert_eq!(a1.group_rules(Profile::Sta2Classic).default_to_formation_move, GroupRules::defaults(Profile::Sta2Classic).default_to_formation_move);
+        assert!(!a1.group_rules(Profile::Fo3).default_to_formation_move);
         let (both, _) = Rules::from_header("int cfgDEFAULT_TO_FORMATION_MOVE = 0;\nint DEFAULT_TO_FORMATION_MOVE = 1;\n");
         assert!(!both.group_rules(Profile::Sta2Classic).default_to_formation_move);
+        assert!(both.group_rules(Profile::Sta1Classic).default_to_formation_move);
         for key in GroupCfg::KEYS {
             assert!(TYPED_CFG_KEYS.contains(&key), "{key}");
         }
@@ -1564,11 +1577,21 @@ mod group_tests {
             "float FORMATION_SPACING = 90.0;\n",
             "float FORMATION_LEADER_SLOWDOWN = 0.9;\n",
             "int cfgDEFAULT_TO_FORMATION_MOVE = 0;\n",
-            "int FORMATIONS_RELATIVE_TO_SHIP = 1;\n",
         ] {
             let (rules, w) = Rules::from_header(header);
             assert!(w.is_empty(), "{w:?}");
             assert_ne!(digest(&rules, Profile::Sta2Classic), base, "{header}");
+        }
+    }
+
+    #[test]
+    fn the_relative_to_ship_key_counts_under_armada_i_only() {
+        let (rules, w) = Rules::from_header("int FORMATIONS_RELATIVE_TO_SHIP = 1;\n");
+        assert!(w.is_empty(), "{w:?}");
+        assert_ne!(digest(&rules, Profile::Sta1Classic), digest(&Rules::default(), Profile::Sta1Classic));
+        for profile in [Profile::Native, Profile::Sta2Classic, Profile::Fo4, Profile::Fo3] {
+            assert!(!rules.group_rules(profile).formations_relative_to_ship, "{profile:?}");
+            assert_eq!(digest(&rules, profile), digest(&Rules::default(), profile), "{profile:?}");
         }
     }
 }

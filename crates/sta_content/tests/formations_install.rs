@@ -37,7 +37,7 @@ fn check_a2_family(name: &str, root: &PathBuf, m: Option<&str>, profile: Profile
     for formation in f.iter() {
         assert!(ids.insert(formation.id), "{name}: id repeated");
         assert!(!formation.name.is_empty() && formation.radius > sta_content::Fixed::ZERO, "{name}");
-        assert!(!formation.slots.is_empty() && formation.leader_slot().is_some(), "{name}: {}", formation.name);
+        assert!(!formation.slots.is_empty() && formation.leader_slot(formation.slots.len()).is_some(), "{name}: {}", formation.name);
     }
     let cfg = db.rules().group_cfg();
     eprintln!("{name}: spacing {:?} slowdown {:?} default-formation-move {:?}", cfg.formation_spacing.map(|v| v.to_f32()), cfg.leader_slowdown.map(|v| v.to_f32()), cfg.default_to_formation_move);
@@ -71,6 +71,5 @@ fn armada_i_has_no_formation_files_and_reads_its_keys() {
     assert!(db.formations().is_empty());
     let cfg = db.rules().group_cfg();
     eprintln!("Armada I: {cfg:?}");
-    assert!(cfg.formation_spacing.is_some() && cfg.leader_slowdown.is_some() && cfg.default_to_formation_move.is_some());
-    eprintln!("relative-to-ship read: {}", cfg.formations_relative_to_ship.is_some());
+    assert!(cfg.formation_spacing.is_some() && cfg.leader_slowdown.is_some() && cfg.a1_default_to_formation_move.is_some() && cfg.formations_relative_to_ship.is_some(), "a key was not read");
 }
