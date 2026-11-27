@@ -162,18 +162,24 @@ pub fn engine_vtables(
     let mut files = IndexMap::new();
     let rd =
         std::fs::read_dir(root).map_err(|e| DecodeError::io(format!("{}: {e}", root.display())))?;
+    let mut entries = Vec::new();
     for entry in rd {
         let entry = entry.map_err(|e| DecodeError::io(e.to_string()))?;
-        files.insert(
-            entry.file_name().to_string_lossy().to_lowercase(),
-            entry.path(),
-        );
+        entries.push((entry.file_name().to_string_lossy().into_owned(), entry.path()));
+    }
+    // Python: `sorted(os.listdir(root))`, so of names that differ only in case the last in
+    // code-point order wins (LUA-15g: the directory order is not the sorted order).
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, path) in entries {
+        files.insert(name.to_lowercase(), path);
     }
     let (Some(exe), Some(map)) = (files.get(exe_name), files.get(map_name)) else {
         return Ok(None);
     };
-    let pe = Pe::open(exe)?;
+    // The Python reads the map first (`open(mapf)`), then the executable (`Pe(exe)`): with both
+    // unreadable the map's `OSError` is the one that is raised (LUA-15g).
     let names = MapFile::open(map)?;
+    let pe = Pe::open(exe)?;
     engine_vtables_from(&pe, &names, classes).map(Some)
 }
 
