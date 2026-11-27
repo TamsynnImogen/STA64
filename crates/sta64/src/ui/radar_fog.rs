@@ -4,9 +4,9 @@
 //! and, for every hidden cell of the scan grid, copies a texel of the layer's pattern
 //! texture into it: `Gshroud` for ground never in sight, `Gfog` for ground seen before
 //! but not in sight now (`map_shroud`/`map_fog` in `gui_global.spr`; the file names
-//! come from `minimapShroudSprite` and `minimapFogSprite`). Both are flat in Fleet Ops
-//! (shroud 30,36,50, fog 8,8,8) and the Classic mod's fog is a dim teal pattern; the
-//! colours here are the mounted mod's own texels, so every mod and game is data. The
+//! come from `minimapShroudSprite` and `minimapFogSprite`). The colours here are the
+//! mounted mod's own texels (read from data: the mean of each texture), so every mod and
+//! game is data; a texture the mount lacks falls back to a code constant. The
 //! shroud is opaque; the fog lets the map show through at [`FOG_ALPHA`] (Refit's
 //! measured match to stock).
 //!

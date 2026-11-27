@@ -23,6 +23,16 @@
 //!
 //! The sim works in the map's left-handed space; the renderer mirrors Z, so the
 //! quads are placed at `-z`.
+//!
+//! Where the layers are drawn (#1145). Rule (read from the executable, static; not measured; Armada II,
+//! Armada I by the same strings only): the shroud and fog layers are drawn right after the background and
+//! before every object, with the depth test always passing and no depth write, in the order map grid,
+//! fog, shroud; so every object covers them. What the player must not see is not drawn at all (see
+//! `render::fog_objects`), the layers never hide it. Here: the quads are on [`GROUND_LAYER`], which the
+//! map's background camera draws (a camera before the scene camera, with its own depth), the fog first and
+//! the shroud over it by their sort bias; the scene camera never draws them. Bevy 0.20.1: a camera clears its
+//! own depth (`bevy_camera` `components.rs`, `Camera3dDepthLoadOp`, default clear), so
+//! nothing the scene draws is tested against the layers.
 
 use std::sync::Arc;
 
@@ -30,6 +40,7 @@ use bevy::asset::{AssetPath, RenderAssetUsages, embedded_asset};
 use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::mesh::{Indices, MeshVertexBufferLayoutRef, PrimitiveTopology};
 use bevy::pbr::{MaterialPipeline, MaterialPipelineKey};
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::render::render_resource::{
     AsBindGroup, CompareFunction, Extent3d, Face, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
@@ -42,6 +53,7 @@ use sta_sim::view::UnitFlags;
 use sta_sim::{PlayerId, WorldView};
 
 use crate::app::GameSet;
+use crate::render::action_camera::GROUND_LAYER;
 use crate::render::units::LocalPlayer;
 use crate::sim_link::{ContentRes, SimLink};
 use crate::ui::radar_fog::{DEFAULT_FOG, DEFAULT_SHROUD, read_pattern};
@@ -49,6 +61,9 @@ use crate::viewer::Mounted;
 
 /// World units per grid cell, unless the map is big enough to need [`MAX_CELLS`].
 pub const CELL: f32 = 128.0;
+/// Cells along the map's longer side in the original's scan grid (read from the executable, static;
+/// not measured). STA64's own grid ([`CELL`]) is finer, and only the footprint threshold uses this.
+pub const ORIGINAL_CELLS: f32 = 128.0;
 /// Most cells along one side of the grid.
 pub const MAX_CELLS: usize = 512;
 
@@ -61,11 +76,10 @@ const FOG_SOFT: f32 = 0.2;
 const SHROUD_SOFT: f32 = 0.1;
 const RIM: f32 = 1.0;
 const RIM_WIDTH: f32 = 0.25;
-/// Sort bias of the layers among the blended things of the scene (nebula puffs, particles,
-/// icons): both go after all of them, the shroud last, so what lies under fog or shroud is
-/// dimmed or hidden whichever side of the map's middle it is on (Refit's `Step::Terrain`
-/// draws them over the world, and the engine draws nothing it cannot see). A sort distance is
-/// world units from the camera; a map is some thousands.
+/// Sort bias of the layers among the blended things of their own camera (the background's sprites
+/// and glows): both go after all of them, the shroud last, so the shroud covers the fog whichever
+/// side of the map's middle it is on. A sort distance is world units from the camera; a map is
+/// some thousands.
 const FOG_SORT: f32 = 1.0e6;
 const SHROUD_SORT: f32 = 2.0e6;
 /// Height of the layers over the map's plane, so they do not z-fight a grid drawn at 0.
@@ -119,6 +133,8 @@ pub struct FogGrid {
     pub cell: f32,
     pub w: usize,
     pub h: usize,
+    /// The map's longer side, world units: the original's scan grid has [`ORIGINAL_CELLS`] cells along it.
+    extent: f32,
     visible: Vec<u8>,
     explored: Vec<u8>,
     /// The last remembering update's sight, not yet in `explored`.
@@ -132,7 +148,7 @@ impl FogGrid {
         let cell = CELL.max(size / MAX_CELLS as f32);
         let dim = |lo: f32, hi: f32| (((hi - lo) / cell).ceil() as usize).clamp(1, MAX_CELLS);
         let (w, h) = (dim(min[0], max[0]), dim(min[1], max[1]));
-        FogGrid { min, cell, w, h, visible: vec![255; w * h], explored: vec![255; w * h], pending: vec![255; w * h] }
+        FogGrid { min, cell, w, h, extent: size, visible: vec![255; w * h], explored: vec![255; w * h], pending: vec![255; w * h] }
     }
 
     /// The cell of a sim-space point, if it is on the grid.
@@ -152,6 +168,50 @@ impl FogGrid {
     #[allow(dead_code)] // read by the minimap (UI-05) and the tests
     pub fn explored_at(&self, x: f32, z: f32) -> bool {
         self.cell_of(x, z).is_some_and(|i| self.explored[i] < 128)
+    }
+
+    /// The radius above which an object counts by its footprint: two cells of the original's scan grid
+    /// (the map's longer side over [`ORIGINAL_CELLS`]); grade: read from the executable, static, not
+    /// measured. The cells sampled are STA64's own, so the contour is interim.
+    pub fn footprint_threshold(&self) -> f32 {
+        2.0 * self.extent / ORIGINAL_CELLS
+    }
+
+    /// Is an object of `radius` at `(x, z)` in sight now? Rule (read from the executable, static;
+    /// not measured; the sampled cells and contour are STA64's, so interim): the cell at the
+    /// object's centre decides, except for an object whose radius is more than
+    /// [`footprint_threshold`](Self::footprint_threshold), which is in sight when any cell whose
+    /// centre lies within its radius is. Off the grid: no.
+    pub fn in_sight_within(&self, x: f32, z: f32, radius: f32) -> bool {
+        self.any_within(&self.visible, x, z, radius)
+    }
+
+    /// Has any cell of the object's footprint (same rule as [`in_sight_within`](Self::in_sight_within))
+    /// ever been in sight? For an object that exists from the start and does not move this is "has the
+    /// object been in sight" (inferred, not the research's per-object record).
+    pub fn explored_within(&self, x: f32, z: f32, radius: f32) -> bool {
+        self.any_within(&self.explored, x, z, radius)
+    }
+
+    fn any_within(&self, mask: &[u8], x: f32, z: f32, radius: f32) -> bool {
+        let inside = |i: usize| mask[i] < 128;
+        if radius.partial_cmp(&self.footprint_threshold()) != Some(std::cmp::Ordering::Greater) {
+            return self.cell_of(x, z).is_some_and(inside);
+        }
+        let c = self.cell;
+        let lo = |p: f32, o: f32| (((p - radius - o) / c).floor() as isize).max(0);
+        let hi = |p: f32, o: f32, cells: usize| (((p + radius - o) / c).ceil() as isize).min(cells as isize - 1);
+        let r2 = radius * radius;
+        for cz in lo(z, self.min[1])..=hi(z, self.min[1], self.h) {
+            let dz = self.min[1] + (cz as f32 + 0.5) * c - z;
+            for cx in lo(x, self.min[0])..=hi(x, self.min[0], self.w) {
+                let dx = self.min[0] + (cx as f32 + 0.5) * c - x;
+                if dx * dx + dz * dz <= r2 && inside(cz as usize * self.w + cx as usize) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// How many cells are in sight now / were ever.
@@ -357,12 +417,14 @@ impl Material for FogMaterial {
     }
     /// The two layers share a plane, so their sort distance ties, and a tie is broken by
     /// an order that varies from run to run; blends do not commute. The shroud goes over
-    /// the fog, as in Refit's `Step::Terrain` (fog, then shroud).
+    /// the fog (the original draws the fog and then the shroud: read from the executable, static).
     fn depth_bias(&self) -> f32 {
         self.bias
     }
-    /// As stock: the depth test always passes and nothing is written, so the layer
-    /// covers whatever is drawn under it, on both sides.
+    /// The depth state of the original's layers (read from the executable, static; not measured): the
+    /// test always passes and nothing is written, so the layer covers whatever its camera drew before
+    /// it. The original's order (the layers before every object) is what [`GROUND_LAYER`] gives; the
+    /// depth state alone is not what makes objects cover them.
     fn specialize(
         _pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
@@ -406,7 +468,7 @@ impl FogPatterns {
 }
 
 /// An art texture: repeating, sRGB, opaque (the layer's opacity is the layer's own).
-fn pattern_image(vfs: Option<&sta_vfs::Vfs>, name: &str, default: [u8; 3]) -> (Image, Vec2) {
+pub(crate) fn pattern_image(vfs: Option<&sta_vfs::Vfs>, name: &str, default: [u8; 3]) -> (Image, Vec2) {
     let (w, h, mut px) = match vfs.and_then(|v| read_pattern(v, name)) {
         Some(p) if p.width > 0 && p.height > 0 => (p.width, p.height, p.pixels),
         _ => (1, 1, vec![default[0], default[1], default[2], 255]),
@@ -449,13 +511,19 @@ fn load_patterns(
     });
 }
 
+/// Register the layers' material and shader (a render app is needed; the pure tests have none).
+pub fn add_material(app: &mut App) {
+    embedded_asset!(app, "fog.wesl");
+    app.add_plugins(MaterialPlugin::<FogMaterial>::default());
+}
+
 pub struct FogPlugin;
 
 impl Plugin for FogPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "fog.wesl");
-        app.add_plugins(crate::render::reveal::RevealPlugin);
-        app.init_resource::<FogSettings>().add_plugins(MaterialPlugin::<FogMaterial>::default()).add_systems(
+        add_material(app);
+        app.add_plugins(crate::render::reveal::RevealPlugin).add_plugins(crate::render::fog_objects::FogObjectsPlugin);
+        app.init_resource::<FogSettings>().add_systems(
             Update,
             (load_patterns.run_if(resource_exists::<Assets<Image>>), update_fog)
                 .chain()
@@ -467,7 +535,7 @@ impl Plugin for FogPlugin {
     }
 }
 
-fn mask_image(grid: &FogGrid, layer: Layer) -> Image {
+pub(crate) fn mask_image(grid: &FogGrid, layer: Layer) -> Image {
     let mut img = Image::new(
         Extent3d { width: grid.w as u32, height: grid.h as u32, depth_or_array_layers: 1 },
         TextureDimension::D2,
@@ -492,7 +560,29 @@ fn layer_mesh(grid: &FogGrid) -> Mesh {
         .with_inserted_indices(Indices::U32(vec![0, 2, 1, 0, 3, 2]))
 }
 
-fn params(layer: Layer, grid: &FogGrid, art: Vec2) -> FogParams {
+/// A layer's entity, without its visibility: the quad, its material and its place on [`GROUND_LAYER`].
+fn layer_parts(
+    layer: Layer,
+    grid: &FogGrid,
+    mask: Handle<Image>,
+    pattern: Handle<Image>,
+    art_size: Vec2,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<FogMaterial>,
+) -> impl Bundle {
+    let bias = if layer == Layer::Shroud { SHROUD_SORT } else { FOG_SORT };
+    let material = materials.add(FogMaterial { params: params(layer, grid, art_size), mask: mask.clone(), pattern, bias });
+    (
+        Name::new(format!("fog layer {layer:?}")),
+        FogLayer { layer, mask },
+        Mesh3d(meshes.add(layer_mesh(grid))),
+        MeshMaterial3d(material),
+        Transform::default(),
+        RenderLayers::layer(GROUND_LAYER),
+    )
+}
+
+pub(crate) fn params(layer: Layer, grid: &FogGrid, art: Vec2) -> FogParams {
     // One art texel per cell, the grid centred in the art (stock's sprite is as large as its grid).
     let grid_texels = Vec2::new(grid.w as f32, grid.h as f32);
     let pat = grid_texels / art;
@@ -514,7 +604,7 @@ fn params(layer: Layer, grid: &FogGrid, art: Vec2) -> FogParams {
 
 /// What `update_fog` remembers between frames (one `Local`: a system takes at most 16 parameters).
 #[derive(Default)]
-struct Memo {
+pub(crate) struct Memo {
     seen: Option<(Arc<WorldView>, Option<PlayerId>)>,
     art_generation: Option<u32>,
     /// What the sim's sensors have shown so far, whatever is lifted (UI-46); `FogState` holds the lifted copy.
@@ -532,7 +622,7 @@ type MatchFog<'w> = (
 /// Recompute the grid when the view, the player or the map changes; spawn the layers
 /// once, then rewrite their masks.
 #[allow(clippy::too_many_arguments)]
-fn update_fog(
+pub(crate) fn update_fog(
     mut commands: Commands,
     link: Res<SimLink>,
     local: Res<LocalPlayer>,
@@ -555,7 +645,7 @@ fn update_fog(
 ) {
     let Memo { seen, art_generation, memory, shown_reveal, shown_cutscene } = &mut *memo;
     let cutscene = cine.as_deref().is_some_and(|c| c.on);
-    // The tactical camera skips the terrain fog pass (Armada2.exe 0x00593200).
+    // The tactical camera draws no flat fog (rule: read from the executable, static; not measured).
     // Continue computing sight and explored cells for the map and radar.
     let draw_fog = settings.fog && crate::input::camera_tactical::overview_active(tactical);
     let visibility = |layer| {
@@ -613,15 +703,9 @@ fn update_fog(
             }
             for layer in [Layer::Fog, Layer::Shroud] {
                 let mask = images.add(mask_image(&new.grid, layer));
-                let mat = materials.add(FogMaterial { params: params(layer, &new.grid, patterns.of(layer).1), mask: mask.clone(), pattern: patterns.of(layer).0.clone(), bias: if layer == Layer::Shroud { SHROUD_SORT } else { FOG_SORT } });
-                commands.spawn((
-                    Name::new(format!("fog layer {layer:?}")),
-                    FogLayer { layer, mask },
-                    Mesh3d(meshes.add(layer_mesh(&new.grid))),
-                    MeshMaterial3d(mat),
-                    Transform::default(),
-                    visibility(layer),
-                ));
+                let art = patterns.of(layer);
+                let parts = layer_parts(layer, &new.grid, mask, art.0.clone(), art.1, &mut meshes, &mut materials);
+                commands.spawn((parts, visibility(layer)));
             }
         } else {
             for (_, l, _) in &layers {
@@ -639,6 +723,10 @@ fn update_fog(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "fog_gpu.rs"]
+mod gpu;
 
 #[cfg(test)]
 mod tests {
@@ -900,6 +988,26 @@ mod tests {
         let mean = crate::ui::radar_fog::mean_colour(img.data.as_ref().unwrap()).unwrap();
         assert_eq!(mean, [30, 36, 50]);
         assert!(size.x >= 1.0 && size.y >= 1.0);
+    }
+
+    /// #1145: the layers are on the ground layer, which the scene camera (layer 0 and the overlay layer) does not
+    /// draw, and the fog sorts before the shroud.
+    #[test]
+    fn the_layers_are_on_the_ground_layer_and_the_fog_sorts_before_the_shroud() {
+        let g = grid();
+        let (mut meshes, mut materials) = (Assets::<Mesh>::default(), Assets::<FogMaterial>::default());
+        let mut world = World::new();
+        let mut spawn = |layer| {
+            let parts = layer_parts(layer, &g, Handle::default(), Handle::default(), Vec2::ONE, &mut meshes, &mut materials);
+            world.spawn(parts).id()
+        };
+        let (fog, shroud) = (spawn(Layer::Fog), spawn(Layer::Shroud));
+        for e in [fog, shroud] {
+            let layers = world.get::<RenderLayers>(e).unwrap();
+            assert_eq!(*layers, RenderLayers::layer(GROUND_LAYER));
+            assert!(!layers.intersects(&RenderLayers::from_layers(&[0, crate::render::action_camera::OVERLAY_LAYER])), "the scene camera does not draw it");
+        }
+        assert!(FOG_SORT < SHROUD_SORT && crate::render::map_grid::GRID_SORT < FOG_SORT, "grid, fog, shroud");
     }
 
     #[test]

@@ -8,15 +8,39 @@
 //! nothing is loaded or executed. Nothing converted is committed or shipped (the output goes
 //! to the user data directory).
 //!
-//! This is the image layer (step LUA-15a): the PE reader, the engine `.map` reader and the
-//! engine vtable names. Decoding and lifting follow in later steps.
+//! So far: the image layer (LUA-15a: the PE reader, the engine `.map` reader, the engine vtable
+//! names) and the shared core (LUA-15c: [`pyval`], [`format`], [`msvc`], [`algebra`],
+//! [`prelude`]). Decoding and lifting follow in later steps.
 
+/// The converter's version. It is part of the tool token every emitter writes into the first
+/// line of its output, and the conversion cache will key on it: raise it when the output of any
+/// converter changes.
+pub const CONVERTER_VERSION: u32 = 1;
+
+/// The tool token of the header line of every emitted file: `sta_mission_convert (converter 1)`
+/// (a token without whitespace, then the bracket text; the Python tools write their own script
+/// name and a package id there, which the parity comparison ignores).
+pub fn tool_token() -> String {
+    format!("sta_mission_convert (converter {CONVERTER_VERSION})")
+}
+
+pub mod algebra;
+pub mod call;
+pub mod convert;
 pub mod disasm;
+pub mod drl;
+pub mod dsl;
+pub mod emit;
 #[doc(hidden)]
 pub mod fixture;
+pub mod format;
 pub mod image;
+pub mod lift;
 pub mod map;
+pub mod msvc;
 pub mod pe;
+pub mod prelude;
+pub mod pyval;
 
 pub use image::{FlatImage, Image, Section};
 
@@ -40,6 +64,12 @@ pub use pe::Pe;
 pub struct DecodeError {
     pub message: String,
     pub kind: ErrorKind,
+    /// The Python exception class name (`KeyError`, `TypeError`, ...) of a `Raw` fault that
+    /// stands for one of Python's own exceptions, `None` for a `Decode` or `Io` fault and for
+    /// STA64's own limits. The Armada I converter writes `{class}: {message}` into the Lua it
+    /// emits for a function whose rendering raised, so ports of the render path use
+    /// [`DecodeError::python`] with Python's exact text.
+    pub class: Option<&'static str>,
 }
 
 /// Which Python exception a fault stands for.
@@ -59,6 +89,7 @@ impl DecodeError {
         Self {
             message: s.into(),
             kind: ErrorKind::Decode,
+            class: None,
         }
     }
 
@@ -67,6 +98,17 @@ impl DecodeError {
         Self {
             message: s.into(),
             kind: ErrorKind::Raw,
+            class: None,
+        }
+    }
+
+    /// A fault of one of Python's own exceptions (`class` is its name, `message` the text
+    /// `str(e)` gives); kind `Raw`.
+    pub fn python(class: &'static str, s: impl Into<String>) -> Self {
+        Self {
+            message: s.into(),
+            kind: ErrorKind::Raw,
+            class: Some(class),
         }
     }
 
@@ -75,6 +117,7 @@ impl DecodeError {
         Self {
             message: s.into(),
             kind: ErrorKind::Io,
+            class: None,
         }
     }
 

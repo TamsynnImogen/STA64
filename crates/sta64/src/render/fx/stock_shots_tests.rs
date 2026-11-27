@@ -689,7 +689,7 @@ fn a_target_the_shot_killed_on_the_fire_tick_is_held_for_the_beams_life() {
 }
 
 #[test]
-fn a_beam_ends_when_its_owner_is_gone_and_when_the_target_is_beyond_root_two_times_the_range() {
+fn a_beam_ends_when_its_owner_is_gone_and_when_the_target_is_beyond_twice_the_range() {
     let mut setup = Setup::new(ShotCfg::default()).fire(4, "w_phaser", 0);
     setup.shooter_until = Some(10);
     let mut app = setup.app(Some(RenderProfile::Stock));
@@ -701,7 +701,7 @@ fn a_beam_ends_when_its_owner_is_gone_and_when_the_target_is_beyond_root_two_tim
         }
     }
     assert!(ended.is_some_and(|i| i <= 12), "ended at frame {ended:?}, the owner went at tick 10");
-    // Range 1000: a target at 1500 is in (1500^2 < 2 * 1000^2), one at 1500 for a 1000-range weapon... a target at 1800 is out.
+    // Authored range 1000: the cut is at twice the range, so a target at 1900 is in and one at 2100 is out.
     let beams = |z: i32| {
         let mut setup = Setup::new(ShotCfg::default()).fire(4, "w_phaser", 0);
         setup.target_z = z;
@@ -713,8 +713,8 @@ fn a_beam_ends_when_its_owner_is_gone_and_when_the_target_is_beyond_root_two_tim
         }
         n
     };
-    assert_eq!(beams(1300), 1);
-    assert_eq!(beams(1500), 0);
+    assert_eq!(beams(1900), 1);
+    assert_eq!(beams(2100), 0);
 }
 
 #[test]
@@ -1075,6 +1075,50 @@ fn the_cap_is_four_per_object_and_two_hundred_in_all_for_any_kind_of_particle() 
     assert!(store.has_room(EntityId(999)));
 }
 
+/// #1145 (N2): the Stock path follows the same rule: a beam of a shooter the client does not draw is laid out only
+/// where its origin is over ground in sight; its impact flare follows its target.
+#[test]
+fn a_stock_beam_of_a_hidden_shooter_is_not_laid_out_and_its_flare_follows_the_target() {
+    let run = |shooter_drawn: bool, target_drawn: bool, seen_origin: bool| {
+        let mut app = Setup::new(ShotCfg::default()).fire(4, "w_phaser", 0).app(Some(RenderProfile::Stock));
+        let mut grid = crate::render::fog::FogGrid::new([-1000.0, -1000.0], [1000.0, 1000.0]);
+        if seen_origin {
+            let c = grid.cell_of(0.0, 0.0).unwrap();
+            grid.set_cell_for_test(c % grid.w, c / grid.w, true, true);
+        }
+        app.insert_resource(crate::render::fog::FogState { grid, updates: 1 });
+        for (id, on) in [(1, shooter_drawn), (2, target_drawn)] {
+            if on {
+                let e = app.world_mut().spawn(GlobalTransform::default()).id();
+                app.world_mut().resource_mut::<SimEntities>().0.insert(EntityId(id), e);
+            }
+        }
+        let (mut laid, mut flare_shown, mut flare_seen) = (false, false, false);
+        for _ in 0..45 {
+            app.update();
+            laid |= shots(&mut app).iter().any(|s| !matches!(s.geom, Geom::None));
+            // The flare's `shown` is set by the visibility system after it is made: read it at the end of its life.
+            let now = of_kind(&flares(&mut app), FlareKind::Impact);
+            if !now.is_empty() {
+                flare_seen = true;
+                flare_shown = now.iter().any(|f| f.shown);
+            }
+        }
+        (laid, flare_seen, flare_shown)
+    };
+    // Hidden shooter, hidden target, nothing in sight: no beam, no shown flare.
+    let (laid, seen, shown) = run(false, false, false);
+    assert!(!laid && !shown, "nothing of unseen units over unseen ground: laid {laid}, flare exists {seen}, shown {shown}");
+    // Hidden shooter, drawn target: the flare on the target shows, the beam (the shooter's place) does not.
+    let (laid, seen, shown) = run(false, true, false);
+    assert!(!laid, "the hidden shooter's place is not shown");
+    assert!(seen && shown, "the flare on a unit the client draws shows");
+    // The origin over ground in sight: the beam is laid out.
+    assert!(run(false, false, true).0, "origin in sight: drawn");
+    // A drawn shooter: always.
+    assert!(run(true, true, false).0, "a drawn shooter's beam is laid out whatever the ground");
+}
+
 #[test]
 fn flares_are_drawn_only_while_their_object_is_visible() {
     let mut app = Setup::new(ShotCfg::default()).fire(4, "w_phaser", 0).app(Some(RenderProfile::Stock));
@@ -1337,6 +1381,7 @@ fn authored_shot(path: ShotPath, geom: Geom, radius: f32, sprite: &str) -> Stock
         last_end: Vec3::ZERO,
         shield_end: Vec3::ZERO,
         pinned: false,
+        hidden_shooter: false,
         muzzle_flare: None,
         impact_flare: None,
         arrived: false,

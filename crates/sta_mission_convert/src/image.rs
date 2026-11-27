@@ -26,11 +26,24 @@ pub struct Section {
 }
 
 impl Section {
-    /// The section's flags mark it as code. The decoder step (LUA-15b) settles which flags
-    /// the linear sweep needs to match the reference listing (not yet measured).
+    /// The section's flags mark it as code: `CNT_CODE` or `MEM_EXECUTE`, either alone. This is
+    /// the rule the reference tool applies to pick the sections it lists (measured on authored
+    /// section flags, LUA-15b); the sweep additionally needs file data (see `disasm`).
     pub fn is_code(&self) -> bool {
         self.characteristics & (SCN_CNT_CODE | SCN_MEM_EXECUTE) != 0
     }
+}
+
+/// `struct.error` of `struct.unpack_from` on a buffer that ends inside the value (the class name
+/// Python prints is `error`).
+pub fn short_buffer(offset: usize, size: usize, len: usize) -> DecodeError {
+    DecodeError::python(
+        "error",
+        format!(
+            "unpack_from requires a buffer of at least {} bytes for unpacking {size} bytes at offset {offset} (actual buffer size is {len})",
+            offset + size
+        ),
+    )
 }
 
 /// A loaded-looking view of a file: address to bytes.
@@ -44,6 +57,12 @@ pub trait Image {
     fn imports(&self) -> &IndexMap<u32, (String, String)>;
     /// Size field of the export data directory (0 when there is none).
     fn export_size(&self) -> u32;
+    /// The file carries a COFF symbol table. The reference disassembler then names branch
+    /// targets after symbols and restarts its sweep at each symbol; the listing does not
+    /// reproduce that, so it refuses such a file.
+    fn has_symbol_table(&self) -> bool {
+        false
+    }
 
     /// File offset of an RVA, or `None` outside every section's raw data (the first section
     /// that contains it wins).
@@ -83,7 +102,7 @@ pub trait Image {
         let end = rest
             .iter()
             .position(|&c| c == 0)
-            .ok_or_else(|| DecodeError::raw("unterminated string"))?;
+            .ok_or_else(|| DecodeError::python("ValueError", "subsection not found"))?;
         Ok(rest[..end].iter().map(|&c| c as char).collect())
     }
 
@@ -94,7 +113,7 @@ pub trait Image {
         let b = self
             .data()
             .get(o..o + 4)
-            .ok_or_else(|| DecodeError::raw("truncated image"))?;
+            .ok_or_else(|| short_buffer(o, 4, self.data().len()))?;
         Ok(f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
 
@@ -105,7 +124,7 @@ pub trait Image {
         let b = self
             .data()
             .get(o..o + 8)
-            .ok_or_else(|| DecodeError::raw("truncated image"))?;
+            .ok_or_else(|| short_buffer(o, 8, self.data().len()))?;
         Ok(f64::from_le_bytes(b.try_into().expect("eight bytes")))
     }
 

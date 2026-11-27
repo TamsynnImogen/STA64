@@ -46,8 +46,8 @@
 //!   flight flies on: the sim still delivers its hit); a
 //!   target lost while `BEAM_MISS_LIFETIME` (counted from the shot) still runs moves the end to
 //!   the weapon's range along the last direction until it has run; lost after that, the beam
-//!   ends at once; a target further than the square root of two times the range ends it at
-//!   once. A planet blocking the path is not tested (no such information in the view).
+//!   ends at once; a target further than twice the range ends it at once (this replaces an
+//!   earlier reading of the factor as the square root of two; #1068). A planet blocking the path is not tested (no such information in the view).
 //! - **Sim timing.** The sim applies a beam's damage on the fire tick (issue #1068); the original
 //!   applies it at the end of `lifeSpan`. The beam is drawn for the data's `lifeSpan` from the
 //!   fire event, whatever the sim's timing; a target the shot killed on the fire tick is held at
@@ -398,6 +398,9 @@ pub struct StockShot {
     shield_end: Vec3,
     /// The target was already gone from the view when the shot was fired (the shot killed it).
     pinned: bool,
+    /// The shooter is one the client does not draw (#1145): the shot is drawn only while it is over ground in sight
+    /// (a beam: where it starts; a pulse or torpedo: where it is now). Interim: the original's rule is not established.
+    hidden_shooter: bool,
     /// The muzzle flare this shot raises on its first frame (a beam of a class with one).
     muzzle_flare: Option<FlareSpec>,
     /// The impact flare's sprite and size, until the beam has reached its target (once per beam).
@@ -427,6 +430,7 @@ pub struct StockShots<'w, 's> {
     tables: Option<Res<'w, SpriteTables>>,
     content: Option<Res<'w, ContentRes>>,
     ents: Option<Res<'w, SimEntities>>,
+    fog: Option<Res<'w, crate::render::fog::FogState>>,
     teams: Option<Res<'w, crate::viewer::TeamColours>>,
     map_teams: Option<Res<'w, crate::viewer::MapTeamColours>>,
     children: Query<'w, 's, &'static Children>,
@@ -458,8 +462,23 @@ impl StockShots<'_, '_> {
         Some(self.transforms.get(node).ok()?.translation() - base)
     }
 
-    /// Whether `object`'s model is visible (no model, or none known: yes).
+    /// Whether the client draws unit `id`: with a fog grid, only a unit that has an entity (the units the local
+    /// player's side sees, #1145: the layers no longer hide what is drawn over unseen ground); without one, every
+    /// unit.
+    pub(super) fn client_draws(&self, id: EntityId) -> bool {
+        super::client_draws(self.ents.as_deref(), self.fog.is_some(), id)
+    }
+
+    /// Whether the ground under the render-space point is in sight now (without a grid: yes).
+    pub(super) fn ground_in_sight(&self, at: Vec3) -> bool {
+        self.fog.as_deref().is_none_or(|f| f.grid.visible_at(at.x, -at.z))
+    }
+
+    /// Whether `object`'s model is visible (no model known: yes, unless the client does not draw the unit).
     pub(super) fn object_visible(&self, object: EntityId, visibility: &Query<&InheritedVisibility>) -> bool {
+        if !self.client_draws(object) {
+            return false;
+        }
         self.ents.as_ref().and_then(|m| m.0.get(&object)).and_then(|e| visibility.get(*e).ok()).is_none_or(|v| v.get())
     }
 
@@ -589,6 +608,7 @@ impl StockShots<'_, '_> {
             impact_flare,
             arrived: false,
             geom: Geom::None,
+            hidden_shooter: !self.client_draws(shooter),
         });
         true
     }
@@ -672,8 +692,9 @@ pub(super) fn update_shots(
                 start + (s.last_end - start).try_normalize().unwrap_or(Vec3::Y) * s.range
             } else {
                 let body = s.last_body.clone().expect("a live or held body");
-                // Further than the square root of two times the range: ends at once.
-                if s.range > 0.0 && start.distance_squared(body.centre) > 2.0 * s.range * s.range {
+                // Further than twice the range: ends at once (read from the executable, static; the factor
+                // replaces an earlier reading of the square root of two).
+                if s.range > 0.0 && start.distance_squared(body.centre) > 4.0 * s.range * s.range {
                     cmds.entity(e).try_despawn();
                     continue;
                 }
@@ -747,6 +768,17 @@ pub(super) fn update_shots(
                     Geom::Segment { a: head, b: tail }
                 }
             };
+        }
+        // #1145: a shot of a shooter the client does not draw is drawn only while it is over ground in sight.
+        if s.hidden_shooter {
+            let head = match s.geom {
+                Geom::Billboard { c } => c,
+                Geom::Segment { a, .. } if s.path != ShotPath::Ribbon => a,
+                _ => s.muzzle,
+            };
+            if !ctx.ground_in_sight(head) {
+                s.geom = Geom::None;
+            }
         }
     }
 }

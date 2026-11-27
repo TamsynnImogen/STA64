@@ -94,17 +94,18 @@ fn unterminated_and_truncated_reads() {
     .unwrap();
     assert_eq!(
         pe.cstr(BASE + 0x1000).unwrap_err(),
-        DecodeError::raw("unterminated string")
+        DecodeError::python("ValueError", "subsection not found")
     );
     let last = BASE + 0x1000 + 0x1FE;
     assert_eq!(pe.dword(last), None);
+    let o = pe.off_of(last).unwrap();
     assert_eq!(
         pe.f32(last).unwrap_err(),
-        DecodeError::raw("truncated image")
+        sta_mission_convert::image::short_buffer(o, 4, pe.data.len())
     );
     assert_eq!(
         pe.f64(last).unwrap_err(),
-        DecodeError::raw("truncated image")
+        sta_mission_convert::image::short_buffer(o, 8, pe.data.len())
     );
     assert_eq!(pe.dword(last - 2), Some(0x7878_7878));
 }
@@ -471,6 +472,17 @@ fn the_engine_lookup_goes_on_past_io_and_decode_faults_but_not_raw_ones() {
     std::fs::write(good.join("engine.exe"), &engine_exe().data).unwrap();
     std::fs::write(good.join("engine.map"), map_text).unwrap();
 
+    // 5: both unreadable: the map cannot be read (Io; it is a directory) and the executable is
+    // truncated inside its PE header (a Raw fault when opened). The Python reads the map first,
+    // so the lookup goes on.
+    let both = dir("both_broken");
+    let mut truncated = vec![0u8; 0x40];
+    truncated[..2].copy_from_slice(b"MZ");
+    truncated[0x3C] = 0x40;
+    truncated.extend_from_slice(b"PE\0\0");
+    std::fs::write(both.join("engine.exe"), &truncated).unwrap();
+    std::fs::create_dir_all(both.join("engine.map")).unwrap();
+
     let kind = |d: &std::path::Path| {
         engine_vtables(d, "engine.exe", "engine.map", &["Foo"])
             .unwrap_err()
@@ -479,6 +491,7 @@ fn the_engine_lookup_goes_on_past_io_and_decode_faults_but_not_raw_ones() {
     assert_eq!(kind(&missing), ErrorKind::Io);
     assert_eq!(kind(&not_pe), ErrorKind::Decode);
     assert_eq!(kind(&no_text), ErrorKind::Raw);
+    assert_eq!(kind(&both), ErrorKind::Io);
 
     // The Python loop: `except (OSError, DecodeError)` tries the next root.
     let lookup = |roots: &[&std::path::Path]| {
@@ -492,6 +505,8 @@ fn the_engine_lookup_goes_on_past_io_and_decode_faults_but_not_raw_ones() {
         Ok(None)
     };
     let found = lookup(&[&missing, &not_pe, &good]).unwrap().unwrap();
+    assert_eq!(found["Foo"].len(), 3);
+    let found = lookup(&[&both, &good]).unwrap().unwrap();
     assert_eq!(found["Foo"].len(), 3);
     assert_eq!(
         lookup(&[&missing, &no_text, &good]).unwrap_err().kind,
