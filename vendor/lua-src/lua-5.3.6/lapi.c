@@ -441,6 +441,57 @@ LUA_API const void *lua_topointer (lua_State *L, int idx) {
 }
 
 
+/*
+** STA64 (issue #1300): the reference id 'tostring' prints instead of an
+** address. Ids are handed out per state, 1, 2, 3, ..., the first time a value
+** is printed, so they depend only on what was printed before. Tables,
+** closures, threads and full userdata keep their id in the object; light C
+** functions and light userdata (never collected, few) in a registry table.
+** Returns 0 for values that are not references.
+*/
+LUA_API lua_Integer lua_sta64_refid (lua_State *L, int idx) {
+  unsigned int *slot = NULL;
+  lua_Integer id = 0;
+  StkId o;
+  lua_lock(L);
+  o = index2addr(L, idx);
+  switch (ttype(o)) {
+    case LUA_TTABLE: slot = &hvalue(o)->sta64_id; break;
+    case LUA_TLCL: slot = &clLvalue(o)->sta64_id; break;
+    case LUA_TCCL: slot = &clCvalue(o)->sta64_id; break;
+    case LUA_TTHREAD: slot = &thvalue(o)->sta64_id; break;
+    case LUA_TUSERDATA: slot = &uvalue(o)->sta64_id; break;
+    default: break;
+  }
+  if (slot != NULL) {
+    if (*slot == 0) *slot = ++G(L)->sta64_lastid;
+    id = *slot;
+  }
+  lua_unlock(L);
+  if (slot == NULL && (lua_type(L, idx) == LUA_TFUNCTION ||
+                       lua_type(L, idx) == LUA_TLIGHTUSERDATA)) {
+    idx = lua_absindex(L, idx);
+    if (lua_getfield(L, LUA_REGISTRYINDEX, "sta64.refids") != LUA_TTABLE) {
+      lua_pop(L, 1);
+      lua_newtable(L);
+      lua_pushvalue(L, -1);
+      lua_setfield(L, LUA_REGISTRYINDEX, "sta64.refids");
+    }
+    lua_pushvalue(L, idx);
+    if (lua_rawget(L, -2) == LUA_TNUMBER)  /* already has one? */
+      id = lua_tointeger(L, -1);
+    else {
+      id = ++G(L)->sta64_lastid;
+      lua_pushvalue(L, idx);
+      lua_pushinteger(L, id);
+      lua_rawset(L, -4);  /* refids[value] = id */
+    }
+    lua_pop(L, 2);  /* lookup result and the registry table */
+  }
+  return id;
+}
+
+
 
 /*
 ** push functions (C -> stack)

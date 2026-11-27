@@ -186,6 +186,8 @@ LUA_API lua_CFunction   (lua_tocfunction) (lua_State *L, int idx);
 LUA_API void	       *(lua_touserdata) (lua_State *L, int idx);
 LUA_API lua_State      *(lua_tothread) (lua_State *L, int idx);
 LUA_API const void     *(lua_topointer) (lua_State *L, int idx);
+/* STA64: per-state reference id printed by 'tostring' (issue #1300) */
+LUA_API lua_Integer     (lua_sta64_refid) (lua_State *L, int idx);
 
 
 /*

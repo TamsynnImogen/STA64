@@ -144,6 +144,7 @@ typedef struct global_State {
   stringtable strt;  /* hash table for strings */
   TValue l_registry;
   unsigned int seed;  /* randomized seed for hashes */
+  unsigned int sta64_lastid;  /* STA64: last reference id handed out */
   lu_byte currentwhite;
   lu_byte gcstate;  /* state of garbage collector */
   lu_byte gckind;  /* kind of GC running */
@@ -179,6 +180,7 @@ struct lua_State {
   CommonHeader;
   unsigned short nci;  /* number of items in 'ci' list */
   lu_byte status;
+  unsigned int sta64_id;  /* STA64: reference id for 'tostring' (0: none yet) */
   StkId top;  /* first free slot in the stack */
   global_State *l_G;
   CallInfo *ci;  /* call info for current function */

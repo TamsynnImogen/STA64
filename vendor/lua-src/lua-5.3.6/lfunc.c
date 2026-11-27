@@ -26,6 +26,7 @@ CClosure *luaF_newCclosure (lua_State *L, int n) {
   GCObject *o = luaC_newobj(L, LUA_TCCL, sizeCclosure(n));
   CClosure *c = gco2ccl(o);
   c->nupvalues = cast_byte(n);
+  c->sta64_id = 0;  /* STA64 */
   return c;
 }
 
@@ -35,6 +36,7 @@ LClosure *luaF_newLclosure (lua_State *L, int n) {
   LClosure *c = gco2lcl(o);
   c->p = NULL;
   c->nupvalues = cast_byte(n);
+  c->sta64_id = 0;  /* STA64 */
   while (n--) c->upvals[n] = NULL;
   return c;
 }

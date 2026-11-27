@@ -346,6 +346,7 @@ typedef union UTString {
 typedef struct Udata {
   CommonHeader;
   lu_byte ttuv_;  /* user value's tag */
+  unsigned int sta64_id;  /* STA64: reference id for 'tostring' (0: none yet) */
   struct Table *metatable;
   size_t len;  /* number of bytes */
   union Value user_;  /* user value */
@@ -440,8 +441,9 @@ typedef struct UpVal UpVal;
 ** Closures
 */
 
+/* STA64: 'sta64_id' is the reference id for 'tostring' (0: none yet) */
 #define ClosureHeader \
-	CommonHeader; lu_byte nupvalues; GCObject *gclist
+	CommonHeader; lu_byte nupvalues; unsigned int sta64_id; GCObject *gclist
 
 typedef struct CClosure {
   ClosureHeader;
@@ -510,6 +512,7 @@ typedef struct Table {
      keys inserted into the hash part since its last resize */
   int sta64_first, sta64_last;
   unsigned int sta64_inserts;
+  unsigned int sta64_id;  /* STA64: reference id for 'tostring' (0: none yet) */
 } Table;
 
 

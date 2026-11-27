@@ -683,6 +683,12 @@ process and on every machine. What a mission author can rely on:
   comparator that is not a strict weak order gives some fixed permutation, not
   an error; if the comparator raises, the table is left unchanged. Strings
   compare by bytes (`<` too), whatever the locale.
+- `tostring` of a table, function, coroutine or userdata (and so `print`,
+  `string.format('%s')` and error messages built from them) gives the type
+  and a per-state id, `table: #12`, never an address. Ids count 1, 2, 3, ...
+  in the order values are first printed, so they are the same in every run;
+  a value keeps its id for its lifetime. (`string.format('%p')` does not exist
+  in Lua 5.3.)
 - Weak tables are not available. A script meets this as an error from
   `setmetatable` when the metatable has `__mode` (as for `__gc`). Behind that,
   the bundled Lua ignores `__mode` altogether, so a mode added to a metatable

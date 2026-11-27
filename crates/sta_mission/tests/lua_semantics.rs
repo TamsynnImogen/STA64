@@ -222,11 +222,42 @@ fn sort_errors_are_defined() {
     assert!(err.contains("bad argument #2 to 'sort'"), "{err}");
 }
 
-/// The workspace builds the patched Lua (vendor/lua-src). Fails if `[patch.crates-io]` ever
-/// falls back to the registry crate.
+/// `tostring` (and `print`, `string.format('%s')`, host `to_string`) shows a per-state id in
+/// first-printed order, never an address.
+#[test]
+fn references_print_as_stable_ids() {
+    let chunk = "local t, f, co = {}, function() end, coroutine.create(function() end) \
+                 local a = tostring(t) .. ' ' .. tostring(f) .. ' ' .. tostring(co) .. ' ' .. tostring(print) .. ' ' .. tostring(UD) \
+                 return a .. '|' .. string.format('%s', t) .. '|' .. tostring(print) .. '|' .. tostring({})";
+    let mut seen = Vec::new();
+    for _ in 0..2 {
+        let lua = new_lua();
+        lua.globals().set("UD", lua.create_any_userdata(1u8).unwrap()).unwrap();
+        seen.push(eval(&lua, chunk));
+    }
+    assert_eq!(seen[0], seen[1]);
+    let s = &seen[0];
+    assert!(!s.contains("0x"), "{s}");
+    let parts: Vec<&str> = s.split('|').collect();
+    let words: Vec<&str> = parts[0].split(' ').collect();
+    assert_eq!(words[0..8], ["table:", "#1", "function:", "#2", "thread:", "#3", "function:", "#4"], "{s}");
+    assert_eq!(words.last(), Some(&"#5"), "userdata gets the next id: {s}");
+    assert_eq!(parts[1], "table: #1", "{s}");
+    assert_eq!(parts[2], "function: #4", "a light C function keeps its id: {s}");
+    assert_eq!(parts[3], "table: #6", "{s}");
+}
+
+/// The workspace builds the patched Lua (vendor/lua-src): a link-time marker and the run-time
+/// behaviour. Fails if `[patch.crates-io]` ever falls back to the registry crate.
 #[test]
 fn the_bundled_lua_is_the_patched_copy() {
+    unsafe extern "C" {
+        fn lua_sta64_refid(state: *mut std::ffi::c_void, idx: std::ffi::c_int) -> i64;
+    }
+    let marker: unsafe extern "C" fn(*mut std::ffi::c_void, std::ffi::c_int) -> i64 = lua_sta64_refid;
+    assert!(marker as usize != 0);
     let lua = Lua::new();
+    assert!(lua.load("return tostring({})").eval::<String>().unwrap().starts_with("table: #"));
     let order = lua
         .load("local t = {} for i = 1, 200 do t['k' .. (i * 37 % 211)] = i end local p = 0 for _, v in pairs(t) do if v ~= p + 1 then return false end p = v end return true")
         .eval::<bool>()

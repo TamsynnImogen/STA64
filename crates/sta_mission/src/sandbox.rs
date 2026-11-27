@@ -14,7 +14,8 @@
 //!
 //! Reproducibility (#1300) lives mostly in the bundled Lua itself
 //! (`vendor/lua-src/STA64-PATCH.md`): `pairs`/`next` in insertion order, a stable
-//! `table.sort`, byte-order string comparison, no weak tables. Here only the
+//! `table.sort`, byte-order string comparison, no weak tables, `tostring` ids
+//! instead of addresses. Here only the
 //! `setmetatable` guard adds a clear error for `__mode`. Host code that walks a
 //! script's table (`Table::pairs`) gets the same insertion order.
 

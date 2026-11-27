@@ -241,6 +241,7 @@ Udata *luaS_newudata (lua_State *L, size_t s) {
   o = luaC_newobj(L, LUA_TUSERDATA, sizeludata(s));
   u = gco2u(o);
   u->len = s;
+  u->sta64_id = 0;  /* STA64 */
   u->metatable = NULL;
   setuservalue(L, u, luaO_nilobject);
   return u;

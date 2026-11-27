@@ -19,6 +19,8 @@ const HAZARDS: &[(&str, &str)] = &[
     ("H02_pairs_table_keys", include_str!("lua_repro/h02_pairs_table_keys.lua")),
     ("H03_pairs_function_keys", include_str!("lua_repro/h03_pairs_function_keys.lua")),
     ("H04_pairs_value_keys_and_len", include_str!("lua_repro/h04_pairs_value_keys.lua")),
+    ("H05_tostring_references", include_str!("lua_repro/h05_tostring.lua")),
+    ("H05b_sort_by_tostring", include_str!("lua_repro/h05b_sort_by_tostring.lua")),
     ("H06_sort_ties", include_str!("lua_repro/h06_sort_ties.lua")),
     ("H07_math_random", include_str!("lua_repro/h07_random.lua")),
     ("H08_os_io", include_str!("lua_repro/h08_os_io.lua")),
@@ -133,6 +135,9 @@ fn hazard_logs_show_the_defined_orders() {
     let h14 = run(script("H14_registry_pattern"));
     let names = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa"];
     assert_eq!(h14[2], names.map(|n| format!("{n}:3")).join(","));
+    let h05 = run(script("H05_tostring_references"));
+    assert!(h05.iter().all(|l| !l.contains("0x")), "no addresses: {:?}", &h05[..2]);
+    assert!(h05[0].starts_with("table: #") && h05[0].contains(" function: #"), "{}", h05[0]);
     let h09 = run(script("H09_weak_tables_gc"));
     assert_eq!(h09[0], "300/300 weak=false:true gcguard=false fin=0", "weak tables refused, late __mode ignored");
     assert_eq!(h09[59], "18000/18000 weak=false:true gcguard=false fin=0");

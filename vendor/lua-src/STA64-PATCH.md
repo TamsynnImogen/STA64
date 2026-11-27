@@ -53,6 +53,14 @@ Every change is marked `STA64` in the source.
   pivot from `clock()` and `time()`, is gone. The table is written only after
   sorting, so a raising comparator leaves it unchanged; an inconsistent
   comparator gives some permutation, never "invalid order function".
+- `lobject.h`, `lstate.h`, `lstate.c`, `lfunc.c`, `lstring.c`, `ltable.c`,
+  `lapi.c`, `lua.h`, `lauxlib.c`: **reference ids instead of addresses**.
+  `luaL_tolstring` (behind `tostring`, `print`, `%s`) prints `table: #12`
+  where it printed an address. `lua_sta64_refid` hands out ids per state in
+  first-printed order; tables, closures, threads and full userdata keep theirs
+  in a field (4 bytes, in existing padding except for the thread), light C
+  functions and light userdata in the registry table `sta64.refids`.
+  `lua_sta64_refid` is also the link-time marker the tests check.
 - `lvm.c` (`l_strcmp`): **string comparison by bytes** (`strcmp`) instead of
   `strcoll`, so `<` on strings does not depend on the process locale.
 

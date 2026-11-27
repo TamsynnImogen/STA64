@@ -236,6 +236,7 @@ static void preinit_thread (lua_State *L, global_State *g) {
   L->nny = 1;
   L->status = LUA_OK;
   L->errfunc = 0;
+  L->sta64_id = 0;  /* STA64 */
 }
 
 
@@ -309,6 +310,7 @@ LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud) {
   g->ud = ud;
   g->mainthread = L;
   g->seed = makeseed(L);
+  g->sta64_lastid = 0;  /* STA64 */
   g->gcrunning = 0;  /* no GC while building state */
   g->GCestimate = 0;
   g->strt.size = g->strt.nuse = 0;
