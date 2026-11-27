@@ -213,7 +213,9 @@ fn settled(s: &material::SpriteState) -> bool {
 /// An adopted node (ADR 0009) keeps `main`'s rule, only while shown and only on change, with its
 /// colour going to its slot and its uv to its look's shared material (written at most once per look
 /// and frame, as every shown node of a look has the same uv); with parity mode (S5) its material
-/// component is marked changed whenever its own material would have been written on `main`. A node
+/// component is marked changed whenever its own material would have been written on `main`, in
+/// `PostUpdate` after visibility and only if some view sees the node ([`material::mark_seen_changes`]).
+/// A node
 /// that is not adopted (an app without rendering) has its own material written, as on `main`.
 ///
 /// A look's uv write re-queues every node drawn through it. For a node drawn in the frame before,
@@ -229,7 +231,10 @@ fn settled(s: &material::SpriteState) -> bool {
 /// - An adopted node is passed over in a frame where none of its inputs changed since the last run:
 ///   its animation's value and its sprite's uv (by bits), its `SpriteFx`, `SpriteFade`, `MoonNimbus`,
 ///   `Visibility`, `SpriteState` and look component (by Bevy's change ticks, which a system does not
-///   see for its own writes), whether it has a fade and a nimbus, and the table. Its last pass ran on
+///   see for its own writes: the look swap below; the parity mark is another system's write
+///   ([`material::mark_seen_changes`], `PostUpdate`), so the next frame's pass sees it as a change and a
+///   node marked in frame N takes one full pass in frame N+1, which writes nothing, see below), whether
+///   it has a fade and a nimbus, and the table. Its last pass ran on
 ///   these same inputs (each frame they changed it ran), and a pass leaves its outputs where a second
 ///   pass on the same inputs writes nothing: the visibility asked for, the state and slot at the
 ///   colour and uv (written only on change), the look component swapped or marked only on change.
@@ -256,8 +261,10 @@ pub fn animate(
         Option<&mut material::SpriteState>,
         Option<&mut MeshMaterial3d<material::SpriteMaterial>>,
         &mut SpriteKeys,
+        Entity,
     )>,
     flip: Query<&UvFlipbook>,
+    mut marks: Option<ResMut<material::ParityMarks>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut looks: Option<ResMut<Assets<material::SpriteMaterial>>>,
     slots: Option<Res<material::SpriteSlots>>,
@@ -267,11 +274,11 @@ pub fn animate(
 ) {
     let t = clock.wall() as f32;
     let table = &tables.0;
-    let parity = material::parity();
+    let parity = material::parity() && !marks.as_ref().is_some_and(|m| m.off());
     let all = tables.is_changed();
     played.refresh(table, t, all);
     writes.clear();
-    for (f, fade, nimbus, mut vis, state, mut drawn, mut keys) in &mut fx {
+    for (f, fade, nimbus, mut vis, state, mut drawn, mut keys, node) in &mut fx {
         let resolved = keys.keys.filter(|_| !f.is_changed() && keys.generation == played.generation);
         let (anim, sprite) = match resolved {
             Some(k) => k,
@@ -357,7 +364,11 @@ pub fn animate(
                     // uv, which has not changed; from now on the look shows it (written above).
                     d.0 = st.look.clone();
                 } else if parity {
-                    d.set_changed();
+                    match marks.as_mut() {
+                        // Marked after visibility, for nodes a view sees (S5 as amended).
+                        Some(marks) => marks.push(node),
+                        None => d.set_changed(),
+                    }
                 }
             }
         }
