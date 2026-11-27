@@ -689,7 +689,7 @@ fn a_target_the_shot_killed_on_the_fire_tick_is_held_for_the_beams_life() {
 }
 
 #[test]
-fn a_beam_ends_when_its_owner_is_gone_and_when_the_target_is_beyond_root_two_times_the_range() {
+fn a_beam_ends_when_its_owner_is_gone_and_when_the_target_is_beyond_twice_the_range() {
     let mut setup = Setup::new(ShotCfg::default()).fire(4, "w_phaser", 0);
     setup.shooter_until = Some(10);
     let mut app = setup.app(Some(RenderProfile::Stock));
@@ -701,7 +701,7 @@ fn a_beam_ends_when_its_owner_is_gone_and_when_the_target_is_beyond_root_two_tim
         }
     }
     assert!(ended.is_some_and(|i| i <= 12), "ended at frame {ended:?}, the owner went at tick 10");
-    // Range 1000: a target at 1500 is in (1500^2 < 2 * 1000^2), one at 1500 for a 1000-range weapon... a target at 1800 is out.
+    // Authored range 1000: the cut is at twice the range, so a target at 1900 is in and one at 2100 is out.
     let beams = |z: i32| {
         let mut setup = Setup::new(ShotCfg::default()).fire(4, "w_phaser", 0);
         setup.target_z = z;
@@ -713,8 +713,8 @@ fn a_beam_ends_when_its_owner_is_gone_and_when_the_target_is_beyond_root_two_tim
         }
         n
     };
-    assert_eq!(beams(1300), 1);
-    assert_eq!(beams(1500), 0);
+    assert_eq!(beams(1900), 1);
+    assert_eq!(beams(2100), 0);
 }
 
 #[test]
