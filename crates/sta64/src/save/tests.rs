@@ -14,7 +14,7 @@ use sta_core::{PlayerId, TeamId};
 use sta_sim::command::{CommandKind, LocalRouter, Order};
 use sta_sim::replay::Replay;
 use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
-use sta_sim::{Sim, Vec3 as SimVec3, WorldSource};
+use sta_sim::{Sim, Vec3 as SimVec3};
 
 use super::*;
 use crate::app::{AppState, configure_sets};
@@ -42,6 +42,24 @@ fn build_match(mut commands: Commands, active: Res<ActiveMatch>, link: Option<Re
     commands.insert_resource(if unlogged.is_some() { link } else { link.with_replay(Replay::new(&active.setup)) });
 }
 
+/// The front end's fake data, with ships on the two-bases map: a cruiser for seat 0 and a frigate
+/// for seat 1, near each other, so a match has something to order and to fight over.
+fn armed() -> ScreenData {
+    let mut data = ScreenData::fake();
+    let mut map = sta_content::fake::two_bases();
+    let ship = |odf: &str, owner: u8, x: f32, z: f32, h: f32| sta_content::MapObject {
+        odf: odf.into(),
+        owner: Some(owner),
+        pos: SimVec3::from_f32([x, 0.0, z]),
+        heading: (sta_sim::Fixed::from_int(h as i32), sta_sim::Fixed::ZERO),
+        label: None,
+    };
+    map.objects.extend([ship("fx_cruiser", 0, -300.0, 0.0, 1.0), ship("fx_cruiser", 0, -300.0, 200.0, 1.0), ship("fx_frigate", 1, 500.0, 50.0, -1.0)]);
+    let entry = data.maps.iter_mut().find(|m| m.def.name == map.name).expect("the fake map");
+    *entry = crate::frontend::screens::MapEntry::new(map);
+    data
+}
+
 fn temp_dir(tag: &str) -> PathBuf {
     let mut id = [0; 8];
     getrandom::fill(&mut id).unwrap();
@@ -59,7 +77,7 @@ fn app(dir: &PathBuf, map_file: bool) -> App {
         .insert_non_send(Mixer::new(Box::new(null)))
         .insert_resource(crate::audio::AudioTestTones(true));
     configure_sets(&mut app);
-    let data = ScreenData::fake();
+    let data = armed();
     let scene = MenuSceneConfig::new(data.content.clone(), MenuMap::builtin(), sta_content::fake::two_bases());
     app.insert_resource(data)
         .insert_resource(ScreensConfig { own_camera: false, fit_scale: false, ..default() })
@@ -154,13 +172,14 @@ const M: u64 = 60;
 #[test]
 fn a_saved_match_loads_and_continues_to_the_same_digests_as_one_that_never_stopped() {
     let dir = temp_dir("roundtrip");
-    let data = ScreenData::fake();
+    let data = armed();
     let seats = || setup(&data, [Control::Human, Control::Idle]);
 
     // The match that never stops.
     let mut reference = app(&dir, true);
     start(&mut reference, seats(), MatchSpeed::Fast);
     let want = run(&mut reference, N + M);
+    assert!(want.windows(2).filter(|w| w[0] != w[1]).count() > 20, "the match has ships that move, or the test proves nothing");
     let want_replay = reference.world().resource::<SimLink>().replay().unwrap().clone();
 
     // The same match, saved at tick N.
@@ -229,7 +248,7 @@ fn a_saved_match_loads_and_continues_to_the_same_digests_as_one_that_never_stopp
 #[test]
 fn commands_in_flight_at_the_save_and_the_players_next_number_survive_the_load() {
     let dir = temp_dir("inflight");
-    let data = ScreenData::fake();
+    let data = armed();
     let seats = || setup(&data, [Control::Human, Control::Idle]);
     let order = |link: &SimLink| {
         let me = link.player();
@@ -287,7 +306,7 @@ fn blocked(app: &mut App) -> Option<SaveBlock> {
 #[test]
 fn save_is_not_allowed_where_it_cannot_be_restored_and_says_why() {
     let dir = temp_dir("blocked");
-    let data = ScreenData::fake();
+    let data = armed();
 
     // No match at all.
     let mut idle = app(&dir, true);
@@ -333,7 +352,7 @@ fn save_is_not_allowed_where_it_cannot_be_restored_and_says_why() {
 #[test]
 fn a_save_that_cannot_be_loaded_here_is_refused_with_its_reason_and_the_match_is_left_running() {
     let dir = temp_dir("refused");
-    let data = ScreenData::fake();
+    let data = armed();
     let mut a = app(&dir, true);
     start(&mut a, setup(&data, [Control::Human, Control::Idle]), MatchSpeed::Normal);
     run(&mut a, 5);
@@ -377,8 +396,9 @@ fn a_save_that_cannot_be_loaded_here_is_refused_with_its_reason_and_the_match_is
 
     // Other content: found after the build, which is then taken down again.
     let mut other = app(&dir, true);
-    let mut data2 = ScreenData::fake();
-    data2.content = Arc::new((*data2.content).clone().with_rules(sta_content::Rules::from_header("int X = 1;").0));
+    let mut data2 = armed();
+    data2.content = Arc::new(sta_content::fake::db_with_formations());
+    assert_ne!(data2.content.hash(), data.content.hash());
     other.insert_resource(data2);
     settle(&mut other, 4);
     other.world_mut().write_message(LoadMatch { path });
@@ -398,13 +418,13 @@ fn a_save_that_cannot_be_loaded_here_is_refused_with_its_reason_and_the_match_is
 #[test]
 fn an_unreadable_client_record_loads_the_match_with_defaults_and_says_so() {
     let dir = temp_dir("defaults");
-    let data = ScreenData::fake();
+    let data = armed();
     let mut a = app(&dir, true);
     start(&mut a, setup(&data, [Control::Human, Control::Idle]), MatchSpeed::Normal);
     run(&mut a, 3);
     // A save as another build's client would have written it: the sim is the same, the record is not ours.
     let (path, bytes) = {
-        let link = a.world_mut().resource_mut::<SimLink>();
+        let mut link = a.world_mut().resource_mut::<SimLink>();
         let sim = Sim::from_snapshot(&link.snapshot().unwrap(), Some(data.content.clone())).unwrap();
         let replay = link.replay().unwrap().clone();
         let info = SaveInfo { map: Some(MapId { path: format!("bzn/{}.bzn", replay.map.name), hash: file_hash(format!("authored map {}", replay.map.name).as_bytes()) }), local_seat: Some(PlayerId(0)), ..SaveInfo::default() };

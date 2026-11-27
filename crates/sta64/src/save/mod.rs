@@ -401,6 +401,18 @@ struct Resume<'w, 's> {
     scene: Option<Res<'w, crate::frontend::scene::MenuScene>>,
 }
 
+/// A load failed after the match was built: back to the front end, which takes the match down.
+#[derive(Resource)]
+struct Aborting;
+
+fn abort_load(mut commands: Commands, state: Res<State<AppState>>, mut next: ResMut<NextState<AppState>>) {
+    if *state.get() == AppState::FrontEnd {
+        commands.remove_resource::<Aborting>();
+    } else {
+        next.set(AppState::FrontEnd);
+    }
+}
+
 /// The build has put the match's link up: the saved game replaces what it was built with.
 #[allow(clippy::too_many_arguments)]
 fn finish_pending_load(
@@ -409,7 +421,6 @@ fn finish_pending_load(
     link: Option<ResMut<SimLink>>,
     state: Option<Res<State<AppState>>>,
     mut r: Resume<'_, '_>,
-    mut leave: MessageWriter<LeaveMatch>,
     mut out: MessageWriter<LoadOutcome>,
     mut notices: MessageWriter<Notice>,
 ) {
@@ -426,7 +437,8 @@ fn finish_pending_load(
     let mut fail = |why: String| {
         notices.write(Notice::new(Severity::Bad, format!("Cannot load: {why}")));
         out.write(LoadOutcome::Refused { path: pending.path.clone(), reason: why });
-        leave.write(LeaveMatch);
+        // The match the build made is taken down again, whichever state it is in.
+        commands.insert_resource(Aborting);
     };
     let Some(active) = r.active.as_deref_mut() else { return };
     let content = r.content.as_deref().map_or_else(|| active.setup.content.clone(), |c| c.0.clone());
@@ -492,11 +504,12 @@ impl Plugin for SavePlugin {
                 Update,
                 (
                     // After the fog's update (Render): its memory is of the tick being saved.
-                    refresh_availability.run_if(resource_exists::<SimLink>),
+                    refresh_availability,
                     save_match,
                     request_load,
                     begin_pending_load.run_if(in_state(AppState::FrontEnd)),
                     finish_pending_load,
+                    abort_load.run_if(resource_exists::<Aborting>),
                 )
                     .chain()
                     .in_set(GameSet::Ui),
