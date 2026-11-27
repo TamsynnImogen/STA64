@@ -110,6 +110,40 @@ pub struct FogState {
     pub updates: u32,
 }
 
+/// The local seat's explored memory as a save keeps it (UI-55, ADR 0010 V3): see
+/// [`FogGrid::export_explored`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExploredRecord {
+    pub min: [f32; 2],
+    pub w: usize,
+    pub h: usize,
+    /// `(byte, count)` runs over the cells, row by row from the map's low Z.
+    pub runs: Vec<(u8, u32)>,
+}
+
+/// What the sim's sensors have shown so far, whatever is lifted (UI-46), where a save can reach it
+/// (UI-55). `update_fog` keeps it here when the resource exists (the plugin adds it) and in its own
+/// `Local` when it does not. `import` is a saved memory the next update takes in, once, in place of
+/// the memory a new match would start with.
+#[derive(Resource, Default)]
+pub struct FogMemory {
+    grid: Option<FogGrid>,
+    /// Set by a load; taken by the next `update_fog`.
+    pub import: Option<ExploredRecord>,
+}
+
+impl FogMemory {
+    /// The explored memory now, for a save; `None` before the first update.
+    pub fn explored(&self) -> Option<ExploredRecord> {
+        self.grid.as_ref().map(FogGrid::export_explored)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_grid_for_test(&mut self, grid: FogGrid) {
+        self.grid = Some(grid);
+    }
+}
+
 /// Which layers are drawn (Refit's `[Overlays] Fog`); the grid is kept either way.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FogSettings {
@@ -231,6 +265,43 @@ impl FogGrid {
     pub(crate) fn set_sensor_for_test(&mut self, centre: Vec2, radius: f32) {
         self.reveal(centre.x, centre.y, radius);
         self.explored.copy_from_slice(&self.visible);
+    }
+
+    /// The explored memory as a save keeps it (UI-55): the grid's shape and one byte per cell,
+    /// run-length coded. The bytes are the memory's own, so a restored memory draws the contour
+    /// as it did. What is in sight now and the sight not yet folded in are not kept: the first
+    /// update after a restore derives them again from the view.
+    pub fn export_explored(&self) -> ExploredRecord {
+        let mut runs: Vec<(u8, u32)> = Vec::new();
+        for &b in &self.explored {
+            match runs.last_mut() {
+                Some((v, n)) if *v == b && *n < u32::MAX => *n += 1,
+                _ => runs.push((b, 1)),
+            }
+        }
+        ExploredRecord { min: self.min, w: self.w, h: self.h, runs }
+    }
+
+    /// Takes a saved explored memory in, replacing this grid's. Refused (and nothing changed) when the
+    /// record is for another grid shape or its runs do not add up to the grid.
+    pub fn import_explored(&mut self, rec: &ExploredRecord) -> Result<(), &'static str> {
+        if rec.w != self.w || rec.h != self.h || rec.min != self.min {
+            return Err("the saved explored memory is for another map grid");
+        }
+        let mut total: usize = 0;
+        for &(_, n) in &rec.runs {
+            total = total.checked_add(n as usize).ok_or("the saved explored memory is damaged")?;
+        }
+        if total != self.explored.len() {
+            return Err("the saved explored memory does not fit the grid");
+        }
+        let mut at = 0;
+        for &(v, n) in &rec.runs {
+            self.explored[at..at + n as usize].fill(v);
+            at += n as usize;
+        }
+        self.pending.fill(255);
+        Ok(())
     }
 
     /// Everything in sight (an omniscient view).
@@ -523,7 +594,7 @@ impl Plugin for FogPlugin {
     fn build(&self, app: &mut App) {
         add_material(app);
         app.add_plugins(crate::render::reveal::RevealPlugin).add_plugins(crate::render::fog_objects::FogObjectsPlugin);
-        app.init_resource::<FogSettings>().add_systems(
+        app.init_resource::<FogSettings>().init_resource::<FogMemory>().add_systems(
             Update,
             (load_patterns.run_if(resource_exists::<Assets<Image>>), update_fog)
                 .chain()
@@ -613,6 +684,12 @@ pub(crate) struct Memo {
     shown_cutscene: Option<bool>,
 }
 
+type CameraFog<'w> = (
+    Option<Res<'w, crate::ui::presentation::CineractiveState>>,
+    Option<Res<'w, crate::input::camera_tactical::TacticalView>>,
+    Option<ResMut<'w, FogMemory>>,
+);
+
 type MatchFog<'w> = (
     Option<Res<'w, crate::game::net_match::NetGame>>,
     Option<Res<'w, crate::game::flow::ActiveMatch>>,
@@ -629,10 +706,7 @@ pub(crate) fn update_fog(
     bounds: Res<FogBounds>,
     content: Option<Res<ContentRes>>,
     settings: Res<FogSettings>,
-    (cine, tactical): (
-        Option<Res<crate::ui::presentation::CineractiveState>>,
-        Option<Res<crate::input::camera_tactical::TacticalView>>,
-    ),
+    (cine, tactical, mut io): CameraFog<'_>,
     patterns: Option<Res<FogPatterns>>,
     state: Option<ResMut<FogState>>,
     mut images: ResMut<Assets<Image>>,
@@ -673,13 +747,30 @@ pub(crate) fn update_fog(
         (fog || reveal.as_deref().is_some_and(|r| r.fog), shroud || reveal.as_deref().is_some_and(|r| r.shroud))
     };
     let fresh = state.is_none() || *shown_reveal != Some(lifted) || *shown_cutscene != Some(cutscene) || *art_generation != Some(patterns.generation) || !seen.as_ref().is_some_and(|(v, p)| Arc::ptr_eq(v, curr) && *p == local.0);
-    let map_changed = memory.as_ref().is_some_and(|m| m.min != [bounds.min.x, bounds.min.y]);
+    let held = io.as_deref().map_or(memory.as_ref(), |i| i.grid.as_ref());
+    let map_changed = held.is_some_and(|m| m.min != [bounds.min.x, bounds.min.y]);
     if fresh || map_changed {
         *seen = Some((curr.clone(), local.0));
         *shown_reveal = Some(lifted);
         *shown_cutscene = Some(cutscene);
-        let (mut grid, updates) = match (state.as_deref(), memory.take()) {
-            (Some(s), Some(m)) if !map_changed => (m, s.updates),
+        let taken = match io.as_deref_mut() {
+            Some(i) => i.grid.take(),
+            None => memory.take(),
+        };
+        // A load's saved memory replaces the new match's (UI-55); a record that does not fit is dropped.
+        let imported = io.as_deref_mut().and_then(|i| i.import.take()).and_then(|rec| {
+            let mut g = FogGrid::new([bounds.min.x, bounds.min.y], [bounds.max.x, bounds.max.y]);
+            match g.import_explored(&rec) {
+                Ok(()) => Some(g),
+                Err(why) => {
+                    warn!("load: {why}; the map starts unexplored");
+                    None
+                }
+            }
+        });
+        let (mut grid, updates) = match (imported, state.as_deref(), taken) {
+            (Some(g), s, _) => (g, s.map_or(0, |s| s.updates)),
+            (None, Some(s), Some(m)) if !map_changed => (m, s.updates),
             _ => (FogGrid::new([bounds.min.x, bounds.min.y], [bounds.max.x, bounds.max.y]), 0),
         };
         // Editing is presentation-only: leave both explored and pending sight intact.
@@ -691,7 +782,10 @@ pub(crate) fn update_fog(
             grid.observe_with(curr, player, content.as_deref().map(|c| &*c.0), !cutscene);
         }
         let shown = grid.lifted(lifted.0, lifted.1);
-        *memory = Some(grid);
+        match io.as_deref_mut() {
+            Some(i) => i.grid = Some(grid),
+            None => *memory = Some(grid),
+        }
         let art_changed = *art_generation != Some(patterns.generation);
         *art_generation = Some(patterns.generation);
         let respawn = state.is_none() || map_changed || art_changed;
@@ -1184,5 +1278,48 @@ mod tests {
             assert!(rig.explored(-1500.0) && !rig.explored(1500.0) && !rig.explored(3000.0));
             assert!(rig.explored(0.0), "what was explored before stays explored");
         }
+
+        /// UI-55: a loaded game's explored memory replaces the one a new match starts with, once.
+        #[test]
+        fn a_saved_explored_memory_replaces_the_new_matchs_and_is_taken_once() {
+            let at = |x| Some(vec![unit(1, 1, x, 0)]);
+            let mut rig = Rig::new();
+            rig.app.init_resource::<FogMemory>();
+            rig.frame(at(0), None);
+            let mut other = FogGrid::new([-4096.0, -4096.0], [4096.0, 4096.0]);
+            other.set_sensor_for_test(Vec2::new(3000.0, 0.0), 300.0);
+            let rec = other.export_explored();
+            rig.app.world_mut().resource_mut::<FogMemory>().import = Some(rec.clone());
+            rig.frame(at(0), None);
+            assert!(rig.explored(3000.0) && !rig.seen(3000.0), "the saved ground is explored, not in sight");
+            assert!(rig.seen(0.0));
+            let mem = rig.app.world().resource::<FogMemory>();
+            assert!(mem.import.is_none(), "taken once");
+            assert_eq!(mem.explored().unwrap().w, rec.w);
+            // A record for another grid shape is dropped, and the memory goes on as it was.
+            let mut wrong = rec;
+            wrong.w += 1;
+            rig.app.world_mut().resource_mut::<FogMemory>().import = Some(wrong);
+            rig.frame(at(0), None);
+            assert!(rig.explored(3000.0), "the memory in place stays when the record does not fit");
+        }
+    }
+
+    #[test]
+    fn the_explored_memory_exports_and_imports_exactly_and_refuses_another_grid() {
+        let mut g = FogGrid::new([-1000.0, -1000.0], [1000.0, 1000.0]);
+        g.reveal(200.0, -300.0, 400.0);
+        g.explored.copy_from_slice(&g.visible);
+        let rec = g.export_explored();
+        assert!(rec.runs.len() < g.explored.len(), "run-length coded");
+        let mut back = FogGrid::new([-1000.0, -1000.0], [1000.0, 1000.0]);
+        back.import_explored(&rec).unwrap();
+        assert_eq!(back.explored, g.explored, "the contour bytes survive");
+        assert_eq!(back.counts().1, g.counts().1);
+        let mut other_map = FogGrid::new([0.0, 0.0], [1000.0, 1000.0]);
+        assert!(other_map.import_explored(&rec).is_err());
+        let mut short = rec.clone();
+        short.runs.pop();
+        assert!(back.import_explored(&short).is_err());
     }
 }
