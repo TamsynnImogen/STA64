@@ -813,5 +813,8 @@ fn committed_tables_are_what_the_generator_writes() {
         .expect("run python3");
     assert!(status.success(), "the generator failed");
     let committed = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/core_data/tables.rs")).unwrap();
-    assert!(committed == std::fs::read(&out).unwrap(), "tests/core_data/tables.rs differs from the generator's output ({})", out.display());
+    // a checkout may have CRLF line endings: compare without carriage returns
+    let strip = |v: Vec<u8>| v.into_iter().filter(|b| *b != b'\r').collect::<Vec<u8>>();
+    let (committed, regenerated) = (strip(committed), strip(std::fs::read(&out).unwrap()));
+    assert!(committed == regenerated, "tests/core_data/tables.rs differs from the generator's output ({})", out.display());
 }
