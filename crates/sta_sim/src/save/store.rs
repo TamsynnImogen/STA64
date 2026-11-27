@@ -4,20 +4,27 @@
 //! module has no directory policy. Paths are joined by component and the
 //! format is binary, so nothing here assumes a path separator or a line
 //! ending.
+//!
+//! **Durability, plainly.** A write goes to a temporary file in the same
+//! folder (a name of its own per write, so concurrent writers do not touch
+//! each other's), the file is flushed to disk (`sync_all`) before it is
+//! renamed over its target, and on Unix the folder is then synced too
+//! (best effort). On Windows the folder is not synced. After a power loss
+//! the new name may be missing, in which case the earlier save is still
+//! whole; a half-written file is never under a save's name.
 
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use sta_content::ContentDb;
 
 use super::header::Header;
-use super::{SaveError, header_len_hint, read_header};
+use super::{MAX_FILE, SaveError, header_len_hint, read_header};
 
 /// File name extension of a save (without the dot).
 pub const EXTENSION: &str = "stasave";
 const TEMP_SUFFIX: &str = ".tmp";
-/// Larger files are refused as damaged without being read.
-const MAX_FILE: u64 = 1 << 30;
 
 fn io_err(what: &str, e: &io::Error) -> SaveError {
     SaveError::Io(format!("{what}: {e}"))
@@ -42,10 +49,46 @@ fn check_name(name: &str) -> Result<(), SaveError> {
     }
 }
 
+/// A temporary name no other write has: the process and a counter.
+fn temp_path(dir: &Path, file_name: &str) -> PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    dir.join(format!(".{file_name}.{}-{}{TEMP_SUFFIX}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)))
+}
+
+/// Writes the temporary file, flushed to disk.
+fn write_temp(dir: &Path, file_name: &str, bytes: &[u8]) -> Result<PathBuf, SaveError> {
+    check_name(file_name)?;
+    std::fs::create_dir_all(dir).map_err(|e| io_err("cannot create the saves folder", &e))?;
+    let temp = temp_path(dir, file_name);
+    let written = (|| {
+        let mut f = std::fs::File::create(&temp)?;
+        f.write_all(bytes)?;
+        f.sync_all()
+    })();
+    match written {
+        Ok(()) => Ok(temp),
+        Err(e) => {
+            let _ = std::fs::remove_file(&temp);
+            Err(io_err("cannot write the save", &e))
+        }
+    }
+}
+
+/// Best-effort sync of the folder after a rename (Unix; nothing on Windows).
+fn sync_dir(dir: &Path) {
+    #[cfg(unix)]
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+}
+
 /// Writes `bytes` as `dir/file_name` atomically: into a temporary file in the
 /// same folder, flushed to disk, then renamed over the target. A write that
-/// is interrupted leaves an earlier file of that name whole, and a leftover
-/// temporary file, which a listing skips. Creates `dir` if it is missing.
+/// is interrupted leaves an earlier file of that name whole, and perhaps a
+/// leftover temporary file, which a listing skips. Creates `dir` if it is
+/// missing. A second writer of the same name wins or loses as a whole.
 pub fn write_atomic(dir: &Path, file_name: &str, bytes: &[u8]) -> Result<PathBuf, SaveError> {
     write_atomic_with(dir, file_name, bytes, &|from, to| std::fs::rename(from, to))
 }
@@ -58,43 +101,64 @@ pub fn write_atomic_with(
     bytes: &[u8],
     rename: &dyn Fn(&Path, &Path) -> io::Result<()>,
 ) -> Result<PathBuf, SaveError> {
-    check_name(file_name)?;
-    std::fs::create_dir_all(dir).map_err(|e| io_err("cannot create the saves folder", &e))?;
+    let temp = write_temp(dir, file_name, bytes)?;
     let target = dir.join(file_name);
-    let temp = dir.join(format!("{file_name}{TEMP_SUFFIX}"));
-    let written = (|| {
-        let mut f = std::fs::File::create(&temp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-        drop(f);
-        rename(&temp, &target)
-    })();
-    if let Err(e) = written {
+    if let Err(e) = rename(&temp, &target) {
         let _ = std::fs::remove_file(&temp);
         return Err(io_err("cannot write the save", &e));
     }
+    sync_dir(dir);
     Ok(target)
 }
 
 /// Writes a new save under a generated name ([`generated_name`]), never over
-/// an existing file: a clash gets `-2`, `-3`, ... before the extension.
+/// an existing file, also against concurrent writers: the finished temporary
+/// file is hard-linked to the free name (which fails if the name is taken),
+/// then the temporary name is removed. A clash gets `-2`, `-3`, ... before
+/// the extension. Where the folder cannot hard-link (some network and FAT
+/// volumes) it falls back to checking the name and renaming, which is not
+/// safe against a concurrent writer of the same name.
 pub fn write_new(dir: &Path, bytes: &[u8]) -> Result<PathBuf, SaveError> {
     let name = generated_name(&read_header(bytes)?);
     let stem = name.strip_suffix(&format!(".{EXTENSION}")).unwrap_or(&name).to_owned();
+    let temp = write_temp(dir, &name, bytes)?;
     let mut candidate = name;
     let mut n = 1u32;
-    while dir.join(&candidate).exists() {
-        n += 1;
-        candidate = format!("{stem}-{n}.{EXTENSION}");
+    loop {
+        let target = dir.join(&candidate);
+        match std::fs::hard_link(&temp, &target) {
+            Ok(()) => {
+                let _ = std::fs::remove_file(&temp);
+                sync_dir(dir);
+                return Ok(target);
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                n += 1;
+                candidate = format!("{stem}-{n}.{EXTENSION}");
+            }
+            Err(_) => {
+                // No hard links here: check, then rename.
+                while dir.join(&candidate).exists() {
+                    n += 1;
+                    candidate = format!("{stem}-{n}.{EXTENSION}");
+                }
+                if let Err(e) = std::fs::rename(&temp, &target) {
+                    let _ = std::fs::remove_file(&temp);
+                    return Err(io_err("cannot write the save", &e));
+                }
+                sync_dir(dir);
+                return Ok(dir.join(candidate));
+            }
+        }
     }
-    write_atomic(dir, &candidate, bytes)
 }
 
-/// The bytes of a save file. A file over 1 GiB is refused as damaged.
+/// The bytes of a save file. A file over [`MAX_FILE`] is refused as damaged
+/// without being read.
 pub fn read_file(path: &Path) -> Result<Vec<u8>, SaveError> {
     let len = std::fs::metadata(path).map_err(|e| io_err("cannot read the save", &e))?.len();
-    if len > MAX_FILE {
-        return Err(SaveError::Damaged("the file is far larger than any save".into()));
+    if len > MAX_FILE as u64 {
+        return Err(SaveError::Damaged("the file is larger than any save".into()));
     }
     std::fs::read(path).map_err(|e| io_err("cannot read the save", &e))
 }
@@ -115,7 +179,9 @@ pub struct Listing {
 /// file. Temporary files of an interrupted write and files of other kinds
 /// are skipped; files this build cannot load are listed with their reason.
 /// `content`, when known, makes a save made on other content refused. A
-/// missing folder is an empty list.
+/// missing folder is an empty list. A directory entry that cannot be read
+/// does not abort the listing: it is listed with [`SaveError::Io`] under the
+/// name `?` (its own name is not known).
 pub fn list(dir: &Path, content: Option<&ContentDb>) -> Result<Vec<Listing>, SaveError> {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -124,7 +190,13 @@ pub fn list(dir: &Path, content: Option<&ContentDb>) -> Result<Vec<Listing>, Sav
     };
     let mut out = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|e| io_err("cannot read the saves folder", &e))?;
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                out.push(Listing { file_name: "?".into(), path: dir.to_path_buf(), outcome: Err(io_err("cannot read a folder entry", &e)) });
+                continue;
+            }
+        };
         let Some(file_name) = entry.file_name().to_str().map(str::to_owned) else { continue };
         if file_name.ends_with(TEMP_SUFFIX) || file_name.starts_with('.') {
             continue;

@@ -12,7 +12,9 @@ pub const MAGIC: [u8; 4] = *b"STAG";
 
 /// The container's own layout version (V2), independent of the snapshot,
 /// replay and protocol numbers. It starts at 1; the steward's ledger, if one
-/// is kept for it, hands out later numbers.
+/// is kept for it, hands out later numbers. The rule for raising it is in
+/// `container`'s docs: any change to the serialised form of the header, of
+/// the types it embeds from other modules, or of the section records.
 pub const CONTAINER_VERSION: u16 = 1;
 
 /// Largest header a file may declare. The encoded header is checked against it
@@ -43,7 +45,11 @@ pub struct MissionIdentity {
 
 /// The map a game was played on, by reference only: map data never enters a
 /// save (V3). The path is as the caller names it; the hash is the caller's
-/// hash of the map file.
+/// hash of the map file. **Only that hash ties the map to the save**: the
+/// sim never sees the file, cannot tell whether the `MapDef` handed to
+/// [`super::load`] is the one that was played (it only feeds the rebuilt
+/// replay, the game state comes from the snapshot) and does not compare the
+/// path, which the caller resolves.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MapId {
     pub path: String,
@@ -56,9 +62,15 @@ pub struct MapId {
 pub struct Header {
     /// Informational: the build that wrote the file.
     pub build_id: String,
-    /// The snapshot format, replay format and seam revision of the writing build.
+    /// The snapshot format, replay format and seam revision of the writing
+    /// build. They are not in the postcard header: they sit at fixed offsets
+    /// in the file's prefix (see `container`) and are filled in from there
+    /// when a header is read.
+    #[serde(skip)]
     pub snapshot_format: u16,
+    #[serde(skip)]
     pub replay_format: u16,
+    #[serde(skip)]
     pub seam_rev: u32,
     /// `ContentDb::hash`, and where the content came from (shown, not compared).
     pub content_hash: u64,

@@ -66,10 +66,15 @@ fn v(x: i32, z: i32) -> Vec3 {
 #[derive(Default)]
 struct Counter {
     n: u32,
+    /// Shots it has been told about: its decisions depend on the events it
+    /// is given, so a controller that misses the events of the tick a save
+    /// was made on sends other commands afterwards.
+    fired: u32,
 }
 
 impl Controller for Counter {
-    fn think(&mut self, view: &WorldView, _events: &[SimEvent], out: &mut Vec<Command>) {
+    fn think(&mut self, view: &WorldView, events: &[SimEvent], out: &mut Vec<Command>) {
+        self.fired += events.iter().filter(|e| matches!(e, SimEvent::Fired { .. })).count() as u32;
         if view.tick % 25 != 3 {
             return;
         }
@@ -78,16 +83,20 @@ impl Controller for Counter {
             return;
         }
         self.n += 1;
-        let to = v((self.n * 377 % 3000) as i32 - 1500, (self.n * 911 % 3000) as i32 - 1500);
+        let k = self.n + self.fired;
+        let to = v((k * 377 % 3000) as i32 - 1500, (k * 911 % 3000) as i32 - 1500);
         out.push(Command { player: P1, seq: self.n, kind: CommandKind::Order(Order::Move { units, to, queue: false }) });
     }
     fn save_state(&self) -> Option<ControllerState> {
-        Some(ControllerState { version: 1, data: self.n.to_le_bytes().to_vec() })
+        let mut data = self.n.to_le_bytes().to_vec();
+        data.extend_from_slice(&self.fired.to_le_bytes());
+        Some(ControllerState { version: 1, data })
     }
     fn restore_state(&mut self, state: &ControllerState) -> Result<(), String> {
-        match (state.version, <[u8; 4]>::try_from(state.data.as_slice())) {
+        match (state.version, <[u8; 8]>::try_from(state.data.as_slice())) {
             (1, Ok(b)) => {
-                self.n = u32::from_le_bytes(b);
+                self.n = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                self.fired = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);
                 Ok(())
             }
             (v, _) => Err(format!("record version {v} or length not readable")),
@@ -247,6 +256,12 @@ fn info() -> SaveInfo {
     }
 }
 
+/// Where a file's header ends (after its checksum): the 18-byte prefix, the
+/// header length at offset 14, the header, its 8-byte checksum.
+fn header_end(file: &[u8]) -> usize {
+    18 + u32::from_le_bytes([file[14], file[15], file[16], file[17]]) as usize + 8
+}
+
 fn client() -> ClientState {
     ClientState { version: 3, data: vec![9, 8, 7, 6, 5] }
 }
@@ -255,6 +270,8 @@ struct Run {
     sim: Sim,
     replay: Replay,
     ctl: Vec<(PlayerId, Box<dyn Controller>)>,
+    /// The events of the last step: what the controllers are given next.
+    events: Vec<SimEvent>,
 }
 
 impl Run {
@@ -269,7 +286,7 @@ impl Run {
             .filter(|p| matches!(p.control, Control::Ai(_)))
             .map(|p| (p.id, Box::new(Counter::default()) as Box<dyn Controller>))
             .collect();
-        Run { sim, replay, ctl }
+        Run { sim, replay, ctl, events: Vec::new() }
     }
 
     /// One tick: the script's commands and the controllers', logged.
@@ -278,16 +295,17 @@ impl Run {
         let mut cmds = script.commands(t).to_vec();
         let view = self.sim.view();
         for (_, c) in &mut self.ctl {
-            c.think(&view, &[], &mut cmds);
+            c.think(&view, &self.events, &mut cmds);
         }
         let out = self.sim.step(&cmds);
+        self.events = out.events.clone();
         self.replay.log_step(t, &cmds, out.view.tick, out.view.digest, EVERY);
         out
     }
 
     fn save(&self, info: &SaveInfo) -> Result<Vec<u8>, SaveError> {
         let refs: Vec<(PlayerId, &dyn Controller)> = self.ctl.iter().map(|(p, c)| (*p, c.as_ref())).collect();
-        save::save(&self.sim, &self.replay, info, &refs, &client())
+        save::save(&self.sim, &self.replay, info, &refs, &self.events, &client())
     }
 
     fn controller_states(&self) -> Vec<(PlayerId, Option<ControllerState>)> {
@@ -371,11 +389,13 @@ fn resume(sc: &Scenario, r: &Reference, n: u64) {
     // Load then save gives the same bytes.
     {
         let refs: Vec<(PlayerId, &dyn Controller)> = ctl.iter().map(|(p, c)| (*p, c.as_ref())).collect();
-        let again = save::save(&loaded.sim, &loaded.replay, &loaded.info, &refs, &loaded.client).expect("saves again");
+        let again = save::save(&loaded.sim, &loaded.replay, &loaded.info, &refs, &loaded.events, &loaded.client).expect("saves again");
         assert!(again == bytes, "{name}: load then save at {n} gives other bytes");
     }
 
-    let mut run = Run { sim: loaded.sim, replay: loaded.replay, ctl };
+    // The first think is given the events of the saved tick, as in an uninterrupted game.
+    assert_eq!(loaded.events, if n == 0 { Vec::new() } else { r.outs[n as usize - 1].events.clone() }, "{name}: the saved tick's events at {n}");
+    let mut run = Run { sim: loaded.sim, replay: loaded.replay, ctl, events: loaded.events };
     for t in n..sc.ticks {
         let out = run.step(&sc.script);
         let want = &r.outs[t as usize];
@@ -412,7 +432,22 @@ fn a_formation_group_round_a_moon_saved_and_loaded_mid_route() {
 
 #[test]
 fn a_computer_player_with_its_own_state_continues_as_if_never_interrupted() {
-    let r = check(with_a_computer_player(), &[4, 29, 300, 601, 900]);
+    // Saves right after ticks that emitted shots: the controller counts shots,
+    // so it must be given the events of the saved tick after a load.
+    let probe = run_reference(&with_a_computer_player(), &[]);
+    let fired: Vec<u64> = probe
+        .outs
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| o.events.iter().any(|e| matches!(e, SimEvent::Fired { .. })))
+        .map(|(i, _)| i as u64 + 1)
+        .collect();
+    assert!(fired.len() >= 4, "the scenario fires shots ({})", fired.len());
+    let mut saves = vec![4, 29, 300, 601, 900];
+    saves.extend([fired[0], fired[fired.len() / 3], fired[fired.len() / 2], fired[fired.len() - 1]]);
+    saves.sort_unstable();
+    saves.dedup();
+    let r = check(with_a_computer_player(), &saves);
     // The controller really acts and keeps state: its record differs from a fresh one.
     let (_, state) = &r.last_controllers[0];
     assert!(state.as_ref().unwrap().data != 0u32.to_le_bytes(), "the controller never acted");
@@ -426,8 +461,28 @@ fn control_a_controller_restored_without_its_state_is_noticed() {
     let sc = with_a_computer_player();
     let r = run_reference(&sc, &[300]);
     let loaded = load(&r.saves[&300], content(), map_source()).unwrap();
-    let mut run = Run { sim: loaded.sim, replay: loaded.replay, ctl: vec![(P1, Box::new(Counter::default()))] };
+    let mut run = Run { sim: loaded.sim, replay: loaded.replay, ctl: vec![(P1, Box::new(Counter::default()))], events: loaded.events };
     for _ in 300..sc.ticks {
+        run.step(&sc.script);
+    }
+    assert_eq!(run.controller_states(), r.last_controllers, "controller state at the end differs");
+}
+
+/// The events of the saved tick matter: a loaded run that is not given them
+/// (the shape of the gap before the events section) diverges. Control for
+/// the harness.
+#[test]
+#[should_panic(expected = "controller state at the end differs")]
+fn control_a_loaded_run_without_the_saved_events_is_noticed() {
+    let sc = with_a_computer_player();
+    let probe = run_reference(&sc, &[]);
+    let at = probe.outs.iter().position(|o| o.events.iter().any(|e| matches!(e, SimEvent::Fired { .. }))).expect("shots") as u64 + 1;
+    let r = run_reference(&sc, &[at]);
+    let loaded = load(&r.saves[&at], content(), map_source()).unwrap();
+    assert!(!loaded.events.is_empty(), "the saved tick has events");
+    let ctl = loaded.restore_controllers(restore_counter).unwrap();
+    let mut run = Run { sim: loaded.sim, replay: loaded.replay, ctl, events: Vec::new() };
+    for _ in at..sc.ticks {
         run.step(&sc.script);
     }
     assert_eq!(run.controller_states(), r.last_controllers, "controller state at the end differs");
@@ -450,7 +505,7 @@ fn saving_twice_gives_identical_bytes_and_the_time_is_only_in_the_header() {
     let c = run.save(&later).unwrap();
     assert!(c != a);
     // Only the header differs: the sections after it are the same bytes.
-    let end = |f: &[u8]| 10 + u32::from_le_bytes([f[6], f[7], f[8], f[9]]) as usize + 8;
+    let end = header_end;
     assert!(a[end(&a)..a.len() - 8] == c[end(&c)..c.len() - 8], "the sections depend on the caller's time or description");
 }
 
@@ -462,7 +517,7 @@ fn the_header_reads_without_the_sections() {
         run.step(&sc.script);
     }
     let bytes = run.save(&info()).unwrap();
-    let header_end = 10 + u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]) as usize + 8;
+    let header_end = header_end(&bytes);
     assert!(header_end < bytes.len() / 2, "the header is a small part of the file");
     let h = read_header(&bytes[..header_end]).expect("reads from the header's bytes alone");
     assert_eq!(h.tick, 77);
@@ -514,7 +569,7 @@ fn another_container_version_is_refused_not_migrated() {
     for found in [0u16, 2, 77] {
         bytes[4..6].copy_from_slice(&found.to_le_bytes());
         let e = load(&bytes, content(), map_source()).err().expect("refused");
-        assert_eq!(e, SaveError::ContainerVersion { found });
+        assert_eq!(e, SaveError::ContainerVersion { found, expected: save::CONTAINER_VERSION });
         assert!(e.to_string().contains("save container version"), "{e}");
         assert!(matches!(read_header(&bytes), Err(SaveError::ContainerVersion { .. })));
     }
@@ -569,14 +624,14 @@ fn a_controller_that_cannot_be_restored_refuses_the_load_naming_the_seat() {
 fn a_controller_that_has_not_opted_in_refuses_the_save_naming_the_seat() {
     let sc = with_a_computer_player();
     let run = Run::start(&sc);
-    let e = save::save(&run.sim, &run.replay, &info(), &[(P1, &Silent)], &client()).expect_err("refused");
+    let e = save::save(&run.sim, &run.replay, &info(), &[(P1, &Silent)], &[], &client()).expect_err("refused");
     assert_eq!(e, SaveError::ControllerCannotSave { seat: P1 });
     assert!(e.to_string().contains("seat 1"));
     // No controller at all for a computer seat, and one for a seat that has none.
-    assert!(matches!(save::save(&run.sim, &run.replay, &info(), &[], &client()), Err(SaveError::Invalid(_))));
+    assert!(matches!(save::save(&run.sim, &run.replay, &info(), &[], &[], &client()), Err(SaveError::Invalid(_))));
     let idle = fleet_combat();
     let run = Run::start(&idle);
-    assert!(matches!(save::save(&run.sim, &run.replay, &info(), &[(P1, &Counter::default())], &client()), Err(SaveError::Invalid(_))));
+    assert!(matches!(save::save(&run.sim, &run.replay, &info(), &[(P1, &Counter::default())], &[], &client()), Err(SaveError::Invalid(_))));
 }
 
 #[test]
@@ -627,7 +682,7 @@ fn every_flipped_byte_is_refused_never_accepted() {
         }
     }
     // The header's fields each flip to a refusal too (a list sees it from the header alone).
-    let header_end = 10 + u32::from_le_bytes([bytes[6], bytes[7], bytes[8], bytes[9]]) as usize + 8;
+    let header_end = header_end(&bytes);
     for i in 0..header_end {
         let mut b = bytes[..header_end].to_vec();
         b[i] ^= 0x10;
@@ -743,6 +798,28 @@ fn file_names_are_checked_and_generated_names_never_overwrite() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Writers of the same moment never overwrite each other, and none leaves a
+/// temporary file behind.
+#[test]
+fn concurrent_writers_each_get_their_own_file() {
+    let dir = scratch("concurrent");
+    let (_, bytes) = a_save();
+    let paths: Vec<PathBuf> = std::thread::scope(|s| {
+        let handles: Vec<_> = (0..8).map(|_| s.spawn(|| store::write_new(&dir, &bytes).expect("writes"))).collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let mut unique = paths.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), 8, "two writers got the same file");
+    assert_eq!(names(&dir).len(), 8, "{:?}", names(&dir));
+    assert!(names(&dir).iter().all(|n| n.ends_with(".stasave")));
+    for p in &paths {
+        assert!(std::fs::read(p).unwrap() == bytes);
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 #[test]
 fn the_listing_shows_refused_files_with_their_reason() {
     let dir = scratch("list");
@@ -762,7 +839,7 @@ fn the_listing_shows_refused_files_with_their_reason() {
     assert_eq!(by.len(), 5, "refused files are listed, never hidden");
     assert!(by["a-good.stasave"].is_ok());
     assert!(matches!(by["b-junk.stasave"], Err(SaveError::NotASave)));
-    assert!(matches!(by["c-old.stasave"], Err(SaveError::ContainerVersion { found: 0 })));
+    assert!(matches!(by["c-old.stasave"], Err(SaveError::ContainerVersion { found: 0, .. })));
     assert!(matches!(by["d-cut.stasave"], Err(SaveError::Damaged(_))));
     // Without content the list cannot judge it; with other content it refuses.
     let other = content_with_formations();

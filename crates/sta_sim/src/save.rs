@@ -4,26 +4,38 @@
 //! - [`save`] and [`load`] are pure functions over bytes. The file helpers in
 //!   [`store`] write atomically into a directory the caller names; the sim
 //!   holds no directory policy, no clock and no install.
-//! - A save is its own file (V2): magic, a container version of its own (see
-//!   [`CONTAINER_VERSION`]), a [`Header`] a load list reads without the rest,
-//!   then four sections: the sim snapshot (`Sim::snapshot` bytes, unchanged),
-//!   the journal (the replay's commands and digests from tick 0, without the
-//!   map), the controllers' state (one opaque record per computer seat,
-//!   written and read by the controller, ADR 0010 V5) and the client's state
-//!   (one opaque record). The byte layout is in [`container`].
+//! - A save is its own file (V2): magic, the four numbers that decide
+//!   loadability at fixed offsets (container version, snapshot format, replay
+//!   format, seam revision: exact match, no migration), a [`Header`] a load
+//!   list reads without the rest, then five sections: the sim snapshot
+//!   (`Sim::snapshot` bytes, unchanged), the journal (the replay's commands
+//!   and digests from tick 0, without the map), the controllers' state (one
+//!   opaque record per computer seat, written and read by the controller,
+//!   ADR 0010 V5), the events of the saved tick (what the controllers are
+//!   given at their first `think`) and the client's state (one opaque
+//!   record). The byte layout, and the rule for when [`CONTAINER_VERSION`]
+//!   must rise, are in `container`.
 //! - No map data and no assets are in a save (V3): the header names the map
 //!   by path and hash; the caller reads the map file and hands its `MapDef`
 //!   and hash to [`load`], which rebuilds the replay from the journal, the
 //!   header's setup and that map. A match whose map has no file is refused
 //!   at save ([`SaveError::NoMapFile`]).
 //! - Nothing is migrated (V1): a file made by another container version, by
-//!   a build whose snapshot, replay or seam revision this build does not read,
-//!   on other content, on another map, with a controller this build cannot
-//!   restore, or a damaged or cut file is refused with [`SaveError`], whose
-//!   message names the first mismatch and is the load list's reason.
+//!   a build with another snapshot, replay or seam number, on other content,
+//!   on another map, with a controller this build cannot restore, or a
+//!   damaged or truncated file is refused with [`SaveError`], whose message
+//!   names the first mismatch and is the load list's reason.
 //! - Saving the same state with the same [`SaveInfo`] gives the same bytes.
 //!   The time and the description are the caller's input and are in the
 //!   header; they are the only parts that vary between saves of one state.
+//! - **A save from elsewhere is untrusted input, and the checksum is not
+//!   protection against it**: it detects accidental damage only (anyone can
+//!   recompute it). The container's own parsing is bounded (sizes, counts
+//!   and lengths are checked before anything is allocated from them, see
+//!   [`MAX_FILE`]) and its tests do not find a panic on the inputs they
+//!   try; the snapshot decoder behind it is the resync decoder, whose
+//!   behaviour on hostile content is its own (the tests here sample it with
+//!   valid checksums).
 
 mod container;
 mod header;
@@ -32,31 +44,52 @@ pub mod store;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use sta_content::{ContentDb, MapDef};
+use sta_content::{ContentDb, MapDef, Profile};
 use sta_core::{PlayerId, SEAM_REV, Tick};
 
 pub use header::{CONTAINER_VERSION, GameKind, Header, MAGIC, MAX_HEADER, MapId, MissionIdentity, SaveInfo};
 pub use store::{Listing, list, read_file, write_atomic, write_new};
 
-use crate::replay::{ControlRec, Logged, Replay};
-use crate::setup::{Controller, ControllerState};
+use crate::replay::{self, ControlRec, Logged, Replay, SeatRec};
+use crate::setup::{Controller, ControllerState, GameOptions};
 use crate::snapshot::{self, SnapshotError};
-use crate::{replay, Sim};
+use crate::{Sim, SimEvent};
+
+/// The largest file `load` and `read_file` accept (64 MiB), checked before
+/// anything else is done with the bytes. A save is a snapshot (a few MiB for
+/// a large match), a journal (a few bytes per command; a three-hour game is
+/// well under a MiB) and small records, so this is far above any real one.
+/// It is low because decoding a hostile file grows memory by a multiple of
+/// its size (about 14 times for the smallest records), and a shared save is
+/// untrusted.
+pub const MAX_FILE: usize = 64 << 20;
+
+/// Most seats a game has (`PlayerId::MAX_PLAYERS`); also the most controller
+/// records a save may hold.
+const MAX_SEATS: usize = PlayerId::MAX_PLAYERS as usize;
+/// Bounds on the counts of the journal and the events, checked from the
+/// count's own bytes before the list is decoded: 2 million commands, a
+/// million digests (a digest every 30 ticks is 33 million ticks), 100 000
+/// events in one tick.
+const MAX_COMMANDS: u64 = 2_000_000;
+const MAX_DIGESTS: u64 = 1_000_000;
+const MAX_EVENTS: u64 = 100_000;
 
 /// Why a save was refused, at save or at load: one variant and one message
-/// per reason (ADR 0010 V1). The message names the first mismatch.
+/// per reason (ADR 0010 V1). The message names the first mismatch. The four
+/// number variants carry what the file has and what this build reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SaveError {
     /// Not a save file (wrong or missing magic).
     NotASave,
     /// Another container version: made by an older or a newer STA64.
-    ContainerVersion { found: u16 },
-    /// The snapshot format inside is one this build does not read.
-    SnapshotFormat { found: u16 },
-    /// The replay format the journal was written for is one this build does not read.
-    ReplayFormat { found: u16 },
+    ContainerVersion { found: u16, expected: u16 },
+    /// The snapshot format inside is not the one this build reads.
+    SnapshotFormat { found: u16, expected: u16 },
+    /// The replay format the journal was written for is not the one this build reads.
+    ReplayFormat { found: u16, expected: u16 },
     /// Another seam revision: commands may not decode alike.
-    SeamRev { found: u32 },
+    SeamRev { found: u32, expected: u32 },
     /// Truncated, garbled or inconsistent.
     Damaged(String),
     /// The content is not the content the game was played on (other content
@@ -80,8 +113,12 @@ pub enum SaveError {
     /// The match's map has no file (a generated or unsaved map): not
     /// supported; needs a decision.
     NoMapFile,
-    /// The inputs of a save do not fit together (journal of another run, a
-    /// header too long, ...).
+    /// A save of an observer (no local player): not supported; V7 keeps it
+    /// to a player's own match.
+    Observer,
+    /// The inputs or the parts of a save do not fit together (journal of
+    /// another run, a header whose setup is not the snapshot's, a header
+    /// too long, a controller for a non-computer seat, ...).
     Invalid(String),
     /// Reading or writing the file failed.
     Io(String),
@@ -89,23 +126,29 @@ pub enum SaveError {
 
 impl std::fmt::Display for SaveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let when = |older: bool| if older { "an older" } else { "a newer" };
         match self {
             SaveError::NotASave => write!(f, "not a STA64 save file"),
-            SaveError::ContainerVersion { found } if *found < CONTAINER_VERSION => {
-                write!(f, "save container version {found} is from an older STA64 and cannot be loaded (this build reads version {CONTAINER_VERSION}); saves are not migrated")
-            }
-            SaveError::ContainerVersion { found } => {
-                write!(f, "save container version {found} is from a newer STA64 (this build reads version {CONTAINER_VERSION})")
-            }
-            SaveError::SnapshotFormat { found } => {
-                write!(f, "the save holds snapshot format {found}, which this build does not read (saves are not migrated)")
-            }
-            SaveError::ReplayFormat { found } => {
-                write!(f, "the save holds replay format {found}, which this build does not read (saves are not migrated)")
-            }
-            SaveError::SeamRev { found } => {
-                write!(f, "the save was made against seam revision {found}, this build is {SEAM_REV} (saves are not migrated)")
-            }
+            SaveError::ContainerVersion { found, expected } => write!(
+                f,
+                "save container version {found} is from {} STA64 (this build reads version {expected}); saves are not migrated",
+                when(found < expected)
+            ),
+            SaveError::SnapshotFormat { found, expected } => write!(
+                f,
+                "the save holds snapshot format {found} from {} STA64 (this build reads format {expected}); saves are not migrated",
+                when(found < expected)
+            ),
+            SaveError::ReplayFormat { found, expected } => write!(
+                f,
+                "the save holds replay format {found} from {} STA64 (this build reads format {expected}); saves are not migrated",
+                when(found < expected)
+            ),
+            SaveError::SeamRev { found, expected } => write!(
+                f,
+                "the save was made against seam revision {found} from {} STA64 (this build is {expected}); saves are not migrated",
+                when(found < expected)
+            ),
             SaveError::Damaged(why) => write!(f, "the save file is damaged: {why}"),
             SaveError::ContentMismatch { saved, given, lineage, packs } => {
                 write!(f, "the save was made on other content: hash {saved:#018x}, this install has {given:#018x} (it was {lineage}")?;
@@ -129,7 +172,8 @@ impl std::fmt::Display for SaveError {
                 write!(f, "a networked game cannot be saved or loaded (seat {} is remote)", seat.0)
             }
             SaveError::NoMapFile => write!(f, "this match's map has no map file (a generated or unsaved map); such matches cannot be saved yet"),
-            SaveError::Invalid(why) => write!(f, "cannot save: {why}"),
+            SaveError::Observer => write!(f, "a game watched as an observer cannot be saved (there is no local player)"),
+            SaveError::Invalid(why) => write!(f, "the parts of the save do not fit together: {why}"),
             SaveError::Io(why) => write!(f, "file error: {why}"),
         }
     }
@@ -155,13 +199,17 @@ pub struct SeatController {
     pub data: Vec<u8>,
 }
 
-/// The journal section: the replay without its map.
-#[derive(Serialize, Deserialize)]
-struct JournalRec {
-    commands: Vec<Logged>,
-    digests: Vec<(Tick, u64)>,
+/// The journal section: the replay without its map. The field order is the
+/// encoding order and is decoded one field at a time, so that the counts of
+/// the two lists are bounded before they are decoded.
+#[derive(Serialize)]
+struct JournalRec<'a> {
     end_tick: Tick,
+    digests: &'a [(Tick, u64)],
+    commands: &'a [Logged],
 }
+
+type Digests = Vec<(Tick, u64)>;
 
 /// A restored controller and the seat it plays.
 pub type SeatBox = (PlayerId, Box<dyn Controller>);
@@ -181,6 +229,13 @@ pub struct Loaded {
     /// One record per computer seat, ascending seat. Restore them with
     /// [`Loaded::restore_controllers`] or by hand.
     pub controllers: Vec<SeatController>,
+    /// The events of the tick the save was made at (what the last `step`
+    /// returned). **Give them to every restored controller's first `think`**
+    /// as the `events` argument, exactly as the previous step's events are
+    /// given between two ticks of an uninterrupted game; without them a
+    /// controller that reads events does not continue as the uninterrupted
+    /// one would (ADR 0010 V5).
+    pub events: Vec<SimEvent>,
     pub client: ClientState,
 }
 
@@ -197,7 +252,8 @@ impl Loaded {
     /// name, record)`, which belongs to the controller's crate (it builds the
     /// controller and takes the record back) and refuses with a reason an
     /// unknown name or a record version it does not read: that refuses the
-    /// load, naming the seat.
+    /// load, naming the seat. Then give [`Loaded::events`] to each
+    /// controller's first `think`.
     pub fn restore_controllers(
         &self,
         mut restore: impl FnMut(PlayerId, &str, &ControllerState) -> Result<Box<dyn Controller>, String>,
@@ -214,25 +270,88 @@ impl Loaded {
     }
 }
 
-fn refuse_remote(seats: &[replay::SeatRec]) -> Result<(), SaveError> {
+fn refuse_remote(seats: &[SeatRec]) -> Result<(), SaveError> {
     match seats.iter().find(|s| matches!(s.control, ControlRec::Remote | ControlRec::RemoteAi(_))) {
         Some(s) => Err(SaveError::Networked { seat: s.id }),
         None => Ok(()),
     }
 }
 
+/// A stable name for a content profile, written to the header. (Not
+/// `Debug`: a rename of a variant must not change the file. A new variant is
+/// a compile error here, so its name is chosen on purpose.)
+fn profile_name(p: Profile) -> &'static str {
+    match p {
+        Profile::Native => "native",
+        Profile::Fo4 => "fo4",
+        Profile::Fo3 => "fo3",
+        Profile::Sta2Classic => "sta2classic",
+        Profile::Sta1Classic => "sta1classic",
+    }
+}
+
+/// The seats of a header or a replay: a plausible set (at most
+/// [`MAX_SEATS`], real player slots, ascending and unique ids).
+fn check_seats(seats: &[SeatRec], local: Option<PlayerId>) -> Result<(), SaveError> {
+    let bad = |why: &str| Err(SaveError::Invalid(why.to_string()));
+    if seats.is_empty() || seats.len() > MAX_SEATS {
+        return bad("the number of seats is not between 1 and 8");
+    }
+    if seats.iter().any(|s| !s.id.is_player()) || seats.windows(2).any(|w| w[0].id >= w[1].id) {
+        return bad("the seats are not ascending, unique player slots");
+    }
+    match local {
+        None => Err(SaveError::Observer),
+        Some(l) if seats.iter().any(|s| s.id == l) => Ok(()),
+        Some(_) => bad("the local seat is not one of the seats"),
+    }
+}
+
+/// The setup a header or a replay records against the sim's own: the seats
+/// and their teams, which seats a computer plays, the Director's Cut option.
+/// A mismatch refuses, so a forged header cannot leave a computer seat
+/// without its controller or give the rebuilt replay another setup than the
+/// game's.
+fn cross_check(sim: &Sim, seats: &[SeatRec], options: &GameOptions) -> Result<(), SaveError> {
+    let bad = |why: &str| Err(SaveError::Invalid(format!("the recorded setup is not the game's: {why}")));
+    let mut theirs: Vec<(PlayerId, sta_core::TeamId)> = seats.iter().map(|s| (s.id, s.team)).collect();
+    theirs.sort();
+    let mut mine = sim.players.clone();
+    mine.sort();
+    if theirs != mine {
+        return bad("the seats or their teams differ");
+    }
+    let mut ai: Vec<PlayerId> =
+        seats.iter().filter(|s| matches!(s.control, ControlRec::Ai(_) | ControlRec::RemoteAi(_))).map(|s| s.id).collect();
+    ai.sort();
+    let mut sim_ai = sim.ai_seats.clone();
+    sim_ai.sort();
+    if ai != sim_ai {
+        return bad("the computer seats differ");
+    }
+    if options.directors_cut != sim.directors_cut {
+        return bad("the Director's Cut option differs");
+    }
+    Ok(())
+}
+
 /// Writes a save of `sim` at its current tick.
 ///
 /// `replay` is the game's replay so far (its journal is kept, its map is
-/// not); it must end at the sim's tick and have been recorded on the same
-/// content. `controllers` holds the controller of every computer seat; one
-/// that has not opted in to saving ([`Controller::save_state`]) refuses the
-/// save with its seat named. `info` carries what only the caller knows.
+/// not); it must end at the sim's tick, have been recorded on the same
+/// content and describe the same setup as the sim. `controllers` holds the
+/// controller of every computer seat; one that has not opted in to saving
+/// ([`Controller::save_state`]) refuses the save with its seat named.
+/// `events` are the events the last `step` returned (what the controllers are
+/// given at their next `think`): they are kept and handed back by [`load`].
+/// `info` carries what only the caller knows; `info.local_seat` must be a
+/// seat of the game (a save without one is an observer's: refused).
 pub fn save(
     sim: &Sim,
     replay: &Replay,
     info: &SaveInfo,
     controllers: &[(PlayerId, &dyn Controller)],
+    events: &[SimEvent],
     client: &ClientState,
 ) -> Result<Vec<u8>, SaveError> {
     if info.kind == GameKind::Mission {
@@ -242,6 +361,7 @@ pub fn save(
         return Err(SaveError::NoMapFile);
     };
     refuse_remote(&replay.players)?;
+    check_seats(&replay.players, info.local_seat)?;
     let snapshot_bytes = sim.snapshot();
     let snap = snapshot::snapshot_info(&snapshot_bytes).map_err(|e| SaveError::Invalid(e.to_string()))?;
     if snap.content_hash == 0 {
@@ -253,6 +373,7 @@ pub fn save(
     if replay.end_tick != sim.tick {
         return Err(SaveError::Invalid(format!("the journal ends at tick {}, the sim is at tick {}", replay.end_tick, sim.tick)));
     }
+    cross_check(sim, &replay.players, &replay.options)?;
     let mut records = Vec::new();
     for seat in &replay.players {
         let ControlRec::Ai(name) = &seat.control else { continue };
@@ -279,7 +400,7 @@ pub fn save(
         content_hash: snap.content_hash,
         lineage: snap.provenance.lineage,
         packs: snap.provenance.packs,
-        profile: sim.content().map_or_else(String::new, |c| format!("{:?}", c.profile())),
+        profile: sim.content().map_or_else(String::new, |c| profile_name(c.profile()).to_string()),
         install_key: info.install_key.clone(),
         mod_key: info.mod_key.clone(),
         map,
@@ -295,23 +416,28 @@ pub fn save(
         made_at: info.made_at,
         description: info.description.clone(),
     };
-    let journal = JournalRec { commands: replay.commands.clone(), digests: replay.digests.clone(), end_tick: replay.end_tick };
+    let journal = JournalRec { end_tick: replay.end_tick, digests: &replay.digests, commands: &replay.commands };
     let invalid = |e: postcard::Error| SaveError::Invalid(e.to_string());
-    container::seal(
+    let bytes = container::seal(
         &header,
         &container::Parts {
             snapshot: snapshot_bytes,
             journal: postcard::to_allocvec(&journal).map_err(invalid)?,
             controllers: postcard::to_allocvec(&records).map_err(invalid)?,
+            events: postcard::to_allocvec(events).map_err(invalid)?,
             client_version: client.version,
             client: client.data.clone(),
         },
-    )
+    )?;
+    if bytes.len() > MAX_FILE {
+        return Err(SaveError::Invalid(format!("the save is {} bytes, more than the {MAX_FILE} a save may have", bytes.len())));
+    }
+    Ok(bytes)
 }
 
 /// Reads the header of a save from the start of its bytes (a prefix as long
-/// as [`header_len_hint`] says is enough), checking magic, container version
-/// and the header's checksum. Does not look at a section.
+/// as [`header_len_hint`] is enough), checking magic, the four numbers by
+/// exact match and the header's checksum. Does not look at a section.
 pub fn read_header(bytes: &[u8]) -> Result<Header, SaveError> {
     container::parse_header(bytes).map(|(h, _)| h)
 }
@@ -323,51 +449,30 @@ pub const fn header_len_hint() -> usize {
 
 impl Header {
     /// Why a build holding `content` (or none, for a list that does not know
-    /// yet) cannot load this save, from the header alone: the formats, the
-    /// game kind, a networked seat and the content. `None` means the
-    /// header raises no objection (the map and the sections are checked by
-    /// [`load`]).
+    /// yet) cannot load this save, from the header alone: a mission, a
+    /// networked or observer game, an implausible set of seats, other
+    /// content. (The numbers that decide loadability were checked when the
+    /// header was read.) `None` means the header raises no objection (the
+    /// map and the sections are checked by [`load`]).
     pub fn refusal(&self, content: Option<&ContentDb>) -> Option<SaveError> {
-        if let Some(e) = self.format_refusal() {
+        if let Some(e) = self.setup_refusal() {
             return Some(e);
         }
         content.and_then(|db| self.content_refusal(db))
     }
 
-    /// The snapshot's and the replay's own checks of their formats and the
-    /// seam revision, run on a stub that carries only what they look at, so
-    /// that what this build reads is decided in one place (their modules).
-    fn format_refusal(&self) -> Option<SaveError> {
-        let mut snap = Vec::new();
-        snap.extend_from_slice(&snapshot::MAGIC);
-        snap.extend_from_slice(&self.snapshot_format.to_le_bytes());
-        snap.extend_from_slice(&self.seam_rev.to_le_bytes());
-        snap.extend_from_slice(&self.content_hash.to_le_bytes());
-        snap.extend_from_slice(&[0, 0]);
-        match snapshot::snapshot_info(&snap) {
-            Err(SnapshotError::FormatVersion { found }) => return Some(SaveError::SnapshotFormat { found }),
-            Err(SnapshotError::SeamRev { found }) => return Some(SaveError::SeamRev { found }),
-            _ => {}
-        }
-        let mut rep = Vec::new();
-        rep.extend_from_slice(&replay::MAGIC);
-        rep.extend_from_slice(&self.replay_format.to_le_bytes());
-        rep.extend(postcard::to_allocvec(&self.seam_rev).unwrap_or_default());
-        match Replay::decode(&rep) {
-            Err(replay::ReplayError::FormatVersion { found }) => return Some(SaveError::ReplayFormat { found }),
-            Err(replay::ReplayError::SeamRev { found }) => return Some(SaveError::SeamRev { found }),
-            _ => {}
-        }
+    fn setup_refusal(&self) -> Option<SaveError> {
         if self.kind == GameKind::Mission {
             return Some(SaveError::Mission);
         }
-        refuse_remote(&self.seats).err()
+        if let Err(e) = refuse_remote(&self.seats) {
+            return Some(e);
+        }
+        check_seats(&self.seats, self.local_seat).err()
     }
 
     fn content_refusal(&self, db: &ContentDb) -> Option<SaveError> {
-        let same = db.hash() == self.content_hash
-            || (!self.options.directors_cut && db.matches_pre_directors_cut_hash(self.content_hash));
-        (!same).then(|| SaveError::ContentMismatch {
+        (db.hash() != self.content_hash).then(|| SaveError::ContentMismatch {
             saved: self.content_hash,
             given: db.hash(),
             lineage: self.lineage.clone(),
@@ -376,14 +481,18 @@ impl Header {
     }
 }
 
-/// Loads a save: checks it in the order of ADR 0010 V1 (container, formats,
-/// damage, content, map, then the sections) and refuses with the first
-/// mismatch. `content` is the database the game is to run on; `map` is the
-/// map file the header names, as the caller read it (`None` if it could not).
-/// Never panics, whatever `bytes` hold.
+/// Loads a save: checks it in the order of ADR 0010 V1 (size, container, the
+/// numbers by exact match, header, damage, content, map, then the sections)
+/// and refuses with the first mismatch. `content` is the database the game is
+/// to run on; `map` is the map file the header names, as the caller read it
+/// (`None` if it could not). The container's parsing is bounded in memory by
+/// the file's size and the caps in this module, whatever `bytes` hold.
 pub fn load(bytes: &[u8], content: Arc<ContentDb>, map: Option<MapSource>) -> Result<Loaded, SaveError> {
+    if bytes.len() > MAX_FILE {
+        return Err(SaveError::Damaged(format!("the file is larger than any save ({} bytes, at most {MAX_FILE})", bytes.len())));
+    }
     let (header, body_at) = container::parse_header(bytes)?;
-    if let Some(e) = header.format_refusal() {
+    if let Some(e) = header.setup_refusal() {
         return Err(e);
     }
     container::verify_whole(bytes, body_at)?;
@@ -401,17 +510,12 @@ pub fn load(bytes: &[u8], content: Arc<ContentDb>, map: Option<MapSource>) -> Re
     if sim.tick != header.tick {
         return Err(SaveError::Damaged("the header's tick is not the snapshot's".into()));
     }
-    let journal: JournalRec = decode(sections.journal, "journal")?;
-    if journal.end_tick != header.tick {
-        return Err(SaveError::Damaged("the journal does not end at the saved tick".into()));
-    }
-    if journal.commands.windows(2).any(|w| w[0].tick > w[1].tick) || journal.commands.iter().any(|c| c.tick >= header.tick) {
-        return Err(SaveError::Damaged("the journal's commands are out of order".into()));
-    }
-    if journal.digests.windows(2).any(|w| w[0].0 >= w[1].0) || journal.digests.iter().any(|d| d.0 > header.tick) {
-        return Err(SaveError::Damaged("the journal's digests are out of order".into()));
-    }
-    let controllers: Vec<SeatController> = decode(sections.controllers, "controller records")?;
+    cross_check(&sim, &header.seats, &header.options)?;
+    let (commands, digests) = decode_journal(sections.journal, header.tick)?;
+    let (events, rest) = take_vec::<SimEvent>(sections.events, MAX_EVENTS, "events")?;
+    ended(rest, "events")?;
+    let (controllers, rest) = take_vec::<SeatController>(sections.controllers, MAX_SEATS as u64, "controller records")?;
+    ended(rest, "controller records")?;
     check_controllers(&header, &controllers)?;
     let replay = Replay {
         seam_rev: SEAM_REV,
@@ -424,9 +528,9 @@ pub fn load(bytes: &[u8], content: Arc<ContentDb>, map: Option<MapSource>) -> Re
         players: header.seats.clone(),
         options: header.options.clone(),
         starts: header.starts,
-        commands: journal.commands,
-        digests: journal.digests,
-        end_tick: journal.end_tick,
+        commands,
+        digests,
+        end_tick: header.tick,
     };
     let info = SaveInfo {
         build_id: header.build_id.clone(),
@@ -441,43 +545,76 @@ pub fn load(bytes: &[u8], content: Arc<ContentDb>, map: Option<MapSource>) -> Re
         description: header.description.clone(),
     };
     let client = ClientState { version: sections.client_version, data: sections.client.to_vec() };
-    Ok(Loaded { sim, replay, header, info, controllers, client })
+    Ok(Loaded { sim, replay, header, info, controllers, events, client })
 }
 
-fn decode<'a, T: Deserialize<'a>>(bytes: &'a [u8], what: &str) -> Result<T, SaveError> {
-    let (value, rest) = postcard::take_from_bytes::<T>(bytes).map_err(|e| SaveError::Damaged(format!("the {what} do not parse: {e}")))?;
-    if !rest.is_empty() {
-        return Err(SaveError::Damaged(format!("the {what} have trailing bytes")));
+fn ended(rest: &[u8], what: &str) -> Result<(), SaveError> {
+    if rest.is_empty() {
+        Ok(())
+    } else {
+        Err(SaveError::Damaged(format!("the {what} have trailing bytes")))
     }
-    Ok(value)
 }
 
-/// The records must be exactly the header's computer seats, by name.
+/// Decodes a postcard list whose count is refused above `max` before the list
+/// is decoded: the count is the list's first bytes (a varint), so a hostile
+/// count costs nothing.
+fn take_vec<'a, T: Deserialize<'a>>(bytes: &'a [u8], max: u64, what: &str) -> Result<(Vec<T>, &'a [u8]), SaveError> {
+    let (n, _) = postcard::take_from_bytes::<u64>(bytes).map_err(|e| SaveError::Damaged(format!("the {what} do not parse: {e}")))?;
+    if n > max {
+        return Err(SaveError::Damaged(format!("too many {what}: {n}, at most {max}")));
+    }
+    postcard::take_from_bytes::<Vec<T>>(bytes).map_err(|e| SaveError::Damaged(format!("the {what} do not parse: {e}")))
+}
+
+/// The journal: end tick, digests, commands; checked for order and against
+/// the saved tick.
+fn decode_journal(bytes: &[u8], tick: Tick) -> Result<(Vec<Logged>, Digests), SaveError> {
+    let parse = |e: postcard::Error| SaveError::Damaged(format!("the journal does not parse: {e}"));
+    let (end_tick, rest) = postcard::take_from_bytes::<Tick>(bytes).map_err(parse)?;
+    if end_tick != tick {
+        return Err(SaveError::Damaged("the journal does not end at the saved tick".into()));
+    }
+    let (digests, rest) = take_vec::<(Tick, u64)>(rest, MAX_DIGESTS, "journal digests")?;
+    let (commands, rest) = take_vec::<Logged>(rest, MAX_COMMANDS, "journal commands")?;
+    ended(rest, "journal")?;
+    if commands.windows(2).any(|w| w[0].tick > w[1].tick) || commands.iter().any(|c| c.tick >= tick) {
+        return Err(SaveError::Damaged("the journal's commands are out of order".into()));
+    }
+    if digests.windows(2).any(|w| w[0].0 >= w[1].0) || digests.iter().any(|d| d.0 > tick) {
+        return Err(SaveError::Damaged("the journal's digests are out of order".into()));
+    }
+    Ok((commands, digests))
+}
+
+/// The records must be exactly the header's computer seats, by name: both
+/// lists ascending by seat (seats are validated ascending; the writer sorts
+/// the records), compared in one pass.
 fn check_controllers(header: &Header, records: &[SeatController]) -> Result<(), SaveError> {
-    let wanted: Vec<(PlayerId, &str)> = header
-        .seats
-        .iter()
-        .filter_map(|s| match &s.control {
-            ControlRec::Ai(name) => Some((s.id, name.as_str())),
-            _ => None,
-        })
-        .collect();
-    for r in records {
-        if !wanted.iter().any(|(id, _)| *id == r.seat) {
-            return Err(SaveError::Damaged(format!("a controller record for seat {}, which is not a computer seat", r.seat.0)));
-        }
+    if records.windows(2).any(|w| w[0].seat >= w[1].seat) {
+        return Err(SaveError::Damaged("the controller records are not ascending by seat".into()));
     }
+    let wanted = header.seats.iter().filter_map(|s| match &s.control {
+        ControlRec::Ai(name) => Some((s.id, name.as_str())),
+        _ => None,
+    });
+    let mut have = records.iter().peekable();
     for (id, name) in wanted {
-        match records.iter().filter(|r| r.seat == id).count() {
-            1 => {}
-            0 => return Err(SaveError::Controller { seat: id, reason: "the save holds no record for it".into() }),
-            _ => return Err(SaveError::Damaged(format!("two controller records for seat {}", id.0))),
+        if let Some(extra) = have.next_if(|r| r.seat < id) {
+            return Err(SaveError::Damaged(format!("a controller record for seat {}, which is not a computer seat", extra.seat.0)));
         }
-        if records.iter().any(|r| r.seat == id && r.name != name) {
-            return Err(SaveError::Damaged(format!("the controller record of seat {} names another controller than the setup", id.0)));
+        match have.next_if(|r| r.seat == id) {
+            None => return Err(SaveError::Controller { seat: id, reason: "the save holds no record for it".into() }),
+            Some(r) if r.name != name => {
+                return Err(SaveError::Damaged(format!("the controller record of seat {} names another controller than the setup", id.0)));
+            }
+            Some(_) => {}
         }
     }
-    Ok(())
+    match have.next() {
+        Some(extra) => Err(SaveError::Damaged(format!("a controller record for seat {}, which is not a computer seat", extra.seat.0))),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]
