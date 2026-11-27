@@ -66,6 +66,26 @@ pub struct SimLink {
     /// A read-only client with no player seat. Only presentation views are unrestricted.
     observer: bool,
     pub(crate) mcp: Option<crate::mcp::SeatControl>,
+    /// Commands handed to the router that no tick has taken yet (single player: the router is local).
+    /// A save keeps them with the client's state, so a load applies them on the next tick as the
+    /// uninterrupted game would (UI-55).
+    in_flight: Vec<Command>,
+}
+
+/// What a load gives a link in place of the game it was built with (UI-55, ADR 0010). Used by the
+/// save module; the allows keep this seam change building alone.
+#[allow(dead_code)]
+pub struct Restored {
+    /// The saved sim, at the saved tick.
+    pub sim: sta_sim::Sim,
+    /// The journal from tick 0 to the saved tick; the link goes on logging into it.
+    pub replay: Replay,
+    /// The computer players, restored.
+    pub controllers: Vec<Box<dyn Controller>>,
+    /// Commands that were on their way to the next tick when the game was saved, in submission order.
+    pub in_flight: Vec<Command>,
+    /// The link's next command number at the save (one counter for player and sandbox commands).
+    pub next_seq: u32,
 }
 
 impl SimLink {
@@ -77,7 +97,45 @@ impl SimLink {
         let systems = source.system_view();
         let warp_phases = source.warp_phases();
         let impulse_caps = source.impulse_caps();
-        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, cargo, nodes, systems, warp_phases, impulse_caps, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None, lifted: None, fog_lifted: false, match_fog_lifted: false, observer: false, mcp: None }
+        SimLink { source: SyncCell::new(source), router: SyncCell::new(router), prev: view.clone(), curr: view, production, cargo, nodes, systems, warp_phases, impulse_caps, player, seq: 0, controllers: SyncCell::new(Vec::new()), controller_commands: 0, log: None, lifted: None, fog_lifted: false, match_fog_lifted: false, observer: false, mcp: None, in_flight: Vec::new() }
+    }
+
+    /// Commands submitted and not yet taken by a tick, in submission order (UI-55: a save keeps them).
+    #[allow(dead_code)]
+    pub fn in_flight(&self) -> &[Command] {
+        &self.in_flight
+    }
+
+    /// The computer players, for a save to ask each for its record.
+    #[allow(dead_code)]
+    pub fn controller_refs(&mut self) -> &[Box<dyn Controller>] {
+        self.controllers.get().as_slice()
+    }
+
+    /// The next command number: one counter for the player's and the sandbox's commands (a save stores it).
+    #[allow(dead_code)]
+    pub fn next_seq(&self) -> u32 {
+        self.seq
+    }
+
+    /// Replaces the game this link runs with a saved one (UI-55), as the editor's undo swaps the source:
+    /// the views are made again, the journal continues the saved one, the command counter is the saved
+    /// one and the in-flight commands go to a new router in their order. The controllers do not think:
+    /// a save is taken after they thought about the last step, and their commands are in flight.
+    #[allow(dead_code)]
+    pub(crate) fn restore(&mut self, r: Restored) {
+        let Restored { sim, replay, controllers, in_flight, next_seq } = r;
+        *self.source.get() = Box::new(sim);
+        *self.router.get() = Box::new(sta_sim::command::LocalRouter::new());
+        self.seq = next_seq;
+        self.in_flight.clear();
+        for c in in_flight {
+            self.in_flight.push(c.clone());
+            self.router.get().submit(c);
+        }
+        self.controllers = SyncCell::new(controllers);
+        self.refresh_views();
+        self.log = Some(replay);
     }
 
     pub(crate) fn with_mcp_seat(mut self, player: PlayerId, bounds: (sta_sim::Vec3, sta_sim::Vec3)) -> Self {
@@ -108,6 +166,13 @@ impl SimLink {
     }
 
     fn refresh_editor_views(&mut self) {
+        self.refresh_views();
+        // A command replay cannot represent a placement edit between ticks.
+        self.log = None;
+        self.refresh_lifted();
+    }
+
+    fn refresh_views(&mut self) {
         let source = self.source.get();
         self.curr = source.view();
         self.prev = self.curr.clone();
@@ -117,8 +182,6 @@ impl SimLink {
         self.systems = source.system_view();
         self.warp_phases = source.warp_phases();
         self.impulse_caps = source.impulse_caps();
-        // A command replay cannot represent a placement edit between ticks.
-        self.log = None;
         self.refresh_lifted();
     }
 
@@ -259,6 +322,7 @@ impl SimLink {
         }
         let cmd = Command { player: self.player, seq: self.seq, kind };
         self.seq += 1;
+        self.in_flight.push(cmd.clone());
         self.router.get().submit(cmd);
     }
 
@@ -272,6 +336,7 @@ impl SimLink {
         }
         let cmd = Command { player: PlayerId::BENCH, seq: self.seq, kind };
         self.seq += 1;
+        self.in_flight.push(cmd.clone());
         self.router.get().submit(cmd);
     }
 
@@ -313,6 +378,7 @@ impl SimLink {
     /// Run one tick if the router has its commands; `None` on a stall.
     pub(crate) fn tick(&mut self) -> Option<Vec<SimEvent>> {
         let mut batch = self.router.get().take_ready(self.curr.tick + 1)?;
+        self.in_flight.clear();
         let submitted = self.mcp.as_mut().map(|seat| seat.merge_orders(&mut batch)).unwrap_or_default();
         let before = self.curr.tick;
         let out = self.source.get().step(&batch);
@@ -344,6 +410,7 @@ impl SimLink {
             if self.controller_commands == 1 || self.controller_commands.is_multiple_of(50) {
                 info!("ai: command {} at tick {}: seat {} {:?}", self.controller_commands, self.curr.tick, cmd.player.0, cmd.kind);
             }
+            self.in_flight.push(cmd.clone());
             self.router.get().submit(cmd);
         }
         Some(out.events)
@@ -690,6 +757,38 @@ mod tests {
         assert_eq!(queued.len(), 1);
         assert_eq!(queued[0].player, PlayerId::SCRIPT);
         assert!(matches!(&queued[0].kind, CommandKind::Edit(sta_sim::command::Edit::Kill(killed)) if *killed == id));
+    }
+
+    /// UI-55: a restore takes the saved counter and the commands in flight in order, and no controller thinks.
+    #[test]
+    fn a_restore_takes_the_saved_counter_and_in_flight_commands_and_does_not_think() {
+        struct Thinks(Arc<std::sync::atomic::AtomicU32>);
+        impl Controller for Thinks {
+            fn think(&mut self, _: &WorldView, _: &[SimEvent], _: &mut Vec<Command>) {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let cmd = |player: u8, seq: u32| Command { player: PlayerId(player), seq, kind: CommandKind::Order(Order::Stop { units: vec![EntityId(1)] }) };
+        let replay = Replay::new(&sta_sim::setup::GameSetup {
+            seed: 1,
+            map: Arc::new(sta_content::fake::two_bases()),
+            content: Arc::new(sta_content::fake::db()),
+            players: Vec::new(),
+            options: Default::default(),
+        });
+        let thinks = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let mut link = SimLink::new(Box::new(Sim::new(1)), Box::new(LocalRouter::new()), PlayerId(0));
+        let flight = vec![cmd(0, 5), cmd(255, 6), cmd(0, 7)];
+        link.restore(Restored { sim: Sim::new(1), replay, controllers: vec![Box::new(Thinks(thinks.clone()))], in_flight: flight.clone(), next_seq: 8 });
+        assert_eq!(thinks.load(std::sync::atomic::Ordering::SeqCst), 0, "no think on restore");
+        assert_eq!((link.next_seq(), link.in_flight()), (8, flight.as_slice()));
+        link.submit(CommandKind::Order(Order::Stop { units: vec![EntityId(1)] }));
+        assert_eq!(link.next_seq(), 9);
+        assert_eq!(link.in_flight().len(), 4);
+        link.tick().unwrap();
+        assert!(link.in_flight().is_empty(), "a tick takes them");
+        assert_eq!(link.replay().unwrap().commands.len(), 4, "the journal logged them when they were stepped");
+        assert_eq!(thinks.load(std::sync::atomic::Ordering::SeqCst), 1, "the controller thinks after the step");
     }
 
     #[derive(Resource, Default)]
