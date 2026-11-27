@@ -216,7 +216,7 @@ fn pick_bodies(mut commands: Commands, link: Res<SimLink>, content: Res<ContentR
 }
 
 /// What `sync_units` last drew: the view, the local player and whether a cineractive revealed the view.
-type SeenKey = (Arc<WorldView>, Option<PlayerId>, bool);
+type SeenKey = (Arc<WorldView>, Option<PlayerId>, bool, Option<u32>);
 
 /// The view-spawned units `sync_units` updates in place.
 type LiveUnits = (&'static mut HullShare, &'static mut UnitOwner, Has<Cloaked>, Option<&'static mut SystemsOff>);
@@ -236,6 +236,7 @@ pub fn sync_units(
     mut placed: Query<(Option<&mut HullShare>, Option<&mut SystemsOff>), Without<FromView>>,
     mut seen: Local<Option<SeenKey>>,
     content: Option<Res<ContentRes>>,
+    fog: Option<Res<crate::render::fog::FogState>>,
 ) {
     // Entities the map view spawned for its own ships belong to the link too.
     for (e, u) in &existing {
@@ -245,10 +246,11 @@ pub fn sync_units(
     // While a cineractive runs the sensors do not limit the view (`drawn_units`); the next frame after
     // it ends the local player's sight applies again and the revealed enemies are despawned below.
     let reveal = cinematic_reveal(cine.as_deref());
-    if seen.as_ref().is_some_and(|(v, p, r)| Arc::ptr_eq(v, curr) && *p == local.0 && *r == reveal) {
+    let fog_updates = fog.as_deref().map(|f| f.updates);
+    if seen.as_ref().is_some_and(|(v, p, r, f)| Arc::ptr_eq(v, curr) && *p == local.0 && *r == reveal && *f == fog_updates) {
         return;
     }
-    *seen = Some((curr.clone(), local.0, reveal));
+    *seen = Some((curr.clone(), local.0, reveal, fog_updates));
 
     let mut want: BTreeMap<EntityId, &sta_sim::UnitView> = drawn_units(curr, local.0, reveal).into_iter().map(|u| (u.id, u)).collect();
     // A neutral planet or backdrop is scenery and stays drawn outside the sensors. Grade: that the original
@@ -259,7 +261,13 @@ pub fn sync_units(
         && let Some(content) = &content
     {
         for u in &curr.units {
-            if u.owner == sta_sim::world::NEUTRAL && content.0.unit(u.def).is_some_and(|d| is_scenery_class(&d.class.0)) {
+            let Some(def) = content.0.unit(u.def).filter(|d| u.owner == sta_sim::world::NEUTRAL && is_scenery_class(&d.class.0)) else { continue };
+            // #1146: a planet never seen is not drawn (a backdrop object stays as it was; not decided). Rule and
+            // grade: `render::fog_objects`. Out of sight it stays drawn as before.
+            let hidden = fog.is_some()
+                && !def.class.0.eq_ignore_ascii_case("background_obj")
+                && crate::render::fog_objects::sight_now(fog.as_deref(), local.0, reveal, u.pos.x.to_f32(), u.pos.z.to_f32(), def.radius.to_f32()) == crate::render::fog_objects::Sight::Never;
+            if !hidden {
                 want.entry(u.id).or_insert(u);
             }
         }
@@ -1344,6 +1352,42 @@ mod view_tests {
         }
         let ids = roots(&mut app).into_iter().map(|r| r.0.0).collect::<BTreeSet<_>>();
         assert_eq!(ids, BTreeSet::from([1, 2]), "the planet stays, the unseen neutral ship does not");
+    }
+
+    /// #1146: with a fog grid, a planet never seen is not drawn, one in sight or seen before is, and a
+    /// backdrop object (not decided) stays whatever the grid says.
+    #[test]
+    fn a_planet_never_seen_is_not_drawn_and_a_backdrop_is() {
+        use crate::render::fog::{FogGrid, FogState};
+        use sta_sim::world::NEUTRAL;
+        let db = sta_content::ContentDb::builder()
+            .unit(sta_content::UnitDef::new("t_planet", "planet_obj"))
+            .unit(sta_content::UnitDef::new("t_backdrop", "background_obj"))
+            .build()
+            .unwrap();
+        let mut planet = unit(2, NEUTRAL.0, 100, UnitFlags::default());
+        planet.def = db.key("t_planet").unwrap();
+        let mut back = unit(3, NEUTRAL.0, 100, UnitFlags::default());
+        back.def = db.key("t_backdrop").unwrap();
+        let v = view(0, vec![unit(1, 1, 100, UnitFlags::default()), planet, back], vec![(PlayerId(1), vec![EntityId(1)])]);
+        let mut app = app_with(Box::new(Views(vec![v], 0)), Some(PlayerId(1)));
+        app.insert_resource(ContentRes(Arc::new(db)));
+        let mut grid = FogGrid::new([-4096.0, -4096.0], [4096.0, 4096.0]);
+        let at = unit(2, 0, 100, UnitFlags::default()).pos;
+        let (px, pz) = (at.x.to_f32(), at.z.to_f32());
+        let ids = |app: &mut App| roots(app).into_iter().map(|r| r.0.0).collect::<BTreeSet<_>>();
+        app.insert_resource(FogState { grid: grid.clone(), updates: 1 });
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(ids(&mut app), BTreeSet::from([1, 3]), "the planet was never seen");
+        let c = grid.cell_of(px, pz).unwrap();
+        grid.set_cell_for_test(c % grid.w, c / grid.w, false, true);
+        app.insert_resource(FogState { grid: grid.clone(), updates: 2 });
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(ids(&mut app), BTreeSet::from([1, 2, 3]), "seen before: drawn as it was before this step");
     }
 
     #[test]
