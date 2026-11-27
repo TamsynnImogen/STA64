@@ -2,11 +2,22 @@
 # agent-cargo: run cargo under the build policy that agent sessions share on
 # one machine (AGENTS.md, "Builds"). Not used by CI.
 #
-#   tools/agent-cargo [--heavy|--light|--check] [--queue|--no-queue] [--dry-run] <cargo args...>
+#   tools/agent-cargo [--heavy|--light|--check] [--queue|--no-queue] [--incremental] [--dry-run] <cargo args...>
 #   tools/agent-cargo --bench [--dry-run] <command...>   (not cargo; see below)
 #
 # Policy: low priority (renice 19), one build per lock class at a time (flock),
 # `--jobs 2`, CARGO_INCREMENTAL=0, CARGO_PROFILE_DEV_DEBUG=0.
+#
+# Incremental builds (opt-in, off by default): `--incremental` or
+# STA64_INCREMENTAL=1 leaves CARGO_INCREMENTAL unset in cargo's environment
+# (also when the caller exported 0 or 1; 1 makes sccache abort), so the
+# workspace crates build incrementally while the third-party dependencies stay
+# cached by sccache (sccache does not cache the incremental crates). Measured
+# 3.5 to 9 times faster edit cycles at the same job count; costs 2 to 3 GB of
+# `incremental/` per worktree `target/`. Job counts and all other policy are
+# unchanged. Use it while iterating on one crate in one worktree, not for
+# one-off checks. Ignored, with a notice, for the shared check directory
+# (--check, `check --workspace`): worktrees with different sources share it.
 #
 #   --heavy   lock heavy.lock; anything compiling sta64 or a Bevy crate. A second
 #             slot, heavy2.lock, is allowed while no original-game bench session
@@ -91,6 +102,7 @@ set -u
 dry=0
 class=""
 qflag=""
+iflag=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --heavy) class=heavy ;;
@@ -100,6 +112,7 @@ while [ $# -gt 0 ]; do
     --dry-run) dry=1 ;;
     --queue) qflag=1 ;;
     --no-queue) qflag=0 ;;
+    --incremental) iflag=1 ;;
     --help|-h) sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) break ;;
   esac
@@ -182,8 +195,21 @@ qdir=$lock_dir/queue/$class
 # Environment for this invocation only.
 # CARGO_BUILD_JOBS is `--jobs 2` without touching the arguments (after `--`
 # they would reach the test binary); an explicit -j/--jobs wins.
-envs=(CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0)
+envs=(CARGO_PROFILE_DEV_DEBUG=0)
 [ "$has_jobs" = 0 ] && envs+=(CARGO_BUILD_JOBS=2)
+# Incremental compilation (opt-in): CARGO_INCREMENTAL must be UNSET in the child
+# (cargo's dev profile then compiles the workspace crates incrementally; =1 makes
+# sccache abort). Never for the shared check directory.
+incr=0; unsets=()
+[ "${STA64_INCREMENTAL:-0}" = 1 ] && incr=1
+[ -n "$iflag" ] && incr=$iflag
+if [ "$incr" = 1 ] && [ "$class" = check ]; then
+  echo "agent-cargo: incremental ignored for the shared check directory (it is shared by worktrees with different sources); CARGO_INCREMENTAL=0" >&2
+  incr=0
+fi
+if [ "$class" = bench ]; then :
+elif [ "$incr" = 1 ]; then unsets=(-u CARGO_INCREMENTAL)
+else envs+=(CARGO_INCREMENTAL=0); fi
 check_dir=${STA64_CHECK_DIR:-$main_root/.claude/target-check}
 if [ "$class" = check ] && [ "$dry" = 0 ] && [ -n "${STA64_LOCK_DIR:-}" ] && [ -z "${STA64_CHECK_DIR:-}" ]; then
   # A lock directory that is not the live one guards nothing about the live check directory.
@@ -229,6 +255,7 @@ if [ "$dry" = 1 ]; then
   [ "$class" = check ] && echo "stamp:  $check_dir/.agent-cargo-worktree = $here (differs: workspace crates' fingerprints are deleted first)"
   echo "sccache: $([ "$sccache_on" = 1 ] && echo on || echo off)"
   for e in "${envs[@]}"; do echo "env:    $e"; done
+  [ "${#unsets[@]}" -gt 0 ] && echo "env:    unset CARGO_INCREMENTAL (incremental on)"
   if [ "$class" = bench ]; then printf 'cmd:   '; else printf 'cmd:    cargo'; fi
   printf ' %q' "${args[@]}"; echo
   exit 0
@@ -401,7 +428,7 @@ fi
 # so a daemon outliving cargo cannot keep the lock. (A server that dies
 # mid-build is restarted by rustc with fd 9 closed too, see below.)
 if [ "$sccache_on" = 1 ]; then
-  env "${envs[@]}" sccache --start-server >/dev/null 2>&1 9>&- || true
+  env ${unsets[@]+"${unsets[@]}"} "${envs[@]}" sccache --start-server >/dev/null 2>&1 9>&- || true
 fi
 
 # Run cargo as a child with the lock descriptor closed: only this script holds
@@ -410,7 +437,7 @@ fi
 if [ "$class" = bench ]; then
   env "${envs[@]}" "${args[@]}" 9>&- &
 else
-  env "${envs[@]}" cargo "${args[@]}" 9>&- &
+  env ${unsets[@]+"${unsets[@]}"} "${envs[@]}" cargo "${args[@]}" 9>&- &
 fi
 pid=$!
 trap 'kill -TERM "$pid" 2>/dev/null' TERM INT HUP
