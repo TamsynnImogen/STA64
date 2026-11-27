@@ -21,6 +21,7 @@ pub mod confinement;
 pub mod db;
 pub mod def;
 pub mod digest;
+pub mod explosion;
 pub mod fake;
 pub mod features;
 pub mod gui_cfg;
@@ -52,6 +53,7 @@ pub use confinement::{ConfinementInitial, ConfinementOverrides, ConfinementRules
 pub use a1_physics::{A1Borg, A1Dynamics};
 pub use db::{ContentBuilder, ContentDb, DEFAULT_TECH_TREE};
 pub use def::{A1BaseOfficers, A1SpecialDef, A1SpecialKind, A2Effect, A2SpecialDef, A2Target, BuildDef, CasualtyDef, ClassLabel, ColonizePodDef, DefRef, FederationWeaponDef, FireArc, FxRefs, Hardpoint, LaunchPoint, Lookup, MoveStats, NebulaEffects, NebulaPathing, OrdnanceCrewLoss, RepairDef, ResourceWeaponDef, SelfDestructBlast, ShieldDef, ShotFlare, ShotLight, ShotLook, ShotScale, SoundRefs, TargetMaskDef, ToHitDef, TradeGood, TradeStationDef, TransportDef, UnitDef, UnitStatsDef, WeaponBaseDef, WeaponDef, WeaponKind};
+pub use explosion::{ChunkCfg, ExplosionDef, ExplosionTable, ShockwaveDef};
 pub use features::{Features, Profile};
 pub use orbital_income::{NodeIncome, StationMining};
 pub use planet::PlanetRole;
