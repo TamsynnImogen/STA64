@@ -38,8 +38,10 @@ impl Listing {
     }
 
     /// The linear sweep of the image's code sections.
-    pub fn from_image(img: &dyn Image) -> Self {
-        Self::new(disassemble(img))
+    ///
+    /// Fails for an image with a COFF symbol table (see [`disassemble`]).
+    pub fn from_image(img: &dyn Image) -> crate::Result<Self> {
+        Ok(Self::new(disassemble(img)?))
     }
 
     /// The lines the Python tools keep of the reference tool's text, for parity runs.
@@ -54,7 +56,7 @@ pub fn parse_objdump(text: &str) -> Vec<Ins> {
     let mut out = Vec::new();
     for line in text.split('\n') {
         let l = line.trim_start();
-        let n = l.bytes().take_while(u8::is_ascii_hexdigit).count();
+        let n = l.bytes().take_while(|&b| matches!(b, b'0'..=b'9' | b'a'..=b'f')).count();
         if n == 0 || !l[n..].starts_with(":\t") {
             continue;
         }
@@ -70,7 +72,16 @@ pub fn parse_objdump(text: &str) -> Vec<Ins> {
 }
 
 /// The listing of every code section of the image, in section order.
-pub fn disassemble(img: &dyn Image) -> Vec<Ins> {
+///
+/// A file with a COFF symbol table is refused with a decode error: the reference tool prints
+/// symbol names after branch targets and restarts its sweep at every symbol, which this listing
+/// does not reproduce, so the text would silently differ from what the Python tools read.
+pub fn disassemble(img: &dyn Image) -> crate::Result<Vec<Ins>> {
+    if img.has_symbol_table() {
+        return Err(crate::DecodeError::new(
+            "the file has a COFF symbol table (the reference disassembler annotates branch targets and restarts at symbols; not reproduced)",
+        ));
+    }
     let mut out = Vec::new();
     for s in img.sections() {
         if !sweep::is_swept(s) {
@@ -82,5 +93,5 @@ pub fn disassemble(img: &dyn Image) -> Vec<Ins> {
         let base = img.base().wrapping_add(s.va);
         disassemble_bytes(base, bytes, &mut out);
     }
-    out
+    Ok(out)
 }

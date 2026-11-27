@@ -45,6 +45,12 @@ pub trait Image {
     fn imports(&self) -> &IndexMap<u32, (String, String)>;
     /// Size field of the export data directory (0 when there is none).
     fn export_size(&self) -> u32;
+    /// The file carries a COFF symbol table. The reference disassembler then names branch
+    /// targets after symbols and restarts its sweep at each symbol; the listing does not
+    /// reproduce that, so it refuses such a file.
+    fn has_symbol_table(&self) -> bool {
+        false
+    }
 
     /// File offset of an RVA, or `None` outside every section's raw data (the first section
     /// that contains it wins).
