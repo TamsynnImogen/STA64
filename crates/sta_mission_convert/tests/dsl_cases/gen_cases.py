@@ -6,6 +6,11 @@ cases.txt. Deterministic: no clock, no randomness, no file but its three argumen
 
     python3 -I gen_cases.py <repo>/tools cases.txt expected.txt
 
+The committed expected.txt is the reference: it was made with CPython 3.14, the version the
+converter's Python reference uses (its first line says so). The texts of raw exceptions differ
+between CPython versions, so the staleness test in tests/dsl.rs compares only when the running
+Python has the same major.minor version and says so when it skips.
+
 The format is that of tests/dsl_lift/gen_pairs.py (read its docstring), with these changes:
 
     engine <Class> <mangled name>...       the vtable of an engine class, slot 0 first
@@ -133,7 +138,10 @@ def main(argv):
     dsl = lc.load_tool(tools)
     with open(cases_path, encoding="utf-8", newline="") as fh:
         cases = parse(fh.read())
-    text = "".join(run_case(dsl, c) for c in cases)
+    # The first line names the CPython that printed the exception texts below (they differ between
+    # versions); the staleness test compares only under the same major.minor version.
+    head = f"# generated with CPython {sys.version_info[0]}.{sys.version_info[1]}\n"
+    text = head + "".join(run_case(dsl, c) for c in cases)
     with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(text)
 
