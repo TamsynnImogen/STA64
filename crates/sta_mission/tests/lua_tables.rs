@@ -151,11 +151,9 @@ fn random_operation_sequences_match_the_documented_semantics() {
         let mut rng = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
         let t = lua.create_table().unwrap();
         let mut m = Model::default();
-        let mut next_value = 1i64;
-        for _ in 0..(40 + rng.below(160)) {
+        let steps = 40 + rng.below(160) as i64;
+        for v in 2..steps + 2 {
             refill(&lua);
-            next_value += 1;
-            let v = next_value;
             match rng.below(12) {
                 0 | 1 => {
                     let k = rng.below(keys.len() as u64) as usize;
