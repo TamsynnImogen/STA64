@@ -780,32 +780,113 @@ fn an_interrupted_write_leaves_the_earlier_save_intact_and_is_not_listed() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+type Writer = fn(&Path, &[u8]) -> Result<PathBuf, SaveError>;
+
+/// `write_new` as it runs where hard links work.
+fn linking(dir: &Path, bytes: &[u8]) -> Result<PathBuf, SaveError> {
+    store::write_new(dir, bytes)
+}
+
+/// `write_new` with the link step failing as on a volume without hard links:
+/// the fallback path.
+fn fallback(dir: &Path, bytes: &[u8]) -> Result<PathBuf, SaveError> {
+    store::write_new_with(dir, bytes, &|_, _| Err(std::io::Error::from(std::io::ErrorKind::Unsupported)))
+}
+
 #[test]
 fn file_names_are_checked_and_generated_names_never_overwrite() {
-    let dir = scratch("names");
+    names_are_checked(linking, "names");
+}
+
+#[test]
+fn the_same_with_the_fallback_forced() {
+    names_are_checked(fallback, "names-fb");
+}
+
+fn names_are_checked(write_new: Writer, label: &str) {
+    let dir = scratch(label);
     let (_, bytes) = a_save();
     for bad in ["", "x", "a/b.stasave", "..\\x.stasave", ".hidden.stasave", "c:x.stasave", "x.txt", "a b.stasave"] {
         assert!(matches!(store::write_atomic(&dir, bad, &bytes), Err(SaveError::Invalid(_))), "{bad:?}");
     }
-    let one = store::write_new(&dir, &bytes).unwrap();
-    let two = store::write_new(&dir, &bytes).unwrap();
+    let one = write_new(&dir, &bytes).unwrap();
+    let two = write_new(&dir, &bytes).unwrap();
     assert_ne!(one, two, "a second save of the same moment kept its own file");
     assert_eq!(names(&dir).len(), 2);
     assert!(one.file_name().unwrap().to_str().unwrap().starts_with("save-"));
-    assert!(store::write_new(&dir, b"junk").is_err());
+    assert!(write_new(&dir, b"junk").is_err());
     // A missing folder lists as empty; a file in its place is an error.
     assert!(store::list(&dir.join("nope"), None).unwrap().is_empty());
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A save already under the generated name, and others at its `-2`, `-3`
+/// names, are never overwritten, and the returned path is the file written,
+/// on both paths.
+fn never_overwrites(write_new: Writer, label: &str) {
+    let dir = scratch(label);
+    let (_, first) = a_save();
+    let name = store::generated_name(&read_header(&first).unwrap());
+    let stem = name.strip_suffix(".stasave").unwrap().to_owned();
+    // Same moment, other content (another description): the same generated name.
+    let sc = with_a_computer_player();
+    let mut run = Run::start(&sc);
+    for _ in 0..40 {
+        run.step(&sc.script);
+    }
+    let mut other_info = info();
+    other_info.description = "another save of the same moment".into();
+    let second = run.save(&other_info).unwrap();
+    assert!(second != first);
+    assert_eq!(store::generated_name(&read_header(&second).unwrap()), name);
+    // Taken: the plain name and the first suffix, with content of their own.
+    std::fs::write(dir.join(&name), b"precious one").unwrap();
+    std::fs::write(dir.join(format!("{stem}-2.stasave")), b"precious two").unwrap();
+    let mut written = Vec::new();
+    for bytes in [&first, &second, &first] {
+        let path = write_new(&dir, bytes).unwrap();
+        assert!(std::fs::read(&path).unwrap() == *bytes, "the returned path {path:?} is not the file that was written");
+        written.push(path);
+    }
+    let mut unique = written.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), 3, "repeated calls gave the same file: {written:?}");
+    assert_eq!(std::fs::read(dir.join(&name)).unwrap(), b"precious one", "an existing save was overwritten");
+    assert_eq!(std::fs::read(dir.join(format!("{stem}-2.stasave"))).unwrap(), b"precious two", "an existing save was overwritten");
+    assert!(written.iter().all(|p| p != &dir.join(&name) && p != &dir.join(format!("{stem}-2.stasave"))));
+    // Two precious files, three new ones, no temporary file left.
+    assert_eq!(names(&dir).len(), 5, "{:?}", names(&dir));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_write_never_overwrites_an_existing_save() {
+    never_overwrites(linking, "keep");
+}
+
+#[test]
+fn a_write_never_overwrites_with_the_fallback_forced() {
+    never_overwrites(fallback, "keep-fb");
 }
 
 /// Writers of the same moment never overwrite each other, and none leaves a
 /// temporary file behind.
 #[test]
 fn concurrent_writers_each_get_their_own_file() {
-    let dir = scratch("concurrent");
+    concurrent(linking, "concurrent");
+}
+
+#[test]
+fn concurrent_writers_with_the_fallback_forced() {
+    concurrent(fallback, "concurrent-fb");
+}
+
+fn concurrent(write_new: Writer, label: &str) {
+    let dir = scratch(label);
     let (_, bytes) = a_save();
     let paths: Vec<PathBuf> = std::thread::scope(|s| {
-        let handles: Vec<_> = (0..8).map(|_| s.spawn(|| store::write_new(&dir, &bytes).expect("writes"))).collect();
+        let handles: Vec<_> = (0..8).map(|_| s.spawn(|| write_new(&dir, &bytes).expect("writes"))).collect();
         handles.into_iter().map(|h| h.join().unwrap()).collect()
     });
     let mut unique = paths.clone();

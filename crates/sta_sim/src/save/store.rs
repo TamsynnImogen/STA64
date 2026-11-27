@@ -116,40 +116,65 @@ pub fn write_atomic_with(
 /// file is hard-linked to the free name (which fails if the name is taken),
 /// then the temporary name is removed. A clash gets `-2`, `-3`, ... before
 /// the extension. Where the folder cannot hard-link (some network and FAT
-/// volumes) it falls back to checking the name and renaming, which is not
-/// safe against a concurrent writer of the same name.
+/// volumes) the final name is first reserved with an exclusive create (atomic
+/// on every platform, and it fails if the name exists), and the finished
+/// temporary file is then renamed over that reservation, which is our own
+/// empty file. The guarantee is the same on both paths: no existing file is
+/// overwritten and the returned path is the file that was written, also
+/// against concurrent writers. On the fallback path the reserved name is an
+/// empty file for the moment before the rename (a listing may show it as not
+/// a save), and a crash in that moment leaves it behind.
 pub fn write_new(dir: &Path, bytes: &[u8]) -> Result<PathBuf, SaveError> {
+    write_new_with(dir, bytes, &|from, to| std::fs::hard_link(from, to))
+}
+
+/// As [`write_new`], with the hard-link step supplied: the seam a test uses
+/// to force the fallback (a link step that fails with anything but
+/// `AlreadyExists` selects it).
+pub fn write_new_with(dir: &Path, bytes: &[u8], link: &dyn Fn(&Path, &Path) -> io::Result<()>) -> Result<PathBuf, SaveError> {
     let name = generated_name(&read_header(bytes)?);
     let stem = name.strip_suffix(&format!(".{EXTENSION}")).unwrap_or(&name).to_owned();
     let temp = write_temp(dir, &name, bytes)?;
     let mut candidate = name;
     let mut n = 1u32;
+    let mut use_link = true;
     loop {
         let target = dir.join(&candidate);
-        match std::fs::hard_link(&temp, &target) {
-            Ok(()) => {
-                let _ = std::fs::remove_file(&temp);
-                sync_dir(dir);
-                return Ok(target);
-            }
-            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-                n += 1;
-                candidate = format!("{stem}-{n}.{EXTENSION}");
-            }
-            Err(_) => {
-                // No hard links here: check, then rename.
-                while dir.join(&candidate).exists() {
-                    n += 1;
-                    candidate = format!("{stem}-{n}.{EXTENSION}");
+        if use_link {
+            match link(&temp, &target) {
+                Ok(()) => {
+                    let _ = std::fs::remove_file(&temp);
+                    sync_dir(dir);
+                    return Ok(target);
                 }
-                if let Err(e) = std::fs::rename(&temp, &target) {
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                // No hard links here: reserve names exclusively from now on.
+                Err(_) => {
+                    use_link = false;
+                    continue;
+                }
+            }
+        } else {
+            match std::fs::OpenOptions::new().write(true).create_new(true).open(&target) {
+                Ok(reserved) => {
+                    drop(reserved);
+                    if let Err(e) = std::fs::rename(&temp, &target) {
+                        let _ = std::fs::remove_file(&target);
+                        let _ = std::fs::remove_file(&temp);
+                        return Err(io_err("cannot write the save", &e));
+                    }
+                    sync_dir(dir);
+                    return Ok(target);
+                }
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(e) => {
                     let _ = std::fs::remove_file(&temp);
                     return Err(io_err("cannot write the save", &e));
                 }
-                sync_dir(dir);
-                return Ok(dir.join(candidate));
             }
         }
+        n += 1;
+        candidate = format!("{stem}-{n}.{EXTENSION}");
     }
 }
 
