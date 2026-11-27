@@ -62,12 +62,12 @@ use crate::msvc::VAR_KINDS;
 use crate::pyval::{py_floordiv, py_int, py_split_ws_once, py_strip, Py};
 use crate::{tup, DecodeError, ErrorKind, Result};
 
-fn dec<T>(msg: String) -> Result<T> {
+pub(crate) fn dec<T>(msg: String) -> Result<T> {
     Err(DecodeError::new(msg))
 }
 
 /// A fault of one of Python's own exceptions (class and CPython's text).
-fn py_err<T>(class: &'static str, msg: impl Into<String>) -> Result<T> {
+pub(crate) fn py_err<T>(class: &'static str, msg: impl Into<String>) -> Result<T> {
     Err(DecodeError::python(class, msg))
 }
 
@@ -77,12 +77,12 @@ pub(crate) fn index_err<T>() -> Result<T> {
 }
 
 /// `KeyError` for a dict miss: the text is the key's `repr`.
-fn key_err<T>(key: &Py) -> Result<T> {
+pub(crate) fn key_err<T>(key: &Py) -> Result<T> {
     py_err("KeyError", key.repr())
 }
 
 /// Python's `seq[i]` with a possibly negative index on a list of length `len`.
-fn pyidx(len: usize, i: i64) -> Result<usize> {
+pub(crate) fn pyidx(len: usize, i: i64) -> Result<usize> {
     let j = if i < 0 { i + len as i64 } else { i };
     if j < 0 || j as usize >= len {
         return index_err();
@@ -91,12 +91,12 @@ fn pyidx(len: usize, i: i64) -> Result<usize> {
 }
 
 /// `x[0]` of a tuple as a string, `""` for a head that is not one (every `== "kind"` is false).
-fn tg(v: &Py) -> Result<&str> {
+pub(crate) fn tg(v: &Py) -> Result<&str> {
     Ok(v.tag()?.unwrap_or(""))
 }
 
 /// `a, b = [x.strip() for x in ops.split(",", 1)]`.
-fn split2(ops: &str) -> Result<(String, String)> {
+pub(crate) fn split2(ops: &str) -> Result<(String, String)> {
     let mut it = ops.splitn(2, ',');
     let a = it.next().unwrap_or("");
     match it.next() {
@@ -120,7 +120,7 @@ pub fn float_of_bits(n: &Py) -> Result<f64> {
 
 /// The integer `v` is, for a site where Python does arithmetic on it with an int (`op`):
 /// `TypeError` with CPython's text for anything else.
-fn int_of(v: &Py, op: &str) -> Result<i64> {
+pub(crate) fn int_of(v: &Py, op: &str) -> Result<i64> {
     match v.as_int() {
         Some(n) => Ok(n),
         None => py_err("TypeError", format!("unsupported operand type(s) for {op}: '{}' and 'int'", v.type_name())),
@@ -128,7 +128,7 @@ fn int_of(v: &Py, op: &str) -> Result<i64> {
 }
 
 /// Python hashes a tuple that holds a list by raising `TypeError`.
-fn hashable(v: &Py) -> Result<()> {
+pub(crate) fn hashable(v: &Py) -> Result<()> {
     match v {
         Py::List(_) => py_err("TypeError", "unhashable type: 'list'"),
         Py::Tuple(x) => x.iter().try_for_each(hashable),
@@ -170,6 +170,8 @@ pub struct Lifted {
     pub vectors: IndexSet<Py>,
     /// Stack slot offset to the same, for a slot that holds one.
     pub litype: IndexMap<Py, Py>,
+    /// The Armada I front end's additions to `Lifted` (LUA-15e); empty for Armada II.
+    pub a1: crate::a1::LiftedExtra,
 }
 
 impl Lifted {
@@ -251,9 +253,20 @@ pub struct State {
     /// Registers read before this block wrote them.
     pub reg_in: BTreeSet<String>,
     pub restored: bool,
+    /// How many times `flags` was assigned (`st.flags is f[3]` of the Armada I front end is
+    /// "not assigned since"); every assignment goes through [`State::set_flags`].
+    pub flags_gen: u64,
+    /// The Armada I front end's additions to `State` (LUA-15e); unused for Armada II.
+    pub a1: crate::a1::StateExtra,
 }
 
 impl State {
+    /// `st.flags = v`.
+    pub fn set_flags(&mut self, v: Py) {
+        self.flags = v;
+        self.flags_gen += 1;
+    }
+
     pub fn new() -> Self {
         State {
             r: IndexMap::new(),
@@ -270,6 +283,8 @@ impl State {
             escaped: IndexSet::new(),
             reg_in: BTreeSet::new(),
             restored: false,
+            flags_gen: 0,
+            a1: crate::a1::StateExtra::default(),
         }
     }
 
@@ -372,6 +387,8 @@ pub struct Lifter<'d, 'a> {
     pub game: Game,
     /// The `call` instruction's handler; [`call_model`] until LUA-15h's lands.
     pub call_fn: CallFn,
+    /// The Armada I front end's fields of `A1Lifter` (LUA-15e); unused for Armada II.
+    pub a1: crate::a1::LifterExtra,
 }
 
 impl<'d, 'a> Lifter<'d, 'a> {
@@ -385,10 +402,11 @@ impl<'d, 'a> Lifter<'d, 'a> {
             ntmp: 0,
             game: Game::A2,
             call_fn: call_model,
+            a1: crate::a1::LifterExtra::default(),
         }
     }
 
-    fn ins(&self, i: usize) -> Result<(i64, &'d str)> {
+    pub(crate) fn ins(&self, i: usize) -> Result<(i64, &'d str)> {
         let d = self.d;
         match d.ins.get(i) {
             Some((a, t)) => Ok((i64::from(*a), t.as_str())),
@@ -528,6 +546,9 @@ impl<'d, 'a> Lifter<'d, 'a> {
     /// `Lifter.lift`: the function at `start`, lifted block by block. A `DecodeError` stops the
     /// function (stored in [`Lifted::error`]); a raw error propagates.
     pub fn lift(&mut self, start: i64) -> Result<Lifted> {
+        if self.game == Game::A1 {
+            return self.a1_lift(start); // `A1Lifter.lift` replaces this method
+        }
         self.cur = Lifted::new(start);
         match self.lift_body(start) {
             Ok(()) => {}
@@ -679,9 +700,18 @@ impl<'d, 'a> Lifter<'d, 'a> {
 
     // ------------------------------------------------------------ step
 
+    /// `Lifter.step` (`A1Lifter.step` for Armada I, which falls back to [`Lifter::step_base`]).
+    #[allow(clippy::too_many_arguments)]
+    pub fn step(&mut self, st: &mut State, stmts: &mut Vec<Py>, a: i64, mn: &str, ops: &str, i: usize, entry: bool) -> Result<Flow> {
+        if self.game == Game::A1 {
+            return self.a1_step(st, stmts, a, mn, ops, i, entry);
+        }
+        self.step_base(st, stmts, a, mn, ops, i, entry)
+    }
+
     /// `Lifter.step`: the effect of one instruction on the state and the block's statements.
     #[allow(clippy::too_many_arguments)]
-    pub fn step(
+    pub fn step_base(
         &mut self,
         st: &mut State,
         stmts: &mut Vec<Py>,
@@ -829,16 +859,17 @@ impl<'d, 'a> Lifter<'d, 'a> {
             let (x, y) = split2(ops)?;
             if x == y || (matches!(x.as_str(), "al" | "eax") && matches!(y.as_str(), "al" | "eax")) {
                 let v = self.read(st, &x, a)?;
-                st.flags = tup!["test", v];
+                st.set_flags(tup!["test", v]);
                 return Ok(Flow::Next);
             }
             if x == "ah" && st.fsw.truthy() {
-                st.flags = tup!["ftest", &st.fsw, py_int(&y, 16)?];
+                let f = tup!["ftest", &st.fsw, py_int(&y, 16)?];
+                st.set_flags(f);
                 return Ok(Flow::Next);
             }
             if pat::is_hex0x(&y) {
                 let v = self.read(st, &x, a)?;
-                st.flags = tup!["test", tup!["arith", "&", v, tup!["const", py_int(&y, 16)?]]];
+                st.set_flags(tup!["test", tup!["arith", "&", v, tup!["const", py_int(&y, 16)?]]]);
                 return Ok(Flow::Next);
             }
             return dec(format!("`test {ops}` at {}", py_hex(a)));
@@ -850,7 +881,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
             }
             let vx = self.read(st, &x, a)?;
             let vy = self.read(st, &y, a)?;
-            st.flags = tup!["cmp", vx, vy];
+            st.set_flags(tup!["cmp", vx, vy]);
             return Ok(Flow::Next);
         }
         if jcc(mn).is_some() {
@@ -897,7 +928,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
                 "neg" => tup!["neg", v],
                 _ => tup!["bnot", v],
             };
-            st.flags = tup!["test", &nv];
+            st.set_flags(tup!["test", &nv]);
             self.write(st, stmts, x, nv, a)?;
             return Ok(Flow::Next);
         }
@@ -920,8 +951,16 @@ impl<'d, 'a> Lifter<'d, 'a> {
 
     // ------------------------------------------------------------ operands
 
-    /// `Lifter.read`: the value of an operand.
+    /// `Lifter.read` (`A1Lifter.read` for Armada I): the value of an operand.
     pub fn read(&mut self, st: &mut State, op: &str, a: i64) -> Result<Py> {
+        if self.game == Game::A1 {
+            return self.a1_read(st, op, a);
+        }
+        self.read_base(st, op, a)
+    }
+
+    /// `Lifter.read`: the value of an operand.
+    pub fn read_base(&mut self, st: &mut State, op: &str, a: i64) -> Result<Py> {
         let d = self.d;
         let op = py_strip(op);
         if is_reg32(op) {
@@ -953,8 +992,16 @@ impl<'d, 'a> Lifter<'d, 'a> {
         }
     }
 
-    /// `Lifter.lvalue`: a memory operand as a location.
+    /// `Lifter.lvalue` (`A1Lifter.lvalue` for Armada I): a memory operand as a location.
     pub fn lvalue(&mut self, st: &mut State, op: &str, a: i64) -> Result<Py> {
+        if self.game == Game::A1 {
+            return self.a1_lvalue(st, op, a, false);
+        }
+        self.lvalue_base(st, op, a)
+    }
+
+    /// `Lifter.lvalue`: a memory operand as a location.
+    pub fn lvalue_base(&mut self, st: &mut State, op: &str, a: i64) -> Result<Py> {
         let op = pat::strip_ptr(py_strip(op));
         if let Some(h) = pat::ds_abs(op) {
             return self.glob(py_int(h, 16)?, a);
@@ -997,8 +1044,16 @@ impl<'d, 'a> Lifter<'d, 'a> {
         dec(format!("operand `{op}` at {}", py_hex(a)))
     }
 
-    /// `Lifter.glob`: a global address as a location.
+    /// `Lifter.glob` (`A1Lifter.glob` for Armada I): a global address as a location.
     pub fn glob(&mut self, addr: i64, a: i64) -> Result<Py> {
+        if self.game == Game::A1 {
+            return self.a1_glob(addr, a);
+        }
+        self.glob_base(addr, a)
+    }
+
+    /// `Lifter.glob`: a global address as a location.
+    pub fn glob_base(&mut self, addr: i64, a: i64) -> Result<Py> {
         let d = self.d;
         if let Some((name, kind, off)) = d.global_at(addr) {
             if matches!(kind, "intarray" | "floatarray") {
@@ -1017,7 +1072,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
         dec(format!("global in {} at {} ({})", sec.unwrap_or_default(), py_hex(addr), py_hex(a)))
     }
 
-    fn data_named(&self, name: &Py) -> Result<&'d crate::dsl::DataItem> {
+    pub(crate) fn data_named(&self, name: &Py) -> Result<&'d crate::dsl::DataItem> {
         let d = self.d;
         d.data
             .values()
@@ -1025,8 +1080,16 @@ impl<'d, 'a> Lifter<'d, 'a> {
             .ok_or_else(|| DecodeError::python("StopIteration", ""))
     }
 
-    /// `Lifter.load`: the value read from a location.
+    /// `Lifter.load` (`A1Lifter.load` for Armada I): the value read from a location.
     pub fn load(&mut self, st: &mut State, lv: &Py, a: i64) -> Result<Py> {
+        if self.game == Game::A1 {
+            return self.a1_load(st, lv, a);
+        }
+        self.load_base(st, lv, a)
+    }
+
+    /// `Lifter.load`: the value read from a location.
+    pub fn load_base(&mut self, st: &mut State, lv: &Py, a: i64) -> Result<Py> {
         let k = tg(lv)?;
         if k == "obj" {
             let name = lv.item(1)?;
@@ -1151,8 +1214,16 @@ impl<'d, 'a> Lifter<'d, 'a> {
         self.glob(addr + off, a)
     }
 
-    /// `Lifter.store`: a store to the operand text `dst`.
+    /// `Lifter.store` (`A1Lifter.store` for Armada I): a store to the operand text `dst`.
     pub fn store(&mut self, st: &mut State, stmts: &mut Vec<Py>, dst: &str, v: Py, a: i64) -> Result<()> {
+        if self.game == Game::A1 {
+            return self.a1_store(st, stmts, dst, v, a);
+        }
+        self.store_base(st, stmts, dst, v, a)
+    }
+
+    /// `Lifter.store`: a store to the operand text `dst`.
+    pub fn store_base(&mut self, st: &mut State, stmts: &mut Vec<Py>, dst: &str, v: Py, a: i64) -> Result<()> {
         if let Some(off) = pat::esp_slot(py_strip(dst)) {
             // an argument slot reserved by `push reg` / `sub esp` and filled in place
             let k = match off {
@@ -1246,7 +1317,16 @@ impl<'d, 'a> Lifter<'d, 'a> {
     /// `Lifter.snap`: before a write, values the block still holds that read the written memory
     /// are copied to temps, so they keep the value they were read with. Returns `value` (the
     /// value about to be written, `Py::None` when there is none) with the same treatment.
+    /// (`A1Lifter.snap` for Armada I.)
     pub fn snap(&mut self, st: &mut State, stmts: &mut Vec<Py>, test: &dyn Fn(&Py) -> Result<bool>, value: Py) -> Result<Py> {
+        if self.game == Game::A1 {
+            return self.a1_snap(st, stmts, test, value);
+        }
+        self.snap_base(st, stmts, test, value)
+    }
+
+    /// `Lifter.snap` itself.
+    pub fn snap_base(&mut self, st: &mut State, stmts: &mut Vec<Py>, test: &dyn Fn(&Py) -> Result<bool>, value: Py) -> Result<Py> {
         let mut cache: IndexMap<Py, Py> = IndexMap::new();
         let keys: Vec<String> = st.r.keys().cloned().collect();
         for k in keys {
@@ -1320,8 +1400,16 @@ impl<'d, 'a> Lifter<'d, 'a> {
         Ok(false)
     }
 
-    /// `Lifter.write`: a write to a register or a memory operand.
+    /// `Lifter.write` (`A1Lifter.write` for Armada I): a write to a register or a memory operand.
     pub fn write(&mut self, st: &mut State, stmts: &mut Vec<Py>, x: &str, v: Py, a: i64) -> Result<()> {
+        if self.game == Game::A1 {
+            return self.a1_write(st, stmts, x, v, a);
+        }
+        self.write_base(st, stmts, x, v, a)
+    }
+
+    /// `Lifter.write`: a write to a register or a memory operand.
+    pub fn write_base(&mut self, st: &mut State, stmts: &mut Vec<Py>, x: &str, v: Py, a: i64) -> Result<()> {
         if is_reg32(x) {
             st.r.insert(x.to_owned(), v);
         } else if let Some(r) = reg8(x) {
@@ -1332,8 +1420,16 @@ impl<'d, 'a> Lifter<'d, 'a> {
         Ok(())
     }
 
-    /// `Lifter.arith`.
+    /// `Lifter.arith` (`A1Lifter.arith` for Armada I).
     pub fn arith(&mut self, st: &mut State, stmts: &mut Vec<Py>, a: i64, mn: &str, ops: &str) -> Result<()> {
+        if self.game == Game::A1 {
+            return self.a1_arith(st, stmts, a, mn, ops);
+        }
+        self.arith_base(st, stmts, a, mn, ops)
+    }
+
+    /// `Lifter.arith`.
+    pub fn arith_base(&mut self, st: &mut State, stmts: &mut Vec<Py>, a: i64, mn: &str, ops: &str) -> Result<()> {
         let (x, y) = split2(ops)?;
         if mn == "xor" && x == y {
             return self.write(st, stmts, &x, tup!["const", 0], a);
@@ -1372,7 +1468,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
                 tup!["arith", op, &vx, &vy]
             }
         };
-        st.flags = if mn == "sub" { tup!["cmp", &vx, &vy] } else { tup!["test", &v] };
+        st.set_flags(if mn == "sub" { tup!["cmp", &vx, &vy] } else { tup!["test", &v] });
         self.write(st, stmts, &x, v, a)
     }
 

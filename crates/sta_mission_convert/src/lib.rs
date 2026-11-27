@@ -12,6 +12,7 @@
 //! names) and the shared core (LUA-15c: [`pyval`], [`format`], [`msvc`], [`algebra`],
 //! [`prelude`]). Decoding and lifting follow in later steps.
 
+pub mod a1;
 pub mod algebra;
 pub mod disasm;
 pub mod dsl;
