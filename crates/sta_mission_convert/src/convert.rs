@@ -295,20 +295,27 @@ fn l_extend(w: &mut impl FnMut(String), lines: Vec<String>) {
     }
 }
 
+/// Opens the rule DLL of a mission: its image and its listing, in that order.
+pub type RuleSource<'a> = dyn FnMut() -> Result<(Pe, Vec<Ins>)> + 'a;
+
 /// `convert(dsl_path, drl_path, engine)` over images and listings. `dsl_base` and `drl_base` are
 /// the files' base names (the header names them).
 pub fn convert(
     dsl: &Pe,
     dsl_listing: Vec<Ins>,
     dsl_base: &str,
-    drl: Option<(Pe, Vec<Ins>, &str)>,
+    drl: Option<(&str, &mut RuleSource<'_>)>,
     engine: &Vtables,
 ) -> std::result::Result<Converted, Failure> {
     let exports = dsl.exports()?;
     let d = Dsl::new(dsl, engine.clone(), dsl_listing, exports)?;
     let (mut funcs, roles) = lift_mission(&d)?;
+    // the rule DLL is opened (image, then listing) only now, as `drl.decode` does after the lift
     let (rules, drl_base) = match drl {
-        Some((pe, ins, base)) => (Some(drl::decode(pe, ins, base, Some(engine))?), Some(base)),
+        Some((base, open)) => {
+            let (pe, ins) = open()?;
+            (Some(drl::decode(pe, ins, base, Some(engine))?), Some(base))
+        }
         None => (None, None),
     };
     let mission = mission_name(dsl_base);
@@ -406,10 +413,20 @@ fn dll_names(data: &[u8]) -> Vec<String> {
     out
 }
 
+/// `os.path.basename(p)`: the text after the last separator (so `""` for a path that ends in
+/// one, and `.` for `x/.`), not `Path::file_name`, which skips those.
+fn py_basename(p: &str) -> String {
+    let sep = |c: char| c == '/' || (cfg!(windows) && c == '\\');
+    match p.rfind(sep) {
+        Some(i) => p[i + 1..].to_owned(),
+        None => p.to_owned(),
+    }
+}
+
 fn walk_stems(dir: &Path, out: &mut IndexMap<String, Vec<String>>) {
     let (mut dirs, mut files) = list_dir(dir);
     dirs.sort_by(|a, b| a.0.cmp(&b.0)); // `dirs.sort()`
-    let base = dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let base = py_basename(&dir.to_string_lossy());
     if py_lower(&base) == "bzn" {
         dirs.clear();
         files.sort();
@@ -520,14 +537,15 @@ pub fn convert_install(
             let result = (|| -> std::result::Result<Converted, Failure> {
                 let pe = Pe::open(&dsl_path)?;
                 let ins = listing(&dsl_path)?;
-                let drl = match (&drl_path, &drl_base) {
-                    (Some(p), Some(base)) => {
-                        let rpe = Pe::open(p)?;
-                        // the rule DLL's listing is read inside `decode`, after the image
-                        let rins = listing(p)?;
-                        Some((rpe, rins, base.as_str()))
-                    }
-                    _ => None,
+                let mut open = || -> Result<(Pe, Vec<Ins>)> {
+                    let p = drl_path.as_ref().expect("a rule DLL");
+                    let rpe = Pe::open(p)?;
+                    let rins = listing(p)?;
+                    Ok((rpe, rins))
+                };
+                let drl = match &drl_base {
+                    Some(base) => Some((base.as_str(), &mut open as &mut RuleSource<'_>)),
+                    None => None,
                 };
                 convert(&pe, ins, &dsl_base, drl, engine)
             })();

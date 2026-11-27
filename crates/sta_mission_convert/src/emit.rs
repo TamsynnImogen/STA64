@@ -33,6 +33,80 @@ fn int(v: &Py, op: &str) -> Result<i64> {
     }
 }
 
+fn py_err<T>(class: &'static str, msg: impl Into<String>) -> Result<T> {
+    Err(DecodeError::python(class, msg))
+}
+
+/// `f"{v:x}"` (`alt` false) or `f"{v:#x}"` (`alt` true) of any value, with CPython's exceptions
+/// for the ones that have no hex form.
+fn hex_fmt(v: &Py, alt: bool) -> Result<String> {
+    match v {
+        Py::Int(_) | Py::Bool(_) => {
+            let n = v.as_int().unwrap_or(0);
+            Ok(if alt { py_hex(n) } else { py_hex_plain(n) })
+        }
+        Py::Float(_) | Py::Str(_) => py_err("ValueError", format!("Unknown format code 'x' for object of type '{}'", v.type_name())),
+        other => py_err("TypeError", format!("unsupported format string passed to {}.__format__", other.type_name())),
+    }
+}
+
+/// `v - n` for an int `n` (a float stays a float).
+fn sub_num(v: &Py, n: i64) -> Result<Py> {
+    match v {
+        Py::Int(_) | Py::Bool(_) => Ok(Py::Int(v.as_int().unwrap_or(0) - n)),
+        Py::Float(f) => Ok(Py::Float(f - n as f64)),
+        other => py_err("TypeError", format!("unsupported operand type(s) for -: '{}' and 'int'", other.type_name())),
+    }
+}
+
+/// `str(v + 1)`.
+fn add_one(v: &Py) -> Result<String> {
+    match v {
+        Py::Int(_) | Py::Bool(_) => Ok((v.as_int().unwrap_or(0) + 1).to_string()),
+        Py::Float(f) => Ok(Py::Float(f + 1.0).to_str()),
+        Py::Str(_) | Py::Tuple(_) | Py::List(_) => {
+            let t = v.type_name();
+            py_err("TypeError", format!("can only concatenate {t} (not \"int\") to {t}"))
+        }
+        other => py_err("TypeError", format!("unsupported operand type(s) for +: '{}' and 'int'", other.type_name())),
+    }
+}
+
+/// `lv, v = p`: the two elements of a pair, with CPython's unpacking errors.
+fn pair(p: &Py) -> Result<(Py, Py)> {
+    let Some(items) = p.as_seq() else {
+        return py_err("TypeError", format!("cannot unpack non-iterable {} object", p.type_name()));
+    };
+    match items.len() {
+        2 => Ok((items[0].clone(), items[1].clone())),
+        n if n > 2 => py_err("ValueError", format!("too many values to unpack (expected 2, got {n})")),
+        n => py_err("ValueError", format!("not enough values to unpack (expected 2, got {n})")),
+    }
+}
+
+/// The text `set.add(v)` raises for an unhashable `v`, `Ok` for a hashable one.
+fn hashable(v: &Py) -> Result<()> {
+    fn inner(v: &Py) -> Option<&'static str> {
+        match v {
+            Py::List(_) => Some("list"),
+            Py::Tuple(items) => items.iter().find_map(inner),
+            _ => None,
+        }
+    }
+    match inner(v) {
+        None => Ok(()),
+        Some(t) => py_err("TypeError", format!("cannot use '{}' as a set element (unhashable type: '{t}')", v.type_name())),
+    }
+}
+
+/// `v.upper()` of a value that should be a string.
+fn upper_of(v: &Py) -> Result<String> {
+    match v {
+        Py::Str(s) => Ok(py_upper(s)),
+        other => py_err("AttributeError", format!("'{}' object has no attribute 'upper'", other.type_name())),
+    }
+}
+
 /// `Namer`: the Lua name of each function.
 pub struct Namer<'d, 'a> {
     pub d: &'d Dsl<'a>,
@@ -89,8 +163,8 @@ impl<'d, 'a> Namer<'d, 'a> {
     }
 
     /// The label text `b{address - base:x}`.
-    fn label(&self, a: i64) -> String {
-        format!("b{}", py_hex_plain(a - i64::from(self.d.pe.base())))
+    fn label(&self, a: &Py) -> Result<String> {
+        Ok(format!("b{}", hex_fmt(&sub_num(a, i64::from(self.d.pe.base()))?, false)?))
     }
 }
 
@@ -147,12 +221,12 @@ pub fn render_expr(e: &Py, nm: &Namer<'_, '_>, ctx: Ctx) -> Result<String> {
         "var" => format!("S.{}", e.item(1)?.to_str()),
         "obj" => format!("O.{}", e.item(1)?.to_str()),
         "elem" => format!("O.{}[{}]", e.item(1)?.to_str(), render_expr(e.item(2)?, nm, Ctx::Num)?),
-        "vfield" => format!("O.{}[{}]", e.item(1)?.to_str(), int(e.item(2)?, "+")? + 1),
+        "vfield" => format!("O.{}[{}]", e.item(1)?.to_str(), add_one(e.item(2)?)?),
         "loc" => format!("L[{}]", e.item(1)?.to_str()),
         "reg" => format!("R.{}", e.item(1)?.to_str()),
         "tmp" => format!("t[{}]", e.item(1)?.to_str()),
-        "glob" => format!("G[{}]", py_hex(int(e.item(1)?, "-")?)),
-        "param" => format!("P[{}]", int(e.item(1)?, "+")? + 1),
+        "glob" => format!("G[{}]", hex_fmt(&sub_num(e.item(1)?, 0)?, true)?),
+        "param" => format!("P[{}]", add_one(e.item(1)?)?),
         "call" => {
             let args = comma_args(e.item(2)?, nm)?;
             format!("A({}{args})", lua_str_py(e.item(1)?)?)
@@ -182,7 +256,7 @@ pub fn render_expr(e: &Py, nm: &Namer<'_, '_>, ctx: Ctx) -> Result<String> {
         }
         "vop" => {
             let args = comma_args(e.item(3)?, nm)?;
-            format!("V{}({}{args})", py_upper(&e.item(1)?.to_str()), vkey(e.item(2)?)?)
+            format!("V{}({}{args})", upper_of(e.item(1)?)?, vkey(e.item(2)?)?)
         }
         "vget" => format!("VGET({}, {})", vkey(e.item(1)?)?, render_expr(e.item(2)?, nm, Ctx::Num)?),
         "arith" => {
@@ -254,7 +328,7 @@ pub fn render_expr(e: &Py, nm: &Namer<'_, '_>, ctx: Ctx) -> Result<String> {
         "addr" => return dec(format!("the address of {} is passed on as a value", e.item(1)?.item(0)?.to_str())),
         "varptr" => format!("V.{}", e.item(1)?.to_str()),
         "script" => render_expr(e.item(1)?, nm, Ctx::Num)?,
-        "field" => format!("VEC({}, {})", render_expr(e.item(1)?, nm, Ctx::Arg)?, int(e.item(2)?, "+")? + 1),
+        "field" => format!("VEC({}, {})", render_expr(e.item(1)?, nm, Ctx::Arg)?, add_one(e.item(2)?)?),
         "vec" => {
             let mut parts: Vec<String> = Vec::new();
             for x in e.item(1)?.items()? {
@@ -290,7 +364,7 @@ pub fn vkey(key: &Py) -> Result<String> {
     Ok(if key.tag_is("loc")? {
         format!("VL(L, {})", key.item(1)?.to_str())
     } else {
-        format!("VG({})", py_hex(int(key.item(1)?, "-")?))
+        format!("VG({})", hex_fmt(key.item(1)?, true)?)
     })
 }
 
@@ -301,11 +375,11 @@ pub fn render_lv(lv: &Py, nm: &Namer<'_, '_>) -> Result<String> {
     Ok(match k {
         "obj" => format!("O.{}", lv.item(1)?.to_str()),
         "elem" => format!("O.{}[{}]", lv.item(1)?.to_str(), render_expr(lv.item(2)?, nm, Ctx::Num)?),
-        "vfield" => format!("O.{}[{}]", lv.item(1)?.to_str(), int(lv.item(2)?, "+")? + 1),
+        "vfield" => format!("O.{}[{}]", lv.item(1)?.to_str(), add_one(lv.item(2)?)?),
         "loc" => format!("L[{}]", lv.item(1)?.to_str()),
         "locidx" => format!("L[{} + 4 * I({})]", lv.item(1)?.to_str(), render_expr(lv.item(2)?, nm, Ctx::Num)?),
-        "gvar" => format!("G[{}]", py_hex(int(lv.item(1)?, "-")?)),
-        "param" => format!("P[{}]", int(lv.item(1)?, "+")? + 1),
+        "gvar" => format!("G[{}]", hex_fmt(lv.item(1)?, true)?),
+        "param" => format!("P[{}]", add_one(lv.item(1)?)?),
         "reg" => format!("R.{}", lv.item(1)?.to_str()),
         "tmp" => format!("t[{}]", lv.item(1)?.to_str()),
         _ => return dec(format!("cannot assign to {}", kv.to_str())),
@@ -477,10 +551,12 @@ pub fn render_function(f: &Lifted, nm: &Namer<'_, '_>, name: &str) -> Result<Vec
     for (_, stmts) in &blocks {
         for s in stmts {
             if s.tag_in(&["goto", "if"])? {
+                hashable(s.item_back(1)?)?;
                 used.insert(s.item_back(1)?.clone());
             }
             if s.tag_is("switch")? {
                 for t in s.item(2)?.items()? {
+                    hashable(t)?;
                     used.insert(t.clone());
                 }
             }
@@ -490,7 +566,7 @@ pub fn render_function(f: &Lifted, nm: &Namer<'_, '_>, name: &str) -> Result<Vec
     lines.push("    local P, L, R, t = {...}, {}, {}, {}".to_owned());
     for (b, stmts) in &blocks {
         if used.contains(&Py::Int(*b)) {
-            lines.push(format!("    ::{}::", nm.label(*b)));
+            lines.push(format!("    ::{}::", nm.label(&Py::Int(*b))?));
         }
         for s in stmts {
             lines.push(format!("    {}", render_stmt(s, nm)?));
@@ -510,10 +586,10 @@ pub fn render_stmt(s: &Py, nm: &Namer<'_, '_>) -> Result<String> {
             let mut lvs: Vec<String> = Vec::new();
             let mut vals: Vec<String> = Vec::new();
             for p in s.item(1)?.items()? {
-                lvs.push(render_lv(p.item(0)?, nm)?);
+                lvs.push(render_lv(&pair(p)?.0, nm)?);
             }
             for p in s.item(1)?.items()? {
-                vals.push(render_expr(p.item(1)?, nm, Ctx::Arg)?);
+                vals.push(render_expr(&pair(p)?.1, nm, Ctx::Arg)?);
             }
             format!("{} = {}", lvs.join(", "), vals.join(", "))
         }
@@ -533,11 +609,11 @@ pub fn render_stmt(s: &Py, nm: &Namer<'_, '_>) -> Result<String> {
             }
             format!("VarOp({}, {}{a})", lua_str_py(name)?, lua_str_py(op)?)
         }
-        "goto" => format!("goto {}", nm.label(int(s.item(1)?, "-")?)),
+        "goto" => format!("goto {}", nm.label(s.item(1)?)?),
         "if" => format!(
             "if {} then goto {} end",
             render_expr(s.item(1)?, nm, Ctx::Bool)?,
-            nm.label(int(s.item(2)?, "-")?)
+            nm.label(s.item(2)?)?
         ),
         "return" => {
             let v = s.item(1)?;
@@ -548,7 +624,7 @@ pub fn render_stmt(s: &Py, nm: &Namer<'_, '_>) -> Result<String> {
             let idx = render_expr(s.item(1)?, nm, Ctx::Num)?;
             let mut cases: Vec<String> = Vec::new();
             for (i, t) in s.item(2)?.items()?.iter().enumerate() {
-                cases.push(format!("if X == {i} then goto {} end", nm.label(int(t, "-")?)));
+                cases.push(format!("if X == {i} then goto {} end", nm.label(t)?));
             }
             format!("do local X = I({idx}) {} end", cases.join(" "))
         }

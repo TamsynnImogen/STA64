@@ -13,8 +13,14 @@ The format is that of tests/dsl_lift/gen_pairs.py (read its docstring), with the
     run convert                            the Lua of the whole mission `m` (the text between the
                                            runtime prelude and the engine block)
     run render <addr>                      the Lua of one lifted function
+    run expr <num|bool|arg> <literal>      render_expr of a hand-made tree (a Python literal)
+    run lv <literal> / run stmt <literal>  render_lv / render_stmt of one
+    run func <literal>                     render_function of a function holding these blocks
+                                           (an exception of the Python is printed, the case goes on)
 """
 
+import resource; resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))  # noqa: E702
+import ast
 import os
 import struct
 import sys
@@ -25,6 +31,9 @@ sys.path.insert(0, os.path.join(HERE, "..", "dsl_lift"))  # -I drops the script'
 
 import gen_pairs as gp  # noqa: E402
 import lift_common as lc  # noqa: E402
+
+
+TREE_RUNS = ("expr", "lv", "stmt", "func")
 
 
 def parse(text):
@@ -89,13 +98,28 @@ def run_case(dsl, case):
                 out.extend(body.rstrip("\n").split("\n"))
             elif what == "statics":
                 out.append(lc.static_refs_line(d))
+            elif what in TREE_RUNS:
+                # a hand-made (possibly malformed) tree given to the renderer directly
+                nm = dsl.Namer(d, {}, {})
+                if what == "expr":
+                    ctx, _, lit = arg.partition(" ")
+                    out.append(dsl.render_expr(ast.literal_eval(lit), nm, ctx))
+                elif what == "lv":
+                    out.append(dsl.render_lv(ast.literal_eval(arg), nm))
+                elif what == "stmt":
+                    out.append(dsl.render_stmt(ast.literal_eval(arg), nm))
+                else:  # func: a list of (label address, [statements])
+                    f = dsl.Lifted(0x10001000)
+                    f.blocks = ast.literal_eval(arg)
+                    out.extend(dsl.render_function(f, nm, "fn"))
             else:
                 raise SystemExit(f"cases.txt: unknown run {what!r}")
         except DecodeError as e:
             out.append(f"error {str(e)!r}")
         except Exception as e:  # a raw Python exception aborts the real tool's run
             out.append(f"raw {type(e).__name__} {str(e)!r}")
-            break
+            if what not in TREE_RUNS:
+                break
     out.append(lc.static_refs_line(d))
     return "\n".join(out) + "\n"
 
