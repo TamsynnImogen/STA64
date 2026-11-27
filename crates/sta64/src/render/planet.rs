@@ -92,6 +92,10 @@ pub fn surface_direction(axes: &[Vec4; 3], v: Vec3) -> Vec3 {
     Vec3::new(local.x, local.y, -local.z).normalize_or_zero()
 }
 
+#[cfg(test)]
+#[path = "planet_ghost_gpu.rs"]
+mod ghost_gpu;
+
 /// A world vector in the body's frame (the transpose of the rotation applied).
 #[cfg(test)]
 pub fn body_frame(axes: &[Vec4; 3], v: Vec3) -> Vec3 {
@@ -441,10 +445,12 @@ fn place_glows(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update(
     camera: Query<&GlobalTransform, crate::map::MainCamera>,
     lights: Query<(&GlobalTransform, &DirectionalLight, Option<&crate::map::MapLightSource>)>,
-    planets: Query<(&GlobalTransform, &PlanetBody)>,
+    planets: Query<(&GlobalTransform, &PlanetBody, Option<&ChildOf>)>,
+    out_of_sight: Query<(), With<crate::render::fog_objects::OutOfSight>>,
     mut materials: ResMut<Assets<PlanetMaterial>>,
     clock: Res<crate::clock::AnimClock>,
     profile: Option<Res<RenderProfile>>,
@@ -477,11 +483,15 @@ fn update(
     ls.sort_by(|a, b| b.2.total_cmp(&a.2));
     let key = ls.first().copied().unwrap_or((Vec3::Y, Vec3::ONE, 1.0));
     let fill = ls.get(1).copied().unwrap_or((Vec3::NEG_Y, Vec3::ZERO, 0.0));
-    for (gt, body) in &planets {
+    for (gt, body, parent) in &planets {
         let centre = gt.translation();
+        // A planet out of sight is a still copy at a fraction of its brightness (#1146; the amount and its grade:
+        // `fog_objects::ghost::PLANET`). `shine.w` multiplies everything the planet's passes draw.
+        let brightness = if parent.is_some_and(|p| out_of_sight.contains(p.parent())) { crate::render::fog_objects::ghost::planet_linear() } else { 1.0 };
         for h in &body.materials {
             let Some(mut m) = materials.get_mut(h) else { continue };
             let p = &mut m.params;
+            p.shine.w = brightness;
             p.centre = centre.extend(1.0);
             [p.rot0, p.rot1, p.rot2] = body_axes(gt.compute_transform().rotation);
             p.eye = cam.translation().extend(1.0);
@@ -974,6 +984,41 @@ mod tests {
         let src = include_str!("planet.wesl").replace("\r\n", "\n");
         let halo = src.split("fn halo_light").nth(1).unwrap().split("\n}\n").next().unwrap();
         assert!(halo.contains("p.shine.w, 0.0)"), "{halo}");
+    }
+
+    /// #1146: a planet whose gate is out of sight is drawn at the out-of-sight fraction of its brightness; in sight
+    /// (or with no gate) at full, in both looks.
+    #[test]
+    fn a_planet_out_of_sight_is_dimmed_and_in_sight_is_not() {
+        use super::*;
+        for profile in [RenderProfile::Stock, RenderProfile::Refit] {
+            let mut app = App::new();
+            let mut effects = ProfileEffects::default();
+            effects.register_stock(Effect::Scenery);
+            app.insert_resource(effects)
+                .insert_resource(profile)
+                .insert_resource(crate::clock::AnimClock::new(crate::clock::ClockMode::Wall, 1))
+                .init_resource::<Assets<PlanetMaterial>>()
+                .add_systems(Update, update);
+            let material = |app: &mut App| {
+                app.world_mut().resource_mut::<Assets<PlanetMaterial>>().add(PlanetMaterial { params: base_params(), texture: None, albedo: None, relief: None, clouds: None, city: None, alpha: AlphaMode::Opaque })
+            };
+            let (a, b, c) = (material(&mut app), material(&mut app), material(&mut app));
+            app.world_mut().spawn((Camera3d::default(), GlobalTransform::from(Transform::from_xyz(0.0, 0.0, 10.0))));
+            let gate = app.world_mut().spawn(crate::render::fog_objects::OutOfSight).id();
+            let live_gate = app.world_mut().spawn_empty().id();
+            let body = |h: &Handle<PlanetMaterial>| PlanetBody { materials: vec![h.clone()], ground: vec![], shell: None, ground_name: String::new(), atmo_name: String::new(), applied: None, radius: 1.0 };
+            app.world_mut().spawn((GlobalTransform::IDENTITY, body(&a), ChildOf(gate)));
+            app.world_mut().spawn((GlobalTransform::IDENTITY, body(&b), ChildOf(live_gate)));
+            app.world_mut().spawn((GlobalTransform::IDENTITY, body(&c)));
+            app.update();
+            let w = |app: &App, h: &Handle<PlanetMaterial>| app.world().resource::<Assets<PlanetMaterial>>().get(h).unwrap().params.shine.w;
+            assert_eq!(w(&app, &a), crate::render::fog_objects::ghost::planet_linear(), "{profile:?}: out of sight");
+            assert_eq!((w(&app, &b), w(&app, &c)), (1.0, 1.0), "{profile:?}: in sight and with no gate");
+            app.world_mut().entity_mut(gate).remove::<crate::render::fog_objects::OutOfSight>();
+            app.update();
+            assert_eq!(w(&app, &a), 1.0, "{profile:?}: back in sight");
+        }
     }
 
     fn run_update(profile: super::RenderProfile) -> super::PlanetParams {
