@@ -13,6 +13,7 @@
 
 pub mod algebra;
 pub mod disasm;
+pub mod drl;
 #[doc(hidden)]
 pub mod fixture;
 pub mod format;
