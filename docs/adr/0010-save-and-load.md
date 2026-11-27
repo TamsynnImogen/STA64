@@ -161,3 +161,26 @@ allowed" state (read from data: a menu caption key).
   wait for the script-declared state of the rejected alternative?
 - Is a load time of minutes for a long mission acceptable for v2, with a
   progress display, or is a bound on it a condition for enabling mission saves?
+
+## Evidence since the first draft
+
+Facts gathered after this draft was written; the decisions above are unchanged.
+
+- **Sim state (open PR #1307, in review).** A tests-only change
+  (`crates/sta_sim/tests/save_round_trip.rs`) runs authored scenarios
+  (navigation round obstacles, a formation group, queued orders, combat across
+  the save point, random-number state, production, resources, the stuck-order
+  watchdog, visibility, one long mixed run) three ways: uninterrupted, by
+  snapshot into a fresh sim, and through a file. It found no sim state lost
+  (its own runs, about 15 s for the file). It does not cover controller state,
+  mission Lua state or client state.
+- **Mission Lua (issue #1300, open PR #1303, in review).** An experiment with
+  authored scripts showed mission Lua is not reproducible from one Lua state to
+  the next (table traversal order, sort ties, weak tables, printed references).
+  PR #1303 makes it reproducible by vendoring and patching the Lua runtime
+  (ordered traversal, stable sort, no weak tables, stable reference printing).
+  This is a precondition for re-running a mission on load (V4 b). Whether the
+  vendored runtime needs an ADR of its own is for the deciders.
+- **Skirmish AI.** Its state has no serialisation today, and its folder is under
+  an open claim of the repository owner. Saving a skirmish with AI seats (V5)
+  is blocked until that claim is released or shared.
