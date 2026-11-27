@@ -71,6 +71,7 @@ pub mod repair;
 pub mod recrew;
 #[cfg(test)]
 mod recrew_tests;
+pub mod save;
 pub mod setup;
 pub mod snapshot;
 pub mod sensors;

@@ -74,6 +74,39 @@ pub struct GameOptions {
 /// A computer player or a mission: reads views and events, writes commands.
 pub trait Controller: Send {
     fn think(&mut self, view: &WorldView, events: &[SimEvent], out: &mut Vec<Command>);
+
+    /// Hands out the controller's changing state as one versioned, opaque
+    /// record for a save file (ADR 0010 V5), or `None`: this controller
+    /// cannot be saved, and a save of a match it plays is refused with its
+    /// seat named instead of losing its state. The default is `None`.
+    ///
+    /// A controller that opts in must be deterministic given this record:
+    /// restored from it and fed the same views and events, it sends the same
+    /// commands as the uninterrupted controller would have (V5: a loaded
+    /// match continues as an uninterrupted one would). The record holds
+    /// state only, never configuration that is rebuilt from the setup and
+    /// content. Restoring is the owning crate's job: it builds the
+    /// controller and calls [`Controller::restore_state`].
+    fn save_state(&self) -> Option<ControllerState> {
+        None
+    }
+
+    /// Takes back a record made by [`Controller::save_state`]. Refuses (with
+    /// a message naming the reason) a record version it does not read. The
+    /// default refuses everything: a controller that does not save does not
+    /// restore.
+    fn restore_state(&mut self, _state: &ControllerState) -> Result<(), String> {
+        Err("this controller does not restore saved state".to_string())
+    }
+}
+
+/// A controller's state as a save file keeps it: a version of the
+/// controller's own record layout and opaque bytes only that controller
+/// reads.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ControllerState {
+    pub version: u32,
+    pub data: Vec<u8>,
 }
 
 impl Sim {
