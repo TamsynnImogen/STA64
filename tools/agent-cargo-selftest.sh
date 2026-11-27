@@ -3,7 +3,7 @@
 # resolution through --dry-run, plus a real lock-contention check that runs
 # no cargo (a fake `cargo` on PATH). Usage: tools/agent-cargo-selftest.sh
 set -u
-unset STA64_QUEUE STA64_QUEUE_KEY STA64_QUEUE_ACTIVE STA64_QUEUE_STALE STA64_MOLD STA64_LOCK_WAIT STA64_LOCK_DIR RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTC_WRAPPER CARGO_BUILD_JOBS
+unset STA64_QUEUE STA64_QUEUE_KEY STA64_QUEUE_ACTIVE STA64_QUEUE_STALE STA64_MOLD STA64_LOCK_WAIT STA64_LOCK_DIR RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTC_WRAPPER CARGO_BUILD_JOBS STA64_INCREMENTAL CARGO_INCREMENTAL
 here=$(cd "$(dirname "$0")" && pwd)
 w=$here/agent-cargo
 fails=0
@@ -51,6 +51,17 @@ o=$(STA64_QUEUE=0 dry --queue --heavy check -p x); expect queue-flag "$o" "queue
 o=$(dry --bench ./a2test run hud);   expect bench-class "$o" "class:  bench"; expect bench-lock "$o" "bench.lock (shared)"
 expect bench-cmd "$o" "cmd:    ./a2test run hud"; refute bench-no-cargo "$o" "CARGO_INCREMENTAL"
 
+# Incremental knob (opt-in): default keeps CARGO_INCREMENTAL=0; the knob leaves it unset.
+o=$(dry check -p sta_sim);                       expect incr-default "$o" "CARGO_INCREMENTAL=0"; refute incr-default-unset "$o" "unset CARGO_INCREMENTAL"
+o=$(STA64_INCREMENTAL=1 dry check -p sta_sim);   refute incr-env-on "$o" "CARGO_INCREMENTAL=0"; expect incr-env-dry "$o" "env:    unset CARGO_INCREMENTAL"
+expect incr-keeps-jobs "$o" "CARGO_BUILD_JOBS=2"; expect incr-keeps-debug "$o" "CARGO_PROFILE_DEV_DEBUG=0"; expect incr-keeps-lock "$o" "light.lock"
+o=$(dry --incremental check -p sta_sim);         refute incr-flag "$o" "CARGO_INCREMENTAL=0"; expect incr-flag-dry "$o" "unset CARGO_INCREMENTAL"
+o=$(STA64_INCREMENTAL=0 dry check -p sta_sim);   expect incr-env-off "$o" "CARGO_INCREMENTAL=0"
+o=$(dry --incremental check --workspace);        expect incr-check-class "$o" "class:  check"; expect incr-check-0 "$o" "CARGO_INCREMENTAL=0"
+expect incr-check-notice "$o" "incremental ignored for the shared check directory"; refute incr-check-unset "$o" "unset CARGO_INCREMENTAL"
+o=$(dry --incremental --heavy check -p sta_sim -- x); expect incr-heavy "$o" "unset CARGO_INCREMENTAL"
+o=$(dry --incremental --bench ./a2test run hud); refute incr-bench "$o" "CARGO_INCREMENTAL"
+
 # sccache opt-in by presence, with a fake binary.
 mkdir -p "$tmp/bin"; printf '#!/bin/sh\nexit 0\n' > "$tmp/bin/sccache"; chmod +x "$tmp/bin/sccache"
 o=$(PATH="$tmp/bin:$PATH" SCCACHE_DIR=/x/y "$w" --dry-run check -p sta_sim 2>&1)
@@ -70,6 +81,17 @@ if command -v flock >/dev/null 2>&1; then
   mkdir -p "$tmp/locks"
   o=$(PATH="$tmp/bin:$PATH" STA64_SCCACHE=0 STA64_LOCK_DIR="$tmp/locks" "$w" --heavy check -p sta_sim 2>&1); rc=$?
   expect lock-free-runs "$o" "ran-fake-cargo"
+  # The child's real environment: default sets 0; the knob leaves the variable absent, whatever the caller exported.
+  printf '#!/bin/sh\necho "child CARGO_INCREMENTAL=${CARGO_INCREMENTAL-absent}"\n' > "$tmp/bin/cargo"; chmod +x "$tmp/bin/cargo"
+  run() { PATH="$tmp/bin:$PATH" STA64_SCCACHE=0 STA64_LOCK_DIR="$tmp/locks" "$@" 2>&1; }
+  o=$(run "$w" --light check -p x);                                   expect child-default "$o" "child CARGO_INCREMENTAL=0"
+  o=$(CARGO_INCREMENTAL=1 run "$w" --light check -p x);               expect child-default-over-1 "$o" "child CARGO_INCREMENTAL=0"
+  o=$(STA64_INCREMENTAL=1 run "$w" --light check -p x);               expect child-incr "$o" "child CARGO_INCREMENTAL=absent"
+  o=$(STA64_INCREMENTAL=1 CARGO_INCREMENTAL=0 run "$w" --light check -p x); expect child-incr-caller0 "$o" "child CARGO_INCREMENTAL=absent"
+  o=$(CARGO_INCREMENTAL=1 run "$w" --incremental --light check -p x); expect child-incr-caller1 "$o" "child CARGO_INCREMENTAL=absent"
+  o=$(STA64_INCREMENTAL=1 CARGO_INCREMENTAL=1 run "$w" --check check -p x); expect child-incr-check "$o" "child CARGO_INCREMENTAL=0"
+  expect child-incr-check-notice "$o" "incremental ignored"
+  printf '#!/bin/sh\necho ran-fake-cargo\nsleep 5 >/dev/null 2>&1 &\nexit 3\n' > "$tmp/bin/cargo"; chmod +x "$tmp/bin/cargo"
   [ "$rc" = 3 ] || { echo "FAIL exit-code: $rc, want 3"; fails=$((fails+1)); }
   ( exec 8>"$tmp/locks/heavy.lock"; flock -n 8 ) || { echo "FAIL lock-leak (background child kept the lock)"; fails=$((fails+1)); }
   ( exec 8>"$tmp/locks/check.lock"; flock -n 8 && touch "$tmp/held" && sleep 4 ) &
