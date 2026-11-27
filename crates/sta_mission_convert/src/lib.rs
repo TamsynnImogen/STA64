@@ -26,7 +26,9 @@ pub fn tool_token() -> String {
 
 pub mod a1;
 pub mod algebra;
+pub mod cache;
 pub mod call;
+pub mod cli;
 pub mod convert;
 pub mod disasm;
 pub mod drl;
@@ -39,6 +41,8 @@ pub mod image;
 pub mod lift;
 pub mod map;
 pub mod msvc;
+pub mod output;
+pub mod paths;
 pub mod pe;
 pub mod prelude;
 pub mod pyval;
