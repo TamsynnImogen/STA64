@@ -439,12 +439,13 @@ mod e2e {
         args.push(out.path().to_string_lossy().into_owned());
         args.extend(extra.iter().map(|s| (*s).to_owned()));
         let (mut so, mut se) = (Vec::new(), Vec::new());
-        let mut listing = rust_listing;
-        let code = cli::run(
+        // the binary's own decoder: the parsed file, no second read
+        let mut decoder = |_: &Path, pe: &Pe| disasm::disassemble(pe);
+        let code = cli::run_with(
             &args,
             &cli::Env::from_process(),
             &mut cli::Io { out: &mut so, err: &mut se },
-            &mut listing,
+            &mut decoder,
         );
         assert!(se.is_empty() || code != 0, "stderr output on a successful run");
         let lines: Vec<String> =
@@ -518,6 +519,12 @@ mod e2e {
         );
         let d = first_difference(&mine, &ref_lines);
         assert_eq!(d, None, "{label}: first differing console line");
+        // The per-mission outcomes: the missions that failed are the reference's (the console
+        // lines are equal, so also their texts), and the exit code says whether any did. It is not
+        // assumed to be 0: the run exits 1 when a mission failed, as the reference's child does.
+        let fails = |v: &[String]| v.iter().filter(|l| l.starts_with("  FAIL ")).count();
+        assert_eq!(fails(&mine), fails(&ref_lines), "{label}: the number of failed missions");
+        assert_eq!(code, i32::from(fails(&ref_lines) != 0 || ref_exit != 0), "{label}: exit code");
         report.assert_ok(label);
     }
 
@@ -537,7 +544,6 @@ mod e2e {
         let Some(install) = reference.install(Kind::Armada2) else { return };
         let root = require(harness::A2_VAR);
         let (code, lines, files) = run_cli(&root, &[]);
-        assert_eq!(code, 0);
         check_run(install, "dsl_to_lua.py", "a2-e2e", code, &lines, &files);
     }
 
@@ -547,7 +553,6 @@ mod e2e {
         let Some(install) = reference.install(Kind::Armada1) else { return };
         let root = require(harness::A1_VAR);
         let (code, lines, files) = run_cli(&root, &[]);
-        assert_eq!(code, 0);
         check_run(install, "a1_to_lua.py", "a1-e2e", code, &lines, &files);
     }
 
@@ -559,7 +564,6 @@ mod e2e {
         assert!(install.include_unmapped());
         let root = require(harness::A1_VAR);
         let (code, lines, files) = run_cli(&root, &["--include-unmapped"]);
-        assert_eq!(code, 0);
         check_run(install, "a1_to_lua.py", "a1-unmapped-e2e", code, &lines, &files);
     }
 
