@@ -33,6 +33,9 @@ pub(crate) mod approach_tests;
 #[cfg(test)]
 mod gravity_tests;
 #[cfg(test)]
+#[path = "movement/order_burst_tests.rs"]
+mod order_burst_tests;
+#[cfg(test)]
 #[path = "movement/formation_leader_tests.rs"]
 mod formation_leader_tests;
 
