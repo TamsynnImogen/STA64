@@ -102,7 +102,9 @@ pub const READ_ODF_KEYS: &[&str] = &[
     "transporttofriendsonnoteasy",
     // Ship-system upgrade pods and resolved station chains.
     "isshipupgrade", "upgradelevel", "upgradesystem", "upgrademultiplier",
-    // #1153: explosion and shockwave definitions (`ExplosionTable`, typed, not drawn yet).
+    // #1153: explosion and shockwave definitions (`ExplosionTable`, typed, not drawn yet). The generic
+    // names (`length`, `color`, `texture`, `rate`) are read only in explosion and shockwave ODFs;
+    // this flat list cannot say so.
     "dbname", "length", "shockwavedelay", "shockwaveminimum", "rays", "color", "texture", "fadefactor", "rate",
 ];
 

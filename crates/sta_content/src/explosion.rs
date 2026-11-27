@@ -2,14 +2,18 @@
 //! `fireball` and `selfDestruct` say, and the chunk settings of `ART_CFG.h`, as typed data on
 //! the content database. Nothing draws them yet.
 //!
-//! Presentation only: not part of the content digest (ADR 0004 D10 covers what the sim reads;
-//! the self-destruct blast damage keys are in the digest already, through
-//! [`crate::SelfDestructBlast`]). A key that is absent stays `None`: the engine's own default
-//! for it is not established here (not measured), so no default is invented.
+//! Presentation only: not part of the content digest, because nothing in the sim reads this
+//! table (ADR 0004 D10; the self-destruct blast damage keys are in the digest already, through
+//! [`crate::SelfDestructBlast`]). Any explosion key the sim later reads enters the digest then
+//! (ADR 0004 D10), with goldens regenerated and the `full-ci` label.
 //!
-//! Evidence grades in the doc comments: "data" is read from data (the key exists in the ODF
-//! classes the games ship), "static" is read from the executable, static; "inferred" and "not
-//! measured" are as stated. Profile rules (ADR 0004 D4/D5) are those of every ODF consumer:
+//! A key that is absent stays `None`. Resolving the defaults for absent keys, and the default
+//! explosion for a unit that names none, is not implemented yet (they are known at grade "read
+//! from the executable, static"; a follow-up applies them with their grade).
+//!
+//! Evidence grades in the doc comments: "data" is a key the ODF class defines, "static" is read
+//! from the executable, static; "inferred" and "not measured" are as stated. Profile rules
+//! (ADR 0004 D4/D5) are those of every ODF consumer:
 //! [`crate::odf::resolve_for_profile`], so includes and the first-assignment rule of the mounted
 //! profile apply.
 
@@ -36,8 +40,7 @@ pub struct ExplosionDef {
     pub sound: Option<String>,
     /// `dbName`: the model of the sprite cluster the fireball plays (data; its use: static).
     pub model: Option<String>,
-    /// `length`: seconds (data). Its effect is not established: what is drawn can end before it
-    /// (static, one stock model measured); not measured otherwise.
+    /// `length`: seconds (data). Its effect on what is drawn is not established (not measured).
     pub length: Option<Fixed>,
     /// `shockwave`: the shockwave ODF started after the delay (data; static). `null` is kept
     /// as written; [`ExplosionTable::shockwave`] resolves a real name.
@@ -64,34 +67,35 @@ pub struct ShockwaveDef {
     pub texture: Option<String>,
     /// `radiusFactor`: the ring's end size as a multiple of the craft's radius (static).
     pub radius_factor: Option<Fixed>,
-    /// `fadeFactor`: the share of the end size from which the ring fades (static).
+    /// `fadeFactor`: the share of the end size from which the ring fades (static). The fade
+    /// shape at the end is unresolved (not measured).
     pub fade_factor: Option<Fixed>,
     /// `rate`: growth in units per second (static; the outer edge measured once).
     pub rate: Option<Fixed>,
 }
 
 /// The chunk settings of `ART_CFG.h` (the pieces of a hull flying off a removed craft). A key
-/// the file does not set stays `None`; the engine's default for it is not recorded here.
-///
-/// The Armada II keys and the Armada I keys differ (`density` and `max_lifetime` are the
-/// Armada I pair); a file sets the keys of its own game. Meaning of the values: static.
+/// the file does not set stays `None`; applying the engine's default for it is not implemented
+/// yet (the defaults are known at grade "read from the executable, static"). Every key is read
+/// when present; the meaning of the values is static, except `density` and `max_lifetime`,
+/// whose rule is not checked.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ChunkCfg {
     /// `ST3D_CHUNK_MANAGER_MAX_CHUNKS`: the cap on live chunks.
     pub max_chunks: Option<u32>,
-    /// `ST3D_CHUNK_SIZE_FACTOR` (Armada II).
+    /// `ST3D_CHUNK_SIZE_FACTOR`.
     pub size_factor: Option<Fixed>,
-    /// `ST3D_CHUNK_LIFETIME_AVG` (Armada II): seconds.
+    /// `ST3D_CHUNK_LIFETIME_AVG`: seconds.
     pub lifetime_average: Option<Fixed>,
-    /// `ST3D_CHUNK_LIFETIME_DEVIATION` (Armada II): seconds.
+    /// `ST3D_CHUNK_LIFETIME_DEVIATION`: seconds.
     pub lifetime_deviation: Option<Fixed>,
     /// `ST3D_CHUNK_MAX_ANGULAR_VELOCITY`: radians per second.
     pub max_angular_velocity: Option<Fixed>,
     /// `ST3D_CHUNK_MAX_VELOCITY`: units per second.
     pub max_velocity: Option<Fixed>,
-    /// `ST3D_CHUNK_DENSITY` (Armada I). Its rule was not checked (not measured).
+    /// `ST3D_CHUNK_DENSITY`: read when present; its rule is not checked (not measured).
     pub density: Option<Fixed>,
-    /// `ST3D_CHUNK_MAX_LIFETIME` (Armada I): seconds. Its rule was not checked (not measured).
+    /// `ST3D_CHUNK_MAX_LIFETIME`: seconds, read when present; its rule is not checked (not measured).
     pub max_lifetime: Option<Fixed>,
 }
 
@@ -224,7 +228,7 @@ impl ExplosionTable {
 
 /// A non-negative number, `None` when the key is absent or not a number (the latter warns).
 fn nonneg(r: &mut Reader<'_>, key: &str) -> Option<Fixed> {
-    r.num(key).map(|v| Fixed::from_f64(v.max(0.0)))
+    r.num(key).map(|v| Fixed::from_f64(v.clamp(0.0, 1.0e9)))
 }
 
 /// `color`: three numbers separated by white space. Anything else warns and stays unset.
@@ -316,7 +320,7 @@ mod tests {
         assert_eq!((e.length, e.shockwave_delay), (None, Some(Fixed::ZERO)));
         let s = t.shockwave("ring").unwrap();
         assert_eq!((s.color, s.rays), (None, None));
-        assert!(s.rate.is_some_and(|r| r > fx(0.0)));
+        assert_eq!(s.rate, Some(fx(1.0e9)), "a huge value is clamped to the same ceiling as colour and chunk values");
         let text = format!("{w:?}");
         assert!(text.contains("length") && text.contains("color") && text.contains("rays"), "{text}");
     }
