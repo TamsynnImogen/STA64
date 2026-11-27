@@ -7,26 +7,24 @@
 //! every recursion, `render_lv` and `render_stmt` included) when it renders for Armada I; that is
 //! the same as the patch.
 
-use crate::format::{lua_str, lua_str_py};
+use crate::format::{lua_str, lua_str_py, Ctx};
 use crate::pyval::Py;
 use crate::{DecodeError, Result};
 
 /// The wrapper's own cases: `Some(result)` when `a1_to_lua.render_expr` answers for `e` itself
 /// (`nil`, `undecodedcall`, the kinds that cannot be rendered), `None` when the Armada II renderer
 /// answers. `ctx` is `"num"`, `"bool"` or `"arg"`.
-pub fn intercept(e: &Py, ctx: &str) -> Option<Result<String>> {
+pub fn intercept(e: &Py, ctx: Ctx) -> Option<Result<String>> {
     let k = match e.item(0) {
         Ok(k) => k,
         Err(err) => return Some(Err(err)),
     };
     match k.as_str() {
-        Some("nil") => Some(Ok((if ctx == "bool" {
-            "false"
-        } else if ctx == "num" {
-            "0"
-        } else {
-            "nil"
-        })
+        Some("nil") => Some(Ok(match ctx {
+            Ctx::Bool => "false",
+            Ctx::Num => "0",
+            Ctx::Arg => "nil",
+        }
         .to_owned())),
         Some("undecodedcall") => Some(undecoded(e, ctx)),
         Some(kind @ ("saved" | "worldoff" | "impaddr" | "rule" | "index" | "impslot" | "mem" | "stackslot")) => {
@@ -36,14 +34,12 @@ pub fn intercept(e: &Py, ctx: &str) -> Option<Result<String>> {
     }
 }
 
-fn undecoded(e: &Py, ctx: &str) -> Result<String> {
+fn undecoded(e: &Py, ctx: Ctx) -> Result<String> {
     let s = format!("UD({}, {})", lua_str_py(e.item(1)?)?, lua_str_py(e.item(2)?)?);
-    Ok(if ctx == "bool" {
-        format!("T({s})")
-    } else if ctx == "num" {
-        format!("N({s})")
-    } else {
-        s
+    Ok(match ctx {
+        Ctx::Bool => format!("T({s})"),
+        Ctx::Num => format!("N({s})"),
+        Ctx::Arg => s,
     })
 }
 

@@ -1359,7 +1359,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
         self.snap_fix(&value, test, &mut cache, stmts)
     }
 
-    fn snap_fix(
+    pub(crate) fn snap_fix(
         &mut self,
         v: &Py,
         test: &dyn Fn(&Py) -> Result<bool>,

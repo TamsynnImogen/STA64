@@ -37,6 +37,11 @@ fn int(v: &Py, op: &str) -> Result<i64> {
 pub struct Namer<'d, 'a> {
     pub d: &'d Dsl<'a>,
     pub names: HashMap<i64, String>,
+    /// LUA-15e edit: the game being rendered. For Armada I, `render_expr` first asks
+    /// `a1_to_lua.render_expr`'s own cases (the Python patches `dsl.render_expr`).
+    pub game: crate::lift::Game,
+    /// LUA-15e edit: set for `a1_to_lua.CondNamer` (names by the table, else `R_fn_<offset>`).
+    pub cond: bool,
 }
 
 impl<'d, 'a> Namer<'d, 'a> {
@@ -70,11 +75,23 @@ impl<'d, 'a> Namer<'d, 'a> {
                 names.insert(*a, format!("{role}_{}", py_hex_plain(a - base)));
             }
         }
-        Namer { d, names }
+        Namer { d, names, game: crate::lift::Game::A2, cond: false }
+    }
+
+    /// LUA-15e edit: `CondNamer(d, names)` of `a1_to_lua.py`.
+    pub fn cond_namer(d: &'d Dsl<'a>, names: HashMap<i64, String>) -> Self {
+        Namer { d, names, game: crate::lift::Game::A1, cond: true }
     }
 
     /// `Namer.fn`: the Lua identifier of the function at `a`.
     pub fn fn_name(&self, a: i64) -> String {
+        if self.cond {
+            // `CondNamer.fn`: `self.names.get(a) or f"R_fn_{a - base:x}"`
+            return match self.names.get(&a).filter(|n| !n.is_empty()) {
+                Some(n) => n.clone(),
+                None => format!("R_fn_{}", py_hex_plain(a - i64::from(self.d.pe.base()))),
+            };
+        }
         let fallback = || format!("fn_{}", py_hex_plain(a - i64::from(self.d.pe.base())));
         match self.names.get(&a).filter(|n| !n.is_empty()) {
             None => fallback(),
@@ -107,6 +124,11 @@ fn comma_args(v: &Py, nm: &Namer<'_, '_>) -> Result<String> {
 /// `render_expr(e, nm, ctx)`: the Lua source of an expression; `ctx` is `Num` (a number), `Bool`
 /// or `Arg`.
 pub fn render_expr(e: &Py, nm: &Namer<'_, '_>, ctx: Ctx) -> Result<String> {
+    if nm.game == crate::lift::Game::A1
+        && let Some(r) = crate::a1::render::intercept(e, ctx)
+    {
+        return r; // LUA-15e edit: `a1_to_lua.render_expr` wraps this function
+    }
     let kv = e.item(0)?;
     let k = kv.as_str().unwrap_or("");
     if matches!(k, "cmp" | "not" | "and" | "or" | "truth") {

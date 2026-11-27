@@ -85,6 +85,15 @@ impl<'a> A1Dll<'a> {
         Ok(d)
     }
 
+    /// `A1Lifter(self)`: a lifter for this DLL.
+    pub fn lifter(&self) -> crate::lift::Lifter<'_, 'a> {
+        let mut l = crate::lift::Lifter::new(&self.dsl);
+        l.game = crate::lift::Game::A1;
+        l.a1.stubs = self.stubs.clone();
+        l.a1.entries = self.entries.clone();
+        l
+    }
+
     /// `A1Dll.entry`: the function address behind a thunk; a `DecodeError` when no instruction
     /// is there.
     pub fn entry(&self, addr: i64) -> Result<i64> {

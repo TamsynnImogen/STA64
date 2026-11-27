@@ -45,7 +45,7 @@ use crate::tup;
 use crate::Result;
 
 pub use dll::A1Dll;
-pub use mission::{convert, convert_dlls, find_missions, lift_mission, mission_report, CondNamer, MissionLift, Namer, Render};
+pub use mission::{convert_dlls, convert_install, find_missions, lift_mission, mission_report, MissionLift, Report};
 
 /// `SAVED` of `a1_to_lua.py`: the registers a function keeps for its caller.
 pub const SAVED: [&str; 4] = ["ebx", "esi", "edi", "ebp"];

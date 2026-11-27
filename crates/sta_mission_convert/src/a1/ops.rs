@@ -8,17 +8,17 @@
 
 use regex_lite_free::{hex_imm, imm_text};
 
-use crate::algebra::{lv_value, simplify};
+use crate::algebra::lv_value;
 use crate::dsl::pat::{self, M};
 use crate::dsl::{is_reg32, reg8};
-use crate::format::{lua_num, py_hex};
-use crate::lift::{dec, int_of, py_err, tg, Flow, Game, Lifter, State};
+use crate::format::py_hex;
+use crate::lift::{dec, int_of, tg, Flow, Lifter, State};
 use crate::msvc::{data_kind, plain_name};
 use crate::pyval::{py_floordiv, py_int, py_mod, py_strip, Py};
 use crate::tup;
 use crate::Result;
 
-use super::{and0, is_head, is_mem, is_uninit, mem, uninit, CFact, Edge};
+use super::{and0, is_mem, is_uninit, uninit, CFact, Edge};
 
 /// Small matchers for the regexes of this module (no regex crate).
 mod regex_lite_free {
@@ -652,10 +652,4 @@ pub(crate) fn ds_target(ops: &str) -> Option<&str> {
     }
     let h = m.hex1()?;
     m.end_exact().then_some(h)
-}
-
-#[allow(dead_code)]
-fn _unused(_: &str) -> Result<()> {
-    let _ = (lua_num, simplify, py_err::<()>, is_head, mem, Game::A1);
-    Ok(())
 }
