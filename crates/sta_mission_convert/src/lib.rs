@@ -11,12 +11,17 @@
 //! This is the image layer (step LUA-15a): the PE reader, the engine `.map` reader and the
 //! engine vtable names. Decoding and lifting follow in later steps.
 
+pub mod algebra;
 pub mod disasm;
 #[doc(hidden)]
 pub mod fixture;
+pub mod format;
 pub mod image;
 pub mod map;
+pub mod msvc;
 pub mod pe;
+pub mod prelude;
+pub mod pyval;
 
 pub use image::{FlatImage, Image, Section};
 
