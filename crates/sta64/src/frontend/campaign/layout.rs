@@ -28,6 +28,10 @@ pub enum CSlot {
     ListDetails,
     ListBack,
     ListPlay,
+    /// The conversion's progress or result line under the rows (LUA-15k); only while it has text.
+    ListStatus,
+    /// The conversion's button (Prepare missions, Convert again, Cancel); only where it applies.
+    ListConvert,
     // Briefing.
     BriefTitle,
     BriefText,
@@ -59,7 +63,8 @@ pub fn region(slot: CSlot) -> Region {
         CSlot::BriefGoals => a(40.0, 370.0, 720.0, 170.0),
         CSlot::DebResult => a(40.0, 50.0, 720.0, 60.0),
         CSlot::DebText => a(40.0, 120.0, 720.0, 410.0),
-        CSlot::DebRetry => a(300.0, 560.0, 200.0, 34.0),
+        CSlot::DebRetry | CSlot::ListConvert => a(300.0, 560.0, 200.0, 34.0),
+        CSlot::ListStatus => a(40.0, 532.0, 720.0, 26.0),
     }
 }
 

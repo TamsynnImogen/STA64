@@ -357,6 +357,9 @@ pub enum Event {
     /// [`Mission::targets`]) for a file that would overwrite one the tool did not write. `message`
     /// is what follows `FAIL <name>: `.
     Failed { mission: String, name: String, message: String },
+    /// A file of this mission was left as it is because the player edited it since the tool wrote it
+    /// (only for an [`crate::output::Edited::Keep`] folder). `name` is the file stem.
+    KeptEdited { mission: String, name: String },
     /// A mission is done (converted, from the cache or failed).
     Done { index: usize, total: usize, mission: String },
 }
@@ -373,6 +376,8 @@ pub struct MissionResult {
     pub written: Vec<String>,
     /// Why it failed (the conversion, or a file that would overwrite one the tool did not write).
     pub failures: Vec<String>,
+    /// The files kept because the player edited them (`<stem>.lua`, see [`Event::KeptEdited`]).
+    pub kept: Vec<String>,
 }
 
 impl MissionResult {
@@ -771,6 +776,10 @@ fn convert_mission(
             match out.write(&file, &source) {
                 Ok(()) => r.written.push(file),
                 Err(WriteError::Collision(msg)) => fail(sink, r, stem, msg),
+                Err(WriteError::Kept) => {
+                    sink(&Event::KeptEdited { mission: r.mission.clone(), name: stem.clone() });
+                    r.kept.push(file);
+                }
                 Err(WriteError::Fatal(msg)) => return Err(msg),
             }
         }

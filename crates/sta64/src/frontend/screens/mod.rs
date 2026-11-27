@@ -213,6 +213,8 @@ impl Plugin for ScreensPlugin {
             .add_message::<StartGame>()
             .add_message::<ModChosen>()
             .add_message::<crate::frontend::campaign::StartMission>()
+            .add_message::<crate::frontend::campaign::RequestConversion>()
+            .add_message::<crate::game::mission_convert::CancelConversion>()
             .add_plugins(crate::frontend::lobby::LobbyPlugin)
             .add_systems(Startup, make_draft)
             .add_systems(OnEnter(AppState::FrontEnd), enter_front_end)

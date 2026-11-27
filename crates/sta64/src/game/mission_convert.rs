@@ -42,7 +42,7 @@ use std::thread::JoinHandle;
 use bevy::prelude::*;
 use sta_mission_convert::cache::{BUILD_ID, Cache};
 use sta_mission_convert::install::{self, Env, Event as ConvEvent, Install, InstallError, Options, Summary};
-use sta_mission_convert::output::OutDir;
+use sta_mission_convert::output::{Edited, OutDir};
 
 /// How many worker messages one frame takes at most; the rest wait for the next frame.
 pub const MAX_EVENTS_PER_FRAME: usize = 64;
@@ -215,7 +215,9 @@ fn stamp_matches(plan: &Plan, inputs: &str) -> bool {
     let Some(rest) = text.strip_prefix(inputs) else { return false };
     match rest.strip_prefix("written ").and_then(|n| n.trim().parse::<usize>().ok()) {
         Some(0) => true,
-        Some(n) => OutDir::inspect(&plan.out_dir, plan.out_res.clone(), false).is_ok_and(|o| o.count_ours() >= n),
+        // a script the player edited is present too: a run keeps it, so it does not call for one
+        Some(n) => OutDir::inspect_with(&plan.out_dir, plan.out_res.clone(), false, Edited::Keep)
+            .is_ok_and(|o| o.count_ours() + o.edited_names().len() >= n),
         None => false,
     }
 }
@@ -315,7 +317,10 @@ fn run(plan: &Plan, forced: bool, cancel: &AtomicBool, tx: &Sender<Msg>, convert
     let _ = std::fs::remove_file(&plan.stamp_path);
     // A forced run goes without the cache; a cache folder that cannot be opened is converted around.
     let cache = if forced { None } else { install::open_cache(&plan.cache_dir, &plan.out_res, &plan.install, &plan.env).ok() };
-    let mut out = match OutDir::inspect(&plan.out_dir, plan.out_res.clone(), false) {
+    // A script the player edited is kept and reported by a normal run; "convert again" replaces it.
+    // A script the tool never wrote is never touched: the folder is refused (no keep_foreign).
+    let policy = if forced { Edited::Replace } else { Edited::Keep };
+    let mut out = match OutDir::inspect_with(&plan.out_dir, plan.out_res.clone(), false, policy) {
         Ok(o) => o,
         Err(m) => return Done::Aborted(m),
     };
@@ -400,6 +405,8 @@ pub struct ConversionState {
     pub failures: Vec<(String, String)>,
     /// Files of the Python tool moved aside at the start: `(old, new)`.
     pub moved_aside: Vec<(String, String)>,
+    /// Script stems the run left alone because the player edited them since.
+    pub kept_edited: Vec<String>,
     /// Worker messages taken so far in this run.
     pub events_seen: usize,
     /// How the last run ended; `None` before the first run and while one is going.
@@ -569,6 +576,7 @@ fn apply(state: &mut ConversionState, e: ConvEvent) {
         ConvEvent::Started { mission, .. } => state.current = Some(mission),
         ConvEvent::Console(_) => {}
         ConvEvent::Failed { mission, message, .. } => state.failures.push((mission, message)),
+        ConvEvent::KeptEdited { name, .. } => state.kept_edited.push(name),
         ConvEvent::Done { index, .. } => state.done = index + 1,
     }
 }
@@ -914,16 +922,18 @@ mod tests {
 
     /// A converter that counts its calls and writes one script (the manifest with it).
     fn counting(calls: Arc<AtomicUsize>) -> Arc<Fake> {
-        fake(move |_i, _o, out, _c, _cancel, _sink| {
+        fake(move |_i, _o, out, _c, _cancel, sink| {
             calls.fetch_add(1, Ordering::SeqCst);
-            out.write("fed1.lua", b"-- authored\n").unwrap();
+            let mut one = install::MissionResult { mission: "fed1".into(), converted: true, ..install::MissionResult::default() };
+            match out.write("fed1.lua", b"-- authored\n") {
+                Ok(()) => one.written.push("fed1.lua".into()),
+                Err(sta_mission_convert::output::WriteError::Kept) => {
+                    sink(&ConvEvent::KeptEdited { mission: "fed1".into(), name: "fed1".into() });
+                    one.kept.push("fed1.lua".into());
+                }
+                Err(e) => panic!("{e}"),
+            }
             let _ = out.finish();
-            let one = install::MissionResult {
-                mission: "fed1".into(),
-                converted: true,
-                written: vec!["fed1.lua".into()],
-                ..install::MissionResult::default()
-            };
             Summary { total: 1, missions: vec![one], ..Summary::default() }
         })
     }
@@ -1024,16 +1034,34 @@ mod tests {
         finish_run(&mut app);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         assert_eq!(std::fs::read(&lua).unwrap(), b"-- authored\n");
-        // a script cut short or edited is not the content the manifest lists: not skipped either; it
-        // is the player's now, so the run refuses the folder and overwrites nothing
-        for bytes in [&b""[..], &b"-- edited\n"[..]] {
-            std::fs::write(&lua, bytes).unwrap();
-            request(&mut app, &root, false);
+        // a script the player edited stays: the stamp counts it as present, so nothing runs
+        std::fs::write(&lua, b"-- edited\n").unwrap();
+        request(&mut app, &root, false);
+        finish_run(&mut app);
+        assert_eq!(seen(&app).last(), Some(&Outcome::Skipped));
+        assert_eq!(std::fs::read(&lua).unwrap(), b"-- edited\n");
+        // a run that is made for another reason keeps it and says so
+        put(&root.join("missions/x1S.dsl"), b"junk, changed");
+        request(&mut app, &root, false);
+        finish_run(&mut app);
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        assert_eq!(state(&app).kept_edited, vec!["fed1".to_owned()]);
+        assert_eq!(std::fs::read(&lua).unwrap(), b"-- edited\n", "the edit is kept");
+        // "convert again" replaces it
+        request(&mut app, &root, true);
+        finish_run(&mut app);
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
+        assert!(state(&app).kept_edited.is_empty());
+        assert_eq!(std::fs::read(&lua).unwrap(), b"-- authored\n");
+        // a file the tool never wrote is never touched: the folder is refused, whatever the run
+        put(&plan.out_res.join("missions/mine.lua"), b"-- mine\n");
+        for forced in [false, true] {
+            request(&mut app, &root, forced);
             finish_run(&mut app);
             assert!(matches!(seen(&app).last(), Some(Outcome::Aborted(m)) if m.contains("did not write")), "{:?}", seen(&app).last());
-            assert_eq!(std::fs::read(&lua).unwrap(), bytes);
         }
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(std::fs::read(plan.out_res.join("missions/mine.lua")).unwrap(), b"-- mine\n");
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
     }
 
     #[test]
