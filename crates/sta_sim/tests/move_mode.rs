@@ -144,8 +144,9 @@ fn older_snapshots_load_with_every_order_on_the_content_default() {
     let (mut sim, [a, ..]) = fleet();
     sim.step(&[go(0, &[a], v(3000, 0), false, None)]);
     let bytes = sim.snapshot();
-    // Format 51 is the same chain without the final move-mode record (two bytes when it has no rows).
-    let mut old = bytes[..bytes.len() - 2].to_vec();
+    // Format 51 is the same chain without its last two records, the move modes and the beams in
+    // flight (two bytes each when they have no rows).
+    let mut old = bytes[..bytes.len() - 4].to_vec();
     old[4..6].copy_from_slice(&sta_sim::snapshot::PRE_MOVE_MODE_FORMAT.to_le_bytes());
     let back = Sim::from_snapshot(&old, sim.content().cloned()).expect("the previous format loads");
     assert!(modes(&back).is_empty());
@@ -158,8 +159,10 @@ fn a_mode_row_for_a_unit_that_does_not_exist_is_a_corrupt_snapshot() {
     let (sim, _) = fleet();
     let bytes = sim.snapshot();
     // Replace the empty record by one row: version 1, one row, unit 999 (varint), mode `Group` (tag 1).
-    let mut forged = bytes[..bytes.len() - 2].to_vec();
+    // The empty beams record (version 1, no rows) follows it.
+    let mut forged = bytes[..bytes.len() - 4].to_vec();
     forged.extend_from_slice(&[1, 1, 0xE7, 0x07, 1]);
+    forged.extend_from_slice(&[1, 0]);
     assert!(matches!(Sim::from_snapshot(&forged, sim.content().cloned()), Err(SnapshotError::Corrupt(_))));
 }
 

@@ -10,6 +10,18 @@
 //!   client derives `fire.end` as the `Fired` tick plus `duration`). A
 //!   projectile flies at `shot_speed` toward its target's current position and
 //!   hits on the tick it arrives; its first move is the tick after it fired.
+//! - Under `beam_damage_at_end` (issue #1068, stock Armada II) a beam's hit is
+//!   not sent on the tick it fires but on the tick its life ends: the beam is
+//!   kept as a [`Beam`] in flight until then. On every tick of its life it is
+//!   lost, for good, when its shooter or its target is gone or the target is
+//!   farther than [`BEAM_BREAK_RANGE_FACTOR`] times the weapon's range
+//!   ([`beam_holds`]). Evidence: that the damage lands at the end of the life
+//!   is measured (to a few frames) and read from the executable, static; the
+//!   cancelling cases are read from the executable, static, not measured.
+//!   STA64's own rules, on which the evidence is silent: the hit roll stays
+//!   at fire time and a missed beam keeps nothing; a beam follows a replaced
+//!   target as a shot does. Only regular beams of this module: not point
+//!   defence, sustained special beams or mining beams.
 //! - Under `start_fire_hold` nothing fires before [`START_HOLD_TICKS`] of
 //!   mission time (SIM-53). An
 //!   `Attack` order adds no delay of its own: a mount fires on the first
@@ -172,6 +184,31 @@ fn shot_reload(timing: bool, w: &sta_content::WeaponDef, rng: &mut Rng) -> u64 {
     }
 }
 
+/// Marks the beams block of the weapons digest (hashed only when a beam is in flight).
+const BEAMS_TAG: u64 = 0x6265_616d_735f_3031;
+
+/// A beam in flight is lost when its target is farther from its shooter than this many
+/// times the weapon's range (`beam_damage_at_end`; a constant of the rule, not a data key).
+pub(crate) const BEAM_BREAK_RANGE_FACTOR: i32 = 2;
+
+/// Whether a beam in flight still holds on this tick, and between what: its shooter and its
+/// target as they are now. `None`: the beam is lost and never applies its damage.
+///
+/// - The shooter or the target is gone. Today a destroyed unit is gone at once; when the
+///   dying phase of #1100 exists, a shooter that starts to die loses the beam and a dying
+///   target still takes the hit.
+/// - The target is farther than [`BEAM_BREAK_RANGE_FACTOR`] times the weapon's range.
+///   INTERIM, as `pick` measures a range today: centre to centre and flat (which two
+///   points and whether in three dimensions is not settled).
+///
+/// Not tested, because not settled: a shooter whose weapons are off, disabled, held or
+/// cloaked since, or that has a new order. Not modelled: a body between the two.
+fn beam_holds<'a>(units: &'a Entities, b: &Beam) -> Option<(&'a Entity, &'a Entity)> {
+    let alive = |id: EntityId| units.get(id).filter(|u| u.hull[1] > Fixed::ZERO);
+    let (s, t) = (alive(b.shooter)?, alive(b.target)?);
+    (flat(s.pos, t.pos).1 <= b.range * Fixed::from_int(BEAM_BREAK_RANGE_FACTOR)).then_some((s, t))
+}
+
 /// One hardpoint's firing state: the first tick its weapon may fire again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 struct Mount {
@@ -191,6 +228,24 @@ pub(crate) struct Shot {
     pub(super) damage: Fixed,
 }
 
+/// A beam in flight under `beam_damage_at_end`: fired, its damage not yet applied.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct Beam {
+    pub(super) shooter: EntityId,
+    pub(super) weapon: ContentKey,
+    pub(super) target: EntityId,
+    /// The tick the beam's life ends and its hit is sent. INTERIM: the fire tick plus
+    /// `duration` (the exact tick is not measured; a beam with no `duration` hits at once).
+    pub(super) ends: u64,
+    /// INTERIM: every multiplier STA64 has (the target's damage row, the upgrade and the
+    /// chant factor) is applied at fire and the result carried. In the original the base
+    /// amount is carried and the shooter's side-wide factors are applied at the end (read
+    /// from the executable, static); which of STA64's multipliers are which is not settled.
+    pub(super) damage: Fixed,
+    /// The weapon's range. INTERIM: as it was at fire (when it is read is not settled).
+    pub(super) range: Fixed,
+}
+
 /// Weapon state of the whole sim.
 #[derive(Debug, Clone, Default)]
 pub struct Weapons {
@@ -198,6 +253,8 @@ pub struct Weapons {
     attack: Table<EntityId>,
     mounts: Table<Vec<Mount>>,
     shots: Vec<Shot>,
+    /// Beams whose life has not ended (`beam_damage_at_end`), in the order they fired.
+    beams: Vec<Beam>,
     next_shot: u32,
     pd: Pd,
     /// Crafts that hold fire this tick (SIM-36 `builder_hold_fire`: a
@@ -241,6 +298,7 @@ impl Weapons {
             attack: Table::from_rows(r.attack)?,
             mounts: Table::from_rows(r.mounts)?,
             shots: r.shots,
+            beams: Vec::new(),
             next_shot: r.next_shot,
             pd: Pd::from_rec(r.pd)?,
             held: Vec::new(),
@@ -250,6 +308,23 @@ impl Weapons {
     }
 
     /// SIM-74: the reload multipliers for the next step, `(unit, factor)` (sorted here).
+    /// The beams in flight, as the snapshot stores them (its own record, after [`WeaponsRec`]).
+    pub(crate) fn beams_rec(&self) -> Vec<Beam> {
+        self.beams.clone()
+    }
+
+    /// Puts back the beams a snapshot held. Every list is accepted: the order is the order
+    /// they fired in (weapons differ in `duration`, so end ticks need not ascend), and a
+    /// beam whose shooter or target is unknown is dropped on the next tick.
+    pub(crate) fn set_beams(&mut self, beams: Vec<Beam>) {
+        self.beams = beams;
+    }
+
+    /// Beams in flight.
+    pub fn beams_in_flight(&self) -> usize {
+        self.beams.len()
+    }
+
     pub(crate) fn set_crew_delay(&mut self, mut rows: Vec<(EntityId, Fixed)>) {
         rows.sort_by_key(|r| r.0);
         rows.dedup_by_key(|r| r.0);
@@ -265,6 +340,11 @@ impl Weapons {
         for shot in &mut self.shots {
             if shot.target == old {
                 shot.target = new;
+            }
+        }
+        for beam in &mut self.beams {
+            if beam.target == old {
+                beam.target = new;
             }
         }
     }
@@ -332,6 +412,7 @@ impl Weapons {
         self.attack.is_empty()
             && self.mounts.is_empty()
             && self.shots.is_empty()
+            && self.beams.is_empty()
             && self.next_shot == 0
             && self.pd.is_empty()
     }
@@ -362,6 +443,20 @@ impl Weapons {
         h.u64(self.next_shot as u64);
         if !self.pd.is_empty() {
             self.pd.hash_into(h);
+        }
+        // Only when a beam is in flight, so the digest of a game without
+        // `beam_damage_at_end` is the one from before it.
+        if !self.beams.is_empty() {
+            h.u64(BEAMS_TAG);
+            h.u64(self.beams.len() as u64);
+            for b in &self.beams {
+                h.u64(b.shooter.0 as u64);
+                h.u64(b.weapon.0 as u64);
+                h.u64(b.target.0 as u64);
+                h.u64(b.ends);
+                h.fixed(b.damage);
+                h.fixed(b.range);
+            }
         }
     }
 
@@ -448,6 +543,28 @@ impl Weapons {
             }
         }
         self.shots = flying;
+
+        // Beams in flight, in the order they fired: one that no longer holds is dropped
+        // (it never lands, even if its target comes back); one whose life ends lands now.
+        let mut lasting = Vec::with_capacity(self.beams.len());
+        for b in std::mem::take(&mut self.beams) {
+            let Some((s, t)) = beam_holds(units, &b) else { continue };
+            if b.ends > tick {
+                lasting.push(b);
+                continue;
+            }
+            // INTERIM: the facing is taken centre to centre, as for every other hit.
+            events.push(SimEvent::Hit {
+                target: b.target,
+                by: b.shooter,
+                weapon: b.weapon,
+                facing: facing(t.heading, t.pos, s.pos),
+                shield: Fixed::ZERO,
+                hull: b.damage,
+                at: t.pos,
+            });
+        }
+        self.beams = lasting;
 
         // Compute after this tick's movement, using the same shared-vision rule
         // as WorldView (which then also leaves out `hidden = 1` units).
@@ -570,6 +687,15 @@ impl Weapons {
                         pos: u.pos,
                         step,
                         damage,
+                    });
+                } else if features.beam_damage_at_end && w.duration > 0 {
+                    self.beams.push(Beam {
+                        shooter: u.id,
+                        weapon: w.key,
+                        target: t.id,
+                        ends: tick.saturating_add(u64::from(w.duration)),
+                        damage,
+                        range: w.range,
                     });
                 } else {
                     let face = facing(t.heading, t.pos, u.pos);

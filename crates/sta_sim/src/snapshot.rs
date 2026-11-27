@@ -78,15 +78,19 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// Format 50 is the last without the Director's Cut match option; format 51 appends it
 /// and 50 still loads with it off. The format of SIM-76 (the current one) appends the move modes
 /// of move orders; 50 and 51 still load, every order then taking the content's default.
-/// Earlier formats are refused. PROVISIONAL number: the merge steward assigns the real one
-/// (the number changes here and in `snapshot/guard_tests.rs` only).
-pub const FORMAT_VERSION: u16 = 52;
+/// Format 53 appends the beams in flight of `beam_damage_at_end` (#1068); 50 to 52 still load,
+/// with no beam in flight.
+/// Earlier formats are refused.
+pub const FORMAT_VERSION: u16 = 53;
 /// The last format without the Director's Cut flag (still loads). Fixed history, not renumbered.
 #[doc(hidden)]
 pub const PRE_DIRECTORS_CUT_FORMAT: u16 = 50;
 /// The last format without the move-mode record (still loads): main's number before SIM-76.
 #[doc(hidden)]
 pub const PRE_MOVE_MODE_FORMAT: u16 = 51;
+/// The last format without the beams record (still loads).
+#[doc(hidden)]
+pub const PRE_BEAMS_FORMAT: u16 = 52;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
@@ -136,7 +140,7 @@ fn check_header(bytes: &[u8]) -> Result<(u16, u64), SnapshotError> {
         return Err(SnapshotError::BadMagic);
     }
     let found = u16::from_le_bytes([bytes[4], bytes[5]]);
-    if !matches!(found, PRE_DIRECTORS_CUT_FORMAT | PRE_MOVE_MODE_FORMAT | FORMAT_VERSION) {
+    if !matches!(found, PRE_DIRECTORS_CUT_FORMAT | PRE_MOVE_MODE_FORMAT | PRE_BEAMS_FORMAT | FORMAT_VERSION) {
         return Err(SnapshotError::FormatVersion { found });
     }
     let seam = u32::from_le_bytes(bytes[6..10].try_into().unwrap());
@@ -167,7 +171,7 @@ impl std::fmt::Display for SnapshotError {
         match self {
             SnapshotError::BadMagic => write!(f, "not a snapshot"),
             SnapshotError::FormatVersion { found } if *found < FORMAT_VERSION => {
-                write!(f, "snapshot format {found} is from an older STA64 and cannot be read (this build reads formats {PRE_DIRECTORS_CUT_FORMAT}, {PRE_MOVE_MODE_FORMAT} and {FORMAT_VERSION})")
+                write!(f, "snapshot format {found} is from an older STA64 and cannot be read (this build reads formats {PRE_DIRECTORS_CUT_FORMAT} to {FORMAT_VERSION})")
             }
             SnapshotError::FormatVersion { found } => {
                 write!(f, "snapshot format {found}, expected {FORMAT_VERSION}")
@@ -271,12 +275,19 @@ struct WatchRec {
     rows: Vec<(EntityId, crate::watchdog::Row)>,
 }
 
-/// The current format (SIM-76): the move mode each unit's last move order named, by unit id.
+/// Format 52 (SIM-76): the move mode each unit's last move order named, by unit id.
 /// INTERIM: the group record replaces this record (see `move_mode.rs`).
 #[derive(Serialize, Deserialize)]
 struct MoveModeRec {
     version: u8,
     rows: Vec<(EntityId, crate::command::MoveMode)>,
+}
+
+/// Format 53 (#1068): the beams in flight under `beam_damage_at_end`, in the order they fired.
+#[derive(Serialize, Deserialize)]
+struct BeamsRec {
+    version: u8,
+    rows: Vec<crate::combat::weapons::Beam>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -553,6 +564,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&self.economy.trade_rows()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.directors_cut).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&MoveModeRec { version: 1, rows: self.move_mode_rows() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&BeamsRec { version: 1, rows: self.weapons.beams_rec() }).expect("snapshot serialises"));
         out
     }
 
@@ -649,11 +661,19 @@ impl Sim {
             postcard::take_from_bytes(rest).map_err(corrupt_postcard)?
         };
         // Formats 50 and 51 carry no move modes (SIM-76): every order took the content's default.
-        let (move_mode_rows, rest): (Vec<(EntityId, crate::command::MoveMode)>, _) = if format < FORMAT_VERSION {
+        let (move_mode_rows, rest): (Vec<(EntityId, crate::command::MoveMode)>, _) = if format <= PRE_MOVE_MODE_FORMAT {
             (Vec::new(), rest)
         } else {
             let (record, rest): (MoveModeRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
             if record.version != 1 { return Err(SnapshotError::Corrupt("unknown move mode record version".into())); }
+            (record.rows, rest)
+        };
+        // Formats 50 to 52 carry no beams in flight (#1068): every beam had hit when it fired.
+        let (beam_rows, rest): (Vec<crate::combat::weapons::Beam>, _) = if format <= PRE_BEAMS_FORMAT {
+            (Vec::new(), rest)
+        } else {
+            let (record, rest): (BeamsRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+            if record.version != 1 { return Err(SnapshotError::Corrupt("unknown beams record version".into())); }
             (record.rows, rest)
         };
         if directors_cut && !content.as_ref().is_some_and(|db| db.profile() == sta_content::Profile::Sta1Classic) {
@@ -749,7 +769,8 @@ impl Sim {
                 return Err(SnapshotError::Corrupt("attribute seat does not exist".into()));
             }
         }
-        let weapons = Weapons::from_rec(b.weapons).ok_or_else(|| corrupt("weapons"))?;
+        let mut weapons = Weapons::from_rec(b.weapons).ok_or_else(|| corrupt("weapons"))?;
+        weapons.set_beams(beam_rows);
         let autonomy = crate::autonomy::Autonomy::from_rec(autonomy_rows).ok_or_else(|| corrupt("autonomy"))?;
         if autonomy.to_rec().iter().any(|(id, _)| {
             units.get(*id).is_none_or(|u| !matches!(u.kind, EntityKind::Craft | EntityKind::Station))
