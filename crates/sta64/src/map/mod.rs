@@ -696,6 +696,28 @@ pub(crate) fn clear_match(
     }
 }
 
+/// The gate under `root` that hides a nebula, asteroid field or planet while the local player's side
+/// has never had it in sight (#1146): `o` is the map's object, `radius` its footprint. A nebula or field
+/// (`kind` given) that has no region of the map gets no gate: it is always drawn, in both nebula looks.
+/// A planet (`kind` none) is gated by its footprint.
+fn sight_gate(commands: &mut Commands, root: Entity, regions: &crate::render::fog_objects::FogRegions, kind: Option<sta_content::RegionKind>, o: &sta_bzn::MapObject, radius: f32) -> Option<Entity> {
+    let (x, z) = (o.transform[9], o.transform[11]);
+    let region = match kind {
+        Some(k) => Some(regions.find(k, x, z, 2.0)?.id),
+        None => None,
+    };
+    Some(
+        commands
+            .spawn((
+                crate::render::fog_objects::SightGate { pos: Vec2::new(x, z), radius, region },
+                Transform::IDENTITY,
+                Visibility::Inherited,
+                ChildOf(root),
+            ))
+            .id(),
+    )
+}
+
 fn setup(mut commands: Commands) {
     let projection = Projection::Perspective(PerspectiveProjection {
         near: 1.0,
@@ -1130,6 +1152,7 @@ fn rebuild(
         commands.insert_resource(crate::game::local_race(&races, race));
     }
     commands.insert_resource(crate::render::units::LocalPlayer(seat_player));
+    let fog_regions = crate::render::fog_objects::FogRegions::of_map(&map_def);
     {
         let (lo, hi) = map_def.bounds;
         // The radar draws the map's own rectangle, not the units' spread.
@@ -1147,7 +1170,7 @@ fn rebuild(
         commands.insert_resource(crate::render::map_grid::GridModes::from_cfg(rts.as_ref()));
         limits.tactical = crate::input::camera_tactical::TacticalConfig::from_cfg(rts.as_ref());
         // The map's nebulae and asteroid fields, for the per-object visibility states (#1144).
-        commands.insert_resource(crate::render::fog_objects::FogRegions::of_map(&map_def));
+        commands.insert_resource(fog_regions.clone());
         commands.insert_resource(crate::render::fog::FogBounds {
             min: Vec2::new(lo.x.to_f32(), lo.z.to_f32()),
             max: Vec2::new(hi.x.to_f32(), hi.z.to_f32()),
@@ -1260,11 +1283,12 @@ fn rebuild(
             let scale = odf.f32("ScaleSOD").or_else(|| odf.f32("scaleSOD")).filter(|s| *s > 0.0).unwrap_or(1.0);
             let orbit = odf.f32("orbitingSpeed").unwrap_or(0.0).to_radians();
             let tumble = odf.f32("rotationSpeed").unwrap_or(0.0);
+            let gate = sight_gate(&mut commands, root, &fog_regions, Some(sta_content::RegionKind::AsteroidField), o, radius).unwrap_or(root);
             let field = commands
                 .spawn((
                     to_bevy(&Matrix34 { m: o.transform }),
                     Visibility::default(),
-                    ChildOf(root),
+                    ChildOf(gate),
                     AsteroidField,
                     Spin { axis: Vec3::Y, speed: orbit },
                 ))
@@ -1328,7 +1352,8 @@ fn rebuild(
             let ground = odf.str("groundTextureName").unwrap_or("").to_owned();
             let atmo = odf.str("atmosphereTextureName").filter(|a| !a.is_empty()).unwrap_or("PA_ECFR0").to_owned();
             let planet_tf = to_bevy(&Matrix34 { m: o.transform });
-            let entity = commands.spawn((planet_tf, Visibility::default(), ChildOf(root))).id();
+            let gate = sight_gate(&mut commands, root, &fog_regions, None, o, radius).unwrap_or(root);
+            let entity = commands.spawn((planet_tf, Visibility::default(), ChildOf(gate))).id();
             // The body turns about its own vertical axis on game time (#1047, visual only).
             if let Some(rate) = crate::render::spin::planet_turn(crate::render::spin::object_key(o.entity_id, [o.transform[9], o.transform[10], o.transform[11]]), odf.f32("rotationSpeed")) {
                 commands.entity(entity).insert(crate::render::spin::Turn { base: planet_tf.rotation, axis: Vec3::Y, rate });
@@ -1367,7 +1392,13 @@ fn rebuild(
         // Background objects (suns, background planets, wrecks, gates) stay where the
         // map puts them but are drawn before the scene, which they never hide.
         let background_obj = odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("background_obj"));
-        let entity = commands.spawn((tf, if has_gas && gas_volumes { Visibility::Hidden } else { Visibility::Inherited }, ChildOf(root))).id();
+        let nebula = odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("nebula_obj"));
+        let parent = if nebula {
+            sight_gate(&mut commands, root, &fog_regions, Some(sta_content::RegionKind::Nebula), o, crate::ui::radar_layers::nebula_radius(odf)).unwrap_or(root)
+        } else {
+            root
+        };
+        let entity = commands.spawn((tf, if has_gas && gas_volumes { Visibility::Hidden } else { Visibility::Inherited }, ChildOf(parent))).id();
         if has_gas { stock_nebulae.push(entity); }
         if background_obj {
             commands.entity(entity).insert(BackgroundObject);
@@ -2267,5 +2298,61 @@ mod tests {
             tried += 1;
         }
         println!("{tried} builders tried");
+    }
+}
+
+#[cfg(test)]
+mod sight_gate_tests {
+    use super::*;
+    use crate::render::fog_objects::{FogRegions, SightGate};
+    use sta_content::{MapDef, Region, RegionKind, RegionShape};
+
+    fn object(x: f32, z: f32) -> sta_bzn::MapObject {
+        let mut o = sta_bzn::MapObject::default();
+        o.transform[9] = x;
+        o.transform[11] = z;
+        o
+    }
+
+    fn regions() -> FogRegions {
+        let v = |x: i32, z: i32| sta_sim::Vec3 { x: Fixed::from_int(x), y: Fixed::ZERO, z: Fixed::from_int(z) };
+        let mut map = MapDef::empty();
+        map.regions.push(Region { kind: RegionKind::Nebula, odf: "n".into(), shape: RegionShape::Sphere { centre: v(100, 200), radius: Fixed::from_int(300) } });
+        map.regions.push(Region { kind: RegionKind::AsteroidField, odf: "f".into(), shape: RegionShape::Sphere { centre: v(-500, 50), radius: Fixed::from_int(150) } });
+        FogRegions::of_map(&map)
+    }
+
+    /// The three kinds are spawned under a gate that does not move them; an object with a region of the map is
+    /// gated by it, a planet by its footprint, and a nebula or field with no region of the map is not gated at all.
+    #[test]
+    fn gates_keep_the_world_transform_and_a_nebula_or_field_without_a_region_has_none() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::transform::TransformPlugin));
+        let root = app.world_mut().spawn((MapRoot, Transform::IDENTITY, Visibility::default())).id();
+        let regions = regions();
+        let mut made = Vec::new();
+        {
+            let mut commands = app.world_mut().commands();
+            made.push(sight_gate(&mut commands, root, &regions, Some(RegionKind::Nebula), &object(100.0, 200.0), 300.0));
+            made.push(sight_gate(&mut commands, root, &regions, Some(RegionKind::AsteroidField), &object(-500.0, 50.0), 150.0));
+            made.push(sight_gate(&mut commands, root, &regions, None, &object(7.0, 8.0), 60.0));
+            // No region at this place, whatever the kind.
+            made.push(sight_gate(&mut commands, root, &regions, Some(RegionKind::Nebula), &object(4000.0, 4000.0), 300.0));
+            made.push(sight_gate(&mut commands, root, &regions, Some(RegionKind::AsteroidField), &object(100.0, 200.0), 300.0));
+        }
+        app.world_mut().flush();
+        assert_eq!(made.iter().map(Option::is_some).collect::<Vec<_>>(), [true, true, true, false, false]);
+        let gate = |i: usize| *app.world().get::<SightGate>(made[i].unwrap()).unwrap();
+        assert_eq!(gate(0).region, Some(0));
+        assert_eq!(gate(1).region, Some(1));
+        assert_eq!((gate(2).region, gate(2).pos, gate(2).radius), (None, Vec2::new(7.0, 8.0), 60.0));
+        // An object under a gate has the world transform it had under the root.
+        let place = Transform::from_xyz(100.0, 0.0, -200.0).with_rotation(Quat::from_rotation_y(0.7));
+        let under_root = app.world_mut().spawn((place, ChildOf(root))).id();
+        let under_gate = app.world_mut().spawn((place, ChildOf(made[0].unwrap()))).id();
+        app.update();
+        assert_eq!(app.world().get::<GlobalTransform>(under_gate).unwrap(), app.world().get::<GlobalTransform>(under_root).unwrap());
+        assert_eq!(app.world().get::<Transform>(made[0].unwrap()), Some(&Transform::IDENTITY));
+        assert_eq!(app.world().get::<Visibility>(made[0].unwrap()), Some(&Visibility::Inherited), "the object's own visibility is untouched");
     }
 }
