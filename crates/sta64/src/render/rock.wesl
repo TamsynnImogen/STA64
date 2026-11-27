@@ -7,7 +7,7 @@
 // The moons' cracks show the light inside them, at the bottom of a ravine: the view's
 // ray is marched down into it (parallax), so its walls hide the light at an angle.
 
-import bevy_pbr::render::mesh_functions::get_world_from_local;
+import bevy_pbr::render::mesh_functions::{get_world_from_local, get_tag};
 // The camera of the view being drawn (Bevy's view uniform), not a material value: its world position is the eye.
 import bevy_pbr::render::mesh_view_bindings::view;
 
@@ -187,5 +187,7 @@ fn fragment(i: FragIn) -> @location(0) vec4<f32> {
     var core = k.core.rgb * (1.0 + hot) + dot(k.core.rgb, vec3<f32>(0.333)) * hot * hot * k.spill.y;
     core = mix(wall, core, lit);
     c = mix(c, core, (1.0 - a.a) * inside);
-    return vec4<f32>(c, 1.0);
+    // A rock out of sight carries the factor on its light as its mesh tag (the bits of the f32; 0: none, #1146).
+    let tag = get_tag(i.instance_index);
+    return vec4<f32>(c * select(1.0, bitcast<f32>(tag), tag != 0u), 1.0);
 }

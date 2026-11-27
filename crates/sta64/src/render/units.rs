@@ -254,6 +254,7 @@ pub fn sync_units(
     *seen = Some((curr.clone(), local.0, reveal, fog_updates));
 
     let mut want: BTreeMap<EntityId, &sta_sim::UnitView> = drawn_units(curr, local.0, reveal).into_iter().map(|u| (u.id, u)).collect();
+    let mut scenery_sight: Vec<(EntityId, bool)> = Vec::new();
     // The fog lifted (match setting, cheat) shows the client every unit (`SimLink::curr`), and the shroud layer no
     // longer hides those on never-explored ground (#1145: the layers are drawn under the scene). Rule (read from
     // the executable, static; not measured; the original's fog off and shroud on): of the units the sim does not
@@ -280,10 +281,15 @@ pub fn sync_units(
             let Some(def) = content.0.unit(u.def).filter(|d| u.owner == sta_sim::world::NEUTRAL && is_scenery_class(&d.class.0)) else { continue };
             // #1146: a planet never seen is not drawn (a backdrop object stays as it was; not decided). Rule and
             // grade: `render::fog_objects`. Out of sight it stays drawn as before.
-            let hidden = !def.class.0.eq_ignore_ascii_case("background_obj")
-                && crate::render::fog_objects::sight_now(fog.as_deref(), local.0, reveal, pending.expected(), u.pos.x.to_f32(), u.pos.z.to_f32(), def.radius.to_f32()) == crate::render::fog_objects::Sight::Never;
-            if !hidden {
+            let background = def.class.0.eq_ignore_ascii_case("background_obj");
+            let sight = crate::render::fog_objects::sight_now(fog.as_deref(), local.0, reveal, pending.expected(), u.pos.x.to_f32(), u.pos.z.to_f32(), def.radius.to_f32());
+            if background || sight != crate::render::fog_objects::Sight::Never {
                 want.entry(u.id).or_insert(u);
+                // Out of sight a planet model is a still copy at the measured fraction of its light (#1146): the
+                // marker stops its turn and the tag dims its meshes (`fog_objects::tag_ghost_meshes`).
+                if !background {
+                    scenery_sight.push((u.id, sight == crate::render::fog_objects::Sight::Remembered));
+                }
             }
         }
     }
@@ -404,6 +410,14 @@ pub fn sync_units(
             map.0.remove(&id);
         }
         *seen = None;
+    }
+    for (id, out) in scenery_sight {
+        let Some(&e) = map.0.get(&id) else { continue };
+        if out {
+            commands.entity(e).try_insert((crate::render::fog_objects::OutOfSight, crate::render::fog_objects::GhostLight(crate::render::fog_objects::ghost::planet_linear())));
+        } else {
+            commands.entity(e).try_remove::<(crate::render::fog_objects::OutOfSight, crate::render::fog_objects::GhostLight)>();
+        }
     }
 }
 
@@ -1431,6 +1445,19 @@ mod view_tests {
             app.update();
         }
         assert_eq!(ids(&mut app), BTreeSet::from([1, 2, 3]), "seen before: drawn as it was before this step");
+        use crate::render::fog_objects::{GhostLight, OutOfSight};
+        let planet_entity = app.world().resource::<SimEntities>().0[&EntityId(2)];
+        let backdrop_entity = app.world().resource::<SimEntities>().0[&EntityId(3)];
+        assert_eq!(app.world().get::<GhostLight>(planet_entity), Some(&GhostLight(crate::render::fog_objects::ghost::planet_linear())), "out of sight: a still, dimmed copy");
+        assert!(app.world().get::<OutOfSight>(planet_entity).is_some());
+        assert!(app.world().get::<OutOfSight>(backdrop_entity).is_none(), "a backdrop is not decided: unchanged");
+        // In sight again: the markers go.
+        grid.set_cell_for_test(c % grid.w, c / grid.w, true, true);
+        app.insert_resource(FogState { grid: grid.clone(), updates: 3 });
+        for _ in 0..3 {
+            app.update();
+        }
+        assert!(app.world().get::<OutOfSight>(planet_entity).is_none() && app.world().get::<GhostLight>(planet_entity).is_none());
     }
 
     #[test]
