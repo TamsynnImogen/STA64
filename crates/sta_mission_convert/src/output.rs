@@ -118,7 +118,10 @@ pub enum Edited {
     /// The game's normal run: an edited file is kept as it is, stays listed in the manifest and is
     /// reported ([`WriteError::Kept`]); everything else is replaced as usual.
     Keep,
-    /// The game's "convert again": an edited file is the tool's again and is replaced.
+    /// The game's explicit "replace edited scripts": an edited file is renamed to `<name>.old`
+    /// (`.old2`, ...; never overwriting, never deleted) and the run writes its own in its place, as
+    /// for a file of the Python tool. A run that stops before it has written the new file loses
+    /// nothing.
     Replace,
 }
 
@@ -251,10 +254,17 @@ impl OutDir {
             && !self.matches_manifest(name, path)
     }
 
-    /// Whether the file is the tool's to delete or replace: it has the content it wrote, or it is
-    /// an edited one and the policy is [`Edited::Replace`].
+    /// Whether the file is the tool's to delete or replace: it has the content it wrote. (An edited
+    /// file is never deleted; under [`Edited::Replace`] it is moved aside.)
     fn is_ours(&self, name: &str, path: &Path) -> bool {
-        self.matches_manifest(name, path) || (self.edited == Edited::Replace && self.is_edited(name, path))
+        self.matches_manifest(name, path)
+    }
+
+    /// Whether the regular file `name` of `missions/` is there and is either what the tool wrote or
+    /// an edit of it (a run keeps both; the stamp counts both as present).
+    pub fn holds(&self, name: &str) -> bool {
+        let p = self.missions().join(name);
+        self.matches_manifest(name, &p) || self.is_edited(name, &p)
     }
 
     /// The `.lua` files of `missions/` the tool wrote that the player has edited since, sorted
@@ -338,7 +348,8 @@ impl OutDir {
         let rd = fs::read_dir(self.missions()).map_err(|e| format!("{}: {e}", self.missions().display()))?;
         for e in rd.flatten() {
             let n = e.file_name().to_string_lossy().into_owned();
-            let kept = self.edited == Edited::Keep && self.is_edited(&n, &e.path());
+            // an edit is kept (Keep) or moved aside (Replace): neither is foreign
+            let kept = self.edited != Edited::Foreign && self.is_edited(&n, &e.path());
             if n.to_lowercase().ends_with(".lua") && !self.is_ours(&n, &e.path()) && !self.is_python_output(&e.path()) && !kept {
                 out.push(n);
             }
@@ -420,6 +431,9 @@ impl OutDir {
                     self.move_aside(&n)?;
                 } else if self.edited == Edited::Keep && self.is_edited(&n, &p) {
                     kept.insert(n);
+                } else if self.edited == Edited::Replace && self.is_edited(&n, &p) {
+                    // the player's edit is moved aside, never deleted before its replacement exists
+                    self.move_aside(&n)?;
                 }
             }
         }
@@ -450,6 +464,7 @@ impl OutDir {
             Ok(_) if self.is_ours(name, &target) => {}
             Ok(_) if self.is_python_output(&target) => self.move_aside(name).map_err(WriteError::Collision)?,
             Ok(_) if self.edited == Edited::Keep && self.is_edited(name, &target) => return Err(WriteError::Kept),
+            Ok(_) if self.edited == Edited::Replace && self.is_edited(name, &target) => self.move_aside(name).map_err(WriteError::Collision)?,
             Ok(_) => {
                 return Err(WriteError::Collision(format!(
                     "{} exists and this tool did not write it (or it changed since): refusing to overwrite it",

@@ -26,7 +26,7 @@ use bevy::prelude::*;
 use super::flow::{FlowConfig, apply_campaigns};
 use super::mission_convert::{ConversionFinished, ConversionState, Outcome, StartConversion};
 use crate::app::AppState;
-use crate::frontend::campaign::{Campaigns, RequestConversion};
+use crate::frontend::campaign::{Campaigns, ConvertMode, RequestConversion};
 use crate::frontend::screens::{ActiveMod, Screen};
 use crate::media::campaign::MissionMovies;
 use crate::ui::notices::{Notice, Severity};
@@ -65,7 +65,7 @@ fn auto_start(
     }
     if campaigns.convertible && campaigns.awaits_conversion() {
         auto.tried = true;
-        requests.write(RequestConversion { forced: false });
+        requests.write(RequestConversion { mode: ConvertMode::Prepare });
     }
 }
 
@@ -82,7 +82,12 @@ fn forward(
             notices.write(Notice::new(Severity::Bad, "No game install is available to prepare the missions from"));
             continue;
         };
-        start.write(StartConversion { install_root: root, active_mod: active.as_ref().and_then(|a| a.0.clone()), forced: r.forced });
+        let (forced, replace_edited) = match r.mode {
+            ConvertMode::Prepare => (false, false),
+            ConvertMode::Again => (true, false),
+            ConvertMode::ReplaceEdited => (true, true),
+        };
+        start.write(StartConversion { install_root: root, active_mod: active.as_ref().and_then(|a| a.0.clone()), forced, replace_edited });
     }
 }
 
@@ -104,6 +109,10 @@ pub fn notices_for(outcome: &Outcome, state: &ConversionState) -> Vec<Notice> {
                 0 => {}
                 1 => v.push(Notice::new(Severity::Info, "1 edited script was kept as you left it")),
                 n => v.push(Notice::new(Severity::Info, format!("{n} edited scripts were kept as you left them"))),
+            }
+            // an explicit replacement: where the edits went
+            if state.replacing && !state.moved_aside.is_empty() {
+                v.push(Notice::new(Severity::Info, format!("{} replaced scripts were moved aside as .old files in the missions folder", state.moved_aside.len())));
             }
         }
         Outcome::Cancelled { .. } => v.push(Notice::new(Severity::Info, "Preparing the missions was cancelled")),
@@ -379,7 +388,7 @@ mod tests {
         assert!(!app.world().resource::<AutoConvert>().tried);
         // and a request that reaches the hook with a mod active is refused there, whoever sent it
         app.insert_resource(ActiveMod(Some("Some Mod".into())));
-        app.world_mut().write_message(RequestConversion { forced: true });
+        app.world_mut().write_message(RequestConversion { mode: ConvertMode::Again });
         app.update();
         app.update();
         let s = app.world().resource::<ConversionState>();
@@ -400,7 +409,7 @@ mod tests {
             cs.campaign = Some("federation".into());
             cs.mission = 1;
         }
-        app.world_mut().write_message(RequestConversion { forced: false });
+        app.world_mut().write_message(RequestConversion { mode: ConvertMode::Prepare });
         run_until_idle(&mut app);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         let cs = app.world().resource::<Campaigns>();
@@ -418,7 +427,7 @@ mod tests {
         let mut app = site.app(writes_the_script(Arc::new(AtomicUsize::new(0))), false);
         app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::InGame);
         app.update();
-        app.world_mut().write_message(RequestConversion { forced: false });
+        app.world_mut().write_message(RequestConversion { mode: ConvertMode::Prepare });
         run_until_idle(&mut app);
         assert!(blocked(&app), "a match is going: the campaigns stay as they are");
         app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::FrontEnd);
@@ -434,13 +443,61 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let mut app = site.app(does_nothing(calls.clone()), true);
         app.insert_resource(FlowConfig { install_root: None });
-        app.world_mut().write_message(RequestConversion { forced: false });
+        app.world_mut().write_message(RequestConversion { mode: ConvertMode::Prepare });
         for _ in 0..4 {
             app.update();
         }
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         assert_eq!(app.world().resource::<ConversionState>().runs, 0);
         assert!(app.world().resource::<Told>().0.iter().any(|n| n.severity == Severity::Bad && n.text.contains("No game install")));
+        let _ = std::fs::remove_dir_all(&site.tmp);
+    }
+
+    #[derive(Resource, Default)]
+    struct Starts(Vec<StartConversion>);
+
+    fn collect_starts(mut starts: ResMut<Starts>, mut r: MessageReader<StartConversion>) {
+        starts.0.extend(r.read().cloned());
+    }
+
+    #[test]
+    fn only_the_explicit_request_asks_for_the_edits_to_be_replaced() {
+        let site = site("modes");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut app = site.app(does_nothing(calls.clone()), true);
+        app.init_resource::<Starts>().add_systems(Last, collect_starts);
+        for (i, mode) in [ConvertMode::Prepare, ConvertMode::Again, ConvertMode::ReplaceEdited].into_iter().enumerate() {
+            app.world_mut().write_message(RequestConversion { mode });
+            for _ in 0..2_000_000 {
+                app.update();
+                let s = app.world().resource::<ConversionState>();
+                if !s.running && s.runs as usize > i {
+                    break;
+                }
+                std::thread::yield_now();
+            }
+        }
+        let got: Vec<(bool, bool)> = app.world().resource::<Starts>().0.iter().map(|s| (s.forced, s.replace_edited)).collect();
+        assert_eq!(got, vec![(false, false), (true, false), (true, true)]);
+        let _ = std::fs::remove_dir_all(&site.tmp);
+    }
+
+    #[test]
+    fn the_campaigns_offer_the_conversion_for_the_base_game_only() {
+        // through the loader the game uses, not a flag set by hand
+        let site = site("modrule");
+        std::fs::create_dir_all(site.conv.join("missions")).unwrap();
+        std::fs::write(site.conv.join("missions/syn_fed02.lua"), SCRIPT).unwrap();
+        let mod_dir = site.root.join("Data/Mods/Some Mod");
+        std::fs::create_dir_all(&mod_dir).unwrap();
+        std::fs::write(mod_dir.join("info.ini"), "[Mod]\nName=Some Mod\n").unwrap();
+        let store = |b: &sta_mission::campaign::CampaignBook| ProgressStore::in_dir(&site.tmp, b);
+        let base = sta_vfs::Vfs::mount_install(&site.root, None).expect("the base game mounts");
+        let (cs, _) = load_campaigns_with(&base, Some(&site.root), None, Some(&site.conv), store).expect("campaigns");
+        assert!(cs.convertible, "the base game with a conversion mounted");
+        let modded = sta_vfs::Vfs::mount_install(&site.root, Some("Some Mod")).expect("the mod mounts");
+        let (cs, _) = load_campaigns_with(&modded, Some(&site.root), Some("Some Mod"), Some(&site.conv), store).expect("campaigns");
+        assert!(!cs.convertible, "a mod's chain is never converted (D6)");
         let _ = std::fs::remove_dir_all(&site.tmp);
     }
 
