@@ -6,9 +6,11 @@
 //! Which bytes are swept and where the tool leaves gaps (runs of zero bytes) is [`sweep`]'s
 //! business; the rules and their grades are documented there.
 
+mod badtab;
 mod decode;
 mod print;
 mod sweep;
+mod vextab;
 
 use std::collections::HashMap;
 

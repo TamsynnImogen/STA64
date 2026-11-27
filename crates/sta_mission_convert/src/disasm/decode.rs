@@ -4,6 +4,8 @@
 
 use iced_x86::{Decoder, DecoderError, DecoderOptions, Instruction};
 
+use super::badtab;
+use super::vextab;
 use super::print::{self, Layout, MemParts, Quirks, Wait, fmt_mem, is_prefix, layout, prefix_name};
 
 /// A decoder over one section and the position it reads at.
@@ -168,30 +170,94 @@ impl<'a> Sweeper<'a> {
     /// The instruction at `pos`: its length in bytes and its text.
     pub(crate) fn decode(&mut self, pos: usize) -> (usize, String) {
         let data = self.data;
-        // `fwait` bytes in front of an x87 instruction belong to it.
-        if data[pos] == 0x9b {
-            let mut k = 1;
-            while pos + k < data.len() && data[pos + k] == 0x9b {
+        // `fwait` bytes after the prefixes and in front of an x87 instruction (which may have
+        // prefixes of its own) belong to it.
+        let mut i = pos;
+        while i < data.len() && is_prefix(data[i]) {
+            i += 1;
+        }
+        if i < data.len() && data[i] == 0x9b {
+            let np = i - pos;
+            let mut k = 0;
+            while i + k < data.len() && data[i + k] == 0x9b {
                 k += 1;
             }
-            if pos + k < data.len() && (0xd8..=0xdf).contains(&data[pos + k]) {
-                // Of several, the last two join the x87 instruction and the others stand alone.
-                if k >= 3 {
-                    return (1, "fwait".to_string());
+            let mut j = i + k;
+            while j < data.len() && is_prefix(data[j]) {
+                j += 1;
+            }
+            let q = j - (i + k);
+            let words_of = |s: &[u8]| -> Vec<&'static str> {
+                s.iter().map(|&b| prefix_name(b).unwrap_or("")).collect()
+            };
+            let x87 = j < data.len() && (0xd8..=0xdf).contains(&data[j]);
+            if np == 0 {
+                if x87 {
+                    // Of several, the last two join the x87 instruction and the others stand
+                    // alone.
+                    if k >= 3 {
+                        return (1, "fwait".to_string());
+                    }
+                    let mut synth: Vec<u8> = data[pos..i].to_vec();
+                    let tail_end = data.len().min(i + k + 32);
+                    synth.extend_from_slice(&data[i + k..tail_end]);
+                    let (n, text, cut) = self.core(pos, Some(&synth), true);
+                    if cut {
+                        // The x87 instruction is cut off by the end of the data: the `fwait`
+                        // stands alone.
+                        return (1, "fwait".to_string());
+                    }
+                    return (n + k, text);
                 }
-                let (n, text) = self.core(pos + k, true);
-                return (k + n, text);
+                // `fwait`, prefixes, `fwait`: the prefixes and the first byte are one line
+                // that ends in the word `fwait`.
+                if k == 1 && q > 0 && j < data.len() && data[j] == 0x9b {
+                    return (1 + q, join(&words_of(&data[i + 1..j]), "fwait", ""));
+                }
+            } else {
+                if x87 && q == 0 {
+                    let mut synth: Vec<u8> = data[pos..i].to_vec();
+                    let tail_end = data.len().min(i + k + 32);
+                    synth.extend_from_slice(&data[i + k..tail_end]);
+                    let (n, text, cut) = self.core(pos, Some(&synth), true);
+                    if !cut {
+                        return (n + k, text);
+                    }
+                }
+                // Prefixes in front of the `fwait`, and not one x87 instruction behind it
+                // without prefixes of its own: they stay in front of the `fwait`.
+                return (np + 1, join(&words_of(&data[pos..i]), "fwait", ""));
             }
         }
-        self.core(pos, false)
+        let (n, text, _) = self.core(pos, None, false);
+        (n, text)
     }
 
-    fn core(&mut self, pos: usize, wait_before: bool) -> (usize, String) {
+    /// Reads the instruction at `pos` (or the stand-in bytes `synth`, which are `pos`'s with some
+    /// bytes taken out): its length (in `synth` when given), its text, and whether the end of the
+    /// data cut it off.
+    fn core(
+        &mut self,
+        pos: usize,
+        synth: Option<&[u8]>,
+        wait_before: bool,
+    ) -> (usize, String, bool) {
         let data = self.data;
         let addr = self.base.wrapping_add(pos as u32);
-        let rest = &data[pos..data.len().min(pos + 32)];
+        let rest = match synth {
+            Some(s) => s,
+            None => &data[pos..data.len().min(pos + 32)],
+        };
         let nprefix = rest.iter().take_while(|&&b| is_prefix(b)).count();
         let orig_prefix = &rest[..nprefix];
+        // The tool takes at most fourteen prefix bytes into one line.
+        if nprefix >= 14 {
+            let words: Vec<&str> = orig_prefix[..14]
+                .iter()
+                .map(|&b| prefix_name(b).unwrap_or(""))
+                .collect();
+            return (14, words.join(" "), false);
+        }
         let n_lock = orig_prefix.iter().filter(|&&b| b == 0xf0).count();
         let eff: Vec<u8>;
         let eff_ref: &[u8] = if n_lock > 0 {
@@ -206,16 +272,44 @@ impl<'a> Sweeper<'a> {
             rest
         };
         let lay = layout(eff_ref);
-        if let Some((n, text)) =
-            self.special(eff_ref, orig_prefix, &lay, addr.wrapping_add(n_lock as u32))
-        {
-            return (n + n_lock, text);
+        if let Some((n, text)) = self.special(
+            eff_ref,
+            orig_prefix,
+            &lay,
+            addr.wrapping_add(n_lock as u32),
+            wait_before,
+        ) {
+            return (n + n_lock, text, false);
+        }
+        // Encodings the tool reads as `(bad)` (read from its output on authored bytes).
+        if let Some(&m) = eff_ref.get(lay.modrm_pos) {
+            let eff_prefix = &eff_ref[..lay.opcode_pos];
+            let last = |b: u8| eff_prefix.iter().rposition(|&x| x == b);
+            let class = match (last(0xf3), last(0xf2)) {
+                (Some(a), Some(b)) if a > b => 3,
+                (Some(_), None) => 3,
+                (_, Some(_)) => 2,
+                _ if eff_prefix.contains(&0x66) => 1,
+                _ => 0,
+            };
+            let opn = match lay.map {
+                0 => 1,
+                1 => 2,
+                _ => 3,
+            };
+            if let Some(k) = badtab::bad_opcode_bytes(class, lay.map, lay.op, m, opn) {
+                let words: Vec<&str> = orig_prefix
+                    .iter()
+                    .map(|&b| prefix_name(b).unwrap_or(""))
+                    .collect();
+                return ((nprefix + k).min(rest.len()), join(&words, "(bad)", ""), false);
+            }
         }
         let mut quirks = Quirks::default();
         let mut ins = Instruction::default();
         let mut patched: Option<Vec<u8>> = None;
         let mut dec2;
-        let (valid, err, used): (bool, DecoderError, &[u8]) = if n_lock == 0 {
+        let (valid, err, used): (bool, DecoderError, &[u8]) = if n_lock == 0 && synth.is_none() {
             let _ = self.dec.set_position(pos);
             self.dec.set_ip(addr as u64);
             self.dec.decode_out(&mut ins);
@@ -270,24 +364,83 @@ impl<'a> Sweeper<'a> {
                 }
             }
         }
+        // The decoder refuses some instructions with an operand-size or repeat prefix that the
+        // tool reads with the prefix unused (it prints the prefix as a word of its own).
+        let mut removed = 0usize;
+        if !valid && err != DecoderError::NoMoreBytes {
+            let eff_prefix = &eff_ref[..lay.opcode_pos];
+            for kind in [0x66u8, 0xf3, 0xf2] {
+                if !eff_prefix.contains(&kind) {
+                    continue;
+                }
+                let b: Vec<u8> = eff_ref
+                    .iter()
+                    .enumerate()
+                    .filter(|&(i, &x)| !(i < lay.opcode_pos && x == kind))
+                    .map(|(_, &x)| x)
+                    .collect();
+                let mut d3 =
+                    Decoder::with_ip(32, &b, addr as u64 + n_lock as u64, DecoderOptions::NONE);
+                d3.decode_out(&mut ins);
+                if !ins.is_invalid() {
+                    removed = eff_ref.len() - b.len();
+                    valid = true;
+                    patched = Some(b);
+                    break;
+                }
+            }
+        }
         if !valid {
             if err == DecoderError::NoMoreBytes {
-                return (1, print::truncated(rest));
+                return (1, print::truncated(rest), true);
+            }
+            // An instruction of more than fifteen bytes: the tool prints `(bad)` for fifteen of
+            // them, naming the prefixes except the segment one its memory operand took.
+            for d in 1..=nprefix {
+                let mut d4 = Decoder::with_ip(32, &eff_ref[d..], 0, DecoderOptions::NONE);
+                let o = d4.decode();
+                if !o.is_invalid() && o.len() + d + n_lock > 15 {
+                    let mem = o.op_kinds().any(|k| k == iced_x86::OpKind::Memory);
+                    let last_seg = orig_prefix
+                        .iter()
+                        .rposition(|&b| matches!(b, 0x2e | 0x36 | 0x3e | 0x26 | 0x64 | 0x65));
+                    let words: Vec<&str> = orig_prefix
+                        .iter()
+                        .enumerate()
+                        .filter(|&(i, _)| !(mem && Some(i) == last_seg))
+                        .map(|(_, &b)| prefix_name(b).unwrap_or(""))
+                        .collect();
+                    return (15.min(rest.len()), join(&words, "(bad)", ""), false);
+                }
             }
             // The tool takes the prefixes and the opcode bytes with it; a few encodings that are
             // not instructions to it take more.
-            let opn = match lay.map {
-                0 => 1,
-                1 => 2,
+            let opn = match (lay.map, lay.op) {
+                (0, _) => 1,
+                // 3DNow with a suffix that is no instruction: only the escape byte is taken.
+                (1, 0x0f) => 1,
+                (1, _) => 2,
                 _ => 3,
             };
             let m = eff_ref.get(lay.modrm_pos).copied().unwrap_or(0);
+            // VEX and EVEX with a valid map and payload: see `vex_len`.
+            let p1 = eff_ref.get(lay.modrm_pos + 1).copied().unwrap_or(0);
+            let vex = match (lay.map, lay.op) {
+                (0, 0xc5) if m >= 0xc0 => true,
+                (0, 0xc4) if m >= 0xc0 && matches!(m & 0x1f, 1..=3 | 5..=7) => true,
+                (0, 0x62) if m >= 0xc0 && matches!(m & 0xf, 1..=3 | 5..=7) && p1 & 4 != 0 => true,
+                _ => false,
+            };
+            if vex {
+                let n = Self::vex_len(eff_ref, lay.opcode_pos);
+                return (n + n_lock, "(bad)".to_string(), false);
+            }
             let extra = match (lay.map, lay.op) {
-                // XOP and VEX prefixes: with a valid map the tool takes the payload bytes and the
-                // opcode along.
+                // XOP: with a valid map the tool takes the payload bytes and the opcode along.
                 (0, 0x8f) if matches!(m & 0x1f, 8..=10) => 3,
-                (0, 0xc4) if m >= 0xc0 && matches!(m & 0x1f, 1..=3) => 3,
-                (0, 0xc5) if m >= 0xc0 => 2,
+                // EVEX with a bad map or a clear bit 2 in the second payload byte stops after
+                // the payload's second byte.
+                (0, 0x62) if m >= 0xc0 && m & 3 != 0 => 2,
                 _ => 0,
             };
             // A prefix the tool took as part of a VEX or XOP escape is not named.
@@ -302,6 +455,7 @@ impl<'a> Sweeper<'a> {
             return (
                 (nprefix + opn + extra).min(rest.len()),
                 join(&words, "(bad)", ""),
+                false,
             );
         }
         let wait = if wait_before && print::merges_wait(ins.mnemonic()) {
@@ -314,7 +468,77 @@ impl<'a> Sweeper<'a> {
             None => used0,
         };
         let text = print::print(&ins, used, orig_prefix, wait, quirks);
-        (used.len() + n_lock, text)
+        (used.len() + n_lock + removed, text, false)
+    }
+
+    /// The length the tool takes for a VEX or EVEX encoded instruction the decoder refuses (a
+    /// register number out of range in the 32-bit mode, a mask or rounding control the
+    /// instruction cannot have, a form the opcode does not have): bad operands do not change the
+    /// length. An opcode the tool knows (see `vextab`) takes its ModRM, SIB and displacement and
+    /// immediate bytes; with a ModRM form it does not have, it takes the opcode and the immediate
+    /// bytes only; an opcode it does not know, or a vector length the opcode cannot have, takes
+    /// the bytes up to and including the opcode. `eff` is the instruction's bytes, the escape
+    /// byte at `at`.
+    fn vex_len(eff: &[u8], at: usize) -> usize {
+        let byte = |i: usize| eff.get(i).copied().unwrap_or(0);
+        let kind = byte(at);
+        let (kind_i, map, pp, w, mut ll, vvvv, op_at) = match kind {
+            0xc5 => {
+                let p = byte(at + 1);
+                (0, 1, p & 3, 0, (p >> 2) & 1, (p >> 3) & 0xf, at + 2)
+            }
+            0xc4 => {
+                let (p0, p1) = (byte(at + 1), byte(at + 2));
+                (1, p0 & 0x1f, p1 & 3, p1 >> 7, (p1 >> 2) & 1, (p1 >> 3) & 0xf, at + 3)
+            }
+            _ => {
+                let (p0, p1, p2) = (byte(at + 1), byte(at + 2), byte(at + 3));
+                (2, p0 & 0xf, p1 & 3, p1 >> 7, (p2 >> 5) & 3, (p1 >> 3) & 0xf, at + 4)
+            }
+        };
+        let vv = u32::from(vvvv != 0xf);
+        let undefined = (op_at + 1).min(eff.len());
+        if kind_i == 2 && ll == 3 {
+            // The vector length field 3 is the rounding control of the forms that have one.
+            if byte(at + 3) & 0x10 == 0 {
+                return undefined;
+            }
+            ll = 2;
+        }
+        let Some(&op) = eff.get(op_at) else {
+            return eff.len();
+        };
+        let v = vextab::vex_op(
+            kind_i as u32,
+            map as u32,
+            pp as u32,
+            w as u32,
+            ll as u32,
+            vv,
+            op as u32,
+        );
+        if v == 0 {
+            return undefined;
+        }
+        let imm = (v & 3) as usize;
+        let Some(&m) = eff.get(op_at + 1) else {
+            return eff.len();
+        };
+        let is_reg = m >= 0xc0;
+        let allowed = if is_reg { v & 8 != 0 } else { v & 4 != 0 };
+        if !allowed {
+            return op_at + 1 + imm;
+        }
+        let a16 = eff[..at].contains(&0x67);
+        let modrm_len = if is_reg {
+            1
+        } else {
+            match modrm_mem(eff, op_at + 1, a16, None) {
+                Some((_, n)) => n,
+                None => return eff.len(),
+            }
+        };
+        op_at + 1 + modrm_len + imm
     }
 
     /// Forms the decoder refuses or reads differently from the tool: `(bad)` x87 encodings and
@@ -325,6 +549,7 @@ impl<'a> Sweeper<'a> {
         orig_prefix: &[u8],
         lay: &Layout,
         addr: u32,
+        wait_before: bool,
     ) -> Option<(usize, String)> {
         let mp = lay.modrm_pos;
         let m = *eff.get(mp)?;
@@ -332,24 +557,85 @@ impl<'a> Sweeper<'a> {
             .iter()
             .map(|&b| prefix_name(b).unwrap_or(""))
             .collect();
-        // The padlock group: only the register forms with `rm` 0 are instructions.
-        if lay.map == 1 && lay.op == 0xa7 {
-            const NAMES: [&str; 8] = [
+        let has = |b: u8| orig_prefix.contains(&b);
+        let reg = (m >> 3) & 7;
+        // The 64-bit-only `swapgs` is an instruction to the tool.
+        if lay.map == 1 && lay.op == 0x01 && m == 0xf8 {
+            return Some((mp + 1, join(&all_words, "swapgs", "")));
+        }
+        // The SSE4a pair reads the opcode and ModRM bytes as operands when the ModRM byte names
+        // memory, and takes only up to that byte.
+        if lay.map == 1 && lay.op == 0x78 && m < 0xc0 && (has(0x66) || has(0xf2)) {
+            let (name, ops) = if has(0xf2) {
+                ("insertq", format!("xmm{reg},(bad),0x78,0x{m:x}"))
+            } else {
+                ("extrq", format!("(bad),0x78,0x{m:x}"))
+            };
+            return Some((mp + 1, join(&[], name, &ops)));
+        }
+        // `sm2` is `repnz` with the first padlock form.
+        if lay.map == 1 && lay.op == 0xa6 && m == 0xc0 && has(0xf2) {
+            return Some((mp + 1, join(&[], "sm2", "")));
+        }
+        // Memory-bound-check moves with an address-size prefix: both operands are named as bad
+        // where the register number is out of range.
+        if lay.map == 1 && matches!(lay.op, 0x1a | 0x1b) && m < 0xc0 && has(0x67) && !has(0x66)
+            && !has(0xf2) && !has(0xf3)
+        {
+            let bnd = if reg < 4 { format!("bnd{reg}") } else { "(bad)".to_string() };
+            let (name, ops) = if lay.op == 0x1a {
+                ("bndldx", format!("{bnd},(bad)"))
+            } else {
+                ("bndstx", format!("(bad),{bnd}"))
+            };
+            // The address-size prefix is named; the bad operand takes the ModRM byte only.
+            return Some((mp + 1, join(&all_words, name, &ops)));
+        }
+        // The 8087 and 287 control instructions of the `db` group.
+        if lay.map == 0 && lay.op == 0xdb && matches!(m, 0xe0 | 0xe1 | 0xe4 | 0xe5) {
+            let mut name = match m {
+                0xe0 => "fneni(8087 only)",
+                0xe1 => "fndisi(8087 only)",
+                0xe4 => "fnsetpm(287 only)",
+                _ => "frstpm(287 only)",
+            }
+            .to_string();
+            if wait_before && name.starts_with("fn") {
+                name.remove(1);
+            }
+            return Some((mp + 1, join(&all_words, &name, "")));
+        }
+        // The padlock groups: only the register forms with `rm` 0 are instructions (the others
+        // are `(bad)`, see `badtab`).
+        if lay.map == 1 && matches!(lay.op, 0xa6 | 0xa7) && m >= 0xc0 && m & 7 == 0 {
+            const A6: [&str; 8] = [
+                "", "xsha1", "xsha256", "xsha384", "xsha512", "", "montmul2", "xmodexp",
+            ];
+            const A7: [&str; 8] = [
                 "xstore-rng",
                 "xcrypt-ecb",
                 "xcrypt-cbc",
                 "xcrypt-ctr",
                 "xcrypt-cfb",
                 "xcrypt-ofb",
-                "(bad)",
-                "(bad)",
+                "",
+                "xrng2",
             ];
-            let name = NAMES[((m >> 3) & 7) as usize];
-            return Some(if m >= 0xc0 && m & 7 == 0 && name != "(bad)" {
-                (mp + 1, join(&all_words, name, ""))
+            let t = if lay.op == 0xa6 { &A6 } else { &A7 };
+            let name = t[((m >> 3) & 7) as usize];
+            if !name.is_empty() {
+                return Some((mp + 1, join(&all_words, name, "")));
+            }
+        }
+        // Moves to and from the test registers: the tool takes any ModRM byte as a register pair.
+        if lay.map == 1 && matches!(lay.op, 0x24 | 0x26) {
+            let (reg, rm) = ((m >> 3) & 7, REG32[(m & 7) as usize]);
+            let ops = if lay.op == 0x24 {
+                format!("{rm},tr{reg}")
             } else {
-                (lay.opcode_pos + 1, join(&all_words, name, "(bad)"))
-            });
+                format!("tr{reg},{rm}")
+            };
+            return Some((mp + 1, join(&all_words, "mov", &ops)));
         }
         // `xbegin` and `xabort` read their operand from the ModRM byte's place.
         if lay.map == 0
