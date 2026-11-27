@@ -44,9 +44,9 @@ mod common;
 const VAR: &str = "STA64_TEST_A2_STOCK_INSTALL";
 
 /// Upper bound, in percent, of the compared functions that may stop with an error (equal on both
-/// sides). The stand-in call model makes many engine-heavy functions stop early (about 55 percent
-/// in the run the bound was set from), so the bound sits above that with room for a few percent
-/// of drift; a change that makes most functions stop, which would leave most of the lifter
+/// sides). The stand-in call model makes many engine-heavy functions stop early (a majority
+/// of them in the run the bound was set from), so the bound sits above that share with some room
+/// for drift; a change that makes most functions stop, which would leave most of the lifter
 /// untested, trips it.
 const ERROR_SHARE_BOUND_PERCENT: usize = 70;
 
