@@ -171,6 +171,10 @@ pub struct NebulaField {
     dome: f32,
     /// Where the class's nebulae sit (Bevy space), for the lightning to strike among.
     centres: Vec<[f32; 3]>,
+    /// The nebula radius the envelope was built for.
+    radius: f32,
+    /// Which of `centres` are drawn (#1146: a nebula never seen is not); all, until the states say otherwise.
+    shown: Vec<bool>,
     lightning: Lightning,
     /// The wall clock at the last update, for the lightning's step.
     last: f32,
@@ -187,7 +191,7 @@ impl Plugin for NebulaPlugin {
         embedded_asset!(app, "nebula.wesl");
         app.add_plugins((MaterialPlugin::<NebulaMaterial>::default(), crate::render::nebula_lowres::NebulaLowResPlugin))
             .init_resource::<NoiseVolume>()
-            .add_systems(Update, poll_noise)
+            .add_systems(Update, (poll_noise, gate_fields.run_if(resource_exists::<crate::render::fog_objects::FogRegions>)))
             // `fade_boards` must run every frame, with no run condition: it reads change ticks and
             // removal events since its last run, and a removal it misses (a puff losing its stored
             // fade) would leave a frame skipped that the walk of every board would not skip.
@@ -871,6 +875,44 @@ fn poll_noise(mut nv: ResMut<NoiseVolume>, mut images: ResMut<Assets<Image>>, mu
     }
 }
 
+/// A nebula of a class's field that the local player's side has never had in sight is not drawn
+/// (#1146; rule and grade: `render::fog_objects`). The field is one box for the whole class, so the
+/// nebula is cleared from the envelope the gas is marched through, and the lightning strikes among
+/// the nebulae drawn only. A nebula in sight, or remembered (out-of-sight looks are a later step),
+/// is as before. A centre that is no region of the map (a latinum nebula) is always drawn.
+fn gate_fields(
+    regions: Res<crate::render::fog_objects::FogRegions>,
+    sights: Res<crate::render::fog_objects::RegionSights>,
+    mut fields: Query<&mut NebulaField>,
+    mut materials: ResMut<Assets<NebulaMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    use crate::render::fog_objects::Sight;
+    for mut f in &mut fields {
+        let shown: Vec<bool> = f
+            .centres
+            .iter()
+            .map(|c| {
+                regions
+                    .find(sta_content::RegionKind::Nebula, c[0], -c[2], REGION_MATCH)
+                    .is_none_or(|r| sights.get(r.id) != Sight::Never)
+            })
+            .collect();
+        if shown == f.shown {
+            continue;
+        }
+        let Some(handle) = materials.get(&f.material).and_then(|m| m.envelope.clone()) else { continue };
+        let env = sta_surface::nebula::envelope_masked(&f.recipe, f.radius, &f.centres, &shown);
+        let Some(mut img) = images.get_mut(&handle) else { continue };
+        img.data = Some(env.pixels);
+        f.shown = shown;
+    }
+}
+
+/// How near (world units) a field's centre must be to a region's to be that region: both come from
+/// the one map object.
+const REGION_MATCH: f32 = 2.0;
+
 /// Spawn one class's field: its nebulae at `pos` (Bevy space), each `radius`.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_field(
@@ -896,7 +938,8 @@ pub fn spawn_field(
         TextureDimension::D2,
         env.pixels.clone(),
         TextureFormat::Rgba8Unorm,
-        RenderAssetUsages::RENDER_WORLD,
+        // Kept in the main world too: the places not yet seen are cleared from it later (`gate_fields`).
+        RenderAssetUsages::default(),
     );
     env_img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
         address_mode_u: ImageAddressMode::ClampToEdge,
@@ -973,6 +1016,8 @@ pub fn spawn_field(
             span: (x1 - x0) + (z1 - z0),
             dome,
             centres: pos.to_vec(),
+            radius,
+            shown: vec![true; pos.len()],
             lightning: Lightning::new(seed),
             last: -1.0,
         },
@@ -1063,7 +1108,8 @@ fn update(
         if r.lightning > 0.0 {
             let dt = if f.last >= 0.0 && t > f.last { t - f.last } else { 0.0 };
             f.last = t;
-            let fl = f.lightning.step(r, &f.centres, f.reach, f.dome, t, dt);
+            let lit: Vec<[f32; 3]> = f.centres.iter().zip(&f.shown).filter(|(_, s)| **s).map(|(c, _)| *c).collect();
+            let fl = f.lightning.step(r, &lit, f.reach, f.dome, t, dt);
             p.flash0 = Vec4::from(fl[0]);
             p.flash1 = Vec4::from(fl[1]);
             p.flash2 = Vec4::from(fl[2]);
@@ -1075,6 +1121,64 @@ fn update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1146: a nebula of the class's field that was never seen is cleared from the envelope; the one in sight is not.
+    #[test]
+    fn gate_fields_clears_the_nebulae_never_seen_from_the_envelope() {
+        use crate::render::fog_objects::{FogRegions, RegionSights, Sight, update_region_sights};
+        use sta_content::{MapDef, Region, RegionKind, RegionShape};
+        let v = |x: i32, z: i32| sta_sim::Vec3 { x: sta_sim::Fixed::from_int(x), y: sta_sim::Fixed::ZERO, z: sta_sim::Fixed::from_int(z) };
+        let mut map = MapDef::empty();
+        for x in [0, 2000] {
+            map.regions.push(Region { kind: RegionKind::Nebula, odf: "n".into(), shape: RegionShape::Sphere { centre: v(x, 100), radius: sta_sim::Fixed::from_int(300) } });
+        }
+        let recipe = NebulaRecipe::parse("[Nebula]\nExtent=1.3\nHeight=3\n");
+        // Bevy space: z is mirrored.
+        let centres = vec![[0.0, 0.0, -100.0], [2000.0, 0.0, -100.0]];
+        let env = sta_surface::nebula::envelope(&recipe, 300.0, &centres);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<Assets<NebulaMaterial>>().init_resource::<Assets<Image>>();
+        let image = Image::new(Extent3d { width: env.w, height: env.h, depth_or_array_layers: 1 }, TextureDimension::D2, env.pixels.clone(), TextureFormat::Rgba8Unorm, RenderAssetUsages::default());
+        let handle = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+        let material = app.world_mut().resource_mut::<Assets<NebulaMaterial>>().add(NebulaMaterial { params: NebulaParams::default(), noise: None, envelope: Some(handle.clone()), shadow: None });
+        let field = app
+            .world_mut()
+            .spawn(NebulaField {
+                material,
+                recipe,
+                reach: 390.0,
+                span: 1.0,
+                dome: 1.0,
+                centres: centres.clone(),
+                radius: 300.0,
+                shown: vec![true; 2],
+                lightning: Lightning::new(1),
+                last: -1.0,
+            })
+            .id();
+        app.insert_resource(FogRegions::of_map(&map))
+            .init_resource::<RegionSights>()
+            .insert_resource(crate::render::units::LocalPlayer(Some(sta_sim::PlayerId(1))));
+        app.add_systems(Update, (update_region_sights, gate_fields).chain());
+        // A grid that has seen only the second nebula.
+        let mut grid = crate::render::fog::FogGrid::new([-4096.0, -4096.0], [4096.0, 4096.0]);
+        let c = grid.cell_of(2000.0, 100.0).unwrap();
+        grid.set_cell_for_test(c % grid.w, c / grid.w, true, true);
+        app.insert_resource(crate::render::fog::FogState { grid, updates: 1 });
+        app.update();
+        assert_eq!(app.world().resource::<RegionSights>().get(0), Sight::Never);
+        assert_eq!(app.world().get::<NebulaField>(field).unwrap().shown, vec![false, true]);
+        let want = sta_surface::nebula::envelope_masked(&app.world().get::<NebulaField>(field).unwrap().recipe, 300.0, &centres, &[false, true]);
+        let got = app.world().resource::<Assets<Image>>().get(&handle).unwrap().data.clone().unwrap();
+        assert_eq!(got, want.pixels);
+        assert_ne!(got, env.pixels);
+        // Everything in sight again: the envelope is the full one.
+        let all = crate::render::fog::FogGrid::new([-4096.0, -4096.0], [4096.0, 4096.0]).lifted(true, true);
+        app.insert_resource(crate::render::fog::FogState { grid: all, updates: 2 });
+        app.update();
+        assert_eq!(app.world().get::<NebulaField>(field).unwrap().shown, vec![true, true]);
+        assert_eq!(app.world().resource::<Assets<Image>>().get(&handle).unwrap().data.clone().unwrap(), env.pixels);
+    }
 
     /// The per-pair form the occlusion had before the discs were computed once.
     fn occlusion_reference(eye: Vec3, nebulae: &[(Vec3, f32)]) -> Vec<f32> {

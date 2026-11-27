@@ -465,6 +465,17 @@ pub struct Envelope {
 
 /// Build the envelope for nebulae at `pos` (x, y, z) with `radius`.
 pub fn envelope(r: &NebulaRecipe, radius: f32, pos: &[[f32; 3]]) -> Envelope {
+    envelope_of(r, radius, pos, &[])
+}
+
+/// As [`envelope`], with the places where `shown` is false left empty (no dome, no cover): the
+/// rectangle, mean height and spread stay those of all of `pos`, so the shown places look as they
+/// do in the full envelope. A `shown` shorter than `pos` counts the rest as shown.
+pub fn envelope_masked(r: &NebulaRecipe, radius: f32, pos: &[[f32; 3]], shown: &[bool]) -> Envelope {
+    envelope_of(r, radius, pos, shown)
+}
+
+fn envelope_of(r: &NebulaRecipe, radius: f32, pos: &[[f32; 3]], shown: &[bool]) -> Envelope {
     let reach = radius * r.extent;
     let mut freach = reach * if r.filaments[0] > 0.0 && r.fil_reach > 1.0 { r.fil_reach } else { 1.0 };
     if r.fringe[0] > 0.0 && reach * r.fringe_reach > freach {
@@ -492,7 +503,10 @@ pub fn envelope(r: &NebulaRecipe, radius: f32, pos: &[[f32; 3]]) -> Envelope {
         for x in 0..w {
             let wx = x0 + (x as f32 + 0.5) * (x1 - x0) / w as f32;
             let (mut s, mut hh, mut g, mut wy, mut ww) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
-            for p in pos {
+            for (i, p) in pos.iter().enumerate() {
+                if !shown.get(i).copied().unwrap_or(true) {
+                    continue;
+                }
                 let (dx, dz) = (wx - p[0], wz - p[2]);
                 let d2 = dx * dx + dz * dz;
                 if d2 >= freach * freach {
@@ -650,6 +664,26 @@ mod tests {
         assert!(at(0.0, 0.0)[3] > 200 && at(0.0, 0.0)[0] > 200, "centre covered");
         assert_eq!(at(300.0, 500.0)[3], 0, "beyond every reach is empty");
         assert!((e.ey - 25.0).abs() < 1e-3 && (e.ydev - 25.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_masked_envelope_empties_the_hidden_places_and_keeps_the_rest() {
+        let r = NebulaRecipe::parse("[Nebula]\nExtent=1.3\nHeight=3\n");
+        let pos = [[0.0, 0.0, 0.0], [2000.0, 50.0, 0.0]];
+        let full = envelope(&r, 300.0, &pos);
+        assert_eq!(envelope_masked(&r, 300.0, &pos, &[true, true]).pixels, full.pixels, "all shown: the same bytes");
+        assert_eq!(envelope_masked(&r, 300.0, &pos, &[]).pixels, full.pixels, "no mask: all shown");
+        let m = envelope_masked(&r, 300.0, &pos, &[false, true]);
+        assert_eq!((m.w, m.h, m.rect, m.ey, m.ydev), (full.w, full.h, full.rect, full.ey, full.ydev));
+        let at = |e: &Envelope, wx: f32| {
+            let x = ((wx - e.rect[0]) / (e.rect[2] - e.rect[0]) * e.w as f32) as u32;
+            let z = (((0.0 - e.rect[1]) / (e.rect[3] - e.rect[1]) * e.h as f32) as u32).min(e.h - 1);
+            let o = ((z * e.w + x) * 4) as usize;
+            [e.pixels[o], e.pixels[o + 1], e.pixels[o + 2], e.pixels[o + 3]]
+        };
+        assert_eq!(at(&m, 0.0), [0, 0, 128, 0], "the hidden nebula's centre is empty");
+        assert!(at(&full, 0.0)[3] > 200);
+        assert_eq!(at(&m, 2000.0), at(&full, 2000.0), "the shown one is as in the full envelope");
     }
 
     #[test]

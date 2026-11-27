@@ -696,6 +696,21 @@ pub(crate) fn clear_match(
     }
 }
 
+/// The gate under `root` that hides a nebula, asteroid field or planet while the local player's side
+/// has never had it in sight (#1146): `o` is the map's object, `radius` its footprint.
+fn sight_gate(commands: &mut Commands, root: Entity, regions: &crate::render::fog_objects::FogRegions, kind: Option<sta_content::RegionKind>, o: &sta_bzn::MapObject, radius: f32) -> Entity {
+    let (x, z) = (o.transform[9], o.transform[11]);
+    let region = kind.and_then(|k| regions.find(k, x, z, 2.0)).map(|r| r.id);
+    commands
+        .spawn((
+            crate::render::fog_objects::SightGate { pos: Vec2::new(x, z), radius, region },
+            Transform::IDENTITY,
+            Visibility::Inherited,
+            ChildOf(root),
+        ))
+        .id()
+}
+
 fn setup(mut commands: Commands) {
     let projection = Projection::Perspective(PerspectiveProjection {
         near: 1.0,
@@ -1130,6 +1145,7 @@ fn rebuild(
         commands.insert_resource(crate::game::local_race(&races, race));
     }
     commands.insert_resource(crate::render::units::LocalPlayer(seat_player));
+    let fog_regions = crate::render::fog_objects::FogRegions::of_map(&map_def);
     {
         let (lo, hi) = map_def.bounds;
         // The radar draws the map's own rectangle, not the units' spread.
@@ -1147,7 +1163,7 @@ fn rebuild(
         commands.insert_resource(crate::render::map_grid::GridModes::from_cfg(rts.as_ref()));
         limits.tactical = crate::input::camera_tactical::TacticalConfig::from_cfg(rts.as_ref());
         // The map's nebulae and asteroid fields, for the per-object visibility states (#1144).
-        commands.insert_resource(crate::render::fog_objects::FogRegions::of_map(&map_def));
+        commands.insert_resource(fog_regions.clone());
         commands.insert_resource(crate::render::fog::FogBounds {
             min: Vec2::new(lo.x.to_f32(), lo.z.to_f32()),
             max: Vec2::new(hi.x.to_f32(), hi.z.to_f32()),
@@ -1260,11 +1276,12 @@ fn rebuild(
             let scale = odf.f32("ScaleSOD").or_else(|| odf.f32("scaleSOD")).filter(|s| *s > 0.0).unwrap_or(1.0);
             let orbit = odf.f32("orbitingSpeed").unwrap_or(0.0).to_radians();
             let tumble = odf.f32("rotationSpeed").unwrap_or(0.0);
+            let gate = sight_gate(&mut commands, root, &fog_regions, Some(sta_content::RegionKind::AsteroidField), o, radius);
             let field = commands
                 .spawn((
                     to_bevy(&Matrix34 { m: o.transform }),
                     Visibility::default(),
-                    ChildOf(root),
+                    ChildOf(gate),
                     AsteroidField,
                     Spin { axis: Vec3::Y, speed: orbit },
                 ))
@@ -1328,7 +1345,8 @@ fn rebuild(
             let ground = odf.str("groundTextureName").unwrap_or("").to_owned();
             let atmo = odf.str("atmosphereTextureName").filter(|a| !a.is_empty()).unwrap_or("PA_ECFR0").to_owned();
             let planet_tf = to_bevy(&Matrix34 { m: o.transform });
-            let entity = commands.spawn((planet_tf, Visibility::default(), ChildOf(root))).id();
+            let gate = sight_gate(&mut commands, root, &fog_regions, None, o, radius);
+            let entity = commands.spawn((planet_tf, Visibility::default(), ChildOf(gate))).id();
             // The body turns about its own vertical axis on game time (#1047, visual only).
             if let Some(rate) = crate::render::spin::planet_turn(crate::render::spin::object_key(o.entity_id, [o.transform[9], o.transform[10], o.transform[11]]), odf.f32("rotationSpeed")) {
                 commands.entity(entity).insert(crate::render::spin::Turn { base: planet_tf.rotation, axis: Vec3::Y, rate });
@@ -1367,7 +1385,13 @@ fn rebuild(
         // Background objects (suns, background planets, wrecks, gates) stay where the
         // map puts them but are drawn before the scene, which they never hide.
         let background_obj = odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("background_obj"));
-        let entity = commands.spawn((tf, if has_gas && gas_volumes { Visibility::Hidden } else { Visibility::Inherited }, ChildOf(root))).id();
+        let nebula = odf.class_label().is_some_and(|c| c.eq_ignore_ascii_case("nebula_obj"));
+        let parent = if nebula {
+            sight_gate(&mut commands, root, &fog_regions, Some(sta_content::RegionKind::Nebula), o, crate::ui::radar_layers::nebula_radius(odf))
+        } else {
+            root
+        };
+        let entity = commands.spawn((tf, if has_gas && gas_volumes { Visibility::Hidden } else { Visibility::Inherited }, ChildOf(parent))).id();
         if has_gas { stock_nebulae.push(entity); }
         if background_obj {
             commands.entity(entity).insert(BackgroundObject);
