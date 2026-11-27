@@ -39,6 +39,15 @@ pub struct SpriteFx {
 #[derive(Component)]
 pub struct SpriteFade(pub f32);
 
+/// A sprite node under an object that is out of sight stands at the animation time it had when the object went out
+/// of sight (#1146; a still copy does not animate: rule read from the executable, static; whether a colour pulse
+/// stops is not established: interim). Its colour and blink are those of the node's animation at this time of the
+/// wall clock; the shared sprite flipbook (`uv`) is the look's and keeps running (declared). Taken off when the
+/// object is in sight again: the node then takes the clock's time, as the sprite channels are functions of
+/// absolute time. Put on and taken off by `fog_objects::still_sprites`.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct SpriteStill(pub f32);
+
 /// Faces the camera every frame.
 #[derive(Component)]
 pub struct Billboard;
@@ -88,8 +97,8 @@ pub struct SpriteKeys {
     keys: Option<(Option<u32>, u32)>,
     /// The [`Played::generation`] the indices belong to.
     generation: u32,
-    /// `(fade, nimbus)` present at the node's last pass.
-    had: (bool, bool),
+    /// `(fade, nimbus, still)` present at the node's last pass.
+    had: (bool, bool, bool),
     /// Full passes so far, so tests can see that nodes were passed over.
     #[cfg(test)]
     pub(super) passes: u32,
@@ -257,6 +266,7 @@ pub fn animate(
         Ref<SpriteFx>,
         Option<Ref<SpriteFade>>,
         Option<Ref<crate::render::rock::MoonNimbus>>,
+        Option<Ref<SpriteStill>>,
         &mut Visibility,
         Option<&mut material::SpriteState>,
         Option<&mut MeshMaterial3d<material::SpriteMaterial>>,
@@ -278,7 +288,7 @@ pub fn animate(
     let all = tables.is_changed();
     played.refresh(table, t, all);
     writes.clear();
-    for (f, fade, nimbus, mut vis, state, mut drawn, mut keys, node) in &mut fx {
+    for (f, fade, nimbus, still, mut vis, state, mut drawn, mut keys, node) in &mut fx {
         let resolved = keys.keys.filter(|_| !f.is_changed() && keys.generation == played.generation);
         let (anim, sprite) = match resolved {
             Some(k) => k,
@@ -289,7 +299,7 @@ pub fn animate(
                 k
             }
         };
-        let had = (fade.is_some(), nimbus.is_some());
+        let had = (fade.is_some(), nimbus.is_some(), still.is_some());
         let quiet = state.is_some()
             && resolved.is_some()
             && !all
@@ -299,7 +309,9 @@ pub fn animate(
             && !vis.is_changed()
             && !state.as_ref().is_some_and(|s| s.is_changed())
             && !drawn.as_ref().is_some_and(|d| d.is_changed())
-            && !anim.is_some_and(|i| played.anims[i as usize].moved)
+            && !still.as_ref().is_some_and(|s| s.is_changed())
+            // A still node's animation stands: its value moving does not reach it.
+            && (still.is_some() || !anim.is_some_and(|i| played.anims[i as usize].moved))
             && !played.sprites[sprite as usize].moved
             && state.as_deref().is_some_and(settled);
         if quiet {
@@ -315,7 +327,11 @@ pub fn animate(
         let mut col = f.colour;
         // A moon's nimbus is drawn under the Stock look only.
         let mut shown = nimbus.as_ref().is_none_or(|n| n.on);
-        match anim.and_then(|i| played.anims[i as usize].now) {
+        let value = match &still {
+            Some(s) => f.node_anim.as_deref().and_then(|name| Played::anim_now(table, name, s.0)),
+            None => anim.and_then(|i| played.anims[i as usize].now),
+        };
+        match value {
             Some(Value::Draw(false)) => shown = false,
             Some(Value::Colour(c)) => col = c,
             _ => {}
