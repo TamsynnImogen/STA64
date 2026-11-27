@@ -26,8 +26,9 @@ pub struct Section {
 }
 
 impl Section {
-    /// The section's flags mark it as code. The decoder step (LUA-15b) settles which flags
-    /// the linear sweep needs to match the reference listing (not yet measured).
+    /// The section's flags mark it as code: `CNT_CODE` or `MEM_EXECUTE`, either alone. This is
+    /// the rule the reference tool applies to pick the sections it lists (measured on authored
+    /// section flags, LUA-15b); the sweep additionally needs file data (see `disasm`).
     pub fn is_code(&self) -> bool {
         self.characteristics & (SCN_CNT_CODE | SCN_MEM_EXECUTE) != 0
     }
