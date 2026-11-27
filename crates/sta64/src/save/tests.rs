@@ -598,12 +598,13 @@ fn save_is_not_allowed_where_it_cannot_be_restored_and_says_why() {
     assert_eq!(blocked(&mut a), Some(SaveBlock::Observer));
 
     // The skirmish AI has not opted in to saving yet (AI-07): the seat is named, with a clear reason.
+    let files = container::store::list(&dir, None).unwrap().len();
     let mut a = app(&dir, true);
     start(&mut a, setup(&data, [Control::Human, Control::Ai(sta_ai::SKIRMISH.into())]), MatchSpeed::Normal);
     let why = blocked(&mut a);
     assert_eq!(why, Some(SaveBlock::Controller(PlayerId(1))));
     assert!(why.unwrap().to_string().contains("seat 1 cannot be saved yet"));
-    assert!(container::store::list(&dir, None).unwrap().is_empty(), "nothing was written");
+    assert_eq!(container::store::list(&dir, None).unwrap().len(), files, "nothing was written");
 
     // The idle computer player opts in (stateless): such a game saves.
     let mut a = app(&dir, true);

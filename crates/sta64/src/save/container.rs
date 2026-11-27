@@ -2,6 +2,4 @@
 //! names what comes from `sta_sim::save`, so the rest of the module does not depend on its layout.
 
 pub use sta_sim::save::store;
-pub use sta_sim::save::{
-    ClientState, GameKind, InFlight, Loaded, MapId, MapSource, SaveError, SaveInfo, load, read_header, save,
-};
+pub use sta_sim::save::{ClientState, GameKind, Header, InFlight, MapId, MapSource, SaveError, SaveInfo, load, read_header, save};
