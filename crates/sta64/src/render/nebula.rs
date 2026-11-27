@@ -182,6 +182,19 @@ pub struct NebulaField {
     lightning: Lightning,
     /// The wall clock at the last update, for the lightning's step.
     last: f32,
+    /// The clock the gas stands at while no nebula of the class is in sight (#1146): the flow, the core's pulse, the
+    /// ring's colours and the swirl are functions of the absolute time, so a still copy is drawn at this time and
+    /// they take the clock's again when one is in sight. `None` while any nebula of the class is. One clock per
+    /// class (the field is one box): a class with one nebula in sight animates whole.
+    still: Option<f32>,
+    /// What the last write of the material's per-frame values was made from (camera, key light, steps, near), so a
+    /// field that stands still and sees the same view writes nothing (#1237).
+    view: Option<[f32; 12]>,
+}
+
+/// The time the gas is drawn at: the clock, or the moment it stopped (see [`NebulaField::still`]).
+fn gas_time(still: Option<f32>, now: f32) -> f32 {
+    still.unwrap_or(now)
 }
 
 /// A field whose box the low-resolution path stands in for (`nebula_lowres.rs`).
@@ -1051,6 +1064,8 @@ pub fn spawn_field(
             lit: pos.to_vec(),
             lightning: Lightning::new(seed),
             last: -1.0,
+            still: None,
+            view: None,
         },
         Visibility::default(),
     )).id()
@@ -1105,6 +1120,27 @@ fn update(
             commands.entity(entity).remove::<(LowResGas, RenderLayers)>();
         }
         let f = &mut *f;
+        // A class with no nebula in sight is a still copy (#1146; rule: read from the executable, static for the
+        // tumble and the lights; whether the colour pulse and the gas flow stop is not established, so they stop
+        // too: interim).
+        let stopped = f.shown.iter().all(|s| *s < 1.0);
+        match (stopped, f.still) {
+            (true, None) => f.still = Some(t),
+            (false, Some(_)) => {
+                f.still = None;
+                // The lightning's step after the stop is the first one again.
+                f.last = -1.0;
+            }
+            _ => {}
+        }
+        // A field at rest that sees what it last wrote draws what it wrote: no write, no upload (#1237).
+        let view = [
+            cam.translation().x, cam.translation().y, cam.translation().z, fwd.x, fwd.y, fwd.z, key.x, key.y, key.z, near, steps as f32, 0.0,
+        ];
+        if f.still.is_some() && f.view == Some(view) && !shadow.as_ref().is_some_and(|s| s.is_changed()) {
+            continue;
+        }
+        f.view = f.still.map(|_| view);
         let Some(mut m) = materials.get_mut(&f.material) else { continue };
         if let Some(s) = shadow.as_deref()
             && m.shadow.as_ref() != Some(&s.image)
@@ -1122,7 +1158,8 @@ fn update(
         // Ships' shadows through the gas (RND-15).
         apply_shadow(p, shadow.as_deref());
         p.scat = Vec4::new(1.0 + g * g, 2.0 * g, steps as f32, 0.0);
-        p.flow.x = (t * r.flow_speed) % 100.0;
+        let gt = gas_time(f.still, t);
+        p.flow.x = (gt * r.flow_speed) % 100.0;
         // Edge-on dimming: a long path through a thin field adds up; dim it unless
         // the gas's own opacity already does.
         let rf = 2.8 * f.reach;
@@ -1130,13 +1167,14 @@ fn update(
         let s = if path > rf && r.opacity <= 0.0 { (rf / path).powf(r.edge_dim) } else { 1.0 };
         p.vert.w = s / f.reach;
         // Motion on the clock: the core's pulse, the ring's colours, the swirl's circles.
-        p.pulse.y = r.pulse_phase(t);
-        p.ring.w = r.ring_phase(t);
-        let [s1, s2] = r.swirl_phases(t);
+        p.pulse.y = r.pulse_phase(gt);
+        p.ring.w = r.ring_phase(gt);
+        let [s1, s2] = r.swirl_phases(gt);
         p.swirl.z = s1;
         p.swirl.w = s2;
-        // Lightning: the flashes now (none on the first frame or after a long gap).
-        if r.lightning > 0.0 {
+        // Lightning: the flashes now (none on the first frame or after a long gap). A still copy keeps the flashes
+        // it had and strikes no more.
+        if r.lightning > 0.0 && f.still.is_none() {
             let dt = if f.last >= 0.0 && t > f.last { t - f.last } else { 0.0 };
             f.last = t;
             let lit = std::mem::take(&mut f.lit);
@@ -1188,6 +1226,8 @@ mod tests {
                 lit: centres.clone(),
                 lightning: Lightning::new(1),
                 last: -1.0,
+                still: None,
+                view: None,
             })
             .id();
         app.insert_resource(FogRegions::of_map(&map))
@@ -1232,6 +1272,86 @@ mod tests {
         app.update();
         assert_eq!(app.world().get::<NebulaField>(field).unwrap().shown, vec![1.0, 1.0]);
         assert_eq!(app.world().resource::<Assets<Image>>().get(&handle).unwrap().data.clone().unwrap(), env.pixels);
+    }
+
+    /// #1146: the gas of a class with no nebula in sight stands at the time it stopped (flow, pulse, ring, swirl),
+    /// writes nothing while the view is the same, and takes the clock's time again when one is in sight; in sight
+    /// every value is the clock's, as before.
+    #[test]
+    fn the_gas_of_a_class_out_of_sight_stands_still_and_writes_nothing() {
+        let recipe = NebulaRecipe::parse("[Nebula]\nFlowSpeed=0.5\nPulseSpeed=0.5\nRingCycle=3\nSwirlPeriod=20\n");
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<Assets<NebulaMaterial>>().init_resource::<crate::clock::AnimClock>();
+        let material = app.world_mut().resource_mut::<Assets<NebulaMaterial>>().add(NebulaMaterial { params: NebulaParams::default(), noise: None, envelope: None, shadow: None });
+        app.world_mut().spawn((Camera3d::default(), Camera::default(), Projection::Perspective(PerspectiveProjection::default()), GlobalTransform::default()));
+        let centres = vec![[0.0, 0.0, 0.0]];
+        let field = app
+            .world_mut()
+            .spawn((
+                NebulaField {
+                    material: material.clone(),
+                    recipe: recipe.clone(),
+                    reach: 390.0,
+                    span: 1.0,
+                    dome: 1.0,
+                    centres: centres.clone(),
+                    radius: 300.0,
+                    shown: vec![1.0],
+                    region: None,
+                    lit: centres,
+                    lightning: Lightning::new(1),
+                    last: -1.0,
+                    still: None,
+                    view: None,
+                },
+                InheritedVisibility::VISIBLE,
+            ))
+            .id();
+        app.add_systems(Update, update);
+        let step = |app: &mut App, dt: f64| {
+            app.world_mut().resource_mut::<crate::clock::AnimClock>().advance_idle(dt);
+            app.update();
+        };
+        let phases = |app: &App| {
+            let p = app.world().resource::<Assets<NebulaMaterial>>().get(&material).unwrap().params;
+            (p.flow.x, p.pulse.y, p.ring.w, p.swirl.z, p.swirl.w)
+        };
+        let at = |t: f32| (
+            (t * recipe.flow_speed) % 100.0,
+            recipe.pulse_phase(t),
+            recipe.ring_phase(t),
+            recipe.swirl_phases(t)[0],
+            recipe.swirl_phases(t)[1],
+        );
+        // In sight: the clock's time, as before.
+        step(&mut app, 1.0);
+        step(&mut app, 1.0);
+        assert_eq!(phases(&app), at(2.0), "in sight the phases are the clock's");
+        assert!(app.world().get::<NebulaField>(field).unwrap().still.is_none());
+        // Out of sight (seen before): the phases stand at the time of the first frame out of sight.
+        app.world_mut().get_mut::<NebulaField>(field).unwrap().shown = vec![crate::render::fog_objects::ghost::NEBULA];
+        step(&mut app, 1.0);
+        let stopped = phases(&app);
+        assert_eq!(stopped, at(3.0));
+        step(&mut app, 5.0);
+        step(&mut app, 5.0);
+        assert_eq!(phases(&app), stopped, "no phase advances out of sight");
+        // Same view, nothing to write: a marker left in the material stays.
+        let before = app.world().resource::<Assets<NebulaMaterial>>().get(&material).unwrap().params.eye;
+        app.world_mut().resource_mut::<Assets<NebulaMaterial>>().get_mut(&material).unwrap().params.eye = Vec4::splat(7.0);
+        step(&mut app, 1.0);
+        assert_eq!(app.world().resource::<Assets<NebulaMaterial>>().get(&material).unwrap().params.eye, Vec4::splat(7.0), "a still field with the same view writes nothing (was {before:?})");
+        // A moved camera is a new view: written, the phases still standing.
+        let cam = app.world_mut().query_filtered::<Entity, With<Camera3d>>().single(app.world()).unwrap();
+        app.world_mut().entity_mut(cam).insert(GlobalTransform::from(Transform::from_xyz(10.0, 20.0, 30.0)));
+        step(&mut app, 1.0);
+        assert_eq!(app.world().resource::<Assets<NebulaMaterial>>().get(&material).unwrap().params.eye.truncate(), Vec3::new(10.0, 20.0, 30.0));
+        assert_eq!(phases(&app), stopped);
+        // In sight again: the clock's time (the sprites' colour channels take absolute time too).
+        app.world_mut().get_mut::<NebulaField>(field).unwrap().shown = vec![1.0];
+        step(&mut app, 1.0);
+        let now = app.world().resource::<crate::clock::AnimClock>().wall() as f32;
+        assert_eq!(phases(&app), at(now));
     }
 
     /// The per-pair form the occlusion had before the discs were computed once.

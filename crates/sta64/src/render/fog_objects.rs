@@ -172,6 +172,11 @@ impl GridPending<'_> {
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct OutOfSight;
 
+/// The wall clock at the frame a [`SightGate`] went out of sight: the sprite nodes under it stand at this time of
+/// their animations ([`SpriteStill`](crate::render::sprites::SpriteStill)). It goes with [`OutOfSight`].
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct StillSince(pub f32);
+
 /// The factor on the light of the hull and rock models under an entity that is out of sight (a tag on each mesh,
 /// read by the hull and rock shaders); it goes with [`OutOfSight`].
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
@@ -279,6 +284,7 @@ pub fn apply_gates(
     new: Query<(), Added<SightGate>>,
     mut gates: Query<(Entity, &SightGate, &mut Visibility, Has<OutOfSight>)>,
     pending: GridPending,
+    clock: Option<Res<crate::clock::AnimClock>>,
     mut memo: Local<SightMemo>,
 ) {
     let cutscene = cine.is_some_and(|c| c.on);
@@ -300,10 +306,10 @@ pub fn apply_gates(
         }
         match (sight == Sight::Remembered, out) {
             (true, false) => {
-                commands.entity(e).insert((OutOfSight, GhostLight(g.ghost)));
+                commands.entity(e).insert((OutOfSight, GhostLight(g.ghost), StillSince(clock.as_deref().map_or(0.0, |c| c.wall() as f32))));
             }
             (false, true) => {
-                commands.entity(e).remove::<(OutOfSight, GhostLight)>();
+                commands.entity(e).remove::<(OutOfSight, GhostLight, StillSince)>();
             }
             _ => {}
         }
@@ -345,6 +351,40 @@ pub fn tag_ghost_meshes(
     }
 }
 
+/// The sprite nodes under a gate that is out of sight stand still: each carries [`SpriteStill`] with the gate's
+/// [`StillSince`] while it is, and loses it when the gate is in sight again. A model's parts appear after the
+/// marker, so the walk repeats a few times a second; a new marker walks at once. Writes only to nodes that lack
+/// the component, so nothing is touched in a frame where nothing changed.
+pub fn still_sprites(
+    mut commands: Commands,
+    gates: Query<(Entity, &StillSince, Ref<StillSince>)>,
+    mut removed: RemovedComponents<StillSince>,
+    children: Query<&Children>,
+    nodes: Query<Has<crate::render::sprites::SpriteStill>, With<crate::render::sprites::SpriteFx>>,
+    stills: Query<(), With<crate::render::sprites::SpriteStill>>,
+    mut frame: Local<u32>,
+) {
+    *frame = frame.wrapping_add(1);
+    let sweep = frame.is_multiple_of(15);
+    for (gate, since, fresh) in &gates {
+        if !(sweep || fresh.is_added()) {
+            continue;
+        }
+        for d in children.iter_descendants(gate) {
+            if nodes.get(d).is_ok_and(|has| !has) {
+                commands.entity(d).try_insert(crate::render::sprites::SpriteStill(since.0));
+            }
+        }
+    }
+    for gate in removed.read() {
+        for d in children.iter_descendants(gate) {
+            if stills.contains(d) {
+                commands.entity(d).try_remove::<crate::render::sprites::SpriteStill>();
+            }
+        }
+    }
+}
+
 pub struct FogObjectsPlugin;
 
 impl Plugin for FogObjectsPlugin {
@@ -356,6 +396,7 @@ impl Plugin for FogObjectsPlugin {
                 clear_region_sights.run_if(resource_removed::<FogRegions>),
                 apply_gates.in_set(GameSet::Render).after(update_region_sights).run_if(resource_exists::<LocalPlayer>),
                 tag_ghost_meshes.after(apply_gates),
+                still_sprites.after(apply_gates),
             ),
         );
     }
@@ -713,5 +754,45 @@ mod tests {
         app.world_mut().resource_mut::<crate::ui::presentation::CineractiveState>().on = true;
         app.update();
         assert_eq!((vis(&app, nebula), vis(&app, planet)), (Visibility::Inherited, Visibility::Inherited));
+    }
+
+    /// #1146: the sprite nodes under a gate out of sight stand at the clock's time of the frame it went out of sight
+    /// (also a node that appears later), and take the clock's time again when it is in sight.
+    #[test]
+    fn the_sprite_nodes_under_a_gate_out_of_sight_stand_at_the_time_it_went_out() {
+        use crate::render::sprites::{SpriteFx, SpriteStill};
+        let map = region_map();
+        let mut app = gate_app(&map);
+        app.init_resource::<crate::clock::AnimClock>().add_systems(Update, still_sprites.after(apply_gates));
+        let node = |app: &mut App, parent: Entity| {
+            app.world_mut().spawn((SpriteFx { node_anim: None, sprite: String::new(), colour: [1.0; 3], material: Handle::default() }, ChildOf(parent))).id()
+        };
+        let gate = app.world_mut().spawn((SightGate { pos: Vec2::new(3000.0, 3000.0), radius: 300.0, region: None, ghost: 0.5 }, Visibility::Inherited)).id();
+        let pivot = app.world_mut().spawn(ChildOf(gate)).id();
+        let first = node(&mut app, pivot);
+        let tick = |app: &mut App, dt: f64| {
+            app.world_mut().resource_mut::<crate::clock::AnimClock>().advance_idle(dt);
+            app.update();
+        };
+        tick(&mut app, 2.0);
+        set_fog(&mut app, grid_with(&[(3250.0, 3000.0, 10.0, true)]));
+        assert!(app.world().get::<SpriteStill>(first).is_none(), "in sight: animating");
+        tick(&mut app, 3.0);
+        // Out of sight at wall time 5 (the clock was advanced by tick before the fog update).
+        set_fog(&mut app, grid_with(&[(3250.0, 3000.0, 10.0, false)]));
+        let went = app.world().get::<StillSince>(gate).expect("the gate stands still").0;
+        assert_eq!(went, 5.0);
+        assert_eq!(app.world().get::<SpriteStill>(first), Some(&SpriteStill(went)));
+        // Time passes; a part adopted later is caught by the sweep and stands at the same time.
+        let late = node(&mut app, pivot);
+        for _ in 0..20 {
+            tick(&mut app, 1.0);
+        }
+        assert_eq!(app.world().get::<StillSince>(gate).unwrap().0, went, "the time is not renewed while out of sight");
+        assert_eq!(app.world().get::<SpriteStill>(late), Some(&SpriteStill(went)));
+        assert_eq!(app.world().get::<SpriteStill>(first), Some(&SpriteStill(went)));
+        // In sight again: all nodes animate.
+        set_fog(&mut app, grid_with(&[(3250.0, 3000.0, 10.0, true)]));
+        assert!(app.world().get::<SpriteStill>(first).is_none() && app.world().get::<SpriteStill>(late).is_none());
     }
 }

@@ -1219,3 +1219,41 @@ fn the_same_check_sees_a_mark_that_lands_a_frame_late() {
     let e = the_mark_lands_in_the_listed_frame(true).expect_err("the late mark must be seen");
     assert!(e.contains("listed"), "{e}");
 }
+
+/// #1146: a node with `SpriteStill` draws its animation at the time it stands at, the other nodes run on; when the
+/// component goes the node takes the clock's time again, and nothing is written for it while it stands.
+#[test]
+fn a_still_node_draws_its_animation_at_the_time_it_stands_at_and_resumes_with_the_clock() {
+    let mut app = game_app(true);
+    let live = spawn_node(&mut app, "puffA", None);
+    let still = spawn_node(&mut app, "puffA", None);
+    let at = 0.25f32;
+    let t = table();
+    let frozen = match spr_anim::value(t.0.animation("pulse").unwrap(), at, spr_anim::LOOP) {
+        Some(Value::Colour(c)) => linear_bits(colour(c)),
+        other => panic!("the invented pulse gives a colour, not {other:?}"),
+    };
+    let frame = |app: &mut App| {
+        app.world_mut().resource_mut::<AnimClock>().advance_idle(0.0);
+        app.update();
+    };
+    frame(&mut app);
+    app.world_mut().entity_mut(still).insert(SpriteStill(at));
+    let mut live_seen = std::collections::BTreeSet::new();
+    for _ in 0..30 {
+        frame(&mut app);
+        assert_eq!(slot_of(&app, still), frozen, "the still node stands at its time");
+        live_seen.insert(slot_of(&app, live));
+    }
+    assert!(live_seen.len() > 3, "the live node animates meanwhile: {} colours", live_seen.len());
+    // Standing still costs nothing: no pass over the node, no write (`passes` counts full passes).
+    let passes = app.world().get::<SpriteKeys>(still).unwrap().passes;
+    for _ in 0..10 {
+        frame(&mut app);
+    }
+    assert_eq!(app.world().get::<SpriteKeys>(still).unwrap().passes, passes, "a still node is passed over");
+    // In sight again: the clock's time, the same as the node that never stopped.
+    app.world_mut().entity_mut(still).remove::<SpriteStill>();
+    frame(&mut app);
+    assert_eq!(slot_of(&app, still), slot_of(&app, live));
+}
