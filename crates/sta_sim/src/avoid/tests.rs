@@ -240,7 +240,7 @@ fn fo4_content() -> Arc<ContentDb> {
 fn field(x: i32, z: i32) -> Region {
     Region {
         kind: RegionKind::AsteroidField,
-        odf: "trigger_blocking".into(),
+        odf: "fx_rockwall".into(),
         shape: RegionShape::Sphere {
             centre: v(x, z),
             radius: Fixed::from_int(400),
