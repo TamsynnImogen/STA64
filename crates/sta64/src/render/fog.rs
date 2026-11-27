@@ -154,6 +154,41 @@ impl FogGrid {
         self.cell_of(x, z).is_some_and(|i| self.explored[i] < 128)
     }
 
+    /// Is an object of `radius` at `(x, z)` in sight now? Rule (read from the executable, static;
+    /// not measured; the grid's own cell size and contour are STA64's, so interim): the cell at the
+    /// object's centre decides, except for an object whose radius is more than two cells, which is
+    /// in sight when any cell whose centre lies within its radius is. Off the grid: no.
+    pub fn in_sight_within(&self, x: f32, z: f32, radius: f32) -> bool {
+        self.any_within(&self.visible, x, z, radius)
+    }
+
+    /// Has any cell of the object's footprint (same rule as [`in_sight_within`](Self::in_sight_within))
+    /// ever been in sight? For an object that does not move, that is: has the object been in sight.
+    pub fn explored_within(&self, x: f32, z: f32, radius: f32) -> bool {
+        self.any_within(&self.explored, x, z, radius)
+    }
+
+    fn any_within(&self, mask: &[u8], x: f32, z: f32, radius: f32) -> bool {
+        let inside = |i: usize| mask[i] < 128;
+        if radius.partial_cmp(&(2.0 * self.cell)) != Some(std::cmp::Ordering::Greater) {
+            return self.cell_of(x, z).is_some_and(inside);
+        }
+        let c = self.cell;
+        let lo = |p: f32, o: f32| (((p - radius - o) / c).floor() as isize).max(0);
+        let hi = |p: f32, o: f32, cells: usize| (((p + radius - o) / c).ceil() as isize).min(cells as isize - 1);
+        let r2 = radius * radius;
+        for cz in lo(z, self.min[1])..=hi(z, self.min[1], self.h) {
+            let dz = self.min[1] + (cz as f32 + 0.5) * c - z;
+            for cx in lo(x, self.min[0])..=hi(x, self.min[0], self.w) {
+                let dx = self.min[0] + (cx as f32 + 0.5) * c - x;
+                if dx * dx + dz * dz <= r2 && inside(cz as usize * self.w + cx as usize) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// How many cells are in sight now / were ever.
     #[allow(dead_code)] // read by the minimap (UI-05) and the tests
     pub fn counts(&self) -> (usize, usize) {
@@ -454,7 +489,7 @@ pub struct FogPlugin;
 impl Plugin for FogPlugin {
     fn build(&self, app: &mut App) {
         embedded_asset!(app, "fog.wesl");
-        app.add_plugins(crate::render::reveal::RevealPlugin);
+        app.add_plugins(crate::render::reveal::RevealPlugin).add_plugins(crate::render::fog_objects::FogObjectsPlugin);
         app.init_resource::<FogSettings>().add_plugins(MaterialPlugin::<FogMaterial>::default()).add_systems(
             Update,
             (load_patterns.run_if(resource_exists::<Assets<Image>>), update_fog)
@@ -514,7 +549,7 @@ fn params(layer: Layer, grid: &FogGrid, art: Vec2) -> FogParams {
 
 /// What `update_fog` remembers between frames (one `Local`: a system takes at most 16 parameters).
 #[derive(Default)]
-struct Memo {
+pub(crate) struct Memo {
     seen: Option<(Arc<WorldView>, Option<PlayerId>)>,
     art_generation: Option<u32>,
     /// What the sim's sensors have shown so far, whatever is lifted (UI-46); `FogState` holds the lifted copy.
@@ -532,7 +567,7 @@ type MatchFog<'w> = (
 /// Recompute the grid when the view, the player or the map changes; spawn the layers
 /// once, then rewrite their masks.
 #[allow(clippy::too_many_arguments)]
-fn update_fog(
+pub(crate) fn update_fog(
     mut commands: Commands,
     link: Res<SimLink>,
     local: Res<LocalPlayer>,
