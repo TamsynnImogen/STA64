@@ -33,6 +33,18 @@ impl Section {
     }
 }
 
+/// `struct.error` of `struct.unpack_from` on a buffer that ends inside the value (the class name
+/// Python prints is `error`).
+pub fn short_buffer(offset: usize, size: usize, len: usize) -> DecodeError {
+    DecodeError::python(
+        "error",
+        format!(
+            "unpack_from requires a buffer of at least {} bytes for unpacking {size} bytes at offset {offset} (actual buffer size is {len})",
+            offset + size
+        ),
+    )
+}
+
 /// A loaded-looking view of a file: address to bytes.
 pub trait Image {
     /// Preferred load address.
@@ -83,7 +95,7 @@ pub trait Image {
         let end = rest
             .iter()
             .position(|&c| c == 0)
-            .ok_or_else(|| DecodeError::raw("unterminated string"))?;
+            .ok_or_else(|| DecodeError::python("ValueError", "subsection not found"))?;
         Ok(rest[..end].iter().map(|&c| c as char).collect())
     }
 
@@ -94,7 +106,7 @@ pub trait Image {
         let b = self
             .data()
             .get(o..o + 4)
-            .ok_or_else(|| DecodeError::raw("truncated image"))?;
+            .ok_or_else(|| short_buffer(o, 4, self.data().len()))?;
         Ok(f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
 
@@ -105,7 +117,7 @@ pub trait Image {
         let b = self
             .data()
             .get(o..o + 8)
-            .ok_or_else(|| DecodeError::raw("truncated image"))?;
+            .ok_or_else(|| short_buffer(o, 8, self.data().len()))?;
         Ok(f64::from_le_bytes(b.try_into().expect("eight bytes")))
     }
 

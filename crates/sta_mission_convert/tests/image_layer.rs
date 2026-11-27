@@ -94,17 +94,18 @@ fn unterminated_and_truncated_reads() {
     .unwrap();
     assert_eq!(
         pe.cstr(BASE + 0x1000).unwrap_err(),
-        DecodeError::raw("unterminated string")
+        DecodeError::python("ValueError", "subsection not found")
     );
     let last = BASE + 0x1000 + 0x1FE;
     assert_eq!(pe.dword(last), None);
+    let o = pe.off_of(last).unwrap();
     assert_eq!(
         pe.f32(last).unwrap_err(),
-        DecodeError::raw("truncated image")
+        sta_mission_convert::image::short_buffer(o, 4, pe.data.len())
     );
     assert_eq!(
         pe.f64(last).unwrap_err(),
-        DecodeError::raw("truncated image")
+        sta_mission_convert::image::short_buffer(o, 8, pe.data.len())
     );
     assert_eq!(pe.dword(last - 2), Some(0x7878_7878));
 }
