@@ -16,7 +16,7 @@ stated in AGENTS.md, "Decisions: ADRs and experiments".
 | [0007](0007-ui-text-and-icons.md) | UI text, markup and icon formats, T1 to T8 | proposed | 2026-11-13 |
 | [0008](0008-stock-hud-aspect.md) | Stock HUD on windows wider or narrower than its layout sheet, H1 to H7 | proposed | 2026-11-14 |
 | [0009](0009-sprite-colours-in-a-storage-buffer.md) | Sprite colour and fade in a storage buffer instead of per-node materials, S1 to S6 | proposed | 2026-11-20, S2 and S3 amended 2026-11-23 |
-| [0011](0011-group-movement.md) | Group movement: formations per base game, pace by the slowest member, one route per group, G1 to G14 | proposed | 2026-11-27 |
+| [0011](0011-group-movement.md) | Group movement: formations per base game, pace by the slowest member, one route per group, G1 to G14 | accepted | 2026-11-27 |
 
 ADR 0007 was merged as `0001-ui-text-and-icons.md` by mistake (PR #663) and
 renumbered on 2026-11-14; its text is unchanged.
