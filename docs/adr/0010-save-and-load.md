@@ -3,10 +3,10 @@
 - **Status:** proposed
 - **Date:** 2026-11-27
 - **Deciders:** the project lead and the repository owner (the pull request that records it).
-  The recommendations of this ADR's pull request (#1275) were accepted by the
-  project lead on 2026-11-27; the repository owner's decision is pending.
-  Accepted when both approve the pull request that merges this file; not
-  binding before.
+  The file was merged as proposed in #1275. The recommendations of that pull
+  request were accepted by the project lead on 2026-11-27; the repository
+  owner's decision is pending. Accepted when both have approved (the pull
+  request that records the decisions); not binding before.
 - **Relates to:** issue #1032; [ADR 0002](0002-deterministic-simulation.md); [ADR 0003](0003-clean-room-content-policy.md); [ADR 0004](0004-modding-v1.md) D10; [ADR 0005](0005-network-after-net-01.md) N2, N5; WORKPLAN SIM-10, SIM-11, SIM-61, UI-20, LUA-15, CON-40, CON-57
 
 ## Context
