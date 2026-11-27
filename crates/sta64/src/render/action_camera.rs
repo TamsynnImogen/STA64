@@ -576,6 +576,18 @@ mod tests {
         app.update();
         app.update();
         assert_eq!(active(&mut app), [true, true, true], "the picture is seen: the sky, ground and scene cameras run");
+        // #1145: the window's cameras, in draw order: the sky (clears), the ground layers, the scene over them.
+        let mut cams: Vec<(isize, Option<RenderLayers>, bool, bool)> = app
+            .world_mut()
+            .query_filtered::<(&Camera, Option<&RenderLayers>, Has<ActionSky>, Has<ActionGround>), Or<(With<ActionCamera>, With<ActionSky>)>>()
+            .iter(app.world())
+            .map(|(c, l, sky, ground)| (c.order, l.cloned(), sky, ground))
+            .collect();
+        cams.sort_by_key(|c| c.0);
+        assert_eq!(cams.iter().map(|c| c.0).collect::<Vec<_>>(), [-10, -9, -8]);
+        assert_eq!((cams[0].2, cams[0].1.clone()), (true, Some(RenderLayers::layer(crate::map::BACKGROUND_LAYER))), "the sky camera draws the background layer only");
+        assert_eq!((cams[1].3, cams[1].1.clone()), (true, Some(RenderLayers::layer(GROUND_LAYER))), "the ground camera draws the fog and shroud layers only (no grid)");
+        assert_eq!(cams[2].1, None, "the scene camera draws the default layer: never the ground layers");
         let target = MovieTarget::Panel(Handle::default());
         app.world_mut().resource_mut::<Movies>().queue_for_test(PlayMovie { id: MovieId(1), name: String::new(), target, skippable: false });
         app.update();

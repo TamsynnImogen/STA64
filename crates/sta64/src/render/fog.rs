@@ -31,7 +31,7 @@
 //! `render::fog_objects`), the layers never hide it. Here: the quads are on [`GROUND_LAYER`], which the
 //! map's background camera draws (a camera before the scene camera, with its own depth), the fog first and
 //! the shroud over it by their sort bias; the scene camera never draws them. Bevy 0.20.1: a camera clears its
-//! own depth (`bevy_core_pipeline` `core_3d/mod.rs`, `Camera3d::depth_load_op`, default clear), so
+//! own depth (`bevy_camera` `components.rs`, `Camera3dDepthLoadOp`, default clear), so
 //! nothing the scene draws is tested against the layers.
 
 use std::sync::Arc;
@@ -417,7 +417,7 @@ impl Material for FogMaterial {
     }
     /// The two layers share a plane, so their sort distance ties, and a tie is broken by
     /// an order that varies from run to run; blends do not commute. The shroud goes over
-    /// the fog (the order of the original's terrain step: fog, then shroud).
+    /// the fog (the original draws the fog and then the shroud: read from the executable, static).
     fn depth_bias(&self) -> f32 {
         self.bias
     }

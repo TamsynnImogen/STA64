@@ -279,10 +279,12 @@ fn fog_of_war_draws_changes_the_frame_and_follows_the_sensors() {
     assert_ne!(a[0], off[0], "the fog must change the first frame");
     assert_ne!(a[1], off[1], "the fog must change the later frame");
     assert_ne!(a[0], a[1], "the fog must move with the scout");
-    // The layers are drawn under the scene (#1145), so the stand-in boxes (drawn wherever they stand) are no longer
-    // covered by the shroud and the largest channel difference is the layers' own dimming; it is still an area
-    // (the discs and the shroud around them), not a speck.
-    assert!(pixels_differing(&a[0], &off[0], 8) > 5000, "fog is a visible dimming, not a speck");
+    // The layers are drawn under the scene (#1145), and the stand-in frames now draw only the units the local player's
+    // side sees (as the game does), so the unit out on never-explored ground is not drawn and the fog frame differs
+    // from the no-fog one by the layers' dimming and by that unit: the original magnitude check holds again, and the
+    // difference is also an area (the discs and the shroud around them), not a speck.
+    assert!(max_diff(&a[0], &off[0]) > 40, "fog is a visible dimming, not a speck");
+    assert!(pixels_differing(&a[0], &off[0], 8) > 5000, "fog changes an area of the frame");
 }
 
 /// A session with a renderer (`--control stdio --frame-dir D`, no `--frames`): runs to

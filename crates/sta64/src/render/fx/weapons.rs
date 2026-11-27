@@ -218,8 +218,6 @@ pub(crate) fn spawn_fx(
     content: Res<ContentRes>,
     live: Query<(Entity, &WeaponFx)>,
     stock: super::stock_shots::StockShots,
-    drawn: Option<Res<crate::sim_link::SimEntities>>,
-    fog: Option<Res<crate::render::fog::FogState>>,
 ) {
     let alpha = clock.alpha();
     // A freighter's mining beam is drawn as a shot but is not one for anyone else.
@@ -231,14 +229,21 @@ pub(crate) fn spawn_fx(
         match ev {
             SimEvent::Fired { shooter, weapon, hardpoint, target } => {
                 let Some(def) = content.0.weapon(*weapon) else { continue };
-                // #1145: the fog and shroud layers no longer cover a shot over ground the player has not seen, so a
-                // shot is drawn only for a shooter the client draws (the sim's sight, or the lifted fog's rule).
-                if fog.is_some() && drawn.as_ref().is_some_and(|d| !d.0.contains_key(shooter)) { continue; }
                 // Tracked A1 ordnance is drawn from its persistent world-view pose.
                 // Fired remains available to the audio and gameplay readers.
                 if def.a1_special.is_some_and(|s| super::a1::tracked(s.kind)) { continue; }
                 // A shooter drawn off its sim place (an orbiting miner) shoots from where it is drawn.
                 let Some(from) = point(&link, *shooter, alpha).map(|p| p + shifted(&offsets, *shooter)) else { continue };
+                // #1145: the fog and shroud layers no longer cover a shot over ground the player has not seen. A shot
+                // of a shooter the client does not draw is drawn only while it is over ground in sight: here, when
+                // its origin or its target is (decided when it is fired; interim, grade: the original's drawing gate
+                // for ordnance is not established, only that it is placed by the cell at its position).
+                if !stock.client_draws(*shooter) {
+                    let to = target_point(&link, &offsets, target, alpha);
+                    if !(stock.ground_in_sight(from) || to.is_some_and(|t| stock.ground_in_sight(t))) {
+                        continue;
+                    }
+                }
                 // The Stock look draws the classes it has a drawing for as the original does (`stock_shots`);
                 // the Remaster look, and every other class, take what follows.
                 if stock.try_spawn(&mut cmds, &link, &clock, &offsets, def, *shooter, *weapon, *hardpoint, target) {
@@ -525,6 +530,12 @@ mod tests {
     /// A beam fired at tick 45 by unit 1 at unit 2; `until` ends a unit (the script's
     /// `Destroyed`). Per frame: the beams and impacts alive, the shortest life and the longest beam.
     fn beam_run(shooter_until: Option<u64>, target_until: Option<u64>, frames: usize) -> Vec<(usize, f32, f32)> {
+        beam_run_with(shooter_until, target_until, frames, None)
+    }
+
+    /// `fog`: a fog grid exists (the client then draws only what has an entity: here nothing, so the shooter is
+    /// one the client does not draw).
+    fn beam_run_with(shooter_until: Option<u64>, target_until: Option<u64>, frames: usize, fog: Option<crate::render::fog::FogGrid>) -> Vec<(usize, f32, f32)> {
         let db = sta_content::fake::db();
         let beam = db.key("fx_beam").unwrap().0;
         let until = |u: Option<u64>| u.map_or(String::new(), |t| format!(", until: {t}"));
@@ -545,6 +556,9 @@ mod tests {
             .insert_resource(SimLink::new(Box::new(src), Box::new(LocalRouter::new()), PlayerId(0)))
             .add_plugins(WeaponFxPlugin);
         configure_sets(&mut app);
+        if let Some(grid) = fog {
+            app.insert_resource(crate::render::fog::FogState { grid, updates: 1 });
+        }
         let mut out = Vec::new();
         for _ in 0..frames {
             app.update();
@@ -567,6 +581,25 @@ mod tests {
         let gone = (48..70).find(|&i| cut[i].0 == 0).expect("the beam ended");
         assert!(gone <= 51, "beam still drawn at frame {gone}, the shooter went at tick 50");
         assert!(cut[gone..].iter().all(|r| r.0 == 0), "it came back");
+    }
+
+    /// #1145 (M1): a shot of a shooter the client does not draw is drawn while its origin or its target is over ground
+    /// in sight, and not otherwise; without a grid it is drawn as before.
+    #[test]
+    fn a_shot_of_a_shooter_the_client_does_not_draw_follows_the_ground_under_it() {
+        use crate::render::fog::FogGrid;
+        let drawn = |grid: Option<FogGrid>| beam_run_with(None, None, 70, grid).iter().any(|r| r.0 > 0);
+        let blank = || FogGrid::new([-1000.0, -1000.0], [1000.0, 1000.0]);
+        let seeing = |x: f32, z: f32| {
+            let mut g = blank();
+            let c = g.cell_of(x, z).unwrap();
+            g.set_cell_for_test(c % g.w, c / g.w, true, true);
+            g
+        };
+        assert!(drawn(None), "no grid: as before");
+        assert!(!drawn(Some(blank())), "over ground never in sight: not drawn");
+        assert!(drawn(Some(seeing(0.0, 0.0))), "its origin over ground in sight: drawn");
+        assert!(drawn(Some(seeing(0.0, 600.0))), "its target over ground in sight: drawn");
     }
 
     #[test]

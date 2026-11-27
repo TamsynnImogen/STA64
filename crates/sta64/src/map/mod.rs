@@ -2366,6 +2366,36 @@ mod sight_gate_tests {
         FogRegions::of_map(&map)
     }
 
+    /// #1145: the map's cameras. The background camera (a child of the main camera, drawn first with its own depth)
+    /// draws the background, the ground layers and the grid; the scene camera draws the default layer and the
+    /// overlay layer over its picture and never the ground layers.
+    #[test]
+    fn the_map_cameras_pin_the_layers_and_the_order_of_the_ground_layers() {
+        use crate::render::action_camera::{GRID_LAYER, GROUND_LAYER, OVERLAY_LAYER};
+        use bevy::camera::visibility::RenderLayers;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_systems(Startup, setup);
+        app.update();
+        let w = app.world_mut();
+        let (scene_e, scene, scene_layers) = {
+            let mut q = w.query_filtered::<(Entity, &Camera, &RenderLayers), (With<Camera3d>, Without<BackgroundCamera>)>();
+            let (e, c, l) = q.iter(w).next().expect("the scene camera");
+            (e, (c.order, c.clear_color.clone()), l.clone())
+        };
+        let (bg_order, bg_layers, bg_parent) = {
+            let mut q = w.query_filtered::<(&Camera, &RenderLayers, &ChildOf), With<BackgroundCamera>>();
+            let (c, l, p) = q.iter(w).next().expect("the background camera");
+            (c.order, l.clone(), p.parent())
+        };
+        assert_eq!(scene.0, 1);
+        assert!(matches!(scene.1, ClearColorConfig::None), "the scene camera draws over the background's picture");
+        assert_eq!(scene_layers, RenderLayers::from_layers(&[0, OVERLAY_LAYER]));
+        assert!(!scene_layers.intersects(&RenderLayers::from_layers(&[GROUND_LAYER, GRID_LAYER])), "the scene camera never draws the ground layers");
+        assert_eq!(bg_order, 0, "the background camera is drawn first");
+        assert_eq!(bg_layers, RenderLayers::from_layers(&[BACKGROUND_LAYER, GROUND_LAYER, GRID_LAYER]));
+        assert_eq!(bg_parent, scene_e, "it follows the main camera");
+    }
+
     /// #1146: what spins or turns under a gate stands still while the gate is out of sight, and goes on after.
     #[test]
     fn spin_pauses_under_a_gate_out_of_sight_and_resumes_in_sight() {

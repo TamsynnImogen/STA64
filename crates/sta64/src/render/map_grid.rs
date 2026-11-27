@@ -10,9 +10,11 @@
 //! - The lines are added to the picture in a dim constant colour ([`GRID_COLOUR`]): additive, depth tested,
 //!   no depth write, one device pixel wide at any zoom, no fade. The grid is drawn under the scene on
 //!   [`GRID_LAYER`] by the map's background camera, after the background and before the fog and shroud
-//!   layers, which sort after it and cover it (#1145: every object covers it, as in the original, whose
-//!   terrain step draws build footprints, the grid, the fog and the shroud before the objects; read from
-//!   the executable, static). Depth write: the original's is not established; additive lines need none.
+//!   layers, which sort after it and cover it (#1145: every object covers it. The original draws build
+//!   footprints, the grid, the fog and the shroud, in that order, before every object, and tests and writes
+//!   depth for the grid: read from the executable, static). Here the lines are depth tested against the
+//!   background camera's own depth and write none: nothing is drawn after them in that camera, so a write
+//!   would change nothing, and the scene is not tested against them (it has its own depth).
 //! - Per view the grid is shown or not by a mode, 0 grid only, 1 grid with height bars, 2 none. The first
 //!   value comes from the mounted `RTS_CFG.h` (`cfgSTRATEGIC_GRID_RENDER` for the original's normal
 //!   view, `cfgTACTICAL_GRID_RENDER` for its tactical view), read from data; the grid-toggle action

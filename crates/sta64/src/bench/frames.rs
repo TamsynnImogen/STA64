@@ -447,11 +447,19 @@ fn sync_world(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut transforms: Query<&mut Transform, (With<Proxy>, Without<FrameCamera>)>,
     mut camera: Query<&mut Transform, With<FrameCamera>>,
+    local: Option<Res<crate::render::units::LocalPlayer>>,
+    fog: Option<Res<crate::render::fog::FogState>>,
 ) {
     let mut bench = bench;
     let bench = bench.0.get();
     let world = bench.view().clone();
-    let alive: Vec<EntityId> = world.units.iter().map(|u| u.id).collect();
+    // With the scene's fog (`Fog=1`) the stand-ins are drawn as the game draws: only the units the local player's
+    // side sees (#1145: the layers no longer hide the rest).
+    let seen: Option<std::collections::BTreeSet<EntityId>> = match (local.as_deref().and_then(|l| l.0), fog) {
+        (Some(p), Some(_)) if !world.visibility.is_empty() => Some(world.visible_to(p).into_iter().map(|u| u.id).collect()),
+        _ => None,
+    };
+    let alive: Vec<EntityId> = world.units.iter().filter(|u| seen.as_ref().is_none_or(|s| s.contains(&u.id))).map(|u| u.id).collect();
     proxies.0.retain(|id, e| {
         let keep = alive.contains(id);
         if !keep {
@@ -459,7 +467,7 @@ fn sync_world(
         }
         keep
     });
-    for u in &world.units {
+    for u in world.units.iter().filter(|u| alive.contains(&u.id)) {
         // Render space, as the game's (`to_bevy`): the sim's Z runs the other way.
         let pos = Vec3::new(fixed(u.pos.x), fixed(u.pos.y), -fixed(u.pos.z));
         let yaw = fixed(u.heading.0).atan2(-fixed(u.heading.1));

@@ -427,6 +427,7 @@ pub struct StockShots<'w, 's> {
     tables: Option<Res<'w, SpriteTables>>,
     content: Option<Res<'w, ContentRes>>,
     ents: Option<Res<'w, SimEntities>>,
+    fog: Option<Res<'w, crate::render::fog::FogState>>,
     teams: Option<Res<'w, crate::viewer::TeamColours>>,
     map_teams: Option<Res<'w, crate::viewer::MapTeamColours>>,
     children: Query<'w, 's, &'static Children>,
@@ -458,8 +459,23 @@ impl StockShots<'_, '_> {
         Some(self.transforms.get(node).ok()?.translation() - base)
     }
 
-    /// Whether `object`'s model is visible (no model, or none known: yes).
+    /// Whether the client draws unit `id`: with a fog grid, only a unit that has an entity (the units the local
+    /// player's side sees, #1145: the layers no longer hide what is drawn over unseen ground); without one, every
+    /// unit.
+    pub(super) fn client_draws(&self, id: EntityId) -> bool {
+        super::client_draws(self.ents.as_deref(), self.fog.is_some(), id)
+    }
+
+    /// Whether the ground under the render-space point is in sight now (without a grid: yes).
+    pub(super) fn ground_in_sight(&self, at: Vec3) -> bool {
+        self.fog.as_deref().is_none_or(|f| f.grid.visible_at(at.x, -at.z))
+    }
+
+    /// Whether `object`'s model is visible (no model known: yes, unless the client does not draw the unit).
     pub(super) fn object_visible(&self, object: EntityId, visibility: &Query<&InheritedVisibility>) -> bool {
+        if !self.client_draws(object) {
+            return false;
+        }
         self.ents.as_ref().and_then(|m| m.0.get(&object)).and_then(|e| visibility.get(*e).ok()).is_none_or(|v| v.get())
     }
 

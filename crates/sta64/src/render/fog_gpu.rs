@@ -58,7 +58,7 @@ fn project(pose: &Transform, p: Vec3) -> (u32, u32) {
 
 /// The authored scene and its frame, or `None` without a hardware adapter. The box stands at render (0, 200, -300),
 /// 400 tall, on ground in sight (a sensor of 700 at the sim origin); the ground beyond it is never explored.
-fn frame(name: &str, arrangement: Arrangement) -> Option<(image::RgbaImage, Transform)> {
+fn frame(name: &str, arrangement: Arrangement, tonemapping: Tonemapping, layers: bool) -> Option<(image::RgbaImage, Transform)> {
     let mut app = App::new();
     app.add_plugins(
         DefaultPlugins
@@ -80,7 +80,7 @@ fn frame(name: &str, arrangement: Arrangement) -> Option<(image::RgbaImage, Tran
                 Camera { order: 0, ..default() },
                 RenderTarget::from(target.clone()),
                 Msaa::Off,
-                Tonemapping::None,
+                tonemapping,
                 pose,
             ));
             app.world_mut().spawn((
@@ -89,19 +89,19 @@ fn frame(name: &str, arrangement: Arrangement) -> Option<(image::RgbaImage, Tran
                 Camera { order: 1, clear_color: ClearColorConfig::None, ..default() },
                 RenderTarget::from(target.clone()),
                 Msaa::Off,
-                Tonemapping::None,
+                tonemapping,
                 pose,
             ));
         }
         Arrangement::SameCamera => {
-            app.world_mut().spawn((Camera3d::default(), RenderLayers::layer(0), RenderTarget::from(target.clone()), Msaa::Off, Tonemapping::None, pose));
+            app.world_mut().spawn((Camera3d::default(), RenderLayers::layer(0), RenderTarget::from(target.clone()), Msaa::Off, tonemapping, pose));
         }
     }
     // The layers: the grid sees a sensor of 700 around the sim origin; the rest of the map was never in sight.
     let mut grid = FogGrid::new([-2000.0, -2000.0], [2000.0, 2000.0]);
     grid.set_sensor_for_test(Vec2::ZERO, 700.0);
     let grid = grid.lifted(false, false);
-    for layer in [Layer::Fog, Layer::Shroud] {
+    for layer in [Layer::Fog, Layer::Shroud].into_iter().filter(|_| layers) {
         let (art, size) = pattern_image(None, "none", if layer == Layer::Fog { FOG_ART } else { SHROUD_ART });
         let (mask, art) = {
             let mut images = app.world_mut().resource_mut::<Assets<Image>>();
@@ -158,7 +158,7 @@ fn objects_cover_the_fog_and_shroud_layers_on_gpu() {
         return;
     }
     let _serial = crate::bench::frames::gpu_serial();
-    let Some((under, pose)) = frame("under-the-scene", Arrangement::Ground) else { return };
+    let Some((under, pose)) = frame("under-the-scene", Arrangement::Ground, Tonemapping::None, true) else { return };
     let px = |img: &image::RgbaImage, p: Vec3| {
         let (x, y) = project(&pose, p);
         img.get_pixel(x.min(SIZE - 1), y.min(SIZE - 1)).0
@@ -173,7 +173,16 @@ fn objects_cover_the_fog_and_shroud_layers_on_gpu() {
     assert!(near(px(&under, ground), SHROUD_ART), "the shroud layer is drawn over ground never explored: {:?}", px(&under, ground));
     // Before the fix (the layers on the scene camera's own layer, drawn over the box): the same frame shows the
     // report. This pins the cause; it is the picture that is wrong, not the test.
-    let Some((over, _)) = frame("over-the-scene", Arrangement::SameCamera) else { return };
+    let Some((over, _)) = frame("over-the-scene", Arrangement::SameCamera, Tonemapping::None, true) else { return };
     eprintln!("over the scene: low {:?} high {:?}", px(&over, low), px(&over, high));
     assert!(near(px(&over, low), SHROUD_ART), "before the fix the shroud covers the box's lower part: {:?}", px(&over, low));
+    // The Remaster look's tone mapper: the box's pixels with the layers are those of the same frame without them
+    // (the layers never touch the box), and the shroud still shows over the ground.
+    let Some((with, _)) = frame("remaster-with-layers", Arrangement::Ground, Tonemapping::default(), true) else { return };
+    let Some((without, _)) = frame("remaster-without-layers", Arrangement::Ground, Tonemapping::default(), false) else { return };
+    for p in [low, high] {
+        let (a, b) = (px(&with, p), px(&without, p));
+        assert!((0..3).all(|c| (i32::from(a[c]) - i32::from(b[c])).abs() <= 2), "the box is as without the layers: {a:?} against {b:?}");
+    }
+    assert!(px(&with, ground) != px(&without, ground), "the layers draw over the ground");
 }
