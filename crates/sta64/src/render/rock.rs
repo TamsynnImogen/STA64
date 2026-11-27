@@ -548,7 +548,7 @@ mod tests {
         // The mesh transform and the view come from Bevy's own shader library: stubs stand in for them.
         let src = include_str!("rock.wesl")
             .replace("constants::MATERIAL_BIND_GROUP", "3")
-            .replace("import bevy_pbr::render::mesh_functions::get_world_from_local;", "fn get_world_from_local(i: u32) -> mat4x4<f32> { return mat4x4<f32>(); }")
+            .replace("import bevy_pbr::render::mesh_functions::{get_world_from_local, get_tag};", "fn get_world_from_local(i: u32) -> mat4x4<f32> { return mat4x4<f32>(); }\nfn get_tag(i: u32) -> u32 { return 0u; }")
             .replace("import bevy_pbr::render::mesh_view_bindings::view;", "struct ViewStub { world_position: vec3<f32> }\nvar<private> view: ViewStub;");
         let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())

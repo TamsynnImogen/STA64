@@ -21,6 +21,13 @@ pub(super) mod warp_flash;
 
 use bevy::prelude::*;
 
+/// The one check "the client draws this unit" the effects of units use (#1145): with a fog grid, a unit is drawn
+/// when it has an entity in [`SimEntities`](crate::sim_link::SimEntities) (what the local player's side sees);
+/// without a grid (no fog in this set-up, or nothing yet) every unit is.
+pub(crate) fn client_draws(ents: Option<&crate::sim_link::SimEntities>, grid: bool, id: sta_sim::EntityId) -> bool {
+    !grid || ents.is_none_or(|m| m.0.contains_key(&id))
+}
+
 /// The effects' shaders and materials. Left out of the windowless tests: the
 /// effect modules attach visuals only when the material assets exist.
 pub struct FxMaterialsPlugin;
@@ -76,6 +83,20 @@ pub(crate) fn validate_wgsl(src: &str) {
 
 #[cfg(test)]
 mod tests {
+    use sta_sim::EntityId;
+
+    /// #1145: the one "the client draws this unit" check the effects use: with a grid, only a unit with an entity;
+    /// without a grid, or without the table, every unit.
+    #[test]
+    fn the_client_draws_a_unit_with_a_grid_only_when_it_has_an_entity() {
+        let mut ents = crate::sim_link::SimEntities::default();
+        ents.0.insert(EntityId(1), bevy::prelude::Entity::PLACEHOLDER);
+        assert!(super::client_draws(Some(&ents), true, EntityId(1)));
+        assert!(!super::client_draws(Some(&ents), true, EntityId(2)), "no entity, grid exists: not drawn");
+        assert!(super::client_draws(Some(&ents), false, EntityId(2)), "no grid: drawn");
+        assert!(super::client_draws(None, true, EntityId(2)), "no table: drawn");
+    }
+
     /// Each shader is embedded at the path its material names.
     #[test]
     fn shader_paths_match_embedded_registration() {

@@ -239,8 +239,16 @@ fn forget_units(mut seen: ResMut<Seen>) {
     seen.0.clear();
 }
 
-fn track(link: Res<SimLink>, content: Option<Res<ContentRes>>, ents: Option<Res<SimEntities>>, radii: Query<&SelectRadius>, mut seen: ResMut<Seen>) {
+fn track(link: Res<SimLink>, content: Option<Res<ContentRes>>, ents: Option<Res<SimEntities>>, radii: Query<&SelectRadius>, mut seen: ResMut<Seen>, fog: Option<Res<crate::render::fog::FogState>>) {
     for u in &link.curr().units {
+        // #1145: hits and explosions are drawn only for units the client draws; the layers no longer cover them
+        // over unseen ground.
+        if !super::client_draws(ents.as_deref(), fog.is_some(), u.id) {
+            // Out of sight, or never seen: no record of where it was, so nothing happens at a stale place when it
+            // dies out of sight (a unit that dies while drawn is gone from the view that frame, keeping its record).
+            seen.0.remove(&u.id);
+            continue;
+        }
         let radius = ents.as_ref().and_then(|m| m.0.get(&u.id)).and_then(|e| radii.get(*e).ok()).map_or(DEFAULT_RADIUS, |r| r.0);
         let heading = Vec3::new(u.heading.0.to_f32(), 0.0, -u.heading.1.to_f32()).normalize_or(Vec3::NEG_Z);
         let faction = content.as_ref().and_then(|c| c.0.unit(u.def)).map_or(Faction::of_odf(""), |d| Faction::of_odf(&d.odf));
@@ -257,13 +265,19 @@ fn spawn_impacts(
     mut seen: ResMut<Seen>,
     profile: Option<Res<RenderProfile>>,
     effects: Option<Res<ProfileEffects>>,
+    fog: Option<Res<crate::render::fog::FogState>>,
 ) {
     let tick = clock.tick();
     let shell = refit_shield_shell(profile.as_deref(), effects.as_deref());
     for SimMsg(ev) in msgs.read() {
         match ev {
             SimEvent::Hit { target, weapon, facing, shield, hull, at, .. } => {
-                let s = seen.0.get(target).copied().unwrap_or_default();
+                // A unit the client does not draw (no record: `track`) gets no shield shell and no sparks.
+                let known = seen.0.get(target).copied();
+                if known.is_none() && fog.is_some() {
+                    continue;
+                }
+                let s = known.unwrap_or_default();
                 let at = to_bevy(at.to_f32());
                 let dir = (at - s.pos).try_normalize().unwrap_or_else(|| facing_dir(s.heading, *facing));
                 let mk = |kind, idx, life, origin, vel, colour| {
@@ -310,7 +324,11 @@ fn spawn_impacts(
             // Under the Stock look nothing is drawn for shields going down yet (the lasting bands wait for the
             // sim's zero-shield hold, #1101): the Refit shell is not the original's (#1041).
             SimEvent::ShieldsDown { id, facing } if shell => {
-                let s = seen.0.get(id).copied().unwrap_or_default();
+                let known = seen.0.get(id).copied();
+                if known.is_none() && fog.is_some() {
+                    continue;
+                }
+                let s = known.unwrap_or_default();
                 let dir = facing_dir(s.heading, *facing);
                 cmds.spawn((
                     ImpactFx {
@@ -737,6 +755,12 @@ mod tests {
 
     /// Frames of FX rows, and per frame the emitter levels.
     fn run() -> (Vec<Vec<Row>>, Vec<Vec<u8>>) {
+        run_with(false, 0..u32::MAX)
+    }
+
+    /// `fog`: a fog grid exists (so units the client does not draw get no effects); `drawn`: the frames in which
+    /// the unit 2 has an entity (the client draws it).
+    fn run_with(fog: bool, drawn: std::ops::Range<u32>) -> (Vec<Vec<Row>>, Vec<Vec<u8>>) {
         let db = sta_content::fake::db();
         let src = ScriptedSource::from_json5(&timeline(&db), &db).unwrap();
         let mut app = App::new();
@@ -747,11 +771,25 @@ mod tests {
             .insert_resource(SimLink::new(Box::new(src), Box::new(LocalRouter::new()), PlayerId(0)))
             .add_plugins(ImpactFxPlugin);
         configure_sets(&mut app);
-        let root = app.world_mut().spawn((SimEntity(EntityId(2)), HullShare(1.0))).id();
+        if fog {
+            app.insert_resource(crate::render::fog::FogState { grid: crate::render::fog::FogGrid::new([-1000.0, -1000.0], [1000.0, 1000.0]), updates: 1 });
+        }
+        let mut root: Option<Entity> = None;
         let (mut frames, mut smoke) = (Vec::new(), Vec::new());
         for f in 0..900 {
+            if drawn.contains(&f) && root.is_none() && app.world().resource::<SimLink>().curr().unit(EntityId(2)).is_some() {
+                let e = app.world_mut().spawn((SimEntity(EntityId(2)), HullShare(1.0))).id();
+                app.world_mut().resource_mut::<SimEntities>().0.insert(EntityId(2), e);
+                root = Some(e);
+            }
+            if !drawn.contains(&f)
+                && let Some(r) = root.take()
+            {
+                app.world_mut().entity_mut(r).despawn();
+                app.world_mut().resource_mut::<SimEntities>().0.remove(&EntityId(2));
+            }
             // Stand-in for the unit view: share falls with time, root goes with the unit.
-            if app.world().get_entity(root).is_ok() {
+            if let Some(root) = root.filter(|r| app.world().get_entity(*r).is_ok()) {
                 if app.world().resource::<SimLink>().curr().unit(EntityId(2)).is_none() && f > 10 {
                     app.world_mut().entity_mut(root).despawn();
                 } else {
@@ -807,5 +845,44 @@ mod tests {
         // Everything drains after the destruction.
         assert!(a.last().unwrap().is_empty(), "FX left: {:?}", a.last());
         assert!(sa.last().unwrap().is_empty());
+    }
+
+    fn kinds(frames: &[Vec<Row>]) -> std::collections::BTreeMap<String, usize> {
+        let mut out = std::collections::BTreeMap::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for r in frames.iter().flatten() {
+            if seen.insert(r.0) {
+                *out.entry(format!("{:?}", r.0.0)).or_insert(0) += 1;
+            }
+        }
+        out
+    }
+
+    /// #1145 (H1): with a fog grid, hits and shields-down on a unit the client does not draw spawn no effect (no
+    /// shield shell, no sparks); drawn they do, and without a grid everything is as before.
+    #[test]
+    fn hits_on_a_unit_the_client_does_not_draw_spawn_no_effects() {
+        let (drawn, _) = run_with(true, 0..u32::MAX);
+        let (hidden, _) = run_with(true, 0..0);
+        let (no_grid, _) = run_with(false, 0..0);
+        let (k_drawn, k_hidden, k_no_grid) = (kinds(&drawn), kinds(&hidden), kinds(&no_grid));
+        assert_eq!(k_drawn.get("Shield"), Some(&4), "{k_drawn:?}");
+        assert!(k_drawn.get("Spark").is_some_and(|n| *n > 0));
+        assert!(k_hidden.is_empty(), "nothing for a unit the client does not draw: {k_hidden:?}");
+        assert_eq!(k_no_grid.get("Shield"), Some(&4), "without a grid every unit counts as drawn: {k_no_grid:?}");
+    }
+
+    /// #1145 (H2): a unit that leaves sight and then dies explodes nowhere (it has no record of a place); a unit
+    /// that dies drawn explodes where it was.
+    #[test]
+    fn a_unit_that_dies_out_of_sight_does_not_explode_at_its_last_drawn_place() {
+        let (drawn, _) = run_with(true, 0..u32::MAX);
+        assert_eq!(kinds(&drawn).get("Fire"), Some(&1), "dies drawn: one fireball");
+        // Drawn for the first 150 frames, out of sight before it dies (at tick 200).
+        let (left, _) = run_with(true, 0..150);
+        let k = kinds(&left);
+        assert_eq!(k.get("Fire"), None, "no fireball at a stale place: {k:?}");
+        assert_eq!(k.get("Ring"), None);
+        assert_eq!(k.get("Debris"), None);
     }
 }

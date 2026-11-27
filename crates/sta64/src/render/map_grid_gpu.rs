@@ -1,14 +1,15 @@
 //! Optional real-GPU frame test of the map grid (#1033): `STA64_GPU_TESTS=1` and a hardware adapter; `STA64_GPU_OUT`
 //! keeps the PNGs outside the repository. Authored bounds, an opaque cube standing on the plane, and a blended black
-//! quad on the plane standing for the fog layers (the same sort bias as the real ones). The camera looks straight
-//! down at the middle of the map.
+//! quad on the plane standing for the fog layers (the same sort bias and layer as the real ones). As in the map
+//! view, the ground camera draws the ground layers (the grid and the fog quad) first and the scene camera draws the
+//! cube over its picture. Both look straight down at the middle of the map.
 //!
 //! Asserted: in the Stock look with MSAA off a line is one pixel wide and adds the dim colour to black, the cube hides
 //! the lines under it, the fog quad dims them, the Remaster look's tone mapping leaves them visible and not
-//! saturated, and the action camera's layers do not draw the grid. Measured and printed, not asserted: the line's
+//! saturated, and the action window's ground camera (the ground layer only) does not draw the grid. Measured and printed, not asserted: the line's
 //! width and value under the default multisampling.
 use super::*;
-use crate::render::action_camera::OVERLAY_LAYER;
+use crate::render::action_camera::{GRID_LAYER, GROUND_LAYER, OVERLAY_LAYER};
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::RenderTarget;
 use bevy::camera::visibility::RenderLayers;
@@ -29,6 +30,7 @@ const CUBE_ROW: u32 = 240;
 struct Setup {
     tonemapping: Tonemapping,
     msaa: Msaa,
+    /// The ground camera's layers.
     layers: RenderLayers,
 }
 
@@ -97,13 +99,24 @@ fn frame(name: &str, s: Setup) -> Option<image::RgbaImage> {
     image.asset_usage = RenderAssetUsages::RENDER_WORLD;
     let target = app.world_mut().resource_mut::<Assets<Image>>().add(image);
     // Straight down over the middle of the map (render space: x 0..1000, z -1000..0), screen up is -Z.
+    let pose = Transform::from_xyz(500.0, 1500.0, -500.0).looking_to(Vec3::NEG_Y, Vec3::NEG_Z);
     app.world_mut().spawn((
         Camera3d::default(),
         s.layers,
+        Camera { order: 0, ..default() },
         RenderTarget::from(target.clone()),
         s.msaa,
         s.tonemapping,
-        Transform::from_xyz(500.0, 1500.0, -500.0).looking_to(Vec3::NEG_Y, Vec3::NEG_Z),
+        pose,
+    ));
+    app.world_mut().spawn((
+        Camera3d::default(),
+        RenderLayers::from_layers(&[0, OVERLAY_LAYER]),
+        Camera { order: 1, clear_color: bevy::camera::ClearColorConfig::None, ..default() },
+        RenderTarget::from(target.clone()),
+        s.msaa,
+        s.tonemapping,
+        pose,
     ));
     let flat = |c: Color| StandardMaterial { base_color: c, unlit: true, ..default() };
     let cube = app.world_mut().resource_mut::<Assets<Mesh>>().add(Cuboid::new(150.0, 40.0, 150.0));
@@ -117,7 +130,7 @@ fn frame(name: &str, s: Setup) -> Option<image::RgbaImage> {
         depth_bias: 1.0e6,
         ..default()
     });
-    app.world_mut().spawn((Mesh3d(quad), MeshMaterial3d(fog), Transform::from_xyz(800.0, 0.0, -500.0)));
+    app.world_mut().spawn((Mesh3d(quad), MeshMaterial3d(fog), Transform::from_xyz(800.0, 0.0, -500.0), RenderLayers::layer(GROUND_LAYER)));
     app.finish();
     app.cleanup();
     for _ in 0..12 {
@@ -141,8 +154,9 @@ fn frame(name: &str, s: Setup) -> Option<image::RgbaImage> {
     Some(img)
 }
 
+/// The map's background camera draws the ground layers and the grid.
 fn both_layers() -> RenderLayers {
-    RenderLayers::from_layers(&[0, OVERLAY_LAYER])
+    RenderLayers::from_layers(&[GROUND_LAYER, GRID_LAYER])
 }
 
 #[test]
@@ -176,9 +190,9 @@ fn the_grid_is_one_dim_additive_line_under_the_cube_and_the_fog_on_gpu() {
     let top: Vec<[u8; 4]> = (232..280).map(|x| stock.get_pixel(x, CUBE_ROW).0).collect();
     assert!(top[0][0] > 100, "the cube is in view: {:?}", top[0]);
     assert!(top.iter().all(|p| *p == top[0]), "a line shows through or over the cube: {top:?}");
-    // (the action camera's layers) no grid in a camera that does not draw the overlay layer.
-    let Some(action) = frame("action-layers", Setup { tonemapping: Tonemapping::None, msaa: Msaa::Off, layers: RenderLayers::layer(0) }) else { return };
-    assert!(marks(&action, LINE_ROW).is_empty(), "the grid is on the overlay layer, which the action camera does not draw");
+    // (the action window's ground camera) no grid in a camera that draws the ground layer only.
+    let Some(action) = frame("action-layers", Setup { tonemapping: Tonemapping::None, msaa: Msaa::Off, layers: RenderLayers::layer(GROUND_LAYER) }) else { return };
+    assert!(marks(&action, LINE_ROW).is_empty(), "the grid is on its own layer, which the action window's ground camera does not draw");
     // (e) The default multisampling, Stock look: measured, not asserted.
     let ms = frame("stock-msaa-default", Setup { tonemapping: Tonemapping::None, msaa: Msaa::default(), layers: both_layers() }).expect("same adapter");
     let ms_lines = marks(&ms, LINE_ROW);
