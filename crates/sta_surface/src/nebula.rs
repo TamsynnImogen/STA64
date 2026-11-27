@@ -472,10 +472,18 @@ pub fn envelope(r: &NebulaRecipe, radius: f32, pos: &[[f32; 3]]) -> Envelope {
 /// rectangle, mean height and spread stay those of all of `pos`, so the shown places look as they
 /// do in the full envelope. A `shown` shorter than `pos` counts the rest as shown.
 pub fn envelope_masked(r: &NebulaRecipe, radius: f32, pos: &[[f32; 3]], shown: &[bool]) -> Envelope {
-    envelope_of(r, radius, pos, shown)
+    let weights: Vec<f32> = shown.iter().map(|&s| if s { 1.0 } else { 0.0 }).collect();
+    envelope_of(r, radius, pos, &weights)
 }
 
-fn envelope_of(r: &NebulaRecipe, radius: f32, pos: &[[f32; 3]], shown: &[bool]) -> Envelope {
+/// As [`envelope_masked`], with a weight per place: 0 leaves it empty, 1 is the full envelope, and between them
+/// the place's cover and haze are scaled by the weight (a thinner gas; STA64's stand-in for a reduced intensity,
+/// interim, not measured). Weights past the end of `weights` count as 1.
+pub fn envelope_weighted(r: &NebulaRecipe, radius: f32, pos: &[[f32; 3]], weights: &[f32]) -> Envelope {
+    envelope_of(r, radius, pos, weights)
+}
+
+fn envelope_of(r: &NebulaRecipe, radius: f32, pos: &[[f32; 3]], weights: &[f32]) -> Envelope {
     let reach = radius * r.extent;
     let mut freach = reach * if r.filaments[0] > 0.0 && r.fil_reach > 1.0 { r.fil_reach } else { 1.0 };
     if r.fringe[0] > 0.0 && reach * r.fringe_reach > freach {
@@ -504,7 +512,8 @@ fn envelope_of(r: &NebulaRecipe, radius: f32, pos: &[[f32; 3]], shown: &[bool]) 
             let wx = x0 + (x as f32 + 0.5) * (x1 - x0) / w as f32;
             let (mut s, mut hh, mut g, mut wy, mut ww) = (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
             for (i, p) in pos.iter().enumerate() {
-                if !shown.get(i).copied().unwrap_or(true) {
+                let weight = weights.get(i).copied().unwrap_or(1.0);
+                if weight <= 0.0 {
                     continue;
                 }
                 let (dx, dz) = (wx - p[0], wz - p[2]);
@@ -513,14 +522,14 @@ fn envelope_of(r: &NebulaRecipe, radius: f32, pos: &[[f32; 3]], shown: &[bool]) 
                     continue;
                 }
                 let d = d2.sqrt();
-                g += smooth(1.0, 0.3, d / freach);
+                g += smooth(1.0, 0.3, d / freach) * weight;
                 let q = smooth(1.0, 0.0, d / freach) + 1e-4;
                 wy += q * (p[1] - ey);
                 ww += q;
                 if d >= reach {
                     continue;
                 }
-                s += smooth(1.0, 0.6, d / reach);
+                s += smooth(1.0, 0.6, d / reach) * weight;
                 let q = d / reach;
                 hh = hh.max(1.0 - q * q * q);
             }
@@ -684,6 +693,26 @@ mod tests {
         assert_eq!(at(&m, 0.0), [0, 0, 128, 0], "the hidden nebula's centre is empty");
         assert!(at(&full, 0.0)[3] > 200);
         assert_eq!(at(&m, 2000.0), at(&full, 2000.0), "the shown one is as in the full envelope");
+    }
+
+    #[test]
+    fn a_weighted_envelope_scales_the_cover_and_haze_of_a_place() {
+        let r = NebulaRecipe::parse("[Nebula]\nExtent=1.3\nHeight=3\n");
+        let pos = [[0.0, 0.0, 0.0], [2000.0, 50.0, 0.0]];
+        let full = envelope(&r, 300.0, &pos);
+        assert_eq!(envelope_weighted(&r, 300.0, &pos, &[1.0, 1.0]).pixels, full.pixels, "weight 1: the same bytes");
+        assert_eq!(envelope_weighted(&r, 300.0, &pos, &[0.0, 1.0]).pixels, envelope_masked(&r, 300.0, &pos, &[false, true]).pixels, "weight 0: masked");
+        let half = envelope_weighted(&r, 300.0, &pos, &[0.5, 1.0]);
+        let at = |e: &Envelope, wx: f32| {
+            let x = ((wx - e.rect[0]) / (e.rect[2] - e.rect[0]) * e.w as f32) as u32;
+            let z = (((0.0 - e.rect[1]) / (e.rect[3] - e.rect[1]) * e.h as f32) as u32).min(e.h - 1);
+            let o = ((z * e.w + x) * 4) as usize;
+            [e.pixels[o], e.pixels[o + 1], e.pixels[o + 2], e.pixels[o + 3]]
+        };
+        let (f, h) = (at(&full, 0.0), at(&half, 0.0));
+        assert!(h[3] < f[3] && (h[3] as f32 - f[3] as f32 * 0.5).abs() <= 2.0, "cover halved: {h:?} against {f:?}");
+        assert_eq!(h[0], f[0], "the dome keeps its height");
+        assert_eq!(at(&half, 2000.0), at(&full, 2000.0), "the other place is untouched");
     }
 
     #[test]

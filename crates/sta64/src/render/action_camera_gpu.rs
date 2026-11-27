@@ -202,7 +202,7 @@ fn the_action_picture_survives_a_resize_and_a_hide_and_show_on_gpu() {
         v
     };
     let shown = cameras(&mut app);
-    assert_eq!(shown.len(), 2, "a scene and a sky camera");
+    assert_eq!(shown.len(), 3, "a scene, a ground and a sky camera");
     assert!(shown.iter().all(|c| c.1), "on while the picture is shown");
     set_visible(&mut app, picture, false);
     for _ in 0..4 {
