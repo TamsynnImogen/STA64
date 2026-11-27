@@ -124,6 +124,15 @@ in Armada I and Fleet Operations 3.2.7 (read from data). The originals'
 modifier key gives the other mode. `Order::Move` carries the mode (a change to
 seam S2).
 
+Who chooses, and how:
+
+- *The player, per order:* the modifier key.
+- *A mod, for its default:* that one key in its own `RTS_CFG.h`, as in the
+  originals. Nothing else is needed: no code and no further file (ADR 0004
+  D9: rules come from the legacy files; v1 has no other rules file). If
+  ADR 0004 later gives mods a rules format of STA64's own, the default move
+  mode is one of its values.
+
 ### The route
 
 **G5. One route per group: only the leader plans.**
@@ -166,7 +175,10 @@ own.
   slot is not capped and catches up at its own speed; one level with or ahead
   of its slot flies at the leader's speed × (0.8·f + 0.2), where f falls from
   1 on the slot to 0 a full leader lead ahead of it, so never below a fifth.
-  In a group move followers are not paced (inferred).
+  In a group move followers are not paced (inferred): only the leader is held
+  to the slowest member's speed, so faster followers arrive first. A player
+  or a mod that wants the group to arrive together uses the formation move
+  (G4).
 - *Armada I.* There is no group minimum, because the slowest craft leads
   (G2). While a follower is in a formation move the leader's speed is
   multiplied by `FORMATION_LEADER_SLOWDOWN` (0.9). A follower nearer its
@@ -224,8 +236,9 @@ not steer for a slot behind it).
 struct in `sta_content`, beside `PathingRules` (ADR 0004 D9). The constants of
 the executables named above are that struct's per-profile defaults, and the
 differences the Fleet Operations and Roots engines patch in are profile rules
-(D2, D5). Rules and formation data are in the content digest (D10). No new
-mod key is introduced.
+(D2, D5). Rules and formation data are in the content digest (D10). The
+default move mode (G4) is one of these rules: a mod sets it, and peers must
+agree on it. No new mod key is introduced.
 
 **G13. Scope.**
 Player, computer-player and mission orders use the same group record. Not
@@ -257,8 +270,8 @@ on one side and arrives in formation.
   with only the leader planning, the group cannot split. Rejected.
 - **Pace followers in a group move too.** Keeps groups tighter in Fleet
   Operations' default mode, but removes the choice the originals give the
-  player between arriving together and arriving fast. Not taken; open
-  question 1.
+  player between arriving together and arriving fast. Not taken; decided by
+  Cedric on 2026-11-27 (open question 1).
 - **Armada II's rules for every profile.** Rejected by Cedric: each base game
   flies as itself.
 - **Keep per-ship planning and add hysteresis.** Stops ships changing sides
@@ -291,7 +304,9 @@ on one side and arrives in formation.
 ## Open questions
 
 1. Should followers be paced in a group move, or does the originals' choice
-   between the two modes stand (G7)?
+   between the two modes stand (G7)? **Decided 2026-11-27 (Cedric):** both
+   modes stay as in the originals; the default is the content's key, so a mod
+   selects it (G4).
 2. If the measurement shows that the group stops when its leader is lost in
    Fleet Operations 3.2.7, Roots or Armada I, does STA64 follow that or keep
    "continues" as a stated improvement (G9)?
