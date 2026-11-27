@@ -38,9 +38,14 @@ pub struct KeyBuilder(Sha256);
 impl KeyBuilder {
     /// `kind` says what is converted (`"a2"`, `"a1"`); the converter version is part of every key.
     pub fn new(kind: &str) -> Self {
+        Self::with_version(kind, crate::CONVERTER_VERSION)
+    }
+
+    /// The same for another converter version (what a raised version would give).
+    pub fn with_version(kind: &str, version: u32) -> Self {
         let mut h = Sha256::new();
         h.update(b"sta64-convert-cache-key");
-        h.update(crate::CONVERTER_VERSION.to_le_bytes());
+        h.update(version.to_le_bytes());
         Self(h).part(kind.as_bytes())
     }
 

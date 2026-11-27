@@ -410,3 +410,193 @@ fn self_private_directory_modes_symlinks_and_owner() {
     fs::write(&file, b"x").unwrap();
     assert!(dir_state(&file, Some(me)).is_err());
 }
+
+// ------------------------------------------------------------------ end to end, no Python, no objdump
+//
+// The package's central claim: the command line, with the Rust decoder (no `objdump`), the Rust
+// lifters and the Rust emission, writes for every mission of an install the file the Python tools
+// wrote, but for the tool token of the first line. The tests that read the reference's own
+// objdump listings instead (`dsl.rs`, `drl.rs`, `a1_parity.rs`) stay as the attribution: when one
+// of those passes and the test here fails, the decoder is the difference; when both fail, the
+// lifters. Failures print indices, line numbers and counts only; the detail goes to
+// `target/scratch/` (game text: never commit or paste it).
+
+mod e2e {
+    use super::*;
+    use sta_mission_convert::convert::load_engine;
+    use sta_mission_convert::drl::{decode_install, install_subdirs};
+    use sta_mission_convert::{cli, disasm, Pe};
+
+    fn rust_listing(p: &Path) -> sta_mission_convert::Result<Vec<(u32, String)>> {
+        disasm::disassemble(&Pe::open(p)?)
+    }
+
+    /// Runs the command line on `install` into a fresh folder; `(exit code, stdout lines, files)`.
+    fn run_cli(install: &Path, extra: &[&str]) -> (i32, Vec<String>, BTreeMap<String, Vec<u8>>) {
+        let out = TempDir::new("e2e-out");
+        let mut args: Vec<String> = vec!["--install".into(), install.to_string_lossy().into_owned()];
+        args.push("--out".into());
+        args.push(out.path().to_string_lossy().into_owned());
+        args.extend(extra.iter().map(|s| (*s).to_owned()));
+        let (mut so, mut se) = (Vec::new(), Vec::new());
+        let mut listing = rust_listing;
+        let code = cli::run(
+            &args,
+            &cli::Env::from_process(),
+            &mut cli::Io { out: &mut so, err: &mut se },
+            &mut listing,
+        );
+        assert!(se.is_empty() || code != 0, "stderr output on a successful run");
+        let lines: Vec<String> =
+            String::from_utf8_lossy(&so).replace('\r', "").lines().map(str::to_owned).collect();
+        let mut files = BTreeMap::new();
+        if let Ok(rd) = fs::read_dir(out.path().join("missions")) {
+            for e in rd.flatten() {
+                files.insert(
+                    format!("missions/{}", e.file_name().to_string_lossy()),
+                    fs::read(e.path()).unwrap(),
+                );
+            }
+        }
+        (code, lines, files)
+    }
+
+    /// The console lines the child converter printed in the reference run: the section of its log
+    /// whose command names `tool`.
+    fn reference_console(i: &harness::RefInstall, tool: &str) -> (Vec<String>, i32) {
+        let s = i
+            .log_sections()
+            .into_iter()
+            .find(|s| s.command.contains(tool))
+            .expect("the reference log has the converter's section");
+        (s.lines, s.exit.expect("the section has an exit code"))
+    }
+
+    /// The child's lines of a run of the command line: between its first line and the summary.
+    fn child_lines(all: &[String]) -> Vec<String> {
+        let end = all
+            .iter()
+            .position(|l| l.starts_with("warning: some missions failed") || l.ends_with(" mission scripts in") || l.contains(" mission scripts in "))
+            .unwrap_or(all.len());
+        all[1..end].to_vec()
+    }
+
+    /// First differing line (1-based) of two console outputs, or `None` when equal.
+    fn first_difference(a: &[String], b: &[String]) -> Option<usize> {
+        (0..a.len().max(b.len())).find(|&k| a.get(k) != b.get(k)).map(|k| k + 1)
+    }
+
+    fn check_run(
+        install: &harness::RefInstall,
+        tool: &str,
+        label: &str,
+        code: i32,
+        lines: &[String],
+        files: &BTreeMap<String, Vec<u8>>,
+    ) {
+        let report = install.compare_subset(files, |rel| rel.starts_with("missions/"));
+        let (ref_lines, ref_exit) = reference_console(install, tool);
+        let mine = child_lines(lines);
+        eprintln!(
+            "{label}: exit {code} (reference child {ref_exit}); {} files, {} equal, {} differing, {} missing, {} extra; \
+             console {} lines (reference {})",
+            files.len(),
+            report.equal,
+            report.differing.len(),
+            report.missing.len(),
+            report.extra.len(),
+            mine.len(),
+            ref_lines.len()
+        );
+        assert!(report.equal > 0, "{label}: nothing was compared");
+        // The wrapper's exit code is 0 while some script exists; the child's own code shows in
+        // the warning line.
+        assert_eq!(
+            lines.iter().any(|l| l.starts_with("warning: some missions failed")),
+            ref_exit != 0,
+            "{label}: the failing set differs in being empty or not"
+        );
+        let d = first_difference(&mine, &ref_lines);
+        assert_eq!(d, None, "{label}: first differing console line");
+        report.assert_ok(label);
+    }
+
+    fn a2_root() -> Option<PathBuf> {
+        std::env::var_os(harness::A2_VAR).map(PathBuf::from).filter(|p| p.is_dir())
+    }
+
+    fn a1_root() -> Option<PathBuf> {
+        std::env::var_os(harness::A1_VAR).map(PathBuf::from).filter(|p| p.is_dir())
+    }
+
+    #[test]
+    fn gated_a2_missions_with_the_rust_decoder_equal_the_python_output() {
+        let Some(reference) = harness::obtain_or_skip() else { return };
+        let Some(install) = reference.install(Kind::Armada2) else { return };
+        let Some(root) = a2_root() else { return };
+        let (code, lines, files) = run_cli(&root, &[]);
+        assert_eq!(code, 0);
+        check_run(install, "dsl_to_lua.py", "a2-e2e", code, &lines, &files);
+    }
+
+    #[test]
+    fn gated_a1_missions_with_the_rust_decoder_equal_the_python_output() {
+        let Some(reference) = harness::obtain_or_skip() else { return };
+        let Some(install) = reference.install(Kind::Armada1) else { return };
+        let Some(root) = a1_root() else { return };
+        let (code, lines, files) = run_cli(&root, &[]);
+        assert_eq!(code, 0);
+        check_run(install, "a1_to_lua.py", "a1-e2e", code, &lines, &files);
+    }
+
+    /// The reference written with `--include-unmapped`: the unmapped pairs are converted too.
+    #[test]
+    fn gated_a1_unmapped_missions_with_the_rust_decoder_equal_the_python_output() {
+        let Some(reference) = harness::obtain_unmapped_or_skip() else { return };
+        let Some(install) = reference.install(Kind::Armada1) else { return };
+        assert!(install.include_unmapped());
+        let Some(root) = a1_root() else { return };
+        let (code, lines, files) = run_cli(&root, &["--include-unmapped"]);
+        assert_eq!(code, 0);
+        check_run(install, "a1_to_lua.py", "a1-unmapped-e2e", code, &lines, &files);
+    }
+
+    #[test]
+    fn gated_a2_rule_scaffolds_with_the_rust_decoder_equal_the_python_output() {
+        let Some(reference) = harness::obtain_or_skip() else { return };
+        let Some(install) = reference.install(Kind::Armada2) else { return };
+        let Some(root) = a2_root() else { return };
+        let mdir = cli::child(&root, "missions")
+            .or_else(|| cli::child(&cli::child(&root, "Data").unwrap_or_else(|| root.clone()), "missions"))
+            .expect("a missions folder");
+        let engine = load_engine(std::slice::from_ref(&mdir), Some(&root)).expect("the engine lookup");
+        let mut listing = rust_listing;
+        let run = decode_install(&mdir, Some(&engine), &mut listing).expect("the run does not abort");
+        let sub = &install_subdirs(std::slice::from_ref(&mdir))[0];
+        let produced: BTreeMap<String, Vec<u8>> =
+            run.files.iter().map(|(k, v)| (format!("drl/{sub}/{k}"), v.clone())).collect();
+        let report = install.compare_subset(&produced, |rel| rel.starts_with("drl/"));
+        eprintln!(
+            "rule scaffolds (rust decoder): {} read, {} written, {} equal, {} differing, {} missing, {} extra",
+            run.read,
+            run.files.len(),
+            report.equal,
+            report.differing.len(),
+            report.missing.len(),
+            report.extra.len()
+        );
+        assert!(report.equal > 0, "nothing was compared");
+        report.assert_ok("a2-scaffolds-e2e");
+        // The reference's drl log section counts the DLLs the same way.
+        let (log, _) = reference_console(install, "drl_to_lua.py");
+        let summary = log.iter().rev().find(|l| l.contains(" R.drl read, ")).expect("the summary line");
+        let want = format!(
+            "{} R.drl read, {} decoded, {} failed, {} skipped",
+            run.read,
+            run.read - run.failed - run.skipped,
+            run.failed,
+            run.skipped
+        );
+        assert_eq!(summary.trim(), want, "the counts of the run");
+    }
+}
