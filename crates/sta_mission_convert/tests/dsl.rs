@@ -377,9 +377,17 @@ fn split_cases(text: &str) -> Vec<(String, String)> {
         if let Some(n) = l.strip_prefix("== ") {
             out.push((n.trim_end().to_owned(), String::new()));
         }
-        out.last_mut().expect("starts with a case header").1.push_str(l);
+        // the lines before the first case (the version header) belong to no case
+        if let Some(last) = out.last_mut() {
+            last.1.push_str(l);
+        }
     }
     out
+}
+
+/// `major.minor` from the first line of an expected file (`# generated with CPython 3.14`).
+fn python_version_of(text: &str) -> Option<String> {
+    text.lines().next()?.strip_prefix("# generated with CPython ").map(str::to_owned)
 }
 
 #[test]
@@ -440,7 +448,25 @@ fn expected_cases_are_current() {
     assert!(status.success(), "the Python driver failed");
     let fresh = std::fs::read_to_string(&out_path).expect("driver output");
     let _ = std::fs::remove_dir_all(&dir);
-    assert_eq!(data(&fresh), data(include_str!("dsl_cases/expected.txt")), "tests/dsl_cases/expected.txt is stale: run gen_cases.py again");
+    let (fresh, committed) = (data(&fresh), data(include_str!("dsl_cases/expected.txt")));
+    // The texts of raw Python exceptions differ between CPython versions, so the committed file
+    // (the reference, made with the version named in its first line) is compared only with the
+    // output of the same major.minor version.
+    let (have, want) = (python_version_of(&fresh), python_version_of(&committed));
+    if have != want {
+        eprintln!(
+            "SKIPPED: expected_cases_are_current: this Python is CPython {}, tests/dsl_cases/expected.txt was made with CPython {}; \
+             the Rust output is still compared with the committed file by every_case_equals_the_originals_output",
+            have.as_deref().unwrap_or("?"),
+            want.as_deref().unwrap_or("?")
+        );
+        return;
+    }
+    assert_eq!(
+        fresh, committed,
+        "tests/dsl_cases/expected.txt (reference: CPython {}) is stale: run gen_cases.py again with that version",
+        want.as_deref().unwrap_or("?")
+    );
 }
 
 #[test]
