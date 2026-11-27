@@ -30,6 +30,8 @@ cut_b tex_b 0 32 32 32\n\
 @sprite_node blink dot strobe (1,1) (1,1,1)\n\
 @sprite_node blA bl_a pulse (2,2) (1,0.3,0.3) billboard\n\
 @sprite_node blB bl_b const (2,2) (0.3,1,0.4) billboard\n\
+@sprite_node blC bl_b pulse (2,2) (0.3,1,0.4) billboard\n\
+@sprite_node adC ad_b pulse (2,2) (1,0.8,0.2) billboard\n\
 @sprite_node adA ad_a pulse (2,2) (0.6,0.4,1) billboard\n\
 @sprite_node adB ad_b const (2,2) (1,0.8,0.2) billboard\n\
 @sprite_node cutA cut_a const (3,3) (0.9,0.9,0.9)\n\
@@ -267,11 +269,35 @@ fn game_app(adopting: bool) -> App {
         let slots = SpriteSlots::with_capacity(&mut app.world_mut().resource_mut::<Assets<ShaderBuffer>>(), 4);
         app.insert_resource(slots);
         material::adoption(&mut app);
+        see_unhidden(&mut app);
         app.add_systems(Update, (animate, apply_fade, tint_ghost).chain());
     } else {
         app.add_systems(Update, (animate_reference, apply_fade, tint_ghost).chain());
     }
     app
+}
+
+/// A stand-in for the visibility systems in an app without rendering, so the parity mark
+/// ([`material::mark_seen_changes`]) has views to ask: one view sees every node that is not hidden and
+/// has no hidden ancestor. Runs before the mark.
+fn see_unhidden(app: &mut App) {
+    fn system(mut nodes: Query<(Entity, &mut ViewVisibility)>, vis: Query<&Visibility>, parents: Query<&ChildOf>) {
+        for (node, mut seen) in &mut nodes {
+            let (mut at, mut hidden) = (node, false);
+            loop {
+                hidden |= vis.get(at) == Ok(&Visibility::Hidden);
+                match parents.get(at) {
+                    Ok(p) => at = p.parent(),
+                    Err(_) => break,
+                }
+            }
+            let want = if hidden { ViewVisibility::HIDDEN } else { ViewVisibility::VISIBLE };
+            if *seen != want {
+                *seen = want;
+            }
+        }
+    }
+    app.add_systems(PostUpdate, system.before(material::mark_seen_changes));
 }
 
 /// A sprite node as `model_scene::spawn_sprite_node` makes it (no texture), under `parent`.
@@ -790,6 +816,7 @@ fn adopted_app(before: bool) -> App {
     if before {
         app.add_systems(Update, (animate_before_1236, apply_fade, tint_ghost).chain());
     } else {
+        see_unhidden(&mut app);
         app.add_systems(Update, (animate, apply_fade, tint_ghost).chain());
     }
     app.init_resource::<Requeued>().init_resource::<Modified>().add_systems(Last, (collect_requeued, count_modified));
@@ -976,8 +1003,10 @@ fn same_node(old: &App, eo: Entity, new: &App, en: Entity) -> Result<(), String>
         }
         _ => return Err("demoted on one side only".into()),
     }
+    // Parity marks are for nodes some view sees (S5, as amended): a node nothing sees is in no phase,
+    // so whether it is re-queued is not compared. Seen nodes must match.
     let (ro, rn) = (wo.resource::<Requeued>().0.contains(&eo), wn.resource::<Requeued>().0.contains(&en));
-    if ro != rn {
+    if wn.get::<ViewVisibility>(en).is_some_and(|v| v.get()) && ro != rn {
         return Err(format!("re-queued {ro} against {rn}"));
     }
     Ok(())
@@ -1051,4 +1080,142 @@ fn the_1236_comparison_sees_a_node_passed_over_when_it_should_not_be() {
     });
     let e = r.err().expect("the comparison reports the difference");
     assert!(e.starts_with("frame 31, node 7: state"), "{e}");
+}
+
+// --- #1237: the parity mark only for nodes a view sees ---
+
+/// A colour-cycling node under a parent that is hidden for a while: in each frame it is re-queued
+/// exactly when its state changed and a view sees it. While hidden (state changing, nothing seeing it)
+/// it is not marked; in the frame it is seen again it is marked, with its slot already holding the
+/// frame's colour (written in `Update`, as the state is), and the list of waiting marks is empty
+/// after every frame.
+#[test]
+fn a_node_is_marked_in_the_frame_a_view_sees_it_and_not_while_none_does() {
+    let mut app = game_app(true);
+    app.init_resource::<Requeued>().add_systems(Last, collect_requeued);
+    let parent = app.world_mut().spawn(Visibility::default()).id();
+    // A look whose uv does not animate (a flipbook look's asset change re-queues its nodes by itself).
+    let node = spawn_node(&mut app, "blA", Some(parent));
+    let (mut seen_changed, mut unseen_changed, mut entered) = (0, 0, 0);
+    let mut was_seen = false;
+    for n in 0..40 {
+        app.world_mut().resource_mut::<AnimClock>().advance_idle(0.0);
+        *app.world_mut().get_mut::<Visibility>(parent).unwrap() = if (10..22).contains(&n) { Visibility::Hidden } else { Visibility::Inherited };
+        let before = bits(app.world().get::<SpriteState>(node).unwrap().colour);
+        app.update();
+        let st = app.world().get::<SpriteState>(node).unwrap();
+        let changed = bits(st.colour) != before;
+        let seen = app.world().get::<ViewVisibility>(node).unwrap().get();
+        let marked = app.world().resource::<Requeued>().0.contains(&node);
+        assert_eq!(marked, changed && seen, "frame {n}: changed {changed}, seen {seen}");
+        assert!(app.world().resource::<material::ParityMarks>().is_empty(), "frame {n}: marks left waiting");
+        assert_eq!(slot_of(&app, node), linear_bits(st.colour), "frame {n}: slot");
+        (seen_changed, unseen_changed) = (seen_changed + usize::from(changed && seen), unseen_changed + usize::from(changed && !seen));
+        entered += usize::from(seen && !was_seen && n > 0);
+        was_seen = seen;
+    }
+    assert!(seen_changed > 15 && unseen_changed > 8 && entered == 1, "seen {seen_changed}, unseen {unseen_changed}, entered {entered}");
+}
+
+/// Runs the nodes listed in alternate frames only through Bevy's own visibility, mesh and material
+/// systems (no GPU). The mark must reach `EntitiesNeedingSpecialization` and `Mesh3d`'s change flag in
+/// exactly the frames the node was listed in, for a node a view sees, and never for one nothing sees. With
+/// `late`, the mark system is ordered after the specialisation check instead of before it, as a negative
+/// control: the mark then lands in the frame after the listing, and the check reports it.
+fn the_mark_lands_in_the_listed_frame(late: bool) -> Result<(), String> {
+    use bevy::camera::visibility::{VisibilityPlugin, VisibilitySystems};
+    use bevy::pbr::{EntitiesNeedingSpecialization, MaterialPlugin};
+    #[derive(Resource)]
+    struct Nodes(Entity, Entity);
+    #[derive(Resource, Default)]
+    struct Saw {
+        specialise: Vec<Entity>,
+        mesh_changed: Vec<Entity>,
+    }
+    let mut app = App::new();
+    app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default(), bevy::mesh::MeshPlugin, VisibilityPlugin))
+        .init_asset::<StandardMaterial>()
+        .init_asset::<bevy::image::Image>()
+        .init_asset::<bevy::shader::Shader>()
+        .add_plugins(MaterialPlugin::<SpriteMaterial>::default());
+    if late {
+        app.init_resource::<material::ParityMarks>().add_systems(
+            PostUpdate,
+            material::mark_seen_changes
+                .after(VisibilitySystems::MarkNewlyHiddenEntitiesInvisible)
+                .after(bevy::pbr::check_entities_needing_specialization::<SpriteMaterial>),
+        );
+    } else {
+        material::adoption(&mut app);
+    }
+    // The view: sees every node that is not hidden, in the set the cameras' check is in.
+    fn view(mut nodes: Query<(&Visibility, &mut ViewVisibility)>) {
+        use bevy::camera::visibility::SetViewVisibility;
+        for (vis, mut seen) in &mut nodes {
+            if *vis != Visibility::Hidden {
+                seen.set_visible();
+            }
+        }
+    }
+    fn list(nodes: Res<Nodes>, mut marks: ResMut<material::ParityMarks>, mut frame: Local<u32>) {
+        // Alternate frames only, so a mark that lands a frame late shows in the frames between.
+        if *frame % 2 == 0 {
+            marks.push(nodes.0);
+            marks.push(nodes.1);
+        }
+        *frame += 1;
+    }
+    fn look(
+        mut saw: ResMut<Saw>,
+        spec: Res<EntitiesNeedingSpecialization<SpriteMaterial>>,
+        meshes: Query<(Entity, Ref<Mesh3d>), With<MeshMaterial3d<SpriteMaterial>>>,
+    ) {
+        saw.specialise = spec.changed.clone();
+        saw.mesh_changed = meshes.iter().filter(|(_, m)| m.is_changed()).map(|(e, _)| e).collect();
+    }
+    app.init_resource::<Saw>()
+        .add_systems(Update, list)
+        .add_systems(PostUpdate, view.in_set(VisibilitySystems::CheckVisibility))
+        .add_systems(Last, look);
+    let spawn = |app: &mut App, v: Visibility| app.world_mut().spawn((Mesh3d(Handle::default()), MeshMaterial3d::<SpriteMaterial>(Handle::default()), v)).id();
+    let (seen, unseen) = (spawn(&mut app, Visibility::Inherited), spawn(&mut app, Visibility::Hidden));
+    app.insert_resource(Nodes(seen, unseen));
+    for n in 0..12u32 {
+        app.update();
+        let saw = app.world().resource::<Saw>();
+        if n < 4 {
+            // Spawn and the first frames settle (added components count as changed).
+            continue;
+        }
+        // The node is listed in frames 0, 2, 4, ...
+        let listed = n % 2 == 0;
+        // `Mesh3d`'s change flag is the mark's trace in exactly the frame it lands (Bevy's private system
+        // turns a changed material into a changed mesh in the same frame); the specialisation set also
+        // holds nodes for other reasons (asset events of the default handles), so it is only required
+        // to hold the node in the frames it was listed in.
+        let (s, m) = (saw.specialise.contains(&seen), saw.mesh_changed.contains(&seen));
+        if (listed && !s) || m != listed {
+            return Err(format!("frame {n}: listed {listed}, in the specialisation set {s}, mesh changed {m}"));
+        }
+        if saw.mesh_changed.contains(&unseen) {
+            return Err(format!("frame {n}: the node nothing sees was marked"));
+        }
+    }
+    Ok(())
+}
+
+/// The mark reaches Bevy's specialisation and mesh re-extraction in the frame `animate` listed the node,
+/// not a frame later (see [`the_mark_lands_in_the_listed_frame`]). The PostUpdate schedule builds with
+/// the mark's two orderings (no cycle).
+#[test]
+fn the_mark_lands_in_the_frame_it_is_listed_in_through_bevys_own_systems() {
+    the_mark_lands_in_the_listed_frame(false).unwrap_or_else(|e| panic!("{e}"));
+}
+
+/// Negative control of the test above: a mark ordered after the specialisation check lands a frame late,
+/// and the check says so.
+#[test]
+fn the_same_check_sees_a_mark_that_lands_a_frame_late() {
+    let e = the_mark_lands_in_the_listed_frame(true).expect_err("the late mark must be seen");
+    assert!(e.contains("listed"), "{e}");
 }
