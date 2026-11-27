@@ -551,17 +551,29 @@ pub fn convert_one(
     engine: &Vtables,
     listing: &mut dyn FnMut(&Path) -> Result<Vec<Ins>>,
 ) -> Result<Outcome> {
+    convert_one_with(job, engine, &mut |p| {
+        let pe = Pe::open(p)?;
+        let ins = listing(p)?;
+        Ok((pe, ins))
+    })
+}
+
+/// Loads a DLL: its image and its listing, from the file at the path.
+pub type LoadFn<'a> = dyn FnMut(&Path) -> Result<(Pe, Vec<Ins>)> + 'a;
+
+/// [`convert_one`] with the loading of a DLL in the caller's hands: `load` gives the image and the
+/// listing of the file at the path (so a caller that has the bytes already need not read the file
+/// again). It is called for the mission DLL first and for the rule DLL later, as the Python opens
+/// them.
+pub fn convert_one_with(job: &Job, engine: &Vtables, load: &mut LoadFn<'_>) -> Result<Outcome> {
     let dsl_base = job.dsl.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let drl_base: Option<String> =
         job.drl.as_ref().map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
     let result = (|| -> std::result::Result<Converted, Failure> {
-        let pe = Pe::open(&job.dsl)?;
-        let ins = listing(&job.dsl)?;
+        let (pe, ins) = load(&job.dsl)?;
         let mut open = || -> Result<(Pe, Vec<Ins>)> {
             let p = job.drl.as_ref().expect("a rule DLL");
-            let rpe = Pe::open(p)?;
-            let rins = listing(p)?;
-            Ok((rpe, rins))
+            load(p)
         };
         let drl = drl_base.as_ref().map(|base| (base.as_str(), &mut open as &mut RuleSource<'_>));
         convert(&pe, ins, &dsl_base, drl, engine)

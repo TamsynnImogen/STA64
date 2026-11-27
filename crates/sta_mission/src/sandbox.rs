@@ -11,6 +11,13 @@
 //! identical on every peer. It is refilled on every entry from the host
 //! ([`refill`]): the script load, each callback, each monitor pass, each
 //! `eval`. A script that exhausts it gets an error from that entry only.
+//!
+//! Reproducibility (#1300) lives mostly in the bundled Lua itself
+//! (`vendor/lua-src/STA64-PATCH.md`): `pairs`/`next` in insertion order, a stable
+//! `table.sort`, byte-order string comparison, no weak tables, `tostring` ids
+//! instead of addresses. Here only the
+//! `setmetatable` guard adds a clear error for `__mode`. Host code that walks a
+//! script's table (`Table::pairs`) gets the same insertion order.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -61,9 +68,21 @@ struct Budget {
     peak: Arc<AtomicU64>,
 }
 
+unsafe extern "C" {
+    /// The bundled Lua's hook for the `^` operator (vendor/lua-src/STA64-PATCH.md).
+    fn lua_sta64_setpow(state: *mut std::ffi::c_void, f: Option<extern "C" fn(f64, f64) -> f64>);
+}
+
+/// `^` as `math.pow`: the platform-independent `libm` power function.
+extern "C" fn libm_pow(a: f64, b: f64) -> f64 {
+    libm::pow(a, b)
+}
+
 /// A fresh mission Lua state with the restrictions above.
 pub fn new_lua() -> Lua {
     let lua = Lua::new_with(std_libs(), LuaOptions::default()).expect("open the mission standard libraries");
+    // SAFETY: the callback only stores a function pointer in the state's global data.
+    unsafe { lua.exec_raw::<()>((), |state| lua_sta64_setpow(state.cast(), Some(libm_pow))) }.expect("set the power function");
     // Both calls only fail on a state not built by `Lua::new_with`.
     lua.set_memory_limit(MEMORY_LIMIT).expect("memory limit available (vendored Lua)");
     let remaining = Arc::new(AtomicU64::new(INSTRUCTION_BUDGET));
@@ -101,6 +120,18 @@ pub fn new_lua() -> Lua {
     lua
 }
 
+/// A Lua `txt(v)` for host chunks that read a mission's state (reports, probes, traces): the
+/// text of a string, number, boolean or nil, or of a value with a `__tostring` metamethod
+/// (error objects), and only the type name (`<table>`) for any other reference. Prepend it to
+/// such a chunk and use `txt` instead of `tostring`: `tostring` of a plain reference hands out
+/// the state's next reference id, so a host read on a UI or log path would shift every id the
+/// script prints later (#1300).
+pub const HOST_TEXT: &str = "local function txt(v) local ty = type(v) \
+    if ty == 'string' or ty == 'number' or ty == 'boolean' or ty == 'nil' then return tostring(v) end \
+    local mt = getmetatable(v) \
+    if type(mt) == 'table' and rawget(mt, '__tostring') ~= nil then return tostring(v) end \
+    return '<' .. ty .. '>' end ";
+
 /// Give `lua` a full instruction budget; call at every entry from the host.
 pub fn refill(lua: &Lua) {
     if let Some(b) = lua.app_data_ref::<Budget>() {
@@ -120,17 +151,29 @@ fn restricted(name: &str, why: String) -> mlua::Error {
     mlua::Error::runtime(format!("{name}: {why}"))
 }
 
-/// `setmetatable` that refuses a `__gc` finalizer: Lua runs finalizers with
-/// hooks disabled, so a looping finalizer could never be stopped.
+/// `setmetatable` that refuses a `__gc` finalizer (Lua runs finalizers with
+/// hooks disabled, so a looping finalizer could never be stopped) and a weak
+/// mode (`__mode`: what a weak table holds depends on when the collector ran,
+/// so a script reading one would not be reproducible, #1300). The bundled Lua
+/// ignores `__mode` anyway (vendor/lua-src/STA64-PATCH.md), also when it is set
+/// on a metatable after this call; the error says so up front.
 fn guard_setmetatable(lua: &Lua, globals: &Table) -> mlua::Result<()> {
     let original: Function = globals.raw_get("setmetatable")?;
     globals.raw_set(
         "setmetatable",
         lua.create_function(move |_, args: MultiValue| {
-            if let Some(Value::Table(meta)) = args.get(1)
-                && !meta.raw_get::<Value>("__gc")?.is_nil()
-            {
-                return Err(restricted("setmetatable", "__gc finalizers are not available to mission scripts".into()));
+            if let Some(Value::Table(meta)) = args.get(1) {
+                if !meta.raw_get::<Value>("__gc")?.is_nil() {
+                    return Err(restricted("setmetatable", "__gc finalizers are not available to mission scripts".into()));
+                }
+                if !meta.raw_get::<Value>("__mode")?.is_nil() {
+                    return Err(restricted(
+                        "setmetatable",
+                        "weak tables (__mode) are not available to mission scripts: what they hold depends on when \
+                         the garbage collector runs, so the script would not be reproducible"
+                            .into(),
+                    ));
+                }
             }
             original.call::<MultiValue>(args)
         })?,
@@ -258,6 +301,8 @@ mod tests {
         let lua = new_lua();
         let err = lua.load("setmetatable({}, {__gc = function() while true do end end})").exec().unwrap_err().to_string();
         assert!(err.contains("__gc"), "{err}");
+        let err = lua.load("setmetatable({}, {__mode = 'v'})").exec().unwrap_err().to_string();
+        assert!(err.contains("__mode") && err.contains("reproducible"), "{err}");
         // Ordinary metatables are untouched.
         assert!(lua.load("return getmetatable(setmetatable({}, {__index = {a = 1}})).__index.a == 1").eval::<bool>().unwrap());
         let err = lua.load("return string.rep('x', 1024 * 1024 * 1024)").eval::<Value>().unwrap_err().to_string();
@@ -272,6 +317,28 @@ mod tests {
         assert_eq!(lua.load("return string.find('hello world', 'o w')").eval::<i64>().unwrap(), 5);
         assert_eq!(lua.load("return (string.gsub('  hi  ', '^%s*(.-)%s*$', '%1'))").eval::<String>().unwrap(), "hi");
         assert_eq!(lua.load("return string.find(string.rep('a', 5000), 'aab', 1, true)").eval::<Option<i64>>().unwrap(), None);
+    }
+
+    /// Host reads of a mission's state on UI, report or log paths cannot shift the reference
+    /// ids the script prints (#1300).
+    #[test]
+    fn host_text_hands_out_no_reference_ids() {
+        let script = "Mission_ = { missing = { [{}] = 1 }, failed = {}, blocked = { r = {} }, problemOrder = { { {}, 'k', 1, {} } } } \
+                      function show() return tostring({}) end";
+        let quiet = crate::runtime::MissionRuntime::from_source("missions/T.lua", script, 1);
+        let busy = crate::runtime::MissionRuntime::from_source("missions/T.lua", script, 1);
+        let read = format!(
+            "{HOST_TEXT}local o = {{}} for k, n in pairs(Mission_.missing) do o[#o+1] = txt(k) .. txt(n) end \
+             for r, c in pairs(Mission_.blocked) do o[#o+1] = txt(r) .. txt(c) end \
+             local q = Mission_.problemOrder[1] o[#o+1] = txt(q[1]) .. txt(q[4]) .. txt(print) .. txt(coroutine.create(print)) \
+             return table.concat(o, ' ')"
+        );
+        assert_eq!(busy.eval::<String>(&read).unwrap(), "<table>1 r<table> <table><table><function><thread>");
+        assert_eq!(quiet.eval::<String>("return show()").unwrap(), busy.eval::<String>("return show()").unwrap());
+        // The probes that read mission state use `txt`, never `tostring`.
+        for (file, src) in [("progress.rs", include_str!("progress.rs")), ("ending.rs", include_str!("ending.rs"))] {
+            assert!(!src.contains("tostring("), "{file} turns mission values into text with tostring");
+        }
     }
 
     fn step_all(rt: &mut crate::runtime::MissionRuntime, ticks: u64) {

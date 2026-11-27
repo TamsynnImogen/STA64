@@ -110,7 +110,7 @@ local function fmt(v)
     return tostring(v)
   end
   if t == "table" then return "{}" end
-  return tostring(v)
+  return txt(v)
 end
 for _, tn in ipairs({ "A2", "A1" }) do
   local t = rawget(_G, tn)
@@ -128,7 +128,7 @@ for _, tn in ipairs({ "A2", "A1" }) do
         local r = table.pack(pcall(f, ...))
         local head = tn .. "." .. k .. "(" .. table.concat(parts, ", ") .. ")"
         if not r[1] then
-          log[#log + 1] = head .. " -> error: " .. tostring(r[2]):match("[^\n]*")
+          log[#log + 1] = head .. " -> error: " .. txt(r[2]):match("[^\n]*")
           error(r[2], 0)
         end
         log[#log + 1] = head .. (r.n > 1 and (" -> " .. fmt(r[2])) or "")
@@ -153,11 +153,11 @@ local M = rawget(_G, "Mission_")
 local out = {}
 if type(M) ~= "table" then return out, f, r, p, e, e2 end
 local fired, ran, prob, errs = M.fired or {}, M.ran or {}, M.problemOrder or {}, M.stepErrors or {}
-for i = f + 1, #fired do out[#out + 1] = "rule\t" .. tostring(fired[i]) end
-for i = r + 1, #ran do out[#out + 1] = "step\t" .. tostring(ran[i]) end
-if #ran == r and (M.stepCount or 0) > e2 and M.lastStep then out[#out + 1] = "step\t" .. tostring(M.lastStep) end
-for i = p + 1, #prob do local q = prob[i] out[#out + 1] = tostring(q[2]) .. "\t" .. tostring(q[1]) .. (q[4] and (": " .. tostring(q[4])) or "") end
-for i = e + 1, #errs do out[#out + 1] = "step-error\t" .. tostring(errs[i]) end
+for i = f + 1, #fired do out[#out + 1] = "rule\t" .. txt(fired[i]) end
+for i = r + 1, #ran do out[#out + 1] = "step\t" .. txt(ran[i]) end
+if #ran == r and (M.stepCount or 0) > e2 and M.lastStep then out[#out + 1] = "step\t" .. txt(M.lastStep) end
+for i = p + 1, #prob do local q = prob[i] out[#out + 1] = txt(q[2]) .. "\t" .. txt(q[1]) .. (q[4] and (": " .. txt(q[4])) or "") end
+for i = e + 1, #errs do out[#out + 1] = "step-error\t" .. txt(errs[i]) end
 return out, #fired, #ran, #prob, #errs, M.stepCount or 0
 "#;
 
@@ -441,7 +441,7 @@ pub fn play(host: &VfsHost, book: &CampaignBook, campaign: &str, index: usize, c
     if !load_calls.is_empty() {
         ev.push(Event { tick: a.sim().tick, kind: "load", what: load_calls.join(" ") });
     }
-    if let Err(e) = a.runtime().eval::<()>(TRACE_HOOK) {
+    if let Err(e) = a.runtime().eval::<()>(&format!("{}{TRACE_HOOK}", crate::sandbox::HOST_TEXT)) {
         ev.push(Event { tick: 0, kind: "error", what: format!("trace hook: {e}") });
     }
     let mut plan = match cfg.plan.as_deref().map(|s| Plan::new(s, &paths)) {
@@ -487,7 +487,8 @@ pub fn play(host: &VfsHost, book: &CampaignBook, campaign: &str, index: usize, c
             }
         }
         // converted-script progress
-        if let Ok((lines, f, r, p, e, n)) = a.runtime().eval_with::<(Vec<String>, i64, i64, i64, i64, i64), _>(CONVERTED, counts) {
+        let converted = format!("{}{CONVERTED}", crate::sandbox::HOST_TEXT);
+        if let Ok((lines, f, r, p, e, n)) = a.runtime().eval_with::<(Vec<String>, i64, i64, i64, i64, i64), _>(&converted, counts) {
             counts = (f, r, p, e, n);
             for l in lines {
                 if let Some((k, w)) = l.split_once('\t') {
