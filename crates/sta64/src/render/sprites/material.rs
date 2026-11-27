@@ -290,16 +290,49 @@ pub(crate) fn parity() -> bool {
 /// its state changed under `main`'s rule, and [`mark_seen_changes`] in `PostUpdate` marks the ones some
 /// view sees and empties the list.
 #[derive(Resource, Default, Debug)]
-pub(crate) struct ParityMarks(Vec<Entity>);
+pub(crate) struct ParityMarks {
+    list: Vec<Entity>,
+    /// Test builds only: a deliberately broken form, a positive control for the tests that the mark is
+    /// there and on time.
+    #[cfg(test)]
+    pub(crate) control: Control,
+    #[cfg(test)]
+    held: Vec<Entity>,
+}
+
+/// A deliberately broken form of the parity mark (test builds only).
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Control {
+    /// The mark as it is in the game.
+    #[default]
+    None,
+    /// No mark at all (what dropping parity mode would be).
+    Off,
+    /// Each node's mark lands a frame after the one it was listed in.
+    Late,
+}
 
 impl ParityMarks {
     pub(crate) fn push(&mut self, node: Entity) {
-        self.0.push(node);
+        self.list.push(node);
+    }
+
+    /// Whether the mark is switched off (test builds only; always `false` in the game).
+    pub(crate) fn off(&self) -> bool {
+        #[cfg(test)]
+        {
+            self.control == Control::Off
+        }
+        #[cfg(not(test))]
+        {
+            false
+        }
     }
 
     #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.list.is_empty()
     }
 }
 
@@ -321,7 +354,12 @@ pub(crate) fn mark_seen_changes(
     seen: Query<&ViewVisibility>,
     mut looks: Query<&mut MeshMaterial3d<SpriteMaterial>>,
 ) {
-    for node in marks.0.drain(..) {
+    #[cfg(test)]
+    if marks.control == Control::Late {
+        let m = &mut *marks;
+        std::mem::swap(&mut m.list, &mut m.held);
+    }
+    for node in marks.list.drain(..) {
         if seen.get(node).is_ok_and(|v| v.get())
             && let Ok(mut m) = looks.get_mut(node)
         {

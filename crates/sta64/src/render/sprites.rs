@@ -231,7 +231,10 @@ fn settled(s: &material::SpriteState) -> bool {
 /// - An adopted node is passed over in a frame where none of its inputs changed since the last run:
 ///   its animation's value and its sprite's uv (by bits), its `SpriteFx`, `SpriteFade`, `MoonNimbus`,
 ///   `Visibility`, `SpriteState` and look component (by Bevy's change ticks, which a system does not
-///   see for its own writes), whether it has a fade and a nimbus, and the table. Its last pass ran on
+///   see for its own writes: the look swap below; the parity mark is another system's write
+///   ([`material::mark_seen_changes`], `PostUpdate`), so the next frame's pass sees it as a change and a
+///   node marked in frame N takes one full pass in frame N+1, which writes nothing, see below), whether
+///   it has a fade and a nimbus, and the table. Its last pass ran on
 ///   these same inputs (each frame they changed it ran), and a pass leaves its outputs where a second
 ///   pass on the same inputs writes nothing: the visibility asked for, the state and slot at the
 ///   colour and uv (written only on change), the look component swapped or marked only on change.
@@ -271,7 +274,7 @@ pub fn animate(
 ) {
     let t = clock.wall() as f32;
     let table = &tables.0;
-    let parity = material::parity();
+    let parity = material::parity() && !marks.as_ref().is_some_and(|m| m.off());
     let all = tables.is_changed();
     played.refresh(table, t, all);
     writes.clear();

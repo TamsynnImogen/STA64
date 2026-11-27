@@ -397,6 +397,21 @@ struct Extras {
     crowd: usize,
     /// A blended pair and an additive pair, each at one place and size (a sort tie, in every camera).
     pairs: bool,
+    /// A colour-cycling board on a parent that moves in depth and passes a constant board that it
+    /// overlaps: its place among the sorted items is right only if it is re-queued (its sort centre is
+    /// taken at queue time), which the parity mark does. Without the mark it draws on the wrong side.
+    crossing: bool,
+    /// The crowd is spawned in batches of ten, one batch per update, so the reference path's set of
+    /// changed entities grows to the crowd's size while the new path's stays small (a different bucket
+    /// count in a hash set keyed by entity index), and six pairs of equal-distance blended boards sit
+    /// at entity ids that straddle multiples of 16 to 512.
+    staged: bool,
+    /// A deliberately broken form of the new path, a positive control (test builds only).
+    control: material::Control,
+}
+
+impl Extras {
+    const NONE: Extras = Extras { crowd: 0, pairs: false, crossing: false, staged: false, control: material::Control::None };
 }
 
 /// The boards' places along x: the row the cameras pan along.
@@ -442,6 +457,7 @@ fn view_series(path: Path, camera: Camera, extras: Extras) -> Option<(Vec<Vec<u8
     let slots = SpriteSlots::with_capacity(&mut app.world_mut().resource_mut::<Assets<ShaderBuffer>>(), 16);
     app.insert_resource(slots);
     app.world_mut().resource_mut::<SpriteLooks>().adopt = path == Path::New;
+    app.world_mut().resource_mut::<material::ParityMarks>().control = extras.control;
     match path {
         Path::New => app.add_systems(Update, (animate, apply_fade, tint_ghost).chain()),
         Path::Reference => app.add_systems(Update, (animate_reference, apply_fade, tint_ghost).chain()),
@@ -500,6 +516,37 @@ fn view_series(path: Path, camera: Camera, extras: Extras) -> Option<(Vec<Vec<u8
         grouped.push(boards.len());
         boards.push(spawn(&mut app, kind, Vec3::new(i as f32 * 9.0 - 14.0, (i % 2) as f32 * 6.0, 0.21 * i as f32), 14.0, Some(group)));
     }
+    // A colour-cycling board on a parent moving in depth, passing a constant board it overlaps. Both
+    // are in the fixed camera's view and, from step 3 on, in the panning camera's.
+    let mover = if extras.crossing {
+        spawn(&mut app, "blB", Vec3::new(48.0, -14.0, 0.0), 18.0, None);
+        let carrier = app.world_mut().spawn((Transform::from_xyz(0.0, 0.0, -8.2), Visibility::default())).id();
+        let dim = spawn(&mut app, "blC", Vec3::new(51.0, -13.0, 0.0), 18.0, Some(carrier));
+        app.world_mut().entity_mut(dim).insert(SpriteFade(0.5));
+        Some(carrier)
+    } else {
+        None
+    };
+    // Six pairs of equal-distance blended boards whose entity ids straddle multiples of 16 to 512 (staged
+    // runs only): one board takes the last index below the multiple, the other the first at it.
+    if extras.staged {
+        for (k, modulus) in [16u32, 32, 64, 128, 256, 512].into_iter().enumerate() {
+            let at = Vec3::new(28.0 + 11.0 * k as f32, -20.0, 1.5);
+            let first = loop {
+                let e = app.world_mut().spawn_empty().id();
+                if e.index_u32() % modulus == modulus - 1 {
+                    break e;
+                }
+            };
+            let (mut m, mut fx, _) = material_of(&t, "blA");
+            m.base_color_texture = Some(tex.clone());
+            let h = app.world_mut().resource_mut::<Assets<StandardMaterial>>().add(m);
+            fx.material = h.clone();
+            app.world_mut().entity_mut(first).insert((Mesh3d(quad.clone()), MeshMaterial3d(h), Transform::from_translation(at).with_scale(Vec3::new(10.0, 10.0, 1.0)), Visibility::default(), fx, Billboard));
+            let dim = spawn(&mut app, "blC", at, 10.0, None);
+            app.world_mut().entity_mut(dim).insert(SpriteFade(0.5));
+        }
+    }
     // The first board of each co-located pair, then the colour-cycling boards in no view, then the
     // second board of each pair: the crowd sits between the pair's entity ids, so the pair's relative
     // place in a hash set of changed entities moves with the crowd's size.
@@ -507,8 +554,11 @@ fn view_series(path: Path, camera: Camera, extras: Extras) -> Option<(Vec<Vec<u8
         spawn(&mut app, "blA", Vec3::new(62.0, -14.0, 1.5), 16.0, None);
         spawn(&mut app, "adA", Vec3::new(22.0, 14.0, 1.5), 16.0, None);
     }
-    for i in 0..extras.crowd {
-        spawn(&mut app, KINDS[i % 3], Vec3::new((i % 40) as f32 * 6.0 - 120.0, 300.0 + (i / 40) as f32 * 6.0, -3.0 + 0.011 * i as f32), 20.0, None);
+    let crowd_at = |i: usize| Vec3::new((i % 40) as f32 * 6.0 - 120.0, 300.0 + (i / 40) as f32 * 6.0, -3.0 + 0.011 * i as f32);
+    if !extras.staged {
+        for i in 0..extras.crowd {
+            spawn(&mut app, KINDS[i % 3], crowd_at(i), 20.0, None);
+        }
     }
     if extras.pairs {
         // Both blended boards cycle in colour, so both are re-queued in every frame; the second is
@@ -529,12 +579,27 @@ fn view_series(path: Path, camera: Camera, extras: Extras) -> Option<(Vec<Vec<u8
         return None;
     }
     eprintln!("adapter: {}", adapter.name);
+    if extras.staged {
+        for batch in 0..extras.crowd / 10 {
+            for i in batch * 10..batch * 10 + 10 {
+                spawn(&mut app, KINDS[i % 3], crowd_at(i), 20.0, None);
+            }
+            app.update();
+        }
+        for _ in 0..4 {
+            app.update();
+        }
+    }
     let mut seen = Seen { any: Vec::new(), in_a: Vec::new(), in_b: Vec::new(), grouped };
     let (mut frames_a, mut frames_b) = (Vec::new(), Vec::new());
     for step in 0..PAN.len() {
         *app.world_mut().get_mut::<Transform>(pan).unwrap() = Transform::from_xyz(PAN[step], 0.0, 60.0);
         *app.world_mut().get_mut::<Transform>(still).unwrap() = Transform::from_xyz(60.0, 0.0, 60.0);
         *app.world_mut().get_mut::<Visibility>(group).unwrap() = if matches!(step, 4..=6 | 9) { Visibility::Hidden } else { Visibility::Inherited };
+        if let Some(carrier) = mover {
+            // Behind the constant board until step 5, in front of it from step 6.
+            *app.world_mut().get_mut::<Transform>(carrier).unwrap() = Transform::from_xyz(0.0, 0.0, -8.2 + 1.5 * step as f32);
+        }
         // Fades move every step on the blended and additive boards (a cut-out board that fades is
         // demoted, which the other test covers).
         for (i, &e) in boards.iter().enumerate() {
@@ -595,7 +660,7 @@ fn boards_a_view_sees_are_drawn_byte_equal_to_the_reference_path_from_two_camera
         return;
     }
     let _serial = crate::bench::frames::gpu_serial();
-    let extras = Extras { crowd: 60, pairs: false };
+    let extras = Extras { crowd: 60, crossing: true, ..Extras::NONE };
     let lit = |f: &Vec<u8>| f.chunks(4).filter(|p| p[0] > 8 || p[1] > 8 || p[2] > 8).count();
     let mut differing = Vec::new();
     for camera in [Camera::Stock, Camera::Tonemapped4x, Camera::HdrBloom, Camera::DepthPrepass4x] {
@@ -643,7 +708,7 @@ fn co_located_boards_on_gpu() {
     let _serial = crate::bench::frames::gpu_serial();
     for camera in [Camera::Stock, Camera::DepthPrepass4x] {
         for crowd in [0usize, 7, 31, 60, 150, 300, 700, 2000] {
-            let extras = Extras { crowd, pairs: true };
+            let extras = Extras { crowd, pairs: true, ..Extras::NONE };
             let Some((oa, ob, _)) = view_series(Path::Reference, camera, extras) else { return };
             let Some((ra, rb, _)) = view_series(Path::Reference, camera, extras) else { return };
             let Some((na, nb, _)) = view_series(Path::New, camera, extras) else { return };
@@ -662,6 +727,62 @@ fn co_located_boards_on_gpu() {
                 }
             }
             eprintln!("TIE {camera:?} crowd {crowd}: {} of {} frames differ{}{}", lines.len(), 2 * oa.len(), if lines.is_empty() { "" } else { ": " }, lines.join("; "));
+        }
+    }
+}
+
+/// Positive control of the two-camera test above (H1 of the review of #1269): the new path with the
+/// parity mark taken out, and with it a frame late, must NOT be byte-equal to the reference path in the
+/// scene where a colour-cycling board on a moving parent passes a constant board, while the new path
+/// with the mark must be. Without this, the byte-equality tests could pass with the mark removed.
+#[test]
+fn the_new_path_without_the_mark_or_with_it_late_differs_from_the_reference_on_gpu() {
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_GPU_TESTS=1");
+        return;
+    }
+    let _serial = crate::bench::frames::gpu_serial();
+    let base = Extras { crowd: 60, crossing: true, ..Extras::NONE };
+    for camera in [Camera::Stock, Camera::DepthPrepass4x] {
+        let Some((oa, ob, _)) = view_series(Path::Reference, camera, base) else { return };
+        let Some((ra, rb, _)) = view_series(Path::Reference, camera, base) else { return };
+        assert!(oa == ra && ob == rb, "{camera:?}: the reference does not repeat");
+        let count = |a: &[Vec<u8>], b: &[Vec<u8>]| a.iter().zip(b).filter(|(x, y)| x != y).count();
+        let mut line = Vec::new();
+        for (name, control, must_differ) in [("mark", material::Control::None, false), ("no mark", material::Control::Off, true), ("late mark", material::Control::Late, true)] {
+            let Some((na, nb, _)) = view_series(Path::New, camera, Extras { control, ..base }) else { return };
+            let differing = count(&oa, &na) + count(&ob, &nb);
+            line.push(format!("{name}: {differing} of {} frames differ", oa.len() + ob.len()));
+            assert_eq!(differing > 0, must_differ, "{camera:?} {name}: {differing} frames differ from the reference");
+        }
+        eprintln!("{camera:?}: {}", line.join("; "));
+    }
+}
+
+/// The tie case with the reference path's changed set grown past the new path's (case (a) of the
+/// review): the crowd is spawned in batches, so on the reference path the set of changed entities grows to
+/// the crowd's size (every cycling board is marked, seen or not) while on the new path it stays at the
+/// seen boards, and six pairs of equal-distance blended boards sit at entity ids that straddle multiples
+/// of 16 to 512. Documents how many frames differ; asserts nothing about the order (it is not defined
+/// where the bucket counts differ), only that the scene is drawn.
+#[test]
+fn staged_co_located_pairs_on_gpu() {
+    if std::env::var("STA64_GPU_TESTS").as_deref() != Ok("1") {
+        eprintln!("SKIP: set STA64_GPU_TESTS=1");
+        return;
+    }
+    let _serial = crate::bench::frames::gpu_serial();
+    let lit = |f: &Vec<u8>| f.chunks(4).filter(|p| p[0] > 8 || p[1] > 8 || p[2] > 8).count();
+    for camera in [Camera::Stock, Camera::DepthPrepass4x] {
+        for crowd in [0usize, 80, 400, 1200] {
+            let extras = Extras { crowd, staged: true, ..Extras::NONE };
+            let Some((oa, ob, _)) = view_series(Path::Reference, camera, extras) else { return };
+            let Some((ra, rb, _)) = view_series(Path::Reference, camera, extras) else { return };
+            let Some((na, nb, _)) = view_series(Path::New, camera, extras) else { return };
+            assert!(oa.iter().chain(&ob).all(|f| lit(f) > 300), "{camera:?}, crowd {crowd}: a frame shows no scene");
+            let repeats = oa == ra && ob == rb;
+            let differing = oa.iter().zip(&na).filter(|(x, y)| x != y).count() + ob.iter().zip(&nb).filter(|(x, y)| x != y).count();
+            eprintln!("STAGED {camera:?} crowd {crowd}: reference repeats {repeats}, {differing} of {} frames differ from the reference", oa.len() + ob.len());
         }
     }
 }

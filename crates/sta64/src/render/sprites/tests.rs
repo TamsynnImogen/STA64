@@ -1117,13 +1117,12 @@ fn a_node_is_marked_in_the_frame_a_view_sees_it_and_not_while_none_does() {
     assert!(seen_changed > 15 && unseen_changed > 8 && entered == 1, "seen {seen_changed}, unseen {unseen_changed}, entered {entered}");
 }
 
-/// The mark reaches Bevy's specialisation and mesh re-extraction in the frame `animate` listed the node,
-/// not a frame later: run through Bevy's own visibility, mesh and material systems (no GPU), a listed node
-/// a view sees is in `EntitiesNeedingSpecialization` and has a changed `Mesh3d` in that same frame, and
-/// one nothing sees is in neither. The PostUpdate schedule builds with the mark's two orderings (no
-/// cycle). A mark ordered after the specialisation check would fail the same-frame assertions.
-#[test]
-fn the_mark_lands_in_the_frame_it_is_listed_in_through_bevys_own_systems() {
+/// Runs the nodes listed in alternate frames only through Bevy's own visibility, mesh and material
+/// systems (no GPU). The mark must reach `EntitiesNeedingSpecialization` and `Mesh3d`'s change flag in
+/// exactly the frames the node was listed in, for a node a view sees, and never for one nothing sees. With
+/// `late`, the mark system is ordered after the specialisation check instead of before it, as a negative
+/// control: the mark then lands in the frame after the listing, and the check reports it.
+fn the_mark_lands_in_the_listed_frame(late: bool) -> Result<(), String> {
     use bevy::camera::visibility::{VisibilityPlugin, VisibilitySystems};
     use bevy::pbr::{EntitiesNeedingSpecialization, MaterialPlugin};
     #[derive(Resource)]
@@ -1139,7 +1138,16 @@ fn the_mark_lands_in_the_frame_it_is_listed_in_through_bevys_own_systems() {
         .init_asset::<bevy::image::Image>()
         .init_asset::<bevy::shader::Shader>()
         .add_plugins(MaterialPlugin::<SpriteMaterial>::default());
-    material::adoption(&mut app);
+    if late {
+        app.init_resource::<material::ParityMarks>().add_systems(
+            PostUpdate,
+            material::mark_seen_changes
+                .after(VisibilitySystems::MarkNewlyHiddenEntitiesInvisible)
+                .after(bevy::pbr::check_entities_needing_specialization::<SpriteMaterial>),
+        );
+    } else {
+        material::adoption(&mut app);
+    }
     // The view: sees every node that is not hidden, in the set the cameras' check is in.
     fn view(mut nodes: Query<(&Visibility, &mut ViewVisibility)>) {
         use bevy::camera::visibility::SetViewVisibility;
@@ -1149,9 +1157,13 @@ fn the_mark_lands_in_the_frame_it_is_listed_in_through_bevys_own_systems() {
             }
         }
     }
-    fn list(nodes: Res<Nodes>, mut marks: ResMut<material::ParityMarks>) {
-        marks.push(nodes.0);
-        marks.push(nodes.1);
+    fn list(nodes: Res<Nodes>, mut marks: ResMut<material::ParityMarks>, mut frame: Local<u32>) {
+        // Alternate frames only, so a mark that lands a frame late shows in the frames between.
+        if *frame % 2 == 0 {
+            marks.push(nodes.0);
+            marks.push(nodes.1);
+        }
+        *frame += 1;
     }
     fn look(
         mut saw: ResMut<Saw>,
@@ -1168,14 +1180,42 @@ fn the_mark_lands_in_the_frame_it_is_listed_in_through_bevys_own_systems() {
     let spawn = |app: &mut App, v: Visibility| app.world_mut().spawn((Mesh3d(Handle::default()), MeshMaterial3d::<SpriteMaterial>(Handle::default()), v)).id();
     let (seen, unseen) = (spawn(&mut app, Visibility::Inherited), spawn(&mut app, Visibility::Hidden));
     app.insert_resource(Nodes(seen, unseen));
-    for n in 0..8 {
+    for n in 0..12u32 {
         app.update();
         let saw = app.world().resource::<Saw>();
-        if n < 3 {
+        if n < 4 {
             // Spawn and the first frames settle (added components count as changed).
             continue;
         }
-        assert!(saw.specialise.contains(&seen) && !saw.specialise.contains(&unseen), "frame {n}: specialisation set {:?}", saw.specialise);
-        assert!(saw.mesh_changed.contains(&seen) && !saw.mesh_changed.contains(&unseen), "frame {n}: changed meshes {:?}", saw.mesh_changed);
+        // The node is listed in frames 0, 2, 4, ...
+        let listed = n % 2 == 0;
+        // `Mesh3d`'s change flag is the mark's trace in exactly the frame it lands (Bevy's private system
+        // turns a changed material into a changed mesh in the same frame); the specialisation set also
+        // holds nodes for other reasons (asset events of the default handles), so it is only required
+        // to hold the node in the frames it was listed in.
+        let (s, m) = (saw.specialise.contains(&seen), saw.mesh_changed.contains(&seen));
+        if (listed && !s) || m != listed {
+            return Err(format!("frame {n}: listed {listed}, in the specialisation set {s}, mesh changed {m}"));
+        }
+        if saw.mesh_changed.contains(&unseen) {
+            return Err(format!("frame {n}: the node nothing sees was marked"));
+        }
     }
+    Ok(())
+}
+
+/// The mark reaches Bevy's specialisation and mesh re-extraction in the frame `animate` listed the node,
+/// not a frame later (see [`the_mark_lands_in_the_listed_frame`]). The PostUpdate schedule builds with
+/// the mark's two orderings (no cycle).
+#[test]
+fn the_mark_lands_in_the_frame_it_is_listed_in_through_bevys_own_systems() {
+    the_mark_lands_in_the_listed_frame(false).unwrap_or_else(|e| panic!("{e}"));
+}
+
+/// Negative control of the test above: a mark ordered after the specialisation check lands a frame late,
+/// and the check says so.
+#[test]
+fn the_same_check_sees_a_mark_that_lands_a_frame_late() {
+    let e = the_mark_lands_in_the_listed_frame(true).expect_err("the late mark must be seen");
+    assert!(e.contains("listed"), "{e}");
 }
