@@ -884,7 +884,7 @@ fn gate_fields(
     regions: Res<crate::render::fog_objects::FogRegions>,
     sights: Res<crate::render::fog_objects::RegionSights>,
     mut fields: Query<&mut NebulaField>,
-    mut materials: ResMut<Assets<NebulaMaterial>>,
+    materials: ResMut<Assets<NebulaMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
     use crate::render::fog_objects::Sight;
