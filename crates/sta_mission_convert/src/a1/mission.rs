@@ -21,7 +21,6 @@ use std::path::{Path, PathBuf};
 use indexmap::IndexMap;
 
 use crate::disasm::Ins;
-use crate::dsl::Dsl;
 use crate::emit::{render_function, Namer};
 use crate::format::{a1_lua_ident, lua_str, py_hex};
 use crate::lift::Lifted;
@@ -52,7 +51,7 @@ pub fn norm(why: &str) -> String {
     let mut out = String::new();
     let mut i = 0;
     while i < b.len() {
-        if b[i] == b'0' && i + 2 < b.len() + 0 && b[i + 1] == b'x' && matches!(b[i + 2], b'0'..=b'9' | b'a'..=b'f') {
+        if b[i] == b'0' && i + 2 < b.len() && b[i + 1] == b'x' && matches!(b[i + 2], b'0'..=b'9' | b'a'..=b'f') {
             let mut j = i + 2;
             while j < b.len() && matches!(b[j], b'0'..=b'9' | b'a'..=b'f') {
                 j += 1;
@@ -164,12 +163,7 @@ pub fn lift_mission(s: &A1Dll<'_>, r: Option<&A1Dll<'_>>) -> Result<MissionLift>
                 }
             }
         }
-        for (c, f) in &out.conds {
-            if !rfuncs.contains_key(c) {
-                // `rfuncs.update({c: f ...})`: only for the totals below
-                let _ = f;
-            }
-        }
+        // `rfuncs.update({c: f for c, f in conds.items() if c not in rfuncs})`, then the totals
         let cond_addrs: HashSet<i64> = out.conds.keys().copied().collect();
         for f in rfuncs.values().chain(out.conds.iter().filter(|(c, _)| !rfuncs.contains_key(*c)).map(|(_, f)| f)) {
             if !cond_addrs.contains(&f.addr) {
@@ -439,7 +433,7 @@ pub fn convert_dlls(s: &A1Dll<'_>, r: Option<&A1Dll<'_>>, map_name: Option<&str>
     let mut cnames: HashMap<i64, String> = HashMap::new();
     let mut used: HashSet<String> = HashSet::new();
     for ru in &ml.rules {
-        if !cnames.contains_key(&ru.cond) {
+        cnames.entry(ru.cond).or_insert_with(|| {
             let base = format!("R_{}", a1_lua_ident(&ru.name));
             let (mut n, mut k) = (base.clone(), 1);
             while used.contains(&n) {
@@ -447,8 +441,8 @@ pub fn convert_dlls(s: &A1Dll<'_>, r: Option<&A1Dll<'_>>, map_name: Option<&str>
                 n = format!("{base}_{k}");
             }
             used.insert(n.clone());
-            cnames.insert(ru.cond, n);
-        }
+            n
+        });
     }
     l.push("-- ---------------------------------------------------------------- rule conditions".to_owned());
     if let Some(r) = r {
@@ -630,7 +624,3 @@ pub fn convert_install(
     }
     Ok(run)
 }
-
-/// Keeps the `Dsl` import used for the documentation links.
-#[allow(dead_code)]
-type _D<'a> = Dsl<'a>;

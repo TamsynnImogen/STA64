@@ -35,7 +35,7 @@ fn before_at(msg: &str) -> &str {
 }
 
 /// `a, b = raw` for a list of known length: `ValueError` with CPython's text otherwise.
-fn unpack<'p>(raw: &'p [Py], n: usize) -> Result<&'p [Py]> {
+fn unpack(raw: &[Py], n: usize) -> Result<&[Py]> {
     if raw.len() < n {
         return py_err("ValueError", format!("not enough values to unpack (expected {n}, got {})", raw.len()));
     }
@@ -129,7 +129,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
         self.snap(
             st,
             stmts,
-            &|e| Ok(e.tag_in(&["obj", "elem", "vfield", "glob", "var", "loc"])?),
+            &|e| e.tag_in(&["obj", "elem", "vfield", "glob", "var", "loc"]),
             Py::None,
         )?;
         let mut args = Vec::new();
