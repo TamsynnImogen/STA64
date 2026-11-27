@@ -1337,6 +1337,7 @@ fn authored_shot(path: ShotPath, geom: Geom, radius: f32, sprite: &str) -> Stock
         last_end: Vec3::ZERO,
         shield_end: Vec3::ZERO,
         pinned: false,
+        hidden_shooter: false,
         muzzle_flare: None,
         impact_flare: None,
         arrived: false,

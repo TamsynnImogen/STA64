@@ -92,6 +92,11 @@ pub struct WeaponFx {
     /// The target (a unit) has gone: the beam is falling off from there.
     target_lost: bool,
     sustained_slot: Option<u8>,
+    /// The shooter is one the client does not draw (#1145): the shot is drawn only while it is over ground in sight
+    /// (a projectile: where it is now; a beam and the muzzle flare: where they start). Decided once at fire time for
+    /// the shooter, every frame for the ground, and only for a shot with this set. Interim: the original's rule for
+    /// this is not established.
+    hidden_shooter: bool,
 }
 
 impl WeaponFx {
@@ -234,16 +239,6 @@ pub(crate) fn spawn_fx(
                 if def.a1_special.is_some_and(|s| super::a1::tracked(s.kind)) { continue; }
                 // A shooter drawn off its sim place (an orbiting miner) shoots from where it is drawn.
                 let Some(from) = point(&link, *shooter, alpha).map(|p| p + shifted(&offsets, *shooter)) else { continue };
-                // #1145: the fog and shroud layers no longer cover a shot over ground the player has not seen. A shot
-                // of a shooter the client does not draw is drawn only while it is over ground in sight: here, when
-                // its origin or its target is (decided when it is fired; interim, grade: the original's drawing gate
-                // for ordnance is not established, only that it is placed by the cell at its position).
-                if !stock.client_draws(*shooter) {
-                    let to = target_point(&link, &offsets, target, alpha);
-                    if !(stock.ground_in_sight(from) || to.is_some_and(|t| stock.ground_in_sight(t))) {
-                        continue;
-                    }
-                }
                 // The Stock look draws the classes it has a drawing for as the original does (`stock_shots`);
                 // the Remaster look, and every other class, take what follows.
                 if stock.try_spawn(&mut cmds, &link, &clock, &offsets, def, *shooter, *weapon, *hardpoint, target) {
@@ -281,6 +276,7 @@ pub(crate) fn spawn_fx(
                     seed,
                     target_lost: false,
                     sustained_slot,
+                    hidden_shooter: !matches!(kind, FxKind::Impact) && !stock.client_draws(*shooter),
                 };
                 // Refit's emitter flare: `Fx::flare` at the start, `Emitter` half widths.
                 let flare = Look::flare(recipe.col, FLARE_CORE, 3.5, recipe.star, FLARE_STAR_SHARP, 0.0, 20.0, seed);
@@ -330,6 +326,7 @@ fn envelope(age: f32, life: f32, fade_in: f32) -> f32 {
 
 #[allow(clippy::type_complexity)]
 pub(super) fn update_fx(
+    fog: Option<Res<crate::render::fog::FogState>>,
     mut cmds: Commands,
     offsets: Option<Res<super::super::mining::VisualOffsets>>,
     clock: Res<AnimClock>,
@@ -427,6 +424,14 @@ pub(super) fn update_fx(
                 let h = if r.shape == Shape::Bolt { r.size } else { r.impact * r.width * 0.5 };
                 *tf = quad::billboard(eye, fx.to, Vec2::splat(h));
                 a.0 = envelope(age, fx.life, r.fade_in);
+            }
+        }
+        // #1145: what must not be seen is not drawn, and the layers no longer cover a shot over ground the player has
+        // not seen. A shot of a shooter the client does not draw is shown only while it is over ground in sight.
+        if fx.hidden_shooter {
+            let head = if fx.kind == FxKind::Projectile { fx.start.lerp(fx.to, k) } else { fx.from };
+            if !fog.as_deref().is_none_or(|f| f.grid.visible_at(head.x, -head.z)) {
+                a.0 = 0.0;
             }
         }
     }
@@ -583,23 +588,94 @@ mod tests {
         assert!(cut[gone..].iter().all(|r| r.0 == 0), "it came back");
     }
 
-    /// #1145 (M1): a shot of a shooter the client does not draw is drawn while its origin or its target is over ground
-    /// in sight, and not otherwise; without a grid it is drawn as before.
-    #[test]
-    fn a_shot_of_a_shooter_the_client_does_not_draw_follows_the_ground_under_it() {
-        use crate::render::fog::FogGrid;
-        let drawn = |grid: Option<FogGrid>| beam_run_with(None, None, 70, grid).iter().any(|r| r.0 > 0);
-        let blank = || FogGrid::new([-1000.0, -1000.0], [1000.0, 1000.0]);
-        let seeing = |x: f32, z: f32| {
-            let mut g = blank();
+    /// Per frame, the alpha of each live effect of a shot of `weapon` fired at tick 45 by unit 1 (at the origin) at unit 2
+    /// (600 away along Z), as `(kind, alpha)`. `fog`: a grid exists; `drawn`: the client draws the shooter (it has an
+    /// entity in `SimEntities`).
+    fn shot_alphas(weapon: &str, fog: Option<crate::render::fog::FogGrid>, drawn: bool, frames: usize) -> Vec<Vec<(FxKind, f32)>> {
+        let db = sta_content::fake::db();
+        let weapon = db.key(weapon).unwrap().0;
+        let text = format!(
+            "{{ units: [
+                {{ id: 1, def: \"fx_cruiser\", owner: 0, hull: 800, rails: [{{ at: 0, pos: {{ x: 0, y: 0, z: 0 }} }}] }},
+                {{ id: 2, def: \"fx_frigate\", owner: 1, hull: 400, rails: [{{ at: 0, pos: {{ x: 0, y: 0, z: 600 }} }}] }},
+            ], events: [{{ at: 45, event: {{ Fired: {{ shooter: 1, weapon: {weapon}, hardpoint: 0, target: {{ Entity: 2 }} }} }} }}] }}"
+        );
+        let src = ScriptedSource::from_json5(&text, &db).unwrap();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / TICK_HZ as f64)))
+            .add_plugins(SimLinkPlugin)
+            .insert_resource(ContentRes(std::sync::Arc::new(db)))
+            .insert_resource(SimLink::new(Box::new(src), Box::new(LocalRouter::new()), PlayerId(0)))
+            .add_plugins(WeaponFxPlugin);
+        configure_sets(&mut app);
+        app.init_resource::<crate::sim_link::SimEntities>();
+        if drawn {
+            app.world_mut().resource_mut::<crate::sim_link::SimEntities>().0.insert(EntityId(1), Entity::PLACEHOLDER);
+        }
+        if let Some(grid) = fog {
+            app.insert_resource(crate::render::fog::FogState { grid, updates: 1 });
+        }
+        let mut out = Vec::new();
+        for _ in 0..frames {
+            app.update();
+            let mut q = app.world_mut().query::<(&WeaponFx, &FxAlpha)>();
+            out.push(q.iter(app.world()).map(|(f, a)| (f.kind, a.0)).collect());
+        }
+        out
+    }
+
+    fn lit(frames: &[Vec<(FxKind, f32)>], kind: FxKind) -> Vec<usize> {
+        frames.iter().enumerate().filter(|(_, f)| f.iter().any(|(k, a)| *k == kind && *a > 0.0)).map(|(i, _)| i).collect()
+    }
+
+    fn grid_seeing(cells: &[(f32, f32)]) -> crate::render::fog::FogGrid {
+        let mut g = crate::render::fog::FogGrid::new([-1000.0, -1000.0], [1000.0, 1000.0]);
+        for &(x, z) in cells {
             let c = g.cell_of(x, z).unwrap();
             g.set_cell_for_test(c % g.w, c / g.w, true, true);
-            g
-        };
-        assert!(drawn(None), "no grid: as before");
-        assert!(!drawn(Some(blank())), "over ground never in sight: not drawn");
-        assert!(drawn(Some(seeing(0.0, 0.0))), "its origin over ground in sight: drawn");
-        assert!(drawn(Some(seeing(0.0, 600.0))), "its target over ground in sight: drawn");
+        }
+        g
+    }
+
+    /// #1145 (R1): a shot of a shooter the client does not draw is drawn only where it is over ground in sight, by
+    /// where it is: a projectile every frame by the ground under its head, a beam and the muzzle flare by their
+    /// origin. Interim (the original's rule is not established).
+    #[test]
+    fn a_projectile_of_a_hidden_shooter_is_drawn_only_while_over_ground_in_sight() {
+        let torp = |fog, drawn| shot_alphas("fx_torpedo", fog, drawn, 140);
+        let blank = || grid_seeing(&[]);
+        let all = torp(None, false);
+        let all_lit = lit(&all, FxKind::Projectile);
+        assert!(all_lit.len() > 5, "no grid: drawn as before ({all_lit:?})");
+        assert!(lit(&torp(Some(blank()), false), FxKind::Projectile).is_empty(), "over ground never in sight: not drawn");
+        // Sight only around the target: the projectile shows when it arrives there, not at the start.
+        let near_target = lit(&torp(Some(grid_seeing(&[(0.0, 550.0), (0.0, 600.0), (0.0, 450.0)])), false), FxKind::Projectile);
+        assert!(!near_target.is_empty() && near_target[0] > all_lit[0], "entering sight: drawn later than with no grid ({near_target:?} against {all_lit:?})");
+        // Sight only around the shooter: it shows at the start and goes when it leaves.
+        let near_origin = lit(&torp(Some(grid_seeing(&[(0.0, 0.0), (0.0, 100.0), (0.0, -100.0)])), false), FxKind::Projectile);
+        assert!(!near_origin.is_empty() && near_origin.last() < all_lit.last(), "leaving sight: gone before it ends ({near_origin:?} against {all_lit:?})");
+        // A shooter the client draws (own, allied: it has an entity): always drawn, whatever the ground.
+        assert_eq!(lit(&torp(Some(blank()), true), FxKind::Projectile), all_lit, "a drawn shooter's shot is as with no grid");
+    }
+
+    #[test]
+    fn a_beam_of_a_hidden_shooter_is_drawn_by_its_origin_and_a_drawn_shooters_always() {
+        let beam = |fog, drawn| shot_alphas("fx_beam", fog, drawn, 70);
+        let all = beam(None, false);
+        assert!(!lit(&all, FxKind::Beam).is_empty() && !lit(&all, FxKind::Flash).is_empty(), "no grid: drawn as before");
+        // Origin never in sight, target in sight: the beam and the muzzle flare are not drawn (they would show where
+        // the shooter is); the flare where the beam lands is the target's and follows it.
+        let target_only = beam(Some(grid_seeing(&[(0.0, 600.0), (0.0, 500.0)])), false);
+        assert!(lit(&target_only, FxKind::Beam).is_empty() && lit(&target_only, FxKind::Flash).is_empty(), "hidden origin: not drawn");
+        assert!(!lit(&target_only, FxKind::Impact).is_empty(), "the flare at the drawn target stays");
+        // Origin in sight: drawn.
+        let origin = beam(Some(grid_seeing(&[(0.0, 0.0)])), false);
+        assert_eq!(lit(&origin, FxKind::Beam), lit(&all, FxKind::Beam));
+        // Own and allied shooters (drawn): always.
+        let own = beam(Some(grid_seeing(&[])), true);
+        assert_eq!(lit(&own, FxKind::Beam), lit(&all, FxKind::Beam));
+        assert_eq!(lit(&own, FxKind::Flash), lit(&all, FxKind::Flash));
     }
 
     #[test]

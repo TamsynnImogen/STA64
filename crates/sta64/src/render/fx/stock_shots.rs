@@ -398,6 +398,9 @@ pub struct StockShot {
     shield_end: Vec3,
     /// The target was already gone from the view when the shot was fired (the shot killed it).
     pinned: bool,
+    /// The shooter is one the client does not draw (#1145): the shot is drawn only while it is over ground in sight
+    /// (a beam: where it starts; a pulse or torpedo: where it is now). Interim: the original's rule is not established.
+    hidden_shooter: bool,
     /// The muzzle flare this shot raises on its first frame (a beam of a class with one).
     muzzle_flare: Option<FlareSpec>,
     /// The impact flare's sprite and size, until the beam has reached its target (once per beam).
@@ -605,6 +608,7 @@ impl StockShots<'_, '_> {
             impact_flare,
             arrived: false,
             geom: Geom::None,
+            hidden_shooter: !self.client_draws(shooter),
         });
         true
     }
@@ -764,6 +768,17 @@ pub(super) fn update_shots(
                     Geom::Segment { a: head, b: tail }
                 }
             };
+        }
+        // #1145: a shot of a shooter the client does not draw is drawn only while it is over ground in sight.
+        if s.hidden_shooter {
+            let head = match s.geom {
+                Geom::Billboard { c } => c,
+                Geom::Segment { a, .. } if s.path != ShotPath::Ribbon => a,
+                _ => s.muzzle,
+            };
+            if !ctx.ground_in_sight(head) {
+                s.geom = Geom::None;
+            }
         }
     }
 }
