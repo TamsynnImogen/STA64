@@ -33,6 +33,8 @@ use sha2::{Digest, Sha256};
 
 /// The manifest's file name, in the output folder.
 pub const MANIFEST: &str = ".sta_mission_convert.manifest";
+/// How many aside names (`.old`, `.old2`, ...) are tried for one file.
+pub const MAX_ASIDE: usize = 99;
 const MANIFEST_HEAD: &str = "sta_mission_convert-manifest 1";
 
 fn sha_hex(b: &[u8]) -> String {
@@ -205,28 +207,39 @@ impl OutDir {
     }
 
     /// Renames `missions/<name>` to a name the tool never writes and the game never lists
-    /// (`<name>.old`, `<name>.old2`, ...): nothing is overwritten.
+    /// (`<name>.old`, `<name>.old2`, ... up to [`MAX_ASIDE`]): nothing is overwritten. Only a name
+    /// that exists is skipped; any other error, or no free name, is an error with a clear text.
     fn move_aside(&mut self, name: &str) -> Result<(), String> {
         let mdir = self.missions();
-        for k in 1.. {
+        for k in 1..=MAX_ASIDE {
             let new = if k == 1 { format!("{name}.old") } else { format!("{name}.old{k}") };
             let dest = mdir.join(&new);
             if fs::symlink_metadata(&dest).is_ok() {
                 continue;
             }
             // reserve the name exclusively, then rename over our own empty reservation
-            if fs::OpenOptions::new().write(true).create_new(true).open(&dest).is_err() {
-                continue;
+            match fs::OpenOptions::new().write(true).create_new(true).open(&dest) {
+                Ok(_) => {}
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => {
+                    return Err(format!("cannot move {} aside ({}: {e})", mdir.join(name).display(), dest.display()));
+                }
             }
-            self.check()?;
+            if let Err(m) = self.check() {
+                let _ = fs::remove_file(&dest);
+                return Err(m);
+            }
             if let Err(e) = fs::rename(mdir.join(name), &dest) {
                 let _ = fs::remove_file(&dest);
-                return Err(format!("{}: {e}", mdir.join(name).display()));
+                return Err(format!("cannot move {} aside: {e}", mdir.join(name).display()));
             }
             self.moved.push((name.to_owned(), new));
             return Ok(());
         }
-        unreachable!("an unused name exists")
+        Err(format!(
+            "cannot move {} aside: the names {name}.old to {name}.old{MAX_ASIDE} are all taken",
+            mdir.join(name).display()
+        ))
     }
 
     /// The files moved aside since the last call: `(old name, new name)`.
@@ -364,7 +377,7 @@ impl OutDir {
         match fs::symlink_metadata(&target) {
             Err(_) => {}
             Ok(_) if self.is_ours(name, &target) => {}
-            Ok(_) if self.is_python_output(&target) => self.move_aside(name)?,
+            Ok(_) if self.is_python_output(&target) => self.move_aside(name).map_err(WriteError::Collision)?,
             Ok(_) => {
                 return Err(WriteError::Collision(format!(
                     "{} exists and this tool did not write it (or it changed since): refusing to overwrite it",

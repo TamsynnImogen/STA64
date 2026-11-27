@@ -690,3 +690,82 @@ fn the_command_line_reports_the_files_it_moves_aside() {
     assert!(r.out.iter().all(|l| !l.contains("moved aside")), "{:?}", r.out);
     assert_eq!(fs::read(out.join("missions/fed1.lua.old")).unwrap(), PY_HEADER.as_bytes());
 }
+
+// ------------------------------------------------------------------ the aside names, the exit code
+
+#[cfg(unix)]
+#[test]
+fn a_read_only_folder_with_a_python_file_is_an_error_not_a_loop() {
+    use std::os::unix::fs::PermissionsExt;
+    let t = TempDir::new("safe-readonly");
+    let (_, out) = ours_dir(&t);
+    let m = out.join("missions");
+    touch(&m.join("old1.lua"), PY_HEADER.as_bytes());
+    fs::set_permissions(&m, fs::Permissions::from_mode(0o555)).unwrap();
+    // a user that can write anyway (root) cannot show this
+    let probe = m.join(".probe");
+    if fs::write(&probe, b"x").is_ok() {
+        let _ = fs::remove_file(&probe);
+        fs::set_permissions(&m, fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+    let mut o = OutDir::inspect(&out, out.clone(), true).unwrap();
+    let e = o.wipe().unwrap_err();
+    assert!(e.contains("cannot move") && e.contains("aside"), "{e}");
+    // and a write that would replace it fails that file, with a collision (the mission fails)
+    let e = o.write("old1.lua", b"new").unwrap_err();
+    assert!(matches!(e, sta_mission_convert::output::WriteError::Collision(_) | sta_mission_convert::output::WriteError::Fatal(_)), "{e}");
+    fs::set_permissions(&m, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(fs::read(m.join("old1.lua")).unwrap(), PY_HEADER.as_bytes(), "nothing was lost");
+    assert!(fs::read_dir(&m).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().contains(".old")), "no reservation stays");
+}
+
+#[test]
+fn when_every_aside_name_is_taken_the_file_stays_and_the_error_says_so() {
+    let t = TempDir::new("safe-aside-cap");
+    let (_, out) = ours_dir(&t);
+    let m = out.join("missions");
+    touch(&m.join("old1.lua"), PY_HEADER.as_bytes());
+    touch(&m.join("old1.lua.old"), b"taken");
+    for k in 2..=sta_mission_convert::output::MAX_ASIDE {
+        touch(&m.join(format!("old1.lua.old{k}")), b"taken");
+    }
+    let mut o = OutDir::inspect(&out, out.clone(), true).unwrap();
+    let e = o.wipe().unwrap_err();
+    assert!(e.contains("are all taken"), "{e}");
+    assert_eq!(fs::read(m.join("old1.lua")).unwrap(), PY_HEADER.as_bytes());
+    assert_eq!(fs::read(m.join("old1.lua.old")).unwrap(), b"taken");
+    // one name free in the middle is found
+    fs::remove_file(m.join("old1.lua.old57")).unwrap();
+    let mut o = OutDir::inspect(&out, out.clone(), true).unwrap();
+    o.wipe().unwrap();
+    assert_eq!(fs::read(m.join("old1.lua.old57")).unwrap(), PY_HEADER.as_bytes());
+    assert!(!m.join("old1.lua").exists());
+}
+
+/// A run in which any mission failed exits 1 even when other scripts were written, and still
+/// prints the warning and the summary (the Python wrapper exits 0 there).
+#[test]
+fn a_run_with_a_failed_mission_exits_one_even_when_other_scripts_exist() {
+    let t = TempDir::new("safe-exit");
+    let w = resolve(t.path()).unwrap();
+    let root = w.join("Armada");
+    a1_install(&root);
+    touch(&root.join("missions/x2S.dsl"), b"junk");
+    touch(&root.join("missions/x2R.drl"), b"junk");
+    touch(&root.join("bzn/fed2.bzn"), b"x2R.drl");
+    let key = cli::a1_cache_key("fed1", &root.join("missions/x1S.dsl"), &root.join("missions/x1R.drl")).unwrap();
+    let cdir = w.join("cache");
+    Cache::new(&cdir)
+        .put(&key, &Entry::Converted { source: b"-- ok\n".to_vec(), console: vec!["  fed1: ok".into()] })
+        .unwrap();
+    let r = run(&["--install", &s(&root), "--out", &s(&w.join("out")), "--cache-dir", &s(&cdir)]);
+    assert_eq!(r.code, 1, "{:?} {}", r.out, r.err);
+    assert!(r.out.iter().any(|l| l.starts_with("  FAIL fed2: ")));
+    assert!(r.out.iter().any(|l| l.starts_with("warning: some missions failed")));
+    assert!(r.out.iter().any(|l| l.starts_with("1 mission scripts in ")));
+    assert_eq!(fs::read(w.join("out/missions/fed1.lua")).unwrap(), b"-- ok\n");
+    // no failure: exit 0
+    let r = run(&["--install", &s(&root), "--out", &s(&w.join("out")), "--cache-dir", &s(&cdir), "--only", "fed1"]);
+    assert_eq!(r.code, 0, "{:?} {}", r.out, r.err);
+}

@@ -32,6 +32,8 @@
 //!   cannot pass it; `--keep-foreign`, `--cache` and `--cache-dir` are new ([`crate::cache`]: a
 //!   mission whose inputs and build are unchanged is not converted again, its console lines and file
 //!   are replayed; failures are not cached);
+//! - a run in which any mission failed or was skipped exits 1 even when other scripts were written
+//!   (it still prints the warning and the summary); the Python wrapper exits 0 there;
 //! - the listing of a DLL comes from the Rust decoder (the caller's closure), not from `objdump`;
 //! - the Python's tracebacks are one line of text on stderr (a message, exit code 1);
 //! - `--help` prints this tool's own help; an option value that looks like an option (`--out -x`)
@@ -478,7 +480,9 @@ pub fn run<S: AsRef<OsStr>>(args: &[S], env: &Env, io: &mut Io<'_>, listing: &mu
     }
     say(io, &format!("{n} mission scripts in {}", given_out.display()));
     say(io, "Start the game as usual; those missions are listed as experimental.");
-    0
+    // The Python wrapper exits 0 here. A run in which any mission failed or was skipped exits 1
+    // (a declared difference), so that a script can tell.
+    i32::from(code != 0)
 }
 
 /// One line per file moved aside since the last call; how many.
