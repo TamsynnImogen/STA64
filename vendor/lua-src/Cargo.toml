@@ -1,0 +1,25 @@
+# Vendored from crates.io `lua-src` 551.0.2 (MIT, see LICENSE and VENDORED.md), with
+# only the Lua 5.3.6 sources and STA64's reproducibility patch. The workspace uses it through
+# `[patch.crates-io]`; it is not a workspace member.
+[package]
+edition = "2024"
+name = "lua-src"
+version = "551.0.2"
+authors = ["Aleksandr Orlenko <zxteam@protonmail.com>"]
+description = "Sources of Lua 5.3 and logic to build them (STA64 patched copy)."
+license = "MIT"
+repository = "https://github.com/mlua-rs/lua-src-rs"
+publish = false
+autotests = false
+autoexamples = false
+autobenches = false
+
+[features]
+ucid = []
+
+[lib]
+name = "lua_src"
+path = "src/lib.rs"
+
+[dependencies]
+cc = "1.2"
