@@ -32,18 +32,33 @@ compares strings by locale. The guarantees for mission authors are in
 
 Every change is marked `STA64` in the source.
 
-- `lobject.h`, `ltable.h`, `ltable.c`, `lvm.c` (`luaV_finishset`):
-  **insertion order**. The hash part of a table keeps a doubly linked list of
-  its nodes in insertion order; `next` walks the array part in index order and
-  then that list. A key assigned again after it was set to nil moves to the
-  end (`luaH_sta64touch`). The hash part is rebuilt after as many insertions
-  as it has nodes, instead of when the free-position search fails, so the
-  moment depends only on the script's operations, not on where keys hashed.
-  A rebuild re-inserts the hash part in its order, then the vanishing slice
-  of the array part. The key just past the array part (`#t + 1` of a list)
-  doubles the array part instead of going to the hash part, so a list kept
-  without holes is always in the array part. Cost: 8 bytes per hash node (40
-  instead of 32 on 64-bit targets), 16 per table (72 instead of 56).
+- `lobject.h`, `ltable.h`, `ltable.c`, `lvm.c` (`luaV_finishset`),
+  `lstate.h`/`lstate.c`, `lapi.c`: **insertion order**. The hash part of a
+  table keeps a doubly linked list of its nodes in insertion order; `next`
+  walks the array part in index order and then that list.
+  - A node is never reused before a rebuild: a key set to nil keeps its node
+    and stays findable; assigned again it moves to the end
+    (`luaH_sta64touch`). So every new key takes exactly one free node, and
+    the stock trigger (no free node left) comes after a number of new keys
+    that depends only on the operations, never on where keys hashed.
+  - A rebuild (`sta64_rebuild`) normally rebuilds the hash part alone at a
+    size that leaves a quarter free; the full rehash (stock sizing of both
+    parts, which walks the array part) runs only once the new keys since the
+    last one reach half the size of both parts. Both are amortised constant
+    per new key. A rebuild re-inserts the hash part in its order, then the
+    vanishing slice of the array part.
+  - The key just past the array part doubles the array part while that part
+    is more than half used (a failed check is remembered for the array size,
+    `sta64_noappend`), so a list kept by list operations always lives in the
+    array part, and queues or ever-growing id registries stay bounded.
+  - **Rule: `luaH_resize` never runs the STA64 insert rules.** It re-inserts
+    through `sta64_reinsert`, which only places a key in the array or a free
+    node and never grows, rebuilds or allocates; a nested resize, or a
+    `luaH_newkey` during a resize, aborts (`sta64_resizing`). Stock Lua has
+    the same invariant implicitly; the patch's rules would break it.
+  - `lua_sta64_tablework` counts the slots rebuilds visit (for the cost test).
+  - Cost: 8 bytes per hash node (40 instead of 32 on 64-bit targets), 24 per
+    table (80 instead of 56).
 - `lgc.c`: **no weak tables** (`__mode` is ignored, every table is traversed
   as strong, whoever set the metatable), and the key of an entry set to nil
   stays alive until its table is rebuilt instead of becoming a dead key, so
@@ -63,6 +78,23 @@ Every change is marked `STA64` in the source.
   `lua_sta64_refid` is also the link-time marker the tests check.
 - `lvm.c` (`l_strcmp`): **string comparison by bytes** (`strcmp`) instead of
   `strcoll`, so `<` on strings does not depend on the process locale.
+- `lstrlib.c`, `lobject.c`: **no locale**: C-locale character classes and
+  case (`string.lower/upper`, pattern classes); numbers print with a dot and
+  a string with the locale's radix character is not a number.
+- `lobject.c`, `lstrlib.c`, `luaconf.h`, `llimits.h`, `lstate.c`, `lua.h`:
+  **the same float text everywhere**: "nan", "inf", "-inf" for `tostring`
+  and `%e %f %g`; `%a` is always Lua's own formatter (no flags, width or
+  precision); `^` calls the power function the host sets with
+  `lua_sta64_setpow` (STA64's sandbox sets `libm::pow`).
+
+## Constraints for STA64 code
+
+- Never give a thread its own hook (`Thread::set_hook`): mlua keeps per-thread
+  hooks in a weak-keyed table, and with `__mode` ignored those threads would
+  never be collected. STA64 uses only global hooks.
+- Host code running in a mission state should not turn references into text
+  (`tostring` of tables, `Value::to_string` on them): that hands out the next
+  reference id and shifts the script's later ids.
 
 ## Updating Lua or lua-src
 
@@ -73,8 +105,17 @@ Every change is marked `STA64` in the source.
 2. Re-apply every `STA64` hunk: `git diff <the previous pristine commit>
    <the previous patched commit> -- vendor/lua-src` is the patch to port.
 3. Run the guards: `tools/agent-cargo test -p sta_mission --test lua_semantics
-   --test lua_repro` (semantics; the authored hazard scripts in several
-   states and in child processes) and then `test -p sta_mission` in full.
-   Add the `full-ci` label to the PR (four operating systems build this C).
+   --test lua_tables --test lua_repro --test lua_numbers --test lua_locale`
+   (semantics; table internals with a differential test against a model; the
+   authored hazard scripts in several states and in child processes; number
+   text; locale independence) and then `test -p sta_mission` in full. Add the
+   `full-ci` label to the PR (four operating systems build this C).
+4. Run the same tests once with the C under AddressSanitizer (Linux, gcc's
+   `libasan`; a separate target directory), adding to the command:
+   `--target-dir target/asan --config "env.CFLAGS.value='-fsanitize=address -fno-omit-frame-pointer -g'"
+   --config "env.CFLAGS.force=true" --config "env.ASAN_OPTIONS='detect_leaks=0:abort_on_error=1:verify_asan_link_order=0'"
+   --config "target.x86_64-unknown-linux-gnu.rustflags=['-Clink-arg=-fsanitize=address','-Clink-arg=-lasan']"`,
+   and once with Lua's internal assertions: `--target-dir target/luadebug
+   --config "env.CFLAGS.value='-DLUA_DEBUG'" --config "env.CFLAGS.force=true"`.
 
 Keep the changes small and local, and record each one here.

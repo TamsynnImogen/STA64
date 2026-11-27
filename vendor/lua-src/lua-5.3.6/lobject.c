@@ -275,8 +275,11 @@ static const char *l_str2d (const char *s, lua_Number *result) {
   const char *endptr;
   const char *pmode = strpbrk(s, ".xXnN");
   int mode = pmode ? ltolower(cast_uchar(*pmode)) : 0;
+  char point = lua_getlocaledecpoint();
   if (mode == 'n')  /* reject 'inf' and 'nan' */
     return NULL;
+  if (point != '.' && strchr(s, point) != NULL)
+    return NULL;  /* STA64: only a dot is a radix mark, whatever the locale */
   endptr = l_str2dloc(s, result, mode);  /* try to convert */
   if (endptr == NULL) {  /* failed? may be a different locale */
     char buff[L_MAXLENNUM + 1];
@@ -375,10 +378,24 @@ void luaO_tostring (lua_State *L, StkId obj) {
   if (ttisinteger(obj))
     len = lua_integer2str(buff, sizeof(buff), ivalue(obj));
   else {
-    len = lua_number2str(buff, sizeof(buff), fltvalue(obj));
+    lua_Number n = fltvalue(obj);
+    /* STA64 (issue #1300): the same text on every platform and in every
+       locale: "nan", "inf", "-inf", and a dot as the radix character */
+    if (n != n || n == (lua_Number)HUGE_VAL || n == -(lua_Number)HUGE_VAL) {
+      const char *w = (n != n) ? "nan" : (n > 0 ? "inf" : "-inf");
+      len = strlen(w);
+      memcpy(buff, w, len + 1);
+    }
+    else {
+      char point = lua_getlocaledecpoint();
+      size_t i;
+      len = lua_number2str(buff, sizeof(buff), n);
+      if (point != '.')
+        for (i = 0; i < len; i++) if (buff[i] == point) buff[i] = '.';
+    }
 #if !defined(LUA_COMPAT_FLOATSTRING)
     if (buff[strspn(buff, "-0123456789")] == '\0') {  /* looks like an int? */
-      buff[len++] = lua_getlocaledecpoint();
+      buff[len++] = '.';  /* STA64: a dot, not the locale's point */
       buff[len++] = '0';  /* adds '.0' to result */
     }
 #endif

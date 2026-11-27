@@ -283,7 +283,10 @@ typedef unsigned long Instruction;
 
 /* exponentiation */
 #if !defined(luai_numpow)
-#define luai_numpow(L,a,b)      ((void)L, l_mathop(pow)(a,b))
+/* STA64 (issue #1300): the host may give '^' its own power function (STA64
+   gives a platform-independent one); see 'lua_sta64_setpow' */
+LUAI_FUNC lua_Number luaE_sta64pow (lua_State *L, lua_Number a, lua_Number b);
+#define luai_numpow(L,a,b)      luaE_sta64pow(L,a,b)
 #endif
 
 /* the others are quite standard operations */

@@ -633,7 +633,9 @@
 ** Otherwise, you can leave 'lua_number2strx' undefined and Lua will
 ** provide its own implementation.
 */
-#if !defined(LUA_USE_C89)
+/* STA64 (issue #1300): always Lua's own '%a' formatter (the C libraries'
+   texts differ between platforms); it takes no flags, width or precision */
+#if 0 && !defined(LUA_USE_C89)
 #define lua_number2strx(L,b,sz,f,n)  \
 	((void)L, l_sprintf(b,sz,f,(LUAI_UACNUMBER)(n)))
 #endif

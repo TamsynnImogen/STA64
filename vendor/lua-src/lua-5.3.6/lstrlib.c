@@ -26,6 +26,54 @@
 
 
 /*
+** {======================================================
+** STA64 (issue #1300): character classes and case conversion of the C
+** locale, whatever locale the process runs in, so 'string.lower/upper' and
+** the pattern classes (%a, %w, ...) give the same result on every machine.
+** =======================================================
+*/
+static int sta64_islower (int c) { return c >= 'a' && c <= 'z'; }
+static int sta64_isupper (int c) { return c >= 'A' && c <= 'Z'; }
+static int sta64_isdigit (int c) { return c >= '0' && c <= '9'; }
+static int sta64_isalpha (int c) { return sta64_islower(c) || sta64_isupper(c); }
+static int sta64_isalnum (int c) { return sta64_isalpha(c) || sta64_isdigit(c); }
+static int sta64_iscntrl (int c) { return (c >= 0 && c < 32) || c == 127; }
+static int sta64_isgraph (int c) { return c > 32 && c < 127; }
+static int sta64_ispunct (int c) { return sta64_isgraph(c) && !sta64_isalnum(c); }
+static int sta64_isspace (int c) { return c == ' ' || (c >= '\t' && c <= '\r'); }
+static int sta64_isxdigit (int c) {
+  return sta64_isdigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+static int sta64_tolower (int c) { return sta64_isupper(c) ? c + ('a' - 'A') : c; }
+static int sta64_toupper (int c) { return sta64_islower(c) ? c - ('a' - 'A') : c; }
+#undef islower
+#undef isupper
+#undef isdigit
+#undef isalpha
+#undef isalnum
+#undef iscntrl
+#undef isgraph
+#undef ispunct
+#undef isspace
+#undef isxdigit
+#undef tolower
+#undef toupper
+#define islower(c)	sta64_islower(c)
+#define isupper(c)	sta64_isupper(c)
+#define isdigit(c)	sta64_isdigit(c)
+#define isalpha(c)	sta64_isalpha(c)
+#define isalnum(c)	sta64_isalnum(c)
+#define iscntrl(c)	sta64_iscntrl(c)
+#define isgraph(c)	sta64_isgraph(c)
+#define ispunct(c)	sta64_ispunct(c)
+#define isspace(c)	sta64_isspace(c)
+#define isxdigit(c)	sta64_isxdigit(c)
+#define tolower(c)	sta64_tolower(c)
+#define toupper(c)	sta64_toupper(c)
+/* }====================================================== */
+
+
+/*
 ** maximum number of captures that a pattern can do during
 ** pattern-matching. This limit is arbitrary, but must fit in
 ** an unsigned char.
@@ -839,9 +887,9 @@ static lua_Number adddigit (char *buff, int n, lua_Number x) {
 
 
 static int num2straux (char *buff, int sz, lua_Number x) {
-  /* if 'inf' or 'NaN', format it like '%g' */
+  /* if 'inf' or 'NaN', format it like '%g' (STA64: as 'tostring' does) */
   if (x != x || x == (lua_Number)HUGE_VAL || x == -(lua_Number)HUGE_VAL)
-    return l_sprintf(buff, sz, LUA_NUMBER_FMT, (LUAI_UACNUMBER)x);
+    return l_sprintf(buff, sz, "%s", x != x ? "nan" : (x > 0 ? "inf" : "-inf"));
   else if (x == 0) {  /* can be -0... */
     /* create "0" or "-0" followed by exponent */
     return l_sprintf(buff, sz, LUA_NUMBER_FMT "x0p+0", (LUAI_UACNUMBER)x);
@@ -937,6 +985,42 @@ static void checkdp (char *buff, int nb) {
     char *ppoint = (char *)memchr(buff, point, nb);
     if (ppoint) *ppoint = '.';  /* change it to a dot */
   }
+}
+
+
+/*
+** STA64 (issue #1300): a non-finite float under '%e %f %g' (any case) is
+** written as "nan", "inf" or "-inf" (upper case for the upper-case
+** conversions), with the flags '-', '+' and ' ' and the width of 'form',
+** instead of the C library's text, which differs between platforms.
+*/
+static int sta64_nonfinite (char *buff, int sz, const char *form,
+                            lua_Number x) {
+  const char *p = form + 1;  /* skip '%' */
+  int left = 0, plus = 0, space = 0, width = 0, len, n = 0, i;
+  char text[8];
+  const char *word = (x != x) ? "nan" : "inf";
+  int upper = 0;
+  for (; *p == '-' || *p == '+' || *p == ' ' || *p == '#' || *p == '0'; p++) {
+    if (*p == '-') left = 1;
+    else if (*p == '+') plus = 1;
+    else if (*p == ' ') space = 1;
+  }
+  for (; *p >= '0' && *p <= '9'; p++) width = width * 10 + (*p - '0');
+  while (*p != '\0' && p[1] != '\0') p++;  /* to the conversion letter */
+  upper = (*p >= 'A' && *p <= 'Z');
+  len = 0;
+  if (x < 0) text[len++] = '-';
+  else if (plus) text[len++] = '+';
+  else if (space) text[len++] = ' ';
+  for (i = 0; i < 3; i++) text[len++] = upper ? toupper(uchar(word[i])) : word[i];
+  text[len] = '\0';
+  if (width >= sz) width = sz - 1;
+  if (!left) for (; n < width - len; n++) buff[n] = ' ';
+  memcpy(buff + n, text, len); n += len;
+  if (left) for (; n < width; n++) buff[n] = ' ';
+  buff[n] = '\0';
+  return n;
 }
 
 
@@ -1049,12 +1133,18 @@ static int str_format (lua_State *L) {
           addlenmod(form, LUA_NUMBER_FRMLEN);
           nb = lua_number2strx(L, buff, MAX_ITEM, form,
                                   luaL_checknumber(L, arg));
+          checkdp(buff, nb);  /* STA64: a dot whatever the locale */
           break;
         case 'e': case 'E': case 'f':
         case 'g': case 'G': {
           lua_Number n = luaL_checknumber(L, arg);
           addlenmod(form, LUA_NUMBER_FRMLEN);
-          nb = l_sprintf(buff, MAX_ITEM, form, (LUAI_UACNUMBER)n);
+          if (n != n || n == (lua_Number)HUGE_VAL || n == -(lua_Number)HUGE_VAL)
+            nb = sta64_nonfinite(buff, MAX_ITEM, form, n);  /* STA64 */
+          else {
+            nb = l_sprintf(buff, MAX_ITEM, form, (LUAI_UACNUMBER)n);
+            checkdp(buff, nb);  /* STA64: a dot whatever the locale */
+          }
           break;
         }
         case 'q': {

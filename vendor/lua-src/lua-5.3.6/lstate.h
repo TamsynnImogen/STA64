@@ -147,6 +147,7 @@ typedef struct global_State {
   unsigned int sta64_lastid;  /* STA64: last reference id handed out */
   int sta64_resizing;  /* STA64: a table resize is re-inserting entries */
   lu_mem sta64_work;  /* STA64: table slots visited by rebuilds (tests) */
+  lua_Number (*sta64_pow) (lua_Number, lua_Number);  /* STA64: '^' (or NULL) */
   lu_byte currentwhite;
   lu_byte gcstate;  /* state of garbage collector */
   lu_byte gckind;  /* kind of GC running */

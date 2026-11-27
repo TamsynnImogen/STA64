@@ -10,6 +10,7 @@
 #include "lprefix.h"
 
 
+#include <math.h>
 #include <stddef.h>
 #include <string.h>
 
@@ -253,6 +254,22 @@ static void close_state (lua_State *L) {
 }
 
 
+/*
+** STA64 (issue #1300): '^' calls the host's power function when one is set
+** ('lua_sta64_setpow'), so its result does not depend on the C library.
+*/
+lua_Number luaE_sta64pow (lua_State *L, lua_Number a, lua_Number b) {
+  lua_Number (*f) (lua_Number, lua_Number) = G(L)->sta64_pow;
+  return f ? f(a, b) : l_mathop(pow)(a, b);
+}
+
+
+LUA_API void lua_sta64_setpow (lua_State *L,
+                               lua_Number (*f) (lua_Number, lua_Number)) {
+  G(L)->sta64_pow = f;
+}
+
+
 LUA_API lua_State *lua_newthread (lua_State *L) {
   global_State *g = G(L);
   lua_State *L1;
@@ -313,6 +330,7 @@ LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud) {
   g->sta64_lastid = 0;  /* STA64 */
   g->sta64_resizing = 0;
   g->sta64_work = 0;
+  g->sta64_pow = NULL;
   g->gcrunning = 0;  /* no GC while building state */
   g->GCestimate = 0;
   g->strt.size = g->strt.nuse = 0;

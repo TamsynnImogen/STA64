@@ -646,7 +646,8 @@ every peer. Lua's arithmetic is IEEE double precision and identical on every
 platform. Its `math.sin`, `math.cos`, `math.exp`, `math.log`, `math.pow` and
 similar call the platform maths library, whose last bits differ between
 platforms. The runtime replaces them with deterministic implementations, and
-`math.random` with the mission runtime's seeded generator.
+`math.random` with the mission runtime's seeded generator. The `^` operator
+uses the same power function as `math.pow` (see below).
 
 `A2.RandomGetUnsigned(upper)` shares that deterministic stream and its
 `math.randomseed` state. It requires exactly one positive unsigned 32-bit
@@ -663,32 +664,50 @@ policies. Native RNG and mission save/resume parity are not claimed.
 ### Reproducible tables, sorting and references
 
 STA64's bundled Lua is patched (`vendor/lua-src/STA64-PATCH.md`, #1300) so a
-script given the same inputs does the same thing in every Lua state, every
-process and on every machine. What a mission author can rely on:
+script given the same inputs does the same thing in every Lua state and every
+process. What a mission author can rely on:
 
 - `pairs` and `next`: first the list part, keys 1, 2, ..., n in ascending
-  order, for a list kept without holes (filled in order, by `t[#t + 1] = v`,
-  `table.insert`, `table.remove` or a list constructor), whatever other keys
-  the table holds. Then every key that is not a positive integer (strings,
-  booleans, floats, zero and negative integers, tables, functions,
-  coroutines, entity handles) in the order it was added. A key set to nil and
-  added again moves to the end; overwriting a present key keeps its place.
-  Other positive integer keys (sparse, or filled out of order) come in an
-  unspecified place among these, but the same place for the same sequence of
-  operations, in every run. Clearing fields during a traversal is fine;
-  adding keys during one is undefined in Lua (but the same in every run).
-  `ipairs`, `#`, `__pairs` and the `table` functions are unchanged. Host
-  functions that walk a script's table use the same order.
+  order, for a list whose integer keys are only ever written by list
+  operations (`t[#t + 1] = v`, filling 1, 2, 3, ... in order, `table.insert`,
+  `table.remove`, `t[#t] = nil`, assigning existing items, a list
+  constructor), whatever other keys the table holds. Then every key that is
+  not a positive integer (strings, booleans, floats, zero and negative
+  integers, tables, functions, coroutines, entity handles) in the order it was
+  added. A key set to nil and added again moves to the end; overwriting a
+  present key keeps its place. Other positive integer keys (sparse, or filled
+  out of order) come in an unspecified place, but the same place for the same
+  sequence of operations, in every run. Clearing fields during a traversal is
+  fine. Adding keys during one is undefined in Lua; here a new key goes to the
+  end and is visited. If the table has to grow for it, keys set to nil are
+  dropped, and a traversal whose current key was one of them ends with
+  "invalid key to 'next'". Either way it is the same in every run. `ipairs`, `__pairs` and the `table` functions are unchanged; `#` is
+  unchanged for lists without holes (on a table with holes it is a valid
+  border, possibly another one than stock Lua's). Host functions that walk a
+  script's table use the same order.
+- A key set to nil keeps its slot (and the key object alive) until the table
+  is rebuilt, which happens after enough new keys; a set keyed by tables or
+  closures that is emptied and never written again keeps those objects alive.
 - `table.sort` is stable: elements that compare equal keep their order. A
   comparator that is not a strict weak order gives some fixed permutation, not
-  an error; if the comparator raises, the table is left unchanged. Strings
-  compare by bytes (`<` too), whatever the locale.
+  an error; if the comparator raises, the table is left unchanged (unless
+  writing the result back raises, through `__newindex` or a memory error).
+- Strings compare by bytes (`<`, `table.sort`). `string.lower/upper` and the
+  pattern classes (`%a`, `%w`, ...) are those of the C locale; numbers print
+  and parse with a dot. A host library changing the process locale does not
+  change any of this.
+- Floats print the same on every platform this is tested on (Linux x86-64
+  and ARM, macOS, Windows): `tostring` and `%g %e %f` give "nan", "inf",
+  "-inf" for non-finite values, `%a` is Lua's own formatter (it takes no
+  flags, width or precision), and `x ^ y` uses the same platform-independent
+  power function as `math.pow`.
 - `tostring` of a table, function, coroutine or userdata (and so `print`,
   `string.format('%s')` and error messages built from them) gives the type
   and a per-state id, `table: #12`, never an address. Ids count 1, 2, 3, ...
-  in the order values are first printed, so they are the same in every run;
-  a value keeps its id for its lifetime. (`string.format('%p')` does not exist
-  in Lua 5.3.)
+  in the order values are first turned into text in that state, by the script
+  or by host code running in it (STA64's own host code turns only numbers and
+  strings into text there), so they are the same in every run; a value keeps
+  its id for its lifetime. (`string.format('%p')` does not exist in Lua 5.3.)
 - Weak tables are not available. A script meets this as an error from
   `setmetatable` when the metatable has `__mode` (as for `__gc`). Behind that,
   the bundled Lua ignores `__mode` altogether, so a mode added to a metatable

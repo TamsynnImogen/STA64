@@ -68,9 +68,21 @@ struct Budget {
     peak: Arc<AtomicU64>,
 }
 
+unsafe extern "C" {
+    /// The bundled Lua's hook for the `^` operator (vendor/lua-src/STA64-PATCH.md).
+    fn lua_sta64_setpow(state: *mut std::ffi::c_void, f: Option<extern "C" fn(f64, f64) -> f64>);
+}
+
+/// `^` as `math.pow`: the platform-independent `libm` power function.
+extern "C" fn libm_pow(a: f64, b: f64) -> f64 {
+    libm::pow(a, b)
+}
+
 /// A fresh mission Lua state with the restrictions above.
 pub fn new_lua() -> Lua {
     let lua = Lua::new_with(std_libs(), LuaOptions::default()).expect("open the mission standard libraries");
+    // SAFETY: the callback only stores a function pointer in the state's global data.
+    unsafe { lua.exec_raw::<()>((), |state| lua_sta64_setpow(state.cast(), Some(libm_pow))) }.expect("set the power function");
     // Both calls only fail on a state not built by `Lua::new_with`.
     lua.set_memory_limit(MEMORY_LIMIT).expect("memory limit available (vendored Lua)");
     let remaining = Arc::new(AtomicU64::new(INSTRUCTION_BUDGET));
