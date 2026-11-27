@@ -42,6 +42,8 @@ struct Fixture {
     imports: Vec<(String, String)>,
     exports: Vec<(String, String)>,
     strings: Vec<(u32, String)>,
+    /// 32-bit words in the image: address and expressions.
+    words: Vec<(u32, Vec<String>)>,
     base: Vec<Block>,
     rbase: Vec<Block>,
     cases: Vec<Case>,
@@ -122,6 +124,10 @@ fn parse(text: &str) -> Fixture {
                 let (a, s) = rest.split_once(' ').expect("string addr text");
                 fx.strings.push((num(a) as u32, s.to_owned()));
             }
+            "words" => {
+                let p: Vec<&str> = rest.split(' ').collect();
+                fx.words.push((num(p[0]) as u32, p[1..].iter().map(|s| (*s).to_owned()).collect()));
+            }
             "base" => {
                 fx.base.push((num(rest) as u32, Vec::new()));
                 target = Some(("base", fx.base.len() - 1));
@@ -160,6 +166,11 @@ fn image(fx: &Fixture) -> FlatImage {
         b.push(0);
         img.put(*a, &b);
     }
+    for (a, exprs) in &fx.words {
+        for (k, e) in exprs.iter().enumerate() {
+            img.put(a + 4 * k as u32, &fx.addr(e).to_le_bytes());
+        }
+    }
     img
 }
 
@@ -173,6 +184,15 @@ fn program(fx: &Fixture, base: &[Block], blocks: &[Block]) -> Vec<(u32, String)>
     for (start, lines) in code {
         let mut a = start;
         for l in lines {
+            // `@chain N`: N blocks of `test eax,eax` and a `je` to the next block
+            if let Some(n) = l.strip_prefix("@chain ") {
+                for _ in 0..n.parse::<u32>().expect("chain length") {
+                    ins.push((a, "test   eax,eax".to_owned()));
+                    ins.push((a + 4, format!("je     {:#x}", a + 8)));
+                    a += 8;
+                }
+                continue;
+            }
             ins.push((a, l));
             a += 4;
         }
@@ -230,6 +250,10 @@ fn run_case(fx: &Fixture, case: &Case) -> String {
                     Err(e) => out.push_str(&format!("render error {} {}\n", class_name(&e), Py::from(e.message).repr())),
                 }
             }
+            "try_convert" => match convert_dlls(&s, None, Some("test1")) {
+                Ok(_) => out.push_str("converted\n"),
+                Err(e) => out.push_str(&format!("FAIL {} {}\n", class_name(&e), Py::from(e.message).repr())),
+            },
             "mission" => {
                 let rdll = (!case.rcode.is_empty())
                     .then(|| A1Dll::new("Test1R.drl", &img, program(fx, &fx.rbase, &case.rcode), IndexMap::new(), Some(0x1000_1100)).expect("a rule DLL"));
@@ -269,7 +293,7 @@ fn every_case_equals_the_originals_output() {
 #[test]
 fn the_cases_reach_the_front_ends_paths() {
     let e = data(include_str!("a1_cases/expected.txt"));
-    for shape in ["undecodedcall", "'multiset'", "AddStep(", "NewScript(", "UD(", "rules 1\n", "registration_errors []", "classify 'partial'", "classify 'complete'", "loop at", "unbalanced stack", "takes arguments"] {
+    for shape in ["undecodedcall", "'multiset'", "AddStep(", "NewScript(", "UD(", "rules 1\n", "registration_errors []", "classify 'partial'", "classify 'complete'", "loop at", "unbalanced stack", "takes arguments", "TrashRule(", "FAIL RecursionError", "converted\n", "deps = { 'ALPHA' }", "R_rule_one_2", "rule_one#2", "render: DecodeError", "no DllMain found", "'switch'", "'comment'"] {
         assert!(e.contains(shape), "no case reaches {shape}");
     }
 }
@@ -296,6 +320,31 @@ fn expected_cases_are_current() {
     let fresh = std::fs::read_to_string(&out_path).expect("driver output");
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(data(&fresh), data(include_str!("a1_cases/expected.txt")), "tests/a1_cases/expected.txt is stale: run gen_cases.py again");
+}
+
+/// `Prelude.test_every_table_the_shared_engine_indexes_is_created` of `tools/test_a1_to_lua.py`:
+/// the shared prelude and engine index `Mission.<x>[...]`, so each such table must exist in the
+/// Armada I `Mission_` literal of a converted mission.
+#[test]
+fn every_table_the_shared_engine_indexes_is_created() {
+    let fx = parse(&data(include_str!("a1_cases/cases.txt")));
+    let case = fx.cases.iter().find(|c| c.name == "a_mission_with_rules_actions_steps_and_init").expect("the mission case");
+    let text = run_case(&fx, case);
+    let start = text.find("Mission_ = {").expect("the literal");
+    let literal = &text[start..start + text[start..].find("\n}\n").expect("its end")];
+    let all = format!("{}{}{}", sta_mission_convert::prelude::PRELUDE, ENGINE, A1_PRELUDE);
+    let mut used: Vec<String> = Vec::new();
+    let mut rest = all.as_str();
+    while let Some(i) = rest.find("Mission.") {
+        rest = &rest[i + "Mission.".len()..];
+        let n: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+        if rest[n.len()..].starts_with('[') && !used.contains(&n) {
+            used.push(n);
+        }
+    }
+    assert!(used.len() > 5, "the scan found {} tables", used.len());
+    let missing: Vec<&String> = used.iter().filter(|n| !literal.contains(&format!(" {n} = {{}}"))).collect();
+    assert!(missing.is_empty(), "tables missing from the Mission_ literal: {missing:?}");
 }
 
 #[test]

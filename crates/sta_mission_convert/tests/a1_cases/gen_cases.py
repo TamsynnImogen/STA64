@@ -17,6 +17,7 @@ except (ImportError, ValueError, OSError):  # no `resource` (Windows) or the lim
 
 import os  # noqa: E402
 import re  # noqa: E402
+import struct  # noqa: E402
 import sys  # noqa: E402
 
 sys.dont_write_bytecode = True
@@ -36,6 +37,7 @@ class Fixture:
         self.imports = []  # (dll, symbol)
         self.exports = []  # (symbol, expr)
         self.strings = {}
+        self.words = []  # (address, [expr...]): 32-bit words in the image
         self.base = []  # (start, [lines])
         self.rbase = []
         self.cases = []
@@ -81,6 +83,9 @@ def parse(text, a1):
         elif word == "string":
             a, _, s = rest.partition(" ")
             fx.strings[num(a)] = s
+        elif word == "words":
+            parts = rest.split(" ")
+            fx.words.append((num(parts[0]), parts[1:]))
         elif word in ("base", "rbase"):
             block = (num(rest), [])
             (fx.base if word == "base" else fx.rbase).append(block)
@@ -102,16 +107,20 @@ def parse(text, a1):
 def make_pe_class(fx, a1):
     imports = {0x10060000 + 4 * i: (d, s) for i, (d, s) in enumerate(fx.imports)}
     strings = fx.strings
+    image = bytearray(0x70000)  # indexed by address - base, like FlatImage
+    for a, exprs in fx.words:
+        for k, e in enumerate(exprs):
+            struct.pack_into("<I", image, a - 0x10000000 + 4 * k, fx.addr(e))
 
     class FakePe:
         base = 0x10000000
-        data = b""
+        data = bytes(image)
 
         def __init__(self):
             self.imports = imports
 
         def off(self, rva):
-            return None
+            return rva if 0 <= rva < len(image) else None
 
         def section_of(self, addr):
             if 0x10001000 <= addr < 0x10030000:
@@ -137,10 +146,18 @@ def make_pe_class(fx, a1):
 
 
 def program(code):
+    """4 bytes per instruction from each start; `@chain N` is N blocks of `test eax,eax` and a
+    `je` to the next block."""
     ins = []
     for start, lines in sorted(code.items()):
         a = start
         for line in lines:
+            if line.startswith("@chain "):
+                for _ in range(int(line.split(" ")[1])):
+                    ins.append((a, "test   eax,eax"))
+                    ins.append((a + 4, f"je     {a + 8:#x}"))
+                    a += 8
+                continue
             ins.append((a, line))
             a += 4
     return ins
@@ -201,6 +218,13 @@ def run_case(fx, a1, FakePe, case):
                 out.append(f"raise {str(e)!r}")
                 continue
             out.extend(lifted_dump(a1, d, f))
+        elif what == "try_convert":
+            S = build(fx, a1, FakePe, case["code"], fx.base, "Test1S.dsl", exports, None)
+            try:
+                a1.convert(S, None, "test1")
+                out.append("converted")
+            except Exception as e:  # noqa: BLE001 - main's per-mission catch
+                out.append(f"FAIL {type(e).__name__} {str(e)!r}")
         elif what == "mission":
             S = build(fx, a1, FakePe, case["code"], fx.base, "Test1S.dsl", exports, None)
             R = None
@@ -224,6 +248,9 @@ def run_case(fx, a1, FakePe, case):
 
 def main(argv):
     tools, cases_path, out_path = argv[1:4]
+    # The tool's own `main` calls `convert` two frames below the module; here `run_case` adds one,
+    # so the limit is one higher and the `RecursionError` cases fail at the same chain length.
+    sys.setrecursionlimit(sys.getrecursionlimit() + 1)
     sys.path.insert(0, tools)
     import a1_to_lua as a1  # noqa: E402
     with open(cases_path, encoding="utf-8", newline="") as fh:

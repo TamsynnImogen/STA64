@@ -577,23 +577,49 @@ impl<'d, 'a> Lifter<'d, 'a> {
 
 /// The `visit` of `A1Lifter.lift`: a depth-first walk that reports a loop and lists the blocks
 /// in reverse topological order.
-fn visit(b: i64, succs: &IndexMap<i64, Vec<i64>>, mark: &mut HashMap<i64, u8>, order: &mut Vec<i64>) -> Result<()> {
-    match mark.get(&b) {
-        Some(1) => return dec(format!("loop at {}", py_hex(b))),
-        Some(2) => return Ok(()),
-        _ => {}
+///
+/// Iterative (an explicit stack, the same visiting order), so a crafted chain of blocks cannot
+/// overflow the thread's stack. The Python recurses: with CPython's default limit of 1000 frames and
+/// the five that lie under it when `main` runs the tool (module, `main`, `convert`, `lift_mission`,
+/// `lift`), the 996th nested `visit` call raises `RecursionError`, which no caller catches, so the
+/// mission fails. [`MAX_VISIT_DEPTH`] is that depth (measured on CPython 3.14; a Python with a
+/// different frame accounting would differ by a few).
+fn visit(start: i64, succs: &IndexMap<i64, Vec<i64>>, mark: &mut HashMap<i64, u8>, order: &mut Vec<i64>) -> Result<()> {
+    // frames: (block, its successors in descending order, index of the next one to visit)
+    let mut stack: Vec<(i64, Vec<i64>, usize)> = Vec::new();
+    let mut call = Some(start);
+    loop {
+        if let Some(b) = call.take() {
+            if stack.len() + 1 > MAX_VISIT_DEPTH {
+                return Err(crate::DecodeError::python("RecursionError", "maximum recursion depth exceeded"));
+            }
+            match mark.get(&b) {
+                Some(1) => return dec(format!("loop at {}", py_hex(b))),
+                Some(2) => {}
+                _ => {
+                    mark.insert(b, 1);
+                    let Some(ss) = succs.get(&b) else { return key_err(&Py::Int(b)) };
+                    let mut ss = ss.clone();
+                    ss.sort_unstable_by(|x, y| y.cmp(x));
+                    stack.push((b, ss, 0));
+                }
+            }
+        }
+        let Some(top) = stack.last_mut() else { break };
+        if top.2 < top.1.len() {
+            call = Some(top.1[top.2]);
+            top.2 += 1;
+            continue;
+        }
+        let (b, _, _) = stack.pop().expect("a frame");
+        mark.insert(b, 2);
+        order.push(b);
     }
-    mark.insert(b, 1);
-    let Some(ss) = succs.get(&b) else { return key_err(&Py::Int(b)) };
-    let mut ss = ss.clone();
-    ss.sort_unstable_by(|x, y| y.cmp(x));
-    for s in ss {
-        visit(s, succs, mark, order)?;
-    }
-    mark.insert(b, 2);
-    order.push(b);
     Ok(())
 }
+
+/// The deepest `visit` nesting the Python's recursion limit allows when `main` runs the tool.
+pub const MAX_VISIT_DEPTH: usize = 995;
 
 /// Small string helper for the tag tests above.
 trait EqAny {

@@ -53,12 +53,18 @@ import Armada.exe ?isCineractiveDone@@3Vhot_int@@A
 import Test1S.dsl ?ALPHA@@3Vhot_int@@A
 import Test1S.dsl ?ship@@3HA
 import Test1S.dsl ?DoIt@@YAXXZ
+import Armada.exe ?trash_rule@IIIE@@QAEXPAVrule@@@Z
+import Armada.exe ?Add_Data@linked_list@@QAEXPAX@Z
+import Armada.exe ?time@timer_int@@UAEMXZ
 
 export ?ALPHA@@3Vhot_int@@A {ALPHA}
 export ?tWait@@3Vtimer_int@@A {WAIT}
 export ?ship@@3HA {SHIP}
 export ?spot@@3VVector3@@A {SPOT}
 export ?DoIt@@YAXXZ 0x10001004
+
+# the jump table of the switch case
+words 0x10040100 {STEP+16} {STEP+28} {STEP+32}
 
 base 0x10001000
   jmp    0x10002000
@@ -367,4 +373,217 @@ rcode {COND}
   mov    ecx,{iat:isCineractiveDone}
   jmp    {iat:??Bhot_int@@QAEHXZ}
 run mission
+end
+
+# a dependency wired inside a condition (the Python's rule dicts share their deps list)
+case a_dependency_wired_in_a_condition
+rcode {DLLMAIN}
+  mov    eax,DWORD PTR [esp+0x8]
+  cmp    eax,0x1
+  jne    {DLLMAIN+16}
+  call   0x1000100c
+  mov    eax,0x1
+  ret    0xc
+rcode {INIT}
+  mov    eax,{iat:WORLD}
+  push   esi
+  mov    esi,{iat:create_rule}
+  push   0x10040020
+  push   0x10001004
+  push   0x10001008
+  lea    ecx,[eax+0x38]
+  call   esi
+  mov    ds:0x10050100,eax
+  pop    esi
+  ret
+rcode 0x10001000
+  jmp    0x10002000
+  jmp    0x10001010
+  jmp    {COND}
+  jmp    0x10005000
+  jmp    {iat:DoIt}
+rcode {COND}
+  push   DWORD PTR ds:0x10050100
+  mov    ecx,{iat:ALPHA}
+  call   {iat:add_dependent_rule}
+  xor    eax,eax
+  ret
+run mission
+end
+
+# two rules of one name, conditions of one name, an action wrapper that calls two imports, a trash
+case rule_names_collide_and_an_action_does_not_resolve
+rcode {DLLMAIN}
+  mov    eax,DWORD PTR [esp+0x8]
+  cmp    eax,0x1
+  jne    {DLLMAIN+16}
+  call   0x1000100c
+  mov    eax,0x1
+  ret    0xc
+rcode {INIT}
+  mov    eax,{iat:WORLD}
+  push   esi
+  mov    esi,{iat:create_rule}
+  push   0x10040020
+  push   0x10001014
+  push   0x10001004
+  lea    ecx,[eax+0x38]
+  call   esi
+  mov    ds:0x10050100,eax
+  mov    eax,{iat:WORLD}
+  push   0x10040020
+  push   0x10001010
+  push   0x10001008
+  lea    ecx,[eax+0x38]
+  call   esi
+  mov    eax,{iat:WORLD}
+  push   DWORD PTR ds:0x10050100
+  lea    ecx,[eax+0x38]
+  call   {iat:trash_rule}
+  pop    esi
+  ret
+rcode 0x10001000
+  jmp    0x10002000
+  jmp    {COND}
+  jmp    {COND2}
+  jmp    0x10005000
+  jmp    {ACT2}
+  jmp    {iat:DoIt}
+rcode {COND}
+  xor    eax,eax
+  ret
+rcode {COND2}
+  xor    eax,eax
+  ret
+rcode {ACT2}
+  push   0x1
+  call   {iat:Bar}
+  add    esp,0x4
+  push   0x2
+  call   {iat:Bar}
+  add    esp,0x4
+  ret
+run mission
+end
+
+case a_rule_dll_without_dllmain
+code {STEP}
+  ret
+rcode {COND}
+  xor    eax,eax
+  ret
+run mission
+end
+
+case a_mission_without_a_rule_dll
+code {ACTION}
+  push   0x1
+  call   {iat:Bar}
+  add    esp,0x4
+  ret
+run mission
+end
+
+# the renderer refuses the address of a stack slot passed on as a value: the function is a stub
+case a_function_the_renderer_cannot_render
+code {ACTION}
+  sub    esp,0x4
+  lea    eax,[esp]
+  mov    ds:{SHIP},eax
+  add    esp,0x4
+  ret
+run mission
+end
+
+case variable_queries_and_the_linked_list_callback
+code {STEP}
+  mov    ecx,{WAIT}
+  call   {iat:time}
+  fstp   st(0)
+  mov    ecx,{ALPHA}
+  call   {iat:??Bhot_int@@QAEHXZ}
+  push   eax
+  call   {iat:Bar}
+  add    esp,0x4
+  push   0x1
+  call   {iat:Add_Data}
+  add    esp,0x4
+  ret
+run lift {STEP}
+end
+
+case a_switch_in_a_function
+code {STEP}
+  mov    eax,DWORD PTR ds:{SHIP}
+  cmp    eax,0x2
+  ja     {STEP+36}
+  jmp    DWORD PTR [eax*4+0x10040100]
+  push   0x1
+  call   {iat:Bar}
+  add    esp,0x4
+  ret
+  ret
+  ret
+run lift {STEP}
+end
+
+case a_frame_left_with_leave
+code {STEP}
+  push   ebp
+  mov    ebp,esp
+  push   0x1
+  call   {iat:Bar}
+  add    esp,0x4
+  leave
+  ret
+run lift {STEP}
+end
+
+case a_frame_left_with_mov_esp_ebp
+code {STEP}
+  push   ebp
+  mov    ebp,esp
+  sub    esp,0x4
+  mov    DWORD PTR [ebp-0x4],0x7
+  push   DWORD PTR [ebp-0x4]
+  call   {iat:Bar}
+  add    esp,0x4
+  mov    esp,ebp
+  pop    ebp
+  ret
+run lift {STEP}
+end
+
+case or_minus_one_and_and_zero
+code {STEP}
+  or     eax,0xffffffff
+  and    ecx,0x0
+  push   eax
+  push   ecx
+  call   {iat:Foo}
+  add    esp,0x8
+  ret
+run lift {STEP}
+end
+
+case a_tail_jump_to_an_internal_function
+code {FUNC}
+  jmp    0x10001008
+run lift {FUNC}
+end
+
+# CPython's limit of 1000 frames, five of them below the first nested visit: 995 nested blocks
+# are the most the Python follows; one more fails the mission with RecursionError
+case a_chain_of_blocks_just_below_the_recursion_limit
+code {ACTION}
+  @chain 994
+  ret
+run try_convert
+end
+
+case a_chain_of_blocks_just_above_the_recursion_limit
+code {ACTION}
+  @chain 995
+  ret
+run try_convert
 end

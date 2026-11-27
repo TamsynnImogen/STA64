@@ -163,6 +163,11 @@ pub fn lift_mission(s: &A1Dll<'_>, r: Option<&A1Dll<'_>>) -> Result<MissionLift>
                 }
             }
         }
+        // The Python's rule dicts share their `deps` list with the lifter's rule: a dependency a
+        // condition or an action wrapper wires while it is lifted (above) shows in the output.
+        for (i, ru) in out.rules.iter_mut().enumerate() {
+            ru.deps = rl.a1.rules[i].deps.clone();
+        }
         // `rfuncs.update({c: f for c, f in conds.items() if c not in rfuncs})`, then the totals
         let cond_addrs: HashSet<i64> = out.conds.keys().copied().collect();
         for f in rfuncs.values().chain(out.conds.iter().filter(|(c, _)| !rfuncs.contains_key(*c)).map(|(_, f)| f)) {
@@ -176,7 +181,8 @@ pub fn lift_mission(s: &A1Dll<'_>, r: Option<&A1Dll<'_>>) -> Result<MissionLift>
     // mission DLL: DllMain (start values, handles) and the actions with their steps
     let mut sl = s.lifter();
     let mut todo: VecDeque<i64> = VecDeque::new();
-    if let Some(dm) = s.dllmain {
+    if let Some(dm) = s.dllmain.filter(|d| *d != 0) {
+        // `if S.dllmain:` is false for an address of 0
         out.roles.insert(dm, "init".to_owned());
         todo.push_back(dm);
     }
