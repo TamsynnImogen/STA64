@@ -93,7 +93,7 @@ fn run(src: &str) -> Vec<String> {
 
 fn fnv(lines: &[String]) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;
-    for b in lines.iter().flat_map(|l| l.bytes().chain([b'\n'])) {
+    for b in lines.iter().flat_map(|l| l.bytes().chain(*b"\n")) {
         h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
     }
     h
