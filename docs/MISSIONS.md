@@ -14,10 +14,12 @@ including Windows. So STA64 never loads `.drl`, `.dsl`, `.dll` or
 
 Legacy compiled scripts (A2 and A1 mission DLLs) reach the player by conversion
 to Lua on their own machine from their own install, never committed or
-shipped (STA64 ships no mission content); the interim route is the Python
-converter, the release target a Rust port run by the game (WORKPLAN LUA-15 and
-the note under the LUA table). Hand-written ports are a separate download kept
-outside the repository and the release.
+shipped (STA64 ships no mission content). The route is the Rust converter,
+`sta_mission_convert` (WORKPLAN LUA-15 and the note under the LUA table); see
+"Converting an install's missions". The Python tools it was ported from are
+kept as its reference only and are superseded as a way to convert.
+Hand-written ports are a separate download kept outside the repository and the
+release.
 
 ## How MMM picks a script (from its source)
 
@@ -576,17 +578,16 @@ Why the menu cannot start them out of the box: a stock mission is a compiled DLL
 finds no Lua and the campaign book blocks the mission as "legacy DLL only": the
 menu lists it "(cannot run yet)". The conversion makes the Lua the resolver wants.
 
-Two steps, the first only once per install (about 30 s; needs `python3` and
-`objdump`, never at game run time):
+Two steps, the first only once per install (see "Converting an install's
+missions" below; it needs neither Python nor `objdump`):
 
 ```sh
-python3 tools/convert_install_missions.py --install "<Armada II root>"
+cargo run --release -p sta_mission_convert -- --install "<Armada II root>"
 cargo run --release -- --install-root "<Armada II root>"
 ```
 
-The tool runs `tools/dsl_to_lua.py` and writes `missions/<map>.lua` into
-`<user data dir>/sta64/converted/<key>/` (`~/.local/share/sta64/...` on Linux;
-`$STA64_DATA_DIR` overrides; `<key>` is the install folder's name and a short hash of its resolved path, so each install keeps its own even when two folders share a name, `sta_core::install_key`; the Python tool still writes the name alone, a folder the game does not find, so pass `--out` the key the game expects or use the Rust converter). The output is
+The converter writes `missions/<map>.lua` into
+`<user data dir>/converted/<key>/`, the folder the game looks in. The output is
 derived from game files and is refused inside the repository or an install. Only the base install's own `missions` folder is converted and only for a game started without `--mod` (a mod's chain is not converted). When
 that folder holds `missions/`, the game mounts it *below* the install (D6: a script at the same path in the install wins; a differently named script the resolver tries later loses to the converted one, a known limit),
 and the campaign menu marks those missions "(experimental)". When it is absent
@@ -597,6 +598,94 @@ every engine call (see "Converted Armada II missions: progress"); a mission can 
 advancing or end early. A script that raises on an unhandled call is reported, its
 callback is disabled and the match goes on (it neither crashes the game nor loses the
 mission by itself; the end rules are LUA-13's).
+
+## Converting an install's missions
+
+The compiled missions of an install (Armada I and Armada II) are converted to
+Lua by the Rust converter, the crate `sta_mission_convert`. It reads the
+install, which it never writes to, decodes the mission DLLs itself and needs no
+other program. This section is the command line. (The game calls the same
+library; that part is described here once its front end has merged.)
+
+```sh
+cargo run --release -p sta_mission_convert -- --install "<game root>"
+```
+
+| Option | Meaning |
+|---|---|
+| `--install <game root>` | the install to read (required) |
+| `--out <folder>` | write here instead of the data directory's folder |
+| `--only <mission>` | convert one mission; may be given several times |
+| `--include-unmapped` | Armada I: also the DLL pairs no map names |
+| `--keep-foreign` | go on in an output folder that holds `.lua` files the tool did not write, leaving them untouched (default: refuse the folder) |
+| `--cache` | keep converted missions in the data directory and reuse them |
+| `--cache-dir <folder>` | the same, in that folder |
+
+**Where the output goes.** Without `--out`: `<user data dir>/converted/<key>/`,
+with the scripts in `missions/<name>.lua` and, beside them, the manifest
+`.sta_mission_convert.manifest` of the files the tool wrote. The user data
+directory is `$STA64_DATA_DIR` when set; otherwise `sta64` below
+`$XDG_DATA_HOME` when that is set, else below `~/.local/share` (Linux),
+`~/Library/Application Support` (macOS) or `%LOCALAPPDATA%` (Windows). The game
+mounts exactly this folder, so a conversion with `--out` elsewhere is not
+found by it.
+
+**The per-install key.** `<key>` is `<slug>-<hash>`: the install folder's own
+name in lower case with every run of other characters than `a-z0-9` as one
+`-`, and the first eight hex digits of a hash of the install's resolved path.
+Two installs whose folders share a name in two places so keep two folders. A
+mod adds `+<slug of the mod>`. The rule lives in one place,
+`sta_core::install_key`, and the converter, the game's mount and the client
+all call it.
+
+**The cache.** With `--cache` the tool keeps each converted mission in
+`<user data dir>/convert-cache/<key>/` (`--cache-dir` names another folder)
+and, on the next run, replays a mission whose inputs and converter build are
+unchanged instead of converting it again. The key of an entry covers the bytes
+of the mission's DLLs, the engine files that name the engine calls and the
+identity of the converter build, so a changed converter never reuses an old
+entry. Failures are not cached. A full run that completed removes the entries
+that have not been used for 30 days, by age only, so a folder two installs
+share loses nothing the other still uses.
+Entries hold converted game text: the cache folder is as private as the
+output.
+
+**What it will not write or delete.** Every path is resolved first (links
+followed). The output folder and the cache folder may not be, contain or lie
+inside an install or anything that looks like a game folder, nor lie inside
+the checkout the converter was built in (its build folders excepted), nor
+contain one another. Symbolic links at the
+folder, at `missions/` or at a file to replace are refused. A full run (no
+`--only`) deletes only files its manifest lists. A `.lua` file that carries
+the Python tool's header line (an earlier conversion by it) is renamed to
+`<name>.old`, never deleted, and listed in the output. Files are written under a
+temporary name and renamed into place, so an interrupted run leaves no half
+script. Converted scripts are game content (ADR 0003): they stay on the
+player's machine and are never committed or shared.
+
+**Exit code.** 0 when every mission converted. 1 when any mission failed or
+was skipped, even if other scripts were written; also when the install, the
+output folder or the cache folder is refused, and when a run is aborted. 2 for
+a command line it cannot read. A mission that does not convert prints a `FAIL`
+line and the run goes on.
+
+### The Python tools: reference only, superseded
+
+`tools/convert_install_missions.py`, `tools/dsl_to_lua.py`,
+`tools/drl_to_lua.py` and `tools/a1_to_lua.py` are what the Rust converter was
+ported from. They stay in the repository as its reference: the converter's
+tests compare its output with theirs, on invented inputs in every run and on a
+local install where one is given. They are no longer the way to convert:
+
+- they need `python3` and `objdump`; the Rust converter needs neither;
+- they name the output folder by the install folder's name alone, which is not
+  the key the game looks for;
+- a full run of the Python wrapper deletes every `.lua` file in its output
+  folder, and it exits 0 when some missions failed.
+
+`tools/campaign_readiness.py` still drives the Python converter for its
+`--converted` measurements (see "Converted Armada II missions: progress");
+that is a measuring tool, not the route for players.
 
 ## Conversion report
 
