@@ -193,9 +193,17 @@ pub mod ghost {
 
     /// A nebula's light out of sight. Rule and grade: half; inferred from the executable (static), not measured on a
     /// nebula; interim. It scales a puff's colour in displayed (sRGB) values, the quantity the original scales
-    /// (the sprites' vertex colour). A gas's cover is a density, not a brightness: scaling it by this is STA64's own
-    /// stand-in (interim, not measured).
+    /// (the sprites' vertex colour). The gas keeps its shape out of sight (its cover and reach as in sight: the
+    /// cover is a threshold in the march, not a brightness) and its emitted light is scaled by this in displayed
+    /// values, through [`nebula_gas_linear`].
     pub const NEBULA: f32 = 0.5;
+
+    /// The factor on the light the gas emits that gives [`NEBULA`] in the displayed values. The march writes
+    /// linear light (premultiplied) into the view, which is displayed through the sRGB transfer, so the factor is
+    /// `NEBULA` to the power 2.2, as the planet's is. Interim, with the grade of [`NEBULA`].
+    pub fn nebula_gas_linear() -> f32 {
+        NEBULA.powf(2.2)
+    }
 
     /// The factor on the linear light of a model out of sight that has no measured value (asteroid rocks): the old
     /// fog layer's own, one minus its opacity of 0.7. Grade: interim, reproduces the previous on-screen dimming

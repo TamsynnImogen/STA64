@@ -62,6 +62,8 @@ struct NebulaParams {
 @group(constants::MATERIAL_BIND_GROUP) @binding(4) var s_env_sampler: sampler;
 // The Key's shadow map: r + g / 2048 the depth of the nearest hull along the Key, 1 where none.
 @group(constants::MATERIAL_BIND_GROUP) @binding(5) var s_shadow: texture_2d<f32>;
+// The light weight of each place of the envelope (r; the envelope's rectangle).
+@group(constants::MATERIAL_BIND_GROUP) @binding(6) var s_light: texture_2d<f32>;
 
 @if(DEPTH_PREPASS && MULTISAMPLED)
 @group(0) @binding(20) var depth_prepass_texture: texture_depth_multisampled_2d;
@@ -289,6 +291,9 @@ fn march_step(p: vec3<f32>, dist: f32, thick: f32, ph: f32, u: vec2<f32>, kk: f3
         let f = flashes_at(p);
         c += k.flash_c.rgb * f * (dn + 0.15 * f * f);
     }
+    // A nebula out of sight keeps its shape and its opacity and emits a fraction of the light (#1146): the
+    // place's light weight, 1 in sight (the weights texture is white until one is dimmed).
+    c *= textureSampleLevel(s_light, s_env_sampler, (p.xz - k.env.xy) * k.env.zw, 0.0).r;
     let near = saturate((dist - k.eye.w * 0.25) / k.eye.w);
     return vec4<f32>(c * (k.gas_a.w * near * thick * k.vert.w), dn * near * thick * k.opac.x);
 }
