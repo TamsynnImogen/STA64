@@ -326,6 +326,9 @@ pub fn tag_ghost_meshes(
     mut removed: RemovedComponents<GhostLight>,
     children: Query<&Children>,
     parts: Query<Has<bevy::mesh::MeshTag>, (Or<(With<MeshMaterial3d<crate::render::hulls::HullMaterial>>, With<MeshMaterial3d<crate::render::rock::RockMaterial>>)>, Without<crate::render::sprites::SpriteFx>)>,
+    // A tagged mesh that is no hull or rock part and no sprite node any more: its part changed material while out
+    // of sight (a look switch), so the tag is stale and nothing else reads it.
+    stale: Query<(), (With<bevy::mesh::MeshTag>, Without<MeshMaterial3d<crate::render::hulls::HullMaterial>>, Without<MeshMaterial3d<crate::render::rock::RockMaterial>>, Without<crate::render::sprites::SpriteFx>)>,
     mut frame: Local<u32>,
 ) {
     // A model's parts appear (and change material) after its entity gets the marker, so the walk repeats a few
@@ -339,6 +342,8 @@ pub fn tag_ghost_meshes(
         for d in children.iter_descendants(gate) {
             if parts.get(d).is_ok_and(|tagged| !tagged) {
                 commands.entity(d).try_insert(bevy::mesh::MeshTag::new(g.0.to_bits()));
+            } else if stale.contains(d) {
+                commands.entity(d).try_remove::<bevy::mesh::MeshTag>();
             }
         }
     }
@@ -671,6 +676,13 @@ mod tests {
             app.update();
         }
         assert_eq!(tag(&app, late), Some(0.25f32.to_bits()));
+        // A part that changes material while out of sight (a look switch) loses the tag it no longer reads.
+        app.world_mut().entity_mut(late).remove::<MeshMaterial3d<RockMaterial>>().insert(MeshMaterial3d::<StandardMaterial>(Handle::default()));
+        for _ in 0..16 {
+            app.update();
+        }
+        assert_eq!(tag(&app, late), None, "a stale tag is taken off at the next sweep");
+        assert_eq!(tag(&app, hull), Some(0.25f32.to_bits()), "the others keep theirs");
     }
 
     /// F6: a grid is expected exactly where `update_fog` can run (its resources), and not otherwise.

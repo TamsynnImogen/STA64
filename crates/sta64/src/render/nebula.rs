@@ -184,8 +184,12 @@ pub struct NebulaField {
     last: f32,
     /// The clock the gas stands at while no nebula of the class is in sight (#1146): the flow, the core's pulse, the
     /// ring's colours and the swirl are functions of the absolute time, so a still copy is drawn at this time and
-    /// they take the clock's again when one is in sight. `None` while any nebula of the class is. One clock per
-    /// class (the field is one box): a class with one nebula in sight animates whole.
+    /// they take the clock's again when one is in sight. `None` while any nebula of the class is. INTERIM, per
+    /// class and not per object: the field is one box and one material for the whole class, and its phases are
+    /// uniforms, so while one nebula of the class is in sight the out-of-sight ones of the same class animate with
+    /// it (a visible difference from the rule "an out-of-sight copy is still"). A per-nebula phase would need the
+    /// shader to know which nebula a sample belongs to (a change of the envelope's encoding and of `nebula.wesl`)
+    /// or a material per nebula, and a write per nebula per frame (#1237).
     still: Option<f32>,
     /// What the last write of the material's per-frame values was made from (camera, key light, steps, near), so a
     /// field that stands still and sees the same view writes nothing (#1237).
