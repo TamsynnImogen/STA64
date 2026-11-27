@@ -22,8 +22,18 @@ use sta_mission_convert::{tup, ErrorKind, FlatImage};
 #[path = "dsl_lift/common.rs"]
 mod common;
 
-const CASES: &str = include_str!("dsl_lift/cases.txt");
-const EXPECTED: &str = include_str!("dsl_lift/expected.txt");
+const RAW_CASES: &str = include_str!("dsl_lift/cases.txt");
+const RAW_EXPECTED: &str = include_str!("dsl_lift/expected.txt");
+
+/// The committed data without `\r`: a checkout may convert line endings (Windows), the Python
+/// driver writes `\n` only.
+fn cases_text() -> String {
+    RAW_CASES.replace('\r', "")
+}
+
+fn expected_text() -> String {
+    RAW_EXPECTED.replace('\r', "")
+}
 
 const STD_EXPORTS: [(&str, u32); 10] = [
     ("?g_pSI@@3PAVScriptInterface@@A", 0x1000_2800),
@@ -319,9 +329,9 @@ fn split_cases(text: &str) -> Vec<(String, String)> {
 
 #[test]
 fn every_case_equals_the_originals_output() {
-    let cases = parse(CASES);
+    let cases = parse(&cases_text());
     assert!(cases.len() >= 20, "{} cases", cases.len());
-    let expected = split_cases(EXPECTED);
+    let expected = split_cases(&expected_text());
     assert_eq!(expected.len(), cases.len(), "cases and expected.txt differ in number");
     let mut bad = Vec::new();
     for (c, (name, want)) in cases.iter().zip(&expected) {
@@ -341,8 +351,9 @@ fn every_case_equals_the_originals_output() {
 fn the_cases_exercise_a_lifted_function_per_form() {
     // A guard on the authored data: the expected output has functions that lifted and functions
     // that stopped with a decode error, so neither path went untested by a typo in a case.
-    let ok = EXPECTED.matches(" error None").count();
-    let stopped = EXPECTED.lines().filter(|l| l.starts_with(" error '")).count();
+    let expected = expected_text();
+    let ok = expected.matches(" error None").count();
+    let stopped = expected.lines().filter(|l| l.starts_with(" error '")).count();
     assert!(ok >= 40, "{ok} functions lifted");
     assert!(stopped >= 25, "{stopped} functions stopped");
 }
@@ -368,5 +379,5 @@ fn expected_pairs_are_current() {
     assert!(status.success(), "the Python driver failed");
     let fresh = std::fs::read_to_string(&out_path).expect("driver output");
     let _ = std::fs::remove_dir_all(&dir);
-    assert_eq!(fresh, EXPECTED, "tests/dsl_lift/expected.txt is stale: run gen_pairs.py again");
+    assert_eq!(fresh.replace('\r', ""), expected_text(), "tests/dsl_lift/expected.txt is stale: run gen_pairs.py again");
 }
