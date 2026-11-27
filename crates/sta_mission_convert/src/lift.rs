@@ -310,8 +310,11 @@ pub fn d_immediate(d: &Dsl<'_>, n: i64) -> Result<Py> {
     Ok(tup!["const", if n >= 1 << 31 { n - (1 << 32) } else { n }])
 }
 
+/// A test over expression nodes (the lambdas of the Python).
+pub type LocationTest = Box<dyn Fn(&Py) -> Result<bool>>;
+
 /// `reads_location(lv)`: a test for expressions that read memory location `lv`.
-pub fn reads_location(lv: &Py) -> Result<Box<dyn Fn(&Py) -> Result<bool>>> {
+pub fn reads_location(lv: &Py) -> Result<LocationTest> {
     let k = tg(lv)?.to_owned();
     let lv = lv.clone();
     Ok(match k.as_str() {
@@ -509,6 +512,9 @@ impl<'d, 'a> Lifter<'d, 'a> {
         Ok(std::mem::take(&mut self.cur))
     }
 
+    // The `k` of the register-store pass moves while the fixed range of statements is walked,
+    // as the Python's `range(k, len(stmts))` does (its end is not re-evaluated).
+    #[allow(clippy::mut_range_bound)]
     fn lift_body(&mut self, start: i64) -> Result<()> {
         let d = self.d;
         let (leaders, seen) = self.blocks(start)?;
@@ -1555,7 +1561,7 @@ impl<'d, 'a> Lifter<'d, 'a> {
             if mn.ends_with('p') || ops.is_empty() {
                 let k = m.unwrap_or(1);
                 let y = self.fpop(st, a)?;
-                if k - 1 >= st.fpu.len() as i64 {
+                if k > st.fpu.len() as i64 {
                     if !st.fret.is_none() && k == 1 {
                         let v = self.fpop(st, a)?;
                         st.fpu.push(v);

@@ -350,10 +350,8 @@ pub(crate) mod pat {
     pub(crate) fn sized_ds(t: &str) -> Option<(&str, &str)> {
         let (size, rest) = if let Some(r) = t.strip_prefix("DWORD PTR ds:") {
             ("DWORD", r)
-        } else if let Some(r) = t.strip_prefix("QWORD PTR ds:") {
-            ("QWORD", r)
         } else {
-            return None;
+            ("QWORD", t.strip_prefix("QWORD PTR ds:")?)
         };
         is_hex0x(rest).then_some((size, rest))
     }
