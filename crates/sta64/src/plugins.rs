@@ -71,6 +71,8 @@ pub fn add_plugins(app: &mut App, cfg: &LaunchConfig) {
     // TOOL-14 playtest capture (Ctrl+F12 in a match)
     if map_view {
         app.add_plugins(crate::capture::CapturePlugin);
+        // UI-55 save and load path
+        app.add_plugins(crate::save::SavePlugin);
     }
 
     // game — the match flow (INT-M3)

@@ -17,8 +17,8 @@
 //! and `mobile` test `max_speed > 0`), so 0 is stored as the tiny held speed: the
 //! craft drops to a crawl, still takes orders, and a reset frees it. The
 //! ceiling keeps the fixed-point products of the movement code (squares of the
-//! speed, `forward_accel * speed * distance` in the braking curve) from wrapping;
-//! stock values are 35 to 150. A held craft (at or below [`HELD_SPEED`]) never
+//! speed, `forward_accel * speed * distance` in the braking curve) from wrapping.
+//! A held craft (at or below [`HELD_SPEED`]) never
 //! warps, is not watched by the stuck-order timer, and turns at its at-rest rate. An override above the
 //! definition's warp speed disables warp for that craft (movement compares the
 //! two); not checked against the original.

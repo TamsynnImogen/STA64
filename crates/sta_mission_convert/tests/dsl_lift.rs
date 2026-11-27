@@ -323,7 +323,10 @@ fn split_cases(text: &str) -> Vec<(String, String)> {
         if let Some(n) = l.strip_prefix("== ") {
             out.push((n.trim_end().to_owned(), String::new()));
         }
-        out.last_mut().expect("starts with a case header").1.push_str(l);
+        // the line before the first case (the version header) belongs to no case
+        if let Some(case) = out.last_mut() {
+            case.1.push_str(l);
+        }
     }
     out
 }
@@ -362,7 +365,7 @@ fn the_cases_exercise_a_lifted_function_per_form() {
 #[test]
 fn expected_pairs_are_current() {
     // some expected lines carry CPython exception texts: compared under the pinned CPython only
-    if !staleness::pinned_python_available("expected_pairs_are_current") {
+    if !staleness::pinned_python_available("expected_pairs_are_current", "tests/dsl_lift/expected.txt", RAW_EXPECTED) {
         return;
     }
     use std::process::Command;
