@@ -6,7 +6,8 @@
   merges this file; not binding before). Agents do not merge it. The
   amendment of S2 and S3 needs the same two approvals. The amendment of S5
   (2026-11-26) was decided by the project lead on that day because the step is
-  revertible on its own; the repo owner was informed, not asked.
+  revertible on its own, and is merged by the merge steward on his instruction;
+  the repo owner was informed, not asked.
 - **Relates to:** [ADR 0004](0004-modding-v1.md) D12; [ADR 0003](0003-clean-room-content-policy.md);
   WORKPLAN RND-22; issue #1020; PR #1000 (open draft, the earlier
   shared-materials attempt, closed when this ADR is accepted; see "Alternatives
@@ -211,8 +212,14 @@ bucket count came from capacity history it is an accident of that history: no
 rule defines the order in either case. It is open question 1, narrowed to
 nodes, and nothing makes it absent by construction. In the experiment the
 draw lists were identical in every scene where main's own marking was stable
-against itself; in the scenes with exact ties its order was not stable, and
-this rule's was.*
+against itself. In the scenes with exact ties (one pair of additive effect
+quads at one place and size) main's order varied from frame to frame, about
+two thirds one way, and this rule's was fixed, always the other: it differed
+from the previous marking's usual order in more frames than the previous
+marking's own order varied, ties only. The effect on the picture was measured
+at one or two levels of 255, inside the pair's rectangle only (additive
+blends commute in exact arithmetic and differ here only by rounding to the
+8-bit target); alpha-blended or cut-out ties were not met in the experiment.*
 
 *S6 and this amendment: S6 asks for frames byte-equal to main. With this rule
 that holds except where the tie order above differs from main's; S6 is not
