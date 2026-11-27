@@ -8,9 +8,12 @@ an invented flat image written in cases.txt. Deterministic.
 tests/a1.rs parses the same cases.txt and compares its own output with expected.txt.
 """
 
-import resource
+try:
+    import resource
 
-resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))
+    resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))
+except (ImportError, ValueError, OSError):  # no `resource` (Windows) or the limit is refused (macOS)
+    pass
 
 import os  # noqa: E402
 import re  # noqa: E402
