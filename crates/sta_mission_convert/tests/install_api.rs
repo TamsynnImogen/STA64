@@ -75,10 +75,22 @@ struct Run {
 }
 
 fn go(root: &Path, out: &Path, cache: Option<&Cache>, only: &[&str], cancel: &dyn Fn() -> bool, stop_after: Option<usize>) -> Run {
+    go_with(root, out, cache, only, false, cancel, stop_after)
+}
+
+fn go_with(
+    root: &Path,
+    out: &Path,
+    cache: Option<&Cache>,
+    only: &[&str],
+    prepare_first: bool,
+    cancel: &dyn Fn() -> bool,
+    stop_after: Option<usize>,
+) -> Run {
     let inst = Install::open(root).expect("an Armada I root");
     assert_eq!(inst.game, Game::Armada1);
     let mut od = out_dir(&inst, out);
-    let opts = Options { only: only.iter().map(|s| (*s).to_owned()).collect(), include_unmapped: false };
+    let opts = Options { only: only.iter().map(|s| (*s).to_owned()).collect(), prepare_first, ..Options::default() };
     let stop = Cell::new(false);
     let mut events = Vec::new();
     let mut sink = |e: &Event| {
@@ -137,8 +149,8 @@ fn progress_events_come_in_order_and_every_mission_is_reported() {
     }
     assert_eq!(e[at], done(1));
     assert_eq!(e[at + 1], started(2));
-    let Event::Failed { name: n, message } = &e[at + 2] else { panic!("a failure was expected: {:?}", e[at + 2]) };
-    assert_eq!(n, "fed2");
+    let Event::Failed { mission, name: n, message } = &e[at + 2] else { panic!("a failure was expected: {:?}", e[at + 2]) };
+    assert_eq!((mission.as_str(), n.as_str()), ("fed2", "fed2"));
     assert_eq!(message, "DecodeError: not a PE file");
     assert_eq!(e[at + 3], done(2));
     assert_eq!(e[at + 4], started(3));
@@ -234,20 +246,23 @@ fn only_selects_missions_and_a_partial_run_keeps_the_files_of_earlier_runs() {
 fn faults_are_values_not_prints_or_exits() {
     let t = TempDir::new("api-faults");
     // not an install
-    assert_eq!(Install::open(&t.path().join("missing")).unwrap_err(), InstallError::NotAFolder);
+    // the error values carry the paths, so a caller words them itself
+    let missing = t.path().join("missing");
+    let InstallError::NotAFolder { path } = Install::open(&missing).unwrap_err() else { panic!("not a folder") };
+    assert_eq!(path, missing);
     let empty = t.path().join("empty");
     fs::create_dir_all(&empty).unwrap();
-    assert_eq!(Install::open(&empty).unwrap_err(), InstallError::NotArmada);
+    let InstallError::NotArmada { path, root } = Install::open(&empty).unwrap_err() else { panic!("not armada") };
+    assert_eq!(path, empty);
+    assert!(root.ends_with("empty"));
     let no_missions = t.path().join("Armada");
     fs::create_dir_all(&no_missions).unwrap();
     fs::write(no_missions.join("Armada.exe"), b"").unwrap();
-    assert_eq!(Install::open(&no_missions).unwrap_err(), InstallError::NoMissionsFolder);
+    assert!(matches!(Install::open(&no_missions).unwrap_err(), InstallError::NoMissionsFolder { .. }));
     let fleet = t.path().join("Fleet");
     fs::create_dir_all(fleet.join("Data")).unwrap();
     fs::write(fleet.join("Data/Armada2.exe"), b"").unwrap();
-    let e = Install::open(&fleet).unwrap_err();
-    assert_eq!(e, InstallError::FleetOperations);
-    assert!(e.describe("x").starts_with("--install x: a Fleet Operations style install"));
+    assert!(matches!(Install::open(&fleet).unwrap_err(), InstallError::FleetOperations { .. }));
     // an Armada II root without its engine files: the run aborts after clearing, as a value
     let a2 = t.path().join("A2");
     fs::create_dir_all(a2.join("missions")).unwrap();
@@ -276,6 +291,56 @@ fn faults_are_values_not_prints_or_exits() {
     assert!(install::resolve_output(&inside, &inst, &install::Env::default()).unwrap_err().contains("is inside the install"));
 }
 
+/// An earlier conversion in `out` (written through the writer, as a run would have), for the
+/// tests of what a stop leaves behind.
+fn earlier_conversion(inst: &Install, out: &Path) {
+    let mut od = out_dir(inst, out);
+    od.write("old.lua", b"-- earlier\n").unwrap();
+    od.finish().unwrap();
+}
+
+#[test]
+fn prepare_first_keeps_the_earlier_conversion_on_a_cancel_at_the_start_or_an_engine_fault() {
+    let t = TempDir::new("api-prepare");
+    let (root, out, cdir) = (t.path().join("Armada"), t.path().join("out"), t.path().join("cache"));
+    a1_install(&root, 2);
+    let cache = Cache::new(&cdir);
+    plant(&cache, &root, &[1, 2]);
+    earlier_conversion(&Install::open(&root).unwrap(), &out);
+    // a cancel before the first mission: nothing cleared, nothing written
+    let r = go_with(&root, &out, Some(&cache), &[], true, &|| true, None);
+    assert!(r.summary.cancelled && !r.summary.cleared && r.summary.missions.is_empty());
+    assert_eq!(r.summary.total, 2);
+    assert!(r.events.is_empty());
+    assert_eq!(lua_files(&out), ["old.lua"]);
+    assert_eq!(manifest_names(&out), ["old.lua"]);
+    // the default order (the command line's) clears first
+    let r = go_with(&root, &out, Some(&cache), &[], false, &|| true, None);
+    assert!(r.summary.cancelled && r.summary.cleared);
+    assert_eq!(lua_files(&out), Vec::<String>::new());
+    // an Armada II root whose engine data cannot be loaded: prepare first keeps, default clears
+    let a2 = t.path().join("A2");
+    fs::create_dir_all(a2.join("missions")).unwrap();
+    fs::write(a2.join("Armada2.exe"), b"junk").unwrap();
+    fs::write(a2.join("missions/a2_fed01S.dsl"), b"junk").unwrap();
+    let inst = Install::open(&a2).unwrap();
+    let out2 = t.path().join("out2");
+    earlier_conversion(&inst, &out2);
+    for (prepare_first, kept) in [(true, true), (false, false)] {
+        let mut od = out_dir(&inst, &out2);
+        let opts = Options { prepare_first, ..Options::default() };
+        let mut dec = no_decoder;
+        let s = install::convert_install(&inst, &opts, &mut od, None, &mut dec, &never, &mut |_| {});
+        let ab = s.aborted.as_ref().expect("the engine data is missing");
+        assert!(ab.message.starts_with("no Armada2.exe + armada2.map found"));
+        assert_eq!(s.cleared, !kept);
+        assert_eq!(out2.join("missions/old.lua").exists(), kept, "prepare_first = {prepare_first}");
+        if !kept {
+            break;
+        }
+    }
+}
+
 #[test]
 fn the_manifests_own_temporary_files_are_cleaned_when_old() {
     let t = TempDir::new("api-temps");
@@ -287,11 +352,13 @@ fn the_manifests_own_temporary_files_are_cleaned_when_old() {
     let old = out.join(format!(".{MANIFEST}.tmp-4242-1"));
     let young = out.join(format!(".{MANIFEST}.tmp-4242-2"));
     let foreign = out.join("notes.tmp-1-1");
-    for p in [&old, &young, &foreign] {
+    // another program's file that matches the tool's temporary-name shape, in the folder's root
+    let dotted = out.join(".notes.tmp-12-3");
+    for p in [&old, &young, &foreign, &dotted] {
         fs::write(p, b"x").unwrap();
     }
     let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
-    for p in [&old, &foreign] {
+    for p in [&old, &foreign, &dotted] {
         fs::File::options().write(true).open(p).unwrap().set_modified(long_ago).unwrap();
     }
     let r = go(&root, &out, Some(&cache), &[], &never, None);
@@ -299,4 +366,5 @@ fn the_manifests_own_temporary_files_are_cleaned_when_old() {
     assert!(!old.exists(), "an old temporary file of a killed save is removed");
     assert!(young.exists(), "a young one may belong to a running process");
     assert!(foreign.exists(), "a file that is not the tool's naming stays");
+    assert!(dotted.exists(), "a foreign file of the temporary-name shape stays: only the manifest's own names go");
 }

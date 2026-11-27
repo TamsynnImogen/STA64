@@ -240,7 +240,7 @@ pub fn run_with<S: AsRef<OsStr>>(
     let shown = a.install.display().to_string();
     let inst = match Install::open(&a.install) {
         Ok(i) => i,
-        Err(e) => return die(io, &e.describe(&shown)),
+        Err(e) => return die(io, &install_error_text(&e, &shown)),
     };
     let given_out: PathBuf = match &a.out {
         Some(o) => o.clone(),
@@ -276,7 +276,7 @@ pub fn run_with<S: AsRef<OsStr>>(
         Err(m) => return die(io, &m),
     };
     say(io, &format!("converting {} -> {}", inst.root.display(), given_out.display()));
-    let opts = Options { only: a.only.clone(), include_unmapped: a.include_unmapped };
+    let opts = Options { only: a.only.clone(), include_unmapped: a.include_unmapped, ..Options::default() };
     let mut moved_total = 0;
     let summary = {
         let mut sink = |e: &Event| match e {
@@ -285,7 +285,7 @@ pub fn run_with<S: AsRef<OsStr>>(
                 say(io, &moved_line(old, new));
             }
             Event::Console(l) => say(io, l),
-            Event::Failed { name, message } => say(io, &format!("  FAIL {name}: {message}")),
+            Event::Failed { name, message, .. } => say(io, &format!("  FAIL {name}: {message}")),
             Event::Planned { .. } | Event::Started { .. } | Event::Done { .. } => {}
         };
         install::convert_install(&inst, &opts, &mut outdir, cache.as_ref(), decoder, &|| false, &mut sink)
@@ -320,6 +320,23 @@ pub fn run_with<S: AsRef<OsStr>>(
     // The Python wrapper exits 0 here. A run in which any mission failed or was skipped exits 1
     // (a declared difference), so that a script can tell.
     code
+}
+
+/// The command line's text for an install that cannot be used (`shown`: the install as typed).
+fn install_error_text(e: &install::InstallError, shown: &str) -> String {
+    use install::InstallError as E;
+    match e {
+        E::NotAFolder { .. } => format!("--install {shown}: not a folder"),
+        E::Unreadable { root, reason, .. } => format!("{}: {reason}", root.display()),
+        E::FleetOperations { .. } => format!(
+            "--install {shown}: a Fleet Operations style install (engine in Data/): it ships Lua missions, \
+             there are no mission DLLs to convert"
+        ),
+        E::NotArmada { .. } => {
+            format!("--install {shown}: neither an Armada I root (Armada.exe) nor an Armada II root (Armada2.exe)")
+        }
+        E::NoMissionsFolder { .. } => format!("--install {shown}: no missions folder"),
+    }
 }
 
 fn moved_line(old: &str, new: &str) -> String {

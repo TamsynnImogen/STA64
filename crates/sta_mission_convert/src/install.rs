@@ -209,43 +209,34 @@ pub struct Install {
 
 /// Why a folder is not an install the converter can use.
 #[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Every variant carries the data a caller needs to word it in its own text (the command line
+/// formats them itself, see `cli.rs`): `path` is the folder as the caller gave it, `root` the
+/// resolved one.
 pub enum InstallError {
-    NotAFolder,
-    /// The folder cannot be listed (the text names the folder and the system's reason).
-    Unreadable(String),
+    /// `path` does not resolve to a folder.
+    NotAFolder { path: PathBuf },
+    /// The folder `root` cannot be listed; `reason` is the system's text.
+    Unreadable { path: PathBuf, root: PathBuf, reason: String },
     /// An engine in `Data/` and Lua missions of its own: nothing to convert.
-    FleetOperations,
-    /// Neither `Armada.exe` nor `Armada2.exe`.
-    NotArmada,
-    NoMissionsFolder,
-}
-
-impl InstallError {
-    /// The command line's text for it; `shown` is the install as the caller wrote it.
-    pub fn describe(&self, shown: &str) -> String {
-        match self {
-            Self::NotAFolder => format!("--install {shown}: not a folder"),
-            Self::Unreadable(m) => m.clone(),
-            Self::FleetOperations => format!(
-                "--install {shown}: a Fleet Operations style install (engine in Data/): it ships Lua missions, \
-                 there are no mission DLLs to convert"
-            ),
-            Self::NotArmada => format!(
-                "--install {shown}: neither an Armada I root (Armada.exe) nor an Armada II root (Armada2.exe)"
-            ),
-            Self::NoMissionsFolder => format!("--install {shown}: no missions folder"),
-        }
-    }
+    FleetOperations { path: PathBuf, root: PathBuf },
+    /// Neither `Armada.exe` nor `Armada2.exe` in `root`.
+    NotArmada { path: PathBuf, root: PathBuf },
+    /// `root` has no missions folder (at its top or in `Data/`).
+    NoMissionsFolder { path: PathBuf, root: PathBuf },
 }
 
 impl Install {
     /// Looks at `path`: which game it is and where its missions are. Reads folder listings only.
     pub fn open(path: &Path) -> std::result::Result<Install, InstallError> {
+        let given = path.to_path_buf();
         let install = match resolve(path) {
             Ok(p) if p.is_dir() => p,
-            _ => return Err(InstallError::NotAFolder),
+            _ => return Err(InstallError::NotAFolder { path: given }),
         };
-        let top = names(&install).map_err(|e| InstallError::Unreadable(format!("{}: {e}", install.display())))?;
+        let (p, r) = (given.clone(), install.clone());
+        let top = names(&install)
+            .map_err(|e| InstallError::Unreadable { path: p, root: r, reason: e.to_string() })?;
         let low: Vec<String> = top.iter().map(|n| py_lower(n)).collect();
         if !low.iter().any(|n| n == "armada.exe") && !low.iter().any(|n| n == "armada2.exe") {
             if let Some(d) = child(&install, "Data")
@@ -254,14 +245,14 @@ impl Install {
                     .iter()
                     .any(|n| matches!(py_lower(n).as_str(), "armada2.exe" | "armadal.exe"))
             {
-                return Err(InstallError::FleetOperations);
+                return Err(InstallError::FleetOperations { path: given, root: install });
             }
-            return Err(InstallError::NotArmada);
+            return Err(InstallError::NotArmada { path: given, root: install });
         }
         // Only the base game's own missions folder: never a mod's DLLs under Data/Mods (D6).
         let mdir = child(&install, "missions")
             .or_else(|| child(&child(&install, "Data").unwrap_or_else(|| install.clone()), "missions"))
-            .ok_or(InstallError::NoMissionsFolder)?;
+            .ok_or_else(|| InstallError::NoMissionsFolder { path: given.clone(), root: install.clone() })?;
         let game = if is_armada1(&install) { Game::Armada1 } else { Game::Armada2 };
         Ok(Install { root: install, game, missions_dir: mdir })
     }
@@ -278,6 +269,11 @@ pub struct Options {
     pub only: Vec<String>,
     /// Armada I: also the DLL pairs no map names.
     pub include_unmapped: bool,
+    /// Full runs only: discover the missions (and load the engine data) and ask `cancel` once
+    /// before clearing the earlier conversion, so that a cancel at the start or a discovery fault
+    /// keeps it (see [`convert_install`]). Off by default: the command line clears first, which its
+    /// console output pins. The game sets it.
+    pub prepare_first: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -380,9 +376,12 @@ pub enum Event {
     Started { index: usize, total: usize, mission: String },
     /// A line the converter prints for a converted mission (a cached mission replays its lines).
     Console(String),
-    /// A mission or one of its files failed: the text is what follows `FAIL <name>: ` on the
-    /// command line. The run goes on.
-    Failed { name: String, message: String },
+    /// A mission or one of its files failed; the run goes on. `mission` is always the mission's
+    /// name ([`Mission::name`], the key of [`MissionResult::mission`]). `name` is what the command
+    /// line prints after `FAIL `: the mission for a conversion failure, the file stem (one of
+    /// [`Mission::targets`]) for a file that would overwrite one the tool did not write. `message`
+    /// is what follows `FAIL <name>: `.
+    Failed { mission: String, name: String, message: String },
     /// A mission is done (converted, from the cache or failed).
     Done { index: usize, total: usize, mission: String },
 }
@@ -430,8 +429,10 @@ pub struct Summary {
     pub missions: Vec<MissionResult>,
     /// The number of missions the run planned (0 when it never got to plan).
     pub total: usize,
-    /// The run was stopped between two missions.
+    /// The run was stopped between two missions (or, with [`Options::prepare_first`], before any).
     pub cancelled: bool,
+    /// The earlier conversion was cleared (a full run reached the clearing; it may have failed).
+    pub cleared: bool,
     pub aborted: Option<Abort>,
     /// The manifest could not be saved at the end.
     pub finish_error: Option<String>,
@@ -611,6 +612,25 @@ fn a1_lines(map: &str, r: &a1::Report) -> Vec<String> {
 /// reported and the run goes on; a fault that ends the run ([`Abort`]) leaves what was written
 /// before it. The manifest is saved at the end whatever happened, and a full run that completed
 /// prunes the cache ([`Cache::prune`]). Each DLL is read once.
+///
+/// # What a stop leaves behind
+///
+/// By default (the command line's order, which its console output pins) a full run clears the earlier
+/// conversion *first*: a cancel before the first mission, or a discovery fault (the Armada II engine
+/// files cannot be loaded), then leaves the folder without the earlier missions. With
+/// [`Options::prepare_first`] everything that can fail without writing (discovery, loading the
+/// engine data, the first cancel check) happens before anything is cleared, so a cancel at the start
+/// or such a fault leaves the earlier conversion untouched (and [`Summary::cleared`] false). A cancel
+/// later leaves what the missions before it wrote and nothing of the earlier set (a full run replaces
+/// it); the manifest always lists exactly what is on disk. A cancel that arrives between the clearing
+/// and the first mission still stops there, after the clearing.
+///
+/// # Panics
+///
+/// This function does not catch panics (a lifter fault on hostile bytes would be one). A caller on a
+/// worker thread must treat a thread that ended by a panic (a `join` error, a closed channel without
+/// a [`Summary`]) as an aborted run: what was written before stays, and the manifest may lack the
+/// last file's final state, which the next full run repairs.
 pub fn convert_install(
     install: &Install,
     opts: &Options,
@@ -621,16 +641,36 @@ pub fn convert_install(
     sink: &mut dyn FnMut(&Event),
 ) -> Summary {
     let mut s = Summary::default();
-    if opts.only.is_empty()
-        && let Err(message) = out.wipe()
-    {
-        s.aborted = Some(Abort { stage: Stage::Clear, message });
-        return s;
+    let mut found = None;
+    if opts.prepare_first {
+        match install.discover(opts) {
+            Ok(d) => found = Some(d),
+            Err(message) => {
+                s.aborted = Some(Abort { stage: Stage::Convert, message });
+                return s;
+            }
+        }
+        if cancel() {
+            s.cancelled = true;
+            s.total = found.as_ref().map_or(0, |d| d.missions.len());
+            return s;
+        }
+    }
+    if opts.only.is_empty() {
+        s.cleared = true;
+        if let Err(message) = out.wipe() {
+            s.aborted = Some(Abort { stage: Stage::Clear, message });
+            return s;
+        }
     }
     for (old, new) in out.take_moved() {
         sink(&Event::MovedAside { old, new });
     }
-    match install.discover(opts) {
+    let found = match found {
+        Some(d) => Ok(d),
+        None => install.discover(opts),
+    };
+    match found {
         Ok(d) => run_missions(&d, out, cache, decoder, cancel, sink, &mut s),
         Err(message) => s.aborted = Some(Abort { stage: Stage::Convert, message }),
     }
@@ -670,6 +710,9 @@ fn run_missions(
         let mut r = MissionResult { mission: m.name.clone(), ..MissionResult::default() };
         let step = convert_mission(d, m, out, cache, decoder, sink, &mut r);
         if let Err(message) = step {
+            // the mission that ended the run is in the results, with the fault as its failure
+            r.failures.push(message.clone());
+            s.missions.push(r);
             s.aborted = Some(Abort { stage: Stage::Convert, message });
             return;
         }
@@ -679,7 +722,7 @@ fn run_missions(
 }
 
 fn fail(sink: &mut dyn FnMut(&Event), r: &mut MissionResult, name: &str, message: String) {
-    sink(&Event::Failed { name: name.to_owned(), message: message.clone() });
+    sink(&Event::Failed { mission: r.mission.clone(), name: name.to_owned(), message: message.clone() });
     r.failures.push(message);
 }
 
