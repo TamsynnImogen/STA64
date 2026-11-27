@@ -521,19 +521,21 @@ mod e2e {
         report.assert_ok(label);
     }
 
-    fn a2_root() -> Option<PathBuf> {
-        std::env::var_os(harness::A2_VAR).map(PathBuf::from).filter(|p| p.is_dir())
-    }
-
-    fn a1_root() -> Option<PathBuf> {
-        std::env::var_os(harness::A1_VAR).map(PathBuf::from).filter(|p| p.is_dir())
+    /// The install the reference was made for: these tests run only when the reference has the
+    /// game, and then they need the install itself; a missing variable is a failure with a
+    /// message, never a silent pass.
+    fn require(var: &str) -> PathBuf {
+        match std::env::var_os(var).map(PathBuf::from).filter(|p| p.is_dir()) {
+            Some(p) => p,
+            None => panic!("the reference has this game but {var} is not set to its install folder"),
+        }
     }
 
     #[test]
     fn gated_a2_missions_with_the_rust_decoder_equal_the_python_output() {
         let Some(reference) = harness::obtain_or_skip() else { return };
         let Some(install) = reference.install(Kind::Armada2) else { return };
-        let Some(root) = a2_root() else { return };
+        let root = require(harness::A2_VAR);
         let (code, lines, files) = run_cli(&root, &[]);
         assert_eq!(code, 0);
         check_run(install, "dsl_to_lua.py", "a2-e2e", code, &lines, &files);
@@ -543,7 +545,7 @@ mod e2e {
     fn gated_a1_missions_with_the_rust_decoder_equal_the_python_output() {
         let Some(reference) = harness::obtain_or_skip() else { return };
         let Some(install) = reference.install(Kind::Armada1) else { return };
-        let Some(root) = a1_root() else { return };
+        let root = require(harness::A1_VAR);
         let (code, lines, files) = run_cli(&root, &[]);
         assert_eq!(code, 0);
         check_run(install, "a1_to_lua.py", "a1-e2e", code, &lines, &files);
@@ -555,7 +557,7 @@ mod e2e {
         let Some(reference) = harness::obtain_unmapped_or_skip() else { return };
         let Some(install) = reference.install(Kind::Armada1) else { return };
         assert!(install.include_unmapped());
-        let Some(root) = a1_root() else { return };
+        let root = require(harness::A1_VAR);
         let (code, lines, files) = run_cli(&root, &["--include-unmapped"]);
         assert_eq!(code, 0);
         check_run(install, "a1_to_lua.py", "a1-unmapped-e2e", code, &lines, &files);
@@ -565,7 +567,7 @@ mod e2e {
     fn gated_a2_rule_scaffolds_with_the_rust_decoder_equal_the_python_output() {
         let Some(reference) = harness::obtain_or_skip() else { return };
         let Some(install) = reference.install(Kind::Armada2) else { return };
-        let Some(root) = a2_root() else { return };
+        let root = require(harness::A2_VAR);
         let mdir = cli::child(&root, "missions")
             .or_else(|| cli::child(&cli::child(&root, "Data").unwrap_or_else(|| root.clone()), "missions"))
             .expect("a missions folder");

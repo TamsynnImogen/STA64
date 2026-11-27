@@ -41,6 +41,8 @@ pub mod image;
 pub mod lift;
 pub mod map;
 pub mod msvc;
+pub mod output;
+pub mod paths;
 pub mod pe;
 pub mod prelude;
 pub mod pyval;

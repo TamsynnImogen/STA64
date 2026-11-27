@@ -268,22 +268,66 @@ fn a_failing_mission_is_reported_and_exit_one_without_other_scripts() {
     assert_eq!(r.out.len(), 3);
 }
 
+/// The full run deletes what the tool wrote (the manifest lists it) and nothing else; a folder with
+/// a .lua file the tool did not write is refused unless --keep-foreign says to leave it alone.
+/// Nothing converts here (junk DLLs), so the files come from cache entries the test puts there.
 #[test]
-fn a_full_run_replaces_the_previous_conversion_and_only_keeps_it() {
+fn a_full_run_deletes_only_what_the_tool_wrote_and_refuses_foreign_files() {
     let t = TempDir::new("cli-wipe");
     let root = t.path().join("Armada");
-    a1_install(&root, &[], &[]);
-    let out = t.path().join("out");
-    touch(&out.join("missions").join("old.lua"), b"old");
-    touch(&out.join("missions").join("keep.txt"), b"keep");
-    let r = run(&["--install", &s(&root), "--out", &s(&out), "--only", "fed1"]);
+    a1_install(&root, &[("x1S.dsl", b"junk"), ("x1R.drl", b"junk")], &[("fed1.bzn", "xx x1R.drl yy")]);
+    let (out, cdir) = (t.path().join("out"), t.path().join("cache"));
+    let key = cli::a1_cache_key("fed1", &root.join("missions/x1S.dsl"), &root.join("missions/x1R.drl")).unwrap();
+    sta_mission_convert::cache::Cache::new(&cdir)
+        .put(&key, &sta_mission_convert::cache::Entry::Converted { source: b"-- one\n".to_vec(), console: vec!["  fed1: x".into()] })
+        .unwrap();
+    let go = |extra: &[&str]| {
+        let mut a = vec!["--install", &*Box::leak(s(&root).into_boxed_str()), "--out", &*Box::leak(s(&out).into_boxed_str()), "--cache-dir", &*Box::leak(s(&cdir).into_boxed_str())];
+        a.extend_from_slice(extra);
+        run(&a)
+    };
+    let r = go(&[]);
+    assert_eq!(r.code, 0, "{:?} {}", r.out, r.err);
+    assert_eq!(fs::read(out.join("missions/fed1.lua")).unwrap(), b"-- one\n");
+    assert!(out.join(".sta_mission_convert.manifest").is_file());
+    // a file of the player's: the next full run refuses the folder and deletes nothing
+    touch(&out.join("missions").join("mine.lua"), b"mine");
+    touch(&out.join("missions").join("notes.txt"), b"notes");
+    let r = go(&[]);
+    assert_eq!(r.code, 1);
+    assert!(r.err.contains("did not write") && r.err.contains("--keep-foreign"), "{}", r.err);
+    assert!(r.out.is_empty());
+    assert!(out.join("missions/fed1.lua").exists() && out.join("missions/mine.lua").exists());
+    // --keep-foreign: the tool's own files are replaced, the player's stay
+    let r = go(&["--keep-foreign"]);
+    assert_eq!(r.code, 0, "{:?} {}", r.out, r.err);
+    assert_eq!(fs::read(out.join("missions/mine.lua")).unwrap(), b"mine");
+    assert_eq!(fs::read(out.join("missions/notes.txt")).unwrap(), b"notes");
+    assert_eq!(fs::read(out.join("missions/fed1.lua")).unwrap(), b"-- one\n");
+    // --only does not delete anything
+    touch(&out.join("missions").join("other.lua"), b"other");
+    let r = go(&["--keep-foreign", "--only", "fed1"]);
     assert_eq!(r.code, 0);
-    assert!(out.join("missions").join("old.lua").exists(), "--only keeps the old conversion");
-    let r = run(&["--install", &s(&root), "--out", &s(&out)]);
-    assert_eq!(r.code, 0);
-    assert!(!out.join("missions").join("old.lua").exists());
-    assert!(out.join("missions").join("keep.txt").exists());
-    assert_eq!(r.out.last().unwrap(), "Start the game as usual; those missions are listed as experimental.");
+    assert!(out.join("missions/other.lua").exists());
+    // a file the tool wrote that the player changed is the player's now
+    fs::write(out.join("missions/fed1.lua"), b"edited by the player").unwrap();
+    let r = go(&[]);
+    assert_eq!(r.code, 1);
+    assert_eq!(fs::read(out.join("missions/fed1.lua")).unwrap(), b"edited by the player");
+    // with --keep-foreign it is not overwritten either: that mission is an error
+    // (the run aborts; other scripts exist, so the wrapper's rule applies: a warning and exit 0)
+    let r = go(&["--keep-foreign"]);
+    assert_eq!(r.code, 0, "{:?}", r.out);
+    assert!(r.err.contains("refusing to overwrite"), "{}", r.err);
+    assert!(r.out.iter().any(|l| l.starts_with("warning: some missions failed")), "{:?}", r.out);
+    assert_eq!(fs::read(out.join("missions/fed1.lua")).unwrap(), b"edited by the player");
+    assert_eq!(fs::read(out.join("missions/mine.lua")).unwrap(), b"mine");
+    // the manifest damaged: refused, nothing deleted
+    fs::write(out.join(".sta_mission_convert.manifest"), b"garbage").unwrap();
+    let r = go(&["--keep-foreign"]);
+    assert_eq!(r.code, 1);
+    assert!(r.err.contains("is damaged"), "{}", r.err);
+    assert_eq!(fs::read(out.join("missions/mine.lua")).unwrap(), b"mine");
 }
 
 #[test]

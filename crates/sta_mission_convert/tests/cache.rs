@@ -32,7 +32,7 @@ fn entry_files(dir: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
-fn keys_depend_on_every_part_the_version_and_the_kind_and_parts_cannot_run_together() {
+fn keys_depend_on_every_part_the_version_the_build_and_the_kind_and_parts_cannot_run_together() {
     let k = key(&[b"dll bytes", b"drl bytes"]);
     assert_eq!(k.len(), 64);
     assert_eq!(k, key(&[b"dll bytes", b"drl bytes"]));
@@ -47,6 +47,17 @@ fn keys_depend_on_every_part_the_version_and_the_kind_and_parts_cannot_run_toget
     assert_ne!(v(1), v(2));
     assert_eq!(v(7), v(7));
     assert_eq!(KeyBuilder::new("t").part(b"x").finish(), v(sta_mission_convert::CONVERTER_VERSION));
+    // so is another build of the converter: a changed source file changes the identity
+    let b = |id: &str| KeyBuilder::with_identity("t", 1, id).part(b"x").finish();
+    assert_ne!(b("0.1.0+aaaa"), b("0.1.0+aaab"));
+    assert_ne!(b("0.1.0+aaaa"), b("0.2.0+aaaa"));
+    assert_eq!(
+        KeyBuilder::new("t").part(b"x").finish(),
+        KeyBuilder::with_identity("t", sta_mission_convert::CONVERTER_VERSION, sta_mission_convert::cache::BUILD_ID)
+            .part(b"x")
+            .finish()
+    );
+    assert!(sta_mission_convert::cache::BUILD_ID.contains('+') && sta_mission_convert::cache::BUILD_ID.len() > 32);
 }
 
 #[test]
@@ -58,10 +69,13 @@ fn entries_round_trip_and_a_hit_is_identical() {
     c.put(&k, &converted()).unwrap();
     assert_eq!(c.get(&k), Some(converted()));
     assert_eq!(c.get(&key(&[b"b"])), None);
-    let f = Entry::Failed { message: "DecodeError: invented \u{e9} text\nsecond line".to_owned() };
+    let odd = Entry::Converted {
+        source: vec![0, 255, 10, 13, 0xe9],
+        console: vec!["invented \u{e9} text".to_owned(), String::new()],
+    };
     let k2 = key(&[b"f"]);
-    c.put(&k2, &f).unwrap();
-    assert_eq!(c.get(&k2), Some(f));
+    c.put(&k2, &odd).unwrap();
+    assert_eq!(c.get(&k2), Some(odd));
     // put replaces
     let again = Entry::Converted { source: Vec::new(), console: Vec::new() };
     c.put(&k, &again).unwrap();
@@ -113,6 +127,52 @@ fn damaged_entries_are_ignored_and_rebuilt() {
     assert_eq!(c.get(&k3), None);
 }
 
+#[test]
+fn an_oversized_entry_is_a_miss_and_retain_prunes_only_what_it_may() {
+    let t = TempDir::new("cache-upkeep");
+    let c = Cache::new(t.path().join("c"));
+    let (k1, k2, k3) = (key(&[b"1"]), key(&[b"2"]), key(&[b"3"]));
+    for k in [&k1, &k2, &k3] {
+        c.put(k, &converted()).unwrap();
+    }
+    // a file that is not ours, a folder, a recent temporary file and an old one
+    fs::write(c.dir().join("notes.txt"), b"x").unwrap();
+    fs::create_dir_all(c.dir().join("sub.entry")).unwrap();
+    let recent = c.dir().join(format!("{k1}.tmp-1-1"));
+    fs::write(&recent, b"x").unwrap();
+    let old = c.dir().join(format!("{k2}.tmp-2-2"));
+    fs::write(&old, b"x").unwrap();
+    let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+    fs::File::options().write(true).open(&old).unwrap().set_modified(two_hours_ago).unwrap();
+    let keep: std::collections::HashSet<String> = [k1.clone()].into_iter().collect();
+    c.retain(&keep);
+    assert!(c.get(&k1).is_some());
+    assert_eq!(c.get(&k2), None);
+    assert_eq!(c.get(&k3), None);
+    assert!(c.dir().join("notes.txt").exists(), "foreign files stay");
+    assert!(c.dir().join("sub.entry").is_dir(), "folders stay");
+    assert!(recent.exists(), "a recent temporary file may belong to a running process");
+    assert!(!old.exists(), "an old temporary file is a killed run's");
+    // an entry file larger than the cap is not read
+    let big = key(&[b"big"]);
+    let f = fs::File::create(c.dir().join(format!("{big}.entry"))).unwrap();
+    f.set_len(65 * 1024 * 1024).unwrap();
+    assert_eq!(c.get(&big), None);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_cache_folder_that_is_a_link_is_not_written() {
+    let t = TempDir::new("cache-link");
+    let real = t.path().join("real");
+    fs::create_dir_all(&real).unwrap();
+    let link = t.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let c = Cache::new(&link);
+    assert!(c.put(&key(&[b"a"]), &converted()).is_err());
+    assert_eq!(fs::read_dir(&real).unwrap().count(), 0);
+}
+
 // ------------------------------------------------------------------ through the command line
 
 fn no_listing(_: &Path) -> sta_mission_convert::Result<Vec<(u32, String)>> {
@@ -120,10 +180,9 @@ fn no_listing(_: &Path) -> sta_mission_convert::Result<Vec<(u32, String)>> {
 }
 
 fn run(args: &[&str]) -> (i32, Vec<String>) {
-    let args: Vec<String> = args.iter().map(|s| (*s).to_owned()).collect();
     let (mut so, mut se) = (Vec::new(), Vec::new());
     let mut listing = no_listing;
-    let code = cli::run(&args, &Env::default(), &mut Io { out: &mut so, err: &mut se }, &mut listing);
+    let code = cli::run(args, &Env::default(), &mut Io { out: &mut so, err: &mut se }, &mut listing);
     (code, String::from_utf8_lossy(&so).replace('\r', "").lines().map(str::to_owned).collect())
 }
 
@@ -144,55 +203,66 @@ fn a1_install(root: &Path, x1s: &[u8]) {
     }
 }
 
-/// A failed mission is recorded; the next run replays the record (proved by changing the record);
-/// a change of an input is another entry; a damaged entry is rebuilt.
+/// The key the command line uses for the authored Armada I mission.
+fn mission_key(root: &Path) -> String {
+    cli::a1_cache_key("fed1", &root.join("missions/x1S.dsl"), &root.join("missions/x1R.drl")).unwrap()
+}
+
+/// Nothing converts here (junk DLLs), so a hit is an entry the test put there under the key the
+/// command line asks for: the run replays it (console lines and file); another input is another
+/// key and the converter answers (a failure, which is never cached); a damaged entry is ignored.
 #[test]
-fn the_command_line_replays_invalidates_and_rebuilds() {
+fn the_command_line_replays_invalidates_and_ignores_damage() {
     let t = TempDir::new("cache-cli");
     let root = t.path().join("Armada");
     let (out, cdir) = (t.path().join("out"), t.path().join("cache"));
     a1_install(&root, b"junk one");
-    let args = |extra: &[&'static str]| -> Vec<String> {
-        let mut a = vec!["--install".to_owned(), s(&root), "--out".to_owned(), s(&out), "--cache-dir".to_owned(), s(&cdir)];
-        a.extend(extra.iter().map(|x| (*x).to_owned()));
-        a
+    let go = || {
+        run(&["--install", &s(&root), "--out", &s(&out), "--cache-dir", &s(&cdir)])
     };
-    let go = |extra: &[&'static str]| {
-        let a = args(extra);
-        run(&a.iter().map(String::as_str).collect::<Vec<_>>())
-    };
-    let (code, first) = go(&[]);
+    // nothing cached: the converter fails, and a failure is not recorded
+    let (code, first) = go();
     assert_eq!(code, 1);
     assert!(first[1].starts_with("  FAIL fed1: "), "{first:?}");
-    let entries = entry_files(&cdir);
-    assert_eq!(entries.len(), 1, "the failure is recorded");
-    // the same run again: a hit (the console is the same)
-    let (_, again) = go(&[]);
-    assert_eq!(again, first);
-    assert_eq!(entry_files(&cdir), entries);
-    // prove it was a hit: the record answers, not the converter
-    let k = entries[0].file_stem().unwrap().to_string_lossy().into_owned();
-    Cache::new(&cdir).put(&k, &Entry::Failed { message: "replayed from the cache".to_owned() }).unwrap();
-    let (_, replay) = go(&[]);
-    assert_eq!(replay[1], "  FAIL fed1: replayed from the cache");
-    // an input changes: another key, the converter runs again
+    assert!(entry_files(&cdir).is_empty(), "a failure is not cached");
+    // a hit: the entry answers
+    let cache = Cache::new(&cdir);
+    let k1 = mission_key(&root);
+    let entry = Entry::Converted {
+        source: b"-- invented lua\nreturn 1\n".to_vec(),
+        console: vec!["  fed1 (x1): invented line".to_owned(), "    registration: invented".to_owned()],
+    };
+    cache.put(&k1, &entry).unwrap();
+    let (code, replay) = go();
+    assert_eq!(code, 0, "{replay:?}");
+    assert_eq!(replay[1], "  fed1 (x1): invented line");
+    assert_eq!(replay[2], "    registration: invented");
+    assert_eq!(fs::read(out.join("missions/fed1.lua")).unwrap(), b"-- invented lua\nreturn 1\n");
+    // an input changes: another key, the converter runs and fails again, the file of the old
+    // conversion is deleted by the full run (it was ours)
     a1_install(&root, b"junk two");
-    let (_, changed) = go(&[]);
-    assert_eq!(changed, first, "the converter answered, not the old record");
-    assert_eq!(entry_files(&cdir).len(), 2);
-    // a damaged entry is rebuilt
-    let k2 = entry_files(&cdir).into_iter().find(|p| *p != entries[0]).unwrap();
-    fs::write(&k2, b"damaged").unwrap();
-    let (_, rebuilt) = go(&[]);
-    assert_eq!(rebuilt, first);
-    assert!(Cache::new(&cdir).get(&k2.file_stem().unwrap().to_string_lossy()).is_some(), "rewritten");
-    // without the option nothing is read or written there
-    let before = entry_files(&cdir);
-    fs::remove_file(&before[0]).unwrap();
-    let a: Vec<String> = vec!["--install".into(), s(&root), "--out".into(), s(&out)];
-    let (_, plain) = run(&a.iter().map(String::as_str).collect::<Vec<_>>());
-    assert_eq!(plain, first);
-    assert_eq!(entry_files(&cdir).len(), before.len() - 1);
+    assert_ne!(mission_key(&root), k1);
+    let (code, changed) = go();
+    assert_eq!(code, 1);
+    assert_eq!(changed, first, "the converter answered, not the old entry");
+    assert!(!out.join("missions/fed1.lua").exists());
+    // a damaged entry under the right key is ignored
+    let k2 = mission_key(&root);
+    cache.put(&k2, &entry).unwrap();
+    fs::write(cdir.join(format!("{k2}.entry")), b"damaged").unwrap();
+    let (code, damaged) = go();
+    assert_eq!(code, 1);
+    assert_eq!(damaged, first);
+    // a full run prunes the entries it did not use (the old one, the damaged one stays a miss),
+    // a run with --only does not
+    cache.put(&k1, &entry).unwrap();
+    cache.put(&k2, &entry).unwrap();
+    let (_, _) = run(&["--install", &s(&root), "--out", &s(&out), "--cache-dir", &s(&cdir), "--only", "fed1"]);
+    assert_eq!(entry_files(&cdir).len(), 2, "--only prunes nothing");
+    let (code, _) = go();
+    assert_eq!(code, 0, "the entry for the current input answers");
+    assert_eq!(entry_files(&cdir).len(), 1, "a full run keeps only what it used");
+    assert!(cache.get(&k2).is_some());
 }
 
 #[test]
@@ -205,8 +275,14 @@ fn the_cache_option_uses_the_data_directory() {
     let (mut so, mut se) = (Vec::new(), Vec::new());
     let mut listing = no_listing;
     let env = Env { data_dir: Some(data.clone()), ..Env::default() };
-    cli::run(&args, &env, &mut Io { out: &mut so, err: &mut se }, &mut listing);
-    assert_eq!(entry_files(&data.join("convert-cache").join("star-trek-armada-test")).len(), 1);
+    // an entry in the default folder is used
+    let dir = data.join("convert-cache").join("star-trek-armada-test");
+    Cache::new(&dir)
+        .put(&mission_key(&root), &Entry::Converted { source: b"-- x\n".to_vec(), console: vec!["  replayed".to_owned()] })
+        .unwrap();
+    let code = cli::run(&args, &env, &mut Io { out: &mut so, err: &mut se }, &mut listing);
+    assert_eq!(code, 0);
+    assert!(String::from_utf8_lossy(&so).contains("  replayed"));
     // no data directory known: refused, with the way out named
     let (mut so, mut se) = (Vec::new(), Vec::new());
     let code = cli::run(&args, &Env::default(), &mut Io { out: &mut so, err: &mut se }, &mut listing);
