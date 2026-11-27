@@ -42,13 +42,17 @@ pub fn neg_op(op: &Py) -> Result<&'static str> {
         Some(">=") => "<",
         Some("<=") => ">",
         Some(">") => "<=",
-        _ => return Err(DecodeError::raw(op.repr())),
+        _ => return Err(DecodeError::python("KeyError", op.repr())),
     })
 }
 
-/// `JCC[mn]` of `drl_to_lua.py`: the comparison a conditional jump of the rule decoder tests
+/// `JCC[mn]` of `drl_to_lua.py`: the comparison a conditional jump of the RULE-DLL decoder tests
 /// (`je` `jne` `jl` `jge` `jle` `jg`); `None` for any other mnemonic (Python's `KeyError`).
-pub fn jcc_op(mn: &str) -> Option<&'static str> {
+/// This is the rule tool's 6-entry table only. `tools/dsl_to_lua.py` has its own, larger `JCC`
+/// (it adds `jb` `jae` `jbe` `ja` `js` `jns`) and its own `SETCC`, and `drl_to_lua.py` has a
+/// `SETCC` of its own too: the mission lifter (LUA-15d) and the rule decoder (LUA-15g) each add
+/// the tables of their Python module; do not reuse this one for the mission lifter.
+pub fn drl_jcc_op(mn: &str) -> Option<&'static str> {
     Some(match mn {
         "je" => "==",
         "jne" => "~=",
@@ -61,7 +65,7 @@ pub fn jcc_op(mn: &str) -> Option<&'static str> {
 }
 
 fn jcc_or_key_error(mn: &str) -> Result<&'static str> {
-    jcc_op(mn).ok_or_else(|| DecodeError::raw(Py::from(mn).repr()))
+    drl_jcc_op(mn).ok_or_else(|| DecodeError::python("KeyError", Py::from(mn).repr()))
 }
 
 /// `negate(p)`: the opposite comparison for a `cmp`, the operand of a `not`, else `("not", p)`.
@@ -234,7 +238,7 @@ pub fn evaluate(e: &Py, env: &HashMap<String, bool>) -> Result<bool> {
         Some("const") => Ok(e.item(1)?.truthy()),
         _ => {
             let (key, pol) = atom_key(e)?;
-            let v = env.get(&key).ok_or_else(|| DecodeError::raw(Py::from(key.as_str()).repr()))?;
+            let v = env.get(&key).ok_or_else(|| DecodeError::python("KeyError", Py::from(key.as_str()).repr()))?;
             Ok(*v == pol)
         }
     }
@@ -448,9 +452,22 @@ pub fn expr_arg(v: &Py, a: i64) -> Result<Py> {
     )))
 }
 
+/// `TypeError` of `x & 0x...` for a value that is not an int.
+fn and_type_error(v: &Py) -> DecodeError {
+    DecodeError::python(
+        "TypeError",
+        format!("unsupported operand type(s) for &: '{}' and 'int'", v.type_name()),
+    )
+}
+
 fn str_of(v: &Py) -> Result<&str> {
     v.as_str()
-        .ok_or_else(|| DecodeError::raw(format!("expected string, got '{}'", v.type_name())))
+        .ok_or_else(|| {
+            DecodeError::python(
+                "TypeError",
+                format!("expected string or bytes-like object, got '{}'", v.type_name()),
+            )
+        })
 }
 
 /// `typed_args(args, params)`: a pushed 32-bit constant in a `float` parameter (`M`) is the
@@ -471,12 +488,7 @@ pub fn typed_args(args: &[Py], params: Option<&[String]>) -> Result<Vec<Py>> {
             let n = match v.item(1)? {
                 Py::Int(n) => *n,
                 Py::Bool(b) => i64::from(*b),
-                other => {
-                    return Err(DecodeError::raw(format!(
-                        "unsupported operand type(s) for &: '{}' and 'int'",
-                        other.type_name()
-                    )))
-                }
+                other => return Err(and_type_error(other)),
             };
             v = tup!["float", f64::from(f32::from_bits((n & 0xFFFF_FFFF) as u32))];
         } else if t == "_N" && !v.tag_is("boolarg")? {
@@ -515,24 +527,26 @@ pub fn branch_pred(mn: &str, f: &Py, a: i64) -> Result<Py> {
         return Ok(tup!["cmp", jcc_or_key_error(mn)?, x, y]);
     }
     if f.tag_is("ftest")? {
-        let pair = f.item(1)?.items().map_err(|_| DecodeError::raw("cannot unpack non-iterable object"))?;
+        // `(st0, m), mask = f[1], f[2]`: the right side is read first, then unpacked
+        let (packed, mask_v) = (f.item(1)?, f.item(2)?);
+        let pair = packed.as_seq().ok_or_else(|| {
+            DecodeError::python("TypeError", format!("cannot unpack non-iterable {} object", packed.type_name()))
+        })?;
         if pair.len() != 2 {
-            return Err(DecodeError::raw(format!(
-                "{} values to unpack (expected 2, got {})",
-                if pair.len() < 2 { "not enough" } else { "too many" },
-                pair.len()
-            )));
+            return Err(DecodeError::python(
+                "ValueError",
+                format!(
+                    "{} values to unpack (expected 2, got {})",
+                    if pair.len() < 2 { "not enough" } else { "too many" },
+                    pair.len()
+                ),
+            ));
         }
         let (st0, m) = (&pair[0], &pair[1]);
-        let mask = match f.item(2)? {
+        let mask = match mask_v {
             Py::Int(n) => *n,
             Py::Bool(b) => i64::from(*b),
-            other => {
-                return Err(DecodeError::raw(format!(
-                    "unsupported operand type(s) for &: '{}' and 'int'",
-                    other.type_name()
-                )))
-            }
+            other => return Err(and_type_error(other)),
         };
         if mask & !0x45 != 0 {
             return Err(DecodeError::new(format!("x87 status mask {} at {}", py_hex(mask), at())));
