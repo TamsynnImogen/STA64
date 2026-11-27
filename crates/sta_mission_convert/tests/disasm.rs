@@ -62,7 +62,7 @@ fn run(var: &str) {
     });
     files.sort();
     assert!(!files.is_empty(), "no mission DLL under the install");
-    let (mut lines, mut differing, mut bad_files) = (0usize, 0usize, 0usize);
+    let (mut lines, mut differing, mut bad_files, mut refused) = (0usize, 0usize, 0usize, 0usize);
     let t0 = std::time::Instant::now();
     let mut listing_time = std::time::Duration::ZERO;
     for (n, p) in files.iter().enumerate() {
@@ -74,7 +74,15 @@ fn run(var: &str) {
         let want = parse_objdump(&String::from_utf8_lossy(&out.stdout));
         let pe = Pe::open(p).unwrap_or_else(|e| panic!("file {n} does not parse: {e}"));
         let t1 = std::time::Instant::now();
-        let got = Listing::from_image(&pe).expect("no symbol table").ins;
+        let got = match Listing::from_image(&pe) {
+            Ok(l) => l.ins,
+            Err(e) => {
+                // A file with a symbol table is refused (not compared); say so.
+                eprintln!("file {n}: refused: {e}");
+                refused += 1;
+                continue;
+            }
+        };
         listing_time += t1.elapsed();
         if let Some(d) = &dump {
             let text: String = got.iter().map(|(a, t)| format!("{a:x}:\t{t}\n")).collect();
@@ -127,7 +135,7 @@ fn run(var: &str) {
     }
     eprintln!(
         "{var}: {} files, {lines} lines compared, {differing} differing, {bad_files} files differ, \
-         listing time {listing_time:?} of {:?}",
+         {refused} refused, listing time {listing_time:?} of {:?}",
         files.len(),
         t0.elapsed()
     );

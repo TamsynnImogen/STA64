@@ -456,11 +456,16 @@ impl<'a> Sweeper<'a> {
                     .map(|&b| prefix_name(b).unwrap_or(""))
                     .collect()
             };
-            return (
-                (nprefix + opn + extra).min(rest.len()),
-                join(&words, "(bad)", ""),
-                false,
-            );
+            // A bad EVEX payload names the mask and rounding fields of its third byte.
+            let text = if lay.op == 0x62 && extra == 2 {
+                match eff_ref.get(lay.modrm_pos + 2) {
+                    Some(&p2) => evex_bad_text(p2),
+                    None => "(bad)".to_string(),
+                }
+            } else {
+                join(&words, "(bad)", "")
+            };
+            return ((nprefix + opn + extra).min(rest.len()), text, false);
         }
         let wait = if wait_before && print::merges_wait(ins.mnemonic()) {
             Wait::Merged
@@ -659,7 +664,7 @@ impl<'a> Sweeper<'a> {
         }
         // The padlock groups: only the register forms with `rm` 0 are instructions (the others
         // are `(bad)`, see `badtab`).
-        if lay.map == 1 && matches!(lay.op, 0xa6 | 0xa7) && m >= 0xc0 && m & 7 == 0 {
+        if lay.map == 1 && matches!(lay.op, 0xa6 | 0xa7) {
             const A6: [&str; 8] = [
                 "", "xsha1", "xsha256", "xsha384", "xsha512", "", "montmul2", "xmodexp",
             ];
@@ -675,8 +680,17 @@ impl<'a> Sweeper<'a> {
             ];
             let t = if lay.op == 0xa6 { &A6 } else { &A7 };
             let name = t[((m >> 3) & 7) as usize];
+            let sm2 = lay.op == 0xa6 && reg == 0 && has(0xf2);
+            let name = if sm2 { "sm2" } else { name };
             if !name.is_empty() {
-                return Some((mp + 1, join(&all_words, name, "")));
+                let words: &[&str] = if sm2 { &[] } else { &all_words };
+                // A register form with `rm` 0 is the instruction; any other ModRM byte leaves it
+                // with a bad operand after the escape byte.
+                return Some(if m >= 0xc0 && m & 7 == 0 {
+                    (mp + 1, join(words, name, ""))
+                } else {
+                    (lay.opcode_pos + 1, join(words, name, "(bad)"))
+                });
             }
         }
         // Moves to and from the test registers: the tool takes any ModRM byte as a register pair.
@@ -788,5 +802,32 @@ fn print_seg(b: u8) -> &'static str {
         0x26 => "es",
         0x64 => "fs",
         _ => "gs",
+    }
+}
+
+/// `(bad)` and the mask and rounding fields of an EVEX payload's third byte, as the tool names
+/// them: `{kN}` (with `{z}`), `{bad}` for a zeroing bit without a mask, then the rounding control
+/// the vector length bits select, followed by `-bad`.
+fn evex_bad_text(p2: u8) -> String {
+    let aaa = p2 & 7;
+    let mask = if aaa != 0 {
+        format!("{{k{aaa}}}{}", if p2 & 0x80 != 0 { "{z}" } else { "" })
+    } else if p2 & 0x80 != 0 {
+        "{bad}".to_string()
+    } else {
+        String::new()
+    };
+    let rc = if p2 & 0x10 != 0 {
+        let name = ["rn", "ru", "rd", "rz"][((p2 >> 5) & 3) as usize];
+        let sep = if mask.is_empty() { "" } else { "," };
+        format!("{sep}{{{name}-bad}}")
+    } else {
+        String::new()
+    };
+    let tail = format!("{mask}{rc}");
+    if tail.is_empty() {
+        "(bad)".to_string()
+    } else {
+        format!("(bad) {tail}")
     }
 }
