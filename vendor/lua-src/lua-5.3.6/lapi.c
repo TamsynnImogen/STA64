@@ -449,6 +449,13 @@ LUA_API const void *lua_topointer (lua_State *L, int idx) {
 ** functions and light userdata (never collected, few) in a registry table.
 ** Returns 0 for values that are not references.
 */
+/* STA64: table slots visited by resizes, rebuilds and density checks so far
+   (for tests that bound the cost of table operations) */
+LUA_API lua_Integer lua_sta64_tablework (lua_State *L) {
+  return cast(lua_Integer, G(L)->sta64_work);
+}
+
+
 LUA_API lua_Integer lua_sta64_refid (lua_State *L, int idx) {
   unsigned int *slot = NULL;
   lua_Integer id = 0;
@@ -464,7 +471,10 @@ LUA_API lua_Integer lua_sta64_refid (lua_State *L, int idx) {
     default: break;
   }
   if (slot != NULL) {
-    if (*slot == 0) *slot = ++G(L)->sta64_lastid;
+    if (*slot == 0) {
+      if (++G(L)->sta64_lastid == 0) G(L)->sta64_lastid = 1;  /* wraps past 0 */
+      *slot = G(L)->sta64_lastid;
+    }
     id = *slot;
   }
   lua_unlock(L);
@@ -481,7 +491,8 @@ LUA_API lua_Integer lua_sta64_refid (lua_State *L, int idx) {
     if (lua_rawget(L, -2) == LUA_TNUMBER)  /* already has one? */
       id = lua_tointeger(L, -1);
     else {
-      id = ++G(L)->sta64_lastid;
+      if (++G(L)->sta64_lastid == 0) G(L)->sta64_lastid = 1;  /* wraps past 0 */
+      id = G(L)->sta64_lastid;
       lua_pushvalue(L, idx);
       lua_pushinteger(L, id);
       lua_rawset(L, -4);  /* refids[value] = id */

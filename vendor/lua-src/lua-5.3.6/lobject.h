@@ -508,10 +508,12 @@ typedef struct Table {
   Node *lastfree;  /* any free position is before this position */
   struct Table *metatable;
   GCObject *gclist;
-  /* STA64: first and last node in insertion order (-1: none), and the
-     keys inserted into the hash part since its last resize */
+  /* STA64: first and last node in insertion order (-1: none); new keys
+     since the last full rehash (saturating); array size + 1 at which the
+     append rule found the array part too sparse (0: none) */
   int sta64_first, sta64_last;
   unsigned int sta64_inserts;
+  unsigned int sta64_noappend;
   unsigned int sta64_id;  /* STA64: reference id for 'tostring' (0: none yet) */
 } Table;
 

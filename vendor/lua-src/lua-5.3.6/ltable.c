@@ -118,13 +118,33 @@ static int l_hashfloat (lua_Number n) {
 ** keys were inserted ('sta64_first', 'sta64_last', node 'sta64_prev' and
 ** 'sta64_next', node indices, -1 for none). 'next' walks the array part in
 ** index order and then this list, so traversal order never depends on hash
-** seeds or addresses. A key assigned again after it was set to nil moves to
-** the end ('luaH_sta64touch'). The hash part is rebuilt after a fixed number
-** of insertions ('sta64_inserts' reaching the node count) rather than when
-** the free-position search fails, so when it happens, and which integer keys
-** then live in the array part, depends only on what the script did.
+** seeds or addresses.
+** - A node is never reused before a rebuild: a key set to nil keeps its node
+**   (and stays findable; assigned again it moves to the end of the order,
+**   'luaH_sta64touch'). So every new key takes exactly one free node, and the
+**   table is rebuilt exactly when it has none left: after a number of new
+**   keys that depends only on the operations, never on where keys hashed.
+** - A rebuild ('sta64_rebuild') normally rebuilds only the hash part, at a
+**   size that leaves a quarter of it free; a full rehash (stock sizing of
+**   both parts) runs once the new keys since the last one reach half the
+**   size of both parts. Both are amortised constant per new key.
+** - The key just past the array part (t[#t + 1] of a full list) grows the
+**   array part when that part is more than half used, so a list kept without
+**   holes always lives in the array part. A failed check is remembered for
+**   the current array size ('sta64_noappend'), so it is not repeated.
+** - Re-insertion inside 'luaH_resize' goes through 'sta64_reinsert', which
+**   never grows, rebuilds or allocates (as in stock Lua); a nested resize
+**   is a fatal internal error ('sta64_resizing').
 ** ==============================================================
 */
+
+#include <stdlib.h>
+
+/* an internal invariant of the patch; failing it means memory corruption */
+#define sta64_check(c)	((c) ? (void)0 : abort())
+
+/* add to the table-work count read by the tests ('lua_sta64_tablework') */
+#define sta64_work(L,n)	(G(L)->sta64_work += cast(lu_mem, (n)))
 
 #define sta64_index(t,n)	cast_int((n) - gnode(t, 0))
 
@@ -168,7 +188,6 @@ void luaH_sta64touch (Table *t, const TValue *slot) {
     Node *n = gnode(t, (p - cast(const char *, gnode(t, 0))) / sizeof(Node));
     sta64_unlink(t, n);
     sta64_append(t, n);
-    t->sta64_inserts++;
   }
 }
 
@@ -384,7 +403,6 @@ static void setnodevector (lua_State *L, Table *t, unsigned int size) {
     t->lsizenode = 0;
     t->lastfree = NULL;  /* signal that it is using dummy node */
     t->sta64_first = t->sta64_last = -1;  /* STA64: empty order */
-    t->sta64_inserts = 0;
   }
   else {
     int i;
@@ -402,7 +420,6 @@ static void setnodevector (lua_State *L, Table *t, unsigned int size) {
     t->lsizenode = cast_byte(lsize);
     t->lastfree = gnode(t, size);  /* all positions are free */
     t->sta64_first = t->sta64_last = -1;  /* STA64: empty order */
-    t->sta64_inserts = 0;
   }
 }
 
@@ -419,6 +436,28 @@ static void auxsetnode (lua_State *L, void *ud) {
 }
 
 
+static TValue *sta64_insertnode (lua_State *L, Table *t, const TValue *key);
+
+
+/*
+** STA64: put a key that is known to be absent, with its value, into the
+** table being rebuilt by 'luaH_resize': into the array part if it fits
+** there, else into a free node. Never grows, rebuilds or allocates; the
+** caller sized the new parts so that a free node always exists.
+*/
+static void sta64_reinsert (lua_State *L, Table *t, const TValue *key,
+                            const TValue *val) {
+  TValue *slot;
+  if (ttisinteger(key) && l_castS2U(ivalue(key)) - 1 < t->sizearray)
+    slot = &t->array[ivalue(key) - 1];
+  else {
+    slot = sta64_insertnode(L, t, key);
+    sta64_check(slot != NULL);  /* the new hash part has room for it */
+  }
+  setobjt2t(L, slot, val);
+}
+
+
 void luaH_resize (lua_State *L, Table *t, unsigned int nasize,
                                           unsigned int nhsize) {
   unsigned int i;
@@ -428,6 +467,7 @@ void luaH_resize (lua_State *L, Table *t, unsigned int nasize,
   int oldhsize = allocsizenode(t);
   Node *nold = t->node;  /* save old hash ... */
   int oldfirst = t->sta64_first;  /* STA64: ... and its order */
+  sta64_check(G(L)->sta64_resizing == 0);  /* STA64: resizes never nest */
   if (nasize > oldasize)  /* array part must grow? */
     setarrayvector(L, t, nasize);
   /* create new hash part with appropriate size */
@@ -436,8 +476,17 @@ void luaH_resize (lua_State *L, Table *t, unsigned int nasize,
     setarrayvector(L, t, oldasize);  /* array back to its original size */
     luaD_throw(L, LUA_ERRMEM);  /* rethrow memory error */
   }
-  /* STA64: re-insert the hash part first, in insertion order, and the
-     vanishing slice of the array part after it, in index order */
+  /* STA64: from here until the array part shrinks, nothing allocates or
+     resizes ('sta64_resizing' is set). Re-insert the hash part first, in
+     insertion order, then the vanishing slice of the array part, in index
+     order; both through 'sta64_reinsert' */
+  G(L)->sta64_resizing = 1;
+  /* the old hash part is walked; the array part is touched only if its
+     size changes */
+  sta64_work(L, cast(lu_mem, oldhsize) +
+                (nasize != oldasize ? oldasize + nasize : 0));
+  if (nasize != oldasize)
+    t->sta64_noappend = 0;  /* a new array size: check density again */
   if (nasize < oldasize)  /* array part must shrink? */
     t->sizearray = nasize;
   for (j = oldfirst; j >= 0; j = nold[j].sta64_next) {
@@ -445,18 +494,23 @@ void luaH_resize (lua_State *L, Table *t, unsigned int nasize,
     if (!ttisnil(gval(old))) {
       /* doesn't need barrier/invalidate cache, as entry was
          already present in the table */
-      setobjt2t(L, luaH_set(L, t, gkey(old)), gval(old));
+      sta64_reinsert(L, t, gkey(old), gval(old));
     }
   }
   if (nasize < oldasize) {  /* array part must shrink? */
     /* re-insert elements from vanishing slice */
     for (i=nasize; i<oldasize; i++) {
-      if (!ttisnil(&t->array[i]))
-        luaH_setint(L, t, i + 1, &t->array[i]);
+      if (!ttisnil(&t->array[i])) {
+        TValue k;
+        setivalue(&k, cast(lua_Integer, i) + 1);
+        sta64_reinsert(L, t, &k, &t->array[i]);
+      }
     }
+    G(L)->sta64_resizing = 0;
     /* shrink array */
     luaM_reallocvector(L, t->array, oldasize, nasize, TValue);
   }
+  G(L)->sta64_resizing = 0;
   if (oldhsize > 0)  /* not the dummy node? */
     luaM_freearray(L, nold, cast(size_t, oldhsize)); /* free old hash */
 }
@@ -490,6 +544,42 @@ static void rehash (lua_State *L, Table *t, const TValue *ek) {
 }
 
 
+/*
+** STA64: the hash part has no free node left for 'ek'. Rebuild the hash
+** part alone (nil entries dropped, a quarter of it left free), or, once the
+** new keys since the last full rehash reach half the size of both parts,
+** run the full rehash. Each is amortised over the new keys that led to it.
+*/
+static void sta64_rebuild (lua_State *L, Table *t, const TValue *ek) {
+  unsigned int live = 0, size;
+  int i = allocsizenode(t);
+  if (t->sta64_inserts >= (t->sizearray + cast(unsigned int, i)) / 2) {
+    t->sta64_inserts = 0;
+    sta64_work(L, t->sizearray + cast(unsigned int, i));
+    rehash(L, t, ek);
+    return;
+  }
+  sta64_work(L, i);
+  while (i--)
+    if (!ttisnil(gval(gnode(t, i)))) live++;
+  size = twoto(luaO_ceillog2(live + 1));
+  if (size - (live + 1) < size / 4) size *= 2;
+  luaH_resize(L, t, t->sizearray, size);
+}
+
+
+/*
+** STA64: is the array part more than half used? (for the append rule)
+*/
+static int sta64_dense (lua_State *L, Table *t) {
+  unsigned int i, used = 0;
+  sta64_work(L, t->sizearray);
+  for (i = 0; i < t->sizearray; i++)
+    if (!ttisnil(&t->array[i])) used++;
+  return used > t->sizearray / 2;
+}
+
+
 
 /*
 ** }=============================================================
@@ -504,6 +594,8 @@ Table *luaH_new (lua_State *L) {
   t->array = NULL;
   t->sizearray = 0;
   t->sta64_id = 0;  /* STA64 */
+  t->sta64_inserts = 0;
+  t->sta64_noappend = 0;
   setnodevector(L, t, 0);
   return t;
 }
@@ -538,9 +630,8 @@ static Node *getfreepos (Table *t) {
 ** position), new key goes to an empty position.
 */
 TValue *luaH_newkey (lua_State *L, Table *t, const TValue *key) {
-  Node *mp;
   TValue aux;
-  int inorder;  /* STA64: 'mp' holds a key set to nil, linked in the order */
+  TValue *slot;
   if (ttisnil(key)) luaG_runerror(L, "table index is nil");
   else if (ttisfloat(key)) {
     lua_Integer k;
@@ -551,31 +642,43 @@ TValue *luaH_newkey (lua_State *L, Table *t, const TValue *key) {
     else if (luai_numisnan(fltvalue(key)))
       luaG_runerror(L, "table index is NaN");
   }
-  /* STA64: the key just past the array part grows the array part, so a
-     list kept without holes always lives there (and 'next' visits it first,
-     ascending), whatever other keys the table holds */
+  sta64_check(G(L)->sta64_resizing == 0);  /* STA64: never inside a resize */
+  /* STA64: the key just past the array part doubles the array part while
+     that part is more than half used, so a list kept without holes always
+     lives there (and 'next' visits it first, ascending) */
   if (ttisinteger(key) &&
       l_castS2U(ivalue(key)) == cast(lua_Unsigned, t->sizearray) + 1 &&
-      t->sizearray < MAXASIZE / 2) {
-    luaH_resize(L, t, t->sizearray ? 2 * t->sizearray : 1, allocsizenode(t));
-    return luaH_set(L, t, key);
+      t->sizearray < MAXASIZE / 2 &&
+      t->sta64_noappend != t->sizearray + 1) {
+    if (t->sizearray == 0 || sta64_dense(L, t)) {
+      luaH_resize(L, t, t->sizearray ? 2 * t->sizearray : 1, allocsizenode(t));
+      return &t->array[ivalue(key) - 1];
+    }
+    t->sta64_noappend = t->sizearray + 1;  /* not again at this size */
   }
-  /* STA64: rebuild after as many insertions as there are nodes (never
-     later than the free-position search would fail) */
-  if (!isdummy(t) && t->sta64_inserts >= cast(unsigned int, sizenode(t))) {
-    rehash(L, t, key);
-    return luaH_set(L, t, key);
+  slot = sta64_insertnode(L, t, key);
+  if (slot == NULL) {  /* no free node left? */
+    sta64_rebuild(L, t, key);
+    /* whatever called 'newkey' takes care of TM cache */
+    return luaH_set(L, t, key);  /* insert key into the rebuilt table */
   }
-  mp = mainposition(t, key);
-  inorder = !ttisnil(gkey(mp));
-  if (!ttisnil(gval(mp)) || isdummy(t)) {  /* main position is taken? */
+  if (t->sta64_inserts < UINT_MAX) t->sta64_inserts++;  /* saturates */
+  return slot;
+}
+
+
+/*
+** STA64: stock 'luaH_newkey' after the key checks, with two changes: a
+** node that still holds a key (set to nil) counts as taken, and the new key
+** goes to the end of the order. Returns NULL when no free node is left.
+*/
+static TValue *sta64_insertnode (lua_State *L, Table *t, const TValue *key) {
+  Node *mp = mainposition(t, key);
+  if (!ttisnil(gkey(mp)) || isdummy(t)) {  /* main position is taken? */
     Node *othern;
     Node *f = getfreepos(t);  /* get a free place */
-    if (f == NULL) {  /* cannot find a free place? */
-      rehash(L, t, key);  /* grow table */
-      /* whatever called 'newkey' takes care of TM cache */
-      return luaH_set(L, t, key);  /* insert key into grown table */
-    }
+    if (f == NULL)  /* cannot find a free place? */
+      return NULL;
     lua_assert(!isdummy(t));
     othern = mainposition(t, gkey(mp));
     if (othern != mp) {  /* is colliding node out of its main position? */
@@ -599,14 +702,11 @@ TValue *luaH_newkey (lua_State *L, Table *t, const TValue *key) {
       gnext(mp) = cast_int(f - mp);
       mp = f;
     }
-    inorder = 0;  /* STA64: 'mp' is a free node, or its order went to 'f' */
   }
-  if (inorder) sta64_unlink(t, mp);  /* STA64: the old key leaves */
   setnodekey(L, &mp->i_key, key);
   luaC_barrierback(L, t, key);
   lua_assert(ttisnil(gval(mp)));
-  sta64_append(t, mp);  /* STA64: the new key goes last */
-  t->sta64_inserts++;
+  sta64_append(t, mp);  /* the new key goes last */
   return gval(mp);
 }
 

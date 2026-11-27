@@ -311,6 +311,8 @@ LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud) {
   g->mainthread = L;
   g->seed = makeseed(L);
   g->sta64_lastid = 0;  /* STA64 */
+  g->sta64_resizing = 0;
+  g->sta64_work = 0;
   g->gcrunning = 0;  /* no GC while building state */
   g->GCestimate = 0;
   g->strt.size = g->strt.nuse = 0;
