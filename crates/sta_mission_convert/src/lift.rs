@@ -34,7 +34,14 @@
 //!
 //! The Armada I front end (LUA-15e) overrides about 25 of the Python methods in a subclass.
 //! Here the methods are public and non-virtual, [`Lifter::game`] says which game the lifter
-//! serves, and the override points branch on it (nothing in this module does yet).
+//! serves, and the override points (`lift`, `step`, `read`, `lvalue`, `glob`, `load`, `store`,
+//! `snap`, `write`, `arith`) are dispatchers: for Armada I they call the `a1_*` method, else the
+//! body, which is the `*_base` method (the Python's `super()`).
+//!
+//! **Rule: code of the core calls the dispatchers, never a `*_base` method.** Only the Armada I
+//! overrides (`a1/ops.rs`) call `*_base`, as the Python's overrides call `super()`; any other call
+//! would skip the override the Python's virtual call reaches. Likewise `State::flags` is assigned
+//! only through `set_flags`.
 //!
 //! # Errors
 //!
@@ -241,8 +248,10 @@ pub struct State {
     pub fpu: Vec<Py>,
     /// The value an x87-returning call left in `st(0)` (`None` when none).
     pub fret: Py,
-    /// The last compare: `("test", v)`, `("cmp", x, y)`, `("ftest", fcmp, mask)`.
-    pub flags: Py,
+    /// The last compare: `("test", v)`, `("cmp", x, y)`, `("ftest", fcmp, mask)`. Private: it is
+    /// assigned only through [`State::set_flags`], which the Armada I front end's identity test
+    /// (`st.flags is f[3]`) relies on.
+    flags: Py,
     pub fsw: Py,
     pub fcmp: Py,
     pub body: bool,
@@ -261,6 +270,11 @@ pub struct State {
 }
 
 impl State {
+    /// `st.flags`.
+    pub fn flags(&self) -> &Py {
+        &self.flags
+    }
+
     /// `st.flags = v`.
     pub fn set_flags(&mut self, v: Py) {
         self.flags = v;

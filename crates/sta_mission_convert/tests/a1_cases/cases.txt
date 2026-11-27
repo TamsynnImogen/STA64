@@ -23,6 +23,9 @@ const STEP 0x10003000
 const ACTION 0x10004000
 const INIT 0x10005000
 const COND 0x10007000
+const CHAIN 0x10010000
+const COND2 0x10007100
+const ACT2 0x10007200
 const EP 0x10001100
 const FUNC 0x10008000
 const LOW 0x10009000
@@ -466,6 +469,16 @@ rcode {ACT2}
 run mission
 end
 
+case a_rule_is_trashed_by_name
+code {STEP}
+  mov    eax,{iat:WORLD}
+  push   0x10040020
+  lea    ecx,[eax+0x38]
+  call   {iat:trash_rule}
+  ret
+run lift {STEP}
+end
+
 case a_rule_dll_without_dllmain
 code {STEP}
   ret
@@ -507,7 +520,6 @@ code {STEP}
   add    esp,0x4
   push   0x1
   call   {iat:Add_Data}
-  add    esp,0x4
   ret
 run lift {STEP}
 end
@@ -576,14 +588,18 @@ end
 # are the most the Python follows; one more fails the mission with RecursionError
 case a_chain_of_blocks_just_below_the_recursion_limit
 code {ACTION}
-  @chain 994
+  jmp    {CHAIN}
+code {CHAIN}
+  @chain 993
   ret
 run try_convert
 end
 
 case a_chain_of_blocks_just_above_the_recursion_limit
 code {ACTION}
-  @chain 995
+  jmp    {CHAIN}
+code {CHAIN}
+  @chain 994
   ret
 run try_convert
 end
