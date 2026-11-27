@@ -330,7 +330,7 @@ fn stock_city(i: FragIn) -> vec4<f32> {
     let l = min(vec3<f32>(p.base.w) + p.dcol0.rgb * max(dot(n, p.dvec0.xyz), 0.0) + p.dcol1.rgb * max(dot(n, p.dvec1.xyz), 0.0), vec3<f32>(1.0));
     let t = textureSample(tex, tex_sampler, i.uv) * textureSample(city_alloc, city_alloc_sampler, i.uv);
     let shown = pow(max(t.rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2)) * l;
-    return vec4<f32>(pow(shown, vec3<f32>(2.2)), t.a);
+    return vec4<f32>(pow(shown, vec3<f32>(2.2)) * p.shine.w, t.a);
 }
 
 // The Stock look: the engine's fixed pipeline. The texel times the sum of the lights (each at
@@ -351,7 +351,8 @@ fn stock(i: FragIn) -> vec4<f32> {
     let l = min(vec3<f32>(p.base.w) + p.dcol0.rgb * max(dot(n, p.dvec0.xyz), 0.0) + p.dcol1.rgb * max(dot(n, p.dvec1.xyz), 0.0), vec3<f32>(1.0));
     let t = textureSample(tex, tex_sampler, i.uv);
     let shown = pow(max(t.rgb, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2)) * l;
-    return vec4<f32>(pow(shown, vec3<f32>(2.2)), t.a);
+    // shine.w is 1 in sight; a planet out of sight is dimmed by it (#1146).
+    return vec4<f32>(pow(shown, vec3<f32>(2.2)) * p.shine.w, t.a);
 }
 
 @fragment

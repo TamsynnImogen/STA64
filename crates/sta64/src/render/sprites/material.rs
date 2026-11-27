@@ -286,10 +286,102 @@ pub(crate) fn parity() -> bool {
     }
 }
 
-/// The adoption and release observers and the looks' table (in [`SpriteMaterialPlugin`]; tests
-/// without rendering add them on their own).
+/// Nodes whose parity mark (S5) waits for visibility: `animate` lists a node in `Update` in each frame
+/// its state changed under `main`'s rule, and [`mark_seen_changes`] in `PostUpdate` marks the ones some
+/// view sees and empties the list.
+#[derive(Resource, Default, Debug)]
+pub(crate) struct ParityMarks {
+    list: Vec<Entity>,
+    /// Test builds only: a deliberately broken form, a positive control for the tests that the mark is
+    /// there and on time.
+    #[cfg(test)]
+    pub(crate) control: Control,
+    #[cfg(test)]
+    held: Vec<Entity>,
+}
+
+/// A deliberately broken form of the parity mark (test builds only).
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Control {
+    /// The mark as it is in the game.
+    #[default]
+    None,
+    /// No mark at all (what dropping parity mode would be).
+    Off,
+    /// Each node's mark lands a frame after the one it was listed in.
+    Late,
+}
+
+impl ParityMarks {
+    pub(crate) fn push(&mut self, node: Entity) {
+        self.list.push(node);
+    }
+
+    /// Whether the mark is switched off (test builds only; always `false` in the game).
+    pub(crate) fn off(&self) -> bool {
+        #[cfg(test)]
+        {
+            self.control == Control::Off
+        }
+        #[cfg(not(test))]
+        {
+            false
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.list.is_empty()
+    }
+}
+
+/// Parity mode (S5, as amended: the mark is for nodes a view sees). Marks the material component of
+/// each listed node that is visible in at least one view this frame, as `main` marks every node whose
+/// state changed. A node that no view sees is in no phase, so whether it is marked changes no view's
+/// phase; a node that comes into view is queued as newly visible (Bevy's `iter_to_queue`, bevy_render
+/// 0.20.1 `camera.rs`), first and once, with or without the mark.
+///
+/// Order (bevy_camera, bevy_light, bevy_mesh and bevy_pbr 0.20.1): after
+/// `MarkNewlyHiddenEntitiesInvisible`, which follows every writer of [`ViewVisibility`] (the cameras'
+/// `CheckVisibility` and the lights' shadow-view checks), so a node seen by any view has its final
+/// flag; and before `mark_3d_meshes_as_changed_if_their_assets_changed`, which both
+/// `check_entities_needing_specialization` and Bevy's private system that turns a changed material
+/// into a changed `Mesh3d` run after. The mark then reaches specialisation, queueing and mesh
+/// re-extraction in the frame `animate` wrote the state, as it does on `main`, not a frame later.
+pub(crate) fn mark_seen_changes(
+    mut marks: ResMut<ParityMarks>,
+    seen: Query<&ViewVisibility>,
+    mut looks: Query<&mut MeshMaterial3d<SpriteMaterial>>,
+) {
+    #[cfg(test)]
+    if marks.control == Control::Late {
+        let m = &mut *marks;
+        std::mem::swap(&mut m.list, &mut m.held);
+    }
+    for node in marks.list.drain(..) {
+        if seen.get(node).is_ok_and(|v| v.get())
+            && let Ok(mut m) = looks.get_mut(node)
+        {
+            m.set_changed();
+        }
+    }
+}
+
+/// The adoption and release observers, the looks' table and the parity mark (in
+/// [`SpriteMaterialPlugin`]; tests without rendering add them on their own).
 pub(crate) fn adoption(app: &mut App) {
-    app.init_resource::<SpriteLooks>().add_observer(adopt).add_observer(release);
+    use bevy::camera::visibility::VisibilitySystems;
+    app.init_resource::<SpriteLooks>()
+        .init_resource::<ParityMarks>()
+        .add_observer(adopt)
+        .add_observer(release)
+        .add_systems(
+            PostUpdate,
+            mark_seen_changes
+                .after(VisibilitySystems::MarkNewlyHiddenEntitiesInvisible)
+                .before(bevy::mesh::mark_3d_meshes_as_changed_if_their_assets_changed),
+        );
 }
 
 /// Put a new sprite node on the material path: a slot written with the colour its own material was

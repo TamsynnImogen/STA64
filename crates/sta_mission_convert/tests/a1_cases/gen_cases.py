@@ -6,6 +6,13 @@ an invented flat image written in cases.txt. Deterministic.
     python3 -I gen_cases.py <repo>/tools cases.txt expected.txt
 
 tests/a1.rs parses the same cases.txt and compares its own output with expected.txt.
+
+The committed expected.txt is the reference: it was made with CPython 3.14, the version the
+converter's Python reference uses (its first line says so). The texts of raw exceptions differ
+between CPython versions, and the RecursionError cases depend on the interpreter's frame depth:
+their chain lengths (and the recursion limit raised by one in `main`) were measured on 3.14. The
+staleness test in tests/a1.rs compares only under the same major.minor version and says so when
+it skips; the Rust-against-expected test uses only the committed file and runs everywhere.
 """
 
 try:
@@ -257,6 +264,7 @@ def main(argv):
         fx = parse(fh.read(), a1)
     FakePe = make_pe_class(fx, a1)
     with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(f"# generated with CPython {sys.version_info[0]}.{sys.version_info[1]}\n")
         for c in fx.cases:
             fh.write(run_case(fx, a1, FakePe, c))
 

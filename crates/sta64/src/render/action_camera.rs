@@ -29,7 +29,12 @@
 //! - Not drawn in the window: nebulae (their march belongs to the main camera) and, while the
 //!   main view shows a ship as a symbol (zoomed far out), its model, because the model is hidden
 //!   by that handoff for every camera. Billboarded effects face the main camera. All **not
-//!   measured** against the original; the fog layer is not treated specially.
+//!   measured** against the original.
+//! - The fog and shroud layers ([`GROUND_LAYER`]) are drawn under the scene, as in the map view
+//!   (#1145). The window keeps showing them as it did before that change, by a ground camera of its
+//!   own at the scene camera's place (the sky camera sits at the map camera's, so it must not draw
+//!   them). What the original's window does with the shroud and fog is **not established**; this
+//!   keeps today's picture (grade: not measured).
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::RenderTarget;
@@ -53,6 +58,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// The layer of what only the map's own camera draws: selection rings and bars, the strategic view's bars, the map grid.
 pub const OVERLAY_LAYER: usize = 3;
+/// The layer of the fog and shroud layers: drawn under the scene (#1145), by the map's background camera
+/// and by the action window's ground camera.
+pub const GROUND_LAYER: usize = 4;
+/// The layer of the map grid: drawn under the scene by the map's background camera only (the action
+/// window has none: seen in one frame).
+pub const GRID_LAYER: usize = 5;
 
 /// Vertical field of view of the action camera (the map camera's default).
 const FOV: f32 = std::f32::consts::FRAC_PI_4;
@@ -181,6 +192,11 @@ pub fn picture_size(size: Vec2) -> UVec2 {
 
 #[derive(Component)]
 pub struct ActionSky;
+
+/// The action view's camera for [`GROUND_LAYER`]: placed and switched like [`ActionCamera`] (it has that
+/// marker too), drawn between the sky and the scene.
+#[derive(Component)]
+pub struct ActionGround;
 
 /// Measurement hook of the performance runs (`bench/perf.rs`): a headless app has no HUD, so
 /// this stands in for the visible picture node (its size) and says which cameras are on.
@@ -395,8 +411,23 @@ fn sync_cameras(
             Msaa::Off,
             // No dithering: it would show as noise in a few hundred pixels.
             bevy::core_pipeline::tonemapping::DebandDither::Disabled,
+            Camera { order: -8, clear_color: ClearColorConfig::None, ..default() },
+            RenderTarget::from(view.image.clone()),
+            projection.clone(),
+            eye,
+            GlobalTransform::from(eye),
+        ));
+        // The fog and shroud layers, under the scene, from the scene camera's own place.
+        commands.spawn((
+            MatchEntity,
+            ActionCamera,
+            ActionGround,
+            Camera3d::default(),
+            Msaa::Off,
+            bevy::core_pipeline::tonemapping::DebandDither::Disabled,
             Camera { order: -9, clear_color: ClearColorConfig::None, ..default() },
             RenderTarget::from(view.image.clone()),
+            RenderLayers::layer(GROUND_LAYER),
             projection.clone(),
             eye,
             GlobalTransform::from(eye),
@@ -544,14 +575,26 @@ mod tests {
         };
         app.update();
         app.update();
-        assert_eq!(active(&mut app), [true, true], "the picture is seen: the pair runs");
+        assert_eq!(active(&mut app), [true, true, true], "the picture is seen: the sky, ground and scene cameras run");
+        // #1145: the window's cameras, in draw order: the sky (clears), the ground layers, the scene over them.
+        let mut cams: Vec<(isize, Option<RenderLayers>, bool, bool)> = app
+            .world_mut()
+            .query_filtered::<(&Camera, Option<&RenderLayers>, Has<ActionSky>, Has<ActionGround>), Or<(With<ActionCamera>, With<ActionSky>)>>()
+            .iter(app.world())
+            .map(|(c, l, sky, ground)| (c.order, l.cloned(), sky, ground))
+            .collect();
+        cams.sort_by_key(|c| c.0);
+        assert_eq!(cams.iter().map(|c| c.0).collect::<Vec<_>>(), [-10, -9, -8]);
+        assert_eq!((cams[0].2, cams[0].1.clone()), (true, Some(RenderLayers::layer(crate::map::BACKGROUND_LAYER))), "the sky camera draws the background layer only");
+        assert_eq!((cams[1].3, cams[1].1.clone()), (true, Some(RenderLayers::layer(GROUND_LAYER))), "the ground camera draws the fog and shroud layers only (no grid)");
+        assert_eq!(cams[2].1, None, "the scene camera draws the default layer: never the ground layers");
         let target = MovieTarget::Panel(Handle::default());
         app.world_mut().resource_mut::<Movies>().queue_for_test(PlayMovie { id: MovieId(1), name: String::new(), target, skippable: false });
         app.update();
-        assert_eq!(active(&mut app), [false, false], "a clip in the panel: quiet");
+        assert_eq!(active(&mut app), [false, false, false], "a clip in the panel: quiet");
         app.world_mut().resource_mut::<Movies>().stop_for_test();
         app.update();
-        assert_eq!(active(&mut app), [true, true], "the clip is over: the picture runs again");
+        assert_eq!(active(&mut app), [true, true, true], "the clip is over: the picture runs again");
     }
 
     #[test]

@@ -106,9 +106,21 @@ impl FogRegions {
         )
     }
 
+    /// The id of the region of `kind` at `(x, z)` (sim space), or, when the map declares none there, a new entry
+    /// for an object of that kind at that place with `radius` (so an object with no region of the map is decided
+    /// by its own footprint like the rest, and not shown early; interim: the research does not say how such an
+    /// object is decided).
+    pub fn region_or_add(&mut self, kind: RegionKind, x: f32, z: f32, radius: f32) -> usize {
+        if let Some(r) = self.find(kind, x, z, 2.0) {
+            return r.id;
+        }
+        let id = self.0.len();
+        self.0.push(FogRegion { id, kind, odf: String::new(), centre: Vec2::new(x, z), radius, shape_known: true });
+        id
+    }
+
     /// The region of `kind` whose centre is within `tolerance` of `(x, z)` (sim space), for a
     /// renderer that knows an object only by where the map placed it.
-    #[allow(dead_code)] // read by the step that draws by state (#1146)
     pub fn find(&self, kind: RegionKind, x: f32, z: f32, tolerance: f32) -> Option<&FogRegion> {
         self.0.iter().filter(|r| r.kind == kind).find(|r| r.centre.distance(Vec2::new(x, z)) <= tolerance)
     }
@@ -124,7 +136,6 @@ pub struct RegionSights {
 
 impl RegionSights {
     /// The state of region `id`; a region the client does not know counts as in sight.
-    #[allow(dead_code)] // read by the step that draws by state (#1146)
     pub fn get(&self, id: usize) -> Sight {
         self.sights.get(id).copied().unwrap_or_default()
     }
@@ -135,6 +146,61 @@ impl RegionSights {
 pub struct SightMemo {
     cutscene: bool,
     had_fog: bool,
+    pending: bool,
+}
+
+/// Whether a fog grid is on its way: the resources `update_fog` runs on exist (its run conditions: a sim link, the
+/// map's bounds and the layers' material; and the images the art is loaded into) but it has not built the grid yet. Until it does, nothing counts as seen, so a never-seen
+/// object is not drawn for the frames before the first grid (#1146, review of the hide step). Where nothing will
+/// build a grid (a set-up without the fog material, a failed network link), this is false and everything is drawn.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct GridPending<'w> {
+    bounds: Option<Res<'w, crate::render::fog::FogBounds>>,
+    link: Option<Res<'w, crate::sim_link::SimLink>>,
+    materials: Option<Res<'w, Assets<crate::render::fog::FogMaterial>>>,
+    images: Option<Res<'w, Assets<Image>>>,
+}
+
+impl GridPending<'_> {
+    pub fn expected(&self) -> bool {
+        self.bounds.is_some() && self.link.is_some() && self.materials.is_some() && self.images.is_some()
+    }
+}
+
+/// Marks a [`SightGate`] whose object the local player's side has seen before and does not have in sight now: it
+/// is drawn as a still, dimmed copy (the renderers read this marker).
+#[derive(Component, Debug, Clone, Copy, Default)]
+pub struct OutOfSight;
+
+/// The factor on the light of the hull and rock models under an entity that is out of sight (a tag on each mesh,
+/// read by the hull and rock shaders); it goes with [`OutOfSight`].
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct GhostLight(pub f32);
+
+/// The look of an object out of sight (rule: read from the executable, static; the amounts are per class below).
+/// A copy does not animate. Its light is reduced: grades per class.
+pub mod ghost {
+    /// A planet's brightness out of sight, relative to in sight. Grade: measured at one window size (1280x720) by a
+    /// first-party bench of the original, as the copy's brightness against the seen planet's. That is a ratio of
+    /// framebuffer values; STA64 draws in linear light into an sRGB target, so the shader's factor is
+    /// [`planet_linear`] (display value ratio 0.20; interim: the original's blend is not read).
+    pub const PLANET: f32 = 0.20;
+
+    /// The factor on a planet's linear output that gives [`PLANET`] in the displayed values.
+    pub fn planet_linear() -> f32 {
+        PLANET.powf(2.2)
+    }
+
+    /// A nebula's light out of sight. Rule and grade: half; inferred from the executable (static), not measured on a
+    /// nebula; interim. It scales a puff's colour in displayed (sRGB) values, the quantity the original scales
+    /// (the sprites' vertex colour). A gas's cover is a density, not a brightness: scaling it by this is STA64's own
+    /// stand-in (interim, not measured).
+    pub const NEBULA: f32 = 0.5;
+
+    /// The factor on the linear light of a model out of sight that has no measured value (asteroid rocks): the old
+    /// fog layer's own, one minus its opacity of 0.7. Grade: interim, reproduces the previous on-screen dimming
+    /// (the layer's colour term is not reproduced); the research gives no value for these.
+    pub const INTERIM_LINEAR: f32 = 0.3;
 }
 
 /// Recompute the regions' states from the fog grid, only when the grid, the regions, the local player
@@ -147,20 +213,22 @@ pub fn update_region_sights(
     local: Res<LocalPlayer>,
     cine: Option<Res<crate::ui::presentation::CineractiveState>>,
     mut sights: ResMut<RegionSights>,
+    pending: GridPending,
     mut memo: Local<SightMemo>,
 ) {
     let cutscene = cine.is_some_and(|c| c.on);
     let had_fog = fog.is_some();
-    let changed = regions.is_changed() || local.is_changed() || fog.as_ref().is_some_and(|f| f.is_changed()) || memo.cutscene != cutscene || memo.had_fog != had_fog;
+    let pending = pending.expected();
+    let changed = regions.is_changed() || local.is_changed() || fog.as_ref().is_some_and(|f| f.is_changed()) || memo.cutscene != cutscene || memo.had_fog != had_fog || memo.pending != pending;
     if !changed {
         return;
     }
-    *memo = SightMemo { cutscene, had_fog };
+    *memo = SightMemo { cutscene, had_fog, pending };
     let sights = &mut *sights;
     sights.updates += 1;
     sights.sights.resize(regions.0.len(), Sight::Visible);
     for (slot, r) in sights.sights.iter_mut().zip(&regions.0) {
-        let next = if r.shape_known { sight_now(fog.as_deref(), local.0, cutscene, r.centre.x, r.centre.y, r.radius) } else { Sight::Visible };
+        let next = if r.shape_known { sight_now(fog.as_deref(), local.0, cutscene, pending, r.centre.x, r.centre.y, r.radius) } else { Sight::Visible };
         if *slot != next {
             *slot = next;
         }
@@ -173,13 +241,108 @@ fn clear_region_sights(mut sights: ResMut<RegionSights>) {
 }
 
 /// The state of an object of `radius` at `(x, z)` (sim space) for the local player.
-/// With no local player or in a cutscene every object counts as in sight; with a local player and
-/// no grid yet (the match is still starting) none has been seen.
-pub fn sight_now(fog: Option<&FogState>, local: Option<PlayerId>, cutscene: bool, x: f32, z: f32, radius: f32) -> Sight {
+/// With no local player or in a cutscene every object counts as in sight, and so does every object
+/// while there is no fog grid (the match is still starting, or nothing builds one): fail-safe, one
+/// rule for the gates, the gas and `sync_units`. The one exception is `pending` (a grid is on its way, see
+/// [`GridPending`]): until it exists nothing has been seen.
+pub fn sight_now(fog: Option<&FogState>, local: Option<PlayerId>, cutscene: bool, pending: bool, x: f32, z: f32, radius: f32) -> Sight {
     if local.is_none() || cutscene {
         return Sight::Visible;
     }
-    fog.map_or(Sight::Never, |f| Sight::of(&f.grid, x, z, radius))
+    fog.map_or(if pending { Sight::Never } else { Sight::Visible }, |f| Sight::of(&f.grid, x, z, radius))
+}
+
+/// An intermediate entity between the map root and an object (nebula billboards, an asteroid field, a
+/// planet): its own [`Visibility`] is [`Hidden`](Visibility::Hidden) while the object has never been
+/// seen (#1146). The renderers keep their own writes to the object's visibility, which this does not
+/// touch. `region` is the object's entry in [`FogRegions`], when it has one; else the footprint
+/// `radius` at `pos` (sim space) decides.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct SightGate {
+    pub pos: Vec2,
+    pub radius: f32,
+    pub region: Option<usize>,
+    /// The factor on the linear light of the hull and rock models under the gate while it is out of sight (1: none).
+    pub ghost: f32,
+}
+
+/// Show or hide each [`SightGate`], when the states, the grid, the local player or the cutscene flag changed
+/// or a gate is new.
+/// A gate whose object is out of sight also carries [`OutOfSight`].
+#[allow(clippy::too_many_arguments)]
+pub fn apply_gates(
+    mut commands: Commands,
+    fog: Option<Res<FogState>>,
+    local: Res<LocalPlayer>,
+    cine: Option<Res<crate::ui::presentation::CineractiveState>>,
+    sights: Res<RegionSights>,
+    new: Query<(), Added<SightGate>>,
+    mut gates: Query<(Entity, &SightGate, &mut Visibility, Has<OutOfSight>)>,
+    pending: GridPending,
+    mut memo: Local<SightMemo>,
+) {
+    let cutscene = cine.is_some_and(|c| c.on);
+    let had_fog = fog.is_some();
+    let pending = pending.expected();
+    let changed = sights.is_changed() || local.is_changed() || fog.as_ref().is_some_and(|f| f.is_changed()) || memo.cutscene != cutscene || memo.had_fog != had_fog || memo.pending != pending || !new.is_empty();
+    if !changed {
+        return;
+    }
+    *memo = SightMemo { cutscene, had_fog, pending };
+    for (e, g, mut v, out) in &mut gates {
+        let sight = match g.region {
+            Some(id) if local.0.is_some() && !cutscene => sights.get(id),
+            _ => sight_now(fog.as_deref(), local.0, cutscene, pending, g.pos.x, g.pos.y, g.radius),
+        };
+        let want = if sight == Sight::Never { Visibility::Hidden } else { Visibility::Inherited };
+        if *v != want {
+            *v = want;
+        }
+        match (sight == Sight::Remembered, out) {
+            (true, false) => {
+                commands.entity(e).insert((OutOfSight, GhostLight(g.ghost)));
+            }
+            (false, true) => {
+                commands.entity(e).remove::<(OutOfSight, GhostLight)>();
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The tag a hull or rock mesh carries while a model it belongs to is out of sight: the factor's bits, which the
+/// hull and rock shaders multiply their light by (a tag of 0 means none). Set on the meshes under an entity that
+/// gets [`GhostLight`] and taken off when it goes; sprite nodes keep their own tags.
+#[allow(clippy::type_complexity)]
+pub fn tag_ghost_meshes(
+    mut commands: Commands,
+    ghosts: Query<(Entity, &GhostLight, Ref<GhostLight>)>,
+    mut removed: RemovedComponents<GhostLight>,
+    children: Query<&Children>,
+    parts: Query<Has<bevy::mesh::MeshTag>, (Or<(With<MeshMaterial3d<crate::render::hulls::HullMaterial>>, With<MeshMaterial3d<crate::render::rock::RockMaterial>>)>, Without<crate::render::sprites::SpriteFx>)>,
+    mut frame: Local<u32>,
+) {
+    // A model's parts appear (and change material) after its entity gets the marker, so the walk repeats a few
+    // times a second; a new marker walks at once. Few entities carry one.
+    *frame = frame.wrapping_add(1);
+    let sweep = frame.is_multiple_of(15);
+    for (gate, g, fresh) in &ghosts {
+        if !(sweep || fresh.is_added()) {
+            continue;
+        }
+        for d in children.iter_descendants(gate) {
+            if parts.get(d).is_ok_and(|tagged| !tagged) {
+                commands.entity(d).try_insert(bevy::mesh::MeshTag::new(g.0.to_bits()));
+            }
+        }
+    }
+    for gate in removed.read() {
+        for d in children.iter_descendants(gate) {
+            if parts.contains(d) {
+                commands.entity(d).try_remove::<bevy::mesh::MeshTag>();
+            }
+        }
+    }
 }
 
 pub struct FogObjectsPlugin;
@@ -191,6 +354,8 @@ impl Plugin for FogObjectsPlugin {
             (
                 update_region_sights.in_set(GameSet::Render).after(update_fog).run_if(resource_exists::<FogRegions>).run_if(resource_exists::<LocalPlayer>),
                 clear_region_sights.run_if(resource_removed::<FogRegions>),
+                apply_gates.in_set(GameSet::Render).after(update_region_sights).run_if(resource_exists::<LocalPlayer>),
+                tag_ghost_meshes.after(apply_gates),
             ),
         );
     }
@@ -331,7 +496,7 @@ mod tests {
         let map = region_map();
         let mut app = app(&map);
         app.update();
-        assert_eq!(sights(&app), [Sight::Never; 2], "with a local player and no grid yet nothing has been seen");
+        assert_eq!(sights(&app), [Sight::Visible; 2], "no grid yet: everything is drawn");
         set_fog(&mut app, grid());
         assert_eq!(sights(&app), [Sight::Never; 2]);
         // A cell inside the nebula (centre 1000,-2000; radius 450) is in sight.
@@ -412,5 +577,141 @@ mod tests {
         app.insert_resource(regions);
         set_fog(&mut app, grid());
         assert_eq!(sights(&app), [Sight::Never, Sight::Visible], "the unknown one is drawn, the known one never seen");
+    }
+
+    #[test]
+    fn a_grid_on_its_way_means_nothing_seen_and_no_grid_expected_means_draw() {
+        let some = Some(PlayerId(1));
+        assert_eq!(sight_now(None, some, false, true, 0.0, 0.0, 10.0), Sight::Never, "pending: not drawn yet");
+        assert_eq!(sight_now(None, some, false, false, 0.0, 0.0, 10.0), Sight::Visible, "set-up without fog: drawn");
+        assert_eq!(sight_now(None, None, false, true, 0.0, 0.0, 10.0), Sight::Visible, "no local player: drawn");
+        assert_eq!(sight_now(None, some, true, true, 0.0, 0.0, 10.0), Sight::Visible, "cutscene: drawn");
+        let fog = FogState { grid: grid(), updates: 1 };
+        assert_eq!(sight_now(Some(&fog), some, false, true, 0.0, 0.0, 10.0), Sight::Never, "a grid decides, pending or not");
+    }
+
+    /// The hull and rock meshes under an entity out of sight get the tag the shaders read; a sprite node keeps its
+    /// own tag; the tag goes when the marker does.
+    #[test]
+    fn ghost_light_tags_the_hull_and_rock_meshes_under_it_and_only_those() {
+        use bevy::mesh::MeshTag;
+        use crate::render::{hulls::HullMaterial, rock::RockMaterial, sprites::SpriteFx};
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).add_systems(Update, tag_ghost_meshes);
+        let root = app.world_mut().spawn(Transform::IDENTITY).id();
+        let node = app.world_mut().spawn((Transform::IDENTITY, ChildOf(root))).id();
+        let hull = app.world_mut().spawn((MeshMaterial3d::<HullMaterial>(Handle::default()), ChildOf(node))).id();
+        let rock = app.world_mut().spawn((MeshMaterial3d::<RockMaterial>(Handle::default()), ChildOf(root))).id();
+        let sprite = app
+            .world_mut()
+            .spawn((MeshMaterial3d::<HullMaterial>(Handle::default()), SpriteFx { node_anim: None, sprite: String::new(), colour: [1.0; 3], material: Handle::default() }, MeshTag::new(7), ChildOf(root)))
+            .id();
+        let plain = app.world_mut().spawn((Transform::IDENTITY, ChildOf(root))).id();
+        app.update();
+        assert!(app.world().get::<MeshTag>(hull).is_none(), "nothing before the marker");
+        app.world_mut().entity_mut(root).insert((OutOfSight, GhostLight(0.25)));
+        app.update();
+        let tag = |app: &App, e: Entity| app.world().get::<MeshTag>(e).map(|t| t.value);
+        assert_eq!((tag(&app, hull), tag(&app, rock)), (Some(0.25f32.to_bits()), Some(0.25f32.to_bits())));
+        assert_eq!(tag(&app, sprite), Some(7), "a sprite node keeps its own tag");
+        assert_eq!(tag(&app, plain), None);
+        app.world_mut().entity_mut(root).remove::<(OutOfSight, GhostLight)>();
+        app.update();
+        assert_eq!((tag(&app, hull), tag(&app, rock), tag(&app, sprite)), (None, None, Some(7)));
+        // A part that appears later (a model loaded after the marker) is tagged by the next sweep.
+        app.world_mut().entity_mut(root).insert((OutOfSight, GhostLight(0.25)));
+        app.update();
+        let late = app.world_mut().spawn((MeshMaterial3d::<RockMaterial>(Handle::default()), ChildOf(root))).id();
+        for _ in 0..16 {
+            app.update();
+        }
+        assert_eq!(tag(&app, late), Some(0.25f32.to_bits()));
+    }
+
+    /// F6: a grid is expected exactly where `update_fog` can run (its resources), and not otherwise.
+    #[test]
+    fn a_grid_is_expected_only_where_update_fog_can_build_one() {
+        #[derive(Resource, Default)]
+        struct Probe(Vec<bool>);
+        fn probe(p: GridPending, mut out: ResMut<Probe>) {
+            out.0.push(p.expected());
+        }
+        let mut app = App::new();
+        app.init_resource::<Probe>().add_systems(Update, probe);
+        let run = |app: &mut App| {
+            app.update();
+            *app.world().resource::<Probe>().0.last().unwrap()
+        };
+        assert!(!run(&mut app), "nothing");
+        app.insert_resource(crate::render::fog::FogBounds { min: Vec2::ZERO, max: Vec2::ONE });
+        app.init_resource::<Assets<crate::render::fog::FogMaterial>>();
+        app.init_resource::<Assets<Image>>();
+        assert!(!run(&mut app), "no sim link: update_fog does not run");
+        let link = crate::sim_link::SimLink::new(Box::new(sta_sim::fake::ScriptedSource::from_json5("{ units: [], events: [] }", &sta_content::fake::db()).unwrap()), Box::new(sta_sim::command::LocalRouter::new()), PlayerId(1));
+        app.insert_resource(link);
+        assert!(run(&mut app), "everything update_fog needs exists");
+        app.world_mut().remove_resource::<Assets<Image>>();
+        assert!(!run(&mut app), "no images: the art is never loaded");
+        app.init_resource::<Assets<Image>>();
+        app.world_mut().remove_resource::<Assets<crate::render::fog::FogMaterial>>();
+        assert!(!run(&mut app), "no layer material");
+        app.init_resource::<Assets<crate::render::fog::FogMaterial>>();
+        app.world_mut().remove_resource::<crate::render::fog::FogBounds>();
+        assert!(!run(&mut app), "no map bounds");
+    }
+
+    fn gate_app(map: &MapDef) -> App {
+        let mut app = app(map);
+        app.add_systems(Update, apply_gates.after(update_region_sights));
+        app
+    }
+
+    fn vis(app: &App, e: Entity) -> Visibility {
+        *app.world().get::<Visibility>(e).unwrap()
+    }
+
+    #[test]
+    fn a_gate_hides_its_object_while_never_seen_and_shows_it_once_any_footprint_cell_is_in_sight() {
+        let map = region_map();
+        let mut app = gate_app(&map);
+        // A region gate (the nebula, id 0), a footprint gate (a planet of radius 300 at 3000,3000)
+        // and a small object whose centre cell alone decides.
+        let nebula = app.world_mut().spawn((SightGate { pos: Vec2::new(1000.0, -2000.0), radius: 450.0, region: Some(0), ghost: 1.0 }, Visibility::Inherited)).id();
+        let planet = app.world_mut().spawn((SightGate { pos: Vec2::new(3000.0, 3000.0), radius: 300.0, region: None, ghost: 0.5 }, Visibility::Inherited)).id();
+        // The asteroid field (region 1, a box centred at 0,300): a region gate too.
+        let field = app.world_mut().spawn((SightGate { pos: Vec2::new(0.0, 300.0), radius: 360.0, region: Some(1), ghost: 0.3 }, Visibility::Inherited)).id();
+        // No grid yet: every gate shows (fail-safe).
+        app.update();
+        assert_eq!((vis(&app, nebula), vis(&app, planet), vis(&app, field)), (Visibility::Inherited, Visibility::Inherited, Visibility::Inherited));
+        set_fog(&mut app, grid());
+        assert_eq!((vis(&app, nebula), vis(&app, planet), vis(&app, field)), (Visibility::Hidden, Visibility::Hidden, Visibility::Hidden));
+        // A cell inside the field's footprint in sight: the field is drawn whole.
+        set_fog(&mut app, grid_with(&[(0.0, 600.0, 10.0, true)]));
+        assert_eq!(vis(&app, field), Visibility::Inherited);
+        set_fog(&mut app, grid());
+        // One cell at the edge of the planet's footprint in sight: drawn whole.
+        set_fog(&mut app, grid_with(&[(3250.0, 3000.0, 10.0, true)]));
+        assert_eq!((vis(&app, nebula), vis(&app, planet)), (Visibility::Hidden, Visibility::Inherited));
+        // Out of sight again: still drawn (the looks of a remembered object are a later step).
+        set_fog(&mut app, grid_with(&[(3250.0, 3000.0, 10.0, false), (1000.0, -1700.0, 20.0, false)]));
+        assert_eq!((vis(&app, nebula), vis(&app, planet)), (Visibility::Inherited, Visibility::Inherited));
+        let out = |app: &App, e: Entity| app.world().get::<OutOfSight>(e).is_some();
+        assert!(out(&app, nebula) && out(&app, planet), "seen before and not in sight: the out-of-sight marker");
+        assert!(!out(&app, field), "the field never seen has none");
+        // Back in sight: the marker goes.
+        set_fog(&mut app, grid_with(&[(3250.0, 3000.0, 10.0, true), (1000.0, -1700.0, 20.0, true)]));
+        assert!(!out(&app, nebula) && !out(&app, planet));
+        set_fog(&mut app, grid_with(&[(3250.0, 3000.0, 10.0, false), (1000.0, -1700.0, 20.0, false)]));
+        // Never seen again (a script cleared the memory): hidden.
+        set_fog(&mut app, grid());
+        assert_eq!((vis(&app, nebula), vis(&app, planet)), (Visibility::Hidden, Visibility::Hidden));
+        // With the fog and shroud lifted every object is drawn; in a cutscene too.
+        set_fog(&mut app, grid().lifted(true, true));
+        assert_eq!((vis(&app, nebula), vis(&app, planet)), (Visibility::Inherited, Visibility::Inherited));
+        app.init_resource::<crate::ui::presentation::CineractiveState>();
+        set_fog(&mut app, grid());
+        app.world_mut().resource_mut::<crate::ui::presentation::CineractiveState>().on = true;
+        app.update();
+        assert_eq!((vis(&app, nebula), vis(&app, planet)), (Visibility::Inherited, Visibility::Inherited));
     }
 }

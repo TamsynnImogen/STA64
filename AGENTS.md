@@ -251,6 +251,14 @@ at once. Bevy makes `sta64` heavy.
   serialised and this protection does not hold). Never `touch` source files or run
   the check against a stale directory to work around odd errors: if a check
   error does not match your source, report it.
+- Incremental builds are opt-in: `tools/agent-cargo --incremental check -p
+  sta_sim` (or `STA64_INCREMENTAL=1`) leaves `CARGO_INCREMENTAL` unset, so the
+  workspace crates compile incrementally (measured 3.5 to 9 times faster edit
+  cycles; dependencies stay cached in sccache). It costs 2 to 3 GB of
+  `incremental/` per worktree `target/`, leaves job counts and every other
+  policy as they are, and is ignored (with a notice) for the shared workspace
+  check directory. Use it while iterating on one crate in one worktree, not
+  for one-off checks.
 - One cargo command at a time per agent, in the foreground; no background
   builds, no `pkill`.
 - Scope to the packages you changed (`-p`). Prefer `cargo check` while

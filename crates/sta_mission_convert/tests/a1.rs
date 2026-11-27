@@ -276,7 +276,9 @@ fn run_case(fx: &Fixture, case: &Case) -> String {
 #[test]
 fn every_case_equals_the_originals_output() {
     let fx = parse(&data(include_str!("a1_cases/cases.txt")));
-    let expected = data(include_str!("a1_cases/expected.txt"));
+    let expected_all = data(include_str!("a1_cases/expected.txt"));
+    // the first line names the CPython that made the file; it belongs to no case
+    let expected = expected_all.split_once('\n').map_or("", |x| x.1).to_owned();
     assert!(fx.cases.len() >= 10, "{} cases", fx.cases.len());
     let got: String = fx.cases.iter().map(|c| run_case(&fx, c)).collect();
     if got != expected {
@@ -319,7 +321,26 @@ fn expected_cases_are_current() {
     assert!(status.success(), "the Python driver failed");
     let fresh = std::fs::read_to_string(&out_path).expect("driver output");
     let _ = std::fs::remove_dir_all(&dir);
-    assert_eq!(data(&fresh), data(include_str!("a1_cases/expected.txt")), "tests/a1_cases/expected.txt is stale: run gen_cases.py again");
+    let (fresh, committed) = (data(&fresh), data(include_str!("a1_cases/expected.txt")));
+    // The texts of raw Python exceptions and the recursion depth differ between CPython versions,
+    // so the committed file (made with the version named in its first line) is compared only
+    // with the output of the same major.minor version.
+    let version = |t: &str| t.lines().next().and_then(|l| l.strip_prefix("# generated with CPython ")).map(str::to_owned);
+    let (have, want) = (version(&fresh), version(&committed));
+    if have != want {
+        eprintln!(
+            "SKIPPED: expected_cases_are_current: this Python is CPython {}, tests/a1_cases/expected.txt was made with CPython {}; \
+             the Rust output is still compared with the committed file by every_case_equals_the_originals_output",
+            have.as_deref().unwrap_or("?"),
+            want.as_deref().unwrap_or("?")
+        );
+        return;
+    }
+    assert_eq!(
+        fresh, committed,
+        "tests/a1_cases/expected.txt (reference: CPython {}) is stale: run gen_cases.py again with that version",
+        want.as_deref().unwrap_or("?")
+    );
 }
 
 /// `Prelude.test_every_table_the_shared_engine_indexes_is_created` of `tools/test_a1_to_lua.py`:

@@ -762,6 +762,7 @@ mod tests {
         let src = include_str!("hulls.wesl")
             .replace("constants::MATERIAL_BIND_GROUP", "3")
             .replace("@if(EMISSIVE_MASK)", "")
+            .replace("import bevy_pbr::render::mesh_functions::get_tag;", "fn get_tag(i: u32) -> u32 { return 0u; }")
             // The view comes from Bevy's own shader library: a stub stands in for it.
             .replace("import bevy_pbr::render::mesh_view_bindings::view;", "struct ViewStub { world_position: vec3<f32> }\nvar<private> view: ViewStub;");
         let module = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
