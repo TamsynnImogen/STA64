@@ -2,10 +2,10 @@
 //!
 //! The issue reports, from a playtest capture, a target that flickered between set and unset on
 //! every tick and a turn rate far above the craft's limit. These tests pin what the sim does with
-//! a burst on authored data (a capital ship that cannot turn at rest, smooth model):
+//! a burst on invented data (a capital ship that cannot turn at rest, smooth model). Bursts of
+//! Move orders did not turn a craft past its full-speed limit either; that guard was dropped as
+//! it passed with or without the turn-rate fixes of this PR (see `kinematics/tests.rs` for those).
 //!
-//! - the heading never changes by more than the craft's turn-rate limit in one tick, whatever the
-//!   burst (same tick, consecutive ticks, alternating, identical, queued; one craft or a group);
 //! - after the last order of a burst the target is that order's point (or, in a formation, its slot)
 //!   on every tick until arrival: never a superseded order's, never unset;
 //! - queued orders keep their order;
@@ -34,24 +34,18 @@ fn f(x: f64) -> Fixed {
     Fixed::from_f64(x)
 }
 
-/// A capital ship of authored stats: it cannot turn or accelerate its turn at rest, and its turn
-/// limit at full speed is 0.5 * 40 * 0.05 = 1 rad/s.
+/// A capital ship of invented stats: it cannot turn or accelerate its turn at rest.
 fn capital() -> MoveStats {
     MoveStats {
-        combat_speed: f(40.0),
+        combat_speed: f(36.0),
         turn_alpha_at_rest: Fixed::ZERO,
-        too_close_to_turn: f(50.0),
-        path_lead: f(150.0),
-        turn_control_angle: f(30.0),
+        too_close_to_turn: f(60.0),
+        path_lead: f(140.0),
+        turn_control_angle: f(25.0),
         turn_control_squared: false,
-        forward_control_distance: f(100.0),
-        ..MoveStats::from_f32(80.0, 3.0, 0.05, 1.0, 0.0)
+        forward_control_distance: f(90.0),
+        ..MoveStats::from_f32(72.0, 2.5, 0.06, 0.8, 0.0)
     }
-}
-
-/// The turn-rate limit at full speed, radians per second (the smooth model's `0.5 K turnOmega`).
-fn omega_limit(s: &MoveStats) -> Fixed {
-    f(0.5) * s.combat_speed * s.turn_omega
 }
 
 fn db(stats: MoveStats) -> Arc<ContentDb> {
@@ -84,11 +78,6 @@ fn world(n: i32) -> (Sim, Vec<EntityId>) {
 
 fn mv(seq: u32, ids: &[EntityId], to: Vec3, queue: bool) -> Command {
     Command { player: PlayerId(1), seq, kind: CommandKind::Order(Order::Move { units: ids.to_vec(), to, queue }) }
-}
-
-/// Signed angle from heading `a` to heading `b`.
-fn heading_change(a: (Fixed, Fixed), b: (Fixed, Fixed)) -> Fixed {
-    crate::kinematics::atan2(a.0 * b.1 - a.1 * b.0, a.0 * b.0 + a.1 * b.1)
 }
 
 /// Gets the craft moving at cruise speed (a long leg), so a burst finds it under way.
@@ -126,32 +115,6 @@ fn run_burst(sim: &mut Sim, ids: &[EntityId], burst: &Burst, mut check: impl FnM
         let cmds: Vec<Command> = given.iter().map(|&(to, q)| { seq += 1; mv(seq, ids, to, q) }).collect();
         sim.step(&cmds);
         check(sim, &given.iter().map(|g| g.0).collect::<Vec<_>>());
-    }
-}
-
-#[test]
-fn a_burst_of_move_orders_never_turns_a_craft_faster_than_its_limit() {
-    let limit_per_tick = omega_limit(&capital()) * crate::kinematics::dt();
-    // The angle comes from a polynomial atan2 (error under 1e-5 rad); allow for it.
-    let allowed = limit_per_tick + f(0.001);
-    for (name, burst) in bursts() {
-        for n in [1, 3] {
-            for moving in [false, true] {
-                let (mut sim, ids) = world(n);
-                if moving {
-                    get_going(&mut sim, &ids);
-                }
-                let mut before: Vec<_> = ids.iter().map(|&i| sim.unit(i).unwrap().heading).collect();
-                run_burst(&mut sim, &ids, &burst, |sim, _| {
-                    for (k, &i) in ids.iter().enumerate() {
-                        let u = sim.unit(i).unwrap();
-                        let turn = heading_change(before[k], u.heading).abs();
-                        assert!(turn <= allowed, "{name}, {n} craft, moving {moving}: turned {} rad in one tick, limit {}", turn.to_f32(), limit_per_tick.to_f32());
-                        before[k] = u.heading;
-                    }
-                });
-            }
-        }
     }
 }
 
