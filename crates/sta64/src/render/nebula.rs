@@ -805,8 +805,9 @@ fn fade_boards(
     }
     let eye = cam.translation();
     let list: Vec<_> = nebulae.iter().filter(|(_, _, _, v, _)| v.get()).map(|(e, g, b, _, _)| (e, g.translation(), b.radius)).collect();
-    // A nebula out of sight is a copy at a reduced intensity (#1146; `fog_objects::ghost::NEBULA`, interim): its
-    // puffs' light is scaled by it, on top of the occlusion.
+    // A nebula out of sight is a copy at a reduced intensity (#1146; `fog_objects::ghost::NEBULA`, interim): the
+    // fade scales the puff's sRGB colour (`SpriteFade`), that is displayed values, the quantity the original's copy
+    // pass scales; the blended result is in linear light and so falls further. On top of the occlusion.
     let dims: Vec<f32> = nebulae
         .iter()
         .filter(|(_, _, _, v, _)| v.get())

@@ -713,9 +713,16 @@ fn sight_gate(
 ) -> Entity {
     let (x, z) = (o.transform[9], o.transform[11]);
     let region = kind.map(|k| regions.region_or_add(k, x, z, radius));
+    // The light of the hull and rock models under the gate out of sight: a planet's measured fraction, a field's rocks
+    // the interim one, a nebula has none (its puffs and gas are dimmed by their own paths).
+    let ghost = match kind {
+        None => crate::render::fog_objects::ghost::planet_linear(),
+        Some(sta_content::RegionKind::AsteroidField) => crate::render::fog_objects::ghost::INTERIM_LINEAR,
+        Some(_) => 1.0,
+    };
     commands
         .spawn((
-            crate::render::fog_objects::SightGate { pos: Vec2::new(x, z), radius, region },
+            crate::render::fog_objects::SightGate { pos: Vec2::new(x, z), radius, region, ghost },
             Transform::IDENTITY,
             if hidden { Visibility::Hidden } else { Visibility::Inherited },
             ChildOf(root),
