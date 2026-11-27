@@ -465,7 +465,9 @@ fn arguments_that_could_write_somewhere_else_are_refused() {
     }
 }
 
-#[cfg(unix)]
+// macOS file systems (APFS, HFS+) refuse file names that are not valid UTF-8, so there is no such
+// path to write to there.
+#[cfg(all(unix, not(target_os = "macos")))]
 #[test]
 fn a_path_that_is_not_utf8_is_written_where_it_says_not_somewhere_else() {
     use std::os::unix::ffi::OsStrExt;
@@ -583,7 +585,7 @@ fn a_python_tools_earlier_conversion_is_moved_aside_never_deleted_and_nothing_el
     assert_eq!(fs::read(m.join("old1.lua.old")).unwrap(), edited.as_bytes());
     assert_eq!(fs::read(m.join("old1.lua.old2")).unwrap(), PY_HEADER.as_bytes());
     // a write that would replace one moves it aside first
-    let mut o = OutDir::inspect(&out, out.clone(), false).map_or_else(|_| OutDir::inspect(&out, out.clone(), true).unwrap(), |o| o);
+    let mut o = OutDir::inspect(&out, out.clone(), true).unwrap();
     touch(&m.join("m9.lua"), PY_HEADER.as_bytes());
     o.write("m9.lua", b"new").unwrap();
     assert_eq!(fs::read(m.join("m9.lua")).unwrap(), b"new");
