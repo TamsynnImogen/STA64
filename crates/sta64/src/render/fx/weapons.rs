@@ -97,6 +97,9 @@ pub struct WeaponFx {
     /// the shooter, every frame for the ground, and only for a shot with this set. Interim: the original's rule for
     /// this is not established.
     hidden_shooter: bool,
+    /// The flare where a beam lands (`FxKind::Impact`) on a target the client does not draw (#1145): shown only while
+    /// the ground under the impact point is in sight. Interim, like `hidden_shooter`.
+    hidden_target: bool,
 }
 
 impl WeaponFx {
@@ -277,6 +280,7 @@ pub(crate) fn spawn_fx(
                     target_lost: false,
                     sustained_slot,
                     hidden_shooter: !matches!(kind, FxKind::Impact) && !stock.client_draws(*shooter),
+                    hidden_target: matches!(kind, FxKind::Impact) && !matches!(target, Target::Entity(id) if stock.client_draws(*id)),
                 };
                 // Refit's emitter flare: `Fx::flare` at the start, `Emitter` half widths.
                 let flare = Look::flare(recipe.col, FLARE_CORE, 3.5, recipe.star, FLARE_STAR_SHARP, 0.0, 20.0, seed);
@@ -428,8 +432,8 @@ pub(super) fn update_fx(
         }
         // #1145: what must not be seen is not drawn, and the layers no longer cover a shot over ground the player has
         // not seen. A shot of a shooter the client does not draw is shown only while it is over ground in sight.
-        if fx.hidden_shooter {
-            let head = if fx.kind == FxKind::Projectile { fx.start.lerp(fx.to, k) } else { fx.from };
+        if fx.hidden_shooter || fx.hidden_target {
+            let head = if fx.hidden_target { fx.to } else if fx.kind == FxKind::Projectile { fx.start.lerp(fx.to, k) } else { fx.from };
             if !fog.as_deref().is_none_or(|f| f.grid.visible_at(head.x, -head.z)) {
                 a.0 = 0.0;
             }
@@ -592,6 +596,11 @@ mod tests {
     /// (600 away along Z), as `(kind, alpha)`. `fog`: a grid exists; `drawn`: the client draws the shooter (it has an
     /// entity in `SimEntities`).
     fn shot_alphas(weapon: &str, fog: Option<crate::render::fog::FogGrid>, drawn: bool, frames: usize) -> Vec<Vec<(FxKind, f32)>> {
+        shot_alphas_with(weapon, fog, drawn, false, frames)
+    }
+
+    /// As `shot_alphas`, with the target (unit 2) drawn too when `target_drawn`.
+    fn shot_alphas_with(weapon: &str, fog: Option<crate::render::fog::FogGrid>, drawn: bool, target_drawn: bool, frames: usize) -> Vec<Vec<(FxKind, f32)>> {
         let db = sta_content::fake::db();
         let weapon = db.key(weapon).unwrap().0;
         let text = format!(
@@ -612,6 +621,9 @@ mod tests {
         app.init_resource::<crate::sim_link::SimEntities>();
         if drawn {
             app.world_mut().resource_mut::<crate::sim_link::SimEntities>().0.insert(EntityId(1), Entity::PLACEHOLDER);
+        }
+        if target_drawn {
+            app.world_mut().resource_mut::<crate::sim_link::SimEntities>().0.insert(EntityId(2), Entity::PLACEHOLDER);
         }
         if let Some(grid) = fog {
             app.insert_resource(crate::render::fog::FogState { grid, updates: 1 });
@@ -657,6 +669,22 @@ mod tests {
         assert!(!near_origin.is_empty() && near_origin.last() < all_lit.last(), "leaving sight: gone before it ends ({near_origin:?} against {all_lit:?})");
         // A shooter the client draws (own, allied: it has an entity): always drawn, whatever the ground.
         assert_eq!(lit(&torp(Some(blank()), true), FxKind::Projectile), all_lit, "a drawn shooter's shot is as with no grid");
+    }
+
+    /// #1145 (N1): the flare where a beam lands is the target's: with a hidden shooter and a hidden target over ground not
+    /// in sight there is no beam and no flare; with a drawn target the flare shows and the beam does not.
+    #[test]
+    fn the_flare_where_a_beam_lands_follows_its_target_not_its_hidden_shooter() {
+        let blank = || grid_seeing(&[]);
+        let both_hidden = shot_alphas_with("fx_beam", Some(blank()), false, false, 70);
+        for kind in [FxKind::Beam, FxKind::Flash, FxKind::Impact] {
+            assert!(lit(&both_hidden, kind).is_empty(), "{kind:?} of unseen units over unseen ground is not drawn");
+        }
+        let target_drawn = shot_alphas_with("fx_beam", Some(blank()), false, true, 70);
+        assert!(lit(&target_drawn, FxKind::Beam).is_empty() && lit(&target_drawn, FxKind::Flash).is_empty(), "the hidden shooter's own place is not shown");
+        assert!(!lit(&target_drawn, FxKind::Impact).is_empty(), "the flare on a unit the client draws shows");
+        let with_ground = shot_alphas_with("fx_beam", Some(grid_seeing(&[(0.0, 600.0), (0.0, 500.0)])), false, false, 70);
+        assert!(!lit(&with_ground, FxKind::Impact).is_empty() && lit(&with_ground, FxKind::Beam).is_empty(), "a hidden target's flare over ground in sight shows, the beam does not");
     }
 
     #[test]
