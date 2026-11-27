@@ -71,7 +71,7 @@ impl sta_sim::setup::Controller for Counter {
         if let Some(u) = view.units.iter().find(|u| u.owner == self.seat) {
             let p = u.pos.to_f32();
             let to = SimVec3::from_f32([p[0] + 100.0 * (s.events % 5 + 1) as f32, 0.0, p[2] + 50.0 * (s.thinks % 7) as f32]);
-            out.push(sta_sim::command::Command { player: self.seat, seq: s.sent, kind: CommandKind::Order(Order::Move { units: vec![u.id], to, queue: false }) });
+            out.push(sta_sim::command::Command { player: self.seat, seq: s.sent, kind: CommandKind::Order(Order::move_to(vec![u.id], to, false)) });
             s.sent += 1;
         }
     }
@@ -261,7 +261,7 @@ fn script(link: &mut SimLink, tick: u64) {
     match tick {
         2 => {
             for (id, p) in &mine {
-                link.submit(CommandKind::Order(Order::Move { units: vec![*id], to: go([p[0] + 600.0, p[1], p[2] + 150.0]), queue: false }));
+                link.submit(CommandKind::Order(Order::move_to(vec![*id], go([p[0] + 600.0, p[1], p[2] + 150.0]), false)));
             }
         }
         12 => {
@@ -271,7 +271,7 @@ fn script(link: &mut SimLink, tick: u64) {
         }
         25 => {
             for (id, p) in mine.iter().skip(1) {
-                link.submit(CommandKind::Order(Order::Move { units: vec![*id], to: go([p[0] - 200.0, p[1], p[2] - 500.0]), queue: true }));
+                link.submit(CommandKind::Order(Order::move_to(vec![*id], go([p[0] - 200.0, p[1], p[2] - 500.0]), true)));
             }
         }
         _ => {}
@@ -384,7 +384,7 @@ fn commands_in_flight_at_the_save_and_the_players_next_number_survive_the_load()
     let order = |link: &SimLink| {
         let me = link.player();
         let id = link.real_curr().units.iter().find(|u| u.owner == me).unwrap().id;
-        CommandKind::Order(Order::Move { units: vec![id], to: SimVec3::from_f32([900.0, 0.0, 900.0]), queue: false })
+        CommandKind::Order(Order::move_to(vec![id], SimVec3::from_f32([900.0, 0.0, 900.0]), false))
     };
 
     let mut reference = app(&dir, true);
@@ -450,7 +450,7 @@ fn inject(app: &mut App, queued: bool) {
         let mut mine = link.real_curr().units.iter().filter(|u| u.owner == link.player()).map(|u| u.id);
         (mine.next().unwrap(), mine.next().unwrap())
     };
-    let go = |x: f32| CommandKind::Order(Order::Move { units: vec![id], to: SimVec3::from_f32([x, 0.0, 700.0]), queue: false });
+    let go = |x: f32| CommandKind::Order(Order::move_to(vec![id], SimVec3::from_f32([x, 0.0, 700.0]), false));
     {
         let mut link = app.world_mut().resource_mut::<SimLink>();
         link.submit(go(900.0));
