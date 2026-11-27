@@ -27,6 +27,13 @@ File format (`cases.txt`, one `tag|payload` per line):
     then the expected result lines: ok|.. err|.. raw|.. slots|.. shapes|.. rule|.. dep|.. out|..
 """
 
+try:
+    import resource
+
+    resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))
+except (ImportError, ValueError, OSError):
+    pass  # no `resource` module on Windows; macOS may refuse this limit
+
 import importlib.util
 import pathlib
 import re
