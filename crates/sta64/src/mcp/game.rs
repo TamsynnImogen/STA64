@@ -303,6 +303,7 @@ pub(crate) fn order(
                     units: ids,
                     to,
                     queue,
+                    mode: None,
                 }
             } else {
                 Order::MoveWarp {

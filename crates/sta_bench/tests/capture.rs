@@ -89,7 +89,7 @@ fn move_order(sim: &Sim, player: u8, seq: u32) -> Command {
     let units: Vec<_> = sim.view().units.iter().filter(|u| u.owner == PlayerId(player)).map(|u| u.id).collect();
     assert!(!units.is_empty(), "seat {player} starts with units");
     let to = Vec3::from_f32([0.0, 0.0, 1500.0]);
-    Command { player: PlayerId(player), seq, kind: CommandKind::Order(Order::Move { units, to, queue: false }) }
+    Command { player: PlayerId(player), seq, kind: CommandKind::Order(Order::Move { units, to, queue: false, mode: None }) }
 }
 
 #[test]

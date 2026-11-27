@@ -76,9 +76,12 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// Format 45 appends cargo routes and holds.
 /// Format 46 stores build queue job identities and the last allocated id.
 /// Format 50 is the last without the Director's Cut match option; format 51 appends it
-/// and 50 still loads with it off. Earlier formats are refused.
-pub const FORMAT_VERSION: u16 = 51;
+/// and 50 still loads with it off. Format 52 (SIM-76) appends the move modes of move
+/// orders; 50 and 51 still load, every order then taking the content's default.
+/// Earlier formats are refused. PROVISIONAL number: the merge steward assigns the real one.
+pub const FORMAT_VERSION: u16 = 52;
 const PRE_DIRECTORS_CUT_FORMAT: u16 = 50;
+const PRE_MOVE_MODE_FORMAT: u16 = 51;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
@@ -128,7 +131,7 @@ fn check_header(bytes: &[u8]) -> Result<(u16, u64), SnapshotError> {
         return Err(SnapshotError::BadMagic);
     }
     let found = u16::from_le_bytes([bytes[4], bytes[5]]);
-    if !matches!(found, PRE_DIRECTORS_CUT_FORMAT | FORMAT_VERSION) {
+    if !matches!(found, PRE_DIRECTORS_CUT_FORMAT | PRE_MOVE_MODE_FORMAT | FORMAT_VERSION) {
         return Err(SnapshotError::FormatVersion { found });
     }
     let seam = u32::from_le_bytes(bytes[6..10].try_into().unwrap());
@@ -159,7 +162,7 @@ impl std::fmt::Display for SnapshotError {
         match self {
             SnapshotError::BadMagic => write!(f, "not a snapshot"),
             SnapshotError::FormatVersion { found } if *found < FORMAT_VERSION => {
-                write!(f, "snapshot format {found} is from an older STA64 and cannot be read (this build reads formats {PRE_DIRECTORS_CUT_FORMAT} and {FORMAT_VERSION})")
+                write!(f, "snapshot format {found} is from an older STA64 and cannot be read (this build reads formats {PRE_DIRECTORS_CUT_FORMAT} to {FORMAT_VERSION})")
             }
             SnapshotError::FormatVersion { found } => {
                 write!(f, "snapshot format {found}, expected {FORMAT_VERSION}")
@@ -261,6 +264,13 @@ struct WarpRec {
 struct WatchRec {
     version: u8,
     rows: Vec<(EntityId, crate::watchdog::Row)>,
+}
+
+/// Format 52 (SIM-76): the move mode each unit's last move order named, by unit id.
+#[derive(Serialize, Deserialize)]
+struct MoveModeRec {
+    version: u8,
+    rows: Vec<(EntityId, crate::command::MoveMode)>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -536,6 +546,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&self.production.officer_upgrade_rows()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.economy.trade_rows()).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&self.directors_cut).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&MoveModeRec { version: 1, rows: self.move_mode_rows() }).expect("snapshot serialises"));
         out
     }
 
@@ -631,6 +642,14 @@ impl Sim {
         } else {
             postcard::take_from_bytes(rest).map_err(corrupt_postcard)?
         };
+        // Formats 50 and 51 carry no move modes (SIM-76): every order took the content's default.
+        let (move_mode_rows, rest): (Vec<(EntityId, crate::command::MoveMode)>, _) = if format < FORMAT_VERSION {
+            (Vec::new(), rest)
+        } else {
+            let (record, rest): (MoveModeRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+            if record.version != 1 { return Err(SnapshotError::Corrupt("unknown move mode record version".into())); }
+            (record.rows, rest)
+        };
         if directors_cut && !content.as_ref().is_some_and(|db| db.profile() == sta_content::Profile::Sta1Classic) {
             return Err(SnapshotError::Corrupt("Director's Cut requires Armada I content".into()));
         }
@@ -711,6 +730,10 @@ impl Sim {
             })
             .collect();
         let movement = Movement::from_rows(courses).ok_or_else(|| corrupt("courses"))?;
+        if move_mode_rows.iter().any(|(id, _)| units.get(*id).is_none()) {
+            return Err(corrupt("move mode unit"));
+        }
+        let move_modes = crate::move_mode::MoveModes::from_rows(move_mode_rows).ok_or_else(|| corrupt("move modes"))?;
         {
             let v = attrs.view();
             if v.races.iter().any(|(id, _)| !units.get(*id).is_some_and(|u| matches!(u.kind, EntityKind::Craft | EntityKind::Station))) {
@@ -844,6 +867,7 @@ impl Sim {
             recycles,
             nebula_shields,
             mission_switches,
+            move_modes,
         };
         sim.refresh_seat_rules();
         sim.restore_ship_upgrade_memo();
@@ -954,6 +978,7 @@ mod tests {
                     units: ids.clone(),
                     to: v(400, 0, 300),
                     queue: false,
+                    mode: None,
                 },
             ),
             cmd(
@@ -962,6 +987,7 @@ mod tests {
                     units: ids.clone(),
                     to: v(-300, 20, 900),
                     queue: true,
+                    mode: None,
                 },
             ),
         ]);
@@ -986,6 +1012,7 @@ mod tests {
                         units: vec![EntityId(2)],
                         to: v(0, 0, -500),
                         queue: false,
+                        mode: None,
                     },
                 )]
             } else {

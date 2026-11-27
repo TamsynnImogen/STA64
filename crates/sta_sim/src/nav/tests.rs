@@ -151,6 +151,7 @@ fn go(sim: &mut Sim, id: EntityId, to: Vec3) {
             units: vec![id],
             to,
             queue: false,
+            mode: None,
         }),
     }]);
 }
@@ -435,6 +436,7 @@ fn a_group_crossing_a_nebula_keeps_out_of_it() {
                 units: vec![id],
                 to: v(-1450 + k as i32 * 100, 5000),
                 queue: false,
+                mode: None,
             }),
         })
         .collect();
@@ -546,6 +548,7 @@ fn a_cold_cache_every_tick_runs_the_same_digests() {
                 units: vec![id],
                 to: v(3000 - k * 500, 5000),
                 queue: false,
+                mode: None,
             }),
         });
     }

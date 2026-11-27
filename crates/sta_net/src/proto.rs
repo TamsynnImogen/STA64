@@ -46,7 +46,9 @@ pub const MAGIC: [u8; 4] = *b"S64N";
 /// 20 appends `Order::CancelBuild` (tag 24) and build job identities to the snapshot.
 /// 22 adds Armada II special-weapon state, and 23 adds Federation ability state.
 /// 24 adds the Armada I Director's Cut match option to `GameOptions`.
-pub const PROTOCOL_VERSION: u16 = 24;
+/// 25 adds the move mode to `Order::Move` (SIM-76, ADR 0011 G4) and to the transferred
+/// snapshot (sim snapshot format 52). PROVISIONAL number: the merge steward assigns the real one.
+pub const PROTOCOL_VERSION: u16 = 25;
 /// Magic, version and body length.
 pub const HEADER_LEN: usize = 10;
 /// Largest frame, header included.
@@ -1669,6 +1671,7 @@ mod tests {
                 units: vec![EntityId(4), EntityId(5)],
                 to: Vec3::from_f32([1.5, 0.0, -2.0]),
                 queue: true,
+                mode: None,
             }),
         }
     }
@@ -2166,7 +2169,7 @@ mod tests {
     #[test]
     fn golden_encoding_is_pinned() {
         let all: Vec<u8> = samples().iter().flat_map(|m| encode(m).unwrap()).collect();
-        assert_eq!(PROTOCOL_VERSION, 24);
+        assert_eq!(PROTOCOL_VERSION, 25);
         assert_eq!(
             fnv1a64(&all),
             GOLDEN,
@@ -2174,7 +2177,9 @@ mod tests {
         );
     }
 
-    const GOLDEN: u64 = 5659040911093881963;
+    /// Pinned with the provisional protocol 25 (SIM-76): the header carries the number, so
+    /// the merge steward's number changes this value too (run the test, copy the left side).
+    const GOLDEN: u64 = 4986018588586439837;
 
     /// Tags are positional and never move: NET-04 appended 22 to 28 after
     /// `Sections` (21), the last tag of protocol 2.
@@ -2281,8 +2286,8 @@ mod tests {
     fn header_is_little_endian_and_frozen() {
         let bytes = encode(&Message::Ping { nonce: 0 }).unwrap();
         // Ping is tag 12, nonce 0: two body bytes.
-        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 24, 0, 2, 0, 0, 0, 12, 0]);
-        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 24, 0, 0, 0, 0, 0]);
+        assert_eq!(bytes, [b'S', b'6', b'4', b'N', 25, 0, 2, 0, 0, 0, 12, 0]);
+        assert_eq!(version_notice(), [b'S', b'6', b'4', b'N', 25, 0, 0, 0, 0, 0]);
     }
 
     #[test]

@@ -223,6 +223,7 @@ mod tests {
                 units: vec![cruiser],
                 to: at(92_000, 90_000),
                 queue: false,
+                mode: None,
             }),
         };
         let mut cmds = vec![go];

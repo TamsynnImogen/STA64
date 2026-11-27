@@ -1015,7 +1015,7 @@ mod tests {
         let order = Command {
             player: ME,
             seq: 0,
-            kind: CommandKind::Order(Order::Move { units: vec![flagship], to: SimVec3::from_f32([1500.0, 0.0, 1500.0]), queue: false }),
+            kind: CommandKind::Order(Order::Move { units: vec![flagship], to: SimVec3::from_f32([1500.0, 0.0, 1500.0]), queue: false, mode: None }),
         };
         let batches = (0..90).map(|t| if t == 0 { vec![order.clone()] } else { Vec::new() });
         (ViewLog::record(&mut bench.sim, batches), content, flagship)

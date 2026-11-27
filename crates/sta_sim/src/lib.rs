@@ -33,6 +33,7 @@ pub mod economy;
 pub mod event;
 pub mod fake;
 pub mod kinematics;
+pub mod move_mode;
 pub mod movement;
 mod ownership;
 pub mod speed_override;
@@ -234,6 +235,9 @@ pub struct Sim {
     nebula_shields: nebula::NebulaShields,
     /// Mission-wide switches (LUA-41), saved; hashed only when not the default.
     mission_switches: mission_switches::MissionSwitches,
+    /// The move mode each unit's last move order named (SIM-76); saved, and in the
+    /// digest once any exists. No rule reads it yet.
+    move_modes: move_mode::MoveModes,
 }
 
 impl Sim {
@@ -283,6 +287,7 @@ impl Sim {
             recycles: Default::default(),
             nebula_shields: Default::default(),
             mission_switches: Default::default(),
+            move_modes: Default::default(),
         }
     }
 
@@ -356,7 +361,7 @@ impl Sim {
             }
         };
         match order {
-            Order::Move { units, to, queue } => {
+            Order::Move { units, to, queue, mode } => {
                 let unlocked: Vec<_> = units.iter().copied()
                     .filter(|id| !self.production.is_welding(*id)).collect();
                 if unlocked.is_empty() { return false; }
@@ -376,8 +381,9 @@ impl Sim {
                         self.production.cancel(&db, &self.units, &mut self.economy, c.player, &cancel);
                     }
                 }
-                let taken = self.apply_movement(c.player, &Order::Move { units: unlocked.clone(), to: *to, queue: *queue });
+                let taken = self.apply_movement(c.player, &Order::Move { units: unlocked.clone(), to: *to, queue: *queue, mode: *mode });
                 if taken {
+                    self.record_move_mode(c.player, &unlocked, *mode);
                     self.auto_warp_moves(c.player, &unlocked);
                 }
                 taken
@@ -418,6 +424,7 @@ impl Sim {
                 }
                 // Immobile actors have no course to stop; their accepted
                 // cleanup must not be reported as a rejected movement order.
+                self.clear_move_modes(&eligible);
                 self.apply_movement(c.player, &Order::Stop { units: eligible });
                 true
             }
@@ -652,6 +659,7 @@ impl Sim {
         }
         self.hold_welding_builders();
         self.advance_courses();
+        self.prune_move_modes();
         self.constrain_targets();
         self.refresh_ship_upgrades();
         self.tick += 1;
@@ -749,7 +757,7 @@ impl Sim {
         }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
         let active_point_defence = self.content.as_deref().map_or_else(Vec::new, |db| self.weapons.active_point_defence(db, &self.units));
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), alerts: self.alerts.levels(), enemy_hit: self.alerts.hits(), ally_attacks: self.alerts.ally_rows().to_vec(), special_forces: self.switches.special_forces(), mission_switches: self.mission_switches, ..self.attrs.view() }, active_point_defence, a1_specials: self.specials.effect_view(self.tick, &self.units, self.content.as_deref()) }
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), alerts: self.alerts.levels(), enemy_hit: self.alerts.hits(), ally_attacks: self.alerts.ally_rows().to_vec(), special_forces: self.switches.special_forces(), mission_switches: self.mission_switches, move_modes: self.move_mode_rows(), ..self.attrs.view() }, active_point_defence, a1_specials: self.specials.effect_view(self.tick, &self.units, self.content.as_deref()) }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content
@@ -781,6 +789,7 @@ impl Sim {
         }
         self.units.hash_into(&mut h);
         self.movement.hash_into(&mut h);
+        self.hash_move_modes(&mut h);
         self.hash_directors_cut(&mut h);
         if !self.approach_warp.is_empty() {
             self.approach_warp.hash_into(&mut h);
@@ -1018,7 +1027,7 @@ mod tests {
 
     /// A single order from `player` to one of its units.
     fn go(player: u8, id: EntityId, to: Vec3) -> command::Command {
-        order(player, 0, command::Order::Move { units: vec![id], to, queue: false })
+        order(player, 0, command::Order::Move { units: vec![id], to, queue: false, mode: None })
     }
 
     fn halt(player: u8, id: EntityId) -> command::Command {
@@ -1170,8 +1179,8 @@ mod tests {
         assert_eq!(first.events, [SimEvent::Spawned { id: a }, SimEvent::Spawned { id: b }]);
         for t in 1..600 {
             let cmds = match t {
-                1 => vec![order(0, 0, command::Order::Move { units: vec![a], to: v(500, 30, -300), queue: false })],
-                10 => vec![order(1, 0, command::Order::Move { units: vec![b], to: v(0, 0, 900), queue: false })],
+                1 => vec![order(0, 0, command::Order::Move { units: vec![a], to: v(500, 30, -300), queue: false, mode: None })],
+                10 => vec![order(1, 0, command::Order::Move { units: vec![b], to: v(0, 0, 900), queue: false, mode: None })],
                 200 => vec![order(0, 1, command::Order::Stop { units: vec![a] })],
                 _ => vec![],
             };
@@ -1206,11 +1215,11 @@ mod tests {
         sim.step(&[]);
         let cmds = [
             // Player 1 may not order player 0's unit.
-            order(1, 0, command::Order::Move { units: vec![a], to: v(100, 0, 0), queue: false }),
+            order(1, 0, command::Order::Move { units: vec![a], to: v(100, 0, 0), queue: false, mode: None }),
             // Not implemented yet.
             order(0, 0, command::Order::Cloak { units: vec![a], on: true }),
             // The bench may order anything.
-            order(255, 0, command::Order::Move { units: vec![a], to: v(100, 0, 0), queue: false }),
+            order(255, 0, command::Order::Move { units: vec![a], to: v(100, 0, 0), queue: false, mode: None }),
         ];
         let out = WorldSource::step(&mut sim, &cmds);
         let rejected = [SimEvent::Rejected { player: PlayerId(0), seq: 0 }, SimEvent::Rejected { player: PlayerId(1), seq: 0 }];
@@ -1223,7 +1232,7 @@ mod tests {
         let mut sim = Sim::new(1);
         let a = sim.spawn(0, v(0, 0, 0), (Fixed::ZERO, Fixed::ONE), stats());
         let destination = v(100, 0, 0);
-        sim.step(&[order(0, 0, command::Order::Move { units: vec![a], to: destination, queue: false })]);
+        sim.step(&[order(0, 0, command::Order::Move { units: vec![a], to: destination, queue: false, mode: None })]);
         for (seq, on) in [(1, None), (2, Some(true)), (3, Some(false))] {
             let mut baseline = sim.clone();
             baseline.step(&[]);

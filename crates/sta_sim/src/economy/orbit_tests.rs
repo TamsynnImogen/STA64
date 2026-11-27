@@ -257,7 +257,7 @@ fn the_first_trip_circles_whatever_the_approach() {
         spawn(&mut sim, "fx_station", PlayerId(0), v(1500, 0));
         let m = spawn(&mut sim, "fx_orbiter", PlayerId(0), v(sx, sz));
         if fast {
-            sim.step(&[Command { player: PlayerId(0), seq: 5, kind: CommandKind::Order(Order::Move { units: vec![m], to: v(-2000, 0), queue: false }) }]);
+            sim.step(&[Command { player: PlayerId(0), seq: 5, kind: CommandKind::Order(Order::Move { units: vec![m], to: v(-2000, 0), queue: false, mode: None }) }]);
             for _ in 0..90 { sim.step(&[]); }
         }
         assert!(mine(&mut sim, 0, m, moon));

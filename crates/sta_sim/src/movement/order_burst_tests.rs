@@ -77,7 +77,7 @@ fn world(n: i32) -> (Sim, Vec<EntityId>) {
 }
 
 fn mv(seq: u32, ids: &[EntityId], to: Vec3, queue: bool) -> Command {
-    Command { player: PlayerId(1), seq, kind: CommandKind::Order(Order::Move { units: ids.to_vec(), to, queue }) }
+    Command { player: PlayerId(1), seq, kind: CommandKind::Order(Order::Move { units: ids.to_vec(), to, queue, mode: None }) }
 }
 
 /// Gets the craft moving at cruise speed (a long leg), so a burst finds it under way.

@@ -79,7 +79,7 @@ fn world2(db: &Arc<ContentDb>) -> (Sim, EntityId, EntityId) {
 }
 
 fn run(sim: &mut Sim, a: EntityId, b: EntityId) {
-    let order = |seq, units, to| Command { player: PlayerId(1), seq, kind: CommandKind::Order(Order::Move { units, to, queue: false }) };
+    let order = |seq, units, to| Command { player: PlayerId(1), seq, kind: CommandKind::Order(Order::Move { units, to, queue: false, mode: None }) };
     // `a` is sent onto the first gate; `b` flies past it to a point beyond.
     sim.step(&[order(1, vec![a], v(1000, 0)), order(2, vec![b], v(2000, 300))]);
     for _ in 0..30 * 30 {
@@ -129,7 +129,7 @@ fn an_emerged_craft_stays_until_ordered_onto_the_gate_again() {
     }
     let (x, z) = pos(&sim, a);
     assert!((x - 5000.0).abs() <= 61.0 && (z - 5000.0).abs() <= 61.0, "no travel back by itself: ({x}, {z})");
-    let back = Command { player: PlayerId(1), seq: 9, kind: CommandKind::Order(Order::Move { units: vec![a], to: v(5000, 5000), queue: false }) };
+    let back = Command { player: PlayerId(1), seq: 9, kind: CommandKind::Order(Order::Move { units: vec![a], to: v(5000, 5000), queue: false, mode: None }) };
     sim.step(&[back]);
     for _ in 0..30 * 5 {
         sim.step(&[]);
@@ -145,7 +145,7 @@ fn a_group_ordered_onto_one_gate_all_emerge_and_the_separation_spreads_them() {
     let cruiser = d.key("fx_cruiser").unwrap();
     let h = (Fixed::ONE, Fixed::ZERO);
     let ids: Vec<EntityId> = (0..3).map(|i| sim.spawn_def(cruiser, PlayerId(1), v(0, 100 * i), h).unwrap()).collect();
-    let order = Command { player: PlayerId(1), seq: 1, kind: CommandKind::Order(Order::Move { units: ids.clone(), to: v(1000, 0), queue: false }) };
+    let order = Command { player: PlayerId(1), seq: 1, kind: CommandKind::Order(Order::Move { units: ids.clone(), to: v(1000, 0), queue: false, mode: None }) };
     sim.step(&[order]);
     for _ in 0..30 * 40 {
         sim.step(&[]);
@@ -161,7 +161,7 @@ fn a_group_ordered_onto_one_gate_all_emerge_and_the_separation_spreads_them() {
 
 /// Order `a` onto (x, z) and let it run; where it ends.
 fn send_a_onto(sim: &mut Sim, a: EntityId, x: i32, z: i32) -> (f32, f32) {
-    let to = Command { player: PlayerId(1), seq: 1, kind: CommandKind::Order(Order::Move { units: vec![a], to: v(x, z), queue: false }) };
+    let to = Command { player: PlayerId(1), seq: 1, kind: CommandKind::Order(Order::Move { units: vec![a], to: v(x, z), queue: false, mode: None }) };
     sim.step(&[to]);
     for _ in 0..30 * 60 {
         sim.step(&[]);
@@ -201,7 +201,7 @@ fn a_right_click_move_onto_a_gate_is_still_given_on_a_map_that_pairs_nothing() {
     let c = sim.spawn_def(cruiser, PlayerId(1), v(900, 0), (Fixed::ONE, Fixed::ZERO)).unwrap();
     let g0 = sim.labels.iter().find(|(_, l)| l.as_str() == "Gate0").map(|(id, _)| id).unwrap();
     let order = crate::context::context_order(Some(&d), &sim.view(), PlayerId(1), &[c], g0);
-    assert_eq!(order, Some(Order::Move { units: vec![c], to: v(1000, 0), queue: false }));
+    assert_eq!(order, Some(Order::Move { units: vec![c], to: v(1000, 0), queue: false, mode: None }));
 }
 
 /// Whole-state digest after a craft of an Armada II-family scene went through a gate.
@@ -284,7 +284,7 @@ fn a_right_click_on_a_gate_moves_the_mobile_units_onto_its_centre() {
     let c = sim.spawn_def(cruiser, PlayerId(1), v(900, 0), (Fixed::ONE, Fixed::ZERO)).unwrap();
     let view = sim.view();
     let order = crate::context::context_order(Some(&d), &view, PlayerId(1), &[c], g[0]);
-    assert_eq!(order, Some(Order::Move { units: vec![c], to: v(1000, 0), queue: false }));
+    assert_eq!(order, Some(Order::Move { units: vec![c], to: v(1000, 0), queue: false, mode: None }));
     // Not a gate, not this rule.
     assert_eq!(crate::context::context_order(Some(&d), &view, PlayerId(1), &[c], c), None);
 }
@@ -305,7 +305,7 @@ fn a_move_onto_an_emerged_craft_does_not_travel() {
     let (ax, az) = send_a_onto(&mut sim, a, 1000, 0);
     assert!((ax - 5000.0).abs() <= 61.0, "a emerged: ({ax}, {az})");
     let to = sim.units.get(a).unwrap().pos;
-    let go = Command { player: PlayerId(1), seq: 5, kind: CommandKind::Order(Order::Move { units: vec![b], to, queue: false }) };
+    let go = Command { player: PlayerId(1), seq: 5, kind: CommandKind::Order(Order::Move { units: vec![b], to, queue: false, mode: None }) };
     sim.step(&[go]);
     for _ in 0..30 * 90 {
         sim.step(&[]);

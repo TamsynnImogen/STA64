@@ -622,10 +622,10 @@ fn orders_are_sent_as_the_owner() {
     assert_eq!(
         orders,
         vec![
-            (PlayerId(0), Order::Move { units: vec![a], to: to(10.0), queue: false }),
-            (PlayerId(0), Order::Move { units: vec![a], to: to(20.0), queue: true }),
-            (PlayerId(0), Order::Move { units: vec![a], to: to(30.0), queue: true }),
-            (PlayerId(0), Order::Move { units: vec![a], to: to(100.0), queue: false }),
+            (PlayerId(0), Order::Move { units: vec![a], to: to(10.0), queue: false, mode: None }),
+            (PlayerId(0), Order::Move { units: vec![a], to: to(20.0), queue: true, mode: None }),
+            (PlayerId(0), Order::Move { units: vec![a], to: to(30.0), queue: true, mode: None }),
+            (PlayerId(0), Order::Move { units: vec![a], to: to(100.0), queue: false, mode: None }),
             (PlayerId(0), Order::Stop { units: vec![a] }),
             (PlayerId(0), Order::Attack { units: vec![a], target: b }),
             (PlayerId(0), Order::Mine { units: vec![a], node: b }),

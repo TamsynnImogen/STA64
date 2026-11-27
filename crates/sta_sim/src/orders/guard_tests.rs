@@ -56,7 +56,7 @@ fn a_guard_follows_a_moving_ward_and_keeps_its_station() {
     run(&mut sim, vec![order(1, 0, Order::Guard { units: vec![guard], ward })], 2);
     assert!(matches!(sim.scripted.job(guard), Some(Job::Guard { ward: w }) if *w == ward));
     // The ward flies a long way; the guard keeps within a few spacings of it.
-    run(&mut sim, vec![order(1, 1, Order::Move { units: vec![ward], to: v(0, 3000), queue: false })], 1);
+    run(&mut sim, vec![order(1, 1, Order::Move { units: vec![ward], to: v(0, 3000), queue: false, mode: None })], 1);
     let mut worst = Fixed::ZERO;
     for tick in 0..(120 * HZ) {
         run(&mut sim, vec![], 1);
@@ -89,7 +89,7 @@ fn a_guard_takes_the_wards_attacker_and_goes_back_when_it_is_dead() {
 fn a_guard_stops_when_the_ward_dies() {
     let (mut sim, _db, guard, ward) = pair();
     run(&mut sim, vec![order(1, 0, Order::Guard { units: vec![guard], ward })], 2);
-    run(&mut sim, vec![order(1, 1, Order::Move { units: vec![ward], to: v(0, 2000), queue: false })], 30 * HZ);
+    run(&mut sim, vec![order(1, 1, Order::Move { units: vec![ward], to: v(0, 2000), queue: false, mode: None })], 30 * HZ);
     run(&mut sim, vec![Command { player: PlayerId::SCRIPT, seq: 2, kind: CommandKind::Edit(Edit::Kill(ward)) }], 5);
     assert!(sim.scripted.job(guard).is_none(), "the order outlived the ward");
     assert!(sim.unit(guard).unwrap().target.is_none());
@@ -123,7 +123,7 @@ fn the_order_is_validated_and_replaced_like_the_other_orders() {
     assert!(sim.scripted.job(ward).is_none());
     assert!(matches!(sim.scripted.job(other), Some(Job::Guard { .. })));
     // A new move replaces it.
-    take(&mut sim, order(1, 4, Order::Move { units: vec![other], to: v(-600, 0), queue: false }));
+    take(&mut sim, order(1, 4, Order::Move { units: vec![other], to: v(-600, 0), queue: false, mode: None }));
     assert!(sim.scripted.job(other).is_none());
 }
 
@@ -131,7 +131,7 @@ fn the_order_is_validated_and_replaced_like_the_other_orders() {
 fn a_guard_order_survives_a_snapshot_byte_for_byte_and_the_loader_refuses_forged_rows() {
     let (mut sim, cdb, guard, ward) = pair();
     run(&mut sim, vec![order(1, 0, Order::Guard { units: vec![guard], ward })], 2);
-    run(&mut sim, vec![order(1, 1, Order::Move { units: vec![ward], to: v(0, 700), queue: false })], 5 * HZ);
+    run(&mut sim, vec![order(1, 1, Order::Move { units: vec![ward], to: v(0, 700), queue: false, mode: None })], 5 * HZ);
     let db = sim.content.clone();
     let mut loaded = Sim::from_snapshot(&sim.snapshot(), db.clone()).unwrap();
     assert_eq!(loaded.digest(), sim.digest());
@@ -170,7 +170,7 @@ fn a_guard_changes_the_digest_and_ending_it_leaves_no_row() {
 fn a_whole_state_digest_with_a_guard_is_pinned() {
     let (mut sim, _db, guard, ward) = pair();
     run(&mut sim, vec![order(1, 0, Order::Guard { units: vec![guard], ward })], 2);
-    run(&mut sim, vec![order(1, 1, Order::Move { units: vec![ward], to: v(0, 900), queue: false })], 20 * HZ);
+    run(&mut sim, vec![order(1, 1, Order::Move { units: vec![ward], to: v(0, 900), queue: false, mode: None })], 20 * HZ);
     assert!(matches!(sim.scripted.job(guard), Some(Job::Guard { .. })));
     assert_eq!(sim.digest(), PINNED_DIGEST);
 }

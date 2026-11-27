@@ -184,6 +184,7 @@ fn transwarp_gate_traversal_cancel_and_snapshot() {
             units: vec![traveler],
             to: entry,
             queue: false,
+            mode: None,
         }),
     };
     let mut restored = Sim::from_snapshot(&sim.snapshot(), sim.content.clone()).unwrap();

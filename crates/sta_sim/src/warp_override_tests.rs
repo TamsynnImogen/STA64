@@ -99,7 +99,7 @@ fn warp_30_holds_30_on_the_aligned_leg_and_impulse_while_turning() {
     assert!(script(&mut sim, Edit::WarpSpeed(s, Some(n(30)))));
     assert_eq!(warp(&sim, s), n(30));
     let goal = at(0, -6000);
-    order(&mut sim, Order::Move { units: vec![s], to: goal, queue: false });
+    order(&mut sim, Order::Move { units: vec![s], to: goal, queue: false, mode: None });
     let (turning, aligned) = legs(&mut sim, s, goal, 60);
     assert!(turning <= n(21), "turning leg at {turning:?}");
     assert!(aligned >= n(29) && aligned <= n(31), "aligned leg at {aligned:?}");
@@ -109,12 +109,12 @@ fn warp_30_holds_30_on_the_aligned_leg_and_impulse_while_turning() {
 fn reset_restores_the_class_warp_and_the_override_persists_across_orders() {
     let (mut sim, s) = game();
     assert!(script(&mut sim, Edit::WarpSpeed(s, Some(n(30)))));
-    order(&mut sim, Order::Move { units: vec![s], to: at(0, 3000), queue: false });
+    order(&mut sim, Order::Move { units: vec![s], to: at(0, 3000), queue: false, mode: None });
     for _ in 0..5 * HZ {
         sim.step(&[]);
     }
     order(&mut sim, Order::Stop { units: vec![s] });
-    order(&mut sim, Order::Move { units: vec![s], to: at(0, 9000), queue: false });
+    order(&mut sim, Order::Move { units: vec![s], to: at(0, 9000), queue: false, mode: None });
     assert_eq!(warp(&sim, s), n(30));
     assert!(sim.view().attrs.warp == vec![(s, n(30))]);
     assert!(script(&mut sim, Edit::WarpSpeed(s, None)));
@@ -136,7 +136,7 @@ fn impulse_85_with_warp_50_flies_50_aligned_and_85_turning() {
     // Setting impulse keeps the absolute warp speed.
     assert_eq!(warp(&sim, s), n(50));
     let goal = at(0, -9000);
-    order(&mut sim, Order::Move { units: vec![s], to: goal, queue: false });
+    order(&mut sim, Order::Move { units: vec![s], to: goal, queue: false, mode: None });
     let (turning, aligned) = legs(&mut sim, s, goal, 120);
     assert!(turning > n(60) && turning <= n(86), "turning leg at {turning:?}");
     assert!(aligned >= n(49) && aligned <= n(51), "aligned leg at {aligned:?}");
@@ -146,7 +146,7 @@ fn impulse_85_with_warp_50_flies_50_aligned_and_85_turning() {
 fn a_warp_speed_below_impulse_slows_the_far_leg_without_a_warp_effect() {
     let (mut sim, s) = game();
     assert!(script(&mut sim, Edit::WarpSpeed(s, Some(n(10)))));
-    order(&mut sim, Order::Move { units: vec![s], to: at(0, 6000), queue: false });
+    order(&mut sim, Order::Move { units: vec![s], to: at(0, 6000), queue: false, mode: None });
     let mut top = Fixed::ZERO;
     for _ in 0..30 * HZ {
         sim.step(&[]);
@@ -164,7 +164,7 @@ fn warp_zero_or_equal_to_impulse_means_no_warp_leg_and_the_move_arrives() {
         assert!(script(&mut sim, Edit::WarpSpeed(s, Some(w))));
         assert_eq!(warp(&sim, s), w);
         let goal = at(0, 400);
-        order(&mut sim, Order::Move { units: vec![s], to: goal, queue: false });
+        order(&mut sim, Order::Move { units: vec![s], to: goal, queue: false, mode: None });
         let mut top = Fixed::ZERO;
         for _ in 0..40 * HZ {
             sim.step(&[]);
@@ -184,7 +184,7 @@ fn values_are_kept_between_zero_and_the_ceiling() {
     assert_eq!(warp(&sim, s), Fixed::ZERO);
     assert!(script(&mut sim, Edit::WarpSpeed(s, Some(n(1_000_000)))));
     assert_eq!(warp(&sim, s), crate::warp_override::MAX_WARP);
-    order(&mut sim, Order::Move { units: vec![s], to: at(0, 60000), queue: false });
+    order(&mut sim, Order::Move { units: vec![s], to: at(0, 60000), queue: false, mode: None });
     for _ in 0..60 * HZ {
         sim.step(&[]);
         let u = sim.unit(s).unwrap();
@@ -255,7 +255,7 @@ fn a_run_that_never_overrides_keeps_its_digests() {
 fn a_snapshot_keeps_the_override_and_a_restored_sim_steps_like_the_live_one() {
     let (mut sim, s) = game();
     assert!(script(&mut sim, Edit::WarpSpeed(s, Some(n(30)))));
-    order(&mut sim, Order::Move { units: vec![s], to: at(0, -5000), queue: false });
+    order(&mut sim, Order::Move { units: vec![s], to: at(0, -5000), queue: false, mode: None });
     for _ in 0..10 * HZ {
         sim.step(&[]);
     }
@@ -286,7 +286,7 @@ fn far_leg(keys: bool, edits: &[Edit]) -> (Fixed, bool) {
         };
         assert!(script(&mut sim, e));
     }
-    order(&mut sim, Order::Move { units: vec![s], to: at(0, 6000), queue: false });
+    order(&mut sim, Order::Move { units: vec![s], to: at(0, 6000), queue: false, mode: None });
     let mut top = Fixed::ZERO;
     let mut phased = false;
     for _ in 0..40 * HZ {
@@ -378,7 +378,7 @@ fn the_attack_approach_of_a_keyed_craft_flies_the_far_leg_at_a_warp_speed_below_
 fn the_pinned_digest_of_a_run_with_an_overridden_warp_speed() {
     let (mut sim, s) = game();
     assert!(script(&mut sim, Edit::WarpSpeed(s, Some(n(30)))));
-    order(&mut sim, Order::Move { units: vec![s], to: at(0, -4000), queue: false });
+    order(&mut sim, Order::Move { units: vec![s], to: at(0, -4000), queue: false, mode: None });
     for _ in 0..12 * HZ {
         sim.step(&[]);
     }

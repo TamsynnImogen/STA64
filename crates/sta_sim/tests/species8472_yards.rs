@@ -157,6 +157,7 @@ fn installed_8472_mothership_remains_a_mobile_producing_station() {
                 z: n(100),
             },
             queue: false,
+            mode: None,
         },
     )]);
     assert!(

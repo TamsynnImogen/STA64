@@ -396,6 +396,7 @@ mod tests {
                     units: ids(&[a]),
                     to: v(0, 0, 600),
                     queue: false,
+                    mode: None,
                 },
             ),
             order(
@@ -405,6 +406,7 @@ mod tests {
                     units: ids(&[a]),
                     to: v(500, 20, 600),
                     queue: true,
+                    mode: None,
                 },
             ),
             order(
@@ -414,6 +416,7 @@ mod tests {
                     units: ids(&[a]),
                     to: v(500, 0, -200),
                     queue: true,
+                    mode: None,
                 },
             ),
         ];
@@ -459,6 +462,7 @@ mod tests {
                     units: ids(&[1]),
                     to: v(0, 0, 300),
                     queue: true,
+                    mode: None,
                 },
             ), // idle: starts at once
             order(
@@ -468,6 +472,7 @@ mod tests {
                     units: ids(&[1]),
                     to: v(300, 0, 300),
                     queue: true,
+                    mode: None,
                 },
             ),
         ];
@@ -492,6 +497,7 @@ mod tests {
                     units: ids(&[1]),
                     to,
                     queue,
+                    mode: None,
                 },
             )
         };
@@ -539,6 +545,7 @@ mod tests {
                     units: ids(&[1, 2, 3]),
                     to: v(0, 0, 1000),
                     queue: false,
+                    mode: None,
                 },
             ),
         ];
@@ -631,6 +638,7 @@ mod tests {
                     units: ids(&[1]),
                     to,
                     queue: true,
+                    mode: None,
                 },
             )
         };
