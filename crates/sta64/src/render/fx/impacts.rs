@@ -273,8 +273,8 @@ pub(super) fn spawn_impacts(
 ) {
     let tick = clock.tick();
     let shell = refit_shield_shell(profile.as_deref(), effects.as_deref());
-    // #1153: under Stock the explosion of a unit whose definition resolves is `stock_explosions.rs`'; the Refit sparks
-    // of a hull hit are not the original's and are not drawn (the original's hull-hit node particle is not drawn yet).
+    // #1153: under Stock the explosion of a unit whose definition resolves is `stock_explosions.rs`'. The hull sparks of
+    // a hit stay Refit's in both looks (INTERIM: the original's hull-hit node particle is not drawn yet).
     let stock = super::stock_explosions::stock_explosions(profile.as_deref(), effects.as_deref());
     for SimMsg(ev) in msgs.read() {
         match ev {
@@ -321,7 +321,7 @@ pub(super) fn spawn_impacts(
                     b.seed = Vec3::splat(rand(*target, tick, 0, 20));
                     cmds.spawn((b, a, t));
                 }
-                if hull.to_f32() > 0.0 && !stock {
+                if hull.to_f32() > 0.0 {
                     let size = (s.radius * 0.14).max(4.0);
                     for i in 0..HIT_SPARKS {
                         cmds.spawn(spark(*target, tick, i, at, dir, size, s));

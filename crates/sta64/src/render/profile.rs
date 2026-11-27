@@ -103,8 +103,8 @@ pub enum Effect {
     ShieldHits,
     /// The explosion of a destroyed unit or building (#1153): the sprite-cluster fireball and the shockwave ring
     /// (`fx/stock_explosions.rs`). Finer than [`Effect::Impacts`], which is never registered as stock: under Stock the
-    /// Refit fireball, ring, blast sparks, debris and hull-hit sparks are not drawn for a unit whose definition
-    /// resolves; the smoke and the shield shell keep their own rules.
+    /// Refit fireball, ring, blast sparks and debris are not drawn for a unit whose definition resolves; the hull
+    /// sparks, the smoke and the shield shell keep their own rules.
     Explosions,
 }
 

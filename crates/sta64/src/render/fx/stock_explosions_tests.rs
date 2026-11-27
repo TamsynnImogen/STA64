@@ -2,7 +2,7 @@
 //! is stepped by hand, never read from the clock of the machine.
 use super::*;
 use crate::app::configure_sets;
-use crate::render::fx::impacts::{ImpactFx, ImpactFxPlugin, ImpactKind, BLAST_SPARKS, HIT_SPARKS};
+use crate::render::fx::impacts::{ImpactFx, ImpactFxPlugin, BLAST_SPARKS, HIT_SPARKS};
 use crate::sim_link::{ContentRes, SimLink, SimLinkPlugin};
 use bevy::time::TimeUpdateStrategy;
 use sta_content::{ChunkCfg, ContentBuilder, ExplosionTable, Fixed, UnitDef, WeaponDef, WeaponKind};
@@ -208,8 +208,9 @@ fn under_stock_a_unit_a_building_and_a_hull_hit_ask_for_the_stock_effect() {
     // The unit whose definition does not resolve keeps today's effect: its fireball, ring and blast sparks.
     let of = |k: &str| d.impacts.get(k).map_or(0, |s| s.iter().filter(|i| i.0 == 3).count());
     assert_eq!((of("Fire"), of("Ring"), of("Spark")), (1, 1, BLAST_SPARKS as usize), "{d:?}");
-    // Nothing of today's explosion for the two with a definition, and no Refit spark for the hull hit.
-    assert!(d.impacts.values().flatten().all(|i| i.0 == 3), "only the unit without a definition draws Refit's effect: {:?}", d.impacts);
+    // Nothing of today's explosion for the two with a definition; the hull hit's sparks stay Refit's (INTERIM).
+    assert!(d.impacts.values().flatten().all(|i| i.0 == 3 || (i.0 == 4 && i.2 < HIT_SPARKS)), "only the unit without a definition draws Refit's explosion: {:?}", d.impacts);
+    assert_eq!(d.impacts["Spark"].iter().filter(|i| i.0 == 4).count(), HIT_SPARKS as usize);
 }
 
 #[test]

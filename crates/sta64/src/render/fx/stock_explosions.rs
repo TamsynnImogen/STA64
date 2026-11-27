@@ -34,7 +34,8 @@
 //!   original's radius is its bounding sphere, and the measurements differ from the model's own).
 //! - **Not drawn.** Hull chunks (cut from the unit's own meshes), death sparks and the hull drawn through the
 //!   dying phase (they wait for #1100), the hull-hit node particle, the explosion's sound and its
-//!   cinematic shot. Under Stock a hull hit draws no Refit spark either (those are not the original's).
+//!   cinematic shot. A weapon impact's hull spark stays Refit's in both looks (INTERIM, `impacts.rs`): the
+//!   original's is a node particle whose sprite choice is left for a decision on naming it.
 
 use std::collections::HashMap;
 use std::sync::Arc;
