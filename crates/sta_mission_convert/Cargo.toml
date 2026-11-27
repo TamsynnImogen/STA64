@@ -12,6 +12,5 @@ iced-x86 = { version = "1.21.0", default-features = false, features = ["std", "d
 # Python dicts keep insertion order and the converter's output depends on it.
 indexmap = "2"
 thiserror.workspace = true
-
-[dev-dependencies]
+# Cache keys and the integrity check of cache entries (LUA-15f).
 sha2.workspace = true

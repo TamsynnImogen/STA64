@@ -26,7 +26,9 @@ pub fn tool_token() -> String {
 
 pub mod a1;
 pub mod algebra;
+pub mod cache;
 pub mod call;
+pub mod cli;
 pub mod convert;
 pub mod disasm;
 pub mod drl;
