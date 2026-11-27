@@ -25,7 +25,7 @@ use crate::frontend::scene::{MenuMap, MenuSceneConfig, MenuSceneCorePlugin};
 use crate::frontend::screens::{ScreenData, ScreensConfig, ScreensPlugin};
 use crate::game::flow::{FlowPlugin, MenuSceneSource};
 use crate::render::fog::FogGrid;
-use crate::sim_link::{BenchDriven, SimLinkPlugin};
+use crate::sim_link::{BenchDriven, ContentRes, SimLinkPlugin};
 
 /// Makes the match's sim from the setup and links it with a journal; `Unlogged` leaves the journal out.
 #[derive(Resource)]
@@ -103,6 +103,16 @@ impl CounterHandles {
         Box::new(Counter { seat, state: st })
     }
 
+    /// The controller a match build makes: registered unless a load has already registered the seat's
+    /// restored one (the build's is replaced by it).
+    fn build_for(&self, seat: PlayerId) -> Box<dyn sta_sim::setup::Controller> {
+        if self.0.lock().unwrap().contains_key(&seat.0) {
+            Box::new(Counter { seat, state: Arc::default() })
+        } else {
+            self.make(seat, CounterState::default())
+        }
+    }
+
     fn state(&self, seat: u8) -> Option<CounterState> {
         self.0.lock().unwrap().get(&seat).map(|s| s.lock().unwrap().clone())
     }
@@ -131,7 +141,7 @@ fn build_match(
         .players
         .iter()
         .filter_map(|p| match &p.control {
-            Control::Ai(name) if name == "counter" => Some(handles.make(p.id, CounterState::default())),
+            Control::Ai(name) if name == "counter" => Some(handles.build_for(p.id)),
             Control::Ai(name) => sta_ai::Registry::builtin().create_for_seat(name, &active.setup, p.id).ok(),
             _ => None,
         })
@@ -140,6 +150,16 @@ fn build_match(
     let link = if active.local.is_none() { link.with_observer() } else { link };
     commands.insert_resource(ContentRes(active.setup.content.clone()));
     commands.insert_resource(if unlogged.is_some() { link } else { link.with_replay(Replay::new(&active.setup)) });
+}
+
+/// How many times the map file lookup was called.
+#[derive(Resource, Clone)]
+struct MapReads(Arc<std::sync::atomic::AtomicUsize>);
+
+impl MapReads {
+    fn count(&self) -> usize {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
 }
 
 /// The front end's fake data, with ships on the two-bases map: a cruiser for seat 0 and a frigate
@@ -169,6 +189,8 @@ fn temp_dir(tag: &str) -> PathBuf {
 fn app(dir: &PathBuf, map_file: bool) -> App {
     let (null, _) = NullAudio::new();
     let handles = CounterHandles::default();
+    let counted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let reads = counted.clone();
     let mut app = App::new();
     app.set_error_handler(bevy::ecs::error::panic)
         .add_plugins((MinimalPlugins, StatesPlugin))
@@ -193,7 +215,11 @@ fn app(dir: &PathBuf, map_file: bool) -> App {
         .insert_resource(handles.extra())
         .insert_resource(handles)
         .init_resource::<FogMemory>()
-        .insert_resource(MapFiles(Arc::new(move |name| map_file.then(|| (format!("bzn/{name}.bzn"), format!("authored map {name}").into_bytes())))));
+        .insert_resource(MapFiles(Arc::new(move |path| {
+            reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            map_file.then(|| format!("authored map {path}").into_bytes())
+        })))
+        .insert_resource(MapReads(counted));
     app
 }
 
@@ -648,18 +674,15 @@ fn a_file_of_another_version_or_a_damaged_one_is_refused_with_found_and_expected
     let out = drain::<LoadOutcome>(&mut a);
     assert!(matches!(out.as_slice(), [LoadOutcome::Refused { reason, .. }] if reason.contains("version 9") && reason.contains("reads version 1")), "{out:?}");
     assert_eq!(state(&a), AppState::InGame);
-    // Damage past the header shows when the whole file is read, after the build: back at the front end.
+    // Damage past the header is found too before the match is left: the whole file is checked first.
     a.world_mut().write_message(LoadMatch { path: dir.join("damaged.stasave") });
-    let mut out = Vec::new();
-    for _ in 0..300 {
-        a.update();
-        out.extend(drain::<LoadOutcome>(&mut a));
-        if !out.is_empty() && state(&a) == AppState::FrontEnd {
-            break;
-        }
-    }
+    a.update();
+    let out = drain::<LoadOutcome>(&mut a);
     assert!(matches!(out.as_slice(), [LoadOutcome::Refused { reason, .. }] if reason.contains("damaged")), "{out:?}");
-    assert_eq!(state(&a), AppState::FrontEnd);
+    settle(&mut a, 40);
+    assert_eq!(state(&a), AppState::InGame, "the running match is still running");
+    assert!(a.world().get_resource::<PendingLoad>().is_none());
+    assert_eq!(a.world().resource::<SimLink>().real_curr().tick, 3, "and it is the same game");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -692,7 +715,7 @@ fn a_save_that_cannot_be_loaded_here_is_refused_with_its_reason_and_the_match_is
 
     // The map file changed since the save: refused before the match is left.
     let mut changed = app(&dir, true);
-    changed.insert_resource(MapFiles(Arc::new(|name| Some((format!("bzn/{name}.bzn"), b"another map".to_vec())))));
+    changed.insert_resource(MapFiles(Arc::new(|_| Some(b"another map".to_vec()))));
     start(&mut changed, setup(&data, [Control::Human, Control::Idle]), MatchSpeed::Normal);
     changed.world_mut().write_message(LoadMatch { path: path.clone() });
     changed.update();
@@ -708,24 +731,145 @@ fn a_save_that_cannot_be_loaded_here_is_refused_with_its_reason_and_the_match_is
     let out = drain::<LoadOutcome>(&mut gone);
     assert!(matches!(out.as_slice(), [LoadOutcome::Refused { reason, .. }] if reason.contains("not available")), "{out:?}");
 
-    // Other content: found after the build, which is then taken down again.
+    assert_eq!(state(&gone), AppState::InGame);
+
+    // Other content (another mod active): refused with the running match still running.
     let mut other = app(&dir, true);
+    start(&mut other, setup(&data, [Control::Human, Control::Idle]), MatchSpeed::Normal);
     let mut data2 = armed();
     data2.content = Arc::new(sta_content::fake::db_with_formations());
     assert_ne!(data2.content.hash(), data.content.hash());
     other.insert_resource(data2);
-    settle(&mut other, 4);
     other.world_mut().write_message(LoadMatch { path });
-    let mut out = Vec::new();
-    for _ in 0..300 {
-        other.update();
-        out.extend(drain::<LoadOutcome>(&mut other));
-        if !out.is_empty() && state(&other) == AppState::FrontEnd {
+    other.update();
+    let out = drain::<LoadOutcome>(&mut other);
+    assert!(matches!(out.as_slice(), [LoadOutcome::Refused { reason, .. }] if reason.contains("other content")), "{out:?}");
+    settle(&mut other, 40);
+    assert_eq!(state(&other), AppState::InGame, "the running match is still running");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A saved game, written by a match of its own app.
+fn a_save_on_disk(dir: &PathBuf, data: &ScreenData, fog: crate::frontend::screens::SetupFog) -> (PathBuf, Vec<u64>) {
+    let mut a = app(dir, true);
+    settle(&mut a, 4);
+    a.world_mut().write_message(StartGame(setup(data, [Control::Human, Control::Idle]), MatchSpeed::Fast, None, fog, None));
+    for _ in 0..200 {
+        a.update();
+        if state(&a) == AppState::InGame {
             break;
         }
     }
-    assert!(matches!(out.as_slice(), [LoadOutcome::Refused { reason, .. }] if reason.contains("other content")), "{out:?}");
-    assert_eq!(state(&other), AppState::FrontEnd, "back at the front end");
+    settle(&mut a, 3);
+    let mut digests = run(&mut a, 20);
+    a.world_mut().write_message(SaveMatch { description: "fresh".into(), overwrite: None });
+    a.update();
+    let saved = drain::<SaveOutcome>(&mut a);
+    let [SaveOutcome::Saved { path, .. }] = saved.as_slice() else { panic!("not saved: {saved:?}") };
+    digests.extend(run(&mut a, 20));
+    (path.clone(), digests)
+}
+
+/// The done-when's wording: a fresh app world loads the file the first one wrote, and continues to the
+/// same digests; the setup's shroud and fog choice and the speed come back from the file.
+#[test]
+fn a_fresh_app_loads_the_file_another_app_wrote_with_the_setups_fog_choice() {
+    use crate::frontend::screens::SetupFog;
+    let dir = temp_dir("fresh");
+    let data = armed();
+    let (path, want) = a_save_on_disk(&dir, &data, SetupFog::Neither);
+
+    let mut fresh = app(&dir, true);
+    settle(&mut fresh, 4);
+    assert!(fresh.world().get_resource::<SimLink>().is_none_or(|l| l.replay().is_none()), "nothing carried over");
+    fresh.world_mut().write_message(LoadMatch { path });
+    let mut loaded = Vec::new();
+    for _ in 0..300 {
+        fresh.update();
+        loaded.extend(drain::<LoadOutcome>(&mut fresh));
+        if !loaded.is_empty() && state(&fresh) == AppState::InGame {
+            break;
+        }
+    }
+    assert!(matches!(loaded.as_slice(), [LoadOutcome::Loaded { tick: 20, left_out, .. }] if left_out.is_empty()), "{loaded:?}");
+    let active = fresh.world().resource::<ActiveMatch>();
+    assert_eq!((active.fog, active.speed), (SetupFog::Neither, MatchSpeed::Fast), "the choice made on the setup screen");
+    assert_eq!(run(&mut fresh, 20), want[20..]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A load whose start fails does not wait for the next match: the pending load is dropped with a refusal,
+/// and an ordinary start gives an ordinary match.
+#[test]
+fn a_load_whose_start_fails_is_dropped_and_cannot_take_a_later_match() {
+    let dir = temp_dir("stale");
+    let data = armed();
+    let (path, _) = a_save_on_disk(&dir, &data, crate::frontend::screens::SetupFog::Both);
+
+    let mut a = app(&dir, true);
+    settle(&mut a, 4);
+    // The start the load writes is refused by the flow (a one-seat roster): it never becomes a match.
+    let mut broken = armed();
+    broken.maps.retain(|m| m.def.name == sta_content::fake::two_bases().name);
+    let mut lone = broken.maps[0].def.as_ref().clone();
+    lone.starts.truncate(1);
+    broken.maps[0] = crate::frontend::screens::MapEntry::new(lone);
+    a.insert_resource(broken);
+    a.world_mut().write_message(LoadMatch { path: path.clone() });
+    let mut out = Vec::new();
+    for _ in 0..80 {
+        a.update();
+        out.extend(drain::<LoadOutcome>(&mut a));
+    }
+    assert!(matches!(out.as_slice(), [LoadOutcome::Refused { .. }]), "{out:?}");
+    assert!(a.world().get_resource::<PendingLoad>().is_none(), "dropped");
+
+    // An ordinary start now gives an ordinary match at tick 0.
+    a.insert_resource(armed());
+    a.world_mut().write_message(StartGame(setup(&data, [Control::Human, Control::Idle]), MatchSpeed::Normal, None, Default::default(), None));
+    for _ in 0..200 {
+        a.update();
+        if state(&a) == AppState::InGame {
+            break;
+        }
+    }
+    settle(&mut a, 5);
+    assert_eq!(a.world().resource::<SimLink>().real_curr().tick, 0, "not the saved game");
+    assert!(drain::<LoadOutcome>(&mut a).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The availability check reads no file and asks no controller each frame: the map file is read once
+/// when the match's link is up, and once more by a save that is taken.
+#[test]
+fn the_availability_check_does_no_file_io_per_frame() {
+    let dir = temp_dir("cheap");
+    let data = armed();
+    let mut a = app(&dir, true);
+    start(&mut a, setup(&data, [Control::Human, Control::Idle]), MatchSpeed::Normal);
+    settle(&mut a, 3);
+    let reads = a.world().resource::<MapReads>().clone();
+    let after_start = reads.count();
+    assert!(after_start >= 1, "read once for the match");
+    settle(&mut a, 120);
+    assert_eq!(reads.count(), after_start, "no read in 120 frames");
+    assert_eq!(a.world().resource::<SaveAvailability>().0, None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A saved memory no update took in does not outlive the match it was loaded for.
+#[test]
+fn a_saved_fog_memory_not_yet_taken_in_is_cleared_on_leaving_the_match() {
+    let dir = temp_dir("fogclear");
+    let data = armed();
+    let mut a = app(&dir, true);
+    start(&mut a, setup(&data, [Control::Human, Control::Idle]), MatchSpeed::Normal);
+    let grid = FogGrid::new([-4096.0, -4096.0], [4096.0, 4096.0]);
+    a.world_mut().resource_mut::<FogMemory>().import = Some(grid.export_explored());
+    a.world_mut().write_message(LeaveMatch);
+    settle(&mut a, 6);
+    assert_eq!(state(&a), AppState::FrontEnd);
+    assert!(a.world().resource::<FogMemory>().import.is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -741,7 +885,7 @@ fn an_unreadable_client_record_loads_the_match_with_defaults_and_says_so() {
         let mut link = a.world_mut().resource_mut::<SimLink>();
         let sim = Sim::from_snapshot(&link.snapshot().unwrap(), Some(data.content.clone())).unwrap();
         let replay = link.replay().unwrap().clone();
-        let info = SaveInfo { map: Some(MapId { path: format!("bzn/{}.bzn", replay.map.name), hash: file_hash(format!("authored map {}", replay.map.name).as_bytes()) }), local_seat: Some(PlayerId(0)), ..SaveInfo::default() };
+        let info = SaveInfo { map: Some(MapId { path: format!("bzn/{}.bzn", replay.map.name), hash: file_hash(format!("authored map bzn/{}.bzn", replay.map.name).as_bytes()) }), local_seat: Some(PlayerId(0)), ..SaveInfo::default() };
         let flight = InFlight { next_seq: link.next_seq(), commands: link.in_flight().to_vec() };
         let bytes = container::save(&sim, &replay, &info, &[], &flight, &ClientState { version: record::VERSION + 7, data: b"from the future".to_vec() }).unwrap();
         (container::store::write_new(&dir, &bytes).unwrap_or_else(|_| dir.join("x")), bytes)
