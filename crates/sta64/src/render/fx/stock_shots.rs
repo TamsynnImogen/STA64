@@ -46,8 +46,8 @@
 //!   flight flies on: the sim still delivers its hit); a
 //!   target lost while `BEAM_MISS_LIFETIME` (counted from the shot) still runs moves the end to
 //!   the weapon's range along the last direction until it has run; lost after that, the beam
-//!   ends at once; a target further than the square root of two times the range ends it at
-//!   once. A planet blocking the path is not tested (no such information in the view).
+//!   ends at once; a target further than twice the range ends it at once (this replaces an
+//!   earlier reading of the factor as the square root of two; #1068). A planet blocking the path is not tested (no such information in the view).
 //! - **Sim timing.** The sim applies a beam's damage on the fire tick (issue #1068); the original
 //!   applies it at the end of `lifeSpan`. The beam is drawn for the data's `lifeSpan` from the
 //!   fire event, whatever the sim's timing; a target the shot killed on the fire tick is held at
@@ -672,8 +672,9 @@ pub(super) fn update_shots(
                 start + (s.last_end - start).try_normalize().unwrap_or(Vec3::Y) * s.range
             } else {
                 let body = s.last_body.clone().expect("a live or held body");
-                // Further than the square root of two times the range: ends at once.
-                if s.range > 0.0 && start.distance_squared(body.centre) > 2.0 * s.range * s.range {
+                // Further than twice the range: ends at once (read from the executable, static; the factor
+                // replaces an earlier reading of the square root of two).
+                if s.range > 0.0 && start.distance_squared(body.centre) > 4.0 * s.range * s.range {
                     cmds.entity(e).try_despawn();
                     continue;
                 }
