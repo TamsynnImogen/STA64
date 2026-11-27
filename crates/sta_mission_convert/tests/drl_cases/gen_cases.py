@@ -12,7 +12,7 @@ and `objdump` of the original are replaced by the invented data). The Rust test
 
 Without an argument it writes `cases.txt` next to itself; the test `cases_file_is_current`
 regenerates into a temporary file and compares (CPython 3.14 only: some exception texts differ
-between versions).
+between versions; the first line of `cases.txt` names the version that wrote it).
 
 File format (`cases.txt`, one `tag|payload` per line):
     case|<name>                       starts a case
@@ -813,6 +813,9 @@ subdirs_case("subdirs_dotdot", ["/a/b/..", "/a/b/c/..", "x/..", "a/b/../c", "../
 subdirs_case("subdirs_names", ["/a/Star Trek: A2", "/b/Star Trek: A2/", "/c/star trek: a2", "/d/ok-1.2_x", "/e/a  b",
                                "/f/--x--", "/g/aéb"])
 
+# The first line names the CPython that printed the exception texts below (they differ between
+# versions); the staleness test compares only under the pinned major.minor version.
+HEAD = f"# generated with CPython {sys.version_info[0]}.{sys.version_info[1]}\n"
 (pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else HERE / "cases.txt").write_text(
-    "\n".join(OUT) + "\n", encoding="utf-8", newline="\n")
+    HEAD + "\n".join(OUT) + "\n", encoding="utf-8", newline="\n")
 print(f"{sum(1 for x in OUT if x.startswith('case|'))} cases")
