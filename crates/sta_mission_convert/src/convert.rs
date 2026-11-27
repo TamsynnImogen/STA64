@@ -543,10 +543,7 @@ pub fn convert_install(
                     let rins = listing(p)?;
                     Ok((rpe, rins))
                 };
-                let drl = match &drl_base {
-                    Some(base) => Some((base.as_str(), &mut open as &mut RuleSource<'_>)),
-                    None => None,
-                };
+                let drl = drl_base.as_ref().map(|base| (base.as_str(), &mut open as &mut RuleSource<'_>));
                 convert(&pe, ins, &dsl_base, drl, engine)
             })();
             match result {

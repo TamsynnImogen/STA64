@@ -19,7 +19,11 @@ The format is that of tests/dsl_lift/gen_pairs.py (read its docstring), with the
                                            (an exception of the Python is printed, the case goes on)
 """
 
-import resource; resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))  # noqa: E702
+try:
+    import resource
+    resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))
+except (ImportError, ValueError, OSError):
+    pass
 import ast
 import os
 import struct
