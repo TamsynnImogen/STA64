@@ -8,7 +8,6 @@
 //!   parity harness' reference): the scaffold of every rule DLL of the install equals the Python
 //!   tool's file, but for the first line. It asserts equality and prints counts only.
 
-#[allow(dead_code)]
 #[path = "parity/harness.rs"]
 mod harness;
 
@@ -648,7 +647,7 @@ fn the_engine_lookup_names_the_vtables_and_checks_the_slots() {
     let base = tmp("engine");
     let good = base.join("good");
     write_engine(&good, &good_tables());
-    let vt = load_engine(&[good.clone()], None).unwrap().expect("engine names");
+    let vt = load_engine(std::slice::from_ref(&good), None).unwrap().expect("engine names");
     assert_eq!(vt.keys().map(String::as_str).collect::<Vec<_>>(), ENGINE_CLASSES.to_vec());
     assert_eq!(vt["character"], ["?GetIIIE@character@@UAEPAVIIIE@@XZ"]);
     assert_eq!(vt["hot_float"][8], "??Bhot_float@@UAEMXZ");
@@ -659,7 +658,7 @@ fn the_engine_lookup_names_the_vtables_and_checks_the_slots() {
     tables[3].1[8] = "?other@x@@";
     let bad = base.join("bad");
     write_engine(&bad, &tables);
-    let e = load_engine(&[bad.clone()], None).unwrap_err();
+    let e = load_engine(std::slice::from_ref(&bad), None).unwrap_err();
     assert_eq!(e.kind, ErrorKind::Decode);
     assert_eq!(
         e.message,
@@ -678,8 +677,8 @@ fn the_engine_lookup_names_the_vtables_and_checks_the_slots() {
     let vt = load_engine(&[none.clone(), good.clone()], None).unwrap().unwrap();
     assert!(vt.contains_key("character"));
     // an engine root named explicitly is the only candidate
-    assert!(load_engine(&[good.clone()], Some(&none)).unwrap().is_none());
-    assert!(load_engine(&[none.clone()], Some(&good)).unwrap().is_some());
+    assert!(load_engine(std::slice::from_ref(&good), Some(&none)).unwrap().is_none());
+    assert!(load_engine(std::slice::from_ref(&none), Some(&good)).unwrap().is_some());
     // an unreadable or undecodable root is skipped, the next one is tried
     let junk = base.join("junk");
     std::fs::create_dir_all(&junk).unwrap();
@@ -751,7 +750,7 @@ fn gated_scaffolds_equal_the_python_output() {
     let mdir = child(&root, "missions")
         .or_else(|| child(&child(&root, "Data").unwrap_or_else(|| root.clone()), "missions"))
         .expect("a missions folder");
-    let engine = load_engine(&[mdir.clone()], Some(&root)).expect("the engine lookup");
+    let engine = load_engine(std::slice::from_ref(&mdir), Some(&root)).expect("the engine lookup");
     assert!(engine.is_some(), "the install has no engine names");
     let mut listing = |p: &Path| -> sta_mission_convert::Result<Vec<(u32, String)>> {
         let name = format!("{}.txt", p.file_name().unwrap().to_string_lossy().to_lowercase());
@@ -761,7 +760,7 @@ fn gated_scaffolds_equal_the_python_output() {
         Ok(parse_objdump(&String::from_utf8_lossy(&bytes)))
     };
     let run = decode_install(&mdir, engine.as_ref(), &mut listing).expect("the run does not abort");
-    let sub = &install_subdirs(&[mdir.clone()])[0];
+    let sub = &install_subdirs(std::slice::from_ref(&mdir))[0];
     let produced: BTreeMap<String, Vec<u8>> =
         run.files.iter().map(|(k, v)| (format!("drl/{sub}/{k}"), v.clone())).collect();
     let report = install.compare_subset(&produced, |rel| rel.starts_with("drl/"));

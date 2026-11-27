@@ -37,7 +37,7 @@ use std::path::{Component, Path, PathBuf};
 use indexmap::IndexMap;
 
 use crate::algebra::{
-    as_bool, binop, branch_pred, conj, expr_arg, false_, jcc_op, negate, simplify, true_, typed_args,
+    as_bool, binop, branch_pred, conj, expr_arg, false_, drl_jcc_op, negate, simplify, true_, typed_args,
 };
 use crate::disasm::Ins;
 use crate::format::{lua_ident, lua_str, py_hex, render, Ctx};
@@ -224,14 +224,14 @@ fn m_base_plus(op: &str) -> Option<(&str, &str)> {
 fn split_pair(ops: &str) -> Result<(&str, &str)> {
     match ops.split_once(',') {
         Some((x, y)) => Ok((py_strip(x), py_strip(y))),
-        None => Err(DecodeError::raw("not enough values to unpack (expected 2, got 1)")),
+        None => Err(DecodeError::python("ValueError", "not enough values to unpack (expected 2, got 1)")),
     }
 }
 
 /// `t.split(None, 1)` as `(mn, ops)`; a blank text is the `IndexError` of `parts[0]`.
 fn split_mn(t: &str) -> Result<(&str, &str)> {
     match py_split_ws_once(t).as_slice() {
-        [] => Err(DecodeError::raw("list index out of range")),
+        [] => Err(DecodeError::python("IndexError", "list index out of range")),
         [mn] => Ok((mn, "")),
         [mn, ops, ..] => Ok((mn, ops)),
     }
@@ -445,6 +445,9 @@ pub enum Next {
 /// A rule the registration code creates: name, condition address, action address.
 pub type Created = (String, i64, i64);
 
+/// The variables each rule (by creation index) depends on.
+pub type Deps = HashMap<usize, Vec<String>>;
+
 /// `Drl`: one decoded rule DLL over its image and its listing.
 pub struct Drl<I: Image> {
     pub pe: I,
@@ -487,10 +490,10 @@ impl<I: Image> Drl<I> {
         // `_chkesp`: the debug runtime's stack check (a no-op for the decoder).
         let mut seen: IndexMap<i64, i64> = IndexMap::new();
         for i in 0..ins.len() - 1 {
-            if m_cmp_esp(&ins[i].1, &["esi", "edi", "ebp"]).is_some() {
-                if let Some(m) = m_word_hex(&ins[i + 1].1, "call") {
-                    *seen.entry(hexval(m)?).or_insert(0) += 1;
-                }
+            if m_cmp_esp(&ins[i].1, &["esi", "edi", "ebp"]).is_some()
+                && let Some(m) = m_word_hex(&ins[i + 1].1, "call")
+            {
+                *seen.entry(hexval(m)?).or_insert(0) += 1;
             }
         }
         let chkesp = first_max_key(seen.iter()).copied();
@@ -542,7 +545,7 @@ impl<I: Image> Drl<I> {
     }
 
     fn ins_at(&self, i: usize) -> Result<&(i64, String)> {
-        self.ins.get(i).ok_or_else(|| DecodeError::raw("list index out of range"))
+        self.ins.get(i).ok_or_else(|| DecodeError::python("IndexError", "list index out of range"))
     }
 
     // ---------------------------------------------------------- operands
@@ -648,7 +651,7 @@ impl<I: Image> Drl<I> {
 
     /// `rules()`: `[(name, condition addr, action addr)]` in creation order, and the variables each
     /// rule depends on (by rule index).
-    pub fn rules(&self) -> Result<(Vec<Created>, HashMap<usize, Vec<String>>)> {
+    pub fn rules(&self) -> Result<(Vec<Created>, Deps)> {
         let mut rules: Vec<Created> = Vec::new();
         let mut deps: HashMap<usize, Vec<String>> = HashMap::new();
         let mut by_glob: HashMap<i64, i64> = HashMap::new();
@@ -988,7 +991,7 @@ impl<I: Image> Drl<I> {
             st.flags = tup!["cmp", vx, vy];
             return Ok(Next::Fall);
         }
-        if jcc_op(mn).is_some() {
+        if drl_jcc_op(mn).is_some() {
             let target = hexval(ops)?;
             let f = st.flags.clone();
             if f.is_none() {
@@ -1188,7 +1191,7 @@ fn py_add_one(v: &Py) -> Result<Py> {
         Py::Int(n) => n.checked_add(1).map(Py::Int).ok_or_else(|| DecodeError::raw("integer overflow")),
         Py::Bool(b) => Ok(Py::Int(i64::from(*b) + 1)),
         Py::Float(x) => Ok(Py::Float(x + 1.0)),
-        other => Err(DecodeError::raw(format!(
+        other => Err(DecodeError::python("TypeError", format!(
             "unsupported operand type(s) for +: '{}' and 'int'",
             other.type_name()
         ))),
@@ -1374,7 +1377,7 @@ pub fn decode<I: Image>(pe: I, listing: Vec<Ins>, base: &str, engine: Option<&Vt
 
 /// `action_target(d, start)`: the one `.dsl` function an action calls.
 pub fn action_target<I: Image>(d: &Drl<I>, start: i64) -> Result<String> {
-    let mut i = *d.at.get(&start).ok_or_else(|| DecodeError::raw(py_hex(start)))?;
+    let mut i = *d.at.get(&start).ok_or_else(|| DecodeError::python("KeyError", py_hex(start)))?;
     let mut called: Vec<String> = Vec::new();
     loop {
         let (a, t) = d.ins_at(i)?;
