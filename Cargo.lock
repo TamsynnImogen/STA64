@@ -5732,6 +5732,7 @@ dependencies = [
  "sta_core",
  "sta_media",
  "sta_mission",
+ "sta_mission_convert",
  "sta_net",
  "sta_odf",
  "sta_sim",
@@ -5865,6 +5866,7 @@ dependencies = [
  "iced-x86",
  "indexmap",
  "sha2",
+ "sta_core",
  "thiserror 2.0.21",
 ]
 

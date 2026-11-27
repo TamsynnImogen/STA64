@@ -12,6 +12,7 @@
 
 pub mod fixed;
 pub use fixed::Fixed;
+pub mod install_key;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

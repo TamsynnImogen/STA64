@@ -290,7 +290,7 @@ fn the_cache_option_uses_the_data_directory() {
     let mut listing = no_listing;
     let env = Env { data_dir: Some(data.clone()), ..Env::default() };
     // an entry in the default folder is used
-    let dir = data.join("convert-cache").join("star-trek-armada-test");
+    let dir = data.join("convert-cache").join(cli::key(&root, None));
     Cache::new(&dir)
         .put(&mission_key(&root), &Entry::Converted { source: b"-- x\n".to_vec(), console: vec!["  replayed".to_owned()] })
         .unwrap();
