@@ -55,6 +55,8 @@ LUAI_FUNC void luaH_resizearray (lua_State *L, Table *t, unsigned int nasize);
 LUAI_FUNC void luaH_free (lua_State *L, Table *t);
 LUAI_FUNC int luaH_next (lua_State *L, Table *t, StkId key);
 LUAI_FUNC lua_Unsigned luaH_getn (Table *t);
+/* STA64: a key assigned again after it was set to nil moves to the end */
+LUAI_FUNC void luaH_sta64touch (Table *t, const TValue *slot);
 
 
 #if defined(LUA_DEBUG)

@@ -76,7 +76,8 @@
 
 static const Node dummynode_ = {
   {NILCONSTANT},  /* value */
-  {{NILCONSTANT, 0}}  /* key */
+  {{NILCONSTANT, 0}},  /* key */
+  -1, -1  /* STA64: order links (never used: a dummy table's order is empty) */
 };
 
 
@@ -108,6 +109,70 @@ static int l_hashfloat (lua_Number n) {
   }
 }
 #endif
+
+
+/*
+** {=============================================================
+** STA64: insertion order (issue #1300)
+** The hash part keeps a doubly linked list of its nodes in the order their
+** keys were inserted ('sta64_first', 'sta64_last', node 'sta64_prev' and
+** 'sta64_next', node indices, -1 for none). 'next' walks the array part in
+** index order and then this list, so traversal order never depends on hash
+** seeds or addresses. A key assigned again after it was set to nil moves to
+** the end ('luaH_sta64touch'). The hash part is rebuilt after a fixed number
+** of insertions ('sta64_inserts' reaching the node count) rather than when
+** the free-position search fails, so when it happens, and which integer keys
+** then live in the array part, depends only on what the script did.
+** ==============================================================
+*/
+
+#define sta64_index(t,n)	cast_int((n) - gnode(t, 0))
+
+static void sta64_unlink (Table *t, Node *n) {
+  if (n->sta64_prev >= 0) gnode(t, n->sta64_prev)->sta64_next = n->sta64_next;
+  else t->sta64_first = n->sta64_next;
+  if (n->sta64_next >= 0) gnode(t, n->sta64_next)->sta64_prev = n->sta64_prev;
+  else t->sta64_last = n->sta64_prev;
+}
+
+
+static void sta64_append (Table *t, Node *n) {
+  int i = sta64_index(t, n);
+  n->sta64_next = -1;
+  n->sta64_prev = t->sta64_last;
+  if (t->sta64_last >= 0) gnode(t, t->sta64_last)->sta64_next = i;
+  else t->sta64_first = i;
+  t->sta64_last = i;
+}
+
+
+/* node 'n' was copied here from another node: point its neighbours at it */
+static void sta64_moved (Table *t, Node *n) {
+  int i = sta64_index(t, n);
+  if (n->sta64_prev >= 0) gnode(t, n->sta64_prev)->sta64_next = i;
+  else t->sta64_first = i;
+  if (n->sta64_next >= 0) gnode(t, n->sta64_next)->sta64_prev = i;
+  else t->sta64_last = i;
+}
+
+
+/*
+** 'slot' is about to be assigned and holds nil: if it is a node of the hash
+** part (a key set to nil before), the key moves to the end of the order.
+*/
+void luaH_sta64touch (Table *t, const TValue *slot) {
+  const char *p = cast(const char *, slot);
+  if (!isdummy(t) && ttisnil(slot) &&
+      p >= cast(const char *, gnode(t, 0)) &&
+      p < cast(const char *, gnode(t, sizenode(t)))) {
+    Node *n = gnode(t, (p - cast(const char *, gnode(t, 0))) / sizeof(Node));
+    sta64_unlink(t, n);
+    sta64_append(t, n);
+    t->sta64_inserts++;
+  }
+}
+
+/* }============================================================= */
 
 
 /*
@@ -185,6 +250,7 @@ static unsigned int findindex (lua_State *L, Table *t, StkId key) {
 
 int luaH_next (lua_State *L, Table *t, StkId key) {
   unsigned int i = findindex(L, t, key);  /* find original element */
+  int n;  /* STA64: node index in insertion order */
   for (; i < t->sizearray; i++) {  /* try first array part */
     if (!ttisnil(&t->array[i])) {  /* a non-nil value? */
       setivalue(key, i + 1);
@@ -192,10 +258,15 @@ int luaH_next (lua_State *L, Table *t, StkId key) {
       return 1;
     }
   }
-  for (i -= t->sizearray; cast_int(i) < sizenode(t); i++) {  /* hash part */
-    if (!ttisnil(gval(gnode(t, i)))) {  /* a non-nil value? */
-      setobj2s(L, key, gkey(gnode(t, i)));
-      setobj2s(L, key+1, gval(gnode(t, i)));
+  /* STA64: hash part in insertion order ('i' > sizearray: 'key' is node
+     i - 1 - sizearray, continue after it; else start at the first node) */
+  n = (i <= t->sizearray) ? t->sta64_first
+                          : gnode(t, i - 1 - t->sizearray)->sta64_next;
+  for (; n >= 0; n = gnode(t, n)->sta64_next) {
+    Node *nd = gnode(t, n);
+    if (!ttisnil(gval(nd))) {  /* a non-nil value? */
+      setobj2s(L, key, gkey(nd));
+      setobj2s(L, key+1, gval(nd));
       return 1;
     }
   }
@@ -312,6 +383,8 @@ static void setnodevector (lua_State *L, Table *t, unsigned int size) {
     t->node = cast(Node *, dummynode);  /* use common 'dummynode' */
     t->lsizenode = 0;
     t->lastfree = NULL;  /* signal that it is using dummy node */
+    t->sta64_first = t->sta64_last = -1;  /* STA64: empty order */
+    t->sta64_inserts = 0;
   }
   else {
     int i;
@@ -328,6 +401,8 @@ static void setnodevector (lua_State *L, Table *t, unsigned int size) {
     }
     t->lsizenode = cast_byte(lsize);
     t->lastfree = gnode(t, size);  /* all positions are free */
+    t->sta64_first = t->sta64_last = -1;  /* STA64: empty order */
+    t->sta64_inserts = 0;
   }
 }
 
@@ -352,6 +427,7 @@ void luaH_resize (lua_State *L, Table *t, unsigned int nasize,
   unsigned int oldasize = t->sizearray;
   int oldhsize = allocsizenode(t);
   Node *nold = t->node;  /* save old hash ... */
+  int oldfirst = t->sta64_first;  /* STA64: ... and its order */
   if (nasize > oldasize)  /* array part must grow? */
     setarrayvector(L, t, nasize);
   /* create new hash part with appropriate size */
@@ -360,8 +436,19 @@ void luaH_resize (lua_State *L, Table *t, unsigned int nasize,
     setarrayvector(L, t, oldasize);  /* array back to its original size */
     luaD_throw(L, LUA_ERRMEM);  /* rethrow memory error */
   }
-  if (nasize < oldasize) {  /* array part must shrink? */
+  /* STA64: re-insert the hash part first, in insertion order, and the
+     vanishing slice of the array part after it, in index order */
+  if (nasize < oldasize)  /* array part must shrink? */
     t->sizearray = nasize;
+  for (j = oldfirst; j >= 0; j = nold[j].sta64_next) {
+    Node *old = nold + j;
+    if (!ttisnil(gval(old))) {
+      /* doesn't need barrier/invalidate cache, as entry was
+         already present in the table */
+      setobjt2t(L, luaH_set(L, t, gkey(old)), gval(old));
+    }
+  }
+  if (nasize < oldasize) {  /* array part must shrink? */
     /* re-insert elements from vanishing slice */
     for (i=nasize; i<oldasize; i++) {
       if (!ttisnil(&t->array[i]))
@@ -369,15 +456,6 @@ void luaH_resize (lua_State *L, Table *t, unsigned int nasize,
     }
     /* shrink array */
     luaM_reallocvector(L, t->array, oldasize, nasize, TValue);
-  }
-  /* re-insert elements from hash part */
-  for (j = oldhsize - 1; j >= 0; j--) {
-    Node *old = nold + j;
-    if (!ttisnil(gval(old))) {
-      /* doesn't need barrier/invalidate cache, as entry was
-         already present in the table */
-      setobjt2t(L, luaH_set(L, t, gkey(old)), gval(old));
-    }
   }
   if (oldhsize > 0)  /* not the dummy node? */
     luaM_freearray(L, nold, cast(size_t, oldhsize)); /* free old hash */
@@ -461,6 +539,7 @@ static Node *getfreepos (Table *t) {
 TValue *luaH_newkey (lua_State *L, Table *t, const TValue *key) {
   Node *mp;
   TValue aux;
+  int inorder;  /* STA64: 'mp' holds a key set to nil, linked in the order */
   if (ttisnil(key)) luaG_runerror(L, "table index is nil");
   else if (ttisfloat(key)) {
     lua_Integer k;
@@ -471,7 +550,14 @@ TValue *luaH_newkey (lua_State *L, Table *t, const TValue *key) {
     else if (luai_numisnan(fltvalue(key)))
       luaG_runerror(L, "table index is NaN");
   }
+  /* STA64: rebuild after as many insertions as there are nodes (never
+     later than the free-position search would fail) */
+  if (!isdummy(t) && t->sta64_inserts >= cast(unsigned int, sizenode(t))) {
+    rehash(L, t, key);
+    return luaH_set(L, t, key);
+  }
   mp = mainposition(t, key);
+  inorder = !ttisnil(gkey(mp));
   if (!ttisnil(gval(mp)) || isdummy(t)) {  /* main position is taken? */
     Node *othern;
     Node *f = getfreepos(t);  /* get a free place */
@@ -488,6 +574,7 @@ TValue *luaH_newkey (lua_State *L, Table *t, const TValue *key) {
         othern += gnext(othern);
       gnext(othern) = cast_int(f - othern);  /* rechain to point to 'f' */
       *f = *mp;  /* copy colliding node into free pos. (mp->next also goes) */
+      sta64_moved(t, f);  /* STA64: its place in the order goes too */
       if (gnext(mp) != 0) {
         gnext(f) += cast_int(mp - f);  /* correct 'next' */
         gnext(mp) = 0;  /* now 'mp' is free */
@@ -502,10 +589,14 @@ TValue *luaH_newkey (lua_State *L, Table *t, const TValue *key) {
       gnext(mp) = cast_int(f - mp);
       mp = f;
     }
+    inorder = 0;  /* STA64: 'mp' is a free node, or its order went to 'f' */
   }
+  if (inorder) sta64_unlink(t, mp);  /* STA64: the old key leaves */
   setnodekey(L, &mp->i_key, key);
   luaC_barrierback(L, t, key);
   lua_assert(ttisnil(gval(mp)));
+  sta64_append(t, mp);  /* STA64: the new key goes last */
+  t->sta64_inserts++;
   return gval(mp);
 }
 
@@ -609,8 +700,10 @@ const TValue *luaH_get (Table *t, const TValue *key) {
 */
 TValue *luaH_set (lua_State *L, Table *t, const TValue *key) {
   const TValue *p = luaH_get(t, key);
-  if (p != luaO_nilobject)
+  if (p != luaO_nilobject) {
+    luaH_sta64touch(t, p);  /* STA64 */
     return cast(TValue *, p);
+  }
   else return luaH_newkey(L, t, key);
 }
 
@@ -618,8 +711,10 @@ TValue *luaH_set (lua_State *L, Table *t, const TValue *key) {
 void luaH_setint (lua_State *L, Table *t, lua_Integer key, TValue *value) {
   const TValue *p = luaH_getint(t, key);
   TValue *cell;
-  if (p != luaO_nilobject)
+  if (p != luaO_nilobject) {
+    luaH_sta64touch(t, p);  /* STA64 */
     cell = cast(TValue *, p);
+  }
   else {
     TValue k;
     setivalue(&k, key);

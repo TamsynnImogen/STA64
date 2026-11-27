@@ -212,6 +212,8 @@ void luaV_finishset (lua_State *L, const TValue *t, TValue *key,
       if (tm == NULL) {  /* no metamethod? */
         if (slot == luaO_nilobject)  /* no previous entry? */
           slot = luaH_newkey(L, h, key);  /* create one */
+        else  /* STA64: a key set to nil before moves to the end */
+          luaH_sta64touch(h, slot);
         /* no metamethod and (now) there is an entry with given key */
         setobj2t(L, cast(TValue *, slot), val);  /* set its new value */
         invalidateTMcache(h);
@@ -251,7 +253,7 @@ static int l_strcmp (const TString *ls, const TString *rs) {
   const char *r = getstr(rs);
   size_t lr = tsslen(rs);
   for (;;) {  /* for each segment */
-    int temp = strcoll(l, r);
+    int temp = strcmp(l, r);  /* STA64: byte order on every machine, not the locale's (issue #1300) */
     if (temp != 0)  /* not equal? */
       return temp;  /* done */
     else {  /* strings are equal up to a '\0' */

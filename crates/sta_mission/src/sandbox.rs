@@ -11,6 +11,12 @@
 //! identical on every peer. It is refilled on every entry from the host
 //! ([`refill`]): the script load, each callback, each monitor pass, each
 //! `eval`. A script that exhausts it gets an error from that entry only.
+//!
+//! Reproducibility (#1300) lives mostly in the bundled Lua itself
+//! (`vendor/lua-src/VENDORED.md`): `pairs`/`next` in insertion order, a stable
+//! `table.sort`, byte-order string comparison, no weak tables. Here only the
+//! `setmetatable` guard adds a clear error for `__mode`. Host code that walks a
+//! script's table (`Table::pairs`) gets the same insertion order.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -120,17 +126,29 @@ fn restricted(name: &str, why: String) -> mlua::Error {
     mlua::Error::runtime(format!("{name}: {why}"))
 }
 
-/// `setmetatable` that refuses a `__gc` finalizer: Lua runs finalizers with
-/// hooks disabled, so a looping finalizer could never be stopped.
+/// `setmetatable` that refuses a `__gc` finalizer (Lua runs finalizers with
+/// hooks disabled, so a looping finalizer could never be stopped) and a weak
+/// mode (`__mode`: what a weak table holds depends on when the collector ran,
+/// so a script reading one would not be reproducible, #1300). The bundled Lua
+/// ignores `__mode` anyway (vendor/lua-src/VENDORED.md), also when it is set
+/// on a metatable after this call; the error says so up front.
 fn guard_setmetatable(lua: &Lua, globals: &Table) -> mlua::Result<()> {
     let original: Function = globals.raw_get("setmetatable")?;
     globals.raw_set(
         "setmetatable",
         lua.create_function(move |_, args: MultiValue| {
-            if let Some(Value::Table(meta)) = args.get(1)
-                && !meta.raw_get::<Value>("__gc")?.is_nil()
-            {
-                return Err(restricted("setmetatable", "__gc finalizers are not available to mission scripts".into()));
+            if let Some(Value::Table(meta)) = args.get(1) {
+                if !meta.raw_get::<Value>("__gc")?.is_nil() {
+                    return Err(restricted("setmetatable", "__gc finalizers are not available to mission scripts".into()));
+                }
+                if !meta.raw_get::<Value>("__mode")?.is_nil() {
+                    return Err(restricted(
+                        "setmetatable",
+                        "weak tables (__mode) are not available to mission scripts: what they hold depends on when \
+                         the garbage collector runs, so the script would not be reproducible"
+                            .into(),
+                    ));
+                }
             }
             original.call::<MultiValue>(args)
         })?,
@@ -258,6 +276,8 @@ mod tests {
         let lua = new_lua();
         let err = lua.load("setmetatable({}, {__gc = function() while true do end end})").exec().unwrap_err().to_string();
         assert!(err.contains("__gc"), "{err}");
+        let err = lua.load("setmetatable({}, {__mode = 'v'})").exec().unwrap_err().to_string();
+        assert!(err.contains("__mode") && err.contains("reproducible"), "{err}");
         // Ordinary metatables are untouched.
         assert!(lua.load("return getmetatable(setmetatable({}, {__index = {a = 1}})).__index.a == 1").eval::<bool>().unwrap());
         let err = lua.load("return string.rep('x', 1024 * 1024 * 1024)").eval::<Value>().unwrap_err().to_string();

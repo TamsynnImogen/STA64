@@ -491,6 +491,8 @@ typedef union TKey {
 typedef struct Node {
   TValue i_val;
   TKey i_key;
+  /* STA64: insertion order of the hash part, as node indices (-1: none) */
+  int sta64_prev, sta64_next;
 } Node;
 
 
@@ -504,6 +506,10 @@ typedef struct Table {
   Node *lastfree;  /* any free position is before this position */
   struct Table *metatable;
   GCObject *gclist;
+  /* STA64: first and last node in insertion order (-1: none), and the
+     keys inserted into the hash part since its last resize */
+  int sta64_first, sta64_last;
+  unsigned int sta64_inserts;
 } Table;
 
 

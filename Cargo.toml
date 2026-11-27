@@ -24,6 +24,8 @@ members = [
 # `cargo run` (and bare `cargo build`/`cargo test`) target the game; use
 # `-p <crate>` or `--workspace` for the others.
 default-members = ["crates/sta64"]
+# Vendored third-party code used through `[patch.crates-io]` below, not a member.
+exclude = ["vendor/lua-src"]
 
 [workspace.package]
 version = "0.1.0"
@@ -78,6 +80,11 @@ semver = "1.0.28"
 gltf = { version = "=1.4.1", default-features = false, features = ["utils", "names", "KHR_materials_unlit"] }
 base64 = "=0.23.1"
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg"] }
+
+# Mission Lua is reproducible from one Lua state to the next (#1300): the Lua 5.3 that mlua
+# builds ("vendored" feature) comes from this patched copy. See vendor/lua-src/VENDORED.md.
+[patch.crates-io]
+lua-src = { path = "vendor/lua-src" }
 
 # Bevy is slow unoptimised; optimise dependencies even in dev builds.
 [profile.dev.package."*"]

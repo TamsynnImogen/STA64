@@ -437,8 +437,12 @@ static void traversestrongtable (global_State *g, Table *h) {
     markvalue(g, &h->array[i]);
   for (n = gnode(h, 0); n < limit; n++) {  /* traverse hash part */
     checkdeadkey(n);
-    if (ttisnil(gval(n)))  /* entry is empty? */
-      removeentry(n);  /* remove it */
+    if (ttisnil(gval(n))) {  /* entry is empty? */
+      /* STA64: keep its key alive (never a dead key) until the hash part is
+         rebuilt, so whether a key set to nil is still found does not depend
+         on when the collector ran (issue #1300) */
+      markvalue(g, gkey(n));
+    }
     else {
       lua_assert(!ttisnil(gkey(n)));
       markvalue(g, gkey(n));  /* mark key */
@@ -452,6 +456,7 @@ static lu_mem traversetable (global_State *g, Table *h) {
   const char *weakkey, *weakvalue;
   const TValue *mode = gfasttm(g, h->metatable, TM_MODE);
   markobjectN(g, h->metatable);
+  mode = NULL;  /* STA64: no weak tables; '__mode' is ignored (issue #1300) */
   if (mode && ttisstring(mode) &&  /* is there a weak mode? */
       ((weakkey = strchr(svalue(mode), 'k')),
        (weakvalue = strchr(svalue(mode), 'v')),

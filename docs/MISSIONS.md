@@ -621,7 +621,8 @@ limits:
 | `PATTERN_SUBJECT_MAX`, `PATTERN_MAX`, `PATTERN_QUANTIFIERS_MAX` | 1024 B, 256 B, 3 | limits for `string.find/match/gmatch/gsub` with a pattern (`find` with the `plain` flag is exempt): the matcher backtracks inside one C call that the instruction hook cannot interrupt |
 
 `setmetatable` refuses a metatable with `__gc`: Lua runs finalizers with hooks
-off, so a looping finalizer could not be stopped.
+off, so a looping finalizer could not be stopped. It refuses `__mode` too
+(weak tables are not reproducible; see "Determinism").
 
 A runaway loop ends with the Lua error "mission script exceeded its
 instruction budget" in that entry only; the budget is refilled for the next
@@ -658,6 +659,30 @@ replacing the global `math.random` afterward does not redirect it.
 The positive upper-exclusive range matches the pinned A2 reference, while
 the random algorithm/sequence and zero-input error are explicit STA64
 policies. Native RNG and mission save/resume parity are not claimed.
+
+### Reproducible tables, sorting and references
+
+STA64's bundled Lua is patched (`vendor/lua-src/VENDORED.md`, #1300) so a
+script given the same inputs does the same thing in every Lua state, every
+process and on every machine. What a mission author can rely on:
+
+- `pairs` and `next` visit keys in the order they were added, for every key
+  type (strings, numbers, booleans, tables, functions, coroutines, entity
+  handles). Integer keys the table keeps in its array part come first,
+  ascending: a list built by appending (`t[#t + 1] = v`, `table.insert`) or by
+  a constructor is always there; other integer keys may be in either part,
+  depending on how the table grew, the same way in every run. A key set to
+  nil and added again moves to the end; overwriting a present key keeps its
+  place. Clearing fields during a traversal is fine; adding keys during one is
+  undefined in Lua (but still the same in every run). `ipairs`, `#`, `__pairs`
+  and the `table` functions are unchanged. Host functions that walk a script's
+  table use the same order.
+- `table.sort` is stable: elements that compare equal keep their order. A
+  comparator that is not a strict weak order gives some fixed permutation, not
+  an error; if the comparator raises, the table is left unchanged. Strings
+  compare by bytes (`<` too), whatever the locale.
+- Weak tables are not available: `setmetatable` refuses a metatable with
+  `__mode` (and `__gc`), and a `__mode` added later is ignored.
 
 ## To do
 
