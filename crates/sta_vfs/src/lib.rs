@@ -414,10 +414,7 @@ fn walk_chain(data: &Path, name: &str, stop_at_standalone: bool) -> Result<Vec<C
             return Err(VfsError::ParentCycle(format!("{} -> {n}", names.join(" -> "))));
         }
         let dir = find_child_ci(&mods, &n).ok_or_else(|| VfsError::ModNotFound(n.clone()))?;
-        let ini = find_child_ci(&dir, "info.ini")
-            .and_then(|p| fs::read(&p).ok())
-            .map(|b| mods::Ini::parse(&String::from_utf8_lossy(&b)))
-            .unwrap_or_default();
+        let ini = mod_info_bytes(&dir).map(|b| mods::Ini::parse(&String::from_utf8_lossy(&b))).unwrap_or_default();
         let parent = ini.get("mod", "ParentMod").map(str::trim).filter(|p| !p.is_empty()).map(str::to_owned);
         // `standalone` in info.ini, or a manifest that says `kind = "standalone"` (D4).
         let manifest_standalone = manifest::manifest_text(&dir)
@@ -428,6 +425,29 @@ fn walk_chain(data: &Path, name: &str, stop_at_standalone: bool) -> Result<Vec<C
         current = if stop_at_standalone && standalone { None } else { parent };
     }
     Ok(chain)
+}
+
+/// The `info.ini` bytes of the mod folder `dir`: its loose `info.ini` (any
+/// case), else the one inside its first root `.sta` (path order, as
+/// [`Vfs::push_dir`] layers them) that carries one, so a mod that is only a
+/// package is a complete mod (CON-16, CON-18; loose files beat the archive,
+/// `docs/STA_ARCHIVE.md` "Mounting and load order" 3). An unreadable
+/// or broken archive is skipped here; the mount reports it.
+fn mod_info_bytes(dir: &Path) -> Option<Vec<u8>> {
+    if let Some(bytes) = find_child_ci(dir, "info.ini").and_then(|p| fs::read(p).ok()) {
+        return Some(bytes);
+    }
+    let mut stas: Vec<PathBuf> = fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().is_some_and(|x| x.eq_ignore_ascii_case("sta")))
+        .collect();
+    stas.sort();
+    stas.iter().find_map(|p| {
+        let archive = sta::StaArchive::open(p).ok()?;
+        archive.read(archive.find("info.ini")?).ok()
+    })
 }
 
 /// Extract `ParentMod` from the `[Mod]` section of an `info.ini`.
