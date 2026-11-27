@@ -1,0 +1,2389 @@
+== construct
+-- dsl
+thunks [(268439552, 268439560), (268439554, 268439572)]
+chkesp None
+data [(268445696, 'g_pSI', 'ScriptInterface', 4, '?g_pSI@@3PAVScriptInterface@@A'), (268445700, 'p_WORLD', 'character', 4, '?p_WORLD@@3PAVcharacter@@A'), (268445704, 'p_ALPHA', 'hot_int', 4, '?p_ALPHA@@3PAVhot_int@@A'), (268445708, 'p_BETA', 'hot_float', 4, '?p_BETA@@3PAVhot_float@@A'), (268445712, 'cnt', 'int', 4, '?cnt@@3HA'), (268445716, 'flt', 'float', 4, '?flt@@3MA'), (268445720, 'arr', 'intarray', 16, '?arr@@3PAHA'), (268445736, 'farr', 'floatarray', 16, '?farr@@3PAMA'), (268445752, 'vec', 'Vector3', 12, '?vec@@3VVector3@@A'), (268445764, 'flag', 'int', 4, '?flag@@3_NA')]
+code_names [(268439560, 'ScriptInit'), (268439808, 'DoAction')]
+-- entry 0x10001000
+268439560
+-- entry 0x10001002
+268439572
+-- entry 0x10001ff0
+error 'no instruction at 0x10001ff0'
+-- global_at 0x10002800
+('g_pSI', 'ScriptInterface', 0)
+-- global_at 0x10002818
+('arr', 'intarray', 0)
+-- global_at 0x1000281c
+('arr', 'intarray', 4)
+-- global_at 0x10002838
+('vec', 'Vector3', 0)
+-- global_at 0x1000283c
+('vec', 'Vector3', 4)
+-- global_at 0x10002840
+('vec', 'Vector3', 8)
+-- global_at 0x10002844
+('flag', 'int', 0)
+-- global_at 0x10002848
+None
+-- global_at 0x10002819
+('arr', 'intarray', 1)
+-- dword 0x10002800
+0
+-- dword 0x10003ffe
+None
+-- dword 0x20000000
+None
+-- dword 0x0
+None
+static_refs []
+== construct_chkesp
+-- dsl
+thunks []
+chkesp 268440320
+data []
+code_names []
+static_refs []
+== construct_chkesp_tie
+-- dsl
+thunks []
+chkesp 268440064
+data []
+code_names []
+static_refs []
+== construct_error_export
+new error 'no instruction at 0x10001ff0'
+== return_values
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 17
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('return', ('const', 5))
+-- blocks 0x10001000
+leaders [268439552]
+seen [268439552, 268439554, 268439556, 268439558, 268439560, 268439562, 268439564, 268439566, 268439568, 268439570, 268439572, 268439574, 268439576, 268439578, 268439580, 268439582, 268439584]
+switches []
+byte_index []
+-- lift 0x10001100
+func 0x10001100
+ error None
+ instructions 5
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001100
+  ('return', ('param', 0))
+-- lift 0x10001200
+func 0x10001200
+ error None
+ instructions 4
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001200
+  ('return', ('reg', 'eax'))
+-- lift 0x10001300
+func 0x10001300
+ error None
+ instructions 4
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001300
+  ('return', None)
+static_refs []
+== push_pop
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 33
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('return', ('param', 0))
+-- lift 0x10001200
+func 0x10001200
+ error None
+ instructions 24
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001200
+  ('return', ('const', -858993460))
+-- lift 0x10001300
+func 0x10001300
+ error None
+ instructions 15
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001300
+  ('return', ('const', 1))
+static_refs []
+== sub_esp_errors
+-- lift 0x10001000
+func 0x10001000
+ error '`sub esp,0x6` at 0x10001014'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001100
+func 0x10001100
+ error None
+ instructions 18
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001100
+  ('return', ('const', -858993460))
+-- lift 0x10001200
+func 0x10001200
+ error '`rep movs DWORD PTR es:[edi],DWORD PTR ds:[esi]` at 0x10001214'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+static_refs []
+== moves
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 39
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('set', ('loc', -12), ('loc', -8))
+  ('set', ('param', 1), ('param', 2))
+  ('set', ('loc', -2), ('param', 2))
+  ('set', ('tmp', 1), ('obj', 'cnt'))
+  ('set', ('obj', 'cnt'), ('const', 9))
+  ('return', ('const', -1))
+-- lift 0x10001200
+func 0x10001200
+ error None
+ instructions 22
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001200
+  ('return', ('seh',))
+static_refs []
+== locals_snap
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 32
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('set', ('tmp', 1), ('loc', -4))
+  ('set', ('loc', -4), ('loc', -8))
+  ('set', ('tmp', 2), ('loc', -8))
+  ('set', ('loc', -8), ('tmp', 1))
+  ('set', ('tmp', 3), ('arith', '+', ('loc', -4), ('const', 1)))
+  ('set', ('loc', -4), ('tmp', 3))
+  ('set', ('loc', -12), ('const', 5))
+  ('set', ('loc', -16), ('const', 7))
+  ('set', ('loc', -12), ('arith', '+', ('const', 5), ('const', 7)))
+  ('set', ('tmp', 4), ('param', 0))
+  ('set', ('param', 0), ('const', 2))
+  ('return', ('arith', '+', ('const', 5), ('const', 7)))
+-- lift 0x10001200
+func 0x10001200
+ error None
+ instructions 24
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001200
+  ('set', ('loc', -20), ('const', 1))
+  ('set', ('loc', -20), ('const', 2))
+  ('set', ('loc', -16), ('const', 3))
+  ('set', ('loc', -16), ('const', 4))
+  ('return', ('addr', ('loc', -20)))
+-- lift 0x10001300
+func 0x10001300
+ error None
+ instructions 22
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001300
+  ('set', ('tmp', 1), ('loc', -8))
+  ('set', ('loc', -8), ('tmp', 1))
+  ('set', ('tmp', 2), ('loc', -4))
+  ('set', ('tmp', 3), ('locidx', -32, ('loc', -4)))
+  ('set', ('locidx', -32, ('tmp', 1)), ('tmp', 3))
+  ('return', ('loc', -4))
+static_refs []
+== branches_all
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 41
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('multiset', [(('reg', 'eax'), ('loc', -4))])
+  ('if', ('cmp', '==', ('loc', -4), ('const', 1)), 268439622)
+ block 0x1000101a
+  ('if', ('cmp', '~=', ('reg', 'eax'), ('const', 2)), 268439622)
+ block 0x1000101e
+  ('if', ('cmp', '<', ('reg', 'eax'), ('const', 3)), 268439622)
+ block 0x10001022
+  ('if', ('cmp', '>=', ('reg', 'eax'), ('const', 4)), 268439622)
+ block 0x10001026
+  ('if', ('cmp', '<=', ('reg', 'eax'), ('const', 5)), 268439622)
+ block 0x1000102a
+  ('if', ('cmp', '>', ('reg', 'eax'), ('const', 6)), 268439622)
+ block 0x1000102e
+  ('if', ('cmp', '<', ('u', ('reg', 'eax')), ('u', ('const', 7))), 268439622)
+ block 0x10001032
+  ('if', ('cmp', '>=', ('u', ('reg', 'eax')), ('u', ('const', 8))), 268439622)
+ block 0x10001036
+  ('if', ('cmp', '<=', ('u', ('reg', 'eax')), ('u', ('const', 9))), 268439622)
+ block 0x1000103a
+  ('if', ('cmp', '>', ('u', ('reg', 'eax')), ('u', ('const', 10))), 268439622)
+ block 0x1000103e
+  ('if', ('cmp', '<', ('arith', '-', ('reg', 'eax'), ('const', 11)), ('const', 0)), 268439622)
+ block 0x10001042
+  ('if', ('cmp', '>=', ('arith', '-', ('reg', 'eax'), ('const', 12)), ('const', 0)), 268439622)
+ block 0x10001046
+  ('return', ('reg', 'eax'))
+-- lift 0x10001400
+func 0x10001400
+ error None
+ instructions 41
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001400
+  ('multiset', [(('reg', 'eax'), ('loc', -4))])
+  ('if', ('not', ('truth', ('loc', -4))), 268440646)
+ block 0x1000141a
+  ('if', ('truth', ('reg', 'eax')), 268440646)
+ block 0x1000141e
+  ('if', ('cmp', '<', ('reg', 'eax'), ('const', 0)), 268440646)
+ block 0x10001422
+  ('if', ('cmp', '>=', ('reg', 'eax'), ('const', 0)), 268440646)
+ block 0x10001426
+  ('if', ('cmp', '<', ('reg', 'eax'), ('const', 0)), 268440646)
+ block 0x1000142a
+  ('if', ('cmp', '>=', ('reg', 'eax'), ('const', 0)), 268440646)
+ block 0x1000142e
+  ('if', ('cmp', '<=', ('reg', 'eax'), ('const', 0)), 268440646)
+ block 0x10001432
+  ('if', ('cmp', '>', ('reg', 'eax'), ('const', 0)), 268440646)
+ block 0x10001436
+  ('if', ('truth', ('reg', 'eax')), 268440646)
+ block 0x1000143a
+  ('if', ('not', ('truth', ('reg', 'eax'))), 268440646)
+ block 0x1000143e
+  ('if', ('const', 0), 268440646)
+ block 0x10001442
+  ('if', ('const', 1), 268440646)
+ block 0x10001446
+  ('return', ('reg', 'eax'))
+static_refs []
+== if_else_loop
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 29
+ params 0
+ loops 1
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('set', ('loc', -4), ('const', 0))
+  ('goto', 268439582)
+ block 0x10001018
+  ('set', ('tmp', 1), ('arith', '+', ('loc', -4), ('const', 1)))
+  ('set', ('loc', -4), ('tmp', 1))
+ block 0x1000101e
+  ('if', ('cmp', '<', ('loc', -4), ('const', 10)), 268439576)
+ block 0x10001022
+  ('if', ('cmp', '~=', ('loc', -4), ('const', 5)), 268439594)
+ block 0x10001026
+  ('set', ('loc', -8), ('const', 1))
+  ('goto', 268439596)
+ block 0x1000102a
+  ('set', ('loc', -8), ('const', 2))
+ block 0x1000102c
+  ('return', ('loc', -8))
+-- blocks 0x10001000
+leaders [268439552, 268439576, 268439582, 268439586, 268439590, 268439594, 268439596]
+seen [268439552, 268439554, 268439556, 268439558, 268439560, 268439562, 268439564, 268439566, 268439568, 268439570, 268439572, 268439574, 268439576, 268439578, 268439580, 268439582, 268439584, 268439586, 268439588, 268439590, 268439592, 268439594, 268439596, 268439598, 268439600, 268439602, 268439604, 268439606, 268439608]
+switches []
+byte_index []
+-- lift 0x10001300
+func 0x10001300
+ error None
+ instructions 22
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001300
+  ('if', ('cmp', '~=', ('param', 0), ('const', 0)), 268440350)
+ block 0x1000131a
+  ('multiset', [(('reg', 'eax'), ('const', 0))])
+  ('goto', 268440352)
+ block 0x1000131e
+  ('multiset', [(('reg', 'eax'), ('const', 1))])
+ block 0x10001320
+  ('return', ('reg', 'eax'))
+static_refs []
+== cross_block_regs
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 27
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('multiset', [(('reg', 'edi'), ('param', 1)), (('reg', 'esi'), ('param', 0))])
+  ('if', ('cmp', '==', ('param', 0), ('const', 0)), 268439586)
+ block 0x1000101c
+  ('multiset', [(('reg', 'edi'), ('reg', 'esi')), (('reg', 'esi'), ('reg', 'edi'))])
+ block 0x10001022
+  ('if', ('cmp', '~=', ('reg', 'esi'), ('reg', 'edi')), 268439592)
+ block 0x10001026
+  ('multiset', [(('reg', 'esi'), ('arith', '+', ('reg', 'esi'), ('const', 1)))])
+ block 0x10001028
+  ('return', ('reg', 'esi'))
+-- lift 0x10001300
+func 0x10001300
+ error None
+ instructions 26
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001300
+  ('if', ('cmp', '~=', ('param', 0), ('const', 1)), 268440350)
+ block 0x1000131a
+  ('multiset', [(('reg', 'ebx'), ('const', 7))])
+  ('goto', 268440352)
+ block 0x1000131e
+  ('multiset', [(('reg', 'ebx'), ('const', 9))])
+ block 0x10001320
+  ('set', ('tmp', 1), ('cmp', '==', ('reg', 'ebx'), ('const', 2)))
+  ('multiset', [(('reg', 'ecx'), ('reg', 'ebx'))])
+  ('if', ('tmp', 1), 268440358)
+ block 0x10001326
+  ('return', ('reg', 'ecx'))
+-- lift 0x10001400
+func 0x10001400
+ error None
+ instructions 25
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001400
+  ('multiset', [(('reg', 'edi'), ('param', 0)), (('reg', 'esi'), ('param', 1))])
+  ('if', ('cmp', '<', ('param', 1), ('param', 0)), 268440610)
+ block 0x10001422
+  ('return', ('arith', '+', ('reg', 'esi'), ('reg', 'edi')))
+static_refs []
+== setcc_forms
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 40
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('set', ('loc', -12), ('cmp', '==', ('loc', -4), ('loc', -8)))
+  ('return', ('cmp', '<=', ('u', ('cmp', '<=', ('u', ('cmp', '>=', ('u', ('cmp', '<', ('u', ('cmp', '>', ('cmp', '<=', ('cmp', '>=', ('cmp', '==', ('loc', -4), ('loc', -8)), ('const', 3)), ('const', 3)), ('const', 3))), ('u', ('const', 3)))), ('u', ('const', 3)))), ('u', ('const', 3)))), ('u', ('const', 3))))
+-- lift 0x10001200
+func 0x10001200
+ error '`sete al` at 0x10001214'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001300
+func 0x10001300
+ error None
+ instructions 13
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001300
+  ('return', ('const', -858993460))
+-- lift 0x10001400
+func 0x10001400
+ error None
+ instructions 19
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001400
+  ('return', ('cmp', '==', ('const', -858993460), ('const', 1)))
+static_refs []
+== test_forms
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 22
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('return', ('loc', -4))
+-- lift 0x10001200
+func 0x10001200
+ error '`test ecx,edx` at 0x10001214'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001300
+func 0x10001300
+ error None
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001300
+  ('return', ('const', -858993460))
+-- lift 0x10001400
+func 0x10001400
+ error '`test eax,0xzz` at 0x10001414'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001500
+func 0x10001500
+ error 'branch without a compare at 0x1000151c'
+ instructions 21
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001500
+  ('if', ('truth', ('arith', '&', ('const', -858993460), ('const', 5))), 268440862)
+ block 0x10001518
+  ('if', ('not', ('truth', ('reg', 'eax'))), 268440862)
+static_refs []
+== arith_forms
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 48
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('set', ('tmp', 1), ('arith', '+', ('loc', -16), ('const', 1)))
+  ('set', ('loc', -16), ('tmp', 1))
+  ('set', ('tmp', 2), ('arith', '-', ('loc', -16), ('const', 1)))
+  ('set', ('loc', -16), ('tmp', 2))
+  ('set', ('tmp', 3), ('neg', ('loc', -16)))
+  ('set', ('loc', -16), ('tmp', 3))
+  ('set', ('tmp', 4), ('bnot', ('loc', -16)))
+  ('set', ('loc', -16), ('tmp', 4))
+  ('set', ('tmp', 5), ('arith', '+', ('loc', -20), ('const', 2)))
+  ('set', ('loc', -20), ('tmp', 5))
+  ('set', ('tmp', 6), ('arith', '-', ('loc', -20), ('bnot', ('arith', '+', ('arith', '>>>', ('arith', '>>', ('arith', '>>', ('arith', '<<', ('arith', '*', ('arith', '-', ('arith', '+', ('arith', '~', ('arith', '|', ('arith', '&', ('loc', -4), ('const', 240)), ('const', 1)), ('loc', -8)), ('const', 4)), ('const', 8)), ('loc', -12)), ('const', 2)), ('const', 1)), ('const', 3)), ('const', 4)), ('const', 1)))))
+  ('set', ('loc', -20), ('tmp', 6))
+  ('set', ('tmp', 7), ('arith', '~', ('loc', -24), ('const', 5)))
+  ('set', ('loc', -24), ('tmp', 7))
+  ('return', ('sbb', ('cmp', ('bnot', ('arith', '+', ('arith', '>>>', ('arith', '>>', ('arith', '>>', ('arith', '<<', ('arith', '*', ('arith', '-', ('arith', '+', ('arith', '~', ('arith', '|', ('arith', '&', ('loc', -4), ('const', 240)), ('const', 1)), ('loc', -8)), ('const', 4)), ('const', 8)), ('loc', -12)), ('const', 2)), ('const', 1)), ('const', 3)), ('const', 4)), ('const', 1))), ('bnot', ('arith', '+', ('arith', '>>>', ('arith', '>>', ('arith', '>>', ('arith', '<<', ('arith', '*', ('arith', '-', ('arith', '+', ('arith', '~', ('arith', '|', ('arith', '&', ('loc', -4), ('const', 240)), ('const', 1)), ('loc', -8)), ('const', 4)), ('const', 8)), ('loc', -12)), ('const', 2)), ('const', 1)), ('const', 3)), ('const', 4)), ('const', 1))))))
+-- lift 0x10001300
+func 0x10001300
+ error '`adc eax,0x1` at 0x10001314'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001400
+func 0x10001400
+ error None
+ instructions 24
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001400
+  ('return', ('arith', '*', ('arith', '//', ('arith', '//', ('arith', '//', ('loc', -4), ('loc', -8)), ('const', 3)), ('const', 3)), ('const', 3)))
+-- lift 0x10001500
+func 0x10001500
+ error None
+ instructions 18
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001500
+  ('return', ('const', 0))
+-- lift 0x10001600
+func 0x10001600
+ error None
+ instructions 20
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001600
+  ('set', ('tmp', 1), ('arith', '|', ('obj', 'cnt'), ('loc', -4)))
+  ('set', ('obj', 'cnt'), ('tmp', 1))
+  ('set', ('tmp', 2), ('arith', '+', ('obj', 'flt'), ('loc', -4)))
+  ('set', ('obj', 'flt'), ('tmp', 2))
+  ('set', ('tmp', 3), ('arith', '&', ('loc', -28), ('loc', -4)))
+  ('set', ('loc', -28), ('tmp', 3))
+  ('return', ('loc', -4))
+-- lift 0x10001700
+func 0x10001700
+ error 'operand `esp` at 0x10001714'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001800
+func 0x10001800
+ error 'operand `esp` at 0x10001814'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+static_refs []
+== switch_plain
+-- blocks 0x10001000
+leaders [268439552, 268439580, 268439584, 268439588, 268439592, 268439596, 268439600, 268439602]
+seen [268439552, 268439554, 268439556, 268439558, 268439560, 268439562, 268439564, 268439566, 268439568, 268439570, 268439572, 268439574, 268439576, 268439578, 268439580, 268439582, 268439584, 268439586, 268439588, 268439590, 268439592, 268439594, 268439596, 268439598, 268439600, 268439602, 268439604, 268439606, 268439608, 268439610, 268439612]
+switches [(268439582, [268439584, 268439588, 268439592, 268439596])]
+byte_index []
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 31
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('set', ('loc', -4), ('param', 0))
+  ('if', ('cmp', '>', ('u', ('loc', -4)), ('u', ('const', 3))), 268439600)
+ block 0x1000101c
+  ('switch', ('loc', -4), [268439584, 268439588, 268439592, 268439596])
+ block 0x10001020
+  ('multiset', [(('reg', 'eax'), ('const', 16))])
+  ('goto', 268439602)
+ block 0x10001024
+  ('multiset', [(('reg', 'eax'), ('const', 17))])
+  ('goto', 268439602)
+ block 0x10001028
+  ('multiset', [(('reg', 'eax'), ('const', 18))])
+  ('goto', 268439602)
+ block 0x1000102c
+  ('multiset', [(('reg', 'eax'), ('const', 19))])
+  ('goto', 268439602)
+ block 0x10001030
+  ('multiset', [(('reg', 'eax'), ('const', 0))])
+ block 0x10001032
+  ('return', ('reg', 'eax'))
+static_refs []
+== switch_two_level
+-- blocks 0x10001000
+leaders [268439552, 268439578, 268439584, 268439588, 268439592, 268439594]
+seen [268439552, 268439554, 268439556, 268439558, 268439560, 268439562, 268439564, 268439566, 268439568, 268439570, 268439572, 268439574, 268439576, 268439578, 268439580, 268439582, 268439584, 268439586, 268439588, 268439590, 268439592, 268439594, 268439596, 268439598, 268439600, 268439602, 268439604]
+switches [(268439582, [268439584, 268439588, 268439588, 268439584, 268439588])]
+byte_index [(268439582, (268439580, 'eax'))]
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 27
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('multiset', [(('reg', 'eax'), ('param', 0))])
+  ('if', ('cmp', '>', ('u', ('param', 0)), ('u', ('const', 4))), 268439592)
+ block 0x1000101a
+  ('switch', ('reg', 'eax'), [268439584, 268439588, 268439588, 268439584, 268439588])
+ block 0x10001020
+  ('multiset', [(('reg', 'eax'), ('const', 32))])
+  ('goto', 268439594)
+ block 0x10001024
+  ('multiset', [(('reg', 'eax'), ('const', 33))])
+  ('goto', 268439594)
+ block 0x10001028
+  ('multiset', [(('reg', 'eax'), ('const', 0))])
+ block 0x1000102a
+  ('return', ('reg', 'eax'))
+static_refs []
+== switch_errors
+-- blocks 0x10001000
+error 'jump table without a bound at 0x10001016'
+-- blocks 0x10001200
+error 'jump table without a bound at 0x1000121a'
+-- blocks 0x10001300
+error 'jump table outside the file at 0x1000131a'
+-- blocks 0x10001400
+error 'indirect jump `jmp    eax` at 0x10001414'
+-- blocks 0x10001500
+error 'jump outside the code at 0x10009000'
+-- blocks 0x10001600
+error 'jump table outside the file at 0x1000171c'
+-- blocks 0x10001700
+error 'jump table outside the file at 0x1000171c'
+-- lift 0x10001000
+func 0x10001000
+ error 'jump table without a bound at 0x10001016'
+ instructions 0
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001400
+func 0x10001400
+ error 'indirect jump `jmp    eax` at 0x10001414'
+ instructions 0
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001500
+func 0x10001500
+ error 'jump outside the code at 0x10009000'
+ instructions 0
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001600
+func 0x10001600
+ error 'jump table outside the file at 0x1000171c'
+ instructions 0
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+static_refs []
+== globals
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 34
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('set', ('tmp', 1), ('elem', 'arr', ('arith', '+', ('elem', 'arr', ('const', 0)), ('const', 1))))
+  ('set', ('tmp', 2), ('elem', 'arr', ('const', 0)))
+  ('set', ('tmp', 3), ('elem', 'arr', ('const', 1)))
+  ('set', ('elem', 'arr', ('obj', 'flt')), ('tmp', 1))
+  ('set', ('obj', 'cnt'), ('tmp', 1))
+  ('set', ('tmp', 4), ('obj', 'flt'))
+  ('set', ('obj', 'flt'), ('float', 1.0))
+  ('set', ('vfield', 'vec', 0), ('float', 1.0))
+  ('set', ('tmp', 5), ('elem', 'farr', ('const', 0)))
+  ('set', ('tmp', 6), ('elem', 'farr', ('const', 2)))
+  ('set', ('elem', 'farr', ('const', 2)), ('float', 2.0))
+  ('set', ('elem', 'farr', ('const', 0)), ('float', 2.0))
+  ('return', ('obj', 'cnt'))
+-- lift 0x10001200
+func 0x10001200
+ error None
+ instructions 23
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001200
+  ('comment', 'g_pSI is set by the engine')
+  ('comment', 'p_WORLD is set by the engine')
+  ('bindvar', 'p_ALPHA', 'hot_int', ('si',))
+  ('bindvar', 'p_BETA', 'hot_float', ('si',))
+  ('return', ('si',))
+-- lift 0x10001300
+func 0x10001300
+ error None
+ instructions 22
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001300
+  ('return', ('method', ('world',), 1))
+-- lift 0x10001400
+func 0x10001400
+ error 'global in .text at 0x10001000 (0x10001414)'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001500
+func 0x10001500
+ error 'global in .text at 0x10001000 (0x10001516)'
+ instructions 13
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001600
+func 0x10001600
+ error None
+ instructions 20
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001600
+  ('set', ('tmp', 1), ('locidx', -32, ('const', 17)))
+  ('set', ('tmp', 2), ('locidx', 4, ('const', 17)))
+  ('set', ('locidx', -32, ('const', 17)), ('const', 1))
+  ('return', ('loc', -32))
+-- lift 0x10001700
+func 0x10001700
+ error 'indexed access `[ecx+edx*4]` at 0x10001714'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001800
+func 0x10001800
+ error 'operand `[esi+edi*2]` at 0x10001814'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001900
+func 0x10001900
+ error None
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001900
+  ('return', ('elem', 'cnt', ('reg', 'esi')))
+-- lift 0x10001a00
+func 0x10001a00
+ error None
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001a00
+  ('return', ('elem', 'p_BETA', ('reg', 'esi')))
+-- lift 0x10001b00
+func 0x10001b00
+ error 'load [world+0x4] at 0x10001b16'
+ instructions 18
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+static_refs [(1073741824, 'word')]
+== statics
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 47
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('set', ('tmp', 1), ('glob', 268444676))
+  ('set', ('gvar', 268444676), ('glob', 268444672))
+  ('set', ('tmp', 2), ('glob', 268445952))
+  ('set', ('gvar', 268445952), ('tmp', 2))
+  ('return', ('tmp', 2))
+-- static 0x10002000
+'rodata'
+-- static 0x10002400
+'mutable'
+-- static 0x10002404
+'mutable'
+-- static 0x10002408
+'const'
+-- static 0x1000240c
+'const'
+-- static 0x10002900
+'mutable'
+-- statics
+static_refs [(268443648, 'rodata'), (268443652, 'rodata'), (268443656, 'rodata'), (268443660, 'rodata'), (268443664, 'rodata'), (268443668, 'rodata'), (268444672, 'word'), (268444676, 'word'), (268444680, 'const'), (268444684, 'const'), (268445952, 'word')]
+static_refs [(268443648, 'rodata'), (268443652, 'rodata'), (268443656, 'rodata'), (268443660, 'rodata'), (268443664, 'rodata'), (268443668, 'rodata'), (268444672, 'word'), (268444676, 'word'), (268444680, 'const'), (268444684, 'const'), (268445952, 'word')]
+== dimm
+-- dimm 0x10002100
+('str', 'a_label')
+-- dimm 0x10002120
+('str', 'line1\nline2')
+-- dimm 0x10002140
+('addr', ('gvar', 268443968))
+-- dimm 0x10002150
+('addr', ('gvar', 268443984))
+-- dimm 0x10002160
+('addr', ('gvar', 268444000))
+-- dimm 0x10002800
+('addr', ('obj', 'g_pSI'))
+-- dimm 0x10002818
+('addr', ('obj', 'arr'))
+-- dimm 0x1000281c
+('addr', ('obj', 'arr'))
+-- dimm 0x10002810
+('addr', ('obj', 'cnt'))
+-- dimm 0x10002000
+('addr', ('gvar', 268443648))
+-- dimm 0x10001000
+('code', 268439552)
+-- dimm 0x5
+('const', 5)
+-- dimm 0x7fffffff
+('const', 2147483647)
+-- dimm 0x80000000
+('const', -2147483648)
+-- dimm 0xffffffff
+('const', -1)
+-- dimm 0x20000000
+('const', 536870912)
+-- dimm 0x10003f00
+('const', 268451584)
+-- dimm 0x100000000
+('const', 0)
+static_refs []
+== unterminated
+-- lift 0x10000010
+raw ValueError 'subsection not found'
+static_refs []
+== calls_model
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 28
+ params 0
+ loops 0
+ calls [268439808]
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('set', ('tmp', 1), ('fcall', 268439808, [('const', 2), ('const', 1)]))
+  ('set', ('loc', -4), ('tmp', 1))
+  ('set', ('tmp', 2), ('fcall', 268439808, []))
+  ('return', ('tmp', 2))
+-- lift 0x10001200
+func 0x10001200
+ error None
+ instructions 24
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001200
+  ('set', ('tmp', 1), ('icall', ('method', ('si',), 4), [('const', 5)]))
+  ('set', ('loc', -8), ('tmp', 1))
+  ('return', ('tmp', 1))
+-- lift 0x10001300
+func 0x10001300
+ error None
+ instructions 26
+ params 0
+ loops 0
+ calls [268439808]
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001300
+  ('set', ('tmp', 1), ('fcall', 268439808, [('addr', ('loc', -16))]))
+  ('set', ('obj', 'cnt'), ('tmp', 1))
+  ('set', ('tmp', 2), ('loc', -16))
+  ('set', ('tmp', 3), ('fcall', 268439808, []))
+  ('return', ('obj', 'cnt'))
+-- lift 0x10001400
+func 0x10001400
+ error None
+ instructions 21
+ params 0
+ loops 0
+ calls [268439808]
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001400
+  ('set', ('tmp', 1), ('fcall', 268439808, [('const', 1)]))
+  ('return', ('tmp', 1))
+-- lift 0x10001600
+func 0x10001600
+ error None
+ instructions 21
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs [-12, -4]
+ itype []
+ vectors []
+ litype []
+ block 0x10001600
+  ('set', ('loc', -8), ('ftol', ('loc', -4)))
+  ('return', ('ftol', ('loc', -12)))
+-- lift 0x10001800
+func 0x10001800
+ error None
+ instructions 22
+ params 0
+ loops 0
+ calls [268439808]
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs [-12, -8, -4]
+ itype []
+ vectors []
+ litype []
+ block 0x10001800
+  ('set', ('tmp', 1), ('fcall', 268439808, []))
+  ('set', ('loc', -4), ('tmp', 1))
+  ('set', ('tmp', 2), ('fcall', 268439808, []))
+  ('set', ('loc', -8), ('tmp', 2))
+  ('set', ('loc', -12), ('tmp', 2))
+  ('return', ('tmp', 2))
+-- lift 0x10001a00
+func 0x10001a00
+ error 'no instruction at 0x10009000'
+ instructions 17
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001b00
+func 0x10001b00
+ error None
+ instructions 17
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001b00
+  ('set', ('tmp', 1), ('icall', ('const', -858993460), []))
+  ('return', ('tmp', 1))
+-- lift 0x10001c00
+func 0x10001c00
+ error 'internal call with 2 arguments, 1 pushed at 0x10001c16'
+ instructions 19
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- facts 0x10001500
+None None True False
+-- facts 0x10001700
+None None False True
+-- facts 0x10001100
+None None False False
+static_refs []
+== x87_basic
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 47
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs [-24, -20, -8]
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('set', ('loc', -8), ('float', 1.0))
+  ('set', ('loc', -16), ('sqrt', ('abs', ('neg', ('farith', '-', ('float', 1.0), ('float', 1.0))))))
+  ('set', ('loc', -20), ('farith', '*', ('float', 1.0), ('float', 1.0)))
+  ('set', ('loc', -24), ('farith', '*', ('float', 1.0), ('float', 1.0)))
+  ('return', ('const', -858993460))
+-- lift 0x10001a00
+func 0x10001a00
+ error None
+ instructions 25
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001a00
+  ('return', ('const', -858993460))
+-- lift 0x10001300
+func 0x10001300
+ error None
+ instructions 35
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs [-8, -4]
+ itype []
+ vectors []
+ litype []
+ block 0x10001300
+  ('set', ('tmp', 1), ('farith', '/', ('farith', '*', ('farith', '-', ('farith', '+', ('farith', '/', ('farith', '-', ('farith', '*', ('farith', '+', ('loc', -4), ('loc', -8)), ('float', 1.0)), ('float', 1.5)), ('obj', 'cnt')), ('loc', -12)), ('loc', -16)), ('loc', -20)), ('loc', -24)))
+  ('set', ('loc', -4), ('tmp', 1))
+  ('set', ('loc', -4), ('float', 1.0))
+  ('set', ('loc', -36), ('const', 1065353216))
+  ('set', ('loc', -40), ('ftol', ('float', 1.0)))
+  ('set', ('loc', -44), ('ftol', ('float', 1.0)))
+  ('set', ('obj', 'flt'), ('obj', 'cnt'))
+  ('return', ('const', -858993460))
+-- lift 0x10001600
+func 0x10001600
+ error None
+ instructions 33
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs [-12, -8, -4]
+ itype []
+ vectors []
+ litype []
+ block 0x10001600
+  ('if', ('cmp', '<=', ('loc', -8), ('loc', -4)), 268441898)
+ block 0x10001620
+  ('if', ('cmp', '>=', ('loc', -4), ('loc', -12)), 268441898)
+ block 0x1000162a
+  ('return', ('reg', 'eax'))
+ block 0x1000192a
+  ('return', ('reg', 'eax'))
+-- lift 0x10001700
+func 0x10001700
+ error None
+ instructions 30
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs [-8, -4]
+ itype []
+ vectors []
+ litype []
+ block 0x10001700
+  ('if', ('cmp', '==', ('loc', -8), ('loc', -4)), 268441898)
+ block 0x10001724
+  ('return', ('reg', 'eax'))
+ block 0x1000192a
+  ('return', ('reg', 'eax'))
+-- lift 0x10001800
+func 0x10001800
+ error None
+ instructions 29
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs [-8, -4]
+ itype []
+ vectors []
+ litype []
+ block 0x10001800
+  ('if', ('cmp', '>', ('loc', -8), ('loc', -4)), 268441898)
+ block 0x10001822
+  ('return', ('reg', 'eax'))
+ block 0x1000192a
+  ('return', ('reg', 'eax'))
+-- lift 0x10001900
+func 0x10001900
+ error None
+ instructions 27
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs [-8, -4]
+ itype []
+ vectors []
+ litype []
+ block 0x10001900
+  ('if', ('cmp', '<', ('loc', -8), ('loc', -4)), 268441898)
+ block 0x10001920
+  ('if', ('cmp', '<=', ('loc', -4), ('loc', -8)), 268441898)
+ block 0x1000192a
+  ('return', ('reg', 'eax'))
+-- lift 0x10001b00
+func 0x10001b00
+ error 'operand `st,st(1)` at 0x10001b16'
+ instructions 13
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+static_refs []
+== x87_errors
+-- lift 0x10001000
+func 0x10001000
+ error 'x87 stack empty at 0x10001014'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs [-4]
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001100
+func 0x10001100
+ error 'fxch on a short x87 stack at 0x10001116'
+ instructions 13
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001200
+func 0x10001200
+ error '`faddp st(1),st` on a short x87 stack at 0x10001216'
+ instructions 13
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001300
+func 0x10001300
+ error '`fstp st(3)` on a short x87 stack at 0x10001316'
+ instructions 13
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001400
+func 0x10001400
+ error '`fadd st(2),st` on a short x87 stack at 0x10001416'
+ instructions 13
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001500
+func 0x10001500
+ error 'fnstsw without a compare at 0x10001514'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001600
+func 0x10001600
+ error 'x87 value live across a block end at 0x10001616'
+ instructions 13
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001700
+func 0x10001700
+ error 'x87 st(2) is empty at 0x10001714'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001800
+func 0x10001800
+ error 'integer load from 0x10002008 at 0x10001814'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001900
+func 0x10001900
+ error 'operand `TBYTE PTR [ebp-0x10]` at 0x10001914'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001a00
+func 0x10001a00
+ error 'x87 stack empty at 0x10001a16'
+ instructions 13
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001b00
+func 0x10001b00
+ error 'arguments pushed across a block end at 0x10001b18'
+ instructions 14
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001c00
+func 0x10001c00
+ error 'float at 0x40000000 outside the file'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001d00
+func 0x10001d00
+ error 'double at 0x40000000 outside the file'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001e00
+raw error 'unpack_from requires a buffer of at least 16390 bytes for unpacking 8 bytes at offset 16382 (actual buffer size is 16384)'
+static_refs []
+== x87_return
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 30
+ params 0
+ loops 0
+ calls [268439808]
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs [-28, -24, -20, -16, -8, -4]
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('set', ('tmp', 1), ('fcall', 268439808, []))
+  ('set', ('loc', -8), ('farith', '+', ('tmp', 1), ('loc', -4)))
+  ('set', ('tmp', 2), ('fcall', 268439808, []))
+  ('set', ('loc', -16), ('tmp', 2))
+  ('set', ('loc', -20), ('tmp', 2))
+  ('set', ('tmp', 3), ('fcall', 268439808, []))
+  ('set', ('loc', -24), ('tmp', 3))
+  ('set', ('tmp', 4), ('fcall', 268439808, []))
+  ('if', ('cmp', '<', ('tmp', 4), ('loc', -28)), 268439600)
+ block 0x10001030
+  ('return', ('reg', 'eax'))
+-- lift 0x10001200
+func 0x10001200
+ error 'fxch on a short x87 stack at 0x10001216'
+ instructions 13
+ params 0
+ loops 0
+ calls [268439808]
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001300
+func 0x10001300
+ error None
+ instructions 20
+ params 0
+ loops 0
+ calls [268439808]
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs [-12, -4]
+ itype []
+ vectors []
+ litype []
+ block 0x10001300
+  ('set', ('tmp', 1), ('fcall', 268439808, []))
+  ('set', ('loc', -12), ('farith', '-', ('tmp', 1), ('loc', -4)))
+  ('return', ('tmp', 1))
+static_refs []
+== recognisers_sprintf_strcmp
+-- facts 0x10001000
+'sprintf' None False False
+-- facts 0x10001100
+None None False False
+-- facts 0x10001200
+'strcmp' None False False
+-- facts 0x10001300
+None None False False
+-- facts 0x10001400
+'strcmp' None False False
+-- facts 0x10009000
+None None False False
+static_refs []
+== recognisers_vec3
+-- facts 0x10001000
+'vec3' None False False
+-- facts 0x10001100
+None None False False
+-- facts 0x10001200
+None None False False
+-- facts 0x10001300
+None None False False
+static_refs []
+== recognisers_atexit
+-- facts 0x10001000
+'atexit' None False False
+-- facts 0x10001200
+None None False False
+static_refs []
+== recognisers_report
+-- facts 0x10001000
+None None False False
+-- facts 0x10001200
+None None False False
+static_refs []
+== recognisers_vector
+-- facts 0x10001000
+None 'begin' False False
+-- facts 0x10001100
+None 'end' False False
+-- facts 0x10001200
+None 'size' False False
+-- facts 0x10001300
+None 'index' False False
+-- facts 0x10001400
+None 'ctor' False False
+-- facts 0x10001500
+None 'push_back' False False
+-- facts 0x10001600
+None 'clear' False False
+-- facts 0x10001900
+None None False False
+static_refs []
+== errors_misc
+-- lift 0x10001000
+func 0x10001000
+ error 'unsupported instruction `bt eax,0x1` at 0x10001014'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001100
+func 0x10001100
+ error '`lea DWORD PTR [ebp-0x4],eax` at 0x10001114'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001200
+func 0x10001200
+ error '`movsx DWORD PTR [ebp-0x4],al` at 0x10001214'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001300
+func 0x10001300
+ error 'branch without a compare at 0x10001314'
+ instructions 13
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001400
+func 0x10001400
+ error 'load [const+0x0] at 0x10001414'
+ instructions 14
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001500
+func 0x10001500
+ error 'load through an unknown pointer at 0x10001518'
+ instructions 14
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001600
+func 0x10001600
+ error 'store through const at 0x10001614'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001700
+func 0x10001700
+ error None
+ instructions 13
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001700
+  ('comment', 'g_pSI is set by the engine')
+  ('comment', 'p_WORLD is set by the engine')
+  ('return', ('const', -858993460))
+-- lift 0x10001800
+func 0x10001800
+ error None
+ instructions 13
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001800
+  ('set', ('vfield', 'vec', 0), ('float', -107374176.0))
+  ('set', ('elem', 'arr', ('const', 0)), ('const', -858993460))
+  ('return', ('const', -858993460))
+-- lift 0x10001900
+func 0x10001900
+ error 'arguments pushed across a block end at 0x10001916'
+ instructions 13
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001a00
+func 0x10001a00
+ error 'store to an unreserved stack slot at 0x10001a14'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001d00
+func 0x10001d00
+ error 'operand `[ebp-0xg]` at 0x10001d14'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001f00
+func 0x10001f00
+ error '`sub esp,0x7` at 0x10001f14'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+static_refs []
+== neg_add_esp
+-- lift 0x10001000
+func 0x10001000
+ error 'arguments pushed across a block end at 0x1000100a'
+ instructions 6
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001100
+func 0x10001100
+ error 'arguments pushed across a block end at 0x1000110c'
+ instructions 7
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001200
+func 0x10001200
+ error None
+ instructions 5
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001200
+  ('return', ('reg', 'eax'))
+-- take -1 3
+([], [('const', 0), ('const', 1), ('const', 2)], True)
+-- take -2 0
+([], [], False)
+-- take 0 0
+([], [], False)
+-- take 0 2
+([], [('const', 0), ('const', 1)], True)
+-- take 2 3
+([('const', 2), ('const', 1)], [('const', 0)], True)
+-- take 3 3
+([('const', 2), ('const', 1), ('const', 0)], [], False)
+-- take 4 3
+error 'call takes 4 arguments, 3 pushed at 0x1000'
+static_refs []
+== raw_jcc_last
+-- blocks 0x10001000
+raw IndexError 'list index out of range'
+static_refs []
+== raw_struct_error
+-- blocks 0x10001000
+raw error 'unpack_from requires a buffer of at least 16386 bytes for unpacking 4 bytes at offset 16382 (actual buffer size is 16384)'
+static_refs []
+== errors_raw_ops
+-- lift 0x10001b00
+raw ValueError 'not enough values to unpack (expected 2, got 1)'
+static_refs []
+== errors_raw_unknown_op
+-- lift 0x10001c00
+func 0x10001c00
+ error 'operand `xyz` at 0x10001c14'
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+static_refs []
+== deref_loads
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 27
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('set', ('tmp', 1), ('icall', ('method', ('world',), 1), [('const', 1)]))
+  ('set', ('loc', -4), ('tmp', 1))
+  ('return', ('tmp', 1))
+-- lift 0x10001200
+func 0x10001200
+ error 'load [param+0xc] at 0x10001216'
+ instructions 13
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001300
+func 0x10001300
+ error 'load [loc+0xc] at 0x1000131a'
+ instructions 15
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001400
+func 0x10001400
+ error None
+ instructions 21
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001400
+  ('set', ('loc', -8), ('const', 4))
+  ('set', ('tmp', 1), ('loc', -16))
+  ('set', ('loc', -16), ('loc', -12))
+  ('return', ('addr', ('loc', -16)))
+-- lift 0x10001500
+func 0x10001500
+ error 'load [addr+0x4] at 0x10001516'
+ instructions 19
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001600
+func 0x10001600
+ error 'load [addr+0x4] at 0x10001616'
+ instructions 20
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+-- lift 0x10001700
+func 0x10001700
+ error None
+ instructions 19
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001700
+  ('set', ('vfield', 'vec', 0), ('float', 2.382207389352189e-44))
+  ('set', ('vfield', 'vec', 0), ('float', 2.382207389352189e-44))
+  ('return', ('const', -858993460))
+-- lift 0x10001800
+func 0x10001800
+ error 'load [addr+0x4] at 0x1000181e'
+ instructions 22
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+static_refs []
+== float_stores
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 26
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs [-8, -4]
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('set', ('loc', -8), ('loc', -4))
+  ('set', ('loc', -8), ('float', 2.0))
+  ('set', ('loc', -4), ('float', 3.0))
+  ('set', ('loc', -12), ('const', 1077936128))
+  ('set', ('obj', 'flt'), ('float', 1.0))
+  ('set', ('elem', 'farr', ('const', 0)), ('float', 1.0))
+  ('set', ('vfield', 'vec', 0), ('float', 1.0))
+  ('set', ('obj', 'cnt'), ('const', 1065353216))
+  ('set', ('gvar', 268445952), ('const', 1065353216))
+  ('return', ('const', -858993460))
+static_refs [(268445952, 'word')]
+== frames_and_misc
+-- lift 0x10001000
+func 0x10001000
+ error None
+ instructions 28
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001000
+  ('set', ('loc', -4), ('const', 17))
+  ('return', ('const', 17))
+-- lift 0x10001200
+func 0x10001200
+ error None
+ instructions 9
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001200
+  ('set', ('loc', -4), ('this',))
+  ('return', ('loc', -4))
+-- lift 0x10001400
+func 0x10001400
+ error None
+ instructions 6
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001400
+  ('return', ('arith', '+', ('param', 0), ('param', 1)))
+-- lift 0x10001500
+func 0x10001500
+ error 'arguments pushed across a block end at 0x1000151e'
+ instructions 16
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10001500
+  ('if', ('cmp', '~=', ('loc', -4), ('param', 0)), 268440862)
+-- lift 0x10001600
+func 0x10001600
+ error 'branch without a compare at 0x1000161c'
+ instructions 16
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+static_refs []
