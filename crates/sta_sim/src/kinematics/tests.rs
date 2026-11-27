@@ -185,6 +185,25 @@ fn leftover_turn_settles_for_a_craft_that_cannot_turn_at_rest() {
     assert_eq!(w.omega, Fixed::ZERO, "still spinning with a target at hand");
 }
 
+/// #1039: the same for a craft in range of its attack target, which brakes while turning to
+/// face it (`Plan::face`): the turn rate left over when it stops (the limit has fallen to 0
+/// with its speed) settles instead of running on for ever (a replayed playtest capture showed a
+/// capital ship at rest, turning at a constant rate; the spin-down rate is interim).
+#[test]
+fn leftover_turn_settles_while_facing_an_attack_target() {
+    let plan = Plan { face: Some(v(2000, 0, 0)), ..Plan::default() };
+    for (speed, omega) in [(40.0, -5.0), (0.0, -0.9)] {
+        let mut u = craft(stock_battleship(), NORTH);
+        u.speed = f(speed);
+        u.omega = f(omega);
+        for _ in 0..3000 {
+            step_planned(Model::Smooth, &mut u, Leg::default(), plan);
+        }
+        assert_eq!(u.speed, Fixed::ZERO);
+        assert_eq!(u.omega, Fixed::ZERO, "still spinning from speed {speed}, omega {omega}");
+    }
+}
+
 /// No slowing to turn: facing away, a unit asks for full speed.
 #[test]
 fn no_slowing_to_turn() {

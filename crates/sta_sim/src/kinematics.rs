@@ -752,7 +752,14 @@ mod smooth {
     pub(super) fn face(u: &mut Unit, err: Fixed, dt: Fixed) {
         let lim = limits(u);
         let (ds, v) = vc(u.speed, Fixed::ZERO, lim.accel, dt);
-        let (dyaw, w) = pc(err, u.omega, lim.alpha, lim.omega, dt);
+        // A turn above the limit (the limit falls with speed) is braked like any leftover
+        // turn, so a craft that cannot turn at rest does not keep spinning while it "faces".
+        let alpha = if u.omega.abs() > lim.omega { spin_down_alpha(u, &lim) } else { lim.alpha };
+        let (dyaw, mut w) = pc(err, u.omega, alpha, lim.omega, dt);
+        // The controller stops within its tolerance of a zero limit; that is at rest.
+        if lim.omega <= tol() && w.abs() < tol() {
+            w = Fixed::ZERO;
+        }
         u.speed = v.max(Fixed::ZERO);
         u.omega = w;
         apply(u, dyaw, ds);
