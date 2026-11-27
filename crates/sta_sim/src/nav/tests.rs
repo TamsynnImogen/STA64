@@ -621,7 +621,7 @@ fn a_craft_at_rest_beside_an_impassable_nebula_does_not_cut_its_corner() {
 #[test]
 fn a_slow_craft_flying_round_a_long_wall_is_not_cut_off() {
     let wall: Vec<Region> = (-10..=10)
-        .map(|i| sphere(RegionKind::AsteroidField, "trigger_blocking", i * 400, 500, 400))
+        .map(|i| sphere(RegionKind::AsteroidField, "fx_rockwall", i * 400, 500, 400))
         .collect();
     let mut sim = sim_with(wall, smooth_content(32));
     let ship = put(&mut sim, "fx_cruiser", v(0, 0));
