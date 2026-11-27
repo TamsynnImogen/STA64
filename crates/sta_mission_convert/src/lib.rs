@@ -13,10 +13,12 @@
 
 pub mod algebra;
 pub mod disasm;
+pub mod dsl;
 #[doc(hidden)]
 pub mod fixture;
 pub mod format;
 pub mod image;
+pub mod lift;
 pub mod map;
 pub mod msvc;
 pub mod pe;
