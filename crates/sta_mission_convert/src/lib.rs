@@ -24,6 +24,7 @@ pub fn tool_token() -> String {
     format!("sta_mission_convert (converter {CONVERTER_VERSION})")
 }
 
+pub mod a1;
 pub mod algebra;
 pub mod call;
 pub mod convert;

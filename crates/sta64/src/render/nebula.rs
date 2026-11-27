@@ -951,16 +951,17 @@ fn gate_fields(
         if shown == f.shown {
             continue;
         }
-        let Some((handle, light)) = materials.get(&f.material).and_then(|m| Some((m.envelope.clone()?, m.light.clone()?))) else { continue };
+        // The envelope hides the never seen and is required; the weight texture only dims, so a material without
+        // one (a test, a stand-in) still has its never-seen nebulae hidden.
+        let Some((handle, light)) = materials.get(&f.material).and_then(|m| Some((m.envelope.clone()?, m.light.clone()))) else { continue };
         // The shape: every nebula seen at all is in the envelope whole (cover and reach as in sight); only the
         // never seen are left out. The light: a nebula out of sight is dimmed by the weight texture, which holds
         // the linear factor of the displayed `shown` (see `fog_objects::ghost::nebula_gas_linear`).
         let mask: Vec<bool> = shown.iter().map(|s| *s > 0.0).collect();
         let weights: Vec<f32> = shown.iter().map(|s| if *s >= 1.0 { 1.0 } else { crate::render::fog_objects::ghost::nebula_gas_linear() }).collect();
         let env = sta_surface::nebula::envelope_masked(&f.recipe, f.radius, &f.centres, &mask);
-        let bytes = sta_surface::nebula::light_weights(&f.recipe, f.radius, &f.centres, &mask, &weights);
-        if let Some(mut img) = images.get_mut(&light) {
-            img.data = Some(bytes);
+        if let Some(mut img) = light.and_then(|l| images.get_mut(&l)) {
+            img.data = Some(sta_surface::nebula::light_weights(&f.recipe, f.radius, &f.centres, &mask, &weights));
         }
         let Some(mut img) = images.get_mut(&handle) else { continue };
         img.data = Some(env.pixels);
@@ -1320,6 +1321,50 @@ mod tests {
         assert_eq!(app.world().get::<NebulaField>(field).unwrap().shown, vec![1.0, 1.0]);
         assert_eq!(app.world().resource::<Assets<Image>>().get(&handle).unwrap().data.clone().unwrap(), env.pixels);
         assert!(app.world().resource::<Assets<Image>>().get(&light).unwrap().data.clone().unwrap().iter().all(|b| *b == 255));
+    }
+
+    /// Review L1: a material with no weight texture still has its never-seen nebulae cleared from the envelope.
+    #[test]
+    fn a_material_without_a_weight_texture_still_hides_the_never_seen() {
+        use crate::render::fog_objects::{FogRegions, RegionSights, update_region_sights};
+        use sta_content::{MapDef, Region, RegionKind, RegionShape};
+        let v = |x: i32, z: i32| sta_sim::Vec3 { x: sta_sim::Fixed::from_int(x), y: sta_sim::Fixed::ZERO, z: sta_sim::Fixed::from_int(z) };
+        let mut map = MapDef::empty();
+        map.regions.push(Region { kind: RegionKind::Nebula, odf: "n".into(), shape: RegionShape::Sphere { centre: v(0, 100), radius: sta_sim::Fixed::from_int(300) } });
+        let recipe = NebulaRecipe::parse("[Nebula]\nExtent=1.3\nHeight=3\n");
+        let centres = vec![[0.0, 0.0, -100.0]];
+        let env = sta_surface::nebula::envelope(&recipe, 300.0, &centres);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<Assets<NebulaMaterial>>().init_resource::<Assets<Image>>();
+        let image = Image::new(Extent3d { width: env.w, height: env.h, depth_or_array_layers: 1 }, TextureDimension::D2, env.pixels.clone(), TextureFormat::Rgba8Unorm, RenderAssetUsages::default());
+        let handle = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+        let material = app.world_mut().resource_mut::<Assets<NebulaMaterial>>().add(NebulaMaterial { params: NebulaParams::default(), noise: None, envelope: Some(handle.clone()), shadow: None, light: None });
+        app.world_mut().spawn(NebulaField {
+            material,
+            recipe: recipe.clone(),
+            reach: 390.0,
+            span: 1.0,
+            dome: 1.0,
+            centres: centres.clone(),
+            radius: 300.0,
+            shown: vec![1.0],
+            region: None,
+            lit: centres.clone(),
+            lightning: Lightning::new(1),
+            last: -1.0,
+            still: None,
+            view: None,
+        });
+        app.insert_resource(FogRegions::of_map(&map))
+            .init_resource::<RegionSights>()
+            .insert_resource(crate::render::units::LocalPlayer(Some(sta_sim::PlayerId(1))));
+        app.add_systems(Update, (update_region_sights, gate_fields).chain());
+        // A grid that has seen nothing: the nebula is never seen and is cleared from the envelope.
+        app.insert_resource(crate::render::fog::FogState { grid: crate::render::fog::FogGrid::new([-4096.0, -4096.0], [4096.0, 4096.0]), updates: 1 });
+        app.update();
+        app.update();
+        let want = sta_surface::nebula::envelope_masked(&recipe, 300.0, &centres, &[false]);
+        assert_eq!(app.world().resource::<Assets<Image>>().get(&handle).unwrap().data.clone().unwrap(), want.pixels);
     }
 
     /// #1146: the gas of a class with no nebula in sight stands at the time it stopped (flow, pulse, ring, swirl),

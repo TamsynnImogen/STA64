@@ -1,0 +1,1175 @@
+# generated with CPython 3.14
+== variables_handles_and_deferred_cleanup
+-- lift {STEP}
+func 0x10003000
+ error None
+ instructions 16
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('GetHandle', 1), ('Foo', 1)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10003000
+  ('var', 'ALPHA', 'set', [('const', 1)])
+  ('var', 'tWait', 'start', [('float', 7.0)])
+  ('set', ('tmp', 1), ('call', 'GetHandle', [('str', 'ship_label')]))
+  ('set', ('obj', 'ship'), ('tmp', 1))
+  ('eval', ('call', 'Foo', [('tmp', 1), ('const', 2)]))
+  ('return', ('const', 0))
+ undecoded []
+ rules_made []
+ imports_called ['hot_int.op4', 'timer_int.start', 'GetHandle', 'Foo']
+ classify 'complete'
+render ok
+function M.fn(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    VarOp('ALPHA', 'set', 1)
+    VarOp('tWait', 'start', 7.0)
+    t[1] = A('GetHandle', 'ship_label')
+    O.ship = t[1]
+    A('Foo', t[1], 2)
+    do return 0 end
+end
+== a_value_that_differs_between_paths_goes_through_a_slot
+-- lift {STEP}
+func 0x10003000
+ error None
+ instructions 9
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('Bar', 1)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10003000
+  ('if', ('not', ('truth', ('obj', 'ship'))), 268447764)
+  ('goto', 268447756)
+ block 0x1000300c
+  ('multiset', [(('loc', -4), ('const', 1))])
+  ('goto', 268447768)
+ block 0x10003014
+  ('multiset', [(('loc', -4), ('const', 0))])
+  ('goto', 268447768)
+ block 0x10003018
+  ('eval', ('call', 'Bar', [('loc', -4)]))
+  ('return', None)
+ undecoded []
+ rules_made []
+ imports_called ['Bar']
+ classify 'complete'
+render ok
+function M.fn(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    if not (T(O.ship)) then goto b3014 end
+    goto b300c
+    ::b300c::
+    L[-4] = 1
+    goto b3018
+    ::b3014::
+    L[-4] = 0
+    goto b3018
+    ::b3018::
+    A('Bar', L[-4])
+    do return end
+end
+== a_value_passes_through_a_block_that_does_not_read_it
+-- lift {STEP}
+func 0x10003000
+ error None
+ instructions 12
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('Bar', 1)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10003000
+  ('set', ('tmp', 1), ('not', ('truth', ('obj', 'ship'))))
+  ('multiset', [(('reg', 'ecx'), ('obj', 'ship'))])
+  ('if', ('tmp', 1), 268447764)
+  ('goto', 268447756)
+ block 0x1000300c
+  ('multiset', [(('reg', 'eax'), ('const', 1))])
+  ('goto', 268447768)
+ block 0x10003014
+  ('multiset', [(('reg', 'eax'), ('const', 2)), (('reg', 'ecx'), ('const', 0))])
+  ('goto', 268447768)
+ block 0x10003018
+  ('if', ('cmp', '==', ('reg', 'ecx'), ('const', 5)), 268447788)
+  ('goto', 268447776)
+ block 0x10003020
+  ('eval', ('call', 'Bar', [('reg', 'eax')]))
+  ('goto', 268447788)
+ block 0x1000302c
+  ('return', ('reg', 'eax'))
+ undecoded []
+ rules_made []
+ imports_called ['Bar']
+ classify 'complete'
+render ok
+function M.fn(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    t[1] = N(not (T(O.ship)))
+    R.ecx = O.ship
+    if T(t[1]) then goto b3014 end
+    goto b300c
+    ::b300c::
+    R.eax = 1
+    goto b3018
+    ::b3014::
+    R.eax, R.ecx = 2, 0
+    goto b3018
+    ::b3018::
+    if N(R.ecx) == 5 then goto b302c end
+    goto b3020
+    ::b3020::
+    A('Bar', R.eax)
+    goto b302c
+    ::b302c::
+    do return R.eax end
+end
+== a_register_proved_zero_by_the_branch
+-- lift {STEP}
+func 0x10003000
+ error None
+ instructions 8
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('Count', 1)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10003000
+  ('set', ('tmp', 2), ('truth', ('obj', 'ship')))
+  ('multiset', [(('reg', 'eax'), ('obj', 'ship'))])
+  ('if', ('tmp', 2), 268447772)
+  ('goto', 268447756)
+ block 0x1000300c
+  ('set', ('tmp', 1), ('call', 'Count', [('const', 3), ('nil',)]))
+  ('multiset', [(('reg', 'eax'), ('tmp', 1))])
+  ('goto', 268447772)
+ block 0x1000301c
+  ('return', ('reg', 'eax'))
+ undecoded []
+ rules_made []
+ imports_called ['Count']
+ classify 'complete'
+render ok
+function M.fn(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    t[2] = N(T(O.ship))
+    R.eax = O.ship
+    if T(t[2]) then goto b301c end
+    goto b300c
+    ::b300c::
+    R.eax = A('Count', 3, nil)
+    goto b301c
+    ::b301c::
+    do return R.eax end
+end
+== a_register_proved_equal_to_a_constant
+-- lift {STEP}
+func 0x10003000
+ error None
+ instructions 7
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('Bar', 1)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10003000
+  ('set', ('tmp', 1), ('cmp', '~=', ('obj', 'ship'), ('const', 7)))
+  ('multiset', [(('reg', 'eax'), ('obj', 'ship'))])
+  ('if', ('tmp', 1), 268447768)
+  ('goto', 268447756)
+ block 0x1000300c
+  ('eval', ('call', 'Bar', [('const', 7)]))
+  ('goto', 268447768)
+ block 0x10003018
+  ('return', ('reg', 'eax'))
+ undecoded []
+ rules_made []
+ imports_called ['Bar']
+ classify 'complete'
+render ok
+function M.fn(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    t[1] = N(N(O.ship) ~= 7)
+    R.eax = O.ship
+    if T(t[1]) then goto b3018 end
+    goto b300c
+    ::b300c::
+    A('Bar', 7)
+    goto b3018
+    ::b3018::
+    do return R.eax end
+end
+== the_taken_edge_of_je_proves_the_value
+-- lift {STEP}
+func 0x10003000
+ error None
+ instructions 8
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('Bar', 1)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10003000
+  ('set', ('tmp', 1), ('not', ('truth', ('obj', 'ship'))))
+  ('multiset', [(('reg', 'eax'), ('obj', 'ship'))])
+  ('if', ('tmp', 1), 268447768)
+  ('goto', 268447756)
+ block 0x1000300c
+  ('return', ('reg', 'eax'))
+ block 0x10003018
+  ('eval', ('call', 'Bar', [('const', 0)]))
+  ('return', None)
+ undecoded []
+ rules_made []
+ imports_called ['Bar']
+ classify 'complete'
+render ok
+function M.fn(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    t[1] = N(not (T(O.ship)))
+    R.eax = O.ship
+    if T(t[1]) then goto b3018 end
+    goto b300c
+    ::b300c::
+    do return R.eax end
+    ::b3018::
+    A('Bar', 0)
+    do return end
+end
+== a_loop_is_not_decoded_but_its_calls_are_listed
+-- lift {STEP}
+func 0x10003000
+ error 'loop at 0x10003000'
+ instructions 2
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ undecoded []
+ rules_made []
+ imports_called ['Bar']
+ classify 'not'
+render ok
+function M.fn(...)
+    M.notDecoded('fn', 'loop at 0x10003000')
+    return 0
+end
+== an_unbalanced_return
+-- lift {STEP}
+func 0x10003000
+ error 'unbalanced stack at a return (1 slots) at 0x10003008'
+ instructions 3
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('Bar', 1)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ undecoded []
+ rules_made []
+ imports_called ['Bar']
+ classify 'not'
+render ok
+function M.fn(...)
+    M.notDecoded('fn', 'unbalanced stack at a return (1 slots) at 0x10003008')
+    return 0
+end
+== an_unreadable_argument_is_an_undecoded_call
+-- lift {STEP}
+func 0x10003000
+ error None
+ instructions 4
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10003000
+  ('eval', ('undecodedcall', 'Foo', 'argument slot not filled'))
+  ('return', None)
+ undecoded [('Foo', 'argument slot not filled')]
+ rules_made []
+ imports_called ['Foo']
+ classify 'partial'
+render ok
+function M.fn(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    UD('Foo', 'argument slot not filled')
+    do return end
+end
+== vectors_by_value_struct_results_and_references
+-- lift {STEP}
+func 0x10003000
+ error None
+ instructions 28
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('GetAttackLocation', 1), ('Attack', 1), ('GetDistance', 1)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10003000
+  ('set', ('tmp', 1), ('call', 'GetAttackLocation', [('const', 1), ('const', 2)]))
+  ('eval', ('call', 'Attack', [('obj', 'ship'), ('vec', [('field', ('tmp', 1), 0), ('field', ('tmp', 1), 1), ('field', ('tmp', 1), 2)])]))
+  ('set', ('tmp', 2), ('call', 'GetDistance', [('obj', 'ship'), ('obj', 'ship')]))
+  ('return', ('tmp', 2))
+ undecoded []
+ rules_made []
+ imports_called ['GetAttackLocation', 'Attack', 'GetDistance']
+ classify 'complete'
+render ok
+function M.fn(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    t[1] = A('GetAttackLocation', 1, 2)
+    A('Attack', O.ship, Vector(N(VEC(t[1], 1)), N(VEC(t[1], 2)), N(VEC(t[1], 3))))
+    do return A('GetDistance', O.ship, O.ship) end
+end
+== const_reference_temporaries_are_their_values
+-- lift {STEP}
+func 0x10003000
+ error None
+ instructions 10
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('Mark', 1)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10003000
+  ('eval', ('call', 'Mark', [('const', 4), ('boolarg', ('const', 1))]))
+  ('return', None)
+ undecoded []
+ rules_made []
+ imports_called ['Mark']
+ classify 'complete'
+render ok
+function M.fn(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    A('Mark', 4, true)
+    do return end
+end
+== a_null_name_is_nil
+-- lift {STEP}
+func 0x10003000
+ error None
+ instructions 5
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('Count', 1)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10003000
+  ('set', ('tmp', 1), ('call', 'Count', [('const', 3), ('nil',)]))
+  ('return', ('tmp', 1))
+ undecoded []
+ rules_made []
+ imports_called ['Count']
+ classify 'complete'
+render ok
+function M.fn(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    do return A('Count', 3, nil) end
+end
+== first_offending_helper_call_is_the_lowest_address
+-- lift {FUNC}
+func 0x10008000
+ error 'call at 0x10008000 to a helper that takes arguments'
+ instructions 3
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ undecoded []
+ rules_made []
+ imports_called []
+ classify 'not'
+render ok
+function M.fn(...)
+    M.notDecoded('fn', 'call at 0x10008000 to a helper that takes arguments')
+    return 0
+end
+== a_stack_frame_with_ebp_and_a_tail_call
+-- lift {STEP}
+func 0x10003000
+ error None
+ instructions 7
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('Bar', 2)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10003000
+  ('eval', ('call', 'Bar', [('const', 5)]))
+  ('eval', ('call', 'Bar', [('param', 0)]))
+  ('return', None)
+ undecoded []
+ rules_made []
+ imports_called ['Bar', 'Bar']
+ classify 'complete'
+render ok
+function M.fn(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    A('Bar', 5)
+    A('Bar', P[1])
+    do return end
+end
+== a_switch_and_an_indirect_call
+-- lift {STEP}
+func 0x10003000
+ error 'argument outside the stack at 0x10003000'
+ instructions 3
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ undecoded []
+ rules_made []
+ imports_called ['Foo']
+ classify 'not'
+render ok
+function M.fn(...)
+    M.notDecoded('fn', 'argument outside the stack at 0x10003000')
+    return 0
+end
+== a_mission_with_rules_actions_steps_and_init
+-- mission
+mission 'Test1'
+prefix
+-- Generated on the user's machine from the user's install; not for redistribution.
+-- Engine calls go to A1 by the imported function's name; unbound, failing or
+-- undecoded calls are counted in Mission.missing / failed / undecoded and answer nil.
+
+Mission_ = {
+    name = 'Test1', game = 'a1',
+    vars = {}, state = {}, objects = {}, globals = {}, timers = {}, scripts = {},
+    rules = {}, affected = {}, satisfied = {}, fired = {}, fireCount = {}, ran = {},
+    calls = {}, missing = {}, failed = {}, notDecoded = {}, stepErrors = {},
+    conditionErrors = {}, engineVars = {}, engineWritten = {}, engineReads = {}, stepCount = 0, callFailed = false,
+    problems = {}, problemOrder = {}, blocked = {}, invalid = {}, unresolved = {},
+    undecoded = {},
+}
+body
+
+BindVar('ALPHA', 'hot_int', NewVar('hot_int', 'ALPHA'))
+BindVar('tWait', 'timer_int', NewVar('timer_int', 'tWait'))
+BindVar('isCineractiveDone', 'hot_int', EngineVar('isCineractiveDone', 'hot_int'))
+O.ship = 0
+O.spot = {}
+
+-- ---------------------------------------------------------------- mission DLL
+-- init: init_2000
+function M.init_2000(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    if N(P[2]) ~= 1 then goto b2010 end
+    goto b200c
+    ::b200c::
+    t[1] = M.helper_5000()
+    goto b2010
+    ::b2010::
+    do return 1 end
+end
+
+-- action: DoIt
+function M.DoIt(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    t[1] = NewScript('the_script')
+    AddStep(t[1], M.DoIt_step, 'DoIt_step')
+    do return end
+end
+
+-- step: DoIt_step
+function M.DoIt_step(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    VarOp('ALPHA', 'set', 1)
+    do return 0 end
+end
+
+-- helper: helper_5000
+function M.helper_5000(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    VarOp('ALPHA', 'set', 0)
+    t[1] = A('GetHandle', 'ship_label')
+    O.ship = t[1]
+    do return t[1] end
+end
+
+function M.ScriptInit() M.init_2000(0, 1, 0) end
+
+-- ---------------------------------------------------------------- rule conditions
+-- condition: R_rule_one
+function M.R_rule_one(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    if not (T(S.ALPHA)) then goto b701c end
+    goto b7010
+    ::b7010::
+    goto b7024
+    ::b7024::
+    do return S.isCineractiveDone end
+    ::b701c::
+    do return 0 end
+end
+
+-- ---------------------------------------------------------------- rules
+-- 1 rules from Test1R.drl, in creation order.
+Mission.rules[#Mission.rules + 1] = {
+    name = 'rule_one',
+    action = 'DoIt',
+    deps = { 'ALPHA' },
+    when = function(S, O) return T(M.R_rule_one()) end,
+}
+
+-- Engine calls the converted code makes (bodies and rule conditions).
+Mission.engineNames = { 'GetHandle' }
+mission 'Test1'
+map 'test1'
+rules 1
+rules_with_deps 1
+rule_actions_resolved 1
+registration_errors []
+registration_calls []
+actions 1
+functions [('init', [1, 1, 0, 0]), ('action', [1, 1, 0, 0]), ('helper', [1, 1, 0, 0]), ('step', [1, 1, 0, 0]), ('condition', [1, 1, 0, 0])]
+undecoded_calls []
+leftovers []
+engine_calls [('GetHandle', 1)]
+init True
+== a_dependency_wired_in_a_condition
+-- mission
+mission 'Test1'
+prefix
+-- Generated on the user's machine from the user's install; not for redistribution.
+-- Engine calls go to A1 by the imported function's name; unbound, failing or
+-- undecoded calls are counted in Mission.missing / failed / undecoded and answer nil.
+
+Mission_ = {
+    name = 'Test1', game = 'a1',
+    vars = {}, state = {}, objects = {}, globals = {}, timers = {}, scripts = {},
+    rules = {}, affected = {}, satisfied = {}, fired = {}, fireCount = {}, ran = {},
+    calls = {}, missing = {}, failed = {}, notDecoded = {}, stepErrors = {},
+    conditionErrors = {}, engineVars = {}, engineWritten = {}, engineReads = {}, stepCount = 0, callFailed = false,
+    problems = {}, problemOrder = {}, blocked = {}, invalid = {}, unresolved = {},
+    undecoded = {},
+}
+body
+
+BindVar('ALPHA', 'hot_int', NewVar('hot_int', 'ALPHA'))
+BindVar('tWait', 'timer_int', NewVar('timer_int', 'tWait'))
+BindVar('isCineractiveDone', 'hot_int', EngineVar('isCineractiveDone', 'hot_int'))
+O.ship = 0
+O.spot = {}
+
+-- ---------------------------------------------------------------- mission DLL
+-- init: init_2000  (not decoded: register ['eax'] read before it is set)
+function M.init_2000(...)
+    M.notDecoded('init_2000', 'register [\'eax\'] read before it is set', {  })
+    return 0
+end
+
+-- action: DoIt  (not decoded: register ['eax'] read before it is set)
+function M.DoIt(...)
+    M.notDecoded('DoIt', 'register [\'eax\'] read before it is set', {  })
+    return 0
+end
+
+function M.ScriptInit() M.init_2000(0, 1, 0) end
+
+-- ---------------------------------------------------------------- rule conditions
+-- condition: R_rule_one
+function M.R_rule_one(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    do return 0 end
+end
+
+-- ---------------------------------------------------------------- rules
+-- 1 rules from Test1R.drl, in creation order.
+Mission.rules[#Mission.rules + 1] = {
+    name = 'rule_one',
+    action = 'DoIt',
+    deps = { 'ALPHA' },
+    when = function(S, O) return T(M.R_rule_one()) end,
+}
+
+-- Engine calls the converted code makes (bodies and rule conditions).
+Mission.engineNames = {  }
+mission 'Test1'
+map 'test1'
+rules 1
+rules_with_deps 1
+rule_actions_resolved 1
+registration_errors []
+registration_calls []
+actions 1
+functions [('init', [1, 0, 0, 1]), ('action', [1, 0, 0, 1]), ('condition', [1, 1, 0, 0])]
+undecoded_calls []
+leftovers [("register ['eax'] read before it is set", 2)]
+engine_calls []
+init True
+== rule_names_collide_and_an_action_does_not_resolve
+-- mission
+mission 'Test1'
+prefix
+-- Generated on the user's machine from the user's install; not for redistribution.
+-- Engine calls go to A1 by the imported function's name; unbound, failing or
+-- undecoded calls are counted in Mission.missing / failed / undecoded and answer nil.
+
+Mission_ = {
+    name = 'Test1', game = 'a1',
+    vars = {}, state = {}, objects = {}, globals = {}, timers = {}, scripts = {},
+    rules = {}, affected = {}, satisfied = {}, fired = {}, fireCount = {}, ran = {},
+    calls = {}, missing = {}, failed = {}, notDecoded = {}, stepErrors = {},
+    conditionErrors = {}, engineVars = {}, engineWritten = {}, engineReads = {}, stepCount = 0, callFailed = false,
+    problems = {}, problemOrder = {}, blocked = {}, invalid = {}, unresolved = {},
+    undecoded = {},
+}
+body
+
+BindVar('ALPHA', 'hot_int', NewVar('hot_int', 'ALPHA'))
+BindVar('tWait', 'timer_int', NewVar('timer_int', 'tWait'))
+BindVar('isCineractiveDone', 'hot_int', EngineVar('isCineractiveDone', 'hot_int'))
+O.ship = 0
+O.spot = {}
+
+-- ---------------------------------------------------------------- mission DLL
+-- init: init_2000  (not decoded: register ['eax'] read before it is set)
+function M.init_2000(...)
+    M.notDecoded('init_2000', 'register [\'eax\'] read before it is set', {  })
+    return 0
+end
+
+-- action: DoIt  (not decoded: register ['eax'] read before it is set)
+function M.DoIt(...)
+    M.notDecoded('DoIt', 'register [\'eax\'] read before it is set', {  })
+    return 0
+end
+
+function M.ScriptInit() M.init_2000(0, 1, 0) end
+
+-- ---------------------------------------------------------------- rule conditions
+-- condition: R_rule_one
+function M.R_rule_one(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    do return 0 end
+end
+
+-- condition: R_rule_one_2
+function M.R_rule_one_2(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    do return 0 end
+end
+
+-- ---------------------------------------------------------------- rules
+-- 2 rules from Test1R.drl, in creation order.
+Mission.rules[#Mission.rules + 1] = {
+    name = 'rule_one',
+    action = 'DoIt',
+    deps = {  },
+    when = function(S, O) return T(M.R_rule_one()) end,
+}
+Mission.rules[#Mission.rules + 1] = {
+    name = 'rule_one#2',
+    action = '?',
+    deps = {  },
+    when = function(S, O) return T(M.R_rule_one_2()) end,
+}
+
+-- Engine calls the converted code makes (bodies and rule conditions).
+Mission.engineNames = {  }
+mission 'Test1'
+map 'test1'
+rules 2
+rules_with_deps 0
+rule_actions_resolved 1
+registration_errors []
+registration_calls []
+actions 1
+functions [('init', [1, 0, 0, 1]), ('action', [1, 0, 0, 1]), ('condition', [2, 2, 0, 0])]
+undecoded_calls []
+leftovers [("register ['eax'] read before it is set", 2)]
+engine_calls []
+init True
+== a_rule_is_trashed_by_name
+-- lift {STEP}
+func 0x10003000
+ error None
+ instructions 5
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10003000
+  ('trashrule', ('str', 'rule_one'))
+  ('return', None)
+ undecoded []
+ rules_made []
+ imports_called ['IIIE.trash_rule']
+ classify 'complete'
+render ok
+function M.fn(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    TrashRule('rule_one')
+    do return end
+end
+== a_rule_dll_without_dllmain
+-- mission
+mission 'Test1'
+prefix
+-- Generated on the user's machine from the user's install; not for redistribution.
+-- Engine calls go to A1 by the imported function's name; unbound, failing or
+-- undecoded calls are counted in Mission.missing / failed / undecoded and answer nil.
+
+Mission_ = {
+    name = 'Test1', game = 'a1',
+    vars = {}, state = {}, objects = {}, globals = {}, timers = {}, scripts = {},
+    rules = {}, affected = {}, satisfied = {}, fired = {}, fireCount = {}, ran = {},
+    calls = {}, missing = {}, failed = {}, notDecoded = {}, stepErrors = {},
+    conditionErrors = {}, engineVars = {}, engineWritten = {}, engineReads = {}, stepCount = 0, callFailed = false,
+    problems = {}, problemOrder = {}, blocked = {}, invalid = {}, unresolved = {},
+    undecoded = {},
+}
+body
+
+BindVar('ALPHA', 'hot_int', NewVar('hot_int', 'ALPHA'))
+BindVar('tWait', 'timer_int', NewVar('timer_int', 'tWait'))
+BindVar('isCineractiveDone', 'hot_int', EngineVar('isCineractiveDone', 'hot_int'))
+O.ship = 0
+O.spot = {}
+
+-- ---------------------------------------------------------------- mission DLL
+-- init: init_2000  (not decoded: register ['eax'] read before it is set)
+function M.init_2000(...)
+    M.notDecoded('init_2000', 'register [\'eax\'] read before it is set', {  })
+    return 0
+end
+
+-- action: DoIt  (not decoded: register ['eax'] read before it is set)
+function M.DoIt(...)
+    M.notDecoded('DoIt', 'register [\'eax\'] read before it is set', {  })
+    return 0
+end
+
+function M.ScriptInit() M.init_2000(0, 1, 0) end
+
+-- ---------------------------------------------------------------- rule conditions
+-- ---------------------------------------------------------------- rules
+-- 0 rules from Test1R.drl, in creation order.
+
+-- Engine calls the converted code makes (bodies and rule conditions).
+Mission.engineNames = {  }
+mission 'Test1'
+map 'test1'
+rules 0
+rules_with_deps 0
+rule_actions_resolved 0
+registration_errors ['no DllMain found']
+registration_calls []
+actions 1
+functions [('init', [1, 0, 0, 1]), ('action', [1, 0, 0, 1])]
+undecoded_calls []
+leftovers [("register ['eax'] read before it is set", 2)]
+engine_calls []
+init True
+== a_mission_without_a_rule_dll
+-- mission
+mission 'Test1'
+prefix
+-- Generated on the user's machine from the user's install; not for redistribution.
+-- Engine calls go to A1 by the imported function's name; unbound, failing or
+-- undecoded calls are counted in Mission.missing / failed / undecoded and answer nil.
+
+Mission_ = {
+    name = 'Test1', game = 'a1',
+    vars = {}, state = {}, objects = {}, globals = {}, timers = {}, scripts = {},
+    rules = {}, affected = {}, satisfied = {}, fired = {}, fireCount = {}, ran = {},
+    calls = {}, missing = {}, failed = {}, notDecoded = {}, stepErrors = {},
+    conditionErrors = {}, engineVars = {}, engineWritten = {}, engineReads = {}, stepCount = 0, callFailed = false,
+    problems = {}, problemOrder = {}, blocked = {}, invalid = {}, unresolved = {},
+    undecoded = {},
+}
+body
+
+BindVar('ALPHA', 'hot_int', NewVar('hot_int', 'ALPHA'))
+BindVar('tWait', 'timer_int', NewVar('timer_int', 'tWait'))
+BindVar('isCineractiveDone', 'hot_int', EngineVar('isCineractiveDone', 'hot_int'))
+O.ship = 0
+O.spot = {}
+
+-- ---------------------------------------------------------------- mission DLL
+-- init: init_2000  (not decoded: register ['eax'] read before it is set)
+function M.init_2000(...)
+    M.notDecoded('init_2000', 'register [\'eax\'] read before it is set', {  })
+    return 0
+end
+
+-- action: DoIt
+function M.DoIt(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    A('Bar', 1)
+    do return end
+end
+
+function M.ScriptInit() M.init_2000(0, 1, 0) end
+
+-- ---------------------------------------------------------------- rule conditions
+-- ---------------------------------------------------------------- rules
+-- 0 rules from -, in creation order.
+
+-- Engine calls the converted code makes (bodies and rule conditions).
+Mission.engineNames = { 'Bar' }
+mission 'Test1'
+map 'test1'
+rules 0
+rules_with_deps 0
+rule_actions_resolved 0
+registration_errors []
+registration_calls []
+actions 1
+functions [('init', [1, 0, 0, 1]), ('action', [1, 1, 0, 0])]
+undecoded_calls []
+leftovers [("register ['eax'] read before it is set", 1)]
+engine_calls [('Bar', 1)]
+init True
+== a_function_the_renderer_cannot_render
+-- mission
+mission 'Test1'
+prefix
+-- Generated on the user's machine from the user's install; not for redistribution.
+-- Engine calls go to A1 by the imported function's name; unbound, failing or
+-- undecoded calls are counted in Mission.missing / failed / undecoded and answer nil.
+
+Mission_ = {
+    name = 'Test1', game = 'a1',
+    vars = {}, state = {}, objects = {}, globals = {}, timers = {}, scripts = {},
+    rules = {}, affected = {}, satisfied = {}, fired = {}, fireCount = {}, ran = {},
+    calls = {}, missing = {}, failed = {}, notDecoded = {}, stepErrors = {},
+    conditionErrors = {}, engineVars = {}, engineWritten = {}, engineReads = {}, stepCount = 0, callFailed = false,
+    problems = {}, problemOrder = {}, blocked = {}, invalid = {}, unresolved = {},
+    undecoded = {},
+}
+body
+
+BindVar('ALPHA', 'hot_int', NewVar('hot_int', 'ALPHA'))
+BindVar('tWait', 'timer_int', NewVar('timer_int', 'tWait'))
+BindVar('isCineractiveDone', 'hot_int', EngineVar('isCineractiveDone', 'hot_int'))
+O.ship = 0
+O.spot = {}
+
+-- ---------------------------------------------------------------- mission DLL
+-- init: init_2000  (not decoded: register ['eax'] read before it is set)
+function M.init_2000(...)
+    M.notDecoded('init_2000', 'register [\'eax\'] read before it is set', {  })
+    return 0
+end
+
+-- action: DoIt
+function M.DoIt(...)
+    M.notDecoded('DoIt', 'render: DecodeError: the address of loc is passed on as a value', {  })
+    return 0
+end
+
+function M.ScriptInit() M.init_2000(0, 1, 0) end
+
+-- ---------------------------------------------------------------- rule conditions
+-- ---------------------------------------------------------------- rules
+-- 0 rules from -, in creation order.
+
+-- Engine calls the converted code makes (bodies and rule conditions).
+Mission.engineNames = {  }
+mission 'Test1'
+map 'test1'
+rules 0
+rules_with_deps 0
+rule_actions_resolved 0
+registration_errors []
+registration_calls []
+actions 1
+functions [('init', [1, 0, 0, 1]), ('action', [1, 0, 0, 1])]
+undecoded_calls []
+leftovers [("register ['eax'] read before it is set", 1), ('render: DecodeError: the address of loc is passed on as a value', 1)]
+engine_calls []
+init True
+== variable_queries_and_the_linked_list_callback
+-- lift {STEP}
+func 0x10003000
+ error None
+ instructions 11
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('Bar', 1)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10003000
+  ('set', ('tmp', 1), ('varq', 'tWait', 'time'))
+  ('eval', ('call', 'Bar', [('var', 'ALPHA', 'hot_int')]))
+  ('comment', 'Add_Data: native save/load callback, not used')
+  ('return', ('const', 1))
+ undecoded []
+ rules_made []
+ imports_called ['timer_int.time', 'hot_int.opB', 'Bar', 'linked_list.Add_Data']
+ classify 'complete'
+render ok
+function M.fn(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    t[1] = VarQuery('tWait', 'time')
+    A('Bar', S.ALPHA)
+    -- Add_Data: native save/load callback, not used
+    do return 1 end
+end
+== a_switch_in_a_function
+-- lift {STEP}
+func 0x10003000
+ error None
+ instructions 10
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('Bar', 1)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10003000
+  ('set', ('tmp', 1), ('cmp', '>', ('u', ('obj', 'ship')), ('u', ('const', 2))))
+  ('multiset', [(('reg', 'eax'), ('obj', 'ship'))])
+  ('if', ('tmp', 1), 268447780)
+  ('goto', 268447756)
+ block 0x1000300c
+  ('switch', ('reg', 'eax'), [268447760, 268447772, 268447776])
+ block 0x10003010
+  ('eval', ('call', 'Bar', [('const', 1)]))
+  ('goto', 268447772)
+ block 0x1000301c
+  ('return', ('reg', 'eax'))
+ block 0x10003020
+  ('return', ('reg', 'eax'))
+ block 0x10003024
+  ('return', ('reg', 'eax'))
+ undecoded []
+ rules_made []
+ imports_called ['Bar']
+ classify 'complete'
+render ok
+function M.fn(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    t[1] = N(U(N(O.ship)) > U(2))
+    R.eax = O.ship
+    if T(t[1]) then goto b3024 end
+    goto b300c
+    ::b300c::
+    do local X = I(N(R.eax)) if X == 0 then goto b3010 end if X == 1 then goto b301c end if X == 2 then goto b3020 end end
+    ::b3010::
+    A('Bar', 1)
+    goto b301c
+    ::b301c::
+    do return R.eax end
+    ::b3020::
+    do return R.eax end
+    ::b3024::
+    do return R.eax end
+end
+== a_frame_left_with_leave
+-- lift {STEP}
+func 0x10003000
+ error None
+ instructions 7
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('Bar', 1)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10003000
+  ('eval', ('call', 'Bar', [('const', 1)]))
+  ('return', None)
+ undecoded []
+ rules_made []
+ imports_called ['Bar']
+ classify 'complete'
+render ok
+function M.fn(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    A('Bar', 1)
+    do return end
+end
+== a_frame_left_with_mov_esp_ebp
+-- lift {STEP}
+func 0x10003000
+ error None
+ instructions 10
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('Bar', 1)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10003000
+  ('eval', ('call', 'Bar', [('const', 7)]))
+  ('return', None)
+ undecoded []
+ rules_made []
+ imports_called ['Bar']
+ classify 'complete'
+render ok
+function M.fn(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    A('Bar', 7)
+    do return end
+end
+== or_minus_one_and_and_zero
+-- lift {STEP}
+func 0x10003000
+ error None
+ instructions 7
+ params 0
+ loops 0
+ calls []
+ steps []
+ engine_calls [('Foo', 1)]
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10003000
+  ('eval', ('call', 'Foo', [('const', 0), ('const', -1)]))
+  ('return', None)
+ undecoded []
+ rules_made []
+ imports_called ['Foo']
+ classify 'complete'
+render ok
+function M.fn(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    A('Foo', 0, -1)
+    do return end
+end
+== a_tail_jump_to_an_internal_function
+-- lift {FUNC}
+func 0x10008000
+ error None
+ instructions 1
+ params 0
+ loops 0
+ calls [268447744]
+ steps []
+ engine_calls []
+ loctypes []
+ floatlocs []
+ itype []
+ vectors []
+ litype []
+ block 0x10008000
+  ('set', ('tmp', 1), ('fcall', 268447744, []))
+  ('return', ('tmp', 1))
+ undecoded []
+ rules_made []
+ imports_called []
+ classify 'complete'
+render ok
+function M.fn(...)
+    local P, L, R, t = {...}, {}, {}, {}
+    do return M.fn_3000() end
+end
+== a_chain_of_blocks_just_below_the_recursion_limit
+-- try_convert
+converted
+== a_chain_of_blocks_just_above_the_recursion_limit
+-- try_convert
+FAIL RecursionError 'maximum recursion depth exceeded'
