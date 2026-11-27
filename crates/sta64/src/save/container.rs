@@ -17,6 +17,7 @@ use std::sync::Arc;
 use sta_content::{ContentDb, MapDef};
 use sta_core::PlayerId;
 use sta_sim::Sim;
+use sta_sim::command::Command;
 use sta_sim::replay::{ControlRec, Replay, SeatRec, StartRec};
 use sta_sim::setup::{Controller, GameOptions};
 
@@ -149,6 +150,8 @@ pub struct Loaded {
     pub header: Header,
     pub info: SaveInfo,
     pub controllers: Vec<SeatController>,
+    /// The commands in flight and the next command number: submit them, restore the number, do not think.
+    pub in_flight: InFlight,
     pub client: ClientState,
 }
 
@@ -158,10 +161,12 @@ pub type SeatBox = (PlayerId, Box<dyn Controller>);
 impl Loaded {
     pub fn restore_controllers(
         &self,
-        _restore: impl FnMut(PlayerId, &str, u32, &[u8]) -> Result<Box<dyn Controller>, String>,
+        mut restore: impl FnMut(PlayerId, &str, u32, &[u8]) -> Result<Box<dyn Controller>, String>,
     ) -> Result<Vec<SeatBox>, SaveError> {
-        // The stand-in refuses computer seats at save, so none is ever recorded.
-        Ok(Vec::new())
+        self.controllers
+            .iter()
+            .map(|c| restore(c.seat, &c.name, c.version, &c.data).map(|ctl| (c.seat, ctl)).map_err(|reason| SaveError::Controller { seat: c.seat, reason }))
+            .collect()
     }
 }
 
@@ -186,8 +191,44 @@ fn take<'a>(rest: &mut &'a [u8]) -> Result<&'a [u8], SaveError> {
 
 const MAGIC: &[u8; 4] = b"STUB";
 
+/// The commands submitted for the next tick and not yet stepped, in submission order, and the link's
+/// next command number (one counter for the player's and the sandbox's commands, so it is stored, not
+/// derived). Part of the game: the container refuses a damaged record (ADR 0010 V5, #1320 review).
+/// A save is taken between ticks, after the controllers have thought about the last step; a load
+/// submits `commands`, restores `next_seq`, does not think, and steps on.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct InFlight {
+    pub next_seq: u32,
+    pub commands: Vec<Command>,
+}
+
 /// Writes a save of `sim` at its tick (see `sta_sim::save::save`).
-pub fn save(sim: &Sim, replay: &Replay, info: &SaveInfo, controllers: &[(PlayerId, &dyn Controller)], client: &ClientState) -> Result<Vec<u8>, SaveError> {
+pub fn save(
+    sim: &Sim,
+    replay: &Replay,
+    info: &SaveInfo,
+    controllers: &[(PlayerId, &dyn Controller)],
+    in_flight: &InFlight,
+    client: &ClientState,
+) -> Result<Vec<u8>, SaveError> {
+    for seat in &replay.players {
+        if matches!(seat.control, ControlRec::Ai(_)) && !controllers.iter().any(|(id, c)| *id == seat.id && controller_can_save(*c)) {
+            return Err(SaveError::ControllerCannotSave { seat: seat.id });
+        }
+    }
+    save_with_records(sim, replay, info, &[], in_flight, client)
+}
+
+/// Stand-in only: as [`save`] with the computer seats' records given. The real container asks each
+/// controller (`Controller::save_state`, SIM-81's seam); the stand-in cannot, so a test registers them.
+pub fn save_with_records(
+    sim: &Sim,
+    replay: &Replay,
+    info: &SaveInfo,
+    records: &[SeatController],
+    in_flight: &InFlight,
+    client: &ClientState,
+) -> Result<Vec<u8>, SaveError> {
     if info.kind == GameKind::Mission {
         return Err(SaveError::Mission);
     }
@@ -199,11 +240,8 @@ pub fn save(sim: &Sim, replay: &Replay, info: &SaveInfo, controllers: &[(PlayerI
         return Err(SaveError::Invalid(format!("the journal ends at tick {}, the sim is at tick {}", replay.end_tick, sim.tick)));
     }
     for seat in &replay.players {
-        if matches!(seat.control, ControlRec::Ai(_)) {
-            let can = controllers.iter().any(|(id, c)| *id == seat.id && controller_can_save(*c));
-            if !can {
-                return Err(SaveError::ControllerCannotSave { seat: seat.id });
-            }
+        if matches!(seat.control, ControlRec::Ai(_)) && !records.iter().any(|r| r.seat == seat.id) {
+            return Err(SaveError::ControllerCannotSave { seat: seat.id });
         }
     }
     let header = serde_json::json!({
@@ -214,6 +252,10 @@ pub fn save(sim: &Sim, replay: &Replay, info: &SaveInfo, controllers: &[(PlayerI
     put(&mut out, header.to_string().as_bytes());
     put(&mut out, &sim.snapshot());
     put(&mut out, &replay.encode());
+    let recs: Vec<serde_json::Value> = records.iter().map(|r| serde_json::json!({"seat": r.seat.0, "name": r.name, "version": r.version, "data": r.data})).collect();
+    put(&mut out, serde_json::Value::Array(recs).to_string().as_bytes());
+    let flight = serde_json::json!({"next_seq": in_flight.next_seq, "commands": serde_json::to_value(&in_flight.commands).map_err(|e| SaveError::Invalid(e.to_string()))?});
+    put(&mut out, flight.to_string().as_bytes());
     let mut c = client.version.to_le_bytes().to_vec();
     c.extend_from_slice(&client.data);
     put(&mut out, &c);
@@ -224,6 +266,8 @@ struct Parts<'a> {
     header: serde_json::Value,
     snapshot: &'a [u8],
     replay: Replay,
+    controllers: Vec<SeatController>,
+    in_flight: InFlight,
     client: ClientState,
 }
 
@@ -232,9 +276,28 @@ fn parts(bytes: &[u8]) -> Result<Parts<'_>, SaveError> {
     let header = serde_json::from_slice(take(&mut rest)?).map_err(|e| SaveError::Damaged(e.to_string()))?;
     let snapshot = take(&mut rest)?;
     let replay = Replay::decode(take(&mut rest)?).map_err(|e| SaveError::Damaged(e.to_string()))?;
+    let damaged = |what: &str| SaveError::Damaged(format!("the {what} do not parse"));
+    let recs: Vec<serde_json::Value> = serde_json::from_slice(take(&mut rest)?).map_err(|_| damaged("controller records"))?;
+    let controllers = recs
+        .iter()
+        .map(|r| {
+            Some(SeatController {
+                seat: PlayerId(u8::try_from(r["seat"].as_u64()?).ok()?),
+                name: r["name"].as_str()?.to_owned(),
+                version: u32::try_from(r["version"].as_u64()?).ok()?,
+                data: serde_json::from_value(r["data"].clone()).ok()?,
+            })
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| damaged("controller records"))?;
+    let flight: serde_json::Value = serde_json::from_slice(take(&mut rest)?).map_err(|_| damaged("commands in flight"))?;
+    let in_flight = InFlight {
+        next_seq: flight["next_seq"].as_u64().and_then(|n| u32::try_from(n).ok()).ok_or_else(|| damaged("commands in flight"))?,
+        commands: serde_json::from_value(flight["commands"].clone()).map_err(|_| damaged("commands in flight"))?,
+    };
     let c = take(&mut rest)?;
     let version = c.get(..4).map(|v| u32::from_le_bytes([v[0], v[1], v[2], v[3]])).ok_or_else(|| SaveError::Damaged("no client record".into()))?;
-    Ok(Parts { header, snapshot, replay, client: ClientState { version, data: c[4..].to_vec() } })
+    Ok(Parts { header, snapshot, replay, controllers, in_flight, client: ClientState { version, data: c[4..].to_vec() } })
 }
 
 fn header_of(p: &Parts<'_>) -> Header {
@@ -283,7 +346,7 @@ pub fn load(bytes: &[u8], content: Arc<ContentDb>, map: Option<MapSource>) -> Re
         description: header.description.clone(),
         ..SaveInfo::default()
     };
-    Ok(Loaded { sim, replay, header, info, controllers: Vec::new(), client: p.client })
+    Ok(Loaded { sim, replay, header, info, controllers: p.controllers, in_flight: p.in_flight, client: p.client })
 }
 
 /// File helpers: a folder of saves.

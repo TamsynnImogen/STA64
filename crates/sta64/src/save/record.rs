@@ -5,12 +5,12 @@
 //! never makes a save unloadable: the match loads with defaults and a notice says what was left out.
 
 use serde_json::{Value, json};
-use sta_sim::command::Command;
-
 use crate::clock::MatchSpeed;
 use crate::render::fog::ExploredRecord;
 
-/// The record layout this build writes and reads.
+/// The record layout this build writes and reads. Still 1: the record has not been released, and the
+/// commands in flight it briefly held moved to the container (they change the game, so damage must
+/// refuse); a field that is no longer written is ignored on reading anyway.
 pub const VERSION: u32 = 1;
 
 /// The orbit camera's pose (the capture index records the same fields).
@@ -31,13 +31,11 @@ pub struct ClientRecord {
     pub explored: Option<ExploredRecord>,
     /// The match's tick pacing.
     pub speed: MatchSpeed,
-    /// Commands on their way to the next tick when the game was saved.
-    pub in_flight: Vec<Command>,
 }
 
 impl Default for ClientRecord {
     fn default() -> Self {
-        ClientRecord { camera: None, explored: None, speed: MatchSpeed::Normal, in_flight: Vec::new() }
+        ClientRecord { camera: None, explored: None, speed: MatchSpeed::Normal }
     }
 }
 
@@ -60,7 +58,6 @@ impl ClientRecord {
             "camera": camera,
             "explored": explored,
             "speed": speed_name(self.speed),
-            "in_flight": serde_json::to_value(&self.in_flight).unwrap_or(Value::Null),
         });
         v.to_string().into_bytes()
     }
@@ -96,13 +93,6 @@ impl ClientRecord {
             Some("normal") | None => {}
             Some("fast") => rec.speed = MatchSpeed::Fast,
             Some(_) => notes.push("the game speed".to_owned()),
-        }
-        match &v["in_flight"] {
-            Value::Null => {}
-            c => match serde_json::from_value(c.clone()) {
-                Ok(cmds) => rec.in_flight = cmds,
-                Err(_) => notes.push("the orders on their way".to_owned()),
-            },
         }
         Ok((rec, notes))
     }
@@ -143,7 +133,6 @@ mod tests {
             camera: Some(CameraRec { focus: [1.5, 0.0, -300.25], yaw: 0.3, pitch: -0.7, dist: 812.5 }),
             explored: Some(ExploredRecord { min: [-100.0, -50.5], w: 3, h: 2, runs: vec![(0, 2), (255, 1), (130, 3)] }),
             speed: MatchSpeed::Fast,
-            in_flight: Vec::new(),
         }
     }
 

@@ -31,12 +31,103 @@ use crate::sim_link::{BenchDriven, SimLinkPlugin};
 #[derive(Resource)]
 struct Unlogged;
 
-fn build_match(mut commands: Commands, active: Res<ActiveMatch>, link: Option<Res<SimLink>>, scene: Option<Res<crate::frontend::scene::MenuScene>>, unlogged: Option<Res<Unlogged>>) {
+/// A stateful computer player that reads events: it counts the thinks and the events it was given,
+/// and every third think, or whenever it saw events, orders its first ship somewhere that depends on
+/// both counts, so a think skipped or repeated changes the game.
+#[derive(Clone, Default, PartialEq, Debug)]
+struct CounterState {
+    thinks: u32,
+    events: u32,
+    sent: u32,
+}
+
+impl CounterState {
+    fn bytes(&self) -> Vec<u8> {
+        [self.thinks, self.events, self.sent].iter().flat_map(|n| n.to_le_bytes()).collect()
+    }
+
+    fn of(data: &[u8]) -> Option<CounterState> {
+        let n = |i: usize| data.get(i * 4..i * 4 + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+        if data.len() != 12 {
+            return None;
+        }
+        Some(CounterState { thinks: n(0)?, events: n(1)?, sent: n(2)? })
+    }
+}
+
+struct Counter {
+    seat: PlayerId,
+    state: Arc<std::sync::Mutex<CounterState>>,
+}
+
+impl sta_sim::setup::Controller for Counter {
+    fn think(&mut self, view: &sta_sim::WorldView, events: &[sta_sim::SimEvent], out: &mut Vec<sta_sim::command::Command>) {
+        let mut s = self.state.lock().unwrap();
+        s.thinks += 1;
+        s.events += events.len() as u32;
+        if events.is_empty() && s.thinks % 3 != 0 {
+            return;
+        }
+        if let Some(u) = view.units.iter().find(|u| u.owner == self.seat) {
+            let p = u.pos.to_f32();
+            let to = SimVec3::from_f32([p[0] + 100.0 * (s.events % 5 + 1) as f32, 0.0, p[2] + 50.0 * (s.thinks % 7) as f32]);
+            out.push(sta_sim::command::Command { player: self.seat, seq: s.sent, kind: CommandKind::Order(Order::Move { units: vec![u.id], to, queue: false }) });
+            s.sent += 1;
+        }
+    }
+}
+
+type Handles = Arc<std::sync::Mutex<std::collections::BTreeMap<u8, Arc<std::sync::Mutex<CounterState>>>>>;
+
+#[derive(Resource, Clone, Default)]
+struct CounterHandles(Handles);
+
+impl CounterHandles {
+    fn make(&self, seat: PlayerId, state: CounterState) -> Box<dyn sta_sim::setup::Controller> {
+        let st = Arc::new(std::sync::Mutex::new(state));
+        self.0.lock().unwrap().insert(seat.0, st.clone());
+        Box::new(Counter { seat, state: st })
+    }
+
+    fn state(&self, seat: u8) -> Option<CounterState> {
+        self.0.lock().unwrap().get(&seat).map(|s| s.lock().unwrap().clone())
+    }
+
+    /// The stand-in's hooks for the container: read a record, build a controller from one.
+    fn hooks(&self) -> StandInControllers {
+        let (a, b) = (self.clone(), self.clone());
+        StandInControllers {
+            record: Arc::new(move |seat| a.state(seat.0).map(|s| (1, s.bytes()))),
+            restore: Arc::new(move |seat, name, version, data| {
+                match (name, version, CounterState::of(data)) {
+                    ("counter", 1, Some(s)) => Ok(b.make(seat, s)),
+                    _ => Err(format!("unreadable record of {name}")),
+                }
+            }),
+        }
+    }
+}
+
+fn build_match(
+    mut commands: Commands,
+    active: Res<ActiveMatch>,
+    link: Option<Res<SimLink>>,
+    scene: Option<Res<crate::frontend::scene::MenuScene>>,
+    unlogged: Option<Res<Unlogged>>,
+    handles: Res<CounterHandles>,
+) {
     if !active.requested || link.is_some() || scene.is_some() {
         return;
     }
     let (sim, _) = Sim::from_setup_with_warnings(&active.setup);
-    let link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), active.local.unwrap_or(PlayerId::BENCH));
+    let controllers: Vec<Box<dyn sta_sim::setup::Controller>> = active
+        .setup
+        .players
+        .iter()
+        .filter(|p| p.control == Control::Ai("counter".into()))
+        .map(|p| handles.make(p.id, CounterState::default()))
+        .collect();
+    let link = SimLink::new(Box::new(sim), Box::new(LocalRouter::new()), active.local.unwrap_or(PlayerId::BENCH)).with_controllers(controllers);
     let link = if active.local.is_none() { link.with_observer() } else { link };
     commands.insert_resource(ContentRes(active.setup.content.clone()));
     commands.insert_resource(if unlogged.is_some() { link } else { link.with_replay(Replay::new(&active.setup)) });
@@ -68,6 +159,7 @@ fn temp_dir(tag: &str) -> PathBuf {
 
 fn app(dir: &PathBuf, map_file: bool) -> App {
     let (null, _) = NullAudio::new();
+    let handles = CounterHandles::default();
     let mut app = App::new();
     app.set_error_handler(bevy::ecs::error::panic)
         .add_plugins((MinimalPlugins, StatesPlugin))
@@ -89,6 +181,8 @@ fn app(dir: &PathBuf, map_file: bool) -> App {
         // The test steps the link itself, tick by tick.
         .insert_resource(BenchDriven)
         .insert_resource(SaveDir(Some(dir.clone())))
+        .insert_resource(handles.hooks())
+        .insert_resource(handles)
         .init_resource::<FogMemory>()
         .insert_resource(MapFiles(Arc::new(move |name| map_file.then(|| (format!("bzn/{name}.bzn"), format!("authored map {name}").into_bytes())))));
     app
@@ -156,7 +250,9 @@ fn run(app: &mut App, n: u64) -> Vec<u64> {
         let mut link = app.world_mut().resource_mut::<SimLink>();
         let t = link.real_curr().tick;
         script(&mut link, t);
-        link.tick().expect("a local router never stalls");
+        let events = link.tick().expect("a local router never stalls");
+        let rejected: Vec<_> = events.iter().filter(|e| matches!(e, sta_sim::SimEvent::Rejected { .. })).collect();
+        assert!(rejected.is_empty(), "tick {t}: {rejected:?}");
         digests.push(link.real_curr().digest);
     }
     digests
@@ -286,6 +382,156 @@ fn commands_in_flight_at_the_save_and_the_players_next_number_survive_the_load()
     assert_eq!(app.world().resource::<SimLink>().in_flight().len(), 1, "handed to the new router");
     let after = run(&mut app, 10);
     assert_eq!(after, want, "the order applies on the next tick as in the match that never stopped");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Phase {
+    /// Before any tick.
+    Start,
+    /// The first tick after which the computer player's command is in flight.
+    AfterItsCommand,
+    /// Player, sandbox and queued input commands all on their way.
+    PlayerAndSandbox,
+}
+
+fn counter_seats(data: &ScreenData) -> GameSetup {
+    setup(data, [Control::Human, Control::Ai("counter".into())])
+}
+
+fn counter(app: &App) -> CounterState {
+    app.world().resource::<CounterHandles>().state(1).expect("the computer player")
+}
+
+fn computer_command_in_flight(app: &App) -> bool {
+    app.world().resource::<SimLink>().in_flight().iter().any(|c| c.player == PlayerId(1))
+}
+
+/// What the player and the sandbox send at the `PlayerAndSandbox` save point. `queued` is the third,
+/// which in the saved run waits in the input's queue and in the reference is submitted at once.
+fn inject(app: &mut App, queued: bool) {
+    let (id, victim) = {
+        let link = app.world().resource::<SimLink>();
+        let mut mine = link.real_curr().units.iter().filter(|u| u.owner == link.player()).map(|u| u.id);
+        (mine.next().unwrap(), mine.next().unwrap())
+    };
+    let go = |x: f32| CommandKind::Order(Order::Move { units: vec![id], to: SimVec3::from_f32([x, 0.0, 700.0]), queue: false });
+    {
+        let mut link = app.world_mut().resource_mut::<SimLink>();
+        link.submit(go(900.0));
+        // The sandbox's command changes the state for certain (the fake ships' orders show in the journal only).
+        link.submit_sandbox(CommandKind::Edit(sta_sim::command::Edit::Kill(victim)));
+        if !queued {
+            link.submit(go(-900.0));
+        }
+    }
+    if queued {
+        app.world_mut().resource_mut::<CommandQueue>().0.push(go(-900.0));
+    }
+}
+
+fn save_and_load(app: &mut App, tick: u64) {
+    app.world_mut().write_message(SaveMatch { description: String::new(), overwrite: None });
+    app.update();
+    let saved = drain::<SaveOutcome>(app);
+    let [SaveOutcome::Saved { path, tick: at }] = saved.as_slice() else { panic!("not saved: {saved:?}") };
+    assert_eq!(*at, tick);
+    let path = path.clone();
+    app.world_mut().write_message(LoadMatch { path });
+    let mut loaded = Vec::new();
+    for _ in 0..300 {
+        app.update();
+        loaded.extend(drain::<LoadOutcome>(app));
+        if !loaded.is_empty() && state(app) == AppState::InGame {
+            break;
+        }
+    }
+    assert!(matches!(loaded.as_slice(), [LoadOutcome::Loaded { .. }]), "{loaded:?}");
+}
+
+/// The game saved at a point where the computer player's or the player's commands are in flight, loaded
+/// and continued, equals the game that never stopped: every tick's digest, the whole journal, the
+/// computer player's state and the command counter.
+#[test]
+fn a_computer_players_game_saved_with_commands_in_flight_continues_exactly() {
+    let dir = temp_dir("counter");
+    let data = armed();
+    for phase in [Phase::Start, Phase::AfterItsCommand, Phase::PlayerAndSandbox] {
+        // The game that never stops.
+        let mut reference = app(&dir, true);
+        start(&mut reference, counter_seats(&data), MatchSpeed::Normal);
+        let mut want = Vec::new();
+        let n = match phase {
+            Phase::Start => 0,
+            Phase::AfterItsCommand => loop {
+                want.extend(run(&mut reference, 1));
+                if computer_command_in_flight(&reference) {
+                    break want.len() as u64;
+                }
+                assert!(want.len() < 300, "the computer player sent nothing");
+            },
+            Phase::PlayerAndSandbox => {
+                want.extend(run(&mut reference, 20));
+                20
+            }
+        };
+        if matches!(phase, Phase::PlayerAndSandbox) {
+            inject(&mut reference, false);
+        }
+        let in_flight_at_save = reference.world().resource::<SimLink>().in_flight().to_vec();
+        want.extend(run(&mut reference, M));
+        let want_replay = reference.world().resource::<SimLink>().replay().unwrap().clone();
+        let (want_state, want_seq) = (counter(&reference), reference.world().resource::<SimLink>().next_seq());
+        assert!(want_state.events > 0, "the computer player was given events");
+        if !matches!(phase, Phase::Start) {
+            assert!(!in_flight_at_save.is_empty());
+        }
+
+        // The same game, saved at tick n and loaded.
+        let mut app = app(&dir, true);
+        start(&mut app, counter_seats(&data), MatchSpeed::Normal);
+        let mut got = run(&mut app, n);
+        if matches!(phase, Phase::PlayerAndSandbox) {
+            inject(&mut app, true);
+        }
+        let thinks_before = counter(&app).thinks;
+        save_and_load(&mut app, n);
+        assert_eq!(app.world().resource::<SimLink>().in_flight(), in_flight_at_save.as_slice(), "{phase:?}: the commands in flight, in order");
+        assert_eq!(counter(&app).thinks, thinks_before, "{phase:?}: restoring does not make the computer player think");
+        got.extend(run(&mut app, M));
+        assert_eq!(got, want, "{phase:?}: a digest on every tick");
+        let link = app.world().resource::<SimLink>();
+        assert_eq!(link.replay().unwrap(), &want_replay, "{phase:?}: the whole journal");
+        assert_eq!((counter(&app), link.next_seq()), (want_state, want_seq), "{phase:?}: the computer player's state and the command counter");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The control: a save that does not carry the commands in flight (taken before they were sent) gives
+/// another game, so the test above does fail when they are dropped.
+#[test]
+fn dropping_the_commands_in_flight_changes_the_game() {
+    let dir = temp_dir("dropped");
+    let data = armed();
+    let mut reference = app(&dir, true);
+    start(&mut reference, counter_seats(&data), MatchSpeed::Normal);
+    let mut want = run(&mut reference, 20);
+    inject(&mut reference, false);
+    want.extend(run(&mut reference, M));
+    // The orders matter to the game at all: without them it runs differently.
+    let mut plain = app(&dir, true);
+    start(&mut plain, counter_seats(&data), MatchSpeed::Normal);
+    let mut without = run(&mut plain, 20);
+    without.extend(run(&mut plain, M));
+    assert_ne!(want, without, "the orders in flight change the game, or this test proves nothing");
+
+    let mut app = app(&dir, true);
+    start(&mut app, counter_seats(&data), MatchSpeed::Normal);
+    let mut got = run(&mut app, 20);
+    save_and_load(&mut app, 20);
+    // The player's and the sandbox's orders were never sent here: the loaded game has no commands in flight.
+    got.extend(run(&mut app, M));
+    assert_ne!(got, want);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -428,7 +674,8 @@ fn an_unreadable_client_record_loads_the_match_with_defaults_and_says_so() {
         let sim = Sim::from_snapshot(&link.snapshot().unwrap(), Some(data.content.clone())).unwrap();
         let replay = link.replay().unwrap().clone();
         let info = SaveInfo { map: Some(MapId { path: format!("bzn/{}.bzn", replay.map.name), hash: file_hash(format!("authored map {}", replay.map.name).as_bytes()) }), local_seat: Some(PlayerId(0)), ..SaveInfo::default() };
-        let bytes = container::save(&sim, &replay, &info, &[], &ClientState { version: record::VERSION + 7, data: b"from the future".to_vec() }).unwrap();
+        let flight = InFlight { next_seq: link.next_seq(), commands: link.in_flight().to_vec() };
+        let bytes = container::save(&sim, &replay, &info, &[], &flight, &ClientState { version: record::VERSION + 7, data: b"from the future".to_vec() }).unwrap();
         (container::store::write_new(&dir, &bytes).unwrap_or_else(|_| dir.join("x")), bytes)
     };
     let _ = bytes;

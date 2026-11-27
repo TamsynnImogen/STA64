@@ -80,11 +80,10 @@ pub struct Restored {
     pub replay: Replay,
     /// The computer players, restored.
     pub controllers: Vec<Box<dyn Controller>>,
-    /// Commands that were on their way to the next tick when the game was saved.
+    /// Commands that were on their way to the next tick when the game was saved, in submission order.
     pub in_flight: Vec<Command>,
-    /// The events of the saved tick, for controllers that have not seen them yet: delivered once,
-    /// by the restore, after the controllers are in place (the one call a container change adapts).
-    pub resume_events: Vec<SimEvent>,
+    /// The link's next command number at the save (one counter for player and sandbox commands).
+    pub next_seq: u32,
 }
 
 impl SimLink {
@@ -109,15 +108,20 @@ impl SimLink {
         self.controllers.get().as_slice()
     }
 
+    /// The next command number: one counter for the player's and the sandbox's commands (a save stores it).
+    pub fn next_seq(&self) -> u32 {
+        self.seq
+    }
+
     /// Replaces the game this link runs with a saved one (UI-55), as the editor's undo swaps the source:
-    /// the views are made again, the journal continues the saved one, this player's next sequence number
-    /// follows the last it used there (journal and in-flight commands), the in-flight commands are
-    /// handed to a new router and `resume_events` go to the restored controllers once.
+    /// the views are made again, the journal continues the saved one, the command counter is the saved
+    /// one and the in-flight commands go to a new router in their order. The controllers do not think:
+    /// a save is taken after they thought about the last step, and their commands are in flight.
     pub(crate) fn restore(&mut self, r: Restored) {
-        let Restored { sim, replay, controllers, in_flight, resume_events } = r;
+        let Restored { sim, replay, controllers, in_flight, next_seq } = r;
         *self.source.get() = Box::new(sim);
         *self.router.get() = Box::new(sta_sim::command::LocalRouter::new());
-        self.seq = next_seq(&replay, &in_flight, self.player);
+        self.seq = next_seq;
         self.in_flight.clear();
         for c in in_flight {
             self.in_flight.push(c.clone());
@@ -126,16 +130,6 @@ impl SimLink {
         self.controllers = SyncCell::new(controllers);
         self.refresh_views();
         self.log = Some(replay);
-        if !resume_events.is_empty() {
-            let mut cmds = Vec::new();
-            for c in self.controllers.get().iter_mut() {
-                c.think(&self.curr, &resume_events, &mut cmds);
-            }
-            for cmd in cmds {
-                self.in_flight.push(cmd.clone());
-                self.router.get().submit(cmd);
-            }
-        }
     }
 
     pub(crate) fn with_mcp_seat(mut self, player: PlayerId, bounds: (sta_sim::Vec3, sta_sim::Vec3)) -> Self {
@@ -415,13 +409,6 @@ impl SimLink {
         }
         Some(out.events)
     }
-}
-
-/// The sequence number `player`'s next command takes in a game whose journal is `replay` and whose
-/// commands in flight are `in_flight`: one past the last it used (no field of its own, ADR 0010).
-fn next_seq(replay: &Replay, in_flight: &[Command], player: PlayerId) -> u32 {
-    let logged = replay.commands.iter().map(|l| &l.command);
-    logged.chain(in_flight).filter(|c| c.player == player).map(|c| c.seq + 1).max().unwrap_or(0)
 }
 
 /// A copy of `view` in which every player sees every unit. A view without visibility data already
@@ -766,24 +753,36 @@ mod tests {
         assert!(matches!(&queued[0].kind, CommandKind::Edit(sta_sim::command::Edit::Kill(killed)) if *killed == id));
     }
 
-    /// UI-55: each player's next number follows the last one it used, in the journal or in flight.
+    /// UI-55: a restore takes the saved counter and the commands in flight in order, and no controller thinks.
     #[test]
-    fn a_restored_links_next_number_follows_the_last_one_the_player_used() {
-        use sta_sim::replay::Logged;
+    fn a_restore_takes_the_saved_counter_and_in_flight_commands_and_does_not_think() {
+        struct Thinks(Arc<std::sync::atomic::AtomicU32>);
+        impl Controller for Thinks {
+            fn think(&mut self, _: &WorldView, _: &[SimEvent], _: &mut Vec<Command>) {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
         let cmd = |player: u8, seq: u32| Command { player: PlayerId(player), seq, kind: CommandKind::Order(Order::Stop { units: vec![EntityId(1)] }) };
-        let mut replay = Replay::new(&sta_sim::setup::GameSetup {
+        let replay = Replay::new(&sta_sim::setup::GameSetup {
             seed: 1,
             map: Arc::new(sta_content::fake::two_bases()),
             content: Arc::new(sta_content::fake::db()),
             players: Vec::new(),
             options: Default::default(),
         });
-        assert_eq!(next_seq(&replay, &[], PlayerId(0)), 0, "nothing used yet");
-        replay.commands = vec![Logged { tick: 1, command: cmd(0, 0) }, Logged { tick: 2, command: cmd(1, 4) }, Logged { tick: 3, command: cmd(0, 1) }];
-        assert_eq!(next_seq(&replay, &[], PlayerId(0)), 2);
-        assert_eq!(next_seq(&replay, &[], PlayerId(1)), 5);
-        assert_eq!(next_seq(&replay, &[cmd(0, 2)], PlayerId(0)), 3, "a command in flight counts");
-        assert_eq!(next_seq(&replay, &[], PlayerId(2)), 0);
+        let thinks = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let mut link = SimLink::new(Box::new(Sim::new(1)), Box::new(LocalRouter::new()), PlayerId(0));
+        let flight = vec![cmd(0, 5), cmd(255, 6), cmd(0, 7)];
+        link.restore(Restored { sim: Sim::new(1), replay, controllers: vec![Box::new(Thinks(thinks.clone()))], in_flight: flight.clone(), next_seq: 8 });
+        assert_eq!(thinks.load(std::sync::atomic::Ordering::SeqCst), 0, "no think on restore");
+        assert_eq!((link.next_seq(), link.in_flight()), (8, flight.as_slice()));
+        link.submit(CommandKind::Order(Order::Stop { units: vec![EntityId(1)] }));
+        assert_eq!(link.next_seq(), 9);
+        assert_eq!(link.in_flight().len(), 4);
+        link.tick().unwrap();
+        assert!(link.in_flight().is_empty(), "a tick takes them");
+        assert_eq!(link.replay().unwrap().commands.len(), 4, "the journal logged them when they were stepped");
+        assert_eq!(thinks.load(std::sync::atomic::Ordering::SeqCst), 1, "the controller thinks after the step");
     }
 
     #[derive(Resource, Default)]
