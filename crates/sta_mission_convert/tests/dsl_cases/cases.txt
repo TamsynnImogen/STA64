@@ -1,6 +1,88 @@
 # Invented cases for the call handling and the emission of tools/dsl_to_lua.py (LUA-15h).
 # Format: see gen_cases.py. No game data: every listing, image and engine name is made up.
 
+# Hand-made trees given to the renderer: what it raises for a malformed one is the Python's
+# exception class and text (the Armada I converter writes them into its output).
+case malformed_trees
+std
+stdexports
+run lv ('gvar', 'x')
+run lv ('gvar', None)
+run lv ('gvar', 0x10002470)
+run lv ('param', None)
+run lv ('param', 'a')
+run lv ('vfield', 'v', 1.5)
+run lv ('vfield', 'v', None)
+run lv ('zzz', 1)
+run lv (5, 1)
+run expr num ('glob', 1.5)
+run expr num ('glob', 'x')
+run expr num ('glob', None)
+run expr num ('glob', 4096)
+run expr num ('glob', True)
+run expr arg ('vop', 5, ('loc', -4), [])
+run expr arg ('vop', 'ctor', ('gvar', 'x'), [])
+run expr arg ('vop', 'ctor', ('gvar', 0x10002470), [('const', 1)])
+run expr arg ('vop', 'ctor', ('loc', -4), [])
+run expr num ('vfield', 'v', None)
+run expr num ('vfield', 'v', 1.5)
+run expr num ('param', None)
+run expr num ('param', 'a')
+run expr num ('param', ('a',))
+run expr arg ('tmp',)
+run expr arg ('boolarg', ())
+run expr num ('loc', True)
+run expr num ('field', ('tmp', 1), None)
+run expr num ('field', ('tmp', 1), 2)
+run expr bool ('const', 0)
+run expr num ('const', 1.5)
+run expr num ('float', 2.0)
+run expr bool ('float', 2.0)
+run expr num ('cmp', '<', ('loc', 4), ('const', 1))
+run expr bool ('and', [('const', 1), ('not', ('loc', 4))])
+run expr bool ('and', 5)
+run expr num ('arith', '^', ('const', 1), ('const', 2))
+run expr num ('arith', '>>>', ('loc', 4), ('const', 2))
+run expr num ('sbb', ('xx',))
+run expr num ('sbb', None)
+run expr arg ('code', 0x10009999)
+run expr arg ('addr', ('loc', 4))
+run expr arg ('zzz',)
+run expr arg (5,)
+run expr arg 5
+run expr arg ()
+run stmt ('goto', 1.5)
+run stmt ('goto', None)
+run stmt ('goto', 0x10001000)
+run stmt ('if', ('const', 1), 'x')
+run stmt ('switch', ('const', 0), [0x10001000, 1.5])
+run stmt ('switch', ('const', 0), 5)
+run stmt ('switch', ('const', 0), [])
+run stmt ('foo',)
+run stmt ()
+run stmt None
+run stmt ('comment', 5)
+run stmt ('return', None)
+run stmt ('multiset', [(('loc', 4), ('const', 1)), (('loc', 8), ('const', 2))])
+run stmt ('multiset', [(('loc', 4),)])
+run stmt ('multiset', [5])
+run stmt ('multiset', [(('loc', 4), ('const', 1), 3)])
+run stmt ('var', 'p', 'set', [('const', 1)])
+run stmt ('var', 5, 'set', [])
+run stmt ('bindvar', 'a', 'b', ('const', 1))
+run stmt ('addstep', ('tmp', 1), 0x10001000)
+run func [(0x10001000, [('goto', [1])])]
+run func [(0x10001000, [('goto', 0x10001000)])]
+run func [(0x10001000, [('goto', (1, [2]))])]
+run func [(0x10001000, [('switch', ('const', 0), [[1]])])]
+run func [(0x10001000, [('if', ('truth', ('loc', 4)), 0x10001000), ('return', None)])]
+run func [(0x10001000, [('set', ('tmp', 1), ('call', 'X', [])), ('eval', ('tmp', 1))])]
+run func [(0x10001000, [('set', ('tmp', 1), ('call', 'X', [])), ('eval', ('call', 'Y', [('tmp', 1)]))])]
+run func [(0x10001000, [('set', ('tmp', 1), ('call', 'X', [])), ('eval', ('call', 'Y', [('call', 'Z', []), ('tmp', 1)]))])]
+run func [(0x10001000, [('set', ('tmp', 1), ('newscript', ('str', 'n'))), ('eval', ('tmp', 1))])]
+run func [(0x10001000, [5])]
+end
+
 case si_calls
 std
 stdexports
@@ -606,4 +688,435 @@ run lift 0x10001400
 run lift 0x10001600
 run lift 0x10001700
 run statics
+end
+
+# A negative vtable slot indexes the name list from the end, as Python does.
+case neg_slot_si
+std
+stdexports
+export ?ScriptInit@@YAXXZ 0x10001000
+engine ScriptInterfaceImp ?DoVoid@ScriptInterfaceImp@@UAEXHM@Z ?Last@ScriptInterfaceImp@@UAEXXZ
+code 0x10001000
+  !p
+  mov    eax,DWORD PTR ds:0x10002800
+  mov    edx,DWORD PTR [eax]
+  mov    ecx,DWORD PTR ds:0x10002800
+  call   DWORD PTR [edx-0x4]
+  !e
+run lift 0x10001000
+run convert
+end
+
+case neg_slot_var_no_names
+std
+stdexports
+export ?ScriptInit@@YAXXZ 0x10001000
+code 0x10001000
+  !p
+  mov    eax,DWORD PTR ds:0x10002808
+  mov    edx,DWORD PTR [eax]
+  mov    ecx,DWORD PTR ds:0x10002808
+  call   DWORD PTR [edx-0x4]
+  !e
+run lift 0x10001000
+end
+
+case neg_slot_si_no_names
+std
+stdexports
+export ?ScriptInit@@YAXXZ 0x10001000
+code 0x10001000
+  !p
+  mov    eax,DWORD PTR ds:0x10002800
+  mov    edx,DWORD PTR [eax]
+  mov    ecx,DWORD PTR ds:0x10002800
+  call   DWORD PTR [edx-0x4]
+  !e
+run lift 0x10001000
+end
+
+case neg_slot_var_names
+std
+stdexports
+export ?ScriptInit@@YAXXZ 0x10001000
+engine hot_int ?a@hot_int@@UAEXXZ ?b@hot_int@@UAEXXZ
+code 0x10001000
+  !p
+  mov    eax,DWORD PTR ds:0x10002808
+  mov    edx,DWORD PTR [eax]
+  mov    ecx,DWORD PTR ds:0x10002808
+  call   DWORD PTR [edx-0x4]
+  !e
+run lift 0x10001000
+end
+
+case si_misc_signatures
+std
+stdexports
+export ?ScriptInit@@YAXXZ 0x10001000
+export ?A2@@YAXXZ 0x10001100
+export ?A3@@YAXXZ 0x10001200
+engine ScriptInterfaceImp ?Odd@ScriptInterfaceImp@@XX ?ScriptGet_n@ScriptInterfaceImp@@UAEHXZ ?RemoveFromSave@ScriptInterfaceImp@@UAEXXZ ?AddToSave@ScriptInterfaceImp@@UAEXXZ ?GetPos@ScriptInterfaceImp@@UAE?AVVector3@@PAD@Z ?RemoveFromLoad@ScriptInterfaceImp@@UAEXXZ
+cstr 0x10002000 s
+code 0x10001000
+  !p
+  mov    eax,DWORD PTR ds:0x10002800
+  mov    edx,DWORD PTR [eax]
+  mov    ecx,DWORD PTR ds:0x10002800
+  call   DWORD PTR [edx]
+  !e
+code 0x10001100
+  !p
+  mov    eax,DWORD PTR ds:0x10002800
+  mov    edx,DWORD PTR [eax]
+  mov    ecx,DWORD PTR ds:0x10002800
+  call   DWORD PTR [edx+0x4]
+  mov    DWORD PTR ds:0x10002810,eax
+  mov    eax,DWORD PTR ds:0x10002800
+  mov    edx,DWORD PTR [eax]
+  mov    ecx,DWORD PTR ds:0x10002800
+  call   DWORD PTR [edx+0x8]
+  mov    eax,DWORD PTR ds:0x10002800
+  mov    edx,DWORD PTR [eax]
+  mov    ecx,DWORD PTR ds:0x10002800
+  call   DWORD PTR [edx+0xc]
+  mov    eax,DWORD PTR ds:0x10002800
+  mov    edx,DWORD PTR [eax]
+  mov    ecx,DWORD PTR ds:0x10002800
+  call   DWORD PTR [edx+0x14]
+  !e
+code 0x10001200
+  !p
+  push   0x10002000
+  push   0x10002810
+  mov    ecx,DWORD PTR ds:0x10002800
+  mov    edx,DWORD PTR [ecx]
+  mov    ecx,DWORD PTR ds:0x10002800
+  call   DWORD PTR [edx+0x10]
+  !e
+run lift 0x10001000
+run lift 0x10001100
+run lift 0x10001200
+run convert
+end
+
+case helpers_and_statics
+std
+stdexports
+export ?ScriptInit@@YAXXZ 0x10001300
+export ?B1@@YAXXZ 0x10001400
+export ?B2@@YAXXZ 0x10001500
+export ?B3@@YAXXZ 0x10001600
+export ?B4@@YAXXZ 0x10001700
+export ?B5@@YAXXZ 0x10001800
+export ?B6@@YAXXZ 0x10001900
+export ?B7@@YAXXZ 0x10001a00
+export ?B8@@YAXXZ 0x10001b00
+cstr 0x10002010 val %d
+cstr 0x10002020 other
+put 0x10002200 01 00
+dwords 0x10002450 7
+dwords 0x10002454 9
+code 0x10001000
+  push   ebp
+  mov    ebp,esp
+  mov    eax,DWORD PTR [ebp+0x8]
+  mov    DWORD PTR [ecx],eax
+  mov    edx,DWORD PTR [ebp+0xc]
+  mov    DWORD PTR [ecx+0x4],edx
+  mov    eax,DWORD PTR [ebp+0x10]
+  mov    DWORD PTR [ecx+0x8],eax
+  mov    eax,ecx
+  pop    ebp
+  ret    0xc
+code 0x10001040
+  push   ebp
+  mov    ebp,esp
+  mov    DWORD PTR [eax+0xc],0x42
+  mov    DWORD PTR [ecx+0x4],0x7fffffff
+  ret
+code 0x10001060
+  mov    edx,DWORD PTR [esp+0x4]
+  mov    ecx,DWORD PTR [esp+0x8]
+  cmp    al,BYTE PTR [ecx]
+  ret
+code 0x100010c0
+  push   ebp
+  mov    ebp,esp
+  fnstcw WORD PTR [ebp-0x2]
+  fistp  QWORD PTR [ebp-0x10]
+  fldcw  WORD PTR [ebp-0x2]
+  pop    ebp
+  ret
+code 0x10001200
+  push   ebp
+  mov    ebp,esp
+  pop    ebp
+  ret
+code 0x10001300
+  !p
+  push   0x7
+  push   0x10002010
+  push   0x10002440
+  call   0x10001040
+  add    esp,0xc
+  push   0x10002200
+  push   0x10002440
+  call   0x10001060
+  add    esp,0x8
+  mov    DWORD PTR ds:0x10002810,eax
+  !e
+code 0x10001400
+  !p
+  push   0x10002460
+  push   0x10002020
+  call   0x10001060
+  add    esp,0x8
+  mov    DWORD PTR ds:0x10002810,eax
+  !e
+code 0x10001500
+  !p
+  fld    DWORD PTR ds:0x10002814
+  call   0x100010c0
+  mov    DWORD PTR ds:0x10002810,eax
+  !e
+code 0x10001600
+  !p
+  push   0x40400000
+  push   0x40000000
+  push   0x3f800000
+  mov    ecx,0x10002810
+  call   0x10001000
+  !e
+code 0x10001700
+  !p
+  push   0x40400000
+  push   0x40000000
+  push   0x3f800000
+  mov    ecx,0x10002838
+  call   0x10001000
+  !e
+code 0x10001800
+  !p
+  push   0x1
+  call   0x10001200
+  add    esp,0x10
+  !e
+code 0x10001900
+  !p
+  push   0x7
+  push   0x10002010
+  push   0x10002440
+  call   0x10001040
+  nop
+  !e
+code 0x10001a00
+  !p
+  push   0x10002020
+  call   0x10001060
+  add    esp,0x10
+  !e
+code 0x10001b00
+  !p
+  mov    eax,DWORD PTR ds:0x10002450
+  mov    DWORD PTR ds:0x10002454,eax
+  mov    ecx,DWORD PTR ds:0x10002454
+  mov    DWORD PTR ds:0x10002810,ecx
+  push   0x10002460
+  !e
+run lift 0x10001300
+run lift 0x10001400
+run lift 0x10001500
+run lift 0x10001600
+run lift 0x10001700
+run lift 0x10001800
+run lift 0x10001900
+run lift 0x10001a00
+run lift 0x10001b00
+run convert
+end
+
+case static_vector
+std
+stdexports
+export ?ScriptInit@@YAXXZ 0x10001c00
+export ?V2@@YAXXZ 0x10001d00
+code 0x10001000
+  push   ebp
+  mov    ebp,esp
+  sub    esp,0x44
+  push   ebx
+  push   esi
+  push   edi
+  push   ecx
+  mov    DWORD PTR [ebp-0x4],ecx
+  mov    eax,DWORD PTR [ebp-0x4]
+  mov    eax,DWORD PTR [eax+0x4]
+  pop    edi
+  pop    esi
+  pop    ebx
+  mov    esp,ebp
+  pop    ebp
+  ret
+code 0x10001100
+  push   ebp
+  mov    ebp,esp
+  sub    esp,0x44
+  push   ebx
+  push   esi
+  push   edi
+  push   ecx
+  mov    DWORD PTR [ebp-0x4],ecx
+  mov    eax,DWORD PTR [ebp-0x4]
+  mov    eax,DWORD PTR [eax+0x8]
+  pop    edi
+  pop    esi
+  pop    ebx
+  mov    esp,ebp
+  pop    ebp
+  ret
+code 0x10001300
+  push   ebp
+  mov    ebp,esp
+  push   ecx
+  mov    DWORD PTR [ebp-0x4],ecx
+  mov    ecx,DWORD PTR [ebp-0x4]
+  call   0x10001000
+  mov    ecx,DWORD PTR [ebp+0x8]
+  lea    eax,[eax+ecx*4]
+  pop    edi
+  ret    0x4
+code 0x10001400
+  push   ebp
+  mov    ebp,esp
+  push   ecx
+  mov    DWORD PTR [ebp-0x4],ecx
+  mov    eax,DWORD PTR [ebp+0x8]
+  mov    cl,BYTE PTR [eax]
+  mov    edx,DWORD PTR [ebp-0x4]
+  mov    BYTE PTR [edx],cl
+  mov    eax,DWORD PTR [ebp-0x4]
+  mov    DWORD PTR [eax+0x4],0x0
+  mov    ecx,DWORD PTR [ebp-0x4]
+  mov    DWORD PTR [ecx+0x8],0x0
+  mov    edx,DWORD PTR [ebp-0x4]
+  mov    DWORD PTR [edx+0xc],0x0
+  mov    eax,DWORD PTR [ebp-0x4]
+  pop    edi
+  ret    0x4
+code 0x10001500
+  push   ebp
+  mov    ebp,esp
+  push   ecx
+  mov    DWORD PTR [ebp-0x4],ecx
+  mov    eax,DWORD PTR [ebp+0x8]
+  push   eax
+  mov    ecx,DWORD PTR [ebp-0x4]
+  call   0x10001100
+  push   eax
+  mov    ecx,DWORD PTR [ebp-0x4]
+  call   0x10001a00
+  pop    edi
+  ret    0x4
+code 0x10001700
+  push   ebp
+  mov    ebp,esp
+  push   ecx
+  mov    DWORD PTR [ebp-0x4],ecx
+  mov    eax,DWORD PTR [ebp+0x8]
+  push   eax
+  mov    ecx,DWORD PTR [ebp-0x4]
+  call   0x10001100
+  push   eax
+  mov    ecx,DWORD PTR [ebp+0x8]
+  add    ecx,0x4
+  push   ecx
+  call   0x10001a00
+  add    esp,0xc
+  mov    edx,DWORD PTR [ebp-0x4]
+  mov    eax,DWORD PTR [edx+0x8]
+  push   eax
+  mov    ecx,DWORD PTR [ebp-0x4]
+  mov    edx,DWORD PTR [ecx+0x8]
+  sub    edx,0x4
+  push   edx
+  mov    ecx,DWORD PTR [ebp-0x4]
+  call   0x10001a00
+  mov    eax,DWORD PTR [ebp-0x4]
+  mov    ecx,DWORD PTR [eax+0x8]
+  sub    ecx,0x4
+  mov    edx,DWORD PTR [ebp-0x4]
+  mov    DWORD PTR [edx+0x8],ecx
+  mov    eax,DWORD PTR [ebp+0x8]
+  pop    edi
+  ret    0x4
+code 0x10001800
+  push   ebp
+  mov    ebp,esp
+  push   ecx
+  mov    DWORD PTR [ebp-0x4],ecx
+  mov    eax,DWORD PTR [ebp-0x4]
+  mov    ecx,DWORD PTR [eax+0x8]
+  push   ecx
+  mov    edx,DWORD PTR [ebp-0x4]
+  mov    eax,DWORD PTR [edx+0x4]
+  push   eax
+  mov    ecx,DWORD PTR [ebp-0x4]
+  call   0x10001a00
+  mov    ecx,DWORD PTR [ebp-0x4]
+  mov    edx,DWORD PTR [ebp-0x4]
+  mov    eax,DWORD PTR [ecx+0xc]
+  sub    eax,DWORD PTR [edx+0x4]
+  sar    eax,0x2
+  push   eax
+  mov    ecx,DWORD PTR [ebp-0x4]
+  mov    edx,DWORD PTR [ecx+0x4]
+  push   edx
+  mov    ecx,DWORD PTR [ebp-0x4]
+  call   0x10001a00
+  mov    eax,DWORD PTR [ebp-0x4]
+  mov    DWORD PTR [eax+0x4],0x0
+  mov    ecx,DWORD PTR [ebp-0x4]
+  mov    DWORD PTR [ecx+0x8],0x0
+  mov    edx,DWORD PTR [ebp-0x4]
+  mov    DWORD PTR [edx+0xc],0x0
+  pop    edi
+  ret
+code 0x10001a00
+  ret
+code 0x10001c00
+  !p
+  push   0x0
+  mov    ecx,0x10002470
+  call   0x10001400
+  mov    DWORD PTR [ebp-0x14],0x5
+  lea    eax,[ebp-0x14]
+  push   eax
+  mov    ecx,0x10002470
+  call   0x10001500
+  push   0x2
+  mov    ecx,0x10002470
+  call   0x10001300
+  mov    eax,DWORD PTR [eax]
+  mov    DWORD PTR ds:0x10002810,eax
+  mov    ecx,0x10002470
+  call   0x10001100
+  push   eax
+  mov    ecx,0x10002470
+  call   0x10001700
+  mov    ecx,0x10002470
+  call   0x10001800
+  !e
+code 0x10001d00
+  !p
+  push   0x0
+  lea    ecx,[ebp-0x10]
+  call   0x10001400
+  push   0x5
+  lea    ecx,[ebp-0x10]
+  call   0x10001500
+  !e
+run lift 0x10001c00
+run lift 0x10001d00
+run convert
 end

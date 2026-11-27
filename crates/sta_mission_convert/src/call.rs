@@ -108,6 +108,12 @@ fn name_at(names: &[String], slot: i64) -> Result<&str> {
     Ok(names[j as usize].as_str())
 }
 
+/// `names[slot] if slot < len(names) else None` (`Dsl.si`, `Dsl.var_slot`): Python list indexing,
+/// so a negative slot counts from the end and one below the start is an `IndexError`.
+fn name_or_none(names: &[String], slot: i64) -> Result<Option<&str>> {
+    if slot < names.len() as i64 { name_at(names, slot).map(Some) } else { Ok(None) }
+}
+
 /// `re.fullmatch(r"PAV(\w+)@@", ret or "")`: the class name.
 fn pav_class(ret: Option<&str>) -> Option<&str> {
     let inner = ret?.strip_prefix("PAV")?.strip_suffix("@@")?;
@@ -248,7 +254,7 @@ pub fn call(lf: &mut Lifter<'_, '_>, st: &mut State, stmts: &mut Vec<Py>, a: i64
 /// The `obj[0] == "si"` branch of `Lifter.call`: a `ScriptInterface` method.
 fn si_call(lf: &mut Lifter<'_, '_>, st: &mut State, stmts: &mut Vec<Py>, a: i64, slot: i64) -> Result<Flow> {
     let d = lf.d;
-    let Some(name) = d.si(slot) else {
+    let Some(name) = name_or_none(d.engine.get("ScriptInterfaceImp").map_or(&[], |v| v.as_slice()), slot)? else {
         return dec(format!("ScriptInterface slot {slot} unknown at {}", py_hex(a)));
     };
     let plain = plain_name(name);
@@ -333,7 +339,10 @@ fn var_call(lf: &mut Lifter<'_, '_>, st: &mut State, stmts: &mut Vec<Py>, a: i64
     let d = lf.d;
     let name = obj.item(1)?.clone();
     let kind = obj.item(2)?.clone();
-    let (op, _) = d.var_slot(&kind.to_str(), slot);
+    // `Dsl.var_slot`: the operation by slot, and the name lookup (which can raise)
+    let names: &[String] = d.engine.get(&kind.to_str()).map_or(&[], |v| v.as_slice());
+    let op = crate::dsl::var_op(slot);
+    name_or_none(names, slot)?;
     let Some(op) = op else {
         return dec(format!("{} slot {slot} at {}", kind.to_str(), py_hex(a)));
     };
