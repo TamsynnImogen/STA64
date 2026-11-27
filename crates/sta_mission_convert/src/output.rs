@@ -12,8 +12,10 @@
 //!   that changed since), unless `--keep-foreign` says to go on and leave them alone; a file it
 //!   would have to overwrite that is foreign is a failed mission, never overwritten; a `.lua` file
 //!   whose first line is the Python tool's header (`-- <mission>: converted by tools/<x>_to_lua.py
-//!   (LUA-nn) from ...`) counts as this tool's (an earlier conversion by the Python wrapper) and a
-//!   full run replaces it;
+//!   (LUA-nn) from ...`) is an earlier conversion by the Python wrapper: no hash says whether the
+//!   player edited it, so it is **not deleted** but renamed in place to `<name>.old` (`.old2`, ...;
+//!   a name that is never a mission script and never overwrites anything), by a full run, or by a
+//!   write that would replace it;
 //! - it refuses a symbolic link as the output folder, as `missions/`, as the manifest or as a file
 //!   it would replace or delete (such a file is not ours);
 //! - every write goes through [`OutDir::write`], which re-checks the folder right before it,
@@ -100,6 +102,8 @@ pub struct OutDir {
     /// `(hash, name)` of the files the tool wrote: `name` is a file in `missions/`.
     manifest: Vec<(String, String)>,
     keep_foreign: bool,
+    /// Files of the Python tool moved aside in this run, `(old name, new name)`.
+    moved: Vec<(String, String)>,
 }
 
 impl OutDir {
@@ -120,7 +124,7 @@ impl OutDir {
         {
             return Err(format!("output folder {shown} is a symbolic link: the tool does not write through links"));
         }
-        let mut me = OutDir { root, manifest: Vec::new(), keep_foreign };
+        let mut me = OutDir { root, manifest: Vec::new(), keep_foreign, moved: Vec::new() };
         match fs::symlink_metadata(&me.root) {
             Ok(m) if !m.is_dir() => return Err(format!("output folder {shown} exists and is not a folder")),
             Ok(_) => {}
@@ -179,8 +183,7 @@ impl OutDir {
         Ok(())
     }
 
-    /// Whether the regular file `name` in `missions/` is this tool's: content the manifest lists
-    /// for it, or a first line that is the Python tool's header.
+    /// Whether the regular file `name` in `missions/` has content the manifest lists for it.
     fn is_ours(&self, name: &str, path: &Path) -> bool {
         let Ok(m) = fs::symlink_metadata(path) else { return false };
         if !m.is_file() {
@@ -188,7 +191,47 @@ impl OutDir {
         }
         let Ok(bytes) = fs::read(path) else { return false };
         let h = sha_hex(&bytes);
-        self.manifest.iter().any(|(mh, mn)| *mh == h && mn == name) || python_header(&bytes)
+        self.manifest.iter().any(|(mh, mn)| *mh == h && mn == name)
+    }
+
+    /// Whether `path` is a regular file whose first line is the Python tool's header: an earlier
+    /// conversion by it (maybe edited since: there is no hash to tell), moved aside, never deleted.
+    fn is_python_output(&self, path: &Path) -> bool {
+        let Ok(m) = fs::symlink_metadata(path) else { return false };
+        if !m.is_file() {
+            return false;
+        }
+        fs::read(path).is_ok_and(|b| python_header(&b))
+    }
+
+    /// Renames `missions/<name>` to a name the tool never writes and the game never lists
+    /// (`<name>.old`, `<name>.old2`, ...): nothing is overwritten.
+    fn move_aside(&mut self, name: &str) -> Result<(), String> {
+        let mdir = self.missions();
+        for k in 1.. {
+            let new = if k == 1 { format!("{name}.old") } else { format!("{name}.old{k}") };
+            let dest = mdir.join(&new);
+            if fs::symlink_metadata(&dest).is_ok() {
+                continue;
+            }
+            // reserve the name exclusively, then rename over our own empty reservation
+            if fs::OpenOptions::new().write(true).create_new(true).open(&dest).is_err() {
+                continue;
+            }
+            self.check()?;
+            if let Err(e) = fs::rename(mdir.join(name), &dest) {
+                let _ = fs::remove_file(&dest);
+                return Err(format!("{}: {e}", mdir.join(name).display()));
+            }
+            self.moved.push((name.to_owned(), new));
+            return Ok(());
+        }
+        unreachable!("an unused name exists")
+    }
+
+    /// The files moved aside since the last call: `(old name, new name)`.
+    pub fn take_moved(&mut self) -> Vec<(String, String)> {
+        std::mem::take(&mut self.moved)
     }
 
     /// How many of the files in `missions/` are this tool's (what a summary may count).
@@ -208,7 +251,7 @@ impl OutDir {
         let rd = fs::read_dir(self.missions()).map_err(|e| format!("{}: {e}", self.missions().display()))?;
         for e in rd.flatten() {
             let n = e.file_name().to_string_lossy().into_owned();
-            if n.to_lowercase().ends_with(".lua") && !self.is_ours(&n, &e.path()) {
+            if n.to_lowercase().ends_with(".lua") && !self.is_ours(&n, &e.path()) && !self.is_python_output(&e.path()) {
                 out.push(n);
             }
         }
@@ -278,7 +321,8 @@ impl OutDir {
                     }
                 }
             }
-            // the manifest's files, and the `.lua` files of the Python tool's earlier conversion
+            // the manifest's files go; the `.lua` files of the Python tool's earlier conversion, which
+            // may have been edited since, are moved aside
             let mut names: BTreeSet<String> = self.manifest.iter().map(|(_, n)| n.clone()).collect();
             if let Ok(rd) = fs::read_dir(&mdir) {
                 names.extend(
@@ -290,6 +334,8 @@ impl OutDir {
                 if self.is_ours(&n, &p) {
                     self.check()?;
                     fs::remove_file(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+                } else if n.to_lowercase().ends_with(".lua") && self.is_python_output(&p) {
+                    self.move_aside(&n)?;
                 }
             }
         }
@@ -318,6 +364,7 @@ impl OutDir {
         match fs::symlink_metadata(&target) {
             Err(_) => {}
             Ok(_) if self.is_ours(name, &target) => {}
+            Ok(_) if self.is_python_output(&target) => self.move_aside(name)?,
             Ok(_) => {
                 return Err(WriteError::Collision(format!(
                     "{} exists and this tool did not write it (or it changed since): refusing to overwrite it",

@@ -24,7 +24,8 @@
 //!   deletes every `*.lua` in `<out>/missions`); an output folder that holds `.lua` files the tool
 //!   did not write is refused (`--keep-foreign` goes on and leaves them alone; a mission whose file
 //!   would collide with one is a `FAIL` line, the run goes on and the exit code says so; a `.lua`
-//!   file with the Python tool's header line counts as the tool's own and a full run replaces it); symbolic links at
+//!   file with the Python tool's header line is renamed to `<name>.old`, never deleted, one output
+//!   line per file and a count in the summary); symbolic links at
 //!   the folder, at `missions/` or at a file to replace are refused; every file is written to a
 //!   temporary name and renamed into place.
 //! - `--include-unmapped` (Armada I) is the option of `a1_to_lua.py`, offered because the wrapper
@@ -226,8 +227,8 @@ options:\n\
   --cache-dir DIR      the same, in DIR\n\n\
 A full run (no --only) deletes only the files this tool wrote before (its manifest lists them), not\n\
 every .lua file in the folder as the Python tool does; a .lua file whose first line is the Python\n\
-tool's header (an earlier conversion by it) counts as written by this tool and is replaced. The\n\
-output folder may not be, contain or lie inside a game folder, and symbolic links in it are refused.";
+tool's header (an earlier conversion by it, maybe edited since) is renamed to <name>.old, never\n\
+deleted, and listed in the output. The output folder may not be, contain or lie inside a game folder, and symbolic links in it are refused.";
 
 const OPTIONS: [&str; 8] =
     ["--help", "--install", "--out", "--only", "--include-unmapped", "--keep-foreign", "--cache", "--cache-dir"];
@@ -448,6 +449,7 @@ pub fn run<S: AsRef<OsStr>>(args: &[S], env: &Env, io: &mut Io<'_>, listing: &mu
         // a full re-run replaces the previous conversion: what this tool wrote before goes
         return die(io, &m);
     }
+    let mut moved_total = report_moved(io, &mut outdir);
     let (code, completed) = if a1 {
         child_a1(&install, &a, &mut outdir, cache.as_ref(), io, listing)
     } else {
@@ -470,9 +472,22 @@ pub fn run<S: AsRef<OsStr>>(args: &[S], env: &Env, io: &mut Io<'_>, listing: &mu
     if code != 0 {
         say(io, &format!("warning: some missions failed to convert (see FAIL lines above); the {n} others are usable"));
     }
+    moved_total += report_moved(io, &mut outdir);
+    if moved_total > 0 {
+        say(io, &format!("{moved_total} file(s) of the Python tool moved aside (renamed to <name>.old, not deleted)"));
+    }
     say(io, &format!("{n} mission scripts in {}", given_out.display()));
     say(io, "Start the game as usual; those missions are listed as experimental.");
     0
+}
+
+/// One line per file moved aside since the last call; how many.
+fn report_moved(io: &mut Io<'_>, out: &mut OutDir) -> usize {
+    let moved = out.take_moved();
+    for (old, new) in &moved {
+        say(io, &format!("moved aside (written by the Python tool, maybe edited): missions/{old} -> missions/{new}"));
+    }
+    moved.len()
 }
 
 fn read_or_none(p: &Path) -> Option<Vec<u8>> {

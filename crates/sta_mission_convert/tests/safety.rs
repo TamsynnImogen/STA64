@@ -541,10 +541,11 @@ fn a_dll_the_decoder_refuses_is_a_failed_mission_and_the_run_goes_on() {
 const PY_HEADER: &str = "-- m1: converted by tools/dsl_to_lua.py (LUA-11) from m1S.dsl and m1R.drl.\nbody\n";
 
 #[test]
-fn a_python_tools_earlier_conversion_is_replaced_by_a_full_run_and_nothing_else_is() {
+fn a_python_tools_earlier_conversion_is_moved_aside_never_deleted_and_nothing_else_is() {
     let t = TempDir::new("safe-python-output");
     let (_, out) = ours_dir(&t);
-    touch(&out.join("missions/old1.lua"), PY_HEADER.as_bytes());
+    let edited = format!("{PY_HEADER}the player added this line\n");
+    touch(&out.join("missions/old1.lua"), edited.as_bytes());
     touch(&out.join("missions/old2.lua"), "-- m2: converted by tools/a1_to_lua.py (LUA-14) from x.dsl.\nx\n".as_bytes());
     // not the header: the player's
     touch(&out.join("missions/mine.lua"), b"-- converted by tools/dsl_to_lua.py\n");
@@ -552,25 +553,52 @@ fn a_python_tools_earlier_conversion_is_replaced_by_a_full_run_and_nothing_else_
     assert!(OutDir::inspect(&out, out.clone(), false).unwrap_err().contains("did not write"));
     let mut o = OutDir::inspect(&out, out.clone(), true).unwrap();
     o.wipe().unwrap();
-    assert!(!out.join("missions/old1.lua").exists() && !out.join("missions/old2.lua").exists());
-    assert!(out.join("missions/mine.lua").exists() && out.join("missions/notes.txt").exists());
-    // a folder with only such files is no obstacle at all
-    fs::remove_file(out.join("missions/mine.lua")).unwrap();
-    touch(&out.join("missions/old3.lua"), PY_HEADER.as_bytes());
-    let mut o = OutDir::inspect(&out, out.clone(), false).unwrap();
-    // and a name that holds one may be written over
-    o.write("old3.lua", b"new").unwrap();
-    assert_eq!(fs::read(out.join("missions/old3.lua")).unwrap(), b"new");
-    // only regular files: a link with the header is not replaced
+    // the Python tool's files are renamed, content intact; nothing was deleted
+    let m = out.join("missions");
+    assert!(!m.join("old1.lua").exists() && !m.join("old2.lua").exists());
+    assert_eq!(fs::read(m.join("old1.lua.old")).unwrap(), edited.as_bytes());
+    assert!(fs::read(m.join("old2.lua.old")).unwrap().starts_with(b"-- m2: converted by tools/a1_to_lua.py"));
+    let mut moved = o.take_moved();
+    moved.sort();
+    assert_eq!(moved, [("old1.lua".to_owned(), "old1.lua.old".to_owned()), ("old2.lua".to_owned(), "old2.lua.old".to_owned())]);
+    assert!(m.join("mine.lua").exists() && m.join("notes.txt").exists());
+    // a second full run moves and loses nothing further
+    let before: Vec<_> = {
+        let mut v: Vec<_> = fs::read_dir(&m).unwrap().flatten().map(|e| (e.file_name(), fs::read(e.path()).unwrap())).collect();
+        v.sort();
+        v
+    };
+    let mut o = OutDir::inspect(&out, out.clone(), true).unwrap();
+    o.wipe().unwrap();
+    assert!(o.take_moved().is_empty());
+    let after: Vec<_> = {
+        let mut v: Vec<_> = fs::read_dir(&m).unwrap().flatten().map(|e| (e.file_name(), fs::read(e.path()).unwrap())).collect();
+        v.sort();
+        v
+    };
+    assert_eq!(before, after);
+    // a new file of the Python tool with a name that is taken: the next name, nothing overwritten
+    touch(&m.join("old1.lua"), PY_HEADER.as_bytes());
+    o.wipe().unwrap();
+    assert_eq!(fs::read(m.join("old1.lua.old")).unwrap(), edited.as_bytes());
+    assert_eq!(fs::read(m.join("old1.lua.old2")).unwrap(), PY_HEADER.as_bytes());
+    // a write that would replace one moves it aside first
+    let mut o = OutDir::inspect(&out, out.clone(), false).map_or_else(|_| OutDir::inspect(&out, out.clone(), true).unwrap(), |o| o);
+    touch(&m.join("m9.lua"), PY_HEADER.as_bytes());
+    o.write("m9.lua", b"new").unwrap();
+    assert_eq!(fs::read(m.join("m9.lua")).unwrap(), b"new");
+    assert_eq!(fs::read(m.join("m9.lua.old")).unwrap(), PY_HEADER.as_bytes());
+    assert_eq!(o.take_moved(), [("m9.lua".to_owned(), "m9.lua.old".to_owned())]);
+    // only regular files: a link with the header is not moved and not followed
     #[cfg(unix)]
     {
         touch(&out.join("target.txt"), PY_HEADER.as_bytes());
-        std::os::unix::fs::symlink(out.join("target.txt"), out.join("missions/link.lua")).unwrap();
-        assert!(OutDir::inspect(&out, out.clone(), false).unwrap_err().contains("did not write"));
+        std::os::unix::fs::symlink(out.join("target.txt"), m.join("link.lua")).unwrap();
         let mut o = OutDir::inspect(&out, out.clone(), true).unwrap();
         o.wipe().unwrap();
         assert!(out.join("target.txt").exists());
-        assert!(fs::symlink_metadata(out.join("missions/link.lua")).is_ok());
+        assert!(fs::symlink_metadata(m.join("link.lua")).is_ok());
+        assert!(!m.join("link.lua.old").exists());
     }
 }
 
@@ -630,4 +658,33 @@ fn only_the_markers_of_an_install_make_a_folder_a_game_folder() {
     // a folder named like the executable is not one
     fs::create_dir_all(w.join("G4/Armada.exe")).unwrap();
     assert_eq!(game_root_above(&w.join("G4/x")), None);
+}
+
+/// Through the command line: the Python tool's file is listed as moved aside and counted in the
+/// summary, and a second full run says nothing more about it.
+#[test]
+fn the_command_line_reports_the_files_it_moves_aside() {
+    let t = TempDir::new("safe-moved-cli");
+    let w = resolve(t.path()).unwrap();
+    let root = w.join("Armada");
+    a1_install(&root);
+    let key = cli::a1_cache_key("fed1", &root.join("missions/x1S.dsl"), &root.join("missions/x1R.drl")).unwrap();
+    let cdir = w.join("cache");
+    Cache::new(&cdir)
+        .put(&key, &Entry::Converted { source: b"-- new\n".to_vec(), console: vec!["  fed1: x".into()] })
+        .unwrap();
+    let out = w.join("out");
+    touch(&out.join("missions/fed1.lua"), PY_HEADER.as_bytes());
+    let args = ["--install", &s(&root), "--out", &s(&out), "--cache-dir", &s(&cdir)];
+    let r = run(&args);
+    assert_eq!(r.code, 0, "{:?} {}", r.out, r.err);
+    assert!(r.out.iter().any(|l| l.contains("moved aside") && l.contains("missions/fed1.lua -> missions/fed1.lua.old")), "{:?}", r.out);
+    assert!(r.out.iter().any(|l| l.starts_with("1 file(s) of the Python tool moved aside")), "{:?}", r.out);
+    assert!(r.out.iter().any(|l| l.starts_with("1 mission scripts in ")), "{:?}", r.out);
+    assert_eq!(fs::read(out.join("missions/fed1.lua")).unwrap(), b"-- new\n");
+    assert_eq!(fs::read(out.join("missions/fed1.lua.old")).unwrap(), PY_HEADER.as_bytes());
+    let r = run(&args);
+    assert_eq!(r.code, 0);
+    assert!(r.out.iter().all(|l| !l.contains("moved aside")), "{:?}", r.out);
+    assert_eq!(fs::read(out.join("missions/fed1.lua.old")).unwrap(), PY_HEADER.as_bytes());
 }
