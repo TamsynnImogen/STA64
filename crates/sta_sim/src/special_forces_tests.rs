@@ -24,7 +24,7 @@ fn flagged_sample() -> (Sim, crate::EntityId) {
     let key = db.key("fx_cruiser").unwrap();
     let a = sim.spawn_def(key, PlayerId(0), v(0, 0), (Fixed::ZERO, Fixed::ONE)).unwrap();
     sim.spawn_def(key, PlayerId(1), v(1000, 0), (-Fixed::ONE, Fixed::ZERO)).unwrap();
-    sim.step(&[Command { player: PlayerId(0), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![a], to: v(500, -300), queue: false }) }]);
+    sim.step(&[Command { player: PlayerId(0), seq: 0, kind: CommandKind::Order(Order::Move { units: vec![a], to: v(500, -300), queue: false, mode: None }) }]);
     for _ in 0..40 {
         sim.step(&[]);
     }
@@ -72,7 +72,7 @@ fn the_view_list_follows_set_and_clear() {
 fn the_owner_can_still_order_a_flagged_craft_and_a_team_change_clears_the_flag() {
     let (mut sim, a) = flagged_sample();
     let before = sim.view().unit(a).unwrap().pos;
-    let out = sim.step(&[Command { player: PlayerId(0), seq: 5, kind: CommandKind::Order(Order::Move { units: vec![a], to: v(-400, 300), queue: false }) }]);
+    let out = sim.step(&[Command { player: PlayerId(0), seq: 5, kind: CommandKind::Order(Order::Move { units: vec![a], to: v(-400, 300), queue: false, mode: None }) }]);
     assert!(!out.events.iter().any(|e| matches!(e, SimEvent::Rejected { .. })), "{:?}", out.events);
     for _ in 0..30 {
         sim.step(&[]);

@@ -171,6 +171,7 @@ impl Room {
                     units,
                     to,
                     queue: self.rng.below(4) == 0,
+                    mode: None,
                 }
             }
             3 => Order::Stop { units },
@@ -596,6 +597,7 @@ fn dropping_a_silent_seat_lets_the_rest_play_on() {
                     units: vec![unit],
                     to: Vec3::from_f32([5.0, 0.0, 5.0]),
                     queue: false,
+                    mode: None,
                 }),
             });
         }
@@ -703,6 +705,7 @@ fn run_with_dropped_order(
             units: vec![unit],
             to: Vec3::from_f32([-400.0, 0.0, 300.0]),
             queue: false,
+            mode: None,
         }),
     });
     // The victim never applies it.

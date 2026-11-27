@@ -179,7 +179,7 @@ fn script(mut queue: ResMut<CommandQueue>, link: Option<Res<SimLink>>, mut st: L
         st.moved = true;
         // Toward the middle of the map, where the other side's ships will be.
         let to = Vec3::from_f32([0.0, 0.0, 400.0 * f32::from(me.0 + 1)]);
-        queue.0.push(CommandKind::Order(Order::Move { units: ships.clone(), to, queue: false }));
+        queue.0.push(CommandKind::Order(Order::Move { units: ships.clone(), to, queue: false, mode: None }));
     }
     if view.tick >= 18 && !st.built && let Some(yard) = mine.iter().find(|u| name(u) == "fx_yard") {
         st.built = true;

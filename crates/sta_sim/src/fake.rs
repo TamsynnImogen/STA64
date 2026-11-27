@@ -386,7 +386,7 @@ mod tests {
         let mv = |player, unit, to| Command {
             player: PlayerId(player),
             seq: 0,
-            kind: CommandKind::Order(Order::Move { units: vec![unit], to: Vec3::from_f32(to), queue: false }),
+            kind: CommandKind::Order(Order::Move { units: vec![unit], to: Vec3::from_f32(to), queue: false, mode: None }),
         };
         let batches = (0..300)
             .map(|t| match t {

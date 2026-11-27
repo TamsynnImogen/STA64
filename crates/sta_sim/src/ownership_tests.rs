@@ -161,6 +161,7 @@ fn team_edit_stops_actor_activity_and_new_owner_controls_later_ticks() {
                 units: vec![craft],
                 to: pos(500),
                 queue: true,
+                mode: None,
             },
         )],
     );
@@ -172,6 +173,7 @@ fn team_edit_stops_actor_activity_and_new_owner_controls_later_ticks() {
                 units: vec![craft],
                 to: pos(800),
                 queue: true,
+                mode: None,
             },
         )],
     );
@@ -232,6 +234,7 @@ fn team_edit_stops_actor_activity_and_new_owner_controls_later_ticks() {
                 units: vec![craft],
                 to: pos(1000),
                 queue: false,
+                mode: None,
             },
         )],
     );
@@ -243,6 +246,7 @@ fn team_edit_stops_actor_activity_and_new_owner_controls_later_ticks() {
                 units: vec![craft],
                 to: pos(1200),
                 queue: false,
+                mode: None,
             },
         )],
     );
@@ -645,6 +649,7 @@ fn existing_team_command_replays_same_build_with_identical_events() {
                     units: vec![EntityId(1)],
                     to: pos(1000),
                     queue: true,
+                    mode: None,
                 },
             )],
             5 => vec![team(PlayerId::SCRIPT, 0, EntityId(1), PlayerId(1))],
@@ -654,6 +659,7 @@ fn existing_team_command_replays_same_build_with_identical_events() {
                     units: vec![EntityId(1)],
                     to: pos(-1000),
                     queue: false,
+                    mode: None,
                 },
             )],
             7 => vec![order(
@@ -662,6 +668,7 @@ fn existing_team_command_replays_same_build_with_identical_events() {
                     units: vec![EntityId(1)],
                     to: pos(500),
                     queue: false,
+                    mode: None,
                 },
             )],
             25 => vec![

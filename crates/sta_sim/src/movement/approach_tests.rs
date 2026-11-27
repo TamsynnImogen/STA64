@@ -191,7 +191,7 @@ fn an_unseen_or_cloaked_target_is_flown_to_without_warp_and_the_order_stands() {
 fn a_dead_target_leaves_no_course_and_queued_legs_wait_for_the_attack() {
     let (mut sim, _) = run(Profile::Sta2Classic, Some(1100), 1000, 30 * 5);
     let (s, t) = (EntityId(1), EntityId(2));
-    let mv = Command { player: PlayerId(1), seq: 1, kind: CommandKind::Order(Order::Move { units: vec![s], to: v(-500, 0), queue: true }) };
+    let mv = Command { player: PlayerId(1), seq: 1, kind: CommandKind::Order(Order::Move { units: vec![s], to: v(-500, 0), queue: true, mode: None }) };
     for _ in 0..30 * 10 {
         WorldSource::step(&mut sim, &[]);
     }
@@ -211,7 +211,7 @@ fn a_dead_target_leaves_no_course_and_queued_legs_wait_for_the_attack() {
 #[test]
 fn a_move_order_replaces_the_attack() {
     let (mut sim, _) = run(Profile::Sta2Classic, Some(1100), 3000, 30);
-    let mv = Command { player: PlayerId(1), seq: 1, kind: CommandKind::Order(Order::Move { units: vec![EntityId(1)], to: v(-500, 0), queue: false }) };
+    let mv = Command { player: PlayerId(1), seq: 1, kind: CommandKind::Order(Order::Move { units: vec![EntityId(1)], to: v(-500, 0), queue: false, mode: None }) };
     WorldSource::step(&mut sim, &[mv]);
     assert_eq!(sim.weapons.attack_of(EntityId(1)), None);
     assert_eq!(sim.unit(EntityId(1)).unwrap().target, Some(v(-500, 0)));

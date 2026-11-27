@@ -73,6 +73,7 @@ fn installed_race_starts_record_and_replay_to_equal_digests() {
                 units: mine.iter().map(|m| m.0).collect(),
                 to: sta_core::Vec3 { x: to.x + sta_core::Fixed::from_int(400), y: to.y, z: to.z },
                 queue: false,
+                mode: None,
             }) }]
         } else {
             vec![]
