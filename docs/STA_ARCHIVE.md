@@ -187,7 +187,12 @@ as FPQ and ZFS archives are today:
 2. A file is served by the highest layer that has it. A whiteout hides the
    path in every layer below its own.
 3. Inside one mod, loose files in its folder win over the same path in its
-   `.sta`, so a modder can test a change without repacking.
+   `.sta`, so a modder can test a change without repacking. A mod's
+   `info.ini` follows the same rule: the loose one, else the one in its
+   root `.sta`; with several root `.sta` files, the first in byte order of
+   the file name that has an `info.ini` supplies it. If that entry cannot be
+   read (a failed hash, say), mounting the mod stops with an error naming
+   the archive.
 4. The ODF index ([`OdfIndex`](../crates/sta_content/src/index.rs)) treats a
    `.sta` layer like any other: ODFs anywhere under `odf/`, mod root first.
 

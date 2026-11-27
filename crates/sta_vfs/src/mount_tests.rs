@@ -269,6 +269,42 @@ fn missing_parent_of_a_package_is_reported_as_before() {
 }
 
 #[test]
+fn damaged_packed_info_ini_is_an_error_not_a_silent_no_parent() {
+    let t = Tmp::new("pkg_damaged");
+    t.write("Data/Mods/Gone/info.ini", "[mod]\n");
+    t.package("Child", "child.sta", &[("info.ini", "[mod]\nParentMod=Gone\n"), ("odf/x.odf", "x")]);
+    let file = t.0.join("Data/Mods/Child/child.sta");
+    let mut bytes = fs::read(&file).unwrap();
+    let needle = b"ParentMod=Gone";
+    let at = bytes.windows(needle.len()).position(|w| w == needle).expect("entry stored plain");
+    bytes[at] ^= 0x01; // one flipped byte inside the entry: it still opens, its hash fails
+    fs::write(&file, bytes).unwrap();
+    assert!(matches!(t.mount("Child"), Err(VfsError::Sta { path, .. }) if path.ends_with("child.sta")));
+    let data = t.0.join("Data");
+    assert!(matches!(crate::mod_chain(&data, "Child"), Err(VfsError::Sta { .. })));
+    // A package without an info.ini entry stays "no info": the mod mounts over Data.
+    t.package("Plain", "plain.sta", &[("odf/y.odf", "y")]);
+    assert_eq!(layers(&t.mount("Plain").unwrap()), ["Plain", "Data"]);
+}
+
+#[test]
+fn several_packages_first_in_byte_order_with_an_info_ini_supplies_it() {
+    let t = Tmp::new("pkg_two");
+    t.write("Data/Mods/Root/info.ini", "[mod]\n");
+    t.write("Data/Mods/Other/info.ini", "[mod]\n");
+    // The mount's order is the byte order of the paths: "A.sta" comes before "b.sta".
+    t.package("Both", "b.sta", &[("info.ini", "[mod]\nParentMod=Other\n"), ("odf/pick.odf", "from b")]);
+    t.package("Both", "A.sta", &[("info.ini", "[mod]\nParentMod=Root\n"), ("odf/pick.odf", "from A")]);
+    let v = t.mount("Both").unwrap();
+    assert_eq!(layers(&v), ["Both", "Root", "Data"]);
+    assert_eq!(text(&v, "odf/pick.odf").as_deref(), Some("from A"), "the mount serves the same package");
+    // A package without an info.ini entry earlier in the order is passed over.
+    t.package("Skip", "A.sta", &[("odf/z.odf", "z")]);
+    t.package("Skip", "b.sta", &[("info.ini", "[mod]\nParentMod=Root\n")]);
+    assert_eq!(layers(&t.mount("Skip").unwrap()), ["Skip", "Root", "Data"]);
+}
+
+#[test]
 fn parent_cycle_through_packages_is_reported() {
     let t = Tmp::new("pkg_cycle");
     t.package("A", "a.sta", &[("info.ini", "[mod]\nParentMod=B\n")]);
