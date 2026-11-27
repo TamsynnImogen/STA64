@@ -200,7 +200,7 @@ fn files_are_written_atomically_listed_and_deleted_only_when_ours() {
     assert_eq!(fs::read(out.join("missions/mine.lua")).unwrap(), b"mine");
     assert_eq!(fs::read(out.join("missions/notes.txt")).unwrap(), b"notes");
     // a name that collides with the player's file is an error, the file is untouched
-    let e = o.write("mine.lua", b"x").unwrap_err();
+    let e = o.write("mine.lua", b"x").unwrap_err().to_string();
     assert!(e.contains("refusing to overwrite"), "{e}");
     assert_eq!(fs::read(out.join("missions/mine.lua")).unwrap(), b"mine");
     // names that are not one plain file name are refused
@@ -223,6 +223,8 @@ fn a_file_a_killed_run_wrote_is_still_ours_and_its_leftover_temporary_is_removed
     o.write("a.lua", b"two").unwrap();
     drop(o);
     touch(&out.join("missions/.a.lua.tmp-9-9"), b"half");
+    let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+    fs::File::options().write(true).open(out.join("missions/.a.lua.tmp-9-9")).unwrap().set_modified(long_ago).unwrap();
     let mut o = OutDir::inspect(&out, out.clone(), false).expect("recognised as ours");
     o.wipe().unwrap();
     assert!(!out.join("missions/a.lua").exists());
@@ -287,7 +289,7 @@ fn links_are_refused_at_the_folder_at_missions_at_the_manifest_and_at_files() {
     std::os::unix::fs::symlink(w.join("target.txt"), out.join("missions/x.lua")).unwrap();
     assert!(OutDir::inspect(&out, out.clone(), false).unwrap_err().contains("did not write"));
     let mut o = OutDir::inspect(&out, out.clone(), true).unwrap();
-    assert!(o.write("x.lua", b"new").unwrap_err().contains("refusing to overwrite"));
+    assert!(o.write("x.lua", b"new").unwrap_err().to_string().contains("refusing to overwrite"));
     assert_eq!(fs::read(w.join("target.txt")).unwrap(), b"target");
     // a wipe never follows it either
     o.wipe().unwrap();
@@ -297,7 +299,7 @@ fn links_are_refused_at_the_folder_at_missions_at_the_manifest_and_at_files() {
     fs::remove_file(out.join("missions/x.lua")).unwrap();
     fs::remove_dir(out.join("missions")).unwrap();
     std::os::unix::fs::symlink(w.join("elsewhere"), out.join("missions")).unwrap();
-    let e = o.write("y.lua", b"y").unwrap_err();
+    let e = o.write("y.lua", b"y").unwrap_err().to_string();
     assert!(e.contains("symbolic link"), "{e}");
     assert!(!w.join("elsewhere/y.lua").exists());
     assert_eq!(fs::read(w.join("elsewhere/precious.lua")).unwrap(), b"precious");
@@ -532,4 +534,100 @@ fn a_dll_the_decoder_refuses_is_a_failed_mission_and_the_run_goes_on() {
     assert!(lines[2].starts_with("  FAIL fed2: DecodeError: the file has a COFF symbol table"), "{}", lines[2]);
     assert!(String::from_utf8_lossy(&se).is_empty());
     assert!(!w.join("out/missions").exists() || fs::read_dir(w.join("out/missions")).unwrap().next().is_none());
+}
+
+// ------------------------------------------------------------------ the last low items
+
+const PY_HEADER: &str = "-- m1: converted by tools/dsl_to_lua.py (LUA-11) from m1S.dsl and m1R.drl.\nbody\n";
+
+#[test]
+fn a_python_tools_earlier_conversion_is_replaced_by_a_full_run_and_nothing_else_is() {
+    let t = TempDir::new("safe-python-output");
+    let (_, out) = ours_dir(&t);
+    touch(&out.join("missions/old1.lua"), PY_HEADER.as_bytes());
+    touch(&out.join("missions/old2.lua"), "-- m2: converted by tools/a1_to_lua.py (LUA-14) from x.dsl.\nx\n".as_bytes());
+    // not the header: the player's
+    touch(&out.join("missions/mine.lua"), b"-- converted by tools/dsl_to_lua.py\n");
+    touch(&out.join("missions/notes.txt"), PY_HEADER.as_bytes());
+    assert!(OutDir::inspect(&out, out.clone(), false).unwrap_err().contains("did not write"));
+    let mut o = OutDir::inspect(&out, out.clone(), true).unwrap();
+    o.wipe().unwrap();
+    assert!(!out.join("missions/old1.lua").exists() && !out.join("missions/old2.lua").exists());
+    assert!(out.join("missions/mine.lua").exists() && out.join("missions/notes.txt").exists());
+    // a folder with only such files is no obstacle at all
+    fs::remove_file(out.join("missions/mine.lua")).unwrap();
+    touch(&out.join("missions/old3.lua"), PY_HEADER.as_bytes());
+    let mut o = OutDir::inspect(&out, out.clone(), false).unwrap();
+    // and a name that holds one may be written over
+    o.write("old3.lua", b"new").unwrap();
+    assert_eq!(fs::read(out.join("missions/old3.lua")).unwrap(), b"new");
+    // only regular files: a link with the header is not replaced
+    #[cfg(unix)]
+    {
+        touch(&out.join("target.txt"), PY_HEADER.as_bytes());
+        std::os::unix::fs::symlink(out.join("target.txt"), out.join("missions/link.lua")).unwrap();
+        assert!(OutDir::inspect(&out, out.clone(), false).unwrap_err().contains("did not write"));
+        let mut o = OutDir::inspect(&out, out.clone(), true).unwrap();
+        o.wipe().unwrap();
+        assert!(out.join("target.txt").exists());
+        assert!(fs::symlink_metadata(out.join("missions/link.lua")).is_ok());
+    }
+}
+
+#[test]
+fn the_wipe_removes_only_the_tools_own_old_temporary_files() {
+    let t = TempDir::new("safe-temps");
+    let (_, out) = ours_dir(&t);
+    let m = out.join("missions");
+    let old = |name: &str| {
+        touch(&m.join(name), b"half");
+        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+        fs::File::options().write(true).open(m.join(name)).unwrap().set_modified(when).unwrap();
+    };
+    old(".a.lua.tmp-123-4"); // the tool's own pattern, old: goes
+    old(".mine.tmp-notes"); // dot file with another shape: stays
+    old(".x.tmp-1-2-3"); // wrong shape: stays
+    old("plain.tmp-1-2"); // no leading dot: stays
+    touch(&m.join(".b.lua.tmp-5-6"), b"in flight"); // recent: a running process's: stays
+    let mut o = OutDir::inspect(&out, out.clone(), false).unwrap();
+    o.wipe().unwrap();
+    assert!(!m.join(".a.lua.tmp-123-4").exists());
+    for stays in [".mine.tmp-notes", ".x.tmp-1-2-3", "plain.tmp-1-2", ".b.lua.tmp-5-6"] {
+        assert!(m.join(stays).exists(), "{stays}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn the_output_folder_is_checked_before_it_is_created() {
+    let t = TempDir::new("safe-check-first");
+    let (w, out) = ours_dir(&t);
+    let mut o = OutDir::inspect(&out.join("deep/er"), out.join("deep/er"), false).unwrap();
+    // an ancestor appears as a link to somewhere else after the inspection: nothing is made there
+    fs::create_dir_all(w.join("elsewhere")).unwrap();
+    fs::create_dir_all(&out).unwrap();
+    std::os::unix::fs::symlink(w.join("elsewhere"), out.join("deep")).unwrap();
+    let e = o.write("a.lua", b"x").unwrap_err().to_string();
+    assert!(e.contains("changed while the tool ran"), "{e}");
+    assert!(fs::read_dir(w.join("elsewhere")).unwrap().next().is_none(), "nothing was created there");
+}
+
+#[test]
+fn only_the_markers_of_an_install_make_a_folder_a_game_folder() {
+    let t = TempDir::new("safe-markers");
+    let w = resolve(t.path()).unwrap();
+    // a downloads folder with an installer named like a game does not block what is below it
+    touch(&w.join("Downloads/Armada2_patch.exe"), b"");
+    touch(&w.join("Downloads/armada_setup.exe"), b"");
+    assert_eq!(game_root_above(&w.join("Downloads/out")), None);
+    // the exact executables do
+    touch(&w.join("G1/ARMADA2.EXE"), b"");
+    touch(&w.join("G2/Data/ArmadaL.exe"), b"");
+    touch(&w.join("G3/Data/other.exe"), b"");
+    assert!(game_root_above(&w.join("G1/x")).is_some());
+    assert!(game_root_above(&w.join("G2/x")).is_some());
+    assert_eq!(game_root_above(&w.join("G3/x")), None);
+    // a folder named like the executable is not one
+    fs::create_dir_all(w.join("G4/Armada.exe")).unwrap();
+    assert_eq!(game_root_above(&w.join("G4/x")), None);
 }

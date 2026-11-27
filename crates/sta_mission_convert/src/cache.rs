@@ -224,30 +224,33 @@ impl Cache {
 }
 
 impl Cache {
-    /// Housekeeping after a full run: removes the `.entry` files (by validated name) whose key is
-    /// not in `keep`, and temporary files of killed runs older than an hour. Nothing else in the
+    /// Marks the entry as used now (its modification time), so that [`Cache::prune`] keeps it.
+    pub fn touch(&self, key: &str) {
+        if valid_key(key)
+            && let Ok(f) = fs::OpenOptions::new().write(true).open(self.path(key))
+        {
+            let _ = f.set_modified(std::time::SystemTime::now());
+        }
+    }
+
+    /// Housekeeping after a full run: removes the `.entry` files (by validated name) not used for
+    /// `max_age`, and temporary files of killed runs older than an hour. By age only, so a folder
+    /// shared by two installs or games loses nothing the other still uses. Nothing else in the
     /// folder is touched; links and folders are left alone.
-    pub fn retain(&self, keep: &std::collections::HashSet<String>) {
+    pub fn prune(&self, max_age: std::time::Duration) {
         let Ok(rd) = fs::read_dir(&self.dir) else { return };
+        let older = |e: &fs::DirEntry, limit: std::time::Duration| {
+            e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|d| d > limit)
+        };
         for e in rd.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
             if !e.file_type().is_ok_and(|t| t.is_file()) {
                 continue;
             }
-            if let Some(k) = name.strip_suffix(".entry") {
-                if valid_key(k) && !keep.contains(k) {
-                    let _ = fs::remove_file(e.path());
-                }
-            } else if name.len() > 64 && valid_key(&name[..64]) && name[64..].starts_with(".tmp-") {
-                let old = e
-                    .metadata()
-                    .and_then(|m| m.modified())
-                    .ok()
-                    .and_then(|t| t.elapsed().ok())
-                    .is_some_and(|d| d.as_secs() > 3600);
-                if old {
-                    let _ = fs::remove_file(e.path());
-                }
+            let hex = name.get(..64).filter(|k| valid_key(k));
+            let (is_entry, is_tmp) = (name.len() == 70 && name.ends_with(".entry"), name.len() > 64 && name[64..].starts_with(".tmp-"));
+            if hex.is_some() && is_entry && older(&e, max_age) || hex.is_some() && is_tmp && older(&e, std::time::Duration::from_secs(3600)) {
+                let _ = fs::remove_file(e.path());
             }
         }
     }

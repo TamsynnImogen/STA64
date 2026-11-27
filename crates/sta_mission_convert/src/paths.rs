@@ -95,22 +95,27 @@ pub fn contains(root: &Path, path: &Path) -> bool {
     }
 }
 
-/// Whether the folder holds a game's executable (`Armada*.exe`) at its top or in `Data/`: a game
-/// root, or the engine folder of a Fleet Operations style one.
+/// Whether the folder is a game install by the markers the install check uses: `Armada.exe` or
+/// `Armada2.exe` at its top, or (a Fleet Operations style install) `Armada2.exe` or `ArmadaL.exe`
+/// in its `Data/` folder. Exact names, any case; other files named like a game are not a marker.
 pub fn looks_like_game_root(dir: &Path) -> bool {
-    fn has_exe(d: &Path) -> bool {
+    fn has(d: &Path, wanted: &[&str]) -> bool {
         std::fs::read_dir(d).is_ok_and(|rd| {
             rd.flatten().any(|e| {
                 let n = e.file_name().to_string_lossy().to_lowercase();
-                n.starts_with("armada") && n.ends_with(".exe")
+                wanted.contains(&n.as_str()) && e.file_type().is_ok_and(|t| !t.is_dir())
             })
         })
     }
-    if has_exe(dir) {
+    if has(dir, &["armada.exe", "armada2.exe"]) {
         return true;
     }
     std::fs::read_dir(dir).is_ok_and(|rd| {
-        rd.flatten().any(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case("data") && has_exe(&e.path()))
+        rd.flatten().any(|e| {
+            e.file_name().to_string_lossy().eq_ignore_ascii_case("data")
+                && e.path().is_dir()
+                && has(&e.path(), &["armada2.exe", "armadal.exe"])
+        })
     })
 }
 

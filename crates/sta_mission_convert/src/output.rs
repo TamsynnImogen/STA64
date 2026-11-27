@@ -10,13 +10,15 @@
 //!   set;
 //! - it refuses an output folder that holds `.lua` files in `missions/` that it did not write (or
 //!   that changed since), unless `--keep-foreign` says to go on and leave them alone; a file it
-//!   would have to overwrite that is foreign is an error, never overwritten;
+//!   would have to overwrite that is foreign is a failed mission, never overwritten; a `.lua` file
+//!   whose first line is the Python tool's header (`-- <mission>: converted by tools/<x>_to_lua.py
+//!   (LUA-nn) from ...`) counts as this tool's (an earlier conversion by the Python wrapper) and a
+//!   full run replaces it;
 //! - it refuses a symbolic link as the output folder, as `missions/`, as the manifest or as a file
-//!   it would replace;
+//!   it would replace or delete (such a file is not ours);
 //! - every write goes through [`OutDir::write`], which re-checks the folder right before it,
 //!   writes a temporary file in the same folder (created exclusively) and renames it into place, so
-//!   an interrupted run leaves no half file under a name the game or the manifest trusts, and a
-//!   file symbolic link at the target is replaced, never followed;
+//!   an interrupted run leaves no half file under a name the game or the manifest trusts;
 //! - the manifest is updated before the file is renamed (the old and the new hash are both listed
 //!   until the run ends), so a file written by a killed run is still recognised as ours.
 
@@ -37,6 +39,48 @@ fn sha_hex(b: &[u8]) -> String {
 
 fn is_hash(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// `.<safe name>.tmp-<pid>-<n>`: the name of a temporary file this tool makes ([`OutDir::atomic`]).
+fn is_own_temp(n: &str) -> bool {
+    let Some(rest) = n.strip_prefix('.') else { return false };
+    let Some((name, tail)) = rest.rsplit_once(".tmp-") else { return false };
+    let mut nums = tail.split('-');
+    let digits = |x: Option<&str>| x.is_some_and(|x| !x.is_empty() && x.bytes().all(|b| b.is_ascii_digit()));
+    safe_name(name) && digits(nums.next()) && digits(nums.next()) && nums.next().is_none()
+}
+
+/// Whether `bytes` start with the header line the Python converters write:
+/// `-- <mission>: converted by tools/<x>_to_lua.py (LUA-nn) from <file>...`.
+fn python_header(bytes: &[u8]) -> bool {
+    let end = bytes.iter().take(2048).position(|&b| b == b'\n').unwrap_or(bytes.len().min(2048));
+    let line = String::from_utf8_lossy(&bytes[..end]);
+    line.starts_with("-- ")
+        && line.contains(": converted by tools/")
+        && line.contains("_to_lua.py (LUA-")
+        && line.contains(") from ")
+}
+
+/// Why a file could not be written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WriteError {
+    /// The target exists and is not this tool's: that mission fails, the run goes on.
+    Collision(String),
+    /// Anything else: the run stops.
+    Fatal(String),
+}
+
+impl std::fmt::Display for WriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (Self::Collision(m) | Self::Fatal(m)) = self;
+        f.write_str(m)
+    }
+}
+
+impl From<String> for WriteError {
+    fn from(m: String) -> Self {
+        Self::Fatal(m)
+    }
 }
 
 /// A file name the tool may create: one component, no separators, no drive or stream syntax.
@@ -135,7 +179,8 @@ impl OutDir {
         Ok(())
     }
 
-    /// Whether the regular file `name` in `missions/` has content the manifest lists for it.
+    /// Whether the regular file `name` in `missions/` is this tool's: content the manifest lists
+    /// for it, or a first line that is the Python tool's header.
     fn is_ours(&self, name: &str, path: &Path) -> bool {
         let Ok(m) = fs::symlink_metadata(path) else { return false };
         if !m.is_file() {
@@ -143,7 +188,18 @@ impl OutDir {
         }
         let Ok(bytes) = fs::read(path) else { return false };
         let h = sha_hex(&bytes);
-        self.manifest.iter().any(|(mh, mn)| *mh == h && mn == name)
+        self.manifest.iter().any(|(mh, mn)| *mh == h && mn == name) || python_header(&bytes)
+    }
+
+    /// How many of the files in `missions/` are this tool's (what a summary may count).
+    pub fn count_ours(&self) -> usize {
+        let Ok(rd) = fs::read_dir(self.missions()) else { return 0 };
+        rd.flatten()
+            .filter(|e| {
+                let n = e.file_name().to_string_lossy().into_owned();
+                n.ends_with(".lua") && self.is_ours(&n, &e.path())
+            })
+            .count()
     }
 
     /// The `.lua` entries of `missions/` that are not ours (links and folders included).
@@ -214,12 +270,21 @@ impl OutDir {
             if let Ok(rd) = fs::read_dir(&mdir) {
                 for e in rd.flatten() {
                     let n = e.file_name().to_string_lossy().into_owned();
-                    if n.starts_with('.') && n.contains(".tmp-") && e.file_type().is_ok_and(|t| t.is_file()) {
+                    if is_own_temp(&n)
+                        && e.file_type().is_ok_and(|t| t.is_file())
+                        && e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|d| d.as_secs() > 3600)
+                    {
                         let _ = fs::remove_file(e.path());
                     }
                 }
             }
-            let names: BTreeSet<String> = self.manifest.iter().map(|(_, n)| n.clone()).collect();
+            // the manifest's files, and the `.lua` files of the Python tool's earlier conversion
+            let mut names: BTreeSet<String> = self.manifest.iter().map(|(_, n)| n.clone()).collect();
+            if let Ok(rd) = fs::read_dir(&mdir) {
+                names.extend(
+                    rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.to_lowercase().ends_with(".lua")),
+                );
+            }
             for n in names {
                 let p = mdir.join(&n);
                 if self.is_ours(&n, &p) {
@@ -236,10 +301,12 @@ impl OutDir {
     }
 
     /// Writes `missions/<name>` atomically (see the module documentation).
-    pub fn write(&mut self, name: &str, bytes: &[u8]) -> Result<(), String> {
+    pub fn write(&mut self, name: &str, bytes: &[u8]) -> Result<(), WriteError> {
         if !safe_name(name) {
-            return Err(format!("refusing to write a file named {name:?}"));
+            return Err(WriteError::Fatal(format!("refusing to write a file named {name:?}")));
         }
+        // the folder is checked before it is created, and after
+        self.check()?;
         fs::create_dir_all(&self.root).map_err(|e| format!("{}: {e}", self.root.display()))?;
         self.check()?;
         let mdir = self.missions();
@@ -252,10 +319,10 @@ impl OutDir {
             Err(_) => {}
             Ok(_) if self.is_ours(name, &target) => {}
             Ok(_) => {
-                return Err(format!(
+                return Err(WriteError::Collision(format!(
                     "{} exists and this tool did not write it (or it changed since): refusing to overwrite it",
                     target.display()
-                ));
+                )));
             }
         }
         let h = sha_hex(bytes);

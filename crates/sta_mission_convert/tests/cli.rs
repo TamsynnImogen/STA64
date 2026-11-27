@@ -314,12 +314,11 @@ fn a_full_run_deletes_only_what_the_tool_wrote_and_refuses_foreign_files() {
     let r = go(&[]);
     assert_eq!(r.code, 1);
     assert_eq!(fs::read(out.join("missions/fed1.lua")).unwrap(), b"edited by the player");
-    // with --keep-foreign it is not overwritten either: that mission is an error
-    // (the run aborts; other scripts exist, so the wrapper's rule applies: a warning and exit 0)
+    // with --keep-foreign it is not overwritten either: that mission fails, the run goes on, the
+    // exit code says so, and the summary counts only the tool's own files
     let r = go(&["--keep-foreign"]);
-    assert_eq!(r.code, 0, "{:?}", r.out);
-    assert!(r.err.contains("refusing to overwrite"), "{}", r.err);
-    assert!(r.out.iter().any(|l| l.starts_with("warning: some missions failed")), "{:?}", r.out);
+    assert_eq!(r.code, 1, "{:?} {}", r.out, r.err);
+    assert!(r.out.iter().any(|l| l.starts_with("  FAIL fed1: ") && l.contains("refusing to overwrite")), "{:?}", r.out);
     assert_eq!(fs::read(out.join("missions/fed1.lua")).unwrap(), b"edited by the player");
     assert_eq!(fs::read(out.join("missions/mine.lua")).unwrap(), b"mine");
     // the manifest damaged: refused, nothing deleted

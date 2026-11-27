@@ -128,13 +128,18 @@ fn damaged_entries_are_ignored_and_rebuilt() {
 }
 
 #[test]
-fn an_oversized_entry_is_a_miss_and_retain_prunes_only_what_it_may() {
+fn an_oversized_entry_is_a_miss_and_prune_goes_by_age_only() {
     let t = TempDir::new("cache-upkeep");
     let c = Cache::new(t.path().join("c"));
     let (k1, k2, k3) = (key(&[b"1"]), key(&[b"2"]), key(&[b"3"]));
     for k in [&k1, &k2, &k3] {
         c.put(k, &converted()).unwrap();
     }
+    let age = |p: &Path, secs: u64| {
+        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(secs);
+        fs::File::options().write(true).open(p).unwrap().set_modified(when).unwrap();
+    };
+    let entry = |k: &str| c.dir().join(format!("{k}.entry"));
     // a file that is not ours, a folder, a recent temporary file and an old one
     fs::write(c.dir().join("notes.txt"), b"x").unwrap();
     fs::create_dir_all(c.dir().join("sub.entry")).unwrap();
@@ -142,17 +147,24 @@ fn an_oversized_entry_is_a_miss_and_retain_prunes_only_what_it_may() {
     fs::write(&recent, b"x").unwrap();
     let old = c.dir().join(format!("{k2}.tmp-2-2"));
     fs::write(&old, b"x").unwrap();
-    let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
-    fs::File::options().write(true).open(&old).unwrap().set_modified(two_hours_ago).unwrap();
-    let keep: std::collections::HashSet<String> = [k1.clone()].into_iter().collect();
-    c.retain(&keep);
+    age(&old, 7200);
+    // k2 was last used long ago, k3 a while ago, k1 now
+    age(&entry(&k2), 40 * 24 * 3600);
+    age(&entry(&k3), 10 * 24 * 3600);
+    let month = std::time::Duration::from_secs(30 * 24 * 3600);
+    c.prune(month);
     assert!(c.get(&k1).is_some());
-    assert_eq!(c.get(&k2), None);
-    assert_eq!(c.get(&k3), None);
+    assert_eq!(c.get(&k2), None, "not used for longer than the limit");
+    assert!(c.get(&k3).is_some(), "another install's entry, used recently enough, stays");
     assert!(c.dir().join("notes.txt").exists(), "foreign files stay");
     assert!(c.dir().join("sub.entry").is_dir(), "folders stay");
     assert!(recent.exists(), "a recent temporary file may belong to a running process");
     assert!(!old.exists(), "an old temporary file is a killed run's");
+    // a hit marks the entry as used
+    age(&entry(&k3), 40 * 24 * 3600);
+    c.touch(&k3);
+    c.prune(month);
+    assert!(c.get(&k3).is_some());
     // an entry file larger than the cap is not read
     let big = key(&[b"big"]);
     let f = fs::File::create(c.dir().join(format!("{big}.entry"))).unwrap();
@@ -253,15 +265,17 @@ fn the_command_line_replays_invalidates_and_ignores_damage() {
     let (code, damaged) = go();
     assert_eq!(code, 1);
     assert_eq!(damaged, first);
-    // a full run prunes the entries it did not use (the old one, the damaged one stays a miss),
-    // a run with --only does not
+    // a hit marks the entry as used; a full run removes entries not used for a month, whoever's
     cache.put(&k1, &entry).unwrap();
     cache.put(&k2, &entry).unwrap();
+    let stale = cdir.join(format!("{k1}.entry"));
+    let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(40 * 24 * 3600);
+    fs::File::options().write(true).open(&stale).unwrap().set_modified(long_ago).unwrap();
     let (_, _) = run(&["--install", &s(&root), "--out", &s(&out), "--cache-dir", &s(&cdir), "--only", "fed1"]);
     assert_eq!(entry_files(&cdir).len(), 2, "--only prunes nothing");
     let (code, _) = go();
     assert_eq!(code, 0, "the entry for the current input answers");
-    assert_eq!(entry_files(&cdir).len(), 1, "a full run keeps only what it used");
+    assert_eq!(entry_files(&cdir).len(), 1, "a full run removes what was not used for a month");
     assert!(cache.get(&k2).is_some());
 }
 

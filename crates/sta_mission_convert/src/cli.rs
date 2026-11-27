@@ -22,7 +22,9 @@
 //!   anything that looks like a game folder, nor lie inside the checkout the binary was built in
 //!   (build folders excepted); a full run deletes only the files its manifest lists (the Python
 //!   deletes every `*.lua` in `<out>/missions`); an output folder that holds `.lua` files the tool
-//!   did not write is refused (`--keep-foreign` goes on and leaves them alone); symbolic links at
+//!   did not write is refused (`--keep-foreign` goes on and leaves them alone; a mission whose file
+//!   would collide with one is a `FAIL` line, the run goes on and the exit code says so; a `.lua`
+//!   file with the Python tool's header line counts as the tool's own and a full run replaces it); symbolic links at
 //!   the folder, at `missions/` or at a file to replace are refused; every file is written to a
 //!   temporary name and renamed into place.
 //! - `--include-unmapped` (Armada I) is the option of `a1_to_lua.py`, offered because the wrapper
@@ -39,7 +41,7 @@
 //! - the child's own `--out` check (`drl.refuse_output`) is not repeated: the wrapper's check,
 //!   which runs first and covers the same folders, is the one that speaks.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -48,7 +50,7 @@ use crate::a1;
 use crate::cache::{Cache, Entry, KeyBuilder};
 use crate::convert::{self, load_engine, Outcome};
 use crate::disasm::Ins;
-use crate::output::OutDir;
+use crate::output::{OutDir, WriteError};
 use crate::paths::{contains, game_root_above, resolve};
 use crate::pyval::py_lower;
 use crate::{DecodeError, ErrorKind, Result};
@@ -223,8 +225,9 @@ options:\n\
   --cache              keep converted missions in the data directory and reuse them\n\
   --cache-dir DIR      the same, in DIR\n\n\
 A full run (no --only) deletes only the files this tool wrote before (its manifest lists them), not\n\
-every .lua file in the folder as the Python tool does. The output folder may not be, contain or lie\n\
-inside a game folder, and symbolic links in it are refused.";
+every .lua file in the folder as the Python tool does; a .lua file whose first line is the Python\n\
+tool's header (an earlier conversion by it) counts as written by this tool and is replaced. The\n\
+output folder may not be, contain or lie inside a game folder, and symbolic links in it are refused.";
 
 const OPTIONS: [&str; 8] =
     ["--help", "--install", "--out", "--only", "--include-unmapped", "--keep-foreign", "--cache", "--cache-dir"];
@@ -445,11 +448,10 @@ pub fn run<S: AsRef<OsStr>>(args: &[S], env: &Env, io: &mut Io<'_>, listing: &mu
         // a full re-run replaces the previous conversion: what this tool wrote before goes
         return die(io, &m);
     }
-    let mut used: HashSet<String> = HashSet::new();
     let (code, completed) = if a1 {
-        child_a1(&install, &a, &mut outdir, cache.as_ref(), &mut used, io, listing)
+        child_a1(&install, &a, &mut outdir, cache.as_ref(), io, listing)
     } else {
-        child_a2(&install, &mdir, &a, &mut outdir, cache.as_ref(), &mut used, io, listing)
+        child_a2(&install, &mdir, &a, &mut outdir, cache.as_ref(), io, listing)
     };
     if let Err(m) = outdir.finish() {
         return die(io, &m);
@@ -458,14 +460,10 @@ pub fn run<S: AsRef<OsStr>>(args: &[S], env: &Env, io: &mut Io<'_>, listing: &mu
         && completed
         && a.only.is_empty()
     {
-        c.retain(&used);
+        c.prune(std::time::Duration::from_secs(30 * 24 * 3600));
     }
-    let outm = outdir.root().join("missions");
-    let n = if outm.is_dir() {
-        names(&outm).map(|v| v.iter().filter(|f| f.ends_with(".lua")).count()).unwrap_or(0)
-    } else {
-        0
-    };
+    // only the files this tool wrote count, not a player's .lua files beside them
+    let n = outdir.count_ours();
     if code != 0 && n == 0 {
         return code;
     }
@@ -501,32 +499,28 @@ fn engine_digest(install: &Path) -> Option<Vec<u8>> {
     Some(h.finalize().to_vec())
 }
 
-/// The cached entry for `key`, if the cache is on and has one.
-fn lookup(cache: Option<&Cache>, key: Option<&String>, used: &mut HashSet<String>) -> Option<Entry> {
+/// The cached entry for `key`, if the cache is on and has one (and marks it used).
+fn lookup(cache: Option<&Cache>, key: Option<&String>) -> Option<Entry> {
     let (c, k) = cache.zip(key)?;
     let e = c.get(k)?;
-    used.insert(k.clone());
+    c.touch(k);
     Some(e)
 }
 
-fn store(cache: Option<&Cache>, key: Option<&String>, used: &mut HashSet<String>, e: &Entry) {
-    if let Some((c, k)) = cache.zip(key)
-        && c.put(k, e).is_ok()
-    {
-        used.insert(k.clone());
+fn store(cache: Option<&Cache>, key: Option<&String>, e: &Entry) {
+    if let Some((c, k)) = cache.zip(key) {
+        let _ = c.put(k, e);
     }
 }
 
 /// `dsl_to_lua.py main` for one install: the console lines and the files, as it prints and writes
 /// them. Returns the child's exit code and whether it ran to the end (not aborted).
-#[allow(clippy::too_many_arguments)]
 fn child_a2(
     install: &Path,
     mdir: &Path,
     a: &Args,
     out: &mut OutDir,
     cache: Option<&Cache>,
-    used: &mut HashSet<String>,
     io: &mut Io<'_>,
     listing: &mut ListingFn<'_>,
 ) -> (i32, bool) {
@@ -561,12 +555,12 @@ fn child_a2(
                     .finish(),
             )
         });
-        let entry = match lookup(cache, ckey.as_ref(), used) {
+        let entry = match lookup(cache, ckey.as_ref()) {
             Some(e) => Some(e),
             None => match convert::convert_one(&job, &engine, listing) {
                 Ok(Outcome::Converted(c)) => {
                     let e = Entry::Converted { source: c.source.clone().into_bytes(), console: vec![a2_line(&c)] };
-                    store(cache, ckey.as_ref(), used, &e);
+                    store(cache, ckey.as_ref(), &e);
                     Some(e)
                 }
                 Ok(Outcome::Failed(m)) => {
@@ -587,8 +581,13 @@ fn child_a2(
             // one script per map that runs the mission (the resolver finds it by the map's stem);
             // a mission no map names keeps its own name
             for stem in &job.targets {
-                if let Err(m) = out.write(&format!("{stem}.lua"), &source) {
-                    return (die(io, &m), false);
+                match out.write(&format!("{stem}.lua"), &source) {
+                    Ok(()) => {}
+                    Err(WriteError::Collision(m)) => {
+                        failed += 1;
+                        say(io, &format!("  FAIL {stem}: {m}"));
+                    }
+                    Err(WriteError::Fatal(m)) => return (die(io, &m), false),
                 }
             }
         }
@@ -617,7 +616,6 @@ fn child_a1(
     a: &Args,
     out: &mut OutDir,
     cache: Option<&Cache>,
-    used: &mut HashSet<String>,
     io: &mut Io<'_>,
     listing: &mut ListingFn<'_>,
 ) -> (i32, bool) {
@@ -628,13 +626,13 @@ fn child_a1(
     let mut failed = 0;
     for job in jobs {
         let ckey = cache.and_then(|_| a1_cache_key(&job.map, &job.dsl, &job.drl));
-        let entry = match lookup(cache, ckey.as_ref(), used) {
+        let entry = match lookup(cache, ckey.as_ref()) {
             Some(e) => Some(e),
             // any fault of one mission fails that mission only
             None => match a1::mission::convert_one(&job, listing) {
                 Ok((src, rep)) => {
                     let e = Entry::Converted { source: src.into_bytes(), console: a1_lines(&job.map, &rep) };
-                    store(cache, ckey.as_ref(), used, &e);
+                    store(cache, ckey.as_ref(), &e);
                     Some(e)
                 }
                 Err(e) => {
@@ -648,8 +646,13 @@ fn child_a1(
             for l in &console {
                 say(io, l);
             }
-            if let Err(m) = out.write(&format!("{}.lua", job.map), &source) {
-                return (die(io, &m), false);
+            match out.write(&format!("{}.lua", job.map), &source) {
+                Ok(()) => {}
+                Err(WriteError::Collision(m)) => {
+                    failed += 1;
+                    say(io, &format!("  FAIL {}: {m}", job.map));
+                }
+                Err(WriteError::Fatal(m)) => return (die(io, &m), false),
             }
         }
     }
