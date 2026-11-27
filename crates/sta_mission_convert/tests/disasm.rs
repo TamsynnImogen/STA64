@@ -139,6 +139,7 @@ fn run(var: &str) {
         files.len(),
         t0.elapsed()
     );
+    assert_eq!(refused, 0, "a mission DLL of the install was refused");
     assert_eq!(differing, 0, "the listing differs from objdump's");
 }
 
