@@ -52,7 +52,8 @@ fn unhex(s: &str) -> Vec<u8> {
 
 fn parse_cases() -> Vec<Case> {
     let mut out: Vec<Case> = Vec::new();
-    for line in CASES.lines() {
+    // the first line names the CPython that made the file; it belongs to no case
+    for line in CASES.lines().skip(1) {
         let (tag, rest) = line.split_once('|').expect("tag|payload");
         if tag == "case" {
             out.push(Case { name: rest.to_owned(), ..Case::default() });
@@ -224,7 +225,7 @@ fn the_case_file_covers_every_kind_of_result() {
 /// texts differ; see `staleness/mod.rs`).
 #[test]
 fn cases_file_is_current() {
-    if !staleness::pinned_python_available("cases_file_is_current") {
+    if !staleness::pinned_python_available("cases_file_is_current", "tests/drl_cases/cases.txt", CASES) {
         return;
     }
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/drl_cases");

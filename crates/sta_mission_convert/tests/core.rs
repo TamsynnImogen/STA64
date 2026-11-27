@@ -793,7 +793,12 @@ fn exception_classes_and_texts_match_python() {
 /// with: the texts of some Python exceptions differ between versions; see `staleness/mod.rs`).
 #[test]
 fn committed_tables_are_what_the_generator_writes() {
-    if !staleness::pinned_python_available("committed_tables_are_what_the_generator_writes") {
+    let committed = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/core_data/tables.rs")).unwrap();
+    if !staleness::pinned_python_available(
+        "committed_tables_are_what_the_generator_writes",
+        "tests/core_data/tables.rs",
+        &String::from_utf8_lossy(&committed),
+    ) {
         return;
     }
     let py = std::path::PathBuf::from("python3");
@@ -809,7 +814,6 @@ fn committed_tables_are_what_the_generator_writes() {
         .status()
         .expect("run python3");
     assert!(status.success(), "the generator failed");
-    let committed = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/core_data/tables.rs")).unwrap();
     // a checkout may have CRLF line endings: compare without carriage returns
     let strip = |v: Vec<u8>| v.into_iter().filter(|b| *b != b'\r').collect::<Vec<u8>>();
     let (committed, regenerated) = (strip(committed), strip(std::fs::read(&out).unwrap()));

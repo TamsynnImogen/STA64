@@ -1,3 +1,5 @@
+//! generated with CPython 3.14
+//!
 //! Expected values for `tests/core.rs`, produced by running the ORIGINAL Python functions of
 //! `tools/drl_to_lua.py`, `tools/dsl_to_lua.py` and `tools/a1_to_lua.py` on inputs invented for
 //! this purpose (made-up symbols and expression trees, numbers from a fixed seed). Nothing here

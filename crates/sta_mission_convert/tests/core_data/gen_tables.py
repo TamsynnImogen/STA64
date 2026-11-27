@@ -4,7 +4,8 @@ Runs the ORIGINAL Python functions of tools/{drl,dsl,a1}_to_lua.py on inputs inv
 symbols, made-up expression trees, random numbers from a fixed seed) and writes input/expected
 pairs as Rust constants. It NEVER reads any game data or any file but the tools' own source.
 Deterministic: the same Python version gives the same file (the texts of some Python exceptions
-differ between versions; the committed table was made with CPython 3.14).
+differ between versions; the committed table was made with CPython 3.14, and its first line says
+so).
 
 Usage (from the repository root):
     python3 -I crates/sta_mission_convert/tests/core_data/gen_tables.py . [output.rs]
@@ -677,7 +678,9 @@ for e_ in (None, 5, (), ("a",), [1]):
 rows = [(repr((nm, args)), run_raw(f, *args)) for nm, args, f in RAW_CASES]
 table("RAW_TEXT", rows, "`(case, args)` -> result, `!DecodeError:<text>` or `!raw:<class>:<text>` of a shared helper")
 
-header = """//! Expected values for `tests/core.rs`, produced by running the ORIGINAL Python functions of
+# The first line names the CPython that produced the exception texts below (they differ between
+# versions); the staleness test compares only under the pinned major.minor version.
+header = f"//! generated with CPython {sys.version_info[0]}.{sys.version_info[1]}\n//!\n" + """//! Expected values for `tests/core.rs`, produced by running the ORIGINAL Python functions of
 //! `tools/drl_to_lua.py`, `tools/dsl_to_lua.py` and `tools/a1_to_lua.py` on inputs invented for
 //! this purpose (made-up symbols and expression trees, numbers from a fixed seed). Nothing here
 //! comes from a game file. An input is the Python `repr` of the argument tuple, the expected value
