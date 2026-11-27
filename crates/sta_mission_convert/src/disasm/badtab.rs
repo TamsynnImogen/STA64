@@ -721,7 +721,7 @@ pub(crate) const BAD_ALL: &[(u32, u32)] = &[
 ];
 
 fn contains(t: &[(u32, u32)], k: u32) -> bool {
-    match t.binary_search_by(|&(a, b)| {
+    t.binary_search_by(|&(a, b)| {
         if k < a {
             std::cmp::Ordering::Greater
         } else if k > b {
@@ -729,16 +729,20 @@ fn contains(t: &[(u32, u32)], k: u32) -> bool {
         } else {
             std::cmp::Ordering::Equal
         }
-    }) {
-        Ok(_) => true,
-        Err(_) => false,
-    }
+    })
+    .is_ok()
 }
 
 /// How many opcode bytes the tool takes for the encoding when it reads it as `(bad)`:
 /// `Some(1)` for the first one only, `Some(n)` for all `n`, `None` when it is an instruction.
-pub(crate) fn bad_opcode_bytes(prefix: u8, map: u8, op: u8, modrm: u8, opcode_bytes: usize) -> Option<usize> {
-    let k = (((prefix as u32 * 4 + map as u32) * 256 + op as u32) * 256) + modrm as u32;
+pub(crate) fn bad_opcode_bytes(
+    prefix: u8,
+    map: u8,
+    op: u8,
+    modrm: u8,
+    opcode_bytes: usize,
+) -> Option<usize> {
+    let k = ((prefix as u32 * 4 + map as u32) * 256 + op as u32) * 256 + modrm as u32;
     if contains(BAD_ONE, k) {
         Some(1)
     } else if contains(BAD_ALL, k) {

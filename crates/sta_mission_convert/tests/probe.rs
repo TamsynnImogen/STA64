@@ -215,25 +215,38 @@ fn listing_lengths_equal_objdump_on_random_and_systematic_bytes() {
         return;
     }
     let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    // Chunks of one megabyte at most, compared and dropped one after another.
+    const CHUNK: usize = 1 << 20;
     let mut length_total = 0;
-    for (name, blob) in [
-        ("systematic", systematic_slots()),
-        ("random-1288", random_blob(1288, 4 << 20)),
-        ("random-77", random_blob(77, 4 << 20)),
-    ] {
-        let o = compare(name, &blob, &dir);
-        eprintln!(
-            "{name}: {} instructions, {} length episodes, {} text-only differences",
-            o.instructions, o.length_episodes, o.text_diffs
-        );
-        if std::env::var("STA64_PROBE_VERBOSE").is_ok() {
-            let mut v: Vec<_> = o.classes.iter().collect();
-            v.sort_by(|a, b| b.1.cmp(a.1));
-            for (k, c) in v.iter().take(40) {
-                eprintln!("    {c:6} {k}");
-            }
-        }
+    let mut classes: BTreeMap<String, usize> = BTreeMap::new();
+    let (mut instructions, mut text_total) = (0usize, 0usize);
+    let verbose = std::env::var("STA64_PROBE_VERBOSE").is_ok();
+    let mut run = |name: &str, blob: &[u8]| {
+        let o = compare(name, blob, &dir);
+        instructions += o.instructions;
+        text_total += o.text_diffs;
         length_total += o.length_episodes;
+        for (k, c) in o.classes {
+            *classes.entry(k).or_default() += c;
+        }
+    };
+    for (i, c) in systematic_slots().chunks(CHUNK).enumerate() {
+        run(&format!("systematic-{i}"), c);
+    }
+    for seed in [1288u64, 77] {
+        for i in 0..4u64 {
+            run(&format!("random-{seed}-{i}"), &random_blob(seed * 1000 + i, CHUNK));
+        }
+    }
+    eprintln!(
+        "{instructions} instructions, {length_total} length episodes, {text_total} text-only differences"
+    );
+    if verbose {
+        let mut v: Vec<_> = classes.iter().collect();
+        v.sort_by(|a, b| b.1.cmp(a.1));
+        for (k, c) in v.iter().take(60) {
+            eprintln!("    {c:6} {k}");
+        }
     }
     assert_eq!(length_total, 0, "the listing's instruction lengths differ from objdump's");
 }

@@ -498,12 +498,14 @@ impl<'a> Sweeper<'a> {
         };
         let vv = u32::from(vvvv != 0xf);
         let undefined = (op_at + 1).min(eff.len());
-        if kind_i == 2 && ll == 3 {
-            // The vector length field 3 is the rounding control of the forms that have one.
-            if byte(at + 3) & 0x10 == 0 {
+        if kind_i == 2 {
+            // The vector length field and the broadcast or rounding bit make one number; a
+            // field of 3 without the bit is no instruction.
+            let b = (byte(at + 3) >> 4) & 1;
+            if ll == 3 && b == 0 {
                 return undefined;
             }
-            ll = 2;
+            ll = ll * 2 + b;
         }
         let Some(&op) = eff.get(op_at) else {
             return eff.len();
@@ -524,6 +526,10 @@ impl<'a> Sweeper<'a> {
         let Some(&m) = eff.get(op_at + 1) else {
             return eff.len();
         };
+        // An opcode that has no such reg field is undefined.
+        if (v >> 8) & (1 << ((m >> 3) & 7)) == 0 {
+            return undefined;
+        }
         let is_reg = m >= 0xc0;
         let allowed = if is_reg { v & 8 != 0 } else { v & 4 != 0 };
         if !allowed {
@@ -572,6 +578,23 @@ impl<'a> Sweeper<'a> {
                 ("extrq", format!("(bad),0x78,0x{m:x}"))
             };
             return Some((mp + 1, join(&[], name, &ops)));
+        }
+        if lay.map == 1 && lay.op == 0x78 && m >= 0xc0 && (has(0x66) || has(0xf2)) {
+            let r = eff.get(mp + 1..mp + 3)?;
+            let (rm, imms) = (m & 7, format!("0x{:x},0x{:x}", r[0], r[1]));
+            let (name, ops) = if has(0xf2) {
+                ("insertq", format!("xmm{reg},xmm{rm},{imms}"))
+            } else {
+                ("extrq", format!("xmm{rm},{imms}"))
+            };
+            return Some((mp + 3, join(&[], name, &ops)));
+        }
+        // `vzeroupper` and `vzeroall` take the escape, the payload byte and the opcode.
+        if lay.map == 0 && lay.op == 0xc5 && m >= 0xc0 && eff.get(mp + 1) == Some(&0x77) {
+            let name = if m & 4 != 0 { "vzeroall" } else { "vzeroupper" };
+            if (m >> 3) & 0xf == 0xf {
+                return Some((mp + 2, join(&[], name, "")));
+            }
         }
         // `sm2` is `repnz` with the first padlock form.
         if lay.map == 1 && lay.op == 0xa6 && m == 0xc0 && has(0xf2) {
@@ -644,6 +667,16 @@ impl<'a> Sweeper<'a> {
             && m & 7 == 0
             && m < 0xc0
         {
+            if lay.op == 0xc7 && has(0x66) {
+                let r = eff.get(mp..mp + 2)?;
+                let rel = u16::from_le_bytes([r[0], r[1]]);
+                let n = mp + 2;
+                let target = (addr.wrapping_add(n as u32) as u16).wrapping_add(rel);
+                return Some((
+                    n,
+                    join(&[], "xbeginw", &format!("(bad),0x{target:x}")),
+                ));
+            }
             if lay.op == 0xc7 {
                 let r = eff.get(mp..mp + 4)?;
                 let rel = i32::from_le_bytes([r[0], r[1], r[2], r[3]]);
