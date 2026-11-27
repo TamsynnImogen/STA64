@@ -29,23 +29,49 @@
 //! sim with hot caches equals one of a sim restored cold, and a sim reloaded
 //! from its own snapshot every k ticks stays on the uninterrupted run.
 //!
-//! Not covered (outside the sim snapshot): controller and AI state (`sta_ai`;
-//! the sim only keeps which seats are AI seats, which the mixed scenario uses),
-//! mission Lua state, and everything on the client side (fog "explored" memory,
-//! camera, selection). Sensor visibility is derived from sim state each tick
-//! and is compared as part of the view. The sim offers no way to drop its
-//! caches in place, so "cold" means "restored from bytes".
+//! Also covered, one small test each: alerts, autonomy, subsystem switches,
+//! shield and hull edits, speed override, names and flags, mission switches,
+//! relations and target permissions, a stock edit; a victory (elimination)
+//! between save points; a station being decommissioned.
+//!
+//! Controls: three `#[should_panic]` tests drive the same `resume` helper with
+//! a deliberate fault (a command withheld after the restore, a snapshot of
+//! another tick, a snapshot of a run with another seed) and must fail it.
+//!
+//! Not covered (outside the sim snapshot): controller and AI state (`sta_ai`).
+//! The mixed scenario's "AI seat" is only the sim's `ai_seats` flag; NO
+//! controller runs and every command comes from the fixed script, so it says
+//! nothing about saving AI players. Also mission Lua state and the client side
+//! (explored-fog memory, camera, selection). Sensor visibility is derived from
+//! sim state each tick and is compared as part of the view.
+//!
+//! Not exercised by any scenario here (the authored fakes cannot set it up, or
+//! the order is rejected): boarding and transporters, colonies and population,
+//! special weapons and cloaks, ship repair queues, station recrew (the order is
+//! rejected for the fake station), decommission of a craft at a yard, approach
+//! warp, the Director's Cut, start-helper expiry and replacements, subsystem
+//! hit points and zero-shield holds, nebula effects (no nebula definition in
+//! the fakes), and `Edit::Seed` (the sim rejects it). A loss in those cannot
+//! show here; several have their own snapshot tests inside the crate.
+//!
+//! What the digest does not cover (so only the final snapshot bytes and the
+//! save-restore-save equality catch a loss there): the stuck-order watchdog
+//! rows, appearance factions, the map's start positions, regions and bounds,
+//! derived ship-upgrade multipliers and the path-planner cache. The sim offers
+//! no way to drop its caches in place, so "cold" means "restored from bytes".
 //!
 //! Authored data only: the fake content (`sta_content::fake`) plus a rig and
 //! body sizes, and synthetic maps. No game files are read.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use sta_content::{ContentDb, MapDef, MoveStats, Region, RegionKind, RegionShape, UnitDef};
 use sta_core::{EntityId, Fixed, PlayerId, TeamId, Vec3};
-use sta_sim::command::{Command, CommandKind, Edit, Order, Target};
+use sta_sim::command::{AlertState, AutonomyKind, AutonomyLevel, Command, CommandKind, Edit, MissionSwitch, Order, Subsystem, Target, TeamOp};
+use sta_sim::view::Relation;
 use sta_sim::setup::{Control, GameOptions, GameSetup, PlayerSetup};
 use sta_sim::world::NEUTRAL;
 use sta_sim::{Sim, SimEvent, TickOutput, WorldSource};
@@ -190,30 +216,59 @@ fn run_reference(sc: Scenario, saves: &[u64]) -> Reference {
 }
 
 /// The bytes written to a file under the build's temp directory and read back.
+/// The file name carries the scenario, the save tick and a process-wide counter,
+/// so no two calls (in parallel tests) ever share a path.
 fn through_file(name: &str, n: u64, bytes: &[u8]) -> Vec<u8> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("save-round-trip-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
-    let path = dir.join(format!("{name}-{n}.stas"));
+    let path = dir.join(format!("{name}-{n}-{}.stas", NEXT.fetch_add(1, Ordering::Relaxed)));
     std::fs::write(&path, bytes).expect("write the save file");
     let back = std::fs::read(&path).expect("read the save file");
     std::fs::remove_file(&path).expect("remove the save file");
     back
 }
 
+/// A deliberate fault for the controls: the harness must fail on each.
+enum Tamper {
+    Nothing,
+    /// The commands of this tick are not delivered to the resumed run.
+    Withhold(u64),
+    /// This snapshot, of another run (another seed) at the same tick, is loaded.
+    OtherRun(Vec<u8>),
+    /// The snapshot of this other tick is loaded in place of the named one.
+    OtherSnapshot(u64),
+}
+
 /// Restore the snapshot taken at tick `n` into a fresh sim and continue.
 fn resume(r: &Reference, n: u64, file: bool) {
+    resume_tampered(r, n, file, &Tamper::Nothing);
+}
+
+fn resume_tampered(r: &Reference, n: u64, file: bool, tamper: &Tamper) {
     let (name, via) = (r.name, if file { "file" } else { "memory" });
-    let saved = &r.snaps[&n];
+    let saved = match tamper {
+        Tamper::OtherSnapshot(m) => &r.snaps[m],
+        Tamper::OtherRun(bytes) => bytes,
+        _ => &r.snaps[&n],
+    };
     let bytes = if file { through_file(name, n, saved) } else { saved.clone() };
     assert!(&bytes == saved, "{name}: the file round trip changed the bytes (save at {n})");
     let mut sim = Sim::from_snapshot(&bytes, Some(content()))
         .unwrap_or_else(|e| panic!("{name}: save at {n} ({via}) does not load: {e:?}"));
-    assert_eq!(sim.tick, n, "{name}: loaded tick");
+    if !matches!(tamper, Tamper::OtherSnapshot(_) | Tamper::OtherRun(_)) {
+        assert_eq!(sim.tick, n, "{name}: loaded tick");
+    }
     let want = if n == 0 { r.start_digest } else { r.outs[n as usize - 1].view.digest };
     assert_eq!(sim.digest(), want, "{name}: digest right after loading the save at {n} ({via})");
     assert!(&sim.snapshot() == saved, "{name}: loading then saving the save at {n} ({via}) gives other bytes");
     for t in n..r.ticks {
-        let out = sim.step(r.script.commands(t));
+        let mut cmds = r.script.commands(t).to_vec();
+        match tamper {
+            Tamper::Withhold(w) if *w == t => cmds.clear(),
+            _ => {}
+        }
+        let out = sim.step(&cmds);
         let want = &r.outs[t as usize];
         assert_eq!(out.view.digest, want.view.digest, "{name}: save at {n} ({via}), digest of tick {t}");
         assert_eq!(out.events, want.events, "{name}: save at {n} ({via}), events of tick {t}");
@@ -250,6 +305,20 @@ fn pos_of(outs: &[TickOutput], id: EntityId, tick: usize) -> Option<Vec3> {
     outs[tick].view.unit(id).map(|u| u.pos)
 }
 
+/// Speed of `id` in the state at tick `n` (zero when it is gone).
+fn speed_at(r: &Reference, n: u64, id: EntityId) -> Fixed {
+    r.outs[n as usize - 1].view.unit(id).map_or(Fixed::ZERO, |u| u.speed)
+}
+
+/// The save ticks `ticks` must catch `ids` flying: live state, not an idle phase.
+fn assert_flying(r: &Reference, ticks: &[u64], ids: &[EntityId]) {
+    for &n in ticks {
+        for &id in ids {
+            assert!(speed_at(r, n, id) > Fixed::ZERO, "{}: {id:?} is not flying at the save at tick {n}", r.name);
+        }
+    }
+}
+
 fn probe(make: impl Fn() -> Scenario) -> Vec<TickOutput> {
     run_reference(make(), &[]).outs
 }
@@ -279,8 +348,11 @@ fn route() -> (Scenario, [EntityId; 3]) {
 
 #[test]
 fn nav_and_path_state_round_an_obstacle() {
-    let (sc, [a, ..]) = route();
+    let (sc, [a, b, c]) = route();
     let r = check(sc, &[1, 37, 200, 450, 700, 1000], 2);
+    // Live state: all three are under a move order and flying at these saves
+    // (the route itself is not exposed; the bend is asserted below).
+    assert_flying(&r, &[37, 200, 450], &[a, b, c]);
     // The route bends round the moon: it is not the straight line.
     let widest = (0..r.ticks as usize).filter_map(|t| pos_of(&r.outs, a, t)).map(|p| p.x.abs()).max().unwrap();
     assert!(widest > Fixed::from_int(300), "the ship flew straight through: {widest:?}");
@@ -308,6 +380,10 @@ fn formation() -> (Scenario, Vec<EntityId>) {
 fn a_formation_group_with_its_leader_round_an_obstacle() {
     let (sc, group) = formation();
     let r = check(sc, &[1, 60, 250, 501, 800, 1200], 2);
+    // Live state: the group is under way (not yet in place) at these saves,
+    // before and after the second formation order at tick 500.
+    assert_flying(&r, &[60, 250], &group);
+    assert!(group.iter().any(|&id| speed_at(&r, 501, id) > Fixed::ZERO), "nobody flies at the save at 501");
     // They flew: every ship ended far from where it started.
     for id in group {
         let end = pos_of(&r.outs, id, r.ticks as usize - 1).expect("alive");
@@ -338,25 +414,40 @@ fn orders() -> Scenario {
 fn queued_orders_and_scripted_orders_mid_execution() {
     let r = check(orders(), &[1, 45, 333, 701, 1000, 1500], 2);
     assert!(r.outs.iter().all(|o| o.view.units.len() == 3));
+    // Live state at the saves: the queue ship and the patrol are flying at 45
+    // and 333 (the queue itself is not exposed), the patrol later too.
+    let ids: Vec<EntityId> = r.outs[0].view.units.iter().map(|u| u.id).collect();
+    assert_flying(&r, &[45, 333], &[ids[0], ids[1]]);
+    assert_flying(&r, &[1000, 1500], &[ids[1]]);
     // The patrol (second unit) really flies its legs, past the save points.
     let patrol = r.outs[0].view.units[1].id;
     let xs: Vec<Fixed> = (0..r.ticks as usize).filter_map(|t| pos_of(&r.outs, patrol, t)).map(|p| p.x).collect();
     assert!(*xs.iter().max().unwrap() - *xs.iter().min().unwrap() > Fixed::from_int(800), "the patrol did not fly");
 }
 
-/// Control for the harness itself: a resumed run that misses a command the
-/// uninterrupted run got does NOT match, so the comparison can fail.
+// Controls for the harness itself: each goes through the same `resume` the
+// scenarios use, with a deliberate fault, and must fail the comparison.
+
 #[test]
-fn the_comparison_notices_a_run_that_diverges() {
+#[should_panic(expected = "digest of tick 700")]
+fn control_a_command_withheld_after_the_restore_is_noticed() {
     let r = run_reference(orders(), &[333]);
-    let mut sim = Sim::from_snapshot(&r.snaps[&333], Some(content())).expect("loads");
-    let mut diverged = false;
-    for t in 333..r.ticks {
-        // The stop at tick 700 is withheld.
-        let cmds = if t == 700 { &[][..] } else { r.script.commands(t) };
-        diverged |= sim.step(cmds).view.digest != r.outs[t as usize].view.digest;
-    }
-    assert!(diverged, "a withheld stop went unnoticed");
+    resume_tampered(&r, 333, false, &Tamper::Withhold(700));
+}
+
+#[test]
+#[should_panic(expected = "digest right after loading the save at 701")]
+fn control_a_snapshot_of_another_tick_is_noticed() {
+    let r = run_reference(orders(), &[333, 701]);
+    resume_tampered(&r, 701, true, &Tamper::OtherSnapshot(333));
+}
+
+#[test]
+#[should_panic(expected = "digest right after loading the save at 333")]
+fn control_a_run_with_a_different_seed_is_noticed() {
+    let r = run_reference(combat(7), &[333]);
+    let other = run_reference(combat(8), &[333]);
+    resume_tampered(&r, 333, false, &Tamper::OtherRun(other.snaps[&333].clone()));
 }
 
 /// Two cruisers against two frigates: beams, torpedoes in flight, shield
@@ -388,6 +479,19 @@ fn combat_in_flight_and_a_unit_dying_across_the_save() {
     saves.dedup();
     let r = check(combat(7), &saves, 3);
     assert!(count_events(&r.outs, |e| matches!(e, SimEvent::Destroyed { .. })) >= 1);
+    // Live state: damage is pending at the save after the first hit and a unit
+    // is alive at the save just before the kill and gone at the one after it.
+    let damaged = |n: u64| {
+        r.outs[n as usize - 1].view.units.iter().any(|u| u.hull[0] < u.hull[1] || u.shields.iter().any(|s| s[0] < s[1]))
+    };
+    assert!(damaged(hit + 1), "nothing is damaged at the save after the first hit");
+    let alive = |n: u64| r.outs[n as usize - 1].view.units.len();
+    assert!(alive(dead) > alive(dead + 1), "the kill does not fall between the saves at {dead} and {}", dead + 1);
+    assert!(
+        r.outs[(fired as usize)..=(fired as usize + 3)].iter().any(|o| o.events.iter().any(|e| matches!(e, SimEvent::Fired { .. }))),
+        "no shot is fired just before the save at {}",
+        fired + 3
+    );
 }
 
 /// The sim's own random draws (hits, casualties) decide the outcome: another
@@ -400,10 +504,10 @@ fn random_number_state_decides_the_outcome_across_a_reload() {
         digests[0] != digests[1] || digests[1] != digests[2],
         "no seed changes the combat: the scenario does not draw from the sim's random state"
     );
+    // (`Edit::Seed` is not applied by the sim today: it is always rejected, so
+    // it is not used here.)
     for seed in [2, 3] {
-        let mut sc = combat(seed);
-        sc.script.edit(300, Edit::Seed(777));
-        check(sc, &[1, 100, 299, 300, 301, 600, 1000], 3);
+        check(combat(seed), &[1, 100, 299, 300, 301, 600, 1000], 3);
     }
 }
 
@@ -435,7 +539,17 @@ fn production_and_construction_in_progress() {
     saves.extend([1300, 1790, 1850]);
     saves.sort_unstable();
     saves.dedup();
-    check(production(), &saves, 3);
+    let r = check(production(), &saves, 3);
+    // Live state: something is under construction (progress strictly between
+    // 0 and 1 in the view) at these saves.
+    for n in [100u64, 450, 600] {
+        let building = r.outs[n as usize - 1]
+            .view
+            .units
+            .iter()
+            .any(|u| u.progress.is_some_and(|p| p > Fixed::ZERO && p < Fixed::ONE));
+        assert!(building, "nothing is under construction at the save at tick {n}");
+    }
 }
 
 /// Two freighters mining two moons for a station: cargo, trips, docking
@@ -465,6 +579,13 @@ fn resources_and_timers_mid_mining() {
     saves.sort_unstable();
     saves.dedup();
     let r = check(mining(), &saves, 3);
+    // Live state: across the saves a freighter is under way at some and
+    // working (mining or unloading, at rest) at others; ids 4 and 5 are the
+    // two freighters (spawn order). Phase and cargo are not in the view.
+    let (m1, m2) = (EntityId(4), EntityId(5));
+    let flying = saves.iter().filter(|&&n| speed_at(&r, n, m1) > Fixed::ZERO || speed_at(&r, n, m2) > Fixed::ZERO).count();
+    let at_rest = saves.iter().filter(|&&n| speed_at(&r, n, m1) == Fixed::ZERO || speed_at(&r, n, m2) == Fixed::ZERO).count();
+    assert!(flying > 0 && at_rest > 0, "saves catch no trip ({flying}) or no work phase ({at_rest})");
     let stock = |t: usize| r.outs[t].view.players[0].resources.clone();
     assert_ne!(stock(0), stock(2599), "the stock changes over the run");
 }
@@ -488,7 +609,14 @@ fn the_stuck_order_watchdog_counters() {
     saves.push((ended + 50).min(4200));
     saves.sort_unstable();
     saves.dedup();
-    check(walled(), &saves, 2);
+    let r = check(walled(), &saves, 2);
+    // The counters (`watchdog::Row`) are not readable through the public API
+    // or the view, so liveness is shown by position: the saves cover the whole
+    // two-minute window (a craft still holding a move order, the order alive)
+    // and the ones after the abandon; the craft is alive all along.
+    let early = saves.iter().filter(|&&n| n < ended).count();
+    assert!(early >= 3, "only {early} saves fall inside the stuck window");
+    assert!(r.outs.iter().all(|o| o.view.units.len() == 1), "the craft is lost");
 }
 
 /// Two ships of two owners passing each other at the edge of sensor range.
@@ -549,7 +677,6 @@ fn mixed(ticks: u64) -> Scenario {
     script.order(300, P0, Order::Rally { builders: vec![yard], at: Target::Point(v(-1500, 0)) });
     script.order(900, P0, Order::Attack { units: fleet[..3].to_vec(), target: base });
     script.order(1200, P0, Order::Stop { units: vec![fleet[3]] });
-    script.edit(1400, Edit::Seed(5));
     script.order(1500, P0, Order::Formation { units: fleet.clone(), kind: 2 });
     script.go(1500, P0, &fleet, v(-1500, 0), false);
     Scenario { name: "mixed", sim, script, ticks }
@@ -562,6 +689,96 @@ fn one_long_mixed_scenario_saved_at_many_ticks() {
     assert!(count_events(&r.outs, |e| matches!(e, SimEvent::Fired { .. })) > 0, "there is combat");
     assert!(count_events(&r.outs, |e| matches!(e, SimEvent::Delivered { .. })) > 0, "there is mining");
     assert!(count_events(&r.outs, |e| matches!(e, SimEvent::Built { .. })) > 0, "there is production");
+    // Live state: at most saves some craft is moving, at some a build is in
+    // progress, at some a shot was fired in the last 30 ticks.
+    let moving = |n: u64| r.outs[n as usize - 1].view.units.iter().any(|u| u.speed > Fixed::ZERO);
+    let building = |n: u64| r.outs[n as usize - 1].view.units.iter().any(|u| u.progress.is_some_and(|p| p > Fixed::ZERO && p < Fixed::ONE));
+    let shooting = |n: u64| r.outs[(n as usize).saturating_sub(30)..n as usize].iter().any(|o| o.events.iter().any(|e| matches!(e, SimEvent::Fired { .. })));
+    let (m, b, s) = (
+        saves.iter().filter(|&&n| moving(n)).count(),
+        saves.iter().filter(|&&n| building(n)).count(),
+        saves.iter().filter(|&&n| shooting(n)).count(),
+    );
+    assert!(m * 4 >= saves.len() * 3, "only {m} of {} saves catch movement", saves.len());
+    assert!(b >= 2 && s >= 1, "saves catch {b} builds and {s} fights");
+}
+
+// ------------------------------------------ further state, one test each
+
+fn rejected(outs: &[TickOutput]) -> usize {
+    count_events(outs, |e| matches!(e, SimEvent::Rejected { .. }))
+}
+
+/// The combat world with the mission and bench edits and orders that set
+/// small pieces of state: alert levels, autonomy, subsystem switches, shield
+/// percent, a speed override, names and flags, mission switches, relations,
+/// target permissions, a stock edit and a hull edit; all after or around the
+/// save points.
+fn edits() -> Scenario {
+    let mut sc = combat(7);
+    let ids: Vec<EntityId> = sc.sim.units.iter().map(|u| u.id).collect();
+    let (c1, c2, f1, f2) = (ids[0], ids[1], ids[2], ids[3]);
+    let s = &mut sc.script;
+    s.order(5, P0, Order::Alert { units: vec![c1, c2], level: AlertState::Red });
+    s.order(10, P0, Order::Autonomy { units: vec![c1], kind: AutonomyKind::Movement, level: AutonomyLevel::High });
+    s.edit(50, Edit::Subsystem(c2, Subsystem::Weapons, false));
+    s.edit(200, Edit::Subsystem(c2, Subsystem::Weapons, true));
+    s.edit(60, Edit::ShieldPercent(f1, Fixed::from_f64(0.5)));
+    s.edit(80, Edit::MaxSpeed(c1, Some(Fixed::from_int(50))));
+    s.edit(90, Edit::Name(f2, "Delta".into()));
+    s.edit(90, Edit::SpecialForces(c1, true));
+    s.edit(100, Edit::MissionSwitch(MissionSwitch::PathPlanning, false));
+    s.edit(100, Edit::MissionSwitch(MissionSwitch::AllowWarp, false));
+    s.edit(120, Edit::TeamPool(PlayerId(P0), TeamOp::ResourceAdd(0), Fixed::from_int(10)));
+    s.edit(130, Edit::AllowAsTarget { id: f1, player: PlayerId(P0), allowed: false });
+    s.edit(140, Edit::Hull(c1, Fixed::from_int(500)));
+    s.edit(150, Edit::SetRelation { from: PlayerId(P1), to: PlayerId(P0), relation: Relation::Neutral });
+    s.edit(300, Edit::SetRelation { from: PlayerId(P1), to: PlayerId(P0), relation: Relation::Enemy });
+    s.edit(320, Edit::MaxSpeed(c1, None));
+    sc.name = "edits";
+    sc
+}
+
+#[test]
+fn alerts_autonomy_switches_relations_and_other_scripted_edits() {
+    let r = check(edits(), &[1, 6, 55, 85, 101, 135, 151, 250, 301, 400, 900], 3);
+    assert_eq!(rejected(&r.outs), 0, "every scripted edit is accepted, so the state it sets is live");
+}
+
+/// A cruiser kills the enemy's only craft: the seat is eliminated (victory
+/// state and event) between the save points.
+fn duel() -> Scenario {
+    let mut sim = world(3, vec![], Control::Idle);
+    let c = mine(&mut sim, "fx_cruiser", 2000, 2000);
+    let f = theirs(&mut sim, "fx_frigate", 2000, 2400);
+    let mut script = Script::default();
+    script.order(0, P0, Order::Attack { units: vec![c], target: f });
+    Scenario { name: "victory", sim, script, ticks: 1200 }
+}
+
+#[test]
+fn a_victory_condition_firing_across_a_reload() {
+    let outs = probe(duel);
+    let out = first_event(&outs, "an elimination", |e| matches!(e, SimEvent::PlayerEliminated { .. }));
+    let mut saves = vec![1, 100];
+    saves.extend(around(out, 1200));
+    saves.push(out + 40);
+    saves.sort_unstable();
+    saves.dedup();
+    check(duel(), &saves, 2);
+}
+
+/// A station decommissioned in place (a recycle job with a timer and a refund).
+#[test]
+fn decommission_in_progress() {
+    let mut sim = world(3, vec![], Control::Idle);
+    let station = mine(&mut sim, "fx_station", 1000, 0);
+    let mut script = Script::default();
+    script.order(10, P0, Order::Decommission { units: vec![station], yard: None });
+    let sc = Scenario { name: "decommission", sim, script, ticks: 1500 };
+    let r = check(sc, &[1, 11, 50, 200, 600, 1000], 2);
+    assert_eq!(rejected(&r.outs), 0, "the order is accepted");
+    assert!(r.outs[1499].view.units.is_empty() || r.outs[1499].view.units.len() < r.outs[0].view.units.len(), "the station was recycled");
 }
 
 // ------------------------------------------------- bytes and cold caches
