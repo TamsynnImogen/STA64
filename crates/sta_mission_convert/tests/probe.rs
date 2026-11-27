@@ -54,8 +54,8 @@ fn systematic_slots() -> Vec<u8> {
         out.extend_from_slice(&s);
     };
     let mods = [
-        0x00u8, 0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38, 0xc0, 0xc8, 0xd0, 0xd8, 0xe0, 0xe8,
-        0xf0, 0xf8,
+        0x00u8, 0x08, 0x10, 0x18, 0x20, 0x28, 0x30, 0x38, 0xc0, 0xc8, 0xd0, 0xd8, 0xe0, 0xe8, 0xf0,
+        0xf8,
     ];
     for op in 0..=255u8 {
         if op != 0x0f {
@@ -77,7 +77,11 @@ fn systematic_slots() -> Vec<u8> {
     }
     for p in [0x66u8, 0x67, 0xf0, 0xf2, 0xf3, 0x2e, 0x64] {
         for op in 0..=255u8 {
-            if [0x0f, 0x66, 0x67, 0xf0, 0xf2, 0xf3, 0x2e, 0x64, 0x36, 0x3e, 0x26, 0x65].contains(&op) {
+            if [
+                0x0f, 0x66, 0x67, 0xf0, 0xf2, 0xf3, 0x2e, 0x64, 0x36, 0x3e, 0x26, 0x65,
+            ]
+            .contains(&op)
+            {
                 continue;
             }
             for m in [0x00u8, 0xc0] {
@@ -93,7 +97,16 @@ fn systematic_slots() -> Vec<u8> {
     // Longer fixed forms: x87 with prefixes, fwait runs, long prefix runs.
     for op in 0xd8..=0xdfu8 {
         for m in [0x00u8, 0x45, 0xc1, 0xe9, 0xf1] {
-            for pre in [&[][..], &[0x9b], &[0x9b, 0x9b], &[0x66], &[0x9b, 0x66], &[0x66, 0x9b], &[0x9b, 0xf0], &[0x9b, 0x9b, 0x9b]] {
+            for pre in [
+                &[][..],
+                &[0x9b],
+                &[0x9b, 0x9b],
+                &[0x66],
+                &[0x9b, 0x66],
+                &[0x66, 0x9b],
+                &[0x9b, 0xf0],
+                &[0x9b, 0x9b, 0x9b],
+            ] {
                 let mut b = pre.to_vec();
                 b.extend_from_slice(&[op, m, 0x90]);
                 add(&b);
@@ -129,7 +142,16 @@ fn compare(name: &str, blob: &[u8], dir: &std::path::Path) -> Outcome {
     let path = dir.join(format!("probe-{name}.bin"));
     std::fs::write(&path, blob).expect("probe file written");
     let out = Command::new("objdump")
-        .args(["-D", "-b", "binary", "-m", "i386", "-M", "intel", "--no-show-raw-insn"])
+        .args([
+            "-D",
+            "-b",
+            "binary",
+            "-m",
+            "i386",
+            "-M",
+            "intel",
+            "--no-show-raw-insn",
+        ])
         .arg(format!("--adjust-vma={BASE:#x}"))
         .arg(&path)
         .output()
@@ -171,7 +193,12 @@ fn compare(name: &str, blob: &[u8], dir: &std::path::Path) -> Outcome {
                 *o.classes.entry(format!("{w} -> {g}")).or_default() += 1;
                 if shown < verbose {
                     shown += 1;
-                    eprintln!("[{name}] text   {}: want {:?} got {:?}", hex_at(a.0), a.1, b.1);
+                    eprintln!(
+                        "[{name}] text   {}: want {:?} got {:?}",
+                        hex_at(a.0),
+                        a.1,
+                        b.1
+                    );
                 }
             }
             i += 1;
@@ -235,7 +262,10 @@ fn listing_lengths_equal_objdump_on_random_and_systematic_bytes() {
     }
     for seed in [1288u64, 77] {
         for i in 0..4u64 {
-            run(&format!("random-{seed}-{i}"), &random_blob(seed * 1000 + i, CHUNK));
+            run(
+                &format!("random-{seed}-{i}"),
+                &random_blob(seed * 1000 + i, CHUNK),
+            );
         }
     }
     eprintln!(
@@ -248,5 +278,8 @@ fn listing_lengths_equal_objdump_on_random_and_systematic_bytes() {
             eprintln!("    {c:6} {k}");
         }
     }
-    assert_eq!(length_total, 0, "the listing's instruction lengths differ from objdump's");
+    assert_eq!(
+        length_total, 0,
+        "the listing's instruction lengths differ from objdump's"
+    );
 }

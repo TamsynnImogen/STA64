@@ -56,7 +56,10 @@ pub fn parse_objdump(text: &str) -> Vec<Ins> {
     let mut out = Vec::new();
     for line in text.split('\n') {
         let l = line.trim_start();
-        let n = l.bytes().take_while(|&b| matches!(b, b'0'..=b'9' | b'a'..=b'f')).count();
+        let n = l
+            .bytes()
+            .take_while(|&b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+            .count();
         if n == 0 || !l[n..].starts_with(":\t") {
             continue;
         }

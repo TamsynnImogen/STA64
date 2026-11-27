@@ -5,8 +5,8 @@
 use iced_x86::{Decoder, DecoderError, DecoderOptions, Instruction};
 
 use super::badtab;
-use super::vextab;
 use super::print::{self, Layout, MemParts, Quirks, Wait, fmt_mem, is_prefix, layout, prefix_name};
+use super::vextab;
 
 /// A decoder over one section and the position it reads at.
 pub(crate) struct Sweeper<'a> {
@@ -302,7 +302,11 @@ impl<'a> Sweeper<'a> {
                     .iter()
                     .map(|&b| prefix_name(b).unwrap_or(""))
                     .collect();
-                return ((nprefix + k).min(rest.len()), join(&words, "(bad)", ""), false);
+                return (
+                    (nprefix + k).min(rest.len()),
+                    join(&words, "(bad)", ""),
+                    false,
+                );
             }
         }
         let mut quirks = Quirks::default();
@@ -489,11 +493,27 @@ impl<'a> Sweeper<'a> {
             }
             0xc4 => {
                 let (p0, p1) = (byte(at + 1), byte(at + 2));
-                (1, p0 & 0x1f, p1 & 3, p1 >> 7, (p1 >> 2) & 1, (p1 >> 3) & 0xf, at + 3)
+                (
+                    1,
+                    p0 & 0x1f,
+                    p1 & 3,
+                    p1 >> 7,
+                    (p1 >> 2) & 1,
+                    (p1 >> 3) & 0xf,
+                    at + 3,
+                )
             }
             _ => {
                 let (p0, p1, p2) = (byte(at + 1), byte(at + 2), byte(at + 3));
-                (2, p0 & 0xf, p1 & 3, p1 >> 7, (p2 >> 5) & 3, (p1 >> 3) & 0xf, at + 4)
+                (
+                    2,
+                    p0 & 0xf,
+                    p1 & 3,
+                    p1 >> 7,
+                    (p2 >> 5) & 3,
+                    (p1 >> 3) & 0xf,
+                    at + 4,
+                )
             }
         };
         let vv = u32::from(vvvv != 0xf);
@@ -602,10 +622,19 @@ impl<'a> Sweeper<'a> {
         }
         // Memory-bound-check moves with an address-size prefix: both operands are named as bad
         // where the register number is out of range.
-        if lay.map == 1 && matches!(lay.op, 0x1a | 0x1b) && m < 0xc0 && has(0x67) && !has(0x66)
-            && !has(0xf2) && !has(0xf3)
+        if lay.map == 1
+            && matches!(lay.op, 0x1a | 0x1b)
+            && m < 0xc0
+            && has(0x67)
+            && !has(0x66)
+            && !has(0xf2)
+            && !has(0xf3)
         {
-            let bnd = if reg < 4 { format!("bnd{reg}") } else { "(bad)".to_string() };
+            let bnd = if reg < 4 {
+                format!("bnd{reg}")
+            } else {
+                "(bad)".to_string()
+            };
             let (name, ops) = if lay.op == 0x1a {
                 ("bndldx", format!("{bnd},(bad)"))
             } else {
@@ -660,6 +689,14 @@ impl<'a> Sweeper<'a> {
             };
             return Some((mp + 1, join(&all_words, "mov", &ops)));
         }
+        // `xbegin` with an operand-size prefix takes a 16-bit displacement.
+        if lay.map == 0 && lay.op == 0xc7 && m == 0xf8 && has(0x66) {
+            let r = eff.get(mp + 1..mp + 3)?;
+            let rel = u16::from_le_bytes([r[0], r[1]]);
+            let n = mp + 3;
+            let target = (addr.wrapping_add(n as u32) as u16).wrapping_add(rel);
+            return Some((n, join(&[], "xbeginw", &format!("0x{target:x}"))));
+        }
         // `xbegin` and `xabort` read their operand from the ModRM byte's place.
         if lay.map == 0
             && matches!(lay.op, 0xc6 | 0xc7)
@@ -672,10 +709,7 @@ impl<'a> Sweeper<'a> {
                 let rel = u16::from_le_bytes([r[0], r[1]]);
                 let n = mp + 2;
                 let target = (addr.wrapping_add(n as u32) as u16).wrapping_add(rel);
-                return Some((
-                    n,
-                    join(&[], "xbeginw", &format!("(bad),0x{target:x}")),
-                ));
+                return Some((n, join(&[], "xbeginw", &format!("(bad),0x{target:x}"))));
             }
             if lay.op == 0xc7 {
                 let r = eff.get(mp..mp + 4)?;
