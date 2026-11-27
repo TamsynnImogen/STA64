@@ -237,6 +237,7 @@ pub fn sync_units(
     mut seen: Local<Option<SeenKey>>,
     content: Option<Res<ContentRes>>,
     fog: Option<Res<crate::render::fog::FogState>>,
+    pending: crate::render::fog_objects::GridPending,
 ) {
     // Entities the map view spawned for its own ships belong to the link too.
     for (e, u) in &existing {
@@ -279,9 +280,8 @@ pub fn sync_units(
             let Some(def) = content.0.unit(u.def).filter(|d| u.owner == sta_sim::world::NEUTRAL && is_scenery_class(&d.class.0)) else { continue };
             // #1146: a planet never seen is not drawn (a backdrop object stays as it was; not decided). Rule and
             // grade: `render::fog_objects`. Out of sight it stays drawn as before.
-            let hidden = fog.is_some()
-                && !def.class.0.eq_ignore_ascii_case("background_obj")
-                && crate::render::fog_objects::sight_now(fog.as_deref(), local.0, reveal, u.pos.x.to_f32(), u.pos.z.to_f32(), def.radius.to_f32()) == crate::render::fog_objects::Sight::Never;
+            let hidden = !def.class.0.eq_ignore_ascii_case("background_obj")
+                && crate::render::fog_objects::sight_now(fog.as_deref(), local.0, reveal, pending.expected(), u.pos.x.to_f32(), u.pos.z.to_f32(), def.radius.to_f32()) == crate::render::fog_objects::Sight::Never;
             if !hidden {
                 want.entry(u.id).or_insert(u);
             }

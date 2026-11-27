@@ -468,7 +468,7 @@ impl FogPatterns {
 }
 
 /// An art texture: repeating, sRGB, opaque (the layer's opacity is the layer's own).
-fn pattern_image(vfs: Option<&sta_vfs::Vfs>, name: &str, default: [u8; 3]) -> (Image, Vec2) {
+pub(crate) fn pattern_image(vfs: Option<&sta_vfs::Vfs>, name: &str, default: [u8; 3]) -> (Image, Vec2) {
     let (w, h, mut px) = match vfs.and_then(|v| read_pattern(v, name)) {
         Some(p) if p.width > 0 && p.height > 0 => (p.width, p.height, p.pixels),
         _ => (1, 1, vec![default[0], default[1], default[2], 255]),
@@ -535,7 +535,7 @@ impl Plugin for FogPlugin {
     }
 }
 
-fn mask_image(grid: &FogGrid, layer: Layer) -> Image {
+pub(crate) fn mask_image(grid: &FogGrid, layer: Layer) -> Image {
     let mut img = Image::new(
         Extent3d { width: grid.w as u32, height: grid.h as u32, depth_or_array_layers: 1 },
         TextureDimension::D2,
@@ -582,7 +582,7 @@ fn layer_parts(
     )
 }
 
-fn params(layer: Layer, grid: &FogGrid, art: Vec2) -> FogParams {
+pub(crate) fn params(layer: Layer, grid: &FogGrid, art: Vec2) -> FogParams {
     // One art texel per cell, the grid centred in the art (stock's sprite is as large as its grid).
     let grid_texels = Vec2::new(grid.w as f32, grid.h as f32);
     let pat = grid_texels / art;

@@ -174,7 +174,7 @@ pub struct NebulaField {
     /// The nebula radius the envelope was built for.
     radius: f32,
     /// Which of `centres` are drawn (#1146: a nebula never seen is not); all, until the states say otherwise.
-    shown: Vec<bool>,
+    shown: Vec<f32>,
     /// Each centre's region of the map, found once (`gate_fields`); `None` until then.
     region: Option<Vec<Option<usize>>>,
     /// The centres drawn (`shown`), for the lightning to strike among.
@@ -690,7 +690,7 @@ struct BoardCache {
     /// The last pass's eye and visible nebulae (centre and radius), by bits, and the occlusion
     /// they gave.
     eye: Option<[u32; 3]>,
-    visible: Vec<(Entity, [u32; 3], u32)>,
+    visible: Vec<(Entity, [u32; 3], u32, u32)>,
     occ: Vec<f32>,
     /// The occlusion's working memory.
     index: Occlusion,
@@ -775,10 +775,12 @@ type MovedPuffs<'w, 's> = Query<
 /// a frame whose inputs did not change, which would write nothing, is skipped (#1235). Nebulae out
 /// of the view are not skipped: a stored fade only follows its value by steps of more than a
 /// thousandth, so what a skipped puff would hold on coming back depends on every frame it missed.
+#[allow(clippy::too_many_arguments)]
 fn fade_boards(
     mut commands: Commands,
     camera: Query<&GlobalTransform, crate::map::MainCamera>,
-    nebulae: Query<(Entity, &GlobalTransform, &NebulaBoards, &InheritedVisibility)>,
+    nebulae: Query<(Entity, &GlobalTransform, &NebulaBoards, &InheritedVisibility, Option<&ChildOf>)>,
+    out_of_sight: Query<(), With<crate::render::fog_objects::OutOfSight>>,
     children: Query<&Children>,
     mut puffs: ParamSet<(MovedPuffs, Puffs)>,
     mut changes: BoardChanges,
@@ -802,10 +804,17 @@ fn fade_boards(
         cache.eye = None;
     }
     let eye = cam.translation();
-    let list: Vec<_> = nebulae.iter().filter(|(_, _, _, v)| v.get()).map(|(e, g, b, _)| (e, g.translation(), b.radius)).collect();
+    let list: Vec<_> = nebulae.iter().filter(|(_, _, _, v, _)| v.get()).map(|(e, g, b, _, _)| (e, g.translation(), b.radius)).collect();
+    // A nebula out of sight is a copy at a reduced intensity (#1146; `fog_objects::ghost::NEBULA`, interim): its
+    // puffs' light is scaled by it, on top of the occlusion.
+    let dims: Vec<f32> = nebulae
+        .iter()
+        .filter(|(_, _, _, v, _)| v.get())
+        .map(|(.., parent)| if parent.is_some_and(|p| out_of_sight.contains(p.parent())) { crate::render::fog_objects::ghost::NEBULA } else { 1.0 })
+        .collect();
     // The occlusion is a pure function of the eye and the visible nebulae (in order): kept while
     // they do not change.
-    let visible: Vec<(Entity, [u32; 3], u32)> = list.iter().map(|&(e, c, r)| (e, c.to_array().map(f32::to_bits), r.to_bits())).collect();
+    let visible: Vec<(Entity, [u32; 3], u32, u32)> = list.iter().zip(&dims).map(|(&(e, c, r), d)| (e, c.to_array().map(f32::to_bits), r.to_bits(), d.to_bits())).collect();
     let eye_bits = eye.to_array().map(f32::to_bits);
     let same = cache.eye == Some(eye_bits) && cache.visible == visible;
     if same && !moved && !cache.shared && !cache.inserted {
@@ -817,11 +826,11 @@ fn fade_boards(
     }
     let occ = std::mem::take(&mut cache.occ);
     let mut inserted = false;
-    for (&(root, _, _), &occ) in list.iter().zip(&occ) {
+    for ((&(root, _, _), &occ), &dim) in list.iter().zip(&occ).zip(&dims) {
         let Some(list) = cache.puffs.get(&root) else { continue };
         for &e in list {
             let Ok((g, t, fade)) = puffs.get_mut(e) else { continue };
-            inserted |= fade_puff(&mut commands, e, g, t, fade, eye, occ);
+            inserted |= fade_puff(&mut commands, e, g, t, fade, eye, occ * dim);
         }
     }
     cache.occ = occ;
@@ -903,15 +912,27 @@ fn gate_fields(
             let found = f.centres.iter().map(|c| regions.find(sta_content::RegionKind::Nebula, c[0], -c[2], REGION_MATCH).map(|r| r.id)).collect();
             f.region = Some(found);
         }
-        let shown: Vec<bool> = f.region.iter().flatten().map(|r| r.is_none_or(|id| sights.get(id) != Sight::Never)).collect();
+        // 1 in sight, the out-of-sight factor for a nebula seen before (a still, thinner copy; interim, see
+        // `fog_objects::ghost::NEBULA`), 0 never seen.
+        let shown: Vec<f32> = f
+            .region
+            .iter()
+            .flatten()
+            .map(|r| match r.map_or(Sight::Visible, |id| sights.get(id)) {
+                Sight::Never => 0.0,
+                Sight::Remembered => crate::render::fog_objects::ghost::NEBULA,
+                Sight::Visible => 1.0,
+            })
+            .collect();
         if shown == f.shown {
             continue;
         }
         let Some(handle) = materials.get(&f.material).and_then(|m| m.envelope.clone()) else { continue };
-        let env = sta_surface::nebula::envelope_masked(&f.recipe, f.radius, &f.centres, &shown);
+        let env = sta_surface::nebula::envelope_weighted(&f.recipe, f.radius, &f.centres, &shown);
         let Some(mut img) = images.get_mut(&handle) else { continue };
         img.data = Some(env.pixels);
-        f.lit = f.centres.iter().zip(&shown).filter(|(_, s)| **s).map(|(c, _)| *c).collect();
+        // The lightning strikes among the nebulae in sight only: a copy out of sight does not animate.
+        f.lit = f.centres.iter().zip(&shown).filter(|(_, s)| **s >= 1.0).map(|(c, _)| *c).collect();
         f.shown = shown;
     }
 }
@@ -1024,7 +1045,7 @@ pub fn spawn_field(
             dome,
             centres: pos.to_vec(),
             radius,
-            shown: vec![true; pos.len()],
+            shown: vec![1.0; pos.len()],
             region: None,
             lit: pos.to_vec(),
             lightning: Lightning::new(seed),
@@ -1161,7 +1182,7 @@ mod tests {
                 dome: 1.0,
                 centres: centres.clone(),
                 radius: 300.0,
-                shown: vec![true; 2],
+                shown: vec![1.0; 2],
                 region: None,
                 lit: centres.clone(),
                 lightning: Lightning::new(1),
@@ -1174,7 +1195,7 @@ mod tests {
         app.add_systems(Update, (update_region_sights, gate_fields).chain());
         // No grid yet: every nebula is drawn (the same rule as the gates and `sync_units`).
         app.update();
-        assert_eq!(app.world().get::<NebulaField>(field).unwrap().shown, vec![true, true]);
+        assert_eq!(app.world().get::<NebulaField>(field).unwrap().shown, vec![1.0, 1.0]);
         assert_eq!(app.world().get::<NebulaField>(field).unwrap().region, Some(vec![Some(0), Some(1)]), "each centre's region found once");
         // A grid that has seen only the second nebula.
         let mut grid = crate::render::fog::FogGrid::new([-4096.0, -4096.0], [4096.0, 4096.0]);
@@ -1183,7 +1204,7 @@ mod tests {
         app.insert_resource(crate::render::fog::FogState { grid, updates: 1 });
         app.update();
         assert_eq!(app.world().resource::<RegionSights>().get(0), Sight::Never);
-        assert_eq!(app.world().get::<NebulaField>(field).unwrap().shown, vec![false, true]);
+        assert_eq!(app.world().get::<NebulaField>(field).unwrap().shown, vec![0.0, 1.0]);
         let want = sta_surface::nebula::envelope_masked(&app.world().get::<NebulaField>(field).unwrap().recipe, 300.0, &centres, &[false, true]);
         let got = app.world().resource::<Assets<Image>>().get(&handle).unwrap().data.clone().unwrap();
         assert_eq!(got, want.pixels);
@@ -1194,11 +1215,21 @@ mod tests {
         app.update();
         app.update();
         assert_eq!(app.world().resource::<Assets<Image>>().get(&handle).unwrap().data.clone().unwrap(), vec![7; got.len()], "no recompute without a change");
+        // The second nebula goes out of sight (seen before, not now): a dimmed, still copy; the first stays hidden.
+        let mut grid = crate::render::fog::FogGrid::new([-4096.0, -4096.0], [4096.0, 4096.0]);
+        grid.set_cell_for_test(c % grid.w, c / grid.w, false, true);
+        app.insert_resource(crate::render::fog::FogState { grid, updates: 2 });
+        app.update();
+        let ghost = crate::render::fog_objects::ghost::NEBULA;
+        assert_eq!(app.world().get::<NebulaField>(field).unwrap().shown, vec![0.0, ghost]);
+        assert!(app.world().get::<NebulaField>(field).unwrap().lit.is_empty(), "no lightning in a copy out of sight");
+        let want = sta_surface::nebula::envelope_weighted(&app.world().get::<NebulaField>(field).unwrap().recipe, 300.0, &centres, &[0.0, ghost]);
+        assert_eq!(app.world().resource::<Assets<Image>>().get(&handle).unwrap().data.clone().unwrap(), want.pixels);
         // Everything in sight again: the envelope is the full one.
         let all = crate::render::fog::FogGrid::new([-4096.0, -4096.0], [4096.0, 4096.0]).lifted(true, true);
-        app.insert_resource(crate::render::fog::FogState { grid: all, updates: 2 });
+        app.insert_resource(crate::render::fog::FogState { grid: all, updates: 3 });
         app.update();
-        assert_eq!(app.world().get::<NebulaField>(field).unwrap().shown, vec![true, true]);
+        assert_eq!(app.world().get::<NebulaField>(field).unwrap().shown, vec![1.0, 1.0]);
         assert_eq!(app.world().resource::<Assets<Image>>().get(&handle).unwrap().data.clone().unwrap(), env.pixels);
     }
 
@@ -1772,6 +1803,49 @@ mod tests {
         nebula(w, Vec3::new(500.0, 0.0, 100.0), 150.0, 3);
         nebula(w, Vec3::new(-450.0, 40.0, -250.0), 180.0, 4);
         app
+    }
+
+    /// #1146: a billboard nebula whose gate is out of sight has its puffs' light scaled by the out-of-sight factor
+    /// (a still copy at a reduced intensity); in sight it is as before, and the change is written on the next pass.
+    #[test]
+    fn a_billboard_nebula_out_of_sight_has_its_puffs_dimmed_and_in_sight_unchanged() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, TransformPlugin));
+        app.add_systems(Update, crate::render::sprites::face_camera).add_systems(PostUpdate, fade_boards.after(TransformSystems::Propagate));
+        let w = app.world_mut();
+        w.spawn((Camera3d::default(), Transform::from_xyz(0.0, 900.0, 1400.0).looking_at(Vec3::ZERO, Vec3::Y)));
+        let gate = w.spawn((Transform::IDENTITY, Visibility::Inherited)).id();
+        let a = nebula(w, Vec3::ZERO, 160.0, 1);
+        let b = nebula(w, Vec3::new(900.0, 0.0, 0.0), 160.0, 1);
+        w.entity_mut(a).insert(ChildOf(gate));
+        let fades = |app: &mut App, root: Entity| -> Vec<f32> {
+            let w = app.world_mut();
+            let mut q = w.query::<(&crate::render::sprites::SpriteFade, &ChildOf)>();
+            let nodes: Vec<Entity> = w.query::<(Entity, &ChildOf)>().iter(w).filter(|(_, c)| c.parent() == root).map(|(e, _)| e).collect();
+            let mut v: Vec<f32> = q.iter(w).filter(|(_, c)| nodes.contains(&c.parent())).map(|(f, _)| f.0).collect();
+            v.sort_by(f32::total_cmp);
+            v
+        };
+        for _ in 0..3 {
+            app.update();
+        }
+        let (live_a, live_b) = (fades(&mut app, a), fades(&mut app, b));
+        assert!(!live_a.is_empty() && live_a.iter().any(|f| *f > 0.0));
+        assert_eq!(live_a, live_b, "two copies of one nebula in sight read the same");
+        app.world_mut().entity_mut(gate).insert(crate::render::fog_objects::OutOfSight);
+        for _ in 0..3 {
+            app.update();
+        }
+        let ghost = crate::render::fog_objects::ghost::NEBULA;
+        let dimmed = fades(&mut app, a);
+        let sum = |v: &[f32]| v.iter().sum::<f32>();
+        assert!((sum(&dimmed) - sum(&live_a) * ghost).abs() < 0.01 * live_a.len() as f32, "dimmed {dimmed:?} against {live_a:?}");
+        assert_eq!(fades(&mut app, b), live_b, "the nebula in sight is unchanged");
+        app.world_mut().entity_mut(gate).remove::<crate::render::fog_objects::OutOfSight>();
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(fades(&mut app, a), live_a, "back in sight: as before");
     }
 
     /// The same scripted change, frame by frame, to either app (entities are spawned in the same
