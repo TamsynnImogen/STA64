@@ -127,6 +127,7 @@ pub fn mission_report(
 fn is_internal(n: &str) -> bool {
     n.starts_with("ScriptCreate_")
         || n.starts_with("ScriptGet_")
+        || n.starts_with("ScriptDestroy_")
         || ["Add", "Remove"].iter().any(|a| {
             ["To", "From"].iter().any(|b| ["Load", "Save"].iter().any(|c| n == format!("{a}{b}{c}")))
         })
