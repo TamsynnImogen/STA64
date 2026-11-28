@@ -806,20 +806,42 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
         // An evolve-only class has it in the opener's place; a class with a builder key keeps
         // Build and gets Evolve in the first free cell (below). INTERIM: the position of a second
         // menu button is STA64's choice, not determined for the original.
-        // INTERIM: a class with the research key and the evolve key shows Research only; the
-        // static reading says both would show, so this is STA64's choice.
-        let evolve = embryo || (key("evolve") && !research);
+        // The STATE of each top-level menu button is its own (read from the executable, static; the cases with a
+        // single flag measured): Research is on by its class flag alone, Build needs exactly one unit selected,
+        // Evolve needs every selected unit to be of one class. No state makes another exclusive.
+        let selected = feed.selected_units();
+        let single = selected.len() == 1;
+        let one_class = selected.iter().all(|u| u.def == selected[0].def);
         let builds = !embryo && (key("builder_ship") || key("builder_facility"));
-        evolve_extra = evolve && builds;
-        let caption = if research { "Research" } else if evolve && !builds { "Evolve" } else { "Build" };
-        let mut opener = button(0, &tr(caption), Act::OpenBuild, &tooltip_key(if research { "Research menu" } else if caption == "Evolve" { "Evolve menu" } else { "Build" }));
-        if research {
-            opener.sprite_names = vec!["b_research".into()];
-            opener.verbose = Some(tooltip_key("Open the research menu."));
-        } else if caption == "Evolve" {
-            opener = evolve_button(0);
+        let research_on = research;
+        let evolve_on = (embryo || key("evolve")) && one_class;
+        let build_on = !embryo && single && (builds || !key("evolve"));
+        // The SLOTS stay as they were (INTERIM, ambiguous in the read): after the states are set the original packs
+        // the buttons that are on into the grid by their configured locations, and whether two buttons that are on
+        // each get a cell of their own or share one is not settled (reading one: separate cells, the second shifts
+        // the rest; reading two: a cell holds several modes and one wins). Today's slots: Research takes the opener's
+        // cell and hides an Evolve that is on with it; Evolve takes the opener's cell when Build is off, else the
+        // first free cell. Needs the install's button location keys and one frame of the original.
+        evolve_extra = evolve_on && build_on && !research_on;
+        let caption = if research_on {
+            Some("Research")
+        } else if evolve_on && !build_on {
+            Some("Evolve")
+        } else if build_on {
+            Some("Build")
+        } else {
+            None
+        };
+        if let Some(caption) = caption {
+            let mut opener = button(0, &tr(caption), Act::OpenBuild, &tooltip_key(match caption { "Research" => "Research menu", "Evolve" => "Evolve menu", _ => "Build" }));
+            if caption == "Research" {
+                opener.sprite_names = vec!["b_research".into()];
+                opener.verbose = Some(tooltip_key("Open the research menu."));
+            } else if caption == "Evolve" {
+                opener = evolve_button(0);
+            }
+            out.push(opener);
         }
-        out.push(opener);
     }
     if caps.rally {
         out.push(button(
@@ -1584,7 +1606,8 @@ mod tests {
                 .any(|b| b.act == Act::Target(TargetMode::Move))
         );
         f.selected = vec![EntityId(1), EntityId(2)];
-        assert!(grid(&f, Page::Top).iter().any(|b| b.act == Act::OpenBuild));
+        // Build is on only for exactly one selected unit (read from the executable, static): two builders give none.
+        assert!(!grid(&f, Page::Top).iter().any(|b| b.act == Act::OpenBuild));
         assert!(grid(&f, Page::Top).iter().any(|b| b.act == Act::Stop));
         f.selected = vec![EntityId(2), EntityId(4)];
         assert!(!grid(&f, Page::Top).iter().any(|b| b.act == Act::OpenBuild));
@@ -2323,6 +2346,53 @@ mod tests {
         assert_eq!(cells.len(), g.len(), "no two buttons share a cell");
         let others: Vec<usize> = g.iter().filter(|b| b.sprite_names != ["b_evolve"]).map(|b| b.cell).collect();
         assert_eq!(Some(o[1].0), (0..).find(|c| !others.contains(c)), "the first free cell");
+    }
+
+    /// A feed with one own unit of each class in `picks` (by definition name), all selected.
+    fn menu_multi(defs: Vec<UnitDef>, picks: &[&str]) -> HudFeed {
+        let fake = sta_content::fake::db();
+        let mut db = ContentDb::builder().profile(fake.profile()).features(fake.features().clone());
+        for weapon in fake.weapons() { db = db.weapon(weapon.clone()); }
+        for u in fake.units() { db = db.unit(u.clone()); }
+        for u in defs { db = db.unit(u); }
+        let db = db.build().unwrap();
+        let units: Vec<_> = picks.iter().enumerate().map(|(i, odf)| unit(&db, 2 + i as u32, odf, 1, 100.0, None)).collect();
+        let ids: Vec<u32> = (0..picks.len() as u32).map(|i| 2 + i).collect();
+        feed(db, units, &ids)
+    }
+
+    /// The state of each top-level menu button is its own (read from the executable, static; single flags measured):
+    /// Build needs exactly one selected unit, Evolve needs one class among the selection, Research only its flag.
+    #[test]
+    fn each_menu_buttons_state_follows_its_own_rule() {
+        let defs = || vec![
+            menu_def("m_build", "station", "builder_facility = 1\n"),
+            menu_def("m_build_two", "station", "builder_facility = 1\n"),
+            menu_def("m_evolve", "station", "evolve = 1\n"),
+            menu_def("m_evolve_two", "station", "evolve = 1\n"),
+            menu_def("m_research", "station", "research = 1\n"),
+        ];
+        let sprites = |picks: &[&str]| -> Vec<String> { openers(&menu_multi(defs(), picks)).into_iter().flat_map(|(_, s)| s).collect() };
+        // Build: one unit gives it, two (even of one class) do not.
+        assert_eq!(sprites(&["m_build"]), ["b_build"]);
+        assert!(sprites(&["m_build", "m_build"]).is_empty());
+        assert!(sprites(&["m_build", "m_build_two"]).is_empty());
+        // Evolve: one class gives it whatever the count; two classes do not.
+        assert_eq!(sprites(&["m_evolve"]), ["b_evolve"]);
+        assert_eq!(sprites(&["m_evolve", "m_evolve"]), ["b_evolve"]);
+        assert!(sprites(&["m_evolve", "m_evolve_two"]).is_empty());
+        // Research: its flag alone, whatever the count or the classes.
+        assert_eq!(sprites(&["m_research"]), ["b_research"]);
+        assert_eq!(sprites(&["m_research", "m_research"]), ["b_research"]);
+    }
+
+    /// A class with a builder key and the evolve key, selected twice: Build is off (two selected) and Evolve is on
+    /// (one class), so Evolve takes the opener's place; the slot rule itself is unchanged and INTERIM (ambiguous).
+    #[test]
+    fn independent_states_show_evolve_alone_where_build_is_off() {
+        let defs = vec![menu_def("m_both", "station", "builder_facility = 1\nevolve = 1\n")];
+        assert_eq!(openers(&menu_multi(defs.clone(), &["m_both"])).iter().map(|o| o.1.clone()).collect::<Vec<_>>(), [vec!["b_build".to_string()], vec!["b_evolve".to_string()]]);
+        assert_eq!(openers(&menu_multi(defs, &["m_both", "m_both"])), [(0, vec!["b_evolve".to_string()])]);
     }
 
     /// Install-gated (`STA64_TEST_A2_STOCK_INSTALL`, read at run time, structure only): every class
