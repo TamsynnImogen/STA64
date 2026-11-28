@@ -53,7 +53,7 @@ pub struct WorldView {
     /// scripted warp moves), ascending entity id. Derived from the sim's warp
     /// record and the craft's speed; no state of its own.
     #[serde(default)]
-    pub warp: Vec<WarpRow>,
+    pub warp_rows: Vec<WarpRow>,
 }
 
 /// Where a craft is in its warp (SIM-36).
@@ -77,6 +77,9 @@ pub enum WarpPhase {
 /// tick otherwise. At warp the ramp is over and `ramp_start` is the tick it
 /// would have begun to end now (`tick - ramp_len`), not the entry tick.
 /// Interim: part 2 of #1102 stores the real start.
+///
+/// `phase` is the contract; the ramp fields are presentation hints and may
+/// become zero-length (no `Entering` row) when the measured no-ramp rule lands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WarpRow {
     pub id: EntityId,
@@ -88,7 +91,7 @@ pub struct WarpRow {
 impl WorldView {
     /// The craft's warp row, if it is in warp or dropping out.
     pub fn warp_of(&self, id: EntityId) -> Option<&WarpRow> {
-        self.warp.binary_search_by_key(&id, |row| row.id).ok().map(|i| &self.warp[i])
+        self.warp_rows.binary_search_by_key(&id, |row| row.id).ok().map(|i| &self.warp_rows[i])
     }
 
     pub fn point_defence_on(&self, id: EntityId, slot: u8) -> bool {

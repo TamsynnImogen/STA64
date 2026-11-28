@@ -193,16 +193,16 @@ mod tests {
         }]);
         for _ in 0..10 { sim.step(&[]); }
         assert!(sim.unit(id).unwrap().speed > Fixed::ZERO, "plain move is at impulse");
-        assert!(sim.view().warp.is_empty(), "plain move has no warp phase");
+        assert!(sim.view().warp_rows.is_empty(), "plain move has no warp phase");
         sim.step(&[Command { player: PlayerId(0), seq: 1,
             kind: CommandKind::Order(Order::MoveWarp { units: vec![id], to: goal, queue: false }),
         }]);
-        assert!(sim.view().warp.is_empty(), "accelerating at impulse before warp entry");
+        assert!(sim.view().warp_rows.is_empty(), "accelerating at impulse before warp entry");
         let mut seen = Vec::new();
         for _ in 0..1500 {
             sim.step(&[]);
             let view = sim.view();
-            match view.warp.as_slice() {
+            match view.warp_rows.as_slice() {
                 [row] => {
                     assert_eq!(row.id, id);
                     assert!(row.ramp_len > 0 && row.ramp_start <= view.tick);

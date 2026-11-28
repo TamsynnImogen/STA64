@@ -242,12 +242,12 @@ fn the_view_carries_warp_rows_for_an_attack_approach_sorted_by_id() {
     let t = sim.spawn_def(db.key("st_target").unwrap(), PlayerId(2), v(0, 3000), AHEAD).unwrap();
     assert!(late < early, "ids follow spawning");
     let order = Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Attack { units: vec![early, late], target: t }) };
-    assert!(sim.view().warp.is_empty(), "nothing warps before the order");
+    assert!(sim.view().warp_rows.is_empty(), "nothing warps before the order");
     let mut seen: Vec<WarpPhase> = Vec::new();
     let mut mid_ramp: Option<(Sim, WarpRow)> = None;
     for i in 0..30 * 12 {
         let view = WorldSource::step(&mut sim, if i == 0 { std::slice::from_ref(&order) } else { &[] }).view;
-        assert!(view.warp.windows(2).all(|w| w[0].id < w[1].id), "sorted by id");
+        assert!(view.warp_rows.windows(2).all(|w| w[0].id < w[1].id), "sorted by id");
         let Some(row) = view.warp_of(early).copied() else { continue };
         assert_eq!(view.warp_of(late).map(|r| r.phase), Some(row.phase), "same course, same phase");
         // 400 - 140 at 2 x 400 per second, 30 ticks a second: 10 ticks.
@@ -268,12 +268,12 @@ fn the_view_carries_warp_rows_for_an_attack_approach_sorted_by_id() {
         }
     }
     assert_eq!(seen, [WarpPhase::Entering, WarpPhase::AtWarp, WarpPhase::Leaving]);
-    assert!(sim.view().warp.is_empty(), "closing in at combat speed is not warp");
+    assert!(sim.view().warp_rows.is_empty(), "closing in at combat speed is not warp");
     // The rows come from the warp record and the speed alone: a snapshot taken
     // mid-ramp shows the same row, and the view adds nothing to the digest.
     let (sim, row) = mid_ramp.expect("a ramp in progress was seen");
     let back = Sim::from_snapshot(&sim.snapshot(), sim.content.clone()).unwrap();
-    assert_eq!(back.view().warp, sim.view().warp);
+    assert_eq!(back.view().warp_rows, sim.view().warp_rows);
     assert_eq!(back.view().warp_of(early), Some(&row));
     assert_eq!(back.digest(), sim.digest());
 }
