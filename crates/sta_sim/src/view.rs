@@ -109,6 +109,14 @@ pub struct WarpRow {
     pub phase: WarpPhase,
     pub ramp_start: Tick,
     pub ramp_len: u32,
+    /// The craft's stretch factor at full warp: the one the ramp's length and shift are made from (the sim's own rule,
+    /// derived from the craft's speeds, one source for the drawing). Never below one.
+    #[serde(default = "one")]
+    pub stretch: Fixed,
+}
+
+fn one() -> Fixed {
+    Fixed::ONE
 }
 
 impl WorldView {

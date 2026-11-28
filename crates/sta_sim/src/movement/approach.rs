@@ -436,18 +436,19 @@ impl Sim {
         use crate::view::{WarpPhase, WarpRow};
         self.approach_warp.to_rec().into_iter().filter_map(|(id, phase)| {
             let u = self.units.get(id)?;
+            let stretch = stretch(u.stats.warp_speed, u.stats.max_speed);
             if let Some(ramp) = self.approach_warp.ramp(id) {
                 let phase = match phase {
                     ENTERING => WarpPhase::Entering,
                     IN_WARP => WarpPhase::AtWarp,
                     _ => WarpPhase::Leaving,
                 };
-                return Some(WarpRow { id, phase, ramp_start: ramp.start, ramp_len: ramp.ticks });
+                return Some(WarpRow { id, phase, ramp_start: ramp.start, ramp_len: ramp.ticks, stretch });
             }
             if self.warp_shape_on(u) {
                 // no ramp: not begun yet, or loaded from a snapshot that stored none
                 let phase = if phase == WARP_OUT { WarpPhase::Leaving } else { WarpPhase::AtWarp };
-                return Some(WarpRow { id, phase, ramp_start: self.tick, ramp_len: 0 });
+                return Some(WarpRow { id, phase, ramp_start: self.tick, ramp_len: 0, stretch });
             }
             let leaving = phase == WARP_OUT;
             let (len, done) = crate::kinematics::warp_ramp(&u.stats, u.speed, !leaving);
@@ -458,7 +459,7 @@ impl Sim {
             } else {
                 (WarpPhase::AtWarp, len)
             };
-            Some(WarpRow { id, phase, ramp_start: self.tick.saturating_sub(u64::from(started)), ramp_len: len })
+            Some(WarpRow { id, phase, ramp_start: self.tick.saturating_sub(u64::from(started)), ramp_len: len, stretch })
         }).collect()
     }
 

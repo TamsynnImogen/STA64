@@ -1,6 +1,19 @@
-//! Armada II's additive warp sprite and cruise hull stretch. Entry timing and projection follow
-//! Armada2.exe's mWarpCheck (0x004b3ce0, 0x004ad4a0), CreateWarpSpriteEffect
-//! (0x0059c380), and WarpSpriteEffect::Render (0x0059ca40).
+//! Armada II's additive warp sprite and cruise hull stretch. The entry flash's timing and projection follow the
+//! original's rule (read from the executable, static): a point ahead of the craft on its velocity line, at the ramp's
+//! length times the warp speed, drawn smaller the nearer the craft comes and removed once it has passed.
+//!
+//! The Stock look ([`Effect::Warp`], #1154) is what the notes establish of the original (read from the executable,
+//! static; not seen in a frame, nothing measured about the view): the entry flash stays (it is the original's, in both
+//! looks); **no exit pulse** (the original draws no flash on leaving, nor a trail or glow); the hull's stretch follows
+//! the stored ramp the view's warp row carries: from 1 to the stretch factor over the entry ramp, held while at warp,
+//! and back to 1 over the exit ramp, in ticks of the sim clock, not the craft's speed (under `warp_shape` the speed holds
+//! and snaps, so it no longer says where the stretch is). INTERIM: the original sweeps a deformation plane through the
+//! mesh, so the shape between the ends differs from a uniform stretch; both ends are the original's. INTERIM: on a
+//! capped exit the original's factor is lower (inferred, not seen); the sim's factor for the craft's own speeds is used. Without the switch the row's ramp is a hint
+//! derived from the old smooth ramp and is used the same way. Not built: the selection bubble and the shield caps
+//! stretching with the hull, and the sounds at entry and exit (established, not yet drawn or played). The Remaster look
+//! keeps its own (the exit pulse, the speed-driven stretch). Armada I has none of this: no hull part is attached to its
+//! craft and its sprite table has no warp sprite.
 
 use std::collections::BTreeSet;
 
@@ -8,11 +21,12 @@ use bevy::image::CompressedImageFormats;
 use bevy::prelude::*;
 use bevy::render::renderer::RenderDevice;
 use sta_assets::spr_anim;
-use sta_sim::{EntityId, Tick, UnitView, view::UnitFlags};
+use sta_sim::{EntityId, Tick, UnitView, view::{UnitFlags, WarpPhase, WarpRow}};
 
 use crate::app::GameSet;
 use crate::clock::AnimClock;
 use crate::map::MainCamera;
+use crate::render::profile::{Effect, ProfileEffects, RenderProfile};
 use crate::render::sprites::{self, SpriteTables};
 use crate::render::textures::{Loader, TextureCache};
 use crate::render::units::{LocalPlayer, cinematic_reveal, drawn_units, to_bevy};
@@ -45,7 +59,29 @@ pub(crate) struct WarpHull {
     pub pivot_z: f32,
 }
 
+/// Whether the Stock warp look is the one drawn: under the Stock look with a stock implementation registered. Without
+/// the profile resources (windowless tests of other effects) it is not.
+fn stock_warp(profile: Option<&RenderProfile>, effects: Option<&ProfileEffects>) -> bool {
+    match (profile, effects) {
+        (Some(p), Some(e)) => e.implementation(*p, Effect::Warp) == RenderProfile::Stock,
+        _ => false,
+    }
+}
+
+/// How far the hull's stretch has come (0 none, 1 full) `now` ticks of the sim clock, from the craft's warp row: up over
+/// the entry ramp, full while at warp, down over the exit ramp. A row with no ramp (an old snapshot) is at its end.
+fn ramp_progress(row: &WarpRow, now: f64) -> f32 {
+    let u = if row.ramp_len == 0 { 1.0 } else { ((now - row.ramp_start as f64) / row.ramp_len as f64).clamp(0.0, 1.0) as f32 };
+    match row.phase {
+        WarpPhase::Entering => u,
+        WarpPhase::AtWarp => 1.0,
+        WarpPhase::Leaving => 1.0 - u,
+    }
+}
+
 pub(super) fn register(app: &mut App) {
+    app.init_resource::<ProfileEffects>();
+    app.world_mut().resource_mut::<ProfileEffects>().register_stock(Effect::Warp);
     app.add_systems(
         Update,
         (track, place, attach).chain().in_set(GameSet::Interpolate),
@@ -63,12 +99,14 @@ fn warp_speeds(link: &SimLink, unit: &UnitView, def: &sta_content::UnitDef) -> (
     (impulse.to_f32(), warp.to_f32())
 }
 
-/// mWarpCheck's stock longitudinal stretch at full warp speed.
-fn cruise_stretch(impulse: f32, warp: f32) -> f32 {
-    (0.6 * warp / (impulse + 0.1)).clamp(1.5, 6.0)
+/// The craft's stretch factor at full warp from its warp row: the sim's own (one source, the one its ramp is made from).
+fn row_stretch(row: &WarpRow) -> f32 {
+    row.stretch.to_f32().max(1.0)
 }
 
 fn stretch_hulls(
+    profile: Option<Res<RenderProfile>>,
+    effects: Option<Res<ProfileEffects>>,
     link: Option<Res<SimLink>>,
     content: Option<Res<ContentRes>>,
     clock: Res<AnimClock>,
@@ -76,6 +114,7 @@ fn stretch_hulls(
     mut models: Query<(&WarpHull, &ChildOf, &mut Transform)>,
 ) {
     let source = link.as_deref().zip(content.as_deref());
+    let stock = stock_warp(profile.as_deref(), effects.as_deref());
     for (model, parent, mut transform) in &mut models {
         let stretch = source
             .and_then(|(link, content)| {
@@ -83,9 +122,15 @@ fn stretch_hulls(
                 link.warp_phase(id)?;
                 let unit = link.real_curr().unit(id)?;
                 let def = content.0.unit(unit.def)?;
+                let row = link.real_curr().warp_of(id)?;
                 let (impulse, warp) = warp_speeds(link, unit, def);
                 if warp <= impulse || impulse < 0.0 {
                     return None;
+                }
+                if stock {
+                    // The stored ramp, on the sim clock: the view shows tick `tick - 1` at alpha 0 and `tick` at 1.
+                    let now = link.real_curr().tick as f64 - 1.0 + f64::from(clock.alpha());
+                    return Some(1.0 + (row_stretch(row) - 1.0) * ramp_progress(row, now));
                 }
                 let now = unit.speed.to_f32();
                 let then = link
@@ -96,7 +141,7 @@ fn stretch_hulls(
                 // The original sweeps a deformation plane through the mesh. Use
                 // the live speed ramp for the visual transform during the transition.
                 let progress = ((speed - impulse) / (warp - impulse)).clamp(0.0, 1.0);
-                Some(1.0 + (cruise_stretch(impulse, warp) - 1.0) * progress)
+                Some(1.0 + (row_stretch(row) - 1.0) * progress)
             })
             .unwrap_or(1.0);
         let scale = Vec3::new(1.0, 1.0, stretch);
@@ -108,13 +153,12 @@ fn stretch_hulls(
     }
 }
 
-/// mWarpCheck multiplies its clamped transition time by the warp speed.
-/// Use the simulation's current speed limits and collision radius.
-fn warp_reach(radius: f32, impulse: f32, warp: f32, speed: f32) -> Option<f32> {
+/// The original multiplies its clamped transition time by the warp speed (read from the executable, static).
+/// Uses the simulation's current speed limits, collision radius and stretch factor.
+fn warp_reach(radius: f32, impulse: f32, warp: f32, speed: f32, stretch: f32) -> Option<f32> {
     if radius <= 0.0 || impulse < 0.0 || warp <= impulse {
         return None;
     }
-    let stretch = cruise_stretch(impulse, warp);
     let acceleration_span = warp - speed.clamp(0.0, impulse);
     let duration = ((stretch - 1.0) * (2.0 * radius) / acceleration_span).clamp(0.1, 3.0);
     Some(duration * warp)
@@ -131,6 +175,8 @@ fn direction(link: &SimLink, unit: &UnitView) -> Vec3 {
 
 fn track(
     mut commands: Commands,
+    profile: Option<Res<RenderProfile>>,
+    effects: Option<Res<ProfileEffects>>,
     link: Option<Res<SimLink>>,
     content: Option<Res<ContentRes>>,
     mut history: Local<WarpHistory>,
@@ -145,6 +191,7 @@ fn track(
         }
         return;
     };
+    let stock = stock_warp(profile.as_deref(), effects.as_deref());
     let view = link.real_curr();
     let reset = link.is_added() || history.tick.is_none_or(|previous| previous > view.tick);
     if !reset && history.tick == Some(view.tick) {
@@ -171,7 +218,8 @@ fn track(
             let radius = def.radius.to_f32();
             let (impulse, warp) = warp_speeds(&link, unit, def);
             let speed = link.prev().unit(id).unwrap_or(unit).speed.to_f32();
-            let Some(reach) = warp_reach(radius, impulse, warp, speed) else {
+            let Some(row) = view.warp_of(id) else { continue };
+            let Some(reach) = warp_reach(radius, impulse, warp, speed, row_stretch(row)) else {
                 continue;
             };
             let Some((start, _)) = link.interpolate(id, 0.0) else {
@@ -197,7 +245,8 @@ fn track(
         // A warp-out may retain a live unit while its phase becomes false, or the
         // source may clear the phase entirely. Only a still-present unit can own
         // an exit pulse; removed ships must not leave a ghost behind.
-        for &id in history.in_warp.difference(&in_warp) {
+        // The Stock look draws none on leaving (the original has no flash there).
+        for &id in history.in_warp.difference(&in_warp).filter(|_| !stock) {
             let Some(unit) = view
                 .unit(id)
                 .filter(|unit| !unit.flags.contains(UnitFlags::DYING))

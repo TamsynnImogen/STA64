@@ -53,7 +53,7 @@ impl WorldSource for WarpSource {
             4 => Some(WarpPhase::Leaving),
             _ => None,
         };
-        next.warp_rows =phase.map(|phase| WarpRow { id: ID, phase, ramp_start: next.tick, ramp_len: 10 }).into_iter().collect();
+        next.warp_rows =phase.map(|phase| WarpRow { id: ID, phase, ramp_start: next.tick, ramp_len: 10, stretch: Fixed::from_int(3) }).into_iter().collect();
         self.view = Arc::new(next);
         TickOutput {
             view: self.view.clone(),
