@@ -1,0 +1,50 @@
+# Install-gated tests
+
+Some tests read a game the repository cannot ship (ADR 0003). They are ordinary tests that **skip** when the
+install they need is not there, and CI never has one, so they run only on a machine that has the games. Run them
+before a release; they rot otherwise (issue #1352).
+
+## One variable per kind of install
+
+A test names the kind of install it needs (`sta_testkit::Kind`, a dev-only crate: never a dependency of a
+non-test target). Each kind has its own variable; a test whose variable is unset, or whose install is of another
+game, prints one line and passes:
+
+```
+SKIP: set STA64_TEST_ROOTS_INSTALL (needs a mod-family (Roots) install)
+```
+
+| Kind | Variable | Also |
+| --- | --- | --- |
+| First game (Armada I) | `STA64_TEST_A1_INSTALL` | |
+| Stock second game (Armada II, no mods) | `STA64_TEST_A2_STOCK_INSTALL` | |
+| Mod family (Roots lineage) | `STA64_TEST_ROOTS_INSTALL` | `STA64_TEST_ROOTS_MOD` names the mod to activate |
+| Fleet Operations 3.2.7 | `STA64_TEST_FO327_INSTALL` | |
+| Dominion War | `STA64_TEST_DW_INSTALL` | |
+| Evolution | `STA64_TEST_EVOLUTION_INSTALL` | |
+| Any game, structure only | the first of the above that is set | |
+
+`STA64_TEST_MAP` names a map the install has; without it, or when the install lacks it, a test that needs a
+map takes one the install has (`sta_testkit::a_map`) and skips when it has none. `STA64_GPU_TESTS=1` is the
+separate opt-in of the GPU tests; they stay off unless asked.
+
+The old general variables `STA64_TEST_INSTALL` and `STA64_TEST_MOD` still work during the transition, for a kind
+that has a content profile, when the install they name is of that kind (checked read-only through the mount the
+game uses). They are removed when every crate's tests have moved.
+
+## Running the whole set before a release
+
+```sh
+cp tools/gated.example tools/gated.local     # once; git-ignored; fill in the folders of this machine
+tools/run-gated --list                       # which groups have a path set, and whether the folder exists
+tools/run-gated                              # every group with a path set
+tools/run-gated --group mod-family --gpu     # one group, with the GPU opt-in
+```
+
+`tools/run-gated` runs `tools/agent-cargo test --workspace` once per group, with only that group's variables set
+(cargo's `--config env.NAME=...` form), filtered to the tests whose name contains `install`, and prints per group
+how many tests passed, failed and were skipped. The tests write only to temporary folders and never launch a game;
+the installs are read only. `tools/gated.local` holds paths of your machine and is never committed.
+
+A test that needs an install writes `SKIP: ...` and returns when it cannot run, never `unwrap`s a missing mod or
+file, and has `install` in its name so the runner finds it.

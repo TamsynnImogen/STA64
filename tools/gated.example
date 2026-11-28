@@ -1,0 +1,17 @@
+# Copy to tools/gated.local (git-ignored) and fill in the install folders of this machine.
+# NAME=value, one per line; a line that starts with # is a comment; leave a group out to skip it.
+# Never commit tools/gated.local: it holds paths of your machine.
+
+# First game (Armada I)
+STA64_TEST_A1_INSTALL=/path/to/armada-1
+# Stock second game (Armada II, no mods)
+STA64_TEST_A2_STOCK_INSTALL=/path/to/armada-2-stock
+# The mod family (Roots lineage) and, optionally, the mod to activate
+STA64_TEST_ROOTS_INSTALL=/path/to/roots
+STA64_TEST_ROOTS_MOD=Name Of The Mod
+# Fleet Operations 3.2.7
+STA64_TEST_FO327_INSTALL=/path/to/fo327
+# Dominion War
+STA64_TEST_DW_INSTALL=/path/to/dominion-war
+# Evolution
+STA64_TEST_EVOLUTION_INSTALL=/path/to/evolution
