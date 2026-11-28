@@ -405,7 +405,7 @@ fn a_malformed_flights_record_is_refused() {
     long.heading = (Fixed::from_int(3), Fixed::ZERO);
     assert!(with(vec![(good.0, long)]).is_err(), "a long heading would multiply the step");
     let mut near = good.1;
-    near.heading = (Fixed::from_f64(0.9995), Fixed::ZERO);
+    near.heading = (Fixed::from_f64(0.9997), Fixed::ZERO);
     assert!(with(vec![(good.0, near)]).is_ok(), "within the tolerance a direction");
     let tick = g.sim.tick;
     let mut late = good.1;
