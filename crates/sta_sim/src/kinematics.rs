@@ -326,10 +326,11 @@ fn face(model: Model, u: &mut Unit, p: Vec3, dt: Fixed) {
     }
 }
 
-/// How fast a coasting craft loses speed (`engines_off_drift`): this share of its speed per
-/// second, as numerator and denominator. Measured, coarse (two repetitions), on stock
-/// Armada II. INTERIM for the exact curve: STA64 takes the share off every tick, which is
-/// roughly the exponential fall the measurement shows.
+/// The rate at which a coasting craft loses speed (`engines_off_drift`), per second, as
+/// numerator and denominator: each tick the speed falls by this rate times the tick's length
+/// times itself, a continuous decay at that rate stepped per tick (so after one second a
+/// little more is left than one minus the rate). Measured, coarse (two repetitions), on
+/// stock Armada II. INTERIM for the exact curve.
 pub(crate) const DRIFT_DECAY: (i32, i32) = (19, 100);
 
 /// Whether `u` coasts this tick: a craft whose engines are offline, that still has speed,
@@ -337,7 +338,7 @@ pub(crate) const DRIFT_DECAY: (i32, i32) = (19, 100);
 /// resolves it). Measured with the engines switched off by a script; engines destroyed by
 /// damage set the same flag, and the movement code of the original tests the same
 /// condition either way (read from the executable, static), but that case was not staged.
-fn drifts(db: Option<&sta_content::ContentDb>, u: &Unit) -> bool {
+pub(crate) fn drifts(db: Option<&sta_content::ContentDb>, u: &Unit) -> bool {
     u.kind == crate::world::EntityKind::Craft
         && u.flags.contains(crate::view::UnitFlags::ENGINES_OFF)
         && u.speed > Fixed::ZERO
@@ -348,11 +349,21 @@ fn drifts(db: Option<&sta_content::ContentDb>, u: &Unit) -> bool {
 /// falls by [`DRIFT_DECAY`]. No turn and no power: the heading is left as it is (a spin a
 /// script gave an engines-off craft is `step_drifting_spin`'s, unchanged) and nothing steers
 /// towards the target, which the craft keeps for when its engines return.
-/// Not settled, STA64's own: a coasting craft is not held at the map's edge.
-fn coast(u: &mut Unit) {
+///
+/// A craft that was at warp is first brought down to its impulse speed and coasts from
+/// there (measured: the normal warp exit on the next tick, then the drift). INTERIM: the
+/// drop is at once; the shape of the exit belongs to the warp kinematics (#1102).
+///
+/// STA64's own guard, not measured: the coast ends at the map's edge (`bounds`).
+fn coast(u: &mut Unit, bounds: Option<(Vec3, Vec3)>) {
+    u.speed = u.speed.min(u.stats.max_speed);
     let step = u.speed * dt();
     u.pos.x = u.pos.x + u.heading.0 * step;
     u.pos.z = u.pos.z + u.heading.1 * step;
+    if let Some((lo, hi)) = bounds {
+        u.pos.x = clamp(u.pos.x, lo.x, hi.x);
+        u.pos.z = clamp(u.pos.z, lo.z, hi.z);
+    }
     let loss = u.speed * Fixed::from_int(DRIFT_DECAY.0) / Fixed::from_int(DRIFT_DECAY.1 * TICK_HZ as i32);
     u.speed = (u.speed - loss).max(Fixed::ZERO);
 }
@@ -376,7 +387,7 @@ impl Sim {
                 // Engines offline and still moving: it coasts, held by the same confinement
                 // as a craft under power.
                 let previous = u.pos;
-                coast(u);
+                coast(u, self.bounds);
                 if self.confinement.is_active() && u.pos != previous {
                     let radius = db.and_then(|db| db.unit(u.def)).map_or(Fixed::ZERO, |d| d.radius * Fixed::from_int(3) / Fixed::from_int(4));
                     crate::avoid::constrain_position(&mut self.confinement, u, previous, radius, &obstacles, self.economy.trade_dock_of(u.id));

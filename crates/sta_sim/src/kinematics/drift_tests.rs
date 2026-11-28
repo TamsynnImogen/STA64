@@ -113,6 +113,7 @@ fn a_warp_move_resumes_at_warp_by_itself() {
     run(&mut sim, vec![engines(ship, false)], 2 * HZ);
     let u = sim.unit(ship).unwrap();
     assert!(sim.approach_warp.phase(ship) != Some(IN_WARP), "not at warp with the engines off");
+    assert!(u.speed <= u.stats.max_speed, "it coasts from impulse, not from warp: {:?}", u.speed);
     assert!(u.speed > Fixed::ZERO && u.target.is_some() && sim.scripted.is_warp(ship), "coasting, the warp move kept");
     let mut warped = false;
     sim.step(&[engines(ship, true)]);
@@ -175,4 +176,70 @@ fn a_snapshot_taken_mid_drift_reloads_to_the_same_flight() {
         back.step(&cmds);
         assert_eq!(back.digest(), sim.digest(), "tick {tick}");
     }
+}
+
+/// A craft at warp whose engines go off is at impulse speed on the next tick and coasts from
+/// there: it does not carry its warp speed across the map.
+#[test]
+fn a_craft_at_warp_drops_to_impulse_before_it_coasts() {
+    let (mut sim, _, ship) = game(Profile::Sta2Classic);
+    run(&mut sim, vec![order(Order::MoveWarp { units: vec![ship], to: v(0, 7500), queue: false })], 4 * HZ);
+    let at_warp = sim.unit(ship).unwrap().clone();
+    assert!(at_warp.speed > at_warp.stats.max_speed, "at warp: {:?}", at_warp.speed);
+    sim.step(&[engines(ship, false)]);
+    sim.step(&[]);
+    let u = sim.unit(ship).unwrap();
+    assert!(u.speed <= u.stats.max_speed && u.speed > Fixed::ZERO, "one tick on: {:?}", u.speed);
+    run(&mut sim, Vec::new(), 60 * HZ);
+    // The whole coast is what impulse speed gives under the decay: the speed over the rate.
+    let far = sim.unit(ship).unwrap().pos.z - at_warp.pos.z;
+    let (num, den) = DRIFT_DECAY;
+    let limit = at_warp.stats.max_speed * n(den) / n(num) + n(50);
+    assert!(far > n(100) && far < limit, "coasted {far:?}, at most {limit:?} from impulse");
+}
+
+/// Puts the craft at `at`, heading along +z at impulse speed with its engines off: a craft
+/// that is coasting, with no order.
+fn adrift(sim: &mut Sim, ship: EntityId, at: Vec3) {
+    let u = sim.units.get_mut(ship).unwrap();
+    u.pos = at;
+    u.heading = AHEAD;
+    u.speed = u.stats.max_speed;
+    u.flags = u.flags.with(UnitFlags::ENGINES_OFF, true);
+}
+
+/// A coasting craft is kept out of an asteroid field, as a craft under power is.
+#[test]
+fn a_coasting_craft_does_not_drift_into_an_asteroid_field() {
+    use sta_content::{Region, RegionKind, RegionShape};
+    let (mut sim, _, ship) = game(Profile::Sta2Classic);
+    // A field straight ahead, well inside the distance the coast covers.
+    let (centre, radius) = (v(0, 1000), 300);
+    sim.regions.push(Region { kind: RegionKind::AsteroidField, odf: "drift_rocks".into(), shape: RegionShape::Sphere { centre, radius: n(radius) } });
+    adrift(&mut sim, ship, v(0, 400));
+    let (mut nearest, mut moved) = (Fixed::from_int(i32::MAX), Fixed::ZERO);
+    for _ in 0..40 * HZ {
+        let before = sim.unit(ship).unwrap().pos;
+        sim.step(&[]);
+        let p = sim.unit(ship).unwrap().pos;
+        moved = moved + (p.z - before.z).abs() + (p.x - before.x).abs();
+        let (dx, dz) = (p.x - centre.x, p.z - centre.z);
+        nearest = nearest.min((dx * dx + dz * dz).sqrt());
+    }
+    assert!(moved > n(500), "it coasted far enough to cross the field's edge: {moved:?}");
+    assert!(nearest >= n(radius), "and stayed out of the field: {nearest:?} from its centre");
+}
+
+/// The coast ends at the map's edge.
+#[test]
+fn a_coasting_craft_stays_on_the_map() {
+    let (mut sim, _, ship) = game(Profile::Sta2Classic);
+    let (_, hi) = sim.bounds.expect("the map has bounds");
+    adrift(&mut sim, ship, Vec3 { x: Fixed::ZERO, y: Fixed::ZERO, z: hi.z - n(100) });
+    for _ in 0..40 * HZ {
+        sim.step(&[]);
+        let z = sim.unit(ship).unwrap().pos.z;
+        assert!(z <= hi.z, "{z:?} beyond the edge {:?}", hi.z);
+    }
+    assert_eq!(sim.unit(ship).unwrap().pos.z, hi.z, "it came to the edge and no further");
 }
