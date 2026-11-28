@@ -14,9 +14,9 @@
 //! where the table has it, else the plain sprite; stock tables have none and are unchanged.
 //!
 //! Rules (read from data; see the package notes outside the repository): the hotspot is in
-//! texture pixels; a cell's size on screen is its texture size, so a mod that ships a larger
-//! texture under the same sprite names gets a larger cursor; a flipbook plays over the
-//! animation's length.
+//! texture pixels; a cell's size on screen is its texture size times the size factors of
+//! [`size_factors`] (the Remaster look: one), so a mod that ships a larger texture under the same
+//! sprite names gets a larger cursor; a flipbook plays over the animation's length.
 
 use std::collections::HashMap;
 
@@ -26,6 +26,7 @@ use bevy::window::{CursorOptions, PrimaryWindow};
 use sta_assets::a2fmt::spr::{Animation, Auto, Field, Sprite, SpriteTable};
 
 use super::gui_sprites::{GuiImageSampling, GuiSprites, crop, page};
+use super::hud::stock::layout::{HudFit, StockLayout};
 use crate::viewer::Mounted;
 
 /// The sprite table the cursors are read from: cursor sprites are resolved against the whole sprite
@@ -150,9 +151,30 @@ pub(crate) fn inset_rect(r: Rect) -> Rect {
 
 /// The node of the inset frame: its top-left and size, from the full frame's (`pos`, `size` in UI
 /// units, the cell's texel scaled by the cursor size factor `k`).
-pub(crate) fn inset_node(frame: Rect, pos: Vec2, k: f32) -> (Vec2, Vec2) {
+pub(crate) fn inset_node(frame: Rect, pos: Vec2, k: Vec2) -> (Vec2, Vec2) {
     let inner = inset_rect(frame);
     (pos + (inner.min - frame.min) * k, inner.size() * k)
+}
+
+/// How many UI units one texel of the cursor covers, horizontally and vertically (D-06, #1152).
+///
+/// - Remaster look (LCARS, and Armada I's HUD, whose cursor scaling is not measured): the texel
+///   covers one unit, times the player's `cursor_scale`.
+/// - Stock look, Stretched HUD fit: the cursor scales with the window, width and height
+///   separately, like the stretched HUD (the original's rule; grade: measured). `hud` is the
+///   HUD's `(scale, scale_x)`, its units per canvas unit vertically and horizontally.
+/// - Stock look, Centred HUD fit: one factor, the centred area's scale, so the cursor keeps its
+///   shape and its size relative to the panels (STA64's choice, not the original's; the same idea
+///   as ADR 0008: the look is kept, groups scale only as wholes).
+///
+/// Under the Stock look `cursor_scale` multiplies the result.
+pub(crate) fn size_factors(stock: Option<(HudFit, (f32, f32))>, cursor_scale: f32) -> Vec2 {
+    let base = match stock {
+        None => Vec2::ONE,
+        Some((HudFit::Stretched, (scale, scale_x))) => Vec2::new(scale_x, scale),
+        Some((HudFit::Centred, (scale, _))) => Vec2::splat(scale),
+    };
+    base * cursor_scale
 }
 
 /// The frame to show `t` seconds in.
@@ -220,6 +242,7 @@ fn place(
     images: Option<ResMut<Assets<Image>>>,
     device: Option<Res<bevy::render::renderer::RenderDevice>>,
     ui_scale: Option<Res<UiScale>>,
+    (profile, hud): (Option<Res<super::profile::UiProfile>>, Option<Res<super::hud::HudConfig>>),
     race: Option<Res<crate::game::LocalRace>>,
     settings: Option<Res<crate::frontend::screens::Settings>>,
     // INTERIM (not measured): the animation clock is real time, so it also runs while the game is paused.
@@ -267,8 +290,12 @@ fn place(
     };
     let frame = frame_at(art.frames.len(), art.period, time.elapsed_secs());
     let rect = art.frames[frame];
-    // The player's size factor (UI-45) scales the drawn cell and the hotspot alike.
-    let size = settings.as_deref().map_or(1.0, |s| s.cursor_scale).clamp(0.5, 3.0);
+    // The size rule (D-06) and the player's factor (UI-45) scale the drawn cell and the hotspot alike.
+    let player = settings.as_deref().map_or(1.0, |s| s.cursor_scale).clamp(0.5, 3.0);
+    let stock = profile.as_deref().filter(|p| p.is_stock() && **p != super::profile::UiProfile::Armada1)
+        .zip(hud.as_deref().and_then(|h| h.gui.as_ref().map(|gui| (h, gui))))
+        .map(|(_, (h, gui))| (h.fit, StockLayout::scales_for_aspect(gui, h.aspect, h.fit)));
+    let size = size_factors(stock, player);
     let pos = node_pos(pointer, art.origin * size, ui_scale.map_or(1.0, |s| s.0));
     // The sampled rectangle and the node are inset together (see `inset_rect`).
     let (pos, node_size) = inset_node(rect, pos, size);
@@ -339,15 +366,42 @@ mod tests {
         for (i, f) in frames.iter().enumerate() {
             let r = inset_rect(*f);
             assert_eq!(r, Rect::new(f.min.x + 0.5, 0.5, f.max.x - 0.5, 31.5), "frame {i}");
-            let (pos, size) = inset_node(*f, Vec2::new(10.0, 20.0), 2.0);
+            let (pos, size) = inset_node(*f, Vec2::new(10.0, 20.0), Vec2::splat(2.0));
             assert_eq!((pos, size), (Vec2::new(11.0, 21.0), Vec2::new(62.0, 62.0)));
         }
         // The scale is unchanged: units per texel are the node's over the rectangle's.
-        let (_, size) = inset_node(frames[0], Vec2::ZERO, 2.0);
+        let (_, size) = inset_node(frames[0], Vec2::ZERO, Vec2::splat(2.0));
         assert_eq!(size / inset_rect(frames[0]).size(), Vec2::splat(2.0));
         // A frame of a texel or less is not inset.
         let tiny = Rect::new(4.0, 4.0, 5.0, 9.0);
         assert_eq!(inset_rect(tiny), tiny);
+    }
+
+    /// D-06 (#1152): the cursor's size under each HUD fit at two window aspects, from a layout on
+    /// the default 1600 x 1200 canvas (invented sheet), and the node it gives for a 32 texel cell.
+    #[test]
+    fn the_cursor_size_follows_the_hud_fit_under_the_stock_look_and_the_player_factor_multiplies() {
+        let gui = sta_content::GuiLayout::default();
+        let factors = |aspect: f32, fit: HudFit, player: f32| {
+            size_factors(Some((fit, StockLayout::scales_for_aspect(&gui, aspect, fit))), player)
+        };
+        // 4:3 window: the sheet's own aspect, both fits agree (1080 / 1200 per axis).
+        let near = |a: Vec2, b: Vec2| assert!((a - b).abs().max_element() < 1e-4, "{a:?} vs {b:?}");
+        near(factors(4.0 / 3.0, HudFit::Centred, 1.0), Vec2::splat(0.9));
+        near(factors(4.0 / 3.0, HudFit::Stretched, 1.0), Vec2::splat(0.9));
+        // 16:9 window: stretched widens the cursor with the window (1920 / 1600 across, 1080 / 1200 down),
+        // centred keeps its shape.
+        near(factors(16.0 / 9.0, HudFit::Stretched, 1.0), Vec2::new(1.2, 0.9));
+        near(factors(16.0 / 9.0, HudFit::Centred, 1.0), Vec2::splat(0.9));
+        // The player's factor multiplies either.
+        near(factors(16.0 / 9.0, HudFit::Stretched, 2.0), Vec2::new(2.4, 1.8));
+        near(factors(16.0 / 9.0, HudFit::Centred, 0.5), Vec2::splat(0.45));
+        // The Remaster look draws the texture size times the player's factor, whatever the window.
+        assert_eq!(size_factors(None, 1.0), Vec2::ONE);
+        assert_eq!(size_factors(None, 1.5), Vec2::splat(1.5));
+        // The drawn cell of 32 x 32 texels on the stretched 16:9 window.
+        let (_, node) = inset_node(Rect::new(0.0, 0.0, 32.0, 32.0), Vec2::ZERO, factors(16.0 / 9.0, HudFit::Stretched, 1.0));
+        near(node, Vec2::new(31.0 * 1.2, 31.0 * 0.9));
     }
 
     #[test]
