@@ -1,7 +1,7 @@
 # ADR 0003: Clean-room content policy
 
 - **Status:** accepted
-- **Date:** 2026-11-07 (first "Legal boundary" text, foundation commit e25f1c1); extended 2026-11-13 (#469, research and game assets) and 2026-11-13 (#636, mission conversion); clarification on engine lookup names proposed 2026-11-28 (not yet in force)
+- **Date:** 2026-11-07 (first "Legal boundary" text, foundation commit e25f1c1); extended 2026-11-13 (#469, research and game assets) and 2026-11-13 (#636, mission conversion); clarification on engine lookup names, decision of Cedric as an easily reversible one, in use from 2026-11-28
 - **Deciders:** "Legal boundary": not recorded. Research and game-asset rules (#469): not recorded (the commit message names no approver). Mission conversion rule (#636): decision of Cedric, agreed by Tammy on 2026-11-13 (commit message of #636 and the WORKPLAN note under the LUA table)
 - **Relates to:** [AGENTS.md](../../AGENTS.md) ("Research and game files", the operative wording for agents), [ARCHITECTURE.md](../ARCHITECTURE.md) ("Legal boundary"), [MISSIONS.md](../MISSIONS.md), WORKPLAN LUA-15
 
@@ -49,9 +49,9 @@ From AGENTS.md, "Research and game files":
 
 AGENTS.md carries the operative wording; where the two texts ever differ, AGENTS.md is followed until this ADR is superseded.
 
-### Clarification 2026-11-28: engine lookup names (PROPOSED, binds nothing until both deciders approve)
+### Clarification 2026-11-28: engine lookup names
 
-*Ruled by Cedric (`cedrichaase`) on 2026-11-28; awaiting Tammy (`TamsynnImogen`). Until she approves and this note is marked accepted, the rules above stand unchanged and AGENTS.md is not changed.*
+*Records a decision taken by Cedric (`cedrichaase`) on 2026-11-28 as an easily reversible one (AGENTS.md, "Decisions: ADRs and experiments": one revert removes the constants, and no save, replay, protocol, content or mod format depends on them). It is in use from that date and is recorded here so that this ADR stays true. Tammy (`TamsynnImogen`) is informed through the pull request that records it and is free to object; if she does, the constants are reverted. Reversal: revert the constants and the AGENTS.md sentence that goes with this note, and mark this note withdrawn.*
 
 Context: under the Stock look STA64 must draw the original's effects. Some effects are defined in the player's own install, but the name by which the original engine selects the definition exists only in the engine, not in any data file. Without that name the code cannot find the entry. The first case is the spark drawn when a weapon hits a bare hull (issue #1153). `main` already carries one such name as the constant `IMPACT_SPRITE` in `crates/sta64/src/render/fx/stock_flares.rs`, for the beam impact effect.
 
@@ -67,7 +67,7 @@ Alternatives considered and not chosen:
 - Finding the entries by a name pattern at run time: the pattern itself would come from the engine, and it is fragile.
 - A mod-facing key written on the player's machine at first-run import: clean, but a new mechanism for a handful of names.
 
-Consequences: a follow-up package draws the hull-hit effect under the Stock look once the dying phase (#1100) is in. On acceptance, one matching sentence is added to AGENTS.md, "Research and game files", in the same or a companion docs PR.
+Consequences: a follow-up package draws the hull-hit effect under the Stock look once the dying phase (#1100) is in; it waits for nothing else. AGENTS.md, "Research and game files", carries one matching sentence with the same limits.
 
 ## Alternatives considered
 

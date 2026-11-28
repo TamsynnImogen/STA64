@@ -248,6 +248,13 @@ Recorded as [ADR 0003](docs/adr/0003-clean-room-content-policy.md); the rules be
   hand, count as game content and are never committed or released. Conversion
   happens on the player's machine from their own install into the user data
   directory (WORKPLAN LUA-15 and the note under the LUA table).
+- A fixed lookup name by which the original engine selects an entry that the
+  install's own data defines may be a named constant in code, where the code
+  needs it to find that entry at run time, with a one-line comment (rule and
+  evidence grade); a mod may define the entry under that name. Lookup names
+  only: definitions, values and every other name from game assets stay under
+  the rules above, and these names appear in code only, never in issues, PR
+  bodies, review comments, commit messages, docs, WORKPLAN or TODO.md.
 
 ## Builds
 
