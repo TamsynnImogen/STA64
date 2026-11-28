@@ -766,16 +766,18 @@ pub(super) fn grid_with_capacity(feed: &HudFeed, page: Page, capacity: usize) ->
     grid_with(feed, page, capacity, false)
 }
 
-/// The grid of the Armada II stock palette: the full build list and the menu button rules measured on the original
-/// (`stock`, see [`grid_with`]).
+/// The grid of the stock palette (Armada II and the mod family's stock HUD; Armada I has its own): the full build list and
+/// the menu button rules measured on the original (`stock`, see [`grid_with`]).
 pub(super) fn stock_grid(feed: &HudFeed, page: Page) -> Vec<Button> {
     grid_with(feed, page, usize::MAX, true)
 }
 
-/// The grid; `stock` is the Armada II stock HUD, which follows the original's menu buttons where a frame of it
-/// measured them: a class with several menu flags shows ONE menu button, Evolve before Research before Build; the Build
-/// button with several builders selected is drawn greyed, not hidden (measured, frame, modded bench). Every other HUD
-/// keeps its own rules.
+/// The grid; `stock` is the stock palette, which follows the original's menu buttons where a frame of it measured
+/// them: a class with several menu flags shows ONE menu button, Evolve before Research before Build; the Build button
+/// with several builders selected is drawn greyed, not hidden (measured, frame, modded bench, one launch, stock
+/// Armada II data). The mod family's stock HUD takes the same rules (INTERIM, not measured for that profile: the rule it
+/// replaces was an unmeasured reading that the frames contradicted, and no reading exists for that family). Every other
+/// HUD keeps its own rules.
 fn grid_with(feed: &HudFeed, page: Page, capacity: usize, stock: bool) -> Vec<Button> {
     let own = feed.own_selection();
     if own.is_empty() {
@@ -837,15 +839,18 @@ fn grid_with(feed: &HudFeed, page: Page, capacity: usize, stock: bool) -> Vec<Bu
         // cell and hides an Evolve that is on with it; Evolve takes the opener's cell when Build is off, else the
         // first free cell. Needs the install's button location keys and one frame of the original.
         evolve_extra = evolve_on && build_on && !research_on && !stock;
-        // The Armada II stock palette (`stock`) follows the frames of the original instead (measured, frame, modded bench):
+        // The stock palette (`stock`) follows the frames of the original instead (measured, frame, modded bench, one
+        // launch, stock Armada II data; the mod family's stock HUD follows it too, INTERIM, not measured for it):
         // one menu button by the flags, Evolve over Research over Build, and Build greyed with several builders.
         // INTERIM, two readings, for the other HUDs: a menu button whose own state is off (several builders selected, or an Evolve over
         // several classes) is NOT DRAWN here (reading one: the original hides it). Reading two: the original draws it
         // greyed and unusable. The read gives the state rule only (grade: read from the executable, static); whether
         // an off button is hidden or greyed is not settled and needs a frame of the original.
         let (caption, greyed) = if stock {
-            // Measured (frame, modded bench): one menu button in the Build slot by the class flags, Evolve before
-            // Research before Build, whatever the other flags. Build is drawn greyed with several builders selected.
+            // Measured (frame, modded bench, one launch): one menu button in the Build slot by each pair of class flags,
+            // Evolve before Research before Build; Build drawn greyed with two builders of one class selected.
+            // INFERRED, not seen: a class with all three flags shows Evolve (transitive from the pairs), and Build is
+            // greyed for any selection of several builders (a mixed selection was not staged).
             // Not measured, so as on main: an Evolve over several classes is not drawn.
             let build_like = !embryo && (builds || !key("evolve"));
             if embryo || key("evolve") {
