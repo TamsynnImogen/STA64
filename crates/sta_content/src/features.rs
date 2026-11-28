@@ -163,11 +163,17 @@ pub struct Features {
     /// static). On for stock Armada II; off elsewhere (Fleet Operations and Armada I are not
     /// checked): a beam hits on the tick it fires.
     pub beam_damage_at_end: bool,
+    /// A craft or station whose hull reaches zero from hits stays in the world for a dying
+    /// phase and is removed when it ends, by the rules `sta_sim::combat::dying` lists (issue
+    /// #1100; measured on stock Armada II and read from its executable, static). On for stock
+    /// Armada II; off elsewhere (Armada I and Fleet Operations are not checked): such a unit
+    /// is removed on the tick its hull reaches zero.
+    pub dying_phase: bool,
 }
 
 impl Features {
     /// Every switch, in declaration order, for the content hash.
-    pub(crate) fn bits(&self) -> [bool; 43] {
+    pub(crate) fn bits(&self) -> [bool; 44] {
         [
             self.weapon_damage_controls,
             self.point_defense_cycles,
@@ -212,6 +218,7 @@ impl Features {
             self.crew_weapon_delay,
             self.shield_zero_hold,
             self.beam_damage_at_end,
+            self.dying_phase,
         ]
     }
 }

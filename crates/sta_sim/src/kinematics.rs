@@ -340,7 +340,8 @@ impl Sim {
         let obstacles = if self.confinement.is_active() { self.obstacles() } else { Vec::new() };
         self.step_drifting_spin();
         let db = self.content.as_deref();
-        for u in self.units.iter_mut().filter(|u| u.mobile()) {
+        // A dying unit drifts instead (#1100, `Sim::drift_dying`).
+        for u in self.units.iter_mut().filter(|u| u.mobile() && !self.dying.contains(u.id)) {
             if self.specials.engines_held(u.id, self.tick) {
                 u.speed = Fixed::ZERO;
                 u.omega = Fixed::ZERO;

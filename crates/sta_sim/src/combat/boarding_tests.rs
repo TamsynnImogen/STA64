@@ -491,7 +491,7 @@ fn a_scripted_capture_run_is_pinned() {
     assert_eq!(w.sim.digest(), CAPTURE_RUN_DIGEST, "{:#x}", w.sim.digest());
 }
 
-const CAPTURE_RUN_DIGEST: u64 = 0xfb15_d0e9_88b2_26c0;
+const CAPTURE_RUN_DIGEST: u64 = 0x8351_a502_8544_3dbb;
 
 #[test]
 fn the_sample_state_is_well_formed() {

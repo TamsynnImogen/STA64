@@ -80,8 +80,10 @@ pub const MAGIC: [u8; 4] = *b"STAS";
 /// of move orders; 50 and 51 still load, every order then taking the content's default.
 /// Format 53 appends the beams in flight of `beam_damage_at_end` (#1068); 50 to 52 still load,
 /// with no beam in flight.
+/// Format 54 appends the dying phases of `dying_phase` (#1100); 50 to 53 still load, with
+/// nobody dying.
 /// Earlier formats are refused.
-pub const FORMAT_VERSION: u16 = 53;
+pub const FORMAT_VERSION: u16 = 54;
 /// The last format without the Director's Cut flag (still loads). Fixed history, not renumbered.
 #[doc(hidden)]
 pub const PRE_DIRECTORS_CUT_FORMAT: u16 = 50;
@@ -91,6 +93,9 @@ pub const PRE_MOVE_MODE_FORMAT: u16 = 51;
 /// The last format without the beams record (still loads).
 #[doc(hidden)]
 pub const PRE_BEAMS_FORMAT: u16 = 52;
+/// The last format without the dying record (still loads).
+#[doc(hidden)]
+pub const PRE_DYING_FORMAT: u16 = 53;
 
 #[cfg(test)]
 #[path = "snapshot/recrew_tests.rs"]
@@ -140,7 +145,7 @@ fn check_header(bytes: &[u8]) -> Result<(u16, u64), SnapshotError> {
         return Err(SnapshotError::BadMagic);
     }
     let found = u16::from_le_bytes([bytes[4], bytes[5]]);
-    if !matches!(found, PRE_DIRECTORS_CUT_FORMAT | PRE_MOVE_MODE_FORMAT | PRE_BEAMS_FORMAT | FORMAT_VERSION) {
+    if !matches!(found, PRE_DIRECTORS_CUT_FORMAT | PRE_MOVE_MODE_FORMAT | PRE_BEAMS_FORMAT | PRE_DYING_FORMAT | FORMAT_VERSION) {
         return Err(SnapshotError::FormatVersion { found });
     }
     let seam = u32::from_le_bytes(bytes[6..10].try_into().unwrap());
@@ -288,6 +293,13 @@ struct MoveModeRec {
 struct BeamsRec {
     version: u8,
     rows: Vec<crate::combat::weapons::Beam>,
+}
+
+/// Format 54 (#1100): the units in their dying phase under `dying_phase`, by unit id.
+#[derive(Serialize, Deserialize)]
+struct DyingRec {
+    version: u8,
+    rows: Vec<(EntityId, crate::combat::dying::Row)>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -565,6 +577,7 @@ impl Sim {
         out.extend(postcard::to_allocvec(&self.directors_cut).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&MoveModeRec { version: 1, rows: self.move_mode_rows() }).expect("snapshot serialises"));
         out.extend(postcard::to_allocvec(&BeamsRec { version: 1, rows: self.weapons.beams_rec() }).expect("snapshot serialises"));
+        out.extend(postcard::to_allocvec(&DyingRec { version: 1, rows: self.dying.to_rows() }).expect("snapshot serialises"));
         out
     }
 
@@ -676,6 +689,14 @@ impl Sim {
             if record.version != 1 { return Err(SnapshotError::Corrupt("unknown beams record version".into())); }
             (record.rows, rest)
         };
+        // Formats 50 to 53 carry no dying phases (#1100): a unit was removed at hull zero.
+        let (dying_rows, rest): (Vec<(EntityId, crate::combat::dying::Row)>, _) = if format <= PRE_DYING_FORMAT {
+            (Vec::new(), rest)
+        } else {
+            let (record, rest): (DyingRec, _) = postcard::take_from_bytes(rest).map_err(corrupt_postcard)?;
+            if record.version != 1 { return Err(SnapshotError::Corrupt("unknown dying record version".into())); }
+            (record.rows, rest)
+        };
         if directors_cut && !content.as_ref().is_some_and(|db| db.profile() == sta_content::Profile::Sta1Classic) {
             return Err(SnapshotError::Corrupt("Director's Cut requires Armada I content".into()));
         }
@@ -773,6 +794,8 @@ impl Sim {
         if !weapons.set_beams(content.as_deref(), beam_rows) {
             return Err(corrupt("beams"));
         }
+        let dying = crate::combat::dying::Dying::from_rows(dying_rows, b.tick, &units)
+            .ok_or_else(|| SnapshotError::Corrupt("dying rows out of order, ended or of a unit that is not dying".into()))?;
         let autonomy = crate::autonomy::Autonomy::from_rec(autonomy_rows).ok_or_else(|| corrupt("autonomy"))?;
         if autonomy.to_rec().iter().any(|(id, _)| {
             units.get(*id).is_none_or(|u| !matches!(u.kind, EntityKind::Craft | EntityKind::Station))
@@ -897,6 +920,7 @@ impl Sim {
             nebula_shields,
             mission_switches,
             move_modes,
+            dying,
         };
         sim.refresh_seat_rules();
         sim.restore_ship_upgrade_memo();

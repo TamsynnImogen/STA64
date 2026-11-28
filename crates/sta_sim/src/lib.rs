@@ -239,6 +239,8 @@ pub struct Sim {
     /// The move mode each unit's last move order named (SIM-76); saved, and in the
     /// digest once any exists. No rule reads it yet.
     move_modes: move_mode::MoveModes,
+    /// Units in their dying phase (#1100, `dying_phase`); saved, and in the digest once any is.
+    dying: combat::dying::Dying,
 }
 
 impl Sim {
@@ -289,6 +291,7 @@ impl Sim {
             nebula_shields: Default::default(),
             mission_switches: Default::default(),
             move_modes: Default::default(),
+            dying: Default::default(),
         }
     }
 
@@ -323,6 +326,19 @@ impl Sim {
     /// and the spawn and kill edits exist; everything else is rejected until
     /// its package lands.
     fn apply(&mut self, c: &command::Command) -> bool {
+        // A dying unit takes no orders (#1100): they apply to the others it was given to.
+        let living;
+        let c = match &c.kind {
+            command::CommandKind::Order(o) => match self.order_for_the_living(o) {
+                combat::dying::Living::All => c,
+                combat::dying::Living::None => return false,
+                combat::dying::Living::Some(o) => {
+                    living = command::Command { player: c.player, seq: c.seq, kind: command::CommandKind::Order(o) };
+                    &living
+                }
+            },
+            _ => c,
+        };
         let ok = self.apply_command(c);
         if ok && let command::CommandKind::Order(o) = &c.kind {
             self.colonies_after_order(c.player, o);
@@ -526,6 +542,9 @@ impl Sim {
 
     /// Move every unit one tick and close the tick with its view.
     fn advance(&mut self) -> TickOutput {
+        // #1100: units whose dying phase ends on this tick leave first, before anything moves
+        // or fires; their owners are checked for elimination with this tick's losses.
+        let died = self.remove_dead();
         if self.content.is_none() {
             self.team_changes.clear();
         }
@@ -557,6 +576,7 @@ impl Sim {
             plans.sort_by_key(|p| p.0);
         }
         self.step_kinematics(&plans, &speed_caps);
+        self.drift_dying();
         self.restore_targets(held);
         self.restore_targets(routed);
         self.step_wormholes(&gate_goers);
@@ -578,6 +598,7 @@ impl Sim {
             self.forget_hits_of_cloakers(cloak_from);
             let from = self.events.len();
             let mut lost = self.step_a2_specials(&db);
+            lost.extend(died);
             self.step_a1_ordnance(&db);
             let mut held = if db.features().builder_hold_fire { self.production.builders_at_work() } else { Vec::new() };
             held.extend(self.scripted.holding_fire());
@@ -605,6 +626,10 @@ impl Sim {
             if !nebulae.is_empty() {
                 killed.extend(self.nebula_damage(&db, &nebulae));
             }
+            // #1100: hits on units already dying shorten their phase; this tick's kills start
+            // theirs under `dying_phase` and are removed when it ends, the others now.
+            self.shorten_dying(from);
+            let killed = self.start_dying(&db, killed);
             // Pulses and arrivals after the hits, before the latch upkeep (SIM-46).
             self.step_transports();
             self.step_recrew();
@@ -636,7 +661,7 @@ impl Sim {
             self.economy.step_crew(&self.units, db, &self.attrs, self.tick, &colony_crew);
             let from = self.events.len();
             self.production.update_research_poses(db, &mut self.units);
-            let completed = self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement, self.bounds, |id| self.specials.stasis(id, self.tick));
+            let completed = self.production.step(&mut self.units, db, &mut self.economy, &mut self.events, &mut self.confinement, self.bounds, |id| self.specials.stasis(id, self.tick) || self.dying.contains(id));
             for old in completed.replaced_pods {
                 self.retire(old);
             }
@@ -707,6 +732,10 @@ impl Sim {
             let mut view = entity.view();
             if self.content.as_deref().and_then(|db| db.unit(entity.def)).is_some_and(EntityKind::hidden) {
                 hidden.push(entity.id);
+                view.flags = view.flags.with(view::UnitFlags::SELECTABLE, false);
+            }
+            // #1100: a dying unit is deselected and cannot be picked (measured, once).
+            if self.dying.contains(entity.id) {
                 view.flags = view.flags.with(view::UnitFlags::SELECTABLE, false);
             }
             view.flags = view.flags.with(view::UnitFlags::BUILDING, self.production.is_welding(entity.id));
@@ -841,6 +870,10 @@ impl Sim {
         }
         if !self.zero_shield_holds.is_empty() {
             self.zero_shield_holds.hash_into(&mut h);
+        }
+        // #1100: the dying phases (nothing is hashed without any).
+        if !self.dying.is_empty() {
+            self.dying.hash_into(&mut h);
         }
         if !self.scripted.is_empty() {
             self.scripted.hash_into(&mut h);
