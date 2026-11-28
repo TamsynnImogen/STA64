@@ -63,7 +63,7 @@ use super::radar::{RadarPlugin, RadarRoot};
 use super::theme::{ButtonClicked, Theme, ThemePlugin};
 use crate::app::GameSet;
 use crate::input::orders::{Aim, OrderTargets, formation_moves};
-use crate::input::select::{Targetable, target_seen, unit_under_where};
+use crate::input::select::{Targetable, pickable, unit_under_where};
 use crate::ui::i18n::{tr, trf};
 use sta_sim::view::UnitFlags;
 use sta_sim::world::EntityKind;
@@ -731,8 +731,8 @@ fn place_build(
 /// What an armed pick gives when the click is on the minimap at the map point `at` (x, z): the same decision as the
 /// main view's click on open ground, with no object (a click over a unit's blip gives the point, never the unit:
 /// read from the executable, static). So a command that needs an object (attack, mine, colonize, transport,
-/// capture, trade, an entity-aimed special weapon) is refused; a move is a warp move unless `plain` (Alt held, the
-/// queue modifier, Armada I content: `input::orders::minimap_plain`); a rally, a repair or decommission "anywhere",
+/// capture, trade, an entity-aimed special weapon) is refused; a move is a warp move unless `plain` (Alt held,
+/// Armada I content: `input::orders::minimap_plain`); a rally, a repair or decommission "anywhere",
 /// a point-aimed special weapon are the ground decision's. INTERIM: what the original gives for an armed attack or
 /// patrol on open ground is not established (STA64 has no ground attack order; patrol and guard are not armed modes),
 /// so those stay refused.
@@ -773,7 +773,6 @@ fn armed_from_minimap(
     mut state: ResMut<HudState>,
     feed: Res<HudFeed>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
-    bindings: Option<Res<crate::input::keys::KeyBindings>>,
     mut queue: ResMut<CommandQueue>,
     mut issued: MessageWriter<OrderIssued>,
     mut targets: ResMut<OrderTargets>,
@@ -792,10 +791,7 @@ fn armed_from_minimap(
     if points.is_empty() || !minimap_aims(&feed) {
         return;
     }
-    let plain = match (keys.as_deref(), bindings.as_deref()) {
-        (Some(k), Some(b)) => crate::input::orders::minimap_plain(k, b, db),
-        _ => false,
-    } || !crate::sim_link::warp_allowed(&feed.view, db);
+    let plain = keys.as_deref().is_some_and(|k| crate::input::orders::minimap_plain(k, db)) || !crate::sim_link::warp_allowed(&feed.view, db);
     for at in points {
         if let Some(mode) = state.targeting {
             if !target_mode_available(&feed, mode) {
@@ -825,7 +821,7 @@ fn order_at_aim(
     units: &Targetable,
     local: Option<sta_sim::PlayerId>,
 ) -> Option<(Vec<Order>, Vec<EntityId>)> {
-    let target = unit_under_where(aim.cursor, aim.ray, units, |t| target_seen(&feed.view, local, t));
+    let target = unit_under_where(aim.cursor, aim.ray, units, |t| pickable(&feed.view, local, t));
     let own = feed.own_selection();
     let heights: Vec<f32> = own.iter().filter_map(|id| feed.view.unit(*id).map(|u| u.pos.y.to_f32())).collect();
     let y = if heights.is_empty() { 0.0 } else { heights.iter().sum::<f32>() / heights.len() as f32 };

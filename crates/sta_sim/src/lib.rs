@@ -160,6 +160,9 @@ pub struct Sim {
     content: Option<Arc<ContentDb>>,
     /// A1 match rule for using dogfight movement in combat.
     directors_cut: bool,
+    /// The match option "warp allowed" is off for this match (#1102): set at the start from
+    /// `GameOptions::allow_warp` under the profile it counts for, never changed afterwards.
+    match_warp_off: bool,
     /// The map's start positions and regions, kept for the systems that use
     /// them. Fixed by the setup, so not in the digest.
     starts: Vec<StartPos>,
@@ -254,6 +257,7 @@ impl Sim {
             ai_seats: Vec::new(),
             content: None,
             directors_cut: false,
+            match_warp_off: false,
             starts: Vec::new(),
             regions: Vec::new(),
             bounds: None,
@@ -788,7 +792,7 @@ impl Sim {
         }
         let perceived_owners = self.perception.iter().map(|(id, &owner)| (id, owner)).collect();
         let active_point_defence = self.content.as_deref().map_or_else(Vec::new, |db| self.weapons.active_point_defence(db, &self.units));
-        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), alerts: self.alerts.levels(), enemy_hit: self.alerts.hits(), ally_attacks: self.alerts.ally_rows().to_vec(), special_forces: self.switches.special_forces(), mission_switches: self.mission_switches, move_modes: self.move_mode_rows(), ..self.attrs.view() }, active_point_defence, a1_specials: self.specials.effect_view(self.tick, &self.units, self.content.as_deref()), warp_rows: self.warp_rows(), beam_rows: self.weapons.beam_rows() }
+        WorldView { tick: self.tick, digest: self.digest(), units, players, visibility, perceived_owners, appearance: self.appearance_view(), colonies: self.colony_views(), attrs: crate::attrs::AttrsView { names: self.switches.names(), seats: self.seat_views(), impulse: self.impulse_overrides(), warp: self.warp_overrides(), alerts: self.alerts.levels(), enemy_hit: self.alerts.hits(), ally_attacks: self.alerts.ally_rows().to_vec(), special_forces: self.switches.special_forces(), mission_switches: self.mission_switches, match_warp_off: self.match_warp_off, move_modes: self.move_mode_rows(), ..self.attrs.view() }, active_point_defence, a1_specials: self.specials.effect_view(self.tick, &self.units, self.content.as_deref()), warp_rows: self.warp_rows(), beam_rows: self.weapons.beam_rows() }
     }
 
     /// FNV-1a over all simulation state, for desync detection. The content
@@ -822,6 +826,7 @@ impl Sim {
         self.movement.hash_into(&mut h);
         self.hash_move_modes(&mut h);
         self.hash_directors_cut(&mut h);
+        self.hash_match_warp(&mut h);
         if !self.approach_warp.is_empty() {
             self.approach_warp.hash_into(&mut h);
         }

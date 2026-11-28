@@ -62,6 +62,11 @@ pub struct AttrsView {
     /// The mission-wide switches (LUA-41); the default when none was sent.
     #[serde(default)]
     pub mission_switches: crate::mission_switches::MissionSwitches,
+    /// The match option "warp allowed" is off for this match (#1102, #1402): derived from the sim's own flag
+    /// every tick, so a client can keep its warp offer honest. False outside the profile the option counts for
+    /// and when the match has warp allowed. No state of its own.
+    #[serde(default)]
+    pub match_warp_off: bool,
     /// The move mode each live unit's last move order named (SIM-76, ADR 0011 G4),
     /// ascending id; absence means the order took the content's default
     /// ([`crate::Sim::move_mode`] resolves it). Not a rule yet: nothing steers by it.
@@ -137,6 +142,7 @@ impl Attrs {
             enemy_hit: Vec::new(),
             ally_attacks: Vec::new(),
             mission_switches: Default::default(),
+            match_warp_off: false,
             move_modes: Vec::new(),
         }
     }

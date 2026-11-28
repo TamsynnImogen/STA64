@@ -12,10 +12,11 @@ pub const MAGIC: [u8; 4] = *b"STAG";
 
 /// The container's own layout version (V2), independent of the snapshot,
 /// replay and protocol numbers. It starts at 1; the steward's ledger, if one
-/// is kept for it, hands out later numbers. The rule for raising it is in
+/// is kept for it, hands out later numbers. Version 2 (#1102): `GameOptions`
+/// gained the warp option, so the header's form changed. The rule for raising it is in
 /// `container`'s docs: any change to the serialised form of the header, of
 /// the types it embeds from other modules, or of the section records.
-pub const CONTAINER_VERSION: u16 = 1;
+pub const CONTAINER_VERSION: u16 = 2;
 
 /// Largest header a file may declare. The encoded header is checked against it
 /// at save and at load, before any allocation sized by the file.

@@ -10,7 +10,7 @@ use sta_sim::{EntityId, Vec3 as SimVec3};
 
 use super::Pointer;
 use super::keys::{Action, KeyBindings};
-use super::select::{AimState, Targetable, own_selection, target_seen, unit_under_where};
+use super::select::{AimState, Targetable, own_selection, pickable, unit_under_where};
 use crate::sim_link::{CommandQueue, ContentRes, OrderIssued, OrderKind, Selection, SimLink};
 
 /// Where each ship was last ordered to go, until it arrives or is stopped,
@@ -79,7 +79,7 @@ pub fn order(
     let view = link.curr();
     // Right-click on a resource or an enemy gives a context order; on
     // anything else it moves.
-    if let Some(order) = unit_under_where(cursor, ray, &units, |t| target_seen(view, local.as_deref().and_then(|l| l.0), t))
+    if let Some(order) = unit_under_where(cursor, ray, &units, |t| pickable(view, local.as_deref().and_then(|l| l.0), t))
         .and_then(|t| super::context::context_order(content.as_deref().map(|c| &*c.0), view, me, &own, t))
     {
         let kind = OrderKind::of(&order);
@@ -99,7 +99,7 @@ pub fn order(
         me,
         own: &own,
         queue_mod: bindings.pressed(Action::AddModifier, &keys),
-        warp: world_warp(&keys, &bindings, content.as_deref().map(|c| &*c.0)) && crate::sim_link::warp_allowed(view, content.as_deref().map(|c| &*c.0)),
+        warp: world_warp(&keys, content.as_deref().map(|c| &*c.0)) && crate::sim_link::warp_allowed(view, content.as_deref().map(|c| &*c.0)),
     };
     let mut acks = Vec::new();
     ground_order(&ground, GroundAt::Ray(ray), &mut OrderOut { queue: &mut queue, targets: &mut targets, issued: &mut acks });
@@ -190,14 +190,14 @@ pub(crate) fn ground_order(g: &Ground, at: GroundAt, out: &mut OrderOut) {
 }
 
 /// The minimap's right-click gives a plain move, not a warp move: Alt is held (read from the
-/// executable, static); or the queue modifier is held (INTERIM: the original keeps the queue on a
-/// warp move, read from the executable, static, but STA64's warp-move order does not queue yet and
-/// would wipe the unit's queued legs, so the plain queued move is given); or the content is
-/// Armada I's (INTERIM: its rule was not read, and its craft that fly warp themselves are not given
-/// a warp job by this click). The minimap cursor reads the same answer. Alt is the keyboard's Alt,
-/// not a rebindable action.
-pub(crate) fn minimap_plain(keys: &ButtonInput<KeyCode>, bindings: &KeyBindings, content: Option<&sta_content::ContentDb>) -> bool {
-    alt_held(keys) || warp_withheld(keys, bindings, content)
+/// executable, static); or the content is Armada I's (INTERIM: its rule was not read, and its craft
+/// that fly warp themselves are not given a warp job by this click). With the queue modifier held it
+/// is a warp move with the queue flag: a queued warp move appends its leg, STA64's own rule (#1173:
+/// the original's rule for a queued warp move is not established, read from the executable, static;
+/// the sim appends it as it does a queued plain move). The minimap cursor reads the same answer. Alt
+/// is the keyboard's Alt, not a rebindable action.
+pub(crate) fn minimap_plain(keys: &ButtonInput<KeyCode>, content: Option<&sta_content::ContentDb>) -> bool {
+    alt_held(keys) || warp_withheld(content)
 }
 
 /// Alt, the keyboard's Alt (not a rebindable action): the warp modifier of the originals.
@@ -205,10 +205,10 @@ fn alt_held(keys: &ButtonInput<KeyCode>) -> bool {
     keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight])
 }
 
-/// The two interim reasons the minimap gives no warp move (see [`minimap_plain`]): the queue
-/// modifier is held, or the content is Armada I's.
-fn warp_withheld(keys: &ButtonInput<KeyCode>, bindings: &KeyBindings, content: Option<&sta_content::ContentDb>) -> bool {
-    bindings.pressed(Action::AddModifier, keys) || content.is_some_and(|c| c.profile() == sta_content::Profile::Sta1Classic)
+/// The one interim reason the minimap gives no warp move (see [`minimap_plain`]): the content is
+/// Armada I's.
+fn warp_withheld(content: Option<&sta_content::ContentDb>) -> bool {
+    content.is_some_and(|c| c.profile() == sta_content::Profile::Sta1Classic)
 }
 
 /// The main view's right-click on open ground (or on an own craft, which gives no order of its
@@ -216,13 +216,12 @@ fn warp_withheld(keys: &ButtonInput<KeyCode>, bindings: &KeyBindings, content: O
 /// (read from the executable, static: a move becomes a warp move when Alt is held; the minimap
 /// has it the other way round). Only on Armada II content: the rule was read from that game's
 /// executable only (INTERIM: not read for Fleet Operations, Roots, Armada I or STA64's own content,
-/// which keep the plain move and the move cursor). INTERIM, as for the minimap: not with the queue
-/// modifier held. This gate belongs to the main view; the minimap's rule is unchanged. Which craft can warp is the sim's existing warp-move rule. The
+/// which keep the plain move and the move cursor). With the queue modifier held the warp move is
+/// queued: it appends its leg (STA64's own rule, #1173). This gate belongs to the main view; the
+/// minimap's rule is unchanged. Which craft can warp is the sim's existing warp-move rule. The
 /// cursor reads the same answer.
-pub(crate) fn world_warp(keys: &ButtonInput<KeyCode>, bindings: &KeyBindings, content: Option<&sta_content::ContentDb>) -> bool {
-    alt_held(keys)
-        && !bindings.pressed(Action::AddModifier, keys)
-        && content.is_some_and(|c| c.profile() == sta_content::Profile::Sta2Classic)
+pub(crate) fn world_warp(keys: &ButtonInput<KeyCode>, content: Option<&sta_content::ContentDb>) -> bool {
+    alt_held(keys) && content.is_some_and(|c| c.profile() == sta_content::Profile::Sta2Classic)
 }
 
 /// A right-click on the minimap (`RadarClick`, Secondary, inside the map's rectangle): the same
@@ -267,7 +266,7 @@ pub fn radar_order(
         me: link.player(),
         own: &own,
         queue_mod: bindings.pressed(Action::AddModifier, &keys),
-        warp: !minimap_plain(&keys, &bindings, content.as_deref().map(|c| &*c.0)) && crate::sim_link::warp_allowed(link.curr(), content.as_deref().map(|c| &*c.0)),
+        warp: !minimap_plain(&keys, content.as_deref().map(|c| &*c.0)) && crate::sim_link::warp_allowed(link.curr(), content.as_deref().map(|c| &*c.0)),
     };
     let mut acks = Vec::new();
     for at in clicks {
@@ -313,6 +312,7 @@ fn prune(view: &sta_sim::WorldView, targets: &mut OrderTargets, underway: &mut U
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::select::target_seen;
     use sta_sim::command::LocalRouter;
     use crate::render::units::SelectRadius;
     use crate::sim_link::SimEntity;
@@ -485,6 +485,40 @@ mod tests {
         }
     }
 
+    /// A right click on an enemy in its dying phase is what a click on the ground there would be (a
+    /// move), not an attack; the same enemy before its phase is attacked, so with the switch off (no unit
+    /// is ever dying) nothing changes. INTERIM: the original's rule is not established.
+    #[test]
+    fn right_click_on_a_dying_enemy_is_a_move_and_on_a_living_one_an_attack() {
+        use sta_sim::command::Command;
+        use sta_sim::{TickOutput, WorldSource, WorldView};
+        struct Frozen(std::sync::Arc<WorldView>);
+        impl WorldSource for Frozen {
+            fn step(&mut self, _: &[Command]) -> TickOutput {
+                TickOutput { view: self.0.clone(), events: vec![] }
+            }
+            fn view(&self) -> std::sync::Arc<WorldView> {
+                self.0.clone()
+            }
+        }
+        for dying in [false, true] {
+            let (mut app, [_, _, e]) = app();
+            let mut view = (**app.world().resource::<SimLink>().curr()).clone();
+            if dying {
+                let u = view.units.iter_mut().find(|u| u.id == e).unwrap();
+                u.flags = u.flags | sta_sim::view::UnitFlags::DYING;
+            }
+            app.insert_resource(SimLink::new(Box::new(Frozen(std::sync::Arc::new(view))), Box::new(LocalRouter::new()), PlayerId(0)));
+            aim_at(&mut app, -500.0, 0.0);
+            let (cmds, _) = click(&mut app, false);
+            match &cmds[..] {
+                [CommandKind::Order(Order::Attack { target, .. })] => assert!(!dying && *target == e),
+                [CommandKind::Order(Order::Move { .. })] => assert!(dying),
+                other => panic!("dying={dying}: {other:?}"),
+            }
+        }
+    }
+
     #[test]
     fn target_seen_follows_the_local_players_visible_set() {
         let (app, [a, _, e]) = app();
@@ -593,16 +627,17 @@ mod tests {
         assert_eq!(app.world().resource::<OrderTargets>().0.get(&a), Some(&to));
     }
 
+    /// Alt gives the plain move; the queue modifier alone gives a queued warp move (the sim appends it
+    /// as it does a queued plain move: STA64's own rule, #1173); both give the plain queued move.
     #[test]
-    fn alt_or_the_queue_modifier_gives_a_plain_move_and_shift_appends_the_leg() {
+    fn alt_gives_a_plain_move_and_the_queue_modifier_a_queued_warp_move() {
         let (mut app, [a, ..]) = radar_app();
         let to = SimVec3::from_f32([2000.0, 0.0, 700.0]);
         let (cmds, _) = radar_click(&mut app, Vec2::new(2000.0, 700.0), SEC, true, &[KeyCode::AltRight]);
         assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: false, mode: None })]);
-        // INTERIM: the queue modifier gives the plain queued move (a warp move would wipe the
-        // queue in today's sim).
-        let (cmds, _) = radar_click(&mut app, Vec2::new(2000.0, 700.0), SEC, true, &[KeyCode::ShiftLeft]);
-        assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: true, mode: None })]);
+        let (cmds, msgs) = radar_click(&mut app, Vec2::new(2000.0, 700.0), SEC, true, &[KeyCode::ShiftLeft]);
+        assert_eq!(cmds, [CommandKind::Order(Order::MoveWarp { units: vec![a], to, queue: true })]);
+        assert_eq!((msgs.len(), msgs[0].kind), (1, OrderKind::Move));
         let (cmds, _) = radar_click(&mut app, Vec2::new(2000.0, 700.0), SEC, true, &[KeyCode::ShiftLeft, KeyCode::AltLeft]);
         assert_eq!(cmds, [CommandKind::Order(Order::Move { units: vec![a], to, queue: true, mode: None })]);
     }
@@ -610,21 +645,21 @@ mod tests {
     /// The world's warp modifier is the minimap's Alt, inverted, and only on Armada II content:
     /// Fleet Operations, Roots, Armada I and STA64's own content keep the plain move.
     #[test]
-    fn world_warp_is_alt_on_armada_two_content_without_the_queue_modifier() {
+    fn world_warp_is_alt_on_armada_two_content_also_with_the_queue_modifier() {
         let db = sta_content::fake::db();
         let with = |p| sta_content::ContentDb::builder().profile(p).features(db.features().clone()).build().unwrap();
         let a2 = with(sta_content::Profile::Sta2Classic);
-        let bindings = KeyBindings::default();
         let mut keys = ButtonInput::<KeyCode>::default();
-        assert!(!world_warp(&keys, &bindings, Some(&a2)));
+        assert!(!world_warp(&keys, Some(&a2)));
         keys.press(KeyCode::AltRight);
-        assert!(world_warp(&keys, &bindings, Some(&a2)));
+        assert!(world_warp(&keys, Some(&a2)));
         for p in [sta_content::Profile::Fo3, sta_content::Profile::Fo4, sta_content::Profile::Sta1Classic, sta_content::Profile::Native] {
-            assert!(!world_warp(&keys, &bindings, Some(&with(p))), "{p:?}");
+            assert!(!world_warp(&keys, Some(&with(p))), "{p:?}");
         }
-        assert!(!world_warp(&keys, &bindings, None));
+        assert!(!world_warp(&keys, None));
+        // With the queue modifier too: the warp move is queued, not withheld.
         keys.press(KeyCode::ShiftLeft);
-        assert!(!world_warp(&keys, &bindings, Some(&a2)));
+        assert!(world_warp(&keys, Some(&a2)));
     }
 
     /// Armada I content: no warp job from the minimap (INTERIM: its rule was not read).
@@ -632,10 +667,10 @@ mod tests {
     fn armada_one_content_gets_a_plain_move_from_the_minimap() {
         let db = sta_content::fake::db();
         let a1 = sta_content::ContentDb::builder().profile(sta_content::Profile::Sta1Classic).features(db.features().clone()).build().unwrap();
-        let (keys, bindings) = (ButtonInput::<KeyCode>::default(), KeyBindings::default());
-        assert!(minimap_plain(&keys, &bindings, Some(&a1)));
-        assert_eq!(minimap_plain(&keys, &bindings, Some(&db)), db.profile() == sta_content::Profile::Sta1Classic);
-        assert!(!minimap_plain(&keys, &bindings, None));
+        let keys = ButtonInput::<KeyCode>::default();
+        assert!(minimap_plain(&keys, Some(&a1)));
+        assert_eq!(minimap_plain(&keys, Some(&db)), db.profile() == sta_content::Profile::Sta1Classic);
+        assert!(!minimap_plain(&keys, None));
     }
 
     /// Warp off, by the content's own switch or by the mission switch the view carries: no path gives a
@@ -659,30 +694,58 @@ mod tests {
             let c = sta_content::ContentDb::builder().profile(sta_content::Profile::Sta2Classic).features(db.features().clone()).build().unwrap();
             std::sync::Arc::new(c.with_rules(db.rules().clone().with_warp(warp)))
         };
-        // (content switch, mission switch, a warp move is offered)
-        for (content, mission, offered) in [(None, true, true), (Some(false), true, false), (None, false, false), (Some(true), true, true)] {
+        // (content switch, mission switch, match option off, a warp move is offered)
+        for (content, mission, match_off, offered) in [(None, true, false, true), (Some(false), true, false, false), (None, false, false, false), (Some(true), true, false, true), (None, true, true, false)] {
             let (mut app, [a, ..]) = radar_app();
             app.insert_resource(ContentRes(a2(content)));
             let mut view = (**app.world().resource::<SimLink>().curr()).clone();
             view.attrs.mission_switches.allow_warp = mission;
+            view.attrs.match_warp_off = match_off;
             app.insert_resource(SimLink::new(Box::new(Frozen(std::sync::Arc::new(view))), Box::new(LocalRouter::new()), PlayerId(0)));
             // The minimap's click.
             let to = SimVec3::from_f32([2000.0, 0.0, 700.0]);
             let (cmds, _) = radar_click(&mut app, Vec2::new(2000.0, 700.0), SEC, true, &[]);
             let want = if offered { Order::MoveWarp { units: vec![a], to, queue: false } } else { Order::Move { units: vec![a], to, queue: false, mode: None } };
-            assert_eq!(cmds, [CommandKind::Order(want)], "minimap: content {content:?} mission {mission}");
+            assert_eq!(cmds, [CommandKind::Order(want)], "minimap: content {content:?} mission {mission} match option off {match_off}");
             // The main view's Alt click on open ground.
             app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::AltLeft);
             aim_at(&mut app, 2000.0, 0.0);
             let (cmds, _) = click(&mut app, false);
             assert!(
                 matches!(&cmds[..], [CommandKind::Order(Order::MoveWarp { .. })]) == offered && matches!(&cmds[..], [CommandKind::Order(Order::MoveWarp { .. } | Order::Move { .. })]),
-                "world: content {content:?} mission {mission}: {cmds:?}"
+                "world: content {content:?} mission {mission} match option off {match_off}: {cmds:?}"
             );
         }
     }
 
-    /// A shift-queued minimap click appends its leg: the sim is run, and the ship still visits the
+    /// The queued path of the warp move is gated too: with warp off the queue modifier gives a queued PLAIN move on
+    /// the minimap and in the main view (with Alt held); with warp on it gives the queued warp move (#1405, #1102).
+    #[test]
+    fn with_warp_off_the_queue_modifier_gives_a_queued_plain_move() {
+        use sta_sim::command::Command;
+        use sta_sim::{TickOutput, WorldSource, WorldView};
+        struct Frozen(std::sync::Arc<WorldView>);
+        impl WorldSource for Frozen {
+            fn step(&mut self, _: &[Command]) -> TickOutput {
+                TickOutput { view: self.0.clone(), events: vec![] }
+            }
+            fn view(&self) -> std::sync::Arc<WorldView> {
+                self.0.clone()
+            }
+        }
+        for warp_on in [true, false] {
+            let (mut app, [a, ..]) = radar_app();
+            let mut view = (**app.world().resource::<SimLink>().curr()).clone();
+            view.attrs.match_warp_off = !warp_on;
+            app.insert_resource(SimLink::new(Box::new(Frozen(std::sync::Arc::new(view))), Box::new(LocalRouter::new()), PlayerId(0)));
+            let to = SimVec3::from_f32([2000.0, 0.0, 700.0]);
+            let (cmds, _) = radar_click(&mut app, Vec2::new(2000.0, 700.0), SEC, true, &[KeyCode::ShiftLeft]);
+            let want = if warp_on { Order::MoveWarp { units: vec![a], to, queue: true } } else { Order::Move { units: vec![a], to, queue: true, mode: None } };
+            assert_eq!(cmds, [CommandKind::Order(want)], "warp on: {warp_on}");
+        }
+    }
+
+    /// A shift-queued minimap click (a queued warp move) appends its leg: the sim is run, and the ship still visits the
     /// legs it had before, in order, then the new one.
     #[test]
     fn a_queued_minimap_click_keeps_the_earlier_legs_in_the_sim() {
@@ -729,7 +792,8 @@ mod tests {
         cmds.extend(radar_click(&mut app, at(300.0, 400.0), SEC, true, &[KeyCode::ShiftLeft]).0);
         cmds.extend(radar_click(&mut app, at(700.0, 400.0), SEC, true, &[KeyCode::ShiftLeft]).0);
         assert_eq!(cmds.len(), 3);
-        assert!(cmds.iter().all(|c| matches!(c, CommandKind::Order(Order::Move { .. }))), "{cmds:?}");
+        assert!(matches!(&cmds[0], CommandKind::Order(Order::Move { queue: false, .. })), "{cmds:?}");
+        assert!(cmds[1..].iter().all(|c| matches!(c, CommandKind::Order(Order::MoveWarp { queue: true, .. }))), "{cmds:?}");
         // One tick each, as the player's clicks come.
         for (i, kind) in cmds.into_iter().enumerate() {
             WorldSource::step(&mut sim, &[Command { player: PlayerId(0), seq: i as u32, kind }]);

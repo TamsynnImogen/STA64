@@ -13,4 +13,8 @@ fn warp_is_offered_only_while_the_mission_switch_and_the_content_allow_it() {
     view.attrs.mission_switches.allow_warp = false;
     assert!(!warp_allowed(&view, Some(&db)), "a script switched warp off");
     assert!(!warp_allowed(&view, None));
+    // the match option: off in this match, whatever the content and the script say
+    let mut view = WorldView::default();
+    view.attrs.match_warp_off = true;
+    assert!(!warp_allowed(&view, Some(&db)) && !warp_allowed(&view, None), "the match has warp off");
 }

@@ -7,8 +7,8 @@ use crate::command::{Command, CommandKind, Order};
 use crate::movement::approach::{ENTERING, IN_WARP, Ramp, WARP_OUT};
 use crate::movement::approach_tests;
 
-/// The record's place: the last of the chain.
-const RAMPS: usize = chain::LEN - 1;
+/// The record's place: the last but one of the chain (the warp option's byte follows it).
+const RAMPS: usize = chain::LEN - 2;
 
 fn v(z: i32) -> Vec3 {
     Vec3 { x: Fixed::ZERO, y: Fixed::ZERO, z: Fixed::from_int(z) }
@@ -31,6 +31,7 @@ fn warping(want: u8) -> (Sim, EntityId) {
 
 /// The same snapshot as the format before the record wrote it.
 fn as_previous_format(bytes: &[u8]) -> Vec<u8> {
+    // (that format has neither the record nor the warp option after it)
     let mut old = chain::before(bytes, RAMPS);
     old[4..6].copy_from_slice(&PRE_WARP_RAMP_FORMAT.to_le_bytes());
     old
@@ -73,7 +74,7 @@ fn the_ramps_are_saved_and_a_malformed_record_is_refused_with_its_reason() {
     assert_eq!(why(1, vec![(s, Ramp { start: u64::MAX, ..ramp })]), unreal);
     // a craft may be without its ramp (it had not been stepped yet): that loads
     assert!(Sim::from_snapshot(&rec(1, Vec::new()), content.clone()).is_ok());
-    // the record is mandatory in its format, and nothing may follow it
+    // the record is mandatory in its format, and nothing may follow the snapshot
     assert!(Sim::from_snapshot(&chain::before(&bytes, RAMPS), content.clone()).is_err());
     let mut trailing = bytes.clone();
     trailing.push(0);
