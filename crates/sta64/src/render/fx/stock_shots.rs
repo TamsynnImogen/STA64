@@ -439,6 +439,13 @@ impl StockShot {
 /// a beam (`beam_damage_at_end`, #1068): STA64's own, so a beam is not dropped at the first or last tick of its life.
 const BEAM_VIEW_SLACK: f32 = 2.0;
 
+/// The squared distance beyond which a beam of `range` is lost: twice the range (the sim's own factor,
+/// measured, repeated; also read from the executable, static), squared.
+pub(super) fn break_distance_squared(range: f32) -> f32 {
+    let reach = sta_sim::combat::weapons::BEAM_BREAK_RANGE_FACTOR as f32 * range;
+    reach * reach
+}
+
 /// The nodes and bodies of the render side, for the systems of this module.
 #[derive(SystemParam)]
 pub struct StockShots<'w, 's> {
@@ -733,7 +740,7 @@ pub(super) fn update_shots(
                 let beyond = match (view.unit(s.shooter), view.unit(id)) {
                     (Some(a), Some(b)) => {
                         let (a, b) = (to_bevy(a.pos.to_f32()), to_bevy(b.pos.to_f32()));
-                        s.range > 0.0 && (a - b).with_y(0.0).length_squared() > 4.0 * s.range * s.range
+                        s.range > 0.0 && (a - b).with_y(0.0).length_squared() > break_distance_squared(s.range)
                     }
                     _ => false,
                 };
@@ -762,7 +769,7 @@ pub(super) fn update_shots(
                 // Further than twice the range: ends at once (read from the executable, static; the factor
                 // replaces an earlier reading of the square root of two).
                 // (Under `beam_damage_at_end` the sim's own break distance decides, above.)
-                if at_end_life.is_none() && s.range > 0.0 && start.distance_squared(body.centre) > 4.0 * s.range * s.range {
+                if at_end_life.is_none() && s.range > 0.0 && start.distance_squared(body.centre) > break_distance_squared(s.range) {
                     cmds.entity(e).try_despawn();
                     continue;
                 }

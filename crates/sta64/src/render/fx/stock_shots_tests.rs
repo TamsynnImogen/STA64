@@ -861,6 +861,14 @@ fn a_beam_the_sim_lost_stays_lost_to_the_end_of_its_life_with_a_timer_longer_tha
 }
 
 #[test]
+fn the_drawing_breaks_a_beam_at_the_distance_the_sim_does() {
+    // One source: the sim's factor, public, squared. An authored range of 1000: the sim holds a target at its limit and loses one beyond.
+    let limit = (sta_sim::combat::weapons::BEAM_BREAK_RANGE_FACTOR * 1000) as f32;
+    assert_eq!(break_distance_squared(1000.0), limit * limit);
+    assert!(1900.0f32.powi(2) <= break_distance_squared(1000.0) && 2100.0f32.powi(2) > break_distance_squared(1000.0));
+}
+
+#[test]
 fn under_beam_damage_at_end_the_sims_break_distance_decides_not_the_drawings_own_reading() {
     // The drawing's own cut ends a beam whose target is beyond twice the range (the authored range is 1000), measured from
     // the muzzle: with the switch off a target at 2100 gets no beam. With the switch on the sim decides: it holds the beam
