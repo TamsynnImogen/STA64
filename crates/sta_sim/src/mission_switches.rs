@@ -107,10 +107,14 @@ impl Sim {
         true
     }
 
-    /// May a craft warp at all (`AllowWarp`): ANDed into the approach and
-    /// warp-move decisions.
+    /// May a craft warp at all: the mission switch (`AllowWarp`) and the content's warp
+    /// switch (`Rules::warp_enabled`, #1102) must both allow it; a script cannot turn warp
+    /// back on for content that has none. ANDed into every decision that asks for warp: the
+    /// warp move (also the one a plain move of a keyed craft becomes), the attack approach,
+    /// and the gravity wells that only matter to warp. A sim without content has warp.
+    /// (The match option of #1102 joins this AND when it exists.)
     pub(crate) fn warp_allowed(&self) -> bool {
-        self.mission_switches.allow_warp
+        self.mission_switches.allow_warp && self.content.as_deref().is_none_or(|db| db.rules().warp_enabled())
     }
 
     /// The switches as the view shows them.
