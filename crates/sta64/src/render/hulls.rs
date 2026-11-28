@@ -53,6 +53,25 @@ const BUMP: f32 = 1.0;
 /// Directional lights the shader takes (Refit's `DIRS`).
 const DIRS: usize = 4;
 
+/// The most points kept per hull part for the death sparks (see [`HullSample`]).
+pub const HULL_SAMPLE_MAX: usize = 256;
+
+/// A few of a hull part's vertices, in the part's own space, kept by the client in a form of its own: the part's mesh
+/// is handed to the renderer (its vertex data lives in the render world only, #1426) and cannot be read at run time.
+/// An even stride through the vertices, at most [`HULL_SAMPLE_MAX`]: a few KB per distinct part, shared by every copy
+/// through the part cache, where keeping the meshes' main-world data would cost every hull its full vertex and index
+/// buffers for the whole session.
+#[derive(Component, Clone, Debug, PartialEq)]
+pub struct HullSample(pub std::sync::Arc<[[f32; 3]]>);
+
+/// The sample of `positions`: all of them when there are few, else an even stride through them.
+pub fn hull_sample(positions: &[[f32; 3]]) -> std::sync::Arc<[[f32; 3]]> {
+    if positions.len() <= HULL_SAMPLE_MAX {
+        return positions.into();
+    }
+    (0..HULL_SAMPLE_MAX).map(|i| positions[i * positions.len() / HULL_SAMPLE_MAX]).collect()
+}
+
 /// Marks a mesh part of a hull (set by `model_scene`), with what the material alone
 /// does not say about it.
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]

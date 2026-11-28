@@ -100,6 +100,8 @@ struct CachedPart {
     rock: Option<crate::render::rock::RockPart>,
     /// Set on a hull's parts (not skies), for the hull look (`render/hulls.rs`).
     hull: Option<crate::render::hulls::HullPart>,
+    /// A few of a hull part's vertices, kept for the death sparks (the mesh itself cannot be read once rendered).
+    sample: Option<std::sync::Arc<[[f32; 3]]>>,
     /// The part belongs to a dilithium moon (its rock or its `glowdmoon` shell): `rock::MoonPart`.
     moon: Option<crate::render::rock::MoonKind>,
 }
@@ -627,6 +629,7 @@ fn spawn_mesh(
 
         let triangles = indices.len() / 3;
 
+        let sample = crate::render::hulls::hull_sample(&positions);
         let usage = if construction.is_some() {
             RenderAssetUsages::default()
         } else {
@@ -751,6 +754,7 @@ fn spawn_mesh(
             triangles,
             rock,
             hull,
+            sample: hull.is_some().then_some(sample),
             moon,
         };
         if let Some(cache) = ctx.parts.as_mut() {
@@ -824,6 +828,9 @@ fn spawn_part(ctx: &mut SpawnCtx, part: &CachedPart, parent: Entity, surface: (u
     }
     if let Some(h) = part.hull {
         e.insert(h);
+        if let Some(sample) = &part.sample {
+            e.insert(crate::render::hulls::HullSample(sample.clone()));
+        }
     }
     if let Some(maps) = maps {
         e.insert(maps);
