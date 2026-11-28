@@ -8,6 +8,11 @@
 //! names or counts one. What is asserted is the outcome of *every* mission the run reports, as data:
 //! converted with files written, or failed with a reason; and that the cache answers a second run,
 //! that a changed converter version converts again and that a refused DLL fails that mission only.
+//! A game whose missions all fail would prove nothing, so at least one mission of each game must
+//! convert, and the DLL the last test refuses is one of a mission the full run converted.
+//!
+//! How long it takes: about a quarter of a minute of test time for one game on a laptop (measured on
+//! this crate's test build; both tests convert the install several times).
 //!
 //! No Python and no `objdump`: the decoder is the crate's own (`disasm::disassemble`), in this
 //! process. The library cannot reach either tool because it never starts a process: the last test
@@ -67,11 +72,19 @@ struct Run {
 }
 
 fn go(inst: &Install, out: &Path, cache: Option<&Cache>, version: Option<u32>, decoder: &mut install::Decoder<'_>) -> Run {
+    go_seeing(inst, out, cache, version, decoder, &mut |_| {})
+}
+
+/// [`go`], with `seen` called for every event as it happens (before the next decoder call).
+fn go_seeing(inst: &Install, out: &Path, cache: Option<&Cache>, version: Option<u32>, decoder: &mut install::Decoder<'_>, seen: &mut dyn FnMut(&Event)) -> Run {
     let res = install::resolve_output(out, inst, &install::Env::from_process()).expect("the output folder is allowed");
     let mut od = OutDir::inspect(out, res, false).expect("a fresh folder is usable");
     let mut events = Vec::new();
     let opts = Options { cache_version: version, prepare_first: true, ..Options::default() };
-    let summary = install::convert_install(inst, &opts, &mut od, cache, decoder, &|| false, &mut |e: &Event| events.push(e.clone()));
+    let summary = install::convert_install(inst, &opts, &mut od, cache, decoder, &|| false, &mut |e: &Event| {
+        seen(e);
+        events.push(e.clone());
+    });
     Run { summary, events }
 }
 
@@ -117,6 +130,8 @@ fn gated_every_mission_has_an_outcome_the_cache_answers_and_a_new_version_conver
         assert!(a.summary.aborted.is_none() && a.summary.finish_error.is_none() && !a.summary.cancelled, "{game}: the run ended early");
         assert_eq!(a.summary.total, a.summary.missions.len(), "{game}: every planned mission is reported");
         assert!(!a.summary.missions.is_empty(), "{game}: the install has missions to convert");
+        // a run in which every mission fails with a reason would pass everything below
+        assert!(a.summary.converted_missions() >= 1, "{game}: no mission of the install converted");
         for (i, m) in a.summary.missions.iter().enumerate() {
             assert_outcome(m, &out, i);
             assert!(!m.cached, "{game}: mission #{i} was cached on a fresh cache");
@@ -159,20 +174,39 @@ fn gated_a_refused_dll_fails_its_mission_with_a_reason_and_the_rest_are_converte
         let t = TempDir::new("e2e-fail");
         let data = temp_root(&t, &root);
         let inst = Install::open(&root).expect("a base install");
-        let mut dec = real_decoder;
-        let full = go(&inst, &data.join("full"), None, None, &mut dec);
+        // the full run, noting which DLL the decoder was asked for under which mission
+        let current = std::cell::Cell::new(None::<usize>);
+        let asked = std::cell::RefCell::new(Vec::<(usize, PathBuf)>::new());
+        let mut noting = |path: &Path, pe: &Pe| {
+            if let Some(i) = current.get() {
+                asked.borrow_mut().push((i, path.to_path_buf()));
+            }
+            disasm::disassemble(pe)
+        };
+        let full = go_seeing(&inst, &data.join("full"), None, None, &mut noting, &mut |e| {
+            if let Event::Started { index, .. } = e {
+                current.set(Some(*index));
+            }
+        });
         assert!(full.summary.aborted.is_none(), "{game}: the run ended early");
-        // the decoder refuses the first DLL it is asked for, as a fault of that file (a value)
-        let refused = std::cell::Cell::new(false);
-        let mut refusing = |_: &Path, pe: &Pe| {
-            if refused.replace(true) { disasm::disassemble(pe) } else { Err(DecodeError::new("refused by the test")) }
+        // A DLL of a mission that converted: refusing one of a mission that fails anyway would
+        // show nothing. Not one that another mission also asked for.
+        let asked = asked.into_inner();
+        let (victim, dll) = asked
+            .iter()
+            .find(|(i, path)| !full.summary.missions[*i].failed() && asked.iter().all(|(j, other)| j == i || other != path))
+            .cloned()
+            .unwrap_or_else(|| panic!("{game}: no converted mission has a DLL of its own to refuse"));
+        // the decoder refuses that DLL, as a fault of that file (a value)
+        let mut refusing = |path: &Path, pe: &Pe| {
+            if path == dll { Err(DecodeError::new("refused by the test")) } else { disasm::disassemble(pe) }
         };
         let part = go(&inst, &data.join("partial"), None, None, &mut refusing);
         assert!(part.summary.aborted.is_none(), "{game}: a refused DLL ended the run");
         assert_eq!(part.summary.missions.len(), full.summary.missions.len());
         let failed: Vec<usize> = part.summary.missions.iter().enumerate().filter(|(_, m)| m.failed()).map(|(i, _)| i).collect();
         let newly: Vec<usize> = failed.iter().copied().filter(|i| !full.summary.missions[*i].failed()).collect();
-        assert_eq!(newly.len(), 1, "{game}: exactly one more mission fails than without the refusal");
+        assert_eq!(newly, [victim], "{game}: the mission whose DLL was refused fails, and no other does that converted before");
         for (i, m) in part.summary.missions.iter().enumerate() {
             assert_outcome(m, &data.join("partial"), i);
             if !newly.contains(&i) {

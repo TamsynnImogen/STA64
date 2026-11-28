@@ -164,6 +164,13 @@ impl OutDir {
 
     /// Looks at the folder (`root` resolved, `given` as the user wrote it) and refuses what the
     /// rules above refuse. Writes and deletes nothing.
+    ///
+    /// `root` must be the resolved folder ([`crate::paths::resolve`]): the caller's checks (not
+    /// inside an install, a game folder or the checkout) were made on that form, and every write
+    /// re-resolves it to notice a folder swapped underneath. A `root` that is not its own resolved
+    /// form is refused here, with a message that says so, instead of at the first write and only
+    /// on the systems where the two forms differ (a temp folder behind a link, another canonical
+    /// form of the same path).
     pub fn inspect(given: &Path, root: PathBuf, keep_foreign: bool) -> Result<OutDir, String> {
         Self::inspect_with(given, root, keep_foreign, Edited::Foreign)
     }
@@ -175,6 +182,14 @@ impl OutDir {
             && fs::symlink_metadata(&abs).is_ok_and(|m| m.file_type().is_symlink())
         {
             return Err(format!("output folder {shown} is a symbolic link: the tool does not write through links"));
+        }
+        let resolved = crate::paths::resolve(&root)?;
+        if resolved != root {
+            return Err(format!(
+                "output folder {shown}: {} is not its resolved form ({}); the caller must pass the resolved folder",
+                root.display(),
+                resolved.display()
+            ));
         }
         let mut me = OutDir { root, manifest: Vec::new(), keep_foreign, moved: Vec::new(), edited };
         match fs::symlink_metadata(&me.root) {
@@ -503,9 +518,10 @@ impl OutDir {
     }
 }
 
-/// The scripts in the output folder `root` (resolved) that the tool wrote and the player has edited
-/// since (file names in `missions/`, sorted); none when the folder cannot be read. Reads the
-/// manifest and the files, writes nothing.
+/// The scripts in the output folder `root` (as the caller has it; resolved here) that the tool
+/// wrote and the player has edited since (file names in `missions/`, sorted); none when the folder
+/// cannot be resolved or read. Reads the manifest and the files, writes nothing.
 pub fn edited_scripts(root: &Path) -> Vec<String> {
-    OutDir::inspect_with(root, root.to_path_buf(), false, Edited::Keep).map(|o| o.edited_names()).unwrap_or_default()
+    let Ok(resolved) = crate::paths::resolve(root) else { return Vec::new() };
+    OutDir::inspect_with(root, resolved, false, Edited::Keep).map(|o| o.edited_names()).unwrap_or_default()
 }
