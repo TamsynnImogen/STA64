@@ -49,8 +49,7 @@ pub const MAGIC: [u8; 4] = *b"STAR";
 /// Format 7 records the Armada I Director's Cut match option.
 /// Format 8 (SIM-76) logs the move mode of `Order::Move` (a new field in the
 /// middle of the command bytes): formats 6 and 7 are refused, not migrated, as
-/// their commands no longer decode alike. PROVISIONAL number: the merge steward
-/// assigns the real one.
+/// their commands no longer decode alike.
 /// Format 9 (#1102) records the match option "warp allowed" (a new field of the options in the
 /// header): format 8 is refused, not migrated.
 pub const FORMAT_VERSION: u16 = 9;
