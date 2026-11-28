@@ -40,9 +40,7 @@ pub fn solids(regions: &[Region]) -> Vec<Solid> {
 }
 
 impl Sim {
-    /// Push every moving unit out of the asteroid fields (X and Z only): the units that can
-    /// move, and a craft coasting with its engines off (`engines_off_drift`), which would
-    /// otherwise drift into a field and be thrown out when its engines return.
+    /// Push every moving unit out of the asteroid fields (X and Z only).
     pub(crate) fn push_out_of_fields(&mut self) {
         let solids = solids(&self.regions);
         if solids.is_empty() {
@@ -50,9 +48,8 @@ impl Sim {
         }
         let radii: Vec<Fixed> = self.units.iter().map(|u| self.body_radius(u.def)).collect();
         let obstacles = if self.confinement.is_active() { self.obstacles() } else { Vec::new() };
-        let db = self.content.as_deref();
         for (u, &radius) in self.units.iter_mut().zip(&radii)
-            .filter(|(u, _)| (u.mobile() || crate::kinematics::drifts(db, u)) && !self.production.is_welding(u.id)) {
+            .filter(|(u, _)| u.mobile() && !self.production.is_welding(u.id)) {
             for s in &solids {
                 let previous = u.pos;
                 let (dx, dz) = push_from_solid(u.pos, radius, s);

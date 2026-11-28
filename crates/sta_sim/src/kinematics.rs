@@ -357,7 +357,7 @@ pub(crate) const DRIFT_DECAY: (i32, i32) = (19, 100);
 /// resolves it). Measured with the engines switched off by a script; engines destroyed by
 /// damage set the same flag, and the movement code of the original tests the same
 /// condition either way (read from the executable, static), but that case was not staged.
-pub(crate) fn drifts(db: Option<&sta_content::ContentDb>, u: &Unit) -> bool {
+fn drifts(db: Option<&sta_content::ContentDb>, u: &Unit) -> bool {
     u.kind == crate::world::EntityKind::Craft
         && u.flags.contains(crate::view::UnitFlags::ENGINES_OFF)
         && u.speed > Fixed::ZERO
@@ -373,16 +373,13 @@ pub(crate) fn drifts(db: Option<&sta_content::ContentDb>, u: &Unit) -> bool {
 /// there (measured: the normal warp exit on the next tick, then the drift). INTERIM: the
 /// drop is at once; the shape of the exit belongs to the warp kinematics (#1102).
 ///
-/// STA64's own guard, not measured: the coast ends at the map's edge (`bounds`).
-fn coast(u: &mut Unit, bounds: Option<(Vec3, Vec3)>) {
+/// The map's edge needs nothing here: the confinement that holds every unit on the map
+/// holds a coasting craft too (it is applied to this step's result by the caller).
+fn coast(u: &mut Unit) {
     u.speed = u.speed.min(u.stats.max_speed);
     let step = u.speed * dt();
     u.pos.x = u.pos.x + u.heading.0 * step;
     u.pos.z = u.pos.z + u.heading.1 * step;
-    if let Some((lo, hi)) = bounds {
-        u.pos.x = clamp(u.pos.x, lo.x, hi.x);
-        u.pos.z = clamp(u.pos.z, lo.z, hi.z);
-    }
     let loss = u.speed * Fixed::from_int(DRIFT_DECAY.0) / Fixed::from_int(DRIFT_DECAY.1 * TICK_HZ as i32);
     u.speed = (u.speed - loss).max(Fixed::ZERO);
 }
@@ -406,7 +403,7 @@ impl Sim {
                 // Engines offline and still moving: it coasts, held by the same confinement
                 // as a craft under power.
                 let previous = u.pos;
-                coast(u, self.bounds);
+                coast(u);
                 if self.confinement.is_active() && u.pos != previous {
                     let radius = db.and_then(|db| db.unit(u.def)).map_or(Fixed::ZERO, |d| d.radius * Fixed::from_int(3) / Fixed::from_int(4));
                     crate::avoid::constrain_position(&mut self.confinement, u, previous, radius, &obstacles, self.economy.trade_dock_of(u.id));

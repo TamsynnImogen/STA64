@@ -208,38 +208,64 @@ fn adrift(sim: &mut Sim, ship: EntityId, at: Vec3) {
     u.flags = u.flags.with(UnitFlags::ENGINES_OFF, true);
 }
 
-/// A coasting craft is kept out of an asteroid field, as a craft under power is.
+/// The approach scene under the native rules with the drift switch forced on: rules under
+/// which no map confinement is active.
+fn game_without_confinement() -> (Sim, EntityId) {
+    let base = approach_tests::db(Profile::Native, Some(1100));
+    let mut features = base.features().clone();
+    features.engines_off_drift = true;
+    let mut b = ContentDb::builder().profile(base.profile()).features(features);
+    for w in base.weapons() {
+        b = b.weapon(w.clone());
+    }
+    for u in base.units() {
+        b = b.unit(u.clone());
+    }
+    let db = Arc::new(b.build().unwrap().with_rules(base.rules().clone()));
+    let mut sim = approach_tests::sim_with(Arc::clone(&db));
+    let ship = sim.spawn_def(db.key("st_seer").unwrap(), PlayerId(1), v(0, 0), AHEAD).unwrap();
+    (sim, ship)
+}
+
+/// A coasting craft is kept out of an asteroid field, as a craft under power is: flying
+/// straight at one, it comes to the field's edge and no further, with the map confinement
+/// active (stock Armada II rules) and without it. The coast adds no rule of its own for
+/// fields: what already keeps units out of them holds a coasting craft too.
 #[test]
 fn a_coasting_craft_does_not_drift_into_an_asteroid_field() {
     use sta_content::{Region, RegionKind, RegionShape};
-    let (mut sim, _, ship) = game(Profile::Sta2Classic);
-    // A field straight ahead, well inside the distance the coast covers.
-    let (centre, radius) = (v(0, 1000), 300);
-    sim.regions.push(Region { kind: RegionKind::AsteroidField, odf: "drift_rocks".into(), shape: RegionShape::Sphere { centre, radius: n(radius) } });
-    adrift(&mut sim, ship, v(0, 400));
-    let (mut nearest, mut moved) = (Fixed::from_int(i32::MAX), Fixed::ZERO);
-    for _ in 0..40 * HZ {
-        let before = sim.unit(ship).unwrap().pos;
-        sim.step(&[]);
-        let p = sim.unit(ship).unwrap().pos;
-        moved = moved + (p.z - before.z).abs() + (p.x - before.x).abs();
-        let (dx, dz) = (p.x - centre.x, p.z - centre.z);
-        nearest = nearest.min((dx * dx + dz * dz).sqrt());
+    let (stock, _, stock_ship) = game(Profile::Sta2Classic);
+    let (bare, bare_ship) = game_without_confinement();
+    assert!(stock.confinement.is_active() && !bare.confinement.is_active());
+    for (what, mut sim, ship) in [("with confinement", stock, stock_ship), ("without confinement", bare, bare_ship)] {
+        // A field straight ahead, well inside the distance the coast covers.
+        let (centre, radius) = (v(0, 1000), 300);
+        sim.regions.push(Region { kind: RegionKind::AsteroidField, odf: "drift_rocks".into(), shape: RegionShape::Sphere { centre, radius: n(radius) } });
+        adrift(&mut sim, ship, v(0, 400));
+        let mut nearest = Fixed::from_int(i32::MAX);
+        for _ in 0..40 * HZ {
+            sim.step(&[]);
+            let p = sim.unit(ship).unwrap().pos;
+            let (dx, dz) = (p.x - centre.x, p.z - centre.z);
+            nearest = nearest.min((dx * dx + dz * dz).sqrt());
+        }
+        assert!(nearest < n(radius + 50), "{what}: the coast reached the field's edge: {nearest:?} from its centre");
+        assert!(nearest >= n(radius), "{what}: and stayed out of the field: {nearest:?} from its centre");
     }
-    assert!(moved > n(500), "it coasted far enough to cross the field's edge: {moved:?}");
-    assert!(nearest >= n(radius), "and stayed out of the field: {nearest:?} from its centre");
 }
 
-/// The coast ends at the map's edge.
+/// A coasting craft is held on the map like every other unit (the map's own confinement; the
+/// coast adds no rule of its own for the edge).
 #[test]
 fn a_coasting_craft_stays_on_the_map() {
     let (mut sim, _, ship) = game(Profile::Sta2Classic);
     let (_, hi) = sim.bounds.expect("the map has bounds");
-    adrift(&mut sim, ship, Vec3 { x: Fixed::ZERO, y: Fixed::ZERO, z: hi.z - n(100) });
+    adrift(&mut sim, ship, Vec3 { x: Fixed::ZERO, y: Fixed::ZERO, z: hi.z - n(600) });
+    let mut farthest = Fixed::ZERO;
     for _ in 0..40 * HZ {
         sim.step(&[]);
-        let z = sim.unit(ship).unwrap().pos.z;
-        assert!(z <= hi.z, "{z:?} beyond the edge {:?}", hi.z);
+        farthest = farthest.max(sim.unit(ship).unwrap().pos.z);
     }
-    assert_eq!(sim.unit(ship).unwrap().pos.z, hi.z, "it came to the edge and no further");
+    assert!(farthest > hi.z - n(300), "the coast reached the edge region: {farthest:?}");
+    assert!(farthest <= hi.z, "and never left the map: {farthest:?} beyond {:?}", hi.z);
 }
