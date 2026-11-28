@@ -40,8 +40,16 @@ fn nebula(odf: &str, text: &str) -> UnitDef {
 /// points, a nebula that halves a craft's speed (`gate_drag`), the path planner off (it
 /// would route round the nebula), and `too_close` as the warp move's distance key when given.
 fn db(too_close: Option<i32>) -> Arc<ContentDb> {
+    db_with(too_close, true)
+}
+
+/// [`db`] with the feature switch `warp_gates` as given (the profile has it on).
+fn db_with(too_close: Option<i32>, gates: bool) -> Arc<ContentDb> {
     let base = approach_tests::db(Profile::Sta2Classic, Some(1100));
-    let mut b = ContentDb::builder().profile(base.profile()).features(base.features().clone());
+    assert!(base.features().warp_gates, "on for stock Armada II");
+    let mut features = base.features().clone();
+    features.warp_gates = gates;
+    let mut b = ContentDb::builder().profile(base.profile()).features(features);
     for w in base.weapons() {
         b = b.weapon(w.clone());
     }
@@ -165,48 +173,78 @@ fn drag(z: i32, radius: i32) -> Region {
     Region { kind: RegionKind::Nebula, odf: "gate_drag".into(), shape: RegionShape::Sphere { centre: v(0, z), radius: n(radius) } }
 }
 
-#[test]
-fn a_speed_cap_at_or_below_impulse_blocks_entry_and_drops_a_warping_craft() {
-    let db = db(None);
-    // Starting inside the slowing nebula, which reaches far past the start: no warp.
-    let mut inside = game(&db, vec![drag(0, 9000)]);
-    let s = ship(&mut inside, &db, v(0, 0));
-    assert!(!run(&mut inside, vec![warp_move(s, v(0, 6000))], s, 8 * HZ), "no entry under the cap");
-    let u = inside.unit(s).unwrap();
-    assert!(u.speed > Fixed::ZERO && u.speed <= u.stats.max_speed);
+/// What a craft did on its way through the slowing nebula across its path.
+struct Crossing {
+    /// At warp on a tick before it reached the nebula.
+    before: bool,
+    /// Ticks that began well inside the nebula, and how many of them ended in the warp phase.
+    inside: usize,
+    inside_at_warp: usize,
+    /// It came out on the far side.
+    crossed: bool,
+    sim: Sim,
+    ship: EntityId,
+}
 
-    // The same move with the nebula across the path: at warp before it, out of warp inside.
-    // Everything inside the empty map's bounds: a goal beyond them would be clamped.
-    let (centre, radius, goal) = (3500, 600, 7800);
-    let mut sim = game(&db, vec![drag(centre, radius)]);
-    let s = ship(&mut sim, &db, v(0, 0));
-    sim.step(&[warp_move(s, v(0, goal))]);
-    let (mut before, mut inside_at_warp, mut ticks_inside) = (false, 0, 0);
-    let mut crossed = false;
+/// The nebula of [`cross`]: its centre and radius along the craft's path.
+const NEBULA: (i32, i32) = (2500, 600);
+
+/// A craft at the origin given `order` (built for it and, when asked, a target 6000 ahead),
+/// flown until it is past the nebula. Everything lies inside the empty map's bounds: a goal
+/// beyond them would be clamped.
+fn cross(db: &Arc<ContentDb>, attack: bool) -> Crossing {
+    let (centre, radius) = NEBULA;
+    let mut sim = game(db, vec![drag(centre, radius)]);
+    let s = ship(&mut sim, db, v(0, 0));
+    let order = if attack {
+        let t = sim.spawn_def(db.key("st_target").unwrap(), PlayerId(2), v(0, 6000), AHEAD).unwrap();
+        Command { player: PlayerId(1), seq: 0, kind: CommandKind::Order(Order::Attack { units: vec![s], target: t }) }
+    } else {
+        warp_move(s, v(0, 7800))
+    };
+    sim.step(&[order]);
+    let mut c = Crossing { before: false, inside: 0, inside_at_warp: 0, crossed: false, sim, ship: s };
     for _ in 0..120 * HZ {
-        // The cap of a tick comes from where the craft is when the tick starts.
-        let z = sim.unit(s).unwrap().pos.z;
-        // Well inside, a margin away from the edge, so the test does not depend on how
-        // the edge itself is counted.
+        // The cap of a tick comes from where the craft is when the tick starts. "Well inside"
+        // keeps a margin from the edge, so the test does not depend on how the edge is counted.
+        let z = c.sim.unit(s).unwrap().pos.z;
         let margin = 100;
         let was_inside = z > n(centre - radius + margin) && z < n(centre + radius - margin);
-        sim.step(&[]);
+        c.sim.step(&[]);
         if was_inside {
-            ticks_inside += 1;
-            inside_at_warp += usize::from(at_warp(&sim, s));
+            c.inside += 1;
+            c.inside_at_warp += usize::from(at_warp(&c.sim, s));
         } else if z < n(centre - radius) {
-            before |= at_warp(&sim, s);
+            c.before |= at_warp(&c.sim, s);
         }
         if z > n(centre + radius) {
-            crossed = true;
+            c.crossed = true;
             break;
         }
     }
-    assert!(before, "at warp on the way to the nebula");
-    assert!(crossed && ticks_inside > HZ as usize, "the craft crossed the nebula ({ticks_inside} ticks inside)");
-    assert_eq!(inside_at_warp, 0, "never in the warp phase on a tick the cap applies");
-    assert!(sim.unit(s).unwrap().target == Some(v(0, goal)), "the goal is inside the map");
-    assert!(run(&mut sim, Vec::new(), s, 6 * HZ), "past the nebula it warps again");
+    c
+}
+
+/// A craft at warp that comes under a nebula's speed cap is out of the warp phase on every
+/// tick the cap applies, and warps again by itself past it. (Entering warp under such a cap
+/// was already impossible for these craft: the cap keeps them below the speed a warp start
+/// asks for. What the ceiling adds is the craft that is already at warp.)
+#[test]
+fn a_speed_cap_at_or_below_impulse_drops_a_warping_craft() {
+    let mut c = cross(&db(None), false);
+    assert!(c.before, "at warp on the way to the nebula");
+    assert!(c.crossed && c.inside > HZ as usize, "the craft crossed the nebula ({} ticks inside)", c.inside);
+    assert_eq!(c.inside_at_warp, 0, "never in the warp phase on a tick the cap applies");
+    assert!(run(&mut c.sim, Vec::new(), c.ship, 6 * HZ), "past the nebula it warps again");
+}
+
+/// The same on the attack approach.
+#[test]
+fn an_attack_approach_drops_out_of_warp_under_a_speed_cap() {
+    let c = cross(&db(None), true);
+    assert!(c.before, "the approach warps on the way to the nebula");
+    assert!(c.crossed && c.inside > HZ as usize, "the attacker crossed the nebula ({} ticks inside)", c.inside);
+    assert_eq!(c.inside_at_warp, 0, "never in the warp phase on a tick the cap applies");
 }
 
 #[test]
@@ -242,4 +280,28 @@ fn an_attack_approach_warps_only_with_the_engines_at_the_share() {
     };
     assert!(approach(Fixed::ZERO), "at the share the approach warps");
     assert!(!approach(Fixed::from_bits(1)), "just below it does not");
+}
+
+/// With the switch off neither gate applies: damaged engines and a nebula's cap leave the warp
+/// decision as it was before the rule (a craft keeps its warp phase under the cap, on both
+/// paths).
+#[test]
+fn with_the_switch_off_neither_gate_applies() {
+    let off = db_with(None, false);
+    let mut sim = game(&off, Vec::new());
+    let s = ship(&mut sim, &off, v(0, 0));
+    sim.step(&[script(Edit::SubsystemDamage(s, Subsystem::Engines, damage_to_the_share() + Fixed::ONE))]);
+    assert!(run(&mut sim, vec![warp_move(s, v(0, 6000))], s, 8 * HZ), "engines below the share still warp");
+
+    for attack in [false, true] {
+        let c = cross(&off, attack);
+        assert!(c.before && c.inside > 0, "attack {attack}: {} ticks inside", c.inside);
+        assert_eq!(c.inside_at_warp, c.inside, "attack {attack}: the warp phase is kept under the cap, as before");
+    }
+
+    // The switch is part of the content digest, and the profiles that have it on are the two
+    // whose executable the reading covers.
+    assert_ne!(off.hash(), db(None).hash());
+    let on: Vec<Profile> = [Profile::Native, Profile::Fo4, Profile::Fo3, Profile::Sta2Classic, Profile::Sta1Classic].into_iter().filter(|p| p.features().warp_gates).collect();
+    assert_eq!(on, [Profile::Fo4, Profile::Sta2Classic]);
 }

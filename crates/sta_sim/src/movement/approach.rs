@@ -174,6 +174,8 @@ pub(crate) fn engines_share_met(hit_points: Fixed, damage: i64) -> bool {
 /// warp)`, the one thing in STA64 that lowers the ceiling; with none there is no ceiling.
 /// (A plan's own cap blocks warp where the plan is made, and a scripted speed is the
 /// craft's impulse itself, not a cap.) Read from the executable, static; not measured.
+/// How a nebula's speed limit maps to the ceiling under Armada I's coefficient rule is not
+/// settled; `warp_gates` is off for that profile, so the question does not arise there.
 pub(crate) fn ceiling_allows_warp(impulse: Fixed, cap: Option<(Fixed, Fixed)>) -> bool {
     cap.is_none_or(|(_, ceiling)| impulse < ceiling)
 }
@@ -193,11 +195,20 @@ impl Sim {
     /// ([`engines_share_met`]; a craft with no damage row is undamaged), and the tick's
     /// speed ceiling leaves room ([`ceiling_allows_warp`]). A craft that fails one while at
     /// warp leaves it the ordinary way, and warps again by itself once it passes.
+    ///
+    /// Under the feature switch `warp_gates` (the unit's, as `ContentDb::unit_features`
+    /// resolves it); off, or without content, every craft passes. INTERIM, not settled:
+    /// engines held by a special weapon or in stasis are not counted as offline here.
     pub(crate) fn warp_gates_pass(&self, u: &Entity, caps: &[(EntityId, (Fixed, Fixed))]) -> bool {
+        let Some(db) = self.content.as_deref() else { return true };
+        let def = db.unit(u.def);
+        if !def.map_or(db.features(), |d| db.unit_features(d)).warp_gates {
+            return true;
+        }
         if u.flags.contains(crate::view::UnitFlags::ENGINES_OFF) {
             return false;
         }
-        let hit_points = self.content.as_deref().and_then(|db| db.unit(u.def)).map_or(Fixed::ZERO, |d| d.system_hit_points[ENGINES]);
+        let hit_points = def.map_or(Fixed::ZERO, |d| d.system_hit_points[ENGINES]);
         let damage = self.subsystems.get(u.id).map_or(0, |row| row.damage[ENGINES]);
         let cap = caps.binary_search_by_key(&u.id, |c| c.0).ok().map(|i| caps[i].1);
         engines_share_met(hit_points, damage) && ceiling_allows_warp(u.stats.max_speed, cap)
