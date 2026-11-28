@@ -347,6 +347,10 @@ fn advanced(p: &mut Box_, ctx: &Ctx, b: Vec2) {
     if let Some(caption) = super::super::view::directors_caption(ctx) {
         act_button(p, ctx, b, Slot::AdvancedDirectorsCut, &caption, Act::ToggleDirectorsCut);
     }
+    // The same slot: Director's Cut and warp belong to different profiles and never show together.
+    if let Some(caption) = super::super::view::warp_caption(ctx) {
+        act_button(p, ctx, b, Slot::AdvancedDirectorsCut, &caption, Act::ToggleWarp);
+    }
     act_button(p, ctx, b, Slot::AdvancedDefault, &tr("Default"), Act::DefaultOptions);
     act_button(p, ctx, b, Slot::AdvancedClose, &tr("OK"), Act::CloseAdvanced(true));
     act_button(p, ctx, b, Slot::AdvancedCancel, &tr("Cancel"), Act::CloseAdvanced(false));
