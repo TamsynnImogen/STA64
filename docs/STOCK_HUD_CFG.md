@@ -168,9 +168,8 @@ SPR fonts remain available to other consumers. The inspected Classic/FO4 CFGs
 do not name individual font files, and native font parity is not claimed by
 this readability correction.
 
-The same live Classic map (`3peace`) was checked read-only: the minimap cluster
-is at the expected normalized start position near (0.219, 0.219), and the large
-grey world shroud matches the mod's `Gshroud` RGB (65, 71, 85). Those are separate
+The same live Classic map was checked read-only: the minimap's start position
+and the world shroud colour agree with the mounted data. Those are separate
 from the atlas/font faults; this HUD correction changes neither map projection,
 sensor rules, fog rendering nor original textures.
 
@@ -199,10 +198,10 @@ the previous fake-player fixture gap; live gameplay/FPS acceptance is separate.
 
 Verified follow-up: 446 client tests pass (one existing ignored), strict client
 all-target Clippy, workspace/all-target and NDK29/API26 ARM64 library checks pass.
-Five actual windowless NVIDIA Vulkan captures cover Classic and FO4 at 4:3 and
-16:9 plus Classic Lots/Restricted. Classic source labels and pixels show
-1200 /16/600 normally, 30000 /16/300 for Lots/Restricted; FO4 hides both fields
-through its CFG flags. The lead inspected the captures. Private evidence lives
+Five actual windowless GPU captures cover Classic and FO4 at 4:3 and
+16:9 plus Classic Lots/Restricted. Classic source labels and pixels follow the
+mounted setup data, for the normal and for the Lots/Restricted case; FO4 hides
+both fields through its CFG flags. The lead inspected the captures. Private evidence lives
 in `STA64-artifacts/probes/ui17/personnel-hud-*`. This is HUD rendering proof;
 live gameplay readability/FPS and the broader UI-18 reference gate remain open.
 
@@ -302,12 +301,12 @@ casualties and boarding remain separate gameplay work.
 
 Rule (read from the executable, static): the info bar takes its text and icon
 areas from the CFG and the name colour; percentages are shown as rounded whole
-numbers (the original appends a `%`; STA64 shows a bare number by decision, see
+numbers (STA64 shows a bare number, without `%`, by decision, see
 above); current crew is the actor's; status colours follow the race's thresholds.
 White icon art requires tint. Private receipts are kept outside the repository.
 This is static original-A2 evidence, not original Roots runtime acceptance.
 The current bare-number presentation follows the supplied stock reference and
-user direction; the `%` is not used as a display requirement. STA64 rounds to the
+user direction. STA64 rounds to the
 nearest whole percent.
 
 Stock wireframes opt into linear texture filtering when resized. The sampler
