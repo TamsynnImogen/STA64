@@ -328,8 +328,8 @@ fn spawn_menu(commands: &mut Commands, page: MenuPage, parts: &Parts, b: Vec2) {
                     panel(p, t, MenuSlot::Panel, b);
                     title(p, t, MenuSlot::Title, b, &tr("Game menu"));
                     button(p, t, MenuSlot::Resume, b, &caption(parts.strings, "return", "Return to game"), MenuAct::Resume);
-                    // UI-56: the stock order puts Save and Load first; where V7 forbids a save the entry
-                    // says so (the key `no_save_game`) and its screen gives the reason.
+                    // UI-56: Save and Load follow Resume; where V7 forbids a save the entry carries the
+                    // caption of the key `no_save_game` and its screen gives the reason.
                     let save = if parts.save_blocked { caption(parts.strings, "no_save_game", "Save not allowed") } else { caption(parts.strings, "save_game", "Save game") };
                     button(p, t, MenuSlot::Save, b, &save, MenuAct::Save);
                     let load = caption(parts.strings, "load_game", "Load game");

@@ -12,7 +12,8 @@ use sta_sim::setup::Control;
 use super::*;
 use crate::app::configure_sets;
 use crate::clock::MatchSpeed;
-use crate::frontend::screens::{Act, Screen};
+use crate::frontend::screens::stock::ScreenLayout;
+use crate::frontend::screens::{Act, Screen, ScreensConfig};
 use crate::save::tests::{app, armed, drain, run, setup, settle, start, state, temp_dir};
 use crate::ui::ingame_menu::{InGameMenu, InGameMenuPlugin, MenuAct, OpenInGameMenu};
 use crate::ui::sprite_font::SpriteText;
@@ -116,29 +117,33 @@ fn a_save_made_from_the_in_game_menu_is_listed_with_its_description_and_loads_fr
     assert_eq!(tick(&a), 15);
     select_row(&mut a, 0);
     click_where(&mut a, SaveAct::Primary);
-    assert_eq!(screen(&a).ask, Some(Ask::Leave(0)), "leaving a running match is asked about");
+    assert!(matches!(screen(&a).ask, Some(Ask::Leave { .. })), "leaving a running match is asked about");
     click_where(&mut a, SaveAct::Yes);
     until(&mut a, 400, |a| state(a) == AppState::InGame && !screen(a).open && a.world().get_resource::<PendingLoad>().is_none());
     settle(&mut a, 3);
     assert_eq!((tick(&a), digest(&a)), (10, saved_digest), "the match continues from the save");
 
-    // From the front end: a fresh app, the single-player screen's Load game button.
-    let mut f = menu_app(&dir, true);
-    settle(&mut f, 4);
-    let go = f.world_mut().query::<(Entity, &Act)>().iter(f.world()).find(|(_, act)| **act == Act::Goto(Screen::SinglePlayer)).unwrap().0;
-    click(f.world_mut(), go);
-    settle(&mut f, 3);
-    let open = f.world_mut().query::<(Entity, &OpenSaveButton)>().iter(f.world()).next().expect("a Load game button").0;
-    click(f.world_mut(), open);
-    settle(&mut f, 3);
-    assert!(screen(&f).open && screen(&f).origin == Some(AppState::FrontEnd));
-    assert_eq!(screen(&f).entries.len(), 1);
-    select_row(&mut f, 0);
-    click_where(&mut f, SaveAct::Primary);
-    assert!(screen(&f).ask.is_none(), "nothing to leave: it loads at once");
-    until(&mut f, 400, |a| state(a) == AppState::InGame && !screen(a).open);
-    settle(&mut f, 3);
-    assert_eq!((tick(&f), digest(&f)), (10, saved_digest));
+    // From the front end, in each look: a fresh app, the single-player screen's Load game button.
+    for layout in [ScreenLayout::Stock, ScreenLayout::Plain] {
+        let mut f = menu_app(&dir, true);
+        f.insert_resource(ScreensConfig { own_camera: false, fit_scale: false, layout, ..default() });
+        settle(&mut f, 4);
+        let go = f.world_mut().query::<(Entity, &Act)>().iter(f.world()).find(|(_, act)| **act == Act::Goto(Screen::SinglePlayer)).unwrap_or_else(|| panic!("{layout:?}: no way to single player")).0;
+        click(f.world_mut(), go);
+        settle(&mut f, 3);
+        let opens: Vec<Entity> = f.world_mut().query::<(Entity, &OpenSaveButton)>().iter(f.world()).map(|(e, _)| e).collect();
+        assert_eq!(opens.len(), 1, "{layout:?}: one Load game button");
+        click(f.world_mut(), opens[0]);
+        settle(&mut f, 3);
+        assert!(screen(&f).open && screen(&f).origin == Some(AppState::FrontEnd), "{layout:?}");
+        assert_eq!(screen(&f).entries.len(), 1);
+        select_row(&mut f, 0);
+        click_where(&mut f, SaveAct::Primary);
+        assert!(screen(&f).ask.is_none(), "nothing to leave: it loads at once");
+        until(&mut f, 400, |a| state(a) == AppState::InGame && !screen(a).open);
+        settle(&mut f, 3);
+        assert_eq!((tick(&f), digest(&f)), (10, saved_digest), "{layout:?}");
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -228,20 +233,27 @@ fn load_is_off_while_a_load_is_pending() {
     start(&mut a, setup(&data, [Control::Human, Control::Idle]), MatchSpeed::Normal);
     run(&mut a, 3);
     save_from_the_menu(&mut a, "one");
-    let mut f = menu_app(&dir, true);
-    settle(&mut f, 4);
-    f.world_mut().write_message(OpenSaveScreen(SaveMode::Load));
-    settle(&mut f, 3);
-    select_row(&mut f, 0);
-    assert_eq!(primary_state(&mut f), WidgetState::Normal);
-    let e = f.world_mut().query::<(Entity, &SaveAct)>().iter(f.world()).find(|(_, act)| **act == SaveAct::Primary).unwrap().0;
-    click(f.world_mut(), e);
-    f.update();
-    assert!(screen(&f).loading, "the click makes the load pending");
-    settle(&mut f, 1);
-    if screen(&f).open {
-        assert_eq!(primary_state(&mut f), WidgetState::Disabled, "Load is off until the load is over");
-    }
+    click_where(&mut a, MenuAct::Load);
+    select_row(&mut a, 0);
+    assert_eq!(primary_state(&mut a), WidgetState::Normal);
+    // Leaving the match is answered Yes: from this frame the load is pending and the screen is still up.
+    click_where(&mut a, SaveAct::Primary);
+    assert!(matches!(screen(&a).ask, Some(Ask::Leave { .. })));
+    let yes = a.world_mut().query::<(Entity, &SaveAct)>().iter(a.world()).find(|(_, act)| **act == SaveAct::Yes).unwrap().0;
+    click(a.world_mut(), yes);
+    a.update();
+    assert!(screen(&a).open && screen(&a).loading, "the answer makes the load pending");
+    assert_eq!(primary_state(&mut a), WidgetState::Disabled, "Load is off until the load is over");
+    // A press that reaches the screen anyway (the button is off, but the guard is the rule) starts nothing.
+    let primary = a.world_mut().query::<(Entity, &SaveAct)>().iter(a.world()).find(|(_, act)| **act == SaveAct::Primary).unwrap().0;
+    a.world_mut().write_message(ButtonClicked(primary));
+    a.update();
+    assert!(screen(&a).ask.is_none(), "no second question, no second load");
+    assert!(screen(&a).loading);
+    // UI-55 refusing the load frees Load again.
+    a.world_mut().write_message(LoadOutcome::Refused { path: PathBuf::from("x"), reason: "no".into() });
+    a.update();
+    assert!(!screen(&a).loading);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -262,7 +274,7 @@ fn saving_over_a_save_and_deleting_one_ask_first() {
     assert_eq!(screen(&a).name, "slot", "choosing a row puts its description in the name field");
     set_name(&mut a, "slot");
     click_where(&mut a, SaveAct::Primary);
-    assert_eq!(screen(&a).ask, Some(Ask::Overwrite(0)));
+    assert!(matches!(&screen(&a).ask, Some(Ask::Overwrite { description, .. }) if description == "slot"));
     click_where(&mut a, SaveAct::No);
     assert!(screen(&a).ask.is_none());
     assert_eq!(container::store::list(&dir, None).unwrap()[0].outcome.as_ref().unwrap().tick, 3, "still the first save");
@@ -277,7 +289,7 @@ fn saving_over_a_save_and_deleting_one_ask_first() {
     click_where(&mut a, MenuAct::Load);
     select_row(&mut a, 0);
     click_where(&mut a, SaveAct::Delete);
-    assert_eq!(screen(&a).ask, Some(Ask::Delete(0)));
+    assert!(matches!(screen(&a).ask, Some(Ask::Delete { .. })));
     click_where(&mut a, SaveAct::No);
     assert_eq!(container::store::list(&dir, None).unwrap().len(), 1);
     click_where(&mut a, SaveAct::Delete);
@@ -286,6 +298,172 @@ fn saving_over_a_save_and_deleting_one_ask_first() {
     assert!(screen(&a).entries.is_empty());
     assert!(drain::<SaveOutcome>(&mut a).iter().all(|o| matches!(o, SaveOutcome::Saved { .. })));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Two saves of different descriptions; the screen's rows are looked up by title.
+fn two_saves(name: &str) -> (App, PathBuf) {
+    let dir = temp_dir(name);
+    let data = armed();
+    let mut a = menu_app(&dir, true);
+    start(&mut a, setup(&data, [Control::Human, Control::Idle]), MatchSpeed::Normal);
+    run(&mut a, 3);
+    save_from_the_menu(&mut a, "alpha");
+    run(&mut a, 3);
+    click_where(&mut a, MenuAct::Save);
+    set_name(&mut a, "beta");
+    click_where(&mut a, SaveAct::Primary);
+    assert_eq!(container::store::list(&dir, None).unwrap().len(), 2);
+    (a, dir)
+}
+
+fn row_of(app: &App, title: &str) -> usize {
+    screen(app).entries.iter().position(|e| e.title() == title).unwrap_or_else(|| panic!("no row {title}"))
+}
+
+fn file_of(app: &App, title: &str) -> String {
+    screen(app).entries[row_of(app, title)].file_name.clone()
+}
+
+fn descriptions(dir: &PathBuf) -> Vec<(String, String, u64)> {
+    let mut v: Vec<_> = container::store::list(dir, None).unwrap().into_iter().map(|l| {
+        let h = l.outcome.unwrap();
+        (l.file_name, h.description, h.tick)
+    }).collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn a_question_is_modal_and_acts_on_the_save_it_named() {
+    let (mut a, dir) = two_saves("modal-delete");
+    click_where(&mut a, MenuAct::Load);
+    let (ia, ib) = (row_of(&a, "alpha"), row_of(&a, "beta"));
+    let (fa, fb) = (file_of(&a, "alpha"), file_of(&a, "beta"));
+    select_row(&mut a, ia);
+    click_where(&mut a, SaveAct::Delete);
+    assert_eq!(screen(&a).ask, Some(Ask::Delete { file: fa.clone() }));
+    // The question says which save it means.
+    assert!(texts(&mut a).iter().any(|t| t.contains("alpha (20")), "the question names the save and its date");
+    // Nothing behind it takes a click: another row, the buttons.
+    click_where(&mut a, SaveRow(ib));
+    assert_eq!(screen(&a).selected, Some(ia), "the choice did not move");
+    assert_eq!(screen(&a).ask, Some(Ask::Delete { file: fa.clone() }));
+    let behind = a.world_mut().query::<(Entity, &SaveAct, &WidgetState)>().iter(a.world()).filter(|(_, act, _)| matches!(act, SaveAct::Primary | SaveAct::Delete)).map(|(_, _, st)| *st).collect::<Vec<_>>();
+    assert_eq!(behind, vec![WidgetState::Disabled; 2], "the buttons behind the question are off");
+    // A press that reaches the screen anyway does not change the question.
+    let primary = a.world_mut().query::<(Entity, &SaveAct)>().iter(a.world()).find(|(_, act)| **act == SaveAct::Primary).unwrap().0;
+    a.world_mut().write_message(ButtonClicked(primary));
+    a.update();
+    assert_eq!(screen(&a).ask, Some(Ask::Delete { file: fa.clone() }));
+    // Yes removes the save that was asked about, and only it.
+    click_where(&mut a, SaveAct::Yes);
+    let left: Vec<String> = descriptions(&dir).into_iter().map(|d| d.0).collect();
+    assert_eq!(left, vec![fb.clone()]);
+
+    // The file the question named is gone from the list by the time it is answered: nothing is done.
+    let mut s = screen(&a);
+    s.ask = Some(Ask::Delete { file: fa });
+    *a.world_mut().resource_mut::<SaveScreen>() = s;
+    settle(&mut a, 2);
+    click_where(&mut a, SaveAct::Yes);
+    assert_eq!(descriptions(&dir).len(), 1, "the other save is untouched");
+    assert!(screen(&a).status.as_deref().is_some_and(|t| t.contains("no longer")));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_overwrite_question_replaces_the_save_it_named_with_the_description_it_was_asked_with() {
+    let (mut a, dir) = two_saves("modal-overwrite");
+    let (fa, fb) = (file_of_disk(&dir, "alpha"), file_of_disk(&dir, "beta"));
+    run(&mut a, 4);
+    click_where(&mut a, MenuAct::Save);
+    let (ia, ib) = (row_of(&a, "alpha"), row_of(&a, "beta"));
+    select_row(&mut a, ia);
+    set_name(&mut a, "alpha");
+    click_where(&mut a, SaveAct::Primary);
+    assert!(matches!(&screen(&a).ask, Some(Ask::Overwrite { file, description }) if *file == fa && description == "alpha"));
+    // Choosing the other row now does nothing: neither the choice nor the name field follows it.
+    click_where(&mut a, SaveRow(ib));
+    assert_eq!(screen(&a).selected, Some(ia));
+    assert_eq!(screen(&a).name, "alpha");
+    click_where(&mut a, SaveAct::Yes);
+    let now = descriptions(&dir);
+    let alpha = now.iter().find(|d| d.0 == fa).unwrap();
+    let beta = now.iter().find(|d| d.0 == fb).unwrap();
+    assert_eq!((alpha.1.as_str(), beta.1.as_str()), ("alpha", "beta"), "each file keeps its own description");
+    assert!(alpha.2 > beta.2, "and the asked file is the one that was written again");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn file_of_disk(dir: &PathBuf, description: &str) -> String {
+    descriptions(dir).into_iter().find(|d| d.1 == description).unwrap().0
+}
+
+/// The screen alone, on a window and the in-game state, with what UI-55 would say set by hand.
+fn bare(width: u32, height: u32) -> App {
+    let mut app = App::new();
+    app.add_plugins((MinimalPlugins, StatesPlugin));
+    configure_sets(&mut app);
+    // A folder that does not exist: an empty list, and the user's own saves are never read.
+    app.insert_resource(crate::save::SaveDir(Some(std::env::temp_dir().join("sta64-ui56-no-such-saves")))).insert_state(AppState::InGame).add_plugins((InGameMenuPlugin, SaveMenuPlugin));
+    app.world_mut().spawn((Window { resolution: WindowResolution::new(width, height), ..default() }, PrimaryWindow));
+    settle(&mut app, 3);
+    app
+}
+
+#[test]
+fn save_is_not_allowed_in_a_networked_match_and_in_a_replay_and_load_is_off_in_a_networked_match() {
+    use crate::save::SaveBlock;
+    use crate::ui::ingame_menu::NetworkedMatch;
+    for (block, word) in [(SaveBlock::Networked, "networked"), (SaveBlock::NoJournal, "replay")] {
+        let mut a = bare(1280, 720);
+        a.world_mut().insert_resource(SaveAvailability(Some(block.clone())));
+        a.world_mut().write_message(OpenSaveScreen(SaveMode::Save));
+        settle(&mut a, 3);
+        let reason = block.to_string();
+        assert!(reason.contains(word), "{reason}");
+        assert!(texts(&mut a).iter().any(|t| t.contains(&reason)), "the screen gives the reason for {block:?}");
+        assert_eq!(primary_state(&mut a), WidgetState::Disabled);
+    }
+
+    // The in-game menu's Load entry is a live button in a single-player match and an off one in a networked match.
+    for networked in [false, true] {
+        let mut a = bare(1280, 720);
+        if networked {
+            a.world_mut().insert_resource(NetworkedMatch);
+        }
+        open_menu(&mut a);
+        let live = a.world_mut().query::<&MenuAct>().iter(a.world()).any(|act| *act == MenuAct::Load);
+        assert_eq!(live, !networked, "networked: {networked}");
+        assert!(texts(&mut a).iter().any(|t| t.eq_ignore_ascii_case("load game")), "the entry is shown either way");
+        if networked {
+            let off = a.world_mut().query::<&WidgetState>().iter(a.world()).filter(|st| **st == WidgetState::Disabled).count();
+            assert!(off >= 1, "an off button stands in its place");
+        }
+    }
+}
+
+#[test]
+fn an_unreadable_folder_says_so_and_an_unreadable_entry_cannot_be_deleted() {
+    let dir = temp_dir("unreadable");
+    // A file where the folder should be: reading it as a folder is an error, not an empty folder.
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::write(&dir, b"not a folder").unwrap();
+    let mut a = menu_app(&dir, true);
+    settle(&mut a, 4);
+    a.world_mut().write_message(OpenSaveScreen(SaveMode::Load));
+    settle(&mut a, 3);
+    let s = screen(&a);
+    assert!(s.entries.is_empty());
+    assert!(s.status.as_deref().is_some_and(|t| t.contains("cannot be read")), "{:?}", s.status);
+    assert!(texts(&mut a).iter().any(|t| t.contains("cannot be read")));
+    let _ = std::fs::remove_file(&dir);
+
+    // The listing's row for an entry it could not read has the folder's path and the name "?".
+    let folder = PathBuf::from("/saves");
+    let unreadable = Entry { file_name: "?".into(), path: folder, header: None, refusal: Some("cannot read".into()) };
+    assert!(!unreadable.deletable());
+    assert!(entry("a.stasave", None).deletable());
 }
 
 #[test]
@@ -323,13 +501,9 @@ fn entry(name: &str, refusal: Option<&str>) -> Entry {
 #[test]
 fn every_screen_fits_three_window_shapes() {
     use crate::frontend::screens::stock::layout::fit_box;
+    let mut shapes: Vec<(&str, Vec2, f32)> = Vec::new();
     for (name, w, h) in WINDOWS {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        configure_sets(&mut app);
-        app.insert_state(AppState::InGame).add_plugins((InGameMenuPlugin, SaveMenuPlugin));
-        app.world_mut().spawn((Window { resolution: WindowResolution::new(w, h), ..default() }, PrimaryWindow));
-        settle(&mut app, 3);
+        let mut app = bare(w, h);
         let b = fit_box(Vec2::new(w as f32, h as f32));
         assert_eq!(app.world().resource::<StockBox>().0, b, "{name}: the box");
         let theme = app.world().resource::<Theme>().clone();
@@ -338,11 +512,11 @@ fn every_screen_fits_three_window_shapes() {
             (SaveMode::Load, many.clone(), None),
             (SaveMode::Save, many.clone(), None),
             (SaveMode::Load, Vec::new(), None),
-            (SaveMode::Save, many.clone(), Some(Ask::Overwrite(0))),
-            (SaveMode::Load, many.clone(), Some(Ask::Leave(1))),
+            (SaveMode::Save, many.clone(), Some(Ask::Overwrite { file: "s0.stasave".into(), description: "s0".into() })),
+            (SaveMode::Load, many.clone(), Some(Ask::Leave { file: "s1.stasave".into() })),
         ] {
             let ctx = format!("{name} {mode:?} {} rows, ask {ask:?}", entries.len());
-            *app.world_mut().resource_mut::<SaveScreen>() = SaveScreen { open: true, mode, origin: Some(AppState::InGame), entries, selected: Some(0), ask, status: Some("a status".into()), ..default() };
+            *app.world_mut().resource_mut::<SaveScreen>() = SaveScreen { open: true, mode, origin: Some(AppState::InGame), entries, selected: Some(0), ask: ask.clone(), status: Some("a status".into()), ..default() };
             settle(&mut app, 3);
             let placed: Vec<(SaveSlot, Entity)> = app.world_mut().query::<(Entity, &SavePlaced)>().iter(app.world()).map(|(e, p)| (p.0, e)).collect();
             for slot in slots_of(mode, ask.is_some()) {
@@ -351,8 +525,42 @@ fn every_screen_fits_three_window_shapes() {
             let is_ask = |s: SaveSlot| matches!(s, SaveSlot::AskPanel | SaveSlot::AskTitle | SaveSlot::AskLine1 | SaveSlot::AskLine2 | SaveSlot::Yes | SaveSlot::No);
             let mut main_rects = Vec::new();
             let mut ask_rects = Vec::new();
+            let all_texts: Vec<(Entity, String)> = app.world_mut().query::<(Entity, &SpriteText)>().iter(app.world()).map(|(e, t)| (e, t.text.clone())).collect();
+            let under = |root: Entity| -> Vec<String> {
+                all_texts
+                    .iter()
+                    .filter(|(start, _)| {
+                        let mut e = *start;
+                        while e != root {
+                            match app.world().get::<ChildOf>(e) {
+                                Some(c) => e = c.parent(),
+                                None => return false,
+                            }
+                        }
+                        true
+                    })
+                    .map(|(_, t)| t.clone())
+                    .collect()
+            };
             for (slot, e) in &placed {
                 let r = node_rect(&app, *e);
+                // A one-line text fits its slot (its width estimated from the size of its letters).
+                let size = match slot {
+                    SaveSlot::Title | SaveSlot::AskTitle => Some(theme.title_size),
+                    SaveSlot::Primary | SaveSlot::Delete | SaveSlot::Back | SaveSlot::Yes | SaveSlot::No => Some(theme.text_size),
+                    _ => None,
+                };
+                if let Some(size) = size {
+                    let words = under(*e);
+                    assert!(!words.is_empty(), "{ctx}: {slot:?} has no text");
+                    for text in words {
+                        let width = text.chars().count() as f32 * size * 0.55;
+                        assert!(width <= r.width() + 0.01, "{ctx}: {slot:?} text {text:?} (about {width}px) is wider than its {}px slot", r.width());
+                    }
+                }
+                if *slot == SaveSlot::Primary && ctx.ends_with("ask None") && mode == SaveMode::Load && !screen(&app).entries.is_empty() {
+                    shapes.push((name, b, r.width() / r.height()));
+                }
                 let want = region(*slot).px(b);
                 for (got, exp) in [(r.min.x, want.min.x), (r.min.y, want.min.y), (r.max.x, want.max.x), (r.max.y, want.max.y)] {
                     assert!((got - exp).abs() < 0.01, "{ctx}: {slot:?} {r:?} is not its region {want:?}");
@@ -381,6 +589,13 @@ fn every_screen_fits_three_window_shapes() {
                 let rows = list_h / theme.list_row_h;
                 assert!(list_h <= slot_h + 0.01 && (rows - rows.round()).abs() < 1e-3, "{ctx}: the list is {list_h}px in a {slot_h}px slot");
             }
+        }
+    }
+    // The three windows are three different shapes, and the screen follows each.
+    assert_eq!(shapes.len(), 3);
+    for (i, (na, ba, ra)) in shapes.iter().enumerate() {
+        for (nb, bb, rb) in &shapes[i + 1..] {
+            assert!(ba != bb && (ra - rb).abs() > 0.01, "{na} and {nb} gave the same geometry ({ba:?} {ra} / {bb:?} {rb})");
         }
     }
 }

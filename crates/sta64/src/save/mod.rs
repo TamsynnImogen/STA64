@@ -203,25 +203,18 @@ pub(crate) struct Env<'w> {
 }
 
 impl Env<'_> {
-    /// Why this install cannot load a save with this header, judged as a load would, without
-    /// reading the rest of the file: the formats and game kind, the map file by the header's exact
-    /// path and hash, and the content with the map's tech tree (UI-56's list greys these out).
-    pub(crate) fn header_refusal(&self, screen: &ScreenData, header: &container::Header) -> Option<String> {
+    /// Why this install cannot load a save with this header, judged as a load judges it
+    /// ([`header_check`]) without reading the rest of the file (UI-56's list greys these out). `cache`
+    /// keeps what was read of each map file, so a list reads and hashes a map once, not once per save.
+    pub(crate) fn header_refusal(&self, screen: &ScreenData, header: &container::Header, cache: &mut MapCache) -> Option<String> {
         if let Some(e) = header.refusal(None) {
             return Some(e.to_string());
         }
-        let name = header.map.path.rsplit(['/', '\\']).next().unwrap_or(&header.map.path).rsplit_once('.').map_or("", |(stem, _)| stem);
-        let missing = || Some(SaveError::MapMissing { path: header.map.path.clone() }.to_string());
-        if !screen.maps.iter().any(|m| m.def.name == name) {
-            return missing();
+        let facts = cache.entry(header.map.path.clone()).or_insert_with(|| map_facts(self, screen, header).map(Arc::new));
+        match facts {
+            Ok(f) => header_check(f, header).err(),
+            Err(why) => Some(why.clone()),
         }
-        let Some(bytes) = self.read_map(&header.map.path) else { return missing() };
-        let hash = file_hash(&bytes);
-        if hash != header.map.hash {
-            return Some(SaveError::MapChanged { path: header.map.path.clone(), saved: header.map.hash, given: hash }.to_string());
-        }
-        let content = match_content(self, screen, &bytes, name);
-        header.refusal(Some(&content)).map(|e| e.to_string())
     }
 
     pub(crate) fn dir(&self) -> Option<PathBuf> {
@@ -456,6 +449,41 @@ fn setup_of(header: &container::Header, map: &Arc<sta_content::MapDef>, content:
     GameSetup { seed: header.seed, map: map.clone(), content, players: header.seats.iter().map(seat).collect(), options: header.options.clone() }
 }
 
+/// What a header's map file says: read once, then compared with each header that names it.
+pub(crate) struct MapFacts {
+    /// Index of the map in `ScreenData::maps`.
+    index: usize,
+    hash: u64,
+    content: Arc<sta_content::ContentDb>,
+}
+
+/// Per list: the map files already read, by the path a header names (an error is the reason the map
+/// cannot be used).
+pub(crate) type MapCache = std::collections::HashMap<String, Result<Arc<MapFacts>, String>>;
+
+/// The map a header names: present in the registry and readable by the exact path, with its hash and
+/// the content it runs on. The one place both a load and the list read a map.
+fn map_facts(env: &Env<'_>, screen: &ScreenData, header: &container::Header) -> Result<MapFacts, String> {
+    let name = header.map.path.rsplit(['/', '\\']).next().unwrap_or(&header.map.path).rsplit_once('.').map_or("", |(stem, _)| stem);
+    let missing = || SaveError::MapMissing { path: header.map.path.clone() }.to_string();
+    let index = screen.maps.iter().position(|m| m.def.name == name).ok_or_else(missing)?;
+    let bytes = env.read_map(&header.map.path).ok_or_else(missing)?;
+    let content = match_content(env, screen, &bytes, name);
+    Ok(MapFacts { index, hash: file_hash(&bytes), content })
+}
+
+/// The checks a header allows once its map is known: the map is the one saved from, and the content
+/// is the one saved on. Used by a load and by the list.
+fn header_check(facts: &MapFacts, header: &container::Header) -> Result<(), String> {
+    if facts.hash != header.map.hash {
+        return Err(SaveError::MapChanged { path: header.map.path.clone(), saved: header.map.hash, given: facts.hash }.to_string());
+    }
+    match header.refusal(Some(&facts.content)) {
+        Some(e) => Err(e.to_string()),
+        None => Ok(()),
+    }
+}
+
 /// The content the match will run on: the mount's, with the tech tree the map names (as the build
 /// does). Without a mount (tests) the front end's content stands.
 fn match_content(env: &Env<'_>, screen: &ScreenData, map_bytes: &[u8], name: &str) -> Arc<sta_content::ContentDb> {
@@ -476,15 +504,9 @@ fn prepare(env: &Env<'_>, screen: Option<&ScreenData>, extra: Option<&ExtraContr
         return Err(e.to_string());
     }
     let screen = screen.ok_or("no game content is loaded")?;
-    let name = header.map.path.rsplit(['/', '\\']).next().unwrap_or(&header.map.path).rsplit_once('.').map_or("", |(stem, _)| stem);
-    let missing = || SaveError::MapMissing { path: header.map.path.clone() }.to_string();
-    let entry = screen.maps.iter().find(|m| m.def.name == name).ok_or_else(missing)?;
-    let map_bytes = env.read_map(&header.map.path).ok_or_else(missing)?;
-    let hash = file_hash(&map_bytes);
-    if hash != header.map.hash {
-        return Err(SaveError::MapChanged { path: header.map.path.clone(), saved: header.map.hash, given: hash }.to_string());
-    }
-    let content = match_content(env, screen, &map_bytes, name);
+    let facts = map_facts(env, screen, &header)?;
+    header_check(&facts, &header)?;
+    let (entry, hash, content) = (&screen.maps[facts.index], facts.hash, facts.content.clone());
     let setup = setup_of(&header, &entry.def, content.clone());
     let loaded = container::load(&bytes, content, Some(MapSource { hash, map: entry.def.clone() })).map_err(|e| e.to_string())?;
     let (record, left_out) = match ClientRecord::decode(loaded.client.version, &loaded.client.data) {

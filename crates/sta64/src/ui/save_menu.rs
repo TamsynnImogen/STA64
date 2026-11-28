@@ -23,18 +23,29 @@
 //! The list reads the headers only ([`container::store::list`]); each header is judged by
 //! [`Env::header_refusal`](crate::save), which is what a load checks without reading the rest of the
 //! file (so the list greys out what a load would refuse for those reasons; damage deeper in a file is
-//! found when it is loaded). Captions: the mounted `label.map`'s `save_game`, `no_save_game`,
-//! `load_game` and `previous_menu` where it has them (read at run time, never carried in the
-//! repository), translated English otherwise.
+//! found when it is loaded). A map file is read and hashed once per list, however many saves name it.
+//!
+//! # Captions
+//!
+//! Read at run time from the mounted `label.map`, never carried in the repository, by the keys
+//! `save_game`, `no_save_game`, `load_game`, `previous_menu`, `save_game_disallowed`,
+//! `save_game_failure` and `game_type_unloadable`; where a key is missing, STA64's own English through
+//! [`tr`]. The key for a save's success is not used: a save closes the screen and says nothing more.
+//! Each caption leads UI-55's own reason, which follows it.
 //!
 //! # Look
 //!
 //! **Interim, marked:** the layout is arranged ([`Grade::Arranged`]) from the kit's widgets in the
-//! theme of the in-game menu, whatever the look: what the original's screens place where is not
-//! established beyond "a list of saves with dates at the right, a name field, Previous Menu, Save
-//! Game, Delete Game" (stated in the research notes, strings and the manual, not measured), so no
-//! position, size or colour of the originals is claimed. A stock-look variant waits for a
-//! measurement.
+//! theme of the in-game menu, whatever the look. Which parts the original's screens have (a list of
+//! saves, a name field, three buttons) is stated in the manual; where they sit, their sizes and colours
+//! are not established, so none is claimed. A stock-look variant waits for a measurement.
+//!
+//! # Questions
+//!
+//! A question (overwrite, delete, leave the match) is modal: the rows and buttons behind it do not
+//! act, and it names the save it means. It keeps that save's file name from the moment it is asked, and
+//! the answer acts on that file only (if the file has left the list, nothing is done and the status
+//! says so).
 
 use std::path::PathBuf;
 
@@ -46,7 +57,7 @@ use crate::frontend::screens::stock::{Grade, Region, StockBox};
 use crate::frontend::screens::ScreenData;
 use crate::game::flow::ActiveMatch;
 use crate::save::container::{self, Header};
-use crate::save::{Env, LoadMatch, LoadOutcome, PendingLoad, SaveAvailability, SaveMatch, SaveOutcome};
+use crate::save::{Env, LoadMatch, MapCache, LoadOutcome, PendingLoad, SaveAvailability, SaveMatch, SaveOutcome};
 use crate::sim_link::SimLink;
 use crate::ui::i18n::{Strings, tr};
 use crate::ui::theme::{ButtonClicked, ListSelected, Theme, ThemePlugin, kit_button, kit_text, disabled_button};
@@ -84,15 +95,23 @@ pub enum SaveAct {
     No,
 }
 
-/// A question the screen asks before it acts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A question the screen asks before it acts. Each names its save by file name, fixed when asked.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ask {
-    /// Save over the existing save in row `n`.
-    Overwrite(usize),
-    /// Delete the save in row `n`.
-    Delete(usize),
-    /// Leave the running match to load row `n`.
-    Leave(usize),
+    /// Save over the existing save in `file`, with `description` (what was in the name field).
+    Overwrite { file: String, description: String },
+    /// Delete the save in `file`.
+    Delete { file: String },
+    /// Leave the running match to load `file`.
+    Leave { file: String },
+}
+
+impl Ask {
+    pub fn file(&self) -> &str {
+        match self {
+            Ask::Overwrite { file, .. } | Ask::Delete { file } | Ask::Leave { file } => file,
+        }
+    }
 }
 
 /// One save on disk, as the list shows it.
@@ -109,6 +128,12 @@ pub struct Entry {
 impl Entry {
     pub fn loadable(&self) -> bool {
         self.refusal.is_none()
+    }
+
+    /// Whether this row stands for a file of its own that can be deleted (the listing's "?" row for an
+    /// unreadable folder entry carries the folder's path).
+    pub fn deletable(&self) -> bool {
+        self.path.file_name().is_some_and(|n| n == self.file_name.as_str())
     }
 
     /// The description, else the file name.
@@ -175,10 +200,10 @@ pub const fn region(slot: SaveSlot) -> Region {
         SaveSlot::Back => a(520.0, 514.0, 200.0, 36.0),
         SaveSlot::AskPanel => a(220.0, 210.0, 360.0, 190.0),
         SaveSlot::AskTitle => a(240.0, 222.0, 320.0, 34.0),
-        SaveSlot::AskLine1 => a(240.0, 262.0, 320.0, 26.0),
-        SaveSlot::AskLine2 => a(240.0, 290.0, 320.0, 26.0),
-        SaveSlot::Yes => a(240.0, 336.0, 150.0, 36.0),
-        SaveSlot::No => a(410.0, 336.0, 150.0, 36.0),
+        SaveSlot::AskLine1 => a(240.0, 262.0, 320.0, 36.0),
+        SaveSlot::AskLine2 => a(240.0, 302.0, 320.0, 44.0),
+        SaveSlot::Yes => a(240.0, 352.0, 150.0, 36.0),
+        SaveSlot::No => a(410.0, 352.0, 150.0, 36.0),
     }
 }
 
@@ -255,18 +280,19 @@ fn map_of(h: &Header) -> &str {
 /// The row's text: date, description, map and play time; a greyed row names its reason instead of the map.
 fn row_text(e: &Entry) -> String {
     let Some(h) = &e.header else { return format!("{}: {}", e.file_name, e.refusal.as_deref().unwrap_or("")) };
-    let head = format!("{}  {}", date(h.made_at), e.title());
+    // The date ends the row (the side the manual's screens put it on); not a column of its own yet.
+    let when = date(h.made_at);
     match &e.refusal {
-        None => format!("{head}  ({}, {})", map_of(h), clock(h.play_time_secs)),
-        Some(why) => format!("{head}  -  {why}"),
+        None => format!("{}  ({}, {})  {when}", e.title(), map_of(h), clock(h.play_time_secs)),
+        Some(why) => format!("{}  -  {why}  {when}", e.title()),
     }
 }
 
 /// What the detail area says of the chosen row.
-fn detail_text(e: Option<&Entry>) -> String {
+fn detail_text(e: Option<&Entry>, strings: Option<&Strings>) -> String {
     let Some(e) = e else { return tr("Choose a save.") };
     match (&e.header, &e.refusal) {
-        (_, Some(why)) => format!("{}: {why}", tr("This save cannot be loaded")),
+        (_, Some(why)) => format!("{}: {why}", caption(strings, "game_type_unloadable", "This save cannot be loaded")),
         (Some(h), None) => {
             let races: Vec<&str> = h.seats.iter().map(|s| s.race.as_str()).collect();
             format!("{}: {}.  {}: {}.  {} {}, {} {}.", tr("Map"), map_of(h), tr("Sides"), races.join(", "), tr("Game time"), clock(h.play_time_secs), tr("tick"), h.tick)
@@ -276,16 +302,20 @@ fn detail_text(e: Option<&Entry>) -> String {
 }
 
 /// Reads the saves folder: every file listed, newest first, the ones this build cannot load with their
-/// reasons.
-fn read_entries(env: &Env<'_>, screen: Option<&ScreenData>) -> Vec<Entry> {
-    let Some(dir) = env.dir() else { return Vec::new() };
-    let listed = container::store::list(&dir, None).unwrap_or_default();
+/// reasons; and what went wrong with the folder itself, if anything.
+fn read_entries(env: &Env<'_>, screen: Option<&ScreenData>) -> (Vec<Entry>, Option<String>) {
+    let Some(dir) = env.dir() else { return (Vec::new(), None) };
+    let (listed, error) = match container::store::list(&dir, None) {
+        Ok(l) => (l, None),
+        Err(e) => (Vec::new(), Some(format!("{}: {e}", tr("The saves folder cannot be read")))),
+    };
+    let mut maps = MapCache::new();
     let mut entries: Vec<Entry> = listed
         .into_iter()
         .map(|l| match l.outcome {
             Ok(h) => {
                 let refusal = match screen {
-                    Some(s) => env.header_refusal(s, &h),
+                    Some(s) => env.header_refusal(s, &h, &mut maps),
                     None => Some(tr("no game content is loaded")),
                 };
                 Entry { file_name: l.file_name, path: l.path, header: Some(h), refusal }
@@ -297,7 +327,7 @@ fn read_entries(env: &Env<'_>, screen: Option<&ScreenData>) -> Vec<Entry> {
         let (a, b) = (x.header.as_ref().map(|h| h.made_at), y.header.as_ref().map(|h| h.made_at));
         b.cmp(&a).then_with(|| x.file_name.cmp(&y.file_name))
     });
-    entries
+    (entries, error)
 }
 
 /// A list of rows as the kit's scrolling list draws them, each row in its own colour (a row that
@@ -426,36 +456,47 @@ fn spawn_screen(commands: &mut Commands, s: &SaveScreen, parts: &Parts, b: Vec2)
                         children![rows_list(t, &rows, s.selected, visible)],
                     ));
                 }
-                wrapped(p, t, SaveSlot::Detail, b, &detail_text(s.selected.and_then(|i| s.entries.get(i))), t.text);
+                wrapped(p, t, SaveSlot::Detail, b, &detail_text(s.selected.and_then(|i| s.entries.get(i)), parts.strings), t.text);
                 let status = match (&s.status, &parts.blocked, save) {
                     (Some(why), _, _) => why.clone(),
-                    (None, Some(why), true) => format!("{}: {why}", caption(parts.strings, "no_save_game", "Save not allowed")),
+                    (None, Some(why), true) => format!("{}: {why}", caption(parts.strings, "save_game_disallowed", "Save not allowed")),
                     _ => String::new(),
                 };
                 wrapped(p, t, SaveSlot::Status, b, &status, t.accent);
                 let chosen = s.selected.and_then(|i| s.entries.get(i));
-                let act_on = !s.loading && !parts.pending;
+                let asking = s.ask.is_some();
+                let act_on = !s.loading && !parts.pending && !asking;
                 if save {
                     put(p, SaveSlot::NameLabel, b, kit_text(t, tr("Name"), t.text_size, t.text));
                     let r = rect(SaveSlot::NameField, b);
                     put(p, SaveSlot::NameField, b, (crate::ui::theme::text_field(t, &s.name, &tr("Description"), r.width(), 60, crate::ui::theme::TextFilter::Any), SaveNameField));
-                    button(p, t, SaveSlot::Primary, b, &caption(parts.strings, "save_game", "Save game"), SaveAct::Primary, parts.blocked.is_none());
+                    button(p, t, SaveSlot::Primary, b, &caption(parts.strings, "save_game", "Save game"), SaveAct::Primary, parts.blocked.is_none() && !asking);
                 } else {
                     let can = chosen.is_some_and(Entry::loadable) && act_on && origin != AppState::Boot;
                     button(p, t, SaveSlot::Primary, b, &caption(parts.strings, "load_game", "Load game"), SaveAct::Primary, can);
                 }
-                button(p, t, SaveSlot::Delete, b, &tr("Delete game"), SaveAct::Delete, chosen.is_some() && !s.loading);
+                button(p, t, SaveSlot::Delete, b, &tr("Delete game"), SaveAct::Delete, chosen.is_some_and(Entry::deletable) && !s.loading && !asking);
                 button(p, t, SaveSlot::Back, b, &caption(parts.strings, "previous_menu", "Previous menu"), SaveAct::Back, true);
-                if let Some(ask) = s.ask {
-                    let (head, one, two) = match ask {
-                        Ask::Overwrite(_) => ("Save over this game?", "A save of this name exists.", "It is replaced."),
-                        Ask::Delete(_) => ("Delete this game?", "The save is removed from the disk.", "This cannot be undone."),
-                        Ask::Leave(_) => ("Load game", "Leave this match?", "The match in progress is lost."),
+                if let Some(ask) = &s.ask {
+                    // Nothing behind the question takes a click.
+                    p.spawn((Node { position_type: PositionType::Absolute, left: Val::Px(0.0), top: Val::Px(0.0), width: Val::Px(b.x), height: Val::Px(b.y), ..default() }, BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.4))));
+                    let named = s.entries.iter().find(|e| e.file_name == ask.file()).map_or_else(
+                        || ask.file().to_owned(),
+                        |e| match &e.header {
+                            Some(h) => format!("{} ({})", e.title(), date(h.made_at)),
+                            None => e.title(),
+                        },
+                    );
+                    let (head, two) = match ask {
+                        Ask::Overwrite { .. } => (tr("Save over this game?"), tr("It is replaced.")),
+                        Ask::Delete { .. } => (tr("Delete this game?"), format!("{} {}", tr("The save is removed from the disk."), tr("This cannot be undone."))),
+                        // The same question and words as the game menu's Exit.
+                        Ask::Leave { .. } => (caption(parts.strings, "load_game", "Load game"), format!("{} {}", tr("Leave this match?"), tr("The match in progress is lost."))),
                     };
                     panel(p, t, SaveSlot::AskPanel, b);
-                    put(p, SaveSlot::AskTitle, b, kit_text(t, t.caps(&tr(head), t.caps_titles), t.title_size, t.title));
-                    put(p, SaveSlot::AskLine1, b, kit_text(t, tr(one), t.text_size, t.text));
-                    put(p, SaveSlot::AskLine2, b, kit_text(t, tr(two), t.text_size, t.text));
+                    put(p, SaveSlot::AskTitle, b, kit_text(t, t.caps(&head, t.caps_titles), t.title_size, t.title));
+                    wrapped(p, t, SaveSlot::AskLine1, b, &named, t.text);
+                    wrapped(p, t, SaveSlot::AskLine2, b, &two, t.text);
                     button(p, t, SaveSlot::Yes, b, &tr("Yes"), SaveAct::Yes, true);
                     button(p, t, SaveSlot::No, b, &tr("No"), SaveAct::No, true);
                 }
@@ -489,15 +530,19 @@ fn open_requests(
     pending: Option<Res<PendingLoad>>,
 ) {
     let Some(OpenSaveScreen(mode)) = requests.read().last().copied() else { return };
-    let entries = read_entries(&env, data.as_deref());
+    let (entries, status) = read_entries(&env, data.as_deref());
     let name = if mode == SaveMode::Save { default_name(active.as_deref(), link.as_deref()) } else { String::new() };
-    *screen = SaveScreen { open: true, mode, origin: state.map(|s| *s.get()), entries, selected: None, ask: None, status: None, loading: pending.is_some(), name };
+    *screen = SaveScreen { open: true, mode, origin: state.map(|s| *s.get()), entries, selected: None, ask: None, status, loading: pending.is_some(), name };
 }
 
 /// A refreshed list after a save or a delete; the choice is kept by file name.
 fn refresh(screen: &mut SaveScreen, env: &Env<'_>, data: Option<&ScreenData>) {
     let keep = screen.selected.and_then(|i| screen.entries.get(i)).map(|e| e.file_name.clone());
-    screen.entries = read_entries(env, data);
+    let (entries, error) = read_entries(env, data);
+    screen.entries = entries;
+    if error.is_some() {
+        screen.status = error;
+    }
     screen.selected = keep.and_then(|k| screen.entries.iter().position(|e| e.file_name == k));
 }
 
@@ -520,7 +565,13 @@ fn clicks(
     mut load: MessageWriter<LoadMatch>,
 ) {
     for ev in rows.read() {
+        // A question is modal: rows behind it do not take a click.
         if screen.open && list.get(ev.list).is_ok() {
+            if screen.ask.is_some() {
+                // Drawn again, so the kit's own highlight goes back to the row that is chosen.
+                screen.set_changed();
+                continue;
+            }
             screen.selected = Some(ev.index);
             screen.status = None;
             if screen.mode == SaveMode::Save && let Some(e) = screen.entries.get(ev.index) {
@@ -537,6 +588,10 @@ fn clicks(
         if !screen.open {
             continue;
         }
+        // Behind a question only its own buttons (and Back, which withdraws it) act.
+        if screen.ask.is_some() && !matches!(act, SaveAct::Yes | SaveAct::No | SaveAct::Back) {
+            continue;
+        }
         let chosen = screen.selected.filter(|i| *i < screen.entries.len());
         match act {
             SaveAct::Back => {
@@ -548,15 +603,15 @@ fn clicks(
             }
             SaveAct::No => screen.ask = None,
             SaveAct::Delete => {
-                if let Some(i) = chosen {
-                    screen.ask = Some(Ask::Delete(i));
+                if let Some(i) = chosen.filter(|i| screen.entries[*i].deletable()) {
+                    screen.ask = Some(Ask::Delete { file: screen.entries[i].file_name.clone() });
                 }
             }
             SaveAct::Primary => match screen.mode {
                 SaveMode::Load => {
                     if let Some(i) = chosen.filter(|i| screen.entries[*i].loadable()) && !screen.loading {
                         if screen.origin == Some(AppState::InGame) {
-                            screen.ask = Some(Ask::Leave(i));
+                            screen.ask = Some(Ask::Leave { file: screen.entries[i].file_name.clone() });
                         } else {
                             load.write(LoadMatch { path: screen.entries[i].path.clone() });
                             screen.loading = true;
@@ -574,16 +629,22 @@ fn clicks(
                     screen.name = text.clone();
                     // The row chosen with the same description is the save being replaced.
                     match chosen.filter(|i| screen.entries[*i].header.as_ref().is_some_and(|h| h.description.trim() == text)) {
-                        Some(i) => screen.ask = Some(Ask::Overwrite(i)),
+                        Some(i) => screen.ask = Some(Ask::Overwrite { file: screen.entries[i].file_name.clone(), description: text }),
                         None => {
                             save.write(SaveMatch { description: text, overwrite: None });
                         }
                     }
                 }
             },
-            SaveAct::Yes => match screen.ask.take() {
-                Some(Ask::Delete(i)) => {
-                    if let Some(entry) = screen.entries.get(i) {
+            SaveAct::Yes => {
+                let Some(ask) = screen.ask.take() else { continue };
+                // The file the question named, found again by name; if it has left the list, nothing is done.
+                let Some(entry) = screen.entries.iter().find(|e| e.file_name == ask.file()).cloned() else {
+                    screen.status = Some(tr("That save is no longer in the list."));
+                    continue;
+                };
+                match ask {
+                    Ask::Delete { .. } => {
                         match std::fs::remove_file(&entry.path) {
                             Ok(()) => screen.status = Some(tr("The save was deleted.")),
                             Err(e) => screen.status = Some(format!("{}: {e}", tr("The save could not be deleted"))),
@@ -591,21 +652,16 @@ fn clicks(
                         screen.selected = None;
                         refresh(&mut screen, &env, data.as_deref());
                     }
-                }
-                Some(Ask::Overwrite(i)) => {
-                    if let Some(entry) = screen.entries.get(i) {
-                        save.write(SaveMatch { description: screen.name.clone(), overwrite: Some(entry.file_name.clone()) });
+                    Ask::Overwrite { description, .. } => {
+                        save.write(SaveMatch { description, overwrite: Some(entry.file_name.clone()) });
                     }
-                }
-                Some(Ask::Leave(i)) => {
-                    if let Some(entry) = screen.entries.get(i) {
+                    Ask::Leave { .. } => {
                         load.write(LoadMatch { path: entry.path.clone() });
                         screen.loading = true;
                         screen.status = None;
                     }
                 }
-                None => {}
-            },
+            }
         }
     }
 }
@@ -618,6 +674,7 @@ fn outcomes(
     mut screen: ResMut<SaveScreen>,
     data: Option<Res<ScreenData>>,
     env: Env<'_>,
+    strings: Option<Res<Strings>>,
 ) {
     for o in saves.read() {
         if !screen.open {
@@ -625,9 +682,9 @@ fn outcomes(
         }
         match o {
             SaveOutcome::Saved { .. } => screen.open = false,
-            SaveOutcome::NotAllowed(why) => screen.status = Some(why.to_string()),
+            SaveOutcome::NotAllowed(why) => screen.status = Some(format!("{}: {why}", caption(strings.as_deref(), "save_game_disallowed", "Save not allowed"))),
             SaveOutcome::Refused(e) => {
-                screen.status = Some(e.to_string());
+                screen.status = Some(format!("{}: {e}", caption(strings.as_deref(), "save_game_failure", "The save failed")));
                 refresh(&mut screen, &env, data.as_deref());
             }
         }
