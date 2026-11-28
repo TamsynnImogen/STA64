@@ -171,37 +171,57 @@ pub(crate) fn register_mesh_guard(app: &mut App) {
     let _ = app;
 }
 
-/// The vertex attributes the stock shot material's fragment stage reads, by name, that `mesh` lacks.
+/// The vertex attributes the stock shot material's fragment stage reads, by name, that `mesh` lacks; `None` when the
+/// mesh's vertex data is no longer readable (it was handed to the renderer: the safe forms of the engine's accessors
+/// return an error then, where the plain ones panic: #1426).
 #[cfg(debug_assertions)]
-fn missing_vertex_inputs(mesh: &Mesh) -> Vec<&'static str> {
-    [
+fn missing_vertex_inputs(mesh: &Mesh) -> Option<Vec<&'static str>> {
+    let mut missing = Vec::new();
+    for (name, id) in [
         ("position", Mesh::ATTRIBUTE_POSITION.id),
         ("normal", Mesh::ATTRIBUTE_NORMAL.id),
         ("uv", Mesh::ATTRIBUTE_UV_0.id),
         ("colour", Mesh::ATTRIBUTE_COLOR.id),
-    ]
-    .into_iter()
-    .filter(|(_, id)| mesh.attribute(*id).is_none())
-    .map(|(name, _)| name)
-    .collect()
+    ] {
+        if mesh.try_attribute_option(id).ok()?.is_none() {
+            missing.push(name);
+        }
+    }
+    Some(missing)
 }
 
 /// The guard (debug builds and tests only: it does not exist in a release build, so it costs nothing there; registered
-/// by the stock effects' own plugin, so every scene that draws a stock effect runs it): a visible
-/// entity drawn with the stock shot material whose mesh lacks an attribute the material's shader reads is a defect that
-/// would end the game in a build without safe mode (#1418). Every scene of the client's tests that draws a stock effect
-/// runs this on every such entity, so a future mesh handed to the material without its colour fails the scene.
+/// by the stock effects' own plugins, so every scene that draws a stock effect runs it): a visible entity drawn with the
+/// stock shot material whose mesh lacks an attribute the material's shader reads is a defect that would end the game in
+/// a build without safe mode (#1418).
+///
+/// It reads only through the safe accessors and never touches a mesh whose data was handed to the renderer: those are
+/// skipped. So in a real play session it checks a mesh on the frames before the renderer takes it (a new effect mesh is
+/// usually visible, and so checked, in the frame it appears; a mesh shared by many entities is checked once); in the
+/// tests, which never extract, it checks every visible entity every frame. It can panic for no reason other than its
+/// own finding.
 #[cfg(debug_assertions)]
-pub(crate) fn guard_stock_meshes(meshes: Option<Res<Assets<Mesh>>>, q: Query<(Entity, &Mesh3d, &Visibility), With<MeshMaterial3d<StockShotMaterial>>>) {
+pub(crate) fn guard_stock_meshes(meshes: Option<Res<Assets<Mesh>>>, q: Query<(Entity, &Mesh3d, &Visibility), With<MeshMaterial3d<StockShotMaterial>>>, mut checked: Local<std::collections::HashSet<AssetId<Mesh>>>) {
     let Some(meshes) = meshes else { return };
     for (e, mesh, vis) in &q {
-        if *vis == Visibility::Hidden {
+        if *vis == Visibility::Hidden || checked.contains(&mesh.0.id()) {
             continue;
         }
-        // A batch mesh is empty (and hidden) until its first fill.
-        let Some(m) = meshes.get(&mesh.0).filter(|m| m.count_vertices() > 0) else { continue };
-        let missing = missing_vertex_inputs(m);
+        let Some(m) = meshes.get(&mesh.0) else { continue };
+        // A mesh already in the renderer cannot be read: skipped for good. A batch mesh is empty (and hidden) until its
+        // first fill: looked at again.
+        match m.try_attribute_option(Mesh::ATTRIBUTE_POSITION.id) {
+            Err(_) => {
+                checked.insert(mesh.0.id());
+                continue;
+            }
+            Ok(None) => continue,
+            Ok(Some(positions)) if positions.is_empty() => continue,
+            Ok(Some(_)) => {}
+        }
+        let Some(missing) = missing_vertex_inputs(m) else { continue };
         assert!(missing.is_empty(), "entity {e:?} is drawn with the stock shot material but its mesh lacks {missing:?}: the pipeline would fail validation");
+        checked.insert(mesh.0.id());
     }
 }
 
@@ -325,6 +345,25 @@ mod tests {
             .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; 3])
             .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0; 2]; 3]);
         if colour { m.with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, vec![[1.0; 4]; 3]) } else { m }
+    }
+
+    /// #1426: a mesh the renderer has taken (its vertex data is in the render world) is never read: the guard skips it,
+    /// where the plain accessors panic. The engine's own call puts the mesh in that state.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn the_guard_does_not_read_a_mesh_the_renderer_has_taken() {
+        let render_only = Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, bevy::asset::RenderAssetUsages::RENDER_WORLD)
+            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0; 3]; 3])
+            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; 3])
+            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0; 2]; 3]);
+        let mut app = guarded_app(render_only);
+        let handle = app.world().resource::<Assets<Mesh>>().iter().next().map(|(id, _)| id).expect("the mesh");
+        app.world_mut().resource_mut::<Assets<Mesh>>().get_mut(handle).unwrap().take_gpu_data().expect("the engine's extraction");
+        assert!(app.world().resource::<Assets<Mesh>>().get(handle).unwrap().try_attribute_option(Mesh::ATTRIBUTE_POSITION.id).is_err(), "the mesh is in the extracted state");
+        // Frames after the extraction: no panic (and, colourless as it is, no finding either: it can no longer be read).
+        for _ in 0..3 {
+            app.update();
+        }
     }
 
     #[cfg(debug_assertions)]

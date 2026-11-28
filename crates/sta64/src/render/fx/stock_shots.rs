@@ -1058,7 +1058,7 @@ pub(super) fn missing_attributes(mesh: &Mesh) -> Vec<&'static str> {
         ("colour", Mesh::ATTRIBUTE_COLOR.id),
     ]
     .into_iter()
-    .filter(|(_, id)| mesh.attribute(*id).is_none())
+    .filter(|(_, id)| mesh.try_attribute_option(*id).ok().flatten().is_none())
     .map(|(name, _)| name)
     .collect()
 }
