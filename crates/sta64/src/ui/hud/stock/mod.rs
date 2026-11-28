@@ -157,7 +157,7 @@ fn menu_button(id: u32, name: &str) -> Button {
 /// Native menus contain HUD actions with an explicit capability gate; ODF
 /// metadata cannot bypass live Recrew eligibility.
 pub(in crate::ui::hud) fn buttons(feed: &HudFeed, page: Page, native: &NativeCommands) -> Vec<Button> {
-    let mut buttons = model::grid_with_capacity(feed, page, usize::MAX);
+    let mut buttons = model::stock_grid(feed, page);
     // The stock HUD shows only what the original shows: TRANSPORT only where the install's command data
     // gives it a place (Armada I has none here: it puts it on its speed rail, `a1::speed`); the fallback
     // cell is for STA64's own layout.
