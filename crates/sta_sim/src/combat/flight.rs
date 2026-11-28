@@ -80,6 +80,11 @@ pub(super) fn plausible(f: &Flight, tick: u64, life: u64) -> bool {
     f.ends >= tick && f.ends <= tick.saturating_add(life) && (len2 - Fixed::ONE).abs() <= HEADING_TOLERANCE
 }
 
+/// Whether a shot of `w` flies by its own flight under `features` (the drawing asks, to read the view's shot rows).
+pub fn flies(features: &Features, w: &WeaponDef) -> bool {
+    life_ticks(features, w).is_some()
+}
+
 /// The shot's life in ticks under the switch: `None` when `w` does not fly this way (the switch
 /// is off, `w` is not a torpedo, or its ordnance has no `lifeSpan`).
 pub(super) fn life_ticks(features: &Features, w: &WeaponDef) -> Option<u64> {
