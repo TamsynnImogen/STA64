@@ -189,11 +189,19 @@ pub struct Features {
     /// stock Armada II; off elsewhere until compared: speed ramps both ways, and a craft at
     /// warp flies straight and brakes to turn.
     pub warp_shape: bool,
+    /// A torpedo of the classes in `sta_sim::combat::weapons` flies as the original's does
+    /// (issue #1068): it has a life (`lifeSpan`) and vanishes without effect when it runs out,
+    /// flies straight on its heading and turns toward its target at a capped rate while its
+    /// `seekTime` runs, then heads for the target each tick, keeps flying straight when its
+    /// target is gone. Measured and read from the executable (static) on stock Armada II. On
+    /// for stock Armada II; off elsewhere until compared (the mod-family engines): a shot
+    /// homes on its target's current position every tick and has no life.
+    pub ordnance_flight: bool,
 }
 
 impl Features {
     /// Every switch, in declaration order, for the content hash.
-    pub(crate) fn bits(&self) -> [bool; 47] {
+    pub(crate) fn bits(&self) -> [bool; 48] {
         [
             self.weapon_damage_controls,
             self.point_defense_cycles,
@@ -242,6 +250,7 @@ impl Features {
             self.dying_phase,
             self.engines_off_drift,
             self.warp_shape,
+            self.ordnance_flight,
         ]
     }
 }

@@ -49,6 +49,7 @@ use crate::ui::sprite_font::{SpriteTextStyle, sprite_text_styled};
 use crate::ui::theme::{ButtonClicked, ListSelected, Theme, disabled_button, font_role, kit_button, kit_text, list};
 
 pub mod layout;
+pub mod shell_art;
 #[cfg(test)]
 pub(crate) mod tests;
 

@@ -4,6 +4,7 @@ pub mod boarding;
 pub mod casualty;
 pub mod damage;
 pub mod dying;
+pub mod flight;
 pub mod hit_roll;
 pub mod pd;
 pub mod targeting;
@@ -29,6 +30,8 @@ mod hit_roll_tests;
 mod crew_delay_tests;
 #[cfg(test)]
 mod beam_end_tests;
+#[cfg(test)]
+pub(crate) mod flight_tests;
 #[cfg(test)]
 mod dying_tests;
 #[cfg(test)]

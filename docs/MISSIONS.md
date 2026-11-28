@@ -614,13 +614,44 @@ run keeps it as it is, and so does Convert again. Only the Replace button
 writes over it, and the edit is then moved aside under the `.old` name (or the
 next free one) in the same folder, never deleted or overwritten.
 
-**Where it applies.** Only for the base game of an install: nothing is
-converted while a mod is active (D6: a mod's chain is not converted), and the
-buttons are not offered then. The run is refused, with its reason shown, when
-no user data folder is known, when the folder is not an install the converter
-can read missions from, or when the output or cache folder is one the
-converter does not accept (inside an install, a game folder or the checkout).
-An install with no mission DLL has nothing to convert and nothing is shown.
+**Where it applies.** What is offered follows the install and the mod that is
+active (ADR 0004 D6: a conversion layer follows the install and the mod it was
+made for).
+
+- A plain stock install, no mod: its own missions, as before; the first run of
+  a session also starts by itself when missions wait.
+- The mod family's own base game (the mount detects Roots or Fleet Operations
+  3.x) with no mod active: nothing. Its missions are scripts already, and the
+  stock campaign found at the root of a hand-made install is not converted under
+  it; nothing converted is mounted for it either. A player who wants that
+  campaign mounts the stock game as its own install, where the first rule applies.
+- A mod is active: the compiled missions of that mod, through the install's mount
+  with that mod (the mod, its parents, the base data unless a mod of the chain is
+  standalone: the converter's `--mod`, see "The missions of a mod"). Only from
+  the mission list's buttons, never by itself. The output and the cache are keyed
+  to the install and the mod, and are mounted only while that mod is active on
+  that install. Such a run has no stamp and relies on the cache, which skips every
+  unchanged mission.
+
+The conversion of a mod's missions needs the engine files that name the engine's
+calls (`Armada2.exe` and `armada2.map`). They are looked for at the install's own
+root first (a hand-made install has them there). Only when they are missing there is
+the stock folder looked at: the `stock_folder` line of the settings file
+(`settings.cfg`, set by hand; there is no picker) names a stock Armada II folder
+that has them; it is only read. The line must be an absolute path (a relative one is
+refused, as the folder it would mean depends on where the game was started). When
+neither has them the run is refused, and the mission list says which files are
+missing, from which folder, and which line of which file (its full path) to set.
+Engine files at the install's root that the converter does not accept do not block the
+setting: the run then goes on with the `stock_folder` when it is set, and says so
+when it is not.
+
+The run is refused, with its reason shown, when no user data folder is known,
+when the folder is not an install the converter can read missions from, when the
+active mod cannot be opened with the install (the mount's own reason), when the
+engine files are missing as above, or when the output or cache folder is one the
+converter does not accept (inside an install, a game folder or the checkout). An
+install with no mission DLL has nothing to convert and nothing is shown.
 
 **Where the scripts go.** `missions/<map>.lua` in
 `<user data dir>/converted/<key>/` (see the next section for the folder and
@@ -696,10 +727,12 @@ finds inside an archive is reported as failed; only files are converted.
 
 An Armada II conversion names the engine's calls from the engine files
 (`Armada2.exe` with `armada2.map`) and refuses files that are not the ones it
-was written against. An install that hosts mods has no such pair at its root,
-so a mod's conversion needs `--engine <stock Armada II root>`: that folder is
-only read, and is guarded like the install. Without it the run stops and says
-so.
+was written against. An install that hosts mods may have no such pair at its root
+(a hand-made install of the mod family has the stock pair there, and needs no
+option); where it has not, a mod's conversion needs `--engine <stock Armada II
+root>`: that folder is only read, and is guarded like the install. Without it the
+run stops and says so. (The game's own offer takes the folder from the
+`stock_folder` line of the settings file, see "Where it applies".)
 
 **The cache.** With `--cache` the tool keeps each converted mission in
 `<user data dir>/convert-cache/<key>/` (`--cache-dir` names another folder)

@@ -195,6 +195,9 @@ fn shot_reload(timing: bool, w: &sta_content::WeaponDef, rng: &mut Rng) -> u64 {
     }
 }
 
+/// Marks the flight of a shot in the weapons digest.
+const FLIGHT_TAG: u64 = 0x666c_6967_6874_5f31;
+
 /// Marks the beams block of the weapons digest (hashed only when a beam is in flight).
 const BEAMS_TAG: u64 = 0x6265_616d_735f_3031;
 
@@ -264,6 +267,10 @@ pub(crate) struct Shot {
     /// Units per tick.
     pub(super) step: Fixed,
     pub(super) damage: Fixed,
+    /// The shot's own flight under `ordnance_flight` (see `flight`); `None`: it homes on its
+    /// target every tick. Not part of this record: the snapshot keeps it in a record of its own.
+    #[serde(skip)]
+    pub(super) flight: Option<super::flight::Flight>,
 }
 
 /// A beam in flight under `beam_damage_at_end`: fired, its damage not yet applied.
@@ -364,6 +371,39 @@ impl Weapons {
         }
         self.beams = beams;
         true
+    }
+
+    /// The flights of the shots that have one, by shot id, as the snapshot stores them (its own record).
+    pub(crate) fn flights_rec(&self) -> Vec<(u32, super::flight::Flight)> {
+        self.shots.iter().filter_map(|s| s.flight.map(|f| (s.id, f))).collect()
+    }
+
+    /// Puts back the flights a snapshot taken at `tick` held; `false` (a corrupt record) when the ids do not
+    /// ascend, a row names a shot that is not in flight, a shot whose weapon does not fly this way (its switch is
+    /// off, or it is not a torpedo with a `lifeSpan`), or a flight no live game could have made (see
+    /// `flight::plausible`).
+    pub(crate) fn set_flights(&mut self, db: Option<&ContentDb>, rows: Vec<(u32, super::flight::Flight)>, tick: u64) -> bool {
+        if rows.windows(2).any(|w| w[0].0 >= w[1].0) {
+            return false;
+        }
+        for (id, f) in rows {
+            let Some(s) = self.shots.iter_mut().find(|s| s.id == id) else { return false };
+            let life = db.and_then(|db| db.weapon(s.weapon).and_then(|w| super::flight::life_ticks(db.weapon_features(w), w)));
+            if !life.is_some_and(|life| super::flight::plausible(&f, tick, life)) {
+                return false;
+            }
+            s.flight = Some(f);
+        }
+        true
+    }
+
+    /// A snapshot from before shots had a flight: each shot that would fly this way gets one, its heading toward
+    /// its target and its life counted from `tick` (INTERIM: the launch is not known).
+    pub(crate) fn adopt_flights(&mut self, db: &ContentDb, units: &Entities, tick: u64) {
+        for s in &mut self.shots {
+            let Some(w) = db.weapon(s.weapon) else { continue };
+            s.flight = super::flight::adopt(db.weapon_features(w), w, s.pos, units.get(s.target), tick);
+        }
     }
 
     /// Beams in flight.
@@ -492,6 +532,13 @@ impl Weapons {
             for f in [s.pos.x, s.pos.y, s.pos.z, s.step, s.damage] {
                 h.fixed(f);
             }
+            // Only a flown shot, so the digest of a game without `ordnance_flight` is unchanged.
+            if let Some(f) = s.flight {
+                h.u64(FLIGHT_TAG);
+                h.fixed(f.heading.0);
+                h.fixed(f.heading.1);
+                h.u64(f.ends);
+            }
         }
         h.u64(self.next_shot as u64);
         if !self.pd.is_empty() {
@@ -578,6 +625,26 @@ impl Weapons {
         // Shots in flight home on the target's current position.
         let mut flying = Vec::with_capacity(self.shots.len());
         for mut s in std::mem::take(&mut self.shots) {
+            if s.flight.is_some() {
+                let target = super::flight::valid(units, specials, db, s.target);
+                match super::flight::fly(db, tick, &mut s, target) {
+                    super::flight::Fate::Gone => {}
+                    super::flight::Fate::Flying => flying.push(s),
+                    super::flight::Fate::Hit => {
+                        let Some(t) = target else { continue };
+                        events.push(SimEvent::Hit {
+                            target: s.target,
+                            by: s.shooter,
+                            weapon: s.weapon,
+                            facing: facing(t.heading, t.pos, s.pos),
+                            shield: Fixed::ZERO,
+                            hull: s.damage,
+                            at: t.pos,
+                        });
+                    }
+                }
+                continue;
+            }
             let Some(t) = alive(s.target) else { continue };
             let (dir, d) = flat(s.pos, t.pos);
             if d <= s.step {
@@ -744,6 +811,7 @@ impl Weapons {
                         pos: u.pos,
                         step,
                         damage,
+                        flight: super::flight::launch(features, w, u.heading, tick),
                     });
                 } else if lands_at_end(features, w) {
                     self.beams.push(Beam {

@@ -7,8 +7,8 @@ use crate::command::{Command, CommandKind, Order};
 use crate::movement::approach::{ENTERING, IN_WARP, Ramp, WARP_OUT};
 use crate::movement::approach_tests;
 
-/// The record's place: the last but one of the chain (the warp option's byte follows it).
-const RAMPS: usize = chain::LEN - 2;
+/// The record's place: the last but two of the chain (the warp option's byte and the torpedo flights follow it).
+const RAMPS: usize = chain::LEN - 3;
 
 fn v(z: i32) -> Vec3 {
     Vec3 { x: Fixed::ZERO, y: Fixed::ZERO, z: Fixed::from_int(z) }

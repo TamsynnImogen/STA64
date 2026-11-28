@@ -3,10 +3,12 @@
 //!
 //! * **When it starts.** By itself, once a session, the first time Single Player's campaign cards are
 //!   shown for the base game of an install whose missions wait for a conversion
-//!   ([`Campaigns::convertible`] and [`Campaigns::awaits_conversion`]: no mod, D6); and on the mission
-//!   list's buttons (Prepare missions, Convert again), which send [`RequestConversion`]. Both go
+//!   ([`Campaigns::convertible`] and [`Campaigns::awaits_conversion`]: no mod active); and on the mission
+//!   list's buttons (Prepare missions, Convert again), which send [`RequestConversion`]. With a mod
+//!   active only the buttons start a run, for that mod's missions (never by itself, #1407). Both go
 //!   through [`forward`], which adds the install and the active mod and sends the hook's
-//!   [`StartConversion`]; the hook refuses a mod itself, so a request is never trusted for it.
+//!   [`StartConversion`]; the hook decides what is allowed (the mod family's own base game is refused),
+//!   so a request is never trusted.
 //! * **What the player is told.** A notice when a run ends ([`finished`]); the mission list draws the
 //!   progress line, Cancel and the per-mission failure text from [`ConversionState`]
 //!   (`frontend::campaign`).
@@ -54,13 +56,15 @@ impl Default for CampaignLoader {
 /// Starts the conversion once, when the campaign cards are first shown for an install that needs it.
 fn auto_start(
     screen: Option<Res<State<Screen>>>,
+    active: Option<Res<ActiveMod>>,
     campaigns: Option<Res<Campaigns>>,
     state: Res<ConversionState>,
     mut auto: ResMut<AutoConvert>,
     mut requests: MessageWriter<RequestConversion>,
 ) {
     let (Some(screen), Some(campaigns)) = (screen, campaigns) else { return };
-    if *screen.get() != Screen::SinglePlayer || auto.tried || state.running {
+    // A mod's missions are converted only when the player asks, from the mission list: never by itself.
+    if *screen.get() != Screen::SinglePlayer || auto.tried || state.running || active.as_ref().is_some_and(|a| a.0.as_deref().is_some_and(|m| !m.is_empty())) {
         return;
     }
     if campaigns.convertible && campaigns.awaits_conversion() {
@@ -373,6 +377,44 @@ mod tests {
         let _ = std::fs::remove_dir_all(&site.tmp);
     }
 
+    /// With a mod active the offer is there (the campaigns are convertible and wait), but nothing starts by
+    /// itself: the run starts only from the mission list's button, for that mod (#1407, D6).
+    #[test]
+    fn with_a_mod_active_nothing_starts_by_itself_and_the_button_starts_that_mods_run() {
+        let site = site("modauto");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let mut app = site.app(does_nothing(calls.clone()), true);
+        app.insert_resource(ActiveMod(Some("Some Mod".into())));
+        go(&mut app, Screen::SinglePlayer);
+        for _ in 0..8 {
+            app.update();
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(!app.world().resource::<AutoConvert>().tried, "no automatic start was made");
+        assert_eq!(app.world().resource::<ConversionState>().runs, 0);
+        let _ = std::fs::remove_dir_all(&site.tmp);
+    }
+
+    /// The mod family's own base game: its mount detects the family's profile, so nothing converted is mounted
+    /// under it (also where a converted folder of the stock campaign exists) and the campaigns are not
+    /// convertible; a plain stock install keeps both. (#1407, D6)
+    #[test]
+    fn the_mod_familys_base_game_mounts_and_offers_nothing_while_a_stock_install_keeps_both() {
+        for (family, mounts) in [(false, true), (true, false)] {
+            let site = site(if family { "fam" } else { "plain" });
+            std::fs::create_dir_all(site.conv.join("missions")).unwrap();
+            std::fs::write(site.conv.join("missions/syn_fed02.lua"), SCRIPT).unwrap();
+            if family {
+                std::fs::write(site.root.join("Data/info.ini"), "[Mod]\nProfile=fo4\n").unwrap();
+            }
+            let vfs = sta_vfs::Vfs::mount_install(&site.root, None).expect("mounts");
+            let (cs, _) = load_campaigns_with(&vfs, Some(&site.root), None, Some(&site.conv), |b| ProgressStore::in_dir(&site.tmp, b)).expect("campaigns");
+            assert_eq!(!cs.experimental.is_empty(), mounts, "family {family}: the converted folder is mounted");
+            assert_eq!(cs.convertible, mounts, "family {family}: the offer");
+            let _ = std::fs::remove_dir_all(&site.tmp);
+        }
+    }
+
     #[test]
     fn nothing_starts_by_itself_where_nothing_waits_or_a_mod_is_active() {
         let site = site("noauto");
@@ -386,15 +428,15 @@ mod tests {
         }
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         assert!(!app.world().resource::<AutoConvert>().tried);
-        // and a request that reaches the hook with a mod active is refused there, whoever sent it
+        // and a request that reaches the hook with a mod the install does not have is refused there, whoever sent it
         app.insert_resource(ActiveMod(Some("Some Mod".into())));
         app.world_mut().write_message(RequestConversion { mode: ConvertMode::Again });
         app.update();
         app.update();
         let s = app.world().resource::<ConversionState>();
-        assert!(matches!(s.outcome, Some(Outcome::Refused(Refusal::ModActive(_)))), "{:?}", s.outcome);
+        assert!(matches!(s.outcome, Some(Outcome::Refused(Refusal::Mod(_)))), "{:?}", s.outcome);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
-        assert!(app.world().resource::<Told>().0.is_empty(), "a mod is not a fault to tell the player about");
+        assert_eq!(app.world().resource::<Told>().0.len(), 1, "a mod that cannot be opened is a fault the player is told about");
         let _ = std::fs::remove_dir_all(&site.tmp);
     }
 
@@ -483,7 +525,7 @@ mod tests {
     }
 
     #[test]
-    fn the_campaigns_offer_the_conversion_for_the_base_game_only() {
+    fn the_campaigns_offer_the_conversion_for_the_base_game_and_for_the_active_mod() {
         // through the loader the game uses, not a flag set by hand
         let site = site("modrule");
         std::fs::create_dir_all(site.conv.join("missions")).unwrap();
@@ -497,7 +539,9 @@ mod tests {
         assert!(cs.convertible, "the base game with a conversion mounted");
         let modded = sta_vfs::Vfs::mount_install(&site.root, Some("Some Mod")).expect("the mod mounts");
         let (cs, _) = load_campaigns_with(&modded, Some(&site.root), Some("Some Mod"), Some(&site.conv), store).expect("campaigns");
-        assert!(!cs.convertible, "a mod's chain is never converted (D6)");
+        assert!(cs.convertible, "with a mod active the conversion of that mod is offered (#1407); it is keyed to the mod (D6)");
+        // and a mod's own converted folder is the one mounted for it, not the base game's: another folder
+        assert_ne!(sta_mission::converted::dir_in(&site.data, &site.root, Some("Some Mod")), site.conv);
         let _ = std::fs::remove_dir_all(&site.tmp);
     }
 
@@ -514,7 +558,7 @@ mod tests {
         assert_eq!(one(Outcome::Cancelled { converted: 1 }), vec![Notice::new(Severity::Info, "Preparing the missions was cancelled")]);
         assert_eq!(one(Outcome::Aborted("boom".into())), vec![Notice::new(Severity::Bad, "Preparing the missions stopped: boom")]);
         assert_eq!(one(Outcome::Busy).len(), 1);
-        for quiet in [Outcome::Skipped, Outcome::AlreadyRunning, Outcome::Refused(Refusal::NoMissionDlls), Outcome::Refused(Refusal::ModActive("m".into()))] {
+        for quiet in [Outcome::Skipped, Outcome::AlreadyRunning, Outcome::Refused(Refusal::NoMissionDlls), Outcome::Refused(Refusal::ModFamilyBase)] {
             assert!(one(quiet.clone()).is_empty(), "{quiet:?}");
         }
         assert_eq!(one(Outcome::Refused(Refusal::NoDataDir)).len(), 1, "a fault is told");

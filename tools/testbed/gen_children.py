@@ -24,7 +24,7 @@ ALWAYS_OFF = {"a1_compat"}
 GROUPS = {
     "Combat": ["weapon_damage_controls", "fire_arcs", "turrets", "team_change_weapons", "weapon_shot_timing",
                "start_fire_hold", "weapon_hit_roll", "weapon_target_damage", "weapon_target_masks",
-               "weapon_cloak_fire", "crew_weapon_delay", "beam_damage_at_end", "dying_phase"],
+               "weapon_cloak_fire", "crew_weapon_delay", "beam_damage_at_end", "dying_phase", "ordnance_flight"],
     "Defence": ["directional_shields", "point_defense_cycles", "pd_energy", "pd_debt_timer", "energy_systems",
                 "shield_zero_hold", "crew_loss_on_hit"],
     "Behaviour": ["attack_buffer_roots", "attack_combat_speed", "attack_opportunity_fire", "builder_hold_fire",
