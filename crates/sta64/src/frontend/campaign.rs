@@ -14,6 +14,9 @@
 //! - **Mission list.** Every mission of the campaign, each marked won, locked (not reached
 //!   yet, or its campaign is locked) or blocked ([`CampaignBook::blocked`]: the mission cannot
 //!   run to a win in STA64 yet; the picked mission's reason is shown and it cannot be started).
+//!   Under the rows, the in-game conversion (LUA-15k, `game::convert_frontend`): its progress or
+//!   result line, Cancel while it runs, else Prepare missions or Convert again; a blocked mission shows
+//!   the conversion's failure for it, and a converted script the player edited is marked.
 //! - **Briefing.** The text of the book (the objectives file the mission's script names: title,
 //!   summary, goals). Start waits while a bridge scene is playing
 //!   ([`MissionMovieLog::busy`](crate::media::campaign::MissionMovieLog::busy)).
@@ -159,9 +162,12 @@ pub struct Campaigns {
     /// Missions whose script is a converted Armada II DLL mission (lower-case `.bzn`
     /// names): experimental, marked as such on the screens.
     pub experimental: std::collections::BTreeSet<String>,
-    /// What to tell the player when missions wait for a conversion that has not run
-    /// (the command to run); `None` when nothing is waiting or the conversion is mounted.
-    pub convert_hint: Option<String>,
+    /// Missions among those that carry a converted script whose file the player edited since the
+    /// conversion wrote it (lower-case `.bzn` names): a run keeps them, "Convert again" replaces them.
+    pub edited: std::collections::BTreeSet<String>,
+    /// Whether the in-game conversion can be offered here: the base game of an install (D6: a mod's
+    /// chain is not converted) with missions waiting for a conversion or one already mounted.
+    pub convertible: bool,
 }
 
 impl Campaigns {
@@ -169,7 +175,7 @@ impl Campaigns {
     pub fn new(book: CampaignBook, host: Arc<dyn MissionHost + Send + Sync>, store: ProgressStore) -> Campaigns {
         let (progress, load_warning) = store.load(&book);
         let blocked = book.blocked();
-        Campaigns { book, progress, store, host, blocked, campaign: None, mission: 0, debrief: None, load_warning, experimental: Default::default(), convert_hint: None }
+        Campaigns { book, progress, store, host, blocked, campaign: None, mission: 0, debrief: None, load_warning, experimental: Default::default(), edited: Default::default(), convertible: false }
     }
 
     /// Mark the missions whose script file exists under `converted` (a mounted conversion,
@@ -183,6 +189,9 @@ impl Campaigns {
             .flatten()
             .map(|e| format!("missions/{}", e.file_name().to_string_lossy().to_ascii_lowercase()))
             .collect();
+        // Scripts the converter wrote that the player has changed since (read from its manifest).
+        let edited: std::collections::BTreeSet<String> =
+            sta_mission_convert::output::edited_scripts(converted).into_iter().map(|n| format!("missions/{}", n.to_ascii_lowercase())).collect();
         for c in &self.book.campaigns {
             for m in &c.missions {
                 if let MissionScript::Lua { path } = &m.script
@@ -190,6 +199,9 @@ impl Campaigns {
                     && !own.contains(&path.to_ascii_lowercase())
                 {
                     self.experimental.insert(m.bzn.to_ascii_lowercase());
+                    if edited.contains(&path.to_ascii_lowercase()) {
+                        self.edited.insert(m.bzn.to_ascii_lowercase());
+                    }
                 }
             }
         }
@@ -198,6 +210,35 @@ impl Campaigns {
     /// Whether the mission runs a converted (experimental) script.
     pub fn is_experimental(&self, m: &CampaignMission) -> bool {
         self.experimental.contains(&m.bzn.to_ascii_lowercase())
+    }
+
+    /// Whether the mission's converted script is one the player edited.
+    pub fn is_edited(&self, m: &CampaignMission) -> bool {
+        self.edited.contains(&m.bzn.to_ascii_lowercase())
+    }
+
+    /// The text of the conversion's failure for `m`, if the run reported one. A failure is keyed by the
+    /// mission the converter names; it is `m`'s when that name is the map's stem or the name of one of
+    /// the legacy DLL files the book records for `m` ([`MissionScript::LegacyDll`]: the file's name
+    /// without its extension and its trailing `S` or `R`, as the converter derives a mission name).
+    pub fn conversion_failure<'a>(&self, m: &CampaignMission, failures: &'a [(String, String)]) -> Option<&'a str> {
+        let stem = m.stem().to_ascii_lowercase();
+        let listed: Vec<String> = match &m.script {
+            MissionScript::LegacyDll { files } => files.iter().map(|f| mission_of_file(f)).collect(),
+            _ => Vec::new(),
+        };
+        failures.iter().find(|(name, _)| {
+            let name = name.to_ascii_lowercase();
+            name == stem || listed.contains(&name)
+        }).map(|(_, text)| text.as_str())
+    }
+
+    /// Tests: every blocked mission waits for a conversion (its reason names its rule DLL).
+    #[cfg(test)]
+    pub(crate) fn pretend_legacy(&mut self) {
+        for b in &mut self.blocked {
+            b.reason = format!("legacy DLL only ({}R.drl): needs a Lua conversion on LUA-05", b.bzn.trim_end_matches(".bzn"));
+        }
     }
 
     /// Whether some mission is blocked only for want of a Lua conversion.
@@ -295,6 +336,33 @@ pub fn mission_name(m: &CampaignMission) -> String {
     m.title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| m.stem().to_owned())
 }
 
+/// The mission name the converter derives from a DLL file name: lower case, without the extension
+/// and without the trailing `s` or `r` of its kind.
+fn mission_of_file(file: &str) -> String {
+    let lower = file.to_ascii_lowercase();
+    let base = lower.rsplit_once('.').map_or(lower.as_str(), |(b, _)| b);
+    base.strip_suffix(['s', 'r']).unwrap_or(base).to_owned()
+}
+
+/// What a request to the conversion asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConvertMode {
+    /// Prepare missions: a normal run (the cache and the stamp may answer for it).
+    Prepare,
+    /// Convert again: ignore the cache and the stamp. The scripts the player edited are kept.
+    Again,
+    /// Replace edited scripts: as `Again`, and each script the player edited is moved aside (as
+    /// `<name>.old`) and the tool's own is written in its place. Only this asks for that.
+    ReplaceEdited,
+}
+
+/// Prepare the missions: written by the mission list's conversion buttons and the automatic start,
+/// read by `game::convert_frontend`, which knows the install.
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RequestConversion {
+    pub mode: ConvertMode,
+}
+
 /// Start this mission: written by the briefing's Start, read by `game::mission_host`.
 #[derive(Message, Debug, Clone, PartialEq, Eq)]
 pub struct StartMission {
@@ -317,6 +385,10 @@ pub enum CampaignAct {
     Start,
     /// The debrief's Next mission (or Retry): pick that mission and open its briefing.
     Pick(usize),
+    /// One of the mission list's conversion buttons.
+    Convert(ConvertMode),
+    /// The mission list's Cancel, while the conversion runs.
+    CancelConvert,
 }
 
 /// The mission list's rows.
@@ -347,6 +419,8 @@ pub(crate) fn on_buttons(
     log: Option<Res<MissionMovieLog>>,
     mut next: ResMut<NextState<Screen>>,
     mut start: MessageWriter<StartMission>,
+    mut convert: MessageWriter<RequestConversion>,
+    mut cancel: MessageWriter<crate::game::mission_convert::CancelConversion>,
 ) {
     let Some(mut campaigns) = campaigns else {
         clicks.clear();
@@ -388,6 +462,12 @@ pub(crate) fn on_buttons(
                 campaigns.mission = m;
                 next.set(Screen::Briefing);
             }
+            CampaignAct::Convert(mode) => {
+                convert.write(RequestConversion { mode });
+            }
+            CampaignAct::CancelConvert => {
+                cancel.write(crate::game::mission_convert::CancelConversion);
+            }
             CampaignAct::Start => {
                 let Some(id) = campaigns.campaign.clone() else { continue };
                 if campaigns.state(&id, campaigns.mission) == MissionState::Ready && !log.as_ref().is_some_and(|l| l.busy()) {
@@ -411,6 +491,7 @@ pub(crate) fn rebuild(
     log: Option<Res<MissionMovieLog>>,
     stock_box: Res<StockBox>,
     camera: Option<Res<crate::frontend::screens::ScreensCamera>>,
+    convert: Option<Res<crate::game::mission_convert::ConversionState>>,
     mut busy: Local<bool>,
 ) {
     let (screen, Some(campaigns)) = (*screen.get(), campaigns) else { return };
@@ -418,14 +499,18 @@ pub(crate) fn rebuild(
         return;
     }
     let wait = log.as_ref().is_some_and(|l| l.busy());
-    let changed = campaigns.is_changed() || theme.is_changed() || stock_box.is_changed() || std::mem::replace(&mut *busy, wait) != wait;
+    let changed = campaigns.is_changed()
+        || theme.is_changed()
+        || stock_box.is_changed()
+        || convert.as_ref().is_some_and(|c| c.is_changed())
+        || std::mem::replace(&mut *busy, wait) != wait;
     if !roots.is_empty() && !changed {
         return;
     }
     for e in &roots {
         commands.entity(e).despawn();
     }
-    spawn(&mut commands, screen, &Ctx { theme: &theme, campaigns: &campaigns, wait, b: stock_box.0 }, camera.map(|c| c.0));
+    spawn(&mut commands, screen, &Ctx { theme: &theme, campaigns: &campaigns, convert: convert.as_deref(), wait, b: stock_box.0 }, camera.map(|c| c.0));
 }
 
 // ---------------------------------------------------------------------------
@@ -436,6 +521,8 @@ pub(crate) fn rebuild(
 pub struct Ctx<'a> {
     pub theme: &'a Theme,
     pub campaigns: &'a Campaigns,
+    /// The in-game conversion's state (`game::mission_convert`), when the game has it.
+    pub convert: Option<&'a crate::game::mission_convert::ConversionState>,
     /// A bridge scene is playing: Start and Next wait.
     pub wait: bool,
     /// The box the regions are fractions of, logical px.
@@ -520,6 +607,8 @@ fn missions(p: &mut Box_, ctx: &Ctx) {
             let mark = match cs.state(&c.id, m.index) {
                 MissionState::Locked => tr(" (locked)"),
                 MissionState::Blocked(_) => tr(" (cannot run yet)"),
+                MissionState::Ready if cs.is_won(&c.id, m.index) && cs.is_edited(m) => tr(" (won, edited)"),
+                MissionState::Ready if cs.is_edited(m) => tr(" (edited)"),
                 MissionState::Ready if cs.is_won(&c.id, m.index) && cs.is_experimental(m) => tr(" (won, experimental)"),
                 MissionState::Ready if cs.is_won(&c.id, m.index) => tr(" (won)"),
                 MissionState::Ready if cs.is_experimental(m) => tr(" (experimental)"),
@@ -549,12 +638,26 @@ fn missions(p: &mut Box_, ctx: &Ctx) {
             MissionState::Blocked(reason) => {
                 d.spawn(para(t, tr("This mission cannot be started yet."), t.text_size, t.bad));
                 d.spawn(para(t, reason.clone(), t.small_size, t.text_dim));
-                if let (Some(hint), true) = (&cs.convert_hint, reason.starts_with("legacy DLL only")) {
-                    d.spawn(para(t, hint.clone(), t.small_size, t.warn));
+                let failures = ctx.convert.map_or(&[][..], |c| c.failures.as_slice());
+                if let Some(why) = cs.conversion_failure(m, failures) {
+                    d.spawn(para(t, trf("The conversion of this mission failed: {0}", &[&why]), t.small_size, t.bad));
+                } else if matches!(m.script, MissionScript::LegacyDll { .. }) {
+                    // the sentence names the button the player has
+                    match conversion_offer(cs, ctx.convert) {
+                        Offer::Prepare => {
+                            d.spawn(para(t, tr("Prepare missions converts it from your own game files."), t.small_size, t.warn));
+                        }
+                        Offer::Again => {
+                            d.spawn(para(t, tr("Convert again tries it once more from your own game files."), t.small_size, t.warn));
+                        }
+                        Offer::None => {}
+                    }
                 }
             }
             MissionState::Ready => {
-                if cs.is_experimental(m) {
+                if cs.is_edited(m) {
+                    d.spawn(para(t, tr("You edited this converted script: it is kept as you left it. Replace edited scripts moves it aside as a .old file and writes a fresh conversion."), t.small_size, t.warn));
+                } else if cs.is_experimental(m) {
                     d.spawn(para(t, tr("Experimental: converted from the original mission file. It may stop early or misbehave."), t.small_size, t.warn));
                 }
                 if let Some(b) = &m.briefing {
@@ -565,6 +668,83 @@ fn missions(p: &mut Box_, ctx: &Ctx) {
     });
     act_button(p, ctx, CSlot::ListBack, &tr("Previous menu"), CampaignAct::ToSinglePlayer, true);
     act_button(p, ctx, CSlot::ListPlay, &tr("Briefing"), CampaignAct::ToBriefing, state != MissionState::Locked);
+    conversion_controls(p, ctx);
+}
+
+/// The status line under the list and the conversion's button: Cancel while it runs, else Prepare
+/// missions (nothing converted yet) or Convert again.
+fn conversion_controls(p: &mut Box_, ctx: &Ctx) {
+    let (t, cs) = (ctx.theme, ctx.campaigns);
+    let state = ctx.convert;
+    if let Some((text, colour)) = state.and_then(|s| conversion_status(cs, s, t)) {
+        block(p, CSlot::ListStatus, region(CSlot::ListStatus).px(ctx.b), |d| {
+            d.spawn(para(t, text, t.small_size, colour));
+        });
+    }
+    if state.is_some_and(|s| s.running) {
+        act_button(p, ctx, CSlot::ListConvert, &tr("Cancel"), CampaignAct::CancelConvert, true);
+        return;
+    }
+    match conversion_offer(cs, state) {
+        Offer::None => return,
+        Offer::Prepare => act_button(p, ctx, CSlot::ListConvert, &tr("Prepare missions"), CampaignAct::Convert(ConvertMode::Prepare), true),
+        Offer::Again => act_button(p, ctx, CSlot::ListConvert, &tr("Convert again"), CampaignAct::Convert(ConvertMode::Again), true),
+    }
+    // Replacing what the player edited is its own button, named for what it does
+    let n = cs.edited.len();
+    if n > 0 {
+        let label = if n == 1 { tr("Replace 1 edited script") } else { trf("Replace {0} edited scripts", &[&n.to_string()]) };
+        act_button(p, ctx, CSlot::ListReplace, &label, CampaignAct::Convert(ConvertMode::ReplaceEdited), true);
+    }
+}
+
+/// Which conversion button the list offers, when none runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Offer {
+    /// None: not the base game, or a refusal the player cannot act on (the data folder inside the
+    /// install, say).
+    None,
+    /// Prepare missions: nothing is converted and the last run did not end in a result.
+    Prepare,
+    /// Convert again: something is converted, or a normal run ended without doing more.
+    Again,
+}
+
+/// The one rule for the button and the sentence a waiting mission shows.
+fn conversion_offer(cs: &Campaigns, state: Option<&crate::game::mission_convert::ConversionState>) -> Offer {
+    use crate::game::mission_convert::Outcome;
+    let refused = state.is_some_and(|s| matches!(&s.outcome, Some(Outcome::Refused(r)) if r.is_fault()));
+    if !cs.convertible || refused || state.is_some_and(|s| s.running) {
+        return Offer::None;
+    }
+    let ended_without_more = state.is_some_and(|s| matches!(s.outcome, Some(Outcome::Skipped | Outcome::Completed { .. })));
+    if !cs.experimental.is_empty() || ended_without_more { Offer::Again } else { Offer::Prepare }
+}
+
+/// "4 missions ready (experimental)", for the status line and the notice.
+pub fn missions_ready(n: usize) -> String {
+    if n == 1 { tr("1 mission ready (experimental)") } else { trf("{0} missions ready (experimental)", &[&n.to_string()]) }
+}
+
+/// What the conversion tells the player under the list: the progress while it runs, else how the
+/// last run ended (nothing when there was none, or it did nothing).
+fn conversion_status(cs: &Campaigns, s: &crate::game::mission_convert::ConversionState, t: &Theme) -> Option<(String, Color)> {
+    use crate::game::mission_convert::Outcome;
+    if s.running {
+        let text = if s.total == 0 { tr("Preparing missions") } else { trf("Preparing missions {0} of {1}", &[&(s.done + 1).min(s.total).to_string(), &s.total.to_string()]) };
+        return Some((text, t.text));
+    }
+    let kept = if cs.edited.is_empty() { String::new() } else { trf(" {0} edited script(s) kept.", &[&cs.edited.len().to_string()]) };
+    Some(match s.outcome.as_ref()? {
+        Outcome::Completed { converted, failed, .. } if *failed > 0 => (trf("{0}; {1} could not be converted.{2}", &[&missions_ready(*converted), &failed.to_string(), &kept]), t.warn),
+        Outcome::Completed { converted, .. } if *converted > 0 => (trf("{0}.{1}", &[&missions_ready(*converted), &kept]), t.good),
+        Outcome::Completed { .. } | Outcome::Skipped | Outcome::AlreadyRunning => return None,
+        Outcome::Cancelled { .. } => (tr("Preparing the missions was cancelled."), t.warn),
+        Outcome::Aborted(why) => (trf("Preparing the missions stopped: {0}", &[why]), t.bad),
+        Outcome::Busy => (tr("Another STA64 is preparing these missions."), t.warn),
+        Outcome::Refused(r) if r.is_fault() => (trf("The missions cannot be prepared: {0}", &[&r.to_string()]), t.bad),
+        Outcome::Refused(_) => return None,
+    })
 }
 
 fn first_paragraph(text: &str) -> String {

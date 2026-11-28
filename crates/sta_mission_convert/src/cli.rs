@@ -286,7 +286,8 @@ pub fn run_with<S: AsRef<OsStr>>(
             }
             Event::Console(l) => say(io, l),
             Event::Failed { name, message, .. } => say(io, &format!("  FAIL {name}: {message}")),
-            Event::Planned { .. } | Event::Started { .. } | Event::Done { .. } => {}
+            // the command line opens its folder with `Edited::Foreign`: a file is never kept
+            Event::Planned { .. } | Event::Started { .. } | Event::Done { .. } | Event::KeptEdited { .. } => {}
         };
         install::convert_install(&inst, &opts, &mut outdir, cache.as_ref(), decoder, &|| false, &mut sink)
     };

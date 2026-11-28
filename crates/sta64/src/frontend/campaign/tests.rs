@@ -208,6 +208,23 @@ fn press(app: &mut App, want: CampaignAct) {
     settle(app);
 }
 
+/// The Klingon mission waits for a conversion, as the book records it: a legacy DLL only.
+fn legacy_kl01(cs: &mut Campaigns) {
+    cs.pretend_legacy();
+    for c in &mut cs.book.campaigns {
+        for m in &mut c.missions {
+            if m.bzn == "syn_kl01.bzn" {
+                m.script = MissionScript::LegacyDll { files: vec!["syn_kl01R.drl".into()] };
+            }
+        }
+    }
+}
+
+/// Every text the screen shows.
+fn screen_texts(app: &mut App) -> Vec<String> {
+    app.world_mut().query::<&crate::ui::sprite_font::SpriteText>().iter(app.world()).map(|t| t.text.clone()).collect()
+}
+
 fn has(app: &mut App, want: CampaignAct) -> bool {
     app.world_mut().query::<&CampaignAct>().iter(app.world()).any(|a| *a == want)
 }
@@ -235,23 +252,32 @@ const WINDOWS: [(&str, u32, u32); 4] = [("21:9", 3440, 1440), ("16:9", 1920, 108
 const SCALES: [f32; 3] = [1.0, 1.25, 1.333];
 
 fn check_layout(screen: Screen) {
+    check_layout_with(screen, &[], &|_| {}, &|_| {});
+}
+
+/// [`check_layout`] for a screen that also carries `extra` slots: `prep_cs` and `prep_app` set the
+/// campaigns and the app up (the conversion's state, say) before the screen is shown.
+fn check_layout_with(screen: Screen, extra: &[CSlot], prep_cs: &dyn Fn(&mut Campaigns), prep_app: &dyn Fn(&mut App)) {
+    let slots: Vec<CSlot> = layout::slots_of(screen).iter().chain(extra).copied().collect();
     for (name, w, h) in WINDOWS {
         for scale in SCALES {
             let mut cs = fixture(true, None);
             won_first(&mut cs);
             cs.campaign = Some("federation".into());
             cs.mission = 1;
+            prep_cs(&mut cs);
             let mut app = app_with(cs, Some((w, h)), scale);
+            prep_app(&mut app);
             go(&mut app, screen);
             let ctx = format!("{screen:?} {name} x{scale}");
             let avail = Vec2::new(w as f32 / scale, h as f32 / scale);
             let b = fit_box(avail);
             assert_eq!(app.world().resource::<crate::frontend::screens::stock::StockBox>().0, b, "{ctx}");
             let all: Vec<(CSlot, Entity)> = app.world_mut().query::<(Entity, &CPlaced)>().iter(app.world()).map(|(e, p)| (p.0, e)).collect();
-            for slot in layout::slots_of(screen) {
+            for slot in &slots {
                 assert!(all.iter().any(|(s, _)| s == slot), "{ctx}: no {slot:?}");
             }
-            assert_eq!(all.len(), layout::slots_of(screen).len(), "{ctx}: controls outside the layout");
+            assert_eq!(all.len(), slots.len(), "{ctx}: controls outside the layout");
             let mut rects = Vec::new();
             for (slot, e) in &all {
                 let r = node_rect(&app, *e);
@@ -412,21 +438,33 @@ fn a_blocked_mission_shows_its_reason_and_cannot_be_started() {
 }
 
 #[test]
-fn a_mission_waiting_for_a_conversion_says_what_to_run_and_a_converted_one_is_marked() {
+fn a_mission_waiting_for_a_conversion_offers_prepare_missions_and_a_converted_one_is_marked() {
     let mut cs = fixture(false, None);
     cs.progress.campaigns.get_mut("federation").unwrap().complete = true;
     for b in cs.blocked.iter_mut() {
         b.reason = "legacy DLL only (syn_kl01R.drl): needs a Lua conversion on LUA-05".into();
     }
     assert!(cs.awaits_conversion());
-    cs.convert_hint = Some(crate::game::mission_host::convert_hint(Path::new("/games/a2")));
-    let hint = cs.convert_hint.clone().unwrap();
-    assert!(hint.contains("tools/convert_install_missions.py --install \"/games/a2\""), "{hint}");
+    // the base game of an install: the mission says what the button does, and there is a button;
+    // no command to run by hand any more
+    legacy_kl01(&mut cs);
+    cs.convertible = true;
     let mut app = app_with(cs, None, 1.0);
     go(&mut app, Screen::SinglePlayer);
     press(&mut app, CampaignAct::Card(2));
-    let texts: Vec<String> = app.world_mut().query::<&crate::ui::sprite_font::SpriteText>().iter(app.world()).map(|t| t.text.clone()).collect();
-    assert!(texts.contains(&hint), "{hint:?} in {texts:?}");
+    let shown = screen_texts(&mut app);
+    assert!(shown.iter().any(|t| t == "Prepare missions converts it from your own game files."), "{shown:?}");
+    assert!(!shown.iter().any(|t| t.contains("python3")), "{shown:?}");
+    assert!(has(&mut app, CampaignAct::Convert(ConvertMode::Prepare)) && !has(&mut app, CampaignAct::Convert(ConvertMode::Again)) && !has(&mut app, CampaignAct::CancelConvert));
+    // a mod is active (not convertible): neither the sentence nor the button
+    let mut cs = fixture(false, None);
+    cs.progress.campaigns.get_mut("federation").unwrap().complete = true;
+    cs.pretend_legacy();
+    let mut app = app_with(cs, None, 1.0);
+    go(&mut app, Screen::SinglePlayer);
+    press(&mut app, CampaignAct::Card(2));
+    assert!(!screen_texts(&mut app).iter().any(|t| t.starts_with("Prepare missions")));
+    assert!(!has(&mut app, CampaignAct::Convert(ConvertMode::Prepare)) && !has(&mut app, CampaignAct::Convert(ConvertMode::Again)));
 
     // A mounted conversion marks the missions whose script it holds, in the list and the details.
     let dir = temp_dir("converted");
@@ -485,4 +523,236 @@ fn the_briefing_shows_the_book_text() {
     for want in ["First Light", "The synthetic fleet gathers.", "* Survive one second", "* Win"] {
         assert!(texts.iter().any(|t| t.to_lowercase().contains(&want.to_lowercase())), "{want:?} in {texts:?}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// The conversion on the mission list (LUA-15k)
+// ---------------------------------------------------------------------------
+
+use crate::game::mission_convert::{CancelConversion, ConversionState, Outcome, Refusal};
+
+/// What the mission list's conversion controls sent.
+#[derive(Resource, Default)]
+struct Asked {
+    convert: Vec<RequestConversion>,
+    cancel: usize,
+}
+
+fn record_asks(mut asked: ResMut<Asked>, mut c: MessageReader<RequestConversion>, mut x: MessageReader<CancelConversion>) {
+    asked.convert.extend(c.read().copied());
+    asked.cancel += x.read().count();
+}
+
+/// The Klingon list (its one mission waits for a conversion), the way the base game shows it.
+fn waiting_list() -> App {
+    let mut cs = fixture(false, None);
+    cs.progress.campaigns.get_mut("federation").unwrap().complete = true;
+    legacy_kl01(&mut cs);
+    cs.convertible = true;
+    let mut app = app_with(cs, None, 1.0);
+    app.init_resource::<Asked>().add_systems(Last, record_asks);
+    go(&mut app, Screen::SinglePlayer);
+    press(&mut app, CampaignAct::Card(2));
+    app
+}
+
+#[test]
+fn the_list_shows_the_progress_and_cancel_while_it_runs_and_the_buttons_send_their_requests() {
+    let mut app = waiting_list();
+    // nothing has run: Prepare missions; it asks for a run that may use the cache and the stamp
+    assert!(has(&mut app, CampaignAct::Convert(ConvertMode::Prepare)) && !has(&mut app, CampaignAct::CancelConvert));
+    press(&mut app, CampaignAct::Convert(ConvertMode::Prepare));
+    assert_eq!(app.world().resource::<Asked>().convert, vec![RequestConversion { mode: ConvertMode::Prepare }]);
+    // running: the progress counts the mission being converted, Cancel replaces the button
+    app.insert_resource(ConversionState { running: true, total: 20, done: 6, runs: 1, ..default() });
+    settle(&mut app);
+    let shown = screen_texts(&mut app);
+    assert!(shown.iter().any(|t| t == "Preparing missions 7 of 20"), "{shown:?}");
+    assert!(has(&mut app, CampaignAct::CancelConvert) && !has(&mut app, CampaignAct::Convert(ConvertMode::Prepare)) && !has(&mut app, CampaignAct::Convert(ConvertMode::Again)));
+    press(&mut app, CampaignAct::CancelConvert);
+    assert_eq!(app.world().resource::<Asked>().cancel, 1);
+    // cancelled with nothing converted: it says so, and the plain Prepare missions is still the offer
+    // (a cancelled automatic run must not leave the forced one as the only button)
+    *app.world_mut().resource_mut::<ConversionState>() = ConversionState { outcome: Some(Outcome::Cancelled { converted: 0 }), runs: 1, ..default() };
+    settle(&mut app);
+    assert!(screen_texts(&mut app).iter().any(|t| t == "Preparing the missions was cancelled."));
+    assert!(has(&mut app, CampaignAct::Convert(ConvertMode::Prepare)) && !has(&mut app, CampaignAct::Convert(ConvertMode::Again)) && !has(&mut app, CampaignAct::CancelConvert));
+    // a normal run that ended without more (or was skipped): Convert again, which only forces
+    *app.world_mut().resource_mut::<ConversionState>() = ConversionState { outcome: Some(Outcome::Skipped), runs: 1, ..default() };
+    settle(&mut app);
+    assert!(has(&mut app, CampaignAct::Convert(ConvertMode::Again)) && !has(&mut app, CampaignAct::Convert(ConvertMode::Prepare)));
+    assert!(!has(&mut app, CampaignAct::Convert(ConvertMode::ReplaceEdited)), "nothing is edited: nothing to replace");
+    press(&mut app, CampaignAct::Convert(ConvertMode::Again));
+    assert_eq!(app.world().resource::<Asked>().convert.last(), Some(&RequestConversion { mode: ConvertMode::Again }));
+}
+
+#[test]
+fn replacing_what_the_player_edited_is_a_button_of_its_own() {
+    use sta_mission_convert::output::OutDir;
+    let dir = temp_dir("replace-button");
+    let mut out = OutDir::inspect(&dir, dir.clone(), false).unwrap();
+    out.write("syn_fed01.lua", b"-- converted one\n").unwrap();
+    out.write("syn_fed02.lua", b"-- converted two\n").unwrap();
+    out.finish().unwrap();
+    std::fs::write(dir.join("missions/syn_fed01.lua"), b"-- the player's own\n").unwrap();
+    let mut cs = fixture(true, None);
+    cs.mark_converted(&dir, &Default::default());
+    cs.convertible = true;
+    let mut app = app_with(cs, None, 1.0);
+    app.init_resource::<Asked>().add_systems(Last, record_asks);
+    go(&mut app, Screen::SinglePlayer);
+    press(&mut app, CampaignAct::Card(1));
+    // something is converted: Convert again (which keeps the edit), and the replacement beside it, named
+    assert!(has(&mut app, CampaignAct::Convert(ConvertMode::Again)) && has(&mut app, CampaignAct::Convert(ConvertMode::ReplaceEdited)));
+    assert!(screen_texts(&mut app).iter().any(|t| t.eq_ignore_ascii_case("Replace 1 edited script")));
+    press(&mut app, CampaignAct::Convert(ConvertMode::Again));
+    assert_eq!(app.world().resource::<Asked>().convert, vec![RequestConversion { mode: ConvertMode::Again }], "one click on Convert again asks to keep the edit");
+    press(&mut app, CampaignAct::Convert(ConvertMode::ReplaceEdited));
+    assert_eq!(app.world().resource::<Asked>().convert.last(), Some(&RequestConversion { mode: ConvertMode::ReplaceEdited }));
+    // no replacement while the run goes
+    app.insert_resource(ConversionState { running: true, total: 2, runs: 1, ..default() });
+    settle(&mut app);
+    assert!(!has(&mut app, CampaignAct::Convert(ConvertMode::ReplaceEdited)) && has(&mut app, CampaignAct::CancelConvert));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_button_and_the_sentence_of_a_waiting_mission_agree_with_a_converted_set_mounted() {
+    // after a restart: part of the missions are converted, one still waits
+    let mut cs = fixture(false, None);
+    cs.progress.campaigns.get_mut("federation").unwrap().complete = true;
+    cs.pretend_legacy();
+    cs.convertible = true;
+    cs.experimental.insert("syn_fed01.bzn".into());
+    let mut app = app_with(cs, None, 1.0);
+    for c in &mut app.world_mut().resource_mut::<Campaigns>().book.campaigns {
+        for m in &mut c.missions {
+            if m.bzn == "syn_kl01.bzn" {
+                m.script = MissionScript::LegacyDll { files: vec!["syn_kl01R.drl".into()] };
+            }
+        }
+    }
+    go(&mut app, Screen::SinglePlayer);
+    press(&mut app, CampaignAct::Card(2));
+    assert!(has(&mut app, CampaignAct::Convert(ConvertMode::Again)) && !has(&mut app, CampaignAct::Convert(ConvertMode::Prepare)));
+    let shown = screen_texts(&mut app);
+    assert!(shown.iter().any(|t| t == "Convert again tries it once more from your own game files."), "{shown:?}");
+    assert!(!shown.iter().any(|t| t.starts_with("Prepare missions converts")), "{shown:?}");
+}
+
+#[test]
+fn how_a_run_ended_is_said_under_the_list_and_a_refusal_leaves_no_button() {
+    let mut app = waiting_list();
+    let end = |app: &mut App, outcome: Outcome| {
+        *app.world_mut().resource_mut::<ConversionState>() = ConversionState { outcome: Some(outcome), runs: 1, ..default() };
+        settle(app);
+        screen_texts(app)
+    };
+    app.init_resource::<ConversionState>();
+    let shown = end(&mut app, Outcome::Completed { total: 5, converted: 4, cached: 0, failed: 1 });
+    assert!(shown.iter().any(|t| t == "4 missions ready (experimental); 1 could not be converted."), "{shown:?}");
+    let shown = end(&mut app, Outcome::Aborted("no write permission".into()));
+    assert!(shown.iter().any(|t| t == "Preparing the missions stopped: no write permission"), "{shown:?}");
+    let shown = end(&mut app, Outcome::Busy);
+    assert!(shown.iter().any(|t| t == "Another STA64 is preparing these missions."), "{shown:?}");
+    // nothing to say for a skipped run
+    let shown = end(&mut app, Outcome::Skipped);
+    assert!(!shown.iter().any(|t| t.starts_with("Preparing the missions") || t.contains("missions ready")), "{shown:?}");
+    assert!(has(&mut app, CampaignAct::Convert(ConvertMode::Again)));
+    // a refusal the player cannot act on: the text and no button
+    let shown = end(&mut app, Outcome::Refused(Refusal::Output("output folder x is inside the install".into())));
+    assert!(shown.iter().any(|t| t.starts_with("The missions cannot be prepared: output folder x")), "{shown:?}");
+    assert!(!has(&mut app, CampaignAct::Convert(ConvertMode::Again)) && !has(&mut app, CampaignAct::Convert(ConvertMode::Prepare)));
+}
+
+#[test]
+fn a_failed_mission_shows_its_own_failure_where_the_blocked_reason_is() {
+    let mut app = waiting_list();
+    // the converter names the mission by its DLL: the book records the DLLs of the mission as data (the
+    // blocked reason's wording is not read: it is set to something else here)
+    for b in app.world_mut().resource_mut::<Campaigns>().blocked.iter_mut() {
+        b.reason = "legacy DLL only: needs a Lua conversion".into();
+    }
+    for c in &mut app.world_mut().resource_mut::<Campaigns>().book.campaigns {
+        for m in &mut c.missions {
+            if m.bzn == "syn_kl01.bzn" {
+                m.script = MissionScript::LegacyDll { files: vec!["odd_nameR.drl".into(), "odd_nameS.dsl".into()] };
+            }
+        }
+    }
+    app.insert_resource(ConversionState {
+        failures: vec![("other".into(), "DecodeError: other".into()), ("odd_name".into(), "DecodeError: not a mission".into())],
+        outcome: Some(Outcome::Completed { total: 2, converted: 0, cached: 0, failed: 2 }),
+        runs: 1,
+        ..default()
+    });
+    settle(&mut app);
+    let shown = screen_texts(&mut app);
+    assert!(shown.iter().any(|t| t == "The conversion of this mission failed: DecodeError: not a mission"), "{shown:?}");
+    assert!(!shown.iter().any(|t| t.contains("DecodeError: other")), "another mission's failure is not shown here: {shown:?}");
+    assert!(!shown.iter().any(|t| t.starts_with("Prepare missions converts")), "the failure replaces the offer: {shown:?}");
+    // keyed by the map's name too
+    app.world_mut().resource_mut::<ConversionState>().failures = vec![("syn_kl01".into(), "DecodeError: by the map".into())];
+    settle(&mut app);
+    assert!(screen_texts(&mut app).iter().any(|t| t == "The conversion of this mission failed: DecodeError: by the map"));
+}
+
+#[test]
+fn a_script_the_player_edited_is_marked_and_kept_apart_from_the_others() {
+    use sta_mission_convert::output::OutDir;
+    let dir = temp_dir("edited-marks");
+    let mut out = OutDir::inspect(&dir, dir.clone(), false).unwrap();
+    out.write("syn_fed01.lua", b"-- converted one\n").unwrap();
+    out.write("syn_fed02.lua", b"-- converted two\n").unwrap();
+    out.finish().unwrap();
+    std::fs::write(dir.join("missions/syn_fed01.lua"), b"-- the player's own\n").unwrap();
+    let mut cs = fixture(true, None);
+    cs.mark_converted(&dir, &Default::default());
+    assert_eq!(cs.experimental.iter().collect::<Vec<_>>(), ["syn_fed01.bzn", "syn_fed02.bzn"]);
+    assert_eq!(cs.edited.iter().collect::<Vec<_>>(), ["syn_fed01.bzn"], "only the changed file is the player's");
+    cs.convertible = true;
+    let mut app = app_with(cs, None, 1.0);
+    go(&mut app, Screen::SinglePlayer);
+    press(&mut app, CampaignAct::Card(1));
+    let shown = screen_texts(&mut app);
+    assert!(shown.iter().any(|t| t.ends_with("First Light (edited)")), "{shown:?}");
+    assert!(!shown.iter().any(|t| t.ends_with("Second Wind (edited)")), "{shown:?}");
+    assert!(shown.iter().any(|t| t.starts_with("You edited this converted script")), "{shown:?}");
+    assert!(!shown.iter().any(|t| t.starts_with("Experimental: converted")), "an edited script is not called a plain conversion: {shown:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_conversion_controls_keep_their_regions_in_every_window_and_scale() {
+    // the status line, Cancel and the other controls: exact regions, none over another, all inside
+    check_layout_with(
+        Screen::Missions,
+        &[CSlot::ListStatus, CSlot::ListConvert],
+        &|cs| cs.convertible = true,
+        &|app| {
+            app.insert_resource(ConversionState { running: true, total: 20, done: 6, runs: 1, ..default() });
+        },
+    );
+    // the replacement button beside Convert again
+    check_layout_with(
+        Screen::Missions,
+        &[CSlot::ListConvert, CSlot::ListReplace],
+        &|cs| {
+            cs.convertible = true;
+            cs.edited.insert("syn_fed01.bzn".into());
+        },
+        &|app| {
+            app.insert_resource(ConversionState { outcome: Some(Outcome::Skipped), runs: 1, ..default() });
+        },
+    );
+    // and a result with a long text stays in its region
+    check_layout_with(
+        Screen::Missions,
+        &[CSlot::ListStatus, CSlot::ListConvert],
+        &|cs| cs.convertible = true,
+        &|app| {
+            let why = "x".repeat(300);
+            app.insert_resource(ConversionState { outcome: Some(Outcome::Aborted(why)), runs: 1, ..default() });
+        },
+    );
 }
