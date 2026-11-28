@@ -184,12 +184,21 @@ pub fn ring_mesh(rays: u32) -> Mesh {
             indices.extend([a_in, a_out, b_out, a_in, b_out, b_in]);
         }
     }
-    let normals = vec![[0.0, 1.0, 0.0]; positions.len()];
+    let n_vertices = positions.len();
+    let normals = vec![[0.0, 1.0, 0.0]; n_vertices];
     Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD)
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        // The material's fragment stage reads a vertex colour; white leaves the texture and the ring's tint as they were.
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, vec![[1.0f32; 4]; n_vertices])
         .with_inserted_indices(Indices::U32(indices))
+}
+
+/// The sprite quad of a fireball cluster: the unit quad with a white vertex colour, which the material's fragment stage
+/// reads (a mesh without it makes the pipeline fail validation: #1418).
+pub fn cluster_quad() -> Mesh {
+    crate::render::sprites::unit_quad().with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, vec![[1.0f32; 4]; 4])
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -416,7 +425,7 @@ fn attach_visuals(
             assets.clusters.insert(key.clone(), nodes);
         }
         let Some(nodes) = assets.clusters[&key].clone() else { continue };
-        let quad = assets.quad.get_or_insert_with(|| meshes.add(crate::render::sprites::unit_quad())).clone();
+        let quad = assets.quad.get_or_insert_with(|| meshes.add(cluster_quad())).clone();
         x.sprites_end = spawn_cluster(&mut cmds, e, &nodes, &quad, &tables.0, &mut mats);
     }
     for (e, mut ring) in &mut rings {

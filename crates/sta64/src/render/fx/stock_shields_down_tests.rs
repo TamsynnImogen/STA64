@@ -482,3 +482,13 @@ fn install_the_shields_down_model_resolves_with_its_textures_and_flipbooks() {
         assert!(b.keys.as_ref().is_some_and(|(period, k)| *period > 0.0 && k.len() > 1), "band {} has no channel", b.name);
     }
 }
+
+/// Every band's mesh carries the attributes the stock shot material reads (#1418).
+#[test]
+fn every_band_mesh_carries_the_attributes_the_material_reads() {
+    let geo = band_geometry(&authored_model()).unwrap();
+    assert!(!geo.bands.is_empty());
+    for b in &geo.bands {
+        assert!(crate::render::fx::stock_shots::missing_attributes(&b.mesh).is_empty());
+    }
+}
