@@ -165,10 +165,16 @@ fn progress_is_saved_after_a_result_and_read_back_by_a_new_state() {
 // ---------------------------------------------------------------------------
 
 fn app_with(campaigns: Campaigns, window: Option<(u32, u32)>, scale: f32) -> App {
+    app_prepared(campaigns, window, scale, |_| {})
+}
+
+/// [`app_with`], with `prep` run on the app before the screens are added (a mount, say).
+fn app_prepared(campaigns: Campaigns, window: Option<(u32, u32)>, scale: f32, prep: impl FnOnce(&mut App)) -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, StatesPlugin));
     configure_sets(&mut app);
     app.add_plugins(crate::ui::profile::UiProfilePlugin);
+    prep(&mut app);
     app.insert_resource(ScreenData::fake())
         .insert_resource(UiScale(scale))
         .insert_resource(ScreensConfig { own_camera: false, fit_scale: false, start: Screen::Main, ..default() })
@@ -757,4 +763,181 @@ fn the_conversion_controls_keep_their_regions_in_every_window_and_scale() {
             app.insert_resource(ConversionState { outcome: Some(Outcome::Aborted(why)), runs: 1, ..default() });
         },
     );
+}
+
+// ---------------------------------------------------------------------------
+// Shell art (#931): authored pictures, generated here
+// ---------------------------------------------------------------------------
+
+use super::shell_art::ShellBackdrop;
+use crate::frontend::screens::stock::StockBoxNode;
+
+/// The single-player picture's colour and the mission list's: authored, distinct from each other.
+const SINGLE_RGB: [u8; 3] = [200, 30, 40];
+const LIST_RGB: [u8; 3] = [20, 60, 210];
+
+/// A 24-bit BMP of one colour (bottom-up rows, padded to four bytes), written here.
+fn bmp_of(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
+    let row = (w * 3).div_ceil(4) * 4;
+    let size = 54 + row * h;
+    let mut out = Vec::new();
+    out.extend_from_slice(b"BM");
+    out.extend_from_slice(&size.to_le_bytes());
+    out.extend_from_slice(&[0; 4]);
+    out.extend_from_slice(&54u32.to_le_bytes());
+    out.extend_from_slice(&40u32.to_le_bytes());
+    out.extend_from_slice(&(w as i32).to_le_bytes());
+    out.extend_from_slice(&(h as i32).to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&24u16.to_le_bytes());
+    out.extend_from_slice(&[0; 24]);
+    for _ in 0..h {
+        let mut line = Vec::new();
+        for _ in 0..w {
+            line.extend_from_slice(&[rgb[2], rgb[1], rgb[0]]);
+        }
+        line.resize(row as usize, 0);
+        out.extend_from_slice(&line);
+    }
+    out
+}
+
+/// A folder with the shell pictures (the single-player one a PNG, the mission list's a BMP) and a
+/// stock profile choice; `art`: whether it carries the pictures at all.
+fn authored_mount(tag: &str, art: bool) -> PathBuf {
+    let dir = temp_dir(tag);
+    std::fs::write(dir.join("info.ini"), "[Mod]\nUiProfile=armada2\n").unwrap();
+    if art {
+        std::fs::create_dir_all(dir.join("bitmaps/single")).unwrap();
+        std::fs::create_dir_all(dir.join("bitmaps/MissionSelect")).unwrap();
+        image::RgbaImage::from_pixel(8, 6, image::Rgba([SINGLE_RGB[0], SINGLE_RGB[1], SINGLE_RGB[2], 255])).save(dir.join("bitmaps/single/singleplay.png")).unwrap();
+        std::fs::write(dir.join("bitmaps/MissionSelect/MissionSelectBG.bmp"), bmp_of(8, 6, LIST_RGB)).unwrap();
+    }
+    dir
+}
+
+/// The app on a mount of `dir`; `lcars` asks for the widget theme whatever the mount says.
+fn art_app(dir: &Path, lcars: bool, cs: Campaigns, window: (u32, u32)) -> App {
+    let mut vfs = sta_vfs::Vfs::default();
+    vfs.push_dir("authored".into(), dir.to_owned()).unwrap();
+    let mut app = app_prepared(cs, Some(window), 1.0, |app| {
+        app.add_plugins(bevy::asset::AssetPlugin::default()).init_asset::<Image>();
+        app.insert_resource(crate::viewer::Mounted(vfs)).insert_resource(crate::ui::profile::UiPreference { lcars });
+    });
+    settle(&mut app);
+    app
+}
+
+fn backdrops(app: &mut App) -> Vec<(Screen, [u8; 3])> {
+    let found: Vec<(Entity, Screen, Handle<Image>)> = app.world_mut().query::<(Entity, &ShellBackdrop, &ImageNode)>().iter(app.world()).map(|(e, b, n)| (e, b.0, n.image.clone())).collect();
+    found
+        .into_iter()
+        .map(|(_, screen, h)| {
+            let img = app.world().resource::<Assets<Image>>().get(&h).expect("the picture is loaded");
+            let px = img.data.as_ref().expect("pixels")[..3].try_into().unwrap();
+            (screen, px)
+        })
+        .collect()
+}
+
+#[test]
+fn the_three_campaign_screens_draw_the_shell_art_under_a_stock_profile_and_the_widget_theme_under_the_other() {
+    let dir = authored_mount("shell-art", true);
+    for (name, w, h) in [("4:3", 1600, 1200), ("16:9", 1920, 1080), ("21:9", 3440, 1440)] {
+        for (screen, want) in [(Screen::SinglePlayer, SINGLE_RGB), (Screen::Missions, LIST_RGB), (Screen::Briefing, LIST_RGB)] {
+            let mut cs = fixture(true, None);
+            cs.campaign = Some("federation".into());
+            let mut app = art_app(&dir, false, cs, (w, h));
+            go(&mut app, screen);
+            assert_eq!(backdrops(&mut app), vec![(screen, want)], "{name} {screen:?}: the shell picture, once");
+            // It is the first child of the screen's box, fills it, and takes no click.
+            let (b, kids) = {
+                let mut q = app.world_mut().query_filtered::<(Entity, &Children), With<StockBoxNode>>();
+                let (b, kids) = q.single(app.world()).unwrap();
+                (b, kids.to_vec())
+            };
+            let first = kids[0];
+            assert!(app.world().get::<ShellBackdrop>(first).is_some(), "{name} {screen:?}: under every control of the box ({b:?})");
+            let node = app.world().get::<Node>(first).unwrap();
+            assert_eq!((node.width, node.height), (Val::Percent(100.0), Val::Percent(100.0)), "{name} {screen:?}");
+            assert!(app.world().get::<Pickable>(first).is_some_and(|p| !p.should_block_lower && !p.is_hoverable), "{name} {screen:?}: a click goes through");
+            // The widget theme under the other profile: no picture.
+            let mut cs = fixture(true, None);
+            cs.campaign = Some("federation".into());
+            let mut lcars = art_app(&dir, true, cs, (w, h));
+            go(&mut lcars, screen);
+            assert!(backdrops(&mut lcars).is_empty(), "{name} {screen:?}: the widget theme keeps its look");
+        }
+        // The other screens keep their recorded choice.
+        for other in [Screen::Main, Screen::Debrief] {
+            let mut cs = fixture(true, None);
+            won_first(&mut cs);
+            let mut app = art_app(&dir, false, cs, (w, h));
+            go(&mut app, other);
+            assert!(backdrops(&mut app).is_empty(), "{name} {other:?}");
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_mount_without_the_pictures_keeps_the_widget_theme_and_a_screen_change_swaps_the_picture() {
+    let bare = authored_mount("shell-bare", false);
+    let mut app = art_app(&bare, false, fixture(true, None), (1920, 1080));
+    go(&mut app, Screen::SinglePlayer);
+    assert!(backdrops(&mut app).is_empty());
+    std::fs::remove_dir_all(bare).unwrap();
+    let dir = authored_mount("shell-swap", true);
+    let mut cs = fixture(true, None);
+    cs.campaign = Some("federation".into());
+    let mut app = art_app(&dir, false, cs, (1920, 1080));
+    go(&mut app, Screen::SinglePlayer);
+    assert_eq!(backdrops(&mut app), vec![(Screen::SinglePlayer, SINGLE_RGB)]);
+    go(&mut app, Screen::Missions);
+    assert_eq!(backdrops(&mut app), vec![(Screen::Missions, LIST_RGB)], "one picture, the new screen's");
+    go(&mut app, Screen::Main);
+    assert!(backdrops(&mut app).is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn the_conversion_line_and_buttons_stay_visible_and_usable_on_the_picture() {
+    let dir = authored_mount("shell-convert", true);
+    for (_, w, h) in [("4:3", 1600, 1200), ("16:9", 1920, 1080), ("21:9", 3440, 1440)] {
+        let mut cs = fixture(false, None);
+        cs.progress.campaigns.get_mut("federation").unwrap().complete = true;
+        legacy_kl01(&mut cs);
+        cs.convertible = true;
+        let mut app = art_app(&dir, false, cs, (w, h));
+        app.init_resource::<Asked>().add_systems(Last, record_asks);
+        go(&mut app, Screen::SinglePlayer);
+        press(&mut app, CampaignAct::Card(2));
+        assert_eq!(screen(&app), Screen::Missions);
+        assert_eq!(backdrops(&mut app).len(), 1);
+        // Prepare missions is there, inside its region and above the picture, and a click reaches it.
+        let b = app.world().resource::<crate::frontend::screens::stock::StockBox>().0;
+        let region_of = |app: &mut App, slot: CSlot| {
+            let (_, e) = app.world_mut().query::<(Entity, &CPlaced)>().iter(app.world()).map(|(e, p)| (p.0, e)).find(|(s, _)| *s == slot).unwrap();
+            node_rect(app, e)
+        };
+        let r = region_of(&mut app, CSlot::ListConvert);
+        let want = region(CSlot::ListConvert).px(b);
+        assert!((r.min - want.min).length() < 0.01 && (r.max - want.max).length() < 0.01);
+        press(&mut app, CampaignAct::Convert(ConvertMode::Prepare));
+        assert_eq!(app.world().resource::<Asked>().convert, vec![RequestConversion { mode: ConvertMode::Prepare }]);
+        // The progress line and Cancel while it runs.
+        app.insert_resource(ConversionState { running: true, total: 20, done: 6, runs: 1, ..default() });
+        settle(&mut app);
+        assert!(screen_texts(&mut app).iter().any(|t| t == "Preparing missions 7 of 20"));
+        assert!(!region_of(&mut app, CSlot::ListStatus).size().min_element().is_nan());
+        press(&mut app, CampaignAct::CancelConvert);
+        assert_eq!(app.world().resource::<Asked>().cancel, 1);
+        // Convert again, and the replacement of an edited script.
+        app.world_mut().resource_mut::<Campaigns>().edited.insert("syn_fed01.bzn".into());
+        *app.world_mut().resource_mut::<ConversionState>() = ConversionState { outcome: Some(Outcome::Skipped), runs: 1, ..default() };
+        settle(&mut app);
+        assert!(has(&mut app, CampaignAct::Convert(ConvertMode::Again)) && has(&mut app, CampaignAct::Convert(ConvertMode::ReplaceEdited)));
+        assert_eq!(backdrops(&mut app).len(), 1, "the screen was rebuilt around the same single picture");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }
