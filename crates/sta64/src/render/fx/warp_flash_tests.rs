@@ -1,4 +1,6 @@
-use super::{EXIT_PULSE_SECONDS, WarpFlash, register, warp_reach};
+use super::{EXIT_PULSE_SECONDS, WarpFlash, ramp_progress, register, warp_reach};
+use crate::render::profile::RenderProfile;
+use sta_sim::view::{WarpPhase, WarpRow};
 
 use crate::app::configure_sets;
 use crate::clock::AnimClock;
@@ -37,6 +39,10 @@ fn reach_rejects_non_warping_or_radiusless_inputs() {
 }
 
 fn live_app() -> (App, EntityId) {
+    live_app_with(None)
+}
+
+fn live_app_with(profile: Option<RenderProfile>) -> (App, EntityId) {
     let mut def = UnitDef::new("warp_flash_test", "craft");
     def.hull = Fixed::from_int(100);
     def.radius = Fixed::from_int(20);
@@ -74,6 +80,9 @@ fn live_app() -> (App, EntityId) {
             Box::new(LocalRouter::new()),
             PlayerId(0),
         ));
+    if let Some(profile) = profile {
+        app.insert_resource(profile);
+    }
     configure_sets(&mut app);
     register(&mut app);
     (app, id)
@@ -290,4 +299,65 @@ fn observing_an_already_warping_match_does_not_play_the_entry_again() {
         }
     }
     panic!("the live warp move should enter warp");
+}
+
+#[test]
+fn the_stretch_runs_up_over_the_entry_ramp_holds_at_warp_and_runs_down_over_the_exit_ramp() {
+    let row = |phase, start, len| WarpRow { id: EntityId(1), phase, ramp_start: start, ramp_len: len };
+    let entering = row(WarpPhase::Entering, 100, 10);
+    assert_eq!(ramp_progress(&entering, 100.0), 0.0);
+    assert_eq!(ramp_progress(&entering, 105.0), 0.5);
+    assert_eq!(ramp_progress(&entering, 110.0), 1.0);
+    assert_eq!(ramp_progress(&entering, 99.0), 0.0, "before the ramp");
+    assert_eq!(ramp_progress(&entering, 500.0), 1.0, "after it");
+    // At warp the row keeps the entry's ramp, long over: full.
+    assert_eq!(ramp_progress(&row(WarpPhase::AtWarp, 100, 10), 900.0), 1.0);
+    // Leaving mirrors it.
+    let leaving = row(WarpPhase::Leaving, 200, 8);
+    assert_eq!(ramp_progress(&leaving, 200.0), 1.0);
+    assert_eq!(ramp_progress(&leaving, 204.0), 0.5);
+    assert_eq!(ramp_progress(&leaving, 208.0), 0.0);
+    // A row with no ramp is at its end: entering full, leaving none.
+    assert_eq!(ramp_progress(&row(WarpPhase::Entering, 5, 0), 5.0), 1.0);
+    assert_eq!(ramp_progress(&row(WarpPhase::Leaving, 5, 0), 5.0), 0.0);
+}
+
+/// Runs a warp move to its end; the hull's stretch and the number of exit pulses per frame.
+fn trip(profile: Option<RenderProfile>) -> (Vec<(Option<WarpPhase>, f32)>, bool) {
+    let (mut app, id) = live_app_with(profile);
+    let root = app.world_mut().spawn((SimEntity(id), Transform::IDENTITY)).id();
+    let hull = app.world_mut().spawn((super::WarpHull { pivot_z: 0.0 }, Transform::IDENTITY, ChildOf(root))).id();
+    app.update();
+    order(&mut app, id, true);
+    let (mut rows, mut pulse) = (Vec::new(), false);
+    for _ in 0..1500 {
+        step(&mut app);
+        pulse |= flash_exit_started(&mut app).is_some();
+        let phase = app.world().resource::<SimLink>().real_curr().warp_of(id).map(|r| r.phase);
+        rows.push((phase, app.world().get::<Transform>(hull).unwrap().scale.z));
+    }
+    (rows, pulse)
+}
+
+#[test]
+fn under_stock_there_is_no_exit_pulse_and_the_stretch_follows_the_ramp_and_the_remaster_look_keeps_its_own() {
+    let (stock, pulse) = trip(Some(RenderProfile::Stock));
+    assert!(!pulse, "no exit pulse under Stock");
+    assert!(stock.iter().any(|r| r.0 == Some(WarpPhase::AtWarp)), "the craft reached warp");
+    let full = stock.iter().filter(|r| r.0 == Some(WarpPhase::AtWarp)).map(|r| r.1).fold(0.0, f32::max);
+    assert!(full > 1.4, "the hull is stretched at warp: {full}");
+    // At warp the stretch is full and flat; entering it never runs backwards; leaving it never grows.
+    let mut previous = 1.0;
+    for (phase, stretch) in &stock {
+        match phase {
+            Some(WarpPhase::Entering) => assert!(*stretch >= previous - 1e-4 && *stretch <= full + 1e-4, "entering {stretch} after {previous}"),
+            Some(WarpPhase::AtWarp) => assert!((stretch - full).abs() < 1e-3, "at warp {stretch} of {full}"),
+            Some(WarpPhase::Leaving) => assert!(*stretch <= previous + 1e-4, "leaving {stretch} after {previous}"),
+            None => {}
+        }
+        previous = *stretch;
+    }
+    // The Remaster look, and a run without the profile resources, keep today's pulse.
+    assert!(trip(Some(RenderProfile::Refit)).1, "the Refit look keeps its exit pulse");
+    assert!(trip(None).1);
 }
