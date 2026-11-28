@@ -588,10 +588,10 @@ mission list:
 
 | Button | When it is offered | What it does |
 |---|---|---|
-| Prepare missions | nothing is converted yet | a normal run; a mission whose inputs are unchanged comes from the cache, and a run whose inputs and output are those of the last complete run is skipped |
+| Prepare missions | nothing is converted yet and no run has just ended | a normal run; a mission whose inputs are unchanged comes from the cache, and a run whose inputs and output are those of the last complete run is skipped |
 | Convert again | something is converted, or a normal run ended without doing more | converts everything again, ignoring the cache and the record of the last run; scripts the player edited are kept |
-| Replace N edited script(s) | at least one converted script was edited | as Convert again, and each edited script is moved aside as `<name>.old` and a fresh conversion is written in its place |
-| Cancel | while a run is going | stops the run between two missions: before the first one the earlier conversion is left untouched, later the scripts written so far stay |
+| Replace 1 edited script / Replace N edited scripts | at least one converted script was edited | as Convert again, and each edited script is moved aside as `<name>.old` (`.old2`, `.old3` and so on when that name is taken) and a fresh conversion is written in its place |
+| Cancel | while a run is going | stops the run between two missions. Before the first one the earlier conversion is left untouched. Later, only what this run has written so far is left: a full run replaces the earlier set, so the missions it had not reached are gone until the next run |
 
 While a run is going the line under the list reads "Preparing missions N of
 M". The run is on its own thread and the game stays usable.
@@ -611,8 +611,8 @@ processes from converting one install at once.
 **Edited scripts.** A converted script the player has changed since the
 converter wrote it is the player's: the mission list marks it "(edited)", a
 run keeps it as it is, and so does Convert again. Only the Replace button
-writes over it, and the edit is then moved aside under the `.old` name in the
-same folder, never deleted.
+writes over it, and the edit is then moved aside under the `.old` name (or the
+next free one) in the same folder, never deleted or overwritten.
 
 **Where it applies.** Only for the base game of an install: nothing is
 converted while a mod is active (D6: a mod's chain is not converted), and the
