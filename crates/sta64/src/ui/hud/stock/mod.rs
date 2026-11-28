@@ -157,7 +157,7 @@ fn menu_button(id: u32, name: &str) -> Button {
 /// Native menus contain HUD actions with an explicit capability gate; ODF
 /// metadata cannot bypass live Recrew eligibility.
 pub(in crate::ui::hud) fn buttons(feed: &HudFeed, page: Page, native: &NativeCommands) -> Vec<Button> {
-    let mut buttons = model::grid_with_capacity(feed, page, usize::MAX);
+    let mut buttons = model::stock_grid(feed, page);
     // The stock HUD shows only what the original shows: TRANSPORT only where the install's command data
     // gives it a place (Armada I has none here: it puts it on its speed rail, `a1::speed`); the fallback
     // cell is for STA64's own layout.
@@ -880,5 +880,32 @@ mod capture_tests {
         assert_eq!(capture.verbose.as_deref(), Some("GUI_CP_TRANSPORT_ATTACK_VTOOLTIP"));
         native.commands.clear();
         assert!(!buttons(&feed, Page::Top, &native).iter().any(|b| b.act == Act::Target(TargetMode::TransportAttack)));
+    }
+
+    /// The mod family's stock HUD (Fleet Operations) takes the stock palette's menu button rules of the Armada II
+    /// frames (INTERIM, not measured for that profile; a later measurement changes this deliberately): builder + evolve
+    /// shows one menu button, Evolve.
+    #[test]
+    fn the_mod_familys_stock_palette_follows_the_stock_menu_button_rules_interim() {
+        let mut def = sta_content::UnitDef::new("ui_menu", "station");
+        def.build.list = vec![sta_content::DefRef::new("ui_menu")];
+        def.raw = Arc::new(sta_odf::resolve("ui_menu", &mut |_| Some("builder_facility = 1\nevolve = 1\n".to_owned())).unwrap());
+        let db = Arc::new(sta_content::ContentDb::builder()
+            .profile(sta_content::Profile::Fo4)
+            .features(sta_content::Profile::Fo4.features())
+            .unit(def).build().unwrap());
+        let unit = UnitView {
+            id: EntityId(1), def: db.key("ui_menu").unwrap(), owner: PlayerId(1),
+            pos: Vec3::ZERO, heading: (Fixed::ZERO, Fixed::ONE), speed: Fixed::ZERO,
+            hull: [Fixed::ONE; 2], shields: [[Fixed::ZERO; 2]; 4],
+            crew: None, energy: None, autonomy: None,
+            flags: UnitFlags::SELECTABLE, progress: None,
+        };
+        let feed = HudFeed {
+            view: Arc::new(WorldView { units: vec![unit], ..Default::default() }),
+            player: PlayerId(1), selected: vec![EntityId(1)], content: Some(db), ..Default::default()
+        };
+        let openers: Vec<_> = buttons(&feed, Page::Top, &NativeCommands::default()).into_iter().filter(|b| b.act == Act::OpenBuild).map(|b| b.sprite_names).collect();
+        assert_eq!(openers, [vec!["b_evolve".to_string()]]);
     }
 }
