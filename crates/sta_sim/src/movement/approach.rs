@@ -562,6 +562,7 @@ impl Sim {
                 warp = false;
             }
             plan.warp = warp;
+            plan.wants_warp = goal.is_some() && far && vw > vi;
             let limit = plan.cap.unwrap_or(vi);
             if shape {
                 self.approach_warp.decide(id, warp);

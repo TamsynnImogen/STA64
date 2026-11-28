@@ -197,11 +197,19 @@ pub struct Features {
     /// for stock Armada II; off elsewhere until compared (the mod-family engines): a shot
     /// homes on its target's current position every tick and has no life.
     pub ordnance_flight: bool,
+    /// A craft that wants warp plans its way round the warp-suppression fields of planets
+    /// (`sta_sim::nav`, issue #1148): each field, grown by the header's buffer key, costs the
+    /// header's cost key in the planner (dearer, not blocked), so the craft turns before the
+    /// field, goes round it and stays at warp. Measured on stock Armada II (the keys and the
+    /// planner: read from the executable, static). On for stock Armada II; off elsewhere until
+    /// compared (the mod-family engines): a warp leg is planned like any move, flies into the
+    /// field and drops out of warp there.
+    pub warp_routing: bool,
 }
 
 impl Features {
     /// Every switch, in declaration order, for the content hash.
-    pub(crate) fn bits(&self) -> [bool; 48] {
+    pub(crate) fn bits(&self) -> [bool; 49] {
         [
             self.weapon_damage_controls,
             self.point_defense_cycles,
@@ -251,6 +259,7 @@ impl Features {
             self.engines_off_drift,
             self.warp_shape,
             self.ordnance_flight,
+            self.warp_routing,
         ]
     }
 }

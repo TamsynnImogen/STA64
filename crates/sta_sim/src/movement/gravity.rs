@@ -8,9 +8,15 @@ use crate::Sim;
 use crate::view::UnitFlags;
 use crate::world::EntityKind;
 
-pub(crate) struct GravityWells(Vec<(Vec3, Fixed)>);
+pub(crate) struct GravityWells(Vec<(Vec3, Fixed)>, Vec<(Vec3, Fixed)>);
 
 impl GravityWells {
+    /// The fields of planets among the wells, centre and radius, in entity order: what the warp
+    /// planner routes round (#1148). The other wells only stop warp.
+    pub(crate) fn planet_fields(&self) -> &[(Vec3, Fixed)] {
+        &self.1
+    }
+
     pub(crate) fn suppresses(&self, position: Vec3, hull_radius: Fixed) -> bool {
         self.0.iter().any(|&(centre, radius)| {
             // The native test is sphere overlap, including the ship's own radius.
@@ -30,7 +36,7 @@ impl Sim {
     /// Live fields, in entity order, sampled once before steering this tick.
     pub(crate) fn gravity_wells(&self) -> GravityWells {
         let Some(db) = self.content.as_deref().filter(|_| self.warp_allowed()) else {
-            return GravityWells(Vec::new());
+            return GravityWells(Vec::new(), Vec::new());
         };
         let fields = db.rules().fields();
         if [fields.planet_dewarp_radius_multiplier, fields.black_hole_dewarp_radius_multiplier]
@@ -38,16 +44,17 @@ impl Sim {
             .flatten()
             .all(|multiplier| multiplier <= Fixed::ZERO)
         {
-            return GravityWells(Vec::new());
+            return GravityWells(Vec::new(), Vec::new());
         }
-        GravityWells(
-            self.units.iter()
-                .filter(|unit| matches!(unit.kind, EntityKind::Resource | EntityKind::Prop) && !unit.flags.contains(UnitFlags::DYING))
-                .filter_map(|unit| {
-                    let radius = db.rules().warp_suppression_radius(db.unit(unit.def)?)?;
-                    (radius > Fixed::ZERO).then_some((unit.pos, radius))
-                })
-                .collect(),
-        )
+        let (mut wells, mut planets) = (Vec::new(), Vec::new());
+        for unit in self.units.iter().filter(|unit| matches!(unit.kind, EntityKind::Resource | EntityKind::Prop) && !unit.flags.contains(UnitFlags::DYING)) {
+            let Some(def) = db.unit(unit.def) else { continue };
+            let Some(radius) = db.rules().warp_suppression_radius(def).filter(|r| *r > Fixed::ZERO) else { continue };
+            wells.push((unit.pos, radius));
+            if db.rules().planet_warp_suppression_radius(def).is_some() {
+                planets.push((unit.pos, radius));
+            }
+        }
+        GravityWells(wells, planets)
     }
 }

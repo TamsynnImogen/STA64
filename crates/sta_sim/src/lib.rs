@@ -570,12 +570,12 @@ impl Sim {
         let mut plans = self.steer_attackers(&gravity_wells, &speed_caps);
         // Before routing and avoidance replace targets with detours.
         let gate_goers = self.wormhole_goers();
-        let routed = self.route_orders();
+        let routed = self.route_orders(&gravity_wells, &plans);
         let held = self.steer_around();
         self.brake_for_attack_detours(&mut plans);
         // Warp eligibility follows the aim this tick will actually use, including
         // temporary navigation and avoidance targets.
-        let warps = self.steer_warp_moves(&gravity_wells, &speed_caps);
+        let warps = self.steer_warp_moves(&gravity_wells, &speed_caps, &routed, &held);
         if !warps.is_empty() {
             plans.extend(warps);
             plans.sort_by_key(|p| p.0);

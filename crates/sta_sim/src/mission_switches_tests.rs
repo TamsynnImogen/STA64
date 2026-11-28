@@ -168,4 +168,4 @@ fn a_sim_with_the_switches_off_has_a_pinned_digest() {
     assert_eq!(back.digest(), s);
 }
 
-const PINNED_OFF: u64 = 0xd4bf_97b0_7869_e32f;
+const PINNED_OFF: u64 = 0xa621_e66b_d086_5cc2;
