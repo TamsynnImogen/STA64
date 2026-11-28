@@ -64,6 +64,12 @@ fn scene(tag: &str) -> Scene {
     Scene { tmp, root, engine }
 }
 
+/// `p` as the converter resolves a folder: links followed, and on Windows the plain form, not
+/// the verbatim one `fs::canonicalize` gives (the converter shows and compares the plain form).
+fn resolved(p: &Path) -> PathBuf {
+    sta_mission_convert::paths::resolve(p).expect("the folder resolves")
+}
+
 fn open(s: &Scene, name: &str) -> Install {
     Install::open_mod(&s.root, name).expect("the mount takes the mod").with_engine(&s.engine).expect("the engine folder")
 }
@@ -226,7 +232,7 @@ fn an_install_and_a_mod_the_mount_refuses_are_refused_with_its_reason() {
     assert!(matches!(Install::open(&s.root).unwrap_err(), InstallError::FleetOperations { .. }));
     // a mod the install does not have
     let ModError::Mount { name, reason, root, .. } = Install::open_mod(&s.root, "Nowhere").unwrap_err() else { panic!("the mount's refusal") };
-    assert_eq!((name.as_str(), root), ("Nowhere", fs::canonicalize(&s.root).unwrap()));
+    assert_eq!((name.as_str(), root), ("Nowhere", resolved(&s.root)));
     let mount_says = sta_vfs::Vfs::mount_install(&s.root, Some("Nowhere")).unwrap_err().to_string();
     assert_eq!(reason, mount_says, "the mount's own text, no second rule");
     // an empty name would key the output like the install without a mod
@@ -263,7 +269,7 @@ fn a_mod_needs_engine_files_and_the_folder_they_are_read_from_is_read_only() {
     let s = scene("mod-engine");
     // the hosting install has no engine files of the kind the conversion reads at its root
     let alone = Install::open_mod(&s.root, "Child").unwrap();
-    assert_eq!(alone.engine_root(), fs::canonicalize(&s.root).unwrap());
+    assert_eq!(alone.engine_root(), resolved(&s.root));
     let e = alone.discover(&Options::default()).unwrap_err();
     assert!(e.contains("--engine"), "the refusal asks for an Armada II root: {e}");
     // the same through the command line: nothing is written, the run fails
@@ -277,7 +283,7 @@ fn a_mod_needs_engine_files_and_the_folder_they_are_read_from_is_read_only() {
 
     // with the folder named, it is read; no output or cache may go into it
     let inst = open(&s, "Child");
-    assert_eq!(inst.engine_root(), fs::canonicalize(&s.engine).unwrap());
+    assert_eq!(inst.engine_root(), resolved(&s.engine));
     assert!(inst.discover(&Options::default()).is_ok());
     let inside = s.engine.join("out");
     assert!(install::resolve_output(&inside, &inst, &Env::default()).unwrap_err().contains("read-only"));
