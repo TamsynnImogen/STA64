@@ -67,7 +67,7 @@ The following rules apply to the Armada II presentation profile.
 | Hover strip | The strip accepts craft and draws hull, shield and energy values and a whole crew count. STA64 displays the same rounded values without percent signs in this strip. Not established: the exact rule that chooses name versus class. |
 | Resource strip | Six rectangle and tooltip definitions are loaded. Their visibility and positions come from the faction's resolved sheet. |
 | Persistent controls | The button panel starts collapsed, and one flag gates the menu, help and palette row. STA64 draws CFG controls and disables actions whose game systems are unavailable. |
-| Minimap and cinematic viewport | Both use the faction's authored frame and display region. The native minimap's event-location marks still need an event feed. Native footprint and live inset behavior need a runtime comparison. |
+| Minimap and cinematic viewport | Both use the faction's authored frame and display region. The native minimap's event-location marks still need an event feed. Native footprint and live inset behavior need a runtime comparison (not established). |
 
 The standalone data mount accepts a copied CD folder with `odf`, `bzn`,
 `game_cfg.h` and `misc/gui_glob16x12.cfg`. This lets tests use the CD assets
@@ -100,8 +100,8 @@ root, its camera and visibility, current selection and armed commands.
 Command ODFs are loaded through the existing layered ODF resolver. Their button,
 menu, tooltip and colour fields decorate only actions the shared capability model
 already supports. The static A2 bar compacts commands by command-type priority;
-`preferredPosition` is a secondary ordering hint for ties. Native `qsort` does not
-specify equal-priority order, so that tie policy is an explicit STA64 adaptation.
+`preferredPosition` is a secondary ordering hint for ties. The original's sort does not
+specify the order of equal priorities, so that tie policy is an explicit STA64 adaptation.
 Visible rows extend upward from `popupPaletteYA`. Long lists use previous/next
 pages rather than inheriting the LCARS build-list limit. Menu and paging actions
 change presentation only; build, targeting, stop and formation actions still use
@@ -211,26 +211,27 @@ live gameplay readability/FPS and the broader UI-18 reference gate remain open.
 
 An authored `resource_N_color` (RGB or RGBA, including white, black or zero
 alpha) wins through the existing case-insensitive CFG/include resolution.
-When absent, the six native resource IDs use Armada II's built-in palette:
+When absent, each of the six native resource IDs has its own default text colour
+(the table of defaults is in `resource_colour`, `ui/hud/stock/info.rs`; read from
+the executable, static):
 
-| ID | Resource | Default RGB |
-|---|---|---|
-| 0 | Crew | 0, 1, 0 |
-| 1 | Officers | 1, 1, 1 |
-| 2 | Dilithium | 0.6, 0.9, 1 |
-| 3 | Latinum | 1, 1, 0 |
-| 4 | Metal | 0.8, 0.8, 0.8 |
-| 5 | Biomatter | 1, 0, 0 |
+| ID | Resource |
+|---|---|
+| 0 | Crew |
+| 1 | Officers |
+| 2 | Dilithium |
+| 3 | Latinum |
+| 4 | Metal |
+| 5 | Biomatter |
 
 Classic does not author those overrides; previously its resource numerals
 incorrectly inherited the generic theme text colour. FO4's authored palette
 and per-faction overrides remain authoritative. The same widget supports both;
 no game assets or simulation/resource values change.
 
-Evidence: read from the stock A2 executable (static). It allocates one RGB
-triple per resource ID in a table, and the resource panel sets the resource's
-text colour from that table with the current resource ID. This does not claim
-original Roots execution. Notes are kept outside the repository.
+Rule (read from the executable, static): each resource ID has its own default
+text colour, applied to that resource's text; explicit CFG keys override it. This
+does not claim original Roots execution. Notes are kept outside the repository.
 
 Regression checks cover all six defaults, explicit per-ID CFG overrides,
 include/case precedence and retaining tints across value updates. The installed
@@ -267,7 +268,7 @@ its stable possibleCraftNames instance caption. The main card retains both
 identity rows. `shipNameColor` controls the strip caption.
 
 Native numeric/icon tints follow faction ODF `crewYellowStatus` and
-`crewRedStatus` thresholds (defaults 0.5/0.25): strictly above yellow is green,
+`crewRedStatus` thresholds (STA64 uses 0.5 and 0.25 where the ODF sets none): strictly above yellow is green,
 strictly above red is yellow, otherwise nonnegative is red. Negative status
 is grey; a zero-capacity crew pool uses the native fully-crewed colour.
 The existing A2FOCraftIdentity GUI palette commands are also honoured:
@@ -299,15 +300,15 @@ shared UnitView values. No capacity is substituted for unknown current crew;
 older snapshots preserve that unknown state. Crew spending/regeneration,
 casualties and boarding remain separate gameplay work.
 
-Evidence: read from the stock A2 executable (static). The info bar loader
-reads native text and icon areas and copies the name colour; percent getters
-multiply by 100 and the display uses floor(percent + 0.5) with a `%` literal;
-energy uses the same format; current crew comes from actor state; status colour
-selection uses race threshold defaults. White icon art requires tint. Private
-native receipts are kept outside the repository.
+Rule (read from the executable, static): the info bar takes its text and icon
+areas from the CFG and the name colour; percentages are shown as rounded whole
+numbers (the original appends a `%`; STA64 shows a bare number by decision, see
+above); current crew is the actor's; status colours follow the race's thresholds.
+White icon art requires tint. Private receipts are kept outside the repository.
 This is static original-A2 evidence, not original Roots runtime acceptance.
 The current bare-number presentation follows the supplied stock reference and
-user direction; the original literal above is not used as a display requirement.
+user direction; the `%` is not used as a display requirement. STA64 rounds to the
+nearest whole percent.
 
 Stock wireframes opt into linear texture filtering when resized. The sampler
 is isolated in page and resolved-art caches; other GUI pictures and sprite

@@ -63,13 +63,13 @@ UI-18's CFG/SPR renderer and current verification boundaries are documented in
 Evidence grade: read from the executable, static; the notes are kept outside
 the repository.
 
-- A panel reads `<panel>Size` with default zero, then loops only over `0..size`,
-  resolving sprite `<configured-name>.<n>` and CFG `<panel>_<n>`. Zero is not a
+- A panel draws one piece per index below its `<panel>Size` (default zero), each
+  from sprite `<configured-name>.<n>` and CFG `<panel>_<n>`. Zero is not a
   request to draw a single full-panel sprite.
 - Rectangles scale x/width and y/height separately by the active dimensions
   divided by the CFG canvas dimensions, with nearest-integer rounding. The
-  FleetOpsHook parameter DB parser's `CacheDimensions` defaults to 1600x1200,
-  overridden by `screenWidth`/`screenHeight`.
+  canvas the CFG rectangles are authored for is STA64's own default; `screenWidth`
+  and `screenHeight` override it.
 - Six resource IDs gated by `no<Name>` each load their `resource_<id>`
   rectangle, in the order Crew, Officers, Dilithium, Latinum, Metal, Biomatter.
   Those GUI IDs differ from STA64's four stock resource-vector indices.
