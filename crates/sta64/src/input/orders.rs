@@ -99,7 +99,7 @@ pub fn order(
         me,
         own: &own,
         queue_mod: bindings.pressed(Action::AddModifier, &keys),
-        warp: world_warp(&keys, &bindings, content.as_deref().map(|c| &*c.0)),
+        warp: world_warp(&keys, &bindings, content.as_deref().map(|c| &*c.0)) && crate::sim_link::warp_allowed(view, content.as_deref().map(|c| &*c.0)),
     };
     let mut acks = Vec::new();
     ground_order(&ground, GroundAt::Ray(ray), &mut OrderOut { queue: &mut queue, targets: &mut targets, issued: &mut acks });
@@ -267,7 +267,7 @@ pub fn radar_order(
         me: link.player(),
         own: &own,
         queue_mod: bindings.pressed(Action::AddModifier, &keys),
-        warp: !minimap_plain(&keys, &bindings, content.as_deref().map(|c| &*c.0)),
+        warp: !minimap_plain(&keys, &bindings, content.as_deref().map(|c| &*c.0)) && crate::sim_link::warp_allowed(link.curr(), content.as_deref().map(|c| &*c.0)),
     };
     let mut acks = Vec::new();
     for at in clicks {
@@ -636,6 +636,50 @@ mod tests {
         assert!(minimap_plain(&keys, &bindings, Some(&a1)));
         assert_eq!(minimap_plain(&keys, &bindings, Some(&db)), db.profile() == sta_content::Profile::Sta1Classic);
         assert!(!minimap_plain(&keys, &bindings, None));
+    }
+
+    /// Warp off, by the content's own switch or by the mission switch the view carries: no path gives a
+    /// warp move. The minimap's click and the main view's Alt click give the plain move; with warp on they
+    /// give the warp move as before (#1102).
+    #[test]
+    fn with_warp_off_no_path_gives_a_warp_move_and_with_it_on_they_do() {
+        use sta_sim::command::Command;
+        use sta_sim::{TickOutput, WorldSource, WorldView};
+        struct Frozen(std::sync::Arc<WorldView>);
+        impl WorldSource for Frozen {
+            fn step(&mut self, _: &[Command]) -> TickOutput {
+                TickOutput { view: self.0.clone(), events: vec![] }
+            }
+            fn view(&self) -> std::sync::Arc<WorldView> {
+                self.0.clone()
+            }
+        }
+        let db = sta_content::fake::db();
+        let a2 = |warp: Option<bool>| {
+            let c = sta_content::ContentDb::builder().profile(sta_content::Profile::Sta2Classic).features(db.features().clone()).build().unwrap();
+            std::sync::Arc::new(c.with_rules(db.rules().clone().with_warp(warp)))
+        };
+        // (content switch, mission switch, a warp move is offered)
+        for (content, mission, offered) in [(None, true, true), (Some(false), true, false), (None, false, false), (Some(true), true, true)] {
+            let (mut app, [a, ..]) = radar_app();
+            app.insert_resource(ContentRes(a2(content)));
+            let mut view = (**app.world().resource::<SimLink>().curr()).clone();
+            view.attrs.mission_switches.allow_warp = mission;
+            app.insert_resource(SimLink::new(Box::new(Frozen(std::sync::Arc::new(view))), Box::new(LocalRouter::new()), PlayerId(0)));
+            // The minimap's click.
+            let to = SimVec3::from_f32([2000.0, 0.0, 700.0]);
+            let (cmds, _) = radar_click(&mut app, Vec2::new(2000.0, 700.0), SEC, true, &[]);
+            let want = if offered { Order::MoveWarp { units: vec![a], to, queue: false } } else { Order::Move { units: vec![a], to, queue: false, mode: None } };
+            assert_eq!(cmds, [CommandKind::Order(want)], "minimap: content {content:?} mission {mission}");
+            // The main view's Alt click on open ground.
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::AltLeft);
+            aim_at(&mut app, 2000.0, 0.0);
+            let (cmds, _) = click(&mut app, false);
+            assert!(
+                matches!(&cmds[..], [CommandKind::Order(Order::MoveWarp { .. })]) == offered && matches!(&cmds[..], [CommandKind::Order(Order::MoveWarp { .. } | Order::Move { .. })]),
+                "world: content {content:?} mission {mission}: {cmds:?}"
+            );
+        }
     }
 
     /// A shift-queued minimap click appends its leg: the sim is run, and the ship still visits the
