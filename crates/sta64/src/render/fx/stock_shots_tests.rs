@@ -391,12 +391,12 @@ struct Shielded {
     dying_from: Option<u64>,
     /// The views of the ticks (from, until) carry a flown torpedo of unit 1 at unit 2 (shot 1) at the place the path
     /// gives for the ticks since `from` (x, z), heading along the next place.
-    flown: Option<(u64, u64, sta_sim::ContentKey, fn(i64) -> (f64, f64))>,
+    flown: Vec<(u64, u64, u32, sta_sim::ContentKey, fn(i64) -> (f64, f64))>,
 }
 
 impl Shielded {
     fn patch(&self, view: Arc<WorldView>) -> Arc<WorldView> {
-        if !self.shields && self.held.is_none() && self.dying_from.is_none() && self.flown.is_none() {
+        if !self.shields && self.held.is_none() && self.dying_from.is_none() && self.flown.is_empty() {
             return view;
         }
         let mut v = (*view).clone();
@@ -410,22 +410,26 @@ impl Shielded {
         {
             v.beam_rows = vec![sta_sim::view::BeamRow { shooter: EntityId(1), weapon, target: EntityId(2), ends: until }];
         }
-        if let Some((from, until, weapon, path)) = self.flown
-            && (from..until).contains(&v.tick)
-        {
+        let mut rows = Vec::new();
+        for (from, until, id, weapon, path) in &self.flown {
+            if !(*from..*until).contains(&v.tick) {
+                continue;
+            }
             let k = (v.tick - from) as i64;
             let ((x, z), (nx, nz)) = (path(k), path(k + 1));
             let heading = Vec3::new((nx - x) as f32, 0.0, (nz - z) as f32).normalize_or(Vec3::Z);
             let f = |v: f64| Fixed::from_f64(v);
-            v.shot_rows = vec![sta_sim::view::ShotRow {
-                id: 1,
+            rows.push(sta_sim::view::ShotRow {
+                id: *id,
                 shooter: EntityId(1),
-                weapon,
+                weapon: *weapon,
                 target: EntityId(2),
                 pos: sta_sim::Vec3 { x: f(x), y: Fixed::ZERO, z: f(z) },
                 heading: (Fixed::from_f64(heading.x as f64), Fixed::from_f64(heading.z as f64)),
-            }];
+            });
         }
+        rows.sort_by_key(|r| r.id);
+        v.shot_rows = rows;
         if let Some(from) = self.dying_from
             && v.tick >= from
         {
@@ -466,18 +470,32 @@ struct Setup {
     /// The shooter starts to die at this tick.
     shooter_dying: Option<u64>,
     /// A flown torpedo (ticks from, until, its path), under `ordnance_flight`.
-    flown: Option<(u64, u64, fn(i64) -> (f64, f64))>,
+    flown: Vec<(u64, u64, u32, fn(i64) -> (f64, f64))>,
+    /// Hits scripted at a tick: (at, weapon, hull).
+    hits: Vec<(u64, &'static str)>,
+    /// Unit 2's height.
+    target_y: i32,
 }
 
 impl Setup {
     fn new(rules: ShotCfg) -> Setup {
-        Setup { db: content(rules), shields: false, shields_until: None, target_def: "t_target", target_z: 600, target_x: 0, target_until: None, shooter_until: None, events: Vec::new(), held: None, shooter_dying: None, flown: None }
+        Setup { db: content(rules), shields: false, shields_until: None, target_def: "t_target", target_z: 600, target_x: 0, target_until: None, shooter_until: None, events: Vec::new(), held: None, shooter_dying: None, flown: Vec::new(), hits: Vec::new(), target_y: 0 }
     }
     /// The content has `ordnance_flight` on (and the torpedo a life), and the views carry a flown torpedo on `path`
     /// from tick `from` until `until`.
     fn flight(mut self, rules: ShotCfg, from: u64, until: u64, path: fn(i64) -> (f64, f64)) -> Setup {
         self.db = content_with(rules, false, true);
-        self.flown = Some((from, until, path));
+        self.flown.push((from, until, 1, path));
+        self
+    }
+    /// Another flown torpedo (shot number `id`).
+    fn also_flown(mut self, from: u64, until: u64, id: u32, path: fn(i64) -> (f64, f64)) -> Setup {
+        self.flown.push((from, until, id, path));
+        self
+    }
+    /// The target is hit by `weapon` at tick `at`.
+    fn hit(mut self, at: u64, weapon: &'static str) -> Self {
+        self.hits.push((at, weapon));
         self
     }
     /// The phaser lands at the end of its life (`beam_damage_at_end`).
@@ -507,15 +525,21 @@ impl Setup {
             let k = self.db.key(w).unwrap().0;
             ev += &format!("{{ at: {at}, event: {{ Fired: {{ shooter: 1, weapon: {k}, hardpoint: {hp}, target: {} }} }} }},", if *target == 0 { "{ Point: { x: 0, y: 0, z: 600 } }".to_owned() } else { format!("{{ Entity: {target} }}") });
         }
+        for (at, w) in &self.hits {
+            let k = self.db.key(w).unwrap().0;
+            ev += &format!("{{ at: {at}, event: {{ Hit: {{ target: 2, by: 1, weapon: {k}, facing: 0, shield: 0, hull: 10, at: {{ x: 0, y: 0, z: 600 }} }} }} }},");
+        }
         let text = format!(
             "{{ units: [
                 {{ id: 1, def: \"t_ship\", owner: 0, hull: 800, rails: [{{ at: 0, pos: {{ x: 0, y: 0, z: 0 }} }}, {{ at: 300, pos: {{ x: 60, y: 0, z: 0 }} }}]{} }},
-                {{ id: 2, def: \"{}\", owner: 1, hull: 400, rails: [{{ at: 0, pos: {{ x: 0, y: 0, z: {} }} }}, {{ at: 300, pos: {{ x: {}, y: 0, z: {} }} }}]{} }},
+                {{ id: 2, def: \"{}\", owner: 1, hull: 400, rails: [{{ at: 0, pos: {{ x: 0, y: {}, z: {} }} }}, {{ at: 300, pos: {{ x: {}, y: {}, z: {} }} }}]{} }},
             ], events: [{ev}] }}",
             until(self.shooter_until),
             self.target_def,
+            self.target_y,
             self.target_z,
             self.target_x,
+            self.target_y,
             self.target_z,
             until(self.target_until)
         );
@@ -526,7 +550,7 @@ impl Setup {
             .add_plugins(SimLinkPlugin)
             .insert_resource(ContentRes(Arc::new(self.db.clone())))
             .insert_resource(SpriteTables(Arc::new(table())))
-            .insert_resource(SimLink::new(Box::new(Shielded { inner, shields: self.shields, shields_until: self.shields_until, held: self.held.map(|(a, b)| (a, b, self.db.key("w_phaser").unwrap())), dying_from: self.shooter_dying, flown: self.flown.map(|(a, b, p)| (a, b, self.db.key("w_torp").unwrap(), p)) }), Box::new(LocalRouter::new()), PlayerId(0)));
+            .insert_resource(SimLink::new(Box::new(Shielded { inner, shields: self.shields, shields_until: self.shields_until, held: self.held.map(|(a, b)| (a, b, self.db.key("w_phaser").unwrap())), dying_from: self.shooter_dying, flown: self.flown.iter().map(|(a, b, id, p)| (*a, *b, *id, self.db.key("w_torp").unwrap(), *p)).collect() }), Box::new(LocalRouter::new()), PlayerId(0)));
         if let Some(p) = profile {
             app.insert_resource(p);
         }
@@ -1625,6 +1649,7 @@ fn authored_shot(path: ShotPath, geom: Geom, radius: f32, sprite: &str) -> Stock
         muzzle_offset: Vec3::ZERO,
         aim_offset: Vec3::ZERO,
         unbound_fallback: false,
+        end_height: None,
         sim_lost: false,
         geom,
     }
@@ -1887,4 +1912,64 @@ fn a_flown_torpedo_without_a_row_in_the_view_is_drawn_as_without_the_switch() {
     let s = shots(&mut app);
     assert_eq!(s.len(), 1);
     assert!(matches!(s[0].geom, Geom::Billboard { .. }), "drawn along the line");
+}
+
+#[test]
+fn a_hit_takes_the_torpedo_whose_row_is_gone_not_the_earliest_fired() {
+    // Two torpedoes at one target: the first (shot 1) is slow, the second (shot 2) arrives first and hits at tick 50.
+    fn slow(k: i64) -> (f64, f64) {
+        (0.0, 5.0 * k as f64)
+    }
+    fn fast(k: i64) -> (f64, f64) {
+        (0.0, 20.0 * k as f64)
+    }
+    let setup = Setup::new(ShotCfg::default()).flight(ShotCfg::default(), 4, 120, slow).also_flown(6, 30, 2, fast).fire(4, "w_torp", 2).fire(6, "w_torp", 2).hit(31, "w_torp");
+    let mut app = setup.app(Some(RenderProfile::Stock));
+    for _ in 0..24 {
+        app.update();
+    }
+    assert_eq!(shots(&mut app).len(), 2, "both in flight");
+    for _ in 0..30 {
+        app.update();
+    }
+    let left = shots(&mut app);
+    assert_eq!(left.len(), 1, "the one that hit is gone");
+    assert_eq!(left[0].fired, 4, "the slow, earlier torpedo flies on; the second one hit");
+}
+
+#[test]
+fn a_flown_torpedo_ends_on_the_node_in_height_too_when_shooter_and_target_differ() {
+    let mut setup = Setup::new(ShotCfg::default()).flight(ShotCfg::default(), 4, 64, bent).fire(4, "w_torp", 2);
+    setup.target_y = 100;
+    let mut app = setup.app(Some(RenderProfile::Stock));
+    let node = Vec3::new(5.0, 0.0, 0.0);
+    let mut last = None;
+    for i in 0..80 {
+        app.update();
+        if i == 0 {
+            model(&mut app, 2, &[("hull_a", node), ("hull_b", node)]);
+        }
+        if let Some(c) = drawn(&mut app).last() {
+            last = Some(*c);
+        }
+    }
+    let aim = Vec3::new(0.0, 100.0, -600.0) + node;
+    let last = last.expect("drawn");
+    assert!(last.distance(aim) <= 14.0, "last drawn place {last} against the node {aim}");
+    assert!((last.y - 100.0).abs() < 4.0, "the height follows the target's: {}", last.y);
+}
+
+#[test]
+fn a_flown_torpedo_waits_for_its_row_hidden_and_then_draws_from_the_row() {
+    // The rows begin three ticks after the shot: until then it is not drawn (no jump from the old line).
+    let setup = Setup::new(ShotCfg::default()).flight(ShotCfg::default(), 6, 64, bent).fire(4, "w_torp", 2);
+    let mut app = setup.app(Some(RenderProfile::Stock));
+    let mut seen = Vec::new();
+    for _ in 0..12 {
+        app.update();
+        seen.push(shots(&mut app).iter().any(|s| s.geom != Geom::None));
+    }
+    let first = seen.iter().position(|d| *d).expect("drawn once bound");
+    assert!(seen[..first].iter().all(|d| !d), "hidden before it binds");
+    assert!(first >= 1);
 }

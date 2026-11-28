@@ -424,6 +424,8 @@ pub struct StockShot {
     aim_offset: Vec3,
     /// A flown shot the view never showed a row for (a view without rows): drawn as without the switch.
     unbound_fallback: bool,
+    /// A flown shot's end height: the target's aim point (the sim keeps a shot at its shooter's height).
+    end_height: Option<f32>,
     /// The sim lost this beam mid-life (latched: a target that comes back does not resume it).
     sim_lost: bool,
     pub geom: Geom,
@@ -669,6 +671,7 @@ impl StockShots<'_, '_> {
             muzzle_offset: Vec3::ZERO,
             aim_offset: Vec3::ZERO,
             unbound_fallback: false,
+            end_height: None,
             sim_lost: false,
             geom: Geom::None,
             hidden_shooter: !self.client_draws(shooter),
@@ -704,7 +707,16 @@ pub(super) fn update_shots(
             if hull.to_f32() > 0.0 {
                 hull_hits.push((*by, *weapon, *target));
             }
-            let hit = q.iter().filter(|(e, s)| !matched.contains(e) && s.path != ShotPath::Ribbon && s.shooter == *by && s.weapon == *weapon && s.target == Target::Entity(*target)).min_by_key(|(_, s)| s.fired).map(|(e, _)| e);
+            // A flown shot bound to a row is matched by its row: the shot that hit is the one whose row is gone from this
+            // view (a later torpedo may arrive first, so the earliest fired is not the one). Only a shot with no row
+            // (not flown, or not yet bound) is matched as before, the earliest fired.
+            let same = |e: &Entity, s: &StockShot| !matched.contains(e) && s.path != ShotPath::Ribbon && s.shooter == *by && s.weapon == *weapon && s.target == Target::Entity(*target);
+            let hit = q
+                .iter()
+                .filter(|(e, s)| same(e, s) && s.bound.is_some_and(|id| link.real_curr().shot_row(id).is_none()))
+                .min_by_key(|(_, s)| s.fired)
+                .or_else(|| q.iter().filter(|(e, s)| same(e, s) && s.bound.is_none()).min_by_key(|(_, s)| s.fired))
+                .map(|(e, _)| e);
             if let Some(e) = hit {
                 matched.push(e);
                 // A projectile that took damage past the shields struck the hull node it was aimed at (the target
@@ -931,10 +943,22 @@ pub(super) fn update_shots(
                         s.progress = (1.0 - (sim_at - c).with_y(0.0).length() / s.start_distance).clamp(0.0, 1.0);
                         if let Some(body) = ctx.body(&link, t, alpha, &offsets, s.target_node) {
                             s.aim_offset = s.aim(&body) - body.centre;
+                            s.end_height = Some(s.aim(&body).y);
                         }
                     }
-                    let pos = sim_at + s.muzzle_offset * (1.0 - s.progress) + s.aim_offset * s.progress;
+                    let mut pos = sim_at + s.muzzle_offset * (1.0 - s.progress) + s.aim_offset * s.progress;
+                    // The sim moves a shot in the ground plane and keeps its shooter's height: the drawn height runs from
+                    // the hardpoint to the aim point's as the shot closes, so it ends on the node in all three axes.
+                    if let Some(end) = s.end_height {
+                        pos.y = (sim_at.y + s.muzzle_offset.y) * (1.0 - s.progress) + end * s.progress;
+                    }
                     (pos, Vec3::new(row.heading.0.to_f32(), 0.0, -row.heading.1.to_f32()).normalize_or(Vec3::Z))
+                }
+                // A flown shot waits for its row hidden (up to the slack, then the old line is drawn): INTERIM, STA64's own,
+                // so it does not jump from the straight line to the row's place when it binds.
+                None if s.flown && !s.unbound_fallback => {
+                    s.geom = Geom::None;
+                    continue;
                 }
                 None => (s.muzzle.lerp(s.to, (age / s.life).clamp(0.0, 1.0)), (s.to - s.muzzle).normalize_or(Vec3::Z)),
             };
