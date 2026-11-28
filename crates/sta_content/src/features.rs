@@ -157,11 +157,17 @@ pub struct Features {
     pub crew_weapon_delay: bool,
     /// Stock Armada II: an empty shield pool waits `shieldDelay` after its last hit.
     pub shield_zero_hold: bool,
+    /// A beam applies its damage on the tick its life (`WeaponDef::duration`) ends, not on
+    /// the tick it fires, and loses it in the cases `sta_sim::combat::weapons` lists (issue
+    /// #1068; the timing is measured on stock Armada II and read from its executable,
+    /// static). On for stock Armada II; off elsewhere (Fleet Operations and Armada I are not
+    /// checked): a beam hits on the tick it fires.
+    pub beam_damage_at_end: bool,
 }
 
 impl Features {
     /// Every switch, in declaration order, for the content hash.
-    pub(crate) fn bits(&self) -> [bool; 42] {
+    pub(crate) fn bits(&self) -> [bool; 43] {
         [
             self.weapon_damage_controls,
             self.point_defense_cycles,
@@ -205,6 +211,7 @@ impl Features {
             self.weapon_cloak_fire,
             self.crew_weapon_delay,
             self.shield_zero_hold,
+            self.beam_damage_at_end,
         ]
     }
 }

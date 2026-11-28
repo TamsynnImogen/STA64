@@ -47,9 +47,10 @@ pub const MAGIC: [u8; 4] = *b"S64N";
 /// 22 adds Armada II special-weapon state, and 23 adds Federation ability state.
 /// 24 adds the Armada I Director's Cut match option to `GameOptions`.
 /// 25 adds the move mode to `Order::Move` (SIM-76, ADR 0011 G4) and to the transferred
-/// snapshot (its move-mode record). PROVISIONAL number: the merge steward assigns the real one
-/// (here, in `golden_encoding_is_pinned` with `GOLDEN`; the header test derives it).
-pub const PROTOCOL_VERSION: u16 = 25;
+/// snapshot (its move-mode record).
+/// 26 adds the beams in flight to the transferred snapshot and marks the rule change of
+/// `beam_damage_at_end` (#1068): peers of both versions would compute different games.
+pub const PROTOCOL_VERSION: u16 = 26;
 /// Magic, version and body length.
 pub const HEADER_LEN: usize = 10;
 /// Largest frame, header included.
@@ -2170,7 +2171,7 @@ mod tests {
     #[test]
     fn golden_encoding_is_pinned() {
         let all: Vec<u8> = samples().iter().flat_map(|m| encode(m).unwrap()).collect();
-        assert_eq!(PROTOCOL_VERSION, 25);
+        assert_eq!(PROTOCOL_VERSION, 26);
         assert_eq!(
             fnv1a64(&all),
             GOLDEN,
@@ -2178,9 +2179,9 @@ mod tests {
         );
     }
 
-    /// Pinned with the provisional protocol 25 (SIM-76): the header carries the number, so
-    /// the merge steward's number changes this value too (run the test, copy the left side).
-    const GOLDEN: u64 = 4986018588586439837;
+    /// Pinned with protocol 26 (#1068): the header carries the number, so a new number
+    /// changes this value too (run the test, copy the left side).
+    const GOLDEN: u64 = 7590920664437132725;
 
     /// Tags are positional and never move: NET-04 appended 22 to 28 after
     /// `Sections` (21), the last tag of protocol 2.
