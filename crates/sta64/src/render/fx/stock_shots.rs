@@ -428,6 +428,15 @@ impl StockShot {
         self.shield_end
     }
 
+    /// Where a projectile at `body` is aimed and ends: the hull node chosen for the shot (the centre where the model
+    /// has none, a planet's sphere point towards the muzzle), whatever the shields do, so the flight never changes
+    /// line (read from the executable, static: the shot is aimed at the node). With shields up and ordnance that does
+    /// not ignore them the original lands the hit on the shield shape on its way there; that crossing is not
+    /// computed: the shot is drawn on to the node (INTERIM). The hull-hit spark is drawn at the same point.
+    pub(super) fn aim(&self, body: &Body) -> Vec3 {
+        beam_end(self.muzzle, body, true)
+    }
+
     /// Where a beam ends on the hull of its target whatever the shields show: the chosen hardpoint, the centre where
     /// the model has none, a planet's sphere towards the muzzle. `None` before the target has been seen.
     pub(super) fn hull_end(&self) -> Option<Vec3> {
@@ -665,14 +674,26 @@ pub(super) fn update_shots(
     let now_ticks = clock.now() * TICK_HZ as f64;
     points.0.clear();
     let mut hull_hits = Vec::new();
-    // The earliest matching shot in flight has arrived.
+    let mut matched: Vec<Entity> = Vec::new();
+    // The earliest matching shot in flight has arrived (one hit takes one shot: a shot already matched this frame is
+    // not matched again).
     for ev in msgs.read().map(|m| &m.0) {
         if let SimEvent::Hit { target, by, weapon, hull, .. } = ev {
             if hull.to_f32() > 0.0 {
                 hull_hits.push((*by, *weapon, *target));
             }
-            let hit = q.iter().filter(|(_, s)| s.path != ShotPath::Ribbon && s.shooter == *by && s.weapon == *weapon && s.target == Target::Entity(*target)).min_by_key(|(_, s)| s.fired).map(|(e, _)| e);
+            let hit = q.iter().filter(|(e, s)| !matched.contains(e) && s.path != ShotPath::Ribbon && s.shooter == *by && s.weapon == *weapon && s.target == Target::Entity(*target)).min_by_key(|(_, s)| s.fired).map(|(e, _)| e);
             if let Some(e) = hit {
+                matched.push(e);
+                // A projectile that took damage past the shields struck the hull node it was aimed at (the target
+                // hardpoint chosen for the shot, the centre where the model has none; read from the executable, static;
+                // the choice per shot is INTERIM): the hull-hit spark is drawn there (`stock_hull_hits`).
+                if hull.to_f32() > 0.0
+                    && let Ok((_, s)) = q.get(e)
+                    && let Some(body) = ctx.body(&link, *target, alpha, &offsets, s.target_node)
+                {
+                    points.0.push((*by, *weapon, *target, s.aim(&body)));
+                }
                 cmds.entity(e).try_despawn();
             }
         }
@@ -827,9 +848,13 @@ pub(super) fn update_shots(
             let (a, b) = beam_segment(start, end, age, s.life, s.travel);
             s.geom = Geom::Segment { a, b };
         } else {
-            // Straight at the target's live place, as the other shots fly (the sim hits on arrival).
+            // Straight at the aim point on the target's live body, as the other shots fly (the sim hits on arrival): the
+            // hull node chosen for the shot, so the shot ends where its hull-hit spark is drawn (`StockShot::aim`).
             let to = match s.target {
-                Target::Entity(id) => point(&link, id, alpha).map(|p| p + shifted(&offsets, id)),
+                Target::Entity(id) => match ctx.body(&link, id, alpha, &offsets, s.target_node) {
+                    Some(body) => Some(s.aim(&body)),
+                    None => point(&link, id, alpha).map(|p| p + shifted(&offsets, id)),
+                },
                 Target::Point(p) => Some(to_bevy(p.to_f32())),
                 _ => None,
             };

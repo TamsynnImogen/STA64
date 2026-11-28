@@ -15,8 +15,14 @@
 //!   INTERIM, where it is drawn: the original puts it at the hit node of the model, which the view does not
 //!   carry. The sim's hit event carries the target's centre, not a hit point. A **beam** drawn the Stock way
 //!   (`stock_shots.rs`) has an end on the hull (the target hardpoint the shot chose, the centre where the model
-//!   has none): the spark is drawn there ([`HullHitPoints`]). Any **other weapon** (a projectile flies at
-//!   the target's place) is drawn at the target's centre. Both stay in the unit's frame, so they follow it.
+//!   has none): the spark is drawn there ([`HullHitPoints`]). A **projectile** drawn the Stock way is aimed at the
+//!   same node and hits there when its distance is under a step (read from the executable, static; the node is
+//!   chosen per shot by STA64's hash, INTERIM: the original's choice is not determined): its spark is drawn at that
+//!   node too. A projectile not drawn the Stock way, or whose target is out of the view, is drawn at the target's
+//!   centre. All stay in the unit's frame, so they follow it. The drawn projectile flies to the same node, so it ends
+//!   where its spark appears, along one line whatever the shields do. With shields up (ordnance that does not ignore
+//!   them) the original lands the hit on the shield shape on its way to the node; that crossing is not computed
+//!   and the shot is drawn on to the node (INTERIM).
 //! - **Other mods' families** draw their own per-ordnance hit effects through their own hook (not read): under
 //!   Stock they get this family for now (INTERIM).
 //! - **A hit on a unit already dying draws none** (read from the executable, static; not measured).
@@ -113,7 +119,7 @@ pub(super) fn raise_hit_spark(
     store.spawn(cmds, spark(FlareKind::HullHit, object, name, radius, local, born));
 }
 
-/// Where each beam's hull hit of this frame struck, as the stock beam drawing knows it: `(shooter, weapon, target,
+/// Where each beam's or projectile's hull hit of this frame struck, as the stock shot drawing knows it: `(shooter, weapon, target,
 /// world point)`. Written by `stock_shots::update_shots`, read by `impacts::spawn_impacts` (which runs after it);
 /// emptied at the start of every `update_shots`.
 #[derive(Resource, Default, Debug)]

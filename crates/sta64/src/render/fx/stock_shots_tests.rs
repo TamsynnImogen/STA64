@@ -377,6 +377,8 @@ fn content_with(rules: ShotCfg, at_end: bool) -> ContentDb {
 struct Shielded {
     inner: ScriptedSource,
     shields: bool,
+    /// The shields show only before this tick (they drop then), when set.
+    shields_until: Option<u64>,
     /// The views of these ticks (from, until) carry unit 1's beam at unit 2 as one the sim holds (#1068).
     held: Option<(u64, u64, sta_sim::ContentKey)>,
     /// From this tick on unit 1 (the shooter) carries the dying flag.
@@ -389,7 +391,7 @@ impl Shielded {
             return view;
         }
         let mut v = (*view).clone();
-        if self.shields {
+        if self.shields && self.shields_until.is_none_or(|t| v.tick < t) {
             for u in v.units.iter_mut().filter(|u| u.id.0 >= 2) {
                 u.shields = [[Fixed::from_int(50), Fixed::from_int(50)]; 4];
             }
@@ -424,6 +426,8 @@ impl WorldSource for Shielded {
 struct Setup {
     db: ContentDb,
     shields: bool,
+    /// The shields drop at this tick, when set.
+    shields_until: Option<u64>,
     /// Unit 2's def and a rail point (the target); `until` ends it.
     target_def: &'static str,
     target_z: i32,
@@ -440,7 +444,7 @@ struct Setup {
 
 impl Setup {
     fn new(rules: ShotCfg) -> Setup {
-        Setup { db: content(rules), shields: false, target_def: "t_target", target_z: 600, target_x: 0, target_until: None, shooter_until: None, events: Vec::new(), held: None, shooter_dying: None }
+        Setup { db: content(rules), shields: false, shields_until: None, target_def: "t_target", target_z: 600, target_x: 0, target_until: None, shooter_until: None, events: Vec::new(), held: None, shooter_dying: None }
     }
     /// The phaser lands at the end of its life (`beam_damage_at_end`).
     fn at_end(mut self, rules: ShotCfg) -> Setup {
@@ -488,7 +492,7 @@ impl Setup {
             .add_plugins(SimLinkPlugin)
             .insert_resource(ContentRes(Arc::new(self.db.clone())))
             .insert_resource(SpriteTables(Arc::new(table())))
-            .insert_resource(SimLink::new(Box::new(Shielded { inner, shields: self.shields, held: self.held.map(|(a, b)| (a, b, self.db.key("w_phaser").unwrap())), dying_from: self.shooter_dying }), Box::new(LocalRouter::new()), PlayerId(0)));
+            .insert_resource(SimLink::new(Box::new(Shielded { inner, shields: self.shields, shields_until: self.shields_until, held: self.held.map(|(a, b)| (a, b, self.db.key("w_phaser").unwrap())), dying_from: self.shooter_dying }), Box::new(LocalRouter::new()), PlayerId(0)));
         if let Some(p) = profile {
             app.insert_resource(p);
         }
@@ -869,6 +873,36 @@ fn the_drawing_breaks_a_beam_at_the_distance_the_sim_does() {
 }
 
 #[test]
+fn a_torpedo_in_flight_keeps_one_line_to_its_node_when_the_targets_shields_drop() {
+    let mut setup = Setup::new(ShotCfg::default()).fire(4, "w_torp", 2);
+    setup.shields = true;
+    setup.shields_until = Some(30);
+    let mut app = setup.app(Some(RenderProfile::Stock));
+    let node = Vec3::new(5.0, 0.0, 0.0);
+    let mut points = Vec::new();
+    for i in 0..58 {
+        app.update();
+        if i == 0 {
+            model(&mut app, 2, &[("hull_a", node), ("hull_b", node)]);
+        }
+        for s in shots(&mut app) {
+            if let Geom::Billboard { c } = s.geom {
+                points.push((i, c, s.muzzle));
+            }
+        }
+    }
+    assert!(points.iter().any(|p| p.0 < 28) && points.iter().any(|p| p.0 > 34), "drawn before and after the shields dropped");
+    // One straight line from the muzzle: every drawn place is the same share of the way along it, to a fixed end.
+    let (_, last, muzzle) = *points.last().unwrap();
+    let dir = (last - muzzle).normalize();
+    let worst = points.iter().map(|(_, c, m)| (*c - *m).cross(dir).length()).fold(0.0, f32::max);
+    assert!(worst < 0.05, "a sideways step of {worst} across the flight");
+    // The line goes to the node (five units off the target's centre), not the centre.
+    let centre_dir = (Vec3::new(0.0, 0.0, -600.0) - muzzle).normalize();
+    assert!(dir.distance(centre_dir) > 1e-3, "the flight aims at the centre");
+}
+
+#[test]
 fn under_beam_damage_at_end_the_sims_break_distance_decides_not_the_drawings_own_reading() {
     // The drawing's own cut ends a beam whose target is beyond twice the range (the authored range is 1000), measured from
     // the muzzle: with the switch off a target at 2100 gets no beam. With the switch on the sim decides: it holds the beam
@@ -945,7 +979,7 @@ fn a_pulse_streak_and_a_torpedo_sprite_fly_to_their_target_and_end_on_the_hit() 
     hit.events.clear();
     let inner = ScriptedSource::from_json5(&src, &hit.db).unwrap();
     let mut app = hit.app(Some(RenderProfile::Stock));
-    *app.world_mut().resource_mut::<SimLink>() = SimLink::new(Box::new(Shielded { inner, shields: false, held: None, dying_from: None }), Box::new(LocalRouter::new()), PlayerId(0));
+    *app.world_mut().resource_mut::<SimLink>() = SimLink::new(Box::new(Shielded { inner, shields: false, shields_until: None, held: None, dying_from: None }), Box::new(LocalRouter::new()), PlayerId(0));
     let mut after = Vec::new();
     for _ in 0..24 {
         app.update();
