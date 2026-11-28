@@ -31,7 +31,7 @@ enum Field {
 
 impl Field {
     fn keys(self, builder: bool) -> (&'static str, &'static str, &'static str, Readout) {
-        // ShipDisplay uses a different set of rectangles for the yard card.
+        // The native info panel uses a different set of rectangles for the yard card.
         // Both modes use the same sprite identifiers and value sources (Armada II, static).
         match self {
             Self::Crew => {
@@ -95,7 +95,7 @@ pub(super) fn spawn(
 ) {
     let id = single.id;
     let builder = layout.info_uses_builder(single);
-    // Roots-hosted mods can use these ShipDisplay fields even with FleetOps presentation.
+    // Roots-hosted mods can use these info panel fields even with FleetOps presentation.
     for field in [Field::Crew, Field::Officers, Field::Energy] {
         let (value_key, icon_key, sprite, tip) = field.keys(builder);
         let marker = SelectionReadout(id, field);
@@ -172,7 +172,7 @@ pub(in crate::ui::hud) fn update(
             .and_then(|unit| feed.def(unit).map(|def| (unit, def)))
             .and_then(|(unit, def)| {
                 field.value(unit, def).map(|(value, share)| {
-                    // TextAndSprite uses the faction's thresholds for crew and energy.
+                    // The native text-and-icon readout uses the faction's thresholds for crew and energy.
                     let colour = if share > 0.0 {
                         state.info_style.color(&def.race, Some(share))
                     } else {
@@ -194,7 +194,7 @@ pub(in crate::ui::hud) fn update(
         };
         if let Some(mut label) = label {
             let value = match field {
-                // Armada II's EnergyText prints a rounded percentage.
+                // Armada II's energy readout prints a rounded percentage.
                 Field::Energy => format!("{value}%"),
                 _ => value.to_string(),
             };
