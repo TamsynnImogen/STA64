@@ -973,6 +973,7 @@ fn flares_follow_their_objects() {
                     assert!((f.at - centre).distance(Vec3::new(7.0, 0.0, -2.0)) < 1e-2, "{} from the target at {centre}", f.at);
                     impact_x.push(f.at.x);
                 }
+                FlareKind::HullHit | FlareKind::DeathSpark => unreachable!("no sparks in this scene"),
             }
         }
     }

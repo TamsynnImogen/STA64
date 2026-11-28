@@ -239,7 +239,8 @@ impl ShotSprites {
             .weapons()
             .flat_map(|w| [w.look.sprite.as_deref(), w.look.flare.as_ref().map(|f| f.sprite.as_str())])
             .flatten()
-            .chain(std::iter::once(stock_flares::IMPACT_SPRITE));
+            .chain(std::iter::once(stock_flares::IMPACT_SPRITE))
+            .chain(stock_flares::SPARK_FAMILY);
         for name in names {
             let key = name.to_ascii_lowercase();
             if map.contains_key(&key) {
