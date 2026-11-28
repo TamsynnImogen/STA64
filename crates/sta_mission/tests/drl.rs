@@ -1,14 +1,15 @@
-//! LUA-07: Lua scaffolds generated from Armada II rule DLLs by
-//! `tools/drl_to_lua.py`.
+//! LUA-07: Lua scaffolds generated from Armada II rule DLLs (the Python reference
+//! `tools/drl_to_lua.py` and its Rust port, `sta_mission_convert::drl`).
 //!
 //! - The asset-free test runs `SYNTHETIC_SCAFFOLD`, the tool's output for a
 //!   synthetic three-rule mission (`tools/test_drl_to_lua.py` checks that the
 //!   two stay identical; it prints a new one with `--print-fixture`).
-//! - The install-gated test runs the tool on `STA64_A2_INSTALL` (an Armada II
-//!   root with `missions/a2_fed01R.drl`), loads the generated `a2_fed01`
-//!   scaffold and checks that every decoded rule is registered. It is skipped
-//!   when the variable is not set. Needs `python3` and `objdump`; the scaffold
-//!   is written under the target directory and never committed.
+//! - The install-gated test decodes the rule DLLs of the install named by
+//!   `STA64_TEST_A2_STOCK_INSTALL` (or, as before, `STA64_A2_INSTALL`) with the
+//!   Rust port, in memory (no Python, no `objdump`, nothing written anywhere),
+//!   loads every scaffold and checks that each registers all its rules and
+//!   runs. It is skipped when neither variable is set. No mission is named and
+//!   no count is pinned: what to expect comes from the decoder's own report.
 
 use sta_mission::runtime::MissionRuntime;
 use sta_sim::WorldView;
@@ -86,97 +87,39 @@ fn synthetic_scaffold_registers_rules_and_fires_actions() {
 }
 
 #[test]
-fn installed_a2_fed01_scaffold_loads_and_registers_its_rules() {
-    let Ok(install) = std::env::var("STA64_A2_INSTALL") else {
-        eprintln!("skipped: set STA64_A2_INSTALL to an Armada II root");
+fn installed_scaffolds_load_and_register_their_rules() {
+    use sta_mission_convert::{Pe, disasm, drl};
+    let Some(install) = ["STA64_TEST_A2_STOCK_INSTALL", "STA64_A2_INSTALL"].into_iter().find_map(|v| std::env::var(v).ok()) else {
+        eprintln!("skipped: set STA64_TEST_A2_STOCK_INSTALL to an Armada II root");
         return;
     };
-    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let out = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("drl_scaffolds");
-    let _ = std::fs::remove_dir_all(&out);
-    let run = std::process::Command::new("python3")
-        .arg(repo.join("tools/drl_to_lua.py"))
-        .args(["--install", &install, "--out"])
-        .arg(&out)
-        .output()
-        .expect("run python3 tools/drl_to_lua.py");
-    let report = String::from_utf8_lossy(&run.stdout);
-    assert!(
-        run.status.success(),
-        "{report}\n{}",
-        String::from_utf8_lossy(&run.stderr)
-    );
-    // "  missions/a2_fed01R.drl: 50 rules, 82 dependencies, 50/50 conditions, ..."
-    let line = report
-        .lines()
-        .find(|l| l.contains("a2_fed01R.drl:"))
-        .expect("a2_fed01R.drl decoded");
-    // the number in front of `what`; for "50/50 conditions" the decoded (left) one
-    let count = |what: &str| -> u32 {
-        let at = line.find(what).unwrap();
-        let word = line[..at].trim_end().rsplit(' ').next().unwrap();
-        word.split('/').next().unwrap().parse().unwrap()
-    };
-    let rules = count(" rules");
-    let decoded = count(" conditions");
-    assert!(rules > 0);
-    assert_eq!(decoded, rules, "{line}");
+    let root = std::path::Path::new(&install);
+    let engine = drl::load_engine(&[root.to_path_buf()], None).expect("the install's engine names load");
+    let run = drl::decode_install(root, engine.as_ref(), &mut |dll: &std::path::Path| disasm::disassemble(&Pe::open(dll)?)).expect("the rule DLLs decode");
+    assert!(run.read > run.skipped, "the install has rule DLLs of the Armada II shape");
+    assert_eq!(run.failed, 0, "{} of {} rule DLLs did not decode in full", run.failed, run.read);
+    assert_eq!(run.files.len(), run.read - run.skipped, "one scaffold for every DLL that was decoded");
 
-    let path = std::fs::read_dir(&out)
-        .unwrap()
-        .map(|d| d.unwrap().path().join("a2_fed01.lua"))
-        .find(|p| p.exists())
-        .expect("a2_fed01.lua written");
-    let source = std::fs::read_to_string(&path).unwrap();
-    let mut rt = load("missions/a2_fed01.lua", &source);
-    tick(&mut rt, 0);
-    assert_eq!(rt.eval::<u32>("return #__drl.rules").unwrap(), rules);
-    assert_eq!(rt.eval::<u32>("return #__drl.ruleMonitors").unwrap(), rules);
-    let ids: Vec<String> = rt
-        .eval("local t = {} for i, m in ipairs(__drl.ruleMonitors) do t[i] = m.id end return t")
-        .unwrap();
-    let names: Vec<String> = rt
-        .eval("local t = {} for i, r in ipairs(__drl.rules) do t[i] = r.name end return t")
-        .unwrap();
-    assert_eq!(ids, names);
-    // Every decoded condition runs against the empty start state without a
-    // Lua error: unbound or failing engine calls are counted by the guard.
-    for at in 1..=30 {
-        tick(&mut rt, at);
-    }
-    assert!(rt.errors().is_empty(), "{:?}", rt.errors());
-    eprintln!(
-        "a2_fed01: {rules} rules registered; actions run in 30 ticks: {:?}",
-        ran(&rt)
-    );
-
-    // Every other generated scaffold loads, registers all its rules and runs.
-    let dir = path.parent().unwrap();
-    let mut loaded = 0;
-    for entry in std::fs::read_dir(dir).unwrap() {
-        let path = entry.unwrap().path();
-        if path.extension().is_none_or(|e| e != "lua") {
-            continue;
-        }
-        let name = format!("missions/{}", path.file_name().unwrap().to_string_lossy());
-        let mut rt = load(&name, &std::fs::read_to_string(&path).unwrap());
+    // Every scaffold loads, registers all its rules (one monitor per rule, in the same order) and
+    // every decoded condition runs against the empty start state without a Lua error: unbound or
+    // failing engine calls are counted by the guard.
+    let mut registered = 0u32;
+    for (i, (file, bytes)) in run.files.iter().enumerate() {
+        let name = format!("missions/{file}");
+        let mut rt = load(&name, std::str::from_utf8(bytes).expect("a scaffold is text"));
         tick(&mut rt, 0);
-        let (rules, monitors): (u32, u32) =
-            rt.eval("return #__drl.rules, #__drl.ruleMonitors").unwrap();
-        assert!(
-            rules > 0 && rules == monitors,
-            "{name}: {rules} rules, {monitors} monitors"
-        );
+        let (rules, monitors): (u32, u32) = rt.eval("return #__drl.rules, #__drl.ruleMonitors").unwrap();
+        assert!(rules > 0 && rules == monitors, "scaffold #{i}: {rules} rules, {monitors} monitors");
+        let ids: Vec<String> = rt.eval("local t = {} for i, m in ipairs(__drl.ruleMonitors) do t[i] = m.id end return t").unwrap();
+        let names: Vec<String> = rt.eval("local t = {} for i, r in ipairs(__drl.rules) do t[i] = r.name end return t").unwrap();
+        assert_eq!(ids, names, "scaffold #{i}");
         for at in 1..=30 {
             tick(&mut rt, at);
         }
-        assert!(rt.errors().is_empty(), "{name}: {:?}", rt.errors());
-        loaded += 1;
+        assert!(rt.errors().is_empty(), "scaffold #{i}: {:?}", rt.errors());
+        registered += rules;
     }
-    assert!(
-        report.contains(&format!("{loaded} decoded, 0 failed")),
-        "{loaded} scaffolds\n{report}"
-    );
+    eprintln!("{} scaffolds, {registered} rules registered", run.files.len());
 }
 
 /// The fixture below must stay the tool's output: run the Python tests
