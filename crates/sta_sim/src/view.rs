@@ -54,6 +54,22 @@ pub struct WorldView {
     /// record and the craft's speed; no state of its own.
     #[serde(default)]
     pub warp_rows: Vec<WarpRow>,
+    /// Beams in flight under `beam_damage_at_end` (#1068): fired, their damage not yet applied, sorted by
+    /// shooter, weapon, target and end tick. Empty when the switch is off. Derived from the weapons state.
+    #[serde(default)]
+    pub beam_rows: Vec<BeamRow>,
+}
+
+/// A beam whose life has not ended: the sim still holds it, and applies its damage on tick `ends`
+/// unless the beam is lost before (its shooter or target gone, the target phased, out of range).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BeamRow {
+    pub shooter: EntityId,
+    pub weapon: ContentKey,
+    pub target: EntityId,
+    /// The sim tick the beam's hit is applied on (fire tick plus the weapon's `duration`); the view that step
+    /// makes has the next tick and no row for the beam.
+    pub ends: Tick,
 }
 
 /// Where a craft is in its warp (SIM-36).
@@ -89,6 +105,13 @@ pub struct WarpRow {
 }
 
 impl WorldView {
+    /// Whether the sim holds a beam of `weapon` from `shooter` at `target` (its life has not ended and it is not lost).
+    pub fn beam_held(&self, shooter: EntityId, weapon: ContentKey, target: EntityId) -> bool {
+        let key = (shooter, weapon, target);
+        let at = self.beam_rows.partition_point(|r| (r.shooter, r.weapon, r.target) < key);
+        self.beam_rows.get(at).is_some_and(|r| (r.shooter, r.weapon, r.target) == key)
+    }
+
     /// The craft's warp row, if it is in warp or dropping out.
     pub fn warp_of(&self, id: EntityId) -> Option<&WarpRow> {
         self.warp_rows.binary_search_by_key(&id, |row| row.id).ok().map(|i| &self.warp_rows[i])

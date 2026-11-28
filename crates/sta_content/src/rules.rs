@@ -81,6 +81,8 @@ pub struct Rules {
     autonomy: Option<AutonomyRules>,
     /// `RTS_CFG.h`'s attack warp distance (SIM-36), when the header sets it.
     approach: Option<ApproachRules>,
+    /// `RTS_CFG.h`'s [`WARP_KEY`], when the header sets it: see [`Rules::warp_enabled`].
+    warp: Option<bool>,
     /// Planet population levels and growth (SIM-30), when the header sets all of them.
     population: Option<PopulationRules>,
     /// `RTS_CFG.h`'s transporter keys (SIM-46 P0), when the header sets any; digested (SIM-69).
@@ -100,7 +102,7 @@ pub struct Rules {
     group: GroupCfg,
 }
 
-const TYPED_LEN: usize = 5 + A1DogfightRules::KEYS.len() + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + ApproachRules::KEYS.len() + CfgRules::KEYS.len() + LegacyStart::KEYS.len() + PopulationRules::KEYS.len() + FieldCfg::KEYS.len() + GroupCfg::KEYS.len();
+const TYPED_LEN: usize = 6 + A1DogfightRules::KEYS.len() + PathingRules::KEYS.len() + AutonomyRules::KEYS.len() + ApproachRules::KEYS.len() + CfgRules::KEYS.len() + LegacyStart::KEYS.len() + PopulationRules::KEYS.len() + FieldCfg::KEYS.len() + GroupCfg::KEYS.len();
 
 /// Every `RTS_CFG.h` key [`Rules`] reads.
 pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
@@ -110,44 +112,45 @@ pub const TYPED_CFG_KEYS: [&str; TYPED_LEN] = {
     out[2] = "MP_OFFICER_LIST_SIZE";
     out[3] = "SINGLE_PLAYER_OFFICER_LIMIT";
     out[4] = "STARTING_CREW_CAPACITY";
+    out[5] = WARP_KEY;
     let mut i = 0;
     while i < PathingRules::KEYS.len() {
-        out[5 + i] = PathingRules::KEYS[i];
+        out[6 + i] = PathingRules::KEYS[i];
         i += 1;
     }
     let mut a = 0;
     while a < AutonomyRules::KEYS.len() {
-        out[5 + i + a] = AutonomyRules::KEYS[a];
+        out[6 + i + a] = AutonomyRules::KEYS[a];
         a += 1;
     }
     let mut w = 0;
     while w < ApproachRules::KEYS.len() {
-        out[5 + i + a + w] = ApproachRules::KEYS[w];
+        out[6 + i + a + w] = ApproachRules::KEYS[w];
         w += 1;
     }
     let mut j = 0;
     while j < CfgRules::KEYS.len() {
-        out[5 + i + a + w + j] = CfgRules::KEYS[j];
+        out[6 + i + a + w + j] = CfgRules::KEYS[j];
         j += 1;
     }
     let mut l = 0;
     while l < LegacyStart::KEYS.len() {
-        out[5 + i + a + w + j + l] = LegacyStart::KEYS[l];
+        out[6 + i + a + w + j + l] = LegacyStart::KEYS[l];
         l += 1;
     }
     let mut p = 0;
     while p < PopulationRules::KEYS.len() {
-        out[5 + i + a + w + j + l + p] = PopulationRules::KEYS[p];
+        out[6 + i + a + w + j + l + p] = PopulationRules::KEYS[p];
         p += 1;
     }
     let mut f = 0;
     while f < FieldCfg::KEYS.len() {
-        out[5 + i + a + w + j + l + p + f] = FieldCfg::KEYS[f];
+        out[6 + i + a + w + j + l + p + f] = FieldCfg::KEYS[f];
         f += 1;
     }
     let mut g = 0;
     while g < GroupCfg::KEYS.len() {
-        out[5 + i + a + w + j + l + p + f + g] = GroupCfg::KEYS[g];
+        out[6 + i + a + w + j + l + p + f + g] = GroupCfg::KEYS[g];
         g += 1;
     }
     out[TYPED_LEN - 2] = A1DogfightRules::KEYS[0];
@@ -331,6 +334,30 @@ impl PopulationRules {
         match level {
             1..=4 => self.levels[usize::from(level) - 1],
             _ => Fixed::ZERO,
+        }
+    }
+}
+
+/// The rules key of the content-level warp switch (#1102): see [`Rules::warp_enabled`].
+pub const WARP_KEY: &str = "GAME_OPTIONS_WARP";
+
+/// Whether content has warp when its header does not set [`WARP_KEY`]: yes, for every profile.
+/// The one source of that default. The data decides: content without warp says so with the key.
+/// Grades: the stock Armada II profile has warp (read from the executable, and measured); the
+/// other profiles keep what STA64 did before it read the key (Fleet Operations 3 and the native
+/// profile: not checked).
+pub const WARP_DEFAULT: bool = true;
+
+/// [`WARP_KEY`] as the header authors it: a whole number, 0 for off and any other for on; `None`
+/// when it is absent. Anything that is not a whole number warns and counts as absent.
+fn warp_from_cfg(cfg: &CfgH, warnings: &mut Vec<Warning>) -> Option<bool> {
+    cfg.raw(WARP_KEY)?;
+    // Whole numbers only, but `1.0` counts as 1 as for the other whole-number keys.
+    match cfg.i64(WARP_KEY).or_else(|| cfg.f32(WARP_KEY).filter(|v| v.is_finite() && v.fract() == 0.0).map(|v| v as i64)) {
+        Some(v) => Some(v != 0),
+        None => {
+            warnings.push(Warning::new("RTS_CFG.h", format!("{WARP_KEY} is not a whole number; the default is used")));
+            None
         }
     }
 }
@@ -958,6 +985,7 @@ impl Rules {
         rules.population = PopulationRules::from_cfg(&cfg, &mut warnings);
         rules.autonomy = AutonomyRules::from_cfg(&cfg, &mut warnings);
         rules.approach = ApproachRules::from_cfg(&cfg, &mut warnings);
+        rules.warp = warp_from_cfg(&cfg, &mut warnings);
         rules.cfg = CfgRules::from_cfg(&cfg, &mut warnings);
         rules.shots = ShotCfg::from_cfg(&cfg, &mut warnings);
         rules.fields = FieldCfg::from_cfg(&cfg, &mut warnings);
@@ -1155,6 +1183,25 @@ impl Rules {
         self.approach.unwrap_or_default()
     }
 
+    /// Whether this content has warp at all (#1102, ADR 0004 D10): [`WARP_KEY`] of the layered
+    /// rules header when it is set (0: off; any other whole number: on), else [`WARP_DEFAULT`].
+    /// One value for the whole content; a mod switches warp off by shipping the key in its own
+    /// header. Off, no craft enters or stays at warp by any path that asks the sim's warp
+    /// permission; Armada I's own cruise model is another mechanism and does not ask it.
+    ///
+    /// This reading of the key is STA64's own rule; what the original games do with the key is
+    /// not established. Grade for the key's name and form: read from data.
+    pub fn warp_enabled(&self) -> bool {
+        self.warp.unwrap_or(WARP_DEFAULT)
+    }
+
+    /// Set the content-level warp switch (tests and content built in code); `None`: as a header
+    /// without the key.
+    pub fn with_warp(mut self, on: Option<bool>) -> Self {
+        self.warp = on;
+        self
+    }
+
     /// Set the attack warp distance (tests and content built in code).
     pub fn with_approach(mut self, approach: ApproachRules) -> Self {
         self.approach = Some(approach);
@@ -1276,8 +1323,13 @@ impl Rules {
         for (key, value) in AutonomyRules::KEYS.iter().zip([a.movement, a.special_weapon]) {
             out.push(DigestEntry::new(format!("RTS_CFG.h:{key}"), value.to_string()));
         }
-        // Only when it differs from the engine default, so an absent key and
-        // the default digest alike and content without it keeps its hash.
+        // The warp switch: only when it differs from the default, so an absent key and one that
+        // restates the default digest alike and content without it keeps its hash.
+        if self.warp_enabled() != WARP_DEFAULT {
+            out.push(DigestEntry::new(format!("RTS_CFG.h:{WARP_KEY}"), u8::from(self.warp_enabled()).to_string()));
+        }
+        // The two warp distances: each only when it differs from its default, so an absent key
+        // and the default digest alike and content without it keeps its hash.
         let (approach, approach_default) = (self.approach(), ApproachRules::default());
         if approach.min_move_warp_distance != approach_default.min_move_warp_distance {
             out.push(DigestEntry::new(
@@ -1630,6 +1682,42 @@ mod group_tests {
 mod approach_tests {
     use super::*;
 
+    /// [`WARP_KEY`] (#1102): typed, 0 is off and any other whole number is on, absent is the
+    /// default, and it is digested only off the default. Authored headers.
+    #[test]
+    fn the_warp_switch_is_typed_and_digested_only_off_its_default() {
+        let digest = |r: &Rules| crate::digest::ContentDigest::from_entries(r.digest_entries());
+        let key = format!("RTS_CFG.h:{WARP_KEY}");
+        let (none, w) = Rules::from_header("int SOMETHING_ELSE = 3;\n");
+        assert!(w.is_empty());
+        assert_eq!(none.warp_enabled(), WARP_DEFAULT);
+        assert!(digest(&none).get(&key).is_none());
+
+        let (off, w) = Rules::from_header("int GAME_OPTIONS_WARP = 0;\n");
+        assert!(w.is_empty());
+        assert!(!off.warp_enabled());
+        assert_eq!(digest(&off).get(&key), Some("0"));
+        assert_ne!(digest(&off).hash64(), digest(&none).hash64());
+
+        // any other whole number is on, and digests like a header without the key
+        for text in ["int GAME_OPTIONS_WARP = 1;\n", "int GAME_OPTIONS_WARP = 7;\n", "float GAME_OPTIONS_WARP = 1.0;\n"] {
+            let (on, w) = Rules::from_header(text);
+            assert!(w.is_empty(), "{text}");
+            assert!(on.warp_enabled(), "{text}");
+            assert_eq!(digest(&on).hash64(), digest(&none).hash64(), "{text}");
+        }
+        // not a whole number: a warning, and the default
+        for text in ["int GAME_OPTIONS_WARP = maybe;\n", "float GAME_OPTIONS_WARP = 0.5;\n"] {
+            let (bad, w) = Rules::from_header(text);
+            assert_eq!(w.len(), 1, "{text}");
+            assert_eq!(bad.warp_enabled(), WARP_DEFAULT, "{text}");
+        }
+        assert!(crate::TYPED_CFG_KEYS.contains(&WARP_KEY));
+        // set in code, as a test or content built in code does
+        assert!(!Rules::default().with_warp(Some(false)).warp_enabled());
+        assert!(Rules::default().with_warp(None).warp_enabled());
+    }
+
     /// `cfgTOO_CLOSE_TO_WARP` (#1102): typed, read beside the attack key without disturbing it,
     /// and digested only off its default. Values authored for the test.
     #[test]
@@ -1865,7 +1953,7 @@ mod cfg_tests {
         // that resolve into MP_OFFICER_LIMIT, and the attack warp distance,
         // which is digested only when it differs from the engine default.
         // The two facing keys are digested only when set (SIM-39).
-        let mut rules = Rules::default().with_approach(ApproachRules { min_move_warp_distance: Fixed::from_int(1100), too_close_to_warp: Fixed::from_int(900) });
+        let mut rules = Rules::default().with_approach(ApproachRules { min_move_warp_distance: Fixed::from_int(1100), too_close_to_warp: Fixed::from_int(900) }).with_warp(Some(false));
         rules.upgrade_pod_maximum_tier = Some(9);
         rules.legacy_start = LegacyStart { dilithium: Some(1), crew: Some(2), officers: None };
         rules.cfg.facing_weight = Some(Fixed::ONE);
